@@ -1,0 +1,16 @@
+appId: com.claude-session-manager
+productName: Claude Session Manager
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.*'
+  - '!{tsconfig,tsconfig.*}.json'
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  artifactName: ${name}-${version}-${arch}.${ext}

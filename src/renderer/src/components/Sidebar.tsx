@@ -1,8 +1,9 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
-import { useStore, type SessionSummary } from '../store'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { useStore, type SessionSummary, type Folder } from '../store'
 import {
-  FolderPlus, FolderOpen, Folder, ChevronRight, ChevronDown,
-  MessageSquare, Clock, Trash2, FolderInput, FolderMinus, List, FolderTree
+  FolderPlus, FolderOpen, Folder as FolderIcon, ChevronRight, ChevronDown,
+  MessageSquare, Clock, Trash2, FolderInput, FolderMinus, List, FolderTree,
+  Plus
 } from 'lucide-react'
 
 function formatDate(iso: string): string {
@@ -16,6 +17,8 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
+// ============ Context Menu ============
+
 interface ContextMenuState {
   x: number
   y: number
@@ -26,7 +29,6 @@ function ContextMenu({
   x, y, sessionId, onClose
 }: ContextMenuState & { onClose: () => void }) {
   const { config, addSessionToFolder, removeSessionFromFolder } = useStore()
-  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handler = () => onClose()
@@ -34,14 +36,10 @@ function ContextMenu({
     return () => document.removeEventListener('click', handler)
   }, [onClose])
 
-  // Adjust position if menu would go off screen
-  const style: React.CSSProperties = { left: x, top: y }
-
   return (
     <div
-      ref={menuRef}
       className="fixed z-50 bg-zinc-800 border border-zinc-600 rounded-md shadow-xl py-1 min-w-[180px]"
-      style={style}
+      style={{ left: x, top: y }}
     >
       {config?.folders && config.folders.length > 0 && (
         <>
@@ -55,11 +53,8 @@ function ContextMenu({
                 key={folder.id}
                 onClick={(e) => {
                   e.stopPropagation()
-                  if (isInFolder) {
-                    removeSessionFromFolder(folder.id, sessionId)
-                  } else {
-                    addSessionToFolder(folder.id, sessionId)
-                  }
+                  if (isInFolder) removeSessionFromFolder(folder.id, sessionId)
+                  else addSessionToFolder(folder.id, sessionId)
                   onClose()
                 }}
                 className="w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-700 flex items-center gap-2"
@@ -86,13 +81,15 @@ function ContextMenu({
   )
 }
 
+// ============ Session Item ============
+
 function SessionItem({
   session,
-  indent,
+  depth,
   onContextMenu
 }: {
   session: SessionSummary
-  indent: number
+  depth: number
   onContextMenu: (e: React.MouseEvent, sessionId: string) => void
 }) {
   const { selectedSession, selectSession, config } = useStore()
@@ -113,7 +110,7 @@ function SessionItem({
       className={`w-full py-1.5 pr-3 text-left hover:bg-zinc-800 group ${
         selectedSession?.id === session.id ? 'bg-zinc-800' : ''
       }`}
-      style={{ paddingLeft: `${indent * 16 + 12}px` }}
+      style={{ paddingLeft: `${depth * 16 + 12}px` }}
     >
       <div className="text-sm text-zinc-200 truncate">{title.slice(0, 60)}</div>
       <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500">
@@ -131,11 +128,236 @@ function SessionItem({
   )
 }
 
+// ============ Inline New Folder Input ============
+
+function InlineNewFolder({
+  depth,
+  onSubmit,
+  onCancel
+}: {
+  depth: number
+  onSubmit: (name: string) => void
+  onCancel: () => void
+}) {
+  const [value, setValue] = useState('')
+  return (
+    <div style={{ paddingLeft: `${depth * 16 + 12}px` }} className="pr-3 py-1">
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && value.trim()) onSubmit(value.trim())
+          if (e.key === 'Escape') onCancel()
+        }}
+        onBlur={() => { if (value.trim()) onSubmit(value.trim()); else onCancel() }}
+        placeholder="子文件夹名称"
+        className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400"
+      />
+    </div>
+  )
+}
+
+// ============ Recursive Folder Node ============
+
+function FolderNode({
+  folder,
+  depth,
+  allFolders,
+  sessionMap,
+  expandedFolders,
+  toggleFolder,
+  dragOverFolderId,
+  setDragOverFolderId,
+  renamingFolderId,
+  setRenamingFolderId,
+  renamingValue,
+  setRenamingValue,
+  handleRenameFolder,
+  onSessionContextMenu,
+  creatingSubfolderId,
+  setCreatingSubfolderId
+}: {
+  folder: Folder
+  depth: number
+  allFolders: Folder[]
+  sessionMap: Map<string, SessionSummary>
+  expandedFolders: Set<string>
+  toggleFolder: (id: string) => void
+  dragOverFolderId: string | null
+  setDragOverFolderId: (id: string | null) => void
+  renamingFolderId: string | null
+  setRenamingFolderId: (id: string | null) => void
+  renamingValue: string
+  setRenamingValue: (v: string) => void
+  handleRenameFolder: (id: string) => void
+  onSessionContextMenu: (e: React.MouseEvent, sessionId: string) => void
+  creatingSubfolderId: string | null
+  setCreatingSubfolderId: (id: string | null) => void
+}) {
+  const { addSessionToFolder, deleteFolder, createFolder } = useStore()
+  const isExpanded = expandedFolders.has(folder.id)
+
+  // Child folders
+  const childFolders = allFolders.filter((f) => f.parentId === folder.id)
+
+  // Direct sessions
+  const folderSessions = folder.sessionIds
+    .map((id) => sessionMap.get(id))
+    .filter(Boolean) as SessionSummary[]
+
+  const totalCount = folderSessions.length + childFolders.reduce((acc, cf) => {
+    const cfSessions = cf.sessionIds.length
+    return acc + cfSessions
+  }, 0)
+
+  return (
+    <div>
+      {/* Folder header */}
+      <button
+        onClick={() => {
+          if (renamingFolderId === folder.id) return
+          toggleFolder(folder.id)
+        }}
+        onDoubleClick={() => {
+          setRenamingFolderId(folder.id)
+          setRenamingValue(folder.name)
+        }}
+        onDragOver={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setDragOverFolderId(folder.id)
+        }}
+        onDragLeave={() => setDragOverFolderId(null)}
+        onDrop={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setDragOverFolderId(null)
+          const sessionId = e.dataTransfer.getData('sessionId')
+          if (sessionId) {
+            addSessionToFolder(folder.id, sessionId)
+            // Auto-expand
+            if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
+          }
+        }}
+        className={`w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm hover:bg-zinc-800 group ${
+          dragOverFolderId === folder.id ? 'ring-1 ring-blue-500 bg-blue-900/20' : ''
+        } text-zinc-400`}
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+      >
+        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <FolderIcon size={14} style={folder.color ? { color: folder.color } : undefined} />
+        {renamingFolderId === folder.id ? (
+          <input
+            autoFocus
+            value={renamingValue}
+            onChange={(e) => setRenamingValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleRenameFolder(folder.id)
+              if (e.key === 'Escape') { setRenamingFolderId(null); setRenamingValue('') }
+            }}
+            onBlur={() => handleRenameFolder(folder.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 min-w-0 px-1 py-0 text-sm bg-zinc-700 border border-zinc-500 rounded text-zinc-200 focus:outline-none"
+          />
+        ) : (
+          <span className="truncate flex-1">
+            {folder.name}
+            <span className="text-zinc-600 ml-1">({totalCount})</span>
+          </span>
+        )}
+        {/* Add subfolder button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            setCreatingSubfolderId(folder.id)
+            if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
+          }}
+          className="hidden group-hover:block p-0.5 hover:text-blue-400"
+          title="新建子文件夹"
+        >
+          <Plus size={12} />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            if (confirm(`删除文件夹「${folder.name}」？（含子文件夹，不会删除对话）`)) deleteFolder(folder.id)
+          }}
+          className="hidden group-hover:block p-0.5 hover:text-red-400"
+          title="删除文件夹"
+        >
+          <Trash2 size={12} />
+        </button>
+      </button>
+
+      {/* Expanded content */}
+      {isExpanded && (
+        <div>
+          {/* Inline subfolder creation */}
+          {creatingSubfolderId === folder.id && (
+            <InlineNewFolder
+              depth={depth + 1}
+              onSubmit={(name) => {
+                createFolder(name, undefined, folder.id)
+                setCreatingSubfolderId(null)
+              }}
+              onCancel={() => setCreatingSubfolderId(null)}
+            />
+          )}
+
+          {/* Child folders (recursive) */}
+          {childFolders.map((child) => (
+            <FolderNode
+              key={child.id}
+              folder={child}
+              depth={depth + 1}
+              allFolders={allFolders}
+              sessionMap={sessionMap}
+              expandedFolders={expandedFolders}
+              toggleFolder={toggleFolder}
+              dragOverFolderId={dragOverFolderId}
+              setDragOverFolderId={setDragOverFolderId}
+              renamingFolderId={renamingFolderId}
+              setRenamingFolderId={setRenamingFolderId}
+              renamingValue={renamingValue}
+              setRenamingValue={setRenamingValue}
+              handleRenameFolder={handleRenameFolder}
+              onSessionContextMenu={onSessionContextMenu}
+              creatingSubfolderId={creatingSubfolderId}
+              setCreatingSubfolderId={setCreatingSubfolderId}
+            />
+          ))}
+
+          {/* Direct sessions */}
+          {folderSessions.map((session) => (
+            <SessionItem
+              key={session.id}
+              session={session}
+              depth={depth + 1}
+              onContextMenu={onSessionContextMenu}
+            />
+          ))}
+
+          {/* Empty state */}
+          {childFolders.length === 0 && folderSessions.length === 0 && creatingSubfolderId !== folder.id && (
+            <div
+              className="py-2 text-xs text-zinc-600 italic"
+              style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}
+            >
+              拖拽对话到这里
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============ Main Sidebar ============
+
 export function Sidebar() {
   const {
-    sessions, config, selectedSession,
-    selectSession, selectFolder, createFolder, deleteFolder, renameFolder,
-    addSessionToFolder
+    sessions, config, createFolder
   } = useStore()
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [showNewFolder, setShowNewFolder] = useState(false)
@@ -145,14 +367,17 @@ export function Sidebar() {
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null)
   const [renamingValue, setRenamingValue] = useState('')
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree')
+  const [creatingSubfolderId, setCreatingSubfolderId] = useState<string | null>(null)
 
-  const toggleFolder = (id: string) => {
+  const { renameFolder } = useStore()
+
+  const toggleFolder = useCallback((id: string) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev)
       next.has(id) ? next.delete(id) : next.add(id)
       return next
     })
-  }
+  }, [])
 
   const handleCreateFolder = () => {
     if (newFolderName.trim()) {
@@ -162,37 +387,41 @@ export function Sidebar() {
     }
   }
 
-  const handleRenameFolder = (folderId: string) => {
+  const handleRenameFolder = useCallback((folderId: string) => {
     if (renamingValue.trim()) {
       renameFolder(folderId, renamingValue.trim())
     }
     setRenamingFolderId(null)
     setRenamingValue('')
-  }
+  }, [renamingValue, renameFolder])
 
-  const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, sessionId: string) => {
     setContextMenu({ x: e.clientX, y: e.clientY, sessionId })
-  }
+  }, [])
 
-  // Compute which sessions are in at least one folder
+  // Compute which sessions are in at least one folder (at any depth)
   const groupedSessionIds = useMemo(() => {
     const ids = new Set<string>()
     config?.folders.forEach((f) => f.sessionIds.forEach((id) => ids.add(id)))
     return ids
   }, [config?.folders])
 
-  // Ungrouped sessions: not in any folder
   const ungroupedSessions = useMemo(
     () => sessions.filter((s) => !groupedSessionIds.has(s.id)),
     [sessions, groupedSessionIds]
   )
 
-  // Map session id -> session for quick lookup
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionSummary>()
     sessions.forEach((s) => map.set(s.id, s))
     return map
   }, [sessions])
+
+  // Root-level folders (no parent)
+  const rootFolders = useMemo(
+    () => (config?.folders || []).filter((f) => !f.parentId),
+    [config?.folders]
+  )
 
   return (
     <div className="w-60 h-full flex flex-col border-r border-zinc-700 bg-zinc-900 shrink-0">
@@ -202,7 +431,7 @@ export function Sidebar() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => setViewMode(viewMode === 'tree' ? 'flat' : 'tree')}
-            className={`p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200`}
+            className="p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200"
             title={viewMode === 'tree' ? '切换为时间线视图' : '切换为树状视图'}
           >
             {viewMode === 'tree' ? <List size={14} /> : <FolderTree size={14} />}
@@ -217,7 +446,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* New folder input */}
+      {/* New root folder input */}
       {showNewFolder && (
         <div className="p-2 border-b border-zinc-700">
           <input
@@ -237,9 +466,7 @@ export function Sidebar() {
 
       {/* Scrollable list */}
       <div className="flex-1 overflow-y-auto">
-
         {viewMode === 'flat' ? (
-          /* ====== FLAT MODE: all sessions by time ====== */
           <>
             <div className="px-3 py-2 text-[11px] text-zinc-500 uppercase tracking-wider">
               全部对话 ({sessions.length})
@@ -248,109 +475,38 @@ export function Sidebar() {
               <SessionItem
                 key={session.id}
                 session={session}
-                indent={0}
+                depth={0}
                 onContextMenu={handleContextMenu}
               />
             ))}
           </>
         ) : (
-          /* ====== TREE MODE: folders with children, then ungrouped ====== */
           <>
-            {/* Folders */}
-            {config?.folders.map((folder) => {
-              const isExpanded = expandedFolders.has(folder.id)
-              const folderSessions = folder.sessionIds
-                .map((id) => sessionMap.get(id))
-                .filter(Boolean) as SessionSummary[]
+            {/* Recursive folder tree */}
+            {rootFolders.map((folder) => (
+              <FolderNode
+                key={folder.id}
+                folder={folder}
+                depth={0}
+                allFolders={config?.folders || []}
+                sessionMap={sessionMap}
+                expandedFolders={expandedFolders}
+                toggleFolder={toggleFolder}
+                dragOverFolderId={dragOverFolderId}
+                setDragOverFolderId={setDragOverFolderId}
+                renamingFolderId={renamingFolderId}
+                setRenamingFolderId={setRenamingFolderId}
+                renamingValue={renamingValue}
+                setRenamingValue={setRenamingValue}
+                handleRenameFolder={handleRenameFolder}
+                onSessionContextMenu={handleContextMenu}
+                creatingSubfolderId={creatingSubfolderId}
+                setCreatingSubfolderId={setCreatingSubfolderId}
+              />
+            ))}
 
-              return (
-                <div key={folder.id}>
-                  {/* Folder header */}
-                  <button
-                    onClick={() => {
-                      if (renamingFolderId === folder.id) return
-                      toggleFolder(folder.id)
-                    }}
-                    onDoubleClick={() => {
-                      setRenamingFolderId(folder.id)
-                      setRenamingValue(folder.name)
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault()
-                      setDragOverFolderId(folder.id)
-                    }}
-                    onDragLeave={() => setDragOverFolderId(null)}
-                    onDrop={(e) => {
-                      e.preventDefault()
-                      setDragOverFolderId(null)
-                      const sessionId = e.dataTransfer.getData('sessionId')
-                      if (sessionId) {
-                        addSessionToFolder(folder.id, sessionId)
-                        // Auto-expand the folder when dropping
-                        setExpandedFolders((prev) => new Set([...prev, folder.id]))
-                      }
-                    }}
-                    className={`w-full px-3 py-2 flex items-center gap-2 text-sm hover:bg-zinc-800 group ${
-                      dragOverFolderId === folder.id ? 'ring-1 ring-blue-500 bg-blue-900/20' : ''
-                    } text-zinc-400`}
-                  >
-                    {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    <Folder size={14} style={folder.color ? { color: folder.color } : undefined} />
-                    {renamingFolderId === folder.id ? (
-                      <input
-                        autoFocus
-                        value={renamingValue}
-                        onChange={(e) => setRenamingValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleRenameFolder(folder.id)
-                          if (e.key === 'Escape') { setRenamingFolderId(null); setRenamingValue('') }
-                        }}
-                        onBlur={() => handleRenameFolder(folder.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex-1 min-w-0 px-1 py-0 text-sm bg-zinc-700 border border-zinc-500 rounded text-zinc-200 focus:outline-none"
-                      />
-                    ) : (
-                      <span className="truncate flex-1">
-                        {folder.name}
-                        <span className="text-zinc-600 ml-1">({folderSessions.length})</span>
-                      </span>
-                    )}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (confirm(`删除文件夹「${folder.name}」？（不会删除其中的对话）`)) deleteFolder(folder.id)
-                      }}
-                      className="hidden group-hover:block p-0.5 hover:text-red-400"
-                      title="删除文件夹"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </button>
-
-                  {/* Folder children */}
-                  {isExpanded && folderSessions.length > 0 && (
-                    <div>
-                      {folderSessions.map((session) => (
-                        <SessionItem
-                          key={session.id}
-                          session={session}
-                          indent={2}
-                          onContextMenu={handleContextMenu}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {isExpanded && folderSessions.length === 0 && (
-                    <div className="pl-10 pr-3 py-2 text-xs text-zinc-600 italic">
-                      拖拽对话到这里
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-
-            {/* Divider between folders and ungrouped */}
-            {config?.folders && config.folders.length > 0 && ungroupedSessions.length > 0 && (
+            {/* Divider */}
+            {rootFolders.length > 0 && ungroupedSessions.length > 0 && (
               <div className="mx-3 my-2 flex items-center gap-2">
                 <div className="flex-1 border-t border-zinc-700" />
                 <span className="text-[10px] text-zinc-600 shrink-0">未分组</span>
@@ -358,12 +514,12 @@ export function Sidebar() {
               </div>
             )}
 
-            {/* Ungrouped sessions */}
+            {/* Ungrouped */}
             {ungroupedSessions.map((session) => (
               <SessionItem
                 key={session.id}
                 session={session}
-                indent={0}
+                depth={0}
                 onContextMenu={handleContextMenu}
               />
             ))}

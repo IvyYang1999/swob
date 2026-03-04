@@ -202,9 +202,9 @@ ipcMain.handle('config:save', (_event, config: UserConfig) => {
   saveConfig(config)
   return config
 })
-ipcMain.handle('config:createFolder', (_event, name: string, color?: string) => {
+ipcMain.handle('config:createFolder', (_event, name: string, color?: string, parentId?: string) => {
   const config = loadConfig()
-  return createFolder(config, name, color)
+  return createFolder(config, name, color, parentId)
 })
 ipcMain.handle('config:deleteFolder', (_event, folderId: string) => {
   const config = loadConfig()

@@ -73,6 +73,7 @@ export interface SessionDetail extends SessionSummary {
 export interface Folder {
   id: string
   name: string
+  parentId?: string | null
   sessionIds: string[]
   color?: string
   createdAt: string

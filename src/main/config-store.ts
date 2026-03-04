@@ -32,10 +32,11 @@ export function saveConfig(config: UserConfig): void {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8')
 }
 
-export function createFolder(config: UserConfig, name: string, color?: string): UserConfig {
+export function createFolder(config: UserConfig, name: string, color?: string, parentId?: string): UserConfig {
   const folder: Folder = {
     id: randomUUID(),
     name,
+    parentId: parentId || null,
     sessionIds: [],
     color,
     createdAt: new Date().toISOString()
@@ -46,7 +47,19 @@ export function createFolder(config: UserConfig, name: string, color?: string): 
 }
 
 export function deleteFolder(config: UserConfig, folderId: string): UserConfig {
-  config.folders = config.folders.filter((f) => f.id !== folderId)
+  // Collect all descendant folder IDs to cascade delete
+  const toDelete = new Set<string>([folderId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const f of config.folders) {
+      if (f.parentId && toDelete.has(f.parentId) && !toDelete.has(f.id)) {
+        toDelete.add(f.id)
+        changed = true
+      }
+    }
+  }
+  config.folders = config.folders.filter((f) => !toDelete.has(f.id))
   saveConfig(config)
   return config
 }

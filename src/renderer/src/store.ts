@@ -38,6 +38,7 @@ interface SessionDetail extends SessionSummary {
 interface Folder {
   id: string
   name: string
+  parentId?: string | null
   sessionIds: string[]
   color?: string
   createdAt: string
@@ -75,7 +76,7 @@ interface AppState {
   toggleViewMode: () => void
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
-  createFolder: (name: string, color?: string) => Promise<void>
+  createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
   deleteFolder: (folderId: string) => Promise<void>
   renameFolder: (folderId: string, name: string) => Promise<void>
   addSessionToFolder: (folderId: string, sessionId: string) => Promise<void>
@@ -153,8 +154,8 @@ export const useStore = create<AppState>((set, get) => ({
   selectFolder: (folderId) => set({ selectedFolderId: folderId }),
   toggleInfoPanel: () => set((state) => ({ infoPanelOpen: !state.infoPanelOpen })),
 
-  createFolder: async (name, color) => {
-    const config = await window.api.createFolder(name, color)
+  createFolder: async (name, color, parentId) => {
+    const config = await window.api.createFolder(name, color, parentId)
     set({ config: config as UserConfig })
   },
   deleteFolder: async (folderId) => {

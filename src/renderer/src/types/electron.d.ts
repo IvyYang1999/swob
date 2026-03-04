@@ -14,7 +14,7 @@ interface ElectronAPI {
   resumeSession: (sessionId: string, terminalApp: string) => Promise<void>
   loadConfig: () => Promise<any>
   saveConfig: (config: any) => Promise<any>
-  createFolder: (name: string, color?: string) => Promise<any>
+  createFolder: (name: string, color?: string, parentId?: string) => Promise<any>
   deleteFolder: (folderId: string) => Promise<any>
   renameFolder: (folderId: string, name: string) => Promise<any>
   addSessionToFolder: (

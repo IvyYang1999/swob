@@ -1,9 +1,32 @@
-import { app, BrowserWindow } from 'electron'
+import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { exec } from 'child_process'
+import * as chokidar from 'chokidar'
+import {
+  loadAllSessions,
+  loadSessionDetail,
+  findAllSessionFiles,
+  parseSessionFile,
+  buildSessionSummary
+} from './session-loader'
+import {
+  loadConfig,
+  saveConfig,
+  createFolder,
+  deleteFolder,
+  renameFolder,
+  addSessionToFolder,
+  removeSessionFromFolder,
+  setSessionMeta
+} from './config-store'
+import type { UserConfig } from './types'
+
+let mainWindow: BrowserWindow | null = null
+let watcher: chokidar.FSWatcher | null = null
 
 function createWindow(): void {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1000,
@@ -17,7 +40,12 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+    mainWindow?.show()
+  })
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -27,17 +55,205 @@ function createWindow(): void {
   }
 }
 
+function startFileWatcher(): void {
+  const claudeDir = join(process.env.HOME || '', '.claude', 'projects')
+  watcher = chokidar.watch(join(claudeDir, '*/*.jsonl'), {
+    ignoreInitial: true,
+    depth: 1
+  })
+
+  watcher.on('add', async (filePath) => {
+    if (filePath.includes('/subagents/')) return
+    try {
+      const raw = await parseSessionFile(filePath)
+      const summary = buildSessionSummary(filePath, raw)
+      if (summary) {
+        mainWindow?.webContents.send('session:added', summary)
+      }
+    } catch {
+      /* ignore */
+    }
+  })
+
+  watcher.on('change', async (filePath) => {
+    if (filePath.includes('/subagents/')) return
+    try {
+      const raw = await parseSessionFile(filePath)
+      const summary = buildSessionSummary(filePath, raw)
+      if (summary) {
+        mainWindow?.webContents.send('session:updated', summary)
+      }
+    } catch {
+      /* ignore */
+    }
+  })
+}
+
+// --- IPC Handlers ---
+
+ipcMain.handle('sessions:loadAll', async () => {
+  return loadAllSessions()
+})
+
+ipcMain.handle('sessions:loadDetail', async (_event, filePath: string) => {
+  return loadSessionDetail(filePath)
+})
+
+ipcMain.handle('sessions:search', async (_event, query: string) => {
+  const files = findAllSessionFiles().filter((f) => !f.includes('/subagents/'))
+  const results: Array<{
+    sessionId: string
+    filePath: string
+    firstUserMessage: string
+    matches: Array<{ text: string; timestamp: string }>
+  }> = []
+
+  for (const file of files) {
+    try {
+      const raw = await parseSessionFile(file)
+      const sessionId = raw[0]?.sessionId
+      if (!sessionId) continue
+
+      const firstUser = raw.find((m) => m.type === 'user')
+      let firstUserMessage = ''
+      if (firstUser?.message) {
+        const content = firstUser.message.content
+        if (typeof content === 'string') firstUserMessage = content.slice(0, 200)
+        else if (Array.isArray(content)) {
+          firstUserMessage = content
+            .filter((p) => p.type === 'text')
+            .map((p) => p.text || '')
+            .join(' ')
+            .slice(0, 200)
+        }
+      }
+
+      const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+      const matches: Array<{ text: string; timestamp: string }> = []
+
+      for (const msg of raw) {
+        if (msg.type !== 'user' && msg.type !== 'assistant') continue
+        const content = msg.message?.content
+        let text = ''
+        if (typeof content === 'string') text = content
+        else if (Array.isArray(content)) {
+          text = content
+            .filter((p) => p.type === 'text')
+            .map((p) => p.text || '')
+            .join(' ')
+        }
+        if (regex.test(text)) {
+          const matchIndex = text.search(regex)
+          const start = Math.max(0, matchIndex - 50)
+          const end = Math.min(text.length, matchIndex + query.length + 50)
+          matches.push({
+            text:
+              (start > 0 ? '...' : '') +
+              text.slice(start, end) +
+              (end < text.length ? '...' : ''),
+            timestamp: msg.timestamp
+          })
+          regex.lastIndex = 0
+        }
+        if (matches.length >= 5) break
+      }
+
+      if (matches.length > 0) {
+        results.push({ sessionId, filePath: file, firstUserMessage, matches })
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  return results
+})
+
+ipcMain.handle(
+  'terminal:resume',
+  async (_event, sessionId: string, terminalApp: string) => {
+    const command = `claude --resume ${sessionId}`
+    if (terminalApp === 'iTerm2') {
+      const script = `
+      tell application "iTerm2"
+        activate
+        tell current window
+          create tab with default profile
+          tell current session
+            write text "${command}"
+          end tell
+        end tell
+      end tell
+    `
+      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`)
+    } else {
+      const script = `
+      tell application "Terminal"
+        activate
+        do script "${command}"
+      end tell
+    `
+      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`)
+    }
+  }
+)
+
+ipcMain.handle('config:load', () => loadConfig())
+ipcMain.handle('config:save', (_event, config: UserConfig) => {
+  saveConfig(config)
+  return config
+})
+ipcMain.handle('config:createFolder', (_event, name: string, color?: string) => {
+  const config = loadConfig()
+  return createFolder(config, name, color)
+})
+ipcMain.handle('config:deleteFolder', (_event, folderId: string) => {
+  const config = loadConfig()
+  return deleteFolder(config, folderId)
+})
+ipcMain.handle(
+  'config:renameFolder',
+  (_event, folderId: string, name: string) => {
+    const config = loadConfig()
+    return renameFolder(config, folderId, name)
+  }
+)
+ipcMain.handle(
+  'config:addSessionToFolder',
+  (_event, folderId: string, sessionId: string) => {
+    const config = loadConfig()
+    return addSessionToFolder(config, folderId, sessionId)
+  }
+)
+ipcMain.handle(
+  'config:removeSessionFromFolder',
+  (_event, folderId: string, sessionId: string) => {
+    const config = loadConfig()
+    return removeSessionFromFolder(config, folderId, sessionId)
+  }
+)
+ipcMain.handle(
+  'config:setSessionMeta',
+  (_event, sessionId: string, meta: { customTitle?: string; notes?: string }) => {
+    const config = loadConfig()
+    return setSessionMeta(config, sessionId, meta)
+  }
+)
+
+// --- App Lifecycle ---
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.claude-session-manager')
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
   createWindow()
+  startFileWatcher()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
 app.on('window-all-closed', () => {
+  watcher?.close()
   if (process.platform !== 'darwin') app.quit()
 })

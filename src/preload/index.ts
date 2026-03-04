@@ -16,7 +16,7 @@ const api = {
   loadConfig: () => ipcRenderer.invoke('config:load'),
   saveConfig: (config: unknown) => ipcRenderer.invoke('config:save', config),
   createFolder: (name: string, color?: string, parentId?: string) =>
-    ipcRenderer.invoke('config:createFolder', name, color, parentId),
+    ipcRenderer.invoke('config:createFolder', name, color ?? null, parentId ?? null),
   deleteFolder: (folderId: string) =>
     ipcRenderer.invoke('config:deleteFolder', folderId),
   renameFolder: (folderId: string, name: string) =>

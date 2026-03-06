@@ -3,20 +3,24 @@ import { contextBridge, ipcRenderer } from 'electron'
 const api = {
   // Sessions
   loadAllSessions: () => ipcRenderer.invoke('sessions:loadAll'),
-  loadSessionDetail: (filePath: string) =>
-    ipcRenderer.invoke('sessions:loadDetail', filePath),
+  loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string) =>
+    ipcRenderer.invoke('sessions:loadDetail', filePath, allFilePaths, branchParentFilePaths, branchPointUuid),
   searchSessions: (query: string) =>
     ipcRenderer.invoke('sessions:search', query),
 
   // Terminal
-  resumeSession: (sessionId: string, terminalApp: string) =>
-    ipcRenderer.invoke('terminal:resume', sessionId, terminalApp),
+  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string) =>
+    ipcRenderer.invoke('terminal:resume', sessionId, terminalApp, permissionMode),
+  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string }>, terminalApp: string) =>
+    ipcRenderer.invoke('terminal:resumeBatch', sessions, terminalApp),
 
   // Config
   loadConfig: () => ipcRenderer.invoke('config:load'),
   saveConfig: (config: unknown) => ipcRenderer.invoke('config:save', config),
-  createFolder: (name: string, color?: string, parentId?: string) =>
-    ipcRenderer.invoke('config:createFolder', name, color ?? null, parentId ?? null),
+  createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) =>
+    ipcRenderer.invoke('config:createFolder', opts),
+  moveFolder: (folderId: string, newParentId: string | null) =>
+    ipcRenderer.invoke('config:moveFolder', folderId, newParentId),
   deleteFolder: (folderId: string) =>
     ipcRenderer.invoke('config:deleteFolder', folderId),
   renameFolder: (folderId: string, name: string) =>
@@ -29,6 +33,10 @@ const api = {
     sessionId: string,
     meta: { customTitle?: string; notes?: string }
   ) => ipcRenderer.invoke('config:setSessionMeta', sessionId, meta),
+
+  // Shell
+  openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
+  showItemInFolder: (filePath: string) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
 
   // Events from main
   onSessionAdded: (callback: (session: unknown) => void) => {

@@ -8,6 +8,8 @@ export interface RawJsonlMessage {
   cwd?: string
   version?: string
   slug?: string
+  isSidechain?: boolean
+  permissionMode?: string
   message?: {
     role: string
     content: string | ContentPart[]
@@ -33,6 +35,8 @@ export interface ParsedMessage {
   textContent: string
   toolCalls: ToolCallInfo[]
   isPreCompact: boolean
+  isSidechain: boolean
+  isSharedContext: boolean
   raw: RawJsonlMessage
 }
 
@@ -49,6 +53,7 @@ export interface SkillInvocation {
 
 export interface SessionSummary {
   id: string
+  sessionId: string
   slug: string
   createdAt: string
   updatedAt: string
@@ -64,7 +69,22 @@ export interface SessionSummary {
   projectPath: string
   filePath: string
   fileSizeBytes: number
+  allFilePaths?: string[]
+  permissionMode?: string
+  branchParentFilePaths?: string[]
+  branchPointUuid?: string
+  userImages: string[]
+  referencedFiles: FileRef[]
+  configFiles: string[]
 }
+
+export interface FileRef {
+  path: string
+  actions: FileAction[]
+  exists: boolean
+}
+
+export type FileAction = 'read' | 'write' | 'edit' | 'user-image' | 'user-input'
 
 export interface SessionDetail extends SessionSummary {
   messages: ParsedMessage[]

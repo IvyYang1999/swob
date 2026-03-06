@@ -1,5 +1,5 @@
-appId: com.claude-session-manager
-productName: Claude Session Manager
+appId: com.swob.app
+productName: Swob
 directories:
   buildResources: build
 files:
@@ -13,4 +13,4 @@ mac:
       arch:
         - arm64
         - x64
-  artifactName: ${name}-${version}-${arch}.${ext}
+  artifactName: swob-${version}-${arch}.${ext}

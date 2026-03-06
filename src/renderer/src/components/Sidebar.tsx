@@ -3,7 +3,7 @@ import { useStore, type SessionSummary, type Folder } from '../store'
 import {
   FolderPlus, FolderOpen, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2, FolderInput, FolderMinus, List, FolderTree,
-  Plus
+  Plus, Play
 } from 'lucide-react'
 
 function formatDate(iso: string): string {
@@ -92,7 +92,7 @@ function SessionItem({
   depth: number
   onContextMenu: (e: React.MouseEvent, sessionId: string) => void
 }) {
-  const { selectedSession, selectSession, config } = useStore()
+  const { selectedUniqueId, selectSession, config } = useStore()
   const meta = config?.sessionMeta[session.id]
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
 
@@ -100,15 +100,22 @@ function SessionItem({
     <button
       draggable
       onDragStart={(e) => {
-        e.dataTransfer.setData('sessionId', session.id)
+        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'session', id: session.id }))
+        e.dataTransfer.effectAllowed = 'move'
       }}
-      onClick={() => selectSession(session.filePath)}
+      onClick={() => selectSession(
+        session.filePath,
+        (session as any).allFilePaths,
+        session.id,
+        (session as any).branchParentFilePaths,
+        (session as any).branchPointUuid
+      )}
       onContextMenu={(e) => {
         e.preventDefault()
         onContextMenu(e, session.id)
       }}
       className={`w-full py-1.5 pr-3 text-left hover:bg-zinc-800 group ${
-        selectedSession?.id === session.id ? 'bg-zinc-800' : ''
+        selectedUniqueId === session.id ? 'bg-zinc-800' : ''
       }`}
       style={{ paddingLeft: `${depth * 16 + 12}px` }}
     >
@@ -195,7 +202,7 @@ function FolderNode({
   creatingSubfolderId: string | null
   setCreatingSubfolderId: (id: string | null) => void
 }) {
-  const { addSessionToFolder, deleteFolder, createFolder } = useStore()
+  const { addSessionToFolder, deleteFolder, createFolder, moveFolder, resumeBatch } = useStore()
   const isExpanded = expandedFolders.has(folder.id)
 
   // Child folders
@@ -211,10 +218,47 @@ function FolderNode({
     return acc + cfSessions
   }, 0)
 
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOverFolderId(null)
+    try {
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'))
+      if (data.type === 'session' && data.id) {
+        addSessionToFolder(folder.id, data.id)
+        if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
+      } else if (data.type === 'folder' && data.id && data.id !== folder.id) {
+        moveFolder(data.id, folder.id)
+        if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
+      }
+    } catch { /* ignore */ }
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOverFolderId(folder.id)
+  }
+
   return (
-    <div>
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={(e) => {
+        // Only clear if leaving the folder entirely (not entering a child)
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setDragOverFolderId(null)
+        }
+      }}
+      onDrop={handleDrop}
+    >
       {/* Folder header */}
-      <button
+      <div
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'folder', id: folder.id }))
+          e.dataTransfer.effectAllowed = 'move'
+          e.stopPropagation()
+        }}
         onClick={() => {
           if (renamingFolderId === folder.id) return
           toggleFolder(folder.id)
@@ -223,24 +267,8 @@ function FolderNode({
           setRenamingFolderId(folder.id)
           setRenamingValue(folder.name)
         }}
-        onDragOver={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setDragOverFolderId(folder.id)
-        }}
-        onDragLeave={() => setDragOverFolderId(null)}
-        onDrop={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setDragOverFolderId(null)
-          const sessionId = e.dataTransfer.getData('sessionId')
-          if (sessionId) {
-            addSessionToFolder(folder.id, sessionId)
-            // Auto-expand
-            if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
-          }
-        }}
-        className={`w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm hover:bg-zinc-800 group ${
+        role="button"
+        className={`w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm hover:bg-zinc-800 group cursor-pointer select-none ${
           dragOverFolderId === folder.id ? 'ring-1 ring-blue-500 bg-blue-900/20' : ''
         } text-zinc-400`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -266,6 +294,22 @@ function FolderNode({
             <span className="text-zinc-600 ml-1">({totalCount})</span>
           </span>
         )}
+        {/* Batch resume */}
+        {folderSessions.length > 0 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              resumeBatch(folderSessions.map((s) => ({
+                sessionId: (s as any).sessionId || s.id,
+                permissionMode: (s as any).permissionMode
+              })))
+            }}
+            className="hidden group-hover:block p-0.5 hover:text-green-400"
+            title={`批量 Resume ${folderSessions.length} 个对话`}
+          >
+            <Play size={12} />
+          </button>
+        )}
         {/* Add subfolder button */}
         <button
           onClick={(e) => {
@@ -288,7 +332,7 @@ function FolderNode({
         >
           <Trash2 size={12} />
         </button>
-      </button>
+      </div>
 
       {/* Expanded content */}
       {isExpanded && (
@@ -355,9 +399,9 @@ function FolderNode({
 
 // ============ Main Sidebar ============
 
-export function Sidebar() {
+export function Sidebar({ width }: { width: number }) {
   const {
-    sessions, config, createFolder
+    sessions, config, createFolder, moveFolder
   } = useStore()
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [showNewFolder, setShowNewFolder] = useState(false)
@@ -424,7 +468,7 @@ export function Sidebar() {
   )
 
   return (
-    <div className="w-60 h-full flex flex-col border-r border-zinc-700 bg-zinc-900 shrink-0">
+    <div className="h-full flex flex-col bg-zinc-900 shrink-0" style={{ width }}>
       {/* Header */}
       <div className="p-3 flex items-center justify-between border-b border-zinc-700">
         <span className="text-sm font-medium text-zinc-300">Sessions</span>
@@ -505,9 +549,25 @@ export function Sidebar() {
               />
             ))}
 
-            {/* Divider */}
+            {/* Divider — drop here to make folder root-level */}
             {rootFolders.length > 0 && ungroupedSessions.length > 0 && (
-              <div className="mx-3 my-2 flex items-center gap-2">
+              <div
+                className="mx-3 my-2 flex items-center gap-2"
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  try {
+                    const data = JSON.parse(e.dataTransfer.getData('text/plain'))
+                    if (data.type === 'folder' && data.id) {
+                      moveFolder(data.id, null)
+                    }
+                  } catch { /* ignore */ }
+                }}
+              >
                 <div className="flex-1 border-t border-zinc-700" />
                 <span className="text-[10px] text-zinc-600 shrink-0">未分组</span>
                 <div className="flex-1 border-t border-zinc-700" />

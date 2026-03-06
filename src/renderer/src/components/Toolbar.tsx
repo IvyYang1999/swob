@@ -77,13 +77,20 @@ export function Toolbar() {
         </button>
 
         {selectedSession && (
-          <button
-            onClick={() => resumeSession(selectedSession.id)}
-            className="ml-2 px-3 py-1 text-xs rounded bg-green-700 hover:bg-green-600 text-white flex items-center gap-1"
-          >
-            <Play size={12} />
-            Resume
-          </button>
+          <>
+            {selectedSession.permissionMode === 'bypassPermissions' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800/50">
+                skip-permissions
+              </span>
+            )}
+            <button
+              onClick={() => resumeSession(selectedSession.sessionId || selectedSession.id, selectedSession.permissionMode)}
+              className="ml-2 px-3 py-1 text-xs rounded bg-green-700 hover:bg-green-600 text-white flex items-center gap-1"
+            >
+              <Play size={12} />
+              Resume
+            </button>
+          </>
         )}
       </div>
     </div>

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 interface SessionSummary {
   id: string
+  sessionId: string
   slug: string
   createdAt: string
   updatedAt: string
@@ -17,6 +18,13 @@ interface SessionSummary {
   projectPath: string
   filePath: string
   fileSizeBytes: number
+  allFilePaths?: string[]
+  permissionMode?: string
+  branchParentFilePaths?: string[]
+  branchPointUuid?: string
+  userImages?: string[]
+  referencedFiles?: Array<{ path: string; actions: string[]; exists: boolean }>
+  configFiles?: string[]
 }
 
 interface ParsedMessage {
@@ -28,6 +36,8 @@ interface ParsedMessage {
   textContent: string
   toolCalls: Array<{ name: string; input: Record<string, unknown> }>
   isPreCompact: boolean
+  isSidechain: boolean
+  isSharedContext: boolean
   raw: unknown
 }
 
@@ -60,6 +70,7 @@ interface SearchResult {
 interface AppState {
   sessions: SessionSummary[]
   selectedSession: SessionDetail | null
+  selectedUniqueId: string | null
   config: UserConfig | null
   searchResults: SearchResult[]
   searchQuery: string
@@ -69,14 +80,16 @@ interface AppState {
   infoPanelOpen: boolean
 
   initialize: () => Promise<void>
-  selectSession: (filePath: string) => Promise<void>
+  selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string) => Promise<void>
   search: (query: string) => Promise<void>
   clearSearch: () => void
-  resumeSession: (sessionId: string) => Promise<void>
+  resumeSession: (sessionId: string, permissionMode?: string) => Promise<void>
+  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string }>) => Promise<void>
   toggleViewMode: () => void
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
+  moveFolder: (folderId: string, newParentId: string | null) => Promise<void>
   deleteFolder: (folderId: string) => Promise<void>
   renameFolder: (folderId: string, name: string) => Promise<void>
   addSessionToFolder: (folderId: string, sessionId: string) => Promise<void>
@@ -89,6 +102,7 @@ export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, 
 export const useStore = create<AppState>((set, get) => ({
   sessions: [],
   selectedSession: null,
+  selectedUniqueId: null,
   config: null,
   searchResults: [],
   searchQuery: '',
@@ -124,9 +138,9 @@ export const useStore = create<AppState>((set, get) => ({
     })
   },
 
-  selectSession: async (filePath) => {
-    const detail = await window.api.loadSessionDetail(filePath)
-    set({ selectedSession: detail as SessionDetail | null })
+  selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?) => {
+    const detail = await window.api.loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid)
+    set({ selectedSession: detail as SessionDetail | null, selectedUniqueId: uniqueId || null })
   },
 
   search: async (query) => {
@@ -141,9 +155,14 @@ export const useStore = create<AppState>((set, get) => ({
 
   clearSearch: () => set({ searchResults: [], searchQuery: '' }),
 
-  resumeSession: async (sessionId) => {
+  resumeSession: async (sessionId, permissionMode?) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
-    await window.api.resumeSession(sessionId, terminalApp)
+    await window.api.resumeSession(sessionId, terminalApp, permissionMode)
+  },
+
+  resumeBatch: async (sessions) => {
+    const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
+    await window.api.resumeBatch(sessions, terminalApp)
   },
 
   toggleViewMode: () =>
@@ -155,7 +174,15 @@ export const useStore = create<AppState>((set, get) => ({
   toggleInfoPanel: () => set((state) => ({ infoPanelOpen: !state.infoPanelOpen })),
 
   createFolder: async (name, color, parentId) => {
-    const config = await window.api.createFolder(name, color, parentId)
+    const config = await window.api.createFolder({
+      name,
+      color: color || null,
+      parentId: parentId || null
+    })
+    set({ config: config as UserConfig })
+  },
+  moveFolder: async (folderId, newParentId) => {
+    const config = await window.api.moveFolder(folderId, newParentId)
     set({ config: config as UserConfig })
   },
   deleteFolder: async (folderId) => {

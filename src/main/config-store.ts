@@ -32,16 +32,36 @@ export function saveConfig(config: UserConfig): void {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8')
 }
 
-export function createFolder(config: UserConfig, name: string, color?: string, parentId?: string): UserConfig {
+export function createFolder(
+  config: UserConfig,
+  opts: { name: string; color?: string | null; parentId?: string | null }
+): UserConfig {
   const folder: Folder = {
     id: randomUUID(),
-    name,
-    parentId: parentId || null,
+    name: opts.name,
+    parentId: opts.parentId || null,
     sessionIds: [],
-    color,
+    color: opts.color || undefined,
     createdAt: new Date().toISOString()
   }
   config.folders.push(folder)
+  saveConfig(config)
+  return config
+}
+
+export function moveFolder(config: UserConfig, folderId: string, newParentId: string | null): UserConfig {
+  const folder = config.folders.find((f) => f.id === folderId)
+  if (!folder) return config
+  // Prevent circular: newParent cannot be a descendant of folderId
+  if (newParentId) {
+    let current = newParentId
+    while (current) {
+      if (current === folderId) return config // circular, abort
+      const parent = config.folders.find((f) => f.id === current)
+      current = parent?.parentId || ''
+    }
+  }
+  folder.parentId = newParentId
   saveConfig(config)
   return config
 }
@@ -76,11 +96,17 @@ export function addSessionToFolder(
   folderId: string,
   sessionId: string
 ): UserConfig {
+  // Remove from all other folders first (move semantics)
+  for (const f of config.folders) {
+    if (f.id !== folderId) {
+      f.sessionIds = f.sessionIds.filter((id) => id !== sessionId)
+    }
+  }
   const folder = config.folders.find((f) => f.id === folderId)
   if (folder && !folder.sessionIds.includes(sessionId)) {
     folder.sessionIds.push(sessionId)
-    saveConfig(config)
   }
+  saveConfig(config)
   return config
 }
 

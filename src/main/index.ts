@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { exec } from 'child_process'
+import * as fs from 'fs'
 import * as chokidar from 'chokidar'
 import {
   loadAllSessions,
@@ -16,6 +17,7 @@ import {
   createFolder,
   deleteFolder,
   renameFolder,
+  moveFolder,
   addSessionToFolder,
   removeSessionFromFolder,
   setSessionMeta
@@ -95,9 +97,12 @@ ipcMain.handle('sessions:loadAll', async () => {
   return loadAllSessions()
 })
 
-ipcMain.handle('sessions:loadDetail', async (_event, filePath: string) => {
-  return loadSessionDetail(filePath)
-})
+ipcMain.handle(
+  'sessions:loadDetail',
+  async (_event, filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string) => {
+    return loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid)
+  }
+)
 
 ipcMain.handle('sessions:search', async (_event, query: string) => {
   const files = findAllSessionFiles().filter((f) => !f.includes('/subagents/'))
@@ -168,31 +173,39 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
   return results
 })
 
+function buildResumeCommand(sessionId: string, permissionMode?: string): string {
+  if (permissionMode === 'bypassPermissions') {
+    return `claude --dangerously-skip-permissions --resume ${sessionId}`
+  }
+  return `claude --resume ${sessionId}`
+}
+
+// Open a .command file in the default terminal — no AppleScript, no permissions needed
+function openInTerminal(command: string): void {
+  const tmpPath = `/tmp/csm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.command`
+  fs.writeFileSync(tmpPath, `#!/bin/bash\n${command}\n`)
+  fs.chmodSync(tmpPath, 0o755)
+  exec(`open "${tmpPath}"`, () => {
+    setTimeout(() => {
+      try { fs.unlinkSync(tmpPath) } catch { /* ignore */ }
+    }, 3000)
+  })
+}
+
+// Single resume: opens a new terminal window
 ipcMain.handle(
   'terminal:resume',
-  async (_event, sessionId: string, terminalApp: string) => {
-    const command = `claude --resume ${sessionId}`
-    if (terminalApp === 'iTerm2') {
-      const script = `
-      tell application "iTerm2"
-        activate
-        tell current window
-          create tab with default profile
-          tell current session
-            write text "${command}"
-          end tell
-        end tell
-      end tell
-    `
-      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`)
-    } else {
-      const script = `
-      tell application "Terminal"
-        activate
-        do script "${command}"
-      end tell
-    `
-      exec(`osascript -e '${script.replace(/'/g, "'\\''")}'`)
+  async (_event, sessionId: string, _terminalApp: string, permissionMode?: string) => {
+    openInTerminal(buildResumeCommand(sessionId, permissionMode))
+  }
+)
+
+// Batch resume: each session opens in its own terminal window
+ipcMain.handle(
+  'terminal:resumeBatch',
+  async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string }>, _terminalApp: string) => {
+    for (const s of sessionIds) {
+      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode))
     }
   }
 )
@@ -202,10 +215,20 @@ ipcMain.handle('config:save', (_event, config: UserConfig) => {
   saveConfig(config)
   return config
 })
-ipcMain.handle('config:createFolder', (_event, name: string, color?: string, parentId?: string) => {
-  const config = loadConfig()
-  return createFolder(config, name, color, parentId)
-})
+ipcMain.handle(
+  'config:createFolder',
+  (_event, opts: { name: string; color?: string | null; parentId?: string | null }) => {
+    const config = loadConfig()
+    return createFolder(config, opts)
+  }
+)
+ipcMain.handle(
+  'config:moveFolder',
+  (_event, folderId: string, newParentId: string | null) => {
+    const config = loadConfig()
+    return moveFolder(config, folderId, newParentId)
+  }
+)
 ipcMain.handle('config:deleteFolder', (_event, folderId: string) => {
   const config = loadConfig()
   return deleteFolder(config, folderId)
@@ -238,6 +261,14 @@ ipcMain.handle(
     return setSessionMeta(config, sessionId, meta)
   }
 )
+
+ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
+  return shell.openPath(filePath)
+})
+
+ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
+  shell.showItemInFolder(filePath)
+})
 
 // --- App Lifecycle ---
 

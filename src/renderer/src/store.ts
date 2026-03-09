@@ -99,40 +99,35 @@ interface AppState {
 
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult }
 
+// Read localStorage at module load time — before first render, zero flicker
+function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: 'compact' | 'full' } {
+  try {
+    const cached = localStorage.getItem('csm:sessions')
+    const cachedConfig = localStorage.getItem('csm:config')
+    if (cached && cachedConfig) {
+      const sessions = JSON.parse(cached)
+      const config = JSON.parse(cachedConfig)
+      return { sessions, config, loading: false, viewMode: config.preferences?.defaultViewMode || 'compact' }
+    }
+  } catch { /* ignore */ }
+  return { sessions: [], config: null, loading: true, viewMode: 'compact' }
+}
+
+const hydrated = hydrateFromCache()
+
 export const useStore = create<AppState>((set, get) => ({
-  sessions: [],
+  sessions: hydrated.sessions,
   selectedSession: null,
   selectedUniqueId: null,
-  config: null,
+  config: hydrated.config,
   searchResults: [],
   searchQuery: '',
-  loading: true,
-  viewMode: 'compact',
+  loading: hydrated.loading,
+  viewMode: hydrated.viewMode,
   selectedFolderId: null,
   infoPanelOpen: true,
 
   initialize: async () => {
-    // Hydrate from localStorage instantly — no loading spinner, no white flash
-    try {
-      const cached = localStorage.getItem('csm:sessions')
-      const cachedConfig = localStorage.getItem('csm:config')
-      if (cached && cachedConfig) {
-        const sessions = JSON.parse(cached)
-        const config = JSON.parse(cachedConfig)
-        set({
-          sessions,
-          config,
-          viewMode: config.preferences?.defaultViewMode || 'compact',
-          loading: false
-        })
-      } else {
-        set({ loading: true })
-      }
-    } catch {
-      set({ loading: true })
-    }
-
-    // Refresh from backend in background
     const [sessions, config] = await Promise.all([
       window.api.loadAllSessions(),
       window.api.loadConfig()

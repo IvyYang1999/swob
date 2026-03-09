@@ -8,7 +8,8 @@
     "build": "electron-vite build",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
-    "build:mac": "npm run build && electron-builder --mac"
+    "build:mac": "npm run build && electron-builder --mac",
+    "deploy": "bash scripts/deploy-local.sh"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

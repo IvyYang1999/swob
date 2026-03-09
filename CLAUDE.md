@@ -19,3 +19,12 @@
 - 开发命令：`npm run dev`
 - 构建命令：`npm run build:mac`
 - 编译验证：每次改完代码跑 `npx electron-vite build` 确认编译通过，再 commit
+
+# 本地部署（强制）
+
+每次 commit + push 之后，必须立即运行：
+```
+npm run deploy
+```
+这会自动：退出正在运行的 Swob → 编译 → 打包 .app → 替换 /Applications/Swob.app → 重新启动。
+不需要手动打包 DMG，不需要手动拖拽安装。

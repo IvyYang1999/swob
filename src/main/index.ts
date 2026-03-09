@@ -68,7 +68,7 @@ function startFileWatcher(): void {
     if (filePath.includes('/subagents/')) return
     try {
       const raw = await parseSessionFile(filePath)
-      const summary = buildSessionSummary(filePath, raw)
+      const summary = buildSessionSummary(filePath, raw, true)
       if (summary) {
         mainWindow?.webContents.send('session:added', summary)
       }
@@ -81,7 +81,7 @@ function startFileWatcher(): void {
     if (filePath.includes('/subagents/')) return
     try {
       const raw = await parseSessionFile(filePath)
-      const summary = buildSessionSummary(filePath, raw)
+      const summary = buildSessionSummary(filePath, raw, true)
       if (summary) {
         mainWindow?.webContents.send('session:updated', summary)
       }

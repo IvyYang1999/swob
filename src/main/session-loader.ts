@@ -15,6 +15,63 @@ import type {
 const CLAUDE_DIR = path.join(process.env.HOME || '', '.claude', 'projects')
 const HOME = process.env.HOME || ''
 
+// --- Disk Cache for Session Summaries ---
+const CACHE_DIR = path.join(HOME, '.claude-session-manager')
+const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
+const CACHE_VERSION = 1
+
+interface DiskCache {
+  version: number
+  manifest: string
+  summaries: SessionSummary[]
+}
+
+function loadDiskCache(): DiskCache | null {
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'))
+      if (data.version === CACHE_VERSION) return data
+    }
+  } catch { /* corrupt cache */ }
+  return null
+}
+
+function saveDiskCache(manifest: string, summaries: SessionSummary[]): void {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true })
+    fs.writeFileSync(CACHE_FILE, JSON.stringify({ version: CACHE_VERSION, manifest, summaries }))
+  } catch { /* ignore */ }
+}
+
+function computeFileManifest(files: string[]): string {
+  return files.sort().map((f) => {
+    try {
+      const s = fs.statSync(f)
+      return `${f}:${s.mtimeMs}:${s.size}`
+    } catch {
+      return ''
+    }
+  }).filter(Boolean).join('\n')
+}
+
+// --- Parallel Helper ---
+async function parallelForEach<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>
+): Promise<void> {
+  let idx = 0
+  async function worker(): Promise<void> {
+    while (idx < items.length) {
+      const i = idx++
+      await fn(items[i])
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+  )
+}
+
 /**
  * Discover config files that would have been loaded for a session.
  * Claude Code loads CLAUDE.md from multiple levels:
@@ -127,7 +184,8 @@ export async function parseSessionFile(filePath: string): Promise<RawJsonlMessag
 
 export function buildSessionSummary(
   filePath: string,
-  rawMessages: RawJsonlMessage[]
+  rawMessages: RawJsonlMessage[],
+  light = false
 ): SessionSummary | null {
   if (filePath.includes('/subagents/')) return null
 
@@ -167,6 +225,34 @@ export function buildSessionSummary(
   let firstUserMessage = ''
   if (firstUser?.message) {
     firstUserMessage = extractText(firstUser.message.content).slice(0, 200)
+  }
+
+  // Light mode: skip expensive operations (tool extraction, file I/O, config discovery)
+  if (light) {
+    const permissionMode = rawMessages.find((m) => m.permissionMode)?.permissionMode
+    const stat = fs.statSync(filePath)
+    return {
+      id: sessionId,
+      sessionId,
+      slug: rawMessages.find((m) => m.slug)?.slug || '',
+      createdAt: timestamps[0] || '',
+      updatedAt: timestamps[timestamps.length - 1] || '',
+      messageCount: validMessages.length,
+      turnCount,
+      compactCount,
+      cwds,
+      version: versions[0] || '',
+      firstUserMessage,
+      toolUsage: {},
+      skillInvocations: [],
+      projectPath: path.dirname(filePath),
+      filePath,
+      fileSizeBytes: stat.size,
+      permissionMode,
+      userImages: [],
+      referencedFiles: [],
+      configFiles: []
+    }
   }
 
   const toolUsage: Record<string, number> = {}
@@ -383,30 +469,35 @@ function clusterFilesForMerge(entries: FileEntry[]): FileEntry[][] {
 }
 
 export async function loadAllSessions(): Promise<SessionSummary[]> {
-  const files = findAllSessionFiles()
+  const allFiles = findAllSessionFiles()
+  const manifest = computeFileManifest(allFiles)
 
-  // Group files by sessionId
+  // Fast path: return cached summaries if no files changed
+  const cache = loadDiskCache()
+  if (cache && cache.manifest === manifest) {
+    return cache.summaries
+  }
+
+  // Slow path: parse all files with parallel I/O + light summaries
   const filesBySession = new Map<string, FileEntry[]>()
 
-  for (const file of files) {
+  await parallelForEach(allFiles, 4, async (file) => {
     try {
       const raw = await parseSessionFile(file)
       const sessionId = raw.find((m) => m.sessionId)?.sessionId
-      if (!sessionId) continue
+      if (!sessionId) return
       const { start, end } = getFileTimeRange(raw)
       if (!filesBySession.has(sessionId)) filesBySession.set(sessionId, [])
       filesBySession.get(sessionId)!.push({ filePath: file, raw, startTime: start, endTime: end })
     } catch {
       // skip files that can't be parsed
     }
-  }
+  })
 
   const summaries: SessionSummary[] = []
   for (const [, group] of filesBySession) {
-    // Cluster files: only merge continuations, keep branches separate
     const clusters = clusterFilesForMerge(group)
 
-    // Build UUID index per cluster for parent linking
     const clusterUuids: Set<string>[] = clusters.map((cluster) => {
       const uuids = new Set<string>()
       for (const entry of cluster) {
@@ -422,14 +513,12 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
       cluster.sort((a, b) => a.startTime.localeCompare(b.startTime))
       const mergedRaw = cluster.flatMap((g) => g.raw)
       const primaryFile = cluster[cluster.length - 1].filePath
-      const summary = buildSessionSummary(primaryFile, mergedRaw)
+      const summary = buildSessionSummary(primaryFile, mergedRaw, true)
       if (summary) {
         summary.allFilePaths = cluster.map((g) => g.filePath)
-        // Disambiguate id when same sessionId has multiple clusters (branches)
         if (clusters.length > 1) {
           summary.id = `${summary.sessionId}:branch-${ci}`
 
-          // Find parent cluster: check if this cluster's first parentUuid exists in another cluster
           const firstParentUuid = mergedRaw.find(
             (m) => m.parentUuid && (m.type === 'user' || m.type === 'assistant')
           )?.parentUuid
@@ -450,6 +539,7 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
   }
 
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  saveDiskCache(manifest, summaries)
   return summaries
 }
 

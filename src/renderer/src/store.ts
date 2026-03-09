@@ -112,7 +112,11 @@ export const useStore = create<AppState>((set, get) => ({
   infoPanelOpen: true,
 
   initialize: async () => {
-    set({ loading: true })
+    const current = get()
+    // Only show loading spinner on first launch (no data yet)
+    if (current.sessions.length === 0) {
+      set({ loading: true })
+    }
     const [sessions, config] = await Promise.all([
       window.api.loadAllSessions(),
       window.api.loadConfig()

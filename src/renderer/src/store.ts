@@ -112,11 +112,27 @@ export const useStore = create<AppState>((set, get) => ({
   infoPanelOpen: true,
 
   initialize: async () => {
-    const current = get()
-    // Only show loading spinner on first launch (no data yet)
-    if (current.sessions.length === 0) {
+    // Hydrate from localStorage instantly — no loading spinner, no white flash
+    try {
+      const cached = localStorage.getItem('csm:sessions')
+      const cachedConfig = localStorage.getItem('csm:config')
+      if (cached && cachedConfig) {
+        const sessions = JSON.parse(cached)
+        const config = JSON.parse(cachedConfig)
+        set({
+          sessions,
+          config,
+          viewMode: config.preferences?.defaultViewMode || 'compact',
+          loading: false
+        })
+      } else {
+        set({ loading: true })
+      }
+    } catch {
       set({ loading: true })
     }
+
+    // Refresh from backend in background
     const [sessions, config] = await Promise.all([
       window.api.loadAllSessions(),
       window.api.loadConfig()
@@ -127,6 +143,10 @@ export const useStore = create<AppState>((set, get) => ({
       viewMode: config.preferences?.defaultViewMode || 'compact',
       loading: false
     })
+    try {
+      localStorage.setItem('csm:sessions', JSON.stringify(sessions))
+      localStorage.setItem('csm:config', JSON.stringify(config))
+    } catch { /* quota exceeded */ }
 
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
     const debouncedRefresh = () => {

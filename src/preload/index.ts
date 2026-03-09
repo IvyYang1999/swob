@@ -44,6 +44,9 @@ const api = {
   },
   onSessionUpdated: (callback: (session: unknown) => void) => {
     ipcRenderer.on('session:updated', (_event, session) => callback(session))
+  },
+  onSessionsRefresh: (callback: () => void) => {
+    ipcRenderer.on('sessions:refresh', () => callback())
   }
 }
 

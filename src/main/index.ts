@@ -26,6 +26,7 @@ import type { UserConfig } from './types'
 
 let mainWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
+const knownSessionIds = new Set<string>()
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -68,9 +69,18 @@ function startFileWatcher(): void {
     if (filePath.includes('/subagents/')) return
     try {
       const raw = await parseSessionFile(filePath)
-      const summary = buildSessionSummary(filePath, raw, true)
-      if (summary) {
-        mainWindow?.webContents.send('session:added', summary)
+      const sessionId = raw.find((m) => m.sessionId)?.sessionId
+      if (!sessionId) return
+
+      if (knownSessionIds.has(sessionId)) {
+        // Existing session got a new file (resume/branch) — need full refresh for correct clustering
+        mainWindow?.webContents.send('sessions:refresh')
+      } else {
+        knownSessionIds.add(sessionId)
+        const summary = buildSessionSummary(filePath, raw, true)
+        if (summary) {
+          mainWindow?.webContents.send('session:added', summary)
+        }
       }
     } catch {
       /* ignore */
@@ -94,7 +104,10 @@ function startFileWatcher(): void {
 // --- IPC Handlers ---
 
 ipcMain.handle('sessions:loadAll', async () => {
-  return loadAllSessions()
+  const sessions = await loadAllSessions()
+  knownSessionIds.clear()
+  for (const s of sessions) knownSessionIds.add(s.sessionId)
+  return sessions
 })
 
 ipcMain.handle(

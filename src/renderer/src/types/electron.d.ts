@@ -35,6 +35,7 @@ interface ElectronAPI {
   showItemInFolder: (filePath: string) => Promise<void>
   onSessionAdded: (callback: (session: any) => void) => void
   onSessionUpdated: (callback: (session: any) => void) => void
+  onSessionsRefresh: (callback: () => void) => void
 }
 
 declare global {

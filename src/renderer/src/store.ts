@@ -124,6 +124,15 @@ export const useStore = create<AppState>((set, get) => ({
       loading: false
     })
 
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const debouncedRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(async () => {
+        const freshSessions = await window.api.loadAllSessions()
+        set({ sessions: freshSessions })
+      }, 500)
+    }
+
     window.api.onSessionAdded((session) => {
       set((state) => ({
         sessions: [session as SessionSummary, ...state.sessions]
@@ -135,6 +144,9 @@ export const useStore = create<AppState>((set, get) => ({
           s.id === (updated as SessionSummary).id ? (updated as SessionSummary) : s
         )
       }))
+    })
+    window.api.onSessionsRefresh(() => {
+      debouncedRefresh()
     })
   },
 

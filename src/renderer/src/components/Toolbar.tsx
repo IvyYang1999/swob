@@ -1,25 +1,14 @@
 import { useState, useCallback } from 'react'
 import { useStore } from '../store'
-import type { ViewMode } from '../store'
-import { Search, Play, PanelRight, X, Download, FolderDown } from 'lucide-react'
-
-const VIEW_MODES: { mode: ViewMode; label: string }[] = [
-  { mode: 'compact', label: '精简' },
-  { mode: 'full', label: '完整' },
-  { mode: 'markdown', label: 'MD' },
-]
+import { Search, PanelRight, X } from 'lucide-react'
 
 export function Toolbar() {
   const {
     searchQuery, search, clearSearch,
-    viewMode, setViewMode,
-    selectedSession, resumeSession,
-    infoPanelOpen, toggleInfoPanel,
-    downloadSessionMarkdown, saveMarkdownToProject
+    infoPanelOpen, toggleInfoPanel
   } = useStore()
   const [inputValue, setInputValue] = useState(searchQuery)
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
-  const [saveStatus, setSaveStatus] = useState<string | null>(null)
 
   const handleSearch = useCallback((value: string) => {
     setInputValue(value)
@@ -29,14 +18,6 @@ export function Toolbar() {
     }, 300)
     setSearchTimeout(timeout)
   }, [search, searchTimeout])
-
-  const handleSaveToProject = useCallback(async () => {
-    const path = await saveMarkdownToProject()
-    if (path) {
-      setSaveStatus('已保存')
-      setTimeout(() => setSaveStatus(null), 2000)
-    }
-  }, [saveMarkdownToProject])
 
   return (
     <div
@@ -71,55 +52,11 @@ export function Toolbar() {
         )}
       </div>
 
-      {/* Actions */}
+      {/* Right side: layout toggle */}
       <div
-        className="flex items-center gap-1.5"
+        className="flex items-center"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        {/* View mode segmented control */}
-        <div className="flex items-center bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden">
-          {VIEW_MODES.map(({ mode, label }) => (
-            <button
-              key={mode}
-              onClick={() => setViewMode(mode)}
-              className={`px-2 py-1 text-[11px] transition-colors ${
-                viewMode === mode
-                  ? 'bg-zinc-600 text-zinc-100 font-medium'
-                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700/50'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Export actions */}
-        {selectedSession && (
-          <>
-            <button
-              onClick={downloadSessionMarkdown}
-              className="p-1.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300"
-              title="下载 MD 文件"
-            >
-              <Download size={14} />
-            </button>
-
-            {selectedSession.cwds?.[0] && (
-              <button
-                onClick={handleSaveToProject}
-                className="p-1.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300"
-                title={saveStatus || '保存到项目目录'}
-              >
-                {saveStatus ? (
-                  <span className="text-[10px] text-green-400 font-medium px-0.5">{saveStatus}</span>
-                ) : (
-                  <FolderDown size={14} />
-                )}
-              </button>
-            )}
-          </>
-        )}
-
         <button
           onClick={toggleInfoPanel}
           className={`p-1.5 rounded hover:bg-zinc-700 ${infoPanelOpen ? 'text-zinc-200' : 'text-zinc-500'}`}
@@ -127,23 +64,6 @@ export function Toolbar() {
         >
           <PanelRight size={16} />
         </button>
-
-        {selectedSession && (
-          <>
-            {selectedSession.permissionMode === 'bypassPermissions' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800/50">
-                skip-permissions
-              </span>
-            )}
-            <button
-              onClick={() => resumeSession(selectedSession.sessionId || selectedSession.id, selectedSession.permissionMode, selectedSession.cwds?.[0])}
-              className="ml-1 px-3 py-1 text-xs rounded bg-green-700 hover:bg-green-600 text-white flex items-center gap-1"
-            >
-              <Play size={12} />
-              Resume
-            </button>
-          </>
-        )}
       </div>
     </div>
   )

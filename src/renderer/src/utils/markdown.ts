@@ -136,14 +136,22 @@ export function buildSegments(msgs: ParsedMessage[]): Segment[] {
   return segments
 }
 
-// --- Markdown generation (fixed hierarchy) ---
+// --- Markdown generation ---
 
 /**
- * Shift all headings in AI response text to H6,
- * so they don't exceed the user query level (H5).
+ * Shift headings in AI text to H6, but skip lines inside code blocks.
  */
 function shiftHeadings(text: string): string {
-  return text.replace(/^(#{1,5})\s/gm, '###### ')
+  const lines = text.split('\n')
+  let inCodeBlock = false
+  return lines.map(line => {
+    if (line.startsWith('```')) {
+      inCodeBlock = !inCodeBlock
+      return line
+    }
+    if (inCodeBlock) return line
+    return line.replace(/^(#{1,5})\s/, '###### ')
+  }).join('\n')
 }
 
 function toolToMarkdown(tc: ToolCallInfo): string {
@@ -205,6 +213,7 @@ function turnToMarkdown(turn: Turn): string {
   }
 
   if (turn.assistantMsgs.length > 0) {
+    lines.push(`**Assistant:**\n`)
     const segments = buildSegments(turn.assistantMsgs)
     for (const seg of segments) {
       if (seg.type === 'text') {
@@ -219,6 +228,7 @@ function turnToMarkdown(turn: Turn): string {
     }
   }
 
+  lines.push('---\n')
   return lines.join('\n')
 }
 

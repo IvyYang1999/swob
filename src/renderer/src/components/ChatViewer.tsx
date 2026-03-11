@@ -1,7 +1,10 @@
 import { useRef, useState, useMemo, useCallback } from 'react'
 import { useStore } from '../store'
-import type { ParsedMessage } from '../store'
-import { User, Bot, Terminal, ChevronDown, ChevronRight, History, GitBranch, Copy, Check } from 'lucide-react'
+import type { ViewMode, ParsedMessage } from '../store'
+import {
+  User, Bot, Terminal, ChevronDown, ChevronRight,
+  History, GitBranch, Copy, Check, Download, Play
+} from 'lucide-react'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
 import {
   computeSections,
@@ -176,7 +179,6 @@ function TurnBlock({
 
   return (
     <div className={`space-y-3 ${faded ? 'opacity-50' : ''}`}>
-      {/* User message */}
       {turn.userMsg && (
         <div className={`flex gap-3 ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
           <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-blue-600">
@@ -210,7 +212,6 @@ function TurnBlock({
         </div>
       )}
 
-      {/* Assistant response (merged) */}
       {segments.length > 0 && (
         <div className={`flex gap-3 ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
           <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-orange-600">
@@ -251,36 +252,108 @@ function TurnBlock({
   )
 }
 
-// --- Markdown document view ---
+// --- View mode config ---
 
-function MarkdownView({ session, sections }: { session: NonNullable<ReturnType<typeof useStore>['selectedSession']>; sections: CompactSection[] }) {
+const VIEW_MODES: { mode: ViewMode; label: string }[] = [
+  { mode: 'compact', label: '精简' },
+  { mode: 'full', label: '完整' },
+  { mode: 'markdown', label: 'MD' },
+]
+
+// --- Session action bar (only when session selected) ---
+
+function SessionBar() {
+  const {
+    selectedSession, viewMode, setViewMode,
+    downloadSessionMarkdown, resumeSession
+  } = useStore()
   const [copied, setCopied] = useState(false)
 
+  const handleCopyMd = useCallback(() => {
+    if (!selectedSession) return
+    const sections = computeSections(selectedSession)
+    const md = sessionToMarkdown(selectedSession, sections)
+    navigator.clipboard.writeText(md)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }, [selectedSession])
+
+  if (!selectedSession) return null
+
+  return (
+    <div className="h-9 flex items-center justify-between px-3 border-b border-zinc-800 bg-zinc-900/60 shrink-0">
+      {/* Left: view mode */}
+      <div className="flex items-center bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden">
+        {VIEW_MODES.map(({ mode, label }) => (
+          <button
+            key={mode}
+            onClick={() => setViewMode(mode)}
+            className={`px-2.5 py-0.5 text-[11px] transition-colors ${
+              viewMode === mode
+                ? 'bg-zinc-600 text-zinc-100 font-medium'
+                : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700/50'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Right: actions */}
+      <div className="flex items-center gap-1.5">
+        {viewMode === 'markdown' && (
+          <button
+            onClick={handleCopyMd}
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+            <span>{copied ? '已复制' : '复制 MD'}</span>
+          </button>
+        )}
+
+        <button
+          onClick={downloadSessionMarkdown}
+          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300"
+          title="下载 MD 文件"
+        >
+          <Download size={13} />
+        </button>
+
+        {selectedSession.permissionMode === 'bypassPermissions' && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800/50">
+            skip-permissions
+          </span>
+        )}
+
+        <button
+          onClick={() => resumeSession(
+            selectedSession.sessionId || selectedSession.id,
+            selectedSession.permissionMode,
+            selectedSession.cwds?.[0]
+          )}
+          className="px-2.5 py-0.5 text-[11px] rounded bg-green-700 hover:bg-green-600 text-white flex items-center gap-1"
+        >
+          <Play size={10} />
+          Resume
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// --- Markdown document view ---
+
+function MarkdownView({ session, sections }: {
+  session: NonNullable<ReturnType<typeof useStore>['selectedSession']>
+  sections: CompactSection[]
+}) {
   const markdownContent = useMemo(
     () => sessionToMarkdown(session, sections),
     [session, sections]
   )
 
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(markdownContent)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }, [markdownContent])
-
   return (
     <div className="flex-1 overflow-y-auto">
-      {/* Sticky toolbar */}
-      <div className="sticky top-0 z-10 flex items-center justify-end gap-2 px-6 py-2 bg-zinc-900/90 backdrop-blur-sm border-b border-zinc-800">
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
-        >
-          {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
-          <span>{copied ? '已复制' : '复制 MD'}</span>
-        </button>
-      </div>
-
-      {/* Rendered markdown document */}
       <div className="max-w-3xl mx-auto px-8 py-6 select-text">
         <DocMarkdown content={markdownContent} />
       </div>
@@ -318,9 +391,14 @@ export function ChatViewer() {
     )
   }
 
-  // Markdown mode: render full document
+  // Markdown mode
   if (viewMode === 'markdown') {
-    return <MarkdownView session={selectedSession} sections={sections} />
+    return (
+      <div className="flex-1 flex flex-col min-w-0">
+        <SessionBar />
+        <MarkdownView session={selectedSession} sections={sections} />
+      </div>
+    )
   }
 
   // Compact / Full modes
@@ -359,56 +437,59 @@ export function ChatViewer() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 space-y-4">
-      {sections.map((section, sIdx) => {
-        if (section.isCurrent) {
+    <div className="flex-1 flex flex-col min-w-0">
+      <SessionBar />
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {sections.map((section, sIdx) => {
+          if (section.isCurrent) {
+            return (
+              <div key={`section-${sIdx}`} className="space-y-4">
+                {sections.length > 1 && (
+                  <div className="flex items-center gap-3 py-2">
+                    <div className="flex-1 border-t border-emerald-600/50" />
+                    <span className="text-emerald-500 text-xs px-3 py-1 bg-emerald-900/20 rounded-full">
+                      当前对话
+                    </span>
+                    <div className="flex-1 border-t border-emerald-600/50" />
+                  </div>
+                )}
+                {renderSection(section, false)}
+              </div>
+            )
+          }
+
+          const isExpanded = expandedSections.has(sIdx)
+          const isShared = section.isSharedContext
+          const borderColor = isShared ? 'border-purple-600/30' : 'border-amber-600/30'
+          const textColor = isShared ? 'text-purple-400/70' : 'text-amber-500/70'
+          const bgColor = isShared ? 'bg-purple-900/10 hover:bg-purple-900/20' : 'bg-amber-900/10 hover:bg-amber-900/20'
+          const borderLColor = isShared ? 'border-purple-600/20' : 'border-amber-600/20'
+          const SectionIcon = isShared ? GitBranch : History
+
           return (
-            <div key={`section-${sIdx}`} className="space-y-4">
-              {sections.length > 1 && (
-                <div className="flex items-center gap-3 py-2">
-                  <div className="flex-1 border-t border-emerald-600/50" />
-                  <span className="text-emerald-500 text-xs px-3 py-1 bg-emerald-900/20 rounded-full">
-                    当前对话
-                  </span>
-                  <div className="flex-1 border-t border-emerald-600/50" />
+            <div key={`section-${sIdx}`}>
+              <button
+                onClick={() => toggleSection(sIdx)}
+                className="w-full flex items-center gap-3 py-2 group"
+              >
+                <div className={`flex-1 border-t ${borderColor}`} />
+                <div className={`flex items-center gap-2 ${textColor} text-xs px-3 py-1 ${bgColor} rounded-full transition-colors`}>
+                  {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  <SectionIcon size={12} />
+                  <span>{section.label}</span>
+                </div>
+                <div className={`flex-1 border-t ${borderColor}`} />
+              </button>
+              {isExpanded && (
+                <div className={`space-y-3 pl-2 border-l-2 ${borderLColor} ml-2`}>
+                  {renderSection(section, true)}
                 </div>
               )}
-              {renderSection(section, false)}
             </div>
           )
-        }
-
-        const isExpanded = expandedSections.has(sIdx)
-        const isShared = section.isSharedContext
-        const borderColor = isShared ? 'border-purple-600/30' : 'border-amber-600/30'
-        const textColor = isShared ? 'text-purple-400/70' : 'text-amber-500/70'
-        const bgColor = isShared ? 'bg-purple-900/10 hover:bg-purple-900/20' : 'bg-amber-900/10 hover:bg-amber-900/20'
-        const borderLColor = isShared ? 'border-purple-600/20' : 'border-amber-600/20'
-        const SectionIcon = isShared ? GitBranch : History
-
-        return (
-          <div key={`section-${sIdx}`}>
-            <button
-              onClick={() => toggleSection(sIdx)}
-              className="w-full flex items-center gap-3 py-2 group"
-            >
-              <div className={`flex-1 border-t ${borderColor}`} />
-              <div className={`flex items-center gap-2 ${textColor} text-xs px-3 py-1 ${bgColor} rounded-full transition-colors`}>
-                {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                <SectionIcon size={12} />
-                <span>{section.label}</span>
-              </div>
-              <div className={`flex-1 border-t ${borderColor}`} />
-            </button>
-            {isExpanded && (
-              <div className={`space-y-3 pl-2 border-l-2 ${borderLColor} ml-2`}>
-                {renderSection(section, true)}
-              </div>
-            )}
-          </div>
-        )
-      })}
-      <div ref={bottomRef} />
+        })}
+        <div ref={bottomRef} />
+      </div>
     </div>
   )
 }

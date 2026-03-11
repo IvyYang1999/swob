@@ -104,7 +104,6 @@ interface AppState {
   removeSessionFromFolder: (folderId: string, sessionId: string) => Promise<void>
   setSessionMeta: (sessionId: string, meta: { customTitle?: string; notes?: string }) => Promise<void>
   downloadSessionMarkdown: () => void
-  saveMarkdownToProject: () => Promise<string | null>
 }
 
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult }
@@ -251,15 +250,5 @@ export const useStore = create<AppState>((set, get) => ({
     const md = sessionToMarkdown(session, sections)
     const filename = generateFilename(session)
     downloadMarkdown(`${filename}.md`, md)
-  },
-
-  saveMarkdownToProject: async () => {
-    const session = get().selectedSession
-    if (!session?.cwds?.[0]) return null
-    const sections = computeSections(session)
-    const md = sessionToMarkdown(session, sections)
-    const filename = generateFilename(session) + '.md'
-    const fullPath = await window.api.saveMarkdown(session.cwds[0], filename, md)
-    return fullPath
   }
 }))

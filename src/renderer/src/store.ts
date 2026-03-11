@@ -103,7 +103,7 @@ interface AppState {
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
-  moveFolder: (folderId: string, newParentId: string | null) => Promise<void>
+  moveFolder: (folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => Promise<void>
   deleteFolder: (folderId: string) => Promise<void>
   renameFolder: (folderId: string, name: string) => Promise<void>
   addSessionToFolder: (folderId: string, sessionId: string) => Promise<void>
@@ -261,8 +261,8 @@ export const useStore = create<AppState>((set, get) => ({
     })
     set({ config: config as UserConfig })
   },
-  moveFolder: async (folderId, newParentId) => {
-    const config = await window.api.moveFolder(folderId, newParentId)
+  moveFolder: async (folderId, newParentId, position?, targetId?) => {
+    const config = await window.api.moveFolder(folderId, newParentId, position, targetId)
     set({ config: config as UserConfig })
   },
   deleteFolder: async (folderId) => {

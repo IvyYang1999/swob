@@ -32,7 +32,8 @@ import {
   setSessionMetaInLibrary,
   resolveFolderPath,
   getLibraryRoot,
-  migrateFromOldConfig
+  migrateFromOldConfig,
+  reorderFolder
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import type { SessionSummary } from './types'
@@ -355,15 +356,20 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:moveFolder',
-  (_event, folderId: string, newParentId: string | null) => {
+  (_event, folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => {
     if (libraryInitialized) {
-      // Move folder = move directory
-      const srcPath = resolveFolderPath(folderId)
-      const destParent = newParentId ? resolveFolderPath(newParentId) : getLibraryRoot()
-      const baseName = require('path').basename(srcPath)
-      const newPath = join(destParent, baseName)
-      if (srcPath !== newPath && fs.existsSync(srcPath)) {
-        fs.renameSync(srcPath, newPath)
+      if (position && position !== 'inside' && targetId) {
+        // Reorder: move folder before/after target (sibling)
+        reorderFolder(folderId, targetId, position)
+      } else {
+        // Reparent: move folder into a new parent
+        const srcPath = resolveFolderPath(folderId)
+        const destParent = newParentId ? resolveFolderPath(newParentId) : getLibraryRoot()
+        const baseName = require('path').basename(srcPath)
+        const newPath = join(destParent, baseName)
+        if (srcPath !== newPath && fs.existsSync(srcPath)) {
+          fs.renameSync(srcPath, newPath)
+        }
       }
       const tree = scanLibrary()
       return libraryTreeToConfig(tree)

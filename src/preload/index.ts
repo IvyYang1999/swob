@@ -19,8 +19,8 @@ const api = {
   saveConfig: (config: unknown) => ipcRenderer.invoke('config:save', config),
   createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) =>
     ipcRenderer.invoke('config:createFolder', opts),
-  moveFolder: (folderId: string, newParentId: string | null) =>
-    ipcRenderer.invoke('config:moveFolder', folderId, newParentId),
+  moveFolder: (folderId: string, newParentId: string | null, position?: string, targetId?: string) =>
+    ipcRenderer.invoke('config:moveFolder', folderId, newParentId, position, targetId),
   deleteFolder: (folderId: string) =>
     ipcRenderer.invoke('config:deleteFolder', folderId),
   renameFolder: (folderId: string, name: string) =>

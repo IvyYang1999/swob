@@ -39,23 +39,20 @@ function ContextMenu({
     return () => document.removeEventListener('click', handler)
   }, [onClose])
 
-  // Adjust position to stay within viewport
-  const [pos, setPos] = useState({ left: x, top: y })
+  // Flip above cursor if not enough room below
+  const [flipUp, setFlipUp] = useState(false)
   useEffect(() => {
     const el = menuRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
-    let left = x, top = y
-    if (rect.bottom > window.innerHeight) top = Math.max(4, window.innerHeight - rect.height - 4)
-    if (rect.right > window.innerWidth) left = Math.max(4, window.innerWidth - rect.width - 4)
-    setPos({ left, top })
-  }, [x, y])
+    setFlipUp(rect.bottom > window.innerHeight)
+  }, [])
 
   return (
     <div
       ref={menuRef}
-      className="fixed z-50 bg-zinc-800 border border-zinc-600 rounded-md shadow-xl py-1 min-w-[180px] max-h-[80vh] overflow-y-auto"
-      style={{ left: pos.left, top: pos.top }}
+      className="fixed z-50 bg-zinc-800 border border-zinc-600 rounded-md shadow-xl py-1 min-w-[180px]"
+      style={{ left: x, top: flipUp ? undefined : y, bottom: flipUp ? (window.innerHeight - y) : undefined }}
     >
       <button
         onClick={(e) => {
@@ -319,10 +316,11 @@ function FolderNode({
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
       } else if (data.type === 'folder' && data.id && data.id !== folder.id) {
         if (zone === 'inside') {
-          moveFolder(data.id, folder.id)
+          moveFolder(data.id, folder.id, 'inside')
           if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
         } else {
-          moveFolder(data.id, folder.parentId ?? null)
+          // Reorder: pass position and target folder ID
+          moveFolder(data.id, folder.parentId ?? null, zone as 'before' | 'after', folder.id)
         }
       }
     } catch { /* ignore */ }

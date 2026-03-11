@@ -44,6 +44,7 @@ export interface LibraryConfig {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
   }
+  folderOrder?: string[]  // relative paths, determines display order
 }
 
 // ============ Constants ============
@@ -685,7 +686,6 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
   const sessionMeta: Record<string, { customTitle?: string; notes?: string }> = {}
 
   function processFolder(f: LibraryFolder, parentId: string | null): void {
-    // Use relative path from library root as folder ID
     const id = path.relative(_root, f.dirPath)
     folders.push({
       id,
@@ -702,12 +702,35 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
         }
       }
     }
-    for (const child of f.children) {
+    // Sort children by folder order too
+    const libConfig = loadLibraryConfig()
+    const order = libConfig.folderOrder || []
+    const sorted = [...f.children].sort((a, b) => {
+      const ai = order.indexOf(path.relative(_root, a.dirPath))
+      const bi = order.indexOf(path.relative(_root, b.dirPath))
+      if (ai === -1 && bi === -1) return a.name.localeCompare(b.name)
+      if (ai === -1) return 1
+      if (bi === -1) return -1
+      return ai - bi
+    })
+    for (const child of sorted) {
       processFolder(child, id)
     }
   }
 
-  for (const f of tree.folders) processFolder(f, null)
+  // Sort root-level folders by folder order
+  const libConfig = loadLibraryConfig()
+  const order = libConfig.folderOrder || []
+  const sortedRoots = [...tree.folders].sort((a, b) => {
+    const ai = order.indexOf(path.relative(_root, a.dirPath))
+    const bi = order.indexOf(path.relative(_root, b.dirPath))
+    if (ai === -1 && bi === -1) return a.name.localeCompare(b.name)
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
+
+  for (const f of sortedRoots) processFolder(f, null)
   for (const s of tree.ungroupedSessions) {
     if (s.meta.customTitle || s.meta.notes) {
       sessionMeta[s.sessionId] = {
@@ -717,12 +740,51 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
     }
   }
 
-  const libConfig = loadLibraryConfig()
   return {
     folders,
     sessionMeta,
     preferences: libConfig.preferences
   }
+}
+
+// Update folder display order: move folderId before/after targetId
+export function reorderFolder(folderId: string, targetId: string, position: 'before' | 'after'): void {
+  const config = loadLibraryConfig()
+  let order = config.folderOrder || []
+
+  // Ensure both folders are in the order array
+  // First, collect all current folder IDs from the tree
+  const tree = scanLibrary()
+  function collectFolderIds(folders: LibraryFolder[], prefix: string): string[] {
+    const ids: string[] = []
+    for (const f of folders) {
+      const id = prefix ? `${prefix}/${f.name}` : path.relative(_root, f.dirPath)
+      ids.push(id)
+      ids.push(...collectFolderIds(f.children, id))
+    }
+    return ids
+  }
+  const allIds = collectFolderIds(tree.folders, '')
+
+  // Initialize order with all known IDs that aren't already in it
+  for (const id of allIds) {
+    if (!order.includes(id)) order.push(id)
+  }
+
+  // Remove the dragged folder from its current position
+  order = order.filter((id) => id !== folderId)
+
+  // Insert at the target position
+  const targetIdx = order.indexOf(targetId)
+  if (targetIdx === -1) {
+    order.push(folderId)
+  } else {
+    const insertIdx = position === 'before' ? targetIdx : targetIdx + 1
+    order.splice(insertIdx, 0, folderId)
+  }
+
+  config.folderOrder = order
+  saveLibraryConfig(config)
 }
 
 // Resolve a folder ID (relative path) to absolute path

@@ -16,7 +16,7 @@ interface ElectronAPI {
   loadConfig: () => Promise<any>
   saveConfig: (config: any) => Promise<any>
   createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) => Promise<any>
-  moveFolder: (folderId: string, newParentId: string | null) => Promise<any>
+  moveFolder: (folderId: string, newParentId: string | null, position?: string, targetId?: string) => Promise<any>
   deleteFolder: (folderId: string) => Promise<any>
   renameFolder: (folderId: string, name: string) => Promise<any>
   addSessionToFolder: (

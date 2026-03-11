@@ -449,7 +449,7 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:setSessionMeta',
-  (_event, sessionId: string, meta: { customTitle?: string; notes?: string }) => {
+  (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: unknown[] }) => {
     if (libraryInitialized) {
       setSessionMetaInLibrary(sessionId, meta)
       const tree = scanLibrary()

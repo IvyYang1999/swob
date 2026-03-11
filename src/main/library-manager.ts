@@ -11,6 +11,7 @@ export interface SessionMeta {
   sourceFilePaths: string[]
   customTitle?: string
   notes?: string
+  highlights?: Array<{ id: string; text: string; turnUuid: string; note?: string; createdAt: string }>
   createdAt: string
   updatedAt: string
   projectPath: string
@@ -706,7 +707,7 @@ export async function migrateFromOldConfig(
 
 export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
   const folders: Folder[] = []
-  const sessionMeta: Record<string, { customTitle?: string; notes?: string }> = {}
+  const sessionMeta: UserConfig['sessionMeta'] = {}
 
   function processFolder(f: LibraryFolder, parentId: string | null): void {
     const id = path.relative(_root, f.dirPath)
@@ -718,10 +719,11 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
       createdAt: ''
     })
     for (const s of f.sessions) {
-      if (s.meta.customTitle || s.meta.notes) {
+      if (s.meta.customTitle || s.meta.notes || (s.meta.highlights && s.meta.highlights.length > 0)) {
         sessionMeta[s.sessionId] = {
           customTitle: s.meta.customTitle,
-          notes: s.meta.notes
+          notes: s.meta.notes,
+          highlights: s.meta.highlights
         }
       }
     }
@@ -755,10 +757,11 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
 
   for (const f of sortedRoots) processFolder(f, null)
   for (const s of tree.ungroupedSessions) {
-    if (s.meta.customTitle || s.meta.notes) {
+    if (s.meta.customTitle || s.meta.notes || (s.meta.highlights && s.meta.highlights.length > 0)) {
       sessionMeta[s.sessionId] = {
         customTitle: s.meta.customTitle,
-        notes: s.meta.notes
+        notes: s.meta.notes,
+        highlights: s.meta.highlights
       }
     }
   }
@@ -831,7 +834,7 @@ export function resolveFolderPath(folderId: string): string {
 // Update session meta (.swob-session.json) and optionally rename dir
 export function setSessionMetaInLibrary(
   sessionId: string,
-  meta: { customTitle?: string; notes?: string }
+  meta: { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }
 ): void {
   const dirPath = sessionIndex.get(sessionId)
   if (!dirPath) return
@@ -841,6 +844,7 @@ export function setSessionMetaInLibrary(
 
   if (meta.customTitle !== undefined) existing.customTitle = meta.customTitle
   if (meta.notes !== undefined) existing.notes = meta.notes
+  if (meta.highlights !== undefined) existing.highlights = meta.highlights
   writeSessionMeta(dirPath, existing)
 
   // Rename dir if title changed

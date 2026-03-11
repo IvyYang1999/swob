@@ -159,6 +159,9 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
   }
 
   libraryInitialized = true
+  // Rescan so index is up to date, then notify renderer to refresh
+  scanLibrary()
+  mainWindow?.webContents.send('sessions:refresh')
 }
 
 // --- IPC Handlers ---
@@ -489,6 +492,11 @@ app.whenReady().then(() => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
+
+  // Initialize library early so session paths are available on first load
+  initLibrary()
+  scanLibrary()
+
   createWindow()
   startFileWatcher()
   app.on('activate', () => {

@@ -114,8 +114,9 @@ function SessionItem({
   onRenameSubmit?: () => void
   onRenameCancel?: () => void
 }) {
-  const { selectedUniqueId, selectSession, config } = useStore()
+  const { selectedUniqueId, selectSession, config, resumedSessionIds } = useStore()
   const meta = config?.sessionMeta[session.id]
+  const isResumed = resumedSessionIds.has(session.sessionId || session.id)
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
@@ -130,7 +131,12 @@ function SessionItem({
         e.dataTransfer.setData('application/x-swob', JSON.stringify({ type: 'session', id: session.id }))
         // For external drop targets: provide the library transcript.md path
         const mdPath = (session as any).libraryMdPath
-        e.dataTransfer.setData('text/plain', mdPath || title)
+        if (mdPath) {
+          e.dataTransfer.setData('text/plain', mdPath)
+          e.dataTransfer.setData('text/uri-list', `file://${mdPath}`)
+        } else {
+          e.dataTransfer.setData('text/plain', title)
+        }
         e.dataTransfer.effectAllowed = 'copyMove'
       }}
       onClick={() => {
@@ -165,7 +171,10 @@ function SessionItem({
           className="w-full text-sm bg-zinc-700 text-zinc-200 rounded px-1 py-0.5 outline-none border border-zinc-500"
         />
       ) : (
-        <div className="text-sm text-zinc-200 truncate">{title.slice(0, 60)}</div>
+        <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
+          {isResumed && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title="已在终端打开" />}
+          <span className="truncate">{title.slice(0, 60)}</span>
+        </div>
       )}
       <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500">
         <Clock size={10} />
@@ -244,7 +253,9 @@ function FolderNode({
   expandedFolders: Set<string>
   toggleFolder: (id: string) => void
   dragOverFolderId: string | null
+  dragOverZone: 'inside' | 'before' | 'after'
   setDragOverFolderId: (id: string | null) => void
+  setDragOverZone: (zone: 'inside' | 'before' | 'after') => void
   renamingFolderId: string | null
   setRenamingFolderId: (id: string | null) => void
   renamingValue: string
@@ -278,6 +289,7 @@ function FolderNode({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     e.stopPropagation()
+    const zone = dragOverZone
     setDragOverFolderId(null)
     try {
       const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
@@ -285,8 +297,14 @@ function FolderNode({
         addSessionToFolder(folder.id, data.id)
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
       } else if (data.type === 'folder' && data.id && data.id !== folder.id) {
-        moveFolder(data.id, folder.id)
-        if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
+        if (zone === 'inside') {
+          // Drop inside: make child of this folder
+          moveFolder(data.id, folder.id)
+          if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
+        } else {
+          // Drop before/after: make sibling (same parent as this folder)
+          moveFolder(data.id, folder.parentId ?? null)
+        }
       }
     } catch { /* ignore */ }
   }
@@ -295,6 +313,13 @@ function FolderNode({
     e.preventDefault()
     e.stopPropagation()
     setDragOverFolderId(folder.id)
+    // Detect zone: top 25% = before, bottom 25% = after, middle = inside
+    const rect = e.currentTarget.getBoundingClientRect()
+    const y = e.clientY - rect.top
+    const ratio = y / rect.height
+    if (ratio < 0.25) setDragOverZone('before')
+    else if (ratio > 0.75) setDragOverZone('after')
+    else setDragOverZone('inside')
   }
 
   return (
@@ -325,8 +350,14 @@ function FolderNode({
           setRenamingValue(folder.name)
         }}
         role="button"
-        className={`w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm hover:bg-zinc-800 group cursor-pointer select-none ${
-          dragOverFolderId === folder.id ? 'ring-1 ring-blue-500 bg-blue-900/20' : ''
+        className={`w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm hover:bg-zinc-800 group cursor-pointer select-none relative ${
+          dragOverFolderId === folder.id && dragOverZone === 'inside'
+            ? 'ring-1 ring-blue-500 bg-blue-900/20'
+            : dragOverFolderId === folder.id && dragOverZone === 'before'
+              ? 'border-t-2 border-blue-500'
+              : dragOverFolderId === folder.id && dragOverZone === 'after'
+                ? 'border-b-2 border-blue-500'
+                : ''
         } text-zinc-400`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
@@ -418,7 +449,9 @@ function FolderNode({
               expandedFolders={expandedFolders}
               toggleFolder={toggleFolder}
               dragOverFolderId={dragOverFolderId}
+              dragOverZone={dragOverZone}
               setDragOverFolderId={setDragOverFolderId}
+              setDragOverZone={setDragOverZone}
               renamingFolderId={renamingFolderId}
               setRenamingFolderId={setRenamingFolderId}
               renamingValue={renamingValue}
@@ -476,6 +509,7 @@ export function Sidebar({ width }: { width: number }) {
   const [newFolderName, setNewFolderName] = useState('')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null)
+  const [dragOverZone, setDragOverZone] = useState<'inside' | 'before' | 'after'>('inside')
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null)
   const [renamingValue, setRenamingValue] = useState('')
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree')

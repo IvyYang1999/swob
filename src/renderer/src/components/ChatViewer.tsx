@@ -561,6 +561,7 @@ export function ChatViewer() {
   const [tocWidth, setTocWidth] = useState(200)
   const [sourceView, setSourceView] = useState(false)
   const pendingScrollRef = useRef<string | null>(null)
+  const scrollRatioRef = useRef<number>(0)
 
   const sections = useMemo<CompactSection[]>(() => {
     if (!selectedSession) return []
@@ -576,6 +577,32 @@ export function ChatViewer() {
   }
 
   const mdMode = viewMode === 'markdown'
+
+  // Track scroll position as ratio for preserving across view mode switches
+  useEffect(() => {
+    const el = contentRef.current
+    if (!el) return
+    const handler = () => {
+      const maxScroll = el.scrollHeight - el.clientHeight
+      scrollRatioRef.current = maxScroll > 0 ? el.scrollTop / maxScroll : 0
+    }
+    el.addEventListener('scroll', handler, { passive: true })
+    return () => el.removeEventListener('scroll', handler)
+  })
+
+  // Restore scroll position after view mode switch
+  const prevViewModeRef = useRef(viewMode)
+  useEffect(() => {
+    if (prevViewModeRef.current !== viewMode) {
+      prevViewModeRef.current = viewMode
+      requestAnimationFrame(() => {
+        const el = contentRef.current
+        if (el && el.scrollHeight > el.clientHeight) {
+          el.scrollTop = scrollRatioRef.current * (el.scrollHeight - el.clientHeight)
+        }
+      })
+    }
+  }, [viewMode])
 
   const customTitle = useMemo(() => {
     if (!selectedSession || !config) return undefined

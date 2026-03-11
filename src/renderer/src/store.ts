@@ -91,6 +91,7 @@ interface AppState {
   selectedFolderId: string | null
   infoPanelOpen: boolean
   selectedSessionMdPath: string | null
+  resumedSessionIds: Set<string>
 
   initialize: () => Promise<void>
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string) => Promise<void>
@@ -141,6 +142,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectedFolderId: null,
   infoPanelOpen: true,
   selectedSessionMdPath: null,
+  resumedSessionIds: new Set<string>(),
 
   initialize: async () => {
     const [sessions, config] = await Promise.all([
@@ -226,11 +228,21 @@ export const useStore = create<AppState>((set, get) => ({
   resumeSession: async (sessionId, permissionMode?, cwd?) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
     await window.api.resumeSession(sessionId, terminalApp, permissionMode, cwd)
+    set((state) => {
+      const next = new Set(state.resumedSessionIds)
+      next.add(sessionId)
+      return { resumedSessionIds: next }
+    })
   },
 
   resumeBatch: async (sessions) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
     await window.api.resumeBatch(sessions, terminalApp)
+    set((state) => {
+      const next = new Set(state.resumedSessionIds)
+      for (const s of sessions) next.add(s.sessionId)
+      return { resumedSessionIds: next }
+    })
   },
 
   setViewMode: (mode) => set({ viewMode: mode }),

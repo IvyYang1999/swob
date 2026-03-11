@@ -49,8 +49,9 @@ export function computeSections(session: SessionDetail): CompactSection[] {
   if (sharedMsgs.length > 0) {
     const filteredShared = sharedMsgs.filter((m) => m.type === 'user' || m.type === 'assistant')
     if (filteredShared.length > 0) {
+      const turnCount = filteredShared.filter((m) => m.type === 'user').length
       sharedSection.push({
-        label: `共享上下文 — 分支前的对话 (${filteredShared.length} 条消息)`,
+        label: `共享上下文 — 分支前的对话 (${turnCount} 轮)`,
         messages: filteredShared,
         isCurrent: false,
         isSharedContext: true
@@ -65,8 +66,8 @@ export function computeSections(session: SessionDetail): CompactSection[] {
   const result: CompactSection[] = []
   const firstSection = allMsgs.slice(0, boundaryIndices[0])
   if (firstSection.length > 0) {
-    const count = firstSection.filter((m) => m.type === 'user' || m.type === 'assistant').length
-    result.push({ label: `原始对话 (${count} 条消息)`, messages: firstSection, isCurrent: false })
+    const turnCount = firstSection.filter((m) => m.type === 'user').length
+    result.push({ label: `原始对话 (${turnCount} 轮)`, messages: firstSection, isCurrent: false })
   }
 
   for (let i = 0; i < boundaryIndices.length; i++) {
@@ -78,8 +79,8 @@ export function computeSections(session: SessionDetail): CompactSection[] {
       if (isLast) {
         result.push({ label: '', messages: sectionMsgs, isCurrent: true })
       } else {
-        const count = sectionMsgs.filter((m) => m.type === 'user' || m.type === 'assistant').length
-        result.push({ label: `Compact #${i + 1} 后 (${count} 条消息)`, messages: sectionMsgs, isCurrent: false })
+        const turnCount = sectionMsgs.filter((m) => m.type === 'user').length
+        result.push({ label: `Compact #${i + 1} 后 (${turnCount} 轮)`, messages: sectionMsgs, isCurrent: false })
       }
     }
   }

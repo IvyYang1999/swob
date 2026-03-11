@@ -193,7 +193,7 @@ function toolToMarkdown(tc: ToolCallInfo): string {
   return lines.join('\n')
 }
 
-function turnToMarkdown(turn: Turn): string {
+export function turnToMarkdown(turn: Turn): string {
   const lines: string[] = []
 
   if (turn.userMsg) {

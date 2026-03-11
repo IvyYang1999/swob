@@ -1,6 +1,6 @@
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
-import type { ViewMode, ParsedMessage } from '../store'
+import type { ViewMode, ParsedMessage, SessionDetail } from '../store'
 import {
   User, Bot, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
@@ -12,9 +12,8 @@ import {
   groupIntoTurns,
   buildSegments,
   sessionToMarkdown,
-  extractToc,
   computeChatTocEntries,
-  computeSourceLines,
+  turnToMarkdown,
   COMPACT_SUMMARY_PREFIX
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
@@ -149,7 +148,7 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
   let inputDisplay: string
   if (tc.name === 'Bash' && tc.input.command) inputDisplay = String(tc.input.command)
   else if (tc.name === 'Read' && tc.input.file_path) inputDisplay = String(tc.input.file_path)
-  else if (isEdit) inputDisplay = '' // handled by DiffView
+  else if (isEdit) inputDisplay = ''
   else if (tc.name === 'Write' && tc.input.content) inputDisplay = `File: ${tc.input.file_path || ''}\n\n${String(tc.input.content).slice(0, 2000)}`
   else inputDisplay = JSON.stringify(tc.input, null, 2)
 
@@ -206,7 +205,7 @@ function TurnBlock({ turn, viewMode, faded }: { turn: Turn; viewMode: 'compact' 
                 </div>
               </div>
             ) : (
-              <div className="text-sm text-zinc-200 whitespace-pre-wrap break-words leading-relaxed">
+              <div className="text-sm text-zinc-200">
                 <CliMarkdown content={turn.userMsg.textContent} />
               </div>
             )}
@@ -258,7 +257,6 @@ function TocSidebar({ entries, onNavigate, width, onResize }: {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
 
-  // Group: H2 entries are section headers, H5 entries are their children
   const groups: { header: TocEntry | null; groupIdx: number; children: TocEntry[] }[] = []
   let currentGroup: (typeof groups)[0] | null = null
 
@@ -337,7 +335,6 @@ function TocSidebar({ entries, onNavigate, width, onResize }: {
           })}
         </div>
       </div>
-      {/* Resize handle */}
       <div
         onMouseDown={handleMouseDown}
         className="w-1 cursor-col-resize hover:bg-zinc-600/50 active:bg-zinc-500/50 shrink-0"
@@ -361,23 +358,23 @@ function SessionBar({
   onToggleSource: () => void
   mdMode: boolean
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, config } = useStore()
   const [copied, setCopied] = useState(false)
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return
+    const customTitle = config?.sessionMeta?.[selectedSession.sessionId]?.customTitle
     const sections = computeSections(selectedSession)
-    const md = sessionToMarkdown(selectedSession, sections)
+    const md = sessionToMarkdown(selectedSession, sections, customTitle)
     navigator.clipboard.writeText(md)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
-  }, [selectedSession])
+  }, [selectedSession, config])
 
   if (!selectedSession) return null
 
   return (
     <div className="h-9 flex items-center justify-between px-3 border-b border-zinc-800 bg-zinc-900/60 shrink-0">
-      {/* Left: view mode + toggles */}
       <div className="flex items-center gap-2">
         <div className="flex items-center bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden">
           {VIEW_MODES.map(({ mode, label }) => (
@@ -414,7 +411,6 @@ function SessionBar({
         )}
       </div>
 
-      {/* Right: actions */}
       <div className="flex items-center gap-1.5">
         <button
           onClick={handleCopyMd}
@@ -454,51 +450,102 @@ function SessionBar({
   )
 }
 
-// --- Source view with TOC support ---
+// --- Helper: generate session header markdown ---
 
-function SourceView({ markdown, tocEntries, contentRef }: {
-  markdown: string
-  tocEntries: TocEntry[]
+function sessionHeaderMd(session: SessionDetail, customTitle?: string): string {
+  const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId
+  const created = new Date(session.createdAt).toLocaleString('zh-CN')
+  const toolSummary = Object.entries(session.toolUsage)
+    .sort(([, a], [, b]) => b - a).slice(0, 6)
+    .map(([name, count]) => `${name}(${count})`).join(', ')
+  const lines = [`# ${title}\n`]
+  lines.push(`> ${created} | ${session.messageCount} 条消息 | ${session.turnCount} 轮对话`)
+  if (toolSummary) lines.push(`> Tools: ${toolSummary}`)
+  lines.push('')
+  return lines.join('\n')
+}
+
+// --- Source view: per-turn raw markdown with anchor divs ---
+
+function SourceView({ session, sections, customTitle, contentRef }: {
+  session: SessionDetail
+  sections: CompactSection[]
+  customTitle?: string
   contentRef: React.RefObject<HTMLDivElement | null>
 }) {
-  const sourceLines = useMemo(() => computeSourceLines(markdown, tocEntries), [markdown, tocEntries])
+  const headerMd = useMemo(() => sessionHeaderMd(session, customTitle), [session, customTitle])
 
   return (
     <div ref={contentRef} className="flex-1 overflow-y-auto">
-      <div className="p-6">
-        {sourceLines.map((line, i) => (
-          <div
-            key={i}
-            id={line.id}
-            className={`text-[12px] font-mono leading-relaxed select-text scroll-mt-12 ${
-              line.isHeading ? 'text-blue-400 font-bold' : 'text-zinc-400'
-            }`}
-          >
-            {line.text || '\u00A0'}
-          </div>
-        ))}
+      <div className="p-6 select-text">
+        <pre className="text-[12px] font-mono text-zinc-400 whitespace-pre-wrap leading-relaxed mb-2">{headerMd}</pre>
+        {sections.map((section, sIdx) => {
+          const sectionHeader = section.isCurrent && sections.length > 1
+            ? '## 当前对话\n'
+            : section.label ? `## ${section.label}\n` : ''
+          const turns = groupIntoTurns(section.messages)
+          return (
+            <div key={sIdx}>
+              {sectionHeader && (
+                <div id={`section-${sIdx}`} className="scroll-mt-12">
+                  <pre className="text-[12px] font-mono text-blue-400 font-bold whitespace-pre-wrap leading-relaxed">{sectionHeader}</pre>
+                </div>
+              )}
+              {turns.map((turn, tIdx) => (
+                <div
+                  key={turn.userMsg?.uuid || tIdx}
+                  id={turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined}
+                  className="scroll-mt-12"
+                >
+                  <pre className="text-[12px] font-mono text-zinc-400 whitespace-pre-wrap leading-relaxed">{turnToMarkdown(turn)}</pre>
+                </div>
+              ))}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
 }
 
-// --- Markdown document view ---
+// --- Markdown document view: per-turn rendered with anchor divs ---
 
-function MarkdownDocView({ session, sections, contentRef }: {
-  session: NonNullable<ReturnType<typeof useStore>['selectedSession']>
+function MarkdownDocView({ session, sections, customTitle, contentRef }: {
+  session: SessionDetail
   sections: CompactSection[]
+  customTitle?: string
   contentRef: React.RefObject<HTMLDivElement | null>
 }) {
-  const markdownContent = useMemo(
-    () => sessionToMarkdown(session, sections),
-    [session, sections]
-  )
-  const tocEntries = useMemo(() => extractToc(markdownContent), [markdownContent])
+  const headerMd = useMemo(() => sessionHeaderMd(session, customTitle), [session, customTitle])
 
   return (
     <div ref={contentRef} className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-8 py-6 select-text">
-        <DocMarkdown content={markdownContent} tocEntries={tocEntries} />
+        <DocMarkdown content={headerMd} tocEntries={[]} />
+        {sections.map((section, sIdx) => {
+          const sectionHeader = section.isCurrent && sections.length > 1
+            ? '## 当前对话'
+            : section.label ? `## ${section.label}` : ''
+          const turns = groupIntoTurns(section.messages)
+          return (
+            <div key={sIdx}>
+              {sectionHeader && (
+                <div id={`section-${sIdx}`} className="scroll-mt-12">
+                  <DocMarkdown content={sectionHeader} tocEntries={[]} />
+                </div>
+              )}
+              {turns.map((turn, tIdx) => (
+                <div
+                  key={turn.userMsg?.uuid || tIdx}
+                  id={turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined}
+                  className="scroll-mt-12"
+                >
+                  <DocMarkdown content={turnToMarkdown(turn)} tocEntries={[]} />
+                </div>
+              ))}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -513,6 +560,7 @@ export function ChatViewer() {
   const [tocOpen, setTocOpen] = useState(true)
   const [tocWidth, setTocWidth] = useState(200)
   const [sourceView, setSourceView] = useState(false)
+  const pendingScrollRef = useRef<string | null>(null)
 
   const sections = useMemo<CompactSection[]>(() => {
     if (!selectedSession) return []
@@ -527,7 +575,6 @@ export function ChatViewer() {
     if (expandedSections.size > 0) setExpandedSections(new Set())
   }
 
-  // TOC entries: chat modes use computeChatTocEntries, MD mode uses extractToc
   const mdMode = viewMode === 'markdown'
 
   const customTitle = useMemo(() => {
@@ -535,21 +582,59 @@ export function ChatViewer() {
     return config.sessionMeta?.[selectedSession.sessionId]?.customTitle
   }, [selectedSession, config])
 
-  const markdownContent = useMemo(() => {
-    if (!selectedSession || !mdMode) return ''
-    return sessionToMarkdown(selectedSession, sections, customTitle)
-  }, [selectedSession, sections, mdMode, customTitle])
+  // Unified TOC entries for all modes
+  const tocEntries = useMemo(() => computeChatTocEntries(sections), [sections])
 
-  const tocEntries = useMemo<TocEntry[]>(() => {
-    if (!selectedSession) return []
-    if (mdMode) return extractToc(markdownContent)
-    return computeChatTocEntries(sections)
-  }, [selectedSession, mdMode, markdownContent, sections])
+  // Map turn UUID → section index (for auto-expand in chat modes)
+  const turnSectionMap = useMemo(() => {
+    const map = new Map<string, number>()
+    sections.forEach((section, sIdx) => {
+      if (section.isCurrent) return
+      const turns = groupIntoTurns(section.messages)
+      turns.forEach(turn => {
+        if (turn.userMsg) map.set(turn.userMsg.uuid, sIdx)
+      })
+    })
+    return map
+  }, [sections])
+
+  // Scroll to pending target after section expansion
+  useEffect(() => {
+    if (pendingScrollRef.current) {
+      const id = pendingScrollRef.current
+      pendingScrollRef.current = null
+      requestAnimationFrame(() => {
+        const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
+        el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    }
+  })
 
   const handleNavigate = useCallback((id: string) => {
+    // In chat modes, auto-expand collapsed sections if needed
+    if (!mdMode) {
+      if (id.startsWith('turn-')) {
+        const uuid = id.slice(5)
+        const sIdx = turnSectionMap.get(uuid)
+        if (sIdx !== undefined && !expandedSections.has(sIdx)) {
+          setExpandedSections(prev => new Set([...prev, sIdx]))
+          pendingScrollRef.current = id
+          return
+        }
+      }
+      if (id.startsWith('section-')) {
+        const sIdx = parseInt(id.slice(8))
+        if (!isNaN(sIdx) && !sections[sIdx]?.isCurrent && !expandedSections.has(sIdx)) {
+          setExpandedSections(prev => new Set([...prev, sIdx]))
+          pendingScrollRef.current = id
+          return
+        }
+      }
+    }
+    // Direct scroll
     const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, [])
+  }, [mdMode, turnSectionMap, expandedSections, sections])
 
   if (!selectedSession) {
     return (
@@ -592,7 +677,6 @@ export function ChatViewer() {
         mdMode={mdMode}
       />
       <div className="flex-1 flex min-h-0">
-        {/* TOC sidebar for all modes */}
         {tocOpen && tocEntries.length > 0 && (
           <TocSidebar
             entries={tocEntries}
@@ -602,12 +686,11 @@ export function ChatViewer() {
           />
         )}
 
-        {/* Content area */}
         {mdMode ? (
           sourceView ? (
-            <SourceView markdown={markdownContent} tocEntries={tocEntries} contentRef={contentRef} />
+            <SourceView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
           ) : (
-            <MarkdownDocView session={selectedSession} sections={sections} contentRef={contentRef} />
+            <MarkdownDocView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
           )
         ) : (
           <div ref={contentRef} className="flex-1 overflow-y-auto p-4 space-y-4">

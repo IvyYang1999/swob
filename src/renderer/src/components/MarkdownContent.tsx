@@ -72,10 +72,10 @@ const cliComponents: Components = {
 function createDocComponents(tocEntries: TocEntry[]): Components {
   let headingIdx = 0
 
-  const getNextId = () => {
-    const id = tocEntries[headingIdx]?.id || `h-${headingIdx}`
-    headingIdx++
-    return id
+  const getNextId = (): string | undefined => {
+    const idx = headingIdx++
+    if (tocEntries.length === 0) return undefined
+    return tocEntries[idx]?.id || `h-${idx}`
   }
 
   return {

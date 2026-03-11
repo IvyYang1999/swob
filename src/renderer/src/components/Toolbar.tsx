@@ -1,13 +1,14 @@
 import { useState, useCallback } from 'react'
 import { useStore } from '../store'
-import { Search, Eye, EyeOff, Play, PanelRight, X } from 'lucide-react'
+import { Search, Eye, EyeOff, Play, PanelRight, X, Download } from 'lucide-react'
 
 export function Toolbar() {
   const {
     searchQuery, search, clearSearch,
     viewMode, toggleViewMode,
     selectedSession, resumeSession,
-    infoPanelOpen, toggleInfoPanel
+    infoPanelOpen, toggleInfoPanel,
+    triggerExportMarkdown
   } = useStore()
   const [inputValue, setInputValue] = useState(searchQuery)
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
@@ -67,6 +68,17 @@ export function Toolbar() {
           {viewMode === 'compact' ? <Eye size={14} /> : <EyeOff size={14} />}
           <span>{viewMode === 'compact' ? '精简' : '完整'}</span>
         </button>
+
+        {selectedSession && (
+          <button
+            onClick={triggerExportMarkdown}
+            className="px-2 py-1 text-xs rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 flex items-center gap-1"
+            title="导出为 Markdown"
+          >
+            <Download size={14} />
+            <span>导出 MD</span>
+          </button>
+        )}
 
         <button
           onClick={toggleInfoPanel}

@@ -1,6 +1,6 @@
-import { useRef, useState, useMemo, useCallback } from 'react'
+import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
-import { User, Bot, Terminal, ChevronDown, ChevronRight, History, GitBranch, Download } from 'lucide-react'
+import { User, Bot, Terminal, ChevronDown, ChevronRight, History, GitBranch } from 'lucide-react'
 import type { ParsedMessage } from '../store'
 
 type ToolCallInfo = { id?: string; name: string; input: Record<string, unknown>; result?: string }
@@ -420,7 +420,7 @@ function TurnBlock({
 // --- Main ChatViewer ---
 
 export function ChatViewer() {
-  const { selectedSession, viewMode, searchQuery } = useStore()
+  const { selectedSession, viewMode, searchQuery, exportMarkdownTrigger } = useStore()
   const bottomRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
 
@@ -514,6 +514,14 @@ export function ChatViewer() {
     downloadMarkdown(`${safeName}.md`, md)
   }, [selectedSession, sections])
 
+  const exportTriggerRef = useRef(exportMarkdownTrigger)
+  useEffect(() => {
+    if (exportMarkdownTrigger > 0 && exportMarkdownTrigger !== exportTriggerRef.current) {
+      handleExportMarkdown()
+    }
+    exportTriggerRef.current = exportMarkdownTrigger
+  }, [exportMarkdownTrigger, handleExportMarkdown])
+
   if (!selectedSession) {
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-500">
@@ -562,18 +570,6 @@ export function ChatViewer() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
-      {/* Export button */}
-      <div className="flex justify-end">
-        <button
-          onClick={handleExportMarkdown}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
-          title="导出为 Markdown"
-        >
-          <Download size={12} />
-          <span>导出 MD</span>
-        </button>
-      </div>
-
       {sections.map((section, sIdx) => {
         if (section.isCurrent) {
           return (

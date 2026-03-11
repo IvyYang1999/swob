@@ -78,6 +78,7 @@ interface AppState {
   viewMode: 'compact' | 'full'
   selectedFolderId: string | null
   infoPanelOpen: boolean
+  exportMarkdownTrigger: number
 
   initialize: () => Promise<void>
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string) => Promise<void>
@@ -95,6 +96,7 @@ interface AppState {
   addSessionToFolder: (folderId: string, sessionId: string) => Promise<void>
   removeSessionFromFolder: (folderId: string, sessionId: string) => Promise<void>
   setSessionMeta: (sessionId: string, meta: { customTitle?: string; notes?: string }) => Promise<void>
+  triggerExportMarkdown: () => void
 }
 
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult }
@@ -126,6 +128,7 @@ export const useStore = create<AppState>((set, get) => ({
   viewMode: hydrated.viewMode,
   selectedFolderId: null,
   infoPanelOpen: true,
+  exportMarkdownTrigger: 0,
 
   initialize: async () => {
     const [sessions, config] = await Promise.all([
@@ -235,5 +238,6 @@ export const useStore = create<AppState>((set, get) => ({
   setSessionMeta: async (sessionId, meta) => {
     const config = await window.api.setSessionMeta(sessionId, meta)
     set({ config: config as UserConfig })
-  }
+  },
+  triggerExportMarkdown: () => set((state) => ({ exportMarkdownTrigger: state.exportMarkdownTrigger + 1 }))
 }))

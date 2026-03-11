@@ -459,7 +459,7 @@ function sessionHeaderMd(session: SessionDetail, customTitle?: string): string {
     .sort(([, a], [, b]) => b - a).slice(0, 6)
     .map(([name, count]) => `${name}(${count})`).join(', ')
   const lines = [`# ${title}\n`]
-  lines.push(`> ${created} | ${session.messageCount} 条消息 | ${session.turnCount} 轮对话`)
+  lines.push(`> ${created} | ${session.turnCount} 轮对话`)
   if (toolSummary) lines.push(`> Tools: ${toolSummary}`)
   lines.push('')
   return lines.join('\n')

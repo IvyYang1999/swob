@@ -341,7 +341,7 @@ ipcMain.on('session:startDrag', async (event, filePath: string, title: string) =
     const lines: string[] = []
     lines.push(`# ${title || summary.firstUserMessage?.slice(0, 60) || summary.sessionId}\n`)
     const created = new Date(summary.createdAt).toLocaleString('zh-CN')
-    lines.push(`> ${created} | ${summary.messageCount} 条消息 | ${summary.turnCount} 轮对话\n`)
+    lines.push(`> ${created} | ${summary.turnCount} 轮对话\n`)
 
     for (const msg of (detail as any).messages || []) {
       if (msg.type === 'user' && msg.textContent) {

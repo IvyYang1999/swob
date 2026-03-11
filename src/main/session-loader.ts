@@ -93,6 +93,7 @@ function discoverConfigFiles(cwds: string[], sessionProjectPath: string): string
   // 1. User-private project config (same dir as the JSONL files)
   check(path.join(sessionProjectPath, 'CLAUDE.md'))
   check(path.join(sessionProjectPath, 'settings.json'))
+  check(path.join(sessionProjectPath, 'memory', 'MEMORY.md'))
 
   // 2. Decode project root from sessionProjectPath dir name
   // e.g. ~/.claude/projects/-Users-yytyyf-newone/ → /Users/yytyyf/newone
@@ -103,6 +104,7 @@ function discoverConfigFiles(cwds: string[], sessionProjectPath: string): string
     check(path.join(decodedRoot, 'CLAUDE.md'))
     check(path.join(decodedRoot, '.claude', 'CLAUDE.md'))
     check(path.join(decodedRoot, '.claude', 'settings.json'))
+    check(path.join(decodedRoot, '.claude', 'settings.local.json'))
   }
 
   // 3. Walk up from each cwd to find project-level CLAUDE.md

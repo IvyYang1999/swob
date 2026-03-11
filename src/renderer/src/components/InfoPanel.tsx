@@ -326,7 +326,7 @@ export function InfoPanel({ width }: { width: number }) {
           </div>
           <div className="flex items-center gap-2 text-zinc-400">
             <MessageSquare size={12} />
-            <span>{s.turnCount} 轮对话 ({s.messageCount} 条消息)</span>
+            <span>{s.turnCount} 轮对话</span>
           </div>
           {s.compactCount > 0 && (
             <div className="flex items-center gap-2 text-amber-400 text-xs">

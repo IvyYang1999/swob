@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { exec } from 'child_process'
@@ -448,6 +448,33 @@ ipcMain.handle(
     const config = loadConfig()
     const { setSessionMeta } = require('./config-store')
     return setSessionMeta(config, sessionId, meta)
+  }
+)
+
+// --- Native Context Menu ---
+
+ipcMain.handle(
+  'context-menu:session',
+  (event, data: { sessionId: string; folders: Array<{ id: string; name: string; isIn: boolean }> }) => {
+    return new Promise((resolve) => {
+      const template: Electron.MenuItemConstructorOptions[] = [
+        { label: '重命名', click: () => resolve({ action: 'rename' }) },
+        { type: 'separator' }
+      ]
+      if (data.folders.length > 0) {
+        for (const f of data.folders) {
+          template.push({
+            label: f.isIn ? `从「${f.name}」移除` : `移入「${f.name}」`,
+            click: () => resolve({ action: f.isIn ? 'removeFromFolder' : 'addToFolder', folderId: f.id })
+          })
+        }
+      } else {
+        template.push({ label: '还没有文件夹，先创建一个', enabled: false })
+      }
+      const menu = Menu.buildFromTemplate(template)
+      const win = BrowserWindow.fromWebContents(event.sender)
+      menu.popup({ window: win!, callback: () => resolve(null) })
+    })
   }
 )
 

@@ -31,6 +31,8 @@ interface ElectronAPI {
     sessionId: string,
     meta: { customTitle?: string; notes?: string }
   ) => Promise<any>
+  showSessionContextMenu: (data: { sessionId: string; folders: Array<{ id: string; name: string; isIn: boolean }> }) =>
+    Promise<{ action: string; folderId?: string } | null>
   libraryGetRoot: () => Promise<string>
   libraryGetMdPath: (sessionId: string) => Promise<string | null>
   libraryGetDirPath: (sessionId: string) => Promise<string | null>

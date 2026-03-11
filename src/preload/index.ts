@@ -34,6 +34,10 @@ const api = {
     meta: { customTitle?: string; notes?: string }
   ) => ipcRenderer.invoke('config:setSessionMeta', sessionId, meta),
 
+  // Native context menu
+  showSessionContextMenu: (data: { sessionId: string; folders: Array<{ id: string; name: string; isIn: boolean }> }) =>
+    ipcRenderer.invoke('context-menu:session', data),
+
   // Library
   libraryGetRoot: () => ipcRenderer.invoke('library:getRoot'),
   libraryGetMdPath: (sessionId: string) => ipcRenderer.invoke('library:getMdPath', sessionId),

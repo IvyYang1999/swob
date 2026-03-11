@@ -3,7 +3,7 @@ import { useStore, type SessionSummary, type Folder } from '../store'
 import {
   FolderPlus, FolderOpen, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2, FolderInput, FolderMinus, List, FolderTree,
-  Plus, Play
+  Plus, Play, Pencil
 } from 'lucide-react'
 
 function formatDate(iso: string): string {
@@ -26,8 +26,8 @@ interface ContextMenuState {
 }
 
 function ContextMenu({
-  x, y, sessionId, onClose
-}: ContextMenuState & { onClose: () => void }) {
+  x, y, sessionId, onClose, onRename
+}: ContextMenuState & { onClose: () => void; onRename: (sessionId: string) => void }) {
   const { config, addSessionToFolder, removeSessionFromFolder } = useStore()
 
   useEffect(() => {
@@ -41,8 +41,20 @@ function ContextMenu({
       className="fixed z-50 bg-zinc-800 border border-zinc-600 rounded-md shadow-xl py-1 min-w-[180px]"
       style={{ left: x, top: y }}
     >
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          onRename(sessionId)
+          onClose()
+        }}
+        className="w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-700 flex items-center gap-2"
+      >
+        <Pencil size={12} className="text-zinc-400" />
+        <span className="text-zinc-300">重命名</span>
+      </button>
       {config?.folders && config.folders.length > 0 && (
         <>
+          <div className="border-t border-zinc-700 my-1" />
           <div className="px-3 py-1 text-[11px] text-zinc-500 uppercase tracking-wider">
             文件夹
           </div>
@@ -86,30 +98,47 @@ function ContextMenu({
 function SessionItem({
   session,
   depth,
-  onContextMenu
+  onContextMenu,
+  isRenaming,
+  renameValue,
+  onRenameChange,
+  onRenameSubmit,
+  onRenameCancel
 }: {
   session: SessionSummary
   depth: number
   onContextMenu: (e: React.MouseEvent, sessionId: string) => void
+  isRenaming?: boolean
+  renameValue?: string
+  onRenameChange?: (v: string) => void
+  onRenameSubmit?: () => void
+  onRenameCancel?: () => void
 }) {
   const { selectedUniqueId, selectSession, config } = useStore()
   const meta = config?.sessionMeta[session.id]
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
+  const renameInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (isRenaming) renameInputRef.current?.focus()
+  }, [isRenaming])
 
   return (
     <button
-      draggable
+      draggable={!isRenaming}
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'session', id: session.id }))
         e.dataTransfer.effectAllowed = 'move'
       }}
-      onClick={() => selectSession(
-        session.filePath,
-        (session as any).allFilePaths,
-        session.id,
-        (session as any).branchParentFilePaths,
-        (session as any).branchPointUuid
-      )}
+      onClick={() => {
+        if (!isRenaming) selectSession(
+          session.filePath,
+          (session as any).allFilePaths,
+          session.id,
+          (session as any).branchParentFilePaths,
+          (session as any).branchPointUuid
+        )
+      }}
       onContextMenu={(e) => {
         e.preventDefault()
         onContextMenu(e, session.id)
@@ -119,7 +148,22 @@ function SessionItem({
       }`}
       style={{ paddingLeft: `${depth * 16 + 12}px` }}
     >
-      <div className="text-sm text-zinc-200 truncate">{title.slice(0, 60)}</div>
+      {isRenaming ? (
+        <input
+          ref={renameInputRef}
+          value={renameValue}
+          onChange={(e) => onRenameChange?.(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onRenameSubmit?.()
+            if (e.key === 'Escape') onRenameCancel?.()
+          }}
+          onBlur={() => onRenameSubmit?.()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-full text-sm bg-zinc-700 text-zinc-200 rounded px-1 py-0.5 outline-none border border-zinc-500"
+        />
+      ) : (
+        <div className="text-sm text-zinc-200 truncate">{title.slice(0, 60)}</div>
+      )}
       <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500">
         <Clock size={10} />
         <span>{formatDate(session.updatedAt)}</span>
@@ -183,7 +227,12 @@ function FolderNode({
   handleRenameFolder,
   onSessionContextMenu,
   creatingSubfolderId,
-  setCreatingSubfolderId
+  setCreatingSubfolderId,
+  renamingSessionId,
+  sessionRenameValue,
+  onSessionRenameChange,
+  onSessionRenameSubmit,
+  onSessionRenameCancel
 }: {
   folder: Folder
   depth: number
@@ -201,6 +250,11 @@ function FolderNode({
   onSessionContextMenu: (e: React.MouseEvent, sessionId: string) => void
   creatingSubfolderId: string | null
   setCreatingSubfolderId: (id: string | null) => void
+  renamingSessionId: string | null
+  sessionRenameValue: string
+  onSessionRenameChange: (v: string) => void
+  onSessionRenameSubmit: () => void
+  onSessionRenameCancel: () => void
 }) {
   const { addSessionToFolder, deleteFolder, createFolder, moveFolder, resumeBatch } = useStore()
   const isExpanded = expandedFolders.has(folder.id)
@@ -370,6 +424,11 @@ function FolderNode({
               onSessionContextMenu={onSessionContextMenu}
               creatingSubfolderId={creatingSubfolderId}
               setCreatingSubfolderId={setCreatingSubfolderId}
+              renamingSessionId={renamingSessionId}
+              sessionRenameValue={sessionRenameValue}
+              onSessionRenameChange={onSessionRenameChange}
+              onSessionRenameSubmit={onSessionRenameSubmit}
+              onSessionRenameCancel={onSessionRenameCancel}
             />
           ))}
 
@@ -380,6 +439,11 @@ function FolderNode({
               session={session}
               depth={depth + 1}
               onContextMenu={onSessionContextMenu}
+              isRenaming={renamingSessionId === session.id}
+              renameValue={sessionRenameValue}
+              onRenameChange={onSessionRenameChange}
+              onRenameSubmit={onSessionRenameSubmit}
+              onRenameCancel={onSessionRenameCancel}
             />
           ))}
 
@@ -414,7 +478,30 @@ export function Sidebar({ width }: { width: number }) {
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree')
   const [creatingSubfolderId, setCreatingSubfolderId] = useState<string | null>(null)
 
-  const { renameFolder } = useStore()
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
+  const [sessionRenameValue, setSessionRenameValue] = useState('')
+
+  const { renameFolder, setSessionMeta } = useStore()
+
+  const handleStartRenameSession = useCallback((sessionId: string) => {
+    const meta = config?.sessionMeta[sessionId]
+    const session = sessions.find((s) => s.id === sessionId)
+    setSessionRenameValue(meta?.customTitle || session?.firstUserMessage || '')
+    setRenamingSessionId(sessionId)
+  }, [config, sessions])
+
+  const handleSubmitRenameSession = useCallback(() => {
+    if (renamingSessionId && sessionRenameValue.trim()) {
+      setSessionMeta(renamingSessionId, { customTitle: sessionRenameValue.trim() })
+    }
+    setRenamingSessionId(null)
+    setSessionRenameValue('')
+  }, [renamingSessionId, sessionRenameValue, setSessionMeta])
+
+  const handleCancelRenameSession = useCallback(() => {
+    setRenamingSessionId(null)
+    setSessionRenameValue('')
+  }, [])
 
   const toggleFolder = useCallback((id: string) => {
     setExpandedFolders((prev) => {
@@ -522,6 +609,11 @@ export function Sidebar({ width }: { width: number }) {
                 session={session}
                 depth={0}
                 onContextMenu={handleContextMenu}
+              isRenaming={renamingSessionId === session.id}
+              renameValue={sessionRenameValue}
+              onRenameChange={setSessionRenameValue}
+              onRenameSubmit={handleSubmitRenameSession}
+              onRenameCancel={handleCancelRenameSession}
               />
             ))}
           </>
@@ -547,6 +639,11 @@ export function Sidebar({ width }: { width: number }) {
                 onSessionContextMenu={handleContextMenu}
                 creatingSubfolderId={creatingSubfolderId}
                 setCreatingSubfolderId={setCreatingSubfolderId}
+                renamingSessionId={renamingSessionId}
+                sessionRenameValue={sessionRenameValue}
+                onSessionRenameChange={setSessionRenameValue}
+                onSessionRenameSubmit={handleSubmitRenameSession}
+                onSessionRenameCancel={handleCancelRenameSession}
               />
             ))}
 
@@ -582,6 +679,11 @@ export function Sidebar({ width }: { width: number }) {
                 session={session}
                 depth={0}
                 onContextMenu={handleContextMenu}
+              isRenaming={renamingSessionId === session.id}
+              renameValue={sessionRenameValue}
+              onRenameChange={setSessionRenameValue}
+              onRenameSubmit={handleSubmitRenameSession}
+              onRenameCancel={handleCancelRenameSession}
               />
             ))}
           </>
@@ -598,6 +700,7 @@ export function Sidebar({ width }: { width: number }) {
         <ContextMenu
           {...contextMenu}
           onClose={() => setContextMenu(null)}
+          onRename={handleStartRenameSession}
         />
       )}
     </div>

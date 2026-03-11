@@ -4,7 +4,7 @@ import type { ViewMode, ParsedMessage, SessionDetail } from '../store'
 import {
   User, Bot, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
-  List, Code2
+  List, Code2, CheckSquare
 } from 'lucide-react'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
 import {
@@ -182,9 +182,9 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
 
 // --- Turn block ---
 
-function TurnBlock({ turn, viewMode, selected, onSelect }: {
+function TurnBlock({ turn, viewMode, selected, selectMode, onSelect }: {
   turn: Turn; viewMode: 'compact' | 'full'
-  selected?: boolean; onSelect?: (uuid: string) => void
+  selected?: boolean; selectMode?: boolean; onSelect?: (uuid: string) => void
 }) {
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
@@ -207,71 +207,82 @@ function TurnBlock({ turn, viewMode, selected, onSelect }: {
   }, [turn.assistantMsgs])
 
   return (
-    <div id={turnId} className={`space-y-3 scroll-mt-12 group/turn relative ${selected ? 'ring-1 ring-blue-500/50 rounded-lg p-2 -m-2 bg-blue-950/10' : ''}`}>
-      {/* Selection checkbox + copy buttons */}
-      {turn.userMsg && (
-        <div className="absolute right-0 top-0 flex items-center gap-1 opacity-0 group-hover/turn:opacity-100 transition-opacity z-10">
-          {onSelect && turn.userMsg && (
-            <button
-              onClick={() => onSelect(turn.userMsg!.uuid)}
-              className={`w-5 h-5 rounded border flex items-center justify-center text-[10px] ${selected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
-            >
-              {selected ? '✓' : ''}
-            </button>
-          )}
-          <button onClick={copyQuery} className="px-1.5 py-0.5 text-[10px] rounded bg-zinc-800 border border-zinc-700 text-zinc-500 hover:text-zinc-300" title="复制 Query">
-            {copiedQ ? <Check size={10} className="text-green-400" /> : 'Q'}
-          </button>
-          {turn.assistantMsgs.length > 0 && (
-            <button onClick={copyResponse} className="px-1.5 py-0.5 text-[10px] rounded bg-zinc-800 border border-zinc-700 text-zinc-500 hover:text-zinc-300" title="复制回答">
-              {copiedA ? <Check size={10} className="text-green-400" /> : 'A'}
-            </button>
-          )}
-        </div>
+    <div id={turnId} className={`space-y-3 scroll-mt-0 relative ${selected ? 'ring-1 ring-blue-500/50 rounded-lg p-2 -m-2 bg-blue-950/10' : ''}`}>
+      {/* Multi-select checkbox — only in select mode */}
+      {selectMode && onSelect && turn.userMsg && (
+        <button
+          onClick={() => onSelect(turn.userMsg!.uuid)}
+          className={`absolute -left-6 top-1 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${selected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
+        >
+          {selected ? '✓' : ''}
+        </button>
       )}
 
+      {/* User message */}
       {turn.userMsg && (
-        <div className={`flex gap-3 ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
-          <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-blue-600"><User size={14} /></div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-medium text-zinc-400">User</span>
-              <span className="text-[11px] text-zinc-600">{formatTime(turn.userMsg.timestamp)}</span>
-            </div>
-            {turn.userMsg.textContent.startsWith(COMPACT_SUMMARY_PREFIX) ? (
-              <div className="text-sm text-zinc-200 border-l-2 border-amber-600/50 pl-3">
-                <div className="text-[10px] text-amber-500 mb-1 font-medium">Compact 上下文摘要</div>
-                <div className="whitespace-pre-wrap break-words leading-relaxed max-h-48 overflow-y-auto">
-                  {turn.userMsg.textContent.slice(COMPACT_SUMMARY_PREFIX.length).trim()}
+        <div className={`group/user ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+          <div className="flex gap-3">
+            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-blue-600"><User size={14} /></div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs font-medium text-zinc-400">User</span>
+                <span className="text-[11px] text-zinc-600">{formatTime(turn.userMsg.timestamp)}</span>
+                {/* Copy query button — visible on hover */}
+                <button
+                  onClick={copyQuery}
+                  className="opacity-0 group-hover/user:opacity-100 transition-opacity p-0.5 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300"
+                  title="复制问题"
+                >
+                  {copiedQ ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                </button>
+              </div>
+              {turn.userMsg.textContent.startsWith(COMPACT_SUMMARY_PREFIX) ? (
+                <div className="text-sm text-zinc-200 border-l-2 border-amber-600/50 pl-3">
+                  <div className="text-[10px] text-amber-500 mb-1 font-medium">Compact 上下文摘要</div>
+                  <div className="whitespace-pre-wrap break-words leading-relaxed max-h-48 overflow-y-auto">
+                    {turn.userMsg.textContent.slice(COMPACT_SUMMARY_PREFIX.length).trim()}
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="text-sm text-zinc-200">
-                <CliMarkdown content={turn.userMsg.textContent} />
-              </div>
-            )}
+              ) : (
+                <div className="text-sm text-zinc-200">
+                  <CliMarkdown content={turn.userMsg.textContent} />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
+
+      {/* Assistant message */}
       {segments.length > 0 && (
-        <div className={`flex gap-3 ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
-          <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-orange-600"><Bot size={14} /></div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-medium text-zinc-400">Assistant</span>
-              <span className="text-[11px] text-zinc-600">{formatTime(turn.assistantMsgs[0].timestamp)}</span>
-              {hasSidechain && <span className="text-[10px] px-1 py-0.5 rounded bg-zinc-700 text-zinc-500">rejected</span>}
-            </div>
-            {segments.map((seg, i) => (
-              <div key={i}>
-                {seg.type === 'text' && <CliMarkdown content={seg.text!} />}
-                {seg.type === 'tools' && (
-                  viewMode === 'compact'
-                    ? <ToolCallPillBar toolCalls={seg.toolCalls!} />
-                    : <div className="space-y-1.5 my-1.5">{seg.toolCalls!.map((tc, j) => <ToolCallFull key={j} tc={tc} />)}</div>
-                )}
+        <div className={`group/assistant ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+          <div className="flex gap-3">
+            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-orange-600"><Bot size={14} /></div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs font-medium text-zinc-400">Assistant</span>
+                <span className="text-[11px] text-zinc-600">{formatTime(turn.assistantMsgs[0].timestamp)}</span>
+                {hasSidechain && <span className="text-[10px] px-1 py-0.5 rounded bg-zinc-700 text-zinc-500">rejected</span>}
+                {/* Copy response button — visible on hover */}
+                <button
+                  onClick={copyResponse}
+                  className="opacity-0 group-hover/assistant:opacity-100 transition-opacity p-0.5 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300"
+                  title="复制回答"
+                >
+                  {copiedA ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                </button>
               </div>
-            ))}
+              {segments.map((seg, i) => (
+                <div key={i}>
+                  {seg.type === 'text' && <CliMarkdown content={seg.text!} />}
+                  {seg.type === 'tools' && (
+                    viewMode === 'compact'
+                      ? <ToolCallPillBar toolCalls={seg.toolCalls!} />
+                      : <div className="space-y-1.5 my-1.5">{seg.toolCalls!.map((tc, j) => <ToolCallFull key={j} tc={tc} />)}</div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -401,12 +412,16 @@ function SessionBar({
   sourceView,
   onToggleSource,
   mdMode,
+  selectMode,
+  onToggleSelectMode,
 }: {
   tocOpen: boolean
   onToggleToc: () => void
   sourceView: boolean
   onToggleSource: () => void
   mdMode: boolean
+  selectMode: boolean
+  onToggleSelectMode: () => void
 }) {
   const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, config } = useStore()
   const [copied, setCopied] = useState(false)
@@ -449,6 +464,16 @@ function SessionBar({
         >
           <List size={13} />
         </button>
+
+        {!mdMode && (
+          <button
+            onClick={onToggleSelectMode}
+            className={`p-1 rounded transition-colors ${selectMode ? 'text-blue-300 bg-blue-800/50' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
+            title="多选模式"
+          >
+            <CheckSquare size={13} />
+          </button>
+        )}
 
         {mdMode && (
           <button
@@ -537,7 +562,7 @@ function SourceView({ session, sections, customTitle, contentRef }: {
           return (
             <div key={sIdx}>
               {sectionHeader && (
-                <div id={`section-${sIdx}`} className="scroll-mt-12">
+                <div id={`section-${sIdx}`} className="scroll-mt-0">
                   <pre className="text-[12px] font-mono text-blue-400 font-bold whitespace-pre-wrap leading-relaxed">{sectionHeader}</pre>
                 </div>
               )}
@@ -545,7 +570,7 @@ function SourceView({ session, sections, customTitle, contentRef }: {
                 <div
                   key={turn.userMsg?.uuid || tIdx}
                   id={turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined}
-                  className="scroll-mt-12"
+                  className="scroll-mt-0"
                 >
                   <pre className="text-[12px] font-mono text-zinc-400 whitespace-pre-wrap leading-relaxed">{turnToMarkdown(turn)}</pre>
                 </div>
@@ -580,7 +605,7 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
           return (
             <div key={sIdx}>
               {sectionHeader && (
-                <div id={`section-${sIdx}`} className="scroll-mt-12">
+                <div id={`section-${sIdx}`} className="scroll-mt-0">
                   <DocMarkdown content={sectionHeader} tocEntries={[]} />
                 </div>
               )}
@@ -588,7 +613,7 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
                 <div
                   key={turn.userMsg?.uuid || tIdx}
                   id={turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined}
-                  className="scroll-mt-12"
+                  className="scroll-mt-0"
                 >
                   <DocMarkdown content={turnToMarkdown(turn)} tocEntries={[]} />
                 </div>
@@ -611,7 +636,8 @@ export function ChatViewer() {
   const [tocWidth, setTocWidth] = useState(200)
   const [sourceView, setSourceView] = useState(false)
   const pendingScrollRef = useRef<string | null>(null)
-  const scrollRatioRef = useRef<number>(0)
+  // Track the first visible turn UUID for cross-mode scroll alignment
+  const firstVisibleTurnRef = useRef<string | null>(null)
 
   const sections = useMemo<CompactSection[]>(() => {
     if (!selectedSession) return []
@@ -628,29 +654,57 @@ export function ChatViewer() {
 
   const mdMode = viewMode === 'markdown'
 
-  // Track scroll position as ratio for preserving across view mode switches
+  // Collect all turn UUIDs for scroll tracking
+  const allTurnUuids = useMemo(() => {
+    const uuids: string[] = []
+    for (const section of sections) {
+      const turns = groupIntoTurns(section.messages)
+      for (const turn of turns) {
+        if (turn.userMsg) uuids.push(turn.userMsg.uuid)
+      }
+    }
+    return uuids
+  }, [sections])
+
+  // Track the first visible turn on scroll
   useEffect(() => {
     const el = contentRef.current
     if (!el) return
     const handler = () => {
-      const maxScroll = el.scrollHeight - el.clientHeight
-      scrollRatioRef.current = maxScroll > 0 ? el.scrollTop / maxScroll : 0
+      const containerTop = el.getBoundingClientRect().top
+      for (const uuid of allTurnUuids) {
+        const turnEl = el.querySelector(`#turn-${CSS.escape(uuid)}`)
+        if (turnEl) {
+          const rect = turnEl.getBoundingClientRect()
+          // The turn is visible if its bottom is below the container top
+          if (rect.bottom > containerTop) {
+            firstVisibleTurnRef.current = uuid
+            return
+          }
+        }
+      }
     }
     el.addEventListener('scroll', handler, { passive: true })
     return () => el.removeEventListener('scroll', handler)
-  })
+  }, [allTurnUuids])
 
-  // Restore scroll position after view mode switch
+  // Restore scroll position after view mode switch — align to first visible turn
   const prevViewModeRef = useRef(viewMode)
   useEffect(() => {
     if (prevViewModeRef.current !== viewMode) {
       prevViewModeRef.current = viewMode
-      requestAnimationFrame(() => {
-        const el = contentRef.current
-        if (el && el.scrollHeight > el.clientHeight) {
-          el.scrollTop = scrollRatioRef.current * (el.scrollHeight - el.clientHeight)
-        }
-      })
+      const targetUuid = firstVisibleTurnRef.current
+      if (targetUuid) {
+        // Use a small delay to let the new view render
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            const el = contentRef.current?.querySelector(`#turn-${CSS.escape(targetUuid)}`)
+            if (el) {
+              el.scrollIntoView({ block: 'start' })
+            }
+          }, 0)
+        })
+      }
     }
   }, [viewMode])
 
@@ -662,13 +716,20 @@ export function ChatViewer() {
   // Unified TOC entries for all modes
   const tocEntries = useMemo(() => computeChatTocEntries(sections), [sections])
 
-  // Multi-select state
+  // Multi-select state — hidden by default, toggled explicitly
+  const [selectMode, setSelectMode] = useState(false)
   const [selectedTurns, setSelectedTurns] = useState<Set<string>>(new Set())
   const toggleTurnSelection = useCallback((uuid: string) => {
     setSelectedTurns(prev => {
       const next = new Set(prev)
       next.has(uuid) ? next.delete(uuid) : next.add(uuid)
       return next
+    })
+  }, [])
+  const toggleSelectMode = useCallback(() => {
+    setSelectMode(prev => {
+      if (prev) setSelectedTurns(new Set()) // exiting select mode clears selection
+      return !prev
     })
   }, [])
 
@@ -804,6 +865,7 @@ export function ChatViewer() {
         turn={turn}
         viewMode={viewMode as 'compact' | 'full'}
         selected={turn.userMsg ? selectedTurns.has(turn.userMsg.uuid) : false}
+        selectMode={selectMode}
         onSelect={toggleTurnSelection}
       />
     ))
@@ -817,10 +879,12 @@ export function ChatViewer() {
         sourceView={sourceView}
         onToggleSource={() => setSourceView(!sourceView)}
         mdMode={mdMode}
+        selectMode={selectMode}
+        onToggleSelectMode={toggleSelectMode}
       />
 
-      {/* Batch action bar */}
-      {selectedTurns.size > 0 && !mdMode && (
+      {/* Batch action bar — only when select mode is on and turns are selected */}
+      {selectMode && selectedTurns.size > 0 && !mdMode && (
         <div className="h-8 flex items-center gap-2 px-3 bg-blue-950/50 border-b border-blue-800/40 shrink-0">
           <span className="text-[11px] text-blue-400">已选 {selectedTurns.size} 轮</span>
           <button onClick={handleBatchExport} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
@@ -829,7 +893,7 @@ export function ChatViewer() {
           <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
             <Download size={10} /> 下载 MD
           </button>
-          <button onClick={() => setSelectedTurns(new Set())} className="px-2 py-0.5 text-[10px] rounded text-zinc-500 hover:text-zinc-300">
+          <button onClick={() => { setSelectedTurns(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-zinc-500 hover:text-zinc-300">
             取消
           </button>
         </div>
@@ -853,13 +917,13 @@ export function ChatViewer() {
             <MarkdownDocView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
           )
         ) : (
-          <div ref={contentRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div ref={contentRef} className={`flex-1 overflow-y-auto px-4 pb-4 space-y-4 ${selectMode ? 'pl-10' : ''}`}>
             {sections.map((section, sIdx) => {
               if (section.isCurrent) {
                 return (
-                  <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="space-y-4 scroll-mt-12">
+                  <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="space-y-4 scroll-mt-0">
                     {sections.length > 1 && (
-                      <div className="sticky top-0 z-10 flex items-center gap-3 py-2 bg-zinc-900/95 backdrop-blur-sm">
+                      <div className="sticky top-0 z-10 flex items-center gap-3 py-2 bg-zinc-900/95 backdrop-blur-sm -mx-4 px-4">
                         <div className="flex-1 border-t border-emerald-600/50" />
                         <span className="text-emerald-500 text-xs px-3 py-1 bg-emerald-900/20 rounded-full">当前对话</span>
                         <div className="flex-1 border-t border-emerald-600/50" />
@@ -879,10 +943,10 @@ export function ChatViewer() {
               const SectionIcon = isShared ? GitBranch : History
 
               return (
-                <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="scroll-mt-12">
+                <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="scroll-mt-0">
                   <button
                     onClick={() => toggleSection(sIdx)}
-                    className="w-full flex items-center gap-3 py-2 group sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm"
+                    className="w-full flex items-center gap-3 py-2 group sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-sm -mx-4 px-4"
                   >
                     <div className={`flex-1 border-t ${borderColor}`} />
                     <div className={`flex items-center gap-2 ${textColor} text-xs px-3 py-1 ${bgColor} rounded-full transition-colors`}>

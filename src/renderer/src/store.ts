@@ -164,8 +164,11 @@ export const useStore = create<AppState>((set, get) => ({
     const debouncedRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer)
       refreshTimer = setTimeout(async () => {
-        const freshSessions = await window.api.loadAllSessions()
-        set({ sessions: freshSessions })
+        const [freshSessions, freshConfig] = await Promise.all([
+          window.api.loadAllSessions(),
+          window.api.loadConfig()
+        ])
+        set({ sessions: freshSessions, config: freshConfig })
       }, 500)
     }
 

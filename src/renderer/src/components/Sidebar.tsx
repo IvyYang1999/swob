@@ -28,7 +28,9 @@ interface ContextMenuState {
 function ContextMenu({
   x, y, sessionId, onClose, onRename
 }: ContextMenuState & { onClose: () => void; onRename: (sessionId: string) => void }) {
-  const { config, addSessionToFolder, removeSessionFromFolder } = useStore()
+  const { config, sessions, addSessionToFolder, removeSessionFromFolder } = useStore()
+  // Resolve base sessionId for library folder operations
+  const baseSessionId = sessions.find((s) => s.id === sessionId)?.sessionId || sessionId
 
   useEffect(() => {
     const handler = () => onClose()
@@ -59,14 +61,14 @@ function ContextMenu({
             文件夹
           </div>
           {config.folders.map((folder) => {
-            const isInFolder = folder.sessionIds.includes(sessionId)
+            const isInFolder = folder.sessionIds.includes(sessionId) || folder.sessionIds.includes(baseSessionId)
             return (
               <button
                 key={folder.id}
                 onClick={(e) => {
                   e.stopPropagation()
-                  if (isInFolder) removeSessionFromFolder(folder.id, sessionId)
-                  else addSessionToFolder(folder.id, sessionId)
+                  if (isInFolder) removeSessionFromFolder(folder.id, baseSessionId)
+                  else addSessionToFolder(folder.id, baseSessionId)
                   onClose()
                 }}
                 className="w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-700 flex items-center gap-2"
@@ -115,7 +117,7 @@ function SessionItem({
   onRenameCancel?: () => void
 }) {
   const { selectedUniqueId, selectSession, config, resumedSessionIds } = useStore()
-  const meta = config?.sessionMeta[session.id]
+  const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
   const renameInputRef = useRef<HTMLInputElement>(null)
@@ -128,7 +130,9 @@ function SessionItem({
     <button
       draggable={!isRenaming}
       onDragStart={(e) => {
-        e.dataTransfer.setData('application/x-swob', JSON.stringify({ type: 'session', id: session.id }))
+        e.dataTransfer.setData('application/x-swob', JSON.stringify({
+          type: 'session', id: session.id, sessionId: session.sessionId || session.id
+        }))
         // For external drop targets: provide the library transcript.md path
         const mdPath = (session as any).libraryMdPath
         if (mdPath) {
@@ -231,7 +235,9 @@ function FolderNode({
   expandedFolders,
   toggleFolder,
   dragOverFolderId,
+  dragOverZone,
   setDragOverFolderId,
+  setDragOverZone,
   renamingFolderId,
   setRenamingFolderId,
   renamingValue,
@@ -293,8 +299,8 @@ function FolderNode({
     setDragOverFolderId(null)
     try {
       const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
-      if (data.type === 'session' && data.id) {
-        addSessionToFolder(folder.id, data.id)
+      if (data.type === 'session' && (data.sessionId || data.id)) {
+        addSessionToFolder(folder.id, data.sessionId || data.id)
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
       } else if (data.type === 'folder' && data.id && data.id !== folder.id) {
         if (zone === 'inside') {
@@ -521,19 +527,22 @@ export function Sidebar({ width }: { width: number }) {
   const { renameFolder, setSessionMeta } = useStore()
 
   const handleStartRenameSession = useCallback((sessionId: string) => {
-    const meta = config?.sessionMeta[sessionId]
     const session = sessions.find((s) => s.id === sessionId)
+    const baseId = session?.sessionId || sessionId
+    const meta = config?.sessionMeta[baseId] || config?.sessionMeta[sessionId]
     setSessionRenameValue(meta?.customTitle || session?.firstUserMessage || '')
     setRenamingSessionId(sessionId)
   }, [config, sessions])
 
   const handleSubmitRenameSession = useCallback(() => {
     if (renamingSessionId && sessionRenameValue.trim()) {
-      setSessionMeta(renamingSessionId, { customTitle: sessionRenameValue.trim() })
+      const session = sessions.find((s) => s.id === renamingSessionId)
+      const baseId = session?.sessionId || renamingSessionId
+      setSessionMeta(baseId, { customTitle: sessionRenameValue.trim() })
     }
     setRenamingSessionId(null)
     setSessionRenameValue('')
-  }, [renamingSessionId, sessionRenameValue, setSessionMeta])
+  }, [renamingSessionId, sessionRenameValue, setSessionMeta, sessions])
 
   const handleCancelRenameSession = useCallback(() => {
     setRenamingSessionId(null)
@@ -576,13 +585,19 @@ export function Sidebar({ width }: { width: number }) {
   }, [config?.folders])
 
   const ungroupedSessions = useMemo(
-    () => sessions.filter((s) => !groupedSessionIds.has(s.id)),
+    () => sessions.filter((s) => !groupedSessionIds.has(s.id) && !groupedSessionIds.has(s.sessionId)),
     [sessions, groupedSessionIds]
   )
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionSummary>()
-    sessions.forEach((s) => map.set(s.id, s))
+    sessions.forEach((s) => {
+      map.set(s.id, s)
+      // Also index by sessionId for library folder lookups (which use base sessionId)
+      if (s.sessionId && s.sessionId !== s.id && !map.has(s.sessionId)) {
+        map.set(s.sessionId, s)
+      }
+    })
     return map
   }, [sessions])
 
@@ -667,7 +682,9 @@ export function Sidebar({ width }: { width: number }) {
                 expandedFolders={expandedFolders}
                 toggleFolder={toggleFolder}
                 dragOverFolderId={dragOverFolderId}
+                dragOverZone={dragOverZone}
                 setDragOverFolderId={setDragOverFolderId}
+                setDragOverZone={setDragOverZone}
                 renamingFolderId={renamingFolderId}
                 setRenamingFolderId={setRenamingFolderId}
                 renamingValue={renamingValue}

@@ -1,10 +1,39 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react'
 import { useStore } from './store'
 import { Sidebar } from './components/Sidebar'
 import { ChatViewer } from './components/ChatViewer'
 import { InfoPanel } from './components/InfoPanel'
 import { Toolbar } from './components/Toolbar'
 import { SearchResults } from './components/SearchResults'
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[ErrorBoundary]', error, info.componentStack)
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="h-screen flex items-center justify-center bg-zinc-900 text-zinc-300 p-8">
+          <div className="max-w-lg text-center">
+            <div className="text-lg font-medium text-red-400 mb-3">渲染错误</div>
+            <pre className="text-xs text-zinc-500 bg-zinc-800 rounded p-3 mb-4 text-left overflow-auto max-h-40">
+              {this.state.error.message}{'\n'}{this.state.error.stack}
+            </pre>
+            <button
+              onClick={() => this.setState({ error: null })}
+              className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm"
+            >
+              重试
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 function ResizeHandle({ side, onResize }: { side: 'left' | 'right'; onResize: (delta: number) => void }) {
   const dragging = useRef(false)
@@ -89,20 +118,22 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-zinc-900 text-white">
-      <Toolbar />
-      <div className="flex-1 flex overflow-hidden relative">
-        <Sidebar width={sidebarWidth} />
-        <ResizeHandle side="left" onResize={handleSidebarResize} />
-        <ChatViewer />
-        {infoPanelOpen && (
-          <>
-            <ResizeHandle side="right" onResize={handleInfoPanelResize} />
-            <InfoPanel width={infoPanelWidth} />
-          </>
-        )}
-        {searchQuery && <SearchResults />}
+    <ErrorBoundary>
+      <div className="h-screen flex flex-col bg-zinc-900 text-white">
+        <Toolbar />
+        <div className="flex-1 flex overflow-hidden relative">
+          <Sidebar width={sidebarWidth} />
+          <ResizeHandle side="left" onResize={handleSidebarResize} />
+          <ChatViewer />
+          {infoPanelOpen && (
+            <>
+              <ResizeHandle side="right" onResize={handleInfoPanelResize} />
+              <InfoPanel width={infoPanelWidth} />
+            </>
+          )}
+          {searchQuery && <SearchResults />}
+        </div>
       </div>
-    </div>
+    </ErrorBoundary>
   )
 }

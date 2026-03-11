@@ -34,6 +34,12 @@ const api = {
     meta: { customTitle?: string; notes?: string }
   ) => ipcRenderer.invoke('config:setSessionMeta', sessionId, meta),
 
+  // Library
+  libraryGetRoot: () => ipcRenderer.invoke('library:getRoot'),
+  libraryGetMdPath: (sessionId: string) => ipcRenderer.invoke('library:getMdPath', sessionId),
+  libraryGetDirPath: (sessionId: string) => ipcRenderer.invoke('library:getDirPath', sessionId),
+  libraryOpenInFinder: () => ipcRenderer.invoke('library:openInFinder'),
+
   // Markdown
   saveMarkdown: (dirPath: string, filename: string, content: string) =>
     ipcRenderer.invoke('session:saveMarkdown', dirPath, filename, content),

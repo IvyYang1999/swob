@@ -1,9 +1,8 @@
-import { app, shell, BrowserWindow, ipcMain, nativeImage } from 'electron'
+import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { exec } from 'child_process'
 import * as fs from 'fs'
-import * as os from 'os'
 import * as chokidar from 'chokidar'
 import {
   loadAllSessions,
@@ -13,21 +12,35 @@ import {
   buildSessionSummary
 } from './session-loader'
 import {
-  loadConfig,
-  saveConfig,
-  createFolder,
-  deleteFolder,
-  renameFolder,
-  moveFolder,
-  addSessionToFolder,
-  removeSessionFromFolder,
-  setSessionMeta
-} from './config-store'
-import type { UserConfig } from './types'
+  initLibrary,
+  scanLibrary,
+  libraryTreeToConfig,
+  loadLibraryConfig,
+  saveLibraryConfig,
+  syncLibraryFromSessions,
+  ensureSessionInLibrary,
+  updateTranscript,
+  syncBackup,
+  getSessionMdPath,
+  getSessionDirPath,
+  createLibraryFolder,
+  renameLibraryFolder,
+  deleteLibraryFolder,
+  moveSessionToFolder,
+  addSessionToFolder as libAddSession,
+  removeSessionFromFolder as libRemoveSession,
+  setSessionMetaInLibrary,
+  resolveFolderPath,
+  getLibraryRoot,
+  migrateFromOldConfig
+} from './library-manager'
+import { loadConfig, saveConfig } from './config-store'
+import type { SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
 const knownSessionIds = new Set<string>()
+let libraryInitialized = false
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -75,12 +88,21 @@ function startFileWatcher(): void {
       if (!sessionId) return
 
       if (knownSessionIds.has(sessionId)) {
-        // Existing session got a new file (resume/branch) — need full refresh for correct clustering
         mainWindow?.webContents.send('sessions:refresh')
       } else {
         knownSessionIds.add(sessionId)
         const summary = buildSessionSummary(filePath, raw, true)
         if (summary) {
+          // Create library entry for new session
+          if (libraryInitialized) {
+            try {
+              const dirPath = await ensureSessionInLibrary(summary)
+              await updateTranscript(sessionId)
+              await syncBackup(sessionId)
+              summary.libraryDirPath = dirPath
+              summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+            } catch { /* ignore */ }
+          }
           mainWindow?.webContents.send('session:added', summary)
         }
       }
@@ -95,6 +117,16 @@ function startFileWatcher(): void {
       const raw = await parseSessionFile(filePath)
       const summary = buildSessionSummary(filePath, raw, true)
       if (summary) {
+        // Update library transcript + backup
+        if (libraryInitialized) {
+          try {
+            await ensureSessionInLibrary(summary)
+            await updateTranscript(summary.sessionId)
+            await syncBackup(summary.sessionId)
+            summary.libraryDirPath = getSessionDirPath(summary.sessionId) || undefined
+            summary.libraryMdPath = getSessionMdPath(summary.sessionId) || undefined
+          } catch { /* ignore */ }
+        }
         mainWindow?.webContents.send('session:updated', summary)
       }
     } catch {
@@ -103,12 +135,53 @@ function startFileWatcher(): void {
   })
 }
 
+// --- Library Initialization ---
+
+async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void> {
+  initLibrary()
+
+  // Check if migration is needed (old config has folders but library is fresh)
+  const oldConfig = loadConfig()
+  const tree = scanLibrary()
+
+  if (oldConfig.folders.length > 0 && tree.folders.length === 0 && tree.ungroupedSessions.length === 0) {
+    // First run after upgrade — sync all sessions first, then migrate
+    await syncLibraryFromSessions(sessions, oldConfig.sessionMeta)
+    await migrateFromOldConfig(oldConfig.folders, oldConfig.sessionMeta)
+
+    // Migrate preferences to library config
+    const libConfig = loadLibraryConfig()
+    libConfig.preferences = oldConfig.preferences
+    saveLibraryConfig(libConfig)
+  } else {
+    // Normal sync — ensure all sessions are in library
+    await syncLibraryFromSessions(sessions, oldConfig.sessionMeta)
+  }
+
+  libraryInitialized = true
+}
+
 // --- IPC Handlers ---
 
 ipcMain.handle('sessions:loadAll', async () => {
   const sessions = await loadAllSessions()
   knownSessionIds.clear()
-  for (const s of sessions) knownSessionIds.add(s.sessionId)
+
+  // Attach library paths
+  for (const s of sessions) {
+    knownSessionIds.add(s.sessionId)
+    const dirPath = getSessionDirPath(s.sessionId)
+    if (dirPath) {
+      s.libraryDirPath = dirPath
+      s.libraryMdPath = getSessionMdPath(s.sessionId) || undefined
+    }
+  }
+
+  // Sync library in background (non-blocking)
+  if (!libraryInitialized) {
+    initLibraryFromSessions(sessions).catch(() => { /* ignore */ })
+  }
+
   return sessions
 })
 
@@ -159,7 +232,6 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
         else if (Array.isArray(content)) {
           for (const part of content) {
             if (part.type === 'text') text += (text ? ' ' : '') + (part.text || '')
-            // Also search tool_use inputs and tool_result content
             if (part.type === 'tool_result' && typeof part.content === 'string') text += ' ' + part.content
             if (part.type === 'tool_use' && part.input) {
               const inp = part.input as Record<string, unknown>
@@ -193,7 +265,6 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
       /* skip */
     }
   }
-  // Sort by match count (most matches first), then by recency
   results.sort((a, b) => {
     if (b.matches.length !== a.matches.length) return b.matches.length - a.matches.length
     const aTime = new Date(a.matches[0]?.timestamp || 0).getTime()
@@ -213,7 +284,6 @@ function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: st
   return cmd
 }
 
-// Open a .command file in the default terminal — no AppleScript, no permissions needed
 function openInTerminal(command: string): void {
   const tmpPath = `/tmp/csm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.command`
   fs.writeFileSync(tmpPath, `#!/bin/bash\n${command}\n`)
@@ -225,7 +295,6 @@ function openInTerminal(command: string): void {
   })
 }
 
-// Single resume: opens a new terminal window
 ipcMain.handle(
   'terminal:resume',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
@@ -233,7 +302,6 @@ ipcMain.handle(
   }
 )
 
-// Batch resume: each session opens in its own terminal window
 ipcMain.handle(
   'terminal:resumeBatch',
   async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
@@ -243,57 +311,154 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle('config:load', () => loadConfig())
-ipcMain.handle('config:save', (_event, config: UserConfig) => {
-  saveConfig(config)
+// --- Config / Library IPC ---
+// These use the library manager but return the same shape the frontend expects
+
+ipcMain.handle('config:load', () => {
+  if (!libraryInitialized) {
+    // Fallback to old config during initial load
+    return loadConfig()
+  }
+  const tree = scanLibrary()
+  return libraryTreeToConfig(tree)
+})
+
+ipcMain.handle('config:save', (_event, config: { preferences: { defaultViewMode: string; terminalApp: string } }) => {
+  if (libraryInitialized) {
+    const libConfig = loadLibraryConfig()
+    libConfig.preferences = config.preferences as any
+    saveLibraryConfig(libConfig)
+  } else {
+    saveConfig(config as any)
+  }
   return config
 })
+
 ipcMain.handle(
   'config:createFolder',
   (_event, opts: { name: string; color?: string | null; parentId?: string | null }) => {
+    if (libraryInitialized) {
+      const parentPath = opts.parentId ? resolveFolderPath(opts.parentId) : undefined
+      createLibraryFolder(opts.name, parentPath)
+      const tree = scanLibrary()
+      return libraryTreeToConfig(tree)
+    }
+    // Fallback
     const config = loadConfig()
+    const { createFolder } = require('./config-store')
     return createFolder(config, opts)
   }
 )
+
 ipcMain.handle(
   'config:moveFolder',
   (_event, folderId: string, newParentId: string | null) => {
+    if (libraryInitialized) {
+      // Move folder = move directory
+      const srcPath = resolveFolderPath(folderId)
+      const destParent = newParentId ? resolveFolderPath(newParentId) : getLibraryRoot()
+      const baseName = require('path').basename(srcPath)
+      const newPath = join(destParent, baseName)
+      if (srcPath !== newPath && fs.existsSync(srcPath)) {
+        fs.renameSync(srcPath, newPath)
+      }
+      const tree = scanLibrary()
+      return libraryTreeToConfig(tree)
+    }
     const config = loadConfig()
+    const { moveFolder } = require('./config-store')
     return moveFolder(config, folderId, newParentId)
   }
 )
+
 ipcMain.handle('config:deleteFolder', (_event, folderId: string) => {
+  if (libraryInitialized) {
+    const folderPath = resolveFolderPath(folderId)
+    deleteLibraryFolder(folderPath)
+    const tree = scanLibrary()
+    return libraryTreeToConfig(tree)
+  }
   const config = loadConfig()
+  const { deleteFolder } = require('./config-store')
   return deleteFolder(config, folderId)
 })
+
 ipcMain.handle(
   'config:renameFolder',
   (_event, folderId: string, name: string) => {
+    if (libraryInitialized) {
+      const folderPath = resolveFolderPath(folderId)
+      renameLibraryFolder(folderPath, name)
+      const tree = scanLibrary()
+      return libraryTreeToConfig(tree)
+    }
     const config = loadConfig()
+    const { renameFolder } = require('./config-store')
     return renameFolder(config, folderId, name)
   }
 )
+
 ipcMain.handle(
   'config:addSessionToFolder',
   (_event, folderId: string, sessionId: string) => {
+    if (libraryInitialized) {
+      const folderPath = resolveFolderPath(folderId)
+      moveSessionToFolder(sessionId, folderPath)
+      const tree = scanLibrary()
+      return libraryTreeToConfig(tree)
+    }
     const config = loadConfig()
+    const { addSessionToFolder } = require('./config-store')
     return addSessionToFolder(config, folderId, sessionId)
   }
 )
+
 ipcMain.handle(
   'config:removeSessionFromFolder',
   (_event, folderId: string, sessionId: string) => {
+    if (libraryInitialized) {
+      const folderPath = resolveFolderPath(folderId)
+      libRemoveSession(sessionId, folderPath)
+      const tree = scanLibrary()
+      return libraryTreeToConfig(tree)
+    }
     const config = loadConfig()
+    const { removeSessionFromFolder } = require('./config-store')
     return removeSessionFromFolder(config, folderId, sessionId)
   }
 )
+
 ipcMain.handle(
   'config:setSessionMeta',
   (_event, sessionId: string, meta: { customTitle?: string; notes?: string }) => {
+    if (libraryInitialized) {
+      setSessionMetaInLibrary(sessionId, meta)
+      const tree = scanLibrary()
+      return libraryTreeToConfig(tree)
+    }
     const config = loadConfig()
+    const { setSessionMeta } = require('./config-store')
     return setSessionMeta(config, sessionId, meta)
   }
 )
+
+// --- Library-specific IPC ---
+
+ipcMain.handle('library:getRoot', () => getLibraryRoot())
+
+ipcMain.handle('library:getMdPath', (_event, sessionId: string) => {
+  return getSessionMdPath(sessionId)
+})
+
+ipcMain.handle('library:getDirPath', (_event, sessionId: string) => {
+  return getSessionDirPath(sessionId)
+})
+
+ipcMain.handle('library:openInFinder', () => {
+  shell.showItemInFolder(getLibraryRoot())
+})
+
+// --- File Operations ---
 
 ipcMain.handle('session:saveMarkdown', async (_event, dirPath: string, filename: string, content: string) => {
   const fullPath = join(dirPath, filename)
@@ -301,9 +466,8 @@ ipcMain.handle('session:saveMarkdown', async (_event, dirPath: string, filename:
   return fullPath
 })
 
-// Save markdown content to temp directory for drag-and-drop
 ipcMain.handle('session:saveToTemp', (_event, filename: string, content: string) => {
-  const tmpDir = join(os.tmpdir(), 'swob-drag')
+  const tmpDir = join(require('os').tmpdir(), 'swob-drag')
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true })
   const fullPath = join(tmpDir, filename)
   fs.writeFileSync(fullPath, content, 'utf-8')
@@ -316,55 +480,6 @@ ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
 
 ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
   shell.showItemInFolder(filePath)
-})
-
-// Native file drag — generate temp .md file and start drag
-ipcMain.on('session:startDrag', async (event, filePath: string, title: string) => {
-  try {
-    const raw = await parseSessionFile(filePath)
-    const summary = buildSessionSummary(filePath, raw, true)
-    if (!summary) return
-
-    const detail = await loadSessionDetail(filePath)
-    if (!detail) return
-
-    // Generate markdown content inline (minimal version)
-    const safeName = (title || summary.firstUserMessage || summary.sessionId)
-      .replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').slice(0, 30)
-    const date = new Date(summary.createdAt).toISOString().slice(0, 10)
-    const filename = `transcript-${date}-${safeName}.md`
-    const tmpDir = join(os.tmpdir(), 'swob-drag')
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true })
-    const tmpPath = join(tmpDir, filename)
-
-    // Build simple markdown
-    const lines: string[] = []
-    lines.push(`# ${title || summary.firstUserMessage?.slice(0, 60) || summary.sessionId}\n`)
-    const created = new Date(summary.createdAt).toLocaleString('zh-CN')
-    lines.push(`> ${created} | ${summary.turnCount} 轮对话\n`)
-
-    for (const msg of (detail as any).messages || []) {
-      if (msg.type === 'user' && msg.textContent) {
-        const snippet = msg.textContent.trim().split('\n')[0].slice(0, 50)
-        lines.push(`##### ${snippet}\n`)
-        lines.push(msg.textContent.split('\n').map((l: string) => `> ${l}`).join('\n'))
-        lines.push('')
-      } else if (msg.type === 'assistant' && msg.textContent) {
-        lines.push(msg.textContent.trim())
-        lines.push('\n---\n')
-      }
-    }
-
-    fs.writeFileSync(tmpPath, lines.join('\n'), 'utf-8')
-
-    // Create a small drag icon
-    const icon = nativeImage.createEmpty()
-
-    event.sender.startDrag({
-      file: tmpPath,
-      icon
-    })
-  } catch { /* ignore drag errors */ }
 })
 
 // --- App Lifecycle ---

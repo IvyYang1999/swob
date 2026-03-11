@@ -31,6 +31,10 @@ interface ElectronAPI {
     sessionId: string,
     meta: { customTitle?: string; notes?: string }
   ) => Promise<any>
+  libraryGetRoot: () => Promise<string>
+  libraryGetMdPath: (sessionId: string) => Promise<string | null>
+  libraryGetDirPath: (sessionId: string) => Promise<string | null>
+  libraryOpenInFinder: () => Promise<void>
   saveMarkdown: (dirPath: string, filename: string, content: string) => Promise<string>
   saveToTemp: (filename: string, content: string) => Promise<string>
   openPath: (filePath: string) => Promise<string>

@@ -79,6 +79,8 @@ export interface SessionSummary {
   userImages: string[]
   referencedFiles: FileRef[]
   configFiles: string[]
+  libraryDirPath?: string
+  libraryMdPath?: string
 }
 
 export interface FileRef {

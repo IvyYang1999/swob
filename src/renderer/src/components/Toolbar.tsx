@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { Search, PanelRight, X } from 'lucide-react'
 
@@ -9,6 +9,7 @@ export function Toolbar() {
   } = useStore()
   const [inputValue, setInputValue] = useState(searchQuery)
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const handleSearch = useCallback((value: string) => {
     setInputValue(value)
@@ -18,6 +19,18 @@ export function Toolbar() {
     }, 300)
     setSearchTimeout(timeout)
   }, [search, searchTimeout])
+
+  // ⌘K to focus global search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        inputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   return (
     <div
@@ -34,12 +47,13 @@ export function Toolbar() {
       >
         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
         <input
+          ref={inputRef}
           value={inputValue}
           onChange={(e) => handleSearch(e.target.value)}
           placeholder="搜索所有对话..."
-          className="w-full pl-8 pr-8 py-1.5 text-sm bg-zinc-800 border border-zinc-700 rounded-md text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-500"
+          className="w-full pl-8 pr-16 py-1.5 text-sm bg-zinc-800 border border-zinc-700 rounded-md text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-500"
         />
-        {inputValue && (
+        {inputValue ? (
           <button
             onClick={() => {
               setInputValue('')
@@ -49,6 +63,8 @@ export function Toolbar() {
           >
             <X size={14} />
           </button>
+        ) : (
+          <kbd className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-zinc-600 bg-zinc-700/50 border border-zinc-600/50 rounded px-1 py-0.5 font-mono">⌘K</kbd>
         )}
       </div>
 

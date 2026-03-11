@@ -412,7 +412,7 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap }: {
   )
 }
 
-// --- In-session search bar ---
+// --- In-session search bar (floats top-right of content area) ---
 
 function InSessionSearchBar({
   query, onQueryChange, matchCount, currentMatch, onNext, onPrev, onClose
@@ -438,31 +438,71 @@ function InSessionSearchBar({
   }, [onNext, onPrev, onClose])
 
   return (
-    <div className="h-8 flex items-center gap-2 px-3 bg-zinc-800/80 border-b border-zinc-700/50 shrink-0">
-      <Search size={12} className="text-zinc-500 shrink-0" />
+    <div className="absolute top-1 right-3 z-20 flex items-center gap-1.5 bg-zinc-800 border border-zinc-600 rounded-lg shadow-xl px-2.5 py-1.5">
+      <Search size={13} className="text-zinc-500 shrink-0" />
       <input
         ref={inputRef}
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}
-        placeholder="在对话中搜索..."
-        className="flex-1 max-w-xs bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
+        placeholder="搜索..."
+        className="w-48 bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
       />
       {query && (
-        <span className="text-[11px] text-zinc-500 shrink-0">
-          {matchCount > 0 ? `${currentMatch + 1}/${matchCount}` : '无匹配'}
+        <span className="text-[11px] text-zinc-400 shrink-0 tabular-nums min-w-[3em] text-center">
+          {matchCount > 0 ? `${currentMatch + 1}/${matchCount}` : '0/0'}
         </span>
       )}
-      <button onClick={onPrev} disabled={matchCount === 0} className="p-0.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 disabled:opacity-30" title="上一个 (Shift+Enter)">
-        <ArrowUp size={13} />
-      </button>
-      <button onClick={onNext} disabled={matchCount === 0} className="p-0.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 disabled:opacity-30" title="下一个 (Enter)">
-        <ArrowDown size={13} />
-      </button>
-      <button onClick={onClose} className="p-0.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300" title="关闭 (Esc)">
-        <X size={13} />
+      <div className="flex items-center gap-0.5 ml-1">
+        <button onClick={onPrev} disabled={matchCount === 0} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 disabled:hover:bg-transparent" title="上一个 (Shift+Enter)">
+          <ArrowUp size={14} />
+        </button>
+        <button onClick={onNext} disabled={matchCount === 0} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 disabled:hover:bg-transparent" title="下一个 (Enter)">
+          <ArrowDown size={14} />
+        </button>
+      </div>
+      <button onClick={onClose} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 ml-0.5" title="关闭 (Esc)">
+        <X size={14} />
       </button>
     </div>
   )
+}
+
+// --- Highlight search keywords in a container element ---
+
+function useSearchHighlight(containerRef: React.RefObject<HTMLElement | null>, query: string) {
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    // Clear previous highlights
+    el.querySelectorAll('mark[data-search-hl]').forEach(m => {
+      const parent = m.parentNode
+      if (parent) { parent.replaceChild(document.createTextNode(m.textContent || ''), m); parent.normalize() }
+    })
+    if (!query.trim()) return
+    const q = query.toLowerCase()
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    const matches: { node: Text; start: number }[] = []
+    let node: Text | null
+    while ((node = walker.nextNode() as Text | null)) {
+      const text = node.textContent?.toLowerCase() || ''
+      let idx = text.indexOf(q)
+      while (idx !== -1) {
+        matches.push({ node, start: idx })
+        idx = text.indexOf(q, idx + 1)
+      }
+    }
+    // Apply highlights in reverse so offsets remain valid
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const { node: textNode, start } = matches[i]
+      const range = document.createRange()
+      range.setStart(textNode, start)
+      range.setEnd(textNode, start + query.length)
+      const mark = document.createElement('mark')
+      mark.setAttribute('data-search-hl', '')
+      mark.className = 'bg-amber-500/40 text-amber-200 rounded-sm'
+      range.surroundContents(mark)
+    }
+  }, [query, containerRef])
 }
 
 // --- Session action bar ---
@@ -899,6 +939,9 @@ export function ChatViewer() {
   const searchPrev = useCallback(() => navigateToMatch(currentMatchIdx - 1), [navigateToMatch, currentMatchIdx])
   const closeSearch = useCallback(() => { setSearchOpen(false); setSearchQuery('') }, [])
 
+  // Highlight search keywords in content
+  useSearchHighlight(contentRef, searchOpen ? searchQuery : '')
+
   // Build turn content map for TOC drag (turn UUID → markdown)
   const turnContentMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -1060,34 +1103,6 @@ export function ChatViewer() {
         onToggleSearch={() => setSearchOpen(prev => !prev)}
       />
 
-      {searchOpen && (
-        <InSessionSearchBar
-          query={searchQuery}
-          onQueryChange={setSearchQuery}
-          matchCount={searchMatches.length}
-          currentMatch={currentMatchIdx}
-          onNext={searchNext}
-          onPrev={searchPrev}
-          onClose={closeSearch}
-        />
-      )}
-
-      {/* Batch action bar */}
-      {selectMode && selectedCount > 0 && !mdMode && (
-        <div className="h-8 flex items-center gap-2 px-3 bg-blue-950/50 border-b border-blue-800/40 shrink-0">
-          <span className="text-[11px] text-blue-400">已选 {selectedCount} 项</span>
-          <button onClick={handleBatchExport} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
-            <Copy size={10} /> 复制
-          </button>
-          <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
-            <Download size={10} /> 下载 MD
-          </button>
-          <button onClick={() => { setSelectedItems(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-zinc-500 hover:text-zinc-300">
-            取消
-          </button>
-        </div>
-      )}
-
       <div className="flex-1 flex min-h-0">
         {tocOpen && tocEntries.length > 0 && (
           <TocSidebar
@@ -1099,14 +1114,44 @@ export function ChatViewer() {
           />
         )}
 
-        {mdMode ? (
-          sourceView ? (
-            <SourceView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
+        {/* Content area wrapper — search bar & batch bar are inside here, not spanning TOC */}
+        <div className="flex-1 flex flex-col min-w-0 relative">
+          {searchOpen && (
+            <InSessionSearchBar
+              query={searchQuery}
+              onQueryChange={setSearchQuery}
+              matchCount={searchMatches.length}
+              currentMatch={currentMatchIdx}
+              onNext={searchNext}
+              onPrev={searchPrev}
+              onClose={closeSearch}
+            />
+          )}
+
+          {/* Batch action bar */}
+          {selectMode && selectedCount > 0 && !mdMode && (
+            <div className="h-8 flex items-center gap-2 px-3 bg-blue-950/50 border-b border-blue-800/40 shrink-0">
+              <span className="text-[11px] text-blue-400">已选 {selectedCount} 项</span>
+              <button onClick={handleBatchExport} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
+                <Copy size={10} /> 复制
+              </button>
+              <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
+                <Download size={10} /> 下载 MD
+              </button>
+              <button onClick={() => { setSelectedItems(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-zinc-500 hover:text-zinc-300">
+                取消
+              </button>
+            </div>
+          )}
+
+          {mdMode ? (
+            sourceView ? (
+              <SourceView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
+            ) : (
+              <MarkdownDocView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
+            )
           ) : (
-            <MarkdownDocView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
-          )
-        ) : (
-          <div ref={contentRef} className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
+            <div ref={contentRef} className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
             {sections.map((section, sIdx) => {
               if (section.isCurrent) {
                 return (
@@ -1155,6 +1200,7 @@ export function ChatViewer() {
             })}
           </div>
         )}
+        </div>{/* end content area wrapper */}
       </div>
     </div>
   )

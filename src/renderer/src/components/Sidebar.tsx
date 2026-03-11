@@ -127,10 +127,11 @@ function SessionItem({
     <button
       draggable={!isRenaming}
       onDragStart={(e) => {
-        e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'session', id: session.id }))
+        e.dataTransfer.setData('application/x-swob', JSON.stringify({ type: 'session', id: session.id }))
+        // For external drop targets (Claude Code, etc.), provide the pre-generated md file path
+        const mdPath = useStore.getState().selectedSessionMdPath
+        e.dataTransfer.setData('text/plain', mdPath || title)
         e.dataTransfer.effectAllowed = 'copyMove'
-        // Start native file drag for external drop targets
-        window.api.startDrag(session.filePath, title)
       }}
       onClick={() => {
         if (!isRenaming) selectSession(
@@ -279,7 +280,7 @@ function FolderNode({
     e.stopPropagation()
     setDragOverFolderId(null)
     try {
-      const data = JSON.parse(e.dataTransfer.getData('text/plain'))
+      const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
       if (data.type === 'session' && data.id) {
         addSessionToFolder(folder.id, data.id)
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
@@ -311,7 +312,7 @@ function FolderNode({
       <div
         draggable
         onDragStart={(e) => {
-          e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'folder', id: folder.id }))
+          e.dataTransfer.setData('application/x-swob', JSON.stringify({ type: 'folder', id: folder.id }))
           e.dataTransfer.effectAllowed = 'move'
           e.stopPropagation()
         }}
@@ -661,7 +662,7 @@ export function Sidebar({ width }: { width: number }) {
                   e.preventDefault()
                   e.stopPropagation()
                   try {
-                    const data = JSON.parse(e.dataTransfer.getData('text/plain'))
+                    const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
                     if (data.type === 'folder' && data.id) {
                       moveFolder(data.id, null)
                     }

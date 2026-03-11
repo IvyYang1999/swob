@@ -41,7 +41,7 @@ export function SearchResults() {
             关闭
           </button>
         </div>
-        <div className="space-y-3">
+        <div className="space-y-4">
           {searchResults.map((result) => (
             <button
               key={result.sessionId}
@@ -49,30 +49,32 @@ export function SearchResults() {
                 selectSession(result.filePath)
                 clearSearch()
               }}
-              className="w-full text-left p-3 bg-zinc-800 hover:bg-zinc-700/50 rounded-lg border border-zinc-700 hover:border-zinc-600 transition-colors"
+              className="w-full text-left p-4 bg-zinc-800 hover:bg-zinc-700/50 rounded-lg border border-zinc-700 hover:border-zinc-600 transition-colors"
             >
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-sm text-zinc-200 font-medium truncate flex-1 mr-2">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-sm text-zinc-200 font-medium truncate flex-1 mr-3">
                   <HighlightText text={result.firstUserMessage.slice(0, 100) || result.sessionId.slice(0, 12)} query={searchQuery} />
                 </div>
-                <span className="text-[10px] text-zinc-600 shrink-0">{result.matches.length} 处匹配</span>
+                <span className="text-[10px] text-zinc-500 bg-zinc-700 px-1.5 py-0.5 rounded shrink-0">{result.matches.length} 处匹配</span>
               </div>
-              {result.matches.map((match, i) => (
-                <div
-                  key={i}
-                  className="text-xs text-zinc-400 mt-1 font-mono bg-zinc-900 rounded px-2 py-1"
-                >
-                  <span className="text-zinc-600 mr-2">
-                    {new Date(match.timestamp).toLocaleString('zh-CN', {
-                      month: '2-digit',
-                      day: '2-digit',
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </span>
-                  <HighlightText text={match.text} query={searchQuery} />
-                </div>
-              ))}
+              <div className="space-y-1.5">
+                {result.matches.map((match, i) => (
+                  <div
+                    key={i}
+                    className="text-xs text-zinc-400 font-mono bg-zinc-900 rounded px-2.5 py-1.5 leading-relaxed"
+                  >
+                    <span className="text-zinc-600 mr-2 text-[10px]">
+                      {new Date(match.timestamp).toLocaleString('zh-CN', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </span>
+                    <HighlightText text={match.text} query={searchQuery} />
+                  </div>
+                ))}
+              </div>
             </button>
           ))}
         </div>

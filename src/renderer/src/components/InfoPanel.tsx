@@ -337,8 +337,9 @@ export function InfoPanel({ width }: { width: number }) {
             <HardDrive size={12} />
             <span>{formatSize(s.fileSizeBytes)} · v{s.version}</span>
           </div>
-          <div className="flex items-center gap-2 text-zinc-500">
-            <span className="text-[10px] font-mono select-all cursor-text" title="Session ID">{s.sessionId}</span>
+          <div className="flex items-center gap-2 text-zinc-500 text-xs">
+            <span className="text-zinc-600 shrink-0">Session ID:</span>
+            <span className="text-[10px] font-mono select-all cursor-text truncate">{s.sessionId}</span>
           </div>
         </section>
 

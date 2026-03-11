@@ -86,6 +86,7 @@ interface AppState {
   viewMode: ViewMode
   selectedFolderId: string | null
   infoPanelOpen: boolean
+  selectedSessionMdPath: string | null
 
   initialize: () => Promise<void>
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string) => Promise<void>
@@ -135,6 +136,7 @@ export const useStore = create<AppState>((set, get) => ({
   viewMode: hydrated.viewMode,
   selectedFolderId: null,
   infoPanelOpen: true,
+  selectedSessionMdPath: null,
 
   initialize: async () => {
     const [sessions, config] = await Promise.all([
@@ -178,6 +180,19 @@ export const useStore = create<AppState>((set, get) => ({
           u.filePath, u.allFilePaths, u.branchParentFilePaths, u.branchPointUuid
         )
         set({ selectedSession: detail as SessionDetail | null })
+        // Regenerate markdown for drag
+        if (detail) {
+          const d = detail as SessionDetail
+          const config = get().config
+          const customTitle = config?.sessionMeta?.[d.sessionId]?.customTitle
+          const sections = computeSections(d)
+          const md = sessionToMarkdown(d, sections, customTitle)
+          const filename = generateFilename(d) + '.md'
+          try {
+            const mdPath = await window.api.saveToTemp(filename, md)
+            set({ selectedSessionMdPath: mdPath })
+          } catch { /* ignore */ }
+        }
       }
     })
     window.api.onSessionsRefresh(() => {
@@ -188,6 +203,19 @@ export const useStore = create<AppState>((set, get) => ({
   selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?) => {
     const detail = await window.api.loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid)
     set({ selectedSession: detail as SessionDetail | null, selectedUniqueId: uniqueId || null })
+    // Pre-generate markdown for drag-as-file
+    if (detail) {
+      const d = detail as SessionDetail
+      const config = get().config
+      const customTitle = config?.sessionMeta?.[d.sessionId]?.customTitle
+      const sections = computeSections(d)
+      const md = sessionToMarkdown(d, sections, customTitle)
+      const filename = generateFilename(d) + '.md'
+      try {
+        const mdPath = await window.api.saveToTemp(filename, md)
+        set({ selectedSessionMdPath: mdPath })
+      } catch { /* ignore */ }
+    }
   },
 
   search: async (query) => {

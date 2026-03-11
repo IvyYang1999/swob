@@ -193,6 +193,13 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
       /* skip */
     }
   }
+  // Sort by match count (most matches first), then by recency
+  results.sort((a, b) => {
+    if (b.matches.length !== a.matches.length) return b.matches.length - a.matches.length
+    const aTime = new Date(a.matches[0]?.timestamp || 0).getTime()
+    const bTime = new Date(b.matches[0]?.timestamp || 0).getTime()
+    return bTime - aTime
+  })
   return results
 })
 
@@ -290,6 +297,15 @@ ipcMain.handle(
 
 ipcMain.handle('session:saveMarkdown', async (_event, dirPath: string, filename: string, content: string) => {
   const fullPath = join(dirPath, filename)
+  fs.writeFileSync(fullPath, content, 'utf-8')
+  return fullPath
+})
+
+// Save markdown content to temp directory for drag-and-drop
+ipcMain.handle('session:saveToTemp', (_event, filename: string, content: string) => {
+  const tmpDir = join(os.tmpdir(), 'swob-drag')
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true })
+  const fullPath = join(tmpDir, filename)
   fs.writeFileSync(fullPath, content, 'utf-8')
   return fullPath
 })

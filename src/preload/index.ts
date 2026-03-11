@@ -37,6 +37,8 @@ const api = {
   // Markdown
   saveMarkdown: (dirPath: string, filename: string, content: string) =>
     ipcRenderer.invoke('session:saveMarkdown', dirPath, filename, content),
+  saveToTemp: (filename: string, content: string) =>
+    ipcRenderer.invoke('session:saveToTemp', filename, content),
 
   // Shell
   openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),

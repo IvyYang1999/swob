@@ -166,12 +166,19 @@ export const useStore = create<AppState>((set, get) => ({
         sessions: [session as SessionSummary, ...state.sessions]
       }))
     })
-    window.api.onSessionUpdated((updated) => {
+    window.api.onSessionUpdated(async (updated) => {
+      const u = updated as SessionSummary
       set((state) => ({
-        sessions: state.sessions.map((s) =>
-          s.id === (updated as SessionSummary).id ? (updated as SessionSummary) : s
-        )
+        sessions: state.sessions.map((s) => s.id === u.id ? u : s)
       }))
+      // Auto-reload detail if this is the currently selected session
+      const current = get().selectedSession
+      if (current && current.id === u.id) {
+        const detail = await window.api.loadSessionDetail(
+          u.filePath, u.allFilePaths, u.branchParentFilePaths, u.branchPointUuid
+        )
+        set({ selectedSession: detail as SessionDetail | null })
+      }
     })
     window.api.onSessionsRefresh(() => {
       debouncedRefresh()
@@ -246,8 +253,10 @@ export const useStore = create<AppState>((set, get) => ({
   downloadSessionMarkdown: () => {
     const session = get().selectedSession
     if (!session) return
+    const config = get().config
+    const customTitle = config?.sessionMeta?.[session.sessionId]?.customTitle
     const sections = computeSections(session)
-    const md = sessionToMarkdown(session, sections)
+    const md = sessionToMarkdown(session, sections, customTitle)
     const filename = generateFilename(session)
     downloadMarkdown(`${filename}.md`, md)
   }

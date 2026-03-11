@@ -1,4 +1,4 @@
-import { useRef, useState, useMemo, useCallback } from 'react'
+import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
 import type { ViewMode, ParsedMessage } from '../store'
 import {
@@ -13,6 +13,8 @@ import {
   buildSegments,
   sessionToMarkdown,
   extractToc,
+  computeChatTocEntries,
+  computeSourceLines,
   COMPACT_SUMMARY_PREFIX
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
@@ -44,6 +46,27 @@ function getToolPreview(name: string, input: Record<string, unknown>): string {
   if (name === 'Skill' && input.skill) return String(input.skill)
   if (name === 'Agent' && input.prompt) return String(input.prompt).slice(0, 80)
   return ''
+}
+
+// --- Diff view for Edit tool ---
+
+function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
+  const oldLines = oldStr.split('\n')
+  const newLines = newStr.split('\n')
+  return (
+    <div className="font-mono text-[11px] leading-relaxed">
+      {oldLines.map((line, i) => (
+        <div key={`old-${i}`} className="bg-red-950/40 text-red-400 px-3 py-0.5">
+          <span className="select-none text-red-600 mr-2">-</span>{line}
+        </div>
+      ))}
+      {newLines.map((line, i) => (
+        <div key={`new-${i}`} className="bg-green-950/40 text-green-400 px-3 py-0.5">
+          <span className="select-none text-green-600 mr-2">+</span>{line}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 // --- Compact mode: Pill bar ---
@@ -82,9 +105,10 @@ function ToolCallPillBar({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
 }
 
 function ToolCallExpanded({ tc }: { tc: ToolCallInfo }) {
-  const [showResult, setShowResult] = useState(false)
+  const [showResult, setShowResult] = useState(true)
   const color = TOOL_COLORS[tc.name] || DEFAULT_TOOL_COLOR
   const preview = getToolPreview(tc.name, tc.input)
+  const isEdit = tc.name === 'Edit' && tc.input.old_string
 
   return (
     <div className="border border-zinc-700/50 rounded-md bg-zinc-800/30">
@@ -92,9 +116,15 @@ function ToolCallExpanded({ tc }: { tc: ToolCallInfo }) {
         <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-mono shrink-0 ${color}`}>{tc.name}</span>
         {preview && <span className="truncate text-zinc-500 text-[11px] font-mono">{preview}</span>}
       </div>
-      <pre className="px-3 py-2 text-[11px] text-zinc-400 overflow-x-auto border-t border-zinc-700/50 max-h-40 overflow-y-auto font-mono">
-        {JSON.stringify(tc.input, null, 2)}
-      </pre>
+      {isEdit ? (
+        <div className="border-t border-zinc-700/50 overflow-x-auto max-h-60 overflow-y-auto">
+          <DiffView oldStr={String(tc.input.old_string)} newStr={String(tc.input.new_string || '')} />
+        </div>
+      ) : (
+        <pre className="px-3 py-2 text-[11px] text-zinc-400 overflow-x-auto border-t border-zinc-700/50 max-h-40 overflow-y-auto font-mono">
+          {JSON.stringify(tc.input, null, 2)}
+        </pre>
+      )}
       {tc.result && (
         <>
           <button onClick={() => setShowResult(!showResult)} className="w-full px-3 py-1 text-[11px] text-zinc-500 hover:text-zinc-400 border-t border-zinc-700/50 flex items-center gap-1">
@@ -111,13 +141,16 @@ function ToolCallExpanded({ tc }: { tc: ToolCallInfo }) {
 }
 
 function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
+  const [showResult, setShowResult] = useState(true)
   const color = TOOL_COLORS[tc.name] || DEFAULT_TOOL_COLOR
   const preview = getToolPreview(tc.name, tc.input)
+  const isEdit = tc.name === 'Edit' && tc.input.old_string
+
   let inputDisplay: string
   if (tc.name === 'Bash' && tc.input.command) inputDisplay = String(tc.input.command)
-  else if (tc.name === 'Edit' && tc.input.old_string) inputDisplay = `File: ${tc.input.file_path || ''}\n\n--- old ---\n${tc.input.old_string}\n\n+++ new +++\n${tc.input.new_string || ''}`
-  else if (tc.name === 'Write' && tc.input.content) inputDisplay = `File: ${tc.input.file_path || ''}\n\n${String(tc.input.content).slice(0, 2000)}`
   else if (tc.name === 'Read' && tc.input.file_path) inputDisplay = String(tc.input.file_path)
+  else if (isEdit) inputDisplay = '' // handled by DiffView
+  else if (tc.name === 'Write' && tc.input.content) inputDisplay = `File: ${tc.input.file_path || ''}\n\n${String(tc.input.content).slice(0, 2000)}`
   else inputDisplay = JSON.stringify(tc.input, null, 2)
 
   return (
@@ -126,11 +159,22 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
         <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-mono shrink-0 ${color}`}>{tc.name}</span>
         {preview && <span className="truncate text-zinc-500 text-[11px] font-mono">{preview}</span>}
       </div>
-      <pre className="px-3 py-2 text-[11px] text-zinc-400 overflow-x-auto max-h-48 overflow-y-auto font-mono">{inputDisplay}</pre>
+      {isEdit ? (
+        <div className="overflow-x-auto max-h-60 overflow-y-auto">
+          <DiffView oldStr={String(tc.input.old_string)} newStr={String(tc.input.new_string || '')} />
+        </div>
+      ) : inputDisplay ? (
+        <pre className="px-3 py-2 text-[11px] text-zinc-400 overflow-x-auto max-h-48 overflow-y-auto font-mono">{inputDisplay}</pre>
+      ) : null}
       {tc.result && (
         <>
-          <div className="px-2.5 py-1 text-[10px] text-zinc-500 bg-zinc-800/40 border-t border-zinc-700/40 font-medium">Result</div>
-          <pre className="px-3 py-2 text-[11px] text-zinc-500 overflow-x-auto max-h-48 overflow-y-auto font-mono bg-zinc-900/30">{tc.result}</pre>
+          <button onClick={() => setShowResult(!showResult)} className="w-full px-3 py-1 text-[11px] text-zinc-500 hover:text-zinc-400 border-t border-zinc-700/50 flex items-center gap-1">
+            {showResult ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+            Result ({tc.result.length > 200 ? `${Math.round(tc.result.length / 1024)}KB` : `${tc.result.length} chars`})
+          </button>
+          {showResult && (
+            <pre className="px-3 py-2 text-[11px] text-zinc-500 overflow-x-auto max-h-48 overflow-y-auto font-mono bg-zinc-900/30">{tc.result}</pre>
+          )}
         </>
       )}
     </div>
@@ -142,9 +186,10 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
 function TurnBlock({ turn, viewMode, faded }: { turn: Turn; viewMode: 'compact' | 'full'; faded: boolean }) {
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
+  const turnId = turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined
 
   return (
-    <div className={`space-y-3 ${faded ? 'opacity-50' : ''}`}>
+    <div id={turnId} className={`space-y-3 scroll-mt-12 ${faded ? 'opacity-50' : ''}`}>
       {turn.userMsg && (
         <div className={`flex gap-3 ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
           <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-blue-600"><User size={14} /></div>
@@ -162,7 +207,7 @@ function TurnBlock({ turn, viewMode, faded }: { turn: Turn; viewMode: 'compact' 
               </div>
             ) : (
               <div className="text-sm text-zinc-200 whitespace-pre-wrap break-words leading-relaxed">
-                {turn.userMsg.textContent}
+                <CliMarkdown content={turn.userMsg.textContent} />
               </div>
             )}
           </div>
@@ -202,17 +247,23 @@ const VIEW_MODES: { mode: ViewMode; label: string }[] = [
   { mode: 'markdown', label: 'MD' },
 ]
 
-// --- TOC Sidebar ---
+// --- Resizable TOC Sidebar ---
 
-function TocSidebar({ entries, onNavigate }: { entries: TocEntry[]; onNavigate: (id: string) => void }) {
+function TocSidebar({ entries, onNavigate, width, onResize }: {
+  entries: TocEntry[]
+  onNavigate: (id: string) => void
+  width: number
+  onResize: (w: number) => void
+}) {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   // Group: H2 entries are section headers, H5 entries are their children
   const groups: { header: TocEntry | null; groupIdx: number; children: TocEntry[] }[] = []
   let currentGroup: (typeof groups)[0] | null = null
 
   for (const entry of entries) {
-    if (entry.level === 1) continue // Skip H1 title
+    if (entry.level === 1) continue
     if (entry.level === 2) {
       if (currentGroup) groups.push(currentGroup)
       currentGroup = { header: entry, groupIdx: groups.length, children: [] }
@@ -231,46 +282,66 @@ function TocSidebar({ entries, onNavigate }: { entries: TocEntry[]; onNavigate: 
     })
   }
 
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragRef.current = { startX: e.clientX, startW: width }
+    const handleMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return
+      const newW = Math.max(120, Math.min(400, dragRef.current.startW + ev.clientX - dragRef.current.startX))
+      onResize(newW)
+    }
+    const handleUp = () => {
+      dragRef.current = null
+      document.removeEventListener('mousemove', handleMove)
+      document.removeEventListener('mouseup', handleUp)
+    }
+    document.addEventListener('mousemove', handleMove)
+    document.addEventListener('mouseup', handleUp)
+  }, [width, onResize])
+
   return (
-    <div className="w-52 shrink-0 border-r border-zinc-800 overflow-y-auto bg-zinc-900/80">
-      <div className="px-3 py-2 text-[11px] text-zinc-500 font-medium uppercase tracking-wide border-b border-zinc-800">
-        目录
-      </div>
-      <div className="py-1">
-        {groups.map((group, gi) => {
-          const isCollapsed = collapsed.has(gi)
-          return (
-            <div key={gi}>
-              {group.header && (
-                <div className="flex items-center">
+    <div className="shrink-0 flex" style={{ width }}>
+      <div className="flex-1 overflow-y-auto bg-zinc-900/80 border-r border-zinc-800">
+        <div className="px-3 py-2 text-[11px] text-zinc-500 font-medium uppercase tracking-wide border-b border-zinc-800">
+          目录
+        </div>
+        <div className="py-1">
+          {groups.map((group, gi) => {
+            const isCollapsed = collapsed.has(gi)
+            return (
+              <div key={gi}>
+                {group.header && (
                   <button
-                    onClick={() => toggleGroup(gi)}
-                    className="p-1 ml-1 text-zinc-600 hover:text-zinc-400"
+                    onClick={() => {
+                      toggleGroup(gi)
+                      onNavigate(group.header!.id)
+                    }}
+                    className="w-full flex items-center gap-1 px-2 py-1 text-[11px] text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50 truncate font-medium"
                   >
-                    {isCollapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+                    {isCollapsed ? <ChevronRight size={10} className="shrink-0 text-zinc-600" /> : <ChevronDown size={10} className="shrink-0 text-zinc-600" />}
+                    <span className="truncate">{group.header.text}</span>
                   </button>
+                )}
+                {!isCollapsed && group.children.map((entry, ci) => (
                   <button
-                    onClick={() => onNavigate(group.header!.id)}
-                    className="flex-1 text-left px-1 py-1 text-[11px] text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50 truncate font-medium"
+                    key={ci}
+                    onClick={() => onNavigate(entry.id)}
+                    className="w-full text-left pl-6 pr-2 py-0.5 text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30 truncate"
+                    title={entry.text}
                   >
-                    {group.header.text}
+                    {entry.text}
                   </button>
-                </div>
-              )}
-              {!isCollapsed && group.children.map((entry, ci) => (
-                <button
-                  key={ci}
-                  onClick={() => onNavigate(entry.id)}
-                  className="w-full text-left pl-7 pr-2 py-0.5 text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30 truncate"
-                  title={entry.text}
-                >
-                  {entry.text}
-                </button>
-              ))}
-            </div>
-          )
-        })}
+                ))}
+              </div>
+            )
+          })}
+        </div>
       </div>
+      {/* Resize handle */}
+      <div
+        onMouseDown={handleMouseDown}
+        className="w-1 cursor-col-resize hover:bg-zinc-600/50 active:bg-zinc-500/50 shrink-0"
+      />
     </div>
   )
 }
@@ -278,17 +349,17 @@ function TocSidebar({ entries, onNavigate }: { entries: TocEntry[]; onNavigate: 
 // --- Session action bar ---
 
 function SessionBar({
-  mdMode,
   tocOpen,
   onToggleToc,
   sourceView,
   onToggleSource,
+  mdMode,
 }: {
-  mdMode: boolean
   tocOpen: boolean
   onToggleToc: () => void
   sourceView: boolean
   onToggleSource: () => void
+  mdMode: boolean
 }) {
   const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession } = useStore()
   const [copied, setCopied] = useState(false)
@@ -306,7 +377,7 @@ function SessionBar({
 
   return (
     <div className="h-9 flex items-center justify-between px-3 border-b border-zinc-800 bg-zinc-900/60 shrink-0">
-      {/* Left: view mode + MD toggles */}
+      {/* Left: view mode + toggles */}
       <div className="flex items-center gap-2">
         <div className="flex items-center bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden">
           {VIEW_MODES.map(({ mode, label }) => (
@@ -324,37 +395,34 @@ function SessionBar({
           ))}
         </div>
 
+        <button
+          onClick={onToggleToc}
+          className={`p-1 rounded transition-colors ${tocOpen ? 'text-zinc-200 bg-zinc-700' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
+          title="目录"
+        >
+          <List size={13} />
+        </button>
+
         {mdMode && (
-          <>
-            <button
-              onClick={onToggleToc}
-              className={`p-1 rounded transition-colors ${tocOpen ? 'text-zinc-200 bg-zinc-700' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
-              title="目录"
-            >
-              <List size={13} />
-            </button>
-            <button
-              onClick={onToggleSource}
-              className={`p-1 rounded transition-colors ${sourceView ? 'text-zinc-200 bg-zinc-700' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
-              title={sourceView ? '预览' : '源码'}
-            >
-              <Code2 size={13} />
-            </button>
-          </>
+          <button
+            onClick={onToggleSource}
+            className={`p-1 rounded transition-colors ${sourceView ? 'text-zinc-200 bg-zinc-700' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
+            title={sourceView ? '预览' : '源码'}
+          >
+            <Code2 size={13} />
+          </button>
         )}
       </div>
 
       {/* Right: actions */}
       <div className="flex items-center gap-1.5">
-        {mdMode && (
-          <button
-            onClick={handleCopyMd}
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
-          >
-            {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
-            <span>{copied ? '已复制' : '复制'}</span>
-          </button>
-        )}
+        <button
+          onClick={handleCopyMd}
+          className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+        >
+          {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+          <span>{copied ? '已复制' : '复制'}</span>
+        </button>
 
         <button
           onClick={downloadSessionMarkdown}
@@ -386,47 +454,51 @@ function SessionBar({
   )
 }
 
+// --- Source view with TOC support ---
+
+function SourceView({ markdown, tocEntries, contentRef }: {
+  markdown: string
+  tocEntries: TocEntry[]
+  contentRef: React.RefObject<HTMLDivElement | null>
+}) {
+  const sourceLines = useMemo(() => computeSourceLines(markdown, tocEntries), [markdown, tocEntries])
+
+  return (
+    <div ref={contentRef} className="flex-1 overflow-y-auto">
+      <div className="p-6">
+        {sourceLines.map((line, i) => (
+          <div
+            key={i}
+            id={line.id}
+            className={`text-[12px] font-mono leading-relaxed select-text scroll-mt-12 ${
+              line.isHeading ? 'text-blue-400 font-bold' : 'text-zinc-400'
+            }`}
+          >
+            {line.text || '\u00A0'}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // --- Markdown document view ---
 
-function MarkdownView({ session, sections, tocOpen, sourceView }: {
+function MarkdownDocView({ session, sections, contentRef }: {
   session: NonNullable<ReturnType<typeof useStore>['selectedSession']>
   sections: CompactSection[]
-  tocOpen: boolean
-  sourceView: boolean
+  contentRef: React.RefObject<HTMLDivElement | null>
 }) {
-  const contentRef = useRef<HTMLDivElement>(null)
-
   const markdownContent = useMemo(
     () => sessionToMarkdown(session, sections),
     [session, sections]
   )
-
-  const tocEntries = useMemo(
-    () => extractToc(markdownContent),
-    [markdownContent]
-  )
-
-  const handleNavigate = useCallback((id: string) => {
-    const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, [])
+  const tocEntries = useMemo(() => extractToc(markdownContent), [markdownContent])
 
   return (
-    <div className="flex-1 flex min-h-0">
-      {tocOpen && !sourceView && (
-        <TocSidebar entries={tocEntries} onNavigate={handleNavigate} />
-      )}
-
-      <div ref={contentRef} className="flex-1 overflow-y-auto">
-        {sourceView ? (
-          <pre className="p-6 text-[12px] font-mono text-zinc-400 whitespace-pre-wrap select-text leading-relaxed">
-            {markdownContent}
-          </pre>
-        ) : (
-          <div className="max-w-3xl mx-auto px-8 py-6 select-text">
-            <DocMarkdown content={markdownContent} tocEntries={tocEntries} />
-          </div>
-        )}
+    <div ref={contentRef} className="flex-1 overflow-y-auto">
+      <div className="max-w-3xl mx-auto px-8 py-6 select-text">
+        <DocMarkdown content={markdownContent} tocEntries={tocEntries} />
       </div>
     </div>
   )
@@ -435,10 +507,11 @@ function MarkdownView({ session, sections, tocOpen, sourceView }: {
 // --- Main ChatViewer ---
 
 export function ChatViewer() {
-  const { selectedSession, viewMode } = useStore()
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const { selectedSession, viewMode, config } = useStore()
+  const contentRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
   const [tocOpen, setTocOpen] = useState(true)
+  const [tocWidth, setTocWidth] = useState(200)
   const [sourceView, setSourceView] = useState(false)
 
   const sections = useMemo<CompactSection[]>(() => {
@@ -446,12 +519,37 @@ export function ChatViewer() {
     return computeSections(selectedSession)
   }, [selectedSession])
 
+  // Reset expanded sections on session change
   const sessionId = selectedSession?.id
   const prevSessionIdRef = useRef<string | null>(null)
   if (sessionId !== prevSessionIdRef.current) {
     prevSessionIdRef.current = sessionId ?? null
     if (expandedSections.size > 0) setExpandedSections(new Set())
   }
+
+  // TOC entries: chat modes use computeChatTocEntries, MD mode uses extractToc
+  const mdMode = viewMode === 'markdown'
+
+  const customTitle = useMemo(() => {
+    if (!selectedSession || !config) return undefined
+    return config.sessionMeta?.[selectedSession.sessionId]?.customTitle
+  }, [selectedSession, config])
+
+  const markdownContent = useMemo(() => {
+    if (!selectedSession || !mdMode) return ''
+    return sessionToMarkdown(selectedSession, sections, customTitle)
+  }, [selectedSession, sections, mdMode, customTitle])
+
+  const tocEntries = useMemo<TocEntry[]>(() => {
+    if (!selectedSession) return []
+    if (mdMode) return extractToc(markdownContent)
+    return computeChatTocEntries(sections)
+  }, [selectedSession, mdMode, markdownContent, sections])
+
+  const handleNavigate = useCallback((id: string) => {
+    const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
 
   if (!selectedSession) {
     return (
@@ -460,28 +558,6 @@ export function ChatViewer() {
           <div className="text-4xl mb-3">💬</div>
           <div className="text-zinc-400">选择一个 Session 查看对话</div>
         </div>
-      </div>
-    )
-  }
-
-  const mdMode = viewMode === 'markdown'
-
-  if (mdMode) {
-    return (
-      <div className="flex-1 flex flex-col min-w-0">
-        <SessionBar
-          mdMode
-          tocOpen={tocOpen}
-          onToggleToc={() => setTocOpen(!tocOpen)}
-          sourceView={sourceView}
-          onToggleSource={() => setSourceView(!sourceView)}
-        />
-        <MarkdownView
-          session={selectedSession}
-          sections={sections}
-          tocOpen={tocOpen}
-          sourceView={sourceView}
-        />
       </div>
     )
   }
@@ -509,57 +585,77 @@ export function ChatViewer() {
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <SessionBar
-        mdMode={false}
-        tocOpen={false}
-        onToggleToc={() => {}}
-        sourceView={false}
-        onToggleSource={() => {}}
+        tocOpen={tocOpen}
+        onToggleToc={() => setTocOpen(!tocOpen)}
+        sourceView={sourceView}
+        onToggleSource={() => setSourceView(!sourceView)}
+        mdMode={mdMode}
       />
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {sections.map((section, sIdx) => {
-          if (section.isCurrent) {
-            return (
-              <div key={`section-${sIdx}`} className="space-y-4">
-                {sections.length > 1 && (
-                  <div className="flex items-center gap-3 py-2">
-                    <div className="flex-1 border-t border-emerald-600/50" />
-                    <span className="text-emerald-500 text-xs px-3 py-1 bg-emerald-900/20 rounded-full">当前对话</span>
-                    <div className="flex-1 border-t border-emerald-600/50" />
-                  </div>
-                )}
-                {renderSection(section, false)}
-              </div>
-            )
-          }
+      <div className="flex-1 flex min-h-0">
+        {/* TOC sidebar for all modes */}
+        {tocOpen && tocEntries.length > 0 && (
+          <TocSidebar
+            entries={tocEntries}
+            onNavigate={handleNavigate}
+            width={tocWidth}
+            onResize={setTocWidth}
+          />
+        )}
 
-          const isExpanded = expandedSections.has(sIdx)
-          const isShared = section.isSharedContext
-          const borderColor = isShared ? 'border-purple-600/30' : 'border-amber-600/30'
-          const textColor = isShared ? 'text-purple-400/70' : 'text-amber-500/70'
-          const bgColor = isShared ? 'bg-purple-900/10 hover:bg-purple-900/20' : 'bg-amber-900/10 hover:bg-amber-900/20'
-          const borderLColor = isShared ? 'border-purple-600/20' : 'border-amber-600/20'
-          const SectionIcon = isShared ? GitBranch : History
-
-          return (
-            <div key={`section-${sIdx}`}>
-              <button onClick={() => toggleSection(sIdx)} className="w-full flex items-center gap-3 py-2 group">
-                <div className={`flex-1 border-t ${borderColor}`} />
-                <div className={`flex items-center gap-2 ${textColor} text-xs px-3 py-1 ${bgColor} rounded-full transition-colors`}>
-                  {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  <SectionIcon size={12} />
-                  <span>{section.label}</span>
-                </div>
-                <div className={`flex-1 border-t ${borderColor}`} />
-              </button>
-              {isExpanded && (
-                <div className={`space-y-3 pl-2 border-l-2 ${borderLColor} ml-2`}>
-                  {renderSection(section, true)}
-                </div>
-              )}
-            </div>
+        {/* Content area */}
+        {mdMode ? (
+          sourceView ? (
+            <SourceView markdown={markdownContent} tocEntries={tocEntries} contentRef={contentRef} />
+          ) : (
+            <MarkdownDocView session={selectedSession} sections={sections} contentRef={contentRef} />
           )
-        })}
-        <div ref={bottomRef} />
+        ) : (
+          <div ref={contentRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+            {sections.map((section, sIdx) => {
+              if (section.isCurrent) {
+                return (
+                  <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="space-y-4 scroll-mt-12">
+                    {sections.length > 1 && (
+                      <div className="flex items-center gap-3 py-2">
+                        <div className="flex-1 border-t border-emerald-600/50" />
+                        <span className="text-emerald-500 text-xs px-3 py-1 bg-emerald-900/20 rounded-full">当前对话</span>
+                        <div className="flex-1 border-t border-emerald-600/50" />
+                      </div>
+                    )}
+                    {renderSection(section, false)}
+                  </div>
+                )
+              }
+
+              const isExpanded = expandedSections.has(sIdx)
+              const isShared = section.isSharedContext
+              const borderColor = isShared ? 'border-purple-600/30' : 'border-amber-600/30'
+              const textColor = isShared ? 'text-purple-400/70' : 'text-amber-500/70'
+              const bgColor = isShared ? 'bg-purple-900/10 hover:bg-purple-900/20' : 'bg-amber-900/10 hover:bg-amber-900/20'
+              const borderLColor = isShared ? 'border-purple-600/20' : 'border-amber-600/20'
+              const SectionIcon = isShared ? GitBranch : History
+
+              return (
+                <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="scroll-mt-12">
+                  <button onClick={() => toggleSection(sIdx)} className="w-full flex items-center gap-3 py-2 group">
+                    <div className={`flex-1 border-t ${borderColor}`} />
+                    <div className={`flex items-center gap-2 ${textColor} text-xs px-3 py-1 ${bgColor} rounded-full transition-colors`}>
+                      {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      <SectionIcon size={12} />
+                      <span>{section.label}</span>
+                    </div>
+                    <div className={`flex-1 border-t ${borderColor}`} />
+                  </button>
+                  {isExpanded && (
+                    <div className={`space-y-3 pl-2 border-l-2 ${borderLColor} ml-2`}>
+                      {renderSection(section, true)}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )

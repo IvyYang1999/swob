@@ -34,6 +34,7 @@ interface ElectronAPI {
   saveMarkdown: (dirPath: string, filename: string, content: string) => Promise<string>
   openPath: (filePath: string) => Promise<string>
   showItemInFolder: (filePath: string) => Promise<void>
+  startDrag: (filePath: string, title: string) => void
   onSessionAdded: (callback: (session: any) => void) => void
   onSessionUpdated: (callback: (session: any) => void) => void
   onSessionsRefresh: (callback: () => void) => void

@@ -42,6 +42,9 @@ const api = {
   openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
   showItemInFolder: (filePath: string) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
 
+  // Native drag
+  startDrag: (filePath: string, title: string) => ipcRenderer.send('session:startDrag', filePath, title),
+
   // Events from main
   onSessionAdded: (callback: (session: unknown) => void) => {
     ipcRenderer.on('session:added', (_event, session) => callback(session))

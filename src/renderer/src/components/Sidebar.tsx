@@ -128,7 +128,9 @@ function SessionItem({
       draggable={!isRenaming}
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'session', id: session.id }))
-        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.effectAllowed = 'copyMove'
+        // Start native file drag for external drop targets
+        window.api.startDrag(session.filePath, title)
       }}
       onClick={() => {
         if (!isRenaming) selectSession(

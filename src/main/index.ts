@@ -1,8 +1,9 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, nativeImage } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { exec } from 'child_process'
 import * as fs from 'fs'
+import * as os from 'os'
 import * as chokidar from 'chokidar'
 import {
   loadAllSessions,
@@ -291,6 +292,55 @@ ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
 
 ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
   shell.showItemInFolder(filePath)
+})
+
+// Native file drag — generate temp .md file and start drag
+ipcMain.on('session:startDrag', async (event, filePath: string, title: string) => {
+  try {
+    const raw = await parseSessionFile(filePath)
+    const summary = buildSessionSummary(filePath, raw, true)
+    if (!summary) return
+
+    const detail = await loadSessionDetail(filePath)
+    if (!detail) return
+
+    // Generate markdown content inline (minimal version)
+    const safeName = (title || summary.firstUserMessage || summary.sessionId)
+      .replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').slice(0, 30)
+    const date = new Date(summary.createdAt).toISOString().slice(0, 10)
+    const filename = `transcript-${date}-${safeName}.md`
+    const tmpDir = join(os.tmpdir(), 'swob-drag')
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true })
+    const tmpPath = join(tmpDir, filename)
+
+    // Build simple markdown
+    const lines: string[] = []
+    lines.push(`# ${title || summary.firstUserMessage?.slice(0, 60) || summary.sessionId}\n`)
+    const created = new Date(summary.createdAt).toLocaleString('zh-CN')
+    lines.push(`> ${created} | ${summary.messageCount} 条消息 | ${summary.turnCount} 轮对话\n`)
+
+    for (const msg of (detail as any).messages || []) {
+      if (msg.type === 'user' && msg.textContent) {
+        const snippet = msg.textContent.trim().split('\n')[0].slice(0, 50)
+        lines.push(`##### ${snippet}\n`)
+        lines.push(msg.textContent.split('\n').map((l: string) => `> ${l}`).join('\n'))
+        lines.push('')
+      } else if (msg.type === 'assistant' && msg.textContent) {
+        lines.push(msg.textContent.trim())
+        lines.push('\n---\n')
+      }
+    }
+
+    fs.writeFileSync(tmpPath, lines.join('\n'), 'utf-8')
+
+    // Create a small drag icon
+    const icon = nativeImage.createEmpty()
+
+    event.sender.startDrag({
+      file: tmpPath,
+      icon
+    })
+  } catch { /* ignore drag errors */ }
 })
 
 // --- App Lifecycle ---

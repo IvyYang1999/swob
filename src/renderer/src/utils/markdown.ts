@@ -49,9 +49,8 @@ export function computeSections(session: SessionDetail): CompactSection[] {
   if (sharedMsgs.length > 0) {
     const filteredShared = sharedMsgs.filter((m) => m.type === 'user' || m.type === 'assistant')
     if (filteredShared.length > 0) {
-      const count = filteredShared.length
       sharedSection.push({
-        label: `共享上下文 — 分支前的对话 (${count} 条消息)`,
+        label: `共享上下文 — 分支前的对话 (${filteredShared.length} 条消息)`,
         messages: filteredShared,
         isCurrent: false,
         isSharedContext: true
@@ -67,11 +66,7 @@ export function computeSections(session: SessionDetail): CompactSection[] {
   const firstSection = allMsgs.slice(0, boundaryIndices[0])
   if (firstSection.length > 0) {
     const count = firstSection.filter((m) => m.type === 'user' || m.type === 'assistant').length
-    result.push({
-      label: `原始对话 (${count} 条消息)`,
-      messages: firstSection,
-      isCurrent: false
-    })
+    result.push({ label: `原始对话 (${count} 条消息)`, messages: firstSection, isCurrent: false })
   }
 
   for (let i = 0; i < boundaryIndices.length; i++) {
@@ -79,17 +74,12 @@ export function computeSections(session: SessionDetail): CompactSection[] {
     const end = i + 1 < boundaryIndices.length ? boundaryIndices[i + 1] : allMsgs.length
     const sectionMsgs = allMsgs.slice(start, end)
     const isLast = i === boundaryIndices.length - 1
-
     if (sectionMsgs.length > 0) {
       if (isLast) {
         result.push({ label: '', messages: sectionMsgs, isCurrent: true })
       } else {
         const count = sectionMsgs.filter((m) => m.type === 'user' || m.type === 'assistant').length
-        result.push({
-          label: `Compact #${i + 1} 后 (${count} 条消息)`,
-          messages: sectionMsgs,
-          isCurrent: false
-        })
+        result.push({ label: `Compact #${i + 1} 后 (${count} 条消息)`, messages: sectionMsgs, isCurrent: false })
       }
     }
   }
@@ -102,12 +92,10 @@ export function computeSections(session: SessionDetail): CompactSection[] {
 export function groupIntoTurns(messages: ParsedMessage[]): Turn[] {
   const turns: Turn[] = []
   let current: Turn | null = null
-
   for (const msg of messages) {
     if (msg.type === 'system') continue
     const hasText = msg.textContent.trim().length > 0
     const hasTools = msg.toolCalls.length > 0
-
     if (msg.type === 'user') {
       if (!hasText) continue
       if (current) turns.push(current)
@@ -127,63 +115,64 @@ export function buildSegments(msgs: ParsedMessage[]): Segment[] {
   for (const msg of msgs) {
     const hasText = msg.textContent.trim().length > 0
     const hasTools = msg.toolCalls.length > 0
-    if (hasText) {
-      segments.push({ type: 'text', text: msg.textContent, isSidechain: msg.isSidechain })
-    }
+    if (hasText) segments.push({ type: 'text', text: msg.textContent, isSidechain: msg.isSidechain })
     if (hasTools) {
       const prev = segments[segments.length - 1]
-      if (prev && prev.type === 'tools') {
-        prev.toolCalls!.push(...msg.toolCalls)
-      } else {
-        segments.push({ type: 'tools', toolCalls: [...msg.toolCalls], isSidechain: msg.isSidechain })
-      }
+      if (prev && prev.type === 'tools') prev.toolCalls!.push(...msg.toolCalls)
+      else segments.push({ type: 'tools', toolCalls: [...msg.toolCalls], isSidechain: msg.isSidechain })
     }
   }
   return segments
 }
 
+// --- Chat TOC (compact/full modes) ---
+
+export function computeChatTocEntries(sections: CompactSection[]): TocEntry[] {
+  const entries: TocEntry[] = []
+  sections.forEach((section, sIdx) => {
+    const label = section.isCurrent
+      ? (sections.length > 1 ? '当前对话' : '')
+      : section.label
+    if (label) {
+      entries.push({ level: 2, text: label, id: `section-${sIdx}` })
+    }
+    const turns = groupIntoTurns(section.messages)
+    turns.forEach(turn => {
+      if (!turn.userMsg) return
+      const text = turn.userMsg.textContent.trim()
+      if (text.startsWith(COMPACT_SUMMARY_PREFIX)) return
+      const snippet = text.split('\n')[0].slice(0, 50)
+      entries.push({ level: 5, text: snippet, id: `turn-${turn.userMsg.uuid}` })
+    })
+  })
+  return entries
+}
+
 // --- Markdown generation ---
 
-/**
- * Convert all markdown headings to **bold** text.
- * This prevents content headings from polluting the document's TOC structure.
- * Skips content inside code blocks.
- */
 function demoteHeadings(text: string): string {
   const lines = text.split('\n')
   let inCodeBlock = false
   return lines.map(line => {
-    if (line.startsWith('```')) {
-      inCodeBlock = !inCodeBlock
-      return line
-    }
+    if (line.startsWith('```')) { inCodeBlock = !inCodeBlock; return line }
     if (inCodeBlock) return line
     const match = line.match(/^#{1,6}\s+(.+)$/)
-    if (match) {
-      const headingText = match[1].replace(/\*\*/g, '')
-      return `**${headingText}**`
-    }
+    if (match) return `**${match[1].replace(/\*\*/g, '')}**`
     return line
   }).join('\n')
 }
 
 function toolToMarkdown(tc: ToolCallInfo): string {
   const lines: string[] = []
-
   if (tc.name === 'Bash' && tc.input.command) {
-    lines.push('```bash')
-    lines.push(`$ ${tc.input.command}`)
+    lines.push('```bash', `$ ${tc.input.command}`)
     if (tc.result) lines.push(tc.result.slice(0, 2000))
     lines.push('```')
   } else if (tc.name === 'Read' && tc.input.file_path) {
     lines.push(`> Read \`${tc.input.file_path}\``)
   } else if (tc.name === 'Write' && tc.input.file_path) {
     lines.push(`> Write \`${tc.input.file_path}\``)
-    if (tc.input.content) {
-      lines.push('```')
-      lines.push(String(tc.input.content).slice(0, 1000))
-      lines.push('```')
-    }
+    if (tc.input.content) { lines.push('```', String(tc.input.content).slice(0, 1000), '```') }
   } else if (tc.name === 'Edit' && tc.input.file_path) {
     lines.push(`> Edit \`${tc.input.file_path}\``)
     if (tc.input.old_string) {
@@ -194,25 +183,13 @@ function toolToMarkdown(tc: ToolCallInfo): string {
     }
   } else if ((tc.name === 'Grep' || tc.name === 'Glob') && tc.input.pattern) {
     lines.push(`> ${tc.name} \`${tc.input.pattern}\``)
-    if (tc.result) {
-      lines.push('```')
-      lines.push(tc.result.slice(0, 1000))
-      lines.push('```')
-    }
+    if (tc.result) { lines.push('```', tc.result.slice(0, 1000), '```') }
   } else if (tc.name === 'Agent') {
     lines.push(`> Agent: ${tc.input.prompt ? String(tc.input.prompt).slice(0, 100) : 'subagent'}`)
-    if (tc.result) {
-      lines.push('```')
-      lines.push(tc.result.slice(0, 2000))
-      lines.push('```')
-    }
+    if (tc.result) { lines.push('```', tc.result.slice(0, 2000), '```') }
   } else {
-    lines.push(`> ${tc.name}`)
-    lines.push('```json')
-    lines.push(JSON.stringify(tc.input, null, 2).slice(0, 500))
-    lines.push('```')
+    lines.push(`> ${tc.name}`, '```json', JSON.stringify(tc.input, null, 2).slice(0, 500), '```')
   }
-
   return lines.join('\n')
 }
 
@@ -221,26 +198,32 @@ function turnToMarkdown(turn: Turn): string {
 
   if (turn.userMsg) {
     const text = turn.userMsg.textContent.trim()
-    const firstLine = text.split('\n')[0].slice(0, 50)
-    const snippet = firstLine + (text.length > firstLine.length ? '...' : '')
-    lines.push(`##### ${snippet}\n`)
-    // Demote headings in user text too — user may paste skill outputs etc.
-    lines.push(demoteHeadings(text))
-    lines.push('')
+    if (text.startsWith(COMPACT_SUMMARY_PREFIX)) {
+      // Compact summary: no heading, code block
+      const summary = text.slice(COMPACT_SUMMARY_PREFIX.length).trim()
+      lines.push('> *Compact 上下文摘要*\n')
+      lines.push('```')
+      lines.push(summary.slice(0, 3000))
+      lines.push('```')
+      lines.push('')
+    } else {
+      // Normal user query: H5 snippet heading + blockquote body
+      const firstLine = text.split('\n')[0].slice(0, 50)
+      const snippet = firstLine + (text.length > firstLine.length ? '...' : '')
+      lines.push(`##### ${snippet}\n`)
+      // User text in blockquote
+      const demoted = demoteHeadings(text)
+      lines.push(demoted.split('\n').map(l => `> ${l}`).join('\n'))
+      lines.push('')
+    }
   }
 
   if (turn.assistantMsgs.length > 0) {
-    lines.push(`**Assistant:**\n`)
     const segments = buildSegments(turn.assistantMsgs)
     for (const seg of segments) {
-      if (seg.type === 'text') {
-        lines.push(demoteHeadings(seg.text!.trim()))
-        lines.push('')
-      } else if (seg.type === 'tools') {
-        for (const tc of seg.toolCalls!) {
-          lines.push(toolToMarkdown(tc))
-          lines.push('')
-        }
+      if (seg.type === 'text') { lines.push(demoteHeadings(seg.text!.trim()), '') }
+      else if (seg.type === 'tools') {
+        for (const tc of seg.toolCalls!) { lines.push(toolToMarkdown(tc), '') }
       }
     }
   }
@@ -251,48 +234,35 @@ function turnToMarkdown(turn: Turn): string {
 
 export function sessionToMarkdown(
   session: SessionDetail,
-  sections: CompactSection[]
+  sections: CompactSection[],
+  customTitle?: string
 ): string {
   const lines: string[] = []
-
-  const title = session.firstUserMessage?.slice(0, 60) || session.sessionId
+  const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId
   lines.push(`# ${title}\n`)
 
   const created = new Date(session.createdAt).toLocaleString('zh-CN')
   const toolSummary = Object.entries(session.toolUsage)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 6)
-    .map(([name, count]) => `${name}(${count})`)
-    .join(', ')
+    .sort(([, a], [, b]) => b - a).slice(0, 6)
+    .map(([name, count]) => `${name}(${count})`).join(', ')
   lines.push(`> ${created} | ${session.messageCount} 条消息 | ${session.turnCount} 轮对话`)
   if (toolSummary) lines.push(`> Tools: ${toolSummary}`)
   lines.push('')
 
   for (const section of sections) {
-    if (section.isCurrent && sections.length > 1) {
-      lines.push(`## 当前对话\n`)
-    } else if (section.label) {
-      lines.push(`## ${section.label}\n`)
-    }
-
+    if (section.isCurrent && sections.length > 1) lines.push(`## 当前对话\n`)
+    else if (section.label) lines.push(`## ${section.label}\n`)
     const turns = groupIntoTurns(section.messages)
-    for (const turn of turns) {
-      lines.push(turnToMarkdown(turn))
-    }
+    for (const turn of turns) lines.push(turnToMarkdown(turn))
   }
 
   return lines.join('\n')
 }
 
-// --- TOC extraction ---
+// --- TOC extraction (for MD mode) ---
 
 function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff_-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 60) || 'heading'
+  return text.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'heading'
 }
 
 export function extractToc(markdown: string): TocEntry[] {
@@ -300,14 +270,9 @@ export function extractToc(markdown: string): TocEntry[] {
   const lines = markdown.split('\n')
   let inCodeBlock = false
   const idCounts = new Map<string, number>()
-
   for (const line of lines) {
-    if (line.startsWith('```')) {
-      inCodeBlock = !inCodeBlock
-      continue
-    }
+    if (line.startsWith('```')) { inCodeBlock = !inCodeBlock; continue }
     if (inCodeBlock) continue
-
     const match = line.match(/^(#{1,6})\s+(.+)$/)
     if (match) {
       const level = match[1].length
@@ -319,8 +284,26 @@ export function extractToc(markdown: string): TocEntry[] {
       entries.push({ level, text, id })
     }
   }
-
   return entries
+}
+
+// Source view: pre-compute line metadata for heading IDs + syntax highlight
+export interface SourceLine {
+  text: string
+  isHeading: boolean
+  id?: string
+}
+
+export function computeSourceLines(markdown: string, tocEntries: TocEntry[]): SourceLine[] {
+  const lines = markdown.split('\n')
+  let inCodeBlock = false
+  let hIdx = 0
+  return lines.map(line => {
+    if (line.startsWith('```')) { inCodeBlock = !inCodeBlock }
+    const isHeading = !inCodeBlock && /^#{1,6}\s/.test(line)
+    const id = isHeading ? tocEntries[hIdx++]?.id : undefined
+    return { text: line, isHeading, id }
+  })
 }
 
 // --- File helpers ---

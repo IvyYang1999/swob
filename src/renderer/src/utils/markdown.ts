@@ -21,6 +21,12 @@ export interface Segment {
   isSidechain?: boolean
 }
 
+export interface TocEntry {
+  level: number
+  text: string
+  id: string
+}
+
 export const COMPACT_SUMMARY_PREFIX = 'This session is being continued from a previous conversation that ran out of context.'
 
 // --- Section computation ---
@@ -139,9 +145,11 @@ export function buildSegments(msgs: ParsedMessage[]): Segment[] {
 // --- Markdown generation ---
 
 /**
- * Shift headings in AI text to H6, but skip lines inside code blocks.
+ * Convert all markdown headings to **bold** text.
+ * This prevents content headings from polluting the document's TOC structure.
+ * Skips content inside code blocks.
  */
-function shiftHeadings(text: string): string {
+function demoteHeadings(text: string): string {
   const lines = text.split('\n')
   let inCodeBlock = false
   return lines.map(line => {
@@ -150,7 +158,12 @@ function shiftHeadings(text: string): string {
       return line
     }
     if (inCodeBlock) return line
-    return line.replace(/^(#{1,5})\s/, '###### ')
+    const match = line.match(/^#{1,6}\s+(.+)$/)
+    if (match) {
+      const headingText = match[1].replace(/\*\*/g, '')
+      return `**${headingText}**`
+    }
+    return line
   }).join('\n')
 }
 
@@ -207,8 +220,12 @@ function turnToMarkdown(turn: Turn): string {
   const lines: string[] = []
 
   if (turn.userMsg) {
-    lines.push(`##### User\n`)
-    lines.push(turn.userMsg.textContent.trim())
+    const text = turn.userMsg.textContent.trim()
+    const firstLine = text.split('\n')[0].slice(0, 50)
+    const snippet = firstLine + (text.length > firstLine.length ? '...' : '')
+    lines.push(`##### ${snippet}\n`)
+    // Demote headings in user text too — user may paste skill outputs etc.
+    lines.push(demoteHeadings(text))
     lines.push('')
   }
 
@@ -217,7 +234,7 @@ function turnToMarkdown(turn: Turn): string {
     const segments = buildSegments(turn.assistantMsgs)
     for (const seg of segments) {
       if (seg.type === 'text') {
-        lines.push(shiftHeadings(seg.text!.trim()))
+        lines.push(demoteHeadings(seg.text!.trim()))
         lines.push('')
       } else if (seg.type === 'tools') {
         for (const tc of seg.toolCalls!) {
@@ -241,7 +258,6 @@ export function sessionToMarkdown(
   const title = session.firstUserMessage?.slice(0, 60) || session.sessionId
   lines.push(`# ${title}\n`)
 
-  // Summary metadata
   const created = new Date(session.createdAt).toLocaleString('zh-CN')
   const toolSummary = Object.entries(session.toolUsage)
     .sort(([, a], [, b]) => b - a)
@@ -266,6 +282,45 @@ export function sessionToMarkdown(
   }
 
   return lines.join('\n')
+}
+
+// --- TOC extraction ---
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 60) || 'heading'
+}
+
+export function extractToc(markdown: string): TocEntry[] {
+  const entries: TocEntry[] = []
+  const lines = markdown.split('\n')
+  let inCodeBlock = false
+  const idCounts = new Map<string, number>()
+
+  for (const line of lines) {
+    if (line.startsWith('```')) {
+      inCodeBlock = !inCodeBlock
+      continue
+    }
+    if (inCodeBlock) continue
+
+    const match = line.match(/^(#{1,6})\s+(.+)$/)
+    if (match) {
+      const level = match[1].length
+      const text = match[2].replace(/\*\*/g, '').replace(/`/g, '').trim()
+      const baseId = slugify(text)
+      const count = idCounts.get(baseId) || 0
+      idCounts.set(baseId, count + 1)
+      const id = count > 0 ? `${baseId}-${count}` : baseId
+      entries.push({ level, text, id })
+    }
+  }
+
+  return entries
 }
 
 // --- File helpers ---

@@ -66,9 +66,17 @@ interface Folder {
   createdAt: string
 }
 
+interface Highlight {
+  id: string
+  text: string
+  turnUuid: string
+  note?: string
+  createdAt: string
+}
+
 interface UserConfig {
   folders: Folder[]
-  sessionMeta: Record<string, { customTitle?: string; notes?: string }>
+  sessionMeta: Record<string, { customTitle?: string; notes?: string; highlights?: Highlight[] }>
   preferences: { defaultViewMode: 'compact' | 'full'; terminalApp: 'Terminal' | 'iTerm2' }
 }
 
@@ -109,10 +117,12 @@ interface AppState {
   addSessionToFolder: (folderId: string, sessionId: string) => Promise<void>
   removeSessionFromFolder: (folderId: string, sessionId: string) => Promise<void>
   setSessionMeta: (sessionId: string, meta: { customTitle?: string; notes?: string }) => Promise<void>
+  addHighlight: (sessionId: string, highlight: Omit<Highlight, 'id' | 'createdAt'>) => Promise<void>
+  removeHighlight: (sessionId: string, highlightId: string) => Promise<void>
   downloadSessionMarkdown: () => void
 }
 
-export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult }
+export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight }
 
 // Read localStorage at module load time — before first render, zero flicker
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode } {
@@ -288,6 +298,29 @@ export const useStore = create<AppState>((set, get) => ({
   setSessionMeta: async (sessionId, meta) => {
     const config = await window.api.setSessionMeta(sessionId, meta)
     set({ config: config as UserConfig })
+  },
+  addHighlight: async (sessionId, highlight) => {
+    const config = get().config
+    if (!config) return
+    const existing = config.sessionMeta[sessionId]?.highlights || []
+    const newHighlight: Highlight = {
+      ...highlight,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString()
+    }
+    const updated = await window.api.setSessionMeta(sessionId, {
+      highlights: [...existing, newHighlight]
+    })
+    set({ config: updated as UserConfig })
+  },
+  removeHighlight: async (sessionId, highlightId) => {
+    const config = get().config
+    if (!config) return
+    const existing = config.sessionMeta[sessionId]?.highlights || []
+    const updated = await window.api.setSessionMeta(sessionId, {
+      highlights: existing.filter(h => h.id !== highlightId)
+    })
+    set({ config: updated as UserConfig })
   },
 
   downloadSessionMarkdown: () => {

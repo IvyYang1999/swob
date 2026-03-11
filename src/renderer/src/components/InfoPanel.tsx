@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useStore } from '../store'
-import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload } from 'lucide-react'
+import type { Highlight } from '../store'
+import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2 } from 'lucide-react'
 
 interface FileRef {
   path: string
@@ -294,8 +295,62 @@ function FileTreeSection({ files }: { files: FileRef[] }) {
   )
 }
 
+function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; sessionId: string }) {
+  const { removeHighlight } = useStore()
+  const [open, setOpen] = useState(true)
+
+  if (highlights.length === 0) return null
+
+  return (
+    <section>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 text-xs font-medium text-zinc-400 mb-2 hover:text-zinc-300 w-full"
+      >
+        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        <Highlighter size={12} className="text-green-500" />
+        <span>划线笔记</span>
+        <span className="text-zinc-600 ml-auto">{highlights.length}</span>
+      </button>
+      {open && (
+        <div className="space-y-1.5">
+          {highlights.map((hl) => (
+            <div
+              key={hl.id}
+              className="group relative px-2 py-1.5 rounded bg-green-900/10 border border-green-800/20 hover:border-green-700/40 cursor-pointer transition-colors"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('swob:scrollToHighlight', { detail: { highlightId: hl.id } }))
+              }}
+              title="点击跳转到划线位置"
+            >
+              <div className="text-xs text-green-300/80 line-clamp-3 leading-relaxed border-l-2 border-green-500/40 pl-2">
+                {hl.text}
+              </div>
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-[10px] text-zinc-600">
+                  {new Date(hl.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    removeHighlight(sessionId, hl.id)
+                  }}
+                  className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-opacity p-0.5"
+                  title="删除划线"
+                >
+                  <Trash2 size={10} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function InfoPanel({ width }: { width: number }) {
-  const { selectedSession, infoPanelOpen } = useStore()
+  const { selectedSession, infoPanelOpen, config } = useStore()
 
   if (!infoPanelOpen || !selectedSession) return null
 
@@ -303,6 +358,7 @@ export function InfoPanel({ width }: { width: number }) {
   const toolEntries = Object.entries(s.toolUsage).sort((a, b) => b[1] - a[1])
   const referencedFiles: FileRef[] = (s as any).referencedFiles || []
   const configFiles: string[] = (s as any).configFiles || []
+  const highlights: Highlight[] = config?.sessionMeta?.[s.sessionId]?.highlights || []
 
   // Extract user images from referencedFiles (they have 'user-image' action)
   const imageFiles = referencedFiles.filter(f => f.actions.includes('user-image'))
@@ -342,6 +398,9 @@ export function InfoPanel({ width }: { width: number }) {
             <span className="text-[10px] font-mono select-all cursor-text truncate">{s.sessionId}</span>
           </div>
         </section>
+
+        {/* Highlights / annotations */}
+        <HighlightList highlights={highlights} sessionId={s.sessionId} />
 
         {/* Working directories */}
         <CollapsibleFileList

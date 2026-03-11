@@ -1,11 +1,11 @@
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
-import type { ViewMode, ParsedMessage, SessionDetail } from '../store'
+import type { ViewMode, ParsedMessage, SessionDetail, Highlight } from '../store'
 import {
   User, Bot, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
   List, Code2, CheckSquare,
-  Search, X, ArrowUp, ArrowDown
+  Search, X, ArrowUp, ArrowDown, Highlighter, Trash2
 } from 'lucide-react'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
 import {
@@ -307,12 +307,13 @@ const VIEW_MODES: { mode: ViewMode; label: string }[] = [
 
 // --- Resizable TOC Sidebar ---
 
-function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap }: {
+function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap, highlightedTurnUuids }: {
   entries: TocEntry[]
   onNavigate: (id: string) => void
   width: number
   onResize: (w: number) => void
   turnContentMap?: Map<string, string>
+  highlightedTurnUuids?: Set<string>
 }) {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
@@ -380,24 +381,29 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap }: {
                     <span className="truncate">{group.header.text}</span>
                   </button>
                 )}
-                {!isCollapsed && group.children.map((entry, ci) => (
-                  <button
-                    key={ci}
-                    draggable={!!turnContentMap?.has(entry.id)}
-                    onDragStart={(e) => {
-                      const md = turnContentMap?.get(entry.id)
-                      if (md) {
-                        e.dataTransfer.setData('text/plain', md)
-                        e.dataTransfer.effectAllowed = 'copy'
-                      }
-                    }}
-                    onClick={() => onNavigate(entry.id)}
-                    className="w-full text-left pl-6 pr-2 py-0.5 text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30 truncate cursor-pointer"
-                    title={entry.text}
-                  >
-                    {entry.text}
-                  </button>
-                ))}
+                {!isCollapsed && group.children.map((entry, ci) => {
+                  const turnUuid = entry.id.startsWith('turn-') ? entry.id.slice(5) : ''
+                  const hasHL = highlightedTurnUuids?.has(turnUuid)
+                  return (
+                    <button
+                      key={ci}
+                      draggable={!!turnContentMap?.has(entry.id)}
+                      onDragStart={(e) => {
+                        const md = turnContentMap?.get(entry.id)
+                        if (md) {
+                          e.dataTransfer.setData('text/plain', md)
+                          e.dataTransfer.effectAllowed = 'copy'
+                        }
+                      }}
+                      onClick={() => onNavigate(entry.id)}
+                      className="w-full flex items-center gap-1 text-left pl-6 pr-2 py-0.5 text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30 truncate cursor-pointer"
+                      title={entry.text}
+                    >
+                      {hasHL && <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />}
+                      <span className="truncate">{entry.text}</span>
+                    </button>
+                  )
+                })}
               </div>
             )
           })}
@@ -476,7 +482,7 @@ function ensureHighlightStyles() {
   if (_hlStyleInjected) return
   _hlStyleInjected = true
   const style = document.createElement('style')
-  style.textContent = `::highlight(swob-search) { background-color: rgba(245,158,11,0.35); color: inherit; } ::highlight(swob-search-current) { background-color: #f59e0b; color: #1c1917; }`
+  style.textContent = `::highlight(swob-search) { background-color: rgba(245,158,11,0.35); color: inherit; } ::highlight(swob-search-current) { background-color: #f59e0b; color: #1c1917; } ::highlight(swob-annotation) { background-color: rgba(34,197,94,0.25); color: inherit; }`
   document.head.appendChild(style)
 }
 
@@ -719,7 +725,7 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
 // --- Main ChatViewer ---
 
 export function ChatViewer() {
-  const { selectedSession, viewMode, config } = useStore()
+  const { selectedSession, viewMode, config, addHighlight, removeHighlight } = useStore()
   const contentRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
   const [tocOpen, setTocOpen] = useState(true)
@@ -1020,6 +1026,146 @@ export function ChatViewer() {
     }
   }, [])
 
+  // --- Highlight / annotation system ---
+  const highlights: Highlight[] = useMemo(() => {
+    if (!selectedSession || !config) return []
+    return config.sessionMeta?.[selectedSession.sessionId]?.highlights || []
+  }, [selectedSession, config])
+
+  // Track which turn UUIDs have highlights (for TOC markers)
+  const highlightedTurnUuids = useMemo(() => new Set(highlights.map(h => h.turnUuid)), [highlights])
+
+  // Floating selection toolbar
+  const [selectionRect, setSelectionRect] = useState<{ top: number; left: number } | null>(null)
+  const [pendingHighlight, setPendingHighlight] = useState<{ text: string; turnUuid: string } | null>(null)
+  const annotationRangesRef = useRef<Map<string, Range>>(new Map())
+
+  useEffect(() => {
+    const el = contentRef.current
+    if (!el) return
+    const handler = () => {
+      const sel = window.getSelection()
+      if (!sel || sel.isCollapsed || !el.contains(sel.anchorNode)) {
+        setSelectionRect(null)
+        setPendingHighlight(null)
+        return
+      }
+      const text = sel.toString().trim()
+      if (!text || text.length > 2000) { setSelectionRect(null); return }
+      // Find turn UUID by walking up from anchor node
+      let node: Node | null = sel.anchorNode
+      let turnUuid: string | null = null
+      while (node && node !== el) {
+        if (node instanceof HTMLElement && node.id?.startsWith('turn-')) {
+          turnUuid = node.id.slice(5)
+          break
+        }
+        node = node.parentNode
+      }
+      if (!turnUuid) { setSelectionRect(null); return }
+      const range = sel.getRangeAt(0)
+      const rect = range.getBoundingClientRect()
+      const containerRect = el.getBoundingClientRect()
+      setSelectionRect({
+        top: rect.top - containerRect.top + el.scrollTop - 36,
+        left: rect.left - containerRect.left + rect.width / 2 - 16
+      })
+      setPendingHighlight({ text, turnUuid })
+    }
+    el.addEventListener('mouseup', handler)
+    return () => el.removeEventListener('mouseup', handler)
+  }, [])
+
+  const handleAddHighlight = useCallback(() => {
+    if (!pendingHighlight || !selectedSession) return
+    addHighlight(selectedSession.sessionId, pendingHighlight)
+    setSelectionRect(null)
+    setPendingHighlight(null)
+    window.getSelection()?.removeAllRanges()
+  }, [pendingHighlight, selectedSession, addHighlight])
+
+  // Render persistent annotation highlights via CSS Custom Highlight API
+  const annotationContentKey = `${viewMode}-${expandedSections.size}-${highlights.length}`
+  useEffect(() => {
+    // @ts-expect-error CSS.highlights
+    const cssHL = CSS.highlights as Map<string, unknown> | undefined
+    if (!cssHL) return
+    cssHL.delete('swob-annotation')
+    annotationRangesRef.current.clear()
+    const el = contentRef.current
+    if (!el || highlights.length === 0) return
+    ensureHighlightStyles()
+
+    const ranges: Range[] = []
+    for (const hl of highlights) {
+      const turnEl = el.querySelector(`#turn-${CSS.escape(hl.turnUuid)}`)
+      if (!turnEl) continue
+      const q = hl.text.toLowerCase()
+      const walker = document.createTreeWalker(turnEl, NodeFilter.SHOW_TEXT)
+      let textNode: Text | null
+      let found = false
+      while ((textNode = walker.nextNode() as Text | null)) {
+        const nodeText = textNode.textContent?.toLowerCase() || ''
+        const idx = nodeText.indexOf(q)
+        if (idx !== -1) {
+          const range = new Range()
+          range.setStart(textNode, idx)
+          range.setEnd(textNode, Math.min(idx + hl.text.length, textNode.textContent!.length))
+          ranges.push(range)
+          annotationRangesRef.current.set(hl.id, range)
+          found = true
+          break
+        }
+      }
+      // If exact match not found, try matching first N chars (text might have been truncated)
+      if (!found && q.length > 20) {
+        const shortQ = q.slice(0, 20)
+        const walker2 = document.createTreeWalker(turnEl, NodeFilter.SHOW_TEXT)
+        while ((textNode = walker2.nextNode() as Text | null)) {
+          const nodeText = textNode.textContent?.toLowerCase() || ''
+          const idx = nodeText.indexOf(shortQ)
+          if (idx !== -1) {
+            const range = new Range()
+            range.setStart(textNode, idx)
+            range.setEnd(textNode, Math.min(idx + hl.text.length, textNode.textContent!.length))
+            ranges.push(range)
+            annotationRangesRef.current.set(hl.id, range)
+            break
+          }
+        }
+      }
+    }
+
+    if (ranges.length > 0) {
+      // @ts-expect-error Highlight constructor
+      cssHL.set('swob-annotation', new Highlight(...ranges))
+    }
+  }, [highlights, annotationContentKey])
+
+  // Navigate to a specific annotation highlight
+  const scrollToAnnotation = useCallback((highlightId: string) => {
+    const range = annotationRangesRef.current.get(highlightId)
+    const el = contentRef.current
+    if (!range || !el) return
+    requestAnimationFrame(() => {
+      try {
+        const rect = range.getBoundingClientRect()
+        const containerRect = el.getBoundingClientRect()
+        el.scrollTop += rect.top - containerRect.top - containerRect.height / 2 + rect.height / 2
+      } catch { /* range may be detached */ }
+    })
+  }, [])
+
+  // Listen for highlight navigation events from InfoPanel
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent).detail?.highlightId
+      if (id) scrollToAnnotation(id)
+    }
+    window.addEventListener('swob:scrollToHighlight', handler)
+    return () => window.removeEventListener('swob:scrollToHighlight', handler)
+  }, [scrollToAnnotation])
+
   // Build turn content map for TOC drag (turn UUID → markdown)
   const turnContentMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -1184,6 +1330,7 @@ export function ChatViewer() {
             width={tocWidth}
             onResize={setTocWidth}
             turnContentMap={turnContentMap}
+            highlightedTurnUuids={highlightedTurnUuids}
           />
         )}
 
@@ -1273,6 +1420,23 @@ export function ChatViewer() {
             })}
           </div>
         )}
+          {/* Floating highlight button — appears on text selection */}
+          {selectionRect && pendingHighlight && (
+            <div
+              className="absolute z-30 pointer-events-none"
+              style={{ top: selectionRect.top, left: Math.max(8, selectionRect.left) }}
+            >
+              <button
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+                onClick={handleAddHighlight}
+                className="pointer-events-auto flex items-center gap-1 px-2 py-1 bg-green-700 hover:bg-green-600 text-white text-xs rounded-md shadow-lg transition-colors"
+                title="划线收藏"
+              >
+                <Highlighter size={12} />
+                <span>划线</span>
+              </button>
+            </div>
+          )}
         </div>{/* end content area wrapper */}
       </div>
     </div>

@@ -31,7 +31,7 @@ const api = {
     ipcRenderer.invoke('config:removeSessionFromFolder', folderId, sessionId),
   setSessionMeta: (
     sessionId: string,
-    meta: { customTitle?: string; notes?: string }
+    meta: { customTitle?: string; notes?: string; highlights?: unknown[] }
   ) => ipcRenderer.invoke('config:setSessionMeta', sessionId, meta),
 
   // Native context menu

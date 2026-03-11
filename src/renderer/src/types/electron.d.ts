@@ -29,7 +29,7 @@ interface ElectronAPI {
   ) => Promise<any>
   setSessionMeta: (
     sessionId: string,
-    meta: { customTitle?: string; notes?: string }
+    meta: { customTitle?: string; notes?: string; highlights?: Array<{ id: string; text: string; turnUuid: string; note?: string; createdAt: string }> }
   ) => Promise<any>
   showSessionContextMenu: (data: { sessionId: string; folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }> }) =>
     Promise<{ action: string; folderId?: string } | null>

@@ -104,11 +104,20 @@ export interface Folder {
   createdAt: string
 }
 
+export interface Highlight {
+  id: string
+  text: string
+  turnUuid: string
+  note?: string
+  createdAt: string
+}
+
 export interface UserConfig {
   folders: Folder[]
   sessionMeta: Record<string, {
     customTitle?: string
     notes?: string
+    highlights?: Highlight[]
   }>
   preferences: {
     defaultViewMode: 'compact' | 'full'

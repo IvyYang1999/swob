@@ -126,7 +126,7 @@ export function removeSessionFromFolder(
 export function setSessionMeta(
   config: UserConfig,
   sessionId: string,
-  meta: { customTitle?: string; notes?: string }
+  meta: { customTitle?: string; notes?: string; highlights?: unknown[] }
 ): UserConfig {
   config.sessionMeta[sessionId] = {
     ...config.sessionMeta[sessionId],

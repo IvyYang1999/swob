@@ -20,7 +20,7 @@ function HighlightText({ text, query }: { text: string; query: string }) {
 }
 
 export function SearchResults() {
-  const { searchResults, searchQuery, selectSession, clearSearch } = useStore()
+  const { searchResults, searchQuery, selectSession, clearSearch, sessions } = useStore()
 
   if (!searchQuery || searchResults.length === 0) return null
 
@@ -46,7 +46,8 @@ export function SearchResults() {
             <button
               key={result.sessionId}
               onClick={() => {
-                selectSession(result.filePath)
+                const s = sessions.find(s => s.sessionId === result.sessionId || s.id === result.sessionId)
+                selectSession(result.filePath, s?.allFilePaths, s?.id, s?.branchParentFilePaths, s?.branchPointUuid)
                 clearSearch()
               }}
               className="w-full text-left p-4 bg-zinc-800 hover:bg-zinc-700/50 rounded-lg border border-zinc-700 hover:border-zinc-600 transition-colors"

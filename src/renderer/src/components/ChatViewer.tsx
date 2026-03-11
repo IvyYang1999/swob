@@ -214,16 +214,16 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
     <div id={turnId} className={`space-y-3 scroll-mt-0 relative ${isCurrentSearchMatch ? 'ring-1 ring-amber-500/40 rounded-lg bg-amber-950/10 p-2 -mx-2' : isSearchMatch ? 'bg-amber-950/5 rounded-lg p-2 -mx-2' : ''}`}>
       {/* User message */}
       {turn.userMsg && (
-        <div className={`group/user relative rounded-lg transition-colors ${qSelected ? 'bg-blue-950/25 -mx-4 px-4' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
-          {selectMode && onSelectQ && (
-            <button
-              onClick={() => onSelectQ(turn.userMsg!.uuid)}
-              className={`absolute left-0 top-2 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${qSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
-            >
-              {qSelected ? '✓' : ''}
-            </button>
-          )}
-          <div className="flex gap-3">
+        <div className={`group/user rounded-lg transition-colors ${qSelected ? 'bg-blue-950/25' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+          <div className="flex gap-3 items-start">
+            {selectMode && onSelectQ && (
+              <button
+                onClick={() => onSelectQ(turn.userMsg!.uuid)}
+                className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 mt-1.5 ${qSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
+              >
+                {qSelected ? '✓' : ''}
+              </button>
+            )}
             <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-blue-600"><User size={14} /></div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
@@ -256,16 +256,16 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
 
       {/* Assistant message */}
       {segments.length > 0 && (
-        <div className={`group/assistant relative rounded-lg transition-colors ${aSelected ? 'bg-blue-950/25 -mx-4 px-4' : ''} ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
-          {selectMode && onSelectA && turn.userMsg && (
-            <button
-              onClick={() => onSelectA(turn.userMsg!.uuid)}
-              className={`absolute left-0 top-2 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${aSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
-            >
-              {aSelected ? '✓' : ''}
-            </button>
-          )}
-          <div className="flex gap-3">
+        <div className={`group/assistant rounded-lg transition-colors ${aSelected ? 'bg-blue-950/25' : ''} ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+          <div className="flex gap-3 items-start">
+            {selectMode && onSelectA && turn.userMsg && (
+              <button
+                onClick={() => onSelectA(turn.userMsg!.uuid)}
+                className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 mt-1.5 ${aSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
+              >
+                {aSelected ? '✓' : ''}
+              </button>
+            )}
             <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-orange-600"><Bot size={14} /></div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
@@ -1106,7 +1106,7 @@ export function ChatViewer() {
             <MarkdownDocView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
           )
         ) : (
-          <div ref={contentRef} className={`flex-1 overflow-y-auto px-4 pb-4 space-y-4 ${selectMode ? 'pl-10' : ''}`}>
+          <div ref={contentRef} className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
             {sections.map((section, sIdx) => {
               if (section.isCurrent) {
                 return (

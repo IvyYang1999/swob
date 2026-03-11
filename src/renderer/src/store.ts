@@ -83,8 +83,8 @@ interface AppState {
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string) => Promise<void>
   search: (query: string) => Promise<void>
   clearSearch: () => void
-  resumeSession: (sessionId: string, permissionMode?: string) => Promise<void>
-  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string }>) => Promise<void>
+  resumeSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
+  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   toggleViewMode: () => void
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
@@ -186,9 +186,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   clearSearch: () => set({ searchResults: [], searchQuery: '' }),
 
-  resumeSession: async (sessionId, permissionMode?) => {
+  resumeSession: async (sessionId, permissionMode?, cwd?) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
-    await window.api.resumeSession(sessionId, terminalApp, permissionMode)
+    await window.api.resumeSession(sessionId, terminalApp, permissionMode, cwd)
   },
 
   resumeBatch: async (sessions) => {

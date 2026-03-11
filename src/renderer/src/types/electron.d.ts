@@ -11,8 +11,8 @@ interface ElectronAPI {
       matches: Array<{ text: string; timestamp: string }>
     }>
   >
-  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string) => Promise<void>
-  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string }>, terminalApp: string) => Promise<void>
+  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<void>
+  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) => Promise<void>
   loadConfig: () => Promise<any>
   saveConfig: (config: any) => Promise<any>
   createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) => Promise<any>

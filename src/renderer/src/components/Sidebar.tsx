@@ -301,7 +301,8 @@ function FolderNode({
               e.stopPropagation()
               resumeBatch(folderSessions.map((s) => ({
                 sessionId: (s as any).sessionId || s.id,
-                permissionMode: (s as any).permissionMode
+                permissionMode: (s as any).permissionMode,
+                cwd: (s as any).cwds?.[0]
               })))
             }}
             className="hidden group-hover:block p-0.5 hover:text-green-400"

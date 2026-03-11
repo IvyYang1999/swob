@@ -84,7 +84,7 @@ export function Toolbar() {
               </span>
             )}
             <button
-              onClick={() => resumeSession(selectedSession.sessionId || selectedSession.id, selectedSession.permissionMode)}
+              onClick={() => resumeSession(selectedSession.sessionId || selectedSession.id, selectedSession.permissionMode, selectedSession.cwds?.[0])}
               className="ml-2 px-3 py-1 text-xs rounded bg-green-700 hover:bg-green-600 text-white flex items-center gap-1"
             >
               <Play size={12} />

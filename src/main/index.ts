@@ -187,11 +187,14 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
   return results
 })
 
-function buildResumeCommand(sessionId: string, permissionMode?: string): string {
-  if (permissionMode === 'bypassPermissions') {
-    return `claude --dangerously-skip-permissions --resume ${sessionId}`
+function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: string): string {
+  const cmd = permissionMode === 'bypassPermissions'
+    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
+    : `claude --resume ${sessionId}`
+  if (cwd && fs.existsSync(cwd)) {
+    return `cd ${JSON.stringify(cwd)} && ${cmd}`
   }
-  return `claude --resume ${sessionId}`
+  return cmd
 }
 
 // Open a .command file in the default terminal — no AppleScript, no permissions needed
@@ -209,17 +212,17 @@ function openInTerminal(command: string): void {
 // Single resume: opens a new terminal window
 ipcMain.handle(
   'terminal:resume',
-  async (_event, sessionId: string, _terminalApp: string, permissionMode?: string) => {
-    openInTerminal(buildResumeCommand(sessionId, permissionMode))
+  async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
+    openInTerminal(buildResumeCommand(sessionId, permissionMode, cwd))
   }
 )
 
 // Batch resume: each session opens in its own terminal window
 ipcMain.handle(
   'terminal:resumeBatch',
-  async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string }>, _terminalApp: string) => {
+  async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
     for (const s of sessionIds) {
-      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode))
+      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, s.cwd))
     }
   }
 )

@@ -9,9 +9,9 @@ const api = {
     ipcRenderer.invoke('sessions:search', query),
 
   // Terminal
-  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string) =>
-    ipcRenderer.invoke('terminal:resume', sessionId, terminalApp, permissionMode),
-  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string }>, terminalApp: string) =>
+  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) =>
+    ipcRenderer.invoke('terminal:resume', sessionId, terminalApp, permissionMode, cwd),
+  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) =>
     ipcRenderer.invoke('terminal:resumeBatch', sessions, terminalApp),
 
   // Config

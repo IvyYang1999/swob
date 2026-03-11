@@ -857,6 +857,7 @@ export function ChatViewer() {
   const [searchMatchCount, setSearchMatchCount] = useState(0)
   const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
   const searchRangesRef = useRef<Range[]>([])
+  const autoExpandedRef = useRef<Set<number>>(new Set()) // sections auto-expanded by search
 
   // Cmd+F to toggle search
   useEffect(() => {
@@ -885,11 +886,60 @@ export function ChatViewer() {
     if (!el || !q) {
       setSearchMatchCount(0)
       setCurrentMatchIdx(0)
+      // Re-collapse auto-expanded sections when query is cleared
+      if (autoExpandedRef.current.size > 0) {
+        const toCollapse = autoExpandedRef.current
+        setExpandedSections(prev => {
+          const next = new Set(prev)
+          for (const idx of toCollapse) next.delete(idx)
+          return next
+        })
+        autoExpandedRef.current = new Set()
+      }
       return
+    }
+
+    // Phase 1: Auto-expand collapsed sections that contain matches (data-level scan)
+    // Also re-collapse previously auto-expanded sections that no longer match
+    const nowNeeded = new Set<number>()
+    const sectionsToExpand: number[] = []
+    for (let sIdx = 0; sIdx < sections.length; sIdx++) {
+      const section = sections[sIdx]
+      if (section.isCurrent) continue
+      const hasMatch = section.messages.some(m => {
+        if (m.type !== 'user' && m.type !== 'assistant') return false
+        return m.textContent.toLowerCase().includes(q)
+      })
+      if (hasMatch) {
+        nowNeeded.add(sIdx)
+        if (!expandedSections.has(sIdx)) sectionsToExpand.push(sIdx)
+      }
+    }
+    // Re-collapse auto-expanded sections that no longer match
+    const toCollapse: number[] = []
+    for (const idx of autoExpandedRef.current) {
+      if (!nowNeeded.has(idx)) toCollapse.push(idx)
+    }
+    if (sectionsToExpand.length > 0 || toCollapse.length > 0) {
+      setExpandedSections(prev => {
+        const next = new Set(prev)
+        for (const idx of sectionsToExpand) next.add(idx)
+        for (const idx of toCollapse) next.delete(idx)
+        return next
+      })
+      // Update auto-expanded tracking: only sections we auto-expanded that are still needed
+      const newAutoExpanded = new Set<number>()
+      for (const idx of autoExpandedRef.current) {
+        if (nowNeeded.has(idx)) newAutoExpanded.add(idx)
+      }
+      for (const idx of sectionsToExpand) newAutoExpanded.add(idx)
+      autoExpandedRef.current = newAutoExpanded
+      if (sectionsToExpand.length > 0) return // wait for re-render with newly expanded DOM
     }
 
     ensureHighlightStyles()
 
+    // Phase 2: DOM-level TreeWalker to find all text matches
     const ranges: Range[] = []
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
     let textNode: Text | null
@@ -911,11 +961,9 @@ export function ChatViewer() {
     if (ranges.length > 0) {
       // @ts-expect-error Highlight constructor
       highlights.set('swob-search', new Highlight(...ranges))
-      // Highlight current match differently
       // @ts-expect-error Highlight constructor
       highlights.set('swob-search-current', new Highlight(ranges[0]))
       setCurrentMatchIdx(0)
-      // Scroll to first match
       requestAnimationFrame(() => {
         const rect = ranges[0].getBoundingClientRect()
         const container = el
@@ -925,7 +973,7 @@ export function ChatViewer() {
     } else {
       setCurrentMatchIdx(0)
     }
-  }, [searchQuery, searchOpen, highlightContentKey])
+  }, [searchQuery, searchOpen, highlightContentKey, sections])
 
   // Navigate to Nth keyword match — scrolls the exact text range into center
   const navigateToMatch = useCallback((idx: number) => {
@@ -960,6 +1008,16 @@ export function ChatViewer() {
     // @ts-expect-error CSS.highlights
     const highlights = CSS.highlights as Map<string, unknown> | undefined
     if (highlights) { highlights.delete('swob-search'); highlights.delete('swob-search-current') }
+    // Re-collapse sections that were auto-expanded by search
+    if (autoExpandedRef.current.size > 0) {
+      const toCollapse = autoExpandedRef.current
+      setExpandedSections(prev => {
+        const next = new Set(prev)
+        for (const idx of toCollapse) next.delete(idx)
+        return next
+      })
+      autoExpandedRef.current = new Set()
+    }
   }, [])
 
   // Build turn content map for TOC drag (turn UUID → markdown)

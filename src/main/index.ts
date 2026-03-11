@@ -157,15 +157,23 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
         let text = ''
         if (typeof content === 'string') text = content
         else if (Array.isArray(content)) {
-          text = content
-            .filter((p) => p.type === 'text')
-            .map((p) => p.text || '')
-            .join(' ')
+          for (const part of content) {
+            if (part.type === 'text') text += (text ? ' ' : '') + (part.text || '')
+            // Also search tool_use inputs and tool_result content
+            if (part.type === 'tool_result' && typeof part.content === 'string') text += ' ' + part.content
+            if (part.type === 'tool_use' && part.input) {
+              const inp = part.input as Record<string, unknown>
+              if (inp.command) text += ' ' + String(inp.command)
+              if (inp.file_path) text += ' ' + String(inp.file_path)
+              if (inp.pattern) text += ' ' + String(inp.pattern)
+              if (inp.content) text += ' ' + String(inp.content).slice(0, 500)
+            }
+          }
         }
         if (regex.test(text)) {
           const matchIndex = text.search(regex)
-          const start = Math.max(0, matchIndex - 50)
-          const end = Math.min(text.length, matchIndex + query.length + 50)
+          const start = Math.max(0, matchIndex - 60)
+          const end = Math.min(text.length, matchIndex + query.length + 60)
           matches.push({
             text:
               (start > 0 ? '...' : '') +
@@ -175,7 +183,7 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
           })
           regex.lastIndex = 0
         }
-        if (matches.length >= 5) break
+        if (matches.length >= 10) break
       }
 
       if (matches.length > 0) {

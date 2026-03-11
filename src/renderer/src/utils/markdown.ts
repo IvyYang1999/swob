@@ -95,8 +95,8 @@ export function groupIntoTurns(messages: ParsedMessage[]): Turn[] {
   let current: Turn | null = null
   for (const msg of messages) {
     if (msg.type === 'system') continue
-    // Skip task-notification messages (they have type=user but are system notifications)
-    if (msg.subtype === 'task-notification') continue
+    // Skip system-injected messages (type=user but not real user input)
+    if (msg.subtype === 'task-notification' || msg.subtype === 'skill-output') continue
     const hasText = msg.textContent.trim().length > 0
     const hasTools = msg.toolCalls.length > 0
     if (msg.type === 'user') {

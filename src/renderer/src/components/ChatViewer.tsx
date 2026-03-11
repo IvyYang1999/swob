@@ -472,6 +472,36 @@ function InSessionSearchBar({
   )
 }
 
+// Scroll a Range into the center of the main container,
+// also scrolling any nested scrollable ancestors (e.g. max-h overflow blocks)
+function scrollRangeToCenter(range: Range, mainContainer: HTMLElement) {
+  // Phase 1: scroll nested scrollable ancestors (inner → outer) so the range is visible within each
+  const scrollableAncestors: HTMLElement[] = []
+  let node = range.startContainer.parentElement
+  while (node && node !== mainContainer) {
+    if (node.scrollHeight > node.clientHeight + 2 && node.scrollTop !== undefined) {
+      const style = getComputedStyle(node)
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+        scrollableAncestors.push(node)
+      }
+    }
+    node = node.parentElement
+  }
+  // Scroll innermost nested containers first
+  for (const ancestor of scrollableAncestors) {
+    const rect = range.getBoundingClientRect()
+    const ancestorRect = ancestor.getBoundingClientRect()
+    const offset = rect.top - ancestorRect.top - ancestorRect.height / 2 + rect.height / 2
+    ancestor.scrollTop += offset
+  }
+  // Phase 2: scroll the main container
+  requestAnimationFrame(() => {
+    const rect = range.getBoundingClientRect()
+    const containerRect = mainContainer.getBoundingClientRect()
+    mainContainer.scrollTop += rect.top - containerRect.top - containerRect.height / 2 + rect.height / 2
+  })
+}
+
 // --- Highlight search keywords using CSS Custom Highlight API ---
 // Does NOT modify the DOM — works by telling the browser to paint ranges.
 // Immune to React re-renders.
@@ -970,12 +1000,7 @@ export function ChatViewer() {
       // @ts-expect-error Highlight constructor
       highlights.set('swob-search-current', new Highlight(ranges[0]))
       setCurrentMatchIdx(0)
-      requestAnimationFrame(() => {
-        const rect = ranges[0].getBoundingClientRect()
-        const container = el
-        const containerRect = container.getBoundingClientRect()
-        container.scrollTop += rect.top - containerRect.top - containerRect.height / 2 + rect.height / 2
-      })
+      scrollRangeToCenter(ranges[0], el)
     } else {
       setCurrentMatchIdx(0)
     }
@@ -996,14 +1021,10 @@ export function ChatViewer() {
       highlights.set('swob-search-current', new Highlight(ranges[safeIdx]))
     }
 
-    // Scroll so the matched text is centered in the viewport
+    // Scroll so the matched text is centered — handles nested scrollable blocks too
     const el = contentRef.current
     if (!el) return
-    requestAnimationFrame(() => {
-      const rect = ranges[safeIdx].getBoundingClientRect()
-      const containerRect = el.getBoundingClientRect()
-      el.scrollTop += rect.top - containerRect.top - containerRect.height / 2 + rect.height / 2
-    })
+    scrollRangeToCenter(ranges[safeIdx], el)
   }, [])
 
   const searchNext = useCallback(() => navigateToMatch(currentMatchIdx + 1), [navigateToMatch, currentMatchIdx])
@@ -1035,23 +1056,22 @@ export function ChatViewer() {
   // Track which turn UUIDs have highlights (for TOC markers)
   const highlightedTurnUuids = useMemo(() => new Set(highlights.map(h => h.turnUuid)), [highlights])
 
-  // Floating selection toolbar
-  const [selectionRect, setSelectionRect] = useState<{ top: number; left: number } | null>(null)
+  // Floating selection toolbar (fixed positioning, viewport coords)
+  const [selectionPos, setSelectionPos] = useState<{ top: number; left: number } | null>(null)
   const [pendingHighlight, setPendingHighlight] = useState<{ text: string; turnUuid: string } | null>(null)
   const annotationRangesRef = useRef<Map<string, Range>>(new Map())
 
   useEffect(() => {
-    const el = contentRef.current
-    if (!el) return
     const handler = () => {
+      const el = contentRef.current
       const sel = window.getSelection()
-      if (!sel || sel.isCollapsed || !el.contains(sel.anchorNode)) {
-        setSelectionRect(null)
+      if (!sel || sel.isCollapsed || !el || !el.contains(sel.anchorNode)) {
+        setSelectionPos(null)
         setPendingHighlight(null)
         return
       }
       const text = sel.toString().trim()
-      if (!text || text.length > 2000) { setSelectionRect(null); return }
+      if (!text || text.length > 2000) { setSelectionPos(null); return }
       // Find turn UUID by walking up from anchor node
       let node: Node | null = sel.anchorNode
       let turnUuid: string | null = null
@@ -1062,24 +1082,32 @@ export function ChatViewer() {
         }
         node = node.parentNode
       }
-      if (!turnUuid) { setSelectionRect(null); return }
+      if (!turnUuid) { setSelectionPos(null); return }
       const range = sel.getRangeAt(0)
       const rect = range.getBoundingClientRect()
-      const containerRect = el.getBoundingClientRect()
-      setSelectionRect({
-        top: rect.top - containerRect.top + el.scrollTop - 36,
-        left: rect.left - containerRect.left + rect.width / 2 - 16
+      setSelectionPos({
+        top: rect.top - 40,
+        left: rect.left + rect.width / 2 - 28
       })
       setPendingHighlight({ text, turnUuid })
     }
-    el.addEventListener('mouseup', handler)
-    return () => el.removeEventListener('mouseup', handler)
+    const dismissOnMouseDown = (e: MouseEvent) => {
+      if ((e.target as HTMLElement)?.closest?.('[data-highlight-btn]')) return
+      setSelectionPos(null)
+      setPendingHighlight(null)
+    }
+    document.addEventListener('mouseup', handler)
+    document.addEventListener('mousedown', dismissOnMouseDown)
+    return () => {
+      document.removeEventListener('mouseup', handler)
+      document.removeEventListener('mousedown', dismissOnMouseDown)
+    }
   }, [])
 
   const handleAddHighlight = useCallback(() => {
     if (!pendingHighlight || !selectedSession) return
     addHighlight(selectedSession.sessionId, pendingHighlight)
-    setSelectionRect(null)
+    setSelectionPos(null)
     setPendingHighlight(null)
     window.getSelection()?.removeAllRanges()
   }, [pendingHighlight, selectedSession, addHighlight])
@@ -1147,13 +1175,9 @@ export function ChatViewer() {
     const range = annotationRangesRef.current.get(highlightId)
     const el = contentRef.current
     if (!range || !el) return
-    requestAnimationFrame(() => {
-      try {
-        const rect = range.getBoundingClientRect()
-        const containerRect = el.getBoundingClientRect()
-        el.scrollTop += rect.top - containerRect.top - containerRect.height / 2 + rect.height / 2
-      } catch { /* range may be detached */ }
-    })
+    try {
+      scrollRangeToCenter(range, el)
+    } catch { /* range may be detached */ }
   }, [])
 
   // Listen for highlight navigation events from InfoPanel
@@ -1420,19 +1444,21 @@ export function ChatViewer() {
             })}
           </div>
         )}
-          {/* Floating highlight button — appears on text selection */}
-          {selectionRect && pendingHighlight && (
+          {/* Floating highlight button — fixed position near selection */}
+          {selectionPos && pendingHighlight && (
             <div
-              className="absolute z-30 pointer-events-none"
-              style={{ top: selectionRect.top, left: Math.max(8, selectionRect.left) }}
+              data-highlight-btn
+              className="fixed z-50"
+              style={{ top: selectionPos.top, left: Math.max(8, selectionPos.left) }}
             >
               <button
+                data-highlight-btn
                 onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onClick={handleAddHighlight}
-                className="pointer-events-auto flex items-center gap-1 px-2 py-1 bg-green-700 hover:bg-green-600 text-white text-xs rounded-md shadow-lg transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs rounded-lg shadow-xl transition-colors"
                 title="划线收藏"
               >
-                <Highlighter size={12} />
+                <Highlighter size={13} />
                 <span>划线</span>
               </button>
             </div>

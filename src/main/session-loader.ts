@@ -408,12 +408,15 @@ export function buildSessionDetail(
       const originalIndex = rawMessages.indexOf(m)
       const toolCalls = m.message ? extractToolCalls(m.message.content) : []
       const textContent = m.message ? extractText(m.message.content) : (m as any).content || ''
-      // Detect task-notification messages masquerading as user messages
-      const isTaskNotification = m.type === 'user' && textContent.trimStart().startsWith('<task-notification>')
+      // Detect system-injected messages masquerading as user messages
+      const trimmed = textContent.trimStart()
+      const isTaskNotification = m.type === 'user' && trimmed.startsWith('<task-notification>')
+      const isSkillOutput = m.type === 'user' && trimmed.startsWith('Base directory for this skill:')
+      const isSystemInjected = isTaskNotification || isSkillOutput
       return {
         uuid: m.uuid,
         type: m.type as ParsedMessage['type'],
-        subtype: isTaskNotification ? 'task-notification' : m.subtype,
+        subtype: isSystemInjected ? (isTaskNotification ? 'task-notification' : 'skill-output') : m.subtype,
         timestamp: m.timestamp,
         role: m.message?.role,
         textContent,
@@ -635,13 +638,18 @@ export async function loadSessionDetail(
       .filter((m) => m.type === 'user' || m.type === 'assistant' || m.type === 'system')
       .map((m) => {
         const toolCalls = m.message ? extractToolCalls(m.message.content) : []
+        const textContent = m.message ? extractText(m.message.content) : (m as any).content || ''
+        const trimmedText = textContent.trimStart()
+        const isTaskNotification = m.type === 'user' && trimmedText.startsWith('<task-notification>')
+        const isSkillOutput = m.type === 'user' && trimmedText.startsWith('Base directory for this skill:')
+        const detectedSubtype = isTaskNotification ? 'task-notification' : isSkillOutput ? 'skill-output' : m.subtype
         return {
           uuid: m.uuid,
           type: m.type as ParsedMessage['type'],
-          subtype: m.subtype,
+          subtype: detectedSubtype,
           timestamp: m.timestamp,
           role: m.message?.role,
-          textContent: m.message ? extractText(m.message.content) : (m as any).content || '',
+          textContent,
           toolCalls,
           isPreCompact: false,
           isSidechain: !!m.isSidechain,

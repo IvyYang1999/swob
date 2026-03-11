@@ -1,17 +1,25 @@
 import { useState, useCallback } from 'react'
 import { useStore } from '../store'
-import { Search, Eye, EyeOff, Play, PanelRight, X, Download } from 'lucide-react'
+import type { ViewMode } from '../store'
+import { Search, Play, PanelRight, X, Download, FolderDown } from 'lucide-react'
+
+const VIEW_MODES: { mode: ViewMode; label: string }[] = [
+  { mode: 'compact', label: '精简' },
+  { mode: 'full', label: '完整' },
+  { mode: 'markdown', label: 'MD' },
+]
 
 export function Toolbar() {
   const {
     searchQuery, search, clearSearch,
-    viewMode, toggleViewMode,
+    viewMode, setViewMode,
     selectedSession, resumeSession,
     infoPanelOpen, toggleInfoPanel,
-    triggerExportMarkdown
+    downloadSessionMarkdown, saveMarkdownToProject
   } = useStore()
   const [inputValue, setInputValue] = useState(searchQuery)
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
+  const [saveStatus, setSaveStatus] = useState<string | null>(null)
 
   const handleSearch = useCallback((value: string) => {
     setInputValue(value)
@@ -21,6 +29,14 @@ export function Toolbar() {
     }, 300)
     setSearchTimeout(timeout)
   }, [search, searchTimeout])
+
+  const handleSaveToProject = useCallback(async () => {
+    const path = await saveMarkdownToProject()
+    if (path) {
+      setSaveStatus('已保存')
+      setTimeout(() => setSaveStatus(null), 2000)
+    }
+  }, [saveMarkdownToProject])
 
   return (
     <div
@@ -57,27 +73,51 @@ export function Toolbar() {
 
       {/* Actions */}
       <div
-        className="flex items-center gap-1"
+        className="flex items-center gap-1.5"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <button
-          onClick={toggleViewMode}
-          className="px-2 py-1 text-xs rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 flex items-center gap-1"
-          title={viewMode === 'compact' ? '切换到完整模式' : '切换到精简模式'}
-        >
-          {viewMode === 'compact' ? <Eye size={14} /> : <EyeOff size={14} />}
-          <span>{viewMode === 'compact' ? '精简' : '完整'}</span>
-        </button>
+        {/* View mode segmented control */}
+        <div className="flex items-center bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden">
+          {VIEW_MODES.map(({ mode, label }) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={`px-2 py-1 text-[11px] transition-colors ${
+                viewMode === mode
+                  ? 'bg-zinc-600 text-zinc-100 font-medium'
+                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700/50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
+        {/* Export actions */}
         {selectedSession && (
-          <button
-            onClick={triggerExportMarkdown}
-            className="px-2 py-1 text-xs rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 flex items-center gap-1"
-            title="导出为 Markdown"
-          >
-            <Download size={14} />
-            <span>导出 MD</span>
-          </button>
+          <>
+            <button
+              onClick={downloadSessionMarkdown}
+              className="p-1.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300"
+              title="下载 MD 文件"
+            >
+              <Download size={14} />
+            </button>
+
+            {selectedSession.cwds?.[0] && (
+              <button
+                onClick={handleSaveToProject}
+                className="p-1.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300"
+                title={saveStatus || '保存到项目目录'}
+              >
+                {saveStatus ? (
+                  <span className="text-[10px] text-green-400 font-medium px-0.5">{saveStatus}</span>
+                ) : (
+                  <FolderDown size={14} />
+                )}
+              </button>
+            )}
+          </>
         )}
 
         <button
@@ -97,7 +137,7 @@ export function Toolbar() {
             )}
             <button
               onClick={() => resumeSession(selectedSession.sessionId || selectedSession.id, selectedSession.permissionMode, selectedSession.cwds?.[0])}
-              className="ml-2 px-3 py-1 text-xs rounded bg-green-700 hover:bg-green-600 text-white flex items-center gap-1"
+              className="ml-1 px-3 py-1 text-xs rounded bg-green-700 hover:bg-green-600 text-white flex items-center gap-1"
             >
               <Play size={12} />
               Resume

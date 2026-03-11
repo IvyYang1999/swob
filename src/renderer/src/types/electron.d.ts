@@ -31,6 +31,7 @@ interface ElectronAPI {
     sessionId: string,
     meta: { customTitle?: string; notes?: string }
   ) => Promise<any>
+  saveMarkdown: (dirPath: string, filename: string, content: string) => Promise<string>
   openPath: (filePath: string) => Promise<string>
   showItemInFolder: (filePath: string) => Promise<void>
   onSessionAdded: (callback: (session: any) => void) => void

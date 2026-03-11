@@ -34,6 +34,10 @@ const api = {
     meta: { customTitle?: string; notes?: string }
   ) => ipcRenderer.invoke('config:setSessionMeta', sessionId, meta),
 
+  // Markdown
+  saveMarkdown: (dirPath: string, filename: string, content: string) =>
+    ipcRenderer.invoke('session:saveMarkdown', dirPath, filename, content),
+
   // Shell
   openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
   showItemInFolder: (filePath: string) => ipcRenderer.invoke('shell:showItemInFolder', filePath),

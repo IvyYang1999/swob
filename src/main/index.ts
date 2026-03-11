@@ -279,6 +279,12 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle('session:saveMarkdown', async (_event, dirPath: string, filename: string, content: string) => {
+  const fullPath = join(dirPath, filename)
+  fs.writeFileSync(fullPath, content, 'utf-8')
+  return fullPath
+})
+
 ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
   return shell.openPath(filePath)
 })

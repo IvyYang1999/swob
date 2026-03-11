@@ -1,9 +1,16 @@
-import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
+import { useRef, useState, useMemo, useCallback } from 'react'
 import { useStore } from '../store'
-import { User, Bot, Terminal, ChevronDown, ChevronRight, History, GitBranch } from 'lucide-react'
 import type { ParsedMessage } from '../store'
-
-type ToolCallInfo = { id?: string; name: string; input: Record<string, unknown>; result?: string }
+import { User, Bot, Terminal, ChevronDown, ChevronRight, History, GitBranch, Copy, Check } from 'lucide-react'
+import { CliMarkdown, DocMarkdown } from './MarkdownContent'
+import {
+  computeSections,
+  groupIntoTurns,
+  buildSegments,
+  sessionToMarkdown,
+  COMPACT_SUMMARY_PREFIX
+} from '../utils/markdown'
+import type { CompactSection, Turn, ToolCallInfo } from '../utils/markdown'
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -34,7 +41,7 @@ function getToolPreview(name: string, input: Record<string, unknown>): string {
   return ''
 }
 
-// --- Compact mode: Pill bar (summary line, click to expand details) ---
+// --- Compact mode: Pill bar ---
 
 function ToolCallPillBar({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   const [expanded, setExpanded] = useState(false)
@@ -77,7 +84,7 @@ function ToolCallPillBar({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   )
 }
 
-// --- Expanded tool call (used in compact mode when pill bar is expanded) ---
+// --- Expanded tool call detail ---
 
 function ToolCallExpanded({ tc }: { tc: ToolCallInfo }) {
   const [showResult, setShowResult] = useState(false)
@@ -113,13 +120,12 @@ function ToolCallExpanded({ tc }: { tc: ToolCallInfo }) {
   )
 }
 
-// --- Full mode: scrollable code blocks, always visible ---
+// --- Full mode: scrollable code blocks ---
 
 function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
   const color = TOOL_COLORS[tc.name] || DEFAULT_TOOL_COLOR
   const preview = getToolPreview(tc.name, tc.input)
 
-  // Format input nicely based on tool type
   let inputDisplay: string
   if (tc.name === 'Bash' && tc.input.command) {
     inputDisplay = String(tc.input.command)
@@ -156,183 +162,13 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
   )
 }
 
-// --- Turn grouping ---
-
-interface Turn {
-  userMsg: ParsedMessage | null
-  assistantMsgs: ParsedMessage[]
-}
-
-interface Segment {
-  type: 'text' | 'tools'
-  text?: string
-  toolCalls?: ToolCallInfo[]
-  isSidechain?: boolean
-}
-
-function groupIntoTurns(messages: ParsedMessage[]): Turn[] {
-  const turns: Turn[] = []
-  let current: Turn | null = null
-
-  for (const msg of messages) {
-    if (msg.type === 'system') continue
-    const hasText = msg.textContent.trim().length > 0
-    const hasTools = msg.toolCalls.length > 0
-
-    if (msg.type === 'user') {
-      if (!hasText) continue
-      if (current) turns.push(current)
-      current = { userMsg: msg, assistantMsgs: [] }
-    } else if (msg.type === 'assistant') {
-      if (!hasText && !hasTools) continue
-      if (!current) current = { userMsg: null, assistantMsgs: [] }
-      current.assistantMsgs.push(msg)
-    }
-  }
-  if (current) turns.push(current)
-  return turns
-}
-
-function buildSegments(msgs: ParsedMessage[]): Segment[] {
-  const segments: Segment[] = []
-  for (const msg of msgs) {
-    const hasText = msg.textContent.trim().length > 0
-    const hasTools = msg.toolCalls.length > 0
-    if (hasText) {
-      segments.push({ type: 'text', text: msg.textContent, isSidechain: msg.isSidechain })
-    }
-    if (hasTools) {
-      const prev = segments[segments.length - 1]
-      if (prev && prev.type === 'tools') {
-        prev.toolCalls!.push(...msg.toolCalls)
-      } else {
-        segments.push({ type: 'tools', toolCalls: [...msg.toolCalls], isSidechain: msg.isSidechain })
-      }
-    }
-  }
-  return segments
-}
-
-// --- Constants ---
-
-const COMPACT_SUMMARY_PREFIX = 'This session is being continued from a previous conversation that ran out of context.'
-
-interface CompactSection {
-  label: string
-  messages: ParsedMessage[]
-  isCurrent: boolean
-  isSharedContext?: boolean
-}
-
-// --- Markdown export ---
-
-function turnToMarkdown(turn: Turn): string {
-  const lines: string[] = []
-
-  if (turn.userMsg) {
-    lines.push(`## Human\n`)
-    lines.push(turn.userMsg.textContent.trim())
-    lines.push('')
-  }
-
-  if (turn.assistantMsgs.length > 0) {
-    lines.push(`## Assistant\n`)
-    const segments = buildSegments(turn.assistantMsgs)
-    for (const seg of segments) {
-      if (seg.type === 'text') {
-        lines.push(seg.text!.trim())
-        lines.push('')
-      } else if (seg.type === 'tools') {
-        for (const tc of seg.toolCalls!) {
-          if (tc.name === 'Bash' && tc.input.command) {
-            lines.push(`\`\`\`bash`)
-            lines.push(`$ ${tc.input.command}`)
-            if (tc.result) lines.push(tc.result.slice(0, 2000))
-            lines.push(`\`\`\``)
-          } else if (tc.name === 'Read' && tc.input.file_path) {
-            lines.push(`> 📄 Read \`${tc.input.file_path}\``)
-          } else if (tc.name === 'Write' && tc.input.file_path) {
-            lines.push(`> ✏️ Write \`${tc.input.file_path}\``)
-            if (tc.input.content) {
-              lines.push(`\`\`\``)
-              lines.push(String(tc.input.content).slice(0, 1000))
-              lines.push(`\`\`\``)
-            }
-          } else if (tc.name === 'Edit' && tc.input.file_path) {
-            lines.push(`> ✏️ Edit \`${tc.input.file_path}\``)
-            if (tc.input.old_string) {
-              lines.push(`\`\`\`diff`)
-              lines.push(`- ${String(tc.input.old_string).split('\n').join('\n- ')}`)
-              lines.push(`+ ${String(tc.input.new_string || '').split('\n').join('\n+ ')}`)
-              lines.push(`\`\`\``)
-            }
-          } else if ((tc.name === 'Grep' || tc.name === 'Glob') && tc.input.pattern) {
-            lines.push(`> 🔍 ${tc.name} \`${tc.input.pattern}\``)
-            if (tc.result) {
-              lines.push(`\`\`\``)
-              lines.push(tc.result.slice(0, 1000))
-              lines.push(`\`\`\``)
-            }
-          } else if (tc.name === 'Agent') {
-            lines.push(`> 🤖 Agent: ${tc.input.prompt ? String(tc.input.prompt).slice(0, 100) : 'subagent'}`)
-            if (tc.result) {
-              lines.push(`\`\`\``)
-              lines.push(tc.result.slice(0, 2000))
-              lines.push(`\`\`\``)
-            }
-          } else {
-            lines.push(`> 🔧 ${tc.name}`)
-            lines.push(`\`\`\`json`)
-            lines.push(JSON.stringify(tc.input, null, 2).slice(0, 500))
-            lines.push(`\`\`\``)
-          }
-          lines.push('')
-        }
-      }
-    }
-  }
-
-  return lines.join('\n')
-}
-
-function sessionToMarkdown(
-  title: string,
-  sections: CompactSection[]
-): string {
-  const lines: string[] = []
-  lines.push(`# ${title}\n`)
-
-  for (const section of sections) {
-    if (section.label) {
-      lines.push(`---\n### ${section.label}\n`)
-    }
-    const turns = groupIntoTurns(section.messages)
-    for (const turn of turns) {
-      lines.push(turnToMarkdown(turn))
-    }
-  }
-
-  return lines.join('\n')
-}
-
-function downloadMarkdown(filename: string, content: string): void {
-  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
 // --- Turn block component ---
 
 function TurnBlock({
-  turn, viewMode, highlightText, faded
+  turn, viewMode, faded
 }: {
   turn: Turn
   viewMode: 'compact' | 'full'
-  highlightText: (text: string) => React.ReactNode
   faded: boolean
 }) {
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
@@ -359,14 +195,14 @@ function TurnBlock({
                   <div className="text-sm text-zinc-200 border-l-2 border-amber-600/50 pl-3">
                     <div className="text-[10px] text-amber-500 mb-1 font-medium">Compact 上下文摘要</div>
                     <div className="whitespace-pre-wrap break-words leading-relaxed max-h-48 overflow-y-auto">
-                      {highlightText(summary)}
+                      {summary}
                     </div>
                   </div>
                 )
               }
               return (
                 <div className="text-sm text-zinc-200 whitespace-pre-wrap break-words leading-relaxed">
-                  {highlightText(turn.userMsg!.textContent)}
+                  {turn.userMsg!.textContent}
                 </div>
               )
             })()}
@@ -393,9 +229,7 @@ function TurnBlock({
             {segments.map((seg, i) => (
               <div key={i}>
                 {seg.type === 'text' && (
-                  <div className="text-sm text-zinc-200 whitespace-pre-wrap break-words leading-relaxed mb-1">
-                    {highlightText(seg.text!)}
-                  </div>
+                  <CliMarkdown content={seg.text!} />
                 )}
                 {seg.type === 'tools' && (
                   viewMode === 'compact'
@@ -417,87 +251,54 @@ function TurnBlock({
   )
 }
 
+// --- Markdown document view ---
+
+function MarkdownView({ session, sections }: { session: NonNullable<ReturnType<typeof useStore>['selectedSession']>; sections: CompactSection[] }) {
+  const [copied, setCopied] = useState(false)
+
+  const markdownContent = useMemo(
+    () => sessionToMarkdown(session, sections),
+    [session, sections]
+  )
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(markdownContent)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }, [markdownContent])
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      {/* Sticky toolbar */}
+      <div className="sticky top-0 z-10 flex items-center justify-end gap-2 px-6 py-2 bg-zinc-900/90 backdrop-blur-sm border-b border-zinc-800">
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+        >
+          {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+          <span>{copied ? '已复制' : '复制 MD'}</span>
+        </button>
+      </div>
+
+      {/* Rendered markdown document */}
+      <div className="max-w-3xl mx-auto px-8 py-6 select-text">
+        <DocMarkdown content={markdownContent} />
+      </div>
+    </div>
+  )
+}
+
 // --- Main ChatViewer ---
 
 export function ChatViewer() {
-  const { selectedSession, viewMode, searchQuery, exportMarkdownTrigger } = useStore()
+  const { selectedSession, viewMode, searchQuery } = useStore()
   const bottomRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
 
   const sections = useMemo<CompactSection[]>(() => {
     if (!selectedSession) return []
-
-    const sharedMsgs = selectedSession.messages.filter((m) => m.isSharedContext)
-    const ownMsgs = selectedSession.messages.filter((m) => !m.isSharedContext)
-
-    const allMsgs = ownMsgs.filter((m) => {
-      if (viewMode === 'compact') {
-        if (m.type === 'system' && m.subtype === 'compact_boundary') return true
-        return m.type === 'user' || m.type === 'assistant'
-      }
-      if (m.type === 'system' && m.subtype === 'compact_boundary') return true
-      return m.type !== 'progress'
-    })
-
-    const boundaryIndices: number[] = []
-    allMsgs.forEach((m, i) => {
-      if (m.type === 'system' && m.subtype === 'compact_boundary') boundaryIndices.push(i)
-    })
-
-    const sharedSection: CompactSection[] = []
-    if (sharedMsgs.length > 0) {
-      const filteredShared = sharedMsgs.filter((m) => m.type === 'user' || m.type === 'assistant')
-      if (filteredShared.length > 0) {
-        const userCount = filteredShared.filter(m => m.type === 'user').length
-        const asstCount = filteredShared.filter(m => m.type === 'assistant').length
-        sharedSection.push({
-          label: `共享上下文 — 分支前的对话 (${userCount + asstCount} 条消息)`,
-          messages: filteredShared,
-          isCurrent: false,
-          isSharedContext: true
-        })
-      }
-    }
-
-    if (boundaryIndices.length === 0) {
-      return [...sharedSection, { label: '', messages: allMsgs, isCurrent: true }]
-    }
-
-    const result: CompactSection[] = []
-    const firstSection = allMsgs.slice(0, boundaryIndices[0])
-    if (firstSection.length > 0) {
-      const userCount = firstSection.filter(m => m.type === 'user').length
-      const asstCount = firstSection.filter(m => m.type === 'assistant').length
-      result.push({
-        label: `原始对话 (${userCount + asstCount} 条消息)`,
-        messages: firstSection,
-        isCurrent: false
-      })
-    }
-
-    for (let i = 0; i < boundaryIndices.length; i++) {
-      const start = boundaryIndices[i] + 1
-      const end = i + 1 < boundaryIndices.length ? boundaryIndices[i + 1] : allMsgs.length
-      const sectionMsgs = allMsgs.slice(start, end)
-      const isLast = i === boundaryIndices.length - 1
-
-      if (sectionMsgs.length > 0) {
-        if (isLast) {
-          result.push({ label: '', messages: sectionMsgs, isCurrent: true })
-        } else {
-          const userCount = sectionMsgs.filter(m => m.type === 'user').length
-          const asstCount = sectionMsgs.filter(m => m.type === 'assistant').length
-          result.push({
-            label: `Compact #${i + 1} 后 (${userCount + asstCount} 条消息)`,
-            messages: sectionMsgs,
-            isCurrent: false
-          })
-        }
-      }
-    }
-
-    return [...sharedSection, ...result]
-  }, [selectedSession, viewMode])
+    return computeSections(selectedSession)
+  }, [selectedSession])
 
   const sessionId = selectedSession?.id
   const prevSessionIdRef = useRef<string | null>(null)
@@ -505,22 +306,6 @@ export function ChatViewer() {
     prevSessionIdRef.current = sessionId ?? null
     if (expandedSections.size > 0) setExpandedSections(new Set())
   }
-
-  const handleExportMarkdown = useCallback(() => {
-    if (!selectedSession || sections.length === 0) return
-    const title = selectedSession.firstUserMessage?.slice(0, 60) || selectedSession.sessionId
-    const md = sessionToMarkdown(title, sections)
-    const safeName = title.replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').slice(0, 40)
-    downloadMarkdown(`${safeName}.md`, md)
-  }, [selectedSession, sections])
-
-  const exportTriggerRef = useRef(exportMarkdownTrigger)
-  useEffect(() => {
-    if (exportMarkdownTrigger > 0 && exportMarkdownTrigger !== exportTriggerRef.current) {
-      handleExportMarkdown()
-    }
-    exportTriggerRef.current = exportMarkdownTrigger
-  }, [exportMarkdownTrigger, handleExportMarkdown])
 
   if (!selectedSession) {
     return (
@@ -533,6 +318,12 @@ export function ChatViewer() {
     )
   }
 
+  // Markdown mode: render full document
+  if (viewMode === 'markdown') {
+    return <MarkdownView session={selectedSession} sections={sections} />
+  }
+
+  // Compact / Full modes
   function highlightText(text: string): React.ReactNode {
     if (!searchQuery) return text
     try {
@@ -561,8 +352,7 @@ export function ChatViewer() {
       <TurnBlock
         key={turn.userMsg?.uuid || turn.assistantMsgs[0]?.uuid || tIdx}
         turn={turn}
-        viewMode={viewMode}
-        highlightText={highlightText}
+        viewMode={viewMode as 'compact' | 'full'}
         faded={faded}
       />
     ))

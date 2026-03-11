@@ -1,4 +1,12 @@
 import { create } from 'zustand'
+import {
+  computeSections,
+  sessionToMarkdown,
+  downloadMarkdown,
+  generateFilename
+} from './utils/markdown'
+
+export type ViewMode = 'compact' | 'full' | 'markdown'
 
 interface SessionSummary {
   id: string
@@ -34,7 +42,7 @@ interface ParsedMessage {
   timestamp: string
   role?: string
   textContent: string
-  toolCalls: Array<{ name: string; input: Record<string, unknown> }>
+  toolCalls: Array<{ id?: string; name: string; input: Record<string, unknown>; result?: string }>
   isPreCompact: boolean
   isSidechain: boolean
   isSharedContext: boolean
@@ -75,10 +83,9 @@ interface AppState {
   searchResults: SearchResult[]
   searchQuery: string
   loading: boolean
-  viewMode: 'compact' | 'full'
+  viewMode: ViewMode
   selectedFolderId: string | null
   infoPanelOpen: boolean
-  exportMarkdownTrigger: number
 
   initialize: () => Promise<void>
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string) => Promise<void>
@@ -86,7 +93,7 @@ interface AppState {
   clearSearch: () => void
   resumeSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
-  toggleViewMode: () => void
+  setViewMode: (mode: ViewMode) => void
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
@@ -96,13 +103,14 @@ interface AppState {
   addSessionToFolder: (folderId: string, sessionId: string) => Promise<void>
   removeSessionFromFolder: (folderId: string, sessionId: string) => Promise<void>
   setSessionMeta: (sessionId: string, meta: { customTitle?: string; notes?: string }) => Promise<void>
-  triggerExportMarkdown: () => void
+  downloadSessionMarkdown: () => void
+  saveMarkdownToProject: () => Promise<string | null>
 }
 
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult }
 
 // Read localStorage at module load time — before first render, zero flicker
-function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: 'compact' | 'full' } {
+function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode } {
   try {
     const cached = localStorage.getItem('csm:sessions')
     const cachedConfig = localStorage.getItem('csm:config')
@@ -128,7 +136,6 @@ export const useStore = create<AppState>((set, get) => ({
   viewMode: hydrated.viewMode,
   selectedFolderId: null,
   infoPanelOpen: true,
-  exportMarkdownTrigger: 0,
 
   initialize: async () => {
     const [sessions, config] = await Promise.all([
@@ -199,10 +206,7 @@ export const useStore = create<AppState>((set, get) => ({
     await window.api.resumeBatch(sessions, terminalApp)
   },
 
-  toggleViewMode: () =>
-    set((state) => ({
-      viewMode: state.viewMode === 'compact' ? 'full' : 'compact'
-    })),
+  setViewMode: (mode) => set({ viewMode: mode }),
 
   selectFolder: (folderId) => set({ selectedFolderId: folderId }),
   toggleInfoPanel: () => set((state) => ({ infoPanelOpen: !state.infoPanelOpen })),
@@ -239,5 +243,23 @@ export const useStore = create<AppState>((set, get) => ({
     const config = await window.api.setSessionMeta(sessionId, meta)
     set({ config: config as UserConfig })
   },
-  triggerExportMarkdown: () => set((state) => ({ exportMarkdownTrigger: state.exportMarkdownTrigger + 1 }))
+
+  downloadSessionMarkdown: () => {
+    const session = get().selectedSession
+    if (!session) return
+    const sections = computeSections(session)
+    const md = sessionToMarkdown(session, sections)
+    const filename = generateFilename(session)
+    downloadMarkdown(`${filename}.md`, md)
+  },
+
+  saveMarkdownToProject: async () => {
+    const session = get().selectedSession
+    if (!session?.cwds?.[0]) return null
+    const sections = computeSections(session)
+    const md = sessionToMarkdown(session, sections)
+    const filename = generateFilename(session) + '.md'
+    const fullPath = await window.api.saveMarkdown(session.cwds[0], filename, md)
+    return fullPath
+  }
 }))

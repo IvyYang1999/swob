@@ -297,7 +297,7 @@ export function Sidebar({ width }: { width: number }) {
     const session = sessions.find((s) => s.id === sessionId)
     const baseId = session?.sessionId || sessionId
     const folders = (config?.folders || []).map((f) => ({
-      id: f.id, name: f.name,
+      id: f.id, name: f.name, parentId: f.parentId || null,
       isIn: f.sessionIds.includes(baseId) || f.sessionIds.includes(sessionId)
     }))
     const result = await window.api.showSessionContextMenu({ sessionId: baseId, folders })

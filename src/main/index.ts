@@ -465,14 +465,13 @@ ipcMain.handle(
 
 ipcMain.handle(
   'context-menu:session',
-  (event, data: { sessionId: string; folders: Array<{ id: string; name: string; isIn: boolean }> }) => {
+  (event, data: { sessionId: string; folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }> }) => {
     return new Promise((resolve) => {
       const template: Electron.MenuItemConstructorOptions[] = [
         { label: '重命名', click: () => resolve({ action: 'rename' }) },
       ]
 
       const removeItems = data.folders.filter(f => f.isIn)
-      const addItems = data.folders.filter(f => !f.isIn)
 
       if (removeItems.length > 0) {
         template.push({ type: 'separator' })
@@ -484,14 +483,42 @@ ipcMain.handle(
         }
       }
 
+      // Build hierarchical "移入" submenu
+      const addItems = data.folders.filter(f => !f.isIn)
       if (addItems.length > 0) {
-        template.push({ type: 'separator' })
+        type FNode = { id: string; name: string; parentId: string | null; children: FNode[] }
+        const nodeMap = new Map<string, FNode>()
         for (const f of addItems) {
-          template.push({
-            label: `移入「${f.name}」`,
-            click: () => resolve({ action: 'addToFolder', folderId: f.id })
+          nodeMap.set(f.id, { id: f.id, name: f.name, parentId: f.parentId, children: [] })
+        }
+        const roots: FNode[] = []
+        for (const node of nodeMap.values()) {
+          if (node.parentId && nodeMap.has(node.parentId)) {
+            nodeMap.get(node.parentId)!.children.push(node)
+          } else {
+            roots.push(node)
+          }
+        }
+        const buildSubmenu = (nodes: FNode[]): Electron.MenuItemConstructorOptions[] => {
+          return nodes.map(n => {
+            const item: Electron.MenuItemConstructorOptions = {
+              label: n.name,
+              click: () => resolve({ action: 'addToFolder', folderId: n.id })
+            }
+            if (n.children.length > 0) {
+              item.submenu = [
+                { label: `移入「${n.name}」`, click: () => resolve({ action: 'addToFolder', folderId: n.id }) },
+                { type: 'separator' },
+                ...buildSubmenu(n.children)
+              ]
+              item.click = undefined
+            }
+            return item
           })
         }
+        template.push({ type: 'separator' })
+        template.push({ label: '移入文件夹', enabled: false })
+        template.push(...buildSubmenu(roots))
       }
 
       if (data.folders.length === 0) {

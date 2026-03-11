@@ -1,10 +1,10 @@
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
-import type { ViewMode, ParsedMessage, SessionDetail, Folder } from '../store'
+import type { ViewMode, ParsedMessage, SessionDetail } from '../store'
 import {
   User, Bot, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
-  List, Code2, CheckSquare, ChevronRight as ChevronSep,
+  List, Code2, CheckSquare,
   Search, X, ArrowUp, ArrowDown
 } from 'lucide-react'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
@@ -214,11 +214,11 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
     <div id={turnId} className={`space-y-3 scroll-mt-0 relative ${isCurrentSearchMatch ? 'ring-1 ring-amber-500/40 rounded-lg bg-amber-950/10 p-2 -mx-2' : isSearchMatch ? 'bg-amber-950/5 rounded-lg p-2 -mx-2' : ''}`}>
       {/* User message */}
       {turn.userMsg && (
-        <div className={`group/user relative rounded-lg transition-colors ${qSelected ? 'bg-blue-950/25' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+        <div className={`group/user relative rounded-lg transition-colors ${qSelected ? 'bg-blue-950/25 -mx-4 px-4' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
           {selectMode && onSelectQ && (
             <button
               onClick={() => onSelectQ(turn.userMsg!.uuid)}
-              className={`absolute -left-6 top-2 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${qSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
+              className={`absolute left-0 top-2 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${qSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
             >
               {qSelected ? '✓' : ''}
             </button>
@@ -256,11 +256,11 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
 
       {/* Assistant message */}
       {segments.length > 0 && (
-        <div className={`group/assistant relative rounded-lg transition-colors ${aSelected ? 'bg-blue-950/25' : ''} ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+        <div className={`group/assistant relative rounded-lg transition-colors ${aSelected ? 'bg-blue-950/25 -mx-4 px-4' : ''} ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
           {selectMode && onSelectA && turn.userMsg && (
             <button
               onClick={() => onSelectA(turn.userMsg!.uuid)}
-              className={`absolute -left-6 top-2 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${aSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
+              className={`absolute left-0 top-2 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${aSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
             >
               {aSelected ? '✓' : ''}
             </button>
@@ -613,25 +613,6 @@ function sessionHeaderMd(session: SessionDetail, customTitle?: string): string {
   return lines.join('\n')
 }
 
-// --- Helper: get session folder breadcrumb ---
-
-function getSessionBreadcrumb(sessionId: string, baseSessionId: string, folders: Folder[]): string[] {
-  const folder = folders.find(f =>
-    f.sessionIds.includes(baseSessionId) || f.sessionIds.includes(sessionId)
-  )
-  if (!folder) return []
-
-  const breadcrumb: string[] = [folder.name]
-  let current = folder
-  while (current.parentId) {
-    const parent = folders.find(f => f.id === current.parentId)
-    if (!parent) break
-    breadcrumb.unshift(parent.name)
-    current = parent
-  }
-  return breadcrumb
-}
-
 // --- Source view: per-turn raw markdown with anchor divs ---
 
 function SourceView({ session, sections, customTitle, contentRef }: {
@@ -822,17 +803,6 @@ export function ChatViewer() {
     if (!selectedSession || !config) return undefined
     return config.sessionMeta?.[selectedSession.sessionId]?.customTitle
   }, [selectedSession, config])
-
-  // Session breadcrumb (folder path)
-  const breadcrumb = useMemo(() => {
-    if (!selectedSession || !config?.folders) return []
-    return getSessionBreadcrumb(selectedSession.id, selectedSession.sessionId, config.folders)
-  }, [selectedSession, config])
-
-  const sessionTitle = useMemo(() => {
-    if (!selectedSession) return ''
-    return customTitle || selectedSession.firstUserMessage?.slice(0, 60) || selectedSession.sessionId
-  }, [selectedSession, customTitle])
 
   // Unified TOC entries for all modes
   const tocEntries = useMemo(() => computeChatTocEntries(sections), [sections])
@@ -1036,6 +1006,9 @@ export function ChatViewer() {
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [mdMode, turnSectionMap, expandedSections, sections])
 
+  const searchMatchSet = useMemo(() => new Set(searchMatches), [searchMatches])
+  const currentSearchUuid = searchMatches[currentMatchIdx] || null
+
   if (!selectedSession) {
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-500">
@@ -1054,9 +1027,6 @@ export function ChatViewer() {
       return next
     })
   }
-
-  const searchMatchSet = useMemo(() => new Set(searchMatches), [searchMatches])
-  const currentSearchUuid = searchMatches[currentMatchIdx] || null
 
   function renderSection(section: CompactSection) {
     const turns = groupIntoTurns(section.messages)
@@ -1100,20 +1070,6 @@ export function ChatViewer() {
           onPrev={searchPrev}
           onClose={closeSearch}
         />
-      )}
-
-      {/* Session breadcrumb */}
-      {(breadcrumb.length > 0 || sessionTitle) && (
-        <div className="px-4 py-1.5 text-xs text-zinc-500 border-b border-zinc-800/50 flex items-center gap-1.5 shrink-0 min-w-0 overflow-hidden">
-          {breadcrumb.map((name, i) => (
-            <span key={i} className="flex items-center gap-1.5 shrink-0">
-              {i > 0 && <ChevronSep size={10} className="text-zinc-600 shrink-0" />}
-              <span className="text-zinc-500">{name}</span>
-            </span>
-          ))}
-          {breadcrumb.length > 0 && <ChevronSep size={10} className="text-zinc-600 shrink-0" />}
-          <span className="text-zinc-300 truncate">{sessionTitle}</span>
-        </div>
       )}
 
       {/* Batch action bar */}

@@ -4,7 +4,8 @@ import type { ViewMode, ParsedMessage, SessionDetail, Folder } from '../store'
 import {
   User, Bot, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
-  List, Code2, CheckSquare, ChevronRight as ChevronSep
+  List, Code2, CheckSquare, ChevronRight as ChevronSep,
+  Search, X, ArrowUp, ArrowDown
 } from 'lucide-react'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
 import {
@@ -182,11 +183,12 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
 
 // --- Turn block ---
 
-function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
+function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ, onSelectA, isSearchMatch, isCurrentSearchMatch }: {
   turn: Turn; viewMode: 'compact' | 'full'
   qSelected?: boolean; aSelected?: boolean
   selectMode?: boolean
   onSelectQ?: (uuid: string) => void; onSelectA?: (uuid: string) => void
+  isSearchMatch?: boolean; isCurrentSearchMatch?: boolean
 }) {
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
@@ -209,7 +211,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
   }, [turn.assistantMsgs])
 
   return (
-    <div id={turnId} className="space-y-3 scroll-mt-0 relative">
+    <div id={turnId} className={`space-y-3 scroll-mt-0 relative ${isCurrentSearchMatch ? 'ring-1 ring-amber-500/40 rounded-lg bg-amber-950/10 p-2 -mx-2' : isSearchMatch ? 'bg-amber-950/5 rounded-lg p-2 -mx-2' : ''}`}>
       {/* User message */}
       {turn.userMsg && (
         <div className={`group/user relative rounded-lg transition-colors ${qSelected ? 'bg-blue-950/25' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
@@ -410,6 +412,59 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap }: {
   )
 }
 
+// --- In-session search bar ---
+
+function InSessionSearchBar({
+  query, onQueryChange, matchCount, currentMatch, onNext, onPrev, onClose
+}: {
+  query: string; onQueryChange: (q: string) => void
+  matchCount: number; currentMatch: number
+  onNext: () => void; onPrev: () => void; onClose: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onNext() }
+      if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); onPrev() }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onNext, onPrev, onClose])
+
+  return (
+    <div className="h-8 flex items-center gap-2 px-3 bg-zinc-800/80 border-b border-zinc-700/50 shrink-0">
+      <Search size={12} className="text-zinc-500 shrink-0" />
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={(e) => onQueryChange(e.target.value)}
+        placeholder="在对话中搜索..."
+        className="flex-1 max-w-xs bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
+      />
+      {query && (
+        <span className="text-[11px] text-zinc-500 shrink-0">
+          {matchCount > 0 ? `${currentMatch + 1}/${matchCount}` : '无匹配'}
+        </span>
+      )}
+      <button onClick={onPrev} disabled={matchCount === 0} className="p-0.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 disabled:opacity-30" title="上一个 (Shift+Enter)">
+        <ArrowUp size={13} />
+      </button>
+      <button onClick={onNext} disabled={matchCount === 0} className="p-0.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 disabled:opacity-30" title="下一个 (Enter)">
+        <ArrowDown size={13} />
+      </button>
+      <button onClick={onClose} className="p-0.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300" title="关闭 (Esc)">
+        <X size={13} />
+      </button>
+    </div>
+  )
+}
+
 // --- Session action bar ---
 
 function SessionBar({
@@ -420,6 +475,8 @@ function SessionBar({
   mdMode,
   selectMode,
   onToggleSelectMode,
+  searchOpen,
+  onToggleSearch,
 }: {
   tocOpen: boolean
   onToggleToc: () => void
@@ -428,6 +485,8 @@ function SessionBar({
   mdMode: boolean
   selectMode: boolean
   onToggleSelectMode: () => void
+  searchOpen: boolean
+  onToggleSearch: () => void
 }) {
   const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, config } = useStore()
   const [copied, setCopied] = useState(false)
@@ -469,6 +528,14 @@ function SessionBar({
           title="目录"
         >
           <List size={13} />
+        </button>
+
+        <button
+          onClick={onToggleSearch}
+          className={`p-1 rounded transition-colors ${searchOpen ? 'text-zinc-200 bg-zinc-700' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
+          title="对话内搜索 (Cmd+F)"
+        >
+          <Search size={13} />
         </button>
 
         {!mdMode && (
@@ -797,6 +864,71 @@ export function ChatViewer() {
     })
   }, [])
 
+  // --- In-session search ---
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatches, setSearchMatches] = useState<string[]>([]) // turn UUIDs with matches
+  const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
+
+  // Cmd+F to toggle search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault()
+        setSearchOpen(prev => !prev)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
+  // Compute matches when query changes
+  useEffect(() => {
+    if (!searchQuery.trim() || !selectedSession) {
+      setSearchMatches([])
+      setCurrentMatchIdx(0)
+      return
+    }
+    const q = searchQuery.toLowerCase()
+    const matched: string[] = []
+    for (const section of sections) {
+      const turns = groupIntoTurns(section.messages)
+      for (const turn of turns) {
+        if (!turn.userMsg) continue
+        const userText = turn.userMsg.textContent.toLowerCase()
+        const assistantText = turn.assistantMsgs.map(m => m.textContent).join(' ').toLowerCase()
+        if (userText.includes(q) || assistantText.includes(q)) {
+          matched.push(turn.userMsg.uuid)
+        }
+      }
+    }
+    setSearchMatches(matched)
+    setCurrentMatchIdx(0)
+  }, [searchQuery, sections, selectedSession])
+
+  // Navigate to current match
+  const navigateToMatch = useCallback((idx: number) => {
+    if (searchMatches.length === 0) return
+    const safeIdx = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length
+    setCurrentMatchIdx(safeIdx)
+    const uuid = searchMatches[safeIdx]
+
+    // Auto-expand collapsed section if needed
+    const sIdx = turnSectionMap.get(uuid)
+    if (sIdx !== undefined && !expandedSections.has(sIdx)) {
+      setExpandedSections(prev => new Set([...prev, sIdx]))
+      pendingScrollRef.current = `turn-${uuid}`
+      return
+    }
+
+    const el = contentRef.current?.querySelector(`#turn-${CSS.escape(uuid)}`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [searchMatches, turnSectionMap, expandedSections])
+
+  const searchNext = useCallback(() => navigateToMatch(currentMatchIdx + 1), [navigateToMatch, currentMatchIdx])
+  const searchPrev = useCallback(() => navigateToMatch(currentMatchIdx - 1), [navigateToMatch, currentMatchIdx])
+  const closeSearch = useCallback(() => { setSearchOpen(false); setSearchQuery('') }, [])
+
   // Build turn content map for TOC drag (turn UUID → markdown)
   const turnContentMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -923,6 +1055,9 @@ export function ChatViewer() {
     })
   }
 
+  const searchMatchSet = useMemo(() => new Set(searchMatches), [searchMatches])
+  const currentSearchUuid = searchMatches[currentMatchIdx] || null
+
   function renderSection(section: CompactSection) {
     const turns = groupIntoTurns(section.messages)
     return turns.map((turn, tIdx) => (
@@ -935,6 +1070,8 @@ export function ChatViewer() {
         selectMode={selectMode}
         onSelectQ={toggleSelectQ}
         onSelectA={toggleSelectA}
+        isSearchMatch={turn.userMsg ? searchMatchSet.has(turn.userMsg.uuid) : false}
+        isCurrentSearchMatch={turn.userMsg ? turn.userMsg.uuid === currentSearchUuid : false}
       />
     ))
   }
@@ -949,7 +1086,21 @@ export function ChatViewer() {
         mdMode={mdMode}
         selectMode={selectMode}
         onToggleSelectMode={toggleSelectMode}
+        searchOpen={searchOpen}
+        onToggleSearch={() => setSearchOpen(prev => !prev)}
       />
+
+      {searchOpen && (
+        <InSessionSearchBar
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          matchCount={searchMatches.length}
+          currentMatch={currentMatchIdx}
+          onNext={searchNext}
+          onPrev={searchPrev}
+          onClose={closeSearch}
+        />
+      )}
 
       {/* Session breadcrumb */}
       {(breadcrumb.length > 0 || sessionTitle) && (

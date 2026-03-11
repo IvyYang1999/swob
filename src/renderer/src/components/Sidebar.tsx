@@ -126,7 +126,8 @@ function FolderNode({
   renamingFolderId, setRenamingFolderId, renamingValue, setRenamingValue,
   handleRenameFolder, onSessionContextMenu, creatingSubfolderId,
   setCreatingSubfolderId, renamingSessionId, sessionRenameValue,
-  onSessionRenameChange, onSessionRenameSubmit, onSessionRenameCancel
+  onSessionRenameChange, onSessionRenameSubmit, onSessionRenameCancel,
+  onDoubleClickRenameSession
 }: {
   folder: Folder; depth: number; allFolders: Folder[]
   sessionMap: Map<string, SessionSummary>

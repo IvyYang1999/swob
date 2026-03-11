@@ -1,10 +1,10 @@
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
-import type { ViewMode, ParsedMessage, SessionDetail } from '../store'
+import type { ViewMode, ParsedMessage, SessionDetail, Folder } from '../store'
 import {
   User, Bot, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
-  List, Code2, CheckSquare
+  List, Code2, CheckSquare, ChevronRight as ChevronSep
 } from 'lucide-react'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
 import {
@@ -182,9 +182,11 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
 
 // --- Turn block ---
 
-function TurnBlock({ turn, viewMode, selected, selectMode, onSelect }: {
+function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
   turn: Turn; viewMode: 'compact' | 'full'
-  selected?: boolean; selectMode?: boolean; onSelect?: (uuid: string) => void
+  qSelected?: boolean; aSelected?: boolean
+  selectMode?: boolean
+  onSelectQ?: (uuid: string) => void; onSelectA?: (uuid: string) => void
 }) {
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
@@ -207,27 +209,24 @@ function TurnBlock({ turn, viewMode, selected, selectMode, onSelect }: {
   }, [turn.assistantMsgs])
 
   return (
-    <div id={turnId} className={`space-y-3 scroll-mt-0 relative ${selected ? 'ring-1 ring-blue-500/50 rounded-lg p-2 -m-2 bg-blue-950/10' : ''}`}>
-      {/* Multi-select checkbox — only in select mode */}
-      {selectMode && onSelect && turn.userMsg && (
-        <button
-          onClick={() => onSelect(turn.userMsg!.uuid)}
-          className={`absolute -left-6 top-1 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${selected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
-        >
-          {selected ? '✓' : ''}
-        </button>
-      )}
-
+    <div id={turnId} className="space-y-3 scroll-mt-0 relative">
       {/* User message */}
       {turn.userMsg && (
-        <div className={`group/user ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+        <div className={`group/user relative rounded-lg transition-colors ${qSelected ? 'bg-blue-950/25' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+          {selectMode && onSelectQ && (
+            <button
+              onClick={() => onSelectQ(turn.userMsg!.uuid)}
+              className={`absolute -left-6 top-2 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${qSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
+            >
+              {qSelected ? '✓' : ''}
+            </button>
+          )}
           <div className="flex gap-3">
             <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-blue-600"><User size={14} /></div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-zinc-400">User</span>
                 <span className="text-[11px] text-zinc-600">{formatTime(turn.userMsg.timestamp)}</span>
-                {/* Copy query button — visible on hover */}
                 <button
                   onClick={copyQuery}
                   className="opacity-0 group-hover/user:opacity-100 transition-opacity p-0.5 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300"
@@ -255,7 +254,15 @@ function TurnBlock({ turn, viewMode, selected, selectMode, onSelect }: {
 
       {/* Assistant message */}
       {segments.length > 0 && (
-        <div className={`group/assistant ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+        <div className={`group/assistant relative rounded-lg transition-colors ${aSelected ? 'bg-blue-950/25' : ''} ${hasSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
+          {selectMode && onSelectA && turn.userMsg && (
+            <button
+              onClick={() => onSelectA(turn.userMsg!.uuid)}
+              className={`absolute -left-6 top-2 w-4 h-4 rounded border flex items-center justify-center text-[10px] ${aSelected ? 'bg-blue-600 border-blue-500 text-white' : 'border-zinc-600 hover:border-zinc-400 text-zinc-500'}`}
+            >
+              {aSelected ? '✓' : ''}
+            </button>
+          )}
           <div className="flex gap-3">
             <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-orange-600"><Bot size={14} /></div>
             <div className="flex-1 min-w-0">
@@ -263,7 +270,6 @@ function TurnBlock({ turn, viewMode, selected, selectMode, onSelect }: {
                 <span className="text-xs font-medium text-zinc-400">Assistant</span>
                 <span className="text-[11px] text-zinc-600">{formatTime(turn.assistantMsgs[0].timestamp)}</span>
                 {hasSidechain && <span className="text-[10px] px-1 py-0.5 rounded bg-zinc-700 text-zinc-500">rejected</span>}
-                {/* Copy response button — visible on hover */}
                 <button
                   onClick={copyResponse}
                   className="opacity-0 group-hover/assistant:opacity-100 transition-opacity p-0.5 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300"
@@ -540,6 +546,25 @@ function sessionHeaderMd(session: SessionDetail, customTitle?: string): string {
   return lines.join('\n')
 }
 
+// --- Helper: get session folder breadcrumb ---
+
+function getSessionBreadcrumb(sessionId: string, baseSessionId: string, folders: Folder[]): string[] {
+  const folder = folders.find(f =>
+    f.sessionIds.includes(baseSessionId) || f.sessionIds.includes(sessionId)
+  )
+  if (!folder) return []
+
+  const breadcrumb: string[] = [folder.name]
+  let current = folder
+  while (current.parentId) {
+    const parent = folders.find(f => f.id === current.parentId)
+    if (!parent) break
+    breadcrumb.unshift(parent.name)
+    current = parent
+  }
+  return breadcrumb
+}
+
 // --- Source view: per-turn raw markdown with anchor divs ---
 
 function SourceView({ session, sections, customTitle, contentRef }: {
@@ -636,7 +661,6 @@ export function ChatViewer() {
   const [tocWidth, setTocWidth] = useState(200)
   const [sourceView, setSourceView] = useState(false)
   const pendingScrollRef = useRef<string | null>(null)
-  // Track the first visible turn UUID for cross-mode scroll alignment
   const firstVisibleTurnRef = useRef<string | null>(null)
 
   const sections = useMemo<CompactSection[]>(() => {
@@ -676,7 +700,6 @@ export function ChatViewer() {
         const turnEl = el.querySelector(`#turn-${CSS.escape(uuid)}`)
         if (turnEl) {
           const rect = turnEl.getBoundingClientRect()
-          // The turn is visible if its bottom is below the container top
           if (rect.bottom > containerTop) {
             firstVisibleTurnRef.current = uuid
             return
@@ -688,23 +711,43 @@ export function ChatViewer() {
     return () => el.removeEventListener('scroll', handler)
   }, [allTurnUuids])
 
+  // Map turn UUID → section index (for auto-expand in chat modes)
+  const turnSectionMap = useMemo(() => {
+    const map = new Map<string, number>()
+    sections.forEach((section, sIdx) => {
+      if (section.isCurrent) return
+      const turns = groupIntoTurns(section.messages)
+      turns.forEach(turn => {
+        if (turn.userMsg) map.set(turn.userMsg.uuid, sIdx)
+      })
+    })
+    return map
+  }, [sections])
+
   // Restore scroll position after view mode switch — align to first visible turn
   const prevViewModeRef = useRef(viewMode)
   useEffect(() => {
     if (prevViewModeRef.current !== viewMode) {
       prevViewModeRef.current = viewMode
       const targetUuid = firstVisibleTurnRef.current
-      if (targetUuid) {
-        // Use a small delay to let the new view render
-        requestAnimationFrame(() => {
-          setTimeout(() => {
-            const el = contentRef.current?.querySelector(`#turn-${CSS.escape(targetUuid)}`)
-            if (el) {
-              el.scrollIntoView({ block: 'start' })
-            }
-          }, 0)
-        })
+      if (!targetUuid) return
+
+      // In chat modes, auto-expand collapsed section if target turn is inside one
+      if (!mdMode) {
+        const sIdx = turnSectionMap.get(targetUuid)
+        if (sIdx !== undefined && !expandedSections.has(sIdx)) {
+          setExpandedSections(prev => new Set([...prev, sIdx]))
+          pendingScrollRef.current = `turn-${targetUuid}`
+          return
+        }
       }
+
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          const el = contentRef.current?.querySelector(`#turn-${CSS.escape(targetUuid)}`)
+          if (el) el.scrollIntoView({ block: 'start' })
+        }, 0)
+      })
     }
   }, [viewMode])
 
@@ -713,22 +756,43 @@ export function ChatViewer() {
     return config.sessionMeta?.[selectedSession.sessionId]?.customTitle
   }, [selectedSession, config])
 
+  // Session breadcrumb (folder path)
+  const breadcrumb = useMemo(() => {
+    if (!selectedSession || !config?.folders) return []
+    return getSessionBreadcrumb(selectedSession.id, selectedSession.sessionId, config.folders)
+  }, [selectedSession, config])
+
+  const sessionTitle = useMemo(() => {
+    if (!selectedSession) return ''
+    return customTitle || selectedSession.firstUserMessage?.slice(0, 60) || selectedSession.sessionId
+  }, [selectedSession, customTitle])
+
   // Unified TOC entries for all modes
   const tocEntries = useMemo(() => computeChatTocEntries(sections), [sections])
 
-  // Multi-select state — hidden by default, toggled explicitly
+  // Multi-select: Q and A selectable independently
+  // Items are "q:uuid" or "a:uuid"
   const [selectMode, setSelectMode] = useState(false)
-  const [selectedTurns, setSelectedTurns] = useState<Set<string>>(new Set())
-  const toggleTurnSelection = useCallback((uuid: string) => {
-    setSelectedTurns(prev => {
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
+  const toggleSelectQ = useCallback((uuid: string) => {
+    setSelectedItems(prev => {
       const next = new Set(prev)
-      next.has(uuid) ? next.delete(uuid) : next.add(uuid)
+      const key = `q:${uuid}`
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
+  }, [])
+  const toggleSelectA = useCallback((uuid: string) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev)
+      const key = `a:${uuid}`
+      next.has(key) ? next.delete(key) : next.add(key)
       return next
     })
   }, [])
   const toggleSelectMode = useCallback(() => {
     setSelectMode(prev => {
-      if (prev) setSelectedTurns(new Set()) // exiting select mode clears selection
+      if (prev) setSelectedItems(new Set())
       return !prev
     })
   }, [])
@@ -756,24 +820,41 @@ export function ChatViewer() {
     return result
   }, [sections])
 
+  const selectedCount = selectedItems.size
+
   const handleBatchExport = useCallback(() => {
-    if (selectedTurns.size === 0) return
+    if (selectedItems.size === 0) return
     const lines: string[] = []
     for (const turn of allTurns) {
-      if (turn.userMsg && selectedTurns.has(turn.userMsg.uuid)) {
+      if (!turn.userMsg) continue
+      const uuid = turn.userMsg.uuid
+      const qSel = selectedItems.has(`q:${uuid}`)
+      const aSel = selectedItems.has(`a:${uuid}`)
+      if (qSel && aSel) {
         lines.push(turnToMarkdown(turn))
+      } else if (qSel) {
+        lines.push(`### User\n\n${turn.userMsg.textContent}\n`)
+      } else if (aSel) {
+        lines.push(turnToMarkdown({ userMsg: null, assistantMsgs: turn.assistantMsgs }))
       }
     }
-    const md = lines.join('\n')
-    navigator.clipboard.writeText(md)
-  }, [selectedTurns, allTurns])
+    navigator.clipboard.writeText(lines.join('\n'))
+  }, [selectedItems, allTurns])
 
   const handleBatchDownload = useCallback(() => {
-    if (selectedTurns.size === 0 || !selectedSession) return
+    if (selectedItems.size === 0 || !selectedSession) return
     const lines: string[] = []
     for (const turn of allTurns) {
-      if (turn.userMsg && selectedTurns.has(turn.userMsg.uuid)) {
+      if (!turn.userMsg) continue
+      const uuid = turn.userMsg.uuid
+      const qSel = selectedItems.has(`q:${uuid}`)
+      const aSel = selectedItems.has(`a:${uuid}`)
+      if (qSel && aSel) {
         lines.push(turnToMarkdown(turn))
+      } else if (qSel) {
+        lines.push(`### User\n\n${turn.userMsg.textContent}\n`)
+      } else if (aSel) {
+        lines.push(turnToMarkdown({ userMsg: null, assistantMsgs: turn.assistantMsgs }))
       }
     }
     const md = lines.join('\n')
@@ -785,20 +866,7 @@ export function ChatViewer() {
     a.download = `selected-turns-${date}.md`
     a.click()
     URL.revokeObjectURL(url)
-  }, [selectedTurns, allTurns, selectedSession])
-
-  // Map turn UUID → section index (for auto-expand in chat modes)
-  const turnSectionMap = useMemo(() => {
-    const map = new Map<string, number>()
-    sections.forEach((section, sIdx) => {
-      if (section.isCurrent) return
-      const turns = groupIntoTurns(section.messages)
-      turns.forEach(turn => {
-        if (turn.userMsg) map.set(turn.userMsg.uuid, sIdx)
-      })
-    })
-    return map
-  }, [sections])
+  }, [selectedItems, allTurns, selectedSession])
 
   // Scroll to pending target after section expansion
   useEffect(() => {
@@ -813,7 +881,6 @@ export function ChatViewer() {
   })
 
   const handleNavigate = useCallback((id: string) => {
-    // In chat modes, auto-expand collapsed sections if needed
     if (!mdMode) {
       if (id.startsWith('turn-')) {
         const uuid = id.slice(5)
@@ -833,7 +900,6 @@ export function ChatViewer() {
         }
       }
     }
-    // Direct scroll
     const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [mdMode, turnSectionMap, expandedSections, sections])
@@ -864,9 +930,11 @@ export function ChatViewer() {
         key={turn.userMsg?.uuid || turn.assistantMsgs[0]?.uuid || tIdx}
         turn={turn}
         viewMode={viewMode as 'compact' | 'full'}
-        selected={turn.userMsg ? selectedTurns.has(turn.userMsg.uuid) : false}
+        qSelected={turn.userMsg ? selectedItems.has(`q:${turn.userMsg.uuid}`) : false}
+        aSelected={turn.userMsg ? selectedItems.has(`a:${turn.userMsg.uuid}`) : false}
         selectMode={selectMode}
-        onSelect={toggleTurnSelection}
+        onSelectQ={toggleSelectQ}
+        onSelectA={toggleSelectA}
       />
     ))
   }
@@ -883,17 +951,31 @@ export function ChatViewer() {
         onToggleSelectMode={toggleSelectMode}
       />
 
-      {/* Batch action bar — only when select mode is on and turns are selected */}
-      {selectMode && selectedTurns.size > 0 && !mdMode && (
+      {/* Session breadcrumb */}
+      {(breadcrumb.length > 0 || sessionTitle) && (
+        <div className="px-4 py-1.5 text-xs text-zinc-500 border-b border-zinc-800/50 flex items-center gap-1.5 shrink-0 min-w-0 overflow-hidden">
+          {breadcrumb.map((name, i) => (
+            <span key={i} className="flex items-center gap-1.5 shrink-0">
+              {i > 0 && <ChevronSep size={10} className="text-zinc-600 shrink-0" />}
+              <span className="text-zinc-500">{name}</span>
+            </span>
+          ))}
+          {breadcrumb.length > 0 && <ChevronSep size={10} className="text-zinc-600 shrink-0" />}
+          <span className="text-zinc-300 truncate">{sessionTitle}</span>
+        </div>
+      )}
+
+      {/* Batch action bar */}
+      {selectMode && selectedCount > 0 && !mdMode && (
         <div className="h-8 flex items-center gap-2 px-3 bg-blue-950/50 border-b border-blue-800/40 shrink-0">
-          <span className="text-[11px] text-blue-400">已选 {selectedTurns.size} 轮</span>
+          <span className="text-[11px] text-blue-400">已选 {selectedCount} 项</span>
           <button onClick={handleBatchExport} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
             <Copy size={10} /> 复制
           </button>
           <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
             <Download size={10} /> 下载 MD
           </button>
-          <button onClick={() => { setSelectedTurns(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-zinc-500 hover:text-zinc-300">
+          <button onClick={() => { setSelectedItems(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-zinc-500 hover:text-zinc-300">
             取消
           </button>
         </div>

@@ -52,9 +52,9 @@ export function Toolbar() {
         )}
       </div>
 
-      {/* Right side: layout toggle */}
+      {/* Right side: layout toggle — pushed to far right */}
       <div
-        className="flex items-center"
+        className="flex items-center ml-auto"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button

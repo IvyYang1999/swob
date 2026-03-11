@@ -169,6 +169,10 @@ export const useStore = create<AppState>((set, get) => ({
           window.api.loadConfig()
         ])
         set({ sessions: freshSessions, config: freshConfig })
+        try {
+          localStorage.setItem('csm:sessions', JSON.stringify(freshSessions))
+          localStorage.setItem('csm:config', JSON.stringify(freshConfig))
+        } catch { /* quota exceeded */ }
       }, 500)
     }
 

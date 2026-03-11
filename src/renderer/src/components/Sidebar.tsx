@@ -21,13 +21,14 @@ function formatDate(iso: string): string {
 
 function SessionItem({
   session, depth, onContextMenu, isRenaming, renameValue,
-  onRenameChange, onRenameSubmit, onRenameCancel
+  onRenameChange, onRenameSubmit, onRenameCancel, onDoubleClickRename
 }: {
   session: SessionSummary; depth: number
   onContextMenu: (e: React.MouseEvent, sessionId: string) => void
   isRenaming?: boolean; renameValue?: string
   onRenameChange?: (v: string) => void
   onRenameSubmit?: () => void; onRenameCancel?: () => void
+  onDoubleClickRename?: (sessionId: string) => void
 }) {
   const { selectedUniqueId, selectSession, config, resumedSessionIds } = useStore()
   const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
@@ -67,6 +68,7 @@ function SessionItem({
         )
       }}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, session.id) }}
+      onDoubleClick={(e) => { e.stopPropagation(); onDoubleClickRename?.(session.id) }}
       className={`w-full py-1.5 pr-3 text-left hover:bg-zinc-800 group ${
         isSelected ? 'bg-zinc-800 border-l-2 border-blue-500' : ''
       }`}
@@ -140,6 +142,7 @@ function FolderNode({
   renamingSessionId: string | null; sessionRenameValue: string
   onSessionRenameChange: (v: string) => void
   onSessionRenameSubmit: () => void; onSessionRenameCancel: () => void
+  onDoubleClickRenameSession: (sessionId: string) => void
 }) {
   const { addSessionToFolder, deleteFolder, createFolder, moveFolder, resumeBatch } = useStore()
   const isExpanded = expandedFolders.has(folder.id)
@@ -247,13 +250,15 @@ function FolderNode({
               creatingSubfolderId={creatingSubfolderId} setCreatingSubfolderId={setCreatingSubfolderId}
               renamingSessionId={renamingSessionId} sessionRenameValue={sessionRenameValue}
               onSessionRenameChange={onSessionRenameChange} onSessionRenameSubmit={onSessionRenameSubmit}
-              onSessionRenameCancel={onSessionRenameCancel} />
+              onSessionRenameCancel={onSessionRenameCancel}
+              onDoubleClickRenameSession={onDoubleClickRenameSession} />
           ))}
           {folderSessions.map((session) => (
             <SessionItem key={session.id} session={session} depth={depth + 1}
               onContextMenu={onSessionContextMenu} isRenaming={renamingSessionId === session.id}
               renameValue={sessionRenameValue} onRenameChange={onSessionRenameChange}
-              onRenameSubmit={onSessionRenameSubmit} onRenameCancel={onSessionRenameCancel} />
+              onRenameSubmit={onSessionRenameSubmit} onRenameCancel={onSessionRenameCancel}
+              onDoubleClickRename={onDoubleClickRenameSession} />
           ))}
           {childFolders.length === 0 && folderSessions.length === 0 && creatingSubfolderId !== folder.id && (
             <div className="py-2 text-xs text-zinc-600 italic" style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}>
@@ -319,6 +324,14 @@ export function Sidebar({ width }: { width: number }) {
   }, [renamingSessionId, sessionRenameValue, setSessionMeta, sessions])
 
   const handleCancelRenameSession = useCallback(() => { setRenamingSessionId(null); setSessionRenameValue('') }, [])
+
+  const handleDoubleClickRenameSession = useCallback((sessionId: string) => {
+    const session = sessions.find(s => s.id === sessionId)
+    const baseId = session?.sessionId || sessionId
+    const meta = config?.sessionMeta[baseId] || config?.sessionMeta[sessionId]
+    setSessionRenameValue(meta?.customTitle || session?.firstUserMessage || '')
+    setRenamingSessionId(sessionId)
+  }, [sessions, config])
 
   const toggleFolder = useCallback((id: string) => {
     setExpandedFolders((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
@@ -430,7 +443,8 @@ export function Sidebar({ width }: { width: number }) {
             {sessions.map((session) => (
               <SessionItem key={session.id} session={session} depth={0} onContextMenu={handleContextMenu}
                 isRenaming={renamingSessionId === session.id} renameValue={sessionRenameValue}
-                onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession} />
+                onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession}
+                onDoubleClickRename={handleDoubleClickRenameSession} />
             ))}
           </>
         ) : (
@@ -446,7 +460,8 @@ export function Sidebar({ width }: { width: number }) {
                 creatingSubfolderId={creatingSubfolderId} setCreatingSubfolderId={setCreatingSubfolderId}
                 renamingSessionId={renamingSessionId} sessionRenameValue={sessionRenameValue}
                 onSessionRenameChange={setSessionRenameValue} onSessionRenameSubmit={handleSubmitRenameSession}
-                onSessionRenameCancel={handleCancelRenameSession} />
+                onSessionRenameCancel={handleCancelRenameSession}
+                onDoubleClickRenameSession={handleDoubleClickRenameSession} />
             ))}
             {rootFolders.length > 0 && ungroupedSessions.length > 0 && (
               <div className="mx-3 my-2 flex items-center gap-2"
@@ -460,7 +475,8 @@ export function Sidebar({ width }: { width: number }) {
             {ungroupedSessions.map((session) => (
               <SessionItem key={session.id} session={session} depth={0} onContextMenu={handleContextMenu}
                 isRenaming={renamingSessionId === session.id} renameValue={sessionRenameValue}
-                onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession} />
+                onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession}
+                onDoubleClickRename={handleDoubleClickRenameSession} />
             ))}
           </>
         )}

@@ -409,10 +409,33 @@ export function createLibraryFolder(name: string, parentPath?: string): string {
 
 export function renameLibraryFolder(folderPath: string, newName: string): string {
   const parent = path.dirname(folderPath)
+  const currentName = path.basename(folderPath)
   const sanitized = sanitizeDirName(newName)
+
+  // Skip if name hasn't changed — avoids (2) suffix
+  if (sanitized === currentName) return folderPath
+
   const newDirName = findUniqueDirName(parent, sanitized)
   const newPath = path.join(parent, newDirName)
+
+  // Update folderOrder before rename
+  updateFolderOrderPaths(path.relative(_root, folderPath), path.relative(_root, newPath))
+
   fs.renameSync(folderPath, newPath)
+  return newPath
+}
+
+export function moveLibraryFolderToParent(srcPath: string, destParentPath: string): string {
+  if (path.dirname(srcPath) === destParentPath) return srcPath
+
+  const baseName = path.basename(srcPath)
+  const newName = findUniqueDirName(destParentPath, baseName)
+  const newPath = path.join(destParentPath, newName)
+
+  // Update folderOrder before move
+  updateFolderOrderPaths(path.relative(_root, srcPath), path.relative(_root, newPath))
+
+  fs.renameSync(srcPath, newPath)
   return newPath
 }
 
@@ -745,6 +768,19 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
     sessionMeta,
     preferences: libConfig.preferences
   }
+}
+
+// Helper: update folderOrder entries when a folder is renamed or moved
+function updateFolderOrderPaths(oldRelPath: string, newRelPath: string): void {
+  const config = loadLibraryConfig()
+  if (!config.folderOrder || config.folderOrder.length === 0) return
+  let changed = false
+  config.folderOrder = config.folderOrder.map(id => {
+    if (id === oldRelPath) { changed = true; return newRelPath }
+    if (id.startsWith(oldRelPath + '/')) { changed = true; return newRelPath + id.slice(oldRelPath.length) }
+    return id
+  })
+  if (changed) saveLibraryConfig(config)
 }
 
 // Update folder display order: move folderId before/after targetId

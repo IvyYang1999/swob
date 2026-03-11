@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
-import { join } from 'path'
+import { join, dirname, basename, relative } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { exec } from 'child_process'
 import * as fs from 'fs'
@@ -33,7 +33,8 @@ import {
   resolveFolderPath,
   getLibraryRoot,
   migrateFromOldConfig,
-  reorderFolder
+  reorderFolder,
+  moveLibraryFolderToParent
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import type { SessionSummary } from './types'
@@ -358,17 +359,26 @@ ipcMain.handle(
   'config:moveFolder',
   (_event, folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => {
     if (libraryInitialized) {
+      const srcPath = resolveFolderPath(folderId)
+
       if (position && position !== 'inside' && targetId) {
-        // Reorder: move folder before/after target (sibling)
-        reorderFolder(folderId, targetId, position)
+        // Sibling reorder — may need physical move if parent differs
+        const targetPath = resolveFolderPath(targetId)
+        const targetParent = dirname(targetPath)
+        const srcParent = dirname(srcPath)
+
+        let newFolderId = folderId
+        if (srcParent !== targetParent && fs.existsSync(srcPath)) {
+          const newPath = moveLibraryFolderToParent(srcPath, targetParent)
+          newFolderId = relative(getLibraryRoot(), newPath)
+          scanLibrary()
+        }
+        reorderFolder(newFolderId, targetId, position)
       } else {
-        // Reparent: move folder into a new parent
-        const srcPath = resolveFolderPath(folderId)
+        // Move folder into a new parent
         const destParent = newParentId ? resolveFolderPath(newParentId) : getLibraryRoot()
-        const baseName = require('path').basename(srcPath)
-        const newPath = join(destParent, baseName)
-        if (srcPath !== newPath && fs.existsSync(srcPath)) {
-          fs.renameSync(srcPath, newPath)
+        if (fs.existsSync(srcPath)) {
+          moveLibraryFolderToParent(srcPath, destParent)
         }
       }
       const tree = scanLibrary()
@@ -459,18 +469,36 @@ ipcMain.handle(
     return new Promise((resolve) => {
       const template: Electron.MenuItemConstructorOptions[] = [
         { label: '重命名', click: () => resolve({ action: 'rename' }) },
-        { type: 'separator' }
       ]
-      if (data.folders.length > 0) {
-        for (const f of data.folders) {
+
+      const removeItems = data.folders.filter(f => f.isIn)
+      const addItems = data.folders.filter(f => !f.isIn)
+
+      if (removeItems.length > 0) {
+        template.push({ type: 'separator' })
+        for (const f of removeItems) {
           template.push({
-            label: f.isIn ? `从「${f.name}」移除` : `移入「${f.name}」`,
-            click: () => resolve({ action: f.isIn ? 'removeFromFolder' : 'addToFolder', folderId: f.id })
+            label: `从「${f.name}」移除`,
+            click: () => resolve({ action: 'removeFromFolder', folderId: f.id })
           })
         }
-      } else {
+      }
+
+      if (addItems.length > 0) {
+        template.push({ type: 'separator' })
+        for (const f of addItems) {
+          template.push({
+            label: `移入「${f.name}」`,
+            click: () => resolve({ action: 'addToFolder', folderId: f.id })
+          })
+        }
+      }
+
+      if (data.folders.length === 0) {
+        template.push({ type: 'separator' })
         template.push({ label: '还没有文件夹，先创建一个', enabled: false })
       }
+
       const menu = Menu.buildFromTemplate(template)
       const win = BrowserWindow.fromWebContents(event.sender)
       menu.popup({ window: win!, callback: () => resolve(null) })

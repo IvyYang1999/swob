@@ -419,18 +419,29 @@ export function deleteLibraryFolder(folderPath: string): void {
   // Only delete if it's a folder (no .swob-session.json)
   if (isSessionDir(folderPath)) return
 
-  // Move contained sessions back to library root before deleting
-  const { sessions } = scanDir(folderPath)
-  for (const s of sessions) {
+  // Recursively collect ALL sessions (including those in subfolders)
+  function collectAllSessions(dirPath: string): LibrarySession[] {
+    const result: LibrarySession[] = []
+    const { sessions, folders } = scanDir(dirPath)
+    result.push(...sessions)
+    for (const f of folders) {
+      result.push(...collectAllSessions(f.dirPath))
+    }
+    return result
+  }
+
+  const allSessions = collectAllSessions(folderPath)
+  for (const s of allSessions) {
     if (!s.isSymlink) {
       const baseName = path.basename(s.dirPath)
       const newName = findUniqueDirName(_root, baseName)
-      fs.renameSync(s.dirPath, path.join(_root, newName))
-      sessionIndex.set(s.sessionId, path.join(_root, newName))
+      const newPath = path.join(_root, newName)
+      fs.renameSync(s.dirPath, newPath)
+      sessionIndex.set(s.sessionId, newPath)
     }
   }
 
-  // Now delete the folder (which only has symlinks/empty subdirs left)
+  // Now delete the folder (only symlinks/empty subdirs remain)
   fs.rmSync(folderPath, { recursive: true, force: true })
 }
 

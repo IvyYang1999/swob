@@ -31,6 +31,7 @@ function ContextMenu({
   const { config, sessions, addSessionToFolder, removeSessionFromFolder } = useStore()
   // Resolve base sessionId for library folder operations
   const baseSessionId = sessions.find((s) => s.id === sessionId)?.sessionId || sessionId
+  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handler = () => onClose()
@@ -38,10 +39,23 @@ function ContextMenu({
     return () => document.removeEventListener('click', handler)
   }, [onClose])
 
+  // Adjust position to stay within viewport
+  const [pos, setPos] = useState({ left: x, top: y })
+  useEffect(() => {
+    const el = menuRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    let left = x, top = y
+    if (rect.bottom > window.innerHeight) top = Math.max(4, window.innerHeight - rect.height - 4)
+    if (rect.right > window.innerWidth) left = Math.max(4, window.innerWidth - rect.width - 4)
+    setPos({ left, top })
+  }, [x, y])
+
   return (
     <div
-      className="fixed z-50 bg-zinc-800 border border-zinc-600 rounded-md shadow-xl py-1 min-w-[180px]"
-      style={{ left: x, top: y }}
+      ref={menuRef}
+      className="fixed z-50 bg-zinc-800 border border-zinc-600 rounded-md shadow-xl py-1 min-w-[180px] max-h-[80vh] overflow-y-auto"
+      style={{ left: pos.left, top: pos.top }}
     >
       <button
         onClick={(e) => {
@@ -278,6 +292,7 @@ function FolderNode({
 }) {
   const { addSessionToFolder, deleteFolder, createFolder, moveFolder, resumeBatch } = useStore()
   const isExpanded = expandedFolders.has(folder.id)
+  const headerRef = useRef<HTMLDivElement>(null)
 
   // Child folders
   const childFolders = allFolders.filter((f) => f.parentId === folder.id)
@@ -304,11 +319,9 @@ function FolderNode({
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
       } else if (data.type === 'folder' && data.id && data.id !== folder.id) {
         if (zone === 'inside') {
-          // Drop inside: make child of this folder
           moveFolder(data.id, folder.id)
           if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
         } else {
-          // Drop before/after: make sibling (same parent as this folder)
           moveFolder(data.id, folder.parentId ?? null)
         }
       }
@@ -319,20 +332,32 @@ function FolderNode({
     e.preventDefault()
     e.stopPropagation()
     setDragOverFolderId(folder.id)
-    // Detect zone: top 25% = before, bottom 25% = after, middle = inside
-    const rect = e.currentTarget.getBoundingClientRect()
-    const y = e.clientY - rect.top
-    const ratio = y / rect.height
-    if (ratio < 0.25) setDragOverZone('before')
-    else if (ratio > 0.75) setDragOverZone('after')
-    else setDragOverZone('inside')
+    // Zone detection based on HEADER position, not the full wrapper
+    const headerRect = headerRef.current?.getBoundingClientRect()
+    if (headerRect) {
+      const y = e.clientY - headerRect.top
+      const h = headerRect.height
+      if (y < 0) {
+        setDragOverZone('before')
+      } else if (y > h) {
+        // Below header = in expanded content = "inside"
+        setDragOverZone('inside')
+      } else {
+        // Within header: top 30% = before, bottom 30% = after, middle = inside
+        const ratio = y / h
+        if (ratio < 0.3) setDragOverZone('before')
+        else if (ratio > 0.7) setDragOverZone('after')
+        else setDragOverZone('inside')
+      }
+    } else {
+      setDragOverZone('inside')
+    }
   }
 
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={(e) => {
-        // Only clear if leaving the folder entirely (not entering a child)
         if (!e.currentTarget.contains(e.relatedTarget as Node)) {
           setDragOverFolderId(null)
         }
@@ -341,6 +366,7 @@ function FolderNode({
     >
       {/* Folder header */}
       <div
+        ref={headerRef}
         draggable
         onDragStart={(e) => {
           e.dataTransfer.setData('application/x-swob', JSON.stringify({ type: 'folder', id: folder.id }))
@@ -607,6 +633,48 @@ export function Sidebar({ width }: { width: number }) {
     [config?.folders]
   )
 
+  // Auto-scroll during drag near edges
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const handleListDragOver = useCallback((e: React.DragEvent) => {
+    const el = scrollRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const y = e.clientY - rect.top
+    const edgeZone = 40 // px from edge to trigger scroll
+
+    if (y < edgeZone) {
+      // Near top — scroll up
+      const speed = Math.max(2, (edgeZone - y) / 2)
+      if (!scrollTimerRef.current) {
+        scrollTimerRef.current = setInterval(() => {
+          el.scrollTop -= speed
+        }, 16)
+      }
+    } else if (y > rect.height - edgeZone) {
+      // Near bottom — scroll down
+      const speed = Math.max(2, (y - (rect.height - edgeZone)) / 2)
+      if (!scrollTimerRef.current) {
+        scrollTimerRef.current = setInterval(() => {
+          el.scrollTop += speed
+        }, 16)
+      }
+    } else {
+      if (scrollTimerRef.current) {
+        clearInterval(scrollTimerRef.current)
+        scrollTimerRef.current = null
+      }
+    }
+  }, [])
+
+  const stopAutoScroll = useCallback(() => {
+    if (scrollTimerRef.current) {
+      clearInterval(scrollTimerRef.current)
+      scrollTimerRef.current = null
+    }
+  }, [])
+
   return (
     <div className="h-full flex flex-col bg-zinc-900 shrink-0" style={{ width }}>
       {/* Header */}
@@ -649,7 +717,14 @@ export function Sidebar({ width }: { width: number }) {
       )}
 
       {/* Scrollable list */}
-      <div className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto"
+        onDragOver={handleListDragOver}
+        onDragLeave={stopAutoScroll}
+        onDrop={stopAutoScroll}
+        onDragEnd={stopAutoScroll}
+      >
         {viewMode === 'flat' ? (
           <>
             <div className="px-3 py-2 text-[11px] text-zinc-500 uppercase tracking-wider">

@@ -5,3 +5,10 @@ body {
   padding: 0;
   overflow: hidden;
 }
+
+/* In-session search keyword highlighting (CSS Custom Highlight API) */
+::highlight(swob-search) {
+  background-color: #f59e0b;
+  color: #1c1917;
+  border-radius: 2px;
+}

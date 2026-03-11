@@ -467,42 +467,56 @@ function InSessionSearchBar({
   )
 }
 
-// --- Highlight search keywords in a container element ---
+// --- Highlight search keywords using CSS Custom Highlight API ---
+// Does NOT modify the DOM — works by telling the browser to paint ranges.
+// Immune to React re-renders.
 
-function useSearchHighlight(containerRef: React.RefObject<HTMLElement | null>, query: string) {
+// Inject highlight styles once (in case CSS minifier strips ::highlight)
+let _hlStyleInjected = false
+function ensureHighlightStyles() {
+  if (_hlStyleInjected) return
+  _hlStyleInjected = true
+  const style = document.createElement('style')
+  style.textContent = `::highlight(swob-search) { background-color: #f59e0b; color: #1c1917; }`
+  document.head.appendChild(style)
+}
+
+function useSearchHighlight(
+  containerRef: React.RefObject<HTMLElement | null>,
+  query: string,
+  _contentKey?: unknown
+) {
   useEffect(() => {
+    // @ts-expect-error CSS.highlights is a newer API
+    const highlights = CSS.highlights as Map<string, unknown> | undefined
+    if (!highlights) return
+    highlights.delete('swob-search')
+
     const el = containerRef.current
-    if (!el) return
-    // Clear previous highlights
-    el.querySelectorAll('mark[data-search-hl]').forEach(m => {
-      const parent = m.parentNode
-      if (parent) { parent.replaceChild(document.createTextNode(m.textContent || ''), m); parent.normalize() }
-    })
-    if (!query.trim()) return
+    if (!el || !query.trim()) return
+
+    ensureHighlightStyles()
+
     const q = query.toLowerCase()
+    const ranges: Range[] = []
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-    const matches: { node: Text; start: number }[] = []
-    let node: Text | null
-    while ((node = walker.nextNode() as Text | null)) {
-      const text = node.textContent?.toLowerCase() || ''
+    let textNode: Text | null
+    while ((textNode = walker.nextNode() as Text | null)) {
+      const text = textNode.textContent?.toLowerCase() || ''
       let idx = text.indexOf(q)
       while (idx !== -1) {
-        matches.push({ node, start: idx })
+        const range = new Range()
+        range.setStart(textNode, idx)
+        range.setEnd(textNode, idx + query.length)
+        ranges.push(range)
         idx = text.indexOf(q, idx + 1)
       }
     }
-    // Apply highlights in reverse so offsets remain valid
-    for (let i = matches.length - 1; i >= 0; i--) {
-      const { node: textNode, start } = matches[i]
-      const range = document.createRange()
-      range.setStart(textNode, start)
-      range.setEnd(textNode, start + query.length)
-      const mark = document.createElement('mark')
-      mark.setAttribute('data-search-hl', '')
-      mark.className = 'bg-amber-500/40 text-amber-200 rounded-sm'
-      range.surroundContents(mark)
+    if (ranges.length > 0) {
+      // @ts-expect-error Highlight constructor
+      highlights.set('swob-search', new Highlight(...ranges))
     }
-  }, [query, containerRef])
+  }, [query, containerRef, _contentKey])
 }
 
 // --- Session action bar ---
@@ -914,6 +928,14 @@ export function ChatViewer() {
     }
     setSearchMatches(matched)
     setCurrentMatchIdx(0)
+    // Auto-navigate to first match
+    if (matched.length > 0) {
+      const uuid = matched[0]
+      requestAnimationFrame(() => {
+        const el = contentRef.current?.querySelector(`#turn-${CSS.escape(uuid)}`)
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+    }
   }, [searchQuery, sections, selectedSession])
 
   // Navigate to current match
@@ -931,16 +953,19 @@ export function ChatViewer() {
       return
     }
 
-    const el = contentRef.current?.querySelector(`#turn-${CSS.escape(uuid)}`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    requestAnimationFrame(() => {
+      const el = contentRef.current?.querySelector(`#turn-${CSS.escape(uuid)}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
   }, [searchMatches, turnSectionMap, expandedSections])
 
   const searchNext = useCallback(() => navigateToMatch(currentMatchIdx + 1), [navigateToMatch, currentMatchIdx])
   const searchPrev = useCallback(() => navigateToMatch(currentMatchIdx - 1), [navigateToMatch, currentMatchIdx])
   const closeSearch = useCallback(() => { setSearchOpen(false); setSearchQuery('') }, [])
 
-  // Highlight search keywords in content
-  useSearchHighlight(contentRef, searchOpen ? searchQuery : '')
+  // Highlight search keywords in content — re-run when sections expand or view changes
+  const highlightContentKey = `${viewMode}-${expandedSections.size}-${sections.length}`
+  useSearchHighlight(contentRef, searchOpen ? searchQuery : '', highlightContentKey)
 
   // Build turn content map for TOC drag (turn UUID → markdown)
   const turnContentMap = useMemo(() => {

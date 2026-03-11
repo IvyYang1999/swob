@@ -153,7 +153,19 @@ function extractToolCalls(content: string | ContentPart[] | undefined): ToolCall
   if (!content || typeof content === 'string') return []
   return content
     .filter((p) => p.type === 'tool_use' && p.name)
-    .map((p) => ({ name: p.name!, input: (p.input as Record<string, unknown>) || {} }))
+    .map((p) => ({ id: p.id, name: p.name!, input: (p.input as Record<string, unknown>) || {} }))
+}
+
+function extractToolResultText(content: string | ContentPart[]): string {
+  if (typeof content === 'string') return content
+  return content
+    .map((p) => {
+      if (p.type === 'text' && p.text) return p.text
+      if (typeof p === 'string') return p
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
 }
 
 function extractSkillInvocations(toolCalls: ToolCallInfo[], timestamp: string): SkillInvocation[] {
@@ -407,6 +419,28 @@ export function buildSessionDetail(
         raw: m
       }
     })
+
+  // Pair tool results with tool calls
+  for (let i = 0; i < rawMessages.length; i++) {
+    const raw = rawMessages[i]
+    if (raw.type !== 'user' || !raw.message) continue
+    const content = raw.message.content
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (part.type === 'tool_result' && part.tool_use_id && part.content) {
+        const resultText = extractToolResultText(part.content)
+        if (!resultText) continue
+        // Find the matching tool call in any preceding assistant message
+        for (const msg of messages) {
+          const tc = msg.toolCalls.find((t) => t.id === part.tool_use_id)
+          if (tc) {
+            tc.result = resultText
+            break
+          }
+        }
+      }
+    }
+  }
 
   return { ...summary, messages }
 }

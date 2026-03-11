@@ -21,8 +21,9 @@ export interface ContentPart {
   type: string
   text?: string
   name?: string
+  id?: string // tool_use id
   input?: Record<string, unknown>
-  tool_use_id?: string
+  tool_use_id?: string // for tool_result, links to tool_use
   content?: string | ContentPart[]
 }
 
@@ -41,8 +42,10 @@ export interface ParsedMessage {
 }
 
 export interface ToolCallInfo {
+  id?: string
   name: string
   input: Record<string, unknown>
+  result?: string
 }
 
 export interface SkillInvocation {

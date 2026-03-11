@@ -1,9 +1,9 @@
-import { useRef, useState, useMemo } from 'react'
+import { useRef, useState, useMemo, useCallback } from 'react'
 import { useStore } from '../store'
-import { User, Bot, Terminal, ChevronDown, ChevronRight, AlertTriangle, History, GitBranch } from 'lucide-react'
+import { User, Bot, Terminal, ChevronDown, ChevronRight, History, GitBranch, Download } from 'lucide-react'
 import type { ParsedMessage } from '../store'
 
-type ToolCallInfo = { name: string; input: Record<string, unknown> }
+type ToolCallInfo = { id?: string; name: string; input: Record<string, unknown>; result?: string }
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -25,49 +25,23 @@ const TOOL_COLORS: Record<string, string> = {
 }
 const DEFAULT_TOOL_COLOR = 'bg-zinc-800/60 text-zinc-400 border-zinc-700/40'
 
-// --- Tool call detail block (for expanded view) ---
-
-function ToolCallDetail({ name, input }: { name: string; input: Record<string, unknown> }) {
-  const [expanded, setExpanded] = useState(false)
-  const color = TOOL_COLORS[name] || DEFAULT_TOOL_COLOR
-
-  let preview = ''
-  if (name === 'Bash' && input.command) preview = String(input.command).slice(0, 120)
-  else if ((name === 'Read' || name === 'Write' || name === 'Edit') && input.file_path) preview = String(input.file_path)
-  else if ((name === 'Grep' || name === 'Glob') && input.pattern) preview = String(input.pattern)
-  else if (name === 'Skill' && input.skill) preview = String(input.skill)
-  else if (name === 'Agent' && input.prompt) preview = String(input.prompt).slice(0, 80)
-
-  return (
-    <div className="border border-zinc-700/50 rounded-md bg-zinc-800/30">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full px-2.5 py-1.5 flex items-center gap-2 text-xs hover:bg-zinc-800/50 rounded-md transition-colors"
-      >
-        {expanded ? <ChevronDown size={11} className="text-zinc-500 shrink-0" /> : <ChevronRight size={11} className="text-zinc-500 shrink-0" />}
-        <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-mono shrink-0 ${color}`}>{name}</span>
-        {preview && <span className="truncate text-zinc-500 text-[11px] font-mono">{preview}</span>}
-      </button>
-      {expanded && (
-        <pre className="px-3 py-2 text-[11px] text-zinc-400 overflow-x-auto border-t border-zinc-700/50 max-h-64 overflow-y-auto font-mono">
-          {JSON.stringify(input, null, 2)}
-        </pre>
-      )}
-    </div>
-  )
+function getToolPreview(name: string, input: Record<string, unknown>): string {
+  if (name === 'Bash' && input.command) return String(input.command).slice(0, 120)
+  if ((name === 'Read' || name === 'Write' || name === 'Edit') && input.file_path) return String(input.file_path)
+  if ((name === 'Grep' || name === 'Glob') && input.pattern) return String(input.pattern)
+  if (name === 'Skill' && input.skill) return String(input.skill)
+  if (name === 'Agent' && input.prompt) return String(input.prompt).slice(0, 80)
+  return ''
 }
 
-// --- Superset-style tool call pill bar ---
+// --- Compact mode: Pill bar (summary line, click to expand details) ---
 
 function ToolCallPillBar({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   const [expanded, setExpanded] = useState(false)
 
-  // Aggregate by tool name, preserving order of first appearance
   const grouped = useMemo(() => {
     const map = new Map<string, number>()
-    for (const tc of toolCalls) {
-      map.set(tc.name, (map.get(tc.name) || 0) + 1)
-    }
+    for (const tc of toolCalls) map.set(tc.name, (map.get(tc.name) || 0) + 1)
     return map
   }, [toolCalls])
 
@@ -93,9 +67,9 @@ function ToolCallPillBar({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
         </div>
       </button>
       {expanded && (
-        <div className="mt-1 ml-5 space-y-1">
+        <div className="mt-1 ml-5 space-y-1.5">
           {toolCalls.map((tc, i) => (
-            <ToolCallDetail key={i} name={tc.name} input={tc.input} />
+            <ToolCallExpanded key={i} tc={tc} />
           ))}
         </div>
       )}
@@ -103,14 +77,92 @@ function ToolCallPillBar({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   )
 }
 
-// --- Turn grouping: 1 user message → 1 merged assistant response ---
+// --- Expanded tool call (used in compact mode when pill bar is expanded) ---
+
+function ToolCallExpanded({ tc }: { tc: ToolCallInfo }) {
+  const [showResult, setShowResult] = useState(false)
+  const color = TOOL_COLORS[tc.name] || DEFAULT_TOOL_COLOR
+  const preview = getToolPreview(tc.name, tc.input)
+
+  return (
+    <div className="border border-zinc-700/50 rounded-md bg-zinc-800/30">
+      <div className="px-2.5 py-1.5 flex items-center gap-2 text-xs">
+        <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-mono shrink-0 ${color}`}>{tc.name}</span>
+        {preview && <span className="truncate text-zinc-500 text-[11px] font-mono">{preview}</span>}
+      </div>
+      <pre className="px-3 py-2 text-[11px] text-zinc-400 overflow-x-auto border-t border-zinc-700/50 max-h-40 overflow-y-auto font-mono">
+        {JSON.stringify(tc.input, null, 2)}
+      </pre>
+      {tc.result && (
+        <>
+          <button
+            onClick={() => setShowResult(!showResult)}
+            className="w-full px-3 py-1 text-[11px] text-zinc-500 hover:text-zinc-400 border-t border-zinc-700/50 flex items-center gap-1"
+          >
+            {showResult ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+            Result ({tc.result.length > 200 ? `${Math.round(tc.result.length / 1024)}KB` : `${tc.result.length} chars`})
+          </button>
+          {showResult && (
+            <pre className="px-3 py-2 text-[11px] text-zinc-500 overflow-x-auto border-t border-zinc-700/30 max-h-48 overflow-y-auto font-mono bg-zinc-900/30">
+              {tc.result}
+            </pre>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// --- Full mode: scrollable code blocks, always visible ---
+
+function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
+  const color = TOOL_COLORS[tc.name] || DEFAULT_TOOL_COLOR
+  const preview = getToolPreview(tc.name, tc.input)
+
+  // Format input nicely based on tool type
+  let inputDisplay: string
+  if (tc.name === 'Bash' && tc.input.command) {
+    inputDisplay = String(tc.input.command)
+  } else if ((tc.name === 'Edit') && tc.input.old_string) {
+    inputDisplay = `File: ${tc.input.file_path || ''}\n\n--- old ---\n${tc.input.old_string}\n\n+++ new +++\n${tc.input.new_string || ''}`
+  } else if (tc.name === 'Write' && tc.input.content) {
+    inputDisplay = `File: ${tc.input.file_path || ''}\n\n${String(tc.input.content).slice(0, 2000)}`
+  } else if (tc.name === 'Read' && tc.input.file_path) {
+    inputDisplay = String(tc.input.file_path)
+  } else {
+    inputDisplay = JSON.stringify(tc.input, null, 2)
+  }
+
+  return (
+    <div className="my-1.5 border border-zinc-700/50 rounded-md bg-zinc-850/30 overflow-hidden">
+      <div className="px-2.5 py-1.5 flex items-center gap-2 bg-zinc-800/60 border-b border-zinc-700/40">
+        <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-mono shrink-0 ${color}`}>{tc.name}</span>
+        {preview && <span className="truncate text-zinc-500 text-[11px] font-mono">{preview}</span>}
+      </div>
+      <pre className="px-3 py-2 text-[11px] text-zinc-400 overflow-x-auto max-h-48 overflow-y-auto font-mono">
+        {inputDisplay}
+      </pre>
+      {tc.result && (
+        <>
+          <div className="px-2.5 py-1 text-[10px] text-zinc-500 bg-zinc-800/40 border-t border-zinc-700/40 font-medium">
+            Result
+          </div>
+          <pre className="px-3 py-2 text-[11px] text-zinc-500 overflow-x-auto max-h-48 overflow-y-auto font-mono bg-zinc-900/30">
+            {tc.result}
+          </pre>
+        </>
+      )}
+    </div>
+  )
+}
+
+// --- Turn grouping ---
 
 interface Turn {
   userMsg: ParsedMessage | null
   assistantMsgs: ParsedMessage[]
 }
 
-// Content segments within an assistant block
 interface Segment {
   type: 'text' | 'tools'
   text?: string
@@ -124,12 +176,11 @@ function groupIntoTurns(messages: ParsedMessage[]): Turn[] {
 
   for (const msg of messages) {
     if (msg.type === 'system') continue
-
     const hasText = msg.textContent.trim().length > 0
     const hasTools = msg.toolCalls.length > 0
 
     if (msg.type === 'user') {
-      if (!hasText) continue // skip tool_result user messages
+      if (!hasText) continue
       if (current) turns.push(current)
       current = { userMsg: msg, assistantMsgs: [] }
     } else if (msg.type === 'assistant') {
@@ -142,29 +193,23 @@ function groupIntoTurns(messages: ParsedMessage[]): Turn[] {
   return turns
 }
 
-// Build segments from merged assistant messages, merging consecutive tool-only segments
 function buildSegments(msgs: ParsedMessage[]): Segment[] {
   const segments: Segment[] = []
-
   for (const msg of msgs) {
     const hasText = msg.textContent.trim().length > 0
     const hasTools = msg.toolCalls.length > 0
-
     if (hasText) {
       segments.push({ type: 'text', text: msg.textContent, isSidechain: msg.isSidechain })
     }
-
     if (hasTools) {
       const prev = segments[segments.length - 1]
       if (prev && prev.type === 'tools') {
-        // Merge with previous tool segment
         prev.toolCalls!.push(...msg.toolCalls)
       } else {
         segments.push({ type: 'tools', toolCalls: [...msg.toolCalls], isSidechain: msg.isSidechain })
       }
     }
   }
-
   return segments
 }
 
@@ -177,6 +222,107 @@ interface CompactSection {
   messages: ParsedMessage[]
   isCurrent: boolean
   isSharedContext?: boolean
+}
+
+// --- Markdown export ---
+
+function turnToMarkdown(turn: Turn): string {
+  const lines: string[] = []
+
+  if (turn.userMsg) {
+    lines.push(`## Human\n`)
+    lines.push(turn.userMsg.textContent.trim())
+    lines.push('')
+  }
+
+  if (turn.assistantMsgs.length > 0) {
+    lines.push(`## Assistant\n`)
+    const segments = buildSegments(turn.assistantMsgs)
+    for (const seg of segments) {
+      if (seg.type === 'text') {
+        lines.push(seg.text!.trim())
+        lines.push('')
+      } else if (seg.type === 'tools') {
+        for (const tc of seg.toolCalls!) {
+          if (tc.name === 'Bash' && tc.input.command) {
+            lines.push(`\`\`\`bash`)
+            lines.push(`$ ${tc.input.command}`)
+            if (tc.result) lines.push(tc.result.slice(0, 2000))
+            lines.push(`\`\`\``)
+          } else if (tc.name === 'Read' && tc.input.file_path) {
+            lines.push(`> 📄 Read \`${tc.input.file_path}\``)
+          } else if (tc.name === 'Write' && tc.input.file_path) {
+            lines.push(`> ✏️ Write \`${tc.input.file_path}\``)
+            if (tc.input.content) {
+              lines.push(`\`\`\``)
+              lines.push(String(tc.input.content).slice(0, 1000))
+              lines.push(`\`\`\``)
+            }
+          } else if (tc.name === 'Edit' && tc.input.file_path) {
+            lines.push(`> ✏️ Edit \`${tc.input.file_path}\``)
+            if (tc.input.old_string) {
+              lines.push(`\`\`\`diff`)
+              lines.push(`- ${String(tc.input.old_string).split('\n').join('\n- ')}`)
+              lines.push(`+ ${String(tc.input.new_string || '').split('\n').join('\n+ ')}`)
+              lines.push(`\`\`\``)
+            }
+          } else if ((tc.name === 'Grep' || tc.name === 'Glob') && tc.input.pattern) {
+            lines.push(`> 🔍 ${tc.name} \`${tc.input.pattern}\``)
+            if (tc.result) {
+              lines.push(`\`\`\``)
+              lines.push(tc.result.slice(0, 1000))
+              lines.push(`\`\`\``)
+            }
+          } else if (tc.name === 'Agent') {
+            lines.push(`> 🤖 Agent: ${tc.input.prompt ? String(tc.input.prompt).slice(0, 100) : 'subagent'}`)
+            if (tc.result) {
+              lines.push(`\`\`\``)
+              lines.push(tc.result.slice(0, 2000))
+              lines.push(`\`\`\``)
+            }
+          } else {
+            lines.push(`> 🔧 ${tc.name}`)
+            lines.push(`\`\`\`json`)
+            lines.push(JSON.stringify(tc.input, null, 2).slice(0, 500))
+            lines.push(`\`\`\``)
+          }
+          lines.push('')
+        }
+      }
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function sessionToMarkdown(
+  title: string,
+  sections: CompactSection[]
+): string {
+  const lines: string[] = []
+  lines.push(`# ${title}\n`)
+
+  for (const section of sections) {
+    if (section.label) {
+      lines.push(`---\n### ${section.label}\n`)
+    }
+    const turns = groupIntoTurns(section.messages)
+    for (const turn of turns) {
+      lines.push(turnToMarkdown(turn))
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function downloadMarkdown(filename: string, content: string): void {
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // --- Turn block component ---
@@ -252,15 +398,15 @@ function TurnBlock({
                   </div>
                 )}
                 {seg.type === 'tools' && (
-                  viewMode === 'full'
-                    ? (
-                      <div className="space-y-1 my-1.5">
+                  viewMode === 'compact'
+                    ? <ToolCallPillBar toolCalls={seg.toolCalls!} />
+                    : (
+                      <div className="space-y-1.5 my-1.5">
                         {seg.toolCalls!.map((tc, j) => (
-                          <ToolCallDetail key={j} name={tc.name} input={tc.input} />
+                          <ToolCallFull key={j} tc={tc} />
                         ))}
                       </div>
                     )
-                    : <ToolCallPillBar toolCalls={seg.toolCalls!} />
                 )}
               </div>
             ))}
@@ -278,7 +424,6 @@ export function ChatViewer() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
 
-  // Split messages into compact sections
   const sections = useMemo<CompactSection[]>(() => {
     if (!selectedSession) return []
 
@@ -296,16 +441,12 @@ export function ChatViewer() {
 
     const boundaryIndices: number[] = []
     allMsgs.forEach((m, i) => {
-      if (m.type === 'system' && m.subtype === 'compact_boundary') {
-        boundaryIndices.push(i)
-      }
+      if (m.type === 'system' && m.subtype === 'compact_boundary') boundaryIndices.push(i)
     })
 
     const sharedSection: CompactSection[] = []
     if (sharedMsgs.length > 0) {
-      const filteredShared = sharedMsgs.filter((m) =>
-        m.type === 'user' || m.type === 'assistant'
-      )
+      const filteredShared = sharedMsgs.filter((m) => m.type === 'user' || m.type === 'assistant')
       if (filteredShared.length > 0) {
         const userCount = filteredShared.filter(m => m.type === 'user').length
         const asstCount = filteredShared.filter(m => m.type === 'assistant').length
@@ -323,7 +464,6 @@ export function ChatViewer() {
     }
 
     const result: CompactSection[] = []
-
     const firstSection = allMsgs.slice(0, boundaryIndices[0])
     if (firstSection.length > 0) {
       const userCount = firstSection.filter(m => m.type === 'user').length
@@ -359,15 +499,20 @@ export function ChatViewer() {
     return [...sharedSection, ...result]
   }, [selectedSession, viewMode])
 
-  // Reset expanded sections when session changes
   const sessionId = selectedSession?.id
   const prevSessionIdRef = useRef<string | null>(null)
   if (sessionId !== prevSessionIdRef.current) {
     prevSessionIdRef.current = sessionId ?? null
-    if (expandedSections.size > 0) {
-      setExpandedSections(new Set())
-    }
+    if (expandedSections.size > 0) setExpandedSections(new Set())
   }
+
+  const handleExportMarkdown = useCallback(() => {
+    if (!selectedSession || sections.length === 0) return
+    const title = selectedSession.firstUserMessage?.slice(0, 60) || selectedSession.sessionId
+    const md = sessionToMarkdown(title, sections)
+    const safeName = title.replace(/[^a-zA-Z0-9\u4e00-\u9fff_-]/g, '_').slice(0, 40)
+    downloadMarkdown(`${safeName}.md`, md)
+  }, [selectedSession, sections])
 
   if (!selectedSession) {
     return (
@@ -389,13 +534,9 @@ export function ChatViewer() {
         const isMatch = new RegExp(`^${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(part)
         return isMatch ? (
           <mark key={i} className="bg-yellow-500/40 text-yellow-200 rounded px-0.5">{part}</mark>
-        ) : (
-          part
-        )
+        ) : part
       })
-    } catch {
-      return text
-    }
+    } catch { return text }
   }
 
   const toggleSection = (idx: number) => {
@@ -421,6 +562,18 @@ export function ChatViewer() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {/* Export button */}
+      <div className="flex justify-end">
+        <button
+          onClick={handleExportMarkdown}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+          title="导出为 Markdown"
+        >
+          <Download size={12} />
+          <span>导出 MD</span>
+        </button>
+      </div>
+
       {sections.map((section, sIdx) => {
         if (section.isCurrent) {
           return (
@@ -439,7 +592,6 @@ export function ChatViewer() {
           )
         }
 
-        // Historical / shared context section: collapsible
         const isExpanded = expandedSections.has(sIdx)
         const isShared = section.isSharedContext
         const borderColor = isShared ? 'border-purple-600/30' : 'border-amber-600/30'

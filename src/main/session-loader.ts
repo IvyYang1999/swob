@@ -407,13 +407,16 @@ export function buildSessionDetail(
     .map((m) => {
       const originalIndex = rawMessages.indexOf(m)
       const toolCalls = m.message ? extractToolCalls(m.message.content) : []
+      const textContent = m.message ? extractText(m.message.content) : (m as any).content || ''
+      // Detect task-notification messages masquerading as user messages
+      const isTaskNotification = m.type === 'user' && textContent.trimStart().startsWith('<task-notification>')
       return {
         uuid: m.uuid,
         type: m.type as ParsedMessage['type'],
-        subtype: m.subtype,
+        subtype: isTaskNotification ? 'task-notification' : m.subtype,
         timestamp: m.timestamp,
         role: m.message?.role,
-        textContent: m.message ? extractText(m.message.content) : (m as any).content || '',
+        textContent,
         toolCalls,
         isPreCompact: lastCompactIndex >= 0 && originalIndex < lastCompactIndex,
         isSidechain: !!m.isSidechain,

@@ -183,12 +183,11 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
 
 // --- Turn block ---
 
-function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ, onSelectA, isSearchMatch, isCurrentSearchMatch }: {
+function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
   turn: Turn; viewMode: 'compact' | 'full'
   qSelected?: boolean; aSelected?: boolean
   selectMode?: boolean
   onSelectQ?: (uuid: string) => void; onSelectA?: (uuid: string) => void
-  isSearchMatch?: boolean; isCurrentSearchMatch?: boolean
 }) {
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
@@ -211,7 +210,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
   }, [turn.assistantMsgs])
 
   return (
-    <div id={turnId} className={`space-y-3 scroll-mt-0 relative ${isCurrentSearchMatch ? 'ring-1 ring-amber-500/40 rounded-lg bg-amber-950/10 p-2 -mx-2' : isSearchMatch ? 'bg-amber-950/5 rounded-lg p-2 -mx-2' : ''}`}>
+    <div id={turnId} className="space-y-3 scroll-mt-0 relative">
       {/* User message */}
       {turn.userMsg && (
         <div className={`group/user rounded-lg transition-colors ${qSelected ? 'bg-blue-950/25' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-zinc-600 pl-2' : ''}`}>
@@ -477,47 +476,11 @@ function ensureHighlightStyles() {
   if (_hlStyleInjected) return
   _hlStyleInjected = true
   const style = document.createElement('style')
-  style.textContent = `::highlight(swob-search) { background-color: #f59e0b; color: #1c1917; }`
+  style.textContent = `::highlight(swob-search) { background-color: rgba(245,158,11,0.35); color: inherit; } ::highlight(swob-search-current) { background-color: #f59e0b; color: #1c1917; }`
   document.head.appendChild(style)
 }
 
-function useSearchHighlight(
-  containerRef: React.RefObject<HTMLElement | null>,
-  query: string,
-  _contentKey?: unknown
-) {
-  useEffect(() => {
-    // @ts-expect-error CSS.highlights is a newer API
-    const highlights = CSS.highlights as Map<string, unknown> | undefined
-    if (!highlights) return
-    highlights.delete('swob-search')
-
-    const el = containerRef.current
-    if (!el || !query.trim()) return
-
-    ensureHighlightStyles()
-
-    const q = query.toLowerCase()
-    const ranges: Range[] = []
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-    let textNode: Text | null
-    while ((textNode = walker.nextNode() as Text | null)) {
-      const text = textNode.textContent?.toLowerCase() || ''
-      let idx = text.indexOf(q)
-      while (idx !== -1) {
-        const range = new Range()
-        range.setStart(textNode, idx)
-        range.setEnd(textNode, idx + query.length)
-        ranges.push(range)
-        idx = text.indexOf(q, idx + 1)
-      }
-    }
-    if (ranges.length > 0) {
-      // @ts-expect-error Highlight constructor
-      highlights.set('swob-search', new Highlight(...ranges))
-    }
-  }, [query, containerRef, _contentKey])
-}
+// useSearchHighlight is now integrated directly into ChatViewer's search effect
 
 // --- Session action bar ---
 
@@ -891,8 +854,9 @@ export function ChatViewer() {
   // --- In-session search ---
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchMatches, setSearchMatches] = useState<string[]>([]) // turn UUIDs with matches
+  const [searchMatchCount, setSearchMatchCount] = useState(0)
   const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
+  const searchRangesRef = useRef<Range[]>([])
 
   // Cmd+F to toggle search
   useEffect(() => {
@@ -906,66 +870,97 @@ export function ChatViewer() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // Compute matches when query changes
+  // Compute highlight ranges + match count when query or content changes
+  const highlightContentKey = `${viewMode}-${expandedSections.size}-${sections.length}`
   useEffect(() => {
-    if (!searchQuery.trim() || !selectedSession) {
-      setSearchMatches([])
+    // @ts-expect-error CSS.highlights
+    const highlights = CSS.highlights as Map<string, unknown> | undefined
+    if (!highlights) return
+    highlights.delete('swob-search')
+    highlights.delete('swob-search-current')
+    searchRangesRef.current = []
+
+    const el = contentRef.current
+    const q = (searchOpen ? searchQuery : '').trim().toLowerCase()
+    if (!el || !q) {
+      setSearchMatchCount(0)
       setCurrentMatchIdx(0)
       return
     }
-    const q = searchQuery.toLowerCase()
-    const matched: string[] = []
-    for (const section of sections) {
-      const turns = groupIntoTurns(section.messages)
-      for (const turn of turns) {
-        if (!turn.userMsg) continue
-        const userText = turn.userMsg.textContent.toLowerCase()
-        const assistantText = turn.assistantMsgs.map(m => m.textContent).join(' ').toLowerCase()
-        if (userText.includes(q) || assistantText.includes(q)) {
-          matched.push(turn.userMsg.uuid)
-        }
+
+    ensureHighlightStyles()
+
+    const ranges: Range[] = []
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    let textNode: Text | null
+    while ((textNode = walker.nextNode() as Text | null)) {
+      const text = textNode.textContent?.toLowerCase() || ''
+      let idx = text.indexOf(q)
+      while (idx !== -1) {
+        const range = new Range()
+        range.setStart(textNode, idx)
+        range.setEnd(textNode, idx + q.length)
+        ranges.push(range)
+        idx = text.indexOf(q, idx + 1)
       }
     }
-    setSearchMatches(matched)
-    setCurrentMatchIdx(0)
-    // Auto-navigate to first match
-    if (matched.length > 0) {
-      const uuid = matched[0]
+
+    searchRangesRef.current = ranges
+    setSearchMatchCount(ranges.length)
+
+    if (ranges.length > 0) {
+      // @ts-expect-error Highlight constructor
+      highlights.set('swob-search', new Highlight(...ranges))
+      // Highlight current match differently
+      // @ts-expect-error Highlight constructor
+      highlights.set('swob-search-current', new Highlight(ranges[0]))
+      setCurrentMatchIdx(0)
+      // Scroll to first match
       requestAnimationFrame(() => {
-        const el = contentRef.current?.querySelector(`#turn-${CSS.escape(uuid)}`)
-        el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        const rect = ranges[0].getBoundingClientRect()
+        const container = el
+        const containerRect = container.getBoundingClientRect()
+        container.scrollTop += rect.top - containerRect.top - containerRect.height / 2 + rect.height / 2
       })
+    } else {
+      setCurrentMatchIdx(0)
     }
-  }, [searchQuery, sections, selectedSession])
+  }, [searchQuery, searchOpen, highlightContentKey])
 
-  // Navigate to current match
+  // Navigate to Nth keyword match — scrolls the exact text range into center
   const navigateToMatch = useCallback((idx: number) => {
-    if (searchMatches.length === 0) return
-    const safeIdx = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length
+    const ranges = searchRangesRef.current
+    if (ranges.length === 0) return
+    const safeIdx = ((idx % ranges.length) + ranges.length) % ranges.length
     setCurrentMatchIdx(safeIdx)
-    const uuid = searchMatches[safeIdx]
 
-    // Auto-expand collapsed section if needed
-    const sIdx = turnSectionMap.get(uuid)
-    if (sIdx !== undefined && !expandedSections.has(sIdx)) {
-      setExpandedSections(prev => new Set([...prev, sIdx]))
-      pendingScrollRef.current = `turn-${uuid}`
-      return
+    // Update the "current match" highlight
+    // @ts-expect-error CSS.highlights
+    const highlights = CSS.highlights as Map<string, unknown> | undefined
+    if (highlights) {
+      // @ts-expect-error Highlight constructor
+      highlights.set('swob-search-current', new Highlight(ranges[safeIdx]))
     }
 
+    // Scroll so the matched text is centered in the viewport
+    const el = contentRef.current
+    if (!el) return
     requestAnimationFrame(() => {
-      const el = contentRef.current?.querySelector(`#turn-${CSS.escape(uuid)}`)
-      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const rect = ranges[safeIdx].getBoundingClientRect()
+      const containerRect = el.getBoundingClientRect()
+      el.scrollTop += rect.top - containerRect.top - containerRect.height / 2 + rect.height / 2
     })
-  }, [searchMatches, turnSectionMap, expandedSections])
+  }, [])
 
   const searchNext = useCallback(() => navigateToMatch(currentMatchIdx + 1), [navigateToMatch, currentMatchIdx])
   const searchPrev = useCallback(() => navigateToMatch(currentMatchIdx - 1), [navigateToMatch, currentMatchIdx])
-  const closeSearch = useCallback(() => { setSearchOpen(false); setSearchQuery('') }, [])
-
-  // Highlight search keywords in content — re-run when sections expand or view changes
-  const highlightContentKey = `${viewMode}-${expandedSections.size}-${sections.length}`
-  useSearchHighlight(contentRef, searchOpen ? searchQuery : '', highlightContentKey)
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    // @ts-expect-error CSS.highlights
+    const highlights = CSS.highlights as Map<string, unknown> | undefined
+    if (highlights) { highlights.delete('swob-search'); highlights.delete('swob-search-current') }
+  }, [])
 
   // Build turn content map for TOC drag (turn UUID → markdown)
   const turnContentMap = useMemo(() => {
@@ -1074,9 +1069,6 @@ export function ChatViewer() {
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [mdMode, turnSectionMap, expandedSections, sections])
 
-  const searchMatchSet = useMemo(() => new Set(searchMatches), [searchMatches])
-  const currentSearchUuid = searchMatches[currentMatchIdx] || null
-
   if (!selectedSession) {
     return (
       <div className="flex-1 flex items-center justify-center text-zinc-500">
@@ -1108,8 +1100,6 @@ export function ChatViewer() {
         selectMode={selectMode}
         onSelectQ={toggleSelectQ}
         onSelectA={toggleSelectA}
-        isSearchMatch={turn.userMsg ? searchMatchSet.has(turn.userMsg.uuid) : false}
-        isCurrentSearchMatch={turn.userMsg ? turn.userMsg.uuid === currentSearchUuid : false}
       />
     ))
   }
@@ -1145,7 +1135,7 @@ export function ChatViewer() {
             <InSessionSearchBar
               query={searchQuery}
               onQueryChange={setSearchQuery}
-              matchCount={searchMatches.length}
+              matchCount={searchMatchCount}
               currentMatch={currentMatchIdx}
               onNext={searchNext}
               onPrev={searchPrev}

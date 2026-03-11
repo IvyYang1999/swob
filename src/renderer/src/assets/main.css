@@ -8,7 +8,10 @@ body {
 
 /* In-session search keyword highlighting (CSS Custom Highlight API) */
 ::highlight(swob-search) {
+  background-color: rgba(245, 158, 11, 0.35);
+  color: inherit;
+}
+::highlight(swob-search-current) {
   background-color: #f59e0b;
   color: #1c1917;
-  border-radius: 2px;
 }

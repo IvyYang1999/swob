@@ -128,8 +128,8 @@ function SessionItem({
       draggable={!isRenaming}
       onDragStart={(e) => {
         e.dataTransfer.setData('application/x-swob', JSON.stringify({ type: 'session', id: session.id }))
-        // For external drop targets (Claude Code, etc.), provide the pre-generated md file path
-        const mdPath = useStore.getState().selectedSessionMdPath
+        // For external drop targets: provide the library transcript.md path
+        const mdPath = (session as any).libraryMdPath
         e.dataTransfer.setData('text/plain', mdPath || title)
         e.dataTransfer.effectAllowed = 'copyMove'
       }}

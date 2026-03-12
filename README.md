@@ -1,8 +1,12 @@
-# Swob — Browse, Search & Resume Your Claude Code Sessions
+<p align="center">
+  <img src="docs/banner.png" alt="Swob" width="100%">
+</p>
 
-> AI forgets (compact). You don't.
-
-A native macOS app that turns your Claude Code conversations into a browsable, searchable, annotatable archive. If you vibe-code from `~` and have 100+ sessions piled up with no organization — Swob is for you.
+<p align="center">
+  <strong>AI forgets (compact). You don't.</strong><br>
+  A native macOS app that turns your Claude Code conversations into a browsable, searchable, annotatable archive.<br>
+  If you vibe-code from <code>~</code> and have 100+ sessions piled up with no organization — Swob is for you.
+</p>
 
 ![Swob Screenshot](docs/screenshot.png)
 

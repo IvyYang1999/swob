@@ -1,4 +1,4 @@
-# Swob — Never Lose a Claude Code Conversation Again
+# Swob — Browse, Search & Resume Your Claude Code Sessions
 
 > AI forgets (compact). You don't.
 

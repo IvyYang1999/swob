@@ -4,13 +4,16 @@
 
 <p align="center">
   <strong>AI forgets (compact). You don't.</strong><br>
-  A native macOS app that turns your Claude Code conversations into a browsable, searchable, annotatable archive.<br>
+  A native macOS desktop app to browse, search, and manage your Claude Code conversation history.<br>
+  View pre-compact messages, highlight key insights, and resume any session — all from a visual GUI.<br>
   If you vibe-code from <code>~</code> and have 100+ sessions piled up with no organization — Swob is for you.
 </p>
 
 ![Swob Screenshot](docs/screenshot.png)
 
 ## Why Swob
+
+Claude Code stores conversations as JSONL files in `~/.claude/projects/`, but there's no built-in way to browse, search, or organize them visually. The `/resume` command only shows recent sessions, and compact discards your conversation context. Swob solves this:
 
 - **Pre-compact recovery** — Compact summaries collapse the full conversation, but Swob preserves and displays the original messages. Expand any compact section to see what was lost.
 - **Highlight & annotate** — Select any text in a conversation to bookmark it. All highlights are collected in the sidebar — your personal knowledge trail across sessions.
@@ -88,11 +91,20 @@ npm run build:mac    # produces .dmg in dist/
 ## Requirements
 
 - macOS (Apple Silicon or Intel)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed (Swob reads session files from `~/.claude/projects/`)
+
+## How It Works
+
+Swob reads the JSONL conversation logs that Claude Code stores on disk. It parses session files, detects multi-file continuations and branches, reconstructs pre-compact history, and presents everything in a visual interface. Your data stays local — Swob never uploads anything.
 
 ## Tech Stack
 
 Electron + React 19 + TypeScript + Zustand + Tailwind CSS 4, built with electron-vite.
+
+## Related
+
+- [claude --resume](https://docs.anthropic.com/en/docs/claude-code) — Built-in session resume (limited to recent sessions)
+- [awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code) — Curated list of Claude Code tools
 
 ## License
 

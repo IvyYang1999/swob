@@ -1,4 +1,4 @@
-# Swob — A Desktop GUI for Your Claude Code Sessions
+# Swob — Never Lose a Claude Code Conversation Again
 
 > AI forgets (compact). You don't.
 

@@ -7,6 +7,7 @@ import {
   List, Code2, CheckSquare,
   Search, X, ArrowUp, ArrowDown, Highlighter, Trash2
 } from 'lucide-react'
+import { useT } from '../i18n'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
 import {
   computeSections,
@@ -19,8 +20,8 @@ import {
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+function formatTime(iso: string, locale: string = 'zh-CN'): string {
+  return new Date(iso).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
 }
 
 // --- Tool color palette ---
@@ -189,6 +190,8 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
   selectMode?: boolean
   onSelectQ?: (uuid: string) => void; onSelectA?: (uuid: string) => void
 }) {
+  const t = useT()
+  const locale = useStore((s) => s.locale)
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
   const turnId = turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined
@@ -227,18 +230,18 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-zinc-400">User</span>
-                <span className="text-[11px] text-zinc-600">{formatTime(turn.userMsg.timestamp)}</span>
+                <span className="text-[11px] text-zinc-600">{formatTime(turn.userMsg.timestamp, locale)}</span>
                 <button
                   onClick={copyQuery}
                   className="opacity-0 group-hover/user:opacity-100 transition-opacity p-0.5 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300"
-                  title="复制问题"
+                  title={t('chat.copy_question')}
                 >
                   {copiedQ ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                 </button>
               </div>
               {turn.userMsg.textContent.startsWith(COMPACT_SUMMARY_PREFIX) ? (
                 <div className="text-sm text-zinc-200 border-l-2 border-amber-600/50 pl-3">
-                  <div className="text-[10px] text-amber-500 mb-1 font-medium">Compact 上下文摘要</div>
+                  <div className="text-[10px] text-amber-500 mb-1 font-medium">{t('chat.compact_summary')}</div>
                   <div className="whitespace-pre-wrap break-words leading-relaxed max-h-48 overflow-y-auto">
                     {turn.userMsg.textContent.slice(COMPACT_SUMMARY_PREFIX.length).trim()}
                   </div>
@@ -269,12 +272,12 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-zinc-400">Assistant</span>
-                <span className="text-[11px] text-zinc-600">{formatTime(turn.assistantMsgs[0].timestamp)}</span>
+                <span className="text-[11px] text-zinc-600">{formatTime(turn.assistantMsgs[0].timestamp, locale)}</span>
                 {hasSidechain && <span className="text-[10px] px-1 py-0.5 rounded bg-zinc-700 text-zinc-500">rejected</span>}
                 <button
                   onClick={copyResponse}
                   className="opacity-0 group-hover/assistant:opacity-100 transition-opacity p-0.5 rounded hover:bg-zinc-700/50 text-zinc-500 hover:text-zinc-300"
-                  title="复制回答"
+                  title={t('chat.copy_answer')}
                 >
                   {copiedA ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
                 </button>
@@ -299,10 +302,10 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
 
 // --- View mode config ---
 
-const VIEW_MODES: { mode: ViewMode; label: string }[] = [
-  { mode: 'compact', label: '精简' },
-  { mode: 'full', label: '完整' },
-  { mode: 'markdown', label: 'MD' },
+const VIEW_MODES: { mode: ViewMode; labelKey: string }[] = [
+  { mode: 'compact', labelKey: 'chat.compact' },
+  { mode: 'full', labelKey: 'chat.full' },
+  { mode: 'markdown', labelKey: 'chat.md' },
 ]
 
 // --- Resizable TOC Sidebar ---
@@ -315,6 +318,7 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap, high
   turnContentMap?: Map<string, string>
   highlightedTurnUuids?: Set<string>
 }) {
+  const t = useT()
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
 
@@ -362,7 +366,7 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap, high
     <div className="shrink-0 flex" style={{ width }}>
       <div className="flex-1 overflow-y-auto bg-zinc-900/80 border-r border-zinc-800">
         <div className="px-3 py-2 text-[11px] text-zinc-500 font-medium uppercase tracking-wide border-b border-zinc-800">
-          目录
+          {t('chat.toc')}
         </div>
         <div className="py-1">
           {groups.map((group, gi) => {
@@ -426,6 +430,7 @@ function InSessionSearchBar({
   matchCount: number; currentMatch: number
   onNext: () => void; onPrev: () => void; onClose: () => void
 }) {
+  const t = useT()
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -449,7 +454,7 @@ function InSessionSearchBar({
         ref={inputRef}
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}
-        placeholder="搜索..."
+        placeholder={t('chat.search_placeholder')}
         className="w-48 bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
       />
       {query && (
@@ -458,14 +463,14 @@ function InSessionSearchBar({
         </span>
       )}
       <div className="flex items-center gap-0.5 ml-1">
-        <button onClick={onPrev} disabled={matchCount === 0} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 disabled:hover:bg-transparent" title="上一个 (Shift+Enter)">
+        <button onClick={onPrev} disabled={matchCount === 0} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 disabled:hover:bg-transparent" title={t('chat.prev_match')}>
           <ArrowUp size={14} />
         </button>
-        <button onClick={onNext} disabled={matchCount === 0} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 disabled:hover:bg-transparent" title="下一个 (Enter)">
+        <button onClick={onNext} disabled={matchCount === 0} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 disabled:hover:bg-transparent" title={t('chat.next_match')}>
           <ArrowDown size={14} />
         </button>
       </div>
-      <button onClick={onClose} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 ml-0.5" title="关闭 (Esc)">
+      <button onClick={onClose} className="p-1 rounded hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200 ml-0.5" title={t('chat.close_esc')}>
         <X size={14} />
       </button>
     </div>
@@ -542,6 +547,7 @@ function SessionBar({
   onToggleSearch: () => void
 }) {
   const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, config } = useStore()
+  const t = useT()
   const [copied, setCopied] = useState(false)
 
   const handleCopyMd = useCallback(() => {
@@ -560,7 +566,7 @@ function SessionBar({
     <div className="h-9 flex items-center justify-between px-3 border-b border-zinc-800 bg-zinc-900/60 shrink-0">
       <div className="flex items-center gap-2">
         <div className="flex items-center bg-zinc-800 rounded-md border border-zinc-700 overflow-hidden">
-          {VIEW_MODES.map(({ mode, label }) => (
+          {VIEW_MODES.map(({ mode, labelKey }) => (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
@@ -570,7 +576,7 @@ function SessionBar({
                   : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700/50'
               }`}
             >
-              {label}
+              {t(labelKey)}
             </button>
           ))}
         </div>
@@ -578,7 +584,7 @@ function SessionBar({
         <button
           onClick={onToggleToc}
           className={`p-1 rounded transition-colors ${tocOpen ? 'text-zinc-200 bg-zinc-700' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
-          title="目录"
+          title={t('chat.toc')}
         >
           <List size={13} />
         </button>
@@ -586,7 +592,7 @@ function SessionBar({
         <button
           onClick={onToggleSearch}
           className={`p-1 rounded transition-colors ${searchOpen ? 'text-zinc-200 bg-zinc-700' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
-          title="对话内搜索 (Cmd+F)"
+          title={t('chat.search_session')}
         >
           <Search size={13} />
         </button>
@@ -595,7 +601,7 @@ function SessionBar({
           <button
             onClick={onToggleSelectMode}
             className={`p-1 rounded transition-colors ${selectMode ? 'text-blue-300 bg-blue-800/50' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
-            title="多选模式"
+            title={t('chat.multi_select')}
           >
             <CheckSquare size={13} />
           </button>
@@ -605,7 +611,7 @@ function SessionBar({
           <button
             onClick={onToggleSource}
             className={`p-1 rounded transition-colors ${sourceView ? 'text-zinc-200 bg-zinc-700' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
-            title={sourceView ? '预览' : '源码'}
+            title={sourceView ? t('chat.preview') : t('chat.source')}
           >
             <Code2 size={13} />
           </button>
@@ -618,13 +624,13 @@ function SessionBar({
           className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
         >
           {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
-          <span>{copied ? '已复制' : '复制'}</span>
+          <span>{copied ? t('chat.copied') : t('chat.copy')}</span>
         </button>
 
         <button
           onClick={downloadSessionMarkdown}
           className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300"
-          title="下载 MD"
+          title={t('chat.download_md')}
         >
           <Download size={13} />
         </button>
@@ -653,14 +659,14 @@ function SessionBar({
 
 // --- Helper: generate session header markdown ---
 
-function sessionHeaderMd(session: SessionDetail, customTitle?: string): string {
+function sessionHeaderMd(session: SessionDetail, t: (key: string, params?: Record<string, string | number>) => string, locale: string, customTitle?: string): string {
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId
-  const created = new Date(session.createdAt).toLocaleString('zh-CN')
+  const created = new Date(session.createdAt).toLocaleString(locale)
   const toolSummary = Object.entries(session.toolUsage)
     .sort(([, a], [, b]) => b - a).slice(0, 6)
     .map(([name, count]) => `${name}(${count})`).join(', ')
   const lines = [`# ${title}\n`]
-  lines.push(`> ${created} | ${session.turnCount} 轮对话`)
+  lines.push(`> ${created} | ${t('chat.turns_count', { n: session.turnCount })}`)
   if (toolSummary) lines.push(`> Tools: ${toolSummary}`)
   lines.push('')
   return lines.join('\n')
@@ -674,7 +680,9 @@ function SourceView({ session, sections, customTitle, contentRef }: {
   customTitle?: string
   contentRef: React.RefObject<HTMLDivElement | null>
 }) {
-  const headerMd = useMemo(() => sessionHeaderMd(session, customTitle), [session, customTitle])
+  const t = useT()
+  const locale = useStore((s) => s.locale)
+  const headerMd = useMemo(() => sessionHeaderMd(session, t, locale, customTitle), [session, t, locale, customTitle])
 
   return (
     <div ref={contentRef} className="flex-1 overflow-y-auto">
@@ -682,7 +690,7 @@ function SourceView({ session, sections, customTitle, contentRef }: {
         <pre className="text-[12px] font-mono text-zinc-400 whitespace-pre-wrap leading-relaxed mb-2">{headerMd}</pre>
         {sections.map((section, sIdx) => {
           const sectionHeader = section.isCurrent && sections.length > 1
-            ? '## 当前对话\n'
+            ? `## ${t('chat.current_section')}\n`
             : section.label ? `## ${section.label}\n` : ''
           const turns = groupIntoTurns(section.messages)
           return (
@@ -717,7 +725,9 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
   customTitle?: string
   contentRef: React.RefObject<HTMLDivElement | null>
 }) {
-  const headerMd = useMemo(() => sessionHeaderMd(session, customTitle), [session, customTitle])
+  const t = useT()
+  const locale = useStore((s) => s.locale)
+  const headerMd = useMemo(() => sessionHeaderMd(session, t, locale, customTitle), [session, t, locale, customTitle])
 
   return (
     <div ref={contentRef} className="flex-1 overflow-y-auto">
@@ -725,7 +735,7 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
         <DocMarkdown content={headerMd} tocEntries={[]} />
         {sections.map((section, sIdx) => {
           const sectionHeader = section.isCurrent && sections.length > 1
-            ? '## 当前对话'
+            ? `## ${t('chat.current_section')}`
             : section.label ? `## ${section.label}` : ''
           const turns = groupIntoTurns(section.messages)
           return (
@@ -756,6 +766,7 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
 
 export function ChatViewer() {
   const { selectedSession, viewMode, config, addHighlight, removeHighlight } = useStore()
+  const t = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
   const [tocOpen, setTocOpen] = useState(true)
@@ -1302,7 +1313,7 @@ export function ChatViewer() {
       <div className="flex-1 flex items-center justify-center text-zinc-500">
         <div className="text-center">
           <div className="text-4xl mb-3">💬</div>
-          <div className="text-zinc-400">选择一个 Session 查看对话</div>
+          <div className="text-zinc-400">{t('chat.select_session')}</div>
         </div>
       </div>
     )
@@ -1375,15 +1386,15 @@ export function ChatViewer() {
           {/* Batch action bar */}
           {selectMode && selectedCount > 0 && !mdMode && (
             <div className="h-8 flex items-center gap-2 px-3 bg-blue-950/50 border-b border-blue-800/40 shrink-0">
-              <span className="text-[11px] text-blue-400">已选 {selectedCount} 项</span>
+              <span className="text-[11px] text-blue-400">{t('chat.selected_count', { n: selectedCount })}</span>
               <button onClick={handleBatchExport} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
-                <Copy size={10} /> 复制
+                <Copy size={10} /> {t('chat.copy')}
               </button>
               <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
-                <Download size={10} /> 下载 MD
+                <Download size={10} /> {t('chat.download_md')}
               </button>
               <button onClick={() => { setSelectedItems(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-zinc-500 hover:text-zinc-300">
-                取消
+                {t('chat.cancel')}
               </button>
             </div>
           )}
@@ -1403,7 +1414,7 @@ export function ChatViewer() {
                     {sections.length > 1 && (
                       <div className="sticky top-0 z-10 flex items-center gap-3 py-2 bg-zinc-900/95 backdrop-blur-sm -mx-4 px-4">
                         <div className="flex-1 border-t border-emerald-600/50" />
-                        <span className="text-emerald-500 text-xs px-3 py-1 bg-emerald-900/20 rounded-full">当前对话</span>
+                        <span className="text-emerald-500 text-xs px-3 py-1 bg-emerald-900/20 rounded-full">{t('chat.current_section')}</span>
                         <div className="flex-1 border-t border-emerald-600/50" />
                       </div>
                     )}
@@ -1456,10 +1467,10 @@ export function ChatViewer() {
                 onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onClick={handleAddHighlight}
                 className="flex items-center gap-1 px-2.5 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs rounded-lg shadow-xl transition-colors"
-                title="划线收藏"
+                title={t('chat.highlight_title')}
               >
                 <Highlighter size={13} />
-                <span>划线</span>
+                <span>{t('chat.highlight')}</span>
               </button>
             </div>
           )}

@@ -4,6 +4,8 @@ A desktop app for browsing, searching, and organizing your [Claude Code](https:/
 
 Claude Code stores every conversation as JSONL files on disk. Swob turns them into a visual, searchable archive — so you can revisit past sessions, find that one command you ran last week, and pick up right where you left off.
 
+![Swob Screenshot](docs/screenshot.png)
+
 ## Features
 
 **Browse & Organize**

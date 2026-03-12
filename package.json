@@ -2,6 +2,8 @@
   "name": "claude-session-manager",
   "version": "1.0.0",
   "description": "Visual session manager for Claude Code",
+  "license": "AGPL-3.0-only",
+  "author": "IvyYang1999",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

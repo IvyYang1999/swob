@@ -1,4 +1,4 @@
-# Swob — Visual Workbench for Claude Code Sessions
+# Swob — Browse, Search & Resume Your Claude Code Sessions
 
 > AI forgets (compact). You don't.
 
@@ -11,6 +11,7 @@ Claude Code conversations disappear after compact. Swob brings them back — bro
 - **Pre-compact recovery** — Compact summaries collapse the full conversation, but Swob preserves and displays the original messages. Expand any compact section to see what was lost.
 - **Highlight & annotate** — Select any text in a conversation to bookmark it. All highlights are collected in the sidebar — your personal knowledge trail across sessions.
 - **One-click resume** — Click any session to reopen it in Terminal (`claude --resume`). Batch resume an entire folder at once. Working directory and permission mode are preserved automatically.
+- **Drag as context** — Every session is auto-exported as a Markdown file. Drag it directly into another Claude Code conversation as context — carry knowledge across sessions.
 
 ## Features
 

@@ -1,40 +1,68 @@
-# Swob
+# Swob — Visual Workbench for Claude Code Sessions
 
-A desktop app for browsing, searching, and organizing your [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions.
+> AI forgets (compact). You don't.
 
-Claude Code stores every conversation as JSONL files on disk. Swob turns them into a visual, searchable archive — so you can revisit past sessions, find that one command you ran last week, and pick up right where you left off.
+Claude Code conversations disappear after compact. Swob brings them back — browse pre-compact history, highlight key insights, and resume any session with one click.
 
 ![Swob Screenshot](docs/screenshot.png)
 
+## Why Swob
+
+- **Pre-compact recovery** — Compact summaries collapse the full conversation, but Swob preserves and displays the original messages. Expand any compact section to see what was lost.
+- **Highlight & annotate** — Select any text in a conversation to bookmark it. All highlights are collected in the sidebar — your personal knowledge trail across sessions.
+- **One-click resume** — Click any session to reopen it in Terminal (`claude --resume`). Batch resume an entire folder at once. Working directory and permission mode are preserved automatically.
+
 ## Features
 
-**Browse & Organize**
+<details>
+<summary><strong>Browse & Organize</strong></summary>
+
 - Tree view with nested folders, drag-and-drop, and custom titles
-- Three view modes: Compact (hide tool noise), Full (everything), and Markdown (exportable)
-- Right sidebar shows session metadata, file operations, tool usage stats, and skill invocations
+- Three view modes: Compact (hide tool noise), Full (everything), and Markdown (clean export)
+- Branch detection: auto-merges continuation sessions, separates concurrent branches
+- Sidechain (rejected plan) marking with dimmed display
+- Right sidebar: session metadata, file operations tree, tool usage stats, skill invocations
 
-**Search**
+</details>
+
+<details>
+<summary><strong>Search</strong></summary>
+
 - Global full-text search across all sessions (⌘K)
-- In-session keyword search (⌘F) with precise highlighting and navigation
-- Keywords inside collapsed compact sections or height-limited blocks are auto-revealed
+- In-session keyword search (⌘F) with precise highlighting and match-by-match navigation
+- Auto-reveals matches inside collapsed compact sections
+- Regex support
 
-**Highlight & Annotate**
+</details>
+
+<details>
+<summary><strong>Highlight & Annotate</strong></summary>
+
 - Select any text and click "Highlight" to bookmark it
-- All highlights are listed in the right sidebar — click to jump back
+- Highlights listed in right sidebar — click to jump back
 - TOC entries with highlights get a green dot marker
+- Powered by CSS Custom Highlight API — zero DOM mutation, fully React-compatible
 
-**Resume Sessions**
-- One-click resume in Terminal or iTerm2 (`claude --resume`)
-- Batch resume multiple sessions at once
-- Respects permission mode and working directory
+</details>
 
-**Library System**
+<details>
+<summary><strong>Resume Sessions</strong></summary>
+
+- One-click resume in Terminal or iTerm2
+- Batch resume: reopen all sessions in a folder
+- Respects `--dangerously-skip-permissions` mode
+- Auto-cd to the correct working directory
+
+</details>
+
+<details>
+<summary><strong>Library</strong></summary>
+
 - Auto-syncs from `~/.claude/projects/` via file watcher
-- Each session gets a directory in `~/Documents/Swob/` with:
-  - `transcript.md` — readable Markdown transcript
-  - `backup.jsonl` — full conversation backup
-  - `.swob-session.json` — metadata (title, notes, highlights)
+- Each session is backed up to `~/Documents/Swob/` with readable Markdown transcript
 - Native file drag-and-drop (drag a session to Finder, Notes, etc.)
+
+</details>
 
 ## Install
 
@@ -48,20 +76,14 @@ Download the latest `.dmg` from [Releases](https://github.com/IvyYang1999/swob/r
 git clone https://github.com/IvyYang1999/swob.git
 cd swob
 npm install
-npm run build
+npm run dev          # development with hot reload
 npm run build:mac    # produces .dmg in dist/
-```
-
-For development with hot reload:
-
-```bash
-npm run dev
 ```
 
 ## Requirements
 
-- macOS (Electron, Apple Silicon or Intel)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed (Swob reads its session files)
+- macOS (Apple Silicon or Intel)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
 
 ## Tech Stack
 

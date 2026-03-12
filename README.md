@@ -1,8 +1,8 @@
-# Swob — Browse, Search & Resume Your Claude Code Sessions
+# Swob — A Desktop GUI for Your Claude Code Sessions
 
 > AI forgets (compact). You don't.
 
-Claude Code conversations disappear after compact. Swob brings them back — browse pre-compact history, highlight key insights, and resume any session with one click.
+A native macOS app that turns your Claude Code conversations into a browsable, searchable, annotatable archive. If you vibe-code from `~` and have 100+ sessions piled up with no organization — Swob is for you.
 
 ![Swob Screenshot](docs/screenshot.png)
 

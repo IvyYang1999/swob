@@ -1,20 +1,21 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useStore, type SessionSummary, type Folder } from '../store'
+import { useT } from '../i18n'
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2, List, FolderTree,
   Plus, Play, Pencil
 } from 'lucide-react'
 
-function formatDate(iso: string): string {
+function formatDate(iso: string, locale: string, t: (key: string, params?: Record<string, string | number>) => string): string {
   const d = new Date(iso)
   const now = new Date()
   const diff = now.getTime() - d.getTime()
   const days = Math.floor(diff / 86400000)
-  if (days === 0) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  if (days === 1) return '昨天'
-  if (days < 7) return `${days}天前`
-  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  if (days === 0) return d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+  if (days === 1) return t('sidebar.yesterday')
+  if (days < 7) return t('sidebar.days_ago', { n: days })
+  return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 }
 
 // ============ Session Item ============
@@ -30,7 +31,8 @@ function SessionItem({
   onRenameSubmit?: () => void; onRenameCancel?: () => void
   onDoubleClickRename?: (sessionId: string) => void
 }) {
-  const { selectedUniqueId, selectSession, config, resumedSessionIds } = useStore()
+  const { selectedUniqueId, selectSession, config, resumedSessionIds, locale } = useStore()
+  const t = useT()
   const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
@@ -84,13 +86,13 @@ function SessionItem({
         />
       ) : (
         <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
-          {isResumed && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title="已在终端打开" />}
+          {isResumed && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title={t('sidebar.opened_in_terminal')} />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
       )}
       <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500">
-        <Clock size={10} /><span>{formatDate(session.updatedAt)}</span>
-        <MessageSquare size={10} /><span>{session.turnCount}轮</span>
+        <Clock size={10} /><span>{formatDate(session.updatedAt, locale, t)}</span>
+        <MessageSquare size={10} /><span>{t('sidebar.turns', { n: session.turnCount })}</span>
         {session.compactCount > 0 && (
           <span className="px-1 bg-amber-900/50 text-amber-400 rounded text-[10px]">compact</span>
         )}
@@ -105,13 +107,14 @@ function InlineNewFolder({ depth, onSubmit, onCancel }: {
   depth: number; onSubmit: (name: string) => void; onCancel: () => void
 }) {
   const [value, setValue] = useState('')
+  const t = useT()
   return (
     <div style={{ paddingLeft: `${depth * 16 + 12}px` }} className="pr-3 py-1">
       <input autoFocus value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && value.trim()) onSubmit(value.trim()); if (e.key === 'Escape') onCancel() }}
         onBlur={() => { if (value.trim()) onSubmit(value.trim()); else onCancel() }}
-        placeholder="子文件夹名称"
+        placeholder={t('sidebar.subfolder_name')}
         className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400"
       />
     </div>
@@ -146,6 +149,7 @@ function FolderNode({
   onDoubleClickRenameSession: (sessionId: string) => void
 }) {
   const { addSessionToFolder, deleteFolder, createFolder, moveFolder, resumeBatch } = useStore()
+  const t = useT()
   const isExpanded = expandedFolders.has(folder.id)
   const headerRef = useRef<HTMLDivElement>(null)
   const childFolders = allFolders.filter((f) => f.parentId === folder.id)
@@ -221,12 +225,12 @@ function FolderNode({
         )}
         {folderSessions.length > 0 && (
           <button onClick={(e) => { e.stopPropagation(); resumeBatch(folderSessions.map((s) => ({ sessionId: (s as any).sessionId || s.id, permissionMode: (s as any).permissionMode, cwd: (s as any).cwds?.[0] }))) }}
-            className="hidden group-hover:block p-0.5 hover:text-green-400" title={`批量 Resume ${folderSessions.length} 个对话`}><Play size={12} /></button>
+            className="hidden group-hover:block p-0.5 hover:text-green-400" title={t('sidebar.batch_resume', { n: folderSessions.length })}><Play size={12} /></button>
         )}
         <button onClick={(e) => { e.stopPropagation(); setCreatingSubfolderId(folder.id); if (!isExpanded) toggleFolder(folder.id) }}
-          className="hidden group-hover:block p-0.5 hover:text-blue-400" title="新建子文件夹"><Plus size={12} /></button>
-        <button onClick={(e) => { e.stopPropagation(); if (confirm(`删除文件夹「${folder.name}」？（含子文件夹，不会删除对话）`)) deleteFolder(folder.id) }}
-          className="hidden group-hover:block p-0.5 hover:text-red-400" title="删除文件夹"><Trash2 size={12} /></button>
+          className="hidden group-hover:block p-0.5 hover:text-blue-400" title={t('sidebar.new_subfolder')}><Plus size={12} /></button>
+        <button onClick={(e) => { e.stopPropagation(); if (confirm(t('sidebar.delete_folder', { name: folder.name }))) deleteFolder(folder.id) }}
+          className="hidden group-hover:block p-0.5 hover:text-red-400"><Trash2 size={12} /></button>
       </div>
 
       {/* Expanded content — drop here = "inside" */}
@@ -263,7 +267,7 @@ function FolderNode({
           ))}
           {childFolders.length === 0 && folderSessions.length === 0 && creatingSubfolderId !== folder.id && (
             <div className="py-2 text-xs text-zinc-600 italic" style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}>
-              拖拽对话到这里
+              {t('sidebar.drop_here')}
             </div>
           )}
         </div>
@@ -288,6 +292,7 @@ export function Sidebar({ width }: { width: number }) {
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
   const [sessionRenameValue, setSessionRenameValue] = useState('')
   const { renameFolder, setSessionMeta } = useStore()
+  const t = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -412,15 +417,15 @@ export function Sidebar({ width }: { width: number }) {
   return (
     <div className="h-full flex flex-col bg-zinc-900 shrink-0" style={{ width }}>
       <div className="p-3 flex items-center justify-between border-b border-zinc-700">
-        <span className="text-sm font-medium text-zinc-300">Sessions</span>
+        <span className="text-sm font-medium text-zinc-300">{t('sidebar.sessions')}</span>
         <div className="flex items-center gap-1">
           <button onClick={() => setViewMode(viewMode === 'tree' ? 'flat' : 'tree')}
             className="p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200"
-            title={viewMode === 'tree' ? '切换为时间线视图' : '切换为树状视图'}>
+            title={viewMode === 'tree' ? t('sidebar.timeline_view') : t('sidebar.tree_view')}>
             {viewMode === 'tree' ? <List size={14} /> : <FolderTree size={14} />}
           </button>
           <button onClick={() => setShowNewFolder(true)}
-            className="p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title="新建文件夹">
+            className="p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title={t('sidebar.new_folder')}>
             <FolderPlus size={14} />
           </button>
         </div>
@@ -431,7 +436,7 @@ export function Sidebar({ width }: { width: number }) {
           <input autoFocus value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleCreateFolder(); if (e.key === 'Escape') { setShowNewFolder(false); setNewFolderName('') } }}
             onBlur={() => { if (newFolderName.trim()) handleCreateFolder(); else setShowNewFolder(false) }}
-            placeholder="文件夹名称"
+            placeholder={t('sidebar.folder_name')}
             className="w-full px-2 py-1 text-sm bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400" />
         </div>
       )}
@@ -440,7 +445,7 @@ export function Sidebar({ width }: { width: number }) {
         onDragOver={handleListDragOver} onDragLeave={stopAutoScroll} onDrop={stopAutoScroll} onDragEnd={stopAutoScroll}>
         {viewMode === 'flat' ? (
           <>
-            <div className="px-3 py-2 text-[11px] text-zinc-500 uppercase tracking-wider">全部对话 ({sessions.length})</div>
+            <div className="px-3 py-2 text-[11px] text-zinc-500 uppercase tracking-wider">{t('sidebar.all_sessions')} ({sessions.length})</div>
             {sessions.map((session) => (
               <SessionItem key={session.id} session={session} depth={0} onContextMenu={handleContextMenu}
                 isRenaming={renamingSessionId === session.id} renameValue={sessionRenameValue}
@@ -469,7 +474,7 @@ export function Sidebar({ width }: { width: number }) {
                 onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onDrop={(e) => { e.preventDefault(); e.stopPropagation(); try { const d = JSON.parse(e.dataTransfer.getData('application/x-swob')); if (d.type === 'folder' && d.id) moveFolder(d.id, null) } catch {} }}>
                 <div className="flex-1 border-t border-zinc-700" />
-                <span className="text-[10px] text-zinc-600 shrink-0">未分组</span>
+                <span className="text-[10px] text-zinc-600 shrink-0">{t('sidebar.ungrouped')}</span>
                 <div className="flex-1 border-t border-zinc-700" />
               </div>
             )}
@@ -484,7 +489,7 @@ export function Sidebar({ width }: { width: number }) {
       </div>
 
       <div className="p-2 border-t border-zinc-700 text-[11px] text-zinc-500">
-        {sessions.length} sessions · {(sessions.reduce((a, s) => a + s.fileSizeBytes, 0) / 1024 / 1024).toFixed(0)}MB
+        {t('sidebar.stats', { n: sessions.length, size: `${(sessions.reduce((a, s) => a + s.fileSizeBytes, 0) / 1024 / 1024).toFixed(0)}MB` })}
       </div>
     </div>
   )

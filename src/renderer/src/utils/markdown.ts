@@ -1,4 +1,5 @@
 import type { SessionDetail, ParsedMessage } from '../store'
+import { translate, type Locale } from '../i18n'
 
 export type ToolCallInfo = { id?: string; name: string; input: Record<string, unknown>; result?: string }
 
@@ -31,7 +32,7 @@ export const COMPACT_SUMMARY_PREFIX = 'This session is being continued from a pr
 
 // --- Section computation ---
 
-export function computeSections(session: SessionDetail): CompactSection[] {
+export function computeSections(session: SessionDetail, locale: Locale = 'zh-CN'): CompactSection[] {
   const sharedMsgs = session.messages.filter((m) => m.isSharedContext)
   const ownMsgs = session.messages.filter((m) => !m.isSharedContext)
 
@@ -51,7 +52,7 @@ export function computeSections(session: SessionDetail): CompactSection[] {
     if (filteredShared.length > 0) {
       const turnCount = filteredShared.filter((m) => m.type === 'user').length
       sharedSection.push({
-        label: `共享上下文 — 分支前的对话 (${turnCount} 轮)`,
+        label: translate(locale, 'section.shared_context', { n: turnCount }),
         messages: filteredShared,
         isCurrent: false,
         isSharedContext: true
@@ -67,7 +68,7 @@ export function computeSections(session: SessionDetail): CompactSection[] {
   const firstSection = allMsgs.slice(0, boundaryIndices[0])
   if (firstSection.length > 0) {
     const turnCount = firstSection.filter((m) => m.type === 'user').length
-    result.push({ label: `原始对话 (${turnCount} 轮)`, messages: firstSection, isCurrent: false })
+    result.push({ label: translate(locale, 'section.original', { n: turnCount }), messages: firstSection, isCurrent: false })
   }
 
   for (let i = 0; i < boundaryIndices.length; i++) {
@@ -80,7 +81,7 @@ export function computeSections(session: SessionDetail): CompactSection[] {
         result.push({ label: '', messages: sectionMsgs, isCurrent: true })
       } else {
         const turnCount = sectionMsgs.filter((m) => m.type === 'user').length
-        result.push({ label: `Compact #${i + 1} 后 (${turnCount} 轮)`, messages: sectionMsgs, isCurrent: false })
+        result.push({ label: translate(locale, 'section.compact_after', { i: i + 1, n: turnCount }), messages: sectionMsgs, isCurrent: false })
       }
     }
   }
@@ -130,11 +131,11 @@ export function buildSegments(msgs: ParsedMessage[]): Segment[] {
 
 // --- Chat TOC (compact/full modes) ---
 
-export function computeChatTocEntries(sections: CompactSection[]): TocEntry[] {
+export function computeChatTocEntries(sections: CompactSection[], locale: Locale = 'zh-CN'): TocEntry[] {
   const entries: TocEntry[] = []
   sections.forEach((section, sIdx) => {
     const label = section.isCurrent
-      ? (sections.length > 1 ? '当前对话' : '')
+      ? (sections.length > 1 ? translate(locale, 'section.current') : '')
       : section.label
     if (label) {
       entries.push({ level: 2, text: label, id: `section-${sIdx}` })
@@ -196,7 +197,7 @@ function toolToMarkdown(tc: ToolCallInfo): string {
   return lines.join('\n')
 }
 
-export function turnToMarkdown(turn: Turn): string {
+export function turnToMarkdown(turn: Turn, locale: Locale = 'zh-CN'): string {
   const lines: string[] = []
 
   if (turn.userMsg) {
@@ -204,7 +205,7 @@ export function turnToMarkdown(turn: Turn): string {
     if (text.startsWith(COMPACT_SUMMARY_PREFIX)) {
       // Compact summary: no heading, code block
       const summary = text.slice(COMPACT_SUMMARY_PREFIX.length).trim()
-      lines.push('> *Compact 上下文摘要*\n')
+      lines.push(`${translate(locale, 'section.compact_summary_md')}\n`)
       lines.push('```')
       lines.push(summary.slice(0, 3000))
       lines.push('```')
@@ -238,25 +239,26 @@ export function turnToMarkdown(turn: Turn): string {
 export function sessionToMarkdown(
   session: SessionDetail,
   sections: CompactSection[],
-  customTitle?: string
+  customTitle?: string,
+  locale: Locale = 'zh-CN'
 ): string {
   const lines: string[] = []
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId
   lines.push(`# ${title}\n`)
 
-  const created = new Date(session.createdAt).toLocaleString('zh-CN')
+  const created = new Date(session.createdAt).toLocaleString(locale)
   const toolSummary = Object.entries(session.toolUsage)
     .sort(([, a], [, b]) => b - a).slice(0, 6)
     .map(([name, count]) => `${name}(${count})`).join(', ')
-  lines.push(`> ${created} | ${session.turnCount} 轮对话`)
+  lines.push(`> ${created} | ${translate(locale, 'section.turns_label', { n: session.turnCount })}`)
   if (toolSummary) lines.push(`> Tools: ${toolSummary}`)
   lines.push('')
 
   for (const section of sections) {
-    if (section.isCurrent && sections.length > 1) lines.push(`## 当前对话\n`)
+    if (section.isCurrent && sections.length > 1) lines.push(`## ${translate(locale, 'section.current')}\n`)
     else if (section.label) lines.push(`## ${section.label}\n`)
     const turns = groupIntoTurns(section.messages)
-    for (const turn of turns) lines.push(turnToMarkdown(turn))
+    for (const turn of turns) lines.push(turnToMarkdown(turn, locale))
   }
 
   return lines.join('\n')

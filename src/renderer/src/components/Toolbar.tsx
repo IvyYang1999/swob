@@ -1,12 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
-import { Search, PanelRight, X } from 'lucide-react'
+import { useT } from '../i18n'
+import { Search, PanelRight, X, Globe } from 'lucide-react'
 
 export function Toolbar() {
   const {
     searchQuery, search, clearSearch,
-    infoPanelOpen, toggleInfoPanel
+    infoPanelOpen, toggleInfoPanel,
+    locale, setLocale
   } = useStore()
+  const t = useT()
   const [inputValue, setInputValue] = useState(searchQuery)
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -50,7 +53,7 @@ export function Toolbar() {
           ref={inputRef}
           value={inputValue}
           onChange={(e) => handleSearch(e.target.value)}
-          placeholder="搜索所有对话..."
+          placeholder={t('toolbar.search_placeholder')}
           className="w-full pl-8 pr-16 py-1.5 text-sm bg-zinc-800 border border-zinc-700 rounded-md text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-500"
         />
         {inputValue ? (
@@ -68,15 +71,23 @@ export function Toolbar() {
         )}
       </div>
 
-      {/* Right side: layout toggle — pushed to far right */}
+      {/* Right side: language toggle + info panel toggle */}
       <div
-        className="flex items-center ml-auto"
+        className="flex items-center gap-1 ml-auto"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button
+          onClick={() => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')}
+          className="flex items-center gap-1 px-2 py-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs"
+          title={t('toolbar.language')}
+        >
+          <Globe size={14} />
+          <span>{locale === 'zh-CN' ? 'EN' : '中'}</span>
+        </button>
+        <button
           onClick={toggleInfoPanel}
           className={`p-1.5 rounded hover:bg-zinc-700 ${infoPanelOpen ? 'text-zinc-200' : 'text-zinc-500'}`}
-          title="切换信息面板"
+          title={t('toolbar.toggle_info')}
         >
           <PanelRight size={16} />
         </button>

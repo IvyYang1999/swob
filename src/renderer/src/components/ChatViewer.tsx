@@ -206,7 +206,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
   }, [turn.userMsg])
 
   const copyResponse = useCallback(() => {
-    const md = turnToMarkdown({ userMsg: null, assistantMsgs: turn.assistantMsgs })
+    const md = turnToMarkdown({ userMsg: null, assistantMsgs: turn.assistantMsgs }, locale)
     navigator.clipboard.writeText(md)
     setCopiedA(true)
     setTimeout(() => setCopiedA(false), 1500)
@@ -546,15 +546,15 @@ function SessionBar({
   searchOpen: boolean
   onToggleSearch: () => void
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, config } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, config, locale } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return
     const customTitle = config?.sessionMeta?.[selectedSession.sessionId]?.customTitle
-    const sections = computeSections(selectedSession)
-    const md = sessionToMarkdown(selectedSession, sections, customTitle)
+    const sections = computeSections(selectedSession, locale)
+    const md = sessionToMarkdown(selectedSession, sections, customTitle, locale)
     navigator.clipboard.writeText(md)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
@@ -706,7 +706,7 @@ function SourceView({ session, sections, customTitle, contentRef }: {
                   id={turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined}
                   className="scroll-mt-0"
                 >
-                  <pre className="text-[12px] font-mono text-zinc-400 whitespace-pre-wrap leading-relaxed">{turnToMarkdown(turn)}</pre>
+                  <pre className="text-[12px] font-mono text-zinc-400 whitespace-pre-wrap leading-relaxed">{turnToMarkdown(turn, locale)}</pre>
                 </div>
               ))}
             </div>
@@ -751,7 +751,7 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
                   id={turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined}
                   className="scroll-mt-0"
                 >
-                  <DocMarkdown content={turnToMarkdown(turn)} tocEntries={[]} />
+                  <DocMarkdown content={turnToMarkdown(turn, locale)} tocEntries={[]} />
                 </div>
               ))}
             </div>
@@ -765,7 +765,7 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
 // --- Main ChatViewer ---
 
 export function ChatViewer() {
-  const { selectedSession, viewMode, config, addHighlight, removeHighlight } = useStore()
+  const { selectedSession, viewMode, config, addHighlight, removeHighlight, locale } = useStore()
   const t = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
@@ -777,8 +777,8 @@ export function ChatViewer() {
 
   const sections = useMemo<CompactSection[]>(() => {
     if (!selectedSession) return []
-    return computeSections(selectedSession)
-  }, [selectedSession])
+    return computeSections(selectedSession, locale)
+  }, [selectedSession, locale])
 
   // Reset expanded sections on session change
   const sessionId = selectedSession?.id
@@ -869,7 +869,7 @@ export function ChatViewer() {
   }, [selectedSession, config])
 
   // Unified TOC entries for all modes
-  const tocEntries = useMemo(() => computeChatTocEntries(sections), [sections])
+  const tocEntries = useMemo(() => computeChatTocEntries(sections, locale), [sections, locale])
 
   // Multi-select: Q and A selectable independently
   // Items are "q:uuid" or "a:uuid"
@@ -1208,7 +1208,7 @@ export function ChatViewer() {
       const turns = groupIntoTurns(section.messages)
       for (const turn of turns) {
         if (turn.userMsg) {
-          map.set(`turn-${turn.userMsg.uuid}`, turnToMarkdown(turn))
+          map.set(`turn-${turn.userMsg.uuid}`, turnToMarkdown(turn, locale))
         }
       }
     }
@@ -1235,11 +1235,11 @@ export function ChatViewer() {
       const qSel = selectedItems.has(`q:${uuid}`)
       const aSel = selectedItems.has(`a:${uuid}`)
       if (qSel && aSel) {
-        lines.push(turnToMarkdown(turn))
+        lines.push(turnToMarkdown(turn, locale))
       } else if (qSel) {
         lines.push(`### User\n\n${turn.userMsg.textContent}\n`)
       } else if (aSel) {
-        lines.push(turnToMarkdown({ userMsg: null, assistantMsgs: turn.assistantMsgs }))
+        lines.push(turnToMarkdown({ userMsg: null, assistantMsgs: turn.assistantMsgs }, locale))
       }
     }
     navigator.clipboard.writeText(lines.join('\n'))
@@ -1254,11 +1254,11 @@ export function ChatViewer() {
       const qSel = selectedItems.has(`q:${uuid}`)
       const aSel = selectedItems.has(`a:${uuid}`)
       if (qSel && aSel) {
-        lines.push(turnToMarkdown(turn))
+        lines.push(turnToMarkdown(turn, locale))
       } else if (qSel) {
         lines.push(`### User\n\n${turn.userMsg.textContent}\n`)
       } else if (aSel) {
-        lines.push(turnToMarkdown({ userMsg: null, assistantMsgs: turn.assistantMsgs }))
+        lines.push(turnToMarkdown({ userMsg: null, assistantMsgs: turn.assistantMsgs }, locale))
       }
     }
     const md = lines.join('\n')

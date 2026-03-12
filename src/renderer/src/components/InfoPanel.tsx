@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useStore } from '../store'
 import type { Highlight } from '../store'
+import { useT } from '../i18n'
 import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2 } from 'lucide-react'
 
 interface FileRef {
@@ -16,8 +17,8 @@ interface TreeNode {
   file?: FileRef
 }
 
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString('zh-CN', {
+function formatDateTime(iso: string, locale: string = 'zh-CN'): string {
+  return new Date(iso).toLocaleString(locale, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -32,6 +33,7 @@ function formatSize(bytes: number): string {
 }
 
 function ClickablePath({ path, isDir, dimmed }: { path: string; isDir?: boolean; dimmed?: boolean }) {
+  const t = useT()
   const short = path.replace(/^\/Users\/[^/]+/, '~')
   const fileName = path.split('/').pop() || path
 
@@ -40,7 +42,7 @@ function ClickablePath({ path, isDir, dimmed }: { path: string; isDir?: boolean;
       className={`flex items-center gap-1.5 text-xs font-mono truncate cursor-pointer group ${
         dimmed ? 'text-zinc-600 line-through' : 'text-zinc-400 hover:text-blue-400'
       }`}
-      title={`${path}\n${dimmed ? '(已删除) ' : ''}点击打开 · 右键在 Finder 中显示`}
+      title={`${path}\n${dimmed ? t('info.file_deleted') + ' ' : ''}${t('info.file_click_hint')}`}
       onClick={() => window.api.openPath(path)}
       onContextMenu={(e) => {
         e.preventDefault()
@@ -54,12 +56,13 @@ function ClickablePath({ path, isDir, dimmed }: { path: string; isDir?: boolean;
 }
 
 function ActionBadge({ action }: { action: string }) {
+  const t = useT()
   const config: Record<string, { label: string; color: string }> = {
-    'write': { label: '新建', color: 'bg-green-800 text-green-300' },
-    'edit': { label: '编辑', color: 'bg-blue-800 text-blue-300' },
-    'read': { label: '读取', color: 'bg-zinc-700 text-zinc-400' },
-    'user-image': { label: '上传', color: 'bg-purple-800 text-purple-300' },
-    'user-input': { label: '用户', color: 'bg-amber-800 text-amber-300' },
+    'write': { label: t('info.action_write'), color: 'bg-green-800 text-green-300' },
+    'edit': { label: t('info.action_edit'), color: 'bg-blue-800 text-blue-300' },
+    'read': { label: t('info.action_read'), color: 'bg-zinc-700 text-zinc-400' },
+    'user-image': { label: t('info.action_upload'), color: 'bg-purple-800 text-purple-300' },
+    'user-input': { label: t('info.action_user'), color: 'bg-amber-800 text-amber-300' },
   }
   const c = config[action] || { label: action, color: 'bg-zinc-700 text-zinc-400' }
   return (
@@ -123,6 +126,7 @@ function buildFileTree(files: FileRef[]): TreeNode {
 }
 
 function FileTreeNode({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
+  const t = useT()
   const [open, setOpen] = useState(true)
   const isLeaf = node.children.size === 0 && node.file
   const hasChildren = node.children.size > 0
@@ -141,7 +145,7 @@ function FileTreeNode({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
           f.exists ? 'text-zinc-400 hover:text-blue-400' : 'text-zinc-600 line-through'
         }`}
         style={{ paddingLeft: depth * 12 }}
-        title={`${f.path}\n操作: ${f.actions.join(', ')}${f.exists ? '' : '\n(已删除)'}\n点击打开 · 右键在 Finder 中显示`}
+        title={`${f.path}\n${t('info.file_actions', { actions: f.actions.join(', ') })}${f.exists ? '' : '\n' + t('info.file_deleted')}\n${t('info.file_click_hint')}`}
         onClick={() => window.api.openPath(f.path)}
         onContextMenu={(e) => {
           e.preventDefault()
@@ -198,6 +202,7 @@ function CollapsibleFileList({
   defaultOpen?: boolean
   maxShow?: number
 }) {
+  const t = useT()
   const [open, setOpen] = useState(defaultOpen)
   const [showAll, setShowAll] = useState(false)
 
@@ -227,7 +232,7 @@ function CollapsibleFileList({
               onClick={() => setShowAll(true)}
               className="text-[11px] text-zinc-600 hover:text-zinc-400 ml-3"
             >
-              还有 {paths.length - maxShow} 个...
+              {t('info.show_more', { n: paths.length - maxShow })}
             </button>
           )}
         </div>
@@ -237,6 +242,7 @@ function CollapsibleFileList({
 }
 
 function ImageList({ files }: { files: FileRef[] }) {
+  const t = useT()
   const [open, setOpen] = useState(true)
 
   if (files.length === 0) return null
@@ -249,7 +255,7 @@ function ImageList({ files }: { files: FileRef[] }) {
       >
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         <Image size={12} />
-        <span>上传图片</span>
+        <span>{t('info.uploaded_images')}</span>
         <span className="text-zinc-600 ml-auto">{files.length}</span>
       </button>
       {open && (
@@ -264,6 +270,7 @@ function ImageList({ files }: { files: FileRef[] }) {
 }
 
 function FileTreeSection({ files }: { files: FileRef[] }) {
+  const t = useT()
   const [open, setOpen] = useState(true)
 
   const tree = useMemo(() => buildFileTree(files), [files])
@@ -281,7 +288,7 @@ function FileTreeSection({ files }: { files: FileRef[] }) {
       >
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         <File size={12} />
-        <span>操作过的文件</span>
+        <span>{t('info.files_operated')}</span>
         <span className="text-zinc-600 ml-auto">
           {existCount}{deletedCount > 0 && <span className="text-zinc-700">+{deletedCount}</span>}
         </span>
@@ -297,6 +304,8 @@ function FileTreeSection({ files }: { files: FileRef[] }) {
 
 function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; sessionId: string }) {
   const { removeHighlight } = useStore()
+  const t = useT()
+  const locale = useStore((s) => s.locale)
   const [open, setOpen] = useState(true)
 
   if (highlights.length === 0) return null
@@ -309,7 +318,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
       >
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         <Highlighter size={12} className="text-green-500" />
-        <span>划线笔记</span>
+        <span>{t('info.highlights')}</span>
         <span className="text-zinc-600 ml-auto">{highlights.length}</span>
       </button>
       {open && (
@@ -321,14 +330,14 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
               onClick={() => {
                 window.dispatchEvent(new CustomEvent('swob:scrollToHighlight', { detail: { highlightId: hl.id } }))
               }}
-              title="点击跳转到划线位置"
+              title={t('info.highlight_jump')}
             >
               <div className="text-xs text-green-300/80 line-clamp-3 leading-relaxed border-l-2 border-green-500/40 pl-2">
                 {hl.text}
               </div>
               <div className="flex items-center justify-between mt-1">
                 <span className="text-[10px] text-zinc-600">
-                  {new Date(hl.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  {new Date(hl.createdAt).toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                 </span>
                 <button
                   onClick={(e) => {
@@ -336,7 +345,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
                     removeHighlight(sessionId, hl.id)
                   }}
                   className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-opacity p-0.5"
-                  title="删除划线"
+                  title={t('info.highlight_delete')}
                 >
                   <Trash2 size={10} />
                 </button>
@@ -350,6 +359,8 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
 }
 
 export function InfoPanel({ width }: { width: number }) {
+  const t = useT()
+  const locale = useStore((s) => s.locale)
   const { selectedSession, infoPanelOpen, config } = useStore()
 
   if (!infoPanelOpen || !selectedSession) return null
@@ -368,25 +379,25 @@ export function InfoPanel({ width }: { width: number }) {
   return (
     <div className="h-full bg-zinc-900 overflow-y-auto shrink-0" style={{ width }}>
       <div className="p-4 space-y-4">
-        <h3 className="text-sm font-medium text-zinc-300">Session Info</h3>
+        <h3 className="text-sm font-medium text-zinc-300">{t('info.title')}</h3>
 
         {/* Basic metadata */}
         <section className="space-y-2 text-xs">
           <div className="flex items-center gap-2 text-zinc-400">
             <Clock size={12} />
-            <span>创建：{formatDateTime(s.createdAt)}</span>
+            <span>{t('info.created', { time: formatDateTime(s.createdAt, locale) })}</span>
           </div>
           <div className="flex items-center gap-2 text-zinc-400">
             <Clock size={12} />
-            <span>修改：{formatDateTime(s.updatedAt)}</span>
+            <span>{t('info.modified', { time: formatDateTime(s.updatedAt, locale) })}</span>
           </div>
           <div className="flex items-center gap-2 text-zinc-400">
             <MessageSquare size={12} />
-            <span>{s.turnCount} 轮对话</span>
+            <span>{t('info.turns', { n: s.turnCount })}</span>
           </div>
           {s.compactCount > 0 && (
             <div className="flex items-center gap-2 text-amber-400 text-xs">
-              <span>Compact: {s.compactCount} 次</span>
+              <span>Compact: {s.compactCount}×</span>
             </div>
           )}
           <div className="flex items-center gap-2 text-zinc-400">
@@ -405,7 +416,7 @@ export function InfoPanel({ width }: { width: number }) {
         {/* Working directories */}
         <CollapsibleFileList
           icon={FolderOpen}
-          label="工作目录"
+          label={t('info.working_dirs')}
           paths={s.cwds}
           isDir
         />
@@ -419,7 +430,7 @@ export function InfoPanel({ width }: { width: number }) {
         {/* Config files */}
         <CollapsibleFileList
           icon={Settings}
-          label="配置文件"
+          label={t('info.config_files')}
           paths={configFiles}
         />
 
@@ -428,7 +439,7 @@ export function InfoPanel({ width }: { width: number }) {
           <section>
             <div className="flex items-center gap-2 text-xs font-medium text-zinc-400 mb-2">
               <Wrench size={12} />
-              <span>工具调用</span>
+              <span>{t('info.tool_usage')}</span>
             </div>
             <div className="space-y-1">
               {toolEntries.map(([name, count]) => (
@@ -446,13 +457,13 @@ export function InfoPanel({ width }: { width: number }) {
           <section>
             <div className="flex items-center gap-2 text-xs font-medium text-zinc-400 mb-2">
               <Zap size={12} />
-              <span>Skill 调用</span>
+              <span>{t('info.skill_invocations')}</span>
             </div>
             <div className="space-y-1">
               {s.skillInvocations.map((si, i) => (
                 <div key={i} className="text-xs">
                   <span className="text-zinc-400 font-mono">{si.skillName}</span>
-                  <span className="text-zinc-600 ml-2">{formatDateTime(si.timestamp)}</span>
+                  <span className="text-zinc-600 ml-2">{formatDateTime(si.timestamp, locale)}</span>
                 </div>
               ))}
             </div>
@@ -464,7 +475,7 @@ export function InfoPanel({ width }: { width: number }) {
           <section>
             <div className="flex items-center gap-2 text-xs font-medium text-zinc-400 mb-2">
               <FileText size={12} />
-              <span>.claude 文档</span>
+              <span>{t('info.claude_docs')}</span>
             </div>
             <pre className="text-[11px] text-zinc-500 bg-zinc-800 rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
               {s.claudeMdContent}

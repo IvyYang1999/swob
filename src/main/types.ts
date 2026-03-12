@@ -122,5 +122,6 @@ export interface UserConfig {
   preferences: {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
+    locale?: 'zh-CN' | 'en'
   }
 }

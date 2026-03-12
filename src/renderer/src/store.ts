@@ -5,6 +5,7 @@ import {
   downloadMarkdown,
   generateFilename
 } from './utils/markdown'
+import type { Locale } from './i18n'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
 
@@ -77,7 +78,7 @@ interface Highlight {
 interface UserConfig {
   folders: Folder[]
   sessionMeta: Record<string, { customTitle?: string; notes?: string; highlights?: Highlight[] }>
-  preferences: { defaultViewMode: 'compact' | 'full'; terminalApp: 'Terminal' | 'iTerm2' }
+  preferences: { defaultViewMode: 'compact' | 'full'; terminalApp: 'Terminal' | 'iTerm2'; locale?: Locale }
 }
 
 interface SearchResult {
@@ -96,6 +97,7 @@ interface AppState {
   searchQuery: string
   loading: boolean
   viewMode: ViewMode
+  locale: Locale
   selectedFolderId: string | null
   infoPanelOpen: boolean
   selectedSessionMdPath: string | null
@@ -108,6 +110,7 @@ interface AppState {
   resumeSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   setViewMode: (mode: ViewMode) => void
+  setLocale: (locale: Locale) => void
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
@@ -122,20 +125,20 @@ interface AppState {
   downloadSessionMarkdown: () => void
 }
 
-export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight }
+export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale }
 
 // Read localStorage at module load time — before first render, zero flicker
-function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode } {
+function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
   try {
     const cached = localStorage.getItem('csm:sessions')
     const cachedConfig = localStorage.getItem('csm:config')
     if (cached && cachedConfig) {
       const sessions = JSON.parse(cached)
       const config = JSON.parse(cachedConfig)
-      return { sessions, config, loading: false, viewMode: config.preferences?.defaultViewMode || 'compact' }
+      return { sessions, config, loading: false, viewMode: config.preferences?.defaultViewMode || 'compact', locale: config.preferences?.locale || 'zh-CN' }
     }
   } catch { /* ignore */ }
-  return { sessions: [], config: null, loading: true, viewMode: 'compact' }
+  return { sessions: [], config: null, loading: true, viewMode: 'compact', locale: 'zh-CN' }
 }
 
 const hydrated = hydrateFromCache()
@@ -149,6 +152,7 @@ export const useStore = create<AppState>((set, get) => ({
   searchQuery: '',
   loading: hydrated.loading,
   viewMode: hydrated.viewMode,
+  locale: hydrated.locale,
   selectedFolderId: null,
   infoPanelOpen: true,
   selectedSessionMdPath: null,
@@ -163,6 +167,7 @@ export const useStore = create<AppState>((set, get) => ({
       sessions,
       config,
       viewMode: config.preferences?.defaultViewMode || 'compact',
+      locale: (config.preferences as any)?.locale || 'zh-CN',
       loading: false
     })
     try {
@@ -264,6 +269,19 @@ export const useStore = create<AppState>((set, get) => ({
 
   setViewMode: (mode) => set({ viewMode: mode }),
 
+  setLocale: (locale) => {
+    set({ locale })
+    // Persist to localStorage immediately for next load
+    try {
+      const cachedConfig = localStorage.getItem('csm:config')
+      if (cachedConfig) {
+        const config = JSON.parse(cachedConfig)
+        config.preferences = { ...config.preferences, locale }
+        localStorage.setItem('csm:config', JSON.stringify(config))
+      }
+    } catch { /* ignore */ }
+  },
+
   selectFolder: (folderId) => set({ selectedFolderId: folderId }),
   toggleInfoPanel: () => set((state) => ({ infoPanelOpen: !state.infoPanelOpen })),
 
@@ -327,9 +345,10 @@ export const useStore = create<AppState>((set, get) => ({
     const session = get().selectedSession
     if (!session) return
     const config = get().config
+    const locale = get().locale
     const customTitle = config?.sessionMeta?.[session.sessionId]?.customTitle
-    const sections = computeSections(session)
-    const md = sessionToMarkdown(session, sections, customTitle)
+    const sections = computeSections(session, locale)
+    const md = sessionToMarkdown(session, sections, customTitle, locale)
     const filename = generateFilename(session)
     downloadMarkdown(`${filename}.md`, md)
   }

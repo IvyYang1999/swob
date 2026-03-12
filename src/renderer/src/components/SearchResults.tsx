@@ -1,5 +1,6 @@
 import { useStore } from '../store'
 import { Search } from 'lucide-react'
+import { useT } from '../i18n'
 
 function HighlightText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>
@@ -21,6 +22,8 @@ function HighlightText({ text, query }: { text: string; query: string }) {
 
 export function SearchResults() {
   const { searchResults, searchQuery, selectSession, clearSearch, sessions } = useStore()
+  const locale = useStore((s) => s.locale)
+  const t = useT()
 
   if (!searchQuery || searchResults.length === 0) return null
 
@@ -32,13 +35,13 @@ export function SearchResults() {
         <div className="flex items-center justify-between mb-4">
           <div className="text-sm text-zinc-400">
             <Search size={14} className="inline mr-2" />
-            搜索 &quot;{searchQuery}&quot; — {searchResults.length} 个 session，{totalMatches} 处匹配
+            {t('search.summary', { query: searchQuery, sessions: searchResults.length, matches: totalMatches })}
           </div>
           <button
             onClick={clearSearch}
             className="text-xs text-zinc-500 hover:text-zinc-300 px-2 py-1 hover:bg-zinc-800 rounded"
           >
-            关闭
+            {t('chat.close')}
           </button>
         </div>
         <div className="space-y-4">
@@ -56,7 +59,7 @@ export function SearchResults() {
                 <div className="text-sm text-zinc-200 font-medium truncate flex-1 mr-3">
                   <HighlightText text={result.firstUserMessage.slice(0, 100) || result.sessionId.slice(0, 12)} query={searchQuery} />
                 </div>
-                <span className="text-[10px] text-zinc-500 bg-zinc-700 px-1.5 py-0.5 rounded shrink-0">{result.matches.length} 处匹配</span>
+                <span className="text-[10px] text-zinc-500 bg-zinc-700 px-1.5 py-0.5 rounded shrink-0">{t('search.matches', { n: result.matches.length })}</span>
               </div>
               <div className="space-y-1.5">
                 {result.matches.map((match, i) => (
@@ -65,7 +68,7 @@ export function SearchResults() {
                     className="text-xs text-zinc-400 font-mono bg-zinc-900 rounded px-2.5 py-1.5 leading-relaxed"
                   >
                     <span className="text-zinc-600 mr-2 text-[10px]">
-                      {new Date(match.timestamp).toLocaleString('zh-CN', {
+                      {new Date(match.timestamp).toLocaleString(locale, {
                         month: '2-digit',
                         day: '2-digit',
                         hour: '2-digit',

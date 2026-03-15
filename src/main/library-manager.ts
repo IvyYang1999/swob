@@ -50,7 +50,7 @@ export interface LibraryConfig {
 
 // ============ Constants ============
 
-const DEFAULT_ROOT = path.join(os.homedir(), 'Library', 'Application Support', 'Swob')
+const DEFAULT_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
 const SESSION_META_FILE = '.swob-session.json'
 const LIBRARY_CONFIG_FILE = '.swob-config.json'
 const TRANSCRIPT_FILE = 'transcript.md'
@@ -58,70 +58,14 @@ const BACKUP_FILE = 'backup.jsonl'
 
 // ============ Library Manager ============
 
-const OLD_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
-
 let _root: string = DEFAULT_ROOT
 
 export function getLibraryRoot(): string {
   return _root
 }
 
-/**
- * Check if the old ~/Documents/Swob/ library contains data that belongs to THIS machine.
- * We do this by checking if the sourceFilePaths in session metas point to files that exist locally.
- */
-function isOldLibraryLocal(oldRoot: string): boolean {
-  let totalSessions = 0
-  let localSessions = 0
-
-  function checkDir(dirPath: string): void {
-    let entries: fs.Dirent[]
-    try {
-      entries = fs.readdirSync(dirPath, { withFileTypes: true })
-    } catch { return }
-
-    for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue
-      const fullPath = path.join(dirPath, entry.name)
-      try {
-        if (!fs.statSync(fullPath).isDirectory()) continue
-      } catch { continue }
-
-      const metaPath = path.join(fullPath, SESSION_META_FILE)
-      if (fs.existsSync(metaPath)) {
-        totalSessions++
-        try {
-          const meta: SessionMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
-          const hasLocal = meta.sourceFilePaths?.some(p => fs.existsSync(p))
-          if (hasLocal) localSessions++
-        } catch { /* skip */ }
-      } else {
-        // It's a folder — recurse
-        checkDir(fullPath)
-      }
-    }
-  }
-
-  checkDir(oldRoot)
-  if (totalSessions === 0) return false
-  // If more than 30% of sessions have local source files, this is the origin machine
-  return localSessions / totalSessions > 0.3
-}
-
 export function initLibrary(root?: string): void {
   _root = root || DEFAULT_ROOT
-
-  // Migrate from old ~/Documents/Swob/ if needed
-  if (!root && !fs.existsSync(_root) && fs.existsSync(OLD_ROOT)) {
-    if (isOldLibraryLocal(OLD_ROOT)) {
-      // This is the origin machine — move data to new location
-      fs.mkdirSync(path.dirname(_root), { recursive: true })
-      fs.renameSync(OLD_ROOT, _root)
-    }
-    // If not local (iCloud sync from another machine), we skip migration
-    // and let syncLibraryFromSessions rebuild from scratch
-  }
-
   if (!fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }

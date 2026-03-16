@@ -833,8 +833,19 @@ export async function loadSessionDetail(
     mainRaw = await parseSessionFile(filePath)
   }
 
-  // For intra-file branches, filter to only messages on this branch's path
-  if (branchLeafUuid) {
+  // For intra-file branches, split into shared trunk + branch-specific messages
+  let intraBranchSharedRaw: RawJsonlMessage[] = []
+  if (branchLeafUuid && branchPointUuid) {
+    const filtered = filterMessagesByBranch(mainRaw, branchLeafUuid)
+    // Split at branchPointUuid: everything up to and including it is shared context
+    const splitIdx = filtered.findIndex((m) => m.uuid === branchPointUuid)
+    if (splitIdx >= 0) {
+      intraBranchSharedRaw = filtered.slice(0, splitIdx + 1)
+      mainRaw = filtered.slice(splitIdx + 1)
+    } else {
+      mainRaw = filtered
+    }
+  } else if (branchLeafUuid) {
     mainRaw = filterMessagesByBranch(mainRaw, branchLeafUuid)
   }
 
@@ -861,6 +872,11 @@ export async function loadSessionDetail(
 
   const detail = buildSessionDetail(filePath, mainRaw)
   if (!detail) return null
+
+  // Prepend shared context from intra-file branch (same format as multi-file branch)
+  if (intraBranchSharedRaw.length > 0) {
+    sharedContextRaw = intraBranchSharedRaw
+  }
 
   // Prepend shared context messages
   if (sharedContextRaw.length > 0) {

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useStore } from '../store'
 import type { Highlight } from '../store'
 import { useT } from '../i18n'
-import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2 } from 'lucide-react'
+import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2, GitBranch } from 'lucide-react'
 
 interface FileRef {
   path: string
@@ -361,7 +361,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
 export function InfoPanel({ width }: { width: number }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
-  const { selectedSession, infoPanelOpen, config } = useStore()
+  const { selectedSession, infoPanelOpen, config, sessions, selectSession } = useStore()
 
   if (!infoPanelOpen || !selectedSession) return null
 
@@ -370,6 +370,12 @@ export function InfoPanel({ width }: { width: number }) {
   const referencedFiles: FileRef[] = (s as any).referencedFiles || []
   const configFiles: string[] = (s as any).configFiles || []
   const highlights: Highlight[] = config?.sessionMeta?.[s.sessionId]?.highlights || []
+
+  // Branch relationship data
+  const branchParentId = (s as any).branchParentId as string | undefined
+  const branchChildIds = (s as any).branchChildIds as string[] | undefined
+  const isIntraBranch = !!(s as any).branchLeafUuid
+  const hasBranches = (branchChildIds && branchChildIds.length > 0) || isIntraBranch
 
   // Extract user images from referencedFiles (they have 'user-image' action)
   const imageFiles = referencedFiles.filter(f => f.actions.includes('user-image'))
@@ -412,6 +418,62 @@ export function InfoPanel({ width }: { width: number }) {
 
         {/* Highlights / annotations */}
         <HighlightList highlights={highlights} sessionId={s.sessionId} />
+
+        {/* Branch relationships */}
+        {hasBranches && (
+          <section>
+            <div className="flex items-center gap-2 text-xs font-medium text-purple-400 mb-2">
+              <GitBranch size={12} />
+              <span>{locale === 'zh-CN' ? '分支关系' : 'Branch Tree'}</span>
+            </div>
+            <div className="space-y-1.5">
+              {branchParentId && (() => {
+                const parent = sessions.find((ps) => ps.id === branchParentId)
+                if (!parent) return null
+                const pMeta = config?.sessionMeta?.[parent.sessionId] || config?.sessionMeta?.[parent.id]
+                const pTitle = pMeta?.customTitle || parent.firstUserMessage?.slice(0, 40) || parent.id.slice(0, 12)
+                return (
+                  <button
+                    key="parent"
+                    onClick={() => selectSession(parent.filePath, (parent as any).allFilePaths, parent.id, (parent as any).branchParentFilePaths, (parent as any).branchPointUuid, (parent as any).branchLeafUuid)}
+                    className="w-full text-left text-xs px-2 py-1.5 rounded bg-zinc-800/50 hover:bg-zinc-800 transition-colors"
+                  >
+                    <div className="text-purple-400/60 text-[10px] mb-0.5">{locale === 'zh-CN' ? '↑ 母分支' : '↑ Parent'}</div>
+                    <div className="text-zinc-300 truncate">{pTitle}</div>
+                    <div className="text-zinc-500 text-[10px] mt-0.5">{parent.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
+                  </button>
+                )
+              })()}
+              {!isIntraBranch && (
+                <div className="px-2 py-1 text-[10px] text-emerald-500/60 border-l-2 border-emerald-600/30 ml-1">
+                  ● {locale === 'zh-CN' ? '当前（主分支）' : 'Current (main)'}
+                </div>
+              )}
+              {isIntraBranch && (
+                <div className="px-2 py-1 text-[10px] text-purple-400/60 border-l-2 border-purple-600/30 ml-1">
+                  ● {locale === 'zh-CN' ? '当前分支' : 'Current branch'}
+                </div>
+              )}
+              {branchChildIds && branchChildIds.length > 0 && branchChildIds.map((childId) => {
+                const child = sessions.find((cs) => cs.id === childId)
+                if (!child) return null
+                const cMeta = config?.sessionMeta?.[child.sessionId] || config?.sessionMeta?.[child.id]
+                const cTitle = cMeta?.customTitle || child.firstUserMessage?.slice(0, 40) || child.id.slice(0, 12)
+                return (
+                  <button
+                    key={childId}
+                    onClick={() => selectSession(child.filePath, (child as any).allFilePaths, child.id, (child as any).branchParentFilePaths, (child as any).branchPointUuid, (child as any).branchLeafUuid)}
+                    className="w-full text-left text-xs px-2 py-1.5 rounded bg-zinc-800/50 hover:bg-zinc-800 transition-colors"
+                  >
+                    <div className="text-purple-400/60 text-[10px] mb-0.5">↳ {locale === 'zh-CN' ? '子分支' : 'Child branch'}</div>
+                    <div className="text-zinc-300 truncate">{cTitle}</div>
+                    <div className="text-zinc-500 text-[10px] mt-0.5">{child.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Working directories */}
         <CollapsibleFileList

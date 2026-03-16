@@ -31,23 +31,14 @@ function SessionItem({
   onRenameSubmit?: () => void; onRenameCancel?: () => void
   onDoubleClickRename?: (sessionId: string) => void
 }) {
-  const { selectedUniqueId, selectSession, config, resumedSessionIds, locale, sessions } = useStore()
+  const { selectedUniqueId, selectSession, config, resumedSessionIds, locale } = useStore()
   const t = useT()
   const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
   const isIntraBranch = !!(session as any).branchLeafUuid
-  const branchParentId = (session as any).branchParentId as string | undefined
   const branchChildIds = (session as any).branchChildIds as string[] | undefined
+  const hasBranchChildren = branchChildIds && branchChildIds.length > 0
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
-
-  // Resolve parent branch title
-  const parentTitle = useMemo(() => {
-    if (!branchParentId) return ''
-    const parent = sessions.find((s) => s.id === branchParentId)
-    if (!parent) return ''
-    const pMeta = config?.sessionMeta[parent.sessionId] || config?.sessionMeta[parent.id]
-    return pMeta?.customTitle || parent.firstUserMessage?.slice(0, 30) || ''
-  }, [branchParentId, sessions, config])
   const renameInputRef = useRef<HTMLInputElement>(null)
   const isSelected = selectedUniqueId === session.id
 
@@ -104,18 +95,15 @@ function SessionItem({
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
       )}
-      {isIntraBranch && parentTitle && (
-        <div className="text-[10px] text-purple-400/60 truncate mt-0.5">↳ {parentTitle}</div>
-      )}
       <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500">
         <Clock size={10} /><span>{formatDate(session.updatedAt, locale, t)}</span>
         <MessageSquare size={10} /><span>{t('sidebar.turns', { n: session.turnCount })}</span>
         {session.compactCount > 0 && (
           <span className="px-1 bg-amber-900/50 text-amber-400 rounded text-[10px]">compact</span>
         )}
-        {branchChildIds && branchChildIds.length > 0 && (
+        {hasBranchChildren && (
           <span className="px-1 bg-purple-900/50 text-purple-400 rounded text-[10px] flex items-center gap-0.5">
-            <GitBranch size={9} />{branchChildIds.length}
+            <GitBranch size={9} />{branchChildIds!.length}
           </span>
         )}
       </div>

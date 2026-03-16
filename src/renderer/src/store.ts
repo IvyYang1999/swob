@@ -224,6 +224,16 @@ export const useStore = create<AppState>((set, get) => ({
 
   selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?, branchLeafUuid?) => {
     const detail = await window.api.loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid)
+    // Merge branch relationship fields from summary into detail (detail is freshly built and lacks them)
+    if (detail && uniqueId) {
+      const summary = get().sessions.find((s) => s.id === uniqueId)
+      if (summary) {
+        const d = detail as any
+        if ((summary as any).branchParentId) d.branchParentId = (summary as any).branchParentId
+        if ((summary as any).branchChildIds) d.branchChildIds = (summary as any).branchChildIds
+        if ((summary as any).branchLeafUuid) d.branchLeafUuid = (summary as any).branchLeafUuid
+      }
+    }
     set({ selectedSession: detail as SessionDetail | null, selectedUniqueId: uniqueId || null })
     // Get library markdown path for drag
     if (detail) {

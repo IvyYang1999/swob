@@ -18,7 +18,7 @@ const HOME = process.env.HOME || ''
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 2 // bumped for intra-file branch support
+const CACHE_VERSION = 3 // bumped: stricter branch detection thresholds
 
 interface DiskCache {
   version: number
@@ -485,7 +485,7 @@ interface IntraBranch {
 }
 
 function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
-  const MIN_UNIQUE_TURNS = 5
+  const MIN_UNIQUE_TURNS = 20 // high threshold: only deliberate --resume branches, not retries
   const skipPrefixes = ['[Request interrupted', 'This session is being continued']
 
   // Build uuid → index and children map
@@ -595,6 +595,9 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
       if (mainPath[i] === g.path[i]) commonLen++
       else break
     }
+    // Fork must not be in the last 10% of main path (those are retries, not branches)
+    if (commonLen > mainPath.length * 0.9) continue
+    // Branch must have enough unique user turns
     if (countUserTurns(g.path.slice(commonLen)) >= MIN_UNIQUE_TURNS) {
       allPathGroups.push(g)
     }

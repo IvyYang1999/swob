@@ -127,7 +127,7 @@ function InlineNewFolder({ depth, onSubmit, onCancel }: {
 // ============ Recursive Folder Node ============
 
 function FolderNode({
-  folder, depth, allFolders, sessionMap, expandedFolders, toggleFolder,
+  folder, depth, allFolders, sessionMap, sessionsByBaseId, expandedFolders, toggleFolder,
   dragOverFolderId, dragOverZone, setDragOverFolderId, setDragOverZone,
   renamingFolderId, setRenamingFolderId, renamingValue, setRenamingValue,
   handleRenameFolder, onSessionContextMenu, creatingSubfolderId,
@@ -137,6 +137,7 @@ function FolderNode({
 }: {
   folder: Folder; depth: number; allFolders: Folder[]
   sessionMap: Map<string, SessionSummary>
+  sessionsByBaseId: Map<string, SessionSummary[]>
   expandedFolders: Set<string>; toggleFolder: (id: string) => void
   dragOverFolderId: string | null; dragOverZone: 'inside' | 'before' | 'after'
   setDragOverFolderId: (id: string | null) => void
@@ -156,7 +157,8 @@ function FolderNode({
   const isExpanded = expandedFolders.has(folder.id)
   const headerRef = useRef<HTMLDivElement>(null)
   const childFolders = allFolders.filter((f) => f.parentId === folder.id)
-  const folderSessions = folder.sessionIds.map((id) => sessionMap.get(id)).filter(Boolean) as SessionSummary[]
+  // Include intra-file branches: expand each sessionId to all sessions sharing that base ID
+  const folderSessions = folder.sessionIds.flatMap((id) => sessionsByBaseId.get(id) || (sessionMap.has(id) ? [sessionMap.get(id)!] : []))
   const totalCount = folderSessions.length + childFolders.reduce((acc, cf) => acc + cf.sessionIds.length, 0)
 
   const handleDrop = (e: React.DragEvent, zone: 'inside' | 'before' | 'after') => {
@@ -249,7 +251,7 @@ function FolderNode({
           )}
           {childFolders.map((child) => (
             <FolderNode key={child.id} folder={child} depth={depth + 1} allFolders={allFolders}
-              sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
+              sessionMap={sessionMap} sessionsByBaseId={sessionsByBaseId} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
               dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
               setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
               renamingFolderId={renamingFolderId} setRenamingFolderId={setRenamingFolderId}
@@ -395,6 +397,17 @@ export function Sidebar({ width }: { width: number }) {
     return map
   }, [sessions])
 
+  // Multi-map: sessionId → all sessions with that sessionId (including intra-branches)
+  const sessionsByBaseId = useMemo(() => {
+    const map = new Map<string, SessionSummary[]>()
+    sessions.forEach((s) => {
+      const key = s.sessionId || s.id
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(s)
+    })
+    return map
+  }, [sessions])
+
   const rootFolders = useMemo(() => (config?.folders || []).filter((f) => !f.parentId), [config?.folders])
 
   // --- Auto-scroll during drag ---
@@ -460,7 +473,7 @@ export function Sidebar({ width }: { width: number }) {
           <>
             {rootFolders.map((folder) => (
               <FolderNode key={folder.id} folder={folder} depth={0} allFolders={config?.folders || []}
-                sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
+                sessionMap={sessionMap} sessionsByBaseId={sessionsByBaseId} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
                 dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
                 setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
                 renamingFolderId={renamingFolderId} setRenamingFolderId={setRenamingFolderId}

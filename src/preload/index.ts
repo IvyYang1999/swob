@@ -3,8 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron'
 const api = {
   // Sessions
   loadAllSessions: () => ipcRenderer.invoke('sessions:loadAll'),
-  loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string) =>
-    ipcRenderer.invoke('sessions:loadDetail', filePath, allFilePaths, branchParentFilePaths, branchPointUuid),
+  loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) =>
+    ipcRenderer.invoke('sessions:loadDetail', filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid),
   searchSessions: (query: string) =>
     ipcRenderer.invoke('sessions:search', query),
 

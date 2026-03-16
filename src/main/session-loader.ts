@@ -18,7 +18,7 @@ const HOME = process.env.HOME || ''
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 1
+const CACHE_VERSION = 2 // bumped for intra-file branch support
 
 interface DiskCache {
   version: number
@@ -466,6 +466,212 @@ function getFileTimeRange(raw: RawJsonlMessage[]): { start: string; end: string 
 }
 
 /**
+ * Detect intra-file branches: when `claude --resume` creates a new conversation
+ * thread within the same JSONL file (they share a common trunk via parentUuid).
+ * Returns info about each significant branch (branches with >= MIN_UNIQUE_TURNS user/assistant turns).
+ */
+interface IntraBranch {
+  branchPointUuid: string
+  leafUuid: string
+  firstUserMessage: string
+  createdAt: string
+  updatedAt: string
+  userMsgCount: number
+  turnCount: number
+  pathUuids: Set<string>
+}
+
+function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
+  const MIN_UNIQUE_TURNS = 5
+
+  // Build uuid → index and children map
+  const uuidToIdx = new Map<string, number>()
+  const childrenOf = new Map<string, number[]>()
+  for (let i = 0; i < raw.length; i++) {
+    const u = raw[i].uuid
+    const p = raw[i].parentUuid
+    if (u) uuidToIdx.set(u, i)
+    if (p) {
+      if (!childrenOf.has(p)) childrenOf.set(p, [])
+      childrenOf.get(p)!.push(i)
+    }
+  }
+
+  // Find all leaf uuids (no children)
+  const allUuids = new Set<string>()
+  for (const m of raw) { if (m.uuid) allUuids.add(m.uuid) }
+  const leafUuids = [...allUuids].filter((u) => !childrenOf.has(u))
+  if (leafUuids.length <= 1) return []
+
+  // Trace path from a uuid to root
+  function traceToRoot(uuid: string): string[] {
+    const path: string[] = []
+    const visited = new Set<string>()
+    let current: string | null | undefined = uuid
+    while (current && !visited.has(current)) {
+      visited.add(current)
+      if (uuidToIdx.has(current)) path.push(current)
+      const idx = uuidToIdx.get(current)
+      current = idx !== undefined ? raw[idx].parentUuid : undefined
+    }
+    return path.reverse() // root → leaf order
+  }
+
+  // Get the longest path (main branch)
+  let mainPath: string[] = []
+  let mainLeaf = ''
+  for (const lu of leafUuids) {
+    const p = traceToRoot(lu)
+    if (p.length > mainPath.length) {
+      mainPath = p
+      mainLeaf = lu
+    }
+  }
+
+  const mainSet = new Set(mainPath)
+
+  // Find branches that diverge significantly from main
+  // Group by (branchPointUuid, firstUserMessage) to avoid counting retry-leaves as separate branches
+  const branchGroups = new Map<string, { leaves: string[]; path: string[]; branchPointUuid: string }>()
+
+  for (const lu of leafUuids) {
+    if (lu === mainLeaf) continue
+    const leafPath = traceToRoot(lu)
+    if (leafPath.length < 10) continue
+
+    // Find divergence point from main
+    let commonLen = 0
+    for (let i = 0; i < Math.min(mainPath.length, leafPath.length); i++) {
+      if (mainPath[i] === leafPath[i]) commonLen++
+      else break
+    }
+    if (commonLen === 0) continue
+
+    const uniquePortion = leafPath.slice(commonLen)
+    const uniqueUserMsgs = uniquePortion.filter((u) => {
+      const idx = uuidToIdx.get(u)
+      return idx !== undefined && raw[idx].type === 'user'
+    })
+
+    if (uniqueUserMsgs.length < MIN_UNIQUE_TURNS) continue
+
+    const branchPointUuid = leafPath[commonLen - 1]
+    // Get first user message unique to this branch
+    let firstMsg = ''
+    const skipPrefixes = ['[Request interrupted', 'This session is being continued']
+    for (const u of uniquePortion) {
+      const idx = uuidToIdx.get(u)
+      if (idx === undefined) continue
+      const m = raw[idx]
+      if (m.type !== 'user' || !m.message) continue
+      const text = typeof m.message.content === 'string'
+        ? m.message.content
+        : (m.message.content as any[])?.filter((p: any) => p.type === 'text' && p.text).map((p: any) => p.text).join('\n') || ''
+      const trimmed = text.trim()
+      if (trimmed.length > 0 && !skipPrefixes.some((p) => trimmed.startsWith(p))) {
+        firstMsg = trimmed.slice(0, 200)
+        break
+      }
+    }
+    if (!firstMsg) continue
+
+    // Group key: fork point + first 60 chars of first msg
+    const groupKey = `${branchPointUuid}:${firstMsg.slice(0, 60)}`
+    if (!branchGroups.has(groupKey)) {
+      branchGroups.set(groupKey, { leaves: [], path: leafPath, branchPointUuid })
+    }
+    const group = branchGroups.get(groupKey)!
+    group.leaves.push(lu)
+    // Keep the longest path in the group
+    if (leafPath.length > group.path.length) group.path = leafPath
+  }
+
+  // Convert groups to IntraBranch results
+  const branches: IntraBranch[] = []
+  for (const [, group] of branchGroups) {
+    const pathUuids = new Set(group.path)
+    // Use the deepest leaf as representative
+    const leafUuid = group.leaves.reduce((best, lu) => {
+      const p = traceToRoot(lu)
+      return p.length > traceToRoot(best).length ? lu : best
+    })
+
+    // Compute stats for the unique portion
+    const commonLen = group.path.findIndex((u) => !mainSet.has(u))
+    const uniqueUuids = commonLen >= 0 ? group.path.slice(commonLen) : []
+
+    let userCount = 0
+    let assistantCount = 0
+    let firstUserMessage = ''
+    let createdAt = ''
+    let updatedAt = ''
+    const skipPrefixes = ['[Request interrupted', 'This session is being continued']
+
+    for (const u of uniqueUuids) {
+      const idx = uuidToIdx.get(u)
+      if (idx === undefined) continue
+      const m = raw[idx]
+      if (m.timestamp) {
+        if (!createdAt) createdAt = m.timestamp
+        updatedAt = m.timestamp
+      }
+      if (m.type === 'user') {
+        userCount++
+        if (!firstUserMessage && m.message) {
+          const text = typeof m.message.content === 'string'
+            ? m.message.content
+            : (m.message.content as any[])?.filter((p: any) => p.type === 'text' && p.text).map((p: any) => p.text).join('\n') || ''
+          const trimmed = text.trim()
+          if (trimmed.length > 0 && !skipPrefixes.some((p) => trimmed.startsWith(p))) {
+            firstUserMessage = trimmed.slice(0, 200)
+          }
+        }
+      }
+      if (m.type === 'assistant') assistantCount++
+    }
+
+    if (userCount >= MIN_UNIQUE_TURNS) {
+      branches.push({
+        branchPointUuid: group.branchPointUuid,
+        leafUuid,
+        firstUserMessage,
+        createdAt,
+        updatedAt,
+        userMsgCount: userCount,
+        turnCount: Math.min(userCount, assistantCount),
+        pathUuids
+      })
+    }
+  }
+
+  return branches
+}
+
+/**
+ * Given raw messages and a leaf uuid, return only the messages on the path
+ * from root to that leaf (tracing parentUuid chain).
+ */
+export function filterMessagesByBranch(raw: RawJsonlMessage[], leafUuid: string): RawJsonlMessage[] {
+  const uuidToIdx = new Map<string, number>()
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i].uuid) uuidToIdx.set(raw[i].uuid, i)
+  }
+
+  // Trace from leaf to root
+  const pathUuids = new Set<string>()
+  let current: string | null | undefined = leafUuid
+  const visited = new Set<string>()
+  while (current && !visited.has(current)) {
+    visited.add(current)
+    if (uuidToIdx.has(current)) pathUuids.add(current)
+    const idx = uuidToIdx.get(current)
+    current = idx !== undefined ? raw[idx].parentUuid : undefined
+  }
+
+  return raw.filter((m) => pathUuids.has(m.uuid))
+}
+
+/**
  * Group files with the same sessionId into mergeable clusters.
  * Only merge files that are continuations (B starts after A ends).
  * Files that overlap in time (branches/subagents) stay separate.
@@ -576,6 +782,24 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
           }
         }
         summaries.push(summary)
+
+        // Detect intra-file branches (e.g. from claude --resume within same file)
+        const intraBranches = detectIntraFileBranches(mergedRaw)
+        for (let bi = 0; bi < intraBranches.length; bi++) {
+          const branch = intraBranches[bi]
+          const branchSummary: SessionSummary = {
+            ...summary,
+            id: `${summary.sessionId}:intra-${bi}`,
+            firstUserMessage: branch.firstUserMessage,
+            createdAt: branch.createdAt,
+            updatedAt: branch.updatedAt,
+            turnCount: branch.turnCount,
+            messageCount: branch.pathUuids.size,
+            branchPointUuid: branch.branchPointUuid,
+            branchLeafUuid: branch.leafUuid
+          }
+          summaries.push(branchSummary)
+        }
       }
     }
   }
@@ -589,7 +813,8 @@ export async function loadSessionDetail(
   filePath: string,
   allFilePaths?: string[],
   branchParentFilePaths?: string[],
-  branchPointUuid?: string
+  branchPointUuid?: string,
+  branchLeafUuid?: string
 ): Promise<SessionDetail | null> {
   let mainRaw: RawJsonlMessage[]
 
@@ -606,6 +831,11 @@ export async function loadSessionDetail(
     mainRaw = entries.flatMap((g) => g.raw)
   } else {
     mainRaw = await parseSessionFile(filePath)
+  }
+
+  // For intra-file branches, filter to only messages on this branch's path
+  if (branchLeafUuid) {
+    mainRaw = filterMessagesByBranch(mainRaw, branchLeafUuid)
   }
 
   // Load shared context from parent session if this is a branch

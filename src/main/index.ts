@@ -192,8 +192,8 @@ ipcMain.handle('sessions:loadAll', async () => {
 
 ipcMain.handle(
   'sessions:loadDetail',
-  async (_event, filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string) => {
-    return loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid)
+  async (_event, filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => {
+    return loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid)
   }
 )
 

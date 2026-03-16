@@ -76,6 +76,7 @@ export interface SessionSummary {
   permissionMode?: string
   branchParentFilePaths?: string[]
   branchPointUuid?: string
+  branchLeafUuid?: string // for intra-file branches: trace this leaf's parentUuid chain
   userImages: string[]
   referencedFiles: FileRef[]
   configFiles: string[]

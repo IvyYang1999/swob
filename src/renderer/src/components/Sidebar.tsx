@@ -4,7 +4,7 @@ import { useT } from '../i18n'
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2, List, FolderTree,
-  Plus, Play, Pencil
+  Plus, Play, Pencil, GitBranch
 } from 'lucide-react'
 
 function formatDate(iso: string, locale: string, t: (key: string, params?: Record<string, string | number>) => string): string {
@@ -35,6 +35,7 @@ function SessionItem({
   const t = useT()
   const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
+  const isIntraBranch = !!(session as any).branchLeafUuid
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const isSelected = selectedUniqueId === session.id
@@ -66,7 +67,8 @@ function SessionItem({
           (session as any).allFilePaths,
           session.id,
           (session as any).branchParentFilePaths,
-          (session as any).branchPointUuid
+          (session as any).branchPointUuid,
+          (session as any).branchLeafUuid
         )
       }}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, session.id) }}
@@ -87,6 +89,7 @@ function SessionItem({
       ) : (
         <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
           {isResumed && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title={t('sidebar.opened_in_terminal')} />}
+          {isIntraBranch && <GitBranch size={12} className="shrink-0 text-purple-400" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
       )}

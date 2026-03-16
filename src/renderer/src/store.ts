@@ -104,7 +104,7 @@ interface AppState {
   resumedSessionIds: Set<string>
 
   initialize: () => Promise<void>
-  selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string) => Promise<void>
+  selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<void>
   search: (query: string) => Promise<void>
   clearSearch: () => void
   resumeSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
@@ -205,7 +205,7 @@ export const useStore = create<AppState>((set, get) => ({
       const current = get().selectedSession
       if (current && current.id === u.id) {
         const detail = await window.api.loadSessionDetail(
-          u.filePath, u.allFilePaths, u.branchParentFilePaths, u.branchPointUuid
+          u.filePath, u.allFilePaths, u.branchParentFilePaths, u.branchPointUuid, u.branchLeafUuid
         )
         set({ selectedSession: detail as SessionDetail | null })
         // Library transcript is auto-updated by main process file watcher
@@ -222,8 +222,8 @@ export const useStore = create<AppState>((set, get) => ({
     })
   },
 
-  selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?) => {
-    const detail = await window.api.loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid)
+  selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?, branchLeafUuid?) => {
+    const detail = await window.api.loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid)
     set({ selectedSession: detail as SessionDetail | null, selectedUniqueId: uniqueId || null })
     // Get library markdown path for drag
     if (detail) {

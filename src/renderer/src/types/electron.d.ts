@@ -1,6 +1,6 @@
 interface ElectronAPI {
   loadAllSessions: () => Promise<any[]>
-  loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string) => Promise<any>
+  loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<any>
   searchSessions: (
     query: string
   ) => Promise<

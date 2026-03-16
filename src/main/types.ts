@@ -77,6 +77,8 @@ export interface SessionSummary {
   branchParentFilePaths?: string[]
   branchPointUuid?: string
   branchLeafUuid?: string // for intra-file branches: trace this leaf's parentUuid chain
+  branchParentId?: string // ID of the parent branch/session this was forked from
+  branchChildIds?: string[] // IDs of child branches forked from this session
   userImages: string[]
   referencedFiles: FileRef[]
   configFiles: string[]

@@ -466,23 +466,27 @@ function getFileTimeRange(raw: RawJsonlMessage[]): { start: string; end: string 
 }
 
 /**
- * Detect intra-file branches: when `claude --resume` creates a new conversation
- * thread within the same JSONL file (they share a common trunk via parentUuid).
- * Returns info about each significant branch (branches with >= MIN_UNIQUE_TURNS user/assistant turns).
+ * Detect intra-file branches: conversation threads that diverge within the same JSONL file.
+ * Supports nested branches (branch of a branch) and parallel branches (multiple forks from same point).
+ * Returns a flat list with parent-child relationships (like git commits).
  */
 interface IntraBranch {
+  branchIdx: number // stable index for ID generation
   branchPointUuid: string
   leafUuid: string
   firstUserMessage: string
   createdAt: string
   updatedAt: string
-  userMsgCount: number
   turnCount: number
-  pathUuids: Set<string>
+  messageCount: number
+  parentIdx: number // -1 = main, otherwise index into branches array
+  childIdxs: number[]
+  path: string[] // full path from root to leaf
 }
 
 function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
   const MIN_UNIQUE_TURNS = 5
+  const skipPrefixes = ['[Request interrupted', 'This session is being continued']
 
   // Build uuid → index and children map
   const uuidToIdx = new Map<string, number>()
@@ -497,13 +501,12 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
     }
   }
 
-  // Find all leaf uuids (no children)
+  // Find all leaf uuids
   const allUuids = new Set<string>()
   for (const m of raw) { if (m.uuid) allUuids.add(m.uuid) }
   const leafUuids = [...allUuids].filter((u) => !childrenOf.has(u))
   if (leafUuids.length <= 1) return []
 
-  // Trace path from a uuid to root
   function traceToRoot(uuid: string): string[] {
     const path: string[] = []
     const visited = new Set<string>()
@@ -514,52 +517,11 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
       const idx = uuidToIdx.get(current)
       current = idx !== undefined ? raw[idx].parentUuid : undefined
     }
-    return path.reverse() // root → leaf order
+    return path.reverse()
   }
 
-  // Get the longest path (main branch)
-  let mainPath: string[] = []
-  let mainLeaf = ''
-  for (const lu of leafUuids) {
-    const p = traceToRoot(lu)
-    if (p.length > mainPath.length) {
-      mainPath = p
-      mainLeaf = lu
-    }
-  }
-
-  const mainSet = new Set(mainPath)
-
-  // Find branches that diverge significantly from main
-  // Group by (branchPointUuid, firstUserMessage) to avoid counting retry-leaves as separate branches
-  const branchGroups = new Map<string, { leaves: string[]; path: string[]; branchPointUuid: string }>()
-
-  for (const lu of leafUuids) {
-    if (lu === mainLeaf) continue
-    const leafPath = traceToRoot(lu)
-    if (leafPath.length < 10) continue
-
-    // Find divergence point from main
-    let commonLen = 0
-    for (let i = 0; i < Math.min(mainPath.length, leafPath.length); i++) {
-      if (mainPath[i] === leafPath[i]) commonLen++
-      else break
-    }
-    if (commonLen === 0) continue
-
-    const uniquePortion = leafPath.slice(commonLen)
-    const uniqueUserMsgs = uniquePortion.filter((u) => {
-      const idx = uuidToIdx.get(u)
-      return idx !== undefined && raw[idx].type === 'user'
-    })
-
-    if (uniqueUserMsgs.length < MIN_UNIQUE_TURNS) continue
-
-    const branchPointUuid = leafPath[commonLen - 1]
-    // Get first user message unique to this branch
-    let firstMsg = ''
-    const skipPrefixes = ['[Request interrupted', 'This session is being continued']
-    for (const u of uniquePortion) {
+  function getFirstUserMsg(uuids: string[]): string {
+    for (const u of uuids) {
       const idx = uuidToIdx.get(u)
       if (idx === undefined) continue
       const m = raw[idx]
@@ -568,81 +530,178 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
         ? m.message.content
         : (m.message.content as any[])?.filter((p: any) => p.type === 'text' && p.text).map((p: any) => p.text).join('\n') || ''
       const trimmed = text.trim()
-      if (trimmed.length > 0 && !skipPrefixes.some((p) => trimmed.startsWith(p))) {
-        firstMsg = trimmed.slice(0, 200)
-        break
-      }
+      if (trimmed.length > 0 && !skipPrefixes.some((p) => trimmed.startsWith(p))) return trimmed.slice(0, 200)
     }
-    if (!firstMsg) continue
-
-    // Group key: fork point + first 60 chars of first msg
-    const groupKey = `${branchPointUuid}:${firstMsg.slice(0, 60)}`
-    if (!branchGroups.has(groupKey)) {
-      branchGroups.set(groupKey, { leaves: [], path: leafPath, branchPointUuid })
-    }
-    const group = branchGroups.get(groupKey)!
-    group.leaves.push(lu)
-    // Keep the longest path in the group
-    if (leafPath.length > group.path.length) group.path = leafPath
+    return ''
   }
 
-  // Convert groups to IntraBranch results
-  const branches: IntraBranch[] = []
-  for (const [, group] of branchGroups) {
-    const pathUuids = new Set(group.path)
-    // Use the deepest leaf as representative
-    const leafUuid = group.leaves.reduce((best, lu) => {
-      const p = traceToRoot(lu)
-      return p.length > traceToRoot(best).length ? lu : best
-    })
+  function countUserTurns(uuids: string[]): number {
+    return uuids.filter((u) => {
+      const idx = uuidToIdx.get(u)
+      return idx !== undefined && raw[idx].type === 'user'
+    }).length
+  }
 
-    // Compute stats for the unique portion
-    const commonLen = group.path.findIndex((u) => !mainSet.has(u))
-    const uniqueUuids = commonLen >= 0 ? group.path.slice(commonLen) : []
+  // Collect all leaf paths, group similar ones (same fork point + same first message)
+  interface PathGroup {
+    leaves: string[]
+    path: string[] // longest representative path
+  }
 
-    let userCount = 0
-    let assistantCount = 0
-    let firstUserMessage = ''
+  const allPathGroups: PathGroup[] = []
+  const leafToGroup = new Map<string, number>()
+
+  // Build all paths and group by (forkPoint relative to longest, firstMsg)
+  const allPaths = leafUuids.map((lu) => ({ leaf: lu, path: traceToRoot(lu) }))
+  allPaths.sort((a, b) => b.path.length - a.path.length) // longest first
+
+  // The longest path is the "main" branch
+  const mainPath = allPaths[0].path
+  const mainSet = new Set(mainPath)
+
+  // Group remaining leaves: for each leaf, find its divergence from the closest known branch
+  // Start simple: group by divergence from main
+  const groupByKey = new Map<string, PathGroup>()
+
+  for (const { leaf, path } of allPaths) {
+    // Find divergence from main
+    let commonLen = 0
+    for (let i = 0; i < Math.min(mainPath.length, path.length); i++) {
+      if (mainPath[i] === path[i]) commonLen++
+      else break
+    }
+    const uniquePortion = path.slice(commonLen)
+    if (uniquePortion.length === 0) {
+      // Same as main (or subset) — belongs to main group
+      continue
+    }
+    const firstMsg = getFirstUserMsg(uniquePortion)
+    if (!firstMsg) continue
+    const branchPointUuid = path[commonLen - 1] || ''
+    const groupKey = `${branchPointUuid}:${firstMsg.slice(0, 60)}`
+
+    if (!groupByKey.has(groupKey)) {
+      groupByKey.set(groupKey, { leaves: [], path })
+    }
+    const g = groupByKey.get(groupKey)!
+    g.leaves.push(leaf)
+    if (path.length > g.path.length) g.path = path
+  }
+
+  // Filter to significant groups
+  for (const [, g] of groupByKey) {
+    let commonLen = 0
+    for (let i = 0; i < Math.min(mainPath.length, g.path.length); i++) {
+      if (mainPath[i] === g.path[i]) commonLen++
+      else break
+    }
+    if (countUserTurns(g.path.slice(commonLen)) >= MIN_UNIQUE_TURNS) {
+      allPathGroups.push(g)
+    }
+  }
+
+  if (allPathGroups.length === 0) return []
+
+  // Now build the branch tree: for each pair of groups, determine parent-child
+  // A branch B is a child of branch A if B's path diverges from A's path (not from main)
+  // Sort groups by divergence point from main (earlier fork = higher in tree)
+
+  interface BranchNode {
+    groupIdx: number
+    path: string[]
+    forkFromMainIdx: number // index in mainPath where this diverges
+    parentNode: number // -1 = main
+    childNodes: number[]
+  }
+
+  const nodes: BranchNode[] = allPathGroups.map((g, gi) => {
+    let forkIdx = 0
+    for (let i = 0; i < Math.min(mainPath.length, g.path.length); i++) {
+      if (mainPath[i] === g.path[i]) forkIdx = i + 1
+      else break
+    }
+    return { groupIdx: gi, path: g.path, forkFromMainIdx: forkIdx, parentNode: -1, childNodes: [] }
+  })
+
+  // Determine parent-child: for each node, find the best parent
+  // The parent is the node whose path contains the fork point of this node AND
+  // shares the longest common prefix with this node
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]
+    const nodePath = node.path
+    let bestParent = -1 // default: child of main
+    let bestCommon = node.forkFromMainIdx // shared with main
+
+    for (let j = 0; j < nodes.length; j++) {
+      if (i === j) continue
+      const other = nodes[j]
+      // How much does this node share with the other?
+      let commonLen = 0
+      for (let k = 0; k < Math.min(nodePath.length, other.path.length); k++) {
+        if (nodePath[k] === other.path[k]) commonLen++
+        else break
+      }
+      // This node is a child of other if they share MORE than what node shares with main,
+      // AND the divergence point is on the other's unique portion (not on main)
+      if (commonLen > bestCommon && commonLen > other.forkFromMainIdx) {
+        bestParent = j
+        bestCommon = commonLen
+      }
+    }
+    node.parentNode = bestParent
+  }
+
+  // Build child lists
+  for (let i = 0; i < nodes.length; i++) {
+    const parentIdx = nodes[i].parentNode
+    if (parentIdx >= 0) nodes[parentIdx].childNodes.push(i)
+  }
+
+  // Convert to IntraBranch results
+  const branches: IntraBranch[] = nodes.map((node, idx) => {
+    const group = allPathGroups[node.groupIdx]
+    const path = group.path
+
+    // Find the divergence point: compare with parent's path
+    const parentPath = node.parentNode >= 0 ? nodes[node.parentNode].path : mainPath
+    let commonLen = 0
+    for (let i = 0; i < Math.min(parentPath.length, path.length); i++) {
+      if (parentPath[i] === path[i]) commonLen++
+      else break
+    }
+    const branchPointUuid = path[commonLen - 1] || path[0]
+    const uniquePortion = path.slice(commonLen)
+
+    const firstUserMessage = getFirstUserMsg(uniquePortion)
+    const userCount = countUserTurns(uniquePortion)
+    const assistantCount = uniquePortion.filter((u) => {
+      const i = uuidToIdx.get(u)
+      return i !== undefined && raw[i].type === 'assistant'
+    }).length
+
     let createdAt = ''
     let updatedAt = ''
-    const skipPrefixes = ['[Request interrupted', 'This session is being continued']
-
-    for (const u of uniqueUuids) {
-      const idx = uuidToIdx.get(u)
-      if (idx === undefined) continue
-      const m = raw[idx]
-      if (m.timestamp) {
-        if (!createdAt) createdAt = m.timestamp
-        updatedAt = m.timestamp
-      }
-      if (m.type === 'user') {
-        userCount++
-        if (!firstUserMessage && m.message) {
-          const text = typeof m.message.content === 'string'
-            ? m.message.content
-            : (m.message.content as any[])?.filter((p: any) => p.type === 'text' && p.text).map((p: any) => p.text).join('\n') || ''
-          const trimmed = text.trim()
-          if (trimmed.length > 0 && !skipPrefixes.some((p) => trimmed.startsWith(p))) {
-            firstUserMessage = trimmed.slice(0, 200)
-          }
-        }
-      }
-      if (m.type === 'assistant') assistantCount++
+    for (const u of uniquePortion) {
+      const i = uuidToIdx.get(u)
+      if (i === undefined) continue
+      const ts = raw[i].timestamp
+      if (ts) { if (!createdAt) createdAt = ts; updatedAt = ts }
     }
 
-    if (userCount >= MIN_UNIQUE_TURNS) {
-      branches.push({
-        branchPointUuid: group.branchPointUuid,
-        leafUuid,
-        firstUserMessage,
-        createdAt,
-        updatedAt,
-        userMsgCount: userCount,
-        turnCount: Math.min(userCount, assistantCount),
-        pathUuids
-      })
+    return {
+      branchIdx: idx,
+      branchPointUuid,
+      leafUuid: group.leaves.reduce((best, lu) => traceToRoot(lu).length > traceToRoot(best).length ? lu : best),
+      firstUserMessage,
+      createdAt,
+      updatedAt,
+      turnCount: Math.min(userCount, assistantCount),
+      messageCount: path.length,
+      parentIdx: node.parentNode,
+      childIdxs: node.childNodes,
+      path
     }
-  }
+  })
 
   return branches
 }
@@ -785,20 +844,34 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
 
         // Detect intra-file branches (e.g. from claude --resume within same file)
         const intraBranches = detectIntraFileBranches(mergedRaw)
-        for (let bi = 0; bi < intraBranches.length; bi++) {
-          const branch = intraBranches[bi]
-          const branchSummary: SessionSummary = {
-            ...summary,
-            id: `${summary.sessionId}:intra-${bi}`,
-            firstUserMessage: branch.firstUserMessage,
-            createdAt: branch.createdAt,
-            updatedAt: branch.updatedAt,
-            turnCount: branch.turnCount,
-            messageCount: branch.pathUuids.size,
-            branchPointUuid: branch.branchPointUuid,
-            branchLeafUuid: branch.leafUuid
+        if (intraBranches.length > 0) {
+          const branchIds: string[] = intraBranches.map((_, bi) => `${summary.sessionId}:intra-${bi}`)
+
+          // Set child IDs on the main summary (direct children only)
+          summary.branchChildIds = intraBranches
+            .filter((b) => b.parentIdx === -1)
+            .map((b) => branchIds[b.branchIdx])
+
+          for (let bi = 0; bi < intraBranches.length; bi++) {
+            const branch = intraBranches[bi]
+            const branchId = branchIds[bi]
+            const parentId = branch.parentIdx === -1 ? summary.id : branchIds[branch.parentIdx]
+
+            const branchSummary: SessionSummary = {
+              ...summary,
+              id: branchId,
+              firstUserMessage: branch.firstUserMessage,
+              createdAt: branch.createdAt,
+              updatedAt: branch.updatedAt,
+              turnCount: branch.turnCount,
+              messageCount: branch.messageCount,
+              branchPointUuid: branch.branchPointUuid,
+              branchLeafUuid: branch.leafUuid,
+              branchParentId: parentId,
+              branchChildIds: branch.childIdxs.map((ci) => branchIds[ci])
+            }
+            summaries.push(branchSummary)
           }
-          summaries.push(branchSummary)
         }
       }
     }

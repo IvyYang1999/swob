@@ -31,12 +31,23 @@ function SessionItem({
   onRenameSubmit?: () => void; onRenameCancel?: () => void
   onDoubleClickRename?: (sessionId: string) => void
 }) {
-  const { selectedUniqueId, selectSession, config, resumedSessionIds, locale } = useStore()
+  const { selectedUniqueId, selectSession, config, resumedSessionIds, locale, sessions } = useStore()
   const t = useT()
   const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
   const isIntraBranch = !!(session as any).branchLeafUuid
+  const branchParentId = (session as any).branchParentId as string | undefined
+  const branchChildIds = (session as any).branchChildIds as string[] | undefined
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
+
+  // Resolve parent branch title
+  const parentTitle = useMemo(() => {
+    if (!branchParentId) return ''
+    const parent = sessions.find((s) => s.id === branchParentId)
+    if (!parent) return ''
+    const pMeta = config?.sessionMeta[parent.sessionId] || config?.sessionMeta[parent.id]
+    return pMeta?.customTitle || parent.firstUserMessage?.slice(0, 30) || ''
+  }, [branchParentId, sessions, config])
   const renameInputRef = useRef<HTMLInputElement>(null)
   const isSelected = selectedUniqueId === session.id
 
@@ -93,11 +104,19 @@ function SessionItem({
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
       )}
+      {isIntraBranch && parentTitle && (
+        <div className="text-[10px] text-purple-400/60 truncate mt-0.5">↳ {parentTitle}</div>
+      )}
       <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500">
         <Clock size={10} /><span>{formatDate(session.updatedAt, locale, t)}</span>
         <MessageSquare size={10} /><span>{t('sidebar.turns', { n: session.turnCount })}</span>
         {session.compactCount > 0 && (
           <span className="px-1 bg-amber-900/50 text-amber-400 rounded text-[10px]">compact</span>
+        )}
+        {branchChildIds && branchChildIds.length > 0 && (
+          <span className="px-1 bg-purple-900/50 text-purple-400 rounded text-[10px] flex items-center gap-0.5">
+            <GitBranch size={9} />{branchChildIds.length}
+          </span>
         )}
       </div>
     </button>
@@ -127,7 +146,7 @@ function InlineNewFolder({ depth, onSubmit, onCancel }: {
 // ============ Recursive Folder Node ============
 
 function FolderNode({
-  folder, depth, allFolders, sessionMap, sessionsByBaseId, expandedFolders, toggleFolder,
+  folder, depth, allFolders, sessionMap, expandedFolders, toggleFolder,
   dragOverFolderId, dragOverZone, setDragOverFolderId, setDragOverZone,
   renamingFolderId, setRenamingFolderId, renamingValue, setRenamingValue,
   handleRenameFolder, onSessionContextMenu, creatingSubfolderId,
@@ -137,7 +156,6 @@ function FolderNode({
 }: {
   folder: Folder; depth: number; allFolders: Folder[]
   sessionMap: Map<string, SessionSummary>
-  sessionsByBaseId: Map<string, SessionSummary[]>
   expandedFolders: Set<string>; toggleFolder: (id: string) => void
   dragOverFolderId: string | null; dragOverZone: 'inside' | 'before' | 'after'
   setDragOverFolderId: (id: string | null) => void
@@ -157,8 +175,7 @@ function FolderNode({
   const isExpanded = expandedFolders.has(folder.id)
   const headerRef = useRef<HTMLDivElement>(null)
   const childFolders = allFolders.filter((f) => f.parentId === folder.id)
-  // Include intra-file branches: expand each sessionId to all sessions sharing that base ID
-  const folderSessions = folder.sessionIds.flatMap((id) => sessionsByBaseId.get(id) || (sessionMap.has(id) ? [sessionMap.get(id)!] : []))
+  const folderSessions = folder.sessionIds.map((id) => sessionMap.get(id)).filter(Boolean) as SessionSummary[]
   const totalCount = folderSessions.length + childFolders.reduce((acc, cf) => acc + cf.sessionIds.length, 0)
 
   const handleDrop = (e: React.DragEvent, zone: 'inside' | 'before' | 'after') => {
@@ -251,7 +268,7 @@ function FolderNode({
           )}
           {childFolders.map((child) => (
             <FolderNode key={child.id} folder={child} depth={depth + 1} allFolders={allFolders}
-              sessionMap={sessionMap} sessionsByBaseId={sessionsByBaseId} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
+              sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
               dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
               setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
               renamingFolderId={renamingFolderId} setRenamingFolderId={setRenamingFolderId}
@@ -387,24 +404,17 @@ export function Sidebar({ width }: { width: number }) {
   }, [config?.folders])
 
   const ungroupedSessions = useMemo(
-    () => sessions.filter((s) => !groupedSessionIds.has(s.id) && !groupedSessionIds.has(s.sessionId)),
+    () => sessions.filter((s) => {
+      // Intra-file branches are always ungrouped (they don't follow parent into folders)
+      if ((s as any).branchLeafUuid) return true
+      return !groupedSessionIds.has(s.id) && !groupedSessionIds.has(s.sessionId)
+    }),
     [sessions, groupedSessionIds]
   )
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionSummary>()
     sessions.forEach((s) => { map.set(s.id, s); if (s.sessionId && s.sessionId !== s.id && !map.has(s.sessionId)) map.set(s.sessionId, s) })
-    return map
-  }, [sessions])
-
-  // Multi-map: sessionId → all sessions with that sessionId (including intra-branches)
-  const sessionsByBaseId = useMemo(() => {
-    const map = new Map<string, SessionSummary[]>()
-    sessions.forEach((s) => {
-      const key = s.sessionId || s.id
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(s)
-    })
     return map
   }, [sessions])
 
@@ -473,7 +483,7 @@ export function Sidebar({ width }: { width: number }) {
           <>
             {rootFolders.map((folder) => (
               <FolderNode key={folder.id} folder={folder} depth={0} allFolders={config?.folders || []}
-                sessionMap={sessionMap} sessionsByBaseId={sessionsByBaseId} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
+                sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
                 dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
                 setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
                 renamingFolderId={renamingFolderId} setRenamingFolderId={setRenamingFolderId}

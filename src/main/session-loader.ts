@@ -18,7 +18,7 @@ const HOME = process.env.HOME || ''
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 3 // bumped: stricter branch detection thresholds
+const CACHE_VERSION = 5 // temporal interleaving filter for branches
 
 interface DiskCache {
   version: number
@@ -588,19 +588,39 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
     if (path.length > g.path.length) g.path = path
   }
 
-  // Filter to significant groups
+  // Filter to significant groups — require TEMPORAL INTERLEAVING with main path.
+  // Real --resume branches have two terminals writing simultaneously: their messages
+  // alternate in time (many M→B and B→M transitions when sorted by timestamp).
+  // Retries are single-threaded: retry messages form a contiguous block, few transitions.
+  const MIN_TRANSITIONS = 10
   for (const [, g] of groupByKey) {
     let commonLen = 0
     for (let i = 0; i < Math.min(mainPath.length, g.path.length); i++) {
       if (mainPath[i] === g.path[i]) commonLen++
       else break
     }
-    // Fork must not be in the last 10% of main path (those are retries, not branches)
-    if (commonLen > mainPath.length * 0.9) continue
-    // Branch must have enough unique user turns
-    if (countUserTurns(g.path.slice(commonLen)) >= MIN_UNIQUE_TURNS) {
-      allPathGroups.push(g)
+    if (commonLen === 0 || commonLen >= mainPath.length) continue
+    if (countUserTurns(g.path.slice(commonLen)) < MIN_UNIQUE_TURNS) continue
+
+    // Count interleaving transitions: sort messages by timestamp, count M↔B switches
+    const combined: Array<{ side: 'M' | 'B'; ts: string }> = []
+    for (const u of mainPath.slice(commonLen)) {
+      const i = uuidToIdx.get(u)
+      if (i !== undefined && raw[i].timestamp) combined.push({ side: 'M', ts: raw[i].timestamp })
     }
+    for (const u of g.path.slice(commonLen)) {
+      const i = uuidToIdx.get(u)
+      if (i !== undefined && raw[i].timestamp) combined.push({ side: 'B', ts: raw[i].timestamp })
+    }
+    combined.sort((a, b) => a.ts.localeCompare(b.ts))
+
+    let transitions = 0
+    for (let i = 1; i < combined.length; i++) {
+      if (combined[i].side !== combined[i - 1].side) transitions++
+    }
+    if (transitions < MIN_TRANSITIONS) continue
+
+    allPathGroups.push(g)
   }
 
   if (allPathGroups.length === 0) return []

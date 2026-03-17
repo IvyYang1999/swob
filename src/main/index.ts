@@ -68,8 +68,10 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // Prevent Electron from navigating when files are dropped
-  mainWindow.webContents.on('will-navigate', (event) => {
+  // Prevent Electron from navigating when files/URLs are dropped
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    // Allow in-app navigation (same origin), block external
+    if (!url.startsWith('file://') && !url.startsWith('http')) return
     event.preventDefault()
   })
 

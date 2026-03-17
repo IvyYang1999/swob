@@ -424,8 +424,6 @@ ipcMain.handle(
     const baseSessionId = sessionId.includes(':intra-') || sessionId.includes(':branch-')
       ? sessionId.split(':')[0]
       : sessionId
-    const fsLog = require('fs')
-    fsLog.appendFileSync('/tmp/swob-debug.log', `[addSessionToFolder] folderId=${folderId} sessionId=${sessionId} baseSessionId=${baseSessionId} libraryInit=${libraryInitialized}\n`)
     if (libraryInitialized) {
       const folderPath = resolveFolderPath(folderId)
       moveSessionToFolder(baseSessionId, folderPath)

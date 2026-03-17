@@ -49,8 +49,9 @@ function SessionItem({
   return (
     <button
       data-session-id={session.id}
-      draggable={!isRenaming}
+      draggable={!isRenaming && !isIntraBranch}
       onDragStart={(e) => {
+        if (isIntraBranch) { e.preventDefault(); return }
         e.dataTransfer.setData('application/x-swob', JSON.stringify({
           type: 'session', id: session.id, sessionId: session.sessionId || session.id
         }))

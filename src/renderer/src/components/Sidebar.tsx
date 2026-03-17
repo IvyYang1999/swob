@@ -172,9 +172,9 @@ function FolderNode({
     setDragOverFolderId(null)
     try {
       const rawData = e.dataTransfer.getData('application/x-swob')
-      if (!rawData) { console.error('[DROP] No data in application/x-swob'); return }
+      document.title = `DROP: zone=${zone} data=${rawData?.slice(0, 60) || 'EMPTY'}`
+      if (!rawData) return
       const data = JSON.parse(rawData)
-      console.log('[DROP]', folder.id, zone, data)
       if (data.type === 'session' && (data.sessionId || data.id)) {
         addSessionToFolder(folder.id, data.sessionId || data.id)
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)

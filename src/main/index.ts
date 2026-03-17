@@ -420,15 +420,21 @@ ipcMain.handle(
 ipcMain.handle(
   'config:addSessionToFolder',
   (_event, folderId: string, sessionId: string) => {
+    // For intra-file branches (id like "abc:intra-0"), use the base sessionId
+    const baseSessionId = sessionId.includes(':intra-') || sessionId.includes(':branch-')
+      ? sessionId.split(':')[0]
+      : sessionId
+    const fsLog = require('fs')
+    fsLog.appendFileSync('/tmp/swob-debug.log', `[addSessionToFolder] folderId=${folderId} sessionId=${sessionId} baseSessionId=${baseSessionId} libraryInit=${libraryInitialized}\n`)
     if (libraryInitialized) {
       const folderPath = resolveFolderPath(folderId)
-      moveSessionToFolder(sessionId, folderPath)
+      moveSessionToFolder(baseSessionId, folderPath)
       const tree = scanLibrary()
       return libraryTreeToConfig(tree)
     }
     const config = loadConfig()
     const { addSessionToFolder } = require('./config-store')
-    return addSessionToFolder(config, folderId, sessionId)
+    return addSessionToFolder(config, folderId, baseSessionId)
   }
 )
 

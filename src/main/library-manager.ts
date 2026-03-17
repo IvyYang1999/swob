@@ -472,6 +472,7 @@ export function deleteLibraryFolder(folderPath: string): void {
 
 export function moveSessionToFolder(sessionId: string, folderPath: string): void {
   const currentDir = sessionIndex.get(sessionId)
+  fs.appendFileSync('/tmp/swob-debug.log', `[moveSession] sessionId=${sessionId} currentDir=${currentDir || 'NOT_IN_INDEX'} folderPath=${folderPath} indexSize=${sessionIndex.size}\n`)
   if (!currentDir || !fs.existsSync(currentDir)) return
 
   const baseName = path.basename(currentDir)

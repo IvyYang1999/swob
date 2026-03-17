@@ -35,7 +35,7 @@ function SessionItem({
   const t = useT()
   const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
-  const isIntraBranch = !!(session as any).branchLeafUuid
+  const isIntraBranch = session.id.includes(':intra-')
   const branchChildIds = (session as any).branchChildIds as string[] | undefined
   const hasBranchChildren = branchChildIds && branchChildIds.length > 0
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
@@ -51,7 +51,6 @@ function SessionItem({
       data-session-id={session.id}
       draggable={!isRenaming && !isIntraBranch}
       onDragStart={(e) => {
-        console.log('[dragStart]', session.id, 'isIntraBranch=', isIntraBranch)
         if (isIntraBranch) { e.preventDefault(); return }
         e.dataTransfer.setData('application/x-swob', JSON.stringify({
           type: 'session', id: session.id, sessionId: session.sessionId || session.id
@@ -173,9 +172,7 @@ function FolderNode({
     e.stopPropagation()
     setDragOverFolderId(null)
     try {
-      const raw = e.dataTransfer.getData('application/x-swob')
-      console.log('[handleDrop]', zone, raw)
-      const data = JSON.parse(raw)
+      const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
       if (data.type === 'session' && (data.sessionId || data.id)) {
         addSessionToFolder(folder.id, data.sessionId || data.id)
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)

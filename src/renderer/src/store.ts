@@ -128,8 +128,15 @@ interface AppState {
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale }
 
 // Read localStorage at module load time — before first render, zero flicker
+const LOCAL_CACHE_VERSION = 2 // bump to invalidate stale localStorage data
+
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
   try {
+    const ver = localStorage.getItem('csm:cacheVersion')
+    if (ver !== String(LOCAL_CACHE_VERSION)) {
+      localStorage.removeItem('csm:sessions')
+      localStorage.setItem('csm:cacheVersion', String(LOCAL_CACHE_VERSION))
+    }
     const cached = localStorage.getItem('csm:sessions')
     const cachedConfig = localStorage.getItem('csm:config')
     if (cached && cachedConfig) {

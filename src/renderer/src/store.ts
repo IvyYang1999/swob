@@ -128,7 +128,7 @@ interface AppState {
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale }
 
 // Read localStorage at module load time — before first render, zero flicker
-const LOCAL_CACHE_VERSION = 2 // bump to invalidate stale localStorage data
+const LOCAL_CACHE_VERSION = 3 // bump: new branch detection thresholds
 
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
   try {

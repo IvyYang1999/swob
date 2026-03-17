@@ -93,24 +93,7 @@ export default function App() {
     initialize()
   }, [initialize])
 
-  useEffect(() => {
-    // Prevent external file drops from navigating, but allow internal app drag-and-drop
-    const preventDrop = (e: DragEvent) => {
-      // If the drop has our custom data type, let React handlers handle it
-      if (e.dataTransfer?.types.includes('application/x-swob')) return
-      e.preventDefault()
-    }
-    const preventDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes('application/x-swob')) return
-      e.preventDefault()
-    }
-    document.addEventListener('drop', preventDrop)
-    document.addEventListener('dragover', preventDragOver)
-    return () => {
-      document.removeEventListener('drop', preventDrop)
-      document.removeEventListener('dragover', preventDragOver)
-    }
-  }, [])
+  // External file drop navigation is prevented by main process will-navigate handler
 
   const handleSidebarResize = useCallback((delta: number) => {
     setSidebarWidth(w => Math.max(180, Math.min(400, w + delta)))

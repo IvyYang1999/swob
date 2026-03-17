@@ -18,7 +18,7 @@ const HOME = process.env.HOME || ''
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 5 // temporal interleaving filter for branches
+const CACHE_VERSION = 6 // lower branch thresholds
 
 interface DiskCache {
   version: number
@@ -485,7 +485,7 @@ interface IntraBranch {
 }
 
 function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
-  const MIN_UNIQUE_TURNS = 20 // high threshold: only deliberate --resume branches, not retries
+  const MIN_UNIQUE_TURNS = 2 // low threshold: detect branches with at least 2 user turns
   const skipPrefixes = ['[Request interrupted', 'This session is being continued']
 
   // Build uuid → index and children map
@@ -592,7 +592,7 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
   // Real --resume branches have two terminals writing simultaneously: their messages
   // alternate in time (many M→B and B→M transitions when sorted by timestamp).
   // Retries are single-threaded: retry messages form a contiguous block, few transitions.
-  const MIN_TRANSITIONS = 10
+  const MIN_TRANSITIONS = 4 // require at least 4 M↔B switches (both sides active)
   for (const [, g] of groupByKey) {
     let commonLen = 0
     for (let i = 0; i < Math.min(mainPath.length, g.path.length); i++) {

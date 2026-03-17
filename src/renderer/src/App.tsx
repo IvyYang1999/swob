@@ -94,8 +94,16 @@ export default function App() {
   }, [initialize])
 
   useEffect(() => {
-    const preventDrop = (e: DragEvent) => { e.preventDefault() }
-    const preventDragOver = (e: DragEvent) => { e.preventDefault() }
+    // Prevent external file drops from navigating, but allow internal app drag-and-drop
+    const preventDrop = (e: DragEvent) => {
+      // If the drop has our custom data type, let React handlers handle it
+      if (e.dataTransfer?.types.includes('application/x-swob')) return
+      e.preventDefault()
+    }
+    const preventDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('application/x-swob')) return
+      e.preventDefault()
+    }
     document.addEventListener('drop', preventDrop)
     document.addEventListener('dragover', preventDragOver)
     return () => {

@@ -171,10 +171,7 @@ function FolderNode({
     e.stopPropagation()
     setDragOverFolderId(null)
     try {
-      const rawData = e.dataTransfer.getData('application/x-swob')
-      document.title = `DROP: zone=${zone} data=${rawData?.slice(0, 60) || 'EMPTY'}`
-      if (!rawData) return
-      const data = JSON.parse(rawData)
+      const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
       if (data.type === 'session' && (data.sessionId || data.id)) {
         addSessionToFolder(folder.id, data.sessionId || data.id)
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)

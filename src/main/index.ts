@@ -68,6 +68,11 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Prevent Electron from navigating when files are dropped
+  mainWindow.webContents.on('will-navigate', (event) => {
+    event.preventDefault()
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {

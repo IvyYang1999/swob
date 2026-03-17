@@ -31,7 +31,7 @@ function SessionItem({
   onRenameSubmit?: () => void; onRenameCancel?: () => void
   onDoubleClickRename?: (sessionId: string) => void
 }) {
-  const { selectedUniqueId, selectSession, config, resumedSessionIds, locale } = useStore()
+  const { selectedUniqueId, selectSession, config, resumedSessionIds, locale, sessions } = useStore()
   const t = useT()
   const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
@@ -49,8 +49,9 @@ function SessionItem({
   return (
     <button
       data-session-id={session.id}
-      draggable={!isRenaming}
+      draggable={!isRenaming && !isIntraBranch}
       onDragStart={(e) => {
+        if (isIntraBranch) { e.preventDefault(); return }
         e.dataTransfer.setData('application/x-swob', JSON.stringify({
           type: 'session', id: session.id, sessionId: session.sessionId || session.id
         }))
@@ -64,14 +65,19 @@ function SessionItem({
         e.dataTransfer.effectAllowed = 'copyMove'
       }}
       onClick={() => {
-        if (!isRenaming) selectSession(
-          session.filePath,
-          (session as any).allFilePaths,
-          session.id,
-          (session as any).branchParentFilePaths,
-          (session as any).branchPointUuid,
-          (session as any).branchLeafUuid
-        )
+        if (!isRenaming) {
+          // For intra-file branches, look up fresh data from the sessions array
+          // (localStorage cache might have stale data without branch fields)
+          const fresh = sessions.find((s) => s.id === session.id) || session
+          selectSession(
+            fresh.filePath,
+            (fresh as any).allFilePaths,
+            fresh.id,
+            (fresh as any).branchParentFilePaths,
+            (fresh as any).branchPointUuid,
+            (fresh as any).branchLeafUuid
+          )
+        }
       }}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, session.id) }}
       onDoubleClick={(e) => { e.stopPropagation(); onDoubleClickRename?.(session.id) }}
@@ -394,7 +400,7 @@ export function Sidebar({ width }: { width: number }) {
   const ungroupedSessions = useMemo(
     () => sessions.filter((s) => {
       // Intra-file branches are always ungrouped (they don't follow parent into folders)
-      if ((s as any).branchLeafUuid) return true
+      if (s.id.includes(':intra-')) return true
       return !groupedSessionIds.has(s.id) && !groupedSessionIds.has(s.sessionId)
     }),
     [sessions, groupedSessionIds]

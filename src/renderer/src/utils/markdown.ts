@@ -102,6 +102,16 @@ export function groupIntoTurns(messages: ParsedMessage[]): Turn[] {
     const hasTools = msg.toolCalls.length > 0
     if (msg.type === 'user') {
       if (!hasText) continue
+      // Merge consecutive command-output messages into one turn
+      if (msg.subtype === 'command-output') {
+        if (current?.userMsg?.subtype === 'command-output') {
+          current.userMsg = { ...current.userMsg, textContent: current.userMsg.textContent + '\n' + msg.textContent }
+          continue
+        }
+        if (current) turns.push(current)
+        current = { userMsg: { ...msg }, assistantMsgs: [] }
+        continue
+      }
       if (current) turns.push(current)
       current = { userMsg: msg, assistantMsgs: [] }
     } else if (msg.type === 'assistant') {
@@ -145,6 +155,12 @@ export function computeChatTocEntries(sections: CompactSection[], locale: Locale
       if (!turn.userMsg) return
       const text = turn.userMsg.textContent.trim()
       if (text.startsWith(COMPACT_SUMMARY_PREFIX)) return
+      // Command-output: show command name or "Terminal" instead of raw XML
+      if (turn.userMsg.subtype === 'command-output') {
+        const cmdName = text.match(/<command-name>(.*?)<\/command-name>/)?.[1]
+        entries.push({ level: 5, text: cmdName || 'Terminal', id: `turn-${turn.userMsg.uuid}` })
+        return
+      }
       const snippet = text.split('\n')[0].slice(0, 50)
       entries.push({ level: 5, text: snippet, id: `turn-${turn.userMsg.uuid}` })
     })

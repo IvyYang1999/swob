@@ -32,22 +32,19 @@ function cleanUserText(text: string): string {
     .trim()
 }
 
-/** Parse command-output text into structured parts */
+/** Parse command-output text (may contain merged consecutive messages) */
 function parseCommandOutput(text: string): { label: string; output: string } {
-  // Slash command: <command-name>/foo</command-name> ...
+  // Extract all known parts from the (possibly merged) text
   const cmdName = text.match(/<command-name>(.*?)<\/command-name>/)?.[1]
-  if (cmdName) {
-    // Try to extract stdout that follows the command tags
-    const stdout = text.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/)?.[1]?.trim()
-    return { label: cmdName, output: stdout || '' }
-  }
-  // local-command-caveat: system instruction — show as collapsed notice
-  const caveat = text.match(/<local-command-caveat>([\s\S]*?)<\/local-command-caveat>/)?.[1]?.trim()
-  if (caveat) return { label: 'System', output: caveat }
-  // local-command-stdout or user-prompt-submit-hook
-  const stdout = text.match(/<(?:local-command-stdout|user-prompt-submit-hook)>([\s\S]*?)<\/(?:local-command-stdout|user-prompt-submit-hook)>/)?.[1]?.trim()
-  if (stdout) return { label: 'Terminal', output: stdout }
-  // Fallback: strip all tags
+  const stdout = text.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/)?.[1]?.trim()
+  const hookOut = text.match(/<user-prompt-submit-hook>([\s\S]*?)<\/user-prompt-submit-hook>/)?.[1]?.trim()
+  const output = stdout || hookOut || ''
+
+  // If we have a command name, use it as label (e.g. "/login")
+  if (cmdName) return { label: cmdName, output }
+  // Standalone stdout/hook output
+  if (output) return { label: 'Terminal', output }
+  // Fallback (e.g. caveat-only): strip tags, show as System
   return { label: 'System', output: text.replace(/<[^>]+>/g, '').trim() }
 }
 
@@ -56,22 +53,23 @@ function SystemNoticePill({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false)
   const { label, output } = useMemo(() => parseCommandOutput(text), [text])
   const isSlashCmd = label.startsWith('/')
+  const hasContent = output.length > 0
   const preview = output.length > 80 ? output.slice(0, 80) + '…' : output
 
   return (
     <div className="my-1">
       <button
-        onClick={() => output && setExpanded(!expanded)}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-800/60 border border-zinc-700/40 hover:border-zinc-600/50 transition-colors max-w-full"
+        onClick={() => hasContent && setExpanded(!expanded)}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-800/60 border border-zinc-700/40 transition-colors max-w-full ${hasContent ? 'hover:border-zinc-600/50 cursor-pointer' : 'cursor-default'}`}
       >
-        {output ? (
+        {hasContent ? (
           expanded ? <ChevronDown size={11} className="text-zinc-500 shrink-0" /> : <ChevronRight size={11} className="text-zinc-500 shrink-0" />
         ) : null}
         <Terminal size={11} className="text-zinc-500 shrink-0" />
         <span className={`text-[11px] font-mono shrink-0 ${isSlashCmd ? 'text-purple-400' : 'text-zinc-400'}`}>{label}</span>
         {preview && !expanded && <span className="text-[10px] text-zinc-500 truncate">{preview}</span>}
       </button>
-      {expanded && output && (
+      {expanded && hasContent && (
         <pre className="mt-1 ml-5 px-3 py-2 text-[11px] text-zinc-400 bg-zinc-800/30 border border-zinc-700/50 rounded-md overflow-x-auto max-h-48 overflow-y-auto font-mono whitespace-pre-wrap break-all">{output}</pre>
       )}
     </div>

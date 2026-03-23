@@ -1,5 +1,77 @@
 @import "tailwindcss";
 
+@theme {
+  /* 背景 */
+  --color-base: #18181b;        /* zinc-900 */
+  --color-surface: #27272a;     /* zinc-800 */
+  --color-hover: #3f3f46;       /* zinc-700 */
+  --color-pressed: #52525b;     /* zinc-600 */
+
+  /* 文字 */
+  --color-bright: #f4f4f5;      /* zinc-100 */
+  --color-primary: #e4e4e7;     /* zinc-200 */
+  --color-body: #d4d4d8;        /* zinc-300 */
+  --color-secondary: #a1a1aa;   /* zinc-400 */
+  --color-muted: #71717a;       /* zinc-500 */
+  --color-faint: #52525b;       /* zinc-600 */
+
+  /* 边框 */
+  --color-edge: #3f3f46;        /* zinc-700 */
+  --color-edge-subtle: #27272a; /* zinc-800 */
+  --color-edge-strong: #52525b; /* zinc-600 */
+  --color-edge-focus: #71717a;  /* zinc-500 */
+
+  /* 语义色 */
+  --color-accent: #8c72b8;      /* 选中态（紫色，对齐品牌） */
+  --color-active: #4cc080;      /* 活跃状态 */
+
+  /* 点缀色板 — 底色克制，点缀鲜明 */
+  --color-soft-blue: #5a9fd4;
+  --color-soft-green: #4aad76;
+  --color-soft-red: #cc6b6b;
+  --color-soft-amber: #c49a4a;
+  --color-soft-purple: #8c72b8;
+  --color-soft-cyan: #4aacba;
+  --color-soft-indigo: #7474b8;
+  --color-soft-pink: #c05c88;
+  --color-soft-orange: #c88450;
+  --color-soft-emerald: #44a880;
+}
+
+/* 浅色模式 */
+[data-theme="light"] {
+  --color-base: #ffffff;
+  --color-surface: #f4f4f5;
+  --color-hover: #e4e4e7;
+  --color-pressed: #d4d4d8;
+
+  --color-bright: #09090b;
+  --color-primary: #18181b;
+  --color-body: #27272a;
+  --color-secondary: #52525b;
+  --color-muted: #71717a;
+  --color-faint: #a1a1aa;
+
+  --color-edge: #d4d4d8;
+  --color-edge-subtle: #e4e4e7;
+  --color-edge-strong: #a1a1aa;
+  --color-edge-focus: #71717a;
+
+  --color-accent: #7a60a8;
+  --color-active: #2d9058;
+
+  --color-soft-blue: #3878a8;
+  --color-soft-green: #2d8c58;
+  --color-soft-red: #b04848;
+  --color-soft-amber: #967020;
+  --color-soft-purple: #6c52a0;
+  --color-soft-cyan: #2888a0;
+  --color-soft-indigo: #5858a0;
+  --color-soft-pink: #a84070;
+  --color-soft-orange: #a86830;
+  --color-soft-emerald: #288868;
+}
+
 body {
   margin: 0;
   padding: 0;

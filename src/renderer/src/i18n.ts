@@ -11,6 +11,7 @@ const translations: Record<Locale, Record<string, string>> = {
     // Toolbar
     'toolbar.search_placeholder': '搜索所有对话...',
     'toolbar.toggle_info': '切换信息面板',
+    'toolbar.theme': '切换主题',
     'toolbar.language': '语言',
 
     // Sidebar
@@ -112,6 +113,7 @@ const translations: Record<Locale, Record<string, string>> = {
     // Toolbar
     'toolbar.search_placeholder': 'Search all sessions...',
     'toolbar.toggle_info': 'Toggle info panel',
+    'toolbar.theme': 'Toggle theme',
     'toolbar.language': 'Language',
 
     // Sidebar

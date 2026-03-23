@@ -10,15 +10,15 @@ import { SearchResults } from './components/SearchResults'
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const t = useT()
   return (
-    <div className="h-screen flex items-center justify-center bg-zinc-900 text-zinc-300 p-8">
+    <div className="h-screen flex items-center justify-center bg-base text-body p-8">
       <div className="max-w-lg text-center">
-        <div className="text-lg font-medium text-red-400 mb-3">{t('error.render')}</div>
-        <pre className="text-xs text-zinc-500 bg-zinc-800 rounded p-3 mb-4 text-left overflow-auto max-h-40">
+        <div className="text-lg font-medium text-soft-red mb-3">{t('error.render')}</div>
+        <pre className="text-xs text-muted bg-surface rounded p-3 mb-4 text-left overflow-auto max-h-40">
           {error.message}{'\n'}{error.stack}
         </pre>
         <button
           onClick={onRetry}
-          className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm"
+          className="px-4 py-2 bg-hover hover:bg-pressed rounded text-sm"
         >
           {t('error.retry')}
         </button>
@@ -76,10 +76,10 @@ function ResizeHandle({ side, onResize }: { side: 'left' | 'right'; onResize: (d
 
   return (
     <div
-      className="w-[3px] h-full cursor-col-resize group relative shrink-0 border-l border-zinc-700"
+      className="w-[3px] h-full cursor-col-resize group relative shrink-0 border-l border-edge"
       onMouseDown={onMouseDown}
     >
-      <div className="absolute inset-0 transition-opacity duration-150 opacity-0 group-hover:opacity-100 bg-zinc-500/40" />
+      <div className="absolute inset-0 transition-opacity duration-150 opacity-0 group-hover:opacity-100 bg-muted/40" />
     </div>
   )
 }
@@ -105,9 +105,9 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-zinc-900 text-zinc-400">
+      <div className="h-screen flex items-center justify-center bg-base text-secondary">
         <div className="text-center">
-          <div className="animate-spin w-8 h-8 border-2 border-zinc-600 border-t-zinc-300 rounded-full mx-auto mb-3" />
+          <div className="animate-spin w-8 h-8 border-2 border-edge-strong border-t-body rounded-full mx-auto mb-3" />
           <div className="text-sm">Loading sessions...</div>
         </div>
       </div>
@@ -116,7 +116,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="h-screen flex flex-col bg-zinc-900 text-white">
+      <div className="h-screen flex flex-col bg-base text-primary">
         <Toolbar />
         <div className="flex-1 flex overflow-hidden relative">
           <Sidebar width={sidebarWidth} />

@@ -83,8 +83,8 @@ function SessionItem({
       }}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, session.id) }}
       onDoubleClick={(e) => { e.stopPropagation(); onDoubleClickRename?.(session.id) }}
-      className={`w-full py-1.5 pr-3 text-left hover:bg-zinc-800 group ${
-        isSelected ? 'bg-zinc-800 border-l-2 border-blue-500' : ''
+      className={`w-full py-1.5 pr-3 text-left hover:bg-surface group ${
+        isSelected ? 'bg-surface border-l-2 border-accent' : ''
       }`}
       style={{ paddingLeft: `${depth * 16 + (isSelected ? 10 : 12)}px` }}
     >
@@ -94,23 +94,23 @@ function SessionItem({
           onChange={(e) => onRenameChange?.(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') onRenameSubmit?.(); if (e.key === 'Escape') onRenameCancel?.() }}
           onBlur={() => onRenameSubmit?.()} onClick={(e) => e.stopPropagation()}
-          className="w-full text-sm bg-zinc-700 text-zinc-200 rounded px-1 py-0.5 outline-none border border-zinc-500"
+          className="w-full text-sm bg-hover text-primary rounded px-1 py-0.5 outline-none border border-edge-focus"
         />
       ) : (
-        <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
-          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title={t('sidebar.opened_in_terminal')} />}
-          {isIntraBranch && <GitBranch size={12} className="shrink-0 text-purple-400" />}
+        <div className="text-sm text-primary truncate flex items-center gap-1.5">
+          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-active shrink-0" title={t('sidebar.opened_in_terminal')} />}
+          {isIntraBranch && <GitBranch size={12} className="shrink-0 text-soft-purple" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
       )}
-      <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500 overflow-hidden">
+      <div className="flex items-center gap-2 mt-0.5 text-xs text-muted overflow-hidden">
         <Clock size={10} className="shrink-0" /><span className="whitespace-nowrap">{formatDate(session.updatedAt, locale, t)}</span>
         <MessageSquare size={10} className="shrink-0" /><span className="whitespace-nowrap">{t('sidebar.turns', { n: session.turnCount })}</span>
         {session.compactCount > 0 && (
-          <span className="px-1 bg-amber-900/50 text-amber-400 rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
+          <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
         )}
         {hasBranchChildren && (
-          <span className="px-1 bg-purple-900/50 text-purple-400 rounded text-[10px] flex items-center gap-0.5 shrink-0">
+          <span className="px-1 bg-soft-purple/10 text-soft-purple rounded text-[10px] flex items-center gap-0.5 shrink-0">
             <GitBranch size={9} />{branchChildIds!.length}
           </span>
         )}
@@ -133,7 +133,7 @@ function InlineNewFolder({ depth, onSubmit, onCancel }: {
         onKeyDown={(e) => { if (e.key === 'Enter' && value.trim()) onSubmit(value.trim()); if (e.key === 'Escape') onCancel() }}
         onBlur={() => { if (value.trim()) onSubmit(value.trim()); else onCancel() }}
         placeholder={t('sidebar.subfolder_name')}
-        className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400"
+        className="w-full px-2 py-1 text-xs bg-surface border border-edge-strong rounded text-primary placeholder:text-muted focus:outline-none focus:border-secondary"
       />
     </div>
   )
@@ -221,12 +221,12 @@ function FolderNode({
         onClick={() => { if (renamingFolderId !== folder.id) toggleFolder(folder.id) }}
         onDoubleClick={() => { setRenamingFolderId(folder.id); setRenamingValue(folder.name) }}
         role="button"
-        className={`w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm hover:bg-zinc-800 group cursor-pointer select-none ${
-          dragOverFolderId === folder.id && dragOverZone === 'inside' ? 'ring-1 ring-blue-500 bg-blue-900/20'
-          : dragOverFolderId === folder.id && dragOverZone === 'before' ? 'border-t-2 border-blue-500'
-          : dragOverFolderId === folder.id && dragOverZone === 'after' ? 'border-b-2 border-blue-500'
+        className={`w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm hover:bg-surface group cursor-pointer select-none ${
+          dragOverFolderId === folder.id && dragOverZone === 'inside' ? 'ring-1 ring-accent bg-soft-blue/8'
+          : dragOverFolderId === folder.id && dragOverZone === 'before' ? 'border-t-2 border-accent'
+          : dragOverFolderId === folder.id && dragOverZone === 'after' ? 'border-b-2 border-accent'
           : ''
-        } text-zinc-400`}
+        } text-secondary`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -236,19 +236,19 @@ function FolderNode({
             onChange={(e) => setRenamingValue(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleRenameFolder(folder.id); if (e.key === 'Escape') { setRenamingFolderId(null); setRenamingValue('') } }}
             onBlur={() => handleRenameFolder(folder.id)} onClick={(e) => e.stopPropagation()}
-            className="flex-1 min-w-0 px-1 py-0 text-sm bg-zinc-700 border border-zinc-500 rounded text-zinc-200 focus:outline-none"
+            className="flex-1 min-w-0 px-1 py-0 text-sm bg-hover border border-edge-focus rounded text-primary focus:outline-none"
           />
         ) : (
-          <span className="truncate flex-1">{folder.name}<span className="text-zinc-600 ml-1">({totalCount})</span></span>
+          <span className="truncate flex-1">{folder.name}<span className="text-faint ml-1">({totalCount})</span></span>
         )}
         {folderSessions.length > 0 && (
           <button onClick={(e) => { e.stopPropagation(); resumeBatch(folderSessions.map((s) => ({ sessionId: (s as any).sessionId || s.id, permissionMode: (s as any).permissionMode, cwd: (s as any).cwds?.[0] }))) }}
-            className="hidden group-hover:block p-0.5 hover:text-green-400" title={t('sidebar.batch_resume', { n: folderSessions.length })}><Play size={12} /></button>
+            className="hidden group-hover:block p-0.5 hover:text-soft-green" title={t('sidebar.batch_resume', { n: folderSessions.length })}><Play size={12} /></button>
         )}
         <button onClick={(e) => { e.stopPropagation(); setCreatingSubfolderId(folder.id); if (!isExpanded) toggleFolder(folder.id) }}
-          className="hidden group-hover:block p-0.5 hover:text-blue-400" title={t('sidebar.new_subfolder')}><Plus size={12} /></button>
+          className="hidden group-hover:block p-0.5 hover:text-soft-blue" title={t('sidebar.new_subfolder')}><Plus size={12} /></button>
         <button onClick={(e) => { e.stopPropagation(); if (confirm(t('sidebar.delete_folder', { name: folder.name }))) deleteFolder(folder.id) }}
-          className="hidden group-hover:block p-0.5 hover:text-red-400"><Trash2 size={12} /></button>
+          className="hidden group-hover:block p-0.5 hover:text-soft-red"><Trash2 size={12} /></button>
       </div>
 
       {/* Expanded content — drop here = "inside" */}
@@ -284,7 +284,7 @@ function FolderNode({
               onDoubleClickRename={onDoubleClickRenameSession} />
           ))}
           {childFolders.length === 0 && folderSessions.length === 0 && creatingSubfolderId !== folder.id && (
-            <div className="py-2 text-xs text-zinc-600 italic" style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}>
+            <div className="py-2 text-xs text-faint italic" style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}>
               {t('sidebar.drop_here')}
             </div>
           )}
@@ -440,29 +440,29 @@ export function Sidebar({ width }: { width: number }) {
   const stopAutoScroll = useCallback(() => { if (scrollTimerRef.current) { clearInterval(scrollTimerRef.current); scrollTimerRef.current = null } }, [])
 
   return (
-    <div className="h-full flex flex-col bg-zinc-900 shrink-0" style={{ width }}>
-      <div className="p-3 flex items-center justify-between border-b border-zinc-700">
-        <span className="text-sm font-medium text-zinc-300">{t('sidebar.sessions')}</span>
+    <div className="h-full flex flex-col bg-base shrink-0" style={{ width }}>
+      <div className="p-3 flex items-center justify-between border-b border-edge">
+        <span className="text-sm font-medium text-body">{t('sidebar.sessions')}</span>
         <div className="flex items-center gap-1">
           <button onClick={() => setViewMode(viewMode === 'tree' ? 'flat' : 'tree')}
-            className="p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200"
+            className="p-1 hover:bg-hover rounded text-secondary hover:text-primary"
             title={viewMode === 'tree' ? t('sidebar.timeline_view') : t('sidebar.tree_view')}>
             {viewMode === 'tree' ? <List size={14} /> : <FolderTree size={14} />}
           </button>
           <button onClick={() => setShowNewFolder(true)}
-            className="p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title={t('sidebar.new_folder')}>
+            className="p-1 hover:bg-hover rounded text-secondary hover:text-primary" title={t('sidebar.new_folder')}>
             <FolderPlus size={14} />
           </button>
         </div>
       </div>
 
       {showNewFolder && (
-        <div className="p-2 border-b border-zinc-700">
+        <div className="p-2 border-b border-edge">
           <input autoFocus value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleCreateFolder(); if (e.key === 'Escape') { setShowNewFolder(false); setNewFolderName('') } }}
             onBlur={() => { if (newFolderName.trim()) handleCreateFolder(); else setShowNewFolder(false) }}
             placeholder={t('sidebar.folder_name')}
-            className="w-full px-2 py-1 text-sm bg-zinc-800 border border-zinc-600 rounded text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-400" />
+            className="w-full px-2 py-1 text-sm bg-surface border border-edge-strong rounded text-primary placeholder:text-muted focus:outline-none focus:border-secondary" />
         </div>
       )}
 
@@ -470,7 +470,7 @@ export function Sidebar({ width }: { width: number }) {
         onDragOver={handleListDragOver} onDragLeave={stopAutoScroll} onDrop={stopAutoScroll} onDragEnd={stopAutoScroll}>
         {viewMode === 'flat' ? (
           <>
-            <div className="px-3 py-2 text-[11px] text-zinc-500 uppercase tracking-wider">{t('sidebar.all_sessions')} ({sessions.length})</div>
+            <div className="px-3 py-2 text-[11px] text-muted uppercase tracking-wider">{t('sidebar.all_sessions')} ({sessions.length})</div>
             {sessions.map((session) => (
               <SessionItem key={session.id} session={session} depth={0} onContextMenu={handleContextMenu}
                 isRenaming={renamingSessionId === session.id} renameValue={sessionRenameValue}
@@ -498,9 +498,9 @@ export function Sidebar({ width }: { width: number }) {
               <div className="mx-3 my-2 flex items-center gap-2"
                 onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onDrop={(e) => { e.preventDefault(); e.stopPropagation(); try { const d = JSON.parse(e.dataTransfer.getData('application/x-swob')); if (d.type === 'folder' && d.id) moveFolder(d.id, null) } catch {} }}>
-                <div className="flex-1 border-t border-zinc-700" />
-                <span className="text-[10px] text-zinc-600 shrink-0">{t('sidebar.ungrouped')}</span>
-                <div className="flex-1 border-t border-zinc-700" />
+                <div className="flex-1 border-t border-edge" />
+                <span className="text-[10px] text-faint shrink-0">{t('sidebar.ungrouped')}</span>
+                <div className="flex-1 border-t border-edge" />
               </div>
             )}
             {ungroupedSessions.map((session) => (
@@ -512,15 +512,15 @@ export function Sidebar({ width }: { width: number }) {
             {singleTurnSessions.length > 0 && (
               <>
                 <div className="mx-3 my-2 flex items-center gap-2">
-                  <div className="flex-1 border-t border-zinc-700/50" />
+                  <div className="flex-1 border-t border-edge/50" />
                 </div>
                 <button
                   onClick={() => setSingleTurnExpanded(!singleTurnExpanded)}
-                  className="w-full px-3 py-1.5 flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-400 hover:bg-zinc-800/50"
+                  className="w-full px-3 py-1.5 flex items-center gap-1.5 text-xs text-muted hover:text-secondary hover:bg-surface/50"
                 >
                   {singleTurnExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
                   <span>{t('sidebar.single_turn')}</span>
-                  <span className="text-zinc-600 ml-auto">{singleTurnSessions.length}</span>
+                  <span className="text-faint ml-auto">{singleTurnSessions.length}</span>
                 </button>
                 {singleTurnExpanded && singleTurnSessions.map((session) => (
                   <SessionItem key={session.id} session={session} depth={1} onContextMenu={handleContextMenu}
@@ -534,7 +534,7 @@ export function Sidebar({ width }: { width: number }) {
         )}
       </div>
 
-      <div className="p-2 border-t border-zinc-700 text-[11px] text-zinc-500">
+      <div className="p-2 border-t border-edge text-[11px] text-muted">
         {t('sidebar.stats', { n: sessions.length, size: `${(sessions.reduce((a, s) => a + s.fileSizeBytes, 0) / 1024 / 1024).toFixed(0)}MB` })}
       </div>
     </div>

@@ -487,6 +487,18 @@ export function InfoPanel({ width }: { width: number }) {
                 )
               })}
             </div>
+            <div className="mt-2 px-2 py-1.5 rounded bg-zinc-800/30 text-[10px] text-zinc-500 leading-relaxed">
+              {locale === 'zh-CN'
+                ? <>
+                    <span className="text-zinc-400">主对话</span> = 对话轮数最多的那条路径。两个终端同时 resume 同一个 session 会产生分支，谁聊得多谁就是主对话。
+                    <br /><span className="text-zinc-400">Resume 限制</span>：<code className="text-purple-400/80">claude --resume</code> 只能恢复主对话，无法单独恢复分支（Claude Code CLI 限制）。分支的完整对话可在此处查看。
+                  </>
+                : <>
+                    <span className="text-zinc-400">Main session</span> = the path with the most turns. When two terminals resume the same session simultaneously, whichever has more turns becomes main.
+                    <br /><span className="text-zinc-400">Resume limitation</span>: <code className="text-purple-400/80">claude --resume</code> only restores the main path (CLI limitation). Branch conversations are fully viewable here.
+                  </>
+              }
+            </div>
           </section>
         )}
 

@@ -308,6 +308,7 @@ export function Sidebar({ width }: { width: number }) {
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree')
   const [creatingSubfolderId, setCreatingSubfolderId] = useState<string | null>(null)
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
+  const [singleTurnExpanded, setSingleTurnExpanded] = useState(false)
   const [sessionRenameValue, setSessionRenameValue] = useState('')
   const { renameFolder, setSessionMeta } = useStore()
   const t = useT()
@@ -398,7 +399,7 @@ export function Sidebar({ width }: { width: number }) {
     return ids
   }, [config?.folders])
 
-  const ungroupedSessions = useMemo(
+  const ungroupedAll = useMemo(
     () => sessions.filter((s) => {
       // Branch sessions: only check their own id, not the parent's sessionId
       if (s.id.includes(':intra-')) return !groupedSessionIds.has(s.id)
@@ -406,6 +407,9 @@ export function Sidebar({ width }: { width: number }) {
     }),
     [sessions, groupedSessionIds]
   )
+
+  const ungroupedSessions = useMemo(() => ungroupedAll.filter((s) => s.turnCount > 1), [ungroupedAll])
+  const singleTurnSessions = useMemo(() => ungroupedAll.filter((s) => s.turnCount <= 1), [ungroupedAll])
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionSummary>()
@@ -505,6 +509,27 @@ export function Sidebar({ width }: { width: number }) {
                 onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession}
                 onDoubleClickRename={handleDoubleClickRenameSession} />
             ))}
+            {singleTurnSessions.length > 0 && (
+              <>
+                <div className="mx-3 my-2 flex items-center gap-2">
+                  <div className="flex-1 border-t border-zinc-700/50" />
+                </div>
+                <button
+                  onClick={() => setSingleTurnExpanded(!singleTurnExpanded)}
+                  className="w-full px-3 py-1.5 flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-400 hover:bg-zinc-800/50"
+                >
+                  {singleTurnExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                  <span>{t('sidebar.single_turn')}</span>
+                  <span className="text-zinc-600 ml-auto">{singleTurnSessions.length}</span>
+                </button>
+                {singleTurnExpanded && singleTurnSessions.map((session) => (
+                  <SessionItem key={session.id} session={session} depth={1} onContextMenu={handleContextMenu}
+                    isRenaming={renamingSessionId === session.id} renameValue={sessionRenameValue}
+                    onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession}
+                    onDoubleClickRename={handleDoubleClickRenameSession} />
+                ))}
+              </>
+            )}
           </>
         )}
       </div>

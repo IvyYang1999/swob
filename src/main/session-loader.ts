@@ -23,10 +23,13 @@ export function isRealUserMessage(m: RawJsonlMessage): boolean {
   if (m.type !== 'user' || !m.message) return false
   const c = m.message.content
   if (typeof c === 'string') {
-    // Skip task-notification and compact continuation summaries
     const trimmed = c.trim()
+    // System-generated messages that look like user messages
     if (trimmed.startsWith('<task-notification>')) return false
     if (trimmed.startsWith('This session is being continued')) return false
+    if (trimmed === 'Continue from where you left off.') return false
+    if (trimmed === 'Tool loaded.') return false
+    if (trimmed === 'No response requested.') return false
     return trimmed.length > 0
   }
   if (Array.isArray(c)) {

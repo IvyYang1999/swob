@@ -103,14 +103,14 @@ function SessionItem({
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
       )}
-      <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500">
-        <Clock size={10} /><span>{formatDate(session.updatedAt, locale, t)}</span>
-        <MessageSquare size={10} /><span>{t('sidebar.turns', { n: session.turnCount })}</span>
+      <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-500 overflow-hidden">
+        <Clock size={10} className="shrink-0" /><span className="whitespace-nowrap">{formatDate(session.updatedAt, locale, t)}</span>
+        <MessageSquare size={10} className="shrink-0" /><span className="whitespace-nowrap">{t('sidebar.turns', { n: session.turnCount })}</span>
         {session.compactCount > 0 && (
-          <span className="px-1 bg-amber-900/50 text-amber-400 rounded text-[10px]">compact</span>
+          <span className="px-1 bg-amber-900/50 text-amber-400 rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
         )}
         {hasBranchChildren && (
-          <span className="px-1 bg-purple-900/50 text-purple-400 rounded text-[10px] flex items-center gap-0.5">
+          <span className="px-1 bg-purple-900/50 text-purple-400 rounded text-[10px] flex items-center gap-0.5 shrink-0">
             <GitBranch size={9} />{branchChildIds!.length}
           </span>
         )}

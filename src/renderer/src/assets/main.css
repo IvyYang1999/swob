@@ -21,9 +21,21 @@
   --color-edge-strong: #52525b; /* zinc-600 */
   --color-edge-focus: #71717a;  /* zinc-500 */
 
-  /* 语义色 */
-  --color-accent: #3b82f6;      /* blue-500，选中态 */
-  --color-active: #4ade80;      /* green-400，活跃状态 */
+  /* 语义色 — 降低饱和度 */
+  --color-accent: #6d9dc4;      /* 选中态（柔和蓝） */
+  --color-active: #7abc96;      /* 活跃状态（柔和绿） */
+
+  /* 柔和色板 — Notion 风格低饱和 */
+  --color-soft-blue: #7c9fc0;
+  --color-soft-green: #7aac8e;
+  --color-soft-red: #bf7e7e;
+  --color-soft-amber: #b8a070;
+  --color-soft-purple: #9c8eb4;
+  --color-soft-cyan: #7aacb4;
+  --color-soft-indigo: #8a8ab4;
+  --color-soft-pink: #b48a9c;
+  --color-soft-orange: #c0946e;
+  --color-soft-emerald: #70ac8e;
 }
 
 body {

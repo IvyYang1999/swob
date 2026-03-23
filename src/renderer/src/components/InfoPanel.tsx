@@ -40,7 +40,7 @@ function ClickablePath({ path, isDir, dimmed }: { path: string; isDir?: boolean;
   return (
     <div
       className={`flex items-center gap-1.5 text-xs font-mono truncate cursor-pointer group ${
-        dimmed ? 'text-faint line-through' : 'text-secondary hover:text-blue-400'
+        dimmed ? 'text-faint line-through' : 'text-secondary hover:text-soft-blue'
       }`}
       title={`${path}\n${dimmed ? t('info.file_deleted') + ' ' : ''}${t('info.file_click_hint')}`}
       onClick={() => window.api.openPath(path)}
@@ -58,11 +58,11 @@ function ClickablePath({ path, isDir, dimmed }: { path: string; isDir?: boolean;
 function ActionBadge({ action }: { action: string }) {
   const t = useT()
   const config: Record<string, { label: string; color: string }> = {
-    'write': { label: t('info.action_write'), color: 'bg-green-800 text-green-300' },
-    'edit': { label: t('info.action_edit'), color: 'bg-blue-800 text-blue-300' },
+    'write': { label: t('info.action_write'), color: 'bg-soft-green/15 text-soft-green' },
+    'edit': { label: t('info.action_edit'), color: 'bg-soft-blue/15 text-soft-blue' },
     'read': { label: t('info.action_read'), color: 'bg-hover text-secondary' },
-    'user-image': { label: t('info.action_upload'), color: 'bg-purple-800 text-purple-300' },
-    'user-input': { label: t('info.action_user'), color: 'bg-amber-800 text-amber-300' },
+    'user-image': { label: t('info.action_upload'), color: 'bg-soft-purple/15 text-soft-purple' },
+    'user-input': { label: t('info.action_user'), color: 'bg-soft-amber/15 text-soft-amber' },
   }
   const c = config[action] || { label: action, color: 'bg-hover text-secondary' }
   return (
@@ -75,11 +75,11 @@ function ActionBadge({ action }: { action: string }) {
 function ActionIcon({ action }: { action: string }) {
   const size = 10
   switch (action) {
-    case 'write': return <Plus size={size} className="text-green-400 shrink-0" />
-    case 'edit': return <Pencil size={size} className="text-blue-400 shrink-0" />
+    case 'write': return <Plus size={size} className="text-soft-green shrink-0" />
+    case 'edit': return <Pencil size={size} className="text-soft-blue shrink-0" />
     case 'read': return <Eye size={size} className="text-muted shrink-0" />
-    case 'user-image': return <Upload size={size} className="text-purple-400 shrink-0" />
-    case 'user-input': return <Upload size={size} className="text-amber-400 shrink-0" />
+    case 'user-image': return <Upload size={size} className="text-soft-purple shrink-0" />
+    case 'user-input': return <Upload size={size} className="text-soft-amber shrink-0" />
     default: return null
   }
 }
@@ -142,7 +142,7 @@ function FileTreeNode({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
     return (
       <div
         className={`flex items-center gap-1 text-xs font-mono truncate cursor-pointer group ${
-          f.exists ? 'text-secondary hover:text-blue-400' : 'text-faint line-through'
+          f.exists ? 'text-secondary hover:text-soft-blue' : 'text-faint line-through'
         }`}
         style={{ paddingLeft: depth * 12 }}
         title={`${f.path}\n${t('info.file_actions', { actions: f.actions.join(', ') })}${f.exists ? '' : '\n' + t('info.file_deleted')}\n${t('info.file_click_hint')}`}
@@ -290,7 +290,7 @@ function FileTreeSection({ files }: { files: FileRef[] }) {
         <File size={12} />
         <span>{t('info.files_operated')}</span>
         <span className="text-faint ml-auto">
-          {existCount}{deletedCount > 0 && <span className="text-zinc-700">+{deletedCount}</span>}
+          {existCount}{deletedCount > 0 && <span className="text-edge">+{deletedCount}</span>}
         </span>
       </button>
       {open && (
@@ -318,7 +318,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
         className="flex items-center gap-2 text-xs font-medium text-secondary mb-2 hover:text-body w-full"
       >
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-        <Highlighter size={12} className="text-green-500" />
+        <Highlighter size={12} className="text-soft-green" />
         <span>{t('info.highlights')}</span>
         <span className="text-faint ml-auto">{highlights.length}</span>
       </button>
@@ -327,13 +327,13 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
           {highlights.map((hl) => (
             <div
               key={hl.id}
-              className="group relative px-2 py-1.5 rounded bg-green-900/10 border border-green-800/20 hover:border-green-700/40 cursor-pointer transition-colors"
+              className="group relative px-2 py-1.5 rounded bg-soft-green/6 border border-soft-green/12 hover:border-soft-green/25 cursor-pointer transition-colors"
               onClick={() => {
                 window.dispatchEvent(new CustomEvent('swob:scrollToHighlight', { detail: { highlightId: hl.id } }))
               }}
               title={t('info.highlight_jump')}
             >
-              <div className="text-xs text-green-300/80 line-clamp-3 leading-relaxed border-l-2 border-green-500/40 pl-2">
+              <div className="text-xs text-soft-green/80 line-clamp-3 leading-relaxed border-l-2 border-soft-green/40 pl-2">
                 {hl.text}
               </div>
               <div className="flex items-center justify-between mt-1">
@@ -348,7 +348,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
                       setCopiedId(hl.id)
                       setTimeout(() => setCopiedId(null), 1500)
                     }}
-                    className="opacity-0 group-hover:opacity-100 text-faint hover:text-green-400 transition-opacity p-0.5"
+                    className="opacity-0 group-hover:opacity-100 text-faint hover:text-soft-green transition-opacity p-0.5"
                     title={t('info.highlight_copy')}
                   >
                     {copiedId === hl.id ? <Check size={10} /> : <Copy size={10} />}
@@ -358,7 +358,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
                       e.stopPropagation()
                       removeHighlight(sessionId, hl.id)
                     }}
-                    className="opacity-0 group-hover:opacity-100 text-faint hover:text-red-400 transition-opacity p-0.5"
+                    className="opacity-0 group-hover:opacity-100 text-faint hover:text-soft-red transition-opacity p-0.5"
                     title={t('info.highlight_delete')}
                   >
                     <Trash2 size={10} />
@@ -417,7 +417,7 @@ export function InfoPanel({ width }: { width: number }) {
             <span>{t('info.turns', { n: s.turnCount })}</span>
           </div>
           {s.compactCount > 0 && (
-            <div className="flex items-center gap-2 text-amber-400 text-xs">
+            <div className="flex items-center gap-2 text-soft-amber text-xs">
               <span>Compact: {s.compactCount}×</span>
             </div>
           )}
@@ -437,7 +437,7 @@ export function InfoPanel({ width }: { width: number }) {
         {/* Branch relationships */}
         {hasBranches && (
           <section>
-            <div className="flex items-center gap-2 text-xs font-medium text-purple-400 mb-2">
+            <div className="flex items-center gap-2 text-xs font-medium text-soft-purple mb-2">
               <GitBranch size={12} />
               <span>{locale === 'zh-CN' ? '分支关系' : 'Branch Tree'}</span>
             </div>
@@ -453,19 +453,19 @@ export function InfoPanel({ width }: { width: number }) {
                     onClick={() => selectSession(parent.filePath, (parent as any).allFilePaths, parent.id, (parent as any).branchParentFilePaths, (parent as any).branchPointUuid, (parent as any).branchLeafUuid)}
                     className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
                   >
-                    <div className="text-purple-400/60 text-[10px] mb-0.5">{locale === 'zh-CN' ? '↑ 母分支' : '↑ Parent'}</div>
+                    <div className="text-soft-purple/60 text-[10px] mb-0.5">{locale === 'zh-CN' ? '↑ 母分支' : '↑ Parent'}</div>
                     <div className="text-body truncate">{pTitle}</div>
                     <div className="text-muted text-[10px] mt-0.5">{parent.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
                   </button>
                 )
               })()}
               {!isIntraBranch && (
-                <div className="px-2 py-1 text-[10px] text-emerald-500/60 border-l-2 border-emerald-600/30 ml-1">
+                <div className="px-2 py-1 text-[10px] text-soft-emerald/60 border-l-2 border-soft-emerald/30 ml-1">
                   ● {locale === 'zh-CN' ? '当前（主分支）' : 'Current (main)'}
                 </div>
               )}
               {isIntraBranch && (
-                <div className="px-2 py-1 text-[10px] text-purple-400/60 border-l-2 border-purple-600/30 ml-1">
+                <div className="px-2 py-1 text-[10px] text-soft-purple/60 border-l-2 border-soft-purple/30 ml-1">
                   ● {locale === 'zh-CN' ? '当前分支' : 'Current branch'}
                 </div>
               )}
@@ -480,7 +480,7 @@ export function InfoPanel({ width }: { width: number }) {
                     onClick={() => selectSession(child.filePath, (child as any).allFilePaths, child.id, (child as any).branchParentFilePaths, (child as any).branchPointUuid, (child as any).branchLeafUuid)}
                     className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
                   >
-                    <div className="text-purple-400/60 text-[10px] mb-0.5">↳ {locale === 'zh-CN' ? '子分支' : 'Child branch'}</div>
+                    <div className="text-soft-purple/60 text-[10px] mb-0.5">↳ {locale === 'zh-CN' ? '子分支' : 'Child branch'}</div>
                     <div className="text-body truncate">{cTitle}</div>
                     <div className="text-muted text-[10px] mt-0.5">{child.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
                   </button>
@@ -491,11 +491,11 @@ export function InfoPanel({ width }: { width: number }) {
               {locale === 'zh-CN'
                 ? <>
                     <span className="text-secondary">主对话</span> = 对话轮数最多的那条路径。两个终端同时 resume 同一个 session 会产生分支，谁聊得多谁就是主对话。
-                    <br /><span className="text-secondary">Resume 限制</span>：<code className="text-purple-400/80">claude --resume</code> 只能恢复主对话，无法单独恢复分支（Claude Code CLI 限制）。分支的完整对话可在此处查看。
+                    <br /><span className="text-secondary">Resume 限制</span>：<code className="text-soft-purple/80">claude --resume</code> 只能恢复主对话，无法单独恢复分支（Claude Code CLI 限制）。分支的完整对话可在此处查看。
                   </>
                 : <>
                     <span className="text-secondary">Main session</span> = the path with the most turns. When two terminals resume the same session simultaneously, whichever has more turns becomes main.
-                    <br /><span className="text-secondary">Resume limitation</span>: <code className="text-purple-400/80">claude --resume</code> only restores the main path (CLI limitation). Branch conversations are fully viewable here.
+                    <br /><span className="text-secondary">Resume limitation</span>: <code className="text-soft-purple/80">claude --resume</code> only restores the main path (CLI limitation). Branch conversations are fully viewable here.
                   </>
               }
             </div>

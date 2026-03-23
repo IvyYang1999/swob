@@ -12,7 +12,7 @@ function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void })
   return (
     <div className="h-screen flex items-center justify-center bg-base text-body p-8">
       <div className="max-w-lg text-center">
-        <div className="text-lg font-medium text-red-400 mb-3">{t('error.render')}</div>
+        <div className="text-lg font-medium text-soft-red mb-3">{t('error.render')}</div>
         <pre className="text-xs text-muted bg-surface rounded p-3 mb-4 text-left overflow-auto max-h-40">
           {error.message}{'\n'}{error.stack}
         </pre>
@@ -79,7 +79,7 @@ function ResizeHandle({ side, onResize }: { side: 'left' | 'right'; onResize: (d
       className="w-[3px] h-full cursor-col-resize group relative shrink-0 border-l border-edge"
       onMouseDown={onMouseDown}
     >
-      <div className="absolute inset-0 transition-opacity duration-150 opacity-0 group-hover:opacity-100 bg-zinc-500/40" />
+      <div className="absolute inset-0 transition-opacity duration-150 opacity-0 group-hover:opacity-100 bg-muted/40" />
     </div>
   )
 }

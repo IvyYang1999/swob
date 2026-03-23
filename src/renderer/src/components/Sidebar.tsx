@@ -99,7 +99,7 @@ function SessionItem({
       ) : (
         <div className="text-sm text-primary truncate flex items-center gap-1.5">
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-active shrink-0" title={t('sidebar.opened_in_terminal')} />}
-          {isIntraBranch && <GitBranch size={12} className="shrink-0 text-purple-400" />}
+          {isIntraBranch && <GitBranch size={12} className="shrink-0 text-soft-purple" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
       )}
@@ -107,10 +107,10 @@ function SessionItem({
         <Clock size={10} className="shrink-0" /><span className="whitespace-nowrap">{formatDate(session.updatedAt, locale, t)}</span>
         <MessageSquare size={10} className="shrink-0" /><span className="whitespace-nowrap">{t('sidebar.turns', { n: session.turnCount })}</span>
         {session.compactCount > 0 && (
-          <span className="px-1 bg-amber-900/50 text-amber-400 rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
+          <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
         )}
         {hasBranchChildren && (
-          <span className="px-1 bg-purple-900/50 text-purple-400 rounded text-[10px] flex items-center gap-0.5 shrink-0">
+          <span className="px-1 bg-soft-purple/10 text-soft-purple rounded text-[10px] flex items-center gap-0.5 shrink-0">
             <GitBranch size={9} />{branchChildIds!.length}
           </span>
         )}
@@ -133,7 +133,7 @@ function InlineNewFolder({ depth, onSubmit, onCancel }: {
         onKeyDown={(e) => { if (e.key === 'Enter' && value.trim()) onSubmit(value.trim()); if (e.key === 'Escape') onCancel() }}
         onBlur={() => { if (value.trim()) onSubmit(value.trim()); else onCancel() }}
         placeholder={t('sidebar.subfolder_name')}
-        className="w-full px-2 py-1 text-xs bg-surface border border-edge-strong rounded text-primary placeholder:text-muted focus:outline-none focus:border-zinc-400"
+        className="w-full px-2 py-1 text-xs bg-surface border border-edge-strong rounded text-primary placeholder:text-muted focus:outline-none focus:border-secondary"
       />
     </div>
   )
@@ -222,7 +222,7 @@ function FolderNode({
         onDoubleClick={() => { setRenamingFolderId(folder.id); setRenamingValue(folder.name) }}
         role="button"
         className={`w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm hover:bg-surface group cursor-pointer select-none ${
-          dragOverFolderId === folder.id && dragOverZone === 'inside' ? 'ring-1 ring-accent bg-blue-900/20'
+          dragOverFolderId === folder.id && dragOverZone === 'inside' ? 'ring-1 ring-accent bg-soft-blue/8'
           : dragOverFolderId === folder.id && dragOverZone === 'before' ? 'border-t-2 border-accent'
           : dragOverFolderId === folder.id && dragOverZone === 'after' ? 'border-b-2 border-accent'
           : ''
@@ -243,12 +243,12 @@ function FolderNode({
         )}
         {folderSessions.length > 0 && (
           <button onClick={(e) => { e.stopPropagation(); resumeBatch(folderSessions.map((s) => ({ sessionId: (s as any).sessionId || s.id, permissionMode: (s as any).permissionMode, cwd: (s as any).cwds?.[0] }))) }}
-            className="hidden group-hover:block p-0.5 hover:text-green-400" title={t('sidebar.batch_resume', { n: folderSessions.length })}><Play size={12} /></button>
+            className="hidden group-hover:block p-0.5 hover:text-soft-green" title={t('sidebar.batch_resume', { n: folderSessions.length })}><Play size={12} /></button>
         )}
         <button onClick={(e) => { e.stopPropagation(); setCreatingSubfolderId(folder.id); if (!isExpanded) toggleFolder(folder.id) }}
-          className="hidden group-hover:block p-0.5 hover:text-blue-400" title={t('sidebar.new_subfolder')}><Plus size={12} /></button>
+          className="hidden group-hover:block p-0.5 hover:text-soft-blue" title={t('sidebar.new_subfolder')}><Plus size={12} /></button>
         <button onClick={(e) => { e.stopPropagation(); if (confirm(t('sidebar.delete_folder', { name: folder.name }))) deleteFolder(folder.id) }}
-          className="hidden group-hover:block p-0.5 hover:text-red-400"><Trash2 size={12} /></button>
+          className="hidden group-hover:block p-0.5 hover:text-soft-red"><Trash2 size={12} /></button>
       </div>
 
       {/* Expanded content — drop here = "inside" */}
@@ -462,7 +462,7 @@ export function Sidebar({ width }: { width: number }) {
             onKeyDown={(e) => { if (e.key === 'Enter') handleCreateFolder(); if (e.key === 'Escape') { setShowNewFolder(false); setNewFolderName('') } }}
             onBlur={() => { if (newFolderName.trim()) handleCreateFolder(); else setShowNewFolder(false) }}
             placeholder={t('sidebar.folder_name')}
-            className="w-full px-2 py-1 text-sm bg-surface border border-edge-strong rounded text-primary placeholder:text-muted focus:outline-none focus:border-zinc-400" />
+            className="w-full px-2 py-1 text-sm bg-surface border border-edge-strong rounded text-primary placeholder:text-muted focus:outline-none focus:border-secondary" />
         </div>
       )}
 

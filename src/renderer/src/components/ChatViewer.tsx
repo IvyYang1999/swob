@@ -66,7 +66,7 @@ function SystemNoticePill({ text }: { text: string }) {
           expanded ? <ChevronDown size={11} className="text-muted shrink-0" /> : <ChevronRight size={11} className="text-muted shrink-0" />
         ) : null}
         <Terminal size={11} className="text-muted shrink-0" />
-        <span className={`text-[11px] font-mono shrink-0 ${isSlashCmd ? 'text-purple-400' : 'text-secondary'}`}>{label}</span>
+        <span className={`text-[11px] font-mono shrink-0 ${isSlashCmd ? 'text-soft-purple' : 'text-secondary'}`}>{label}</span>
         {preview && !expanded && <span className="text-[10px] text-muted truncate">{preview}</span>}
       </button>
       {expanded && hasContent && (
@@ -84,13 +84,13 @@ function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
   return (
     <div className="font-mono text-[11px] leading-relaxed">
       {oldLines.map((line, i) => (
-        <div key={`old-${i}`} className="bg-red-950/40 text-red-400 px-3 py-0.5">
-          <span className="select-none text-red-600 mr-2">-</span>{line}
+        <div key={`old-${i}`} className="bg-soft-red/8 text-soft-red px-3 py-0.5">
+          <span className="select-none text-soft-red/60 mr-2">-</span>{line}
         </div>
       ))}
       {newLines.map((line, i) => (
-        <div key={`new-${i}`} className="bg-green-950/40 text-green-400 px-3 py-0.5">
-          <span className="select-none text-green-600 mr-2">+</span>{line}
+        <div key={`new-${i}`} className="bg-soft-green/8 text-soft-green px-3 py-0.5">
+          <span className="select-none text-soft-green/60 mr-2">+</span>{line}
         </div>
       ))}
     </div>
@@ -182,7 +182,7 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
   else inputDisplay = JSON.stringify(tc.input, null, 2)
 
   return (
-    <div className="my-1.5 border border-edge/50 rounded-md bg-zinc-850/30 overflow-hidden">
+    <div className="my-1.5 border border-edge/50 rounded-md bg-base/30 overflow-hidden">
       <div className="px-2.5 py-1.5 flex items-center gap-2 bg-surface/60 border-b border-edge/40">
         <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-mono shrink-0 ${color}`}>{tc.name}</span>
         {preview && <span className="truncate text-muted text-[11px] font-mono">{preview}</span>}
@@ -252,17 +252,17 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
     <div id={turnId} className="space-y-3 scroll-mt-0 relative">
       {/* User message */}
       {turn.userMsg && (
-        <div className={`group/user rounded-lg transition-colors ${qSelected ? 'bg-blue-950/25' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-edge-strong pl-2' : ''}`}>
+        <div className={`group/user rounded-lg transition-colors ${qSelected ? 'bg-soft-blue/6' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-edge-strong pl-2' : ''}`}>
           <div className="flex gap-3 items-start">
             {selectMode && onSelectQ && (
               <button
                 onClick={() => onSelectQ(turn.userMsg!.uuid)}
-                className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 mt-1.5 ${qSelected ? 'bg-blue-600 border-accent text-white' : 'border-edge-strong hover:border-zinc-400 text-muted'}`}
+                className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 mt-1.5 ${qSelected ? 'bg-soft-blue border-accent text-white' : 'border-edge-strong hover:border-secondary text-muted'}`}
               >
                 {qSelected ? '✓' : ''}
               </button>
             )}
-            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-blue-600"><User size={14} /></div>
+            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-soft-blue"><User size={14} /></div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-secondary">User</span>
@@ -272,12 +272,12 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                   className="opacity-0 group-hover/user:opacity-100 transition-opacity p-0.5 rounded hover:bg-hover/50 text-muted hover:text-body"
                   title={t('chat.copy_question')}
                 >
-                  {copiedQ ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                  {copiedQ ? <Check size={12} className="text-soft-green" /> : <Copy size={12} />}
                 </button>
               </div>
               {turn.userMsg.textContent.startsWith(COMPACT_SUMMARY_PREFIX) ? (
-                <div className="text-sm text-primary border-l-2 border-amber-600/50 pl-3">
-                  <div className="text-[10px] text-amber-500 mb-1 font-medium">{t('chat.compact_summary')}</div>
+                <div className="text-sm text-primary border-l-2 border-soft-amber/50 pl-3">
+                  <div className="text-[10px] text-soft-amber mb-1 font-medium">{t('chat.compact_summary')}</div>
                   <div className="whitespace-pre-wrap break-words leading-relaxed max-h-48 overflow-y-auto">
                     {turn.userMsg.textContent.slice(COMPACT_SUMMARY_PREFIX.length).trim()}
                   </div>
@@ -294,17 +294,17 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
 
       {/* Assistant message */}
       {segments.length > 0 && (
-        <div className={`group/assistant rounded-lg transition-colors ${aSelected ? 'bg-blue-950/25' : ''} ${hasSidechain ? 'opacity-40 border-l-2 border-edge-strong pl-2' : ''}`}>
+        <div className={`group/assistant rounded-lg transition-colors ${aSelected ? 'bg-soft-blue/6' : ''} ${hasSidechain ? 'opacity-40 border-l-2 border-edge-strong pl-2' : ''}`}>
           <div className="flex gap-3 items-start">
             {selectMode && onSelectA && turn.userMsg && (
               <button
                 onClick={() => onSelectA(turn.userMsg!.uuid)}
-                className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 mt-1.5 ${aSelected ? 'bg-blue-600 border-accent text-white' : 'border-edge-strong hover:border-zinc-400 text-muted'}`}
+                className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 mt-1.5 ${aSelected ? 'bg-soft-blue border-accent text-white' : 'border-edge-strong hover:border-secondary text-muted'}`}
               >
                 {aSelected ? '✓' : ''}
               </button>
             )}
-            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-orange-600"><Bot size={14} /></div>
+            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-soft-orange"><Bot size={14} /></div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-secondary">Assistant</span>
@@ -315,7 +315,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                   className="opacity-0 group-hover/assistant:opacity-100 transition-opacity p-0.5 rounded hover:bg-hover/50 text-muted hover:text-body"
                   title={t('chat.copy_answer')}
                 >
-                  {copiedA ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                  {copiedA ? <Check size={12} className="text-soft-green" /> : <Copy size={12} />}
                 </button>
               </div>
               {segments.map((seg, i) => (
@@ -447,7 +447,7 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap }: {
       </div>
       <div
         onMouseDown={handleMouseDown}
-        className="w-1 cursor-col-resize hover:bg-pressed/50 active:bg-zinc-500/50 shrink-0"
+        className="w-1 cursor-col-resize hover:bg-pressed/50 active:bg-muted/50 shrink-0"
       />
     </div>
   )
@@ -633,7 +633,7 @@ function SessionBar({
         {!mdMode && (
           <button
             onClick={onToggleSelectMode}
-            className={`p-1 rounded transition-colors ${selectMode ? 'text-blue-300 bg-blue-800/50' : 'text-muted hover:text-body hover:bg-surface'}`}
+            className={`p-1 rounded transition-colors ${selectMode ? 'text-soft-blue bg-soft-blue/12' : 'text-muted hover:text-body hover:bg-surface'}`}
             title={t('chat.multi_select')}
           >
             <CheckSquare size={13} />
@@ -656,7 +656,7 @@ function SessionBar({
           onClick={handleCopyMd}
           className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-muted hover:text-body hover:bg-surface transition-colors"
         >
-          {copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+          {copied ? <Check size={11} className="text-soft-green" /> : <Copy size={11} />}
           <span>{copied ? t('chat.copied') : t('chat.copy')}</span>
         </button>
 
@@ -669,7 +669,7 @@ function SessionBar({
         </button>
 
         {selectedSession.permissionMode === 'bypassPermissions' && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800/50">
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-soft-red/10 text-soft-red border border-soft-red/20">
             skip-permissions
           </span>
         )}
@@ -687,7 +687,7 @@ function SessionBar({
           className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1"
           title={t('chat.copy_resume_cmd')}
         >
-          {copiedResumeCmd ? <Check size={10} className="text-green-400" /> : <Copy size={10} />}
+          {copiedResumeCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
           {copiedResumeCmd ? t('chat.copied') : t('chat.copy_resume_cmd_short')}
         </button>
         <button
@@ -699,7 +699,7 @@ function SessionBar({
           className={`px-2.5 py-0.5 text-[11px] rounded flex items-center gap-1 ${
             selectedSession.id?.includes(':intra-')
               ? 'bg-hover hover:bg-pressed text-body'
-              : 'bg-green-700 hover:bg-green-600 text-white'
+              : 'bg-soft-green/90 hover:bg-soft-green text-white'
           }`}
           title={selectedSession.id?.includes(':intra-') ? t('chat.resume_branch_hint') : undefined}
         >
@@ -740,7 +740,7 @@ function SourceView({ session, sections, customTitle, contentRef }: {
             <div key={sIdx}>
               {sectionHeader && (
                 <div id={`section-${sIdx}`} className="scroll-mt-0">
-                  <pre className="text-[12px] font-mono text-blue-400 font-bold whitespace-pre-wrap leading-relaxed">{sectionHeader}</pre>
+                  <pre className="text-[12px] font-mono text-soft-blue font-bold whitespace-pre-wrap leading-relaxed">{sectionHeader}</pre>
                 </div>
               )}
               {turns.map((turn, tIdx) => (
@@ -1426,12 +1426,12 @@ export function ChatViewer() {
 
           {/* Batch action bar */}
           {selectMode && selectedCount > 0 && !mdMode && (
-            <div className="h-8 flex items-center gap-2 px-3 bg-blue-950/50 border-b border-blue-800/40 shrink-0">
-              <span className="text-[11px] text-blue-400">{t('chat.selected_count', { n: selectedCount })}</span>
-              <button onClick={handleBatchExport} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
+            <div className="h-8 flex items-center gap-2 px-3 bg-soft-blue/8 border-b border-soft-blue/15 shrink-0">
+              <span className="text-[11px] text-soft-blue">{t('chat.selected_count', { n: selectedCount })}</span>
+              <button onClick={handleBatchExport} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
                 <Copy size={10} /> {t('chat.copy')}
               </button>
-              <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-blue-800/50 text-blue-300 hover:bg-blue-700/50 flex items-center gap-1">
+              <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
                 <Download size={10} /> {t('chat.download_md')}
               </button>
               <button onClick={() => { setSelectedItems(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-muted hover:text-body">
@@ -1454,9 +1454,9 @@ export function ChatViewer() {
                   <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="space-y-4 scroll-mt-0">
                     {sections.length > 1 && (
                       <div className="sticky top-0 z-10 flex items-center gap-3 py-2 bg-base/95 backdrop-blur-sm -mx-4 px-4">
-                        <div className="flex-1 border-t border-emerald-600/50" />
-                        <span className="text-emerald-500 text-xs px-3 py-1 bg-emerald-900/20 rounded-full">{t('chat.current_section')}</span>
-                        <div className="flex-1 border-t border-emerald-600/50" />
+                        <div className="flex-1 border-t border-soft-emerald/50" />
+                        <span className="text-soft-emerald text-xs px-3 py-1 bg-soft-emerald/10 rounded-full">{t('chat.current_section')}</span>
+                        <div className="flex-1 border-t border-soft-emerald/50" />
                       </div>
                     )}
                     {renderSection(section)}
@@ -1466,10 +1466,10 @@ export function ChatViewer() {
 
               const isExpanded = expandedSections.has(sIdx)
               const isShared = section.isSharedContext
-              const borderColor = isShared ? 'border-purple-600/30' : 'border-amber-600/30'
-              const textColor = isShared ? 'text-purple-400/70' : 'text-amber-500/70'
-              const bgColor = isShared ? 'bg-purple-900/10 hover:bg-purple-900/20' : 'bg-amber-900/10 hover:bg-amber-900/20'
-              const borderLColor = isShared ? 'border-purple-600/20' : 'border-amber-600/20'
+              const borderColor = isShared ? 'border-soft-purple/30' : 'border-soft-amber/30'
+              const textColor = isShared ? 'text-soft-purple/70' : 'text-soft-amber/70'
+              const bgColor = isShared ? 'bg-soft-purple/6 hover:bg-soft-purple/10' : 'bg-soft-amber/6 hover:bg-soft-amber/10'
+              const borderLColor = isShared ? 'border-soft-purple/20' : 'border-soft-amber/20'
               const SectionIcon = isShared ? GitBranch : History
 
               return (
@@ -1507,7 +1507,7 @@ export function ChatViewer() {
                 data-highlight-btn
                 onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onClick={handleAddHighlight}
-                className="flex items-center gap-1 px-2.5 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs rounded-lg shadow-xl transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1.5 bg-soft-green/90 hover:bg-soft-green text-white text-xs rounded-lg shadow-xl transition-colors"
                 title={t('chat.highlight_title')}
               >
                 <Highlighter size={13} />

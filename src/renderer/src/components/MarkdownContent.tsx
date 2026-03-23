@@ -26,7 +26,7 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 
 function InlineCode({ children }: { children?: React.ReactNode }) {
   return (
-    <code className="bg-hover/50 px-1 py-0.5 rounded text-[12px] font-mono text-emerald-400">
+    <code className="bg-hover/50 px-1 py-0.5 rounded text-[12px] font-mono text-soft-emerald">
       {children}
     </code>
   )
@@ -55,7 +55,7 @@ const cliComponents: Components = {
     <blockquote className="border-l-2 border-edge-strong pl-3 my-1.5 text-secondary italic">{children}</blockquote>
   ),
   a: ({ href, children }) => (
-    <a href={href} className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>
+    <a href={href} className="text-soft-blue hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>
   ),
   hr: () => <hr className="border-edge my-3" />,
   table: ({ children }) => (
@@ -96,8 +96,8 @@ function createDocComponents(tocEntries: TocEntry[]): Components {
       <h4 id={getNextId()} className="text-base font-bold text-body mt-4 mb-1.5 scroll-mt-12">{children}</h4>
     ),
     h5: ({ children }) => (
-      <h5 id={getNextId()} className="text-sm font-bold text-blue-400 mt-4 mb-1 flex items-center gap-2 scroll-mt-12">
-        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+      <h5 id={getNextId()} className="text-sm font-bold text-soft-blue mt-4 mb-1 flex items-center gap-2 scroll-mt-12">
+        <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
         {children}
       </h5>
     ),
@@ -125,7 +125,7 @@ function createDocComponents(tocEntries: TocEntry[]): Components {
       </blockquote>
     ),
     a: ({ href, children }) => (
-      <a href={href} className="text-blue-400 hover:text-blue-300 hover:underline" target="_blank" rel="noopener noreferrer">
+      <a href={href} className="text-soft-blue hover:text-soft-blue hover:underline" target="_blank" rel="noopener noreferrer">
         {children}
       </a>
     ),

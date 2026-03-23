@@ -22,6 +22,22 @@ import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/mark
 
 import { formatTime, getToolPreview, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_COLOR } from '../utils/chat-helpers'
 
+// --- System tag helpers ---
+
+/** Strip system-injected XML blocks from user message text */
+function cleanUserText(text: string): string {
+  return text
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '')
+    .replace(/<available-deferred-tools>[\s\S]*?<\/available-deferred-tools>\s*/g, '')
+    .trim()
+}
+
+/** Extract content from command output XML tags */
+function extractCommandContent(text: string): string {
+  const match = text.match(/<(?:local-command-stdout|user-prompt-submit-hook)>([\s\S]*?)<\/(?:local-command-stdout|user-prompt-submit-hook)>/)
+  return match ? match[1].trim() : text
+}
+
 // --- Diff view for Edit tool ---
 
 function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
@@ -185,6 +201,19 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
     setTimeout(() => setCopiedA(false), 1500)
   }, [turn.assistantMsgs])
 
+  // Command output: render as compact terminal notification
+  if (turn.userMsg?.subtype === 'command-output') {
+    const content = extractCommandContent(turn.userMsg.textContent)
+    return (
+      <div id={turnId} className="scroll-mt-0">
+        <div className="flex items-start gap-2 px-3 py-1.5 rounded-md bg-zinc-800/40 border border-zinc-700/30">
+          <Terminal size={12} className="shrink-0 mt-0.5 text-zinc-500" />
+          <span className="font-mono text-xs text-zinc-400 break-all whitespace-pre-wrap">{content}</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div id={turnId} className="space-y-3 scroll-mt-0 relative">
       {/* User message */}
@@ -221,7 +250,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                 </div>
               ) : (
                 <div className="text-sm text-zinc-200">
-                  <CliMarkdown content={turn.userMsg.textContent} />
+                  <CliMarkdown content={cleanUserText(turn.userMsg.textContent)} />
                 </div>
               )}
             </div>

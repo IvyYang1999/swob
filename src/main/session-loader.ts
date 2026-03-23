@@ -412,11 +412,20 @@ export function buildSessionDetail(
       const trimmed = textContent.trimStart()
       const isTaskNotification = m.type === 'user' && trimmed.startsWith('<task-notification>')
       const isSkillOutput = m.type === 'user' && trimmed.startsWith('Base directory for this skill:')
-      const isSystemInjected = isTaskNotification || isSkillOutput
+      const isCommandOutput = m.type === 'user' && (
+        trimmed.startsWith('<local-command-stdout>') || trimmed.startsWith('<user-prompt-submit-hook>')
+      )
+      const isSystemReminder = m.type === 'user' && trimmed.startsWith('<system-reminder>') &&
+        !trimmed.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()
+      const detectedSubtype = isTaskNotification ? 'task-notification'
+        : isSkillOutput ? 'skill-output'
+        : isCommandOutput ? 'command-output'
+        : isSystemReminder ? 'system-reminder'
+        : m.subtype
       return {
         uuid: m.uuid,
         type: m.type as ParsedMessage['type'],
-        subtype: isSystemInjected ? (isTaskNotification ? 'task-notification' : 'skill-output') : m.subtype,
+        subtype: detectedSubtype,
         timestamp: m.timestamp,
         role: m.message?.role,
         textContent,
@@ -996,7 +1005,16 @@ export async function loadSessionDetail(
         const trimmedText = textContent.trimStart()
         const isTaskNotification = m.type === 'user' && trimmedText.startsWith('<task-notification>')
         const isSkillOutput = m.type === 'user' && trimmedText.startsWith('Base directory for this skill:')
-        const detectedSubtype = isTaskNotification ? 'task-notification' : isSkillOutput ? 'skill-output' : m.subtype
+        const isCommandOutput = m.type === 'user' && (
+          trimmedText.startsWith('<local-command-stdout>') || trimmedText.startsWith('<user-prompt-submit-hook>')
+        )
+        const isSystemReminder = m.type === 'user' && trimmedText.startsWith('<system-reminder>') &&
+          !trimmedText.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()
+        const detectedSubtype = isTaskNotification ? 'task-notification'
+          : isSkillOutput ? 'skill-output'
+          : isCommandOutput ? 'command-output'
+          : isSystemReminder ? 'system-reminder'
+          : m.subtype
         return {
           uuid: m.uuid,
           type: m.type as ParsedMessage['type'],

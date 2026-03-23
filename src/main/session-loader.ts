@@ -18,7 +18,7 @@ const HOME = process.env.HOME || ''
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 7 // MIN_UNIQUE_TURNS=1, MIN_TRANSITIONS=3
+const CACHE_VERSION = 8 // traceToRoot follows logicalParentUuid, full-path turnCount
 
 interface DiskCache {
   version: number
@@ -515,7 +515,9 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
       visited.add(current)
       if (uuidToIdx.has(current)) path.push(current)
       const idx = uuidToIdx.get(current)
-      current = idx !== undefined ? raw[idx].parentUuid : undefined
+      if (idx === undefined) break
+      // Follow parentUuid; if null, try logicalParentUuid (crosses compact boundary)
+      current = raw[idx].parentUuid || raw[idx].logicalParentUuid || undefined
     }
     return path.reverse()
   }
@@ -696,8 +698,9 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
     const uniquePortion = path.slice(commonLen)
 
     const firstUserMessage = getFirstUserMsg(uniquePortion)
-    const userCount = countUserTurns(uniquePortion)
-    const assistantCount = uniquePortion.filter((u) => {
+    // Count turns across the FULL path (shared + unique) for accurate display
+    const fullUserCount = countUserTurns(path)
+    const fullAssistantCount = path.filter((u) => {
       const i = uuidToIdx.get(u)
       return i !== undefined && raw[i].type === 'assistant'
     }).length
@@ -718,7 +721,7 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
       firstUserMessage,
       createdAt,
       updatedAt,
-      turnCount: Math.min(userCount, assistantCount),
+      turnCount: Math.min(fullUserCount, fullAssistantCount),
       messageCount: path.length,
       parentIdx: node.parentNode,
       childIdxs: node.childNodes,
@@ -739,7 +742,7 @@ export function filterMessagesByBranch(raw: RawJsonlMessage[], leafUuid: string)
     if (raw[i].uuid) uuidToIdx.set(raw[i].uuid, i)
   }
 
-  // Trace from leaf to root
+  // Trace from leaf to root, following logicalParentUuid through compact boundaries
   const pathUuids = new Set<string>()
   let current: string | null | undefined = leafUuid
   const visited = new Set<string>()
@@ -747,7 +750,9 @@ export function filterMessagesByBranch(raw: RawJsonlMessage[], leafUuid: string)
     visited.add(current)
     if (uuidToIdx.has(current)) pathUuids.add(current)
     const idx = uuidToIdx.get(current)
-    current = idx !== undefined ? raw[idx].parentUuid : undefined
+    if (idx === undefined) break
+    // Follow parentUuid; if null, try logicalParentUuid (crosses compact boundary)
+    current = raw[idx].parentUuid || raw[idx].logicalParentUuid || undefined
   }
 
   return raw.filter((m) => pathUuids.has(m.uuid))

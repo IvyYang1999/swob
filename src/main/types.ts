@@ -1,6 +1,7 @@
 export interface RawJsonlMessage {
   uuid: string
   parentUuid: string | null
+  logicalParentUuid?: string | null  // used across compact boundaries
   sessionId: string
   type: 'user' | 'assistant' | 'system' | 'progress' | 'file-history-snapshot'
   subtype?: string

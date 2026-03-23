@@ -214,7 +214,11 @@ export function turnToMarkdown(turn: Turn, locale: Locale = 'zh-CN'): string {
       // Normal user query: H5 snippet heading + blockquote body
       const firstLine = text.split('\n')[0].slice(0, 50)
       const snippet = firstLine + (text.length > firstLine.length ? '...' : '')
+      const ts = turn.userMsg.timestamp
+        ? new Date(turn.userMsg.timestamp).toLocaleString(locale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : ''
       lines.push(`##### ${snippet}\n`)
+      if (ts) lines.push(`*${ts}*\n`)
       // User text in blockquote
       const demoted = demoteHeadings(text)
       lines.push(demoted.split('\n').map(l => `> ${l}`).join('\n'))

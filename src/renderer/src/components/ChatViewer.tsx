@@ -346,13 +346,12 @@ const VIEW_MODES: { mode: ViewMode; labelKey: string }[] = [
 
 // --- Resizable TOC Sidebar ---
 
-function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap, highlightedTurnUuids }: {
+function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap }: {
   entries: TocEntry[]
   onNavigate: (id: string) => void
   width: number
   onResize: (w: number) => void
   turnContentMap?: Map<string, string>
-  highlightedTurnUuids?: Set<string>
 }) {
   const t = useT()
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
@@ -422,8 +421,6 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap, high
                   </button>
                 )}
                 {!isCollapsed && group.children.map((entry, ci) => {
-                  const turnUuid = entry.id.startsWith('turn-') ? entry.id.slice(5) : ''
-                  const hasHL = highlightedTurnUuids?.has(turnUuid)
                   return (
                     <button
                       key={ci}
@@ -439,7 +436,6 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap, high
                       className="w-full flex items-center gap-1 text-left pl-6 pr-2 py-0.5 text-[11px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30 truncate cursor-pointer"
                       title={entry.text}
                     >
-                      {hasHL && <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />}
                       <span className="truncate">{entry.text}</span>
                     </button>
                   )
@@ -1112,7 +1108,6 @@ export function ChatViewer() {
   }, [selectedSession, config])
 
   // Track which turn UUIDs have highlights (for TOC markers)
-  const highlightedTurnUuids = useMemo(() => new Set(highlights.map(h => h.turnUuid)), [highlights])
 
   // Floating selection toolbar (fixed positioning, viewport coords)
   const [selectionPos, setSelectionPos] = useState<{ top: number; left: number } | null>(null)
@@ -1412,7 +1407,6 @@ export function ChatViewer() {
             width={tocWidth}
             onResize={setTocWidth}
             turnContentMap={turnContentMap}
-            highlightedTurnUuids={highlightedTurnUuids}
           />
         )}
 

@@ -46,6 +46,7 @@ export interface LibraryConfig {
     terminalApp: 'Terminal' | 'iTerm2'
   }
   folderOrder?: string[]  // relative paths, determines display order
+  branchFolders?: Record<string, string[]>  // branch unique ID → folder relative paths
 }
 
 // ============ Constants ============
@@ -766,6 +767,17 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
     }
   }
 
+  // Inject branch-to-folder assignments from config
+  const branchFolders = libConfig.branchFolders || {}
+  for (const [branchId, folderIds] of Object.entries(branchFolders)) {
+    for (const fid of folderIds) {
+      const folder = folders.find((f) => f.id === fid)
+      if (folder && !folder.sessionIds.includes(branchId)) {
+        folder.sessionIds.push(branchId)
+      }
+    }
+  }
+
   return {
     folders,
     sessionMeta,
@@ -829,6 +841,30 @@ export function reorderFolder(folderId: string, targetId: string, position: 'bef
 // Resolve a folder ID (relative path) to absolute path
 export function resolveFolderPath(folderId: string): string {
   return path.join(_root, folderId)
+}
+
+// --- Branch folder management (stored in config, not file system) ---
+
+export function addBranchToFolder(branchId: string, folderId: string): void {
+  const config = loadLibraryConfig()
+  const map = config.branchFolders || {}
+  const folders = map[branchId] || []
+  if (!folders.includes(folderId)) folders.push(folderId)
+  map[branchId] = folders
+  config.branchFolders = map
+  saveLibraryConfig(config)
+}
+
+export function removeBranchFromFolder(branchId: string, folderId: string): void {
+  const config = loadLibraryConfig()
+  const map = config.branchFolders || {}
+  const folders = map[branchId] || []
+  const idx = folders.indexOf(folderId)
+  if (idx !== -1) folders.splice(idx, 1)
+  if (folders.length === 0) delete map[branchId]
+  else map[branchId] = folders
+  config.branchFolders = map
+  saveLibraryConfig(config)
 }
 
 // Update session meta (.swob-session.json) and optionally rename dir

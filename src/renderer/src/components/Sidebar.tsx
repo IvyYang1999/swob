@@ -177,8 +177,8 @@ function FolderNode({
     setDragOverFolderId(null)
     try {
       const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
-      if (data.type === 'session' && (data.sessionId || data.id)) {
-        addSessionToFolder(folder.id, data.sessionId || data.id)
+      if (data.type === 'session' && (data.id || data.sessionId)) {
+        addSessionToFolder(folder.id, data.id || data.sessionId)
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
       } else if (data.type === 'folder' && data.id && data.id !== folder.id) {
         if (zone === 'inside') {
@@ -315,12 +315,13 @@ export function Sidebar({ width }: { width: number }) {
   const handleContextMenu = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.preventDefault()
     const session = sessions.find((s) => s.id === sessionId)
-    const baseId = session?.sessionId || sessionId
+    // Use session.id for folder operations — branches have their own identity
+    const opId = sessionId
     const folders = (config?.folders || []).map((f) => ({
       id: f.id, name: f.name, parentId: f.parentId || null,
-      isIn: f.sessionIds.includes(baseId) || f.sessionIds.includes(sessionId)
+      isIn: f.sessionIds.includes(opId)
     }))
-    const result = await window.api.showSessionContextMenu({ sessionId: baseId, folders })
+    const result = await window.api.showSessionContextMenu({ sessionId: opId, folders })
     if (!result) return
     if (result.action === 'rename') {
       const s = sessions.find((s) => s.id === sessionId)
@@ -329,9 +330,9 @@ export function Sidebar({ width }: { width: number }) {
       setSessionRenameValue(meta?.customTitle || s?.firstUserMessage || '')
       setRenamingSessionId(sessionId)
     } else if (result.action === 'addToFolder' && result.folderId) {
-      addSessionToFolder(result.folderId, baseId)
+      addSessionToFolder(result.folderId, opId)
     } else if (result.action === 'removeFromFolder' && result.folderId) {
-      removeSessionFromFolder(result.folderId, baseId)
+      removeSessionFromFolder(result.folderId, opId)
     }
   }, [sessions, config, addSessionToFolder, removeSessionFromFolder])
 
@@ -398,8 +399,6 @@ export function Sidebar({ width }: { width: number }) {
 
   const ungroupedSessions = useMemo(
     () => sessions.filter((s) => {
-      // Intra-file branches are always ungrouped (they don't follow parent into folders)
-      if (s.id.includes(':intra-')) return true
       return !groupedSessionIds.has(s.id) && !groupedSessionIds.has(s.sessionId)
     }),
     [sessions, groupedSessionIds]

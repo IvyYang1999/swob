@@ -34,7 +34,9 @@ import {
   getLibraryRoot,
   migrateFromOldConfig,
   reorderFolder,
-  moveLibraryFolderToParent
+  moveLibraryFolderToParent,
+  addBranchToFolder,
+  removeBranchFromFolder
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import type { SessionSummary } from './types'
@@ -429,36 +431,43 @@ ipcMain.handle(
 ipcMain.handle(
   'config:addSessionToFolder',
   async (_event, folderId: string, sessionId: string) => {
-    // For intra-file branches (id like "abc:intra-0"), use the base sessionId
-    const baseSessionId = sessionId.includes(':intra-') || sessionId.includes(':branch-')
-      ? sessionId.split(':')[0]
-      : sessionId
+    const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
-      // Ensure session exists in Library before moving
-      const dirPath = getSessionDirPath(baseSessionId)
-      if (!dirPath) {
-        const summary = cachedSessions.find((s) => s.sessionId === baseSessionId)
-        if (summary) {
-          await ensureSessionInLibrary(summary)
+      if (isBranch) {
+        // Branch sessions: store in config (independent of parent's file system location)
+        addBranchToFolder(sessionId, folderId)
+      } else {
+        // Regular sessions: move directory in Library file system
+        const dirPath = getSessionDirPath(sessionId)
+        if (!dirPath) {
+          const summary = cachedSessions.find((s) => s.sessionId === sessionId)
+          if (summary) {
+            await ensureSessionInLibrary(summary)
+          }
         }
+        const folderPath = resolveFolderPath(folderId)
+        moveSessionToFolder(sessionId, folderPath)
       }
-      const folderPath = resolveFolderPath(folderId)
-      moveSessionToFolder(baseSessionId, folderPath)
       const tree = scanLibrary()
       return libraryTreeToConfig(tree)
     }
     const config = loadConfig()
     const { addSessionToFolder } = require('./config-store')
-    return addSessionToFolder(config, folderId, baseSessionId)
+    return addSessionToFolder(config, folderId, sessionId)
   }
 )
 
 ipcMain.handle(
   'config:removeSessionFromFolder',
   (_event, folderId: string, sessionId: string) => {
+    const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
-      const folderPath = resolveFolderPath(folderId)
-      libRemoveSession(sessionId, folderPath)
+      if (isBranch) {
+        removeBranchFromFolder(sessionId, folderId)
+      } else {
+        const folderPath = resolveFolderPath(folderId)
+        libRemoveSession(sessionId, folderPath)
+      }
       const tree = scanLibrary()
       return libraryTreeToConfig(tree)
     }

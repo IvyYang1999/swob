@@ -522,6 +522,7 @@ function SessionBar({
   const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, config, locale } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
+  const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return
@@ -614,6 +615,23 @@ function SessionBar({
           </span>
         )}
 
+        <button
+          onClick={() => {
+            const sid = selectedSession.sessionId || selectedSession.id.split(':')[0]
+            const cmd = selectedSession.permissionMode === 'bypassPermissions'
+              ? `claude --dangerously-skip-permissions --resume ${sid}`
+              : `claude --resume ${sid}`
+            const full = selectedSession.cwds?.[0] ? `cd ${JSON.stringify(selectedSession.cwds[0])} && ${cmd}` : cmd
+            navigator.clipboard.writeText(full)
+            setCopiedResumeCmd(true)
+            setTimeout(() => setCopiedResumeCmd(false), 1500)
+          }}
+          className="px-2 py-0.5 text-[11px] rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-300 flex items-center gap-1"
+          title={t('chat.copy_resume_cmd')}
+        >
+          {copiedResumeCmd ? <Check size={10} className="text-green-400" /> : <Copy size={10} />}
+          {copiedResumeCmd ? t('chat.copied') : t('chat.copy_resume_cmd_short')}
+        </button>
         <button
           onClick={() => resumeSession(
             selectedSession.sessionId || selectedSession.id,

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useStore } from '../store'
 import type { Highlight } from '../store'
 import { useT } from '../i18n'
-import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2, GitBranch } from 'lucide-react'
+import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2, GitBranch, Copy, Check } from 'lucide-react'
 
 interface FileRef {
   path: string
@@ -307,6 +307,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
   const t = useT()
   const locale = useStore((s) => s.locale)
   const [open, setOpen] = useState(true)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   if (highlights.length === 0) return null
 
@@ -339,16 +340,30 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
                 <span className="text-[10px] text-zinc-600">
                   {new Date(hl.createdAt).toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                 </span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    removeHighlight(sessionId, hl.id)
-                  }}
-                  className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-opacity p-0.5"
-                  title={t('info.highlight_delete')}
-                >
-                  <Trash2 size={10} />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigator.clipboard.writeText(hl.text)
+                      setCopiedId(hl.id)
+                      setTimeout(() => setCopiedId(null), 1500)
+                    }}
+                    className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-green-400 transition-opacity p-0.5"
+                    title={t('info.highlight_copy')}
+                  >
+                    {copiedId === hl.id ? <Check size={10} /> : <Copy size={10} />}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      removeHighlight(sessionId, hl.id)
+                    }}
+                    className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-opacity p-0.5"
+                    title={t('info.highlight_delete')}
+                  >
+                    <Trash2 size={10} />
+                  </button>
+                </div>
               </div>
             </div>
           ))}

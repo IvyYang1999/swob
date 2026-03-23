@@ -20,34 +20,7 @@ import {
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
 
-function formatTime(iso: string, locale: string = 'zh-CN'): string {
-  return new Date(iso).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
-}
-
-// --- Tool color palette ---
-
-const TOOL_COLORS: Record<string, string> = {
-  Bash: 'bg-green-900/50 text-green-400 border-green-700/40',
-  Read: 'bg-blue-900/50 text-blue-400 border-blue-700/40',
-  Write: 'bg-amber-900/50 text-amber-400 border-amber-700/40',
-  Edit: 'bg-amber-900/50 text-amber-400 border-amber-700/40',
-  Grep: 'bg-violet-900/50 text-violet-400 border-violet-700/40',
-  Glob: 'bg-violet-900/50 text-violet-400 border-violet-700/40',
-  Agent: 'bg-cyan-900/50 text-cyan-400 border-cyan-700/40',
-  WebSearch: 'bg-indigo-900/50 text-indigo-400 border-indigo-700/40',
-  WebFetch: 'bg-indigo-900/50 text-indigo-400 border-indigo-700/40',
-  Skill: 'bg-pink-900/50 text-pink-400 border-pink-700/40',
-}
-const DEFAULT_TOOL_COLOR = 'bg-zinc-800/60 text-zinc-400 border-zinc-700/40'
-
-function getToolPreview(name: string, input: Record<string, unknown>): string {
-  if (name === 'Bash' && input.command) return String(input.command).slice(0, 120)
-  if ((name === 'Read' || name === 'Write' || name === 'Edit') && input.file_path) return String(input.file_path)
-  if ((name === 'Grep' || name === 'Glob') && input.pattern) return String(input.pattern)
-  if (name === 'Skill' && input.skill) return String(input.skill)
-  if (name === 'Agent' && input.prompt) return String(input.prompt).slice(0, 80)
-  return ''
-}
+import { formatTime, getToolPreview, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_COLOR } from '../utils/chat-helpers'
 
 // --- Diff view for Edit tool ---
 
@@ -647,10 +620,15 @@ function SessionBar({
             selectedSession.permissionMode,
             selectedSession.cwds?.[0]
           )}
-          className="px-2.5 py-0.5 text-[11px] rounded bg-green-700 hover:bg-green-600 text-white flex items-center gap-1"
+          className={`px-2.5 py-0.5 text-[11px] rounded flex items-center gap-1 ${
+            selectedSession.id?.includes(':intra-')
+              ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+              : 'bg-green-700 hover:bg-green-600 text-white'
+          }`}
+          title={selectedSession.id?.includes(':intra-') ? t('chat.resume_branch_hint') : undefined}
         >
           <Play size={10} />
-          Resume
+          Resume{selectedSession.id?.includes(':intra-') ? ` (${t('chat.resume_parent')})` : ''}
         </button>
       </div>
     </div>
@@ -659,18 +637,7 @@ function SessionBar({
 
 // --- Helper: generate session header markdown ---
 
-function sessionHeaderMd(session: SessionDetail, t: (key: string, params?: Record<string, string | number>) => string, locale: string, customTitle?: string): string {
-  const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId
-  const created = new Date(session.createdAt).toLocaleString(locale)
-  const toolSummary = Object.entries(session.toolUsage)
-    .sort(([, a], [, b]) => b - a).slice(0, 6)
-    .map(([name, count]) => `${name}(${count})`).join(', ')
-  const lines = [`# ${title}\n`]
-  lines.push(`> ${created} | ${t('chat.turns_count', { n: session.turnCount })}`)
-  if (toolSummary) lines.push(`> Tools: ${toolSummary}`)
-  lines.push('')
-  return lines.join('\n')
-}
+// sessionHeaderMd moved to utils/chat-helpers.ts
 
 // --- Source view: per-turn raw markdown with anchor divs ---
 

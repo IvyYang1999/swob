@@ -303,13 +303,10 @@ function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: st
 
 function openInTerminal(command: string): void {
   const tmpPath = `/tmp/csm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.command`
-  fs.writeFileSync(tmpPath, `#!/bin/bash\n${command}\n`)
+  // Script deletes itself after command finishes, so Terminal won't kill a running process
+  fs.writeFileSync(tmpPath, `#!/bin/bash\n${command}\nrm -f "${tmpPath}"\n`)
   fs.chmodSync(tmpPath, 0o755)
-  exec(`open "${tmpPath}"`, () => {
-    setTimeout(() => {
-      try { fs.unlinkSync(tmpPath) } catch { /* ignore */ }
-    }, 3000)
-  })
+  exec(`open "${tmpPath}"`)
 }
 
 ipcMain.handle(

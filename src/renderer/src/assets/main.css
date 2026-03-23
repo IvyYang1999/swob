@@ -21,21 +21,21 @@
   --color-edge-strong: #52525b; /* zinc-600 */
   --color-edge-focus: #71717a;  /* zinc-500 */
 
-  /* 语义色 — 降低饱和度 */
-  --color-accent: #6d9dc4;      /* 选中态（柔和蓝） */
-  --color-active: #7abc96;      /* 活跃状态（柔和绿） */
+  /* 语义色 */
+  --color-accent: #8c72b8;      /* 选中态（紫色，对齐品牌） */
+  --color-active: #4cc080;      /* 活跃状态 */
 
-  /* 柔和色板 — Notion 风格低饱和 */
-  --color-soft-blue: #7c9fc0;
-  --color-soft-green: #7aac8e;
-  --color-soft-red: #bf7e7e;
-  --color-soft-amber: #b8a070;
-  --color-soft-purple: #9c8eb4;
-  --color-soft-cyan: #7aacb4;
-  --color-soft-indigo: #8a8ab4;
-  --color-soft-pink: #b48a9c;
-  --color-soft-orange: #c0946e;
-  --color-soft-emerald: #70ac8e;
+  /* 点缀色板 — 底色克制，点缀鲜明 */
+  --color-soft-blue: #5a9fd4;
+  --color-soft-green: #4aad76;
+  --color-soft-red: #cc6b6b;
+  --color-soft-amber: #c49a4a;
+  --color-soft-purple: #8c72b8;
+  --color-soft-cyan: #4aacba;
+  --color-soft-indigo: #7474b8;
+  --color-soft-pink: #c05c88;
+  --color-soft-orange: #c88450;
+  --color-soft-emerald: #44a880;
 }
 
 body {

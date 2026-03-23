@@ -26,7 +26,7 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 
 function InlineCode({ children }: { children?: React.ReactNode }) {
   return (
-    <code className="bg-hover/50 px-1 py-0.5 rounded text-[12px] font-mono text-soft-emerald">
+    <code className="bg-hover/50 px-1 py-0.5 rounded text-[12px] font-mono text-soft-cyan">
       {children}
     </code>
   )

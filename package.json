@@ -1,6 +1,6 @@
 {
   "name": "claude-session-manager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Visual session manager for Claude Code",
   "license": "AGPL-3.0-only",
   "author": "IvyYang1999",

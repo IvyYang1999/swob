@@ -78,8 +78,8 @@ const api = {
   onUpdateDownloading: (callback: (version: string) => void) => {
     ipcRenderer.on('update:downloading', (_event, version) => callback(version))
   },
-  onUpdateReady: (callback: (version: string) => void) => {
-    ipcRenderer.on('update:ready', (_event, version) => callback(version))
+  onUpdateReady: (callback: (version: string, notes: string) => void) => {
+    ipcRenderer.on('update:ready', (_event, version, notes) => callback(version, notes))
   },
   installUpdate: () => ipcRenderer.invoke('update:install')
 }

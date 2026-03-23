@@ -696,11 +696,18 @@ function setupAutoUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = true
 
   autoUpdater.on('update-available', (info) => {
-    mainWindow?.webContents.send('update:downloading', info.version)
+    mainWindow?.webContents.send('update:downloading', info.version, '')
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    mainWindow?.webContents.send('update:ready', info.version)
+    // releaseNotes 可能是 string 或 ReleaseNoteInfo[]
+    let notes = ''
+    if (typeof info.releaseNotes === 'string') {
+      notes = info.releaseNotes
+    } else if (Array.isArray(info.releaseNotes)) {
+      notes = info.releaseNotes.map((n) => n.note || '').join('\n')
+    }
+    mainWindow?.webContents.send('update:ready', info.version, notes)
   })
 
   autoUpdater.on('error', (err) => {

@@ -13,6 +13,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -20,6 +22,20 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # 找到上一个 tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            # 第一次发版，取所有 commit
+            LOGS=$(git log --pretty=format:"- %s" --no-merges -20)
+          else
+            LOGS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" --no-merges)
+          fi
+          # 写入文件，避免多行字符串转义问题
+          echo "$LOGS" > /tmp/changelog.txt
 
       - name: Build & Publish
         env:
@@ -30,3 +46,11 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ZPTA4LP594
         run: npx electron-vite build && npx electron-builder --mac --publish always
+
+      - name: Update release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          CHANGELOG=$(cat /tmp/changelog.txt)
+          gh release edit "$TAG" --notes "$CHANGELOG"

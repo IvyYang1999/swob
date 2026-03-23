@@ -2,3 +2,6 @@ node_modules
 out
 dist
 .DS_Store
+e2e/screenshots
+test-results
+.working

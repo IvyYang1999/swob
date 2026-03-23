@@ -262,7 +262,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                 {qSelected ? '✓' : ''}
               </button>
             )}
-            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-soft-blue"><User size={14} /></div>
+            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#5a8fb8] text-white"><User size={14} /></div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-secondary">User</span>
@@ -304,7 +304,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                 {aSelected ? '✓' : ''}
               </button>
             )}
-            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-soft-orange"><Bot size={14} /></div>
+            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#b87a4a] text-white"><Bot size={14} /></div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-secondary">Assistant</span>

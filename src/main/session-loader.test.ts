@@ -414,6 +414,17 @@ describe('【曾经的 bug】turnCount 不能把工具结果算成用户轮次',
     expect(isRealUserMessage(toolResult)).toBe(false)
   })
 
+  it('【曾经的 bug】tool_result + text 混合也不是真实用户消息（AskUserQuestion 的回答）', () => {
+    const mixed = rawMsg({
+      type: 'user',
+      message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'abc', content: 'Answer questions?' },
+        { type: 'text', text: 'Answer questions?' }
+      ] as any }
+    })
+    expect(isRealUserMessage(mixed)).toBe(false)
+  })
+
   it('纯文本的用户消息是真实的', () => {
     const textMsg = rawMsg({
       type: 'user',

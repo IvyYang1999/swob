@@ -30,7 +30,8 @@ export function isRealUserMessage(m: RawJsonlMessage): boolean {
     return trimmed.length > 0
   }
   if (Array.isArray(c)) {
-    // If content only has tool_result parts, it's not a real user message
+    // Any message containing tool_result is system-generated, not user-initiated
+    if (c.some((p) => p.type === 'tool_result')) return false
     return c.some((p) => p.type === 'text' && p.text?.trim())
   }
   return false

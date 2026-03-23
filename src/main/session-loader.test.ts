@@ -342,6 +342,36 @@ describe('【曾经的 bug】分支检测不能被 traceToRoot 的改动破坏',
 
     expect(branches.length).toBeGreaterThanOrEqual(1)
   })
+
+  it('两边都 compact 后仍能检测到分支', () => {
+    // 场景：fork 后两个终端各自聊了很久，各自触发了 compact
+    // traceToRoot 需要穿越各自的 compact_boundary 才能找到共享前缀
+    const shared1 = rawMsg({ uuid: 'sh1', parentUuid: null, type: 'user', timestamp: '2026-03-01T10:00:00Z', message: { role: 'user', content: '开始对话' } })
+    const shared2 = rawMsg({ uuid: 'sh2', parentUuid: 'sh1', type: 'assistant', timestamp: '2026-03-01T10:01:00Z', message: { role: 'assistant', content: '好的' } })
+
+    // Main path: fork → lots of messages → compact → continue
+    const mainPre = rawMsg({ uuid: 'mp1', parentUuid: 'sh2', type: 'user', timestamp: '2026-03-01T10:02:00Z', message: { role: 'user', content: '主路径开始' } })
+    const mainPre2 = rawMsg({ uuid: 'mp2', parentUuid: 'mp1', type: 'assistant', timestamp: '2026-03-01T10:04:00Z', message: { role: 'assistant', content: '主路径回复' } })
+    const mainCompact = rawMsg({ uuid: 'mc', parentUuid: null, type: 'system', subtype: 'compact_boundary', timestamp: '2026-03-01T11:00:00Z' })
+    // @ts-expect-error
+    mainCompact.logicalParentUuid = 'mp2'
+    const mainPost1 = rawMsg({ uuid: 'mq1', parentUuid: 'mc', type: 'user', timestamp: '2026-03-01T11:01:00Z', message: { role: 'user', content: '主路径继续' } })
+    const mainPost2 = rawMsg({ uuid: 'mq2', parentUuid: 'mq1', type: 'assistant', timestamp: '2026-03-01T11:02:00Z', message: { role: 'assistant', content: '主路径继续回复' } })
+
+    // Branch path: fork → lots of messages → compact → continue (timestamps interleave with main)
+    const brPre = rawMsg({ uuid: 'bp1', parentUuid: 'sh2', type: 'user', timestamp: '2026-03-01T10:03:00Z', message: { role: 'user', content: '分支路径开始' } })
+    const brPre2 = rawMsg({ uuid: 'bp2', parentUuid: 'bp1', type: 'assistant', timestamp: '2026-03-01T10:05:00Z', message: { role: 'assistant', content: '分支回复' } })
+    const brCompact = rawMsg({ uuid: 'bc', parentUuid: null, type: 'system', subtype: 'compact_boundary', timestamp: '2026-03-01T11:05:00Z' })
+    // @ts-expect-error
+    brCompact.logicalParentUuid = 'bp2'
+    const brPost1 = rawMsg({ uuid: 'bq1', parentUuid: 'bc', type: 'user', timestamp: '2026-03-01T11:06:00Z', message: { role: 'user', content: '分支继续' } })
+
+    const msgs = [shared1, shared2, mainPre, mainPre2, mainCompact, mainPost1, mainPost2, brPre, brPre2, brCompact, brPost1]
+    const branches = detectIntraFileBranches(msgs)
+
+    // 关键：即使两边都 compact 了，分支也必须被检测到
+    expect(branches.length).toBeGreaterThanOrEqual(1)
+  })
 })
 
 describe('filterMessagesByBranch 穿越 compact 边界', () => {

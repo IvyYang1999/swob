@@ -515,7 +515,16 @@ export function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
       visited.add(current)
       if (uuidToIdx.has(current)) path.push(current)
       const idx = uuidToIdx.get(current)
-      current = idx !== undefined ? raw[idx].parentUuid : undefined
+      if (idx === undefined) break
+      const msg = raw[idx]
+      // Follow parentUuid normally; at compact_boundary, cross via logicalParentUuid
+      if (msg.parentUuid) {
+        current = msg.parentUuid
+      } else if (msg.subtype === 'compact_boundary' && msg.logicalParentUuid) {
+        current = msg.logicalParentUuid
+      } else {
+        break
+      }
     }
     return path.reverse()
   }

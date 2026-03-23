@@ -1,6 +1,7 @@
-import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
 import { join, dirname, basename, relative } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
 import { exec, execSync } from 'child_process'
 import * as fs from 'fs'
 import * as chokidar from 'chokidar'
@@ -688,6 +689,57 @@ ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
 
 // --- App Lifecycle ---
 
+// --- Auto Update ---
+
+function setupAutoUpdater(): void {
+  // 不自动下载，先通知用户
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-available', (info) => {
+    dialog
+      .showMessageBox({
+        type: 'info',
+        title: '发现新版本',
+        message: `Swob ${info.version} 已发布，是否下载？`,
+        buttons: ['下载', '稍后'],
+        defaultId: 0,
+        cancelId: 1
+      })
+      .then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.downloadUpdate()
+        }
+      })
+  })
+
+  autoUpdater.on('update-downloaded', () => {
+    dialog
+      .showMessageBox({
+        type: 'info',
+        title: '更新就绪',
+        message: '新版本已下载完成，重启即可完成更新。',
+        buttons: ['立即重启', '稍后'],
+        defaultId: 0,
+        cancelId: 1
+      })
+      .then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.quitAndInstall()
+        }
+      })
+  })
+
+  autoUpdater.on('error', (err) => {
+    console.error('自动更新出错:', err.message)
+  })
+
+  // 启动后检查更新（开发模式跳过）
+  if (!is.dev) {
+    autoUpdater.checkForUpdates().catch(() => { /* ignore */ })
+  }
+}
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.claude-session-manager')
   app.on('browser-window-created', (_, window) => {
@@ -701,6 +753,7 @@ app.whenReady().then(() => {
   createWindow()
   startFileWatcher()
   startActiveSessionPoller()
+  setupAutoUpdater()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

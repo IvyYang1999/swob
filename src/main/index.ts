@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
 import { join, dirname, basename, relative } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
@@ -692,49 +692,25 @@ ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
 // --- Auto Update ---
 
 function setupAutoUpdater(): void {
-  // 不自动下载，先通知用户
-  autoUpdater.autoDownload = false
+  autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
   autoUpdater.on('update-available', (info) => {
-    dialog
-      .showMessageBox({
-        type: 'info',
-        title: '发现新版本',
-        message: `Swob ${info.version} 已发布，是否下载？`,
-        buttons: ['下载', '稍后'],
-        defaultId: 0,
-        cancelId: 1
-      })
-      .then(({ response }) => {
-        if (response === 0) {
-          autoUpdater.downloadUpdate()
-        }
-      })
+    mainWindow?.webContents.send('update:downloading', info.version)
   })
 
-  autoUpdater.on('update-downloaded', () => {
-    dialog
-      .showMessageBox({
-        type: 'info',
-        title: '更新就绪',
-        message: '新版本已下载完成，重启即可完成更新。',
-        buttons: ['立即重启', '稍后'],
-        defaultId: 0,
-        cancelId: 1
-      })
-      .then(({ response }) => {
-        if (response === 0) {
-          autoUpdater.quitAndInstall()
-        }
-      })
+  autoUpdater.on('update-downloaded', (info) => {
+    mainWindow?.webContents.send('update:ready', info.version)
   })
 
   autoUpdater.on('error', (err) => {
     console.error('自动更新出错:', err.message)
   })
 
-  // 启动后检查更新（开发模式跳过）
+  ipcMain.handle('update:install', () => {
+    autoUpdater.quitAndInstall()
+  })
+
   if (!is.dev) {
     autoUpdater.checkForUpdates().catch(() => { /* ignore */ })
   }

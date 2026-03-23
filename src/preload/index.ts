@@ -72,7 +72,16 @@ const api = {
   },
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => {
     ipcRenderer.on('sessions:activeChanged', (_event, ids) => callback(ids))
-  }
+  },
+
+  // Auto Update
+  onUpdateDownloading: (callback: (version: string) => void) => {
+    ipcRenderer.on('update:downloading', (_event, version) => callback(version))
+  },
+  onUpdateReady: (callback: (version: string) => void) => {
+    ipcRenderer.on('update:ready', (_event, version) => callback(version))
+  },
+  installUpdate: () => ipcRenderer.invoke('update:install')
 }
 
 contextBridge.exposeInMainWorld('api', api)

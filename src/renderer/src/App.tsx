@@ -6,6 +6,7 @@ import { ChatViewer } from './components/ChatViewer'
 import { InfoPanel } from './components/InfoPanel'
 import { Toolbar } from './components/Toolbar'
 import { SearchResults } from './components/SearchResults'
+import { UpdateBanner } from './components/UpdateBanner'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const t = useT()
@@ -130,6 +131,7 @@ export default function App() {
           )}
           {searchQuery && <SearchResults />}
         </div>
+        <UpdateBanner />
       </div>
     </ErrorBoundary>
   )

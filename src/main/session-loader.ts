@@ -19,23 +19,33 @@ const HOME = process.env.HOME || ''
  * True user message = type 'user' with real text content (not tool_result / task-notification).
  * Tool results have content as array of { type: 'tool_result' }.
  */
+const SYSTEM_USER_MESSAGES = [
+  'Continue from where you left off.',
+  'Tool loaded.',
+  'No response requested.'
+]
+
+function isSystemText(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return true
+  if (trimmed.startsWith('<task-notification>')) return true
+  if (trimmed.startsWith('This session is being continued')) return true
+  return SYSTEM_USER_MESSAGES.includes(trimmed)
+}
+
 export function isRealUserMessage(m: RawJsonlMessage): boolean {
   if (m.type !== 'user' || !m.message) return false
   const c = m.message.content
   if (typeof c === 'string') {
-    const trimmed = c.trim()
-    // System-generated messages that look like user messages
-    if (trimmed.startsWith('<task-notification>')) return false
-    if (trimmed.startsWith('This session is being continued')) return false
-    if (trimmed === 'Continue from where you left off.') return false
-    if (trimmed === 'Tool loaded.') return false
-    if (trimmed === 'No response requested.') return false
-    return trimmed.length > 0
+    return !isSystemText(c)
   }
   if (Array.isArray(c)) {
-    // Any message containing tool_result is system-generated, not user-initiated
     if (c.some((p) => p.type === 'tool_result')) return false
-    return c.some((p) => p.type === 'text' && p.text?.trim())
+    // Extract all text parts, check if any is real user input
+    const texts = c.filter((p) => p.type === 'text' && p.text).map((p) => p.text!)
+    if (texts.length === 0) return false
+    // If ALL text parts are system-generated, not a real message
+    return texts.some((t) => !isSystemText(t))
   }
   return false
 }

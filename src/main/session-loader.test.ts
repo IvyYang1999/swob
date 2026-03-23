@@ -445,8 +445,15 @@ describe('【曾经的 bug】turnCount 不能把工具结果算成用户轮次',
     expect(isRealUserMessage(rawMsg({ type: 'user', message: { role: 'user', content: 'Tool loaded.' } }))).toBe(false)
   })
 
-  it('【曾经的 bug】"Continue from where you left off." 不是真实用户消息', () => {
+  it('【曾经的 bug】"Continue from where you left off." 不是真实用户消息（字符串格式）', () => {
     expect(isRealUserMessage(rawMsg({ type: 'user', message: { role: 'user', content: 'Continue from where you left off.' } }))).toBe(false)
+  })
+
+  it('【曾经的 bug】"Continue from where you left off." 不是真实用户消息（array 格式）', () => {
+    expect(isRealUserMessage(rawMsg({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'Continue from where you left off.' }] as any }
+    }))).toBe(false)
   })
 
   it('含 text 部分的 array content 是真实用户消息', () => {

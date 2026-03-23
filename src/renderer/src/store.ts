@@ -51,6 +51,7 @@ interface ParsedMessage {
   isPreCompact: boolean
   isSidechain: boolean
   isSharedContext: boolean
+  isSystemGenerated: boolean
   raw: unknown
 }
 

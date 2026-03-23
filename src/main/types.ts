@@ -39,6 +39,7 @@ export interface ParsedMessage {
   isPreCompact: boolean
   isSidechain: boolean
   isSharedContext: boolean
+  isSystemGenerated: boolean  // type:"user" but not real user input (tool_result, Tool loaded, etc.)
   raw: RawJsonlMessage
 }
 

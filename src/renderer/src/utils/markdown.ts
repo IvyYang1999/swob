@@ -38,6 +38,7 @@ export function computeSections(session: SessionDetail, locale: Locale = 'zh-CN'
 
   const allMsgs = ownMsgs.filter((m) => {
     if (m.type === 'system' && m.subtype === 'compact_boundary') return true
+    if ((m as any).isSystemGenerated) return false
     return m.type === 'user' || m.type === 'assistant'
   })
 
@@ -48,7 +49,7 @@ export function computeSections(session: SessionDetail, locale: Locale = 'zh-CN'
 
   const sharedSection: CompactSection[] = []
   if (sharedMsgs.length > 0) {
-    const filteredShared = sharedMsgs.filter((m) => m.type === 'user' || m.type === 'assistant')
+    const filteredShared = sharedMsgs.filter((m) => (m.type === 'user' || m.type === 'assistant') && !(m as any).isSystemGenerated)
     if (filteredShared.length > 0) {
       const turnCount = filteredShared.filter((m) => m.type === 'user').length
       sharedSection.push({

@@ -456,6 +456,7 @@ export function buildSessionDetail(
         isPreCompact: lastCompactIndex >= 0 && originalIndex < lastCompactIndex,
         isSidechain: !!m.isSidechain,
         isSharedContext: false,
+        isSystemGenerated: m.type === 'user' && !isRealUserMessage(m),
         raw: m
       }
     })

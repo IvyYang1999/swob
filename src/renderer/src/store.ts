@@ -99,6 +99,7 @@ interface AppState {
   loading: boolean
   viewMode: ViewMode
   locale: Locale
+  theme: 'dark' | 'light'
   selectedFolderId: string | null
   infoPanelOpen: boolean
   selectedSessionMdPath: string | null
@@ -112,6 +113,7 @@ interface AppState {
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   setViewMode: (mode: ViewMode) => void
   setLocale: (locale: Locale) => void
+  toggleTheme: () => void
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
@@ -151,6 +153,14 @@ function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | 
 
 const hydrated = hydrateFromCache()
 
+function resolveTheme(): 'dark' | 'light' {
+  try {
+    const saved = localStorage.getItem('csm:theme')
+    if (saved === 'dark' || saved === 'light') return saved
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  } catch { return 'dark' }
+}
+
 export const useStore = create<AppState>((set, get) => ({
   sessions: hydrated.sessions,
   selectedSession: null,
@@ -161,6 +171,7 @@ export const useStore = create<AppState>((set, get) => ({
   loading: hydrated.loading,
   viewMode: hydrated.viewMode,
   locale: hydrated.locale,
+  theme: resolveTheme(),
   selectedFolderId: null,
   infoPanelOpen: true,
   selectedSessionMdPath: null,
@@ -298,7 +309,6 @@ export const useStore = create<AppState>((set, get) => ({
 
   setLocale: (locale) => {
     set({ locale })
-    // Persist to localStorage immediately for next load
     try {
       const cachedConfig = localStorage.getItem('csm:config')
       if (cachedConfig) {
@@ -307,6 +317,13 @@ export const useStore = create<AppState>((set, get) => ({
         localStorage.setItem('csm:config', JSON.stringify(config))
       }
     } catch { /* ignore */ }
+  },
+
+  toggleTheme: () => {
+    const next = get().theme === 'dark' ? 'light' : 'dark'
+    document.documentElement.setAttribute('data-theme', next)
+    localStorage.setItem('csm:theme', next)
+    set({ theme: next })
   },
 
   selectFolder: (folderId) => set({ selectedFolderId: folderId }),

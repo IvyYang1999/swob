@@ -116,7 +116,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="h-screen flex flex-col bg-base text-white">
+      <div className="h-screen flex flex-col bg-base text-primary">
         <Toolbar />
         <div className="flex-1 flex overflow-hidden relative">
           <Sidebar width={sidebarWidth} />

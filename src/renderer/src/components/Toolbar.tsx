@@ -1,13 +1,14 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { Search, PanelRight, X, Globe } from 'lucide-react'
+import { Search, PanelRight, X, Globe, Sun, Moon } from 'lucide-react'
 
 export function Toolbar() {
   const {
     searchQuery, search, clearSearch,
     infoPanelOpen, toggleInfoPanel,
-    locale, setLocale
+    locale, setLocale,
+    theme, toggleTheme
   } = useStore()
   const t = useT()
   const [inputValue, setInputValue] = useState(searchQuery)
@@ -76,6 +77,13 @@ export function Toolbar() {
         className="flex items-center gap-1 ml-auto"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
+        <button
+          onClick={toggleTheme}
+          className="p-1.5 rounded hover:bg-hover text-secondary hover:text-primary"
+          title={t('toolbar.theme')}
+        >
+          {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+        </button>
         <button
           onClick={() => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')}
           className="flex items-center gap-1 px-2 py-1 rounded hover:bg-hover text-secondary hover:text-primary text-xs"

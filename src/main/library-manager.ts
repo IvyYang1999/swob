@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { parseSessionFile, buildSessionSummary } from './session-loader'
+import { parseSessionFile, buildSessionSummary, filterMessagesByBranch } from './session-loader'
 import type { RawJsonlMessage, ContentPart, SessionSummary, Folder, UserConfig } from './types'
 
 // ============ Types ============
@@ -147,6 +147,71 @@ export function getSessionMdPath(sessionId: string): string | null {
   if (!dirPath) return null
   const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
   return fs.existsSync(mdPath) ? mdPath : null
+}
+
+/**
+ * Get or generate an independent transcript for a branch session.
+ * Branch transcripts are stored alongside the main transcript as `transcript-intra-N.md`.
+ */
+export function getBranchMdPath(branchId: string): string | null {
+  // branchId = "abc-123:intra-0" → baseId = "abc-123", suffix = "intra-0"
+  const colonIdx = branchId.indexOf(':intra-')
+  if (colonIdx === -1) return getSessionMdPath(branchId)
+  const baseId = branchId.slice(0, colonIdx)
+  const suffix = branchId.slice(colonIdx + 1) // "intra-0"
+  const dirPath = sessionIndex.get(baseId)
+  if (!dirPath) return null
+  const mdPath = path.join(dirPath, `transcript-${suffix}.md`)
+  return fs.existsSync(mdPath) ? mdPath : null
+}
+
+/**
+ * Generate and write a branch-specific transcript.
+ */
+export async function updateBranchTranscript(
+  branchId: string,
+  branchLeafUuid: string,
+  customTitle?: string
+): Promise<string | null> {
+  const colonIdx = branchId.indexOf(':intra-')
+  if (colonIdx === -1) return null
+  const baseId = branchId.slice(0, colonIdx)
+  const suffix = branchId.slice(colonIdx + 1)
+  const dirPath = sessionIndex.get(baseId)
+  if (!dirPath) return null
+
+  const meta = readSessionMeta(dirPath)
+  if (!meta) return null
+
+  // Parse source files
+  const allRaw: RawJsonlMessage[] = []
+  for (const src of meta.sourceFilePaths) {
+    try {
+      if (fs.existsSync(src)) {
+        const raw = await parseSessionFile(src)
+        allRaw.push(...raw)
+      }
+    } catch { /* skip */ }
+  }
+  if (allRaw.length === 0) return null
+
+  // Filter to this branch's messages only
+  const branchRaw = filterMessagesByBranch(allRaw, branchLeafUuid)
+  if (branchRaw.length === 0) return null
+
+  const summary = buildSessionSummary(meta.sourceFilePaths[0], branchRaw, true)
+  if (!summary) return null
+
+  const title = customTitle || summary.firstUserMessage?.slice(0, 60) || branchId.slice(0, 12)
+  const md = generateTranscript(branchRaw, title, {
+    createdAt: summary.createdAt,
+    turnCount: summary.turnCount,
+    toolUsage: summary.toolUsage
+  })
+
+  const mdPath = path.join(dirPath, `transcript-${suffix}.md`)
+  fs.writeFileSync(mdPath, md, 'utf-8')
+  return mdPath
 }
 
 // --- Scan Library ---

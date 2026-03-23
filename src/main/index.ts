@@ -37,7 +37,9 @@ import {
   moveLibraryFolderToParent,
   addBranchToFolder,
   removeBranchFromFolder,
-  setBranchMeta
+  setBranchMeta,
+  getBranchMdPath,
+  updateBranchTranscript
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import type { SessionSummary } from './types'
@@ -187,10 +189,21 @@ ipcMain.handle('sessions:loadAll', async () => {
   // Attach library paths
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
+    const isBranch = s.id.includes(':intra-')
     const dirPath = getSessionDirPath(s.sessionId)
     if (dirPath) {
       s.libraryDirPath = dirPath
-      s.libraryMdPath = getSessionMdPath(s.sessionId) || undefined
+      if (isBranch) {
+        // Branch: use or generate independent transcript
+        let branchMd = getBranchMdPath(s.id)
+        if (!branchMd && s.branchLeafUuid) {
+          const branchMeta = (await import('./library-manager')).loadLibraryConfig().branchMeta?.[s.id]
+          branchMd = await updateBranchTranscript(s.id, s.branchLeafUuid, branchMeta?.customTitle) || undefined
+        }
+        s.libraryMdPath = branchMd || getSessionMdPath(s.sessionId) || undefined
+      } else {
+        s.libraryMdPath = getSessionMdPath(s.sessionId) || undefined
+      }
     }
   }
 
@@ -571,6 +584,9 @@ ipcMain.handle(
 ipcMain.handle('library:getRoot', () => getLibraryRoot())
 
 ipcMain.handle('library:getMdPath', (_event, sessionId: string) => {
+  if (sessionId.includes(':intra-')) {
+    return getBranchMdPath(sessionId) || getSessionMdPath(sessionId.split(':')[0])
+  }
   return getSessionMdPath(sessionId)
 })
 

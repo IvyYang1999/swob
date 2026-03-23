@@ -15,10 +15,31 @@ import type {
 const CLAUDE_DIR = path.join(process.env.HOME || '', '.claude', 'projects')
 const HOME = process.env.HOME || ''
 
+/**
+ * True user message = type 'user' with real text content (not tool_result / task-notification).
+ * Tool results have content as array of { type: 'tool_result' }.
+ */
+export function isRealUserMessage(m: RawJsonlMessage): boolean {
+  if (m.type !== 'user' || !m.message) return false
+  const c = m.message.content
+  if (typeof c === 'string') {
+    // Skip task-notification and compact continuation summaries
+    const trimmed = c.trim()
+    if (trimmed.startsWith('<task-notification>')) return false
+    if (trimmed.startsWith('This session is being continued')) return false
+    return trimmed.length > 0
+  }
+  if (Array.isArray(c)) {
+    // If content only has tool_result parts, it's not a real user message
+    return c.some((p) => p.type === 'text' && p.text?.trim())
+  }
+  return false
+}
+
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 8 // traceToRoot follows logicalParentUuid, full-path turnCount
+const CACHE_VERSION = 9 // isRealUserMessage: exclude tool_result from turnCount
 
 interface DiskCache {
   version: number
@@ -221,9 +242,9 @@ export function buildSessionSummary(
   const allTimestamps = rawMessages.map((m) => m.timestamp).filter(Boolean).sort()
   const timestamps = mainTimestamps.length > 0 ? mainTimestamps : allTimestamps
 
-  const userMsgCount = validMessages.filter((m) => m.type === 'user').length
+  const realUserMsgCount = validMessages.filter(isRealUserMessage).length
   const assistantMsgCount = validMessages.filter((m) => m.type === 'assistant').length
-  const turnCount = Math.min(userMsgCount, assistantMsgCount)
+  const turnCount = Math.min(realUserMsgCount, assistantMsgCount)
 
   const compactCount = rawMessages.filter(
     (m) => m.type === 'system' && m.subtype === 'compact_boundary'
@@ -554,7 +575,7 @@ export function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
   function countUserTurns(uuids: string[]): number {
     return uuids.filter((u) => {
       const idx = uuidToIdx.get(u)
-      return idx !== undefined && raw[idx].type === 'user'
+      return idx !== undefined && isRealUserMessage(raw[idx])
     }).length
   }
 

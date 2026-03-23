@@ -8,7 +8,7 @@
  * - 分支检测误判
  */
 import { describe, it, expect } from 'vitest'
-import { buildSessionSummary, buildSessionDetail, detectIntraFileBranches, filterMessagesByBranch } from './session-loader'
+import { buildSessionSummary, buildSessionDetail, detectIntraFileBranches, filterMessagesByBranch, isRealUserMessage } from './session-loader'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -398,5 +398,60 @@ describe('filterMessagesByBranch 穿越 compact 边界', () => {
     expect(uuids).toContain('cb')
     expect(uuids).toContain('ac1')
     expect(uuids).toContain('ac2')
+  })
+})
+
+// ========================================================
+// isRealUserMessage + turnCount 测试
+// ========================================================
+
+describe('【曾经的 bug】turnCount 不能把工具结果算成用户轮次', () => {
+  it('tool_result 不是真实用户消息', () => {
+    const toolResult = rawMsg({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'abc', content: 'file written' }] }
+    })
+    expect(isRealUserMessage(toolResult)).toBe(false)
+  })
+
+  it('纯文本的用户消息是真实的', () => {
+    const textMsg = rawMsg({
+      type: 'user',
+      message: { role: 'user', content: '你好' }
+    })
+    expect(isRealUserMessage(textMsg)).toBe(true)
+  })
+
+  it('task-notification 不是真实用户消息', () => {
+    const taskMsg = rawMsg({
+      type: 'user',
+      message: { role: 'user', content: '<task-notification>task completed</task-notification>' }
+    })
+    expect(isRealUserMessage(taskMsg)).toBe(false)
+  })
+
+  it('含 text 部分的 array content 是真实用户消息', () => {
+    const mixed = rawMsg({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '请帮我看看' }] as any }
+    })
+    expect(isRealUserMessage(mixed)).toBe(true)
+  })
+
+  it('1 个用户消息 + 8 个 tool_result = turnCount 应该是 1 而不是 9', () => {
+    const msgs = [
+      rawMsg({ type: 'user', timestamp: '2026-03-01T10:00:00Z', message: { role: 'user', content: 'https://example.com' } }),
+      rawMsg({ type: 'assistant', timestamp: '2026-03-01T10:01:00Z', message: { role: 'assistant', content: [{ type: 'text', text: '好的' }, { type: 'tool_use', name: 'WebFetch', input: {} }] as any } }),
+      rawMsg({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'fetched' }] as any } }),
+      rawMsg({ type: 'assistant', timestamp: '2026-03-01T10:02:00Z', message: { role: 'assistant', content: [{ type: 'text', text: '继续' }, { type: 'tool_use', name: 'Write', input: {} }] as any } }),
+      rawMsg({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: 'written' }] as any } }),
+      rawMsg({ type: 'assistant', timestamp: '2026-03-01T10:03:00Z', message: { role: 'assistant', content: '完成' } })
+    ]
+    const fp = writeTempJsonl(msgs)
+    const summary = buildSessionSummary(fp, msgs)
+
+    expect(summary).not.toBeNull()
+    // 只有 1 个真实用户消息，turnCount 应该是 1
+    expect(summary!.turnCount).toBe(1)
   })
 })

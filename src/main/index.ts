@@ -43,6 +43,7 @@ let mainWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
+let cachedSessions: SessionSummary[] = []
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -177,6 +178,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
 
 ipcMain.handle('sessions:loadAll', async () => {
   const sessions = await loadAllSessions()
+  cachedSessions = sessions
   knownSessionIds.clear()
 
   // Attach library paths
@@ -426,12 +428,20 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:addSessionToFolder',
-  (_event, folderId: string, sessionId: string) => {
+  async (_event, folderId: string, sessionId: string) => {
     // For intra-file branches (id like "abc:intra-0"), use the base sessionId
     const baseSessionId = sessionId.includes(':intra-') || sessionId.includes(':branch-')
       ? sessionId.split(':')[0]
       : sessionId
     if (libraryInitialized) {
+      // Ensure session exists in Library before moving
+      const dirPath = getSessionDirPath(baseSessionId)
+      if (!dirPath) {
+        const summary = cachedSessions.find((s) => s.sessionId === baseSessionId)
+        if (summary) {
+          await ensureSessionInLibrary(summary)
+        }
+      }
       const folderPath = resolveFolderPath(folderId)
       moveSessionToFolder(baseSessionId, folderPath)
       const tree = scanLibrary()

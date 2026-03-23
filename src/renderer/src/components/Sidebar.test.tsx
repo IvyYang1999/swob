@@ -133,7 +133,7 @@ describe('分支和母 session 显示各自独立的标题', () => {
     expect(screen.queryByText('母session标题')).toBeNull()
   })
 
-  it('分支没有 customTitle 时显示 firstUserMessage，不是母 session 的标题', () => {
+  it('【曾经的 bug】分支没有 customTitle 时显示自己的 firstUserMessage，不能显示母 session 的标题', () => {
     // 清掉分支的 customTitle
     const origMeta = { ...mockStore.config.sessionMeta }
     delete (mockStore.config.sessionMeta as any)['parent-uuid:intra-0']
@@ -147,12 +147,10 @@ describe('分支和母 session 显示各自独立的标题', () => {
 
     render(<Sidebar width={260} />)
 
-    // 没有分支专属 meta 时，会 fallback 到父级的 meta
-    // 但 firstUserMessage 也是个合理的 fallback
-    // 关键是不能崩溃
-    expect(screen.getByText((text) =>
-      text.includes('分支默认消息') || text.includes('母session标题')
-    )).toBeTruthy()
+    // 必须显示分支自己的 firstUserMessage
+    expect(screen.getByText((text) => text.includes('分支默认消息'))).toBeTruthy()
+    // 绝对不能 fallback 到母 session 的标题
+    expect(screen.queryByText('母session标题')).toBeNull()
 
     // 恢复
     mockStore.config.sessionMeta = origMeta

@@ -34,9 +34,9 @@ function SessionItem({
   const { selectedUniqueId, selectSession, config, resumedSessionIds, locale, sessions } = useStore()
   const t = useT()
   const isIntraBranch = session.id.includes(':intra-')
-  // Branch: check own ID first so its title is independent of parent
+  // Branch: only use its own meta, never fall back to parent's
   const meta = isIntraBranch
-    ? (config?.sessionMeta[session.id] || config?.sessionMeta[session.sessionId])
+    ? config?.sessionMeta[session.id]
     : (config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id])
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
   const branchChildIds = (session as any).branchChildIds as string[] | undefined

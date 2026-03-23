@@ -621,8 +621,7 @@ function SessionBar({
             const cmd = selectedSession.permissionMode === 'bypassPermissions'
               ? `claude --dangerously-skip-permissions --resume ${sid}`
               : `claude --resume ${sid}`
-            const full = selectedSession.cwds?.[0] ? `cd ${JSON.stringify(selectedSession.cwds[0])} && ${cmd}` : cmd
-            navigator.clipboard.writeText(full)
+            navigator.clipboard.writeText(cmd)
             setCopiedResumeCmd(true)
             setTimeout(() => setCopiedResumeCmd(false), 1500)
           }}

@@ -412,9 +412,7 @@ export function buildSessionDetail(
       const trimmed = textContent.trimStart()
       const isTaskNotification = m.type === 'user' && trimmed.startsWith('<task-notification>')
       const isSkillOutput = m.type === 'user' && trimmed.startsWith('Base directory for this skill:')
-      const isCommandOutput = m.type === 'user' && (
-        trimmed.startsWith('<local-command-stdout>') || trimmed.startsWith('<user-prompt-submit-hook>')
-      )
+      const isCommandOutput = m.type === 'user' && /^<(?:local-command-stdout|local-command-caveat|user-prompt-submit-hook|command-name)>/.test(trimmed)
       const isSystemReminder = m.type === 'user' && trimmed.startsWith('<system-reminder>') &&
         !trimmed.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()
       const detectedSubtype = isTaskNotification ? 'task-notification'
@@ -1005,9 +1003,7 @@ export async function loadSessionDetail(
         const trimmedText = textContent.trimStart()
         const isTaskNotification = m.type === 'user' && trimmedText.startsWith('<task-notification>')
         const isSkillOutput = m.type === 'user' && trimmedText.startsWith('Base directory for this skill:')
-        const isCommandOutput = m.type === 'user' && (
-          trimmedText.startsWith('<local-command-stdout>') || trimmedText.startsWith('<user-prompt-submit-hook>')
-        )
+        const isCommandOutput = m.type === 'user' && /^<(?:local-command-stdout|local-command-caveat|user-prompt-submit-hook|command-name)>/.test(trimmedText)
         const isSystemReminder = m.type === 'user' && trimmedText.startsWith('<system-reminder>') &&
           !trimmedText.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()
         const detectedSubtype = isTaskNotification ? 'task-notification'

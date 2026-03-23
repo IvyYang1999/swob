@@ -32,10 +32,50 @@ function cleanUserText(text: string): string {
     .trim()
 }
 
-/** Extract content from command output XML tags */
-function extractCommandContent(text: string): string {
-  const match = text.match(/<(?:local-command-stdout|user-prompt-submit-hook)>([\s\S]*?)<\/(?:local-command-stdout|user-prompt-submit-hook)>/)
-  return match ? match[1].trim() : text
+/** Parse command-output text into structured parts */
+function parseCommandOutput(text: string): { label: string; output: string } {
+  // Slash command: <command-name>/foo</command-name> ...
+  const cmdName = text.match(/<command-name>(.*?)<\/command-name>/)?.[1]
+  if (cmdName) {
+    // Try to extract stdout that follows the command tags
+    const stdout = text.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/)?.[1]?.trim()
+    return { label: cmdName, output: stdout || '' }
+  }
+  // local-command-caveat: system instruction — show as collapsed notice
+  const caveat = text.match(/<local-command-caveat>([\s\S]*?)<\/local-command-caveat>/)?.[1]?.trim()
+  if (caveat) return { label: 'System', output: caveat }
+  // local-command-stdout or user-prompt-submit-hook
+  const stdout = text.match(/<(?:local-command-stdout|user-prompt-submit-hook)>([\s\S]*?)<\/(?:local-command-stdout|user-prompt-submit-hook)>/)?.[1]?.trim()
+  if (stdout) return { label: 'Terminal', output: stdout }
+  // Fallback: strip all tags
+  return { label: 'System', output: text.replace(/<[^>]+>/g, '').trim() }
+}
+
+/** Collapsible system notification pill (similar to tool call pills) */
+function SystemNoticePill({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const { label, output } = useMemo(() => parseCommandOutput(text), [text])
+  const isSlashCmd = label.startsWith('/')
+  const preview = output.length > 80 ? output.slice(0, 80) + '…' : output
+
+  return (
+    <div className="my-1">
+      <button
+        onClick={() => output && setExpanded(!expanded)}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-800/60 border border-zinc-700/40 hover:border-zinc-600/50 transition-colors max-w-full"
+      >
+        {output ? (
+          expanded ? <ChevronDown size={11} className="text-zinc-500 shrink-0" /> : <ChevronRight size={11} className="text-zinc-500 shrink-0" />
+        ) : null}
+        <Terminal size={11} className="text-zinc-500 shrink-0" />
+        <span className={`text-[11px] font-mono shrink-0 ${isSlashCmd ? 'text-purple-400' : 'text-zinc-400'}`}>{label}</span>
+        {preview && !expanded && <span className="text-[10px] text-zinc-500 truncate">{preview}</span>}
+      </button>
+      {expanded && output && (
+        <pre className="mt-1 ml-5 px-3 py-2 text-[11px] text-zinc-400 bg-zinc-800/30 border border-zinc-700/50 rounded-md overflow-x-auto max-h-48 overflow-y-auto font-mono whitespace-pre-wrap break-all">{output}</pre>
+      )}
+    </div>
+  )
 }
 
 // --- Diff view for Edit tool ---
@@ -201,15 +241,11 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
     setTimeout(() => setCopiedA(false), 1500)
   }, [turn.assistantMsgs])
 
-  // Command output: render as compact terminal notification
+  // Command output: render as collapsible system notice pill
   if (turn.userMsg?.subtype === 'command-output') {
-    const content = extractCommandContent(turn.userMsg.textContent)
     return (
       <div id={turnId} className="scroll-mt-0">
-        <div className="flex items-start gap-2 px-3 py-1.5 rounded-md bg-zinc-800/40 border border-zinc-700/30">
-          <Terminal size={12} className="shrink-0 mt-0.5 text-zinc-500" />
-          <span className="font-mono text-xs text-zinc-400 break-all whitespace-pre-wrap">{content}</span>
-        </div>
+        <SystemNoticePill text={turn.userMsg.textContent} />
       </div>
     )
   }

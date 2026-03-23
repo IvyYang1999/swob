@@ -36,7 +36,8 @@ import {
   reorderFolder,
   moveLibraryFolderToParent,
   addBranchToFolder,
-  removeBranchFromFolder
+  removeBranchFromFolder,
+  setBranchMeta
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import type { SessionSummary } from './types'
@@ -480,8 +481,13 @@ ipcMain.handle(
 ipcMain.handle(
   'config:setSessionMeta',
   (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: unknown[] }) => {
+    const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
-      setSessionMetaInLibrary(sessionId, meta)
+      if (isBranch) {
+        setBranchMeta(sessionId, meta as Parameters<typeof setBranchMeta>[1])
+      } else {
+        setSessionMetaInLibrary(sessionId, meta)
+      }
       const tree = scanLibrary()
       return libraryTreeToConfig(tree)
     }

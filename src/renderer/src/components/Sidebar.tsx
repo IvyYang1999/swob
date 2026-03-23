@@ -33,7 +33,10 @@ function SessionItem({
 }) {
   const { selectedUniqueId, selectSession, config, resumedSessionIds, locale, sessions } = useStore()
   const t = useT()
-  const meta = config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id]
+  // Branch: check own ID first so its title is independent of parent
+  const meta = isIntraBranch
+    ? (config?.sessionMeta[session.id] || config?.sessionMeta[session.sessionId])
+    : (config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id])
   const isResumed = resumedSessionIds.has(session.sessionId || session.id)
   const isIntraBranch = session.id.includes(':intra-')
   const branchChildIds = (session as any).branchChildIds as string[] | undefined
@@ -325,8 +328,7 @@ export function Sidebar({ width }: { width: number }) {
     if (!result) return
     if (result.action === 'rename') {
       const s = sessions.find((s) => s.id === sessionId)
-      const bId = s?.sessionId || sessionId
-      const meta = config?.sessionMeta[bId] || config?.sessionMeta[sessionId]
+      const meta = config?.sessionMeta[sessionId] || config?.sessionMeta[s?.sessionId || '']
       setSessionRenameValue(meta?.customTitle || s?.firstUserMessage || '')
       setRenamingSessionId(sessionId)
     } else if (result.action === 'addToFolder' && result.folderId) {
@@ -338,19 +340,18 @@ export function Sidebar({ width }: { width: number }) {
 
   const handleSubmitRenameSession = useCallback(() => {
     if (renamingSessionId && sessionRenameValue.trim()) {
-      const session = sessions.find((s) => s.id === renamingSessionId)
-      const baseId = session?.sessionId || renamingSessionId
-      setSessionMeta(baseId, { customTitle: sessionRenameValue.trim() })
+      // Use session.id directly — branches need their own identity
+      setSessionMeta(renamingSessionId, { customTitle: sessionRenameValue.trim() })
     }
     setRenamingSessionId(null); setSessionRenameValue('')
-  }, [renamingSessionId, sessionRenameValue, setSessionMeta, sessions])
+  }, [renamingSessionId, sessionRenameValue, setSessionMeta])
 
   const handleCancelRenameSession = useCallback(() => { setRenamingSessionId(null); setSessionRenameValue('') }, [])
 
   const handleDoubleClickRenameSession = useCallback((sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId)
-    const baseId = session?.sessionId || sessionId
-    const meta = config?.sessionMeta[baseId] || config?.sessionMeta[sessionId]
+    // Branch: check own ID first; regular: sessionId === id
+    const meta = config?.sessionMeta[sessionId] || config?.sessionMeta[session?.sessionId || '']
     setSessionRenameValue(meta?.customTitle || session?.firstUserMessage || '')
     setRenamingSessionId(sessionId)
   }, [sessions, config])

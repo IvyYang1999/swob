@@ -47,6 +47,7 @@ export interface LibraryConfig {
   }
   folderOrder?: string[]  // relative paths, determines display order
   branchFolders?: Record<string, string[]>  // branch unique ID → folder relative paths
+  branchMeta?: Record<string, { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }>
 }
 
 // ============ Constants ============
@@ -778,6 +779,12 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
     }
   }
 
+  // Inject branch meta from config
+  const branchMetaMap = libConfig.branchMeta || {}
+  for (const [branchId, meta] of Object.entries(branchMetaMap)) {
+    sessionMeta[branchId] = meta
+  }
+
   return {
     folders,
     sessionMeta,
@@ -864,6 +871,17 @@ export function removeBranchFromFolder(branchId: string, folderId: string): void
   if (folders.length === 0) delete map[branchId]
   else map[branchId] = folders
   config.branchFolders = map
+  saveLibraryConfig(config)
+}
+
+export function setBranchMeta(
+  branchId: string,
+  meta: { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }
+): void {
+  const config = loadLibraryConfig()
+  const map = config.branchMeta || {}
+  map[branchId] = { ...(map[branchId] || {}), ...meta }
+  config.branchMeta = map
   saveLibraryConfig(config)
 }
 

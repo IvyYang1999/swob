@@ -101,7 +101,7 @@ interface AppState {
   selectedFolderId: string | null
   infoPanelOpen: boolean
   selectedSessionMdPath: string | null
-  resumedSessionIds: Set<string>
+  activeSessionIds: Set<string>
 
   initialize: () => Promise<void>
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<void>
@@ -128,7 +128,7 @@ interface AppState {
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale }
 
 // Read localStorage at module load time — before first render, zero flicker
-const LOCAL_CACHE_VERSION = 5 // bump: full-path turnCount for branches
+const LOCAL_CACHE_VERSION = 6 // bump: traceToRoot compact crossing + store field rename
 
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
   try {
@@ -163,7 +163,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectedFolderId: null,
   infoPanelOpen: true,
   selectedSessionMdPath: null,
-  resumedSessionIds: new Set<string>(),
+  activeSessionIds: new Set<string>(),
 
   initialize: async () => {
     const [sessions, config] = await Promise.all([
@@ -227,6 +227,15 @@ export const useStore = create<AppState>((set, get) => ({
     window.api.onSessionsRefresh(() => {
       debouncedRefresh()
     })
+
+    // Initialize active session detection
+    try {
+      const activeIds = await window.api.getActiveSessions()
+      set({ activeSessionIds: new Set(activeIds) })
+    } catch { /* ignore */ }
+    window.api.onActiveSessionsChanged((ids) => {
+      set({ activeSessionIds: new Set(ids) })
+    })
   },
 
   selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?, branchLeafUuid?) => {
@@ -268,9 +277,9 @@ export const useStore = create<AppState>((set, get) => ({
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
     await window.api.resumeSession(sessionId, terminalApp, permissionMode, cwd)
     set((state) => {
-      const next = new Set(state.resumedSessionIds)
+      const next = new Set(state.activeSessionIds)
       next.add(sessionId)
-      return { resumedSessionIds: next }
+      return { activeSessionIds: next }
     })
   },
 
@@ -278,9 +287,9 @@ export const useStore = create<AppState>((set, get) => ({
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
     await window.api.resumeBatch(sessions, terminalApp)
     set((state) => {
-      const next = new Set(state.resumedSessionIds)
+      const next = new Set(state.activeSessionIds)
       for (const s of sessions) next.add(s.sessionId)
-      return { resumedSessionIds: next }
+      return { activeSessionIds: next }
     })
   },
 

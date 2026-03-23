@@ -484,7 +484,7 @@ interface IntraBranch {
   path: string[] // full path from root to leaf
 }
 
-function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
+export function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
   const MIN_UNIQUE_TURNS = 1 // any divergence with at least 1 user message counts
   const skipPrefixes = ['[Request interrupted', 'This session is being continued']
 
@@ -515,9 +515,7 @@ function detectIntraFileBranches(raw: RawJsonlMessage[]): IntraBranch[] {
       visited.add(current)
       if (uuidToIdx.has(current)) path.push(current)
       const idx = uuidToIdx.get(current)
-      if (idx === undefined) break
-      // Follow parentUuid; if null, try logicalParentUuid (crosses compact boundary)
-      current = raw[idx].parentUuid || raw[idx].logicalParentUuid || undefined
+      current = idx !== undefined ? raw[idx].parentUuid : undefined
     }
     return path.reverse()
   }

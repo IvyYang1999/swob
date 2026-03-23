@@ -297,6 +297,7 @@ export function scanLibrary(): LibraryTree {
 }
 
 // --- Transcript Generation (main process) ---
+// Format optimized for AI consumption: minimal tokens, max information.
 
 function extractText(content: string | ContentPart[] | undefined): string {
   if (!content) return ''
@@ -307,6 +308,34 @@ function extractText(content: string | ContentPart[] | undefined): string {
     .join('\n')
 }
 
+function extractToolCalls(content: string | ContentPart[] | undefined): string[] {
+  if (!content || typeof content === 'string') return []
+  const calls: string[] = []
+  for (const part of content) {
+    if (part.type !== 'tool_use' || !part.name) continue
+    const input = part.input || {}
+    // Compact summary: tool name + most informative param
+    if (part.name === 'Bash' && input.command) {
+      const cmd = String(input.command).split('\n')[0].slice(0, 120)
+      calls.push(`[${part.name}] ${cmd}`)
+    } else if ((part.name === 'Read' || part.name === 'Write' || part.name === 'Edit') && input.file_path) {
+      calls.push(`[${part.name}] ${input.file_path}`)
+    } else if (part.name === 'Grep' && input.pattern) {
+      calls.push(`[${part.name}] ${input.pattern}`)
+    } else if (part.name === 'Agent' && input.prompt) {
+      calls.push(`[${part.name}] ${String(input.prompt).slice(0, 80)}`)
+    } else {
+      calls.push(`[${part.name}]`)
+    }
+  }
+  return calls
+}
+
+function formatTs(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
 export function generateTranscript(
   rawMessages: RawJsonlMessage[],
   title: string,
@@ -314,38 +343,39 @@ export function generateTranscript(
 ): string {
   const lines: string[] = []
 
-  // Header
+  // Header: one compact block
   lines.push(`# ${title}\n`)
-  const created = new Date(meta.createdAt).toLocaleString('zh-CN')
-  lines.push(`> ${created} | ${meta.turnCount} 轮对话`)
-  if (meta.toolUsage) {
-    const toolSummary = Object.entries(meta.toolUsage)
-      .sort(([, a], [, b]) => b - a).slice(0, 6)
-      .map(([name, count]) => `${name}(${count})`).join(', ')
-    if (toolSummary) lines.push(`> Tools: ${toolSummary}`)
-  }
+  const created = formatTs(meta.createdAt)
+  const toolSummary = meta.toolUsage
+    ? Object.entries(meta.toolUsage).sort(([, a], [, b]) => b - a).slice(0, 6)
+        .map(([name, count]) => `${name}(${count})`).join(', ')
+    : ''
+  lines.push(`> ${created} | ${meta.turnCount} 轮对话${toolSummary ? ` | Tools: ${toolSummary}` : ''}`)
   lines.push('')
 
-  // Messages
+  // Messages: role label + content, no duplication
   const validMessages = rawMessages.filter(
     (m) => (m.type === 'user' || m.type === 'assistant') && m.message
   )
 
   for (const msg of validMessages) {
     const text = extractText(msg.message?.content).trim()
-    if (!text) continue
+    const ts = msg.timestamp ? formatTs(msg.timestamp) : ''
 
     if (msg.type === 'user') {
-      const snippet = text.split('\n')[0].slice(0, 80)
-      lines.push(`##### ${snippet}\n`)
-      // Blockquote user message
-      lines.push(text.split('\n').map((l) => `> ${l}`).join('\n'))
+      if (!text) continue
+      lines.push(`**User** [${ts}]`)
+      lines.push(text)
       lines.push('')
     } else if (msg.type === 'assistant') {
-      // Demote headings to bold to avoid TOC pollution
-      const demoted = text.replace(/^(#{1,6})\s+(.+)$/gm, '**$2**')
-      lines.push(demoted)
-      lines.push('\n---\n')
+      const tools = extractToolCalls(msg.message?.content)
+      if (!text && tools.length === 0) continue
+      lines.push(`**Assistant** [${ts}]`)
+      if (tools.length > 0) {
+        for (const t of tools) lines.push(t)
+      }
+      if (text) lines.push(text)
+      lines.push('')
     }
   }
 

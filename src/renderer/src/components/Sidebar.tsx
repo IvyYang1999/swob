@@ -399,6 +399,8 @@ export function Sidebar({ width }: { width: number }) {
 
   const ungroupedSessions = useMemo(
     () => sessions.filter((s) => {
+      // Branch sessions: only check their own id, not the parent's sessionId
+      if (s.id.includes(':intra-')) return !groupedSessionIds.has(s.id)
       return !groupedSessionIds.has(s.id) && !groupedSessionIds.has(s.sessionId)
     }),
     [sessions, groupedSessionIds]

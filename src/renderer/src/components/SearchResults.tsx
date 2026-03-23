@@ -30,16 +30,16 @@ export function SearchResults() {
   const totalMatches = searchResults.reduce((acc, r) => acc + r.matches.length, 0)
 
   return (
-    <div className="absolute inset-0 bg-zinc-900/95 z-50 overflow-y-auto p-4">
+    <div className="absolute inset-0 bg-base/95 z-50 overflow-y-auto p-4">
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center justify-between mb-4">
-          <div className="text-sm text-zinc-400">
+          <div className="text-sm text-secondary">
             <Search size={14} className="inline mr-2" />
             {t('search.summary', { query: searchQuery, sessions: searchResults.length, matches: totalMatches })}
           </div>
           <button
             onClick={clearSearch}
-            className="text-xs text-zinc-500 hover:text-zinc-300 px-2 py-1 hover:bg-zinc-800 rounded"
+            className="text-xs text-muted hover:text-body px-2 py-1 hover:bg-surface rounded"
           >
             {t('chat.close')}
           </button>
@@ -53,21 +53,21 @@ export function SearchResults() {
                 selectSession(result.filePath, s?.allFilePaths, s?.id, s?.branchParentFilePaths, s?.branchPointUuid)
                 clearSearch()
               }}
-              className="w-full text-left p-4 bg-zinc-800 hover:bg-zinc-700/50 rounded-lg border border-zinc-700 hover:border-zinc-600 transition-colors"
+              className="w-full text-left p-4 bg-surface hover:bg-hover/50 rounded-lg border border-edge hover:border-edge-strong transition-colors"
             >
               <div className="flex items-center justify-between mb-3">
-                <div className="text-sm text-zinc-200 font-medium truncate flex-1 mr-3">
+                <div className="text-sm text-primary font-medium truncate flex-1 mr-3">
                   <HighlightText text={result.firstUserMessage.slice(0, 100) || result.sessionId.slice(0, 12)} query={searchQuery} />
                 </div>
-                <span className="text-[10px] text-zinc-500 bg-zinc-700 px-1.5 py-0.5 rounded shrink-0">{t('search.matches', { n: result.matches.length })}</span>
+                <span className="text-[10px] text-muted bg-hover px-1.5 py-0.5 rounded shrink-0">{t('search.matches', { n: result.matches.length })}</span>
               </div>
               <div className="space-y-1.5">
                 {result.matches.map((match, i) => (
                   <div
                     key={i}
-                    className="text-xs text-zinc-400 font-mono bg-zinc-900 rounded px-2.5 py-1.5 leading-relaxed"
+                    className="text-xs text-secondary font-mono bg-base rounded px-2.5 py-1.5 leading-relaxed"
                   >
-                    <span className="text-zinc-600 mr-2 text-[10px]">
+                    <span className="text-faint mr-2 text-[10px]">
                       {new Date(match.timestamp).toLocaleString(locale, {
                         month: '2-digit',
                         day: '2-digit',

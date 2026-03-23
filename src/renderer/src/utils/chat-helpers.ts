@@ -17,7 +17,7 @@ export const TOOL_COLORS: Record<string, string> = {
   WebFetch: 'bg-indigo-900/50 text-indigo-400 border-indigo-700/40',
   Skill: 'bg-pink-900/50 text-pink-400 border-pink-700/40',
 }
-export const DEFAULT_TOOL_COLOR = 'bg-zinc-800/60 text-zinc-400 border-zinc-700/40'
+export const DEFAULT_TOOL_COLOR = 'bg-surface/60 text-secondary border-edge/40'
 
 /**
  * 从工具调用的 input 中提取一行预览文本

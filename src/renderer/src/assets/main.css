@@ -1,5 +1,31 @@
 @import "tailwindcss";
 
+@theme {
+  /* 背景 */
+  --color-base: #18181b;        /* zinc-900 */
+  --color-surface: #27272a;     /* zinc-800 */
+  --color-hover: #3f3f46;       /* zinc-700 */
+  --color-pressed: #52525b;     /* zinc-600 */
+
+  /* 文字 */
+  --color-bright: #f4f4f5;      /* zinc-100 */
+  --color-primary: #e4e4e7;     /* zinc-200 */
+  --color-body: #d4d4d8;        /* zinc-300 */
+  --color-secondary: #a1a1aa;   /* zinc-400 */
+  --color-muted: #71717a;       /* zinc-500 */
+  --color-faint: #52525b;       /* zinc-600 */
+
+  /* 边框 */
+  --color-edge: #3f3f46;        /* zinc-700 */
+  --color-edge-subtle: #27272a; /* zinc-800 */
+  --color-edge-strong: #52525b; /* zinc-600 */
+  --color-edge-focus: #71717a;  /* zinc-500 */
+
+  /* 语义色 */
+  --color-accent: #3b82f6;      /* blue-500，选中态 */
+  --color-active: #4ade80;      /* green-400，活跃状态 */
+}
+
 body {
   margin: 0;
   padding: 0;

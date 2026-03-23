@@ -11,7 +11,11 @@
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:mac": "npm run build && electron-builder --mac",
-    "deploy": "bash scripts/deploy-local.sh"
+    "deploy": "bash scripts/deploy-local.sh",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "npx electron-vite build && npx playwright test",
+    "test:all": "vitest run && npx electron-vite build && npx playwright test"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -26,7 +30,10 @@
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/vite": "^4.2.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^25.3.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -34,7 +41,9 @@
     "electron": "^40.7.0",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
+    "jsdom": "^29.0.1",
     "tailwindcss": "^4.2.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   }
 }

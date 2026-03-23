@@ -26,7 +26,7 @@ const mockStore = {
     },
     preferences: { defaultViewMode: 'compact' as const, terminalApp: 'Terminal' as const }
   },
-  resumedSessionIds: new Set<string>(),
+  activeSessionIds: new Set<string>(),
   locale: 'zh-CN',
   sessions: [],
   addSessionToFolder: vi.fn(),

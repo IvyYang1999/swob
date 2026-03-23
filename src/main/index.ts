@@ -1,7 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
 import { join, dirname, basename, relative } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { exec } from 'child_process'
+import { exec, execSync } from 'child_process'
 import * as fs from 'fs'
 import * as chokidar from 'chokidar'
 import {
@@ -48,6 +48,62 @@ let mainWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
+
+// --- Active Session Detection ---
+const sessionLastActivity = new Map<string, number>() // sessionId -> timestamp (ms)
+let previousActiveIds: string[] = []
+let activePoller: ReturnType<typeof setInterval> | null = null
+
+function detectActiveSessionsFromProcesses(): Set<string> {
+  try {
+    const stdout = execSync('ps -eo command', { encoding: 'utf-8', timeout: 3000 })
+    const active = new Set<string>()
+    for (const line of stdout.split('\n')) {
+      if (!line.includes('claude')) continue
+      const match = line.match(/--resume\s+(\S+)/)
+      if (match) active.add(match[1])
+    }
+    return active
+  } catch {
+    return new Set()
+  }
+}
+
+function getActiveSessionIds(): string[] {
+  const active = new Set<string>()
+
+  // 1. From running processes (claude --resume <id>)
+  const fromProcesses = detectActiveSessionsFromProcesses()
+  for (const id of fromProcesses) active.add(id)
+
+  // 2. From recent file modifications (within 30s)
+  const now = Date.now()
+  const ACTIVITY_TIMEOUT = 30_000
+  for (const [sessionId, lastTime] of sessionLastActivity) {
+    if (now - lastTime < ACTIVITY_TIMEOUT) {
+      active.add(sessionId)
+    } else {
+      sessionLastActivity.delete(sessionId)
+    }
+  }
+
+  return Array.from(active).sort()
+}
+
+function pollActiveSessions(): void {
+  const currentIds = getActiveSessionIds()
+  const prev = previousActiveIds
+  if (currentIds.length !== prev.length || currentIds.some((id, i) => id !== prev[i])) {
+    previousActiveIds = currentIds
+    mainWindow?.webContents.send('sessions:activeChanged', currentIds)
+  }
+}
+
+function startActiveSessionPoller(): void {
+  // Run immediately, then every 5 seconds
+  pollActiveSessions()
+  activePoller = setInterval(pollActiveSessions, 5000)
+}
 let cachedSessions: SessionSummary[] = []
 
 function createWindow(): void {
@@ -102,6 +158,9 @@ function startFileWatcher(): void {
       const sessionId = raw.find((m) => m.sessionId)?.sessionId
       if (!sessionId) return
 
+      // Track file activity for active session detection
+      sessionLastActivity.set(sessionId, Date.now())
+
       if (knownSessionIds.has(sessionId)) {
         mainWindow?.webContents.send('sessions:refresh')
       } else {
@@ -132,6 +191,9 @@ function startFileWatcher(): void {
       const raw = await parseSessionFile(filePath)
       const summary = buildSessionSummary(filePath, raw, true)
       if (summary) {
+        // Track file activity for active session detection
+        sessionLastActivity.set(summary.sessionId, Date.now())
+
         // Update library transcript + backup
         if (libraryInitialized) {
           try {
@@ -180,6 +242,8 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
 }
 
 // --- IPC Handlers ---
+
+ipcMain.handle('sessions:getActive', () => getActiveSessionIds())
 
 ipcMain.handle('sessions:loadAll', async () => {
   const sessions = await loadAllSessions()
@@ -636,6 +700,7 @@ app.whenReady().then(() => {
 
   createWindow()
   startFileWatcher()
+  startActiveSessionPoller()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -643,5 +708,6 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   watcher?.close()
+  if (activePoller) clearInterval(activePoller)
   if (process.platform !== 'darwin') app.quit()
 })

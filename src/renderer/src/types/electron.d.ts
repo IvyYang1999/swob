@@ -13,6 +13,7 @@ interface ElectronAPI {
   >
   resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<void>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) => Promise<void>
+  getActiveSessions: () => Promise<string[]>
   loadConfig: () => Promise<any>
   saveConfig: (config: any) => Promise<any>
   createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) => Promise<any>
@@ -45,6 +46,7 @@ interface ElectronAPI {
   onSessionAdded: (callback: (session: any) => void) => void
   onSessionUpdated: (callback: (session: any) => void) => void
   onSessionsRefresh: (callback: () => void) => void
+  onActiveSessionsChanged: (callback: (ids: string[]) => void) => void
 }
 
 declare global {

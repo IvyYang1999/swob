@@ -31,14 +31,14 @@ function SessionItem({
   onRenameSubmit?: () => void; onRenameCancel?: () => void
   onDoubleClickRename?: (sessionId: string) => void
 }) {
-  const { selectedUniqueId, selectSession, config, resumedSessionIds, locale, sessions } = useStore()
+  const { selectedUniqueId, selectSession, config, activeSessionIds, locale, sessions } = useStore()
   const t = useT()
   const isIntraBranch = session.id.includes(':intra-')
   // Branch: only use its own meta, never fall back to parent's
   const meta = isIntraBranch
     ? config?.sessionMeta[session.id]
     : (config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id])
-  const isResumed = resumedSessionIds.has(session.sessionId || session.id)
+  const isActive = activeSessionIds.has(session.sessionId || session.id)
   const branchChildIds = (session as any).branchChildIds as string[] | undefined
   const hasBranchChildren = branchChildIds && branchChildIds.length > 0
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
@@ -98,7 +98,7 @@ function SessionItem({
         />
       ) : (
         <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
-          {isResumed && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title={t('sidebar.opened_in_terminal')} />}
+          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title={t('sidebar.opened_in_terminal')} />}
           {isIntraBranch && <GitBranch size={12} className="shrink-0 text-purple-400" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>

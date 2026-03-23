@@ -57,6 +57,9 @@ const api = {
   // Native drag
   startDrag: (filePath: string, title: string) => ipcRenderer.send('session:startDrag', filePath, title),
 
+  // Active sessions
+  getActiveSessions: () => ipcRenderer.invoke('sessions:getActive'),
+
   // Events from main
   onSessionAdded: (callback: (session: unknown) => void) => {
     ipcRenderer.on('session:added', (_event, session) => callback(session))
@@ -66,6 +69,9 @@ const api = {
   },
   onSessionsRefresh: (callback: () => void) => {
     ipcRenderer.on('sessions:refresh', () => callback())
+  },
+  onActiveSessionsChanged: (callback: (ids: string[]) => void) => {
+    ipcRenderer.on('sessions:activeChanged', (_event, ids) => callback(ids))
   }
 }
 

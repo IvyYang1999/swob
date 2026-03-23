@@ -197,7 +197,7 @@ ipcMain.handle('sessions:loadAll', async () => {
         // Branch: use or generate independent transcript
         let branchMd = getBranchMdPath(s.id)
         if (!branchMd && s.branchLeafUuid) {
-          const branchMeta = (await import('./library-manager')).loadLibraryConfig().branchMeta?.[s.id]
+          const branchMeta = loadLibraryConfig().branchMeta?.[s.id]
           branchMd = await updateBranchTranscript(s.id, s.branchLeafUuid, branchMeta?.customTitle) || undefined
         }
         s.libraryMdPath = branchMd || getSessionMdPath(s.sessionId) || undefined

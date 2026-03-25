@@ -114,6 +114,7 @@ interface AppState {
   search: (query: string) => Promise<void>
   clearSearch: () => void
   resumeSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
+  forkSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   setViewMode: (mode: ViewMode) => void
   setLocale: (locale: Locale) => void
@@ -297,6 +298,11 @@ export const useStore = create<AppState>((set, get) => ({
       next.add(sessionId)
       return { activeSessionIds: next }
     })
+  },
+
+  forkSession: async (sessionId, permissionMode?, cwd?) => {
+    const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
+    await window.api.forkSession(sessionId, terminalApp, permissionMode, cwd)
   },
 
   resumeBatch: async (sessions) => {

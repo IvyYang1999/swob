@@ -13,6 +13,7 @@ interface ElectronAPI {
   >
   resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<void>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) => Promise<void>
+  forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<void>
   getActiveSessions: () => Promise<string[]>
   loadConfig: () => Promise<any>
   saveConfig: (config: any) => Promise<any>

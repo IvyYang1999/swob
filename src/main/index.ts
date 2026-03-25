@@ -422,6 +422,16 @@ function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: st
   return cmd
 }
 
+function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: string): string {
+  const cmd = permissionMode === 'bypassPermissions'
+    ? `claude --dangerously-skip-permissions --fork-session --resume ${sessionId}`
+    : `claude --fork-session --resume ${sessionId}`
+  if (cwd && fs.existsSync(cwd)) {
+    return `cd ${JSON.stringify(cwd)} && ${cmd}`
+  }
+  return cmd
+}
+
 function openInTerminal(command: string): void {
   const tmpPath = `/tmp/csm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.command`
   // Script deletes itself after command finishes, so Terminal won't kill a running process
@@ -443,6 +453,13 @@ ipcMain.handle(
     for (const s of sessionIds) {
       openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, s.cwd))
     }
+  }
+)
+
+ipcMain.handle(
+  'terminal:fork',
+  async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
+    openInTerminal(buildForkCommand(sessionId, permissionMode, cwd))
   }
 )
 

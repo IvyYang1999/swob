@@ -714,10 +714,11 @@ function SessionBar({
   searchOpen: boolean
   onToggleSearch: () => void
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, config, locale } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
+  const [copiedForkCmd, setCopiedForkCmd] = useState(false)
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return
@@ -841,6 +842,34 @@ function SessionBar({
         >
           <Play size={10} />
           Resume{selectedSession.id?.includes(':intra-') ? ` (${t('chat.resume_parent')})` : ''}
+        </button>
+        <button
+          onClick={() => {
+            const sid = selectedSession.sessionId || selectedSession.id.split(':')[0]
+            const cmd = selectedSession.permissionMode === 'bypassPermissions'
+              ? `claude --dangerously-skip-permissions --fork-session --resume ${sid}`
+              : `claude --fork-session --resume ${sid}`
+            navigator.clipboard.writeText(cmd)
+            setCopiedForkCmd(true)
+            setTimeout(() => setCopiedForkCmd(false), 1500)
+          }}
+          className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1"
+          title={t('chat.copy_fork_cmd')}
+        >
+          {copiedForkCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
+          {copiedForkCmd ? t('chat.copied') : 'Fork cmd'}
+        </button>
+        <button
+          onClick={() => forkSession(
+            selectedSession.sessionId || selectedSession.id.split(':')[0],
+            selectedSession.permissionMode,
+            selectedSession.cwds?.[0]
+          )}
+          className="px-2.5 py-0.5 text-[11px] rounded bg-purple-600/90 hover:bg-purple-500 text-white flex items-center gap-1"
+          title={t('chat.fork_hint')}
+        >
+          <GitBranch size={10} />
+          {t('chat.fork')}
         </button>
       </div>
     </div>

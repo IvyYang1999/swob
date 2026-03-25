@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
-import { join, dirname, basename, relative } from 'path'
+import path from 'path'
+const { join, dirname, basename, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { exec, execSync } from 'child_process'
@@ -245,6 +246,36 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
 // --- IPC Handlers ---
 
 ipcMain.handle('sessions:getActive', () => getActiveSessionIds())
+
+// Load a local image file as data URL, with fallback to ~/.claude/image-cache/
+ipcMain.handle('image:load', async (_event, filePath: string) => {
+  const tryLoad = (p: string): { dataUrl: string; status: string } | null => {
+    try {
+      if (!fs.existsSync(p)) return null
+      const ext = path.extname(p).toLowerCase()
+      const mimeMap: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' }
+      const mime = mimeMap[ext] || 'image/png'
+      const data = fs.readFileSync(p).toString('base64')
+      return { dataUrl: `data:${mime};base64,${data}`, status: 'exists' }
+    } catch { return null }
+  }
+  // Try original path
+  const original = tryLoad(filePath)
+  if (original) return original
+  // Try image-cache: scan all subdirs for matching filename
+  const cacheDir = path.join(process.env.HOME || '', '.claude', 'image-cache')
+  try {
+    if (fs.existsSync(cacheDir)) {
+      const basename = path.basename(filePath)
+      for (const sub of fs.readdirSync(cacheDir)) {
+        const cached = path.join(cacheDir, sub, basename)
+        const result = tryLoad(cached)
+        if (result) return { ...result, status: 'cached' }
+      }
+    }
+  } catch { /* ignore */ }
+  return { dataUrl: null, status: 'missing' }
+})
 
 ipcMain.handle('sessions:loadAll', async () => {
   const sessions = await loadAllSessions()

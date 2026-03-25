@@ -24,11 +24,12 @@ import { formatTime, getToolPreview, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_
 
 // --- System tag helpers ---
 
-/** Strip system-injected XML blocks from user message text */
+/** Strip system-injected XML blocks and [Image: source: ...] refs from user message text */
 function cleanUserText(text: string): string {
   return text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '')
     .replace(/<available-deferred-tools>[\s\S]*?<\/available-deferred-tools>\s*/g, '')
+    .replace(/\[Image: source: [^\]]+\]\s*/g, '')
     .trim()
 }
 
@@ -85,7 +86,7 @@ function InlineImage({ src }: { src: string }) {
       <img
         src={src}
         onClick={() => setOpen(true)}
-        className="max-h-48 max-w-xs rounded-md border border-border cursor-pointer hover:opacity-90 transition-opacity object-contain bg-surface"
+        className="max-h-48 rounded-md cursor-pointer hover:opacity-90 transition-opacity"
       />
       {open && (
         <div

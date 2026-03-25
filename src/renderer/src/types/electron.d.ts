@@ -42,6 +42,7 @@ interface ElectronAPI {
   saveToTemp: (filename: string, content: string) => Promise<string>
   openPath: (filePath: string) => Promise<string>
   showItemInFolder: (filePath: string) => Promise<void>
+  loadImage: (filePath: string) => Promise<{ dataUrl: string | null; status: string }>
   startDrag: (filePath: string, title: string) => void
   onSessionAdded: (callback: (session: any) => void) => void
   onSessionUpdated: (callback: (session: any) => void) => void

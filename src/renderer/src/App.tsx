@@ -126,7 +126,7 @@ export default function App() {
           {infoPanelOpen && (
             <>
               <ResizeHandle side="right" onResize={handleInfoPanelResize} />
-              <InfoPanel width={infoPanelWidth} />
+              <InfoPanel width={infoPanelWidth} onNavigate={(id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />
             </>
           )}
           {searchQuery && <SearchResults />}

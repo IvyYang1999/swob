@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useStore } from '../store'
 import type { Highlight } from '../store'
 import { useT } from '../i18n'
@@ -247,11 +247,126 @@ function CollapsibleFileList({
   )
 }
 
-function ImageList({ files }: { files: FileRef[] }) {
-  const t = useT()
-  const [open, setOpen] = useState(true)
+/** A single image entry collected from session messages */
+interface ImageEntry {
+  src: string | null // data URL, null if not yet loaded
+  turnUuid: string
+  originalPath?: string
+  isPasted: boolean
+  status: 'exists' | 'cached' | 'missing' | 'loading'
+}
 
-  if (files.length === 0) return null
+/** Thumbnail that lazy-loads file-path images via IPC */
+function ImageThumb({ entry, onClick, onContextMenu }: { entry: ImageEntry; onClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
+  const [lightbox, setLightbox] = useState(false)
+  const locale = useStore((s) => s.locale)
+  const shortPath = entry.originalPath?.replace(/^\/Users\/[^/]+/, '~') || ''
+  const fileName = entry.originalPath?.split('/').pop() || ''
+
+  return (
+    <>
+      <div
+        className="relative group cursor-pointer rounded overflow-hidden bg-surface"
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+      >
+        {entry.src ? (
+          <img
+            src={entry.src}
+            className="w-full aspect-square object-cover rounded hover:opacity-90 transition-opacity"
+            onDoubleClick={(e) => { e.stopPropagation(); setLightbox(true) }}
+          />
+        ) : (
+          <div className="w-full aspect-square flex items-center justify-center bg-surface text-faint text-[10px] p-1 text-center leading-tight">
+            {entry.status === 'loading' ? '...' : entry.status === 'missing' ? (
+              <span title={shortPath}>{fileName || '?'}<br /><span className="text-soft-red">{locale === 'zh-CN' ? '已移动' : 'moved'}</span></span>
+            ) : '?'}
+          </div>
+        )}
+        {/* Label overlay */}
+        <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-[9px] text-white px-1 py-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity">
+          {entry.isPasted ? (locale === 'zh-CN' ? '粘贴' : 'Pasted') : fileName}
+        </div>
+        {/* Status badge for moved/cached */}
+        {entry.originalPath && entry.status === 'cached' && (
+          <div className="absolute top-0.5 right-0.5 bg-soft-amber/80 text-[8px] text-white px-1 rounded">{locale === 'zh-CN' ? '缓存' : 'cache'}</div>
+        )}
+      </div>
+      {lightbox && entry.src && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-zoom-out" onClick={() => setLightbox(false)}>
+          <img src={entry.src} className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
+        </div>
+      )}
+    </>
+  )
+}
+
+/** Collect all images from session messages, lazy-load file-path ones */
+function useSessionImages(messages: Array<{ uuid: string; type: string; images: string[]; textContent: string }>) {
+  const [entries, setEntries] = useState<ImageEntry[]>([])
+
+  useEffect(() => {
+    const collected: ImageEntry[] = []
+    const filePathsToLoad: Array<{ idx: number; path: string }> = []
+
+    for (const msg of messages) {
+      if (msg.type !== 'user') continue
+      // Pasted base64 images
+      for (const src of msg.images) {
+        collected.push({ src, turnUuid: msg.uuid, isPasted: true, status: 'exists' })
+      }
+      // File-path references: [Image: source: /path]
+      const pathMatches = msg.textContent.matchAll(/\[Image: source: ([^\]]+)\]/g)
+      for (const m of pathMatches) {
+        const filePath = m[1].trim()
+        const idx = collected.length
+        collected.push({ src: null, turnUuid: msg.uuid, originalPath: filePath, isPasted: false, status: 'loading' })
+        filePathsToLoad.push({ idx, path: filePath })
+      }
+    }
+
+    setEntries(collected)
+
+    // Async load file-path images
+    for (const { idx, path: fp } of filePathsToLoad) {
+      ;(window as any).api.loadImage(fp).then((result: { dataUrl: string | null; status: string }) => {
+        setEntries(prev => {
+          const next = [...prev]
+          next[idx] = { ...next[idx], src: result.dataUrl, status: result.status as ImageEntry['status'] }
+          return next
+        })
+      })
+    }
+  }, [messages])
+
+  return entries
+}
+
+function ImageGallery({ messages, onNavigate }: {
+  messages: Array<{ uuid: string; type: string; images: string[]; textContent: string }>
+  onNavigate: (turnUuid: string) => void
+}) {
+  const t = useT()
+  const locale = useStore((s) => s.locale)
+  const [open, setOpen] = useState(true)
+  const entries = useSessionImages(messages)
+
+  if (entries.length === 0) return null
+
+  const handleContextMenu = (entry: ImageEntry) => (e: React.MouseEvent) => {
+    e.preventDefault()
+    if (!entry.originalPath) return
+    const api = (window as any).api
+    // Simple context menu via native menu
+    const items: string[] = []
+    if (entry.status === 'exists' || entry.status === 'cached') items.push('open')
+    if (entry.originalPath) items.push('folder', 'copy')
+    // Use a basic approach: show options
+    const choice = items[0] // For now, just open on right-click
+    if (entry.originalPath && entry.status === 'exists') {
+      api.showItemInFolder(entry.originalPath)
+    }
+  }
 
   return (
     <section>
@@ -262,12 +377,17 @@ function ImageList({ files }: { files: FileRef[] }) {
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         <Image size={12} />
         <span>{t('info.uploaded_images')}</span>
-        <span className="text-faint ml-auto">{files.length}</span>
+        <span className="text-faint ml-auto">{entries.length}</span>
       </button>
       {open && (
-        <div className="space-y-1 ml-1">
-          {files.map((f) => (
-            <ClickablePath key={f.path} path={f.path} dimmed={!f.exists} />
+        <div className="grid grid-cols-3 gap-1.5">
+          {entries.map((entry, i) => (
+            <ImageThumb
+              key={i}
+              entry={entry}
+              onClick={() => onNavigate(entry.turnUuid)}
+              onContextMenu={handleContextMenu(entry)}
+            />
           ))}
         </div>
       )}
@@ -379,7 +499,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
   )
 }
 
-export function InfoPanel({ width }: { width: number }) {
+export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (id: string) => void }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
   const { selectedSession, infoPanelOpen, config, sessions, selectSession } = useStore()
@@ -398,8 +518,6 @@ export function InfoPanel({ width }: { width: number }) {
   const isIntraBranch = !!(s as any).branchLeafUuid
   const hasBranches = (branchChildIds && branchChildIds.length > 0) || isIntraBranch
 
-  // Extract user images from referencedFiles (they have 'user-image' action)
-  const imageFiles = referencedFiles.filter(f => f.actions.includes('user-image'))
   // Non-image referenced files for the tree
   const nonImageFiles = referencedFiles.filter(f => !f.actions.includes('user-image'))
 
@@ -438,12 +556,6 @@ export function InfoPanel({ width }: { width: number }) {
                 {formatTokenShort(s.tokenUsage.inputTokens + s.tokenUsage.cacheCreationTokens + s.tokenUsage.cacheReadTokens)} in / {formatTokenShort(s.tokenUsage.outputTokens)} out
                 {s.tokenUsage.cacheReadTokens > 0 && <span className="text-faint ml-1">({formatTokenShort(s.tokenUsage.cacheReadTokens)} cached)</span>}
               </span>
-            </div>
-          )}
-          {(s.pastedImageCount || 0) > 0 && (
-            <div className="flex items-center gap-2 text-secondary">
-              <Image size={12} />
-              <span>{locale === 'zh-CN' ? `${s.pastedImageCount} 张粘贴截图` : `${s.pastedImageCount} pasted screenshot${(s.pastedImageCount || 0) > 1 ? 's' : ''}`}</span>
             </div>
           )}
           <div className="flex items-center gap-2 text-muted text-xs">
@@ -531,8 +643,11 @@ export function InfoPanel({ width }: { width: number }) {
           isDir
         />
 
-        {/* User images with existence check */}
-        <ImageList files={imageFiles} />
+        {/* Image gallery: pasted + file-referenced images */}
+        <ImageGallery
+          messages={(s as any).messages || []}
+          onNavigate={(turnUuid) => onNavigate?.(`turn-${turnUuid}`)}
+        />
 
         {/* Referenced files - directory tree */}
         <FileTreeSection files={nonImageFiles} />

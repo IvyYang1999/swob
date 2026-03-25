@@ -31,6 +31,8 @@ function isSystemText(text: string): boolean {
   if (!trimmed) return true
   if (trimmed.startsWith('<task-notification>')) return true
   if (trimmed.startsWith('This session is being continued')) return true
+  // Pure [Image: source: ...] text (file path references alongside base64 images)
+  if (/^\[Image: source: [^\]]+\](\s*\[Image: source: [^\]]+\])*\s*$/.test(trimmed)) return true
   return SYSTEM_USER_MESSAGES.includes(trimmed)
 }
 
@@ -54,7 +56,7 @@ export function isRealUserMessage(m: RawJsonlMessage): boolean {
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 9 // isRealUserMessage: exclude tool_result from turnCount
+const CACHE_VERSION = 10 // [Image: source:] pure text = system-generated; tokenUsage + pastedImageCount
 
 interface DiskCache {
   version: number

@@ -277,6 +277,18 @@ ipcMain.handle('image:load', async (_event, filePath: string) => {
   return { dataUrl: null, status: 'missing' }
 })
 
+// Native context menu for images
+ipcMain.handle('image:contextMenu', (_event, options: { path: string }) => {
+  const { Menu, shell, clipboard } = require('electron')
+  const menu = Menu.buildFromTemplate([
+    { label: '打开图片', click: () => shell.openPath(options.path) },
+    { label: '在 Finder 中显示', click: () => shell.showItemInFolder(options.path) },
+    { type: 'separator' },
+    { label: '复制路径', click: () => clipboard.writeText(options.path) }
+  ])
+  menu.popup()
+})
+
 ipcMain.handle('sessions:loadAll', async () => {
   const sessions = await loadAllSessions()
   cachedSessions = sessions

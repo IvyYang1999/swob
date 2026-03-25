@@ -24,13 +24,22 @@ import { formatTime, getToolPreview, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_
 
 // --- System tag helpers ---
 
-/** Strip system-injected XML blocks and [Image: source: ...] refs from user message text */
+/** Strip system-injected XML blocks from user message text (keeps [Image: source:] for copy/export) */
 function cleanUserText(text: string): string {
   return text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '')
     .replace(/<available-deferred-tools>[\s\S]*?<\/available-deferred-tools>\s*/g, '')
-    .replace(/\[Image: source: [^\]]+\]\s*/g, '')
     .trim()
+}
+
+/** Extract [Image: source: /path] entries and remaining text for visual rendering */
+function splitImagePaths(text: string): { displayText: string; imagePaths: string[] } {
+  const imagePaths: string[] = []
+  const displayText = text.replace(/\[Image: source: ([^\]]+)\]\s*/g, (_match, p) => {
+    imagePaths.push(p.trim())
+    return ''
+  }).trim()
+  return { displayText, imagePaths }
 }
 
 /** Parse command-output text (may contain merged consecutive messages) */
@@ -89,14 +98,58 @@ function InlineImage({ src }: { src: string }) {
         className="max-h-48 rounded-md cursor-pointer hover:opacity-90 transition-opacity"
       />
       {open && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-zoom-out"
-          onClick={() => setOpen(false)}
-        >
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-zoom-out" onClick={() => setOpen(false)}>
           <img src={src} className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
         </div>
       )}
     </>
+  )
+}
+
+/** File-referenced image: loads from local file via IPC, falls back to base64 */
+function FileImage({ path: filePath, fallbackSrc }: { path: string; fallbackSrc?: string }) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [status, setStatus] = useState<string>('loading')
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    ;(window as any).api.loadImage(filePath).then((r: { dataUrl: string | null; status: string }) => {
+      setSrc(r.dataUrl || fallbackSrc || null)
+      setStatus(r.status)
+    })
+  }, [filePath, fallbackSrc])
+
+  const displaySrc = src || fallbackSrc
+  const fileName = filePath.split('/').pop() || filePath
+
+  return (
+    <div className="relative group inline-block">
+      {displaySrc ? (
+        <>
+          <img
+            src={displaySrc}
+            onClick={() => setOpen(true)}
+            onContextMenu={(e) => { e.preventDefault(); (window as any).api.showImageContextMenu({ path: filePath }) }}
+            className="max-h-48 rounded-md cursor-pointer hover:opacity-90 transition-opacity"
+          />
+          <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[10px] text-white px-1.5 py-0.5 rounded-b-md truncate opacity-0 group-hover:opacity-100 transition-opacity">
+            {fileName}
+            {status === 'missing' && <span className="text-soft-red ml-1">(已移动)</span>}
+            {status === 'cached' && <span className="text-soft-amber ml-1">(缓存)</span>}
+          </div>
+        </>
+      ) : (
+        <div className="w-32 h-24 rounded-md bg-surface flex flex-col items-center justify-center text-[10px] text-muted p-2 text-center">
+          <span className="truncate max-w-full">{fileName}</span>
+          <span className="text-soft-red mt-1">文件已移动</span>
+        </div>
+      )}
+      {open && displaySrc && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-zoom-out" onClick={() => setOpen(false)}>
+          <img src={displaySrc} className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -338,18 +391,37 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                     {turn.userMsg.textContent.slice(COMPACT_SUMMARY_PREFIX.length).trim()}
                   </div>
                 </div>
-              ) : (
-                <div className="text-sm text-primary">
-                  <CliMarkdown content={cleanUserText(turn.userMsg.textContent)} />
-                </div>
-              )}
-              {turn.userMsg.images.length > 0 && (
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {turn.userMsg.images.map((src, i) => (
-                    <InlineImage key={i} src={src} />
-                  ))}
-                </div>
-              )}
+              ) : (() => {
+                const cleaned = cleanUserText(turn.userMsg!.textContent)
+                const { displayText, imagePaths } = splitImagePaths(cleaned)
+                // Pure pasted images = base64 images NOT covered by file paths
+                const pastedImages = imagePaths.length > 0
+                  ? turn.userMsg!.images.slice(imagePaths.length) // extras beyond file paths
+                  : turn.userMsg!.images // no file paths → all are pasted
+                return (
+                  <>
+                    {displayText && (
+                      <div className="text-sm text-primary">
+                        <CliMarkdown content={displayText} />
+                      </div>
+                    )}
+                    {imagePaths.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {imagePaths.map((p, i) => (
+                          <FileImage key={p} path={p} fallbackSrc={turn.userMsg!.images[i]} />
+                        ))}
+                      </div>
+                    )}
+                    {pastedImages.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {pastedImages.map((src, i) => (
+                          <InlineImage key={i} src={src} />
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
             </div>
           </div>
         </div>

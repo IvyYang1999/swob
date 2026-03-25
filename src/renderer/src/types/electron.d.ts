@@ -43,6 +43,7 @@ interface ElectronAPI {
   openPath: (filePath: string) => Promise<string>
   showItemInFolder: (filePath: string) => Promise<void>
   loadImage: (filePath: string) => Promise<{ dataUrl: string | null; status: string }>
+  showImageContextMenu: (options: { path: string }) => Promise<void>
   startDrag: (filePath: string, title: string) => void
   onSessionAdded: (callback: (session: any) => void) => void
   onSessionUpdated: (callback: (session: any) => void) => void

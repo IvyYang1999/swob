@@ -57,8 +57,9 @@ const api = {
   // Native drag
   startDrag: (filePath: string, title: string) => ipcRenderer.send('session:startDrag', filePath, title),
 
-  // Image loading
+  // Image loading & context menu
   loadImage: (filePath: string) => ipcRenderer.invoke('image:load', filePath),
+  showImageContextMenu: (options: { path: string }) => ipcRenderer.invoke('image:contextMenu', options),
 
   // Active sessions
   getActiveSessions: () => ipcRenderer.invoke('sessions:getActive'),

@@ -113,6 +113,12 @@ export function groupIntoTurns(messages: ParsedMessage[]): Turn[] {
         current = { userMsg: { ...msg }, assistantMsgs: [] }
         continue
       }
+      // Merge pure [Image: source: /path] messages into previous turn
+      const isPureImagePaths = /^\[Image: source: [^\]]+\](\s*\[Image: source: [^\]]+\])*\s*$/.test(msg.textContent.trim())
+      if (isPureImagePaths && current?.userMsg) {
+        current.userMsg = { ...current.userMsg, textContent: current.userMsg.textContent + '\n' + msg.textContent }
+        continue
+      }
       if (current) turns.push(current)
       current = { userMsg: msg, assistantMsgs: [] }
     } else if (msg.type === 'assistant') {

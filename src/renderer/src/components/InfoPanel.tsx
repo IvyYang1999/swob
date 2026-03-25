@@ -302,37 +302,50 @@ function ImageThumb({ entry, onClick, onContextMenu }: { entry: ImageEntry; onCl
 }
 
 /** Collect all images from session messages, lazy-load file-path ones */
-function useSessionImages(messages: Array<{ uuid: string; type: string; images: string[]; textContent: string }>) {
+/** Collect deduplicated images: prefer file-path entries, pure pasted as fallback */
+function useSessionImages(messages: Array<{ uuid: string; type: string; timestamp: string; images: string[]; textContent: string }>) {
   const [entries, setEntries] = useState<ImageEntry[]>([])
 
   useEffect(() => {
     const collected: ImageEntry[] = []
     const filePathsToLoad: Array<{ idx: number; path: string }> = []
+    // Track timestamps that have file-path references (to skip their base64 duplicates)
+    const timestampsWithPaths = new Set<string>()
 
+    // Pass 1: collect file-path references
     for (const msg of messages) {
       if (msg.type !== 'user') continue
-      // Pasted base64 images
+      const paths = [...msg.textContent.matchAll(/\[Image: source: ([^\]]+)\]/g)]
+      if (paths.length === 0) continue
+      timestampsWithPaths.add(msg.timestamp)
+      // Find the message with base64 images at same timestamp (for navigation UUID + fallback)
+      const imageMsg = messages.find(m => m.type === 'user' && m.uuid !== msg.uuid && m.images.length > 0 && m.timestamp === msg.timestamp)
+      const navUuid = imageMsg?.uuid || msg.uuid
+      for (let i = 0; i < paths.length; i++) {
+        const filePath = paths[i][1].trim()
+        const idx = collected.length
+        collected.push({ src: imageMsg?.images[i] || null, turnUuid: navUuid, originalPath: filePath, isPasted: false, status: 'loading' })
+        filePathsToLoad.push({ idx, path: filePath })
+      }
+    }
+
+    // Pass 2: collect pure pasted images (no file-path at same timestamp)
+    for (const msg of messages) {
+      if (msg.type !== 'user' || msg.images.length === 0) continue
+      if (timestampsWithPaths.has(msg.timestamp)) continue
       for (const src of msg.images) {
         collected.push({ src, turnUuid: msg.uuid, isPasted: true, status: 'exists' })
-      }
-      // File-path references: [Image: source: /path]
-      const pathMatches = msg.textContent.matchAll(/\[Image: source: ([^\]]+)\]/g)
-      for (const m of pathMatches) {
-        const filePath = m[1].trim()
-        const idx = collected.length
-        collected.push({ src: null, turnUuid: msg.uuid, originalPath: filePath, isPasted: false, status: 'loading' })
-        filePathsToLoad.push({ idx, path: filePath })
       }
     }
 
     setEntries(collected)
 
-    // Async load file-path images
+    // Async load file-path images (overrides base64 fallback with actual file)
     for (const { idx, path: fp } of filePathsToLoad) {
       ;(window as any).api.loadImage(fp).then((result: { dataUrl: string | null; status: string }) => {
         setEntries(prev => {
           const next = [...prev]
-          next[idx] = { ...next[idx], src: result.dataUrl, status: result.status as ImageEntry['status'] }
+          next[idx] = { ...next[idx], src: result.dataUrl || next[idx].src, status: result.status as ImageEntry['status'] }
           return next
         })
       })
@@ -343,7 +356,7 @@ function useSessionImages(messages: Array<{ uuid: string; type: string; images: 
 }
 
 function ImageGallery({ messages, onNavigate }: {
-  messages: Array<{ uuid: string; type: string; images: string[]; textContent: string }>
+  messages: Array<{ uuid: string; type: string; timestamp: string; images: string[]; textContent: string }>
   onNavigate: (turnUuid: string) => void
 }) {
   const t = useT()
@@ -356,16 +369,7 @@ function ImageGallery({ messages, onNavigate }: {
   const handleContextMenu = (entry: ImageEntry) => (e: React.MouseEvent) => {
     e.preventDefault()
     if (!entry.originalPath) return
-    const api = (window as any).api
-    // Simple context menu via native menu
-    const items: string[] = []
-    if (entry.status === 'exists' || entry.status === 'cached') items.push('open')
-    if (entry.originalPath) items.push('folder', 'copy')
-    // Use a basic approach: show options
-    const choice = items[0] // For now, just open on right-click
-    if (entry.originalPath && entry.status === 'exists') {
-      api.showItemInFolder(entry.originalPath)
-    }
+    ;(window as any).api.showImageContextMenu({ path: entry.originalPath })
   }
 
   return (

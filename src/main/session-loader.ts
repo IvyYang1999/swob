@@ -56,7 +56,7 @@ export function isRealUserMessage(m: RawJsonlMessage): boolean {
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 10 // [Image: source:] pure text = system-generated; tokenUsage + pastedImageCount
+const CACHE_VERSION = 11 // forkedFrom inter-file branch detection
 
 interface DiskCache {
   version: number
@@ -1010,6 +1010,33 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
             summaries.push(branchSummary)
           }
         }
+      }
+    }
+  }
+
+  // Detect /fork and /branch relationships via forkedFrom field
+  const summaryById = new Map<string, SessionSummary>()
+  for (const s of summaries) summaryById.set(s.sessionId, s)
+
+  for (const [, entries] of filesBySession) {
+    for (const entry of entries) {
+      const forkMsg = entry.raw.find((m) => m.forkedFrom)
+      if (!forkMsg?.forkedFrom) continue
+      const { sessionId: parentSessionId, messageUuid } = forkMsg.forkedFrom
+      const childSessionId = forkMsg.sessionId
+      const child = summaryById.get(childSessionId)
+      const parent = summaryById.get(parentSessionId)
+      if (!child || !parent) continue
+
+      // Link child → parent
+      child.branchParentId = parent.id
+      child.branchPointUuid = messageUuid
+      child.branchParentFilePaths = parent.allFilePaths || [parent.filePath]
+
+      // Link parent → child
+      if (!parent.branchChildIds) parent.branchChildIds = []
+      if (!parent.branchChildIds.includes(child.id)) {
+        parent.branchChildIds.push(child.id)
       }
     }
   }

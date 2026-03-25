@@ -29,6 +29,7 @@ export interface RawJsonlMessage {
     }
   }
   data?: unknown
+  forkedFrom?: { sessionId: string; messageUuid: string }
 }
 
 export interface ContentPart {

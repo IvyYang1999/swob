@@ -520,7 +520,8 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
   const branchParentId = (s as any).branchParentId as string | undefined
   const branchChildIds = (s as any).branchChildIds as string[] | undefined
   const isIntraBranch = !!(s as any).branchLeafUuid
-  const hasBranches = (branchChildIds && branchChildIds.length > 0) || isIntraBranch
+  const isForkBranch = !!branchParentId && !isIntraBranch
+  const hasBranches = (branchChildIds && branchChildIds.length > 0) || isIntraBranch || isForkBranch
 
   // Non-image referenced files for the tree
   const nonImageFiles = referencedFiles.filter(f => !f.actions.includes('user-image'))
@@ -596,7 +597,12 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
                   </button>
                 )
               })()}
-              {!isIntraBranch && (
+              {isForkBranch && (
+                <div className="px-2 py-1 text-[10px] text-soft-blue/60 border-l-2 border-soft-blue/30 ml-1">
+                  ● {locale === 'zh-CN' ? '当前（Fork 分支，可独立 Resume）' : 'Current (fork, can resume independently)'}
+                </div>
+              )}
+              {!isIntraBranch && !isForkBranch && (
                 <div className="px-2 py-1 text-[10px] text-soft-emerald/60 border-l-2 border-soft-emerald/30 ml-1">
                   ● {locale === 'zh-CN' ? '当前（主分支）' : 'Current (main)'}
                 </div>
@@ -625,16 +631,21 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
               })}
             </div>
             <div className="mt-2 px-2 py-1.5 rounded bg-surface/30 text-[10px] text-muted leading-relaxed">
-              {locale === 'zh-CN'
-                ? <>
-                    <span className="text-secondary">主对话</span> = 对话轮数最多的那条路径。两个终端同时 resume 同一个 session 会产生分支，谁聊得多谁就是主对话。
-                    <br /><span className="text-secondary">Resume 限制</span>：<code className="text-soft-purple/80">claude --resume</code> 只能恢复主对话，无法单独恢复分支（Claude Code CLI 限制）。分支的完整对话可在此处查看。
-                  </>
-                : <>
-                    <span className="text-secondary">Main session</span> = the path with the most turns. When two terminals resume the same session simultaneously, whichever has more turns becomes main.
-                    <br /><span className="text-secondary">Resume limitation</span>: <code className="text-soft-purple/80">claude --resume</code> only restores the main path (CLI limitation). Branch conversations are fully viewable here.
-                  </>
-              }
+              {isForkBranch ? (
+                locale === 'zh-CN'
+                  ? <><span className="text-secondary">Fork 分支</span>：通过 <code className="text-soft-purple/80">/branch</code> 或 <code className="text-soft-purple/80">/fork</code> 创建的独立对话，可以单独 Resume。</>
+                  : <><span className="text-secondary">Fork branch</span>: Created via <code className="text-soft-purple/80">/branch</code> or <code className="text-soft-purple/80">/fork</code>, can be resumed independently.</>
+              ) : (
+                locale === 'zh-CN'
+                  ? <>
+                      <span className="text-secondary">主对话</span> = 对话轮数最多的那条路径。两个终端同时 resume 同一个 session 会产生分支，谁聊得多谁就是主对话。
+                      <br /><span className="text-secondary">Resume 限制</span>：<code className="text-soft-purple/80">claude --resume</code> 只能恢复主对话，无法单独恢复分支（Claude Code CLI 限制）。分支的完整对话可在此处查看。
+                    </>
+                  : <>
+                      <span className="text-secondary">Main session</span> = the path with the most turns. When two terminals resume the same session simultaneously, whichever has more turns becomes main.
+                      <br /><span className="text-secondary">Resume limitation</span>: <code className="text-soft-purple/80">claude --resume</code> only restores the main path (CLI limitation). Branch conversations are fully viewable here.
+                    </>
+              )}
             </div>
           </section>
         )}

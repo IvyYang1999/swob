@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useStore } from '../store'
 import type { Highlight } from '../store'
 import { useT } from '../i18n'
-import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2, GitBranch, Copy, Check } from 'lucide-react'
+import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2, GitBranch, Copy, Check, Coins } from 'lucide-react'
 
 interface FileRef {
   path: string
@@ -30,6 +30,12 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}KB`
   return `${(bytes / 1048576).toFixed(1)}MB`
+}
+
+function formatTokenShort(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
 }
 
 function ClickablePath({ path, isDir, dimmed }: { path: string; isDir?: boolean; dimmed?: boolean }) {
@@ -425,6 +431,21 @@ export function InfoPanel({ width }: { width: number }) {
             <HardDrive size={12} />
             <span>{formatSize(s.fileSizeBytes)} · v{s.version}</span>
           </div>
+          {s.tokenUsage && (s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0) && (
+            <div className="flex items-center gap-2 text-secondary">
+              <Coins size={12} />
+              <span>
+                {formatTokenShort(s.tokenUsage.inputTokens + s.tokenUsage.cacheCreationTokens + s.tokenUsage.cacheReadTokens)} in / {formatTokenShort(s.tokenUsage.outputTokens)} out
+                {s.tokenUsage.cacheReadTokens > 0 && <span className="text-faint ml-1">({formatTokenShort(s.tokenUsage.cacheReadTokens)} cached)</span>}
+              </span>
+            </div>
+          )}
+          {(s.pastedImageCount || 0) > 0 && (
+            <div className="flex items-center gap-2 text-secondary">
+              <Image size={12} />
+              <span>{locale === 'zh-CN' ? `${s.pastedImageCount} 张粘贴截图` : `${s.pastedImageCount} pasted screenshot${(s.pastedImageCount || 0) > 1 ? 's' : ''}`}</span>
+            </div>
+          )}
           <div className="flex items-center gap-2 text-muted text-xs">
             <span className="text-faint shrink-0">Session ID:</span>
             <span className="text-[10px] font-mono select-all cursor-text truncate">{s.sessionId}</span>

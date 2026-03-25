@@ -9,7 +9,8 @@ import type {
   ToolCallInfo,
   SkillInvocation,
   ContentPart,
-  FileAction
+  FileAction,
+  TokenUsage
 } from './types'
 
 const CLAUDE_DIR = path.join(process.env.HOME || '', '.claude', 'projects')
@@ -205,6 +206,38 @@ function extractToolResultText(content: string | ContentPart[]): string {
     .join('\n')
 }
 
+/** Extract base64 images as data URLs from message content */
+function extractImages(content: string | ContentPart[] | undefined): string[] {
+  if (!content || typeof content === 'string') return []
+  const images: string[] = []
+  for (const p of content) {
+    if (p.type === 'image' && p.source?.type === 'base64' && p.source.data && p.source.media_type) {
+      images.push(`data:${p.source.media_type};base64,${p.source.data}`)
+    }
+    // Also check inside tool_result content blocks
+    if (p.type === 'tool_result' && Array.isArray(p.content)) {
+      for (const sub of p.content) {
+        if (typeof sub === 'object' && sub.type === 'image' && sub.source?.type === 'base64' && sub.source.data && sub.source.media_type) {
+          images.push(`data:${sub.source.media_type};base64,${sub.source.data}`)
+        }
+      }
+    }
+  }
+  return images
+}
+
+/** Extract token usage from API response */
+function extractTokenUsage(msg: RawJsonlMessage): TokenUsage | undefined {
+  const u = msg.message?.usage
+  if (!u) return undefined
+  return {
+    inputTokens: u.input_tokens || 0,
+    outputTokens: u.output_tokens || 0,
+    cacheCreationTokens: u.cache_creation_input_tokens || 0,
+    cacheReadTokens: u.cache_read_input_tokens || 0
+  }
+}
+
 function extractSkillInvocations(toolCalls: ToolCallInfo[], timestamp: string): SkillInvocation[] {
   return toolCalls
     .filter((t) => t.name === 'Skill')
@@ -276,6 +309,24 @@ export function buildSessionSummary(
     firstUserMessage = extractText(firstUser.message.content).slice(0, 200)
   }
 
+  // Accumulate token usage across all assistant messages
+  const totalTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
+  let pastedImageCount = 0
+  for (const msg of rawMessages) {
+    if (msg.type === 'assistant' && msg.message?.usage) {
+      const u = msg.message.usage
+      totalTokenUsage.inputTokens += u.input_tokens || 0
+      totalTokenUsage.outputTokens += u.output_tokens || 0
+      totalTokenUsage.cacheCreationTokens += u.cache_creation_input_tokens || 0
+      totalTokenUsage.cacheReadTokens += u.cache_read_input_tokens || 0
+    }
+    if (msg.type === 'user' && msg.message && Array.isArray(msg.message.content)) {
+      for (const p of msg.message.content) {
+        if (typeof p === 'object' && p.type === 'image' && (p as ContentPart).source?.type === 'base64') pastedImageCount++
+      }
+    }
+  }
+
   // Light mode: skip expensive operations (tool extraction, file I/O, config discovery)
   if (light) {
     const permissionMode = rawMessages.find((m) => m.permissionMode)?.permissionMode
@@ -299,6 +350,8 @@ export function buildSessionSummary(
       fileSizeBytes: stat.size,
       permissionMode,
       userImages: [],
+      pastedImageCount,
+      tokenUsage: totalTokenUsage,
       referencedFiles: [],
       configFiles: []
     }
@@ -419,6 +472,8 @@ export function buildSessionSummary(
     fileSizeBytes: stat.size,
     permissionMode,
     userImages: [...userImages],
+    pastedImageCount,
+    tokenUsage: totalTokenUsage,
     referencedFiles: [...referencedFiles],
     configFiles
   }
@@ -463,6 +518,8 @@ export function buildSessionDetail(
         role: m.message?.role,
         textContent,
         toolCalls,
+        images: m.message ? extractImages(m.message.content) : [],
+        tokenUsage: m.type === 'assistant' ? extractTokenUsage(m) : undefined,
         isPreCompact: lastCompactIndex >= 0 && originalIndex < lastCompactIndex,
         isSidechain: !!m.isSidechain,
         isSharedContext: false,
@@ -1055,9 +1112,12 @@ export async function loadSessionDetail(
           role: m.message?.role,
           textContent,
           toolCalls,
+          images: m.message ? extractImages(m.message.content) : [],
+          tokenUsage: m.type === 'assistant' ? extractTokenUsage(m) : undefined,
           isPreCompact: false,
           isSidechain: !!m.isSidechain,
           isSharedContext: true,
+          isSystemGenerated: m.type === 'user' && !isRealUserMessage(m),
           raw: m
         }
       })

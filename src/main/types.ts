@@ -1,3 +1,10 @@
+export interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
+}
+
 export interface RawJsonlMessage {
   uuid: string
   parentUuid: string | null
@@ -14,6 +21,12 @@ export interface RawJsonlMessage {
   message?: {
     role: string
     content: string | ContentPart[]
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      cache_creation_input_tokens?: number
+      cache_read_input_tokens?: number
+    }
   }
   data?: unknown
 }
@@ -26,6 +39,7 @@ export interface ContentPart {
   input?: Record<string, unknown>
   tool_use_id?: string // for tool_result, links to tool_use
   content?: string | ContentPart[]
+  source?: { type: string; media_type?: string; data?: string; url?: string }
 }
 
 export interface ParsedMessage {
@@ -36,6 +50,8 @@ export interface ParsedMessage {
   role?: string
   textContent: string
   toolCalls: ToolCallInfo[]
+  images: string[] // data URLs for pasted/inline images
+  tokenUsage?: TokenUsage // API-reported token usage (assistant messages only)
   isPreCompact: boolean
   isSidechain: boolean
   isSharedContext: boolean
@@ -82,6 +98,8 @@ export interface SessionSummary {
   branchParentId?: string // ID of the parent branch/session this was forked from
   branchChildIds?: string[] // IDs of child branches forked from this session
   userImages: string[]
+  pastedImageCount: number // count of base64 pasted images (not stored as data URLs in summary)
+  tokenUsage: TokenUsage
   referencedFiles: FileRef[]
   configFiles: string[]
   libraryDirPath?: string

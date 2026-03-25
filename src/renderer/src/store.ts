@@ -34,6 +34,8 @@ interface SessionSummary {
   branchParentFilePaths?: string[]
   branchPointUuid?: string
   userImages?: string[]
+  pastedImageCount?: number
+  tokenUsage?: { inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number }
   referencedFiles?: Array<{ path: string; actions: string[]; exists: boolean }>
   configFiles?: string[]
   libraryDirPath?: string
@@ -48,6 +50,8 @@ interface ParsedMessage {
   role?: string
   textContent: string
   toolCalls: Array<{ id?: string; name: string; input: Record<string, unknown>; result?: string }>
+  images: string[]
+  tokenUsage?: { inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number }
   isPreCompact: boolean
   isSidechain: boolean
   isSharedContext: boolean

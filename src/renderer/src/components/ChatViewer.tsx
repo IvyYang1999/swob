@@ -76,6 +76,61 @@ function SystemNoticePill({ text }: { text: string }) {
   )
 }
 
+// --- Inline image with lightbox ---
+
+function InlineImage({ src }: { src: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <img
+        src={src}
+        onClick={() => setOpen(true)}
+        className="max-h-48 max-w-xs rounded-md border border-border cursor-pointer hover:opacity-90 transition-opacity object-contain bg-surface"
+      />
+      {open && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-zoom-out"
+          onClick={() => setOpen(false)}
+        >
+          <img src={src} className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
+        </div>
+      )}
+    </>
+  )
+}
+
+// --- Token badge for assistant messages ---
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+function TokenBadge({ msgs }: { msgs: ParsedMessage[] }) {
+  const total = useMemo(() => {
+    let input = 0, output = 0
+    for (const m of msgs) {
+      if (m.tokenUsage) {
+        input += m.tokenUsage.inputTokens + m.tokenUsage.cacheCreationTokens + m.tokenUsage.cacheReadTokens
+        output += m.tokenUsage.outputTokens
+      }
+    }
+    return { input, output }
+  }, [msgs])
+
+  if (total.input === 0 && total.output === 0) return null
+
+  return (
+    <span
+      className="text-[10px] text-faint font-mono"
+      title={`Input: ${total.input.toLocaleString()} tokens\nOutput: ${total.output.toLocaleString()} tokens`}
+    >
+      {formatTokenCount(total.input + total.output)} tok
+    </span>
+  )
+}
+
 // --- Diff view for Edit tool ---
 
 function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
@@ -287,6 +342,13 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                   <CliMarkdown content={cleanUserText(turn.userMsg.textContent)} />
                 </div>
               )}
+              {turn.userMsg.images.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {turn.userMsg.images.map((src, i) => (
+                    <InlineImage key={i} src={src} />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -309,6 +371,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-secondary">Assistant</span>
                 <span className="text-[11px] text-faint">{formatTime(turn.assistantMsgs[0].timestamp, locale)}</span>
+                <TokenBadge msgs={turn.assistantMsgs} />
                 {hasSidechain && <span className="text-[10px] px-1 py-0.5 rounded bg-hover text-muted">rejected</span>}
                 <button
                   onClick={copyResponse}

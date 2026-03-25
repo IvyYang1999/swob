@@ -10,8 +10,8 @@ cd "$(dirname "$0")/.."
 echo "==> 编译..."
 npx electron-vite build
 
-echo "==> 打包 .app (跳过 DMG)..."
-npx electron-builder --mac --dir --config.mac.target=dir
+echo "==> 打包 .app (跳过 DMG，跳过签名)..."
+CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir --config.mac.target=dir
 
 if [ ! -d "$DIST_APP" ]; then
   echo "错误：找不到 $DIST_APP"

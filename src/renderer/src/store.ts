@@ -137,7 +137,7 @@ interface AppState {
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale }
 
 // Read localStorage at module load time — before first render, zero flicker
-const LOCAL_CACHE_VERSION = 6 // bump: traceToRoot compact crossing + store field rename
+const LOCAL_CACHE_VERSION = 7 // bump: resumeCwd semantics changed from latest cwd to initial cwd
 
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
   try {

@@ -162,7 +162,7 @@ describe('buildSessionSummary', () => {
     expect(summary!.cwds).toContain('/Users/test/project-b')
   })
 
-  it('resume 应该使用最新的 cwd 和 permissionMode，而不是最早的', () => {
+  it('resume 应该使用会话最初创建时的 cwd，而不是后来 cd 进去的目录', () => {
     const msgs = [
       rawMsg({
         type: 'user',
@@ -197,7 +197,7 @@ describe('buildSessionSummary', () => {
     const summary = buildSessionSummary(fp, msgs)
 
     expect(summary!.cwds).toEqual(['/Users/test/project-a', '/Users/test/project-b'])
-    expect(summary!.resumeCwd).toBe('/Users/test/project-b')
+    expect(summary!.resumeCwd).toBe('/Users/test/project-a')
     expect(summary!.permissionMode).toBe('default')
     expect(summary!.version).toBe('2.1.85')
   })

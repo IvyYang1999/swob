@@ -53,10 +53,21 @@ export function isRealUserMessage(m: RawJsonlMessage): boolean {
   return false
 }
 
+function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefined {
+  let earliest: { timestamp: string; cwd: string } | null = null
+  for (const msg of rawMessages) {
+    if (msg.isSidechain || !msg.cwd || !msg.timestamp) continue
+    if (!earliest || msg.timestamp < earliest.timestamp) {
+      earliest = { timestamp: msg.timestamp, cwd: msg.cwd }
+    }
+  }
+  return earliest?.cwd
+}
+
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 11 // forkedFrom inter-file branch detection
+const CACHE_VERSION = 12 // resumeCwd should use initial session cwd
 
 interface DiskCache {
   version: number
@@ -286,7 +297,7 @@ export function buildSessionSummary(
 
   const cwds = [...new Set(rawMessages.map((m) => m.cwd).filter(Boolean) as string[])]
   const versions = [...new Set(rawMessages.map((m) => m.version).filter(Boolean) as string[])]
-  const latestCwd = [...rawMessages].reverse().find((m) => m.cwd)?.cwd
+  const initialCwd = getInitialSessionCwd(rawMessages)
   const latestPermissionMode = [...rawMessages].reverse().find((m) => m.permissionMode)?.permissionMode
   const latestVersion = [...rawMessages].reverse().find((m) => m.version)?.version
   // Use main chain timestamps for updatedAt (sidechain messages are rejected branches)
@@ -353,7 +364,7 @@ export function buildSessionSummary(
       filePath,
       fileSizeBytes: stat.size,
       permissionMode: latestPermissionMode,
-      resumeCwd: latestCwd,
+      resumeCwd: initialCwd,
       userImages: [],
       pastedImageCount,
       tokenUsage: totalTokenUsage,
@@ -473,7 +484,7 @@ export function buildSessionSummary(
     filePath,
     fileSizeBytes: stat.size,
     permissionMode: latestPermissionMode,
-    resumeCwd: latestCwd,
+    resumeCwd: initialCwd,
     userImages: [...userImages],
     pastedImageCount,
     tokenUsage: totalTokenUsage,

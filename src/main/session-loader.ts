@@ -286,6 +286,9 @@ export function buildSessionSummary(
 
   const cwds = [...new Set(rawMessages.map((m) => m.cwd).filter(Boolean) as string[])]
   const versions = [...new Set(rawMessages.map((m) => m.version).filter(Boolean) as string[])]
+  const latestCwd = [...rawMessages].reverse().find((m) => m.cwd)?.cwd
+  const latestPermissionMode = [...rawMessages].reverse().find((m) => m.permissionMode)?.permissionMode
+  const latestVersion = [...rawMessages].reverse().find((m) => m.version)?.version
   // Use main chain timestamps for updatedAt (sidechain messages are rejected branches)
   const mainTimestamps = mainChainMessages.map((m) => m.timestamp).filter(Boolean).sort()
   const allTimestamps = rawMessages.map((m) => m.timestamp).filter(Boolean).sort()
@@ -331,7 +334,6 @@ export function buildSessionSummary(
 
   // Light mode: skip expensive operations (tool extraction, file I/O, config discovery)
   if (light) {
-    const permissionMode = rawMessages.find((m) => m.permissionMode)?.permissionMode
     const stat = fs.statSync(filePath)
     return {
       id: sessionId,
@@ -343,14 +345,15 @@ export function buildSessionSummary(
       turnCount,
       compactCount,
       cwds,
-      version: versions[0] || '',
+      version: latestVersion || versions[0] || '',
       firstUserMessage,
       toolUsage: {},
       skillInvocations: [],
       projectPath: path.dirname(filePath),
       filePath,
       fileSizeBytes: stat.size,
-      permissionMode,
+      permissionMode: latestPermissionMode,
+      resumeCwd: latestCwd,
       userImages: [],
       pastedImageCount,
       tokenUsage: totalTokenUsage,
@@ -448,9 +451,6 @@ export function buildSessionSummary(
   // Discover config files from filesystem based on cwds and projectPath
   const configFiles = discoverConfigFiles(cwds, path.dirname(filePath))
 
-  // Extract permission mode from the first user message that has it
-  const permissionMode = rawMessages.find((m) => m.permissionMode)?.permissionMode
-
   const stat = fs.statSync(filePath)
   const projectPath = path.dirname(filePath)
 
@@ -464,7 +464,7 @@ export function buildSessionSummary(
     turnCount,
     compactCount,
     cwds,
-    version: versions[0] || '',
+    version: latestVersion || versions[0] || '',
     firstUserMessage,
     toolUsage,
     skillInvocations,
@@ -472,7 +472,8 @@ export function buildSessionSummary(
     projectPath,
     filePath,
     fileSizeBytes: stat.size,
-    permissionMode,
+    permissionMode: latestPermissionMode,
+    resumeCwd: latestCwd,
     userImages: [...userImages],
     pastedImageCount,
     tokenUsage: totalTokenUsage,

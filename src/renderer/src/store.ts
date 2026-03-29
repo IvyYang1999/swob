@@ -31,6 +31,7 @@ interface SessionSummary {
   fileSizeBytes: number
   allFilePaths?: string[]
   permissionMode?: string
+  resumeCwd?: string
   branchParentFilePaths?: string[]
   branchPointUuid?: string
   userImages?: string[]

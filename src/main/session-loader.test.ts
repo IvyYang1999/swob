@@ -162,6 +162,46 @@ describe('buildSessionSummary', () => {
     expect(summary!.cwds).toContain('/Users/test/project-b')
   })
 
+  it('resume 应该使用最新的 cwd 和 permissionMode，而不是最早的', () => {
+    const msgs = [
+      rawMsg({
+        type: 'user',
+        cwd: '/Users/test/project-a',
+        permissionMode: 'bypassPermissions',
+        version: '2.1.71',
+        message: { role: 'user', content: '第一轮' }
+      }),
+      rawMsg({
+        type: 'assistant',
+        cwd: '/Users/test/project-a',
+        permissionMode: 'bypassPermissions',
+        version: '2.1.71',
+        message: { role: 'assistant', content: '收到' }
+      }),
+      rawMsg({
+        type: 'user',
+        cwd: '/Users/test/project-b',
+        permissionMode: 'default',
+        version: '2.1.85',
+        message: { role: 'user', content: '后来切到另一个目录继续' }
+      }),
+      rawMsg({
+        type: 'assistant',
+        cwd: '/Users/test/project-b',
+        permissionMode: 'default',
+        version: '2.1.85',
+        message: { role: 'assistant', content: '继续完成' }
+      })
+    ]
+    const fp = writeTempJsonl(msgs)
+    const summary = buildSessionSummary(fp, msgs)
+
+    expect(summary!.cwds).toEqual(['/Users/test/project-a', '/Users/test/project-b'])
+    expect(summary!.resumeCwd).toBe('/Users/test/project-b')
+    expect(summary!.permissionMode).toBe('default')
+    expect(summary!.version).toBe('2.1.85')
+  })
+
   it('content 是数组格式（含图片等）也能正确提取文本', () => {
     const msgs = [
       rawMsg({

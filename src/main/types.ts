@@ -93,6 +93,7 @@ export interface SessionSummary {
   fileSizeBytes: number
   allFilePaths?: string[]
   permissionMode?: string
+  resumeCwd?: string
   branchParentFilePaths?: string[]
   branchPointUuid?: string
   branchLeafUuid?: string // for intra-file branches: trace this leaf's parentUuid chain

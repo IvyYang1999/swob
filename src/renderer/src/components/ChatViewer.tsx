@@ -22,6 +22,10 @@ import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/mark
 
 import { formatTime, getToolPreview, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_COLOR } from '../utils/chat-helpers'
 
+function getResumeCwd(session: SessionDetail): string | undefined {
+  return (session as SessionDetail & { resumeCwd?: string }).resumeCwd || session.cwds?.[session.cwds.length - 1] || session.cwds?.[0]
+}
+
 // --- System tag helpers ---
 
 /** Strip system-injected XML blocks from user message text (keeps [Image: source:] for copy/export) */
@@ -831,7 +835,7 @@ function SessionBar({
           onClick={() => resumeSession(
             selectedSession.sessionId || selectedSession.id,
             selectedSession.permissionMode,
-            selectedSession.cwds?.[0]
+            getResumeCwd(selectedSession)
           )}
           className={`px-2.5 py-0.5 text-[11px] rounded flex items-center gap-1 ${
             selectedSession.id?.includes(':intra-')
@@ -863,7 +867,7 @@ function SessionBar({
           onClick={() => forkSession(
             selectedSession.sessionId || selectedSession.id.split(':')[0],
             selectedSession.permissionMode,
-            selectedSession.cwds?.[0]
+            getResumeCwd(selectedSession)
           )}
           className="px-2.5 py-0.5 text-[11px] rounded bg-purple-600/90 hover:bg-purple-500 text-white flex items-center gap-1"
           title={t('chat.fork_hint')}

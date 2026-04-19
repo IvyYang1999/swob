@@ -66,6 +66,17 @@ const api = {
   // Active sessions
   getActiveSessions: () => ipcRenderer.invoke('sessions:getActive'),
 
+  // iCloud
+  icloudIsCloudOnly: (sessionId: string) => ipcRenderer.invoke('icloud:isCloudOnly', sessionId),
+  icloudDownload: (sessionId: string) => ipcRenderer.invoke('icloud:download', sessionId),
+  icloudScanCloudSessions: () => ipcRenderer.invoke('icloud:scanCloudSessions'),
+
+  // SSH
+  sshGetConfig: () => ipcRenderer.invoke('ssh:getConfig'),
+  sshSetConfig: (config: { host: string; user: string; remotePath?: string } | null) => ipcRenderer.invoke('ssh:setConfig', config),
+  sshResume: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:resume', sessionId, permissionMode),
+  sshBuildCommand: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:buildCommand', sessionId, permissionMode),
+
   // Events from main
   onSessionAdded: (callback: (session: unknown) => void) => {
     ipcRenderer.on('session:added', (_event, session) => callback(session))

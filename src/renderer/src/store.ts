@@ -84,7 +84,13 @@ interface Highlight {
 interface UserConfig {
   folders: Folder[]
   sessionMeta: Record<string, { customTitle?: string; notes?: string; highlights?: Highlight[] }>
-  preferences: { defaultViewMode: 'compact' | 'full'; terminalApp: 'Terminal' | 'iTerm2'; locale?: Locale }
+  preferences: { defaultViewMode: 'compact' | 'full'; terminalApp: 'Terminal' | 'iTerm2'; locale?: Locale; sshConfig?: SshConfig }
+}
+
+export interface SshConfig {
+  host: string
+  user: string
+  remotePath?: string
 }
 
 interface SearchResult {
@@ -109,6 +115,8 @@ interface AppState {
   infoPanelOpen: boolean
   selectedSessionMdPath: string | null
   activeSessionIds: Set<string>
+  cloudSessionIds: Set<string>   // iCloud-only sessions not yet downloaded
+  sshConfig: SshConfig | null
 
   initialize: () => Promise<void>
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<void>
@@ -132,6 +140,13 @@ interface AppState {
   addHighlight: (sessionId: string, highlight: Omit<Highlight, 'id' | 'createdAt'>) => Promise<void>
   removeHighlight: (sessionId: string, highlightId: string) => Promise<void>
   downloadSessionMarkdown: () => void
+  // iCloud
+  refreshCloudSessions: () => Promise<void>
+  downloadCloudSession: (sessionId: string) => Promise<void>
+  // SSH
+  setSshConfig: (config: SshConfig | null) => Promise<void>
+  sshResumeSession: (sessionId: string, permissionMode?: string) => Promise<void>
+  sshBuildCommand: (sessionId: string, permissionMode?: string) => Promise<string | null>
 }
 
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale }
@@ -182,17 +197,21 @@ export const useStore = create<AppState>((set, get) => ({
   infoPanelOpen: true,
   selectedSessionMdPath: null,
   activeSessionIds: new Set<string>(),
+  cloudSessionIds: new Set<string>(),
+  sshConfig: null,
 
   initialize: async () => {
-    const [sessions, config] = await Promise.all([
+    const [sessions, config, sshConfig] = await Promise.all([
       window.api.loadAllSessions(),
-      window.api.loadConfig()
+      window.api.loadConfig(),
+      (window.api as any).sshGetConfig?.() ?? null
     ])
     set({
       sessions,
       config,
       viewMode: config.preferences?.defaultViewMode || 'compact',
       locale: (config.preferences as any)?.locale || 'zh-CN',
+      sshConfig: sshConfig ?? null,
       loading: false
     })
     try {
@@ -406,5 +425,32 @@ export const useStore = create<AppState>((set, get) => ({
     const md = sessionToMarkdown(session, sections, customTitle, locale)
     const filename = generateFilename(session)
     downloadMarkdown(`${filename}.md`, md)
+  },
+
+  // iCloud
+  refreshCloudSessions: async () => {
+    const cloudIds: string[] = await (window.api as any).icloudScanCloudSessions?.() ?? []
+    set({ cloudSessionIds: new Set(cloudIds) })
+  },
+
+  downloadCloudSession: async (sessionId: string) => {
+    await (window.api as any).icloudDownload?.(sessionId)
+    // After download, re-scan
+    const cloudIds: string[] = await (window.api as any).icloudScanCloudSessions?.() ?? []
+    set({ cloudSessionIds: new Set(cloudIds) })
+  },
+
+  // SSH
+  setSshConfig: async (config) => {
+    await (window.api as any).sshSetConfig?.(config)
+    set({ sshConfig: config })
+  },
+
+  sshResumeSession: async (sessionId, permissionMode) => {
+    await (window.api as any).sshResume?.(sessionId, permissionMode)
+  },
+
+  sshBuildCommand: async (sessionId, permissionMode) => {
+    return (window.api as any).sshBuildCommand?.(sessionId, permissionMode) ?? null
   }
 }))

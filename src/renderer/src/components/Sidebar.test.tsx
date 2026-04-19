@@ -27,12 +27,15 @@ const mockStore = {
     preferences: { defaultViewMode: 'compact' as const, terminalApp: 'Terminal' as const }
   },
   activeSessionIds: new Set<string>(),
+  cloudSessionIds: new Set<string>(),
+  sshConfig: null,
   locale: 'zh-CN',
   sessions: [],
   addSessionToFolder: vi.fn(),
   removeSessionFromFolder: vi.fn(),
   renameFolder: vi.fn(),
-  setSessionMeta: vi.fn()
+  setSessionMeta: vi.fn(),
+  refreshCloudSessions: vi.fn()
 }
 
 vi.mock('../store', () => ({

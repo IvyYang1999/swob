@@ -4,8 +4,9 @@ import { useT } from '../i18n'
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2, List, FolderTree,
-  Plus, Play, Pencil, GitBranch
+  Plus, Play, Pencil, GitBranch, Cloud, CloudDownload, Settings, Copy, Terminal
 } from 'lucide-react'
+import { SshConfigModal } from './SshConfigModal'
 
 function getResumeCwd(session: SessionSummary): string | undefined {
   return (session as SessionSummary & { resumeCwd?: string }).resumeCwd || session.cwds?.[session.cwds.length - 1] || session.cwds?.[0]
@@ -35,7 +36,7 @@ function SessionItem({
   onRenameSubmit?: () => void; onRenameCancel?: () => void
   onDoubleClickRename?: (sessionId: string) => void
 }) {
-  const { selectedUniqueId, selectSession, config, activeSessionIds, locale, sessions } = useStore()
+  const { selectedUniqueId, selectSession, config, activeSessionIds, cloudSessionIds, locale, sessions } = useStore()
   const t = useT()
   const isIntraBranch = session.id.includes(':intra-')
   // Branch: only use its own meta, never fall back to parent's
@@ -43,6 +44,7 @@ function SessionItem({
     ? config?.sessionMeta[session.id]
     : (config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id])
   const isActive = activeSessionIds.has(session.sessionId || session.id)
+  const isCloud = cloudSessionIds.has(session.sessionId || session.id)
   const branchChildIds = (session as any).branchChildIds as string[] | undefined
   const hasBranchChildren = branchChildIds && branchChildIds.length > 0
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
@@ -103,6 +105,7 @@ function SessionItem({
       ) : (
         <div className="text-sm text-primary truncate flex items-center gap-1.5">
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-active shrink-0" title={t('sidebar.opened_in_terminal')} />}
+          {isCloud && <Cloud size={11} className="shrink-0 text-blue-400" title="iCloud 云端文件，未下载到本地" />}
           {isIntraBranch && <GitBranch size={12} className="shrink-0 text-soft-purple" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
@@ -301,7 +304,7 @@ function FolderNode({
 // ============ Main Sidebar ============
 
 export function Sidebar({ width }: { width: number }) {
-  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder } = useStore()
+  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, sshConfig, refreshCloudSessions } = useStore()
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -314,10 +317,25 @@ export function Sidebar({ width }: { width: number }) {
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
   const [singleTurnExpanded, setSingleTurnExpanded] = useState(false)
   const [sessionRenameValue, setSessionRenameValue] = useState('')
+  const [showSshConfig, setShowSshConfig] = useState(false)
+  const [cloudRefreshing, setCloudRefreshing] = useState(false)
   const { renameFolder, setSessionMeta } = useStore()
   const t = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Auto-refresh cloud session list on mount and periodically
+  useEffect(() => {
+    refreshCloudSessions()
+    const interval = setInterval(refreshCloudSessions, 30_000)
+    return () => clearInterval(interval)
+  }, [refreshCloudSessions])
+
+  async function handleRefreshCloud() {
+    setCloudRefreshing(true)
+    await refreshCloudSessions()
+    setCloudRefreshing(false)
+  }
 
   // --- Native context menu ---
   const handleContextMenu = useCallback(async (e: React.MouseEvent, sessionId: string) => {
@@ -448,6 +466,20 @@ export function Sidebar({ width }: { width: number }) {
       <div className="p-3 flex items-center justify-between border-b border-edge">
         <span className="text-sm font-medium text-body">{t('sidebar.sessions')}</span>
         <div className="flex items-center gap-1">
+          <button
+            onClick={handleRefreshCloud}
+            className="p-1 hover:bg-hover rounded text-secondary hover:text-primary"
+            title="刷新 iCloud 同步状态"
+          >
+            <CloudDownload size={14} className={cloudRefreshing ? 'animate-pulse text-blue-400' : ''} />
+          </button>
+          <button
+            onClick={() => setShowSshConfig(true)}
+            className={`p-1 hover:bg-hover rounded hover:text-primary ${sshConfig ? 'text-accent' : 'text-secondary'}`}
+            title={sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : 'SSH 远程配置'}
+          >
+            <Terminal size={14} />
+          </button>
           <button onClick={() => setViewMode(viewMode === 'tree' ? 'flat' : 'tree')}
             className="p-1 hover:bg-hover rounded text-secondary hover:text-primary"
             title={viewMode === 'tree' ? t('sidebar.timeline_view') : t('sidebar.tree_view')}>
@@ -459,6 +491,8 @@ export function Sidebar({ width }: { width: number }) {
           </button>
         </div>
       </div>
+
+      {showSshConfig && <SshConfigModal onClose={() => setShowSshConfig(false)} />}
 
       {showNewFolder && (
         <div className="p-2 border-b border-edge">

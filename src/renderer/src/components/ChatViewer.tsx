@@ -4,7 +4,7 @@ import type { ViewMode, ParsedMessage, SessionDetail, Highlight } from '../store
 import {
   User, Bot, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
-  List, Code2, CheckSquare,
+  List, Code2, CheckSquare, Cloud, CloudDownload,
   Search, X, ArrowUp, ArrowDown, Highlighter, Trash2
 } from 'lucide-react'
 import { useT } from '../i18n'
@@ -718,11 +718,16 @@ function SessionBar({
   searchOpen: boolean
   onToggleSearch: () => void
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshBuildCommand } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
   const [copiedForkCmd, setCopiedForkCmd] = useState(false)
+  const [copiedSshCmd, setCopiedSshCmd] = useState(false)
+  const [sshResuming, setSshResuming] = useState(false)
+  const [cloudDownloading, setCloudDownloading] = useState(false)
+
+  const isCloud = selectedSession ? cloudSessionIds.has(selectedSession.sessionId) : false
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return
@@ -875,6 +880,66 @@ function SessionBar({
           <GitBranch size={10} />
           {t('chat.fork')}
         </button>
+
+        {/* iCloud 云端下载 */}
+        {isCloud && (
+          <button
+            onClick={async () => {
+              if (!selectedSession) return
+              setCloudDownloading(true)
+              await downloadCloudSession(selectedSession.sessionId)
+              setCloudDownloading(false)
+            }}
+            disabled={cloudDownloading}
+            className="px-2 py-0.5 text-[11px] rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-400/30 flex items-center gap-1"
+            title="此会话文件存储在 iCloud，点击下载到本地"
+          >
+            {cloudDownloading ? <Cloud size={10} className="animate-pulse" /> : <CloudDownload size={10} />}
+            {cloudDownloading ? '下载中...' : 'iCloud 下载'}
+          </button>
+        )}
+
+        {/* SSH Resume */}
+        {sshConfig && !isCloud && (
+          <>
+            <button
+              onClick={async () => {
+                if (!selectedSession) return
+                const cmd = await sshBuildCommand(
+                  selectedSession.sessionId || selectedSession.id.split(':')[0],
+                  selectedSession.permissionMode
+                )
+                if (cmd) {
+                  navigator.clipboard.writeText(cmd)
+                  setCopiedSshCmd(true)
+                  setTimeout(() => setCopiedSshCmd(false), 1500)
+                }
+              }}
+              className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1"
+              title={`复制 SSH resume 命令 (${sshConfig.user}@${sshConfig.host})`}
+            >
+              {copiedSshCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
+              {copiedSshCmd ? '已复制' : 'SSH cmd'}
+            </button>
+            <button
+              onClick={async () => {
+                if (!selectedSession || sshResuming) return
+                setSshResuming(true)
+                await sshResumeSession(
+                  selectedSession.sessionId || selectedSession.id.split(':')[0],
+                  selectedSession.permissionMode
+                )
+                setSshResuming(false)
+              }}
+              disabled={sshResuming}
+              className="px-2.5 py-0.5 text-[11px] rounded bg-teal-600/90 hover:bg-teal-500 text-white flex items-center gap-1 disabled:opacity-60"
+              title={`SSH 到 ${sshConfig.user}@${sshConfig.host} 并 Resume`}
+            >
+              <Terminal size={10} />
+              {sshResuming ? '连接中...' : 'SSH Resume'}
+            </button>
+          </>
+        )}
       </div>
     </div>
   )

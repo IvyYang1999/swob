@@ -137,6 +137,12 @@ export interface Highlight {
   createdAt: string
 }
 
+export interface SshConfig {
+  host: string          // e.g. "mac-mini.local" or "192.168.1.x"
+  user: string          // SSH username
+  remotePath?: string   // optional: remote path override for claude executable
+}
+
 export interface UserConfig {
   folders: Folder[]
   sessionMeta: Record<string, {
@@ -148,5 +154,6 @@ export interface UserConfig {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
     locale?: 'zh-CN' | 'en'
+    sshConfig?: SshConfig
   }
 }

@@ -41,7 +41,12 @@ import {
   removeBranchFromFolder,
   setBranchMeta,
   getBranchMdPath,
-  updateBranchTranscript
+  updateBranchTranscript,
+  isSessionCloudOnly,
+  triggerICloudDownload,
+  getSshConfig,
+  setSshConfig,
+  buildSshResumeCommand
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import type { SessionSummary } from './types'
@@ -246,6 +251,52 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
 // --- IPC Handlers ---
 
 ipcMain.handle('sessions:getActive', () => getActiveSessionIds())
+
+// --- iCloud ---
+
+ipcMain.handle('icloud:isCloudOnly', (_event, sessionId: string) => {
+  return isSessionCloudOnly(sessionId)
+})
+
+ipcMain.handle('icloud:download', (_event, sessionId: string) => {
+  return triggerICloudDownload(sessionId)
+})
+
+// Scan all sessions and return which ones are cloud-only
+ipcMain.handle('icloud:scanCloudSessions', () => {
+  const cloudSessions: string[] = []
+  for (const session of cachedSessions) {
+    if (isSessionCloudOnly(session.sessionId)) {
+      cloudSessions.push(session.sessionId)
+    }
+  }
+  return cloudSessions
+})
+
+// --- SSH ---
+
+ipcMain.handle('ssh:getConfig', () => getSshConfig())
+
+ipcMain.handle('ssh:setConfig', (_event, sshConfig: { host: string; user: string; remotePath?: string } | null) => {
+  setSshConfig(sshConfig)
+})
+
+ipcMain.handle('ssh:resume', (_event, sessionId: string, permissionMode?: string) => {
+  const sshConfig = getSshConfig()
+  if (!sshConfig) throw new Error('SSH config not set')
+  const cmd = buildSshResumeCommand(sessionId, sshConfig, permissionMode)
+  openInTerminal(`ssh -t ${sshConfig.user}@${sshConfig.host} "${(permissionMode === 'bypassPermissions' ? `claude --dangerously-skip-permissions --resume ${sessionId}` : `claude --resume ${sessionId}`).replace(/"/g, '\\"')}"`)
+})
+
+ipcMain.handle('ssh:buildCommand', (_event, sessionId: string, permissionMode?: string) => {
+  const sshConfig = getSshConfig()
+  if (!sshConfig) return null
+  // Build: ssh -t user@host "claude --resume sessionId"
+  const remoteCmd = permissionMode === 'bypassPermissions'
+    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
+    : `claude --resume ${sessionId}`
+  return `ssh -t ${sshConfig.user}@${sshConfig.host} "${remoteCmd}"`
+})
 
 // Load a local image file as data URL, with fallback to ~/.claude/image-cache/
 ipcMain.handle('image:load', async (_event, filePath: string) => {

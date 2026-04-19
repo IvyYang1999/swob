@@ -39,11 +39,18 @@ export interface LibraryTree {
   ungroupedSessions: LibrarySession[]
 }
 
+export interface SshConfig {
+  host: string
+  user: string
+  remotePath?: string
+}
+
 export interface LibraryConfig {
   libraryRoot: string
   preferences: {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
+    sshConfig?: SshConfig
   }
   folderOrder?: string[]  // relative paths, determines display order
   branchFolders?: Record<string, string[]>  // branch unique ID → folder relative paths
@@ -1001,3 +1008,90 @@ export function setSessionMetaInLibrary(
     renameSessionDir(sessionId, meta.customTitle)
   }
 }
+
+// ============ iCloud Detection ============
+
+/**
+ * Check if a file path is an iCloud placeholder (not yet downloaded).
+ * macOS stores cloud-only files as hidden .icloud files with the original name prefixed by dot.
+ * E.g., "transcript.md" becomes ".transcript.md.icloud"
+ */
+export function isICloudPlaceholder(filePath: string): boolean {
+  try {
+    // Direct check: the file itself has .icloud extension
+    if (filePath.endsWith('.icloud')) return true
+    // Check if corresponding .icloud placeholder exists for this file
+    const dir = path.dirname(filePath)
+    const base = path.basename(filePath)
+    const placeholder = path.join(dir, `.${base}.icloud`)
+    return fs.existsSync(placeholder)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Check if a session directory is stored in iCloud and the content is cloud-only.
+ * Returns true if the session dir exists but key files are not downloaded.
+ */
+export function isSessionCloudOnly(sessionId: string): boolean {
+  const dirPath = sessionIndex.get(sessionId)
+  if (!dirPath) return false
+  // Check if session meta file is a cloud placeholder
+  const metaFile = path.join(dirPath, SESSION_META_FILE)
+  return isICloudPlaceholder(metaFile) || !fs.existsSync(metaFile)
+}
+
+/**
+ * Trigger iCloud download for a session directory.
+ * Uses `brctl download` command (macOS iCloud daemon).
+ * Returns true if download was triggered successfully.
+ */
+export function triggerICloudDownload(sessionId: string): boolean {
+  const dirPath = sessionIndex.get(sessionId)
+  if (!dirPath || !fs.existsSync(dirPath)) return false
+  try {
+    const { execSync } = require('child_process')
+    execSync(`brctl download "${dirPath}"`, { timeout: 5000 })
+    return true
+  } catch {
+    return false
+  }
+}
+
+// ============ SSH Config ============
+
+export function getSshConfig(): SshConfig | undefined {
+  const config = loadLibraryConfig()
+  return config.preferences?.sshConfig
+}
+
+export function setSshConfig(sshConfig: SshConfig | null): void {
+  const config = loadLibraryConfig()
+  if (sshConfig === null) {
+    delete config.preferences.sshConfig
+  } else {
+    config.preferences.sshConfig = sshConfig
+  }
+  saveLibraryConfig(config)
+}
+
+/**
+ * Build SSH resume command for a session.
+ * ssh user@host "cd /path && claude --resume sessionId"
+ */
+export function buildSshResumeCommand(
+  sessionId: string,
+  sshConfig: SshConfig,
+  permissionMode?: string
+): string {
+  const claudeCmd = permissionMode === 'bypassPermissions'
+    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
+    : `claude --resume ${sessionId}`
+  const remoteClaude = sshConfig.remotePath ? sshConfig.remotePath : claudeCmd
+  const remoteCmd = sshConfig.remotePath
+    ? `${sshConfig.remotePath} --resume ${sessionId}${permissionMode === 'bypassPermissions' ? ' --dangerously-skip-permissions' : ''}`
+    : claudeCmd
+  return `ssh ${sshConfig.user}@${sshConfig.host} "${remoteCmd.replace(/"/g, '\\"')}"`
+}
+

@@ -381,6 +381,7 @@ ipcMain.handle('sessions:loadAll', async () => {
           summary.allFilePaths = [backupPath]
           summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
           summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+          summary.isRemote = true
           if (meta.customTitle) {
             ;(summary as any)._libraryTitle = meta.customTitle
           }
@@ -818,6 +819,7 @@ ipcMain.handle('library:selectDirectory', async () => {
   const { dialog } = require('electron')
   const result = await dialog.showOpenDialog(mainWindow, {
     title: '选择 Swob Library 存储位置',
+    defaultPath: getLibraryRoot(),
     properties: ['openDirectory', 'createDirectory'],
     buttonLabel: '选择此文件夹'
   })

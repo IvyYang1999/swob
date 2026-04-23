@@ -718,7 +718,7 @@ function SessionBar({
   searchOpen: boolean
   onToggleSearch: () => void
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshBuildCommand } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshBuildCommand, showToast } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
@@ -728,6 +728,7 @@ function SessionBar({
   const [cloudDownloading, setCloudDownloading] = useState(false)
 
   const isCloud = selectedSession ? cloudSessionIds.has(selectedSession.sessionId) : false
+  const isRemote = !!(selectedSession as any)?.isRemote
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return
@@ -837,20 +838,41 @@ function SessionBar({
           {copiedResumeCmd ? t('chat.copied') : t('chat.copy_resume_cmd_short')}
         </button>
         <button
-          onClick={() => resumeSession(
-            selectedSession.sessionId || selectedSession.id,
-            selectedSession.permissionMode,
-            getResumeCwd(selectedSession)
-          )}
+          onClick={async () => {
+            if (isRemote && sshConfig) {
+              setSshResuming(true)
+              await sshResumeSession(
+                selectedSession.sessionId || selectedSession.id.split(':')[0],
+                selectedSession.permissionMode
+              )
+              setSshResuming(false)
+            } else if (isRemote && !sshConfig) {
+              showToast('此会话来自其他设备，请先配置 SSH 再 Resume', 'error')
+            } else {
+              resumeSession(
+                selectedSession.sessionId || selectedSession.id,
+                selectedSession.permissionMode,
+                getResumeCwd(selectedSession)
+              )
+            }
+          }}
+          disabled={sshResuming}
           className={`px-2.5 py-0.5 text-[11px] rounded flex items-center gap-1 ${
             selectedSession.id?.includes(':intra-')
               ? 'bg-hover hover:bg-pressed text-body'
-              : 'bg-soft-green/90 hover:bg-soft-green text-white'
-          }`}
-          title={selectedSession.id?.includes(':intra-') ? t('chat.resume_branch_hint') : undefined}
+              : isRemote && sshConfig
+                ? 'bg-teal-600/90 hover:bg-teal-500 text-white'
+                : 'bg-soft-green/90 hover:bg-soft-green text-white'
+          } disabled:opacity-60`}
+          title={
+            selectedSession.id?.includes(':intra-') ? t('chat.resume_branch_hint')
+            : isRemote && sshConfig ? `SSH Resume (${sshConfig.user}@${sshConfig.host})`
+            : isRemote ? '此会话来自其他设备，需要配置 SSH'
+            : undefined
+          }
         >
-          <Play size={10} />
-          Resume{selectedSession.id?.includes(':intra-') ? ` (${t('chat.resume_parent')})` : ''}
+          {isRemote && sshConfig ? <Terminal size={10} /> : <Play size={10} />}
+          {sshResuming ? '连接中...' : isRemote ? 'SSH Resume' : `Resume${selectedSession.id?.includes(':intra-') ? ` (${t('chat.resume_parent')})` : ''}`}
         </button>
         <button
           onClick={() => {

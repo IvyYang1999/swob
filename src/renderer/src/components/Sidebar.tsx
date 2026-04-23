@@ -598,12 +598,20 @@ function SidebarFooter({ sessionCount, totalBytes }: { sessionCount: number; tot
     const selected = await (window.api as any).librarySelectDirectory?.()
     if (!selected) return
 
-    const isExisting = await (window.api as any).libraryIsInitialized?.(selected)
-    if (isExisting) {
-      showToast(`正在打开已有 Library: ${selected}`, 'info')
-    } else {
-      showToast(`正在创建新 Library: ${selected}`, 'info')
+    if (selected === libraryPath) {
+      showToast('已经是当前 Library 路径', 'info')
+      return
     }
+
+    const isExisting = await (window.api as any).libraryIsInitialized?.(selected)
+
+    const confirmMsg = isExisting
+      ? `切换到已有 Library:\n${selected}\n\n原路径下的文件夹和会话将不再显示。`
+      : `在此位置创建新 Library:\n${selected}\n\n原路径下的文件夹和会话将不再显示。`
+
+    if (!window.confirm(confirmMsg)) return
+
+    showToast(isExisting ? '正在打开已有 Library...' : '正在创建新 Library...', 'info')
 
     const newRoot = await (window.api as any).libraryChangePath?.(selected)
     if (newRoot) {

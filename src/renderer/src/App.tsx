@@ -92,9 +92,9 @@ function ToastContainer() {
   if (toasts.length === 0) return null
   const iconMap = { info: Info, success: CheckCircle, error: AlertCircle }
   const styleMap = {
-    info: 'toast-info',
-    success: 'toast-success',
-    error: 'toast-error'
+    info: 'bg-soft-blue/10 text-soft-blue border-soft-blue/20',
+    success: 'bg-soft-green/10 text-soft-green border-soft-green/20',
+    error: 'bg-soft-red/10 text-soft-red border-soft-red/20'
   }
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
@@ -103,7 +103,7 @@ function ToastContainer() {
         return (
           <div
             key={t.id}
-            className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm shadow-lg ${styleMap[t.type]}`}
+            className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg border text-sm shadow-lg ${styleMap[t.type]}`}
             style={{ animation: 'toast-in 0.25s ease-out' }}
           >
             <Icon size={16} className="shrink-0" />

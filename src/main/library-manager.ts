@@ -1163,8 +1163,9 @@ export function buildSshResumeCommand(
   const args = permissionMode === 'bypassPermissions'
     ? `--dangerously-skip-permissions --resume ${sessionId}`
     : `--resume ${sessionId}`
-  // Use login shell (-l) so ~/.zprofile / ~/.zshrc are loaded and PATH includes claude
-  const remoteCmd = `zsh -l -c '${claudeBin} ${args}'`
+  // Use interactive login shell (-li) so both ~/.zprofile AND ~/.zshrc are loaded.
+  // claude is often a shell function defined in .zshrc, not a binary on PATH.
+  const remoteCmd = `zsh -li -c '${claudeBin} ${args}'`
   return `ssh -t ${sshConfig.user}@${sshConfig.host} "${remoteCmd.replace(/"/g, '\\"')}"`
 }
 

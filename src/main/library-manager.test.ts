@@ -241,10 +241,10 @@ describe('分支文件夹归属独立于母 session', () => {
 })
 
 describe('buildSshResumeCommand', () => {
-  it('默认用 login shell 包裹 claude 命令', () => {
+  it('默认用 interactive login shell 包裹 claude 命令', () => {
     const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' })
     expect(cmd).toContain('ssh -t bob@mac.local')
-    expect(cmd).toContain("zsh -l -c 'claude --resume sess-123'")
+    expect(cmd).toContain("zsh -li -c 'claude --resume sess-123'")
   })
 
   it('bypassPermissions 模式加上 --dangerously-skip-permissions', () => {

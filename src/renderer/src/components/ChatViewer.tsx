@@ -26,44 +26,15 @@ function getResumeCwd(session: SessionDetail): string | undefined {
   return (session as SessionDetail & { resumeCwd?: string }).resumeCwd || session.cwds?.[session.cwds.length - 1] || session.cwds?.[0]
 }
 
-// --- Source-specific assistant avatars ---
+// --- Source-specific assistant avatars (using official brand icons) ---
 
-function ClaudeAvatar() {
-  return (
-    <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#c87040] text-white">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-        <path d="M12 2L12 6M12 18L12 22M2 12L6 12M18 12L22 12M4.93 4.93L7.76 7.76M16.24 16.24L19.07 19.07M19.07 4.93L16.24 7.76M7.76 16.24L4.93 19.07" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/>
-      </svg>
-    </div>
-  )
-}
-
-function CodexAvatar() {
-  return (
-    <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#19c37d] text-white">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3a3 3 0 110 6 3 3 0 010-6zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z" fill="currentColor"/>
-      </svg>
-    </div>
-  )
-}
-
-function CursorAvatar() {
-  const theme = useStore((s) => s.theme)
-  const isDark = theme === 'dark'
-  return (
-    <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${isDark ? 'bg-[#e0e0e0] text-[#1a1a1a]' : 'bg-[#2d2d2d] text-white'}`}>
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-        <path d="M5 3l14 9-6 2-3 7L5 3z" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-      </svg>
-    </div>
-  )
-}
+import claudeIcon from '../assets/icons/claude.png'
+import openaiIcon from '../assets/icons/openai.png'
+import cursorIcon from '../assets/icons/cursor.png'
 
 function AssistantAvatar({ source }: { source?: string }) {
-  if (source === 'codex') return <CodexAvatar />
-  if (source === 'cursor') return <CursorAvatar />
-  return <ClaudeAvatar />
+  const icon = source === 'codex' ? openaiIcon : source === 'cursor' ? cursorIcon : claudeIcon
+  return <img src={icon} className="w-7 h-7 rounded-full shrink-0 mt-0.5" alt="" />
 }
 
 function AssistantLabel({ source }: { source?: string }) {

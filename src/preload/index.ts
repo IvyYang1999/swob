@@ -45,6 +45,10 @@ const api = {
   libraryGetMdPath: (sessionId: string) => ipcRenderer.invoke('library:getMdPath', sessionId),
   libraryGetDirPath: (sessionId: string) => ipcRenderer.invoke('library:getDirPath', sessionId),
   libraryOpenInFinder: () => ipcRenderer.invoke('library:openInFinder'),
+  libraryGetConfiguredPath: () => ipcRenderer.invoke('library:getConfiguredPath'),
+  libraryIsInitialized: (rootPath: string) => ipcRenderer.invoke('library:isInitialized', rootPath),
+  librarySelectDirectory: () => ipcRenderer.invoke('library:selectDirectory'),
+  libraryChangePath: (newPath: string) => ipcRenderer.invoke('library:changePath', newPath),
 
   // Markdown
   saveMarkdown: (dirPath: string, filename: string, content: string) =>

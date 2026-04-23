@@ -60,6 +60,35 @@ export interface LibraryConfig {
 // ============ Constants ============
 
 const DEFAULT_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
+const APP_CONFIG_DIR = path.join(os.homedir(), '.claude-session-manager')
+const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
+
+export function loadAppConfig(): { libraryPath?: string } {
+  try {
+    if (fs.existsSync(APP_CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
+    }
+  } catch { /* ignore */ }
+  return {}
+}
+
+export function saveAppConfig(config: { libraryPath?: string }): void {
+  if (!fs.existsSync(APP_CONFIG_DIR)) {
+    fs.mkdirSync(APP_CONFIG_DIR, { recursive: true })
+  }
+  const existing = loadAppConfig()
+  fs.writeFileSync(APP_CONFIG_FILE, JSON.stringify({ ...existing, ...config }, null, 2), 'utf-8')
+}
+
+export function getConfiguredLibraryPath(): string {
+  const appConfig = loadAppConfig()
+  return appConfig.libraryPath || DEFAULT_ROOT
+}
+
+export function isLibraryInitialized(rootPath: string): boolean {
+  const configFile = path.join(rootPath, LIBRARY_CONFIG_FILE)
+  return fs.existsSync(configFile)
+}
 const SESSION_META_FILE = '.swob-session.json'
 const LIBRARY_CONFIG_FILE = '.swob-config.json'
 const TRANSCRIPT_FILE = 'transcript.md'
@@ -74,7 +103,7 @@ export function getLibraryRoot(): string {
 }
 
 export function initLibrary(root?: string): void {
-  _root = root || DEFAULT_ROOT
+  _root = root || getConfiguredLibraryPath()
   if (!fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }
@@ -1007,6 +1036,51 @@ export function setSessionMetaInLibrary(
   if (meta.customTitle) {
     renameSessionDir(sessionId, meta.customTitle)
   }
+}
+
+// ============ Library-only Sessions ============
+
+/**
+ * Find sessions in Library that don't exist in the local session set.
+ * Returns backup.jsonl paths for sessions only available via Library (e.g. from another device).
+ */
+export function findLibraryOnlySessions(localSessionIds: Set<string>): Array<{
+  sessionId: string
+  backupPath: string
+  meta: SessionMeta
+}> {
+  const results: Array<{ sessionId: string; backupPath: string; meta: SessionMeta }> = []
+
+  function walk(dirPath: string): void {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true })
+    } catch { return }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const fullPath = path.join(dirPath, entry.name)
+      try {
+        if (!fs.statSync(fullPath).isDirectory()) continue
+      } catch { continue }
+
+      if (isSessionDir(fullPath)) {
+        const meta = readSessionMeta(fullPath)
+        if (!meta) continue
+        if (localSessionIds.has(meta.sessionId)) continue
+        const backupPath = path.join(fullPath, BACKUP_FILE)
+        if (fs.existsSync(backupPath)) {
+          results.push({ sessionId: meta.sessionId, backupPath, meta })
+          sessionIndex.set(meta.sessionId, fullPath)
+        }
+      } else {
+        walk(fullPath)
+      }
+    }
+  }
+
+  walk(_root)
+  return results
 }
 
 // ============ iCloud Detection ============

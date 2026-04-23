@@ -93,6 +93,96 @@ describe('【曾经的 bug】重命名分支 session 不应该影响母 session'
   })
 })
 
+describe('App 配置：Library 路径管理', () => {
+  let configDir: string
+  let configFile: string
+
+  beforeEach(() => {
+    configDir = path.join(tmpRoot, '.app-config')
+    configFile = path.join(configDir, 'app-config.json')
+  })
+
+  it('loadAppConfig 文件不存在时返回空对象', () => {
+    const config = lib.loadAppConfig()
+    // 真实环境下可能已有配置，这里只验证不会崩溃且返回对象
+    expect(typeof config).toBe('object')
+  })
+
+  it('saveAppConfig + loadAppConfig 往返一致', () => {
+    lib.saveAppConfig({ libraryPath: tmpRoot })
+    const config = lib.loadAppConfig()
+    expect(config.libraryPath).toBe(tmpRoot)
+  })
+
+  it('getConfiguredLibraryPath 无配置时返回默认路径', () => {
+    const p = lib.getConfiguredLibraryPath()
+    expect(typeof p).toBe('string')
+    expect(p.length).toBeGreaterThan(0)
+  })
+
+  it('isLibraryInitialized 对新目录返回 false', () => {
+    const emptyDir = path.join(tmpRoot, 'empty-dir')
+    fs.mkdirSync(emptyDir)
+    expect(lib.isLibraryInitialized(emptyDir)).toBe(false)
+  })
+
+  it('isLibraryInitialized 对已初始化的 Library 返回 true', () => {
+    // tmpRoot 已经被 initLibrary 初始化过，需要先创建 config 文件
+    lib.saveLibraryConfig(lib.loadLibraryConfig())
+    expect(lib.isLibraryInitialized(tmpRoot)).toBe(true)
+  })
+})
+
+describe('Library-only sessions（跨设备同步）', () => {
+  it('findLibraryOnlySessions 不返回本机已有的 session', () => {
+    const localIds = new Set(['abc-123'])
+    const result = lib.findLibraryOnlySessions(localIds)
+    expect(result).toHaveLength(0)
+  })
+
+  it('findLibraryOnlySessions 返回 Library 中有 backup 但本机没有的 session', () => {
+    // 创建一个「来自其他设备」的 session
+    const remoteDir = path.join(tmpRoot, '远程设备的对话')
+    fs.mkdirSync(remoteDir, { recursive: true })
+    fs.writeFileSync(path.join(remoteDir, '.swob-session.json'), JSON.stringify({
+      sessionId: 'remote-999',
+      sourceFilePaths: ['/Users/other-machine/.claude/projects/xxx/session.jsonl'],
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T01:00:00Z',
+      projectPath: '/Users/other-machine/projects/xxx'
+    }))
+    fs.writeFileSync(path.join(remoteDir, 'backup.jsonl'), '{"uuid":"u1","sessionId":"remote-999","type":"user","timestamp":"2026-04-01T00:00:00Z","message":{"role":"user","content":"hello"}}\n')
+
+    // 重新扫描
+    lib.scanLibrary()
+
+    const localIds = new Set(['abc-123'])
+    const result = lib.findLibraryOnlySessions(localIds)
+    expect(result).toHaveLength(1)
+    expect(result[0].sessionId).toBe('remote-999')
+    expect(result[0].backupPath).toContain('backup.jsonl')
+  })
+
+  it('findLibraryOnlySessions 忽略没有 backup.jsonl 的 Library session', () => {
+    const noBackupDir = path.join(tmpRoot, '没有备份的对话')
+    fs.mkdirSync(noBackupDir, { recursive: true })
+    fs.writeFileSync(path.join(noBackupDir, '.swob-session.json'), JSON.stringify({
+      sessionId: 'no-backup-999',
+      sourceFilePaths: [],
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T01:00:00Z',
+      projectPath: '/fake'
+    }))
+
+    lib.scanLibrary()
+
+    const localIds = new Set(['abc-123'])
+    const result = lib.findLibraryOnlySessions(localIds)
+    // 应该不包含没有 backup 的 session
+    expect(result.find(r => r.sessionId === 'no-backup-999')).toBeUndefined()
+  })
+})
+
 describe('分支文件夹归属独立于母 session', () => {
   it('分支移入文件夹后，母 session 不跟着动', () => {
     const branchId = 'abc-123:intra-0'

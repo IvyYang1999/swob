@@ -46,7 +46,11 @@ import {
   triggerICloudDownload,
   getSshConfig,
   setSshConfig,
-  buildSshResumeCommand
+  buildSshResumeCommand,
+  getConfiguredLibraryPath,
+  saveAppConfig,
+  isLibraryInitialized,
+  findLibraryOnlySessions
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import type { SessionSummary } from './types'
@@ -353,7 +357,6 @@ ipcMain.handle('sessions:loadAll', async () => {
     if (dirPath) {
       s.libraryDirPath = dirPath
       if (isBranch) {
-        // Branch: use or generate independent transcript
         let branchMd = getBranchMdPath(s.id)
         if (!branchMd && s.branchLeafUuid) {
           const branchMeta = loadLibraryConfig().branchMeta?.[s.id]
@@ -365,6 +368,34 @@ ipcMain.handle('sessions:loadAll', async () => {
       }
     }
   }
+
+  // Load Library-only sessions (from other devices via iCloud sync)
+  try {
+    const localIds = new Set(sessions.map((s) => s.sessionId))
+    const libraryOnly = findLibraryOnlySessions(localIds)
+    for (const { sessionId, backupPath, meta } of libraryOnly) {
+      try {
+        const raw = await parseSessionFile(backupPath)
+        const summary = buildSessionSummary(backupPath, raw, true)
+        if (summary) {
+          summary.allFilePaths = [backupPath]
+          summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
+          summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+          if (meta.customTitle) {
+            ;(summary as any)._libraryTitle = meta.customTitle
+          }
+          sessions.push(summary)
+          knownSessionIds.add(sessionId)
+        }
+      } catch { /* skip unparseable backup */ }
+    }
+    // Re-sort after adding library-only sessions
+    if (libraryOnly.length > 0) {
+      sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    }
+  } catch { /* ignore */ }
+
+  cachedSessions = sessions
 
   // Sync library in background (non-blocking)
   if (!libraryInitialized) {
@@ -772,6 +803,43 @@ ipcMain.handle('library:getDirPath', (_event, sessionId: string) => {
 
 ipcMain.handle('library:openInFinder', () => {
   shell.showItemInFolder(getLibraryRoot())
+})
+
+ipcMain.handle('library:getConfiguredPath', () => {
+  return getConfiguredLibraryPath()
+})
+
+ipcMain.handle('library:isInitialized', (_event, rootPath: string) => {
+  return isLibraryInitialized(rootPath)
+})
+
+ipcMain.handle('library:selectDirectory', async () => {
+  if (!mainWindow) return null
+  const { dialog } = require('electron')
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择 Swob Library 存储位置',
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: '选择此文件夹'
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
+ipcMain.handle('library:changePath', async (_event, newPath: string) => {
+  saveAppConfig({ libraryPath: newPath })
+  // Re-initialize library at new path
+  initLibrary(newPath)
+  const tree = scanLibrary()
+  libraryInitialized = true
+  // Re-sync sessions from source
+  if (cachedSessions.length > 0) {
+    const oldConfig = loadConfig()
+    await syncLibraryFromSessions(cachedSessions, oldConfig.sessionMeta)
+    // Rescan after sync
+    scanLibrary()
+  }
+  mainWindow?.webContents.send('sessions:refresh')
+  return getLibraryRoot()
 })
 
 // --- File Operations ---

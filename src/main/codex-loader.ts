@@ -242,6 +242,21 @@ export async function buildCodexSessionSummary(filePath: string): Promise<Sessio
     ? (typeof firstUser.message.content === 'string' ? firstUser.message.content : '').slice(0, 200)
     : ''
 
+  const allUserTexts: string[] = []
+  let totalLen = 0
+  const USER_TEXT_LIMIT = 2000
+  for (const m of userMessages) {
+    const text = typeof m.message?.content === 'string' ? m.message.content.trim() : ''
+    if (!text || text === firstUserMessage) continue
+    if (totalLen + text.length > USER_TEXT_LIMIT) {
+      allUserTexts.push(text.slice(0, USER_TEXT_LIMIT - totalLen))
+      break
+    }
+    allUserTexts.push(text)
+    totalLen += text.length
+  }
+  const allUserMessages = allUserTexts.length > 0 ? allUserTexts.join(' ') : undefined
+
   // Token usage from event_msg/token_count
   const totalTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
   for (const line of lines) {
@@ -288,7 +303,8 @@ export async function buildCodexSessionSummary(filePath: string): Promise<Sessio
     tokenUsage: totalTokenUsage,
     referencedFiles: [],
     configFiles: [],
-    source: 'codex'
+    source: 'codex',
+    allUserMessages
   }
 }
 

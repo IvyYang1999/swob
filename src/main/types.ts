@@ -111,6 +111,7 @@ export interface SessionSummary {
   isRemote?: boolean
   remoteHost?: string  // hostname of the device that created this session (e.g. "macbooka.local")
   source?: SessionSource
+  allUserMessages?: string
 }
 
 export interface FileRef {

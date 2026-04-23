@@ -128,4 +128,36 @@ describe('spotlightSearch', () => {
     const results = spotlightSearch('通用', sessions, emptyContext, 10)
     expect(results.length).toBe(10)
   })
+
+  it('allUserMessages 全内容搜索', () => {
+    const sessions = [
+      makeSummary({ sessionId: 'a', firstUserMessage: '初始化项目', allUserMessages: '帮我调研飞搜的最新API 还有lark-cli的用法' }),
+      makeSummary({ sessionId: 'b', firstUserMessage: '其他内容' })
+    ]
+    const results = spotlightSearch('飞搜', sessions, emptyContext)
+    expect(results.length).toBe(1)
+    expect(results[0].session.sessionId).toBe('a')
+    expect(results[0].matchedFields).toContain('content')
+  })
+
+  it('目录名匹配（cwds 末级目录）', () => {
+    const sessions = [
+      makeSummary({ sessionId: 'a', cwds: ['/Users/test/projects/feisou-plugin'], firstUserMessage: '不相关' }),
+      makeSummary({ sessionId: 'b', cwds: ['/Users/test/projects/other'], firstUserMessage: '不相关' })
+    ]
+    const results = spotlightSearch('feisou', sessions, emptyContext)
+    expect(results.length).toBe(1)
+    expect(results[0].session.sessionId).toBe('a')
+  })
+
+  it('组合搜索：来源 + 内容关键词', () => {
+    const sessions = [
+      makeSummary({ sessionId: 'a', source: 'cursor', firstUserMessage: '初始化', allUserMessages: '飞搜功能迭代 新增搜索接口' }),
+      makeSummary({ sessionId: 'b', source: 'cursor', firstUserMessage: '其他项目' }),
+      makeSummary({ sessionId: 'c', source: 'codex', firstUserMessage: '飞搜相关', allUserMessages: '飞搜搜索优化' })
+    ]
+    const results = spotlightSearch('飞搜 cursor', sessions, emptyContext)
+    expect(results.length).toBe(1)
+    expect(results[0].session.sessionId).toBe('a')
+  })
 })

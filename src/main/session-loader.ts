@@ -327,6 +327,22 @@ export function buildSessionSummary(
     firstUserMessage = extractText(firstUser.message.content).slice(0, 200)
   }
 
+  const allUserTexts: string[] = []
+  let totalLen = 0
+  const USER_TEXT_LIMIT = 2000
+  for (const m of validMessages) {
+    if (m.type !== 'user' || !m.message) continue
+    const text = extractText(m.message.content).trim()
+    if (!text || text === firstUserMessage) continue
+    if (totalLen + text.length > USER_TEXT_LIMIT) {
+      allUserTexts.push(text.slice(0, USER_TEXT_LIMIT - totalLen))
+      break
+    }
+    allUserTexts.push(text)
+    totalLen += text.length
+  }
+  const allUserMessages = allUserTexts.length > 0 ? allUserTexts.join(' ') : undefined
+
   // Accumulate token usage across all assistant messages
   const totalTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
   let pastedImageCount = 0
@@ -372,7 +388,8 @@ export function buildSessionSummary(
       tokenUsage: totalTokenUsage,
       referencedFiles: [],
       configFiles: [],
-      source: 'claude-code'
+      source: 'claude-code',
+      allUserMessages
     }
   }
 
@@ -493,7 +510,8 @@ export function buildSessionSummary(
     tokenUsage: totalTokenUsage,
     referencedFiles: [...referencedFiles],
     configFiles,
-    source: 'claude-code'
+    source: 'claude-code',
+    allUserMessages
   }
 }
 

@@ -273,6 +273,21 @@ export async function buildCursorSessionSummary(filePath: string): Promise<Sessi
     if (cleaned) { firstUserMessage = cleaned.slice(0, 200); break }
   }
 
+  const allUserTexts: string[] = []
+  let totalLen = 0
+  const USER_TEXT_LIMIT = 2000
+  for (const m of userMessages) {
+    const text = typeof m.message!.content === 'string' ? cleanUserText(m.message!.content) : ''
+    if (!text || text === firstUserMessage) continue
+    if (totalLen + text.length > USER_TEXT_LIMIT) {
+      allUserTexts.push(text.slice(0, USER_TEXT_LIMIT - totalLen))
+      break
+    }
+    allUserTexts.push(text)
+    totalLen += text.length
+  }
+  const allUserMessages = allUserTexts.length > 0 ? allUserTexts.join(' ') : undefined
+
   const toolUsage: Record<string, number> = {}
   for (const m of rawMessages) {
     if (m.type === 'assistant' && m.message && Array.isArray(m.message.content)) {
@@ -308,7 +323,8 @@ export async function buildCursorSessionSummary(filePath: string): Promise<Sessi
     tokenUsage: totalTokenUsage,
     referencedFiles: [],
     configFiles: [],
-    source: 'cursor'
+    source: 'cursor',
+    allUserMessages
   }
 }
 

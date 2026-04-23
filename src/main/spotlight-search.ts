@@ -160,6 +160,13 @@ export function spotlightSearch(
         tokenMatched = true
       }
 
+      // All user messages (full content search)
+      if (!tokenMatched && session.allUserMessages && fuzzyMatch(session.allUserMessages, token)) {
+        score += 20
+        if (!matchedFields.includes('content')) matchedFields.push('content')
+        tokenMatched = true
+      }
+
       // Folder name
       if (folderName && fuzzyMatch(folderName, token)) {
         score += 25
@@ -167,12 +174,22 @@ export function spotlightSearch(
         tokenMatched = true
       }
 
-      // CWDs / project path
+      // CWDs / project path — also match last directory name for project name matching
       const allPaths = [...session.cwds, session.projectPath].join(' ')
       if (fuzzyMatch(allPaths, token)) {
         score += 15
         if (!matchedFields.includes('path')) matchedFields.push('path')
         tokenMatched = true
+      }
+      if (!tokenMatched) {
+        const dirNames = [...session.cwds, session.projectPath]
+          .map((p) => p.split('/').filter(Boolean).pop() || '')
+          .join(' ')
+        if (fuzzyMatch(dirNames, token)) {
+          score += 20
+          if (!matchedFields.includes('dirname')) matchedFields.push('dirname')
+          tokenMatched = true
+        }
       }
 
       // Tool usage keys

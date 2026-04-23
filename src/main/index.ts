@@ -59,6 +59,7 @@ import {
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
+import { buildInsights } from './insights'
 import type { SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
@@ -792,6 +793,23 @@ ipcMain.handle(
     openInTerminal(buildForkCommand(sessionId, permissionMode, cwd, source))
   }
 )
+
+// --- Insights IPC ---
+ipcMain.handle('insights:get', () => {
+  const sessions = cachedSessions
+  let folders: Array<{ id: string; name: string; parentId?: string | null; sessionIds: string[] }> = []
+  try {
+    if (libraryInitialized) {
+      const tree = scanLibrary()
+      const cfg = libraryTreeToConfig(tree)
+      folders = cfg.folders || []
+    } else {
+      const cfg = loadConfig()
+      folders = cfg.folders || []
+    }
+  } catch { /* ignore */ }
+  return buildInsights(sessions, folders)
+})
 
 // --- Config / Library IPC ---
 // These use the library manager but return the same shape the frontend expects

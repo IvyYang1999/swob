@@ -82,6 +82,9 @@ const api = {
   sshFork: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:fork', sessionId, permissionMode),
   sshBuildCommand: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:buildCommand', sessionId, permissionMode),
 
+  // Insights
+  getInsights: () => ipcRenderer.invoke('insights:get'),
+
   // Spotlight
   spotlightSearch: (query: string) => ipcRenderer.invoke('spotlight:search', query),
   spotlightResume: (sessionId: string, cwd?: string) => ipcRenderer.invoke('spotlight:resume', sessionId, cwd),

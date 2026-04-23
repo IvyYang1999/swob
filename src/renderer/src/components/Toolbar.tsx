@@ -1,13 +1,14 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { Search, PanelRight, X, Zap, Settings } from 'lucide-react'
+import { Search, PanelRight, X, Zap, Settings, BarChart3 } from 'lucide-react'
 
 export function Toolbar() {
   const {
     searchQuery, search, clearSearch,
     infoPanelOpen, toggleInfoPanel,
-    settingsOpen, toggleSettings
+    settingsOpen, toggleSettings,
+    insightsOpen, toggleInsights
   } = useStore()
   const t = useT()
   const [inputValue, setInputValue] = useState(searchQuery)
@@ -89,6 +90,13 @@ export function Toolbar() {
         className="flex items-center gap-1 ml-auto"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
+        <button
+          onClick={toggleInsights}
+          className={`p-1.5 rounded hover:bg-hover ${insightsOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}
+          title={t('toolbar.insights')}
+        >
+          <BarChart3 size={14} />
+        </button>
         <button
           onClick={toggleSettings}
           className={`p-1.5 rounded hover:bg-hover ${settingsOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}

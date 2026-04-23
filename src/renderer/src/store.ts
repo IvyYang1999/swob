@@ -128,6 +128,7 @@ interface AppState {
   sshConfig: SshConfig | null
   sshModalOpen: boolean
   settingsOpen: boolean
+  insightsOpen: boolean
   toasts: ToastMessage[]
 
   initialize: () => Promise<void>
@@ -145,6 +146,7 @@ interface AppState {
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
   toggleSettings: () => void
+  toggleInsights: () => void
   savePreferences: (prefs: Record<string, unknown>) => Promise<void>
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
   moveFolder: (folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => Promise<void>
@@ -229,6 +231,7 @@ export const useStore = create<AppState>((set, get) => ({
   theme: effectiveTheme(resolveThemeMode()),
   selectedFolderId: null,
   settingsOpen: false,
+  insightsOpen: false,
   infoPanelOpen: true,
   selectedSessionMdPath: null,
   activeSessionIds: new Set<string>(),
@@ -419,7 +422,8 @@ export const useStore = create<AppState>((set, get) => ({
     get().setThemeMode(next)
   },
 
-  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen })),
+  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, insightsOpen: false })),
+  toggleInsights: () => set((s) => ({ insightsOpen: !s.insightsOpen, settingsOpen: false })),
 
   savePreferences: async (prefs) => {
     const config = get().config

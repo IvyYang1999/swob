@@ -401,18 +401,7 @@ ipcMain.handle('spotlight:search', (_event, query: string) => {
 ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => {
   const session = cachedSessions.find((s) => s.sessionId === sessionId)
   if (!session) return
-  const source = session.source
-  if (source === 'cursor') {
-    // Cursor sessions can't be resumed from CLI — navigate in main window instead
-    spotlightWindow?.hide()
-    if (mainWindow) {
-      mainWindow.show()
-      mainWindow.focus()
-      mainWindow.webContents.send('spotlight:navigate', sessionId)
-    }
-    return
-  }
-  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, cwd, source))
+  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, cwd, session.source))
   spotlightWindow?.hide()
 })
 
@@ -697,6 +686,13 @@ function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: st
     }
     return cmd
   }
+  if (source === 'cursor') {
+    cmd = `cursor agent --resume ${sessionId}`
+    if (cwd && fs.existsSync(cwd)) {
+      return `cd ${JSON.stringify(cwd)} && ${cmd}`
+    }
+    return cmd
+  }
   // Claude Code (default)
   cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --resume ${sessionId}`
@@ -713,6 +709,14 @@ function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: stri
     cmd = `codex fork ${sessionId}`
     if (cwd && fs.existsSync(cwd)) {
       cmd += ` -C ${JSON.stringify(cwd)}`
+    }
+    return cmd
+  }
+  // Cursor 没有 fork 命令，走 resume
+  if (source === 'cursor') {
+    cmd = `cursor agent --resume ${sessionId}`
+    if (cwd && fs.existsSync(cwd)) {
+      return `cd ${JSON.stringify(cwd)} && ${cmd}`
     }
     return cmd
   }
@@ -739,7 +743,6 @@ ipcMain.handle(
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
     const session = cachedSessions.find((s) => s.sessionId === sessionId)
     const source = session?.source
-    if (source === 'cursor') return
     openInTerminal(buildResumeCommand(sessionId, permissionMode, cwd, source))
   }
 )
@@ -748,7 +751,8 @@ ipcMain.handle(
   'terminal:resumeBatch',
   async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
     for (const s of sessionIds) {
-      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, s.cwd))
+      const session = cachedSessions.find((ss) => ss.sessionId === s.sessionId)
+      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, s.cwd, session?.source))
     }
   }
 )
@@ -758,7 +762,6 @@ ipcMain.handle(
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
     const session = cachedSessions.find((s) => s.sessionId === sessionId)
     const source = session?.source
-    if (source === 'cursor') return
     openInTerminal(buildForkCommand(sessionId, permissionMode, cwd, source))
   }
 )

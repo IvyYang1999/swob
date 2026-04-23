@@ -42,6 +42,7 @@ interface SessionSummary {
   libraryDirPath?: string
   libraryMdPath?: string
   isRemote?: boolean
+  remoteHost?: string
 }
 
 interface ParsedMessage {

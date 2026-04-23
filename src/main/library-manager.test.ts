@@ -265,6 +265,15 @@ describe('isRemoteProjectPath', () => {
   it('不以连字符开头返回 false', () => {
     expect(lib.isRemoteProjectPath('/Users/mac/.claude/projects/random')).toBe(false)
   })
+
+  it('【曾经的 bug】本机用户名但只有 -Users-xxx 的短路径也判断为本地', () => {
+    const localUser = require('os').userInfo().username
+    expect(lib.isRemoteProjectPath(`/Users/${localUser}/.claude/projects/-Users-${localUser}`)).toBe(false)
+  })
+
+  it('远程用户名的短路径判断为远程', () => {
+    expect(lib.isRemoteProjectPath('/Users/mac/.claude/projects/-Users-mac')).toBe(true)
+  })
 })
 
 describe('extractRemoteUser', () => {

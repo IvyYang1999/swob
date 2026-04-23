@@ -394,9 +394,12 @@ ipcMain.handle('sessions:loadAll', async () => {
           summary.allFilePaths = [backupPath]
           summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
           summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
-          summary.isRemote = true
-          const remoteUser = meta.projectPath ? extractRemoteUser(meta.projectPath) : null
-          if (remoteUser) summary.remoteHost = `${remoteUser}@remote`
+          const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
+          summary.isRemote = remoteByPath
+          if (remoteByPath) {
+            const remoteUser = meta.projectPath ? extractRemoteUser(meta.projectPath) : null
+            if (remoteUser) summary.remoteHost = `${remoteUser}@remote`
+          }
           if (meta.customTitle) {
             ;(summary as any)._libraryTitle = meta.customTitle
           }

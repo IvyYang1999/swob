@@ -45,7 +45,7 @@ function SessionItem({
     : (config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id])
   const isActive = activeSessionIds.has(session.sessionId || session.id)
   const isCloud = cloudSessionIds.has(session.sessionId || session.id)
-  const isRemote = !!(session as any).isRemote
+  const isRemote = !!session.isRemote
   const branchChildIds = (session as any).branchChildIds as string[] | undefined
   const hasBranchChildren = branchChildIds && branchChildIds.length > 0
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
@@ -107,7 +107,7 @@ function SessionItem({
         <div className="text-sm text-primary truncate flex items-center gap-1.5">
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-active shrink-0" title={t('sidebar.opened_in_terminal')} />}
           {isCloud && <Cloud size={11} className="shrink-0 text-blue-400" title="iCloud 云端文件，未下载到本地" />}
-          {isRemote && !isCloud && <Cloud size={11} className="shrink-0 text-soft-cyan" title={(session as any).remoteHost ? `来自 ${(session as any).remoteHost}` : '来自其他设备'} />}
+          {isRemote && !isCloud && <Cloud size={11} className="shrink-0 text-soft-cyan" title={session.remoteHost ? `来自 ${session.remoteHost}` : '来自其他设备'} />}
           {isIntraBranch && <GitBranch size={12} className="shrink-0 text-soft-purple" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>

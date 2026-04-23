@@ -726,7 +726,7 @@ function SessionBar({
   const [cloudDownloading, setCloudDownloading] = useState(false)
 
   const isCloud = selectedSession ? cloudSessionIds.has(selectedSession.sessionId) : false
-  const isRemote = !!(selectedSession as any)?.isRemote
+  const isRemote = !!selectedSession?.isRemote
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return

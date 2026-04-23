@@ -11,11 +11,19 @@ import * as os from 'os'
 
 // 隔离测试环境：用临时目录作为 Library root
 let tmpRoot: string
+let savedAppConfig: string | null = null
 
 // 动态导入，确保 HOME 修改生效
 let lib: typeof import('./library-manager')
 
+const APP_CONFIG_FILE = path.join(os.homedir(), '.claude-session-manager', 'app-config.json')
+
 beforeEach(async () => {
+  // 备份真实的 app-config，防止测试污染生产配置
+  try {
+    savedAppConfig = fs.existsSync(APP_CONFIG_FILE) ? fs.readFileSync(APP_CONFIG_FILE, 'utf-8') : null
+  } catch { savedAppConfig = null }
+
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-lib-test-'))
   lib = await import('./library-manager')
   lib.initLibrary(tmpRoot)
@@ -41,6 +49,10 @@ beforeEach(async () => {
 
 afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true })
+  // 恢复真实的 app-config，避免测试污染生产环境
+  if (savedAppConfig !== null) {
+    fs.writeFileSync(APP_CONFIG_FILE, savedAppConfig, 'utf-8')
+  }
 })
 
 describe('【曾经的 bug】重命名分支 session 不应该影响母 session', () => {

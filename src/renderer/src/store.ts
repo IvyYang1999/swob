@@ -292,6 +292,15 @@ export const useStore = create<AppState>((set, get) => ({
     window.api.onActiveSessionsChanged((ids) => {
       set({ activeSessionIds: new Set(ids) })
     })
+
+    // Spotlight: navigate to session from spotlight window
+    window.api.onSpotlightNavigate?.((sessionId: string) => {
+      const { sessions, selectSession } = get()
+      const session = sessions.find((s) => s.sessionId === sessionId)
+      if (session) {
+        selectSession(session.filePath, session.allFilePaths, session.id)
+      }
+    })
   },
 
   selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?, branchLeafUuid?) => {

@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen } from 'electron'
 import path from 'path'
 const { join, dirname, basename, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -58,9 +58,11 @@ import {
   findLibraryOnlySessions
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
+import { spotlightSearch } from './spotlight-search'
 import type { SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
+let spotlightWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
 let codexWatcher: chokidar.FSWatcher | null = null
 let cursorWatcher: chokidar.FSWatcher | null = null
@@ -159,6 +161,66 @@ function createWindow(): void {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+function createSpotlightWindow(): void {
+  if (spotlightWindow && !spotlightWindow.isDestroyed()) {
+    spotlightWindow.focus()
+    return
+  }
+
+  const cursor = screen.getCursorScreenPoint()
+  const display = screen.getDisplayNearestPoint(cursor)
+  const { x, y, width } = display.workArea
+  const winWidth = 680
+  const winHeight = 480
+
+  spotlightWindow = new BrowserWindow({
+    width: winWidth,
+    height: winHeight,
+    x: x + Math.round((width - winWidth) / 2),
+    y: y + 120,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: true,
+    show: false,
+    vibrancy: 'under-window',
+    visualEffectState: 'active',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false
+    }
+  })
+
+  spotlightWindow.on('blur', () => {
+    spotlightWindow?.hide()
+  })
+
+  spotlightWindow.on('closed', () => {
+    spotlightWindow = null
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    spotlightWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] + '#spotlight')
+  } else {
+    spotlightWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'spotlight' })
+  }
+
+  spotlightWindow.once('ready-to-show', () => {
+    spotlightWindow?.show()
+  })
+}
+
+function toggleSpotlight(): void {
+  if (spotlightWindow && !spotlightWindow.isDestroyed() && spotlightWindow.isVisible()) {
+    spotlightWindow.hide()
+  } else {
+    createSpotlightWindow()
   }
 }
 
@@ -313,6 +375,47 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
 // --- IPC Handlers ---
 
 ipcMain.handle('sessions:getActive', () => getActiveSessionIds())
+
+// --- Spotlight ---
+
+ipcMain.handle('spotlight:search', (_event, query: string) => {
+  const config = libraryInitialized ? (() => {
+    const tree = scanLibrary()
+    return libraryTreeToConfig(tree)
+  })() : loadConfig()
+
+  const folderMap = new Map<string, string>()
+  for (const folder of config.folders) {
+    for (const sid of folder.sessionIds) {
+      folderMap.set(sid, folder.name)
+    }
+  }
+
+  return spotlightSearch(query, cachedSessions, {
+    sessionMeta: config.sessionMeta || {},
+    folderMap
+  })
+})
+
+ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => {
+  const session = cachedSessions.find((s) => s.sessionId === sessionId)
+  const permissionMode = session?.permissionMode
+  openInTerminal(buildResumeCommand(sessionId, permissionMode, cwd))
+  spotlightWindow?.hide()
+})
+
+ipcMain.handle('spotlight:hide', () => {
+  spotlightWindow?.hide()
+})
+
+ipcMain.handle('spotlight:selectInMain', (_event, sessionId: string) => {
+  spotlightWindow?.hide()
+  if (mainWindow) {
+    mainWindow.show()
+    mainWindow.focus()
+    mainWindow.webContents.send('spotlight:navigate', sessionId)
+  }
+})
 
 // --- iCloud ---
 
@@ -998,6 +1101,10 @@ app.whenReady().then(() => {
   startCursorWatcher()
   startActiveSessionPoller()
   setupAutoUpdater()
+
+  globalShortcut.register('CommandOrControl+Shift+Space', () => {
+    toggleSpotlight()
+  })
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -1008,5 +1115,6 @@ app.on('window-all-closed', () => {
   codexWatcher?.close()
   cursorWatcher?.close()
   if (activePoller) clearInterval(activePoller)
+  globalShortcut.unregisterAll()
   if (process.platform !== 'darwin') app.quit()
 })

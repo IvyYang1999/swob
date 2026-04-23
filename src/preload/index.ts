@@ -82,6 +82,15 @@ const api = {
   sshFork: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:fork', sessionId, permissionMode),
   sshBuildCommand: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:buildCommand', sessionId, permissionMode),
 
+  // Spotlight
+  spotlightSearch: (query: string) => ipcRenderer.invoke('spotlight:search', query),
+  spotlightResume: (sessionId: string, cwd?: string) => ipcRenderer.invoke('spotlight:resume', sessionId, cwd),
+  spotlightHide: () => ipcRenderer.invoke('spotlight:hide'),
+  spotlightSelectInMain: (sessionId: string) => ipcRenderer.invoke('spotlight:selectInMain', sessionId),
+  onSpotlightNavigate: (callback: (sessionId: string) => void) => {
+    ipcRenderer.on('spotlight:navigate', (_event, sessionId) => callback(sessionId))
+  },
+
   // Events from main
   onSessionAdded: (callback: (session: unknown) => void) => {
     ipcRenderer.on('session:added', (_event, session) => callback(session))

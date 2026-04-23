@@ -43,6 +43,7 @@ interface SessionSummary {
   libraryMdPath?: string
   isRemote?: boolean
   remoteHost?: string
+  source?: 'claude-code' | 'codex' | 'cursor'
 }
 
 interface ParsedMessage {

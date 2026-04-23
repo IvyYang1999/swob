@@ -73,6 +73,8 @@ export interface SkillInvocation {
   args?: string
 }
 
+export type SessionSource = 'claude-code' | 'codex' | 'cursor'
+
 export interface SessionSummary {
   id: string
   sessionId: string
@@ -108,6 +110,7 @@ export interface SessionSummary {
   libraryMdPath?: string
   isRemote?: boolean
   remoteHost?: string  // hostname of the device that created this session (e.g. "macbooka.local")
+  source?: SessionSource
 }
 
 export interface FileRef {

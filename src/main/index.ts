@@ -13,6 +13,8 @@ import {
   parseSessionFile,
   buildSessionSummary
 } from './session-loader'
+import { findCodexSessionFiles, buildCodexSessionSummary } from './codex-loader'
+import { findCursorSessionFiles, buildCursorSessionSummary } from './cursor-loader'
 import {
   initLibrary,
   scanLibrary,
@@ -60,6 +62,8 @@ import type { SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
+let codexWatcher: chokidar.FSWatcher | null = null
+let cursorWatcher: chokidar.FSWatcher | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
 
@@ -226,6 +230,57 @@ function startFileWatcher(): void {
   })
 }
 
+function startCodexWatcher(): void {
+  const codexDir = join(process.env.HOME || '', '.codex', 'sessions')
+  if (!fs.existsSync(codexDir)) return
+  codexWatcher = chokidar.watch(join(codexDir, '**/*.jsonl'), {
+    ignoreInitial: true,
+    depth: 4
+  })
+
+  const handleCodexFile = async (filePath: string) => {
+    if (!basename(filePath).startsWith('rollout-')) return
+    try {
+      const summary = await buildCodexSessionSummary(filePath)
+      if (!summary) return
+      if (knownSessionIds.has(summary.id)) {
+        mainWindow?.webContents.send('sessions:refresh')
+      } else {
+        knownSessionIds.add(summary.id)
+        mainWindow?.webContents.send('session:added', summary)
+      }
+    } catch { /* ignore */ }
+  }
+
+  codexWatcher.on('add', handleCodexFile)
+  codexWatcher.on('change', handleCodexFile)
+}
+
+function startCursorWatcher(): void {
+  const cursorDir = join(process.env.HOME || '', '.cursor', 'projects')
+  if (!fs.existsSync(cursorDir)) return
+  cursorWatcher = chokidar.watch(join(cursorDir, '*/agent-transcripts/*/*.jsonl'), {
+    ignoreInitial: true,
+    depth: 4
+  })
+
+  const handleCursorFile = async (filePath: string) => {
+    try {
+      const summary = await buildCursorSessionSummary(filePath)
+      if (!summary) return
+      if (knownSessionIds.has(summary.id)) {
+        mainWindow?.webContents.send('sessions:refresh')
+      } else {
+        knownSessionIds.add(summary.id)
+        mainWindow?.webContents.send('session:added', summary)
+      }
+    } catch { /* ignore */ }
+  }
+
+  cursorWatcher.on('add', handleCursorFile)
+  cursorWatcher.on('change', handleCursorFile)
+}
+
 // --- Library Initialization ---
 
 async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void> {
@@ -360,6 +415,11 @@ ipcMain.handle('sessions:loadAll', async () => {
   // Attach library paths + detect remote sessions
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
+    knownSessionIds.add(s.id)
+
+    // Skip library/remote processing for non-Claude-Code sessions
+    if (s.source === 'codex' || s.source === 'cursor') continue
+
     if (s.projectPath && isRemoteProjectPath(s.projectPath)) {
       s.isRemote = true
       const remoteUser = extractRemoteUser(s.projectPath)
@@ -934,6 +994,8 @@ app.whenReady().then(() => {
 
   createWindow()
   startFileWatcher()
+  startCodexWatcher()
+  startCursorWatcher()
   startActiveSessionPoller()
   setupAutoUpdater()
   app.on('activate', () => {
@@ -943,6 +1005,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   watcher?.close()
+  codexWatcher?.close()
+  cursorWatcher?.close()
   if (activePoller) clearInterval(activePoller)
   if (process.platform !== 'darwin') app.quit()
 })

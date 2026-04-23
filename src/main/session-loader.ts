@@ -12,6 +12,8 @@ import type {
   FileAction,
   TokenUsage
 } from './types'
+import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetail } from './codex-loader'
+import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail } from './cursor-loader'
 
 const CLAUDE_DIR = path.join(process.env.HOME || '', '.claude', 'projects')
 const HOME = process.env.HOME || ''
@@ -369,7 +371,8 @@ export function buildSessionSummary(
       pastedImageCount,
       tokenUsage: totalTokenUsage,
       referencedFiles: [],
-      configFiles: []
+      configFiles: [],
+      source: 'claude-code'
     }
   }
 
@@ -489,7 +492,8 @@ export function buildSessionSummary(
     pastedImageCount,
     tokenUsage: totalTokenUsage,
     referencedFiles: [...referencedFiles],
-    configFiles
+    configFiles,
+    source: 'claude-code'
   }
 }
 
@@ -926,7 +930,9 @@ function clusterFilesForMerge(entries: FileEntry[]): FileEntry[][] {
 
 export async function loadAllSessions(): Promise<SessionSummary[]> {
   const allFiles = findAllSessionFiles()
-  const manifest = computeFileManifest(allFiles)
+  const codexFiles = findCodexSessionFiles()
+  const cursorFiles = findCursorSessionFiles()
+  const manifest = computeFileManifest([...allFiles, ...codexFiles, ...cursorFiles])
 
   // Fast path: return cached summaries if no files changed
   const cache = loadDiskCache()
@@ -1053,6 +1059,22 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
     }
   }
 
+  // --- Load Codex sessions ---
+  await parallelForEach(codexFiles, 4, async (file) => {
+    try {
+      const summary = await buildCodexSessionSummary(file)
+      if (summary) summaries.push(summary)
+    } catch { /* skip */ }
+  })
+
+  // --- Load Cursor sessions ---
+  await parallelForEach(cursorFiles, 4, async (file) => {
+    try {
+      const summary = await buildCursorSessionSummary(file)
+      if (summary) summaries.push(summary)
+    } catch { /* skip */ }
+  })
+
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   saveDiskCache(manifest, summaries)
   return summaries
@@ -1065,6 +1087,14 @@ export async function loadSessionDetail(
   branchPointUuid?: string,
   branchLeafUuid?: string
 ): Promise<SessionDetail | null> {
+  // Dispatch to source-specific loaders
+  if (filePath.includes('/.codex/sessions/') && filePath.includes('rollout-')) {
+    return buildCodexSessionDetail(filePath)
+  }
+  if (filePath.includes('/.cursor/projects/') && filePath.includes('agent-transcripts')) {
+    return buildCursorSessionDetail(filePath)
+  }
+
   let mainRaw: RawJsonlMessage[]
 
   if (allFilePaths && allFilePaths.length > 1) {

@@ -100,6 +100,12 @@ interface SearchResult {
   matches: Array<{ text: string; timestamp: string }>
 }
 
+export interface ToastMessage {
+  id: string
+  text: string
+  type: 'info' | 'success' | 'error'
+}
+
 interface AppState {
   sessions: SessionSummary[]
   selectedSession: SessionDetail | null
@@ -117,6 +123,7 @@ interface AppState {
   activeSessionIds: Set<string>
   cloudSessionIds: Set<string>   // iCloud-only sessions not yet downloaded
   sshConfig: SshConfig | null
+  toasts: ToastMessage[]
 
   initialize: () => Promise<void>
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<void>
@@ -140,6 +147,9 @@ interface AppState {
   addHighlight: (sessionId: string, highlight: Omit<Highlight, 'id' | 'createdAt'>) => Promise<void>
   removeHighlight: (sessionId: string, highlightId: string) => Promise<void>
   downloadSessionMarkdown: () => void
+  // Toast
+  showToast: (text: string, type?: 'info' | 'success' | 'error') => void
+  dismissToast: (id: string) => void
   // iCloud
   refreshCloudSessions: () => Promise<void>
   downloadCloudSession: (sessionId: string) => Promise<void>
@@ -149,7 +159,7 @@ interface AppState {
   sshBuildCommand: (sessionId: string, permissionMode?: string) => Promise<string | null>
 }
 
-export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale }
+export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale, ToastMessage }
 
 // Read localStorage at module load time — before first render, zero flicker
 const LOCAL_CACHE_VERSION = 7 // bump: resumeCwd semantics changed from latest cwd to initial cwd
@@ -199,6 +209,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeSessionIds: new Set<string>(),
   cloudSessionIds: new Set<string>(),
   sshConfig: null,
+  toasts: [],
 
   initialize: async () => {
     const [sessions, config, sshConfig] = await Promise.all([
@@ -427,6 +438,18 @@ export const useStore = create<AppState>((set, get) => ({
     downloadMarkdown(`${filename}.md`, md)
   },
 
+  // Toast
+  showToast: (text, type = 'info') => {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+    set((state) => ({ toasts: [...state.toasts, { id, text, type }] }))
+    setTimeout(() => {
+      set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))
+    }, 3000)
+  },
+  dismissToast: (id) => {
+    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))
+  },
+
   // iCloud
   refreshCloudSessions: async () => {
     const cloudIds: string[] = await (window.api as any).icloudScanCloudSessions?.() ?? []
@@ -434,10 +457,16 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   downloadCloudSession: async (sessionId: string) => {
-    await (window.api as any).icloudDownload?.(sessionId)
-    // After download, re-scan
+    const { showToast } = get()
+    showToast('正在触发 iCloud 下载...', 'info')
+    const ok = await (window.api as any).icloudDownload?.(sessionId)
     const cloudIds: string[] = await (window.api as any).icloudScanCloudSessions?.() ?? []
     set({ cloudSessionIds: new Set(cloudIds) })
+    if (ok) {
+      showToast('已触发下载，iCloud 同步中', 'success')
+    } else {
+      showToast('下载触发失败', 'error')
+    }
   },
 
   // SSH

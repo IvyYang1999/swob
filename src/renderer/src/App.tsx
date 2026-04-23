@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, Component, type ReactNode, type ErrorInfo } from 'react'
-import { useStore } from './store'
+import { useStore, type ToastMessage } from './store'
 import { useT } from './i18n'
 import { Sidebar } from './components/Sidebar'
 import { ChatViewer } from './components/ChatViewer'
@@ -7,6 +7,7 @@ import { InfoPanel } from './components/InfoPanel'
 import { Toolbar } from './components/Toolbar'
 import { SearchResults } from './components/SearchResults'
 import { UpdateBanner } from './components/UpdateBanner'
+import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const t = useT()
@@ -85,6 +86,33 @@ function ResizeHandle({ side, onResize }: { side: 'left' | 'right'; onResize: (d
   )
 }
 
+function ToastContainer() {
+  const toasts = useStore((s) => s.toasts)
+  const dismissToast = useStore((s) => s.dismissToast)
+  if (toasts.length === 0) return null
+  const iconMap = { info: Info, success: CheckCircle, error: AlertCircle }
+  const colorMap = { info: 'text-blue-400', success: 'text-green-400', error: 'text-red-400' }
+  return (
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      {toasts.map((t) => {
+        const Icon = iconMap[t.type]
+        return (
+          <div
+            key={t.id}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface border border-edge shadow-lg text-sm text-primary animate-in slide-in-from-right"
+          >
+            <Icon size={14} className={colorMap[t.type]} />
+            <span>{t.text}</span>
+            <button onClick={() => dismissToast(t.id)} className="ml-2 text-muted hover:text-primary">
+              <X size={12} />
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function App() {
   const { initialize, loading, searchQuery, infoPanelOpen } = useStore()
   const [sidebarWidth, setSidebarWidth] = useState(240)
@@ -132,6 +160,7 @@ export default function App() {
           {searchQuery && <SearchResults />}
         </div>
         <UpdateBanner />
+        <ToastContainer />
       </div>
     </ErrorBoundary>
   )

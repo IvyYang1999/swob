@@ -15,6 +15,16 @@ import React from 'react'
 
 // --- Mock store and i18n before importing component ---
 
+// Mock window.api for SidebarFooter
+;(globalThis as any).window = globalThis.window || {}
+;(window as any).api = {
+  libraryGetConfiguredPath: vi.fn().mockResolvedValue('/Users/test/Documents/Swob'),
+  libraryIsInitialized: vi.fn().mockResolvedValue(false),
+  librarySelectDirectory: vi.fn().mockResolvedValue(null),
+  libraryChangePath: vi.fn().mockResolvedValue(null),
+  showSessionContextMenu: vi.fn().mockResolvedValue(null)
+}
+
 const mockStore = {
   selectedUniqueId: null,
   selectSession: vi.fn(),
@@ -35,12 +45,19 @@ const mockStore = {
   removeSessionFromFolder: vi.fn(),
   renameFolder: vi.fn(),
   setSessionMeta: vi.fn(),
-  refreshCloudSessions: vi.fn()
+  refreshCloudSessions: vi.fn(),
+  showToast: vi.fn(),
+  toasts: [],
+  dismissToast: vi.fn(),
+  createFolder: vi.fn(),
+  moveFolder: vi.fn()
 }
 
-vi.mock('../store', () => ({
-  useStore: () => mockStore
-}))
+vi.mock('../store', () => {
+  const fn = (() => mockStore) as any
+  fn.getState = () => mockStore
+  return { useStore: fn }
+})
 
 vi.mock('../i18n', () => ({
   useT: () => (key: string, params?: Record<string, string | number>) => {

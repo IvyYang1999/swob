@@ -331,10 +331,18 @@ export function Sidebar({ width }: { width: number }) {
     return () => clearInterval(interval)
   }, [refreshCloudSessions])
 
+  const { showToast } = useStore()
+
   async function handleRefreshCloud() {
     setCloudRefreshing(true)
     await refreshCloudSessions()
     setCloudRefreshing(false)
+    const cloudCount = useStore.getState().cloudSessionIds.size
+    if (cloudCount > 0) {
+      showToast(`发现 ${cloudCount} 个 iCloud 云端会话`, 'info')
+    } else {
+      showToast('iCloud 状态已刷新，所有会话均在本地', 'success')
+    }
   }
 
   // --- Native context menu ---
@@ -572,9 +580,53 @@ export function Sidebar({ width }: { width: number }) {
         )}
       </div>
 
-      <div className="p-2 border-t border-edge text-[11px] text-muted">
-        {t('sidebar.stats', { n: sessions.length, size: `${(sessions.reduce((a, s) => a + s.fileSizeBytes, 0) / 1024 / 1024).toFixed(0)}MB` })}
-      </div>
+      <SidebarFooter sessionCount={sessions.length} totalBytes={sessions.reduce((a, s) => a + s.fileSizeBytes, 0)} />
+    </div>
+  )
+}
+
+function SidebarFooter({ sessionCount, totalBytes }: { sessionCount: number; totalBytes: number }) {
+  const t = useT()
+  const { showToast } = useStore()
+  const [libraryPath, setLibraryPath] = useState<string>('')
+
+  useEffect(() => {
+    (window.api as any).libraryGetConfiguredPath?.().then((p: string) => setLibraryPath(p))
+  }, [])
+
+  async function handleChangeLibraryPath() {
+    const selected = await (window.api as any).librarySelectDirectory?.()
+    if (!selected) return
+
+    const isExisting = await (window.api as any).libraryIsInitialized?.(selected)
+    if (isExisting) {
+      showToast(`正在打开已有 Library: ${selected}`, 'info')
+    } else {
+      showToast(`正在创建新 Library: ${selected}`, 'info')
+    }
+
+    const newRoot = await (window.api as any).libraryChangePath?.(selected)
+    if (newRoot) {
+      setLibraryPath(newRoot)
+      showToast('Library 路径已切换', 'success')
+    }
+  }
+
+  const shortPath = libraryPath.replace(/^\/Users\/[^/]+/, '~')
+
+  return (
+    <div className="p-2 border-t border-edge text-[11px] text-muted space-y-1">
+      <div>{t('sidebar.stats', { n: sessionCount, size: `${(totalBytes / 1024 / 1024).toFixed(0)}MB` })}</div>
+      {libraryPath && (
+        <div
+          className="flex items-center gap-1 cursor-pointer hover:text-secondary truncate"
+          onClick={handleChangeLibraryPath}
+          title={`Library: ${libraryPath}\n点击切换存储位置`}
+        >
+          <FolderIcon size={10} className="shrink-0" />
+          <span className="truncate">{shortPath}</span>
+        </div>
+      )}
     </div>
   )
 }

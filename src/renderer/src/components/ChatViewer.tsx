@@ -728,7 +728,7 @@ function SessionBar({
   const [cloudDownloading, setCloudDownloading] = useState(false)
 
   const isCloud = selectedSession ? cloudSessionIds.has(selectedSession.sessionId) : false
-  const isRemote = !!(selectedSession as any)?.isRemote
+  const isRemote = !!(selectedSession as any)?.isRemote || (selectedSession?.filePath?.endsWith('/backup.jsonl') ?? false)
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return
@@ -822,20 +822,25 @@ function SessionBar({
         )}
 
         <button
-          onClick={() => {
+          onClick={async () => {
             const sid = selectedSession.sessionId || selectedSession.id.split(':')[0]
-            const cmd = selectedSession.permissionMode === 'bypassPermissions'
-              ? `claude --dangerously-skip-permissions --resume ${sid}`
-              : `claude --resume ${sid}`
+            let cmd: string
+            if (isRemote && sshConfig) {
+              cmd = await sshBuildCommand(sid, selectedSession.permissionMode) || `ssh ${sshConfig.user}@${sshConfig.host} "claude --resume ${sid}"`
+            } else {
+              cmd = selectedSession.permissionMode === 'bypassPermissions'
+                ? `claude --dangerously-skip-permissions --resume ${sid}`
+                : `claude --resume ${sid}`
+            }
             navigator.clipboard.writeText(cmd)
             setCopiedResumeCmd(true)
             setTimeout(() => setCopiedResumeCmd(false), 1500)
           }}
           className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1"
-          title={t('chat.copy_resume_cmd')}
+          title={isRemote && sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : t('chat.copy_resume_cmd')}
         >
           {copiedResumeCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
-          {copiedResumeCmd ? t('chat.copied') : t('chat.copy_resume_cmd_short')}
+          {copiedResumeCmd ? t('chat.copied') : isRemote ? 'SSH cmd' : t('chat.copy_resume_cmd_short')}
         </button>
         <button
           onClick={async () => {

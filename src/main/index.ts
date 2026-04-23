@@ -288,18 +288,13 @@ ipcMain.handle('ssh:setConfig', (_event, sshConfig: { host: string; user: string
 ipcMain.handle('ssh:resume', (_event, sessionId: string, permissionMode?: string) => {
   const sshConfig = getSshConfig()
   if (!sshConfig) throw new Error('SSH config not set')
-  const cmd = buildSshResumeCommand(sessionId, sshConfig, permissionMode)
-  openInTerminal(`ssh -t ${sshConfig.user}@${sshConfig.host} "${(permissionMode === 'bypassPermissions' ? `claude --dangerously-skip-permissions --resume ${sessionId}` : `claude --resume ${sessionId}`).replace(/"/g, '\\"')}"`)
+  openInTerminal(buildSshResumeCommand(sessionId, sshConfig, permissionMode))
 })
 
 ipcMain.handle('ssh:buildCommand', (_event, sessionId: string, permissionMode?: string) => {
   const sshConfig = getSshConfig()
   if (!sshConfig) return null
-  // Build: ssh -t user@host "claude --resume sessionId"
-  const remoteCmd = permissionMode === 'bypassPermissions'
-    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
-    : `claude --resume ${sessionId}`
-  return `ssh -t ${sshConfig.user}@${sshConfig.host} "${remoteCmd}"`
+  return buildSshResumeCommand(sessionId, sshConfig, permissionMode)
 })
 
 // Load a local image file as data URL, with fallback to ~/.claude/image-cache/

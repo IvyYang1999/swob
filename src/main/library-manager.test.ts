@@ -239,3 +239,23 @@ describe('分支文件夹归属独立于母 session', () => {
     expect(folder!.sessionIds).not.toContain(branchId)
   })
 })
+
+describe('buildSshResumeCommand', () => {
+  it('默认用 login shell 包裹 claude 命令', () => {
+    const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' })
+    expect(cmd).toContain('ssh -t bob@mac.local')
+    expect(cmd).toContain("zsh -l -c 'claude --resume sess-123'")
+  })
+
+  it('bypassPermissions 模式加上 --dangerously-skip-permissions', () => {
+    const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' }, 'bypassPermissions')
+    expect(cmd).toContain('--dangerously-skip-permissions')
+    expect(cmd).toContain('--resume sess-123')
+  })
+
+  it('指定 remotePath 时使用自定义路径', () => {
+    const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob', remotePath: '/opt/bin/claude' })
+    expect(cmd).toContain('/opt/bin/claude')
+    expect(cmd).not.toMatch(/(?<!\/)claude --resume/)
+  })
+})

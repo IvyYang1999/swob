@@ -1159,13 +1159,12 @@ export function buildSshResumeCommand(
   sshConfig: SshConfig,
   permissionMode?: string
 ): string {
-  const claudeCmd = permissionMode === 'bypassPermissions'
-    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
-    : `claude --resume ${sessionId}`
-  const remoteClaude = sshConfig.remotePath ? sshConfig.remotePath : claudeCmd
-  const remoteCmd = sshConfig.remotePath
-    ? `${sshConfig.remotePath} --resume ${sessionId}${permissionMode === 'bypassPermissions' ? ' --dangerously-skip-permissions' : ''}`
-    : claudeCmd
-  return `ssh ${sshConfig.user}@${sshConfig.host} "${remoteCmd.replace(/"/g, '\\"')}"`
+  const claudeBin = sshConfig.remotePath || 'claude'
+  const args = permissionMode === 'bypassPermissions'
+    ? `--dangerously-skip-permissions --resume ${sessionId}`
+    : `--resume ${sessionId}`
+  // Use login shell (-l) so ~/.zprofile / ~/.zshrc are loaded and PATH includes claude
+  const remoteCmd = `zsh -l -c '${claudeBin} ${args}'`
+  return `ssh -t ${sshConfig.user}@${sshConfig.host} "${remoteCmd.replace(/"/g, '\\"')}"`
 }
 

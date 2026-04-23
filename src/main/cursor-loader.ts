@@ -112,7 +112,7 @@ function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: s
       let contentParts: ContentPart[] | undefined
 
       if (typeof content === 'string') {
-        textContent = content
+        textContent = cleanUserText(content)
       } else if (Array.isArray(content)) {
         const hasToolResult = content.some((p) => p.type === 'tool_result' || p.type === 'tool-result')
         if (hasToolResult) {
@@ -127,7 +127,8 @@ function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: s
             return { type: 'text', text: p.text || '' } as ContentPart
           })
         } else {
-          textContent = content.filter((p) => p.type === 'text' && p.text).map((p) => p.text!).join('\n')
+          const rawText = content.filter((p) => p.type === 'text' && p.text).map((p) => p.text!).join('\n')
+          textContent = cleanUserText(rawText)
         }
       }
 
@@ -233,9 +234,13 @@ function extractToolCalls(content: string | ContentPart[] | undefined): ToolCall
 // --- Strip XML wrappers from user queries ---
 
 function cleanUserText(text: string): string {
-  const match = text.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/)
-  if (match) return match[1].trim()
-  return text
+  let result = text
+  // Strip <user_query> wrapper
+  const match = result.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/)
+  if (match) result = match[1].trim()
+  // Strip leading [Image] / [Image #N] references (actual images follow as separate data)
+  result = result.replace(/^\[Image(?:\s*#\d+)?\]\s*/g, '')
+  return result.trim()
 }
 
 // --- Build summary ---

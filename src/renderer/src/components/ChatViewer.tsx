@@ -2,7 +2,7 @@ import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
 import type { ViewMode, ParsedMessage, SessionDetail, Highlight } from '../store'
 import {
-  User, Bot, Terminal, ChevronDown, ChevronRight,
+  User, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
   List, Code2, CheckSquare, Cloud, CloudDownload,
   Search, X, ArrowUp, ArrowDown, Highlighter, Trash2
@@ -26,14 +26,73 @@ function getResumeCwd(session: SessionDetail): string | undefined {
   return (session as SessionDetail & { resumeCwd?: string }).resumeCwd || session.cwds?.[session.cwds.length - 1] || session.cwds?.[0]
 }
 
+// --- Source-specific assistant avatars ---
+
+function ClaudeAvatar() {
+  return (
+    <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#c87040] text-white">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+        <path d="M12 2L12 6M12 18L12 22M2 12L6 12M18 12L22 12M4.93 4.93L7.76 7.76M16.24 16.24L19.07 19.07M19.07 4.93L16.24 7.76M7.76 16.24L4.93 19.07" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"/>
+      </svg>
+    </div>
+  )
+}
+
+function CodexAvatar() {
+  return (
+    <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#19c37d] text-white">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3a3 3 0 110 6 3 3 0 010-6zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z" fill="currentColor"/>
+      </svg>
+    </div>
+  )
+}
+
+function CursorAvatar() {
+  const theme = useStore((s) => s.theme)
+  const isDark = theme === 'dark'
+  return (
+    <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${isDark ? 'bg-[#e0e0e0] text-[#1a1a1a]' : 'bg-[#2d2d2d] text-white'}`}>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+        <path d="M5 3l14 9-6 2-3 7L5 3z" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+      </svg>
+    </div>
+  )
+}
+
+function AssistantAvatar({ source }: { source?: string }) {
+  if (source === 'codex') return <CodexAvatar />
+  if (source === 'cursor') return <CursorAvatar />
+  return <ClaudeAvatar />
+}
+
+function AssistantLabel({ source }: { source?: string }) {
+  if (source === 'codex') return <span className="text-xs font-medium text-secondary">Codex</span>
+  if (source === 'cursor') return <span className="text-xs font-medium text-secondary">Cursor</span>
+  return <span className="text-xs font-medium text-secondary">Claude Code</span>
+}
+
 // --- System tag helpers ---
 
-/** Strip system-injected XML blocks from user message text (keeps [Image: source:] for copy/export) */
+/** Strip system-injected XML blocks and wrappers from user message text */
 function cleanUserText(text: string): string {
-  return text
+  let result = text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '')
     .replace(/<available-deferred-tools>[\s\S]*?<\/available-deferred-tools>\s*/g, '')
-    .trim()
+  // Cursor wraps user input in <user_query>
+  const uqMatch = result.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/)
+  if (uqMatch) result = uqMatch[1]
+  // Strip other Cursor system tags
+  result = result
+    .replace(/<user_info>[\s\S]*?<\/user_info>\s*/g, '')
+    .replace(/<git_status>[\s\S]*?<\/git_status>\s*/g, '')
+    .replace(/<attached_files>[\s\S]*?<\/attached_files>\s*/g, '')
+    .replace(/<agent_transcripts>[\s\S]*?<\/agent_transcripts>\s*/g, '')
+    .replace(/<agent_skills>[\s\S]*?<\/agent_skills>\s*/g, '')
+    .replace(/<rules>[\s\S]*?<\/rules>\s*/g, '')
+  // Strip bare [Image] / [Image #N] prefix (file-path images are handled by splitImagePaths)
+  result = result.replace(/^\[Image(?:\s*#\d+)?\]\s*/g, '')
+  return result.trim()
 }
 
 /** Extract [Image: source: /path] entries and remaining text for visual rendering */
@@ -332,6 +391,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
 }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
+  const sessionSource = useStore((s) => s.selectedSession?.source)
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
   const turnId = turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined
@@ -443,10 +503,10 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                 {aSelected ? '✓' : ''}
               </button>
             )}
-            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#b87a4a] text-white"><Bot size={14} /></div>
+            <AssistantAvatar source={sessionSource} />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs font-medium text-secondary">Assistant</span>
+                <AssistantLabel source={sessionSource} />
                 <span className="text-[11px] text-faint">{formatTime(turn.assistantMsgs[0].timestamp, locale)}</span>
                 <TokenBadge msgs={turn.assistantMsgs} />
                 {hasSidechain && <span className="text-[10px] px-1 py-0.5 rounded bg-hover text-muted">rejected</span>}

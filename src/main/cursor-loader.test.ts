@@ -127,5 +127,30 @@ describe('cursor-loader', () => {
 
       expect(summary!.firstUserMessage).toBe('普通消息不带 XML 包装')
     })
+
+    it('【曾经的 bug】[Image] 前缀应被清理', async () => {
+      const lines = [
+        { role: 'user', message: { content: [{ type: 'text', text: '<user_query>\n[Image]\n帮我看看这个截图\n</user_query>' }] } },
+        { role: 'assistant', message: { content: [{ type: 'text', text: '好的。' }] } }
+      ]
+      const fp = writeTempJsonl(lines)
+      const detail = await buildCursorSessionDetail(fp)
+
+      const userMsg = detail!.messages.find((m) => m.type === 'user')
+      expect(userMsg).toBeDefined()
+      expect(userMsg!.textContent).not.toContain('<user_query>')
+      expect(userMsg!.textContent).not.toMatch(/^\[Image\]/)
+      expect(userMsg!.textContent).toContain('帮我看看这个截图')
+    })
+
+    it('【曾经的 bug】detail 中 <user_query> 也被清理', async () => {
+      const fp = writeTempJsonl(makeCursorLines())
+      const detail = await buildCursorSessionDetail(fp)
+
+      const userMsgs = detail!.messages.filter((m) => m.type === 'user')
+      for (const m of userMsgs) {
+        expect(m.textContent).not.toContain('<user_query>')
+      }
+    })
   })
 })

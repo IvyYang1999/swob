@@ -115,11 +115,14 @@ function SessionItem({
       <div className="flex items-center gap-2 mt-0.5 text-xs text-muted overflow-hidden">
         <Clock size={10} className="shrink-0" /><span className="whitespace-nowrap">{formatDate(session.updatedAt, locale, t)}</span>
         <MessageSquare size={10} className="shrink-0" /><span className="whitespace-nowrap">{t('sidebar.turns', { n: session.turnCount })}</span>
+        {(!session.source || session.source === 'claude-code') && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-orange/15 text-soft-orange font-medium">CC</span>
+        )}
         {session.source === 'codex' && (
-          <span className="px-1 bg-emerald-900/30 text-emerald-400 rounded text-[10px] whitespace-nowrap shrink-0">Codex</span>
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-blue/15 text-soft-blue font-medium">Codex</span>
         )}
         {session.source === 'cursor' && (
-          <span className="px-1 bg-sky-900/30 text-sky-400 rounded text-[10px] whitespace-nowrap shrink-0">Cursor</span>
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-secondary/10 text-secondary font-medium">Cursor</span>
         )}
         {session.compactCount > 0 && (
           <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">compact</span>

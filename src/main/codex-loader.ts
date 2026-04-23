@@ -77,6 +77,20 @@ function extractSessionId(filePath: string, lines: CodexLine[]): string | undefi
   return match?.[1]
 }
 
+const CODEX_SYSTEM_PREFIXES = [
+  '<permissions instructions>',
+  '<environment_context>',
+  'AGENTS.md instructions',
+  '<INSTRUCTIONS>',
+  '<collaboration_mode>',
+  '# Collaboration Mode:'
+]
+
+function isCodexSystemText(text: string): boolean {
+  const trimmed = text.trim()
+  return CODEX_SYSTEM_PREFIXES.some((p) => trimmed.startsWith(p))
+}
+
 // --- Convert Codex lines to unified RawJsonlMessage[] ---
 
 function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMessage[] {
@@ -125,10 +139,11 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
 
       if (rtype === 'message') {
         const role = p.role as string
+        if (role === 'developer') continue
         if (role === 'user') {
           const content = p.content as Array<{ type: string; text: string }> | undefined
           const text = content?.filter((c) => c.type === 'input_text').map((c) => c.text).join('\n') || ''
-          if (text && !text.startsWith('<permissions instructions>') && !text.startsWith('<environment_context>')) {
+          if (text && !isCodexSystemText(text)) {
             messages.push({
               uuid: `codex-${sessionId}-${msgIndex++}`,
               parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,

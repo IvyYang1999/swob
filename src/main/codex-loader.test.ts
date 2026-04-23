@@ -147,5 +147,48 @@ describe('codex-loader', () => {
       expect(toolCallMsg).toBeDefined()
       expect(toolCallMsg!.toolCalls[0].result).toContain('src')
     })
+
+    it('【曾经的 bug】AGENTS.md instructions 等系统消息不作为用户输入', async () => {
+      const lines = [
+        ...makeCodexLines(),
+        {
+          timestamp: '2026-03-27T13:39:00.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'AGENTS.md instructions for /Users/test\n<INSTRUCTIONS>## Skills\nsome instructions</INSTRUCTIONS>' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:39:01.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'System prompt content' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:39:02.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '<environment_context>cwd=/Users/test</environment_context>' }]
+          }
+        }
+      ]
+      const fp = writeTempJsonl(lines)
+      const detail = await buildCodexSessionDetail(fp)
+
+      const userTexts = detail!.messages
+        .filter((m) => m.type === 'user')
+        .map((m) => m.textContent)
+
+      expect(userTexts.some((t) => t.includes('AGENTS.md'))).toBe(false)
+      expect(userTexts.some((t) => t.includes('System prompt'))).toBe(false)
+      expect(userTexts.some((t) => t.includes('<environment_context>'))).toBe(false)
+    })
   })
 })

@@ -718,7 +718,7 @@ function SessionBar({
   searchOpen: boolean
   onToggleSearch: () => void
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshBuildCommand, showToast } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshBuildCommand, showToast, openSshModal } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
@@ -852,7 +852,7 @@ function SessionBar({
               )
               setSshResuming(false)
             } else if (isRemote && !sshConfig) {
-              showToast('此会话来自其他设备，请先配置 SSH 再 Resume', 'error')
+              openSshModal()
             } else {
               resumeSession(
                 selectedSession.sessionId || selectedSession.id,

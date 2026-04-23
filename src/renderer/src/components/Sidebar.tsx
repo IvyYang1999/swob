@@ -4,7 +4,7 @@ import { useT } from '../i18n'
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2, List, FolderTree,
-  Plus, Play, Pencil, GitBranch, Cloud, CloudDownload, Settings, Copy, Terminal, Monitor
+  Plus, Play, Pencil, GitBranch, Cloud, CloudDownload, Settings, Copy, Terminal
 } from 'lucide-react'
 import { SshConfigModal } from './SshConfigModal'
 
@@ -107,7 +107,7 @@ function SessionItem({
         <div className="text-sm text-primary truncate flex items-center gap-1.5">
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-active shrink-0" title={t('sidebar.opened_in_terminal')} />}
           {isCloud && <Cloud size={11} className="shrink-0 text-blue-400" title="iCloud 云端文件，未下载到本地" />}
-          {isRemote && !isCloud && <Monitor size={11} className="shrink-0 text-soft-cyan" title="来自其他设备" />}
+          {isRemote && !isCloud && <Cloud size={11} className="shrink-0 text-soft-cyan" title="来自其他设备（云端同步）" />}
           {isIntraBranch && <GitBranch size={12} className="shrink-0 text-soft-purple" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
@@ -319,7 +319,7 @@ export function Sidebar({ width }: { width: number }) {
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
   const [singleTurnExpanded, setSingleTurnExpanded] = useState(false)
   const [sessionRenameValue, setSessionRenameValue] = useState('')
-  const [showSshConfig, setShowSshConfig] = useState(false)
+  const { sshModalOpen, openSshModal, closeSshModal } = useStore()
   const [cloudRefreshing, setCloudRefreshing] = useState(false)
   const { renameFolder, setSessionMeta } = useStore()
   const t = useT()
@@ -484,7 +484,7 @@ export function Sidebar({ width }: { width: number }) {
             <CloudDownload size={14} className={cloudRefreshing ? 'animate-pulse text-blue-400' : ''} />
           </button>
           <button
-            onClick={() => setShowSshConfig(true)}
+            onClick={() => openSshModal()}
             className={`p-1 hover:bg-hover rounded hover:text-primary ${sshConfig ? 'text-accent' : 'text-secondary'}`}
             title={sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : 'SSH 远程配置'}
           >
@@ -502,7 +502,7 @@ export function Sidebar({ width }: { width: number }) {
         </div>
       </div>
 
-      {showSshConfig && <SshConfigModal onClose={() => setShowSshConfig(false)} />}
+      {sshModalOpen && <SshConfigModal onClose={() => closeSshModal()} />}
 
       {showNewFolder && (
         <div className="p-2 border-b border-edge">

@@ -124,6 +124,7 @@ interface AppState {
   activeSessionIds: Set<string>
   cloudSessionIds: Set<string>   // iCloud-only sessions not yet downloaded
   sshConfig: SshConfig | null
+  sshModalOpen: boolean
   toasts: ToastMessage[]
 
   initialize: () => Promise<void>
@@ -158,6 +159,8 @@ interface AppState {
   setSshConfig: (config: SshConfig | null) => Promise<void>
   sshResumeSession: (sessionId: string, permissionMode?: string) => Promise<void>
   sshBuildCommand: (sessionId: string, permissionMode?: string) => Promise<string | null>
+  openSshModal: () => void
+  closeSshModal: () => void
 }
 
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale, ToastMessage }
@@ -210,6 +213,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeSessionIds: new Set<string>(),
   cloudSessionIds: new Set<string>(),
   sshConfig: null,
+  sshModalOpen: false,
   toasts: [],
 
   initialize: async () => {
@@ -482,5 +486,8 @@ export const useStore = create<AppState>((set, get) => ({
 
   sshBuildCommand: async (sessionId, permissionMode) => {
     return (window.api as any).sshBuildCommand?.(sessionId, permissionMode) ?? null
-  }
+  },
+
+  openSshModal: () => set({ sshModalOpen: true }),
+  closeSshModal: () => set({ sshModalOpen: false })
 }))

@@ -91,12 +91,11 @@ function ToastContainer() {
   const dismissToast = useStore((s) => s.dismissToast)
   if (toasts.length === 0) return null
   const iconMap = { info: Info, success: CheckCircle, error: AlertCircle }
-  const accentMap = {
-    info: 'var(--color-soft-blue)',
-    success: 'var(--color-soft-green)',
-    error: 'var(--color-soft-red)'
+  const styleMap = {
+    info: 'toast-info',
+    success: 'toast-success',
+    error: 'toast-error'
   }
-  const iconColorMap = { info: 'text-soft-blue', success: 'text-soft-green', error: 'text-soft-red' }
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
       {toasts.map((t) => {
@@ -104,13 +103,12 @@ function ToastContainer() {
         return (
           <div
             key={t.id}
-            className="flex items-center gap-2.5 pl-0 pr-3 py-2.5 rounded-lg border border-edge bg-base text-primary text-sm shadow-lg overflow-hidden"
+            className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm shadow-lg ${styleMap[t.type]}`}
             style={{ animation: 'toast-in 0.25s ease-out' }}
           >
-            <div className="w-1 self-stretch rounded-l-lg shrink-0" style={{ background: accentMap[t.type] }} />
-            <Icon size={16} className={`shrink-0 ml-2 ${iconColorMap[t.type]}`} />
+            <Icon size={16} className="shrink-0" />
             <span className="flex-1">{t.text}</span>
-            <button onClick={() => dismissToast(t.id)} className="ml-1 text-muted hover:text-primary shrink-0">
+            <button onClick={() => dismissToast(t.id)} className="ml-1 opacity-50 hover:opacity-100 shrink-0">
               <X size={14} />
             </button>
           </div>

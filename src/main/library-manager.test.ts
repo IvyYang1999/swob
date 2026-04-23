@@ -252,6 +252,31 @@ describe('分支文件夹归属独立于母 session', () => {
   })
 })
 
+describe('isRemoteProjectPath', () => {
+  it('不同用户名判断为远程', () => {
+    expect(lib.isRemoteProjectPath('/Users/mac/.claude/projects/-Users-mac-projects-scsp')).toBe(true)
+  })
+
+  it('本机用户名判断为本地', () => {
+    const localUser = require('os').userInfo().username
+    expect(lib.isRemoteProjectPath(`/Users/${localUser}/.claude/projects/-Users-${localUser}-projects-foo`)).toBe(false)
+  })
+
+  it('不以连字符开头返回 false', () => {
+    expect(lib.isRemoteProjectPath('/Users/mac/.claude/projects/random')).toBe(false)
+  })
+})
+
+describe('extractRemoteUser', () => {
+  it('提取远程用户名', () => {
+    expect(lib.extractRemoteUser('/Users/mac/.claude/projects/-Users-mac-projects-scsp')).toBe('mac')
+  })
+
+  it('无效路径返回 null', () => {
+    expect(lib.extractRemoteUser('/some/random/path')).toBeNull()
+  })
+})
+
 describe('claudeProjectPathToCwd', () => {
   it('把 Claude 项目存储路径转为实际目录', () => {
     expect(lib.claudeProjectPathToCwd('/Users/mac/.claude/projects/-Users-mac-projects-scsp'))

@@ -1155,6 +1155,41 @@ export function setSshConfig(sshConfig: SshConfig | null): void {
  * ssh user@host "cd /path && claude --resume sessionId"
  */
 /**
+ * Check if a session's projectPath belongs to a different user than the current machine.
+ * projectPath format: `/Users/mac/.claude/projects/-Users-mac-projects-scsp`
+ * The dir name `-Users-mac-projects-scsp` encodes the user as the second segment.
+ */
+export function isRemoteProjectPath(projectPath: string): boolean {
+  const localUser = os.userInfo().username
+  const dirName = path.basename(projectPath)
+  if (!dirName.startsWith('-')) return false
+  const segments = dirName.slice(1).split('-')
+  // Typical: ["Users", "mac", "projects", "scsp"] — second segment is username
+  if (segments.length >= 2 && segments[0] === 'Users') {
+    return segments[1] !== localUser
+  }
+  // Linux: ["home", "mac", "projects", ...] — second segment is username
+  if (segments.length >= 2 && segments[0] === 'home') {
+    return segments[1] !== localUser
+  }
+  return false
+}
+
+/**
+ * Extract the hostname hint from a projectPath.
+ * Uses the username from the path; actual hostname comes from .swob-session.json if available.
+ */
+export function extractRemoteUser(projectPath: string): string | null {
+  const dirName = path.basename(projectPath)
+  if (!dirName.startsWith('-')) return null
+  const segments = dirName.slice(1).split('-')
+  if (segments.length >= 2 && (segments[0] === 'Users' || segments[0] === 'home')) {
+    return segments[1]
+  }
+  return null
+}
+
+/**
  * Convert a Claude project storage path like
  *   `/Users/mac/.claude/projects/-Users-mac-projects-scsp`
  * to the actual project directory: `/Users/mac/projects/scsp`

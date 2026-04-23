@@ -106,7 +106,8 @@ export interface SessionSummary {
   configFiles: string[]
   libraryDirPath?: string
   libraryMdPath?: string
-  isRemote?: boolean  // session loaded from Library backup (other device), not local ~/.claude/projects/
+  isRemote?: boolean
+  remoteHost?: string  // hostname of the device that created this session (e.g. "macbooka.local")
 }
 
 export interface FileRef {

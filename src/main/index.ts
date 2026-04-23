@@ -48,6 +48,8 @@ import {
   setSshConfig,
   buildSshResumeCommand,
   getRemoteCwdForSession,
+  isRemoteProjectPath,
+  extractRemoteUser,
   getConfiguredLibraryPath,
   saveAppConfig,
   isLibraryInitialized,
@@ -293,6 +295,14 @@ ipcMain.handle('ssh:resume', (_event, sessionId: string, permissionMode?: string
   openInTerminal(buildSshResumeCommand(sessionId, sshConfig, permissionMode, remoteCwd))
 })
 
+ipcMain.handle('ssh:fork', (_event, sessionId: string, permissionMode?: string) => {
+  const sshConfig = getSshConfig()
+  if (!sshConfig) throw new Error('SSH config not set')
+  const remoteCwd = getRemoteCwdForSession(sessionId)
+  const cmd = buildSshResumeCommand(sessionId, sshConfig, permissionMode, remoteCwd)
+  openInTerminal(cmd.replace('--resume', '--fork-session --resume'))
+})
+
 ipcMain.handle('ssh:buildCommand', (_event, sessionId: string, permissionMode?: string) => {
   const sshConfig = getSshConfig()
   if (!sshConfig) return null
@@ -347,9 +357,14 @@ ipcMain.handle('sessions:loadAll', async () => {
   cachedSessions = sessions
   knownSessionIds.clear()
 
-  // Attach library paths
+  // Attach library paths + detect remote sessions
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
+    if (s.projectPath && isRemoteProjectPath(s.projectPath)) {
+      s.isRemote = true
+      const remoteUser = extractRemoteUser(s.projectPath)
+      if (remoteUser) s.remoteHost = `${remoteUser}@remote`
+    }
     const isBranch = s.id.includes(':intra-')
     const dirPath = getSessionDirPath(s.sessionId)
     if (dirPath) {
@@ -380,6 +395,8 @@ ipcMain.handle('sessions:loadAll', async () => {
           summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
           summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
           summary.isRemote = true
+          const remoteUser = meta.projectPath ? extractRemoteUser(meta.projectPath) : null
+          if (remoteUser) summary.remoteHost = `${remoteUser}@remote`
           if (meta.customTitle) {
             ;(summary as any)._libraryTitle = meta.customTitle
           }

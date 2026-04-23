@@ -158,6 +158,7 @@ interface AppState {
   // SSH
   setSshConfig: (config: SshConfig | null) => Promise<void>
   sshResumeSession: (sessionId: string, permissionMode?: string) => Promise<void>
+  sshForkSession: (sessionId: string, permissionMode?: string) => Promise<void>
   sshBuildCommand: (sessionId: string, permissionMode?: string) => Promise<string | null>
   openSshModal: () => void
   closeSshModal: () => void
@@ -482,6 +483,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   sshResumeSession: async (sessionId, permissionMode) => {
     await (window.api as any).sshResume?.(sessionId, permissionMode)
+  },
+
+  sshForkSession: async (sessionId, permissionMode) => {
+    await (window.api as any).sshFork?.(sessionId, permissionMode)
   },
 
   sshBuildCommand: async (sessionId, permissionMode) => {

@@ -718,17 +718,15 @@ function SessionBar({
   searchOpen: boolean
   onToggleSearch: () => void
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshBuildCommand, showToast, openSshModal } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshForkSession, sshBuildCommand, showToast, openSshModal } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
-  const [copiedForkCmd, setCopiedForkCmd] = useState(false)
-  const [copiedSshCmd, setCopiedSshCmd] = useState(false)
   const [sshResuming, setSshResuming] = useState(false)
   const [cloudDownloading, setCloudDownloading] = useState(false)
 
   const isCloud = selectedSession ? cloudSessionIds.has(selectedSession.sessionId) : false
-  const isRemote = !!(selectedSession as any)?.isRemote || (selectedSession?.filePath?.endsWith('/backup.jsonl') ?? false)
+  const isRemote = !!(selectedSession as any)?.isRemote
 
   const handleCopyMd = useCallback(() => {
     if (!selectedSession) return
@@ -821,6 +819,7 @@ function SessionBar({
           </span>
         )}
 
+        {/* 复制命令 */}
         <button
           onClick={async () => {
             const sid = selectedSession.sessionId || selectedSession.id.split(':')[0]
@@ -840,8 +839,10 @@ function SessionBar({
           title={isRemote && sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : t('chat.copy_resume_cmd')}
         >
           {copiedResumeCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
-          {copiedResumeCmd ? t('chat.copied') : isRemote ? 'SSH cmd' : t('chat.copy_resume_cmd_short')}
+          {copiedResumeCmd ? t('chat.copied') : t('chat.copy_resume_cmd_short')}
         </button>
+
+        {/* Resume / SSH Resume */}
         <button
           onClick={async () => {
             if (isRemote && sshConfig) {
@@ -865,47 +866,44 @@ function SessionBar({
           className={`px-2.5 py-0.5 text-[11px] rounded flex items-center gap-1 ${
             selectedSession.id?.includes(':intra-')
               ? 'bg-hover hover:bg-pressed text-body'
-              : isRemote && sshConfig
+              : isRemote
                 ? 'bg-teal-600/90 hover:bg-teal-500 text-white'
                 : 'bg-soft-green/90 hover:bg-soft-green text-white'
           } disabled:opacity-60`}
           title={
             selectedSession.id?.includes(':intra-') ? t('chat.resume_branch_hint')
             : isRemote && sshConfig ? `SSH Resume (${sshConfig.user}@${sshConfig.host})`
-            : isRemote ? '此会话来自其他设备，需要配置 SSH'
+            : isRemote ? '此会话来自其他设备，点击配置 SSH'
             : undefined
           }
         >
-          {isRemote && sshConfig ? <Terminal size={10} /> : <Play size={10} />}
+          {isRemote ? <Terminal size={10} /> : <Play size={10} />}
           {sshResuming ? '连接中...' : isRemote ? 'SSH Resume' : `Resume${selectedSession.id?.includes(':intra-') ? ` (${t('chat.resume_parent')})` : ''}`}
         </button>
+
+        {/* Fork */}
         <button
-          onClick={() => {
-            const sid = selectedSession.sessionId || selectedSession.id.split(':')[0]
-            const cmd = selectedSession.permissionMode === 'bypassPermissions'
-              ? `claude --dangerously-skip-permissions --fork-session --resume ${sid}`
-              : `claude --fork-session --resume ${sid}`
-            navigator.clipboard.writeText(cmd)
-            setCopiedForkCmd(true)
-            setTimeout(() => setCopiedForkCmd(false), 1500)
+          onClick={async () => {
+            if (isRemote && sshConfig) {
+              await sshForkSession(
+                selectedSession.sessionId || selectedSession.id.split(':')[0],
+                selectedSession.permissionMode
+              )
+            } else if (isRemote && !sshConfig) {
+              openSshModal()
+            } else {
+              forkSession(
+                selectedSession.sessionId || selectedSession.id.split(':')[0],
+                selectedSession.permissionMode,
+                getResumeCwd(selectedSession)
+              )
+            }
           }}
-          className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1"
-          title={t('chat.copy_fork_cmd')}
-        >
-          {copiedForkCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
-          {copiedForkCmd ? t('chat.copied') : 'Fork cmd'}
-        </button>
-        <button
-          onClick={() => forkSession(
-            selectedSession.sessionId || selectedSession.id.split(':')[0],
-            selectedSession.permissionMode,
-            getResumeCwd(selectedSession)
-          )}
           className="px-2.5 py-0.5 text-[11px] rounded bg-purple-600/90 hover:bg-purple-500 text-white flex items-center gap-1"
-          title={t('chat.fork_hint')}
+          title={isRemote ? 'SSH Fork' : t('chat.fork_hint')}
         >
           <GitBranch size={10} />
-          {t('chat.fork')}
+          {isRemote ? 'SSH Fork' : t('chat.fork')}
         </button>
 
         {/* iCloud 云端下载 */}
@@ -924,48 +922,6 @@ function SessionBar({
             {cloudDownloading ? <Cloud size={10} className="animate-pulse" /> : <CloudDownload size={10} />}
             {cloudDownloading ? '下载中...' : 'iCloud 下载'}
           </button>
-        )}
-
-        {/* SSH Resume */}
-        {sshConfig && !isCloud && (
-          <>
-            <button
-              onClick={async () => {
-                if (!selectedSession) return
-                const cmd = await sshBuildCommand(
-                  selectedSession.sessionId || selectedSession.id.split(':')[0],
-                  selectedSession.permissionMode
-                )
-                if (cmd) {
-                  navigator.clipboard.writeText(cmd)
-                  setCopiedSshCmd(true)
-                  setTimeout(() => setCopiedSshCmd(false), 1500)
-                }
-              }}
-              className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1"
-              title={`复制 SSH resume 命令 (${sshConfig.user}@${sshConfig.host})`}
-            >
-              {copiedSshCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
-              {copiedSshCmd ? '已复制' : 'SSH cmd'}
-            </button>
-            <button
-              onClick={async () => {
-                if (!selectedSession || sshResuming) return
-                setSshResuming(true)
-                await sshResumeSession(
-                  selectedSession.sessionId || selectedSession.id.split(':')[0],
-                  selectedSession.permissionMode
-                )
-                setSshResuming(false)
-              }}
-              disabled={sshResuming}
-              className="px-2.5 py-0.5 text-[11px] rounded bg-teal-600/90 hover:bg-teal-500 text-white flex items-center gap-1 disabled:opacity-60"
-              title={`SSH 到 ${sshConfig.user}@${sshConfig.host} 并 Resume`}
-            >
-              <Terminal size={10} />
-              {sshResuming ? '连接中...' : 'SSH Resume'}
-            </button>
-          </>
         )}
       </div>
     </div>

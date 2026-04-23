@@ -303,6 +303,8 @@ export const useStore = create<AppState>((set, get) => ({
         if ((summary as any).branchParentId) d.branchParentId = (summary as any).branchParentId
         if ((summary as any).branchChildIds) d.branchChildIds = (summary as any).branchChildIds
         if ((summary as any).branchLeafUuid) d.branchLeafUuid = (summary as any).branchLeafUuid
+        if (summary.isRemote) d.isRemote = true
+        if (summary.remoteHost) d.remoteHost = summary.remoteHost
       }
     }
     set({ selectedSession: detail as SessionDetail | null, selectedUniqueId: uniqueId || null })

@@ -166,6 +166,7 @@ function createWindow(): void {
 
 function createSpotlightWindow(): void {
   if (spotlightWindow && !spotlightWindow.isDestroyed()) {
+    spotlightWindow.show()
     spotlightWindow.focus()
     return
   }
@@ -184,13 +185,13 @@ function createSpotlightWindow(): void {
     frame: false,
     transparent: true,
     resizable: false,
-    movable: true,
+    movable: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    hasShadow: true,
+    hasShadow: false,
     show: false,
-    vibrancy: 'under-window',
-    visualEffectState: 'active',
+    backgroundColor: '#00000000',
+    roundedCorners: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -399,8 +400,19 @@ ipcMain.handle('spotlight:search', (_event, query: string) => {
 
 ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => {
   const session = cachedSessions.find((s) => s.sessionId === sessionId)
-  const permissionMode = session?.permissionMode
-  openInTerminal(buildResumeCommand(sessionId, permissionMode, cwd))
+  if (!session) return
+  const source = session.source
+  if (source === 'cursor') {
+    // Cursor sessions can't be resumed from CLI — navigate in main window instead
+    spotlightWindow?.hide()
+    if (mainWindow) {
+      mainWindow.show()
+      mainWindow.focus()
+      mainWindow.webContents.send('spotlight:navigate', sessionId)
+    }
+    return
+  }
+  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, cwd, source))
   spotlightWindow?.hide()
 })
 
@@ -676,8 +688,17 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
   return results
 })
 
-function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: string): string {
-  const cmd = permissionMode === 'bypassPermissions'
+function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string): string {
+  let cmd: string
+  if (source === 'codex') {
+    cmd = `codex resume ${sessionId}`
+    if (cwd && fs.existsSync(cwd)) {
+      cmd += ` -C ${JSON.stringify(cwd)}`
+    }
+    return cmd
+  }
+  // Claude Code (default)
+  cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --resume ${sessionId}`
     : `claude --resume ${sessionId}`
   if (cwd && fs.existsSync(cwd)) {
@@ -686,8 +707,17 @@ function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: st
   return cmd
 }
 
-function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: string): string {
-  const cmd = permissionMode === 'bypassPermissions'
+function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string): string {
+  let cmd: string
+  if (source === 'codex') {
+    cmd = `codex fork ${sessionId}`
+    if (cwd && fs.existsSync(cwd)) {
+      cmd += ` -C ${JSON.stringify(cwd)}`
+    }
+    return cmd
+  }
+  // Claude Code (default)
+  cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --fork-session --resume ${sessionId}`
     : `claude --fork-session --resume ${sessionId}`
   if (cwd && fs.existsSync(cwd)) {
@@ -707,7 +737,10 @@ function openInTerminal(command: string): void {
 ipcMain.handle(
   'terminal:resume',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    openInTerminal(buildResumeCommand(sessionId, permissionMode, cwd))
+    const session = cachedSessions.find((s) => s.sessionId === sessionId)
+    const source = session?.source
+    if (source === 'cursor') return
+    openInTerminal(buildResumeCommand(sessionId, permissionMode, cwd, source))
   }
 )
 
@@ -723,7 +756,10 @@ ipcMain.handle(
 ipcMain.handle(
   'terminal:fork',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    openInTerminal(buildForkCommand(sessionId, permissionMode, cwd))
+    const session = cachedSessions.find((s) => s.sessionId === sessionId)
+    const source = session?.source
+    if (source === 'cursor') return
+    openInTerminal(buildForkCommand(sessionId, permissionMode, cwd, source))
   }
 )
 

@@ -121,7 +121,7 @@ export default function SpotlightApp() {
       e.preventDefault()
       const item = results[selectedIndex]
       if (!item) return
-      if (e.metaKey || e.ctrlKey) {
+      if (e.metaKey || e.ctrlKey || item.session.source === 'cursor') {
         handleNavigate(item)
       } else {
         handleResume(item)
@@ -167,7 +167,7 @@ export default function SpotlightApp() {
               className={`px-4 py-2.5 cursor-pointer flex items-start gap-3 transition-colors ${
                 i === selectedIndex ? 'bg-accent/12' : 'hover:bg-surface'
               }`}
-              onClick={() => handleResume(item)}
+              onClick={() => item.session.source === 'cursor' ? handleNavigate(item) : handleResume(item)}
               onMouseEnter={() => setSelectedIndex(i)}
             >
               <img
@@ -214,19 +214,21 @@ export default function SpotlightApp() {
               <div className="flex items-center gap-1 shrink-0 mt-1">
                 {i === selectedIndex && (
                   <>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleResume(item) }}
-                      className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-active/15 text-active hover:bg-active/25 transition-colors"
-                      title="Resume (Enter)"
-                    >
-                      <Play size={10} /> Resume
-                    </button>
+                    {item.session.source !== 'cursor' ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleResume(item) }}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-active/15 text-active hover:bg-active/25 transition-colors"
+                        title="Resume (Enter)"
+                      >
+                        <Play size={10} /> Resume
+                      </button>
+                    ) : null}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleNavigate(item) }}
                       className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] bg-surface text-muted hover:text-secondary transition-colors"
                       title="在 Swob 中查看 (⌘+Enter)"
                     >
-                      <ArrowRight size={10} />
+                      <ArrowRight size={10} /> {item.session.source === 'cursor' ? '查看' : ''}
                     </button>
                   </>
                 )}

@@ -47,6 +47,7 @@ import {
   getSshConfig,
   setSshConfig,
   buildSshResumeCommand,
+  getRemoteCwdForSession,
   getConfiguredLibraryPath,
   saveAppConfig,
   isLibraryInitialized,
@@ -288,13 +289,15 @@ ipcMain.handle('ssh:setConfig', (_event, sshConfig: { host: string; user: string
 ipcMain.handle('ssh:resume', (_event, sessionId: string, permissionMode?: string) => {
   const sshConfig = getSshConfig()
   if (!sshConfig) throw new Error('SSH config not set')
-  openInTerminal(buildSshResumeCommand(sessionId, sshConfig, permissionMode))
+  const remoteCwd = getRemoteCwdForSession(sessionId)
+  openInTerminal(buildSshResumeCommand(sessionId, sshConfig, permissionMode, remoteCwd))
 })
 
 ipcMain.handle('ssh:buildCommand', (_event, sessionId: string, permissionMode?: string) => {
   const sshConfig = getSshConfig()
   if (!sshConfig) return null
-  return buildSshResumeCommand(sessionId, sshConfig, permissionMode)
+  const remoteCwd = getRemoteCwdForSession(sessionId)
+  return buildSshResumeCommand(sessionId, sshConfig, permissionMode, remoteCwd)
 })
 
 // Load a local image file as data URL, with fallback to ~/.claude/image-cache/

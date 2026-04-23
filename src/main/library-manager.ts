@@ -1154,18 +1154,42 @@ export function setSshConfig(sshConfig: SshConfig | null): void {
  * Build SSH resume command for a session.
  * ssh user@host "cd /path && claude --resume sessionId"
  */
+/**
+ * Convert a Claude project storage path like
+ *   `/Users/mac/.claude/projects/-Users-mac-projects-scsp`
+ * to the actual project directory: `/Users/mac/projects/scsp`
+ */
+export function claudeProjectPathToCwd(projectPath: string): string | null {
+  const dirName = path.basename(projectPath)
+  if (!dirName.startsWith('-')) return null
+  return dirName.replace(/^-/, '/').replace(/-/g, '/')
+}
+
+/**
+ * Look up the remote working directory for a session from its Library metadata.
+ */
+export function getRemoteCwdForSession(sessionId: string): string | null {
+  const dirPath = sessionIndex.get(sessionId)
+  if (!dirPath) return null
+  const meta = readSessionMeta(dirPath)
+  if (!meta?.projectPath) return null
+  return claudeProjectPathToCwd(meta.projectPath)
+}
+
 export function buildSshResumeCommand(
   sessionId: string,
   sshConfig: SshConfig,
-  permissionMode?: string
+  permissionMode?: string,
+  remoteCwd?: string | null
 ): string {
   const claudeBin = sshConfig.remotePath || 'claude'
   const args = permissionMode === 'bypassPermissions'
     ? `--dangerously-skip-permissions --resume ${sessionId}`
     : `--resume ${sessionId}`
+  const claudeCmd = `${claudeBin} ${args}`
+  const fullCmd = remoteCwd ? `cd ${remoteCwd} && ${claudeCmd}` : claudeCmd
   // Use interactive login shell (-li) so both ~/.zprofile AND ~/.zshrc are loaded.
-  // claude is often a shell function defined in .zshrc, not a binary on PATH.
-  const remoteCmd = `zsh -li -c '${claudeBin} ${args}'`
+  const remoteCmd = `zsh -li -c '${fullCmd}'`
   return `ssh -t ${sshConfig.user}@${sshConfig.host} "${remoteCmd.replace(/"/g, '\\"')}"`
 }
 

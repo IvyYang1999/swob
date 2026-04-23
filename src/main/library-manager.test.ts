@@ -240,6 +240,22 @@ describe('分支文件夹归属独立于母 session', () => {
   })
 })
 
+describe('claudeProjectPathToCwd', () => {
+  it('把 Claude 项目存储路径转为实际目录', () => {
+    expect(lib.claudeProjectPathToCwd('/Users/mac/.claude/projects/-Users-mac-projects-scsp'))
+      .toBe('/Users/mac/projects/scsp')
+  })
+
+  it('处理更深层嵌套路径', () => {
+    expect(lib.claudeProjectPathToCwd('/home/user/.claude/projects/-home-user-work-my-project'))
+      .toBe('/home/user/work/my/project')
+  })
+
+  it('不以连字符开头的路径返回 null', () => {
+    expect(lib.claudeProjectPathToCwd('/Users/mac/.claude/projects/some-random')).toBeNull()
+  })
+})
+
 describe('buildSshResumeCommand', () => {
   it('默认用 interactive login shell 包裹 claude 命令', () => {
     const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' })
@@ -257,5 +273,15 @@ describe('buildSshResumeCommand', () => {
     const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob', remotePath: '/opt/bin/claude' })
     expect(cmd).toContain('/opt/bin/claude')
     expect(cmd).not.toMatch(/(?<!\/)claude --resume/)
+  })
+
+  it('传入 remoteCwd 时先 cd 到目录', () => {
+    const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' }, undefined, '/Users/mac/projects/scsp')
+    expect(cmd).toContain('cd /Users/mac/projects/scsp && claude --resume sess-123')
+  })
+
+  it('remoteCwd 为 null 时不加 cd', () => {
+    const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' }, undefined, null)
+    expect(cmd).not.toContain('cd ')
   })
 })

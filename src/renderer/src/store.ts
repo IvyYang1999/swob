@@ -127,6 +127,7 @@ interface AppState {
   cloudSessionIds: Set<string>   // iCloud-only sessions not yet downloaded
   sshConfig: SshConfig | null
   sshModalOpen: boolean
+  settingsOpen: boolean
   toasts: ToastMessage[]
 
   initialize: () => Promise<void>
@@ -138,9 +139,13 @@ interface AppState {
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   setViewMode: (mode: ViewMode) => void
   setLocale: (locale: Locale) => void
+  themeMode: 'dark' | 'light' | 'system'
+  setThemeMode: (mode: 'dark' | 'light' | 'system') => void
   toggleTheme: () => void
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
+  toggleSettings: () => void
+  savePreferences: (prefs: Record<string, unknown>) => Promise<void>
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
   moveFolder: (folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => Promise<void>
   deleteFolder: (folderId: string) => Promise<void>
@@ -191,12 +196,23 @@ function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | 
 
 const hydrated = hydrateFromCache()
 
-function resolveTheme(): 'dark' | 'light' {
+function resolveThemeMode(): 'dark' | 'light' | 'system' {
   try {
-    const saved = localStorage.getItem('csm:theme')
-    if (saved === 'dark' || saved === 'light') return saved
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
-  } catch { return 'dark' }
+    const saved = localStorage.getItem('csm:themeMode')
+    if (saved === 'dark' || saved === 'light' || saved === 'system') return saved
+    const legacySaved = localStorage.getItem('csm:theme')
+    if (legacySaved === 'dark' || legacySaved === 'light') return legacySaved
+    return 'system'
+  } catch { return 'system' }
+}
+
+function effectiveTheme(mode: 'dark' | 'light' | 'system'): 'dark' | 'light' {
+  if (mode === 'system') {
+    try {
+      return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+    } catch { return 'dark' }
+  }
+  return mode
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -209,8 +225,10 @@ export const useStore = create<AppState>((set, get) => ({
   loading: hydrated.loading,
   viewMode: hydrated.viewMode,
   locale: hydrated.locale,
-  theme: resolveTheme(),
+  themeMode: resolveThemeMode(),
+  theme: effectiveTheme(resolveThemeMode()),
   selectedFolderId: null,
+  settingsOpen: false,
   infoPanelOpen: true,
   selectedSessionMdPath: null,
   activeSessionIds: new Set<string>(),
@@ -291,6 +309,15 @@ export const useStore = create<AppState>((set, get) => ({
     } catch { /* ignore */ }
     window.api.onActiveSessionsChanged((ids) => {
       set({ activeSessionIds: new Set(ids) })
+    })
+
+    // System theme change listener
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+      if (get().themeMode === 'system') {
+        const resolved = effectiveTheme('system')
+        document.documentElement.setAttribute('data-theme', resolved)
+        set({ theme: resolved })
+      }
     })
 
     // Spotlight: navigate to session from spotlight window
@@ -379,11 +406,27 @@ export const useStore = create<AppState>((set, get) => ({
     } catch { /* ignore */ }
   },
 
+  setThemeMode: (mode) => {
+    const resolved = effectiveTheme(mode)
+    document.documentElement.setAttribute('data-theme', resolved)
+    localStorage.setItem('csm:themeMode', mode)
+    set({ themeMode: mode, theme: resolved })
+  },
+
   toggleTheme: () => {
-    const next = get().theme === 'dark' ? 'light' : 'dark'
-    document.documentElement.setAttribute('data-theme', next)
-    localStorage.setItem('csm:theme', next)
-    set({ theme: next })
+    const currentMode = get().themeMode
+    const next = currentMode === 'dark' ? 'light' : currentMode === 'light' ? 'system' : 'dark'
+    get().setThemeMode(next)
+  },
+
+  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen })),
+
+  savePreferences: async (prefs) => {
+    const config = get().config
+    if (!config) return
+    const updated = { ...config, preferences: { ...config.preferences, ...prefs } }
+    await window.api.saveConfig(updated)
+    set({ config: updated as UserConfig })
   },
 
   selectFolder: (folderId) => set({ selectedFolderId: folderId }),

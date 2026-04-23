@@ -173,7 +173,7 @@ function createSpotlightWindow(): void {
 
   const cursor = screen.getCursorScreenPoint()
   const display = screen.getDisplayNearestPoint(cursor)
-  const { x, y, width } = display.workArea
+  const { x, y, width, height } = display.workArea
   const winWidth = 680
   const winHeight = 480
 
@@ -181,7 +181,7 @@ function createSpotlightWindow(): void {
     width: winWidth,
     height: winHeight,
     x: x + Math.round((width - winWidth) / 2),
-    y: y + 120,
+    y: y + Math.round((height - winHeight) / 2),
     frame: false,
     transparent: true,
     resizable: false,
@@ -223,6 +223,29 @@ function toggleSpotlight(): void {
   } else {
     createSpotlightWindow()
   }
+}
+
+const DEFAULT_SPOTLIGHT_SHORTCUT = 'CommandOrControl+Shift+Space'
+let currentSpotlightShortcut: string | null = null
+
+function registerSpotlightShortcut(shortcut?: string): void {
+  const accelerator = shortcut || DEFAULT_SPOTLIGHT_SHORTCUT
+  if (currentSpotlightShortcut) {
+    globalShortcut.unregister(currentSpotlightShortcut)
+  }
+  const ok = globalShortcut.register(accelerator, toggleSpotlight)
+  currentSpotlightShortcut = ok ? accelerator : null
+}
+
+function getSpotlightShortcut(): string {
+  try {
+    if (libraryInitialized) {
+      const libConfig = loadLibraryConfig()
+      return (libConfig.preferences as any)?.spotlightShortcut || DEFAULT_SPOTLIGHT_SHORTCUT
+    }
+    const cfg = loadConfig()
+    return cfg.preferences?.spotlightShortcut || DEFAULT_SPOTLIGHT_SHORTCUT
+  } catch { return DEFAULT_SPOTLIGHT_SHORTCUT }
 }
 
 function startFileWatcher(): void {
@@ -407,6 +430,10 @@ ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => 
 
 ipcMain.handle('spotlight:hide', () => {
   spotlightWindow?.hide()
+})
+
+ipcMain.handle('spotlight:toggle', () => {
+  toggleSpotlight()
 })
 
 ipcMain.handle('spotlight:selectInMain', (_event, sessionId: string) => {
@@ -778,13 +805,18 @@ ipcMain.handle('config:load', () => {
   return libraryTreeToConfig(tree)
 })
 
-ipcMain.handle('config:save', (_event, config: { preferences: { defaultViewMode: string; terminalApp: string } }) => {
+ipcMain.handle('config:save', (_event, config: { preferences: Record<string, unknown> }) => {
   if (libraryInitialized) {
     const libConfig = loadLibraryConfig()
     libConfig.preferences = config.preferences as any
     saveLibraryConfig(libConfig)
   } else {
     saveConfig(config as any)
+  }
+  // If spotlight shortcut changed, re-register it
+  const shortcut = (config.preferences?.spotlightShortcut as string) || DEFAULT_SPOTLIGHT_SHORTCUT
+  if (shortcut !== currentSpotlightShortcut) {
+    registerSpotlightShortcut(shortcut)
   }
   return config
 })
@@ -1141,9 +1173,7 @@ app.whenReady().then(() => {
   startActiveSessionPoller()
   setupAutoUpdater()
 
-  globalShortcut.register('CommandOrControl+Shift+Space', () => {
-    toggleSpotlight()
-  })
+  registerSpotlightShortcut(getSpotlightShortcut())
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -1154,6 +1184,9 @@ app.on('window-all-closed', () => {
   codexWatcher?.close()
   cursorWatcher?.close()
   if (activePoller) clearInterval(activePoller)
-  globalShortcut.unregisterAll()
-  if (process.platform !== 'darwin') app.quit()
+  // macOS: don't unregister shortcuts — app stays alive and user expects Cmd+Shift+Space to work
+  if (process.platform !== 'darwin') {
+    globalShortcut.unregisterAll()
+    app.quit()
+  }
 })

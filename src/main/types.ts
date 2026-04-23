@@ -149,6 +149,8 @@ export interface SshConfig {
   remotePath?: string   // optional: remote path override for claude executable
 }
 
+export type ThemeMode = 'dark' | 'light' | 'system'
+
 export interface UserConfig {
   folders: Folder[]
   sessionMeta: Record<string, {
@@ -160,6 +162,8 @@ export interface UserConfig {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
     locale?: 'zh-CN' | 'en'
+    themeMode?: ThemeMode
+    spotlightShortcut?: string
     sshConfig?: SshConfig
   }
 }

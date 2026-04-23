@@ -1,14 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { Search, PanelRight, X, Globe, Sun, Moon } from 'lucide-react'
+import { Search, PanelRight, X, Zap, Settings } from 'lucide-react'
 
 export function Toolbar() {
   const {
     searchQuery, search, clearSearch,
     infoPanelOpen, toggleInfoPanel,
-    locale, setLocale,
-    theme, toggleTheme
+    settingsOpen, toggleSettings
   } = useStore()
   const t = useT()
   const [inputValue, setInputValue] = useState(searchQuery)
@@ -72,25 +71,30 @@ export function Toolbar() {
         )}
       </div>
 
-      {/* Right side: language toggle + info panel toggle */}
+      {/* Spotlight jump button */}
+      <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <button
+          onClick={() => (window as any).api?.spotlightToggle?.()}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted hover:text-primary hover:bg-hover transition-colors"
+          title={t('toolbar.spotlight')}
+        >
+          <Zap size={13} />
+          <span className="hidden sm:inline">{t('toolbar.spotlight_label')}</span>
+          <kbd className="text-[10px] text-faint bg-hover/50 border border-edge-strong/50 rounded px-1 py-0.5 font-mono">⌘⇧Space</kbd>
+        </button>
+      </div>
+
+      {/* Right side */}
       <div
         className="flex items-center gap-1 ml-auto"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button
-          onClick={toggleTheme}
-          className="p-1.5 rounded hover:bg-hover text-secondary hover:text-primary"
-          title={t('toolbar.theme')}
+          onClick={toggleSettings}
+          className={`p-1.5 rounded hover:bg-hover ${settingsOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}
+          title={t('toolbar.settings')}
         >
-          {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-        </button>
-        <button
-          onClick={() => setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN')}
-          className="flex items-center gap-1 px-2 py-1 rounded hover:bg-hover text-secondary hover:text-primary text-xs"
-          title={t('toolbar.language')}
-        >
-          <Globe size={14} />
-          <span>{locale === 'zh-CN' ? 'EN' : '中'}</span>
+          <Settings size={14} />
         </button>
         <button
           onClick={toggleInfoPanel}

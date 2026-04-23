@@ -7,6 +7,7 @@ import { InfoPanel } from './components/InfoPanel'
 import { Toolbar } from './components/Toolbar'
 import { SearchResults } from './components/SearchResults'
 import { UpdateBanner } from './components/UpdateBanner'
+import { SettingsPanel } from './components/SettingsPanel'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
@@ -119,7 +120,7 @@ function ToastContainer() {
 }
 
 export default function App() {
-  const { initialize, loading, searchQuery, infoPanelOpen } = useStore()
+  const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen } = useStore()
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [infoPanelWidth, setInfoPanelWidth] = useState(320)
 
@@ -156,12 +157,13 @@ export default function App() {
           <Sidebar width={sidebarWidth} />
           <ResizeHandle side="left" onResize={handleSidebarResize} />
           <ChatViewer />
-          {infoPanelOpen && (
+          {infoPanelOpen && !settingsOpen && (
             <>
               <ResizeHandle side="right" onResize={handleInfoPanelResize} />
               <InfoPanel width={infoPanelWidth} onNavigate={(id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />
             </>
           )}
+          {settingsOpen && <SettingsPanel />}
           {searchQuery && <SearchResults />}
         </div>
         <UpdateBanner />

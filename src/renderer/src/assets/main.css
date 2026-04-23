@@ -91,3 +91,8 @@ body {
   background-color: rgba(34, 197, 94, 0.25);
   color: inherit;
 }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(40px); }
+  to   { opacity: 1; transform: translateX(0); }
+}

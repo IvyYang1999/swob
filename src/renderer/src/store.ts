@@ -41,6 +41,7 @@ interface SessionSummary {
   configFiles?: string[]
   libraryDirPath?: string
   libraryMdPath?: string
+  isRemote?: boolean
 }
 
 interface ParsedMessage {
@@ -444,7 +445,7 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({ toasts: [...state.toasts, { id, text, type }] }))
     setTimeout(() => {
       set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))
-    }, 3000)
+    }, 5000)
   },
   dismissToast: (id) => {
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))

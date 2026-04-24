@@ -3,7 +3,7 @@ import type { HeatmapCell } from './shared'
 import { formatTokenCount } from './shared'
 
 const HEATMAP_LEVELS = [
-  'bg-surface',
+  'bg-edge/60',
   'bg-blue-500/15',
   'bg-blue-500/35',
   'bg-blue-500/65',

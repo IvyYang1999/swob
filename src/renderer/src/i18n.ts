@@ -35,6 +35,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.ssh_save': '保存',
     'settings.ssh_clear': '清除',
     'settings.reset_shortcut': '重置',
+    'settings.project_view': '项目视图',
+    'settings.project_view_folders': '按整理的文件夹',
+    'settings.project_view_paths': '按实际项目路径',
 
     // Sidebar
     'sidebar.sessions': 'Sessions',
@@ -162,6 +165,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.ssh_save': 'Save',
     'settings.ssh_clear': 'Clear',
     'settings.reset_shortcut': 'Reset',
+    'settings.project_view': 'Project View',
+    'settings.project_view_folders': 'By organized folders',
+    'settings.project_view_paths': 'By actual project paths',
 
     // Sidebar
     'sidebar.sessions': 'Sessions',

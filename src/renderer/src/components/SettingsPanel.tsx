@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { X, Sun, Moon, Monitor, Globe, Keyboard, Server } from 'lucide-react'
+import { X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree } from 'lucide-react'
 
 const ELECTRON_MODIFIER_MAP: Record<string, string> = {
   Meta: 'CommandOrControl',
@@ -227,6 +227,29 @@ export function SettingsPanel() {
                 </button>
               )}
             </div>
+          </div>
+        </section>
+
+        {/* Project View */}
+        <section>
+          <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
+            <FolderTree size={12} />
+            {t('settings.project_view')}
+          </label>
+          <div className="flex gap-1">
+            {([['folders', t('settings.project_view_folders')], ['paths', t('settings.project_view_paths')]] as const).map(([mode, label]) => (
+              <button
+                key={mode}
+                onClick={() => savePreferences({ projectViewMode: mode })}
+                className={`flex-1 px-2 py-1.5 rounded-md text-xs transition-colors ${
+                  (config?.preferences?.projectViewMode || 'folders') === mode
+                    ? 'bg-accent/15 text-accent'
+                    : 'bg-surface text-muted hover:text-primary hover:bg-hover'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </section>
       </div>

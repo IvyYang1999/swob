@@ -14,6 +14,7 @@ import type {
 } from './types'
 import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetail } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail } from './cursor-loader'
+import { estimateActiveTime } from './insights'
 
 const CLAUDE_DIR = path.join(process.env.HOME || '', '.claude', 'projects')
 const HOME = process.env.HOME || ''
@@ -389,7 +390,8 @@ export function buildSessionSummary(
       referencedFiles: [],
       configFiles: [],
       source: 'claude-code',
-      allUserMessages
+      allUserMessages,
+      estimatedTime: estimateActiveTime(validMessages)
     }
   }
 
@@ -511,7 +513,8 @@ export function buildSessionSummary(
     referencedFiles: [...referencedFiles],
     configFiles,
     source: 'claude-code',
-    allUserMessages
+    allUserMessages,
+    estimatedTime: estimateActiveTime(validMessages)
   }
 }
 

@@ -808,7 +808,11 @@ ipcMain.handle('insights:get', () => {
       folders = cfg.folders || []
     }
   } catch { /* ignore */ }
-  return buildInsights(sessions, folders)
+  const sessionTimes = new Map<string, number>()
+  for (const s of sessions) {
+    if (s.estimatedTime) sessionTimes.set(s.sessionId, s.estimatedTime)
+  }
+  return buildInsights(sessions, folders, sessionTimes)
 })
 
 // --- Config / Library IPC ---

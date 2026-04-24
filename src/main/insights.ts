@@ -1,4 +1,4 @@
-import type { SessionSummary, Folder, ParsedMessage } from './types'
+import type { SessionSummary, Folder } from './types'
 
 export interface SourceStats {
   source: string
@@ -124,7 +124,7 @@ function emptyDateStats(date: string): DateStats {
 const THIRTY_MINUTES = 30 * 60 * 1000
 
 /** 相邻消息间隔累加，超过 30 分钟无消息截断 */
-export function estimateActiveTime(messages: ParsedMessage[]): number {
+export function estimateActiveTime(messages: { timestamp: string }[]): number {
   if (messages.length < 2) return 0
   const sorted = [...messages].sort((a, b) =>
     new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()

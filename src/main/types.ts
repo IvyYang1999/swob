@@ -166,5 +166,6 @@ export interface UserConfig {
     themeMode?: ThemeMode
     spotlightShortcut?: string
     sshConfig?: SshConfig
+    projectViewMode?: 'folders' | 'paths'
   }
 }

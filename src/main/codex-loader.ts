@@ -257,14 +257,19 @@ export async function buildCodexSessionSummary(filePath: string): Promise<Sessio
   }
   const allUserMessages = allUserTexts.length > 0 ? allUserTexts.join(' ') : undefined
 
-  // Token usage from event_msg/token_count
+  // Token usage: take the LAST token_count event's total_token_usage (it's cumulative)
   const totalTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
+  let lastTokenCount: Record<string, unknown> | null = null
   for (const line of lines) {
     if (line.type === 'event_msg' && (line.payload as any).type === 'token_count') {
-      const p = line.payload as Record<string, unknown>
-      totalTokenUsage.inputTokens += (p.input_tokens as number) || 0
-      totalTokenUsage.outputTokens += (p.output_tokens as number) || 0
+      const info = (line.payload as any).info
+      if (info?.total_token_usage) lastTokenCount = info.total_token_usage
     }
+  }
+  if (lastTokenCount) {
+    totalTokenUsage.inputTokens = (lastTokenCount.input_tokens as number) || 0
+    totalTokenUsage.outputTokens = (lastTokenCount.output_tokens as number) || 0
+    totalTokenUsage.cacheReadTokens = (lastTokenCount.cached_input_tokens as number) || 0
   }
 
   // Tool usage

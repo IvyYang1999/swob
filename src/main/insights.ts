@@ -169,7 +169,9 @@ export function buildInsights(
   for (const session of sessions) {
     const input = session.tokenUsage.inputTokens
     const output = session.tokenUsage.outputTokens
-    const tokens = input + output
+    const cacheCreate = session.tokenUsage.cacheCreationTokens || 0
+    const cacheRead = session.tokenUsage.cacheReadTokens || 0
+    const tokens = input + output + cacheCreate + cacheRead
     totalInputTokens += input
     totalOutputTokens += output
     totalTurns += session.turnCount

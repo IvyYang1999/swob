@@ -54,7 +54,7 @@ function makeCodexLines() {
     {
       timestamp: '2026-03-27T13:38:00.000Z',
       type: 'event_msg',
-      payload: { type: 'token_count', input_tokens: 500, output_tokens: 200, total_tokens: 700 }
+      payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 500, output_tokens: 200, cached_input_tokens: 0, total_tokens: 700 } }, rate_limits: {} }
     },
     {
       timestamp: '2026-03-27T13:38:01.000Z',

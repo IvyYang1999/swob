@@ -197,6 +197,7 @@ function FolderNode({
     e.stopPropagation()
     setDragOverFolderId(null)
     try {
+      if (folder.id.startsWith('path-')) return
       const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
       if (data.type === 'session' && (data.id || data.sessionId)) {
         addSessionToFolder(folder.id, data.id || data.sessionId)
@@ -216,7 +217,7 @@ function FolderNode({
     <div>
       {/* Folder header — zone detection here */}
       <div
-        ref={headerRef} draggable
+        ref={headerRef} draggable={!folder.id.startsWith('path-')}
         onDragStart={(e) => {
           e.dataTransfer.setData('application/x-swob', JSON.stringify({ type: 'folder', id: folder.id }))
           e.dataTransfer.effectAllowed = 'move'
@@ -263,10 +264,14 @@ function FolderNode({
           <button onClick={(e) => { e.stopPropagation(); resumeBatch(folderSessions.map((s) => ({ sessionId: (s as any).sessionId || s.id, permissionMode: (s as any).permissionMode, cwd: getResumeCwd(s) }))) }}
             className="hidden group-hover:block p-0.5 hover:text-soft-green" title={t('sidebar.batch_resume', { n: folderSessions.length })}><Play size={12} /></button>
         )}
-        <button onClick={(e) => { e.stopPropagation(); setCreatingSubfolderId(folder.id); if (!isExpanded) toggleFolder(folder.id) }}
-          className="hidden group-hover:block p-0.5 hover:text-soft-blue" title={t('sidebar.new_subfolder')}><Plus size={12} /></button>
-        <button onClick={(e) => { e.stopPropagation(); if (confirm(t('sidebar.delete_folder', { name: folder.name }))) deleteFolder(folder.id) }}
-          className="hidden group-hover:block p-0.5 hover:text-soft-red"><Trash2 size={12} /></button>
+        {!folder.id.startsWith('path-') && (
+          <button onClick={(e) => { e.stopPropagation(); setCreatingSubfolderId(folder.id); if (!isExpanded) toggleFolder(folder.id) }}
+            className="hidden group-hover:block p-0.5 hover:text-soft-blue" title={t('sidebar.new_subfolder')}><Plus size={12} /></button>
+        )}
+        {!folder.id.startsWith('path-') && (
+          <button onClick={(e) => { e.stopPropagation(); if (confirm(t('sidebar.delete_folder', { name: folder.name }))) deleteFolder(folder.id) }}
+            className="hidden group-hover:block p-0.5 hover:text-soft-red"><Trash2 size={12} /></button>
+        )}
       </div>
 
       {/* Expanded content — drop here = "inside" */}
@@ -460,6 +465,31 @@ export function Sidebar({ width }: { width: number }) {
 
   const rootFolders = useMemo(() => (config?.folders || []).filter((f) => !f.parentId), [config?.folders])
 
+  const projectViewMode = (config?.preferences as any)?.projectViewMode || 'folders'
+
+  // paths 模式: 从 sessions 的 cwd 自动生成虚拟文件夹
+  const pathFolders = useMemo(() => {
+    if (projectViewMode !== 'paths') return []
+    const cwdMap = new Map<string, string[]>() // projectName → sessionIds
+    for (const s of sessions) {
+      const cwd = s.cwds?.[0] || ''
+      const parts = cwd.split('/')
+      const projectName = parts[parts.length - 1] || cwd
+      if (!cwdMap.has(projectName)) cwdMap.set(projectName, [])
+      cwdMap.get(projectName)!.push(s.id)
+    }
+    return Array.from(cwdMap.entries()).map(([name, sessionIds], i) => ({
+      id: `path-${i}`,
+      name,
+      parentId: null as string | null,
+      sessionIds,
+      createdAt: '',
+    }))
+  }, [sessions, projectViewMode])
+
+  const effectiveRootFolders = projectViewMode === 'paths' ? pathFolders : rootFolders
+  const effectiveAllFolders = projectViewMode === 'paths' ? pathFolders : (config?.folders || [])
+
   // --- Auto-scroll during drag ---
   const handleListDragOver = useCallback((e: React.DragEvent) => {
     const el = scrollRef.current
@@ -504,10 +534,12 @@ export function Sidebar({ width }: { width: number }) {
             title={viewMode === 'tree' ? t('sidebar.timeline_view') : t('sidebar.tree_view')}>
             {viewMode === 'tree' ? <List size={14} /> : <FolderTree size={14} />}
           </button>
-          <button onClick={() => setShowNewFolder(true)}
-            className="p-1 hover:bg-hover rounded text-secondary hover:text-primary" title={t('sidebar.new_folder')}>
-            <FolderPlus size={14} />
-          </button>
+          {projectViewMode === 'folders' && (
+            <button onClick={() => setShowNewFolder(true)}
+              className="p-1 hover:bg-hover rounded text-secondary hover:text-primary" title={t('sidebar.new_folder')}>
+              <FolderPlus size={14} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -537,8 +569,8 @@ export function Sidebar({ width }: { width: number }) {
           </>
         ) : (
           <>
-            {rootFolders.map((folder) => (
-              <FolderNode key={folder.id} folder={folder} depth={0} allFolders={config?.folders || []}
+            {effectiveRootFolders.map((folder) => (
+              <FolderNode key={folder.id} folder={folder} depth={0} allFolders={effectiveAllFolders}
                 sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
                 dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
                 setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
@@ -551,7 +583,7 @@ export function Sidebar({ width }: { width: number }) {
                 onSessionRenameCancel={handleCancelRenameSession}
                 onDoubleClickRenameSession={handleDoubleClickRenameSession} />
             ))}
-            {rootFolders.length > 0 && ungroupedSessions.length > 0 && (
+            {effectiveRootFolders.length > 0 && ungroupedSessions.length > 0 && (
               <div className="mx-3 my-2 flex items-center gap-2"
                 onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onDrop={(e) => { e.preventDefault(); e.stopPropagation(); try { const d = JSON.parse(e.dataTransfer.getData('application/x-swob')); if (d.type === 'folder' && d.id) moveFolder(d.id, null) } catch {} }}>

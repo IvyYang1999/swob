@@ -37,8 +37,8 @@ export function StatsCards({ data }: { data: InsightsData }) {
     <div className="grid grid-cols-5 gap-3">
       {cards.map((c) => (
         <div key={c.label} className="bg-surface rounded-lg p-4 border border-edge">
-          <div className="text-lg font-medium text-primary">{c.value}</div>
-          <div className="text-xs text-muted">{c.label}</div>
+          <div className="text-xs text-muted mb-1">{c.label}</div>
+          <div className="text-2xl font-semibold text-primary">{c.value}</div>
           {c.sub && <div className="text-[11px] text-muted mt-0.5">{c.sub}</div>}
         </div>
       ))}

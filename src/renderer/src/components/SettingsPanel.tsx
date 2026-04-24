@@ -91,15 +91,22 @@ export function SettingsPanel() {
   if (!settingsOpen) return null
 
   return (
-    <div className="w-72 border-l border-edge bg-base flex flex-col h-full shrink-0 overflow-y-auto">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={toggleSettings}
+    >
+      <div
+        className="bg-base border border-edge rounded-xl shadow-2xl w-[440px] max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+      <div className="flex items-center justify-between px-5 py-4 border-b border-edge">
         <h2 className="text-sm font-medium text-primary">{t('settings.title')}</h2>
         <button onClick={toggleSettings} className="p-1 rounded hover:bg-hover text-muted hover:text-primary">
           <X size={14} />
         </button>
       </div>
 
-      <div className="p-4 space-y-4">
+      <div className="p-5 space-y-5">
         {/* Theme */}
         <section>
           <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
@@ -252,6 +259,7 @@ export function SettingsPanel() {
             ))}
           </div>
         </section>
+      </div>
       </div>
     </div>
   )

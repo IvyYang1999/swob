@@ -4,10 +4,10 @@ import { formatTokenCount } from './shared'
 
 const HEATMAP_LEVELS = [
   'bg-surface',
-  'bg-soft-green/20',
-  'bg-soft-green/40',
-  'bg-soft-green/60',
-  'bg-soft-green',
+  'bg-blue-500/15',
+  'bg-blue-500/35',
+  'bg-blue-500/65',
+  'bg-blue-500',
 ]
 
 function HeatmapTooltip({ date, value, x, y }: { date: string; value: number; x: number; y: number }) {
@@ -83,17 +83,17 @@ export function TokenHeatmap({ data }: { data: HeatmapCell[] }) {
             <span
               key={i}
               className="text-[10px] text-muted"
-              style={{ position: 'absolute', left: m.col * 12 }}
+              style={{ position: 'absolute', left: m.col * 16 }}
             >
               {m.label}
             </span>
           ))}
         </div>
         <div
-          className="grid gap-[2px]"
+          className="grid gap-[3px]"
           style={{
-            gridTemplateRows: 'repeat(7, 10px)',
-            gridTemplateColumns: `repeat(${colCount}, 10px)`,
+            gridTemplateRows: 'repeat(7, 13px)',
+            gridTemplateColumns: `repeat(${colCount}, 13px)`,
             gridAutoFlow: 'column',
           }}
         >
@@ -101,7 +101,7 @@ export function TokenHeatmap({ data }: { data: HeatmapCell[] }) {
             row.map((cell) => (
               <div
                 key={cell.key}
-                className={`w-[10px] h-[10px] rounded-[2px] ${HEATMAP_LEVELS[cell.level]}`}
+                className={`w-[13px] h-[13px] rounded-[3px] ${HEATMAP_LEVELS[cell.level]}`}
                 onMouseEnter={(e) => handleMouseEnter(e, cell)}
                 onMouseLeave={handleMouseLeave}
               />

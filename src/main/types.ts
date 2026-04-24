@@ -112,6 +112,7 @@ export interface SessionSummary {
   remoteHost?: string  // hostname of the device that created this session (e.g. "macbooka.local")
   source?: SessionSource
   allUserMessages?: string
+  estimatedTime?: number  // 预估活跃时间（毫秒），相邻消息间隔累加，30min 截断
 }
 
 export interface FileRef {

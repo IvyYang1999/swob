@@ -1,4 +1,4 @@
-import type { SessionSummary, Folder } from './types'
+import type { SessionSummary, Folder, ParsedMessage } from './types'
 
 export interface SourceStats {
   source: string
@@ -40,6 +40,8 @@ export interface DateStats {
   turnCount: number
   bySource: Record<string, number>
   byProject: Record<string, number>
+  totalTime: number
+  byProjectTime: Record<string, number>
 }
 
 export interface HeatmapEntry {
@@ -54,6 +56,8 @@ export interface InsightsData {
   totalOutputTokens: number
   totalSessions: number
   totalTurns: number
+  totalTime: number
+  activeDays: number
   bySource: SourceStats[]
   byProject: ProjectStats[]
   byFolder: FolderStats[]
@@ -111,17 +115,39 @@ function emptyDateStats(date: string): DateStats {
     sessionCount: 0,
     turnCount: 0,
     bySource: {},
-    byProject: {}
+    byProject: {},
+    totalTime: 0,
+    byProjectTime: {}
   }
+}
+
+const THIRTY_MINUTES = 30 * 60 * 1000
+
+/** 相邻消息间隔累加，超过 30 分钟无消息截断 */
+export function estimateActiveTime(messages: ParsedMessage[]): number {
+  if (messages.length < 2) return 0
+  const sorted = [...messages].sort((a, b) =>
+    new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  )
+  let total = 0
+  for (let i = 1; i < sorted.length; i++) {
+    const gap = new Date(sorted[i].timestamp).getTime() - new Date(sorted[i - 1].timestamp).getTime()
+    if (gap > 0 && gap < THIRTY_MINUTES) {
+      total += gap
+    }
+  }
+  return total
 }
 
 export function buildInsights(
   sessions: SessionSummary[],
-  folders: Folder[]
+  folders: Folder[],
+  sessionTimes?: Map<string, number>
 ): InsightsData {
   let totalInputTokens = 0
   let totalOutputTokens = 0
   let totalTurns = 0
+  let totalTime = 0
 
   const sourceMap = new Map<string, SourceStats>()
   for (const s of SOURCE_ORDER) {
@@ -205,6 +231,10 @@ export function buildInsights(
     dateStats.turnCount += session.turnCount
     dateStats.bySource[source] = (dateStats.bySource[source] || 0) + tokens
     dateStats.byProject[project] = (dateStats.byProject[project] || 0) + tokens
+    const estTime = sessionTimes?.get(session.sessionId) || session.estimatedTime || 0
+    totalTime += estTime
+    dateStats.totalTime += estTime
+    dateStats.byProjectTime[project] = (dateStats.byProjectTime[project] || 0) + estTime
   }
 
   const folderMap = new Map<string, FolderStats>()
@@ -252,12 +282,16 @@ export function buildInsights(
     return { date, value, level: getHeatmapLevel(value) }
   })
 
+  const activeDays = byDate.filter(d => d.totalTokens > 0).length
+
   return {
     totalTokens: totalInputTokens + totalOutputTokens,
     totalInputTokens,
     totalOutputTokens,
     totalSessions: sessions.length,
     totalTurns,
+    totalTime,
+    activeDays,
     bySource,
     byProject,
     byFolder,

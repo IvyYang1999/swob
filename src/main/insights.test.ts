@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildInsights } from './insights'
+import { buildInsights, estimateActiveTime } from './insights'
 import type { SessionSummary, Folder } from './types'
 
 function makeSession(overrides: Partial<SessionSummary> = {}): SessionSummary {
@@ -330,5 +330,83 @@ describe('buildInsights', () => {
       expect(result.totalTokens).toBe(4500)
       expect(result.totalSessions).toBe(2)
     })
+  })
+})
+
+describe('estimateActiveTime', () => {
+  it('空消息返回 0', () => {
+    expect(estimateActiveTime([])).toBe(0)
+  })
+
+  it('单条消息返回 0', () => {
+    expect(estimateActiveTime([
+      { timestamp: '2025-06-01T10:00:00Z' } as any
+    ])).toBe(0)
+  })
+
+  it('正常消息序列累加间隔', () => {
+    const messages = [
+      { timestamp: '2025-06-01T10:00:00Z' },
+      { timestamp: '2025-06-01T10:05:00Z' },
+      { timestamp: '2025-06-01T10:10:00Z' },
+    ] as any[]
+    expect(estimateActiveTime(messages)).toBe(600_000)
+  })
+
+  it('超过 30 分钟的间隔被截断', () => {
+    const messages = [
+      { timestamp: '2025-06-01T10:00:00Z' },
+      { timestamp: '2025-06-01T10:05:00Z' },
+      { timestamp: '2025-06-01T11:00:00Z' },
+      { timestamp: '2025-06-01T11:05:00Z' },
+    ] as any[]
+    expect(estimateActiveTime(messages)).toBe(600_000)
+  })
+
+  it('无序消息也能正确计算', () => {
+    const messages = [
+      { timestamp: '2025-06-01T10:10:00Z' },
+      { timestamp: '2025-06-01T10:00:00Z' },
+      { timestamp: '2025-06-01T10:05:00Z' },
+    ] as any[]
+    expect(estimateActiveTime(messages)).toBe(600_000)
+  })
+})
+
+describe('buildInsights 时间字段', () => {
+  it('totalTime 和 activeDays 正确计算', () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    const sessions = [
+      makeSession({ sessionId: 's1', updatedAt: `${today}T10:00:00Z` }),
+      makeSession({ sessionId: 's2', updatedAt: `${yesterday}T10:00:00Z` }),
+    ]
+    const sessionTimes = new Map<string, number>()
+    sessionTimes.set('s1', 600_000)
+    sessionTimes.set('s2', 1_800_000)
+    const result = buildInsights(sessions, [], sessionTimes)
+
+    expect(result.totalTime).toBe(2_400_000)
+    expect(result.activeDays).toBe(2)
+  })
+
+  it('byDate 包含 totalTime 和 byProjectTime', () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const sessions = [
+      makeSession({ sessionId: 's1', updatedAt: `${today}T10:00:00Z`, cwds: ['/a/swob'] }),
+    ]
+    const sessionTimes = new Map<string, number>()
+    sessionTimes.set('s1', 600_000)
+    const result = buildInsights(sessions, [], sessionTimes)
+    const todayStats = result.byDate.find(d => d.date === today)!
+
+    expect(todayStats.totalTime).toBe(600_000)
+    expect(todayStats.byProjectTime['swob']).toBe(600_000)
+  })
+
+  it('空 sessions totalTime 为 0, activeDays 为 0', () => {
+    const result = buildInsights([], [])
+    expect(result.totalTime).toBe(0)
+    expect(result.activeDays).toBe(0)
   })
 })

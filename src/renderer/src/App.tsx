@@ -8,7 +8,7 @@ import { Toolbar } from './components/Toolbar'
 import { SearchResults } from './components/SearchResults'
 import { UpdateBanner } from './components/UpdateBanner'
 import { SettingsPanel } from './components/SettingsPanel'
-import { InsightsPage } from './components/InsightsPage'
+import { InsightsPage } from './components/insights/InsightsPage'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {

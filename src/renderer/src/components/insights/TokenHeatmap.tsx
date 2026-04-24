@@ -4,11 +4,13 @@ import { formatTokenCount } from './shared'
 
 const HEATMAP_LEVELS = [
   'bg-edge/60',
-  'bg-blue-500/15',
-  'bg-blue-500/35',
-  'bg-blue-500/65',
+  'bg-blue-500/20',
+  'bg-blue-500/40',
+  'bg-blue-500/70',
   'bg-blue-500',
 ]
+
+const DOW_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
 
 function HeatmapTooltip({ date, value, x, y }: { date: string; value: number; x: number; y: number }) {
   return (
@@ -21,52 +23,66 @@ function HeatmapTooltip({ date, value, x, y }: { date: string; value: number; x:
   )
 }
 
+type GridCell = HeatmapCell & { key: string; pad: boolean }
+
 export function TokenHeatmap({ data }: { data: HeatmapCell[] }) {
   const [tooltip, setTooltip] = useState<{ date: string; value: number; x: number; y: number } | null>(null)
 
-  const grid = useMemo(() => {
+  // Build weeks[][day] structure — each week is a column, each day is a row
+  const weeks = useMemo<GridCell[][]>(() => {
     const map = new Map(data.map((d) => [d.date, d]))
     const today = new Date()
-    const rows: Array<Array<HeatmapCell & { key: string }>> = Array.from({ length: 7 }, () => [])
 
+    // Go back 364 days and snap to the previous Sunday
     const start = new Date(today)
     start.setDate(start.getDate() - 364)
-    const startDow = start.getDay()
-    if (startDow !== 0) {
-      start.setDate(start.getDate() - startDow)
-    }
+    const dow = start.getDay()
+    if (dow !== 0) start.setDate(start.getDate() - dow)
 
+    const result: GridCell[][] = []
+    let week: GridCell[] = []
     const cursor = new Date(start)
+
     while (cursor <= today) {
+      if (cursor.getDay() === 0 && week.length > 0) {
+        result.push(week)
+        week = []
+      }
       const iso = cursor.toISOString().slice(0, 10)
-      const dow = cursor.getDay()
-      const cell = map.get(iso) || { date: iso, value: 0, level: 0 as const }
-      rows[dow].push({ ...cell, key: iso })
+      const cell = map.get(iso) ?? { date: iso, value: 0, level: 0 as const }
+      week.push({ ...cell, key: iso, pad: false })
       cursor.setDate(cursor.getDate() + 1)
     }
+    // Pad last week to 7 days so the grid is rectangular
+    if (week.length > 0) {
+      for (let i = week.length; i < 7; i++) {
+        week.push({ date: '', value: 0, level: 0, key: `pad-${i}`, pad: true })
+      }
+      result.push(week)
+    }
 
-    return rows
+    return result
   }, [data])
 
+  // Month labels: show at the first week of each new month
   const months = useMemo(() => {
-    if (grid[0].length === 0) return []
     const labels: Array<{ label: string; col: number }> = []
     let lastMonth = -1
-    for (let col = 0; col < grid[0].length; col++) {
-      const d = new Date(grid[0][col].key)
-      const m = d.getMonth()
+    for (let col = 0; col < weeks.length; col++) {
+      const sun = weeks[col][0]
+      if (!sun || sun.pad) continue
+      const m = new Date(sun.key).getMonth()
       if (m !== lastMonth) {
-        labels.push({
-          label: d.toLocaleString('default', { month: 'short' }),
-          col,
-        })
+        labels.push({ label: new Date(sun.key).toLocaleString('default', { month: 'short' }), col })
         lastMonth = m
       }
     }
     return labels
-  }, [grid])
+  }, [weeks])
 
-  const colCount = grid[0]?.length || 0
+  const CELL = 13
+  const GAP = 3
+  const STEP = CELL + GAP
 
   const handleMouseEnter = useCallback((e: React.MouseEvent, cell: HeatmapCell) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect()
@@ -76,39 +92,55 @@ export function TokenHeatmap({ data }: { data: HeatmapCell[] }) {
   const handleMouseLeave = useCallback(() => setTooltip(null), [])
 
   return (
-    <div className="space-y-1">
-      <div className="relative" style={{ paddingTop: 16 }}>
-        <div className="flex gap-[2px]" style={{ position: 'absolute', top: 0, left: 0 }}>
-          {months.map((m, i) => (
+    <div className="flex gap-1">
+      {/* Day-of-week labels */}
+      <div className="flex flex-col pt-[20px]" style={{ gap: GAP }}>
+        {DOW_LABELS.map((label, i) => (
+          <div key={i} className="text-[10px] text-muted leading-none flex items-center" style={{ height: CELL }}>
+            {label}
+          </div>
+        ))}
+      </div>
+
+      {/* Grid */}
+      <div className="relative overflow-x-auto">
+        {/* Month labels */}
+        <div className="relative h-5">
+          {months.map((m) => (
             <span
-              key={i}
-              className="text-[10px] text-muted"
-              style={{ position: 'absolute', left: m.col * 16 }}
+              key={m.col}
+              className="absolute text-[10px] text-muted"
+              style={{ left: m.col * STEP }}
             >
               {m.label}
             </span>
           ))}
         </div>
+
+        {/* Cells: render week by week (column by column) */}
         <div
-          className="grid gap-[3px]"
+          className="grid"
           style={{
-            gridTemplateRows: 'repeat(7, 13px)',
-            gridTemplateColumns: `repeat(${colCount}, 13px)`,
+            gridTemplateRows: `repeat(7, ${CELL}px)`,
+            gridTemplateColumns: `repeat(${weeks.length}, ${CELL}px)`,
             gridAutoFlow: 'column',
+            gap: GAP,
           }}
         >
-          {grid.flatMap((row) =>
-            row.map((cell) => (
+          {weeks.flatMap((week) =>
+            week.map((cell) => (
               <div
                 key={cell.key}
-                className={`w-[13px] h-[13px] rounded-[3px] ${HEATMAP_LEVELS[cell.level]}`}
-                onMouseEnter={(e) => handleMouseEnter(e, cell)}
-                onMouseLeave={handleMouseLeave}
+                className={`rounded-[3px] ${cell.pad ? 'invisible' : HEATMAP_LEVELS[cell.level]}`}
+                style={{ width: CELL, height: CELL }}
+                onMouseEnter={!cell.pad && cell.value > 0 ? (e) => handleMouseEnter(e, cell) : undefined}
+                onMouseLeave={!cell.pad ? handleMouseLeave : undefined}
               />
             ))
           )}
         </div>
       </div>
+
       {tooltip && <HeatmapTooltip {...tooltip} />}
     </div>
   )

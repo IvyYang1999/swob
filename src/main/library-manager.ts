@@ -1114,6 +1114,45 @@ export function findLibraryOnlySessions(localSessionIds: Set<string>): Array<{
   return results
 }
 
+export function findLibrarySessionsWithMissingSources(): Array<{
+  sessionId: string
+  backupPath: string
+  meta: SessionMeta
+}> {
+  const results: Array<{ sessionId: string; backupPath: string; meta: SessionMeta }> = []
+
+  function walk(dirPath: string): void {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true })
+    } catch { return }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const fullPath = path.join(dirPath, entry.name)
+      try {
+        if (!fs.statSync(fullPath).isDirectory()) continue
+      } catch { continue }
+
+      if (isSessionDir(fullPath)) {
+        const meta = readSessionMeta(fullPath)
+        if (!meta) continue
+        const hasExistingSource = meta.sourceFilePaths.some((src) => fs.existsSync(src))
+        const backupPath = path.join(fullPath, BACKUP_FILE)
+        if (!hasExistingSource && fs.existsSync(backupPath)) {
+          results.push({ sessionId: meta.sessionId, backupPath, meta })
+          sessionIndex.set(meta.sessionId, fullPath)
+        }
+      } else {
+        walk(fullPath)
+      }
+    }
+  }
+
+  walk(_root)
+  return results
+}
+
 // ============ iCloud Detection ============
 
 /**

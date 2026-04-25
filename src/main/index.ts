@@ -56,10 +56,12 @@ import {
   getConfiguredLibraryPath,
   saveAppConfig,
   isLibraryInitialized,
-  findLibraryOnlySessions
+  findLibraryOnlySessions,
+  findLibrarySessionsWithMissingSources
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
+import { searchSessionFiles } from './session-search'
 import { buildInsights } from './insights'
 import type { SessionSummary } from './types'
 
@@ -664,84 +666,11 @@ ipcMain.handle(
 
 ipcMain.handle('sessions:search', async (_event, query: string) => {
   const files = findAllSessionFiles().filter((f) => !f.includes('/subagents/'))
-  const results: Array<{
-    sessionId: string
-    filePath: string
-    firstUserMessage: string
-    matches: Array<{ text: string; timestamp: string }>
-  }> = []
-
-  for (const file of files) {
-    try {
-      const raw = await parseSessionFile(file)
-      const sessionId = raw[0]?.sessionId
-      if (!sessionId) continue
-
-      const firstUser = raw.find((m) => m.type === 'user')
-      let firstUserMessage = ''
-      if (firstUser?.message) {
-        const content = firstUser.message.content
-        if (typeof content === 'string') firstUserMessage = content.slice(0, 200)
-        else if (Array.isArray(content)) {
-          firstUserMessage = content
-            .filter((p) => p.type === 'text')
-            .map((p) => p.text || '')
-            .join(' ')
-            .slice(0, 200)
-        }
-      }
-
-      const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
-      const matches: Array<{ text: string; timestamp: string }> = []
-
-      for (const msg of raw) {
-        if (msg.type !== 'user' && msg.type !== 'assistant') continue
-        const content = msg.message?.content
-        let text = ''
-        if (typeof content === 'string') text = content
-        else if (Array.isArray(content)) {
-          for (const part of content) {
-            if (part.type === 'text') text += (text ? ' ' : '') + (part.text || '')
-            if (part.type === 'tool_result' && typeof part.content === 'string') text += ' ' + part.content
-            if (part.type === 'tool_use' && part.input) {
-              const inp = part.input as Record<string, unknown>
-              if (inp.command) text += ' ' + String(inp.command)
-              if (inp.file_path) text += ' ' + String(inp.file_path)
-              if (inp.pattern) text += ' ' + String(inp.pattern)
-              if (inp.content) text += ' ' + String(inp.content).slice(0, 500)
-            }
-          }
-        }
-        if (regex.test(text)) {
-          const matchIndex = text.search(regex)
-          const start = Math.max(0, matchIndex - 60)
-          const end = Math.min(text.length, matchIndex + query.length + 60)
-          matches.push({
-            text:
-              (start > 0 ? '...' : '') +
-              text.slice(start, end) +
-              (end < text.length ? '...' : ''),
-            timestamp: msg.timestamp
-          })
-          regex.lastIndex = 0
-        }
-        if (matches.length >= 10) break
-      }
-
-      if (matches.length > 0) {
-        results.push({ sessionId, filePath: file, firstUserMessage, matches })
-      }
-    } catch {
-      /* skip */
-    }
-  }
-  results.sort((a, b) => {
-    if (b.matches.length !== a.matches.length) return b.matches.length - a.matches.length
-    const aTime = new Date(a.matches[0]?.timestamp || 0).getTime()
-    const bTime = new Date(b.matches[0]?.timestamp || 0).getTime()
-    return bTime - aTime
-  })
-  return results
+  const missingSourceLibrarySessions = findLibrarySessionsWithMissingSources()
+  return searchSessionFiles(query, [
+    ...files.map((filePath) => ({ filePath })),
+    ...missingSourceLibrarySessions.map(({ backupPath }) => ({ filePath: backupPath }))
+  ])
 })
 
 function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string): string {

@@ -194,6 +194,27 @@ describe('Library-only sessions（跨设备同步）', () => {
     expect(result.find(r => r.sessionId === 'no-backup-999')).toBeUndefined()
   })
 
+  it('【曾经的 bug】findLibrarySessionsWithMissingSources 不受 cachedSessions 影响', () => {
+    const localSourcePath = path.join(os.homedir(), '.claude', 'projects', `-swob-missing-source-${process.pid}-${Date.now()}`, 'missing-source-999.jsonl')
+    const sessionDir = path.join(tmpRoot, '原始文件缺失但列表已缓存')
+
+    fs.mkdirSync(sessionDir, { recursive: true })
+    fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
+      sessionId: 'missing-source-999',
+      sourceFilePaths: [localSourcePath],
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T01:00:00Z',
+      projectPath: '/Users/test'
+    }))
+    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), '{"uuid":"u1","sessionId":"missing-source-999"}\n')
+
+    lib.scanLibrary()
+
+    expect(lib.findLibraryOnlySessions(new Set(['missing-source-999']))).toHaveLength(0)
+    const missingSourceResults = lib.findLibrarySessionsWithMissingSources()
+    expect(missingSourceResults.some((r) => r.sessionId === 'missing-source-999')).toBe(true)
+  })
+
   it('【曾经的 bug】本机原始 JSONL 丢失时，resume 前应该从 Library backup 恢复', () => {
     const localSourceDir = path.join(os.homedir(), '.claude', 'projects', `-swob-test-${process.pid}-${Date.now()}`)
     const localSourcePath = path.join(localSourceDir, 'lost-local-999.jsonl')

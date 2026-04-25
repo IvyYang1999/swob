@@ -86,6 +86,17 @@ function getProjectFromCwds(cwds: string[]): { project: string; fullPath: string
   return { project, fullPath: cwd }
 }
 
+function normalizeModelName(raw: string): string {
+  // Strip provider prefix: "anthropic/claude-4.6-opus-20260205" → "claude-4.6-opus-20260205"
+  let m = raw.includes('/') ? raw.split('/').pop()! : raw
+  // Strip -thinking suffix: "claude-opus-4-6-thinking" → "claude-opus-4-6"
+  m = m.replace(/-thinking$/, '')
+  // Normalize "claude-4.6-opus-20260205" → "claude-opus-4-6"
+  const dated = m.match(/^claude-(\d+)\.(\d+)-(opus|sonnet|haiku)-\d{8}$/)
+  if (dated) return `claude-${dated[3]}-${dated[1]}-${dated[2]}`
+  return m
+}
+
 function toDateStr(iso: string): string {
   return iso.slice(0, 10)
 }
@@ -208,7 +219,8 @@ export function buildInsights(
     // byModel: split tokens equally across models used in this session
     const sessionModels = session.models?.length ? session.models : ['unknown']
     const tokensPerModel = Math.round(tokens / sessionModels.length)
-    for (const m of sessionModels) {
+    for (const raw of sessionModels) {
+      const m = normalizeModelName(raw)
       let ms = modelMap.get(m)
       if (!ms) { ms = { model: m, totalTokens: 0, sessionCount: 0 }; modelMap.set(m, ms) }
       ms.totalTokens += tokensPerModel

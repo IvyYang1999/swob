@@ -27,6 +27,7 @@ import {
   syncBackup,
   getSessionMdPath,
   getSessionDirPath,
+  restoreBackupToClaudeSource,
   createLibraryFolder,
   renameLibraryFolder,
   deleteLibraryFolder,
@@ -454,6 +455,7 @@ ipcMain.handle('spotlight:search', (_event, query: string) => {
 ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => {
   const session = cachedSessions.find((s) => s.sessionId === sessionId)
   if (!session) return
+  restoreBackupToClaudeSource(sessionId)
   openInTerminal(buildResumeCommand(sessionId, session.permissionMode, cwd, session.source))
   spotlightWindow?.hide()
 })
@@ -808,6 +810,7 @@ ipcMain.handle(
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
     const session = cachedSessions.find((s) => s.sessionId === sessionId)
     const source = session?.source
+    restoreBackupToClaudeSource(sessionId)
     openInTerminal(buildResumeCommand(sessionId, permissionMode, cwd, source))
   }
 )
@@ -817,6 +820,7 @@ ipcMain.handle(
   async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
     for (const s of sessionIds) {
       const session = cachedSessions.find((ss) => ss.sessionId === s.sessionId)
+      restoreBackupToClaudeSource(s.sessionId)
       openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, s.cwd, session?.source))
     }
   }
@@ -827,6 +831,7 @@ ipcMain.handle(
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
     const session = cachedSessions.find((s) => s.sessionId === sessionId)
     const source = session?.source
+    restoreBackupToClaudeSource(sessionId)
     openInTerminal(buildForkCommand(sessionId, permissionMode, cwd, source))
   }
 )

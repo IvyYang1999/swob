@@ -193,6 +193,54 @@ describe('Library-only sessions（跨设备同步）', () => {
     // 应该不包含没有 backup 的 session
     expect(result.find(r => r.sessionId === 'no-backup-999')).toBeUndefined()
   })
+
+  it('【曾经的 bug】本机原始 JSONL 丢失时，resume 前应该从 Library backup 恢复', () => {
+    const localSourceDir = path.join(os.homedir(), '.claude', 'projects', `-swob-test-${process.pid}-${Date.now()}`)
+    const localSourcePath = path.join(localSourceDir, 'lost-local-999.jsonl')
+    const sessionDir = path.join(tmpRoot, '本机丢失的对话')
+    const backupContent = '{"uuid":"u1","sessionId":"lost-local-999","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test","message":{"role":"user","content":"hello"}}\n'
+
+    fs.mkdirSync(sessionDir, { recursive: true })
+    fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
+      sessionId: 'lost-local-999',
+      sourceFilePaths: [localSourcePath],
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T01:00:00Z',
+      projectPath: '/Users/test'
+    }))
+    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
+
+    lib.scanLibrary()
+    const result = lib.restoreBackupToClaudeSource('lost-local-999')
+
+    expect(result.restored).toBe(true)
+    expect(result.sourcePath).toBe(localSourcePath)
+    expect(fs.readFileSync(localSourcePath, 'utf-8')).toBe(backupContent)
+
+    fs.rmSync(localSourceDir, { recursive: true, force: true })
+  })
+
+  it('不会把其他机器路径的 backup 恢复到本机 Claude 目录外', () => {
+    const foreignSourcePath = '/Users/other-machine/.claude/projects/xxx/remote-999.jsonl'
+    const sessionDir = path.join(tmpRoot, '其他机器的对话')
+
+    fs.mkdirSync(sessionDir, { recursive: true })
+    fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
+      sessionId: 'remote-999',
+      sourceFilePaths: [foreignSourcePath],
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T01:00:00Z',
+      projectPath: '/Users/other-machine/projects/xxx'
+    }))
+    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), '{"uuid":"u1","sessionId":"remote-999"}\n')
+
+    lib.scanLibrary()
+    const result = lib.restoreBackupToClaudeSource('remote-999')
+
+    expect(result.restored).toBe(false)
+    expect(result.reason).toBe('source-outside-local-claude-projects')
+    expect(fs.existsSync(foreignSourcePath)).toBe(false)
+  })
 })
 
 describe('分支文件夹归属独立于母 session', () => {

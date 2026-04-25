@@ -185,6 +185,37 @@ export function getSessionMdPath(sessionId: string): string | null {
   return fs.existsSync(mdPath) ? mdPath : null
 }
 
+export function restoreBackupToClaudeSource(sessionId: string): {
+  restored: boolean
+  sourcePath: string | null
+  reason?: string
+} {
+  const dirPath = sessionIndex.get(sessionId)
+  if (!dirPath) return { restored: false, sourcePath: null, reason: 'session-not-in-library' }
+
+  const meta = readSessionMeta(dirPath)
+  if (!meta) return { restored: false, sourcePath: null, reason: 'missing-meta' }
+
+  const existingSource = meta.sourceFilePaths.find((src) => fs.existsSync(src))
+  if (existingSource) return { restored: false, sourcePath: existingSource, reason: 'source-exists' }
+
+  const sourcePath = meta.sourceFilePaths[0]
+  if (!sourcePath) return { restored: false, sourcePath: null, reason: 'missing-source-path' }
+
+  const localClaudeProjects = path.join(os.homedir(), '.claude', 'projects')
+  const relativeSource = path.relative(localClaudeProjects, sourcePath)
+  if (relativeSource.startsWith('..') || path.isAbsolute(relativeSource)) {
+    return { restored: false, sourcePath, reason: 'source-outside-local-claude-projects' }
+  }
+
+  const backupPath = path.join(dirPath, BACKUP_FILE)
+  if (!fs.existsSync(backupPath)) return { restored: false, sourcePath, reason: 'missing-backup' }
+
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+  fs.copyFileSync(backupPath, sourcePath)
+  return { restored: true, sourcePath }
+}
+
 /**
  * Get or generate an independent transcript for a branch session.
  * Branch transcripts are stored alongside the main transcript as `transcript-intra-N.md`.
@@ -1227,4 +1258,3 @@ export function buildSshResumeCommand(
   const remoteCmd = `zsh -li -c '${fullCmd}'`
   return `ssh -t ${sshConfig.user}@${sshConfig.host} "${remoteCmd.replace(/"/g, '\\"')}"`
 }
-

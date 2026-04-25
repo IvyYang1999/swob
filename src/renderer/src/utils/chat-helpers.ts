@@ -19,6 +19,10 @@ export const TOOL_COLORS: Record<string, string> = {
 }
 export const DEFAULT_TOOL_COLOR = 'bg-surface/60 text-secondary border-edge/40'
 
+export function resolveResumeCwd(session: { resumeCwd?: string; cwds?: string[] }): string | undefined {
+  return session.resumeCwd || session.cwds?.[0]
+}
+
 /**
  * 从工具调用的 input 中提取一行预览文本
  * 用于在精简模式下显示工具标签旁边的摘要

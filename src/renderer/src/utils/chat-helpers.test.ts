@@ -3,7 +3,22 @@
  * 从 ChatViewer.tsx 提取出来的纯逻辑函数
  */
 import { describe, it, expect } from 'vitest'
-import { getToolPreview, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_COLOR } from './chat-helpers'
+import { getToolPreview, resolveResumeCwd, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_COLOR } from './chat-helpers'
+
+describe('resolveResumeCwd', () => {
+  it('优先使用解析出的 resumeCwd', () => {
+    expect(resolveResumeCwd({
+      resumeCwd: '/Users/test/project-start',
+      cwds: ['/Users/test/project-later']
+    })).toBe('/Users/test/project-start')
+  })
+
+  it('【曾经的 bug】缺少 resumeCwd 时，不应该 fallback 到最后一个 cwd', () => {
+    expect(resolveResumeCwd({
+      cwds: ['/Users/test/project-start', '/Users/test/project-later']
+    })).toBe('/Users/test/project-start')
+  })
+})
 
 describe('getToolPreview', () => {
   it('Bash 工具显示命令内容', () => {

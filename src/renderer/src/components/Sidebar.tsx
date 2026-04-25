@@ -7,10 +7,7 @@ import {
   Plus, Play, Pencil, GitBranch, Cloud, CloudDownload, Settings, Copy, Terminal
 } from 'lucide-react'
 import { SshConfigModal } from './SshConfigModal'
-
-function getResumeCwd(session: SessionSummary): string | undefined {
-  return (session as SessionSummary & { resumeCwd?: string }).resumeCwd || session.cwds?.[session.cwds.length - 1] || session.cwds?.[0]
-}
+import { resolveResumeCwd } from '../utils/chat-helpers'
 
 function formatDate(iso: string, locale: string, t: (key: string, params?: Record<string, string | number>) => string): string {
   const d = new Date(iso)
@@ -261,7 +258,7 @@ function FolderNode({
           <span className="truncate flex-1">{folder.name}<span className="text-faint ml-1">({totalCount})</span></span>
         )}
         {folderSessions.length > 0 && (
-          <button onClick={(e) => { e.stopPropagation(); resumeBatch(folderSessions.map((s) => ({ sessionId: (s as any).sessionId || s.id, permissionMode: (s as any).permissionMode, cwd: getResumeCwd(s) }))) }}
+          <button onClick={(e) => { e.stopPropagation(); resumeBatch(folderSessions.map((s) => ({ sessionId: (s as any).sessionId || s.id, permissionMode: (s as any).permissionMode, cwd: resolveResumeCwd(s) }))) }}
             className="hidden group-hover:block p-0.5 hover:text-soft-green" title={t('sidebar.batch_resume', { n: folderSessions.length })}><Play size={12} /></button>
         )}
         {!folder.id.startsWith('path-') && (

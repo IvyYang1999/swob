@@ -456,7 +456,7 @@ ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => 
   const session = cachedSessions.find((s) => s.sessionId === sessionId)
   if (!session) return
   restoreBackupToClaudeSource(sessionId)
-  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, cwd, session.source))
+  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, session.resumeCwd || cwd, session.source))
   spotlightWindow?.hide()
 })
 
@@ -811,7 +811,7 @@ ipcMain.handle(
     const session = cachedSessions.find((s) => s.sessionId === sessionId)
     const source = session?.source
     restoreBackupToClaudeSource(sessionId)
-    openInTerminal(buildResumeCommand(sessionId, permissionMode, cwd, source))
+    openInTerminal(buildResumeCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source))
   }
 )
 
@@ -821,7 +821,7 @@ ipcMain.handle(
     for (const s of sessionIds) {
       const session = cachedSessions.find((ss) => ss.sessionId === s.sessionId)
       restoreBackupToClaudeSource(s.sessionId)
-      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, s.cwd, session?.source))
+      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, session?.resumeCwd || s.cwd, session?.source))
     }
   }
 )
@@ -832,7 +832,7 @@ ipcMain.handle(
     const session = cachedSessions.find((s) => s.sessionId === sessionId)
     const source = session?.source
     restoreBackupToClaudeSource(sessionId)
-    openInTerminal(buildForkCommand(sessionId, permissionMode, cwd, source))
+    openInTerminal(buildForkCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source))
   }
 )
 

@@ -20,11 +20,7 @@ import {
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
 
-import { formatTime, getToolPreview, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_COLOR } from '../utils/chat-helpers'
-
-function getResumeCwd(session: SessionDetail): string | undefined {
-  return (session as SessionDetail & { resumeCwd?: string }).resumeCwd || session.cwds?.[session.cwds.length - 1] || session.cwds?.[0]
-}
+import { formatTime, getToolPreview, resolveResumeCwd, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_COLOR } from '../utils/chat-helpers'
 
 // --- Source-specific assistant avatars (using official brand icons) ---
 
@@ -889,7 +885,7 @@ function SessionBar({
               resumeSession(
                 selectedSession.sessionId || selectedSession.id,
                 selectedSession.permissionMode,
-                getResumeCwd(selectedSession)
+                resolveResumeCwd(selectedSession)
               )
             }
           }}

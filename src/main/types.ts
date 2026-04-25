@@ -20,6 +20,7 @@ export interface RawJsonlMessage {
   permissionMode?: string
   message?: {
     role: string
+    model?: string
     content: string | ContentPart[]
     usage?: {
       input_tokens?: number
@@ -113,6 +114,7 @@ export interface SessionSummary {
   source?: SessionSource
   allUserMessages?: string
   estimatedTime?: number  // 预估活跃时间（毫秒），相邻消息间隔累加，30min 截断
+  models?: string[]  // 该 session 使用的模型列表（去重）
 }
 
 export interface FileRef {

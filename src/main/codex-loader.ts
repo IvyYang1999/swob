@@ -309,7 +309,8 @@ export async function buildCodexSessionSummary(filePath: string): Promise<Sessio
     referencedFiles: [],
     configFiles: [],
     source: 'codex',
-    allUserMessages
+    allUserMessages,
+    models: model?.model ? [model.model as string] : []
   }
 }
 

@@ -50,6 +50,12 @@ export interface HeatmapEntry {
   level: 0 | 1 | 2 | 3 | 4
 }
 
+export interface ModelStats {
+  model: string
+  totalTokens: number
+  sessionCount: number
+}
+
 export interface InsightsData {
   totalTokens: number
   totalInputTokens: number
@@ -59,6 +65,7 @@ export interface InsightsData {
   totalTime: number
   activeDays: number
   bySource: SourceStats[]
+  byModel: ModelStats[]
   byProject: ProjectStats[]
   byFolder: FolderStats[]
   byDate: DateStats[]
@@ -162,6 +169,8 @@ export function buildInsights(
     })
   }
 
+  const modelMap = new Map<string, ModelStats>()
+
   const projectMap = new Map<string, ProjectStats>()
   const dateMap = new Map<string, DateStats>()
   const folderSessionSet = new Map<string, Set<string>>()
@@ -195,6 +204,16 @@ export function buildInsights(
     srcStats.outputTokens += output
     srcStats.sessionCount += 1
     srcStats.turnCount += session.turnCount
+
+    // byModel: split tokens equally across models used in this session
+    const sessionModels = session.models?.length ? session.models : ['unknown']
+    const tokensPerModel = Math.round(tokens / sessionModels.length)
+    for (const m of sessionModels) {
+      let ms = modelMap.get(m)
+      if (!ms) { ms = { model: m, totalTokens: 0, sessionCount: 0 }; modelMap.set(m, ms) }
+      ms.totalTokens += tokensPerModel
+      ms.sessionCount += 1
+    }
 
     const { project, fullPath } = getProjectFromCwds(session.cwds)
     let projStats = projectMap.get(fullPath)
@@ -275,6 +294,9 @@ export function buildInsights(
 
   const byProject = Array.from(projectMap.values()).sort((a, b) => b.totalTokens - a.totalTokens)
   const byFolder = Array.from(folderMap.values()).sort((a, b) => b.totalTokens - a.totalTokens)
+  const byModel = Array.from(modelMap.values())
+    .filter(m => m.model !== 'unknown')
+    .sort((a, b) => b.totalTokens - a.totalTokens)
 
   const last365 = getLast365Days()
   const byDate = last365.map(date => dateMap.get(date) || emptyDateStats(date))
@@ -287,7 +309,7 @@ export function buildInsights(
   const activeDays = byDate.filter(d => d.totalTokens > 0).length
 
   return {
-    totalTokens: totalInputTokens + totalOutputTokens,
+    totalTokens: Array.from(sourceMap.values()).reduce((s, m) => s + m.totalTokens, 0),
     totalInputTokens,
     totalOutputTokens,
     totalSessions: sessions.length,
@@ -295,6 +317,7 @@ export function buildInsights(
     totalTime,
     activeDays,
     bySource,
+    byModel,
     byProject,
     byFolder,
     byDate,

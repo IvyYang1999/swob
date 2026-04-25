@@ -70,7 +70,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 12 // resumeCwd should use initial session cwd
+const CACHE_VERSION = 13 // add models field to SessionSummary
 
 interface DiskCache {
   version: number
@@ -391,7 +391,8 @@ export function buildSessionSummary(
       configFiles: [],
       source: 'claude-code',
       allUserMessages,
-      estimatedTime: estimateActiveTime(validMessages)
+      estimatedTime: estimateActiveTime(validMessages),
+      models: [...new Set(rawMessages.map(m => m.message?.model).filter(Boolean) as string[])]
     }
   }
 
@@ -514,7 +515,8 @@ export function buildSessionSummary(
     configFiles,
     source: 'claude-code',
     allUserMessages,
-    estimatedTime: estimateActiveTime(validMessages)
+    estimatedTime: estimateActiveTime(validMessages),
+    models: [...new Set(rawMessages.map(m => m.message?.model).filter(Boolean) as string[])]
   }
 }
 

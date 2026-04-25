@@ -24,6 +24,12 @@ export const PROJECT_COLORS = [
   '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
 ]
 
+export interface ByModel {
+  model: string
+  totalTokens: number
+  sessionCount: number
+}
+
 export interface InsightsData {
   totalTokens: number
   totalInputTokens: number
@@ -33,6 +39,7 @@ export interface InsightsData {
   totalTime: number
   activeDays: number
   bySource: BySource[]
+  byModel: ByModel[]
   byProject: ByProject[]
   byFolder: ByFolder[]
   byDate: ByDate[]

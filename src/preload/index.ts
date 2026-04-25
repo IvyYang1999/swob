@@ -109,6 +109,10 @@ const api = {
     ipcRenderer.on('sessions:activeChanged', (_event, ids) => callback(ids))
   },
 
+  // CLI
+  cliGetStatus: () => ipcRenderer.invoke('cli:getStatus'),
+  cliInstall: () => ipcRenderer.invoke('cli:install'),
+
   // Auto Update
   onUpdateDownloading: (callback: (version: string) => void) => {
     ipcRenderer.on('update:downloading', (_event, version) => callback(version))

@@ -50,6 +50,10 @@ interface ElectronAPI {
   onSessionUpdated: (callback: (session: any) => void) => void
   onSessionsRefresh: (callback: () => void) => void
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => void
+
+  // CLI
+  cliGetStatus: () => Promise<{ cliInstalled: boolean; symlinkInstalled: boolean; skillInstalled: boolean }>
+  cliInstall: () => Promise<{ cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; cliManualInstall?: string; error?: string }>
 }
 
 declare global {

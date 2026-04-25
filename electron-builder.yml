@@ -7,6 +7,11 @@ files:
   - '!src/*'
   - '!electron.vite.config.*'
   - '!{tsconfig,tsconfig.*}.json'
+extraResources:
+  - from: out/main/cli.js
+    to: cli/cli.js
+  - from: out/main/chunks/
+    to: cli/chunks/
 mac:
   target:
     - target: dmg

@@ -5,6 +5,9 @@
   "license": "AGPL-3.0-only",
   "author": "IvyYang1999",
   "main": "./out/main/index.js",
+  "bin": {
+    "swob": "./out/main/cli.js"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

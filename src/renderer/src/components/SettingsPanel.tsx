@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree } from 'lucide-react'
+import { X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree, Terminal, Check, AlertCircle } from 'lucide-react'
 
 const ELECTRON_MODIFIER_MAP: Record<string, string> = {
   Meta: 'CommandOrControl',
@@ -37,6 +37,101 @@ function formatAccelerator(accel: string): string {
     .split('+')
     .map((p) => DISPLAY_MODIFIER_MAP[p] || p)
     .join('')
+}
+
+function CliSection() {
+  const [status, setStatus] = useState<{
+    cliInstalled: boolean; symlinkInstalled: boolean; skillInstalled: boolean
+  } | null>(null)
+  const [installing, setInstalling] = useState(false)
+  const [result, setResult] = useState<{ cliManualInstall?: string; error?: string } | null>(null)
+
+  useEffect(() => {
+    window.api.cliGetStatus().then(setStatus)
+  }, [])
+
+  const handleInstall = async () => {
+    setInstalling(true)
+    setResult(null)
+    try {
+      const r = await window.api.cliInstall()
+      setResult(r)
+      window.api.cliGetStatus().then(setStatus)
+    } catch (e) {
+      setResult({ error: String(e) })
+    } finally {
+      setInstalling(false)
+    }
+  }
+
+  const allGood = status?.cliInstalled && status?.symlinkInstalled && status?.skillInstalled
+
+  return (
+    <section>
+      <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
+        <Terminal size={12} />
+        CLI & Agent
+      </label>
+      <div className="space-y-2">
+        <p className="text-[11px] text-muted">
+          安装 Swob CLI 后，你的 AI Agent 可以通过命令行搜索、整理和恢复会话。
+        </p>
+
+        {status && (
+          <div className="space-y-1">
+            <StatusRow label="CLI 文件" ok={status.cliInstalled} />
+            <StatusRow label="swob 命令" ok={status.symlinkInstalled} />
+            <StatusRow label="Agent Skill" ok={status.skillInstalled} />
+          </div>
+        )}
+
+        {!allGood && (
+          <button
+            onClick={handleInstall}
+            disabled={installing}
+            className="w-full px-2 py-1.5 rounded-md text-xs bg-accent/15 text-accent hover:bg-accent/25 disabled:opacity-40 transition-colors"
+          >
+            {installing ? '安装中...' : '安装 / 更新 CLI'}
+          </button>
+        )}
+
+        {allGood && (
+          <div className="flex items-center gap-1.5 text-[11px] text-green-400">
+            <Check size={11} />
+            已安装，Agent 可以使用 swob 命令
+          </div>
+        )}
+
+        {result?.cliManualInstall && (
+          <div className="text-[11px] text-muted">
+            <p className="flex items-center gap-1 text-amber-400 mb-1">
+              <AlertCircle size={10} />
+              需要手动创建 symlink:
+            </p>
+            <code className="block px-2 py-1 bg-surface rounded text-[10px] font-mono text-primary select-all">
+              {result.cliManualInstall}
+            </code>
+          </div>
+        )}
+
+        {result?.error && (
+          <p className="text-[11px] text-red-400">{result.error}</p>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function StatusRow({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <div className="flex items-center gap-2 text-[11px]">
+      {ok
+        ? <Check size={10} className="text-green-400" />
+        : <AlertCircle size={10} className="text-muted" />
+      }
+      <span className={ok ? 'text-primary' : 'text-muted'}>{label}</span>
+    </div>
+  )
 }
 
 export function SettingsPanel() {
@@ -259,6 +354,9 @@ export function SettingsPanel() {
             ))}
           </div>
         </section>
+
+        {/* CLI & Agent */}
+        <CliSection />
       </div>
       </div>
     </div>

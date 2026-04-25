@@ -45,13 +45,14 @@ export function InsightsPage() {
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
       <StatsCards data={data} />
 
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
-          <div className="text-sm font-medium text-primary">Token Heatmap</div>
-          <div className="overflow-x-auto">
-            <TokenHeatmap data={data.heatmap} />
-          </div>
+      <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
+        <div className="text-sm font-medium text-primary">Token Heatmap</div>
+        <div className="overflow-x-auto">
+          <TokenHeatmap data={data.heatmap} />
         </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
         <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
           <div className="text-sm font-medium text-primary">By Source</div>
           <SourceDonut sources={data.bySource} />
@@ -60,17 +61,15 @@ export function InsightsPage() {
           <div className="text-sm font-medium text-primary">By Model</div>
           <ModelBreakdown models={data.byModel ?? []} />
         </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
         <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
           <div className="text-sm font-medium text-primary">Top Projects</div>
           <ProjectRanking projects={projectData} />
         </div>
-        <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
-          <div className="text-sm font-medium text-primary">Daily Trend (30d)</div>
-          <DailyTrend data={data.byDate} />
-        </div>
+      </div>
+
+      <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
+        <div className="text-sm font-medium text-primary">Daily Trend (30d)</div>
+        <DailyTrend data={data.byDate} />
       </div>
 
       <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">

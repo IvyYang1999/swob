@@ -294,8 +294,9 @@ export function buildInsights(
 
   const byProject = Array.from(projectMap.values()).sort((a, b) => b.totalTokens - a.totalTokens)
   const byFolder = Array.from(folderMap.values()).sort((a, b) => b.totalTokens - a.totalTokens)
+  const INTERNAL_MODEL_NAMES = new Set(['unknown', '<synthetic>'])
   const byModel = Array.from(modelMap.values())
-    .filter(m => m.model !== 'unknown')
+    .filter(m => !INTERNAL_MODEL_NAMES.has(m.model))
     .sort((a, b) => b.totalTokens - a.totalTokens)
 
   const last365 = getLast365Days()

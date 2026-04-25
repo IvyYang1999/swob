@@ -326,11 +326,21 @@ export const useStore = create<AppState>((set, get) => ({
     // Spotlight: navigate to session from spotlight window
     window.api.onSpotlightNavigate?.((sessionId: string) => {
       const { sessions, selectSession } = get()
-      const session = sessions.find((s) => s.sessionId === sessionId)
+      const session = sessions.find((s) => s.id === sessionId || s.sessionId === sessionId)
       if (session) {
         selectSession(session.filePath, session.allFilePaths, session.id)
       }
     })
+    try {
+      const pendingSessionId = await (window.api as any).spotlightConsumePendingNavigation?.()
+      if (pendingSessionId) {
+        const { sessions, selectSession } = get()
+        const session = sessions.find((s) => s.id === pendingSessionId || s.sessionId === pendingSessionId)
+        if (session) {
+          selectSession(session.filePath, session.allFilePaths, session.id)
+        }
+      }
+    } catch { /* ignore */ }
   },
 
   selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?, branchLeafUuid?) => {

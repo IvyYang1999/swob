@@ -50,6 +50,13 @@ interface ElectronAPI {
   onSessionUpdated: (callback: (session: any) => void) => void
   onSessionsRefresh: (callback: () => void) => void
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => void
+  spotlightSearch: (query: string) => Promise<any[]>
+  spotlightResume: (sessionId: string, cwd?: string) => Promise<void>
+  spotlightHide: () => Promise<void>
+  spotlightSelectInMain: (sessionId: string) => Promise<void>
+  spotlightConsumePendingNavigation: () => Promise<string | null>
+  spotlightToggle: () => Promise<void>
+  onSpotlightNavigate: (callback: (sessionId: string) => void) => void
 
   // CLI
   cliGetStatus: () => Promise<{ cliInstalled: boolean; symlinkInstalled: boolean; skillInstalled: boolean }>

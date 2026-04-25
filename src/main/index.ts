@@ -67,6 +67,7 @@ let spotlightWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
 let codexWatcher: chokidar.FSWatcher | null = null
 let cursorWatcher: chokidar.FSWatcher | null = null
+let pendingSpotlightNavigationSessionId: string | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
 
@@ -127,6 +128,19 @@ function startActiveSessionPoller(): void {
 }
 let cachedSessions: SessionSummary[] = []
 
+function cleanupRuntimeResources(): void {
+  watcher?.close()
+  codexWatcher?.close()
+  cursorWatcher?.close()
+  watcher = null
+  codexWatcher = null
+  cursorWatcher = null
+  if (activePoller) {
+    clearInterval(activePoller)
+    activePoller = null
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -144,6 +158,10 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+  })
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -165,6 +183,17 @@ function createWindow(): void {
   }
 }
 
+function showMainWindow(): BrowserWindow {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow()
+  } else {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+  return mainWindow!
+}
+
 function createSpotlightWindow(): void {
   if (spotlightWindow && !spotlightWindow.isDestroyed()) {
     spotlightWindow.show()
@@ -175,8 +204,8 @@ function createSpotlightWindow(): void {
   const cursor = screen.getCursorScreenPoint()
   const display = screen.getDisplayNearestPoint(cursor)
   const { x, y, width, height } = display.workArea
-  const winWidth = 680
-  const winHeight = 480
+  const winWidth = 720
+  const winHeight = 520
 
   spotlightWindow = new BrowserWindow({
     width: winWidth,
@@ -439,11 +468,19 @@ ipcMain.handle('spotlight:toggle', () => {
 
 ipcMain.handle('spotlight:selectInMain', (_event, sessionId: string) => {
   spotlightWindow?.hide()
-  if (mainWindow) {
-    mainWindow.show()
-    mainWindow.focus()
-    mainWindow.webContents.send('spotlight:navigate', sessionId)
+  const hadMainWindow = !!mainWindow && !mainWindow.isDestroyed()
+  const win = showMainWindow()
+  if (hadMainWindow && !win.webContents.isLoading()) {
+    win.webContents.send('spotlight:navigate', sessionId)
+  } else {
+    pendingSpotlightNavigationSessionId = sessionId
   }
+})
+
+ipcMain.handle('spotlight:consumePendingNavigation', () => {
+  const sessionId = pendingSpotlightNavigationSessionId
+  pendingSpotlightNavigationSessionId = null
+  return sessionId
 })
 
 // --- iCloud ---
@@ -1432,18 +1469,19 @@ app.whenReady().then(() => {
 
   registerSpotlightShortcut(getSpotlightShortcut())
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    showMainWindow()
   })
 })
 
 app.on('window-all-closed', () => {
-  watcher?.close()
-  codexWatcher?.close()
-  cursorWatcher?.close()
-  if (activePoller) clearInterval(activePoller)
   // macOS: don't unregister shortcuts — app stays alive and user expects Cmd+Shift+Space to work
   if (process.platform !== 'darwin') {
+    cleanupRuntimeResources()
     globalShortcut.unregisterAll()
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  cleanupRuntimeResources()
 })

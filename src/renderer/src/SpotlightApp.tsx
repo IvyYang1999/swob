@@ -107,7 +107,7 @@ export default function SpotlightApp() {
   }, [])
 
   const handleNavigate = useCallback((item: SpotlightResultItem) => {
-    api.spotlightSelectInMain(item.session.sessionId)
+    api.spotlightSelectInMain(item.session.id)
   }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -132,10 +132,10 @@ export default function SpotlightApp() {
   }, [results, selectedIndex, handleResume, handleNavigate])
 
   return (
-    <div className="w-full h-full flex flex-col select-none" style={{ WebkitAppRegion: 'drag' } as any}>
+    <div className="w-full h-full flex flex-col select-none p-5" style={{ WebkitAppRegion: 'drag' } as any}>
       <div
-        className="mx-auto w-[640px] mt-2 rounded-2xl bg-base/95 backdrop-blur-xl border border-edge shadow-2xl overflow-hidden flex flex-col"
-        style={{ maxHeight: '460px', WebkitAppRegion: 'no-drag' } as any}
+        className="mx-auto w-full max-w-[680px] rounded-2xl bg-base/95 backdrop-blur-xl border border-edge shadow-2xl overflow-hidden flex flex-col"
+        style={{ maxHeight: '480px', WebkitAppRegion: 'no-drag' } as any}
       >
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-edge">

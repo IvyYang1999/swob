@@ -90,6 +90,7 @@ const api = {
   spotlightResume: (sessionId: string, cwd?: string) => ipcRenderer.invoke('spotlight:resume', sessionId, cwd),
   spotlightHide: () => ipcRenderer.invoke('spotlight:hide'),
   spotlightSelectInMain: (sessionId: string) => ipcRenderer.invoke('spotlight:selectInMain', sessionId),
+  spotlightConsumePendingNavigation: () => ipcRenderer.invoke('spotlight:consumePendingNavigation'),
   spotlightToggle: () => ipcRenderer.invoke('spotlight:toggle'),
   onSpotlightNavigate: (callback: (sessionId: string) => void) => {
     ipcRenderer.on('spotlight:navigate', (_event, sessionId) => callback(sessionId))

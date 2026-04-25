@@ -91,9 +91,13 @@ function normalizeModelName(raw: string): string {
   let m = raw.includes('/') ? raw.split('/').pop()! : raw
   // Strip -thinking suffix: "claude-opus-4-6-thinking" → "claude-opus-4-6"
   m = m.replace(/-thinking$/, '')
+  // Strip date suffix: "claude-haiku-4-5-20251001" → "claude-haiku-4-5"
+  m = m.replace(/^(claude-\w+-\d+-\d+)-\d{8}$/, '$1')
   // Normalize "claude-4.6-opus-20260205" → "claude-opus-4-6"
   const dated = m.match(/^claude-(\d+)\.(\d+)-(opus|sonnet|haiku)-\d{8}$/)
   if (dated) return `claude-${dated[3]}-${dated[1]}-${dated[2]}`
+  // Normalize "claude-opus-4.6" → "claude-opus-4-6" (dot variant)
+  m = m.replace(/^claude-(opus|sonnet|haiku)-(\d+)\.(\d+)$/, 'claude-$1-$2-$3')
   return m
 }
 

@@ -83,7 +83,9 @@ const CODEX_SYSTEM_PREFIXES = [
   'AGENTS.md instructions',
   '<INSTRUCTIONS>',
   '<collaboration_mode>',
-  '# Collaboration Mode:'
+  '# Collaboration Mode:',
+  '<turn_aborted>',
+  '<user_shell_command>',
 ]
 
 function isCodexSystemText(text: string): boolean {
@@ -106,20 +108,8 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
       const p = line.payload as Record<string, unknown>
       const etype = p.type as string
 
-      if (etype === 'user_message') {
-        messages.push({
-          uuid: `codex-${sessionId}-${msgIndex++}`,
-          parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
-          sessionId,
-          type: 'user',
-          timestamp: ts,
-          cwd,
-          message: {
-            role: 'user',
-            content: (p.message as string) || ''
-          }
-        })
-      } else if (etype === 'agent_message') {
+      // Skip user_message from event_msg — it duplicates response_item
+      if (etype === 'agent_message') {
         messages.push({
           uuid: `codex-${sessionId}-${msgIndex++}`,
           parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,

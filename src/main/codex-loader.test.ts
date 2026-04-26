@@ -27,6 +27,15 @@ function makeCodexLines() {
       }
     },
     {
+      timestamp: '2026-03-27T13:37:33.984Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '帮我看看这个项目的目录' }]
+      }
+    },
+    {
       timestamp: '2026-03-27T13:37:33.985Z',
       type: 'event_msg',
       payload: { type: 'user_message', message: '帮我看看这个项目的目录', images: [] }
@@ -55,6 +64,15 @@ function makeCodexLines() {
       timestamp: '2026-03-27T13:38:00.000Z',
       type: 'event_msg',
       payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 500, output_tokens: 200, cached_input_tokens: 0, total_tokens: 700 } }, rate_limits: {} }
+    },
+    {
+      timestamp: '2026-03-27T13:38:00.500Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '现在帮我改一下 README' }]
+      }
     },
     {
       timestamp: '2026-03-27T13:38:01.000Z',

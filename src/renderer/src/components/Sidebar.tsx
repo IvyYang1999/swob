@@ -197,7 +197,7 @@ function FolderNode({
       if (folder.id.startsWith('path-')) return
       const data = JSON.parse(e.dataTransfer.getData('application/x-swob'))
       if (data.type === 'session' && (data.id || data.sessionId)) {
-        addSessionToFolder(folder.id, data.id || data.sessionId)
+        addSessionToFolder(folder.id, data.sessionId || data.id)
         if (!expandedFolders.has(folder.id)) toggleFolder(folder.id)
       } else if (data.type === 'folder' && data.id && data.id !== folder.id) {
         if (zone === 'inside') {

@@ -362,8 +362,9 @@ export function Sidebar({ width }: { width: number }) {
   const handleContextMenu = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.preventDefault()
     const session = sessions.find((s) => s.id === sessionId)
-    // Use session.id for folder operations — branches have their own identity
-    const opId = sessionId
+    // Branches use session.id (contains :intra-), others use sessionId (strip codex:/cursor: prefix)
+    const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
+    const opId = isBranch ? sessionId : (session?.sessionId || sessionId)
     const folders = (config?.folders || []).map((f) => ({
       id: f.id, name: f.name, parentId: f.parentId || null,
       isIn: f.sessionIds.includes(opId)

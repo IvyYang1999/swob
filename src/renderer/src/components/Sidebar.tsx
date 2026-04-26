@@ -385,11 +385,16 @@ export function Sidebar({ width }: { width: number }) {
 
   const handleSubmitRenameSession = useCallback(() => {
     if (renamingSessionId && sessionRenameValue.trim()) {
-      // Use session.id directly — branches need their own identity
-      setSessionMeta(renamingSessionId, { customTitle: sessionRenameValue.trim() })
+      const isBranch = renamingSessionId.includes(':intra-') || renamingSessionId.includes(':branch-')
+      if (isBranch) {
+        setSessionMeta(renamingSessionId, { customTitle: sessionRenameValue.trim() })
+      } else {
+        const session = sessions.find(s => s.id === renamingSessionId)
+        setSessionMeta(session?.sessionId || renamingSessionId, { customTitle: sessionRenameValue.trim() })
+      }
     }
     setRenamingSessionId(null); setSessionRenameValue('')
-  }, [renamingSessionId, sessionRenameValue, setSessionMeta])
+  }, [renamingSessionId, sessionRenameValue, setSessionMeta, sessions])
 
   const handleCancelRenameSession = useCallback(() => { setRenamingSessionId(null); setSessionRenameValue('') }, [])
 

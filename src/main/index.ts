@@ -75,48 +75,27 @@ const knownSessionIds = new Set<string>()
 let libraryInitialized = false
 
 // --- Active Session Detection ---
-const sessionLastActivity = new Map<string, number>() // sessionId -> timestamp (ms)
 let previousActiveIds: string[] = []
 let activePoller: ReturnType<typeof setInterval> | null = null
 
-function detectActiveSessionsFromProcesses(): Set<string> {
-  try {
-    const stdout = execSync('ps -eo command', { encoding: 'utf-8', timeout: 3000 })
-    const active = new Set<string>()
-    for (const line of stdout.split('\n')) {
-      if (!line.includes('claude')) continue
-      const match = line.match(/--resume\s+(\S+)/)
-      if (match) active.add(match[1])
-    }
-    return active
-  } catch {
-    return new Set()
-  }
+function detectActiveSessionsFromProcesses(): Promise<Set<string>> {
+  return new Promise((resolve) => {
+    exec('ps -eo command', { timeout: 3000 }, (err, stdout) => {
+      if (err) { resolve(new Set()); return }
+      const active = new Set<string>()
+      for (const line of stdout.split('\n')) {
+        if (!line.includes('claude')) continue
+        const match = line.match(/--resume\s+(\S+)/)
+        if (match) active.add(match[1])
+      }
+      resolve(active)
+    })
+  })
 }
 
-function getActiveSessionIds(): string[] {
-  const active = new Set<string>()
-
-  // 1. From running processes (claude --resume <id>)
-  const fromProcesses = detectActiveSessionsFromProcesses()
-  for (const id of fromProcesses) active.add(id)
-
-  // 2. From recent file modifications (within 30s)
-  const now = Date.now()
-  const ACTIVITY_TIMEOUT = 30_000
-  for (const [sessionId, lastTime] of sessionLastActivity) {
-    if (now - lastTime < ACTIVITY_TIMEOUT) {
-      active.add(sessionId)
-    } else {
-      sessionLastActivity.delete(sessionId)
-    }
-  }
-
-  return Array.from(active).sort()
-}
-
-function pollActiveSessions(): void {
-  const currentIds = getActiveSessionIds()
+async function pushActiveSessionIds(): Promise<void> {
+  const fromProcesses = await detectActiveSessionsFromProcesses()
+  const currentIds = Array.from(fromProcesses).sort()
   const prev = previousActiveIds
   if (currentIds.length !== prev.length || currentIds.some((id, i) => id !== prev[i])) {
     previousActiveIds = currentIds
@@ -125,9 +104,9 @@ function pollActiveSessions(): void {
 }
 
 function startActiveSessionPoller(): void {
-  // Run immediately, then every 5 seconds
-  pollActiveSessions()
-  activePoller = setInterval(pollActiveSessions, 5000)
+  // Run immediately, then every 1 second (async, non-blocking)
+  pushActiveSessionIds()
+  activePoller = setInterval(() => { pushActiveSessionIds() }, 1000)
 }
 let cachedSessions: SessionSummary[] = []
 
@@ -295,9 +274,6 @@ function startFileWatcher(): void {
       const sessionId = raw.find((m) => m.sessionId)?.sessionId
       if (!sessionId) return
 
-      // Track file activity for active session detection
-      sessionLastActivity.set(sessionId, Date.now())
-
       if (knownSessionIds.has(sessionId)) {
         mainWindow?.webContents.send('sessions:refresh')
       } else {
@@ -328,8 +304,12 @@ function startFileWatcher(): void {
       const raw = await parseSessionFile(filePath)
       const summary = buildSessionSummary(filePath, raw, true)
       if (summary) {
-        // Track file activity for active session detection
-        sessionLastActivity.set(summary.sessionId, Date.now())
+        // File changed = process is alive, immediately add to active set
+        if (!previousActiveIds.includes(summary.sessionId)) {
+          const next = [...previousActiveIds, summary.sessionId].sort()
+          previousActiveIds = next
+          mainWindow?.webContents.send('sessions:activeChanged', next)
+        }
 
         // Update library transcript + backup
         if (libraryInitialized) {
@@ -431,7 +411,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
 
 // --- IPC Handlers ---
 
-ipcMain.handle('sessions:getActive', () => getActiveSessionIds())
+ipcMain.handle('sessions:getActive', () => previousActiveIds)
 
 // --- Spotlight ---
 

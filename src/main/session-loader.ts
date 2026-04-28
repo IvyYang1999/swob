@@ -16,7 +16,6 @@ import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetai
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail } from './cursor-loader'
 import { estimateActiveTime } from './insights'
 
-const CLAUDE_DIR = path.join(process.env.HOME || '', '.claude', 'projects')
 const HOME = process.env.HOME || ''
 
 /**
@@ -70,7 +69,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 13 // add models field to SessionSummary
+const CACHE_VERSION = 14 // include Claude Window config roots
 
 interface DiskCache {
   version: number
@@ -176,22 +175,85 @@ function discoverConfigFiles(cwds: string[], sessionProjectPath: string): string
   return found
 }
 
-export function findAllSessionFiles(): string[] {
-  const files: string[] = []
-  if (!fs.existsSync(CLAUDE_DIR)) return files
+function isDirectory(dirPath: string): boolean {
+  try {
+    return fs.statSync(dirPath).isDirectory()
+  } catch {
+    return false
+  }
+}
 
-  const projects = fs.readdirSync(CLAUDE_DIR, { withFileTypes: true })
-  for (const proj of projects) {
-    if (!proj.isDirectory()) continue
-    const projDir = path.join(CLAUDE_DIR, proj.name)
-    const entries = fs.readdirSync(projDir, { withFileTypes: true })
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-        files.push(path.join(projDir, entry.name))
+export function findClaudeProjectRoots(home = HOME): string[] {
+  const roots: string[] = []
+  const standardRoot = path.join(home, '.claude', 'projects')
+  if (isDirectory(standardRoot)) roots.push(standardRoot)
+
+  const claudeWindowRoot = path.join(home, '.claude-window')
+  if (!isDirectory(claudeWindowRoot)) return roots
+
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(claudeWindowRoot, { withFileTypes: true })
+  } catch {
+    return roots
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const projectsRoot = path.join(claudeWindowRoot, entry.name, 'projects')
+    if (isDirectory(projectsRoot)) roots.push(projectsRoot)
+  }
+
+  return roots
+}
+
+export function findSessionFilesInProjectRoots(projectRoots: string[]): string[] {
+  const files = new Set<string>()
+
+  for (const root of projectRoots) {
+    let projects: fs.Dirent[]
+    try {
+      projects = fs.readdirSync(root, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const proj of projects) {
+      if (!proj.isDirectory()) continue
+      const projDir = path.join(root, proj.name)
+      let entries: fs.Dirent[]
+      try {
+        entries = fs.readdirSync(projDir, { withFileTypes: true })
+      } catch {
+        continue
+      }
+
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+          files.add(path.join(projDir, entry.name))
+        }
       }
     }
   }
-  return files
+
+  return [...files]
+}
+
+export function getClaudeConfigDirForSessionFile(filePath: string, home = HOME): string | undefined {
+  const claudeWindowRoot = path.resolve(home, '.claude-window')
+  const rel = path.relative(claudeWindowRoot, path.resolve(filePath))
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return undefined
+
+  const parts = rel.split(path.sep)
+  if (parts.length >= 3 && parts[0] && parts[1] === 'projects') {
+    return path.join(claudeWindowRoot, parts[0])
+  }
+
+  return undefined
+}
+
+export function findAllSessionFiles(): string[] {
+  return findSessionFilesInProjectRoots(findClaudeProjectRoots())
 }
 
 function extractText(content: string | ContentPart[] | undefined): string {
@@ -301,6 +363,7 @@ export function buildSessionSummary(
   const cwds = [...new Set(rawMessages.map((m) => m.cwd).filter(Boolean) as string[])]
   const versions = [...new Set(rawMessages.map((m) => m.version).filter(Boolean) as string[])]
   const initialCwd = getInitialSessionCwd(rawMessages)
+  const claudeConfigDir = getClaudeConfigDirForSessionFile(filePath, process.env.HOME || HOME)
   const latestPermissionMode = [...rawMessages].reverse().find((m) => m.permissionMode)?.permissionMode
   const latestVersion = [...rawMessages].reverse().find((m) => m.version)?.version
   // Use main chain timestamps for updatedAt (sidechain messages are rejected branches)
@@ -390,6 +453,7 @@ export function buildSessionSummary(
       referencedFiles: [],
       configFiles: [],
       source: 'claude-code',
+      claudeConfigDir,
       allUserMessages,
       estimatedTime: estimateActiveTime(validMessages),
       models: [...new Set(rawMessages.map(m => m.message?.model).filter(Boolean) as string[])]
@@ -514,6 +578,7 @@ export function buildSessionSummary(
     referencedFiles: [...referencedFiles],
     configFiles,
     source: 'claude-code',
+    claudeConfigDir,
     allUserMessages,
     estimatedTime: estimateActiveTime(validMessages),
     models: [...new Set(rawMessages.map(m => m.message?.model).filter(Boolean) as string[])]

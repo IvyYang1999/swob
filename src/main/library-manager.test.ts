@@ -241,6 +241,33 @@ describe('Library-only sessions（跨设备同步）', () => {
     fs.rmSync(localSourceDir, { recursive: true, force: true })
   })
 
+  it('Claude Window 配置目录下的原始 JSONL 丢失时也应该允许从 backup 恢复', () => {
+    const localConfigDir = path.join(os.homedir(), '.claude-window', `swob-test-${process.pid}-${Date.now()}`)
+    const localSourceDir = path.join(localConfigDir, 'projects', '-Users-test-projects-draftbox')
+    const localSourcePath = path.join(localSourceDir, 'lost-window-999.jsonl')
+    const sessionDir = path.join(tmpRoot, 'Claude Window 丢失的对话')
+    const backupContent = '{"uuid":"u1","sessionId":"lost-window-999","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test/projects/draftbox","message":{"role":"user","content":"hello"}}\n'
+
+    fs.mkdirSync(sessionDir, { recursive: true })
+    fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
+      sessionId: 'lost-window-999',
+      sourceFilePaths: [localSourcePath],
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T01:00:00Z',
+      projectPath: '/Users/test/projects/draftbox'
+    }))
+    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
+
+    lib.scanLibrary()
+    const result = lib.restoreBackupToClaudeSource('lost-window-999')
+
+    expect(result.restored).toBe(true)
+    expect(result.sourcePath).toBe(localSourcePath)
+    expect(fs.readFileSync(localSourcePath, 'utf-8')).toBe(backupContent)
+
+    fs.rmSync(localConfigDir, { recursive: true, force: true })
+  })
+
   it('不会把其他机器路径的 backup 恢复到本机 Claude 目录外', () => {
     const foreignSourcePath = '/Users/other-machine/.claude/projects/xxx/remote-999.jsonl'
     const sessionDir = path.join(tmpRoot, '其他机器的对话')

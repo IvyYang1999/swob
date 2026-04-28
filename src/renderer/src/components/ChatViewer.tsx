@@ -857,6 +857,9 @@ function SessionBar({
               cmd = selectedSession.permissionMode === 'bypassPermissions'
                 ? `claude --dangerously-skip-permissions --resume ${sid}`
                 : `claude --resume ${sid}`
+              if (selectedSession.claudeConfigDir) {
+                cmd = `CLAUDE_CONFIG_DIR=${JSON.stringify(selectedSession.claudeConfigDir)} ${cmd}`
+              }
             }
             navigator.clipboard.writeText(cmd)
             setCopiedResumeCmd(true)

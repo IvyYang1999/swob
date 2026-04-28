@@ -261,10 +261,12 @@ function getSpotlightShortcut(): string {
 }
 
 function startFileWatcher(): void {
-  const claudeDir = join(process.env.HOME || '', '.claude', 'projects')
-  watcher = chokidar.watch(join(claudeDir, '*/*.jsonl'), {
-    ignoreInitial: true,
-    depth: 1
+  const home = process.env.HOME || ''
+  watcher = chokidar.watch([
+    join(home, '.claude', 'projects', '*', '*.jsonl'),
+    join(home, '.claude-window', '*', 'projects', '*', '*.jsonl')
+  ], {
+    ignoreInitial: true
   })
 
   watcher.on('add', async (filePath) => {
@@ -438,7 +440,7 @@ ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => 
   const session = cachedSessions.find((s) => s.sessionId === sessionId)
   if (!session) return
   restoreBackupToClaudeSource(sessionId)
-  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, session.resumeCwd || cwd, session.source))
+  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, session.resumeCwd || cwd, session.source, session.claudeConfigDir))
   spotlightWindow?.hide()
 })
 
@@ -653,7 +655,11 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
   ])
 })
 
-function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string): string {
+function withClaudeConfigDir(cmd: string, claudeConfigDir?: string): string {
+  return claudeConfigDir ? `CLAUDE_CONFIG_DIR=${JSON.stringify(claudeConfigDir)} ${cmd}` : cmd
+}
+
+function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string, claudeConfigDir?: string): string {
   let cmd: string
   if (source === 'codex') {
     cmd = `codex resume ${sessionId}`
@@ -673,13 +679,14 @@ function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: st
   cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --resume ${sessionId}`
     : `claude --resume ${sessionId}`
+  cmd = withClaudeConfigDir(cmd, claudeConfigDir)
   if (cwd && fs.existsSync(cwd)) {
     return `cd ${JSON.stringify(cwd)} && ${cmd}`
   }
   return cmd
 }
 
-function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string): string {
+function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string, claudeConfigDir?: string): string {
   let cmd: string
   if (source === 'codex') {
     cmd = `codex fork ${sessionId}`
@@ -700,6 +707,7 @@ function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: stri
   cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --fork-session --resume ${sessionId}`
     : `claude --fork-session --resume ${sessionId}`
+  cmd = withClaudeConfigDir(cmd, claudeConfigDir)
   if (cwd && fs.existsSync(cwd)) {
     return `cd ${JSON.stringify(cwd)} && ${cmd}`
   }
@@ -720,7 +728,7 @@ ipcMain.handle(
     const session = cachedSessions.find((s) => s.sessionId === sessionId)
     const source = session?.source
     restoreBackupToClaudeSource(sessionId)
-    openInTerminal(buildResumeCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source))
+    openInTerminal(buildResumeCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source, session?.claudeConfigDir))
   }
 )
 
@@ -730,7 +738,7 @@ ipcMain.handle(
     for (const s of sessionIds) {
       const session = cachedSessions.find((ss) => ss.sessionId === s.sessionId)
       restoreBackupToClaudeSource(s.sessionId)
-      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, session?.resumeCwd || s.cwd, session?.source))
+      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, session?.resumeCwd || s.cwd, session?.source, session?.claudeConfigDir))
     }
   }
 )
@@ -741,7 +749,7 @@ ipcMain.handle(
     const session = cachedSessions.find((s) => s.sessionId === sessionId)
     const source = session?.source
     restoreBackupToClaudeSource(sessionId)
-    openInTerminal(buildForkCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source))
+    openInTerminal(buildForkCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source, session?.claudeConfigDir))
   }
 )
 

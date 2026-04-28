@@ -185,6 +185,23 @@ export function getSessionMdPath(sessionId: string): string | null {
   return fs.existsSync(mdPath) ? mdPath : null
 }
 
+function isPathInside(parentDir: string, childPath: string): boolean {
+  const rel = path.relative(parentDir, childPath)
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+}
+
+function isRestorableLocalClaudeSource(sourcePath: string): boolean {
+  const home = os.homedir()
+  const localClaudeProjects = path.join(home, '.claude', 'projects')
+  if (isPathInside(localClaudeProjects, sourcePath)) return true
+
+  const localClaudeWindowRoot = path.join(home, '.claude-window')
+  const rel = path.relative(localClaudeWindowRoot, sourcePath)
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false
+  const parts = rel.split(path.sep)
+  return parts.length >= 4 && !!parts[0] && parts[1] === 'projects'
+}
+
 export function restoreBackupToClaudeSource(sessionId: string): {
   restored: boolean
   sourcePath: string | null
@@ -202,9 +219,7 @@ export function restoreBackupToClaudeSource(sessionId: string): {
   const sourcePath = meta.sourceFilePaths[0]
   if (!sourcePath) return { restored: false, sourcePath: null, reason: 'missing-source-path' }
 
-  const localClaudeProjects = path.join(os.homedir(), '.claude', 'projects')
-  const relativeSource = path.relative(localClaudeProjects, sourcePath)
-  if (relativeSource.startsWith('..') || path.isAbsolute(relativeSource)) {
+  if (!isRestorableLocalClaudeSource(sourcePath)) {
     return { restored: false, sourcePath, reason: 'source-outside-local-claude-projects' }
   }
 

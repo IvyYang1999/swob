@@ -8,7 +8,16 @@
  * - 分支检测误判
  */
 import { describe, it, expect } from 'vitest'
-import { buildSessionSummary, buildSessionDetail, detectIntraFileBranches, filterMessagesByBranch, isRealUserMessage } from './session-loader'
+import {
+  buildSessionSummary,
+  buildSessionDetail,
+  detectIntraFileBranches,
+  filterMessagesByBranch,
+  findClaudeProjectRoots,
+  findSessionFilesInProjectRoots,
+  getClaudeConfigDirForSessionFile,
+  isRealUserMessage
+} from './session-loader'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -40,6 +49,82 @@ function writeTempJsonl(messages: RawJsonlMessage[]): string {
   fs.writeFileSync(fp, content)
   return fp
 }
+
+function writeJsonlAt(filePath: string, messages: RawJsonlMessage[]): string {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, messages.map((m) => JSON.stringify(m)).join('\n'))
+  return filePath
+}
+
+// ========================================================
+// Claude session discovery 测试
+// ========================================================
+describe('Claude session discovery', () => {
+  it('应该同时扫描 ~/.claude/projects 和 ~/.claude-window/*/projects', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-home-'))
+    const standardRoot = path.join(home, '.claude', 'projects')
+    const windowRoot = path.join(home, '.claude-window', 'aec2c37b389f', 'projects')
+    const standardFile = writeJsonlAt(
+      path.join(standardRoot, '-Users-test-projects-swob', 'standard-session.jsonl'),
+      [rawMsg({ type: 'user', sessionId: 'standard-session', message: { role: 'user', content: '标准 Claude session' } })]
+    )
+    const windowFile = writeJsonlAt(
+      path.join(windowRoot, '-Users-test-projects-draftbox', 'window-session.jsonl'),
+      [rawMsg({ type: 'user', sessionId: 'window-session', message: { role: 'user', content: 'Claude Window session' } })]
+    )
+    const subagentFile = writeJsonlAt(
+      path.join(windowRoot, '-Users-test-projects-draftbox', 'subagents', 'agent-session.jsonl'),
+      [rawMsg({ type: 'user', sessionId: 'subagent-session', message: { role: 'user', content: 'subagent' } })]
+    )
+
+    const roots = findClaudeProjectRoots(home)
+    expect(roots).toContain(standardRoot)
+    expect(roots).toContain(windowRoot)
+
+    const files = findSessionFilesInProjectRoots(roots)
+    expect(files).toContain(standardFile)
+    expect(files).toContain(windowFile)
+    expect(files).not.toContain(subagentFile)
+  })
+
+  it('Claude Window session 应该记录对应的 CLAUDE_CONFIG_DIR', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-home-'))
+    const configDir = path.join(home, '.claude-window', 'aec2c37b389f')
+    const sessionFile = writeJsonlAt(
+      path.join(configDir, 'projects', '-Users-test-projects-draftbox', 'window-session.jsonl'),
+      [
+        rawMsg({
+          type: 'user',
+          sessionId: 'window-session',
+          cwd: '/Users/test/projects/draftbox',
+          message: { role: 'user', content: 'DraftBox 开发 session' }
+        })
+      ]
+    )
+    const standardFile = path.join(home, '.claude', 'projects', '-Users-test-projects-swob', 'standard-session.jsonl')
+
+    expect(getClaudeConfigDirForSessionFile(sessionFile, home)).toBe(configDir)
+    expect(getClaudeConfigDirForSessionFile(standardFile, home)).toBeUndefined()
+
+    const oldHome = process.env.HOME
+    process.env.HOME = home
+    try {
+      const summary = buildSessionSummary(sessionFile, [
+        rawMsg({
+          type: 'user',
+          sessionId: 'window-session',
+          cwd: '/Users/test/projects/draftbox',
+          message: { role: 'user', content: 'DraftBox 开发 session' }
+        })
+      ], true)
+      expect(summary?.claudeConfigDir).toBe(configDir)
+      expect(summary?.resumeCwd).toBe('/Users/test/projects/draftbox')
+    } finally {
+      if (oldHome === undefined) delete process.env.HOME
+      else process.env.HOME = oldHome
+    }
+  })
+})
 
 // ========================================================
 // buildSessionSummary 测试

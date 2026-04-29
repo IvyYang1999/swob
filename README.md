@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>Swob</h1>
+<img src="docs/banner.png" alt="Swob" width="100%" />
 
 <p>
   <a href="README.md">English</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="CHANGELOG.md">Changelog</a>
@@ -14,85 +14,114 @@
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green" alt="License" />
 </p>
 
-<p><strong>AI forgets (compact). You don't.</strong></p>
+<h3>Browse, Search & Resume Your Claude Code Sessions</h3>
 
-<p>The session manager for Claude Code, Codex & Cursor — browse, search, recover, and resume any conversation.</p>
-
-<img src="e2e/screenshots/chat-loaded.png" alt="Swob main interface" width="800" />
+<p>
+  The missing session manager for <strong>Claude Code</strong>, <strong>Codex</strong> & <strong>Cursor</strong>.<br/>
+  Recover compacted conversations. Search across hundreds of sessions. Resume with one click.
+</p>
 
 </div>
 
----
+<br/>
 
-## Why Swob
-
-Claude Code compacts conversations to save context. When that happens, your original messages are gone — you can only see the summary. **Swob keeps everything.**
-
-Beyond recovery, Swob is a full control center for your AI coding workflow: organize hundreds of sessions into folders, jump to any conversation with a Spotlight-style shortcut, track token costs, and resume from your phone over SSH.
+<p align="center">
+  <img src="docs/screenshot.png" alt="Swob main interface" width="800" />
+</p>
 
 ---
 
-## Features
+## The Problem
 
-### 🔓 Pre-compact Recovery
-Expand any compacted section to read the original messages. The only tool that does this.
+You've been vibe-coding from `~` for months. You have 200+ Claude Code sessions piled up with no organization. Half of them have been compacted — the original conversation is gone, replaced by a summary. The built-in `/resume` only shows recent sessions. Finding that one conversation where you solved a tricky bug? Good luck.
 
-### ⚡ Spotlight Session Jump (⌘⇧K)
-Fuzzy search across all sessions. Jump to any conversation in under a second.
+## The Solution
 
-### 📁 Session Browser & Organizer
-Tree-view sidebar with nested folders, drag-and-drop, custom titles, and branch detection. Three view modes: Compact / Full / Markdown.
+Swob reads the JSONL files that Claude Code, Codex, and Cursor store on disk. It parses every session, detects branches and continuations, **reconstructs the full pre-compact history**, and presents everything in a searchable, organized interface.
 
-### 🔀 Multi-source Support
-Reads sessions from **Claude Code**, **Codex**, and **Cursor CLI** — all in one place.
+Your data stays 100% local. Swob never uploads anything.
 
-### 📊 Token Insights
-365-day heatmap, cost breakdown by model, project rankings, and daily timeline. Know exactly where your tokens go.
+---
 
-### ▶️ One-click Resume
-Resume any session in Terminal or iTerm2 with a single click. Batch-resume entire folders. Working directory and `--dangerously-skip-permissions` mode are preserved automatically.
+## Key Features
 
-### 🌐 SSH Remote Resume
+### Recover Compacted Conversations
+
+Claude Code compacts your conversation to save context. The original messages are still in the JSONL file — Swob finds them and lets you expand any compact block to read what was lost. **No other tool does this.**
+
+### Spotlight Session Jump — `⌘⇧K`
+
+A global hotkey brings up a Spotlight-style search window. Fuzzy search by content, project name, folder, or time (`today`, `yesterday`, `this week`). Filter by source (`claude`, `codex`, `cursor`). Jump to any session in under a second without switching windows.
+
+### Full-text Search — `⌘K`
+
+Search across all sessions at once. Matches auto-expand inside collapsed compact sections, so you find things even when they've been compacted away. In-session search (`⌘F`) with regex support.
+
+### Multi-source: Claude Code + Codex + Cursor
+
+Reads from `~/.claude/projects/`, `~/.codex/sessions/`, and `~/.cursor/projects/` — browse and resume sessions from all three tools in one place.
+
+### Token Insights Dashboard
+
+- 5 stat cards: total tokens, sessions, turns, active days, estimated time
+- 365-day contribution heatmap (like GitHub, but for your AI usage)
+- Source breakdown donut chart (Claude Code vs Codex vs Cursor)
+- Model usage breakdown
+- Project ranking by token consumption
+- 30-day daily trend chart
+
+### One-click Resume
+
+Click any session to reopen it in Terminal or iTerm2. Batch-resume an entire folder. Working directory and `--dangerously-skip-permissions` mode are preserved. Supports Codex (`codex resume`) and Cursor (`cursor agent --resume`) too.
+
+### SSH Remote Resume
+
 Configure SSH connections and resume sessions on remote servers directly from the app.
 
-### 💻 CLI (`swob`)
+### CLI — `swob`
+
 ```bash
-swob search "authentication bug"     # search sessions
-swob list --source claude            # list by source
-swob resume <sessionId>              # get resume command
-swob insights                        # token stats
-swob active                          # show active sessions
-swob install                         # install CLI + Skill
+swob search "auth bug"          # fuzzy search sessions
+swob list --source codex        # filter by source
+swob resume <id>                # get resume command
+swob insights                   # token usage stats
+swob active                     # show running sessions
+swob install                    # install CLI + Agent Skill
 ```
 
-### 🔍 Full-text Search
-Global search (⌘K) across all sessions, in-session search (⌘F) with regex support. Matches auto-expand inside collapsed compact sections.
+All commands output JSON. The `swob install` command also installs a Claude Code Skill, so Claude can call `swob` as a tool during conversations.
 
-### 🖊️ Highlight & Annotate
-Select any text to bookmark it. All highlights are collected in the sidebar as a personal knowledge trail with jump-back navigation.
+### Session Organization
 
-### ☁️ iCloud Sync
-Backup sessions to `~/Documents/Swob/` (iCloud-synced). Auto-detects and downloads iCloud placeholder files on demand.
+Tree-view sidebar with nested folders, drag-and-drop sorting, and custom titles. Three view modes: Compact (hide tool noise), Full (everything), Markdown (clean export).
 
-### 🌏 Bilingual UI
+### Branch Detection
+
+Automatically detects when sessions continue from another file (multi-file continuations) and when concurrent branches diverge. Sidechain / rejected-plan branches are dimmed.
+
+### Highlight & Annotate
+
+Select any text to bookmark it. All highlights are collected in the right sidebar with jump-back links — your personal knowledge trail across sessions.
+
+### Metadata Sidebar
+
+Every session shows: creation/update time, turn count, token usage (input/output/cache), tool call stats, skill invocations, file operations tree, referenced files list, and estimated active time.
+
+### iCloud Backup
+
+Sessions are backed up to `~/Documents/Swob/` with readable Markdown transcripts. iCloud placeholder files are auto-detected and downloaded on demand.
+
+### Active Session Detection
+
+Green dot indicates which sessions are currently running. Detected via `ps` polling (1s interval) and file-change watchers.
+
+### Drag-to-export
+
+Every session is auto-exported as Markdown. Drag it into another app (Finder, Notes, another Claude Code session) to carry context across conversations.
+
+### Bilingual UI
+
 Full Chinese (zh-CN) and English support.
-
----
-
-## Screenshots
-
-<table>
-  <tr>
-    <td align="center"><b>Session Browser</b></td>
-    <td align="center"><b>Chat View</b></td>
-    <td align="center"><b>Global Search</b></td>
-  </tr>
-  <tr>
-    <td><img src="e2e/screenshots/sidebar-loaded.png" alt="Session browser" /></td>
-    <td><img src="e2e/screenshots/chat-loaded.png" alt="Chat view" /></td>
-    <td><img src="e2e/screenshots/search-opened.png" alt="Global search" /></td>
-  </tr>
-</table>
 
 ---
 
@@ -114,28 +143,16 @@ npm run build:mac    # produces .dmg in dist/
 
 ---
 
-## How It Works
-
-Swob reads the JSONL conversation logs that Claude Code, Codex, and Cursor store on disk. It parses session files, detects multi-file continuations and branches, reconstructs pre-compact history, and presents everything in a visual interface. Your data stays local — Swob never uploads anything.
-
----
-
 ## Tech Stack
 
-| | |
-|---|---|
-| Framework | Electron 40 + React 19 + TypeScript |
-| Build | electron-vite |
-| State | Zustand |
-| UI | Tailwind CSS 4 |
-| Charts | Recharts |
-| Testing | Vitest + Playwright |
+Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · Recharts · electron-vite
 
 ---
 
 ## Related
 
 - [claude --resume](https://docs.anthropic.com/en/docs/claude-code) — Built-in session resume (limited to recent sessions)
+- [CC Switch](https://github.com/farion1231/cc-switch) — Provider & config manager for AI CLI tools
 - [awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code) — Curated list of Claude Code tools
 
 ---

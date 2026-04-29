@@ -81,6 +81,13 @@ const api = {
   sshResume: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:resume', sessionId, permissionMode),
   sshFork: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:fork', sessionId, permissionMode),
   sshBuildCommand: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:buildCommand', sessionId, permissionMode),
+  networkGetInfo: () => ipcRenderer.invoke('network:getInfo') as Promise<{
+    localIps: string[]
+    tailscaleIp: string | null
+    publicIp: string | null
+    hostname: string
+    sshEnabled: boolean
+  }>,
 
   // Insights
   getInsights: () => ipcRenderer.invoke('insights:get'),

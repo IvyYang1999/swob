@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree, Terminal, Check, AlertCircle } from 'lucide-react'
+import { X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree, Terminal, Check, AlertCircle, Smartphone, RefreshCw, Copy, Wifi, Globe2, Shield } from 'lucide-react'
 
 const ELECTRON_MODIFIER_MAP: Record<string, string> = {
   Meta: 'CommandOrControl',
@@ -131,6 +131,147 @@ function StatusRow({ label, ok }: { label: string; ok: boolean }) {
       }
       <span className={ok ? 'text-primary' : 'text-muted'}>{label}</span>
     </div>
+  )
+}
+
+type NetworkInfo = {
+  localIps: string[]
+  tailscaleIp: string | null
+  publicIp: string | null
+  hostname: string
+  sshEnabled: boolean
+}
+
+function IpRow({ ip, label, icon, desc, warn }: {
+  ip: string
+  label: string
+  icon: React.ReactNode
+  desc: string
+  warn?: string
+}) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(ip)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+  return (
+    <div className="flex flex-col gap-1 p-2.5 rounded-lg bg-surface border border-edge-subtle">
+      <div className="flex items-center gap-1.5 text-[11px] font-medium text-secondary">
+        {icon}
+        {label}
+      </div>
+      <div className="flex items-center gap-2">
+        <code className="flex-1 text-xs font-mono text-primary bg-hover px-2 py-1 rounded select-all">{ip}</code>
+        <button
+          onClick={copy}
+          className="p-1 rounded hover:bg-hover text-muted hover:text-primary"
+          title="复制"
+        >
+          {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+        </button>
+      </div>
+      <p className="text-[10px] text-muted leading-relaxed">{desc}</p>
+      {warn && <p className="text-[10px] text-amber-400 leading-relaxed">⚠️ {warn}</p>}
+    </div>
+  )
+}
+
+function MobileConnectSection() {
+  const [info, setInfo] = useState<NetworkInfo | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await window.api.networkGetInfo()
+      setInfo(result)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const localIpsWithoutTailscale = info?.localIps.filter(ip => !ip.startsWith('100.')) ?? []
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-2">
+        <label className="flex items-center gap-2 text-xs font-medium text-secondary">
+          <Smartphone size={12} />
+          手机连接信息
+        </label>
+        <button
+          onClick={load}
+          disabled={loading}
+          className="p-1 rounded hover:bg-hover text-muted hover:text-primary disabled:opacity-40"
+          title="刷新"
+        >
+          <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+
+      {!info && loading && (
+        <p className="text-[11px] text-muted">检测中...</p>
+      )}
+
+      {info && (
+        <div className="flex flex-col gap-2">
+          {!info.sshEnabled && (
+            <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-400/10 border border-amber-400/30 text-[11px] text-amber-400">
+              <AlertCircle size={12} className="mt-0.5 shrink-0" />
+              <span>未开启「远程登录」(SSH)。请前往 系统设置 → 通用 → 共享 → 远程登录 开启。</span>
+            </div>
+          )}
+
+          {info.tailscaleIp && (
+            <IpRow
+              ip={info.tailscaleIp}
+              label="Tailscale（推荐，跨网络可用）"
+              icon={<Shield size={10} className="text-purple-400" />}
+              desc="已检测到 Tailscale。只要手机也安装 Tailscale 并登录同一账号，任何网络下都能连接，无需公网 IP。"
+            />
+          )}
+
+          {localIpsWithoutTailscale.map((ip) => (
+            <IpRow
+              key={ip}
+              ip={ip}
+              label="局域网 IP（同一 WiFi 下可用）"
+              icon={<Wifi size={10} className="text-blue-400" />}
+              desc="仅限手机和 Mac 在同一个 WiFi 网络时使用。IP 可能随网络变化，建议配合路由器固定 IP 使用。"
+              warn="跨网络、VPN 下不可用"
+            />
+          ))}
+
+          {info.publicIp && (
+            <IpRow
+              ip={info.publicIp}
+              label="公网 IP（跨网络可用，需端口转发）"
+              icon={<Globe2 size={10} className="text-green-400" />}
+              desc="从互联网可见的 IP。需在路由器上将 22 端口转发到这台 Mac。家用 IP 通常会定期变化。"
+              warn="需要路由器端口转发，且 IP 可能随时变化"
+            />
+          )}
+
+          {!info.publicIp && !loading && (
+            <p className="text-[10px] text-muted">公网 IP 获取失败（可能无网络）</p>
+          )}
+
+          {!info.tailscaleIp && (
+            <div className="p-2.5 rounded-lg bg-surface border border-edge-subtle text-[10px] text-muted leading-relaxed">
+              <span className="font-medium text-secondary">推荐：安装 Tailscale</span> 实现最简单的跨网络连接——无需公网 IP、无需端口转发，手机和 Mac 各安装一次即可。
+              免费个人计划支持 3 台设备。
+            </div>
+          )}
+
+          <p className="text-[10px] text-faint">
+            用户名：{info.hostname ? <code className="bg-hover px-1 rounded">{info.hostname}</code> : '未知'}。在终端运行 <code className="bg-hover px-1 rounded">whoami</code> 获取用户名。
+          </p>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -357,6 +498,9 @@ export function SettingsPanel() {
 
         {/* CLI & Agent */}
         <CliSection />
+
+        {/* 手机连接信息 */}
+        <MobileConnectSection />
       </div>
       </div>
     </div>

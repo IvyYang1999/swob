@@ -480,13 +480,44 @@ ipcMain.handle('icloud:download', (_event, sessionId: string) => {
 })
 
 // Scan all sessions and return which ones are cloud-only
-ipcMain.handle('icloud:scanCloudSessions', () => {
+// Also re-scans Library to discover newly downloaded sessions from other devices
+ipcMain.handle('icloud:scanCloudSessions', async () => {
   const cloudSessions: string[] = []
   for (const session of cachedSessions) {
     if (isSessionCloudOnly(session.sessionId)) {
       cloudSessions.push(session.sessionId)
     }
   }
+
+  // Re-scan Library for newly downloaded sessions (e.g. after iCloud download)
+  try {
+    const localIds = new Set(cachedSessions.map((s) => s.sessionId))
+    const libraryOnly = findLibraryOnlySessions(localIds)
+    for (const { sessionId, backupPath, meta } of libraryOnly) {
+      try {
+        const raw = await parseSessionFile(backupPath)
+        const summary = buildSessionSummary(backupPath, raw, true)
+        if (summary) {
+          summary.allFilePaths = [backupPath]
+          summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
+          summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+          const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
+          summary.isRemote = remoteByPath
+          if (remoteByPath) {
+            const remoteUser = meta.projectPath ? extractRemoteUser(meta.projectPath) : null
+            if (remoteUser) summary.remoteHost = `${remoteUser}@remote`
+          }
+          if (meta.customTitle) {
+            ;(summary as any)._libraryTitle = meta.customTitle
+          }
+          cachedSessions.push(summary)
+          knownSessionIds.add(sessionId)
+          mainWindow?.webContents.send('sessions:added', summary)
+        }
+      } catch { /* skip unparseable backup */ }
+    }
+  } catch { /* ignore */ }
+
   return cloudSessions
 })
 

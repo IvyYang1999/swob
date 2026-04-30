@@ -604,6 +604,7 @@ ipcMain.handle('image:contextMenu', (_event, options: { path: string }) => {
 })
 
 ipcMain.handle('sessions:loadAll', async () => {
+  try {
   const sessions = await loadAllSessions()
   cachedSessions = sessions
   knownSessionIds.clear()
@@ -678,6 +679,10 @@ ipcMain.handle('sessions:loadAll', async () => {
   }
 
   return sessions
+  } catch (err) {
+    console.error('sessions:loadAll failed:', err)
+    return cachedSessions // return whatever we have
+  }
 })
 
 ipcMain.handle(

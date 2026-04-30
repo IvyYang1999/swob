@@ -311,6 +311,8 @@ function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: Librar
 
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue
+    // Skip iCloud placeholder files (e.g. .filename.icloud)
+    if (entry.name.includes('.icloud')) continue
     const fullPath = path.join(dirPath, entry.name)
 
     // Resolve symlinks
@@ -323,7 +325,7 @@ function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: Librar
         realPath = fs.realpathSync(fullPath)
       }
     } catch {
-      continue // broken symlink
+      continue // broken symlink or iCloud download in progress
     }
 
     if (!fs.statSync(realPath).isDirectory()) continue

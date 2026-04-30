@@ -331,15 +331,32 @@ export async function parseSessionFile(filePath: string): Promise<RawJsonlMessag
   const stream = fs.createReadStream(filePath, { encoding: 'utf-8' })
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
 
-  for await (const line of rl) {
-    if (!line.trim()) continue
-    try {
-      messages.push(JSON.parse(line))
-    } catch {
-      // skip malformed lines
-    }
-  }
-  return messages
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      rl.close()
+      stream.destroy()
+      resolve(messages)
+    }, 30_000) // 30s timeout for large files or iCloud downloads
+
+    rl.on('line', (line) => {
+      if (!line.trim()) return
+      try {
+        messages.push(JSON.parse(line))
+      } catch {
+        // skip malformed lines
+      }
+    })
+
+    rl.on('close', () => {
+      clearTimeout(timeout)
+      resolve(messages)
+    })
+
+    rl.on('error', () => {
+      clearTimeout(timeout)
+      resolve(messages)
+    })
+  })
 }
 
 export function buildSessionSummary(

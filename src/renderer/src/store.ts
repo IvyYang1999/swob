@@ -242,19 +242,24 @@ export const useStore = create<AppState>((set, get) => ({
   toasts: [],
 
   initialize: async () => {
-    const [sessions, config, sshConfig] = await Promise.all([
-      window.api.loadAllSessions(),
-      window.api.loadConfig(),
-      (window.api as any).sshGetConfig?.() ?? null
-    ])
-    set({
-      sessions,
-      config,
-      viewMode: config.preferences?.defaultViewMode || 'compact',
-      locale: (config.preferences as any)?.locale || 'zh-CN',
-      sshConfig: sshConfig ?? null,
-      loading: false
-    })
+    try {
+      const [sessions, config, sshConfig] = await Promise.all([
+        window.api.loadAllSessions(),
+        window.api.loadConfig(),
+        (window.api as any).sshGetConfig?.() ?? null
+      ])
+      set({
+        sessions,
+        config,
+        viewMode: config.preferences?.defaultViewMode || 'compact',
+        locale: (config.preferences as any)?.locale || 'zh-CN',
+        sshConfig: sshConfig ?? null,
+        loading: false
+      })
+    } catch (err) {
+      console.error('Failed to initialize:', err)
+      set({ loading: false })
+    }
     try {
       localStorage.setItem('csm:sessions', JSON.stringify(sessions))
       localStorage.setItem('csm:config', JSON.stringify(config))

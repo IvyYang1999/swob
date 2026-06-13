@@ -11,11 +11,14 @@
  */
 import * as path from 'path'
 
-/** vault 内不参与 swob 扫描/放置的目录名（任意层级匹配）。可被 .swob-config.json 的 ignoreDirs 覆盖。 */
-export const DEFAULT_IGNORE_DIRS = [
-  'wiki', 'clipii', '日记', '附件', 'Excalidraw',
-  'inbox', '收集', '创作', '_os', 'node_modules'
-]
+/**
+ * 默认不参与 swob 扫描/放置的目录名（任意层级匹配）。
+ *
+ * 只放**通用**的开发垃圾目录——绝不硬编码某个 vault 专属的目录名（如 wiki、clipii），
+ * 否则开源给别人用时会莫名其妙地隐藏人家的目录。需要隐藏自己 vault 的目录，
+ * 在该库的 `.swob-config.json` 里写 `ignoreDirs: [...]` 覆盖即可。
+ */
+export const DEFAULT_IGNORE_DIRS = ['node_modules', '.git']
 
 /** 默认的会话归档子目录名。 */
 export const SESSION_FOLDER = 'AI会话'

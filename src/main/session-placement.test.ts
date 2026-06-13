@@ -12,8 +12,17 @@ import {
 } from './session-placement'
 
 const VAULT = '/Users/me/Documents/main'
-const ignore = new Set(DEFAULT_IGNORE_DIRS)
+// 用户在 .swob-config.json 里配的忽略名单（DEFAULT 只含通用垃圾目录，不含 vault 专属名）
+const ignore = new Set(['wiki', 'clipii', '附件', 'node_modules'])
 const central = path.join(VAULT, SESSION_FOLDER)
+
+describe('DEFAULT_IGNORE_DIRS（开源默认值，不得含 vault 专属目录名）', () => {
+  it('只含通用垃圾目录，不硬编码 wiki/clipii 等', () => {
+    expect(DEFAULT_IGNORE_DIRS).not.toContain('wiki')
+    expect(DEFAULT_IGNORE_DIRS).not.toContain('clipii')
+    expect(DEFAULT_IGNORE_DIRS).toContain('node_modules')
+  })
+})
 
 describe('resolveSessionParent', () => {
   it('vault 内项目目录启动 → <cwd>/AI会话', () => {

@@ -187,6 +187,10 @@ function FolderNode({
   const headerRef = useRef<HTMLDivElement>(null)
   const childFolders = allFolders.filter((f) => f.parentId === folder.id)
   const folderSessions = folder.sessionIds.map((id) => sessionMap.get(id)).filter(Boolean) as SessionSummary[]
+  // 文件夹内同样按「多轮直接列出、单轮（≤1 轮）折叠到底部」渲染，与顶层未分组一致
+  const multiTurnSessions = folderSessions.filter((s) => s.turnCount > 1)
+  const singleTurnSessions = folderSessions.filter((s) => s.turnCount <= 1)
+  const [singleTurnExpanded, setSingleTurnExpanded] = useState(false)
   const totalCount = folderSessions.length + childFolders.reduce((acc, cf) => acc + cf.sessionIds.length, 0)
 
   const handleDrop = (e: React.DragEvent, zone: 'inside' | 'before' | 'after') => {
@@ -296,13 +300,33 @@ function FolderNode({
               onSessionRenameCancel={onSessionRenameCancel}
               onDoubleClickRenameSession={onDoubleClickRenameSession} />
           ))}
-          {folderSessions.map((session) => (
+          {multiTurnSessions.map((session) => (
             <SessionItem key={session.id} session={session} depth={depth + 1}
               onContextMenu={onSessionContextMenu} isRenaming={renamingSessionId === session.id}
               renameValue={sessionRenameValue} onRenameChange={onSessionRenameChange}
               onRenameSubmit={onSessionRenameSubmit} onRenameCancel={onSessionRenameCancel}
               onDoubleClickRename={onDoubleClickRenameSession} />
           ))}
+          {singleTurnSessions.length > 0 && (
+            <>
+              <button
+                onClick={() => setSingleTurnExpanded(!singleTurnExpanded)}
+                className="w-full px-3 py-1.5 flex items-center gap-1.5 text-xs text-muted hover:text-secondary hover:bg-surface/50"
+                style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}
+              >
+                {singleTurnExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                <span>{t('sidebar.single_turn')}</span>
+                <span className="text-faint ml-auto">{singleTurnSessions.length}</span>
+              </button>
+              {singleTurnExpanded && singleTurnSessions.map((session) => (
+                <SessionItem key={session.id} session={session} depth={depth + 2}
+                  onContextMenu={onSessionContextMenu} isRenaming={renamingSessionId === session.id}
+                  renameValue={sessionRenameValue} onRenameChange={onSessionRenameChange}
+                  onRenameSubmit={onSessionRenameSubmit} onRenameCancel={onSessionRenameCancel}
+                  onDoubleClickRename={onDoubleClickRenameSession} />
+              ))}
+            </>
+          )}
           {childFolders.length === 0 && folderSessions.length === 0 && creatingSubfolderId !== folder.id && (
             <div className="py-2 text-xs text-faint italic" style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}>
               {t('sidebar.drop_here')}

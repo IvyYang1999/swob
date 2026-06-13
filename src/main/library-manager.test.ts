@@ -472,7 +472,14 @@ describe('库根 = vault：cwd 感知放置 + 忽略名单 + 安全删除', () =
     expect(path.dirname(dir)).not.toBe(tmpRoot)
   })
 
-  it('scanLibrary 跳过忽略目录（wiki）里的会话，但收录项目里的会话', () => {
+  it('scanLibrary 跳过配置的 ignoreDirs 里的会话，但收录项目里的会话', () => {
+    // ignoreDirs 由用户在 .swob-config.json 配置（DEFAULT 不含 vault 专属名）
+    fs.writeFileSync(path.join(tmpRoot, '.swob-config.json'), JSON.stringify({
+      libraryRoot: tmpRoot,
+      preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' },
+      ignoreDirs: ['wiki']
+    }))
+    lib.initLibrary(tmpRoot) // 重新加载 ignoreDirs
     makeSession(path.join(tmpRoot, 'wiki', '不该出现'), 'wiki-x')
     makeSession(path.join(tmpRoot, '项目', '飞搜', 'AI会话', '应该出现'), 'proj-x')
     const ids = collectIds(lib.scanLibrary())

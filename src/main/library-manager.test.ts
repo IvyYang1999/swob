@@ -427,3 +427,73 @@ describe('buildSshResumeCommand', () => {
     expect(cmd).not.toContain('cd ')
   })
 })
+
+describe('库根 = vault：cwd 感知放置 + 忽略名单 + 安全删除', () => {
+  function summary(sessionId: string, cwds: string[]) {
+    return {
+      sessionId,
+      cwds,
+      firstUserMessage: '会话 ' + sessionId,
+      createdAt: '2026-06-01T00:00:00Z',
+      updatedAt: '2026-06-01T01:00:00Z',
+      projectPath: '/fake',
+      filePath: '/fake/' + sessionId + '.jsonl',
+      allFilePaths: ['/fake/' + sessionId + '.jsonl']
+    } as any
+  }
+
+  function makeSession(dir: string, sessionId: string) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, '.swob-session.json'), JSON.stringify({
+      sessionId, sourceFilePaths: [], createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z', projectPath: '/x'
+    }))
+  }
+
+  function collectIds(tree: any): string[] {
+    const ids: string[] = []
+    const walk = (f: any) => { for (const s of f.sessions) ids.push(s.sessionId); for (const c of f.children) walk(c) }
+    for (const s of tree.ungroupedSessions) ids.push(s.sessionId)
+    for (const f of tree.folders) walk(f)
+    return ids
+  }
+
+  it('vault 内项目目录启动的会话 → 落进 <cwd>/AI会话/', async () => {
+    const cwd = path.join(tmpRoot, '项目', '飞搜')
+    fs.mkdirSync(cwd, { recursive: true })
+    const dir = await lib.ensureSessionInLibrary(summary('in-vault-1', [cwd]))
+    expect(dir).toBe(path.join(cwd, 'AI会话', '会话 in-vault-1'))
+    expect(fs.existsSync(path.join(dir, '.swob-session.json'))).toBe(true)
+  })
+
+  it('vault 外启动的会话 → 中央桶 <root>/AI会话/，绝不落在库根本身', async () => {
+    const dir = await lib.ensureSessionInLibrary(summary('outside-1', ['/somewhere/else']))
+    expect(dir).toBe(path.join(tmpRoot, 'AI会话', '会话 outside-1'))
+    expect(path.dirname(dir)).not.toBe(tmpRoot)
+  })
+
+  it('scanLibrary 跳过忽略目录（wiki）里的会话，但收录项目里的会话', () => {
+    makeSession(path.join(tmpRoot, 'wiki', '不该出现'), 'wiki-x')
+    makeSession(path.join(tmpRoot, '项目', '飞搜', 'AI会话', '应该出现'), 'proj-x')
+    const ids = collectIds(lib.scanLibrary())
+    expect(ids).toContain('proj-x')
+    expect(ids).not.toContain('wiki-x')
+  })
+
+  it('deleteLibraryFolder 拒绝删除含用户文件的目录，笔记保住', () => {
+    const proj = path.join(tmpRoot, '项目', '飞搜')
+    fs.mkdirSync(proj, { recursive: true })
+    fs.writeFileSync(path.join(proj, 'context.md'), '# 我的项目笔记')
+    expect(() => lib.deleteLibraryFolder(proj)).toThrow()
+    expect(fs.existsSync(path.join(proj, 'context.md'))).toBe(true)
+    expect(fs.existsSync(proj)).toBe(true)
+  })
+
+  it('deleteLibraryFolder 正常删除纯会话容器（无散文件）', () => {
+    const folder = path.join(tmpRoot, '纯容器')
+    makeSession(path.join(folder, '一个会话'), 'pure-x')
+    lib.scanLibrary()
+    expect(() => lib.deleteLibraryFolder(folder)).not.toThrow()
+    expect(fs.existsSync(folder)).toBe(false)
+  })
+})

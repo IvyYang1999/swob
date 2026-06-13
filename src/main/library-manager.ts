@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch } from './session-loader'
+import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
 import type { RawJsonlMessage, ContentPart, SessionSummary, Folder, UserConfig } from './types'
 
 // ============ Types ============
@@ -55,6 +56,7 @@ export interface LibraryConfig {
   folderOrder?: string[]  // relative paths, determines display order
   branchFolders?: Record<string, string[]>  // branch unique ID → folder relative paths
   branchMeta?: Record<string, { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }>
+  ignoreDirs?: string[]  // 库根设为整个 vault 时，扫描/放置时跳过的目录名（如 wiki、clipii）
 }
 
 // ============ Constants ============
@@ -97,9 +99,14 @@ const BACKUP_FILE = 'backup.jsonl'
 // ============ Library Manager ============
 
 let _root: string = DEFAULT_ROOT
+let _ignoreDirs: Set<string> = new Set(DEFAULT_IGNORE_DIRS)
 
 export function getLibraryRoot(): string {
   return _root
+}
+
+export function getIgnoreDirs(): Set<string> {
+  return _ignoreDirs
 }
 
 export function initLibrary(root?: string): void {
@@ -107,6 +114,9 @@ export function initLibrary(root?: string): void {
   if (!fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }
+  // 库根可能是整个 vault：加载忽略名单，避免扫描 wiki/clipii/日记 等非项目目录
+  const cfg = loadLibraryConfig()
+  _ignoreDirs = new Set(cfg.ignoreDirs && cfg.ignoreDirs.length ? cfg.ignoreDirs : DEFAULT_IGNORE_DIRS)
 }
 
 // --- Config ---
@@ -168,6 +178,46 @@ function writeSessionMeta(dirPath: string, meta: SessionMeta): void {
 
 function isSessionDir(dirPath: string): boolean {
   return fs.existsSync(path.join(dirPath, SESSION_META_FILE))
+}
+
+/**
+ * 文件夹（递归）是否含有「非会话」的用户文件。
+ *
+ * 库根可能 = 整个 vault，于是 wiki/、项目/飞搜/ 这类含笔记的真实目录会作为
+ * 「文件夹」出现在 swob 里。删除文件夹是递归强删（fs.rmSync force），一旦误删
+ * 这种目录就会毁掉用户笔记。此函数用于在删除前拦截：会话目录内部的文件
+ * （transcript.md / backup.jsonl 等）是允许的，但非会话目录里的散文件 = 用户内容，
+ * 一旦发现就拒绝删除。
+ */
+function folderHasUserFiles(dirPath: string): boolean {
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true })
+  } catch {
+    return false
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const fullPath = path.join(dirPath, entry.name)
+    let realPath = fullPath
+    try {
+      if (fs.lstatSync(fullPath).isSymbolicLink()) realPath = fs.realpathSync(fullPath)
+    } catch {
+      continue // broken symlink
+    }
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(realPath)
+    } catch {
+      continue
+    }
+    if (stat.isFile()) return true // 散文件 = 用户内容
+    if (stat.isDirectory()) {
+      if (isSessionDir(realPath)) continue // 会话目录内部文件是允许的
+      if (folderHasUserFiles(realPath)) return true
+    }
+  }
+  return false
 }
 
 // --- Index: sessionId → dirPath ---
@@ -313,6 +363,8 @@ function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: Librar
     if (entry.name.startsWith('.')) continue
     // Skip iCloud placeholder files (e.g. .filename.icloud)
     if (entry.name.includes('.icloud')) continue
+    // 库根设为整个 vault 时，跳过 wiki/clipii/日记 等非项目目录
+    if (_ignoreDirs.has(entry.name)) continue
     const fullPath = path.join(dirPath, entry.name)
 
     // Resolve symlinks
@@ -493,11 +545,15 @@ export async function ensureSessionInLibrary(
     return existing
   }
 
-  // Create new session dir
+  // Create new session dir.
+  // 按启动目录归档：vault 内项目目录启动 → <cwd>/AI会话/；否则 → 中央桶 <root>/AI会话/。
+  // 任何会话都不会落在库根本身（即便库根 = vault）。
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId.slice(0, 12)
   const baseName = sanitizeDirName(title)
-  const dirName = findUniqueDirName(_root, baseName)
-  const dirPath = path.join(_root, dirName)
+  const parentDir = resolveSessionParent(session.cwds, _root, _ignoreDirs)
+  fs.mkdirSync(parentDir, { recursive: true })
+  const dirName = findUniqueDirName(parentDir, baseName)
+  const dirPath = path.join(parentDir, dirName)
 
   fs.mkdirSync(dirPath, { recursive: true })
 
@@ -624,6 +680,15 @@ export function moveLibraryFolderToParent(srcPath: string, destParentPath: strin
 export function deleteLibraryFolder(folderPath: string): void {
   // Only delete if it's a folder (no .swob-session.json)
   if (isSessionDir(folderPath)) return
+
+  // 安全护栏：库根可能 = 整个 vault，拒绝删除含用户笔记的真实目录（如 wiki/、项目/飞搜/）。
+  // 正常的 swob 文件夹只含会话/子文件夹，不会触发；含散文件的目录会被拦下。
+  if (folderHasUserFiles(folderPath)) {
+    throw new Error(
+      `拒绝删除：「${path.basename(folderPath)}」含有非会话文件（可能是你的笔记/文档）。` +
+      `如果库根设成了整个 vault，请在文件系统里手动确认后再删。`
+    )
+  }
 
   // Recursively collect ALL sessions (including those in subfolders)
   function collectAllSessions(dirPath: string): LibrarySession[] {

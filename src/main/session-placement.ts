@@ -1,0 +1,66 @@
+/**
+ * 会话落点决策（纯函数，无副作用，便于单测）。
+ *
+ * 设计目标：让 swob 库根可以安全地设为整个 Obsidian vault。
+ * - 在 vault 内某项目目录里启动的会话 → 落进 `<cwd>/AI会话/`，
+ *   于是它就直接出现在该项目的目录树里，无需软链接/别名。
+ * - vault 外（或 vault 根、或忽略目录里）启动的会话 → 落进中央桶 `<root>/AI会话/`。
+ *
+ * 关键不变量：**任何会话都不会落在库根本身**——即便库根 = vault，
+ * vault 外的会话也进 `<root>/AI会话/`，绝不污染 vault 根目录。
+ */
+import * as path from 'path'
+
+/** vault 内不参与 swob 扫描/放置的目录名（任意层级匹配）。可被 .swob-config.json 的 ignoreDirs 覆盖。 */
+export const DEFAULT_IGNORE_DIRS = [
+  'wiki', 'clipii', '日记', '附件', 'Excalidraw',
+  'inbox', '收集', '创作', '_os', 'node_modules'
+]
+
+/** 默认的会话归档子目录名。 */
+export const SESSION_FOLDER = 'AI会话'
+
+function isInside(parentDir: string, childPath: string): boolean {
+  const rel = path.relative(parentDir, childPath)
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+}
+
+/** 路径相对 root 的任一段命中忽略名单。 */
+export function isIgnoredPath(p: string, root: string, ignore: Set<string>): boolean {
+  const rel = path.relative(root, p)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false
+  return rel.split(path.sep).some((seg) => ignore.has(seg))
+}
+
+/**
+ * 决定会话应落在哪个「AI会话」父目录下。
+ *
+ * @param cwds    会话出现过的工作目录（取第一个有效值作为「启动目录」）
+ * @param root    库根
+ * @param ignore  忽略目录名集合
+ * @param folder  归档子目录名，默认 `AI会话`
+ * @returns       会话目录应创建在此父目录下
+ */
+export function resolveSessionParent(
+  cwds: string[] | undefined,
+  root: string,
+  ignore: Set<string> = new Set(DEFAULT_IGNORE_DIRS),
+  folder: string = SESSION_FOLDER
+): string {
+  const rootResolved = path.resolve(root)
+  // 若库根本身就是「AI会话」目录（迁移前的旧配置），中央桶 = 库根，避免 AI会话/AI会话 嵌套
+  const central =
+    path.basename(rootResolved) === folder ? rootResolved : path.join(root, folder)
+  const launch = (cwds || []).find((c) => c && c.trim())
+  if (!launch) return central
+
+  const cwd = path.resolve(launch)
+  if (
+    isInside(rootResolved, cwd) &&
+    cwd !== rootResolved &&
+    !isIgnoredPath(cwd, rootResolved, ignore)
+  ) {
+    return path.join(cwd, folder)
+  }
+  return central
+}

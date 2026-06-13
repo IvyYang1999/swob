@@ -48,12 +48,15 @@ export function resolveSessionParent(
   cwds: string[] | undefined,
   root: string,
   ignore: Set<string> = new Set(DEFAULT_IGNORE_DIRS),
-  folder: string = SESSION_FOLDER
+  folder: string = SESSION_FOLDER,
+  centralSubfolder?: string
 ): string {
   const rootResolved = path.resolve(root)
   // 若库根本身就是「AI会话」目录（迁移前的旧配置），中央桶 = 库根，避免 AI会话/AI会话 嵌套
-  const central =
+  const centralBase =
     path.basename(rootResolved) === folder ? rootResolved : path.join(root, folder)
+  // 中央桶里新会话可再落进一个子目录（如 单轮会话/未分组），让它直接出现在 UI 底部对应区
+  const central = centralSubfolder ? path.join(centralBase, centralSubfolder) : centralBase
   const launch = (cwds || []).find((c) => c && c.trim())
   if (!launch) return central
 

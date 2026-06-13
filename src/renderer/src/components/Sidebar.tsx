@@ -187,10 +187,6 @@ function FolderNode({
   const headerRef = useRef<HTMLDivElement>(null)
   const childFolders = allFolders.filter((f) => f.parentId === folder.id)
   const folderSessions = folder.sessionIds.map((id) => sessionMap.get(id)).filter(Boolean) as SessionSummary[]
-  // 文件夹内同样按「多轮直接列出、单轮（≤1 轮）折叠到底部」渲染，与顶层未分组一致
-  const multiTurnSessions = folderSessions.filter((s) => s.turnCount > 1)
-  const singleTurnSessions = folderSessions.filter((s) => s.turnCount <= 1)
-  const [singleTurnExpanded, setSingleTurnExpanded] = useState(false)
   const totalCount = folderSessions.length + childFolders.reduce((acc, cf) => acc + cf.sessionIds.length, 0)
 
   const handleDrop = (e: React.DragEvent, zone: 'inside' | 'before' | 'after') => {
@@ -300,33 +296,13 @@ function FolderNode({
               onSessionRenameCancel={onSessionRenameCancel}
               onDoubleClickRenameSession={onDoubleClickRenameSession} />
           ))}
-          {multiTurnSessions.map((session) => (
+          {folderSessions.map((session) => (
             <SessionItem key={session.id} session={session} depth={depth + 1}
               onContextMenu={onSessionContextMenu} isRenaming={renamingSessionId === session.id}
               renameValue={sessionRenameValue} onRenameChange={onSessionRenameChange}
               onRenameSubmit={onSessionRenameSubmit} onRenameCancel={onSessionRenameCancel}
               onDoubleClickRename={onDoubleClickRenameSession} />
           ))}
-          {singleTurnSessions.length > 0 && (
-            <>
-              <button
-                onClick={() => setSingleTurnExpanded(!singleTurnExpanded)}
-                className="w-full px-3 py-1.5 flex items-center gap-1.5 text-xs text-muted hover:text-secondary hover:bg-surface/50"
-                style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}
-              >
-                {singleTurnExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                <span>{t('sidebar.single_turn')}</span>
-                <span className="text-faint ml-auto">{singleTurnSessions.length}</span>
-              </button>
-              {singleTurnExpanded && singleTurnSessions.map((session) => (
-                <SessionItem key={session.id} session={session} depth={depth + 2}
-                  onContextMenu={onSessionContextMenu} isRenaming={renamingSessionId === session.id}
-                  renameValue={sessionRenameValue} onRenameChange={onSessionRenameChange}
-                  onRenameSubmit={onSessionRenameSubmit} onRenameCancel={onSessionRenameCancel}
-                  onDoubleClickRename={onDoubleClickRenameSession} />
-              ))}
-            </>
-          )}
           {childFolders.length === 0 && folderSessions.length === 0 && creatingSubfolderId !== folder.id && (
             <div className="py-2 text-xs text-faint italic" style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}>
               {t('sidebar.drop_here')}
@@ -466,11 +442,27 @@ export function Sidebar({ width }: { width: number }) {
   }, [selectedUniqueId])
 
   // --- Computed ---
+  // 「未分组容器」：配置里指定的文件夹名（如 未分组/单轮会话）。它们的会话被当作未分组，
+  // 拉到侧栏底部按轮数罗列/折叠，文件夹本身不在树里显示。底层仍是真实文件夹（Obsidian 可见）。
+  const ungroupingNames = useMemo(() => {
+    const ung = (config?.preferences as any)?.ungrouping
+    return new Set<string>(ung ? [ung.multiTurn, ung.singleTurn].filter(Boolean) : [])
+  }, [config?.preferences])
+  const ungroupingFolderIds = useMemo(
+    () => new Set((config?.folders || []).filter((f) => ungroupingNames.has(f.name)).map((f) => f.id)),
+    [config?.folders, ungroupingNames]
+  )
+  // 树渲染用的文件夹列表：剔除未分组容器
+  const treeFolders = useMemo(
+    () => (config?.folders || []).filter((f) => !ungroupingFolderIds.has(f.id)),
+    [config?.folders, ungroupingFolderIds]
+  )
+
   const groupedSessionIds = useMemo(() => {
     const ids = new Set<string>()
-    config?.folders.forEach((f) => f.sessionIds.forEach((id) => ids.add(id)))
+    treeFolders.forEach((f) => f.sessionIds.forEach((id) => ids.add(id)))
     return ids
-  }, [config?.folders])
+  }, [treeFolders])
 
   const ungroupedAll = useMemo(
     () => sessions.filter((s) => {
@@ -490,7 +482,7 @@ export function Sidebar({ width }: { width: number }) {
     return map
   }, [sessions])
 
-  const rootFolders = useMemo(() => (config?.folders || []).filter((f) => !f.parentId), [config?.folders])
+  const rootFolders = useMemo(() => treeFolders.filter((f) => !f.parentId), [treeFolders])
 
   const projectViewMode = (config?.preferences as any)?.projectViewMode || 'folders'
 
@@ -515,7 +507,7 @@ export function Sidebar({ width }: { width: number }) {
   }, [sessions, projectViewMode])
 
   const effectiveRootFolders = projectViewMode === 'paths' ? pathFolders : rootFolders
-  const effectiveAllFolders = projectViewMode === 'paths' ? pathFolders : (config?.folders || [])
+  const effectiveAllFolders = projectViewMode === 'paths' ? pathFolders : treeFolders
 
   // --- Auto-scroll during drag ---
   const handleListDragOver = useCallback((e: React.DragEvent) => {

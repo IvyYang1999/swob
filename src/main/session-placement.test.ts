@@ -67,6 +67,17 @@ describe('resolveSessionParent', () => {
     expect(resolveSessionParent([], oldRoot, ignore)).toBe(oldRoot)
   })
 
+  it('中央桶可再指定子目录（单轮会话/未分组），让新会话直接进底部对应区', () => {
+    expect(resolveSessionParent(['/outside'], VAULT, ignore, undefined, '单轮会话')).toBe(
+      path.join(central, '单轮会话')
+    )
+    // vault 内启动的会话不受 centralSubfolder 影响（仍落进 <cwd>/AI会话）
+    const cwd = path.join(VAULT, '项目', '飞搜')
+    expect(resolveSessionParent([cwd], VAULT, ignore, undefined, '单轮会话')).toBe(
+      path.join(cwd, SESSION_FOLDER)
+    )
+  })
+
   it('无论如何都不会把会话落在库根本身', () => {
     const cases = [[VAULT], ['/outside'], [], [path.join(VAULT, 'clipii')]]
     for (const c of cases) {

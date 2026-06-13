@@ -52,6 +52,9 @@ export interface LibraryConfig {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
     sshConfig?: SshConfig
+    // 指定「未分组容器」：这两个文件夹的会话在 UI 底部按轮数罗列/折叠、不在树里显示。
+    // 新中央会话也按轮数落进这俩文件夹。不配则为空，swob 行为完全通用。
+    ungrouping?: { multiTurn: string; singleTurn: string }
   }
   folderOrder?: string[]  // relative paths, determines display order
   branchFolders?: Record<string, string[]>  // branch unique ID → folder relative paths
@@ -550,7 +553,13 @@ export async function ensureSessionInLibrary(
   // 任何会话都不会落在库根本身（即便库根 = vault）。
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId.slice(0, 12)
   const baseName = sanitizeDirName(title)
-  const parentDir = resolveSessionParent(session.cwds, _root, _ignoreDirs)
+  // 中央桶里的新会话按轮数落进 单轮会话/未分组 子目录（若库配置了 ungrouping），
+  // 使其直接出现在 UI 底部的单轮折叠/未分组区，不在 AI会话 文件夹里一闪而过。
+  const ung = (loadLibraryConfig().preferences as any)?.ungrouping
+  const centralSubfolder = ung
+    ? (session.turnCount > 1 ? ung.multiTurn : ung.singleTurn)
+    : undefined
+  const parentDir = resolveSessionParent(session.cwds, _root, _ignoreDirs, undefined, centralSubfolder)
   fs.mkdirSync(parentDir, { recursive: true })
   const dirName = findUniqueDirName(parentDir, baseName)
   const dirPath = path.join(parentDir, dirName)

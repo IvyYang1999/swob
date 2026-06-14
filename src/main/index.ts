@@ -27,6 +27,7 @@ import {
   syncBackup,
   getSessionMdPath,
   getSessionDirPath,
+  setSessionTurnCount,
   restoreBackupToClaudeSource,
   createLibraryFolder,
   renameLibraryFolder,
@@ -672,6 +673,12 @@ ipcMain.handle('sessions:loadAll', async () => {
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
+
+    // 持久化权威 turnCount 进 meta（所有类型，含 Codex/Cursor），供外部整理脚本按真实轮数归档
+    if (!s.id.includes(':intra-')) {
+      const ld = getSessionDirPath(s.sessionId)
+      if (ld) setSessionTurnCount(ld, s.turnCount)
+    }
 
     // Skip library/remote processing for non-Claude-Code sessions
     if (s.source === 'codex' || s.source === 'cursor') continue

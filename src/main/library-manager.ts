@@ -16,6 +16,7 @@ export interface SessionMeta {
   createdAt: string
   updatedAt: string
   projectPath: string
+  turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
 }
 
 export interface LibrarySession {
@@ -181,6 +182,18 @@ function writeSessionMeta(dirPath: string, meta: SessionMeta): void {
 
 function isSessionDir(dirPath: string): boolean {
   return fs.existsSync(path.join(dirPath, SESSION_META_FILE))
+}
+
+/** 把 swob 权威 turnCount 持久化进会话 meta（供外部整理脚本按真实轮数归档）。变化才写盘。 */
+export function setSessionTurnCount(dirPath: string, turnCount: number): void {
+  if (typeof turnCount !== 'number') return
+  try {
+    const m = readSessionMeta(dirPath)
+    if (m && m.turnCount !== turnCount) {
+      m.turnCount = turnCount
+      writeSessionMeta(dirPath, m)
+    }
+  } catch { /* ignore */ }
 }
 
 /**
@@ -572,7 +585,8 @@ export async function ensureSessionInLibrary(
     customTitle,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    projectPath: session.projectPath
+    projectPath: session.projectPath,
+    turnCount: session.turnCount
   }
   writeSessionMeta(dirPath, meta)
   sessionIndex.set(session.sessionId, dirPath)
@@ -639,8 +653,9 @@ export async function updateTranscript(sessionId: string, customTitle?: string):
   const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
   fs.writeFileSync(mdPath, md, 'utf-8')
 
-  // Update meta timestamps
+  // Update meta timestamps + 权威轮数
   meta.updatedAt = summary.updatedAt
+  meta.turnCount = summary.turnCount
   writeSessionMeta(dirPath, meta)
 }
 
@@ -850,6 +865,15 @@ export async function syncLibraryFromSessions(
   for (const session of sessions) {
     const customTitle = sessionMeta[session.sessionId]?.customTitle
     const dirPath = await ensureSessionInLibrary(session, customTitle)
+
+    // 持久化 swob 权威 turnCount 进 meta（各会话类型统一），供外部整理脚本按真实轮数归档
+    try {
+      const m = readSessionMeta(dirPath)
+      if (m && m.turnCount !== session.turnCount) {
+        m.turnCount = session.turnCount
+        writeSessionMeta(dirPath, m)
+      }
+    } catch { /* ignore */ }
 
     // Update transcript
     const mdPath = path.join(dirPath, TRANSCRIPT_FILE)

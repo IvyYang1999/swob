@@ -442,30 +442,10 @@ export function Sidebar({ width }: { width: number }) {
   }, [selectedUniqueId])
 
   // --- Computed ---
-  // 「未分组容器」：配置里指定的文件夹名（如 未分组/单轮会话）。它们的会话被当作未分组，
-  // 拉到侧栏底部按轮数罗列/折叠，文件夹本身不在树里显示。底层仍是真实文件夹（Obsidian 可见）。
+  // 「未分组容器」：配置里指定的文件夹名（如 未分组/单轮会话），不在树里显示、其会话拉到底部。
   const ungConfig = (config?.preferences as any)?.ungrouping as
     | { multiTurn?: string; singleTurn?: string }
     | undefined
-  // 收集「未分组容器」文件夹的会话 id。多轮容器(未分组)→底部平铺区；单轮容器(单轮会话)→底部折叠区。
-  // 关键：底部「多轮/单轮」的划分跟着【物理文件夹】走，而不是各自再按 turnCount 算一遍——
-  // 否则没有 transcript 的会话，swob 现算的轮数和整理脚本归档用的轮数会对不上，导致
-  // 明明在「单轮会话」文件夹里却显示到「未分组」。文件夹是单一事实来源，存储与显示永远一致。
-  const idsOfFolders = (names: Set<string>): Set<string> => {
-    const ids = new Set<string>()
-    ;(config?.folders || []).forEach((f) => {
-      if (names.has(f.name)) f.sessionIds.forEach((id) => ids.add(id))
-    })
-    return ids
-  }
-  const multiFolderSessionIds = useMemo(
-    () => idsOfFolders(new Set(ungConfig?.multiTurn ? [ungConfig.multiTurn] : [])),
-    [config?.folders, ungConfig?.multiTurn]
-  )
-  const singleFolderSessionIds = useMemo(
-    () => idsOfFolders(new Set(ungConfig?.singleTurn ? [ungConfig.singleTurn] : [])),
-    [config?.folders, ungConfig?.singleTurn]
-  )
   const ungroupingFolderIds = useMemo(() => {
     const names = new Set<string>(
       ungConfig ? [ungConfig.multiTurn, ungConfig.singleTurn].filter(Boolean) as string[] : []
@@ -478,29 +458,25 @@ export function Sidebar({ width }: { width: number }) {
     [config?.folders, ungroupingFolderIds]
   )
 
-  const groupedSessionIds = useMemo(() => {
-    const ids = new Set<string>()
-    treeFolders.forEach((f) => f.sessionIds.forEach((id) => ids.add(id)))
-    return ids
-  }, [treeFolders])
-
-  const ungroupedAll = useMemo(
-    () => sessions.filter((s) => {
-      // Branch sessions: only check their own id, not the parent's sessionId
-      if (s.id.includes(':intra-')) return !groupedSessionIds.has(s.id)
-      return !groupedSessionIds.has(s.id) && !groupedSessionIds.has(s.sessionId)
-    }),
-    [sessions, groupedSessionIds]
-  )
-
-  // 单轮判定：优先看物理文件夹（单轮会话→单轮、未分组→多轮）；都不在则回退到 turnCount（真·散会话）
+  // 底部归属【完全按主进程打的物理位置标签 ungroupBucket】判定，不靠 id 匹配：
+  //   'grouped' = 已在某主题文件夹（只在树里显示，绝不进底部，杜绝重复显示）
+  //   'multi'/'single' = 在 未分组/单轮会话 容器里 → 进底部对应区
+  //   'root'/无标签 = 真·游离会话（含分支、未归档新会话）→ 进底部，按 turnCount 分
+  const bucketOf = (s: SessionSummary): string | undefined => (s as any).ungroupBucket
   const isSingleTurn = (s: SessionSummary): boolean => {
-    if (singleFolderSessionIds.has(s.id) || singleFolderSessionIds.has(s.sessionId)) return true
-    if (multiFolderSessionIds.has(s.id) || multiFolderSessionIds.has(s.sessionId)) return false
+    const b = bucketOf(s)
+    if (b === 'single') return true
+    if (b === 'multi') return false
     return s.turnCount <= 1
   }
-  const ungroupedSessions = useMemo(() => ungroupedAll.filter((s) => !isSingleTurn(s)), [ungroupedAll, singleFolderSessionIds, multiFolderSessionIds])
-  const singleTurnSessions = useMemo(() => ungroupedAll.filter((s) => isSingleTurn(s)), [ungroupedAll, singleFolderSessionIds, multiFolderSessionIds])
+  const ungroupedSessions = useMemo(
+    () => sessions.filter((s) => bucketOf(s) !== 'grouped' && !isSingleTurn(s)),
+    [sessions]
+  )
+  const singleTurnSessions = useMemo(
+    () => sessions.filter((s) => bucketOf(s) !== 'grouped' && isSingleTurn(s)),
+    [sessions]
+  )
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionSummary>()

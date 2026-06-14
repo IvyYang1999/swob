@@ -670,14 +670,24 @@ ipcMain.handle('sessions:loadAll', async () => {
   knownSessionIds.clear()
 
   // Attach library paths + detect remote sessions
+  const ungCfg = (loadLibraryConfig().preferences as any)?.ungrouping
+  const libRoot = getLibraryRoot()
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
 
-    // 持久化权威 turnCount 进 meta（所有类型，含 Codex/Cursor），供外部整理脚本按真实轮数归档
+    // 给每个会话打【物理位置标签】+ 持久化权威 turnCount。前端据标签判定底部归属，
+    // 不靠脆弱的 id 匹配（Codex/Cursor 的 live id 常与库里存的对不齐，会导致已分组会话漏进底部、重复显示）。
     if (!s.id.includes(':intra-')) {
       const ld = getSessionDirPath(s.sessionId)
-      if (ld) setSessionTurnCount(ld, s.turnCount)
+      if (ld) {
+        setSessionTurnCount(ld, s.turnCount)
+        const parent = path.basename(path.dirname(ld))
+        if (ungCfg && parent === ungCfg.multiTurn) (s as any).ungroupBucket = 'multi'
+        else if (ungCfg && parent === ungCfg.singleTurn) (s as any).ungroupBucket = 'single'
+        else if (path.dirname(ld) === libRoot) (s as any).ungroupBucket = 'root'
+        else (s as any).ungroupBucket = 'grouped' // 在某主题文件夹里 → 只在树里显示，绝不进底部
+      }
     }
 
     // Skip library/remote processing for non-Claude-Code sessions

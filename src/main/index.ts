@@ -113,6 +113,45 @@ function startActiveSessionPoller(): void {
 }
 let cachedSessions: SessionSummary[] = []
 
+type UngroupBucket = 'grouped' | 'multi' | 'single' | 'root'
+
+function computeUngroupBucket(session: SessionSummary, dirPath?: string | null): UngroupBucket | undefined {
+  const libConfig = loadLibraryConfig()
+  const branchFolders = libConfig.branchFolders || {}
+  if ((session.id.includes(':intra-') || session.id.includes(':branch-')) && branchFolders[session.id]?.length) {
+    return 'grouped'
+  }
+
+  const resolvedDir = dirPath || getSessionDirPath(session.sessionId)
+  if (!resolvedDir) return undefined
+
+  const parentDir = path.dirname(resolvedDir)
+  const parent = path.basename(parentDir)
+  const ungCfg = (libConfig.preferences as any)?.ungrouping
+  if (ungCfg && parent === ungCfg.multiTurn) return 'multi'
+  if (ungCfg && parent === ungCfg.singleTurn) return 'single'
+  if (parentDir === getLibraryRoot()) return 'root'
+  return 'grouped'
+}
+
+function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | null): void {
+  const resolvedDir = dirPath || getSessionDirPath(session.sessionId)
+  if (resolvedDir) {
+    session.libraryDirPath = resolvedDir
+    session.libraryMdPath = getSessionMdPath(session.sessionId) || session.libraryMdPath
+    if (!session.id.includes(':intra-') && !session.id.includes(':branch-')) {
+      setSessionTurnCount(resolvedDir, session.turnCount)
+    }
+  }
+
+  const bucket = computeUngroupBucket(session, resolvedDir)
+  if (bucket) (session as any).ungroupBucket = bucket
+}
+
+function shouldReadLibraryConfig(): boolean {
+  return libraryInitialized || isLibraryInitialized(getLibraryRoot())
+}
+
 function cleanupRuntimeResources(): void {
   watcher?.close()
   codexWatcher?.close()
@@ -291,10 +330,10 @@ function startFileWatcher(): void {
               const dirPath = await ensureSessionInLibrary(summary)
               await updateTranscript(sessionId)
               await syncBackup(sessionId)
-              summary.libraryDirPath = dirPath
-              summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+              annotateSessionForFrontend(summary, dirPath)
             } catch { /* ignore */ }
           }
+          annotateSessionForFrontend(summary)
           mainWindow?.webContents.send('session:added', summary)
         }
       }
@@ -322,10 +361,10 @@ function startFileWatcher(): void {
             await ensureSessionInLibrary(summary)
             await updateTranscript(summary.sessionId)
             await syncBackup(summary.sessionId)
-            summary.libraryDirPath = getSessionDirPath(summary.sessionId) || undefined
-            summary.libraryMdPath = getSessionMdPath(summary.sessionId) || undefined
+            annotateSessionForFrontend(summary)
           } catch { /* ignore */ }
         }
+        annotateSessionForFrontend(summary)
         mainWindow?.webContents.send('session:updated', summary)
       }
     } catch {
@@ -351,6 +390,7 @@ function startCodexWatcher(): void {
         mainWindow?.webContents.send('sessions:refresh')
       } else {
         knownSessionIds.add(summary.id)
+        annotateSessionForFrontend(summary)
         mainWindow?.webContents.send('session:added', summary)
       }
     } catch { /* ignore */ }
@@ -376,6 +416,7 @@ function startCursorWatcher(): void {
         mainWindow?.webContents.send('sessions:refresh')
       } else {
         knownSessionIds.add(summary.id)
+        annotateSessionForFrontend(summary)
         mainWindow?.webContents.send('session:added', summary)
       }
     } catch { /* ignore */ }
@@ -528,8 +569,7 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
         const summary = buildSessionSummary(backupPath, raw, true)
         if (summary) {
           summary.allFilePaths = [backupPath]
-          summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
-          summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+          annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
           const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
           summary.isRemote = remoteByPath
           if (remoteByPath) {
@@ -541,7 +581,7 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
           }
           cachedSessions.push(summary)
           knownSessionIds.add(sessionId)
-          mainWindow?.webContents.send('sessions:added', summary)
+          mainWindow?.webContents.send('session:added', summary)
         }
       } catch { /* skip unparseable backup */ }
     }
@@ -669,26 +709,14 @@ ipcMain.handle('sessions:loadAll', async () => {
   cachedSessions = sessions
   knownSessionIds.clear()
 
-  // Attach library paths + detect remote sessions
-  const ungCfg = (loadLibraryConfig().preferences as any)?.ungrouping
-  const libRoot = getLibraryRoot()
+  // Attach library paths + physical location bucket + detect remote sessions.
+  // Every summary sent to the renderer must carry the same bucket semantics;
+  // otherwise the sidebar treats missing data as bottom "ungrouped" noise.
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
-
-    // 给每个会话打【物理位置标签】+ 持久化权威 turnCount。前端据标签判定底部归属，
-    // 不靠脆弱的 id 匹配（Codex/Cursor 的 live id 常与库里存的对不齐，会导致已分组会话漏进底部、重复显示）。
-    if (!s.id.includes(':intra-')) {
-      const ld = getSessionDirPath(s.sessionId)
-      if (ld) {
-        setSessionTurnCount(ld, s.turnCount)
-        const parent = path.basename(path.dirname(ld))
-        if (ungCfg && parent === ungCfg.multiTurn) (s as any).ungroupBucket = 'multi'
-        else if (ungCfg && parent === ungCfg.singleTurn) (s as any).ungroupBucket = 'single'
-        else if (path.dirname(ld) === libRoot) (s as any).ungroupBucket = 'root'
-        else (s as any).ungroupBucket = 'grouped' // 在某主题文件夹里 → 只在树里显示，绝不进底部
-      }
-    }
+    const dirPath = getSessionDirPath(s.sessionId)
+    annotateSessionForFrontend(s, dirPath)
 
     // Skip library/remote processing for non-Claude-Code sessions
     if (s.source === 'codex' || s.source === 'cursor') continue
@@ -699,9 +727,7 @@ ipcMain.handle('sessions:loadAll', async () => {
       if (remoteUser) s.remoteHost = `${remoteUser}@remote`
     }
     const isBranch = s.id.includes(':intra-')
-    const dirPath = getSessionDirPath(s.sessionId)
     if (dirPath) {
-      s.libraryDirPath = dirPath
       if (isBranch) {
         let branchMd = getBranchMdPath(s.id)
         if (!branchMd && s.branchLeafUuid) {
@@ -709,8 +735,6 @@ ipcMain.handle('sessions:loadAll', async () => {
           branchMd = await updateBranchTranscript(s.id, s.branchLeafUuid, branchMeta?.customTitle) || undefined
         }
         s.libraryMdPath = branchMd || getSessionMdPath(s.sessionId) || undefined
-      } else {
-        s.libraryMdPath = getSessionMdPath(s.sessionId) || undefined
       }
     }
   }
@@ -725,8 +749,7 @@ ipcMain.handle('sessions:loadAll', async () => {
         const summary = buildSessionSummary(backupPath, raw, true)
         if (summary) {
           summary.allFilePaths = [backupPath]
-          summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
-          summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+          annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
           const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
           summary.isRemote = remoteByPath
           if (remoteByPath) {
@@ -900,7 +923,7 @@ ipcMain.handle('insights:get', () => {
 // These use the library manager but return the same shape the frontend expects
 
 ipcMain.handle('config:load', () => {
-  if (!libraryInitialized) {
+  if (!shouldReadLibraryConfig()) {
     // Fallback to old config during initial load
     return loadConfig()
   }

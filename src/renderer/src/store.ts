@@ -177,7 +177,7 @@ interface AppState {
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale, ToastMessage }
 
 // Read localStorage at module load time — before first render, zero flicker
-const LOCAL_CACHE_VERSION = 8 // include Claude Window config roots
+const LOCAL_CACHE_VERSION = 9 // include physical ungroupBucket on cached sessions
 
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
   try {
@@ -256,14 +256,14 @@ export const useStore = create<AppState>((set, get) => ({
         sshConfig: sshConfig ?? null,
         loading: false
       })
+      try {
+        localStorage.setItem('csm:sessions', JSON.stringify(sessions))
+        localStorage.setItem('csm:config', JSON.stringify(config))
+      } catch { /* quota exceeded */ }
     } catch (err) {
       console.error('Failed to initialize:', err)
       set({ loading: false })
     }
-    try {
-      localStorage.setItem('csm:sessions', JSON.stringify(sessions))
-      localStorage.setItem('csm:config', JSON.stringify(config))
-    } catch { /* quota exceeded */ }
 
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
     const debouncedRefresh = () => {

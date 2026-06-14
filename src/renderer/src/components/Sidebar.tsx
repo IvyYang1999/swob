@@ -461,8 +461,15 @@ export function Sidebar({ width }: { width: number }) {
   // 底部归属【完全按主进程打的物理位置标签 ungroupBucket】判定，不靠 id 匹配：
   //   'grouped' = 已在某主题文件夹（只在树里显示，绝不进底部，杜绝重复显示）
   //   'multi'/'single' = 在 未分组/单轮会话 容器里 → 进底部对应区
-  //   'root'/无标签 = 真·游离会话（含分支、未归档新会话）→ 进底部，按 turnCount 分
+  //   'root' = 真·游离会话 → 进底部，按 turnCount 分
+  // 配了 ungrouping 时，缺标签不再 fail-open 进底部；否则 library-only/旧缓存会把已分组会话重复显示。
   const bucketOf = (s: SessionSummary): string | undefined => (s as any).ungroupBucket
+  const isBottomSession = (s: SessionSummary): boolean => {
+    const b = bucketOf(s)
+    if (b === 'grouped') return false
+    if (b === 'multi' || b === 'single' || b === 'root') return true
+    return !ungConfig
+  }
   const isSingleTurn = (s: SessionSummary): boolean => {
     const b = bucketOf(s)
     if (b === 'single') return true
@@ -470,12 +477,12 @@ export function Sidebar({ width }: { width: number }) {
     return s.turnCount <= 1
   }
   const ungroupedSessions = useMemo(
-    () => sessions.filter((s) => bucketOf(s) !== 'grouped' && !isSingleTurn(s)),
-    [sessions]
+    () => sessions.filter((s) => isBottomSession(s) && !isSingleTurn(s)),
+    [sessions, ungConfig]
   )
   const singleTurnSessions = useMemo(
-    () => sessions.filter((s) => bucketOf(s) !== 'grouped' && isSingleTurn(s)),
-    [sessions]
+    () => sessions.filter((s) => isBottomSession(s) && isSingleTurn(s)),
+    [sessions, ungConfig]
   )
 
   const sessionMap = useMemo(() => {

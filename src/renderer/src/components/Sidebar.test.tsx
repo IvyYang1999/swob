@@ -176,3 +176,80 @@ describe('分支和母 session 显示各自独立的标题', () => {
     mockStore.config.sessionMeta = origMeta
   })
 })
+
+describe('未分组底部区域只接受物理归属标签', () => {
+  beforeEach(() => {
+    mockStore.selectedUniqueId = null
+    mockStore.config = {
+      folders: [],
+      sessionMeta: {
+        'parent-uuid': { customTitle: '母session标题' },
+        'parent-uuid:intra-0': { customTitle: '分支标题' }
+      },
+      preferences: { defaultViewMode: 'compact' as const, terminalApp: 'Terminal' as const }
+    }
+  })
+
+  it('配置 ungrouping 后，缺 ungroupBucket 的 library-only 会话不会 fail-open 进底部', () => {
+    mockStore.config = {
+      folders: [{
+        id: '项目/开发项目/飞搜',
+        name: '飞搜',
+        parentId: null,
+        sessionIds: ['remote-grouped'],
+        createdAt: ''
+      }],
+      sessionMeta: {},
+      preferences: {
+        defaultViewMode: 'compact' as const,
+        terminalApp: 'Terminal' as const,
+        ungrouping: { multiTurn: '未分组', singleTurn: '单轮会话' }
+      } as any
+    }
+    mockStore.sessions = [makeSession({
+      id: 'remote-grouped',
+      sessionId: 'remote-grouped',
+      firstUserMessage: '这个已分组会话不该出现在底部',
+      turnCount: 12
+    })] as any
+
+    render(<Sidebar width={260} />)
+
+    expect(screen.getByText('飞搜')).toBeTruthy()
+    expect(screen.queryByText((text) => text.includes('这个已分组会话不该出现在底部'))).toBeNull()
+  })
+
+  it('multi/single 物理标签仍进入底部未分组与单轮区域', () => {
+    mockStore.config = {
+      folders: [],
+      sessionMeta: {},
+      preferences: {
+        defaultViewMode: 'compact' as const,
+        terminalApp: 'Terminal' as const,
+        ungrouping: { multiTurn: '未分组', singleTurn: '单轮会话' }
+      } as any
+    }
+    mockStore.sessions = [
+      makeSession({
+        id: 'physical-multi',
+        sessionId: 'physical-multi',
+        firstUserMessage: '真正未分组多轮',
+        turnCount: 8,
+        ungroupBucket: 'multi'
+      }),
+      makeSession({
+        id: 'physical-single',
+        sessionId: 'physical-single',
+        firstUserMessage: '真正单轮',
+        turnCount: 1,
+        ungroupBucket: 'single'
+      })
+    ] as any
+
+    render(<Sidebar width={260} />)
+
+    expect(screen.getByText((text) => text.includes('真正未分组多轮'))).toBeTruthy()
+    expect(screen.getByText('sidebar.single_turn')).toBeTruthy()
+    expect(screen.queryByText((text) => text.includes('真正单轮'))).toBeNull()
+  })
+})

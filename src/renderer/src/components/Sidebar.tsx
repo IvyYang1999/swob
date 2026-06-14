@@ -444,14 +444,34 @@ export function Sidebar({ width }: { width: number }) {
   // --- Computed ---
   // 「未分组容器」：配置里指定的文件夹名（如 未分组/单轮会话）。它们的会话被当作未分组，
   // 拉到侧栏底部按轮数罗列/折叠，文件夹本身不在树里显示。底层仍是真实文件夹（Obsidian 可见）。
-  const ungroupingNames = useMemo(() => {
-    const ung = (config?.preferences as any)?.ungrouping
-    return new Set<string>(ung ? [ung.multiTurn, ung.singleTurn].filter(Boolean) : [])
-  }, [config?.preferences])
-  const ungroupingFolderIds = useMemo(
-    () => new Set((config?.folders || []).filter((f) => ungroupingNames.has(f.name)).map((f) => f.id)),
-    [config?.folders, ungroupingNames]
+  const ungConfig = (config?.preferences as any)?.ungrouping as
+    | { multiTurn?: string; singleTurn?: string }
+    | undefined
+  // 收集「未分组容器」文件夹的会话 id。多轮容器(未分组)→底部平铺区；单轮容器(单轮会话)→底部折叠区。
+  // 关键：底部「多轮/单轮」的划分跟着【物理文件夹】走，而不是各自再按 turnCount 算一遍——
+  // 否则没有 transcript 的会话，swob 现算的轮数和整理脚本归档用的轮数会对不上，导致
+  // 明明在「单轮会话」文件夹里却显示到「未分组」。文件夹是单一事实来源，存储与显示永远一致。
+  const idsOfFolders = (names: Set<string>): Set<string> => {
+    const ids = new Set<string>()
+    ;(config?.folders || []).forEach((f) => {
+      if (names.has(f.name)) f.sessionIds.forEach((id) => ids.add(id))
+    })
+    return ids
+  }
+  const multiFolderSessionIds = useMemo(
+    () => idsOfFolders(new Set(ungConfig?.multiTurn ? [ungConfig.multiTurn] : [])),
+    [config?.folders, ungConfig?.multiTurn]
   )
+  const singleFolderSessionIds = useMemo(
+    () => idsOfFolders(new Set(ungConfig?.singleTurn ? [ungConfig.singleTurn] : [])),
+    [config?.folders, ungConfig?.singleTurn]
+  )
+  const ungroupingFolderIds = useMemo(() => {
+    const names = new Set<string>(
+      ungConfig ? [ungConfig.multiTurn, ungConfig.singleTurn].filter(Boolean) as string[] : []
+    )
+    return new Set((config?.folders || []).filter((f) => names.has(f.name)).map((f) => f.id))
+  }, [config?.folders, ungConfig])
   // 树渲染用的文件夹列表：剔除未分组容器
   const treeFolders = useMemo(
     () => (config?.folders || []).filter((f) => !ungroupingFolderIds.has(f.id)),
@@ -473,8 +493,14 @@ export function Sidebar({ width }: { width: number }) {
     [sessions, groupedSessionIds]
   )
 
-  const ungroupedSessions = useMemo(() => ungroupedAll.filter((s) => s.turnCount > 1), [ungroupedAll])
-  const singleTurnSessions = useMemo(() => ungroupedAll.filter((s) => s.turnCount <= 1), [ungroupedAll])
+  // 单轮判定：优先看物理文件夹（单轮会话→单轮、未分组→多轮）；都不在则回退到 turnCount（真·散会话）
+  const isSingleTurn = (s: SessionSummary): boolean => {
+    if (singleFolderSessionIds.has(s.id) || singleFolderSessionIds.has(s.sessionId)) return true
+    if (multiFolderSessionIds.has(s.id) || multiFolderSessionIds.has(s.sessionId)) return false
+    return s.turnCount <= 1
+  }
+  const ungroupedSessions = useMemo(() => ungroupedAll.filter((s) => !isSingleTurn(s)), [ungroupedAll, singleFolderSessionIds, multiFolderSessionIds])
+  const singleTurnSessions = useMemo(() => ungroupedAll.filter((s) => isSingleTurn(s)), [ungroupedAll, singleFolderSessionIds, multiFolderSessionIds])
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionSummary>()

@@ -70,6 +70,8 @@ let spotlightWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
 let codexWatcher: chokidar.FSWatcher | null = null
 let cursorWatcher: chokidar.FSWatcher | null = null
+let libraryWatcher: chokidar.FSWatcher | null = null
+let libraryRescanTimer: ReturnType<typeof setTimeout> | null = null
 let pendingSpotlightNavigationSessionId: string | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
@@ -380,6 +382,32 @@ function startCursorWatcher(): void {
 
   cursorWatcher.on('add', handleCursorFile)
   cursorWatcher.on('change', handleCursorFile)
+}
+
+// 监听库目录本身的「文件夹」变化。swob 原本只监听 ~/.claude 的 jsonl，察觉不到外部对库的
+// 结构改动（整理脚本移动、iCloud 从别的机器同步进来的移动、手动挪动），导致目录树状态不及时。
+// 这里只对 addDir/unlinkDir 反应（文件写入不触发，clipii/wiki 编辑很安静），debounce 后重扫并
+// 通知前端刷新；前端收到 sessions:refresh 会重载会话与目录树。
+function startLibraryWatcher(): void {
+  if (libraryWatcher) { libraryWatcher.close(); libraryWatcher = null }
+  const root = getLibraryRoot()
+  if (!root || !fs.existsSync(root)) return
+  libraryWatcher = chokidar.watch(root, {
+    ignoreInitial: true,
+    ignorePermissionErrors: true,
+    depth: 6,
+    ignored: (p: string) =>
+      p.includes('/node_modules/') || p.includes('/.git/') ||
+      p.includes('/.obsidian/') || p.endsWith('.jsonl')
+  })
+  const schedule = (): void => {
+    if (libraryRescanTimer) clearTimeout(libraryRescanTimer)
+    libraryRescanTimer = setTimeout(() => {
+      try { scanLibrary() } catch { /* ignore */ }
+      mainWindow?.webContents.send('sessions:refresh')
+    }, 1500)
+  }
+  libraryWatcher.on('addDir', schedule).on('unlinkDir', schedule)
 }
 
 // --- Library Initialization ---
@@ -1143,6 +1171,7 @@ ipcMain.handle('library:changePath', async (_event, newPath: string) => {
   initLibrary(newPath)
   const tree = scanLibrary()
   libraryInitialized = true
+  startLibraryWatcher() // 跟随新库根重启目录监听
   // Re-sync sessions from source
   if (cachedSessions.length > 0) {
     const oldConfig = loadConfig()
@@ -1460,6 +1489,7 @@ app.whenReady().then(() => {
 
   createWindow()
   startFileWatcher()
+  startLibraryWatcher()
   startCodexWatcher()
   startCursorWatcher()
   startActiveSessionPoller()

@@ -69,6 +69,22 @@ const DEFAULT_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
 const APP_CONFIG_DIR = path.join(os.homedir(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 
+function isOriginalSessionSourcePath(filePath: string): boolean {
+  if (!filePath.endsWith('.jsonl')) return false
+  const normalized = filePath.split(path.sep).join('/')
+  return normalized.includes('/.claude/projects/') ||
+    normalized.includes('/.claude-window/') ||
+    normalized.includes('/.codex/sessions/') ||
+    normalized.includes('/.cursor/projects/')
+}
+
+function sourceFilePathsForMeta(session: SessionSummary): string[] {
+  const candidates = session.allFilePaths && session.allFilePaths.length > 0
+    ? session.allFilePaths
+    : [session.filePath]
+  return candidates.filter(isOriginalSessionSourcePath)
+}
+
 export function loadAppConfig(): { libraryPath?: string } {
   try {
     if (fs.existsSync(APP_CONFIG_FILE)) {
@@ -553,7 +569,10 @@ export async function ensureSessionInLibrary(
       }
       if (meta.updatedAt !== session.updatedAt) {
         meta.updatedAt = session.updatedAt
-        meta.sourceFilePaths = session.allFilePaths || [session.filePath]
+        const nextSourceFilePaths = sourceFilePathsForMeta(session)
+        if (nextSourceFilePaths.length > 0) {
+          meta.sourceFilePaths = nextSourceFilePaths
+        }
         changed = true
       }
       if (changed) writeSessionMeta(existing, meta)
@@ -581,7 +600,7 @@ export async function ensureSessionInLibrary(
 
   const meta: SessionMeta = {
     sessionId: session.sessionId,
-    sourceFilePaths: session.allFilePaths || [session.filePath],
+    sourceFilePaths: sourceFilePathsForMeta(session),
     customTitle,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

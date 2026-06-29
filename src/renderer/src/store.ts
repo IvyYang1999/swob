@@ -138,6 +138,7 @@ interface AppState {
   clearSearch: () => void
   resumeSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
   forkSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
+  buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<string>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   setViewMode: (mode: ViewMode) => void
   setLocale: (locale: Locale) => void
@@ -177,7 +178,7 @@ interface AppState {
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale, ToastMessage }
 
 // Read localStorage at module load time — before first render, zero flicker
-const LOCAL_CACHE_VERSION = 9 // include physical ungroupBucket on cached sessions
+const LOCAL_CACHE_VERSION = 11 // refresh corrected cross-session branch metadata
 
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
   try {
@@ -282,8 +283,12 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     window.api.onSessionAdded((session) => {
+      const incoming = session as SessionSummary
       set((state) => ({
-        sessions: [session as SessionSummary, ...state.sessions]
+        sessions: [
+          incoming,
+          ...state.sessions.filter((s) => s.id !== incoming.id && s.sessionId !== incoming.sessionId)
+        ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       }))
     })
     window.api.onSessionUpdated(async (updated) => {
@@ -399,6 +404,10 @@ export const useStore = create<AppState>((set, get) => ({
   forkSession: async (sessionId, permissionMode?, cwd?) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
     await window.api.forkSession(sessionId, terminalApp, permissionMode, cwd)
+  },
+
+  buildResumeCommand: async (sessionId, permissionMode?, cwd?) => {
+    return window.api.buildResumeCommand(sessionId, permissionMode, cwd)
   },
 
   resumeBatch: async (sessions) => {

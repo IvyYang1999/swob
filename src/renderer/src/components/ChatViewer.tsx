@@ -745,7 +745,7 @@ function SessionBar({
   searchOpen: boolean
   onToggleSearch: () => void
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshForkSession, sshBuildCommand, showToast, openSshModal } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, buildResumeCommand, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshForkSession, sshBuildCommand, showToast, openSshModal } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
@@ -854,12 +854,7 @@ function SessionBar({
             if (isRemote && sshConfig) {
               cmd = await sshBuildCommand(sid, selectedSession.permissionMode) || `ssh ${sshConfig.user}@${sshConfig.host} "claude --resume ${sid}"`
             } else {
-              cmd = selectedSession.permissionMode === 'bypassPermissions'
-                ? `claude --dangerously-skip-permissions --resume ${sid}`
-                : `claude --resume ${sid}`
-              if (selectedSession.claudeConfigDir) {
-                cmd = `CLAUDE_CONFIG_DIR=${JSON.stringify(selectedSession.claudeConfigDir)} ${cmd}`
-              }
+              cmd = await buildResumeCommand(sid, selectedSession.permissionMode, resolveResumeCwd(selectedSession))
             }
             navigator.clipboard.writeText(cmd)
             setCopiedResumeCmd(true)

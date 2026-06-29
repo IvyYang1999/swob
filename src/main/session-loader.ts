@@ -28,11 +28,24 @@ const SYSTEM_USER_MESSAGES = [
   'No response requested.'
 ]
 
+const SYSTEM_USER_PREFIXES = [
+  '<task-notification>',
+  '<local-command-caveat>',
+  '<local-command-stdout>',
+  '<command-name>',
+  '<command-message>',
+  '<command-args>',
+  '<user-prompt-submit-hook>',
+  'Base directory for this skill:'
+]
+
 function isSystemText(text: string): boolean {
   const trimmed = text.trim()
   if (!trimmed) return true
-  if (trimmed.startsWith('<task-notification>')) return true
+  if (SYSTEM_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) return true
   if (trimmed.startsWith('This session is being continued')) return true
+  if (trimmed.startsWith('<system-reminder>') &&
+    !trimmed.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()) return true
   // Pure [Image: source: ...] text (file path references alongside base64 images)
   if (/^\[Image: source: [^\]]+\](\s*\[Image: source: [^\]]+\])*\s*$/.test(trimmed)) return true
   return SYSTEM_USER_MESSAGES.includes(trimmed)
@@ -69,7 +82,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 14 // include Claude Window config roots
+const CACHE_VERSION = 16 // refine cross-session branch inference
 
 interface DiskCache {
   version: number
@@ -396,16 +409,19 @@ export function buildSessionSummary(
     (m) => m.type === 'system' && m.subtype === 'compact_boundary'
   ).length
 
-  // Find first meaningful user message (skip interruptions and empty messages)
+  // Find first meaningful user message (skip interruptions, compact summaries, and synthetic command output)
   const skipPrefixes = ['[Request interrupted', 'This session is being continued']
   const firstUser = validMessages.find((m) => {
     if (m.type !== 'user') return false
     const text = m.message ? extractText(m.message.content).trim() : ''
-    return text.length > 0 && !skipPrefixes.some((p) => text.startsWith(p))
-  }) || validMessages.find((m) => m.type === 'user')
+    return text.length > 0 && !isSystemText(text) && !skipPrefixes.some((p) => text.startsWith(p))
+  })
   let firstUserMessage = ''
   if (firstUser?.message) {
     firstUserMessage = extractText(firstUser.message.content).slice(0, 200)
+  } else {
+    const aiTitle = rawMessages.find((m) => (m as any).type === 'ai-title' && (m as any).aiTitle)
+    firstUserMessage = ((aiTitle as any)?.aiTitle || sessionId).slice(0, 200)
   }
 
   const allUserTexts: string[] = []
@@ -414,7 +430,7 @@ export function buildSessionSummary(
   for (const m of validMessages) {
     if (m.type !== 'user' || !m.message) continue
     const text = extractText(m.message.content).trim()
-    if (!text || text === firstUserMessage) continue
+    if (!text || isSystemText(text) || text === firstUserMessage) continue
     if (totalLen + text.length > USER_TEXT_LIMIT) {
       allUserTexts.push(text.slice(0, USER_TEXT_LIMIT - totalLen))
       break
@@ -1033,6 +1049,376 @@ function clusterFilesForMerge(entries: FileEntry[]): FileEntry[][] {
   return clusters
 }
 
+interface SessionCluster {
+  sessionId: string
+  entries: FileEntry[]
+  filePaths: string[]
+  raw: RawJsonlMessage[]
+  startTime: string
+  endTime: string
+  uuidSet: Set<string>
+  branchSummaryId?: string
+  branchParentFilePaths?: string[]
+  branchPointUuid?: string
+}
+
+interface LogicalSessionCluster extends SessionCluster {
+  continuationSessionIds: string[]
+  coveredSessionIds: string[]
+}
+
+function getUuidSet(raw: RawJsonlMessage[]): Set<string> {
+  const uuids = new Set<string>()
+  for (const m of raw) {
+    if (m.uuid) uuids.add(m.uuid)
+  }
+  return uuids
+}
+
+function getSessionIds(raw: RawJsonlMessage[]): string[] {
+  return [...new Set(raw.map((m) => m.sessionId).filter(Boolean))]
+}
+
+function normalizePromptText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function getRealUserText(m: RawJsonlMessage): string {
+  if (!isRealUserMessage(m) || !m.message) return ''
+  return normalizePromptText(extractText(m.message.content))
+}
+
+function hasAssistantBetween(raw: RawJsonlMessage[], fromExclusive: number, toExclusive: number): boolean {
+  for (let i = fromExclusive + 1; i < toExclusive; i++) {
+    if (raw[i].type === 'assistant') return true
+  }
+  return false
+}
+
+function dedupeNearDuplicatePendingPrompts(raw: RawJsonlMessage[]): RawJsonlMessage[] {
+  const lastByText = new Map<string, number>()
+  const drop = new Set<number>()
+  const TWO_MINUTES = 2 * 60 * 1000
+
+  for (let i = 0; i < raw.length; i++) {
+    const text = getRealUserText(raw[i])
+    if (!text) continue
+
+    const prevIdx = lastByText.get(text)
+    if (prevIdx !== undefined && !drop.has(prevIdx)) {
+      const prev = raw[prevIdx]
+      const prevTs = prev.timestamp ? new Date(prev.timestamp).getTime() : Number.NaN
+      const currTs = raw[i].timestamp ? new Date(raw[i].timestamp).getTime() : Number.NaN
+      const closeInTime = Number.isFinite(prevTs) && Number.isFinite(currTs) && Math.abs(currTs - prevTs) <= TWO_MINUTES
+      const differentPhysicalSession = prev.sessionId && raw[i].sessionId && prev.sessionId !== raw[i].sessionId
+      if (closeInTime && differentPhysicalSession && !hasAssistantBetween(raw, prevIdx, i)) {
+        drop.add(prevIdx)
+      }
+    }
+
+    lastByText.set(text, i)
+  }
+
+  return raw.filter((_, idx) => !drop.has(idx))
+}
+
+function mergeRawMessages(rawMessages: RawJsonlMessage[]): RawJsonlMessage[] {
+  const seenUuids = new Set<string>()
+  const merged: RawJsonlMessage[] = []
+
+  for (const m of rawMessages) {
+    if (m.uuid) {
+      if (seenUuids.has(m.uuid)) continue
+      seenUuids.add(m.uuid)
+    }
+    merged.push(m)
+  }
+
+  return dedupeNearDuplicatePendingPrompts(merged)
+}
+
+function createSessionCluster(
+  sessionId: string,
+  entries: FileEntry[],
+  branchSummaryId?: string,
+  branchParentFilePaths?: string[],
+  branchPointUuid?: string
+): SessionCluster {
+  const sortedEntries = [...entries].sort((a, b) => a.startTime.localeCompare(b.startTime))
+  const raw = mergeRawMessages(sortedEntries.flatMap((g) => g.raw))
+  const { start, end } = getFileTimeRange(raw)
+  return {
+    sessionId,
+    entries: sortedEntries,
+    filePaths: sortedEntries.map((g) => g.filePath),
+    raw,
+    startTime: start || sortedEntries[0]?.startTime || '',
+    endTime: end || sortedEntries[sortedEntries.length - 1]?.endTime || '',
+    uuidSet: getUuidSet(raw),
+    branchSummaryId,
+    branchParentFilePaths,
+    branchPointUuid
+  }
+}
+
+function buildInitialSessionClusters(filesBySession: Map<string, FileEntry[]>): SessionCluster[] {
+  const initialClusters: SessionCluster[] = []
+
+  for (const [sessionId, group] of filesBySession) {
+    const clusters = clusterFilesForMerge(group)
+    const clusterUuids: Set<string>[] = clusters.map((cluster) => {
+      const uuids = new Set<string>()
+      for (const entry of cluster) {
+        for (const m of entry.raw) {
+          if (m.uuid) uuids.add(m.uuid)
+        }
+      }
+      return uuids
+    })
+
+    for (let ci = 0; ci < clusters.length; ci++) {
+      let branchSummaryId: string | undefined
+      let branchParentFilePaths: string[] | undefined
+      let branchPointUuid: string | undefined
+
+      if (clusters.length > 1) {
+        branchSummaryId = `${sessionId}:branch-${ci}`
+
+        const mergedRaw = mergeRawMessages(clusters[ci].flatMap((g) => g.raw))
+        const firstParentUuid = mergedRaw.find(
+          (m) => m.parentUuid && (m.type === 'user' || m.type === 'assistant')
+        )?.parentUuid
+        if (firstParentUuid) {
+          for (let pi = 0; pi < clusters.length; pi++) {
+            if (pi === ci) continue
+            if (clusterUuids[pi].has(firstParentUuid)) {
+              branchParentFilePaths = clusters[pi].map((g) => g.filePath)
+              branchPointUuid = firstParentUuid
+              break
+            }
+          }
+        }
+      }
+
+      initialClusters.push(createSessionCluster(
+        sessionId,
+        clusters[ci],
+        branchSummaryId,
+        branchParentFilePaths,
+        branchPointUuid
+      ))
+    }
+  }
+
+  return initialClusters
+}
+
+function findContinuationAnchor(raw: RawJsonlMessage[]): string | null {
+  const uuidMessages = raw.filter((m) => m.uuid).slice(0, 30)
+  for (let i = 0; i < uuidMessages.length; i++) {
+    const m = uuidMessages[i]
+    if (m.type !== 'system' || m.subtype !== 'compact_boundary' || !m.uuid) continue
+    const hasContinuationSummary = uuidMessages.slice(i + 1, i + 5).some((next) => {
+      if (next.type !== 'user' || !next.message) return false
+      return extractText(next.message.content).trim().startsWith('This session is being continued')
+    })
+    if (hasContinuationSummary) return m.uuid
+  }
+  return null
+}
+
+function countOverlap(a: Set<string>, b: Set<string>): number {
+  let count = 0
+  for (const u of a) {
+    if (b.has(u)) count++
+  }
+  return count
+}
+
+function createsContinuationCycle(childIdx: number, parentIdx: number, childToParent: Map<number, number>): boolean {
+  let current: number | undefined = parentIdx
+  while (current !== undefined) {
+    if (current === childIdx) return true
+    current = childToParent.get(current)
+  }
+  return false
+}
+
+function findContinuationParentIdx(childIdx: number, clusters: SessionCluster[]): number | null {
+  const child = clusters[childIdx]
+  const anchorUuid = findContinuationAnchor(child.raw)
+  if (!anchorUuid) return null
+  if (child.uuidSet.size === 0) return null
+
+  let best: { idx: number; overlap: number; ratio: number } | null = null
+  for (let i = 0; i < clusters.length; i++) {
+    if (i === childIdx) continue
+    const parent = clusters[i]
+    if (parent.sessionId === child.sessionId) continue
+    if (!parent.uuidSet.has(anchorUuid)) continue
+
+    const overlap = countOverlap(child.uuidSet, parent.uuidSet)
+    const ratio = overlap / child.uuidSet.size
+    if (overlap < 8 || ratio < 0.7) continue
+    if (!best || overlap > best.overlap || (overlap === best.overlap && ratio > best.ratio)) {
+      best = { idx: i, overlap, ratio }
+    }
+  }
+
+  return best?.idx ?? null
+}
+
+function buildLogicalSessionClusters(initialClusters: SessionCluster[]): LogicalSessionCluster[] {
+  const childToParent = new Map<number, number>()
+  const childrenByParent = new Map<number, number[]>()
+
+  for (let childIdx = 0; childIdx < initialClusters.length; childIdx++) {
+    const parentIdx = findContinuationParentIdx(childIdx, initialClusters)
+    if (parentIdx === null) continue
+    if (createsContinuationCycle(childIdx, parentIdx, childToParent)) continue
+
+    childToParent.set(childIdx, parentIdx)
+    if (!childrenByParent.has(parentIdx)) childrenByParent.set(parentIdx, [])
+    childrenByParent.get(parentIdx)!.push(childIdx)
+  }
+
+  function collectDescendants(idx: number, out: number[]): void {
+    const children = childrenByParent.get(idx) || []
+    children.sort((a, b) => initialClusters[a].startTime.localeCompare(initialClusters[b].startTime))
+    for (const child of children) {
+      out.push(child)
+      collectDescendants(child, out)
+    }
+  }
+
+  const logical: LogicalSessionCluster[] = []
+  for (let idx = 0; idx < initialClusters.length; idx++) {
+    if (childToParent.has(idx)) continue
+
+    const descendantIdxs: number[] = []
+    collectDescendants(idx, descendantIdxs)
+    const parts = [idx, ...descendantIdxs].map((partIdx) => initialClusters[partIdx])
+    const root = initialClusters[idx]
+    const raw = mergeRawMessages(parts.flatMap((p) => p.raw))
+    const { start, end } = getFileTimeRange(raw)
+    const filePaths = [...new Set(parts.flatMap((p) => p.filePaths))]
+    const coveredSessionIds = [...new Set(parts.flatMap((p) => getSessionIds(p.raw)))]
+    const continuationSessionIds = coveredSessionIds.filter((sid) => sid !== root.sessionId)
+
+    logical.push({
+      ...root,
+      entries: parts.flatMap((p) => p.entries),
+      filePaths,
+      raw,
+      startTime: start || root.startTime,
+      endTime: end || root.endTime,
+      uuidSet: getUuidSet(raw),
+      continuationSessionIds,
+      coveredSessionIds
+    })
+  }
+
+  return logical
+}
+
+function latestSharedUuid(a: SessionCluster, b: SessionCluster): string | null {
+  let best: { uuid: string; ts: string } | null = null
+  const aByUuid = new Map<string, RawJsonlMessage>()
+  for (const m of a.raw) {
+    if (m.uuid) aByUuid.set(m.uuid, m)
+  }
+
+  for (const m of b.raw) {
+    if (!m.uuid || !aByUuid.has(m.uuid)) continue
+    const ts = m.timestamp || aByUuid.get(m.uuid)?.timestamp || ''
+    if (!best || ts > best.ts) best = { uuid: m.uuid, ts }
+  }
+
+  return best?.uuid || null
+}
+
+function uniqueRealUserTextsAfter(cluster: SessionCluster, otherUuids: Set<string>, branchPointUuid: string): string[] {
+  let afterBranchPoint = false
+  const texts: string[] = []
+  const seen = new Set<string>()
+
+  for (const m of cluster.raw) {
+    if (m.uuid === branchPointUuid) {
+      afterBranchPoint = true
+      continue
+    }
+    if (!afterBranchPoint) continue
+    if (m.uuid && otherUuids.has(m.uuid)) continue
+    const text = getRealUserText(m)
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    texts.push(text)
+  }
+
+  return texts
+}
+
+function hasMaterialUserTailDivergence(
+  child: LogicalSessionCluster,
+  parent: LogicalSessionCluster,
+  branchPointUuid: string
+): boolean {
+  const childTexts = uniqueRealUserTextsAfter(child, parent.uuidSet, branchPointUuid)
+  const parentTexts = uniqueRealUserTextsAfter(parent, child.uuidSet, branchPointUuid)
+  if (childTexts.length === 0 || parentTexts.length === 0) return false
+
+  const childSet = new Set(childTexts)
+  const parentSet = new Set(parentTexts)
+  return childTexts.some((t) => !parentSet.has(t)) && parentTexts.some((t) => !childSet.has(t))
+}
+
+function canBeCrossSessionBranchParent(
+  parent: { summary: SessionSummary; cluster: LogicalSessionCluster },
+  child: { summary: SessionSummary; cluster: LogicalSessionCluster }
+): boolean {
+  if (parent.summary.createdAt < child.summary.createdAt) return true
+  if (parent.summary.createdAt > child.summary.createdAt) return false
+  return parent.summary.id < child.summary.id
+}
+
+function linkCrossSessionBranches(
+  pairs: Array<{ summary: SessionSummary; cluster: LogicalSessionCluster }>
+): void {
+  for (let childIdx = 0; childIdx < pairs.length; childIdx++) {
+    const child = pairs[childIdx]
+    if (child.summary.branchParentId) continue
+
+    let best: { parentIdx: number; overlap: number; branchPointUuid: string } | null = null
+    for (let parentIdx = 0; parentIdx < pairs.length; parentIdx++) {
+      if (parentIdx === childIdx) continue
+      const parent = pairs[parentIdx]
+      if (parent.summary.sessionId === child.summary.sessionId) continue
+      if (!canBeCrossSessionBranchParent(parent, child)) continue
+
+      const overlap = countOverlap(child.cluster.uuidSet, parent.cluster.uuidSet)
+      if (overlap < 3) continue
+      const branchPointUuid = latestSharedUuid(parent.cluster, child.cluster)
+      if (!branchPointUuid) continue
+
+      if (!hasMaterialUserTailDivergence(child.cluster, parent.cluster, branchPointUuid)) continue
+
+      if (!best || overlap > best.overlap) {
+        best = { parentIdx, overlap, branchPointUuid }
+      }
+    }
+
+    if (!best) continue
+    const parent = pairs[best.parentIdx]
+    child.summary.branchParentId = parent.summary.id
+    child.summary.branchPointUuid = best.branchPointUuid
+    child.summary.branchParentFilePaths = parent.summary.allFilePaths || [parent.summary.filePath]
+    if (!parent.summary.branchChildIds) parent.summary.branchChildIds = []
+    if (!parent.summary.branchChildIds.includes(child.summary.id)) {
+      parent.summary.branchChildIds.push(child.summary.id)
+    }
+  }
+}
+
 export async function loadAllSessions(): Promise<SessionSummary[]> {
   const allFiles = findAllSessionFiles()
   const codexFiles = findCodexSessionFiles()
@@ -1062,80 +1448,60 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
   })
 
   const summaries: SessionSummary[] = []
-  for (const [, group] of filesBySession) {
-    const clusters = clusterFilesForMerge(group)
+  const initialClusters = buildInitialSessionClusters(filesBySession)
+  const logicalClusters = buildLogicalSessionClusters(initialClusters)
+  const summaryClusterPairs: Array<{ summary: SessionSummary; cluster: LogicalSessionCluster }> = []
 
-    const clusterUuids: Set<string>[] = clusters.map((cluster) => {
-      const uuids = new Set<string>()
-      for (const entry of cluster) {
-        for (const m of entry.raw) {
-          if (m.uuid) uuids.add(m.uuid)
-        }
+  for (const cluster of logicalClusters) {
+    const primaryFile = cluster.filePaths[0]
+    const summary = buildSessionSummary(primaryFile, cluster.raw, true)
+    if (summary) {
+      summary.allFilePaths = cluster.filePaths
+      if (cluster.branchSummaryId) summary.id = cluster.branchSummaryId
+      if (cluster.branchParentFilePaths) summary.branchParentFilePaths = cluster.branchParentFilePaths
+      if (cluster.branchPointUuid) summary.branchPointUuid = cluster.branchPointUuid
+      if (cluster.continuationSessionIds.length > 0) {
+        summary.continuationSessionIds = cluster.continuationSessionIds
       }
-      return uuids
-    })
+      summaries.push(summary)
+      summaryClusterPairs.push({ summary, cluster })
 
-    for (let ci = 0; ci < clusters.length; ci++) {
-      const cluster = clusters[ci]
-      cluster.sort((a, b) => a.startTime.localeCompare(b.startTime))
-      const mergedRaw = cluster.flatMap((g) => g.raw)
-      const primaryFile = cluster[cluster.length - 1].filePath
-      const summary = buildSessionSummary(primaryFile, mergedRaw, true)
-      if (summary) {
-        summary.allFilePaths = cluster.map((g) => g.filePath)
-        if (clusters.length > 1) {
-          summary.id = `${summary.sessionId}:branch-${ci}`
+      // Detect intra-file branches (e.g. from claude --resume within same file).
+      // Run on the logical raw stream so compact continuation shards don't appear as standalone sessions.
+      const intraBranches = detectIntraFileBranches(cluster.raw)
+      if (intraBranches.length > 0) {
+        const branchIds: string[] = intraBranches.map((_, bi) => `${summary.sessionId}:intra-${bi}`)
 
-          const firstParentUuid = mergedRaw.find(
-            (m) => m.parentUuid && (m.type === 'user' || m.type === 'assistant')
-          )?.parentUuid
-          if (firstParentUuid) {
-            for (let pi = 0; pi < clusters.length; pi++) {
-              if (pi === ci) continue
-              if (clusterUuids[pi].has(firstParentUuid)) {
-                summary.branchParentFilePaths = clusters[pi].map((g) => g.filePath)
-                summary.branchPointUuid = firstParentUuid
-                break
-              }
-            }
+        // Set child IDs on the main summary (direct children only)
+        summary.branchChildIds = intraBranches
+          .filter((b) => b.parentIdx === -1)
+          .map((b) => branchIds[b.branchIdx])
+
+        for (let bi = 0; bi < intraBranches.length; bi++) {
+          const branch = intraBranches[bi]
+          const branchId = branchIds[bi]
+          const parentId = branch.parentIdx === -1 ? summary.id : branchIds[branch.parentIdx]
+
+          const branchSummary: SessionSummary = {
+            ...summary,
+            id: branchId,
+            firstUserMessage: branch.firstUserMessage,
+            createdAt: branch.createdAt,
+            updatedAt: branch.updatedAt,
+            turnCount: branch.turnCount,
+            messageCount: branch.messageCount,
+            branchPointUuid: branch.branchPointUuid,
+            branchLeafUuid: branch.leafUuid,
+            branchParentId: parentId,
+            branchChildIds: branch.childIdxs.map((ci) => branchIds[ci])
           }
-        }
-        summaries.push(summary)
-
-        // Detect intra-file branches (e.g. from claude --resume within same file)
-        const intraBranches = detectIntraFileBranches(mergedRaw)
-        if (intraBranches.length > 0) {
-          const branchIds: string[] = intraBranches.map((_, bi) => `${summary.sessionId}:intra-${bi}`)
-
-          // Set child IDs on the main summary (direct children only)
-          summary.branchChildIds = intraBranches
-            .filter((b) => b.parentIdx === -1)
-            .map((b) => branchIds[b.branchIdx])
-
-          for (let bi = 0; bi < intraBranches.length; bi++) {
-            const branch = intraBranches[bi]
-            const branchId = branchIds[bi]
-            const parentId = branch.parentIdx === -1 ? summary.id : branchIds[branch.parentIdx]
-
-            const branchSummary: SessionSummary = {
-              ...summary,
-              id: branchId,
-              firstUserMessage: branch.firstUserMessage,
-              createdAt: branch.createdAt,
-              updatedAt: branch.updatedAt,
-              turnCount: branch.turnCount,
-              messageCount: branch.messageCount,
-              branchPointUuid: branch.branchPointUuid,
-              branchLeafUuid: branch.leafUuid,
-              branchParentId: parentId,
-              branchChildIds: branch.childIdxs.map((ci) => branchIds[ci])
-            }
-            summaries.push(branchSummary)
-          }
+          summaries.push(branchSummary)
         }
       }
     }
   }
+
+  linkCrossSessionBranches(summaryClusterPairs)
 
   // Detect /fork and /branch relationships via forkedFrom field
   const summaryById = new Map<string, SessionSummary>()
@@ -1212,7 +1578,7 @@ export async function loadSessionDetail(
       } catch { /* skip */ }
     }
     entries.sort((a, b) => a.startTime.localeCompare(b.startTime))
-    mainRaw = entries.flatMap((g) => g.raw)
+    mainRaw = mergeRawMessages(entries.flatMap((g) => g.raw))
   } else {
     mainRaw = await parseSessionFile(filePath)
   }

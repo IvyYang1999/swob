@@ -64,7 +64,13 @@ import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
 import { searchSessionFiles } from './session-search'
 import { buildInsights } from './insights'
-import type { SessionSummary } from './types'
+import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
+import {
+  buildForkCommand,
+  buildResumeCommand,
+  resolveSessionActionContext
+} from './session-actions'
+import type { Folder, Highlight, SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
 let spotlightWindow: BrowserWindow | null = null
@@ -146,6 +152,32 @@ function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | 
 
   const bucket = computeUngroupBucket(session, resolvedDir)
   if (bucket) (session as any).ungroupBucket = bucket
+}
+
+async function reloadSessionsForAction(): Promise<SessionSummary[]> {
+  cachedSessions = await loadAllSessions()
+  for (const s of cachedSessions) {
+    knownSessionIds.add(s.sessionId)
+    knownSessionIds.add(s.id)
+    for (const continuationId of s.continuationSessionIds || []) {
+      knownSessionIds.add(continuationId)
+    }
+  }
+  return cachedSessions
+}
+
+async function resolveLocalSessionAction(
+  sessionId: string,
+  permissionMode?: string,
+  cwd?: string,
+  restoredSourcePath?: string | null
+) {
+  return resolveSessionActionContext(sessionId, cachedSessions, {
+    reloadSessions: reloadSessionsForAction,
+    permissionModeFallback: permissionMode,
+    cwdFallback: cwd,
+    restoredSourcePath
+  })
 }
 
 function shouldReadLibraryConfig(): boolean {
@@ -334,7 +366,7 @@ function startFileWatcher(): void {
             } catch { /* ignore */ }
           }
           annotateSessionForFrontend(summary)
-          mainWindow?.webContents.send('session:added', summary)
+          mainWindow?.webContents.send('sessions:refresh')
         }
       }
     } catch {
@@ -365,7 +397,11 @@ function startFileWatcher(): void {
           } catch { /* ignore */ }
         }
         annotateSessionForFrontend(summary)
-        mainWindow?.webContents.send('session:updated', summary)
+        if (cachedSessions.some((s) => (s.continuationSessionIds || []).includes(summary.sessionId))) {
+          mainWindow?.webContents.send('sessions:refresh')
+        } else {
+          mainWindow?.webContents.send('session:updated', summary)
+        }
       }
     } catch {
       /* ignore */
@@ -506,11 +542,16 @@ ipcMain.handle('spotlight:search', (_event, query: string) => {
   })
 })
 
-ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => {
-  const session = cachedSessions.find((s) => s.sessionId === sessionId)
-  if (!session) return
-  restoreBackupToClaudeSource(sessionId)
-  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, session.resumeCwd || cwd, session.source, session.claudeConfigDir))
+ipcMain.handle('spotlight:resume', async (_event, sessionId: string, cwd?: string) => {
+  const restored = restoreBackupToClaudeSource(sessionId)
+  const context = await resolveLocalSessionAction(sessionId, undefined, cwd, restored.sourcePath)
+  openInTerminal(buildResumeCommand(
+    context.sessionId,
+    context.permissionMode,
+    context.cwd,
+    context.source,
+    context.claudeConfigDir
+  ))
   spotlightWindow?.hide()
 })
 
@@ -560,14 +601,19 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
   }
 
   // Re-scan Library for newly downloaded sessions (e.g. after iCloud download)
+  // If the main session list hasn't loaded yet, every library entry would look
+  // "library-only" and be pushed as a duplicate before the real list arrives.
+  if (cachedSessions.length === 0) return cloudSessions
+
   try {
-    const localIds = new Set(cachedSessions.map((s) => s.sessionId))
+    const localIds = collectSessionCoverage(cachedSessions)
     const libraryOnly = findLibraryOnlySessions(localIds)
     for (const { sessionId, backupPath, meta } of libraryOnly) {
       try {
         const raw = await parseSessionFile(backupPath)
         const summary = buildSessionSummary(backupPath, raw, true)
         if (summary) {
+          if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
           annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
           const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
@@ -580,7 +626,10 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
             ;(summary as any)._libraryTitle = meta.customTitle
           }
           cachedSessions.push(summary)
+          localIds.add(sessionId)
           knownSessionIds.add(sessionId)
+          addSessionCoverage(localIds, summary)
+          addSessionCoverage(knownSessionIds, summary)
           mainWindow?.webContents.send('session:added', summary)
         }
       } catch { /* skip unparseable backup */ }
@@ -715,6 +764,9 @@ ipcMain.handle('sessions:loadAll', async () => {
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
+    for (const continuationId of s.continuationSessionIds || []) {
+      knownSessionIds.add(continuationId)
+    }
     const dirPath = getSessionDirPath(s.sessionId)
     annotateSessionForFrontend(s, dirPath)
 
@@ -729,7 +781,7 @@ ipcMain.handle('sessions:loadAll', async () => {
     const isBranch = s.id.includes(':intra-')
     if (dirPath) {
       if (isBranch) {
-        let branchMd = getBranchMdPath(s.id)
+        let branchMd: string | null | undefined = getBranchMdPath(s.id)
         if (!branchMd && s.branchLeafUuid) {
           const branchMeta = loadLibraryConfig().branchMeta?.[s.id]
           branchMd = await updateBranchTranscript(s.id, s.branchLeafUuid, branchMeta?.customTitle) || undefined
@@ -741,13 +793,14 @@ ipcMain.handle('sessions:loadAll', async () => {
 
   // Load Library-only sessions (from other devices via iCloud sync)
   try {
-    const localIds = new Set(sessions.map((s) => s.sessionId))
+    const localIds = collectSessionCoverage(sessions)
     const libraryOnly = findLibraryOnlySessions(localIds)
     for (const { sessionId, backupPath, meta } of libraryOnly) {
       try {
         const raw = await parseSessionFile(backupPath)
         const summary = buildSessionSummary(backupPath, raw, true)
         if (summary) {
+          if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
           annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
           const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
@@ -760,7 +813,10 @@ ipcMain.handle('sessions:loadAll', async () => {
             ;(summary as any)._libraryTitle = meta.customTitle
           }
           sessions.push(summary)
+          localIds.add(sessionId)
           knownSessionIds.add(sessionId)
+          addSessionCoverage(localIds, summary)
+          addSessionCoverage(knownSessionIds, summary)
         }
       } catch { /* skip unparseable backup */ }
     }
@@ -800,65 +856,6 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
   ])
 })
 
-function withClaudeConfigDir(cmd: string, claudeConfigDir?: string): string {
-  return claudeConfigDir ? `CLAUDE_CONFIG_DIR=${JSON.stringify(claudeConfigDir)} ${cmd}` : cmd
-}
-
-function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string, claudeConfigDir?: string): string {
-  let cmd: string
-  if (source === 'codex') {
-    cmd = `codex resume ${sessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      cmd += ` -C ${JSON.stringify(cwd)}`
-    }
-    return cmd
-  }
-  if (source === 'cursor') {
-    cmd = `cursor agent --resume ${sessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      return `cd ${JSON.stringify(cwd)} && ${cmd}`
-    }
-    return cmd
-  }
-  // Claude Code (default)
-  cmd = permissionMode === 'bypassPermissions'
-    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
-    : `claude --resume ${sessionId}`
-  cmd = withClaudeConfigDir(cmd, claudeConfigDir)
-  if (cwd && fs.existsSync(cwd)) {
-    return `cd ${JSON.stringify(cwd)} && ${cmd}`
-  }
-  return cmd
-}
-
-function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string, claudeConfigDir?: string): string {
-  let cmd: string
-  if (source === 'codex') {
-    cmd = `codex fork ${sessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      cmd += ` -C ${JSON.stringify(cwd)}`
-    }
-    return cmd
-  }
-  // Cursor 没有 fork 命令，走 resume
-  if (source === 'cursor') {
-    cmd = `cursor agent --resume ${sessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      return `cd ${JSON.stringify(cwd)} && ${cmd}`
-    }
-    return cmd
-  }
-  // Claude Code (default)
-  cmd = permissionMode === 'bypassPermissions'
-    ? `claude --dangerously-skip-permissions --fork-session --resume ${sessionId}`
-    : `claude --fork-session --resume ${sessionId}`
-  cmd = withClaudeConfigDir(cmd, claudeConfigDir)
-  if (cwd && fs.existsSync(cwd)) {
-    return `cd ${JSON.stringify(cwd)} && ${cmd}`
-  }
-  return cmd
-}
-
 function openInTerminal(command: string): void {
   const tmpPath = `/tmp/csm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.command`
   // Script deletes itself after command finishes, so Terminal won't kill a running process
@@ -870,10 +867,15 @@ function openInTerminal(command: string): void {
 ipcMain.handle(
   'terminal:resume',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    const session = cachedSessions.find((s) => s.sessionId === sessionId)
-    const source = session?.source
-    restoreBackupToClaudeSource(sessionId)
-    openInTerminal(buildResumeCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source, session?.claudeConfigDir))
+    const restored = restoreBackupToClaudeSource(sessionId)
+    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd, restored.sourcePath)
+    openInTerminal(buildResumeCommand(
+      context.sessionId,
+      context.permissionMode,
+      context.cwd,
+      context.source,
+      context.claudeConfigDir
+    ))
   }
 )
 
@@ -881,9 +883,15 @@ ipcMain.handle(
   'terminal:resumeBatch',
   async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
     for (const s of sessionIds) {
-      const session = cachedSessions.find((ss) => ss.sessionId === s.sessionId)
-      restoreBackupToClaudeSource(s.sessionId)
-      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, session?.resumeCwd || s.cwd, session?.source, session?.claudeConfigDir))
+      const restored = restoreBackupToClaudeSource(s.sessionId)
+      const context = await resolveLocalSessionAction(s.sessionId, s.permissionMode, s.cwd, restored.sourcePath)
+      openInTerminal(buildResumeCommand(
+        context.sessionId,
+        context.permissionMode,
+        context.cwd,
+        context.source,
+        context.claudeConfigDir
+      ))
     }
   }
 )
@@ -891,17 +899,36 @@ ipcMain.handle(
 ipcMain.handle(
   'terminal:fork',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    const session = cachedSessions.find((s) => s.sessionId === sessionId)
-    const source = session?.source
-    restoreBackupToClaudeSource(sessionId)
-    openInTerminal(buildForkCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source, session?.claudeConfigDir))
+    const restored = restoreBackupToClaudeSource(sessionId)
+    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd, restored.sourcePath)
+    openInTerminal(buildForkCommand(
+      context.sessionId,
+      context.permissionMode,
+      context.cwd,
+      context.source,
+      context.claudeConfigDir
+    ))
+  }
+)
+
+ipcMain.handle(
+  'terminal:buildResumeCommand',
+  async (_event, sessionId: string, permissionMode?: string, cwd?: string) => {
+    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd)
+    return buildResumeCommand(
+      context.sessionId,
+      context.permissionMode,
+      context.cwd,
+      context.source,
+      context.claudeConfigDir
+    )
   }
 )
 
 // --- Insights IPC ---
 ipcMain.handle('insights:get', () => {
   const sessions = cachedSessions
-  let folders: Array<{ id: string; name: string; parentId?: string | null; sessionIds: string[] }> = []
+  let folders: Folder[] = []
   try {
     if (libraryInitialized) {
       const tree = scanLibrary()
@@ -1076,7 +1103,7 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:setSessionMeta',
-  (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: unknown[] }) => {
+  (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: Highlight[] }) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
       if (isBranch) {

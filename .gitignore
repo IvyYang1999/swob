@@ -5,3 +5,7 @@ dist
 e2e/screenshots
 test-results
 .working
+
+# 编译产物/临时 dump（误生成，勿提交）
+/index.js
+/spotlight-search-*.js

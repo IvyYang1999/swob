@@ -9,3 +9,6 @@ test-results
 # 编译产物/临时 dump（误生成，勿提交）
 /index.js
 /spotlight-search-*.js
+
+# 本机 Agent 配置 / worktree（本机特有，跨机复用走 vault harness/）
+/.claude/

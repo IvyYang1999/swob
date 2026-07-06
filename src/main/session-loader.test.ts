@@ -7,10 +7,11 @@
  * - 工具统计数字不对
  * - 分支检测误判
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   buildSessionSummary,
   buildSessionDetail,
+  loadSessionDetail,
   detectIntraFileBranches,
   filterMessagesByBranch,
   findClaudeProjectRoots,
@@ -18,6 +19,7 @@ import {
   getClaudeConfigDirForSessionFile,
   isRealUserMessage
 } from './session-loader'
+import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -54,6 +56,29 @@ function writeJsonlAt(filePath: string, messages: RawJsonlMessage[]): string {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, messages.map((m) => JSON.stringify(m)).join('\n'))
   return filePath
+}
+
+function sharedCrossSessionPrefix(sessionId: string): RawJsonlMessage[] {
+  return [
+    rawMsg({ uuid: 'shared-u1', sessionId, parentUuid: null, type: 'user', timestamp: '2026-06-10T10:00:00Z', message: { role: 'user', content: '共享开始' } }),
+    rawMsg({ uuid: 'shared-a1', sessionId, parentUuid: 'shared-u1', type: 'assistant', timestamp: '2026-06-10T10:01:00Z', message: { role: 'assistant', content: '收到' } }),
+    rawMsg({ uuid: 'shared-u2', sessionId, parentUuid: 'shared-a1', type: 'user', timestamp: '2026-06-10T10:02:00Z', message: { role: 'user', content: '继续共享上下文' } }),
+    rawMsg({ uuid: 'shared-a2', sessionId, parentUuid: 'shared-u2', type: 'assistant', timestamp: '2026-06-10T10:03:00Z', message: { role: 'assistant', content: '继续' } })
+  ]
+}
+
+async function loadAllSessionsFromTempHome(home: string) {
+  const oldHome = process.env.HOME
+  process.env.HOME = home
+  vi.resetModules()
+  try {
+    const mod = await import('./session-loader')
+    return await mod.loadAllSessions()
+  } finally {
+    if (oldHome === undefined) delete process.env.HOME
+    else process.env.HOME = oldHome
+    vi.resetModules()
+  }
 }
 
 // ========================================================
@@ -171,6 +196,21 @@ describe('buildSessionSummary', () => {
     const summary = buildSessionSummary(fp, msgs)
 
     expect(summary!.firstUserMessage).toBe('继续帮我改那个 bug')
+  })
+
+  it('firstUserMessage 应该跳过 local-command 和命令输出', () => {
+    const msgs = [
+      rawMsg({ type: 'user', message: { role: 'user', content: '<local-command-caveat>Caveat: generated while running local commands</local-command-caveat>' } }),
+      rawMsg({ type: 'user', message: { role: 'user', content: '<command-name>/model</command-name>' } }),
+      rawMsg({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Set model</local-command-stdout>' } }),
+      rawMsg({ type: 'user', message: { role: 'user', content: '现在文件夹里有大量的单轮会话' } }),
+      rawMsg({ type: 'assistant', message: { role: 'assistant', content: '开始处理' } })
+    ]
+    const fp = writeTempJsonl(msgs)
+    const summary = buildSessionSummary(fp, msgs)
+
+    expect(summary!.firstUserMessage).toBe('现在文件夹里有大量的单轮会话')
+    expect(summary!.turnCount).toBe(1)
   })
 
   it('compact 次数统计', () => {
@@ -390,6 +430,176 @@ describe('buildSessionDetail', () => {
     expect(sidechain).toHaveLength(1)
     expect(sidechain[0].textContent).toBe('这是被拒绝的回复')
   })
+
+  it('loadSessionDetail 应该把 compact continuation shard 拼回父会话并去重', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-continuation-'))
+    const parentFile = path.join(tmp, 'parent.jsonl')
+    const childFile = path.join(tmp, 'child.jsonl')
+    const repeatedPrompt = '这是现在侧边栏的滚动截图。所有 session 都显示在未分组。'
+
+    const parentMsgs = [
+      rawMsg({ uuid: 'u1', sessionId: 'parent-session', type: 'user', timestamp: '2026-06-14T10:00:00Z', message: { role: 'user', content: '开始' } }),
+      rawMsg({ uuid: 'a1', sessionId: 'parent-session', type: 'assistant', parentUuid: 'u1', timestamp: '2026-06-14T10:01:00Z', message: { role: 'assistant', content: '好的' } }),
+      rawMsg({ uuid: 'cb', sessionId: 'parent-session', type: 'system', subtype: 'compact_boundary', parentUuid: null, logicalParentUuid: 'a1', timestamp: '2026-06-14T10:02:00Z', message: { role: 'system', content: 'Conversation compacted' } }),
+      rawMsg({ uuid: 'sum', sessionId: 'parent-session', type: 'user', parentUuid: 'cb', timestamp: '2026-06-14T10:02:00Z', message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. Summary: ...' } }),
+      rawMsg({ uuid: 'copied-a', sessionId: 'parent-session', type: 'assistant', parentUuid: 'sum', timestamp: '2026-06-14T10:03:00Z', message: { role: 'assistant', content: 'compact 后的共享回复' } }),
+      rawMsg({ uuid: 'pending-parent', sessionId: 'parent-session', type: 'user', parentUuid: 'copied-a', timestamp: '2026-06-14T10:10:00Z', message: { role: 'user', content: repeatedPrompt } })
+    ]
+    const childMsgs = [
+      rawMsg({ uuid: 'cb', sessionId: 'child-session', type: 'system', subtype: 'compact_boundary', parentUuid: null, logicalParentUuid: 'a1', timestamp: '2026-06-14T10:02:00Z', message: { role: 'system', content: 'Conversation compacted' } }),
+      rawMsg({ uuid: 'sum', sessionId: 'child-session', type: 'user', parentUuid: 'cb', timestamp: '2026-06-14T10:02:00Z', message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. Summary: ...' } }),
+      rawMsg({ uuid: 'copied-a', sessionId: 'child-session', type: 'assistant', parentUuid: 'sum', timestamp: '2026-06-14T10:03:00Z', message: { role: 'assistant', content: 'compact 后的共享回复' } }),
+      rawMsg({ uuid: 'pending-child', sessionId: 'child-session', type: 'user', parentUuid: 'copied-a', timestamp: '2026-06-14T10:10:40Z', message: { role: 'user', content: repeatedPrompt } }),
+      rawMsg({ uuid: 'child-answer', sessionId: 'child-session', type: 'assistant', parentUuid: 'pending-child', timestamp: '2026-06-14T10:11:00Z', message: { role: 'assistant', content: '这是子 continuation 的新回答' } })
+    ]
+
+    writeJsonlAt(parentFile, parentMsgs)
+    writeJsonlAt(childFile, childMsgs)
+
+    const detail = await loadSessionDetail(parentFile, [parentFile, childFile])
+
+    expect(detail).not.toBeNull()
+    expect(detail!.sessionId).toBe('parent-session')
+    expect(detail!.messages.filter((m) => m.uuid === 'cb')).toHaveLength(1)
+    expect(detail!.messages.filter((m) => m.type === 'user' && m.textContent === repeatedPrompt)).toHaveLength(1)
+    expect(detail!.messages.some((m) => m.uuid === 'child-answer' && m.textContent === '这是子 continuation 的新回答')).toBe(true)
+  })
+})
+
+// ========================================================
+// cross-session branch inference 测试
+// ========================================================
+describe('cross-session branch inference', () => {
+  it('同一条用户 prompt 被不同 sessionId 重放且一边只是继续追加时，不应该判为 branch', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-branch-home-'))
+    const projectDir = path.join(home, '.claude', 'projects', '-Users-test-vault')
+    const repeatedPrompt = '晚上，看电视剧，妈突然来了一句：宝宝，妈妈觉得那个人是骗子。'
+
+    const longSession = [
+      ...sharedCrossSessionPrefix('diary-long'),
+      rawMsg({ uuid: 'long-repeat-user', sessionId: 'diary-long', parentUuid: 'shared-a2', type: 'user', timestamp: '2026-06-13T13:11:21Z', message: { role: 'user', content: repeatedPrompt } }),
+      rawMsg({ uuid: 'long-repeat-answer', sessionId: 'diary-long', parentUuid: 'long-repeat-user', type: 'assistant', timestamp: '2026-06-13T13:12:04Z', message: { role: 'assistant', content: '对同一条 prompt 的另一版回答' } }),
+      rawMsg({ uuid: 'long-extra-user', sessionId: 'diary-long', parentUuid: 'long-repeat-answer', type: 'user', timestamp: '2026-06-14T02:24:58Z', message: { role: 'user', content: '2026.6.14sun 今日Todo' } }),
+      rawMsg({ uuid: 'long-extra-answer', sessionId: 'diary-long', parentUuid: 'long-extra-user', type: 'assistant', timestamp: '2026-06-14T02:25:32Z', message: { role: 'assistant', content: '继续处理今日 Todo' } })
+    ]
+    const shortSession = [
+      ...sharedCrossSessionPrefix('diary-short'),
+      rawMsg({ uuid: 'short-repeat-user', sessionId: 'diary-short', parentUuid: 'shared-a2', type: 'user', timestamp: '2026-06-13T13:07:37Z', message: { role: 'user', content: repeatedPrompt } }),
+      rawMsg({ uuid: 'short-repeat-answer', sessionId: 'diary-short', parentUuid: 'short-repeat-user', type: 'assistant', timestamp: '2026-06-13T13:09:54Z', message: { role: 'assistant', content: '对同一条 prompt 的一版回答' } })
+    ]
+
+    writeJsonlAt(path.join(projectDir, 'diary-long.jsonl'), longSession)
+    writeJsonlAt(path.join(projectDir, 'diary-short.jsonl'), shortSession)
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home)
+      const long = sessions.find((s) => s.sessionId === 'diary-long')
+      const short = sessions.find((s) => s.sessionId === 'diary-short')
+
+      expect(long).toBeDefined()
+      expect(short).toBeDefined()
+      expect(long!.branchParentId).toBeUndefined()
+      expect(short!.branchParentId).toBeUndefined()
+      expect(long!.branchChildIds || []).not.toContain(short!.id)
+      expect(short!.branchChildIds || []).not.toContain(long!.id)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('共享前缀后双方都有不同用户意图时，仍然应该判为单向 branch', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-branch-home-'))
+    const projectDir = path.join(home, '.claude', 'projects', '-Users-test-vault')
+
+    const parentSession = [
+      ...sharedCrossSessionPrefix('branch-a'),
+      rawMsg({ uuid: 'branch-a-user', sessionId: 'branch-a', parentUuid: 'shared-a2', type: 'user', timestamp: '2026-06-10T10:10:00Z', message: { role: 'user', content: '走 A 方案' } }),
+      rawMsg({ uuid: 'branch-a-answer', sessionId: 'branch-a', parentUuid: 'branch-a-user', type: 'assistant', timestamp: '2026-06-10T10:11:00Z', message: { role: 'assistant', content: 'A 方案回复' } })
+    ]
+    const childSession = [
+      ...sharedCrossSessionPrefix('branch-b'),
+      rawMsg({ uuid: 'branch-b-user', sessionId: 'branch-b', parentUuid: 'shared-a2', type: 'user', timestamp: '2026-06-10T10:12:00Z', message: { role: 'user', content: '走 B 方案' } }),
+      rawMsg({ uuid: 'branch-b-answer', sessionId: 'branch-b', parentUuid: 'branch-b-user', type: 'assistant', timestamp: '2026-06-10T10:13:00Z', message: { role: 'assistant', content: 'B 方案回复' } })
+    ]
+
+    writeJsonlAt(path.join(projectDir, 'branch-a.jsonl'), parentSession)
+    writeJsonlAt(path.join(projectDir, 'branch-b.jsonl'), childSession)
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home)
+      const parent = sessions.find((s) => s.sessionId === 'branch-a')
+      const child = sessions.find((s) => s.sessionId === 'branch-b')
+
+      expect(parent).toBeDefined()
+      expect(child).toBeDefined()
+      expect(parent!.branchParentId).toBeUndefined()
+      expect(parent!.branchChildIds).toContain(child!.id)
+      expect(child!.branchParentId).toBe(parent!.id)
+      expect(child!.branchChildIds || []).not.toContain(parent!.id)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('真实 fork 文件用 basename child id 独立显示并 resume child session', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-fork-home-'))
+    const projectDir = path.join(home, '.claude', 'projects', '-Users-test-vault')
+    const parentId = '11111111-1111-4111-8111-111111111111'
+    const childId = '22222222-2222-4222-8222-222222222222'
+    const parentFile = path.join(projectDir, `${parentId}.jsonl`)
+    const childFile = path.join(projectDir, `${childId}.jsonl`)
+
+    const shared = [
+      rawMsg({ uuid: 'shared-u', sessionId: parentId, parentUuid: null, type: 'user', timestamp: '2026-06-10T10:00:00Z', message: { role: 'user', content: '共享上下文' } }),
+      rawMsg({ uuid: 'shared-a', sessionId: parentId, parentUuid: 'shared-u', type: 'assistant', timestamp: '2026-06-10T10:01:00Z', message: { role: 'assistant', content: '共享回复' } }),
+      rawMsg({ uuid: 'shared-u2', sessionId: parentId, parentUuid: 'shared-a', type: 'user', timestamp: '2026-06-10T10:01:30Z', message: { role: 'user', content: '继续共享' } })
+    ]
+    const parentMsgs = [
+      ...shared,
+      rawMsg({ uuid: 'parent-u', sessionId: parentId, parentUuid: 'shared-u2', type: 'user', timestamp: '2026-06-10T10:02:00Z', message: { role: 'user', content: '父会话继续' } }),
+      rawMsg({ uuid: 'parent-a', sessionId: parentId, parentUuid: 'parent-u', type: 'assistant', timestamp: '2026-06-10T10:03:00Z', message: { role: 'assistant', content: '父会话回答' } })
+    ]
+    const childMsgs = [
+      ...shared,
+      rawMsg({ uuid: 'child-u', sessionId: childId, parentUuid: 'shared-u2', type: 'user', timestamp: '2026-06-10T10:04:00Z', message: { role: 'user', content: 'fork child 的新问题' } }),
+      rawMsg({ uuid: 'child-a', sessionId: childId, parentUuid: 'child-u', type: 'assistant', timestamp: '2026-06-10T10:05:00Z', message: { role: 'assistant', content: 'fork child 的回答' } })
+    ]
+
+    writeJsonlAt(parentFile, parentMsgs)
+    writeJsonlAt(childFile, childMsgs)
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home)
+      const parent = sessions.find((s) => s.sessionId === parentId)
+      const child = sessions.find((s) => s.sessionId === childId)
+
+      expect(parent).toBeDefined()
+      expect(child).toBeDefined()
+      expect(child!.id).toBe(childId)
+      expect(child!.filePath).toBe(childFile)
+      expect(child!.branchParentId).toBe(parent!.id)
+      expect(parent!.branchChildIds).toContain(child!.id)
+
+      const detail = await loadSessionDetail(
+        child!.filePath,
+        child!.allFilePaths,
+        child!.branchParentFilePaths,
+        child!.branchPointUuid,
+        child!.branchLeafUuid
+      )
+      expect(detail).not.toBeNull()
+      expect(detail!.sessionId).toBe(childId)
+      expect(detail!.messages.filter((m) => m.uuid === 'shared-a')).toHaveLength(1)
+      expect(detail!.messages.some((m) => m.uuid === 'parent-u')).toBe(false)
+      expect(detail!.messages.some((m) => m.uuid === 'child-u')).toBe(true)
+
+      const context = await resolveSessionActionContext(childId, sessions)
+      expect(context.sessionId).toBe(childId)
+      expect(buildResumeCommand(context.sessionId, context.permissionMode, undefined, context.source)).toBe(`claude --resume ${childId}`)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
 })
 
 // ========================================================
@@ -448,7 +658,6 @@ describe('【曾经的 bug】分支检测不能被 traceToRoot 的改动破坏',
       uuid: 'cb', parentUuid: null, type: 'system', subtype: 'compact_boundary',
       timestamp: '2026-03-01T09:00:00Z'
     })
-    // @ts-expect-error logicalParentUuid not in type for tests
     compact.logicalParentUuid = 'pre-compact-msg'
 
     const preCompact = rawMsg({ uuid: 'pre-compact-msg', parentUuid: null, type: 'user', timestamp: '2026-03-01T08:00:00Z', message: { role: 'user', content: '远古消息' } })
@@ -478,7 +687,6 @@ describe('【曾经的 bug】分支检测不能被 traceToRoot 的改动破坏',
     const mainPre = rawMsg({ uuid: 'mp1', parentUuid: 'sh2', type: 'user', timestamp: '2026-03-01T10:02:00Z', message: { role: 'user', content: '主路径开始' } })
     const mainPre2 = rawMsg({ uuid: 'mp2', parentUuid: 'mp1', type: 'assistant', timestamp: '2026-03-01T10:04:00Z', message: { role: 'assistant', content: '主路径回复' } })
     const mainCompact = rawMsg({ uuid: 'mc', parentUuid: null, type: 'system', subtype: 'compact_boundary', timestamp: '2026-03-01T11:00:00Z' })
-    // @ts-expect-error
     mainCompact.logicalParentUuid = 'mp2'
     const mainPost1 = rawMsg({ uuid: 'mq1', parentUuid: 'mc', type: 'user', timestamp: '2026-03-01T11:01:00Z', message: { role: 'user', content: '主路径继续' } })
     const mainPost2 = rawMsg({ uuid: 'mq2', parentUuid: 'mq1', type: 'assistant', timestamp: '2026-03-01T11:02:00Z', message: { role: 'assistant', content: '主路径继续回复' } })
@@ -487,7 +695,6 @@ describe('【曾经的 bug】分支检测不能被 traceToRoot 的改动破坏',
     const brPre = rawMsg({ uuid: 'bp1', parentUuid: 'sh2', type: 'user', timestamp: '2026-03-01T10:03:00Z', message: { role: 'user', content: '分支路径开始' } })
     const brPre2 = rawMsg({ uuid: 'bp2', parentUuid: 'bp1', type: 'assistant', timestamp: '2026-03-01T10:05:00Z', message: { role: 'assistant', content: '分支回复' } })
     const brCompact = rawMsg({ uuid: 'bc', parentUuid: null, type: 'system', subtype: 'compact_boundary', timestamp: '2026-03-01T11:05:00Z' })
-    // @ts-expect-error
     brCompact.logicalParentUuid = 'bp2'
     const brPost1 = rawMsg({ uuid: 'bq1', parentUuid: 'bc', type: 'user', timestamp: '2026-03-01T11:06:00Z', message: { role: 'user', content: '分支继续' } })
 
@@ -507,7 +714,6 @@ describe('filterMessagesByBranch 穿越 compact 边界', () => {
       uuid: 'cb', parentUuid: null, type: 'system', subtype: 'compact_boundary',
       timestamp: '2026-03-01T09:00:00Z'
     })
-    // @ts-expect-error
     compact.logicalParentUuid = 'old2'
 
     const afterCompact = rawMsg({ uuid: 'ac1', parentUuid: 'cb', type: 'user', timestamp: '2026-03-01T09:01:00Z', message: { role: 'user', content: '新消息' } })
@@ -564,6 +770,21 @@ describe('【曾经的 bug】turnCount 不能把工具结果算成用户轮次',
       message: { role: 'user', content: '<task-notification>task completed</task-notification>' }
     })
     expect(isRealUserMessage(taskMsg)).toBe(false)
+  })
+
+  it('local-command caveat 和命令输出不是真实用户消息', () => {
+    expect(isRealUserMessage(rawMsg({
+      type: 'user',
+      message: { role: 'user', content: '<local-command-caveat>Caveat</local-command-caveat>' }
+    }))).toBe(false)
+    expect(isRealUserMessage(rawMsg({
+      type: 'user',
+      message: { role: 'user', content: '<command-name>/model</command-name>' }
+    }))).toBe(false)
+    expect(isRealUserMessage(rawMsg({
+      type: 'user',
+      message: { role: 'user', content: '<local-command-stdout>Set model</local-command-stdout>' }
+    }))).toBe(false)
   })
 
   it('【曾经的 bug】"Tool loaded." 不是真实用户消息', () => {

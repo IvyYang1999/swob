@@ -39,6 +39,11 @@ function AssistantLabel({ source }: { source?: string }) {
   return <span className="text-xs font-medium text-secondary">Claude Code</span>
 }
 
+function independentResumeSessionId(session: SessionDetail): string | null {
+  if (session.id?.includes(':intra-')) return null
+  return (session as any).resumeSessionId || session.sessionId || session.id
+}
+
 // --- System tag helpers ---
 
 /** Strip system-injected XML blocks and wrappers from user message text */
@@ -745,7 +750,7 @@ function SessionBar({
   searchOpen: boolean
   onToggleSearch: () => void
 }) {
-  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshForkSession, sshBuildCommand, showToast, openSshModal } = useStore()
+  const { selectedSession, viewMode, setViewMode, downloadSessionMarkdown, resumeSession, forkSession, buildResumeCommand, config, locale, sshConfig, cloudSessionIds, downloadCloudSession, sshResumeSession, sshForkSession, sshBuildCommand, showToast, openSshModal } = useStore()
   const t = useT()
   const [copied, setCopied] = useState(false)
   const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
@@ -849,17 +854,16 @@ function SessionBar({
         {/* 复制命令 */}
         <button
           onClick={async () => {
-            const sid = selectedSession.sessionId || selectedSession.id.split(':')[0]
+            const sid = independentResumeSessionId(selectedSession)
+            if (!sid) {
+              showToast(t('chat.intra_branch_not_resumable'), 'error')
+              return
+            }
             let cmd: string
             if (isRemote && sshConfig) {
               cmd = await sshBuildCommand(sid, selectedSession.permissionMode) || `ssh ${sshConfig.user}@${sshConfig.host} "claude --resume ${sid}"`
             } else {
-              cmd = selectedSession.permissionMode === 'bypassPermissions'
-                ? `claude --dangerously-skip-permissions --resume ${sid}`
-                : `claude --resume ${sid}`
-              if (selectedSession.claudeConfigDir) {
-                cmd = `CLAUDE_CONFIG_DIR=${JSON.stringify(selectedSession.claudeConfigDir)} ${cmd}`
-              }
+              cmd = await buildResumeCommand(sid, selectedSession.permissionMode, resolveResumeCwd(selectedSession))
             }
             navigator.clipboard.writeText(cmd)
             setCopiedResumeCmd(true)
@@ -875,10 +879,15 @@ function SessionBar({
         {/* Resume / SSH Resume */}
         <button
           onClick={async () => {
+            const sid = independentResumeSessionId(selectedSession)
+            if (!sid) {
+              showToast(t('chat.intra_branch_not_resumable'), 'error')
+              return
+            }
             if (isRemote && sshConfig) {
               setSshResuming(true)
               await sshResumeSession(
-                selectedSession.sessionId || selectedSession.id.split(':')[0],
+                sid,
                 selectedSession.permissionMode
               )
               setSshResuming(false)
@@ -886,7 +895,7 @@ function SessionBar({
               openSshModal()
             } else {
               resumeSession(
-                selectedSession.sessionId || selectedSession.id,
+                sid,
                 selectedSession.permissionMode,
                 resolveResumeCwd(selectedSession)
               )
@@ -901,29 +910,34 @@ function SessionBar({
                 : 'bg-soft-green/90 hover:bg-soft-green text-white'
           } disabled:opacity-60`}
           title={
-            selectedSession.id?.includes(':intra-') ? t('chat.resume_branch_hint')
+            selectedSession.id?.includes(':intra-') ? t('chat.intra_branch_not_resumable')
             : isRemote && sshConfig ? `SSH Resume (${sshConfig.user}@${sshConfig.host})`
             : isRemote ? '此会话来自其他设备，点击配置 SSH'
             : undefined
           }
         >
           {isRemote ? <Terminal size={10} /> : <Play size={10} />}
-          {sshResuming ? '连接中...' : isRemote ? 'SSH Resume' : `Resume${selectedSession.id?.includes(':intra-') ? ` (${t('chat.resume_parent')})` : ''}`}
+          {sshResuming ? '连接中...' : isRemote ? 'SSH Resume' : 'Resume'}
         </button>
 
         {/* Fork */}
         <button
           onClick={async () => {
+            const sid = independentResumeSessionId(selectedSession)
+            if (!sid) {
+              showToast(t('chat.intra_branch_not_resumable'), 'error')
+              return
+            }
             if (isRemote && sshConfig) {
               await sshForkSession(
-                selectedSession.sessionId || selectedSession.id.split(':')[0],
+                sid,
                 selectedSession.permissionMode
               )
             } else if (isRemote && !sshConfig) {
               openSshModal()
             } else {
               forkSession(
-                selectedSession.sessionId || selectedSession.id.split(':')[0],
+                sid,
                 selectedSession.permissionMode,
                 getResumeCwd(selectedSession)
               )

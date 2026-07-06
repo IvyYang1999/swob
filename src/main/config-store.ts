@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
-import type { UserConfig, Folder } from './types'
+import type { UserConfig, Folder, Highlight } from './types'
 
 const CONFIG_DIR = path.join(process.env.HOME || '', '.claude-session-manager')
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
@@ -126,7 +126,7 @@ export function removeSessionFromFolder(
 export function setSessionMeta(
   config: UserConfig,
   sessionId: string,
-  meta: { customTitle?: string; notes?: string; highlights?: unknown[] }
+  meta: { customTitle?: string; notes?: string; highlights?: Highlight[] }
 ): UserConfig {
   config.sessionMeta[sessionId] = {
     ...config.sessionMeta[sessionId],

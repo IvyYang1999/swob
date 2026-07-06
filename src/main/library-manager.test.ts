@@ -427,3 +427,213 @@ describe('buildSshResumeCommand', () => {
     expect(cmd).not.toContain('cd ')
   })
 })
+
+describe('库根 = vault：cwd 感知放置 + 忽略名单 + 安全删除', () => {
+  function summary(sessionId: string, cwds: string[]) {
+    return {
+      sessionId,
+      cwds,
+      firstUserMessage: '会话 ' + sessionId,
+      createdAt: '2026-06-01T00:00:00Z',
+      updatedAt: '2026-06-01T01:00:00Z',
+      projectPath: '/fake',
+      filePath: '/fake/' + sessionId + '.jsonl',
+      allFilePaths: ['/fake/' + sessionId + '.jsonl']
+    } as any
+  }
+
+  function makeSession(dir: string, sessionId: string) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, '.swob-session.json'), JSON.stringify({
+      sessionId, sourceFilePaths: [], createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z', projectPath: '/x'
+    }))
+  }
+
+  function collectIds(tree: any): string[] {
+    const ids: string[] = []
+    const walk = (f: any) => { for (const s of f.sessions) ids.push(s.sessionId); for (const c of f.children) walk(c) }
+    for (const s of tree.ungroupedSessions) ids.push(s.sessionId)
+    for (const f of tree.folders) walk(f)
+    return ids
+  }
+
+  it('vault 内项目目录启动的会话 → 落进 <cwd>/AI会话/', async () => {
+    const cwd = path.join(tmpRoot, '项目', '飞搜')
+    fs.mkdirSync(cwd, { recursive: true })
+    const dir = await lib.ensureSessionInLibrary(summary('in-vault-1', [cwd]))
+    expect(dir).toBe(path.join(cwd, 'AI会话', '会话 in-vault-1'))
+    expect(fs.existsSync(path.join(dir, '.swob-session.json'))).toBe(true)
+  })
+
+  it('vault 外启动的会话 → 中央桶 <root>/AI会话/，绝不落在库根本身', async () => {
+    const dir = await lib.ensureSessionInLibrary(summary('outside-1', ['/somewhere/else']))
+    expect(dir).toBe(path.join(tmpRoot, 'AI会话', '会话 outside-1'))
+    expect(path.dirname(dir)).not.toBe(tmpRoot)
+  })
+
+  it('scanLibrary 跳过配置的 ignoreDirs 里的会话，但收录项目里的会话', () => {
+    // ignoreDirs 由用户在 .swob-config.json 配置（DEFAULT 不含 vault 专属名）
+    fs.writeFileSync(path.join(tmpRoot, '.swob-config.json'), JSON.stringify({
+      libraryRoot: tmpRoot,
+      preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' },
+      ignoreDirs: ['wiki']
+    }))
+    lib.initLibrary(tmpRoot) // 重新加载 ignoreDirs
+    makeSession(path.join(tmpRoot, 'wiki', '不该出现'), 'wiki-x')
+    makeSession(path.join(tmpRoot, '项目', '飞搜', 'AI会话', '应该出现'), 'proj-x')
+    const ids = collectIds(lib.scanLibrary())
+    expect(ids).toContain('proj-x')
+    expect(ids).not.toContain('wiki-x')
+  })
+
+  it('deleteLibraryFolder 拒绝删除含用户文件的目录，笔记保住', () => {
+    const proj = path.join(tmpRoot, '项目', '飞搜')
+    fs.mkdirSync(proj, { recursive: true })
+    fs.writeFileSync(path.join(proj, 'context.md'), '# 我的项目笔记')
+    expect(() => lib.deleteLibraryFolder(proj)).toThrow()
+    expect(fs.existsSync(path.join(proj, 'context.md'))).toBe(true)
+    expect(fs.existsSync(proj)).toBe(true)
+  })
+
+  it('deleteLibraryFolder 正常删除纯会话容器（无散文件）', () => {
+    const folder = path.join(tmpRoot, '纯容器')
+    makeSession(path.join(folder, '一个会话'), 'pure-x')
+    lib.scanLibrary()
+    expect(() => lib.deleteLibraryFolder(folder)).not.toThrow()
+    expect(fs.existsSync(folder)).toBe(false)
+  })
+})
+
+describe('transcript markdown heading semantics', () => {
+  it('demoteMarkdownHeadings 只降级 fenced code block 外的 ATX heading', () => {
+    const input = [
+      '# 一级标题',
+      '  ## 前置空格标题',
+      '    # 四空格代码行不动',
+      '```md',
+      '# 代码块标题不动',
+      '```',
+      '### 多级标题 ###'
+    ].join('\n')
+
+    expect(lib.demoteMarkdownHeadings(input)).toBe([
+      '**一级标题**',
+      '  **前置空格标题**',
+      '    # 四空格代码行不动',
+      '```md',
+      '# 代码块标题不动',
+      '```',
+      '**多级标题**'
+    ].join('\n'))
+  })
+
+  it('generateTranscript 用 user 首行做 outline，assistant heading 降为粗体', () => {
+    const md = lib.generateTranscript([
+      {
+        uuid: 'u1',
+        parentUuid: null,
+        sessionId: 's1',
+        type: 'user',
+        timestamp: '2026-03-01T00:00:00Z',
+        message: { role: 'user', content: '请做方案\n# 用户原始标题保留' }
+      },
+      {
+        uuid: 'a1',
+        parentUuid: 'u1',
+        sessionId: 's1',
+        type: 'assistant',
+        timestamp: '2026-03-01T00:01:00Z',
+        message: { role: 'assistant', content: '## Assistant Plan\n```md\n# 代码块标题不动\n```\n### Step ###' }
+      }
+    ] as any, '测试标题', { createdAt: '2026-03-01T00:00:00Z', turnCount: 1 })
+
+    expect(md).toContain('**User** [')
+    expect(md).toContain('\n## 请做方案\n请做方案\n# 用户原始标题保留')
+    expect(md).toContain('**Assistant Plan**')
+    expect(md).toContain('# 代码块标题不动')
+    expect(md).toContain('**Step**')
+    expect(md).not.toContain('\n## Assistant Plan')
+  })
+})
+
+describe('computeUngroupBucket 跨设备 session 归属', () => {
+  // 【曾经的 bug】跨设备（iCloud）同步来的 session 常落在用户手动建的 vault 目录里
+  // （如 AI会话/垃圾箱/），这些目录不是 Swob 主题文件夹。
+  // 旧逻辑只按目录路径判 grouped，导致它们既不进底部、也不在文件夹树 → 凭空消失。
+  // 修复：兜底前用 folders[].sessionIds 校验 session 是否真归属某 folder，否则判 root（进底部）。
+
+  let bucketRoot: string
+  let userDir: string // 模拟「用户手动建的目录」（非 Swob folder）
+
+  beforeEach(() => {
+    bucketRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-bucket-test-'))
+    lib.initLibrary(bucketRoot)
+    // 用户手动建的目录（不是 Swob folder，只是 vault 里的普通目录）
+    userDir = path.join(bucketRoot, 'AI会话', '垃圾箱')
+    fs.mkdirSync(userDir, { recursive: true })
+  })
+
+  afterEach(() => {
+    fs.rmSync(bucketRoot, { recursive: true, force: true })
+  })
+
+  it('session 在用户手动目录但不在任何 folder → 判 root（进底部，不消失）', () => {
+    // session 物理位置：bucketRoot/AI会话/垃圾箱/<session>/
+    // 父目录 parentDir = bucketRoot/AI会话/垃圾箱，既非 root 也非 ungrouping 容器
+    const sessionDir = path.join(userDir, 'mac来的session')
+    fs.mkdirSync(sessionDir, { recursive: true })
+
+    const result = lib.computeUngroupBucket(
+      { id: 'sid-cross-device', sessionId: 'sid-cross-device' },
+      sessionDir,
+      [] // 没有任何 folder
+    )
+    expect(result).toBe('root')
+  })
+
+  it('session 真在某 folder.sessionIds → 判 grouped（只在树里显示）', () => {
+    const sessionDir = path.join(userDir, '已被分组的session')
+    fs.mkdirSync(sessionDir, { recursive: true })
+
+    const folders = [{
+      id: 'f1', name: '主题文件夹', sessionIds: ['sid-grouped'],
+      createdAt: '2026-01-01T00:00:00Z'
+    }]
+    const result = lib.computeUngroupBucket(
+      { id: 'sid-grouped', sessionId: 'sid-grouped' },
+      sessionDir,
+      folders
+    )
+    expect(result).toBe('grouped')
+  })
+
+  it('session 在 Library 根 → 判 root', () => {
+    const sessionDir = path.join(bucketRoot, '根级session')
+    fs.mkdirSync(sessionDir, { recursive: true })
+
+    const result = lib.computeUngroupBucket(
+      { id: 'sid-root', sessionId: 'sid-root' },
+      sessionDir,
+      []
+    )
+    expect(result).toBe('root')
+  })
+
+  it('session.id 和 session.sessionId 任一匹配 folder.sessionIds 即判 grouped', () => {
+    const sessionDir = path.join(userDir, 'session')
+    fs.mkdirSync(sessionDir, { recursive: true })
+
+    const folders = [{
+      id: 'f1', name: 'F', sessionIds: ['other-id', 'matched-sessionId'],
+      createdAt: '2026-01-01T00:00:00Z'
+    }]
+    // id 不匹配，但 sessionId 匹配
+    const result = lib.computeUngroupBucket(
+      { id: 'unmatched-id', sessionId: 'matched-sessionId' },
+      sessionDir,
+      folders
+    )
+    expect(result).toBe('grouped')
+  })
+})

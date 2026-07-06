@@ -15,6 +15,7 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:mac": "npm run build && electron-builder --mac",
     "deploy": "bash scripts/deploy-local.sh",
+    "dmg": "bash scripts/build-dmg-desktop.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npx electron-vite build && npx playwright test",

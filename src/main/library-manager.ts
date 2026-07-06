@@ -1,7 +1,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { parseSessionFile, buildSessionSummary, filterMessagesByBranch } from './session-loader'
+import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
+import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
 import type { RawJsonlMessage, ContentPart, SessionSummary, Folder, UserConfig } from './types'
 
 // ============ Types ============
@@ -15,6 +16,7 @@ export interface SessionMeta {
   createdAt: string
   updatedAt: string
   projectPath: string
+  turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
 }
 
 export interface LibrarySession {
@@ -51,10 +53,14 @@ export interface LibraryConfig {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
     sshConfig?: SshConfig
+    // 指定「未分组容器」：这两个文件夹的会话在 UI 底部按轮数罗列/折叠、不在树里显示。
+    // 新中央会话也按轮数落进这俩文件夹。不配则为空，swob 行为完全通用。
+    ungrouping?: { multiTurn: string; singleTurn: string }
   }
   folderOrder?: string[]  // relative paths, determines display order
   branchFolders?: Record<string, string[]>  // branch unique ID → folder relative paths
   branchMeta?: Record<string, { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }>
+  ignoreDirs?: string[]  // 库根设为整个 vault 时，扫描/放置时跳过的目录名（如 wiki、clipii）
 }
 
 // ============ Constants ============
@@ -62,6 +68,22 @@ export interface LibraryConfig {
 const DEFAULT_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
 const APP_CONFIG_DIR = path.join(os.homedir(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
+
+function isOriginalSessionSourcePath(filePath: string): boolean {
+  if (!filePath.endsWith('.jsonl')) return false
+  const normalized = filePath.split(path.sep).join('/')
+  return normalized.includes('/.claude/projects/') ||
+    normalized.includes('/.claude-window/') ||
+    normalized.includes('/.codex/sessions/') ||
+    normalized.includes('/.cursor/projects/')
+}
+
+function sourceFilePathsForMeta(session: SessionSummary): string[] {
+  const candidates = session.allFilePaths && session.allFilePaths.length > 0
+    ? session.allFilePaths
+    : [session.filePath]
+  return candidates.filter(isOriginalSessionSourcePath)
+}
 
 export function loadAppConfig(): { libraryPath?: string } {
   try {
@@ -97,9 +119,14 @@ const BACKUP_FILE = 'backup.jsonl'
 // ============ Library Manager ============
 
 let _root: string = DEFAULT_ROOT
+let _ignoreDirs: Set<string> = new Set(DEFAULT_IGNORE_DIRS)
 
 export function getLibraryRoot(): string {
   return _root
+}
+
+export function getIgnoreDirs(): Set<string> {
+  return _ignoreDirs
 }
 
 export function initLibrary(root?: string): void {
@@ -107,6 +134,9 @@ export function initLibrary(root?: string): void {
   if (!fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }
+  // 库根可能是整个 vault：加载忽略名单，避免扫描 wiki/clipii/日记 等非项目目录
+  const cfg = loadLibraryConfig()
+  _ignoreDirs = new Set(cfg.ignoreDirs && cfg.ignoreDirs.length ? cfg.ignoreDirs : DEFAULT_IGNORE_DIRS)
 }
 
 // --- Config ---
@@ -170,6 +200,58 @@ function isSessionDir(dirPath: string): boolean {
   return fs.existsSync(path.join(dirPath, SESSION_META_FILE))
 }
 
+/** 把 swob 权威 turnCount 持久化进会话 meta（供外部整理脚本按真实轮数归档）。变化才写盘。 */
+export function setSessionTurnCount(dirPath: string, turnCount: number): void {
+  if (typeof turnCount !== 'number') return
+  try {
+    const m = readSessionMeta(dirPath)
+    if (m && m.turnCount !== turnCount) {
+      m.turnCount = turnCount
+      writeSessionMeta(dirPath, m)
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * 文件夹（递归）是否含有「非会话」的用户文件。
+ *
+ * 库根可能 = 整个 vault，于是 wiki/、项目/飞搜/ 这类含笔记的真实目录会作为
+ * 「文件夹」出现在 swob 里。删除文件夹是递归强删（fs.rmSync force），一旦误删
+ * 这种目录就会毁掉用户笔记。此函数用于在删除前拦截：会话目录内部的文件
+ * （transcript.md / backup.jsonl 等）是允许的，但非会话目录里的散文件 = 用户内容，
+ * 一旦发现就拒绝删除。
+ */
+function folderHasUserFiles(dirPath: string): boolean {
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true })
+  } catch {
+    return false
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const fullPath = path.join(dirPath, entry.name)
+    let realPath = fullPath
+    try {
+      if (fs.lstatSync(fullPath).isSymbolicLink()) realPath = fs.realpathSync(fullPath)
+    } catch {
+      continue // broken symlink
+    }
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(realPath)
+    } catch {
+      continue
+    }
+    if (stat.isFile()) return true // 散文件 = 用户内容
+    if (stat.isDirectory()) {
+      if (isSessionDir(realPath)) continue // 会话目录内部文件是允许的
+      if (folderHasUserFiles(realPath)) return true
+    }
+  }
+  return false
+}
+
 // --- Index: sessionId → dirPath ---
 
 const sessionIndex = new Map<string, string>()
@@ -183,6 +265,45 @@ export function getSessionMdPath(sessionId: string): string | null {
   if (!dirPath) return null
   const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
   return fs.existsSync(mdPath) ? mdPath : null
+}
+
+/**
+ * 计算 session 的「物理位置桶」，决定前端把它显示在文件夹树还是底部未分组区。
+ *   'grouped' = 真归属某 Swob 主题文件夹 → 只在树里显示，绝不进底部
+ *   'multi'/'single' = 在 未分组/单轮会话 容器目录里 → 进底部对应区
+ *   'root' = 游离（在 Library 根，或落在用户手动目录但不在任何 Swob 文件夹里）→ 进底部
+ *
+ * folders 由调用方注入（来自 UserConfig.folders，即 ~/.claude-session-manager/config.json）。
+ * 因为 loadLibraryConfig()（.swob-config.json）不含 folders，必须显式传入，否则无法判断真实归属。
+ */
+export function computeUngroupBucket(
+  session: { id: string; sessionId: string },
+  dirPath: string | null | undefined,
+  folders: Folder[]
+): 'grouped' | 'multi' | 'single' | 'root' | undefined {
+  const libConfig = loadLibraryConfig()
+  const branchFolders = libConfig.branchFolders || {}
+  if ((session.id.includes(':intra-') || session.id.includes(':branch-')) && branchFolders[session.id]?.length) {
+    return 'grouped'
+  }
+
+  const resolvedDir = dirPath || getSessionDirPath(session.sessionId)
+  if (!resolvedDir) return undefined
+
+  const parentDir = path.dirname(resolvedDir)
+  const parent = path.basename(parentDir)
+  const ungCfg = (libConfig.preferences as any)?.ungrouping
+  if (ungCfg && parent === ungCfg.multiTurn) return 'multi'
+  if (ungCfg && parent === ungCfg.singleTurn) return 'single'
+  if (parentDir === getLibraryRoot()) return 'root'
+
+  // 关键修复：兜底前确认 session 真归属某 Swob 文件夹。
+  // 跨设备（iCloud）同步来的 session 常落在用户手动建的 vault 目录里（如 AI会话/垃圾箱/），
+  // 这些目录不是 Swob 文件夹 —— 之前一律判 grouped 导致它们既不进底部也不在树里 → 凭空消失。
+  // 现在查 loadConfig().folders 的 sessionIds：真归属才 grouped，否则当游离 root（进底部）。
+  const ids = new Set([session.id, session.sessionId])
+  const isInFolder = (folders || []).some((f) => (f.sessionIds || []).some((sid) => ids.has(sid)))
+  return isInFolder ? 'grouped' : 'root'
 }
 
 function isPathInside(parentDir: string, childPath: string): boolean {
@@ -281,7 +402,7 @@ export async function updateBranchTranscript(
   const branchRaw = filterMessagesByBranch(allRaw, branchLeafUuid)
   if (branchRaw.length === 0) return null
 
-  const summary = buildSessionSummary(meta.sourceFilePaths[0], branchRaw, true)
+  const summary = buildSessionSummary(meta.sourceFilePaths[0], branchRaw, true, meta.sessionId)
   if (!summary) return null
 
   const title = customTitle || summary.firstUserMessage?.slice(0, 60) || branchId.slice(0, 12)
@@ -313,6 +434,8 @@ function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: Librar
     if (entry.name.startsWith('.')) continue
     // Skip iCloud placeholder files (e.g. .filename.icloud)
     if (entry.name.includes('.icloud')) continue
+    // 库根设为整个 vault 时，跳过 wiki/clipii/日记 等非项目目录
+    if (_ignoreDirs.has(entry.name)) continue
     const fullPath = path.join(dirPath, entry.name)
 
     // Resolve symlinks
@@ -420,6 +543,47 @@ function formatTs(iso: string): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+export function demoteMarkdownHeadings(text: string): string {
+  const lines = text.split('\n')
+  let inFence = false
+  let fenceMarker: '`' | '~' | null = null
+  let fenceLength = 0
+
+  return lines.map((line) => {
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})/)
+    if (fence) {
+      const marker = fence[1][0] as '`' | '~'
+      const length = fence[1].length
+      if (!inFence) {
+        inFence = true
+        fenceMarker = marker
+        fenceLength = length
+      } else if (marker === fenceMarker && length >= fenceLength) {
+        inFence = false
+        fenceMarker = null
+        fenceLength = 0
+      }
+      return line
+    }
+
+    if (inFence) return line
+
+    const match = line.match(/^( {0,3})#{1,6}(?:[ \t]+|$)(.*)$/)
+    if (!match) return line
+
+    const headingText = match[2].replace(/[ \t]+#{1,}[ \t]*$/, '').trim()
+    if (!headingText) return line
+    return `${match[1]}**${headingText.replace(/\*\*/g, '')}**`
+  }).join('\n')
+}
+
+function firstLineSnippet(text: string, maxLen = 40): string {
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim()) || text
+  const normalized = firstLine.replace(/\s+/g, ' ').trim()
+  if (!normalized) return 'User prompt'
+  return normalized.length > maxLen ? `${normalized.slice(0, maxLen).trimEnd()}...` : normalized
+}
+
 export function generateTranscript(
   rawMessages: RawJsonlMessage[],
   title: string,
@@ -449,6 +613,7 @@ export function generateTranscript(
     if (msg.type === 'user') {
       if (!text) continue
       lines.push(`**User** [${ts}]`)
+      lines.push(`## ${firstLineSnippet(text)}`)
       lines.push(text)
       lines.push('')
     } else if (msg.type === 'assistant') {
@@ -458,7 +623,7 @@ export function generateTranscript(
       if (tools.length > 0) {
         for (const t of tools) lines.push(t)
       }
-      if (text) lines.push(text)
+      if (text) lines.push(demoteMarkdownHeadings(text))
       lines.push('')
     }
   }
@@ -485,7 +650,10 @@ export async function ensureSessionInLibrary(
       }
       if (meta.updatedAt !== session.updatedAt) {
         meta.updatedAt = session.updatedAt
-        meta.sourceFilePaths = session.allFilePaths || [session.filePath]
+        const nextSourceFilePaths = sourceFilePathsForMeta(session)
+        if (nextSourceFilePaths.length > 0) {
+          meta.sourceFilePaths = nextSourceFilePaths
+        }
         changed = true
       }
       if (changed) writeSessionMeta(existing, meta)
@@ -493,21 +661,32 @@ export async function ensureSessionInLibrary(
     return existing
   }
 
-  // Create new session dir
+  // Create new session dir.
+  // 按启动目录归档：vault 内项目目录启动 → <cwd>/AI会话/；否则 → 中央桶 <root>/AI会话/。
+  // 任何会话都不会落在库根本身（即便库根 = vault）。
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId.slice(0, 12)
   const baseName = sanitizeDirName(title)
-  const dirName = findUniqueDirName(_root, baseName)
-  const dirPath = path.join(_root, dirName)
+  // 中央桶里的新会话按轮数落进 单轮会话/未分组 子目录（若库配置了 ungrouping），
+  // 使其直接出现在 UI 底部的单轮折叠/未分组区，不在 AI会话 文件夹里一闪而过。
+  const ung = (loadLibraryConfig().preferences as any)?.ungrouping
+  const centralSubfolder = ung
+    ? (session.turnCount > 1 ? ung.multiTurn : ung.singleTurn)
+    : undefined
+  const parentDir = resolveSessionParent(session.cwds, _root, _ignoreDirs, undefined, centralSubfolder)
+  fs.mkdirSync(parentDir, { recursive: true })
+  const dirName = findUniqueDirName(parentDir, baseName)
+  const dirPath = path.join(parentDir, dirName)
 
   fs.mkdirSync(dirPath, { recursive: true })
 
   const meta: SessionMeta = {
     sessionId: session.sessionId,
-    sourceFilePaths: session.allFilePaths || [session.filePath],
+    sourceFilePaths: sourceFilePathsForMeta(session),
     customTitle,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    projectPath: session.projectPath
+    projectPath: session.projectPath,
+    turnCount: session.turnCount
   }
   writeSessionMeta(dirPath, meta)
   sessionIndex.set(session.sessionId, dirPath)
@@ -561,7 +740,7 @@ export async function updateTranscript(sessionId: string, customTitle?: string):
   }
   if (allRaw.length === 0) return
 
-  const summary = buildSessionSummary(meta.sourceFilePaths[0], allRaw, true)
+  const summary = buildSessionSummary(meta.sourceFilePaths[0], allRaw, true, meta.sessionId)
   if (!summary) return
 
   const title = customTitle || meta.customTitle || summary.firstUserMessage?.slice(0, 60) || sessionId.slice(0, 12)
@@ -574,9 +753,72 @@ export async function updateTranscript(sessionId: string, customTitle?: string):
   const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
   fs.writeFileSync(mdPath, md, 'utf-8')
 
-  // Update meta timestamps
+  // Update meta timestamps + 权威轮数
   meta.updatedAt = summary.updatedAt
+  meta.turnCount = summary.turnCount
   writeSessionMeta(dirPath, meta)
+}
+
+export interface RebuildTranscriptsResult {
+  libraryRoot: string
+  dryRun: boolean
+  sessionCount: number
+  branchCount: number
+  transcriptCount: number
+}
+
+function collectLibrarySessions(tree: LibraryTree): LibrarySession[] {
+  const sessions: LibrarySession[] = [...tree.ungroupedSessions]
+  const walk = (folder: LibraryFolder): void => {
+    sessions.push(...folder.sessions)
+    for (const child of folder.children) walk(child)
+  }
+  for (const folder of tree.folders) walk(folder)
+  return sessions
+}
+
+async function loadRawFromMeta(meta: SessionMeta): Promise<RawJsonlMessage[]> {
+  const allRaw: RawJsonlMessage[] = []
+  for (const src of meta.sourceFilePaths) {
+    try {
+      if (fs.existsSync(src)) {
+        const raw = await parseSessionFile(src)
+        allRaw.push(...raw)
+      }
+    } catch { /* skip */ }
+  }
+  return allRaw
+}
+
+export async function rebuildAllTranscripts(options: { dryRun?: boolean } = {}): Promise<RebuildTranscriptsResult> {
+  const dryRun = options.dryRun === true
+  const tree = scanLibrary()
+  const sessions = collectLibrarySessions(tree)
+  const config = loadLibraryConfig()
+  let branchCount = 0
+
+  for (const session of sessions) {
+    const raw = await loadRawFromMeta(session.meta)
+    const branches = raw.length > 0 ? detectIntraFileBranches(raw) : []
+    branchCount += branches.length
+
+    if (dryRun) continue
+
+    await updateTranscript(session.sessionId, session.meta.customTitle)
+    for (let idx = 0; idx < branches.length; idx++) {
+      const branchId = `${session.sessionId}:intra-${idx}`
+      const branchTitle = config.branchMeta?.[branchId]?.customTitle
+      await updateBranchTranscript(branchId, branches[idx].leafUuid, branchTitle)
+    }
+  }
+
+  return {
+    libraryRoot: _root,
+    dryRun,
+    sessionCount: sessions.length,
+    branchCount,
+    transcriptCount: sessions.length + branchCount
+  }
 }
 
 // --- Folder Operations ---
@@ -624,6 +866,15 @@ export function moveLibraryFolderToParent(srcPath: string, destParentPath: strin
 export function deleteLibraryFolder(folderPath: string): void {
   // Only delete if it's a folder (no .swob-session.json)
   if (isSessionDir(folderPath)) return
+
+  // 安全护栏：库根可能 = 整个 vault，拒绝删除含用户笔记的真实目录（如 wiki/、项目/飞搜/）。
+  // 正常的 swob 文件夹只含会话/子文件夹，不会触发；含散文件的目录会被拦下。
+  if (folderHasUserFiles(folderPath)) {
+    throw new Error(
+      `拒绝删除：「${path.basename(folderPath)}」含有非会话文件（可能是你的笔记/文档）。` +
+      `如果库根设成了整个 vault，请在文件系统里手动确认后再删。`
+    )
+  }
 
   // Recursively collect ALL sessions (including those in subfolders)
   function collectAllSessions(dirPath: string): LibrarySession[] {
@@ -776,6 +1027,15 @@ export async function syncLibraryFromSessions(
   for (const session of sessions) {
     const customTitle = sessionMeta[session.sessionId]?.customTitle
     const dirPath = await ensureSessionInLibrary(session, customTitle)
+
+    // 持久化 swob 权威 turnCount 进 meta（各会话类型统一），供外部整理脚本按真实轮数归档
+    try {
+      const m = readSessionMeta(dirPath)
+      if (m && m.turnCount !== session.turnCount) {
+        m.turnCount = session.turnCount
+        writeSessionMeta(dirPath, m)
+      }
+    } catch { /* ignore */ }
 
     // Update transcript
     const mdPath = path.join(dirPath, TRANSCRIPT_FILE)

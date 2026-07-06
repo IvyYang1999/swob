@@ -11,7 +11,8 @@ import {
   loadSessionDetail,
   findAllSessionFiles,
   parseSessionFile,
-  buildSessionSummary
+  buildSessionSummary,
+  resolvePhysicalSessionId
 } from './session-loader'
 import { findCodexSessionFiles, buildCodexSessionSummary } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary } from './cursor-loader'
@@ -27,6 +28,7 @@ import {
   syncBackup,
   getSessionMdPath,
   getSessionDirPath,
+  setSessionTurnCount,
   restoreBackupToClaudeSource,
   createLibraryFolder,
   renameLibraryFolder,
@@ -57,19 +59,28 @@ import {
   saveAppConfig,
   isLibraryInitialized,
   findLibraryOnlySessions,
-  findLibrarySessionsWithMissingSources
+  findLibrarySessionsWithMissingSources,
+  computeUngroupBucket
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
 import { searchSessionFiles } from './session-search'
 import { buildInsights } from './insights'
-import type { SessionSummary } from './types'
+import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
+import {
+  buildForkCommand,
+  buildResumeCommand,
+  resolveSessionActionContext
+} from './session-actions'
+import type { Folder, Highlight, SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
 let spotlightWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
 let codexWatcher: chokidar.FSWatcher | null = null
 let cursorWatcher: chokidar.FSWatcher | null = null
+let libraryWatcher: chokidar.FSWatcher | null = null
+let libraryRescanTimer: ReturnType<typeof setTimeout> | null = null
 let pendingSpotlightNavigationSessionId: string | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
@@ -109,6 +120,50 @@ function startActiveSessionPoller(): void {
   activePoller = setInterval(() => { pushActiveSessionIds() }, 1000)
 }
 let cachedSessions: SessionSummary[] = []
+
+function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | null): void {
+  const resolvedDir = dirPath || getSessionDirPath(session.sessionId)
+  if (resolvedDir) {
+    session.libraryDirPath = resolvedDir
+    session.libraryMdPath = getSessionMdPath(session.sessionId) || session.libraryMdPath
+    if (!session.id.includes(':intra-') && !session.id.includes(':branch-')) {
+      setSessionTurnCount(resolvedDir, session.turnCount)
+    }
+  }
+
+  const bucket = computeUngroupBucket(session, resolvedDir, loadConfig().folders || [])
+  if (bucket) (session as any).ungroupBucket = bucket
+}
+
+async function reloadSessionsForAction(): Promise<SessionSummary[]> {
+  cachedSessions = await loadAllSessions()
+  for (const s of cachedSessions) {
+    knownSessionIds.add(s.sessionId)
+    knownSessionIds.add(s.id)
+    for (const continuationId of s.continuationSessionIds || []) {
+      knownSessionIds.add(continuationId)
+    }
+  }
+  return cachedSessions
+}
+
+async function resolveLocalSessionAction(
+  sessionId: string,
+  permissionMode?: string,
+  cwd?: string,
+  restoredSourcePath?: string | null
+) {
+  return resolveSessionActionContext(sessionId, cachedSessions, {
+    reloadSessions: reloadSessionsForAction,
+    permissionModeFallback: permissionMode,
+    cwdFallback: cwd,
+    restoredSourcePath
+  })
+}
+
+function shouldReadLibraryConfig(): boolean {
+  return libraryInitialized || isLibraryInitialized(getLibraryRoot())
+}
 
 function cleanupRuntimeResources(): void {
   watcher?.close()
@@ -273,7 +328,7 @@ function startFileWatcher(): void {
     if (filePath.includes('/subagents/')) return
     try {
       const raw = await parseSessionFile(filePath)
-      const sessionId = raw.find((m) => m.sessionId)?.sessionId
+      const sessionId = resolvePhysicalSessionId(filePath, raw)
       if (!sessionId) return
 
       if (knownSessionIds.has(sessionId)) {
@@ -288,11 +343,11 @@ function startFileWatcher(): void {
               const dirPath = await ensureSessionInLibrary(summary)
               await updateTranscript(sessionId)
               await syncBackup(sessionId)
-              summary.libraryDirPath = dirPath
-              summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+              annotateSessionForFrontend(summary, dirPath)
             } catch { /* ignore */ }
           }
-          mainWindow?.webContents.send('session:added', summary)
+          annotateSessionForFrontend(summary)
+          mainWindow?.webContents.send('sessions:refresh')
         }
       }
     } catch {
@@ -319,11 +374,15 @@ function startFileWatcher(): void {
             await ensureSessionInLibrary(summary)
             await updateTranscript(summary.sessionId)
             await syncBackup(summary.sessionId)
-            summary.libraryDirPath = getSessionDirPath(summary.sessionId) || undefined
-            summary.libraryMdPath = getSessionMdPath(summary.sessionId) || undefined
+            annotateSessionForFrontend(summary)
           } catch { /* ignore */ }
         }
-        mainWindow?.webContents.send('session:updated', summary)
+        annotateSessionForFrontend(summary)
+        if (cachedSessions.some((s) => (s.continuationSessionIds || []).includes(summary.sessionId))) {
+          mainWindow?.webContents.send('sessions:refresh')
+        } else {
+          mainWindow?.webContents.send('session:updated', summary)
+        }
       }
     } catch {
       /* ignore */
@@ -348,6 +407,7 @@ function startCodexWatcher(): void {
         mainWindow?.webContents.send('sessions:refresh')
       } else {
         knownSessionIds.add(summary.id)
+        annotateSessionForFrontend(summary)
         mainWindow?.webContents.send('session:added', summary)
       }
     } catch { /* ignore */ }
@@ -373,6 +433,7 @@ function startCursorWatcher(): void {
         mainWindow?.webContents.send('sessions:refresh')
       } else {
         knownSessionIds.add(summary.id)
+        annotateSessionForFrontend(summary)
         mainWindow?.webContents.send('session:added', summary)
       }
     } catch { /* ignore */ }
@@ -380,6 +441,32 @@ function startCursorWatcher(): void {
 
   cursorWatcher.on('add', handleCursorFile)
   cursorWatcher.on('change', handleCursorFile)
+}
+
+// 监听库目录本身的「文件夹」变化。swob 原本只监听 ~/.claude 的 jsonl，察觉不到外部对库的
+// 结构改动（整理脚本移动、iCloud 从别的机器同步进来的移动、手动挪动），导致目录树状态不及时。
+// 这里只对 addDir/unlinkDir 反应（文件写入不触发，clipii/wiki 编辑很安静），debounce 后重扫并
+// 通知前端刷新；前端收到 sessions:refresh 会重载会话与目录树。
+function startLibraryWatcher(): void {
+  if (libraryWatcher) { libraryWatcher.close(); libraryWatcher = null }
+  const root = getLibraryRoot()
+  if (!root || !fs.existsSync(root)) return
+  libraryWatcher = chokidar.watch(root, {
+    ignoreInitial: true,
+    ignorePermissionErrors: true,
+    depth: 6,
+    ignored: (p: string) =>
+      p.includes('/node_modules/') || p.includes('/.git/') ||
+      p.includes('/.obsidian/') || p.endsWith('.jsonl')
+  })
+  const schedule = (): void => {
+    if (libraryRescanTimer) clearTimeout(libraryRescanTimer)
+    libraryRescanTimer = setTimeout(() => {
+      try { scanLibrary() } catch { /* ignore */ }
+      mainWindow?.webContents.send('sessions:refresh')
+    }, 1500)
+  }
+  libraryWatcher.on('addDir', schedule).on('unlinkDir', schedule)
 }
 
 // --- Library Initialization ---
@@ -436,11 +523,16 @@ ipcMain.handle('spotlight:search', (_event, query: string) => {
   })
 })
 
-ipcMain.handle('spotlight:resume', (_event, sessionId: string, cwd?: string) => {
-  const session = cachedSessions.find((s) => s.sessionId === sessionId)
-  if (!session) return
-  restoreBackupToClaudeSource(sessionId)
-  openInTerminal(buildResumeCommand(sessionId, session.permissionMode, session.resumeCwd || cwd, session.source, session.claudeConfigDir))
+ipcMain.handle('spotlight:resume', async (_event, sessionId: string, cwd?: string) => {
+  const restored = restoreBackupToClaudeSource(sessionId)
+  const context = await resolveLocalSessionAction(sessionId, undefined, cwd, restored.sourcePath)
+  openInTerminal(buildResumeCommand(
+    context.sessionId,
+    context.permissionMode,
+    context.cwd,
+    context.source,
+    context.claudeConfigDir
+  ))
   spotlightWindow?.hide()
 })
 
@@ -490,17 +582,21 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
   }
 
   // Re-scan Library for newly downloaded sessions (e.g. after iCloud download)
+  // If the main session list hasn't loaded yet, every library entry would look
+  // "library-only" and be pushed as a duplicate before the real list arrives.
+  if (cachedSessions.length === 0) return cloudSessions
+
   try {
-    const localIds = new Set(cachedSessions.map((s) => s.sessionId))
+    const localIds = collectSessionCoverage(cachedSessions)
     const libraryOnly = findLibraryOnlySessions(localIds)
     for (const { sessionId, backupPath, meta } of libraryOnly) {
       try {
         const raw = await parseSessionFile(backupPath)
-        const summary = buildSessionSummary(backupPath, raw, true)
+        const summary = buildSessionSummary(backupPath, raw, true, sessionId)
         if (summary) {
+          if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
-          summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
-          summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+          annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
           const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
           summary.isRemote = remoteByPath
           if (remoteByPath) {
@@ -511,8 +607,11 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
             ;(summary as any)._libraryTitle = meta.customTitle
           }
           cachedSessions.push(summary)
+          localIds.add(sessionId)
           knownSessionIds.add(sessionId)
-          mainWindow?.webContents.send('sessions:added', summary)
+          addSessionCoverage(localIds, summary)
+          addSessionCoverage(knownSessionIds, summary)
+          mainWindow?.webContents.send('session:added', summary)
         }
       } catch { /* skip unparseable backup */ }
     }
@@ -640,10 +739,17 @@ ipcMain.handle('sessions:loadAll', async () => {
   cachedSessions = sessions
   knownSessionIds.clear()
 
-  // Attach library paths + detect remote sessions
+  // Attach library paths + physical location bucket + detect remote sessions.
+  // Every summary sent to the renderer must carry the same bucket semantics;
+  // otherwise the sidebar treats missing data as bottom "ungrouped" noise.
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
+    for (const continuationId of s.continuationSessionIds || []) {
+      knownSessionIds.add(continuationId)
+    }
+    const dirPath = getSessionDirPath(s.sessionId)
+    annotateSessionForFrontend(s, dirPath)
 
     // Skip library/remote processing for non-Claude-Code sessions
     if (s.source === 'codex' || s.source === 'cursor') continue
@@ -654,34 +760,30 @@ ipcMain.handle('sessions:loadAll', async () => {
       if (remoteUser) s.remoteHost = `${remoteUser}@remote`
     }
     const isBranch = s.id.includes(':intra-')
-    const dirPath = getSessionDirPath(s.sessionId)
     if (dirPath) {
-      s.libraryDirPath = dirPath
       if (isBranch) {
-        let branchMd = getBranchMdPath(s.id)
+        let branchMd: string | null | undefined = getBranchMdPath(s.id)
         if (!branchMd && s.branchLeafUuid) {
           const branchMeta = loadLibraryConfig().branchMeta?.[s.id]
           branchMd = await updateBranchTranscript(s.id, s.branchLeafUuid, branchMeta?.customTitle) || undefined
         }
         s.libraryMdPath = branchMd || getSessionMdPath(s.sessionId) || undefined
-      } else {
-        s.libraryMdPath = getSessionMdPath(s.sessionId) || undefined
       }
     }
   }
 
   // Load Library-only sessions (from other devices via iCloud sync)
   try {
-    const localIds = new Set(sessions.map((s) => s.sessionId))
+    const localIds = collectSessionCoverage(sessions)
     const libraryOnly = findLibraryOnlySessions(localIds)
     for (const { sessionId, backupPath, meta } of libraryOnly) {
       try {
         const raw = await parseSessionFile(backupPath)
-        const summary = buildSessionSummary(backupPath, raw, true)
+        const summary = buildSessionSummary(backupPath, raw, true, sessionId)
         if (summary) {
+          if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
-          summary.libraryDirPath = getSessionDirPath(sessionId) || undefined
-          summary.libraryMdPath = getSessionMdPath(sessionId) || undefined
+          annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
           const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
           summary.isRemote = remoteByPath
           if (remoteByPath) {
@@ -692,7 +794,10 @@ ipcMain.handle('sessions:loadAll', async () => {
             ;(summary as any)._libraryTitle = meta.customTitle
           }
           sessions.push(summary)
+          localIds.add(sessionId)
           knownSessionIds.add(sessionId)
+          addSessionCoverage(localIds, summary)
+          addSessionCoverage(knownSessionIds, summary)
         }
       } catch { /* skip unparseable backup */ }
     }
@@ -732,65 +837,6 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
   ])
 })
 
-function withClaudeConfigDir(cmd: string, claudeConfigDir?: string): string {
-  return claudeConfigDir ? `CLAUDE_CONFIG_DIR=${JSON.stringify(claudeConfigDir)} ${cmd}` : cmd
-}
-
-function buildResumeCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string, claudeConfigDir?: string): string {
-  let cmd: string
-  if (source === 'codex') {
-    cmd = `codex resume ${sessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      cmd += ` -C ${JSON.stringify(cwd)}`
-    }
-    return cmd
-  }
-  if (source === 'cursor') {
-    cmd = `cursor agent --resume ${sessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      return `cd ${JSON.stringify(cwd)} && ${cmd}`
-    }
-    return cmd
-  }
-  // Claude Code (default)
-  cmd = permissionMode === 'bypassPermissions'
-    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
-    : `claude --resume ${sessionId}`
-  cmd = withClaudeConfigDir(cmd, claudeConfigDir)
-  if (cwd && fs.existsSync(cwd)) {
-    return `cd ${JSON.stringify(cwd)} && ${cmd}`
-  }
-  return cmd
-}
-
-function buildForkCommand(sessionId: string, permissionMode?: string, cwd?: string, source?: string, claudeConfigDir?: string): string {
-  let cmd: string
-  if (source === 'codex') {
-    cmd = `codex fork ${sessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      cmd += ` -C ${JSON.stringify(cwd)}`
-    }
-    return cmd
-  }
-  // Cursor 没有 fork 命令，走 resume
-  if (source === 'cursor') {
-    cmd = `cursor agent --resume ${sessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      return `cd ${JSON.stringify(cwd)} && ${cmd}`
-    }
-    return cmd
-  }
-  // Claude Code (default)
-  cmd = permissionMode === 'bypassPermissions'
-    ? `claude --dangerously-skip-permissions --fork-session --resume ${sessionId}`
-    : `claude --fork-session --resume ${sessionId}`
-  cmd = withClaudeConfigDir(cmd, claudeConfigDir)
-  if (cwd && fs.existsSync(cwd)) {
-    return `cd ${JSON.stringify(cwd)} && ${cmd}`
-  }
-  return cmd
-}
-
 function openInTerminal(command: string): void {
   const tmpPath = `/tmp/csm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.command`
   // Script deletes itself after command finishes, so Terminal won't kill a running process
@@ -802,10 +848,15 @@ function openInTerminal(command: string): void {
 ipcMain.handle(
   'terminal:resume',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    const session = cachedSessions.find((s) => s.sessionId === sessionId)
-    const source = session?.source
-    restoreBackupToClaudeSource(sessionId)
-    openInTerminal(buildResumeCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source, session?.claudeConfigDir))
+    const restored = restoreBackupToClaudeSource(sessionId)
+    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd, restored.sourcePath)
+    openInTerminal(buildResumeCommand(
+      context.sessionId,
+      context.permissionMode,
+      context.cwd,
+      context.source,
+      context.claudeConfigDir
+    ))
   }
 )
 
@@ -813,9 +864,15 @@ ipcMain.handle(
   'terminal:resumeBatch',
   async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
     for (const s of sessionIds) {
-      const session = cachedSessions.find((ss) => ss.sessionId === s.sessionId)
-      restoreBackupToClaudeSource(s.sessionId)
-      openInTerminal(buildResumeCommand(s.sessionId, s.permissionMode, session?.resumeCwd || s.cwd, session?.source, session?.claudeConfigDir))
+      const restored = restoreBackupToClaudeSource(s.sessionId)
+      const context = await resolveLocalSessionAction(s.sessionId, s.permissionMode, s.cwd, restored.sourcePath)
+      openInTerminal(buildResumeCommand(
+        context.sessionId,
+        context.permissionMode,
+        context.cwd,
+        context.source,
+        context.claudeConfigDir
+      ))
     }
   }
 )
@@ -823,17 +880,36 @@ ipcMain.handle(
 ipcMain.handle(
   'terminal:fork',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    const session = cachedSessions.find((s) => s.sessionId === sessionId)
-    const source = session?.source
-    restoreBackupToClaudeSource(sessionId)
-    openInTerminal(buildForkCommand(sessionId, permissionMode, session?.resumeCwd || cwd, source, session?.claudeConfigDir))
+    const restored = restoreBackupToClaudeSource(sessionId)
+    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd, restored.sourcePath)
+    openInTerminal(buildForkCommand(
+      context.sessionId,
+      context.permissionMode,
+      context.cwd,
+      context.source,
+      context.claudeConfigDir
+    ))
+  }
+)
+
+ipcMain.handle(
+  'terminal:buildResumeCommand',
+  async (_event, sessionId: string, permissionMode?: string, cwd?: string) => {
+    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd)
+    return buildResumeCommand(
+      context.sessionId,
+      context.permissionMode,
+      context.cwd,
+      context.source,
+      context.claudeConfigDir
+    )
   }
 )
 
 // --- Insights IPC ---
 ipcMain.handle('insights:get', () => {
   const sessions = cachedSessions
-  let folders: Array<{ id: string; name: string; parentId?: string | null; sessionIds: string[] }> = []
+  let folders: Folder[] = []
   try {
     if (libraryInitialized) {
       const tree = scanLibrary()
@@ -855,7 +931,7 @@ ipcMain.handle('insights:get', () => {
 // These use the library manager but return the same shape the frontend expects
 
 ipcMain.handle('config:load', () => {
-  if (!libraryInitialized) {
+  if (!shouldReadLibraryConfig()) {
     // Fallback to old config during initial load
     return loadConfig()
   }
@@ -1008,7 +1084,7 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:setSessionMeta',
-  (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: unknown[] }) => {
+  (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: Highlight[] }) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
       if (isBranch) {
@@ -1143,6 +1219,7 @@ ipcMain.handle('library:changePath', async (_event, newPath: string) => {
   initLibrary(newPath)
   const tree = scanLibrary()
   libraryInitialized = true
+  startLibraryWatcher() // 跟随新库根重启目录监听
   // Re-sync sessions from source
   if (cachedSessions.length > 0) {
     const oldConfig = loadConfig()
@@ -1460,6 +1537,7 @@ app.whenReady().then(() => {
 
   createWindow()
   startFileWatcher()
+  startLibraryWatcher()
   startCodexWatcher()
   startCursorWatcher()
   startActiveSessionPoller()

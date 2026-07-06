@@ -79,6 +79,7 @@ export type SessionSource = 'claude-code' | 'codex' | 'cursor'
 export interface SessionSummary {
   id: string
   sessionId: string
+  resumeSessionId?: string
   slug: string
   createdAt: string
   updatedAt: string
@@ -102,6 +103,7 @@ export interface SessionSummary {
   branchLeafUuid?: string // for intra-file branches: trace this leaf's parentUuid chain
   branchParentId?: string // ID of the parent branch/session this was forked from
   branchChildIds?: string[] // IDs of child branches forked from this session
+  continuationSessionIds?: string[] // physical sessionIds merged into this logical session
   userImages: string[]
   pastedImageCount: number // count of base64 pasted images (not stored as data URLs in summary)
   tokenUsage: TokenUsage

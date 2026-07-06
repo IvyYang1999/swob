@@ -21,7 +21,8 @@ import {
   resolveFolderPath,
   getLibraryRoot,
   getSessionDirPath,
-  getSessionMdPath
+  getSessionMdPath,
+  rebuildAllTranscripts
 } from '../main/library-manager'
 import { loadConfig, saveConfig } from '../main/config-store'
 import { spotlightSearch } from '../main/spotlight-search'
@@ -409,6 +410,14 @@ function cmdActive(): void {
   out({ activeSessionIds: Array.from(active) })
 }
 
+async function cmdTranscript(args: string[], flags: Record<string, string | true>): Promise<void> {
+  if (args[0] !== 'rebuild' || flags.all !== true) {
+    err('用法: swob transcript rebuild --all [--dry-run]')
+  }
+  const result = await rebuildAllTranscripts({ dryRun: flags['dry-run'] === true })
+  out(result)
+}
+
 async function cmdInstall(): Promise<void> {
   const fs = await import('fs')
   const path = await import('path')
@@ -616,6 +625,7 @@ async function main(): Promise<void> {
   config get [key]            读取设置
   config set <key> <value>    修改设置
   active                      列出活跃 session
+  transcript rebuild --all    强制重生成 Library transcript
   install                     安装/更新 CLI 和 Skill
 
 选项:
@@ -628,6 +638,7 @@ async function main(): Promise<void> {
   --skip-permissions          resume 时跳过权限
   --cwd <path>                resume 时指定工作目录
   --parent <id>               创建子文件夹时指定父文件夹
+  --dry-run                   transcript rebuild 只统计不写入
 `)
     process.exit(0)
   }
@@ -701,6 +712,10 @@ async function main(): Promise<void> {
 
       case 'active':
         cmdActive()
+        break
+
+      case 'transcript':
+        await cmdTranscript(cmd.slice(1), flags)
         break
 
       case 'install':

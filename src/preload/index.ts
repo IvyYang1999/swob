@@ -15,6 +15,8 @@ const api = {
     ipcRenderer.invoke('terminal:resumeBatch', sessions, terminalApp),
   forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) =>
     ipcRenderer.invoke('terminal:fork', sessionId, terminalApp, permissionMode, cwd),
+  buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) =>
+    ipcRenderer.invoke('terminal:buildResumeCommand', sessionId, permissionMode, cwd),
 
   // Config
   loadConfig: () => ipcRenderer.invoke('config:load'),

@@ -442,23 +442,48 @@ export function Sidebar({ width }: { width: number }) {
   }, [selectedUniqueId])
 
   // --- Computed ---
-  const groupedSessionIds = useMemo(() => {
-    const ids = new Set<string>()
-    config?.folders.forEach((f) => f.sessionIds.forEach((id) => ids.add(id)))
-    return ids
-  }, [config?.folders])
-
-  const ungroupedAll = useMemo(
-    () => sessions.filter((s) => {
-      // Branch sessions: only check their own id, not the parent's sessionId
-      if (s.id.includes(':intra-')) return !groupedSessionIds.has(s.id)
-      return !groupedSessionIds.has(s.id) && !groupedSessionIds.has(s.sessionId)
-    }),
-    [sessions, groupedSessionIds]
+  // 「未分组容器」：配置里指定的文件夹名（如 未分组/单轮会话），不在树里显示、其会话拉到底部。
+  const ungConfig = (config?.preferences as any)?.ungrouping as
+    | { multiTurn?: string; singleTurn?: string }
+    | undefined
+  const ungroupingFolderIds = useMemo(() => {
+    const names = new Set<string>(
+      ungConfig ? [ungConfig.multiTurn, ungConfig.singleTurn].filter(Boolean) as string[] : []
+    )
+    return new Set((config?.folders || []).filter((f) => names.has(f.name)).map((f) => f.id))
+  }, [config?.folders, ungConfig])
+  // 树渲染用的文件夹列表：剔除未分组容器
+  const treeFolders = useMemo(
+    () => (config?.folders || []).filter((f) => !ungroupingFolderIds.has(f.id)),
+    [config?.folders, ungroupingFolderIds]
   )
 
-  const ungroupedSessions = useMemo(() => ungroupedAll.filter((s) => s.turnCount > 1), [ungroupedAll])
-  const singleTurnSessions = useMemo(() => ungroupedAll.filter((s) => s.turnCount <= 1), [ungroupedAll])
+  // 底部归属【完全按主进程打的物理位置标签 ungroupBucket】判定，不靠 id 匹配：
+  //   'grouped' = 已在某主题文件夹（只在树里显示，绝不进底部，杜绝重复显示）
+  //   'multi'/'single' = 在 未分组/单轮会话 容器里 → 进底部对应区
+  //   'root' = 真·游离会话 → 进底部，按 turnCount 分
+  // 配了 ungrouping 时，缺标签不再 fail-open 进底部；否则 library-only/旧缓存会把已分组会话重复显示。
+  const bucketOf = (s: SessionSummary): string | undefined => (s as any).ungroupBucket
+  const isBottomSession = (s: SessionSummary): boolean => {
+    const b = bucketOf(s)
+    if (b === 'grouped') return false
+    if (b === 'multi' || b === 'single' || b === 'root') return true
+    return !ungConfig
+  }
+  const isSingleTurn = (s: SessionSummary): boolean => {
+    const b = bucketOf(s)
+    if (b === 'single') return true
+    if (b === 'multi') return false
+    return s.turnCount <= 1
+  }
+  const ungroupedSessions = useMemo(
+    () => sessions.filter((s) => isBottomSession(s) && !isSingleTurn(s)),
+    [sessions, ungConfig]
+  )
+  const singleTurnSessions = useMemo(
+    () => sessions.filter((s) => isBottomSession(s) && isSingleTurn(s)),
+    [sessions, ungConfig]
+  )
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionSummary>()
@@ -466,7 +491,7 @@ export function Sidebar({ width }: { width: number }) {
     return map
   }, [sessions])
 
-  const rootFolders = useMemo(() => (config?.folders || []).filter((f) => !f.parentId), [config?.folders])
+  const rootFolders = useMemo(() => treeFolders.filter((f) => !f.parentId), [treeFolders])
 
   const projectViewMode = (config?.preferences as any)?.projectViewMode || 'folders'
 
@@ -491,7 +516,7 @@ export function Sidebar({ width }: { width: number }) {
   }, [sessions, projectViewMode])
 
   const effectiveRootFolders = projectViewMode === 'paths' ? pathFolders : rootFolders
-  const effectiveAllFolders = projectViewMode === 'paths' ? pathFolders : (config?.folders || [])
+  const effectiveAllFolders = projectViewMode === 'paths' ? pathFolders : treeFolders
 
   // --- Auto-scroll during drag ---
   const handleListDragOver = useCallback((e: React.DragEvent) => {

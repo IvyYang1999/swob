@@ -180,13 +180,39 @@ export function computeChatTocEntries(sections: CompactSection[], locale: Locale
 function demoteHeadings(text: string): string {
   const lines = text.split('\n')
   let inCodeBlock = false
+  let fenceMarker: '`' | '~' | null = null
+  let fenceLength = 0
   return lines.map(line => {
-    if (line.startsWith('```')) { inCodeBlock = !inCodeBlock; return line }
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})/)
+    if (fence) {
+      const marker = fence[1][0] as '`' | '~'
+      const length = fence[1].length
+      if (!inCodeBlock) {
+        inCodeBlock = true
+        fenceMarker = marker
+        fenceLength = length
+      } else if (marker === fenceMarker && length >= fenceLength) {
+        inCodeBlock = false
+        fenceMarker = null
+        fenceLength = 0
+      }
+      return line
+    }
     if (inCodeBlock) return line
-    const match = line.match(/^#{1,6}\s+(.+)$/)
-    if (match) return `**${match[1].replace(/\*\*/g, '')}**`
+    const match = line.match(/^( {0,3})#{1,6}(?:[ \t]+|$)(.*)$/)
+    if (match) {
+      const headingText = match[2].replace(/[ \t]+#{1,}[ \t]*$/, '').trim()
+      if (headingText) return `${match[1]}**${headingText.replace(/\*\*/g, '')}**`
+    }
     return line
   }).join('\n')
+}
+
+function firstLineSnippet(text: string, maxLen = 40): string {
+  const firstLine = text.split(/\r?\n/).find(line => line.trim()) || text
+  const normalized = firstLine.replace(/\s+/g, ' ').trim()
+  if (!normalized) return 'User prompt'
+  return normalized.length > maxLen ? `${normalized.slice(0, maxLen).trimEnd()}...` : normalized
 }
 
 function toolToMarkdown(tc: ToolCallInfo): string {
@@ -234,23 +260,22 @@ export function turnToMarkdown(turn: Turn, locale: Locale = 'zh-CN'): string {
       lines.push('```')
       lines.push('')
     } else {
-      // Normal user query: H5 snippet heading + blockquote body
-      const firstLine = text.split('\n')[0].slice(0, 50)
-      const snippet = firstLine + (text.length > firstLine.length ? '...' : '')
+      // Normal user query: heading snippet + complete prompt body
+      const snippet = firstLineSnippet(text)
       const ts = turn.userMsg.timestamp
         ? new Date(turn.userMsg.timestamp).toLocaleString(locale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
         : ''
-      lines.push(`##### ${snippet}\n`)
-      if (ts) lines.push(`*${ts}*\n`)
-      // User text in blockquote
-      const demoted = demoteHeadings(text)
-      lines.push(demoted.split('\n').map(l => `> ${l}`).join('\n'))
+      if (ts) lines.push(`**User** [${ts}]`)
+      else lines.push('**User**')
+      lines.push(`## ${snippet}`)
+      lines.push(text)
       lines.push('')
     }
   }
 
   if (turn.assistantMsgs.length > 0) {
     const segments = buildSegments(turn.assistantMsgs)
+    lines.push('**Assistant**')
     for (const seg of segments) {
       if (seg.type === 'text') { lines.push(demoteHeadings(seg.text!.trim()), '') }
       else if (seg.type === 'tools') {

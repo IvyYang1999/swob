@@ -8,7 +8,7 @@
  * - demoteHeadings 在代码块内误替换
  */
 import { describe, it, expect } from 'vitest'
-import { groupIntoTurns, buildSegments, computeSections, computeChatTocEntries } from './markdown'
+import { groupIntoTurns, buildSegments, computeSections, computeChatTocEntries, turnToMarkdown } from './markdown'
 import type { CompactSection } from './markdown'
 
 // --- 造假数据的工具函数 ---
@@ -307,5 +307,26 @@ describe('computeChatTocEntries', () => {
     const turnEntries = entries.filter(e => e.level === 5)
     expect(turnEntries).toHaveLength(1)
     expect(turnEntries[0].text).toBe('真正的问题')
+  })
+})
+
+describe('turnToMarkdown heading semantics', () => {
+  it('user prompt becomes outline heading and assistant headings are demoted outside code fences', () => {
+    const md = turnToMarkdown({
+      userMsg: msg({ type: 'user', textContent: '请做方案\n# 用户原始标题保留', uuid: 'u1' }),
+      assistantMsgs: [
+        msg({
+          type: 'assistant',
+          textContent: '## Assistant Plan\n```md\n# 代码块标题不动\n```\n   ### 前置空格标题 ###'
+        })
+      ]
+    }, 'zh-CN')
+
+    expect(md).toContain('**User** [')
+    expect(md).toContain('\n## 请做方案\n请做方案\n# 用户原始标题保留')
+    expect(md).toContain('**Assistant Plan**')
+    expect(md).toContain('# 代码块标题不动')
+    expect(md).toContain('   **前置空格标题**')
+    expect(md).not.toContain('\n## Assistant Plan')
   })
 })

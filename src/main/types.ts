@@ -79,6 +79,7 @@ export type SessionSource = 'claude-code' | 'codex' | 'cursor'
 export interface SessionSummary {
   id: string
   sessionId: string
+  resumeSessionId?: string
   slug: string
   createdAt: string
   updatedAt: string

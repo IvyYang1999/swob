@@ -14,6 +14,7 @@ export type ViewMode = 'compact' | 'full' | 'markdown'
 interface SessionSummary {
   id: string
   sessionId: string
+  resumeSessionId?: string
   slug: string
   createdAt: string
   updatedAt: string
@@ -34,6 +35,9 @@ interface SessionSummary {
   resumeCwd?: string
   branchParentFilePaths?: string[]
   branchPointUuid?: string
+  branchLeafUuid?: string
+  branchParentId?: string
+  branchChildIds?: string[]
   userImages?: string[]
   pastedImageCount?: number
   tokenUsage?: { inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number }
@@ -178,7 +182,7 @@ interface AppState {
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale, ToastMessage }
 
 // Read localStorage at module load time — before first render, zero flicker
-const LOCAL_CACHE_VERSION = 11 // refresh corrected cross-session branch metadata
+const LOCAL_CACHE_VERSION = 12 // refresh physical resume ids and transcript metadata
 
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
   try {
@@ -361,11 +365,20 @@ export const useStore = create<AppState>((set, get) => ({
       const summary = get().sessions.find((s) => s.id === uniqueId)
       if (summary) {
         const d = detail as any
-        if ((summary as any).branchParentId) d.branchParentId = (summary as any).branchParentId
-        if ((summary as any).branchChildIds) d.branchChildIds = (summary as any).branchChildIds
-        if ((summary as any).branchLeafUuid) d.branchLeafUuid = (summary as any).branchLeafUuid
-        if (summary.isRemote) d.isRemote = true
-        if (summary.remoteHost) d.remoteHost = summary.remoteHost
+        d.id = summary.id
+        d.sessionId = summary.sessionId
+        d.resumeSessionId = summary.resumeSessionId
+        d.filePath = summary.filePath
+        d.allFilePaths = summary.allFilePaths
+        d.branchParentFilePaths = summary.branchParentFilePaths
+        d.branchPointUuid = summary.branchPointUuid
+        d.branchParentId = summary.branchParentId
+        d.branchChildIds = summary.branchChildIds
+        d.branchLeafUuid = summary.branchLeafUuid
+        d.libraryDirPath = summary.libraryDirPath
+        d.libraryMdPath = summary.libraryMdPath
+        d.isRemote = summary.isRemote
+        d.remoteHost = summary.remoteHost
       }
     }
     set({ selectedSession: detail as SessionDetail | null, selectedUniqueId: uniqueId || null })

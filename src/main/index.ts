@@ -11,7 +11,8 @@ import {
   loadSessionDetail,
   findAllSessionFiles,
   parseSessionFile,
-  buildSessionSummary
+  buildSessionSummary,
+  resolvePhysicalSessionId
 } from './session-loader'
 import { findCodexSessionFiles, buildCodexSessionSummary } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary } from './cursor-loader'
@@ -347,7 +348,7 @@ function startFileWatcher(): void {
     if (filePath.includes('/subagents/')) return
     try {
       const raw = await parseSessionFile(filePath)
-      const sessionId = raw.find((m) => m.sessionId)?.sessionId
+      const sessionId = resolvePhysicalSessionId(filePath, raw)
       if (!sessionId) return
 
       if (knownSessionIds.has(sessionId)) {
@@ -611,7 +612,7 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
     for (const { sessionId, backupPath, meta } of libraryOnly) {
       try {
         const raw = await parseSessionFile(backupPath)
-        const summary = buildSessionSummary(backupPath, raw, true)
+        const summary = buildSessionSummary(backupPath, raw, true, sessionId)
         if (summary) {
           if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
@@ -798,7 +799,7 @@ ipcMain.handle('sessions:loadAll', async () => {
     for (const { sessionId, backupPath, meta } of libraryOnly) {
       try {
         const raw = await parseSessionFile(backupPath)
-        const summary = buildSessionSummary(backupPath, raw, true)
+        const summary = buildSessionSummary(backupPath, raw, true, sessionId)
         if (summary) {
           if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]

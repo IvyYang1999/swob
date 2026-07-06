@@ -158,7 +158,10 @@ async function buildFreshClaudeSummary(
 
   const primaryFile = entries[0].filePath
   const raw = entries.flatMap((entry) => entry.raw)
-  const fresh = buildSessionSummary(primaryFile, raw, true)
+  const sessionIdOverride = summary.continuationSessionIds && summary.continuationSessionIds.length > 0
+    ? summary.sessionId
+    : undefined
+  const fresh = buildSessionSummary(primaryFile, raw, true, sessionIdOverride)
   if (!fresh) return null
 
   fresh.allFilePaths = entries.map((entry) => entry.filePath)
@@ -169,6 +172,7 @@ async function buildFreshClaudeSummary(
   fresh.branchParentId = summary.branchParentId
   fresh.branchChildIds = summary.branchChildIds
   fresh.continuationSessionIds = summary.continuationSessionIds
+  fresh.resumeSessionId = summary.resumeSessionId || fresh.sessionId
   fresh.libraryDirPath = summary.libraryDirPath
   fresh.libraryMdPath = summary.libraryMdPath
   fresh.isRemote = summary.isRemote
@@ -187,6 +191,10 @@ export async function resolveSessionActionContext(
   sessions: SessionSummary[],
   options: ResolveSessionActionOptions = {}
 ): Promise<SessionActionContext> {
+  if (requestedSessionId.includes(':intra-')) {
+    throw new Error('Intra-file branches cannot be resumed independently')
+  }
+
   const home = options.home || process.env.HOME || ''
   let currentSessions = sessions
   let summary = findSessionForAction(currentSessions, requestedSessionId)
@@ -201,7 +209,7 @@ export async function resolveSessionActionContext(
     if (fresh) summary = { ...summary, ...fresh }
   }
 
-  const commandSessionId = summary?.sessionId || requestedSessionId.split(':')[0]
+  const commandSessionId = summary?.resumeSessionId || summary?.sessionId || requestedSessionId
   return {
     sessionId: commandSessionId,
     source: summary?.source,

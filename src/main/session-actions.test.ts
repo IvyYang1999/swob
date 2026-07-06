@@ -175,4 +175,13 @@ describe('session action context', () => {
     expect(context.sessionId).toBe('parent-session')
     expect(context.cwd).toBe(initialCwd)
   })
+
+  it('intra-file branch id should not silently resolve to its parent session', async () => {
+    await expect(resolveSessionActionContext('parent-session:intra-0', [
+      summary({
+        id: 'parent-session:intra-0',
+        sessionId: 'parent-session'
+      })
+    ])).rejects.toThrow('Intra-file branches cannot be resumed independently')
+  })
 })

@@ -19,6 +19,7 @@ import {
   getClaudeConfigDirForSessionFile,
   isRealUserMessage
 } from './session-loader'
+import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -535,6 +536,66 @@ describe('cross-session branch inference', () => {
       expect(parent!.branchChildIds).toContain(child!.id)
       expect(child!.branchParentId).toBe(parent!.id)
       expect(child!.branchChildIds || []).not.toContain(parent!.id)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('真实 fork 文件用 basename child id 独立显示并 resume child session', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-fork-home-'))
+    const projectDir = path.join(home, '.claude', 'projects', '-Users-test-vault')
+    const parentId = '11111111-1111-4111-8111-111111111111'
+    const childId = '22222222-2222-4222-8222-222222222222'
+    const parentFile = path.join(projectDir, `${parentId}.jsonl`)
+    const childFile = path.join(projectDir, `${childId}.jsonl`)
+
+    const shared = [
+      rawMsg({ uuid: 'shared-u', sessionId: parentId, parentUuid: null, type: 'user', timestamp: '2026-06-10T10:00:00Z', message: { role: 'user', content: '共享上下文' } }),
+      rawMsg({ uuid: 'shared-a', sessionId: parentId, parentUuid: 'shared-u', type: 'assistant', timestamp: '2026-06-10T10:01:00Z', message: { role: 'assistant', content: '共享回复' } }),
+      rawMsg({ uuid: 'shared-u2', sessionId: parentId, parentUuid: 'shared-a', type: 'user', timestamp: '2026-06-10T10:01:30Z', message: { role: 'user', content: '继续共享' } })
+    ]
+    const parentMsgs = [
+      ...shared,
+      rawMsg({ uuid: 'parent-u', sessionId: parentId, parentUuid: 'shared-u2', type: 'user', timestamp: '2026-06-10T10:02:00Z', message: { role: 'user', content: '父会话继续' } }),
+      rawMsg({ uuid: 'parent-a', sessionId: parentId, parentUuid: 'parent-u', type: 'assistant', timestamp: '2026-06-10T10:03:00Z', message: { role: 'assistant', content: '父会话回答' } })
+    ]
+    const childMsgs = [
+      ...shared,
+      rawMsg({ uuid: 'child-u', sessionId: childId, parentUuid: 'shared-u2', type: 'user', timestamp: '2026-06-10T10:04:00Z', message: { role: 'user', content: 'fork child 的新问题' } }),
+      rawMsg({ uuid: 'child-a', sessionId: childId, parentUuid: 'child-u', type: 'assistant', timestamp: '2026-06-10T10:05:00Z', message: { role: 'assistant', content: 'fork child 的回答' } })
+    ]
+
+    writeJsonlAt(parentFile, parentMsgs)
+    writeJsonlAt(childFile, childMsgs)
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home)
+      const parent = sessions.find((s) => s.sessionId === parentId)
+      const child = sessions.find((s) => s.sessionId === childId)
+
+      expect(parent).toBeDefined()
+      expect(child).toBeDefined()
+      expect(child!.id).toBe(childId)
+      expect(child!.filePath).toBe(childFile)
+      expect(child!.branchParentId).toBe(parent!.id)
+      expect(parent!.branchChildIds).toContain(child!.id)
+
+      const detail = await loadSessionDetail(
+        child!.filePath,
+        child!.allFilePaths,
+        child!.branchParentFilePaths,
+        child!.branchPointUuid,
+        child!.branchLeafUuid
+      )
+      expect(detail).not.toBeNull()
+      expect(detail!.sessionId).toBe(childId)
+      expect(detail!.messages.filter((m) => m.uuid === 'shared-a')).toHaveLength(1)
+      expect(detail!.messages.some((m) => m.uuid === 'parent-u')).toBe(false)
+      expect(detail!.messages.some((m) => m.uuid === 'child-u')).toBe(true)
+
+      const context = await resolveSessionActionContext(childId, sessions)
+      expect(context.sessionId).toBe(childId)
+      expect(buildResumeCommand(context.sessionId, context.permissionMode, undefined, context.source)).toBe(`claude --resume ${childId}`)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }

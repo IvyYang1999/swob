@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { parseSessionFile, buildSessionSummary, filterMessagesByBranch } from './session-loader'
+import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
 import type { RawJsonlMessage, ContentPart, SessionSummary, Folder, UserConfig } from './types'
 
@@ -363,7 +363,7 @@ export async function updateBranchTranscript(
   const branchRaw = filterMessagesByBranch(allRaw, branchLeafUuid)
   if (branchRaw.length === 0) return null
 
-  const summary = buildSessionSummary(meta.sourceFilePaths[0], branchRaw, true)
+  const summary = buildSessionSummary(meta.sourceFilePaths[0], branchRaw, true, meta.sessionId)
   if (!summary) return null
 
   const title = customTitle || summary.firstUserMessage?.slice(0, 60) || branchId.slice(0, 12)
@@ -504,6 +504,47 @@ function formatTs(iso: string): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+export function demoteMarkdownHeadings(text: string): string {
+  const lines = text.split('\n')
+  let inFence = false
+  let fenceMarker: '`' | '~' | null = null
+  let fenceLength = 0
+
+  return lines.map((line) => {
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})/)
+    if (fence) {
+      const marker = fence[1][0] as '`' | '~'
+      const length = fence[1].length
+      if (!inFence) {
+        inFence = true
+        fenceMarker = marker
+        fenceLength = length
+      } else if (marker === fenceMarker && length >= fenceLength) {
+        inFence = false
+        fenceMarker = null
+        fenceLength = 0
+      }
+      return line
+    }
+
+    if (inFence) return line
+
+    const match = line.match(/^( {0,3})#{1,6}(?:[ \t]+|$)(.*)$/)
+    if (!match) return line
+
+    const headingText = match[2].replace(/[ \t]+#{1,}[ \t]*$/, '').trim()
+    if (!headingText) return line
+    return `${match[1]}**${headingText.replace(/\*\*/g, '')}**`
+  }).join('\n')
+}
+
+function firstLineSnippet(text: string, maxLen = 40): string {
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim()) || text
+  const normalized = firstLine.replace(/\s+/g, ' ').trim()
+  if (!normalized) return 'User prompt'
+  return normalized.length > maxLen ? `${normalized.slice(0, maxLen).trimEnd()}...` : normalized
+}
+
 export function generateTranscript(
   rawMessages: RawJsonlMessage[],
   title: string,
@@ -533,6 +574,7 @@ export function generateTranscript(
     if (msg.type === 'user') {
       if (!text) continue
       lines.push(`**User** [${ts}]`)
+      lines.push(`## ${firstLineSnippet(text)}`)
       lines.push(text)
       lines.push('')
     } else if (msg.type === 'assistant') {
@@ -542,7 +584,7 @@ export function generateTranscript(
       if (tools.length > 0) {
         for (const t of tools) lines.push(t)
       }
-      if (text) lines.push(text)
+      if (text) lines.push(demoteMarkdownHeadings(text))
       lines.push('')
     }
   }
@@ -659,7 +701,7 @@ export async function updateTranscript(sessionId: string, customTitle?: string):
   }
   if (allRaw.length === 0) return
 
-  const summary = buildSessionSummary(meta.sourceFilePaths[0], allRaw, true)
+  const summary = buildSessionSummary(meta.sourceFilePaths[0], allRaw, true, meta.sessionId)
   if (!summary) return
 
   const title = customTitle || meta.customTitle || summary.firstUserMessage?.slice(0, 60) || sessionId.slice(0, 12)
@@ -676,6 +718,68 @@ export async function updateTranscript(sessionId: string, customTitle?: string):
   meta.updatedAt = summary.updatedAt
   meta.turnCount = summary.turnCount
   writeSessionMeta(dirPath, meta)
+}
+
+export interface RebuildTranscriptsResult {
+  libraryRoot: string
+  dryRun: boolean
+  sessionCount: number
+  branchCount: number
+  transcriptCount: number
+}
+
+function collectLibrarySessions(tree: LibraryTree): LibrarySession[] {
+  const sessions: LibrarySession[] = [...tree.ungroupedSessions]
+  const walk = (folder: LibraryFolder): void => {
+    sessions.push(...folder.sessions)
+    for (const child of folder.children) walk(child)
+  }
+  for (const folder of tree.folders) walk(folder)
+  return sessions
+}
+
+async function loadRawFromMeta(meta: SessionMeta): Promise<RawJsonlMessage[]> {
+  const allRaw: RawJsonlMessage[] = []
+  for (const src of meta.sourceFilePaths) {
+    try {
+      if (fs.existsSync(src)) {
+        const raw = await parseSessionFile(src)
+        allRaw.push(...raw)
+      }
+    } catch { /* skip */ }
+  }
+  return allRaw
+}
+
+export async function rebuildAllTranscripts(options: { dryRun?: boolean } = {}): Promise<RebuildTranscriptsResult> {
+  const dryRun = options.dryRun === true
+  const tree = scanLibrary()
+  const sessions = collectLibrarySessions(tree)
+  const config = loadLibraryConfig()
+  let branchCount = 0
+
+  for (const session of sessions) {
+    const raw = await loadRawFromMeta(session.meta)
+    const branches = raw.length > 0 ? detectIntraFileBranches(raw) : []
+    branchCount += branches.length
+
+    if (dryRun) continue
+
+    await updateTranscript(session.sessionId, session.meta.customTitle)
+    for (let idx = 0; idx < branches.length; idx++) {
+      const branchId = `${session.sessionId}:intra-${idx}`
+      const branchTitle = config.branchMeta?.[branchId]?.customTitle
+      await updateBranchTranscript(branchId, branches[idx].leafUuid, branchTitle)
+    }
+  }
+
+  return {
+    libraryRoot: _root,
+    dryRun,
+    sessionCount: sessions.length,
+    branchCount,
+    transcriptCount: sessions.length + branchCount
+  }
 }
 
 // --- Folder Operations ---

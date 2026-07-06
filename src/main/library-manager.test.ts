@@ -504,3 +504,55 @@ describe('库根 = vault：cwd 感知放置 + 忽略名单 + 安全删除', () =
     expect(fs.existsSync(folder)).toBe(false)
   })
 })
+
+describe('transcript markdown heading semantics', () => {
+  it('demoteMarkdownHeadings 只降级 fenced code block 外的 ATX heading', () => {
+    const input = [
+      '# 一级标题',
+      '  ## 前置空格标题',
+      '    # 四空格代码行不动',
+      '```md',
+      '# 代码块标题不动',
+      '```',
+      '### 多级标题 ###'
+    ].join('\n')
+
+    expect(lib.demoteMarkdownHeadings(input)).toBe([
+      '**一级标题**',
+      '  **前置空格标题**',
+      '    # 四空格代码行不动',
+      '```md',
+      '# 代码块标题不动',
+      '```',
+      '**多级标题**'
+    ].join('\n'))
+  })
+
+  it('generateTranscript 用 user 首行做 outline，assistant heading 降为粗体', () => {
+    const md = lib.generateTranscript([
+      {
+        uuid: 'u1',
+        parentUuid: null,
+        sessionId: 's1',
+        type: 'user',
+        timestamp: '2026-03-01T00:00:00Z',
+        message: { role: 'user', content: '请做方案\n# 用户原始标题保留' }
+      },
+      {
+        uuid: 'a1',
+        parentUuid: 'u1',
+        sessionId: 's1',
+        type: 'assistant',
+        timestamp: '2026-03-01T00:01:00Z',
+        message: { role: 'assistant', content: '## Assistant Plan\n```md\n# 代码块标题不动\n```\n### Step ###' }
+      }
+    ] as any, '测试标题', { createdAt: '2026-03-01T00:00:00Z', turnCount: 1 })
+
+    expect(md).toContain('**User** [')
+    expect(md).toContain('\n## 请做方案\n请做方案\n# 用户原始标题保留')
+    expect(md).toContain('**Assistant Plan**')
+    expect(md).toContain('# 代码块标题不动')
+    expect(md).toContain('**Step**')
+    expect(md).not.toContain('\n## Assistant Plan')
+  })
+})

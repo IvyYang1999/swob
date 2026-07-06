@@ -82,7 +82,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 16 // refine cross-session branch inference
+const CACHE_VERSION = 17 // use physical session ids for cross-session forks
 
 interface DiskCache {
   version: number
@@ -375,7 +375,8 @@ export async function parseSessionFile(filePath: string): Promise<RawJsonlMessag
 export function buildSessionSummary(
   filePath: string,
   rawMessages: RawJsonlMessage[],
-  light = false
+  light = false,
+  sessionIdOverride?: string
 ): SessionSummary | null {
   if (filePath.includes('/subagents/')) return null
 
@@ -384,7 +385,7 @@ export function buildSessionSummary(
   )
   if (validMessages.length === 0) return null
 
-  const sessionId = rawMessages.find((m) => m.sessionId)?.sessionId
+  const sessionId = sessionIdOverride || resolvePhysicalSessionId(filePath, rawMessages)
   if (!sessionId) return null
 
   // Separate main chain and sidechain messages
@@ -464,6 +465,7 @@ export function buildSessionSummary(
     return {
       id: sessionId,
       sessionId,
+      resumeSessionId: sessionId,
       slug: rawMessages.find((m) => m.slug)?.slug || '',
       createdAt: timestamps[0] || '',
       updatedAt: timestamps[timestamps.length - 1] || '',
@@ -588,6 +590,7 @@ export function buildSessionSummary(
   return {
     id: sessionId,
     sessionId,
+    resumeSessionId: sessionId,
     slug: rawMessages.find((m) => m.slug)?.slug || '',
     createdAt: timestamps[0] || '',
     updatedAt: timestamps[timestamps.length - 1] || '',
@@ -620,9 +623,10 @@ export function buildSessionSummary(
 
 export function buildSessionDetail(
   filePath: string,
-  rawMessages: RawJsonlMessage[]
+  rawMessages: RawJsonlMessage[],
+  sessionIdOverride?: string
 ): SessionDetail | null {
-  const summary = buildSessionSummary(filePath, rawMessages)
+  const summary = buildSessionSummary(filePath, rawMessages, false, sessionIdOverride)
   if (!summary) return null
 
   const compactIndices = rawMessages
@@ -1079,6 +1083,19 @@ function getSessionIds(raw: RawJsonlMessage[]): string[] {
   return [...new Set(raw.map((m) => m.sessionId).filter(Boolean))]
 }
 
+const UUID_BASENAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function resolvePhysicalSessionId(filePath: string, raw: RawJsonlMessage[]): string | null {
+  const sessionIds = getSessionIds(raw)
+  const fileStem = path.basename(filePath, path.extname(filePath))
+  if (UUID_BASENAME_RE.test(fileStem) && sessionIds.includes(fileStem)) {
+    return fileStem
+  }
+
+  const lastMainChainId = [...raw].reverse().find((m) => m.sessionId && !m.isSidechain)?.sessionId
+  return lastMainChainId || [...raw].reverse().find((m) => m.sessionId)?.sessionId || null
+}
+
 function normalizePromptText(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
@@ -1437,7 +1454,7 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
   await parallelForEach(allFiles, 4, async (file) => {
     try {
       const raw = await parseSessionFile(file)
-      const sessionId = raw.find((m) => m.sessionId)?.sessionId
+      const sessionId = resolvePhysicalSessionId(file, raw)
       if (!sessionId) return
       const { start, end } = getFileTimeRange(raw)
       if (!filesBySession.has(sessionId)) filesBySession.set(sessionId, [])
@@ -1454,7 +1471,7 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
 
   for (const cluster of logicalClusters) {
     const primaryFile = cluster.filePaths[0]
-    const summary = buildSessionSummary(primaryFile, cluster.raw, true)
+    const summary = buildSessionSummary(primaryFile, cluster.raw, true, cluster.sessionId)
     if (summary) {
       summary.allFilePaths = cluster.filePaths
       if (cluster.branchSummaryId) summary.id = cluster.branchSummaryId
@@ -1492,6 +1509,7 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
             messageCount: branch.messageCount,
             branchPointUuid: branch.branchPointUuid,
             branchLeafUuid: branch.leafUuid,
+            resumeSessionId: undefined,
             branchParentId: parentId,
             branchChildIds: branch.childIdxs.map((ci) => branchIds[ci])
           }
@@ -1567,6 +1585,7 @@ export async function loadSessionDetail(
   }
 
   let mainRaw: RawJsonlMessage[]
+  let detailSessionId: string | undefined
 
   if (allFilePaths && allFilePaths.length > 1) {
     const entries: FileEntry[] = []
@@ -1578,6 +1597,7 @@ export async function loadSessionDetail(
       } catch { /* skip */ }
     }
     entries.sort((a, b) => a.startTime.localeCompare(b.startTime))
+    detailSessionId = entries[0] ? resolvePhysicalSessionId(entries[0].filePath, entries[0].raw) || undefined : undefined
     mainRaw = mergeRawMessages(entries.flatMap((g) => g.raw))
   } else {
     mainRaw = await parseSessionFile(filePath)
@@ -1597,6 +1617,13 @@ export async function loadSessionDetail(
     }
   } else if (branchLeafUuid) {
     mainRaw = filterMessagesByBranch(mainRaw, branchLeafUuid)
+  }
+
+  if (!branchLeafUuid && branchParentFilePaths && branchPointUuid) {
+    const splitIdx = mainRaw.findIndex((m) => m.uuid === branchPointUuid)
+    if (splitIdx >= 0) {
+      mainRaw = mainRaw.slice(splitIdx + 1)
+    }
   }
 
   // Load shared context from parent session if this is a branch
@@ -1620,7 +1647,7 @@ export async function loadSessionDetail(
     }
   }
 
-  const detail = buildSessionDetail(filePath, mainRaw)
+  const detail = buildSessionDetail(filePath, mainRaw, detailSessionId)
   if (!detail) return null
 
   // Prepend shared context from intra-file branch (same format as multi-file branch)

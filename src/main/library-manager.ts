@@ -267,6 +267,45 @@ export function getSessionMdPath(sessionId: string): string | null {
   return fs.existsSync(mdPath) ? mdPath : null
 }
 
+/**
+ * 计算 session 的「物理位置桶」，决定前端把它显示在文件夹树还是底部未分组区。
+ *   'grouped' = 真归属某 Swob 主题文件夹 → 只在树里显示，绝不进底部
+ *   'multi'/'single' = 在 未分组/单轮会话 容器目录里 → 进底部对应区
+ *   'root' = 游离（在 Library 根，或落在用户手动目录但不在任何 Swob 文件夹里）→ 进底部
+ *
+ * folders 由调用方注入（来自 UserConfig.folders，即 ~/.claude-session-manager/config.json）。
+ * 因为 loadLibraryConfig()（.swob-config.json）不含 folders，必须显式传入，否则无法判断真实归属。
+ */
+export function computeUngroupBucket(
+  session: { id: string; sessionId: string },
+  dirPath: string | null | undefined,
+  folders: Folder[]
+): 'grouped' | 'multi' | 'single' | 'root' | undefined {
+  const libConfig = loadLibraryConfig()
+  const branchFolders = libConfig.branchFolders || {}
+  if ((session.id.includes(':intra-') || session.id.includes(':branch-')) && branchFolders[session.id]?.length) {
+    return 'grouped'
+  }
+
+  const resolvedDir = dirPath || getSessionDirPath(session.sessionId)
+  if (!resolvedDir) return undefined
+
+  const parentDir = path.dirname(resolvedDir)
+  const parent = path.basename(parentDir)
+  const ungCfg = (libConfig.preferences as any)?.ungrouping
+  if (ungCfg && parent === ungCfg.multiTurn) return 'multi'
+  if (ungCfg && parent === ungCfg.singleTurn) return 'single'
+  if (parentDir === getLibraryRoot()) return 'root'
+
+  // 关键修复：兜底前确认 session 真归属某 Swob 文件夹。
+  // 跨设备（iCloud）同步来的 session 常落在用户手动建的 vault 目录里（如 AI会话/垃圾箱/），
+  // 这些目录不是 Swob 文件夹 —— 之前一律判 grouped 导致它们既不进底部也不在树里 → 凭空消失。
+  // 现在查 loadConfig().folders 的 sessionIds：真归属才 grouped，否则当游离 root（进底部）。
+  const ids = new Set([session.id, session.sessionId])
+  const isInFolder = (folders || []).some((f) => (f.sessionIds || []).some((sid) => ids.has(sid)))
+  return isInFolder ? 'grouped' : 'root'
+}
+
 function isPathInside(parentDir: string, childPath: string): boolean {
   const rel = path.relative(parentDir, childPath)
   return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)

@@ -59,7 +59,8 @@ import {
   saveAppConfig,
   isLibraryInitialized,
   findLibraryOnlySessions,
-  findLibrarySessionsWithMissingSources
+  findLibrarySessionsWithMissingSources,
+  computeUngroupBucket
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
@@ -120,27 +121,6 @@ function startActiveSessionPoller(): void {
 }
 let cachedSessions: SessionSummary[] = []
 
-type UngroupBucket = 'grouped' | 'multi' | 'single' | 'root'
-
-function computeUngroupBucket(session: SessionSummary, dirPath?: string | null): UngroupBucket | undefined {
-  const libConfig = loadLibraryConfig()
-  const branchFolders = libConfig.branchFolders || {}
-  if ((session.id.includes(':intra-') || session.id.includes(':branch-')) && branchFolders[session.id]?.length) {
-    return 'grouped'
-  }
-
-  const resolvedDir = dirPath || getSessionDirPath(session.sessionId)
-  if (!resolvedDir) return undefined
-
-  const parentDir = path.dirname(resolvedDir)
-  const parent = path.basename(parentDir)
-  const ungCfg = (libConfig.preferences as any)?.ungrouping
-  if (ungCfg && parent === ungCfg.multiTurn) return 'multi'
-  if (ungCfg && parent === ungCfg.singleTurn) return 'single'
-  if (parentDir === getLibraryRoot()) return 'root'
-  return 'grouped'
-}
-
 function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | null): void {
   const resolvedDir = dirPath || getSessionDirPath(session.sessionId)
   if (resolvedDir) {
@@ -151,7 +131,7 @@ function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | 
     }
   }
 
-  const bucket = computeUngroupBucket(session, resolvedDir)
+  const bucket = computeUngroupBucket(session, resolvedDir, loadConfig().folders || [])
   if (bucket) (session as any).ungroupBucket = bucket
 }
 

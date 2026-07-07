@@ -4,7 +4,7 @@
  * 确保分支 session 的 meta（重命名、笔记等）和文件夹归属
  * 完全独立于母 session，互不影响。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
@@ -12,6 +12,9 @@ import * as os from 'os'
 // 隔离测试环境：用临时目录作为 Library root
 let tmpRoot: string
 let savedAppConfig: string | null = null
+const savedHome = process.env.HOME
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-lib-home-'))
+process.env.HOME = testHome
 
 // 动态导入，确保 HOME 修改生效
 let lib: typeof import('./library-manager')
@@ -70,8 +73,35 @@ function createLibrarySession(sessionId: string, sourceFilePaths: string[], opts
   return dirPath
 }
 
+function parseFrontmatter(md: string): { data: Record<string, string | number>; body: string } {
+  expect(md.startsWith('---\n')).toBe(true)
+  const close = md.indexOf('\n---\n', 4)
+  expect(close).toBeGreaterThan(0)
+  const data: Record<string, string | number> = {}
+  for (const line of md.slice(4, close).split(/\r?\n/)) {
+    const idx = line.indexOf(':')
+    if (idx === -1) continue
+    const key = line.slice(0, idx)
+    const rawValue = line.slice(idx + 1).trim()
+    if (/^\d+$/.test(rawValue)) {
+      data[key] = Number(rawValue)
+    } else if (rawValue.startsWith('"')) {
+      data[key] = JSON.parse(rawValue)
+    } else {
+      data[key] = rawValue
+    }
+  }
+  return { data, body: md.slice(close + '\n---\n'.length) }
+}
+
+function expectTitleImmediatelyAfterFrontmatter(md: string, title: string): Record<string, string | number> {
+  const { data, body } = parseFrontmatter(md)
+  expect(body.split(/\r?\n/).find((line) => line.trim())).toBe(`# ${title}`)
+  return data
+}
+
 beforeEach(async () => {
-  // 备份真实的 app-config，防止测试污染生产配置
+  // 备份临时 HOME 内的 app-config，防止测试之间串状态
   try {
     savedAppConfig = fs.existsSync(APP_CONFIG_FILE) ? fs.readFileSync(APP_CONFIG_FILE, 'utf-8') : null
   } catch { savedAppConfig = null }
@@ -101,10 +131,21 @@ beforeEach(async () => {
 
 afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true })
-  // 恢复真实的 app-config，避免测试污染生产环境
+  // 恢复临时 app-config，避免测试之间串状态
   if (savedAppConfig !== null) {
     fs.writeFileSync(APP_CONFIG_FILE, savedAppConfig, 'utf-8')
+  } else {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
   }
+})
+
+afterAll(() => {
+  if (savedHome === undefined) {
+    delete process.env.HOME
+  } else {
+    process.env.HOME = savedHome
+  }
+  fs.rmSync(testHome, { recursive: true, force: true })
 })
 
 describe('【曾经的 bug】重命名分支 session 不应该影响母 session', () => {
@@ -606,6 +647,347 @@ describe('transcript markdown heading semantics', () => {
     expect(md).toContain('# 代码块标题不动')
     expect(md).toContain('**Step**')
     expect(md).not.toContain('\n## Assistant Plan')
+  })
+})
+
+describe('transcript frontmatter 属性', () => {
+  it('claude transcript 写入完整 frontmatter 且标题紧跟其后', async () => {
+    removeDefaultSession()
+    const sessionId = 'claude-frontmatter-session'
+    const claudeFile = path.join(
+      tmpRoot,
+      'Users',
+      'yytyyf',
+      '.claude',
+      'projects',
+      'swob',
+      `${sessionId}.jsonl`
+    )
+    writeJsonl(claudeFile, [
+      {
+        uuid: 'u1',
+        parentUuid: null,
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:00:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'user', content: '请生成 Obsidian 属性' }
+      },
+      {
+        uuid: 'a1',
+        parentUuid: 'u1',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:01:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'assistant', model: 'claude-sonnet-4-5', content: '已生成。' }
+      }
+    ])
+    const dirPath = createLibrarySession(sessionId, [claudeFile], { dirName: 'claude-frontmatter' })
+    lib.scanLibrary()
+
+    await lib.updateTranscript(sessionId)
+
+    const md = fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')
+    const fm = expectTitleImmediatelyAfterFrontmatter(md, '请生成 Obsidian 属性')
+    expect(fm).toMatchObject({
+      sessionId,
+      harness: 'claude-code',
+      model: 'claude-sonnet-4-5',
+      device: 'mac-mini',
+      cwd: '/Users/yytyyf/projects/swob',
+      turns: 1,
+      created: '2026-07-07T00:00:00Z',
+      updated: '2026-07-07T00:01:00Z',
+      resume: `claude --resume ${sessionId}`,
+      source: claudeFile
+    })
+  })
+
+  it('frontmatter cwd 忽略早于主链的 sidechain 消息', async () => {
+    removeDefaultSession()
+    const sessionId = 'sidechain-cwd-session'
+    const claudeFile = path.join(
+      tmpRoot,
+      'Users',
+      'yytyyf',
+      '.claude',
+      'projects',
+      'swob',
+      `${sessionId}.jsonl`
+    )
+    writeJsonl(claudeFile, [
+      {
+        uuid: 'side-a1',
+        parentUuid: 'side-u1',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:00:00Z',
+        cwd: '/Users/yytyyf/projects/rejected-sidechain',
+        isSidechain: true,
+        message: { role: 'assistant', model: 'claude-sonnet-4-5', content: '这条 rejected sidechain 更早。' }
+      },
+      {
+        uuid: 'main-u1',
+        parentUuid: null,
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:00:01Z',
+        cwd: '/Users/yytyyf/projects/main-chain',
+        message: { role: 'user', content: '请生成主链 cwd' }
+      },
+      {
+        uuid: 'main-a1',
+        parentUuid: 'main-u1',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:00:02Z',
+        cwd: '/Users/yytyyf/projects/main-chain',
+        message: { role: 'assistant', model: 'claude-sonnet-4-5', content: '已生成。' }
+      }
+    ])
+    const dirPath = createLibrarySession(sessionId, [claudeFile], { dirName: 'sidechain-cwd' })
+    lib.scanLibrary()
+
+    await lib.updateTranscript(sessionId)
+
+    const md = fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')
+    const fm = expectTitleImmediatelyAfterFrontmatter(md, '请生成主链 cwd')
+    expect(fm.cwd).toBe('/Users/yytyyf/projects/main-chain')
+  })
+
+  it('codex transcript 写入 frontmatter 并过滤系统注入', async () => {
+    removeDefaultSession()
+    const sessionId = '33333333-3333-4333-8333-333333333333'
+    const codexFile = path.join(
+      tmpRoot,
+      'Users',
+      'mac',
+      '.codex',
+      'sessions',
+      '2026',
+      '07',
+      '07',
+      `rollout-2026-07-07T00-00-00-${sessionId}.jsonl`
+    )
+    writeJsonl(codexFile, [
+      {
+        timestamp: '2026-07-07T00:00:00Z',
+        type: 'session_meta',
+        payload: { id: sessionId, timestamp: '2026-07-07T00:00:00Z', cwd: '/Users/mac/projects/swob', cli_version: 'codex-test' }
+      },
+      {
+        timestamp: '2026-07-07T00:00:01Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '# AGENTS.md instructions for /Users/mac\n<INSTRUCTIONS>noise</INSTRUCTIONS>' }]
+        }
+      },
+      {
+        timestamp: '2026-07-07T00:00:02Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<environment_context>cwd=/Users/mac/projects/swob</environment_context>' }]
+        }
+      },
+      {
+        timestamp: '2026-07-07T00:00:03Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '请用 Codex 生成属性' }]
+        }
+      },
+      {
+        timestamp: '2026-07-07T00:00:04Z',
+        type: 'turn_context',
+        payload: { turn_id: 'turn-1', cwd: '/Users/mac/projects/swob', model: 'gpt-5.4' }
+      },
+      {
+        timestamp: '2026-07-07T00:00:05Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Codex frontmatter 已生成。' }]
+        }
+      }
+    ])
+    const dirPath = createLibrarySession(sessionId, [codexFile], { dirName: 'codex-frontmatter' })
+    lib.scanLibrary()
+
+    await lib.updateTranscript(sessionId)
+
+    const md = fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')
+    const fm = expectTitleImmediatelyAfterFrontmatter(md, '请用 Codex 生成属性')
+    expect(fm).toMatchObject({
+      sessionId,
+      harness: 'codex',
+      model: 'gpt-5.4',
+      device: 'macbook',
+      cwd: '/Users/mac/projects/swob',
+      turns: 1,
+      created: '2026-07-07T00:00:00Z',
+      updated: '2026-07-07T00:00:05Z',
+      resume: `codex resume ${sessionId}`,
+      source: codexFile
+    })
+    expect(md).not.toContain('AGENTS.md instructions')
+    expect(md).not.toContain('<environment_context>')
+  })
+
+  it('cursor transcript 省略缺失 model 字段并保留标题位置', async () => {
+    removeDefaultSession()
+    const sessionId = 'cursor-frontmatter-session'
+    const cursorFile = path.join(
+      tmpRoot,
+      'Users',
+      'unknown',
+      '.cursor',
+      'projects',
+      'Users-yytyyf-projects-swob',
+      'agent-transcripts',
+      sessionId,
+      `${sessionId}.jsonl`
+    )
+    writeJsonl(cursorFile, [
+      { role: 'user', message: { content: '<user_query>请用 Cursor 生成属性</user_query>' } },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            { type: 'tool-call', toolCallId: 'tool-1', toolName: 'read_file', args: { target_file: 'src/main/library-manager.ts' } },
+            { type: 'text', text: 'Cursor frontmatter 已生成。' }
+          ]
+        }
+      }
+    ])
+    const dirPath = createLibrarySession(sessionId, [cursorFile], { dirName: 'cursor-frontmatter' })
+    lib.scanLibrary()
+
+    await lib.updateTranscript(sessionId)
+
+    const md = fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')
+    const fm = expectTitleImmediatelyAfterFrontmatter(md, '请用 Cursor 生成属性')
+    expect(fm).toMatchObject({
+      sessionId,
+      harness: 'cursor',
+      device: os.hostname(),
+      cwd: '/Users/yytyyf/projects/swob',
+      turns: 1,
+      created: '2026-07-07T00:00:00Z',
+      resume: `cursor-agent --resume=${sessionId}`,
+      source: cursorFile
+    })
+    expect(fm.model).toBeUndefined()
+  })
+
+  it('branch transcript 写入 frontmatter 并用 base session 生成 resume', async () => {
+    removeDefaultSession()
+    const sessionId = 'branch-frontmatter-session'
+    const branchId = `${sessionId}:intra-0`
+    const claudeFile = path.join(
+      tmpRoot,
+      'Users',
+      'yytyyf',
+      '.claude',
+      'projects',
+      'swob',
+      `${sessionId}.jsonl`
+    )
+    writeJsonl(claudeFile, [
+      {
+        uuid: 's1',
+        parentUuid: null,
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:00:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'user', content: '开始对话' }
+      },
+      {
+        uuid: 's2',
+        parentUuid: 's1',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:01:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'assistant', model: 'claude-sonnet-4-5', content: '好的' }
+      },
+      {
+        uuid: 's3',
+        parentUuid: 's2',
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:02:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'user', content: '继续' }
+      },
+      {
+        uuid: 'm1',
+        parentUuid: 's3',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:03:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'assistant', model: 'claude-sonnet-4-5', content: '主路径回复' }
+      },
+      {
+        uuid: 'm2',
+        parentUuid: 'm1',
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:05:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'user', content: '主路径问题' }
+      },
+      {
+        uuid: 'm3',
+        parentUuid: 'm2',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:07:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'assistant', model: 'claude-sonnet-4-5', content: '主路径回答' }
+      },
+      {
+        uuid: 'b1',
+        parentUuid: 's3',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:04:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'assistant', model: 'claude-sonnet-4-5', content: '分支回复' }
+      },
+      {
+        uuid: 'b2',
+        parentUuid: 'b1',
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:06:00Z',
+        cwd: '/Users/yytyyf/projects/swob',
+        message: { role: 'user', content: '分支问题' }
+      }
+    ])
+    const dirPath = createLibrarySession(sessionId, [claudeFile], { dirName: 'branch-frontmatter' })
+    lib.scanLibrary()
+
+    const mdPath = await lib.updateBranchTranscript(branchId, 'b2')
+
+    expect(mdPath).toBe(path.join(dirPath, 'transcript-intra-0.md'))
+    const md = fs.readFileSync(mdPath!, 'utf-8')
+    const fm = parseFrontmatter(md).data
+    expect(fm).toMatchObject({
+      sessionId: branchId,
+      harness: 'claude-code',
+      resume: `claude --resume ${sessionId}`,
+      source: claudeFile
+    })
   })
 })
 

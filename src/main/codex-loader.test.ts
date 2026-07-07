@@ -135,6 +135,104 @@ describe('codex-loader', () => {
       expect(summary).not.toBeNull()
       expect(summary!.sessionId).toBe(SESSION_ID)
     })
+
+    it('过滤 Codex 系统注入并用第一个真实 Query 做 firstUserMessage', async () => {
+      const lines = [
+        makeCodexLines()[0],
+        {
+          timestamp: '2026-03-27T13:37:34.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '# AGENTS.md instructions for /Users/test\n<INSTRUCTIONS>不要进入 transcript</INSTRUCTIONS>' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:35.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '<environment_context>cwd=/Users/test</environment_context>' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:36.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '<user_instructions>系统注入</user_instructions>' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:37.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '<turn_aborted>interrupted</turn_aborted>' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:38.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '请真正处理这个需求' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:39.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '收到。' }]
+          }
+        }
+      ]
+      const fp = writeTempJsonl(lines)
+      const summary = await buildCodexSessionSummary(fp)
+
+      expect(summary).not.toBeNull()
+      expect(summary!.firstUserMessage).toBe('请真正处理这个需求')
+      expect(summary!.allUserMessages).toBeUndefined()
+    })
+
+    it('真实用户消息以 AGENTS.md instructions 开头时不被误杀', async () => {
+      const lines = [
+        makeCodexLines()[0],
+        {
+          timestamp: '2026-03-27T13:37:34.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '# AGENTS.md instructions 是什么？请解释这个标题。' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:35.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '这是一个说明标题。' }]
+          }
+        }
+      ]
+      const fp = writeTempJsonl(lines)
+      const summary = await buildCodexSessionSummary(fp)
+      const detail = await buildCodexSessionDetail(fp)
+
+      expect(summary).not.toBeNull()
+      expect(summary!.firstUserMessage).toBe('# AGENTS.md instructions 是什么？请解释这个标题。')
+      expect(summary!.turnCount).toBe(1)
+      expect(detail!.messages.some((m) => m.textContent.includes('# AGENTS.md instructions 是什么'))).toBe(true)
+    })
   })
 
   describe('buildCodexSessionDetail', () => {
@@ -168,9 +266,9 @@ describe('codex-loader', () => {
 
     it('【曾经的 bug】AGENTS.md instructions 等系统消息不作为用户输入', async () => {
       const lines = [
-        ...makeCodexLines(),
+        makeCodexLines()[0],
         {
-          timestamp: '2026-03-27T13:39:00.000Z',
+          timestamp: '2026-03-27T13:37:34.000Z',
           type: 'response_item',
           payload: {
             type: 'message',
@@ -179,7 +277,7 @@ describe('codex-loader', () => {
           }
         },
         {
-          timestamp: '2026-03-27T13:39:01.000Z',
+          timestamp: '2026-03-27T13:37:35.000Z',
           type: 'response_item',
           payload: {
             type: 'message',
@@ -188,12 +286,30 @@ describe('codex-loader', () => {
           }
         },
         {
-          timestamp: '2026-03-27T13:39:02.000Z',
+          timestamp: '2026-03-27T13:37:36.000Z',
           type: 'response_item',
           payload: {
             type: 'message',
             role: 'user',
             content: [{ type: 'input_text', text: '<environment_context>cwd=/Users/test</environment_context>' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:37.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '真实问题' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:38.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '真实回答' }]
           }
         }
       ]
@@ -207,6 +323,40 @@ describe('codex-loader', () => {
       expect(userTexts.some((t) => t.includes('AGENTS.md'))).toBe(false)
       expect(userTexts.some((t) => t.includes('System prompt'))).toBe(false)
       expect(userTexts.some((t) => t.includes('<environment_context>'))).toBe(false)
+      expect(userTexts).toContain('真实问题')
+    })
+
+    it('保留 Codex user_shell_command 的命令本体', async () => {
+      const lines = [
+        makeCodexLines()[0],
+        {
+          timestamp: '2026-03-27T13:37:34.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '<user_shell_command>\nnpm test\n</user_shell_command>' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:35.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '测试完成。' }]
+          }
+        }
+      ]
+      const fp = writeTempJsonl(lines)
+      const detail = await buildCodexSessionDetail(fp)
+
+      const userTexts = detail!.messages
+        .filter((m) => m.type === 'user')
+        .map((m) => m.textContent)
+
+      expect(userTexts).toContain('npm test')
+      expect(userTexts.some((t) => t.includes('<user_shell_command>'))).toBe(false)
     })
   })
 })

@@ -369,10 +369,22 @@ export async function updateBranchTranscript(
   if (!summary) return null
 
   const title = customTitle || summary.firstUserMessage?.slice(0, 60) || branchId.slice(0, 12)
+  const sourcePath = meta.sourceFilePaths[0] || ''
+  const source = detectSourceForTranscript(meta, sourcePath)
   const md = generateTranscript(branchRaw, title, {
     createdAt: summary.createdAt,
     turnCount: summary.turnCount,
-    toolUsage: summary.toolUsage
+    toolUsage: summary.toolUsage,
+    frontmatter: buildTranscriptFrontmatter({
+      sessionId: branchId,
+      resumeSessionId: baseId,
+      source,
+      sourcePath,
+      rawMessages: branchRaw,
+      createdAt: summary.createdAt,
+      updatedAt: summary.updatedAt,
+      turnCount: summary.turnCount
+    })
   })
 
   const mdPath = path.join(dirPath, `transcript-${suffix}.md`)
@@ -547,12 +559,149 @@ function firstLineSnippet(text: string, maxLen = 40): string {
   return normalized.length > maxLen ? `${normalized.slice(0, maxLen).trimEnd()}...` : normalized
 }
 
+interface TranscriptFrontmatter {
+  sessionId?: string
+  harness?: SessionSource
+  model?: string
+  device?: string
+  cwd?: string
+  turns?: number
+  created?: string
+  updated?: string
+  resume?: string
+  source?: string
+}
+
+interface TranscriptGenerationMeta {
+  createdAt: string
+  turnCount: number
+  toolUsage?: Record<string, number>
+  frontmatter?: TranscriptFrontmatter
+}
+
+const TRANSCRIPT_FRONTMATTER_KEYS: Array<keyof TranscriptFrontmatter> = [
+  'sessionId',
+  'harness',
+  'model',
+  'device',
+  'cwd',
+  'turns',
+  'created',
+  'updated',
+  'resume',
+  'source'
+]
+
+function formatYamlScalar(value: string | number): string {
+  if (typeof value === 'number') return String(value)
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(value)) return value
+  return JSON.stringify(value)
+}
+
+function formatTranscriptFrontmatter(frontmatter?: TranscriptFrontmatter): string[] {
+  if (!frontmatter) return []
+
+  const lines: string[] = []
+  for (const key of TRANSCRIPT_FRONTMATTER_KEYS) {
+    const value = frontmatter[key]
+    if (value === undefined || value === null) continue
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) continue
+      lines.push(`${key}: ${formatYamlScalar(value)}`)
+      continue
+    }
+    if (!value.trim()) continue
+    lines.push(`${key}: ${formatYamlScalar(value)}`)
+  }
+
+  return lines.length > 0 ? ['---', ...lines, '---'] : []
+}
+
+function modeString(values: Array<string | undefined>): string | undefined {
+  const counts = new Map<string, { count: number; firstIdx: number }>()
+  values.forEach((value, idx) => {
+    const normalized = value?.trim()
+    if (!normalized) return
+    const current = counts.get(normalized)
+    if (current) {
+      current.count += 1
+    } else {
+      counts.set(normalized, { count: 1, firstIdx: idx })
+    }
+  })
+  return [...counts.entries()]
+    .sort(([, a], [, b]) => b.count - a.count || a.firstIdx - b.firstIdx)[0]?.[0]
+}
+
+function inferTranscriptModel(source: SessionSource, rawMessages: RawJsonlMessage[]): string | undefined {
+  if (source === 'cursor') return undefined
+  if (source === 'codex') {
+    return modeString(rawMessages.flatMap((m) => [m.message?.model, m.version]))
+  }
+  return modeString(rawMessages.map((m) => m.message?.model))
+}
+
+function inferTranscriptCwd(rawMessages: RawJsonlMessage[]): string | undefined {
+  let earliest: { timestamp: string; cwd: string } | null = null
+  for (const msg of rawMessages) {
+    if (msg.isSidechain) continue
+    if (!msg.cwd) continue
+    if (!msg.timestamp) return msg.cwd
+    if (!earliest || msg.timestamp < earliest.timestamp) {
+      earliest = { timestamp: msg.timestamp, cwd: msg.cwd }
+    }
+  }
+  return earliest?.cwd
+}
+
+function inferDevice(sourcePath: string): string {
+  const normalized = sourcePath.split(path.sep).join('/')
+  const user = normalized.match(/\/Users\/([^/]+)\//)?.[1]
+  if (user === 'yytyyf') return 'mac-mini'
+  if (user === 'mac') return 'macbook'
+  return os.hostname()
+}
+
+function buildResumeCommand(source: SessionSource, sessionId: string): string {
+  if (source === 'codex') return `codex resume ${sessionId}`
+  if (source === 'cursor') return `cursor-agent --resume=${sessionId}`
+  return `claude --resume ${sessionId}`
+}
+
+function buildTranscriptFrontmatter(params: {
+  sessionId: string
+  resumeSessionId?: string
+  source: SessionSource
+  sourcePath: string
+  rawMessages: RawJsonlMessage[]
+  createdAt: string
+  updatedAt: string
+  turnCount: number
+}): TranscriptFrontmatter {
+  const model = inferTranscriptModel(params.source, params.rawMessages)
+  const cwd = inferTranscriptCwd(params.rawMessages)
+  return {
+    sessionId: params.sessionId,
+    harness: params.source,
+    model,
+    device: inferDevice(params.sourcePath),
+    cwd,
+    turns: params.turnCount,
+    created: params.createdAt,
+    updated: params.updatedAt,
+    resume: buildResumeCommand(params.source, params.resumeSessionId || params.sessionId),
+    source: params.sourcePath
+  }
+}
+
 export function generateTranscript(
   rawMessages: RawJsonlMessage[],
   title: string,
-  meta: { createdAt: string; turnCount: number; toolUsage?: Record<string, number> }
+  meta: TranscriptGenerationMeta
 ): string {
   const lines: string[] = []
+
+  lines.push(...formatTranscriptFrontmatter(meta.frontmatter))
 
   // Header: one compact block
   lines.push(`# ${title}\n`)
@@ -873,7 +1022,16 @@ function writeTranscriptFromLoadedRaw(
   const md = generateTranscript(loaded.raw, title, {
     createdAt: meta.createdAt,
     turnCount: summary.turnCount,
-    toolUsage: summary.toolUsage
+    toolUsage: summary.toolUsage,
+    frontmatter: buildTranscriptFrontmatter({
+      sessionId,
+      source: loaded.source,
+      sourcePath: loaded.filePath || meta.sourceFilePaths[0] || '',
+      rawMessages: loaded.raw,
+      createdAt: meta.createdAt,
+      updatedAt: summary.updatedAt,
+      turnCount: summary.turnCount
+    })
   })
 
   const mdPath = path.join(dirPath, TRANSCRIPT_FILE)

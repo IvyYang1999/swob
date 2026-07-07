@@ -412,9 +412,12 @@ function cmdActive(): void {
 
 async function cmdTranscript(args: string[], flags: Record<string, string | true>): Promise<void> {
   if (args[0] !== 'rebuild' || flags.all !== true) {
-    err('用法: swob transcript rebuild --all [--dry-run]')
+    err('用法: swob transcript rebuild --all [--dry-run] [--missing-only]')
   }
-  const result = await rebuildAllTranscripts({ dryRun: flags['dry-run'] === true })
+  const result = await rebuildAllTranscripts({
+    dryRun: flags['dry-run'] === true,
+    missingOnly: flags['missing-only'] === true
+  })
   out(result)
 }
 
@@ -639,6 +642,7 @@ async function main(): Promise<void> {
   --cwd <path>                resume 时指定工作目录
   --parent <id>               创建子文件夹时指定父文件夹
   --dry-run                   transcript rebuild 只统计不写入
+  --missing-only              transcript rebuild 只补缺失的 transcript.md
 `)
     process.exit(0)
   }

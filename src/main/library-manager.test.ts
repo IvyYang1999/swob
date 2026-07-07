@@ -18,6 +18,58 @@ let lib: typeof import('./library-manager')
 
 const APP_CONFIG_FILE = path.join(os.homedir(), '.claude-session-manager', 'app-config.json')
 
+function writeJsonl(filePath: string, rows: unknown[]): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, rows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf-8')
+}
+
+function writeSessionMeta(dirPath: string, meta: Record<string, unknown>): void {
+  fs.mkdirSync(dirPath, { recursive: true })
+  fs.writeFileSync(path.join(dirPath, '.swob-session.json'), JSON.stringify(meta, null, 2), 'utf-8')
+}
+
+function removeDefaultSession(): void {
+  fs.rmSync(path.join(tmpRoot, '这是母session'), { recursive: true, force: true })
+}
+
+function claudeRows(sessionId: string, prompt = '请测试 transcript'): unknown[] {
+  return [
+    {
+      uuid: `${sessionId}-u1`,
+      parentUuid: null,
+      sessionId,
+      type: 'user',
+      timestamp: '2026-07-07T00:00:00Z',
+      cwd: tmpRoot,
+      message: { role: 'user', content: prompt }
+    },
+    {
+      uuid: `${sessionId}-a1`,
+      parentUuid: `${sessionId}-u1`,
+      sessionId,
+      type: 'assistant',
+      timestamp: '2026-07-07T00:01:00Z',
+      cwd: tmpRoot,
+      message: { role: 'assistant', content: '已完成。' }
+    }
+  ]
+}
+
+function createLibrarySession(sessionId: string, sourceFilePaths: string[], opts: { dirName?: string; transcript?: string } = {}): string {
+  const dirPath = path.join(tmpRoot, opts.dirName || sessionId)
+  writeSessionMeta(dirPath, {
+    sessionId,
+    sourceFilePaths,
+    createdAt: '2026-07-07T00:00:00Z',
+    updatedAt: '2026-07-07T00:01:00Z',
+    projectPath: tmpRoot
+  })
+  if (opts.transcript !== undefined) {
+    fs.writeFileSync(path.join(dirPath, 'transcript.md'), opts.transcript, 'utf-8')
+  }
+  return dirPath
+}
+
 beforeEach(async () => {
   // 备份真实的 app-config，防止测试污染生产配置
   try {
@@ -554,5 +606,177 @@ describe('transcript markdown heading semantics', () => {
     expect(md).toContain('# 代码块标题不动')
     expect(md).toContain('**Step**')
     expect(md).not.toContain('\n## Assistant Plan')
+  })
+})
+
+describe('Library transcript rebuild 多来源回归', () => {
+  it('【曾经的 bug】codex 会话生成 transcript', async () => {
+    removeDefaultSession()
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    const codexFile = path.join(
+      tmpRoot,
+      '.codex',
+      'sessions',
+      '2026',
+      '07',
+      '07',
+      `rollout-2026-07-07T00-00-00-${sessionId}.jsonl`
+    )
+    writeJsonl(codexFile, [
+      {
+        timestamp: '2026-07-07T00:00:00Z',
+        type: 'session_meta',
+        payload: { id: sessionId, timestamp: '2026-07-07T00:00:00Z', cwd: tmpRoot, cli_version: 'codex-test' }
+      },
+      {
+        timestamp: '2026-07-07T00:00:01Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '请用 Codex 修 bug' }]
+        }
+      },
+      {
+        timestamp: '2026-07-07T00:00:02Z',
+        type: 'response_item',
+        payload: { type: 'function_call', name: 'shell', call_id: 'call-1', arguments: '{"cmd":"npm test"}' }
+      },
+      {
+        timestamp: '2026-07-07T00:00:03Z',
+        type: 'response_item',
+        payload: { type: 'function_call_output', call_id: 'call-1', output: 'ok' }
+      },
+      {
+        timestamp: '2026-07-07T00:00:04Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Codex transcript 已生成。' }]
+        }
+      }
+    ])
+    const dirPath = createLibrarySession(sessionId, [codexFile], { dirName: 'codex-session' })
+    lib.scanLibrary()
+
+    await lib.updateTranscript(sessionId)
+
+    const md = fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')
+    expect(md).toContain('## 请用 Codex 修 bug')
+    expect(md).toContain('Codex transcript 已生成。')
+    expect(md).toContain('1 轮对话 | Tools: shell(1)')
+  })
+
+  it('【曾经的 bug】cursor 会话生成 transcript', async () => {
+    removeDefaultSession()
+    const sessionId = 'cursor-session-1'
+    const cursorFile = path.join(
+      tmpRoot,
+      '.cursor',
+      'projects',
+      '-Users-yytyyf-projects-swob',
+      'agent-transcripts',
+      sessionId,
+      `${sessionId}.jsonl`
+    )
+    writeJsonl(cursorFile, [
+      { role: 'user', message: { content: '<user_query>请用 Cursor 修 bug</user_query>' } },
+      {
+        role: 'assistant',
+        message: {
+          content: [
+            { type: 'tool-call', toolCallId: 'tool-1', toolName: 'read_file', args: { target_file: 'src/main/library-manager.ts' } },
+            { type: 'text', text: 'Cursor transcript 已生成。' }
+          ]
+        }
+      }
+    ])
+    const dirPath = createLibrarySession(sessionId, [cursorFile], { dirName: 'cursor-session' })
+    lib.scanLibrary()
+
+    await lib.updateTranscript(sessionId)
+
+    const md = fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')
+    expect(md).toContain('## 请用 Cursor 修 bug')
+    expect(md).toContain('Cursor transcript 已生成。')
+    expect(md).toContain('1 轮对话 | Tools: read_file(1)')
+  })
+
+  it('【曾经的 bug】源文件全部缺失时 fallback 到 backup.jsonl 生成 transcript', async () => {
+    removeDefaultSession()
+    const sessionId = '22222222-2222-4222-8222-222222222222'
+    const missingSource = path.join(tmpRoot, 'missing', 'unknown-source.jsonl')
+    const dirPath = createLibrarySession(sessionId, [missingSource], { dirName: 'backup-only-codex' })
+    writeJsonl(path.join(dirPath, 'backup.jsonl'), [
+      {
+        timestamp: '2026-07-07T00:00:00Z',
+        type: 'session_meta',
+        payload: { id: sessionId, timestamp: '2026-07-07T00:00:00Z', cwd: tmpRoot, cli_version: 'codex-test' }
+      },
+      {
+        timestamp: '2026-07-07T00:00:01Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '从 backup 恢复 transcript' }]
+        }
+      },
+      {
+        timestamp: '2026-07-07T00:00:02Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'backup fallback 生效。' }]
+        }
+      }
+    ])
+    lib.scanLibrary()
+
+    await lib.updateTranscript(sessionId)
+
+    const md = fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')
+    expect(md).toContain('## 从 backup 恢复 transcript')
+    expect(md).toContain('backup fallback 生效。')
+  })
+
+  it('【曾经的 bug】rebuild 返回真实 written/failed 计数', async () => {
+    removeDefaultSession()
+    const okSource = path.join(tmpRoot, '.claude', 'projects', 'ok', 'ok-session.jsonl')
+    writeJsonl(okSource, claudeRows('ok-session', '请重建有效 transcript'))
+    createLibrarySession('ok-session', [okSource])
+    createLibrarySession('failed-session', [path.join(tmpRoot, '.claude', 'projects', 'missing', 'failed-session.jsonl')])
+    lib.scanLibrary()
+
+    const result = await lib.rebuildAllTranscripts()
+
+    expect(result.sessionCount).toBe(2)
+    expect(result.written).toBe(1)
+    expect(result.failed).toBe(1)
+    expect(result.failedSessionIds).toEqual(['failed-session'])
+    expect(result.transcriptCount).toBe(1)
+  })
+
+  it('【曾经的 bug】--missing-only 不重写已有 transcript', async () => {
+    removeDefaultSession()
+    const existingSource = path.join(tmpRoot, '.claude', 'projects', 'existing', 'existing-session.jsonl')
+    const missingSource = path.join(tmpRoot, '.claude', 'projects', 'missing-md', 'missing-md-session.jsonl')
+    writeJsonl(existingSource, claudeRows('existing-session', '已有 transcript 不应重写'))
+    writeJsonl(missingSource, claudeRows('missing-md-session', '缺失 transcript 应补齐'))
+    const existingDir = createLibrarySession('existing-session', [existingSource], {
+      transcript: '# 已有人写过的 transcript\n'
+    })
+    const missingDir = createLibrarySession('missing-md-session', [missingSource])
+    lib.scanLibrary()
+
+    const result = await lib.rebuildAllTranscripts({ missingOnly: true })
+
+    expect(result.written).toBe(1)
+    expect(result.skipped).toBe(1)
+    expect(result.failed).toBe(0)
+    expect(fs.readFileSync(path.join(existingDir, 'transcript.md'), 'utf-8')).toBe('# 已有人写过的 transcript\n')
+    expect(fs.readFileSync(path.join(missingDir, 'transcript.md'), 'utf-8')).toContain('## 缺失 transcript 应补齐')
   })
 })

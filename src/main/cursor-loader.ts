@@ -74,6 +74,13 @@ async function parseCursorFile(filePath: string): Promise<CursorLine[]> {
   return lines
 }
 
+export async function loadCursorRawMessages(filePath: string, sessionIdOverride?: string): Promise<RawJsonlMessage[]> {
+  const lines = await parseCursorFile(filePath)
+  if (lines.length === 0) return []
+  const sessionId = sessionIdOverride || extractSessionId(filePath)
+  return cursorToRawMessages(lines, sessionId, filePath)
+}
+
 // --- Derive project path from the transcript location ---
 
 function deriveProjectPath(filePath: string): string {

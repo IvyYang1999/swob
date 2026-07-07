@@ -2,8 +2,10 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
+import { loadCodexRawMessages } from './codex-loader'
+import { loadCursorRawMessages } from './cursor-loader'
 import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
-import type { RawJsonlMessage, ContentPart, SessionSummary, Folder, UserConfig } from './types'
+import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
 
 // ============ Types ============
 
@@ -682,30 +684,193 @@ export async function syncBackup(sessionId: string): Promise<void> {
 
 // --- Update Transcript ---
 
-export async function updateTranscript(sessionId: string, customTitle?: string): Promise<void> {
-  const dirPath = sessionIndex.get(sessionId)
-  if (!dirPath) return
+interface LoadedTranscriptRaw {
+  raw: RawJsonlMessage[]
+  source: SessionSource
+  filePath: string
+}
 
-  const meta = readSessionMeta(dirPath)
-  if (!meta) return
+interface TranscriptSummaryForWrite {
+  updatedAt: string
+  turnCount: number
+  firstUserMessage: string
+  toolUsage: Record<string, number>
+}
 
-  // Parse all source files
+function detectSourceFromPath(filePath?: string): SessionSource | null {
+  if (!filePath) return null
+  const normalized = filePath.split(path.sep).join('/')
+  if (normalized.includes('/.codex/sessions/')) return 'codex'
+  if (normalized.includes('/.cursor/projects/')) return 'cursor'
+  if (normalized.includes('/.claude/projects/') || normalized.includes('/.claude-window/')) return 'claude-code'
+  return null
+}
+
+function readFirstJsonlObject(filePath: string): Record<string, unknown> | null {
+  let fd: number | null = null
+  try {
+    fd = fs.openSync(filePath, 'r')
+    const buffer = Buffer.alloc(8192)
+    let pending = ''
+    let position = 0
+
+    while (position < 1024 * 1024) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position)
+      if (bytesRead === 0) break
+      position += bytesRead
+      pending += buffer.toString('utf-8', 0, bytesRead)
+      const lines = pending.split(/\r?\n/)
+      pending = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.trim()) continue
+        return JSON.parse(line)
+      }
+    }
+
+    if (pending.trim()) return JSON.parse(pending)
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch { /* ignore */ }
+    }
+  }
+  return null
+}
+
+function sniffSourceFromJsonl(filePath: string): SessionSource | null {
+  const first = readFirstJsonlObject(filePath)
+  if (!first) return null
+  if (Object.prototype.hasOwnProperty.call(first, 'payload')) return 'codex'
+  if (
+    Object.prototype.hasOwnProperty.call(first, 'role') &&
+    Object.prototype.hasOwnProperty.call(first, 'message') &&
+    !Object.prototype.hasOwnProperty.call(first, 'type')
+  ) return 'cursor'
+  return 'claude-code'
+}
+
+function detectSourceForTranscript(meta: SessionMeta, filePath: string): SessionSource {
+  return detectSourceFromPath(meta.sourceFilePaths[0]) ||
+    detectSourceFromPath(filePath) ||
+    sniffSourceFromJsonl(filePath) ||
+    'claude-code'
+}
+
+async function loadRawFileForTranscript(filePath: string, source: SessionSource, sessionId: string): Promise<RawJsonlMessage[]> {
+  if (source === 'codex') return loadCodexRawMessages(filePath, sessionId)
+  if (source === 'cursor') return loadCursorRawMessages(filePath, sessionId)
+  return parseSessionFile(filePath)
+}
+
+async function loadRawFromMeta(meta: SessionMeta, dirPath?: string): Promise<LoadedTranscriptRaw> {
   const allRaw: RawJsonlMessage[] = []
+  let foundSourceFile = false
+  let firstLoadedPath = ''
+  let firstLoadedSource: SessionSource | null = null
+
   for (const src of meta.sourceFilePaths) {
     try {
-      if (fs.existsSync(src)) {
-        const raw = await parseSessionFile(src)
-        allRaw.push(...raw)
+      if (!fs.existsSync(src)) continue
+      foundSourceFile = true
+      const source = detectSourceForTranscript(meta, src)
+      const raw = await loadRawFileForTranscript(src, source, meta.sessionId)
+      if (!firstLoadedPath) {
+        firstLoadedPath = src
+        firstLoadedSource = source
       }
+      allRaw.push(...raw)
     } catch { /* skip */ }
   }
-  if (allRaw.length === 0) return
 
-  const summary = buildSessionSummary(meta.sourceFilePaths[0], allRaw, true, meta.sessionId)
-  if (!summary) return
+  if (allRaw.length > 0) {
+    return {
+      raw: allRaw,
+      source: firstLoadedSource || detectSourceFromPath(meta.sourceFilePaths[0]) || 'claude-code',
+      filePath: firstLoadedPath || meta.sourceFilePaths[0]
+    }
+  }
 
+  if (!foundSourceFile && dirPath) {
+    const backupPath = path.join(dirPath, BACKUP_FILE)
+    if (fs.existsSync(backupPath)) {
+      const source = detectSourceForTranscript(meta, backupPath)
+      try {
+        return {
+          raw: await loadRawFileForTranscript(backupPath, source, meta.sessionId),
+          source,
+          filePath: backupPath
+        }
+      } catch { /* fall through */ }
+    }
+  }
+
+  return {
+    raw: [],
+    source: detectSourceFromPath(meta.sourceFilePaths[0]) || 'claude-code',
+    filePath: meta.sourceFilePaths[0] || (dirPath ? path.join(dirPath, BACKUP_FILE) : '')
+  }
+}
+
+function extractToolUsageForTranscript(rawMessages: RawJsonlMessage[]): Record<string, number> {
+  const toolUsage: Record<string, number> = {}
+  for (const msg of rawMessages) {
+    if (msg.type !== 'assistant' || !msg.message || !Array.isArray(msg.message.content)) continue
+    for (const part of msg.message.content) {
+      if (part.type !== 'tool_use' || !part.name) continue
+      toolUsage[part.name] = (toolUsage[part.name] || 0) + 1
+    }
+  }
+  return toolUsage
+}
+
+function buildTranscriptSummaryForWrite(meta: SessionMeta, loaded: LoadedTranscriptRaw): TranscriptSummaryForWrite | null {
+  if (loaded.raw.length === 0) return null
+
+  if (loaded.source === 'claude-code') {
+    const summary = buildSessionSummary(loaded.filePath, loaded.raw, true, meta.sessionId)
+    if (!summary) return null
+    return {
+      updatedAt: summary.updatedAt,
+      turnCount: summary.turnCount,
+      firstUserMessage: summary.firstUserMessage,
+      toolUsage: summary.toolUsage
+    }
+  }
+
+  const validMessages = loaded.raw.filter((m) => (m.type === 'user' || m.type === 'assistant') && m.message)
+  if (validMessages.length === 0) return null
+
+  const userMessages = validMessages.filter((m) => m.type === 'user' && extractText(m.message?.content).trim())
+  const assistantMessages = validMessages.filter((m) => {
+    if (m.type !== 'assistant') return false
+    const hasText = extractText(m.message?.content).trim().length > 0
+    const hasTool = Array.isArray(m.message?.content) && m.message.content.some((p) => p.type === 'tool_use' && p.name)
+    return hasText || hasTool
+  })
+  const timestamps = loaded.raw.map((m) => m.timestamp).filter(Boolean).sort()
+  const firstUserMessage = userMessages.length > 0
+    ? extractText(userMessages[0].message?.content).slice(0, 200)
+    : meta.sessionId
+
+  return {
+    updatedAt: timestamps[timestamps.length - 1] || meta.updatedAt,
+    turnCount: Math.min(userMessages.length, assistantMessages.length),
+    firstUserMessage,
+    toolUsage: extractToolUsageForTranscript(loaded.raw)
+  }
+}
+
+function writeTranscriptFromLoadedRaw(
+  sessionId: string,
+  dirPath: string,
+  meta: SessionMeta,
+  loaded: LoadedTranscriptRaw,
+  summary: TranscriptSummaryForWrite,
+  customTitle?: string
+): void {
   const title = customTitle || meta.customTitle || summary.firstUserMessage?.slice(0, 60) || sessionId.slice(0, 12)
-  const md = generateTranscript(allRaw, title, {
+  const md = generateTranscript(loaded.raw, title, {
     createdAt: meta.createdAt,
     turnCount: summary.turnCount,
     toolUsage: summary.toolUsage
@@ -720,12 +885,33 @@ export async function updateTranscript(sessionId: string, customTitle?: string):
   writeSessionMeta(dirPath, meta)
 }
 
+export async function updateTranscript(sessionId: string, customTitle?: string): Promise<boolean> {
+  const dirPath = sessionIndex.get(sessionId)
+  if (!dirPath) return false
+
+  const meta = readSessionMeta(dirPath)
+  if (!meta) return false
+
+  const loaded = await loadRawFromMeta(meta, dirPath)
+  const summary = buildTranscriptSummaryForWrite(meta, loaded)
+  if (!summary) return false
+
+  writeTranscriptFromLoadedRaw(sessionId, dirPath, meta, loaded, summary, customTitle)
+  return true
+}
+
 export interface RebuildTranscriptsResult {
   libraryRoot: string
   dryRun: boolean
+  missingOnly: boolean
   sessionCount: number
   branchCount: number
   transcriptCount: number
+  written: number
+  skipped: number
+  failed: number
+  failedSessionIds: string[]
+  wouldWrite: number
 }
 
 function collectLibrarySessions(tree: LibraryTree): LibrarySession[] {
@@ -738,47 +924,61 @@ function collectLibrarySessions(tree: LibraryTree): LibrarySession[] {
   return sessions
 }
 
-async function loadRawFromMeta(meta: SessionMeta): Promise<RawJsonlMessage[]> {
-  const allRaw: RawJsonlMessage[] = []
-  for (const src of meta.sourceFilePaths) {
-    try {
-      if (fs.existsSync(src)) {
-        const raw = await parseSessionFile(src)
-        allRaw.push(...raw)
-      }
-    } catch { /* skip */ }
-  }
-  return allRaw
-}
-
-export async function rebuildAllTranscripts(options: { dryRun?: boolean } = {}): Promise<RebuildTranscriptsResult> {
+export async function rebuildAllTranscripts(options: { dryRun?: boolean; missingOnly?: boolean } = {}): Promise<RebuildTranscriptsResult> {
   const dryRun = options.dryRun === true
+  const missingOnly = options.missingOnly === true
   const tree = scanLibrary()
   const sessions = collectLibrarySessions(tree)
   const config = loadLibraryConfig()
   let branchCount = 0
+  let written = 0
+  let skipped = 0
+  let wouldWrite = 0
+  const failedSessionIds: string[] = []
 
   for (const session of sessions) {
-    const raw = await loadRawFromMeta(session.meta)
-    const branches = raw.length > 0 ? detectIntraFileBranches(raw) : []
+    if (missingOnly && fs.existsSync(session.mdPath)) {
+      skipped++
+      continue
+    }
+
+    const loaded = await loadRawFromMeta(session.meta, session.dirPath)
+    const summary = buildTranscriptSummaryForWrite(session.meta, loaded)
+    if (loaded.raw.length === 0 || !summary) {
+      failedSessionIds.push(session.sessionId)
+      continue
+    }
+
+    const branches = loaded.source === 'claude-code' ? detectIntraFileBranches(loaded.raw) : []
     branchCount += branches.length
 
-    if (dryRun) continue
+    if (dryRun) {
+      wouldWrite += 1 + branches.length
+      continue
+    }
 
-    await updateTranscript(session.sessionId, session.meta.customTitle)
+    writeTranscriptFromLoadedRaw(session.sessionId, session.dirPath, session.meta, loaded, summary, session.meta.customTitle)
+    written++
     for (let idx = 0; idx < branches.length; idx++) {
       const branchId = `${session.sessionId}:intra-${idx}`
       const branchTitle = config.branchMeta?.[branchId]?.customTitle
-      await updateBranchTranscript(branchId, branches[idx].leafUuid, branchTitle)
+      const branchMd = await updateBranchTranscript(branchId, branches[idx].leafUuid, branchTitle)
+      if (branchMd) written++
     }
   }
 
   return {
     libraryRoot: _root,
     dryRun,
+    missingOnly,
     sessionCount: sessions.length,
     branchCount,
-    transcriptCount: sessions.length + branchCount
+    transcriptCount: dryRun ? wouldWrite : written,
+    written,
+    skipped,
+    failed: failedSessionIds.length,
+    failedSessionIds,
+    wouldWrite: dryRun ? wouldWrite : written
   }
 }
 

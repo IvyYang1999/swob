@@ -63,6 +63,13 @@ describe('CLI parseArgs', () => {
     expect(cmd).toEqual(['folder', 'create', '我的项目'])
     expect(flags.parent).toBe('swob/主开发')
   })
+
+  it('【曾经的 bug】transcript rebuild 解析 --missing-only flag', () => {
+    const { cmd, flags } = parseArgs(['transcript', 'rebuild', '--all', '--missing-only'])
+    expect(cmd).toEqual(['transcript', 'rebuild'])
+    expect(flags.all).toBe(true)
+    expect(flags['missing-only']).toBe(true)
+  })
 })
 
 describe('CLI formatTokens', () => {

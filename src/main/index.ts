@@ -423,11 +423,20 @@ function startCodexWatcher(): void {
     try {
       const summary = await buildCodexSessionSummary(filePath)
       if (!summary) return
-      if (knownSessionIds.has(summary.id)) {
+      let dirPath: string | undefined
+      if (libraryInitialized) {
+        try {
+          dirPath = await ensureSessionInLibrary(summary)
+          await updateTranscript(summary.sessionId)
+          await syncBackup(summary.sessionId)
+        } catch { /* ignore */ }
+      }
+      annotateSessionForFrontend(summary, dirPath)
+      if (knownSessionIds.has(summary.id) || knownSessionIds.has(summary.sessionId)) {
         mainWindow?.webContents.send('sessions:refresh')
       } else {
         knownSessionIds.add(summary.id)
-        annotateSessionForFrontend(summary)
+        knownSessionIds.add(summary.sessionId)
         mainWindow?.webContents.send('session:added', summary)
       }
     } catch { /* ignore */ }
@@ -449,11 +458,20 @@ function startCursorWatcher(): void {
     try {
       const summary = await buildCursorSessionSummary(filePath)
       if (!summary) return
-      if (knownSessionIds.has(summary.id)) {
+      let dirPath: string | undefined
+      if (libraryInitialized) {
+        try {
+          dirPath = await ensureSessionInLibrary(summary)
+          await updateTranscript(summary.sessionId)
+          await syncBackup(summary.sessionId)
+        } catch { /* ignore */ }
+      }
+      annotateSessionForFrontend(summary, dirPath)
+      if (knownSessionIds.has(summary.id) || knownSessionIds.has(summary.sessionId)) {
         mainWindow?.webContents.send('sessions:refresh')
       } else {
         knownSessionIds.add(summary.id)
-        annotateSessionForFrontend(summary)
+        knownSessionIds.add(summary.sessionId)
         mainWindow?.webContents.send('session:added', summary)
       }
     } catch { /* ignore */ }

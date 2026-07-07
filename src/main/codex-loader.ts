@@ -65,6 +65,13 @@ async function parseCodexFile(filePath: string): Promise<CodexLine[]> {
   return lines
 }
 
+export async function loadCodexRawMessages(filePath: string, sessionIdOverride?: string): Promise<RawJsonlMessage[]> {
+  const lines = await parseCodexFile(filePath)
+  const sessionId = sessionIdOverride || extractSessionId(filePath, lines)
+  if (!sessionId) return []
+  return codexToRawMessages(lines, sessionId)
+}
+
 // --- Extract session ID from filename or meta ---
 
 function extractSessionId(filePath: string, lines: CodexLine[]): string | undefined {

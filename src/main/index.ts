@@ -12,7 +12,8 @@ import {
   findAllSessionFiles,
   parseSessionFile,
   buildSessionSummary,
-  resolvePhysicalSessionId
+  resolvePhysicalSessionId,
+  buildSessionSummaryFromBackup
 } from './session-loader'
 import { findCodexSessionFiles, buildCodexSessionSummary } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary } from './cursor-loader'
@@ -629,8 +630,7 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
     const libraryOnly = findLibraryOnlySessions(localIds)
     for (const { sessionId, backupPath, meta } of libraryOnly) {
       try {
-        const raw = await parseSessionFile(backupPath)
-        const summary = buildSessionSummary(backupPath, raw, true, sessionId)
+        const summary = await buildSessionSummaryFromBackup(backupPath, sessionId, meta)
         if (summary) {
           if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
@@ -816,8 +816,7 @@ ipcMain.handle('sessions:loadAll', async () => {
     const libraryOnly = findLibraryOnlySessions(localIds)
     for (const { sessionId, backupPath, meta } of libraryOnly) {
       try {
-        const raw = await parseSessionFile(backupPath)
-        const summary = buildSessionSummary(backupPath, raw, true, sessionId)
+        const summary = await buildSessionSummaryFromBackup(backupPath, sessionId, meta)
         if (summary) {
           if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]

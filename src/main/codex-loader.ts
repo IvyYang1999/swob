@@ -218,9 +218,9 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
 
 // --- Build summary ---
 
-export async function buildCodexSessionSummary(filePath: string): Promise<SessionSummary | null> {
+export async function buildCodexSessionSummary(filePath: string, sessionIdOverride?: string): Promise<SessionSummary | null> {
   const lines = await parseCodexFile(filePath)
-  const sessionId = extractSessionId(filePath, lines)
+  const sessionId = sessionIdOverride || extractSessionId(filePath, lines)
   if (!sessionId) return null
 
   const rawMessages = codexToRawMessages(lines, sessionId)
@@ -311,14 +311,21 @@ export async function buildCodexSessionSummary(filePath: string): Promise<Sessio
   }
 }
 
+export async function buildCodexSessionSummaryFromBackup(
+  filePath: string,
+  sessionIdOverride?: string
+): Promise<SessionSummary | null> {
+  return buildCodexSessionSummary(filePath, sessionIdOverride)
+}
+
 // --- Build detail ---
 
-export async function buildCodexSessionDetail(filePath: string): Promise<SessionDetail | null> {
+export async function buildCodexSessionDetail(filePath: string, sessionIdOverride?: string): Promise<SessionDetail | null> {
   const lines = await parseCodexFile(filePath)
-  const sessionId = extractSessionId(filePath, lines)
+  const sessionId = sessionIdOverride || extractSessionId(filePath, lines)
   if (!sessionId) return null
 
-  const summary = await buildCodexSessionSummary(filePath)
+  const summary = await buildCodexSessionSummary(filePath, sessionId)
   if (!summary) return null
 
   const rawMessages = codexToRawMessages(lines, sessionId)

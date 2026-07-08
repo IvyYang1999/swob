@@ -252,11 +252,11 @@ function cleanUserText(text: string): string {
 
 // --- Build summary ---
 
-export async function buildCursorSessionSummary(filePath: string): Promise<SessionSummary | null> {
+export async function buildCursorSessionSummary(filePath: string, sessionIdOverride?: string): Promise<SessionSummary | null> {
   const lines = await parseCursorFile(filePath)
   if (lines.length === 0) return null
 
-  const sessionId = extractSessionId(filePath)
+  const sessionId = sessionIdOverride || extractSessionId(filePath)
   const rawMessages = cursorToRawMessages(lines, sessionId, filePath)
   if (rawMessages.length === 0) return null
 
@@ -335,14 +335,21 @@ export async function buildCursorSessionSummary(filePath: string): Promise<Sessi
   }
 }
 
+export async function buildCursorSessionSummaryFromBackup(
+  filePath: string,
+  sessionIdOverride: string
+): Promise<SessionSummary | null> {
+  return buildCursorSessionSummary(filePath, sessionIdOverride)
+}
+
 // --- Build detail ---
 
-export async function buildCursorSessionDetail(filePath: string): Promise<SessionDetail | null> {
-  const summary = await buildCursorSessionSummary(filePath)
+export async function buildCursorSessionDetail(filePath: string, sessionIdOverride?: string): Promise<SessionDetail | null> {
+  const summary = await buildCursorSessionSummary(filePath, sessionIdOverride)
   if (!summary) return null
 
   const lines = await parseCursorFile(filePath)
-  const sessionId = extractSessionId(filePath)
+  const sessionId = sessionIdOverride || extractSessionId(filePath)
   const rawMessages = cursorToRawMessages(lines, sessionId, filePath)
 
   const messages: ParsedMessage[] = rawMessages

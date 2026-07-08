@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   buildSessionSummary,
+  buildSessionSummaryFromBackup,
   buildSessionDetail,
   loadSessionDetail,
   detectIntraFileBranches,
@@ -56,6 +57,53 @@ function writeJsonlAt(filePath: string, messages: RawJsonlMessage[]): string {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, messages.map((m) => JSON.stringify(m)).join('\n'))
   return filePath
+}
+
+function writeObjectJsonl(fileName: string, rows: unknown[]): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-backup-test-'))
+  const fp = path.join(dir, fileName)
+  fs.writeFileSync(fp, rows.map((row) => JSON.stringify(row)).join('\n'))
+  return fp
+}
+
+function codexBackupRows(sessionId: string): unknown[] {
+  return [
+    {
+      timestamp: '2026-07-07T00:00:00Z',
+      type: 'session_meta',
+      payload: {
+        id: sessionId,
+        timestamp: '2026-07-07T00:00:00Z',
+        cwd: '/Users/test/projects/codex-app',
+        cli_version: 'codex-test'
+      }
+    },
+    {
+      timestamp: '2026-07-07T00:00:01Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '从 Codex backup 建 summary' }]
+      }
+    },
+    {
+      timestamp: '2026-07-07T00:00:02Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'Codex backup summary 已恢复。' }]
+      }
+    }
+  ]
+}
+
+function cursorBackupRows(prompt = '从 Cursor backup 建 detail'): unknown[] {
+  return [
+    { role: 'user', message: { content: `<user_query>${prompt}</user_query>` } },
+    { role: 'assistant', message: { content: [{ type: 'text', text: 'Cursor backup 已恢复。' }] } }
+  ]
 }
 
 function sharedCrossSessionPrefix(sessionId: string): RawJsonlMessage[] {
@@ -345,6 +393,120 @@ describe('buildSessionSummary', () => {
     const summary = buildSessionSummary(fp, msgs)
 
     expect(summary!.firstUserMessage).toBe('看看这张图')
+  })
+})
+
+describe('buildSessionSummaryFromBackup', () => {
+  it('【曾经的 bug】codex backup.jsonl 无本机源时应该建出非 null summary', async () => {
+    const sessionId = '22222222-2222-4222-8222-222222222222'
+    const fp = writeObjectJsonl('backup.jsonl', codexBackupRows(sessionId))
+
+    const summary = await buildSessionSummaryFromBackup(fp, sessionId, {
+      sourceFilePaths: ['/missing/unknown-source.jsonl']
+    })
+
+    expect(summary).not.toBeNull()
+    expect(summary!.source).toBe('codex')
+    expect(summary!.id).toBe(`codex:${sessionId}`)
+    expect(summary!.sessionId).toBe(sessionId)
+    expect(summary!.firstUserMessage).toBe('从 Codex backup 建 summary')
+  })
+
+  it('【曾经的 bug】claude backup.jsonl 仍然走 Claude parser', async () => {
+    const sessionId = 'claude-backup-123'
+    const fp = writeObjectJsonl('backup.jsonl', [
+      rawMsg({
+        type: 'user',
+        sessionId,
+        timestamp: '2026-07-07T00:00:00Z',
+        message: { role: 'user', content: 'Claude backup 不能回归' }
+      }),
+      rawMsg({
+        type: 'assistant',
+        sessionId,
+        timestamp: '2026-07-07T00:00:01Z',
+        message: { role: 'assistant', content: '收到' }
+      })
+    ])
+
+    const summary = await buildSessionSummaryFromBackup(fp, sessionId, {
+      sourceFilePaths: ['/missing/unknown-source.jsonl']
+    })
+
+    expect(summary).not.toBeNull()
+    expect(summary!.source).toBe('claude-code')
+    expect(summary!.sessionId).toBe(sessionId)
+    expect(summary!.firstUserMessage).toBe('Claude backup 不能回归')
+  })
+
+  it('backup source path 与内容冲突时 summary 优先使用 backup 内容来源', async () => {
+    const sessionId = 'cursor-backup-conflict'
+    const fp = writeObjectJsonl('backup.jsonl', cursorBackupRows('Cursor 内容优先'))
+
+    const summary = await buildSessionSummaryFromBackup(fp, sessionId, {
+      sourceFilePaths: [
+        '/Users/test/.codex/sessions/2026/07/07/rollout-2026-07-07T00-00-00-00000000-0000-4000-8000-000000000000.jsonl'
+      ]
+    })
+
+    expect(summary).not.toBeNull()
+    expect(summary!.source).toBe('cursor')
+    expect(summary!.id).toBe(`cursor:${sessionId}`)
+    expect(summary!.sessionId).toBe(sessionId)
+    expect(summary!.firstUserMessage).toBe('Cursor 内容优先')
+  })
+})
+
+describe('loadSessionDetail source-aware backup', () => {
+  it('【曾经的 bug】loadSessionDetail 喂 codex backup.jsonl 应返回非 null detail', async () => {
+    const sessionId = '33333333-3333-4333-8333-333333333333'
+    const fp = writeObjectJsonl('backup.jsonl', codexBackupRows(sessionId))
+
+    const detail = await loadSessionDetail(fp)
+
+    expect(detail).not.toBeNull()
+    expect(detail!.source).toBe('codex')
+    expect(detail!.sessionId).toBe(sessionId)
+    expect(detail!.messages.length).toBeGreaterThan(0)
+  })
+
+  it('cursor backup.jsonl 缺 .swob-session.json 时不使用父目录名生成错误 id', async () => {
+    const fp = writeObjectJsonl('backup.jsonl', cursorBackupRows())
+
+    const detail = await loadSessionDetail(fp)
+
+    expect(detail).toBeNull()
+  })
+
+  it('cursor backup.jsonl 的 .swob-session.json 缺 sessionId 时不使用父目录名生成错误 id', async () => {
+    const fp = writeObjectJsonl('backup.jsonl', cursorBackupRows())
+    fs.writeFileSync(path.join(path.dirname(fp), '.swob-session.json'), JSON.stringify({ sourceFilePaths: [] }))
+
+    const detail = await loadSessionDetail(fp)
+
+    expect(detail).toBeNull()
+  })
+
+  it('cursor 正常源目录 detail 仍然使用父目录名作为 sessionId', async () => {
+    const sessionId = 'cursor-normal-session'
+    const fp = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cursor-normal-')),
+      '.cursor',
+      'projects',
+      '-Users-test-project',
+      'agent-transcripts',
+      sessionId,
+      `${sessionId}.jsonl`
+    )
+    fs.mkdirSync(path.dirname(fp), { recursive: true })
+    fs.writeFileSync(fp, cursorBackupRows('Cursor 正常源目录').map((row) => JSON.stringify(row)).join('\n'))
+
+    const detail = await loadSessionDetail(fp)
+
+    expect(detail).not.toBeNull()
+    expect(detail!.source).toBe('cursor')
+    expect(detail!.sessionId).toBe(sessionId)
+    expect(detail!.id).toBe(`cursor:${sessionId}`)
   })
 })
 

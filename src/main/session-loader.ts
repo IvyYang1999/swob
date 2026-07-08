@@ -12,9 +12,10 @@ import type {
   FileAction,
   TokenUsage
 } from './types'
-import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetail } from './codex-loader'
-import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail } from './cursor-loader'
+import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetail, buildCodexSessionSummaryFromBackup } from './codex-loader'
+import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup } from './cursor-loader'
 import { estimateActiveTime } from './insights'
+import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
 
 const HOME = process.env.HOME || ''
 
@@ -1178,6 +1179,34 @@ function createSessionCluster(
   }
 }
 
+type BackupSummaryMeta = {
+  sourceFilePaths?: string[]
+}
+
+export async function buildSessionSummaryFromBackup(
+  backupPath: string,
+  sessionIdOverride: string,
+  meta?: BackupSummaryMeta
+): Promise<SessionSummary | null> {
+  const source = detectSessionSourceForJsonl(backupPath, meta?.sourceFilePaths || [])
+  if (source === 'codex') return buildCodexSessionSummaryFromBackup(backupPath, sessionIdOverride)
+  if (source === 'cursor') return buildCursorSessionSummaryFromBackup(backupPath, sessionIdOverride)
+
+  const raw = await parseSessionFile(backupPath)
+  return buildSessionSummary(backupPath, raw, true, sessionIdOverride)
+}
+
+function readBackupSessionIdOverride(filePath: string): string | undefined {
+  if (path.basename(filePath) !== 'backup.jsonl') return undefined
+  try {
+    const metaPath = path.join(path.dirname(filePath), '.swob-session.json')
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+    return typeof meta.sessionId === 'string' ? meta.sessionId : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function buildInitialSessionClusters(filesBySession: Map<string, FileEntry[]>): SessionCluster[] {
   const initialClusters: SessionCluster[] = []
 
@@ -1577,11 +1606,12 @@ export async function loadSessionDetail(
   branchLeafUuid?: string
 ): Promise<SessionDetail | null> {
   // Dispatch to source-specific loaders
-  if (filePath.includes('/.codex/sessions/') && filePath.includes('rollout-')) {
-    return buildCodexSessionDetail(filePath)
-  }
-  if (filePath.includes('/.cursor/projects/') && filePath.includes('agent-transcripts')) {
-    return buildCursorSessionDetail(filePath)
+  const source = detectSessionSourceFromPath(filePath) || sniffSessionSourceFromJsonl(filePath)
+  if (source === 'codex') return buildCodexSessionDetail(filePath, readBackupSessionIdOverride(filePath))
+  if (source === 'cursor') {
+    const sessionIdOverride = readBackupSessionIdOverride(filePath)
+    if (path.basename(filePath) === 'backup.jsonl' && !sessionIdOverride) return null
+    return buildCursorSessionDetail(filePath, sessionIdOverride)
   }
 
   let mainRaw: RawJsonlMessage[]

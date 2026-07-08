@@ -5,6 +5,7 @@ import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIn
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
 import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
+import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
 
 // ============ Types ============
@@ -697,64 +698,8 @@ interface TranscriptSummaryForWrite {
   toolUsage: Record<string, number>
 }
 
-function detectSourceFromPath(filePath?: string): SessionSource | null {
-  if (!filePath) return null
-  const normalized = filePath.split(path.sep).join('/')
-  if (normalized.includes('/.codex/sessions/')) return 'codex'
-  if (normalized.includes('/.cursor/projects/')) return 'cursor'
-  if (normalized.includes('/.claude/projects/') || normalized.includes('/.claude-window/')) return 'claude-code'
-  return null
-}
-
-function readFirstJsonlObject(filePath: string): Record<string, unknown> | null {
-  let fd: number | null = null
-  try {
-    fd = fs.openSync(filePath, 'r')
-    const buffer = Buffer.alloc(8192)
-    let pending = ''
-    let position = 0
-
-    while (position < 1024 * 1024) {
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position)
-      if (bytesRead === 0) break
-      position += bytesRead
-      pending += buffer.toString('utf-8', 0, bytesRead)
-      const lines = pending.split(/\r?\n/)
-      pending = lines.pop() || ''
-      for (const line of lines) {
-        if (!line.trim()) continue
-        return JSON.parse(line)
-      }
-    }
-
-    if (pending.trim()) return JSON.parse(pending)
-  } catch {
-    return null
-  } finally {
-    if (fd !== null) {
-      try { fs.closeSync(fd) } catch { /* ignore */ }
-    }
-  }
-  return null
-}
-
-function sniffSourceFromJsonl(filePath: string): SessionSource | null {
-  const first = readFirstJsonlObject(filePath)
-  if (!first) return null
-  if (Object.prototype.hasOwnProperty.call(first, 'payload')) return 'codex'
-  if (
-    Object.prototype.hasOwnProperty.call(first, 'role') &&
-    Object.prototype.hasOwnProperty.call(first, 'message') &&
-    !Object.prototype.hasOwnProperty.call(first, 'type')
-  ) return 'cursor'
-  return 'claude-code'
-}
-
 function detectSourceForTranscript(meta: SessionMeta, filePath: string): SessionSource {
-  return detectSourceFromPath(meta.sourceFilePaths[0]) ||
-    detectSourceFromPath(filePath) ||
-    sniffSourceFromJsonl(filePath) ||
-    'claude-code'
+  return detectSessionSourceForJsonl(filePath, meta.sourceFilePaths, { preferSourcePaths: true })
 }
 
 async function loadRawFileForTranscript(filePath: string, source: SessionSource, sessionId: string): Promise<RawJsonlMessage[]> {
@@ -786,7 +731,7 @@ async function loadRawFromMeta(meta: SessionMeta, dirPath?: string): Promise<Loa
   if (allRaw.length > 0) {
     return {
       raw: allRaw,
-      source: firstLoadedSource || detectSourceFromPath(meta.sourceFilePaths[0]) || 'claude-code',
+      source: firstLoadedSource || detectSessionSourceFromPath(meta.sourceFilePaths[0]) || 'claude-code',
       filePath: firstLoadedPath || meta.sourceFilePaths[0]
     }
   }
@@ -807,7 +752,7 @@ async function loadRawFromMeta(meta: SessionMeta, dirPath?: string): Promise<Loa
 
   return {
     raw: [],
-    source: detectSourceFromPath(meta.sourceFilePaths[0]) || 'claude-code',
+    source: detectSessionSourceFromPath(meta.sourceFilePaths[0]) || 'claude-code',
     filePath: meta.sourceFilePaths[0] || (dirPath ? path.join(dirPath, BACKUP_FILE) : '')
   }
 }

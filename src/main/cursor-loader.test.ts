@@ -2,13 +2,20 @@ import { describe, it, expect } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { buildCursorSessionSummary, buildCursorSessionDetail, findCursorSessionFiles } from './cursor-loader'
+import { buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup, findCursorSessionFiles } from './cursor-loader'
 
 function writeTempJsonl(lines: object[], sessionId = 'abc-def-123'): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cursor-test-'))
   const sessionDir = path.join(dir, sessionId)
   fs.mkdirSync(sessionDir, { recursive: true })
   const fp = path.join(sessionDir, `${sessionId}.jsonl`)
+  fs.writeFileSync(fp, lines.map((l) => JSON.stringify(l)).join('\n'))
+  return fp
+}
+
+function writeBackupJsonl(lines: object[]): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cursor-backup-test-'))
+  const fp = path.join(dir, 'backup.jsonl')
   fs.writeFileSync(fp, lines.map((l) => JSON.stringify(l)).join('\n'))
   return fp
 }
@@ -89,6 +96,15 @@ describe('cursor-loader', () => {
       const fp = writeTempJsonl([])
       const summary = await buildCursorSessionSummary(fp)
       expect(summary).toBeNull()
+    })
+
+    it('【曾经的 bug】cursor backup summary 应使用 override sessionId 而不是目录名', async () => {
+      const fp = writeBackupJsonl(makeCursorLines())
+      const summary = await buildCursorSessionSummaryFromBackup(fp, 'cursor-override-session')
+
+      expect(summary).not.toBeNull()
+      expect(summary!.sessionId).toBe('cursor-override-session')
+      expect(summary!.id).toBe('cursor:cursor-override-session')
     })
   })
 

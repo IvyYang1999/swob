@@ -1,4 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+import { initLibrary, scanLibrary, LOCAL_RESUME_UNAVAILABLE_REASON } from '../main/library-manager'
+import { buildCliResumeResponse } from './resume-command'
 
 // CLI 的 parseArgs 是内部函数，这里用同样的逻辑来测试
 function parseArgs(argv: string[]): { cmd: string[]; flags: Record<string, string | true> } {
@@ -116,5 +121,58 @@ describe('CLI formatTime', () => {
   it('小时级别', () => {
     expect(formatTime(3_600_000)).toBe('1.0h')
     expect(formatTime(5_400_000)).toBe('1.5h')
+  })
+})
+
+describe('CLI resume guard', () => {
+  let tmpRoot: string
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cli-resume-'))
+    initLibrary(tmpRoot)
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+  })
+
+  function writeLibraryBackupOnlySession(sessionId: string): void {
+    const dirPath = path.join(tmpRoot, sessionId)
+    fs.mkdirSync(dirPath, { recursive: true })
+    fs.writeFileSync(path.join(dirPath, '.swob-session.json'), JSON.stringify({
+      sessionId,
+      sourceFilePaths: [`/Users/other-machine/.claude/projects/-Users-other-project/${sessionId}.jsonl`],
+      createdAt: '2026-07-07T00:00:00Z',
+      updatedAt: '2026-07-07T00:01:00Z',
+      projectPath: '/Users/other-machine/project'
+    }, null, 2), 'utf-8')
+    fs.writeFileSync(path.join(dirPath, 'backup.jsonl'), JSON.stringify({
+      uuid: `${sessionId}-u1`,
+      sessionId,
+      type: 'user',
+      timestamp: '2026-07-07T00:00:00Z',
+      message: { role: 'user', content: 'hello' }
+    }) + '\n', 'utf-8')
+    scanLibrary()
+  }
+
+  it('Library-only backup-only id 返回 error，不拼 ad-hoc 假命令', async () => {
+    writeLibraryBackupOnlySession('remote-only-999')
+
+    const result = await buildCliResumeResponse('remote-only-999', {}, {
+      loadSessions: async () => []
+    })
+
+    expect(result).toEqual({ error: LOCAL_RESUME_UNAVAILABLE_REASON })
+  })
+
+  it('完全 unknown 的 ad-hoc id 仍保留兼容命令', async () => {
+    scanLibrary()
+
+    const result = await buildCliResumeResponse('totally-unknown-999', {}, {
+      loadSessions: async () => []
+    })
+
+    expect(result).toEqual({ command: 'claude --resume totally-unknown-999' })
   })
 })

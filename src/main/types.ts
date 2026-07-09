@@ -111,6 +111,8 @@ export interface SessionSummary {
   configFiles: string[]
   libraryDirPath?: string
   libraryMdPath?: string
+  canResume?: boolean
+  resumeUnavailableReason?: string
   isRemote?: boolean
   remoteHost?: string  // hostname of the device that created this session (e.g. "macbooka.local")
   source?: SessionSource

@@ -190,6 +190,8 @@ function FolderNode({
   const headerRef = useRef<HTMLDivElement>(null)
   const childFolders = allFolders.filter((f) => f.parentId === folder.id)
   const folderSessions = folder.sessionIds.map((id) => sessionMap.get(id)).filter(Boolean) as SessionSummary[]
+  const resumableFolderSessions = folderSessions.filter((s) => s.canResume !== false)
+  const blockedResumeCount = folderSessions.length - resumableFolderSessions.length
   const totalCount = folderSessions.length + childFolders.reduce((acc, cf) => acc + cf.sessionIds.length, 0)
 
   const handleDrop = (e: React.DragEvent, zone: 'inside' | 'before' | 'after') => {
@@ -261,8 +263,22 @@ function FolderNode({
           <span className="truncate flex-1">{folder.name}<span className="text-faint ml-1">({totalCount})</span></span>
         )}
         {folderSessions.length > 0 && (
-          <button onClick={(e) => { e.stopPropagation(); resumeBatch(folderSessions.map((s) => ({ sessionId: (s as any).sessionId || s.id, permissionMode: (s as any).permissionMode, cwd: resolveResumeCwd(s) }))) }}
-            className="hidden group-hover:block p-0.5 hover:text-soft-green" title={t('sidebar.batch_resume', { n: folderSessions.length })}><Play size={12} /></button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              if (resumableFolderSessions.length === 0) return
+              resumeBatch(resumableFolderSessions.map((s) => ({ sessionId: (s as any).sessionId || s.id, permissionMode: (s as any).permissionMode, cwd: resolveResumeCwd(s) })))
+            }}
+            disabled={resumableFolderSessions.length === 0}
+            className="hidden group-hover:block p-0.5 hover:text-soft-green disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-secondary"
+            title={
+              resumableFolderSessions.length === 0
+                ? (folderSessions[0]?.resumeUnavailableReason || '此会话无法直接恢复')
+                : blockedResumeCount > 0
+                  ? `${t('sidebar.batch_resume', { n: resumableFolderSessions.length })}，${blockedResumeCount} 个不可恢复将跳过`
+                  : t('sidebar.batch_resume', { n: folderSessions.length })
+            }
+          ><Play size={12} /></button>
         )}
         {!folder.id.startsWith('path-') && (
           <button onClick={(e) => { e.stopPropagation(); setCreatingSubfolderId(folder.id); if (!isExpanded) toggleFolder(folder.id) }}
@@ -320,7 +336,7 @@ function FolderNode({
 // ============ Main Sidebar ============
 
 export function Sidebar({ width }: { width: number }) {
-  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, sshConfig, refreshCloudSessions } = useStore()
+  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, resumeSession, sshConfig, refreshCloudSessions } = useStore()
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -368,13 +384,25 @@ export function Sidebar({ width }: { width: number }) {
     // Branches use session.id (contains :intra-), others use sessionId (strip codex:/cursor: prefix)
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     const opId = isBranch ? sessionId : (session?.sessionId || sessionId)
+    const canResume = !!session && !isBranch && session.canResume !== false
     const folders = (config?.folders || []).map((f) => ({
       id: f.id, name: f.name, parentId: f.parentId || null,
       isIn: f.sessionIds.includes(opId)
     }))
-    const result = await window.api.showSessionContextMenu({ sessionId: opId, folders })
+    const result = await window.api.showSessionContextMenu({
+      sessionId: opId,
+      canResume,
+      resumeUnavailableReason: isBranch
+        ? t('chat.intra_branch_not_resumable')
+        : session?.resumeUnavailableReason,
+      folders
+    })
     if (!result) return
-    if (result.action === 'rename') {
+    if (result.action === 'resume') {
+      if (session) {
+        resumeSession(opId, session.permissionMode, resolveResumeCwd(session))
+      }
+    } else if (result.action === 'rename') {
       const s = sessions.find((s) => s.id === sessionId)
       const meta = config?.sessionMeta[sessionId] || config?.sessionMeta[s?.sessionId || '']
       setSessionRenameValue(meta?.customTitle || s?.firstUserMessage || '')
@@ -384,7 +412,7 @@ export function Sidebar({ width }: { width: number }) {
     } else if (result.action === 'removeFromFolder' && result.folderId) {
       removeSessionFromFolder(result.folderId, opId)
     }
-  }, [sessions, config, addSessionToFolder, removeSessionFromFolder])
+  }, [sessions, config, addSessionToFolder, removeSessionFromFolder, resumeSession, t])
 
   const handleSubmitRenameSession = useCallback(() => {
     if (renamingSessionId && sessionRenameValue.trim()) {

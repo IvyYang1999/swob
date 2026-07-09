@@ -284,6 +284,7 @@ describe('Library-only sessions（跨设备同步）', () => {
     fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
 
     lib.scanLibrary()
+    expect(lib.getSessionResumeAvailability('lost-local-999').canResume).toBe(true)
     const result = lib.restoreBackupToClaudeSource('lost-local-999')
 
     expect(result.restored).toBe(true)

@@ -126,6 +126,13 @@ const SESSION_META_FILE = '.swob-session.json'
 const LIBRARY_CONFIG_FILE = '.swob-config.json'
 const TRANSCRIPT_FILE = 'transcript.md'
 const BACKUP_FILE = 'backup.jsonl'
+export const LOCAL_RESUME_UNAVAILABLE_REASON = '此会话数据在备份中，本机无源文件，无法直接恢复'
+
+export interface SessionResumeAvailability {
+  canResume: boolean
+  reason?: string
+  sourcePath?: string | null
+}
 
 // ============ Library Manager ============
 
@@ -295,6 +302,111 @@ function isRestorableLocalClaudeSource(sourcePath: string): boolean {
   return parts.length >= 4 && !!parts[0] && parts[1] === 'projects'
 }
 
+function backupPathForDir(dirPath?: string | null): string | null {
+  return dirPath ? path.join(dirPath, BACKUP_FILE) : null
+}
+
+function hasBackupForDir(dirPath?: string | null): boolean {
+  const backupPath = backupPathForDir(dirPath)
+  return !!backupPath && fs.existsSync(backupPath)
+}
+
+function detectSourceFromSourcePaths(sourceFilePaths: string[], fallback?: SessionSource): SessionSource {
+  for (const sourcePath of sourceFilePaths) {
+    const source = detectSessionSourceFromPath(sourcePath)
+    if (source) return source
+  }
+  return fallback || 'claude-code'
+}
+
+function sourceFilePathsFromSummary(session?: Pick<SessionSummary, 'filePath' | 'allFilePaths' | 'source'>): string[] {
+  if (!session) return []
+  const candidates = session.allFilePaths && session.allFilePaths.length > 0
+    ? session.allFilePaths
+    : [session.filePath]
+  return candidates.filter(isOriginalSessionSourcePath)
+}
+
+function sourceFilePathsFromMeta(meta: SessionMeta): string[] | null {
+  const raw = (meta as unknown as { sourceFilePaths?: unknown }).sourceFilePaths
+  if (!Array.isArray(raw)) return null
+  return raw.filter((src): src is string => typeof src === 'string' && src.length > 0)
+}
+
+function evaluateSourceResumeAvailability(
+  sourceFilePaths: string[],
+  source: SessionSource,
+  dirPath?: string | null
+): SessionResumeAvailability {
+  const existingSource = sourceFilePaths.find((src) => fs.existsSync(src))
+  if (existingSource) return { canResume: true, sourcePath: existingSource }
+
+  if (source === 'claude-code' && hasBackupForDir(dirPath)) {
+    const restorableSource = sourceFilePaths.find(isRestorableLocalClaudeSource)
+    if (restorableSource) return { canResume: true, sourcePath: restorableSource }
+  }
+
+  return {
+    canResume: false,
+    reason: LOCAL_RESUME_UNAVAILABLE_REASON,
+    sourcePath: sourceFilePaths[0] || null
+  }
+}
+
+export function getSessionResumeAvailability(
+  sessionId: string,
+  session?: Pick<SessionSummary, 'sessionId' | 'filePath' | 'allFilePaths' | 'source'>
+): SessionResumeAvailability {
+  const dirPath = sessionIndex.get(sessionId) || (session?.sessionId ? sessionIndex.get(session.sessionId) : null)
+  const meta = dirPath ? readSessionMeta(dirPath) : null
+  const summarySourceFilePaths = sourceFilePathsFromSummary(session)
+
+  if (meta) {
+    const metaSourceFilePaths = sourceFilePathsFromMeta(meta)
+    if (metaSourceFilePaths && metaSourceFilePaths.length > 0) {
+      return evaluateSourceResumeAvailability(
+        metaSourceFilePaths,
+        detectSourceFromSourcePaths(metaSourceFilePaths, session?.source),
+        dirPath
+      )
+    }
+
+    if (!metaSourceFilePaths || metaSourceFilePaths.length === 0) {
+      if (summarySourceFilePaths.length > 0) {
+        return evaluateSourceResumeAvailability(
+          summarySourceFilePaths,
+          detectSourceFromSourcePaths(summarySourceFilePaths, session?.source),
+          null
+        )
+      }
+      return {
+        canResume: false,
+        reason: LOCAL_RESUME_UNAVAILABLE_REASON,
+        sourcePath: null
+      }
+    }
+  }
+
+  if (session) {
+    const sourceFilePaths = summarySourceFilePaths
+    if (sourceFilePaths.length > 0) {
+      return evaluateSourceResumeAvailability(
+        sourceFilePaths,
+        detectSourceFromSourcePaths(sourceFilePaths, session.source),
+        null
+      )
+    }
+    return {
+      canResume: false,
+      reason: LOCAL_RESUME_UNAVAILABLE_REASON,
+      sourcePath: null
+    }
+  }
+
+  // Keep historical behavior for ad-hoc ids that are not known to the Library.
+  return { canResume: true, sourcePath: null }
+}
+
 export function restoreBackupToClaudeSource(sessionId: string): {
   restored: boolean
   sourcePath: string | null
@@ -306,11 +418,15 @@ export function restoreBackupToClaudeSource(sessionId: string): {
   const meta = readSessionMeta(dirPath)
   if (!meta) return { restored: false, sourcePath: null, reason: 'missing-meta' }
 
-  const existingSource = meta.sourceFilePaths.find((src) => fs.existsSync(src))
+  const sourceFilePaths = sourceFilePathsFromMeta(meta)
+  if (!sourceFilePaths || sourceFilePaths.length === 0) {
+    return { restored: false, sourcePath: null, reason: 'missing-source-path' }
+  }
+
+  const existingSource = sourceFilePaths.find((src) => fs.existsSync(src))
   if (existingSource) return { restored: false, sourcePath: existingSource, reason: 'source-exists' }
 
-  const sourcePath = meta.sourceFilePaths[0]
-  if (!sourcePath) return { restored: false, sourcePath: null, reason: 'missing-source-path' }
+  const sourcePath = sourceFilePaths[0]
 
   if (!isRestorableLocalClaudeSource(sourcePath)) {
     return { restored: false, sourcePath, reason: 'source-outside-local-claude-projects' }
@@ -360,7 +476,8 @@ export async function updateBranchTranscript(
 
   // Parse source files
   const allRaw: RawJsonlMessage[] = []
-  for (const src of meta.sourceFilePaths) {
+  const sourceFilePaths = sourceFilePathsFromMeta(meta) || []
+  for (const src of sourceFilePaths) {
     try {
       if (fs.existsSync(src)) {
         const raw = await parseSessionFile(src)
@@ -374,7 +491,7 @@ export async function updateBranchTranscript(
   const branchRaw = filterMessagesByBranch(allRaw, branchLeafUuid)
   if (branchRaw.length === 0) return null
 
-  const summary = buildSessionSummary(meta.sourceFilePaths[0], branchRaw, true, meta.sessionId)
+  const summary = buildSessionSummary(sourceFilePaths[0], branchRaw, true, meta.sessionId)
   if (!summary) return null
 
   const title = customTitle || summary.firstUserMessage?.slice(0, 60) || branchId.slice(0, 12)
@@ -679,7 +796,7 @@ export async function syncBackup(sessionId: string): Promise<void> {
 
   // Concatenate all source files into one backup
   const allContent: string[] = []
-  for (const src of meta.sourceFilePaths) {
+  for (const src of sourceFilePathsFromMeta(meta) || []) {
     try {
       if (detectSessionSourceFromPath(src) === 'opencode') continue
       if (fs.existsSync(src)) {
@@ -708,7 +825,7 @@ interface TranscriptSummaryForWrite {
 }
 
 function detectSourceForTranscript(meta: SessionMeta, filePath: string): SessionSource {
-  return detectSessionSourceForJsonl(filePath, meta.sourceFilePaths, { preferSourcePaths: true })
+  return detectSessionSourceForJsonl(filePath, sourceFilePathsFromMeta(meta) || [], { preferSourcePaths: true })
 }
 
 async function loadRawFileForTranscript(filePath: string, source: SessionSource, sessionId: string): Promise<RawJsonlMessage[]> {
@@ -720,11 +837,12 @@ async function loadRawFileForTranscript(filePath: string, source: SessionSource,
 
 async function loadRawFromMeta(meta: SessionMeta, dirPath?: string): Promise<LoadedTranscriptRaw> {
   const allRaw: RawJsonlMessage[] = []
+  const sourceFilePaths = sourceFilePathsFromMeta(meta) || []
   let foundSourceFile = false
   let firstLoadedPath = ''
   let firstLoadedSource: SessionSource | null = null
 
-  for (const src of meta.sourceFilePaths) {
+  for (const src of sourceFilePaths) {
     try {
       if (!fs.existsSync(sourceStatPath(src))) continue
       foundSourceFile = true
@@ -741,8 +859,8 @@ async function loadRawFromMeta(meta: SessionMeta, dirPath?: string): Promise<Loa
   if (allRaw.length > 0) {
     return {
       raw: allRaw,
-      source: firstLoadedSource || detectSessionSourceFromPath(meta.sourceFilePaths[0]) || 'claude-code',
-      filePath: firstLoadedPath || meta.sourceFilePaths[0]
+      source: firstLoadedSource || detectSessionSourceFromPath(sourceFilePaths[0]) || 'claude-code',
+      filePath: firstLoadedPath || sourceFilePaths[0]
     }
   }
 
@@ -762,8 +880,8 @@ async function loadRawFromMeta(meta: SessionMeta, dirPath?: string): Promise<Loa
 
   return {
     raw: [],
-    source: detectSessionSourceFromPath(meta.sourceFilePaths[0]) || 'claude-code',
-    filePath: meta.sourceFilePaths[0] || (dirPath ? path.join(dirPath, BACKUP_FILE) : '')
+    source: detectSessionSourceFromPath(sourceFilePaths[0]) || 'claude-code',
+    filePath: sourceFilePaths[0] || (dirPath ? path.join(dirPath, BACKUP_FILE) : '')
   }
 }
 
@@ -1532,7 +1650,7 @@ export function findLibrarySessionsWithMissingSources(): Array<{
       if (isSessionDir(fullPath)) {
         const meta = readSessionMeta(fullPath)
         if (!meta) continue
-        const hasExistingSource = meta.sourceFilePaths.some((src) => fs.existsSync(sourceStatPath(src)))
+        const hasExistingSource = (sourceFilePathsFromMeta(meta) || []).some((src) => fs.existsSync(sourceStatPath(src)))
         const backupPath = path.join(fullPath, BACKUP_FILE)
         if (!hasExistingSource && fs.existsSync(backupPath)) {
           results.push({ sessionId: meta.sessionId, backupPath, meta })

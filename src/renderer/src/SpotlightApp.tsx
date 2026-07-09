@@ -17,6 +17,8 @@ interface SpotlightResultItem {
     resumeCwd?: string
     source?: string
     permissionMode?: string
+    canResume?: boolean
+    resumeUnavailableReason?: string
   }
   score: number
   matchedFields: string[]
@@ -105,6 +107,7 @@ export default function SpotlightApp() {
   }, [selectedIndex])
 
   const handleResume = useCallback((item: SpotlightResultItem) => {
+    if (item.session.canResume === false) return
     const cwd = item.session.resumeCwd || item.session.cwds?.[0]
     api.spotlightResume(item.session.sessionId, cwd)
   }, [])
@@ -167,11 +170,12 @@ export default function SpotlightApp() {
           {results.map((item, i) => (
             <div
               key={item.session.id}
-              className={`px-4 py-2.5 cursor-pointer flex items-start gap-3 transition-colors ${
+              className={`px-4 py-2.5 flex items-start gap-3 transition-colors ${
                 i === selectedIndex ? 'bg-accent/12' : 'hover:bg-surface'
-              }`}
+              } ${item.session.canResume === false ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}
               onClick={() => handleResume(item)}
               onMouseEnter={() => setSelectedIndex(i)}
+              title={item.session.canResume === false ? item.session.resumeUnavailableReason : undefined}
             >
               <img
                 src={sourceIcon(item.session.source)}
@@ -219,8 +223,9 @@ export default function SpotlightApp() {
                   <>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleResume(item) }}
-                      className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-active/15 text-active hover:bg-active/25 transition-colors"
-                      title="Resume (Enter)"
+                      disabled={item.session.canResume === false}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-active/15 text-active hover:bg-active/25 transition-colors disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-active/15"
+                      title={item.session.canResume === false ? item.session.resumeUnavailableReason : 'Resume (Enter)'}
                     >
                       <Play size={10} /> Resume
                     </button>

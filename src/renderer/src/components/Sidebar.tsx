@@ -121,6 +121,9 @@ function SessionItem({
         {session.source === 'cursor' && (
           <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-secondary/10 text-secondary font-medium">Cursor</span>
         )}
+        {session.source === 'opencode' && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-emerald/15 text-soft-emerald font-medium">OC</span>
+        )}
         {session.compactCount > 0 && (
           <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
         )}

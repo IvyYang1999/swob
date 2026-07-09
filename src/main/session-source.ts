@@ -7,6 +7,7 @@ export function detectSessionSourceFromPath(filePath?: string): SessionSource | 
   const normalized = filePath.split(path.sep).join('/')
   if (normalized.includes('/.codex/sessions/')) return 'codex'
   if (normalized.includes('/.cursor/projects/')) return 'cursor'
+  if (normalized.includes('/.local/share/opencode/opencode.db')) return 'opencode'
   if (normalized.includes('/.claude/projects/') || normalized.includes('/.claude-window/')) return 'claude-code'
   return null
 }

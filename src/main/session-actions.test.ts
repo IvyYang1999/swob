@@ -58,6 +58,18 @@ function summary(overrides: Partial<SessionSummary>): SessionSummary {
 }
 
 describe('session action context', () => {
+  it('opencode resume command uses opencode --session and cd cwd when available', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-opencode-resume-'))
+
+    try {
+      const command = buildResumeCommand('ses_Abc123', undefined, dir, 'opencode')
+
+      expect(command).toBe(`cd ${JSON.stringify(dir)} && opencode --session ses_Abc123`)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('Claude Window session should recover config dir and original cwd from JSONL even when summary is stale', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-action-home-'))
     const configDir = path.join(home, '.claude-window', '17db0051cdfc')

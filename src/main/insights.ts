@@ -72,11 +72,12 @@ export interface InsightsData {
   heatmap: HeatmapEntry[]
 }
 
-const SOURCE_ORDER = ['claude-code', 'codex', 'cursor'] as const
+const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode'] as const
 const SOURCE_LABELS: Record<string, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
-  cursor: 'Cursor'
+  cursor: 'Cursor',
+  opencode: 'opencode'
 }
 
 function getProjectFromCwds(cwds: string[]): { project: string; fullPath: string } {

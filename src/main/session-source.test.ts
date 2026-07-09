@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { detectSessionSourceForJsonl } from './session-source'
+import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 
 function writeBackupJsonl(rows: unknown[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-source-test-'))
@@ -12,6 +12,12 @@ function writeBackupJsonl(rows: unknown[]): string {
 }
 
 describe('detectSessionSourceForJsonl', () => {
+  it('opencode DB source ref 按路径识别来源', () => {
+    const source = detectSessionSourceFromPath('/Users/test/.local/share/opencode/opencode.db#ses_Abc123')
+
+    expect(source).toBe('opencode')
+  })
+
   it('backup/detail 场景 source path 与内容冲突时优先嗅探内容', () => {
     const backupPath = writeBackupJsonl([
       { role: 'user', message: { content: 'Cursor backup content' } }

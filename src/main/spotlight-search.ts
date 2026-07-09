@@ -11,7 +11,8 @@ export interface SpotlightResult {
 const SOURCE_ALIASES: Record<string, string[]> = {
   'claude-code': ['cc', 'claude', 'claudecode', 'claude-code'],
   codex: ['codex', 'openai', 'gpt'],
-  cursor: ['cursor']
+  cursor: ['cursor'],
+  opencode: ['opencode', 'glm', 'zcode']
 }
 
 const TIME_ALIASES: Record<string, () => number> = {

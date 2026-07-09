@@ -4,6 +4,7 @@ import * as os from 'os'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
+import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loader'
 import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
@@ -73,12 +74,19 @@ const APP_CONFIG_DIR = path.join(os.homedir(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 
 function isOriginalSessionSourcePath(filePath: string): boolean {
-  if (!filePath.endsWith('.jsonl')) return false
   const normalized = filePath.split(path.sep).join('/')
+  if (normalized.includes('/.local/share/opencode/opencode.db#ses_')) return true
+  if (!filePath.endsWith('.jsonl')) return false
   return normalized.includes('/.claude/projects/') ||
     normalized.includes('/.claude-window/') ||
     normalized.includes('/.codex/sessions/') ||
     normalized.includes('/.cursor/projects/')
+}
+
+function sourceStatPath(filePath: string): string {
+  return detectSessionSourceFromPath(filePath) === 'opencode'
+    ? stripOpencodeSessionRef(filePath)
+    : filePath
 }
 
 function sourceFilePathsForMeta(session: SessionSummary): string[] {
@@ -673,6 +681,7 @@ export async function syncBackup(sessionId: string): Promise<void> {
   const allContent: string[] = []
   for (const src of meta.sourceFilePaths) {
     try {
+      if (detectSessionSourceFromPath(src) === 'opencode') continue
       if (fs.existsSync(src)) {
         allContent.push(fs.readFileSync(src, 'utf-8'))
       }
@@ -705,6 +714,7 @@ function detectSourceForTranscript(meta: SessionMeta, filePath: string): Session
 async function loadRawFileForTranscript(filePath: string, source: SessionSource, sessionId: string): Promise<RawJsonlMessage[]> {
   if (source === 'codex') return loadCodexRawMessages(filePath, sessionId)
   if (source === 'cursor') return loadCursorRawMessages(filePath, sessionId)
+  if (source === 'opencode') return loadOpencodeRawMessages(filePath, sessionId)
   return parseSessionFile(filePath)
 }
 
@@ -716,7 +726,7 @@ async function loadRawFromMeta(meta: SessionMeta, dirPath?: string): Promise<Loa
 
   for (const src of meta.sourceFilePaths) {
     try {
-      if (!fs.existsSync(src)) continue
+      if (!fs.existsSync(sourceStatPath(src))) continue
       foundSourceFile = true
       const source = detectSourceForTranscript(meta, src)
       const raw = await loadRawFileForTranscript(src, source, meta.sessionId)
@@ -1153,7 +1163,8 @@ export async function syncLibraryFromSessions(
       try {
         const mdMtime = fs.statSync(mdPath).mtimeMs
         for (const src of session.allFilePaths || [session.filePath]) {
-          if (fs.existsSync(src) && fs.statSync(src).mtimeMs > mdMtime) {
+          const statPath = sourceStatPath(src)
+          if (fs.existsSync(statPath) && fs.statSync(statPath).mtimeMs > mdMtime) {
             needsUpdate = true
             break
           }
@@ -1174,7 +1185,8 @@ export async function syncLibraryFromSessions(
       try {
         const bkMtime = fs.statSync(backupPath).mtimeMs
         for (const src of session.allFilePaths || [session.filePath]) {
-          if (fs.existsSync(src) && fs.statSync(src).mtimeMs > bkMtime) {
+          const statPath = sourceStatPath(src)
+          if (fs.existsSync(statPath) && fs.statSync(statPath).mtimeMs > bkMtime) {
             backupNeedsUpdate = true
             break
           }
@@ -1520,7 +1532,7 @@ export function findLibrarySessionsWithMissingSources(): Array<{
       if (isSessionDir(fullPath)) {
         const meta = readSessionMeta(fullPath)
         if (!meta) continue
-        const hasExistingSource = meta.sourceFilePaths.some((src) => fs.existsSync(src))
+        const hasExistingSource = meta.sourceFilePaths.some((src) => fs.existsSync(sourceStatPath(src)))
         const backupPath = path.join(fullPath, BACKUP_FILE)
         if (!hasExistingSource && fs.existsSync(backupPath)) {
           results.push({ sessionId: meta.sessionId, backupPath, meta })

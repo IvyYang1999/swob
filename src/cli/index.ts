@@ -245,6 +245,8 @@ function cmdResume(sessionId: string, flags: Record<string, string | true>): voi
     cmd = `codex resume ${sessionId}`
   } else if (source === 'cursor') {
     cmd = `cursor agent --resume ${sessionId}`
+  } else if (source === 'opencode') {
+    cmd = `opencode --session ${sessionId}`
   } else {
     cmd = skipPermissions
       ? `claude --dangerously-skip-permissions --resume ${sessionId}`
@@ -481,7 +483,7 @@ swob search "关键词"
 swob search "项目名" --limit 10
 \`\`\`
 
-返回匹配的 session 列表，按相关性排序。支持中英文、项目名、文件夹名、时间（今天/昨天/本周）、来源（cc/codex/cursor）。
+返回匹配的 session 列表，按相关性排序。支持中英文、项目名、文件夹名、时间（今天/昨天/本周）、来源（cc/codex/cursor/opencode）。
 
 ### 列出 session
 
@@ -635,7 +637,7 @@ async function main(): Promise<void> {
   --help                      显示帮助
   --limit <n>                 限制结果数量
   --folder <name>             按文件夹过滤
-  --source <source>           按来源过滤 (claude-code/codex/cursor)
+  --source <source>           按来源过滤 (claude-code/codex/cursor/opencode)
   --project <name>            按项目过滤
   --json                      输出完整 JSON
   --skip-permissions          resume 时跳过权限

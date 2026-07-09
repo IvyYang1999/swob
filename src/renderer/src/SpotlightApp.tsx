@@ -26,6 +26,7 @@ interface SpotlightResultItem {
 
 function sourceIcon(source?: string): string {
   if (source === 'codex') return openaiIcon
+  if (source === 'opencode') return openaiIcon
   if (source === 'cursor') return cursorIcon
   return claudeIcon
 }
@@ -33,12 +34,14 @@ function sourceIcon(source?: string): string {
 function sourceLabel(source?: string): string {
   if (source === 'codex') return 'Codex'
   if (source === 'cursor') return 'Cursor'
+  if (source === 'opencode') return 'OC'
   return 'CC'
 }
 
 function sourceBadgeClass(source?: string): string {
   if (source === 'codex') return 'bg-[#5a9fd4]/15 text-[#5a9fd4]'
   if (source === 'cursor') return 'bg-[#a1a1aa]/15 text-[#a1a1aa]'
+  if (source === 'opencode') return 'bg-[#4aad76]/15 text-[#4aad76]'
   return 'bg-[#c88450]/15 text-[#c88450]'
 }
 

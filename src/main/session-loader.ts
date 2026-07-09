@@ -14,6 +14,7 @@ import type {
 } from './types'
 import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetail, buildCodexSessionSummaryFromBackup } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup } from './cursor-loader'
+import { findOpencodeSessionFiles, buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, stripOpencodeSessionRef } from './opencode-loader'
 import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
 
@@ -83,7 +84,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 17 // use physical session ids for cross-session forks
+const CACHE_VERSION = 18 // add opencode source summaries
 
 interface DiskCache {
   version: number
@@ -111,7 +112,8 @@ function saveDiskCache(manifest: string, summaries: SessionSummary[]): void {
 function computeFileManifest(files: string[]): string {
   return files.sort().map((f) => {
     try {
-      const s = fs.statSync(f)
+      const statPath = detectSessionSourceFromPath(f) === 'opencode' ? stripOpencodeSessionRef(f) : f
+      const s = fs.statSync(statPath)
       return `${f}:${s.mtimeMs}:${s.size}`
     } catch {
       return ''
@@ -1191,6 +1193,7 @@ export async function buildSessionSummaryFromBackup(
   const source = detectSessionSourceForJsonl(backupPath, meta?.sourceFilePaths || [])
   if (source === 'codex') return buildCodexSessionSummaryFromBackup(backupPath, sessionIdOverride)
   if (source === 'cursor') return buildCursorSessionSummaryFromBackup(backupPath, sessionIdOverride)
+  if (source === 'opencode') return buildOpencodeSessionSummaryFromBackup(backupPath, sessionIdOverride)
 
   const raw = await parseSessionFile(backupPath)
   return buildSessionSummary(backupPath, raw, true, sessionIdOverride)
@@ -1469,7 +1472,8 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
   const allFiles = findAllSessionFiles()
   const codexFiles = findCodexSessionFiles()
   const cursorFiles = findCursorSessionFiles()
-  const manifest = computeFileManifest([...allFiles, ...codexFiles, ...cursorFiles])
+  const opencodeFiles = await findOpencodeSessionFiles()
+  const manifest = computeFileManifest([...allFiles, ...codexFiles, ...cursorFiles, ...opencodeFiles])
 
   // Fast path: return cached summaries if no files changed
   const cache = loadDiskCache()
@@ -1593,6 +1597,14 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
     } catch { /* skip */ }
   })
 
+  // --- Load opencode sessions ---
+  await parallelForEach(opencodeFiles, 4, async (file) => {
+    try {
+      const summary = await buildOpencodeSessionSummary(file)
+      if (summary) summaries.push(summary)
+    } catch { /* skip */ }
+  })
+
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   saveDiskCache(manifest, summaries)
   return summaries
@@ -1608,6 +1620,7 @@ export async function loadSessionDetail(
   // Dispatch to source-specific loaders
   const source = detectSessionSourceFromPath(filePath) || sniffSessionSourceFromJsonl(filePath)
   if (source === 'codex') return buildCodexSessionDetail(filePath, readBackupSessionIdOverride(filePath))
+  if (source === 'opencode') return buildOpencodeSessionDetail(filePath, readBackupSessionIdOverride(filePath))
   if (source === 'cursor') {
     const sessionIdOverride = readBackupSessionIdOverride(filePath)
     if (path.basename(filePath) === 'backup.jsonl' && !sessionIdOverride) return null

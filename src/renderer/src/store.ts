@@ -47,7 +47,7 @@ interface SessionSummary {
   libraryMdPath?: string
   isRemote?: boolean
   remoteHost?: string
-  source?: 'claude-code' | 'codex' | 'cursor'
+  source?: 'claude-code' | 'codex' | 'cursor' | 'opencode'
   claudeConfigDir?: string
 }
 

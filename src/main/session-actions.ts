@@ -49,6 +49,13 @@ export function buildResumeCommand(
     }
     return cmd
   }
+  if (source === 'opencode') {
+    cmd = `opencode --session ${sessionId}`
+    if (cwd && fs.existsSync(cwd)) {
+      return `cd ${JSON.stringify(cwd)} && ${cmd}`
+    }
+    return cmd
+  }
 
   cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --resume ${sessionId}`
@@ -82,6 +89,13 @@ export function buildForkCommand(
     }
     return cmd
   }
+  if (source === 'opencode') {
+    cmd = `opencode --session ${sessionId}`
+    if (cwd && fs.existsSync(cwd)) {
+      return `cd ${JSON.stringify(cwd)} && ${cmd}`
+    }
+    return cmd
+  }
 
   cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --fork-session --resume ${sessionId}`
@@ -105,7 +119,7 @@ function hasClaudeWindowPath(summary: SessionSummary, home: string): boolean {
 
 function needsSessionReload(summary: SessionSummary | undefined, home: string): boolean {
   if (!summary) return true
-  if (summary.source === 'codex' || summary.source === 'cursor') return false
+  if (summary.source === 'codex' || summary.source === 'cursor' || summary.source === 'opencode') return false
   return hasClaudeWindowPath(summary, home) && !summary.claudeConfigDir
 }
 
@@ -204,7 +218,7 @@ export async function resolveSessionActionContext(
     summary = findSessionForAction(currentSessions, requestedSessionId) || summary
   }
 
-  if (summary && summary.source !== 'codex' && summary.source !== 'cursor') {
+  if (summary && summary.source !== 'codex' && summary.source !== 'cursor' && summary.source !== 'opencode') {
     const fresh = await buildFreshClaudeSummary(summary, options.restoredSourcePath, home)
     if (fresh) summary = { ...summary, ...fresh }
   }

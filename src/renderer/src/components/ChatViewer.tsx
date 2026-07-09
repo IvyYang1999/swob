@@ -29,6 +29,9 @@ import openaiIcon from '../assets/icons/openai.png'
 import cursorIcon from '../assets/icons/cursor.png'
 
 function AssistantAvatar({ source }: { source?: string }) {
+  if (source === 'opencode') {
+    return <div className="w-7 h-7 rounded-full shrink-0 mt-0.5 bg-soft-emerald/15 text-soft-emerald flex items-center justify-center text-[10px] font-semibold">OC</div>
+  }
   const icon = source === 'codex' ? openaiIcon : source === 'cursor' ? cursorIcon : claudeIcon
   return <img src={icon} className="w-7 h-7 rounded-full shrink-0 mt-0.5" alt="" />
 }
@@ -36,6 +39,7 @@ function AssistantAvatar({ source }: { source?: string }) {
 function AssistantLabel({ source }: { source?: string }) {
   if (source === 'codex') return <span className="text-xs font-medium text-secondary">Codex</span>
   if (source === 'cursor') return <span className="text-xs font-medium text-secondary">Cursor</span>
+  if (source === 'opencode') return <span className="text-xs font-medium text-secondary">opencode</span>
   return <span className="text-xs font-medium text-secondary">Claude Code</span>
 }
 

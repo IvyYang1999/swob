@@ -27,6 +27,11 @@ import { spotlightSearch } from '../main/spotlight-search'
 import { buildInsights } from '../main/insights'
 import { installSwobCli } from '../main/cli-install'
 import { buildCliResumeResponse } from './resume-command'
+import {
+  getSessionLineagePath,
+  rebuildSessionLineageRegistry,
+  writeSessionLineageRegistry
+} from '../main/session-lineage'
 import type { SessionSummary } from '../main/types'
 import { execSync } from 'child_process'
 
@@ -240,6 +245,16 @@ async function cmdResume(sessionId: string, flags: Record<string, string | true>
   const result = await buildCliResumeResponse(sessionId, flags)
   if (result.error || !result.command) err(result.error || '此会话无法直接恢复')
   out({ command: result.command })
+}
+
+async function cmdLineage(flags: Record<string, string | true>): Promise<void> {
+  const libraryRoot = getLibraryRoot()
+  const registry = await rebuildSessionLineageRegistry(libraryRoot)
+  const registryPath = getSessionLineagePath(libraryRoot)
+  if (flags['dry-run'] !== true) {
+    writeSessionLineageRegistry(registry, registryPath)
+  }
+  out(registry)
 }
 
 function cmdFolders(): void {
@@ -481,6 +496,15 @@ swob resume <sessionId> --cwd /path/to/project
 
 返回 \`{ "command": "claude --resume ..." }\`，你可以直接执行该命令。
 
+### 重建会话血统注册表
+
+\`\`\`bash
+swob lineage
+swob lineage --dry-run
+\`\`\`
+
+重建 Library 根目录的 \`.session-lineage.json\`，输出旧 id → 最新可 resume id 的机器可读注册表。
+
 ### 列出文件夹
 
 \`\`\`bash
@@ -588,6 +612,7 @@ async function main(): Promise<void> {
   list                        列出 session
   show <sessionId>            查看 session 详情
   resume <sessionId>          获取 resume 命令
+  lineage                     重建会话血统注册表
   folders                     列出所有文件夹
   folder create <name>        创建文件夹
   folder rename <id> <name>   重命名文件夹
@@ -611,7 +636,7 @@ async function main(): Promise<void> {
   --skip-permissions          resume 时跳过权限
   --cwd <path>                resume 时指定工作目录
   --parent <id>               创建子文件夹时指定父文件夹
-  --dry-run                   transcript rebuild 只统计不写入
+  --dry-run                   lineage 只输出不写入；transcript rebuild 只统计不写入
   --missing-only              transcript rebuild 只补缺失的 transcript.md
 `)
     process.exit(0)
@@ -638,6 +663,10 @@ async function main(): Promise<void> {
       case 'resume':
         if (!cmd[1]) err('缺少 sessionId。用法: swob resume <sessionId>')
         await cmdResume(cmd[1], flags)
+        break
+
+      case 'lineage':
+        await cmdLineage(flags)
         break
 
       case 'folders':

@@ -84,20 +84,76 @@ function extractSessionId(filePath: string, lines: CodexLine[]): string | undefi
   return match?.[1]
 }
 
-const CODEX_SYSTEM_PREFIXES = [
-  '<permissions instructions>',
-  '<environment_context>',
-  'AGENTS.md instructions',
-  '<INSTRUCTIONS>',
-  '<collaboration_mode>',
-  '# Collaboration Mode:',
-  '<turn_aborted>',
-  '<user_shell_command>',
+const CODEX_AGENTS_PREFIXES = [
+  '# AGENTS.md instructions',
+  'AGENTS.md instructions'
 ]
 
-function isCodexSystemText(text: string): boolean {
+const CODEX_SYSTEM_WRAPPER_TAGS = [
+  '<permissions instructions>',
+  '<environment_context>',
+  '<user_instructions>',
+  '<INSTRUCTIONS>',
+  '<collaboration_mode>',
+  '<turn_aborted>'
+]
+
+function isWholeWrappedByCodexTag(trimmed: string, openTag: string): boolean {
+  const closeTag = openTag.replace(/^</, '</')
+  return trimmed.startsWith(openTag) && trimmed.endsWith(closeTag)
+}
+
+function isCodexAgentsInjection(trimmed: string, beforeFirstRealUser: boolean): boolean {
+  if (!beforeFirstRealUser) return false
+  if (!CODEX_AGENTS_PREFIXES.some((p) => trimmed.startsWith(p))) return false
+  return trimmed.includes('<INSTRUCTIONS>') || trimmed.length > 2000
+}
+
+function isCodexCollaborationInjection(trimmed: string, beforeFirstRealUser: boolean): boolean {
+  if (!beforeFirstRealUser) return false
+  if (!trimmed.startsWith('# Collaboration Mode:')) return false
+  return trimmed.includes('<collaboration_mode>') || trimmed.length > 2000
+}
+
+function normalizeCodexUserText(text: string, beforeFirstRealUser: boolean): string | null {
   const trimmed = text.trim()
-  return CODEX_SYSTEM_PREFIXES.some((p) => trimmed.startsWith(p))
+  if (!trimmed) return null
+
+  const shellMatch = trimmed.match(/^<user_shell_command>\s*([\s\S]*?)\s*<\/user_shell_command>$/)
+  if (shellMatch) return shellMatch[1].trim() || null
+  if (trimmed.startsWith('<user_shell_command>')) {
+    const withoutOpen = trimmed.replace(/^<user_shell_command>\s*/, '')
+    return withoutOpen.replace(/\s*<\/user_shell_command>$/, '').trim() || null
+  }
+
+  if (isCodexAgentsInjection(trimmed, beforeFirstRealUser)) return null
+  if (isCodexCollaborationInjection(trimmed, beforeFirstRealUser)) return null
+  if (CODEX_SYSTEM_WRAPPER_TAGS.some((tag) => isWholeWrappedByCodexTag(trimmed, tag))) return null
+  return text
+}
+
+function modeString(values: Array<string | undefined>): string | undefined {
+  const counts = new Map<string, { count: number; firstIdx: number }>()
+  values.forEach((value, idx) => {
+    const normalized = value?.trim()
+    if (!normalized) return
+    const current = counts.get(normalized)
+    if (current) {
+      current.count += 1
+    } else {
+      counts.set(normalized, { count: 1, firstIdx: idx })
+    }
+  })
+  return [...counts.entries()]
+    .sort(([, a], [, b]) => b.count - a.count || a.firstIdx - b.firstIdx)[0]?.[0]
+}
+
+function extractCodexModel(lines: CodexLine[]): string | undefined {
+  return modeString(lines.map((line) => {
+    if (line.type !== 'turn_context') return undefined
+    const model = (line.payload as Record<string, unknown>).model
+    return typeof model === 'string' ? model : undefined
+  }))
 }
 
 // --- Convert Codex lines to unified RawJsonlMessage[] ---
@@ -106,7 +162,9 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
   const messages: RawJsonlMessage[] = []
   const meta = lines.find((l) => l.type === 'session_meta')?.payload as unknown as CodexSessionMeta | undefined
   const cwd = meta?.cwd
+  const model = extractCodexModel(lines)
   let msgIndex = 0
+  let seenRealUserMessage = false
 
   for (const line of lines) {
     const ts = line.timestamp
@@ -124,8 +182,10 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
           type: 'assistant',
           timestamp: ts,
           cwd,
+          version: model,
           message: {
             role: 'assistant',
+            model,
             content: (p.message as string) || ''
           }
         })
@@ -140,7 +200,9 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
         if (role === 'user') {
           const content = p.content as Array<{ type: string; text: string }> | undefined
           const text = content?.filter((c) => c.type === 'input_text').map((c) => c.text).join('\n') || ''
-          if (text && !isCodexSystemText(text)) {
+          const normalizedText = normalizeCodexUserText(text, !seenRealUserMessage)
+          if (normalizedText) {
+            seenRealUserMessage = true
             messages.push({
               uuid: `codex-${sessionId}-${msgIndex++}`,
               parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
@@ -148,7 +210,8 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
               type: 'user',
               timestamp: ts,
               cwd,
-              message: { role: 'user', content: text }
+              version: model,
+              message: { role: 'user', model, content: normalizedText }
             })
           }
         } else if (role === 'assistant') {
@@ -162,7 +225,8 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
               type: 'assistant',
               timestamp: ts,
               cwd,
-              message: { role: 'assistant', content: text }
+              version: model,
+              message: { role: 'assistant', model, content: text }
             })
           }
         }
@@ -180,8 +244,10 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
           type: 'assistant',
           timestamp: ts,
           cwd,
+          version: model,
           message: {
             role: 'assistant',
+            model,
             content: [{
               type: 'tool_use',
               id: callId,
@@ -200,8 +266,10 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
           type: 'user',
           timestamp: ts,
           cwd,
+          version: model,
           message: {
             role: 'user',
+            model,
             content: [{
               type: 'tool_result',
               tool_use_id: callId,
@@ -279,7 +347,7 @@ export async function buildCodexSessionSummary(filePath: string, sessionIdOverri
   }
 
   const stat = fs.statSync(filePath)
-  const model = lines.find((l) => l.type === 'turn_context')?.payload as Record<string, unknown> | undefined
+  const model = extractCodexModel(lines)
 
   return {
     id: `codex:${sessionId}`,
@@ -291,7 +359,7 @@ export async function buildCodexSessionSummary(filePath: string, sessionIdOverri
     turnCount,
     compactCount: 0,
     cwds,
-    version: meta?.cli_version || (model?.model as string) || '',
+    version: meta?.cli_version || model || '',
     firstUserMessage,
     toolUsage,
     skillInvocations: [],
@@ -307,7 +375,7 @@ export async function buildCodexSessionSummary(filePath: string, sessionIdOverri
     configFiles: [],
     source: 'codex',
     allUserMessages,
-    models: model?.model ? [model.model as string] : []
+    models: model ? [model] : []
   }
 }
 

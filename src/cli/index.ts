@@ -25,6 +25,7 @@ import {
 import { loadConfig, saveConfig } from '../main/config-store'
 import { spotlightSearch } from '../main/spotlight-search'
 import { buildInsights } from '../main/insights'
+import { installSwobCli } from '../main/cli-install'
 import { buildCliResumeResponse } from './resume-command'
 import type { SessionSummary } from '../main/types'
 import { execSync } from 'child_process'
@@ -409,25 +410,8 @@ async function cmdInstall(): Promise<void> {
   const path = await import('path')
   const os = await import('os')
 
-  // 1. Install CLI symlink
-  const cliSource = path.join(__dirname, 'index.js')
-  const cliTarget = '/usr/local/bin/swob'
-  const wrapperScript = `#!/bin/bash\nexec node "${cliSource}" "$@"\n`
-  const wrapperPath = path.join(os.homedir(), '.claude-session-manager', 'swob-cli.sh')
-
-  const csmDir = path.join(os.homedir(), '.claude-session-manager')
-  if (!fs.existsSync(csmDir)) fs.mkdirSync(csmDir, { recursive: true })
-  fs.writeFileSync(wrapperPath, wrapperScript, { mode: 0o755 })
-
-  let cliInstalled = false
-  try {
-    if (fs.existsSync(cliTarget)) fs.unlinkSync(cliTarget)
-    fs.symlinkSync(wrapperPath, cliTarget)
-    cliInstalled = true
-  } catch {
-    // Needs sudo, fall back to advice
-    cliInstalled = false
-  }
+  // 1. Install CLI wrapper + symlink
+  const cliInstall = installSwobCli()
 
   // 2. Install skill
   const skillDir = path.join(os.homedir(), '.claude', 'skills', 'swob')
@@ -436,9 +420,12 @@ async function cmdInstall(): Promise<void> {
   fs.writeFileSync(skillPath, generateSkillContent(), 'utf-8')
 
   out({
-    cliInstalled,
-    cliPath: cliInstalled ? cliTarget : null,
-    cliManualInstall: cliInstalled ? null : `sudo ln -sf "${wrapperPath}" ${cliTarget}`,
+    cliInstalled: cliInstall.cliInstalled,
+    cliPath: cliInstall.cliPath,
+    cliManualInstall: cliInstall.cliManualInstall,
+    cliWrapperPath: cliInstall.wrapperPath,
+    cliFallbackUsed: cliInstall.fallbackUsed,
+    cliAttemptedPaths: cliInstall.attemptedCliPaths,
     skillInstalled: true,
     skillPath
   })

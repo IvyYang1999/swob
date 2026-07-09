@@ -27,6 +27,7 @@ import { spotlightSearch } from '../main/spotlight-search'
 import { buildInsights } from '../main/insights'
 import { installSwobCli } from '../main/cli-install'
 import { buildCliResumeResponse } from './resume-command'
+import { formatResolveCliOutput, resolveSessionId } from './resolve-command'
 import {
   getSessionLineagePath,
   rebuildSessionLineageRegistry,
@@ -247,6 +248,13 @@ async function cmdResume(sessionId: string, flags: Record<string, string | true>
   out({ command: result.command })
 }
 
+function cmdResolve(sessionId: string, flags: Record<string, string | true>): void {
+  const result = resolveSessionId(sessionId, getLibraryRoot())
+  const output = formatResolveCliOutput(result, flags.json === true)
+  process.stdout.write(output.stdout)
+  if (output.stderr) process.stderr.write(output.stderr)
+}
+
 async function cmdLineage(flags: Record<string, string | true>): Promise<void> {
   const libraryRoot = getLibraryRoot()
   const registry = await rebuildSessionLineageRegistry(libraryRoot)
@@ -457,7 +465,7 @@ Swob 是 Claude Code / Codex / Cursor 的会话管理工具。通过 \`swob\` CL
 
 ## 命令参考
 
-所有命令输出 JSON，可直接解析。
+除 \`swob resolve\` 默认输出纯 id 外，其他命令输出 JSON，可直接解析。
 
 ### 搜索 session
 
@@ -504,6 +512,15 @@ swob lineage --dry-run
 \`\`\`
 
 重建 Library 根目录的 \`.session-lineage.json\`，输出旧 id → 最新可 resume id 的机器可读注册表。
+
+### 解析会话真身 id
+
+\`\`\`bash
+swob resolve <sessionId>
+swob resolve <sessionId> --json
+\`\`\`
+
+读取 Library 根目录的 \`.session-lineage.json\`，把旧 id 或短 id 解析为最新可 resume 的完整 id。默认 stdout 只输出一行 id；查无或注册表不可读时原样回显输入。
 
 ### 列出文件夹
 
@@ -612,6 +629,7 @@ async function main(): Promise<void> {
   list                        列出 session
   show <sessionId>            查看 session 详情
   resume <sessionId>          获取 resume 命令
+  resolve <sessionId>         解析旧 id/短 id 到最新完整 id
   lineage                     重建会话血统注册表
   folders                     列出所有文件夹
   folder create <name>        创建文件夹
@@ -663,6 +681,14 @@ async function main(): Promise<void> {
       case 'resume':
         if (!cmd[1]) err('缺少 sessionId。用法: swob resume <sessionId>')
         await cmdResume(cmd[1], flags)
+        break
+
+      case 'resolve':
+        {
+          const resolveId = cmd[1] || (typeof flags.json === 'string' ? flags.json : undefined)
+          if (!resolveId) err('缺少 sessionId。用法: swob resolve <sessionId> [--json]')
+          cmdResolve(resolveId, { ...flags, json: flags.json ? true : flags.json })
+        }
         break
 
       case 'lineage':

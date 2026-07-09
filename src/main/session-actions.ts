@@ -4,6 +4,7 @@ import {
   getClaudeConfigDirForSessionFile,
   parseSessionFile
 } from './session-loader'
+import { shellQuote } from './resume-terminal'
 import type { RawJsonlMessage, SessionSource, SessionSummary } from './types'
 
 export interface SessionActionContext {
@@ -24,7 +25,7 @@ export interface ResolveSessionActionOptions {
 }
 
 function withClaudeConfigDir(cmd: string, claudeConfigDir?: string): string {
-  return claudeConfigDir ? `CLAUDE_CONFIG_DIR=${JSON.stringify(claudeConfigDir)} ${cmd}` : cmd
+  return claudeConfigDir ? `CLAUDE_CONFIG_DIR=${shellQuote(claudeConfigDir)} ${cmd}` : cmd
 }
 
 export function buildResumeCommand(
@@ -35,34 +36,35 @@ export function buildResumeCommand(
   claudeConfigDir?: string
 ): string {
   let cmd: string
+  const quotedSessionId = shellQuote(sessionId)
   if (source === 'codex') {
-    cmd = `codex resume ${sessionId}`
+    cmd = `codex resume ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) {
-      cmd += ` -C ${JSON.stringify(cwd)}`
+      cmd += ` -C ${shellQuote(cwd)}`
     }
     return cmd
   }
   if (source === 'cursor') {
-    cmd = `cursor agent --resume ${sessionId}`
+    cmd = `cursor agent --resume ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) {
-      return `cd ${JSON.stringify(cwd)} && ${cmd}`
+      return `cd ${shellQuote(cwd)} && ${cmd}`
     }
     return cmd
   }
   if (source === 'opencode') {
-    cmd = `opencode --session ${sessionId}`
+    cmd = `opencode --session ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) {
-      return `cd ${JSON.stringify(cwd)} && ${cmd}`
+      return `cd ${shellQuote(cwd)} && ${cmd}`
     }
     return cmd
   }
 
   cmd = permissionMode === 'bypassPermissions'
-    ? `claude --dangerously-skip-permissions --resume ${sessionId}`
-    : `claude --resume ${sessionId}`
+    ? `claude --dangerously-skip-permissions --resume ${quotedSessionId}`
+    : `claude --resume ${quotedSessionId}`
   cmd = withClaudeConfigDir(cmd, claudeConfigDir)
   if (cwd && fs.existsSync(cwd)) {
-    return `cd ${JSON.stringify(cwd)} && ${cmd}`
+    return `cd ${shellQuote(cwd)} && ${cmd}`
   }
   return cmd
 }
@@ -75,34 +77,35 @@ export function buildForkCommand(
   claudeConfigDir?: string
 ): string {
   let cmd: string
+  const quotedSessionId = shellQuote(sessionId)
   if (source === 'codex') {
-    cmd = `codex fork ${sessionId}`
+    cmd = `codex fork ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) {
-      cmd += ` -C ${JSON.stringify(cwd)}`
+      cmd += ` -C ${shellQuote(cwd)}`
     }
     return cmd
   }
   if (source === 'cursor') {
-    cmd = `cursor agent --resume ${sessionId}`
+    cmd = `cursor agent --resume ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) {
-      return `cd ${JSON.stringify(cwd)} && ${cmd}`
+      return `cd ${shellQuote(cwd)} && ${cmd}`
     }
     return cmd
   }
   if (source === 'opencode') {
-    cmd = `opencode --session ${sessionId}`
+    cmd = `opencode --session ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) {
-      return `cd ${JSON.stringify(cwd)} && ${cmd}`
+      return `cd ${shellQuote(cwd)} && ${cmd}`
     }
     return cmd
   }
 
   cmd = permissionMode === 'bypassPermissions'
-    ? `claude --dangerously-skip-permissions --fork-session --resume ${sessionId}`
-    : `claude --fork-session --resume ${sessionId}`
+    ? `claude --dangerously-skip-permissions --fork-session --resume ${quotedSessionId}`
+    : `claude --fork-session --resume ${quotedSessionId}`
   cmd = withClaudeConfigDir(cmd, claudeConfigDir)
   if (cwd && fs.existsSync(cwd)) {
-    return `cd ${JSON.stringify(cwd)} && ${cmd}`
+    return `cd ${shellQuote(cwd)} && ${cmd}`
   }
   return cmd
 }

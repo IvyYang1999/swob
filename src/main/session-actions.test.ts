@@ -6,6 +6,7 @@ import {
   buildResumeCommand,
   resolveSessionActionContext
 } from './session-actions'
+import { shellQuote } from './resume-terminal'
 import type { RawJsonlMessage, SessionSummary } from './types'
 
 function rawMsg(overrides: Partial<RawJsonlMessage> & { type: RawJsonlMessage['type'] }): RawJsonlMessage {
@@ -64,9 +65,24 @@ describe('session action context', () => {
     try {
       const command = buildResumeCommand('ses_Abc123', undefined, dir, 'opencode')
 
-      expect(command).toBe(`cd ${JSON.stringify(dir)} && opencode --session ses_Abc123`)
+      expect(command).toBe(`cd ${shellQuote(dir)} && opencode --session ${shellQuote('ses_Abc123')}`)
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('resume 命令会 shell-quote cwd 和 sessionId，避免特殊字符被 shell 解释', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-action-quote-'))
+    const dir = path.join(tmpRoot, "project '$HOME")
+    const sessionId = "abc'; touch /tmp/swob-pwn #"
+
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      const command = buildResumeCommand(sessionId, undefined, dir, 'claude-code')
+
+      expect(command).toBe(`cd ${shellQuote(dir)} && claude --resume ${shellQuote(sessionId)}`)
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true })
     }
   })
 
@@ -125,8 +141,8 @@ describe('session action context', () => {
       context.source,
       context.claudeConfigDir
     )
-    expect(command).toContain(`cd ${JSON.stringify(initialCwd)}`)
-    expect(command).toContain(`CLAUDE_CONFIG_DIR=${JSON.stringify(configDir)} claude --resume window-session`)
+    expect(command).toContain(`cd ${shellQuote(initialCwd)}`)
+    expect(command).toContain(`CLAUDE_CONFIG_DIR=${shellQuote(configDir)} claude --resume ${shellQuote('window-session')}`)
   })
 
   it('continuation id should resolve through the parent summary and keep the earliest cwd', async () => {

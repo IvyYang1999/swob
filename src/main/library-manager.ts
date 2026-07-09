@@ -7,6 +7,7 @@ import { loadCursorRawMessages } from './cursor-loader'
 import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loader'
 import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
+import { shellQuote } from './resume-terminal'
 import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
 
 // ============ Types ============
@@ -56,6 +57,8 @@ export interface LibraryConfig {
   preferences: {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
+    resumeTerminal?: 'terminal-app' | 'iterm' | 'custom'
+    resumeTerminalCommandTemplate?: string
     sshConfig?: SshConfig
     // 指定「未分组容器」：这两个文件夹的会话在 UI 底部按轮数罗列/折叠、不在树里显示。
     // 新中央会话也按轮数落进这俩文件夹。不配则为空，swob 行为完全通用。
@@ -1959,12 +1962,13 @@ export function buildSshResumeCommand(
   remoteCwd?: string | null
 ): string {
   const claudeBin = sshConfig.remotePath || 'claude'
+  const quotedSessionId = shellQuote(sessionId)
   const args = permissionMode === 'bypassPermissions'
-    ? `--dangerously-skip-permissions --resume ${sessionId}`
-    : `--resume ${sessionId}`
-  const claudeCmd = `${claudeBin} ${args}`
-  const fullCmd = remoteCwd ? `cd ${remoteCwd} && ${claudeCmd}` : claudeCmd
+    ? `--dangerously-skip-permissions --resume ${quotedSessionId}`
+    : `--resume ${quotedSessionId}`
+  const claudeCmd = `${shellQuote(claudeBin)} ${args}`
+  const fullCmd = remoteCwd ? `cd ${shellQuote(remoteCwd)} && ${claudeCmd}` : claudeCmd
   // Use interactive login shell (-li) so both ~/.zprofile AND ~/.zshrc are loaded.
-  const remoteCmd = `zsh -li -c '${fullCmd}'`
-  return `ssh -t ${sshConfig.user}@${sshConfig.host} "${remoteCmd.replace(/"/g, '\\"')}"`
+  const remoteCmd = `zsh -li -c ${shellQuote(fullCmd)}`
+  return `ssh -t ${shellQuote(`${sshConfig.user}@${sshConfig.host}`)} ${shellQuote(remoteCmd)}`
 }

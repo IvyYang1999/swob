@@ -94,7 +94,15 @@ interface Highlight {
 interface UserConfig {
   folders: Folder[]
   sessionMeta: Record<string, { customTitle?: string; notes?: string; highlights?: Highlight[] }>
-  preferences: { defaultViewMode: 'compact' | 'full'; terminalApp: 'Terminal' | 'iTerm2'; locale?: Locale; sshConfig?: SshConfig; projectViewMode?: 'folders' | 'paths' }
+  preferences: {
+    defaultViewMode: 'compact' | 'full'
+    terminalApp: 'Terminal' | 'iTerm2'
+    resumeTerminal?: 'terminal-app' | 'iterm' | 'custom'
+    resumeTerminalCommandTemplate?: string
+    locale?: Locale
+    sshConfig?: SshConfig
+    projectViewMode?: 'folders' | 'paths'
+  }
 }
 
 export interface SshConfig {

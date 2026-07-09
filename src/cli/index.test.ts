@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { initLibrary, scanLibrary, LOCAL_RESUME_UNAVAILABLE_REASON } from '../main/library-manager'
+import { shellQuote } from '../main/resume-terminal'
 import { buildCliResumeResponse } from './resume-command'
 
 // CLI 的 parseArgs 是内部函数，这里用同样的逻辑来测试
@@ -173,6 +174,6 @@ describe('CLI resume guard', () => {
       loadSessions: async () => []
     })
 
-    expect(result).toEqual({ command: 'claude --resume totally-unknown-999' })
+    expect(result).toEqual({ command: `claude --resume ${shellQuote('totally-unknown-999')}` })
   })
 })

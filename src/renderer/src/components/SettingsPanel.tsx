@@ -286,6 +286,10 @@ export function SettingsPanel() {
   const t = useT()
 
   const currentShortcut = config?.preferences?.spotlightShortcut || 'CommandOrControl+Shift+Space'
+  const resumeTerminal = config?.preferences?.resumeTerminal || 'terminal-app'
+  const resumeTerminalTemplate = config?.preferences?.resumeTerminalCommandTemplate || ''
+  const resumeTerminalTemplateInvalid = resumeTerminal === 'custom' &&
+    (!resumeTerminalTemplate.trim() || !resumeTerminalTemplate.includes('{{command}}'))
   const [recording, setRecording] = useState(false)
   const [pendingShortcut, setPendingShortcut] = useState<string | null>(null)
   const shortcutRef = useRef<HTMLButtonElement>(null)
@@ -426,6 +430,49 @@ export function SettingsPanel() {
             )}
           </div>
           <p className="text-[11px] text-faint mt-1">{t('settings.spotlight_shortcut_hint')}</p>
+        </section>
+
+        {/* Resume Terminal */}
+        <section>
+          <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
+            <Terminal size={12} />
+            {t('settings.resume_terminal')}
+          </label>
+          <div className="flex gap-1">
+            {([
+              ['terminal-app', t('settings.resume_terminal_terminal_app')],
+              ['iterm', t('settings.resume_terminal_iterm')],
+              ['custom', t('settings.resume_terminal_custom')]
+            ] as const).map(([mode, label]) => (
+              <button
+                key={mode}
+                onClick={() => savePreferences({ resumeTerminal: mode })}
+                className={`flex-1 px-2 py-1.5 rounded-md text-xs transition-colors ${
+                  resumeTerminal === mode
+                    ? 'bg-accent/15 text-accent'
+                    : 'bg-surface text-muted hover:text-primary hover:bg-hover'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {resumeTerminal === 'custom' && (
+            <div className="mt-2 space-y-1">
+              <textarea
+                value={resumeTerminalTemplate}
+                onChange={(e) => savePreferences({ resumeTerminalCommandTemplate: e.target.value })}
+                placeholder="otty {{command}}"
+                rows={2}
+                className="w-full px-2 py-1.5 text-xs bg-surface border border-edge rounded-md text-primary placeholder:text-muted focus:outline-none focus:border-edge-focus font-mono resize-y"
+              />
+              <p className={resumeTerminalTemplateInvalid ? 'text-[11px] text-amber-400' : 'text-[11px] text-faint'}>
+                {resumeTerminalTemplateInvalid
+                  ? t('settings.resume_terminal_custom_invalid')
+                  : t('settings.resume_terminal_custom_hint')}
+              </p>
+            </div>
+          )}
         </section>
 
         {/* SSH */}

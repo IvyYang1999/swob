@@ -7,6 +7,7 @@ import { loadCursorRawMessages } from './cursor-loader'
 import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loader'
 import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
+import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
 import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
 
 // ============ Types ============
@@ -65,6 +66,9 @@ export interface LibraryConfig {
   branchFolders?: Record<string, string[]>  // branch unique ID → folder relative paths
   branchMeta?: Record<string, { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }>
   ignoreDirs?: string[]  // 库根设为整个 vault 时，扫描/放置时跳过的目录名（如 wiki、clipii）
+  derivedFiles?: {
+    enabledGenerators?: string[]
+  }
 }
 
 // ============ Constants ============
@@ -127,6 +131,13 @@ const LIBRARY_CONFIG_FILE = '.swob-config.json'
 const TRANSCRIPT_FILE = 'transcript.md'
 const BACKUP_FILE = 'backup.jsonl'
 export const LOCAL_RESUME_UNAVAILABLE_REASON = '此会话数据在备份中，本机无源文件，无法直接恢复'
+
+const SESSION_COMPANION_FILE_NAMES = new Set<string>([
+  TRANSCRIPT_FILE,
+  BACKUP_FILE,
+  SESSION_SUMMARY_COMPANION_FILE,
+  ...DERIVED_FILE_NAMES
+])
 
 export interface SessionResumeAvailability {
   canResume: boolean
@@ -218,6 +229,41 @@ function isSessionDir(dirPath: string): boolean {
   return fs.existsSync(path.join(dirPath, SESSION_META_FILE))
 }
 
+function isSessionCompanionFileName(name: string): boolean {
+  if (SESSION_COMPANION_FILE_NAMES.has(name)) return true
+  return /^transcript-intra-\d+\.md$/.test(name)
+}
+
+function sessionDirHasUserFiles(dirPath: string): boolean {
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true })
+  } catch {
+    return false
+  }
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    if (entry.name.includes('.icloud')) continue
+    const fullPath = path.join(dirPath, entry.name)
+
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(fullPath)
+    } catch {
+      continue
+    }
+
+    if (stat.isFile()) {
+      if (!isSessionCompanionFileName(entry.name)) return true
+      continue
+    }
+    if (stat.isDirectory() && folderHasUserFiles(fullPath)) return true
+  }
+
+  return false
+}
+
 /** 把 swob 权威 turnCount 持久化进会话 meta（供外部整理脚本按真实轮数归档）。变化才写盘。 */
 export function setSessionTurnCount(dirPath: string, turnCount: number): void {
   if (typeof turnCount !== 'number') return
@@ -263,7 +309,10 @@ function folderHasUserFiles(dirPath: string): boolean {
     }
     if (stat.isFile()) return true // 散文件 = 用户内容
     if (stat.isDirectory()) {
-      if (isSessionDir(realPath)) continue // 会话目录内部文件是允许的
+      if (isSessionDir(realPath)) {
+        if (sessionDirHasUserFiles(realPath)) return true
+        continue
+      }
       if (folderHasUserFiles(realPath)) return true
     }
   }
@@ -1083,6 +1132,23 @@ function buildTranscriptSummaryForWrite(meta: SessionMeta, loaded: LoadedTranscr
   }
 }
 
+function getEnabledDerivedGeneratorNames(config: LibraryConfig): string[] | undefined {
+  const names = config.derivedFiles?.enabledGenerators
+  if (names === undefined) return undefined
+  return names.filter((name): name is string => typeof name === 'string')
+}
+
+function writeDerivedFilesFromLoadedRaw(sessionId: string, dirPath: string, rawMessages: RawJsonlMessage[]): void {
+  const config = loadLibraryConfig()
+  const generators = getEnabledDerivedFileGenerators(getEnabledDerivedGeneratorNames(config))
+
+  for (const generator of generators) {
+    const content = generator.generate(rawMessages, { sessionId })
+    if (content === null) continue
+    fs.writeFileSync(path.join(dirPath, generator.fileName), content, 'utf-8')
+  }
+}
+
 function writeTranscriptFromLoadedRaw(
   sessionId: string,
   dirPath: string,
@@ -1128,6 +1194,7 @@ export async function updateTranscript(sessionId: string, customTitle?: string):
   if (!summary) return false
 
   writeTranscriptFromLoadedRaw(sessionId, dirPath, meta, loaded, summary, customTitle)
+  writeDerivedFilesFromLoadedRaw(sessionId, dirPath, loaded.raw)
   return true
 }
 
@@ -1189,6 +1256,7 @@ export async function rebuildAllTranscripts(options: { dryRun?: boolean; missing
     }
 
     writeTranscriptFromLoadedRaw(session.sessionId, session.dirPath, session.meta, loaded, summary, session.meta.customTitle)
+    writeDerivedFilesFromLoadedRaw(session.sessionId, session.dirPath, loaded.raw)
     written++
     for (let idx = 0; idx < branches.length; idx++) {
       const branchId = `${session.sessionId}:intra-${idx}`

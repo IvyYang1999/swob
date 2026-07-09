@@ -597,6 +597,33 @@ describe('库根 = vault：cwd 感知放置 + 忽略名单 + 安全删除', () =
     expect(() => lib.deleteLibraryFolder(folder)).not.toThrow()
     expect(fs.existsSync(folder)).toBe(false)
   })
+
+  it('deleteLibraryFolder 允许含派生文件和摘要.md 的会话目录', () => {
+    const folder = path.join(tmpRoot, '派生文件容器')
+    const sessionDir = path.join(folder, '一个会话')
+    makeSession(sessionDir, 'derived-safe-x')
+    fs.writeFileSync(path.join(sessionDir, 'transcript.md'), '# transcript\n', 'utf-8')
+    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), '{}\n', 'utf-8')
+    fs.writeFileSync(path.join(sessionDir, 'compact-summaries.md'), '# Compact Summaries\n', 'utf-8')
+    fs.writeFileSync(path.join(sessionDir, 'user-queries.md'), '# User Queries\n', 'utf-8')
+    fs.writeFileSync(path.join(sessionDir, '摘要.md'), '# 外部摘要\n', 'utf-8')
+    lib.scanLibrary()
+
+    expect(() => lib.deleteLibraryFolder(folder)).not.toThrow()
+    expect(fs.existsSync(folder)).toBe(false)
+  })
+
+  it('deleteLibraryFolder 仍拒绝含其它用户 md 的会话目录', () => {
+    const folder = path.join(tmpRoot, '用户文件容器')
+    const sessionDir = path.join(folder, '一个会话')
+    makeSession(sessionDir, 'derived-blocked-x')
+    fs.writeFileSync(path.join(sessionDir, 'notes.md'), '# 用户笔记\n', 'utf-8')
+    lib.scanLibrary()
+
+    expect(() => lib.deleteLibraryFolder(folder)).toThrow()
+    expect(fs.existsSync(folder)).toBe(true)
+    expect(fs.existsSync(path.join(sessionDir, 'notes.md'))).toBe(true)
+  })
 })
 
 describe('transcript markdown heading semantics', () => {
@@ -989,6 +1016,111 @@ describe('transcript frontmatter 属性', () => {
       resume: `claude --resume ${sessionId}`,
       source: claudeFile
     })
+  })
+})
+
+describe('派生文件生成接入', () => {
+  function writeClaudeSessionWithCompact(sessionId: string): { sourcePath: string; dirPath: string } {
+    const sourcePath = path.join(tmpRoot, '.claude', 'projects', 'derived', `${sessionId}.jsonl`)
+    writeJsonl(sourcePath, [
+      {
+        uuid: 'u1',
+        parentUuid: null,
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:00:00Z',
+        cwd: tmpRoot,
+        message: { role: 'user', content: '第一条真实提问' }
+      },
+      {
+        uuid: 'a1',
+        parentUuid: 'u1',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:01:00Z',
+        cwd: tmpRoot,
+        message: { role: 'assistant', content: '第一条回答' }
+      },
+      {
+        uuid: 'cb1',
+        parentUuid: null,
+        logicalParentUuid: 'a1',
+        sessionId,
+        type: 'system',
+        subtype: 'compact_boundary',
+        timestamp: '2026-07-07T00:02:00Z',
+        cwd: tmpRoot,
+        message: { role: 'system', content: 'Conversation compacted' }
+      },
+      {
+        uuid: 'sum1',
+        parentUuid: 'cb1',
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:03:00Z',
+        cwd: tmpRoot,
+        message: {
+          role: 'user',
+          content: 'This session is being continued from a previous conversation that ran out of context. Summary: compact 后的上下文摘要'
+        }
+      },
+      {
+        uuid: 'u2',
+        parentUuid: 'sum1',
+        sessionId,
+        type: 'user',
+        timestamp: '2026-07-07T00:04:00Z',
+        cwd: tmpRoot,
+        message: { role: 'user', content: '第二条真实提问' }
+      },
+      {
+        uuid: 'a2',
+        parentUuid: 'u2',
+        sessionId,
+        type: 'assistant',
+        timestamp: '2026-07-07T00:05:00Z',
+        cwd: tmpRoot,
+        message: { role: 'assistant', content: '第二条回答' }
+      }
+    ])
+    const dirPath = createLibrarySession(sessionId, [sourcePath], { dirName: sessionId })
+    return { sourcePath, dirPath }
+  }
+
+  it('rebuildAllTranscripts 一并回填默认启用的派生文件', async () => {
+    removeDefaultSession()
+    const sessionId = 'derived-rebuild-session'
+    const { dirPath } = writeClaudeSessionWithCompact(sessionId)
+    lib.scanLibrary()
+
+    await lib.rebuildAllTranscripts()
+
+    const compactMd = fs.readFileSync(path.join(dirPath, 'compact-summaries.md'), 'utf-8')
+    const userMd = fs.readFileSync(path.join(dirPath, 'user-queries.md'), 'utf-8')
+    expect(compactMd).toContain('sessionId: derived-rebuild-session')
+    expect(compactMd).toContain('type: derived-compact-summaries')
+    expect(compactMd).toContain('compact 后的上下文摘要')
+    expect(userMd).toContain('type: derived-user-queries')
+    expect(userMd).toContain('第一条真实提问')
+    expect(userMd).toContain('第二条真实提问')
+    expect(userMd).not.toContain('This session is being continued')
+  })
+
+  it('配置关闭某个派生器时 updateTranscript 不生成对应文件', async () => {
+    removeDefaultSession()
+    fs.writeFileSync(path.join(tmpRoot, '.swob-config.json'), JSON.stringify({
+      libraryRoot: tmpRoot,
+      preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' },
+      derivedFiles: { enabledGenerators: ['compact-summaries'] }
+    }, null, 2), 'utf-8')
+    const sessionId = 'derived-disabled-session'
+    const { dirPath } = writeClaudeSessionWithCompact(sessionId)
+    lib.scanLibrary()
+
+    await lib.updateTranscript(sessionId)
+
+    expect(fs.existsSync(path.join(dirPath, 'compact-summaries.md'))).toBe(true)
+    expect(fs.existsSync(path.join(dirPath, 'user-queries.md'))).toBe(false)
   })
 })
 

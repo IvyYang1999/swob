@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { shellQuote } from './resume-terminal'
 
 // 隔离测试环境：用临时目录作为 Library root
 let tmpRoot: string
@@ -493,27 +494,33 @@ describe('claudeProjectPathToCwd', () => {
 })
 
 describe('buildSshResumeCommand', () => {
+  function expectedSsh(userHost: string, fullCmd: string): string {
+    const remoteCmd = `zsh -li -c ${shellQuote(fullCmd)}`
+    return `ssh -t ${shellQuote(userHost)} ${shellQuote(remoteCmd)}`
+  }
+
   it('默认用 interactive login shell 包裹 claude 命令', () => {
     const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' })
-    expect(cmd).toContain('ssh -t bob@mac.local')
-    expect(cmd).toContain("zsh -li -c 'claude --resume sess-123'")
+    expect(cmd).toBe(expectedSsh('bob@mac.local', `${shellQuote('claude')} --resume ${shellQuote('sess-123')}`))
   })
 
   it('bypassPermissions 模式加上 --dangerously-skip-permissions', () => {
     const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' }, 'bypassPermissions')
     expect(cmd).toContain('--dangerously-skip-permissions')
-    expect(cmd).toContain('--resume sess-123')
+    expect(cmd).toContain('sess-123')
   })
 
   it('指定 remotePath 时使用自定义路径', () => {
     const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob', remotePath: '/opt/bin/claude' })
-    expect(cmd).toContain('/opt/bin/claude')
-    expect(cmd).not.toMatch(/(?<!\/)claude --resume/)
+    expect(cmd).toBe(expectedSsh('bob@mac.local', `${shellQuote('/opt/bin/claude')} --resume ${shellQuote('sess-123')}`))
   })
 
   it('传入 remoteCwd 时先 cd 到目录', () => {
     const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' }, undefined, '/Users/mac/projects/scsp')
-    expect(cmd).toContain('cd /Users/mac/projects/scsp && claude --resume sess-123')
+    expect(cmd).toBe(expectedSsh(
+      'bob@mac.local',
+      `cd ${shellQuote('/Users/mac/projects/scsp')} && ${shellQuote('claude')} --resume ${shellQuote('sess-123')}`
+    ))
   })
 
   it('remoteCwd 为 null 时不加 cd', () => {

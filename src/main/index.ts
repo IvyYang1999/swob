@@ -68,6 +68,10 @@ import { searchSessionFiles } from './session-search'
 import { buildInsights } from './insights'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
 import {
+  normalizeResumeTerminalSettings,
+  openResumeTerminal
+} from './resume-terminal'
+import {
   buildGuardedResumeCommand,
   openGuardedForkCommand,
   openGuardedResumeCommand,
@@ -878,11 +882,15 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
 })
 
 function openInTerminal(command: string): void {
-  const tmpPath = `/tmp/csm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.command`
-  // Script deletes itself after command finishes, so Terminal won't kill a running process
-  fs.writeFileSync(tmpPath, `#!/bin/bash\n${command}\nrm -f "${tmpPath}"\n`)
-  fs.chmodSync(tmpPath, 0o755)
-  exec(`open "${tmpPath}"`)
+  let preferences: Record<string, unknown> | undefined
+  try {
+    preferences = shouldReadLibraryConfig()
+      ? loadLibraryConfig().preferences as unknown as Record<string, unknown>
+      : loadConfig().preferences as unknown as Record<string, unknown>
+  } catch {
+    preferences = undefined
+  }
+  openResumeTerminal(command, normalizeResumeTerminalSettings(preferences))
 }
 
 ipcMain.handle(

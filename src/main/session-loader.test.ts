@@ -21,6 +21,7 @@ import {
   isRealUserMessage
 } from './session-loader'
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
+import { shellQuote } from './resume-terminal'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -757,7 +758,8 @@ describe('cross-session branch inference', () => {
 
       const context = await resolveSessionActionContext(childId, sessions)
       expect(context.sessionId).toBe(childId)
-      expect(buildResumeCommand(context.sessionId, context.permissionMode, undefined, context.source)).toBe(`claude --resume ${childId}`)
+      expect(buildResumeCommand(context.sessionId, context.permissionMode, undefined, context.source))
+        .toBe(`claude --resume ${shellQuote(childId)}`)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }

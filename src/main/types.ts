@@ -158,6 +158,7 @@ export interface SshConfig {
 }
 
 export type ThemeMode = 'dark' | 'light' | 'system'
+export type ResumeTerminal = 'terminal-app' | 'iterm' | 'custom'
 
 export interface UserConfig {
   folders: Folder[]
@@ -169,6 +170,8 @@ export interface UserConfig {
   preferences: {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
+    resumeTerminal?: ResumeTerminal
+    resumeTerminalCommandTemplate?: string
     locale?: 'zh-CN' | 'en'
     themeMode?: ThemeMode
     spotlightShortcut?: string

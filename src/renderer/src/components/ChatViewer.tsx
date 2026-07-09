@@ -771,6 +771,9 @@ function SessionBar({
   }, [selectedSession, config])
 
   if (!selectedSession) return null
+  const resumeUnavailableReason = selectedSession.canResume === false
+    ? (selectedSession.resumeUnavailableReason || '此会话无法直接恢复')
+    : undefined
 
   return (
     <div className="h-9 flex items-center justify-between px-3 border-b border-edge-subtle bg-base/60 shrink-0">
@@ -854,6 +857,10 @@ function SessionBar({
         {/* 复制命令 */}
         <button
           onClick={async () => {
+            if (resumeUnavailableReason) {
+              showToast(resumeUnavailableReason, 'error')
+              return
+            }
             const sid = independentResumeSessionId(selectedSession)
             if (!sid) {
               showToast(t('chat.intra_branch_not_resumable'), 'error')
@@ -869,8 +876,9 @@ function SessionBar({
             setCopiedResumeCmd(true)
             setTimeout(() => setCopiedResumeCmd(false), 1500)
           }}
-          className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1"
-          title={isRemote && sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : t('chat.copy_resume_cmd')}
+          disabled={!!resumeUnavailableReason}
+          className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-hover"
+          title={resumeUnavailableReason || (isRemote && sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : t('chat.copy_resume_cmd'))}
         >
           {copiedResumeCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
           {copiedResumeCmd ? t('chat.copied') : t('chat.copy_resume_cmd_short')}
@@ -879,6 +887,10 @@ function SessionBar({
         {/* Resume / SSH Resume */}
         <button
           onClick={async () => {
+            if (resumeUnavailableReason) {
+              showToast(resumeUnavailableReason, 'error')
+              return
+            }
             const sid = independentResumeSessionId(selectedSession)
             if (!sid) {
               showToast(t('chat.intra_branch_not_resumable'), 'error')
@@ -901,19 +913,19 @@ function SessionBar({
               )
             }
           }}
-          disabled={sshResuming}
+          disabled={sshResuming || !!resumeUnavailableReason}
           className={`px-2.5 py-0.5 text-[11px] rounded flex items-center gap-1 ${
             selectedSession.id?.includes(':intra-')
               ? 'bg-hover hover:bg-pressed text-body'
               : isRemote
                 ? 'bg-teal-600/90 hover:bg-teal-500 text-white'
                 : 'bg-soft-green/90 hover:bg-soft-green text-white'
-          } disabled:opacity-60`}
+          } disabled:opacity-45 disabled:cursor-not-allowed`}
           title={
-            selectedSession.id?.includes(':intra-') ? t('chat.intra_branch_not_resumable')
+            resumeUnavailableReason || (selectedSession.id?.includes(':intra-') ? t('chat.intra_branch_not_resumable')
             : isRemote && sshConfig ? `SSH Resume (${sshConfig.user}@${sshConfig.host})`
             : isRemote ? '此会话来自其他设备，点击配置 SSH'
-            : undefined
+            : undefined)
           }
         >
           {isRemote ? <Terminal size={10} /> : <Play size={10} />}
@@ -923,6 +935,10 @@ function SessionBar({
         {/* Fork */}
         <button
           onClick={async () => {
+            if (resumeUnavailableReason) {
+              showToast(resumeUnavailableReason, 'error')
+              return
+            }
             const sid = independentResumeSessionId(selectedSession)
             if (!sid) {
               showToast(t('chat.intra_branch_not_resumable'), 'error')
@@ -939,12 +955,13 @@ function SessionBar({
               forkSession(
                 sid,
                 selectedSession.permissionMode,
-                getResumeCwd(selectedSession)
+                resolveResumeCwd(selectedSession)
               )
             }
           }}
-          className="px-2.5 py-0.5 text-[11px] rounded bg-purple-600/90 hover:bg-purple-500 text-white flex items-center gap-1"
-          title={isRemote ? 'SSH Fork' : t('chat.fork_hint')}
+          disabled={!!resumeUnavailableReason}
+          className="px-2.5 py-0.5 text-[11px] rounded bg-purple-600/90 hover:bg-purple-500 text-white flex items-center gap-1 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-purple-600/90"
+          title={resumeUnavailableReason || (isRemote ? 'SSH Fork' : t('chat.fork_hint'))}
         >
           <GitBranch size={10} />
           {isRemote ? 'SSH Fork' : t('chat.fork')}

@@ -20,13 +20,12 @@ import {
   setSessionMetaInLibrary,
   resolveFolderPath,
   getLibraryRoot,
-  getSessionDirPath,
-  getSessionMdPath,
   rebuildAllTranscripts
 } from '../main/library-manager'
 import { loadConfig, saveConfig } from '../main/config-store'
 import { spotlightSearch } from '../main/spotlight-search'
 import { buildInsights } from '../main/insights'
+import { buildCliResumeResponse } from './resume-command'
 import type { SessionSummary } from '../main/types'
 import { execSync } from 'child_process'
 
@@ -236,26 +235,10 @@ async function cmdShow(sessionId: string): Promise<void> {
   })
 }
 
-function cmdResume(sessionId: string, flags: Record<string, string | true>): void {
-  const source = String(flags.source || 'claude-code')
-  const skipPermissions = flags['skip-permissions'] === true
-
-  let cmd: string
-  if (source === 'codex') {
-    cmd = `codex resume ${sessionId}`
-  } else if (source === 'cursor') {
-    cmd = `cursor agent --resume ${sessionId}`
-  } else {
-    cmd = skipPermissions
-      ? `claude --dangerously-skip-permissions --resume ${sessionId}`
-      : `claude --resume ${sessionId}`
-  }
-
-  if (flags.cwd) {
-    cmd = `cd ${JSON.stringify(String(flags.cwd))} && ${cmd}`
-  }
-
-  out({ command: cmd })
+async function cmdResume(sessionId: string, flags: Record<string, string | true>): Promise<void> {
+  const result = await buildCliResumeResponse(sessionId, flags)
+  if (result.error || !result.command) err(result.error || '此会话无法直接恢复')
+  out({ command: result.command })
 }
 
 function cmdFolders(): void {
@@ -667,7 +650,7 @@ async function main(): Promise<void> {
 
       case 'resume':
         if (!cmd[1]) err('缺少 sessionId。用法: swob resume <sessionId>')
-        cmdResume(cmd[1], flags)
+        await cmdResume(cmd[1], flags)
         break
 
       case 'folders':

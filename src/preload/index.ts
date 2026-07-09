@@ -39,7 +39,7 @@ const api = {
   ) => ipcRenderer.invoke('config:setSessionMeta', sessionId, meta),
 
   // Native context menu
-  showSessionContextMenu: (data: { sessionId: string; folders: Array<{ id: string; name: string; isIn: boolean }> }) =>
+  showSessionContextMenu: (data: { sessionId: string; canResume?: boolean; resumeUnavailableReason?: string; folders: Array<{ id: string; name: string; isIn: boolean }> }) =>
     ipcRenderer.invoke('context-menu:session', data),
 
   // Library
@@ -132,5 +132,7 @@ const api = {
   },
   installUpdate: () => ipcRenderer.invoke('update:install')
 }
+
+export type ResumeActionResult = { ok: boolean; sessionId: string; reason?: string; command?: string }
 
 contextBridge.exposeInMainWorld('api', api)

@@ -30,7 +30,7 @@ import {
   getSessionMdPath,
   getSessionDirPath,
   setSessionTurnCount,
-  restoreBackupToClaudeSource,
+  getSessionResumeAvailability,
   createLibraryFolder,
   renameLibraryFolder,
   deleteLibraryFolder,
@@ -68,10 +68,11 @@ import { searchSessionFiles } from './session-search'
 import { buildInsights } from './insights'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
 import {
-  buildForkCommand,
-  buildResumeCommand,
-  resolveSessionActionContext
-} from './session-actions'
+  buildGuardedResumeCommand,
+  openGuardedForkCommand,
+  openGuardedResumeCommand,
+  type ResumeActionResult
+} from './resume-guard'
 import type { Folder, Highlight, SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
@@ -152,6 +153,14 @@ function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | 
     }
   }
 
+  const resumeAvailability = getSessionResumeAvailability(session.sessionId, session)
+  session.canResume = resumeAvailability.canResume
+  if (resumeAvailability.canResume) {
+    delete session.resumeUnavailableReason
+  } else {
+    session.resumeUnavailableReason = resumeAvailability.reason
+  }
+
   const bucket = computeUngroupBucket(session, resolvedDir)
   if (bucket) (session as any).ungroupBucket = bucket
 }
@@ -166,20 +175,6 @@ async function reloadSessionsForAction(): Promise<SessionSummary[]> {
     }
   }
   return cachedSessions
-}
-
-async function resolveLocalSessionAction(
-  sessionId: string,
-  permissionMode?: string,
-  cwd?: string,
-  restoredSourcePath?: string | null
-) {
-  return resolveSessionActionContext(sessionId, cachedSessions, {
-    reloadSessions: reloadSessionsForAction,
-    permissionModeFallback: permissionMode,
-    cwdFallback: cwd,
-    restoredSourcePath
-  })
 }
 
 function shouldReadLibraryConfig(): boolean {
@@ -563,16 +558,15 @@ ipcMain.handle('spotlight:search', (_event, query: string) => {
 })
 
 ipcMain.handle('spotlight:resume', async (_event, sessionId: string, cwd?: string) => {
-  const restored = restoreBackupToClaudeSource(sessionId)
-  const context = await resolveLocalSessionAction(sessionId, undefined, cwd, restored.sourcePath)
-  openInTerminal(buildResumeCommand(
-    context.sessionId,
-    context.permissionMode,
-    context.cwd,
-    context.source,
-    context.claudeConfigDir
-  ))
-  spotlightWindow?.hide()
+  const result = await openGuardedResumeCommand({
+    sessionId,
+    sessions: cachedSessions,
+    cwd,
+    reloadSessions: reloadSessionsForAction,
+    openCommand: openInTerminal
+  })
+  if (result.ok) spotlightWindow?.hide()
+  return result
 })
 
 ipcMain.handle('spotlight:hide', () => {
@@ -710,6 +704,8 @@ ipcMain.handle('ssh:setConfig', (_event, sshConfig: { host: string; user: string
 ipcMain.handle('ssh:resume', (_event, sessionId: string, permissionMode?: string) => {
   const sshConfig = getSshConfig()
   if (!sshConfig) throw new Error('SSH config not set')
+  // SSH resume/fork executes on the remote host, so local source-file availability is not authoritative here.
+  // Do not attach the local resume guard to this path; the remote machine owns the recoverability check.
   const remoteCwd = getRemoteCwdForSession(sessionId)
   openInTerminal(buildSshResumeCommand(sessionId, sshConfig, permissionMode, remoteCwd))
 })
@@ -717,6 +713,7 @@ ipcMain.handle('ssh:resume', (_event, sessionId: string, permissionMode?: string
 ipcMain.handle('ssh:fork', (_event, sessionId: string, permissionMode?: string) => {
   const sshConfig = getSshConfig()
   if (!sshConfig) throw new Error('SSH config not set')
+  // Same SSH exemption as ssh:resume: the actual restore happens remotely, not on this machine.
   const remoteCwd = getRemoteCwdForSession(sessionId)
   const cmd = buildSshResumeCommand(sessionId, sshConfig, permissionMode, remoteCwd)
   openInTerminal(cmd.replace('--resume', '--fork-session --resume'))
@@ -725,6 +722,7 @@ ipcMain.handle('ssh:fork', (_event, sessionId: string, permissionMode?: string) 
 ipcMain.handle('ssh:buildCommand', (_event, sessionId: string, permissionMode?: string) => {
   const sshConfig = getSshConfig()
   if (!sshConfig) return null
+  // Builds a remote command only; local Library/source guard would be the wrong boundary.
   const remoteCwd = getRemoteCwdForSession(sessionId)
   return buildSshResumeCommand(sessionId, sshConfig, permissionMode, remoteCwd)
 })
@@ -885,61 +883,61 @@ function openInTerminal(command: string): void {
 ipcMain.handle(
   'terminal:resume',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    const restored = restoreBackupToClaudeSource(sessionId)
-    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd, restored.sourcePath)
-    openInTerminal(buildResumeCommand(
-      context.sessionId,
-      context.permissionMode,
-      context.cwd,
-      context.source,
-      context.claudeConfigDir
-    ))
+    return openGuardedResumeCommand({
+      sessionId,
+      sessions: cachedSessions,
+      permissionMode,
+      cwd,
+      reloadSessions: reloadSessionsForAction,
+      openCommand: openInTerminal
+    })
   }
 )
 
 ipcMain.handle(
   'terminal:resumeBatch',
   async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
+    const results: ResumeActionResult[] = []
     for (const s of sessionIds) {
-      const restored = restoreBackupToClaudeSource(s.sessionId)
-      const context = await resolveLocalSessionAction(s.sessionId, s.permissionMode, s.cwd, restored.sourcePath)
-      openInTerminal(buildResumeCommand(
-        context.sessionId,
-        context.permissionMode,
-        context.cwd,
-        context.source,
-        context.claudeConfigDir
-      ))
+      results.push(await openGuardedResumeCommand({
+        sessionId: s.sessionId,
+        sessions: cachedSessions,
+        permissionMode: s.permissionMode,
+        cwd: s.cwd,
+        reloadSessions: reloadSessionsForAction,
+        openCommand: openInTerminal
+      }))
     }
+    return results
   }
 )
 
 ipcMain.handle(
   'terminal:fork',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    const restored = restoreBackupToClaudeSource(sessionId)
-    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd, restored.sourcePath)
-    openInTerminal(buildForkCommand(
-      context.sessionId,
-      context.permissionMode,
-      context.cwd,
-      context.source,
-      context.claudeConfigDir
-    ))
+    return openGuardedForkCommand({
+      sessionId,
+      sessions: cachedSessions,
+      permissionMode,
+      cwd,
+      reloadSessions: reloadSessionsForAction,
+      openCommand: openInTerminal
+    })
   }
 )
 
 ipcMain.handle(
   'terminal:buildResumeCommand',
   async (_event, sessionId: string, permissionMode?: string, cwd?: string) => {
-    const context = await resolveLocalSessionAction(sessionId, permissionMode, cwd)
-    return buildResumeCommand(
-      context.sessionId,
-      context.permissionMode,
-      context.cwd,
-      context.source,
-      context.claudeConfigDir
-    )
+    const result = await buildGuardedResumeCommand({
+      sessionId,
+      sessions: cachedSessions,
+      permissionMode,
+      cwd,
+      reloadSessions: reloadSessionsForAction
+    })
+    if (!result.ok || !result.command) throw new Error(result.reason || '此会话无法直接恢复')
+    return result.command
   }
 )
 
@@ -1142,9 +1140,22 @@ ipcMain.handle(
 
 ipcMain.handle(
   'context-menu:session',
-  (event, data: { sessionId: string; folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }> }) => {
+  (event, data: {
+    sessionId: string
+    canResume?: boolean
+    resumeUnavailableReason?: string
+    folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }>
+  }) => {
     return new Promise((resolve) => {
       const template: Electron.MenuItemConstructorOptions[] = [
+        {
+          label: data.canResume === false
+            ? `Resume（${data.resumeUnavailableReason || '不可恢复'}）`
+            : 'Resume',
+          enabled: data.canResume !== false,
+          click: () => resolve({ action: 'resume' })
+        },
+        { type: 'separator' },
         { label: '重命名', click: () => resolve({ action: 'rename' }) },
       ]
 

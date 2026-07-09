@@ -45,6 +45,8 @@ interface SessionSummary {
   configFiles?: string[]
   libraryDirPath?: string
   libraryMdPath?: string
+  canResume?: boolean
+  resumeUnavailableReason?: string
   isRemote?: boolean
   remoteHost?: string
   source?: 'claude-code' | 'codex' | 'cursor'
@@ -406,7 +408,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   resumeSession: async (sessionId, permissionMode?, cwd?) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
-    await window.api.resumeSession(sessionId, terminalApp, permissionMode, cwd)
+    const result = await window.api.resumeSession(sessionId, terminalApp, permissionMode, cwd)
+    if (!result.ok) {
+      get().showToast(result.reason || '此会话无法直接恢复', 'error')
+      return
+    }
     set((state) => {
       const next = new Set(state.activeSessionIds)
       next.add(sessionId)
@@ -416,7 +422,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   forkSession: async (sessionId, permissionMode?, cwd?) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
-    await window.api.forkSession(sessionId, terminalApp, permissionMode, cwd)
+    const result = await window.api.forkSession(sessionId, terminalApp, permissionMode, cwd)
+    if (!result.ok) {
+      get().showToast(result.reason || '此会话无法直接恢复', 'error')
+    }
   },
 
   buildResumeCommand: async (sessionId, permissionMode?, cwd?) => {
@@ -425,10 +434,17 @@ export const useStore = create<AppState>((set, get) => ({
 
   resumeBatch: async (sessions) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
-    await window.api.resumeBatch(sessions, terminalApp)
+    const results = await window.api.resumeBatch(sessions, terminalApp)
+    const blocked = results.filter((r) => !r.ok)
+    if (blocked.length > 0) {
+      const reason = blocked[0].reason || '部分会话无法直接恢复'
+      get().showToast(blocked.length === 1 ? reason : `${blocked.length} 个会话无法直接恢复：${reason}`, 'error')
+    }
     set((state) => {
       const next = new Set(state.activeSessionIds)
-      for (const s of sessions) next.add(s.sessionId)
+      for (let i = 0; i < sessions.length; i++) {
+        if (results[i]?.ok) next.add(sessions[i].sessionId)
+      }
       return { activeSessionIds: next }
     })
   },

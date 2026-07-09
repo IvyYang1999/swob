@@ -1,3 +1,5 @@
+type ResumeActionResult = { ok: boolean; sessionId: string; reason?: string; command?: string }
+
 interface ElectronAPI {
   loadAllSessions: () => Promise<any[]>
   loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<any>
@@ -11,9 +13,9 @@ interface ElectronAPI {
       matches: Array<{ text: string; timestamp: string }>
     }>
   >
-  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<void>
-  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) => Promise<void>
-  forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<void>
+  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<ResumeActionResult>
+  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) => Promise<ResumeActionResult[]>
+  forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<ResumeActionResult>
   buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<string>
   getActiveSessions: () => Promise<string[]>
   loadConfig: () => Promise<any>
@@ -34,7 +36,7 @@ interface ElectronAPI {
     sessionId: string,
     meta: { customTitle?: string; notes?: string; highlights?: Array<{ id: string; text: string; turnUuid: string; note?: string; createdAt: string }> }
   ) => Promise<any>
-  showSessionContextMenu: (data: { sessionId: string; folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }> }) =>
+  showSessionContextMenu: (data: { sessionId: string; canResume?: boolean; resumeUnavailableReason?: string; folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }> }) =>
     Promise<{ action: string; folderId?: string } | null>
   libraryGetRoot: () => Promise<string>
   libraryGetMdPath: (sessionId: string) => Promise<string | null>
@@ -52,7 +54,7 @@ interface ElectronAPI {
   onSessionsRefresh: (callback: () => void) => void
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => void
   spotlightSearch: (query: string) => Promise<any[]>
-  spotlightResume: (sessionId: string, cwd?: string) => Promise<void>
+  spotlightResume: (sessionId: string, cwd?: string) => Promise<ResumeActionResult>
   spotlightHide: () => Promise<void>
   spotlightSelectInMain: (sessionId: string) => Promise<void>
   spotlightConsumePendingNavigation: () => Promise<string | null>

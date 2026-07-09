@@ -73,6 +73,11 @@ import {
   openGuardedResumeCommand,
   type ResumeActionResult
 } from './resume-guard'
+import {
+  findInstalledSwobCommandPath,
+  installSwobCli,
+  SWOB_APP_CLI_PATH
+} from './cli-install'
 import type { Folder, Highlight, SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
@@ -1305,78 +1310,25 @@ ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
 
 // --- CLI Installation ---
 
-function getCliSourceDir(): string {
-  // In packaged app: Resources/cli/
-  // In dev: out/main/
-  if (is.dev) {
-    return join(__dirname)
-  }
-  return join(process.resourcesPath, 'cli')
-}
-
-function getCliInstallDir(): string {
-  return join(process.env.HOME || '', '.claude-session-manager', 'cli')
-}
-
 function isCliInstalled(): boolean {
-  const installDir = getCliInstallDir()
-  return fs.existsSync(join(installDir, 'cli.js'))
+  return fs.existsSync(SWOB_APP_CLI_PATH)
 }
 
-function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; error?: string } {
-  const sourceDir = getCliSourceDir()
-  const installDir = getCliInstallDir()
+function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; cliManualInstall?: string; error?: string } {
   const home = process.env.HOME || ''
+  const cliInstall = installSwobCli({ homeDir: home || undefined })
 
-  // 1. Copy CLI files
-  if (!fs.existsSync(installDir)) fs.mkdirSync(installDir, { recursive: true })
-
-  const sourceCliJs = join(sourceDir, 'cli.js')
-  if (!fs.existsSync(sourceCliJs)) {
-    return { cliInstalled: false, skillInstalled: false, cliPath: null, error: `CLI 源文件不存在: ${sourceCliJs}` }
-  }
-
-  fs.copyFileSync(sourceCliJs, join(installDir, 'cli.js'))
-
-  // Copy chunks directory
-  const sourceChunks = join(sourceDir, 'chunks')
-  const destChunks = join(installDir, 'chunks')
-  if (fs.existsSync(sourceChunks)) {
-    if (!fs.existsSync(destChunks)) fs.mkdirSync(destChunks, { recursive: true })
-    for (const file of fs.readdirSync(sourceChunks)) {
-      fs.copyFileSync(join(sourceChunks, file), join(destChunks, file))
-    }
-  }
-
-  // 2. Create wrapper script
-  const wrapperPath = join(home, '.claude-session-manager', 'swob-cli.sh')
-  fs.writeFileSync(wrapperPath, `#!/bin/bash\nexec node "${join(installDir, 'cli.js')}" "$@"\n`, { mode: 0o755 })
-
-  // 3. Create symlink
-  const cliTarget = '/usr/local/bin/swob'
-  let cliInstalled = false
-  try {
-    if (fs.existsSync(cliTarget) || fs.lstatSync(cliTarget).isSymbolicLink()) {
-      fs.unlinkSync(cliTarget)
-    }
-  } catch { /* doesn't exist */ }
-  try {
-    fs.symlinkSync(wrapperPath, cliTarget)
-    cliInstalled = true
-  } catch {
-    cliInstalled = false
-  }
-
-  // 4. Install skill
+  // 2. Install skill
   const skillDir = join(home, '.claude', 'skills', 'swob')
   if (!fs.existsSync(skillDir)) fs.mkdirSync(skillDir, { recursive: true })
   const skillContent = generateSkillMd()
   fs.writeFileSync(join(skillDir, 'SKILL.md'), skillContent, 'utf-8')
 
   return {
-    cliInstalled,
+    cliInstalled: cliInstall.cliInstalled,
     skillInstalled: true,
-    cliPath: cliInstalled ? cliTarget : null
+    cliPath: cliInstall.cliPath,
+    cliManualInstall: cliInstall.cliManualInstall ?? undefined
   }
 }
 
@@ -1528,7 +1480,7 @@ function autoInstallCliOnStartup(): void {
 
 ipcMain.handle('cli:getStatus', () => {
   const installed = isCliInstalled()
-  const symlinkExists = fs.existsSync('/usr/local/bin/swob')
+  const symlinkExists = findInstalledSwobCommandPath() !== null
   const skillExists = fs.existsSync(join(process.env.HOME || '', '.claude', 'skills', 'swob', 'SKILL.md'))
   return { cliInstalled: installed, symlinkInstalled: symlinkExists, skillInstalled: skillExists }
 })

@@ -20,7 +20,18 @@ import {
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
 
-import { formatTime, getToolPreview, resolveResumeCwd, sessionHeaderMd, TOOL_COLORS, DEFAULT_TOOL_COLOR } from '../utils/chat-helpers'
+import {
+  DEFAULT_TOOL_COLOR,
+  formatTime,
+  formatTokenCount,
+  getToolPreview,
+  parseCommandOutput,
+  resolveResumeCwd,
+  sessionHeaderMd,
+  splitImagePaths,
+  stripUserText,
+  TOOL_COLORS
+} from '../../../shared/chat-format'
 
 // --- Source-specific assistant avatars (using official brand icons) ---
 
@@ -46,55 +57,6 @@ function AssistantLabel({ source }: { source?: string }) {
 function independentResumeSessionId(session: SessionDetail): string | null {
   if (session.id?.includes(':intra-')) return null
   return (session as any).resumeSessionId || session.sessionId || session.id
-}
-
-// --- System tag helpers ---
-
-/** Strip system-injected XML blocks and wrappers from user message text */
-function cleanUserText(text: string): string {
-  let result = text
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '')
-    .replace(/<available-deferred-tools>[\s\S]*?<\/available-deferred-tools>\s*/g, '')
-  // Cursor wraps user input in <user_query>
-  const uqMatch = result.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/)
-  if (uqMatch) result = uqMatch[1]
-  // Strip other Cursor system tags
-  result = result
-    .replace(/<user_info>[\s\S]*?<\/user_info>\s*/g, '')
-    .replace(/<git_status>[\s\S]*?<\/git_status>\s*/g, '')
-    .replace(/<attached_files>[\s\S]*?<\/attached_files>\s*/g, '')
-    .replace(/<agent_transcripts>[\s\S]*?<\/agent_transcripts>\s*/g, '')
-    .replace(/<agent_skills>[\s\S]*?<\/agent_skills>\s*/g, '')
-    .replace(/<rules>[\s\S]*?<\/rules>\s*/g, '')
-  // Strip bare [Image] / [Image #N] prefix (file-path images are handled by splitImagePaths)
-  result = result.replace(/^\[Image(?:\s*#\d+)?\]\s*/g, '')
-  return result.trim()
-}
-
-/** Extract [Image: source: /path] entries and remaining text for visual rendering */
-function splitImagePaths(text: string): { displayText: string; imagePaths: string[] } {
-  const imagePaths: string[] = []
-  const displayText = text.replace(/\[Image: source: ([^\]]+)\]\s*/g, (_match, p) => {
-    imagePaths.push(p.trim())
-    return ''
-  }).trim()
-  return { displayText, imagePaths }
-}
-
-/** Parse command-output text (may contain merged consecutive messages) */
-function parseCommandOutput(text: string): { label: string; output: string } {
-  // Extract all known parts from the (possibly merged) text
-  const cmdName = text.match(/<command-name>(.*?)<\/command-name>/)?.[1]
-  const stdout = text.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/)?.[1]?.trim()
-  const hookOut = text.match(/<user-prompt-submit-hook>([\s\S]*?)<\/user-prompt-submit-hook>/)?.[1]?.trim()
-  const output = stdout || hookOut || ''
-
-  // If we have a command name, use it as label (e.g. "/login")
-  if (cmdName) return { label: cmdName, output }
-  // Standalone stdout/hook output
-  if (output) return { label: 'Terminal', output }
-  // Fallback (e.g. caveat-only): strip tags, show as System
-  return { label: 'System', output: text.replace(/<[^>]+>/g, '').trim() }
 }
 
 /** Collapsible system notification pill (similar to tool call pills) */
@@ -193,12 +155,6 @@ function FileImage({ path: filePath, fallbackSrc }: { path: string; fallbackSrc?
 }
 
 // --- Token badge for assistant messages ---
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
 
 function TokenBadge({ msgs }: { msgs: ParsedMessage[] }) {
   const total = useMemo(() => {
@@ -432,7 +388,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
                   </div>
                 </div>
               ) : (() => {
-                const cleaned = cleanUserText(turn.userMsg!.textContent)
+                const cleaned = stripUserText(turn.userMsg!.textContent)
                 const { displayText, imagePaths } = splitImagePaths(cleaned)
                 // Pure pasted images = base64 images NOT covered by file paths
                 const pastedImages = imagePaths.length > 0

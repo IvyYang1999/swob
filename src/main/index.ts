@@ -66,6 +66,7 @@ import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
 import { searchSessionFiles } from './session-search'
 import { buildInsights } from './insights'
+import { TranscriptWatcher } from './transcript-watcher'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
 import {
   normalizeResumeTerminalSettings,
@@ -90,6 +91,7 @@ let watcher: chokidar.FSWatcher | null = null
 let codexWatcher: chokidar.FSWatcher | null = null
 let cursorWatcher: chokidar.FSWatcher | null = null
 let libraryWatcher: chokidar.FSWatcher | null = null
+let transcriptWatcher: TranscriptWatcher | null = null
 let libraryRescanTimer: ReturnType<typeof setTimeout> | null = null
 let pendingSpotlightNavigationSessionId: string | null = null
 const knownSessionIds = new Set<string>()
@@ -197,6 +199,8 @@ function cleanupRuntimeResources(): void {
   watcher = null
   codexWatcher = null
   cursorWatcher = null
+  transcriptWatcher?.stop()
+  transcriptWatcher = null
   if (activePoller) {
     clearInterval(activePoller)
     activePoller = null
@@ -506,6 +510,7 @@ function startLibraryWatcher(): void {
     if (libraryRescanTimer) clearTimeout(libraryRescanTimer)
     libraryRescanTimer = setTimeout(() => {
       try { scanLibrary() } catch { /* ignore */ }
+      transcriptWatcher?.refresh()
       mainWindow?.webContents.send('sessions:refresh')
     }, 1500)
   }
@@ -538,6 +543,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
   libraryInitialized = true
   // Rescan so index is up to date, then notify renderer to refresh
   scanLibrary()
+  transcriptWatcher?.refresh()
   mainWindow?.webContents.send('sessions:refresh')
 }
 
@@ -1288,6 +1294,7 @@ ipcMain.handle('library:changePath', async (_event, newPath: string) => {
     // Rescan after sync
     scanLibrary()
   }
+  transcriptWatcher?.refresh()
   mainWindow?.webContents.send('sessions:refresh')
   return getLibraryRoot()
 })
@@ -1542,6 +1549,8 @@ app.whenReady().then(() => {
   // Initialize library early so session paths are available on first load
   initLibrary()
   scanLibrary()
+  transcriptWatcher = new TranscriptWatcher()
+  transcriptWatcher.start()
 
   createWindow()
   startFileWatcher()

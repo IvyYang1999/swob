@@ -130,6 +130,13 @@ async function loadAllSessionsFromTempHome(home: string) {
   }
 }
 
+function incrementalCacheLog(spy: ReturnType<typeof vi.spyOn>): string {
+  const call = [...spy.mock.calls].reverse().find(([message]) =>
+    typeof message === 'string' && message.includes('[session-loader] incremental cache:')
+  )
+  return String(call?.[0] || '')
+}
+
 // ========================================================
 // Claude session discovery 测试
 // ========================================================
@@ -632,6 +639,87 @@ describe('buildSessionDetail', () => {
 // ========================================================
 // cross-session branch inference 测试
 // ========================================================
+describe('loadAllSessions per-file incremental cache', () => {
+  it('只重建变化文件，并使热启动 summaries/血统与删缓存全量重建一致', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cache-home-'))
+    const projectDir = path.join(home, '.claude', 'projects', '-Users-test-vault')
+    const firstFile = path.join(projectDir, 'cache-a.jsonl')
+    const secondFile = path.join(projectDir, 'cache-b.jsonl')
+    const firstMessages = [
+      rawMsg({ uuid: 'cache-a-u', sessionId: 'cache-a', type: 'user', message: { role: 'user', content: '缓存会话 A' } }),
+      rawMsg({ uuid: 'cache-a-a', sessionId: 'cache-a', parentUuid: 'cache-a-u', type: 'assistant', timestamp: '2026-03-01T00:01:00Z', message: { role: 'assistant', content: 'A 回复' } })
+    ]
+    const secondMessages = [
+      rawMsg({ uuid: 'cache-b-u', sessionId: 'cache-b', type: 'user', message: { role: 'user', content: '缓存会话 B' } }),
+      rawMsg({ uuid: 'cache-b-a', sessionId: 'cache-b', parentUuid: 'cache-b-u', type: 'assistant', timestamp: '2026-03-01T00:01:00Z', message: { role: 'assistant', content: 'B 回复' } })
+    ]
+    writeJsonlAt(firstFile, firstMessages)
+    writeJsonlAt(secondFile, secondMessages)
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      await loadAllSessionsFromTempHome(home)
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 2, reused 0, files 2')
+
+      const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+      const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+      expect(diskCache.version).toBe(19)
+      expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
+      expect(diskCache.entries[firstFile]).toMatchObject({
+        sig: expect.any(String),
+        perFile: {
+          summary: { sessionId: 'cache-a' },
+          lineageMeta: {
+            uuids: ['cache-a-u', 'cache-a-a'],
+            leafUuidRefs: expect.any(Array),
+            startTime: expect.any(String),
+            endTime: expect.any(String),
+            cwd: '/Users/test',
+            sessionId: 'cache-a'
+          }
+        }
+      })
+
+      writeJsonlAt(firstFile, [
+        ...firstMessages,
+        rawMsg({ uuid: 'cache-a-u2', sessionId: 'cache-a', parentUuid: 'cache-a-a', type: 'user', timestamp: '2026-03-01T00:02:00Z', message: { role: 'user', content: '只修改 A' } }),
+        rawMsg({ uuid: 'cache-a-a2', sessionId: 'cache-a', parentUuid: 'cache-a-u2', type: 'assistant', timestamp: '2026-03-01T00:03:00Z', message: { role: 'assistant', content: 'A 新回复' } })
+      ])
+      infoSpy.mockClear()
+      const incremental = await loadAllSessionsFromTempHome(home)
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 1, files 2')
+
+      fs.rmSync(cachePath)
+      infoSpy.mockClear()
+      const fullRebuild = await loadAllSessionsFromTempHome(home)
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 2, reused 0, files 2')
+      expect(incremental).toEqual(fullRebuild)
+    } finally {
+      infoSpy.mockRestore()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('当前不存在的文件会从新缓存删除', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cache-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'removed.jsonl')
+    writeJsonlAt(file, [rawMsg({ sessionId: 'removed', type: 'user', message: { role: 'user', content: '待删除' } })])
+
+    try {
+      await loadAllSessionsFromTempHome(home)
+      fs.rmSync(file)
+      const sessions = await loadAllSessionsFromTempHome(home)
+      const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+      const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+      expect(sessions.some((session) => session.sessionId === 'removed')).toBe(false)
+      expect(diskCache.entries[file]).toBeUndefined()
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+})
+
 describe('cross-session branch inference', () => {
   it('同一条用户 prompt 被不同 sessionId 重放且一边只是继续追加时，不应该判为 branch', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-branch-home-'))
@@ -760,6 +848,20 @@ describe('cross-session branch inference', () => {
       expect(context.sessionId).toBe(childId)
       expect(buildResumeCommand(context.sessionId, context.permissionMode, undefined, context.source))
         .toBe(`claude --resume ${shellQuote(childId)}`)
+
+      // The unchanged parent's UUID graph must survive the cache; otherwise the
+      // one-file update loses the child -> parent relationship.
+      writeJsonlAt(childFile, [
+        ...childMsgs,
+        rawMsg({ uuid: 'child-u2', sessionId: childId, parentUuid: 'child-a', type: 'user', timestamp: '2026-06-10T10:06:00Z', message: { role: 'user', content: '只更新 child' } }),
+        rawMsg({ uuid: 'child-a2', sessionId: childId, parentUuid: 'child-u2', type: 'assistant', timestamp: '2026-06-10T10:07:00Z', message: { role: 'assistant', content: 'child 新回答' } })
+      ])
+      const incremental = await loadAllSessionsFromTempHome(home)
+      fs.rmSync(path.join(home, '.claude-session-manager', 'summary-cache.json'))
+      const rebuilt = await loadAllSessionsFromTempHome(home)
+      expect(incremental).toEqual(rebuilt)
+      expect(incremental.find((s) => s.sessionId === childId)?.branchParentId).toBe(parent!.id)
+      expect(incremental.find((s) => s.sessionId === parentId)?.branchChildIds).toContain(child!.id)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }

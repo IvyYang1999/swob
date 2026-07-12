@@ -84,41 +84,67 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 18 // add opencode source summaries
+const CACHE_VERSION = 19 // per-file summaries + lineage metadata
+
+type CachedSessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode'
+
+interface LineageMeta {
+  uuids: string[]
+  firstParentUuid?: string
+  // Compact message references, not the full JSONL records. These retain exactly the
+  // fields used by clustering and light-summary rebuilding while dropping bulky
+  // tool payloads, results, images, and other detail-only data.
+  leafUuidRefs: RawJsonlMessage[]
+  forkedFrom?: { sessionId: string; messageUuid: string }
+  startTime: string
+  endTime: string
+  cwd?: string
+  sessionId: string
+}
+
+interface PerFileCache {
+  summary: SessionSummary | null
+  lineageMeta: LineageMeta
+  source: CachedSessionSource
+}
+
+interface DiskCacheEntry {
+  sig: string
+  perFile: PerFileCache
+}
 
 interface DiskCache {
   version: number
-  manifest: string
-  summaries: SessionSummary[]
+  entries: Record<string, DiskCacheEntry>
 }
 
 function loadDiskCache(): DiskCache | null {
   try {
     if (fs.existsSync(CACHE_FILE)) {
       const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'))
-      if (data.version === CACHE_VERSION) return data
+      if (data.version === CACHE_VERSION && data.entries && typeof data.entries === 'object') return data
     }
   } catch { /* corrupt cache */ }
   return null
 }
 
-function saveDiskCache(manifest: string, summaries: SessionSummary[]): void {
+function saveDiskCache(entries: Record<string, DiskCacheEntry>): void {
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true })
-    fs.writeFileSync(CACHE_FILE, JSON.stringify({ version: CACHE_VERSION, manifest, summaries }))
+    const tempFile = `${CACHE_FILE}.tmp`
+    fs.writeFileSync(tempFile, JSON.stringify({ version: CACHE_VERSION, entries }))
+    fs.renameSync(tempFile, CACHE_FILE)
   } catch { /* ignore */ }
 }
 
-function computeFileManifest(files: string[]): string {
-  return files.sort().map((f) => {
-    try {
-      const statPath = detectSessionSourceFromPath(f) === 'opencode' ? stripOpencodeSessionRef(f) : f
-      const s = fs.statSync(statPath)
-      return `${f}:${s.mtimeMs}:${s.size}`
-    } catch {
-      return ''
-    }
-  }).filter(Boolean).join('\n')
+function computeFileSig(filePath: string, source: CachedSessionSource): string | null {
+  try {
+    const statPath = source === 'opencode' ? stripOpencodeSessionRef(filePath) : filePath
+    const stat = fs.statSync(statPath)
+    return `${stat.mtimeMs}:${stat.size}`
+  } catch {
+    return null
+  }
 }
 
 // --- Parallel Helper ---
@@ -709,6 +735,79 @@ interface FileEntry {
 function getFileTimeRange(raw: RawJsonlMessage[]): { start: string; end: string } {
   const timestamps = raw.map((m) => m.timestamp).filter(Boolean).sort()
   return { start: timestamps[0] || '', end: timestamps[timestamps.length - 1] || '' }
+}
+
+function compactLineageContent(content: string | ContentPart[] | undefined): string | ContentPart[] {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content.flatMap((part): ContentPart[] => {
+    if (part.type === 'text') return [{ type: 'text', text: part.text || '' }]
+    if (part.type === 'tool_result') return [{ type: 'tool_result' }]
+    if (part.type === 'image' && part.source?.type === 'base64') {
+      return [{ type: 'image', source: { type: 'base64' } }]
+    }
+    return []
+  })
+}
+
+/** Keep the data used by lineage and light summaries, excluding detail-only payloads. */
+function compactLineageMessage(message: RawJsonlMessage): RawJsonlMessage {
+  const compact: RawJsonlMessage = {
+    uuid: message.uuid,
+    parentUuid: message.parentUuid,
+    sessionId: message.sessionId,
+    type: message.type,
+    timestamp: message.timestamp
+  }
+  if (message.logicalParentUuid !== undefined) compact.logicalParentUuid = message.logicalParentUuid
+  if (message.subtype !== undefined) compact.subtype = message.subtype
+  if (message.cwd !== undefined) compact.cwd = message.cwd
+  if (message.version !== undefined) compact.version = message.version
+  if (message.slug !== undefined) compact.slug = message.slug
+  if (message.isSidechain !== undefined) compact.isSidechain = message.isSidechain
+  if (message.permissionMode !== undefined) compact.permissionMode = message.permissionMode
+  if (message.forkedFrom !== undefined) compact.forkedFrom = message.forkedFrom
+  if (message.message) {
+    compact.message = {
+      role: message.message.role,
+      model: message.message.model,
+      // Assistant prose/tool payloads do not participate in lineage or light
+      // summaries; their count/model/usage do, and are retained separately.
+      content: message.type === 'assistant' ? '' : compactLineageContent(message.message.content),
+      usage: message.message.usage
+    }
+  }
+  const aiTitle = (message as RawJsonlMessage & { aiTitle?: string }).aiTitle
+  if (aiTitle !== undefined) (compact as RawJsonlMessage & { aiTitle?: string }).aiTitle = aiTitle
+  return compact
+}
+
+function buildLineageMeta(filePath: string, raw: RawJsonlMessage[]): LineageMeta {
+  const { start, end } = getFileTimeRange(raw)
+  const sessionId = resolvePhysicalSessionId(filePath, raw) || ''
+  return {
+    uuids: raw.map((message) => message.uuid).filter(Boolean),
+    firstParentUuid: raw.find(
+      (message) => message.parentUuid && (message.type === 'user' || message.type === 'assistant')
+    )?.parentUuid || undefined,
+    leafUuidRefs: raw.map(compactLineageMessage),
+    forkedFrom: raw.find((message) => message.forkedFrom)?.forkedFrom,
+    startTime: start,
+    endTime: end,
+    cwd: getInitialSessionCwd(raw),
+    sessionId
+  }
+}
+
+function emptyLineageMeta(summary: SessionSummary | null): LineageMeta {
+  return {
+    uuids: [],
+    leafUuidRefs: [],
+    startTime: summary?.createdAt || '',
+    endTime: summary?.updatedAt || '',
+    cwd: summary?.resumeCwd || summary?.cwds[0],
+    sessionId: summary?.sessionId || ''
+  }
 }
 
 /**
@@ -1468,34 +1567,74 @@ function linkCrossSessionBranches(
   }
 }
 
+async function buildPerFileCache(filePath: string, source: CachedSessionSource): Promise<PerFileCache> {
+  if (source === 'claude-code') {
+    const raw = await parseSessionFile(filePath)
+    const lineageMeta = buildLineageMeta(filePath, raw)
+    const summary = lineageMeta.sessionId
+      ? buildSessionSummary(filePath, raw, true, lineageMeta.sessionId)
+      : null
+    return { summary, lineageMeta, source }
+  }
+
+  let summary: SessionSummary | null = null
+  if (source === 'codex') summary = await buildCodexSessionSummary(filePath)
+  else if (source === 'cursor') summary = await buildCursorSessionSummary(filePath)
+  else summary = await buildOpencodeSessionSummary(filePath)
+  return { summary, lineageMeta: emptyLineageMeta(summary), source }
+}
+
 export async function loadAllSessions(): Promise<SessionSummary[]> {
+  const startedAt = Date.now()
   const allFiles = findAllSessionFiles()
   const codexFiles = findCodexSessionFiles()
   const cursorFiles = findCursorSessionFiles()
   const opencodeFiles = await findOpencodeSessionFiles()
-  const manifest = computeFileManifest([...allFiles, ...codexFiles, ...cursorFiles, ...opencodeFiles])
-
-  // Fast path: return cached summaries if no files changed
   const cache = loadDiskCache()
-  if (cache && cache.manifest === manifest) {
-    return cache.summaries
-  }
+  const descriptors: Array<{ filePath: string; source: CachedSessionSource }> = [
+    ...allFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),
+    ...codexFiles.map((filePath) => ({ filePath, source: 'codex' as const })),
+    ...cursorFiles.map((filePath) => ({ filePath, source: 'cursor' as const })),
+    ...opencodeFiles.map((filePath) => ({ filePath, source: 'opencode' as const }))
+  ]
+  const currentFiles = descriptors.flatMap((descriptor) => {
+    const sig = computeFileSig(descriptor.filePath, descriptor.source)
+    return sig ? [{ ...descriptor, sig }] : []
+  })
+  const entries: Record<string, DiskCacheEntry> = {}
+  let parsedCount = 0
+  let reusedCount = 0
 
-  // Slow path: parse all files with parallel I/O + light summaries
-  const filesBySession = new Map<string, FileEntry[]>()
+  await parallelForEach(currentFiles, 4, async ({ filePath, source, sig }) => {
+    const cached = cache?.entries[filePath]
+    if (cached?.sig === sig && cached.perFile?.source === source &&
+      Array.isArray(cached.perFile.lineageMeta?.leafUuidRefs)) {
+      entries[filePath] = cached
+      reusedCount++
+      return
+    }
 
-  await parallelForEach(allFiles, 4, async (file) => {
+    parsedCount++
     try {
-      const raw = await parseSessionFile(file)
-      const sessionId = resolvePhysicalSessionId(file, raw)
-      if (!sessionId) return
-      const { start, end } = getFileTimeRange(raw)
-      if (!filesBySession.has(sessionId)) filesBySession.set(sessionId, [])
-      filesBySession.get(sessionId)!.push({ filePath: file, raw, startTime: start, endTime: end })
+      entries[filePath] = { sig, perFile: await buildPerFileCache(filePath, source) }
     } catch {
-      // skip files that can't be parsed
+      entries[filePath] = { sig, perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source } }
     }
   })
+
+  // Rebuild lineage from every file's cached metadata. Only changed/new files were parsed above.
+  const filesBySession = new Map<string, FileEntry[]>()
+  for (const file of allFiles) {
+    const meta = entries[file]?.perFile.lineageMeta
+    if (!meta?.sessionId) continue
+    if (!filesBySession.has(meta.sessionId)) filesBySession.set(meta.sessionId, [])
+    filesBySession.get(meta.sessionId)!.push({
+      filePath: file,
+      raw: meta.leafUuidRefs,
+      startTime: meta.startTime,
+      endTime: meta.endTime
+    })
+  }
 
   const summaries: SessionSummary[] = []
   const initialClusters = buildInitialSessionClusters(filesBySession)
@@ -1504,7 +1643,14 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
 
   for (const cluster of logicalClusters) {
     const primaryFile = cluster.filePaths[0]
-    const summary = buildSessionSummary(primaryFile, cluster.raw, true, cluster.sessionId)
+    // A one-file logical session already has an exact cached summary. Rebuilding it
+    // from lineage refs would turn the hot path back into an all-message scan.
+    const perFileSummary = cluster.entries.length === 1
+      ? entries[primaryFile]?.perFile.summary
+      : null
+    const summary = perFileSummary
+      ? { ...perFileSummary }
+      : buildSessionSummary(primaryFile, cluster.raw, true, cluster.sessionId)
     if (summary) {
       summary.allFilePaths = cluster.filePaths
       if (cluster.branchSummaryId) summary.id = cluster.branchSummaryId
@@ -1581,32 +1727,18 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
     }
   }
 
-  // --- Load Codex sessions ---
-  await parallelForEach(codexFiles, 4, async (file) => {
-    try {
-      const summary = await buildCodexSessionSummary(file)
-      if (summary) summaries.push(summary)
-    } catch { /* skip */ }
-  })
-
-  // --- Load Cursor sessions ---
-  await parallelForEach(cursorFiles, 4, async (file) => {
-    try {
-      const summary = await buildCursorSessionSummary(file)
-      if (summary) summaries.push(summary)
-    } catch { /* skip */ }
-  })
-
-  // --- Load opencode sessions ---
-  await parallelForEach(opencodeFiles, 4, async (file) => {
-    try {
-      const summary = await buildOpencodeSessionSummary(file)
-      if (summary) summaries.push(summary)
-    } catch { /* skip */ }
-  })
+  for (const { filePath, source } of descriptors) {
+    if (source === 'claude-code') continue
+    const summary = entries[filePath]?.perFile.summary
+    if (summary) summaries.push(summary)
+  }
 
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-  saveDiskCache(manifest, summaries)
+  saveDiskCache(entries)
+  console.info(
+    `[session-loader] incremental cache: parsed ${parsedCount}, reused ${reusedCount}, ` +
+    `files ${currentFiles.length}, ${Date.now() - startedAt}ms`
+  )
   return summaries
 }
 

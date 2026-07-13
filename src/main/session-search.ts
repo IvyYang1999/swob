@@ -1,4 +1,7 @@
+import * as fs from 'fs'
+import * as path from 'path'
 import { parseSessionFile } from './session-loader'
+import type { RawJsonlMessage } from './types'
 
 export interface SessionSearchResult {
   sessionId: string
@@ -9,6 +12,89 @@ export interface SessionSearchResult {
 
 export interface SessionSearchSource {
   filePath: string
+}
+
+// Keep this cache separate from summary-cache.json. Searches may include library
+// backups which are not part of the session-summary cache, and corrupt or stale
+// search data must never invalidate summary/lineage data.
+const SEARCH_CACHE_VERSION = 1
+const DEFAULT_CACHE_DIR = path.join(process.env.HOME || '', '.claude-session-manager')
+
+interface CachedSearchMessage {
+  text: string
+  timestamp: string
+}
+
+interface SearchCacheEntry {
+  sig: string
+  sessionId: string | null
+  firstUserMessage: string
+  messages: CachedSearchMessage[]
+}
+
+interface SearchDiskCache {
+  version: number
+  entries: Record<string, SearchCacheEntry>
+}
+
+interface InMemorySearchCache {
+  file: string
+  diskSig: string | null
+  cache: SearchDiskCache
+  persisted: boolean
+}
+
+let inMemoryCache: InMemorySearchCache | null = null
+
+function searchCacheFile(): string {
+  // The override is intentionally only for isolated tests. Production always
+  // uses the same private application cache directory as session-loader.
+  return path.join(process.env.SWOB_SEARCH_CACHE_DIR || DEFAULT_CACHE_DIR, 'search-cache.json')
+}
+
+function loadSearchCache(file: string): SearchDiskCache | null {
+  try {
+    const cache = JSON.parse(fs.readFileSync(file, 'utf-8')) as SearchDiskCache
+    if (cache.version === SEARCH_CACHE_VERSION && cache.entries && typeof cache.entries === 'object') {
+      return cache
+    }
+  } catch { /* missing or corrupt cache: rebuild below */ }
+  return null
+}
+
+function saveSearchCache(cache: SearchDiskCache): void {
+  try {
+    const file = searchCacheFile()
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    const tempFile = `${file}.tmp`
+    fs.writeFileSync(tempFile, JSON.stringify(cache), { mode: 0o600 })
+    fs.renameSync(tempFile, file)
+    inMemoryCache = { file, diskSig: computeFileSig(file), cache, persisted: true }
+  } catch { /* cache is an optimization, never a search failure */ }
+}
+
+function computeFileSig(filePath: string): string | null {
+  try {
+    const stat = fs.statSync(filePath)
+    return `${stat.mtimeMs}:${stat.size}`
+  } catch {
+    return null
+  }
+}
+
+function getSearchCache(): InMemorySearchCache {
+  const file = searchCacheFile()
+  const diskSig = computeFileSig(file)
+  if (inMemoryCache?.file === file && inMemoryCache.diskSig === diskSig) return inMemoryCache
+
+  const loaded = loadSearchCache(file)
+  inMemoryCache = {
+    file,
+    diskSig,
+    cache: loaded || { version: SEARCH_CACHE_VERSION, entries: {} },
+    persisted: Boolean(loaded)
+  }
+  return inMemoryCache
 }
 
 function extractContentText(content: unknown): string {
@@ -37,6 +123,25 @@ function getFirstUserMessage(raw: Array<{ type: string; message?: { content?: un
   return extractContentText(firstUser?.message?.content).slice(0, 200)
 }
 
+function buildSearchCacheEntry(raw: RawJsonlMessage[], sig: string): SearchCacheEntry {
+  return {
+    sig,
+    sessionId: raw.find((m) => m.sessionId)?.sessionId || null,
+    firstUserMessage: getFirstUserMessage(raw),
+    messages: raw
+      .filter((m) => m.type === 'user' || m.type === 'assistant')
+      .map((m) => ({ text: extractContentText(m.message?.content), timestamp: m.timestamp }))
+  }
+}
+
+function isUsableCacheEntry(entry: SearchCacheEntry | undefined, sig: string): entry is SearchCacheEntry {
+  return Boolean(
+    entry && entry.sig === sig && (typeof entry.sessionId === 'string' || entry.sessionId === null) &&
+    typeof entry.firstUserMessage === 'string' && Array.isArray(entry.messages) &&
+    entry.messages.every((message) => typeof message?.text === 'string' && typeof message.timestamp === 'string')
+  )
+}
+
 export async function searchSessionFiles(
   query: string,
   sources: SessionSearchSource[]
@@ -44,6 +149,9 @@ export async function searchSessionFiles(
   const results: SessionSearchResult[] = []
   const seenFiles = new Set<string>()
   const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+  const memoryCache = getSearchCache()
+  const entries = memoryCache.cache.entries
+  let cacheChanged = !memoryCache.persisted
 
   for (const source of sources) {
     const file = source.filePath
@@ -51,14 +159,22 @@ export async function searchSessionFiles(
     seenFiles.add(file)
 
     try {
-      const raw = await parseSessionFile(file)
-      const sessionId = raw.find((m) => m.sessionId)?.sessionId
+      const sig = computeFileSig(file)
+      if (!sig) continue
+
+      let entry = entries[file]
+      if (!isUsableCacheEntry(entry, sig)) {
+        entry = buildSearchCacheEntry(await parseSessionFile(file), sig)
+        entries[file] = entry
+        cacheChanged = true
+      }
+
+      const sessionId = entry.sessionId
       if (!sessionId) continue
 
       const matches: Array<{ text: string; timestamp: string }> = []
-      for (const msg of raw) {
-        if (msg.type !== 'user' && msg.type !== 'assistant') continue
-        const text = extractContentText(msg.message?.content)
+      for (const message of entry.messages) {
+        const text = message.text
         if (regex.test(text)) {
           const matchIndex = text.search(regex)
           const start = Math.max(0, matchIndex - 60)
@@ -68,7 +184,7 @@ export async function searchSessionFiles(
               (start > 0 ? '...' : '') +
               text.slice(start, end) +
               (end < text.length ? '...' : ''),
-            timestamp: msg.timestamp
+            timestamp: message.timestamp
           })
           regex.lastIndex = 0
         }
@@ -79,7 +195,7 @@ export async function searchSessionFiles(
         results.push({
           sessionId,
           filePath: file,
-          firstUserMessage: getFirstUserMessage(raw),
+          firstUserMessage: entry.firstUserMessage,
           matches
         })
       }
@@ -87,6 +203,8 @@ export async function searchSessionFiles(
       /* skip */
     }
   }
+
+  if (cacheChanged) saveSearchCache(memoryCache.cache)
 
   results.sort((a, b) => {
     if (b.matches.length !== a.matches.length) return b.matches.length - a.matches.length

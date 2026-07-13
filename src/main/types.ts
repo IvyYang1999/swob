@@ -10,7 +10,7 @@ export interface RawJsonlMessage {
   parentUuid: string | null
   logicalParentUuid?: string | null  // used across compact boundaries
   sessionId: string
-  type: 'user' | 'assistant' | 'system' | 'progress' | 'file-history-snapshot'
+  type: 'user' | 'assistant' | 'system' | 'progress' | 'file-history-snapshot' | 'summary'
   subtype?: string
   timestamp: string
   cwd?: string
@@ -31,6 +31,8 @@ export interface RawJsonlMessage {
   }
   data?: unknown
   forkedFrom?: { sessionId: string; messageUuid: string }
+  /** Claude continuation summary: the UUID at which the previous session ended. */
+  leafUuid?: string
 }
 
 export interface ContentPart {

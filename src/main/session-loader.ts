@@ -88,7 +88,9 @@ const CACHE_VERSION = 19 // per-file summaries + lineage metadata
 
 type CachedSessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode'
 
-interface LineageMeta {
+export interface CachedLineageMeta {
+  /** Bump independently of the disk-cache version when compacted lineage fields change. */
+  lineageFormatVersion: 2
   uuids: string[]
   firstParentUuid?: string
   // Compact message references, not the full JSONL records. These retain exactly the
@@ -104,7 +106,7 @@ interface LineageMeta {
 
 interface PerFileCache {
   summary: SessionSummary | null
-  lineageMeta: LineageMeta
+  lineageMeta: CachedLineageMeta
   source: CachedSessionSource
 }
 
@@ -767,6 +769,7 @@ function compactLineageMessage(message: RawJsonlMessage): RawJsonlMessage {
   if (message.isSidechain !== undefined) compact.isSidechain = message.isSidechain
   if (message.permissionMode !== undefined) compact.permissionMode = message.permissionMode
   if (message.forkedFrom !== undefined) compact.forkedFrom = message.forkedFrom
+  if (message.leafUuid !== undefined) compact.leafUuid = message.leafUuid
   if (message.message) {
     compact.message = {
       role: message.message.role,
@@ -782,10 +785,11 @@ function compactLineageMessage(message: RawJsonlMessage): RawJsonlMessage {
   return compact
 }
 
-function buildLineageMeta(filePath: string, raw: RawJsonlMessage[]): LineageMeta {
+function buildLineageMeta(filePath: string, raw: RawJsonlMessage[]): CachedLineageMeta {
   const { start, end } = getFileTimeRange(raw)
   const sessionId = resolvePhysicalSessionId(filePath, raw) || ''
   return {
+    lineageFormatVersion: 2,
     uuids: raw.map((message) => message.uuid).filter(Boolean),
     firstParentUuid: raw.find(
       (message) => message.parentUuid && (message.type === 'user' || message.type === 'assistant')
@@ -799,8 +803,9 @@ function buildLineageMeta(filePath: string, raw: RawJsonlMessage[]): LineageMeta
   }
 }
 
-function emptyLineageMeta(summary: SessionSummary | null): LineageMeta {
+function emptyLineageMeta(summary: SessionSummary | null): CachedLineageMeta {
   return {
+    lineageFormatVersion: 2,
     uuids: [],
     leafUuidRefs: [],
     startTime: summary?.createdAt || '',
@@ -1584,6 +1589,76 @@ async function buildPerFileCache(filePath: string, source: CachedSessionSource):
   return { summary, lineageMeta: emptyLineageMeta(summary), source }
 }
 
+export interface CachedClaudeLineageFile {
+  filePath: string
+  meta: CachedLineageMeta
+}
+
+export interface CachedClaudeLineageLoadResult {
+  files: CachedClaudeLineageFile[]
+  parsedFileCount: number
+  reusedFileCount: number
+}
+
+/**
+ * Return Claude lineage metadata from the same incremental per-file cache used by
+ * the session loader. A changed file is parsed once; unchanged files are reused
+ * directly, so lineage never needs to rescan every JSONL just to rebuild its UUID
+ * index.
+ */
+export async function loadCachedClaudeLineageMetadata(
+  filePaths: string[] = findAllSessionFiles()
+): Promise<CachedClaudeLineageLoadResult> {
+  const cache = loadDiskCache()
+  const currentFiles = filePaths.flatMap((filePath) => {
+    const sig = computeFileSig(filePath, 'claude-code')
+    return sig ? [{ filePath, sig }] : []
+  })
+  const currentPaths = new Set(currentFiles.map(({ filePath }) => filePath))
+  const entries: Record<string, DiskCacheEntry> = { ...(cache?.entries || {}) }
+
+  // This entry point only owns Claude files. Keep cached summaries from other
+  // sources intact while pruning Claude files that were removed from disk.
+  for (const [filePath, entry] of Object.entries(entries)) {
+    if (entry.perFile?.source === 'claude-code' && !currentPaths.has(filePath)) {
+      delete entries[filePath]
+    }
+  }
+
+  let parsedFileCount = 0
+  let reusedFileCount = 0
+  await parallelForEach(currentFiles, 4, async ({ filePath, sig }) => {
+    const cached = cache?.entries[filePath]
+    if (cached?.sig === sig && cached.perFile?.source === 'claude-code' &&
+      cached.perFile.lineageMeta?.lineageFormatVersion === 2 &&
+      Array.isArray(cached.perFile.lineageMeta?.leafUuidRefs)) {
+      entries[filePath] = cached
+      reusedFileCount++
+      return
+    }
+
+    parsedFileCount++
+    try {
+      entries[filePath] = { sig, perFile: await buildPerFileCache(filePath, 'claude-code') }
+    } catch {
+      entries[filePath] = {
+        sig,
+        perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source: 'claude-code' }
+      }
+    }
+  })
+
+  saveDiskCache(entries)
+  return {
+    files: currentFiles.flatMap(({ filePath }) => {
+      const meta = entries[filePath]?.perFile.lineageMeta
+      return meta?.sessionId ? [{ filePath, meta }] : []
+    }),
+    parsedFileCount,
+    reusedFileCount
+  }
+}
+
 export async function loadAllSessions(): Promise<SessionSummary[]> {
   const startedAt = Date.now()
   const allFiles = findAllSessionFiles()
@@ -1608,6 +1683,7 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
   await parallelForEach(currentFiles, 4, async ({ filePath, source, sig }) => {
     const cached = cache?.entries[filePath]
     if (cached?.sig === sig && cached.perFile?.source === source &&
+      (source !== 'claude-code' || cached.perFile.lineageMeta?.lineageFormatVersion === 2) &&
       Array.isArray(cached.perFile.lineageMeta?.leafUuidRefs)) {
       entries[filePath] = cached
       reusedCount++

@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildSessionLineageRegistryFromClaudeFiles,
   getSessionLineagePath,
@@ -24,6 +24,7 @@ afterEach(() => {
 
 function writeJsonl(root: string, sessionId: string, rows: unknown[]): string {
   const filePath = path.join(root, `${sessionId}.jsonl`)
+  fs.mkdirSync(root, { recursive: true })
   fs.writeFileSync(filePath, rows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf-8')
   return filePath
 }
@@ -63,6 +64,7 @@ describe('session-lineage', () => {
     ])
     const newFile = writeJsonl(root, newId, [
       { type: 'mode', sessionId: newId },
+      { type: 'summary', sessionId: newId, leafUuid: 'u2', timestamp: '2026-07-09T10:01:30.000Z' },
       message(newId, 'u1', null, '2026-07-09T10:00:00.000Z'),
       message(newId, 'u2', 'u1', '2026-07-09T10:01:00.000Z'),
       message(newId, 'u3', 'u2', '2026-07-09T10:02:00.000Z')
@@ -81,14 +83,11 @@ describe('session-lineage', () => {
     })
     expect(registry.latestByRoot[oldId]).toBe(newId)
     expect(registry.relations[0]).toMatchObject({
-      from: oldId,
-      to: newId,
-      evidence: {
-        type: 'uuid-parent-chain',
-        overlapCount: 2,
-        parentUuid: 'u2',
-        childFirstNewUuid: 'u3'
-      }
+      child: newId,
+      parent: oldId,
+      type: 'continuation',
+      pointUuid: 'u2',
+      pointTs: '2026-07-09T10:01:00.000Z'
     })
   })
 
@@ -137,6 +136,13 @@ describe('session-lineage', () => {
     })
 
     expect(registry.aliases).toEqual({})
+    expect(registry.relations).toEqual([{
+      child: forkId,
+      parent: oldId,
+      type: 'fork',
+      pointUuid: 'u2',
+      pointTs: '2026-07-09T10:01:00.000Z'
+    }])
   })
 
   it('【血统】forkedFrom 出现在 child 非首个新行时也不把 fork 当转世', async () => {
@@ -163,6 +169,13 @@ describe('session-lineage', () => {
 
     expect(registry.aliases).toEqual({})
     expect(registry.ambiguous).toEqual([])
+    expect(registry.relations).toEqual([{
+      child: forkId,
+      parent: oldId,
+      type: 'fork',
+      pointUuid: 'u2',
+      pointTs: '2026-07-09T10:01:00.000Z'
+    }])
   })
 
   it('【血统】任一侧 cwd 缺失时不连并进入 ambiguous', async () => {
@@ -312,5 +325,134 @@ describe('session-lineage', () => {
       latestByRoot: { [oldId]: newId }
     })
     expect(written.sessions[oldId].latestResumeId).toBe(newId)
+  })
+
+  it('【血统】找不到 fork 指针的前身时写入 broken，不伪造有效关系', async () => {
+    const root = makeTmpRoot()
+    const childId = 'abababab-abab-4bab-8bab-abababababab'
+    const file = writeJsonl(root, childId, [
+      message(childId, 'child-u1', null, '2026-07-09T10:00:00.000Z', {
+        forkedFrom: { sessionId: 'remote-parent-id', messageUuid: 'remote-point' }
+      })
+    ])
+
+    const registry = await buildSessionLineageRegistryFromClaudeFiles([file], { libraryRoot: root })
+
+    expect(registry.relations).toEqual([])
+    expect(registry.broken).toEqual([{
+      child: childId,
+      parentSessionRef: 'remote-parent-id',
+      type: 'fork',
+      pointUuid: 'remote-point',
+      pointTs: ''
+    }])
+  })
+
+  it('【血统】找不到 continuation summary 的 leafUuid 时写入 broken', async () => {
+    const root = makeTmpRoot()
+    const childId = 'fefefefe-fefe-4efe-8efe-fefefefefefe'
+    const file = writeJsonl(root, childId, [
+      { type: 'summary', sessionId: childId, leafUuid: 'missing-leaf', timestamp: '2026-07-09T10:00:00.000Z' },
+      message(childId, 'child-u1', null, '2026-07-09T10:01:00.000Z')
+    ])
+
+    const registry = await buildSessionLineageRegistryFromClaudeFiles([file], { libraryRoot: root })
+
+    expect(registry.relations).toEqual([])
+    expect(registry.broken).toEqual([{
+      child: childId,
+      type: 'continuation',
+      pointUuid: 'missing-leaf',
+      pointTs: ''
+    }])
+  })
+
+  it('【血统】同一 child 的两个精确前身冲突时进入 ambiguous 且不硬连', async () => {
+    const root = makeTmpRoot()
+    const parentA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const parentB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const childId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const fileA = writeJsonl(root, parentA, [message(parentA, 'point-a', null, '2026-07-09T10:00:00.000Z')])
+    const fileB = writeJsonl(root, parentB, [message(parentB, 'point-b', null, '2026-07-09T10:00:00.000Z')])
+    const child = writeJsonl(root, childId, [
+      message(childId, 'child-1', null, '2026-07-09T10:01:00.000Z', {
+        forkedFrom: { sessionId: parentA, messageUuid: 'point-a' }
+      }),
+      message(childId, 'child-2', 'child-1', '2026-07-09T10:02:00.000Z', {
+        forkedFrom: { sessionId: parentB, messageUuid: 'point-b' }
+      })
+    ])
+
+    const registry = await buildSessionLineageRegistryFromClaudeFiles([fileA, fileB, child], { libraryRoot: root })
+
+    expect(registry.relations).toEqual([])
+    expect(registry.ambiguous).toContainEqual({
+      sessionId: childId,
+      reason: 'multiple-exact-lineage-parents',
+      candidates: [
+        { sessionId: parentA, updatedAt: '2026-07-09T10:00:00.000Z', overlapCount: 0, parentCoverage: 0 },
+        { sessionId: parentB, updatedAt: '2026-07-09T10:00:00.000Z', overlapCount: 0, parentCoverage: 0 }
+      ]
+    })
+  })
+
+  it('【血统】全局 UUID 索引复用 session-loader 缓存，二次读取不重扫 JSONL', async () => {
+    const home = makeTmpRoot()
+    const project = path.join(home, '.claude', 'projects', '-Users-test-lineage-cache')
+    const first = writeJsonl(project, 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', [
+      message('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'cache-point', null, '2026-07-09T10:00:00.000Z')
+    ])
+    const second = writeJsonl(project, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', [
+      { type: 'summary', sessionId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', leafUuid: 'cache-point', timestamp: '2026-07-09T10:01:00.000Z' },
+      message('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'cache-child', null, '2026-07-09T10:01:01.000Z')
+    ])
+    const previousHome = process.env.HOME
+    process.env.HOME = home
+    vi.resetModules()
+    try {
+      const { loadCachedClaudeLineageMetadata } = await import('./session-loader')
+      const initial = await loadCachedClaudeLineageMetadata([first, second])
+      const hot = await loadCachedClaudeLineageMetadata([first, second])
+      expect(initial).toMatchObject({ parsedFileCount: 2, reusedFileCount: 0 })
+      expect(hot).toMatchObject({ parsedFileCount: 0, reusedFileCount: 2 })
+      expect(hot.files[1].meta.leafUuidRefs).toContainEqual(expect.objectContaining({ leafUuid: 'cache-point' }))
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      vi.resetModules()
+    }
+  })
+
+  it('【血统】CLI 重建保留已有 aliases 键，并把新 continuation 链闭包到最新 id', async () => {
+    const home = makeTmpRoot()
+    const project = path.join(home, '.claude', 'projects', '-Users-test-lineage-aliases')
+    const library = path.join(home, 'library')
+    const oldId = '11111111-1111-4111-8111-111111111111'
+    const latestId = '22222222-2222-4222-8222-222222222222'
+    writeJsonl(project, oldId, [message(oldId, 'old-point', null, '2026-07-09T10:00:00.000Z')])
+    writeJsonl(project, latestId, [
+      { type: 'summary', sessionId: latestId, leafUuid: 'old-point', timestamp: '2026-07-09T10:01:00.000Z' },
+      message(latestId, 'latest-point', null, '2026-07-09T10:01:01.000Z')
+    ])
+    fs.mkdirSync(library, { recursive: true })
+    fs.writeFileSync(path.join(library, '.session-lineage.json'), JSON.stringify({
+      aliases: { 'legacy-old-id': oldId }
+    }), 'utf-8')
+
+    const previousHome = process.env.HOME
+    process.env.HOME = home
+    vi.resetModules()
+    try {
+      const { rebuildSessionLineageRegistry } = await import('./session-lineage')
+      const registry = await rebuildSessionLineageRegistry(library)
+      expect(registry.aliases).toMatchObject({
+        [oldId]: latestId,
+        'legacy-old-id': latestId
+      })
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      vi.resetModules()
+    }
   })
 })

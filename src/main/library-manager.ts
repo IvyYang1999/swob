@@ -8,6 +8,7 @@ import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loa
 import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
+import { redactSecrets } from './secret-redactor'
 import { shellQuote } from './resume-terminal'
 import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
 
@@ -918,7 +919,7 @@ export function generateTranscript(
     }
   }
 
-  return lines.join('\n')
+  return redactSecrets(lines.join('\n')).text
 }
 
 // --- Ensure Session in Library ---
@@ -1148,7 +1149,7 @@ function writeDerivedFilesFromLoadedRaw(sessionId: string, dirPath: string, rawM
   for (const generator of generators) {
     const content = generator.generate(rawMessages, { sessionId })
     if (content === null) continue
-    fs.writeFileSync(path.join(dirPath, generator.fileName), content, 'utf-8')
+    fs.writeFileSync(path.join(dirPath, generator.fileName), redactSecrets(content).text, 'utf-8')
   }
 }
 
@@ -1215,6 +1216,13 @@ export interface RebuildTranscriptsResult {
   wouldWrite: number
 }
 
+export interface RedactLibraryTranscriptsResult {
+  dryRun: boolean
+  /** Number of files that contain at least one credential match. */
+  files: number
+  hits: number
+}
+
 function collectLibrarySessions(tree: LibraryTree): LibrarySession[] {
   const sessions: LibrarySession[] = [...tree.ungroupedSessions]
   const walk = (folder: LibraryFolder): void => {
@@ -1223,6 +1231,57 @@ function collectLibrarySessions(tree: LibraryTree): LibrarySession[] {
   }
   for (const folder of tree.folders) walk(folder)
   return sessions
+}
+
+function redactableMarkdownPaths(dirPath: string): string[] {
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries
+    .filter((entry) => entry.isFile() && isSessionCompanionFileName(entry.name) && entry.name.endsWith('.md'))
+    .map((entry) => path.join(dirPath, entry.name))
+}
+
+/**
+ * Backfill generated markdown only. Original JSONL, backups, metadata and user
+ * notes are deliberately outside this traversal.
+ */
+export function redactLibraryTranscripts(options: { dryRun?: boolean } = {}): RedactLibraryTranscriptsResult {
+  const dryRun = options.dryRun === true
+  const sessions = collectLibrarySessions(scanLibrary())
+  const visitedDirs = new Set<string>()
+  let files = 0
+  let hits = 0
+
+  for (const session of sessions) {
+    let realDir: string
+    try {
+      realDir = fs.realpathSync(session.dirPath)
+    } catch {
+      continue
+    }
+    if (visitedDirs.has(realDir)) continue
+    visitedDirs.add(realDir)
+
+    for (const mdPath of redactableMarkdownPaths(realDir)) {
+      let content: string
+      try {
+        content = fs.readFileSync(mdPath, 'utf-8')
+      } catch {
+        continue
+      }
+      const result = redactSecrets(content)
+      if (result.hits === 0) continue
+      files++
+      hits += result.hits
+      if (!dryRun) fs.writeFileSync(mdPath, result.text, 'utf-8')
+    }
+  }
+
+  return { dryRun, files, hits }
 }
 
 export async function rebuildAllTranscripts(options: { dryRun?: boolean; missingOnly?: boolean } = {}): Promise<RebuildTranscriptsResult> {

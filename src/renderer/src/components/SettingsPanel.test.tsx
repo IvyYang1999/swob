@@ -59,7 +59,10 @@ vi.mock('../i18n', () => ({
       'settings.ssh_clear': '清除',
       'settings.project_view': '项目视图',
       'settings.project_view_folders': '按整理的文件夹',
-      'settings.project_view_paths': '按实际项目路径'
+      'settings.project_view_paths': '按实际项目路径',
+      'settings.update': '软件更新',
+      'settings.check_for_updates': '检查更新',
+      'settings.checking_update': '正在检查更新…'
     }
     return labels[key] || key
   }
@@ -85,6 +88,7 @@ describe('SettingsPanel Resume 终端设置', () => {
         skillInstalled: true
       }),
       cliInstall: vi.fn(),
+      checkForUpdates: vi.fn().mockResolvedValue(undefined),
       networkGetInfo: vi.fn().mockResolvedValue({
         localIps: [],
         tailscaleIp: null,
@@ -127,5 +131,13 @@ describe('SettingsPanel Resume 终端设置', () => {
     expect(savePreferences).toHaveBeenCalledWith({
       resumeTerminalCommandTemplate: 'wezterm start -- {{command}}'
     })
+  })
+
+  it('提供手动检查更新入口', async () => {
+    render(<SettingsPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: '检查更新' }))
+
+    expect((window as any).api.checkForUpdates).toHaveBeenCalledTimes(1)
   })
 })

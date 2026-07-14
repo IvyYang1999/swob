@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Download, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
 
-type UpdateState = 'idle' | 'downloading' | 'ready'
+type UpdateState = 'idle' | 'available' | 'downloading' | 'ready'
 
 export function UpdateBanner() {
   const [state, setState] = useState<UpdateState>('idle')
@@ -11,6 +11,11 @@ export function UpdateBanner() {
 
   useEffect(() => {
     const api = (window as any).api
+    api.onUpdateAvailable((v: string, n: string) => {
+      setVersion(v)
+      setNotes(n || '')
+      setState('available')
+    })
     api.onUpdateDownloading((v: string) => {
       setVersion(v)
       setState('downloading')
@@ -37,6 +42,18 @@ export function UpdateBanner() {
           <>
             <Download size={14} className="text-zinc-400 animate-pulse shrink-0" />
             <span className="text-zinc-400">正在下载 v{version}…</span>
+          </>
+        )}
+        {state === 'available' && (
+          <>
+            <Download size={14} className="text-zinc-300 shrink-0" />
+            <span>发现新版本 v{version}</span>
+            <button
+              onClick={() => (window as any).api.downloadUpdate()}
+              className="ml-auto px-2 py-0.5 rounded bg-green-600 hover:bg-green-500 text-white text-xs font-medium transition-colors shrink-0"
+            >
+              更新
+            </button>
           </>
         )}
         {state === 'ready' && (

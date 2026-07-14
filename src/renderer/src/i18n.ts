@@ -44,6 +44,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.project_view': '项目视图',
     'settings.project_view_folders': '按整理的文件夹',
     'settings.project_view_paths': '按实际项目路径',
+    'settings.update': '软件更新',
+    'settings.check_for_updates': '检查更新',
+    'settings.checking_update': '正在检查更新…',
 
     // Sidebar
     'sidebar.sessions': 'Sessions',
@@ -181,6 +184,9 @@ const translations: Record<Locale, Record<string, string>> = {
     'settings.project_view': 'Project View',
     'settings.project_view_folders': 'By organized folders',
     'settings.project_view_paths': 'By actual project paths',
+    'settings.update': 'Software Update',
+    'settings.check_for_updates': 'Check for updates',
+    'settings.checking_update': 'Checking for updates…',
 
     // Sidebar
     'sidebar.sessions': 'Sessions',

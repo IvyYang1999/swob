@@ -61,6 +61,14 @@ interface ElectronAPI {
   spotlightToggle: () => Promise<void>
   onSpotlightNavigate: (callback: (sessionId: string) => void) => void
 
+  // Auto Update
+  onUpdateAvailable: (callback: (version: string, notes: string) => void) => void
+  onUpdateDownloading: (callback: (version: string) => void) => void
+  onUpdateReady: (callback: (version: string, notes: string) => void) => void
+  checkForUpdates: () => Promise<void>
+  downloadUpdate: () => Promise<void>
+  installUpdate: () => Promise<void>
+
   // CLI
   cliGetStatus: () => Promise<{ cliInstalled: boolean; symlinkInstalled: boolean; skillInstalled: boolean }>
   cliInstall: () => Promise<{ cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; cliManualInstall?: string; error?: string }>

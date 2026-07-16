@@ -5,6 +5,7 @@ import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIn
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
 import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loader'
+import { loadZcodeRawMessages, stripZcodeSessionRef } from './zcode-loader'
 import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
@@ -83,6 +84,7 @@ const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 function isOriginalSessionSourcePath(filePath: string): boolean {
   const normalized = filePath.split(path.sep).join('/')
   if (normalized.includes('/.local/share/opencode/opencode.db#ses_')) return true
+  if (normalized.includes('/.zcode/cli/db/db.sqlite#sess_')) return true
   if (!filePath.endsWith('.jsonl')) return false
   return normalized.includes('/.claude/projects/') ||
     normalized.includes('/.claude-window/') ||
@@ -91,9 +93,10 @@ function isOriginalSessionSourcePath(filePath: string): boolean {
 }
 
 function sourceStatPath(filePath: string): string {
-  return detectSessionSourceFromPath(filePath) === 'opencode'
-    ? stripOpencodeSessionRef(filePath)
-    : filePath
+  const source = detectSessionSourceFromPath(filePath)
+  if (source === 'opencode') return stripOpencodeSessionRef(filePath)
+  if (source === 'zcode') return stripZcodeSessionRef(filePath)
+  return filePath
 }
 
 function sourceFilePathsForMeta(session: SessionSummary): string[] {
@@ -843,6 +846,7 @@ function inferDevice(sourcePath: string): string {
 function buildResumeCommand(source: SessionSource, sessionId: string): string {
   if (source === 'codex') return `codex resume ${sessionId}`
   if (source === 'cursor') return `cursor-agent --resume=${sessionId}`
+  if (source === 'opencode' || source === 'zcode') return `${source} --session ${sessionId}`
   return `claude --resume ${sessionId}`
 }
 
@@ -999,7 +1003,8 @@ export async function syncBackup(sessionId: string): Promise<void> {
   const allContent: string[] = []
   for (const src of sourceFilePathsFromMeta(meta) || []) {
     try {
-      if (detectSessionSourceFromPath(src) === 'opencode') continue
+      const source = detectSessionSourceFromPath(src)
+      if (source === 'opencode' || source === 'zcode') continue
       if (fs.existsSync(src)) {
         allContent.push(fs.readFileSync(src, 'utf-8'))
       }
@@ -1033,6 +1038,7 @@ async function loadRawFileForTranscript(filePath: string, source: SessionSource,
   if (source === 'codex') return loadCodexRawMessages(filePath, sessionId)
   if (source === 'cursor') return loadCursorRawMessages(filePath, sessionId)
   if (source === 'opencode') return loadOpencodeRawMessages(filePath, sessionId)
+  if (source === 'zcode') return loadZcodeRawMessages(filePath, sessionId)
   return parseSessionFile(filePath)
 }
 

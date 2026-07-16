@@ -49,7 +49,7 @@ interface SessionSummary {
   resumeUnavailableReason?: string
   isRemote?: boolean
   remoteHost?: string
-  source?: 'claude-code' | 'codex' | 'cursor' | 'opencode'
+  source?: 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode'
   claudeConfigDir?: string
 }
 

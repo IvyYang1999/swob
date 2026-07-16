@@ -8,12 +8,23 @@ import type {
   SessionDetail,
   ToolCallInfo,
   TokenUsage,
-  ContentPart
+  ContentPart,
+  SessionSource
 } from './types'
 
-const SESSION_ID_RE = /^ses_[A-Za-z0-9]+$/
+const SESSION_ID_RE = /^sess?_[A-Za-z0-9_-]+$/
 const SQLITE_TIMEOUT_MS = 5000
-const OPENCODE_DB_RELATIVE = ['.local', 'share', 'opencode', 'opencode.db']
+const AGENT_DB_SOURCES = {
+  opencode: {
+    relativePath: ['.local', 'share', 'opencode', 'opencode.db'],
+    summaryPrefix: 'opencode'
+  },
+  zcode: {
+    relativePath: ['.zcode', 'cli', 'db', 'db.sqlite'],
+    summaryPrefix: 'zcode'
+  }
+} as const
+export type SqliteAgentSource = keyof typeof AGENT_DB_SOURCES
 const SESSION_SELECT_COLUMNS = [
   'id',
   'slug',
@@ -28,7 +39,10 @@ const SESSION_SELECT_COLUMNS = [
   'time_updated',
   'timeUpdated',
   'updated_at',
-  'updatedAt'
+  'updatedAt',
+  'parent_id',
+  'parentId',
+  'parentID'
 ]
 const MESSAGE_SELECT_COLUMNS = ['id', 'data', 'role', 'time_created', 'timeCreated']
 const PART_SELECT_COLUMNS = [
@@ -67,7 +81,11 @@ interface LoadedOpencodeSession {
 const schemaCache = new Map<string, Promise<OpencodeSchema | null>>()
 
 export function getOpencodeDbPath(): string {
-  return path.join(process.env.HOME || '', ...OPENCODE_DB_RELATIVE)
+  return getSqliteAgentDbPath('opencode')
+}
+
+export function getSqliteAgentDbPath(source: SqliteAgentSource): string {
+  return path.join(process.env.HOME || '', ...AGENT_DB_SOURCES[source].relativePath)
 }
 
 export function isValidOpencodeSessionId(sessionId?: string): boolean {
@@ -75,6 +93,14 @@ export function isValidOpencodeSessionId(sessionId?: string): boolean {
 }
 
 export function makeOpencodeSessionRef(sessionId: string, dbPath = getOpencodeDbPath()): string {
+  return makeSqliteAgentSessionRef('opencode', sessionId, dbPath)
+}
+
+export function makeSqliteAgentSessionRef(
+  source: SqliteAgentSource,
+  sessionId: string,
+  dbPath = getSqliteAgentDbPath(source)
+): string {
   return `${dbPath}#${sessionId}`
 }
 
@@ -82,15 +108,23 @@ export function parseOpencodeSessionRef(
   sourceRef: string,
   sessionIdOverride?: string
 ): { dbPath: string; sessionId: string | null } {
+  return parseSqliteAgentSessionRef('opencode', sourceRef, sessionIdOverride)
+}
+
+export function parseSqliteAgentSessionRef(
+  source: SqliteAgentSource,
+  sourceRef: string,
+  sessionIdOverride?: string
+): { dbPath: string; sessionId: string | null } {
   if (sessionIdOverride) {
     return {
-      dbPath: stripOpencodeSessionRef(sourceRef),
+      dbPath: stripSqliteAgentSessionRef(sourceRef),
       sessionId: isValidOpencodeSessionId(sessionIdOverride) ? sessionIdOverride : null
     }
   }
 
   if (isValidOpencodeSessionId(sourceRef)) {
-    return { dbPath: getOpencodeDbPath(), sessionId: sourceRef }
+    return { dbPath: getSqliteAgentDbPath(source), sessionId: sourceRef }
   }
 
   const hashIdx = sourceRef.lastIndexOf('#')
@@ -106,11 +140,22 @@ export function parseOpencodeSessionRef(
 }
 
 export function stripOpencodeSessionRef(sourceRef: string): string {
+  return stripSqliteAgentSessionRef(sourceRef)
+}
+
+export function stripSqliteAgentSessionRef(sourceRef: string): string {
   const hashIdx = sourceRef.lastIndexOf('#')
   return hashIdx >= 0 ? sourceRef.slice(0, hashIdx) : sourceRef
 }
 
 export async function findOpencodeSessionFiles(dbPath = getOpencodeDbPath()): Promise<string[]> {
+  return findSqliteAgentSessionFiles('opencode', dbPath)
+}
+
+export async function findSqliteAgentSessionFiles(
+  source: SqliteAgentSource,
+  dbPath = getSqliteAgentDbPath(source)
+): Promise<string[]> {
   if (!fs.existsSync(dbPath)) return []
   const schema = await getSchema(dbPath)
   if (!schema || !schema.session.has('id')) return []
@@ -123,34 +168,58 @@ export async function findOpencodeSessionFiles(dbPath = getOpencodeDbPath()): Pr
   return rows
     .map((row) => asString(row.id))
     .filter(isValidOpencodeSessionId)
-    .map((sessionId) => makeOpencodeSessionRef(sessionId, dbPath))
+    .map((sessionId) => makeSqliteAgentSessionRef(source, sessionId, dbPath))
 }
 
 export async function loadOpencodeRawMessages(
   sourceRef: string,
   sessionIdOverride?: string
 ): Promise<RawJsonlMessage[]> {
-  const loaded = await loadOpencodeSession(sourceRef, sessionIdOverride)
-  return loaded?.rawMessages || []
+  return loadSqliteAgentRawMessages('opencode', sourceRef, sessionIdOverride)
 }
 
 export async function buildOpencodeSessionSummary(
   sourceRef: string,
   sessionIdOverride?: string
 ): Promise<SessionSummary | null> {
-  const loaded = await loadOpencodeSession(sourceRef, sessionIdOverride)
-  if (!loaded || loaded.rawMessages.length === 0) return null
-  return summarizeLoadedOpencodeSession(loaded)
+  return buildSqliteAgentSessionSummary('opencode', sourceRef, sessionIdOverride)
 }
 
 export async function buildOpencodeSessionDetail(
   sourceRef: string,
   sessionIdOverride?: string
 ): Promise<SessionDetail | null> {
-  const loaded = await loadOpencodeSession(sourceRef, sessionIdOverride)
+  return buildSqliteAgentSessionDetail('opencode', sourceRef, sessionIdOverride)
+}
+
+export async function loadSqliteAgentRawMessages(
+  source: SqliteAgentSource,
+  sourceRef: string,
+  sessionIdOverride?: string
+): Promise<RawJsonlMessage[]> {
+  const loaded = await loadSqliteAgentSession(source, sourceRef, sessionIdOverride)
+  return loaded?.rawMessages || []
+}
+
+export async function buildSqliteAgentSessionSummary(
+  source: SqliteAgentSource,
+  sourceRef: string,
+  sessionIdOverride?: string
+): Promise<SessionSummary | null> {
+  const loaded = await loadSqliteAgentSession(source, sourceRef, sessionIdOverride)
+  if (!loaded || loaded.rawMessages.length === 0) return null
+  return summarizeLoadedSqliteAgentSession(source, loaded)
+}
+
+export async function buildSqliteAgentSessionDetail(
+  source: SqliteAgentSource,
+  sourceRef: string,
+  sessionIdOverride?: string
+): Promise<SessionDetail | null> {
+  const loaded = await loadSqliteAgentSession(source, sourceRef, sessionIdOverride)
   if (!loaded || loaded.rawMessages.length === 0) return null
 
-  const summary = summarizeLoadedOpencodeSession(loaded)
+  const summary = summarizeLoadedSqliteAgentSession(source, loaded)
   if (!summary) return null
 
   const messages = rawToParsedMessages(loaded.rawMessages)
@@ -166,11 +235,12 @@ export async function buildOpencodeSessionSummaryFromBackup(
   return null
 }
 
-async function loadOpencodeSession(
+async function loadSqliteAgentSession(
+  source: SqliteAgentSource,
   sourceRef: string,
   sessionIdOverride?: string
 ): Promise<LoadedOpencodeSession | null> {
-  const { dbPath, sessionId } = parseOpencodeSessionRef(sourceRef, sessionIdOverride)
+  const { dbPath, sessionId } = parseSqliteAgentSessionRef(source, sourceRef, sessionIdOverride)
   if (!sessionId || !fs.existsSync(dbPath)) return null
 
   const schema = await getSchema(dbPath)
@@ -192,7 +262,7 @@ async function loadOpencodeSession(
 
   return {
     dbPath,
-    sourceRef: makeOpencodeSessionRef(sessionId, dbPath),
+    sourceRef: makeSqliteAgentSessionRef(source, sessionId, dbPath),
     sessionId,
     sessionRow,
     rawMessages
@@ -203,7 +273,7 @@ function hasMinimumSchema(schema: OpencodeSchema): boolean {
   return schema.session.has('id') &&
     schema.message.has('id') &&
     schema.message.has('data') &&
-    schema.part.has('type')
+    schema.part.has('data')
 }
 
 async function getSchema(dbPath: string): Promise<OpencodeSchema | null> {
@@ -369,7 +439,7 @@ function opencodeToRawMessages(
     if (!uuid) continue
 
     const parts = (partsByMessage.get(uuid) || [])
-      .filter((part) => !isIgnoredPartType(asString(part.type)))
+      .filter((part) => !isIgnoredPartType(partType(part)))
       .sort(sortParts)
 
     const content = buildMessageContent(role, data, parts)
@@ -415,16 +485,16 @@ function buildMessageContent(
   const contentParts: ContentPart[] = []
 
   for (const part of parts) {
-    const partType = asString(part.type)
+    const type = partType(part)
     const data = parseObject(part.data)
 
-    if (partType === 'text') {
+    if (type === 'text') {
       const text = extractPartText(part, data)
       if (text) contentParts.push({ type: 'text', text })
       continue
     }
 
-    if (partType === 'tool' && role === 'assistant') {
+    if (type === 'tool' && role === 'assistant') {
       const tool = buildToolUsePart(part, data)
       if (tool) contentParts.push(tool)
     }
@@ -485,6 +555,10 @@ function extractPartText(part: SqliteRow, data: Record<string, unknown>): string
   return direct || ''
 }
 
+function partType(part: SqliteRow): string {
+  return asString(part.type) || asString(parseObject(part.data).type)
+}
+
 function extractMessageFallbackText(messageData: Record<string, unknown>): string {
   return asString(messageData.text) ||
     asString(messageData.content) ||
@@ -492,7 +566,7 @@ function extractMessageFallbackText(messageData: Record<string, unknown>): strin
     ''
 }
 
-function summarizeLoadedOpencodeSession(loaded: LoadedOpencodeSession): SessionSummary | null {
+function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: LoadedOpencodeSession): SessionSummary | null {
   const { dbPath, sourceRef, sessionId, sessionRow, rawMessages } = loaded
   if (rawMessages.length === 0) return null
 
@@ -507,9 +581,12 @@ function summarizeLoadedOpencodeSession(loaded: LoadedOpencodeSession): SessionS
   })
   const timestamps = rawMessages.map((m) => m.timestamp).filter(Boolean).sort()
   const cwds = [...new Set(rawMessages.map((m) => m.cwd).filter(Boolean) as string[])]
+  const sessionTitle = source === 'zcode'
+    ? asString(sessionRow.title) || asString(sessionRow.slug)
+    : asString(sessionRow.slug) || asString(sessionRow.title)
   const firstUserMessage = userMessages[0]?.message
     ? extractText(userMessages[0].message.content).slice(0, 200)
-    : (asString(sessionRow.title) || sessionId).slice(0, 200)
+    : (sessionTitle || sessionId).slice(0, 200)
 
   const allUserTexts: string[] = []
   let totalLen = 0
@@ -553,10 +630,10 @@ function summarizeLoadedOpencodeSession(loaded: LoadedOpencodeSession): SessionS
   if (sessionModel && !models.includes(sessionModel)) models.push(sessionModel)
 
   return {
-    id: `opencode:${sessionId}`,
+    id: `${AGENT_DB_SOURCES[source].summaryPrefix}:${sessionId}`,
     sessionId,
     resumeSessionId: sessionId,
-    slug: asString(sessionRow.slug) || asString(sessionRow.title) || '',
+    slug: sessionTitle,
     createdAt: timestamps[0] || '',
     updatedAt: timestamps[timestamps.length - 1] || '',
     messageCount: validMessages.length,
@@ -572,12 +649,13 @@ function summarizeLoadedOpencodeSession(loaded: LoadedOpencodeSession): SessionS
     fileSizeBytes: stat?.size || 0,
     allFilePaths: [sourceRef],
     resumeCwd: asString(sessionRow.directory) || cwds[0],
+    branchParentId: asString(sessionRow.parent_id) || asString(sessionRow.parentId) || asString(sessionRow.parentID) || undefined,
     userImages: [],
     pastedImageCount: 0,
     tokenUsage,
     referencedFiles: [],
     configFiles: [],
-    source: 'opencode',
+    source: source as SessionSource,
     allUserMessages: allUserTexts.length > 0 ? allUserTexts.join(' ') : undefined,
     models
   }

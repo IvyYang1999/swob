@@ -71,6 +71,18 @@ describe('session action context', () => {
     }
   })
 
+  it('zcode resume command uses zcode --session and cd cwd when available', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-zcode-resume-'))
+
+    try {
+      const command = buildResumeCommand('sess_b3c1-with-hyphen', undefined, dir, 'zcode')
+
+      expect(command).toBe(`cd ${shellQuote(dir)} && zcode --session ${shellQuote('sess_b3c1-with-hyphen')}`)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('resume 命令会 shell-quote cwd 和 sessionId，避免特殊字符被 shell 解释', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-action-quote-'))
     const dir = path.join(tmpRoot, "project '$HOME")

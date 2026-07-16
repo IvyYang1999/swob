@@ -124,6 +124,9 @@ function SessionItem({
         {session.source === 'opencode' && (
           <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-emerald/15 text-soft-emerald font-medium">OC</span>
         )}
+        {session.source === 'zcode' && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-cyan/15 text-soft-cyan font-medium">ZC</span>
+        )}
         {session.compactCount > 0 && (
           <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
         )}

@@ -20,7 +20,8 @@ import {
   setSessionMetaInLibrary,
   resolveFolderPath,
   getLibraryRoot,
-  rebuildAllTranscripts
+  rebuildAllTranscripts,
+  redactLibraryTranscripts
 } from '../main/library-manager'
 import { loadConfig, saveConfig } from '../main/config-store'
 import { spotlightSearch } from '../main/spotlight-search'
@@ -428,6 +429,11 @@ async function cmdTranscript(args: string[], flags: Record<string, string | true
   out(result)
 }
 
+function cmdRedact(flags: Record<string, string | true>): void {
+  const result = redactLibraryTranscripts({ dryRun: flags['dry-run'] === true })
+  out({ files: result.files, hits: result.hits })
+}
+
 async function cmdInstall(): Promise<void> {
   const fs = await import('fs')
   const path = await import('path')
@@ -642,6 +648,7 @@ async function main(): Promise<void> {
   config set <key> <value>    修改设置
   active                      列出活跃 session
   transcript rebuild --all    强制重生成 Library transcript
+  redact [--dry-run]          回填脱敏所有已生成的 transcript/派生 Markdown
   install                     安装/更新 CLI 和 Skill
 
 选项:
@@ -745,6 +752,10 @@ async function main(): Promise<void> {
 
       case 'transcript':
         await cmdTranscript(cmd.slice(1), flags)
+        break
+
+      case 'redact':
+        cmdRedact(flags)
         break
 
       case 'install':

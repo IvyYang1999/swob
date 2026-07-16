@@ -683,6 +683,36 @@ describe('transcript markdown heading semantics', () => {
     expect(md).toContain('**Step**')
     expect(md).not.toContain('\n## Assistant Plan')
   })
+
+  it('generateTranscript 在写入前打码', () => {
+    const candidate = `WK${'a'.repeat(34)}`
+    const md = lib.generateTranscript([
+      {
+        uuid: 'u1', parentUuid: null, sessionId: 's1', type: 'user',
+        timestamp: '2026-03-01T00:00:00Z',
+        message: { role: 'user', content: candidate }
+      }
+    ] as any, '测试标题', { createdAt: '2026-03-01T00:00:00Z', turnCount: 0 })
+
+    expect(md).not.toContain(candidate)
+    expect(md).toContain('WK……aaaa（已脱敏）')
+  })
+
+  it('redactLibraryTranscripts 仅回填生成 Markdown，dry-run 不写盘', () => {
+    removeDefaultSession()
+    const candidate = `WK${'a'.repeat(34)}`
+    const dirPath = createLibrarySession('redact-backfill-session', [], { dirName: 'redact-backfill' })
+    fs.writeFileSync(path.join(dirPath, 'transcript.md'), candidate, 'utf-8')
+    fs.writeFileSync(path.join(dirPath, 'compact-summaries.md'), candidate, 'utf-8')
+    fs.writeFileSync(path.join(dirPath, 'notes.md'), candidate, 'utf-8')
+    lib.scanLibrary()
+
+    expect(lib.redactLibraryTranscripts({ dryRun: true })).toEqual({ dryRun: true, files: 2, hits: 2 })
+    expect(fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')).toBe(candidate)
+    expect(lib.redactLibraryTranscripts()).toEqual({ dryRun: false, files: 2, hits: 2 })
+    expect(fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')).toContain('WK……aaaa（已脱敏）')
+    expect(fs.readFileSync(path.join(dirPath, 'notes.md'), 'utf-8')).toBe(candidate)
+  })
 })
 
 describe('transcript frontmatter 属性', () => {

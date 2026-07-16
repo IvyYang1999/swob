@@ -53,6 +53,16 @@ describe('spotlightSearch', () => {
     expect(results[0].session.sessionId).toBe('cx1')
   })
 
+  it('按来源别名过滤：zcode 和 glm 只匹配 Zcode', () => {
+    const sessions = [
+      makeSummary({ sessionId: 'oc1', source: 'opencode', firstUserMessage: '同一项目' }),
+      makeSummary({ sessionId: 'zc1', source: 'zcode', firstUserMessage: '同一项目' })
+    ]
+
+    expect(spotlightSearch('zcode 同一项目', sessions, emptyContext)[0].session.sessionId).toBe('zc1')
+    expect(spotlightSearch('glm 同一项目', sessions, emptyContext)[0].session.sessionId).toBe('zc1')
+  })
+
   it('按来源别名过滤：cc → claude-code', () => {
     const sessions = [
       makeSummary({ sessionId: 'cc1', source: 'claude-code', firstUserMessage: '测试' }),

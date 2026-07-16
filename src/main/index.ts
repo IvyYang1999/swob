@@ -803,7 +803,7 @@ ipcMain.handle('sessions:loadAll', async () => {
     annotateSessionForFrontend(s, dirPath)
 
     // Skip library/remote processing for non-Claude-Code sessions
-    if (s.source === 'codex' || s.source === 'cursor' || s.source === 'opencode') continue
+    if (s.source === 'codex' || s.source === 'cursor' || s.source === 'opencode' || s.source === 'zcode') continue
 
     if (s.projectPath && isRemoteProjectPath(s.projectPath)) {
       s.isRemote = true
@@ -1367,7 +1367,7 @@ swob search "关键词"
 swob search "项目名" --limit 10
 \`\`\`
 
-返回匹配的 session 列表，按相关性排序。支持中英文、项目名、文件夹名、时间（今天/昨天/本周）、来源（cc/codex/cursor/opencode）。
+返回匹配的 session 列表，按相关性排序。支持中英文、项目名、文件夹名、时间（今天/昨天/本周）、来源（cc/codex/cursor/opencode/zcode）。
 
 ### 列出 session
 

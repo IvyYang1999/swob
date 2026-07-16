@@ -12,7 +12,8 @@ const SOURCE_ALIASES: Record<string, string[]> = {
   'claude-code': ['cc', 'claude', 'claudecode', 'claude-code'],
   codex: ['codex', 'openai', 'gpt'],
   cursor: ['cursor'],
-  opencode: ['opencode', 'glm', 'zcode']
+  opencode: ['opencode'],
+  zcode: ['zcode', 'glm']
 }
 
 const TIME_ALIASES: Record<string, () => number> = {

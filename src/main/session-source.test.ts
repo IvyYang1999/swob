@@ -18,6 +18,12 @@ describe('detectSessionSourceForJsonl', () => {
     expect(source).toBe('opencode')
   })
 
+  it('Zcode 路径按 /.zcode/ 识别来源', () => {
+    const source = detectSessionSourceFromPath('/Users/test/.zcode/cli/db/db.sqlite#sess_b3c1-with-hyphen')
+
+    expect(source).toBe('zcode')
+  })
+
   it('backup/detail 场景 source path 与内容冲突时优先嗅探内容', () => {
     const backupPath = writeBackupJsonl([
       { role: 'user', message: { content: 'Cursor backup content' } }

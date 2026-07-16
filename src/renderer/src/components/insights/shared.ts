@@ -18,6 +18,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   codex: '#3b82f6',
   cursor: '#a1a1aa',
   opencode: '#10b981',
+  zcode: '#10b981',
 }
 
 export const PROJECT_COLORS = [

@@ -15,6 +15,7 @@ import type {
 import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetail, buildCodexSessionSummaryFromBackup } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup } from './cursor-loader'
 import { findOpencodeSessionFiles, buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, stripOpencodeSessionRef } from './opencode-loader'
+import { findZcodeSessionFiles, buildZcodeSessionSummary, buildZcodeSessionDetail, buildZcodeSessionSummaryFromBackup, stripZcodeSessionRef } from './zcode-loader'
 import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
 
@@ -86,7 +87,7 @@ const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
 const CACHE_VERSION = 19 // per-file summaries + lineage metadata
 
-type CachedSessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode'
+type CachedSessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode'
 
 interface LineageMeta {
   uuids: string[]
@@ -139,7 +140,11 @@ function saveDiskCache(entries: Record<string, DiskCacheEntry>): void {
 
 function computeFileSig(filePath: string, source: CachedSessionSource): string | null {
   try {
-    const statPath = source === 'opencode' ? stripOpencodeSessionRef(filePath) : filePath
+    const statPath = source === 'opencode'
+      ? stripOpencodeSessionRef(filePath)
+      : source === 'zcode'
+        ? stripZcodeSessionRef(filePath)
+        : filePath
     const stat = fs.statSync(statPath)
     return `${stat.mtimeMs}:${stat.size}`
   } catch {
@@ -1293,6 +1298,7 @@ export async function buildSessionSummaryFromBackup(
   if (source === 'codex') return buildCodexSessionSummaryFromBackup(backupPath, sessionIdOverride)
   if (source === 'cursor') return buildCursorSessionSummaryFromBackup(backupPath, sessionIdOverride)
   if (source === 'opencode') return buildOpencodeSessionSummaryFromBackup(backupPath, sessionIdOverride)
+  if (source === 'zcode') return buildZcodeSessionSummaryFromBackup(backupPath, sessionIdOverride)
 
   const raw = await parseSessionFile(backupPath)
   return buildSessionSummary(backupPath, raw, true, sessionIdOverride)
@@ -1580,7 +1586,8 @@ async function buildPerFileCache(filePath: string, source: CachedSessionSource):
   let summary: SessionSummary | null = null
   if (source === 'codex') summary = await buildCodexSessionSummary(filePath)
   else if (source === 'cursor') summary = await buildCursorSessionSummary(filePath)
-  else summary = await buildOpencodeSessionSummary(filePath)
+  else if (source === 'opencode') summary = await buildOpencodeSessionSummary(filePath)
+  else summary = await buildZcodeSessionSummary(filePath)
   return { summary, lineageMeta: emptyLineageMeta(summary), source }
 }
 
@@ -1590,12 +1597,14 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
   const codexFiles = findCodexSessionFiles()
   const cursorFiles = findCursorSessionFiles()
   const opencodeFiles = await findOpencodeSessionFiles()
+  const zcodeFiles = await findZcodeSessionFiles()
   const cache = loadDiskCache()
   const descriptors: Array<{ filePath: string; source: CachedSessionSource }> = [
     ...allFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),
     ...codexFiles.map((filePath) => ({ filePath, source: 'codex' as const })),
     ...cursorFiles.map((filePath) => ({ filePath, source: 'cursor' as const })),
-    ...opencodeFiles.map((filePath) => ({ filePath, source: 'opencode' as const }))
+    ...opencodeFiles.map((filePath) => ({ filePath, source: 'opencode' as const })),
+    ...zcodeFiles.map((filePath) => ({ filePath, source: 'zcode' as const }))
   ]
   const currentFiles = descriptors.flatMap((descriptor) => {
     const sig = computeFileSig(descriptor.filePath, descriptor.source)
@@ -1753,6 +1762,7 @@ export async function loadSessionDetail(
   const source = detectSessionSourceFromPath(filePath) || sniffSessionSourceFromJsonl(filePath)
   if (source === 'codex') return buildCodexSessionDetail(filePath, readBackupSessionIdOverride(filePath))
   if (source === 'opencode') return buildOpencodeSessionDetail(filePath, readBackupSessionIdOverride(filePath))
+  if (source === 'zcode') return buildZcodeSessionDetail(filePath, readBackupSessionIdOverride(filePath))
   if (source === 'cursor') {
     const sessionIdOverride = readBackupSessionIdOverride(filePath)
     if (path.basename(filePath) === 'backup.jsonl' && !sessionIdOverride) return null

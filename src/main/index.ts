@@ -3,6 +3,7 @@ import path from 'path'
 const { join, dirname, basename, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
+import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
 import { exec, execSync } from 'child_process'
 import * as fs from 'fs'
 import * as chokidar from 'chokidar'
@@ -1509,35 +1510,14 @@ ipcMain.handle('cli:install', () => {
 // --- Auto Update ---
 
 function setupAutoUpdater(): void {
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
-
-  autoUpdater.on('update-available', (info) => {
-    mainWindow?.webContents.send('update:downloading', info.version, '')
+  configureAutoUpdater({
+    updater: autoUpdater,
+    ipcMain,
+    sendToRenderer: (channel, ...args) => mainWindow?.webContents.send(channel, ...args),
+    // The window and all startup watchers are already running before this
+    // delayed, fire-and-forget request is scheduled.
+    checkOnStartup: !is.dev
   })
-
-  autoUpdater.on('update-downloaded', (info) => {
-    // releaseNotes 可能是 string 或 ReleaseNoteInfo[]
-    let notes = ''
-    if (typeof info.releaseNotes === 'string') {
-      notes = info.releaseNotes
-    } else if (Array.isArray(info.releaseNotes)) {
-      notes = info.releaseNotes.map((n) => n.note || '').join('\n')
-    }
-    mainWindow?.webContents.send('update:ready', info.version, notes)
-  })
-
-  autoUpdater.on('error', (err) => {
-    console.error('自动更新出错:', err.message)
-  })
-
-  ipcMain.handle('update:install', () => {
-    autoUpdater.quitAndInstall()
-  })
-
-  if (!is.dev) {
-    autoUpdater.checkForUpdates().catch(() => { /* ignore */ })
-  }
 }
 
 app.whenReady().then(() => {

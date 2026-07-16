@@ -124,12 +124,17 @@ const api = {
   cliInstall: () => ipcRenderer.invoke('cli:install'),
 
   // Auto Update
+  onUpdateAvailable: (callback: (version: string, notes: string) => void) => {
+    ipcRenderer.on('update:available', (_event, version, notes) => callback(version, notes))
+  },
   onUpdateDownloading: (callback: (version: string) => void) => {
     ipcRenderer.on('update:downloading', (_event, version) => callback(version))
   },
   onUpdateReady: (callback: (version: string, notes: string) => void) => {
     ipcRenderer.on('update:ready', (_event, version, notes) => callback(version, notes))
   },
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
   installUpdate: () => ipcRenderer.invoke('update:install')
 }
 

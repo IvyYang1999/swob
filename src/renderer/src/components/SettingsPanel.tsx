@@ -292,6 +292,7 @@ export function SettingsPanel() {
     (!resumeTerminalTemplate.trim() || !resumeTerminalTemplate.includes('{{command}}'))
   const [recording, setRecording] = useState(false)
   const [pendingShortcut, setPendingShortcut] = useState<string | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
   const shortcutRef = useRef<HTMLButtonElement>(null)
 
   const [sshHost, setSshHost] = useState(sshConfig?.host || '')
@@ -327,6 +328,15 @@ export function SettingsPanel() {
     if (!sshHost.trim() || !sshUser.trim()) return
     await setSshConfig({ host: sshHost.trim(), user: sshUser.trim(), remotePath: sshRemotePath.trim() || undefined })
   }, [sshHost, sshUser, sshRemotePath, setSshConfig])
+
+  const handleCheckForUpdates = useCallback(async () => {
+    setCheckingUpdate(true)
+    try {
+      await window.api.checkForUpdates()
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }, [])
 
   if (!settingsOpen) return null
 
@@ -541,6 +551,21 @@ export function SettingsPanel() {
               </button>
             ))}
           </div>
+        </section>
+
+        {/* App updates */}
+        <section>
+          <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
+            <RefreshCw size={12} />
+            {t('settings.update')}
+          </label>
+          <button
+            onClick={handleCheckForUpdates}
+            disabled={checkingUpdate}
+            className="w-full px-2 py-1.5 rounded-md text-xs bg-surface text-muted hover:text-primary hover:bg-hover disabled:opacity-40 transition-colors"
+          >
+            {checkingUpdate ? t('settings.checking_update') : t('settings.check_for_updates')}
+          </button>
         </section>
 
         {/* CLI & Agent */}

@@ -171,6 +171,24 @@ export async function findSqliteAgentSessionFiles(
     .map((sessionId) => makeSqliteAgentSessionRef(source, sessionId, dbPath))
 }
 
+/** Verify that a DB-backed resume reference still points at a real session row. */
+export async function hasSqliteAgentSessionRecord(
+  source: SqliteAgentSource,
+  sourceRef: string,
+  sessionIdOverride?: string
+): Promise<boolean> {
+  const { dbPath, sessionId } = parseSqliteAgentSessionRef(source, sourceRef, sessionIdOverride)
+  if (!sessionId || !fs.existsSync(dbPath)) return false
+
+  const schema = await getSchema(dbPath)
+  if (!schema?.session.has('id')) return false
+  const rows = await runSqliteJson<SqliteRow>(
+    dbPath,
+    `SELECT "id" FROM "session" WHERE "id" = ${sqlString(sessionId)} LIMIT 1`
+  )
+  return rows.length === 1
+}
+
 export async function loadOpencodeRawMessages(
   sourceRef: string,
   sessionIdOverride?: string

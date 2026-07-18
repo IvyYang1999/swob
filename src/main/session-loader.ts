@@ -1666,7 +1666,14 @@ export async function loadCachedClaudeLineageMetadata(
   }
 }
 
-export async function loadAllSessions(): Promise<SessionSummary[]> {
+export interface LoadAllSessionsOptions {
+  /** Do not update the summary cache. Used by commands that promise read-only auditing. */
+  readOnly?: boolean
+  /** Suppress progress output so structured CLI output remains valid JSON. */
+  quiet?: boolean
+}
+
+export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
   const startedAt = Date.now()
   const allFiles = findAllSessionFiles()
   const codexFiles = findCodexSessionFiles()
@@ -1819,11 +1826,13 @@ export async function loadAllSessions(): Promise<SessionSummary[]> {
   }
 
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-  saveDiskCache(entries)
-  console.info(
-    `[session-loader] incremental cache: parsed ${parsedCount}, reused ${reusedCount}, ` +
-    `files ${currentFiles.length}, ${Date.now() - startedAt}ms`
-  )
+  if (!options.readOnly) saveDiskCache(entries)
+  if (!options.quiet) {
+    console.info(
+      `[session-loader] incremental cache: parsed ${parsedCount}, reused ${reusedCount}, ` +
+      `files ${currentFiles.length}, ${Date.now() - startedAt}ms`
+    )
+  }
   return summaries
 }
 

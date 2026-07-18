@@ -116,13 +116,16 @@ function sharedCrossSessionPrefix(sessionId: string): RawJsonlMessage[] {
   ]
 }
 
-async function loadAllSessionsFromTempHome(home: string) {
+async function loadAllSessionsFromTempHome(
+  home: string,
+  options: { readOnly?: boolean; quiet?: boolean } = {}
+) {
   const oldHome = process.env.HOME
   process.env.HOME = home
   vi.resetModules()
   try {
     const mod = await import('./session-loader')
-    return await mod.loadAllSessions()
+    return await mod.loadAllSessions(options)
   } finally {
     if (oldHome === undefined) delete process.env.HOME
     else process.env.HOME = oldHome
@@ -640,6 +643,27 @@ describe('buildSessionDetail', () => {
 // cross-session branch inference 测试
 // ========================================================
 describe('loadAllSessions per-file incremental cache', () => {
+  it('readOnly 模式读取会话但不创建 summary cache', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-readonly-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'readonly.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'readonly-session',
+        type: 'user',
+        message: { role: 'user', content: '只读审计' }
+      })
+    ])
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+
+      expect(sessions.some((session) => session.sessionId === 'readonly-session')).toBe(true)
+      expect(fs.existsSync(path.join(home, '.claude-session-manager', 'summary-cache.json'))).toBe(false)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('只重建变化文件，并使热启动 summaries/血统与删缓存全量重建一致', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cache-home-'))
     const projectDir = path.join(home, '.claude', 'projects', '-Users-test-vault')

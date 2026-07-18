@@ -7,18 +7,19 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/version-1.1.1-blue" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.2.0-blue" alt="Version" />
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform" />
   <img src="https://img.shields.io/badge/built%20with-Electron-47848F" alt="Built with Electron" />
   <img src="https://img.shields.io/github/downloads/IvyYang1999/swob/total" alt="Downloads" />
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green" alt="License" />
 </p>
 
-<h3>Browse, Search & Resume Your Claude Code Sessions</h3>
+<h3>A git graph for your AI conversations</h3>
 
 <p>
-  The missing session manager for <strong>Claude Code</strong>, <strong>Codex</strong> & <strong>Cursor</strong>.<br/>
-  Recover compacted conversations. Search across hundreds of sessions. Resume with one click.
+  Free & open-source session manager for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Cursor</strong>, <strong>OpenCode</strong> & <strong>Zcode</strong>.<br/>
+  Track how sessions fork and resume. Expand compacted history. Search everything. Resume with one click.<br/>
+  100% local — your conversations never leave your machine.
 </p>
 
 </div>
@@ -33,39 +34,43 @@
 
 ## The Problem
 
-You've been vibe-coding from `~` for months. You have 200+ Claude Code sessions piled up with no organization. Half of them have been compacted — the original conversation is gone, replaced by a summary. The built-in `/resume` only shows recent sessions. Finding that one conversation where you solved a tricky bug? Good luck.
+You've been vibe-coding from `~` for months. You have 200+ Claude Code sessions piled up with no organization. Sessions multiply: resume one and a second file appears, fork an experiment, compact and continue — soon five files are "the same conversation" and no tool tells you how they relate. Half your history is folded behind compact summaries. The built-in `/resume` only shows recent sessions. Finding that one conversation where you solved a tricky bug? Good luck.
 
 ## The Solution
 
-Swob reads the JSONL files that Claude Code, Codex, and Cursor store on disk. It parses every session, detects branches and continuations, **reconstructs the full pre-compact history**, and presents everything in a searchable, organized interface.
+Swob reads the session files that Claude Code, Codex, Cursor, OpenCode, and Zcode store on disk. It parses every session, **detects how they relate — forks, resumes, continuations —** expands compact-folded history in place, and presents everything in a searchable, organized interface.
 
-Your data stays 100% local. Swob never uploads anything.
+Your data stays 100% local. Swob never uploads anything. Free & open-source under AGPL-3.0.
 
 ---
 
 ## Key Features
 
-### Recover Compacted Conversations
+### Session Lineage — Know Which Session Came From Which
 
-Claude Code compacts your conversation to save context. The original messages are still in the JSONL file — Swob finds them and lets you expand any compact block to read what was lost. **No other tool does this.**
+AI sessions don't stay single files: resuming spawns a new file, forking splits a conversation, compacting chains a summary to a fresh start. Swob detects these relationships precisely — fork edges, continuation edges, multi-file resumes — and maintains an on-disk lineage registry so the family tree of your conversations survives cache rebuilds. Think `git log --graph`, but for sessions. (A visual lineage tree view is on the roadmap.)
+
+### Expand Compacted Conversations
+
+Claude Code compacts your conversation to save context — the model forgets, but the original messages are still in the JSONL file. Swob shows every compact block inline and lets you expand it in place to read what was folded away. One click, no digging through raw JSONL.
 
 ### Spotlight Session Jump — `⌘⇧K`
 
-A global hotkey brings up a Spotlight-style search window. Fuzzy search by content, project name, folder, or time (`today`, `yesterday`, `this week`). Filter by source (`claude`, `codex`, `cursor`). Jump to any session in under a second without switching windows.
+A global hotkey brings up a Spotlight-style search window. Fuzzy search by content, project name, folder, or time (`today`, `yesterday`, `this week`). Filter by source (`claude`, `codex`, `cursor`, `opencode`, `zcode`). Jump to any session in under a second without switching windows.
 
 ### Full-text Search — `⌘K`
 
 Search across all sessions at once. Matches auto-expand inside collapsed compact sections, so you find things even when they've been compacted away. In-session search (`⌘F`) with regex support.
 
-### Multi-source: Claude Code + Codex + Cursor
+### Multi-source: Claude Code + Codex + Cursor + OpenCode + Zcode
 
-Reads from `~/.claude/projects/`, `~/.codex/sessions/`, and `~/.cursor/projects/` — browse and resume sessions from all three tools in one place.
+Reads from `~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`, `~/.local/share/opencode/opencode.db`, and `~/.zcode/cli/db/db.sqlite` — browse and resume sessions from all five tools in one place.
 
 ### Token Insights Dashboard
 
 - 5 stat cards: total tokens, sessions, turns, active days, estimated time
 - 365-day contribution heatmap (like GitHub, but for your AI usage)
-- Source breakdown donut chart (Claude Code vs Codex vs Cursor)
+- Source breakdown donut chart (Claude Code / Codex / Cursor / OpenCode / Zcode)
 - Model usage breakdown
 - Project ranking by token consumption
 - 30-day daily trend chart
@@ -94,10 +99,6 @@ All commands output JSON. The `swob install` command also installs a Claude Code
 ### Session Organization
 
 Tree-view sidebar with nested folders, drag-and-drop sorting, and custom titles. Three view modes: Compact (hide tool noise), Full (everything), Markdown (clean export).
-
-### Branch Detection
-
-Automatically detects when sessions continue from another file (multi-file continuations) and when concurrent branches diverge. Sidechain / rejected-plan branches are dimmed.
 
 ### Highlight & Annotate
 
@@ -128,6 +129,12 @@ Full Chinese (zh-CN) and English support.
 ## Install
 
 Download the latest `.dmg` from [**Releases**](https://github.com/IvyYang1999/swob/releases).
+
+> **Note (unsigned build):** Swob isn't notarized yet. If macOS says the app "is damaged or can't be opened", run:
+> ```bash
+> xattr -cr /Applications/Swob.app
+> ```
+> Starting with v1.2.0, Swob checks for updates and installs them in-app — no need to come back here.
 
 Or build from source:
 

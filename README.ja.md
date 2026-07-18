@@ -7,18 +7,19 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/バージョン-1.1.1-blue" alt="バージョン" />
+  <img src="https://img.shields.io/badge/バージョン-1.2.0-blue" alt="バージョン" />
   <img src="https://img.shields.io/badge/プラットフォーム-macOS-lightgrey" alt="プラットフォーム" />
   <img src="https://img.shields.io/badge/製作-Electron-47848F" alt="Electron製" />
   <img src="https://img.shields.io/github/downloads/IvyYang1999/swob/total" alt="ダウンロード数" />
   <img src="https://img.shields.io/badge/ライセンス-AGPL--3.0-green" alt="ライセンス" />
 </p>
 
-<h3>Claude Code セッションを閲覧・検索・再開</h3>
+<h3>AI 会話のための git graph</h3>
 
 <p>
-  <strong>Claude Code</strong>・<strong>Codex</strong>・<strong>Cursor</strong> のセッションマネージャー。<br/>
-  compact された会話を復元。数百のセッションを横断検索。ワンクリックで再開。
+  <strong>Claude Code</strong>・<strong>Codex</strong>・<strong>Cursor</strong>・<strong>OpenCode</strong>・<strong>Zcode</strong> の無料オープンソースセッションマネージャー。<br/>
+  セッションの fork と resume の系譜を追跡。compact で畳まれた履歴を展開。横断検索。ワンクリックで再開。<br/>
+  100% ローカル — 会話がマシンの外に出ることはない。
 </p>
 
 </div>
@@ -37,17 +38,21 @@ Claude Code で `~` ディレクトリから何ヶ月も vibe-code してきた�
 
 ## 解決策
 
-Swob は Claude Code・Codex・Cursor がディスクに保存する JSONL ファイルを読み取る。すべてのセッションを解析し、ブランチと続きを検出し、**compact 前の完全な履歴を再構築**して、検索・整理可能なインターフェースで表示する。
+Swob は Claude Code・Codex・Cursor・OpenCode・Zcode がディスクに保存するセッションファイルを読み取る。すべてのセッションを解析し、**セッション同士の関係 — fork・resume・続き — を検出**し、compact で畳まれた履歴をその場で展開して、検索・整理可能なインターフェースで表示する。
 
-データは 100% ローカルに留まる。Swob は何もアップロードしない。
+データは 100% ローカルに留まる。Swob は何もアップロードしない。AGPL-3.0 の無料オープンソース。
 
 ---
 
 ## 主要機能
 
-### Compact された会話の復元
+### セッション血統 — どのセッションがどこから来たか
 
-Claude Code はコンテキストを節約するために会話を圧縮する。元のメッセージは JSONL ファイルに残っている — Swob がそれを見つけて、任意の compact ブロックを展開して失われた内容を読めるようにする。**他のツールにこの機能はない。**
+AI セッションは 1 つのファイルに収まらない：resume すると新しいファイルが生まれ、fork で会話が分裂し、compact はサマリーを新しい開始点につなぐ。Swob はこれらの関係 — fork エッジ・続きエッジ・複数ファイル resume — を正確に検出し、ディスク上の血統レジストリを維持する。`git log --graph` のセッション版。（血統ツリーの可視化はロードマップ上。）
+
+### Compact された会話の展開
+
+Claude Code はコンテキストを節約するために会話を圧縮する — モデルは忘れても、元のメッセージは JSONL ファイルに残っている。Swob はすべての compact ブロックをインライン表示し、ワンクリックでその場に展開できる。生の JSONL を掘る必要はない。
 
 ### Spotlight セッションジャンプ — `⌘⇧K`
 
@@ -57,15 +62,15 @@ Claude Code はコンテキストを節約するために会話を圧縮する�
 
 全セッションを一括検索。マッチした内容は折りたたまれた compact セクション内でも自動展開されるので、compact されたものでも見つかる。セッション内検索（`⌘F`）は正規表現対応。
 
-### マルチソース：Claude Code + Codex + Cursor
+### マルチソース：Claude Code + Codex + Cursor + OpenCode + Zcode
 
-`~/.claude/projects/`、`~/.codex/sessions/`、`~/.cursor/projects/` を読み取り — 3つのツールのすべてのセッションを一か所で閲覧・再開。
+`~/.claude/projects/`、`~/.codex/sessions/`、`~/.cursor/projects/`、`~/.local/share/opencode/opencode.db`、`~/.zcode/cli/db/db.sqlite` を読み取り — 5つのツールのすべてのセッションを一か所で閲覧・再開。
 
 ### トークンインサイトダッシュボード
 
 - 5つの統計カード：総トークン、セッション数、ターン数、アクティブ日数、推定時間
 - 365日コントリビューションヒートマップ（GitHub のように、AI 使用量を可視化）
-- ソース別ドーナツチャート（Claude Code vs Codex vs Cursor）
+- ソース別ドーナツチャート（Claude Code / Codex / Cursor / OpenCode / Zcode）
 - モデル使用内訳
 - プロジェクト別トークン消費ランキング
 - 30日間デイリートレンドチャート
@@ -94,10 +99,6 @@ swob install                    # CLI + Agent Skill インストール
 ### セッション整理
 
 ネストフォルダ、ドラッグ＆ドロップ、カスタムタイトル対応のツリービューサイドバー。3つの表示モード：コンパクト（ツールノイズを非表示）、フル（すべて表示）、Markdown（クリーンなエクスポート）。
-
-### ブランチ検出
-
-ファイル間の続き（multi-file continuations）と並行ブランチの分岐を自動検出。サイドチェーン（却下されたプラン）は暗く表示。
 
 ### ハイライト＆メモ
 
@@ -128,6 +129,12 @@ swob install                    # CLI + Agent Skill インストール
 ## インストール
 
 [**Releases**](https://github.com/IvyYang1999/swob/releases) から最新の `.dmg` をダウンロード。
+
+> **未署名ビルドについて：** Swob はまだ Apple の公証を受けていない。macOS が「壊れているため開けません」と表示する場合は次を実行：
+> ```bash
+> xattr -cr /Applications/Swob.app
+> ```
+> v1.2.0 からはアプリ内で更新を確認・インストールできる。
 
 またはソースからビルド：
 

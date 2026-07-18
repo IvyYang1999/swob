@@ -16,13 +16,14 @@ const CURSOR_PROJECTS_DIR = path.join(HOME, '.cursor', 'projects')
 
 // --- File discovery ---
 
-export function findCursorSessionFiles(): string[] {
+export function findCursorSessionFiles(home = HOME): string[] {
   const files: string[] = []
-  if (!fs.existsSync(CURSOR_PROJECTS_DIR)) return files
+  const projectsDir = home === HOME ? CURSOR_PROJECTS_DIR : path.join(home, '.cursor', 'projects')
+  if (!fs.existsSync(projectsDir)) return files
 
-  for (const projEntry of fs.readdirSync(CURSOR_PROJECTS_DIR, { withFileTypes: true })) {
+  for (const projEntry of fs.readdirSync(projectsDir, { withFileTypes: true })) {
     if (!projEntry.isDirectory()) continue
-    const transcriptsDir = path.join(CURSOR_PROJECTS_DIR, projEntry.name, 'agent-transcripts')
+    const transcriptsDir = path.join(projectsDir, projEntry.name, 'agent-transcripts')
     if (!fs.existsSync(transcriptsDir)) continue
 
     for (const sessionEntry of fs.readdirSync(transcriptsDir, { withFileTypes: true })) {

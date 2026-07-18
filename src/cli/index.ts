@@ -27,6 +27,7 @@ import { loadConfig, saveConfig } from '../main/config-store'
 import { spotlightSearch } from '../main/spotlight-search'
 import { buildInsights } from '../main/insights'
 import { installSwobCli } from '../main/cli-install'
+import { formatResumeAuditReport, runResumeAudit } from '../main/resume-audit'
 import { buildCliResumeResponse } from './resume-command'
 import { formatResolveCliOutput, resolveSessionId } from './resolve-command'
 import {
@@ -101,7 +102,8 @@ function formatTime(ms: number): string {
 
 // ── Init ───────────────────────────────────────────────────────────
 
-initLibrary()
+const startupCommand = parseArgs(process.argv.slice(2)).cmd[0]
+initLibrary(undefined, { readOnly: startupCommand === 'resume-audit' })
 scanLibrary()
 
 // ── Commands ───────────────────────────────────────────────────────
@@ -247,6 +249,15 @@ async function cmdResume(sessionId: string, flags: Record<string, string | true>
   const result = await buildCliResumeResponse(sessionId, flags)
   if (result.error || !result.command) err(result.error || '此会话无法直接恢复')
   out({ command: result.command })
+}
+
+async function cmdResumeAudit(flags: Record<string, string | true>): Promise<void> {
+  const report = await runResumeAudit()
+  if (flags.json === true) {
+    out(report)
+    return
+  }
+  process.stdout.write(formatResumeAuditReport(report))
 }
 
 function cmdResolve(sessionId: string, flags: Record<string, string | true>): void {
@@ -510,6 +521,15 @@ swob resume <sessionId> --cwd /path/to/project
 
 返回 \`{ "command": "claude --resume ..." }\`，你可以直接执行该命令。
 
+### 审计全部 session 的 resume 可信度（只读）
+
+\`\`\`bash
+swob resume-audit
+swob resume-audit --json
+\`\`\`
+
+分层验证 resume 命令可生成、源引用和 session id 可信，并单独报告缺失的 harness CLI。
+
 ### 重建会话血统注册表
 
 \`\`\`bash
@@ -635,6 +655,7 @@ async function main(): Promise<void> {
   list                        列出 session
   show <sessionId>            查看 session 详情
   resume <sessionId>          获取 resume 命令
+  resume-audit               只读审计全部 session 的 resume 可信度
   resolve <sessionId>         解析旧 id/短 id 到最新完整 id
   lineage                     重建会话血统注册表
   folders                     列出所有文件夹
@@ -688,6 +709,10 @@ async function main(): Promise<void> {
       case 'resume':
         if (!cmd[1]) err('缺少 sessionId。用法: swob resume <sessionId>')
         await cmdResume(cmd[1], flags)
+        break
+
+      case 'resume-audit':
+        await cmdResumeAudit(flags)
         break
 
       case 'resolve':

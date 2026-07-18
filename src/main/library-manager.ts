@@ -165,9 +165,13 @@ export function getIgnoreDirs(): Set<string> {
   return _ignoreDirs
 }
 
-export function initLibrary(root?: string): void {
+export interface InitLibraryOptions {
+  readOnly?: boolean
+}
+
+export function initLibrary(root?: string, options: InitLibraryOptions = {}): void {
   _root = root || getConfiguredLibraryPath()
-  if (!fs.existsSync(_root)) {
+  if (!options.readOnly && !fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }
   // 库根可能是整个 vault：加载忽略名单，避免扫描 wiki/clipii/日记 等非项目目录
@@ -394,7 +398,7 @@ function evaluateSourceResumeAvailability(
   source: SessionSource,
   dirPath?: string | null
 ): SessionResumeAvailability {
-  const existingSource = sourceFilePaths.find((src) => fs.existsSync(src))
+  const existingSource = sourceFilePaths.find((src) => fs.existsSync(sourceStatPath(src)))
   if (existingSource) return { canResume: true, sourcePath: existingSource }
 
   if (source === 'claude-code' && hasBackupForDir(dirPath)) {
@@ -479,7 +483,7 @@ export function restoreBackupToClaudeSource(sessionId: string): {
     return { restored: false, sourcePath: null, reason: 'missing-source-path' }
   }
 
-  const existingSource = sourceFilePaths.find((src) => fs.existsSync(src))
+  const existingSource = sourceFilePaths.find((src) => fs.existsSync(sourceStatPath(src)))
   if (existingSource) return { restored: false, sourcePath: existingSource, reason: 'source-exists' }
 
   const sourcePath = sourceFilePaths[0]

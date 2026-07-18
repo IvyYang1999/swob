@@ -94,6 +94,10 @@ const CODEX_SYSTEM_WRAPPER_TAGS = [
   '<environment_context>',
   '<user_instructions>',
   '<INSTRUCTIONS>',
+  '<recommended_plugins>',
+  '<skills_instructions>',
+  '<apps_instructions>',
+  '<plugins_instructions>',
   '<collaboration_mode>',
   '<turn_aborted>'
 ]
@@ -115,6 +119,19 @@ function isCodexCollaborationInjection(trimmed: string, beforeFirstRealUser: boo
   return trimmed.includes('<collaboration_mode>') || trimmed.length > 2000
 }
 
+function isCodexBootstrapInjection(trimmed: string, beforeFirstRealUser: boolean): boolean {
+  if (!beforeFirstRealUser) return false
+
+  const startsWithKnownInjection = CODEX_SYSTEM_WRAPPER_TAGS.some((tag) => trimmed.startsWith(tag)) ||
+    CODEX_AGENTS_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+  if (!startsWithKnownInjection) return false
+
+  const wrapperCount = CODEX_SYSTEM_WRAPPER_TAGS.filter((marker) => trimmed.includes(marker)).length
+  const agentsMarkerCount = CODEX_AGENTS_PREFIXES.some((marker) => trimmed.includes(marker)) ? 1 : 0
+  const markerCount = wrapperCount + agentsMarkerCount
+  return markerCount >= 2
+}
+
 function normalizeCodexUserText(text: string, beforeFirstRealUser: boolean): string | null {
   const trimmed = text.trim()
   if (!trimmed) return null
@@ -128,6 +145,7 @@ function normalizeCodexUserText(text: string, beforeFirstRealUser: boolean): str
 
   if (isCodexAgentsInjection(trimmed, beforeFirstRealUser)) return null
   if (isCodexCollaborationInjection(trimmed, beforeFirstRealUser)) return null
+  if (isCodexBootstrapInjection(trimmed, beforeFirstRealUser)) return null
   if (CODEX_SYSTEM_WRAPPER_TAGS.some((tag) => isWholeWrappedByCodexTag(trimmed, tag))) return null
   return text
 }
@@ -165,6 +183,31 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
   const model = extractCodexModel(lines)
   let msgIndex = 0
   let seenRealUserMessage = false
+  const assistantTextSourcesInTurn = new Map<string, 'event_msg' | 'response_item'>()
+
+  const pushAssistantText = (text: string, timestamp: string, source: 'event_msg' | 'response_item'): void => {
+    const dedupeKey = text.trim()
+    if (!dedupeKey) return
+
+    const previousSource = assistantTextSourcesInTurn.get(dedupeKey)
+    if (previousSource && previousSource !== source) return
+    if (!previousSource) assistantTextSourcesInTurn.set(dedupeKey, source)
+
+    messages.push({
+      uuid: `codex-${sessionId}-${msgIndex++}`,
+      parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
+      sessionId,
+      type: 'assistant',
+      timestamp,
+      cwd,
+      version: model,
+      message: {
+        role: 'assistant',
+        model,
+        content: text
+      }
+    })
+  }
 
   for (const line of lines) {
     const ts = line.timestamp
@@ -175,20 +218,7 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
 
       // Skip user_message from event_msg — it duplicates response_item
       if (etype === 'agent_message') {
-        messages.push({
-          uuid: `codex-${sessionId}-${msgIndex++}`,
-          parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
-          sessionId,
-          type: 'assistant',
-          timestamp: ts,
-          cwd,
-          version: model,
-          message: {
-            role: 'assistant',
-            model,
-            content: (p.message as string) || ''
-          }
-        })
+        pushAssistantText((p.message as string) || '', ts, 'event_msg')
       }
     } else if (line.type === 'response_item') {
       const p = line.payload as Record<string, unknown>
@@ -203,6 +233,7 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
           const normalizedText = normalizeCodexUserText(text, !seenRealUserMessage)
           if (normalizedText) {
             seenRealUserMessage = true
+            assistantTextSourcesInTurn.clear()
             messages.push({
               uuid: `codex-${sessionId}-${msgIndex++}`,
               parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
@@ -217,18 +248,7 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
         } else if (role === 'assistant') {
           const content = p.content as Array<{ type: string; text: string }> | undefined
           const text = content?.filter((c) => c.type === 'output_text').map((c) => c.text).join('\n') || ''
-          if (text) {
-            messages.push({
-              uuid: `codex-${sessionId}-${msgIndex++}`,
-              parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
-              sessionId,
-              type: 'assistant',
-              timestamp: ts,
-              cwd,
-              version: model,
-              message: { role: 'assistant', model, content: text }
-            })
-          }
+          pushAssistantText(text, ts, 'response_item')
         }
       } else if (rtype === 'function_call') {
         const name = p.name as string || 'unknown'

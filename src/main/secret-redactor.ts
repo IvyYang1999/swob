@@ -12,6 +12,7 @@ const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
 const GIT_SHA_RE = /\b[0-9a-f]{40}\b/gi
 const DATA_IMAGE_RE = /data:image[^\s)\]]*/gi
 const MARKDOWN_LINK_DESTINATION_RE = /\]\(\s*(?:<([^>]+)>|([^\s)]+))/g
+const DATABASE_PASSWORD_RE = /\b((?:[a-z]+sql?|rediss?|mongodb(?:\+srv)?):\/\/[^:/\s]+:)([^@\s]+)(@)/gi
 const CREDENTIAL_RE = new RegExp([
   '-----BEGIN [A-Z ]*PRI[V]ATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRI[V]ATE KEY-----',
   's[k]-[A-Za-z0-9_-]{20,}',
@@ -53,14 +54,30 @@ function visiblePrefix(candidate: string): string {
   return candidate.slice(0, 2)
 }
 
+function redactDatabasePasswords(text: string): RedactionResult {
+  let hits = 0
+  DATABASE_PASSWORD_RE.lastIndex = 0
+  const redacted = text.replace(
+    DATABASE_PASSWORD_RE,
+    (candidate: string, prefix: string, password: string, suffix: string) => {
+      if (password.endsWith('（已脱敏）')) return candidate
+      hits++
+      const visibleSuffix = password.length > 4 ? password.slice(-4) : ''
+      return `${prefix}xx……${visibleSuffix}（已脱敏）${suffix}`
+    }
+  )
+  return { text: redacted, hits }
+}
+
 function isProtected(start: number, end: number, ranges: TextRange[]): boolean {
   return ranges.some((range) => start < range.end && end > range.start)
 }
 
 export function redactSecrets(text: string): RedactionResult {
-  const ranges = protectedRanges(text)
-  let hits = 0
-  const redacted = text.replace(CREDENTIAL_RE, (candidate: string, offset: number) => {
+  const databaseResult = redactDatabasePasswords(text)
+  const ranges = protectedRanges(databaseResult.text)
+  let hits = databaseResult.hits
+  const redacted = databaseResult.text.replace(CREDENTIAL_RE, (candidate: string, offset: number) => {
     if (isProtected(offset, offset + candidate.length, ranges)) return candidate
     hits++
     return `${visiblePrefix(candidate)}……${candidate.slice(-4)}（已脱敏）`

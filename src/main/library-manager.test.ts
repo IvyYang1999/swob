@@ -847,6 +847,18 @@ describe('transcript frontmatter 属性', () => {
         payload: {
           type: 'message',
           role: 'user',
+          content: [{
+            type: 'input_text',
+            text: '<recommended_plugins>catalog</recommended_plugins>\n# AGENTS.md instructions\n<INSTRUCTIONS>rules</INSTRUCTIONS>\n<environment_context>cwd=/tmp</environment_context>'
+          }]
+        }
+      },
+      {
+        timestamp: '2026-07-07T00:00:01.100Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
           content: [{ type: 'input_text', text: '# AGENTS.md instructions for /Users/mac\n<INSTRUCTIONS>noise</INSTRUCTIONS>' }]
         }
       },
@@ -1201,6 +1213,11 @@ describe('Library transcript rebuild 多来源回归', () => {
       },
       {
         timestamp: '2026-07-07T00:00:04Z',
+        type: 'event_msg',
+        payload: { type: 'agent_message', message: 'Codex transcript 已生成。', phase: 'final_answer' }
+      },
+      {
+        timestamp: '2026-07-07T00:00:04.100Z',
         type: 'response_item',
         payload: {
           type: 'message',
@@ -1217,6 +1234,8 @@ describe('Library transcript rebuild 多来源回归', () => {
     const md = fs.readFileSync(path.join(dirPath, 'transcript.md'), 'utf-8')
     expect(md).toContain('## 请用 Codex 修 bug')
     expect(md).toContain('Codex transcript 已生成。')
+    expect(md).not.toContain('<recommended_plugins>')
+    expect(md.match(/Codex transcript 已生成。/g)).toHaveLength(1)
     expect(md).toContain('1 轮对话 | Tools: shell(1)')
   })
 

@@ -233,6 +233,51 @@ describe('codex-loader', () => {
       expect(summary!.turnCount).toBe(1)
       expect(detail!.messages.some((m) => m.textContent.includes('# AGENTS.md instructions 是什么'))).toBe(true)
     })
+
+    it('过滤 recommended_plugins + INSTRUCTIONS + environment_context 组合注入', async () => {
+      const bootstrap = [
+        '<recommended_plugins>plugin catalog</recommended_plugins>',
+        '# AGENTS.md instructions',
+        '<INSTRUCTIONS>workspace rules</INSTRUCTIONS>',
+        '<environment_context>cwd=/Users/test</environment_context>'
+      ].join('\n')
+      const lines = [
+        makeCodexLines()[0],
+        {
+          timestamp: '2026-03-27T13:37:34.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: bootstrap }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:35.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '第一条真实 Query' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:36.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '真实回答' }]
+          }
+        }
+      ]
+      const fp = writeTempJsonl(lines)
+      const summary = await buildCodexSessionSummary(fp)
+      const detail = await buildCodexSessionDetail(fp)
+
+      expect(summary!.firstUserMessage).toBe('第一条真实 Query')
+      expect(detail!.messages.filter((m) => m.type === 'user').map((m) => m.textContent)).toEqual(['第一条真实 Query'])
+    })
   })
 
   describe('buildCodexSessionDetail', () => {
@@ -262,6 +307,48 @@ describe('codex-loader', () => {
       const toolCallMsg = detail!.messages.find((m) => m.toolCalls.some((t) => t.id === 'call_abc123'))
       expect(toolCallMsg).toBeDefined()
       expect(toolCallMsg!.toolCalls[0].result).toContain('src')
+    })
+
+    it('同一 Assistant 回合的 reasoning/agent_message 与 response_item message 只保留一条', async () => {
+      const repeatedAnswer = '同一回合只应落盘一次。'
+      const lines = [
+        makeCodexLines()[0],
+        {
+          timestamp: '2026-03-27T13:37:34.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: '请检查重复回合' }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:35.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'reasoning',
+            summary: [{ type: 'summary_text', text: repeatedAnswer }]
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:37:35.050Z',
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: repeatedAnswer, phase: 'final_answer' }
+        },
+        {
+          timestamp: '2026-03-27T13:37:35.100Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: repeatedAnswer }]
+          }
+        }
+      ]
+      const fp = writeTempJsonl(lines)
+      const detail = await buildCodexSessionDetail(fp)
+
+      expect(detail!.messages.filter((m) => m.type === 'assistant').map((m) => m.textContent)).toEqual([repeatedAnswer])
     })
 
     it('【曾经的 bug】AGENTS.md instructions 等系统消息不作为用户输入', async () => {

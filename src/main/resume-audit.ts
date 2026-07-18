@@ -9,7 +9,8 @@ import {
 } from './library-manager'
 import {
   buildSessionSummaryFromBackup,
-  findAllSessionFiles,
+  findClaudeProjectRoots,
+  findSessionFilesInProjectRoots,
   getClaudeConfigDirForSessionFile,
   isRealUserMessage,
   loadAllSessions,
@@ -86,6 +87,9 @@ export interface ResumeAuditL3Stats {
   }
   would404: number
   skipped: number
+  skippedReasons: {
+    expectedAnchorEmpty: number
+  }
   mismatchExamples: ResumeAuditAnchorExample[]
   would404Examples: ResumeAuditAnchorExample[]
 }
@@ -127,11 +131,12 @@ export interface ResumeAuditOptions {
 interface AuditOutcome {
   source: SessionSource
   sessionId: string
-  status: 'ok' | 'fail' | 'env-missing'
+  status: 'ok' | 'fail' | 'env-missing' | 'skipped'
   level: 'L1' | 'L2' | 'L3'
   failureCode?: ResumeAuditFailureCode
   binary?: string
-  l3Status?: 'match' | 'mismatch' | 'would-404'
+  l3Status?: 'match' | 'mismatch' | 'would-404' | 'skipped'
+  l3SkipReason?: 'expected-anchor-empty'
   mismatchKind?: ResumeAuditMismatchKind
   expectedAnchors?: ResumeAuditAnchors
 }
@@ -324,12 +329,42 @@ function exampleFor(outcome: AuditOutcome): ResumeAuditAnchorExample {
   }
 }
 
+function findCursorResumeStores(home: string): string[] {
+  const chatsRoot = path.join(home, '.cursor', 'chats')
+  const stores: string[] = []
+  let workspaces: fs.Dirent[]
+  try {
+    workspaces = fs.readdirSync(chatsRoot, { withFileTypes: true })
+  } catch {
+    return stores
+  }
+
+  for (const workspace of workspaces) {
+    if (!workspace.isDirectory()) continue
+    const workspaceDir = path.join(chatsRoot, workspace.name)
+    let sessions: fs.Dirent[]
+    try {
+      sessions = fs.readdirSync(workspaceDir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const session of sessions) {
+      if (!session.isDirectory()) continue
+      const storePath = path.join(workspaceDir, session.name, 'store.db')
+      if (fs.existsSync(storePath)) stores.push(storePath)
+    }
+  }
+  return stores
+}
+
 function buildTargetLists(options: ResumeAuditOptions): Record<SessionSource, string[]> {
   const overrides = options.resumeTargets || {}
+  const home = options.home || process.env.HOME || ''
   return {
-    'claude-code': overrides['claude-code'] || findAllSessionFiles(),
+    'claude-code': overrides['claude-code'] ||
+      findSessionFilesInProjectRoots(findClaudeProjectRoots(home)),
     codex: overrides.codex || findCodexSessionFiles(),
-    cursor: overrides.cursor || [],
+    cursor: overrides.cursor || findCursorResumeStores(home),
     opencode: overrides.opencode || [getSqliteAgentDbPath('opencode')],
     zcode: overrides.zcode || [getSqliteAgentDbPath('zcode')]
   }
@@ -388,8 +423,8 @@ function fileHasData(filePath: string): boolean {
 }
 
 async function loadClaudeTarget(
-  session: SessionSummary,
   sessionId: string,
+  claudeConfigDir: string | undefined,
   runtime: ResumeAuditRuntime
 ): Promise<ResumeTargetData> {
   const home = runtime.options.home || process.env.HOME || ''
@@ -397,8 +432,8 @@ async function loadClaudeTarget(
   const candidates = runtime.targets['claude-code'].filter((candidate) => {
     if (path.basename(candidate) !== exactName) return false
     const candidateConfig = getClaudeConfigDirForSessionFile(candidate, home)
-    if (session.claudeConfigDir) {
-      return !!candidateConfig && path.resolve(candidateConfig) === path.resolve(session.claudeConfigDir)
+    if (claudeConfigDir) {
+      return !!candidateConfig && path.resolve(candidateConfig) === path.resolve(claudeConfigDir)
     }
     return !candidateConfig
   })
@@ -502,7 +537,9 @@ async function runSqliteJson(dbPath: string, sql: string): Promise<SqliteJsonRow
   return new Promise((resolve) => {
     let settled = false
     let stdout = ''
-    const child = spawn('sqlite3', ['-readonly', '-json', dbPath], {
+    // dbPath is always a private temp snapshot. A writable connection is required
+    // to recover copied WAL state; the original user database is never opened here.
+    const child = spawn('sqlite3', ['-json', dbPath], {
       stdio: ['pipe', 'pipe', 'ignore']
     })
     const finish = (rows: SqliteJsonRow[]): void => {
@@ -682,15 +719,27 @@ async function loadCursorStore(dbPath: string): Promise<ResumeTargetData> {
 }
 
 function cursorTargetPath(session: SessionSummary, sessionId: string, runtime: ResumeAuditRuntime): string | null {
-  const overrides = runtime.targets.cursor
-  if (overrides.length > 0) {
-    return overrides.find((candidate) => path.basename(path.dirname(candidate)) === sessionId) ||
-      (overrides.length === 1 ? overrides[0] : null)
+  const candidates = runtime.targets.cursor.filter((candidate) =>
+    path.basename(candidate) === 'store.db' &&
+    path.basename(path.dirname(candidate)) === sessionId
+  )
+  if (candidates.length === 0) return null
+  if (candidates.length === 1) return candidates[0]
+
+  // Prefer the current workspace copy when one session id exists in multiple workspaces.
+  if (session.resumeCwd) {
+    const workspaceHash = crypto.createHash('md5').update(path.resolve(session.resumeCwd)).digest('hex')
+    const sameWorkspace = candidates.find((candidate) =>
+      path.basename(path.dirname(path.dirname(candidate))) === workspaceHash
+    )
+    if (sameWorkspace) return sameWorkspace
   }
-  const home = runtime.options.home || process.env.HOME || ''
-  const cwd = path.resolve(session.resumeCwd || process.cwd())
-  const workspaceHash = crypto.createHash('md5').update(cwd).digest('hex')
-  return path.join(home, '.cursor', 'chats', workspaceHash, sessionId, 'store.db')
+  return candidates.sort((left, right) => {
+    const mtime = (filePath: string): number => {
+      try { return fs.statSync(filePath).mtimeMs } catch { return 0 }
+    }
+    return mtime(right) - mtime(left) || left.localeCompare(right)
+  })[0]
 }
 
 async function loadSqliteAgentTarget(
@@ -723,14 +772,15 @@ async function loadSqliteAgentTarget(
 async function loadResumeTarget(
   session: SessionSummary,
   commandSessionId: string,
+  claudeConfigDir: string | undefined,
   runtime: ResumeAuditRuntime
 ): Promise<ResumeTargetData> {
   const source = sourceOf(session)
-  if (source === 'claude-code') return loadClaudeTarget(session, commandSessionId, runtime)
+  if (source === 'claude-code') return loadClaudeTarget(commandSessionId, claudeConfigDir, runtime)
   if (source === 'codex') return loadCodexTarget(commandSessionId, runtime)
   if (source === 'cursor') {
-    const dbPath = cursorTargetPath(session, commandSessionId, runtime)
-    return dbPath ? loadCursorStore(dbPath) : emptyTarget('missing')
+    const targetPath = cursorTargetPath(session, commandSessionId, runtime)
+    return targetPath ? loadCursorStore(targetPath) : emptyTarget('missing')
   }
   return loadSqliteAgentTarget(source, commandSessionId, runtime)
 }
@@ -874,15 +924,17 @@ async function auditSession(
   }
 
   let commandSessionId: string
+  let claudeConfigDir: string | undefined
   try {
     const context = await resolveSessionActionContext(exampleId, [session])
     commandSessionId = context.sessionId
+    claudeConfigDir = context.claudeConfigDir || session.claudeConfigDir
     const command = buildResumeCommand(
       context.sessionId,
       context.permissionMode,
       context.cwd,
       context.source,
-      context.claudeConfigDir
+      claudeConfigDir
     )
     if (!command.trim()) return fail(source, exampleId, 'L1', 'command-build-failed')
   } catch {
@@ -923,7 +975,18 @@ async function auditSession(
   }
 
   const expected = await loadExpectedAnchors(session, runtime)
-  const target = await loadResumeTarget(session, commandSessionId, runtime)
+  if (!expected.user && !expected.assistant) {
+    return {
+      source,
+      sessionId: exampleId,
+      status: 'skipped',
+      level: 'L3',
+      l3Status: 'skipped',
+      l3SkipReason: 'expected-anchor-empty',
+      expectedAnchors: expected
+    }
+  }
+  const target = await loadResumeTarget(session, commandSessionId, claudeConfigDir, runtime)
   return classifyL3(source, exampleId, expected, target)
 }
 
@@ -935,7 +998,12 @@ function roundedPercent(numerator: number, denominator: number): number | null {
 function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
   const ok = outcomes.filter((outcome) => outcome.l3Status === 'match').length
   const failures = outcomes.filter((outcome) => outcome.status === 'fail')
-  const levelFailures = failures.filter((outcome) => !!outcome.failureCode)
+  const levelFailures = failures.filter(
+    (outcome): outcome is AuditOutcome & {
+      failureCode: ResumeAuditFailureCode
+      level: 'L1' | 'L2'
+    } => !!outcome.failureCode && outcome.level !== 'L3'
+  )
   const envMissingOutcomes = outcomes.filter((outcome) => outcome.status === 'env-missing')
   const total = outcomes.length
   const failCount = failures.length
@@ -977,6 +1045,9 @@ function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
   const l2Fail = levelFailures.filter((outcome) => outcome.level === 'L2').length
   const mismatchOutcomes = outcomes.filter((outcome) => outcome.l3Status === 'mismatch')
   const would404Outcomes = outcomes.filter((outcome) => outcome.l3Status === 'would-404')
+  const expectedAnchorEmptyOutcomes = outcomes.filter(
+    (outcome) => outcome.l3SkipReason === 'expected-anchor-empty'
+  )
   const l2Ok = outcomes.filter((outcome) => !!outcome.l3Status).length
   const mismatchExamples: ResumeAuditAnchorExample[] = []
   for (const kind of ['wrong-branch', 'stale', 'empty'] as const) {
@@ -1008,7 +1079,10 @@ function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
         empty: mismatchOutcomes.filter((outcome) => outcome.mismatchKind === 'empty').length
       },
       would404: would404Outcomes.length,
-      skipped: total - l2Ok,
+      skipped: total - ok - mismatchOutcomes.length - would404Outcomes.length,
+      skippedReasons: {
+        expectedAnchorEmpty: expectedAnchorEmptyOutcomes.length
+      },
       mismatchExamples,
       would404Examples: would404Outcomes.slice(0, 3).map(exampleFor)
     },
@@ -1101,6 +1175,7 @@ export function formatResumeAuditReport(report: ResumeAuditReport): string {
     `L2 reference verification: ${report.l2.ok} ok / ${report.l2.fail} fail / ${report.l2.envMissing} env-missing`,
     `L3 content consistency: ${report.l3.match} match / ${report.l3.mismatch.total} mismatch / ${report.l3.would404} would-404 / ${report.l3.skipped} skipped`,
     `  mismatch: wrong-branch=${report.l3.mismatch.wrongBranch}, stale=${report.l3.mismatch.stale}, empty=${report.l3.mismatch.empty}`,
+    `  skipped: expected-anchor-empty=${report.l3.skippedReasons.expectedAnchorEmpty}`,
     'success = ok / (ok + fail); env-missing is excluded. verified = ok / total.'
   ]
 
@@ -1155,7 +1230,8 @@ export function formatResumeAuditReport(report: ResumeAuditReport): string {
   for (const source of RESUME_AUDIT_SOURCES) {
     const stats = report.perSource[source]
     if (stats.failureReasons.length === 0 && stats.environmentMissing.length === 0 &&
-      stats.l3.mismatch.total === 0 && stats.l3.would404 === 0) continue
+      stats.l3.mismatch.total === 0 && stats.l3.would404 === 0 &&
+      stats.l3.skippedReasons.expectedAnchorEmpty === 0) continue
     lines.push(`  ${source}:`)
     for (const reason of stats.failureReasons) {
       lines.push(
@@ -1165,6 +1241,9 @@ export function formatResumeAuditReport(report: ResumeAuditReport): string {
     }
     for (const item of stats.environmentMissing) {
       lines.push(`    env-missing ${item.binary}: ${item.count}; example=${item.exampleSessionId}`)
+    }
+    if (stats.l3.skippedReasons.expectedAnchorEmpty > 0) {
+      lines.push(`    L3 skipped expected-anchor-empty=${stats.l3.skippedReasons.expectedAnchorEmpty}`)
     }
     if (stats.l3.mismatch.total > 0 || stats.l3.would404 > 0) {
       lines.push(

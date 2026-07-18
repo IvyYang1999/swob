@@ -15,6 +15,7 @@ import type { SessionSource, SessionSummary } from './types'
 
 const IDS = {
   claude: '11111111-1111-4111-8111-111111111111',
+  claudeWindow: '55555555-5555-4555-8555-555555555555',
   codex: '22222222-2222-4222-8222-222222222222',
   cursor: '33333333-3333-4333-8333-333333333333',
   staleCodex: '44444444-4444-4444-8444-444444444444'
@@ -118,6 +119,7 @@ function createCursorStore(dbPath: string, sessionId: string, userText: string, 
   const metadata = Buffer.from(JSON.stringify({ agentId: sessionId, latestRootBlobId: rootId }), 'utf-8').toString('hex')
   execFileSync('sqlite3', [dbPath], {
     input: `
+      PRAGMA journal_mode=WAL;
       CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);
       CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
       INSERT INTO meta VALUES ('0', ${sqlString(metadata)});
@@ -212,7 +214,7 @@ afterEach(() => {
 })
 
 describe('resume audit', () => {
-  it('五种来源均复用现有命令路径并通过 L1/L2，空 fixture 不冒充 L3 成功', async () => {
+  it('五种来源均复用现有命令路径并通过 L1/L2，空期望锚点单列跳过 L3', async () => {
     for (const binary of ['claude', 'codex', 'cursor', 'opencode', 'zcode']) installFakeBinary(binary)
 
     const sessions = [
@@ -242,16 +244,97 @@ describe('resume audit', () => {
       readOnly: true,
       total: 5,
       ok: 0,
-      fail: 5,
+      fail: 0,
       envMissing: 0,
-      successRate: 0,
+      successRate: null,
       verifiedRate: 0,
       l1: { ok: 5, fail: 0 },
-      l2: { ok: 5, fail: 0, envMissing: 0 }
+      l2: { ok: 5, fail: 0, envMissing: 0 },
+      l3: {
+        match: 0,
+        mismatch: { total: 0, wrongBranch: 0, stale: 0, empty: 0 },
+        would404: 0,
+        skipped: 5,
+        skippedReasons: { expectedAnchorEmpty: 5 }
+      }
     })
     for (const source of ['claude-code', 'codex', 'cursor', 'opencode', 'zcode'] as const) {
-      expect(report.perSource[source]).toMatchObject({ total: 1, ok: 0, fail: 1 })
+      expect(report.perSource[source]).toMatchObject({
+        total: 1,
+        ok: 0,
+        fail: 0,
+        l3: { skipped: 1, skippedReasons: { expectedAnchorEmpty: 1 } }
+      })
     }
+  })
+
+  it('Claude resume 按命令配置扫描全部项目目录并兼容 claude-window', async () => {
+    installFakeBinary('claude')
+    const standardBackup = writeJsonl(
+      path.join(tempRoot, 'library', 'standard-backup.jsonl'),
+      claudeRows(IDS.claude, '标准目录用户锚点', '标准目录助手锚点')
+    )
+    writeJsonl(
+      path.join(tempRoot, '.claude', 'projects', 'another-project', `${IDS.claude}.jsonl`),
+      claudeRows(IDS.claude, '标准目录用户锚点', '标准目录助手锚点')
+    )
+
+    const windowConfigDir = path.join(tempRoot, '.claude-window', 'fixture-window')
+    const windowBackup = writeJsonl(
+      path.join(tempRoot, 'library', 'window-backup.jsonl'),
+      claudeRows(IDS.claudeWindow, '窗口目录用户锚点', '窗口目录助手锚点')
+    )
+    writeJsonl(
+      path.join(windowConfigDir, 'projects', 'window-project', `${IDS.claudeWindow}.jsonl`),
+      claudeRows(IDS.claudeWindow, '窗口目录用户锚点', '窗口目录助手锚点')
+    )
+    const windowSummary = summary('claude-code', IDS.claudeWindow, windowBackup)
+    windowSummary.claudeConfigDir = windowConfigDir
+
+    const report = await runResumeAudit({
+      sessions: [summary('claude-code', IDS.claude, standardBackup), windowSummary],
+      pathEnv: binDir,
+      home: tempRoot
+    })
+
+    expect(report.l3).toMatchObject({
+      match: 2,
+      mismatch: { total: 0 },
+      would404: 0,
+      skipped: 0
+    })
+  })
+
+  fixtureIt('【曾经的 bug】Cursor 期望侧读 agent-transcripts，resume 实际侧按 id 全局读取 DB', async () => {
+    installFakeBinary('cursor')
+    const expected = writeCursorTranscript(
+      path.join(tempRoot, '.cursor', 'projects', 'another-project', 'agent-transcripts', IDS.cursor, `${IDS.cursor}.jsonl`),
+      'Cursor loader 用户锚点',
+      'Cursor loader 助手锚点'
+    )
+    const storePath = createCursorStore(
+      path.join(tempRoot, '.cursor', 'chats', 'not-derived-from-resume-cwd', IDS.cursor, 'store.db'),
+      IDS.cursor,
+      'Cursor loader 用户锚点',
+      'Cursor loader 助手锚点'
+    )
+    const storeBefore = fs.readFileSync(storePath)
+    const storeMtimeBefore = fs.statSync(storePath).mtimeMs
+
+    const report = await runResumeAudit({
+      sessions: [summary('cursor', IDS.cursor, expected)],
+      pathEnv: binDir,
+      home: tempRoot
+    })
+
+    expect(report.perSource.cursor.l3).toMatchObject({
+      match: 1,
+      mismatch: { total: 0 },
+      would404: 0,
+      skipped: 0
+    })
+    expect(fs.readFileSync(storePath)).toEqual(storeBefore)
+    expect(fs.statSync(storePath).mtimeMs).toBe(storeMtimeBefore)
   })
 
   fixtureIt('L3 五来源真实格式 fixture 均 match', async () => {
@@ -384,7 +467,14 @@ describe('resume audit', () => {
       'Cursor 将 404',
       'Cursor 目标不存在'
     )
-    const missingCursorDb = path.join(tempRoot, '.cursor', 'chats', 'missing', IDS.cursor, 'store.db')
+    const missingCursorTarget = path.join(
+      tempRoot,
+      '.cursor',
+      'chats',
+      'missing-workspace',
+      IDS.cursor,
+      'store.db'
+    )
 
     const report = await runResumeAudit({
       sessions: [
@@ -396,7 +486,7 @@ describe('resume audit', () => {
       resumeTargets: {
         'claude-code': [claudeFile],
         codex: [staleCodexTarget],
-        cursor: [missingCursorDb]
+        cursor: [missingCursorTarget]
       }
     })
 

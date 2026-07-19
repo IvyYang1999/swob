@@ -691,6 +691,7 @@ function rawToParsedMessages(rawMessages: RawJsonlMessage[]): ParsedMessage[] {
         subtype: undefined,
         timestamp: m.timestamp,
         role: m.message?.role,
+        origin: 'unknown',
         textContent: extractText(content),
         toolCalls: extractToolCalls(content),
         images: [],

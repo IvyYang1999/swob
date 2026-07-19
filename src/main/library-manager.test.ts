@@ -45,6 +45,7 @@ function claudeRows(sessionId: string, prompt = '请测试 transcript'): unknown
       type: 'user',
       timestamp: '2026-07-07T00:00:00Z',
       cwd: tmpRoot,
+      promptSource: 'typed',
       message: { role: 'user', content: prompt }
     },
     {
@@ -664,6 +665,7 @@ describe('transcript markdown heading semantics', () => {
         sessionId: 's1',
         type: 'user',
         timestamp: '2026-03-01T00:00:00Z',
+        promptSource: 'typed',
         message: { role: 'user', content: '请做方案\n# 用户原始标题保留' }
       },
       {
@@ -684,12 +686,79 @@ describe('transcript markdown heading semantics', () => {
     expect(md).not.toContain('\n## Assistant Plan')
   })
 
+  it('合成结构样本：机器注入带来源标头，真人消息保持原样', () => {
+    const md = lib.generateTranscript([
+      {
+        uuid: 'hook-real-shape',
+        parentUuid: null,
+        sessionId: 'origin-session',
+        type: 'user',
+        timestamp: '2026-07-19T10:01:00',
+        isMeta: true,
+        message: { role: 'user', content: '<system-reminder>x</system-reminder>' }
+      },
+      {
+        uuid: 'task-real-shape',
+        parentUuid: 'hook-real-shape',
+        sessionId: 'origin-session',
+        type: 'user',
+        timestamp: '2026-07-19T10:02:00',
+        origin: { kind: 'task-notification' },
+        promptSource: 'system',
+        message: { role: 'user', content: '<task-notification>x</task-notification>' }
+      },
+      {
+        uuid: 'human-real-shape',
+        parentUuid: 'task-real-shape',
+        sessionId: 'origin-session',
+        type: 'user',
+        timestamp: '2026-07-19T10:03:00',
+        origin: { kind: 'human' },
+        promptSource: 'typed',
+        message: { role: 'user', content: '真人问题' }
+      },
+      {
+        uuid: 'assistant-message',
+        parentUuid: 'human-real-shape',
+        sessionId: 'origin-session',
+        type: 'assistant',
+        timestamp: '2026-07-19T10:04:00',
+        message: { role: 'assistant', content: '收到' }
+      }
+    ] as any, '来源标识核验', { createdAt: '2026-07-19T10:00:00', turnCount: 1 })
+
+    expect(md).toBe([
+      '# 来源标识核验',
+      '',
+      '> 7/19 10:00 | 1 轮对话',
+      '',
+      '**User** [7/19 10:01]',
+      '〔机器注入 · hook〕',
+      '## <system-reminder>x</system-reminder>',
+      '<system-reminder>x</system-reminder>',
+      '',
+      '**User** [7/19 10:02]',
+      '〔机器注入 · task-notification〕',
+      '## <task-notification>x</task-notification>',
+      '<task-notification>x</task-notification>',
+      '',
+      '**User** [7/19 10:03]',
+      '## 真人问题',
+      '真人问题',
+      '',
+      '**Assistant** [7/19 10:04]',
+      '收到',
+      ''
+    ].join('\n'))
+  })
+
   it('generateTranscript 在写入前打码', () => {
     const candidate = `WK${'a'.repeat(34)}`
     const md = lib.generateTranscript([
       {
         uuid: 'u1', parentUuid: null, sessionId: 's1', type: 'user',
         timestamp: '2026-03-01T00:00:00Z',
+        promptSource: 'typed',
         message: { role: 'user', content: candidate }
       }
     ] as any, '测试标题', { createdAt: '2026-03-01T00:00:00Z', turnCount: 0 })
@@ -736,6 +805,7 @@ describe('transcript frontmatter 属性', () => {
         type: 'user',
         timestamp: '2026-07-07T00:00:00Z',
         cwd: '/Users/yytyyf/projects/swob',
+        promptSource: 'typed',
         message: { role: 'user', content: '请生成 Obsidian 属性' }
       },
       {
@@ -799,6 +869,7 @@ describe('transcript frontmatter 属性', () => {
         type: 'user',
         timestamp: '2026-07-07T00:00:01Z',
         cwd: '/Users/yytyyf/projects/main-chain',
+        promptSource: 'typed',
         message: { role: 'user', content: '请生成主链 cwd' }
       },
       {
@@ -985,6 +1056,7 @@ describe('transcript frontmatter 属性', () => {
         type: 'user',
         timestamp: '2026-07-07T00:00:00Z',
         cwd: '/Users/yytyyf/projects/swob',
+        promptSource: 'typed',
         message: { role: 'user', content: '开始对话' }
       },
       {
@@ -1003,6 +1075,7 @@ describe('transcript frontmatter 属性', () => {
         type: 'user',
         timestamp: '2026-07-07T00:02:00Z',
         cwd: '/Users/yytyyf/projects/swob',
+        promptSource: 'typed',
         message: { role: 'user', content: '继续' }
       },
       {
@@ -1021,6 +1094,7 @@ describe('transcript frontmatter 属性', () => {
         type: 'user',
         timestamp: '2026-07-07T00:05:00Z',
         cwd: '/Users/yytyyf/projects/swob',
+        promptSource: 'typed',
         message: { role: 'user', content: '主路径问题' }
       },
       {
@@ -1048,6 +1122,7 @@ describe('transcript frontmatter 属性', () => {
         type: 'user',
         timestamp: '2026-07-07T00:06:00Z',
         cwd: '/Users/yytyyf/projects/swob',
+        promptSource: 'typed',
         message: { role: 'user', content: '分支问题' }
       }
     ])
@@ -1079,6 +1154,7 @@ describe('派生文件生成接入', () => {
         type: 'user',
         timestamp: '2026-07-07T00:00:00Z',
         cwd: tmpRoot,
+        promptSource: 'typed',
         message: { role: 'user', content: '第一条真实提问' }
       },
       {
@@ -1120,6 +1196,7 @@ describe('派生文件生成接入', () => {
         type: 'user',
         timestamp: '2026-07-07T00:04:00Z',
         cwd: tmpRoot,
+        promptSource: 'typed',
         message: { role: 'user', content: '第二条真实提问' }
       },
       {

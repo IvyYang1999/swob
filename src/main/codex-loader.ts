@@ -444,6 +444,7 @@ export async function buildCodexSessionDetail(filePath: string, sessionIdOverrid
         subtype: undefined,
         timestamp: m.timestamp,
         role: m.message?.role,
+        origin: 'unknown',
         textContent,
         toolCalls,
         images: [],

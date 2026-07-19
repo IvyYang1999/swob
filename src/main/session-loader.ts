@@ -18,57 +18,12 @@ import { findOpencodeSessionFiles, buildOpencodeSessionSummary, buildOpencodeSes
 import { findZcodeSessionFiles, buildZcodeSessionSummary, buildZcodeSessionDetail, buildZcodeSessionSummaryFromBackup, stripZcodeSessionRef } from './zcode-loader'
 import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
+import { detectTranscriptOrigin } from './transcript-origin'
 
 const HOME = process.env.HOME || ''
 
-/**
- * True user message = type 'user' with real text content (not tool_result / task-notification).
- * Tool results have content as array of { type: 'tool_result' }.
- */
-const SYSTEM_USER_MESSAGES = [
-  'Continue from where you left off.',
-  'Tool loaded.',
-  'No response requested.'
-]
-
-const SYSTEM_USER_PREFIXES = [
-  '<task-notification>',
-  '<local-command-caveat>',
-  '<local-command-stdout>',
-  '<command-name>',
-  '<command-message>',
-  '<command-args>',
-  '<user-prompt-submit-hook>',
-  'Base directory for this skill:'
-]
-
-function isSystemText(text: string): boolean {
-  const trimmed = text.trim()
-  if (!trimmed) return true
-  if (SYSTEM_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) return true
-  if (trimmed.startsWith('This session is being continued')) return true
-  if (trimmed.startsWith('<system-reminder>') &&
-    !trimmed.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()) return true
-  // Pure [Image: source: ...] text (file path references alongside base64 images)
-  if (/^\[Image: source: [^\]]+\](\s*\[Image: source: [^\]]+\])*\s*$/.test(trimmed)) return true
-  return SYSTEM_USER_MESSAGES.includes(trimmed)
-}
-
 export function isRealUserMessage(m: RawJsonlMessage): boolean {
-  if (m.type !== 'user' || !m.message) return false
-  const c = m.message.content
-  if (typeof c === 'string') {
-    return !isSystemText(c)
-  }
-  if (Array.isArray(c)) {
-    if (c.some((p) => p.type === 'tool_result')) return false
-    // Extract all text parts, check if any is real user input
-    const texts = c.filter((p) => p.type === 'text' && p.text).map((p) => p.text!)
-    if (texts.length === 0) return false
-    // If ALL text parts are system-generated, not a real message
-    return texts.some((t) => !isSystemText(t))
-  }
-  return false
+  return detectTranscriptOrigin(m) === 'human'
 }
 
 function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefined {
@@ -85,7 +40,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 19 // per-file summaries + lineage metadata
+const CACHE_VERSION = 20 // preserve transcript-origin evidence in lineage metadata
 
 type CachedSessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode'
 
@@ -447,11 +402,10 @@ export function buildSessionSummary(
   ).length
 
   // Find first meaningful user message (skip interruptions, compact summaries, and synthetic command output)
-  const skipPrefixes = ['[Request interrupted', 'This session is being continued']
   const firstUser = validMessages.find((m) => {
-    if (m.type !== 'user') return false
+    if (!isRealUserMessage(m)) return false
     const text = m.message ? extractText(m.message.content).trim() : ''
-    return text.length > 0 && !isSystemText(text) && !skipPrefixes.some((p) => text.startsWith(p))
+    return text.length > 0
   })
   let firstUserMessage = ''
   if (firstUser?.message) {
@@ -465,9 +419,9 @@ export function buildSessionSummary(
   let totalLen = 0
   const USER_TEXT_LIMIT = 2000
   for (const m of validMessages) {
-    if (m.type !== 'user' || !m.message) continue
+    if (!isRealUserMessage(m) || !m.message) continue
     const text = extractText(m.message.content).trim()
-    if (!text || isSystemText(text) || text === firstUserMessage) continue
+    if (!text || text === firstUserMessage) continue
     if (totalLen + text.length > USER_TEXT_LIMIT) {
       allUserTexts.push(text.slice(0, USER_TEXT_LIMIT - totalLen))
       break
@@ -677,17 +631,12 @@ export function buildSessionDetail(
       const originalIndex = rawMessages.indexOf(m)
       const toolCalls = m.message ? extractToolCalls(m.message.content) : []
       const textContent = m.message ? extractText(m.message.content) : (m as any).content || ''
-      // Detect system-injected messages masquerading as user messages
-      const trimmed = textContent.trimStart()
-      const isTaskNotification = m.type === 'user' && trimmed.startsWith('<task-notification>')
-      const isSkillOutput = m.type === 'user' && trimmed.startsWith('Base directory for this skill:')
-      const isCommandOutput = m.type === 'user' && /^<(?:local-command-stdout|local-command-caveat|user-prompt-submit-hook|command-name)>/.test(trimmed)
-      const isSystemReminder = m.type === 'user' && trimmed.startsWith('<system-reminder>') &&
-        !trimmed.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()
-      const detectedSubtype = isTaskNotification ? 'task-notification'
+      const origin = detectTranscriptOrigin(m)
+      const isSkillOutput = m.type === 'user' && textContent.trimStart().startsWith('Base directory for this skill:')
+      const detectedSubtype = origin === 'task-notification' ? 'task-notification'
         : isSkillOutput ? 'skill-output'
-        : isCommandOutput ? 'command-output'
-        : isSystemReminder ? 'system-reminder'
+        : origin === 'command' ? 'command-output'
+        : origin === 'hook' ? 'system-reminder'
         : m.subtype
       return {
         uuid: m.uuid,
@@ -695,6 +644,7 @@ export function buildSessionDetail(
         subtype: detectedSubtype,
         timestamp: m.timestamp,
         role: m.message?.role,
+        origin,
         textContent,
         toolCalls,
         images: m.message ? extractImages(m.message.content) : [],
@@ -702,7 +652,7 @@ export function buildSessionDetail(
         isPreCompact: lastCompactIndex >= 0 && originalIndex < lastCompactIndex,
         isSidechain: !!m.isSidechain,
         isSharedContext: false,
-        isSystemGenerated: m.type === 'user' && !isRealUserMessage(m),
+        isSystemGenerated: m.type === 'user' && origin !== 'human',
         raw: m
       }
     })
@@ -773,6 +723,15 @@ function compactLineageMessage(message: RawJsonlMessage): RawJsonlMessage {
   if (message.slug !== undefined) compact.slug = message.slug
   if (message.isSidechain !== undefined) compact.isSidechain = message.isSidechain
   if (message.permissionMode !== undefined) compact.permissionMode = message.permissionMode
+  if (message.origin !== undefined) compact.origin = message.origin
+  if (message.promptSource !== undefined) compact.promptSource = message.promptSource
+  if (message.isMeta !== undefined) compact.isMeta = message.isMeta
+  if (message.sourceToolAssistantUUID !== undefined) {
+    compact.sourceToolAssistantUUID = message.sourceToolAssistantUUID
+  }
+  // The payload is detail-only; retain a sentinel so cached summary rebuilding
+  // keeps the top-level tool-origin evidence without storing the result body.
+  if (message.toolUseResult !== undefined) compact.toolUseResult = true
   if (message.forkedFrom !== undefined) compact.forkedFrom = message.forkedFrom
   if (message.leafUuid !== undefined) compact.leafUuid = message.leafUuid
   if (message.message) {
@@ -1932,16 +1891,12 @@ export async function loadSessionDetail(
       .map((m) => {
         const toolCalls = m.message ? extractToolCalls(m.message.content) : []
         const textContent = m.message ? extractText(m.message.content) : (m as any).content || ''
-        const trimmedText = textContent.trimStart()
-        const isTaskNotification = m.type === 'user' && trimmedText.startsWith('<task-notification>')
-        const isSkillOutput = m.type === 'user' && trimmedText.startsWith('Base directory for this skill:')
-        const isCommandOutput = m.type === 'user' && /^<(?:local-command-stdout|local-command-caveat|user-prompt-submit-hook|command-name)>/.test(trimmedText)
-        const isSystemReminder = m.type === 'user' && trimmedText.startsWith('<system-reminder>') &&
-          !trimmedText.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()
-        const detectedSubtype = isTaskNotification ? 'task-notification'
+        const origin = detectTranscriptOrigin(m)
+        const isSkillOutput = m.type === 'user' && textContent.trimStart().startsWith('Base directory for this skill:')
+        const detectedSubtype = origin === 'task-notification' ? 'task-notification'
           : isSkillOutput ? 'skill-output'
-          : isCommandOutput ? 'command-output'
-          : isSystemReminder ? 'system-reminder'
+          : origin === 'command' ? 'command-output'
+          : origin === 'hook' ? 'system-reminder'
           : m.subtype
         return {
           uuid: m.uuid,
@@ -1949,6 +1904,7 @@ export async function loadSessionDetail(
           subtype: detectedSubtype,
           timestamp: m.timestamp,
           role: m.message?.role,
+          origin,
           textContent,
           toolCalls,
           images: m.message ? extractImages(m.message.content) : [],
@@ -1956,7 +1912,7 @@ export async function loadSessionDetail(
           isPreCompact: false,
           isSidechain: !!m.isSidechain,
           isSharedContext: true,
-          isSystemGenerated: m.type === 'user' && !isRealUserMessage(m),
+          isSystemGenerated: m.type === 'user' && origin !== 'human',
           raw: m
         }
       })

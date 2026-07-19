@@ -222,10 +222,18 @@ function extractRawText(message: RawJsonlMessage): string {
     .join('\n')
 }
 
-function rawAnchorMessages(messages: RawJsonlMessage[]): AnchorMessage[] {
+function rawAnchorMessages(
+  messages: RawJsonlMessage[],
+  source: SessionSource = 'claude-code'
+): AnchorMessage[] {
   const result: AnchorMessage[] = []
   for (const message of messages) {
-    if (message.type === 'user' && isRealUserMessage(message)) {
+    const content = message.message?.content
+    const isToolResult = Array.isArray(content) && content.some((part) => part.type === 'tool_result')
+    const isUserAnchor = source === 'claude-code'
+      ? isRealUserMessage(message)
+      : message.type === 'user' && !isToolResult
+    if (isUserAnchor) {
       result.push({ role: 'user', text: extractRawText(message) })
     } else if (message.type === 'assistant') {
       result.push({ role: 'assistant', text: extractRawText(message) })
@@ -237,7 +245,10 @@ function rawAnchorMessages(messages: RawJsonlMessage[]): AnchorMessage[] {
 function parsedAnchorMessages(messages: ParsedMessage[]): AnchorMessage[] {
   const result: AnchorMessage[] = []
   for (const message of messages) {
-    if (message.type === 'user' && !message.isSystemGenerated && isRealUserMessage(message.raw)) {
+    // Source-specific loaders have already classified synthetic user carriers.
+    // Re-running the Claude-only origin classifier here would discard valid user
+    // anchors from Codex, Cursor, OpenCode, and Zcode.
+    if (message.type === 'user' && !message.isSystemGenerated) {
       result.push({ role: 'user', text: message.textContent })
     } else if (message.type === 'assistant') {
       result.push({ role: 'assistant', text: message.textContent })
@@ -288,7 +299,7 @@ async function loadExpectedAnchors(
         `${snapshotPath}#${session.sessionId}`,
         session.sessionId
       )
-      return anchorsFromMessages(rawAnchorMessages(raw))
+      return anchorsFromMessages(rawAnchorMessages(raw, source))
     }
     const detail = await loadSessionDetail(
       session.filePath,
@@ -468,7 +479,7 @@ async function loadCodexTarget(sessionId: string, runtime: ResumeAuditRuntime): 
     return emptyTarget('unparseable')
   }
   if (raw.length === 0) return emptyTarget(fileHasData(target) ? 'unparseable' : 'empty')
-  const messages = rawAnchorMessages(raw)
+  const messages = rawAnchorMessages(raw, 'codex')
   return { status: messages.length > 0 ? 'found' : 'empty', defaultMessages: messages, allMessages: messages }
 }
 
@@ -758,7 +769,7 @@ async function loadSqliteAgentTarget(
     if (!exists) return emptyTarget('missing')
     const raw = await loadSqliteAgentRawMessages(source, sourceRef, sessionId)
     if (raw.length === 0) return emptyTarget('empty')
-    const messages = rawAnchorMessages(raw)
+    const messages = rawAnchorMessages(raw, source)
     return {
       status: messages.length > 0 ? 'found' : 'empty',
       defaultMessages: messages,

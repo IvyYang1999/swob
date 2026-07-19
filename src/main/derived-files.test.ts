@@ -8,13 +8,15 @@ import {
 } from './derived-files'
 
 function rawMsg(overrides: Partial<RawJsonlMessage> & Record<string, unknown> = {}): RawJsonlMessage {
+  const type = (overrides.type as RawJsonlMessage['type']) || 'user'
   return {
     uuid: String(overrides.uuid || 'u1'),
     parentUuid: (overrides.parentUuid as string | null | undefined) ?? null,
     sessionId: String(overrides.sessionId || 's1'),
-    type: (overrides.type as RawJsonlMessage['type']) || 'user',
+    type,
     subtype: overrides.subtype as string | undefined,
     timestamp: String(overrides.timestamp || '2026-07-09T00:00:00Z'),
+    promptSource: type === 'user' ? 'typed' : undefined,
     message: overrides.message as RawJsonlMessage['message'],
     ...overrides
   }

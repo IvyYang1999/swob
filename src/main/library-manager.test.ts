@@ -220,6 +220,14 @@ describe('App 配置：Library 路径管理', () => {
     expect(config.libraryPath).toBe(tmpRoot)
   })
 
+  it('deviceId 在 app-config.json 中只生成一次并持久化', () => {
+    const first = lib.getOrCreateLocalDeviceId(() => 'device-xx…0001')
+    const second = lib.getOrCreateLocalDeviceId(() => 'device-xx…9999')
+    expect(first).toBe('device-xx…0001')
+    expect(second).toBe(first)
+    expect(lib.loadAppConfig().deviceId).toBe('device-xx…0001')
+  })
+
   it('getConfiguredLibraryPath 无配置时返回默认路径', () => {
     const p = lib.getConfiguredLibraryPath()
     expect(typeof p).toBe('string')
@@ -236,6 +244,106 @@ describe('App 配置：Library 路径管理', () => {
     // tmpRoot 已经被 initLibrary 初始化过，需要先创建 config 文件
     lib.saveLibraryConfig(lib.loadLibraryConfig())
     expect(lib.isLibraryInitialized(tmpRoot)).toBe(true)
+  })
+})
+
+describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
+  it('旧 meta 缺 schemaVersion/origin/sourceInstance 时正常读取且字段不被伪造', () => {
+    const legacy = {
+      sessionId: 'legacy-xx…0001',
+      sourceFilePaths: ['/fixture/source-xx…0001.jsonl'],
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: '/fixture/project-xx…0001'
+    }
+    const parsed = lib.parseSessionMeta(JSON.stringify(legacy))
+    expect(parsed).toEqual(legacy)
+    expect(parsed?.schemaVersion).toBeUndefined()
+    expect(parsed?.origin).toBeUndefined()
+    expect(parsed?.sourceInstance).toBeUndefined()
+
+    const dirPath = path.join(tmpRoot, 'legacy-meta-xx…0001')
+    writeSessionMeta(dirPath, legacy)
+    lib.scanLibrary()
+    const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === legacy.sessionId)
+    expect(found).toBeUndefined() // historical behavior: no backup means not library-only
+    expect(() => lib.getSessionResumeAvailability(legacy.sessionId)).not.toThrow()
+  })
+
+  it('新建 meta 写入首次 origin/sourceInstance，deviceId 来自 app-config', async () => {
+    removeDefaultSession()
+    lib.getOrCreateLocalDeviceId(() => 'device-xx…0002')
+    const sessionId = '90000000-0000-4000-8000-000000000009'
+    const sourcePath = path.join(
+      testHome,
+      '.claude',
+      'projects',
+      '-fixture-project-xx…0002',
+      `${sessionId}.jsonl`
+    )
+    const dirPath = await lib.ensureSessionInLibrary({
+      sessionId,
+      cwds: ['/fixture/outside-xx…0002'],
+      firstUserMessage: 'fixture-title-xx…0002',
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: path.dirname(sourcePath),
+      filePath: sourcePath,
+      allFilePaths: [sourcePath],
+      turnCount: 1
+    } as any, undefined, {
+      hostname: 'host-xx…0002',
+      username: 'user-xx…0002',
+      capturedAt: '2026-07-19T00:02:00.000Z'
+    })
+
+    const written = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    expect(written).toMatchObject({
+      schemaVersion: 2,
+      origin: {
+        deviceId: 'device-xx…0002',
+        hostname: 'host-xx…0002',
+        username: 'user-xx…0002',
+        capturedAt: '2026-07-19T00:02:00.000Z'
+      },
+      sourceInstance: { kind: 'claude-default' }
+    })
+    expect(lib.loadAppConfig().deviceId).toBe(written.origin.deviceId)
+    expect(fs.existsSync(sourcePath)).toBe(false)
+  })
+
+  it('已有远端 origin 在后续同步中保持不变', async () => {
+    removeDefaultSession()
+    const sessionId = 'a0000000-0000-4000-8000-00000000000a'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture-project-xx…0003', `${sessionId}.jsonl`)
+    const dirPath = createLibrarySession(sessionId, [sourcePath], { dirName: 'preserve-origin-xx…0003' })
+    const initial = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    initial.schemaVersion = 2
+    initial.origin = {
+      deviceId: 'remote-device-xx…0003',
+      hostname: 'remote-host-xx…0003',
+      username: 'same-user-xx…0003',
+      capturedAt: '2026-07-18T00:00:00.000Z'
+    }
+    fs.writeFileSync(path.join(dirPath, '.swob-session.json'), JSON.stringify(initial, null, 2), 'utf-8')
+    lib.scanLibrary()
+
+    await lib.ensureSessionInLibrary({
+      sessionId,
+      createdAt: initial.createdAt,
+      updatedAt: '2026-07-19T00:03:00.000Z',
+      projectPath: path.dirname(sourcePath),
+      filePath: sourcePath,
+      allFilePaths: [sourcePath],
+      cwds: ['/fixture/project-xx…0003'],
+      turnCount: 1
+    } as any, undefined, {
+      deviceId: 'local-device-xx…0003',
+      hostname: 'local-host-xx…0003'
+    })
+
+    const after = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    expect(after.origin).toEqual(initial.origin)
   })
 })
 
@@ -464,6 +572,34 @@ describe('isRemoteProjectPath', () => {
 
   it('远程用户名的短路径判断为远程', () => {
     expect(lib.isRemoteProjectPath('/Users/mac/.claude/projects/-Users-mac')).toBe(true)
+  })
+})
+
+describe('resolveSessionRemoteState', () => {
+  it('同用户名但 deviceId 不同仍判定为远端，并使用持久化 hostname', () => {
+    expect(lib.resolveSessionRemoteState({
+      projectPath: '/Users/same-user-xx…0004/.claude/projects/-Users-same-user-xx…0004-project',
+      origin: {
+        deviceId: 'remote-device-xx…0004',
+        hostname: 'remote-host-xx…0004',
+        username: 'same-user-xx…0004',
+        capturedAt: '2026-07-19T00:00:00.000Z'
+      }
+    }, 'local-device-xx…0004', 'same-user-xx…0004')).toEqual({
+      isRemote: true,
+      remoteHost: 'remote-host-xx…0004',
+      confidence: 'device-id'
+    })
+  })
+
+  it('旧 meta 无 origin 时保持用户名路径猜测行为', () => {
+    expect(lib.resolveSessionRemoteState({
+      projectPath: '/Users/userxx…0005/.claude/projects/-Users-userxx…0005-project'
+    }, 'local-device-xx…0005', 'userxx…0005')).toEqual({
+      isRemote: false,
+      remoteHost: undefined,
+      confidence: 'legacy-path-guess'
+    })
   })
 })
 

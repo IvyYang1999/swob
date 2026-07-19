@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { randomUUID } from 'crypto'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
@@ -16,6 +17,11 @@ import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folde
 // ============ Types ============
 
 export interface SessionMeta {
+  /**
+   * Version 2 adds origin/sourceInstance. It stays optional so a v1
+   * .swob-session.json can be read without migration or changed defaults.
+   */
+  schemaVersion?: 2
   sessionId: string
   sourceFilePaths: string[]
   customTitle?: string
@@ -25,6 +31,22 @@ export interface SessionMeta {
   updatedAt: string
   projectPath: string
   turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
+  /** Immutable identity of the machine that first captured this Library item. */
+  origin?: SessionOrigin
+  /** Describes the original harness instance; it is never an authorization to write there. */
+  sourceInstance?: SessionSourceInstance
+}
+
+export interface SessionOrigin {
+  deviceId: string
+  hostname: string
+  username: string
+  capturedAt: string
+}
+
+export interface SessionSourceInstance {
+  kind: 'claude-default' | 'claude-window' | 'other'
+  configDir?: string
 }
 
 export interface LibrarySession {
@@ -82,6 +104,15 @@ const DEFAULT_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
 const APP_CONFIG_DIR = path.join(os.homedir(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 
+export interface AppConfig {
+  libraryPath?: string
+  /**
+   * Per-install UUID. This is the stable local side of origin.deviceId comparisons.
+   * It lives in ~/.claude-session-manager/app-config.json, never in Claude data dirs.
+   */
+  deviceId?: string
+}
+
 function isOriginalSessionSourcePath(filePath: string): boolean {
   const normalized = filePath.split(path.sep).join('/')
   if (normalized.includes('/.local/share/opencode/opencode.db#ses_')) return true
@@ -107,7 +138,7 @@ function sourceFilePathsForMeta(session: SessionSummary): string[] {
   return candidates.filter(isOriginalSessionSourcePath)
 }
 
-export function loadAppConfig(): { libraryPath?: string } {
+export function loadAppConfig(): AppConfig {
   try {
     if (fs.existsSync(APP_CONFIG_FILE)) {
       return JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
@@ -116,12 +147,47 @@ export function loadAppConfig(): { libraryPath?: string } {
   return {}
 }
 
-export function saveAppConfig(config: { libraryPath?: string }): void {
+export function saveAppConfig(config: AppConfig): void {
   if (!fs.existsSync(APP_CONFIG_DIR)) {
     fs.mkdirSync(APP_CONFIG_DIR, { recursive: true })
   }
   const existing = loadAppConfig()
   fs.writeFileSync(APP_CONFIG_FILE, JSON.stringify({ ...existing, ...config }, null, 2), 'utf-8')
+}
+
+/**
+ * Return the installation identity, creating it once in app-config.json when absent.
+ * Session metadata copies this value only when its origin is first established.
+ */
+export function getOrCreateLocalDeviceId(createId: () => string = randomUUID): string {
+  const existing = loadAppConfig().deviceId
+  if (typeof existing === 'string' && existing.length > 0) return existing
+  const deviceId = createId()
+  saveAppConfig({ deviceId })
+  return deviceId
+}
+
+export function captureLocalSessionOrigin(
+  override: Partial<SessionOrigin> = {}
+): SessionOrigin {
+  return {
+    deviceId: override.deviceId || getOrCreateLocalDeviceId(),
+    hostname: override.hostname || os.hostname(),
+    username: override.username || os.userInfo().username,
+    capturedAt: override.capturedAt || new Date().toISOString()
+  }
+}
+
+export function detectSessionSourceInstance(sourceFilePaths: string[]): SessionSourceInstance {
+  for (const sourcePath of sourceFilePaths) {
+    const normalized = sourcePath.split(path.sep).join('/')
+    const windowMatch = normalized.match(/^(.*\/\.claude-window\/[^/]+)\/projects\/[^/]+\/[^/]+\.jsonl$/)
+    if (windowMatch) return { kind: 'claude-window', configDir: windowMatch[1] }
+    if (/\/\.claude\/projects\/[^/]+\/[^/]+\.jsonl$/.test(normalized)) {
+      return { kind: 'claude-default' }
+    }
+  }
+  return { kind: 'other' }
 }
 
 export function getConfiguredLibraryPath(): string {
@@ -221,11 +287,22 @@ function findUniqueDirName(parentDir: string, baseName: string): string {
 
 // --- Session Meta ---
 
+/** Parse both legacy v1 and v2 metadata without inventing missing origin fields. */
+export function parseSessionMeta(content: string): SessionMeta | null {
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as SessionMeta
+  } catch {
+    return null
+  }
+}
+
 function readSessionMeta(dirPath: string): SessionMeta | null {
   const metaPath = path.join(dirPath, SESSION_META_FILE)
   try {
     if (fs.existsSync(metaPath)) {
-      return JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+      return parseSessionMeta(fs.readFileSync(metaPath, 'utf-8'))
     }
   } catch { /* corrupt */ }
   return null
@@ -934,7 +1011,8 @@ export function generateTranscript(
 
 export async function ensureSessionInLibrary(
   session: SessionSummary,
-  customTitle?: string
+  customTitle?: string,
+  originOverride?: Partial<SessionOrigin>
 ): Promise<string> {
   const existing = sessionIndex.get(session.sessionId)
 
@@ -953,6 +1031,20 @@ export async function ensureSessionInLibrary(
         if (nextSourceFilePaths.length > 0) {
           meta.sourceFilePaths = nextSourceFilePaths
         }
+        changed = true
+      }
+      // Lazy, evidence-based migration: a source that exists on this machine proves
+      // only that this machine can capture the legacy item now. Never overwrite an
+      // origin already synced from another device.
+      const currentSourceFilePaths = sourceFilePathsForMeta(session)
+      if (!meta.origin && currentSourceFilePaths.some((sourcePath) => fs.existsSync(sourceStatPath(sourcePath)))) {
+        meta.origin = captureLocalSessionOrigin(originOverride)
+        meta.schemaVersion = 2
+        changed = true
+      }
+      if (!meta.sourceInstance && currentSourceFilePaths.length > 0) {
+        meta.sourceInstance = detectSessionSourceInstance(currentSourceFilePaths)
+        meta.schemaVersion = 2
         changed = true
       }
       if (changed) writeSessionMeta(existing, meta)
@@ -978,14 +1070,18 @@ export async function ensureSessionInLibrary(
 
   fs.mkdirSync(dirPath, { recursive: true })
 
+  const sourceFilePaths = sourceFilePathsForMeta(session)
   const meta: SessionMeta = {
+    schemaVersion: 2,
     sessionId: session.sessionId,
-    sourceFilePaths: sourceFilePathsForMeta(session),
+    sourceFilePaths,
     customTitle,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     projectPath: session.projectPath,
-    turnCount: session.turnCount
+    turnCount: session.turnCount,
+    origin: captureLocalSessionOrigin(originOverride),
+    sourceInstance: detectSessionSourceInstance(sourceFilePaths)
   }
   writeSessionMeta(dirPath, meta)
   sessionIndex.set(session.sessionId, dirPath)
@@ -2040,8 +2136,7 @@ export function setSshConfig(sshConfig: SshConfig | null): void {
  * projectPath format: `/Users/mac/.claude/projects/-Users-mac-projects-scsp`
  * The dir name `-Users-mac-projects-scsp` encodes the user as the second segment.
  */
-export function isRemoteProjectPath(projectPath: string): boolean {
-  const localUser = os.userInfo().username
+function isRemoteProjectPathForUser(projectPath: string, localUser: string): boolean {
   const dirName = path.basename(projectPath)
   if (!dirName.startsWith('-')) return false
   const segments = dirName.slice(1).split('-')
@@ -2054,6 +2149,45 @@ export function isRemoteProjectPath(projectPath: string): boolean {
     return segments[1] !== localUser
   }
   return false
+}
+
+export function isRemoteProjectPath(projectPath: string): boolean {
+  return isRemoteProjectPathForUser(projectPath, os.userInfo().username)
+}
+
+export interface SessionRemoteState {
+  isRemote: boolean
+  remoteHost?: string
+  confidence: 'device-id' | 'legacy-path-guess'
+}
+
+/**
+ * deviceId is authoritative when v2 metadata has it. Legacy metadata keeps the
+ * historical username/path behavior, so reading an old file cannot change UI state.
+ */
+export function resolveSessionRemoteState(
+  meta: Pick<SessionMeta, 'origin' | 'projectPath'>,
+  localDeviceId: string,
+  localUsername: string = os.userInfo().username
+): SessionRemoteState {
+  if (meta.origin?.deviceId) {
+    const isRemote = meta.origin.deviceId !== localDeviceId
+    return {
+      isRemote,
+      remoteHost: isRemote ? meta.origin.hostname : undefined,
+      confidence: 'device-id'
+    }
+  }
+
+  const isRemote = meta.projectPath
+    ? isRemoteProjectPathForUser(meta.projectPath, localUsername)
+    : true
+  const remoteUser = isRemote && meta.projectPath ? extractRemoteUser(meta.projectPath) : null
+  return {
+    isRemote,
+    remoteHost: remoteUser ? `${remoteUser}@remote` : undefined,
+    confidence: 'legacy-path-guess'
+  }
 }
 
 /**

@@ -57,10 +57,9 @@ import {
   getRemoteCwdForSession,
   isRemoteProjectPath,
   extractRemoteUser,
-  getOrCreateLocalDeviceId,
-  resolveSessionRemoteState,
+  resolveLibrarySessionRemoteState,
   getConfiguredLibraryPath,
-  saveAppConfig,
+  changeConfiguredLibraryPath,
   isLibraryInitialized,
   findLibraryOnlySessions,
   findLibrarySessionsWithMissingSources
@@ -647,7 +646,7 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
           if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
           annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
-          const remoteState = resolveSessionRemoteState(meta, getOrCreateLocalDeviceId())
+          const remoteState = resolveLibrarySessionRemoteState(meta)
           summary.isRemote = remoteState.isRemote
           if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
           if (meta.customTitle) {
@@ -834,7 +833,7 @@ ipcMain.handle('sessions:loadAll', async () => {
           if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
           annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
-          const remoteState = resolveSessionRemoteState(meta, getOrCreateLocalDeviceId())
+          const remoteState = resolveLibrarySessionRemoteState(meta)
           summary.isRemote = remoteState.isRemote
           if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
           if (meta.customTitle) {
@@ -1278,7 +1277,7 @@ ipcMain.handle('library:selectDirectory', async () => {
 })
 
 ipcMain.handle('library:changePath', async (_event, newPath: string) => {
-  saveAppConfig({ libraryPath: newPath })
+  changeConfiguredLibraryPath(newPath)
   // Re-initialize library at new path
   initLibrary(newPath)
   const tree = scanLibrary()

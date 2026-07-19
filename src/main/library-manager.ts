@@ -12,7 +12,15 @@ import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './sess
 import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
 import { redactSecrets } from './secret-redactor'
 import { shellQuote } from './resume-terminal'
+import {
+  extractRemoteUser,
+  isRemoteProjectPathForUser,
+  resolveSessionRemoteState,
+  type SessionRemoteState
+} from './session-remote-state'
 import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
+
+export { extractRemoteUser, resolveSessionRemoteState, type SessionRemoteState } from './session-remote-state'
 
 // ============ Types ============
 
@@ -31,7 +39,7 @@ export interface SessionMeta {
   updatedAt: string
   projectPath: string
   turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
-  /** Immutable identity of the machine that first captured this Library item. */
+  /** Immutable identity of the installation that first captured this Library item. */
   origin?: SessionOrigin
   /** Describes the original harness instance; it is never an authorization to write there. */
   sourceInstance?: SessionSourceInstance
@@ -107,7 +115,7 @@ const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 export interface AppConfig {
   libraryPath?: string
   /**
-   * Per-install UUID. This is the stable local side of origin.deviceId comparisons.
+   * Per-home installation UUID. It is not a hardware or machine identifier.
    * It lives in ~/.claude-session-manager/app-config.json, never in Claude data dirs.
    */
   deviceId?: string
@@ -139,20 +147,134 @@ function sourceFilePathsForMeta(session: SessionSummary): string[] {
 }
 
 export function loadAppConfig(): AppConfig {
-  try {
-    if (fs.existsSync(APP_CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
-    }
-  } catch { /* ignore */ }
-  return {}
+  return readAppConfigStrict().config
 }
 
-export function saveAppConfig(config: AppConfig): void {
+type AppConfigReadResult =
+  | { state: 'missing'; config: AppConfig }
+  | { state: 'valid'; config: AppConfig }
+  | { state: 'invalid'; config: AppConfig; backupPath?: string }
+
+function backupCorruptAppConfig(content: string): string {
+  const mtime = Math.trunc(fs.statSync(APP_CONFIG_FILE).mtimeMs)
+  const basePath = `${APP_CONFIG_FILE}.corrupt-${mtime}`
+  let suffix = 0
+
+  while (true) {
+    const backupPath = suffix === 0 ? basePath : `${basePath}-${suffix}`
+    try {
+      fs.writeFileSync(backupPath, content, {
+        encoding: 'utf-8',
+        flag: 'wx',
+        mode: 0o600
+      })
+      return backupPath
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try {
+        if (fs.readFileSync(backupPath, 'utf-8') === content) return backupPath
+      } catch { /* choose another suffix */ }
+      suffix++
+    }
+  }
+}
+
+function invalidAppConfig(content?: string): AppConfigReadResult {
+  if (content === undefined) return { state: 'invalid', config: {} }
+  try {
+    return { state: 'invalid', config: {}, backupPath: backupCorruptAppConfig(content) }
+  } catch {
+    return { state: 'invalid', config: {} }
+  }
+}
+
+function readAppConfigStrict(): AppConfigReadResult {
+  if (!fs.existsSync(APP_CONFIG_FILE)) return { state: 'missing', config: {} }
+
+  let content: string
+  try {
+    content = fs.readFileSync(APP_CONFIG_FILE, 'utf-8')
+  } catch {
+    return invalidAppConfig()
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return invalidAppConfig(content)
+    }
+    const config = parsed as Record<string, unknown>
+    if (
+      (config.libraryPath !== undefined && typeof config.libraryPath !== 'string') ||
+      (config.deviceId !== undefined && (typeof config.deviceId !== 'string' || config.deviceId.length === 0))
+    ) {
+      return invalidAppConfig(content)
+    }
+    return { state: 'valid', config: parsed as AppConfig }
+  } catch {
+    return invalidAppConfig(content)
+  }
+}
+
+const APP_CONFIG_LOCK_FILE = `${APP_CONFIG_FILE}.lock`
+
+function acquireAppConfigLock(): number {
+  try {
+    return fs.openSync(APP_CONFIG_LOCK_FILE, 'wx', 0o600)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EEXIST') throw new Error('app-config-write-in-progress')
+    throw error
+  }
+}
+
+function writeAppConfigAtomically(config: AppConfig): void {
+  const tempPath = `${APP_CONFIG_FILE}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(config, null, 2), {
+      encoding: 'utf-8',
+      flag: 'wx',
+      mode: 0o600
+    })
+    fs.renameSync(tempPath, APP_CONFIG_FILE)
+  } finally {
+    try { fs.rmSync(tempPath, { force: true }) } catch { /* best effort */ }
+  }
+}
+
+function updateAppConfigAtomically(
+  update: (existing: AppConfig) => AppConfig,
+  recoverCorrupt = false
+): AppConfig {
   if (!fs.existsSync(APP_CONFIG_DIR)) {
     fs.mkdirSync(APP_CONFIG_DIR, { recursive: true })
   }
-  const existing = loadAppConfig()
-  fs.writeFileSync(APP_CONFIG_FILE, JSON.stringify({ ...existing, ...config }, null, 2), 'utf-8')
+  const lockFd = acquireAppConfigLock()
+  try {
+    const current = readAppConfigStrict()
+    if (current.state === 'invalid') {
+      if (!recoverCorrupt) throw new Error('invalid-app-config')
+      if (!current.backupPath) throw new Error('invalid-app-config-backup-failed')
+    }
+    const next = update(current.config)
+    writeAppConfigAtomically(next)
+    return next
+  } finally {
+    try { fs.closeSync(lockFd) } catch { /* best effort */ }
+    try { fs.rmSync(APP_CONFIG_LOCK_FILE, { force: true }) } catch { /* best effort */ }
+  }
+}
+
+export function saveAppConfig(config: AppConfig): void {
+  updateAppConfigAtomically((existing) => ({ ...existing, ...config }))
+}
+
+/** The explicit Library picker is the only path allowed to replace a backed-up corrupt config. */
+export function changeConfiguredLibraryPath(libraryPath: string): void {
+  updateAppConfigAtomically(
+    (existing) => ({ ...existing, libraryPath }),
+    true
+  )
 }
 
 /**
@@ -160,11 +282,35 @@ export function saveAppConfig(config: AppConfig): void {
  * Session metadata copies this value only when its origin is first established.
  */
 export function getOrCreateLocalDeviceId(createId: () => string = randomUUID): string {
-  const existing = loadAppConfig().deviceId
-  if (typeof existing === 'string' && existing.length > 0) return existing
-  const deviceId = createId()
-  saveAppConfig({ deviceId })
+  const initial = readAppConfigStrict()
+  if (initial.state === 'invalid') throw new Error('invalid-app-config')
+  if (initial.config.deviceId) return initial.config.deviceId
+
+  let deviceId = ''
+  updateAppConfigAtomically((existing) => {
+    if (existing.deviceId) {
+      deviceId = existing.deviceId
+      return existing
+    }
+    deviceId = createId()
+    if (!deviceId) throw new Error('invalid-generated-device-id')
+    return { ...existing, deviceId }
+  })
   return deviceId
+}
+
+/**
+ * Library-only discovery must survive unavailable/corrupt installation identity.
+ * Missing identity is handled conservatively as "not proven to be this install".
+ */
+export function resolveLibrarySessionRemoteState(meta: SessionMeta): SessionRemoteState {
+  let localDeviceId: string | undefined
+  try {
+    localDeviceId = getOrCreateLocalDeviceId()
+  } catch {
+    console.warn('[library-manager] Installation identity unavailable; keeping Library session visible')
+  }
+  return resolveSessionRemoteState(meta, localDeviceId)
 }
 
 export function captureLocalSessionOrigin(
@@ -287,13 +433,46 @@ function findUniqueDirName(parentDir: string, baseName: string): string {
 
 // --- Session Meta ---
 
-/** Parse both legacy v1 and v2 metadata without inventing missing origin fields. */
-export function parseSessionMeta(content: string): SessionMeta | null {
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
+function isValidSessionOrigin(value: unknown): value is SessionOrigin {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const origin = value as Record<string, unknown>
+  return isNonEmptyString(origin.deviceId) &&
+    isNonEmptyString(origin.hostname) &&
+    isNonEmptyString(origin.username) &&
+    isNonEmptyString(origin.capturedAt)
+}
+
+/** Parse both legacy v1 and v2 metadata, rejecting malformed data at the boundary. */
+export function parseSessionMeta(
+  content: string,
+  warn: (message: string) => void = console.warn
+): SessionMeta | null {
   try {
     const parsed: unknown = JSON.parse(content)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      warn('[library-manager] Ignoring invalid session metadata: expected object')
+      return null
+    }
+    const meta = parsed as Record<string, unknown>
+    if (!isNonEmptyString(meta.sessionId) || !isNonEmptyString(meta.projectPath)) {
+      warn('[library-manager] Ignoring invalid session metadata: missing sessionId/projectPath')
+      return null
+    }
+    if (!Array.isArray(meta.sourceFilePaths) || !meta.sourceFilePaths.every(isNonEmptyString)) {
+      warn('[library-manager] Ignoring invalid session metadata: sourceFilePaths must be strings')
+      return null
+    }
+    if (meta.origin !== undefined && !isValidSessionOrigin(meta.origin)) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed origin')
+      return null
+    }
     return parsed as SessionMeta
   } catch {
+    warn('[library-manager] Ignoring invalid session metadata: malformed JSON')
     return null
   }
 }
@@ -540,8 +719,12 @@ export function getSessionResumeAvailability(
     }
   }
 
-  // Keep historical behavior for ad-hoc ids that are not known to the Library.
-  return { canResume: true, sourcePath: null }
+  // No indexed metadata and no caller summary means no source inventory.
+  return {
+    canResume: false,
+    reason: LOCAL_RESUME_UNAVAILABLE_REASON,
+    sourcePath: null
+  }
 }
 
 export function restoreBackupToClaudeSource(sessionId: string): {
@@ -1033,8 +1216,8 @@ export async function ensureSessionInLibrary(
         }
         changed = true
       }
-      // Lazy, evidence-based migration: a source that exists on this machine proves
-      // only that this machine can capture the legacy item now. Never overwrite an
+      // Lazy, evidence-based migration: a source visible to this installation proves
+      // only that this installation can capture the legacy item now. Never overwrite an
       // origin already synced from another device.
       const currentSourceFilePaths = sourceFilePathsForMeta(session)
       if (!meta.origin && currentSourceFilePaths.some((sourcePath) => fs.existsSync(sourceStatPath(sourcePath)))) {
@@ -2131,77 +2314,8 @@ export function setSshConfig(sshConfig: SshConfig | null): void {
  * Build SSH resume command for a session.
  * ssh user@host "cd /path && claude --resume sessionId"
  */
-/**
- * Check if a session's projectPath belongs to a different user than the current machine.
- * projectPath format: `/Users/mac/.claude/projects/-Users-mac-projects-scsp`
- * The dir name `-Users-mac-projects-scsp` encodes the user as the second segment.
- */
-function isRemoteProjectPathForUser(projectPath: string, localUser: string): boolean {
-  const dirName = path.basename(projectPath)
-  if (!dirName.startsWith('-')) return false
-  const segments = dirName.slice(1).split('-')
-  // Typical: ["Users", "mac", "projects", "scsp"] — second segment is username
-  if (segments.length >= 2 && segments[0] === 'Users') {
-    return segments[1] !== localUser
-  }
-  // Linux: ["home", "mac", "projects", ...] — second segment is username
-  if (segments.length >= 2 && segments[0] === 'home') {
-    return segments[1] !== localUser
-  }
-  return false
-}
-
 export function isRemoteProjectPath(projectPath: string): boolean {
   return isRemoteProjectPathForUser(projectPath, os.userInfo().username)
-}
-
-export interface SessionRemoteState {
-  isRemote: boolean
-  remoteHost?: string
-  confidence: 'device-id' | 'legacy-path-guess'
-}
-
-/**
- * deviceId is authoritative when v2 metadata has it. Legacy metadata keeps the
- * historical username/path behavior, so reading an old file cannot change UI state.
- */
-export function resolveSessionRemoteState(
-  meta: Pick<SessionMeta, 'origin' | 'projectPath'>,
-  localDeviceId: string,
-  localUsername: string = os.userInfo().username
-): SessionRemoteState {
-  if (meta.origin?.deviceId) {
-    const isRemote = meta.origin.deviceId !== localDeviceId
-    return {
-      isRemote,
-      remoteHost: isRemote ? meta.origin.hostname : undefined,
-      confidence: 'device-id'
-    }
-  }
-
-  const isRemote = meta.projectPath
-    ? isRemoteProjectPathForUser(meta.projectPath, localUsername)
-    : true
-  const remoteUser = isRemote && meta.projectPath ? extractRemoteUser(meta.projectPath) : null
-  return {
-    isRemote,
-    remoteHost: remoteUser ? `${remoteUser}@remote` : undefined,
-    confidence: 'legacy-path-guess'
-  }
-}
-
-/**
- * Extract the hostname hint from a projectPath.
- * Uses the username from the path; actual hostname comes from .swob-session.json if available.
- */
-export function extractRemoteUser(projectPath: string): string | null {
-  const dirName = path.basename(projectPath)
-  if (!dirName.startsWith('-')) return null
-  const segments = dirName.slice(1).split('-')
-  if (segments.length >= 2 && (segments[0] === 'Users' || segments[0] === 'home')) {
-    return segments[1]
-  }
-  return null
 }
 
 /**

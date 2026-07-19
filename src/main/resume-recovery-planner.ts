@@ -1,5 +1,6 @@
 import * as path from 'path'
 import type { SessionMeta } from './library-manager'
+import { resolveSessionRemoteState } from './session-remote-state'
 
 export type RecoveryInstanceKind = 'standard' | 'claude-window' | 'non-standard'
 
@@ -18,8 +19,10 @@ export interface RecoveryTargetInstance {
   projectsRoot: string
   configDir?: string
   available: boolean
-  trusted?: boolean
-  existingFiles?: RecoveryExistingFile[]
+  /** Explicit result of trusted-root/symlink validation by the inventory adapter. */
+  trusted: boolean
+  /** Explicit, complete file inventory. An empty array means inventoried and empty. */
+  existingFiles: RecoveryExistingFile[]
 }
 
 export type RecoveryBackupState = 'ready' | 'icloud-placeholder' | 'invalid' | 'missing'
@@ -39,8 +42,10 @@ export interface RecoveryPlannerInput {
   targetInstances: RecoveryTargetInstance[]
   /** Required to authorize an import from a known different device or non-standard source. */
   preferredTargetInstanceId?: string
-  /** When supplied, a different origin.deviceId is treated as remote with no path guessing. */
+  /** Installation identity used to distinguish this installation from another one. */
   localDeviceId?: string
+  /** Required for the legacy path fallback when origin.deviceId is absent. */
+  localUsername?: string
 }
 
 export interface ClassifiedRecoverySource {
@@ -86,6 +91,11 @@ export type RecoveryPlanFailureReason =
   | 'target-instance-not-found'
   | 'target-instance-unavailable'
   | 'target-instance-untrusted'
+  | 'missing-target-inventory'
+  | 'target-inventory-incomplete'
+  | 'target-instance-missing-config-dir'
+  | 'missing-local-device-id'
+  | 'missing-local-username'
   | 'non-standard-target-refused'
   | 'target-conflict'
 
@@ -205,6 +215,31 @@ function routeFor(
   return target.kind === 'standard' ? 'import-to-standard' : 'import-to-window'
 }
 
+/**
+ * Approximate the default case-insensitive APFS comparison used by supported
+ * macOS installations. This is lexical only; the inventory adapter still owns
+ * realpath, volume-format, and symlink validation.
+ */
+function caseFoldPath(value: string): string {
+  return path.normalize(value).normalize('NFC').toLowerCase()
+}
+
+function caseFoldIdentity(value: string): string {
+  return value.normalize('NFC').toLowerCase()
+}
+
+function hasCompleteTargetInventory(target: RecoveryTargetInstance): boolean {
+  return typeof target.trusted === 'boolean' &&
+    Array.isArray(target.existingFiles) &&
+    target.existingFiles.every((existing) =>
+      existing !== null &&
+      typeof existing === 'object' &&
+      typeof existing.path === 'string' &&
+      existing.path.length > 0 &&
+      (existing.physicalSessionId === undefined || typeof existing.physicalSessionId === 'string')
+    )
+}
+
 function predictConflicts(
   target: RecoveryTargetInstance,
   targetPath: string,
@@ -212,10 +247,10 @@ function predictConflicts(
 ): RecoveryConflict[] {
   const conflicts: RecoveryConflict[] = []
   const seen = new Set<string>()
-  for (const existing of target.existingFiles || []) {
+  for (const existing of target.existingFiles) {
     const normalizedExisting = path.normalize(existing.path)
-    if (normalizedExisting === path.normalize(targetPath)) {
-      const key = `target-path-exists:${normalizedExisting}`
+    if (caseFoldPath(normalizedExisting) === caseFoldPath(targetPath)) {
+      const key = `target-path-exists:${caseFoldPath(normalizedExisting)}`
       if (!seen.has(key)) {
         seen.add(key)
         conflicts.push({
@@ -225,8 +260,11 @@ function predictConflicts(
         })
       }
     }
-    if (existing.physicalSessionId === physicalSessionId) {
-      const key = `physical-id-exists:${normalizedExisting}`
+    if (
+      existing.physicalSessionId &&
+      caseFoldIdentity(existing.physicalSessionId) === caseFoldIdentity(physicalSessionId)
+    ) {
+      const key = `physical-id-exists:${caseFoldPath(normalizedExisting)}`
       if (!seen.has(key)) {
         seen.add(key)
         conflicts.push({
@@ -252,6 +290,9 @@ export function planSessionRecovery(input: RecoveryPlannerInput): RecoveryPlan {
   if (input.backup.state === 'invalid') {
     return failure(input, 'invalid-backup', { diagnostic: input.backup.diagnostic })
   }
+  if (!Array.isArray(input.targetInstances)) {
+    return failure(input, 'missing-target-inventory')
+  }
 
   const sourcePath = input.libraryMeta.sourceFilePaths?.[0]
   if (!sourcePath) return failure(input, 'missing-source-path')
@@ -267,16 +308,23 @@ export function planSessionRecovery(input: RecoveryPlannerInput): RecoveryPlan {
     return failure(input, 'invalid-source-path', { source })
   }
 
+  if (input.libraryMeta.origin?.deviceId && !input.localDeviceId) {
+    return failure(input, 'missing-local-device-id', { source, physicalSessionId })
+  }
+
   const preferred = findPreferredTarget(input)
   if (preferred && 'ok' in preferred) {
     return { ...preferred, source, physicalSessionId }
   }
 
-  const isKnownRemote = Boolean(
-    input.localDeviceId &&
-    input.libraryMeta.origin?.deviceId &&
-    input.libraryMeta.origin.deviceId !== input.localDeviceId
-  )
+  if (!input.libraryMeta.origin?.deviceId && !preferred && !input.localUsername) {
+    return failure(input, 'missing-local-username', { source, physicalSessionId })
+  }
+  const isKnownRemote = resolveSessionRemoteState(
+    input.libraryMeta,
+    input.localDeviceId,
+    input.localUsername
+  ).isRemote
   if (isKnownRemote && !preferred) {
     return failure(input, 'remote-source-requires-explicit-target', { source, physicalSessionId })
   }
@@ -292,8 +340,20 @@ export function planSessionRecovery(input: RecoveryPlannerInput): RecoveryPlan {
   if (!target.available) {
     return failure(input, 'target-instance-unavailable', { source, physicalSessionId })
   }
-  if (target.trusted === false || !path.isAbsolute(target.projectsRoot)) {
+  if (!hasCompleteTargetInventory(target)) {
+    return failure(input, 'target-inventory-incomplete', { source, physicalSessionId })
+  }
+  if (!target.trusted || !path.isAbsolute(target.projectsRoot)) {
     return failure(input, 'target-instance-untrusted', { source, physicalSessionId })
+  }
+  if (target.kind === 'claude-window') {
+    const configDir = target.configDir
+    if (!configDir) {
+      return failure(input, 'target-instance-missing-config-dir', { source, physicalSessionId })
+    }
+    if (!path.isAbsolute(configDir)) {
+      return failure(input, 'target-instance-untrusted', { source, physicalSessionId })
+    }
   }
 
   const projectDirName = source.projectDirName || path.basename(input.libraryMeta.projectPath || '')

@@ -4,11 +4,12 @@
  * 确保分支 session 的 meta（重命名、笔记等）和文件夹归属
  * 完全独立于母 session，互不影响。
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { shellQuote } from './resume-terminal'
+import { buildSessionSummaryFromBackup } from './session-loader'
 
 // 隔离测试环境：用临时目录作为 Library root
 let tmpRoot: string
@@ -131,6 +132,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   fs.rmSync(tmpRoot, { recursive: true, force: true })
   // 恢复临时 app-config，避免测试之间串状态
   if (savedAppConfig !== null) {
@@ -138,6 +140,13 @@ afterEach(() => {
   } else {
     fs.rmSync(APP_CONFIG_FILE, { force: true })
   }
+  try {
+    for (const name of fs.readdirSync(path.dirname(APP_CONFIG_FILE))) {
+      if (name.startsWith('app-config.json.corrupt-')) {
+        fs.rmSync(path.join(path.dirname(APP_CONFIG_FILE), name), { force: true })
+      }
+    }
+  } catch { /* temporary HOME may not contain a config directory */ }
 })
 
 afterAll(() => {
@@ -226,6 +235,21 @@ describe('App 配置：Library 路径管理', () => {
     expect(first).toBe('device-xx…0001')
     expect(second).toBe(first)
     expect(lib.loadAppConfig().deviceId).toBe('device-xx…0001')
+    expect(fs.statSync(APP_CONFIG_FILE).mode & 0o777).toBe(0o600)
+    expect(fs.readdirSync(path.dirname(APP_CONFIG_FILE)).filter((name) =>
+      name === 'app-config.json.lock' || name.endsWith('.tmp')
+    )).toEqual([])
+  })
+
+  it('并发初始化锁存在时拒绝第二次生成，不写入竞争 deviceId', () => {
+    fs.mkdirSync(path.dirname(APP_CONFIG_FILE), { recursive: true })
+    fs.writeFileSync(`${APP_CONFIG_FILE}.lock`, 'in-progress', { mode: 0o600 })
+    const createId = vi.fn(() => 'competing-device-xx…0002')
+
+    expect(() => lib.getOrCreateLocalDeviceId(createId)).toThrow('app-config-write-in-progress')
+    expect(createId).not.toHaveBeenCalled()
+    expect(fs.existsSync(APP_CONFIG_FILE)).toBe(false)
+    fs.rmSync(`${APP_CONFIG_FILE}.lock`, { force: true })
   })
 
   it('getConfiguredLibraryPath 无配置时返回默认路径', () => {
@@ -248,6 +272,53 @@ describe('App 配置：Library 路径管理', () => {
 })
 
 describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
+  it('缺 sessionId 的 meta 在边界告警并拒绝进入扫描', () => {
+    const warnings: string[] = []
+    const parsed = lib.parseSessionMeta(JSON.stringify({
+      sourceFilePaths: ['/fixture/source-xx…0101.jsonl'],
+      projectPath: '/fixture/project-xx…0101'
+    }), (warning) => warnings.push(warning))
+
+    expect(parsed).toBeNull()
+    expect(warnings).toEqual([expect.stringContaining('missing sessionId/projectPath')])
+  })
+
+  it('缺 projectPath 的 meta 在边界告警并拒绝进入扫描', () => {
+    const warnings: string[] = []
+    const parsed = lib.parseSessionMeta(JSON.stringify({
+      sessionId: 'invalid-xx…0102',
+      sourceFilePaths: ['/fixture/source-xx…0102.jsonl']
+    }), (warning) => warnings.push(warning))
+
+    expect(parsed).toBeNull()
+    expect(warnings).toHaveLength(1)
+  })
+
+  it('sourceFilePaths 含非字符串时在边界告警并拒绝进入扫描', () => {
+    const warnings: string[] = []
+    const parsed = lib.parseSessionMeta(JSON.stringify({
+      sessionId: 'invalid-xx…0103',
+      sourceFilePaths: ['/fixture/source-xx…0103.jsonl', 42],
+      projectPath: '/fixture/project-xx…0103'
+    }), (warning) => warnings.push(warning))
+
+    expect(parsed).toBeNull()
+    expect(warnings).toEqual([expect.stringContaining('sourceFilePaths must be strings')])
+  })
+
+  it('畸形 origin 在边界告警并拒绝进入扫描', () => {
+    const warnings: string[] = []
+    const parsed = lib.parseSessionMeta(JSON.stringify({
+      sessionId: 'invalid-xx…0104',
+      sourceFilePaths: ['/fixture/source-xx…0104.jsonl'],
+      projectPath: '/fixture/project-xx…0104',
+      origin: { deviceId: 42 }
+    }), (warning) => warnings.push(warning))
+
+    expect(parsed).toBeNull()
+    expect(warnings).toEqual([expect.stringContaining('malformed origin')])
+  })
+
   it('旧 meta 缺 schemaVersion/origin/sourceInstance 时正常读取且字段不被伪造', () => {
     const legacy = {
       sessionId: 'legacy-xx…0001',
@@ -268,6 +339,104 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
     const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === legacy.sessionId)
     expect(found).toBeUndefined() // historical behavior: no backup means not library-only
     expect(() => lib.getSessionResumeAvailability(legacy.sessionId)).not.toThrow()
+  })
+
+  it('旧 meta 加有效 backup 能真实加载为 library-only session', async () => {
+    const sessionId = 'legacy-backup-xx…0105'
+    const dirPath = path.join(tmpRoot, 'legacy-backup-xx…0105')
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: ['/Users/legacy-xx…0105/.claude/projects/-Users-legacy-xx…0105-project/session.jsonl'],
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: '/Users/legacy-xx…0105/.claude/projects/-Users-legacy-xx…0105-project'
+    })
+    writeJsonl(path.join(dirPath, 'backup.jsonl'), claudeRows(sessionId, 'legacy backup regression'))
+
+    lib.scanLibrary()
+    const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === sessionId)
+    expect(found).toBeDefined()
+    const summary = await buildSessionSummaryFromBackup(found!.backupPath, sessionId, found!.meta)
+    expect(summary).toMatchObject({ sessionId, firstUserMessage: 'legacy backup regression' })
+  })
+
+  it('损坏 app-config 使 deviceId 缺失时仍保留并加载旧 library-only session', async () => {
+    const sessionId = 'corrupt-config-xx…0106'
+    const dirPath = path.join(tmpRoot, 'corrupt-config-xx…0106')
+    writeSessionMeta(dirPath, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: ['/Users/old-install-xx…0106/.claude/projects/-Users-old-install-xx…0106-project/session.jsonl'],
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: '/Users/old-install-xx…0106/.claude/projects/-Users-old-install-xx…0106-project',
+      origin: {
+        deviceId: 'old-installation-xx…0106',
+        hostname: 'old-host-xx…0106',
+        username: 'old-user-xx…0106',
+        capturedAt: '2026-07-18T00:00:00.000Z'
+      }
+    })
+    writeJsonl(path.join(dirPath, 'backup.jsonl'), claudeRows(sessionId, 'survives missing device id'))
+    fs.mkdirSync(path.dirname(APP_CONFIG_FILE), { recursive: true })
+    fs.writeFileSync(APP_CONFIG_FILE, '{broken-app-config', 'utf-8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(() => lib.getOrCreateLocalDeviceId(() => 'must-not-overwrite')).toThrow('invalid-app-config')
+    lib.scanLibrary()
+    const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === sessionId)
+    expect(found).toBeDefined()
+    expect(lib.resolveLibrarySessionRemoteState(found!.meta)).toEqual({
+      isRemote: true,
+      remoteHost: 'old-host-xx…0106',
+      confidence: 'installation-id-unavailable'
+    })
+    const summary = await buildSessionSummaryFromBackup(found!.backupPath, sessionId, found!.meta)
+    expect(summary?.firstUserMessage).toBe('survives missing device id')
+    expect(fs.readFileSync(APP_CONFIG_FILE, 'utf-8')).toBe('{broken-app-config')
+  })
+
+  it('自定义 Library 冷启动遇损坏配置时先备份，再经 changePath 找回旧 session', async () => {
+    const customLibrary = path.join(tmpRoot, 'custom-library-xx…0107')
+    const sessionId = 'corrupt-cold-start-xx…0107'
+    const dirPath = path.join(customLibrary, 'old-session-xx…0107')
+    const corruptContent = '{broken-cold-start-config-xx…0107'
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: ['/Users/old-install-xx…0107/.claude/projects/-fixture-old-xx…0107/session.jsonl'],
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: '/Users/old-install-xx…0107/.claude/projects/-fixture-old-xx…0107'
+    })
+    writeJsonl(path.join(dirPath, 'backup.jsonl'), claudeRows(sessionId, 'cold-start recovery evidence'))
+    lib.saveAppConfig({ libraryPath: customLibrary, deviceId: 'device-before-corruption-xx…0107' })
+    fs.writeFileSync(APP_CONFIG_FILE, corruptContent, 'utf-8')
+
+    // 验收员原形态：损坏配置后重启，首次初始化无法猜回自定义路径。
+    lib.initLibrary()
+    lib.scanLibrary()
+    expect(lib.getLibraryRoot()).not.toBe(customLibrary)
+    expect(lib.findLibraryOnlySessions(new Set()).some((item) => item.sessionId === sessionId)).toBe(false)
+
+    const backups = fs.readdirSync(path.dirname(APP_CONFIG_FILE))
+      .filter((name) => name.startsWith('app-config.json.corrupt-'))
+      .map((name) => path.join(path.dirname(APP_CONFIG_FILE), name))
+      .filter((backupPath) => fs.readFileSync(backupPath, 'utf-8') === corruptContent)
+    expect(backups).toHaveLength(1)
+    expect(fs.statSync(backups[0]).mode & 0o777).toBe(0o600)
+    expect(fs.readFileSync(APP_CONFIG_FILE, 'utf-8')).toBe(corruptContent)
+
+    // UI 的 library:changePath 使用此专用入口；备份存在后才允许重建配置。
+    expect(() => lib.changeConfiguredLibraryPath(customLibrary)).not.toThrow()
+    expect(lib.loadAppConfig()).toEqual({ libraryPath: customLibrary })
+    expect(fs.readFileSync(backups[0], 'utf-8')).toBe(corruptContent)
+
+    lib.initLibrary()
+    lib.scanLibrary()
+    const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === sessionId)
+    expect(found).toBeDefined()
+    const summary = await buildSessionSummaryFromBackup(found!.backupPath, sessionId, found!.meta)
+    expect(summary?.firstUserMessage).toBe('cold-start recovery evidence')
   })
 
   it('新建 meta 写入首次 origin/sourceInstance，deviceId 来自 app-config', async () => {
@@ -576,7 +745,7 @@ describe('isRemoteProjectPath', () => {
 })
 
 describe('resolveSessionRemoteState', () => {
-  it('同用户名但 deviceId 不同仍判定为远端，并使用持久化 hostname', () => {
+  it('同用户名但安装 ID 不同仍判定为非本安装，并使用持久化 hostname', () => {
     expect(lib.resolveSessionRemoteState({
       projectPath: '/Users/same-user-xx…0004/.claude/projects/-Users-same-user-xx…0004-project',
       origin: {
@@ -588,7 +757,7 @@ describe('resolveSessionRemoteState', () => {
     }, 'local-device-xx…0004', 'same-user-xx…0004')).toEqual({
       isRemote: true,
       remoteHost: 'remote-host-xx…0004',
-      confidence: 'device-id'
+      confidence: 'installation-id'
     })
   })
 

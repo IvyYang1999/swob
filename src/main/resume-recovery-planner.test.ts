@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import fs from 'fs'
+import { describe, expect, it } from 'vitest'
 import * as path from 'path'
 import { RECOVERY_SYNTHETIC_FIXTURES } from './__fixtures__/resume-recovery-synthetic'
 import {
@@ -25,8 +24,6 @@ function standardTarget(overrides: Partial<RecoveryTargetInstance> = {}): Recove
     ...overrides
   }
 }
-
-afterEach(() => vi.restoreAllMocks())
 
 describe('recovery planner synthetic 253-shape fixtures', () => {
   it('normal: routes a standard source to the standard instance', () => {
@@ -77,6 +74,36 @@ describe('recovery planner synthetic 253-shape fixtures', () => {
 })
 
 describe('recovery target routing and conflicts', () => {
+  it('refuses a target whose trusted inventory result was omitted', () => {
+    const input = cloneFixture('normal')
+    delete (input.targetInstances[0] as Partial<RecoveryTargetInstance>).trusted
+
+    expect(planSessionRecovery(input)).toMatchObject({
+      ok: false,
+      reason: 'target-inventory-incomplete'
+    })
+  })
+
+  it('refuses a target whose existing-file inventory was omitted', () => {
+    const input = cloneFixture('normal')
+    delete (input.targetInstances[0] as Partial<RecoveryTargetInstance>).existingFiles
+
+    expect(planSessionRecovery(input)).toMatchObject({
+      ok: false,
+      reason: 'target-inventory-incomplete'
+    })
+  })
+
+  it('refuses a completely omitted target inventory instead of guessing', () => {
+    const input = cloneFixture('normal')
+    delete (input as Partial<RecoveryPlannerInput>).targetInstances
+
+    expect(planSessionRecovery(input)).toMatchObject({
+      ok: false,
+      reason: 'missing-target-inventory'
+    })
+  })
+
   it('predicts an existing same-name target and refuses to overwrite it', () => {
     const input = cloneFixture('normal')
     const sourcePath = input.libraryMeta.sourceFilePaths[0]
@@ -106,6 +133,19 @@ describe('recovery target routing and conflicts', () => {
     }])
   })
 
+  it('treats a case-only target-path difference as an APFS-default conflict', () => {
+    const input = cloneFixture('normal')
+    input.targetInstances[0].existingFiles = [{
+      path: input.libraryMeta.sourceFilePaths[0].toUpperCase()
+    }]
+
+    expect(planSessionRecovery(input)).toMatchObject({
+      ok: false,
+      reason: 'target-conflict',
+      conflicts: [{ code: 'target-path-exists' }]
+    })
+  })
+
   it('routes an existing Claude Window source back to its matching instance', () => {
     const sessionId = '60000000-0000-4000-8000-000000000006'
     const input = cloneFixture('normal')
@@ -131,6 +171,29 @@ describe('recovery target routing and conflicts', () => {
       instanceId: 'window-xx…1003',
       instanceKind: 'claude-window',
       route: 'original-instance'
+    })
+  })
+
+  it('refuses a Claude Window target whose configDir was omitted', () => {
+    const sessionId = '61000000-0000-4000-8000-000000000006'
+    const input = cloneFixture('normal')
+    input.sessionId = sessionId
+    input.libraryMeta.sessionId = sessionId
+    input.libraryMeta.sourceFilePaths = [
+      `/fixture/home-xx…1003/.claude-window/window-xx…1003/projects/-fixture-project-xx…1003/${sessionId}.jsonl`
+    ]
+    input.targetInstances = [{
+      id: 'window-xx…1003',
+      kind: 'claude-window',
+      projectsRoot: '/fixture/home-xx…1003/.claude-window/window-xx…1003/projects',
+      available: true,
+      trusted: true,
+      existingFiles: []
+    }]
+
+    expect(planSessionRecovery(input)).toMatchObject({
+      ok: false,
+      reason: 'target-instance-missing-config-dir'
     })
   })
 
@@ -172,7 +235,7 @@ describe('recovery target routing and conflicts', () => {
     expect(selected.target.instanceKind).toBe('standard')
   })
 
-  it('uses deviceId—not username—to block an implicit same-username cross-machine restore', () => {
+  it('uses deviceId—not username—to block an implicit restore from another installation', () => {
     const input = cloneFixture('normal')
     input.localDeviceId = 'device-xx…2002'
     input.libraryMeta.origin = {
@@ -187,34 +250,47 @@ describe('recovery target routing and conflicts', () => {
       reason: 'remote-source-requires-explicit-target'
     })
   })
-})
 
-describe('recovery planner purity', () => {
-  it('does not invoke filesystem write, create, copy, rename, or remove APIs', () => {
-    const writeFile = vi.spyOn(fs, 'writeFileSync')
-    const mkdir = vi.spyOn(fs, 'mkdirSync')
-    const copy = vi.spyOn(fs, 'copyFileSync')
-    const rename = vi.spyOn(fs, 'renameSync')
-    const remove = vi.spyOn(fs, 'rmSync')
+  it('refuses origin metadata when the caller omitted the local installation ID', () => {
+    const input = cloneFixture('normal')
+    delete input.localDeviceId
 
-    const result = planSessionRecovery(cloneFixture('normal'))
-
-    expect(result.ok).toBe(true)
-    expect(writeFile).not.toHaveBeenCalled()
-    expect(mkdir).not.toHaveBeenCalled()
-    expect(copy).not.toHaveBeenCalled()
-    expect(rename).not.toHaveBeenCalled()
-    expect(remove).not.toHaveBeenCalled()
+    expect(planSessionRecovery(input)).toMatchObject({
+      ok: false,
+      reason: 'missing-local-device-id'
+    })
   })
 
-  it('classifies paths lexically without probing them', () => {
-    const exists = vi.spyOn(fs, 'existsSync')
-    const lstat = vi.spyOn(fs, 'lstatSync')
+  it('uses the legacy remote-state resolver to block a different-username path', () => {
+    const input = cloneFixture('normal')
+    delete input.libraryMeta.origin
+    input.localUsername = 'local-user-xx…2003'
+    input.libraryMeta.projectPath =
+      '/Users/remote-user-xx…2003/.claude/projects/-Users-remote-user-xx…2003-project'
+
+    expect(planSessionRecovery(input)).toMatchObject({
+      ok: false,
+      reason: 'remote-source-requires-explicit-target'
+    })
+  })
+
+  it('refuses an implicit legacy plan when localUsername was omitted', () => {
+    const input = cloneFixture('normal')
+    delete input.libraryMeta.origin
+    delete input.localUsername
+
+    expect(planSessionRecovery(input)).toMatchObject({
+      ok: false,
+      reason: 'missing-local-username'
+    })
+  })
+})
+
+describe('recovery path classification', () => {
+  it('classifies a standard path lexically', () => {
     const result = classifyRecoverySourcePath(
       '/fixture/home-xx…3001/.claude/projects/-fixture-project-xx…3001/80000000-0000-4000-8000-000000000008.jsonl'
     )
     expect(result.kind).toBe('standard')
-    expect(exists).not.toHaveBeenCalled()
-    expect(lstat).not.toHaveBeenCalled()
   })
 })

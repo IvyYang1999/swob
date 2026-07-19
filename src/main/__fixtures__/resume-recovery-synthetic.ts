@@ -74,8 +74,9 @@ export const RECOVERY_SYNTHETIC_FIXTURES = {
     localDeviceId: 'device-xx…0001',
     evidence: {
       jsonl: [
-        '{"sessionId":"20000000-0000-4000-8000-000000000002","type":"user","message":{"content":"logical-xx…0002"}}',
-        '{"sessionId":"30000000-0000-4000-8000-000000000003","type":"assistant","message":{"content":"physical-xx…0003"}}'
+        '{"sessionId":"20000000-0000-4000-8000-000000000002","uuid":"logical-user-xx…0002","parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"logical-xx…0002"}}',
+        '{"sessionId":"30000000-0000-4000-8000-000000000003","uuid":"continuation-summary-xx…0003","parentUuid":null,"isSidechain":false,"type":"summary","leafUuid":"logical-user-xx…0002"}',
+        '{"sessionId":"30000000-0000-4000-8000-000000000003","uuid":"physical-assistant-xx…0003","parentUuid":"continuation-summary-xx…0003","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":"physical-xx…0003"}}'
       ].join('\n') + '\n'
     }
   },

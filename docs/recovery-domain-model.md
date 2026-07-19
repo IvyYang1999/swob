@@ -21,6 +21,8 @@ sourceInstance?: {
   kind: 'claude-default' | 'claude-window' | 'other'
   configDir?: string
 }
+backupSha256?: string
+backupSize?: number
 ```
 
 `deviceId` is a per-home installation UUID stored in
@@ -70,6 +72,35 @@ source is demonstrably visible to the current installation, a normal metadata
 update may lazily capture the local origin. With no such evidence, historical path/user
 guessing remains unchanged and explicitly low confidence.
 
+## Backup integrity and iCloud materialization
+
+Every new `backup.jsonl` write records the exact UTF-8 byte length and SHA-256
+in `backupSize` and `backupSha256`. Both fields remain optional so legacy
+metadata is read without migration. When either expected value is supplied to
+the materializer, strong completion requires the placeholder to be absent, the
+target to be readable strict JSONL, and every supplied expected value to match.
+A mismatch stays on the polling/failure path; a locally valid JSONL prefix is
+not accepted as the remote object's final EOF.
+
+The `backup.jsonl` bytes and their `.swob-session.json` metadata are separate
+writes, not one atomic transaction. iCloud can therefore temporarily expose a
+backup from one generation with expected metadata from another. Either mixed
+ordering fails safely on the SHA-256/size mismatch, although the materializer
+may spend its polling budget and report a temporary timeout before the matching
+generation arrives. Mismatched bytes are never promoted to strong success.
+
+Without expected metadata, placeholder disappearance plus a valid local read is
+returned as the separate non-success state `{ ok: false, state: 'unverified',
+confidence: 'prefix-unverifiable' }`. Its content is omitted by default and is
+included only when the caller explicitly sets `allowUnverified: true`; even
+then it is never reported as `ok: true`.
+
+The implementation deliberately does not parse `brctl status`. That command's
+human-readable output is not a stable API contract, so treating its text as an
+authoritative completion signal would replace a known missing proof with a
+version- and locale-dependent guess. `brctl download` is used only to trigger
+the download, with an argument array and the exact target/placeholder path.
+
 ## Pure planner contract
 
 `planSessionRecovery()` accepts only:
@@ -100,6 +131,13 @@ volume and trusted roots before setting `trusted: true`.
 The module imports no filesystem API. It performs lexical path classification
 only; trusted-root, symlink, existence, validation, and iCloud state facts must
 come from an external read-only inventory adapter.
+
+Known purity edge: the planner's existing runtime dependency closure includes
+`session-remote-state.ts`, whose bare `os` import is Node's `node:os` API and
+whose default parameter reads `os.userInfo()` when `localUsername` is
+undefined. The current purity rule forbids filesystem and CommonJS escape
+hatches but does not reject this host read. This is recorded for subtask 3; this
+contract patch does not change that code.
 
 ## Synthetic fixtures
 

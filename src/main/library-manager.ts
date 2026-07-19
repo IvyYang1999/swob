@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
@@ -39,6 +39,9 @@ export interface SessionMeta {
   updatedAt: string
   projectPath: string
   turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
+  /** Expected bytes for strong iCloud materialization verification. */
+  backupSha256?: string
+  backupSize?: number
   /** Immutable identity of the installation that first captured this Library item. */
   origin?: SessionOrigin
   /** Describes the original harness instance; it is never an authorization to write there. */
@@ -468,6 +471,16 @@ export function parseSessionMeta(
     }
     if (meta.origin !== undefined && !isValidSessionOrigin(meta.origin)) {
       warn('[library-manager] Ignoring invalid session metadata: malformed origin')
+      return null
+    }
+    if (meta.backupSha256 !== undefined &&
+      (typeof meta.backupSha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(meta.backupSha256))) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed backupSha256')
+      return null
+    }
+    if (meta.backupSize !== undefined &&
+      (typeof meta.backupSize !== 'number' || !Number.isSafeInteger(meta.backupSize) || meta.backupSize < 0)) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed backupSize')
       return null
     }
     return parsed as SessionMeta
@@ -1295,7 +1308,12 @@ export async function syncBackup(sessionId: string): Promise<void> {
     } catch { /* skip */ }
   }
   if (allContent.length > 0) {
-    fs.writeFileSync(backupPath, allContent.join('\n'), 'utf-8')
+    const content = allContent.join('\n')
+    fs.writeFileSync(backupPath, content, 'utf-8')
+    meta.backupSha256 = createHash('sha256').update(content, 'utf-8').digest('hex')
+    meta.backupSize = Buffer.byteLength(content, 'utf-8')
+    meta.schemaVersion = 2
+    writeSessionMeta(dirPath, meta)
   }
 }
 

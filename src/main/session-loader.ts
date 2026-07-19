@@ -18,58 +18,11 @@ import { findOpencodeSessionFiles, buildOpencodeSessionSummary, buildOpencodeSes
 import { findZcodeSessionFiles, buildZcodeSessionSummary, buildZcodeSessionDetail, buildZcodeSessionSummaryFromBackup, stripZcodeSessionRef } from './zcode-loader'
 import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
+import { isRealUserMessage, isSystemText } from './session-message-classifier'
+
+export { isRealUserMessage } from './session-message-classifier'
 
 const HOME = process.env.HOME || ''
-
-/**
- * True user message = type 'user' with real text content (not tool_result / task-notification).
- * Tool results have content as array of { type: 'tool_result' }.
- */
-const SYSTEM_USER_MESSAGES = [
-  'Continue from where you left off.',
-  'Tool loaded.',
-  'No response requested.'
-]
-
-const SYSTEM_USER_PREFIXES = [
-  '<task-notification>',
-  '<local-command-caveat>',
-  '<local-command-stdout>',
-  '<command-name>',
-  '<command-message>',
-  '<command-args>',
-  '<user-prompt-submit-hook>',
-  'Base directory for this skill:'
-]
-
-function isSystemText(text: string): boolean {
-  const trimmed = text.trim()
-  if (!trimmed) return true
-  if (SYSTEM_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) return true
-  if (trimmed.startsWith('This session is being continued')) return true
-  if (trimmed.startsWith('<system-reminder>') &&
-    !trimmed.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim()) return true
-  // Pure [Image: source: ...] text (file path references alongside base64 images)
-  if (/^\[Image: source: [^\]]+\](\s*\[Image: source: [^\]]+\])*\s*$/.test(trimmed)) return true
-  return SYSTEM_USER_MESSAGES.includes(trimmed)
-}
-
-export function isRealUserMessage(m: RawJsonlMessage): boolean {
-  if (m.type !== 'user' || !m.message) return false
-  const c = m.message.content
-  if (typeof c === 'string') {
-    return !isSystemText(c)
-  }
-  if (Array.isArray(c)) {
-    if (c.some((p) => p.type === 'tool_result')) return false
-    // Extract all text parts, check if any is real user input
-    const texts = c.filter((p) => p.type === 'text' && p.text).map((p) => p.text!)
-    if (texts.length === 0) return false
-    // If ALL text parts are system-generated, not a real message
-    return texts.some((t) => !isSystemText(t))
-  }
-  return false
-}
 
 function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefined {
   let earliest: { timestamp: string; cwd: string } | null = null

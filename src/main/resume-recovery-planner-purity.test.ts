@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import ts from 'typescript'
+import {
+  runtimeRelativeImports,
+  typescriptRuntimeDependencyClosure
+} from './__test-support__/typescript-runtime-closure'
 
 /**
  * Vitest's ESM mocks below guard ESM imports and runtime access, but Node's native
@@ -34,56 +38,6 @@ function forbiddenPuritySyntax(sourceText: string, fileName: string): string[] {
   return violations
 }
 
-function runtimeRelativeImports(sourceText: string, fileName: string): string[] {
-  const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true)
-  const imports: string[] = []
-
-  const addSpecifier = (specifier: ts.Expression | undefined, typeOnly: boolean): void => {
-    if (!typeOnly && specifier && ts.isStringLiteralLike(specifier) && specifier.text.startsWith('.')) {
-      imports.push(specifier.text)
-    }
-  }
-
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node)) {
-      addSpecifier(node.moduleSpecifier, Boolean(node.importClause?.isTypeOnly))
-    } else if (ts.isExportDeclaration(node)) {
-      addSpecifier(node.moduleSpecifier, node.isTypeOnly)
-    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      addSpecifier(node.arguments[0], false)
-    }
-    ts.forEachChild(node, visit)
-  }
-
-  visit(sourceFile)
-  return imports
-}
-
-function resolveTypeScriptImport(fromFile: string, specifier: string): string {
-  const candidate = path.resolve(path.dirname(fromFile), specifier)
-  const choices = [candidate, `${candidate}.ts`, path.join(candidate, 'index.ts')]
-  const resolved = choices.find((choice) => fs.existsSync(choice))
-  if (!resolved) throw new Error(`cannot resolve planner dependency: ${fromFile} -> ${specifier}`)
-  return resolved
-}
-
-function plannerRuntimeDependencyClosure(entryFile: string): string[] {
-  const pending = [entryFile]
-  const visited = new Set<string>()
-
-  while (pending.length > 0) {
-    const fileName = pending.pop()!
-    if (visited.has(fileName)) continue
-    visited.add(fileName)
-    const sourceText = fs.readFileSync(fileName, 'utf-8')
-    for (const specifier of runtimeRelativeImports(sourceText, fileName)) {
-      pending.push(resolveTypeScriptImport(fileName, specifier))
-    }
-  }
-
-  return [...visited]
-}
-
 function installFilesystemTripwires(): void {
   const deniedModule = (moduleName: string): object => new Proxy(
     { __esModule: true },
@@ -113,7 +67,7 @@ afterEach(() => {
 describe('recovery planner zero-side-effect boundary', () => {
   it('statically forbids CommonJS and filesystem access across the planner runtime closure', () => {
     const entryFile = path.resolve(process.cwd(), 'src/main/resume-recovery-planner.ts')
-    const closure = plannerRuntimeDependencyClosure(entryFile)
+    const closure = typescriptRuntimeDependencyClosure(entryFile)
     const violations = closure.flatMap((fileName) =>
       forbiddenPuritySyntax(fs.readFileSync(fileName, 'utf-8'), fileName)
     )
@@ -123,6 +77,24 @@ describe('recovery planner zero-side-effect boundary', () => {
       'session-remote-state.ts'
     ])
     expect(violations).toEqual([])
+  })
+
+  it('shared AST closure parser includes dynamic imports and excludes type-only edges', () => {
+    const sourceText = [
+      "import type { TypeOnly } from './type-only'",
+      "export type { AnotherType } from './another-type'",
+      "export { runtimeValue } from './runtime-export'",
+      "void import('./dynamic-helper')"
+    ].join('\n')
+
+    expect(runtimeRelativeImports(sourceText, 'synthetic-closure.ts')).toEqual([
+      './runtime-export',
+      './dynamic-helper'
+    ])
+    expect(() => runtimeRelativeImports(
+      "void import('./' + helperName)",
+      'computed-dynamic-import.ts'
+    )).toThrow('dynamic import must use a static string literal')
   })
 
   it('proves the static rule catches both required CommonJS mutations', () => {

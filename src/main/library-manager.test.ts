@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { createHash } from 'node:crypto'
 import { shellQuote } from './resume-terminal'
 import { buildSessionSummaryFromBackup } from './session-loader'
 
@@ -332,6 +333,8 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
     expect(parsed?.schemaVersion).toBeUndefined()
     expect(parsed?.origin).toBeUndefined()
     expect(parsed?.sourceInstance).toBeUndefined()
+    expect(parsed?.backupSha256).toBeUndefined()
+    expect(parsed?.backupSize).toBeUndefined()
 
     const dirPath = path.join(tmpRoot, 'legacy-meta-xx…0001')
     writeSessionMeta(dirPath, legacy)
@@ -339,6 +342,32 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
     const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === legacy.sessionId)
     expect(found).toBeUndefined() // historical behavior: no backup means not library-only
     expect(() => lib.getSessionResumeAvailability(legacy.sessionId)).not.toThrow()
+  })
+
+  it('backup 写入后把实际 SHA-256/size 顺路持久化到 SessionMeta v2', async () => {
+    removeDefaultSession()
+    const sessionId = 'metadata-backup-xx…0107'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture-project-xx…0107', `${sessionId}.jsonl`)
+    const rows = claudeRows(sessionId, 'expected metadata supply')
+    writeJsonl(sourcePath, rows)
+    const expectedContent = fs.readFileSync(sourcePath)
+    const dirPath = createLibrarySession(sessionId, [sourcePath], { dirName: 'metadata-backup-xx…0107' })
+    lib.scanLibrary()
+
+    await lib.syncBackup(sessionId)
+
+    const backupPath = path.join(dirPath, 'backup.jsonl')
+    const writtenMeta = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    expect(fs.readFileSync(backupPath)).toEqual(expectedContent)
+    expect(writtenMeta).toMatchObject({
+      schemaVersion: 2,
+      backupSha256: createHash('sha256').update(expectedContent).digest('hex'),
+      backupSize: expectedContent.length
+    })
+    expect(lib.parseSessionMeta(JSON.stringify(writtenMeta))).toMatchObject({
+      backupSha256: writtenMeta.backupSha256,
+      backupSize: writtenMeta.backupSize
+    })
   })
 
   it('旧 meta 加有效 backup 能真实加载为 library-only session', async () => {

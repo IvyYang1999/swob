@@ -136,7 +136,8 @@ function claudeRows(sessionId: string, userText: string, assistantText: string):
   return [
     {
       uuid: 'claude-user', parentUuid: null, sessionId, type: 'user',
-      timestamp: '2026-07-18T00:00:00.000Z', message: { role: 'user', content: userText }
+      timestamp: '2026-07-18T00:00:00.000Z', promptSource: 'typed',
+      message: { role: 'user', content: userText }
     },
     {
       uuid: 'claude-assistant', parentUuid: 'claude-user', sessionId, type: 'assistant',
@@ -421,7 +422,8 @@ describe('resume audit', () => {
       ...claudeRows(IDS.claude, '共享用户', '共享助手'),
       {
         uuid: 'main-user', parentUuid: 'claude-assistant', sessionId: IDS.claude, type: 'user',
-        timestamp: '2026-07-18T00:00:02.000Z', message: { role: 'user', content: '主链用户' }
+        timestamp: '2026-07-18T00:00:02.000Z', promptSource: 'typed',
+        message: { role: 'user', content: '主链用户' }
       },
       {
         uuid: 'main-assistant', parentUuid: 'main-user', sessionId: IDS.claude, type: 'assistant',
@@ -429,7 +431,8 @@ describe('resume audit', () => {
       },
       {
         uuid: 'main-user-2', parentUuid: 'main-assistant', sessionId: IDS.claude, type: 'user',
-        timestamp: '2026-07-18T00:00:04.000Z', message: { role: 'user', content: '主链更长' }
+        timestamp: '2026-07-18T00:00:04.000Z', promptSource: 'typed',
+        message: { role: 'user', content: '主链更长' }
       },
       {
         uuid: 'main-assistant-2', parentUuid: 'main-user-2', sessionId: IDS.claude, type: 'assistant',
@@ -437,7 +440,8 @@ describe('resume audit', () => {
       },
       {
         uuid: 'branch-user', parentUuid: 'claude-assistant', sessionId: IDS.claude, type: 'user',
-        timestamp: '2026-07-18T00:00:06.000Z', message: { role: 'user', content: '分支用户锚点' }
+        timestamp: '2026-07-18T00:00:06.000Z', promptSource: 'typed',
+        message: { role: 'user', content: '分支用户锚点' }
       },
       {
         uuid: 'branch-assistant', parentUuid: 'branch-user', sessionId: IDS.claude, type: 'assistant',

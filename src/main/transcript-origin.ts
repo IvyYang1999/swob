@@ -49,6 +49,8 @@ const UNKNOWN_MACHINE_MESSAGES = new Set([
   'No response requested.'
 ])
 
+const IMAGE_SOURCE_PLACEHOLDERS = /^(?:\[Image: source: [^\]]+\]\s*)+$/
+
 function hasOwnOrigin(message: RawJsonlMessage): boolean {
   return Object.prototype.hasOwnProperty.call(message, 'origin')
 }
@@ -67,8 +69,8 @@ function firstContentText(message: RawJsonlMessage): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   for (const part of content) {
-    if (typeof part === 'string') return part
-    if (part?.type === 'text' && typeof part.text === 'string') return part.text
+    if (typeof part === 'string' && part.trim()) return part
+    if (part?.type === 'text' && typeof part.text === 'string' && part.text.trim()) return part.text
   }
   return ''
 }
@@ -100,7 +102,7 @@ function isOrdinaryHumanContent(message: RawJsonlMessage): boolean {
  * Classify the source of a transcript input record.
  *
  * `origin.kind` is authoritative when present. Legacy label matching is restricted
- * to the start of the first text part so quoted tags in a human message stay human.
+ * to the start of the first non-blank text part so quoted tags in a human message stay human.
  */
 export function detectTranscriptOrigin(
   message: RawJsonlMessage,
@@ -116,13 +118,13 @@ export function detectTranscriptOrigin(
   if (Array.isArray(content) && content.some((part) => typeof part === 'object' && part?.type === 'tool_result')) {
     return 'tool'
   }
+  if ((typeof message.sourceToolAssistantUUID === 'string' && message.sourceToolAssistantUUID.trim()) ||
+    message.toolUseResult !== undefined) {
+    return 'tool'
+  }
 
   const promptSource = message.promptSource
   const ordinaryContent = isOrdinaryHumanContent(message)
-  if (promptSource && STRUCTURED_HUMAN_PROMPT_SOURCES.has(promptSource)) {
-    return ordinaryContent ? 'human' : 'unknown'
-  }
-
   const text = firstContentText(message).trimStart()
   const tag = leadingTag(text)
   if (tag === 'task-notification') return 'task-notification'
@@ -133,9 +135,14 @@ export function detectTranscriptOrigin(
   if (message.isMeta === true || promptSource === 'system') return 'unknown'
   if (UNKNOWN_MACHINE_PREFIXES.some((prefix) => text.startsWith(prefix))) return 'unknown'
   if (UNKNOWN_MACHINE_MESSAGES.has(text.trim())) return 'unknown'
+  if (IMAGE_SOURCE_PLACEHOLDERS.test(text.trim())) return 'unknown'
   if (tag) return 'unknown'
 
-  return ordinaryContent ? 'human' : 'unknown'
+  if (promptSource && STRUCTURED_HUMAN_PROMPT_SOURCES.has(promptSource)) {
+    return ordinaryContent ? 'human' : 'unknown'
+  }
+
+  return 'unknown'
 }
 
 export function formatTranscriptOriginHeader(origin: TranscriptOrigin): string | null {

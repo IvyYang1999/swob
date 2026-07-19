@@ -23,6 +23,8 @@ export interface RawJsonlMessage {
   origin?: { kind?: string } | string
   promptSource?: string
   isMeta?: boolean
+  sourceToolAssistantUUID?: string
+  toolUseResult?: unknown
   message?: {
     role: string
     model?: string

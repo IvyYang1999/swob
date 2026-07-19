@@ -19,18 +19,20 @@ function userMessage(
 }
 
 describe('transcript 来源判定', () => {
-  it('真人：优先采用 origin.kind human，并兼容旧版普通 content', () => {
+  it('真人：只采用 origin.kind human 或 promptSource 白名单证据', () => {
     const typed = userMessage('帮我核对 transcript', {
       origin: { kind: 'human' },
       promptSource: 'typed'
     })
-    const legacyArray = userMessage([
+    const queuedArray = userMessage([
       { type: 'text', text: '请看这张图' },
       { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'redacted' } }
-    ])
+    ], { promptSource: 'queued' })
+    const accepted = userMessage('采用建议', { promptSource: 'suggestion_accepted' })
 
     expect(detectTranscriptOrigin(typed)).toBe('human')
-    expect(detectTranscriptOrigin(legacyArray)).toBe('human')
+    expect(detectTranscriptOrigin(queuedArray)).toBe('human')
+    expect(detectTranscriptOrigin(accepted)).toBe('human')
   })
 
   it('task-notification：结构字段优先，并兼容旧版起始标签', () => {
@@ -71,6 +73,20 @@ describe('transcript 来源判定', () => {
     expect(detectTranscriptOrigin(mixed)).toBe('tool')
   })
 
+  it('P2-2：顶层工具字段优先于普通 text 与真人 promptSource', () => {
+    const sourceUuid = userMessage('规整后的普通文本', {
+      promptSource: 'typed',
+      sourceToolAssistantUUID: 'assistant-tool-uuid'
+    })
+    const result = userMessage('规整后的普通文本', {
+      promptSource: 'typed',
+      toolUseResult: { status: 'ok' }
+    })
+
+    expect(detectTranscriptOrigin(sourceUuid)).toBe('tool')
+    expect(detectTranscriptOrigin(result)).toBe('tool')
+  })
+
   it('unknown：机器元消息和 compact continuation 绝不默认归 human', () => {
     const skillMeta = userMessage([{ type: 'text', text: 'Base directory for this skill: /redacted' }], { isMeta: true })
     const continuation = userMessage('This session is being continued from a previous conversation. Summary: redacted')
@@ -82,9 +98,32 @@ describe('transcript 来源判定', () => {
   })
 
   it('【曾经的 bug】正文中途引用 task-notification 字样仍是真人消息', () => {
-    const quoted = userMessage('请解释正文里的 <task-notification> 字样')
+    const quoted = userMessage('请解释正文里的 <task-notification> 字样', { promptSource: 'typed' })
 
     expect(detectTranscriptOrigin(quoted)).toBe('human')
+  })
+
+  it('P1-1 回归：跳过空白 text 后识别首个有效 task-notification 标签', () => {
+    const notification = userMessage([
+      { type: 'text', text: '   ' },
+      { type: 'text', text: '<task-notification>done</task-notification>' }
+    ])
+
+    expect(detectTranscriptOrigin(notification)).toBe('task-notification')
+  })
+
+  it('P1-2 回归：sdk、未来值与缺失 promptSource 均不回退 human', () => {
+    expect(detectTranscriptOrigin(userMessage('普通正文', { promptSource: 'sdk' }))).toBe('unknown')
+    expect(detectTranscriptOrigin(userMessage('普通正文', { promptSource: 'future-source' }))).toBe('unknown')
+    expect(detectTranscriptOrigin(userMessage('普通正文'))).toBe('unknown')
+  })
+
+  it('P2-1【曾经的 bug】：纯图片来源占位字符串不是 human', () => {
+    const single = userMessage('[Image: source: /redacted/a.png]')
+    const multiple = userMessage('[Image: source: /redacted/a.png]  [Image: source: /redacted/b.png]')
+
+    expect(detectTranscriptOrigin(single)).toBe('unknown')
+    expect(detectTranscriptOrigin(multiple)).toBe('unknown')
   })
 
   it('结构化字段优先于标签，未知结构值也不回退猜测', () => {

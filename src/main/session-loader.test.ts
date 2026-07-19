@@ -29,7 +29,7 @@ import * as path from 'path'
 
 // --- 造假 JSONL 消息的工具函数 ---
 function rawMsg(overrides: Partial<RawJsonlMessage> & { type: RawJsonlMessage['type'] }): RawJsonlMessage {
-  return {
+  const message: RawJsonlMessage = {
     uuid: overrides.uuid || Math.random().toString(36).slice(2),
     parentUuid: overrides.parentUuid ?? null,
     sessionId: overrides.sessionId || 'test-session-id',
@@ -40,9 +40,17 @@ function rawMsg(overrides: Partial<RawJsonlMessage> & { type: RawJsonlMessage['t
     version: overrides.version || '2.1.63',
     slug: overrides.slug,
     isSidechain: overrides.isSidechain,
+    promptSource: overrides.promptSource ?? (overrides.type === 'user' ? 'typed' : undefined),
     message: overrides.message,
     permissionMode: overrides.permissionMode
   }
+  if (overrides.origin !== undefined) message.origin = overrides.origin
+  if (overrides.isMeta !== undefined) message.isMeta = overrides.isMeta
+  if (overrides.sourceToolAssistantUUID !== undefined) {
+    message.sourceToolAssistantUUID = overrides.sourceToolAssistantUUID
+  }
+  if (overrides.toolUseResult !== undefined) message.toolUseResult = overrides.toolUseResult
+  return message
 }
 
 // 写一个临时 JSONL 文件（测试 parseSessionFile 用）
@@ -688,7 +696,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
       const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
-      expect(diskCache.version).toBe(19)
+      expect(diskCache.version).toBe(20)
       expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
       expect(diskCache.entries[firstFile]).toMatchObject({
         sig: expect.any(String),
@@ -719,6 +727,152 @@ describe('loadAllSessions per-file incremental cache', () => {
       const fullRebuild = await loadAllSessionsFromTempHome(home)
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 2, reused 0, files 2')
       expect(incremental).toEqual(fullRebuild)
+    } finally {
+      infoSpy.mockRestore()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('P1-3：压缩缓存保留来源证据，多文件 summary 重建不丢判定字段', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-origin-cache-home-'))
+    const projectDir = path.join(home, '.claude', 'projects', '-Users-test-vault')
+    const firstFile = path.join(projectDir, 'origin-cache-a.jsonl')
+    const secondFile = path.join(projectDir, 'origin-cache-b.jsonl')
+    writeJsonlAt(firstFile, [
+      rawMsg({
+        uuid: 'origin-human',
+        sessionId: 'origin-cache-session',
+        type: 'user',
+        timestamp: '2026-03-01T00:00:00Z',
+        promptSource: 'typed',
+        message: { role: 'user', content: '缓存中的真人问题' }
+      }),
+      rawMsg({
+        uuid: 'origin-assistant-a',
+        sessionId: 'origin-cache-session',
+        parentUuid: 'origin-human',
+        type: 'assistant',
+        timestamp: '2026-03-01T00:01:00Z',
+        message: { role: 'assistant', content: '第一段回复' }
+      })
+    ])
+    writeJsonlAt(secondFile, [
+      rawMsg({
+        uuid: 'origin-task',
+        sessionId: 'origin-cache-session',
+        type: 'user',
+        timestamp: '2026-03-01T00:02:00Z',
+        origin: { kind: 'task-notification' },
+        promptSource: 'sdk',
+        message: { role: 'user', content: '无标签的任务通知正文' }
+      }),
+      rawMsg({
+        uuid: 'origin-meta',
+        sessionId: 'origin-cache-session',
+        type: 'user',
+        timestamp: '2026-03-01T00:02:10Z',
+        promptSource: 'typed',
+        isMeta: true,
+        message: { role: 'user', content: '无标签的元消息正文' }
+      }),
+      rawMsg({
+        uuid: 'origin-tool',
+        sessionId: 'origin-cache-session',
+        type: 'user',
+        timestamp: '2026-03-01T00:02:20Z',
+        promptSource: 'typed',
+        sourceToolAssistantUUID: 'tool-source-uuid',
+        toolUseResult: { detail: '不应写入压缩缓存' },
+        message: { role: 'user', content: '规整后的工具结果' }
+      }),
+      rawMsg({
+        uuid: 'origin-assistant-b',
+        sessionId: 'origin-cache-session',
+        parentUuid: 'origin-tool',
+        type: 'assistant',
+        timestamp: '2026-03-01T00:03:00Z',
+        message: { role: 'assistant', content: '第二段回复' }
+      })
+    ])
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, { quiet: true })
+      const summary = sessions.find((session) => session.sessionId === 'origin-cache-session')
+      const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+      const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+      const refs = [
+        ...diskCache.entries[firstFile].perFile.lineageMeta.leafUuidRefs,
+        ...diskCache.entries[secondFile].perFile.lineageMeta.leafUuidRefs
+      ]
+
+      expect(summary).toMatchObject({ firstUserMessage: '缓存中的真人问题', turnCount: 1 })
+      expect(refs.find((message: RawJsonlMessage) => message.uuid === 'origin-human')).toMatchObject({
+        promptSource: 'typed'
+      })
+      expect(refs.find((message: RawJsonlMessage) => message.uuid === 'origin-task')).toMatchObject({
+        origin: { kind: 'task-notification' },
+        promptSource: 'sdk'
+      })
+      expect(refs.find((message: RawJsonlMessage) => message.uuid === 'origin-meta')).toMatchObject({
+        promptSource: 'typed',
+        isMeta: true
+      })
+      expect(refs.find((message: RawJsonlMessage) => message.uuid === 'origin-tool')).toMatchObject({
+        promptSource: 'typed',
+        sourceToolAssistantUUID: 'tool-source-uuid',
+        toolUseResult: true
+      })
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('P1-3：版本 19 的旧缓存强制失效，不污染来源判定', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-old-origin-cache-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'old-cache-session.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        uuid: 'old-cache-task',
+        sessionId: 'old-cache-session',
+        type: 'user',
+        origin: { kind: 'task-notification' },
+        promptSource: 'sdk',
+        message: { role: 'user', content: '无标签的机器通知' }
+      }),
+      rawMsg({
+        uuid: 'old-cache-assistant',
+        sessionId: 'old-cache-session',
+        parentUuid: 'old-cache-task',
+        type: 'assistant',
+        timestamp: '2026-03-01T00:01:00Z',
+        message: { role: 'assistant', content: '收到' }
+      })
+    ])
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      await loadAllSessionsFromTempHome(home)
+      const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+      const oldCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+      oldCache.version = 19
+      oldCache.entries[file].perFile.summary.firstUserMessage = '旧缓存误判的真人内容'
+      oldCache.entries[file].perFile.summary.turnCount = 1
+      delete oldCache.entries[file].perFile.lineageMeta.leafUuidRefs[0].origin
+      oldCache.entries[file].perFile.lineageMeta.leafUuidRefs[0].promptSource = 'typed'
+      fs.writeFileSync(cachePath, JSON.stringify(oldCache))
+
+      infoSpy.mockClear()
+      const sessions = await loadAllSessionsFromTempHome(home)
+      const summary = sessions.find((session) => session.sessionId === 'old-cache-session')
+      const refreshedCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
+      expect(summary).toMatchObject({ firstUserMessage: 'old-cache-session', turnCount: 0 })
+      expect(refreshedCache.version).toBe(20)
+      expect(refreshedCache.entries[file].perFile.lineageMeta.leafUuidRefs[0]).toMatchObject({
+        origin: { kind: 'task-notification' },
+        promptSource: 'sdk'
+      })
     } finally {
       infoSpy.mockRestore()
       fs.rmSync(home, { recursive: true, force: true })

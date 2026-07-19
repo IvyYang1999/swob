@@ -40,7 +40,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 19 // per-file summaries + lineage metadata
+const CACHE_VERSION = 20 // preserve transcript-origin evidence in lineage metadata
 
 type CachedSessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode'
 
@@ -723,6 +723,15 @@ function compactLineageMessage(message: RawJsonlMessage): RawJsonlMessage {
   if (message.slug !== undefined) compact.slug = message.slug
   if (message.isSidechain !== undefined) compact.isSidechain = message.isSidechain
   if (message.permissionMode !== undefined) compact.permissionMode = message.permissionMode
+  if (message.origin !== undefined) compact.origin = message.origin
+  if (message.promptSource !== undefined) compact.promptSource = message.promptSource
+  if (message.isMeta !== undefined) compact.isMeta = message.isMeta
+  if (message.sourceToolAssistantUUID !== undefined) {
+    compact.sourceToolAssistantUUID = message.sourceToolAssistantUUID
+  }
+  // The payload is detail-only; retain a sentinel so cached summary rebuilding
+  // keeps the top-level tool-origin evidence without storing the result body.
+  if (message.toolUseResult !== undefined) compact.toolUseResult = true
   if (message.forkedFrom !== undefined) compact.forkedFrom = message.forkedFrom
   if (message.leafUuid !== undefined) compact.leafUuid = message.leafUuid
   if (message.message) {

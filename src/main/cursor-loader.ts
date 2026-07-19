@@ -367,6 +367,7 @@ export async function buildCursorSessionDetail(filePath: string, sessionIdOverri
         subtype: undefined,
         timestamp: m.timestamp,
         role: m.message?.role,
+        origin: 'unknown',
         textContent,
         toolCalls,
         images: [],

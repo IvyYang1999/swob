@@ -11,6 +11,7 @@ import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './sess
 import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
 import { redactSecrets } from './secret-redactor'
 import { shellQuote } from './resume-terminal'
+import { detectTranscriptOrigin, formatTranscriptOriginHeader } from './transcript-origin'
 import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
 
 // ============ Types ============
@@ -911,7 +912,10 @@ export function generateTranscript(
 
     if (msg.type === 'user') {
       if (!text) continue
+      const source = meta.frontmatter?.harness || 'claude-code'
+      const originHeader = formatTranscriptOriginHeader(detectTranscriptOrigin(msg, source))
       lines.push(`**User** [${ts}]`)
+      if (originHeader) lines.push(originHeader)
       lines.push(`## ${firstLineSnippet(text)}`)
       lines.push(text)
       lines.push('')

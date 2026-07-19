@@ -684,6 +684,72 @@ describe('transcript markdown heading semantics', () => {
     expect(md).not.toContain('\n## Assistant Plan')
   })
 
+  it('真实 Claude 结构会话：机器注入带来源标头，真人消息保持原样', () => {
+    const md = lib.generateTranscript([
+      {
+        uuid: 'hook-real-shape',
+        parentUuid: null,
+        sessionId: 'origin-session',
+        type: 'user',
+        timestamp: '2026-07-19T10:01:00',
+        isMeta: true,
+        message: { role: 'user', content: '<system-reminder>x</system-reminder>' }
+      },
+      {
+        uuid: 'task-real-shape',
+        parentUuid: 'hook-real-shape',
+        sessionId: 'origin-session',
+        type: 'user',
+        timestamp: '2026-07-19T10:02:00',
+        origin: { kind: 'task-notification' },
+        promptSource: 'system',
+        message: { role: 'user', content: '<task-notification>x</task-notification>' }
+      },
+      {
+        uuid: 'human-real-shape',
+        parentUuid: 'task-real-shape',
+        sessionId: 'origin-session',
+        type: 'user',
+        timestamp: '2026-07-19T10:03:00',
+        origin: { kind: 'human' },
+        promptSource: 'typed',
+        message: { role: 'user', content: '真人问题' }
+      },
+      {
+        uuid: 'assistant-message',
+        parentUuid: 'human-real-shape',
+        sessionId: 'origin-session',
+        type: 'assistant',
+        timestamp: '2026-07-19T10:04:00',
+        message: { role: 'assistant', content: '收到' }
+      }
+    ] as any, '来源标识核验', { createdAt: '2026-07-19T10:00:00', turnCount: 1 })
+
+    expect(md).toBe([
+      '# 来源标识核验',
+      '',
+      '> 7/19 10:00 | 1 轮对话',
+      '',
+      '**User** [7/19 10:01]',
+      '〔机器注入 · hook〕',
+      '## <system-reminder>x</system-reminder>',
+      '<system-reminder>x</system-reminder>',
+      '',
+      '**User** [7/19 10:02]',
+      '〔机器注入 · task-notification〕',
+      '## <task-notification>x</task-notification>',
+      '<task-notification>x</task-notification>',
+      '',
+      '**User** [7/19 10:03]',
+      '## 真人问题',
+      '真人问题',
+      '',
+      '**Assistant** [7/19 10:04]',
+      '收到',
+      ''
+    ].join('\n'))
+  })
+
   it('generateTranscript 在写入前打码', () => {
     const candidate = `WK${'a'.repeat(34)}`
     const md = lib.generateTranscript([

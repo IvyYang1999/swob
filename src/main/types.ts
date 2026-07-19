@@ -5,6 +5,8 @@ export interface TokenUsage {
   cacheReadTokens: number
 }
 
+export type TranscriptOrigin = 'human' | 'task-notification' | 'hook' | 'command' | 'tool' | 'unknown'
+
 export interface RawJsonlMessage {
   uuid: string
   parentUuid: string | null
@@ -18,6 +20,9 @@ export interface RawJsonlMessage {
   slug?: string
   isSidechain?: boolean
   permissionMode?: string
+  origin?: { kind?: string } | string
+  promptSource?: string
+  isMeta?: boolean
   message?: {
     role: string
     model?: string
@@ -52,6 +57,7 @@ export interface ParsedMessage {
   subtype?: string
   timestamp: string
   role?: string
+  origin: TranscriptOrigin
   textContent: string
   toolCalls: ToolCallInfo[]
   images: string[] // data URLs for pasted/inline images

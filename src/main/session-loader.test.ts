@@ -540,6 +540,7 @@ describe('buildSessionDetail', () => {
     // 第三条消息（task-notification）应该有特殊 subtype
     const taskNotif = detail!.messages.find((m) => m.subtype === 'task-notification')
     expect(taskNotif).toBeDefined()
+    expect(taskNotif!.origin).toBe('task-notification')
     expect(taskNotif!.textContent).toContain('task-notification')
   })
 

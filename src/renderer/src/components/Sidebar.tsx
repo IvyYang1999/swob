@@ -127,6 +127,24 @@ function SessionItem({
         {session.source === 'zcode' && (
           <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-cyan/15 text-soft-cyan font-medium">ZC</span>
         )}
+        {session.source === 'cc-mirror' && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-pink/15 text-soft-pink font-medium">Mirror</span>
+        )}
+        {session.source === 'antigravity' && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-purple/15 text-soft-purple font-medium">AGY</span>
+        )}
+        {session.source === 'grok' && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-secondary/10 text-secondary font-medium">Grok</span>
+        )}
+        {session.source === 'pi' && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-teal/15 text-soft-teal font-medium">Pi</span>
+        )}
+        {session.source === 'kimi' && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-orange/15 text-soft-orange font-medium">Kimi</span>
+        )}
+        {session.source === 'hermes' && (
+          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-purple/15 text-soft-purple font-medium">Hermes</span>
+        )}
         {session.compactCount > 0 && (
           <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
         )}

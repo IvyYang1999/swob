@@ -9,6 +9,12 @@ export function detectSessionSourceFromPath(filePath?: string): SessionSource | 
   if (normalized.includes('/.cursor/projects/')) return 'cursor'
   if (normalized.includes('/.local/share/opencode/opencode.db')) return 'opencode'
   if (normalized.includes('/.zcode/')) return 'zcode'
+  if (normalized.includes('/.cc-mirror/')) return 'cc-mirror'
+  if (normalized.includes('/.gemini/antigravity')) return 'antigravity'
+  if (normalized.includes('/.grok/sessions/') || normalized.includes('/.factory/sessions/')) return 'grok'
+  if (normalized.includes('/.pi/agent/sessions/')) return 'pi'
+  if (normalized.includes('/.kimi-code/sessions/')) return 'kimi'
+  if (normalized.includes('/.hermes/sessions/')) return 'hermes'
   if (normalized.includes('/.claude/projects/') || normalized.includes('/.claude-window/')) return 'claude-code'
   return null
 }

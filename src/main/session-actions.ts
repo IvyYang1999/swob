@@ -58,6 +58,16 @@ export function buildResumeCommand(
     }
     return cmd
   }
+  const newSourceCmds: Partial<Record<SessionSource, string>> = {
+    'cc-mirror': 'claude', antigravity: 'agy', grok: 'grok',
+    pi: 'pi', kimi: 'kimi', hermes: 'hermes'
+  }
+  const newCmd = source && newSourceCmds[source]
+  if (newCmd) {
+    cmd = `${newCmd} --resume ${quotedSessionId}`
+    if (cwd && fs.existsSync(cwd)) return `cd ${shellQuote(cwd)} && ${cmd}`
+    return cmd
+  }
 
   cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --resume ${quotedSessionId}`

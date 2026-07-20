@@ -18,6 +18,8 @@ const SOURCE_LABELS: Record<string, string> = {
   zcode: 'Zcode'
 }
 
+const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode']
+
 interface Node {
   id: string
   x: number
@@ -28,29 +30,45 @@ interface Node {
   project: string
   title: string
   turnCount: number
+  totalTokens: number
+  compactCount: number
+  createdAt: number
+  recency: number // 0..1, 1 = today
+  cwds: string[]
+  fileKeys: string[]
 }
-
-const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode']
 
 interface Edge {
   from: number
   to: number
-  type: string
+  type: string // lineage | project | source | time | cwd | files
+}
+
+function dayKey(ts: number): number {
+  return Math.floor(ts / 86400000)
 }
 
 function buildGraph(
-  sessions: Array<{ sessionId: string; id: string; source: string; projectPath?: string; firstUserMessage?: string; turnCount: number }>,
+  sessions: Array<{
+    sessionId: string; id: string; source: string; projectPath?: string;
+    firstUserMessage?: string; turnCount: number; createdAt: string;
+    tokenUsage?: { totalTokens: number }; compactCount: number;
+    cwds?: string[]; referencedFiles?: Array<{ path: string }>
+  }>,
   registry: { relations: Array<{ parent: string; child: string; type: string }> } | null
 ) {
   const idToIdx = new Map<string, number>()
   const nodes: Node[] = []
-  const cx = 0
-  const cy = 0
+  const now = Date.now()
 
-  // Assign each source a sector so same-harness nodes start clustered
   const sourceAngleBase = new Map<string, number>()
   SOURCE_ORDER.forEach((src, idx) => sourceAngleBase.set(src, (idx / SOURCE_ORDER.length) * Math.PI * 2))
   const sourceCounters = new Map<string, number>()
+  const srcTotals = new Map<string, number>()
+  for (const s of sessions) {
+    const src = s.source || 'claude-code'
+    srcTotals.set(src, (srcTotals.get(src) || 0) + 1)
+  }
 
   for (let i = 0; i < sessions.length; i++) {
     const s = sessions[i]
@@ -58,37 +76,50 @@ function buildGraph(
     const base = sourceAngleBase.get(src) || 0
     const count = sourceCounters.get(src) || 0
     sourceCounters.set(src, count + 1)
-    const srcTotal = sessions.filter(ss => (ss.source || 'claude-code') === src).length
+    const srcTotal = srcTotals.get(src) || 1
     const sectorWidth = (2 * Math.PI) / SOURCE_ORDER.length * 0.8
     const angle = base + (count / Math.max(srcTotal, 1)) * sectorWidth - sectorWidth / 2
     const r = 20 + Math.random() * 60
+    const created = new Date(s.createdAt).getTime() || now
+    const ageDays = (now - created) / 86400000
+    const recency = Math.max(0, Math.min(1, 1 - ageDays / 180))
+    const totalTokens = s.tokenUsage?.totalTokens || 0
+    const fileKeys = (s.referencedFiles || []).map(f => f.path).slice(0, 20)
+
     idToIdx.set(s.sessionId, i)
     idToIdx.set(s.id, i)
     nodes.push({
       id: s.sessionId,
-      x: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 20,
-      y: cy + Math.sin(angle) * r + (Math.random() - 0.5) * 20,
-      vx: 0,
-      vy: 0,
-      source: s.source || 'claude-code',
+      x: Math.cos(angle) * r + (Math.random() - 0.5) * 20,
+      y: Math.sin(angle) * r + (Math.random() - 0.5) * 20,
+      vx: 0, vy: 0,
+      source: src,
       project: s.projectPath || '',
       title: s.firstUserMessage?.slice(0, 80) || s.sessionId.slice(0, 12),
-      turnCount: s.turnCount
+      turnCount: s.turnCount,
+      totalTokens,
+      compactCount: s.compactCount || 0,
+      createdAt: created,
+      recency,
+      cwds: s.cwds || [],
+      fileKeys
     })
   }
 
   const edges: Edge[] = []
+
+  // 1. Lineage edges (strongest)
   if (registry) {
     for (const r of registry.relations) {
       const fi = idToIdx.get(r.parent)
       const ti = idToIdx.get(r.child)
       if (fi !== undefined && ti !== undefined) {
-        edges.push({ from: fi, to: ti, type: r.type })
+        edges.push({ from: fi, to: ti, type: 'lineage' })
       }
     }
   }
 
-  // Add weak edges: same project (chain neighbors for visual density)
+  // 2. Same project chain
   const projectMap = new Map<string, number[]>()
   for (let i = 0; i < nodes.length; i++) {
     const p = nodes[i].project
@@ -104,16 +135,59 @@ function buildGraph(
     }
   }
 
-  // Strong same-source clustering: chain every adjacent pair → sub-ball per harness
+  // 3. Same source chain (harness clustering)
   const sourceMap = new Map<string, number[]>()
   for (let i = 0; i < nodes.length; i++) {
-    const src = nodes[i].source
-    if (!sourceMap.has(src)) sourceMap.set(src, [])
-    sourceMap.get(src)!.push(i)
+    if (!sourceMap.has(nodes[i].source)) sourceMap.set(nodes[i].source, [])
+    sourceMap.get(nodes[i].source)!.push(i)
   }
   for (const [, indices] of sourceMap) {
     for (let i = 0; i < indices.length - 1; i++) {
       edges.push({ from: indices[i], to: indices[i + 1], type: 'source' })
+    }
+  }
+
+  // 4. Time proximity — same day sessions link
+  const dayMap = new Map<number, number[]>()
+  for (let i = 0; i < nodes.length; i++) {
+    const dk = dayKey(nodes[i].createdAt)
+    if (!dayMap.has(dk)) dayMap.set(dk, [])
+    dayMap.get(dk)!.push(i)
+  }
+  for (const [, indices] of dayMap) {
+    if (indices.length < 2) continue
+    for (let i = 0; i < Math.min(indices.length - 1, 30); i++) {
+      edges.push({ from: indices[i], to: indices[i + 1], type: 'time' })
+    }
+  }
+
+  // 5. Same working directory
+  const cwdMap = new Map<string, number[]>()
+  for (let i = 0; i < nodes.length; i++) {
+    for (const cwd of nodes[i].cwds.slice(0, 3)) {
+      if (!cwdMap.has(cwd)) cwdMap.set(cwd, [])
+      cwdMap.get(cwd)!.push(i)
+    }
+  }
+  for (const [, indices] of cwdMap) {
+    if (indices.length < 2 || indices.length > 300) continue
+    for (let i = 0; i < Math.min(indices.length - 1, 20); i++) {
+      edges.push({ from: indices[i], to: indices[i + 1], type: 'cwd' })
+    }
+  }
+
+  // 6. File overlap — sessions sharing referenced files
+  const fileMap = new Map<string, number[]>()
+  for (let i = 0; i < nodes.length; i++) {
+    for (const fk of nodes[i].fileKeys) {
+      if (!fileMap.has(fk)) fileMap.set(fk, [])
+      fileMap.get(fk)!.push(i)
+    }
+  }
+  for (const [, indices] of fileMap) {
+    if (indices.length < 2 || indices.length > 100) continue
+    for (let i = 0; i < Math.min(indices.length - 1, 10); i++) {
+      edges.push({ from: indices[i], to: indices[i + 1], type: 'files' })
     }
   }
 
@@ -123,18 +197,16 @@ function buildGraph(
 function simulate(nodes: Node[], edges: Edge[], iterations: number) {
   const n = nodes.length
   const repulsion = 60
-  const attraction = 0.08
-  const projectAttraction = 0.01
   const damping = 0.8
   const maxForce = 4
 
-  const projectMap = new Map<string, number[]>()
-  for (let i = 0; i < n; i++) {
-    const p = nodes[i].project
-    if (p) {
-      if (!projectMap.has(p)) projectMap.set(p, [])
-      projectMap.get(p)!.push(i)
-    }
+  const STRENGTH: Record<string, number> = {
+    lineage: 0.1,
+    project: 0.012,
+    source: 0.025,
+    time: 0.008,
+    cwd: 0.01,
+    files: 0.006
   }
 
   for (let iter = 0; iter < iterations; iter++) {
@@ -144,7 +216,6 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
       let fx = 0
       let fy = 0
 
-      // Sample-based repulsion (avoid O(n²) for large graphs)
       const sampleSize = Math.min(50, n)
       for (let s = 0; s < sampleSize; s++) {
         const j = s < 10 ? (i + s + 1) % n : Math.floor(Math.random() * n)
@@ -157,16 +228,19 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
         fy += (dy / dist) * force
       }
 
-      // Per-source gravity well — each harness has its own center
+      // Per-source gravity well
       const srcIdx = SOURCE_ORDER.indexOf(nodes[i].source)
       const wellAngle = srcIdx >= 0 ? (srcIdx / SOURCE_ORDER.length) * Math.PI * 2 : 0
       const wellR = 80
       const wellX = Math.cos(wellAngle) * wellR
       const wellY = Math.sin(wellAngle) * wellR
-      const cx = -(nodes[i].x - wellX) * 0.04
-      const cy = -(nodes[i].y - wellY) * 0.04
-      fx += cx
-      fy += cy
+      fx += -(nodes[i].x - wellX) * 0.04
+      fy += -(nodes[i].y - wellY) * 0.04
+
+      // Importance centrality: high-token sessions pulled slightly toward center
+      const importance = Math.min(1, nodes[i].totalTokens / 500000)
+      fx += -nodes[i].x * importance * 0.005
+      fy += -nodes[i].y * importance * 0.005
 
       const fMag = Math.sqrt(fx * fx + fy * fy)
       if (fMag > maxForce) {
@@ -178,16 +252,13 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
       nodes[i].vy = (nodes[i].vy + fy * temp) * damping
     }
 
-    // Edge attraction — strong for lineage, weak for project/source
     for (const e of edges) {
       const a = nodes[e.from]
       const b = nodes[e.to]
       const dx = b.x - a.x
       const dy = b.y - a.y
       const dist = Math.sqrt(dx * dx + dy * dy) + 1
-      const str = e.type === 'project' ? projectAttraction
-                : e.type === 'source' ? projectAttraction * 3
-                : attraction
+      const str = STRENGTH[e.type] || 0.01
       const force = dist * str * temp
       a.vx += (dx / dist) * force
       a.vy += (dy / dist) * force
@@ -215,6 +286,7 @@ export function LineagePage() {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
   const graphRef = useRef<{ nodes: Node[]; edges: Edge[] } | null>(null)
   const transformRef = useRef({ x: 0, y: 0, scale: 1 })
+  const dragRef = useRef<{ dragging: boolean; lastX: number; lastY: number }>({ dragging: false, lastX: 0, lastY: 0 })
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
@@ -253,18 +325,18 @@ export function LineagePage() {
     ctx.translate(rect.width / 2 + t.x, rect.height / 2 + t.y)
     ctx.scale(t.scale, t.scale)
 
-    // Draw edges — weak ones first, then strong
+    // Draw edges
     for (const e of graph.edges) {
       const a = graph.nodes[e.from]
       const b = graph.nodes[e.to]
-      if (e.type === 'project' || e.type === 'source') {
-        ctx.globalAlpha = 0.06
+      if (e.type === 'lineage') {
+        ctx.globalAlpha = 0.4
+        ctx.lineWidth = 1.2
+        ctx.strokeStyle = '#60a5fa'
+      } else {
+        ctx.globalAlpha = 0.04
         ctx.lineWidth = 0.3
         ctx.strokeStyle = getComputedStyle(canvas).color || '#888'
-      } else {
-        ctx.globalAlpha = 0.35
-        ctx.lineWidth = 1
-        ctx.strokeStyle = e.type === 'fork' ? '#a78bfa' : '#60a5fa'
       }
       ctx.beginPath()
       ctx.moveTo(a.x, a.y)
@@ -272,29 +344,36 @@ export function LineagePage() {
       ctx.stroke()
     }
 
-    // Draw nodes — small dots, tight ball
+    // Draw nodes with recency fade + size by importance
     for (const node of graph.nodes) {
       const color = SOURCE_COLORS[node.source] || '#94a3b8'
-      const size = Math.max(1.5, Math.min(4, Math.sqrt(node.turnCount) * 0.3))
+      // Size: base from turns, boost from tokens and compacts
+      const turnSize = Math.sqrt(node.turnCount) * 0.25
+      const tokenBoost = Math.min(1.5, node.totalTokens / 300000)
+      const compactBoost = Math.min(1, node.compactCount * 0.3)
+      const size = Math.max(1.2, Math.min(5, turnSize + tokenBoost + compactBoost))
+
+      // Opacity: recent = bright, old = faded
+      const baseAlpha = 0.3 + node.recency * 0.6 // 0.3 for 180d+ old, 0.9 for today
       ctx.fillStyle = color
-      ctx.globalAlpha = node === hoveredNode ? 1 : 0.75
+      ctx.globalAlpha = node === hoveredNode ? 1 : baseAlpha
       ctx.beginPath()
       ctx.arc(node.x, node.y, size, 0, Math.PI * 2)
       ctx.fill()
     }
 
-    // Hovered node glow
+    // Hovered node glow + label
     if (hoveredNode) {
       const color = SOURCE_COLORS[hoveredNode.source] || '#94a3b8'
-      ctx.globalAlpha = 0.25
+      ctx.globalAlpha = 0.2
       ctx.fillStyle = color
       ctx.beginPath()
-      ctx.arc(hoveredNode.x, hoveredNode.y, 10, 0, Math.PI * 2)
+      ctx.arc(hoveredNode.x, hoveredNode.y, 12, 0, Math.PI * 2)
       ctx.fill()
       ctx.globalAlpha = 1
       ctx.fillStyle = color
       ctx.beginPath()
-      ctx.arc(hoveredNode.x, hoveredNode.y, 3, 0, Math.PI * 2)
+      ctx.arc(hoveredNode.x, hoveredNode.y, 3.5, 0, Math.PI * 2)
       ctx.fill()
     }
 
@@ -302,9 +381,7 @@ export function LineagePage() {
   }, [hoveredNode])
 
   useEffect(() => {
-    if (ready) {
-      draw()
-    }
+    if (ready) draw()
   }, [ready, draw])
 
   useEffect(() => {
@@ -317,37 +394,43 @@ export function LineagePage() {
     const canvas = canvasRef.current
     const graph = graphRef.current
     if (!canvas || !graph) return null
-
     const rect = canvas.getBoundingClientRect()
     const t = transformRef.current
     const mx = (clientX - rect.left - rect.width / 2 - t.x) / t.scale
     const my = (clientY - rect.top - rect.height / 2 - t.y) / t.scale
-
     let closest: Node | null = null
-    let closestDist = 15
-
+    let closestDist = 15 / t.scale
     for (const node of graph.nodes) {
-      const dx = node.x - mx
-      const dy = node.y - my
-      const dist = Math.sqrt(dx * dx + dy * dy)
-      if (dist < closestDist) {
-        closestDist = dist
-        closest = node
-      }
+      const dist = Math.sqrt((node.x - mx) ** 2 + (node.y - my) ** 2)
+      if (dist < closestDist) { closestDist = dist; closest = node }
     }
     return closest
   }, [])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (dragRef.current.dragging) {
+      transformRef.current.x += e.clientX - dragRef.current.lastX
+      transformRef.current.y += e.clientY - dragRef.current.lastY
+      dragRef.current.lastX = e.clientX
+      dragRef.current.lastY = e.clientY
+      draw()
+      return
+    }
     const node = findNodeAt(e.clientX, e.clientY)
     setMousePos({ x: e.clientX, y: e.clientY })
-    if (node !== hoveredNode) {
-      setHoveredNode(node)
-      draw()
-    }
+    if (node !== hoveredNode) { setHoveredNode(node); draw() }
   }, [findNodeAt, hoveredNode, draw])
 
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    dragRef.current = { dragging: true, lastX: e.clientX, lastY: e.clientY }
+  }, [])
+
+  const handleMouseUp = useCallback(() => {
+    dragRef.current.dragging = false
+  }, [])
+
   const handleClick = useCallback((e: React.MouseEvent) => {
+    if (dragRef.current.dragging) return
     const node = findNodeAt(e.clientX, e.clientY)
     if (node) {
       const session = sessions.find((s) => s.sessionId === node.id)
@@ -361,12 +444,10 @@ export function LineagePage() {
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
     const delta = e.deltaY > 0 ? 0.9 : 1.1
-    transformRef.current.scale *= delta
-    transformRef.current.scale = Math.max(0.1, Math.min(5, transformRef.current.scale))
+    transformRef.current.scale = Math.max(0.1, Math.min(8, transformRef.current.scale * delta))
     draw()
   }, [draw])
 
-  // Source legend stats
   const sourceCounts = sessions.reduce((acc, s) => {
     const src = s.source || 'claude-code'
     acc[src] = (acc[src] || 0) + 1
@@ -382,9 +463,13 @@ export function LineagePage() {
     )
   }
 
+  const formatDate = (ts: number) => {
+    const d = new Date(ts)
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+  }
+
   return (
     <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden relative">
-      {/* Legend bar */}
       <div className="flex items-center gap-4 px-4 py-2 border-b border-edge text-xs text-secondary shrink-0 flex-wrap">
         <span className="text-sm font-medium text-primary flex items-center gap-1.5">
           <GitBranch size={14} />
@@ -400,30 +485,36 @@ export function LineagePage() {
         <span className="text-muted ml-auto">{sessions.length} sessions</span>
       </div>
 
-      {/* Canvas */}
       <canvas
         ref={canvasRef}
-        className="flex-1 cursor-crosshair"
+        className="flex-1"
+        style={{ width: '100%', height: '100%', cursor: dragRef.current.dragging ? 'grabbing' : 'grab' }}
         onMouseMove={handleMouseMove}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
         onClick={handleClick}
         onWheel={handleWheel}
-        style={{ width: '100%', height: '100%' }}
       />
 
-      {/* Tooltip */}
-      {hoveredNode && (
+      {hoveredNode && !dragRef.current.dragging && (
         <div
-          className="fixed z-50 px-3 py-2 rounded-lg border border-edge bg-base shadow-lg text-xs max-w-[280px] pointer-events-none"
+          className="fixed z-50 px-3 py-2 rounded-lg border border-edge bg-base shadow-lg text-xs max-w-[300px] pointer-events-none"
           style={{ left: mousePos.x + 12, top: mousePos.y - 10 }}
         >
           <div className="flex items-center gap-2 mb-1">
             <span className="inline-block w-2 h-2 rounded-full" style={{ background: SOURCE_COLORS[hoveredNode.source] || '#94a3b8' }} />
             <span className="font-medium text-body">{SOURCE_LABELS[hoveredNode.source] || hoveredNode.source}</span>
-            <span className="text-muted">{hoveredNode.turnCount} turns</span>
           </div>
-          <div className="text-body truncate">{hoveredNode.title}</div>
-          {hoveredNode.project && (
-            <div className="text-muted truncate mt-0.5">{hoveredNode.project}</div>
+          <div className="text-body truncate mb-1">{hoveredNode.title}</div>
+          <div className="text-muted space-x-2">
+            <span>{hoveredNode.turnCount} turns</span>
+            {hoveredNode.totalTokens > 0 && <span>· {Math.round(hoveredNode.totalTokens / 1000)}k tok</span>}
+            {hoveredNode.compactCount > 0 && <span>· {hoveredNode.compactCount}x compact</span>}
+            <span>· {formatDate(hoveredNode.createdAt)}</span>
+          </div>
+          {hoveredNode.cwds.length > 0 && (
+            <div className="text-muted truncate mt-0.5">{hoveredNode.cwds[0]}</div>
           )}
         </div>
       )}

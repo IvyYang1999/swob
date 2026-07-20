@@ -1013,6 +1013,18 @@ ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
   }
 })
 
+ipcMain.handle('session:getContextInspector', async (_event, filePath: string) => {
+  try {
+    const { parseSessionFile } = await import('./session-loader')
+    const { buildContextInspector } = await import('./context-inspector')
+    const messages = await parseSessionFile(filePath)
+    const sessionId = path.basename(filePath, '.jsonl')
+    return buildContextInspector(messages, sessionId)
+  } catch {
+    return null
+  }
+})
+
 // --- Config / Library IPC ---
 // These use the library manager but return the same shape the frontend expects
 

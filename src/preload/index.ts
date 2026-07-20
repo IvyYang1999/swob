@@ -100,6 +100,9 @@ const api = {
   // Execution Tree
   getExecutionTree: (filePath: string) => ipcRenderer.invoke('session:getExecutionTree', filePath),
 
+  // Context Inspector
+  getContextInspector: (filePath: string) => ipcRenderer.invoke('session:getContextInspector', filePath),
+
   // Spotlight
   spotlightSearch: (query: string) => ipcRenderer.invoke('spotlight:search', query),
   spotlightResume: (sessionId: string, cwd?: string) => ipcRenderer.invoke('spotlight:resume', sessionId, cwd),

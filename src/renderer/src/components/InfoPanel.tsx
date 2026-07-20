@@ -5,6 +5,7 @@ import { useT } from '../i18n'
 import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2, GitBranch, Copy, Check, Coins } from 'lucide-react'
 import { SessionFamilyTree } from './SessionFamilyTree'
 import { ExecutionTreePanel } from './ExecutionTreePanel'
+import { ContextInspectorPanel } from './ContextInspectorPanel'
 
 interface FileRef {
   path: string
@@ -579,6 +580,9 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
 
         {/* Execution tree — tool calls, agent spawns, token timeline */}
         <ExecutionTreePanel filePath={s.filePath} />
+
+        {/* Context Inspector — per-turn context pressure, category breakdown */}
+        <ContextInspectorPanel filePath={s.filePath} />
 
         {/* Branch relationships */}
         {hasBranches && (

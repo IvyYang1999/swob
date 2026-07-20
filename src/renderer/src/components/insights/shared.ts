@@ -19,6 +19,12 @@ export const SOURCE_COLORS: Record<string, string> = {
   cursor: '#a1a1aa',
   opencode: '#10b981',
   zcode: '#10b981',
+  'cc-mirror': '#f472b6',
+  antigravity: '#a78bfa',
+  grok: '#6b7280',
+  pi: '#14b8a6',
+  kimi: '#fb923c',
+  hermes: '#8b5cf6',
 }
 
 export const PROJECT_COLORS = [

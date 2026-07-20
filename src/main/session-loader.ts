@@ -258,8 +258,75 @@ export function getClaudeConfigDirForSessionFile(filePath: string, home = HOME):
   return undefined
 }
 
+function findJsonlFilesRecursive(root: string, maxDepth = 4): string[] {
+  const results: string[] = []
+  if (!isDirectory(root)) return results
+
+  function walk(dir: string, depth: number) {
+    if (depth > maxDepth) return
+    let entries: fs.Dirent[]
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      if (e.isFile() && e.name.endsWith('.jsonl')) results.push(full)
+      else if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules') walk(full, depth + 1)
+    }
+  }
+  walk(root, 0)
+  return results
+}
+
+function findJsonFilesFlat(root: string): string[] {
+  if (!isDirectory(root)) return []
+  try {
+    return fs.readdirSync(root)
+      .filter(f => f.endsWith('.json'))
+      .map(f => path.join(root, f))
+  } catch { return [] }
+}
+
+export function findNewSourceSessionFiles(home = HOME): string[] {
+  const files: string[] = []
+
+  // CC-Mirror: ~/.cc-mirror/*/projects/**/*.jsonl (same as Claude Code)
+  const ccMirrorRoot = path.join(home, '.cc-mirror')
+  if (isDirectory(ccMirrorRoot)) {
+    try {
+      for (const variant of fs.readdirSync(ccMirrorRoot, { withFileTypes: true })) {
+        if (!variant.isDirectory()) continue
+        const projRoot = path.join(ccMirrorRoot, variant.name, 'projects')
+        files.push(...findSessionFilesInProjectRoots([projRoot]))
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Antigravity: ~/.gemini/antigravity-cli/brain/**/transcript.jsonl
+  const agyRoot = path.join(home, '.gemini', 'antigravity-cli', 'brain')
+  files.push(...findJsonlFilesRecursive(agyRoot))
+  const agyOldRoot = path.join(home, '.gemini', 'antigravity', 'brain')
+  files.push(...findJsonlFilesRecursive(agyOldRoot))
+
+  // Grok/Droid: ~/.grok/sessions/**/*.jsonl or ~/.factory/sessions/**/*.jsonl
+  files.push(...findJsonlFilesRecursive(path.join(home, '.grok', 'sessions')))
+  files.push(...findJsonlFilesRecursive(path.join(home, '.factory', 'sessions')))
+
+  // Pi: ~/.pi/agent/sessions/**/*.jsonl
+  files.push(...findJsonlFilesRecursive(path.join(home, '.pi', 'agent', 'sessions')))
+
+  // Kimi: ~/.kimi-code/sessions/**/wire.jsonl
+  files.push(...findJsonlFilesRecursive(path.join(home, '.kimi-code', 'sessions')))
+
+  // Hermes: ~/.hermes/sessions/*.json
+  files.push(...findJsonFilesFlat(path.join(home, '.hermes', 'sessions')))
+
+  return files
+}
+
 export function findAllSessionFiles(): string[] {
-  return findSessionFilesInProjectRoots(findClaudeProjectRoots())
+  return [
+    ...findSessionFilesInProjectRoots(findClaudeProjectRoots()),
+    ...findNewSourceSessionFiles()
+  ]
 }
 
 function extractText(content: string | ContentPart[] | undefined): string {

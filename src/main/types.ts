@@ -84,7 +84,7 @@ export interface SkillInvocation {
   args?: string
 }
 
-export type SessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode'
+export type SessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode' | 'cc-mirror' | 'antigravity' | 'grok' | 'pi' | 'kimi' | 'hermes'
 
 export interface SessionSummary {
   id: string

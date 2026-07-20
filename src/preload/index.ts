@@ -94,6 +94,9 @@ const api = {
   // Insights
   getInsights: () => ipcRenderer.invoke('insights:get'),
 
+  // Lineage
+  getLineageRegistry: () => ipcRenderer.invoke('lineage:getRegistry'),
+
   // Spotlight
   spotlightSearch: (query: string) => ipcRenderer.invoke('spotlight:search', query),
   spotlightResume: (sessionId: string, cwd?: string) => ipcRenderer.invoke('spotlight:resume', sessionId, cwd),

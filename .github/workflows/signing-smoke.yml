@@ -2,6 +2,15 @@ name: macOS Signing Smoke Test
 
 on:
   workflow_dispatch:
+  # Bootstrap the first credential test before this workflow reaches master.
+  # Remove this exact-branch trigger after t090 is merged; workflow_dispatch
+  # remains the permanent, non-publishing smoke-test entry point.
+  push:
+    branches:
+      - feature/t090-signing-smoke
+    paths:
+      - .github/workflows/signing-smoke.yml
+      - electron-builder.yml
 
 concurrency:
   group: macos-signing-smoke

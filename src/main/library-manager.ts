@@ -13,6 +13,10 @@ import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFi
 import { redactSecrets } from './secret-redactor'
 import { shellQuote } from './resume-terminal'
 import {
+  ensureClaudeResumeTarget,
+  type ClaudeResumeRecoveryFailureReason
+} from './resume-recovery-service'
+import {
   extractRemoteUser,
   isRemoteProjectPathForUser,
   resolveSessionRemoteState,
@@ -637,7 +641,10 @@ function backupPathForDir(dirPath?: string | null): string | null {
 
 function hasBackupForDir(dirPath?: string | null): boolean {
   const backupPath = backupPathForDir(dirPath)
-  return !!backupPath && fs.existsSync(backupPath)
+  return !!backupPath && (
+    fs.existsSync(backupPath) ||
+    fs.existsSync(path.join(path.dirname(backupPath), `.${path.basename(backupPath)}.icloud`))
+  )
 }
 
 function detectSourceFromSourcePaths(sourceFilePaths: string[], fallback?: SessionSource): SessionSource {
@@ -740,37 +747,118 @@ export function getSessionResumeAvailability(
   }
 }
 
-export function restoreBackupToClaudeSource(sessionId: string): {
-  restored: boolean
+export interface SessionResumePreparationResult {
+  ok: boolean
   sourcePath: string | null
+  state?: 'source-present' | 'already-present' | 'restored'
   reason?: string
-} {
+  failureCode?: ClaudeResumeRecoveryFailureReason | 'session-not-in-library' | 'missing-meta' |
+    'missing-source-path' | 'recovery-required' | 'unsupported-source'
+}
+
+export interface SessionResumePreparationOptions {
+  allowRecovery?: boolean
+  requestedSessionId?: string
+  allowUnverifiedBackup?: boolean
+  preferredTargetInstanceId?: string
+  /** Test/adapter boundary; production callers use the actual local installation. */
+  runtimeIdentity?: {
+    homeDir: string
+    localDeviceId?: string
+    localUsername: string
+  }
+}
+
+function recoveryFailureMessage(reason: ClaudeResumeRecoveryFailureReason): string {
+  if (reason === 'unverified-backup') return '备份缺少 SHA-256/大小证据，需要明确确认后才能复活'
+  if (reason === 'invalid-backup') return '备份未通过严格 JSONL 校验，未写入 Claude 源目录'
+  if (reason === 'target-conflict') return '目标 Claude 实例已有同名或同 ID 会话，已停止以避免覆盖'
+  if (reason === 'recovery-locked') return '另一 Swob 进程正在复活该会话，请稍后重试'
+  if (reason === 'remote-source-requires-explicit-target') return '这是其他安装的会话，需要先选择要导入的 Claude 实例'
+  if (reason === 'target-instance-untrusted' || reason === 'target-instance-unavailable') {
+    return '目标 Claude 实例不可用或未通过路径安全检查'
+  }
+  if (reason === 'materialization-failed') return 'iCloud 备份尚未完整下载或完整性证据不匹配'
+  if (reason === 'missing-backup') return '找不到可用于复活的备份'
+  if (reason === 'post-publish-verification-failed') return '目标已发布但最终校验失败，已保留现场且未自动删除'
+  return `无法复活会话：${reason}`
+}
+
+/** The sole Library-to-Claude recovery adapter used by every local resume entry point. */
+export async function ensureSessionResumeTarget(
+  sessionId: string,
+  options: SessionResumePreparationOptions = {}
+): Promise<SessionResumePreparationResult> {
   const dirPath = sessionIndex.get(sessionId)
-  if (!dirPath) return { restored: false, sourcePath: null, reason: 'session-not-in-library' }
+  if (!dirPath) {
+    return { ok: false, sourcePath: null, failureCode: 'session-not-in-library', reason: '会话不在 Library 中' }
+  }
 
   const meta = readSessionMeta(dirPath)
-  if (!meta) return { restored: false, sourcePath: null, reason: 'missing-meta' }
+  if (!meta) return { ok: false, sourcePath: null, failureCode: 'missing-meta', reason: '会话元数据无效' }
 
   const sourceFilePaths = sourceFilePathsFromMeta(meta)
   if (!sourceFilePaths || sourceFilePaths.length === 0) {
-    return { restored: false, sourcePath: null, reason: 'missing-source-path' }
+    return { ok: false, sourcePath: null, failureCode: 'missing-source-path', reason: '会话缺少源路径' }
   }
 
-  const existingSource = sourceFilePaths.find((src) => fs.existsSync(sourceStatPath(src)))
-  if (existingSource) return { restored: false, sourcePath: existingSource, reason: 'source-exists' }
+  const claudeSourcePaths = sourceFilePaths.filter((sourcePath) =>
+    detectSessionSourceFromPath(sourcePath) === 'claude-code')
+  const lastClaudePhysicalId = claudeSourcePaths.length > 0
+    ? path.basename(claudeSourcePaths[claudeSourcePaths.length - 1], '.jsonl')
+    : undefined
+  const requestedPhysicalId = options.requestedSessionId && options.requestedSessionId !== meta.sessionId &&
+    claudeSourcePaths.some((sourcePath) => path.basename(sourcePath, '.jsonl') === options.requestedSessionId)
+    ? options.requestedSessionId
+    : lastClaudePhysicalId
+  const sourcePathsRequiredForAction = requestedPhysicalId
+    ? claudeSourcePaths.filter((sourcePath) => path.basename(sourcePath, '.jsonl') === requestedPhysicalId)
+    : sourceFilePaths
+  const existingSource = sourcePathsRequiredForAction.find((src) => fs.existsSync(sourceStatPath(src)))
+  if (existingSource) return { ok: true, state: 'source-present', sourcePath: existingSource }
 
-  const sourcePath = sourceFilePaths[0]
-
-  if (!isRestorableLocalClaudeSource(sourcePath)) {
-    return { restored: false, sourcePath, reason: 'source-outside-local-claude-projects' }
+  const hasClaudeSource = sourceFilePaths.some((sourcePath) =>
+    detectSessionSourceFromPath(sourcePath) === 'claude-code')
+  if (!hasClaudeSource) {
+    return {
+      ok: false,
+      sourcePath: sourceFilePaths[0],
+      failureCode: 'unsupported-source',
+      reason: LOCAL_RESUME_UNAVAILABLE_REASON
+    }
+  }
+  if (!options.allowRecovery) {
+    return {
+      ok: false,
+      sourcePath: sourceFilePaths[0],
+      failureCode: 'recovery-required',
+      reason: '源记录缺失；请先在 Swob 中执行复活。复制命令不会改写 Claude 源目录'
+    }
   }
 
-  const backupPath = path.join(dirPath, BACKUP_FILE)
-  if (!fs.existsSync(backupPath)) return { restored: false, sourcePath, reason: 'missing-backup' }
-
-  fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
-  fs.copyFileSync(backupPath, sourcePath)
-  return { restored: true, sourcePath }
+  const runtimeIdentity = options.runtimeIdentity || {
+    homeDir: os.homedir(),
+    localDeviceId: getOrCreateLocalDeviceId(),
+    localUsername: os.userInfo().username
+  }
+  const recovery = await ensureClaudeResumeTarget({
+    sessionId,
+    libraryMeta: meta,
+    backupPath: path.join(dirPath, BACKUP_FILE),
+    homeDir: runtimeIdentity.homeDir,
+    localDeviceId: runtimeIdentity.localDeviceId,
+    localUsername: runtimeIdentity.localUsername,
+    physicalSessionId: requestedPhysicalId,
+    preferredTargetInstanceId: options.preferredTargetInstanceId,
+    allowUnverifiedBackup: options.allowUnverifiedBackup
+  })
+  if (recovery.ok) return { ok: true, state: recovery.state, sourcePath: recovery.sourcePath }
+  return {
+    ok: false,
+    sourcePath: recovery.sourcePath || sourceFilePaths[0],
+    failureCode: recovery.reason,
+    reason: recoveryFailureMessage(recovery.reason)
+  }
 }
 
 /**

@@ -615,79 +615,107 @@ describe('Library-only sessions（跨设备同步）', () => {
     expect(missingSourceResults.some((r) => r.sessionId === 'missing-source-999')).toBe(true)
   })
 
-  it('【曾经的 bug】本机原始 JSONL 丢失时，resume 前应该从 Library backup 恢复', () => {
-    const localSourceDir = path.join(os.homedir(), '.claude', 'projects', `-swob-test-${process.pid}-${Date.now()}`)
-    const localSourcePath = path.join(localSourceDir, 'lost-local-999.jsonl')
+  it('【曾经的 bug】本机原始 JSONL 丢失时，通过唯一事务入口从 Library backup 恢复', async () => {
+    const sessionId = '83000000-0000-4000-8000-000000000001'
+    const localSourceDir = path.join(testHome, '.claude', 'projects', `-swob-test-${process.pid}-${Date.now()}`)
+    const localSourcePath = path.join(localSourceDir, `${sessionId}.jsonl`)
     const sessionDir = path.join(tmpRoot, '本机丢失的对话')
-    const backupContent = '{"uuid":"u1","sessionId":"lost-local-999","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test","message":{"role":"user","content":"hello"}}\n'
+    const backupContent = `{"uuid":"u1","sessionId":"${sessionId}","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test","message":{"role":"user","content":"hello"}}\n`
 
+    fs.mkdirSync(path.join(testHome, '.claude', 'projects'), { recursive: true })
     fs.mkdirSync(sessionDir, { recursive: true })
     fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
-      sessionId: 'lost-local-999',
+      schemaVersion: 2,
+      sessionId,
       sourceFilePaths: [localSourcePath],
       createdAt: '2026-04-01T00:00:00Z',
       updatedAt: '2026-04-01T01:00:00Z',
-      projectPath: '/Users/test'
+      projectPath: '/Users/test',
+      backupSha256: createHash('sha256').update(backupContent).digest('hex'),
+      backupSize: Buffer.byteLength(backupContent),
+      origin: { deviceId: 'test-device', hostname: 'test-host', username: 'test', capturedAt: '2026-04-01T00:00:00Z' }
     }))
     fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
 
     lib.scanLibrary()
-    expect(lib.getSessionResumeAvailability('lost-local-999').canResume).toBe(true)
-    const result = lib.restoreBackupToClaudeSource('lost-local-999')
+    const result = await lib.ensureSessionResumeTarget(sessionId, {
+      allowRecovery: true,
+      runtimeIdentity: { homeDir: testHome, localDeviceId: 'test-device', localUsername: 'test' }
+    })
 
-    expect(result.restored).toBe(true)
+    expect(result).toMatchObject({ ok: true, state: 'restored' })
     expect(result.sourcePath).toBe(localSourcePath)
     expect(fs.readFileSync(localSourcePath, 'utf-8')).toBe(backupContent)
 
     fs.rmSync(localSourceDir, { recursive: true, force: true })
   })
 
-  it('Claude Window 配置目录下的原始 JSONL 丢失时也应该允许从 backup 恢复', () => {
-    const localConfigDir = path.join(os.homedir(), '.claude-window', `swob-test-${process.pid}-${Date.now()}`)
+  it('Claude Window 配置目录下的原始 JSONL 丢失时也走同一个事务入口', async () => {
+    const sessionId = '84000000-0000-4000-8000-000000000001'
+    const windowId = `swob-test-${process.pid}-${Date.now()}`
+    const localConfigDir = path.join(testHome, '.claude-window', windowId)
     const localSourceDir = path.join(localConfigDir, 'projects', '-Users-test-projects-draftbox')
-    const localSourcePath = path.join(localSourceDir, 'lost-window-999.jsonl')
+    const localSourcePath = path.join(localSourceDir, `${sessionId}.jsonl`)
     const sessionDir = path.join(tmpRoot, 'Claude Window 丢失的对话')
-    const backupContent = '{"uuid":"u1","sessionId":"lost-window-999","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test/projects/draftbox","message":{"role":"user","content":"hello"}}\n'
+    const backupContent = `{"uuid":"u1","sessionId":"${sessionId}","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test/projects/draftbox","message":{"role":"user","content":"hello"}}\n`
 
+    fs.mkdirSync(path.join(localConfigDir, 'projects'), { recursive: true })
     fs.mkdirSync(sessionDir, { recursive: true })
     fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
-      sessionId: 'lost-window-999',
+      schemaVersion: 2,
+      sessionId,
       sourceFilePaths: [localSourcePath],
       createdAt: '2026-04-01T00:00:00Z',
       updatedAt: '2026-04-01T01:00:00Z',
-      projectPath: '/Users/test/projects/draftbox'
+      projectPath: '/Users/test/projects/draftbox',
+      backupSha256: createHash('sha256').update(backupContent).digest('hex'),
+      backupSize: Buffer.byteLength(backupContent),
+      origin: { deviceId: 'test-device', hostname: 'test-host', username: 'test', capturedAt: '2026-04-01T00:00:00Z' },
+      sourceInstance: { kind: 'claude-window', configDir: localConfigDir }
     }))
     fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
 
     lib.scanLibrary()
-    const result = lib.restoreBackupToClaudeSource('lost-window-999')
+    const result = await lib.ensureSessionResumeTarget(sessionId, {
+      allowRecovery: true,
+      runtimeIdentity: { homeDir: testHome, localDeviceId: 'test-device', localUsername: 'test' }
+    })
 
-    expect(result.restored).toBe(true)
+    expect(result).toMatchObject({ ok: true, state: 'restored' })
     expect(result.sourcePath).toBe(localSourcePath)
     expect(fs.readFileSync(localSourcePath, 'utf-8')).toBe(backupContent)
 
     fs.rmSync(localConfigDir, { recursive: true, force: true })
   })
 
-  it('不会把其他机器路径的 backup 恢复到本机 Claude 目录外', () => {
-    const foreignSourcePath = '/Users/other-machine/.claude/projects/xxx/remote-999.jsonl'
+  it('不会把其他安装路径的 backup 自动恢复到本机 Claude 目录外', async () => {
+    const sessionId = '85000000-0000-4000-8000-000000000001'
+    const foreignSourcePath = `/Users/other-machine/.claude/projects/xxx/${sessionId}.jsonl`
     const sessionDir = path.join(tmpRoot, '其他机器的对话')
+    const backupContent = `{"uuid":"u1","sessionId":"${sessionId}","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/other-machine","message":{"role":"user","content":"hello"}}\n`
 
+    fs.mkdirSync(path.join(testHome, '.claude', 'projects'), { recursive: true })
     fs.mkdirSync(sessionDir, { recursive: true })
     fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
-      sessionId: 'remote-999',
+      schemaVersion: 2,
+      sessionId,
       sourceFilePaths: [foreignSourcePath],
       createdAt: '2026-04-01T00:00:00Z',
       updatedAt: '2026-04-01T01:00:00Z',
-      projectPath: '/Users/other-machine/projects/xxx'
+      projectPath: '/Users/other-machine/projects/xxx',
+      backupSha256: createHash('sha256').update(backupContent).digest('hex'),
+      backupSize: Buffer.byteLength(backupContent),
+      origin: { deviceId: 'other-device', hostname: 'other-host', username: 'other', capturedAt: '2026-04-01T00:00:00Z' }
     }))
-    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), '{"uuid":"u1","sessionId":"remote-999"}\n')
+    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
 
     lib.scanLibrary()
-    const result = lib.restoreBackupToClaudeSource('remote-999')
+    const result = await lib.ensureSessionResumeTarget(sessionId, {
+      allowRecovery: true,
+      runtimeIdentity: { homeDir: testHome, localDeviceId: 'test-device', localUsername: 'test' }
+    })
 
-    expect(result.restored).toBe(false)
-    expect(result.reason).toBe('source-outside-local-claude-projects')
+    expect(result).toMatchObject({ ok: false, failureCode: 'remote-source-requires-explicit-target' })
     expect(fs.existsSync(foreignSourcePath)).toBe(false)
   })
 })

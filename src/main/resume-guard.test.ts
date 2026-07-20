@@ -8,7 +8,7 @@ import {
   scanLibrary,
   LOCAL_RESUME_UNAVAILABLE_REASON
 } from './library-manager'
-import { openGuardedResumeCommand } from './resume-guard'
+import { buildGuardedResumeCommand, openGuardedResumeCommand } from './resume-guard'
 import type { SessionSource, SessionSummary } from './types'
 
 let tmpRoot: string
@@ -225,5 +225,80 @@ describe('resume guard', () => {
       canResume: true,
       sourcePath
     })
+  })
+
+  it('复制命令不触发恢复写入，真正打开 Resume 才跨过恢复动作边界', async () => {
+    const sessionId = '82000000-0000-4000-8000-000000000001'
+    const sourcePath = sourcePathFor(sessionId, 'claude-code', true)
+    writeSource(sourcePath, sessionId, 'claude-code')
+    const dirPath = path.join(tmpRoot, sessionId)
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: '2026-07-07T00:00:00Z',
+      updatedAt: '2026-07-07T00:01:00Z',
+      projectPath: tmpRoot
+    })
+    scanLibrary()
+
+    const recoveryFlags: boolean[] = []
+    const prepareResumeTarget = async (_id: string, options: { allowRecovery?: boolean }) => {
+      recoveryFlags.push(options.allowRecovery === true)
+      return options.allowRecovery
+        ? { ok: true, state: 'restored' as const, sourcePath }
+        : { ok: false, sourcePath, failureCode: 'recovery-required' as const, reason: 'recovery required' }
+    }
+
+    const copied = await buildGuardedResumeCommand({
+      sessionId,
+      sessions: [summary(sessionId, sourcePath, 'claude-code')],
+      prepareResumeTarget
+    })
+    expect(copied).toMatchObject({ ok: false, reason: 'recovery required' })
+
+    const opened: string[] = []
+    const resumed = await openGuardedResumeCommand({
+      sessionId,
+      sessions: [summary(sessionId, sourcePath, 'claude-code')],
+      prepareResumeTarget,
+      openCommand: (command) => opened.push(command)
+    })
+    expect(resumed.ok).toBe(true)
+    expect(opened).toHaveLength(1)
+    expect(recoveryFlags).toEqual([false, true])
+  })
+
+  it('continuation 物理 ID 复活时，用逻辑 Library ID 找备份但仍恢复物理 ID', async () => {
+    const logicalId = '86000000-0000-4000-8000-000000000001'
+    const physicalId = '86000000-0000-4000-8000-000000000002'
+    const sourcePath = sourcePathFor(physicalId, 'claude-code', true)
+    writeSource(sourcePath, physicalId, 'claude-code')
+    const dirPath = path.join(tmpRoot, logicalId)
+    writeSessionMeta(dirPath, {
+      sessionId: logicalId,
+      sourceFilePaths: [sourcePath],
+      createdAt: '2026-07-07T00:00:00Z',
+      updatedAt: '2026-07-07T00:01:00Z',
+      projectPath: tmpRoot
+    })
+    scanLibrary()
+
+    const parent = summary(logicalId, sourcePath, 'claude-code')
+    parent.continuationSessionIds = [physicalId]
+    parent.resumeSessionId = physicalId
+    const preparedIds: string[] = []
+    const result = await openGuardedResumeCommand({
+      sessionId: physicalId,
+      sessions: [parent],
+      prepareResumeTarget: async (sessionId) => {
+        preparedIds.push(sessionId)
+        return { ok: true, state: 'restored', sourcePath }
+      },
+      openCommand: () => undefined
+    })
+
+    expect(preparedIds).toEqual([logicalId])
+    expect(result).toMatchObject({ ok: true, sessionId: physicalId })
+    expect(result.command).toContain(physicalId)
   })
 })

@@ -92,7 +92,10 @@ export function Toolbar() {
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button
-          onClick={toggleLineage}
+          onClick={() => {
+            ;(window as any).__swobGraphOpenAt = performance.now()
+            toggleLineage()
+          }}
           className={`p-1.5 rounded hover:bg-hover ${lineageOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}
           title={t('toolbar.lineage')}
         >

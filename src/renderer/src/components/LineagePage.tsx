@@ -71,14 +71,7 @@ function computeLayout(
     connectedIds.add(r.child)
   }
 
-  const nodeIds = Object.keys(sessions).filter(
-    (id) => connectedIds.has(id) && !sessions[id].isAlias
-  )
-
-  if (connectedIds.size > 0 && nodeIds.length === 0) {
-    const allConnected = [...connectedIds].filter((id) => sessions[id])
-    nodeIds.push(...allConnected)
-  }
+  const nodeIds = [...connectedIds].filter((id) => sessions[id])
 
   if (nodeIds.length === 0) return { nodes: [], edges: [], width: 0, height: 0 }
 

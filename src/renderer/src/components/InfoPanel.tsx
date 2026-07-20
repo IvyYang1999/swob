@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import type { Highlight } from '../store'
 import { useT } from '../i18n'
 import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2, GitBranch, Copy, Check, Coins } from 'lucide-react'
+import { SessionFamilyTree } from './SessionFamilyTree'
 
 interface FileRef {
   path: string
@@ -571,6 +572,9 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
 
         {/* Highlights / annotations */}
         <HighlightList highlights={highlights} sessionId={s.sessionId} />
+
+        {/* Session family tree (lineage) */}
+        <SessionFamilyTree sessionId={s.sessionId} />
 
         {/* Branch relationships */}
         {hasBranches && (

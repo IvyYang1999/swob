@@ -143,7 +143,8 @@ export function buildSessionGraph(
   registry: LineageRegistryInput | null,
   now = Date.now()
 ): SessionGraphData {
-  const nodes = sessions.map((session): SessionGraphNode => {
+  const activeSessions = sessions.filter((s) => s.turnCount > 0)
+  const nodes = activeSessions.map((session): SessionGraphNode => {
     const source = normalizeSource(session.source)
     const createdAt = parseTime(session.createdAt, now)
     const updatedAt = parseTime(session.updatedAt, createdAt)

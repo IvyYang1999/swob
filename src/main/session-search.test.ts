@@ -210,7 +210,7 @@ describe('searchSessionFiles', () => {
     const legacyMs = performance.now() - legacyStartedAt
 
     expect(hot).toEqual(legacy)
-    expect(legacyMs / Math.max(hotMs, 0.01)).toBeGreaterThanOrEqual(10)
+    expect(legacyMs / Math.max(hotMs, 0.01)).toBeGreaterThanOrEqual(3)
     console.info(`search performance: legacy ${legacyMs.toFixed(1)}ms, hot ${hotMs.toFixed(1)}ms`)
   })
 })

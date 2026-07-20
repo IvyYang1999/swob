@@ -48,13 +48,13 @@ function buildGraph(
   for (let i = 0; i < sessions.length; i++) {
     const s = sessions[i]
     const angle = (i / sessions.length) * Math.PI * 2
-    const r = 200 + Math.random() * 300
+    const r = 30 + Math.random() * 80
     idToIdx.set(s.sessionId, i)
     idToIdx.set(s.id, i)
     nodes.push({
       id: s.sessionId,
-      x: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 100,
-      y: cy + Math.sin(angle) * r + (Math.random() - 0.5) * 100,
+      x: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 20,
+      y: cy + Math.sin(angle) * r + (Math.random() - 0.5) * 20,
       vx: 0,
       vy: 0,
       source: s.source || 'claude-code',
@@ -75,16 +75,45 @@ function buildGraph(
     }
   }
 
+  // Add weak edges: same project (chain neighbors for visual density)
+  const projectMap = new Map<string, number[]>()
+  for (let i = 0; i < nodes.length; i++) {
+    const p = nodes[i].project
+    if (p) {
+      if (!projectMap.has(p)) projectMap.set(p, [])
+      projectMap.get(p)!.push(i)
+    }
+  }
+  for (const [, indices] of projectMap) {
+    if (indices.length < 2) continue
+    for (let i = 0; i < indices.length - 1; i++) {
+      edges.push({ from: indices[i], to: indices[i + 1], type: 'project' })
+    }
+  }
+
+  // Add weak edges: same source (connect a sparse chain for clustering)
+  const sourceMap = new Map<string, number[]>()
+  for (let i = 0; i < nodes.length; i++) {
+    const src = nodes[i].source
+    if (!sourceMap.has(src)) sourceMap.set(src, [])
+    sourceMap.get(src)!.push(i)
+  }
+  for (const [, indices] of sourceMap) {
+    for (let i = 0; i < indices.length - 1; i += 5) {
+      edges.push({ from: indices[i], to: indices[Math.min(i + 5, indices.length - 1)], type: 'source' })
+    }
+  }
+
   return { nodes, edges }
 }
 
 function simulate(nodes: Node[], edges: Edge[], iterations: number) {
   const n = nodes.length
-  const repulsion = 800
-  const attraction = 0.03
-  const projectAttraction = 0.002
-  const damping = 0.85
-  const maxForce = 10
+  const repulsion = 60
+  const attraction = 0.08
+  const projectAttraction = 0.01
+  const damping = 0.8
+  const maxForce = 4
 
   const projectMap = new Map<string, number[]>()
   for (let i = 0; i < n; i++) {
@@ -115,9 +144,9 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
         fy += (dy / dist) * force
       }
 
-      // Center gravity
-      const cx = -nodes[i].x * 0.001
-      const cy = -nodes[i].y * 0.001
+      // Strong center gravity — pull into tight ball
+      const cx = -nodes[i].x * 0.03
+      const cy = -nodes[i].y * 0.03
       fx += cx
       fy += cy
 
@@ -131,35 +160,21 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
       nodes[i].vy = (nodes[i].vy + fy * temp) * damping
     }
 
-    // Edge attraction (strong: lineage)
+    // Edge attraction — strong for lineage, weak for project/source
     for (const e of edges) {
       const a = nodes[e.from]
       const b = nodes[e.to]
       const dx = b.x - a.x
       const dy = b.y - a.y
       const dist = Math.sqrt(dx * dx + dy * dy) + 1
-      const force = dist * attraction * temp
+      const str = e.type === 'project' ? projectAttraction
+                : e.type === 'source' ? projectAttraction * 0.5
+                : attraction
+      const force = dist * str * temp
       a.vx += (dx / dist) * force
       a.vy += (dy / dist) * force
       b.vx -= (dx / dist) * force
       b.vy -= (dy / dist) * force
-    }
-
-    // Weak attraction: same project
-    for (const [, indices] of projectMap) {
-      if (indices.length < 2 || indices.length > 200) continue
-      for (let i = 0; i < Math.min(indices.length, 20); i++) {
-        const a = indices[i]
-        const b = indices[(i + 1) % indices.length]
-        const dx = nodes[b].x - nodes[a].x
-        const dy = nodes[b].y - nodes[a].y
-        const dist = Math.sqrt(dx * dx + dy * dy) + 1
-        const force = dist * projectAttraction * temp
-        nodes[a].vx += (dx / dist) * force
-        nodes[a].vy += (dy / dist) * force
-        nodes[b].vx -= (dx / dist) * force
-        nodes[b].vy -= (dy / dist) * force
-      }
     }
 
     for (let i = 0; i < n; i++) {
@@ -220,26 +235,31 @@ export function LineagePage() {
     ctx.translate(rect.width / 2 + t.x, rect.height / 2 + t.y)
     ctx.scale(t.scale, t.scale)
 
-    // Draw edges
-    ctx.globalAlpha = 0.25
-    ctx.lineWidth = 0.8
+    // Draw edges — weak ones first, then strong
     for (const e of graph.edges) {
       const a = graph.nodes[e.from]
       const b = graph.nodes[e.to]
-      ctx.strokeStyle = e.type === 'fork' ? '#a78bfa' : '#60a5fa'
+      if (e.type === 'project' || e.type === 'source') {
+        ctx.globalAlpha = 0.06
+        ctx.lineWidth = 0.3
+        ctx.strokeStyle = getComputedStyle(canvas).color || '#888'
+      } else {
+        ctx.globalAlpha = 0.35
+        ctx.lineWidth = 1
+        ctx.strokeStyle = e.type === 'fork' ? '#a78bfa' : '#60a5fa'
+      }
       ctx.beginPath()
       ctx.moveTo(a.x, a.y)
       ctx.lineTo(b.x, b.y)
       ctx.stroke()
     }
 
-    // Draw nodes
-    ctx.globalAlpha = 1
+    // Draw nodes — small dots, tight ball
     for (const node of graph.nodes) {
       const color = SOURCE_COLORS[node.source] || '#94a3b8'
-      const size = Math.max(2.5, Math.min(6, Math.sqrt(node.turnCount) * 0.5))
+      const size = Math.max(1.5, Math.min(4, Math.sqrt(node.turnCount) * 0.3))
       ctx.fillStyle = color
-      ctx.globalAlpha = node === hoveredNode ? 1 : 0.7
+      ctx.globalAlpha = node === hoveredNode ? 1 : 0.75
       ctx.beginPath()
       ctx.arc(node.x, node.y, size, 0, Math.PI * 2)
       ctx.fill()
@@ -248,10 +268,15 @@ export function LineagePage() {
     // Hovered node glow
     if (hoveredNode) {
       const color = SOURCE_COLORS[hoveredNode.source] || '#94a3b8'
-      ctx.globalAlpha = 0.3
+      ctx.globalAlpha = 0.25
       ctx.fillStyle = color
       ctx.beginPath()
-      ctx.arc(hoveredNode.x, hoveredNode.y, 12, 0, Math.PI * 2)
+      ctx.arc(hoveredNode.x, hoveredNode.y, 10, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.globalAlpha = 1
+      ctx.fillStyle = color
+      ctx.beginPath()
+      ctx.arc(hoveredNode.x, hoveredNode.y, 3, 0, Math.PI * 2)
       ctx.fill()
     }
 

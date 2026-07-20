@@ -57,8 +57,9 @@ import {
   getRemoteCwdForSession,
   isRemoteProjectPath,
   extractRemoteUser,
+  resolveLibrarySessionRemoteState,
   getConfiguredLibraryPath,
-  saveAppConfig,
+  changeConfiguredLibraryPath,
   isLibraryInitialized,
   findLibraryOnlySessions,
   findLibrarySessionsWithMissingSources
@@ -645,12 +646,9 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
           if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
           annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
-          const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
-          summary.isRemote = remoteByPath
-          if (remoteByPath) {
-            const remoteUser = meta.projectPath ? extractRemoteUser(meta.projectPath) : null
-            if (remoteUser) summary.remoteHost = `${remoteUser}@remote`
-          }
+          const remoteState = resolveLibrarySessionRemoteState(meta)
+          summary.isRemote = remoteState.isRemote
+          if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
           if (meta.customTitle) {
             ;(summary as any)._libraryTitle = meta.customTitle
           }
@@ -835,12 +833,9 @@ ipcMain.handle('sessions:loadAll', async () => {
           if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
           summary.allFilePaths = [backupPath]
           annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
-          const remoteByPath = meta.projectPath ? isRemoteProjectPath(meta.projectPath) : true
-          summary.isRemote = remoteByPath
-          if (remoteByPath) {
-            const remoteUser = meta.projectPath ? extractRemoteUser(meta.projectPath) : null
-            if (remoteUser) summary.remoteHost = `${remoteUser}@remote`
-          }
+          const remoteState = resolveLibrarySessionRemoteState(meta)
+          summary.isRemote = remoteState.isRemote
+          if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
           if (meta.customTitle) {
             ;(summary as any)._libraryTitle = meta.customTitle
           }
@@ -1282,7 +1277,7 @@ ipcMain.handle('library:selectDirectory', async () => {
 })
 
 ipcMain.handle('library:changePath', async (_event, newPath: string) => {
-  saveAppConfig({ libraryPath: newPath })
+  changeConfiguredLibraryPath(newPath)
   // Re-initialize library at new path
   initLibrary(newPath)
   const tree = scanLibrary()

@@ -4,11 +4,13 @@
  * 确保分支 session 的 meta（重命名、笔记等）和文件夹归属
  * 完全独立于母 session，互不影响。
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { createHash } from 'node:crypto'
 import { shellQuote } from './resume-terminal'
+import { buildSessionSummaryFromBackup } from './session-loader'
 
 // 隔离测试环境：用临时目录作为 Library root
 let tmpRoot: string
@@ -132,6 +134,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   fs.rmSync(tmpRoot, { recursive: true, force: true })
   // 恢复临时 app-config，避免测试之间串状态
   if (savedAppConfig !== null) {
@@ -139,6 +142,13 @@ afterEach(() => {
   } else {
     fs.rmSync(APP_CONFIG_FILE, { force: true })
   }
+  try {
+    for (const name of fs.readdirSync(path.dirname(APP_CONFIG_FILE))) {
+      if (name.startsWith('app-config.json.corrupt-')) {
+        fs.rmSync(path.join(path.dirname(APP_CONFIG_FILE), name), { force: true })
+      }
+    }
+  } catch { /* temporary HOME may not contain a config directory */ }
 })
 
 afterAll(() => {
@@ -221,6 +231,29 @@ describe('App 配置：Library 路径管理', () => {
     expect(config.libraryPath).toBe(tmpRoot)
   })
 
+  it('deviceId 在 app-config.json 中只生成一次并持久化', () => {
+    const first = lib.getOrCreateLocalDeviceId(() => 'device-xx…0001')
+    const second = lib.getOrCreateLocalDeviceId(() => 'device-xx…9999')
+    expect(first).toBe('device-xx…0001')
+    expect(second).toBe(first)
+    expect(lib.loadAppConfig().deviceId).toBe('device-xx…0001')
+    expect(fs.statSync(APP_CONFIG_FILE).mode & 0o777).toBe(0o600)
+    expect(fs.readdirSync(path.dirname(APP_CONFIG_FILE)).filter((name) =>
+      name === 'app-config.json.lock' || name.endsWith('.tmp')
+    )).toEqual([])
+  })
+
+  it('并发初始化锁存在时拒绝第二次生成，不写入竞争 deviceId', () => {
+    fs.mkdirSync(path.dirname(APP_CONFIG_FILE), { recursive: true })
+    fs.writeFileSync(`${APP_CONFIG_FILE}.lock`, 'in-progress', { mode: 0o600 })
+    const createId = vi.fn(() => 'competing-device-xx…0002')
+
+    expect(() => lib.getOrCreateLocalDeviceId(createId)).toThrow('app-config-write-in-progress')
+    expect(createId).not.toHaveBeenCalled()
+    expect(fs.existsSync(APP_CONFIG_FILE)).toBe(false)
+    fs.rmSync(`${APP_CONFIG_FILE}.lock`, { force: true })
+  })
+
   it('getConfiguredLibraryPath 无配置时返回默认路径', () => {
     const p = lib.getConfiguredLibraryPath()
     expect(typeof p).toBe('string')
@@ -237,6 +270,279 @@ describe('App 配置：Library 路径管理', () => {
     // tmpRoot 已经被 initLibrary 初始化过，需要先创建 config 文件
     lib.saveLibraryConfig(lib.loadLibraryConfig())
     expect(lib.isLibraryInitialized(tmpRoot)).toBe(true)
+  })
+})
+
+describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
+  it('缺 sessionId 的 meta 在边界告警并拒绝进入扫描', () => {
+    const warnings: string[] = []
+    const parsed = lib.parseSessionMeta(JSON.stringify({
+      sourceFilePaths: ['/fixture/source-xx…0101.jsonl'],
+      projectPath: '/fixture/project-xx…0101'
+    }), (warning) => warnings.push(warning))
+
+    expect(parsed).toBeNull()
+    expect(warnings).toEqual([expect.stringContaining('missing sessionId/projectPath')])
+  })
+
+  it('缺 projectPath 的 meta 在边界告警并拒绝进入扫描', () => {
+    const warnings: string[] = []
+    const parsed = lib.parseSessionMeta(JSON.stringify({
+      sessionId: 'invalid-xx…0102',
+      sourceFilePaths: ['/fixture/source-xx…0102.jsonl']
+    }), (warning) => warnings.push(warning))
+
+    expect(parsed).toBeNull()
+    expect(warnings).toHaveLength(1)
+  })
+
+  it('sourceFilePaths 含非字符串时在边界告警并拒绝进入扫描', () => {
+    const warnings: string[] = []
+    const parsed = lib.parseSessionMeta(JSON.stringify({
+      sessionId: 'invalid-xx…0103',
+      sourceFilePaths: ['/fixture/source-xx…0103.jsonl', 42],
+      projectPath: '/fixture/project-xx…0103'
+    }), (warning) => warnings.push(warning))
+
+    expect(parsed).toBeNull()
+    expect(warnings).toEqual([expect.stringContaining('sourceFilePaths must be strings')])
+  })
+
+  it('畸形 origin 在边界告警并拒绝进入扫描', () => {
+    const warnings: string[] = []
+    const parsed = lib.parseSessionMeta(JSON.stringify({
+      sessionId: 'invalid-xx…0104',
+      sourceFilePaths: ['/fixture/source-xx…0104.jsonl'],
+      projectPath: '/fixture/project-xx…0104',
+      origin: { deviceId: 42 }
+    }), (warning) => warnings.push(warning))
+
+    expect(parsed).toBeNull()
+    expect(warnings).toEqual([expect.stringContaining('malformed origin')])
+  })
+
+  it('旧 meta 缺 schemaVersion/origin/sourceInstance 时正常读取且字段不被伪造', () => {
+    const legacy = {
+      sessionId: 'legacy-xx…0001',
+      sourceFilePaths: ['/fixture/source-xx…0001.jsonl'],
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: '/fixture/project-xx…0001'
+    }
+    const parsed = lib.parseSessionMeta(JSON.stringify(legacy))
+    expect(parsed).toEqual(legacy)
+    expect(parsed?.schemaVersion).toBeUndefined()
+    expect(parsed?.origin).toBeUndefined()
+    expect(parsed?.sourceInstance).toBeUndefined()
+    expect(parsed?.backupSha256).toBeUndefined()
+    expect(parsed?.backupSize).toBeUndefined()
+
+    const dirPath = path.join(tmpRoot, 'legacy-meta-xx…0001')
+    writeSessionMeta(dirPath, legacy)
+    lib.scanLibrary()
+    const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === legacy.sessionId)
+    expect(found).toBeUndefined() // historical behavior: no backup means not library-only
+    expect(() => lib.getSessionResumeAvailability(legacy.sessionId)).not.toThrow()
+  })
+
+  it('backup 写入后把实际 SHA-256/size 顺路持久化到 SessionMeta v2', async () => {
+    removeDefaultSession()
+    const sessionId = 'metadata-backup-xx…0107'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture-project-xx…0107', `${sessionId}.jsonl`)
+    const rows = claudeRows(sessionId, 'expected metadata supply')
+    writeJsonl(sourcePath, rows)
+    const expectedContent = fs.readFileSync(sourcePath)
+    const dirPath = createLibrarySession(sessionId, [sourcePath], { dirName: 'metadata-backup-xx…0107' })
+    lib.scanLibrary()
+
+    await lib.syncBackup(sessionId)
+
+    const backupPath = path.join(dirPath, 'backup.jsonl')
+    const writtenMeta = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    expect(fs.readFileSync(backupPath)).toEqual(expectedContent)
+    expect(writtenMeta).toMatchObject({
+      schemaVersion: 2,
+      backupSha256: createHash('sha256').update(expectedContent).digest('hex'),
+      backupSize: expectedContent.length
+    })
+    expect(lib.parseSessionMeta(JSON.stringify(writtenMeta))).toMatchObject({
+      backupSha256: writtenMeta.backupSha256,
+      backupSize: writtenMeta.backupSize
+    })
+  })
+
+  it('旧 meta 加有效 backup 能真实加载为 library-only session', async () => {
+    const sessionId = 'legacy-backup-xx…0105'
+    const dirPath = path.join(tmpRoot, 'legacy-backup-xx…0105')
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: ['/Users/legacy-xx…0105/.claude/projects/-Users-legacy-xx…0105-project/session.jsonl'],
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: '/Users/legacy-xx…0105/.claude/projects/-Users-legacy-xx…0105-project'
+    })
+    writeJsonl(path.join(dirPath, 'backup.jsonl'), claudeRows(sessionId, 'legacy backup regression'))
+
+    lib.scanLibrary()
+    const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === sessionId)
+    expect(found).toBeDefined()
+    const summary = await buildSessionSummaryFromBackup(found!.backupPath, sessionId, found!.meta)
+    expect(summary).toMatchObject({ sessionId, firstUserMessage: 'legacy backup regression' })
+  })
+
+  it('损坏 app-config 使 deviceId 缺失时仍保留并加载旧 library-only session', async () => {
+    const sessionId = 'corrupt-config-xx…0106'
+    const dirPath = path.join(tmpRoot, 'corrupt-config-xx…0106')
+    writeSessionMeta(dirPath, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: ['/Users/old-install-xx…0106/.claude/projects/-Users-old-install-xx…0106-project/session.jsonl'],
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: '/Users/old-install-xx…0106/.claude/projects/-Users-old-install-xx…0106-project',
+      origin: {
+        deviceId: 'old-installation-xx…0106',
+        hostname: 'old-host-xx…0106',
+        username: 'old-user-xx…0106',
+        capturedAt: '2026-07-18T00:00:00.000Z'
+      }
+    })
+    writeJsonl(path.join(dirPath, 'backup.jsonl'), claudeRows(sessionId, 'survives missing device id'))
+    fs.mkdirSync(path.dirname(APP_CONFIG_FILE), { recursive: true })
+    fs.writeFileSync(APP_CONFIG_FILE, '{broken-app-config', 'utf-8')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(() => lib.getOrCreateLocalDeviceId(() => 'must-not-overwrite')).toThrow('invalid-app-config')
+    lib.scanLibrary()
+    const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === sessionId)
+    expect(found).toBeDefined()
+    expect(lib.resolveLibrarySessionRemoteState(found!.meta)).toEqual({
+      isRemote: true,
+      remoteHost: 'old-host-xx…0106',
+      confidence: 'installation-id-unavailable'
+    })
+    const summary = await buildSessionSummaryFromBackup(found!.backupPath, sessionId, found!.meta)
+    expect(summary?.firstUserMessage).toBe('survives missing device id')
+    expect(fs.readFileSync(APP_CONFIG_FILE, 'utf-8')).toBe('{broken-app-config')
+  })
+
+  it('自定义 Library 冷启动遇损坏配置时先备份，再经 changePath 找回旧 session', async () => {
+    const customLibrary = path.join(tmpRoot, 'custom-library-xx…0107')
+    const sessionId = 'corrupt-cold-start-xx…0107'
+    const dirPath = path.join(customLibrary, 'old-session-xx…0107')
+    const corruptContent = '{broken-cold-start-config-xx…0107'
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: ['/Users/old-install-xx…0107/.claude/projects/-fixture-old-xx…0107/session.jsonl'],
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: '/Users/old-install-xx…0107/.claude/projects/-fixture-old-xx…0107'
+    })
+    writeJsonl(path.join(dirPath, 'backup.jsonl'), claudeRows(sessionId, 'cold-start recovery evidence'))
+    lib.saveAppConfig({ libraryPath: customLibrary, deviceId: 'device-before-corruption-xx…0107' })
+    fs.writeFileSync(APP_CONFIG_FILE, corruptContent, 'utf-8')
+
+    // 验收员原形态：损坏配置后重启，首次初始化无法猜回自定义路径。
+    lib.initLibrary()
+    lib.scanLibrary()
+    expect(lib.getLibraryRoot()).not.toBe(customLibrary)
+    expect(lib.findLibraryOnlySessions(new Set()).some((item) => item.sessionId === sessionId)).toBe(false)
+
+    const backups = fs.readdirSync(path.dirname(APP_CONFIG_FILE))
+      .filter((name) => name.startsWith('app-config.json.corrupt-'))
+      .map((name) => path.join(path.dirname(APP_CONFIG_FILE), name))
+      .filter((backupPath) => fs.readFileSync(backupPath, 'utf-8') === corruptContent)
+    expect(backups).toHaveLength(1)
+    expect(fs.statSync(backups[0]).mode & 0o777).toBe(0o600)
+    expect(fs.readFileSync(APP_CONFIG_FILE, 'utf-8')).toBe(corruptContent)
+
+    // UI 的 library:changePath 使用此专用入口；备份存在后才允许重建配置。
+    expect(() => lib.changeConfiguredLibraryPath(customLibrary)).not.toThrow()
+    expect(lib.loadAppConfig()).toEqual({ libraryPath: customLibrary })
+    expect(fs.readFileSync(backups[0], 'utf-8')).toBe(corruptContent)
+
+    lib.initLibrary()
+    lib.scanLibrary()
+    const found = lib.findLibraryOnlySessions(new Set()).find((item) => item.sessionId === sessionId)
+    expect(found).toBeDefined()
+    const summary = await buildSessionSummaryFromBackup(found!.backupPath, sessionId, found!.meta)
+    expect(summary?.firstUserMessage).toBe('cold-start recovery evidence')
+  })
+
+  it('新建 meta 写入首次 origin/sourceInstance，deviceId 来自 app-config', async () => {
+    removeDefaultSession()
+    lib.getOrCreateLocalDeviceId(() => 'device-xx…0002')
+    const sessionId = '90000000-0000-4000-8000-000000000009'
+    const sourcePath = path.join(
+      testHome,
+      '.claude',
+      'projects',
+      '-fixture-project-xx…0002',
+      `${sessionId}.jsonl`
+    )
+    const dirPath = await lib.ensureSessionInLibrary({
+      sessionId,
+      cwds: ['/fixture/outside-xx…0002'],
+      firstUserMessage: 'fixture-title-xx…0002',
+      createdAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:01:00.000Z',
+      projectPath: path.dirname(sourcePath),
+      filePath: sourcePath,
+      allFilePaths: [sourcePath],
+      turnCount: 1
+    } as any, undefined, {
+      hostname: 'host-xx…0002',
+      username: 'user-xx…0002',
+      capturedAt: '2026-07-19T00:02:00.000Z'
+    })
+
+    const written = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    expect(written).toMatchObject({
+      schemaVersion: 2,
+      origin: {
+        deviceId: 'device-xx…0002',
+        hostname: 'host-xx…0002',
+        username: 'user-xx…0002',
+        capturedAt: '2026-07-19T00:02:00.000Z'
+      },
+      sourceInstance: { kind: 'claude-default' }
+    })
+    expect(lib.loadAppConfig().deviceId).toBe(written.origin.deviceId)
+    expect(fs.existsSync(sourcePath)).toBe(false)
+  })
+
+  it('已有远端 origin 在后续同步中保持不变', async () => {
+    removeDefaultSession()
+    const sessionId = 'a0000000-0000-4000-8000-00000000000a'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture-project-xx…0003', `${sessionId}.jsonl`)
+    const dirPath = createLibrarySession(sessionId, [sourcePath], { dirName: 'preserve-origin-xx…0003' })
+    const initial = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    initial.schemaVersion = 2
+    initial.origin = {
+      deviceId: 'remote-device-xx…0003',
+      hostname: 'remote-host-xx…0003',
+      username: 'same-user-xx…0003',
+      capturedAt: '2026-07-18T00:00:00.000Z'
+    }
+    fs.writeFileSync(path.join(dirPath, '.swob-session.json'), JSON.stringify(initial, null, 2), 'utf-8')
+    lib.scanLibrary()
+
+    await lib.ensureSessionInLibrary({
+      sessionId,
+      createdAt: initial.createdAt,
+      updatedAt: '2026-07-19T00:03:00.000Z',
+      projectPath: path.dirname(sourcePath),
+      filePath: sourcePath,
+      allFilePaths: [sourcePath],
+      cwds: ['/fixture/project-xx…0003'],
+      turnCount: 1
+    } as any, undefined, {
+      deviceId: 'local-device-xx…0003',
+      hostname: 'local-host-xx…0003'
+    })
+
+    const after = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    expect(after.origin).toEqual(initial.origin)
   })
 })
 
@@ -310,79 +616,107 @@ describe('Library-only sessions（跨设备同步）', () => {
     expect(missingSourceResults.some((r) => r.sessionId === 'missing-source-999')).toBe(true)
   })
 
-  it('【曾经的 bug】本机原始 JSONL 丢失时，resume 前应该从 Library backup 恢复', () => {
-    const localSourceDir = path.join(os.homedir(), '.claude', 'projects', `-swob-test-${process.pid}-${Date.now()}`)
-    const localSourcePath = path.join(localSourceDir, 'lost-local-999.jsonl')
+  it('【曾经的 bug】本机原始 JSONL 丢失时，通过唯一事务入口从 Library backup 恢复', async () => {
+    const sessionId = '83000000-0000-4000-8000-000000000001'
+    const localSourceDir = path.join(testHome, '.claude', 'projects', `-swob-test-${process.pid}-${Date.now()}`)
+    const localSourcePath = path.join(localSourceDir, `${sessionId}.jsonl`)
     const sessionDir = path.join(tmpRoot, '本机丢失的对话')
-    const backupContent = '{"uuid":"u1","sessionId":"lost-local-999","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test","message":{"role":"user","content":"hello"}}\n'
+    const backupContent = `{"uuid":"u1","sessionId":"${sessionId}","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test","message":{"role":"user","content":"hello"}}\n`
 
+    fs.mkdirSync(path.join(testHome, '.claude', 'projects'), { recursive: true })
     fs.mkdirSync(sessionDir, { recursive: true })
     fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
-      sessionId: 'lost-local-999',
+      schemaVersion: 2,
+      sessionId,
       sourceFilePaths: [localSourcePath],
       createdAt: '2026-04-01T00:00:00Z',
       updatedAt: '2026-04-01T01:00:00Z',
-      projectPath: '/Users/test'
+      projectPath: '/Users/test',
+      backupSha256: createHash('sha256').update(backupContent).digest('hex'),
+      backupSize: Buffer.byteLength(backupContent),
+      origin: { deviceId: 'test-device', hostname: 'test-host', username: 'test', capturedAt: '2026-04-01T00:00:00Z' }
     }))
     fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
 
     lib.scanLibrary()
-    expect(lib.getSessionResumeAvailability('lost-local-999').canResume).toBe(true)
-    const result = lib.restoreBackupToClaudeSource('lost-local-999')
+    const result = await lib.ensureSessionResumeTarget(sessionId, {
+      allowRecovery: true,
+      runtimeIdentity: { homeDir: testHome, localDeviceId: 'test-device', localUsername: 'test' }
+    })
 
-    expect(result.restored).toBe(true)
+    expect(result).toMatchObject({ ok: true, state: 'restored' })
     expect(result.sourcePath).toBe(localSourcePath)
     expect(fs.readFileSync(localSourcePath, 'utf-8')).toBe(backupContent)
 
     fs.rmSync(localSourceDir, { recursive: true, force: true })
   })
 
-  it('Claude Window 配置目录下的原始 JSONL 丢失时也应该允许从 backup 恢复', () => {
-    const localConfigDir = path.join(os.homedir(), '.claude-window', `swob-test-${process.pid}-${Date.now()}`)
+  it('Claude Window 配置目录下的原始 JSONL 丢失时也走同一个事务入口', async () => {
+    const sessionId = '84000000-0000-4000-8000-000000000001'
+    const windowId = `swob-test-${process.pid}-${Date.now()}`
+    const localConfigDir = path.join(testHome, '.claude-window', windowId)
     const localSourceDir = path.join(localConfigDir, 'projects', '-Users-test-projects-draftbox')
-    const localSourcePath = path.join(localSourceDir, 'lost-window-999.jsonl')
+    const localSourcePath = path.join(localSourceDir, `${sessionId}.jsonl`)
     const sessionDir = path.join(tmpRoot, 'Claude Window 丢失的对话')
-    const backupContent = '{"uuid":"u1","sessionId":"lost-window-999","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test/projects/draftbox","message":{"role":"user","content":"hello"}}\n'
+    const backupContent = `{"uuid":"u1","sessionId":"${sessionId}","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/test/projects/draftbox","message":{"role":"user","content":"hello"}}\n`
 
+    fs.mkdirSync(path.join(localConfigDir, 'projects'), { recursive: true })
     fs.mkdirSync(sessionDir, { recursive: true })
     fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
-      sessionId: 'lost-window-999',
+      schemaVersion: 2,
+      sessionId,
       sourceFilePaths: [localSourcePath],
       createdAt: '2026-04-01T00:00:00Z',
       updatedAt: '2026-04-01T01:00:00Z',
-      projectPath: '/Users/test/projects/draftbox'
+      projectPath: '/Users/test/projects/draftbox',
+      backupSha256: createHash('sha256').update(backupContent).digest('hex'),
+      backupSize: Buffer.byteLength(backupContent),
+      origin: { deviceId: 'test-device', hostname: 'test-host', username: 'test', capturedAt: '2026-04-01T00:00:00Z' },
+      sourceInstance: { kind: 'claude-window', configDir: localConfigDir }
     }))
     fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
 
     lib.scanLibrary()
-    const result = lib.restoreBackupToClaudeSource('lost-window-999')
+    const result = await lib.ensureSessionResumeTarget(sessionId, {
+      allowRecovery: true,
+      runtimeIdentity: { homeDir: testHome, localDeviceId: 'test-device', localUsername: 'test' }
+    })
 
-    expect(result.restored).toBe(true)
+    expect(result).toMatchObject({ ok: true, state: 'restored' })
     expect(result.sourcePath).toBe(localSourcePath)
     expect(fs.readFileSync(localSourcePath, 'utf-8')).toBe(backupContent)
 
     fs.rmSync(localConfigDir, { recursive: true, force: true })
   })
 
-  it('不会把其他机器路径的 backup 恢复到本机 Claude 目录外', () => {
-    const foreignSourcePath = '/Users/other-machine/.claude/projects/xxx/remote-999.jsonl'
+  it('不会把其他安装路径的 backup 自动恢复到本机 Claude 目录外', async () => {
+    const sessionId = '85000000-0000-4000-8000-000000000001'
+    const foreignSourcePath = `/Users/other-machine/.claude/projects/xxx/${sessionId}.jsonl`
     const sessionDir = path.join(tmpRoot, '其他机器的对话')
+    const backupContent = `{"uuid":"u1","sessionId":"${sessionId}","type":"user","timestamp":"2026-04-01T00:00:00Z","cwd":"/Users/other-machine","message":{"role":"user","content":"hello"}}\n`
 
+    fs.mkdirSync(path.join(testHome, '.claude', 'projects'), { recursive: true })
     fs.mkdirSync(sessionDir, { recursive: true })
     fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
-      sessionId: 'remote-999',
+      schemaVersion: 2,
+      sessionId,
       sourceFilePaths: [foreignSourcePath],
       createdAt: '2026-04-01T00:00:00Z',
       updatedAt: '2026-04-01T01:00:00Z',
-      projectPath: '/Users/other-machine/projects/xxx'
+      projectPath: '/Users/other-machine/projects/xxx',
+      backupSha256: createHash('sha256').update(backupContent).digest('hex'),
+      backupSize: Buffer.byteLength(backupContent),
+      origin: { deviceId: 'other-device', hostname: 'other-host', username: 'other', capturedAt: '2026-04-01T00:00:00Z' }
     }))
-    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), '{"uuid":"u1","sessionId":"remote-999"}\n')
+    fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), backupContent)
 
     lib.scanLibrary()
-    const result = lib.restoreBackupToClaudeSource('remote-999')
+    const result = await lib.ensureSessionResumeTarget(sessionId, {
+      allowRecovery: true,
+      runtimeIdentity: { homeDir: testHome, localDeviceId: 'test-device', localUsername: 'test' }
+    })
 
-    expect(result.restored).toBe(false)
-    expect(result.reason).toBe('source-outside-local-claude-projects')
+    expect(result).toMatchObject({ ok: false, failureCode: 'remote-source-requires-explicit-target' })
     expect(fs.existsSync(foreignSourcePath)).toBe(false)
   })
 })
@@ -465,6 +799,34 @@ describe('isRemoteProjectPath', () => {
 
   it('远程用户名的短路径判断为远程', () => {
     expect(lib.isRemoteProjectPath('/Users/mac/.claude/projects/-Users-mac')).toBe(true)
+  })
+})
+
+describe('resolveSessionRemoteState', () => {
+  it('同用户名但安装 ID 不同仍判定为非本安装，并使用持久化 hostname', () => {
+    expect(lib.resolveSessionRemoteState({
+      projectPath: '/Users/same-user-xx…0004/.claude/projects/-Users-same-user-xx…0004-project',
+      origin: {
+        deviceId: 'remote-device-xx…0004',
+        hostname: 'remote-host-xx…0004',
+        username: 'same-user-xx…0004',
+        capturedAt: '2026-07-19T00:00:00.000Z'
+      }
+    }, 'local-device-xx…0004', 'same-user-xx…0004')).toEqual({
+      isRemote: true,
+      remoteHost: 'remote-host-xx…0004',
+      confidence: 'installation-id'
+    })
+  })
+
+  it('旧 meta 无 origin 时保持用户名路径猜测行为', () => {
+    expect(lib.resolveSessionRemoteState({
+      projectPath: '/Users/userxx…0005/.claude/projects/-Users-userxx…0005-project'
+    }, 'local-device-xx…0005', 'userxx…0005')).toEqual({
+      isRemote: false,
+      remoteHost: undefined,
+      confidence: 'legacy-path-guess'
+    })
   })
 })
 

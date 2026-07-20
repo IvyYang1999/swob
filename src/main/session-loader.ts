@@ -19,12 +19,14 @@ import { findZcodeSessionFiles, buildZcodeSessionSummary, buildZcodeSessionDetai
 import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
 import { detectTranscriptOrigin } from './transcript-origin'
+import { isSystemText } from './session-message-classifier'
 
 const HOME = process.env.HOME || ''
 
 export function isRealUserMessage(m: RawJsonlMessage): boolean {
   return detectTranscriptOrigin(m) === 'human'
 }
+
 
 function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefined {
   let earliest: { timestamp: string; cwd: string } | null = null

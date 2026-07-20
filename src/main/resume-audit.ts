@@ -12,7 +12,6 @@ import {
   findClaudeProjectRoots,
   findSessionFilesInProjectRoots,
   getClaudeConfigDirForSessionFile,
-  isRealUserMessage,
   loadAllSessions,
   loadSessionDetail,
   parseSessionFile
@@ -30,7 +29,20 @@ import {
   buildResumeCommand,
   resolveSessionActionContext
 } from './session-actions'
-import type { ParsedMessage, RawJsonlMessage, SessionSource, SessionSummary } from './types'
+import {
+  anchorsFromMessages,
+  classifyResumeL3,
+  parsedAnchorMessages,
+  rawAnchorMessages,
+  selectClaudeDefaultChain,
+  type ResumeAnchorMessage,
+  type ResumeAnchors,
+  type ResumeL3MismatchKind,
+  type ResumeL3TargetData
+} from './resume-verifier'
+import type { RawJsonlMessage, SessionSource, SessionSummary } from './types'
+
+export { normalizeResumeAuditText } from './resume-verifier'
 
 export const RESUME_AUDIT_SOURCES = [
   'claude-code',
@@ -68,7 +80,7 @@ export interface ResumeAuditLevelStats {
   l3: ResumeAuditL3Stats
 }
 
-export type ResumeAuditMismatchKind = 'wrong-branch' | 'stale' | 'empty'
+export type ResumeAuditMismatchKind = ResumeL3MismatchKind
 
 export interface ResumeAuditAnchorExample {
   sessionId: string
@@ -141,21 +153,9 @@ interface AuditOutcome {
   expectedAnchors?: ResumeAuditAnchors
 }
 
-interface ResumeAuditAnchors {
-  user: string
-  assistant: string
-}
-
-interface AnchorMessage {
-  role: 'user' | 'assistant'
-  text: string
-}
-
-interface ResumeTargetData {
-  status: 'found' | 'empty' | 'missing' | 'unparseable'
-  defaultMessages: AnchorMessage[]
-  allMessages: AnchorMessage[]
-}
+type ResumeAuditAnchors = ResumeAnchors
+type AnchorMessage = ResumeAnchorMessage
+type ResumeTargetData = ResumeL3TargetData
 
 interface ResumeAuditRuntime {
   options: ResumeAuditOptions
@@ -212,78 +212,6 @@ function emptyTarget(status: ResumeTargetData['status']): ResumeTargetData {
   return { status, defaultMessages: [], allMessages: [] }
 }
 
-function extractRawText(message: RawJsonlMessage): string {
-  const content = message.message?.content
-  if (!content) return ''
-  if (typeof content === 'string') return content
-  return content
-    .filter((part) => part.type === 'text' && part.text)
-    .map((part) => part.text!)
-    .join('\n')
-}
-
-function rawAnchorMessages(
-  messages: RawJsonlMessage[],
-  source: SessionSource = 'claude-code'
-): AnchorMessage[] {
-  const result: AnchorMessage[] = []
-  for (const message of messages) {
-    const content = message.message?.content
-    const isToolResult = Array.isArray(content) && content.some((part) => part.type === 'tool_result')
-    const isUserAnchor = source === 'claude-code'
-      ? isRealUserMessage(message)
-      : message.type === 'user' && !isToolResult
-    if (isUserAnchor) {
-      result.push({ role: 'user', text: extractRawText(message) })
-    } else if (message.type === 'assistant') {
-      result.push({ role: 'assistant', text: extractRawText(message) })
-    }
-  }
-  return result
-}
-
-function parsedAnchorMessages(messages: ParsedMessage[]): AnchorMessage[] {
-  const result: AnchorMessage[] = []
-  for (const message of messages) {
-    // Source-specific loaders have already classified synthetic user carriers.
-    // Re-running the Claude-only origin classifier here would discard valid user
-    // anchors from Codex, Cursor, OpenCode, and Zcode.
-    if (message.type === 'user' && !message.isSystemGenerated) {
-      result.push({ role: 'user', text: message.textContent })
-    } else if (message.type === 'assistant') {
-      result.push({ role: 'assistant', text: message.textContent })
-    }
-  }
-  return result
-}
-
-/** Normalize a tail anchor so formatting-only differences do not become L3 failures. */
-export function normalizeResumeAuditText(text: string): string {
-  const normalized = text
-    .normalize('NFKC')
-    .replace(/```[^\n]*\n?/g, '')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/[\s*_~]+/g, '')
-    .trim()
-  return Array.from(normalized).slice(0, 200).join('')
-}
-
-function anchorsFromMessages(messages: AnchorMessage[]): ResumeAuditAnchors {
-  let user = ''
-  let assistant = ''
-  for (const message of messages) {
-    const text = normalizeResumeAuditText(message.text)
-    if (!text) continue
-    if (message.role === 'user') user = text
-    else assistant = text
-  }
-  return { user, assistant }
-}
-
 async function loadExpectedAnchors(
   session: SessionSummary,
   runtime: ResumeAuditRuntime
@@ -299,7 +227,7 @@ async function loadExpectedAnchors(
         `${snapshotPath}#${session.sessionId}`,
         session.sessionId
       )
-      return anchorsFromMessages(rawAnchorMessages(raw, source))
+      return anchorsFromMessages(rawAnchorMessages(raw))
     }
     const detail = await loadSessionDetail(
       session.filePath,
@@ -388,41 +316,6 @@ function cachedRawFile(runtime: ResumeAuditRuntime, filePath: string): Promise<R
     runtime.rawFileCache.set(filePath, cached)
   }
   return cached
-}
-
-function selectClaudeDefaultChain(raw: RawJsonlMessage[]): RawJsonlMessage[] {
-  const indexed = raw
-    .map((message, index) => ({ message, index }))
-    .filter(({ message }) => !!message.uuid && !message.isSidechain)
-  if (indexed.length === 0) return []
-
-  const byUuid = new Map(indexed.map((entry) => [entry.message.uuid, entry]))
-  const parents = new Set<string>()
-  for (const { message } of indexed) {
-    if (message.parentUuid && byUuid.has(message.parentUuid)) parents.add(message.parentUuid)
-    if (!message.parentUuid && message.logicalParentUuid && byUuid.has(message.logicalParentUuid)) {
-      parents.add(message.logicalParentUuid)
-    }
-  }
-  const leaves = indexed.filter(({ message }) => !parents.has(message.uuid))
-  if (leaves.length === 0) return indexed.map((entry) => entry.message)
-
-  const trace = (leafUuid: string): Set<string> => {
-    const chain = new Set<string>()
-    let current: string | null | undefined = leafUuid
-    while (current && !chain.has(current)) {
-      const entry = byUuid.get(current)
-      if (!entry) break
-      chain.add(current)
-      current = entry.message.parentUuid || entry.message.logicalParentUuid
-    }
-    return chain
-  }
-
-  const selected = leaves
-    .map((entry) => ({ entry, chain: trace(entry.message.uuid) }))
-    .sort((a, b) => b.chain.size - a.chain.size || b.entry.index - a.entry.index)[0]
-  return raw.filter((message) => !message.isSidechain && selected.chain.has(message.uuid))
 }
 
 function fileHasData(filePath: string): boolean {
@@ -796,28 +689,14 @@ async function loadResumeTarget(
   return loadSqliteAgentTarget(source, commandSessionId, runtime)
 }
 
-function targetContainsAnchors(messages: AnchorMessage[], expected: ResumeAuditAnchors): boolean {
-  const normalized = messages.map((message) => ({
-    role: message.role,
-    text: normalizeResumeAuditText(message.text)
-  }))
-  const expectedValues: Array<['user' | 'assistant', string]> = [
-    ['user', expected.user],
-    ['assistant', expected.assistant]
-  ]
-  const present = expectedValues.filter(([, value]) => !!value)
-  return present.length > 0 && present.every(([role, value]) =>
-    normalized.some((message) => message.role === role && message.text === value)
-  )
-}
-
 function classifyL3(
   source: SessionSource,
   sessionId: string,
   expected: ResumeAuditAnchors,
   target: ResumeTargetData
 ): AuditOutcome {
-  if (target.status === 'missing' || target.status === 'unparseable') {
+  const decision = classifyResumeL3(expected, target)
+  if (decision.status === 'would-404') {
     return {
       source,
       sessionId,
@@ -827,26 +706,27 @@ function classifyL3(
       expectedAnchors: expected
     }
   }
-
-  const actual = anchorsFromMessages(target.defaultMessages)
-  const hasExpected = !!expected.user || !!expected.assistant
-  if (hasExpected && expected.user === actual.user && expected.assistant === actual.assistant) {
+  if (decision.status === 'match') {
     return { source, sessionId, status: 'ok', level: 'L3', l3Status: 'match', expectedAnchors: expected }
   }
-
-  const mismatchKind: ResumeAuditMismatchKind =
-    target.status === 'empty' || (!actual.user && !actual.assistant)
-      ? 'empty'
-      : targetContainsAnchors(target.allMessages, expected)
-        ? 'wrong-branch'
-        : 'stale'
+  if (decision.status === 'skipped') {
+    return {
+      source,
+      sessionId,
+      status: 'skipped',
+      level: 'L3',
+      l3Status: 'skipped',
+      l3SkipReason: 'expected-anchor-empty',
+      expectedAnchors: expected
+    }
+  }
   return {
     source,
     sessionId,
     status: 'fail',
     level: 'L3',
     l3Status: 'mismatch',
-    mismatchKind,
+    mismatchKind: decision.mismatchKind,
     expectedAnchors: expected
   }
 }

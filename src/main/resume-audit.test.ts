@@ -11,6 +11,7 @@ import {
   runResumeAudit
 } from './resume-audit'
 import { getSessionResumeAvailability, initLibrary, scanLibrary } from './library-manager'
+import { verifyClaudeResumeTarget } from './resume-verifier'
 import type { SessionSource, SessionSummary } from './types'
 
 const IDS = {
@@ -215,6 +216,62 @@ afterEach(() => {
 })
 
 describe('resume audit', () => {
+  it('runResumeAudit 与 resume-verifier 对同一组 Claude fixture 的 L3 结论一致', async () => {
+    const pairs = [
+      {
+        sessionId: IDS.claude,
+        sourceRows: claudeRows(IDS.claude, 'contract match user', 'contract match assistant'),
+        targetRows: claudeRows(IDS.claude, 'contract match user', 'contract match assistant')
+      },
+      {
+        sessionId: IDS.claudeWindow,
+        sourceRows: claudeRows(IDS.claudeWindow, 'contract source user', 'contract source assistant'),
+        targetRows: claudeRows(IDS.claudeWindow, 'contract stale user', 'contract stale assistant')
+      }
+    ].map((fixture) => {
+      const sourcePath = writeJsonl(
+        path.join(tempRoot, 'library', `${fixture.sessionId}.jsonl`),
+        fixture.sourceRows
+      )
+      const targetPath = writeJsonl(
+        path.join(tempRoot, '.claude', 'projects', 'contract', `${fixture.sessionId}.jsonl`),
+        fixture.targetRows
+      )
+      return {
+        ...fixture,
+        sourcePath,
+        targetPath,
+        verification: verifyClaudeResumeTarget(
+          fs.readFileSync(sourcePath),
+          fs.readFileSync(targetPath),
+          {
+            expectedLogicalSessionId: fixture.sessionId,
+            expectedPhysicalSessionId: fixture.sessionId
+          }
+        )
+      }
+    })
+
+    const report = await runResumeAudit({
+      sessions: pairs.map((fixture) => summary('claude-code', fixture.sessionId, fixture.sourcePath)),
+      resumeTargets: { 'claude-code': pairs.map((fixture) => fixture.targetPath) },
+      binaryAvailable: () => true,
+      home: tempRoot
+    })
+
+    expect(report.l3.match).toBe(pairs.filter((fixture) => fixture.verification.l3.status === 'match').length)
+    expect(report.l3.mismatch.stale).toBe(pairs.filter((fixture) =>
+      fixture.verification.l3.status === 'mismatch' && fixture.verification.l3.mismatchKind === 'stale'
+    ).length)
+    expect(pairs.map((fixture) => fixture.verification.status)).toEqual(['match', 'mismatch'])
+    expect(report.l3).toMatchObject({
+      match: 1,
+      mismatch: { total: 1, wrongBranch: 0, stale: 1, empty: 0 },
+      would404: 0,
+      skipped: 0
+    })
+  })
+
   it('五种来源均复用现有命令路径并通过 L1/L2，空期望锚点单列跳过 L3', async () => {
     for (const binary of ['claude', 'codex', 'cursor', 'opencode', 'zcode']) installFakeBinary(binary)
 

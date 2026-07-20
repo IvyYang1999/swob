@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import { createHash, randomUUID } from 'crypto'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
@@ -12,11 +13,28 @@ import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFi
 import { redactSecrets } from './secret-redactor'
 import { shellQuote } from './resume-terminal'
 import { detectTranscriptOrigin, formatTranscriptOriginHeader } from './transcript-origin'
+import {
+  ensureClaudeResumeTarget,
+  type ClaudeResumeRecoveryFailureReason
+} from './resume-recovery-service'
+import {
+  extractRemoteUser,
+  isRemoteProjectPathForUser,
+  resolveSessionRemoteState,
+  type SessionRemoteState
+} from './session-remote-state'
 import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
+
+export { extractRemoteUser, resolveSessionRemoteState, type SessionRemoteState } from './session-remote-state'
 
 // ============ Types ============
 
 export interface SessionMeta {
+  /**
+   * Version 2 adds origin/sourceInstance. It stays optional so a v1
+   * .swob-session.json can be read without migration or changed defaults.
+   */
+  schemaVersion?: 2
   sessionId: string
   sourceFilePaths: string[]
   customTitle?: string
@@ -26,6 +44,25 @@ export interface SessionMeta {
   updatedAt: string
   projectPath: string
   turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
+  /** Expected bytes for strong iCloud materialization verification. */
+  backupSha256?: string
+  backupSize?: number
+  /** Immutable identity of the installation that first captured this Library item. */
+  origin?: SessionOrigin
+  /** Describes the original harness instance; it is never an authorization to write there. */
+  sourceInstance?: SessionSourceInstance
+}
+
+export interface SessionOrigin {
+  deviceId: string
+  hostname: string
+  username: string
+  capturedAt: string
+}
+
+export interface SessionSourceInstance {
+  kind: 'claude-default' | 'claude-window' | 'other'
+  configDir?: string
 }
 
 export interface LibrarySession {
@@ -83,6 +120,15 @@ const DEFAULT_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
 const APP_CONFIG_DIR = path.join(os.homedir(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 
+export interface AppConfig {
+  libraryPath?: string
+  /**
+   * Per-home installation UUID. It is not a hardware or machine identifier.
+   * It lives in ~/.claude-session-manager/app-config.json, never in Claude data dirs.
+   */
+  deviceId?: string
+}
+
 function isOriginalSessionSourcePath(filePath: string): boolean {
   const normalized = filePath.split(path.sep).join('/')
   if (normalized.includes('/.local/share/opencode/opencode.db#ses_')) return true
@@ -108,21 +154,194 @@ function sourceFilePathsForMeta(session: SessionSummary): string[] {
   return candidates.filter(isOriginalSessionSourcePath)
 }
 
-export function loadAppConfig(): { libraryPath?: string } {
-  try {
-    if (fs.existsSync(APP_CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
-    }
-  } catch { /* ignore */ }
-  return {}
+export function loadAppConfig(): AppConfig {
+  return readAppConfigStrict().config
 }
 
-export function saveAppConfig(config: { libraryPath?: string }): void {
+type AppConfigReadResult =
+  | { state: 'missing'; config: AppConfig }
+  | { state: 'valid'; config: AppConfig }
+  | { state: 'invalid'; config: AppConfig; backupPath?: string }
+
+function backupCorruptAppConfig(content: string): string {
+  const mtime = Math.trunc(fs.statSync(APP_CONFIG_FILE).mtimeMs)
+  const basePath = `${APP_CONFIG_FILE}.corrupt-${mtime}`
+  let suffix = 0
+
+  while (true) {
+    const backupPath = suffix === 0 ? basePath : `${basePath}-${suffix}`
+    try {
+      fs.writeFileSync(backupPath, content, {
+        encoding: 'utf-8',
+        flag: 'wx',
+        mode: 0o600
+      })
+      return backupPath
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try {
+        if (fs.readFileSync(backupPath, 'utf-8') === content) return backupPath
+      } catch { /* choose another suffix */ }
+      suffix++
+    }
+  }
+}
+
+function invalidAppConfig(content?: string): AppConfigReadResult {
+  if (content === undefined) return { state: 'invalid', config: {} }
+  try {
+    return { state: 'invalid', config: {}, backupPath: backupCorruptAppConfig(content) }
+  } catch {
+    return { state: 'invalid', config: {} }
+  }
+}
+
+function readAppConfigStrict(): AppConfigReadResult {
+  if (!fs.existsSync(APP_CONFIG_FILE)) return { state: 'missing', config: {} }
+
+  let content: string
+  try {
+    content = fs.readFileSync(APP_CONFIG_FILE, 'utf-8')
+  } catch {
+    return invalidAppConfig()
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return invalidAppConfig(content)
+    }
+    const config = parsed as Record<string, unknown>
+    if (
+      (config.libraryPath !== undefined && typeof config.libraryPath !== 'string') ||
+      (config.deviceId !== undefined && (typeof config.deviceId !== 'string' || config.deviceId.length === 0))
+    ) {
+      return invalidAppConfig(content)
+    }
+    return { state: 'valid', config: parsed as AppConfig }
+  } catch {
+    return invalidAppConfig(content)
+  }
+}
+
+const APP_CONFIG_LOCK_FILE = `${APP_CONFIG_FILE}.lock`
+
+function acquireAppConfigLock(): number {
+  try {
+    return fs.openSync(APP_CONFIG_LOCK_FILE, 'wx', 0o600)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EEXIST') throw new Error('app-config-write-in-progress')
+    throw error
+  }
+}
+
+function writeAppConfigAtomically(config: AppConfig): void {
+  const tempPath = `${APP_CONFIG_FILE}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(config, null, 2), {
+      encoding: 'utf-8',
+      flag: 'wx',
+      mode: 0o600
+    })
+    fs.renameSync(tempPath, APP_CONFIG_FILE)
+  } finally {
+    try { fs.rmSync(tempPath, { force: true }) } catch { /* best effort */ }
+  }
+}
+
+function updateAppConfigAtomically(
+  update: (existing: AppConfig) => AppConfig,
+  recoverCorrupt = false
+): AppConfig {
   if (!fs.existsSync(APP_CONFIG_DIR)) {
     fs.mkdirSync(APP_CONFIG_DIR, { recursive: true })
   }
-  const existing = loadAppConfig()
-  fs.writeFileSync(APP_CONFIG_FILE, JSON.stringify({ ...existing, ...config }, null, 2), 'utf-8')
+  const lockFd = acquireAppConfigLock()
+  try {
+    const current = readAppConfigStrict()
+    if (current.state === 'invalid') {
+      if (!recoverCorrupt) throw new Error('invalid-app-config')
+      if (!current.backupPath) throw new Error('invalid-app-config-backup-failed')
+    }
+    const next = update(current.config)
+    writeAppConfigAtomically(next)
+    return next
+  } finally {
+    try { fs.closeSync(lockFd) } catch { /* best effort */ }
+    try { fs.rmSync(APP_CONFIG_LOCK_FILE, { force: true }) } catch { /* best effort */ }
+  }
+}
+
+export function saveAppConfig(config: AppConfig): void {
+  updateAppConfigAtomically((existing) => ({ ...existing, ...config }))
+}
+
+/** The explicit Library picker is the only path allowed to replace a backed-up corrupt config. */
+export function changeConfiguredLibraryPath(libraryPath: string): void {
+  updateAppConfigAtomically(
+    (existing) => ({ ...existing, libraryPath }),
+    true
+  )
+}
+
+/**
+ * Return the installation identity, creating it once in app-config.json when absent.
+ * Session metadata copies this value only when its origin is first established.
+ */
+export function getOrCreateLocalDeviceId(createId: () => string = randomUUID): string {
+  const initial = readAppConfigStrict()
+  if (initial.state === 'invalid') throw new Error('invalid-app-config')
+  if (initial.config.deviceId) return initial.config.deviceId
+
+  let deviceId = ''
+  updateAppConfigAtomically((existing) => {
+    if (existing.deviceId) {
+      deviceId = existing.deviceId
+      return existing
+    }
+    deviceId = createId()
+    if (!deviceId) throw new Error('invalid-generated-device-id')
+    return { ...existing, deviceId }
+  })
+  return deviceId
+}
+
+/**
+ * Library-only discovery must survive unavailable/corrupt installation identity.
+ * Missing identity is handled conservatively as "not proven to be this install".
+ */
+export function resolveLibrarySessionRemoteState(meta: SessionMeta): SessionRemoteState {
+  let localDeviceId: string | undefined
+  try {
+    localDeviceId = getOrCreateLocalDeviceId()
+  } catch {
+    console.warn('[library-manager] Installation identity unavailable; keeping Library session visible')
+  }
+  return resolveSessionRemoteState(meta, localDeviceId)
+}
+
+export function captureLocalSessionOrigin(
+  override: Partial<SessionOrigin> = {}
+): SessionOrigin {
+  return {
+    deviceId: override.deviceId || getOrCreateLocalDeviceId(),
+    hostname: override.hostname || os.hostname(),
+    username: override.username || os.userInfo().username,
+    capturedAt: override.capturedAt || new Date().toISOString()
+  }
+}
+
+export function detectSessionSourceInstance(sourceFilePaths: string[]): SessionSourceInstance {
+  for (const sourcePath of sourceFilePaths) {
+    const normalized = sourcePath.split(path.sep).join('/')
+    const windowMatch = normalized.match(/^(.*\/\.claude-window\/[^/]+)\/projects\/[^/]+\/[^/]+\.jsonl$/)
+    if (windowMatch) return { kind: 'claude-window', configDir: windowMatch[1] }
+    if (/\/\.claude\/projects\/[^/]+\/[^/]+\.jsonl$/.test(normalized)) {
+      return { kind: 'claude-default' }
+    }
+  }
+  return { kind: 'other' }
 }
 
 export function getConfiguredLibraryPath(): string {
@@ -222,11 +441,65 @@ function findUniqueDirName(parentDir: string, baseName: string): string {
 
 // --- Session Meta ---
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
+}
+
+function isValidSessionOrigin(value: unknown): value is SessionOrigin {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const origin = value as Record<string, unknown>
+  return isNonEmptyString(origin.deviceId) &&
+    isNonEmptyString(origin.hostname) &&
+    isNonEmptyString(origin.username) &&
+    isNonEmptyString(origin.capturedAt)
+}
+
+/** Parse both legacy v1 and v2 metadata, rejecting malformed data at the boundary. */
+export function parseSessionMeta(
+  content: string,
+  warn: (message: string) => void = console.warn
+): SessionMeta | null {
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      warn('[library-manager] Ignoring invalid session metadata: expected object')
+      return null
+    }
+    const meta = parsed as Record<string, unknown>
+    if (!isNonEmptyString(meta.sessionId) || !isNonEmptyString(meta.projectPath)) {
+      warn('[library-manager] Ignoring invalid session metadata: missing sessionId/projectPath')
+      return null
+    }
+    if (!Array.isArray(meta.sourceFilePaths) || !meta.sourceFilePaths.every(isNonEmptyString)) {
+      warn('[library-manager] Ignoring invalid session metadata: sourceFilePaths must be strings')
+      return null
+    }
+    if (meta.origin !== undefined && !isValidSessionOrigin(meta.origin)) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed origin')
+      return null
+    }
+    if (meta.backupSha256 !== undefined &&
+      (typeof meta.backupSha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(meta.backupSha256))) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed backupSha256')
+      return null
+    }
+    if (meta.backupSize !== undefined &&
+      (typeof meta.backupSize !== 'number' || !Number.isSafeInteger(meta.backupSize) || meta.backupSize < 0)) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed backupSize')
+      return null
+    }
+    return parsed as SessionMeta
+  } catch {
+    warn('[library-manager] Ignoring invalid session metadata: malformed JSON')
+    return null
+  }
+}
+
 function readSessionMeta(dirPath: string): SessionMeta | null {
   const metaPath = path.join(dirPath, SESSION_META_FILE)
   try {
     if (fs.existsSync(metaPath)) {
-      return JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+      return parseSessionMeta(fs.readFileSync(metaPath, 'utf-8'))
     }
   } catch { /* corrupt */ }
   return null
@@ -369,7 +642,10 @@ function backupPathForDir(dirPath?: string | null): string | null {
 
 function hasBackupForDir(dirPath?: string | null): boolean {
   const backupPath = backupPathForDir(dirPath)
-  return !!backupPath && fs.existsSync(backupPath)
+  return !!backupPath && (
+    fs.existsSync(backupPath) ||
+    fs.existsSync(path.join(path.dirname(backupPath), `.${path.basename(backupPath)}.icloud`))
+  )
 }
 
 function detectSourceFromSourcePaths(sourceFilePaths: string[], fallback?: SessionSource): SessionSource {
@@ -464,41 +740,126 @@ export function getSessionResumeAvailability(
     }
   }
 
-  // Keep historical behavior for ad-hoc ids that are not known to the Library.
-  return { canResume: true, sourcePath: null }
+  // No indexed metadata and no caller summary means no source inventory.
+  return {
+    canResume: false,
+    reason: LOCAL_RESUME_UNAVAILABLE_REASON,
+    sourcePath: null
+  }
 }
 
-export function restoreBackupToClaudeSource(sessionId: string): {
-  restored: boolean
+export interface SessionResumePreparationResult {
+  ok: boolean
   sourcePath: string | null
+  state?: 'source-present' | 'already-present' | 'restored'
   reason?: string
-} {
+  failureCode?: ClaudeResumeRecoveryFailureReason | 'session-not-in-library' | 'missing-meta' |
+    'missing-source-path' | 'recovery-required' | 'unsupported-source'
+}
+
+export interface SessionResumePreparationOptions {
+  allowRecovery?: boolean
+  requestedSessionId?: string
+  allowUnverifiedBackup?: boolean
+  preferredTargetInstanceId?: string
+  /** Test/adapter boundary; production callers use the actual local installation. */
+  runtimeIdentity?: {
+    homeDir: string
+    localDeviceId?: string
+    localUsername: string
+  }
+}
+
+function recoveryFailureMessage(reason: ClaudeResumeRecoveryFailureReason): string {
+  if (reason === 'unverified-backup') return '备份缺少 SHA-256/大小证据，需要明确确认后才能复活'
+  if (reason === 'invalid-backup') return '备份未通过严格 JSONL 校验，未写入 Claude 源目录'
+  if (reason === 'target-conflict') return '目标 Claude 实例已有同名或同 ID 会话，已停止以避免覆盖'
+  if (reason === 'recovery-locked') return '另一 Swob 进程正在复活该会话，请稍后重试'
+  if (reason === 'remote-source-requires-explicit-target') return '这是其他安装的会话，需要先选择要导入的 Claude 实例'
+  if (reason === 'target-instance-untrusted' || reason === 'target-instance-unavailable') {
+    return '目标 Claude 实例不可用或未通过路径安全检查'
+  }
+  if (reason === 'materialization-failed') return 'iCloud 备份尚未完整下载或完整性证据不匹配'
+  if (reason === 'missing-backup') return '找不到可用于复活的备份'
+  if (reason === 'post-publish-verification-failed') return '目标已发布但最终校验失败，已保留现场且未自动删除'
+  return `无法复活会话：${reason}`
+}
+
+/** The sole Library-to-Claude recovery adapter used by every local resume entry point. */
+export async function ensureSessionResumeTarget(
+  sessionId: string,
+  options: SessionResumePreparationOptions = {}
+): Promise<SessionResumePreparationResult> {
   const dirPath = sessionIndex.get(sessionId)
-  if (!dirPath) return { restored: false, sourcePath: null, reason: 'session-not-in-library' }
+  if (!dirPath) {
+    return { ok: false, sourcePath: null, failureCode: 'session-not-in-library', reason: '会话不在 Library 中' }
+  }
 
   const meta = readSessionMeta(dirPath)
-  if (!meta) return { restored: false, sourcePath: null, reason: 'missing-meta' }
+  if (!meta) return { ok: false, sourcePath: null, failureCode: 'missing-meta', reason: '会话元数据无效' }
 
   const sourceFilePaths = sourceFilePathsFromMeta(meta)
   if (!sourceFilePaths || sourceFilePaths.length === 0) {
-    return { restored: false, sourcePath: null, reason: 'missing-source-path' }
+    return { ok: false, sourcePath: null, failureCode: 'missing-source-path', reason: '会话缺少源路径' }
   }
 
-  const existingSource = sourceFilePaths.find((src) => fs.existsSync(sourceStatPath(src)))
-  if (existingSource) return { restored: false, sourcePath: existingSource, reason: 'source-exists' }
+  const claudeSourcePaths = sourceFilePaths.filter((sourcePath) =>
+    detectSessionSourceFromPath(sourcePath) === 'claude-code')
+  const lastClaudePhysicalId = claudeSourcePaths.length > 0
+    ? path.basename(claudeSourcePaths[claudeSourcePaths.length - 1], '.jsonl')
+    : undefined
+  const requestedPhysicalId = options.requestedSessionId && options.requestedSessionId !== meta.sessionId &&
+    claudeSourcePaths.some((sourcePath) => path.basename(sourcePath, '.jsonl') === options.requestedSessionId)
+    ? options.requestedSessionId
+    : lastClaudePhysicalId
+  const sourcePathsRequiredForAction = requestedPhysicalId
+    ? claudeSourcePaths.filter((sourcePath) => path.basename(sourcePath, '.jsonl') === requestedPhysicalId)
+    : sourceFilePaths
+  const existingSource = sourcePathsRequiredForAction.find((src) => fs.existsSync(sourceStatPath(src)))
+  if (existingSource) return { ok: true, state: 'source-present', sourcePath: existingSource }
 
-  const sourcePath = sourceFilePaths[0]
-
-  if (!isRestorableLocalClaudeSource(sourcePath)) {
-    return { restored: false, sourcePath, reason: 'source-outside-local-claude-projects' }
+  const hasClaudeSource = sourceFilePaths.some((sourcePath) =>
+    detectSessionSourceFromPath(sourcePath) === 'claude-code')
+  if (!hasClaudeSource) {
+    return {
+      ok: false,
+      sourcePath: sourceFilePaths[0],
+      failureCode: 'unsupported-source',
+      reason: LOCAL_RESUME_UNAVAILABLE_REASON
+    }
+  }
+  if (!options.allowRecovery) {
+    return {
+      ok: false,
+      sourcePath: sourceFilePaths[0],
+      failureCode: 'recovery-required',
+      reason: '源记录缺失；请先在 Swob 中执行复活。复制命令不会改写 Claude 源目录'
+    }
   }
 
-  const backupPath = path.join(dirPath, BACKUP_FILE)
-  if (!fs.existsSync(backupPath)) return { restored: false, sourcePath, reason: 'missing-backup' }
-
-  fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
-  fs.copyFileSync(backupPath, sourcePath)
-  return { restored: true, sourcePath }
+  const runtimeIdentity = options.runtimeIdentity || {
+    homeDir: os.homedir(),
+    localDeviceId: getOrCreateLocalDeviceId(),
+    localUsername: os.userInfo().username
+  }
+  const recovery = await ensureClaudeResumeTarget({
+    sessionId,
+    libraryMeta: meta,
+    backupPath: path.join(dirPath, BACKUP_FILE),
+    homeDir: runtimeIdentity.homeDir,
+    localDeviceId: runtimeIdentity.localDeviceId,
+    localUsername: runtimeIdentity.localUsername,
+    physicalSessionId: requestedPhysicalId,
+    preferredTargetInstanceId: options.preferredTargetInstanceId,
+    allowUnverifiedBackup: options.allowUnverifiedBackup
+  })
+  if (recovery.ok) return { ok: true, state: recovery.state, sourcePath: recovery.sourcePath }
+  return {
+    ok: false,
+    sourcePath: recovery.sourcePath || sourceFilePaths[0],
+    failureCode: recovery.reason,
+    reason: recoveryFailureMessage(recovery.reason)
+  }
 }
 
 /**
@@ -938,7 +1299,8 @@ export function generateTranscript(
 
 export async function ensureSessionInLibrary(
   session: SessionSummary,
-  customTitle?: string
+  customTitle?: string,
+  originOverride?: Partial<SessionOrigin>
 ): Promise<string> {
   const existing = sessionIndex.get(session.sessionId)
 
@@ -957,6 +1319,20 @@ export async function ensureSessionInLibrary(
         if (nextSourceFilePaths.length > 0) {
           meta.sourceFilePaths = nextSourceFilePaths
         }
+        changed = true
+      }
+      // Lazy, evidence-based migration: a source visible to this installation proves
+      // only that this installation can capture the legacy item now. Never overwrite an
+      // origin already synced from another device.
+      const currentSourceFilePaths = sourceFilePathsForMeta(session)
+      if (!meta.origin && currentSourceFilePaths.some((sourcePath) => fs.existsSync(sourceStatPath(sourcePath)))) {
+        meta.origin = captureLocalSessionOrigin(originOverride)
+        meta.schemaVersion = 2
+        changed = true
+      }
+      if (!meta.sourceInstance && currentSourceFilePaths.length > 0) {
+        meta.sourceInstance = detectSessionSourceInstance(currentSourceFilePaths)
+        meta.schemaVersion = 2
         changed = true
       }
       if (changed) writeSessionMeta(existing, meta)
@@ -982,14 +1358,18 @@ export async function ensureSessionInLibrary(
 
   fs.mkdirSync(dirPath, { recursive: true })
 
+  const sourceFilePaths = sourceFilePathsForMeta(session)
   const meta: SessionMeta = {
+    schemaVersion: 2,
     sessionId: session.sessionId,
-    sourceFilePaths: sourceFilePathsForMeta(session),
+    sourceFilePaths,
     customTitle,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     projectPath: session.projectPath,
-    turnCount: session.turnCount
+    turnCount: session.turnCount,
+    origin: captureLocalSessionOrigin(originOverride),
+    sourceInstance: detectSessionSourceInstance(sourceFilePaths)
   }
   writeSessionMeta(dirPath, meta)
   sessionIndex.set(session.sessionId, dirPath)
@@ -1020,7 +1400,12 @@ export async function syncBackup(sessionId: string): Promise<void> {
     } catch { /* skip */ }
   }
   if (allContent.length > 0) {
-    fs.writeFileSync(backupPath, allContent.join('\n'), 'utf-8')
+    const content = allContent.join('\n')
+    fs.writeFileSync(backupPath, content, 'utf-8')
+    meta.backupSha256 = createHash('sha256').update(content, 'utf-8').digest('hex')
+    meta.backupSize = Buffer.byteLength(content, 'utf-8')
+    meta.schemaVersion = 2
+    writeSessionMeta(dirPath, meta)
   }
 }
 
@@ -2039,39 +2424,8 @@ export function setSshConfig(sshConfig: SshConfig | null): void {
  * Build SSH resume command for a session.
  * ssh user@host "cd /path && claude --resume sessionId"
  */
-/**
- * Check if a session's projectPath belongs to a different user than the current machine.
- * projectPath format: `/Users/mac/.claude/projects/-Users-mac-projects-scsp`
- * The dir name `-Users-mac-projects-scsp` encodes the user as the second segment.
- */
 export function isRemoteProjectPath(projectPath: string): boolean {
-  const localUser = os.userInfo().username
-  const dirName = path.basename(projectPath)
-  if (!dirName.startsWith('-')) return false
-  const segments = dirName.slice(1).split('-')
-  // Typical: ["Users", "mac", "projects", "scsp"] — second segment is username
-  if (segments.length >= 2 && segments[0] === 'Users') {
-    return segments[1] !== localUser
-  }
-  // Linux: ["home", "mac", "projects", ...] — second segment is username
-  if (segments.length >= 2 && segments[0] === 'home') {
-    return segments[1] !== localUser
-  }
-  return false
-}
-
-/**
- * Extract the hostname hint from a projectPath.
- * Uses the username from the path; actual hostname comes from .swob-session.json if available.
- */
-export function extractRemoteUser(projectPath: string): string | null {
-  const dirName = path.basename(projectPath)
-  if (!dirName.startsWith('-')) return null
-  const segments = dirName.slice(1).split('-')
-  if (segments.length >= 2 && (segments[0] === 'Users' || segments[0] === 'home')) {
-    return segments[1]
-  }
-  return null
+  return isRemoteProjectPathForUser(projectPath, os.userInfo().username)
 }
 
 /**

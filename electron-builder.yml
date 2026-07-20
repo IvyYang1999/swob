@@ -13,6 +13,10 @@ extraResources:
   - from: out/main/chunks/
     to: cli/chunks/
 mac:
+  # Release builds must fail closed: Developer ID signing, hardened runtime,
+  # notarization, and stapling are all required for Gatekeeper acceptance.
+  hardenedRuntime: true
+  notarize: true
   target:
     - target: dmg
       arch:

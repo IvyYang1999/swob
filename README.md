@@ -22,6 +22,10 @@
   100% local — your conversations never leave your machine.
 </p>
 
+<p>
+  <a href="https://ivyyang1999.github.io/swob/"><strong>Landing Page</strong></a> · <a href="https://github.com/IvyYang1999/swob/releases"><strong>Download</strong></a>
+</p>
+
 </div>
 
 <br/>
@@ -29,6 +33,10 @@
 <p align="center">
   <img src="docs/screenshot.png" alt="Swob main interface" width="800" />
 </p>
+
+---
+
+> **253 / 1,621** — From one real user's session history: 253 sessions (15.6%) had already been purged by Claude Code's default 30-day cleanup policy (`cleanupPeriodDays`). They survived only because Swob had backed them up. The official tool is deleting your conversations — and you might not even know.
 
 ---
 

@@ -22,6 +22,10 @@
   100% ローカル — 会話がマシンの外に出ることはない。
 </p>
 
+<p>
+  <a href="https://ivyyang1999.github.io/swob/"><strong>ランディングページ</strong></a> · <a href="https://github.com/IvyYang1999/swob/releases"><strong>ダウンロード</strong></a>
+</p>
+
 </div>
 
 <br/>
@@ -29,6 +33,10 @@
 <p align="center">
   <img src="docs/screenshot.png" alt="Swob メイン画面" width="800" />
 </p>
+
+---
+
+> **253 / 1,621** — 実際のユーザーのセッション履歴から：253セッション（15.6%）が Claude Code のデフォルト30日クリーンアップポリシー（`cleanupPeriodDays`）によって削除済み。Swob がバックアップしていたおかげで生き残った。公式ツールがあなたの会話を削除している — 気づいていないかもしれない。
 
 ---
 

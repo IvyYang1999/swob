@@ -22,6 +22,10 @@
   100% 本地——你的对话不离开你的机器。
 </p>
 
+<p>
+  <a href="https://ivyyang1999.github.io/swob/"><strong>产品主页</strong></a> · <a href="https://github.com/IvyYang1999/swob/releases"><strong>下载</strong></a>
+</p>
+
 </div>
 
 <br/>
@@ -29,6 +33,10 @@
 <p align="center">
   <img src="docs/screenshot.png" alt="Swob 主界面" width="800" />
 </p>
+
+---
+
+> **253 / 1,621** — 来自一个真实用户的会话历史：253 个会话（15.6%）已被 Claude Code 默认的 30 天清理策略（`cleanupPeriodDays`）删除。它们只因 Swob 做了备份才得以保留。官方工具正在删除你的对话——你可能完全不知道。
 
 ---
 

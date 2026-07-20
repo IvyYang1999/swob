@@ -1,0 +1,167 @@
+name: macOS Signing Smoke Test
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-signing-smoke
+  cancel-in-progress: false
+
+jobs:
+  signing-smoke:
+    name: Sign, notarize, and verify
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    # This workflow must never create a tag, release, or published asset.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out requested revision
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Preflight notarization credentials
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ZPTA4LP594
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$APPLE_ID" || -z "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            echo "Required Apple notarization secrets are missing." >&2
+            exit 1
+          fi
+
+          xcrun notarytool history \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --output-format json > /dev/null
+
+          echo "Apple notarization credentials accepted."
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build, sign, and notarize both architectures
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ZPTA4LP594
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" ]]; then
+            echo "Required Developer ID signing secrets are missing." >&2
+            exit 1
+          fi
+
+          npx electron-vite build
+          npx electron-builder --mac --publish never
+
+      - name: Verify Developer ID, Gatekeeper, tickets, and disk images
+        shell: bash
+        env:
+          EXPECTED_TEAM_ID: ZPTA4LP594
+        run: |
+          set -euo pipefail
+
+          app_bundles=()
+          while IFS= read -r -d '' app_bundle; do
+            app_bundles+=("$app_bundle")
+          done < <(find dist -type d -name 'Swob.app' -print0)
+
+          if [[ ${#app_bundles[@]} -ne 2 ]]; then
+            echo "Expected two Swob.app bundles, found ${#app_bundles[@]}." >&2
+            find dist -maxdepth 3 -name '*.app' -print >&2
+            exit 1
+          fi
+
+          found_arm64=0
+          found_x86_64=0
+
+          for app_bundle in "${app_bundles[@]}"; do
+            echo "Verifying $app_bundle"
+            codesign --verify --deep --strict --verbose=2 "$app_bundle"
+
+            signature_info=$(codesign -dv --verbose=4 "$app_bundle" 2>&1)
+            echo "$signature_info"
+
+            if ! grep -q '^Authority=Developer ID Application:' <<< "$signature_info"; then
+              echo "Developer ID Application authority is missing from $app_bundle." >&2
+              exit 1
+            fi
+
+            if ! grep -q "^TeamIdentifier=${EXPECTED_TEAM_ID}$" <<< "$signature_info"; then
+              echo "Unexpected or missing TeamIdentifier in $app_bundle." >&2
+              exit 1
+            fi
+
+            if grep -q '^Signature=adhoc$' <<< "$signature_info"; then
+              echo "Ad-hoc signature is not allowed for $app_bundle." >&2
+              exit 1
+            fi
+
+            spctl --assess --type execute --verbose=4 "$app_bundle"
+            xcrun stapler validate "$app_bundle"
+
+            executable="$app_bundle/Contents/MacOS/Swob"
+            architectures=$(lipo -archs "$executable")
+            echo "Architectures: $architectures"
+
+            if grep -qw arm64 <<< "$architectures"; then found_arm64=1; fi
+            if grep -qw x86_64 <<< "$architectures"; then found_x86_64=1; fi
+          done
+
+          if [[ $found_arm64 -ne 1 || $found_x86_64 -ne 1 ]]; then
+            echo "Expected separate arm64 and x86_64 application bundles." >&2
+            exit 1
+          fi
+
+          dmg_files=()
+          while IFS= read -r -d '' dmg_file; do
+            dmg_files+=("$dmg_file")
+          done < <(find dist -maxdepth 1 -type f -name '*.dmg' -print0)
+
+          if [[ ${#dmg_files[@]} -ne 2 ]]; then
+            echo "Expected two DMG files, found ${#dmg_files[@]}." >&2
+            exit 1
+          fi
+
+          for dmg_file in "${dmg_files[@]}"; do
+            hdiutil verify "$dmg_file"
+          done
+
+          {
+            echo '## macOS signing smoke test passed'
+            echo
+            echo '- Developer ID authority verified'
+            echo "- Team ID verified: ${EXPECTED_TEAM_ID}"
+            echo '- Hardened runtime signatures verified'
+            echo '- Gatekeeper accepted both architectures'
+            echo '- Stapled notarization tickets validated'
+            echo '- arm64 and x86_64 DMGs verified'
+            echo '- No tag or GitHub Release was created'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload private smoke-test installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: swob-macos-signed-smoke-${{ github.run_number }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 3

@@ -1,14 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { Search, PanelRight, X, Zap, Settings, BarChart3 } from 'lucide-react'
+import { Search, PanelRight, X, Zap, Settings, BarChart3, GitBranch } from 'lucide-react'
 
 export function Toolbar() {
   const {
     searchQuery, search, clearSearch,
     infoPanelOpen, toggleInfoPanel,
     settingsOpen, toggleSettings,
-    insightsOpen, toggleInsights
+    insightsOpen, toggleInsights,
+    lineageOpen, toggleLineage
   } = useStore()
   const t = useT()
   const [inputValue, setInputValue] = useState(searchQuery)
@@ -90,6 +91,13 @@ export function Toolbar() {
         className="flex items-center gap-1 ml-auto"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
+        <button
+          onClick={toggleLineage}
+          className={`p-1.5 rounded hover:bg-hover ${lineageOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}
+          title={t('toolbar.lineage')}
+        >
+          <GitBranch size={14} />
+        </button>
         <button
           onClick={toggleInsights}
           className={`p-1.5 rounded hover:bg-hover ${insightsOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}

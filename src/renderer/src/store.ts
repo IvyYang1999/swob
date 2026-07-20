@@ -144,6 +144,7 @@ interface AppState {
   sshModalOpen: boolean
   settingsOpen: boolean
   insightsOpen: boolean
+  lineageOpen: boolean
   toasts: ToastMessage[]
 
   initialize: () => Promise<void>
@@ -163,6 +164,7 @@ interface AppState {
   toggleInfoPanel: () => void
   toggleSettings: () => void
   toggleInsights: () => void
+  toggleLineage: () => void
   savePreferences: (prefs: Record<string, unknown>) => Promise<void>
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
   moveFolder: (folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => Promise<void>
@@ -248,6 +250,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectedFolderId: null,
   settingsOpen: false,
   insightsOpen: false,
+  lineageOpen: false,
   infoPanelOpen: true,
   selectedSessionMdPath: null,
   activeSessionIds: new Set<string>(),
@@ -484,8 +487,9 @@ export const useStore = create<AppState>((set, get) => ({
     get().setThemeMode(next)
   },
 
-  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, insightsOpen: false })),
-  toggleInsights: () => set((s) => ({ insightsOpen: !s.insightsOpen, settingsOpen: false })),
+  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, insightsOpen: false, lineageOpen: false })),
+  toggleInsights: () => set((s) => ({ insightsOpen: !s.insightsOpen, settingsOpen: false, lineageOpen: false })),
+  toggleLineage: () => set((s) => ({ lineageOpen: !s.lineageOpen, settingsOpen: false, insightsOpen: false })),
 
   savePreferences: async (prefs) => {
     const config = get().config

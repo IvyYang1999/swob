@@ -9,6 +9,7 @@ import { SearchResults } from './components/SearchResults'
 import { UpdateBanner } from './components/UpdateBanner'
 import { SettingsPanel } from './components/SettingsPanel'
 import { InsightsPage } from './components/insights/InsightsPage'
+import { LineagePage } from './components/LineagePage'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
@@ -121,7 +122,7 @@ function ToastContainer() {
 }
 
 export default function App() {
-  const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen, insightsOpen } = useStore()
+  const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen, insightsOpen, lineageOpen } = useStore()
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [infoPanelWidth, setInfoPanelWidth] = useState(320)
 
@@ -157,8 +158,8 @@ export default function App() {
         <div className="flex-1 flex overflow-hidden relative">
           <Sidebar width={sidebarWidth} />
           <ResizeHandle side="left" onResize={handleSidebarResize} />
-          {insightsOpen ? <InsightsPage /> : <ChatViewer />}
-          {infoPanelOpen && !settingsOpen && !insightsOpen && (
+          {lineageOpen ? <LineagePage /> : insightsOpen ? <InsightsPage /> : <ChatViewer />}
+          {infoPanelOpen && !settingsOpen && !insightsOpen && !lineageOpen && (
             <>
               <ResizeHandle side="right" onResize={handleInfoPanelResize} />
               <InfoPanel width={infoPanelWidth} onNavigate={(id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />

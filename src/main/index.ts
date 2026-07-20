@@ -84,6 +84,11 @@ import {
   installSwobCli,
   SWOB_APP_CLI_PATH
 } from './cli-install'
+import {
+  getSessionLineagePath,
+  rebuildSessionLineageRegistry,
+  writeSessionLineageRegistry
+} from './session-lineage'
 import type { Folder, Highlight, SessionSummary } from './types'
 
 let mainWindow: BrowserWindow | null = null
@@ -980,6 +985,25 @@ ipcMain.handle('insights:get', () => {
     if (s.estimatedTime) sessionTimes.set(s.sessionId, s.estimatedTime)
   }
   return buildInsights(sessions, folders, sessionTimes)
+})
+
+// --- Lineage IPC ---
+
+ipcMain.handle('lineage:getRegistry', async () => {
+  const libraryRoot = getLibraryRoot()
+  const registryPath = getSessionLineagePath(libraryRoot)
+  try {
+    if (fs.existsSync(registryPath)) {
+      return JSON.parse(fs.readFileSync(registryPath, 'utf-8'))
+    }
+  } catch { /* fall through to rebuild */ }
+  try {
+    const registry = await rebuildSessionLineageRegistry(libraryRoot)
+    try { writeSessionLineageRegistry(registry, registryPath) } catch { /* ignore write failure */ }
+    return registry
+  } catch {
+    return null
+  }
 })
 
 // --- Config / Library IPC ---

@@ -97,6 +97,9 @@ const api = {
   // Lineage
   getLineageRegistry: () => ipcRenderer.invoke('lineage:getRegistry'),
 
+  // Execution Tree
+  getExecutionTree: (filePath: string) => ipcRenderer.invoke('session:getExecutionTree', filePath),
+
   // Spotlight
   spotlightSearch: (query: string) => ipcRenderer.invoke('spotlight:search', query),
   spotlightResume: (sessionId: string, cwd?: string) => ipcRenderer.invoke('spotlight:resume', sessionId, cwd),

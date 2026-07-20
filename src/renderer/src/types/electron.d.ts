@@ -72,6 +72,9 @@ interface ElectronAPI {
   // Lineage
   getLineageRegistry: () => Promise<any>
 
+  // Execution Tree
+  getExecutionTree: (filePath: string) => Promise<any>
+
   // CLI
   cliGetStatus: () => Promise<{ cliInstalled: boolean; symlinkInstalled: boolean; skillInstalled: boolean }>
   cliInstall: () => Promise<{ cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; cliManualInstall?: string; error?: string }>

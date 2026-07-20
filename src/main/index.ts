@@ -1001,6 +1001,18 @@ ipcMain.handle('lineage:getRegistry', async () => {
   }
 })
 
+ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
+  try {
+    const { parseSessionFile } = await import('./session-loader')
+    const { buildExecutionTree } = await import('./execution-tree')
+    const messages = await parseSessionFile(filePath)
+    const sessionId = path.basename(filePath, '.jsonl')
+    return buildExecutionTree(messages, sessionId)
+  } catch {
+    return null
+  }
+})
+
 // --- Config / Library IPC ---
 // These use the library manager but return the same shape the frontend expects
 

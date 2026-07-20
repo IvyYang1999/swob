@@ -30,6 +30,8 @@ interface Node {
   turnCount: number
 }
 
+const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode']
+
 interface Edge {
   from: number
   to: number
@@ -45,10 +47,21 @@ function buildGraph(
   const cx = 0
   const cy = 0
 
+  // Assign each source a sector so same-harness nodes start clustered
+  const sourceAngleBase = new Map<string, number>()
+  SOURCE_ORDER.forEach((src, idx) => sourceAngleBase.set(src, (idx / SOURCE_ORDER.length) * Math.PI * 2))
+  const sourceCounters = new Map<string, number>()
+
   for (let i = 0; i < sessions.length; i++) {
     const s = sessions[i]
-    const angle = (i / sessions.length) * Math.PI * 2
-    const r = 30 + Math.random() * 80
+    const src = s.source || 'claude-code'
+    const base = sourceAngleBase.get(src) || 0
+    const count = sourceCounters.get(src) || 0
+    sourceCounters.set(src, count + 1)
+    const srcTotal = sessions.filter(ss => (ss.source || 'claude-code') === src).length
+    const sectorWidth = (2 * Math.PI) / SOURCE_ORDER.length * 0.8
+    const angle = base + (count / Math.max(srcTotal, 1)) * sectorWidth - sectorWidth / 2
+    const r = 20 + Math.random() * 60
     idToIdx.set(s.sessionId, i)
     idToIdx.set(s.id, i)
     nodes.push({
@@ -91,7 +104,7 @@ function buildGraph(
     }
   }
 
-  // Add weak edges: same source (connect a sparse chain for clustering)
+  // Strong same-source clustering: chain every adjacent pair → sub-ball per harness
   const sourceMap = new Map<string, number[]>()
   for (let i = 0; i < nodes.length; i++) {
     const src = nodes[i].source
@@ -99,8 +112,8 @@ function buildGraph(
     sourceMap.get(src)!.push(i)
   }
   for (const [, indices] of sourceMap) {
-    for (let i = 0; i < indices.length - 1; i += 5) {
-      edges.push({ from: indices[i], to: indices[Math.min(i + 5, indices.length - 1)], type: 'source' })
+    for (let i = 0; i < indices.length - 1; i++) {
+      edges.push({ from: indices[i], to: indices[i + 1], type: 'source' })
     }
   }
 
@@ -144,9 +157,14 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
         fy += (dy / dist) * force
       }
 
-      // Strong center gravity — pull into tight ball
-      const cx = -nodes[i].x * 0.03
-      const cy = -nodes[i].y * 0.03
+      // Per-source gravity well — each harness has its own center
+      const srcIdx = SOURCE_ORDER.indexOf(nodes[i].source)
+      const wellAngle = srcIdx >= 0 ? (srcIdx / SOURCE_ORDER.length) * Math.PI * 2 : 0
+      const wellR = 80
+      const wellX = Math.cos(wellAngle) * wellR
+      const wellY = Math.sin(wellAngle) * wellR
+      const cx = -(nodes[i].x - wellX) * 0.04
+      const cy = -(nodes[i].y - wellY) * 0.04
       fx += cx
       fy += cy
 
@@ -168,7 +186,7 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
       const dy = b.y - a.y
       const dist = Math.sqrt(dx * dx + dy * dy) + 1
       const str = e.type === 'project' ? projectAttraction
-                : e.type === 'source' ? projectAttraction * 0.5
+                : e.type === 'source' ? projectAttraction * 3
                 : attraction
       const force = dist * str * temp
       a.vx += (dx / dist) * force

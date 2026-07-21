@@ -12,6 +12,7 @@ import { HourlyChart } from './HourlyChart'
 import { TurnDistribution } from './TurnDistribution'
 import { ToolUsageChart } from './ToolUsageChart'
 import { CodeChangesCard } from './CodeChangesCard'
+import { AuditReportTab } from './AuditReportTab'
 import type { InsightsData } from './shared'
 
 export function InsightsPage() {
@@ -33,6 +34,7 @@ export function InsightsPage() {
 
   const projectViewMode = config?.preferences?.projectViewMode || 'folders'
 
+  const [activeTab, setActiveTab] = useState<'stats' | 'audit'>('stats')
   const [generating, setGenerating] = useState(false)
   const [reportResult, setReportResult] = useState<string | null>(null)
   const [progress, setProgress] = useState<{ stage: string; current: number; total: number } | null>(null)
@@ -96,6 +98,26 @@ export function InsightsPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 border-b border-edge pb-2">
+        {([['stats', '📊 Token 统计', '📊 Token Stats'], ['audit', '🔍 审计报告', '🔍 Audit Report']] as const).map(([id, zh, en]) => (
+          <button
+            key={id}
+            onClick={() => setActiveTab(id as 'stats' | 'audit')}
+            className={`px-3 py-1.5 rounded-t-md text-xs font-medium transition-colors ${
+              activeTab === id
+                ? 'bg-accent/10 text-accent border-b-2 border-accent'
+                : 'text-muted hover:text-primary'
+            }`}
+          >
+            {zh}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'audit' && <AuditReportTab />}
+
+      {activeTab === 'stats' && <>
       {/* Audit Report generation */}
       <div className="bg-surface rounded-lg p-4 border border-edge space-y-3">
         <div className="flex items-center justify-between">
@@ -219,6 +241,7 @@ export function InsightsPage() {
       </div>
 
       <ToolUsageChart tools={data.topTools || []} />
+      </>}
     </div>
   )
 }

@@ -9,7 +9,7 @@ import { loadCursorRawMessages } from './cursor-loader'
 import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loader'
 import { loadZcodeRawMessages, stripZcodeSessionRef } from './zcode-loader'
 import { DEFAULT_IGNORE_DIRS } from './session-placement'
-import { executeOrganization } from './vault-organizer'
+import { executeOrganization, undoLastOrganization, type OrganizationResult } from './vault-organizer'
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
 import { redactSecrets } from './secret-redactor'
@@ -2170,11 +2170,79 @@ export function deleteLibraryFolder(folderPath: string): void {
   fs.rmSync(folderPath, { recursive: true, force: true })
 }
 
+export interface LibraryMoveRequest {
+  sessionId: string
+  folderId: string
+}
+
+export interface LibraryRenameRequest {
+  sessionId: string
+  title: string
+}
+
+function requireIndexedSessionDir(sessionId: string): string {
+  const indexedDir = sessionIndex.get(sessionId)
+  if (!indexedDir || !fs.existsSync(indexedDir)) throw new Error(`Session "${sessionId}" 不存在`)
+  return resolvePathWithinRoot(_root, indexedDir, { allowRoot: false, mustExist: true })
+}
+
+export function moveSessionsToFolders(requests: readonly LibraryMoveRequest[]): OrganizationResult {
+  if (requests.length === 0) throw new Error('批量移动输入为空')
+  const prepared = requests.map(({ sessionId, folderId }) => {
+    const currentDir = requireIndexedSessionDir(sessionId)
+    const folderPath = resolveFolderPath(folderId)
+    if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+      throw new Error(`文件夹 "${folderId}" 不存在`)
+    }
+    const relative = path.relative(_root, folderPath)
+    return {
+      sessionId,
+      sourceDir: currentDir,
+      targetRelativeFolder: relative === '' ? '.' : relative
+    }
+  })
+  const result = executeOrganization(_root, 'manual', prepared)
+  for (const move of result.moves) {
+    if (move.from !== move.to) updateSymlinksRecursive(_root, move.from, move.to)
+    sessionIndex.set(move.sessionId, move.to)
+  }
+  return result
+}
+
+export function renameSessionsInLibrary(requests: readonly LibraryRenameRequest[]): OrganizationResult {
+  if (requests.length === 0) throw new Error('批量重命名输入为空')
+  const prepared = requests.map(({ sessionId, title }) => {
+    if (!title.trim()) throw new Error(`Session "${sessionId}" 的标题不能为空`)
+    const currentDir = requireIndexedSessionDir(sessionId)
+    const relativeParent = path.relative(_root, path.dirname(currentDir))
+    return {
+      sessionId,
+      sourceDir: currentDir,
+      targetRelativeFolder: relativeParent === '' ? '.' : relativeParent,
+      targetBaseName: title,
+      metaPatch: { customTitle: title }
+    }
+  })
+  const result = executeOrganization(_root, 'manual', prepared)
+  for (const move of result.moves) {
+    if (move.from !== move.to) updateSymlinksRecursive(_root, move.from, move.to)
+    sessionIndex.set(move.sessionId, move.to)
+  }
+  return result
+}
+
+export function undoLastLibraryOrganization(): OrganizationResult {
+  const result = undoLastOrganization(_root)
+  for (const move of result.moves) {
+    if (move.from !== move.to) updateSymlinksRecursive(_root, move.from, move.to)
+    sessionIndex.set(move.sessionId, move.to)
+  }
+  return result
+}
+
 export function moveSessionToFolder(sessionId: string, folderPath: string): void {
   folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
-  const indexedDir = sessionIndex.get(sessionId)
-  if (!indexedDir || !fs.existsSync(indexedDir)) return
-  const currentDir = resolvePathWithinRoot(_root, indexedDir, { allowRoot: false, mustExist: true })
+  const currentDir = requireIndexedSessionDir(sessionId)
 
   // Remove any existing symlinks to this session in the target folder
   removeSessionSymlinksIn(currentDir, folderPath)

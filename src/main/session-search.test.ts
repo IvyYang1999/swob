@@ -1,10 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { searchIndexedSessions, searchSessionFiles } from './session-search'
 import { parseSessionFile } from './session-loader'
-import { closeSearchIndex, searchDatabasePath, searchIndexStats } from './search-index'
+import {
+  closeSearchIndex,
+  grepTranscripts,
+  searchDatabasePath,
+  searchIndexStats,
+  synchronizeSearchSources
+} from './search-index'
 
 function writeJsonl(dir: string, filename: string, messages: object[]): string {
   fs.mkdirSync(dir, { recursive: true })
@@ -186,6 +192,66 @@ describe('searchSessionFiles', () => {
     expect(searchIndexedSessions('initial-content')).toHaveLength(1)
   })
 
+  it('grep 索引完整工具参数、结果和 thinking，并返回命中上下文 ±1', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-grep-full-test-'))
+    const filePath = writeJsonl(dir, 'grep.jsonl', [
+      { uuid: 'u1', parentUuid: null, sessionId: 'grep-full', type: 'user', cwd: '/repo/alpha', timestamp: '2026-07-20T00:00:00Z', message: { role: 'user', content: '前一条消息' } },
+      { uuid: 'a1', parentUuid: 'u1', sessionId: 'grep-full', type: 'assistant', cwd: '/repo/alpha', timestamp: '2026-07-20T00:01:00Z', message: { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'private-reasoning-needle' },
+        { type: 'tool_use', name: 'Write', input: { content: `${'x'.repeat(700)} full-tool-input-needle`, file_path: '/repo/alpha/a.ts' } }
+      ] } },
+      { uuid: 'u2', parentUuid: 'a1', sessionId: 'grep-full', type: 'user', cwd: '/repo/alpha', timestamp: '2026-07-20T00:02:00Z', message: { role: 'user', content: [{ type: 'tool_result', content: 'full-tool-result-needle' }] } }
+    ])
+    await searchSessionFiles('full-tool-input-needle', [{ filePath, source: 'codex' }])
+
+    const results = grepTranscripts('full-tool-input-needle', {
+      source: 'codex',
+      project: 'alpha',
+      sessionIds: ['grep-full'],
+      after: '2026-07-20T00:00:30Z',
+      before: '2026-07-20T00:01:30Z'
+    })
+
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ sessionId: 'grep-full', source: 'codex', projectPath: '/repo/alpha' })
+    expect(results[0].matches[0].text).toContain('full-tool-input-needle')
+    expect(results[0].matches[0].context.map((line) => line.text)).toEqual(expect.arrayContaining([
+      '前一条消息',
+      'full-tool-result-needle'
+    ]))
+    expect(grepTranscripts('private-reasoning-needle')).toHaveLength(1)
+    expect(grepTranscripts('full-tool-result-needle')).toHaveLength(1)
+    expect(grepTranscripts('full-tool-input-needle', { source: 'claude-code' })).toHaveLength(0)
+  })
+
+  it('支持 DB 虚拟会话引用和来源专用 normalizer，热同步不重复解析', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-grep-virtual-source-'))
+    const stateFilePath = path.join(dir, 'opencode.db')
+    fs.writeFileSync(stateFilePath, 'database-state')
+    const filePath = `${stateFilePath}#session-opencode`
+    const loadRaw = vi.fn(async () => [{
+      uuid: 'u1',
+      parentUuid: null,
+      sessionId: 'session-opencode',
+      type: 'user' as const,
+      cwd: '/repo/opencode-project',
+      timestamp: '2026-07-20T00:00:00Z',
+      message: { role: 'user', content: 'virtual-source-needle' }
+    }])
+    const source = { filePath, stateFilePath, source: 'opencode', loadRaw }
+
+    await synchronizeSearchSources([source])
+    await synchronizeSearchSources([source])
+
+    expect(loadRaw).toHaveBeenCalledTimes(1)
+    expect(grepTranscripts('virtual-source-needle', { source: 'opencode' })).toMatchObject([{
+      sessionId: 'session-opencode',
+      filePath,
+      source: 'opencode',
+      projectPath: '/repo/opencode-project'
+    }])
+  })
+
   it('数据库缺失时自动重建，且完全不读取旧 search-cache.json', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-rebuild-test-'))
     const filePath = writeJsonl(dir, 'rebuild.jsonl', [
@@ -250,4 +316,30 @@ describe('searchSessionFiles', () => {
     // the uncontended hot-path assertion above remains the <50ms requirement.
     expect(queryP95Ms).toBeLessThan(100)
   })
+
+  it('1700 个会话的 grep 热查询低于 500ms', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-grep-scale-test-'))
+    const sources = Array.from({ length: 1700 }, (_, index) => ({
+      filePath: writeJsonl(dir, `session-${index}.jsonl`, [{
+        uuid: `u-${index}`,
+        parentUuid: null,
+        sessionId: `scale-${index}`,
+        type: 'user',
+        cwd: `/repo/project-${index % 20}`,
+        timestamp: '2026-07-20T00:00:00Z',
+        message: { role: 'user', content: index === 1699 ? 'scale-grep-needle' : `ordinary transcript ${index}` }
+      }])
+    }))
+    await searchSessionFiles('scale-grep-needle', sources)
+
+    const startedAt = performance.now()
+    await synchronizeSearchSources(sources)
+    const results = grepTranscripts('scale-grep-needle')
+    const elapsedMs = performance.now() - startedAt
+
+    expect(results).toHaveLength(1)
+    expect(results[0].sessionId).toBe('scale-1699')
+    console.info(`grep acceptance: 1700 sessions, hot refresh + query ${elapsedMs.toFixed(1)}ms`)
+    expect(elapsedMs).toBeLessThan(500)
+  }, 30_000)
 })

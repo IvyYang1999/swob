@@ -71,6 +71,7 @@ import { buildInsights } from './insights'
 import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transcript-watcher'
 import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worker'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
+import { LibraryRescanController } from './library-rescan-controller'
 import {
   buildProjectOrganizationPreview,
   executeOrganization,
@@ -80,6 +81,14 @@ import {
 } from './vault-organizer'
 import { requestSmartOrganization } from './smart-organizer'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
+import { toRendererSessionDetail } from './renderer-session-detail'
+import { assertPathWithinAllowedRoots, resolvePathWithinRoot } from './path-containment'
+import {
+  getLlmSettingsForDisplay,
+  getLlmSettingsWithSecret,
+  migrateLegacyLlmCredential,
+  setLlmSettings as persistLlmSettings
+} from './llm-settings'
 import {
   normalizeResumeTerminalSettings,
   openResumeTerminal
@@ -113,7 +122,7 @@ let libraryWatcher: chokidar.FSWatcher | null = null
 let transcriptWatcher: TranscriptWatcher | null = null
 let libraryWorker: LibraryWorkerClient | null = null
 let sessionSyncCoordinator: SessionSyncCoordinator | null = null
-let libraryRescanTimer: ReturnType<typeof setTimeout> | null = null
+let libraryRescanController: LibraryRescanController | null = null
 let pendingSpotlightNavigationSessionId: string | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
@@ -157,6 +166,76 @@ function startActiveSessionPoller(): void {
   activePoller = setInterval(() => { pushActiveSessionIds() }, 1000)
 }
 let cachedSessions: SessionSummary[] = []
+
+const approvedLibraryRoots = new Set<string>()
+
+function safeProjectRoots(): string[] {
+  const home = path.resolve(process.env.HOME || app.getPath('home'))
+  const roots = new Set<string>()
+  for (const session of cachedSessions) {
+    for (const candidate of [session.resumeCwd, ...(session.cwds || [])]) {
+      if (!candidate || !path.isAbsolute(candidate)) continue
+      const resolved = path.resolve(candidate)
+      const volumeRoot = path.parse(resolved).root
+      // A transcript is input data, not an authorization to expose a whole
+      // home/volume. Only narrower project directories become capabilities.
+      if (resolved === volumeRoot || resolved === home || home.startsWith(`${resolved}${path.sep}`)) continue
+      roots.add(resolved)
+    }
+  }
+  return [...roots]
+}
+
+function sessionSourceRoots(): string[] {
+  const home = process.env.HOME || app.getPath('home')
+  return [
+    getLibraryRoot(),
+    join(home, '.claude', 'projects'),
+    join(home, '.claude-window'),
+    join(home, '.codex', 'sessions'),
+    join(home, '.cursor', 'projects'),
+    join(home, '.local', 'share', 'opencode'),
+    join(home, '.zcode', 'cli', 'db')
+  ]
+}
+
+function assertSessionSourcePath(filePath: string): string {
+  return assertPathWithinAllowedRoots(filePath, sessionSourceRoots())
+}
+
+function assertProjectOrLibraryPath(filePath: string): string {
+  return assertPathWithinAllowedRoots(filePath, [getLibraryRoot(), ...safeProjectRoots()])
+}
+
+function assertResumeCwd(sessionId: string, cwd?: string): void {
+  if (!cwd) return
+  const session = cachedSessions.find((item) =>
+    item.id === sessionId ||
+    item.sessionId === sessionId ||
+    (item.continuationSessionIds || []).includes(sessionId)
+  )
+  const roots = session
+    ? [session.resumeCwd, ...(session.cwds || [])].filter((item): item is string => Boolean(item))
+    : []
+  assertPathWithinAllowedRoots(cwd, roots)
+}
+
+function approveLibraryRoot(rootPath: string): string {
+  const resolved = path.resolve(rootPath)
+  if (!path.isAbsolute(rootPath) || !fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    throw new Error('Library root must be an existing absolute directory')
+  }
+  const canonical = fs.realpathSync.native(resolved)
+  approvedLibraryRoots.add(canonical)
+  return canonical
+}
+
+function assertApprovedLibraryRoot(rootPath: string): string {
+  const resolved = path.resolve(rootPath)
+  const canonical = fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved
+  if (!approvedLibraryRoots.has(canonical)) throw new Error('Library path was not approved by the directory picker')
+  return canonical
+}
 
 type UngroupBucket = 'grouped' | 'multi' | 'single' | 'root'
 
@@ -315,10 +394,8 @@ function cleanupRuntimeResources(): void {
   cursorWatcher = null
   libraryWatcher?.close()
   libraryWatcher = null
-  if (libraryRescanTimer) {
-    clearTimeout(libraryRescanTimer)
-    libraryRescanTimer = null
-  }
+  libraryRescanController?.dispose()
+  libraryRescanController = null
   transcriptWatcher?.stop()
   transcriptWatcher = null
   libraryWorker?.close()
@@ -661,25 +738,38 @@ async function initializeLibraryScanInBackground(): Promise<void> {
 // 通知前端刷新；前端收到 sessions:refresh 会重载会话与目录树。
 function startLibraryWatcher(): void {
   if (libraryWatcher) { libraryWatcher.close(); libraryWatcher = null }
+  libraryRescanController?.dispose()
+  libraryRescanController = null
   const root = getLibraryRoot()
   if (!root || !fs.existsSync(root)) return
+  libraryRescanController = new LibraryRescanController(async () => {
+    const tree = await requestLibraryScan()
+    await hydrateLibrarySessions(tree)
+  }, 750)
   libraryWatcher = chokidar.watch(root, {
     ignoreInitial: true,
     ignorePermissionErrors: true,
     depth: 6,
     ignored: (p: string) =>
       p.includes('/node_modules/') || p.includes('/.git/') ||
-      p.includes('/.obsidian/') || p.endsWith('.jsonl')
+      p.includes('/.obsidian/')
   })
-  const schedule = (): void => {
-    if (libraryRescanTimer) clearTimeout(libraryRescanTimer)
-    libraryRescanTimer = setTimeout(() => {
-      void requestLibraryScan().then((tree) => hydrateLibrarySessions(tree)).catch((error) => {
-        console.error('[library-worker] watched scan failed:', error)
-      })
-    }, 1500)
+  const markDirty = (changedPath: string): void => {
+    const name = path.basename(changedPath)
+    const relevantFile = name === '.swob-session.json' ||
+      name === '.swob-config.json' ||
+      name === 'backup.jsonl' ||
+      name.endsWith('.icloud')
+    if (!relevantFile && path.extname(name)) return
+    libraryRescanController?.markDirty()
   }
-  libraryWatcher.on('addDir', schedule).on('unlinkDir', schedule)
+  libraryWatcher
+    .on('addDir', markDirty)
+    .on('unlinkDir', markDirty)
+    .on('add', markDirty)
+    .on('unlink', markDirty)
+    .on('change', markDirty)
+    .on('error', (error) => console.error('[library-watcher] failed:', error))
 }
 
 // --- Library Initialization ---
@@ -751,6 +841,7 @@ ipcMain.handle('spotlight:search', (_event, query: string) => {
 })
 
 ipcMain.handle('spotlight:resume', async (_event, sessionId: string, cwd?: string) => {
+  assertResumeCwd(sessionId, cwd)
   const result = await openGuardedResumeAction({
     sessionId,
     sessions: cachedSessions,
@@ -798,8 +889,8 @@ ipcMain.handle('icloud:download', (_event, sessionId: string) => {
   return triggerICloudDownload(sessionId)
 })
 
-// Scan all sessions and return which ones are cloud-only
-// Also re-scans Library to discover newly downloaded sessions from other devices
+// Report the current cloud-only set. Library discovery is watcher-driven; this
+// read-only status query must never trigger a full scan/hydration.
 ipcMain.handle('icloud:scanCloudSessions', async () => {
   const cloudSessions: string[] = []
   for (const session of cachedSessions) {
@@ -807,16 +898,6 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
       cloudSessions.push(session.sessionId)
     }
   }
-
-  // Re-scan Library for newly downloaded sessions (e.g. after iCloud download)
-  // If the main session list hasn't loaded yet, every library entry would look
-  // "library-only" and be pushed as a duplicate before the real list arrives.
-  if (cachedSessions.length === 0) return cloudSessions
-
-  try {
-    const tree = await requestLibraryScan()
-    await hydrateLibrarySessions(tree)
-  } catch { /* ignore */ }
 
   return cloudSessions
 })
@@ -898,28 +979,38 @@ ipcMain.handle('ssh:buildCommand', (_event, sessionId: string, permissionMode?: 
 
 // Load a local image file as data URL, with fallback to ~/.claude/image-cache/
 ipcMain.handle('image:load', async (_event, filePath: string) => {
+  const safeOriginalPath = assertProjectOrLibraryPath(filePath)
   const tryLoad = (p: string): { dataUrl: string; status: string } | null => {
     try {
       if (!fs.existsSync(p)) return null
       const ext = path.extname(p).toLowerCase()
       const mimeMap: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' }
-      const mime = mimeMap[ext] || 'image/png'
+      const mime = mimeMap[ext]
+      if (!mime || fs.statSync(p).size > 25 * 1024 * 1024) return null
       const data = fs.readFileSync(p).toString('base64')
       return { dataUrl: `data:${mime};base64,${data}`, status: 'exists' }
     } catch { return null }
   }
   // Try original path
-  const original = tryLoad(filePath)
+  const original = tryLoad(safeOriginalPath)
   if (original) return original
   // Try image-cache: scan all subdirs for matching filename
   const cacheDir = path.join(process.env.HOME || '', '.claude', 'image-cache')
   try {
     if (fs.existsSync(cacheDir)) {
-      const basename = path.basename(filePath)
+      const basename = path.basename(safeOriginalPath)
       for (const sub of fs.readdirSync(cacheDir)) {
-        const cached = path.join(cacheDir, sub, basename)
-        const result = tryLoad(cached)
-        if (result) return { ...result, status: 'cached' }
+        try {
+          const cached = resolvePathWithinRoot(cacheDir, path.join(sub, basename), {
+            allowRoot: false,
+            allowAbsolute: false
+          })
+          const result = tryLoad(cached)
+          if (result) return { ...result, status: 'cached' }
+        } catch {
+          // A cache entry may be an untrusted symlink. Never follow it outside
+          // the dedicated image-cache root.
+        }
       }
     }
   } catch { /* ignore */ }
@@ -929,11 +1020,12 @@ ipcMain.handle('image:load', async (_event, filePath: string) => {
 // Native context menu for images
 ipcMain.handle('image:contextMenu', (_event, options: { path: string }) => {
   const { Menu, shell, clipboard } = require('electron')
+  const safePath = assertProjectOrLibraryPath(options.path)
   const menu = Menu.buildFromTemplate([
-    { label: '打开图片', click: () => shell.openPath(options.path) },
-    { label: '在 Finder 中显示', click: () => shell.showItemInFolder(options.path) },
+    { label: '打开图片', click: () => shell.openPath(safePath) },
+    { label: '在 Finder 中显示', click: () => shell.showItemInFolder(safePath) },
     { type: 'separator' },
-    { label: '复制路径', click: () => clipboard.writeText(options.path) }
+    { label: '复制路径', click: () => clipboard.writeText(safePath) }
   ])
   menu.popup()
 })
@@ -990,13 +1082,14 @@ ipcMain.handle('sessions:loadAll', async () => {
 ipcMain.handle(
   'sessions:loadDetail',
   async (_event, filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => {
-    const detail = await loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid)
-    if (detail?.messages) {
-      for (const msg of detail.messages) {
-        (msg as any).raw = undefined
-      }
-    }
-    return detail
+    const safeFilePath = assertSessionSourcePath(filePath)
+    const safeAllPaths = allFilePaths?.map(assertSessionSourcePath)
+    const safeParentPaths = branchParentFilePaths?.map(assertSessionSourcePath)
+    const detail = await loadSessionDetail(safeFilePath, safeAllPaths, safeParentPaths, branchPointUuid, branchLeafUuid)
+    // Electron's structured clone of thousands of nested message objects can
+    // monopolize the renderer thread. One JSON string crosses IPC cheaply; the
+    // preload restores the existing object-shaped API in a single parse.
+    return JSON.stringify(toRendererSessionDetail(detail))
   }
 )
 
@@ -1128,6 +1221,7 @@ ipcMain.handle(
     cwd?: string,
     surface?: ResumeSurface
   ) => {
+    assertResumeCwd(sessionId, cwd)
     const effectiveSurface = surface || defaultResumeSurfaceForSession(sessionId)
     return openGuardedResumeAction({
       sessionId,
@@ -1147,6 +1241,7 @@ ipcMain.handle(
   async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
     const results: ResumeActionResult[] = []
     for (const s of sessionIds) {
+      assertResumeCwd(s.sessionId, s.cwd)
       results.push(await openGuardedResumeCommand({
         sessionId: s.sessionId,
         sessions: cachedSessions,
@@ -1163,6 +1258,7 @@ ipcMain.handle(
 ipcMain.handle(
   'terminal:fork',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
+    assertResumeCwd(sessionId, cwd)
     return openGuardedForkCommand({
       sessionId,
       sessions: cachedSessions,
@@ -1177,6 +1273,7 @@ ipcMain.handle(
 ipcMain.handle(
   'terminal:buildResumeCommand',
   async (_event, sessionId: string, permissionMode?: string, cwd?: string) => {
+    assertResumeCwd(sessionId, cwd)
     const result = await buildGuardedResumeCommand({
       sessionId,
       sessions: cachedSessions,
@@ -1261,11 +1358,12 @@ ipcMain.handle('claude:setCleanupDays', async (_event, days: number) => {
 })
 
 ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
+  const safeFilePath = assertSessionSourcePath(filePath)
   try {
     const { parseSessionFile } = await import('./session-loader')
     const { buildExecutionTree } = await import('./execution-tree')
-    const messages = await parseSessionFile(filePath)
-    const sessionId = path.basename(filePath, '.jsonl')
+    const messages = await parseSessionFile(safeFilePath)
+    const sessionId = path.basename(safeFilePath, '.jsonl')
     return buildExecutionTree(messages, sessionId)
   } catch {
     return null
@@ -1309,9 +1407,8 @@ ipcMain.handle('insights:generate', async (event, options?: { useLlm?: boolean }
     let llmError: string | undefined
     if (options?.useLlm) {
       try {
-        const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
-        const llmSettings = libConfig.llmSettings as { provider: 'anthropic' | 'openai' | 'custom'; apiKey: string; model?: string; baseUrl?: string } | undefined
-        if (!llmSettings?.apiKey) {
+        const llmSettings = await getLlmSettingsWithSecret()
+        if (!llmSettings) {
           llmError = 'no-api-key'
         } else {
           const narrative = await generateLlmNarrative(report, cachedSessions, llmSettings, sendProgress)
@@ -1343,48 +1440,29 @@ ipcMain.handle('insights:generate', async (event, options?: { useLlm?: boolean }
 ipcMain.handle('insights:listModels', async () => {
   try {
     const { listModels } = await import('./llm-client')
-    const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
-    const s = libConfig.llmSettings as { provider?: string; apiKey?: string; baseUrl?: string } | undefined
-    if (!s?.apiKey) return []
-    return await listModels({
-      provider: (s.provider || 'anthropic') as 'anthropic' | 'openai' | 'custom',
-      apiKey: s.apiKey,
-      baseUrl: s.baseUrl
-    })
+    const settings = await getLlmSettingsWithSecret()
+    return settings ? await listModels(settings) : []
   } catch {
     return []
   }
 })
 
-ipcMain.handle('insights:getLlmSettings', () => {
+ipcMain.handle('insights:getLlmSettings', async () => {
   try {
-    const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
-    const s = libConfig.llmSettings as { provider?: string; apiKey?: string; model?: string; baseUrl?: string } | undefined
-    // Mask the key for display: only reveal last 4 chars
-    return {
-      provider: s?.provider || 'anthropic',
-      hasKey: Boolean(s?.apiKey),
-      keyHint: s?.apiKey ? `…${s.apiKey.slice(-4)}` : '',
-      model: s?.model || '',
-      baseUrl: s?.baseUrl || ''
-    }
+    return await getLlmSettingsForDisplay()
   } catch {
     return { provider: 'anthropic', hasKey: false, keyHint: '', model: '', baseUrl: '' }
   }
 })
 
-ipcMain.handle('insights:setLlmSettings', (_event, settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) => {
+ipcMain.handle('insights:setLlmSettings', async (_event, settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) => {
   try {
-    const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
-    const existing = (libConfig.llmSettings as { apiKey?: string } | undefined) || {}
-    libConfig.llmSettings = {
+    await persistLlmSettings({
       provider: settings.provider,
-      // Empty apiKey means "keep existing"
-      apiKey: settings.apiKey?.trim() ? settings.apiKey.trim() : existing.apiKey || '',
+      value: settings.credential,
       model: settings.model?.trim() || '',
       baseUrl: settings.baseUrl?.trim() || ''
-    }
-    saveLibraryConfig(libConfig as never)
+    })
     return true
   } catch {
     return false
@@ -1392,11 +1470,12 @@ ipcMain.handle('insights:setLlmSettings', (_event, settings: { provider: string;
 })
 
 ipcMain.handle('session:audit', async (_event, filePath: string) => {
+  const safeFilePath = assertSessionSourcePath(filePath)
   try {
     const { parseSessionFile } = await import('./session-loader')
     const { auditSession } = await import('./session-audit')
-    const messages = await parseSessionFile(filePath)
-    const sessionId = path.basename(filePath, '.jsonl')
+    const messages = await parseSessionFile(safeFilePath)
+    const sessionId = path.basename(safeFilePath, '.jsonl')
     return auditSession(messages, sessionId)
   } catch {
     return null
@@ -1404,11 +1483,12 @@ ipcMain.handle('session:audit', async (_event, filePath: string) => {
 })
 
 ipcMain.handle('session:getContextInspector', async (_event, filePath: string) => {
+  const safeFilePath = assertSessionSourcePath(filePath)
   try {
     const { parseSessionFile } = await import('./session-loader')
     const { buildContextInspector } = await import('./context-inspector')
-    const messages = await parseSessionFile(filePath)
-    const sessionId = path.basename(filePath, '.jsonl')
+    const messages = await parseSessionFile(safeFilePath)
+    const sessionId = path.basename(safeFilePath, '.jsonl')
     return buildContextInspector(messages, sessionId)
   } catch {
     return null
@@ -1787,7 +1867,7 @@ ipcMain.handle('library:getConfiguredPath', () => {
 })
 
 ipcMain.handle('library:isInitialized', (_event, rootPath: string) => {
-  return isLibraryInitialized(rootPath)
+  return isLibraryInitialized(assertApprovedLibraryRoot(rootPath))
 })
 
 ipcMain.handle('library:selectDirectory', async () => {
@@ -1800,7 +1880,7 @@ ipcMain.handle('library:selectDirectory', async () => {
     buttonLabel: '选择此文件夹'
   })
   if (result.canceled || result.filePaths.length === 0) return null
-  return result.filePaths[0]
+  return approveLibraryRoot(result.filePaths[0])
 })
 
 async function activateLibraryAt(newPath: string): Promise<string> {
@@ -1833,7 +1913,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
 }
 
 ipcMain.handle('library:changePath', async (_event, newPath: string) => {
-  return activateLibraryAt(newPath)
+  return activateLibraryAt(assertApprovedLibraryRoot(newPath))
 })
 
 // --- Vault migration ---
@@ -1843,16 +1923,22 @@ let vaultMigrationRunning = false
 ipcMain.handle('vault:migrate', async (_event, targetPath: string) => {
   if (vaultMigrationRunning) return { ok: false, error: '已有迁移在进行中' }
   if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '目标位置无效' }
+  let approvedTarget: string
+  try {
+    approvedTarget = assertApprovedLibraryRoot(targetPath)
+  } catch {
+    return { ok: false, error: '目标位置未经目录选择器确认' }
+  }
   vaultMigrationRunning = true
   try {
     const sourceRoot = getLibraryRoot()
     const { migrateVault } = await import('./vault-migrator')
-    const result = migrateVault(sourceRoot, targetPath, (progress) => {
+    const result = migrateVault(sourceRoot, approvedTarget, (progress) => {
       mainWindow?.webContents.send('vault:migrateProgress', progress)
     })
     if (!result.ok) return result
     // Copy verified — point the app at the new home and reindex.
-    await activateLibraryAt(targetPath)
+    await activateLibraryAt(approvedTarget)
     return { ...result, newRoot: getLibraryRoot() }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -1870,7 +1956,7 @@ ipcMain.handle('vault:selectMigrationTarget', async () => {
     buttonLabel: '迁移到这里'
   })
   if (result.canceled || result.filePaths.length === 0) return null
-  return result.filePaths[0]
+  return approveLibraryRoot(result.filePaths[0])
 })
 
 // --- First-run onboarding ---
@@ -1884,7 +1970,16 @@ ipcMain.handle('onboarding:getState', () => {
 })
 
 ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, excludedSources: string[]) => {
-  const targetPath = typeof libraryPath === 'string' && libraryPath.trim() ? libraryPath : getDefaultLibraryRoot()
+  const requested = typeof libraryPath === 'string' && libraryPath.trim() ? libraryPath : getDefaultLibraryRoot()
+  // The main-process default root is trusted by construction; any other path
+  // must have come through the directory picker (which registers approval).
+  let targetPath: string
+  if (path.resolve(requested) === path.resolve(getDefaultLibraryRoot())) {
+    fs.mkdirSync(requested, { recursive: true })
+    targetPath = approveLibraryRoot(requested)
+  } else {
+    targetPath = assertApprovedLibraryRoot(requested)
+  }
   const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
   completeOnboarding(targetPath, excluded)
   cachedSessions = filterExcludedSources(cachedSessions)
@@ -1932,25 +2027,32 @@ ipcMain.handle('onboarding:extendClaudeRetention', () => {
 // --- File Operations ---
 
 ipcMain.handle('session:saveMarkdown', async (_event, dirPath: string, filename: string, content: string) => {
-  const fullPath = join(dirPath, filename)
-  fs.writeFileSync(fullPath, content, 'utf-8')
+  const safeDir = assertPathWithinAllowedRoots(dirPath, [getLibraryRoot()], { mustExist: true })
+  const fullPath = resolvePathWithinRoot(safeDir, filename, {
+    allowRoot: false,
+    allowAbsolute: false
+  })
+  fs.writeFileSync(fullPath, content, { encoding: 'utf-8', mode: 0o600 })
   return fullPath
 })
 
 ipcMain.handle('session:saveToTemp', (_event, filename: string, content: string) => {
   const tmpDir = join(require('os').tmpdir(), 'swob-drag')
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true })
-  const fullPath = join(tmpDir, filename)
-  fs.writeFileSync(fullPath, content, 'utf-8')
+  const fullPath = resolvePathWithinRoot(tmpDir, filename, {
+    allowRoot: false,
+    allowAbsolute: false
+  })
+  fs.writeFileSync(fullPath, content, { encoding: 'utf-8', mode: 0o600 })
   return fullPath
 })
 
 ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
-  return shell.openPath(filePath)
+  return shell.openPath(assertProjectOrLibraryPath(filePath))
 })
 
 ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
-  shell.showItemInFolder(filePath)
+  shell.showItemInFolder(assertProjectOrLibraryPath(filePath))
 })
 
 // --- CLI Installation ---
@@ -2149,7 +2251,7 @@ function setupAutoUpdater(): void {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.claude-session-manager')
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -2157,6 +2259,15 @@ app.whenReady().then(() => {
 
   // Only resolve/create the root synchronously. Recursive scan and batch sync run in a Worker.
   initLibrary()
+  approveLibraryRoot(getLibraryRoot())
+  try {
+    await migrateLegacyLlmCredential()
+  } catch (error) {
+    console.error(
+      '[llm-settings] Keychain migration failed; plaintext config was preserved:',
+      error instanceof Error ? error.message : 'unknown error'
+    )
+  }
   libraryWorker = new LibraryWorkerClient()
   sessionSyncCoordinator = new SessionSyncCoordinator({
     quietWindowMs: 2_000,

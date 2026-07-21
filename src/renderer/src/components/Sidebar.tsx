@@ -567,10 +567,10 @@ export function Sidebar({ width }: { width: number }) {
     } catch { /* renderer storage unavailable */ }
   }, [sidebarMode, lensDimension])
 
+  // Initial status read only. Library changes are delivered by the main-process
+  // watcher; a periodic renderer poll must not create an O(library) idle cost.
   useEffect(() => {
-    refreshCloudSessions()
-    const interval = setInterval(refreshCloudSessions, 30_000)
-    return () => clearInterval(interval)
+    void refreshCloudSessions()
   }, [refreshCloudSessions])
 
   // --- Native context menu ---

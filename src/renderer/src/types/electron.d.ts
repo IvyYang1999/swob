@@ -136,7 +136,7 @@ interface ElectronAPI {
   generateInsights: (options?: { useLlm?: boolean }) => Promise<{ ok: boolean; path?: string; sessionCount?: number; llmUsed?: boolean; llmError?: string; error?: string }>
   listModels: () => Promise<string[]>
   getLlmSettings: () => Promise<{ provider: string; hasKey: boolean; keyHint: string; model: string; baseUrl: string }>
-  setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) => Promise<boolean>
+  setLlmSettings: (settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) => Promise<boolean>
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void
 
   // Session Audit

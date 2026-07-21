@@ -10,7 +10,7 @@ function getTextContent(node: React.ReactNode): string {
   if (typeof node === 'number') return String(node)
   if (Array.isArray(node)) return node.map(getTextContent).join('')
   if (node && typeof node === 'object' && 'props' in node) {
-    return getTextContent((node as React.ReactElement).props.children)
+    return getTextContent((node as React.ReactElement<{ children?: React.ReactNode }>).props.children)
   }
   return ''
 }
@@ -66,6 +66,12 @@ const cliComponents: Components = {
   thead: ({ children }) => <thead className="bg-surface">{children}</thead>,
   th: ({ children }) => <th className="border border-edge px-2 py-1 text-body font-medium text-left">{children}</th>,
   td: ({ children }) => <td className="border border-edge px-2 py-1 text-secondary">{children}</td>,
+}
+
+export function mightContainMarkdown(content: string): boolean {
+  if (/[`*_#[\]<>|~\\]/.test(content)) return true
+  if (/(^|\n)\s*(?:#{1,6}|>|[-+]|\d+\.)\s/.test(content)) return true
+  return /(?:https?:\/\/|www\.)/i.test(content)
 }
 
 // Typora-style: heading components need IDs for TOC navigation
@@ -142,6 +148,13 @@ function createDocComponents(tocEntries: TocEntry[]): Components {
 }
 
 export function CliMarkdown({ content }: { content: string }) {
+  if (!mightContainMarkdown(content)) {
+    return (
+      <div className="text-sm text-primary">
+        <p className="mb-1.5 leading-relaxed whitespace-pre-wrap break-words">{content}</p>
+      </div>
+    )
+  }
   return (
     <div className="text-sm text-primary">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={cliComponents}>

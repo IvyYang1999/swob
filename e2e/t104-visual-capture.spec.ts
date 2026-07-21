@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { launchApp } from './helpers'
+import { launchAppWithEnv as launchApp } from './helpers'
 
 const SHOT_DIR = path.join(os.tmpdir(), 'swob-t104-visual')
 

@@ -3,7 +3,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { launchApp } from './helpers'
+import { launchAppWithEnv as launchApp } from './helpers'
 
 let app: ElectronApplication
 let page: Page

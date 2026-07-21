@@ -2,7 +2,7 @@ import { test, expect, type ElectronApplication, type Page } from '@playwright/t
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { launchApp } from './helpers'
+import { launchAppWithEnv as launchApp } from './helpers'
 
 let app: ElectronApplication
 let page: Page
@@ -50,7 +50,8 @@ test('全新安装走完三步引导后进入主界面，配置落盘', async ()
   await expect.poll(() => fs.existsSync(appConfigPath)).toBe(true)
   const appConfig = JSON.parse(fs.readFileSync(appConfigPath, 'utf-8'))
   expect(appConfig.onboardingCompleted).toBe(true)
-  expect(appConfig.libraryPath).toBe(path.join(fixtureHome, 'Documents', 'Swob'))
+  // approveLibraryRoot 落盘的是 realpath 规范化路径(/var → /private/var)
+  expect(fs.realpathSync(appConfig.libraryPath)).toBe(fs.realpathSync(path.join(fixtureHome, 'Documents', 'Swob')))
   await expect.poll(() =>
     fs.existsSync(path.join(fixtureHome, 'Documents', 'Swob', '.swob-config.json'))
   ).toBe(true)

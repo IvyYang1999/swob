@@ -148,7 +148,11 @@ export function buildSegments(msgs: ParsedMessage[]): Segment[] {
 
 // --- Chat TOC (compact/full modes) ---
 
-export function computeChatTocEntries(sections: CompactSection[], locale: Locale = 'zh-CN'): TocEntry[] {
+export function computeChatTocEntries(
+  sections: CompactSection[],
+  locale: Locale = 'zh-CN',
+  groupedTurns?: Turn[][]
+): TocEntry[] {
   const entries: TocEntry[] = []
   sections.forEach((section, sIdx) => {
     const label = section.isCurrent
@@ -157,7 +161,7 @@ export function computeChatTocEntries(sections: CompactSection[], locale: Locale
     if (label) {
       entries.push({ level: 2, text: label, id: `section-${sIdx}` })
     }
-    const turns = groupIntoTurns(section.messages)
+    const turns = groupedTurns?.[sIdx] || groupIntoTurns(section.messages)
     turns.forEach(turn => {
       if (!turn.userMsg) return
       const text = turn.userMsg.textContent.trim()

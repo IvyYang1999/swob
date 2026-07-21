@@ -3,7 +3,7 @@ import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { launchApp } from './helpers'
+import { launchAppWithEnv as launchApp } from './helpers'
 
 let app: ElectronApplication
 let page: Page
@@ -14,7 +14,7 @@ const originalSessionDirs: string[] = []
 
 function createSessionPackage(index: number, turns: number, tags: string[]): void {
   const sessionId = `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`
-  const dir = path.join(vaultRoot, 'Inbox', `会话 ${index}`)
+  const dir = path.join(vaultRoot, `💬 会话 ${index}`)
   originalSessionDirs.push(dir)
   fs.mkdirSync(dir, { recursive: true })
   const rows: unknown[] = []
@@ -105,7 +105,9 @@ test('文件夹与镜头切换、7 维分组不会写 Vault', async () => {
   await page.getByRole('tab', { name: /文件夹/ }).click()
   await expect(page.getByRole('tab', { name: /文件夹/ })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByText('项目说明.md')).toBeVisible()
-  await expect(page.getByText('Inbox', { exact: true }).first()).toBeVisible()
+  // 根目录散放：不再有 Inbox 容器；游离会话直接显示
+  await expect(page.getByText('Inbox', { exact: true })).toHaveCount(0)
+  await expect(page.locator('[data-session-id]').first()).toBeVisible()
   const sidebar = page.locator('[data-testid="sidebar"]')
   const resizeHandle = page.locator('.cursor-col-resize').first()
   const beforeResize = await sidebar.boundingBox()

@@ -289,7 +289,7 @@ export function RemoteConnectionSection() {
 export function LlmSettingsSection() {
   const locale = useStore((s) => s.locale)
   const [provider, setProvider] = useState('anthropic')
-  const [apiKey, setApiKey] = useState('')
+  const [credential, setCredential] = useState('')
   const [keyHint, setKeyHint] = useState('')
   const [hasKey, setHasKey] = useState(false)
   const [model, setModel] = useState('')
@@ -328,18 +328,18 @@ export function LlmSettingsSection() {
   }, [hasKey, fetchModels])
 
   const handleSave = useCallback(async () => {
-    const ok = await window.api.setLlmSettings({ provider, apiKey, model, baseUrl })
+    const ok = await window.api.setLlmSettings({ provider, credential, model, baseUrl })
     if (ok) {
       setSaved(true)
-      setApiKey('')
+      setCredential('')
       const s = await window.api.getLlmSettings()
       setKeyHint(s.keyHint)
       setHasKey(s.hasKey)
       setTimeout(() => setSaved(false), 2000)
       // Refresh model list after saving new key
-      if (apiKey.trim()) fetchModels()
+      if (credential.trim()) fetchModels()
     }
-  }, [provider, apiKey, model, baseUrl])
+  }, [provider, credential, model, baseUrl])
 
   return (
     <section>
@@ -362,8 +362,8 @@ export function LlmSettingsSection() {
         </div>
         <input
           type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
+          value={credential}
+          onChange={(e) => setCredential(e.target.value)}
           placeholder={hasKey ? `${locale === 'zh-CN' ? '已保存' : 'Saved'} ${keyHint} — ${locale === 'zh-CN' ? '输入新 key 可替换' : 'enter new key to replace'}` : 'API Key'}
           className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
         />

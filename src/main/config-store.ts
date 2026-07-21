@@ -1,10 +1,13 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import * as os from 'os'
 import { randomUUID } from 'crypto'
 import type { UserConfig, Folder, Highlight } from './types'
 
-const CONFIG_DIR = path.join(process.env.HOME || '', '.claude-session-manager')
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
+function configPaths(): { dir: string; file: string } {
+  const dir = path.join(process.env.HOME || os.homedir(), '.claude-session-manager')
+  return { dir, file: path.join(dir, 'config.json') }
+}
 
 const DEFAULT_CONFIG: UserConfig = {
   folders: [],
@@ -16,9 +19,10 @@ const DEFAULT_CONFIG: UserConfig = {
 }
 
 export function loadConfig(): UserConfig {
+  const { file } = configPaths()
   try {
-    if (!fs.existsSync(CONFIG_FILE)) return { ...DEFAULT_CONFIG }
-    const data = fs.readFileSync(CONFIG_FILE, 'utf-8')
+    if (!fs.existsSync(file)) return { ...DEFAULT_CONFIG }
+    const data = fs.readFileSync(file, 'utf-8')
     return { ...DEFAULT_CONFIG, ...JSON.parse(data) }
   } catch {
     return { ...DEFAULT_CONFIG }
@@ -26,10 +30,11 @@ export function loadConfig(): UserConfig {
 }
 
 export function saveConfig(config: UserConfig): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true })
+  const { dir, file } = configPaths()
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true })
   }
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8')
+  fs.writeFileSync(file, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 })
 }
 
 export function createFolder(

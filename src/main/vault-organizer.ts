@@ -80,6 +80,8 @@ function sanitizeSegment(value: string): string {
 
 export function sanitizeRelativeFolder(value: string): string {
   if (!value.trim() || path.isAbsolute(value)) throw new Error('目标文件夹必须是 Vault 内的相对路径')
+  // '.' targets the vault root itself (loose sessions live there by default).
+  if (value.trim() === '.') return ''
   const rawSegments = value.split(/[\\/]+/)
   if (rawSegments.some((segment) => segment.trim() === '..' || segment.trim() === '.')) {
     throw new Error('目标文件夹不能包含路径穿越')

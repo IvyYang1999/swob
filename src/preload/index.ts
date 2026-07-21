@@ -2,11 +2,23 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 
+async function parseJsonIpcResult<T>(result: Promise<string | T>): Promise<T> {
+  const value = await result
+  return typeof value === 'string' ? JSON.parse(value) as T : value
+}
+
 const api = {
   // Sessions
   loadAllSessions: () => ipcRenderer.invoke('sessions:loadAll'),
   loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) =>
-    ipcRenderer.invoke('sessions:loadDetail', filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid),
+    parseJsonIpcResult(ipcRenderer.invoke(
+      'sessions:loadDetail',
+      filePath,
+      allFilePaths,
+      branchParentFilePaths,
+      branchPointUuid,
+      branchLeafUuid
+    )),
   searchSessions: (query: string) =>
     ipcRenderer.invoke('sessions:search', query),
 
@@ -67,6 +79,23 @@ const api = {
   librarySelectDirectory: () => ipcRenderer.invoke('library:selectDirectory'),
   libraryChangePath: (newPath: string) => ipcRenderer.invoke('library:changePath', newPath),
 
+  // Vault migration
+  vaultMigrate: (targetPath: string) => ipcRenderer.invoke('vault:migrate', targetPath),
+  vaultSelectMigrationTarget: () => ipcRenderer.invoke('vault:selectMigrationTarget'),
+  onVaultMigrateProgress: (callback: (progress: { phase: string; copied: number; total: number }) => void) => {
+    const listener = (_event: unknown, progress: { phase: string; copied: number; total: number }) => callback(progress)
+    ipcRenderer.on('vault:migrateProgress', listener)
+    return () => ipcRenderer.removeListener('vault:migrateProgress', listener)
+  },
+
+  // Onboarding
+  onboardingGetState: () => ipcRenderer.invoke('onboarding:getState'),
+  onboardingComplete: (libraryPath: string, excludedSources: string[]) =>
+    ipcRenderer.invoke('onboarding:complete', libraryPath, excludedSources),
+  onboardingSetExcludedSources: (excludedSources: string[]) =>
+    ipcRenderer.invoke('onboarding:setExcludedSources', excludedSources),
+  onboardingExtendClaudeRetention: () => ipcRenderer.invoke('onboarding:extendClaudeRetention'),
+
   // Markdown
   saveMarkdown: (dirPath: string, filename: string, content: string) =>
     ipcRenderer.invoke('session:saveMarkdown', dirPath, filename, content),
@@ -124,7 +153,7 @@ const api = {
   generateInsights: (options?: { useLlm?: boolean }) => ipcRenderer.invoke('insights:generate', options),
   listModels: () => ipcRenderer.invoke('insights:listModels'),
   getLlmSettings: () => ipcRenderer.invoke('insights:getLlmSettings'),
-  setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) =>
+  setLlmSettings: (settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) =>
     ipcRenderer.invoke('insights:setLlmSettings', settings),
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => {
     const listener = (_e: unknown, data: { stage: string; current: number; total: number }): void => callback(data)

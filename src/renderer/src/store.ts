@@ -60,16 +60,13 @@ interface ParsedMessage {
   type: string
   subtype?: string
   timestamp: string
-  role?: string
   textContent: string
   toolCalls: Array<{ id?: string; name: string; input: Record<string, unknown>; result?: string }>
   images: string[]
   tokenUsage?: { inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number }
-  isPreCompact: boolean
-  isSidechain: boolean
-  isSharedContext: boolean
-  isSystemGenerated: boolean
-  raw: unknown
+  isSidechain?: boolean
+  isSharedContext?: boolean
+  isSystemGenerated?: boolean
 }
 
 interface SessionDetail extends SessionSummary {

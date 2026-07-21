@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { createHash, randomUUID } from 'crypto'
+import { execFile } from 'node:child_process'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
@@ -14,6 +15,8 @@ import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFi
 import { redactSecrets } from './secret-redactor'
 import { shellQuote } from './resume-terminal'
 import { detectTranscriptOrigin, formatTranscriptOriginHeader } from './transcript-origin'
+import { resolvePathWithinRoot } from './path-containment'
+import { runtimeHome } from './runtime-home'
 import {
   ensureClaudeResumeTarget,
   type ClaudeResumeRecoveryFailureReason
@@ -144,12 +147,18 @@ export interface LibraryConfig {
   derivedFiles?: {
     enabledGenerators?: string[]
   }
+  llmSettings?: {
+    provider: 'anthropic' | 'openai' | 'custom'
+    keyHint: string
+    model: string
+    baseUrl: string
+  }
 }
 
 // ============ Constants ============
 
-const DEFAULT_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
-const APP_CONFIG_DIR = path.join(os.homedir(), '.claude-session-manager')
+const DEFAULT_ROOT = process.env.SWOB_LIBRARY_ROOT || path.join(runtimeHome(), 'Documents', 'Swob')
+const APP_CONFIG_DIR = path.join(runtimeHome(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 
 export interface AppConfig {
@@ -159,6 +168,10 @@ export interface AppConfig {
    * It lives in ~/.claude-session-manager/app-config.json, never in Claude data dirs.
    */
   deviceId?: string
+  /** First-run onboarding finished (or inherited from a pre-onboarding install). */
+  onboardingCompleted?: boolean
+  /** Harness sources the user chose to exclude entirely (no display, no backup). */
+  excludedSources?: string[]
 }
 
 function isOriginalSessionSourcePath(filePath: string): boolean {
@@ -246,7 +259,11 @@ function readAppConfigStrict(): AppConfigReadResult {
     const config = parsed as Record<string, unknown>
     if (
       (config.libraryPath !== undefined && typeof config.libraryPath !== 'string') ||
-      (config.deviceId !== undefined && (typeof config.deviceId !== 'string' || config.deviceId.length === 0))
+      (config.deviceId !== undefined && (typeof config.deviceId !== 'string' || config.deviceId.length === 0)) ||
+      (config.onboardingCompleted !== undefined && typeof config.onboardingCompleted !== 'boolean') ||
+      (config.excludedSources !== undefined && (
+        !Array.isArray(config.excludedSources) || !config.excludedSources.every((item) => typeof item === 'string')
+      ))
     ) {
       return invalidAppConfig(content)
     }
@@ -381,6 +398,50 @@ export function getConfiguredLibraryPath(): string {
   return appConfig.libraryPath || DEFAULT_ROOT
 }
 
+/**
+ * First-run onboarding is needed only for genuinely fresh installs. Pre-onboarding
+ * installs (an initialized library already exists at the configured/default root)
+ * are grandfathered in and marked completed on first check.
+ */
+export function isOnboardingNeeded(): boolean {
+  const appConfig = loadAppConfig()
+  if (appConfig.onboardingCompleted) return false
+  if (appConfig.libraryPath || isLibraryInitialized(getConfiguredLibraryPath())) {
+    try {
+      updateAppConfigAtomically((existing) => ({ ...existing, onboardingCompleted: true }))
+    } catch { /* best effort; recheck next launch */ }
+    return false
+  }
+  return true
+}
+
+export function getExcludedSources(): string[] {
+  return loadAppConfig().excludedSources || []
+}
+
+export function completeOnboarding(libraryPath: string, excludedSources: string[]): void {
+  updateAppConfigAtomically(
+    (existing) => ({
+      ...existing,
+      libraryPath,
+      excludedSources: excludedSources.length > 0 ? excludedSources : undefined,
+      onboardingCompleted: true
+    }),
+    true
+  )
+}
+
+export function setExcludedSources(excludedSources: string[]): void {
+  updateAppConfigAtomically((existing) => ({
+    ...existing,
+    excludedSources: excludedSources.length > 0 ? excludedSources : undefined
+  }))
+}
+
+export function getDefaultLibraryRoot(): string {
+  return DEFAULT_ROOT
+}
+
 export function isLibraryInitialized(rootPath: string): boolean {
   const configFile = path.join(rootPath, LIBRARY_CONFIG_FILE)
   return fs.existsSync(configFile)
@@ -466,7 +527,15 @@ export function loadLibraryConfig(): LibraryConfig {
 
 export function saveLibraryConfig(config: LibraryConfig): void {
   const configPath = path.join(_root, LIBRARY_CONFIG_FILE)
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+  if (!fs.existsSync(_root)) fs.mkdirSync(_root, { recursive: true })
+  const tempPath = `${configPath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 })
+    fs.renameSync(tempPath, configPath)
+    fs.chmodSync(configPath, 0o600)
+  } finally {
+    if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true })
+  }
   _cachedLibraryConfig = config
   _cachedLibraryConfigRoot = _root
 }
@@ -477,6 +546,9 @@ export function invalidateLibraryConfigCache(): void {
 }
 
 // --- Session Dir Naming ---
+
+/** Emoji marker distinguishing session packages from ordinary folders in Obsidian/Finder. */
+export const SESSION_DIR_PREFIX = '💬 '
 
 function sanitizeDirName(title: string): string {
   return title
@@ -729,7 +801,7 @@ function isPathInside(parentDir: string, childPath: string): boolean {
 }
 
 function isRestorableLocalClaudeSource(sourcePath: string): boolean {
-  const home = os.homedir()
+  const home = runtimeHome()
   const localClaudeProjects = path.join(home, '.claude', 'projects')
   if (isPathInside(localClaudeProjects, sourcePath)) return true
 
@@ -942,7 +1014,7 @@ export async function ensureSessionResumeTarget(
   }
 
   const runtimeIdentity = options.runtimeIdentity || {
-    homeDir: os.homedir(),
+    homeDir: runtimeHome(),
     localDeviceId: getOrCreateLocalDeviceId(),
     localUsername: os.userInfo().username
   }
@@ -1481,11 +1553,17 @@ export async function ensureSessionInLibrary(
     return existing
   }
 
-  // Create new session dir. New sessions always land in Inbox. Project/date/topic
-  // organization is explicit: a lens never writes, and an organizer always previews.
+  // Create new session dir. Default: loose in the vault root, marked with an emoji
+  // prefix so session packages are distinguishable from ordinary folders in
+  // Obsidian/Finder. Auto-filing into container folders is opt-in via
+  // preferences.ungrouping — the user consciously chooses where sessions land.
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId.slice(0, 12)
-  const baseName = sanitizeDirName(title)
-  const parentDir = path.join(_root, 'Inbox')
+  const baseName = `${SESSION_DIR_PREFIX}${sanitizeDirName(title)}`
+  const ungrouping = loadLibraryConfig().preferences?.ungrouping
+  const containerName = ungrouping
+    ? (session.turnCount <= 1 ? ungrouping.singleTurn : ungrouping.multiTurn)
+    : null
+  const parentDir = containerName ? path.join(_root, containerName) : _root
   fs.mkdirSync(parentDir, { recursive: true })
   const dirName = findUniqueDirName(parentDir, baseName)
   const dirPath = path.join(parentDir, dirName)
@@ -1963,9 +2041,11 @@ export async function rebuildAllTranscripts(options: { dryRun?: boolean; missing
 // --- Folder Operations ---
 
 export function createLibraryFolder(name: string, parentPath?: string): string {
-  const parent = parentPath || _root
+  const parent = parentPath
+    ? resolvePathWithinRoot(_root, parentPath, { mustExist: true })
+    : path.resolve(_root)
   const dirName = findUniqueDirName(parent, sanitizeDirName(name))
-  const dirPath = path.join(parent, dirName)
+  const dirPath = resolvePathWithinRoot(_root, path.join(parent, dirName))
   fs.mkdirSync(dirPath, { recursive: true })
   return dirPath
 }
@@ -2021,6 +2101,7 @@ function relocateManagedFolder(folderPath: string, newPath: string): string {
 }
 
 export function renameLibraryFolder(folderPath: string, newName: string): string {
+  folderPath = resolvePathWithinRoot(_root, folderPath, { allowRoot: false, mustExist: true })
   const parent = path.dirname(folderPath)
   const currentName = path.basename(folderPath)
   const sanitized = sanitizeDirName(newName)
@@ -2029,7 +2110,7 @@ export function renameLibraryFolder(folderPath: string, newName: string): string
   if (sanitized === currentName) return folderPath
 
   const newDirName = findUniqueDirName(parent, sanitized)
-  const newPath = path.join(parent, newDirName)
+  const newPath = resolvePathWithinRoot(_root, path.join(parent, newDirName), { allowRoot: false })
 
   const movedPath = relocateManagedFolder(folderPath, newPath)
   updateFolderOrderPaths(path.relative(_root, folderPath), path.relative(_root, movedPath))
@@ -2037,6 +2118,8 @@ export function renameLibraryFolder(folderPath: string, newName: string): string
 }
 
 export function moveLibraryFolderToParent(srcPath: string, destParentPath: string): string {
+  srcPath = resolvePathWithinRoot(_root, srcPath, { allowRoot: false, mustExist: true })
+  destParentPath = resolvePathWithinRoot(_root, destParentPath, { mustExist: true })
   if (path.dirname(srcPath) === destParentPath) return srcPath
   const relativeParent = path.relative(_root, destParentPath)
   if (relativeParent === '..' || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)) {
@@ -2049,7 +2132,7 @@ export function moveLibraryFolderToParent(srcPath: string, destParentPath: strin
 
   const baseName = path.basename(srcPath)
   const newName = findUniqueDirName(destParentPath, baseName)
-  const newPath = path.join(destParentPath, newName)
+  const newPath = resolvePathWithinRoot(_root, path.join(destParentPath, newName), { allowRoot: false })
 
   const movedPath = relocateManagedFolder(srcPath, newPath)
   updateFolderOrderPaths(path.relative(_root, srcPath), path.relative(_root, movedPath))
@@ -2057,6 +2140,7 @@ export function moveLibraryFolderToParent(srcPath: string, destParentPath: strin
 }
 
 export function deleteLibraryFolder(folderPath: string): void {
+  folderPath = resolvePathWithinRoot(_root, folderPath, { allowRoot: false, mustExist: true })
   // Only delete if it's a folder (no .swob-session.json)
   if (isSessionDir(folderPath)) return
 
@@ -2073,7 +2157,7 @@ export function deleteLibraryFolder(folderPath: string): void {
   const result = executeOrganization(_root, 'manual', allSessions.map((session) => ({
     sessionId: session.sessionId,
     sourceDir: session.dirPath,
-    targetRelativeFolder: 'Inbox'
+    targetRelativeFolder: '.'
   })))
   for (const move of result.moves) sessionIndex.set(move.sessionId, move.to)
 
@@ -2082,9 +2166,17 @@ export function deleteLibraryFolder(folderPath: string): void {
 }
 
 export function moveSessionToFolder(sessionId: string, folderPath: string): void {
-  const currentDir = sessionIndex.get(sessionId)
-  if (!currentDir || !fs.existsSync(currentDir)) return
-  const targetRelativeFolder = path.relative(_root, folderPath)
+  folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
+  const indexedDir = sessionIndex.get(sessionId)
+  if (!indexedDir || !fs.existsSync(indexedDir)) return
+  const currentDir = resolvePathWithinRoot(_root, indexedDir, { allowRoot: false, mustExist: true })
+
+  // Remove any existing symlinks to this session in the target folder
+  removeSessionSymlinksIn(currentDir, folderPath)
+
+  // Moves go through executeOrganization so every manual drag is undoable.
+  const relative = path.relative(_root, folderPath)
+  const targetRelativeFolder = relative === '' ? '.' : relative
   const result = executeOrganization(_root, 'manual', [{
     sessionId,
     sourceDir: currentDir,
@@ -2095,8 +2187,10 @@ export function moveSessionToFolder(sessionId: string, folderPath: string): void
 }
 
 export function addSessionToFolder(sessionId: string, folderPath: string): void {
-  const currentDir = sessionIndex.get(sessionId)
-  if (!currentDir || !fs.existsSync(currentDir)) return
+  folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
+  const indexedDir = sessionIndex.get(sessionId)
+  if (!indexedDir || !fs.existsSync(indexedDir)) return
+  const currentDir = resolvePathWithinRoot(_root, indexedDir, { allowRoot: false, mustExist: true })
 
   // Check if already in this folder (directly or via symlink)
   const baseName = path.basename(currentDir)
@@ -2108,8 +2202,10 @@ export function addSessionToFolder(sessionId: string, folderPath: string): void 
 }
 
 export function removeSessionFromFolder(sessionId: string, folderPath: string): void {
-  const realDir = sessionIndex.get(sessionId)
-  if (!realDir) return
+  folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
+  const indexedDir = sessionIndex.get(sessionId)
+  if (!indexedDir) return
+  const realDir = resolvePathWithinRoot(_root, indexedDir, { allowRoot: false, mustExist: true })
 
   // Find and remove symlinks or the real dir in this folder
   const entries = fs.readdirSync(folderPath, { withFileTypes: true })
@@ -2124,11 +2220,11 @@ export function removeSessionFromFolder(sessionId: string, folderPath: string): 
           return
         }
       } else if (fullPath === realDir) {
-        // Removing a physical assignment returns the session to Inbox.
+        // Removing a physical assignment returns the session to the vault root.
         const result = executeOrganization(_root, 'manual', [{
           sessionId,
           sourceDir: fullPath,
-          targetRelativeFolder: 'Inbox'
+          targetRelativeFolder: '.'
         }])
         const moved = result.moves[0]
         if (moved) sessionIndex.set(sessionId, moved.to)
@@ -2442,6 +2538,8 @@ function updateFolderOrderPaths(oldRelPath: string, newRelPath: string): void {
 
 // Update folder display order: move folderId before/after targetId
 export function reorderFolder(folderId: string, targetId: string, position: 'before' | 'after'): void {
+  resolveFolderPath(folderId)
+  resolveFolderPath(targetId)
   const config = loadLibraryConfig()
   let order = config.folderOrder || []
 
@@ -2482,12 +2580,16 @@ export function reorderFolder(folderId: string, targetId: string, position: 'bef
 
 // Resolve a folder ID (relative path) to absolute path
 export function resolveFolderPath(folderId: string): string {
-  return path.join(_root, folderId)
+  return resolvePathWithinRoot(_root, folderId, {
+    allowRoot: false,
+    allowAbsolute: false
+  })
 }
 
 // --- Branch folder management (stored in config, not file system) ---
 
 export function addBranchToFolder(branchId: string, folderId: string): void {
+  resolveFolderPath(folderId)
   const config = loadLibraryConfig()
   const map = config.branchFolders || {}
   const folders = map[branchId] || []
@@ -2498,6 +2600,7 @@ export function addBranchToFolder(branchId: string, folderId: string): void {
 }
 
 export function removeBranchFromFolder(branchId: string, folderId: string): void {
+  resolveFolderPath(folderId)
   const config = loadLibraryConfig()
   const map = config.branchFolders || {}
   const folders = map[branchId] || []
@@ -2676,16 +2779,15 @@ export function isSessionCloudOnly(sessionId: string): boolean {
  * Uses `brctl download` command (macOS iCloud daemon).
  * Returns true if download was triggered successfully.
  */
-export function triggerICloudDownload(sessionId: string): boolean {
+export function triggerICloudDownload(sessionId: string): Promise<boolean> {
   const dirPath = sessionIndex.get(sessionId)
-  if (!dirPath || !fs.existsSync(dirPath)) return false
-  try {
-    const { execSync } = require('child_process')
-    execSync(`brctl download "${dirPath}"`, { timeout: 5000 })
-    return true
-  } catch {
-    return false
-  }
+  if (!dirPath || !fs.existsSync(dirPath)) return Promise.resolve(false)
+  const safeDirPath = resolvePathWithinRoot(_root, dirPath, { allowRoot: false, mustExist: true })
+  return new Promise((resolve) => {
+    execFile('/usr/bin/brctl', ['download', safeDirPath], { timeout: 5000 }, (error) => {
+      resolve(!error)
+    })
+  })
 }
 
 // ============ SSH Config ============

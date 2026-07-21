@@ -1,12 +1,12 @@
 /**
  * Minimal LLM client for insights narrative generation.
  * Supports Anthropic / OpenAI-compatible APIs via fetch, no SDK dependency.
- * API keys live in library config (local disk), never logged.
+ * Credentials are supplied at call time from the OS secret store and are never logged.
  */
 
 export interface LlmSettings {
   provider: 'anthropic' | 'openai' | 'custom'
-  apiKey: string
+  credential: string
   model?: string
   baseUrl?: string
 }
@@ -28,7 +28,7 @@ export async function callLlm(
   maxTokens = 4096
 ): Promise<string> {
   const model = resolveLlmModel(settings)
-  if (!settings.apiKey?.trim()) throw new Error('missing-api-key')
+  if (!settings.credential?.trim()) throw new Error('missing-api-key')
   if (!model) throw new Error('missing-model')
 
   // Determine if this is an Anthropic-protocol endpoint
@@ -43,7 +43,7 @@ export async function callLlm(
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': settings.apiKey,
+        'x-api-key': settings.credential,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
@@ -70,7 +70,7 @@ export async function callLlm(
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      authorization: `Bearer ${settings.apiKey}`
+      authorization: `Bearer ${settings.credential}`
     },
     body: JSON.stringify({
       model,
@@ -91,7 +91,7 @@ export async function callLlm(
 
 /** Fetch available models from the configured provider. Returns model IDs sorted by recommendation. */
 export async function listModels(settings: LlmSettings): Promise<string[]> {
-  if (!settings.apiKey?.trim()) return []
+  if (!settings.credential?.trim()) return []
 
   const isAnthropicProtocol = settings.provider === 'anthropic' ||
     (settings.provider === 'custom' && settings.baseUrl?.includes('anthropic'))
@@ -102,7 +102,7 @@ export async function listModels(settings: LlmSettings): Promise<string[]> {
         ? 'https://api.anthropic.com/v1/models'
         : `${settings.baseUrl!.trim().replace(/\/+$/, '')}/v1/models`
       const res = await fetch(endpoint, {
-        headers: { 'x-api-key': settings.apiKey, 'anthropic-version': '2023-06-01' },
+        headers: { 'x-api-key': settings.credential, 'anthropic-version': '2023-06-01' },
         signal: AbortSignal.timeout(10_000)
       })
       if (!res.ok) return []
@@ -120,7 +120,7 @@ export async function listModels(settings: LlmSettings): Promise<string[]> {
       ? settings.baseUrl.trim().replace(/\/+$/, '')
       : 'https://api.openai.com/v1'
     const res = await fetch(`${baseUrl}/models`, {
-      headers: { authorization: `Bearer ${settings.apiKey}` },
+      headers: { authorization: `Bearer ${settings.credential}` },
       signal: AbortSignal.timeout(10_000)
     })
     if (!res.ok) return []

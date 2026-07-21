@@ -1,4 +1,6 @@
-import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
+import { useRef, useState, useMemo, useCallback, useEffect, useDeferredValue, memo } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import type { Rect, Virtualizer } from '@tanstack/react-virtual'
 import { useStore } from '../store'
 import type { ViewMode, ParsedMessage, SessionDetail, Highlight, ResumeSurface } from '../store'
 import {
@@ -33,6 +35,60 @@ import {
   stripUserText,
   TOOL_COLORS
 } from '../../../shared/chat-format'
+
+function observeVirtualElementRect(
+  instance: Virtualizer<HTMLDivElement, Element>,
+  notify: (rect: Rect) => void
+): (() => void) | undefined {
+  const element = instance.scrollElement
+  const targetWindow = instance.targetWindow
+  if (!element || !targetWindow) return undefined
+
+  if (!targetWindow.ResizeObserver) {
+    notify({ width: element.clientWidth, height: element.clientHeight })
+    return () => undefined
+  }
+
+  let frame = 0
+  let pendingRect: Rect | null = null
+  const observer = new targetWindow.ResizeObserver((entries) => {
+    const entry = entries[0]
+    if (!entry) return
+    const borderBox = entry.borderBoxSize?.[0]
+    pendingRect = borderBox
+      ? { width: borderBox.inlineSize, height: borderBox.blockSize }
+      : { width: entry.contentRect.width, height: entry.contentRect.height }
+    if (frame) return
+    frame = targetWindow.requestAnimationFrame(() => {
+      frame = 0
+      if (!pendingRect) return
+      notify({
+        width: Math.round(pendingRect.width),
+        height: Math.round(pendingRect.height)
+      })
+      pendingRect = null
+    })
+  })
+  observer.observe(element, { box: 'border-box' })
+  return () => {
+    if (frame) targetWindow.cancelAnimationFrame(frame)
+    observer.disconnect()
+  }
+}
+
+function scrollVirtualElement(
+  offset: number,
+  { adjustments = 0, behavior }: { adjustments?: number; behavior?: ScrollBehavior },
+  instance: Virtualizer<HTMLDivElement, Element>
+): void {
+  const element = instance.scrollElement
+  if (!element) return
+  const target = offset + adjustments
+  // Reading scrollTop here forces layout. TanStack already tracks the current
+  // offset, so use its cached value to skip no-op writes without DOM geometry.
+  if (Math.abs((instance.scrollOffset ?? 0) - target) < 1) return
+  element.scrollTo({ top: target, behavior })
+}
 
 // --- Source-specific assistant avatars (using official brand icons) ---
 
@@ -320,15 +376,15 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
 
 // --- Turn block ---
 
-function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
+const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
   turn: Turn; viewMode: 'compact' | 'full'
+  sessionSource?: string
   qSelected?: boolean; aSelected?: boolean
   selectMode?: boolean
   onSelectQ?: (uuid: string) => void; onSelectA?: (uuid: string) => void
 }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
-  const sessionSource = useStore((s) => s.selectedSession?.source)
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
   const turnId = turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined
@@ -352,14 +408,14 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
   // Command output: render as collapsible system notice pill
   if (turn.userMsg?.subtype === 'command-output') {
     return (
-      <div id={turnId} className="scroll-mt-0">
+      <div id={turnId} data-turn-uuid={turn.userMsg?.uuid} className="scroll-mt-0">
         <SystemNoticePill text={turn.userMsg.textContent} />
       </div>
     )
   }
 
   return (
-    <div id={turnId} className="space-y-3 scroll-mt-0 relative">
+    <div id={turnId} data-turn-uuid={turn.userMsg?.uuid} className="space-y-3 scroll-mt-0 relative">
       {/* User message */}
       {turn.userMsg && (
         <div className={`group/user rounded-lg transition-colors ${qSelected ? 'bg-soft-blue/6' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-edge-strong pl-2' : ''}`}>
@@ -471,7 +527,7 @@ function TurnBlock({ turn, viewMode, qSelected, aSelected, selectMode, onSelectQ
       )}
     </div>
   )
-}
+})
 
 // --- View mode config ---
 
@@ -483,31 +539,60 @@ const VIEW_MODES: { mode: ViewMode; labelKey: string }[] = [
 
 // --- Resizable TOC Sidebar ---
 
-function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap }: {
+function TocSidebar({ entries, onNavigate, width, onResize, getTurnContent }: {
   entries: TocEntry[]
   onNavigate: (id: string) => void
   width: number
   onResize: (w: number) => void
-  turnContentMap?: Map<string, string>
+  getTurnContent?: (id: string) => string | undefined
 }) {
   const t = useT()
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set())
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
-  const groups: { header: TocEntry | null; groupIdx: number; children: TocEntry[] }[] = []
-  let currentGroup: (typeof groups)[0] | null = null
-
-  for (const entry of entries) {
-    if (entry.level === 1) continue
-    if (entry.level === 2) {
-      if (currentGroup) groups.push(currentGroup)
-      currentGroup = { header: entry, groupIdx: groups.length, children: [] }
-    } else if (entry.level === 5) {
-      if (!currentGroup) currentGroup = { header: null, groupIdx: groups.length, children: [] }
-      currentGroup.children.push(entry)
+  const rows = useMemo<Array<
+    | { kind: 'header'; groupIdx: number; entry: TocEntry }
+    | { kind: 'entry'; groupIdx: number; entry: TocEntry }
+  >>(() => {
+    const groups: { header: TocEntry | null; children: TocEntry[] }[] = []
+    let currentGroup: (typeof groups)[0] | null = null
+    for (const entry of entries) {
+      if (entry.level === 1) continue
+      if (entry.level === 2) {
+        if (currentGroup) groups.push(currentGroup)
+        currentGroup = { header: entry, children: [] }
+      } else if (entry.level === 5) {
+        if (!currentGroup) currentGroup = { header: null, children: [] }
+        currentGroup.children.push(entry)
+      }
     }
-  }
-  if (currentGroup) groups.push(currentGroup)
+    if (currentGroup) groups.push(currentGroup)
+
+    const result: Array<
+      | { kind: 'header'; groupIdx: number; entry: TocEntry }
+      | { kind: 'entry'; groupIdx: number; entry: TocEntry }
+    > = []
+    groups.forEach((group, groupIdx) => {
+      if (group.header) result.push({ kind: 'header', groupIdx, entry: group.header })
+      if (!collapsed.has(groupIdx)) {
+        group.children.forEach((entry) => result.push({ kind: 'entry', groupIdx, entry }))
+      }
+    })
+    return result
+  }, [entries, collapsed])
+  const tocVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    observeElementRect: observeVirtualElementRect,
+    scrollToFn: scrollVirtualElement,
+    estimateSize: (index) => rows[index]?.kind === 'header' ? 28 : 22,
+    getItemKey: (index) => {
+      const row = rows[index]
+      return row ? `${row.kind}-${row.groupIdx}-${row.entry.id}` : index
+    },
+    overscan: 2
+  })
 
   const toggleGroup = (idx: number) => {
     setCollapsed(prev => {
@@ -536,50 +621,57 @@ function TocSidebar({ entries, onNavigate, width, onResize, turnContentMap }: {
 
   return (
     <div className="shrink-0 flex" style={{ width }}>
-      <div className="flex-1 overflow-y-auto bg-base/80 border-r border-edge-subtle">
+      <div className="flex-1 min-w-0 flex flex-col bg-base/80 border-r border-edge-subtle">
         <div className="px-3 py-2 text-[11px] text-muted font-medium uppercase tracking-wide border-b border-edge-subtle">
           {t('chat.toc')}
         </div>
-        <div className="py-1">
-          {groups.map((group, gi) => {
-            const isCollapsed = collapsed.has(gi)
-            return (
-              <div key={gi}>
-                {group.header && (
+        <div ref={scrollRef} data-testid="toc-scroll" className="flex-1 min-h-0 overflow-y-auto">
+          <div className="relative w-full" style={{ height: `${tocVirtualizer.getTotalSize()}px` }}>
+            {tocVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = rows[virtualRow.index]
+              if (!row) return null
+              const isHeader = row.kind === 'header'
+              const isCollapsed = collapsed.has(row.groupIdx)
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={tocVirtualizer.measureElement}
+                  className="absolute left-0 top-0 w-full"
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  {isHeader ? (
                   <button
                     onClick={() => {
-                      toggleGroup(gi)
-                      onNavigate(group.header!.id)
+                        toggleGroup(row.groupIdx)
+                        onNavigate(row.entry.id)
                     }}
                     className="w-full flex items-center gap-1 px-2 py-1 text-[11px] text-body hover:text-bright hover:bg-surface/50 truncate font-medium"
                   >
                     {isCollapsed ? <ChevronRight size={10} className="shrink-0 text-faint" /> : <ChevronDown size={10} className="shrink-0 text-faint" />}
-                    <span className="truncate">{group.header.text}</span>
+                      <span className="truncate">{row.entry.text}</span>
                   </button>
-                )}
-                {!isCollapsed && group.children.map((entry, ci) => {
-                  return (
+                  ) : (
                     <button
-                      key={ci}
-                      draggable={!!turnContentMap?.has(entry.id)}
+                      draggable={row.entry.id.startsWith('turn-')}
                       onDragStart={(e) => {
-                        const md = turnContentMap?.get(entry.id)
+                        const md = getTurnContent?.(row.entry.id)
                         if (md) {
                           e.dataTransfer.setData('text/plain', md)
                           e.dataTransfer.effectAllowed = 'copy'
                         }
                       }}
-                      onClick={() => onNavigate(entry.id)}
+                      onClick={() => onNavigate(row.entry.id)}
                       className="w-full flex items-center gap-1 text-left pl-6 pr-2 py-0.5 text-[11px] text-muted hover:text-body hover:bg-surface/30 truncate cursor-pointer"
-                      title={entry.text}
+                      title={row.entry.text}
                     >
-                      <span className="truncate">{entry.text}</span>
+                      <span className="truncate">{row.entry.text}</span>
                     </button>
-                  )
-                })}
-              </div>
-            )
-          })}
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
       </div>
       <div
@@ -1122,6 +1214,7 @@ function SourceView({ session, sections, customTitle, contentRef }: {
                 <div
                   key={turn.userMsg?.uuid || tIdx}
                   id={turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined}
+                  data-turn-uuid={turn.userMsg?.uuid}
                   className="scroll-mt-0"
                 >
                   <pre className="text-[12px] font-mono text-secondary whitespace-pre-wrap leading-relaxed">{turnToMarkdown(turn, locale)}</pre>
@@ -1167,6 +1260,7 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
                 <div
                   key={turn.userMsg?.uuid || tIdx}
                   id={turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined}
+                  data-turn-uuid={turn.userMsg?.uuid}
                   className="scroll-mt-0"
                 >
                   <DocMarkdown content={turnToMarkdown(turn, locale)} tocEntries={[]} />
@@ -1182,8 +1276,18 @@ function MarkdownDocView({ session, sections, customTitle, contentRef }: {
 
 // --- Main ChatViewer ---
 
+type ChatVirtualRow =
+  | { kind: 'section'; section: CompactSection; sectionIndex: number }
+  | { kind: 'turn'; section: CompactSection; sectionIndex: number; turn: Turn }
+
 export function ChatViewer() {
-  const { selectedSession, viewMode, config, addHighlight, removeHighlight, locale } = useStore()
+  const selectedSessionSnapshot = useStore((state) => state.selectedSession)
+  const viewMode = useStore((state) => state.viewMode)
+  const config = useStore((state) => state.config)
+  const addHighlight = useStore((state) => state.addHighlight)
+  const removeHighlight = useStore((state) => state.removeHighlight)
+  const locale = useStore((state) => state.locale)
+  const selectedSession = useDeferredValue(selectedSessionSnapshot)
   const t = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
@@ -1192,11 +1296,16 @@ export function ChatViewer() {
   const [sourceView, setSourceView] = useState(false)
   const pendingScrollRef = useRef<string | null>(null)
   const firstVisibleTurnRef = useRef<string | null>(null)
+  const [virtualRenderVersion, setVirtualRenderVersion] = useState(0)
 
   const sections = useMemo<CompactSection[]>(() => {
     if (!selectedSession) return []
     return computeSections(selectedSession, locale)
   }, [selectedSession, locale])
+  const sectionTurns = useMemo(
+    () => sections.map((section) => groupIntoTurns(section.messages)),
+    [sections]
+  )
 
   // Reset expanded sections on session change
   const sessionId = selectedSession?.id
@@ -1208,51 +1317,18 @@ export function ChatViewer() {
 
   const mdMode = viewMode === 'markdown'
 
-  // Collect all turn UUIDs for scroll tracking
-  const allTurnUuids = useMemo(() => {
-    const uuids: string[] = []
-    for (const section of sections) {
-      const turns = groupIntoTurns(section.messages)
-      for (const turn of turns) {
-        if (turn.userMsg) uuids.push(turn.userMsg.uuid)
-      }
-    }
-    return uuids
-  }, [sections])
-
-  // Track the first visible turn on scroll
-  useEffect(() => {
-    const el = contentRef.current
-    if (!el) return
-    const handler = () => {
-      const containerTop = el.getBoundingClientRect().top
-      for (const uuid of allTurnUuids) {
-        const turnEl = el.querySelector(`#turn-${CSS.escape(uuid)}`)
-        if (turnEl) {
-          const rect = turnEl.getBoundingClientRect()
-          if (rect.bottom > containerTop) {
-            firstVisibleTurnRef.current = uuid
-            return
-          }
-        }
-      }
-    }
-    el.addEventListener('scroll', handler, { passive: true })
-    return () => el.removeEventListener('scroll', handler)
-  }, [allTurnUuids])
-
   // Map turn UUID → section index (for auto-expand in chat modes)
   const turnSectionMap = useMemo(() => {
     const map = new Map<string, number>()
     sections.forEach((section, sIdx) => {
       if (section.isCurrent) return
-      const turns = groupIntoTurns(section.messages)
+      const turns = sectionTurns[sIdx] || []
       turns.forEach(turn => {
         if (turn.userMsg) map.set(turn.userMsg.uuid, sIdx)
       })
     })
     return map
-  }, [sections])
+  }, [sections, sectionTurns])
 
   // Restore scroll position after view mode switch — align to first visible turn
   const prevViewModeRef = useRef(viewMode)
@@ -1267,9 +1343,9 @@ export function ChatViewer() {
         const sIdx = turnSectionMap.get(targetUuid)
         if (sIdx !== undefined && !expandedSections.has(sIdx)) {
           setExpandedSections(prev => new Set([...prev, sIdx]))
-          pendingScrollRef.current = `turn-${targetUuid}`
-          return
         }
+        pendingScrollRef.current = `turn-${targetUuid}`
+        return
       }
 
       requestAnimationFrame(() => {
@@ -1286,8 +1362,26 @@ export function ChatViewer() {
     return config.sessionMeta?.[selectedSession.sessionId]?.customTitle
   }, [selectedSession, config])
 
-  // Unified TOC entries for all modes
-  const tocEntries = useMemo(() => computeChatTocEntries(sections, locale), [sections, locale])
+  const [tocReadySessionId, setTocReadySessionId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!sessionId) {
+      setTocReadySessionId(null)
+      return
+    }
+    // Building a long TOC is useful but not part of the first content paint.
+    // Put it in a separate task so it cannot merge with session parsing/render.
+    const timer = window.setTimeout(() => setTocReadySessionId(sessionId), 150)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [sessionId])
+  const tocEntries = useMemo(
+    () => tocReadySessionId === sessionId
+      ? computeChatTocEntries(sections, locale, sectionTurns)
+      : [],
+    [tocReadySessionId, sessionId, sections, locale, sectionTurns]
+  )
+  const visibleTocEntries = tocEntries
 
   // Multi-select: Q and A selectable independently
   // Items are "q:uuid" or "a:uuid"
@@ -1337,9 +1431,8 @@ export function ChatViewer() {
   }, [])
 
   // Compute highlight ranges + match count when query or content changes
-  const highlightContentKey = `${viewMode}-${expandedSections.size}-${sections.length}`
+  const highlightContentKey = `${viewMode}-${expandedSections.size}-${sections.length}-${virtualRenderVersion}`
   useEffect(() => {
-    // @ts-expect-error CSS.highlights
     const highlights = CSS.highlights as Map<string, unknown> | undefined
     if (!highlights) return
     highlights.delete('swob-search')
@@ -1424,9 +1517,7 @@ export function ChatViewer() {
     setSearchMatchCount(ranges.length)
 
     if (ranges.length > 0) {
-      // @ts-expect-error Highlight constructor
       highlights.set('swob-search', new Highlight(...ranges))
-      // @ts-expect-error Highlight constructor
       highlights.set('swob-search-current', new Highlight(ranges[0]))
       setCurrentMatchIdx(0)
       scrollRangeToCenter(ranges[0], el)
@@ -1443,10 +1534,8 @@ export function ChatViewer() {
     setCurrentMatchIdx(safeIdx)
 
     // Update the "current match" highlight
-    // @ts-expect-error CSS.highlights
     const highlights = CSS.highlights as Map<string, unknown> | undefined
     if (highlights) {
-      // @ts-expect-error Highlight constructor
       highlights.set('swob-search-current', new Highlight(ranges[safeIdx]))
     }
 
@@ -1461,7 +1550,6 @@ export function ChatViewer() {
   const closeSearch = useCallback(() => {
     setSearchOpen(false)
     setSearchQuery('')
-    // @ts-expect-error CSS.highlights
     const highlights = CSS.highlights as Map<string, unknown> | undefined
     if (highlights) { highlights.delete('swob-search'); highlights.delete('swob-search-current') }
     // Re-collapse sections that were auto-expanded by search
@@ -1541,9 +1629,8 @@ export function ChatViewer() {
   }, [pendingHighlight, selectedSession, addHighlight])
 
   // Render persistent annotation highlights via CSS Custom Highlight API
-  const annotationContentKey = `${viewMode}-${expandedSections.size}-${highlights.length}`
+  const annotationContentKey = `${viewMode}-${expandedSections.size}-${highlights.length}-${virtualRenderVersion}`
   useEffect(() => {
-    // @ts-expect-error CSS.highlights
     const cssHL = CSS.highlights as Map<string, unknown> | undefined
     if (!cssHL) return
     cssHL.delete('swob-annotation')
@@ -1593,7 +1680,6 @@ export function ChatViewer() {
     }
 
     if (ranges.length > 0) {
-      // @ts-expect-error Highlight constructor
       cssHL.set('swob-annotation', new Highlight(...ranges))
     }
   }, [highlights, annotationContentKey])
@@ -1602,11 +1688,23 @@ export function ChatViewer() {
   const scrollToAnnotation = useCallback((highlightId: string) => {
     const range = annotationRangesRef.current.get(highlightId)
     const el = contentRef.current
-    if (!range || !el) return
+    if (!range || !el) {
+      const highlight = highlights.find((item) => item.id === highlightId)
+      if (!highlight) return
+      if (!mdMode) {
+        const sectionIndex = turnSectionMap.get(highlight.turnUuid)
+        if (sectionIndex !== undefined && !expandedSections.has(sectionIndex)) {
+          setExpandedSections((previous) => new Set([...previous, sectionIndex]))
+        }
+      }
+      pendingScrollRef.current = `turn-${highlight.turnUuid}`
+      setVirtualRenderVersion((version) => version + 1)
+      return
+    }
     try {
       scrollRangeToCenter(range, el)
     } catch { /* range may be detached */ }
-  }, [])
+  }, [highlights, mdMode, turnSectionMap, expandedSections])
 
   // Listen for highlight navigation events from InfoPanel
   useEffect(() => {
@@ -1618,28 +1716,118 @@ export function ChatViewer() {
     return () => window.removeEventListener('swob:scrollToHighlight', handler)
   }, [scrollToAnnotation])
 
-  // Build turn content map for TOC drag (turn UUID → markdown)
-  const turnContentMap = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const section of sections) {
-      const turns = groupIntoTurns(section.messages)
-      for (const turn of turns) {
-        if (turn.userMsg) {
-          map.set(`turn-${turn.userMsg.uuid}`, turnToMarkdown(turn, locale))
-        }
-      }
-    }
-    return map
-  }, [sections])
-
   // Build all turns flat list for batch export
   const allTurns = useMemo(() => {
     const result: Turn[] = []
-    for (const section of sections) {
-      result.push(...groupIntoTurns(section.messages))
-    }
+    for (const turns of sectionTurns) result.push(...turns)
     return result
-  }, [sections])
+  }, [sectionTurns])
+
+  // Markdown generation is intentionally deferred until an actual drag starts.
+  const getTurnContent = useCallback((id: string): string | undefined => {
+    if (!id.startsWith('turn-')) return undefined
+    const uuid = id.slice(5)
+    const turn = allTurns.find((candidate) => candidate.userMsg?.uuid === uuid)
+    return turn ? turnToMarkdown(turn, locale) : undefined
+  }, [allTurns, locale])
+
+  const chatRows = useMemo<ChatVirtualRow[]>(() => {
+    const rows: ChatVirtualRow[] = []
+    sections.forEach((section, sectionIndex) => {
+      rows.push({ kind: 'section', section, sectionIndex })
+      if (section.isCurrent || expandedSections.has(sectionIndex)) {
+        for (const turn of sectionTurns[sectionIndex] || []) {
+          rows.push({ kind: 'turn', section, sectionIndex, turn })
+        }
+      }
+    })
+    return rows
+  }, [sections, sectionTurns, expandedSections])
+
+  const chatVirtualizer = useVirtualizer({
+    count: mdMode ? 0 : chatRows.length,
+    getScrollElement: () => contentRef.current,
+    observeElementRect: observeVirtualElementRect,
+    scrollToFn: scrollVirtualElement,
+    estimateSize: (index) => chatRows[index]?.kind === 'section' ? 42 : 280,
+    getItemKey: (index) => {
+      const row = chatRows[index]
+      if (!row) return index
+      if (row.kind === 'section') return `section-${row.sectionIndex}`
+      return row.turn.userMsg?.uuid || row.turn.assistantMsgs[0]?.uuid || `turn-${index}`
+    },
+    // Search relies on DOM text ranges. Temporarily mount the complete row set
+    // only while a query is active, then return to the bounded virtual window.
+    overscan: searchOpen && searchQuery.trim() ? chatRows.length : tocReadySessionId === sessionId ? 1 : 0
+  })
+  const virtualItems = chatVirtualizer.getVirtualItems()
+  const [turnRenderBudget, setTurnRenderBudget] = useState<{ sessionId: string | null; turns: number }>({
+    sessionId: null,
+    turns: 0
+  })
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    let frame = 0
+    let turns = 0
+    setTurnRenderBudget({ sessionId, turns })
+    const grow = () => {
+      if (cancelled) return
+      turns += 1
+      const nextBudget = turns >= 12 ? Number.POSITIVE_INFINITY : turns
+      setTurnRenderBudget({ sessionId, turns: nextBudget })
+      if (Number.isFinite(nextBudget)) frame = requestAnimationFrame(grow)
+    }
+    frame = requestAnimationFrame(grow)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+    }
+  }, [sessionId])
+  const currentTurnBudget = turnRenderBudget.sessionId === sessionId ? turnRenderBudget.turns : 0
+  let renderedTurnCount = 0
+  const stagedVirtualItems = virtualItems.filter((virtualRow) => {
+    const row = chatRows[virtualRow.index]
+    if (!row || row.kind === 'section') return true
+    renderedTurnCount += 1
+    return renderedTurnCount <= currentTurnBudget
+  })
+  const renderedVirtualKey = stagedVirtualItems.map((item) => item.key).join('|')
+
+  const rowIndexById = useMemo(() => {
+    const result = new Map<string, number>()
+    chatRows.forEach((row, index) => {
+      if (row.kind === 'section') {
+        result.set(`section-${row.sectionIndex}`, index)
+      } else if (row.turn.userMsg) {
+        result.set(`turn-${row.turn.userMsg.uuid}`, index)
+      }
+    })
+    return result
+  }, [chatRows])
+
+  // Track visible turns from the bounded rendered window. No scroll handler and
+  // no query loop over the complete transcript are involved.
+  useEffect(() => {
+    const root = contentRef.current
+    if (!root) return
+    const visible = new Map<Element, IntersectionObserverEntry>()
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.set(entry.target, entry)
+        else visible.delete(entry.target)
+      }
+      const first = [...visible.values()]
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0]
+      const uuid = first?.target.getAttribute('data-turn-uuid')
+      if (uuid) firstVisibleTurnRef.current = uuid
+    }, { root, threshold: 0.01 })
+    root.querySelectorAll('[data-turn-uuid]').forEach((node) => observer.observe(node))
+    if (searchOpen || highlights.length > 0) {
+      setVirtualRenderVersion((version) => version + 1)
+    }
+    return () => observer.disconnect()
+  }, [selectedSession?.id, viewMode, sourceView, renderedVirtualKey, sections.length, searchOpen, highlights.length])
 
   const selectedCount = selectedItems.size
 
@@ -1691,15 +1879,21 @@ export function ChatViewer() {
 
   // Scroll to pending target after section expansion
   useEffect(() => {
-    if (pendingScrollRef.current) {
-      const id = pendingScrollRef.current
+    const id = pendingScrollRef.current
+    if (!id) return
+    if (!mdMode) {
+      const rowIndex = rowIndexById.get(id)
+      if (rowIndex === undefined) return
       pendingScrollRef.current = null
-      requestAnimationFrame(() => {
-        const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
-        el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      })
+      chatVirtualizer.scrollToIndex(rowIndex, { align: 'start' })
+      return
     }
-  })
+    pendingScrollRef.current = null
+    requestAnimationFrame(() => {
+      const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [chatRows, mdMode, rowIndexById, chatVirtualizer])
 
   const handleNavigate = useCallback((id: string) => {
     if (!mdMode) {
@@ -1721,9 +1915,14 @@ export function ChatViewer() {
         }
       }
     }
+    if (!mdMode) {
+      const rowIndex = rowIndexById.get(id)
+      if (rowIndex !== undefined) chatVirtualizer.scrollToIndex(rowIndex, { align: 'start' })
+      return
+    }
     const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, [mdMode, turnSectionMap, expandedSections, sections])
+  }, [mdMode, turnSectionMap, expandedSections, sections, rowIndexById, chatVirtualizer])
 
   if (!selectedSession) {
     return (
@@ -1744,22 +1943,6 @@ export function ChatViewer() {
     })
   }
 
-  function renderSection(section: CompactSection) {
-    const turns = groupIntoTurns(section.messages)
-    return turns.map((turn, tIdx) => (
-      <TurnBlock
-        key={turn.userMsg?.uuid || turn.assistantMsgs[0]?.uuid || tIdx}
-        turn={turn}
-        viewMode={viewMode as 'compact' | 'full'}
-        qSelected={turn.userMsg ? selectedItems.has(`q:${turn.userMsg.uuid}`) : false}
-        aSelected={turn.userMsg ? selectedItems.has(`a:${turn.userMsg.uuid}`) : false}
-        selectMode={selectMode}
-        onSelectQ={toggleSelectQ}
-        onSelectA={toggleSelectA}
-      />
-    ))
-  }
-
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <SessionBar
@@ -1775,13 +1958,13 @@ export function ChatViewer() {
       />
 
       <div className="flex-1 flex min-h-0">
-        {tocOpen && tocEntries.length > 0 && (
+        {tocOpen && visibleTocEntries.length > 0 && (
           <TocSidebar
-            entries={tocEntries}
+            entries={visibleTocEntries}
             onNavigate={handleNavigate}
             width={tocWidth}
             onResize={setTocWidth}
-            turnContentMap={turnContentMap}
+            getTurnContent={getTurnContent}
           />
         )}
 
@@ -1822,55 +2005,84 @@ export function ChatViewer() {
               <MarkdownDocView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
             )
           ) : (
-            <div ref={contentRef} className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
-            {sections.map((section, sIdx) => {
-              if (section.isCurrent) {
-                return (
-                  <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="space-y-4 scroll-mt-0">
-                    {sections.length > 1 && (
-                      <div className="sticky top-0 z-10 flex items-center gap-3 py-2 bg-base/95 backdrop-blur-sm -mx-4 px-4">
-                        <div className="flex-1 border-t border-soft-emerald/50" />
-                        <span className="text-soft-emerald text-xs px-3 py-1 bg-soft-emerald/10 rounded-full">{t('chat.current_section')}</span>
-                        <div className="flex-1 border-t border-soft-emerald/50" />
-                      </div>
-                    )}
-                    {renderSection(section)}
-                  </div>
-                )
-              }
-
-              const isExpanded = expandedSections.has(sIdx)
-              const isShared = section.isSharedContext
-              const borderColor = isShared ? 'border-soft-purple/30' : 'border-soft-amber/30'
-              const textColor = isShared ? 'text-soft-purple/70' : 'text-soft-amber/70'
-              const bgColor = isShared ? 'bg-soft-purple/6 hover:bg-soft-purple/10' : 'bg-soft-amber/6 hover:bg-soft-amber/10'
-              const borderLColor = isShared ? 'border-soft-purple/20' : 'border-soft-amber/20'
-              const SectionIcon = isShared ? GitBranch : History
-
-              return (
-                <div key={`section-${sIdx}`} id={`section-${sIdx}`} className="scroll-mt-0">
-                  <button
-                    onClick={() => toggleSection(sIdx)}
-                    className="w-full flex items-center gap-3 py-2 group sticky top-0 z-10 bg-base/95 backdrop-blur-sm -mx-4 px-4"
-                  >
-                    <div className={`flex-1 border-t ${borderColor}`} />
-                    <div className={`flex items-center gap-2 ${textColor} text-xs px-3 py-1 ${bgColor} rounded-full transition-colors`}>
-                      {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                      <SectionIcon size={12} />
-                      <span>{section.label}</span>
+            <div ref={contentRef} data-testid="chat-scroll" className="flex-1 overflow-y-auto px-4">
+              <div
+                className="relative w-full"
+                style={{ height: `${chatVirtualizer.getTotalSize()}px` }}
+              >
+                {stagedVirtualItems.map((virtualRow) => {
+                  const row = chatRows[virtualRow.index]
+                  if (!row) return null
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      data-index={virtualRow.index}
+                      ref={chatVirtualizer.measureElement}
+                      className="absolute left-0 top-0 w-full pb-4"
+                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                    >
+                      {row.kind === 'section' ? (() => {
+                        const { section, sectionIndex } = row
+                        if (section.isCurrent) {
+                          return (
+                            <div id={`section-${sectionIndex}`} className="scroll-mt-0">
+                              {sections.length > 1 ? (
+                                <div className="flex items-center gap-3 py-2 bg-base/95">
+                                  <div className="flex-1 border-t border-soft-emerald/50" />
+                                  <span className="text-soft-emerald text-xs px-3 py-1 bg-soft-emerald/10 rounded-full">
+                                    {t('chat.current_section')}
+                                  </span>
+                                  <div className="flex-1 border-t border-soft-emerald/50" />
+                                </div>
+                              ) : <div className="h-2" />}
+                            </div>
+                          )
+                        }
+                        const isExpanded = expandedSections.has(sectionIndex)
+                        const isShared = section.isSharedContext
+                        const borderColor = isShared ? 'border-soft-purple/30' : 'border-soft-amber/30'
+                        const textColor = isShared ? 'text-soft-purple/70' : 'text-soft-amber/70'
+                        const bgColor = isShared ? 'bg-soft-purple/6 hover:bg-soft-purple/10' : 'bg-soft-amber/6 hover:bg-soft-amber/10'
+                        const SectionIcon = isShared ? GitBranch : History
+                        return (
+                          <div id={`section-${sectionIndex}`} className="scroll-mt-0">
+                            <button
+                              onClick={() => toggleSection(sectionIndex)}
+                              className="w-full flex items-center gap-3 py-2 group bg-base/95"
+                            >
+                              <div className={`flex-1 border-t ${borderColor}`} />
+                              <div className={`flex items-center gap-2 ${textColor} text-xs px-3 py-1 ${bgColor} rounded-full transition-colors`}>
+                                {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                <SectionIcon size={12} />
+                                <span>{section.label}</span>
+                              </div>
+                              <div className={`flex-1 border-t ${borderColor}`} />
+                            </button>
+                          </div>
+                        )
+                      })() : (
+                        <div className={row.section.isCurrent
+                          ? ''
+                          : `pl-2 border-l-2 ml-2 ${row.section.isSharedContext ? 'border-soft-purple/20' : 'border-soft-amber/20'}`
+                        }>
+                          <TurnBlock
+                            turn={row.turn}
+                            viewMode={viewMode as 'compact' | 'full'}
+                            sessionSource={selectedSession.source}
+                            qSelected={row.turn.userMsg ? selectedItems.has(`q:${row.turn.userMsg.uuid}`) : false}
+                            aSelected={row.turn.userMsg ? selectedItems.has(`a:${row.turn.userMsg.uuid}`) : false}
+                            selectMode={selectMode}
+                            onSelectQ={toggleSelectQ}
+                            onSelectA={toggleSelectA}
+                          />
+                        </div>
+                      )}
                     </div>
-                    <div className={`flex-1 border-t ${borderColor}`} />
-                  </button>
-                  {isExpanded && (
-                    <div className={`space-y-3 pl-2 border-l-2 ${borderLColor} ml-2`}>
-                      {renderSection(section)}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
+                  )
+                })}
+              </div>
+            </div>
+          )}
           {/* Floating highlight button — fixed position near selection */}
           {selectionPos && pendingHighlight && (
             <div

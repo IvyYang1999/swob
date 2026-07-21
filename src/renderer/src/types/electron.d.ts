@@ -85,6 +85,13 @@ interface ElectronAPI {
   libraryGetMdPath: (sessionId: string) => Promise<string | null>
   libraryGetDirPath: (sessionId: string) => Promise<string | null>
   libraryOpenInFinder: () => Promise<void>
+  vaultMigrate: (targetPath: string) => Promise<{ ok: boolean; error?: string; newRoot?: string; movedMarkerPath?: string }>
+  vaultSelectMigrationTarget: () => Promise<string | null>
+  onVaultMigrateProgress: (callback: (progress: { phase: string; copied: number; total: number }) => void) => () => void
+  onboardingGetState: () => Promise<{ needed: boolean; defaultPath: string; excludedSources: string[] }>
+  onboardingComplete: (libraryPath: string, excludedSources: string[]) => Promise<string>
+  onboardingSetExcludedSources: (excludedSources: string[]) => Promise<string[]>
+  onboardingExtendClaudeRetention: () => Promise<{ ok: boolean; error?: string }>
   saveMarkdown: (dirPath: string, filename: string, content: string) => Promise<string>
   saveToTemp: (filename: string, content: string) => Promise<string>
   openPath: (filePath: string) => Promise<string>
@@ -129,7 +136,7 @@ interface ElectronAPI {
   generateInsights: (options?: { useLlm?: boolean }) => Promise<{ ok: boolean; path?: string; sessionCount?: number; llmUsed?: boolean; llmError?: string; error?: string }>
   listModels: () => Promise<string[]>
   getLlmSettings: () => Promise<{ provider: string; hasKey: boolean; keyHint: string; model: string; baseUrl: string }>
-  setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) => Promise<boolean>
+  setLlmSettings: (settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) => Promise<boolean>
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void
 
   // Session Audit

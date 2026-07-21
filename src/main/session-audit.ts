@@ -6,7 +6,7 @@
  * 2. Thinking Depth 代理（signature 长度 / redaction 检测）
  * 3. 逐轮延迟（p50/p95/max，慢轮标记）
  * 4. 成本估算（token × 模型单价）
- * 5. 框架开销占比（system-reminder 等注入）
+ * 5. 用户消息中可见 framework marker 的字符估算（不是 API context 开销）
  * 6. 工具序列反模式检测
  * 7. 用户挫败信号
  * 8. 行为健康评分
@@ -65,7 +65,11 @@ export interface SessionAuditResult {
   turnLatencies: TurnLatency[]
   latencyStats: AuditMetric<{ p50: number; p95: number; max: number }>
   estimatedCost: AuditMetric<{ inputCost: number; outputCost: number; totalCost: number; currency: string }>
-  frameworkOverhead: AuditMetric<{ frameworkTokens: number; totalTokens: number; percentage: number }>
+  visibleFrameworkMarkers: AuditMetric<{
+    estimatedMarkerTokens: number
+    estimatedVisibleUserTokens: number
+    shareOfVisibleUserText: number
+  }>
 
   // New dimensions
   sessionType: SessionType
@@ -151,12 +155,20 @@ function extractText(content: unknown): string {
     .join('\n')
 }
 
+const FRAMEWORK_TAG_PATTERN = 'system-reminder|command-name|task-notification|local-command-[^>\\s]+|user-prompt-submit-hook'
+
+function extractVisibleFrameworkContent(text: string): string {
+  const paired = new RegExp(`<(${FRAMEWORK_TAG_PATTERN})[^>]*>[\\s\\S]*?<\\/\\1>`, 'gi')
+  const matches = text.match(paired)
+  if (matches) return matches.join('\n')
+  // Some harness rows persist only a marker/opening tag. Count that literal row,
+  // never the whole user message and never claim it represents hidden context.
+  const markerLines = new RegExp(`^.*<(?:${FRAMEWORK_TAG_PATTERN})[^>]*>.*$`, 'gim')
+  return (text.match(markerLines) || []).join('\n')
+}
+
 function isFrameworkContent(text: string): boolean {
-  return text.includes('<system-reminder>') ||
-    text.includes('<command-name>') ||
-    text.includes('<task-notification>') ||
-    text.includes('<local-command-') ||
-    text.includes('<user-prompt-submit-hook>')
+  return extractVisibleFrameworkContent(text).length > 0
 }
 
 function estimateTokens(text: string): number {
@@ -180,8 +192,8 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
   const modelTurns: Record<string, { turns: number; input: number; output: number }> = {}
   let totalInputTokens = 0
   let totalOutputTokens = 0
-  let frameworkTokens = 0
-  let totalContentTokens = 0
+  let visibleFrameworkMarkerTokens = 0
+  let visibleUserTextTokens = 0
   let lastModel = ''
   let turnIndex = 0
   let userInterruptions = 0
@@ -241,11 +253,10 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
     } else if (msg.type === 'user') {
       const text = extractText(content)
 
-      // Framework overhead
-      if (isFrameworkContent(text)) {
-        frameworkTokens += estimateTokens(text)
-      }
-      totalContentTokens += estimateTokens(text)
+      // Visible marker estimate only. This does not observe the full request body.
+      const visibleFrameworkContent = extractVisibleFrameworkContent(text)
+      if (visibleFrameworkContent) visibleFrameworkMarkerTokens += estimateTokens(visibleFrameworkContent)
+      visibleUserTextTokens += estimateTokens(text)
 
       // Tool results (for agent anti-pattern + error tracking)
       if (Array.isArray(content)) {
@@ -341,8 +352,10 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
   const inputCost = (totalInputTokens / 1_000_000) * pricing.input
   const outputCost = (totalOutputTokens / 1_000_000) * pricing.output
 
-  // 5. Framework overhead
-  const frameworkPct = totalContentTokens > 0 ? (frameworkTokens / totalContentTokens) * 100 : 0
+  // 5. Visible framework-marker share within user text. Never treat as context overhead.
+  const visibleMarkerShare = visibleUserTextTokens > 0
+    ? (visibleFrameworkMarkerTokens / visibleUserTextTokens) * 100
+    : 0
 
   // 6. Anti-patterns
   // Repeated Read same file >3 times
@@ -382,7 +395,6 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
   else if (frustrationSignals.length > 2) score -= 8
   if (antiPatterns.length > 3) score -= 10
   else if (antiPatterns.length > 0) score -= 5
-  if (frameworkPct > 30) score -= 10
   if (redactedCount > totalBlocks * 0.5 && totalBlocks > 5) score -= 10
   score = Math.max(0, Math.min(100, score))
 
@@ -392,7 +404,6 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
   const findings: string[] = []
   if (readEditHealth === 'critical') findings.push(`Read:Edit ratio ${readEditRatio.toFixed(1)} — editing without sufficient research (benchmark: ≥6.0)`)
   if (readEditHealth === 'degraded') findings.push(`Read:Edit ratio ${readEditRatio.toFixed(1)} — slightly below research benchmark (≥6.0)`)
-  if (frameworkPct > 30) findings.push(`Framework overhead ${frameworkPct.toFixed(0)}% — system injections consuming significant context`)
   if (frustrationSignals.length > 3) findings.push(`${frustrationSignals.length} frustration signals detected — frequent corrections or interruptions`)
   if (antiPatterns.length > 0) findings.push(`${antiPatterns.length} tool anti-patterns — repeated reads or edit-reverts suggest exploration loops`)
   if (redactedCount > 0) findings.push(`${redactedCount}/${totalBlocks} thinking blocks redacted — reasoning depth may be limited`)
@@ -462,8 +473,12 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
       value: { inputCost, outputCost, totalCost: inputCost + outputCost, currency: 'USD' },
       provenance: totalInputTokens > 0 ? 'estimated' : 'unavailable'
     },
-    frameworkOverhead: {
-      value: { frameworkTokens, totalTokens: totalContentTokens, percentage: frameworkPct },
+    visibleFrameworkMarkers: {
+      value: {
+        estimatedMarkerTokens: visibleFrameworkMarkerTokens,
+        estimatedVisibleUserTokens: visibleUserTextTokens,
+        shareOfVisibleUserText: visibleMarkerShare
+      },
       provenance: 'estimated'
     },
     sessionType,

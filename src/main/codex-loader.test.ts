@@ -119,6 +119,56 @@ describe('codex-loader', () => {
       expect(summary!.tokenUsage.outputTokens).toBe(200)
     })
 
+    it('【回归】cached_input/reasoning 是子集，重复 token_count 快照不应重复计费', async () => {
+      const lines: any[] = makeCodexLines().filter((line) => !(line.type === 'event_msg' && line.payload.type === 'token_count'))
+      lines.push(
+        {
+          timestamp: '2026-03-27T13:38:10.100Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              last_token_usage: { input_tokens: 1_000, cached_input_tokens: 600, output_tokens: 100, reasoning_output_tokens: 40 },
+              total_token_usage: { input_tokens: 1_000, cached_input_tokens: 600, output_tokens: 100, reasoning_output_tokens: 40 }
+            }
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:38:10.200Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              last_token_usage: { input_tokens: 1_000, cached_input_tokens: 600, output_tokens: 100, reasoning_output_tokens: 40 },
+              total_token_usage: { input_tokens: 1_000, cached_input_tokens: 600, output_tokens: 100, reasoning_output_tokens: 40 }
+            }
+          }
+        },
+        {
+          timestamp: '2026-03-27T13:38:20.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              last_token_usage: { input_tokens: 500, cached_input_tokens: 300, output_tokens: 60, reasoning_output_tokens: 20 },
+              total_token_usage: { input_tokens: 1_500, cached_input_tokens: 900, output_tokens: 160, reasoning_output_tokens: 60 }
+            }
+          }
+        }
+      )
+      const summary = await buildCodexSessionSummary(writeTempJsonl(lines))
+
+      expect(summary!.tokenUsage).toEqual({
+        inputTokens: 600,
+        cacheReadTokens: 900,
+        cacheCreationTokens: 0,
+        outputTokens: 160
+      })
+      expect(summary!.tokenAccounting?.components?.reasoningTokens).toBe(60)
+      expect(summary!.tokenAccounting?.billingTotal).toBe(1_660)
+      expect(summary!.tokenAccounting?.usageEvents).toHaveLength(2)
+    })
+
     it('空文件返回 null', async () => {
       const fp = writeTempJsonl([])
       const summary = await buildCodexSessionSummary(fp)

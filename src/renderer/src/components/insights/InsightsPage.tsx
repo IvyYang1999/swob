@@ -191,15 +191,20 @@ export function InsightsPage() {
       </div>
 
       <StatsCards data={data} />
+      <div className="text-[10px] text-muted px-1" title="The same provider-normalized ledger feeds global, project and session totals.">
+        Processed/billing scope · cache components are mutually exclusive · unavailable usage is excluded, not counted as zero
+        {data.tokenUnavailableSessions > 0 && ` · ${data.tokenUnavailableSessions} session${data.tokenUnavailableSessions === 1 ? '' : 's'} unavailable`}
+        {!data.reconciliation?.ok && <span className="text-red-400"> · reconciliation mismatch</span>}
+      </div>
 
       <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
         <div className="text-sm font-medium text-primary">Token Heatmap</div>
-        <div className="overflow-x-auto">
+        <div className="min-w-0">
           <TokenHeatmap data={data.heatmap} />
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
           <div className="text-sm font-medium text-primary">By Source</div>
           <SourceDonut sources={data.bySource} />
@@ -225,7 +230,7 @@ export function InsightsPage() {
       </div>
 
       {/* New insight dimensions */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <CostCard
           costUsd={data.estimatedCostUsd || 0}
           cacheRead={data.totalCacheReadTokens || 0}
@@ -235,7 +240,7 @@ export function InsightsPage() {
         <HourlyChart hours={data.hourlyDistribution || new Array(24).fill(0)} />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <TurnDistribution buckets={data.turnCountDistribution || [0,0,0,0,0,0]} />
         <CodeChangesCard changes={data.codeChanges || { filesRead: 0, filesWritten: 0, filesEdited: 0 }} />
       </div>

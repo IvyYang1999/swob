@@ -14,7 +14,11 @@ interface SessionAuditResult {
   thinkingDepth: AuditMetric<{ avgSignatureLength: number; redactedCount: number; totalBlocks: number }>
   latencyStats: AuditMetric<{ p50: number; p95: number; max: number }>
   estimatedCost: AuditMetric<{ inputCost: number; outputCost: number; totalCost: number; currency: string }>
-  frameworkOverhead: AuditMetric<{ frameworkTokens: number; totalTokens: number; percentage: number }>
+  visibleFrameworkMarkers: AuditMetric<{
+    estimatedMarkerTokens: number
+    estimatedVisibleUserTokens: number
+    shareOfVisibleUserText: number
+  }>
   antiPatterns: Array<{ type: string; turnIndex: number; detail: string }>
   frustrationSignals: Array<{ type: string; turnIndex: number; text: string }>
   healthScore: number
@@ -128,10 +132,10 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
               />
             )}
             <MetricRow
-              label={locale === 'zh-CN' ? '框架开销' : 'Framework Overhead'}
-              value={`${audit.frameworkOverhead.value.percentage.toFixed(0)}%`}
-              provenance={audit.frameworkOverhead.provenance}
-              health={audit.frameworkOverhead.value.percentage > 30 ? 'critical' : audit.frameworkOverhead.value.percentage > 15 ? 'degraded' : 'healthy'}
+              label={locale === 'zh-CN' ? '可见框架标记' : 'Visible Framework Markers'}
+              value={`≈${audit.visibleFrameworkMarkers.value.estimatedMarkerTokens.toLocaleString()}`}
+              unit={locale === 'zh-CN' ? 'tokens（非 API 上下文开销）' : 'tokens (not API context overhead)'}
+              provenance={audit.visibleFrameworkMarkers.provenance}
             />
           </div>
 

@@ -40,9 +40,12 @@ export interface ByModel {
 
 export interface InsightsData {
   totalTokens: number
+  conversationOnlyTokens: number
   totalInputTokens: number
   totalOutputTokens: number
   totalSessions: number
+  tokenAvailableSessions: number
+  tokenUnavailableSessions: number
   totalTurns: number
   totalTime: number
   activeDays: number
@@ -60,6 +63,15 @@ export interface InsightsData {
   turnCountDistribution: number[]  // [1-5, 6-20, 21-50, 51-100, 101-500, 500+]
   topTools: Array<{ name: string; count: number }>
   codeChanges: { filesRead: number; filesWritten: number; filesEdited: number }
+  bySession: Array<{
+    sessionId: string
+    projectPath: string
+    source: string
+    totalTokens: number | null
+    conversationOnlyTokens: number | null
+    provenance: string
+  }>
+  reconciliation: { global: number; projects: number; sessions: number; difference: number; ok: boolean }
 }
 
 export interface BySource {
@@ -70,6 +82,9 @@ export interface BySource {
   outputTokens: number
   sessionCount: number
   turnCount: number
+  tokenAvailableSessions: number
+  tokenUnavailableSessions: number
+  tokenDataStatus: 'available' | 'partial' | 'unavailable' | 'no-data'
 }
 
 export interface ByProject {
@@ -81,6 +96,8 @@ export interface ByProject {
   sessionCount: number
   turnCount: number
   sources: string[]
+  tokenAvailableSessions: number
+  tokenUnavailableSessions: number
 }
 
 export interface ByFolder {
@@ -91,6 +108,8 @@ export interface ByFolder {
   outputTokens: number
   sessionCount: number
   turnCount: number
+  tokenAvailableSessions: number
+  tokenUnavailableSessions: number
 }
 
 export interface ByDate {

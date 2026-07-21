@@ -694,10 +694,14 @@ export function buildSessionDetail(
 
   const lastCompactIndex = compactIndices.length > 0 ? compactIndices[compactIndices.length - 1] : -1
 
+  // Pre-build message→index map to avoid O(n²) indexOf in the loop below
+  const rawIndexMap = new Map<RawJsonlMessage, number>()
+  for (let i = 0; i < rawMessages.length; i++) rawIndexMap.set(rawMessages[i], i)
+
   const messages: ParsedMessage[] = rawMessages
     .filter((m) => m.type === 'user' || m.type === 'assistant' || m.type === 'system')
     .map((m) => {
-      const originalIndex = rawMessages.indexOf(m)
+      const originalIndex = rawIndexMap.get(m) ?? -1
       const toolCalls = m.message ? extractToolCalls(m.message.content) : []
       const textContent = m.message ? extractText(m.message.content) : (m as any).content || ''
       const origin = detectTranscriptOrigin(m)

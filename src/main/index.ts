@@ -548,10 +548,13 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
   }
 
   libraryInitialized = true
-  // Rescan so index is up to date, then notify renderer to refresh
   scanLibrary()
   transcriptWatcher?.refresh()
-  mainWindow?.webContents.send('sessions:refresh')
+  // Only refresh if library sync actually changed something; avoid triggering
+  // a second full loadAllSessions that doubles startup time
+  if (cachedSessions.length > 0) {
+    mainWindow?.webContents.send('sessions:configUpdated')
+  }
 }
 
 // --- IPC Handlers ---
@@ -885,16 +888,26 @@ ipcMain.handle(
   }
 )
 
+// Cache library-missing-sources list to avoid recursive scan on every search query
+let cachedMissingSources: Array<{ sessionId: string; backupPath: string }> | null = null
+let cachedMissingSourcesTime = 0
+const MISSING_SOURCES_TTL = 60_000 // refresh every 60s
+
 ipcMain.handle('sessions:search', async (_event, query: string) => {
-  // Ensure library is initialized before searching backups
   if (!libraryInitialized) {
     try { initLibrary() } catch { /* ignore */ }
   }
   const files = findAllSessionFiles().filter((f) => !f.includes('/subagents/'))
-  const missingSourceLibrarySessions = findLibrarySessionsWithMissingSources()
+
+  const now = Date.now()
+  if (!cachedMissingSources || now - cachedMissingSourcesTime > MISSING_SOURCES_TTL) {
+    cachedMissingSources = findLibrarySessionsWithMissingSources().map(({ sessionId, backupPath }) => ({ sessionId, backupPath }))
+    cachedMissingSourcesTime = now
+  }
+
   return searchSessionFiles(query, [
     ...files.map((filePath) => ({ filePath })),
-    ...missingSourceLibrarySessions.map(({ backupPath }) => ({ filePath: backupPath }))
+    ...cachedMissingSources.map(({ backupPath }) => ({ filePath: backupPath }))
   ])
 })
 

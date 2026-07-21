@@ -107,6 +107,7 @@ const api = {
   // Insights Report
   generateInsightsJson: (options?: { startDate?: string; endDate?: string }) => ipcRenderer.invoke('insights:generateJson', options),
   generateInsights: (options?: { useLlm?: boolean }) => ipcRenderer.invoke('insights:generate', options),
+  listModels: () => ipcRenderer.invoke('insights:listModels'),
   getLlmSettings: () => ipcRenderer.invoke('insights:getLlmSettings'),
   setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) =>
     ipcRenderer.invoke('insights:setLlmSettings', settings),
@@ -140,8 +141,14 @@ const api = {
   onSessionUpdated: (callback: (session: unknown) => void) => {
     ipcRenderer.on('session:updated', (_event, session) => callback(session))
   },
+  onSessionSummaryUpdated: (callback: (session: unknown) => void) => {
+    ipcRenderer.on('session:summaryUpdated', (_event, session) => callback(session))
+  },
   onSessionsRefresh: (callback: () => void) => {
     ipcRenderer.on('sessions:refresh', () => callback())
+  },
+  onLibraryPatch: (callback: (patch: unknown) => void) => {
+    ipcRenderer.on('sessions:libraryPatch', (_event, patch) => callback(patch))
   },
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => {
     ipcRenderer.on('sessions:activeChanged', (_event, ids) => callback(ids))

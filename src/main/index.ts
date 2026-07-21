@@ -11,26 +11,20 @@ import {
   loadAllSessions,
   loadSessionDetail,
   findAllSessionFiles,
-  parseSessionFile,
-  buildSessionSummary,
-  resolvePhysicalSessionId,
   buildSessionSummaryFromBackup
 } from './session-loader'
-import { findCodexSessionFiles, buildCodexSessionSummary } from './codex-loader'
-import { findCursorSessionFiles, buildCursorSessionSummary } from './cursor-loader'
+import { findCodexSessionFiles } from './codex-loader'
+import { findCursorSessionFiles } from './cursor-loader'
 import {
   initLibrary,
-  scanLibrary,
+  applyLibraryTree,
   libraryTreeToConfig,
   loadLibraryConfig,
   saveLibraryConfig,
-  syncLibraryFromSessions,
   ensureSessionInLibrary,
   updateTranscript,
-  syncBackup,
   getSessionMdPath,
   getSessionDirPath,
-  setSessionTurnCount,
   getSessionResumeAvailability,
   createLibraryFolder,
   renameLibraryFolder,
@@ -61,14 +55,17 @@ import {
   getConfiguredLibraryPath,
   changeConfiguredLibraryPath,
   isLibraryInitialized,
-  findLibraryOnlySessions,
-  findLibrarySessionsWithMissingSources
+  type LibrarySession,
+  type LibraryTree
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
-import { searchSessionFiles } from './session-search'
+import { searchIndexedSessions } from './session-search'
+import { synchronizeSearchSources } from './search-index'
 import { buildInsights } from './insights'
-import { TranscriptWatcher } from './transcript-watcher'
+import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transcript-watcher'
+import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worker'
+import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
 import {
   normalizeResumeTerminalSettings,
@@ -99,10 +96,16 @@ let codexWatcher: chokidar.FSWatcher | null = null
 let cursorWatcher: chokidar.FSWatcher | null = null
 let libraryWatcher: chokidar.FSWatcher | null = null
 let transcriptWatcher: TranscriptWatcher | null = null
+let libraryWorker: LibraryWorkerClient | null = null
+let sessionSyncCoordinator: SessionSyncCoordinator | null = null
 let libraryRescanTimer: ReturnType<typeof setTimeout> | null = null
 let pendingSpotlightNavigationSessionId: string | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
+let latestLibraryTree: LibraryTree | null = null
+let libraryInitializationPromise: Promise<void> | null = null
+let libraryHydrationGeneration = 0
+let searchIndexWarmScheduled = false
 
 // --- Active Session Detection ---
 let previousActiveIds: string[] = []
@@ -166,9 +169,6 @@ function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | 
   if (resolvedDir) {
     session.libraryDirPath = resolvedDir
     session.libraryMdPath = getSessionMdPath(session.sessionId) || session.libraryMdPath
-    if (!session.id.includes(':intra-') && !session.id.includes(':branch-')) {
-      setSessionTurnCount(resolvedDir, session.turnCount)
-    }
   }
 
   const resumeAvailability = getSessionResumeAvailability(session.sessionId, session)
@@ -181,6 +181,95 @@ function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | 
 
   const bucket = computeUngroupBucket(session, resolvedDir)
   if (bucket) (session as any).ungroupBucket = bucket
+}
+
+function cachedSummaryForSource(filePath?: string, sessionId?: string): SessionSummary | undefined {
+  if (filePath) {
+    const byPath = cachedSessions.find((session) =>
+      session.filePath === filePath || session.allFilePaths?.includes(filePath)
+    )
+    if (byPath) return byPath
+  }
+  if (!sessionId) return undefined
+  return cachedSessions.find((session) =>
+    session.sessionId === sessionId || session.id === sessionId || session.continuationSessionIds?.includes(sessionId)
+  )
+}
+
+function markSessionActive(sessionId?: string): void {
+  if (!sessionId || previousActiveIds.includes(sessionId)) return
+  previousActiveIds = [...previousActiveIds, sessionId].sort()
+  mainWindow?.webContents.send('sessions:activeChanged', previousActiveIds)
+}
+
+async function performSessionSynchronization(request: SessionSyncRequest): Promise<void> {
+  const cached = cachedSummaryForSource(request.filePath, request.sessionId)
+  const filePath = request.filePath || cached?.filePath
+  if (!filePath) return
+  const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+  const { summary, dirPath } = await worker.syncSession({
+    root: getLibraryRoot(),
+    filePath,
+    sessionId: request.sessionId,
+    source: request.source
+  })
+  markSessionActive(summary.sessionId)
+  annotateSessionForFrontend(summary, dirPath)
+  summary.libraryDirPath = dirPath
+  summary.libraryMdPath = path.join(dirPath, 'transcript.md')
+
+  const continuationParent = cachedSessions.find((session) =>
+    session.continuationSessionIds?.includes(summary!.sessionId)
+  )
+  if (continuationParent) {
+    const updatedParent: SessionSummary = {
+      ...continuationParent,
+      updatedAt: summary.updatedAt > continuationParent.updatedAt
+        ? summary.updatedAt
+        : continuationParent.updatedAt,
+      permissionMode: summary.permissionMode || continuationParent.permissionMode,
+      resumeCwd: summary.resumeCwd || continuationParent.resumeCwd
+    }
+    const parentIndex = cachedSessions.findIndex((session) => session.id === continuationParent.id)
+    if (parentIndex >= 0) cachedSessions[parentIndex] = updatedParent
+    mainWindow?.webContents.send('session:summaryUpdated', updatedParent)
+    return
+  }
+
+  const existingIndex = cachedSessions.findIndex((session) => session.id === summary!.id)
+  if (existingIndex >= 0) {
+    cachedSessions[existingIndex] = summary
+    knownSessionIds.add(summary.id)
+    knownSessionIds.add(summary.sessionId)
+    mainWindow?.webContents.send('session:summaryUpdated', summary)
+  } else {
+    cachedSessions = [summary, ...cachedSessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    knownSessionIds.add(summary.id)
+    knownSessionIds.add(summary.sessionId)
+    mainWindow?.webContents.send('session:added', summary)
+  }
+}
+
+function scheduleSessionSynchronization(request: SessionSyncRequest): void {
+  const cached = cachedSummaryForSource(request.filePath, request.sessionId)
+  markSessionActive(request.sessionId || cached?.sessionId)
+  sessionSyncCoordinator?.schedule({
+    ...request,
+    sessionId: request.sessionId || cached?.sessionId
+  })
+}
+
+function scheduleSearchIndexWarmup(): void {
+  if (searchIndexWarmScheduled) return
+  searchIndexWarmScheduled = true
+  const timer = setTimeout(() => {
+    void synchronizeSearchSources(currentSearchSources())
+      .catch((error) => {
+        console.error('[search-index] background warmup failed:', error)
+      })
+      .finally(() => { searchIndexWarmScheduled = false })
+  }, 0)
+  timer.unref?.()
 }
 
 async function reloadSessionsForAction(): Promise<SessionSummary[]> {
@@ -206,8 +295,18 @@ function cleanupRuntimeResources(): void {
   watcher = null
   codexWatcher = null
   cursorWatcher = null
+  libraryWatcher?.close()
+  libraryWatcher = null
+  if (libraryRescanTimer) {
+    clearTimeout(libraryRescanTimer)
+    libraryRescanTimer = null
+  }
   transcriptWatcher?.stop()
   transcriptWatcher = null
+  libraryWorker?.close()
+  libraryWorker = null
+  sessionSyncCoordinator?.stop()
+  sessionSyncCoordinator = null
   if (activePoller) {
     clearInterval(activePoller)
     activePoller = null
@@ -357,72 +456,18 @@ function startFileWatcher(): void {
     join(home, '.claude', 'projects', '*', '*.jsonl'),
     join(home, '.claude-window', '*', 'projects', '*', '*.jsonl')
   ], {
-    ignoreInitial: true
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 }
   })
 
-  watcher.on('add', async (filePath) => {
+  watcher.on('add', (filePath) => {
     if (filePath.includes('/subagents/')) return
-    try {
-      const raw = await parseSessionFile(filePath)
-      const sessionId = resolvePhysicalSessionId(filePath, raw)
-      if (!sessionId) return
-
-      if (knownSessionIds.has(sessionId)) {
-        mainWindow?.webContents.send('sessions:refresh')
-      } else {
-        knownSessionIds.add(sessionId)
-        const summary = buildSessionSummary(filePath, raw, true)
-        if (summary) {
-          // Create library entry for new session
-          if (libraryInitialized) {
-            try {
-              const dirPath = await ensureSessionInLibrary(summary)
-              await updateTranscript(sessionId)
-              await syncBackup(sessionId)
-              annotateSessionForFrontend(summary, dirPath)
-            } catch { /* ignore */ }
-          }
-          annotateSessionForFrontend(summary)
-          mainWindow?.webContents.send('sessions:refresh')
-        }
-      }
-    } catch {
-      /* ignore */
-    }
+    scheduleSessionSynchronization({ filePath, source: 'claude-code', reason: 'add' })
   })
 
-  watcher.on('change', async (filePath) => {
+  watcher.on('change', (filePath) => {
     if (filePath.includes('/subagents/')) return
-    try {
-      const raw = await parseSessionFile(filePath)
-      const summary = buildSessionSummary(filePath, raw, true)
-      if (summary) {
-        // File changed = process is alive, immediately add to active set
-        if (!previousActiveIds.includes(summary.sessionId)) {
-          const next = [...previousActiveIds, summary.sessionId].sort()
-          previousActiveIds = next
-          mainWindow?.webContents.send('sessions:activeChanged', next)
-        }
-
-        // Update library transcript + backup
-        if (libraryInitialized) {
-          try {
-            await ensureSessionInLibrary(summary)
-            await updateTranscript(summary.sessionId)
-            await syncBackup(summary.sessionId)
-            annotateSessionForFrontend(summary)
-          } catch { /* ignore */ }
-        }
-        annotateSessionForFrontend(summary)
-        if (cachedSessions.some((s) => (s.continuationSessionIds || []).includes(summary.sessionId))) {
-          mainWindow?.webContents.send('sessions:refresh')
-        } else {
-          mainWindow?.webContents.send('session:updated', summary)
-        }
-      }
-    } catch {
-      /* ignore */
-    }
+    scheduleSessionSynchronization({ filePath, source: 'claude-code', reason: 'change' })
   })
 }
 
@@ -434,28 +479,9 @@ function startCodexWatcher(): void {
     depth: 4
   })
 
-  const handleCodexFile = async (filePath: string) => {
+  const handleCodexFile = (filePath: string) => {
     if (!basename(filePath).startsWith('rollout-')) return
-    try {
-      const summary = await buildCodexSessionSummary(filePath)
-      if (!summary) return
-      let dirPath: string | undefined
-      if (libraryInitialized) {
-        try {
-          dirPath = await ensureSessionInLibrary(summary)
-          await updateTranscript(summary.sessionId)
-          await syncBackup(summary.sessionId)
-        } catch { /* ignore */ }
-      }
-      annotateSessionForFrontend(summary, dirPath)
-      if (knownSessionIds.has(summary.id) || knownSessionIds.has(summary.sessionId)) {
-        mainWindow?.webContents.send('sessions:refresh')
-      } else {
-        knownSessionIds.add(summary.id)
-        knownSessionIds.add(summary.sessionId)
-        mainWindow?.webContents.send('session:added', summary)
-      }
-    } catch { /* ignore */ }
+    scheduleSessionSynchronization({ filePath, source: 'codex', reason: 'change' })
   }
 
   codexWatcher.on('add', handleCodexFile)
@@ -470,31 +496,145 @@ function startCursorWatcher(): void {
     depth: 4
   })
 
-  const handleCursorFile = async (filePath: string) => {
-    try {
-      const summary = await buildCursorSessionSummary(filePath)
-      if (!summary) return
-      let dirPath: string | undefined
-      if (libraryInitialized) {
-        try {
-          dirPath = await ensureSessionInLibrary(summary)
-          await updateTranscript(summary.sessionId)
-          await syncBackup(summary.sessionId)
-        } catch { /* ignore */ }
-      }
-      annotateSessionForFrontend(summary, dirPath)
-      if (knownSessionIds.has(summary.id) || knownSessionIds.has(summary.sessionId)) {
-        mainWindow?.webContents.send('sessions:refresh')
-      } else {
-        knownSessionIds.add(summary.id)
-        knownSessionIds.add(summary.sessionId)
-        mainWindow?.webContents.send('session:added', summary)
-      }
-    } catch { /* ignore */ }
+  const handleCursorFile = (filePath: string) => {
+    scheduleSessionSynchronization({ filePath, source: 'cursor', reason: 'change' })
   }
 
   cursorWatcher.on('add', handleCursorFile)
   cursorWatcher.on('change', handleCursorFile)
+}
+
+function collectLibrarySessionsFromTree(tree: LibraryTree): LibrarySession[] {
+  const bySessionId = new Map<string, LibrarySession>()
+  const add = (session: LibrarySession): void => {
+    const existing = bySessionId.get(session.sessionId)
+    if (!existing || (existing.isSymlink && !session.isSymlink)) {
+      bySessionId.set(session.sessionId, session)
+    }
+  }
+  const visit = (folder: LibraryTree['folders'][number]): void => {
+    folder.sessions.forEach(add)
+    folder.children.forEach(visit)
+  }
+  tree.ungroupedSessions.forEach(add)
+  tree.folders.forEach(visit)
+  return [...bySessionId.values()]
+}
+
+function mergeSessionPatch(patch: SessionSummary[]): void {
+  if (patch.length === 0) return
+  const byId = new Map(cachedSessions.map((session) => [session.id, session]))
+  for (const session of patch) {
+    byId.set(session.id, session)
+    knownSessionIds.add(session.id)
+    knownSessionIds.add(session.sessionId)
+    for (const continuationId of session.continuationSessionIds || []) {
+      knownSessionIds.add(continuationId)
+    }
+  }
+  cachedSessions = [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
+function emitLibraryPatch(sessions: SessionSummary[], tree?: LibraryTree): void {
+  mainWindow?.webContents.send('sessions:libraryPatch', {
+    sessions,
+    config: tree ? libraryTreeToConfig(tree) : undefined
+  })
+}
+
+function adoptLibraryTree(tree: LibraryTree, notifyRenderer = true): LibraryTree {
+  // Ignore a queued response for a root that was replaced while the worker was scanning.
+  if (path.resolve(tree.root) !== path.resolve(getLibraryRoot())) return tree
+  latestLibraryTree = tree
+  applyLibraryTree(tree)
+  refreshCachedMissingSources()
+  scheduleSearchIndexWarmup()
+  transcriptWatcher?.refresh()
+  if (notifyRenderer) emitLibraryPatch([], tree)
+  return tree
+}
+
+async function requestLibraryScan(notifyRenderer = true): Promise<LibraryTree> {
+  const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+  const tree = await worker.scan(getLibraryRoot())
+  return adoptLibraryTree(tree, notifyRenderer)
+}
+
+function reportLibrarySyncProgress(progress: LibraryWorkerProgress): void {
+  mainWindow?.webContents.send('library:syncProgress', progress)
+}
+
+async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
+  const generation = ++libraryHydrationGeneration
+  const batchSize = 20
+  const librarySessions = collectLibrarySessionsFromTree(tree)
+  const backupPaths = new Set(librarySessions.map((session) => session.jsonlPath))
+  const yieldToMainLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+  let batch: SessionSummary[] = []
+  const flush = async (): Promise<void> => {
+    if (generation !== libraryHydrationGeneration || batch.length === 0) return
+    const patch = batch
+    batch = []
+    mergeSessionPatch(patch)
+    emitLibraryPatch(patch)
+    await yieldToMainLoop()
+  }
+
+  // Phase 2a: add Library metadata to the local summaries already rendered in phase 1.
+  const localSnapshot = [...cachedSessions]
+  for (const session of localSnapshot) {
+    if (generation !== libraryHydrationGeneration) return
+    if (backupPaths.has(session.filePath)) continue
+    const dirPath = getSessionDirPath(session.sessionId)
+    annotateSessionForFrontend(session, dirPath)
+    if (dirPath && session.id.includes(':intra-')) {
+      let branchMd: string | null | undefined = getBranchMdPath(session.id)
+      if (!branchMd && session.branchLeafUuid) {
+        const branchMeta = loadLibraryConfig().branchMeta?.[session.id]
+        branchMd = await updateBranchTranscript(
+          session.id,
+          session.branchLeafUuid,
+          branchMeta?.customTitle
+        ) || undefined
+      }
+      session.libraryMdPath = branchMd || getSessionMdPath(session.sessionId) || undefined
+    }
+    batch.push(session)
+    if (batch.length >= batchSize) await flush()
+  }
+  await flush()
+
+  // Phase 2b: parse Library-only backups incrementally instead of blocking the first paint.
+  const coveredIds = collectSessionCoverage(cachedSessions)
+  for (const librarySession of librarySessions) {
+    if (generation !== libraryHydrationGeneration) return
+    const { sessionId, jsonlPath: backupPath, meta } = librarySession
+    if (coveredIds.has(sessionId) || !fs.existsSync(backupPath)) continue
+    try {
+      const summary = await buildSessionSummaryFromBackup(backupPath, sessionId, meta)
+      if (!summary || coveredIds.has(summary.id) || coveredIds.has(summary.sessionId)) continue
+      summary.allFilePaths = [backupPath]
+      annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
+      const remoteState = resolveLibrarySessionRemoteState(meta)
+      summary.isRemote = remoteState.isRemote
+      if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
+      if (meta.customTitle) (summary as any)._libraryTitle = meta.customTitle
+      addSessionCoverage(coveredIds, summary)
+      batch.push(summary)
+      if (batch.length >= batchSize) await flush()
+    } catch { /* skip an unparseable or unavailable iCloud backup */ }
+  }
+  await flush()
+}
+
+async function initializeLibraryScanInBackground(): Promise<void> {
+  try {
+    const tree = await requestLibraryScan()
+    transcriptWatcher?.start()
+    if (cachedSessions.length > 0) void hydrateLibrarySessions(tree)
+  } catch (error) {
+    console.error('[library-worker] initial scan failed:', error)
+  }
 }
 
 // 监听库目录本身的「文件夹」变化。swob 原本只监听 ~/.claude 的 jsonl，察觉不到外部对库的
@@ -516,9 +656,9 @@ function startLibraryWatcher(): void {
   const schedule = (): void => {
     if (libraryRescanTimer) clearTimeout(libraryRescanTimer)
     libraryRescanTimer = setTimeout(() => {
-      try { scanLibrary() } catch { /* ignore */ }
-      transcriptWatcher?.refresh()
-      mainWindow?.webContents.send('sessions:refresh')
+      void requestLibraryScan().then((tree) => hydrateLibrarySessions(tree)).catch((error) => {
+        console.error('[library-worker] watched scan failed:', error)
+      })
     }, 1500)
   }
   libraryWatcher.on('addDir', schedule).on('unlinkDir', schedule)
@@ -527,33 +667,46 @@ function startLibraryWatcher(): void {
 // --- Library Initialization ---
 
 async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void> {
-  initLibrary()
+  if (libraryInitializationPromise) return libraryInitializationPromise
+  const work = (async (): Promise<void> => {
+    initLibrary()
+    const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+    const oldConfig = loadConfig()
+    let tree = latestLibraryTree || await requestLibraryScan(false)
+    const needsMigration = oldConfig.folders.length > 0 &&
+      tree.folders.length === 0 && tree.ungroupedSessions.length === 0
 
-  // Check if migration is needed (old config has folders but library is fresh)
-  const oldConfig = loadConfig()
-  const tree = scanLibrary()
+    tree = await worker.sync(getLibraryRoot(), sessions, oldConfig.sessionMeta, {
+      onProgress: reportLibrarySyncProgress
+    })
+    adoptLibraryTree(tree, false)
 
-  if (oldConfig.folders.length > 0 && tree.folders.length === 0 && tree.ungroupedSessions.length === 0) {
-    // First run after upgrade — sync all sessions first, then migrate
-    await syncLibraryFromSessions(sessions, oldConfig.sessionMeta)
-    await migrateFromOldConfig(oldConfig.folders, oldConfig.sessionMeta)
+    if (needsMigration) {
+      // This one-time directory migration needs the worker-built index but does not parse transcripts.
+      await migrateFromOldConfig(oldConfig.folders, oldConfig.sessionMeta)
+      const libConfig = loadLibraryConfig()
+      libConfig.preferences = oldConfig.preferences
+      saveLibraryConfig(libConfig)
+      tree = await requestLibraryScan(false)
+    }
 
-    // Migrate preferences to library config
-    const libConfig = loadLibraryConfig()
-    libConfig.preferences = oldConfig.preferences
-    saveLibraryConfig(libConfig)
-  } else {
-    // Normal sync — ensure all sessions are in library
-    await syncLibraryFromSessions(sessions, oldConfig.sessionMeta)
-  }
+    // Include any session that arrived while the initial worker batch was running.
+    if (cachedSessions.some((session) => !sessions.some((initial) => initial.id === session.id))) {
+      tree = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
+        onProgress: reportLibrarySyncProgress
+      })
+      adoptLibraryTree(tree, false)
+    }
 
-  libraryInitialized = true
-  scanLibrary()
-  transcriptWatcher?.refresh()
-  // Only refresh if library sync actually changed something; avoid triggering
-  // a second full loadAllSessions that doubles startup time
-  if (cachedSessions.length > 0) {
-    mainWindow?.webContents.send('sessions:configUpdated')
+    libraryInitialized = true
+    adoptLibraryTree(tree)
+    await hydrateLibrarySessions(tree)
+  })()
+  libraryInitializationPromise = work
+  try {
+    await work
+  } finally {
+    if (libraryInitializationPromise === work) libraryInitializationPromise = null
   }
 }
 
@@ -564,10 +717,7 @@ ipcMain.handle('sessions:getActive', () => previousActiveIds)
 // --- Spotlight ---
 
 ipcMain.handle('spotlight:search', (_event, query: string) => {
-  const config = libraryInitialized ? (() => {
-    const tree = scanLibrary()
-    return libraryTreeToConfig(tree)
-  })() : loadConfig()
+  const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
 
   const folderMap = new Map<string, string>()
   for (const folder of config.folders) {
@@ -645,30 +795,8 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
   if (cachedSessions.length === 0) return cloudSessions
 
   try {
-    const localIds = collectSessionCoverage(cachedSessions)
-    const libraryOnly = findLibraryOnlySessions(localIds)
-    for (const { sessionId, backupPath, meta } of libraryOnly) {
-      try {
-        const summary = await buildSessionSummaryFromBackup(backupPath, sessionId, meta)
-        if (summary) {
-          if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
-          summary.allFilePaths = [backupPath]
-          annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
-          const remoteState = resolveLibrarySessionRemoteState(meta)
-          summary.isRemote = remoteState.isRemote
-          if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
-          if (meta.customTitle) {
-            ;(summary as any)._libraryTitle = meta.customTitle
-          }
-          cachedSessions.push(summary)
-          localIds.add(sessionId)
-          knownSessionIds.add(sessionId)
-          addSessionCoverage(localIds, summary)
-          addSessionCoverage(knownSessionIds, summary)
-          mainWindow?.webContents.send('session:added', summary)
-        }
-      } catch { /* skip unparseable backup */ }
-    }
+    const tree = await requestLibraryScan()
+    await hydrateLibrarySessions(tree)
   } catch { /* ignore */ }
 
   return cloudSessions
@@ -795,20 +923,17 @@ ipcMain.handle('sessions:loadAll', async () => {
   try {
   const sessions = await loadAllSessions()
   cachedSessions = sessions
+  scheduleSearchIndexWarmup()
   knownSessionIds.clear()
 
-  // Attach library paths + physical location bucket + detect remote sessions.
-  // Every summary sent to the renderer must carry the same bucket semantics;
-  // otherwise the sidebar treats missing data as bottom "ungrouped" noise.
+  // Phase 1 only: return source summaries immediately. Library annotation and
+  // cross-device backups arrive through sessions:libraryPatch after worker scan.
   for (const s of sessions) {
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
     for (const continuationId of s.continuationSessionIds || []) {
       knownSessionIds.add(continuationId)
     }
-    const dirPath = getSessionDirPath(s.sessionId)
-    annotateSessionForFrontend(s, dirPath)
-
     // Skip library/remote processing for non-Claude-Code sessions
     if (s.source === 'codex' || s.source === 'cursor' || s.source === 'opencode' || s.source === 'zcode') continue
 
@@ -817,51 +942,11 @@ ipcMain.handle('sessions:loadAll', async () => {
       const remoteUser = extractRemoteUser(s.projectPath)
       if (remoteUser) s.remoteHost = `${remoteUser}@remote`
     }
-    const isBranch = s.id.includes(':intra-')
-    if (dirPath) {
-      if (isBranch) {
-        let branchMd: string | null | undefined = getBranchMdPath(s.id)
-        if (!branchMd && s.branchLeafUuid) {
-          const branchMeta = loadLibraryConfig().branchMeta?.[s.id]
-          branchMd = await updateBranchTranscript(s.id, s.branchLeafUuid, branchMeta?.customTitle) || undefined
-        }
-        s.libraryMdPath = branchMd || getSessionMdPath(s.sessionId) || undefined
-      }
-    }
   }
 
-  // Load Library-only sessions (from other devices via iCloud sync)
-  try {
-    const localIds = collectSessionCoverage(sessions)
-    const libraryOnly = findLibraryOnlySessions(localIds)
-    for (const { sessionId, backupPath, meta } of libraryOnly) {
-      try {
-        const summary = await buildSessionSummaryFromBackup(backupPath, sessionId, meta)
-        if (summary) {
-          if (localIds.has(sessionId) || localIds.has(summary.sessionId) || localIds.has(summary.id)) continue
-          summary.allFilePaths = [backupPath]
-          annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
-          const remoteState = resolveLibrarySessionRemoteState(meta)
-          summary.isRemote = remoteState.isRemote
-          if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
-          if (meta.customTitle) {
-            ;(summary as any)._libraryTitle = meta.customTitle
-          }
-          sessions.push(summary)
-          localIds.add(sessionId)
-          knownSessionIds.add(sessionId)
-          addSessionCoverage(localIds, summary)
-          addSessionCoverage(knownSessionIds, summary)
-        }
-      } catch { /* skip unparseable backup */ }
-    }
-    // Re-sort after adding library-only sessions
-    if (libraryOnly.length > 0) {
-      sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    }
-  } catch { /* ignore */ }
-
   cachedSessions = sessions
+
+  if (latestLibraryTree) void hydrateLibrarySessions(latestLibraryTree)
 
   // Sync library in background (non-blocking)
   if (!libraryInitialized) {
@@ -888,27 +973,41 @@ ipcMain.handle(
   }
 )
 
-// Cache library-missing-sources list to avoid recursive scan on every search query
+// Refreshed only by Library scan/sync events. Search queries never recurse the vault.
 let cachedMissingSources: Array<{ sessionId: string; backupPath: string }> | null = null
-let cachedMissingSourcesTime = 0
-const MISSING_SOURCES_TTL = 60_000 // refresh every 60s
+
+function refreshCachedMissingSources(): void {
+  if (!latestLibraryTree) {
+    cachedMissingSources ||= []
+    return
+  }
+  cachedMissingSources = collectLibrarySessionsFromTree(latestLibraryTree)
+    .filter((session) => {
+      const sources = Array.isArray(session.meta.sourceFilePaths) ? session.meta.sourceFilePaths : []
+      return sources.length === 0 || !sources.some((sourcePath) => {
+        const branchMarker = sourcePath.indexOf('#')
+        const physicalPath = branchMarker >= 0 ? sourcePath.slice(0, branchMarker) : sourcePath
+        return fs.existsSync(physicalPath)
+      })
+    })
+    .filter((session) => fs.existsSync(session.jsonlPath))
+    .map((session) => ({ sessionId: session.sessionId, backupPath: session.jsonlPath }))
+}
+
+function currentSearchSources(): Array<{ filePath: string; sessionId?: string; isLibraryBackup?: boolean }> {
+  const files = findAllSessionFiles().filter((filePath) => !filePath.includes('/subagents/'))
+  return [
+    ...files.map((filePath) => ({ filePath })),
+    ...(cachedMissingSources || []).map(({ sessionId, backupPath }) => ({
+      filePath: backupPath,
+      sessionId,
+      isLibraryBackup: true
+    }))
+  ]
+}
 
 ipcMain.handle('sessions:search', async (_event, query: string) => {
-  if (!libraryInitialized) {
-    try { initLibrary() } catch { /* ignore */ }
-  }
-  const files = findAllSessionFiles().filter((f) => !f.includes('/subagents/'))
-
-  const now = Date.now()
-  if (!cachedMissingSources || now - cachedMissingSourcesTime > MISSING_SOURCES_TTL) {
-    cachedMissingSources = findLibrarySessionsWithMissingSources().map(({ sessionId, backupPath }) => ({ sessionId, backupPath }))
-    cachedMissingSourcesTime = now
-  }
-
-  return searchSessionFiles(query, [
-    ...files.map((filePath) => ({ filePath })),
-    ...cachedMissingSources.map(({ backupPath }) => ({ filePath: backupPath }))
-  ])
+  return searchIndexedSessions(query)
 })
 
 function openInTerminal(command: string): void {
@@ -989,9 +1088,8 @@ ipcMain.handle('insights:get', () => {
   const sessions = cachedSessions
   let folders: Folder[] = []
   try {
-    if (libraryInitialized) {
-      const tree = scanLibrary()
-      const cfg = libraryTreeToConfig(tree)
+    if (latestLibraryTree) {
+      const cfg = libraryTreeToConfig(latestLibraryTree)
       folders = cfg.folders || []
     } else {
       const cfg = loadConfig()
@@ -1136,6 +1234,22 @@ ipcMain.handle('insights:generate', async (event, options?: { useLlm?: boolean }
   }
 })
 
+ipcMain.handle('insights:listModels', async () => {
+  try {
+    const { listModels } = await import('./llm-client')
+    const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
+    const s = libConfig.llmSettings as { provider?: string; apiKey?: string; baseUrl?: string } | undefined
+    if (!s?.apiKey) return []
+    return await listModels({
+      provider: (s.provider || 'anthropic') as 'anthropic' | 'openai' | 'custom',
+      apiKey: s.apiKey,
+      baseUrl: s.baseUrl
+    })
+  } catch {
+    return []
+  }
+})
+
 ipcMain.handle('insights:getLlmSettings', () => {
   try {
     const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
@@ -1199,12 +1313,11 @@ ipcMain.handle('session:getContextInspector', async (_event, filePath: string) =
 // These use the library manager but return the same shape the frontend expects
 
 ipcMain.handle('config:load', () => {
-  if (!shouldReadLibraryConfig()) {
+  if (!shouldReadLibraryConfig() || !latestLibraryTree) {
     // Fallback to old config during initial load
     return loadConfig()
   }
-  const tree = scanLibrary()
-  return libraryTreeToConfig(tree)
+  return libraryTreeToConfig(latestLibraryTree)
 })
 
 ipcMain.handle('config:save', (_event, config: { preferences: Record<string, unknown> }) => {
@@ -1225,11 +1338,11 @@ ipcMain.handle('config:save', (_event, config: { preferences: Record<string, unk
 
 ipcMain.handle(
   'config:createFolder',
-  (_event, opts: { name: string; color?: string | null; parentId?: string | null }) => {
+  async (_event, opts: { name: string; color?: string | null; parentId?: string | null }) => {
     if (libraryInitialized) {
       const parentPath = opts.parentId ? resolveFolderPath(opts.parentId) : undefined
       createLibraryFolder(opts.name, parentPath)
-      const tree = scanLibrary()
+      const tree = await requestLibraryScan()
       return libraryTreeToConfig(tree)
     }
     // Fallback
@@ -1241,7 +1354,7 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:moveFolder',
-  (_event, folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => {
+  async (_event, folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => {
     if (libraryInitialized) {
       const srcPath = resolveFolderPath(folderId)
 
@@ -1255,7 +1368,6 @@ ipcMain.handle(
         if (srcParent !== targetParent && fs.existsSync(srcPath)) {
           const newPath = moveLibraryFolderToParent(srcPath, targetParent)
           newFolderId = relative(getLibraryRoot(), newPath)
-          scanLibrary()
         }
         reorderFolder(newFolderId, targetId, position)
       } else {
@@ -1265,7 +1377,7 @@ ipcMain.handle(
           moveLibraryFolderToParent(srcPath, destParent)
         }
       }
-      const tree = scanLibrary()
+      const tree = await requestLibraryScan()
       return libraryTreeToConfig(tree)
     }
     const config = loadConfig()
@@ -1274,11 +1386,11 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle('config:deleteFolder', (_event, folderId: string) => {
+ipcMain.handle('config:deleteFolder', async (_event, folderId: string) => {
   if (libraryInitialized) {
     const folderPath = resolveFolderPath(folderId)
     deleteLibraryFolder(folderPath)
-    const tree = scanLibrary()
+    const tree = await requestLibraryScan()
     return libraryTreeToConfig(tree)
   }
   const config = loadConfig()
@@ -1288,11 +1400,11 @@ ipcMain.handle('config:deleteFolder', (_event, folderId: string) => {
 
 ipcMain.handle(
   'config:renameFolder',
-  (_event, folderId: string, name: string) => {
+  async (_event, folderId: string, name: string) => {
     if (libraryInitialized) {
       const folderPath = resolveFolderPath(folderId)
       renameLibraryFolder(folderPath, name)
-      const tree = scanLibrary()
+      const tree = await requestLibraryScan()
       return libraryTreeToConfig(tree)
     }
     const config = loadConfig()
@@ -1321,7 +1433,7 @@ ipcMain.handle(
         const folderPath = resolveFolderPath(folderId)
         moveSessionToFolder(sessionId, folderPath)
       }
-      const tree = scanLibrary()
+      const tree = await requestLibraryScan()
       return libraryTreeToConfig(tree)
     }
     const config = loadConfig()
@@ -1332,7 +1444,7 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:removeSessionFromFolder',
-  (_event, folderId: string, sessionId: string) => {
+  async (_event, folderId: string, sessionId: string) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
       if (isBranch) {
@@ -1341,7 +1453,7 @@ ipcMain.handle(
         const folderPath = resolveFolderPath(folderId)
         libRemoveSession(sessionId, folderPath)
       }
-      const tree = scanLibrary()
+      const tree = await requestLibraryScan()
       return libraryTreeToConfig(tree)
     }
     const config = loadConfig()
@@ -1352,7 +1464,7 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:setSessionMeta',
-  (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: Highlight[] }) => {
+  async (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: Highlight[] }) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
       if (isBranch) {
@@ -1360,7 +1472,7 @@ ipcMain.handle(
       } else {
         setSessionMetaInLibrary(sessionId, meta)
       }
-      const tree = scanLibrary()
+      const tree = await requestLibraryScan()
       return libraryTreeToConfig(tree)
     }
     const config = loadConfig()
@@ -1496,20 +1608,25 @@ ipcMain.handle('library:selectDirectory', async () => {
 
 ipcMain.handle('library:changePath', async (_event, newPath: string) => {
   changeConfiguredLibraryPath(newPath)
-  // Re-initialize library at new path
   initLibrary(newPath)
-  const tree = scanLibrary()
-  libraryInitialized = true
+  latestLibraryTree = null
+  libraryInitialized = false
+  libraryInitializationPromise = null
+  libraryHydrationGeneration++
   startLibraryWatcher() // 跟随新库根重启目录监听
-  // Re-sync sessions from source
+  const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+  let tree: LibraryTree
   if (cachedSessions.length > 0) {
     const oldConfig = loadConfig()
-    await syncLibraryFromSessions(cachedSessions, oldConfig.sessionMeta)
-    // Rescan after sync
-    scanLibrary()
+    tree = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
+      onProgress: reportLibrarySyncProgress
+    })
+  } else {
+    tree = await worker.scan(getLibraryRoot())
   }
-  transcriptWatcher?.refresh()
-  mainWindow?.webContents.send('sessions:refresh')
+  libraryInitialized = true
+  adoptLibraryTree(tree)
+  await hydrateLibrarySessions(tree)
   return getLibraryRoot()
 })
 
@@ -1739,18 +1856,34 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // Initialize library early so session paths are available on first load
+  // Only resolve/create the root synchronously. Recursive scan and batch sync run in a Worker.
   initLibrary()
-  scanLibrary()
-  transcriptWatcher = new TranscriptWatcher()
-  transcriptWatcher.start()
-
+  libraryWorker = new LibraryWorkerClient()
+  sessionSyncCoordinator = new SessionSyncCoordinator({
+    quietWindowMs: 2_000,
+    concurrency: 2,
+    sync: performSessionSynchronization
+  })
+  transcriptWatcher = new TranscriptWatcher({
+    scan: () => latestLibraryTree
+      ? scanActiveTranscriptSourcesFromTree(latestLibraryTree)
+      : { sources: [], totalSessionCount: 0 },
+    schedule: ({ sessionId, sourcePath }) => {
+      scheduleSessionSynchronization({
+        sessionId,
+        filePath: sourcePath,
+        source: 'transcript',
+        reason: 'transcript-watcher'
+      })
+    }
+  })
   createWindow()
   startFileWatcher()
   startLibraryWatcher()
   startCodexWatcher()
   startCursorWatcher()
   startActiveSessionPoller()
+  void initializeLibraryScanInBackground()
   setupAutoUpdater()
   autoInstallCliOnStartup()
 

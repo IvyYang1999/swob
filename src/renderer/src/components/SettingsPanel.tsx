@@ -284,6 +284,9 @@ function LlmSettingsSection() {
   const [model, setModel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [saved, setSaved] = useState(false)
+  const [models, setModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsFailed, setModelsFailed] = useState(false)
 
   useEffect(() => {
     window.api.getLlmSettings().then((s) => {
@@ -295,6 +298,24 @@ function LlmSettingsSection() {
     }).catch(() => {})
   }, [])
 
+  const fetchModels = useCallback(async () => {
+    setLoadingModels(true)
+    setModelsFailed(false)
+    try {
+      const list = await window.api.listModels()
+      setModels(list)
+      if (list.length === 0) setModelsFailed(true)
+    } catch {
+      setModelsFailed(true)
+    }
+    setLoadingModels(false)
+  }, [])
+
+  // Auto-fetch models when key is available
+  useEffect(() => {
+    if (hasKey) fetchModels()
+  }, [hasKey, fetchModels])
+
   const handleSave = useCallback(async () => {
     const ok = await window.api.setLlmSettings({ provider, apiKey, model, baseUrl })
     if (ok) {
@@ -304,6 +325,8 @@ function LlmSettingsSection() {
       setKeyHint(s.keyHint)
       setHasKey(s.hasKey)
       setTimeout(() => setSaved(false), 2000)
+      // Refresh model list after saving new key
+      if (apiKey.trim()) fetchModels()
     }
   }, [provider, apiKey, model, baseUrl])
 
@@ -333,13 +356,44 @@ function LlmSettingsSection() {
           placeholder={hasKey ? `${locale === 'zh-CN' ? '已保存' : 'Saved'} ${keyHint} — ${locale === 'zh-CN' ? '输入新 key 可替换' : 'enter new key to replace'}` : 'API Key'}
           className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
         />
-        <input
-          type="text"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder={locale === 'zh-CN' ? `模型（留空用默认：${provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : '必填'}）` : `Model (default: ${provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : 'required'})`}
-          className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
-        />
+        {/* Model selector — dropdown when models available, text fallback otherwise */}
+        {loadingModels ? (
+          <div className="flex items-center gap-2 text-[11px] text-muted py-1.5">
+            <div className="animate-spin w-3 h-3 border border-soft-blue border-t-transparent rounded-full" />
+            {locale === 'zh-CN' ? '获取可用模型…' : 'Fetching models…'}
+          </div>
+        ) : models.length > 0 && !modelsFailed ? (
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary"
+          >
+            <option value="">{locale === 'zh-CN' ? '自动选择（推荐最便宜）' : 'Auto (cheapest recommended)'}</option>
+            {models.map((m) => <option key={m} value={m}>{m}</option>)}
+            <option value="__custom__">{locale === 'zh-CN' ? '自定义输入…' : 'Custom…'}</option>
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder={locale === 'zh-CN' ? `模型（留空用默认：${provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : '必填'}）` : `Model (default: ${provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : 'required'})`}
+            className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
+          />
+        )}
+        {model === '__custom__' && (
+          <input
+            type="text"
+            value=""
+            onChange={(e) => setModel(e.target.value)}
+            placeholder={locale === 'zh-CN' ? '输入自定义模型 ID' : 'Enter custom model ID'}
+            className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
+            autoFocus
+          />
+        )}
+        {modelsFailed && hasKey && (
+          <div className="text-[10px] text-soft-amber">{locale === 'zh-CN' ? '获取模型列表失败，请手动输入' : 'Failed to fetch models, enter manually'}</div>
+        )}
         {provider === 'custom' && (
           <input
             type="text"

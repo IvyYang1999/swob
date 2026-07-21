@@ -88,3 +88,49 @@ export async function callLlm(
   const data = await res.json()
   return data.choices?.[0]?.message?.content || ''
 }
+
+/** Fetch available models from the configured provider. Returns model IDs sorted by recommendation. */
+export async function listModels(settings: LlmSettings): Promise<string[]> {
+  if (!settings.apiKey?.trim()) return []
+
+  const isAnthropicProtocol = settings.provider === 'anthropic' ||
+    (settings.provider === 'custom' && settings.baseUrl?.includes('anthropic'))
+
+  try {
+    if (isAnthropicProtocol) {
+      const endpoint = settings.provider === 'anthropic'
+        ? 'https://api.anthropic.com/v1/models'
+        : `${settings.baseUrl!.trim().replace(/\/+$/, '')}/v1/models`
+      const res = await fetch(endpoint, {
+        headers: { 'x-api-key': settings.apiKey, 'anthropic-version': '2023-06-01' },
+        signal: AbortSignal.timeout(10_000)
+      })
+      if (!res.ok) return []
+      const data = await res.json()
+      const models = (Array.isArray(data.data) ? data.data : [])
+        .map((m: { id: string }) => m.id)
+        .filter((id: string) => id.startsWith('claude'))
+      // Sort: haiku first (cheapest), then sonnet, then opus
+      const order = (id: string) => id.includes('haiku') ? 0 : id.includes('sonnet') ? 1 : id.includes('opus') ? 2 : 3
+      return models.sort((a: string, b: string) => order(a) - order(b) || b.localeCompare(a))
+    }
+
+    // OpenAI-compatible
+    const baseUrl = (settings.provider === 'custom' && settings.baseUrl?.trim())
+      ? settings.baseUrl.trim().replace(/\/+$/, '')
+      : 'https://api.openai.com/v1'
+    const res = await fetch(`${baseUrl}/models`, {
+      headers: { authorization: `Bearer ${settings.apiKey}` },
+      signal: AbortSignal.timeout(10_000)
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    const models = (Array.isArray(data.data) ? data.data : [])
+      .map((m: { id: string }) => m.id)
+      .filter((id: string) => !id.includes('embed') && !id.includes('tts') && !id.includes('whisper') && !id.includes('dall-e'))
+      .sort((a: { created?: number }, b: { created?: number }) => (b.created || 0) - (a.created || 0))
+    return models
+  } catch {
+    return []
+  }
+}

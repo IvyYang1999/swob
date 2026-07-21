@@ -51,7 +51,9 @@ interface ElectronAPI {
   startDrag: (filePath: string, title: string) => void
   onSessionAdded: (callback: (session: any) => void) => void
   onSessionUpdated: (callback: (session: any) => void) => void
+  onSessionSummaryUpdated: (callback: (session: any) => void) => void
   onSessionsRefresh: (callback: () => void) => void
+  onLibraryPatch: (callback: (patch: { sessions: any[]; config?: any }) => void) => void
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => void
   spotlightSearch: (query: string) => Promise<any[]>
   spotlightResume: (sessionId: string, cwd?: string) => Promise<ResumeActionResult>
@@ -82,6 +84,7 @@ interface ElectronAPI {
   // Insights Report
   generateInsightsJson: (options?: { startDate?: string; endDate?: string }) => Promise<{ ok: boolean; report?: any; error?: string }>
   generateInsights: (options?: { useLlm?: boolean }) => Promise<{ ok: boolean; path?: string; sessionCount?: number; llmUsed?: boolean; llmError?: string; error?: string }>
+  listModels: () => Promise<string[]>
   getLlmSettings: () => Promise<{ provider: string; hasKey: boolean; keyHint: string; model: string; baseUrl: string }>
   setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) => Promise<boolean>
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void

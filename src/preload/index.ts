@@ -155,6 +155,27 @@ const api = {
   getLlmSettings: () => ipcRenderer.invoke('insights:getLlmSettings'),
   setLlmSettings: (settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) =>
     ipcRenderer.invoke('insights:setLlmSettings', settings),
+  llmListProfiles: () => ipcRenderer.invoke('llm:listProfiles'),
+  llmSaveProfile: (profile: {
+    id?: string
+    name: string
+    provider: 'anthropic' | 'openai' | 'custom'
+    model?: string
+    baseUrl?: string
+    credential?: string
+    clearCredential?: boolean
+  }) => ipcRenderer.invoke('llm:saveProfile', profile),
+  llmDeleteProfile: (profileId: string) => ipcRenderer.invoke('llm:deleteProfile', profileId),
+  llmGetBindings: () => ipcRenderer.invoke('llm:getBindings'),
+  llmSetBindings: (bindings: {
+    insights?: string
+    smartOrganize?: string
+    smartRename?: string
+    globalAgent?: string
+  }) => ipcRenderer.invoke('llm:setBindings', bindings),
+  smartRenamePreview: (sessionIds: string[]) => ipcRenderer.invoke('smartRename:preview', sessionIds),
+  smartRenameApply: (items: Array<{ id: string; newTitle: string }>) =>
+    ipcRenderer.invoke('smartRename:apply', items),
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => {
     const listener = (_e: unknown, data: { stage: string; current: number; total: number }): void => callback(data)
     ipcRenderer.on('insights:progress', listener)

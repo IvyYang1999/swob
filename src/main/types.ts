@@ -214,5 +214,7 @@ export interface UserConfig {
     singleTurnBehavior?: import('../shared/settings-capabilities').SingleTurnBehavior
     autoCheckUpdates?: boolean
     updateChannel?: import('../shared/settings-capabilities').UpdateChannel
+    llmProfiles?: import('./llm-profiles').LlmProfile[]
+    smartFeatureBindings?: import('./llm-profiles').SmartFeatureBinding
   }
 }

@@ -14,7 +14,7 @@ import {
   migrateLegacyLlmCredential,
   setLlmSettings
 } from './llm-settings'
-import type { SecretStore } from './llm-secret-store'
+import type { ProfileSecretStore, SecretStore } from './llm-secret-store'
 
 class MemoryStore implements SecretStore {
   stored: string | null = null
@@ -26,6 +26,22 @@ class MemoryStore implements SecretStore {
 
   async set(value: string): Promise<void> {
     this.stored = value
+  }
+}
+
+class MemoryProfileStore implements ProfileSecretStore {
+  stored = new Map<string, string>()
+
+  async get(profileId: string): Promise<string | null> {
+    return this.stored.get(profileId) || null
+  }
+
+  async set(profileId: string, value: string): Promise<void> {
+    this.stored.set(profileId, value)
+  }
+
+  async delete(profileId: string): Promise<void> {
+    this.stored.delete(profileId)
   }
 }
 
@@ -43,11 +59,10 @@ afterEach(() => {
 })
 
 function writeLegacy(value: string): void {
-  const config = loadLibraryConfig() as Omit<ReturnType<typeof loadLibraryConfig>, 'llmSettings'> & {
-    llmSettings: Record<string, unknown>
-  }
+  const config = loadLibraryConfig()
   config.llmSettings = {
     provider: 'anthropic',
+    keyHint: '',
     [LEGACY_FIELD]: value,
     model: 'fixture-model',
     baseUrl: ''
@@ -82,26 +97,29 @@ describe('LLM Keychain settings', () => {
 
   it('stores only metadata in Library and resolves the value at use time', async () => {
     const store = new MemoryStore()
+    const profileStore = new MemoryProfileStore()
     await setLlmSettings({
       provider: 'custom',
       value: 'runtime-example-abcd',
       model: 'fixture-model',
       baseUrl: 'https://example.test'
-    }, store)
+    }, store, profileStore)
 
-    expect(await getLlmSettingsForDisplay(store)).toEqual({
+    expect(await getLlmSettingsForDisplay(store, profileStore)).toEqual({
       provider: 'custom',
       hasKey: true,
       keyHint: '…abcd',
       model: 'fixture-model',
       baseUrl: 'https://example.test'
     })
-    expect(await getLlmSettingsWithSecret(store)).toMatchObject({
+    expect(await getLlmSettingsWithSecret(store, profileStore)).toMatchObject({
       provider: 'custom',
       credential: 'runtime-example-abcd',
       model: 'fixture-model',
       baseUrl: 'https://example.test'
     })
     expect(JSON.stringify(loadLibraryConfig())).not.toContain('runtime-example-abcd')
+    expect(loadLibraryConfig().llmSettings).toBeUndefined()
+    expect(loadLibraryConfig().preferences.llmProfiles).toHaveLength(1)
   })
 })

@@ -470,6 +470,9 @@ export function invalidateLibraryConfigCache(): void {
 
 // --- Session Dir Naming ---
 
+/** Emoji marker distinguishing session packages from ordinary folders in Obsidian/Finder. */
+export const SESSION_DIR_PREFIX = '💬 '
+
 function sanitizeDirName(title: string): string {
   return title
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
@@ -1473,11 +1476,17 @@ export async function ensureSessionInLibrary(
     return existing
   }
 
-  // Create new session dir. New sessions always land in Inbox. Project/date/topic
-  // organization is explicit: a lens never writes, and an organizer always previews.
+  // Create new session dir. Default: loose in the vault root, marked with an emoji
+  // prefix so session packages are distinguishable from ordinary folders in
+  // Obsidian/Finder. Auto-filing into container folders is opt-in via
+  // preferences.ungrouping — the user consciously chooses where sessions land.
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId.slice(0, 12)
-  const baseName = sanitizeDirName(title)
-  const parentDir = path.join(_root, 'Inbox')
+  const baseName = `${SESSION_DIR_PREFIX}${sanitizeDirName(title)}`
+  const ungrouping = loadLibraryConfig().preferences?.ungrouping
+  const containerName = ungrouping
+    ? (session.turnCount <= 1 ? ungrouping.singleTurn : ungrouping.multiTurn)
+    : null
+  const parentDir = containerName ? path.join(_root, containerName) : _root
   fs.mkdirSync(parentDir, { recursive: true })
   const dirName = findUniqueDirName(parentDir, baseName)
   const dirPath = path.join(parentDir, dirName)
@@ -2065,7 +2074,7 @@ export function deleteLibraryFolder(folderPath: string): void {
   const result = executeOrganization(_root, 'manual', allSessions.map((session) => ({
     sessionId: session.sessionId,
     sourceDir: session.dirPath,
-    targetRelativeFolder: 'Inbox'
+    targetRelativeFolder: '.'
   })))
   for (const move of result.moves) sessionIndex.set(move.sessionId, move.to)
 
@@ -2116,11 +2125,11 @@ export function removeSessionFromFolder(sessionId: string, folderPath: string): 
           return
         }
       } else if (fullPath === realDir) {
-        // Removing a physical assignment returns the session to Inbox.
+        // Removing a physical assignment returns the session to the vault root.
         const result = executeOrganization(_root, 'manual', [{
           sessionId,
           sourceDir: fullPath,
-          targetRelativeFolder: 'Inbox'
+          targetRelativeFolder: '.'
         }])
         const moved = result.moves[0]
         if (moved) sessionIndex.set(sessionId, moved.to)

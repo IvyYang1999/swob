@@ -5,10 +5,10 @@ import { useT } from '../i18n'
 import { groupSessionsByLens, type LensDimension, type LensGroup } from '../../../shared/vault-lens'
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
-  MessageSquare, Clock, Trash2, List, FolderTree,
-  Plus, Play, Pencil, GitBranch, Cloud, CloudDownload, Settings, Copy, Terminal,
-  FileText, Focus, Inbox, Sparkles, Tags, CalendarDays, Layers3, Gauge,
-  HardDrive, Rows3, Undo2, WandSparkles
+  MessageSquare, Clock, Trash2,
+  Plus, Play, GitBranch, Cloud,
+  FileText, Focus, Tags, CalendarDays, Layers3, Gauge,
+  HardDrive, Rows3, WandSparkles, FolderTree, Undo2
 } from 'lucide-react'
 import { SshConfigModal } from './SshConfigModal'
 import { resolveResumeCwd } from '../utils/chat-helpers'
@@ -43,7 +43,6 @@ function SessionItem({
   const { selectedUniqueId, selectSession, config, activeSessionIds, cloudSessionIds, locale, sessions } = useStore()
   const t = useT()
   const isIntraBranch = session.id.includes(':intra-')
-  // Branch: only use its own meta, never fall back to parent's
   const meta = isIntraBranch
     ? config?.sessionMeta[session.id]
     : (config?.sessionMeta[session.sessionId] || config?.sessionMeta[session.id])
@@ -80,8 +79,6 @@ function SessionItem({
       }}
       onClick={() => {
         if (!isRenaming) {
-          // For intra-file branches, look up fresh data from the sessions array
-          // (localStorage cache might have stale data without branch fields)
           const fresh = sessions.find((s) => s.id === session.id) || session
           selectSession(
             fresh.filePath,
@@ -283,7 +280,7 @@ function InlineNewFolder({ depth, onSubmit, onCancel }: {
   )
 }
 
-// ============ Virtualized Session List (flat/timeline mode) ============
+// ============ Virtualized Session List (flat mode) ============
 
 const SESSION_ROW_HEIGHT = 52
 
@@ -407,7 +404,6 @@ function FolderNode({
 
   return (
     <div>
-      {/* Folder header — zone detection here */}
       <div
         ref={headerRef} draggable={!folder.id.startsWith('path-')}
         onDragStart={(e) => {
@@ -480,7 +476,6 @@ function FolderNode({
         )}
       </div>
 
-      {/* Expanded content — drop here = "inside" */}
       {isExpanded && (
         <div
           onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverFolderId(folder.id); setDragOverZone('inside') }}
@@ -529,7 +524,7 @@ function FolderNode({
 // ============ Main Sidebar ============
 
 export function Sidebar({ width }: { width: number }) {
-  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, resumeSession, sshConfig, refreshCloudSessions, undoLastOrganization } = useStore()
+  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, resumeSession, sshConfig, refreshCloudSessions, undoLastOrganization, showToast } = useStore()
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -537,18 +532,23 @@ export function Sidebar({ width }: { width: number }) {
   const [dragOverZone, setDragOverZone] = useState<'inside' | 'before' | 'after'>('inside')
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null)
   const [renamingValue, setRenamingValue] = useState('')
-  const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree')
   const [creatingSubfolderId, setCreatingSubfolderId] = useState<string | null>(null)
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
   const [singleTurnExpanded, setSingleTurnExpanded] = useState(false)
   const [sessionRenameValue, setSessionRenameValue] = useState('')
   const { sshModalOpen, openSshModal, closeSshModal } = useStore()
-  const [cloudRefreshing, setCloudRefreshing] = useState(false)
   const [sidebarMode, setSidebarMode] = useState<'folders' | 'lens'>(() => {
-    try { return localStorage.getItem('swob:sidebar-mode') === 'lens' ? 'lens' : 'folders' } catch { return 'folders' }
+    try {
+      const saved = localStorage.getItem('swob:sidebar-mode')
+      if (saved === 'lens') return 'lens'
+      if (saved === 'timeline') return 'lens'
+      return 'folders'
+    } catch { return 'folders' }
   })
   const [lensDimension, setLensDimension] = useState<LensDimension>(() => {
     try {
+      const savedMode = localStorage.getItem('swob:sidebar-mode')
+      if (savedMode === 'timeline') return 'date'
       const saved = localStorage.getItem('swob:lens-dimension') as LensDimension | null
       return LENS_DEFINITIONS.some((item) => item.id === saved) ? saved! : 'date'
     } catch { return 'date' }
@@ -558,7 +558,6 @@ export function Sidebar({ width }: { width: number }) {
   const t = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const inboxExpansionInitialized = useRef(false)
 
   useEffect(() => {
     try {
@@ -568,42 +567,15 @@ export function Sidebar({ width }: { width: number }) {
   }, [sidebarMode, lensDimension])
 
   useEffect(() => {
-    if (inboxExpansionInitialized.current || !config?.folders) return
-    const inboxIds = config.folders
-      .filter((folder) => ['inbox', '未分类'].includes(folder.name.trim().toLowerCase()))
-      .map((folder) => folder.id)
-    if (inboxIds.length > 0) {
-      setExpandedFolders((current) => new Set([...current, ...inboxIds]))
-      inboxExpansionInitialized.current = true
-    }
-  }, [config?.folders])
-
-  // Auto-refresh cloud session list on mount and periodically
-  useEffect(() => {
     refreshCloudSessions()
     const interval = setInterval(refreshCloudSessions, 30_000)
     return () => clearInterval(interval)
   }, [refreshCloudSessions])
 
-  const { showToast } = useStore()
-
-  async function handleRefreshCloud() {
-    setCloudRefreshing(true)
-    await refreshCloudSessions()
-    setCloudRefreshing(false)
-    const cloudCount = useStore.getState().cloudSessionIds.size
-    if (cloudCount > 0) {
-      showToast(`发现 ${cloudCount} 个 iCloud 云端会话`, 'info')
-    } else {
-      showToast('iCloud 状态已刷新，所有会话均在本地', 'success')
-    }
-  }
-
   // --- Native context menu ---
   const handleContextMenu = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.preventDefault()
     const session = sessions.find((s) => s.id === sessionId)
-    // Branches use session.id (contains :intra-), others use sessionId (strip codex:/cursor: prefix)
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     const opId = isBranch ? sessionId : (session?.sessionId || sessionId)
     const canResume = !!session && !isBranch && session.canResume !== false
@@ -653,7 +625,6 @@ export function Sidebar({ width }: { width: number }) {
 
   const handleDoubleClickRenameSession = useCallback((sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId)
-    // Branch: check own ID first; regular: sessionId === id
     const meta = config?.sessionMeta[sessionId] || config?.sessionMeta[session?.sessionId || '']
     setSessionRenameValue(meta?.customTitle || session?.firstUserMessage || '')
     setRenamingSessionId(sessionId)
@@ -695,7 +666,8 @@ export function Sidebar({ width }: { width: number }) {
   }, [selectedUniqueId])
 
   // --- Computed ---
-  // 「未分组容器」：配置里指定的文件夹名（如 未分组/单轮会话），不在树里显示、其会话拉到底部。
+  // 「未分组容器」：用户在 preferences.ungrouping 显式配置的容器文件夹（自动整理开关）。
+  // 只匹配用户配置的名字，绝不硬编码猜测（曾误伤用户自己的 inbox 文件夹）。
   const ungConfig = (config?.preferences as any)?.ungrouping as
     | { multiTurn?: string; singleTurn?: string }
     | undefined
@@ -705,17 +677,17 @@ export function Sidebar({ width }: { width: number }) {
     )
     return new Set((config?.folders || []).filter((f) => names.has(f.name)).map((f) => f.id))
   }, [config?.folders, ungConfig])
-  // 树渲染用的文件夹列表：剔除未分组容器
-  const treeFolders = useMemo(
+  // 树渲染用的文件夹列表：剔除未分组容器（用户显式勾选自动整理时才存在）
+  const allFolders = useMemo(
     () => (config?.folders || []).filter((f) => !ungroupingFolderIds.has(f.id)),
     [config?.folders, ungroupingFolderIds]
   )
+  const rootFolders = useMemo(() => allFolders.filter((f) => !f.parentId), [allFolders])
 
-  // 底部归属【完全按主进程打的物理位置标签 ungroupBucket】判定，不靠 id 匹配：
-  //   'grouped' = 已在某主题文件夹（只在树里显示，绝不进底部，杜绝重复显示）
-  //   'multi'/'single' = 在 未分组/单轮会话 容器里 → 进底部对应区
-  //   'root' = 真·游离会话 → 进底部，按 turnCount 分
-  // 配了 ungrouping 时，缺标签不再 fail-open 进底部；否则 library-only/旧缓存会把已分组会话重复显示。
+  // 底部归属按主进程打的物理位置标签 ungroupBucket 判定：
+  //   'grouped' = 已在某主题文件夹（只在树里显示）
+  //   'multi'/'single' = 在自动整理容器里 → 底部对应区
+  //   'root' = 散放根目录的游离会话 → 底部，按 turnCount 分
   const bucketOf = (s: SessionSummary): string | undefined => (s as any).ungroupBucket
   const isBottomSession = (s: SessionSummary): boolean => {
     const b = bucketOf(s)
@@ -744,11 +716,6 @@ export function Sidebar({ width }: { width: number }) {
     return map
   }, [sessions])
 
-  const rootFolders = useMemo(() => treeFolders.filter((f) => !f.parentId), [treeFolders])
-  const isInboxFolder = (folder: Folder): boolean => ['inbox', '未分类'].includes(folder.name.trim().toLowerCase())
-  const regularRootFolders = useMemo(() => rootFolders.filter((folder) => !isInboxFolder(folder)), [rootFolders])
-  const inboxRootFolders = useMemo(() => rootFolders.filter(isInboxFolder), [rootFolders])
-
   // --- Auto-scroll during drag ---
   const handleListDragOver = useCallback((e: React.DragEvent) => {
     const el = scrollRef.current
@@ -769,49 +736,26 @@ export function Sidebar({ width }: { width: number }) {
 
   const stopAutoScroll = useCallback(() => { if (scrollTimerRef.current) { clearInterval(scrollTimerRef.current); scrollTimerRef.current = null } }, [])
 
+  // Store 的 undoLastOrganization 自带结果 toast，这里直接透传
+  const handleUndo = () => { void undoLastOrganization() }
+
+  const [cloudRefreshing, setCloudRefreshing] = useState(false)
+  async function handleRefreshCloud() {
+    setCloudRefreshing(true)
+    await refreshCloudSessions()
+    setCloudRefreshing(false)
+    const cloudCount = useStore.getState().cloudSessionIds.size
+    if (cloudCount > 0) {
+      showToast(`发现 ${cloudCount} 个 iCloud 云端会话`, 'info')
+    } else {
+      showToast('iCloud 状态已刷新，所有会话均在本地', 'success')
+    }
+  }
+
   return (
     <div data-testid="sidebar" className="h-full flex flex-col bg-base shrink-0" style={{ width }}>
-      <div className="p-3 flex items-center justify-between border-b border-edge">
-        <span className="text-sm font-medium text-body">{t('sidebar.sessions')}</span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={handleRefreshCloud}
-            className="p-1 hover:bg-hover rounded text-secondary hover:text-primary"
-            title="刷新 iCloud 同步状态"
-          >
-            <CloudDownload size={14} className={cloudRefreshing ? 'animate-pulse text-blue-400' : ''} />
-          </button>
-          <button
-            onClick={() => openSshModal()}
-            className={`p-1 hover:bg-hover rounded hover:text-primary ${sshConfig ? 'text-accent' : 'text-secondary'}`}
-            title={sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : 'SSH 远程配置'}
-          >
-            <Terminal size={14} />
-          </button>
-          <button
-            onClick={() => void undoLastOrganization()}
-            className="p-1 hover:bg-hover rounded text-secondary hover:text-primary"
-            title="撤销最近一次整理"
-          >
-            <Undo2 size={14} />
-          </button>
-          {sidebarMode === 'folders' && (
-            <button onClick={() => setViewMode(viewMode === 'tree' ? 'flat' : 'tree')}
-              className="p-1 hover:bg-hover rounded text-secondary hover:text-primary"
-              title={viewMode === 'tree' ? t('sidebar.timeline_view') : t('sidebar.tree_view')}>
-              {viewMode === 'tree' ? <List size={14} /> : <FolderTree size={14} />}
-            </button>
-          )}
-          {sidebarMode === 'folders' && (
-            <button onClick={() => setShowNewFolder(true)}
-              className="p-1 hover:bg-hover rounded text-secondary hover:text-primary" title={t('sidebar.new_folder')}>
-              <FolderPlus size={14} />
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="px-2 py-2 border-b border-edge space-y-2">
+      {/* ===== Top: Mode switch (the ONLY thing at the very top) ===== */}
+      <div className="px-2 pt-2 pb-1 border-b border-edge space-y-1.5">
         <div className="grid grid-cols-2 p-0.5 rounded bg-surface" role="tablist" aria-label="侧边栏模式">
           <button
             role="tab"
@@ -843,14 +787,6 @@ export function Sidebar({ width }: { width: number }) {
             ))}
           </div>
         )}
-        <div className="flex items-center gap-1">
-          <button onClick={() => setOrganizerKind('project')} className="flex-1 px-2 py-1 text-[11px] text-secondary hover:text-primary hover:bg-surface rounded flex items-center justify-center gap-1">
-            <FolderIcon size={11} />按项目整理
-          </button>
-          <button onClick={() => setOrganizerKind('smart')} className="flex-1 px-2 py-1 text-[11px] text-secondary hover:text-primary hover:bg-surface rounded flex items-center justify-center gap-1">
-            <WandSparkles size={11} />智能整理
-          </button>
-        </div>
       </div>
 
       {sshModalOpen && <SshConfigModal onClose={() => closeSshModal()} />}
@@ -866,6 +802,7 @@ export function Sidebar({ width }: { width: number }) {
         </div>
       )}
 
+      {/* ===== Main scrollable area ===== */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto"
         onDragOver={handleListDragOver} onDragLeave={stopAutoScroll} onDrop={stopAutoScroll} onDragEnd={stopAutoScroll}>
         {sidebarMode === 'lens' ? (
@@ -879,32 +816,20 @@ export function Sidebar({ width }: { width: number }) {
             onRenameCancel={handleCancelRenameSession}
             onDoubleClickRename={handleDoubleClickRenameSession}
           />
-        ) : viewMode === 'flat' ? (
-          <VirtualizedSessionList
-            sessions={sessions}
-            scrollRef={scrollRef}
-            onContextMenu={handleContextMenu}
-            renamingSessionId={renamingSessionId}
-            sessionRenameValue={sessionRenameValue}
-            onRenameChange={setSessionRenameValue}
-            onRenameSubmit={handleSubmitRenameSession}
-            onRenameCancel={handleCancelRenameSession}
-            onDoubleClickRename={handleDoubleClickRenameSession}
-          />
         ) : (
           <>
-            {regularRootFolders.length === 0 && (sessions.length > 0 || inboxRootFolders.length > 0) && (
+            {rootFolders.length === 0 && sessions.length > 0 && (
               <div className="m-3 p-3 border border-edge rounded bg-surface/40">
-                <div className="flex items-center gap-2 text-sm text-primary"><Inbox size={14} className="text-accent" />会话还住在 Inbox</div>
-                <p className="text-xs text-muted mt-1.5 leading-relaxed">不会自动重排。先换个镜头浏览，或预览一次整理。</p>
+                <div className="flex items-center gap-2 text-sm text-primary"><WandSparkles size={14} className="text-accent" />开始整理你的会话</div>
+                <p className="text-xs text-muted mt-1.5 leading-relaxed">切换到镜头浏览，或一键按项目整理。</p>
                 <div className="flex gap-2 mt-2">
                   <button onClick={() => setSidebarMode('lens')} className="text-[11px] text-accent hover:text-primary">用镜头浏览</button>
                   <button onClick={() => setOrganizerKind('project')} className="text-[11px] text-secondary hover:text-primary">按项目整理 →</button>
                 </div>
               </div>
             )}
-            {regularRootFolders.map((folder) => (
-              <FolderNode key={folder.id} folder={folder} depth={0} allFolders={treeFolders}
+            {rootFolders.map((folder) => (
+              <FolderNode key={folder.id} folder={folder} depth={0} allFolders={allFolders}
                 sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
                 dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
                 setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
@@ -918,7 +843,7 @@ export function Sidebar({ width }: { width: number }) {
                 onDoubleClickRenameSession={handleDoubleClickRenameSession} />
             ))}
             {(config?.rootFiles || []).map((file) => <VaultFileItem key={file.path} file={file} />)}
-            {regularRootFolders.length > 0 && ungroupedSessions.length > 0 && (
+            {rootFolders.length > 0 && ungroupedSessions.length > 0 && (
               <div className="mx-3 my-2 flex items-center gap-2"
                 onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onDrop={(e) => { e.preventDefault(); e.stopPropagation(); try { const d = JSON.parse(e.dataTransfer.getData('application/x-swob')); if (d.type === 'folder' && d.id) moveFolder(d.id, null) } catch {} }}>
@@ -954,40 +879,37 @@ export function Sidebar({ width }: { width: number }) {
                 ))}
               </>
             )}
-            {inboxRootFolders.length > 0 && (
-              <div className="mx-3 my-2 flex items-center gap-2">
-                <div className="flex-1 border-t border-edge" />
-                <span className="text-[10px] text-faint shrink-0">Inbox</span>
-                <div className="flex-1 border-t border-edge" />
-              </div>
-            )}
-            {inboxRootFolders.map((folder) => (
-              <FolderNode key={folder.id} folder={folder} depth={0} allFolders={treeFolders}
-                sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
-                dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
-                setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
-                renamingFolderId={renamingFolderId} setRenamingFolderId={setRenamingFolderId}
-                renamingValue={renamingValue} setRenamingValue={setRenamingValue}
-                handleRenameFolder={handleRenameFolder} onSessionContextMenu={handleContextMenu}
-                creatingSubfolderId={creatingSubfolderId} setCreatingSubfolderId={setCreatingSubfolderId}
-                renamingSessionId={renamingSessionId} sessionRenameValue={sessionRenameValue}
-                onSessionRenameChange={setSessionRenameValue} onSessionRenameSubmit={handleSubmitRenameSession}
-                onSessionRenameCancel={handleCancelRenameSession}
-                onDoubleClickRenameSession={handleDoubleClickRenameSession} />
-            ))}
           </>
         )}
       </div>
 
-      <SidebarFooter sessionCount={sessions.length} totalBytes={sessions.reduce((a, s) => a + s.fileSizeBytes, 0)} />
+      {/* ===== Bottom status bar ===== */}
+      <SidebarFooter
+        sessionCount={sessions.length}
+        totalBytes={sessions.reduce((a, s) => a + s.fileSizeBytes, 0)}
+        onOrganize={setOrganizerKind}
+        onNewFolder={() => setShowNewFolder(true)}
+        onUndo={handleUndo}
+        onRefreshCloud={handleRefreshCloud}
+        cloudRefreshing={cloudRefreshing}
+        sidebarMode={sidebarMode}
+      />
     </div>
   )
 }
 
-function SidebarFooter({ sessionCount, totalBytes }: { sessionCount: number; totalBytes: number }) {
+function SidebarFooter({ sessionCount, totalBytes, onOrganize, onNewFolder, onUndo, onRefreshCloud, cloudRefreshing, sidebarMode }: {
+  sessionCount: number; totalBytes: number
+  onOrganize: (kind: 'project' | 'smart') => void
+  onNewFolder: () => void
+  onUndo: () => void
+  onRefreshCloud: () => void
+  cloudRefreshing: boolean
+  sidebarMode: 'folders' | 'lens'
+}) {
   const t = useT()
-  const { showToast } = useStore()
   const [libraryPath, setLibraryPath] = useState<string>('')
+  const { showToast } = useStore()
 
   useEffect(() => {
     (window.api as any).libraryGetConfiguredPath?.().then((p: string) => setLibraryPath(p))
@@ -1022,11 +944,32 @@ function SidebarFooter({ sessionCount, totalBytes }: { sessionCount: number; tot
   const shortPath = libraryPath.replace(/^\/Users\/[^/]+/, '~')
 
   return (
-    <div className="p-2 border-t border-edge text-[11px] text-muted space-y-1">
-      <div>{t('sidebar.stats', { n: sessionCount, size: `${(totalBytes / 1024 / 1024).toFixed(0)}MB` })}</div>
+    <div className="border-t border-edge text-[11px] text-muted">
+      <div className="px-2 py-1.5 flex items-center justify-between">
+        <span>{t('sidebar.stats', { n: sessionCount, size: `${(totalBytes / 1024 / 1024).toFixed(0)}MB` })}</span>
+        <div className="flex items-center gap-0.5">
+          {sidebarMode === 'folders' && (
+            <button onClick={onNewFolder} className="p-1 hover:bg-hover rounded hover:text-primary" title={t('sidebar.new_folder')}>
+              <FolderPlus size={12} />
+            </button>
+          )}
+          <button onClick={onRefreshCloud} className="p-1 hover:bg-hover rounded hover:text-primary" title="刷新 iCloud 同步状态">
+            <Cloud size={12} className={cloudRefreshing ? 'animate-pulse text-soft-blue' : ''} />
+          </button>
+          <button onClick={onUndo} className="p-1 hover:bg-hover rounded hover:text-primary" title="撤销最近整理">
+            <Undo2 size={12} />
+          </button>
+          <button onClick={() => onOrganize('project')} className="p-1 hover:bg-hover rounded hover:text-primary" title="按项目整理">
+            <FolderIcon size={12} />
+          </button>
+          <button onClick={() => onOrganize('smart')} className="p-1 hover:bg-hover rounded hover:text-primary" title="智能整理">
+            <WandSparkles size={12} />
+          </button>
+        </div>
+      </div>
       {libraryPath && (
         <div
-          className="flex items-center gap-1 cursor-pointer hover:text-secondary truncate"
+          className="px-2 pb-1.5 flex items-center gap-1 cursor-pointer hover:text-secondary truncate"
           onClick={handleChangeLibraryPath}
           title={`Library: ${libraryPath}\n点击切换存储位置`}
         >

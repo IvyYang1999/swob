@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useStore, type SessionSummary, type Folder } from '../store'
 import { useT } from '../i18n'
 import {
@@ -175,6 +176,70 @@ function InlineNewFolder({ depth, onSubmit, onCancel }: {
         className="w-full px-2 py-1 text-xs bg-surface border border-edge-strong rounded text-primary placeholder:text-muted focus:outline-none focus:border-secondary"
       />
     </div>
+  )
+}
+
+// ============ Virtualized Session List (flat/timeline mode) ============
+
+const SESSION_ROW_HEIGHT = 52
+
+function VirtualizedSessionList({
+  sessions, scrollRef, onContextMenu, renamingSessionId, sessionRenameValue,
+  onRenameChange, onRenameSubmit, onRenameCancel, onDoubleClickRename
+}: {
+  sessions: SessionSummary[]
+  scrollRef: React.RefObject<HTMLDivElement | null>
+  onContextMenu: (e: React.MouseEvent, s: SessionSummary) => void
+  renamingSessionId: string | null
+  sessionRenameValue: string
+  onRenameChange: (v: string) => void
+  onRenameSubmit: () => void
+  onRenameCancel: () => void
+  onDoubleClickRename: (s: SessionSummary) => void
+}) {
+  const t = useT()
+  const virtualizer = useVirtualizer({
+    count: sessions.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => SESSION_ROW_HEIGHT,
+    overscan: 10
+  })
+
+  return (
+    <>
+      <div className="px-3 py-2 text-[11px] text-muted uppercase tracking-wider">
+        {t('sidebar.all_sessions')} ({sessions.length})
+      </div>
+      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const session = sessions[virtualRow.index]
+          return (
+            <div
+              key={session.id}
+              style={{
+                position: 'absolute',
+                top: virtualRow.start,
+                left: 0,
+                right: 0,
+                height: virtualRow.size
+              }}
+            >
+              <SessionItem
+                session={session}
+                depth={0}
+                onContextMenu={onContextMenu}
+                isRenaming={renamingSessionId === session.id}
+                renameValue={sessionRenameValue}
+                onRenameChange={onRenameChange}
+                onRenameSubmit={onRenameSubmit}
+                onRenameCancel={onRenameCancel}
+                onDoubleClickRename={onDoubleClickRename}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </>
   )
 }
 
@@ -638,15 +703,17 @@ export function Sidebar({ width }: { width: number }) {
       <div ref={scrollRef} className="flex-1 overflow-y-auto"
         onDragOver={handleListDragOver} onDragLeave={stopAutoScroll} onDrop={stopAutoScroll} onDragEnd={stopAutoScroll}>
         {viewMode === 'flat' ? (
-          <>
-            <div className="px-3 py-2 text-[11px] text-muted uppercase tracking-wider">{t('sidebar.all_sessions')} ({sessions.length})</div>
-            {sessions.map((session) => (
-              <SessionItem key={session.id} session={session} depth={0} onContextMenu={handleContextMenu}
-                isRenaming={renamingSessionId === session.id} renameValue={sessionRenameValue}
-                onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession}
-                onDoubleClickRename={handleDoubleClickRenameSession} />
-            ))}
-          </>
+          <VirtualizedSessionList
+            sessions={sessions}
+            scrollRef={scrollRef}
+            onContextMenu={handleContextMenu}
+            renamingSessionId={renamingSessionId}
+            sessionRenameValue={sessionRenameValue}
+            onRenameChange={setSessionRenameValue}
+            onRenameSubmit={handleSubmitRenameSession}
+            onRenameCancel={handleCancelRenameSession}
+            onDoubleClickRename={handleDoubleClickRenameSession}
+          />
         ) : (
           <>
             {effectiveRootFolders.map((folder) => (

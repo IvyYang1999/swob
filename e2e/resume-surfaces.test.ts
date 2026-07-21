@@ -27,26 +27,10 @@ test.describe.serial('多客户端 Resume surfaces', () => {
   let page: Page
 
   test.beforeAll(async () => {
-<<<<<<< HEAD
-    syntheticHome = createSyntheticHome()
-    fs.mkdirSync(SCREENSHOT_DIR, { recursive: true })
-    app = await electron.launch({
-      args: [path.join(__dirname, '..', 'out', 'main', 'index.js')],
-      env: {
-        ...process.env,
-        HOME: syntheticHome,
-        NODE_ENV: 'test'
-      }
-    })
-    page = await app.firstWindow()
-    await page.waitForLoadState('domcontentloaded')
-    await page.setViewportSize({ width: 1100, height: 720 })
-=======
     launched = await launchApp({ viewport: { width: 1100, height: 720 } })
     page = launched.page
     // Root-scatter model: loose sessions render flat; single-turn ones collapse.
     await revealAllSessions(page)
->>>>>>> origin/master
     await expect(page.locator('[data-session-id]')).toHaveCount(3, { timeout: 20000 })
   })
 
@@ -89,13 +73,8 @@ test.describe.serial('多客户端 Resume surfaces', () => {
     await toggle.check()
     await expect(toggle).toBeChecked()
 
-<<<<<<< HEAD
-    const section = page.getByText('实验：导入到 Claude Desktop').locator('xpath=ancestor::div[contains(@class,"rounded-md")]').first()
-    await section.screenshot({ path: path.join(SCREENSHOT_DIR, 'claude-experimental-setting.png') })
-=======
     const section = page.getByText('实验：导入到 Claude Desktop').locator('xpath=ancestor::section')
     await section.screenshot({ path: testInfo.outputPath('claude-experimental-setting.png') })
->>>>>>> origin/master
 
     await page.getByRole('button', { name: '关闭设置' }).click()
   })

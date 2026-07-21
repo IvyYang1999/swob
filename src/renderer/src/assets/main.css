@@ -86,12 +86,19 @@ body {
   display: none;
 }
 
-.settings-tab-strip {
-  scrollbar-width: none;
+/* Settings vertical navigation: fixed left rail, narrower on small windows. */
+.settings-nav {
+  width: 156px;
 }
 
-.settings-tab-strip::-webkit-scrollbar {
-  display: none;
+@media (max-width: 560px) {
+  .settings-nav {
+    width: 118px;
+  }
+  .settings-nav button {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
 }
 
 /* In-session search keyword highlighting (CSS Custom Highlight API) */

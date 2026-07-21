@@ -4,7 +4,7 @@
 /// <reference types="@testing-library/jest-dom" />
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
 const savePreferences = vi.fn()
 
@@ -70,9 +70,13 @@ vi.mock('../i18n', () => ({
   }
 }))
 
-import { SettingsPanel } from './SettingsPanelV2'
+import { SettingsPanel } from './settings/SettingsPanel'
 
-describe('SettingsPanel 七 Tab 设置', () => {
+function navButton(name: string): HTMLElement {
+  return within(screen.getByRole('navigation')).getByRole('button', { name })
+}
+
+describe('SettingsPanel 纵向导航设置', () => {
   beforeEach(() => {
     savePreferences.mockClear()
     mockStore.config = {
@@ -116,17 +120,20 @@ describe('SettingsPanel 七 Tab 设置', () => {
 
   afterEach(() => cleanup())
 
-  it('顶部严格显示 7 个独立 Tab，通用不再叫外观', () => {
+  it('左侧纵向导航显示 7 个分类，通用不再叫外观，无横向 Tab', () => {
     render(<SettingsPanel />)
 
-    expect(screen.getAllByRole('tab')).toHaveLength(7)
-    expect(screen.getByRole('tab', { name: '通用' })).not.toBeNull()
-    expect(screen.queryByRole('tab', { name: '外观' })).toBeNull()
+    const nav = screen.getByRole('navigation')
+    expect(within(nav).getAllByRole('button')).toHaveLength(7)
+    expect(within(nav).getByRole('button', { name: '通用' })).not.toBeNull()
+    expect(within(nav).queryByRole('button', { name: '外观' })).toBeNull()
+    expect(screen.queryAllByRole('tab')).toHaveLength(0)
+    expect(within(nav).getByRole('button', { name: '通用' }).getAttribute('aria-current')).toBe('page')
   })
 
-  it('终端 Tab 展示检测结果，禁用无命令入口的 App', async () => {
+  it('终端分类展示检测结果，禁用无命令入口的 App', async () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('tab', { name: '终端' }))
+    fireEvent.click(navButton('终端'))
 
     expect(await screen.findByRole('button', { name: /iTerm2/ })).not.toBeNull()
     expect((screen.getByRole('button', { name: /Tabby/ }) as HTMLButtonElement).disabled).toBe(true)
@@ -151,7 +158,7 @@ describe('SettingsPanel 七 Tab 设置', () => {
 
     render(<SettingsPanel />)
 
-    fireEvent.click(screen.getByRole('tab', { name: '终端' }))
+    fireEvent.click(navButton('终端'))
 
     const input = screen.getByPlaceholderText('otty {{command}}') as HTMLTextAreaElement
     expect(input.value).toBe('otty {{command}}')
@@ -166,7 +173,7 @@ describe('SettingsPanel 七 Tab 设置', () => {
   it('Claude Desktop 实验开关默认关闭，并保存显式启用', () => {
     render(<SettingsPanel />)
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Resume' }))
+    fireEvent.click(navButton('Resume'))
 
     const toggle = screen.getByRole('checkbox', { name: '实验：导入到 Claude Desktop' })
     expect((toggle as HTMLInputElement).checked).toBe(false)
@@ -181,16 +188,16 @@ describe('SettingsPanel 七 Tab 设置', () => {
   it('提供手动检查更新入口', async () => {
     render(<SettingsPanel />)
 
-    fireEvent.click(screen.getByRole('tab', { name: '更新' }))
+    fireEvent.click(navButton('更新'))
 
     fireEvent.click(screen.getByRole('button', { name: '检查更新' }))
 
     expect((window as any).api.checkForUpdates).toHaveBeenCalledTimes(1)
   })
 
-  it('Resume Tab 按 harness 过滤方式，ZCode 终端选项明确禁用', () => {
+  it('Resume 分类按 harness 过滤方式，ZCode 终端选项明确禁用', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('tab', { name: 'Resume' }))
+    fireEvent.click(navButton('Resume'))
 
     const zcode = screen.getByRole('combobox', { name: /ZCode 默认方式/ }) as HTMLSelectElement
     expect(zcode.value).toBe('zcode-desktop')
@@ -199,9 +206,9 @@ describe('SettingsPanel 七 Tab 设置', () => {
     expect(terminalOption?.textContent).toContain('没有公开 CLI Resume')
   })
 
-  it('SSH Tab 提供三段折叠教程，且不再出现手机文案', () => {
+  it('SSH 分类提供三段折叠教程，且不再出现手机文案', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('tab', { name: 'SSH' }))
+    fireEvent.click(navButton('SSH'))
 
     expect(screen.getByText('查找远程机器地址')).not.toBeNull()
     expect(screen.getByText('配置 SSH key')).not.toBeNull()
@@ -209,9 +216,9 @@ describe('SettingsPanel 七 Tab 设置', () => {
     expect(screen.queryByText(/手机/)).toBeNull()
   })
 
-  it('视图 Tab 能保存默认排序', () => {
+  it('视图分类能保存默认排序', () => {
     render(<SettingsPanel />)
-    fireEvent.click(screen.getByRole('tab', { name: '视图' }))
+    fireEvent.click(navButton('视图'))
     fireEvent.click(screen.getByRole('button', { name: '轮数' }))
 
     expect(savePreferences).toHaveBeenCalledWith({ defaultSort: 'turns' })

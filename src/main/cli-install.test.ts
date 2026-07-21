@@ -24,9 +24,13 @@ describe('CLI install helper', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true })
   })
 
-  it('generates a wrapper pinned to the app bundle CLI', () => {
-    expect(buildCliWrapperScript()).toBe(
-      `#!/bin/bash\nexec node "${SWOB_APP_CLI_PATH}" "$@"\n`
+  it('generates a wrapper pinned to the app bundle CLI, with NODE_PATH reaching unpacked native deps', () => {
+    const script = buildCliWrapperScript()
+    expect(script).toContain(`exec node "${SWOB_APP_CLI_PATH}" "$@"`)
+    // grep/FTS 依赖 better-sqlite3(原生模块),只存在于 app.asar.unpacked 内;
+    // 系统 node 必须经 NODE_PATH 才能解析到它(2026-07-22 CLI 全挂回归)。
+    expect(script).toContain(
+      'NODE_PATH="/Applications/Swob.app/Contents/Resources/app.asar.unpacked/node_modules'
     )
   })
 

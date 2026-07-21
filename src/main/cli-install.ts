@@ -44,7 +44,15 @@ function normalizeDir(dir: string, homeDir: string): string {
 }
 
 export function buildCliWrapperScript(appCliPath = SWOB_APP_CLI_PATH): string {
-  return `#!/bin/bash\nexec node "${appCliPath}" "$@"\n`
+  // The packaged CLI runs under the system Node, outside the app's module tree.
+  // Native deps (better-sqlite3 for grep/FTS) live in app.asar.unpacked, which
+  // is only reachable when NODE_PATH points at it before Node starts.
+  const unpackedNodeModules = path.join(
+    path.dirname(path.dirname(appCliPath)),
+    'app.asar.unpacked',
+    'node_modules'
+  )
+  return `#!/bin/bash\nexport NODE_PATH="${unpackedNodeModules}\${NODE_PATH:+:$NODE_PATH}"\nexec node "${appCliPath}" "$@"\n`
 }
 
 export function getCliWrapperPath(homeDir = os.homedir()): string {

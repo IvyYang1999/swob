@@ -49,8 +49,21 @@ const api = {
     ipcRenderer.invoke('config:removeSessionFromFolder', folderId, sessionId),
   setSessionMeta: (
     sessionId: string,
-    meta: { customTitle?: string; notes?: string; highlights?: unknown[] }
+    meta: {
+      customTitle?: string
+      notes?: string
+      highlights?: unknown[]
+      tags?: string[]
+      topic?: string
+      topicConfidence?: number
+    }
   ) => ipcRenderer.invoke('config:setSessionMeta', sessionId, meta),
+
+  // Vault organization
+  organizerPreviewProject: () => ipcRenderer.invoke('organizer:previewProject'),
+  organizerPreviewSmart: () => ipcRenderer.invoke('organizer:previewSmart'),
+  organizerApply: (kind: string, items: unknown[]) => ipcRenderer.invoke('organizer:apply', kind, items),
+  organizerUndo: () => ipcRenderer.invoke('organizer:undo'),
 
   // Native context menu
   showSessionContextMenu: (data: { sessionId: string; canResume?: boolean; resumeUnavailableReason?: string; folders: Array<{ id: string; name: string; isIn: boolean }> }) =>
@@ -65,6 +78,23 @@ const api = {
   libraryIsInitialized: (rootPath: string) => ipcRenderer.invoke('library:isInitialized', rootPath),
   librarySelectDirectory: () => ipcRenderer.invoke('library:selectDirectory'),
   libraryChangePath: (newPath: string) => ipcRenderer.invoke('library:changePath', newPath),
+
+  // Vault migration
+  vaultMigrate: (targetPath: string) => ipcRenderer.invoke('vault:migrate', targetPath),
+  vaultSelectMigrationTarget: () => ipcRenderer.invoke('vault:selectMigrationTarget'),
+  onVaultMigrateProgress: (callback: (progress: { phase: string; copied: number; total: number }) => void) => {
+    const listener = (_event: unknown, progress: { phase: string; copied: number; total: number }) => callback(progress)
+    ipcRenderer.on('vault:migrateProgress', listener)
+    return () => ipcRenderer.removeListener('vault:migrateProgress', listener)
+  },
+
+  // Onboarding
+  onboardingGetState: () => ipcRenderer.invoke('onboarding:getState'),
+  onboardingComplete: (libraryPath: string, excludedSources: string[]) =>
+    ipcRenderer.invoke('onboarding:complete', libraryPath, excludedSources),
+  onboardingSetExcludedSources: (excludedSources: string[]) =>
+    ipcRenderer.invoke('onboarding:setExcludedSources', excludedSources),
+  onboardingExtendClaudeRetention: () => ipcRenderer.invoke('onboarding:extendClaudeRetention'),
 
   // Markdown
   saveMarkdown: (dirPath: string, filename: string, content: string) =>

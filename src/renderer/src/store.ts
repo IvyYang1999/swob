@@ -50,7 +50,7 @@ interface SessionSummary {
   resumeUnavailableReason?: string
   isRemote?: boolean
   remoteHost?: string
-  source?: 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode'
+  source?: string
   claudeConfigDir?: string
 }
 
@@ -77,8 +77,14 @@ interface Folder {
   name: string
   parentId?: string | null
   sessionIds: string[]
+  files?: VaultFile[]
   color?: string
   createdAt: string
+}
+
+interface VaultFile {
+  name: string
+  path: string
 }
 
 interface Highlight {
@@ -91,7 +97,15 @@ interface Highlight {
 
 interface UserConfig {
   folders: Folder[]
-  sessionMeta: Record<string, { customTitle?: string; notes?: string; highlights?: Highlight[] }>
+  rootFiles?: VaultFile[]
+  sessionMeta: Record<string, {
+    customTitle?: string
+    notes?: string
+    highlights?: Highlight[]
+    tags?: string[]
+    topic?: string
+    topicConfidence?: number
+  }>
   preferences: {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
@@ -121,6 +135,15 @@ export interface ToastMessage {
   id: string
   text: string
   type: 'info' | 'success' | 'error'
+  action?: { label: string; onClick: () => void }
+}
+
+export interface OrganizationApplyItem {
+  sessionId: string
+  targetRelativeFolder: string
+  topic?: string
+  tags?: string[]
+  confidence?: number
 }
 
 interface AppState {
@@ -171,12 +194,20 @@ interface AppState {
   renameFolder: (folderId: string, name: string) => Promise<void>
   addSessionToFolder: (folderId: string, sessionId: string) => Promise<void>
   removeSessionFromFolder: (folderId: string, sessionId: string) => Promise<void>
-  setSessionMeta: (sessionId: string, meta: { customTitle?: string; notes?: string }) => Promise<void>
+  setSessionMeta: (sessionId: string, meta: {
+    customTitle?: string
+    notes?: string
+    tags?: string[]
+    topic?: string
+    topicConfidence?: number
+  }) => Promise<void>
+  applyOrganization: (kind: 'project' | 'smart' | 'archive', items: OrganizationApplyItem[]) => Promise<number>
+  undoLastOrganization: () => Promise<number>
   addHighlight: (sessionId: string, highlight: Omit<Highlight, 'id' | 'createdAt'>) => Promise<void>
   removeHighlight: (sessionId: string, highlightId: string) => Promise<void>
   downloadSessionMarkdown: () => void
   // Toast
-  showToast: (text: string, type?: 'info' | 'success' | 'error') => void
+  showToast: (text: string, type?: 'info' | 'success' | 'error', action?: ToastMessage['action']) => void
   dismissToast: (id: string) => void
   // iCloud
   refreshCloudSessions: () => Promise<void>
@@ -190,7 +221,7 @@ interface AppState {
   closeSshModal: () => void
 }
 
-export type { SessionSummary, SessionDetail, ParsedMessage, Folder, UserConfig, SearchResult, Highlight, Locale, ToastMessage }
+export type { SessionSummary, SessionDetail, ParsedMessage, Folder, VaultFile, UserConfig, SearchResult, Highlight, Locale }
 
 // Read localStorage at module load time — before first render, zero flicker
 const LOCAL_CACHE_VERSION = 12 // refresh physical resume ids and transcript metadata
@@ -580,6 +611,27 @@ export const useStore = create<AppState>((set, get) => ({
     const config = await window.api.setSessionMeta(sessionId, meta)
     set({ config: config as UserConfig })
   },
+  applyOrganization: async (kind, items) => {
+    const result = await window.api.organizerApply(kind, items)
+    set({ config: result.config as UserConfig })
+    const moved = result.moves.length
+    if (moved > 0) {
+      get().showToast(`已整理 ${moved} 个会话`, 'success', {
+        label: '撤销',
+        onClick: () => { void get().undoLastOrganization() }
+      })
+    } else {
+      get().showToast('这些会话已经在目标位置', 'info')
+    }
+    return moved
+  },
+  undoLastOrganization: async () => {
+    const result = await window.api.organizerUndo()
+    set({ config: result.config as UserConfig })
+    const moved = result.moves.length
+    get().showToast(moved > 0 ? `已撤销 ${moved} 个会话的整理` : '没有可撤销的整理', moved > 0 ? 'success' : 'info')
+    return moved
+  },
   addHighlight: async (sessionId, highlight) => {
     const config = get().config
     if (!config) return
@@ -617,9 +669,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // Toast
-  showToast: (text, type = 'info') => {
+  showToast: (text, type = 'info', action) => {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
-    set((state) => ({ toasts: [...state.toasts, { id, text, type }] }))
+    set((state) => ({ toasts: [...state.toasts, { id, text, type, action }] }))
     setTimeout(() => {
       set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))
     }, 5000)

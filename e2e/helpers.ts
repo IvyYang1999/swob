@@ -8,6 +8,25 @@ export const CLAUDE_FIXTURE_ID = '82000000-0000-4000-8000-000000000099'
 export const CODEX_FIXTURE_ID = '019abcde-1234-7000-8000-012345670099'
 export const ZCODE_FIXTURE_ID = 'sess_ZcodeUI099'
 
+/**
+ * Legacy launcher for specs that manage their own fixture HOME and inspect it
+ * after the app closes (onboarding, vault-lens, visual capture). New specs
+ * should prefer the fully sandboxed launchApp below.
+ */
+export async function launchAppWithEnv(options: { env?: Record<string, string> } = {}): Promise<{ app: ElectronApplication; page: Page }> {
+  const app = await electron.launch({
+    args: [path.join(__dirname, '..', 'out', 'main', 'index.js')],
+    env: {
+      ...process.env,
+      ...options.env,
+      NODE_ENV: 'test'
+    }
+  })
+  const page = await app.firstWindow()
+  await page.waitForLoadState('domcontentloaded')
+  return { app, page }
+}
+
 export interface LaunchAppOptions {
   claudeTurns?: number
   viewport?: { width: number; height: number }

@@ -55,6 +55,11 @@ import {
   getConfiguredLibraryPath,
   changeConfiguredLibraryPath,
   isLibraryInitialized,
+  isOnboardingNeeded,
+  getExcludedSources,
+  setExcludedSources,
+  completeOnboarding,
+  getDefaultLibraryRoot,
   type LibrarySession,
   type LibraryTree
 } from './library-manager'
@@ -67,6 +72,14 @@ import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transc
 import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worker'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
 import { LibraryRescanController } from './library-rescan-controller'
+import {
+  buildProjectOrganizationPreview,
+  executeOrganization,
+  undoLastOrganization,
+  type OrganizationKind,
+  type OrganizationInput
+} from './vault-organizer'
+import { requestSmartOrganization } from './smart-organizer'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
 import { toRendererSessionDetail } from './renderer-session-detail'
 import { assertPathWithinAllowedRoots, resolvePathWithinRoot } from './path-containment'
@@ -1017,9 +1030,16 @@ ipcMain.handle('image:contextMenu', (_event, options: { path: string }) => {
   menu.popup()
 })
 
+function filterExcludedSources(sessions: SessionSummary[]): SessionSummary[] {
+  const excluded = getExcludedSources()
+  if (excluded.length === 0) return sessions
+  const excludedSet = new Set(excluded)
+  return sessions.filter((s) => !excludedSet.has(s.source || 'claude-code'))
+}
+
 ipcMain.handle('sessions:loadAll', async () => {
   try {
-  const sessions = await loadAllSessions()
+  const sessions = filterExcludedSources(await loadAllSessions())
   cachedSessions = sessions
   scheduleSearchIndexWarmup()
   knownSessionIds.clear()
@@ -1046,8 +1066,9 @@ ipcMain.handle('sessions:loadAll', async () => {
 
   if (latestLibraryTree) void hydrateLibrarySessions(latestLibraryTree)
 
-  // Sync library in background (non-blocking)
-  if (!libraryInitialized) {
+  // Sync library in background (non-blocking). During first-run onboarding the
+  // library init waits until the user has chosen a vault location.
+  if (!libraryInitialized && !isOnboardingNeeded()) {
     initLibraryFromSessions(sessions).catch(() => { /* ignore */ })
   }
 
@@ -1629,7 +1650,14 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:setSessionMeta',
-  async (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: Highlight[] }) => {
+  async (_event, sessionId: string, meta: {
+    customTitle?: string
+    notes?: string
+    highlights?: Highlight[]
+    tags?: string[]
+    topic?: string
+    topicConfidence?: number
+  }) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
       if (isBranch) {
@@ -1645,6 +1673,90 @@ ipcMain.handle(
     return setSessionMeta(config, sessionId, meta)
   }
 )
+
+async function refreshAfterOrganization(): Promise<ReturnType<typeof libraryTreeToConfig>> {
+  const tree = await requestLibraryScan(false)
+  for (const session of cachedSessions) annotateSessionForFrontend(session)
+  emitLibraryPatch(cachedSessions, tree)
+  return libraryTreeToConfig(tree)
+}
+
+ipcMain.handle('organizer:previewProject', () => {
+  const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
+  return buildProjectOrganizationPreview(getLibraryRoot(), cachedSessions
+    .filter((session) => !session.id.includes(':intra-') && !session.id.includes(':branch-'))
+    .map((session) => ({
+      ...session,
+      firstUserMessage: config.sessionMeta[session.sessionId]?.customTitle || session.firstUserMessage,
+      libraryDirPath: getSessionDirPath(session.sessionId) || undefined
+    })))
+})
+
+ipcMain.handle('organizer:previewSmart', async () => {
+  const libConfig = loadLibraryConfig()
+  const settings = (libConfig as any).llmSettings as {
+    provider: 'anthropic' | 'openai' | 'custom'
+    apiKey?: string
+    model?: string
+    baseUrl?: string
+  } | undefined
+  if (!settings?.apiKey) throw new Error('missing-api-key')
+
+  const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
+  const candidates = cachedSessions.filter((session) => {
+    if (session.id.includes(':intra-') || session.id.includes(':branch-')) return false
+    if (!getSessionDirPath(session.sessionId)) return false
+    return !config.sessionMeta[session.sessionId]?.topic
+  })
+  const suggestions = await requestSmartOrganization(
+    settings as Parameters<typeof requestSmartOrganization>[0],
+    candidates.map((session) => ({
+      sessionId: session.sessionId,
+      title: config.sessionMeta[session.sessionId]?.customTitle || session.firstUserMessage || session.id,
+      summary: session.firstUserMessage || ''
+    })),
+    config.folders.map((folder) => folder.id)
+  )
+  const byId = new Map(candidates.map((session) => [session.sessionId, session]))
+  return suggestions.map((suggestion) => ({
+    ...suggestion,
+    title: config.sessionMeta[suggestion.sessionId]?.customTitle ||
+      byId.get(suggestion.sessionId)?.firstUserMessage || suggestion.sessionId
+  }))
+})
+
+ipcMain.handle('organizer:apply', async (_event, kind: OrganizationKind, items: Array<{
+  sessionId: string
+  targetRelativeFolder: string
+  topic?: string
+  tags?: string[]
+  confidence?: number
+}>) => {
+  if (!['project', 'smart', 'archive'].includes(kind)) throw new Error('不支持的整理类型')
+  const inputs: OrganizationInput[] = items.map((item) => {
+    const sourceDir = getSessionDirPath(item.sessionId)
+    if (!sourceDir) throw new Error(`会话不在当前 Vault：${item.sessionId}`)
+    return {
+      sessionId: item.sessionId,
+      sourceDir,
+      targetRelativeFolder: item.targetRelativeFolder,
+      metaPatch: kind === 'smart' ? {
+        topic: item.topic,
+        tags: item.tags,
+        topicConfidence: item.confidence
+      } : undefined
+    }
+  })
+  const result = executeOrganization(getLibraryRoot(), kind, inputs)
+  const config = await refreshAfterOrganization()
+  return { ...result, config }
+})
+
+ipcMain.handle('organizer:undo', async () => {
+  const result = undoLastOrganization(getLibraryRoot())
+  const config = await refreshAfterOrganization()
+  return { ...result, config }
+})
 
 // --- Native Context Menu ---
 
@@ -1771,10 +1883,9 @@ ipcMain.handle('library:selectDirectory', async () => {
   return approveLibraryRoot(result.filePaths[0])
 })
 
-ipcMain.handle('library:changePath', async (_event, newPath: string) => {
-  const approvedPath = assertApprovedLibraryRoot(newPath)
-  changeConfiguredLibraryPath(approvedPath)
-  initLibrary(approvedPath)
+async function activateLibraryAt(newPath: string): Promise<string> {
+  changeConfiguredLibraryPath(newPath)
+  initLibrary(newPath)
   latestLibraryTree = null
   libraryInitialized = false
   libraryInitializationPromise = null
@@ -1791,9 +1902,126 @@ ipcMain.handle('library:changePath', async (_event, newPath: string) => {
     tree = await worker.scan(getLibraryRoot())
   }
   libraryInitialized = true
+  // An empty vault writes no config on scan; persist the marker so the root
+  // counts as initialized on the next launch.
+  if (!isLibraryInitialized(getLibraryRoot())) {
+    saveLibraryConfig(loadLibraryConfig())
+  }
   adoptLibraryTree(tree)
   await hydrateLibrarySessions(tree)
   return getLibraryRoot()
+}
+
+ipcMain.handle('library:changePath', async (_event, newPath: string) => {
+  return activateLibraryAt(assertApprovedLibraryRoot(newPath))
+})
+
+// --- Vault migration ---
+
+let vaultMigrationRunning = false
+
+ipcMain.handle('vault:migrate', async (_event, targetPath: string) => {
+  if (vaultMigrationRunning) return { ok: false, error: '已有迁移在进行中' }
+  if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '目标位置无效' }
+  let approvedTarget: string
+  try {
+    approvedTarget = assertApprovedLibraryRoot(targetPath)
+  } catch {
+    return { ok: false, error: '目标位置未经目录选择器确认' }
+  }
+  vaultMigrationRunning = true
+  try {
+    const sourceRoot = getLibraryRoot()
+    const { migrateVault } = await import('./vault-migrator')
+    const result = migrateVault(sourceRoot, approvedTarget, (progress) => {
+      mainWindow?.webContents.send('vault:migrateProgress', progress)
+    })
+    if (!result.ok) return result
+    // Copy verified — point the app at the new home and reindex.
+    await activateLibraryAt(approvedTarget)
+    return { ...result, newRoot: getLibraryRoot() }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    vaultMigrationRunning = false
+  }
+})
+
+ipcMain.handle('vault:selectMigrationTarget', async () => {
+  if (!mainWindow) return null
+  const { dialog } = require('electron')
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择迁移目标位置（须为空文件夹）',
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: '迁移到这里'
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return approveLibraryRoot(result.filePaths[0])
+})
+
+// --- First-run onboarding ---
+
+ipcMain.handle('onboarding:getState', () => {
+  return {
+    needed: isOnboardingNeeded(),
+    defaultPath: getDefaultLibraryRoot(),
+    excludedSources: getExcludedSources()
+  }
+})
+
+ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, excludedSources: string[]) => {
+  const requested = typeof libraryPath === 'string' && libraryPath.trim() ? libraryPath : getDefaultLibraryRoot()
+  // The main-process default root is trusted by construction; any other path
+  // must have come through the directory picker (which registers approval).
+  let targetPath: string
+  if (path.resolve(requested) === path.resolve(getDefaultLibraryRoot())) {
+    fs.mkdirSync(requested, { recursive: true })
+    targetPath = approveLibraryRoot(requested)
+  } else {
+    targetPath = assertApprovedLibraryRoot(requested)
+  }
+  const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
+  completeOnboarding(targetPath, excluded)
+  cachedSessions = filterExcludedSources(cachedSessions)
+  const root = await activateLibraryAt(targetPath)
+  mainWindow?.webContents.send('sessions:updated', cachedSessions)
+  return root
+})
+
+ipcMain.handle('onboarding:setExcludedSources', (_event, excludedSources: string[]) => {
+  const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
+  setExcludedSources(excluded)
+  cachedSessions = filterExcludedSources(cachedSessions)
+  return excluded
+})
+
+/**
+ * Claude Code deletes session history after cleanupPeriodDays (default 30).
+ * With explicit user consent we extend it to 10 years via ~/.claude/settings.json.
+ */
+ipcMain.handle('onboarding:extendClaudeRetention', () => {
+  const settingsPath = join(require('os').homedir(), '.claude', 'settings.json')
+  let settings: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      settings = parsed as Record<string, unknown>
+    } else {
+      return { ok: false, error: 'settings.json 格式异常，未修改' }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { ok: false, error: '无法读取 ~/.claude/settings.json，未修改' }
+    }
+  }
+  settings.cleanupPeriodDays = 3650
+  try {
+    fs.mkdirSync(join(require('os').homedir(), '.claude'), { recursive: true })
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8')
+    return { ok: true }
+  } catch {
+    return { ok: false, error: '写入 ~/.claude/settings.json 失败' }
+  }
 })
 
 // --- File Operations ---

@@ -10,6 +10,7 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { SettingsPanel } from './components/SettingsPanel'
 import { InsightsPage } from './components/insights/InsightsPage'
 import { LineagePage } from './components/LineagePage'
+import { Onboarding } from './components/Onboarding'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
@@ -111,6 +112,14 @@ function ToastContainer() {
           >
             <Icon size={16} className="shrink-0" />
             <span className="flex-1">{t.text}</span>
+            {t.action && (
+              <button
+                onClick={() => { t.action?.onClick(); dismissToast(t.id) }}
+                className="shrink-0 px-2 py-1 rounded border border-current/20 hover:bg-base/30 text-[11px] font-medium"
+              >
+                {t.action.label}
+              </button>
+            )}
             <button onClick={() => dismissToast(t.id)} className="ml-1 opacity-50 hover:opacity-100 shrink-0">
               <X size={14} />
             </button>
@@ -125,9 +134,13 @@ export default function App() {
   const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen, insightsOpen, lineageOpen } = useStore()
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [infoPanelWidth, setInfoPanelWidth] = useState(320)
+  const [onboarding, setOnboarding] = useState<{ needed: boolean; defaultPath: string } | null>(null)
 
   useEffect(() => {
     initialize()
+    window.api.onboardingGetState?.()
+      .then((state) => setOnboarding({ needed: state.needed, defaultPath: state.defaultPath }))
+      .catch(() => setOnboarding({ needed: false, defaultPath: '' }))
   }, [initialize])
 
   // External file drop navigation is prevented by main process will-navigate handler
@@ -139,6 +152,18 @@ export default function App() {
   const handleInfoPanelResize = useCallback((delta: number) => {
     setInfoPanelWidth(w => Math.max(240, Math.min(600, w + delta)))
   }, [])
+
+  if (onboarding?.needed) {
+    return (
+      <ErrorBoundary>
+        <Onboarding
+          defaultPath={onboarding.defaultPath}
+          onDone={() => setOnboarding({ needed: false, defaultPath: onboarding.defaultPath })}
+        />
+        <ToastContainer />
+      </ErrorBoundary>
+    )
+  }
 
   if (loading) {
     return (

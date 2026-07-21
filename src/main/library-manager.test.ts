@@ -11,6 +11,7 @@ import * as os from 'os'
 import { createHash } from 'node:crypto'
 import { shellQuote } from './resume-terminal'
 import { buildSessionSummaryFromBackup } from './session-loader'
+import { undoLastOrganization } from './vault-organizer'
 
 // 隔离测试环境：用临时目录作为 Library root
 let tmpRoot: string
@@ -942,7 +943,39 @@ describe('buildSshResumeCommand', () => {
   })
 })
 
-describe('库根 = vault：cwd 感知放置 + 忽略名单 + 安全删除', () => {
+describe('首启动引导状态机', () => {
+  it('全新安装（无 app-config、无已初始化库）需要引导', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    expect(lib.isOnboardingNeeded()).toBe(true)
+  })
+
+  it('completeOnboarding 落库路径 + 排除清单，之后不再需要引导', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.completeOnboarding(tmpRoot, ['zcode', 'grok'])
+    expect(lib.isOnboardingNeeded()).toBe(false)
+    expect(lib.getConfiguredLibraryPath()).toBe(tmpRoot)
+    expect(lib.getExcludedSources()).toEqual(['zcode', 'grok'])
+  })
+
+  it('老装机（已配置 libraryPath 但没有引导标记）被豁免并补标记', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.changeConfiguredLibraryPath(tmpRoot)
+    expect(lib.isOnboardingNeeded()).toBe(false)
+    const config = JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
+    expect(config.onboardingCompleted).toBe(true)
+  })
+
+  it('setExcludedSources 空数组清除配置键', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.completeOnboarding(tmpRoot, ['pi'])
+    lib.setExcludedSources([])
+    expect(lib.getExcludedSources()).toEqual([])
+    const config = JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
+    expect('excludedSources' in config).toBe(false)
+  })
+})
+
+describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
   function summary(sessionId: string, cwds: string[]) {
     return {
       sessionId,
@@ -972,18 +1005,61 @@ describe('库根 = vault：cwd 感知放置 + 忽略名单 + 安全删除', () =
     return ids
   }
 
-  it('vault 内项目目录启动的会话 → 落进 <cwd>/AI会话/', async () => {
+  it('vault 内项目目录启动的新会话散放根目录并带会话包标记，不擅自按 cwd 整理', async () => {
     const cwd = path.join(tmpRoot, '项目', '飞搜')
     fs.mkdirSync(cwd, { recursive: true })
     const dir = await lib.ensureSessionInLibrary(summary('in-vault-1', [cwd]))
-    expect(dir).toBe(path.join(cwd, 'AI会话', '会话 in-vault-1'))
+    expect(dir).toBe(path.join(tmpRoot, '💬 会话 in-vault-1'))
     expect(fs.existsSync(path.join(dir, '.swob-session.json'))).toBe(true)
   })
 
-  it('vault 外启动的会话 → 中央桶 <root>/AI会话/，绝不落在库根本身', async () => {
+  it('vault 外启动的新会话同样散放根目录', async () => {
     const dir = await lib.ensureSessionInLibrary(summary('outside-1', ['/somewhere/else']))
-    expect(dir).toBe(path.join(tmpRoot, 'AI会话', '会话 outside-1'))
-    expect(path.dirname(dir)).not.toBe(tmpRoot)
+    expect(dir).toBe(path.join(tmpRoot, '💬 会话 outside-1'))
+  })
+
+  it('勾选自动整理后，新会话按轮数落进用户配置的容器文件夹', async () => {
+    fs.writeFileSync(path.join(tmpRoot, '.swob-config.json'), JSON.stringify({
+      libraryRoot: tmpRoot,
+      preferences: {
+        defaultViewMode: 'compact', terminalApp: 'Terminal',
+        ungrouping: { multiTurn: '未分组', singleTurn: '单轮会话' }
+      }
+    }))
+    lib.initLibrary(tmpRoot)
+    const multi = await lib.ensureSessionInLibrary({ ...summary('auto-multi', ['/x']), turnCount: 8 })
+    expect(multi).toBe(path.join(tmpRoot, '未分组', '💬 会话 auto-multi'))
+    const single = await lib.ensureSessionInLibrary({ ...summary('auto-single', ['/x']), turnCount: 1 })
+    expect(single).toBe(path.join(tmpRoot, '单轮会话', '💬 会话 auto-single'))
+  })
+
+  it('scanLibrary 暴露普通文件供文件夹模式显示，但绝不把它当会话包', () => {
+    const notesDir = path.join(tmpRoot, '项目笔记')
+    fs.mkdirSync(notesDir, { recursive: true })
+    fs.writeFileSync(path.join(tmpRoot, '总览.md'), '# 总览')
+    fs.writeFileSync(path.join(notesDir, '想法.md'), '# 想法')
+    makeSession(path.join(notesDir, '真正会话'), 'real-session')
+
+    const tree = lib.scanLibrary()
+    expect(tree.rootFiles).toEqual([{ name: '总览.md', path: path.join(tmpRoot, '总览.md') }])
+    const folder = tree.folders.find((item) => item.name === '项目笔记')
+    expect(folder?.files).toEqual([{ name: '想法.md', path: path.join(notesDir, '想法.md') }])
+    expect(folder?.sessions.map((item) => item.sessionId)).toEqual(['real-session'])
+  })
+
+  it('meta 的 tags/topic/topicConfidence 能通过配置适配器完整到达 renderer', () => {
+    makeSession(path.join(tmpRoot, '带分类'), 'classified')
+    const marker = path.join(tmpRoot, '带分类', '.swob-session.json')
+    const meta = JSON.parse(fs.readFileSync(marker, 'utf-8'))
+    Object.assign(meta, { tags: ['产品', '性能'], topic: '会话整理', topicConfidence: 0.88 })
+    fs.writeFileSync(marker, JSON.stringify(meta))
+
+    const config = lib.libraryTreeToConfig(lib.scanLibrary())
+    expect(config.sessionMeta.classified).toMatchObject({
+      tags: ['产品', '性能'],
+      topic: '会话整理',
+      topicConfidence: 0.88
+    })
   })
 
   it('scanLibrary 跳过配置的 ignoreDirs 里的会话，但收录项目里的会话', () => {
@@ -1010,12 +1086,55 @@ describe('库根 = vault：cwd 感知放置 + 忽略名单 + 安全删除', () =
     expect(fs.existsSync(proj)).toBe(true)
   })
 
-  it('deleteLibraryFolder 正常删除纯会话容器（无散文件）', () => {
+  it('deleteLibraryFolder 正常删除纯会话容器（无散文件），会话退回根目录', () => {
     const folder = path.join(tmpRoot, '纯容器')
     makeSession(path.join(folder, '一个会话'), 'pure-x')
     lib.scanLibrary()
     expect(() => lib.deleteLibraryFolder(folder)).not.toThrow()
     expect(fs.existsSync(folder)).toBe(false)
+    expect(fs.existsSync(path.join(tmpRoot, '一个会话', '.swob-session.json'))).toBe(true)
+
+    const undone = undoLastOrganization(tmpRoot)
+    expect(undone.moves.map((move) => move.sessionId)).toEqual(['pure-x'])
+    expect(fs.existsSync(path.join(folder, '一个会话', '.swob-session.json'))).toBe(true)
+    expect(fs.existsSync(path.join(tmpRoot, '一个会话'))).toBe(false)
+  })
+
+  it('文件夹拖拽只物化会话包，并可用同一份日志完整撤销', () => {
+    const source = path.join(tmpRoot, '原分类')
+    const destination = path.join(tmpRoot, '新分类')
+    makeSession(path.join(source, '子层', '会话甲'), 'folder-move-a')
+    makeSession(path.join(source, '会话乙'), 'folder-move-b')
+    fs.mkdirSync(destination, { recursive: true })
+    lib.scanLibrary()
+
+    const movedFolder = lib.moveLibraryFolderToParent(source, destination)
+    expect(movedFolder).toBe(path.join(destination, '原分类'))
+    expect(fs.existsSync(path.join(movedFolder, '子层', '会话甲', '.swob-session.json'))).toBe(true)
+    expect(fs.existsSync(path.join(movedFolder, '会话乙', '.swob-session.json'))).toBe(true)
+    expect(fs.existsSync(source)).toBe(false)
+
+    const undone = undoLastOrganization(tmpRoot)
+    expect(new Set(undone.moves.map((move) => move.sessionId))).toEqual(
+      new Set(['folder-move-a', 'folder-move-b'])
+    )
+    expect(fs.existsSync(path.join(source, '子层', '会话甲', '.swob-session.json'))).toBe(true)
+    expect(fs.existsSync(path.join(source, '会话乙', '.swob-session.json'))).toBe(true)
+    expect(fs.existsSync(movedFolder)).toBe(false)
+  })
+
+  it('文件夹拖拽遇到普通笔记时整批拒绝，笔记和会话都不动', () => {
+    const source = path.join(tmpRoot, '混合目录')
+    const destination = path.join(tmpRoot, '目标分类')
+    makeSession(path.join(source, '会话'), 'folder-note-guard')
+    fs.writeFileSync(path.join(source, '项目说明.md'), '# 不许移动')
+    fs.mkdirSync(destination, { recursive: true })
+    lib.scanLibrary()
+
+    expect(() => lib.moveLibraryFolderToParent(source, destination)).toThrow(/普通笔记|文档/)
+    expect(fs.readFileSync(path.join(source, '项目说明.md'), 'utf-8')).toBe('# 不许移动')
+    expect(fs.existsSync(path.join(source, '会话', '.swob-session.json'))).toBe(true)
+    expect(fs.existsSync(path.join(destination, '混合目录'))).toBe(false)
   })
 
   it('deleteLibraryFolder 允许含派生文件和摘要.md 的会话目录', () => {

@@ -23,11 +23,11 @@ Swob は **11 種類の AI コーディング harness** のローカル履歴を
 </div>
 
 > [!IMPORTANT]
-> **製品チャンネルを明確に分けています。** 以下のスクリーンショットとデバッガー機能は現在の `main` の実画面です。公開前に識別可能なテキストだけを英語化し、匿名化しています。公開中の **v1.2.0 安定版 DMG には、Session Galaxy、11-harness 取り込み、Session Debugger、AI Insights、SQLite FTS5 はまだ含まれていません**。今すぐ試す場合は `main` をソースからビルドしてください。次回リリースに搭載予定です。
+> **製品チャンネルを明確に分けています。** 以下の機能画像は現在の `main` の画面を基に、英語デモとして再構成し、サンプルデータを匿名化したものです。実装済みのレイアウトとワークフローを示すもので、未編集の本番データ画面ではありません。画像内の数値は例示用で、下記の監査 corpus とは別集計です。公開中の **v1.2.0 安定版 DMG には、Session Galaxy、11-harness 取り込み、Session Debugger、AI Insights、SQLite FTS5 はまだ含まれていません**。今すぐ試す場合は `main` をソースからビルドしてください。次回リリースに搭載予定です。
 
-![Swob Session Galaxy — 現在の main と匿名化デモデータ](site/assets/graph-view.png)
+![現在の main を基に再構成した Swob Session Galaxy の英語デモ](site/assets/graph-view.png)
 
-<p align="center"><sub>現在の <code>main</code> · 実際の Swob 画面 · 識別可能なテキストは英語化・匿名化済み</sub></p>
+<p align="center"><sub>現在の <code>main</code> · 英語デモ再構成 · 匿名化した例示データ</sub></p>
 
 ## Swob が必要な理由
 

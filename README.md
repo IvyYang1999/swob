@@ -1,177 +1,186 @@
 <div align="center">
 
-<img src="docs/banner.png" alt="Swob" width="100%" />
+<img src="site/assets/favicon.svg" alt="Swob" width="72" height="72" />
 
-<p>
-  <a href="README.md">English</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="CHANGELOG.md">Changelog</a>
-</p>
+# Swob
 
-<p>
-  <img src="https://img.shields.io/badge/version-1.2.0-blue" alt="Version" />
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform" />
-  <img src="https://img.shields.io/badge/built%20with-Electron-47848F" alt="Built with Electron" />
-  <img src="https://img.shields.io/github/downloads/IvyYang1999/swob/total" alt="Downloads" />
-  <img src="https://img.shields.io/badge/license-AGPL--3.0-green" alt="License" />
-</p>
+### A git graph for your AI conversations
 
-<h3>A git graph for your AI conversations</h3>
+**Recover lost context. Trace forks and compactions. Debug how your agents actually worked.**
 
-<p>
-  Free & open-source session manager for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Cursor</strong>, <strong>OpenCode</strong> & <strong>Zcode</strong>.<br/>
-  Track how sessions fork and resume. Expand compacted history. Search everything. Resume with one click.<br/>
-  100% local — your conversations never leave your machine.
-</p>
+Swob reads local histories from **11 AI coding harnesses**, reconstructs session lineage, indexes every message with SQLite FTS5, and adds an execution tree, context inspector, provenance-aware audit, and optional AI Insights.
 
-<p>
-  <a href="https://ivyyang1999.github.io/swob/"><strong>Landing Page</strong></a> · <a href="https://github.com/IvyYang1999/swob/releases"><strong>Download</strong></a>
-</p>
+[Website](https://ivyyang1999.github.io/swob/) · [Apple Silicon DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) · [Intel DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) · [Changelog](CHANGELOG.md)
+
+[English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
+
+![Latest release](https://img.shields.io/github/v/release/IvyYang1999/swob?label=stable)
+![Platform](https://img.shields.io/badge/platform-macOS-2d2d30)
+![Build](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
+![Downloads](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
+![License](https://img.shields.io/badge/license-AGPL--3.0-5b4fc4)
 
 </div>
 
-<br/>
+> [!IMPORTANT]
+> **Product channels are intentionally separated.** The screenshots and debugger features below are real captures from current `main` using sanitized demo data. The public **v1.2.0 stable DMGs predate Session Galaxy, 11-harness ingestion, Session Debugger, AI Insights, and SQLite FTS5**. Build `main` from source to try them now; they will ship in the next release.
 
-<p align="center">
-  <img src="docs/screenshot.png" alt="Swob main interface" width="800" />
-</p>
+![Swob Session Galaxy — current main with sanitized demo data](site/assets/graph-view.png)
 
----
+<p align="center"><sub>Current <code>main</code> · real Swob UI · sanitized demo data · no generated product mockups</sub></p>
 
-> **253 / 1,621** — From one real user's session history: 253 sessions (15.6%) had already been purged by Claude Code's default 30-day cleanup policy (`cleanupPeriodDays`). They survived only because Swob had backed them up. The official tool is deleting your conversations — and you might not even know.
+## Why Swob exists
 
----
+AI coding sessions are not isolated chat files. A resume creates another file. A fork splits a task. A compaction replaces earlier context with a summary. Different agents store the same kind of work in incompatible locations. A normal viewer can show one transcript; it cannot explain where that transcript came from or why the agent lost the plot.
 
-## The Problem
+Swob treats session history as evidence:
 
-You've been vibe-coding from `~` for months. You have 200+ Claude Code sessions piled up with no organization. Sessions multiply: resume one and a second file appears, fork an experiment, compact and continue — soon five files are "the same conversation" and no tool tells you how they relate. Half your history is folded behind compact summaries. The built-in `/resume` only shows recent sessions. Finding that one conversation where you solved a tricky bug? Good luck.
+- **Trace lineage** — navigate verified fork and continuation relationships in an interactive, force-directed Session Galaxy.
+- **Recover context** — expand compacted Claude Code turns and preserve local backups after the source has disappeared.
+- **Debug execution** — inspect tool/agent calls, token pressure, compaction boundaries, latency, framework overhead, errors, and anti-patterns.
+- **Search everything** — SQLite FTS5 indexes local messages incrementally instead of rescanning the archive for every query.
+- **Resume safely** — return to a supported CLI with its session ID and working directory, with source-aware validation.
 
-## The Solution
+## Evidence, not vanity metrics
 
-Swob reads the session files that Claude Code, Codex, Cursor, OpenCode, and Zcode store on disk. It parses every session, **detects how they relate — forks, resumes, continuations —** expands compact-folded history in place, and presents everything in a searchable, organized interface.
+| Audited result | What it means |
+|---|---|
+| **253 / 1,621** | 253 Claude Code source sessions in one audited library were already missing under the default 30-day retention policy; Swob still had local backups. |
+| **93.58%** | Verified resumability in the same 1,621-session, five-source audit corpus. This is an observed corpus result, not a universal success guarantee. |
+| **1,704 sessions** | Current local performance and UI corpus used to exercise the new index and dashboard. |
+| **11 harnesses** | Current `main` discovers histories from 11 source families; parsing depth and resume support vary with source data and CLI capabilities. |
 
-Your data stays 100% local. Swob never uploads anything. Free & open-source under AGPL-3.0.
+## Session Galaxy
 
----
+The current graph is a real Canvas-based, force-directed view. It distinguishes verified lineage edges from softer project/source/time grouping and lets you pan, zoom, inspect, and open a session. A prior PixiJS prototype was deliberately reverted for further work; Swob does **not** claim WebGL rendering today.
 
-## Key Features
+## Session Debugger
 
-### Session Lineage — Know Which Session Came From Which
+Swob goes beyond transcript rendering:
 
-AI sessions don't stay single files: resuming spawns a new file, forking splits a conversation, compacting chains a summary to a fresh start. Swob detects these relationships precisely — fork edges, continuation edges, multi-file resumes — and maintains an on-disk lineage registry so the family tree of your conversations survives cache rebuilds. Think `git log --graph`, but for sessions. (A visual lineage tree view is on the roadmap.)
+- **Execution Tree** — reconstructs turns, tool calls, sub-agent spawns, errors, durations, and cumulative token use.
+- **Context Inspector** — breaks context into user, assistant, tool input/output, system injection, thinking, image, and compact slices; marks compact boundaries and pressure warnings.
+- **Session Audit** — a 12-dimension workflow audit covering research/edit balance, thinking evidence, latency, estimated cost, framework overhead, session type, model use, tool efficiency, interruptions, goal length, anti-patterns, and frustration signals.
+- **Provenance labels** — metrics are labeled `reported`, `estimated`, or `unavailable`; missing evidence is not presented as fact.
 
-### Expand Compacted Conversations
+| Session Audit | Execution Tree + Context Inspector |
+|---|---|
+| ![Session Audit in current Swob main](site/assets/session-audit.png) | ![Execution Tree and Context Inspector in current Swob main](site/assets/session-debugger.png) |
 
-Claude Code compacts your conversation to save context — the model forgets, but the original messages are still in the JSONL file. Swob shows every compact block inline and lets you expand it in place to read what was folded away. One click, no digging through raw JSONL.
+## Insights across all sessions
 
-### Spotlight Session Jump — `⌘⇧K`
+The local dashboard includes token and cost totals, a 365-day heatmap, source/model/project breakdowns, hourly and turn distributions, tool usage, code-change counts, and an audit report.
 
-A global hotkey brings up a Spotlight-style search window. Fuzzy search by content, project name, folder, or time (`today`, `yesterday`, `this week`). Filter by source (`claude`, `codex`, `cursor`, `opencode`, `zcode`). Jump to any session in under a second without switching windows.
+**AI Insights is optional and off until configured.** When explicitly invoked, it sends aggregate metrics plus a bounded sample of real user messages to the provider you configure. Read [PRIVACY.md](PRIVACY.md) before enabling it.
 
-### Full-text Search — `⌘K`
+![Swob Insights dashboard in current main](site/assets/insights-dashboard.png)
 
-Search across all sessions at once. Matches auto-expand inside collapsed compact sections, so you find things even when they've been compacted away. In-session search (`⌘F`) with regex support.
+## Sources in current `main`
 
-### Multi-source: Claude Code + Codex + Cursor + OpenCode + Zcode
+| Source family | Local history discovery | Notes |
+|---|---:|---|
+| Claude Code | Stable | Deepest lineage, compact recovery, backup, audit, and resume support. |
+| Codex | Stable | Local rollout parsing, search, insights, and resume. |
+| Cursor | Stable | Local agent history, search, insights, and resume where the CLI exposes it. |
+| OpenCode | Stable | SQLite history ingestion and normalized viewing. |
+| Zcode | Stable | SQLite history ingestion and normalized viewing. |
+| CC Mirror | Current main | Claude-compatible project histories. |
+| Antigravity | Current main | Current and legacy local transcript roots. |
+| Grok / Factory | Current main | JSONL histories from Grok and Factory/Droid roots. |
+| Pi | Current main | Local agent session histories. |
+| Kimi Code | Current main | Local `wire.jsonl` histories. |
+| Hermes | Current main | Local JSON session histories. |
 
-Reads from `~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`, `~/.local/share/opencode/opencode.db`, and `~/.zcode/cli/db/db.sqlite` — browse and resume sessions from all five tools in one place.
+“Discovered” does not mean every source exposes identical metadata. Swob preserves source limitations instead of manufacturing missing tokens, lineage, or resume commands.
 
-### Token Insights Dashboard
+## How Swob compares
 
-- 5 stat cards: total tokens, sessions, turns, active days, estimated time
-- 365-day contribution heatmap (like GitHub, but for your AI usage)
-- Source breakdown donut chart (Claude Code / Codex / Cursor / OpenCode / Zcode)
-- Model usage breakdown
-- Project ranking by token consumption
-- 30-day daily trend chart
+Public README claims checked on 2026-07-21. `✅` = explicitly documented; `◐` = adjacent or partial capability; `—` = not documented as a current feature. This is a capability map, not a quality score.
 
-### One-click Resume
-
-Click any session to reopen it in Terminal or iTerm2. Batch-resume an entire folder. Working directory and `--dangerously-skip-permissions` mode are preserved. Supports Codex (`codex resume`) and Cursor (`cursor agent --resume`) too.
-
-### SSH Remote Resume
-
-Configure SSH connections and resume sessions on remote servers directly from the app.
-
-### CLI — `swob`
-
-```bash
-swob search "auth bug"          # fuzzy search sessions
-swob list --source codex        # filter by source
-swob resume <id>                # get resume command
-swob insights                   # token usage stats
-swob active                     # show running sessions
-swob install                    # install CLI + Agent Skill
-```
-
-All commands output JSON. The `swob install` command also installs a Claude Code Skill, so Claude can call `swob` as a tool during conversations.
-
-### Session Organization
-
-Tree-view sidebar with nested folders, drag-and-drop sorting, and custom titles. Three view modes: Compact (hide tool noise), Full (everything), Markdown (clean export).
-
-### Highlight & Annotate
-
-Select any text to bookmark it. All highlights are collected in the right sidebar with jump-back links — your personal knowledge trail across sessions.
-
-### Metadata Sidebar
-
-Every session shows: creation/update time, turn count, token usage (input/output/cache), tool call stats, skill invocations, file operations tree, referenced files list, and estimated active time.
-
-### iCloud Backup
-
-Sessions are backed up to `~/Documents/Swob/` with readable Markdown transcripts. iCloud placeholder files are auto-detected and downloaded on demand.
-
-### Active Session Detection
-
-Green dot indicates which sessions are currently running. Detected via `ps` polling (1s interval) and file-change watchers.
-
-### Drag-to-export
-
-Every session is auto-exported as Markdown. Drag it into another app (Finder, Notes, another Claude Code session) to carry context across conversations.
-
-### Bilingual UI
-
-Full Chinese (zh-CN) and English support.
-
----
+| Capability | Swob current `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
+|---|---|---|---|---|
+| Local multi-harness history | ✅ 11 source families | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
+| Visual session lineage graph | ✅ verified + grouping edges | ◐ Session Board, not lineage | — | ◐ child-session normalization, no lineage graph documented |
+| Compact-history recovery | ✅ Claude Code | — | — | — |
+| Execution tree / agent-call anatomy | ✅ | ◐ tool rendering | ◐ tool/output navigation | ◐ tool-call mix and child sessions |
+| Context pressure inspector | ✅ per-turn categories + compact boundaries | ◐ token analytics | ◐ quota/session runway | ✅ session context/cache analytics |
+| Provenance-aware health audit | ✅ | — | ◐ honest quota states | — |
+| Local full-text search | ✅ SQLite FTS5 | ✅ | ✅ local index | ✅ SQLite FTS5 |
+| Resume in source CLI | ✅ where supported | ◐ open/focus by session | ✅ supported CLIs | ✅ where supported |
+| Headless / browser mode | — | ✅ | — | ✅ |
 
 ## Install
 
-Download the latest `.dmg` from [**Releases**](https://github.com/IvyYang1999/swob/releases).
+### Stable v1.2.0
 
-> **Note (unsigned build):** Swob isn't notarized yet. If macOS says the app "is damaged or can't be opened", run:
+| Mac | Direct download |
+|---|---|
+| Apple Silicon (`arm64`) | [Download `swob-1.2.0-arm64.dmg`](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) |
+| Intel (`x64`) | [Download `swob-1.2.0-x64.dmg`](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) |
+
+**System requirement:** macOS on Apple Silicon or Intel.
+
+> [!WARNING]
+> The public v1.2.0 DMGs are **not signed or notarized**. The signing pipeline has passed an isolated smoke test, but no signed public release exists yet. If Gatekeeper reports that Swob is damaged or cannot be opened, verify the download came from this repository, then run:
+>
 > ```bash
 > xattr -cr /Applications/Swob.app
 > ```
-> Starting with v1.2.0, Swob checks for updates and installs them in-app — no need to come back here.
 
-Or build from source:
+### Current `main`
 
 ```bash
 git clone https://github.com/IvyYang1999/swob.git
 cd swob
-npm install
-npm run dev          # development with hot reload
-npm run build:mac    # produces .dmg in dist/
+npm ci
+npm run dev
 ```
 
-**Requirements:** macOS (Apple Silicon or Intel) · Claude Code installed
+To build local DMGs:
 
----
+```bash
+npm run build:mac
+```
 
-## Tech Stack
+## CLI
 
-Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · Recharts · electron-vite
+```bash
+swob search "auth regression"    # local cross-session search
+swob list --source codex         # filter by source
+swob resume <session-id>         # print the source-aware resume command
+swob insights                    # aggregate local usage
+swob active                      # inspect running sessions
+swob install                     # install CLI + Agent Skill
+```
 
----
+CLI commands return JSON so other agents can query Swob without scraping the UI.
 
-## Related
+## Privacy and security
 
-- [claude --resume](https://docs.anthropic.com/en/docs/claude-code) — Built-in session resume (limited to recent sessions)
-- [CC Switch](https://github.com/farion1231/cc-switch) — Provider & config manager for AI CLI tools
-- [awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code) — Curated list of Claude Code tools
+- Core browsing, indexing, lineage, audit, and Quick Report computation run locally.
+- Swob does not include product analytics or session-upload telemetry in the reviewed current source.
+- Startup update checks contact the release service but do not send session content.
+- Optional AI Insights sends bounded real session samples only after an explicit confirmation.
+- API credentials are stored in the local Swob Library configuration and are **not encrypted by Swob** in current `main`.
+- SSH resume and terminal resume contact only destinations/actions the user explicitly configures.
 
----
+Read the complete boundaries in [PRIVACY.md](PRIVACY.md). Report vulnerabilities through [SECURITY.md](SECURITY.md), never through a public issue containing transcripts or credentials.
+
+## Stable vs. next
+
+| Channel | What it contains |
+|---|---|
+| **Stable v1.2.0** | Five-source browsing, lineage detection/registry, compact expansion, search, token insights, CLI, backup/export, and resume. Public DMGs are unsigned. |
+| **Current `main` / next release** | Adds 11-harness ingestion, Session Galaxy, Execution Tree, Context Inspector, Session Audit, optional AI Insights, SQLite FTS5, and watcher/worker performance work. Build from source today. |
+
+## Tech stack
+
+Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · SQLite FTS5 · Recharts · electron-vite
+
+## Contributing
+
+Issues and pull requests are welcome. Before sharing a fixture or screenshot, remove transcript content, absolute paths, credentials, cookies, and device identifiers. Security reports follow [SECURITY.md](SECURITY.md).
 
 ## License
 
-[AGPL-3.0](LICENSE)
+[AGPL-3.0-only](LICENSE). If you distribute a modified network-accessible version, review the AGPL obligations that apply to your use.

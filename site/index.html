@@ -1,470 +1,559 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Swob — A git graph for your AI conversations</title>
-<meta name="description" content="Track fork/resume lineage, expand compacted turns, unify 5 AI coding platforms, full-text search — 100% local, open source.">
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-
-:root{
-  --bg:     #0d1117;
-  --bg-alt: #161b22;
-  --fg:     #e6edf3;
-  --fg-dim: #8b949e;
-  --accent: #3fb950;
-  --accent2:#f0883e;
-  --border: #30363d;
-  --code-bg:#1c2128;
-  --link:   #58a6ff;
-  --danger: #f85149;
-  --mono:   ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
-  --sans:   -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  color-scheme: dark light;
-}
-
-@media(prefers-color-scheme:light){
-  :root{
-    --bg:     #ffffff;
-    --bg-alt: #f6f8fa;
-    --fg:     #1f2328;
-    --fg-dim: #656d76;
-    --accent: #1a7f37;
-    --accent2:#bc4c00;
-    --border: #d0d7de;
-    --code-bg:#f6f8fa;
-    --link:   #0969da;
-    --danger: #cf222e;
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swob — A git graph for your AI conversations</title>
+  <meta name="description" content="Trace lineage, recover compacted context, search 11 AI coding harnesses, and debug agent execution locally on macOS.">
+  <meta name="theme-color" content="#efebe2">
+  <meta name="color-scheme" content="light">
+  <link rel="canonical" href="https://ivyyang1999.github.io/swob/">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Swob">
+  <meta property="og:title" content="Swob — A git graph for your AI conversations">
+  <meta property="og:description" content="Trace how AI coding sessions fork, compact, and continue. Recover context, search locally, and debug execution across 11 harnesses.">
+  <meta property="og:url" content="https://ivyyang1999.github.io/swob/">
+  <meta property="og:image" content="https://ivyyang1999.github.io/swob/assets/graph-view.png">
+  <meta property="og:image:width" content="1500">
+  <meta property="og:image:height" content="960">
+  <meta property="og:image:alt" content="Swob Session Galaxy showing local AI coding session lineage">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Swob — A git graph for your AI conversations">
+  <meta name="twitter:description" content="Recover context, trace session lineage, and debug AI coding work locally.">
+  <meta name="twitter:image" content="https://ivyyang1999.github.io/swob/assets/graph-view.png">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Swob",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS",
+    "softwareVersion": "1.2.0",
+    "description": "A local-first git graph and debugger for AI coding sessions.",
+    "downloadUrl": "https://github.com/IvyYang1999/swob/releases/tag/v1.2.0",
+    "codeRepository": "https://github.com/IvyYang1999/swob",
+    "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+    "isAccessibleForFree": true
   }
-}
+  </script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box}
+    *{margin:0}
+    :root{
+      --paper:#efebe2;
+      --paper-2:#e7e1d5;
+      --ink:#19191b;
+      --muted:#65615b;
+      --line:#c8c0b3;
+      --panel:#171719;
+      --panel-2:#222225;
+      --panel-text:#f0ede7;
+      --orange:#d8792b;
+      --purple:#6556d8;
+      --green:#25855d;
+      --blue:#3275c7;
+      --red:#ba4b43;
+      --display:"Avenir Next","Helvetica Neue",Helvetica,sans-serif;
+      --body:"Avenir Next","Helvetica Neue",Helvetica,sans-serif;
+      --mono:"SFMono-Regular","Cascadia Code",Menlo,Consolas,monospace;
+      --max:1180px;
+      --radius:12px;
+    }
+    html{scroll-behavior:smooth;background:var(--paper)}
+    body{
+      min-width:320px;
+      background:var(--paper);
+      color:var(--ink);
+      font-family:var(--body);
+      font-size:16px;
+      line-height:1.62;
+      -webkit-font-smoothing:antialiased;
+      overflow-x:hidden;
+    }
+    img{display:block;max-width:100%;height:auto}
+    a{color:inherit;text-underline-offset:.2em}
+    button,a{touch-action:manipulation}
+    :focus-visible{outline:3px solid color-mix(in srgb,var(--purple) 70%,transparent);outline-offset:4px}
+    .skip-link{position:absolute;top:-80px;left:1rem;z-index:100;background:var(--ink);color:var(--paper);padding:.75rem 1rem}
+    .skip-link:focus{top:1rem}
+    .shell{width:min(var(--max),calc(100% - 48px));margin-inline:auto}
+    .eyebrow{
+      display:flex;align-items:center;gap:.65rem;
+      color:var(--muted);font:700 .72rem/1.2 var(--mono);
+      letter-spacing:.12em;text-transform:uppercase;
+    }
+    .eyebrow::before{content:"";width:24px;height:2px;background:var(--orange)}
+    .kicker{font:700 .74rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--purple)}
+    h1,h2,h3{font-family:var(--display);letter-spacing:-.035em;line-height:1.06}
+    h1{font-size:clamp(3rem,6vw,5.6rem);font-weight:650}
+    h2{font-size:clamp(2.15rem,4.7vw,4.5rem);font-weight:620}
+    h3{font-size:clamp(1.25rem,2.2vw,1.8rem);font-weight:650}
+    p{max-width:70ch}
 
-html{font-size:16px;scroll-behavior:smooth}
-body{
-  font-family:var(--sans);
-  background:var(--bg);
-  color:var(--fg);
-  line-height:1.6;
-  -webkit-font-smoothing:antialiased;
-  overflow-x:hidden;
-}
+    .site-nav{position:relative;z-index:10;border-bottom:1px solid var(--line);background:var(--paper)}
+    .nav-inner{height:68px;display:flex;align-items:center;gap:2rem}
+    .brand{display:inline-flex;align-items:center;gap:.7rem;text-decoration:none;font-weight:700;letter-spacing:-.02em}
+    .brand img{width:30px;height:30px}
+    .nav-links{display:flex;align-items:center;gap:1.45rem;margin-left:auto;font-size:.84rem;font-weight:650}
+    .nav-links a{text-decoration:none;color:var(--muted)}
+    .nav-links a:hover{color:var(--ink)}
+    .nav-download{border:1px solid var(--ink);padding:.48rem .78rem;color:var(--ink)!important}
 
-.wrap{max-width:960px;margin:0 auto;padding:0 24px}
+    .hero{position:relative;padding:clamp(4.5rem,9vw,9rem) 0 4rem;isolation:isolate}
+    .hero::before{
+      content:"";position:absolute;inset:0 0 auto 50%;height:100%;z-index:-1;opacity:.34;
+      background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+      background-size:44px 44px;
+      mask-image:linear-gradient(to bottom,black,transparent 84%);
+    }
+    .hero-grid{display:grid;grid-template-columns:minmax(0,.87fr) minmax(0,1.13fr);gap:clamp(2.2rem,5vw,6rem);align-items:start}
+    .hero-copy{padding-top:1rem}
+    .hero h1{margin:.9rem 0 1.5rem;max-width:10ch}
+    .hero-last{display:block;font-size:.83em}
+    .hero-lead{font-size:clamp(1.05rem,1.7vw,1.3rem);line-height:1.55;color:var(--muted);max-width:36rem}
+    .hero-lead strong{color:var(--ink);font-weight:650}
+    .cta-row{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;margin-top:2rem}
+    .button{
+      display:inline-flex;align-items:center;justify-content:center;gap:.55rem;min-height:46px;
+      padding:.72rem 1rem;border:1px solid var(--ink);font:700 .82rem/1 var(--mono);
+      text-decoration:none;transition:transform .18s ease,background .18s ease,color .18s ease;
+    }
+    .button:hover{transform:translateY(-2px)}
+    .button-primary{background:var(--ink);color:var(--paper)}
+    .button-primary:hover{background:var(--purple);border-color:var(--purple)}
+    .button-secondary{background:transparent;color:var(--ink)}
+    .micro-link{font:650 .77rem/1.2 var(--mono);color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line);padding:.65rem .2rem}
+    .release-note{margin-top:1.15rem;padding-left:.85rem;border-left:2px solid var(--orange);font-size:.78rem;color:var(--muted);max-width:34rem}
+    .release-note strong{color:var(--ink)}
+    .product-frame{position:relative;margin-top:1rem}
+    .frame-tab{display:inline-flex;align-items:center;gap:.5rem;background:var(--panel);color:var(--panel-text);padding:.5rem .7rem;font:600 .68rem/1 var(--mono);letter-spacing:.06em;text-transform:uppercase}
+    .frame-tab::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green)}
+    .product-frame img{border:1px solid #313136;background:var(--panel);box-shadow:18px 22px 0 color-mix(in srgb,var(--purple) 16%,transparent)}
+    .frame-caption{display:flex;justify-content:space-between;gap:1rem;margin-top:.75rem;color:var(--muted);font:500 .7rem/1.4 var(--mono)}
+    .frame-caption span:last-child{text-align:right}
 
-a{color:var(--link);text-decoration:none}
-a:hover{text-decoration:underline}
+    .proof-strip{border-block:1px solid var(--line)}
+    .proof-grid{display:grid;grid-template-columns:repeat(4,1fr)}
+    .proof-item{padding:1.45rem 1.25rem;border-right:1px solid var(--line)}
+    .proof-item:first-child{padding-left:0}
+    .proof-item:last-child{border-right:0}
+    .proof-value{display:block;font:650 clamp(1.55rem,3vw,2.5rem)/1 var(--display);letter-spacing:-.04em}
+    .proof-label{display:block;margin-top:.45rem;color:var(--muted);font-size:.76rem;line-height:1.35}
 
-code, .mono{font-family:var(--mono)}
+    .section{padding:clamp(5rem,10vw,9rem) 0;border-bottom:1px solid var(--line)}
+    .section-head{display:grid;grid-template-columns:180px minmax(0,1fr);gap:2rem;margin-bottom:clamp(2.5rem,5vw,5rem)}
+    .section-head h2{max-width:13ch}
+    .section-intro{align-self:end;color:var(--muted);font-size:1.04rem;max-width:42rem}
+    .section-intro strong{color:var(--ink)}
+    .feature-row{display:grid;grid-template-columns:repeat(12,1fr);gap:clamp(1.25rem,2.5vw,2.5rem);align-items:center;margin-top:5rem}
+    .feature-row:first-of-type{margin-top:0}
+    .feature-copy{grid-column:span 4}
+    .feature-copy h3{margin:.7rem 0 1rem}
+    .feature-copy p{color:var(--muted);font-size:.96rem}
+    .feature-copy ul{margin:1.3rem 0 0;padding:0;list-style:none;border-top:1px solid var(--line)}
+    .feature-copy li{display:grid;grid-template-columns:1.6rem 1fr;gap:.5rem;padding:.62rem 0;border-bottom:1px solid var(--line);font-size:.82rem}
+    .feature-copy li::before{content:"↳";font-family:var(--mono);color:var(--purple)}
+    .feature-visual{grid-column:span 8;background:var(--panel);padding:10px;border:1px solid #2f2f33}
+    .feature-visual img{width:100%}
+    .feature-row.reverse .feature-copy{grid-column:9/span 4;grid-row:1}
+    .feature-row.reverse .feature-visual{grid-column:1/span 8;grid-row:1}
+    .visual-caption{display:flex;justify-content:space-between;gap:1rem;padding:.65rem .35rem .1rem;color:#96939c;font:500 .66rem/1.4 var(--mono)}
 
-/* ── hero ─────────────────── */
-.hero{
-  padding:80px 0 48px;
-  border-bottom:1px solid var(--border);
-}
-.hero-tag{
-  display:inline-block;
-  font-family:var(--mono);
-  font-size:.75rem;
-  color:var(--accent);
-  border:1px solid var(--accent);
-  border-radius:3px;
-  padding:2px 8px;
-  margin-bottom:16px;
-  letter-spacing:.5px;
-}
-.hero h1{
-  font-family:var(--mono);
-  font-size:clamp(1.6rem, 4vw, 2.4rem);
-  font-weight:700;
-  line-height:1.2;
-  margin-bottom:12px;
-}
-.hero h1 .accent{color:var(--accent)}
-.hero .subtitle{
-  font-size:1.05rem;
-  color:var(--fg-dim);
-  max-width:600px;
-  margin-bottom:28px;
-}
-.cta-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:40px}
-.btn{
-  display:inline-flex;align-items:center;gap:6px;
-  font-family:var(--mono);
-  font-size:.875rem;
-  padding:10px 20px;
-  border-radius:4px;
-  border:1px solid transparent;
-  cursor:pointer;
-  text-decoration:none !important;
-  transition:opacity .15s;
-}
-.btn:hover{opacity:.85}
-.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
-.btn-secondary{background:transparent;color:var(--fg);border-color:var(--border)}
+    .stat-story{display:grid;grid-template-columns:minmax(300px,.9fr) minmax(0,1.1fr);gap:clamp(2rem,5vw,5rem);align-items:center;background:var(--panel);color:var(--panel-text);padding:clamp(2rem,5vw,5rem)}
+    .ratio{font:650 clamp(3.6rem,6.6vw,6rem)/.92 var(--display);letter-spacing:-.07em;white-space:nowrap}
+    .ratio .lost{color:#ef796d}.ratio .slash{color:#615f64;font-weight:400}.ratio .total{color:#f1ede5}
+    .ratio-label{margin-top:1rem;color:#b4b0aa;font:600 .72rem/1.5 var(--mono);letter-spacing:.06em;text-transform:uppercase}
+    .story-copy h3{font-size:clamp(1.6rem,3.2vw,2.8rem);max-width:18ch}
+    .story-copy p{margin-top:1.25rem;color:#bcb8b2}
+    .method{margin-top:1.6rem;padding-top:1rem;border-top:1px solid #39393d;color:#918e89;font:500 .7rem/1.6 var(--mono)}
 
-.hero-img{
-  width:100%;
-  border-radius:6px;
-  border:1px solid var(--border);
-  box-shadow:0 8px 32px rgba(0,0,0,.35);
-}
-@media(prefers-color-scheme:light){
-  .hero-img{box-shadow:0 8px 32px rgba(0,0,0,.1)}
-}
+    .debug-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+    .debug-shot{background:var(--panel);border:1px solid #303035;padding:8px}
+    .debug-shot figcaption{padding:.65rem .25rem .15rem;color:#aaa6af;font:500 .68rem/1.35 var(--mono)}
 
-/* ── sections ──────────────── */
-section{padding:56px 0;border-bottom:1px solid var(--border)}
-section:last-of-type{border-bottom:none}
+    .source-band{background:var(--ink);color:var(--panel-text)}
+    .source-band .section{border-color:#343438}
+    .source-band .eyebrow,.source-band .section-intro{color:#aaa6a0}
+    .source-band .section-head h2{color:#f2eee6}
+    .source-list{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid #3a393c;border-left:1px solid #3a393c}
+    .source{padding:1rem;border-right:1px solid #3a393c;border-bottom:1px solid #3a393c;min-height:102px}
+    .source-name{display:flex;align-items:center;gap:.55rem;font-weight:650}
+    .source-dot{width:8px;height:8px;border-radius:50%;background:var(--source,var(--purple))}
+    .source-status{margin-top:.55rem;color:#8f8c88;font:500 .67rem/1.45 var(--mono)}
+    .source-note{margin-top:1.4rem;color:#aaa6a0;font-size:.82rem;max-width:62rem}
 
-.section-label{
-  font-family:var(--mono);
-  font-size:.75rem;
-  color:var(--fg-dim);
-  text-transform:uppercase;
-  letter-spacing:1px;
-  margin-bottom:8px;
-}
-section h2{
-  font-family:var(--mono);
-  font-size:clamp(1.25rem, 3vw, 1.6rem);
-  font-weight:600;
-  margin-bottom:20px;
-  line-height:1.3;
-}
+    .privacy-grid{display:grid;grid-template-columns:repeat(3,1fr);border-block:1px solid var(--line)}
+    .privacy-item{padding:2rem;border-right:1px solid var(--line)}
+    .privacy-item:first-child{padding-left:0}.privacy-item:last-child{border-right:0;padding-right:0}
+    .privacy-index{font:700 .72rem/1 var(--mono);color:var(--purple)}
+    .privacy-item h3{margin:.9rem 0 .8rem;font-size:1.3rem}
+    .privacy-item p{color:var(--muted);font-size:.87rem}
+    .privacy-warning{margin-top:2rem;background:#e7d6bf;border-left:4px solid var(--orange);padding:1rem 1.15rem;font-size:.84rem}
 
-/* ── problem ───────────────── */
-.problem-list{list-style:none;padding:0}
-.problem-list li{
-  position:relative;
-  padding-left:28px;
-  margin-bottom:14px;
-  color:var(--fg-dim);
-  font-size:.95rem;
-}
-.problem-list li::before{
-  content:"×";
-  position:absolute;left:0;top:0;
-  font-family:var(--mono);
-  font-weight:700;
-  color:var(--danger);
-  font-size:1.1rem;
-}
+    .channel-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line)}
+    .channel{padding:clamp(1.5rem,4vw,3rem)}
+    .channel+ .channel{border-left:1px solid var(--line)}
+    .channel-tag{display:inline-block;padding:.3rem .48rem;border:1px solid currentColor;font:700 .65rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase}
+    .channel.stable .channel-tag{color:var(--blue)}
+    .channel.next{background:var(--panel);color:var(--panel-text)}
+    .channel.next .channel-tag{color:#a89cff}
+    .channel h3{margin:1.2rem 0 .8rem}
+    .channel p{font-size:.9rem;color:var(--muted)}
+    .channel.next p{color:#aaa6a0}
+    .channel ul{margin:1rem 0 0;padding-left:1.1rem;font-size:.82rem;color:var(--muted)}
+    .channel.next ul{color:#aaa6a0}
 
-/* ── stat hook ─────────────── */
-.stat-section{
-  background:var(--bg-alt);
-  border:1px solid var(--border);
-  border-radius:6px;
-  padding:40px 32px;
-  text-align:center;
-  margin:0 auto;
-  max-width:720px;
-}
-.stat-big{
-  font-family:var(--mono);
-  font-size:clamp(2.2rem, 6vw, 3.6rem);
-  font-weight:800;
-  line-height:1.1;
-  margin-bottom:4px;
-}
-.stat-big .num{color:var(--danger)}
-.stat-big .dim{color:var(--fg-dim);font-weight:400}
-.stat-big .total{color:var(--fg)}
-.stat-pct{
-  font-family:var(--mono);
-  font-size:1rem;
-  color:var(--accent2);
-  margin-bottom:16px;
-}
-.stat-desc{
-  color:var(--fg-dim);
-  font-size:.95rem;
-  max-width:520px;
-  margin:0 auto;
-}
-.stat-desc strong{color:var(--fg)}
+    .install-box{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2rem;align-items:center;padding:2rem 0;border-block:1px solid var(--line)}
+    .install-box h3{font-size:1.55rem}
+    .install-box p{margin-top:.55rem;color:var(--muted);font-size:.86rem}
+    .install-actions{display:flex;gap:.7rem;flex-wrap:wrap;justify-content:flex-end}
+    .gatekeeper{margin-top:1.2rem;color:var(--muted);font-size:.8rem}
+    code{font-family:var(--mono);font-size:.92em;background:color-mix(in srgb,var(--ink) 7%,transparent);padding:.1em .28em;overflow-wrap:anywhere}
 
-/* ── features ──────────────── */
-.features-grid{
-  display:grid;
-  gap:40px;
-}
-.feature{
-  display:grid;
-  grid-template-columns:1fr;
-  gap:24px;
-}
-.feature-text h3{
-  font-family:var(--mono);
-  font-size:1.1rem;
-  font-weight:600;
-  margin-bottom:8px;
-}
-.feature-text h3 .tag{
-  font-size:.7rem;
-  font-weight:500;
-  color:var(--accent);
-  border:1px solid var(--accent);
-  border-radius:2px;
-  padding:1px 5px;
-  margin-left:8px;
-  vertical-align:middle;
-}
-.feature-text p{
-  color:var(--fg-dim);
-  font-size:.925rem;
-}
-.feature-img{
-  width:100%;
-  border-radius:6px;
-  border:1px solid var(--border);
-}
-.feature-row{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:24px;
-  margin-top:20px;
-}
-@media(max-width:640px){
-  .feature-row{grid-template-columns:1fr}
-}
+    .faq{border-top:1px solid var(--line)}
+    details{border-bottom:1px solid var(--line)}
+    summary{display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:center;padding:1.15rem 0;cursor:pointer;font-weight:650;list-style:none}
+    summary::-webkit-details-marker{display:none}
+    summary::after{content:"+";font:500 1.2rem/1 var(--mono);color:var(--purple)}
+    details[open] summary::after{content:"−"}
+    details p{padding:0 3rem 1.35rem 0;color:var(--muted);font-size:.9rem}
 
-.feature-card{
-  border:1px solid var(--border);
-  border-radius:6px;
-  padding:20px;
-  background:var(--bg-alt);
-}
-.feature-card h3{
-  font-family:var(--mono);
-  font-size:.95rem;
-  font-weight:600;
-  margin-bottom:6px;
-}
-.feature-card p{
-  font-size:.875rem;
-  color:var(--fg-dim);
-}
+    .final{background:var(--panel);color:var(--panel-text);padding:clamp(4rem,10vw,8rem) 0}
+    .final-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(240px,.65fr);gap:3rem;align-items:end}
+    .final h2{max-width:11ch}
+    .final p{margin-top:1.3rem;color:#aaa6a0}
+    .final .button-primary{background:var(--panel-text);color:var(--panel);border-color:var(--panel-text)}
+    .final .button-secondary{color:var(--panel-text);border-color:#5b5960}
+    .final-actions{display:flex;gap:.7rem;justify-content:flex-end;flex-wrap:wrap}
+    footer{background:var(--panel);color:#85827d;border-top:1px solid #343438;padding:1.4rem 0;font:500 .68rem/1.5 var(--mono)}
+    .footer-inner{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+    .footer-links{display:flex;gap:1rem;flex-wrap:wrap}
 
-/* ── commit-style feature list ── */
-.commit-list{list-style:none;padding:0;margin-top:24px}
-.commit-list li{
-  position:relative;
-  padding:0 0 24px 32px;
-  border-left:2px solid var(--border);
-}
-.commit-list li:last-child{border-left-color:transparent;padding-bottom:0}
-.commit-list li::before{
-  content:"";
-  position:absolute;
-  left:-6px;top:4px;
-  width:10px;height:10px;
-  border-radius:50%;
-  background:var(--accent);
-  border:2px solid var(--bg);
-}
-.commit-list li h3{
-  font-family:var(--mono);
-  font-size:.95rem;
-  font-weight:600;
-  margin-bottom:4px;
-}
-.commit-list li p{
-  font-size:.875rem;
-  color:var(--fg-dim);
-}
+    @keyframes enter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+    .hero-copy,.product-frame{animation:enter .65s cubic-bezier(.22,1,.36,1) both}
+    .product-frame{animation-delay:.12s}
+    @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.hero-copy,.product-frame{animation:none}.button{transition:none}}
 
-/* ── honesty ───────────────── */
-.honesty{
-  background:var(--bg-alt);
-  border-radius:6px;
-  border:1px solid var(--border);
-  padding:28px 24px;
-}
-.honesty h2{margin-bottom:16px}
-.honesty-items{list-style:none;padding:0}
-.honesty-items li{
-  padding:10px 0;
-  border-bottom:1px solid var(--border);
-  font-size:.9rem;
-  display:flex;
-  gap:10px;
-  align-items:baseline;
-}
-.honesty-items li:last-child{border-bottom:none}
-.honesty-items .warn{
-  font-family:var(--mono);
-  color:var(--accent2);
-  font-weight:600;
-  flex-shrink:0;
-  font-size:.8rem;
-}
-
-/* ── footer ────────────────── */
-footer{
-  padding:40px 0;
-  border-top:1px solid var(--border);
-  text-align:center;
-  font-size:.85rem;
-  color:var(--fg-dim);
-}
-footer .foot-links{
-  display:flex;
-  gap:20px;
-  justify-content:center;
-  flex-wrap:wrap;
-  margin-bottom:12px;
-}
-footer .tagline{
-  font-family:var(--mono);
-  font-style:italic;
-  margin-top:8px;
-}
-
-/* ── util ──────────────────── */
-.mt-16{margin-top:16px}
-.mt-24{margin-top:24px}
-.text-center{text-align:center}
-
-/* ── responsive ────────────── */
-@media(max-width:640px){
-  .hero{padding:48px 0 32px}
-  section{padding:40px 0}
-  .stat-section{padding:28px 20px}
-  .stat-big{font-size:2rem}
-  .wrap{padding:0 16px}
-}
-</style>
+    @media(max-width:900px){
+      .shell{width:min(var(--max),calc(100% - 32px))}
+      .nav-links{gap:.8rem}.nav-links a:not(.nav-download){display:none}
+      .hero-grid{grid-template-columns:1fr}.hero::before{left:35%}.hero-copy{max-width:720px}
+      .proof-grid{grid-template-columns:1fr 1fr}.proof-item:nth-child(2){border-right:0}.proof-item:nth-child(-n+2){border-bottom:1px solid var(--line)}.proof-item:nth-child(3){padding-left:0}
+      .section-head{grid-template-columns:1fr;gap:1rem}.section-intro{align-self:auto}
+      .feature-copy,.feature-row.reverse .feature-copy{grid-column:1/-1;grid-row:auto}.feature-visual,.feature-row.reverse .feature-visual{grid-column:1/-1;grid-row:auto}.feature-row.reverse .feature-copy{order:1}.feature-row.reverse .feature-visual{order:2}
+      .stat-story{grid-template-columns:1fr}.ratio{white-space:normal}
+      .debug-grid{grid-template-columns:1fr}
+      .source-list{grid-template-columns:repeat(2,1fr)}
+      .privacy-grid{grid-template-columns:1fr}.privacy-item,.privacy-item:first-child,.privacy-item:last-child{padding:1.5rem 0;border-right:0;border-bottom:1px solid var(--line)}.privacy-item:last-child{border-bottom:0}
+      .final-grid{grid-template-columns:1fr}.final-actions{justify-content:flex-start}
+    }
+    @media(max-width:620px){
+      .nav-inner{height:60px}.brand img{width:27px;height:27px}.nav-download{padding:.42rem .58rem;font-size:.78rem}
+      .hero{padding-top:3.5rem}.hero h1{font-size:clamp(2.85rem,15vw,4.4rem)}
+      .cta-row{align-items:stretch}.button{width:100%}.micro-link{text-align:center;width:100%}
+      .frame-caption{display:block}.frame-caption span{display:block}.frame-caption span:last-child{text-align:left;margin-top:.25rem}
+      .proof-item{padding:1.1rem .8rem}.proof-value{font-size:1.75rem}
+      .section{padding:4.5rem 0}.feature-row{margin-top:3.5rem}
+      .source-list{grid-template-columns:1fr}
+      .channel-grid{grid-template-columns:1fr}.channel+ .channel{border-left:0;border-top:1px solid var(--line)}
+      .install-box{grid-template-columns:1fr}.install-actions{justify-content:flex-start}.install-actions .button{width:100%}
+      details p{padding-right:0}
+      .final-actions{display:grid}.final-actions .button{width:100%}
+    }
+  </style>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
 
-<!-- ════ HERO ════ -->
-<header class="hero">
-<div class="wrap">
-  <div class="hero-tag">open source &middot; macOS &middot; AGPL-3.0</div>
-  <h1><span class="accent">swob</span> — A git graph for<br>your AI conversations.</h1>
-  <p class="subtitle">Track fork/resume lineage across Claude Code, Codex, Cursor, OpenCode &amp; Zcode. Expand compacted turns. Full-text search. One-click resume. 100% local.</p>
-  <div class="cta-row">
-    <a href="https://github.com/IvyYang1999/swob/releases" class="btn btn-primary">Download .dmg</a>
-    <a href="https://github.com/IvyYang1999/swob" class="btn btn-secondary">GitHub</a>
-  </div>
-  <img src="assets/main.png" alt="Swob main interface — session tree, compact expansion, session info panel" class="hero-img" loading="lazy" width="1920" height="1080">
-</div>
-</header>
+  <nav class="site-nav" aria-label="Primary">
+    <div class="shell nav-inner">
+      <a class="brand" href="#top" aria-label="Swob home">
+        <img src="assets/favicon.svg" alt="" width="30" height="30">
+        <span>swob</span>
+      </a>
+      <div class="nav-links">
+        <a href="#proof">Proof</a>
+        <a href="#debugger">Debugger</a>
+        <a href="#privacy">Privacy</a>
+        <a href="#faq">FAQ</a>
+        <a class="nav-download" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">Download v1.2.0</a>
+      </div>
+    </div>
+  </nav>
 
-<!-- ════ THE PROBLEM ════ -->
-<section>
-<div class="wrap">
-  <div class="section-label">// the problem</div>
-  <h2>Your AI conversations have history.<br>Your tools pretend they don't.</h2>
-  <ul class="problem-list">
-    <li>Sessions scatter across <code>~/.claude/projects</code>, <code>~/.codex/sessions</code>, and more — no unified view, no search.</li>
-    <li><code>compact</code> folds your early turns into a summary and hides the originals. You lose what you actually said.</li>
-    <li><code>resume</code> creates a new file. <code>fork</code> branches off. Nobody tells you which session came from which.</li>
-    <li>Claude Code's default <code>cleanupPeriodDays: 30</code> silently deletes old sessions from disk.</li>
-  </ul>
-</div>
-</section>
+  <main id="main">
+    <header class="hero" id="top">
+      <div class="shell hero-grid">
+        <div class="hero-copy">
+          <div class="eyebrow">Open source · macOS · local-first</div>
+          <h1>A git graph for your AI <span class="hero-last">conversations.</span></h1>
+          <p class="hero-lead">Trace how sessions <strong>fork, compact, and continue</strong>. Recover missing context, search histories from 11 coding harnesses, and debug the tool calls and context pressure behind every run.</p>
+          <div class="cta-row">
+            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">Download stable · Apple Silicon</a>
+            <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">Explore current main</a>
+            <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel Mac</a>
+          </div>
+          <p class="release-note"><strong>Truth before launch copy:</strong> public v1.2.0 is the five-source stable build and is unsigned. The graph, debugger, 11-harness ingestion, AI Insights, and SQLite FTS shown here are implemented on current <code>main</code> and ship in the next release.</p>
+        </div>
 
-<!-- ════ STAT HOOK ════ -->
-<section style="border-bottom:none;padding-bottom:0">
-<div class="wrap">
-  <div class="stat-section">
-    <div class="stat-big"><span class="num">253</span> <span class="dim">/</span> <span class="total">1,621</span></div>
-    <div class="stat-pct">15.6% deleted by the official 30-day policy</div>
-    <p class="stat-desc">From one real user's session history: <strong>253 sessions</strong> had already been purged by Claude Code's default cleanup. They survived only because swob had backed them up. The official tool is deleting your conversations — and you might not even know.</p>
-  </div>
-</div>
-</section>
+        <figure class="product-frame">
+          <div class="frame-tab">Current main · Session Galaxy</div>
+          <img src="assets/graph-view.png" alt="Current Swob Session Galaxy with color-coded sources, verified lineage edges, and a session evidence tooltip" width="1500" height="960" fetchpriority="high" decoding="async">
+          <figcaption class="frame-caption">
+            <span>Real current UI · sanitized demo data</span>
+            <span>Canvas force layout · pan · zoom · inspect</span>
+          </figcaption>
+        </figure>
+      </div>
+    </header>
 
-<!-- ════ FEATURES ════ -->
-<section>
-<div class="wrap">
-  <div class="section-label">// what swob does</div>
-  <h2>Session lineage, not just session viewing.</h2>
-  <p style="color:var(--fg-dim);margin-bottom:8px;font-size:.95rem">Other viewers show you individual conversations. Swob shows you <strong style="color:var(--fg)">the relationships between them</strong> — fork edges, continuation chains, multi-file resumes — plus compact expansion and 5-platform unification.</p>
+    <section class="proof-strip" aria-label="Audited product evidence">
+      <div class="shell proof-grid">
+        <div class="proof-item"><span class="proof-value">253 / 1,621</span><span class="proof-label">source sessions missing; local backups survived</span></div>
+        <div class="proof-item"><span class="proof-value">93.58%</span><span class="proof-label">verified resumability in that audited corpus</span></div>
+        <div class="proof-item"><span class="proof-value">1,704</span><span class="proof-label">sessions in the current performance corpus</span></div>
+        <div class="proof-item"><span class="proof-value">11</span><span class="proof-label">local harness families discovered on current main</span></div>
+      </div>
+    </section>
 
-  <ul class="commit-list">
-    <li>
-      <h3>Lineage detection</h3>
-      <p>Swob identifies fork, resume, and compact relationships between sessions, builds a lineage registry, and persists it across cache rebuilds. You see which session begat which — like <code>git log --graph</code> for your AI conversations.</p>
-    </li>
-    <li>
-      <h3>Compact expansion</h3>
-      <p>Compacted turns are still in the JSONL. Swob surfaces every compact block inline and lets you expand each one in place — no manual file spelunking.</p>
-    </li>
-    <li>
-      <h3>5-platform unification</h3>
-      <p>Claude Code, Codex, Cursor, OpenCode, Zcode — one sidebar, one search, one resume button. Each session shows its source badge.</p>
-    </li>
-    <li>
-      <h3>Full-text search + Spotlight jump</h3>
-      <p><code>&#8984;K</code> for cross-session full-text search (matches auto-expand compact segments). <code>&#8984;&#8679;K</code> for fuzzy Spotlight-style jump filtered by content, project, time, or source.</p>
-    </li>
-    <li>
-      <h3>One-click resume</h3>
-      <p>Resume any session in Terminal or iTerm2, preserving working directory and permission mode. Supports codex/cursor resume, batch resume, and SSH remote resume.</p>
-    </li>
-    <li>
-      <h3>Token insights</h3>
-      <p>5 stat cards, 365-day contribution heatmap, source/model distribution, per-project token ranking, and 30-day trend — know where your tokens are going.</p>
-    </li>
-  </ul>
+    <section class="section" id="proof">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">01 · Lineage</div>
+          <h2>See the history your agent UI flattened.</h2>
+          <p class="section-intro">A resume is not always the same file. A fork is not merely another row. A compact summary is not the original conversation. <strong>Swob reconstructs those relationships instead of pretending every transcript stands alone.</strong></p>
+        </div>
 
-</div>
-</section>
+        <div class="stat-story">
+          <div>
+            <div class="ratio"><span class="lost">253</span> <span class="slash">/</span> <span class="total">1,621</span></div>
+            <div class="ratio-label">15.6% of one audited Claude Code corpus no longer had source files</div>
+          </div>
+          <div class="story-copy">
+            <div class="kicker">A real failure mode</div>
+            <h3>The official retention policy had already removed the originals.</h3>
+            <p>Swob's Library still held local backups, so the work remained readable and could be evaluated for safe recovery. The number is an audited corpus result—not a claim that every user loses exactly 15.6%.</p>
+            <div class="method">Method boundary · 1,621 sessions across five sources · 253 Claude Code sessions classified as missing at the original source path · recoverability and resume validity are separate checks</div>
+          </div>
+        </div>
 
-<!-- ════ CLI ════ -->
-<section>
-<div class="wrap">
-  <div class="section-label">// cli</div>
-  <h2><code>swob</code> in your terminal</h2>
-  <div style="background:var(--code-bg);border:1px solid var(--border);border-radius:6px;padding:20px;font-family:var(--mono);font-size:.85rem;overflow-x:auto;line-height:1.7">
-    <span style="color:var(--fg-dim)">$</span> swob search <span style="color:var(--accent)">"refactor database"</span><br>
-    <span style="color:var(--fg-dim)">$</span> swob list <span style="color:var(--fg-dim)">--source claude-code --json</span><br>
-    <span style="color:var(--fg-dim)">$</span> swob resume <span style="color:var(--accent)">a6771e74</span><br>
-    <span style="color:var(--fg-dim)">$</span> swob insights<br>
-    <span style="color:var(--fg-dim)">$</span> swob install <span style="color:var(--fg-dim)"># installs Claude Code Skill</span>
-  </div>
-  <p class="mt-16" style="font-size:.9rem;color:var(--fg-dim)">All commands output JSON. <code>swob install</code> adds a Claude Code Skill so Claude can query your session history mid-conversation.</p>
-</div>
-</section>
+        <div class="feature-row">
+          <div class="feature-copy">
+            <div class="kicker">Session Galaxy · current main</div>
+            <h3>Verified lineage, visible.</h3>
+            <p>The graph distinguishes strong lineage evidence from softer project, source, time, working-directory, and file affinity. It helps you navigate without turning a visual grouping into a fake family relationship.</p>
+            <ul>
+              <li>Fork and continuation relationships</li>
+              <li>Source and project neighborhoods</li>
+              <li>Pan, zoom, hover evidence, open session</li>
+              <li>Canvas today; no false WebGL claim</li>
+            </ul>
+          </div>
+          <figure class="feature-visual">
+            <img src="assets/graph-view.png" alt="Swob Session Galaxy showing multiple coding-agent sources and lineage relationships" width="1500" height="960" loading="lazy" decoding="async">
+            <figcaption class="visual-caption"><span>Current main · sanitized demo</span><span>Implemented, not roadmap</span></figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
 
-<!-- ════ HONESTY ════ -->
-<section>
-<div class="wrap">
-  <div class="section-label">// known limitations</div>
-  <div class="honesty">
-    <h2>Things you should know before installing</h2>
-    <ul class="honesty-items">
-      <li>
-        <span class="warn">ROADMAP</span>
-        <span><strong>Tree visualization is not built yet.</strong> Swob detects lineage relationships (fork/resume/compact edges) and stores them in a registry, but does not yet render a visual tree graph. What you get today is relationship annotations and multi-file grouping — the visual tree is on the roadmap.</span>
-      </li>
-      <li>
-        <span class="warn">UNSIGNED</span>
-        <span><strong>The app is not code-signed.</strong> macOS Gatekeeper will block it. After downloading, run: <code>xattr -cr /Applications/Swob.app</code></span>
-      </li>
-      <li>
-        <span class="warn">macOS ONLY</span>
-        <span>Swob is an Electron app currently built and tested only for macOS. No Windows or Linux builds at this time.</span>
-      </li>
-    </ul>
-  </div>
-</div>
-</section>
+    <section class="section" id="debugger">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">02 · Debugger</div>
+          <h2>Stop guessing why the session went wrong.</h2>
+          <p class="section-intro">The answer is rarely “the model was bad.” Swob lets you inspect the execution path, context composition, compaction points, tool errors, latency, framework overhead, and evidence quality behind a session.</p>
+        </div>
 
-<!-- ════ FOOTER ════ -->
-<footer>
-<div class="wrap">
-  <div class="foot-links">
-    <a href="https://github.com/IvyYang1999/swob">GitHub</a>
-    <a href="https://github.com/IvyYang1999/swob/releases">Releases</a>
-    <span>AGPL-3.0</span>
-  </div>
-  <div class="tagline">A git graph for your AI conversations.</div>
-</div>
-</footer>
+        <div class="debug-grid">
+          <figure class="debug-shot">
+            <img src="assets/session-audit.png" alt="Swob Session Audit with health score, reported and estimated labels, latency, cost, overhead, findings, and anti-patterns" width="1500" height="960" loading="lazy" decoding="async">
+            <figcaption>Session Audit · 12 dimensions · every metric marked reported, estimated, or unavailable</figcaption>
+          </figure>
+          <figure class="debug-shot">
+            <img src="assets/session-debugger.png" alt="Swob Execution Tree and Context Inspector showing tool calls, agent spawns, compact boundary, and token pressure" width="1500" height="960" loading="lazy" decoding="async">
+            <figcaption>Execution Tree + Context Inspector · tools, agents, errors, context slices, compact boundaries</figcaption>
+          </figure>
+        </div>
 
+        <div class="feature-row reverse">
+          <div class="feature-copy">
+            <div class="kicker">Cross-session intelligence</div>
+            <h3>Insights that keep their provenance.</h3>
+            <p>The local dashboard combines tokens, cost estimates, heatmaps, source/model/project breakdowns, tool use, and code-change counts. Quick Report stays local. AI Report is a separate, explicit network action.</p>
+            <ul>
+              <li>1,704-session dashboard exercised locally</li>
+              <li>11-source distribution and model breakdown</li>
+              <li>SQLite FTS5 incremental search</li>
+              <li>Optional AI narrative, never implied offline</li>
+            </ul>
+          </div>
+          <figure class="feature-visual">
+            <img src="assets/insights-dashboard.png" alt="Swob Insights dashboard with session totals, heatmap, 11-source distribution, model usage, and project ranking" width="1260" height="844" loading="lazy" decoding="async">
+            <figcaption class="visual-caption"><span>Local aggregate dashboard</span><span>AI Report is opt-in</span></figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <div class="source-band">
+      <section class="section" id="sources">
+        <div class="shell">
+          <div class="section-head">
+            <div class="eyebrow">03 · Sources</div>
+            <h2>One local history across 11 harness families.</h2>
+            <p class="section-intro">Current <code>main</code> discovers each source below. Parsing depth, lineage evidence, tokens, and resume support depend on what the original tool records; Swob does not fabricate missing metadata.</p>
+          </div>
+          <div class="source-list" aria-label="Supported source families">
+            <div class="source" style="--source:#e09927"><div class="source-name"><span class="source-dot"></span>Claude Code</div><div class="source-status">Deep lineage · compact recovery · backup · resume</div></div>
+            <div class="source" style="--source:#478be1"><div class="source-name"><span class="source-dot"></span>Codex</div><div class="source-status">Rollout parsing · search · insights · resume</div></div>
+            <div class="source" style="--source:#61a96f"><div class="source-name"><span class="source-dot"></span>Cursor</div><div class="source-status">Local agent history · search · source-aware resume</div></div>
+            <div class="source" style="--source:#21a7bd"><div class="source-name"><span class="source-dot"></span>OpenCode</div><div class="source-status">SQLite history · normalized viewing</div></div>
+            <div class="source" style="--source:#d4554c"><div class="source-name"><span class="source-dot"></span>Zcode</div><div class="source-status">SQLite history · normalized viewing</div></div>
+            <div class="source" style="--source:#d3659a"><div class="source-name"><span class="source-dot"></span>CC Mirror</div><div class="source-status">Claude-compatible project histories</div></div>
+            <div class="source" style="--source:#8c79e8"><div class="source-name"><span class="source-dot"></span>Antigravity</div><div class="source-status">Current and legacy transcript roots</div></div>
+            <div class="source" style="--source:#8a898c"><div class="source-name"><span class="source-dot"></span>Grok / Factory</div><div class="source-status">Grok and Factory/Droid JSONL histories</div></div>
+            <div class="source" style="--source:#3cab93"><div class="source-name"><span class="source-dot"></span>Pi</div><div class="source-status">Local agent session histories</div></div>
+            <div class="source" style="--source:#e48a43"><div class="source-name"><span class="source-dot"></span>Kimi Code</div><div class="source-status">Local wire.jsonl histories</div></div>
+            <div class="source" style="--source:#7657ca"><div class="source-name"><span class="source-dot"></span>Hermes</div><div class="source-status">Local JSON session histories</div></div>
+          </div>
+          <p class="source-note">Stable v1.2.0 publicly ships the original five-source set: Claude Code, Codex, Cursor, OpenCode, and Zcode. The additional six source families are current-main / next-release capabilities.</p>
+        </div>
+      </section>
+    </div>
+
+    <section class="section" id="privacy">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">04 · Trust</div>
+          <h2>Local-first, with the network boundary stated plainly.</h2>
+          <p class="section-intro">“Local-first” should describe architecture, not hide exceptions. Swob documents which operations stay local, which actions connect elsewhere, and what optional AI analysis samples.</p>
+        </div>
+        <div class="privacy-grid">
+          <article class="privacy-item">
+            <div class="privacy-index">LOCAL / 01</div>
+            <h3>Core evidence stays on the Mac.</h3>
+            <p>Browsing, SQLite indexing, search, lineage, graph layout, execution inspection, context analysis, audit, Quick Report, and export run locally.</p>
+          </article>
+          <article class="privacy-item">
+            <div class="privacy-index">NETWORK / 02</div>
+            <h3>Optional actions are explicit.</h3>
+            <p>Update checks contact the release service. Resume can open a terminal or configured SSH host. AI Report sends bounded real user-message samples only after confirmation.</p>
+          </article>
+          <article class="privacy-item">
+            <div class="privacy-index">CREDENTIALS / 03</div>
+            <h3>Know the current limitation.</h3>
+            <p>AI provider credentials are stored in the local Swob Library configuration and are not encrypted by Swob in current <code>main</code>.</p>
+          </article>
+        </div>
+        <p class="privacy-warning"><strong>AI sample boundary:</strong> up to 60 recent sessions, 8 user messages per session, 300 characters per message, and 120,000 sampled characters total. Read the full <a href="https://github.com/IvyYang1999/swob/blob/master/PRIVACY.md">privacy document</a> before enabling AI Insights.</p>
+      </div>
+    </section>
+
+    <section class="section" id="channels">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">05 · Product truth</div>
+          <h2>Stable and next are not the same promise.</h2>
+          <p class="section-intro">The public installer must not silently trail the page. Until the next release exists, Swob labels both channels and gives each one an honest install path.</p>
+        </div>
+        <div class="channel-grid">
+          <article class="channel stable">
+            <span class="channel-tag">Stable · v1.2.0</span>
+            <h3>Five-source session management</h3>
+            <p>The public DMG includes the proven session browser and recovery layer.</p>
+            <ul>
+              <li>Lineage detection and registry</li>
+              <li>Compact expansion and full-text search</li>
+              <li>Token Insights, CLI, backup/export, resume</li>
+              <li>Unsigned and not notarized</li>
+            </ul>
+          </article>
+          <article class="channel next">
+            <span class="channel-tag">Current main · next</span>
+            <h3>Session graph and debugger</h3>
+            <p>The screenshots on this page come from these implemented current-main capabilities.</p>
+            <ul>
+              <li>11-harness ingestion and Session Galaxy</li>
+              <li>Execution Tree, Context Inspector, Session Audit</li>
+              <li>Optional AI Insights with confirmation</li>
+              <li>SQLite FTS5, watcher, and worker performance work</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="install-box" id="download">
+          <div>
+            <h3>Download the stable macOS build</h3>
+            <p>Choose the architecture that matches your Mac. The buttons link directly to the official v1.2.0 DMGs.</p>
+          </div>
+          <div class="install-actions">
+            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">Apple Silicon</a>
+            <a class="button button-secondary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel</a>
+          </div>
+        </div>
+        <p class="gatekeeper"><strong>Unsigned build:</strong> after verifying the DMG came from this repository, Gatekeeper may require <code>xattr -cr /Applications/Swob.app</code>. The signing/notarization pipeline has passed a smoke test, but no signed public asset has shipped yet.</p>
+      </div>
+    </section>
+
+    <section class="section" id="faq">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">06 · FAQ</div>
+          <h2>Before you install.</h2>
+          <p class="section-intro">The important limitations are part of the decision, not hidden below the download button.</p>
+        </div>
+        <div class="faq">
+          <details>
+            <summary>Will the v1.2.0 DMG show the Session Galaxy and Debugger?</summary>
+            <p>No. Those capabilities are implemented on current <code>main</code> and are planned for the next release. Build from source to try them today.</p>
+          </details>
+          <details>
+            <summary>Does every one of the 11 harnesses expose the same data?</summary>
+            <p>No. Discovery is implemented for 11 source families, but lineage, tokens, child agents, and resume commands depend on what each source records. Swob leaves unavailable fields unavailable.</p>
+          </details>
+          <details>
+            <summary>Does session content ever leave my Mac?</summary>
+            <p>Core browsing and analysis do not upload it. Optional AI Report sends bounded real user-message samples to the provider you configure after an explicit confirmation. Update checks and user-triggered SSH/resume actions can also use the network for their stated purpose.</p>
+          </details>
+          <details>
+            <summary>Why does macOS say the app is damaged?</summary>
+            <p>The current public v1.2.0 DMGs are unsigned and not notarized, so Gatekeeper can block them. Verify the download URL and use the documented quarantine command, or build from source. A signed public release has not shipped yet.</p>
+          </details>
+          <details>
+            <summary>Is Windows or Linux supported?</summary>
+            <p>No. Swob is currently built and tested for macOS on Apple Silicon and Intel. Windows, Linux, and headless/browser mode are not current product claims.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="final">
+      <div class="shell final-grid">
+        <div>
+          <div class="eyebrow">Open source · AGPL-3.0</div>
+          <h2>Your agent history deserves a history.</h2>
+          <p>Start with the stable browser today, or inspect and build current <code>main</code> to try the graph and debugger before the next release.</p>
+        </div>
+        <div class="final-actions">
+          <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">Download stable</a>
+          <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">View source</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-inner">
+      <span>Swob · local-first AI coding session history</span>
+      <span class="footer-links">
+        <a href="https://github.com/IvyYang1999/swob">GitHub</a>
+        <a href="https://github.com/IvyYang1999/swob/blob/master/PRIVACY.md">Privacy</a>
+        <a href="https://github.com/IvyYang1999/swob/blob/master/SECURITY.md">Security</a>
+        <a href="https://github.com/IvyYang1999/swob/releases">Releases</a>
+      </span>
+    </div>
+  </footer>
 </body>
 </html>

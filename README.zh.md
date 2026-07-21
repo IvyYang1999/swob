@@ -1,177 +1,186 @@
 <div align="center">
 
-<img src="docs/banner.png" alt="Swob" width="100%" />
+<img src="site/assets/favicon.svg" alt="Swob" width="72" height="72" />
 
-<p>
-  <a href="README.md">English</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="CHANGELOG.md">更新日志</a>
-</p>
+# Swob
 
-<p>
-  <img src="https://img.shields.io/badge/版本-1.2.0-blue" alt="版本" />
-  <img src="https://img.shields.io/badge/平台-macOS-lightgrey" alt="平台" />
-  <img src="https://img.shields.io/badge/基于-Electron-47848F" alt="基于 Electron" />
-  <img src="https://img.shields.io/github/downloads/IvyYang1999/swob/total" alt="下载量" />
-  <img src="https://img.shields.io/badge/许可证-AGPL--3.0-green" alt="许可证" />
-</p>
+### AI 对话的 git graph
 
-<h3>AI 会话的 git graph</h3>
+**找回丢失的上下文，追踪 fork 与 compact，调试 Agent 到底做了什么。**
 
-<p>
-  <strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Cursor</strong>、<strong>OpenCode</strong>、<strong>Zcode</strong> 的免费开源会话管理器。<br/>
-  看清 session 之间怎么分叉、怎么续写。展开被 compact 折叠的历史。全局搜索。一键续写。<br/>
-  100% 本地——你的对话不离开你的机器。
-</p>
+Swob 读取 **11 种 AI 编程 harness** 的本地历史，重建会话血统，用 SQLite FTS5 索引全部消息，并提供执行树、上下文检查器、带数据来源标记的会话审计，以及可选的 AI Insights。
 
-<p>
-  <a href="https://ivyyang1999.github.io/swob/"><strong>产品主页</strong></a> · <a href="https://github.com/IvyYang1999/swob/releases"><strong>下载</strong></a>
-</p>
+[官网](https://ivyyang1999.github.io/swob/) · [Apple Silicon DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) · [Intel DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) · [更新日志](CHANGELOG.md)
+
+[English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
+
+![最新稳定版](https://img.shields.io/github/v/release/IvyYang1999/swob?label=stable)
+![平台](https://img.shields.io/badge/platform-macOS-2d2d30)
+![构建](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
+![下载量](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
+![许可证](https://img.shields.io/badge/license-AGPL--3.0-5b4fc4)
 
 </div>
 
-<br/>
+> [!IMPORTANT]
+> **产品通道有意分开。** 下方截图和调试能力来自当前 `main` 的真实界面，数据为脱敏演示数据。公开的 **v1.2.0 稳定版 DMG 早于 Session Galaxy、11 harness、Session Debugger、AI Insights 和 SQLite FTS5**。现在可从源码构建 `main` 体验；这些能力将在下一次发布中交付。
 
-<p align="center">
-  <img src="docs/screenshot.png" alt="Swob 主界面" width="800" />
-</p>
+![Swob Session Galaxy——当前 main，使用脱敏演示数据](site/assets/graph-view.png)
 
----
+<p align="center"><sub>当前 <code>main</code> · 真实 Swob 界面 · 脱敏演示数据 · 非生成式产品效果图</sub></p>
 
-> **253 / 1,621** — 来自一个真实用户的会话历史：253 个会话（15.6%）已被 Claude Code 默认的 30 天清理策略（`cleanupPeriodDays`）删除。它们只因 Swob 做了备份才得以保留。官方工具正在删除你的对话——你可能完全不知道。
+## 为什么需要 Swob
 
----
+AI 编程会话不是一堆互不相干的聊天文件。resume 会生成新文件，fork 会把任务分叉，compact 会用摘要替换早期上下文；不同 Agent 又把同一种工作存进互不兼容的位置。普通 Viewer 能打开一份转录，却解释不了它从哪里来，也解释不了 Agent 为什么逐渐跑偏。
 
-## 问题
+Swob 把会话历史当作证据：
 
-你用 Claude Code 从 `~` 目录 vibe-code 好几个月了。200 多个 session 堆在一起毫无组织。session 还会繁殖：resume 一下多出一个新文件，fork 一个实验分支，compact 之后又接着聊——很快五个文件都是「同一场对话」，却没有任何工具告诉你它们之间什么关系。一半历史被 compact 摘要折叠。内置的 `/resume` 只显示最近的 session。想找到那个你解决了棘手 bug 的对话？祝你好运。
+- **追踪血统**——在交互式力导向 Session Galaxy 中浏览经过验证的 fork 与 continuation 关系。
+- **恢复上下文**——展开 Claude Code compact 前的内容，并在源文件消失后保留本地备份。
+- **调试执行过程**——检查工具/子 Agent 调用、上下文压力、compact 边界、延迟、框架开销、错误与反模式。
+- **搜索所有历史**——SQLite FTS5 增量索引本地消息，不再为每次查询重扫整个档案。
+- **可靠续写**——在来源支持时，携带正确的 session ID 和工作目录返回对应 CLI，并进行来源感知校验。
 
-## 方案
+## 证据，不是虚荣指标
 
-Swob 读取 Claude Code、Codex、Cursor、OpenCode、Zcode 存在磁盘上的会话文件。解析每一个 session，**识别它们之间的关系——fork、resume、续写**，原地展开被 compact 折叠的历史，并以可搜索、可整理的界面呈现。
+| 审计结果 | 含义 |
+|---|---|
+| **253 / 1,621** | 一份真实审计 Library 中，253 个 Claude Code 源会话已在默认 30 天保留策略下消失；Swob 仍保有本地备份。 |
+| **93.58%** | 同一份 1,621 会话、五来源语料的可验证续写率。这是已观察到的语料结果，不是对所有环境的成功率承诺。 |
+| **1,704 sessions** | 当前本地性能和界面验证语料，用来压测新索引与 Insights。 |
+| **11 harnesses** | 当前 `main` 可发现 11 个来源家族；解析深度和 resume 能力取决于来源记录和 CLI 能力。 |
 
-数据 100% 留在本地。Swob 不上传任何东西。基于 AGPL-3.0 免费开源。
+## Session Galaxy
 
----
+当前图谱是真实的 Canvas 力导向视图，可区分经过验证的血统边与较弱的项目/来源/时间分组关系，并支持平移、缩放、检查和打开会话。此前的 PixiJS 原型已主动回退等待专项打磨；Swob **目前不宣称使用 WebGL 渲染**。
 
-## 核心功能
+## Session Debugger
 
-### 会话血统——看清哪个 session 从哪来
+Swob 不止渲染聊天记录：
 
-AI session 不会安分地待在一个文件里：resume 会生出新文件，fork 会分裂对话，compact 会把摘要接到一个新开头上。Swob 精确识别这些关系——fork 边、续写边、跨文件 resume——并维护一份落盘的血统注册表，让会话家谱在缓存重建后依然存活。相当于 `git log --graph`，只不过对象是你的会话。（可视化血统树已在路线图上。）
+- **执行树**——重建每轮对话、工具调用、子 Agent、错误、耗时和累计 token。
+- **上下文检查器**——把上下文拆成用户、助手、工具输入/输出、系统注入、thinking、图片和 compact 等类别，并标出 compact 边界和压力警告。
+- **会话审计**——覆盖研究/编辑比例、thinking 证据、延迟、估算成本、框架开销、会话类型、模型、工具效率、中断、目标长度、反模式与挫败信号等 12 个维度。
+- **来源标记**——每项指标标为 `reported`、`estimated` 或 `unavailable`；没有证据就不冒充事实。
 
-### 展开被 Compact 的对话
+| 会话审计 | 执行树 + 上下文检查器 |
+|---|---|
+| ![当前 Swob main 的会话审计](site/assets/session-audit.png) | ![当前 Swob main 的执行树与上下文检查器](site/assets/session-debugger.png) |
 
-Claude Code 会压缩对话来节省上下文——模型忘了，但原始消息仍然在 JSONL 文件里。Swob 把每个 compact 块内联展示，一键原地展开被折叠的内容，不用去翻原始 JSONL。
+## 跨会话 Insights
 
-### Spotlight 会话跳转 — `⌘⇧K`
+本地面板包括 token 与成本总览、365 天热力图、来源/模型/项目分布、时段与轮次分布、工具使用、代码改动数量及审计报告。
 
-全局快捷键唤出类 Spotlight 搜索窗口。支持内容、项目名、文件夹、时间（`今天`、`昨天`、`本周`）模糊搜索，按来源（`claude`、`codex`、`cursor`、`opencode`、`zcode`）过滤。不到一秒跳转到任意 session，无需切换窗口。
+**AI Insights 是可选功能，配置前不会启用。** 用户明确触发后，它会把聚合指标和有上限的真实用户消息样本发送给用户配置的模型供应商。启用前请阅读 [PRIVACY.md](PRIVACY.md)。
 
-### 全文搜索 — `⌘K`
+![当前 main 的 Swob Insights 面板](site/assets/insights-dashboard.png)
 
-跨所有 session 一次搜索。匹配内容自动展开 compact 折叠区块，即使内容被 compact 了也能找到。局部搜索（`⌘F`）支持正则。
+## 当前 `main` 的来源
 
-### 五工具合一：Claude Code + Codex + Cursor + OpenCode + Zcode
+| 来源家族 | 本地历史发现 | 说明 |
+|---|---:|---|
+| Claude Code | 稳定 | 血统、compact 恢复、备份、审计和 resume 支持最完整。 |
+| Codex | 稳定 | 本地 rollout 解析、搜索、Insights 与 resume。 |
+| Cursor | 稳定 | 本地 Agent 历史、搜索、Insights；CLI 提供能力时可 resume。 |
+| OpenCode | 稳定 | SQLite 历史导入和统一浏览。 |
+| Zcode | 稳定 | SQLite 历史导入和统一浏览。 |
+| CC Mirror | 当前 main | Claude 兼容的项目历史。 |
+| Antigravity | 当前 main | 当前与旧版本地 transcript 路径。 |
+| Grok / Factory | 当前 main | Grok 和 Factory/Droid 根目录下的 JSONL 历史。 |
+| Pi | 当前 main | 本地 Agent session 历史。 |
+| Kimi Code | 当前 main | 本地 `wire.jsonl` 历史。 |
+| Hermes | 当前 main | 本地 JSON session 历史。 |
 
-读取 `~/.claude/projects/`、`~/.codex/sessions/`、`~/.cursor/projects/`、`~/.local/share/opencode/opencode.db` 和 `~/.zcode/cli/db/db.sqlite`——在一个界面浏览和恢复五个工具的所有 session。
+“可发现”不代表所有来源都提供相同元数据。Swob 会保留来源限制，不会捏造缺失的 token、血统或 resume 命令。
 
-### Token 洞察仪表盘
+## 与同类项目的能力对照
 
-- 5 个统计卡片：总 token、session 数、对话轮次、活跃天数、预估时间
-- 365 天贡献热力图（像 GitHub，但是看你的 AI 使用量）
-- 来源环形图（Claude Code / Codex / Cursor / OpenCode / Zcode）
-- 模型使用分布
-- 项目 token 消耗排行
-- 30 天日趋势图
+依据 2026-07-21 各项目公开 README。`✅` = 明确记录；`◐` = 相邻或部分能力；`—` = 官方 README 未记录为当前能力。这是能力地图，不是质量排名。
 
-### 一键续写
-
-点击任意 session 即可在 Terminal 或 iTerm2 中恢复。支持批量续写整个文件夹。自动保留工作目录和 `--dangerously-skip-permissions` 模式。也支持 Codex（`codex resume`）和 Cursor（`cursor agent --resume`）。
-
-### SSH 远程续写
-
-配置 SSH 连接，直接从应用中续写远程服务器上的 session。
-
-### CLI — `swob`
-
-```bash
-swob search "认证 bug"           # 模糊搜索 session
-swob list --source codex        # 按来源过滤
-swob resume <id>                # 获取续写命令
-swob insights                   # token 使用统计
-swob active                     # 显示运行中的 session
-swob install                    # 安装 CLI + Agent Skill
-```
-
-所有命令输出 JSON。`swob install` 还会安装一个 Claude Code Skill，让 Claude 在对话中可以调用 `swob` 作为工具。
-
-### 会话整理
-
-树形侧边栏，嵌套文件夹、拖拽排序、自定义标题。三种视图：精简（隐藏工具噪音）、完整（全部展示）、Markdown（干净导出）。
-
-### 高亮与笔记
-
-选中任意文本标注为书签。所有高亮汇总在右侧边栏，支持点击跳回——跨 session 的个人知识足迹。
-
-### 元数据侧边栏
-
-每个 session 展示：创建/更新时间、对话轮次、token 用量（input/output/cache）、工具调用统计、skill 调用记录、文件操作树、引用文件列表、预估活跃时间。
-
-### iCloud 备份
-
-Session 自动备份到 `~/Documents/Swob/`，生成可读的 Markdown 转录。iCloud 占位符文件自动检测并按需下载。
-
-### 活跃会话检测
-
-绿点标记正在运行的 session。通过 `ps` 轮询（1s 间隔）和文件变化监听器检测。
-
-### 拖拽导出
-
-每个 session 自动导出为 Markdown。拖到其他应用（Finder、备忘录、另一个 Claude Code 对话）即可跨会话传递上下文。
-
-### 双语界面
-
-完整支持中文（zh-CN）和英文。
-
----
+| 能力 | Swob 当前 `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
+|---|---|---|---|---|
+| 本地多 harness 历史 | ✅ 11 个来源家族 | ✅ 9 个 provider | ✅ 9+ 个 Agent | ✅ 9 个工具 |
+| 可视化会话血统图 | ✅ 验证边 + 分组边 | ◐ Session Board，不是血统图 | — | ◐ 会规范化子会话，未记录血统图 |
+| Compact 历史恢复 | ✅ Claude Code | — | — | — |
+| 执行树 / Agent 调用解剖 | ✅ | ◐ 工具渲染 | ◐ 工具/输出导航 | ◐ 工具混合与子会话 |
+| 上下文压力检查 | ✅ 逐轮类别 + compact 边界 | ◐ token 分析 | ◐ 配额与 session runway | ✅ session context/cache 分析 |
+| 带来源标记的健康审计 | ✅ | — | ◐ 配额状态强调无法验证时不猜 | — |
+| 本地全文搜索 | ✅ SQLite FTS5 | ✅ | ✅ 本地索引 | ✅ SQLite FTS5 |
+| 回到来源 CLI 续写 | ✅ 来源支持时 | ◐ 按 session 打开/定位 | ✅ 支持的 CLI | ✅ 来源支持时 |
+| Headless / 浏览器模式 | — | ✅ | — | ✅ |
 
 ## 安装
 
-从 [**Releases**](https://github.com/IvyYang1999/swob/releases) 下载最新的 `.dmg`。
+### 稳定版 v1.2.0
 
-> **未签名版本说明：** Swob 尚未做 Apple 公证。如果 macOS 提示应用「已损坏或无法打开」，运行：
+| Mac | 直接下载 |
+|---|---|
+| Apple Silicon（`arm64`） | [下载 `swob-1.2.0-arm64.dmg`](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) |
+| Intel（`x64`） | [下载 `swob-1.2.0-x64.dmg`](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) |
+
+**系统要求：** Apple Silicon 或 Intel Mac。
+
+> [!WARNING]
+> 公开的 v1.2.0 DMG **尚未签名或公证**。签名流水线已通过隔离 smoke test，但公开发行版仍未更新。如果 Gatekeeper 提示 Swob 已损坏或无法打开，请先确认安装包来自本仓库，再运行：
+>
 > ```bash
 > xattr -cr /Applications/Swob.app
 > ```
-> 从 v1.2.0 起，Swob 会在应用内提示并直接安装更新，不用再回来手动下载。
 
-或从源码构建：
+### 当前 `main`
 
 ```bash
 git clone https://github.com/IvyYang1999/swob.git
 cd swob
-npm install
-npm run dev          # 开发模式（热重载）
-npm run build:mac    # 在 dist/ 生成 .dmg
+npm ci
+npm run dev
 ```
 
-**系统要求：** macOS（Apple Silicon 或 Intel）· 已安装 Claude Code
+构建本地 DMG：
 
----
+```bash
+npm run build:mac
+```
+
+## CLI
+
+```bash
+swob search "认证回归"             # 本地跨会话搜索
+swob list --source codex          # 按来源过滤
+swob resume <session-id>          # 输出来源感知的 resume 命令
+swob insights                     # 聚合本地使用数据
+swob active                       # 查看运行中的 session
+swob install                      # 安装 CLI + Agent Skill
+```
+
+CLI 统一返回 JSON，其他 Agent 不需要抓取界面就能查询 Swob。
+
+## 隐私与安全
+
+- 核心浏览、索引、血统、审计和 Quick Report 均在本地计算。
+- 在核验过的当前源码中，没有产品分析或上传 session 的遥测。
+- 启动时的更新检查会访问发布服务，但不发送 session 内容。
+- 可选 AI Insights 只在明确确认后发送有限的真实 session 样本。
+- 当前 `main` 把 API 凭据保存在本地 Swob Library 配置中，**Swob 尚未对其加密**。
+- SSH resume 和终端 resume 只访问用户明确配置或触发的目标。
+
+完整边界见 [PRIVACY.md](PRIVACY.md)。漏洞请按 [SECURITY.md](SECURITY.md) 私下报告，不要把 transcript 或凭据贴进公开 issue。
+
+## 稳定版与下一版
+
+| 通道 | 内容 |
+|---|---|
+| **Stable v1.2.0** | 五来源浏览、血统检测/注册表、compact 展开、搜索、Token Insights、CLI、备份/导出和 resume。公开 DMG 未签名。 |
+| **当前 `main` / 下一版** | 新增 11 harness 导入、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5，以及 watcher/worker 性能升级。现在可从源码构建。 |
 
 ## 技术栈
 
-Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · Recharts · electron-vite
+Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · SQLite FTS5 · Recharts · electron-vite
 
----
+## 参与贡献
 
-## 相关项目
-
-- [claude --resume](https://docs.anthropic.com/en/docs/claude-code) — 内置 session 恢复（仅限最近的 session）
-- [CC Switch](https://github.com/farion1231/cc-switch) — AI CLI 工具的供应商和配置管理器
-- [awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code) — Claude Code 工具合集
-
----
+欢迎 issue 和 PR。分享 fixture 或截图前，请移除 transcript 内容、绝对路径、凭据、cookie 与设备标识。安全问题遵循 [SECURITY.md](SECURITY.md)。
 
 ## 许可证
 
-[AGPL-3.0](LICENSE)
+[AGPL-3.0-only](LICENSE)。如果你分发修改版或提供可通过网络访问的修改版，请自行核对 AGPL 对应义务。

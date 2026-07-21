@@ -1,177 +1,186 @@
 <div align="center">
 
-<img src="docs/banner.png" alt="Swob" width="100%" />
+<img src="site/assets/favicon.svg" alt="Swob" width="72" height="72" />
 
-<p>
-  <a href="README.md">English</a> | <a href="README.zh.md">中文</a> | <a href="README.ja.md">日本語</a> | <a href="CHANGELOG.md">更新履歴</a>
-</p>
+# Swob
 
-<p>
-  <img src="https://img.shields.io/badge/バージョン-1.2.0-blue" alt="バージョン" />
-  <img src="https://img.shields.io/badge/プラットフォーム-macOS-lightgrey" alt="プラットフォーム" />
-  <img src="https://img.shields.io/badge/製作-Electron-47848F" alt="Electron製" />
-  <img src="https://img.shields.io/github/downloads/IvyYang1999/swob/total" alt="ダウンロード数" />
-  <img src="https://img.shields.io/badge/ライセンス-AGPL--3.0-green" alt="ライセンス" />
-</p>
+### AI 会話のための git graph
 
-<h3>AI 会話のための git graph</h3>
+**失われたコンテキストを復元し、fork と compact を追跡し、Agent が実際に何をしたかをデバッグします。**
 
-<p>
-  <strong>Claude Code</strong>・<strong>Codex</strong>・<strong>Cursor</strong>・<strong>OpenCode</strong>・<strong>Zcode</strong> の無料オープンソースセッションマネージャー。<br/>
-  セッションの fork と resume の系譜を追跡。compact で畳まれた履歴を展開。横断検索。ワンクリックで再開。<br/>
-  100% ローカル — 会話がマシンの外に出ることはない。
-</p>
+Swob は **11 種類の AI コーディング harness** のローカル履歴を読み取り、セッション系譜を再構築し、SQLite FTS5 で全メッセージを索引化します。さらに実行ツリー、コンテキスト検査、provenance 付き監査、任意の AI Insights を提供します。
 
-<p>
-  <a href="https://ivyyang1999.github.io/swob/"><strong>ランディングページ</strong></a> · <a href="https://github.com/IvyYang1999/swob/releases"><strong>ダウンロード</strong></a>
-</p>
+[Web サイト](https://ivyyang1999.github.io/swob/) · [Apple Silicon DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) · [Intel DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) · [更新履歴](CHANGELOG.md)
+
+[English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
+
+![最新安定版](https://img.shields.io/github/v/release/IvyYang1999/swob?label=stable)
+![プラットフォーム](https://img.shields.io/badge/platform-macOS-2d2d30)
+![ビルド](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
+![ダウンロード](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
+![ライセンス](https://img.shields.io/badge/license-AGPL--3.0-5b4fc4)
 
 </div>
 
-<br/>
+> [!IMPORTANT]
+> **製品チャンネルを明確に分けています。** 以下のスクリーンショットとデバッガー機能は、匿名化デモデータを使った現在の `main` の実画面です。公開中の **v1.2.0 安定版 DMG には、Session Galaxy、11-harness 取り込み、Session Debugger、AI Insights、SQLite FTS5 はまだ含まれていません**。今すぐ試す場合は `main` をソースからビルドしてください。次回リリースに搭載予定です。
 
-<p align="center">
-  <img src="docs/screenshot.png" alt="Swob メイン画面" width="800" />
-</p>
+![Swob Session Galaxy — 現在の main と匿名化デモデータ](site/assets/graph-view.png)
 
----
+<p align="center"><sub>現在の <code>main</code> · 実際の Swob UI · 匿名化デモデータ · 生成された製品モックではありません</sub></p>
 
-> **253 / 1,621** — 実際のユーザーのセッション履歴から：253セッション（15.6%）が Claude Code のデフォルト30日クリーンアップポリシー（`cleanupPeriodDays`）によって削除済み。Swob がバックアップしていたおかげで生き残った。公式ツールがあなたの会話を削除している — 気づいていないかもしれない。
+## Swob が必要な理由
 
----
+AI コーディングセッションは独立したチャットファイルではありません。resume は別ファイルを作り、fork は作業を分岐させ、compact は以前の文脈を要約に置き換えます。各 Agent は同じ種類の作業を別々の形式と場所に保存します。通常の Viewer は転記を開けても、その由来や Agent が文脈を失った理由までは説明できません。
 
-## 問題
+Swob はセッション履歴を証拠として扱います。
 
-Claude Code で `~` ディレクトリから何ヶ月も vibe-code してきた。200以上のセッションが整理されないまま山積み。半分は compact されて、元の会話は消え、サマリーだけが残っている。内蔵の `/resume` は最近のセッションしか表示しない。あの厄介なバグを解決した会話を見つけたい？幸運を祈る。
+- **系譜を追跡** — 対話型の力指向 Session Galaxy で、検証済みの fork / continuation 関係をたどります。
+- **コンテキストを復元** — Claude Code の compact 前の内容を展開し、元ファイル消失後もローカルバックアップを保持します。
+- **実行をデバッグ** — tool / sub-agent 呼び出し、コンテキスト圧力、compact 境界、遅延、framework overhead、エラー、反パターンを調べます。
+- **全履歴を検索** — SQLite FTS5 がローカルメッセージを増分索引化し、検索ごとの全走査を避けます。
+- **安全に再開** — 対応 CLI へ正しい session ID と作業ディレクトリで戻り、source-aware な検証を行います。
 
-## 解決策
+## 見栄えの数字ではなく、検証可能な根拠
 
-Swob は Claude Code・Codex・Cursor・OpenCode・Zcode がディスクに保存するセッションファイルを読み取る。すべてのセッションを解析し、**セッション同士の関係 — fork・resume・続き — を検出**し、compact で畳まれた履歴をその場で展開して、検索・整理可能なインターフェースで表示する。
+| 監査結果 | 意味 |
+|---|---|
+| **253 / 1,621** | ある実運用 Library の監査で、Claude Code の 253 セッションが既定の 30 日保持ポリシーにより元の保存先から消失していましたが、Swob のローカルバックアップには残っていました。 |
+| **93.58%** | 同じ 1,621 セッション・5 ソースの監査 corpus で確認できた再開可能率です。全環境への成功保証ではありません。 |
+| **1,704 sessions** | 新しい索引とダッシュボードの検証に使う現在のローカル性能/UI corpus です。 |
+| **11 harnesses** | 現在の `main` が検出できる 11 のソースファミリーです。解析深度と resume 対応は、各ソースの記録内容と CLI 機能に依存します。 |
 
-データは 100% ローカルに留まる。Swob は何もアップロードしない。AGPL-3.0 の無料オープンソース。
+## Session Galaxy
 
----
+現在のグラフは実装済みの Canvas ベース力指向ビューです。検証済み系譜エッジと、弱い project/source/time グループを区別し、pan、zoom、inspect、open ができます。以前の PixiJS プロトタイプは追加検証のため意図的に戻されました。Swob は**現時点で WebGL レンダリングをうたっていません**。
 
-## 主要機能
+## Session Debugger
 
-### セッション血統 — どのセッションがどこから来たか
+Swob は transcript 表示だけではありません。
 
-AI セッションは 1 つのファイルに収まらない：resume すると新しいファイルが生まれ、fork で会話が分裂し、compact はサマリーを新しい開始点につなぐ。Swob はこれらの関係 — fork エッジ・続きエッジ・複数ファイル resume — を正確に検出し、ディスク上の血統レジストリを維持する。`git log --graph` のセッション版。（血統ツリーの可視化はロードマップ上。）
+- **Execution Tree** — turn、tool call、sub-agent、エラー、所要時間、累積 token を再構築します。
+- **Context Inspector** — user、assistant、tool input/output、system injection、thinking、image、compact に分類し、compact 境界と圧力警告を示します。
+- **Session Audit** — 調査/編集比、thinking 根拠、遅延、推定コスト、framework overhead、セッション種別、モデル、tool 効率、中断、目標長、反パターン、frustration signal の 12 次元を監査します。
+- **Provenance 表示** — 各指標を `reported`、`estimated`、`unavailable` として明示し、欠けた証拠を事実のように扱いません。
 
-### Compact された会話の展開
+| Session Audit | Execution Tree + Context Inspector |
+|---|---|
+| ![現在の Swob main の Session Audit](site/assets/session-audit.png) | ![現在の Swob main の Execution Tree と Context Inspector](site/assets/session-debugger.png) |
 
-Claude Code はコンテキストを節約するために会話を圧縮する — モデルは忘れても、元のメッセージは JSONL ファイルに残っている。Swob はすべての compact ブロックをインライン表示し、ワンクリックでその場に展開できる。生の JSONL を掘る必要はない。
+## 全セッション Insights
 
-### Spotlight セッションジャンプ — `⌘⇧K`
+ローカルダッシュボードには token / cost 集計、365 日ヒートマップ、source / model / project 分布、時間帯と turn 分布、tool 利用、コード変更数、監査レポートがあります。
 
-グローバルホットキーで Spotlight 風の検索ウィンドウを表示。コンテンツ、プロジェクト名、フォルダ、時間（`today`、`yesterday`、`this week`）でファジー検索。ソース（`claude`、`codex`、`cursor`）でフィルタリング。ウィンドウを切り替えずに1秒以内で任意のセッションにジャンプ。
+**AI Insights は任意で、設定するまで無効です。** 明示的に実行したときだけ、集計指標と上限付きの実ユーザーメッセージサンプルを、ユーザーが設定したプロバイダーへ送信します。有効化前に [PRIVACY.md](PRIVACY.md) を確認してください。
 
-### 全文検索 — `⌘K`
+![現在の main の Swob Insights ダッシュボード](site/assets/insights-dashboard.png)
 
-全セッションを一括検索。マッチした内容は折りたたまれた compact セクション内でも自動展開されるので、compact されたものでも見つかる。セッション内検索（`⌘F`）は正規表現対応。
+## 現在の `main` が読むソース
 
-### マルチソース：Claude Code + Codex + Cursor + OpenCode + Zcode
+| ソースファミリー | ローカル履歴検出 | 備考 |
+|---|---:|---|
+| Claude Code | Stable | 系譜、compact 復元、バックアップ、監査、resume が最も充実。 |
+| Codex | Stable | ローカル rollout 解析、検索、Insights、resume。 |
+| Cursor | Stable | ローカル Agent 履歴、検索、Insights。CLI が対応する場合に resume。 |
+| OpenCode | Stable | SQLite 履歴の取り込みと統一表示。 |
+| Zcode | Stable | SQLite 履歴の取り込みと統一表示。 |
+| CC Mirror | Current main | Claude 互換の project 履歴。 |
+| Antigravity | Current main | 現行および旧ローカル transcript root。 |
+| Grok / Factory | Current main | Grok と Factory/Droid の JSONL 履歴。 |
+| Pi | Current main | ローカル Agent session 履歴。 |
+| Kimi Code | Current main | ローカル `wire.jsonl` 履歴。 |
+| Hermes | Current main | ローカル JSON session 履歴。 |
 
-`~/.claude/projects/`、`~/.codex/sessions/`、`~/.cursor/projects/`、`~/.local/share/opencode/opencode.db`、`~/.zcode/cli/db/db.sqlite` を読み取り — 5つのツールのすべてのセッションを一か所で閲覧・再開。
+「検出可能」は、すべてのソースが同じメタデータを提供するという意味ではありません。Swob はソースの限界を残し、存在しない token、系譜、resume command を捏造しません。
 
-### トークンインサイトダッシュボード
+## 類似プロジェクトとの機能比較
 
-- 5つの統計カード：総トークン、セッション数、ターン数、アクティブ日数、推定時間
-- 365日コントリビューションヒートマップ（GitHub のように、AI 使用量を可視化）
-- ソース別ドーナツチャート（Claude Code / Codex / Cursor / OpenCode / Zcode）
-- モデル使用内訳
-- プロジェクト別トークン消費ランキング
-- 30日間デイリートレンドチャート
+2026-07-21 時点の各公式 README に基づきます。`✅` = 明記、`◐` = 隣接または部分機能、`—` = 現行機能として記載なし。品質順位ではなく機能地図です。
 
-### ワンクリック再開
-
-任意のセッションをクリックして Terminal または iTerm2 で再開。フォルダ全体の一括再開も可能。作業ディレクトリと `--dangerously-skip-permissions` モードを自動保持。Codex（`codex resume`）と Cursor（`cursor agent --resume`）にも対応。
-
-### SSH リモート再開
-
-SSH 接続を設定し、アプリから直接リモートサーバー上のセッションを再開。
-
-### CLI — `swob`
-
-```bash
-swob search "認証バグ"           # ファジー検索
-swob list --source codex        # ソース別フィルタ
-swob resume <id>                # 再開コマンド取得
-swob insights                   # トークン使用統計
-swob active                     # 実行中のセッション表示
-swob install                    # CLI + Agent Skill インストール
-```
-
-すべてのコマンドは JSON を出力。`swob install` は Claude Code Skill もインストールし、会話中に Claude が `swob` をツールとして呼び出せるようになる。
-
-### セッション整理
-
-ネストフォルダ、ドラッグ＆ドロップ、カスタムタイトル対応のツリービューサイドバー。3つの表示モード：コンパクト（ツールノイズを非表示）、フル（すべて表示）、Markdown（クリーンなエクスポート）。
-
-### ハイライト＆メモ
-
-任意のテキストを選択してブックマーク。すべてのハイライトは右サイドバーに集約され、クリックで元の位置にジャンプバック — セッションを横断する個人ナレッジトレイル。
-
-### メタデータサイドバー
-
-各セッション表示：作成/更新日時、ターン数、トークン使用量（input/output/cache）、ツール呼び出し統計、Skill 呼び出し記録、ファイル操作ツリー、参照ファイルリスト、推定アクティブ時間。
-
-### iCloud バックアップ
-
-セッションは `~/Documents/Swob/` に可読な Markdown トランスクリプト付きで自動バックアップ。iCloud プレースホルダーファイルを自動検出し、必要に応じてダウンロード。
-
-### アクティブセッション検出
-
-緑のドットで実行中のセッションを表示。`ps` ポーリング（1秒間隔）とファイル変更ウォッチャーで検出。
-
-### ドラッグエクスポート
-
-各セッションは自動的に Markdown としてエクスポート。他のアプリ（Finder、メモ、別の Claude Code セッション）にドラッグして会話間でコンテキストを受け渡し。
-
-### バイリンガル UI
-
-中国語（zh-CN）と英語を完全サポート。
-
----
+| 機能 | Swob 現在の `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
+|---|---|---|---|---|
+| ローカル multi-harness 履歴 | ✅ 11 source families | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
+| 可視化 session lineage graph | ✅ 検証エッジ + grouping edge | ◐ Session Board、lineage ではない | — | ◐ child session 正規化、lineage graph の記載なし |
+| Compact 履歴復元 | ✅ Claude Code | — | — | — |
+| Execution tree / Agent call 分析 | ✅ | ◐ tool rendering | ◐ tool/output navigation | ◐ tool-call mix と child session |
+| Context pressure inspector | ✅ turn 別カテゴリ + compact 境界 | ◐ token analytics | ◐ quota / session runway | ✅ session context/cache analytics |
+| Provenance 付き health audit | ✅ | — | ◐ 検証不能な quota 状態を明示 | — |
+| ローカル全文検索 | ✅ SQLite FTS5 | ✅ | ✅ local index | ✅ SQLite FTS5 |
+| 元 CLI で resume | ✅ 対応ソース | ◐ session を開く/フォーカス | ✅ 対応 CLI | ✅ 対応ソース |
+| Headless / browser mode | — | ✅ | — | ✅ |
 
 ## インストール
 
-[**Releases**](https://github.com/IvyYang1999/swob/releases) から最新の `.dmg` をダウンロード。
+### 安定版 v1.2.0
 
-> **未署名ビルドについて：** Swob はまだ Apple の公証を受けていない。macOS が「壊れているため開けません」と表示する場合は次を実行：
+| Mac | 直接ダウンロード |
+|---|---|
+| Apple Silicon（`arm64`） | [`swob-1.2.0-arm64.dmg` をダウンロード](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) |
+| Intel（`x64`） | [`swob-1.2.0-x64.dmg` をダウンロード](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) |
+
+**動作環境：** Apple Silicon または Intel の macOS。
+
+> [!WARNING]
+> 公開中の v1.2.0 DMG は**署名・公証されていません**。署名パイプラインの隔離 smoke test は成功しましたが、署名済み公開リリースはまだありません。Gatekeeper が破損または開けないと表示した場合は、本リポジトリからのダウンロードであることを確認してから実行してください。
+>
 > ```bash
 > xattr -cr /Applications/Swob.app
 > ```
-> v1.2.0 からはアプリ内で更新を確認・インストールできる。
 
-またはソースからビルド：
+### 現在の `main`
 
 ```bash
 git clone https://github.com/IvyYang1999/swob.git
 cd swob
-npm install
-npm run dev          # 開発モード（ホットリロード）
-npm run build:mac    # dist/ に .dmg を生成
+npm ci
+npm run dev
 ```
 
-**動作環境：** macOS（Apple Silicon または Intel）· Claude Code インストール済み
+ローカル DMG を作る場合：
 
----
+```bash
+npm run build:mac
+```
+
+## CLI
+
+```bash
+swob search "auth regression"    # ローカル横断検索
+swob list --source codex         # source フィルター
+swob resume <session-id>         # source-aware resume command
+swob insights                    # ローカル利用集計
+swob active                      # 実行中 session
+swob install                     # CLI + Agent Skill
+```
+
+CLI は JSON を返すため、他の Agent は UI をスクレイピングせず Swob を利用できます。
+
+## プライバシーとセキュリティ
+
+- 基本の閲覧、索引、系譜、監査、Quick Report はローカルで計算します。
+- 確認済みの現在のソースには、製品 analytics や session upload telemetry はありません。
+- 起動時の更新確認はリリースサービスへ接続しますが、session 内容は送信しません。
+- 任意の AI Insights は、明示確認後に限られた実 session サンプルを送ります。
+- 現在の `main` では API credential をローカル Swob Library 設定に保存し、**Swob 自身では暗号化していません**。
+- SSH resume と terminal resume は、ユーザーが明示的に設定・実行した宛先だけに接続します。
+
+完全な境界は [PRIVACY.md](PRIVACY.md) を参照してください。脆弱性は [SECURITY.md](SECURITY.md) に従って非公開で報告し、公開 issue に transcript や credential を貼らないでください。
+
+## Stable と Next
+
+| チャンネル | 内容 |
+|---|---|
+| **Stable v1.2.0** | 5 ソース閲覧、系譜検出/registry、compact 展開、検索、Token Insights、CLI、バックアップ/エクスポート、resume。公開 DMG は未署名。 |
+| **現在の `main` / 次回リリース** | 11-harness 取り込み、Session Galaxy、Execution Tree、Context Inspector、Session Audit、任意 AI Insights、SQLite FTS5、watcher/worker 性能改善。現在はソースビルド。 |
 
 ## 技術スタック
 
-Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · Recharts · electron-vite
+Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · SQLite FTS5 · Recharts · electron-vite
 
----
+## コントリビュート
 
-## 関連プロジェクト
-
-- [claude --resume](https://docs.anthropic.com/en/docs/claude-code) — 内蔵セッション再開（最近のセッションのみ）
-- [CC Switch](https://github.com/farion1231/cc-switch) — AI CLI ツールのプロバイダー＆設定マネージャー
-- [awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code) — Claude Code ツール集
-
----
+Issue と PR を歓迎します。fixture やスクリーンショットを共有する前に、transcript 本文、絶対パス、credential、cookie、端末識別子を削除してください。セキュリティ報告は [SECURITY.md](SECURITY.md) に従ってください。
 
 ## ライセンス
 
-[AGPL-3.0](LICENSE)
+[AGPL-3.0-only](LICENSE)。変更版を配布、またはネットワーク越しに提供する場合は、該当する AGPL 義務を確認してください。

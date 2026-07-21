@@ -67,6 +67,15 @@ const api = {
   librarySelectDirectory: () => ipcRenderer.invoke('library:selectDirectory'),
   libraryChangePath: (newPath: string) => ipcRenderer.invoke('library:changePath', newPath),
 
+  // Vault migration
+  vaultMigrate: (targetPath: string) => ipcRenderer.invoke('vault:migrate', targetPath),
+  vaultSelectMigrationTarget: () => ipcRenderer.invoke('vault:selectMigrationTarget'),
+  onVaultMigrateProgress: (callback: (progress: { phase: string; copied: number; total: number }) => void) => {
+    const listener = (_event: unknown, progress: { phase: string; copied: number; total: number }) => callback(progress)
+    ipcRenderer.on('vault:migrateProgress', listener)
+    return () => ipcRenderer.removeListener('vault:migrateProgress', listener)
+  },
+
   // Onboarding
   onboardingGetState: () => ipcRenderer.invoke('onboarding:getState'),
   onboardingComplete: (libraryPath: string, excludedSources: string[]) =>

@@ -13,6 +13,7 @@ import {
 import { SshConfigModal } from './SshConfigModal'
 import { resolveResumeCwd } from '../utils/chat-helpers'
 import { OrganizerPanel } from './OrganizerPanel'
+import { VaultLocationModal } from './VaultLocationModal'
 
 function formatDate(iso: string, locale: string, t: (key: string, params?: Record<string, string | number>) => string): string {
   const d = new Date(iso)
@@ -909,37 +910,11 @@ function SidebarFooter({ sessionCount, totalBytes, onOrganize, onNewFolder, onUn
 }) {
   const t = useT()
   const [libraryPath, setLibraryPath] = useState<string>('')
-  const { showToast } = useStore()
+  const [locationModalOpen, setLocationModalOpen] = useState(false)
 
   useEffect(() => {
     (window.api as any).libraryGetConfiguredPath?.().then((p: string) => setLibraryPath(p))
   }, [])
-
-  async function handleChangeLibraryPath() {
-    const selected = await (window.api as any).librarySelectDirectory?.()
-    if (!selected) return
-
-    if (selected === libraryPath) {
-      showToast('已经是当前 Library 路径', 'info')
-      return
-    }
-
-    const isExisting = await (window.api as any).libraryIsInitialized?.(selected)
-
-    const confirmMsg = isExisting
-      ? `切换到已有 Library:\n${selected}\n\n原路径下的文件夹和会话将不再显示。`
-      : `在此位置创建新 Library:\n${selected}\n\n原路径下的文件夹和会话将不再显示。`
-
-    if (!window.confirm(confirmMsg)) return
-
-    showToast(isExisting ? '正在打开已有 Library...' : '正在创建新 Library...', 'info')
-
-    const newRoot = await (window.api as any).libraryChangePath?.(selected)
-    if (newRoot) {
-      setLibraryPath(newRoot)
-      showToast('Library 路径已切换', 'success')
-    }
-  }
 
   const shortPath = libraryPath.replace(/^\/Users\/[^/]+/, '~')
 
@@ -970,12 +945,19 @@ function SidebarFooter({ sessionCount, totalBytes, onOrganize, onNewFolder, onUn
       {libraryPath && (
         <div
           className="px-2 pb-1.5 flex items-center gap-1 cursor-pointer hover:text-secondary truncate"
-          onClick={handleChangeLibraryPath}
-          title={`Library: ${libraryPath}\n点击切换存储位置`}
+          onClick={() => setLocationModalOpen(true)}
+          title={`库位置: ${libraryPath}\n点击切换或迁移`}
         >
           <FolderIcon size={10} className="shrink-0" />
           <span className="truncate">{shortPath}</span>
         </div>
+      )}
+      {locationModalOpen && (
+        <VaultLocationModal
+          currentPath={libraryPath}
+          onClose={() => setLocationModalOpen(false)}
+          onPathChanged={setLibraryPath}
+        />
       )}
     </div>
   )

@@ -1836,6 +1836,43 @@ ipcMain.handle('library:changePath', async (_event, newPath: string) => {
   return activateLibraryAt(newPath)
 })
 
+// --- Vault migration ---
+
+let vaultMigrationRunning = false
+
+ipcMain.handle('vault:migrate', async (_event, targetPath: string) => {
+  if (vaultMigrationRunning) return { ok: false, error: '已有迁移在进行中' }
+  if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '目标位置无效' }
+  vaultMigrationRunning = true
+  try {
+    const sourceRoot = getLibraryRoot()
+    const { migrateVault } = await import('./vault-migrator')
+    const result = migrateVault(sourceRoot, targetPath, (progress) => {
+      mainWindow?.webContents.send('vault:migrateProgress', progress)
+    })
+    if (!result.ok) return result
+    // Copy verified — point the app at the new home and reindex.
+    await activateLibraryAt(targetPath)
+    return { ...result, newRoot: getLibraryRoot() }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    vaultMigrationRunning = false
+  }
+})
+
+ipcMain.handle('vault:selectMigrationTarget', async () => {
+  if (!mainWindow) return null
+  const { dialog } = require('electron')
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择迁移目标位置（须为空文件夹）',
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: '迁移到这里'
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
 // --- First-run onboarding ---
 
 ipcMain.handle('onboarding:getState', () => {

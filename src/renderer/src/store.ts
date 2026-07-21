@@ -43,6 +43,12 @@ interface SessionSummary {
   userImages?: string[]
   pastedImageCount?: number
   tokenUsage?: { inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number }
+  tokenAccounting?: {
+    provenance: 'reported' | 'derived' | 'estimated' | 'unavailable'
+    billingTotal: number | null
+    conversationOnly: number | null
+    unavailableReason?: string
+  }
   referencedFiles?: Array<{ path: string; actions: string[]; exists: boolean }>
   configFiles?: string[]
   libraryDirPath?: string

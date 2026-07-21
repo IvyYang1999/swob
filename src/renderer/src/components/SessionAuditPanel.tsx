@@ -30,7 +30,11 @@ interface SessionAuditResult {
   thinkingDepth: AuditMetric<{ avgSignatureLength: number; redactedCount: number; totalBlocks: number }>
   latencyStats: AuditMetric<{ p50: number; p95: number; max: number }>
   estimatedCost: AuditMetric<{ inputCost: number; outputCost: number; totalCost: number; currency: string }>
-  frameworkOverhead: AuditMetric<{ frameworkTokens: number; totalTokens: number; percentage: number }>
+  visibleFrameworkMarkers: AuditMetric<{
+    estimatedMarkerTokens: number
+    estimatedVisibleUserTokens: number
+    shareOfVisibleUserText: number
+  }>
   antiPatterns: Array<{ type: string; turnIndex: number; detail: string; evidence: AuditEvidence[] }>
   frustrationSignals: Array<{ type: string; turnIndex: number; text: string; evidence: AuditEvidence[] }>
   sessionType: string
@@ -107,7 +111,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
     { label: locale === 'zh-CN' ? 'Thinking 代理' : 'Thinking Proxy', metric: audit.thinkingDepth },
     { label: locale === 'zh-CN' ? '响应延迟' : 'Response Latency', metric: audit.latencyStats },
     { label: locale === 'zh-CN' ? '成本估算' : 'Cost Estimate', metric: audit.estimatedCost },
-    { label: locale === 'zh-CN' ? '框架开销' : 'Framework Overhead', metric: audit.frameworkOverhead }
+    { label: locale === 'zh-CN' ? '可见框架标记' : 'Visible Framework Markers', metric: audit.visibleFrameworkMarkers }
   ]
 
   return (
@@ -169,10 +173,10 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
               />
             )}
             <MetricRow
-              label={locale === 'zh-CN' ? '框架开销' : 'Framework Overhead'}
-              value={`${audit.frameworkOverhead.value.percentage.toFixed(0)}%`}
-              provenance={audit.frameworkOverhead.provenance}
-              health={audit.frameworkOverhead.value.percentage > 30 ? 'critical' : audit.frameworkOverhead.value.percentage > 15 ? 'degraded' : 'healthy'}
+              label={locale === 'zh-CN' ? '可见框架标记' : 'Visible Framework Markers'}
+              value={`≈${audit.visibleFrameworkMarkers.value.estimatedMarkerTokens.toLocaleString()}`}
+              unit={locale === 'zh-CN' ? 'tokens（非 API 上下文开销）' : 'tokens (not API context overhead)'}
+              provenance={audit.visibleFrameworkMarkers.provenance}
             />
           </div>
 

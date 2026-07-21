@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import {
-  findAllSessionFiles,
+  findClaudeSessionFiles,
   loadCachedClaudeLineageMetadata,
   parseSessionFile,
   resolvePhysicalSessionId,
@@ -145,7 +145,7 @@ export async function rebuildSessionLineageRegistry(
   libraryRoot: string,
   options: Omit<BuildOptions, 'libraryRoot'> = {}
 ): Promise<SessionLineageRegistry> {
-  const cached = await loadCachedClaudeLineageMetadata(findAllSessionFiles())
+  const cached = await loadCachedClaudeLineageMetadata(findClaudeSessionFiles())
   const registry = buildSessionLineageRegistryFromRecords(loadLineageRecordsFromCache(cached.files), {
     ...options,
     libraryRoot

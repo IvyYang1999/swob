@@ -4,6 +4,8 @@
  * The audit intentionally keeps observed facts separate from heuristics. Every
  * displayed metric carries line-addressable evidence and an explicit caveat;
  * the health score is a transparent heuristic, not an objective quality grade.
+ * Framework marker sizing measures visible marker text in user messages only —
+ * it is not API context overhead (t106 semantics).
  */
 import type { RawJsonlMessage } from './types'
 
@@ -92,7 +94,11 @@ export interface SessionAuditResult {
   turnLatencies: TurnLatency[]
   latencyStats: AuditMetric<{ p50: number; p95: number; max: number }>
   estimatedCost: AuditMetric<{ inputCost: number; outputCost: number; totalCost: number; currency: string }>
-  frameworkOverhead: AuditMetric<{ frameworkTokens: number; totalTokens: number; percentage: number }>
+  visibleFrameworkMarkers: AuditMetric<{
+    estimatedMarkerTokens: number
+    estimatedVisibleUserTokens: number
+    shareOfVisibleUserText: number
+  }>
 
   sessionType: SessionType
   modelUsage: ModelUsage[]
@@ -168,12 +174,20 @@ function extractText(content: unknown): string {
     .join('\n')
 }
 
+const FRAMEWORK_TAG_PATTERN = 'system-reminder|command-name|task-notification|local-command-[^>\\s]+|user-prompt-submit-hook'
+
+function extractVisibleFrameworkContent(text: string): string {
+  const paired = new RegExp(`<(${FRAMEWORK_TAG_PATTERN})[^>]*>[\\s\\S]*?<\\/\\1>`, 'gi')
+  const matches = text.match(paired)
+  if (matches) return matches.join('\n')
+  // Some harness rows persist only a marker/opening tag. Count that literal row,
+  // never the whole user message and never claim it represents hidden context.
+  const markerLines = new RegExp(`^.*<(?:${FRAMEWORK_TAG_PATTERN})[^>]*>.*$`, 'gim')
+  return (text.match(markerLines) || []).join('\n')
+}
+
 function isFrameworkContent(text: string): boolean {
-  return text.includes('<system-reminder>') ||
-    text.includes('<command-name>') ||
-    text.includes('<task-notification>') ||
-    text.includes('<local-command-') ||
-    text.includes('<user-prompt-submit-hook>')
+  return extractVisibleFrameworkContent(text).length > 0
 }
 
 function estimateTokens(text: string): number {
@@ -216,8 +230,8 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
   const modelTurns: Record<string, { turns: number; input: number; output: number }> = {}
   let totalInputTokens = 0
   let totalOutputTokens = 0
-  let frameworkTokens = 0
-  let totalContentTokens = 0
+  let visibleFrameworkMarkerTokens = 0
+  let visibleUserTextTokens = 0
   let lastModel = ''
   let turnIndex = 0
   let userInterruptions = 0
@@ -290,17 +304,19 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
 
     if (message.type !== 'user') return
     const text = extractText(content)
-    if (isFrameworkContent(text)) {
-      frameworkTokens += estimateTokens(text)
+    // Visible marker estimate only. This does not observe the full request body.
+    const visibleFrameworkContent = extractVisibleFrameworkContent(text)
+    if (visibleFrameworkContent) {
+      visibleFrameworkMarkerTokens += estimateTokens(visibleFrameworkContent)
       frameworkEvidence.push(evidence(
         line,
         message,
         'user',
         'framework',
-        `framework-like content (${text.length} chars)`
+        `visible framework marker (${visibleFrameworkContent.length} chars)`
       ))
     }
-    totalContentTokens += estimateTokens(text)
+    visibleUserTextTokens += estimateTokens(text)
 
     if (Array.isArray(content)) {
       for (const part of content as unknown as Array<Record<string, unknown>>) {
@@ -426,7 +442,10 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
   const pricing = MODEL_PRICING[lastModel] || { input: 3, output: 15 }
   const inputCost = (totalInputTokens / 1_000_000) * pricing.input
   const outputCost = (totalOutputTokens / 1_000_000) * pricing.output
-  const frameworkPct = totalContentTokens > 0 ? (frameworkTokens / totalContentTokens) * 100 : 0
+  // Visible framework-marker share within user text. Never treat as context overhead.
+  const visibleMarkerShare = visibleUserTextTokens > 0
+    ? (visibleFrameworkMarkerTokens / visibleUserTextTokens) * 100
+    : 0
 
   const readPathCounts = new Map<string, number>()
   for (const read of recentReads) {
@@ -486,14 +505,6 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
       evidence: antiPatterns.flatMap((pattern) => pattern.evidence)
     })
   }
-  if (frameworkPct > 30) {
-    scoreFactors.push({
-      key: 'framework-overhead',
-      impact: -10,
-      detail: `Estimated framework overhead ${frameworkPct.toFixed(0)}%`,
-      evidence: frameworkEvidence
-    })
-  }
   if (redactedCount > totalBlocks * 0.5 && totalBlocks > 5) {
     scoreFactors.push({
       key: 'redacted-thinking',
@@ -513,7 +524,6 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
   if (readEditHealth === 'degraded') {
     findings.push(`Read:Edit ratio ${readEditRatio.toFixed(1)} — experimental heuristic band; excluded from score`)
   }
-  if (frameworkPct > 30) findings.push(`Estimated framework overhead ${frameworkPct.toFixed(0)}% — character-based proxy`)
   if (frustrationSignals.length > 3) findings.push(`${frustrationSignals.length} possible frustration signals detected`)
   if (antiPatterns.length > 0) findings.push(`${antiPatterns.length} heuristic tool anti-patterns detected`)
   if (redactedCount > 0) findings.push(`${redactedCount}/${totalBlocks} thinking blocks redacted; reasoning quality cannot be inferred`)
@@ -608,11 +618,15 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
       evidence: usageEvidence,
       caveat: 'Reported token counts multiplied by a bundled static price table; not an invoice or live price.'
     },
-    frameworkOverhead: {
-      value: { frameworkTokens, totalTokens: totalContentTokens, percentage: frameworkPct },
+    visibleFrameworkMarkers: {
+      value: {
+        estimatedMarkerTokens: visibleFrameworkMarkerTokens,
+        estimatedVisibleUserTokens: visibleUserTextTokens,
+        shareOfVisibleUserText: visibleMarkerShare
+      },
       provenance: 'estimated',
       evidence: frameworkEvidence,
-      caveat: 'Framework-like tags are detected textually and converted at four characters per token.'
+      caveat: 'Visible framework markers in user messages, four characters per token; not API context overhead.'
     },
     sessionType,
     modelUsage,

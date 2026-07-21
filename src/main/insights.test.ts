@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { buildInsights, estimateActiveTime } from './insights'
+import {
+  accountCodexUsage,
+  accountingFromMutuallyExclusiveUsage,
+  markExcludedFromRollups,
+  tokenUsageFromAccounting,
+  unavailableTokenAccounting
+} from './token-accounting'
 import type { SessionSummary, Folder } from './types'
 
 function makeSession(overrides: Partial<SessionSummary> = {}): SessionSummary {
@@ -56,8 +63,11 @@ describe('buildInsights', () => {
       expect(result.totalOutputTokens).toBe(0)
       expect(result.totalSessions).toBe(0)
       expect(result.totalTurns).toBe(0)
-      expect(result.bySource).toHaveLength(5)
-      expect(result.bySource.map((s) => s.source)).toEqual(['claude-code', 'codex', 'cursor', 'opencode', 'zcode'])
+      expect(result.bySource).toHaveLength(11)
+      expect(result.bySource.map((s) => s.source)).toEqual([
+        'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror',
+        'antigravity', 'grok', 'pi', 'kimi', 'hermes'
+      ])
       expect(result.bySource.every(s => s.totalTokens === 0)).toBe(true)
       expect(result.byProject).toHaveLength(0)
       expect(result.byFolder).toHaveLength(0)
@@ -87,8 +97,9 @@ describe('buildInsights', () => {
       expect(result.bySource[1].sessionCount).toBe(1)
 
       expect(result.bySource[2].source).toBe('cursor')
-      expect(result.bySource[2].totalTokens).toBe(450)
+      expect(result.bySource[2].totalTokens).toBe(0)
       expect(result.bySource[2].sessionCount).toBe(1)
+      expect(result.bySource[2].tokenDataStatus).toBe('unavailable')
     })
 
     it('bySource 固定顺序: claude-code, codex, cursor', () => {
@@ -330,6 +341,57 @@ describe('buildInsights', () => {
       expect(result.totalOutputTokens).toBe(1500)
       expect(result.totalTokens).toBe(4500)
       expect(result.totalSessions).toBe(2)
+    })
+
+    it('【回归】cache 口径互斥、unavailable 不作零值，且 global/project/session 严格对账', () => {
+      const claudeAccounting = accountingFromMutuallyExclusiveUsage('claude-code', {
+        inputTokens: 100,
+        cacheReadTokens: 20,
+        cacheCreationTokens: 10,
+        outputTokens: 50
+      })
+      const codexAccounting = accountCodexUsage([{
+        kind: 'incremental', inputTokens: 1_000, cachedInputTokens: 600, outputTokens: 100, dedupHint: 'turn-1'
+      }])
+      const cursorAccounting = unavailableTokenAccounting('cursor', 'fixture has no authoritative usage')
+      const syntheticAccounting = markExcludedFromRollups(claudeAccounting)
+      const sessions = [
+        makeSession({
+          sessionId: 'claude', cwds: ['/a/project-a'], tokenAccounting: claudeAccounting,
+          tokenUsage: tokenUsageFromAccounting(claudeAccounting)
+        }),
+        makeSession({
+          sessionId: 'codex', source: 'codex', cwds: ['/a/project-b'], tokenAccounting: codexAccounting,
+          tokenUsage: tokenUsageFromAccounting(codexAccounting)
+        }),
+        makeSession({
+          sessionId: 'cursor', source: 'cursor', cwds: ['/a/project-c'], tokenAccounting: cursorAccounting,
+          tokenUsage: tokenUsageFromAccounting(cursorAccounting)
+        }),
+        makeSession({
+          sessionId: 'synthetic', branchLeafUuid: 'leaf', tokenAccounting: syntheticAccounting,
+          tokenUsage: tokenUsageFromAccounting(syntheticAccounting)
+        })
+      ]
+      const result = buildInsights(sessions, [])
+
+      expect(result.totalTokens).toBe(1_280)
+      expect(result.totalInputTokens).toBe(1_130)
+      expect(result.totalOutputTokens).toBe(150)
+      expect(result.totalCacheReadTokens).toBe(620)
+      expect(result.totalCacheCreationTokens).toBe(10)
+      expect(result.tokenAvailableSessions).toBe(2)
+      expect(result.tokenUnavailableSessions).toBe(1)
+      expect(result.totalSessions).toBe(3)
+      expect(result.reconciliation).toEqual({
+        global: 1_280,
+        projects: 1_280,
+        sessions: 1_280,
+        difference: 0,
+        ok: true
+      })
+      expect(result.bySession.find((session) => session.sessionId === 'cursor')?.totalTokens).toBeNull()
+      expect(result.bySession.some((session) => session.sessionId === 'synthetic')).toBe(false)
     })
   })
 })

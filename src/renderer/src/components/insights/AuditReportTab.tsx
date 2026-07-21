@@ -9,15 +9,16 @@ interface InsightsReport {
   totalSessions: number
   totalTurns: number
   totalTokens: number
+  tokenAvailability: { availableSessions: number; unavailableSessions: number }
   totalEstimatedCost: number
   activeDays: number
   totalActiveHours: number
-  bySource: Array<{ source: string; sessions: number; turns: number; tokens: number; cost: number }>
+  bySource: Array<{ source: string; sessions: number; turns: number; tokens: number; cost: number; unavailableSessions: number }>
   bySessionType: Record<string, number>
   healthDistribution: { excellent: number; good: number; fair: number; poor: number; avgScore: number }
   topTools: Array<{ name: string; count: number; errorRate: number }>
   topModels: Array<{ model: string; turns: number; cost: number }>
-  frameworkOverhead: { avgPercentage: number }
+  visibleFrameworkMarkers: { avgEstimatedTokens: number }
   readEditRatio: { avg: number; healthyCnt: number; degradedCnt: number; criticalCnt: number }
   totalAntiPatterns: number
   totalFrustrationSignals: number
@@ -132,7 +133,7 @@ export function AuditReportTab() {
         <>
           <div className="grid grid-cols-3 gap-3">
             <StatCard value={String(report.totalSessions)} label="Sessions" />
-            <StatCard value={formatTokenCount(report.totalTokens)} label="Tokens" />
+            <StatCard value={formatTokenCount(report.totalTokens)} label="Processed Tokens" />
             <StatCard value={`$${report.totalEstimatedCost.toFixed(0)}`} label="Est. Cost" color="text-soft-amber" />
           </div>
 
@@ -145,7 +146,10 @@ export function AuditReportTab() {
                 <div key={s.source} className="flex items-center gap-2 text-[11px]">
                   <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: SOURCE_COLORS[s.source] || '#6b7280' }} />
                   <span className="text-secondary w-20 truncate">{s.source}</span>
-                  <span className="text-muted">{s.sessions} sessions · {formatTokenCount(s.tokens)}</span>
+                  <span className="text-muted">
+                    {s.sessions} sessions · {formatTokenCount(s.tokens)}
+                    {s.unavailableSessions > 0 ? ` · ${s.unavailableSessions} unavailable` : ''}
+                  </span>
                   <span className="text-muted ml-auto">${s.cost.toFixed(1)}</span>
                 </div>
               ))}

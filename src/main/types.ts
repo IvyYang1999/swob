@@ -1,3 +1,5 @@
+import type { TokenAccounting } from './token-accounting'
+
 export interface TokenUsage {
   inputTokens: number
   outputTokens: number
@@ -24,10 +26,13 @@ export interface RawJsonlMessage {
   promptSource?: string
   isMeta?: boolean
   sourceToolAssistantUUID?: string
+  requestId?: string
   toolUseResult?: unknown
   message?: {
+    id?: string
     role: string
     model?: string
+    stop_reason?: string | null
     content: string | ContentPart[]
     usage?: {
       input_tokens?: number
@@ -117,6 +122,8 @@ export interface SessionSummary {
   userImages: string[]
   pastedImageCount: number // count of base64 pasted images (not stored as data URLs in summary)
   tokenUsage: TokenUsage
+  /** Provider-aware, deduplicated ledger. tokenUsage remains a compatibility view. */
+  tokenAccounting?: TokenAccounting
   referencedFiles: FileRef[]
   configFiles: string[]
   libraryDirPath?: string

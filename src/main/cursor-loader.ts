@@ -7,9 +7,9 @@ import type {
   SessionSummary,
   SessionDetail,
   ToolCallInfo,
-  TokenUsage,
   ContentPart
 } from './types'
+import { tokenUsageFromAccounting, unavailableTokenAccounting } from './token-accounting'
 
 const HOME = process.env.HOME || ''
 const CURSOR_PROJECTS_DIR = path.join(HOME, '.cursor', 'projects')
@@ -305,7 +305,11 @@ export async function buildCursorSessionSummary(filePath: string, sessionIdOverr
     }
   }
 
-  const totalTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
+  const tokenAccounting = unavailableTokenAccounting(
+    'cursor',
+    'Local Cursor transcripts do not expose authoritative token usage'
+  )
+  const totalTokenUsage = tokenUsageFromAccounting(tokenAccounting)
 
   return {
     id: `cursor:${sessionId}`,
@@ -329,6 +333,7 @@ export async function buildCursorSessionSummary(filePath: string, sessionIdOverr
     userImages: [],
     pastedImageCount: 0,
     tokenUsage: totalTokenUsage,
+    tokenAccounting,
     referencedFiles: [],
     configFiles: [],
     source: 'cursor',

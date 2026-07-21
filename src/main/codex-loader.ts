@@ -7,15 +7,20 @@ import type {
   SessionSummary,
   SessionDetail,
   ToolCallInfo,
-  TokenUsage,
   ContentPart
 } from './types'
+import {
+  accountCodexUsage,
+  tokenUsageFromAccounting,
+  type CodexUsageSnapshot,
+  type TokenAccounting
+} from './token-accounting'
 
 const CODEX_DIR = path.join(process.env.HOME || '', '.codex', 'sessions')
 
 // --- Codex JSONL envelope types ---
 
-interface CodexLine {
+export interface CodexLine {
   timestamp: string
   type: 'session_meta' | 'event_msg' | 'response_item' | 'turn_context'
   payload: Record<string, unknown>
@@ -28,6 +33,66 @@ interface CodexSessionMeta {
   cli_version: string
   model_provider?: string
   git?: { branch?: string; repository_url?: string }
+}
+
+function tokenNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function codexSnapshot(
+  raw: Record<string, unknown>,
+  kind: CodexUsageSnapshot['kind'],
+  timestamp: string,
+  model?: string,
+  dedupHint?: string
+): CodexUsageSnapshot {
+  return {
+    timestamp,
+    model,
+    kind,
+    inputTokens: tokenNumber(raw.input_tokens),
+    outputTokens: tokenNumber(raw.output_tokens),
+    cachedInputTokens: tokenNumber(raw.cached_input_tokens),
+    cacheWriteTokens: tokenNumber(raw.cache_write_tokens) || tokenNumber(raw.cache_creation_input_tokens),
+    reasoningTokens: tokenNumber(raw.reasoning_output_tokens) || tokenNumber(raw.reasoning_tokens),
+    dedupHint
+  }
+}
+
+export function extractCodexTokenAccounting(lines: CodexLine[]): TokenAccounting {
+  const perTurn: CodexUsageSnapshot[] = []
+  const cumulative: CodexUsageSnapshot[] = []
+  let currentModel: string | undefined
+
+  for (const line of lines) {
+    if (line.type === 'turn_context') {
+      if (typeof line.payload.model === 'string') currentModel = line.payload.model
+    }
+    if (line.type !== 'event_msg' || line.payload.type !== 'token_count') continue
+    const info = line.payload.info as Record<string, unknown> | undefined
+    if (!info) continue
+    const last = info.last_token_usage as Record<string, unknown> | undefined
+    const total = info.total_token_usage as Record<string, unknown> | undefined
+    const turnId = typeof info.turn_id === 'string'
+        ? info.turn_id
+        : typeof line.payload.turn_id === 'string'
+          ? line.payload.turn_id
+          : undefined
+    if (last) {
+      const totalKey = total
+        ? [
+            tokenNumber(total.input_tokens), tokenNumber(total.output_tokens),
+            tokenNumber(total.cached_input_tokens), tokenNumber(total.reasoning_output_tokens) || tokenNumber(total.reasoning_tokens)
+          ].join(':')
+        : undefined
+      const dedupHint = turnId ? `codex:turn:${turnId}` : totalKey ? `codex:total:${totalKey}` : undefined
+      perTurn.push(codexSnapshot(last, 'incremental', line.timestamp, currentModel, dedupHint))
+    } else if (total) {
+      cumulative.push(codexSnapshot(total, 'cumulative', line.timestamp, currentModel))
+    }
+  }
+
+  return accountCodexUsage(perTurn.length > 0 ? perTurn : cumulative)
 }
 
 // --- File discovery ---
@@ -342,20 +407,10 @@ export async function buildCodexSessionSummary(filePath: string, sessionIdOverri
   }
   const allUserMessages = allUserTexts.length > 0 ? allUserTexts.join(' ') : undefined
 
-  // Token usage: take the LAST token_count event's total_token_usage (it's cumulative)
-  const totalTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
-  let lastTokenCount: Record<string, unknown> | null = null
-  for (const line of lines) {
-    if (line.type === 'event_msg' && (line.payload as any).type === 'token_count') {
-      const info = (line.payload as any).info
-      if (info?.total_token_usage) lastTokenCount = info.total_token_usage
-    }
-  }
-  if (lastTokenCount) {
-    totalTokenUsage.inputTokens = (lastTokenCount.input_tokens as number) || 0
-    totalTokenUsage.outputTokens = (lastTokenCount.output_tokens as number) || 0
-    totalTokenUsage.cacheReadTokens = (lastTokenCount.cached_input_tokens as number) || 0
-  }
+  // Codex input_tokens already includes cached_input_tokens. Normalize them to
+  // mutually exclusive components and prefer per-turn usage when it is present.
+  const tokenAccounting = extractCodexTokenAccounting(lines)
+  const totalTokenUsage = tokenUsageFromAccounting(tokenAccounting)
 
   // Tool usage
   const toolUsage: Record<string, number> = {}
@@ -391,6 +446,7 @@ export async function buildCodexSessionSummary(filePath: string, sessionIdOverri
     userImages: [],
     pastedImageCount: 0,
     tokenUsage: totalTokenUsage,
+    tokenAccounting,
     referencedFiles: [],
     configFiles: [],
     source: 'codex',

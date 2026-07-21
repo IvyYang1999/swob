@@ -10,7 +10,8 @@ import type {
   SkillInvocation,
   ContentPart,
   FileAction,
-  TokenUsage
+  TokenUsage,
+  SessionSource
 } from './types'
 import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetail, buildCodexSessionSummaryFromBackup } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup } from './cursor-loader'
@@ -20,6 +21,12 @@ import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
 import { detectTranscriptOrigin } from './transcript-origin'
 import { isSystemText } from './session-message-classifier'
+import {
+  accountClaudeUsage,
+  markExcludedFromRollups,
+  tokenUsageFromAccounting,
+  unavailableTokenAccounting
+} from './token-accounting'
 
 const HOME = process.env.HOME || ''
 
@@ -42,9 +49,9 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 21 // origin whitelist fix: external/sdk/legacy-no-promptSource are human
+const CACHE_VERSION = 22 // provider-aware token accounting + source-correct new harness discovery
 
-type CachedSessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode'
+type CachedSessionSource = SessionSource
 
 export interface CachedLineageMeta {
   /** Bump independently of the disk-cache version when compacted lineage fields change. */
@@ -105,7 +112,19 @@ function computeFileSig(filePath: string, source: CachedSessionSource): string |
         ? stripZcodeSessionRef(filePath)
         : filePath
     const stat = fs.statSync(statPath)
-    return `${stat.mtimeMs}:${stat.size}`
+    const baseSig = `${stat.mtimeMs}:${stat.size}`
+    if (source !== 'claude-code' && source !== 'cc-mirror') return baseSig
+    const supplementalSig = findClaudeSubagentFilesNearMain(filePath)
+      .flatMap((subagentPath) => {
+        try {
+          const subagentStat = fs.statSync(subagentPath)
+          return [`${subagentPath}:${subagentStat.mtimeMs}:${subagentStat.size}`]
+        } catch {
+          return []
+        }
+      })
+      .join('|')
+    return supplementalSig ? `${baseSig}|${supplementalSig}` : baseSig
   } catch {
     return null
   }
@@ -276,6 +295,31 @@ function findJsonlFilesRecursive(root: string, maxDepth = 4): string[] {
   return results
 }
 
+function findClaudeSubagentFilesNearMain(filePath: string): string[] {
+  const mainDir = path.dirname(filePath)
+  const physicalId = path.basename(filePath, path.extname(filePath))
+  const roots = [
+    path.join(mainDir, 'subagents'),
+    path.join(mainDir, physicalId, 'subagents')
+  ]
+  return [...new Set(roots.flatMap((root) => findJsonlFilesRecursive(root, 2)))].sort()
+}
+
+async function loadRelatedClaudeSubagentMessages(
+  filePath: string,
+  sessionId: string
+): Promise<RawJsonlMessage[]> {
+  const related: RawJsonlMessage[] = []
+  for (const subagentPath of findClaudeSubagentFilesNearMain(filePath)) {
+    const raw = await parseSessionFile(subagentPath)
+    const ownerDir = path.basename(path.dirname(path.dirname(subagentPath)))
+    const belongsToSession = ownerDir === sessionId || raw.some((message) => message.sessionId === sessionId)
+    if (!belongsToSession) continue
+    related.push(...raw)
+  }
+  return related
+}
+
 function findJsonFilesFlat(root: string): string[] {
   if (!isDirectory(root)) return []
   try {
@@ -324,9 +368,62 @@ export function findNewSourceSessionFiles(home = HOME): string[] {
 
 export function findAllSessionFiles(): string[] {
   return [
-    ...findSessionFilesInProjectRoots(findClaudeProjectRoots()),
+    ...findClaudeSessionFiles(),
     ...findNewSourceSessionFiles()
   ]
+}
+
+export function findClaudeSessionFiles(): string[] {
+  return findSessionFilesInProjectRoots(findClaudeProjectRoots())
+}
+
+function unavailableSourceSessionId(filePath: string): string {
+  const base = path.basename(filePath, path.extname(filePath))
+  return base === 'wire' || base === 'transcript' ? path.basename(path.dirname(filePath)) : base
+}
+
+function buildUnavailableSourceSummary(
+  filePath: string,
+  source: Exclude<SessionSource, 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode' | 'cc-mirror'>,
+  sessionIdOverride?: string
+): SessionSummary | null {
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(filePath)
+  } catch {
+    return null
+  }
+  const sessionId = sessionIdOverride || unavailableSourceSessionId(filePath)
+  const createdAt = stat.birthtimeMs > 0 ? stat.birthtime.toISOString() : stat.mtime.toISOString()
+  const updatedAt = stat.mtime.toISOString()
+  const tokenAccounting = unavailableTokenAccounting(source, `${source} token schema has not been verified`)
+  return {
+    id: `${source}:${sessionId}`,
+    sessionId,
+    resumeSessionId: sessionId,
+    slug: '',
+    createdAt,
+    updatedAt,
+    messageCount: 0,
+    turnCount: 0,
+    compactCount: 0,
+    cwds: [],
+    version: '',
+    firstUserMessage: `${source} session ${sessionId}`,
+    toolUsage: {},
+    skillInvocations: [],
+    projectPath: path.dirname(filePath),
+    filePath,
+    fileSizeBytes: stat.size,
+    userImages: [],
+    pastedImageCount: 0,
+    tokenUsage: tokenUsageFromAccounting(tokenAccounting),
+    tokenAccounting,
+    referencedFiles: [],
+    configFiles: [],
+    source,
+    models: []
+  }
 }
 
 function extractText(content: string | ContentPart[] | undefined): string {
@@ -377,18 +474,6 @@ function extractImages(content: string | ContentPart[] | undefined): string[] {
   return images
 }
 
-/** Extract token usage from API response */
-function extractTokenUsage(msg: RawJsonlMessage): TokenUsage | undefined {
-  const u = msg.message?.usage
-  if (!u) return undefined
-  return {
-    inputTokens: u.input_tokens || 0,
-    outputTokens: u.output_tokens || 0,
-    cacheCreationTokens: u.cache_creation_input_tokens || 0,
-    cacheReadTokens: u.cache_read_input_tokens || 0
-  }
-}
-
 function extractSkillInvocations(toolCalls: ToolCallInfo[], timestamp: string): SkillInvocation[] {
   return toolCalls
     .filter((t) => t.name === 'Skill')
@@ -436,7 +521,9 @@ export function buildSessionSummary(
   filePath: string,
   rawMessages: RawJsonlMessage[],
   light = false,
-  sessionIdOverride?: string
+  sessionIdOverride?: string,
+  sourceOverride: 'claude-code' | 'cc-mirror' = 'claude-code',
+  subagentUsageMessages: RawJsonlMessage[] = []
 ): SessionSummary | null {
   if (filePath.includes('/subagents/')) return null
 
@@ -500,17 +587,18 @@ export function buildSessionSummary(
   }
   const allUserMessages = allUserTexts.length > 0 ? allUserTexts.join(' ') : undefined
 
-  // Accumulate token usage across all assistant messages
-  const totalTokenUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
+  // One provider-aware ledger feeds every rollup. Claude streaming snapshots are
+  // deduplicated here instead of being re-summed independently by each screen.
+  const subagentRows = new Set(subagentUsageMessages)
+  const tokenAccounting = accountClaudeUsage(
+    [...rawMessages, ...subagentUsageMessages],
+    sourceOverride,
+    undefined,
+    (message) => subagentRows.has(message) ? 'subagent' : undefined
+  )
+  const totalTokenUsage = tokenUsageFromAccounting(tokenAccounting)
   let pastedImageCount = 0
   for (const msg of rawMessages) {
-    if (msg.type === 'assistant' && msg.message?.usage) {
-      const u = msg.message.usage
-      totalTokenUsage.inputTokens += u.input_tokens || 0
-      totalTokenUsage.outputTokens += u.output_tokens || 0
-      totalTokenUsage.cacheCreationTokens += u.cache_creation_input_tokens || 0
-      totalTokenUsage.cacheReadTokens += u.cache_read_input_tokens || 0
-    }
     if (msg.type === 'user' && msg.message && Array.isArray(msg.message.content)) {
       for (const p of msg.message.content) {
         if (typeof p === 'object' && p.type === 'image' && (p as ContentPart).source?.type === 'base64') pastedImageCount++
@@ -544,9 +632,10 @@ export function buildSessionSummary(
       userImages: [],
       pastedImageCount,
       tokenUsage: totalTokenUsage,
+      tokenAccounting,
       referencedFiles: [],
       configFiles: [],
-      source: 'claude-code',
+      source: sourceOverride,
       claudeConfigDir,
       allUserMessages,
       estimatedTime: estimateActiveTime(validMessages),
@@ -670,9 +759,10 @@ export function buildSessionSummary(
     userImages: [...userImages],
     pastedImageCount,
     tokenUsage: totalTokenUsage,
+    tokenAccounting,
     referencedFiles: [...referencedFiles],
     configFiles,
-    source: 'claude-code',
+    source: sourceOverride,
     claudeConfigDir,
     allUserMessages,
     estimatedTime: estimateActiveTime(validMessages),
@@ -683,10 +773,30 @@ export function buildSessionSummary(
 export function buildSessionDetail(
   filePath: string,
   rawMessages: RawJsonlMessage[],
-  sessionIdOverride?: string
+  sessionIdOverride?: string,
+  sourceOverride: 'claude-code' | 'cc-mirror' = 'claude-code',
+  subagentUsageMessages: RawJsonlMessage[] = []
 ): SessionDetail | null {
-  const summary = buildSessionSummary(filePath, rawMessages, false, sessionIdOverride)
+  const summary = buildSessionSummary(
+    filePath,
+    rawMessages,
+    false,
+    sessionIdOverride,
+    sourceOverride,
+    subagentUsageMessages
+  )
   if (!summary) return null
+
+  const selectedUsageByRow = new Map(
+    (summary.tokenAccounting?.usageEvents || [])
+      .filter((event) => event.sourceRowId)
+      .map((event) => [event.sourceRowId!, {
+        inputTokens: event.components.nonCachedInputTokens,
+        outputTokens: event.components.outputTokens,
+        cacheCreationTokens: event.components.cacheWriteTokens,
+        cacheReadTokens: event.components.cacheReadTokens
+      } satisfies TokenUsage])
+  )
 
   const compactIndices = rawMessages
     .map((m, i) => (m.type === 'system' && m.subtype === 'compact_boundary' ? i : -1))
@@ -721,7 +831,7 @@ export function buildSessionDetail(
         textContent,
         toolCalls,
         images: m.message ? extractImages(m.message.content) : [],
-        tokenUsage: m.type === 'assistant' ? extractTokenUsage(m) : undefined,
+        tokenUsage: m.type === 'assistant' ? selectedUsageByRow.get(m.uuid) : undefined,
         isPreCompact: lastCompactIndex >= 0 && originalIndex < lastCompactIndex,
         isSidechain: !!m.isSidechain,
         isSharedContext: false,
@@ -802,6 +912,7 @@ function compactLineageMessage(message: RawJsonlMessage): RawJsonlMessage {
   if (message.sourceToolAssistantUUID !== undefined) {
     compact.sourceToolAssistantUUID = message.sourceToolAssistantUUID
   }
+  if (message.requestId !== undefined) compact.requestId = message.requestId
   // The payload is detail-only; retain a sentinel so cached summary rebuilding
   // keeps the top-level tool-origin evidence without storing the result body.
   if (message.toolUseResult !== undefined) compact.toolUseResult = true
@@ -809,8 +920,10 @@ function compactLineageMessage(message: RawJsonlMessage): RawJsonlMessage {
   if (message.leafUuid !== undefined) compact.leafUuid = message.leafUuid
   if (message.message) {
     compact.message = {
+      id: message.message.id,
       role: message.message.role,
       model: message.message.model,
+      stop_reason: message.message.stop_reason,
       // Assistant prose/tool payloads do not participate in lineage or light
       // summaries; their count/model/usage do, and are retained separately.
       content: message.type === 'assistant' ? '' : compactLineageContent(message.message.content),
@@ -1336,9 +1449,12 @@ export async function buildSessionSummaryFromBackup(
   if (source === 'cursor') return buildCursorSessionSummaryFromBackup(backupPath, sessionIdOverride)
   if (source === 'opencode') return buildOpencodeSessionSummaryFromBackup(backupPath, sessionIdOverride)
   if (source === 'zcode') return buildZcodeSessionSummaryFromBackup(backupPath, sessionIdOverride)
+  if (source !== 'claude-code' && source !== 'cc-mirror') {
+    return buildUnavailableSourceSummary(backupPath, source, sessionIdOverride)
+  }
 
   const raw = await parseSessionFile(backupPath)
-  return buildSessionSummary(backupPath, raw, true, sessionIdOverride)
+  return buildSessionSummary(backupPath, raw, true, sessionIdOverride, source)
 }
 
 function readBackupSessionIdOverride(filePath: string): string | undefined {
@@ -1614,17 +1730,29 @@ async function buildPerFileCache(filePath: string, source: CachedSessionSource):
   if (source === 'claude-code') {
     const raw = await parseSessionFile(filePath)
     const lineageMeta = buildLineageMeta(filePath, raw)
+    const subagentUsage = lineageMeta.sessionId
+      ? await loadRelatedClaudeSubagentMessages(filePath, lineageMeta.sessionId)
+      : []
     const summary = lineageMeta.sessionId
-      ? buildSessionSummary(filePath, raw, true, lineageMeta.sessionId)
+      ? buildSessionSummary(filePath, raw, true, lineageMeta.sessionId, 'claude-code', subagentUsage)
       : null
     return { summary, lineageMeta, source }
+  }
+
+  if (source === 'cc-mirror') {
+    const raw = await parseSessionFile(filePath)
+    const sessionId = resolvePhysicalSessionId(filePath, raw)
+    const subagentUsage = sessionId ? await loadRelatedClaudeSubagentMessages(filePath, sessionId) : []
+    const summary = buildSessionSummary(filePath, raw, true, undefined, 'cc-mirror', subagentUsage)
+    return { summary, lineageMeta: emptyLineageMeta(summary), source }
   }
 
   let summary: SessionSummary | null = null
   if (source === 'codex') summary = await buildCodexSessionSummary(filePath)
   else if (source === 'cursor') summary = await buildCursorSessionSummary(filePath)
   else if (source === 'opencode') summary = await buildOpencodeSessionSummary(filePath)
-  else summary = await buildZcodeSessionSummary(filePath)
+  else if (source === 'zcode') summary = await buildZcodeSessionSummary(filePath)
+  else summary = buildUnavailableSourceSummary(filePath, source)
   return { summary, lineageMeta: emptyLineageMeta(summary), source }
 }
 
@@ -1646,7 +1774,7 @@ export interface CachedClaudeLineageLoadResult {
  * index.
  */
 export async function loadCachedClaudeLineageMetadata(
-  filePaths: string[] = findAllSessionFiles()
+  filePaths: string[] = findClaudeSessionFiles()
 ): Promise<CachedClaudeLineageLoadResult> {
   const cache = loadDiskCache()
   const currentFiles = filePaths.flatMap((filePath) => {
@@ -1707,14 +1835,22 @@ export interface LoadAllSessionsOptions {
 
 export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
   const startedAt = Date.now()
-  const allFiles = findAllSessionFiles()
+  const claudeFiles = findClaudeSessionFiles()
+  const newSourceFiles = findNewSourceSessionFiles()
   const codexFiles = findCodexSessionFiles()
   const cursorFiles = findCursorSessionFiles()
   const opencodeFiles = await findOpencodeSessionFiles()
   const zcodeFiles = await findZcodeSessionFiles()
   const cache = loadDiskCache()
   const descriptors: Array<{ filePath: string; source: CachedSessionSource }> = [
-    ...allFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),
+    ...claudeFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),
+    ...newSourceFiles.flatMap((filePath) => {
+      const source = detectSessionSourceFromPath(filePath)
+      return source && source !== 'claude-code' && source !== 'codex' && source !== 'cursor' &&
+        source !== 'opencode' && source !== 'zcode'
+        ? [{ filePath, source }]
+        : []
+    }),
     ...codexFiles.map((filePath) => ({ filePath, source: 'codex' as const })),
     ...cursorFiles.map((filePath) => ({ filePath, source: 'cursor' as const })),
     ...opencodeFiles.map((filePath) => ({ filePath, source: 'opencode' as const })),
@@ -1748,7 +1884,7 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
 
   // Rebuild lineage from every file's cached metadata. Only changed/new files were parsed above.
   const filesBySession = new Map<string, FileEntry[]>()
-  for (const file of allFiles) {
+  for (const file of claudeFiles) {
     const meta = entries[file]?.perFile.lineageMeta
     if (!meta?.sessionId) continue
     if (!filesBySession.has(meta.sessionId)) filesBySession.set(meta.sessionId, [])
@@ -1772,9 +1908,18 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
     const perFileSummary = cluster.entries.length === 1
       ? entries[primaryFile]?.perFile.summary
       : null
+    const clusterSubagentUsage: RawJsonlMessage[] = []
+    if (!perFileSummary) {
+      for (const entry of cluster.entries) {
+        const physicalSessionId = resolvePhysicalSessionId(entry.filePath, entry.raw)
+        if (physicalSessionId) {
+          clusterSubagentUsage.push(...await loadRelatedClaudeSubagentMessages(entry.filePath, physicalSessionId))
+        }
+      }
+    }
     const summary = perFileSummary
       ? { ...perFileSummary }
-      : buildSessionSummary(primaryFile, cluster.raw, true, cluster.sessionId)
+      : buildSessionSummary(primaryFile, cluster.raw, true, cluster.sessionId, 'claude-code', clusterSubagentUsage)
     if (summary) {
       summary.allFilePaths = cluster.filePaths
       if (cluster.branchSummaryId) summary.id = cluster.branchSummaryId
@@ -1801,6 +1946,8 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
           const branch = intraBranches[bi]
           const branchId = branchIds[bi]
           const parentId = branch.parentIdx === -1 ? summary.id : branchIds[branch.parentIdx]
+          const branchRaw = filterMessagesByBranch(cluster.raw, branch.leafUuid)
+          const branchAccounting = markExcludedFromRollups(accountClaudeUsage(branchRaw))
 
           const branchSummary: SessionSummary = {
             ...summary,
@@ -1810,6 +1957,8 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
             updatedAt: branch.updatedAt,
             turnCount: branch.turnCount,
             messageCount: branch.messageCount,
+            tokenUsage: tokenUsageFromAccounting(branchAccounting),
+            tokenAccounting: branchAccounting,
             branchPointUuid: branch.branchPointUuid,
             branchLeafUuid: branch.leafUuid,
             resumeSessionId: undefined,
@@ -1851,11 +2000,40 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
     }
   }
 
+  const nonClaudeBySession = new Map<string, SessionSummary>()
   for (const { filePath, source } of descriptors) {
     if (source === 'claude-code') continue
     const summary = entries[filePath]?.perFile.summary
-    if (summary) summaries.push(summary)
+    if (!summary) continue
+    const key = `${source}:${summary.sessionId}`
+    const current = nonClaudeBySession.get(key)
+    if (!current) {
+      nonClaudeBySession.set(key, summary)
+      continue
+    }
+    const currentTotal = current.tokenAccounting?.billingTotal ?? -1
+    const candidateTotal = summary.tokenAccounting?.billingTotal ?? -1
+    const preferred = candidateTotal > currentTotal ||
+      (candidateTotal === currentTotal && summary.updatedAt > current.updatedAt)
+      ? summary
+      : current
+    const allFilePaths = [...new Set([
+      ...(current.allFilePaths || [current.filePath]),
+      ...(summary.allFilePaths || [summary.filePath])
+    ])]
+    const warning = `deduplicated ${allFilePaths.length} files for the same ${source} session id; retained the most complete snapshot`
+    nonClaudeBySession.set(key, {
+      ...preferred,
+      allFilePaths,
+      tokenAccounting: preferred.tokenAccounting
+        ? {
+            ...preferred.tokenAccounting,
+            warnings: [...new Set([...preferred.tokenAccounting.warnings, warning])]
+          }
+        : preferred.tokenAccounting
+    })
   }
+  summaries.push(...nonClaudeBySession.values())
 
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   if (!options.readOnly) saveDiskCache(entries)
@@ -1884,6 +2062,10 @@ export async function loadSessionDetail(
     const sessionIdOverride = readBackupSessionIdOverride(filePath)
     if (path.basename(filePath) === 'backup.jsonl' && !sessionIdOverride) return null
     return buildCursorSessionDetail(filePath, sessionIdOverride)
+  }
+  if (source === 'antigravity' || source === 'grok' || source === 'pi' || source === 'kimi' || source === 'hermes') {
+    const summary = buildUnavailableSourceSummary(filePath, source, readBackupSessionIdOverride(filePath))
+    return summary ? { ...summary, messages: [] } : null
   }
 
   let mainRaw: RawJsonlMessage[]
@@ -1949,7 +2131,26 @@ export async function loadSessionDetail(
     }
   }
 
-  const detail = buildSessionDetail(filePath, mainRaw, detailSessionId)
+  const subagentUsageMessages: RawJsonlMessage[] = []
+  if (!branchLeafUuid && (source === 'claude-code' || source === 'cc-mirror' || source === null)) {
+    for (const usageFilePath of allFilePaths?.length ? allFilePaths : [filePath]) {
+      try {
+        const usageMainRaw = await parseSessionFile(usageFilePath)
+        const usageSessionId = resolvePhysicalSessionId(usageFilePath, usageMainRaw)
+        if (usageSessionId) {
+          subagentUsageMessages.push(...await loadRelatedClaudeSubagentMessages(usageFilePath, usageSessionId))
+        }
+      } catch { /* detail remains available without supplemental usage */ }
+    }
+  }
+
+  const detail = buildSessionDetail(
+    filePath,
+    mainRaw,
+    detailSessionId,
+    source === 'cc-mirror' ? 'cc-mirror' : 'claude-code',
+    subagentUsageMessages
+  )
   if (!detail) return null
 
   // Prepend shared context from intra-file branch (same format as multi-file branch)
@@ -1981,7 +2182,8 @@ export async function loadSessionDetail(
           textContent,
           toolCalls,
           images: m.message ? extractImages(m.message.content) : [],
-          tokenUsage: m.type === 'assistant' ? extractTokenUsage(m) : undefined,
+          // Shared parent context is a view, not a second billable event.
+          tokenUsage: undefined,
           isPreCompact: false,
           isSidechain: !!m.isSidechain,
           isSharedContext: true,

@@ -82,6 +82,9 @@ describe('cursor-loader', () => {
       expect(summary!.turnCount).toBe(2)
       expect(summary!.toolUsage['Read']).toBe(1)
       expect(summary!.toolUsage['Write']).toBe(1)
+      expect(summary!.tokenAccounting?.provenance).toBe('unavailable')
+      expect(summary!.tokenAccounting?.billingTotal).toBeNull()
+      expect(summary!.tokenAccounting?.unavailableReason).toContain('do not expose authoritative token usage')
     })
 
     it('【曾经的 bug】user_query XML 标签应被清理', async () => {

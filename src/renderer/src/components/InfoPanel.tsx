@@ -581,8 +581,13 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
             <HardDrive size={12} />
             <span>{formatSize(s.fileSizeBytes)} · v{s.version}</span>
           </div>
-          {s.tokenUsage && (s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0) && (
-            <div className="flex items-center gap-2 text-secondary">
+          {s.tokenAccounting?.provenance === 'unavailable' ? (
+            <div className="flex items-center gap-2 text-muted" title={s.tokenAccounting.unavailableReason || 'Authoritative token usage is unavailable'}>
+              <Coins size={12} />
+              <span>{locale === 'zh-CN' ? 'Token：不可用' : 'Tokens: unavailable'}</span>
+            </div>
+          ) : s.tokenUsage && (s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0 || s.tokenUsage.cacheCreationTokens > 0 || s.tokenUsage.cacheReadTokens > 0) && (
+            <div className="flex items-center gap-2 text-secondary" title="Processed input = non-cached input + cache read + cache write. Output is added once; reasoning remains an output subset.">
               <Coins size={12} />
               <span>
                 {formatTokenShort(s.tokenUsage.inputTokens + s.tokenUsage.cacheCreationTokens + s.tokenUsage.cacheReadTokens)} in / {formatTokenShort(s.tokenUsage.outputTokens)} out

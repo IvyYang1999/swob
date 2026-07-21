@@ -40,10 +40,12 @@ function rawMsg(overrides: Partial<RawJsonlMessage> & { type: RawJsonlMessage['t
     version: overrides.version || '2.1.63',
     slug: overrides.slug,
     isSidechain: overrides.isSidechain,
+    requestId: overrides.requestId,
     promptSource: overrides.promptSource ?? (overrides.type === 'user' ? 'typed' : undefined),
     message: overrides.message,
     permissionMode: overrides.permissionMode
   }
+  if (overrides.forkedFrom !== undefined) message.forkedFrom = overrides.forkedFrom
   if (overrides.origin !== undefined) message.origin = overrides.origin
   if (overrides.isMeta !== undefined) message.isMeta = overrides.isMeta
   if (overrides.sourceToolAssistantUUID !== undefined) {
@@ -216,6 +218,102 @@ describe('Claude session discovery', () => {
       else process.env.HOME = oldHome
     }
   })
+
+  it('【回归】新增 harness 保留真实 source；未验证格式不得套用 Claude token parser', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-new-sources-home-'))
+    const ccRows = [
+      rawMsg({ type: 'user', sessionId: 'cc-session', message: { role: 'user', content: 'CC Mirror 真实消息' } }),
+      rawMsg({
+        type: 'assistant', sessionId: 'cc-session',
+        message: { id: 'cc-msg', role: 'assistant', content: '完成', stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } }
+      })
+    ]
+    writeJsonlAt(path.join(home, '.cc-mirror', 'default', 'projects', '-Users-test-cc', 'cc-session.jsonl'), ccRows)
+    writeJsonlAt(path.join(home, '.gemini', 'antigravity-cli', 'brain', 'agy-session', 'transcript.jsonl'), [] as RawJsonlMessage[])
+    writeJsonlAt(path.join(home, '.grok', 'sessions', 'grok-session.jsonl'), [] as RawJsonlMessage[])
+    writeJsonlAt(path.join(home, '.pi', 'agent', 'sessions', 'pi-session.jsonl'), [] as RawJsonlMessage[])
+    writeJsonlAt(path.join(home, '.kimi-code', 'sessions', 'kimi-session', 'wire.jsonl'), [] as RawJsonlMessage[])
+    const hermesPath = path.join(home, '.hermes', 'sessions', 'hermes-session.json')
+    fs.mkdirSync(path.dirname(hermesPath), { recursive: true })
+    fs.writeFileSync(hermesPath, '{}')
+
+    const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+    const cc = sessions.find((session) => session.source === 'cc-mirror')
+    expect(cc?.firstUserMessage).toBe('CC Mirror 真实消息')
+    expect(cc?.tokenAccounting?.billingTotal).toBe(15)
+
+    for (const source of ['antigravity', 'grok', 'pi', 'kimi', 'hermes'] as const) {
+      const summary = sessions.find((session) => session.source === source)
+      expect(summary, source).toBeDefined()
+      expect(summary?.tokenAccounting?.provider, source).toBe(source)
+      expect(summary?.tokenAccounting?.provenance, source).toBe('unavailable')
+      expect(summary?.tokenAccounting?.billingTotal, source).toBeNull()
+    }
+    expect(sessions.filter((session) => session.source === 'claude-code')).toHaveLength(0)
+  })
+
+  it('【回归】Claude 主文件与 subagent 共用去重表，同时保留 billing/conversation 两种 scope', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-subagent-home-'))
+    const projectDir = path.join(home, '.claude', 'projects', '-Users-test-project')
+    const mainRows = [
+      rawMsg({ type: 'user', sessionId: 'main-session', message: { role: 'user', content: '让 subagent 调研' } }),
+      rawMsg({
+        type: 'assistant', sessionId: 'main-session', uuid: 'main-call', requestId: 'shared-request',
+        message: { id: 'shared-message', role: 'assistant', content: '主线程', stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 20 } }
+      })
+    ]
+    const subagentRows = [
+      rawMsg({
+        type: 'assistant', sessionId: 'main-session', uuid: 'shared-copy', requestId: 'shared-request', isSidechain: true,
+        message: { id: 'shared-message', role: 'assistant', content: '重复副本', stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 20 } }
+      }),
+      rawMsg({
+        type: 'assistant', sessionId: 'main-session', uuid: 'subagent-call', requestId: 'subagent-request', isSidechain: true,
+        message: { id: 'subagent-message', role: 'assistant', content: '子代理独立调用', stop_reason: 'end_turn', usage: { input_tokens: 50, output_tokens: 10 } }
+      })
+    ]
+    writeJsonlAt(path.join(projectDir, 'main-session.jsonl'), mainRows)
+    writeJsonlAt(path.join(projectDir, 'subagents', 'agent-research.jsonl'), subagentRows)
+
+    const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+    const summary = sessions.find((session) => session.sessionId === 'main-session')
+
+    expect(summary?.tokenAccounting?.usageEvents).toHaveLength(2)
+    expect(summary?.tokenAccounting?.billingTotal).toBe(180)
+    expect(summary?.tokenAccounting?.conversationOnly).toBe(120)
+    expect(summary?.tokenAccounting?.usageEvents.map((event) => event.scope).sort()).toEqual(['main', 'subagent'])
+  })
+
+  it('【回归】同一 provider/session id 的跨文件副本只保留最完整 token 快照', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-cross-file-home-'))
+    const codexDir = path.join(home, '.codex', 'sessions', '2026', '07', '22')
+    const sessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const codexRows = (inputTokens: number, outputTokens: number, suffix: string) => [
+      {
+        timestamp: `2026-07-22T00:00:0${suffix}Z`, type: 'session_meta',
+        payload: { id: sessionId, timestamp: '2026-07-22T00:00:00Z', cwd: '/Users/test/codex', cli_version: 'test' }
+      },
+      {
+        timestamp: `2026-07-22T00:00:1${suffix}Z`, type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '跨文件去重' }] }
+      },
+      {
+        timestamp: `2026-07-22T00:00:2${suffix}Z`, type: 'event_msg',
+        payload: { type: 'token_count', info: { total_token_usage: { input_tokens: inputTokens, output_tokens: outputTokens } } }
+      }
+    ]
+    fs.mkdirSync(codexDir, { recursive: true })
+    fs.writeFileSync(path.join(codexDir, 'rollout-copy-a.jsonl'), codexRows(500, 200, '1').map(JSON.stringify).join('\n'))
+    fs.writeFileSync(path.join(codexDir, 'rollout-copy-b.jsonl'), codexRows(650, 250, '2').map(JSON.stringify).join('\n'))
+
+    const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+    const codexSessions = sessions.filter((session) => session.source === 'codex')
+
+    expect(codexSessions).toHaveLength(1)
+    expect(codexSessions[0].tokenAccounting?.billingTotal).toBe(900)
+    expect(codexSessions[0].allFilePaths).toHaveLength(2)
+    expect(codexSessions[0].tokenAccounting?.warnings.join(' ')).toContain('deduplicated 2 files')
+  })
 })
 
 // ========================================================
@@ -318,6 +416,30 @@ describe('buildSessionSummary', () => {
 
     expect(summary!.toolUsage['Read']).toBe(2)
     expect(summary!.toolUsage['Bash']).toBe(1)
+  })
+
+  it('【回归】Claude streaming 快照与 fork 继承 usage 不得重复计入 summary', () => {
+    const msgs = [
+      rawMsg({ type: 'user', message: { role: 'user', content: '统计 token' } }),
+      rawMsg({
+        type: 'assistant', uuid: 'snap-1', requestId: 'req-1',
+        message: { id: 'msg-1', role: 'assistant', content: 'partial', stop_reason: null, usage: { input_tokens: 100, output_tokens: 10 } }
+      }),
+      rawMsg({
+        type: 'assistant', uuid: 'snap-2', requestId: 'req-1',
+        message: { id: 'msg-1', role: 'assistant', content: 'done', stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 20 } }
+      }),
+      rawMsg({
+        type: 'assistant', uuid: 'fork-copy',
+        forkedFrom: { sessionId: 'parent', messageUuid: 'parent-message' },
+        message: { id: 'forked', role: 'assistant', content: 'inherited', stop_reason: 'end_turn', usage: { input_tokens: 5_000, output_tokens: 5_000 } }
+      })
+    ]
+    const fp = writeTempJsonl(msgs)
+    const summary = buildSessionSummary(fp, msgs)!
+
+    expect(summary.tokenAccounting?.billingTotal).toBe(120)
+    expect(summary.tokenUsage).toEqual({ inputTokens: 100, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0 })
   })
 
   it('subagent 文件路径应该返回 null', () => {
@@ -696,7 +818,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
       const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
-      expect(diskCache.version).toBe(21)
+      expect(diskCache.version).toBe(22)
       expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
       expect(diskCache.entries[firstFile]).toMatchObject({
         sig: expect.any(String),
@@ -868,7 +990,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
       expect(summary).toMatchObject({ firstUserMessage: 'old-cache-session', turnCount: 0 })
-      expect(refreshedCache.version).toBe(21)
+      expect(refreshedCache.version).toBe(22)
       expect(refreshedCache.entries[file].perFile.lineageMeta.leafUuidRefs[0]).toMatchObject({
         origin: { kind: 'task-notification' },
         promptSource: 'sdk'

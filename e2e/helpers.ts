@@ -30,6 +30,7 @@ export async function launchAppWithEnv(options: { env?: Record<string, string> }
 export interface LaunchAppOptions {
   claudeTurns?: number
   viewport?: { width: number; height: number }
+  includeCursorFixture?: boolean
 }
 
 export interface LaunchedApp {
@@ -66,7 +67,7 @@ function writeJsonl(filePath: string, rows: unknown[]): void {
   fs.writeFileSync(filePath, rows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf-8')
 }
 
-function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: number): void {
+function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: number, includeCursorFixture = false): void {
   const project = path.join(home, 'project')
   fs.mkdirSync(project, { recursive: true })
   fs.mkdirSync(libraryRoot, { recursive: true })
@@ -105,8 +106,16 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
       timestamp: new Date(Date.UTC(2026, 6, 21, 10, 0, index * 2 + 1)).toISOString(),
       cwd: project,
       message: {
+        id: `claude-message-${index}`,
         role: 'assistant',
-        content: `Synthetic response ${index} ${'fixture '.repeat(12)}`
+        content: `Synthetic response ${index} ${'fixture '.repeat(12)}`,
+        stop_reason: 'end_turn',
+        usage: {
+          input_tokens: 100,
+          cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 10,
+          output_tokens: 50
+        }
       }
     })
     parentUuid = assistantUuid
@@ -154,9 +163,38 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
           role: 'assistant',
           content: [{ type: 'output_text', text: 'Synthetic response' }]
         }
+      },
+      {
+        timestamp: '2026-07-21T10:00:21Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            last_token_usage: { input_tokens: 1000, cached_input_tokens: 600, output_tokens: 100, reasoning_output_tokens: 40 },
+            total_token_usage: { input_tokens: 1000, cached_input_tokens: 600, output_tokens: 100, reasoning_output_tokens: 40 }
+          }
+        }
       }
     ]
   )
+
+  if (includeCursorFixture) {
+    writeJsonl(
+      path.join(
+        home,
+        '.cursor',
+        'projects',
+        '-synthetic-project',
+        'agent-transcripts',
+        'cursor-token-unavailable',
+        'cursor-token-unavailable.jsonl'
+      ),
+      [
+        { role: 'user', message: { content: [{ type: 'text', text: '<user_query>Cursor token unavailable fixture</user_query>' }] } },
+        { role: 'assistant', message: { content: [{ type: 'text', text: 'Cursor response without authoritative usage.' }] } }
+      ]
+    )
+  }
 
   const dbPath = path.join(home, '.zcode', 'cli', 'db', 'db.sqlite')
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
@@ -227,7 +265,7 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
   for (const dir of [home, libraryRoot, userData, cache, logs, temp]) {
     fs.mkdirSync(dir, { recursive: true })
   }
-  createSyntheticCorpus(home, libraryRoot, options.claudeTurns ?? 3)
+  createSyntheticCorpus(home, libraryRoot, options.claudeTurns ?? 3, options.includeCursorFixture ?? false)
 
   const app = await electron.launch({
     args: [

@@ -8,6 +8,7 @@
 import { auditSession, type SessionAuditResult, type SessionType } from './session-audit'
 import { parseSessionFile } from './session-loader'
 import { callLlm, resolveLlmModel, type LlmSettings } from './llm-client'
+import { accountingForSession } from './token-accounting'
 import type { SessionSummary } from './types'
 
 export type InsightsProgress = (stage: string, current: number, total: number) => void
@@ -18,6 +19,7 @@ export interface InsightsReport {
   totalSessions: number
   totalTurns: number
   totalTokens: number
+  tokenAvailability: { availableSessions: number; unavailableSessions: number }
   totalEstimatedCost: number
   activeDays: number
   totalActiveHours: number
@@ -28,6 +30,7 @@ export interface InsightsReport {
     turns: number
     tokens: number
     cost: number
+    unavailableSessions: number
   }>
 
   bySessionType: Record<SessionType, number>
@@ -44,7 +47,7 @@ export interface InsightsReport {
 
   topModels: Array<{ model: string; turns: number; cost: number }>
 
-  frameworkOverhead: { avgPercentage: number; maxPercentage: number; maxSessionId: string }
+  visibleFrameworkMarkers: { avgEstimatedTokens: number; maxEstimatedTokens: number; maxSessionId: string }
 
   readEditRatio: { avg: number; healthyCnt: number; degradedCnt: number; criticalCnt: number }
 
@@ -72,19 +75,19 @@ export async function generateInsightsReport(
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, maxSessions)
 
-  const audits: SessionAuditResult[] = []
+  const analyzed: Array<{ session: SessionSummary; audit: SessionAuditResult }> = []
   for (let i = 0; i < eligible.length; i++) {
     const s = eligible[i]
     try {
       const msgs = await parseSessionFile(s.filePath)
-      if (msgs.length > 0) audits.push(auditSession(msgs, s.sessionId))
+      if (msgs.length > 0) analyzed.push({ session: s, audit: auditSession(msgs, s.sessionId) })
     } catch { /* skip */ }
     if (onProgress && (i % 10 === 0 || i === eligible.length - 1)) {
       onProgress('analyzing', i + 1, eligible.length)
     }
   }
 
-  const bySource = new Map<string, { sessions: number; turns: number; tokens: number; cost: number }>()
+  const bySource = new Map<string, { sessions: number; turns: number; tokens: number; cost: number; unavailableSessions: number }>()
   const byType: Record<SessionType, number> = { coding: 0, research: 0, debugging: 0, discussion: 0, mixed: 0 }
   const health = { excellent: 0, good: 0, fair: 0, poor: 0, totalScore: 0 }
   const toolAgg = new Map<string, { count: number; errors: number }>()
@@ -95,12 +98,14 @@ export async function generateInsightsReport(
   let totalFrustration = 0
   let totalInterruptions = 0
   let totalTokens = 0
+  let availableTokenSessions = 0
+  let unavailableTokenSessions = 0
   let totalTurns = 0
   let totalCost = 0
-  let fwTotal = 0
-  let fwCount = 0
-  let fwMax = 0
-  let fwMaxSid = ''
+  let markerTotal = 0
+  let markerCount = 0
+  let markerMax = 0
+  let markerMaxSid = ''
   let reSum = 0
   let reHealthy = 0
   let reDegraded = 0
@@ -108,16 +113,17 @@ export async function generateInsightsReport(
   let reCount = 0
   const dates: number[] = []
 
-  for (let i = 0; i < audits.length; i++) {
-    const audit = audits[i]
-    const session = eligible[i]
+  for (const { audit, session } of analyzed) {
     const src = session.source || 'claude-code'
+    const accounting = accountingForSession(session)
+    const billingTokens = accounting.excludedFromRollups ? null : accounting.billingTotal
 
-    if (!bySource.has(src)) bySource.set(src, { sessions: 0, turns: 0, tokens: 0, cost: 0 })
+    if (!bySource.has(src)) bySource.set(src, { sessions: 0, turns: 0, tokens: 0, cost: 0, unavailableSessions: 0 })
     const srcEntry = bySource.get(src)!
     srcEntry.sessions++
     srcEntry.turns += session.turnCount
-    srcEntry.tokens += (session.tokenUsage?.inputTokens || 0) + (session.tokenUsage?.outputTokens || 0)
+    if (billingTokens === null) srcEntry.unavailableSessions++
+    else srcEntry.tokens += billingTokens
     srcEntry.cost += audit.estimatedCost.value.totalCost
 
     byType[audit.sessionType]++
@@ -145,16 +151,21 @@ export async function generateInsightsReport(
     totalAntiPatterns += audit.antiPatterns.length
     totalFrustration += audit.frustrationSignals.length
     totalInterruptions += audit.userInterruptions
-    totalTokens += (session.tokenUsage?.inputTokens || 0) + (session.tokenUsage?.outputTokens || 0)
+    if (billingTokens === null) unavailableTokenSessions++
+    else {
+      availableTokenSessions++
+      totalTokens += billingTokens
+    }
     totalTurns += session.turnCount
     totalCost += audit.estimatedCost.value.totalCost
 
-    if (audit.frameworkOverhead.value.percentage > 0) {
-      fwTotal += audit.frameworkOverhead.value.percentage
-      fwCount++
-      if (audit.frameworkOverhead.value.percentage > fwMax) {
-        fwMax = audit.frameworkOverhead.value.percentage
-        fwMaxSid = audit.sessionId
+    if (audit.visibleFrameworkMarkers.value.estimatedMarkerTokens > 0) {
+      const markerTokens = audit.visibleFrameworkMarkers.value.estimatedMarkerTokens
+      markerTotal += markerTokens
+      markerCount++
+      if (markerTokens > markerMax) {
+        markerMax = markerTokens
+        markerMaxSid = audit.sessionId
       }
     }
 
@@ -178,10 +189,9 @@ export async function generateInsightsReport(
   dates.sort()
 
   const findings: string[] = []
-  const avgHealth = audits.length > 0 ? health.totalScore / audits.length : 0
+  const avgHealth = analyzed.length > 0 ? health.totalScore / analyzed.length : 0
   if (avgHealth < 50) findings.push(`Average health score ${avgHealth.toFixed(0)}/100 — significant quality issues across sessions`)
-  if (fwCount > 0 && fwTotal / fwCount > 25) findings.push(`Average framework overhead ${(fwTotal / fwCount).toFixed(0)}% — consider reducing CLAUDE.md/Rules/Skills size`)
-  if (totalInterruptions > audits.length * 0.5) findings.push(`${totalInterruptions} interruptions across ${audits.length} sessions — frequent workflow breaks`)
+  if (totalInterruptions > analyzed.length * 0.5) findings.push(`${totalInterruptions} interruptions across ${analyzed.length} sessions — frequent workflow breaks`)
   if (reCount > 0 && reSum / reCount < 3) findings.push(`Average Read:Edit ratio ${(reSum / reCount).toFixed(1)} — tendency to edit before thoroughly reading`)
   const topSrc = [...bySource.entries()].sort((a, b) => b[1].cost - a[1].cost)
   if (topSrc.length > 1) findings.push(`Highest cost source: ${topSrc[0][0]} ($${topSrc[0][1].cost.toFixed(2)}) across ${topSrc[0][1].sessions} sessions`)
@@ -195,9 +205,10 @@ export async function generateInsightsReport(
       start: dates.length > 0 ? new Date(dates[0]).toISOString().slice(0, 10) : '',
       end: dates.length > 0 ? new Date(dates[dates.length - 1]).toISOString().slice(0, 10) : ''
     },
-    totalSessions: audits.length,
+    totalSessions: analyzed.length,
     totalTurns,
     totalTokens,
+    tokenAvailability: { availableSessions: availableTokenSessions, unavailableSessions: unavailableTokenSessions },
     totalEstimatedCost: totalCost,
     activeDays,
     totalActiveHours: Math.round(totalHours),
@@ -211,7 +222,11 @@ export async function generateInsightsReport(
     topModels: [...modelAgg.entries()]
       .map(([model, d]) => ({ model, ...d }))
       .sort((a, b) => b.turns - a.turns),
-    frameworkOverhead: { avgPercentage: fwCount > 0 ? fwTotal / fwCount : 0, maxPercentage: fwMax, maxSessionId: fwMaxSid },
+    visibleFrameworkMarkers: {
+      avgEstimatedTokens: markerCount > 0 ? markerTotal / markerCount : 0,
+      maxEstimatedTokens: markerMax,
+      maxSessionId: markerMaxSid
+    },
     readEditRatio: { avg: reCount > 0 ? reSum / reCount : 0, healthyCnt: reHealthy, degradedCnt: reDegraded, criticalCnt: reCritical },
     totalAntiPatterns,
     totalFrustrationSignals: totalFrustration,
@@ -281,7 +296,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);text-
 <div class="stats">
 <div class="stat"><div class="stat-value">${report.totalSessions}</div><div class="stat-label">Sessions</div></div>
 <div class="stat"><div class="stat-value">${report.totalTurns.toLocaleString()}</div><div class="stat-label">Turns</div></div>
-<div class="stat"><div class="stat-value">${Math.round(report.totalTokens / 1000).toLocaleString()}k</div><div class="stat-label">Tokens</div></div>
+<div class="stat"><div class="stat-value">${Math.round(report.totalTokens / 1000).toLocaleString()}k</div><div class="stat-label">Processed Tokens</div></div>
 <div class="stat"><div class="stat-value">$${report.totalEstimatedCost.toFixed(0)}</div><div class="stat-label">Est. Cost</div></div>
 <div class="stat"><div class="stat-value">${report.activeDays}</div><div class="stat-label">Active Days</div></div>
 <div class="stat"><div class="stat-value">${report.totalActiveHours}h</div><div class="stat-label">Active Time</div></div>
@@ -294,7 +309,7 @@ ${healthBar('Good', report.healthDistribution.good, '#58a6ff')}
 ${healthBar('Fair', report.healthDistribution.fair, '#f59e0b')}
 ${healthBar('Poor', report.healthDistribution.poor, '#f85149')}
 </div>
-<p style="font-size:12px;color:var(--dim)">Average health score: <strong style="color:var(--fg)">${report.healthDistribution.avgScore.toFixed(0)}/100</strong> · Read:Edit avg: ${report.readEditRatio.avg.toFixed(1)} · Framework overhead avg: ${report.frameworkOverhead.avgPercentage.toFixed(0)}%</p>
+<p style="font-size:12px;color:var(--dim)">Average health score: <strong style="color:var(--fg)">${report.healthDistribution.avgScore.toFixed(0)}/100</strong> · Read:Edit avg: ${report.readEditRatio.avg.toFixed(1)} · Visible marker estimate avg: ${Math.round(report.visibleFrameworkMarkers.avgEstimatedTokens).toLocaleString()} tokens (not API context overhead)</p>
 
 <h2>By Source</h2>
 <table><tr><th>Source</th><th>Sessions</th><th>Turns</th><th>Tokens</th><th>Cost</th></tr>${srcRows}</table>
@@ -391,7 +406,8 @@ export async function generateLlmNarrative(
     topTools: report.topTools.slice(0, 8),
     topModels: report.topModels,
     readEditRatio: report.readEditRatio,
-    frameworkOverheadAvgPct: report.frameworkOverhead.avgPercentage,
+    visibleFrameworkMarkerAvgEstimatedTokens: report.visibleFrameworkMarkers.avgEstimatedTokens,
+    tokenAvailability: report.tokenAvailability,
     frustrationSignals: report.totalFrustrationSignals,
     interruptions: report.totalInterruptions,
     quantFindings: report.findings

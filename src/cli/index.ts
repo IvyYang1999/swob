@@ -36,6 +36,7 @@ import {
   writeSessionLineageRegistry
 } from '../main/session-lineage'
 import type { SessionSummary } from '../main/types'
+import { accountingForSession } from '../main/token-accounting'
 import { execSync } from 'child_process'
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -133,7 +134,7 @@ async function cmdSearch(query: string, flags: Record<string, string | true>): P
     source: r.session.source || 'claude-code',
     updatedAt: r.session.updatedAt,
     turnCount: r.session.turnCount,
-    tokens: r.session.tokenUsage.inputTokens + r.session.tokenUsage.outputTokens,
+    tokens: accountingForSession(r.session).billingTotal,
     score: Math.round(r.score),
     matchedFields: r.matchedFields
   })))
@@ -189,7 +190,7 @@ async function cmdList(flags: Record<string, string | true>): Promise<void> {
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     turnCount: s.turnCount,
-    tokens: s.tokenUsage.inputTokens + s.tokenUsage.outputTokens,
+    tokens: accountingForSession(s).billingTotal,
     isActive: false
   })))
 }
@@ -231,6 +232,7 @@ async function cmdShow(sessionId: string): Promise<void> {
       cacheCreation: detail.tokenUsage.cacheCreationTokens,
       cacheRead: detail.tokenUsage.cacheReadTokens
     },
+    tokenAccounting: detail.tokenAccounting,
     models: detail.models,
     toolUsage: detail.toolUsage,
     messages: detail.messages.map(m => ({

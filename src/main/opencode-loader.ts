@@ -11,6 +11,7 @@ import type {
   ContentPart,
   SessionSource
 } from './types'
+import { accountingFromMutuallyExclusiveUsage, tokenUsageFromAccounting } from './token-accounting'
 
 const SESSION_ID_RE = /^sess?_[A-Za-z0-9_-]+$/
 const SQLITE_TIMEOUT_MS = 5000
@@ -641,6 +642,12 @@ function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: Lo
   if (tokenUsage.inputTokens === 0 && tokenUsage.outputTokens === 0 && sessionTokenUsage) {
     Object.assign(tokenUsage, sessionTokenUsage)
   }
+  const tokenAccounting = accountingFromMutuallyExclusiveUsage(
+    source as SessionSource,
+    tokenUsage,
+    'reported'
+  )
+  const normalizedTokenUsage = tokenUsageFromAccounting(tokenAccounting)
 
   const stat = safeStat(dbPath)
   const models = [...new Set(rawMessages.map((m) => m.message?.model).filter(Boolean) as string[])]
@@ -670,7 +677,8 @@ function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: Lo
     branchParentId: asString(sessionRow.parent_id) || asString(sessionRow.parentId) || asString(sessionRow.parentID) || undefined,
     userImages: [],
     pastedImageCount: 0,
-    tokenUsage,
+    tokenUsage: normalizedTokenUsage,
+    tokenAccounting,
     referencedFiles: [],
     configFiles: [],
     source: source as SessionSource,

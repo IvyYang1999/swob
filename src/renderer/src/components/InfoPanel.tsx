@@ -6,6 +6,7 @@ import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Ima
 import { SessionFamilyTree } from './SessionFamilyTree'
 import { ExecutionTreePanel } from './ExecutionTreePanel'
 import { ContextInspectorPanel } from './ContextInspectorPanel'
+import { SessionAuditPanel } from './SessionAuditPanel'
 
 interface FileRef {
   path: string
@@ -574,6 +575,9 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
 
         {/* Highlights / annotations */}
         <HighlightList highlights={highlights} sessionId={s.sessionId} />
+
+        {/* Session Audit — health score, metrics, anti-patterns */}
+        <SessionAuditPanel filePath={s.filePath} />
 
         {/* Session family tree (lineage) */}
         <SessionFamilyTree sessionId={s.sessionId} />

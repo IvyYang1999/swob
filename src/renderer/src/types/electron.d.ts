@@ -79,6 +79,9 @@ interface ElectronAPI {
   // Execution Tree
   getExecutionTree: (filePath: string) => Promise<any>
 
+  // Session Audit
+  auditSession: (filePath: string) => Promise<any>
+
   // Context Inspector
   getContextInspector: (filePath: string) => Promise<any>
 

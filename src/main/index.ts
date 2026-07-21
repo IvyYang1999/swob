@@ -1053,6 +1053,18 @@ ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
   }
 })
 
+ipcMain.handle('session:audit', async (_event, filePath: string) => {
+  try {
+    const { parseSessionFile } = await import('./session-loader')
+    const { auditSession } = await import('./session-audit')
+    const messages = await parseSessionFile(filePath)
+    const sessionId = path.basename(filePath, '.jsonl')
+    return auditSession(messages, sessionId)
+  } catch {
+    return null
+  }
+})
+
 ipcMain.handle('session:getContextInspector', async (_event, filePath: string) => {
   try {
     const { parseSessionFile } = await import('./session-loader')

@@ -7,7 +7,8 @@ import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
 import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loader'
 import { loadZcodeRawMessages, stripZcodeSessionRef } from './zcode-loader'
-import { resolveSessionParent, DEFAULT_IGNORE_DIRS } from './session-placement'
+import { DEFAULT_IGNORE_DIRS } from './session-placement'
+import { executeOrganization } from './vault-organizer'
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
 import { redactSecrets } from './secret-redactor'
@@ -44,6 +45,11 @@ export interface SessionMeta {
   updatedAt: string
   projectPath: string
   turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
+  /** Multi-membership metadata used by the tag lens. */
+  tags?: string[]
+  /** Cached smart-organization classification. */
+  topic?: string
+  topicConfidence?: number
   /** Expected bytes for strong iCloud materialization verification. */
   backupSha256?: string
   backupSize?: number
@@ -90,12 +96,19 @@ export interface LibraryFolder {
   dirPath: string
   sessions: LibrarySession[]
   children: LibraryFolder[]
+  files: LibraryFile[]
+}
+
+export interface LibraryFile {
+  name: string
+  path: string
 }
 
 export interface LibraryTree {
   root: string
   folders: LibraryFolder[]
   ungroupedSessions: LibrarySession[]
+  rootFiles: LibraryFile[]
 }
 
 export interface SshConfig {
@@ -535,6 +548,21 @@ export function parseSessionMeta(
     }
     if (meta.backupSourceState !== undefined && !isValidBackupSourceState(meta.backupSourceState)) {
       warn('[library-manager] Ignoring invalid session metadata: malformed backupSourceState')
+      return null
+    }
+    if (meta.tags !== undefined &&
+      (!Array.isArray(meta.tags) || !meta.tags.every((tag) => typeof tag === 'string'))) {
+      warn('[library-manager] Ignoring invalid session metadata: tags must be strings')
+      return null
+    }
+    if (meta.topic !== undefined && typeof meta.topic !== 'string') {
+      warn('[library-manager] Ignoring invalid session metadata: topic must be a string')
+      return null
+    }
+    if (meta.topicConfidence !== undefined &&
+      (typeof meta.topicConfidence !== 'number' || !Number.isFinite(meta.topicConfidence) ||
+        meta.topicConfidence < 0 || meta.topicConfidence > 1)) {
+      warn('[library-manager] Ignoring invalid session metadata: topicConfidence must be between 0 and 1')
       return null
     }
     return parsed as SessionMeta
@@ -1010,15 +1038,16 @@ export async function updateBranchTranscript(
 
 // --- Scan Library ---
 
-function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: LibraryFolder[] } {
+function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: LibraryFolder[]; files: LibraryFile[] } {
   const sessions: LibrarySession[] = []
   const folders: LibraryFolder[] = []
+  const files: LibraryFile[] = []
 
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(dirPath, { withFileTypes: true })
   } catch {
-    return { sessions, folders }
+    return { sessions, folders, files }
   }
 
   for (const entry of entries) {
@@ -1028,6 +1057,11 @@ function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: Librar
     // 库根设为整个 vault 时，跳过 wiki/clipii/日记 等非项目目录
     if (_ignoreDirs.has(entry.name)) continue
     const fullPath = path.join(dirPath, entry.name)
+
+    if (entry.isFile()) {
+      files.push({ name: entry.name, path: fullPath })
+      continue
+    }
 
     // Resolve symlinks
     let realPath = fullPath
@@ -1066,17 +1100,19 @@ function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: Librar
         name: entry.name,
         dirPath: fullPath,
         sessions: sub.sessions,
-        children: sub.folders
+        children: sub.folders,
+        files: sub.files
       })
     }
   }
 
-  return { sessions, folders }
+  files.sort((a, b) => a.name.localeCompare(b.name))
+  return { sessions, folders, files }
 }
 
 export function scanLibrary(): LibraryTree {
-  const { sessions, folders } = scanDir(_root)
-  const tree = { root: _root, folders, ungroupedSessions: sessions }
+  const { sessions, folders, files } = scanDir(_root)
+  const tree = { root: _root, folders, ungroupedSessions: sessions, rootFiles: files }
   applyLibraryTree(tree)
   return tree
 }
@@ -1437,18 +1473,11 @@ export async function ensureSessionInLibrary(
     return existing
   }
 
-  // Create new session dir.
-  // 按启动目录归档：vault 内项目目录启动 → <cwd>/AI会话/；否则 → 中央桶 <root>/AI会话/。
-  // 任何会话都不会落在库根本身（即便库根 = vault）。
+  // Create new session dir. New sessions always land in Inbox. Project/date/topic
+  // organization is explicit: a lens never writes, and an organizer always previews.
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId.slice(0, 12)
   const baseName = sanitizeDirName(title)
-  // 中央桶里的新会话按轮数落进 单轮会话/未分组 子目录（若库配置了 ungrouping），
-  // 使其直接出现在 UI 底部的单轮折叠/未分组区，不在 AI会话 文件夹里一闪而过。
-  const ung = (loadLibraryConfig().preferences as any)?.ungrouping
-  const centralSubfolder = ung
-    ? (session.turnCount > 1 ? ung.multiTurn : ung.singleTurn)
-    : undefined
-  const parentDir = resolveSessionParent(session.cwds, _root, _ignoreDirs, undefined, centralSubfolder)
+  const parentDir = path.join(_root, 'Inbox')
   fs.mkdirSync(parentDir, { recursive: true })
   const dirName = findUniqueDirName(parentDir, baseName)
   const dirPath = path.join(parentDir, dirName)
@@ -1933,6 +1962,56 @@ export function createLibraryFolder(name: string, parentPath?: string): string {
   return dirPath
 }
 
+function assertManagedFolderPath(folderPath: string): void {
+  const relative = path.relative(_root, folderPath)
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('只能整理当前 Vault 内的子文件夹')
+  }
+  if (isSessionDir(folderPath)) throw new Error('会话包不能作为文件夹整体整理')
+  if (folderHasUserFiles(folderPath)) {
+    throw new Error(`拒绝移动：「${path.basename(folderPath)}」含有普通笔记或文档；只允许整理会话包。`)
+  }
+}
+
+function collectRealSessionsRecursively(dirPath: string): LibrarySession[] {
+  const result: LibrarySession[] = []
+  const { sessions, folders } = scanDir(dirPath)
+  result.push(...sessions.filter((session) => !session.isSymlink))
+  for (const folder of folders) result.push(...collectRealSessionsRecursively(folder.dirPath))
+  return result
+}
+
+/**
+ * Materialize a folder rename/move as a batch of marker-verified session moves.
+ * The organizer writes the full reverse plan before the first package moves;
+ * the old shell is removed only after every package has landed successfully.
+ */
+function relocateManagedFolder(folderPath: string, newPath: string): string {
+  assertManagedFolderPath(folderPath)
+  const sessions = collectRealSessionsRecursively(folderPath)
+
+  if (sessions.length === 0) {
+    fs.renameSync(folderPath, newPath)
+    return newPath
+  }
+
+  const inputs = sessions.map((session) => {
+    const relativeParent = path.relative(folderPath, path.dirname(session.dirPath))
+    return {
+      sessionId: session.sessionId,
+      sourceDir: session.dirPath,
+      targetRelativeFolder: path.relative(_root, path.join(newPath, relativeParent))
+    }
+  })
+  const result = executeOrganization(_root, 'manual', inputs)
+  for (const move of result.moves) sessionIndex.set(move.sessionId, move.to)
+
+  // The preflight above proved this tree contains no ordinary files. At this
+  // point only empty directories and aliases remain; session data is at target.
+  fs.rmSync(folderPath, { recursive: true, force: true })
+  return newPath
+}
+
 export function renameLibraryFolder(folderPath: string, newName: string): string {
   const parent = path.dirname(folderPath)
   const currentName = path.basename(folderPath)
@@ -1944,25 +2023,29 @@ export function renameLibraryFolder(folderPath: string, newName: string): string
   const newDirName = findUniqueDirName(parent, sanitized)
   const newPath = path.join(parent, newDirName)
 
-  // Update folderOrder before rename
-  updateFolderOrderPaths(path.relative(_root, folderPath), path.relative(_root, newPath))
-
-  fs.renameSync(folderPath, newPath)
-  return newPath
+  const movedPath = relocateManagedFolder(folderPath, newPath)
+  updateFolderOrderPaths(path.relative(_root, folderPath), path.relative(_root, movedPath))
+  return movedPath
 }
 
 export function moveLibraryFolderToParent(srcPath: string, destParentPath: string): string {
   if (path.dirname(srcPath) === destParentPath) return srcPath
+  const relativeParent = path.relative(_root, destParentPath)
+  if (relativeParent === '..' || relativeParent.startsWith(`..${path.sep}`) || path.isAbsolute(relativeParent)) {
+    throw new Error('目标文件夹必须位于当前 Vault 内')
+  }
+  const relativeToSource = path.relative(srcPath, destParentPath)
+  if (!relativeToSource || (!relativeToSource.startsWith(`..${path.sep}`) && relativeToSource !== '..')) {
+    throw new Error('不能把文件夹移动到自身内部')
+  }
 
   const baseName = path.basename(srcPath)
   const newName = findUniqueDirName(destParentPath, baseName)
   const newPath = path.join(destParentPath, newName)
 
-  // Update folderOrder before move
-  updateFolderOrderPaths(path.relative(_root, srcPath), path.relative(_root, newPath))
-
-  fs.renameSync(srcPath, newPath)
-  return newPath
+  const movedPath = relocateManagedFolder(srcPath, newPath)
+  updateFolderOrderPaths(path.relative(_root, srcPath), path.relative(_root, movedPath))
+  return movedPath
 }
 
 export function deleteLibraryFolder(folderPath: string): void {
@@ -1978,27 +2061,13 @@ export function deleteLibraryFolder(folderPath: string): void {
     )
   }
 
-  // Recursively collect ALL sessions (including those in subfolders)
-  function collectAllSessions(dirPath: string): LibrarySession[] {
-    const result: LibrarySession[] = []
-    const { sessions, folders } = scanDir(dirPath)
-    result.push(...sessions)
-    for (const f of folders) {
-      result.push(...collectAllSessions(f.dirPath))
-    }
-    return result
-  }
-
-  const allSessions = collectAllSessions(folderPath)
-  for (const s of allSessions) {
-    if (!s.isSymlink) {
-      const baseName = path.basename(s.dirPath)
-      const newName = findUniqueDirName(_root, baseName)
-      const newPath = path.join(_root, newName)
-      fs.renameSync(s.dirPath, newPath)
-      sessionIndex.set(s.sessionId, newPath)
-    }
-  }
+  const allSessions = collectRealSessionsRecursively(folderPath)
+  const result = executeOrganization(_root, 'manual', allSessions.map((session) => ({
+    sessionId: session.sessionId,
+    sourceDir: session.dirPath,
+    targetRelativeFolder: 'Inbox'
+  })))
+  for (const move of result.moves) sessionIndex.set(move.sessionId, move.to)
 
   // Now delete the folder (only symlinks/empty subdirs remain)
   fs.rmSync(folderPath, { recursive: true, force: true })
@@ -2007,16 +2076,14 @@ export function deleteLibraryFolder(folderPath: string): void {
 export function moveSessionToFolder(sessionId: string, folderPath: string): void {
   const currentDir = sessionIndex.get(sessionId)
   if (!currentDir || !fs.existsSync(currentDir)) return
-
-  const baseName = path.basename(currentDir)
-  const newName = findUniqueDirName(folderPath, baseName)
-  const newPath = path.join(folderPath, newName)
-
-  // Remove any existing symlinks to this session in the target folder
-  removeSessionSymlinksIn(currentDir, folderPath)
-
-  fs.renameSync(currentDir, newPath)
-  sessionIndex.set(sessionId, newPath)
+  const targetRelativeFolder = path.relative(_root, folderPath)
+  const result = executeOrganization(_root, 'manual', [{
+    sessionId,
+    sourceDir: currentDir,
+    targetRelativeFolder
+  }])
+  const moved = result.moves[0]
+  if (moved) sessionIndex.set(sessionId, moved.to)
 }
 
 export function addSessionToFolder(sessionId: string, folderPath: string): void {
@@ -2049,10 +2116,14 @@ export function removeSessionFromFolder(sessionId: string, folderPath: string): 
           return
         }
       } else if (fullPath === realDir) {
-        // It's the real dir — move to library root
-        const newName = findUniqueDirName(_root, entry.name)
-        fs.renameSync(fullPath, path.join(_root, newName))
-        sessionIndex.set(sessionId, path.join(_root, newName))
+        // Removing a physical assignment returns the session to Inbox.
+        const result = executeOrganization(_root, 'manual', [{
+          sessionId,
+          sourceDir: fullPath,
+          targetRelativeFolder: 'Inbox'
+        }])
+        const moved = result.moves[0]
+        if (moved) sessionIndex.set(sessionId, moved.to)
         return
       }
     } catch { /* ignore */ }
@@ -2264,14 +2335,19 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
       name: f.name,
       parentId,
       sessionIds: f.sessions.map((s) => s.sessionId),
+      files: f.files,
       createdAt: ''
     })
     for (const s of f.sessions) {
-      if (s.meta.customTitle || s.meta.notes || (s.meta.highlights && s.meta.highlights.length > 0)) {
+      if (s.meta.customTitle || s.meta.notes || (s.meta.highlights && s.meta.highlights.length > 0) ||
+        (s.meta.tags && s.meta.tags.length > 0) || s.meta.topic || s.meta.topicConfidence !== undefined) {
         sessionMeta[s.sessionId] = {
           customTitle: s.meta.customTitle,
           notes: s.meta.notes,
-          highlights: s.meta.highlights
+          highlights: s.meta.highlights,
+          tags: s.meta.tags,
+          topic: s.meta.topic,
+          topicConfidence: s.meta.topicConfidence
         }
       }
     }
@@ -2305,11 +2381,15 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
 
   for (const f of sortedRoots) processFolder(f, null)
   for (const s of tree.ungroupedSessions) {
-    if (s.meta.customTitle || s.meta.notes || (s.meta.highlights && s.meta.highlights.length > 0)) {
+    if (s.meta.customTitle || s.meta.notes || (s.meta.highlights && s.meta.highlights.length > 0) ||
+      (s.meta.tags && s.meta.tags.length > 0) || s.meta.topic || s.meta.topicConfidence !== undefined) {
       sessionMeta[s.sessionId] = {
         customTitle: s.meta.customTitle,
         notes: s.meta.notes,
-        highlights: s.meta.highlights
+        highlights: s.meta.highlights,
+        tags: s.meta.tags,
+        topic: s.meta.topic,
+        topicConfidence: s.meta.topicConfidence
       }
     }
   }
@@ -2333,6 +2413,7 @@ export function libraryTreeToConfig(tree: LibraryTree): UserConfig {
 
   return {
     folders,
+    rootFiles: tree.rootFiles,
     sessionMeta,
     preferences: libConfig.preferences
   }
@@ -2434,7 +2515,14 @@ export function setBranchMeta(
 // Update session meta (.swob-session.json) and optionally rename dir
 export function setSessionMetaInLibrary(
   sessionId: string,
-  meta: { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }
+  meta: {
+    customTitle?: string
+    notes?: string
+    highlights?: SessionMeta['highlights']
+    tags?: string[]
+    topic?: string
+    topicConfidence?: number
+  }
 ): void {
   const dirPath = sessionIndex.get(sessionId)
   if (!dirPath) return
@@ -2445,6 +2533,11 @@ export function setSessionMetaInLibrary(
   if (meta.customTitle !== undefined) existing.customTitle = meta.customTitle
   if (meta.notes !== undefined) existing.notes = meta.notes
   if (meta.highlights !== undefined) existing.highlights = meta.highlights
+  if (meta.tags !== undefined) existing.tags = [...new Set(meta.tags.map((tag) => tag.trim()).filter(Boolean))]
+  if (meta.topic !== undefined) existing.topic = meta.topic.trim()
+  if (meta.topicConfidence !== undefined) {
+    existing.topicConfidence = Math.max(0, Math.min(1, meta.topicConfidence))
+  }
   writeSessionMeta(dirPath, existing)
 
   // Rename dir if title changed

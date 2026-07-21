@@ -37,8 +37,21 @@ const api = {
     ipcRenderer.invoke('config:removeSessionFromFolder', folderId, sessionId),
   setSessionMeta: (
     sessionId: string,
-    meta: { customTitle?: string; notes?: string; highlights?: unknown[] }
+    meta: {
+      customTitle?: string
+      notes?: string
+      highlights?: unknown[]
+      tags?: string[]
+      topic?: string
+      topicConfidence?: number
+    }
   ) => ipcRenderer.invoke('config:setSessionMeta', sessionId, meta),
+
+  // Vault organization
+  organizerPreviewProject: () => ipcRenderer.invoke('organizer:previewProject'),
+  organizerPreviewSmart: () => ipcRenderer.invoke('organizer:previewSmart'),
+  organizerApply: (kind: string, items: unknown[]) => ipcRenderer.invoke('organizer:apply', kind, items),
+  organizerUndo: () => ipcRenderer.invoke('organizer:undo'),
 
   // Native context menu
   showSessionContextMenu: (data: { sessionId: string; canResume?: boolean; resumeUnavailableReason?: string; folders: Array<{ id: string; name: string; isIn: boolean }> }) =>

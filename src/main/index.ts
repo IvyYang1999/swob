@@ -66,6 +66,14 @@ import { buildInsights } from './insights'
 import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transcript-watcher'
 import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worker'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
+import {
+  buildProjectOrganizationPreview,
+  executeOrganization,
+  undoLastOrganization,
+  type OrganizationKind,
+  type OrganizationInput
+} from './vault-organizer'
+import { requestSmartOrganization } from './smart-organizer'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
 import {
   normalizeResumeTerminalSettings,
@@ -1549,7 +1557,14 @@ ipcMain.handle(
 
 ipcMain.handle(
   'config:setSessionMeta',
-  async (_event, sessionId: string, meta: { customTitle?: string; notes?: string; highlights?: Highlight[] }) => {
+  async (_event, sessionId: string, meta: {
+    customTitle?: string
+    notes?: string
+    highlights?: Highlight[]
+    tags?: string[]
+    topic?: string
+    topicConfidence?: number
+  }) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
     if (libraryInitialized) {
       if (isBranch) {
@@ -1565,6 +1580,90 @@ ipcMain.handle(
     return setSessionMeta(config, sessionId, meta)
   }
 )
+
+async function refreshAfterOrganization(): Promise<ReturnType<typeof libraryTreeToConfig>> {
+  const tree = await requestLibraryScan(false)
+  for (const session of cachedSessions) annotateSessionForFrontend(session)
+  emitLibraryPatch(cachedSessions, tree)
+  return libraryTreeToConfig(tree)
+}
+
+ipcMain.handle('organizer:previewProject', () => {
+  const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
+  return buildProjectOrganizationPreview(getLibraryRoot(), cachedSessions
+    .filter((session) => !session.id.includes(':intra-') && !session.id.includes(':branch-'))
+    .map((session) => ({
+      ...session,
+      firstUserMessage: config.sessionMeta[session.sessionId]?.customTitle || session.firstUserMessage,
+      libraryDirPath: getSessionDirPath(session.sessionId) || undefined
+    })))
+})
+
+ipcMain.handle('organizer:previewSmart', async () => {
+  const libConfig = loadLibraryConfig()
+  const settings = (libConfig as any).llmSettings as {
+    provider: 'anthropic' | 'openai' | 'custom'
+    apiKey?: string
+    model?: string
+    baseUrl?: string
+  } | undefined
+  if (!settings?.apiKey) throw new Error('missing-api-key')
+
+  const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
+  const candidates = cachedSessions.filter((session) => {
+    if (session.id.includes(':intra-') || session.id.includes(':branch-')) return false
+    if (!getSessionDirPath(session.sessionId)) return false
+    return !config.sessionMeta[session.sessionId]?.topic
+  })
+  const suggestions = await requestSmartOrganization(
+    settings as Parameters<typeof requestSmartOrganization>[0],
+    candidates.map((session) => ({
+      sessionId: session.sessionId,
+      title: config.sessionMeta[session.sessionId]?.customTitle || session.firstUserMessage || session.id,
+      summary: session.firstUserMessage || ''
+    })),
+    config.folders.map((folder) => folder.id)
+  )
+  const byId = new Map(candidates.map((session) => [session.sessionId, session]))
+  return suggestions.map((suggestion) => ({
+    ...suggestion,
+    title: config.sessionMeta[suggestion.sessionId]?.customTitle ||
+      byId.get(suggestion.sessionId)?.firstUserMessage || suggestion.sessionId
+  }))
+})
+
+ipcMain.handle('organizer:apply', async (_event, kind: OrganizationKind, items: Array<{
+  sessionId: string
+  targetRelativeFolder: string
+  topic?: string
+  tags?: string[]
+  confidence?: number
+}>) => {
+  if (!['project', 'smart', 'archive'].includes(kind)) throw new Error('不支持的整理类型')
+  const inputs: OrganizationInput[] = items.map((item) => {
+    const sourceDir = getSessionDirPath(item.sessionId)
+    if (!sourceDir) throw new Error(`会话不在当前 Vault：${item.sessionId}`)
+    return {
+      sessionId: item.sessionId,
+      sourceDir,
+      targetRelativeFolder: item.targetRelativeFolder,
+      metaPatch: kind === 'smart' ? {
+        topic: item.topic,
+        tags: item.tags,
+        topicConfidence: item.confidence
+      } : undefined
+    }
+  })
+  const result = executeOrganization(getLibraryRoot(), kind, inputs)
+  const config = await refreshAfterOrganization()
+  return { ...result, config }
+})
+
+ipcMain.handle('organizer:undo', async () => {
+  const result = undoLastOrganization(getLibraryRoot())
+  const config = await refreshAfterOrganization()
+  return { ...result, config }
+})
 
 // --- Native Context Menu ---
 

@@ -149,8 +149,14 @@ export interface Folder {
   name: string
   parentId?: string | null
   sessionIds: string[]
+  files?: VaultFile[]
   color?: string
   createdAt: string
+}
+
+export interface VaultFile {
+  name: string
+  path: string
 }
 
 export interface Highlight {
@@ -172,10 +178,14 @@ export type ResumeTerminal = 'terminal-app' | 'iterm' | 'custom'
 
 export interface UserConfig {
   folders: Folder[]
+  rootFiles?: VaultFile[]
   sessionMeta: Record<string, {
     customTitle?: string
     notes?: string
     highlights?: Highlight[]
+    tags?: string[]
+    topic?: string
+    topicConfidence?: number
   }>
   preferences: {
     defaultViewMode: 'compact' | 'full'

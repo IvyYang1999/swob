@@ -47,8 +47,38 @@ interface ElectronAPI {
   ) => Promise<any>
   setSessionMeta: (
     sessionId: string,
-    meta: { customTitle?: string; notes?: string; highlights?: Array<{ id: string; text: string; turnUuid: string; note?: string; createdAt: string }> }
+    meta: {
+      customTitle?: string
+      notes?: string
+      highlights?: Array<{ id: string; text: string; turnUuid: string; note?: string; createdAt: string }>
+      tags?: string[]
+      topic?: string
+      topicConfidence?: number
+    }
   ) => Promise<any>
+  organizerPreviewProject: () => Promise<Array<{
+    sessionId: string
+    sourceDir: string
+    targetRelativeFolder: string
+    title: string
+    fromRelative: string
+  }>>
+  organizerPreviewSmart: () => Promise<Array<{
+    sessionId: string
+    folder: string
+    topic: string
+    tags: string[]
+    confidence: number
+    title: string
+  }>>
+  organizerApply: (kind: 'project' | 'smart' | 'archive', items: Array<{
+    sessionId: string
+    targetRelativeFolder: string
+    topic?: string
+    tags?: string[]
+    confidence?: number
+  }>) => Promise<{ operationId: string | null; moves: unknown[]; config: any }>
+  organizerUndo: () => Promise<{ operationId: string | null; moves: unknown[]; config: any }>
   showSessionContextMenu: (data: { sessionId: string; canResume?: boolean; resumeUnavailableReason?: string; folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }> }) =>
     Promise<{ action: string; folderId?: string } | null>
   libraryGetRoot: () => Promise<string>

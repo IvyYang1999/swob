@@ -23,11 +23,11 @@ Swob 读取 **11 种 AI 编程 harness** 的本地历史，重建会话血统，
 </div>
 
 > [!IMPORTANT]
-> **产品通道有意分开。** 下方截图和调试能力来自当前 `main` 的真实界面；发布前只对可识别文本做了英文化与隐私脱敏。公开的 **v1.2.0 稳定版 DMG 早于 Session Galaxy、11 harness、Session Debugger、AI Insights 和 SQLite FTS5**。现在可从源码构建 `main` 体验；这些能力将在下一次发布中交付。
+> **产品通道有意分开。** 下方功能图以当前 `main` 的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。公开的 **v1.2.0 稳定版 DMG 早于 Session Galaxy、11 harness、Session Debugger、AI Insights 和 SQLite FTS5**。现在可从源码构建 `main` 体验；这些能力将在下一次发布中交付。
 
-![Swob Session Galaxy——当前 main，使用脱敏演示数据](site/assets/graph-view.png)
+![基于当前 main 重构的 Swob Session Galaxy 英文演示图](site/assets/graph-view.png)
 
-<p align="center"><sub>当前 <code>main</code> · 真实 Swob 截图 · 可识别文本已英文化并脱敏</sub></p>
+<p align="center"><sub>当前 <code>main</code> · 英文演示重构 · 使用隐私脱敏的示例数据</sub></p>
 
 ## 为什么需要 Swob
 

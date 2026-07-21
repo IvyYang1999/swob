@@ -121,6 +121,7 @@ import {
   writeSessionLineageRegistry
 } from './session-lineage'
 import type { Folder, Highlight, SessionSummary } from './types'
+import { generateSkillContent } from '../cli/command-registry'
 
 let mainWindow: BrowserWindow | null = null
 let spotlightWindow: BrowserWindow | null = null
@@ -2087,7 +2088,7 @@ function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath
   // 2. Install skill
   const skillDir = join(home, '.claude', 'skills', 'swob')
   if (!fs.existsSync(skillDir)) fs.mkdirSync(skillDir, { recursive: true })
-  const skillContent = generateSkillMd()
+  const skillContent = generateSkillContent()
   fs.writeFileSync(join(skillDir, 'SKILL.md'), skillContent, 'utf-8')
 
   return {
@@ -2096,146 +2097,6 @@ function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath
     cliPath: cliInstall.cliPath,
     cliManualInstall: cliInstall.cliManualInstall ?? undefined
   }
-}
-
-function generateSkillMd(): string {
-  return `# Swob CLI — Agent Skill
-
-Swob 是 Claude Code / Codex / Cursor 的会话管理工具。通过 \`swob\` CLI 你可以搜索、浏览、恢复和整理用户的所有 AI 编程助手聊天记录。
-
-## 使用前提
-
-用户已安装 Swob 桌面应用并执行过 \`swob install\`。
-
-## 命令参考
-
-所有命令输出 JSON，可直接解析。
-
-### 搜索 session
-
-\`\`\`bash
-swob search "关键词"
-swob search "项目名" --limit 10
-\`\`\`
-
-返回匹配的 session 列表，按相关性排序。支持中英文、项目名、文件夹名、时间（今天/昨天/本周）、来源（cc/codex/cursor/opencode/zcode）。
-
-### 列出 session
-
-\`\`\`bash
-swob list
-swob list --folder "项目名"
-swob list --source claude-code
-swob list --project swob
-swob list --limit 20
-\`\`\`
-
-### 查看 session 详情
-
-\`\`\`bash
-swob show <sessionId>
-\`\`\`
-
-返回完整的 session 信息，包括消息列表、工具调用、token 统计。
-
-### 恢复 session（获取 resume 命令）
-
-\`\`\`bash
-swob resume <sessionId>
-swob resume <sessionId> --skip-permissions
-swob resume <sessionId> --cwd /path/to/project
-\`\`\`
-
-返回 \\\`{ "command": "claude --resume ..." }\\\`，你可以直接执行该命令。
-
-### 列出文件夹
-
-\`\`\`bash
-swob folders
-\`\`\`
-
-### 创建文件夹
-
-\`\`\`bash
-swob folder create "文件夹名"
-swob folder create "子文件夹" --parent "父文件夹id"
-\`\`\`
-
-### 重命名文件夹
-
-\`\`\`bash
-swob folder rename <folderId> "新名称"
-\`\`\`
-
-### 删除文件夹
-
-\`\`\`bash
-swob folder delete <folderId>
-\`\`\`
-
-### 移动 session 到文件夹
-
-\`\`\`bash
-swob move <sessionId> <folderId>
-\`\`\`
-
-### 重命名 session
-
-\`\`\`bash
-swob rename <sessionId> "新标题"
-\`\`\`
-
-### 查看统计数据
-
-\`\`\`bash
-swob insights
-swob insights --json
-\`\`\`
-
-返回 token 消耗、活跃天数、项目排行、模型使用等统计。
-
-### 查看/修改设置
-
-\`\`\`bash
-swob config get
-swob config get terminalApp
-swob config set terminalApp iTerm2
-swob config set defaultViewMode compact
-\`\`\`
-
-### 查看活跃 session
-
-\`\`\`bash
-swob active
-\`\`\`
-
-### 安装/更新 CLI 和 Skill
-
-\`\`\`bash
-swob install
-\`\`\`
-
-## 典型工作流
-
-### 整理某个项目的所有 session
-
-1. \\\`swob list --project myproject\\\` 找到所有相关 session
-2. \\\`swob folders\\\` 查看现有文件夹
-3. \\\`swob folder create "myproject"\\\` 创建文件夹（如不存在）
-4. 对每个 session 执行 \\\`swob move <sessionId> <folderId>\\\`
-5. 可选：\\\`swob rename <sessionId> "描述性标题"\\\` 重命名
-
-### 快速找到并恢复之前的对话
-
-1. \\\`swob search "我在做的事情"\\\` 搜索
-2. 从结果中找到目标 sessionId
-3. \\\`swob resume <sessionId>\\\` 获取恢复命令
-4. 执行返回的命令
-
-### 查看工作统计
-
-\\\`swob insights\\\` 查看总览，包括 token 消耗和活跃时间。
-`
 }
 
 function autoInstallCliOnStartup(): void {

@@ -4,7 +4,7 @@ import * as path from 'path'
 import { parseSessionFile } from './session-loader'
 import type { RawJsonlMessage } from './types'
 
-const SEARCH_SCHEMA_VERSION = 2
+const SEARCH_SCHEMA_VERSION = 3
 const DEFAULT_INDEX_DIR = path.join(process.env.HOME || '', '.claude-session-manager')
 
 export interface SearchIndexSource {
@@ -12,6 +12,10 @@ export interface SearchIndexSource {
   sessionId?: string
   source?: string
   isLibraryBackup?: boolean
+  /** Physical file used for freshness checks when filePath is a virtual DB session ref. */
+  stateFilePath?: string
+  /** Source-specific normalizer. Called only when the physical signature changed. */
+  loadRaw?: () => Promise<RawJsonlMessage[]>
 }
 
 export interface SearchIndexResult {
@@ -19,6 +23,37 @@ export interface SearchIndexResult {
   filePath: string
   firstUserMessage: string
   matches: Array<{ text: string; timestamp: string }>
+}
+
+export interface TranscriptGrepFilters {
+  source?: string
+  sessionIds?: string[]
+  after?: string
+  before?: string
+  project?: string
+  limit?: number
+}
+
+export interface TranscriptGrepLine {
+  role: string
+  text: string
+  timestamp: string
+  matched: boolean
+}
+
+export interface TranscriptGrepMatch {
+  role: string
+  text: string
+  timestamp: string
+  context: TranscriptGrepLine[]
+}
+
+export interface TranscriptGrepResult {
+  sessionId: string
+  filePath: string
+  source: string
+  projectPath: string
+  matches: TranscriptGrepMatch[]
 }
 
 interface IndexedSessionRow {
@@ -29,6 +64,7 @@ interface IndexedSessionRow {
   file_dev: number
   file_ino: number
   indexed_raw_count: number
+  project_path: string
 }
 
 interface FileState {
@@ -43,6 +79,17 @@ interface SearchRow {
   file_path: string
   first_user_message: string
   snippet: string
+  timestamp: string
+}
+
+interface GrepRow {
+  rowid: number
+  session_id: string
+  file_path: string
+  source: string
+  project_path: string
+  role: string
+  text: string
   timestamp: string
 }
 
@@ -103,6 +150,7 @@ function ensureSchema(db: Database.Database): void {
       file_path TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
       source TEXT NOT NULL,
+      project_path TEXT NOT NULL,
       file_signature TEXT NOT NULL,
       first_user_message TEXT NOT NULL,
       indexed_size INTEGER NOT NULL,
@@ -145,6 +193,14 @@ function getDatabase(): Database.Database {
   return database
 }
 
+function searchableValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try { return JSON.stringify(value) }
+  catch { return String(value) }
+}
+
 function extractContentText(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -153,17 +209,19 @@ function extractContentText(content: unknown): string {
   for (const part of content) {
     if (!part || typeof part !== 'object') continue
     const item = part as Record<string, unknown>
-    if (item.type === 'text') text += (text ? ' ' : '') + String(item.text || '')
-    if (item.type === 'tool_result' && typeof item.content === 'string') text += ' ' + item.content
-    if (item.type === 'tool_use' && item.input && typeof item.input === 'object') {
-      const input = item.input as Record<string, unknown>
-      if (input.command) text += ' ' + String(input.command)
-      if (input.file_path) text += ' ' + String(input.file_path)
-      if (input.pattern) text += ' ' + String(input.pattern)
-      if (input.content) text += ' ' + String(input.content).slice(0, 500)
+    if (item.type === 'text') text += (text ? ' ' : '') + searchableValue(item.text)
+    if (item.type === 'thinking') text += (text ? ' ' : '') + searchableValue(item.thinking ?? item.text)
+    if (item.type === 'tool_result') text += (text ? ' ' : '') + extractContentText(item.content)
+    if (item.type === 'tool_use') {
+      text += (text ? ' ' : '') + searchableValue(item.name)
+      text += (text ? ' ' : '') + searchableValue(item.input)
     }
   }
   return text
+}
+
+function projectPathFromRaw(raw: RawJsonlMessage[]): string {
+  return raw.find((message) => typeof message.cwd === 'string' && message.cwd.trim())?.cwd || ''
 }
 
 function firstUserMessage(raw: RawJsonlMessage[]): string {
@@ -183,7 +241,7 @@ function removeIndexedFile(db: Database.Database, filePath: string): void {
 
 async function indexSourceNow(source: SearchIndexSource): Promise<boolean> {
   const db = getDatabase()
-  const state = computeFileState(source.filePath)
+  const state = computeFileState(source.stateFilePath || source.filePath)
   if (!state) {
     removeIndexedFile(db, source.filePath)
     return false
@@ -196,7 +254,7 @@ async function indexSourceNow(source: SearchIndexSource): Promise<boolean> {
 
   let raw: RawJsonlMessage[]
   try {
-    raw = await parseSessionFile(source.filePath)
+    raw = source.loadRaw ? await source.loadRaw() : await parseSessionFile(source.filePath)
   } catch {
     removeIndexedFile(db, source.filePath)
     return false
@@ -220,7 +278,7 @@ function writeIndexedRawSource(
   }
 
   const canAppend = Boolean(
-    existing && existing.session_id === sessionId &&
+    !source.stateFilePath && existing && existing.session_id === sessionId &&
     existing.file_dev === state.dev && existing.file_ino === state.ino &&
     state.size > existing.indexed_size && raw.length >= existing.indexed_raw_count
   )
@@ -237,13 +295,14 @@ function writeIndexedRawSource(
     if (!canAppend) db.prepare('DELETE FROM messages_fts WHERE file_path = ?').run(source.filePath)
     db.prepare(`
       INSERT INTO sessions(
-        file_path, session_id, source, file_signature, first_user_message,
+        file_path, session_id, source, project_path, file_signature, first_user_message,
         indexed_size, file_dev, file_ino, indexed_raw_count
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(file_path) DO UPDATE SET
         session_id = excluded.session_id,
         source = excluded.source,
+        project_path = excluded.project_path,
         file_signature = excluded.file_signature,
         first_user_message = excluded.first_user_message,
         indexed_size = excluded.indexed_size,
@@ -254,6 +313,7 @@ function writeIndexedRawSource(
       source.filePath,
       sessionId,
       source.source || (isLibraryBackup ? 'library-backup' : 'claude-code'),
+      projectPathFromRaw(raw),
       state.signature,
       firstUserMessage(raw),
       state.size,
@@ -305,7 +365,7 @@ export async function indexParsedSearchSource(
 ): Promise<void> {
   return serializeSynchronization(async () => {
     const db = getDatabase()
-    const state = computeFileState(source.filePath)
+    const state = computeFileState(source.stateFilePath || source.filePath)
     if (!state) {
       removeIndexedFile(db, source.filePath)
       return
@@ -395,6 +455,100 @@ export function searchFTS(query: string, limit = 50): SearchIndexResult[] {
   queryCache.set(cacheKey, { dataVersion, indexRevision, results: output })
   if (queryCache.size > 32) queryCache.delete(queryCache.keys().next().value!)
   return output
+}
+
+function contextLine(row: Pick<GrepRow, 'role' | 'text' | 'timestamp'>, matched: boolean): TranscriptGrepLine {
+  return { role: row.role, text: row.text, timestamp: row.timestamp, matched }
+}
+
+/**
+ * Search the already synchronized FTS index. Context means the immediately
+ * preceding and following indexed transcript messages from the same source.
+ */
+export function grepTranscripts(query: string, filters: TranscriptGrepFilters = {}): TranscriptGrepResult[] {
+  const ftsQuery = toFtsQuery(query)
+  if (!ftsQuery) return []
+  if (filters.sessionIds && filters.sessionIds.length === 0) return []
+
+  const db = getDatabase()
+  const where = ['messages_fts MATCH ?']
+  const params: Array<string | number> = [ftsQuery]
+  if (filters.source) {
+    where.push('sessions.source = ?')
+    params.push(filters.source)
+  }
+  if (filters.sessionIds) {
+    where.push(`sessions.session_id IN (${filters.sessionIds.map(() => '?').join(', ')})`)
+    params.push(...filters.sessionIds)
+  }
+  if (filters.after) {
+    where.push('messages_fts.timestamp >= ?')
+    params.push(filters.after)
+  }
+  if (filters.before) {
+    where.push('messages_fts.timestamp <= ?')
+    params.push(filters.before)
+  }
+  if (filters.project) {
+    where.push('sessions.project_path LIKE ?')
+    params.push(`%${filters.project}%`)
+  }
+  const limit = Math.max(1, Math.min(filters.limit || 100, 1000))
+  params.push(limit)
+
+  const rows = db.prepare(`
+    SELECT
+      messages_fts.rowid AS rowid,
+      sessions.session_id,
+      sessions.file_path,
+      sessions.source,
+      sessions.project_path,
+      messages_fts.role,
+      messages_fts.text,
+      messages_fts.timestamp
+    FROM messages_fts
+    JOIN sessions ON sessions.file_path = messages_fts.file_path
+    WHERE ${where.join(' AND ')}
+    ORDER BY bm25(messages_fts), messages_fts.timestamp DESC
+    LIMIT ?
+  `).all(...params) as GrepRow[]
+
+  const previous = db.prepare(`
+    SELECT role, text, timestamp FROM messages_fts
+    WHERE file_path = ? AND rowid < ? ORDER BY rowid DESC LIMIT 1
+  `)
+  const next = db.prepare(`
+    SELECT role, text, timestamp FROM messages_fts
+    WHERE file_path = ? AND rowid > ? ORDER BY rowid ASC LIMIT 1
+  `)
+  const grouped = new Map<string, TranscriptGrepResult>()
+  for (const row of rows) {
+    const key = `${row.session_id}\0${row.file_path}`
+    let result = grouped.get(key)
+    if (!result) {
+      result = {
+        sessionId: row.session_id,
+        filePath: row.file_path,
+        source: row.source,
+        projectPath: row.project_path,
+        matches: []
+      }
+      grouped.set(key, result)
+    }
+    const before = previous.get(row.file_path, row.rowid) as Pick<GrepRow, 'role' | 'text' | 'timestamp'> | undefined
+    const after = next.get(row.file_path, row.rowid) as Pick<GrepRow, 'role' | 'text' | 'timestamp'> | undefined
+    result.matches.push({
+      role: row.role,
+      text: row.text,
+      timestamp: row.timestamp,
+      context: [
+        ...(before ? [contextLine(before, false)] : []),
+        contextLine(row, true),
+        ...(after ? [contextLine(after, false)] : [])
+      ]
+    })
+  }
+  return [...grouped.values()]
 }
 
 export function searchIndexStats(): { sessions: number; messages: number; libraryBackups: number; databasePath: string } {

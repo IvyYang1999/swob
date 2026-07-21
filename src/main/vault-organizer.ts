@@ -9,6 +9,7 @@ const OPERATIONS_DIR = path.join('.swob', 'operations')
 export type OrganizationKind = 'manual' | 'project' | 'smart' | 'archive'
 
 export interface SessionClassificationPatch {
+  customTitle?: string
   tags?: string[]
   topic?: string
   topicConfidence?: number
@@ -18,6 +19,8 @@ export interface OrganizationInput {
   sessionId: string
   sourceDir: string
   targetRelativeFolder: string
+  /** Optional package directory name. Used by transactional session rename. */
+  targetBaseName?: string
   metaPatch?: SessionClassificationPatch
 }
 
@@ -26,6 +29,7 @@ export interface OrganizationMove {
   from: string
   to: string
   metaBefore: {
+    customTitle: string | null
     tags: string[] | null
     topic: string | null
     topicConfidence: number | null
@@ -113,6 +117,7 @@ function readMarker(dirPath: string, expectedSessionId?: string): Record<string,
 
 function classificationSnapshot(meta: Record<string, unknown>): OrganizationMove['metaBefore'] {
   return {
+    customTitle: typeof meta.customTitle === 'string' ? meta.customTitle : null,
     tags: Array.isArray(meta.tags) && meta.tags.every((tag) => typeof tag === 'string') ? [...meta.tags] as string[] : null,
     topic: typeof meta.topic === 'string' ? meta.topic : null,
     topicConfidence: typeof meta.topicConfidence === 'number' ? meta.topicConfidence : null
@@ -138,6 +143,7 @@ function writeMarker(dirPath: string, meta: Record<string, unknown>): void {
 
 function applyMetaPatch(dirPath: string, patch: SessionClassificationPatch): void {
   const meta = readMarker(dirPath)
+  if (patch.customTitle !== undefined) meta.customTitle = patch.customTitle
   if (patch.tags !== undefined) {
     meta.tags = [...new Set(patch.tags.map((tag) => tag.trim()).filter(Boolean))]
   }
@@ -150,6 +156,8 @@ function applyMetaPatch(dirPath: string, patch: SessionClassificationPatch): voi
 
 function restoreMeta(dirPath: string, snapshot: OrganizationMove['metaBefore']): void {
   const meta = readMarker(dirPath)
+  if (snapshot.customTitle === null) delete meta.customTitle
+  else meta.customTitle = snapshot.customTitle
   if (snapshot.tags === null) delete meta.tags
   else meta.tags = snapshot.tags
   if (snapshot.topic === null) delete meta.topic
@@ -189,9 +197,16 @@ function buildMoves(root: string, inputs: readonly OrganizationInput[]): Organiz
     const relativeFolder = sanitizeRelativeFolder(input.targetRelativeFolder)
     const targetFolder = path.resolve(rootPath, relativeFolder)
     if (!isInside(rootPath, targetFolder)) throw new Error('目标文件夹超出 Vault')
-    if (path.dirname(sourceDir) === targetFolder) return []
+    const requestedBaseName = input.targetBaseName === undefined
+      ? path.basename(sourceDir)
+      : sanitizeSegment(input.targetBaseName)
+    if (!requestedBaseName) throw new Error(`会话标题无效：${input.sessionId}`)
+    const staysInPlace = path.dirname(sourceDir) === targetFolder && path.basename(sourceDir) === requestedBaseName
+    if (staysInPlace && !input.metaPatch) return []
 
-    const targetPath = uniqueDestination(targetFolder, path.basename(sourceDir), reserved)
+    const targetPath = staysInPlace
+      ? sourceDir
+      : uniqueDestination(targetFolder, requestedBaseName, reserved)
     return [{
       sessionId: input.sessionId,
       from: sourceDir,
@@ -252,12 +267,14 @@ export function executeOrganization(
     for (const move of moves) {
       fs.mkdirSync(path.dirname(move.to), { recursive: true })
       readMarker(move.from, move.sessionId)
-      fs.renameSync(move.from, move.to)
-      if (move.metaAfter) applyMetaPatch(move.to, move.metaAfter)
+      // Persist the reverse step before mutating the package. If the process
+      // dies between rename and the next log write, undo still has a plan.
       log.appliedCount++
       log.status = 'partial'
       log.updatedAt = new Date().toISOString()
       writeJsonAtomically(logPath, log)
+      if (move.from !== move.to) fs.renameSync(move.from, move.to)
+      if (move.metaAfter) applyMetaPatch(move.to, move.metaAfter)
     }
     log.status = 'applied'
     log.updatedAt = new Date().toISOString()
@@ -297,6 +314,10 @@ export function undoLastOrganization(root: string): OrganizationResult {
 
   // Preflight the entire reverse operation before changing the filesystem.
   for (const move of appliedMoves) {
+    if (move.from === move.to) {
+      readMarker(move.to, move.sessionId)
+      continue
+    }
     if (fs.existsSync(move.to)) {
       readMarker(move.to, move.sessionId)
       if (fs.existsSync(move.from)) throw new Error(`无法撤销：原位置已被占用 ${move.from}`)
@@ -307,6 +328,11 @@ export function undoLastOrganization(root: string): OrganizationResult {
 
   const reversed: OrganizationMove[] = []
   for (const move of [...appliedMoves].reverse()) {
+    if (move.from === move.to) {
+      restoreMeta(move.from, move.metaBefore)
+      reversed.push({ ...move })
+      continue
+    }
     if (!fs.existsSync(move.to)) continue
     fs.mkdirSync(path.dirname(move.from), { recursive: true })
     fs.renameSync(move.to, move.from)

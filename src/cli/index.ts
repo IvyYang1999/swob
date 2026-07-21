@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { execSync } from 'node:child_process'
+import { format as formatLog } from 'node:util'
 import {
-  loadAllSessions,
-  loadSessionDetail,
   findAllSessionFiles,
-  parseSessionFile,
-  buildSessionSummary
+  loadAllSessions,
+  loadSessionDetail
 } from '../main/session-loader'
 import {
   initLibrary,
@@ -16,14 +19,15 @@ import {
   createLibraryFolder,
   renameLibraryFolder,
   deleteLibraryFolder,
-  moveSessionToFolder,
-  setSessionMetaInLibrary,
+  moveSessionsToFolders,
+  renameSessionsInLibrary,
+  undoLastLibraryOrganization,
   resolveFolderPath,
   getLibraryRoot,
   rebuildAllTranscripts,
-  redactLibraryTranscripts
+  redactLibraryTranscripts,
+  findLibrarySessionsWithMissingSources
 } from '../main/library-manager'
-import { loadConfig, saveConfig } from '../main/config-store'
 import { spotlightSearch } from '../main/spotlight-search'
 import { buildInsights } from '../main/insights'
 import { installSwobCli } from '../main/cli-install'
@@ -35,43 +39,101 @@ import {
   rebuildSessionLineageRegistry,
   writeSessionLineageRegistry
 } from '../main/session-lineage'
-import type { SessionSummary } from '../main/types'
-import { accountingForSession } from '../main/token-accounting'
-import { execSync } from 'child_process'
+import { detectSessionSourceForJsonl } from '../main/session-source'
+import { grepTranscripts, synchronizeSearchSources, type SearchIndexSource } from '../main/search-index'
+import { findCodexSessionFiles, loadCodexRawMessages } from '../main/codex-loader'
+import { findCursorSessionFiles, loadCursorRawMessages } from '../main/cursor-loader'
+import {
+  findOpencodeSessionFiles,
+  loadOpencodeRawMessages,
+  stripOpencodeSessionRef
+} from '../main/opencode-loader'
+import { findZcodeSessionFiles, loadZcodeRawMessages, stripZcodeSessionRef } from '../main/zcode-loader'
+import type { ParsedMessage, SessionDetail } from '../main/types'
+import {
+  CLI_VERSION,
+  cliHelpData,
+  generateSkillContent,
+  renderCliHelp
+} from './command-registry'
 
-// ── Helpers ────────────────────────────────────────────────────────
+export interface CliIo {
+  stdout: (value: string) => void
+  stderr: (value: string) => void
+  readStdin: () => Promise<string>
+}
+
+const processIo: CliIo = {
+  stdout: (value) => process.stdout.write(value),
+  stderr: (value) => process.stderr.write(value),
+  readStdin: async () => {
+    let value = ''
+    process.stdin.setEncoding('utf-8')
+    for await (const chunk of process.stdin) value += chunk
+    return value
+  }
+}
+
+let activeIo = processIo
+
+class CliFailure extends Error {
+  constructor(message: string, readonly exitCode = 1) {
+    super(message)
+  }
+}
 
 function out(data: unknown): void {
-  process.stdout.write(JSON.stringify(data, null, 2) + '\n')
+  activeIo.stdout(JSON.stringify(data, null, 2) + '\n')
 }
 
-function err(message: string, code = 1): never {
-  process.stderr.write(JSON.stringify({ error: message }) + '\n')
-  process.exit(code)
+function outJsonl(data: unknown): void {
+  activeIo.stdout(JSON.stringify(data) + '\n')
 }
 
-function parseArgs(argv: string[]): { cmd: string[]; flags: Record<string, string | true> } {
+function fail(message: string, exitCode = 1): never {
+  throw new CliFailure(message, exitCode)
+}
+
+const booleanFlags = new Set([
+  'all', 'dry-run', 'full', 'help', 'json', 'missing-only', 'skip-permissions',
+  'stdin', 'summary', 'version'
+])
+
+export function parseArgs(argv: string[]): { cmd: string[]; flags: Record<string, string | true> } {
   const cmd: string[] = []
   const flags: Record<string, string | true> = {}
-  let i = 0
-  while (i < argv.length) {
-    const arg = argv[i]
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2)
-      const next = argv[i + 1]
-      if (next && !next.startsWith('--')) {
-        flags[key] = next
-        i += 2
-      } else {
-        flags[key] = true
-        i += 1
-      }
-    } else {
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index]
+    if (!arg.startsWith('--')) {
       cmd.push(arg)
-      i += 1
+      continue
+    }
+    const equalAt = arg.indexOf('=')
+    if (equalAt > 2) {
+      flags[arg.slice(2, equalAt)] = arg.slice(equalAt + 1)
+      continue
+    }
+    const key = arg.slice(2)
+    if (booleanFlags.has(key)) {
+      flags[key] = true
+      continue
+    }
+    const next = argv[index + 1]
+    if (next && !next.startsWith('--')) {
+      flags[key] = next
+      index++
+    } else {
+      flags[key] = true
     }
   }
   return { cmd, flags }
+}
+
+function positiveInteger(value: string | true | undefined, fallback: number): number {
+  if (value === undefined) return fallback
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed <= 0) fail(`必须是正整数: ${String(value)}`)
+  return parsed
 }
 
 function detectActiveSessionsFromProcesses(): Set<string> {
@@ -89,10 +151,10 @@ function detectActiveSessionsFromProcesses(): Set<string> {
   }
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
+  return String(value)
 }
 
 function formatTime(ms: number): string {
@@ -101,123 +163,119 @@ function formatTime(ms: number): string {
   return `${(ms / 3_600_000).toFixed(1)}h`
 }
 
-// ── Init ───────────────────────────────────────────────────────────
+function currentLibraryConfig() {
+  return libraryTreeToConfig(scanLibrary())
+}
 
-const startupCommand = parseArgs(process.argv.slice(2)).cmd[0]
-initLibrary(undefined, { readOnly: startupCommand === 'resume-audit' })
-scanLibrary()
-
-// ── Commands ───────────────────────────────────────────────────────
+function folderSessionIds(folderValue: string): string[] {
+  const normalized = folderValue.toLowerCase()
+  const folder = currentLibraryConfig().folders.find((candidate) =>
+    candidate.id.toLowerCase() === normalized || candidate.name.toLowerCase() === normalized
+  )
+  if (!folder) fail(`文件夹 "${folderValue}" 不存在`, 3)
+  return folder.sessionIds
+}
 
 async function cmdSearch(query: string, flags: Record<string, string | true>): Promise<void> {
-  const sessions = await loadAllSessions()
-  const config = (() => {
-    const tree = scanLibrary()
-    return libraryTreeToConfig(tree)
-  })()
+  const sessions = await loadAllSessions({ quiet: true })
+  const config = currentLibraryConfig()
   const folderMap = new Map<string, string>()
   for (const folder of config.folders) {
-    for (const sid of folder.sessionIds) {
-      folderMap.set(sid, folder.name)
-    }
+    for (const sessionId of folder.sessionIds) folderMap.set(sessionId, folder.name)
   }
-  const limit = flags.limit ? parseInt(String(flags.limit), 10) : 20
   const results = spotlightSearch(query, sessions, {
     sessionMeta: config.sessionMeta || {},
     folderMap
-  }, limit)
-
-  out(results.map(r => ({
-    sessionId: r.session.sessionId,
-    title: r.customTitle || r.session.firstUserMessage?.slice(0, 80),
-    folder: r.folderName || null,
-    source: r.session.source || 'claude-code',
-    updatedAt: r.session.updatedAt,
-    turnCount: r.session.turnCount,
-    tokens: accountingForSession(r.session).billingTotal,
-    score: Math.round(r.score),
-    matchedFields: r.matchedFields
+  }, positiveInteger(flags.limit, 20))
+  out(results.map((result) => ({
+    sessionId: result.session.sessionId,
+    title: result.customTitle || result.session.firstUserMessage?.slice(0, 80),
+    folder: result.folderName || null,
+    source: result.session.source || 'claude-code',
+    updatedAt: result.session.updatedAt,
+    turnCount: result.session.turnCount,
+    tokens: result.session.tokenUsage.inputTokens + result.session.tokenUsage.outputTokens,
+    tokenMetric: 'input_plus_output',
+    score: Math.round(result.score),
+    matchedFields: result.matchedFields
   })))
 }
 
 async function cmdList(flags: Record<string, string | true>): Promise<void> {
-  const sessions = await loadAllSessions()
-  const config = (() => {
-    const tree = scanLibrary()
-    return libraryTreeToConfig(tree)
-  })()
-
+  const sessions = await loadAllSessions({ quiet: true })
+  const config = currentLibraryConfig()
   let filtered = sessions
-
-  if (flags.folder) {
-    const folderName = String(flags.folder).toLowerCase()
-    const folder = config.folders.find(f => f.name.toLowerCase() === folderName)
-    if (!folder) err(`文件夹 "${flags.folder}" 不存在`)
-    const idSet = new Set(folder.sessionIds)
-    filtered = filtered.filter(s => idSet.has(s.sessionId))
+  if (typeof flags.folder === 'string') {
+    const ids = new Set(folderSessionIds(flags.folder))
+    filtered = filtered.filter((session) => ids.has(session.sessionId))
   }
-
-  if (flags.source) {
-    const src = String(flags.source).toLowerCase()
-    filtered = filtered.filter(s => (s.source || 'claude-code') === src)
+  if (typeof flags.source === 'string') {
+    const source = flags.source.toLowerCase()
+    filtered = filtered.filter((session) => (session.source || 'claude-code') === source)
   }
-
-  if (flags.project) {
-    const proj = String(flags.project).toLowerCase()
-    filtered = filtered.filter(s =>
-      s.cwds.some(c => c.toLowerCase().includes(proj)) ||
-      s.projectPath.toLowerCase().includes(proj)
+  if (typeof flags.project === 'string') {
+    const project = flags.project.toLowerCase()
+    filtered = filtered.filter((session) =>
+      session.cwds.some((cwd) => cwd.toLowerCase().includes(project)) ||
+      session.projectPath.toLowerCase().includes(project)
     )
   }
-
-  const limit = flags.limit ? parseInt(String(flags.limit), 10) : 50
-  filtered = filtered.slice(0, limit)
-
+  filtered = filtered.slice(0, positiveInteger(flags.limit, 50))
   const sessionMeta = config.sessionMeta || {}
   const folderMap = new Map<string, string>()
   for (const folder of config.folders) {
-    for (const sid of folder.sessionIds) {
-      folderMap.set(sid, folder.name)
-    }
+    for (const sessionId of folder.sessionIds) folderMap.set(sessionId, folder.name)
   }
-
-  out(filtered.map(s => ({
-    sessionId: s.sessionId,
-    title: sessionMeta[s.sessionId]?.customTitle || s.firstUserMessage?.slice(0, 80),
-    folder: folderMap.get(s.sessionId) || null,
-    source: s.source || 'claude-code',
-    project: s.cwds[0]?.split('/').pop() || '',
-    createdAt: s.createdAt,
-    updatedAt: s.updatedAt,
-    turnCount: s.turnCount,
-    tokens: accountingForSession(s).billingTotal,
+  out(filtered.map((session) => ({
+    sessionId: session.sessionId,
+    title: sessionMeta[session.sessionId]?.customTitle || session.firstUserMessage?.slice(0, 80),
+    folder: folderMap.get(session.sessionId) || null,
+    source: session.source || 'claude-code',
+    project: session.cwds[0]?.split('/').pop() || '',
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    turnCount: session.turnCount,
+    tokens: session.tokenUsage.inputTokens + session.tokenUsage.outputTokens,
+    tokenMetric: 'input_plus_output',
     isActive: false
   })))
 }
 
-async function cmdShow(sessionId: string): Promise<void> {
-  const sessions = await loadAllSessions()
-  const session = sessions.find(s => s.sessionId === sessionId || s.id === sessionId)
-  if (!session) err(`Session "${sessionId}" 不存在`)
+function thinkingParts(message: ParsedMessage): string[] {
+  const content = message.raw.message?.content
+  if (!Array.isArray(content)) return []
+  return content.flatMap((part) => {
+    if (part.type !== 'thinking') return []
+    const record = part as unknown as Record<string, unknown>
+    const thinking = record.thinking ?? record.text
+    return typeof thinking === 'string' ? [thinking] : []
+  })
+}
 
-  const detail = await loadSessionDetail(
-    session.filePath,
-    session.allFilePaths,
-    session.branchParentFilePaths,
-    session.branchPointUuid,
-    session.branchLeafUuid
-  )
-  if (!detail) err(`无法加载 session "${sessionId}" 的详情`)
+function showMessage(message: ParsedMessage, full: boolean): Record<string, unknown> {
+  return {
+    uuid: message.uuid,
+    type: message.type,
+    timestamp: message.timestamp,
+    text: full ? message.textContent : message.textContent.slice(0, 500),
+    toolCalls: full
+      ? message.toolCalls.map((tool) => ({
+          id: tool.id || null,
+          name: tool.name,
+          input: tool.input,
+          result: tool.result ?? null
+        }))
+      : message.toolCalls.map((tool) => tool.name),
+    ...(full ? { thinking: thinkingParts(message) } : {}),
+    isPreCompact: message.isPreCompact,
+    isSidechain: message.isSidechain
+  }
+}
 
-  const config = (() => {
-    const tree = scanLibrary()
-    return libraryTreeToConfig(tree)
-  })()
-  const meta = config.sessionMeta?.[session.sessionId]
-
-  out({
+function showHeader(detail: SessionDetail, title: string): Record<string, unknown> {
+  return {
     sessionId: detail.sessionId,
-    title: meta?.customTitle || detail.firstUserMessage?.slice(0, 80),
+    title,
     source: detail.source || 'claude-code',
     createdAt: detail.createdAt,
     updatedAt: detail.updatedAt,
@@ -230,237 +288,352 @@ async function cmdShow(sessionId: string): Promise<void> {
       input: detail.tokenUsage.inputTokens,
       output: detail.tokenUsage.outputTokens,
       cacheCreation: detail.tokenUsage.cacheCreationTokens,
-      cacheRead: detail.tokenUsage.cacheReadTokens
+      cacheRead: detail.tokenUsage.cacheReadTokens,
+      totalMetric: 'input_plus_output'
     },
     tokenAccounting: detail.tokenAccounting,
     models: detail.models,
-    toolUsage: detail.toolUsage,
-    messages: detail.messages.map(m => ({
-      uuid: m.uuid,
-      type: m.type,
-      timestamp: m.timestamp,
-      text: m.textContent.slice(0, 500),
-      toolCalls: m.toolCalls.map(t => t.name),
-      isPreCompact: m.isPreCompact,
-      isSidechain: m.isSidechain
-    }))
+    toolUsage: detail.toolUsage
+  }
+}
+
+async function cmdShow(sessionId: string, flags: Record<string, string | true>): Promise<void> {
+  const sessions = await loadAllSessions({ quiet: true })
+  const session = sessions.find((candidate) => candidate.sessionId === sessionId || candidate.id === sessionId)
+  if (!session) fail(`Session "${sessionId}" 不存在`, 3)
+  const detail = await loadSessionDetail(
+    session.filePath,
+    session.allFilePaths,
+    session.branchParentFilePaths,
+    session.branchPointUuid,
+    session.branchLeafUuid
+  )
+  if (!detail) fail(`Session "${sessionId}" 不存在`, 3)
+  const meta = currentLibraryConfig().sessionMeta?.[session.sessionId]
+  const header = showHeader(detail, meta?.customTitle || detail.firstUserMessage?.slice(0, 80))
+  const full = flags.full === true
+  const output = { ...header, messages: detail.messages.map((message) => showMessage(message, full)) }
+  if (flags.format === undefined) {
+    out(output)
+    return
+  }
+  if (flags.format !== 'jsonl') fail(`不支持的格式: ${String(flags.format)}`)
+  outJsonl({ event: 'session', ...header })
+  for (const message of detail.messages) {
+    outJsonl({ event: 'message', sessionId: detail.sessionId, ...showMessage(message, full) })
+  }
+}
+
+function dateBoundary(value: string | true | undefined, endOfDay: boolean): string | undefined {
+  if (value === undefined) return undefined
+  if (value === true) fail('日期选项缺少值')
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`
+    : value
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) fail(`无效日期: ${value}`)
+  return date.toISOString()
+}
+
+async function cmdGrep(query: string, flags: Record<string, string | true>): Promise<void> {
+  const sourceFiles = findAllSessionFiles()
+  const sources: SearchIndexSource[] = sourceFiles.map((filePath) => ({
+    filePath,
+    source: detectSessionSourceForJsonl(filePath)
+  }))
+  for (const filePath of findCodexSessionFiles()) {
+    sources.push({ filePath, source: 'codex', loadRaw: () => loadCodexRawMessages(filePath) })
+  }
+  for (const filePath of findCursorSessionFiles()) {
+    sources.push({ filePath, source: 'cursor', loadRaw: () => loadCursorRawMessages(filePath) })
+  }
+  for (const filePath of await findOpencodeSessionFiles()) {
+    sources.push({
+      filePath,
+      source: 'opencode',
+      stateFilePath: stripOpencodeSessionRef(filePath),
+      loadRaw: () => loadOpencodeRawMessages(filePath)
+    })
+  }
+  for (const filePath of await findZcodeSessionFiles()) {
+    sources.push({
+      filePath,
+      source: 'zcode',
+      stateFilePath: stripZcodeSessionRef(filePath),
+      loadRaw: () => loadZcodeRawMessages(filePath)
+    })
+  }
+  for (const backup of findLibrarySessionsWithMissingSources()) {
+    sources.push({ filePath: backup.backupPath, source: 'library-backup' })
+  }
+  await synchronizeSearchSources(sources)
+  const startedAt = performance.now()
+  const results = grepTranscripts(query, {
+    source: typeof flags.source === 'string' ? flags.source : undefined,
+    sessionIds: typeof flags.folder === 'string' ? folderSessionIds(flags.folder) : undefined,
+    after: dateBoundary(flags.after, false),
+    before: dateBoundary(flags.before, true),
+    project: typeof flags.project === 'string' ? flags.project : undefined,
+    limit: positiveInteger(flags.limit, 100)
+  })
+  out({
+    query,
+    filters: {
+      source: typeof flags.source === 'string' ? flags.source : null,
+      folder: typeof flags.folder === 'string' ? flags.folder : null,
+      after: typeof flags.after === 'string' ? flags.after : null,
+      before: typeof flags.before === 'string' ? flags.before : null,
+      project: typeof flags.project === 'string' ? flags.project : null
+    },
+    elapsedMs: Number((performance.now() - startedAt).toFixed(3)),
+    sessionCount: results.length,
+    matchCount: results.reduce((sum, result) => sum + result.matches.length, 0),
+    sessions: results
   })
 }
 
 async function cmdResume(sessionId: string, flags: Record<string, string | true>): Promise<void> {
   const result = await buildCliResumeResponse(sessionId, flags)
-  if (result.error || !result.command) err(result.error || '此会话无法直接恢复')
+  if (result.error || !result.command) {
+    const message = result.error || '此会话无法直接恢复'
+    fail(message, /不存在|not found/i.test(message) ? 3 : 1)
+  }
   out({ command: result.command })
 }
 
 async function cmdResumeAudit(flags: Record<string, string | true>): Promise<void> {
   const report = await runResumeAudit()
-  if (flags.json === true) {
-    out(report)
-    return
-  }
-  process.stdout.write(formatResumeAuditReport(report))
+  if (flags.json === true) out(report)
+  else activeIo.stdout(formatResumeAuditReport(report))
 }
 
-function cmdResolve(sessionId: string, flags: Record<string, string | true>): void {
+function cmdResolve(sessionId: string, flags: Record<string, string | true>): number {
   const result = resolveSessionId(sessionId, getLibraryRoot())
-  const output = formatResolveCliOutput(result, flags.json === true)
-  process.stdout.write(output.stdout)
-  if (output.stderr) process.stderr.write(output.stderr)
+  if (flags.json === true) {
+    out({
+      input: result.input,
+      resolved: result.resolved,
+      matched: result.matched,
+      ambiguous: result.ambiguous === true
+    })
+  } else {
+    const output = formatResolveCliOutput(result, false)
+    activeIo.stdout(output.stdout)
+  }
+  if (result.diagnostic) activeIo.stderr(result.diagnostic + '\n')
+  if (result.ambiguous) return 2
+  if (!result.matched) return 3
+  return 0
 }
 
 async function cmdLineage(flags: Record<string, string | true>): Promise<void> {
   const libraryRoot = getLibraryRoot()
   const registry = await rebuildSessionLineageRegistry(libraryRoot)
-  const registryPath = getSessionLineagePath(libraryRoot)
-  if (flags['dry-run'] !== true) {
-    writeSessionLineageRegistry(registry, registryPath)
-  }
+  if (flags['dry-run'] !== true) writeSessionLineageRegistry(registry, getSessionLineagePath(libraryRoot))
   out(registry)
 }
 
 function cmdFolders(): void {
-  const tree = scanLibrary()
-  const config = libraryTreeToConfig(tree)
-
-  interface FolderNode {
-    id: string
-    name: string
-    parentId: string | null
-    sessionCount: number
-    children?: FolderNode[]
-  }
-
+  const config = currentLibraryConfig()
+  interface FolderNode { id: string; name: string; parentId: string | null; sessionCount: number; children?: FolderNode[] }
   const folderMap = new Map<string, FolderNode>()
-  for (const f of config.folders) {
-    folderMap.set(f.id, {
-      id: f.id,
-      name: f.name,
-      parentId: f.parentId || null,
-      sessionCount: f.sessionIds.length
+  for (const folder of config.folders) {
+    folderMap.set(folder.id, {
+      id: folder.id,
+      name: folder.name,
+      parentId: folder.parentId || null,
+      sessionCount: folder.sessionIds.length
     })
   }
-
   const roots: FolderNode[] = []
   for (const node of folderMap.values()) {
     if (node.parentId && folderMap.has(node.parentId)) {
       const parent = folderMap.get(node.parentId)!
       if (!parent.children) parent.children = []
       parent.children.push(node)
-    } else {
-      roots.push(node)
-    }
+    } else roots.push(node)
   }
-
   out(roots)
 }
 
 function cmdFolderCreate(name: string, flags: Record<string, string | true>): void {
-  const parentId = flags.parent ? String(flags.parent) : undefined
-  const parentPath = parentId ? resolveFolderPath(parentId) : undefined
-  createLibraryFolder(name, parentPath)
-  const tree = scanLibrary()
-  const config = libraryTreeToConfig(tree)
-  const created = config.folders.find(f => f.name === name)
-  out({ success: true, folder: created ? { id: created.id, name: created.name } : null })
+  const parentPath = typeof flags.parent === 'string' ? resolveFolderPath(flags.parent) : undefined
+  const createdPath = createLibraryFolder(name, parentPath)
+  scanLibrary()
+  out({ success: true, folder: { id: path.relative(getLibraryRoot(), createdPath), name: path.basename(createdPath) } })
 }
 
 function cmdFolderRename(folderId: string, newName: string): void {
-  const folderPath = resolveFolderPath(folderId)
-  renameLibraryFolder(folderPath, newName)
+  const renamedPath = renameLibraryFolder(resolveFolderPath(folderId), newName)
   scanLibrary()
-  out({ success: true })
+  out({ success: true, folderId: path.relative(getLibraryRoot(), renamedPath) })
 }
 
 function cmdFolderDelete(folderId: string): void {
-  const folderPath = resolveFolderPath(folderId)
-  deleteLibraryFolder(folderPath)
+  deleteLibraryFolder(resolveFolderPath(folderId))
   scanLibrary()
-  out({ success: true })
+  out({ success: true, folderId })
 }
 
-async function cmdMove(sessionId: string, folderId: string): Promise<void> {
-  const folderPath = resolveFolderPath(folderId)
-  moveSessionToFolder(sessionId, folderPath)
-  scanLibrary()
-  out({ success: true })
+interface MoveInput { sessionId: string; folderId: string }
+interface RenameInput { sessionId: string; title: string }
+
+function parseBatchInput<T>(raw: string, validate: (value: unknown, index: number) => T): T[] {
+  const trimmed = raw.trim()
+  if (!trimmed) fail('stdin 为空')
+  let values: unknown[]
+  if (trimmed.startsWith('[')) {
+    let parsed: unknown
+    try { parsed = JSON.parse(trimmed) }
+    catch (error) { fail(`stdin JSON 无效: ${error instanceof Error ? error.message : String(error)}`) }
+    if (!Array.isArray(parsed)) fail('stdin JSON 必须是数组或 JSONL')
+    values = parsed
+  } else {
+    values = trimmed.split(/\r?\n/).filter((line) => line.trim()).map((line, index) => {
+      try { return JSON.parse(line) }
+      catch (error) { fail(`stdin 第 ${index + 1} 行 JSON 无效: ${error instanceof Error ? error.message : String(error)}`) }
+    })
+  }
+  if (values.length === 0) fail('stdin 没有记录')
+  return values.map(validate)
 }
 
-function cmdRename(sessionId: string, title: string): void {
-  setSessionMetaInLibrary(sessionId, { customTitle: title })
+function objectRecord(value: unknown, index: number): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`stdin 第 ${index + 1} 条必须是对象`)
+  return value as Record<string, unknown>
+}
+
+async function moveInputs(cmd: string[], flags: Record<string, string | true>): Promise<MoveInput[]> {
+  if (flags.stdin === true) {
+    return parseBatchInput(await activeIo.readStdin(), (value, index) => {
+      const record = objectRecord(value, index)
+      if (typeof record.sessionId !== 'string' || typeof record.folderId !== 'string') {
+        fail(`stdin 第 ${index + 1} 条必须包含字符串 sessionId 和 folderId`)
+      }
+      return { sessionId: record.sessionId, folderId: record.folderId }
+    })
+  }
+  if (!cmd[1] || !cmd[2]) fail('用法: swob move <sessionId> <folderId>，或 swob move --stdin')
+  return [{ sessionId: cmd[1], folderId: cmd[2] }]
+}
+
+async function renameInputs(cmd: string[], flags: Record<string, string | true>): Promise<RenameInput[]> {
+  if (flags.stdin === true) {
+    return parseBatchInput(await activeIo.readStdin(), (value, index) => {
+      const record = objectRecord(value, index)
+      if (typeof record.sessionId !== 'string' || typeof record.title !== 'string') {
+        fail(`stdin 第 ${index + 1} 条必须包含字符串 sessionId 和 title`)
+      }
+      return { sessionId: record.sessionId, title: record.title }
+    })
+  }
+  if (!cmd[1] || !cmd[2]) fail('用法: swob rename <sessionId> <title>，或 swob rename --stdin')
+  return [{ sessionId: cmd[1], title: cmd.slice(2).join(' ') }]
+}
+
+async function cmdMove(cmd: string[], flags: Record<string, string | true>): Promise<void> {
+  const inputs = await moveInputs(cmd, flags)
+  const result = moveSessionsToFolders(inputs)
   scanLibrary()
-  out({ success: true })
+  out({ success: true, operationId: result.operationId, count: inputs.length, moved: result.moves.length })
+}
+
+async function cmdRename(cmd: string[], flags: Record<string, string | true>): Promise<void> {
+  const inputs = await renameInputs(cmd, flags)
+  const result = renameSessionsInLibrary(inputs)
+  scanLibrary()
+  out({ success: true, operationId: result.operationId, count: inputs.length, renamed: result.moves.length })
+}
+
+function cmdUndo(): void {
+  const result = undoLastLibraryOrganization()
+  if (!result.operationId) fail('没有可撤销的组织事务', 3)
+  scanLibrary()
+  out({ success: true, operationId: result.operationId, restored: result.moves.length })
 }
 
 async function cmdInsights(flags: Record<string, string | true>): Promise<void> {
-  const sessions = await loadAllSessions()
-  const tree = scanLibrary()
-  const config = libraryTreeToConfig(tree)
+  const sessions = await loadAllSessions({ quiet: true })
+  const config = currentLibraryConfig()
   const sessionTimes = new Map<string, number>()
-  for (const s of sessions) {
-    if (s.estimatedTime) sessionTimes.set(s.sessionId, s.estimatedTime)
-  }
+  for (const session of sessions) if (session.estimatedTime) sessionTimes.set(session.sessionId, session.estimatedTime)
   const insights = buildInsights(sessions, config.folders, sessionTimes)
-
   if (flags.summary === true || !flags.json) {
     out({
       totalSessions: insights.totalSessions,
       totalTurns: insights.totalTurns,
       totalTokens: insights.totalTokens,
+      totalTokensMetric: 'input_plus_output',
       totalTime: insights.totalTime,
       totalTimeFormatted: formatTime(insights.totalTime),
       activeDays: insights.activeDays,
-      bySource: insights.bySource.filter(s => s.sessionCount > 0).map(s => ({
-        source: s.source,
-        label: s.label,
-        sessions: s.sessionCount,
-        tokens: s.totalTokens,
-        tokensFormatted: formatTokens(s.totalTokens)
+      bySource: insights.bySource.filter((source) => source.sessionCount > 0).map((source) => ({
+        source: source.source,
+        label: source.label,
+        sessions: source.sessionCount,
+        tokens: source.totalTokens,
+        tokenMetric: 'input_plus_output',
+        tokensFormatted: formatTokens(source.totalTokens)
       })),
-      byModel: insights.byModel.slice(0, 10).map(m => ({
-        model: m.model,
-        tokens: m.totalTokens,
-        tokensFormatted: formatTokens(m.totalTokens),
-        sessions: m.sessionCount
+      byModel: insights.byModel.slice(0, 10).map((model) => ({
+        model: model.model,
+        tokens: model.totalTokens,
+        tokenMetric: 'input_plus_output',
+        tokensFormatted: formatTokens(model.totalTokens),
+        sessions: model.sessionCount
       })),
-      topProjects: insights.byProject.slice(0, 10).map(p => ({
-        project: p.project,
-        path: p.fullPath,
-        sessions: p.sessionCount,
-        tokens: p.totalTokens,
-        tokensFormatted: formatTokens(p.totalTokens)
+      topProjects: insights.byProject.slice(0, 10).map((project) => ({
+        project: project.project,
+        path: project.fullPath,
+        sessions: project.sessionCount,
+        tokens: project.totalTokens,
+        tokenMetric: 'input_plus_output',
+        tokensFormatted: formatTokens(project.totalTokens)
       }))
     })
     return
   }
-
-  out(insights)
+  out({ ...insights, totalTokensMetric: 'input_plus_output' })
 }
 
 function cmdConfigGet(key?: string): void {
-  const libConfig = loadLibraryConfig()
+  const config = loadLibraryConfig()
   if (!key) {
-    out({
-      libraryRoot: getLibraryRoot(),
-      preferences: libConfig.preferences
-    })
+    out({ libraryRoot: getLibraryRoot(), preferences: config.preferences })
     return
   }
-  const prefs = libConfig.preferences as Record<string, unknown>
-  if (key === 'libraryRoot') {
-    out({ libraryRoot: getLibraryRoot() })
-  } else if (key in prefs) {
-    out({ [key]: prefs[key] })
-  } else {
-    err(`未知的配置项: ${key}`)
-  }
+  const preferences = config.preferences as Record<string, unknown>
+  if (key === 'libraryRoot') out({ libraryRoot: getLibraryRoot() })
+  else if (key in preferences) out({ [key]: preferences[key] })
+  else fail(`未知的配置项: ${key}`)
 }
 
 function cmdConfigSet(key: string, value: string): void {
-  const libConfig = loadLibraryConfig()
-  const prefs = libConfig.preferences as Record<string, unknown>
-  if (value === 'true') prefs[key] = true
-  else if (value === 'false') prefs[key] = false
-  else prefs[key] = value
-  saveLibraryConfig(libConfig)
-  out({ success: true, [key]: prefs[key] })
-}
-
-function cmdActive(): void {
-  const active = detectActiveSessionsFromProcesses()
-  out({ activeSessionIds: Array.from(active) })
+  const config = loadLibraryConfig()
+  const preferences = config.preferences as Record<string, unknown>
+  if (value === 'true') preferences[key] = true
+  else if (value === 'false') preferences[key] = false
+  else preferences[key] = value
+  saveLibraryConfig(config)
+  out({ success: true, [key]: preferences[key] })
 }
 
 async function cmdTranscript(args: string[], flags: Record<string, string | true>): Promise<void> {
   if (args[0] !== 'rebuild' || flags.all !== true) {
-    err('用法: swob transcript rebuild --all [--dry-run] [--missing-only]')
+    fail('用法: swob transcript rebuild --all [--dry-run] [--missing-only]')
   }
-  const result = await rebuildAllTranscripts({
+  out(await rebuildAllTranscripts({
     dryRun: flags['dry-run'] === true,
     missingOnly: flags['missing-only'] === true
-  })
-  out(result)
-}
-
-function cmdRedact(flags: Record<string, string | true>): void {
-  const result = redactLibraryTranscripts({ dryRun: flags['dry-run'] === true })
-  out({ files: result.files, hits: result.hits })
+  }))
 }
 
 async function cmdInstall(): Promise<void> {
-  const fs = await import('fs')
-  const path = await import('path')
-  const os = await import('os')
-
-  // 1. Install CLI wrapper + symlink
   const cliInstall = installSwobCli()
-
-  // 2. Install skill
   const skillDir = path.join(os.homedir(), '.claude', 'skills', 'swob')
-  if (!fs.existsSync(skillDir)) fs.mkdirSync(skillDir, { recursive: true })
+  fs.mkdirSync(skillDir, { recursive: true })
   const skillPath = path.join(skillDir, 'SKILL.md')
   fs.writeFileSync(skillPath, generateSkillContent(), 'utf-8')
-
   out({
     cliInstalled: cliInstall.cliInstalled,
     cliPath: cliInstall.cliPath,
@@ -473,328 +646,113 @@ async function cmdInstall(): Promise<void> {
   })
 }
 
-function generateSkillContent(): string {
-  return `# Swob CLI — Agent Skill
-
-Swob 是 Claude Code / Codex / Cursor 的会话管理工具。通过 \`swob\` CLI 你可以搜索、浏览、恢复和整理用户的所有 AI 编程助手聊天记录。
-
-## 使用前提
-
-用户已安装 Swob 桌面应用并执行过 \`swob install\`。
-
-## 命令参考
-
-除 \`swob resolve\` 默认输出纯 id 外，其他命令输出 JSON，可直接解析。
-
-### 搜索 session
-
-\`\`\`bash
-swob search "关键词"
-swob search "项目名" --limit 10
-\`\`\`
-
-返回匹配的 session 列表，按相关性排序。支持中英文、项目名、文件夹名、时间（今天/昨天/本周）、来源（cc/codex/cursor/opencode/zcode）。
-
-### 列出 session
-
-\`\`\`bash
-swob list
-swob list --folder "项目名"
-swob list --source claude-code
-swob list --project swob
-swob list --limit 20
-\`\`\`
-
-### 查看 session 详情
-
-\`\`\`bash
-swob show <sessionId>
-\`\`\`
-
-返回完整的 session 信息，包括消息列表、工具调用、token 统计。
-
-### 恢复 session（获取 resume 命令）
-
-\`\`\`bash
-swob resume <sessionId>
-swob resume <sessionId> --skip-permissions
-swob resume <sessionId> --cwd /path/to/project
-\`\`\`
-
-返回 \`{ "command": "claude --resume ..." }\`，你可以直接执行该命令。
-
-### 审计全部 session 的 resume 可信度（只读）
-
-\`\`\`bash
-swob resume-audit
-swob resume-audit --json
-\`\`\`
-
-分层验证 resume 命令可生成、源引用和 session id 可信，并单独报告缺失的 harness CLI。
-
-### 重建会话血统注册表
-
-\`\`\`bash
-swob lineage
-swob lineage --dry-run
-\`\`\`
-
-重建 Library 根目录的 \`.session-lineage.json\`，输出旧 id → 最新可 resume id 的机器可读注册表。
-
-### 解析会话真身 id
-
-\`\`\`bash
-swob resolve <sessionId>
-swob resolve <sessionId> --json
-\`\`\`
-
-读取 Library 根目录的 \`.session-lineage.json\`，把旧 id 或短 id 解析为最新可 resume 的完整 id。默认 stdout 只输出一行 id；查无或注册表不可读时原样回显输入。
-
-### 列出文件夹
-
-\`\`\`bash
-swob folders
-\`\`\`
-
-返回文件夹树形结构。
-
-### 创建文件夹
-
-\`\`\`bash
-swob folder create "文件夹名"
-swob folder create "子文件夹" --parent "父文件夹id"
-\`\`\`
-
-### 重命名文件夹
-
-\`\`\`bash
-swob folder rename <folderId> "新名称"
-\`\`\`
-
-### 删除文件夹
-
-\`\`\`bash
-swob folder delete <folderId>
-\`\`\`
-
-### 移动 session 到文件夹
-
-\`\`\`bash
-swob move <sessionId> <folderId>
-\`\`\`
-
-### 重命名 session
-
-\`\`\`bash
-swob rename <sessionId> "新标题"
-\`\`\`
-
-### 查看统计数据
-
-\`\`\`bash
-swob insights
-swob insights --json
-\`\`\`
-
-返回 token 消耗、活跃天数、项目排行、模型使用等统计。
-
-### 查看/修改设置
-
-\`\`\`bash
-swob config get
-swob config get terminalApp
-swob config set terminalApp iTerm2
-swob config set defaultViewMode compact
-\`\`\`
-
-### 查看活跃 session
-
-\`\`\`bash
-swob active
-\`\`\`
-
-### 安装/更新 CLI 和 Skill
-
-\`\`\`bash
-swob install
-\`\`\`
-
-## 典型工作流
-
-### 整理某个项目的所有 session
-
-1. \`swob list --project myproject\` 找到所有相关 session
-2. \`swob folders\` 查看现有文件夹
-3. \`swob folder create "myproject"\` 创建文件夹（如不存在）
-4. 对每个 session 执行 \`swob move <sessionId> <folderId>\`
-5. 可选：\`swob rename <sessionId> "描述性标题"\` 重命名
-
-### 快速找到并恢复之前的对话
-
-1. \`swob search "我在做的事情"\` 搜索
-2. 从结果中找到目标 sessionId
-3. \`swob resume <sessionId>\` 获取恢复命令
-4. 执行返回的命令
-
-### 查看工作统计
-
-\`swob insights\` 查看总览，包括 token 消耗和活跃时间。
-`
-}
-
-// ── Main ───────────────────────────────────────────────────────────
-
-async function main(): Promise<void> {
-  const { cmd, flags } = parseArgs(process.argv.slice(2))
-
-  if (cmd.length === 0 || flags.help === true) {
-    process.stdout.write(`Swob CLI — AI 编程助手会话管理
-
-用法: swob <命令> [参数] [选项]
-
-命令:
-  search <query>              搜索 session
-  list                        列出 session
-  show <sessionId>            查看 session 详情
-  resume <sessionId>          获取 resume 命令
-  resume-audit               只读审计全部 session 的 resume 可信度
-  resolve <sessionId>         解析旧 id/短 id 到最新完整 id
-  lineage                     重建会话血统注册表
-  folders                     列出所有文件夹
-  folder create <name>        创建文件夹
-  folder rename <id> <name>   重命名文件夹
-  folder delete <id>          删除文件夹
-  move <sessionId> <folderId> 移动 session 到文件夹
-  rename <sessionId> <title>  重命名 session
-  insights                    查看统计数据
-  config get [key]            读取设置
-  config set <key> <value>    修改设置
-  active                      列出活跃 session
-  transcript rebuild --all    强制重生成 Library transcript
-  redact [--dry-run]          回填脱敏所有已生成的 transcript/派生 Markdown
-  install                     安装/更新 CLI 和 Skill
-
-选项:
-  --help                      显示帮助
-  --limit <n>                 限制结果数量
-  --folder <name>             按文件夹过滤
-  --source <source>           按来源过滤 (claude-code/codex/cursor/opencode/zcode)
-  --project <name>            按项目过滤
-  --json                      输出完整 JSON
-  --skip-permissions          resume 时跳过权限
-  --cwd <path>                resume 时指定工作目录
-  --parent <id>               创建子文件夹时指定父文件夹
-  --dry-run                   lineage 只输出不写入；transcript rebuild 只统计不写入
-  --missing-only              transcript rebuild 只补缺失的 transcript.md
-`)
-    process.exit(0)
-  }
-
+async function dispatch(cmd: string[], flags: Record<string, string | true>): Promise<number> {
   const command = cmd[0]
-
-  try {
-    switch (command) {
-      case 'search':
-        if (!cmd[1]) err('缺少搜索关键词。用法: swob search <query>')
-        await cmdSearch(cmd.slice(1).join(' '), flags)
-        break
-
-      case 'list':
-        await cmdList(flags)
-        break
-
-      case 'show':
-        if (!cmd[1]) err('缺少 sessionId。用法: swob show <sessionId>')
-        await cmdShow(cmd[1])
-        break
-
-      case 'resume':
-        if (!cmd[1]) err('缺少 sessionId。用法: swob resume <sessionId>')
-        await cmdResume(cmd[1], flags)
-        break
-
-      case 'resume-audit':
-        await cmdResumeAudit(flags)
-        break
-
-      case 'resolve':
-        {
-          const resolveId = cmd[1] || (typeof flags.json === 'string' ? flags.json : undefined)
-          if (!resolveId) err('缺少 sessionId。用法: swob resolve <sessionId> [--json]')
-          cmdResolve(resolveId, { ...flags, json: flags.json ? true : flags.json })
-        }
-        break
-
-      case 'lineage':
-        await cmdLineage(flags)
-        break
-
-      case 'folders':
-        cmdFolders()
-        break
-
-      case 'folder':
-        if (cmd[1] === 'create') {
-          if (!cmd[2]) err('缺少文件夹名。用法: swob folder create <name>')
-          cmdFolderCreate(cmd.slice(2).join(' '), flags)
-        } else if (cmd[1] === 'rename') {
-          if (!cmd[2] || !cmd[3]) err('用法: swob folder rename <id> <name>')
-          cmdFolderRename(cmd[2], cmd.slice(3).join(' '))
-        } else if (cmd[1] === 'delete') {
-          if (!cmd[2]) err('缺少文件夹 ID。用法: swob folder delete <id>')
-          cmdFolderDelete(cmd[2])
-        } else {
-          err(`未知的 folder 子命令: ${cmd[1]}`)
-        }
-        break
-
-      case 'move':
-        if (!cmd[1] || !cmd[2]) err('用法: swob move <sessionId> <folderId>')
-        await cmdMove(cmd[1], cmd[2])
-        break
-
-      case 'rename':
-        if (!cmd[1] || !cmd[2]) err('用法: swob rename <sessionId> <title>')
-        cmdRename(cmd[1], cmd.slice(2).join(' '))
-        break
-
-      case 'insights':
-        await cmdInsights(flags)
-        break
-
-      case 'config':
-        if (cmd[1] === 'get') {
-          cmdConfigGet(cmd[2])
-        } else if (cmd[1] === 'set') {
-          if (!cmd[2] || !cmd[3]) err('用法: swob config set <key> <value>')
-          cmdConfigSet(cmd[2], cmd.slice(3).join(' '))
-        } else {
-          err(`未知的 config 子命令: ${cmd[1]}`)
-        }
-        break
-
-      case 'active':
-        cmdActive()
-        break
-
-      case 'transcript':
-        await cmdTranscript(cmd.slice(1), flags)
-        break
-
-      case 'redact':
-        cmdRedact(flags)
-        break
-
-      case 'install':
-        await cmdInstall()
-        break
-
-      default:
-        err(`未知命令: ${command}。运行 swob --help 查看帮助。`)
+  switch (command) {
+    case 'search':
+      if (!cmd[1]) fail('缺少搜索关键词。用法: swob search <query>')
+      await cmdSearch(cmd.slice(1).join(' '), flags)
+      return 0
+    case 'list': await cmdList(flags); return 0
+    case 'show':
+      if (!cmd[1]) fail('缺少 sessionId。用法: swob show <sessionId>')
+      await cmdShow(cmd[1], flags)
+      return 0
+    case 'grep':
+      if (!cmd[1]) fail('缺少搜索关键词。用法: swob grep <query>')
+      await cmdGrep(cmd.slice(1).join(' '), flags)
+      return 0
+    case 'resume':
+      if (!cmd[1]) fail('缺少 sessionId。用法: swob resume <sessionId>')
+      await cmdResume(cmd[1], flags)
+      return 0
+    case 'resume-audit': await cmdResumeAudit(flags); return 0
+    case 'resolve':
+      if (!cmd[1]) fail('缺少 sessionId。用法: swob resolve <sessionId> [--json]')
+      return cmdResolve(cmd[1], flags)
+    case 'lineage': await cmdLineage(flags); return 0
+    case 'folders': cmdFolders(); return 0
+    case 'folder':
+      if (cmd[1] === 'create') {
+        if (!cmd[2]) fail('缺少文件夹名。用法: swob folder create <name>')
+        cmdFolderCreate(cmd.slice(2).join(' '), flags)
+      } else if (cmd[1] === 'rename') {
+        if (!cmd[2] || !cmd[3]) fail('用法: swob folder rename <id> <name>')
+        cmdFolderRename(cmd[2], cmd.slice(3).join(' '))
+      } else if (cmd[1] === 'delete') {
+        if (!cmd[2]) fail('缺少文件夹 ID。用法: swob folder delete <id>')
+        cmdFolderDelete(cmd[2])
+      } else fail(`未知的 folder 子命令: ${cmd[1] || ''}`)
+      return 0
+    case 'move': await cmdMove(cmd, flags); return 0
+    case 'rename': await cmdRename(cmd, flags); return 0
+    case 'undo': cmdUndo(); return 0
+    case 'insights': await cmdInsights(flags); return 0
+    case 'config':
+      if (cmd[1] === 'get') cmdConfigGet(cmd[2])
+      else if (cmd[1] === 'set') {
+        if (!cmd[2] || !cmd[3]) fail('用法: swob config set <key> <value>')
+        cmdConfigSet(cmd[2], cmd.slice(3).join(' '))
+      } else fail(`未知的 config 子命令: ${cmd[1] || ''}`)
+      return 0
+    case 'active': out({ activeSessionIds: [...detectActiveSessionsFromProcesses()] }); return 0
+    case 'transcript': await cmdTranscript(cmd.slice(1), flags); return 0
+    case 'redact': {
+      const result = redactLibraryTranscripts({ dryRun: flags['dry-run'] === true })
+      out({ files: result.files, hits: result.hits })
+      return 0
     }
-  } catch (e) {
-    err(e instanceof Error ? e.message : String(e))
+    case 'install': await cmdInstall(); return 0
+    default: fail(`未知命令: ${command}。运行 swob --help 查看帮助。`)
   }
 }
 
-main()
+function errorExitCode(error: unknown): number {
+  if (error instanceof CliFailure) return error.exitCode
+  const message = error instanceof Error ? error.message : String(error)
+  return /不存在|not found|ENOENT/i.test(message) ? 3 : 1
+}
+
+export async function runCli(
+  argv: string[],
+  io: CliIo = processIo,
+  options: { libraryRoot?: string } = {}
+): Promise<number> {
+  activeIo = io
+  const originalConsole = { log: console.log, info: console.info, warn: console.warn, error: console.error }
+  const diagnostic = (...values: unknown[]) => activeIo.stderr(formatLog(...values) + '\n')
+  console.log = diagnostic
+  console.info = diagnostic
+  console.warn = diagnostic
+  console.error = diagnostic
+  try {
+    const { cmd, flags } = parseArgs(argv)
+    if (flags.version === true) {
+      if (flags.json === true) out({ name: 'swob', version: CLI_VERSION })
+      else activeIo.stdout(CLI_VERSION + '\n')
+      return 0
+    }
+    if (cmd.length === 0 || flags.help === true) {
+      if (flags.json === true) out(cliHelpData())
+      else activeIo.stdout(renderCliHelp())
+      return 0
+    }
+    initLibrary(options.libraryRoot, { readOnly: cmd[0] === 'resume-audit' })
+    scanLibrary()
+    return await dispatch(cmd, flags)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    activeIo.stderr(JSON.stringify({ error: message }) + '\n')
+    return errorExitCode(error)
+  } finally {
+    console.log = originalConsole.log
+    console.info = originalConsole.info
+    console.warn = originalConsole.warn
+    console.error = originalConsole.error
+    activeIo = processIo
+  }
+}
+
+if (process.env.SWOB_CLI_DISABLE_AUTO_RUN !== '1' && process.env.VITEST !== 'true') {
+  void runCli(process.argv.slice(2)).then((exitCode) => { process.exitCode = exitCode })
+}

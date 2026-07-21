@@ -99,6 +99,40 @@ describe('Vault 整理事务', () => {
     expect(restoredMeta.topicConfidence).toBeUndefined()
   })
 
+  it('批量重命名把目录名和 customTitle 放进同一个可撤销事务', () => {
+    const first = createSession('旧标题一', 'rename-a', { customTitle: '旧标题一' })
+    const second = createSession('旧标题二', 'rename-b')
+
+    const applied = executeOrganization(root, 'manual', [
+      {
+        sessionId: 'rename-a',
+        sourceDir: first,
+        targetRelativeFolder: '.',
+        targetBaseName: '新标题一',
+        metaPatch: { customTitle: '新标题一' }
+      },
+      {
+        sessionId: 'rename-b',
+        sourceDir: second,
+        targetRelativeFolder: '.',
+        targetBaseName: '新标题二',
+        metaPatch: { customTitle: '新标题二' }
+      }
+    ])
+
+    expect(applied.moves).toHaveLength(2)
+    expect(operationFiles()).toHaveLength(1)
+    expect(applied.moves.map((move) => path.basename(move.to))).toEqual(['新标题一', '新标题二'])
+    expect(JSON.parse(fs.readFileSync(path.join(applied.moves[1].to, '.swob-session.json'), 'utf-8')).customTitle).toBe('新标题二')
+
+    const undone = undoLastOrganization(root)
+    expect(undone.moves).toHaveLength(2)
+    expect(fs.existsSync(first)).toBe(true)
+    expect(fs.existsSync(second)).toBe(true)
+    expect(JSON.parse(fs.readFileSync(path.join(first, '.swob-session.json'), 'utf-8')).customTitle).toBe('旧标题一')
+    expect(JSON.parse(fs.readFileSync(path.join(second, '.swob-session.json'), 'utf-8')).customTitle).toBeUndefined()
+  })
+
   it('预检整批输入，任何非法项都不会造成部分移动', () => {
     const valid = createSession('合法会话', 'valid')
     const invalid = path.join(root, '普通目录')

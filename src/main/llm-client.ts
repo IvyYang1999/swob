@@ -31,8 +31,15 @@ export async function callLlm(
   if (!settings.apiKey?.trim()) throw new Error('missing-api-key')
   if (!model) throw new Error('missing-model')
 
-  if (settings.provider === 'anthropic') {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+  // Determine if this is an Anthropic-protocol endpoint
+  const isAnthropicProtocol = settings.provider === 'anthropic' ||
+    (settings.provider === 'custom' && settings.baseUrl?.includes('anthropic'))
+
+  if (isAnthropicProtocol) {
+    const endpoint = settings.provider === 'anthropic'
+      ? 'https://api.anthropic.com/v1/messages'
+      : `${settings.baseUrl!.trim().replace(/\/+$/, '')}/v1/messages`
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

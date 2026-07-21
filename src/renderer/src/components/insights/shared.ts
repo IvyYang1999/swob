@@ -52,6 +52,14 @@ export interface InsightsData {
   byFolder: ByFolder[]
   byDate: ByDate[]
   heatmap: HeatmapCell[]
+  // New dimensions
+  totalCacheReadTokens: number
+  totalCacheCreationTokens: number
+  estimatedCostUsd: number
+  hourlyDistribution: number[]     // 24 items, index = hour
+  turnCountDistribution: number[]  // [1-5, 6-20, 21-50, 51-100, 101-500, 500+]
+  topTools: Array<{ name: string; count: number }>
+  codeChanges: { filesRead: number; filesWritten: number; filesEdited: number }
 }
 
 export interface BySource {

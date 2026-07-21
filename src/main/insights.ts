@@ -172,6 +172,14 @@ export function buildInsights(
   let totalOutputTokens = 0
   let totalTurns = 0
   let totalTime = 0
+  let totalCacheRead = 0
+  let totalCacheCreate = 0
+  const hourly = new Array(24).fill(0) as number[]
+  const turnBuckets = [0, 0, 0, 0, 0, 0] // [1-5, 6-20, 21-50, 51-100, 101-500, 500+]
+  const toolAgg = new Map<string, number>()
+  let filesRead = 0
+  let filesWritten = 0
+  let filesEdited = 0
 
   const sourceMap = new Map<string, SourceStats>()
   for (const s of SOURCE_ORDER) {
@@ -197,6 +205,35 @@ export function buildInsights(
     const output = session.tokenUsage.outputTokens
     const cacheCreate = session.tokenUsage.cacheCreationTokens || 0
     const cacheRead = session.tokenUsage.cacheReadTokens || 0
+    totalCacheRead += cacheRead
+    totalCacheCreate += cacheCreate
+
+    // Hourly distribution
+    try {
+      const h = new Date(session.createdAt).getHours()
+      if (h >= 0 && h < 24) hourly[h]++
+    } catch { /* ignore */ }
+
+    // Turn count distribution
+    const tc = session.turnCount
+    if (tc <= 5) turnBuckets[0]++
+    else if (tc <= 20) turnBuckets[1]++
+    else if (tc <= 50) turnBuckets[2]++
+    else if (tc <= 100) turnBuckets[3]++
+    else if (tc <= 500) turnBuckets[4]++
+    else turnBuckets[5]++
+
+    // Tool usage aggregation
+    for (const [name, count] of Object.entries(session.toolUsage)) {
+      toolAgg.set(name, (toolAgg.get(name) || 0) + count)
+    }
+
+    // Code change tracking
+    for (const f of session.referencedFiles || []) {
+      if (f.actions.includes('write')) filesWritten++
+      else if (f.actions.includes('edit')) filesEdited++
+      else if (f.actions.includes('read')) filesRead++
+    }
     const tokens = input + output + cacheCreate + cacheRead
     totalInputTokens += input
     totalOutputTokens += output
@@ -340,6 +377,13 @@ export function buildInsights(
     byProject,
     byFolder,
     byDate,
-    heatmap
+    heatmap,
+    totalCacheReadTokens: totalCacheRead,
+    totalCacheCreationTokens: totalCacheCreate,
+    estimatedCostUsd: (totalInputTokens / 1_000_000) * 3 + (totalOutputTokens / 1_000_000) * 15,
+    hourlyDistribution: hourly,
+    turnCountDistribution: turnBuckets,
+    topTools: [...toolAgg.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 15),
+    codeChanges: { filesRead, filesWritten, filesEdited }
   }
 }

@@ -7,6 +7,11 @@ import { ProjectRanking } from './ProjectRanking'
 import { DailyTrend } from './DailyTrend'
 import { DailyTimeline } from './DailyTimeline'
 import { ModelBreakdown } from './ModelBreakdown'
+import { CostCard } from './CostCard'
+import { HourlyChart } from './HourlyChart'
+import { TurnDistribution } from './TurnDistribution'
+import { ToolUsageChart } from './ToolUsageChart'
+import { CodeChangesCard } from './CodeChangesCard'
 import type { InsightsData } from './shared'
 
 export function InsightsPage() {
@@ -196,6 +201,24 @@ export function InsightsPage() {
         <div className="text-sm font-medium text-primary">Daily Insights</div>
         <DailyTimeline data={data.byDate} projectKey={projectViewMode === 'paths' ? 'byProject' : 'byFolder'} />
       </div>
+
+      {/* New insight dimensions */}
+      <div className="grid grid-cols-2 gap-4">
+        <CostCard
+          costUsd={data.estimatedCostUsd || 0}
+          cacheRead={data.totalCacheReadTokens || 0}
+          cacheCreate={data.totalCacheCreationTokens || 0}
+          totalInput={data.totalInputTokens || 0}
+        />
+        <HourlyChart hours={data.hourlyDistribution || new Array(24).fill(0)} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <TurnDistribution buckets={data.turnCountDistribution || [0,0,0,0,0,0]} />
+        <CodeChangesCard changes={data.codeChanges || { filesRead: 0, filesWritten: 0, filesEdited: 0 }} />
+      </div>
+
+      <ToolUsageChart tools={data.topTools || []} />
     </div>
   )
 }

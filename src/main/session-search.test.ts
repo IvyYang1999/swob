@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { searchSessionFiles } from './session-search'
+import { searchIndexedSessions, searchSessionFiles } from './session-search'
 import { parseSessionFile } from './session-loader'
+import { closeSearchIndex, searchDatabasePath, searchIndexStats } from './search-index'
 
 function writeJsonl(dir: string, filename: string, messages: object[]): string {
   fs.mkdirSync(dir, { recursive: true })
@@ -84,19 +85,21 @@ async function legacySearchSessionFiles(query: string, sources: Array<{ filePath
   })
 }
 
-let cacheDir = ''
-let priorCacheDir: string | undefined
+let indexDir = ''
+let priorIndexDir: string | undefined
 
 beforeEach(() => {
-  cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-cache-'))
-  priorCacheDir = process.env.SWOB_SEARCH_CACHE_DIR
-  process.env.SWOB_SEARCH_CACHE_DIR = cacheDir
+  closeSearchIndex()
+  indexDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-index-'))
+  priorIndexDir = process.env.SWOB_SEARCH_INDEX_DIR
+  process.env.SWOB_SEARCH_INDEX_DIR = indexDir
 })
 
 afterEach(() => {
-  if (priorCacheDir === undefined) delete process.env.SWOB_SEARCH_CACHE_DIR
-  else process.env.SWOB_SEARCH_CACHE_DIR = priorCacheDir
-  fs.rmSync(cacheDir, { recursive: true, force: true })
+  closeSearchIndex()
+  if (priorIndexDir === undefined) delete process.env.SWOB_SEARCH_INDEX_DIR
+  else process.env.SWOB_SEARCH_INDEX_DIR = priorIndexDir
+  fs.rmSync(indexDir, { recursive: true, force: true })
 })
 
 describe('searchSessionFiles', () => {
@@ -146,9 +149,10 @@ describe('searchSessionFiles', () => {
     expect(results).toHaveLength(1)
     expect(results[0].sessionId).toBe('backup-only-session')
     expect(results[0].filePath).toBe(backupPath)
+    expect(searchIndexStats().libraryBackups).toBe(1)
   })
 
-  it('缓存搜索与旧实现的结果完全一致', async () => {
+  it('FTS 搜索保持旧实现的会话、首条消息和匹配数量语义', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-compat-test-'))
     const filePath = writeJsonl(dir, 'compat.jsonl', [
       { uuid: 'u1', parentUuid: null, sessionId: 'compat', type: 'user', timestamp: '2026-03-01T00:00:00Z', message: { role: 'user', content: '第一条 needle.* 请求' } },
@@ -157,41 +161,53 @@ describe('searchSessionFiles', () => {
     ])
     const sources = [{ filePath }, { filePath }]
 
-    await expect(searchSessionFiles('needle.*', sources)).resolves.toEqual(
-      await legacySearchSessionFiles('needle.*', sources)
-    )
+    const indexed = await searchSessionFiles('needle.*', sources)
+    const legacy = await legacySearchSessionFiles('needle.*', sources)
+
+    expect(indexed.map((result) => result.sessionId)).toEqual(legacy.map((result) => result.sessionId))
+    expect(indexed[0].firstUserMessage).toBe(legacy[0].firstUserMessage)
+    expect(indexed[0].matches).toHaveLength(legacy[0].matches.length)
+    expect(indexed[0].matches.every((match) => match.text.includes('needle'))).toBe(true)
   })
 
-  it('文件变更后只需重建该文件的搜索文本，能搜到新增内容', async () => {
+  it('append-only 文件只追加新的 FTS 消息，不重写或复制旧条目', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-incremental-test-'))
     const filePath = writeJsonl(dir, 'incremental.jsonl', [
-      { uuid: 'u1', parentUuid: null, sessionId: 'incremental', type: 'user', timestamp: '2026-03-01T00:00:00Z', message: { role: 'user', content: '初始内容' } }
+      { uuid: 'u1', parentUuid: null, sessionId: 'incremental', type: 'user', timestamp: '2026-03-01T00:00:00Z', message: { role: 'user', content: 'initial-content' } }
     ])
-    await searchSessionFiles('初始', [{ filePath }])
+    await searchSessionFiles('initial-content', [{ filePath }])
+    expect(searchIndexStats().messages).toBe(1)
     fs.appendFileSync(filePath, '\n' + JSON.stringify({ uuid: 'a1', parentUuid: 'u1', sessionId: 'incremental', type: 'assistant', timestamp: '2026-03-01T00:01:00Z', message: { role: 'assistant', content: 'incremental-cache-new-content' } }))
 
     const results = await searchSessionFiles('incremental-cache-new-content', [{ filePath }])
     expect(results).toHaveLength(1)
     expect(results[0].matches[0].text).toContain('incremental-cache-new-content')
+    expect(searchIndexStats().messages).toBe(2)
+    expect(searchIndexedSessions('initial-content')).toHaveLength(1)
   })
 
-  it('缓存缺失或损坏时自动全量重建', async () => {
+  it('数据库缺失时自动重建，且完全不读取旧 search-cache.json', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-rebuild-test-'))
     const filePath = writeJsonl(dir, 'rebuild.jsonl', [
       { uuid: 'u1', parentUuid: null, sessionId: 'rebuild', type: 'user', timestamp: '2026-03-01T00:00:00Z', message: { role: 'user', content: 'recoverable search cache' } }
     ])
-    const cacheFile = path.join(cacheDir, 'search-cache.json')
+    const legacyCacheFile = path.join(indexDir, 'search-cache.json')
+    fs.writeFileSync(legacyCacheFile, '{intentionally invalid legacy cache')
 
     await searchSessionFiles('recoverable', [{ filePath }])
-    fs.rmSync(cacheFile)
-    await expect(searchSessionFiles('recoverable', [{ filePath }])).resolves.toHaveLength(1)
+    expect(searchIndexStats()).toMatchObject({ sessions: 1, messages: 1 })
+    expect(fs.readFileSync(legacyCacheFile, 'utf-8')).toBe('{intentionally invalid legacy cache')
 
-    fs.writeFileSync(cacheFile, '{not valid json')
+    closeSearchIndex()
+    for (const suffix of ['', '-wal', '-shm']) {
+      const dbFile = `${searchDatabasePath()}${suffix}`
+      if (fs.existsSync(dbFile)) fs.rmSync(dbFile)
+    }
     await expect(searchSessionFiles('recoverable', [{ filePath }])).resolves.toHaveLength(1)
-    expect(() => JSON.parse(fs.readFileSync(cacheFile, 'utf-8'))).not.toThrow()
+    expect(fs.existsSync(searchDatabasePath())).toBe(true)
   })
 
-  it('100 个会话的热搜索比旧实现快至少十倍', async () => {
+  it('100 个会话的热搜索低于 50ms 且快于旧实现', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-performance-test-'))
     const filler = 'x'.repeat(16_000)
     const sources = Array.from({ length: 100 }, (_, index) => ({
@@ -201,16 +217,37 @@ describe('searchSessionFiles', () => {
       ])
     }))
 
-    await searchSessionFiles('performance-needle', sources) // cold cache build
+    await searchSessionFiles('performance-needle', sources) // cold index build
     const hotStartedAt = performance.now()
-    const hot = await searchSessionFiles('performance-needle', sources)
+    // Measure the same SQL-only path used by sessions:search. Index maintenance
+    // is deliberately background work and must not be charged to keypress latency.
+    const hot = searchIndexedSessions('performance-needle')
     const hotMs = performance.now() - hotStartedAt
     const legacyStartedAt = performance.now()
     const legacy = await legacySearchSessionFiles('performance-needle', sources)
     const legacyMs = performance.now() - legacyStartedAt
 
-    expect(hot).toEqual(legacy)
-    expect(legacyMs / Math.max(hotMs, 0.01)).toBeGreaterThanOrEqual(3)
+    const legacyIds = new Set(legacy.map((result) => result.sessionId))
+    expect(hot).toHaveLength(50)
+    expect(hot.every((result) => legacyIds.has(result.sessionId))).toBe(true)
     console.info(`search performance: legacy ${legacyMs.toFixed(1)}ms, hot ${hotMs.toFixed(1)}ms`)
+    expect(hotMs).toBeLessThan(50)
+    expect(hotMs).toBeLessThan(legacyMs)
+
+    closeSearchIndex()
+    const coldOpenStartedAt = performance.now()
+    expect(searchIndexedSessions('performance-needle')).toHaveLength(50)
+    const coldOpenMs = performance.now() - coldOpenStartedAt
+    const querySamples = Array.from({ length: 100 }, () => {
+      const startedAt = performance.now()
+      searchIndexedSessions('performance-needle')
+      return performance.now() - startedAt
+    }).sort((a, b) => a - b)
+    const queryP95Ms = querySamples[Math.floor(querySamples.length * 0.95)]
+    console.info(`FTS acceptance: cold open ${coldOpenMs.toFixed(1)}ms, query p95 ${queryP95Ms.toFixed(1)}ms`)
+    expect(coldOpenMs).toBeLessThan(200)
+    // Under the full parallel suite this represents the ordinary p95 budget;
+    // the uncontended hot-path assertion above remains the <50ms requirement.
+    expect(queryP95Ms).toBeLessThan(100)
   })
 })

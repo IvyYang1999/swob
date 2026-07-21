@@ -47,6 +47,14 @@ export interface SessionMeta {
   /** Expected bytes for strong iCloud materialization verification. */
   backupSha256?: string
   backupSize?: number
+  /** Append-only checkpoint used to copy just the new JSONL tail on the next sync. */
+  backupSourceState?: {
+    path: string
+    dev: number
+    ino: number
+    size: number
+    mtimeMs: number
+  }
   /** Immutable identity of the installation that first captured this Library item. */
   origin?: SessionOrigin
   /** Describes the original harness instance; it is never an authorization to write there. */
@@ -72,6 +80,9 @@ export interface LibrarySession {
   jsonlPath: string
   meta: SessionMeta
   isSymlink: boolean
+  /** Worker-scanned signature lets the main thread prime its cache without stat calls. */
+  metaMtimeMs?: number
+  metaSize?: number
 }
 
 export interface LibraryFolder {
@@ -387,18 +398,26 @@ export function getIgnoreDirs(): Set<string> {
 
 export interface InitLibraryOptions {
   readOnly?: boolean
+  ignoreDirs?: string[]
 }
 
 export function initLibrary(root?: string, options: InitLibraryOptions = {}): void {
+  const nextRoot = root || getConfiguredLibraryPath()
+  if (path.resolve(nextRoot) !== path.resolve(_root)) {
+    sessionMetaCache.clear()
+    sessionMetaDiskReads = 0
+  }
   _cachedLibraryConfig = null
   _cachedLibraryConfigRoot = ''
-  _root = root || getConfiguredLibraryPath()
+  _root = nextRoot
   if (!options.readOnly && !fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }
   // 库根可能是整个 vault：加载忽略名单，避免扫描 wiki/clipii/日记 等非项目目录
   const cfg = loadLibraryConfig()
-  _ignoreDirs = new Set(cfg.ignoreDirs && cfg.ignoreDirs.length ? cfg.ignoreDirs : DEFAULT_IGNORE_DIRS)
+  _ignoreDirs = new Set(
+    options.ignoreDirs || (cfg.ignoreDirs && cfg.ignoreDirs.length ? cfg.ignoreDirs : DEFAULT_IGNORE_DIRS)
+  )
 }
 
 // --- Config (cached to avoid thousands of readFileSync per load cycle) ---
@@ -471,6 +490,15 @@ function isValidSessionOrigin(value: unknown): value is SessionOrigin {
     isNonEmptyString(origin.capturedAt)
 }
 
+function isValidBackupSourceState(value: unknown): value is NonNullable<SessionMeta['backupSourceState']> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const state = value as Record<string, unknown>
+  return isNonEmptyString(state.path) &&
+    ['dev', 'ino', 'size', 'mtimeMs'].every((field) =>
+      typeof state[field] === 'number' && Number.isFinite(state[field]) && (state[field] as number) >= 0
+    )
+}
+
 /** Parse both legacy v1 and v2 metadata, rejecting malformed data at the boundary. */
 export function parseSessionMeta(
   content: string,
@@ -505,6 +533,10 @@ export function parseSessionMeta(
       warn('[library-manager] Ignoring invalid session metadata: malformed backupSize')
       return null
     }
+    if (meta.backupSourceState !== undefined && !isValidBackupSourceState(meta.backupSourceState)) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed backupSourceState')
+      return null
+    }
     return parsed as SessionMeta
   } catch {
     warn('[library-manager] Ignoring invalid session metadata: malformed JSON')
@@ -515,9 +547,16 @@ export function parseSessionMeta(
 function readSessionMeta(dirPath: string): SessionMeta | null {
   const metaPath = path.join(dirPath, SESSION_META_FILE)
   try {
-    if (fs.existsSync(metaPath)) {
-      return parseSessionMeta(fs.readFileSync(metaPath, 'utf-8'))
+    const stat = fs.statSync(metaPath)
+    const cached = sessionMetaCache.get(metaPath)
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return structuredClone(cached.meta)
     }
+    const meta = parseSessionMeta(fs.readFileSync(metaPath, 'utf-8'))
+    sessionMetaDiskReads++
+    if (!meta) return null
+    sessionMetaCache.set(metaPath, { mtimeMs: stat.mtimeMs, size: stat.size, meta: structuredClone(meta) })
+    return meta
   } catch { /* corrupt */ }
   return null
 }
@@ -525,6 +564,12 @@ function readSessionMeta(dirPath: string): SessionMeta | null {
 function writeSessionMeta(dirPath: string, meta: SessionMeta): void {
   const metaPath = path.join(dirPath, SESSION_META_FILE)
   fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8')
+  try {
+    const stat = fs.statSync(metaPath)
+    sessionMetaCache.set(metaPath, { mtimeMs: stat.mtimeMs, size: stat.size, meta: structuredClone(meta) })
+  } catch {
+    sessionMetaCache.delete(metaPath)
+  }
 }
 
 function isSessionDir(dirPath: string): boolean {
@@ -624,6 +669,12 @@ function folderHasUserFiles(dirPath: string): boolean {
 // --- Index: sessionId → dirPath ---
 
 const sessionIndex = new Map<string, string>()
+const sessionMetaCache = new Map<string, { mtimeMs: number; size: number; meta: SessionMeta }>()
+let sessionMetaDiskReads = 0
+
+export function getLibraryMetaCacheStats(): { entries: number; diskReads: number } {
+  return { entries: sessionMetaCache.size, diskReads: sessionMetaDiskReads }
+}
 
 export function getSessionDirPath(sessionId: string): string | null {
   return sessionIndex.get(sessionId) || null
@@ -996,13 +1047,16 @@ function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: Librar
     if (isSessionDir(realPath)) {
       const meta = readSessionMeta(realPath)
       if (meta) {
+        const metaSignature = sessionMetaCache.get(path.join(realPath, SESSION_META_FILE))
         sessions.push({
           sessionId: meta.sessionId,
           dirPath: realPath,
           mdPath: path.join(realPath, TRANSCRIPT_FILE),
           jsonlPath: path.join(realPath, BACKUP_FILE),
           meta,
-          isSymlink
+          isSymlink,
+          metaMtimeMs: metaSignature?.mtimeMs,
+          metaSize: metaSignature?.size
         })
       }
     } else {
@@ -1022,14 +1076,38 @@ function scanDir(dirPath: string): { sessions: LibrarySession[]; folders: Librar
 
 export function scanLibrary(): LibraryTree {
   const { sessions, folders } = scanDir(_root)
+  const tree = { root: _root, folders, ungroupedSessions: sessions }
+  applyLibraryTree(tree)
+  return tree
+}
 
+/** Apply a tree scanned by the Library worker without rereading every meta file. */
+export function applyLibraryTree(tree: LibraryTree): void {
+  _root = tree.root
   // Rebuild index
   sessionIndex.clear()
+  const liveMetaPaths = new Set<string>()
   function indexSessions(list: LibrarySession[]): void {
     for (const s of list) {
       if (!s.isSymlink) {
         sessionIndex.set(s.sessionId, s.dirPath)
       }
+      const metaPath = path.join(s.dirPath, SESSION_META_FILE)
+      liveMetaPaths.add(metaPath)
+      if (typeof s.metaMtimeMs === 'number' && typeof s.metaSize === 'number') {
+        sessionMetaCache.set(metaPath, {
+          mtimeMs: s.metaMtimeMs,
+          size: s.metaSize,
+          meta: structuredClone(s.meta)
+        })
+      } else try {
+        const stat = fs.statSync(metaPath)
+        sessionMetaCache.set(metaPath, {
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          meta: structuredClone(s.meta)
+        })
+      } catch { /* source may be an iCloud placeholder */ }
     }
   }
   function indexFolder(f: LibraryFolder): void {
@@ -1037,10 +1115,11 @@ export function scanLibrary(): LibraryTree {
     for (const child of f.children) indexFolder(child)
   }
 
-  indexSessions(sessions)
-  for (const f of folders) indexFolder(f)
-
-  return { root: _root, folders, ungroupedSessions: sessions }
+  indexSessions(tree.ungroupedSessions)
+  for (const f of tree.folders) indexFolder(f)
+  for (const metaPath of sessionMetaCache.keys()) {
+    if (!liveMetaPaths.has(metaPath)) sessionMetaCache.delete(metaPath)
+  }
 }
 
 // --- Transcript Generation (main process) ---
@@ -1396,6 +1475,48 @@ export async function ensureSessionInLibrary(
 
 // --- Sync JSONL Backup ---
 
+async function hashFileSha256(filePath: string): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk as Buffer)
+  return hash.digest('hex')
+}
+
+async function appendSourceTail(sourcePath: string, backupPath: string, start: number): Promise<void> {
+  const output = fs.createWriteStream(backupPath, { flags: 'a', mode: 0o600 })
+  try {
+    for await (const chunk of fs.createReadStream(sourcePath, { start })) {
+      if (!output.write(chunk)) await new Promise<void>((resolve) => output.once('drain', resolve))
+    }
+    await new Promise<void>((resolve, reject) => {
+      output.end(resolve)
+      output.once('error', reject)
+    })
+  } catch (error) {
+    output.destroy()
+    throw error
+  }
+}
+
+async function concatenateSources(sourcePaths: string[], destination: string): Promise<void> {
+  const tempPath = `${destination}.tmp-${process.pid}`
+  const handle = await fs.promises.open(tempPath, 'w', 0o600)
+  try {
+    for (let index = 0; index < sourcePaths.length; index++) {
+      for await (const chunk of fs.createReadStream(sourcePaths[index])) {
+        await handle.write(chunk as Buffer)
+      }
+      if (index < sourcePaths.length - 1) await handle.write('\n')
+    }
+    await handle.sync()
+  } catch (error) {
+    await handle.close().catch(() => {})
+    await fs.promises.unlink(tempPath).catch(() => {})
+    throw error
+  }
+  await handle.close()
+  await fs.promises.rename(tempPath, destination)
+}
+
 export async function syncBackup(sessionId: string): Promise<void> {
   const dirPath = sessionIndex.get(sessionId)
   if (!dirPath) return
@@ -1405,25 +1526,47 @@ export async function syncBackup(sessionId: string): Promise<void> {
 
   const backupPath = path.join(dirPath, BACKUP_FILE)
 
-  // Concatenate all source files into one backup
-  const allContent: string[] = []
-  for (const src of sourceFilePathsFromMeta(meta) || []) {
-    try {
-      const source = detectSessionSourceFromPath(src)
-      if (source === 'opencode' || source === 'zcode') continue
-      if (fs.existsSync(src)) {
-        allContent.push(fs.readFileSync(src, 'utf-8'))
-      }
-    } catch { /* skip */ }
+  const sourcePaths = (sourceFilePathsFromMeta(meta) || []).filter((src) => {
+    const source = detectSessionSourceFromPath(src)
+    return source !== 'opencode' && source !== 'zcode' && fs.existsSync(src)
+  })
+  if (sourcePaths.length === 0) return
+
+  let nextSourceState: SessionMeta['backupSourceState'] | undefined
+  if (sourcePaths.length === 1) {
+    const sourcePath = sourcePaths[0]
+    const sourceStat = await fs.promises.stat(sourcePath)
+    const backupStat = await fs.promises.stat(backupPath).catch(() => null)
+    const previous = meta.backupSourceState
+    const canAppend = Boolean(
+      previous && backupStat &&
+      previous.path === sourcePath && previous.dev === sourceStat.dev && previous.ino === sourceStat.ino &&
+      previous.size === backupStat.size && sourceStat.size > previous.size
+    )
+
+    if (canAppend) await appendSourceTail(sourcePath, backupPath, previous!.size)
+    else if (!backupStat || sourceStat.size !== backupStat.size || sourceStat.mtimeMs !== previous?.mtimeMs) {
+      await fs.promises.copyFile(sourcePath, backupPath)
+      await fs.promises.chmod(backupPath, 0o600).catch(() => {})
+    }
+
+    nextSourceState = {
+      path: sourcePath,
+      dev: sourceStat.dev,
+      ino: sourceStat.ino,
+      size: sourceStat.size,
+      mtimeMs: sourceStat.mtimeMs
+    }
+  } else {
+    await concatenateSources(sourcePaths, backupPath)
   }
-  if (allContent.length > 0) {
-    const content = allContent.join('\n')
-    fs.writeFileSync(backupPath, content, 'utf-8')
-    meta.backupSha256 = createHash('sha256').update(content, 'utf-8').digest('hex')
-    meta.backupSize = Buffer.byteLength(content, 'utf-8')
-    meta.schemaVersion = 2
-    writeSessionMeta(dirPath, meta)
-  }
+
+  const backupStat = await fs.promises.stat(backupPath)
+  meta.backupSha256 = await hashFileSha256(backupPath)
+  meta.backupSize = backupStat.size
+  meta.backupSourceState = nextSourceState
+  meta.schemaVersion = 2
+  writeSessionMeta(dirPath, meta)
 }
 
 // --- Update Transcript ---
@@ -1615,6 +1758,26 @@ export async function updateTranscript(sessionId: string, customTitle?: string):
 
   writeTranscriptFromLoadedRaw(sessionId, dirPath, meta, loaded, summary, customTitle)
   writeDerivedFilesFromLoadedRaw(sessionId, dirPath, loaded.raw)
+  return true
+}
+
+/** Reuse a coordinator/worker parse instead of rereading a large Claude JSONL. */
+export function updateTranscriptFromRaw(
+  sessionId: string,
+  raw: RawJsonlMessage[],
+  source: SessionSource,
+  filePath: string,
+  customTitle?: string
+): boolean {
+  const dirPath = sessionIndex.get(sessionId)
+  if (!dirPath) return false
+  const meta = readSessionMeta(dirPath)
+  if (!meta) return false
+  const loaded: LoadedTranscriptRaw = { raw, source, filePath }
+  const summary = buildTranscriptSummaryForWrite(meta, loaded)
+  if (!summary) return false
+  writeTranscriptFromLoadedRaw(sessionId, dirPath, meta, loaded, summary, customTitle)
+  writeDerivedFilesFromLoadedRaw(sessionId, dirPath, raw)
   return true
 }
 
@@ -1960,9 +2123,11 @@ function updateSymlinksRecursive(searchDir: string, oldTarget: string, newTarget
 
 export async function syncLibraryFromSessions(
   sessions: SessionSummary[],
-  sessionMeta: Record<string, { customTitle?: string; notes?: string }>
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
+  onProgress?: (progress: { current: number; total: number; sessionId: string }) => void
 ): Promise<void> {
-  for (const session of sessions) {
+  for (let index = 0; index < sessions.length; index++) {
+    const session = sessions[index]
     const customTitle = sessionMeta[session.sessionId]?.customTitle
     const dirPath = await ensureSessionInLibrary(session, customTitle)
 
@@ -2021,6 +2186,7 @@ export async function syncLibraryFromSessions(
     if (backupNeedsUpdate) {
       await syncBackup(session.sessionId)
     }
+    onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
   }
 }
 

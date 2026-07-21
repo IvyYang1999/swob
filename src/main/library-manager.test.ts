@@ -160,6 +160,19 @@ afterAll(() => {
   fs.rmSync(testHome, { recursive: true, force: true })
 })
 
+describe('Library metadata cache', () => {
+  it('unchanged metadata is read once across repeated scans', () => {
+    const sessionId = 'meta-cache-session'
+    createLibrarySession(sessionId, ['/unavailable/meta-cache.jsonl'])
+    const before = lib.getLibraryMetaCacheStats().diskReads
+
+    lib.scanLibrary()
+    lib.scanLibrary()
+
+    expect(lib.getLibraryMetaCacheStats().diskReads - before).toBe(1)
+  })
+})
+
 describe('【曾经的 bug】重命名分支 session 不应该影响母 session', () => {
   it('分支重命名后，母 session 的标题不变', () => {
     const branchId = 'abc-123:intra-0'
@@ -367,8 +380,45 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
     })
     expect(lib.parseSessionMeta(JSON.stringify(writtenMeta))).toMatchObject({
       backupSha256: writtenMeta.backupSha256,
-      backupSize: writtenMeta.backupSize
+      backupSize: writtenMeta.backupSize,
+      backupSourceState: expect.objectContaining({
+        path: sourcePath,
+        size: expectedContent.length
+      })
     })
+  })
+
+  it('单一 JSONL 增长时只追加新尾部并保留 backup inode', async () => {
+    removeDefaultSession()
+    const sessionId = 'incremental-backup-xx…0110'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture-project-xx…0110', `${sessionId}.jsonl`)
+    writeJsonl(sourcePath, claudeRows(sessionId, 'before append'))
+    const dirPath = createLibrarySession(sessionId, [sourcePath], { dirName: 'incremental-backup-xx…0110' })
+    lib.scanLibrary()
+    await lib.syncBackup(sessionId)
+
+    const backupPath = path.join(dirPath, 'backup.jsonl')
+    const inodeBefore = fs.statSync(backupPath).ino
+    const appended = '\n' + JSON.stringify({
+      uuid: 'append-a1',
+      parentUuid: 'u1',
+      sessionId,
+      type: 'assistant',
+      timestamp: '2026-07-21T18:00:01Z',
+      cwd: '/fixture/project',
+      message: { role: 'assistant', content: 'tail marker' }
+    })
+    fs.appendFileSync(sourcePath, appended)
+
+    await lib.syncBackup(sessionId)
+
+    const expected = fs.readFileSync(sourcePath)
+    const writtenMeta = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
+    expect(fs.statSync(backupPath).ino).toBe(inodeBefore)
+    expect(fs.readFileSync(backupPath)).toEqual(expected)
+    expect(writtenMeta.backupSize).toBe(expected.length)
+    expect(writtenMeta.backupSha256).toBe(createHash('sha256').update(expected).digest('hex'))
+    expect(writtenMeta.backupSourceState.size).toBe(expected.length)
   })
 
   it('旧 meta 加有效 backup 能真实加载为 library-only session', async () => {

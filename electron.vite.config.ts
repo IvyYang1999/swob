@@ -10,7 +10,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
-          cli: resolve(__dirname, 'src/cli/index.ts')
+          cli: resolve(__dirname, 'src/cli/index.ts'),
+          'library-worker': resolve(__dirname, 'src/main/library-worker.ts')
         },
         output: {
           entryFileNames: '[name].js'

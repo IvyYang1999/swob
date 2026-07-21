@@ -260,23 +260,50 @@ export const useStore = create<AppState>((set, get) => ({
   toasts: [],
 
   initialize: async () => {
+    let initialLoadComplete = false
+    let queuedLibraryConfig: UserConfig | undefined
+    const queuedLibrarySessions = new Map<string, SessionSummary>()
+    const applyLibraryPatch = (patch: SessionSummary[], config?: UserConfig): void => {
+      if (!initialLoadComplete) {
+        for (const session of patch) queuedLibrarySessions.set(session.id, session)
+        if (config) queuedLibraryConfig = config
+        return
+      }
+      set((state) => {
+        const byId = new Map(state.sessions.map((session) => [session.id, session]))
+        for (const session of patch) byId.set(session.id, session)
+        return {
+          sessions: [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+          config: config || state.config
+        }
+      })
+    }
+    window.api.onLibraryPatch(({ sessions, config }) => {
+      applyLibraryPatch(sessions as SessionSummary[], config as UserConfig | undefined)
+    })
+
     try {
       const [sessions, config, sshConfig] = await Promise.all([
         window.api.loadAllSessions(),
         window.api.loadConfig(),
         (window.api as any).sshGetConfig?.() ?? null
       ])
+      const mergedSessions = new Map((sessions as SessionSummary[]).map((session) => [session.id, session]))
+      for (const session of queuedLibrarySessions.values()) mergedSessions.set(session.id, session)
+      initialLoadComplete = true
+      const hydratedSessions = [...mergedSessions.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      const hydratedConfig = queuedLibraryConfig || config
       set({
-        sessions,
-        config,
+        sessions: hydratedSessions,
+        config: hydratedConfig,
         viewMode: config.preferences?.defaultViewMode || 'compact',
         locale: (config.preferences as any)?.locale || 'zh-CN',
         sshConfig: sshConfig ?? null,
         loading: false
       })
       try {
-        localStorage.setItem('csm:sessions', JSON.stringify(sessions))
-        localStorage.setItem('csm:config', JSON.stringify(config))
+        localStorage.setItem('csm:sessions', JSON.stringify(hydratedSessions))
+        localStorage.setItem('csm:config', JSON.stringify(hydratedConfig))
       } catch { /* quota exceeded */ }
     } catch (err) {
       console.error('Failed to initialize:', err)
@@ -329,10 +356,18 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
     })
+    window.api.onSessionSummaryUpdated((updated) => {
+      const summary = updated as SessionSummary
+      set((state) => ({
+        sessions: state.sessions.map((session) => session.id === summary.id ? summary : session),
+        selectedSession: state.selectedSession?.id === summary.id
+          ? { ...state.selectedSession, ...summary, messages: state.selectedSession.messages }
+          : state.selectedSession
+      }))
+    })
     window.api.onSessionsRefresh(() => {
       debouncedRefresh()
     })
-
     // Initialize active session detection
     try {
       const activeIds = await window.api.getActiveSessions()

@@ -42,6 +42,8 @@ interface ClosableWatcher {
 export interface TranscriptWatcherOptions {
   scan?: () => ActiveTranscriptScan
   generate?: (sessionId: string) => Promise<boolean>
+  /** Route source events into the shared session coordinator instead of generating independently. */
+  schedule?: (request: { sessionId: string; sourcePath: string }) => void
   watchSource?: (sourcePath: string, onChange: () => void) => ClosableWatcher
   now?: () => number
   debounceMs?: number
@@ -96,7 +98,15 @@ export function selectActiveTranscriptSources(
 }
 
 export function scanActiveTranscriptSources(now = Date.now()): ActiveTranscriptScan {
-  const sessions = collectLibrarySessions(scanLibrary())
+  return scanActiveTranscriptSourcesFromTree(scanLibrary(), now)
+}
+
+/** Build the active set from an already scanned tree so the main thread never rescans the vault. */
+export function scanActiveTranscriptSourcesFromTree(
+  tree: LibraryTree,
+  now = Date.now()
+): ActiveTranscriptScan {
+  const sessions = collectLibrarySessions(tree)
   const candidates = sessions
     .filter((session) => getSessionDirPath(session.sessionId) !== null)
     .flatMap((session) => {
@@ -160,6 +170,7 @@ export function watchTranscriptSource(sourcePath: string, onChange: () => void):
 export class TranscriptWatcher {
   private readonly scan: () => ActiveTranscriptScan
   private readonly generate: (sessionId: string) => Promise<boolean>
+  private readonly schedule?: (request: { sessionId: string; sourcePath: string }) => void
   private readonly watchSource: (sourcePath: string, onChange: () => void) => ClosableWatcher
   private readonly now: () => number
   private readonly debounceMs: number
@@ -178,6 +189,7 @@ export class TranscriptWatcher {
     this.now = options.now || Date.now
     this.scan = options.scan || (() => scanActiveTranscriptSources(this.now()))
     this.generate = options.generate || updateTranscript
+    this.schedule = options.schedule
     this.watchSource = options.watchSource || watchTranscriptSource
     this.debounceMs = options.debounceMs ?? TRANSCRIPT_DEBOUNCE_MS
     this.rescanIntervalMs = options.rescanIntervalMs ?? TRANSCRIPT_RESCAN_INTERVAL_MS
@@ -282,7 +294,10 @@ export class TranscriptWatcher {
     if (this.stopped) return
     const entry = this.watches.get(sourcePath)
     if (!entry) return
-    for (const sessionId of entry.sessionIds) this.scheduleGeneration(sessionId)
+    for (const sessionId of entry.sessionIds) {
+      if (this.schedule) this.schedule({ sessionId, sourcePath })
+      else this.scheduleGeneration(sessionId)
+    }
   }
 
   private scheduleGeneration(sessionId: string): void {

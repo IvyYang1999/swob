@@ -211,12 +211,15 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     root: getLibraryRoot(),
     filePath,
     sessionId: request.sessionId,
-    source: request.source
+    source: request.source,
+    maintainLibrary: libraryInitialized
   })
   markSessionActive(summary.sessionId)
   annotateSessionForFrontend(summary, dirPath)
-  summary.libraryDirPath = dirPath
-  summary.libraryMdPath = path.join(dirPath, 'transcript.md')
+  if (dirPath) {
+    summary.libraryDirPath = dirPath
+    summary.libraryMdPath = path.join(dirPath, 'transcript.md')
+  }
 
   const continuationParent = cachedSessions.find((session) =>
     session.continuationSessionIds?.includes(summary!.sessionId)

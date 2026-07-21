@@ -140,6 +140,34 @@ describe('TranscriptWatcher lifecycle', () => {
     watcher.stop()
     expect(close).toHaveBeenCalledTimes(1)
   })
+
+  it('routes changes to the shared coordinator without running its own generator', () => {
+    const callbacks = new Map<string, () => void>()
+    const schedule = vi.fn()
+    const generate = vi.fn(async () => true)
+    const watcher = new TranscriptWatcher({
+      scan: () => ({
+        sources: [{ sourcePath: '/tmp/coordinated.jsonl', sessionIds: ['coordinated-session'] }],
+        totalSessionCount: 1
+      }),
+      schedule,
+      generate,
+      watchSource: (sourcePath, onChange) => {
+        callbacks.set(sourcePath, onChange)
+        return { close: vi.fn() }
+      },
+      logger: { info: vi.fn(), error: vi.fn() }
+    })
+
+    watcher.start()
+    callbacks.get('/tmp/coordinated.jsonl')!()
+    expect(schedule).toHaveBeenCalledWith({
+      sessionId: 'coordinated-session',
+      sourcePath: '/tmp/coordinated.jsonl'
+    })
+    expect(generate).not.toHaveBeenCalled()
+    watcher.stop()
+  })
 })
 
 describe('TranscriptWatcher real-file integration', () => {

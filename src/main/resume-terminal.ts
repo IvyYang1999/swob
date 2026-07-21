@@ -1,8 +1,14 @@
 import * as fs from 'fs'
-import { exec as childExec, execFile as childExecFile } from 'child_process'
+import {
+  exec as childExec,
+  execFile as childExecFile,
+  execFileSync,
+  spawn as childSpawn
+} from 'child_process'
 import { migrateSettingsPreferences } from '../shared/settings-capabilities'
+import type { LaunchSpec } from './session-actions'
 
-export type ResumeTerminal = 'terminal-app' | 'iterm' | 'custom'
+export type ResumeTerminal = 'terminal-app' | 'iterm' | 'custom' | 'windows-terminal' | 'powershell' | 'cmd'
 
 export interface ResumeTerminalSettings {
   resumeTerminal: ResumeTerminal
@@ -37,6 +43,17 @@ interface ResumeTerminalDeps {
   logger: Pick<Console, 'warn'>
 }
 
+interface WindowsTerminalDeps {
+  commandExists: (executable: string) => boolean
+  spawn: typeof childSpawn
+}
+
+export interface WindowsTerminalInvocation {
+  terminal: 'windows-terminal' | 'powershell' | 'cmd'
+  executable: string
+  args: string[]
+}
+
 const defaultDeps: ResumeTerminalDeps = {
   fs,
   exec: childExec,
@@ -51,7 +68,102 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
 }
 
-export function normalizeResumeTerminal(value: unknown): ResumeTerminal {
+export function powershellQuote(value: string): string {
+  if (/[\0\r\n]/.test(value)) throw new Error('PowerShell 参数包含非法控制字符')
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+export function renderPowerShellLaunchCommand(spec: LaunchSpec): string {
+  return `& ${[spec.executable, ...spec.args].map(powershellQuote).join(' ')}`
+}
+
+function renderCmdLaunchCommand(spec: LaunchSpec): string {
+  const values = [spec.executable, ...spec.args]
+  if (values.some((value) => /[\0\r\n%!^&|<>"]/.test(value))) {
+    throw new Error('cmd 降级无法安全表示 Resume 参数')
+  }
+  return values.map((value) => `"${value}"`).join(' ')
+}
+
+function defaultCommandExists(executable: string): boolean {
+  try {
+    execFileSync('where.exe', [executable], { stdio: 'ignore', timeout: 3000 })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function buildWindowsTerminalInvocation(
+  spec: LaunchSpec,
+  commandExists: (executable: string) => boolean = defaultCommandExists,
+  preferred: ResumeTerminal = 'windows-terminal'
+): WindowsTerminalInvocation {
+  const powershellCommand = renderPowerShellLaunchCommand(spec)
+
+  if (preferred !== 'powershell' && preferred !== 'cmd' && commandExists('wt.exe')) {
+    const args = ['-w', 'new', 'new-tab']
+    if (spec.cwd) args.push('-d', spec.cwd)
+    args.push('powershell.exe', '-NoExit', '-Command', powershellCommand)
+    return { terminal: 'windows-terminal', executable: 'wt.exe', args }
+  }
+
+  if (preferred !== 'cmd' && commandExists('pwsh.exe')) {
+    return {
+      terminal: 'powershell',
+      executable: 'pwsh.exe',
+      args: ['-NoLogo', '-NoExit', '-Command', powershellCommand]
+    }
+  }
+
+  if (preferred !== 'cmd' && commandExists('powershell.exe')) {
+    return {
+      terminal: 'powershell',
+      executable: 'powershell.exe',
+      args: ['-NoLogo', '-NoExit', '-Command', powershellCommand]
+    }
+  }
+
+  return {
+    terminal: 'cmd',
+    executable: 'cmd.exe',
+    args: ['/D', '/K', renderCmdLaunchCommand(spec)]
+  }
+}
+
+export async function openResumeLaunchSpec(
+  spec: LaunchSpec,
+  settings: ResumeTerminalSettings,
+  deps: Partial<WindowsTerminalDeps> = {}
+): Promise<OpenResumeTerminalResult> {
+  const commandExists = deps.commandExists || defaultCommandExists
+  const spawn = deps.spawn || childSpawn
+  const preferred = normalizeResumeTerminal(settings.defaultTerminalId, 'win32')
+  const invocation = buildWindowsTerminalInvocation(spec, commandExists, preferred)
+  const child = spawn(invocation.executable, invocation.args, {
+    cwd: spec.cwd,
+    env: { ...process.env, ...spec.env },
+    detached: true,
+    windowsHide: false,
+    stdio: 'ignore'
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve)
+    child.once('error', reject)
+  })
+  child.unref()
+  return { terminal: invocation.terminal }
+}
+
+export function normalizeResumeTerminal(
+  value: unknown,
+  platform: NodeJS.Platform = process.platform
+): ResumeTerminal {
+  if (platform === 'win32') {
+    if (value === 'powershell' || value === 'cmd' || value === 'windows-terminal') return value
+    return 'windows-terminal'
+  }
   if (value === 'iterm' || value === 'iTerm' || value === 'iTerm2') return 'iterm'
   if (value === 'custom') return 'custom'
   if (value === 'terminal-app' || value === 'Terminal.app' || value === 'Terminal') return 'terminal-app'
@@ -59,16 +171,32 @@ export function normalizeResumeTerminal(value: unknown): ResumeTerminal {
 }
 
 export function normalizeResumeTerminalSettings(
-  preferences?: ResumeTerminalPreferences | null
+  preferences?: ResumeTerminalPreferences | null,
+  platform: NodeJS.Platform = process.platform
 ): ResumeTerminalSettings {
   const migrated = migrateSettingsPreferences(preferences as Record<string, unknown> | undefined)
   const legacyTerminal = migrated.defaultTerminalId === 'iterm2'
     ? 'iterm'
     : migrated.defaultTerminalId === 'custom' ? 'custom' : 'terminal-app'
+  if (platform === 'win32') {
+    const requested = ['windows-terminal', 'powershell', 'cmd'].includes(migrated.defaultTerminalId)
+      ? migrated.defaultTerminalId
+      : ['windows-terminal', 'powershell', 'cmd'].includes(String(preferences?.resumeTerminal))
+        ? String(preferences?.resumeTerminal)
+        : 'windows-terminal'
+    const resumeTerminal = normalizeResumeTerminal(requested, platform)
+    return {
+      resumeTerminal,
+      resumeTerminalCommandTemplate: typeof preferences?.resumeTerminalCommandTemplate === 'string'
+        ? preferences.resumeTerminalCommandTemplate
+        : '',
+      defaultTerminalId: resumeTerminal
+    }
+  }
   return {
     resumeTerminal: preferences?.resumeTerminal === undefined
       ? legacyTerminal
-      : normalizeResumeTerminal(preferences.resumeTerminal),
+      : normalizeResumeTerminal(preferences.resumeTerminal, platform),
     resumeTerminalCommandTemplate: typeof preferences?.resumeTerminalCommandTemplate === 'string'
       ? preferences.resumeTerminalCommandTemplate
       : '',

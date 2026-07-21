@@ -27,8 +27,11 @@ import {
   tokenUsageFromAccounting,
   unavailableTokenAccounting
 } from './token-accounting'
+import { runtimeHome } from './runtime-home'
+import { hasPortablePathSegment, isPortableAbsolutePath } from './portable-path'
+import { isSessionSourceSupported } from './platform-support'
 
-const HOME = process.env.HOME || ''
+const HOME = runtimeHome()
 
 export function isRealUserMessage(m: RawJsonlMessage): boolean {
   return detectTranscriptOrigin(m) === 'human'
@@ -174,9 +177,9 @@ function discoverConfigFiles(cwds: string[], sessionProjectPath: string): string
   // 2. Decode project root from sessionProjectPath dir name
   // e.g. ~/.claude/projects/-Users-yytyyf-newone/ → /Users/yytyyf/newone
   const encodedName = path.basename(sessionProjectPath)
-  const decodedRoot = encodedName.replace(/^-/, '/').replace(/-/g, '/')
+  const decodedRoot = decodeClaudeProjectDirectoryName(encodedName)
   // Skip if decodedRoot is HOME itself (would pick up global config)
-  if (decodedRoot && decodedRoot !== '/' && decodedRoot !== HOME) {
+  if (decodedRoot && decodedRoot !== HOME) {
     check(path.join(decodedRoot, 'CLAUDE.md'))
     check(path.join(decodedRoot, '.claude', 'CLAUDE.md'))
     check(path.join(decodedRoot, '.claude', 'settings.json'))
@@ -187,7 +190,7 @@ function discoverConfigFiles(cwds: string[], sessionProjectPath: string): string
   for (const cwd of cwds) {
     let dir = cwd
     const limit = 10
-    for (let i = 0; i < limit && dir !== '/' && dir !== HOME; i++) {
+    for (let i = 0; i < limit && path.dirname(dir) !== dir && dir !== HOME; i++) {
       check(path.join(dir, 'CLAUDE.md'))
       check(path.join(dir, '.claude', 'CLAUDE.md'))
       if (i === 0) {
@@ -198,6 +201,24 @@ function discoverConfigFiles(cwds: string[], sessionProjectPath: string): string
   }
 
   return found
+}
+
+export function decodeClaudeProjectDirectoryName(
+  encodedName: string,
+  platform: NodeJS.Platform = process.platform
+): string | undefined {
+  if (platform === 'win32') {
+    // Claude Code encodes `C:\\Users\\Alice\\project` as
+    // `C--Users-Alice-project` (colon and separators become dashes).
+    // This is a best-effort fallback only; transcript cwd remains authoritative
+    // because literal dashes make the encoding inherently non-reversible.
+    const match = encodedName.match(/^([A-Za-z])--(.+)$/)
+    if (!match) return undefined
+    return path.win32.join(`${match[1]}:\\`, ...match[2].split('-').filter(Boolean))
+  }
+
+  if (!encodedName.startsWith('-')) return undefined
+  return encodedName.replace(/^-/, '/').replace(/-/g, '/')
 }
 
 function isDirectory(dirPath: string): boolean {
@@ -329,7 +350,11 @@ function findJsonFilesFlat(root: string): string[] {
   } catch { return [] }
 }
 
-export function findNewSourceSessionFiles(home = HOME): string[] {
+export function findNewSourceSessionFiles(
+  home = HOME,
+  platform: NodeJS.Platform = process.platform
+): string[] {
+  if (platform === 'win32') return []
   const files: string[] = []
 
   // CC-Mirror: ~/.cc-mirror/*/projects/**/*.jsonl (same as Claude Code)
@@ -525,7 +550,7 @@ export function buildSessionSummary(
   sourceOverride: 'claude-code' | 'cc-mirror' = 'claude-code',
   subagentUsageMessages: RawJsonlMessage[] = []
 ): SessionSummary | null {
-  if (filePath.includes('/subagents/')) return null
+  if (hasPortablePathSegment(filePath, 'subagents')) return null
 
   const validMessages = rawMessages.filter(
     (m) => m.type === 'user' || m.type === 'assistant' || m.type === 'system'
@@ -541,7 +566,7 @@ export function buildSessionSummary(
   const cwds = [...new Set(rawMessages.map((m) => m.cwd).filter(Boolean) as string[])]
   const versions = [...new Set(rawMessages.map((m) => m.version).filter(Boolean) as string[])]
   const initialCwd = getInitialSessionCwd(rawMessages)
-  const claudeConfigDir = getClaudeConfigDirForSessionFile(filePath, process.env.HOME || HOME)
+  const claudeConfigDir = getClaudeConfigDirForSessionFile(filePath, runtimeHome())
   const latestPermissionMode = [...rawMessages].reverse().find((m) => m.permissionMode)?.permissionMode
   const latestVersion = [...rawMessages].reverse().find((m) => m.version)?.version
   // Use main chain timestamps for updatedAt (sidechain messages are rejected branches)
@@ -661,7 +686,7 @@ export function buildSessionSummary(
   const fileActions = new Map<string, Set<FileAction>>()
 
   function addFileAction(fp: string, action: FileAction): void {
-    if (!fp.startsWith('/')) return
+    if (!isPortableAbsolutePath(fp)) return
     if (!fileActions.has(fp)) fileActions.set(fp, new Set())
     fileActions.get(fp)!.add(action)
   }
@@ -1835,12 +1860,15 @@ export interface LoadAllSessionsOptions {
 
 export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
   const startedAt = Date.now()
-  const claudeFiles = findClaudeSessionFiles()
-  const newSourceFiles = findNewSourceSessionFiles()
-  const codexFiles = findCodexSessionFiles()
-  const cursorFiles = findCursorSessionFiles()
-  const opencodeFiles = await findOpencodeSessionFiles()
-  const zcodeFiles = await findZcodeSessionFiles()
+  const claudeFiles = isSessionSourceSupported('claude-code') ? findClaudeSessionFiles() : []
+  const newSourceFiles = findNewSourceSessionFiles().filter((filePath) => {
+    const source = detectSessionSourceFromPath(filePath)
+    return source ? isSessionSourceSupported(source) : false
+  })
+  const codexFiles = isSessionSourceSupported('codex') ? findCodexSessionFiles() : []
+  const cursorFiles = isSessionSourceSupported('cursor') ? findCursorSessionFiles() : []
+  const opencodeFiles = isSessionSourceSupported('opencode') ? await findOpencodeSessionFiles() : []
+  const zcodeFiles = isSessionSourceSupported('zcode') ? await findZcodeSessionFiles() : []
   const cache = loadDiskCache()
   const descriptors: Array<{ filePath: string; source: CachedSessionSource }> = [
     ...claudeFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),

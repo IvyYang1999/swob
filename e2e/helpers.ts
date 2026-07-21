@@ -31,6 +31,7 @@ export interface LaunchAppOptions {
   claudeTurns?: number
   viewport?: { width: number; height: number }
   includeCursorFixture?: boolean
+  env?: Record<string, string>
 }
 
 export interface LaunchedApp {
@@ -274,7 +275,7 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
       `--disk-cache-dir=${cache}`,
       `--crash-dumps-dir=${logs}`
     ],
-    env: isolatedEnvironment(home, libraryRoot, sandboxRoot)
+    env: { ...isolatedEnvironment(home, libraryRoot, sandboxRoot), ...options.env }
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')

@@ -73,6 +73,7 @@ describe('recovery planner zero-side-effect boundary', () => {
     )
 
     expect(closure.map((fileName) => path.basename(fileName)).sort()).toEqual([
+      'portable-path.ts',
       'resume-recovery-planner.ts',
       'session-remote-state.ts'
     ])

@@ -12,6 +12,11 @@ function writeBackupJsonl(rows: unknown[]): string {
 }
 
 describe('detectSessionSourceForJsonl', () => {
+  it('Windows 反斜杠路径也能识别 Alpha 来源', () => {
+    expect(detectSessionSourceFromPath('C:\\Users\\Alice\\.claude\\projects\\demo\\a.jsonl')).toBe('claude-code')
+    expect(detectSessionSourceFromPath('C:\\Users\\Alice\\.codex\\sessions\\2026\\a.jsonl')).toBe('codex')
+  })
+
   it('opencode DB source ref 按路径识别来源', () => {
     const source = detectSessionSourceFromPath('/Users/test/.local/share/opencode/opencode.db#ses_Abc123')
 

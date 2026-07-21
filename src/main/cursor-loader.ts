@@ -10,8 +10,9 @@ import type {
   ContentPart
 } from './types'
 import { tokenUsageFromAccounting, unavailableTokenAccounting } from './token-accounting'
+import { runtimeHome } from './runtime-home'
 
-const HOME = process.env.HOME || ''
+const HOME = runtimeHome()
 const CURSOR_PROJECTS_DIR = path.join(HOME, '.cursor', 'projects')
 
 // --- File discovery ---

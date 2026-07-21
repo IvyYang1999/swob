@@ -94,6 +94,19 @@ function makeCodexLines() {
 
 describe('codex-loader', () => {
   describe('findCodexSessionFiles', () => {
+    it('可从注入的 Windows USERPROFILE fixture 发现会话', () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-win-codex-home-'))
+      const sessionPath = path.join(home, '.codex', 'sessions', '2026', '07', '22', 'rollout-test.jsonl')
+      fs.mkdirSync(path.dirname(sessionPath), { recursive: true })
+      fs.writeFileSync(sessionPath, '{}\n')
+
+      try {
+        expect(findCodexSessionFiles(home)).toEqual([sessionPath])
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    })
+
     it('扫描 ~/.codex/sessions/ 下的 rollout-*.jsonl 文件', () => {
       const files = findCodexSessionFiles()
       for (const f of files) {

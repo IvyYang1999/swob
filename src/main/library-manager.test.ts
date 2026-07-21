@@ -175,6 +175,45 @@ describe('Library metadata cache', () => {
   })
 })
 
+describe('Windows Library filesystem policy', () => {
+  it('sanitize 处理 NTFS 保留名和结尾点/空格，但保留 emoji 前缀', () => {
+    expect(lib.sanitizeLibraryEntryName('CON')).toBe('_CON')
+    expect(lib.sanitizeLibraryEntryName('aux.txt')).toBe('_aux.txt')
+    expect(lib.sanitizeLibraryEntryName('report...   ')).toBe('report')
+    expect(lib.sanitizeLibraryEntryName('💬 中文会话')).toBe('💬 中文会话')
+    expect(lib.isWindowsCompatibleLibraryName('💬 中文会话')).toBe(true)
+  })
+
+  it('Windows 用 directory junction 建立多文件夹引用，不要求开发者模式', () => {
+    const calls: Array<{ target: string; link: string; type?: fs.symlink.Type }> = []
+    lib.createSessionFolderReference(
+      'C:\\Vault\\💬 Session',
+      'C:\\Vault\\Folder\\💬 Session',
+      'win32',
+      (target, link, type) => calls.push({ target: String(target), link: String(link), type })
+    )
+
+    expect(calls).toEqual([{
+      target: 'C:\\Vault\\💬 Session',
+      link: 'C:\\Vault\\Folder\\💬 Session',
+      type: 'junction'
+    }])
+  })
+
+  it('Mac 创建的 POSIX source meta 在本机源不存在时只标记不可 Resume，不崩溃', () => {
+    const sessionId = 'mac-library-on-windows'
+    const foreignPath = `/Users/other-mac/.claude/projects/-Users-other-mac-project/${sessionId}.jsonl`
+    createLibrarySession(sessionId, [foreignPath], { dirName: '💬 Mac 远端会话' })
+
+    expect(() => lib.scanLibrary()).not.toThrow()
+    expect(lib.getSessionResumeAvailability(sessionId)).toEqual({
+      canResume: false,
+      reason: lib.LOCAL_RESUME_UNAVAILABLE_REASON,
+      sourcePath: foreignPath
+    })
+  })
+})
+
 describe('【曾经的 bug】重命名分支 session 不应该影响母 session', () => {
   it('分支重命名后，母 session 的标题不变', () => {
     const branchId = 'abc-123:intra-0'

@@ -12,6 +12,7 @@ import type {
   SessionSource
 } from './types'
 import { accountingFromMutuallyExclusiveUsage, tokenUsageFromAccounting } from './token-accounting'
+import { runtimeHome } from './runtime-home'
 
 const SESSION_ID_RE = /^sess?_[A-Za-z0-9_-]+$/
 const SQLITE_TIMEOUT_MS = 5000
@@ -86,7 +87,7 @@ export function getOpencodeDbPath(): string {
 }
 
 export function getSqliteAgentDbPath(source: SqliteAgentSource): string {
-  return path.join(process.env.HOME || '', ...AGENT_DB_SOURCES[source].relativePath)
+  return path.join(runtimeHome(), ...AGENT_DB_SOURCES[source].relativePath)
 }
 
 export function isValidOpencodeSessionId(sessionId?: string): boolean {

@@ -181,7 +181,7 @@ export interface SshConfig {
 }
 
 export type ThemeMode = 'dark' | 'light' | 'system'
-export type ResumeTerminal = 'terminal-app' | 'iterm' | 'custom'
+export type ResumeTerminal = 'terminal-app' | 'iterm' | 'custom' | 'windows-terminal' | 'powershell' | 'cmd'
 
 export interface UserConfig {
   folders: Folder[]

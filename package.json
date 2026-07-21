@@ -14,6 +14,7 @@
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:mac": "npm run build && electron-builder --mac",
+    "build:win": "npm run build && electron-builder --win nsis --x64 --publish never --config.npmRebuild=false",
     "deploy": "bash scripts/deploy-local.sh",
     "dmg": "bash scripts/build-dmg-desktop.sh",
     "test": "vitest run",

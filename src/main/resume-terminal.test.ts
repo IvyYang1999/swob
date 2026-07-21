@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest'
 import {
   normalizeResumeTerminalSettings,
   openResumeTerminal,
+  buildWindowsTerminalInvocation,
+  powershellQuote,
+  renderPowerShellLaunchCommand,
   renderCustomResumeTerminalCommand,
   shellQuote
 } from './resume-terminal'
@@ -52,6 +55,50 @@ function fakeDeps() {
 }
 
 describe('Resume 终端打开方式', () => {
+  it('PowerShell 引号规则使用单引号翻倍，不复用 POSIX shellQuote', () => {
+    expect(powershellQuote("C:\\Users\\O'Brien\\中文项目"))
+      .toBe("'C:\\Users\\O''Brien\\中文项目'")
+    expect(renderPowerShellLaunchCommand({
+      executable: 'claude',
+      args: ['--resume', "abc'def"],
+      target: 'native',
+      keepOpen: true
+    })).toBe("& 'claude' '--resume' 'abc''def'")
+  })
+
+  it('Windows Terminal 可用时优先新建 tab，并将 cwd 作为独立 argv', () => {
+    const invocation = buildWindowsTerminalInvocation({
+      executable: 'claude',
+      args: ['--resume', 'abc'],
+      cwd: 'C:\\Users\\Alice\\My Project',
+      target: 'native',
+      keepOpen: true
+    }, () => true)
+
+    expect(invocation.terminal).toBe('windows-terminal')
+    expect(invocation.executable).toBe('wt.exe')
+    expect(invocation.args.slice(0, 7)).toEqual([
+      '-w', 'new', 'new-tab', '-d', 'C:\\Users\\Alice\\My Project', 'powershell.exe', '-NoExit'
+    ])
+    expect(invocation.args.at(-1)).toBe("& 'claude' '--resume' 'abc'")
+  })
+
+  it('Windows Terminal 缺失时按 PowerShell 再 cmd 降级', () => {
+    const spec = { executable: 'codex', args: ['resume', 'thread-1'], target: 'native' as const, keepOpen: true }
+    const powershell = buildWindowsTerminalInvocation(spec, (name) => name === 'pwsh.exe')
+    expect(powershell).toMatchObject({ terminal: 'powershell', executable: 'pwsh.exe' })
+
+    const cmd = buildWindowsTerminalInvocation(spec, () => false)
+    expect(cmd).toMatchObject({ terminal: 'cmd', executable: 'cmd.exe', args: ['/D', '/K', expect.any(String)] })
+  })
+
+  it('Windows 优先使用新设置层的 defaultTerminalId', () => {
+    expect(normalizeResumeTerminalSettings({ defaultTerminalId: 'powershell' }, 'win32'))
+      .toMatchObject({ resumeTerminal: 'powershell', defaultTerminalId: 'powershell' })
+    expect(normalizeResumeTerminalSettings(undefined, 'win32'))
+      .toMatchObject({ resumeTerminal: 'windows-terminal', defaultTerminalId: 'windows-terminal' })
+  })
+
   it('默认没有设置时仍然写 .command 文件并用 Terminal.app 打开', () => {
     const f = fakeDeps()
     const settings = normalizeResumeTerminalSettings(undefined)

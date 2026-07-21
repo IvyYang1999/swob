@@ -17,6 +17,7 @@ import { shellQuote } from './resume-terminal'
 import { detectTranscriptOrigin, formatTranscriptOriginHeader } from './transcript-origin'
 import { resolvePathWithinRoot } from './path-containment'
 import { runtimeHome } from './runtime-home'
+import { normalizePortablePath } from './portable-path'
 import {
   ensureClaudeResumeTarget,
   type ClaudeResumeRecoveryFailureReason
@@ -127,8 +128,9 @@ export interface LibraryConfig {
   preferences: {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
-    resumeTerminal?: 'terminal-app' | 'iterm' | 'custom'
+    resumeTerminal?: 'terminal-app' | 'iterm' | 'custom' | 'windows-terminal' | 'powershell' | 'cmd'
     resumeTerminalCommandTemplate?: string
+    experimentalClaudeDesktopImport?: boolean
     settingsSchemaVersion?: 1
     defaultTerminalId?: string
     resumeMethodByHarness?: Record<string, import('../shared/settings-capabilities').ResumeMethod>
@@ -179,7 +181,7 @@ export interface AppConfig {
 }
 
 function isOriginalSessionSourcePath(filePath: string): boolean {
-  const normalized = filePath.split(path.sep).join('/')
+  const normalized = normalizePortablePath(filePath)
   if (normalized.includes('/.local/share/opencode/opencode.db#ses_')) return true
   if (normalized.includes('/.zcode/cli/db/db.sqlite#sess_')) return true
   if (!filePath.endsWith('.jsonl')) return false
@@ -554,12 +556,47 @@ export function invalidateLibraryConfigCache(): void {
 /** Emoji marker distinguishing session packages from ordinary folders in Obsidian/Finder. */
 export const SESSION_DIR_PREFIX = '💬 '
 
-function sanitizeDirName(title: string): string {
-  return title
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i
+
+export function isWindowsCompatibleLibraryName(name: string): boolean {
+  return name.length > 0 &&
+    !/[<>:"/\\|?*\x00-\x1f]/.test(name) &&
+    !/[. ]$/.test(name) &&
+    !WINDOWS_RESERVED_NAME.test(name)
+}
+
+export function sanitizeLibraryEntryName(title: string): string {
+  let sanitized = title
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 60) || 'untitled'
+    .slice(0, 60)
+    .replace(/[. ]+$/g, '')
+
+  if (!sanitized) sanitized = 'untitled'
+  if (WINDOWS_RESERVED_NAME.test(sanitized)) sanitized = `_${sanitized}`
+  return sanitized
+}
+
+function sanitizeDirName(title: string): string {
+  return sanitizeLibraryEntryName(title)
+}
+
+type SymlinkWriter = (target: fs.PathLike, linkPath: fs.PathLike, type?: fs.symlink.Type) => void
+
+export function createSessionFolderReference(
+  targetPath: string,
+  linkPath: string,
+  platform: NodeJS.Platform = process.platform,
+  writeSymlink: SymlinkWriter = fs.symlinkSync
+): void {
+  // Directory junctions do not require Windows Developer Mode/admin rights,
+  // while preserving the existing logical multi-folder reference semantics.
+  if (platform === 'win32') {
+    writeSymlink(targetPath, linkPath, 'junction')
+    return
+  }
+  writeSymlink(targetPath, linkPath)
 }
 
 function findUniqueDirName(parentDir: string, baseName: string): string {
@@ -2272,8 +2309,9 @@ export function addSessionToFolder(sessionId: string, folderPath: string): void 
   const targetPath = path.join(folderPath, baseName)
   if (fs.existsSync(targetPath)) return
 
-  // Create symlink
-  fs.symlinkSync(currentDir, targetPath)
+  // Windows uses a directory junction so Alpha does not require admin or
+  // Developer Mode; macOS keeps the existing symlink behavior unchanged.
+  createSessionFolderReference(currentDir, targetPath)
 }
 
 export function removeSessionFromFolder(sessionId: string, folderPath: string): void {
@@ -2360,7 +2398,7 @@ function updateSymlinksRecursive(searchDir: string, oldTarget: string, newTarget
           const target = fs.realpathSync(fullPath)
           if (target === oldTarget) {
             fs.unlinkSync(fullPath)
-            fs.symlinkSync(newTarget, fullPath)
+            createSessionFolderReference(newTarget, fullPath)
           }
         } else if (lstat.isDirectory() && !isSessionDir(fullPath)) {
           updateSymlinksRecursive(fullPath, oldTarget, newTarget)

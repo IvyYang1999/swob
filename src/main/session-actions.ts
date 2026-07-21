@@ -6,6 +6,8 @@ import {
 } from './session-loader'
 import { shellQuote } from './resume-terminal'
 import type { RawJsonlMessage, SessionSource, SessionSummary } from './types'
+import { runtimeHome } from './runtime-home'
+import { alphaUnsupportedReason } from './platform-support'
 
 export interface SessionActionContext {
   sessionId: string
@@ -32,12 +34,119 @@ export type ResumeSurface =
   | 'remote-control'
 
 export type ResumeLaunchAction =
-  | { kind: 'terminal'; command: string }
+  | { kind: 'terminal'; command: string; launchSpec: LaunchSpec }
   | { kind: 'deep-link'; url: string }
-  | { kind: 'remote-control'; command: string }
+  | { kind: 'remote-control'; command: string; launchSpec: LaunchSpec }
+
+export interface LaunchSpec {
+  executable: string
+  args: string[]
+  cwd?: string
+  env?: Record<string, string>
+  target: 'native'
+  keepOpen: boolean
+}
 
 function withClaudeConfigDir(cmd: string, claudeConfigDir?: string): string {
   return claudeConfigDir ? `CLAUDE_CONFIG_DIR=${shellQuote(claudeConfigDir)} ${cmd}` : cmd
+}
+
+function existingDirectory(cwd?: string): string | undefined {
+  if (!cwd) return undefined
+  try {
+    return fs.statSync(cwd).isDirectory() ? cwd : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function buildResumeLaunchSpec(
+  sessionId: string,
+  permissionMode?: string,
+  cwd?: string,
+  source: SessionSource = 'claude-code',
+  claudeConfigDir?: string,
+  platform: NodeJS.Platform = process.platform
+): LaunchSpec {
+  const unsupportedReason = alphaUnsupportedReason(source, platform)
+  if (unsupportedReason) throw new Error(unsupportedReason)
+
+  const launchCwd = existingDirectory(cwd)
+  let executable: string
+  let args: string[]
+
+  if (source === 'codex') {
+    executable = 'codex'
+    args = ['resume', sessionId]
+    if (launchCwd) args.push('-C', launchCwd)
+  } else if (source === 'cursor') {
+    executable = 'cursor-agent'
+    args = [`--resume=${sessionId}`]
+  } else if (source === 'opencode') {
+    executable = 'opencode'
+    args = [...(launchCwd ? [launchCwd] : []), '--session', sessionId]
+  } else if (source === 'zcode') {
+    throw new Error('ZCode 没有公开 CLI；请改用“打开 ZCode App”')
+  } else {
+    const executableBySource: Partial<Record<SessionSource, string>> = {
+      'claude-code': 'claude',
+      'cc-mirror': 'claude',
+      antigravity: 'agy',
+      grok: 'grok',
+      pi: 'pi',
+      kimi: 'kimi',
+      hermes: 'hermes'
+    }
+    executable = executableBySource[source] || 'claude'
+    args = [
+      ...(source === 'claude-code' && permissionMode === 'bypassPermissions'
+        ? ['--dangerously-skip-permissions']
+        : []),
+      '--resume',
+      sessionId
+    ]
+  }
+
+  return {
+    executable,
+    args,
+    ...(launchCwd ? { cwd: launchCwd } : {}),
+    ...(claudeConfigDir && source === 'claude-code'
+      ? { env: { CLAUDE_CONFIG_DIR: claudeConfigDir } }
+      : {}),
+    target: 'native',
+    keepOpen: true
+  }
+}
+
+export function buildForkLaunchSpec(
+  sessionId: string,
+  permissionMode?: string,
+  cwd?: string,
+  source: SessionSource = 'claude-code',
+  claudeConfigDir?: string,
+  platform: NodeJS.Platform = process.platform
+): LaunchSpec {
+  const resume = buildResumeLaunchSpec(
+    sessionId,
+    permissionMode,
+    cwd,
+    source,
+    claudeConfigDir,
+    platform
+  )
+  if (source === 'codex') return { ...resume, args: ['fork', ...resume.args.slice(1)] }
+  if (source !== 'claude-code') return resume
+
+  const resumeIndex = resume.args.indexOf('--resume')
+  return {
+    ...resume,
+    args: [
+      ...resume.args.slice(0, resumeIndex),
+      '--fork-session',
+      ...resume.args.slice(resumeIndex)
+    ]
+  }
 }
 
 function buildTerminalResumeCommand(
@@ -120,15 +229,36 @@ export function buildResumeAction(
   cwd?: string,
   source?: SessionSource,
   claudeConfigDir?: string,
-  surface: ResumeSurface = 'terminal'
+  surface: ResumeSurface = 'terminal',
+  platform: NodeJS.Platform = process.platform
 ): ResumeLaunchAction {
+  const effectiveSource = source || 'claude-code'
+  const unsupportedReason = alphaUnsupportedReason(effectiveSource, platform)
+  if (unsupportedReason) throw new Error(unsupportedReason)
+  if (platform === 'win32') {
+    const supportedSurface = surface === 'terminal' || (
+      effectiveSource === 'codex' && surface === 'codex-desktop'
+    )
+    if (!supportedSurface) {
+      throw new Error(`Windows Alpha 暂不支持 ${surface} Resume`)
+    }
+  }
+
   if (surface === 'terminal') {
     if (source === 'zcode') {
       throw new Error('ZCode 没有公开 CLI；请改用“打开 ZCode App”')
     }
     return {
       kind: 'terminal',
-      command: buildTerminalResumeCommand(sessionId, permissionMode, cwd, source, claudeConfigDir)
+      command: buildTerminalResumeCommand(sessionId, permissionMode, cwd, source, claudeConfigDir),
+      launchSpec: buildResumeLaunchSpec(
+        sessionId,
+        permissionMode,
+        cwd,
+        effectiveSource,
+        claudeConfigDir,
+        platform
+      )
     }
   }
 
@@ -163,7 +293,18 @@ export function buildResumeAction(
     source,
     claudeConfigDir
   )} --remote-control`
-  return { kind: 'remote-control', command }
+  const launchSpec = buildResumeLaunchSpec(
+    sessionId,
+    permissionMode,
+    cwd,
+    source || 'claude-code',
+    claudeConfigDir
+  )
+  return {
+    kind: 'remote-control',
+    command,
+    launchSpec: { ...launchSpec, args: [...launchSpec.args, '--remote-control'] }
+  }
 }
 
 /** Legacy raw command builder used by copy/audit call sites. Launches must use buildResumeAction. */
@@ -258,7 +399,7 @@ function getRawTimeRange(raw: RawJsonlMessage[]): { start: number; end: number }
 async function buildFreshClaudeSummary(
   summary: SessionSummary,
   restoredSourcePath?: string | null,
-  home = process.env.HOME || ''
+  home = runtimeHome()
 ): Promise<SessionSummary | null> {
   const sourcePaths = restoredSourcePath && fs.existsSync(restoredSourcePath)
     ? [restoredSourcePath]
@@ -323,7 +464,7 @@ export async function resolveSessionActionContext(
     throw new Error('Intra-file branches cannot be resumed independently')
   }
 
-  const home = options.home || process.env.HOME || ''
+  const home = options.home || runtimeHome()
   let currentSessions = sessions
   let summary = findSessionForAction(currentSessions, requestedSessionId)
 

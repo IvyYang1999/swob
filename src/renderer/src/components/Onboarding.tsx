@@ -5,6 +5,7 @@ import {
   MessageSquare, FolderHeart, Sparkles, ScanSearch, ArchiveRestore,
   ChevronRight, FolderOpen, ShieldAlert, Check
 } from 'lucide-react'
+import { WindowsAlphaNotice, usePlatformCapabilities } from './WindowsAlphaNotice'
 
 type Step = 'welcome' | 'vault' | 'scan'
 
@@ -38,6 +39,7 @@ function StepDots({ step }: { step: Step }) {
 
 export function Onboarding({ defaultPath, onDone }: { defaultPath: string; onDone: () => void }) {
   const t = useT()
+  const platformCapabilities = usePlatformCapabilities()
   const { sessions, showToast } = useStore()
   const [step, setStep] = useState<Step>('welcome')
   const [vaultPath, setVaultPath] = useState(defaultPath)
@@ -45,7 +47,9 @@ export function Onboarding({ defaultPath, onDone }: { defaultPath: string; onDon
   const [retentionDone, setRetentionDone] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  const shortPath = vaultPath.replace(/^\/Users\/[^/]+/, '~')
+  const shortPath = vaultPath
+    .replace(/^\/Users\/[^/]+/, '~')
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+/i, '~')
 
   const sourceCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -159,6 +163,10 @@ export function Onboarding({ defaultPath, onDone }: { defaultPath: string; onDon
                 ? t('onboarding.scan_body', { n: sessions.length })
                 : t('onboarding.scan_empty')}
             </p>
+
+            <div className="mb-5">
+              <WindowsAlphaNotice capabilities={platformCapabilities} />
+            </div>
 
             {sourceCounts.length > 0 && (
               <div className="mb-5 rounded-lg border border-edge divide-y divide-edge overflow-hidden">

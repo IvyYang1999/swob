@@ -1,4 +1,5 @@
 import * as path from 'path'
+import { isPortableAbsolutePath, normalizePortablePath } from './portable-path'
 import type { SessionMeta } from './library-manager'
 import { resolveSessionRemoteState } from './session-remote-state'
 
@@ -143,15 +144,20 @@ function failure(
 
 /** Pure lexical classification; it does not resolve symlinks or touch the filesystem. */
 export function classifyRecoverySourcePath(sourcePath: string): ClassifiedRecoverySource {
-  const normalized = sourcePath.split(path.sep).join('/')
+  const windowsPath = path.win32.isAbsolute(sourcePath) && !path.posix.isAbsolute(sourcePath)
+  const pathApi = windowsPath ? path.win32 : path.posix
+  const normalized = normalizePortablePath(sourcePath)
+  const native = (value: string): string => pathApi.normalize(
+    windowsPath ? value.replace(/\//g, '\\') : value
+  )
   const windowMatch = normalized.match(
     /^(.*\/\.claude-window\/([^/]+))\/projects\/([^/]+)\/([^/]+\.jsonl)$/
   )
-  if (path.isAbsolute(sourcePath) && windowMatch) {
+  if (isPortableAbsolutePath(sourcePath) && windowMatch) {
     return {
       kind: 'claude-window',
-      path: path.normalize(sourcePath),
-      configDir: windowMatch[1],
+      path: native(sourcePath),
+      configDir: native(windowMatch[1]),
       instanceId: windowMatch[2],
       projectDirName: windowMatch[3],
       fileName: windowMatch[4]
@@ -161,22 +167,22 @@ export function classifyRecoverySourcePath(sourcePath: string): ClassifiedRecove
   const standardMatch = normalized.match(
     /^(.*\/\.claude)\/projects\/([^/]+)\/([^/]+\.jsonl)$/
   )
-  if (path.isAbsolute(sourcePath) && standardMatch) {
+  if (isPortableAbsolutePath(sourcePath) && standardMatch) {
     return {
       kind: 'standard',
-      path: path.normalize(sourcePath),
-      configDir: standardMatch[1],
+      path: native(sourcePath),
+      configDir: native(standardMatch[1]),
       projectDirName: standardMatch[2],
       fileName: standardMatch[3]
     }
   }
 
-  if (path.isAbsolute(sourcePath) && path.basename(sourcePath).endsWith('.jsonl')) {
+  if (isPortableAbsolutePath(sourcePath) && pathApi.basename(sourcePath).endsWith('.jsonl')) {
     return {
       kind: 'non-standard',
-      path: path.normalize(sourcePath),
-      projectDirName: path.basename(path.dirname(sourcePath)),
-      fileName: path.basename(sourcePath)
+      path: native(sourcePath),
+      projectDirName: pathApi.basename(pathApi.dirname(sourcePath)),
+      fileName: pathApi.basename(sourcePath)
     }
   }
   return { kind: 'non-standard', path: sourcePath }

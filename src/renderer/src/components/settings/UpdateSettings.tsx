@@ -3,17 +3,27 @@ import { RefreshCw } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import { copy, SettingField, Segmented, ToggleRow, useSettingsPreferences } from './shared'
+import { usePlatformCapabilities } from '../WindowsAlphaNotice'
 
 export function UpdateSettings() {
   const { locale, savePreferences } = useStore()
   const t = useT()
   const preferences = useSettingsPreferences()
+  const isWindowsAlpha = usePlatformCapabilities()?.windowsNativeAlpha === true
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [appInfo, setAppInfo] = useState<{ version: string; platform: string } | null>(null)
 
   useEffect(() => {
     void window.api.getAppInfo().then(setAppInfo)
   }, [])
+
+  if (isWindowsAlpha) {
+    return (
+      <p className="text-[11px] leading-relaxed text-muted">
+        Windows Alpha 不提供自动更新；新版本由负责人分发未签名的 x64 NSIS 安装包。
+      </p>
+    )
+  }
 
   return (
     <>

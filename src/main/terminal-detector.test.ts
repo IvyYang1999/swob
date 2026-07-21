@@ -42,4 +42,19 @@ describe('终端自动检测', () => {
     })])
     expect(found.some((item) => item.id === 'apple-terminal')).toBe(false)
   })
+
+  it('Windows 识别 Windows Terminal、PowerShell 和 cmd 的可执行入口', () => {
+    const found = detectInstalledTerminals(deps({
+      platform: 'win32',
+      findExecutable: (name) => ['wt.exe', 'powershell.exe', 'cmd.exe'].includes(name)
+        ? `C:\\Windows\\${name}`
+        : null
+    }))
+
+    expect(found.map((item) => item.id)).toEqual(expect.arrayContaining([
+      'windows-terminal', 'powershell', 'cmd'
+    ]))
+    expect(found.filter((item) => ['windows-terminal', 'powershell', 'cmd'].includes(item.id))
+      .every((item) => item.canRunCommand)).toBe(true)
+  })
 })

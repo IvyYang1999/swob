@@ -293,4 +293,16 @@ describe('recovery path classification', () => {
     )
     expect(result.kind).toBe('standard')
   })
+
+  it('在非 Windows 测试机上也能按 path.win32 识别盘符源路径', () => {
+    const result = classifyRecoverySourcePath(
+      'C:\\Users\\Alice\\.claude\\projects\\C--Users-Alice-project\\80000000-0000-4000-8000-000000000008.jsonl'
+    )
+    expect(result).toMatchObject({
+      kind: 'standard',
+      configDir: 'C:\\Users\\Alice\\.claude',
+      projectDirName: 'C--Users-Alice-project',
+      fileName: '80000000-0000-4000-8000-000000000008.jsonl'
+    })
+  })
 })

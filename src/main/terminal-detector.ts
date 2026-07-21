@@ -32,6 +32,8 @@ export const TERMINAL_DEFINITIONS: TerminalDefinition[] = [
   { id: 'kitty', name: 'kitty', platforms: ['darwin', 'linux'], bundleId: 'net.kovidgoyal.kitty', paths: ['/Applications/kitty.app'], bins: ['kitty'], commandSupport: 'stable' },
   { id: 'alacritty', name: 'Alacritty', platforms: ['darwin', 'linux', 'win32'], bundleId: 'org.alacritty', paths: ['/Applications/Alacritty.app'], bins: ['alacritty', 'alacritty.exe'], commandSupport: 'stable' },
   { id: 'windows-terminal', name: 'Windows Terminal', platforms: ['win32'], paths: [], bins: ['wt.exe'], commandSupport: 'stable' },
+  { id: 'powershell', name: 'PowerShell', platforms: ['win32'], paths: [], bins: ['pwsh.exe', 'powershell.exe'], commandSupport: 'stable' },
+  { id: 'cmd', name: 'cmd', platforms: ['win32'], paths: [], bins: ['cmd.exe'], commandSupport: 'stable' },
   { id: 'gnome-terminal', name: 'GNOME Terminal', platforms: ['linux'], paths: [], bins: ['gnome-terminal'], commandSupport: 'stable' },
   { id: 'konsole', name: 'Konsole', platforms: ['linux'], paths: [], bins: ['konsole'], commandSupport: 'stable' },
   { id: 'foot', name: 'foot', platforms: ['linux'], paths: [], bins: ['foot'], commandSupport: 'stable' },

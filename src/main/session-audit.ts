@@ -37,6 +37,24 @@ export interface TurnLatency {
   role: 'user' | 'assistant'
 }
 
+export interface ModelUsage {
+  model: string
+  turns: number
+  inputTokens: number
+  outputTokens: number
+  estimatedCost: number
+}
+
+export interface ToolEfficiency {
+  name: string
+  count: number
+  errorCount: number
+  errorRate: number
+  avgLatencyMs: number
+}
+
+export type SessionType = 'coding' | 'research' | 'debugging' | 'discussion' | 'mixed'
+
 export interface SessionAuditResult {
   sessionId: string
 
@@ -48,6 +66,13 @@ export interface SessionAuditResult {
   latencyStats: AuditMetric<{ p50: number; p95: number; max: number }>
   estimatedCost: AuditMetric<{ inputCost: number; outputCost: number; totalCost: number; currency: string }>
   frameworkOverhead: AuditMetric<{ frameworkTokens: number; totalTokens: number; percentage: number }>
+
+  // New dimensions
+  sessionType: SessionType
+  modelUsage: ModelUsage[]
+  toolEfficiency: ToolEfficiency[]
+  userInterruptions: number
+  avgTurnsPerGoal: number
 
   // Pattern detection
   antiPatterns: ToolAntiPattern[]
@@ -83,8 +108,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   'claude-3-5-sonnet-20241022': { input: 3, output: 15 },
 }
 
-const FRUSTRATION_KEYWORDS_ZH = ['不对', '重做', '为什么', '错了', '别这样', '回滚', '撤销', '不是这个意思', '搞错了']
-const FRUSTRATION_KEYWORDS_EN = ['no not', 'wrong', 'redo', 'revert', 'undo', 'that\'s not', 'stop', 'don\'t']
+// Only match frustration keywords at the START of short messages (<100 chars)
+// to avoid false positives in long normal paragraphs
+const FRUSTRATION_KEYWORDS_ZH = ['不对', '错了', '别这样', '回滚', '撤销', '不是这个意思', '搞错了', '重来']
+const FRUSTRATION_KEYWORDS_EN = ['no, not', 'that\'s wrong', 'redo this', 'revert it', 'undo that', 'that\'s not what']
 
 function extractToolUseNames(content: unknown): string[] {
   if (!content || !Array.isArray(content)) return []
@@ -144,16 +171,21 @@ function percentile(sorted: number[], p: number): number {
 
 export function auditSession(messages: RawMessage[], sessionId: string): SessionAuditResult {
   const toolCounts: Record<string, number> = {}
+  const toolErrors: Record<string, number> = {}
+  const toolLatencies: Record<string, number[]> = {}
   const thinkingBlocks: Array<{ length: number; signature?: string }> = []
   const turnTimestamps: Array<{ ts: number; role: string; index: number }> = []
   const antiPatterns: ToolAntiPattern[] = []
   const frustrationSignals: FrustrationSignal[] = []
+  const modelTurns: Record<string, { turns: number; input: number; output: number }> = {}
   let totalInputTokens = 0
   let totalOutputTokens = 0
   let frameworkTokens = 0
   let totalContentTokens = 0
   let lastModel = ''
   let turnIndex = 0
+  let userInterruptions = 0
+  let userGoalChanges = 0
 
   // For anti-pattern detection
   const recentReads: Array<{ path: string; turnIndex: number }> = []
@@ -193,7 +225,15 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
         totalInputTokens += usage.input_tokens || 0
         totalOutputTokens += usage.output_tokens || 0
       }
-      if (msg.message.model) lastModel = msg.message.model
+      if (msg.message.model) {
+        lastModel = msg.message.model
+        if (!modelTurns[lastModel]) modelTurns[lastModel] = { turns: 0, input: 0, output: 0 }
+        modelTurns[lastModel].turns++
+        if (usage) {
+          modelTurns[lastModel].input += usage.input_tokens || 0
+          modelTurns[lastModel].output += usage.output_tokens || 0
+        }
+      }
 
       // Timestamps
       if (ts > 0) turnTimestamps.push({ ts, role: 'assistant', index: turnIndex })
@@ -207,11 +247,15 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
       }
       totalContentTokens += estimateTokens(text)
 
-      // Tool results (for agent anti-pattern)
+      // Tool results (for agent anti-pattern + error tracking)
       if (Array.isArray(content)) {
         for (const p of (content as Array<Record<string, unknown>>)) {
           if (p.type === 'tool_result' && p.tool_use_id) {
             agentResultIds.add(p.tool_use_id as string)
+            if (p.is_error === true) {
+              const toolName = String(p.tool_use_id).slice(0, 20)
+              toolErrors[toolName] = (toolErrors[toolName] || 0) + 1
+            }
           }
         }
       }
@@ -228,13 +272,15 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
           consecutiveShortUserMsgs = 0
         }
 
-        // Keyword detection
-        const lower = text.toLowerCase()
-        const allKeywords = [...FRUSTRATION_KEYWORDS_ZH, ...FRUSTRATION_KEYWORDS_EN]
-        for (const kw of allKeywords) {
-          if (lower.includes(kw)) {
-            frustrationSignals.push({ type: 'keyword', turnIndex, text: `"${kw}" in: ${text.slice(0, 50)}` })
-            break
+        // Keyword detection — only in short messages to avoid false positives
+        if (text.length < 150) {
+          const lower = text.toLowerCase()
+          const allKeywords = [...FRUSTRATION_KEYWORDS_ZH, ...FRUSTRATION_KEYWORDS_EN]
+          for (const kw of allKeywords) {
+            if (lower.startsWith(kw) || lower.includes(kw)) {
+              frustrationSignals.push({ type: 'keyword', turnIndex, text: `"${kw}" in: ${text.slice(0, 50)}` })
+              break
+            }
           }
         }
 
@@ -245,6 +291,7 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
 
         // Interruption
         if (text.includes('[Request interrupted')) {
+          userInterruptions++
           frustrationSignals.push({ type: 'interruption', turnIndex, text: 'User interrupted request' })
         }
 
@@ -303,8 +350,10 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
   for (const r of recentReads) {
     if (r.path) readPathCounts.set(r.path, (readPathCounts.get(r.path) || 0) + 1)
   }
+  // Scale threshold with session length — 5 reads is normal in a 50-turn session
+  const readThreshold = Math.max(5, Math.floor(turnIndex / 10))
   for (const [filePath, count] of readPathCounts) {
-    if (count > 3) {
+    if (count > readThreshold) {
       antiPatterns.push({
         type: 'repeated-read',
         turnIndex: recentReads.find(r => r.path === filePath)?.turnIndex || 0,
@@ -351,6 +400,47 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
     findings.push(`P95 response latency ${(percentile(assistantLatencies, 95) / 1000).toFixed(0)}s — some turns are very slow`)
   }
 
+  // Session type classification
+  const totalTools = Object.values(toolCounts).reduce((a, b) => a + b, 0)
+  const editTools = (toolCounts['Edit'] || 0) + (toolCounts['Write'] || 0)
+  const readTools = toolCounts['Read'] || 0
+  const bashTools = toolCounts['Bash'] || 0
+  const searchTools = (toolCounts['WebSearch'] || 0) + (toolCounts['WebFetch'] || 0) + (toolCounts['Grep'] || 0)
+  const sessionType: SessionType =
+    totalTools === 0 ? 'discussion'
+    : editTools > totalTools * 0.3 ? 'coding'
+    : searchTools > totalTools * 0.3 ? 'research'
+    : bashTools > totalTools * 0.3 && (toolErrors['Bash'] || 0) > 0 ? 'debugging'
+    : 'mixed'
+
+  // Model usage breakdown
+  const modelUsage: ModelUsage[] = Object.entries(modelTurns).map(([model, stats]) => {
+    const p = MODEL_PRICING[model] || { input: 3, output: 15 }
+    return {
+      model: model.replace(/^claude-/, '').replace(/-\d{8}$/, ''),
+      turns: stats.turns,
+      inputTokens: stats.input,
+      outputTokens: stats.output,
+      estimatedCost: (stats.input / 1_000_000) * p.input + (stats.output / 1_000_000) * p.output
+    }
+  }).sort((a, b) => b.turns - a.turns)
+
+  // Tool efficiency
+  const toolEfficiency: ToolEfficiency[] = Object.entries(toolCounts)
+    .filter(([, count]) => count >= 2)
+    .map(([name, count]) => ({
+      name,
+      count,
+      errorCount: toolErrors[name] || 0,
+      errorRate: (toolErrors[name] || 0) / count,
+      avgLatencyMs: (toolLatencies[name]?.reduce((a, b) => a + b, 0) || 0) / (toolLatencies[name]?.length || 1)
+    }))
+    .sort((a, b) => b.count - a.count)
+
+  // Avg turns per goal change (approximation: user messages without tool results)
+  const pureUserMsgs = turnTimestamps.filter(t => t.role === 'user').length
+  const avgTurnsPerGoal = pureUserMsgs > 0 ? turnIndex / pureUserMsgs : turnIndex
+
   return {
     sessionId,
     readEditRatio: { value: readEditRatio, provenance: 'reported' },
@@ -376,6 +466,11 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
       value: { frameworkTokens, totalTokens: totalContentTokens, percentage: frameworkPct },
       provenance: 'estimated'
     },
+    sessionType,
+    modelUsage,
+    toolEfficiency,
+    userInterruptions,
+    avgTurnsPerGoal,
     antiPatterns,
     frustrationSignals,
     healthScore: score,

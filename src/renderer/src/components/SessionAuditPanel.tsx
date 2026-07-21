@@ -173,6 +173,44 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
             </div>
           )}
 
+          {/* Session type + model usage */}
+          <div className="border-t border-edge pt-2 space-y-1.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-muted">{locale === 'zh-CN' ? '会话类型' : 'Session Type'}</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface text-secondary capitalize">{audit.sessionType}</span>
+            </div>
+            {audit.modelUsage && audit.modelUsage.length > 0 && (
+              <div>
+                <div className="text-[10px] text-muted mb-1">{locale === 'zh-CN' ? '模型使用' : 'Model Usage'}</div>
+                {audit.modelUsage.slice(0, 3).map((m, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px] pl-2">
+                    <span className="text-secondary truncate">{m.model}</span>
+                    <span className="text-muted">{m.turns} turns · ${m.estimatedCost.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {audit.toolEfficiency && audit.toolEfficiency.length > 0 && (
+              <div>
+                <div className="text-[10px] text-muted mb-1">{locale === 'zh-CN' ? '工具效率' : 'Tool Efficiency'}</div>
+                {audit.toolEfficiency.slice(0, 5).map((t, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px] pl-2">
+                    <span className="text-secondary">{t.name}</span>
+                    <span className="text-muted">
+                      {t.count}x
+                      {t.errorCount > 0 && <span className="text-red-400 ml-1">({t.errorCount} err)</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {audit.userInterruptions > 0 && (
+              <div className="text-[10px] text-soft-amber">
+                ⏸ {audit.userInterruptions} {locale === 'zh-CN' ? '次用户中断' : 'interruptions'}
+              </div>
+            )}
+          </div>
+
           {/* Provenance legend */}
           <div className="flex gap-2 text-[9px] text-faint border-t border-edge pt-2">
             <span><ProvenanceBadge p="reported" /> API 真实值</span>

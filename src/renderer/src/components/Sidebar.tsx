@@ -1,14 +1,18 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useStore, type SessionSummary, type Folder } from '../store'
+import { useStore, type SessionSummary, type Folder, type VaultFile } from '../store'
 import { useT } from '../i18n'
+import { groupSessionsByLens, type LensDimension, type LensGroup } from '../../../shared/vault-lens'
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2, List, FolderTree,
-  Plus, Play, Pencil, GitBranch, Cloud, CloudDownload, Settings, Copy, Terminal
+  Plus, Play, Pencil, GitBranch, Cloud, CloudDownload, Settings, Copy, Terminal,
+  FileText, Focus, Inbox, Sparkles, Tags, CalendarDays, Layers3, Gauge,
+  HardDrive, Rows3, Undo2, WandSparkles
 } from 'lucide-react'
 import { SshConfigModal } from './SshConfigModal'
 import { resolveResumeCwd } from '../utils/chat-helpers'
+import { OrganizerPanel } from './OrganizerPanel'
 
 function formatDate(iso: string, locale: string, t: (key: string, params?: Record<string, string | number>) => string): string {
   const d = new Date(iso)
@@ -25,7 +29,8 @@ function formatDate(iso: string, locale: string, t: (key: string, params?: Recor
 
 function SessionItem({
   session, depth, onContextMenu, isRenaming, renameValue,
-  onRenameChange, onRenameSubmit, onRenameCancel, onDoubleClickRename
+  onRenameChange, onRenameSubmit, onRenameCancel, onDoubleClickRename,
+  allowDrag = true
 }: {
   session: SessionSummary; depth: number
   onContextMenu: (e: React.MouseEvent, sessionId: string) => void
@@ -33,6 +38,7 @@ function SessionItem({
   onRenameChange?: (v: string) => void
   onRenameSubmit?: () => void; onRenameCancel?: () => void
   onDoubleClickRename?: (sessionId: string) => void
+  allowDrag?: boolean
 }) {
   const { selectedUniqueId, selectSession, config, activeSessionIds, cloudSessionIds, locale, sessions } = useStore()
   const t = useT()
@@ -57,8 +63,9 @@ function SessionItem({
   return (
     <button
       data-session-id={session.id}
-      draggable={!isRenaming}
+      draggable={allowDrag && !isRenaming}
       onDragStart={(e) => {
+        if (!allowDrag) { e.preventDefault(); return }
         e.dataTransfer.setData('application/x-swob', JSON.stringify({
           type: 'session', id: session.id, sessionId: session.sessionId || session.id
         }))
@@ -103,9 +110,10 @@ function SessionItem({
         />
       ) : (
         <div className="text-sm text-primary truncate flex items-center gap-1.5">
+          <MessageSquare size={12} className="shrink-0 text-muted" aria-label="会话包" />
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-active shrink-0" title={t('sidebar.opened_in_terminal')} />}
-          {isCloud && <Cloud size={11} className="shrink-0 text-blue-400" title="iCloud 云端文件，未下载到本地" />}
-          {isRemote && !isCloud && <Cloud size={11} className="shrink-0 text-soft-cyan" title={session.remoteHost ? `来自 ${session.remoteHost}` : '来自其他设备'} />}
+          {isCloud && <span title="iCloud 云端文件，未下载到本地"><Cloud size={11} className="shrink-0 text-soft-blue" /></span>}
+          {isRemote && !isCloud && <span title={session.remoteHost ? `来自 ${session.remoteHost}` : '来自其他设备'}><Cloud size={11} className="shrink-0 text-soft-cyan" /></span>}
           {isIntraBranch && <GitBranch size={12} className="shrink-0 text-soft-purple" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
@@ -159,6 +167,102 @@ function SessionItem({
   )
 }
 
+function VaultFileItem({ file, depth = 0 }: { file: VaultFile; depth?: number }) {
+  return (
+    <button
+      data-vault-file={file.path}
+      onClick={() => { void window.api.openPath(file.path) }}
+      className="w-full py-1.5 pr-3 flex items-center gap-1.5 text-sm text-secondary hover:text-primary hover:bg-surface text-left"
+      style={{ paddingLeft: `${depth * 16 + 12}px` }}
+      title={file.path}
+    >
+      <FileText size={12} className="shrink-0 text-faint" />
+      <span className="truncate">{file.name}</span>
+    </button>
+  )
+}
+
+const LENS_DEFINITIONS: Array<{ id: LensDimension; label: string; icon: typeof Focus }> = [
+  { id: 'project', label: '项目', icon: Focus },
+  { id: 'date', label: '日期', icon: CalendarDays },
+  { id: 'tags', label: '标签', icon: Tags },
+  { id: 'harness', label: 'harness', icon: Layers3 },
+  { id: 'turns', label: '轮数', icon: Gauge },
+  { id: 'source', label: '来源', icon: HardDrive },
+  { id: 'none', label: '无分组', icon: Rows3 }
+]
+
+const LENS_COLOR_CLASSES: Record<LensGroup['color'], string> = {
+  blue: 'border-soft-blue bg-soft-blue/5',
+  green: 'border-soft-green bg-soft-green/5',
+  amber: 'border-soft-amber bg-soft-amber/5',
+  purple: 'border-soft-purple bg-soft-purple/5',
+  cyan: 'border-soft-cyan bg-soft-cyan/5',
+  pink: 'border-soft-pink bg-soft-pink/5',
+  orange: 'border-soft-orange bg-soft-orange/5'
+}
+
+function LensView({
+  dimension, onContextMenu, renamingSessionId, sessionRenameValue,
+  onRenameChange, onRenameSubmit, onRenameCancel, onDoubleClickRename
+}: {
+  dimension: LensDimension
+  onContextMenu: (e: React.MouseEvent, sessionId: string) => void
+  renamingSessionId: string | null
+  sessionRenameValue: string
+  onRenameChange: (value: string) => void
+  onRenameSubmit: () => void
+  onRenameCancel: () => void
+  onDoubleClickRename: (sessionId: string) => void
+}) {
+  const { sessions, config, cloudSessionIds, applyOrganization } = useStore()
+  const groups = useMemo(() => groupSessionsByLens(sessions, dimension, {
+    metaBySessionId: config?.sessionMeta || {},
+    cloudSessionIds
+  }), [sessions, dimension, config?.sessionMeta, cloudSessionIds])
+
+  return (
+    <div data-testid="lens-view" className="px-2 pb-3 space-y-3">
+      {groups.map((group) => (
+        <section key={group.id} data-lens-group={group.id} className="min-w-0">
+          <div className={`h-8 px-2 flex items-center gap-2 border-l-2 ${LENS_COLOR_CLASSES[group.color]}`}>
+            <span className="text-xs font-medium text-body truncate">{group.label}</span>
+            <span className="ml-auto px-1.5 py-0.5 rounded-full text-[10px] bg-surface text-muted">{group.items.length}</span>
+            {dimension === 'turns' && group.id === 'single' && group.items.length > 0 && (
+              <button
+                onClick={() => void applyOrganization('archive', group.items.map((session) => ({
+                  sessionId: session.sessionId || session.id,
+                  targetRelativeFolder: '归档/单轮会话'
+                })))}
+                className="text-[10px] text-muted hover:text-primary"
+              >
+                批量归档
+              </button>
+            )}
+          </div>
+          <div className="pt-1">
+            {group.items.map((session) => (
+              <SessionItem
+                key={`${group.id}:${session.id}`}
+                session={session}
+                depth={0}
+                allowDrag={false}
+                onContextMenu={onContextMenu}
+                isRenaming={renamingSessionId === session.id}
+                renameValue={sessionRenameValue}
+                onRenameChange={onRenameChange}
+                onRenameSubmit={onRenameSubmit}
+                onRenameCancel={onRenameCancel}
+                onDoubleClickRename={onDoubleClickRename}
+              />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}
+
 // ============ Inline New Folder Input ============
 
 function InlineNewFolder({ depth, onSubmit, onCancel }: {
@@ -189,13 +293,13 @@ function VirtualizedSessionList({
 }: {
   sessions: SessionSummary[]
   scrollRef: React.RefObject<HTMLDivElement | null>
-  onContextMenu: (e: React.MouseEvent, s: SessionSummary) => void
+  onContextMenu: (e: React.MouseEvent, sessionId: string) => void
   renamingSessionId: string | null
   sessionRenameValue: string
   onRenameChange: (v: string) => void
   onRenameSubmit: () => void
   onRenameCancel: () => void
-  onDoubleClickRename: (s: SessionSummary) => void
+  onDoubleClickRename: (sessionId: string) => void
 }) {
   const t = useT()
   const virtualizer = useVirtualizer({
@@ -401,6 +505,9 @@ function FolderNode({
               onSessionRenameCancel={onSessionRenameCancel}
               onDoubleClickRenameSession={onDoubleClickRenameSession} />
           ))}
+          {(folder.files || []).map((file) => (
+            <VaultFileItem key={file.path} file={file} depth={depth + 1} />
+          ))}
           {folderSessions.map((session) => (
             <SessionItem key={session.id} session={session} depth={depth + 1}
               onContextMenu={onSessionContextMenu} isRenaming={renamingSessionId === session.id}
@@ -408,7 +515,7 @@ function FolderNode({
               onRenameSubmit={onSessionRenameSubmit} onRenameCancel={onSessionRenameCancel}
               onDoubleClickRename={onDoubleClickRenameSession} />
           ))}
-          {childFolders.length === 0 && folderSessions.length === 0 && creatingSubfolderId !== folder.id && (
+          {childFolders.length === 0 && folderSessions.length === 0 && (folder.files || []).length === 0 && creatingSubfolderId !== folder.id && (
             <div className="py-2 text-xs text-faint italic" style={{ paddingLeft: `${(depth + 1) * 16 + 12}px` }}>
               {t('sidebar.drop_here')}
             </div>
@@ -422,7 +529,7 @@ function FolderNode({
 // ============ Main Sidebar ============
 
 export function Sidebar({ width }: { width: number }) {
-  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, resumeSession, sshConfig, refreshCloudSessions } = useStore()
+  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, resumeSession, sshConfig, refreshCloudSessions, undoLastOrganization } = useStore()
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -437,10 +544,39 @@ export function Sidebar({ width }: { width: number }) {
   const [sessionRenameValue, setSessionRenameValue] = useState('')
   const { sshModalOpen, openSshModal, closeSshModal } = useStore()
   const [cloudRefreshing, setCloudRefreshing] = useState(false)
+  const [sidebarMode, setSidebarMode] = useState<'folders' | 'lens'>(() => {
+    try { return localStorage.getItem('swob:sidebar-mode') === 'lens' ? 'lens' : 'folders' } catch { return 'folders' }
+  })
+  const [lensDimension, setLensDimension] = useState<LensDimension>(() => {
+    try {
+      const saved = localStorage.getItem('swob:lens-dimension') as LensDimension | null
+      return LENS_DEFINITIONS.some((item) => item.id === saved) ? saved! : 'date'
+    } catch { return 'date' }
+  })
+  const [organizerKind, setOrganizerKind] = useState<'project' | 'smart' | null>(null)
   const { renameFolder, setSessionMeta } = useStore()
   const t = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const inboxExpansionInitialized = useRef(false)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('swob:sidebar-mode', sidebarMode)
+      localStorage.setItem('swob:lens-dimension', lensDimension)
+    } catch { /* renderer storage unavailable */ }
+  }, [sidebarMode, lensDimension])
+
+  useEffect(() => {
+    if (inboxExpansionInitialized.current || !config?.folders) return
+    const inboxIds = config.folders
+      .filter((folder) => ['inbox', '未分类'].includes(folder.name.trim().toLowerCase()))
+      .map((folder) => folder.id)
+    if (inboxIds.length > 0) {
+      setExpandedFolders((current) => new Set([...current, ...inboxIds]))
+      inboxExpansionInitialized.current = true
+    }
+  }, [config?.folders])
 
   // Auto-refresh cloud session list on mount and periodically
   useEffect(() => {
@@ -609,31 +745,9 @@ export function Sidebar({ width }: { width: number }) {
   }, [sessions])
 
   const rootFolders = useMemo(() => treeFolders.filter((f) => !f.parentId), [treeFolders])
-
-  const projectViewMode = (config?.preferences as any)?.projectViewMode || 'folders'
-
-  // paths 模式: 从 sessions 的 cwd 自动生成虚拟文件夹
-  const pathFolders = useMemo(() => {
-    if (projectViewMode !== 'paths') return []
-    const cwdMap = new Map<string, string[]>() // projectName → sessionIds
-    for (const s of sessions) {
-      const cwd = s.cwds?.[0] || ''
-      const parts = cwd.split('/')
-      const projectName = parts[parts.length - 1] || cwd
-      if (!cwdMap.has(projectName)) cwdMap.set(projectName, [])
-      cwdMap.get(projectName)!.push(s.id)
-    }
-    return Array.from(cwdMap.entries()).map(([name, sessionIds], i) => ({
-      id: `path-${i}`,
-      name,
-      parentId: null as string | null,
-      sessionIds,
-      createdAt: '',
-    }))
-  }, [sessions, projectViewMode])
-
-  const effectiveRootFolders = projectViewMode === 'paths' ? pathFolders : rootFolders
-  const effectiveAllFolders = projectViewMode === 'paths' ? pathFolders : treeFolders
+  const isInboxFolder = (folder: Folder): boolean => ['inbox', '未分类'].includes(folder.name.trim().toLowerCase())
+  const regularRootFolders = useMemo(() => rootFolders.filter((folder) => !isInboxFolder(folder)), [rootFolders])
+  const inboxRootFolders = useMemo(() => rootFolders.filter(isInboxFolder), [rootFolders])
 
   // --- Auto-scroll during drag ---
   const handleListDragOver = useCallback((e: React.DragEvent) => {
@@ -656,7 +770,7 @@ export function Sidebar({ width }: { width: number }) {
   const stopAutoScroll = useCallback(() => { if (scrollTimerRef.current) { clearInterval(scrollTimerRef.current); scrollTimerRef.current = null } }, [])
 
   return (
-    <div className="h-full flex flex-col bg-base shrink-0" style={{ width }}>
+    <div data-testid="sidebar" className="h-full flex flex-col bg-base shrink-0" style={{ width }}>
       <div className="p-3 flex items-center justify-between border-b border-edge">
         <span className="text-sm font-medium text-body">{t('sidebar.sessions')}</span>
         <div className="flex items-center gap-1">
@@ -674,12 +788,21 @@ export function Sidebar({ width }: { width: number }) {
           >
             <Terminal size={14} />
           </button>
-          <button onClick={() => setViewMode(viewMode === 'tree' ? 'flat' : 'tree')}
+          <button
+            onClick={() => void undoLastOrganization()}
             className="p-1 hover:bg-hover rounded text-secondary hover:text-primary"
-            title={viewMode === 'tree' ? t('sidebar.timeline_view') : t('sidebar.tree_view')}>
-            {viewMode === 'tree' ? <List size={14} /> : <FolderTree size={14} />}
+            title="撤销最近一次整理"
+          >
+            <Undo2 size={14} />
           </button>
-          {projectViewMode === 'folders' && (
+          {sidebarMode === 'folders' && (
+            <button onClick={() => setViewMode(viewMode === 'tree' ? 'flat' : 'tree')}
+              className="p-1 hover:bg-hover rounded text-secondary hover:text-primary"
+              title={viewMode === 'tree' ? t('sidebar.timeline_view') : t('sidebar.tree_view')}>
+              {viewMode === 'tree' ? <List size={14} /> : <FolderTree size={14} />}
+            </button>
+          )}
+          {sidebarMode === 'folders' && (
             <button onClick={() => setShowNewFolder(true)}
               className="p-1 hover:bg-hover rounded text-secondary hover:text-primary" title={t('sidebar.new_folder')}>
               <FolderPlus size={14} />
@@ -688,7 +811,50 @@ export function Sidebar({ width }: { width: number }) {
         </div>
       </div>
 
+      <div className="px-2 py-2 border-b border-edge space-y-2">
+        <div className="grid grid-cols-2 p-0.5 rounded bg-surface" role="tablist" aria-label="侧边栏模式">
+          <button
+            role="tab"
+            aria-selected={sidebarMode === 'folders'}
+            onClick={() => setSidebarMode('folders')}
+            className={`py-1 rounded text-[11px] flex items-center justify-center gap-1.5 ${sidebarMode === 'folders' ? 'bg-hover text-primary' : 'text-muted hover:text-secondary'}`}
+          >
+            <FolderTree size={12} />文件夹
+          </button>
+          <button
+            role="tab"
+            aria-selected={sidebarMode === 'lens'}
+            onClick={() => setSidebarMode('lens')}
+            className={`py-1 rounded text-[11px] flex items-center justify-center gap-1.5 ${sidebarMode === 'lens' ? 'bg-hover text-primary' : 'text-muted hover:text-secondary'}`}
+          >
+            <Focus size={12} />镜头
+          </button>
+        </div>
+        {sidebarMode === 'lens' && (
+          <div className="lens-chip-strip flex gap-1 overflow-x-auto pb-0.5" aria-label="镜头维度">
+            {LENS_DEFINITIONS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                onClick={() => setLensDimension(id)}
+                className={`shrink-0 px-2 py-1 rounded-full text-[10px] flex items-center gap-1 border ${lensDimension === id ? 'border-accent text-primary bg-soft-purple/10' : 'border-edge text-muted hover:text-secondary'}`}
+              >
+                <Icon size={10} />{label}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-1">
+          <button onClick={() => setOrganizerKind('project')} className="flex-1 px-2 py-1 text-[11px] text-secondary hover:text-primary hover:bg-surface rounded flex items-center justify-center gap-1">
+            <FolderIcon size={11} />按项目整理
+          </button>
+          <button onClick={() => setOrganizerKind('smart')} className="flex-1 px-2 py-1 text-[11px] text-secondary hover:text-primary hover:bg-surface rounded flex items-center justify-center gap-1">
+            <WandSparkles size={11} />智能整理
+          </button>
+        </div>
+      </div>
+
       {sshModalOpen && <SshConfigModal onClose={() => closeSshModal()} />}
+      {organizerKind && <OrganizerPanel kind={organizerKind} sidebarWidth={width} onClose={() => setOrganizerKind(null)} />}
 
       {showNewFolder && (
         <div className="p-2 border-b border-edge">
@@ -702,7 +868,18 @@ export function Sidebar({ width }: { width: number }) {
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto"
         onDragOver={handleListDragOver} onDragLeave={stopAutoScroll} onDrop={stopAutoScroll} onDragEnd={stopAutoScroll}>
-        {viewMode === 'flat' ? (
+        {sidebarMode === 'lens' ? (
+          <LensView
+            dimension={lensDimension}
+            onContextMenu={handleContextMenu}
+            renamingSessionId={renamingSessionId}
+            sessionRenameValue={sessionRenameValue}
+            onRenameChange={setSessionRenameValue}
+            onRenameSubmit={handleSubmitRenameSession}
+            onRenameCancel={handleCancelRenameSession}
+            onDoubleClickRename={handleDoubleClickRenameSession}
+          />
+        ) : viewMode === 'flat' ? (
           <VirtualizedSessionList
             sessions={sessions}
             scrollRef={scrollRef}
@@ -716,8 +893,18 @@ export function Sidebar({ width }: { width: number }) {
           />
         ) : (
           <>
-            {effectiveRootFolders.map((folder) => (
-              <FolderNode key={folder.id} folder={folder} depth={0} allFolders={effectiveAllFolders}
+            {regularRootFolders.length === 0 && (sessions.length > 0 || inboxRootFolders.length > 0) && (
+              <div className="m-3 p-3 border border-edge rounded bg-surface/40">
+                <div className="flex items-center gap-2 text-sm text-primary"><Inbox size={14} className="text-accent" />会话还住在 Inbox</div>
+                <p className="text-xs text-muted mt-1.5 leading-relaxed">不会自动重排。先换个镜头浏览，或预览一次整理。</p>
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => setSidebarMode('lens')} className="text-[11px] text-accent hover:text-primary">用镜头浏览</button>
+                  <button onClick={() => setOrganizerKind('project')} className="text-[11px] text-secondary hover:text-primary">按项目整理 →</button>
+                </div>
+              </div>
+            )}
+            {regularRootFolders.map((folder) => (
+              <FolderNode key={folder.id} folder={folder} depth={0} allFolders={treeFolders}
                 sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
                 dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
                 setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
@@ -730,7 +917,8 @@ export function Sidebar({ width }: { width: number }) {
                 onSessionRenameCancel={handleCancelRenameSession}
                 onDoubleClickRenameSession={handleDoubleClickRenameSession} />
             ))}
-            {effectiveRootFolders.length > 0 && ungroupedSessions.length > 0 && (
+            {(config?.rootFiles || []).map((file) => <VaultFileItem key={file.path} file={file} />)}
+            {regularRootFolders.length > 0 && ungroupedSessions.length > 0 && (
               <div className="mx-3 my-2 flex items-center gap-2"
                 onDragOver={(e) => { e.preventDefault(); e.stopPropagation() }}
                 onDrop={(e) => { e.preventDefault(); e.stopPropagation(); try { const d = JSON.parse(e.dataTransfer.getData('application/x-swob')); if (d.type === 'folder' && d.id) moveFolder(d.id, null) } catch {} }}>
@@ -766,6 +954,27 @@ export function Sidebar({ width }: { width: number }) {
                 ))}
               </>
             )}
+            {inboxRootFolders.length > 0 && (
+              <div className="mx-3 my-2 flex items-center gap-2">
+                <div className="flex-1 border-t border-edge" />
+                <span className="text-[10px] text-faint shrink-0">Inbox</span>
+                <div className="flex-1 border-t border-edge" />
+              </div>
+            )}
+            {inboxRootFolders.map((folder) => (
+              <FolderNode key={folder.id} folder={folder} depth={0} allFolders={treeFolders}
+                sessionMap={sessionMap} expandedFolders={expandedFolders} toggleFolder={toggleFolder}
+                dragOverFolderId={dragOverFolderId} dragOverZone={dragOverZone}
+                setDragOverFolderId={setDragOverFolderId} setDragOverZone={setDragOverZone}
+                renamingFolderId={renamingFolderId} setRenamingFolderId={setRenamingFolderId}
+                renamingValue={renamingValue} setRenamingValue={setRenamingValue}
+                handleRenameFolder={handleRenameFolder} onSessionContextMenu={handleContextMenu}
+                creatingSubfolderId={creatingSubfolderId} setCreatingSubfolderId={setCreatingSubfolderId}
+                renamingSessionId={renamingSessionId} sessionRenameValue={sessionRenameValue}
+                onSessionRenameChange={setSessionRenameValue} onSessionRenameSubmit={handleSubmitRenameSession}
+                onSessionRenameCancel={handleCancelRenameSession}
+                onDoubleClickRenameSession={handleDoubleClickRenameSession} />
+            ))}
           </>
         )}
       </div>

@@ -111,6 +111,14 @@ function ToastContainer() {
           >
             <Icon size={16} className="shrink-0" />
             <span className="flex-1">{t.text}</span>
+            {t.action && (
+              <button
+                onClick={() => { t.action?.onClick(); dismissToast(t.id) }}
+                className="shrink-0 px-2 py-1 rounded border border-current/20 hover:bg-base/30 text-[11px] font-medium"
+              >
+                {t.action.label}
+              </button>
+            )}
             <button onClick={() => dismissToast(t.id)} className="ml-1 opacity-50 hover:opacity-100 shrink-0">
               <X size={14} />
             </button>

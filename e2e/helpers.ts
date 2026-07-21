@@ -7,11 +7,12 @@
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import * as path from 'path'
 
-export async function launchApp(): Promise<{ app: ElectronApplication; page: Page }> {
+export async function launchApp(options: { env?: Record<string, string> } = {}): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
     args: [path.join(__dirname, '..', 'out', 'main', 'index.js')],
     env: {
       ...process.env,
+      ...options.env,
       // 可以设置测试专用的环境变量
       NODE_ENV: 'test'
     }

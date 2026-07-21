@@ -10,7 +10,7 @@
  */
 /// <reference types="@testing-library/jest-dom" />
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import React from 'react'
 
 // --- Mock store and i18n before importing component ---
@@ -22,10 +22,15 @@ import React from 'react'
   libraryIsInitialized: vi.fn().mockResolvedValue(false),
   librarySelectDirectory: vi.fn().mockResolvedValue(null),
   libraryChangePath: vi.fn().mockResolvedValue(null),
-  showSessionContextMenu: vi.fn().mockResolvedValue(null)
+  showSessionContextMenu: vi.fn().mockResolvedValue(null),
+  openPath: vi.fn().mockResolvedValue(''),
+  organizerPreviewProject: vi.fn().mockResolvedValue([]),
+  organizerPreviewSmart: vi.fn().mockResolvedValue([]),
+  organizerApply: vi.fn().mockResolvedValue({ operationId: null, moves: [], config: {} }),
+  organizerUndo: vi.fn().mockResolvedValue({ operationId: null, moves: [], config: {} })
 }
 
-const mockStore = {
+const mockStore: any = {
   selectedUniqueId: null,
   selectSession: vi.fn(),
   config: {
@@ -50,7 +55,9 @@ const mockStore = {
   toasts: [],
   dismissToast: vi.fn(),
   createFolder: vi.fn(),
-  moveFolder: vi.fn()
+  moveFolder: vi.fn(),
+  applyOrganization: vi.fn().mockResolvedValue(0),
+  undoLastOrganization: vi.fn().mockResolvedValue(0)
 }
 
 vi.mock('../store', () => {
@@ -97,10 +104,25 @@ function makeSession(overrides: Record<string, unknown> = {}) {
   }
 }
 
+beforeEach(() => {
+  localStorage.removeItem('swob:sidebar-mode')
+  localStorage.removeItem('swob:lens-dimension')
+  mockStore.config = {
+    folders: [],
+    sessionMeta: {
+      'parent-uuid': { customTitle: '母session标题' },
+      'parent-uuid:intra-0': { customTitle: '分支标题' }
+    },
+    preferences: { defaultViewMode: 'compact' as const, terminalApp: 'Terminal' as const }
+  } as any
+})
+
 describe('【曾经的 bug】SessionItem 渲染不能因变量顺序而崩溃', () => {
   beforeEach(() => {
     mockStore.sessions = []
     mockStore.selectedUniqueId = null
+    localStorage.removeItem('swob:sidebar-mode')
+    localStorage.removeItem('swob:lens-dimension')
   })
 
   it('渲染母 session 不崩溃', () => {
@@ -124,6 +146,51 @@ describe('【曾经的 bug】SessionItem 渲染不能因变量顺序而崩溃', 
     expect(() => {
       render(<Sidebar width={260} />)
     }).not.toThrow()
+  })
+})
+
+describe('Vault 与镜头双层导航', () => {
+  beforeEach(() => {
+    localStorage.removeItem('swob:sidebar-mode')
+    localStorage.removeItem('swob:lens-dimension')
+    mockStore.config = {
+      folders: [],
+      rootFiles: [],
+      sessionMeta: {},
+      preferences: { defaultViewMode: 'compact' as const, terminalApp: 'Terminal' as const }
+    } as any
+    mockStore.sessions = [makeSession({ firstUserMessage: '镜头测试会话' })] as any
+  })
+
+  it('切换到镜头后显示 7 个维度，且会话不可拖拽', () => {
+    render(<Sidebar width={260} />)
+    fireEvent.click(screen.getByRole('tab', { name: /镜头/ }))
+
+    for (const label of ['项目', '日期', '标签', 'harness', '轮数', '来源', '无分组']) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${label}$`, 'i') })).toBeTruthy()
+    }
+    const sessionButton = document.querySelector('[data-session-id="parent-uuid"]')
+    expect(sessionButton?.getAttribute('draggable')).toBe('false')
+  })
+
+  it('标签镜头会把同一会话平铺进多个分组', () => {
+    mockStore.config.sessionMeta = { 'parent-uuid': { tags: ['产品', '性能'] } } as any
+    render(<Sidebar width={260} />)
+    fireEvent.click(screen.getByRole('tab', { name: /镜头/ }))
+    fireEvent.click(screen.getByRole('button', { name: /标签/ }))
+
+    expect(document.querySelector('[data-lens-group="tag:产品"]')).toBeTruthy()
+    expect(document.querySelector('[data-lens-group="tag:性能"]')).toBeTruthy()
+    expect(screen.getAllByText('镜头测试会话')).toHaveLength(2)
+  })
+
+  it('文件夹模式显示普通文件，但普通文件没有会话包标记属性', () => {
+    mockStore.config.rootFiles = [{ name: '项目说明.md', path: '/vault/项目说明.md' }]
+    render(<Sidebar width={260} />)
+
+    expect(screen.getByText('项目说明.md')).toBeTruthy()
+    expect(document.querySelector('[data-vault-file="/vault/项目说明.md"]')).toBeTruthy()
+    expect(document.querySelector('[data-vault-file="/vault/项目说明.md"]')?.hasAttribute('data-session-id')).toBe(false)
   })
 })
 

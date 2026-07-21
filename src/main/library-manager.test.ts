@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto'
 import { shellQuote } from './resume-terminal'
 import { buildSessionSummaryFromBackup } from './session-loader'
 import { undoLastOrganization } from './vault-organizer'
+import { readRecoveryAttempts } from './recovery-metrics'
 
 // 隔离测试环境：用临时目录作为 Library root
 let tmpRoot: string
@@ -698,6 +699,9 @@ describe('Library-only sessions（跨设备同步）', () => {
     expect(result).toMatchObject({ ok: true, state: 'restored' })
     expect(result.sourcePath).toBe(localSourcePath)
     expect(fs.readFileSync(localSourcePath, 'utf-8')).toBe(backupContent)
+    expect(readRecoveryAttempts(tmpRoot)).toEqual([
+      expect.objectContaining({ sessionId, ok: true, outcome: 'restored' })
+    ])
 
     fs.rmSync(localSourceDir, { recursive: true, force: true })
   })
@@ -769,6 +773,14 @@ describe('Library-only sessions（跨设备同步）', () => {
 
     expect(result).toMatchObject({ ok: false, failureCode: 'remote-source-requires-explicit-target' })
     expect(fs.existsSync(foreignSourcePath)).toBe(false)
+    expect(readRecoveryAttempts(tmpRoot)).toEqual([
+      expect.objectContaining({
+        sessionId,
+        ok: false,
+        outcome: 'failed',
+        failureCode: 'remote-source-requires-explicit-target'
+      })
+    ])
   })
 })
 

@@ -1,40 +1,56 @@
 /**
- * Session Audit Engine — 会话质量审计
+ * Session Audit Engine — experimental, explainable session-quality signals.
  *
- * 从 JSONL 消息流中计算审计指标，覆盖：
- * 1. Read:Edit Ratio（研究充分度 benchmark）
- * 2. Thinking Depth 代理（signature 长度 / redaction 检测）
- * 3. 逐轮延迟（p50/p95/max，慢轮标记）
- * 4. 成本估算（token × 模型单价）
- * 5. 框架开销占比（system-reminder 等注入）
- * 6. 工具序列反模式检测
- * 7. 用户挫败信号
- * 8. 行为健康评分
- *
- * 每个指标标注 provenance: 'reported' | 'estimated' | 'unavailable'
+ * The audit intentionally keeps observed facts separate from heuristics. Every
+ * displayed metric carries line-addressable evidence and an explicit caveat;
+ * the health score is a transparent heuristic, not an objective quality grade.
  */
+import type { RawJsonlMessage } from './types'
+
+export type AuditProvenance = 'reported' | 'estimated' | 'unavailable'
+export type AuditEvidenceKind =
+  | 'tool-use'
+  | 'tool-result'
+  | 'usage'
+  | 'thinking'
+  | 'framework'
+  | 'latency'
+  | 'frustration'
+
+export interface AuditEvidence {
+  line: number
+  messageUuid?: string
+  role: 'user' | 'assistant'
+  kind: AuditEvidenceKind
+  excerpt: string
+}
 
 export interface AuditMetric<T> {
   value: T
-  provenance: 'reported' | 'estimated' | 'unavailable'
+  provenance: AuditProvenance
+  evidence: AuditEvidence[]
+  caveat: string
 }
 
 export interface ToolAntiPattern {
   type: 'repeated-read' | 'edit-revert' | 'ignored-agent' | 'excessive-bash-retry'
   turnIndex: number
   detail: string
+  evidence: AuditEvidence[]
 }
 
 export interface FrustrationSignal {
   type: 'rapid-correction' | 'keyword' | 'repeated-instruction' | 'interruption'
   turnIndex: number
   text: string
+  evidence: AuditEvidence[]
 }
 
 export interface TurnLatency {
   turnIndex: number
   latencyMs: number
   role: 'user' | 'assistant'
+  evidence: AuditEvidence[]
 }
 
 export interface ModelUsage {
@@ -51,14 +67,25 @@ export interface ToolEfficiency {
   errorCount: number
   errorRate: number
   avgLatencyMs: number
+  evidence: AuditEvidence[]
+}
+
+export interface AuditScoreFactor {
+  key: string
+  impact: number
+  detail: string
+  evidence: AuditEvidence[]
 }
 
 export type SessionType = 'coding' | 'research' | 'debugging' | 'discussion' | 'mixed'
 
 export interface SessionAuditResult {
   sessionId: string
+  experimental: true
+  methodologyVersion: 'experimental-v2'
+  readEditHealthBasis: 'heuristic-unvalidated'
+  limitations: string[]
 
-  // Core metrics
   readEditRatio: AuditMetric<number>
   readEditHealth: 'healthy' | 'degraded' | 'critical' | 'unavailable'
   thinkingDepth: AuditMetric<{ avgSignatureLength: number; redactedCount: number; totalBlocks: number }>
@@ -67,40 +94,32 @@ export interface SessionAuditResult {
   estimatedCost: AuditMetric<{ inputCost: number; outputCost: number; totalCost: number; currency: string }>
   frameworkOverhead: AuditMetric<{ frameworkTokens: number; totalTokens: number; percentage: number }>
 
-  // New dimensions
   sessionType: SessionType
   modelUsage: ModelUsage[]
   toolEfficiency: ToolEfficiency[]
   userInterruptions: number
   avgTurnsPerGoal: number
-
-  // Pattern detection
   antiPatterns: ToolAntiPattern[]
   frustrationSignals: FrustrationSignal[]
 
-  // Summary
-  healthScore: number // 0-100
+  healthScore: number
   healthLabel: 'excellent' | 'good' | 'fair' | 'poor'
+  scoreFactors: AuditScoreFactor[]
   findings: string[]
 }
 
-interface RawMessage {
-  uuid?: string
-  type?: string
-  timestamp?: string
-  isSidechain?: boolean
-  message?: {
-    role?: string
-    content?: string | Array<Record<string, unknown>>
-    usage?: {
-      input_tokens?: number
-      output_tokens?: number
-    }
-    model?: string
-  }
+interface ToolUse {
+  id: string
+  name: string
+  path: string
 }
 
-// Model pricing (USD per million tokens, 2026 rates)
+interface ThinkingBlock {
+  length: number
+  signature?: string
+}
+
+// Bundled fallback prices (USD per million tokens). They are estimates, not bills.
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   'claude-sonnet-4-20250514': { input: 3, output: 15 },
   'claude-opus-4-20250514': { input: 15, output: 75 },
@@ -108,36 +127,34 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   'claude-3-5-sonnet-20241022': { input: 3, output: 15 },
 }
 
-// Only match frustration keywords at the START of short messages (<100 chars)
-// to avoid false positives in long normal paragraphs
 const FRUSTRATION_KEYWORDS_ZH = ['不对', '错了', '别这样', '回滚', '撤销', '不是这个意思', '搞错了', '重来']
-const FRUSTRATION_KEYWORDS_EN = ['no, not', 'that\'s wrong', 'redo this', 'revert it', 'undo that', 'that\'s not what']
+const FRUSTRATION_KEYWORDS_EN = ['no, not', "that's wrong", 'redo this', 'revert it', 'undo that', "that's not what"]
 
-function extractToolUseNames(content: unknown): string[] {
-  if (!content || !Array.isArray(content)) return []
+function extractToolUses(content: unknown): ToolUse[] {
+  if (!Array.isArray(content)) return []
   return (content as Array<Record<string, unknown>>)
-    .filter(p => p.type === 'tool_use' && p.name)
-    .map(p => p.name as string)
+    .filter((part) => part.type === 'tool_use' && typeof part.name === 'string')
+    .map((part) => {
+      const input = part.input && typeof part.input === 'object'
+        ? part.input as Record<string, unknown>
+        : {}
+      return {
+        id: typeof part.id === 'string' ? part.id : '',
+        name: part.name as string,
+        path: typeof input.file_path === 'string'
+          ? input.file_path
+          : typeof input.command === 'string' ? input.command : ''
+      }
+    })
 }
 
-function extractToolInputPaths(content: unknown): Array<{ name: string; path: string }> {
-  if (!content || !Array.isArray(content)) return []
+function extractThinkingBlocks(content: unknown): ThinkingBlock[] {
+  if (!Array.isArray(content)) return []
   return (content as Array<Record<string, unknown>>)
-    .filter(p => p.type === 'tool_use' && p.name && p.input)
-    .map(p => ({
-      name: p.name as string,
-      path: ((p.input as Record<string, unknown>)?.file_path as string) ||
-            ((p.input as Record<string, unknown>)?.command as string) || ''
-    }))
-}
-
-function extractThinkingBlocks(content: unknown): Array<{ length: number; signature?: string }> {
-  if (!content || !Array.isArray(content)) return []
-  return (content as Array<Record<string, unknown>>)
-    .filter(p => p.type === 'thinking')
-    .map(p => ({
-      length: typeof p.thinking === 'string' ? (p.thinking as string).length : 0,
-      signature: typeof p.signature === 'string' ? (p.signature as string) : undefined
+    .filter((part) => part.type === 'thinking')
+    .map((part) => ({
+      length: typeof part.thinking === 'string' ? part.thinking.length : 0,
+      signature: typeof part.signature === 'string' ? part.signature : undefined
     }))
 }
 
@@ -146,8 +163,8 @@ function extractText(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   return (content as Array<Record<string, unknown>>)
-    .filter(p => p.type === 'text' && p.text)
-    .map(p => p.text as string)
+    .filter((part) => part.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text as string)
     .join('\n')
 }
 
@@ -165,16 +182,35 @@ function estimateTokens(text: string): number {
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0
-  const idx = Math.ceil(sorted.length * p / 100) - 1
-  return sorted[Math.max(0, idx)]
+  const index = Math.ceil(sorted.length * p / 100) - 1
+  return sorted[Math.max(0, index)]
 }
 
-export function auditSession(messages: RawMessage[], sessionId: string): SessionAuditResult {
+function evidence(
+  line: number,
+  message: RawJsonlMessage,
+  role: 'user' | 'assistant',
+  kind: AuditEvidenceKind,
+  excerpt: string
+): AuditEvidence {
+  return { line, messageUuid: message.uuid, role, kind, excerpt: excerpt.slice(0, 160) }
+}
+
+export function auditSession(messages: RawJsonlMessage[], sessionId: string): SessionAuditResult {
   const toolCounts: Record<string, number> = {}
   const toolErrors: Record<string, number> = {}
   const toolLatencies: Record<string, number[]> = {}
-  const thinkingBlocks: Array<{ length: number; signature?: string }> = []
-  const turnTimestamps: Array<{ ts: number; role: string; index: number }> = []
+  const toolEvidence: Record<string, AuditEvidence[]> = {}
+  const toolUsesById = new Map<string, { name: string; startedAt: number }>()
+  const thinkingBlocks: Array<ThinkingBlock & { evidence: AuditEvidence }> = []
+  const usageEvidence: AuditEvidence[] = []
+  const frameworkEvidence: AuditEvidence[] = []
+  const turnTimestamps: Array<{
+    ts: number
+    role: 'user' | 'assistant'
+    index: number
+    evidence: AuditEvidence
+  }> = []
   const antiPatterns: ToolAntiPattern[] = []
   const frustrationSignals: FrustrationSignal[] = []
   const modelTurns: Record<string, { turns: number; input: number; output: number }> = {}
@@ -185,48 +221,53 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
   let lastModel = ''
   let turnIndex = 0
   let userInterruptions = 0
-  let userGoalChanges = 0
 
-  // For anti-pattern detection
-  const recentReads: Array<{ path: string; turnIndex: number }> = []
-  const recentEdits: Array<{ path: string; turnIndex: number }> = []
-  const agentSpawnIds = new Set<string>()
-  const agentResultIds = new Set<string>()
+  const recentReads: Array<{ path: string; turnIndex: number; evidence: AuditEvidence }> = []
+  const recentEdits: Array<{ path: string; turnIndex: number; evidence: AuditEvidence }> = []
   let lastUserTimestamp = 0
   let lastUserText = ''
   let consecutiveShortUserMsgs = 0
 
-  for (const msg of messages) {
-    if (msg.isSidechain) continue
-    if (!msg.type || !msg.message) continue
+  messages.forEach((message, messageIndex) => {
+    if (message.isSidechain || !message.type || !message.message) return
+    const line = messageIndex + 1
+    const content = message.message.content
+    const timestamp = message.timestamp ? new Date(message.timestamp).getTime() : 0
 
-    const content = msg.message.content
-    const ts = msg.timestamp ? new Date(msg.timestamp).getTime() : 0
-
-    if (msg.type === 'assistant') {
-      // Tool counts
-      const tools = extractToolUseNames(content)
-      for (const t of tools) toolCounts[t] = (toolCounts[t] || 0) + 1
-
-      // Tool paths for anti-pattern detection
-      const toolPaths = extractToolInputPaths(content)
-      for (const tp of toolPaths) {
-        if (tp.name === 'Read') recentReads.push({ path: tp.path, turnIndex })
-        if (tp.name === 'Edit' || tp.name === 'Write') recentEdits.push({ path: tp.path, turnIndex })
-        if (tp.name === 'Agent') agentSpawnIds.add(tp.path)
+    if (message.type === 'assistant') {
+      for (const tool of extractToolUses(content)) {
+        const toolUseEvidence = evidence(line, message, 'assistant', 'tool-use', `${tool.name} invoked`)
+        toolCounts[tool.name] = (toolCounts[tool.name] || 0) + 1
+        ;(toolEvidence[tool.name] ||= []).push(toolUseEvidence)
+        if (tool.id) toolUsesById.set(tool.id, { name: tool.name, startedAt: timestamp })
+        if (tool.name === 'Read') recentReads.push({ path: tool.path, turnIndex, evidence: toolUseEvidence })
+        if (tool.name === 'Edit' || tool.name === 'Write') {
+          recentEdits.push({ path: tool.path, turnIndex, evidence: toolUseEvidence })
+        }
       }
 
-      // Thinking depth
-      thinkingBlocks.push(...extractThinkingBlocks(content))
+      for (const block of extractThinkingBlocks(content)) {
+        thinkingBlocks.push({
+          ...block,
+          evidence: evidence(line, message, 'assistant', 'thinking',
+            block.length > 0 ? `thinking block (${block.length} chars)` : 'redacted thinking block')
+        })
+      }
 
-      // Token usage
-      const usage = msg.message.usage
+      const usage = message.message.usage
       if (usage) {
         totalInputTokens += usage.input_tokens || 0
         totalOutputTokens += usage.output_tokens || 0
+        usageEvidence.push(evidence(
+          line,
+          message,
+          'assistant',
+          'usage',
+          `reported usage: input=${usage.input_tokens || 0}, output=${usage.output_tokens || 0}`
+        ))
       }
-      if (msg.message.model) {
-        lastModel = msg.message.model
+      if (message.message.model) {
+        lastModel = message.message.model
         if (!modelTurns[lastModel]) modelTurns[lastModel] = { turns: 0, input: 0, output: 0 }
         modelTurns[lastModel].turns++
         if (usage) {
@@ -235,219 +276,320 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
         }
       }
 
-      // Timestamps
-      if (ts > 0) turnTimestamps.push({ ts, role: 'assistant', index: turnIndex })
+      if (timestamp > 0) {
+        turnTimestamps.push({
+          ts: timestamp,
+          role: 'assistant',
+          index: turnIndex,
+          evidence: evidence(line, message, 'assistant', 'latency', `assistant timestamp ${message.timestamp}`)
+        })
+      }
       turnIndex++
-    } else if (msg.type === 'user') {
-      const text = extractText(content)
-
-      // Framework overhead
-      if (isFrameworkContent(text)) {
-        frameworkTokens += estimateTokens(text)
-      }
-      totalContentTokens += estimateTokens(text)
-
-      // Tool results (for agent anti-pattern + error tracking)
-      if (Array.isArray(content)) {
-        for (const p of (content as Array<Record<string, unknown>>)) {
-          if (p.type === 'tool_result' && p.tool_use_id) {
-            agentResultIds.add(p.tool_use_id as string)
-            if (p.is_error === true) {
-              const toolName = String(p.tool_use_id).slice(0, 20)
-              toolErrors[toolName] = (toolErrors[toolName] || 0) + 1
-            }
-          }
-        }
-      }
-
-      // Frustration signals
-      if (text && !isFrameworkContent(text)) {
-        // Rapid correction
-        if (ts > 0 && lastUserTimestamp > 0 && ts - lastUserTimestamp < 10000 && text.length < 100) {
-          consecutiveShortUserMsgs++
-          if (consecutiveShortUserMsgs >= 2) {
-            frustrationSignals.push({ type: 'rapid-correction', turnIndex, text: text.slice(0, 60) })
-          }
-        } else {
-          consecutiveShortUserMsgs = 0
-        }
-
-        // Keyword detection — only in short messages to avoid false positives
-        if (text.length < 150) {
-          const lower = text.toLowerCase()
-          const allKeywords = [...FRUSTRATION_KEYWORDS_ZH, ...FRUSTRATION_KEYWORDS_EN]
-          for (const kw of allKeywords) {
-            if (lower.startsWith(kw) || lower.includes(kw)) {
-              frustrationSignals.push({ type: 'keyword', turnIndex, text: `"${kw}" in: ${text.slice(0, 50)}` })
-              break
-            }
-          }
-        }
-
-        // Repeated instruction
-        if (lastUserText && text.length > 20 && text === lastUserText) {
-          frustrationSignals.push({ type: 'repeated-instruction', turnIndex, text: text.slice(0, 50) })
-        }
-
-        // Interruption
-        if (text.includes('[Request interrupted')) {
-          userInterruptions++
-          frustrationSignals.push({ type: 'interruption', turnIndex, text: 'User interrupted request' })
-        }
-
-        lastUserText = text
-        if (ts > 0) lastUserTimestamp = ts
-      }
-
-      if (ts > 0) turnTimestamps.push({ ts, role: 'user', index: turnIndex })
+      return
     }
-  }
 
-  // === Calculate metrics ===
+    if (message.type !== 'user') return
+    const text = extractText(content)
+    if (isFrameworkContent(text)) {
+      frameworkTokens += estimateTokens(text)
+      frameworkEvidence.push(evidence(
+        line,
+        message,
+        'user',
+        'framework',
+        `framework-like content (${text.length} chars)`
+      ))
+    }
+    totalContentTokens += estimateTokens(text)
 
-  // 1. Read:Edit Ratio
-  const reads = toolCounts['Read'] || 0
-  const edits = (toolCounts['Edit'] || 0) + (toolCounts['Write'] || 0)
+    if (Array.isArray(content)) {
+      for (const part of content as unknown as Array<Record<string, unknown>>) {
+        if (part.type !== 'tool_result' || typeof part.tool_use_id !== 'string') continue
+        const matchedTool = toolUsesById.get(part.tool_use_id)
+        if (!matchedTool) continue
+        const resultEvidence = evidence(
+          line,
+          message,
+          'user',
+          'tool-result',
+          `${matchedTool.name} result${part.is_error === true ? ' (error)' : ''}`
+        )
+        ;(toolEvidence[matchedTool.name] ||= []).push(resultEvidence)
+        if (part.is_error === true) {
+          toolErrors[matchedTool.name] = (toolErrors[matchedTool.name] || 0) + 1
+        }
+        const latency = timestamp - matchedTool.startedAt
+        if (matchedTool.startedAt > 0 && latency >= 0 && latency < 3_600_000) {
+          ;(toolLatencies[matchedTool.name] ||= []).push(latency)
+        }
+      }
+    }
+
+    if (text && !isFrameworkContent(text)) {
+      const frustrationEvidence = evidence(line, message, 'user', 'frustration', text)
+      if (timestamp > 0 && lastUserTimestamp > 0 && timestamp - lastUserTimestamp < 10_000 && text.length < 100) {
+        consecutiveShortUserMsgs++
+        if (consecutiveShortUserMsgs >= 2) {
+          frustrationSignals.push({
+            type: 'rapid-correction',
+            turnIndex,
+            text: text.slice(0, 60),
+            evidence: [frustrationEvidence]
+          })
+        }
+      } else {
+        consecutiveShortUserMsgs = 0
+      }
+
+      if (text.length < 150) {
+        const lower = text.toLowerCase()
+        for (const keyword of [...FRUSTRATION_KEYWORDS_ZH, ...FRUSTRATION_KEYWORDS_EN]) {
+          if (lower.startsWith(keyword) || lower.includes(keyword)) {
+            frustrationSignals.push({
+              type: 'keyword',
+              turnIndex,
+              text: `"${keyword}" in: ${text.slice(0, 50)}`,
+              evidence: [frustrationEvidence]
+            })
+            break
+          }
+        }
+      }
+
+      if (lastUserText && text.length > 20 && text === lastUserText) {
+        frustrationSignals.push({
+          type: 'repeated-instruction',
+          turnIndex,
+          text: text.slice(0, 50),
+          evidence: [frustrationEvidence]
+        })
+      }
+      if (text.includes('[Request interrupted')) {
+        userInterruptions++
+        frustrationSignals.push({
+          type: 'interruption',
+          turnIndex,
+          text: 'User interrupted request',
+          evidence: [frustrationEvidence]
+        })
+      }
+      lastUserText = text
+      if (timestamp > 0) lastUserTimestamp = timestamp
+    }
+
+    if (timestamp > 0) {
+      turnTimestamps.push({
+        ts: timestamp,
+        role: 'user',
+        index: turnIndex,
+        evidence: evidence(line, message, 'user', 'latency', `user timestamp ${message.timestamp}`)
+      })
+    }
+  })
+
+  const reads = toolCounts.Read || 0
+  const edits = (toolCounts.Edit || 0) + (toolCounts.Write || 0)
   const readEditRatio = edits > 0 ? reads / edits : reads > 0 ? reads : 0
   const readEditHealth = edits === 0 && reads === 0 ? 'unavailable'
     : readEditRatio >= 6 ? 'healthy'
     : readEditRatio >= 2 ? 'degraded'
     : 'critical'
+  const readEditEvidence = [...(toolEvidence.Read || []), ...(toolEvidence.Edit || []), ...(toolEvidence.Write || [])]
 
-  // 2. Thinking depth
   const totalBlocks = thinkingBlocks.length
-  const redactedCount = thinkingBlocks.filter(b => b.length === 0 && b.signature).length
-  const avgSignatureLength = thinkingBlocks.length > 0
-    ? thinkingBlocks.reduce((a, b) => a + (b.signature?.length || b.length), 0) / thinkingBlocks.length
+  const redactedCount = thinkingBlocks.filter((block) => block.length === 0 && block.signature).length
+  const avgSignatureLength = totalBlocks > 0
+    ? thinkingBlocks.reduce((total, block) => total + (block.signature?.length || block.length), 0) / totalBlocks
     : 0
 
-  // 3. Latencies
   const latencies: TurnLatency[] = []
-  for (let i = 1; i < turnTimestamps.length; i++) {
-    const prev = turnTimestamps[i - 1]
-    const curr = turnTimestamps[i]
-    if (curr.ts > prev.ts && curr.ts - prev.ts < 3600000) {
+  for (let index = 1; index < turnTimestamps.length; index++) {
+    const previous = turnTimestamps[index - 1]
+    const current = turnTimestamps[index]
+    if (current.ts > previous.ts && current.ts - previous.ts < 3_600_000) {
       latencies.push({
-        turnIndex: curr.index,
-        latencyMs: curr.ts - prev.ts,
-        role: curr.role as 'user' | 'assistant'
+        turnIndex: current.index,
+        latencyMs: current.ts - previous.ts,
+        role: current.role,
+        evidence: [previous.evidence, current.evidence]
       })
     }
   }
-  const assistantLatencies = latencies.filter(l => l.role === 'assistant').map(l => l.latencyMs).sort((a, b) => a - b)
+  const assistantLatencies = latencies
+    .filter((latency) => latency.role === 'assistant')
+    .map((latency) => latency.latencyMs)
+    .sort((a, b) => a - b)
+  const latencyEvidence = latencies
+    .filter((latency) => latency.role === 'assistant')
+    .flatMap((latency) => latency.evidence)
 
-  // 4. Cost estimation
   const pricing = MODEL_PRICING[lastModel] || { input: 3, output: 15 }
   const inputCost = (totalInputTokens / 1_000_000) * pricing.input
   const outputCost = (totalOutputTokens / 1_000_000) * pricing.output
-
-  // 5. Framework overhead
   const frameworkPct = totalContentTokens > 0 ? (frameworkTokens / totalContentTokens) * 100 : 0
 
-  // 6. Anti-patterns
-  // Repeated Read same file >3 times
   const readPathCounts = new Map<string, number>()
-  for (const r of recentReads) {
-    if (r.path) readPathCounts.set(r.path, (readPathCounts.get(r.path) || 0) + 1)
+  for (const read of recentReads) {
+    if (read.path) readPathCounts.set(read.path, (readPathCounts.get(read.path) || 0) + 1)
   }
-  // Scale threshold with session length — 5 reads is normal in a 50-turn session
   const readThreshold = Math.max(5, Math.floor(turnIndex / 10))
   for (const [filePath, count] of readPathCounts) {
     if (count > readThreshold) {
       antiPatterns.push({
         type: 'repeated-read',
-        turnIndex: recentReads.find(r => r.path === filePath)?.turnIndex || 0,
-        detail: `Read "${filePath.split('/').pop()}" ${count} times`
+        turnIndex: recentReads.find((read) => read.path === filePath)?.turnIndex || 0,
+        detail: `Read "${filePath.split('/').pop()}" ${count} times`,
+        evidence: recentReads.filter((read) => read.path === filePath).map((read) => read.evidence)
       })
     }
   }
-
-  // Edit followed by editing the same file again (possible revert)
-  const editPaths = recentEdits.map(e => e.path).filter(Boolean)
-  for (let i = 1; i < editPaths.length; i++) {
-    if (editPaths[i] === editPaths[i - 1]) {
+  const editsWithPaths = recentEdits.filter((edit) => Boolean(edit.path))
+  for (let index = 1; index < editsWithPaths.length; index++) {
+    if (editsWithPaths[index].path === editsWithPaths[index - 1].path) {
       antiPatterns.push({
         type: 'edit-revert',
-        turnIndex: recentEdits[i].turnIndex,
-        detail: `Re-edited "${editPaths[i].split('/').pop()}" consecutively`
+        turnIndex: editsWithPaths[index].turnIndex,
+        detail: `Re-edited "${editsWithPaths[index].path.split('/').pop()}" consecutively`,
+        evidence: [editsWithPaths[index - 1].evidence, editsWithPaths[index].evidence]
       })
     }
   }
 
-  // === Health Score ===
-  let score = 80
-  if (readEditHealth === 'critical') score -= 20
-  else if (readEditHealth === 'degraded') score -= 10
-  if (frustrationSignals.length > 5) score -= 15
-  else if (frustrationSignals.length > 2) score -= 8
-  if (antiPatterns.length > 3) score -= 10
-  else if (antiPatterns.length > 0) score -= 5
-  if (frameworkPct > 30) score -= 10
-  if (redactedCount > totalBlocks * 0.5 && totalBlocks > 5) score -= 10
-  score = Math.max(0, Math.min(100, score))
-
+  const scoreFactors: AuditScoreFactor[] = []
+  if (frustrationSignals.length > 5) {
+    scoreFactors.push({
+      key: 'frustration-signals',
+      impact: -15,
+      detail: `${frustrationSignals.length} frustration signals`,
+      evidence: frustrationSignals.flatMap((signal) => signal.evidence)
+    })
+  } else if (frustrationSignals.length > 2) {
+    scoreFactors.push({
+      key: 'frustration-signals',
+      impact: -8,
+      detail: `${frustrationSignals.length} frustration signals`,
+      evidence: frustrationSignals.flatMap((signal) => signal.evidence)
+    })
+  }
+  if (antiPatterns.length > 3) {
+    scoreFactors.push({
+      key: 'tool-anti-patterns',
+      impact: -10,
+      detail: `${antiPatterns.length} heuristic tool anti-patterns`,
+      evidence: antiPatterns.flatMap((pattern) => pattern.evidence)
+    })
+  } else if (antiPatterns.length > 0) {
+    scoreFactors.push({
+      key: 'tool-anti-patterns',
+      impact: -5,
+      detail: `${antiPatterns.length} heuristic tool anti-patterns`,
+      evidence: antiPatterns.flatMap((pattern) => pattern.evidence)
+    })
+  }
+  if (frameworkPct > 30) {
+    scoreFactors.push({
+      key: 'framework-overhead',
+      impact: -10,
+      detail: `Estimated framework overhead ${frameworkPct.toFixed(0)}%`,
+      evidence: frameworkEvidence
+    })
+  }
+  if (redactedCount > totalBlocks * 0.5 && totalBlocks > 5) {
+    scoreFactors.push({
+      key: 'redacted-thinking',
+      impact: -10,
+      detail: `${redactedCount}/${totalBlocks} thinking blocks redacted`,
+      evidence: thinkingBlocks.filter((block) => block.length === 0 && block.signature).map((block) => block.evidence)
+    })
+  }
+  const score = Math.max(0, Math.min(100,
+    80 + scoreFactors.reduce((total, factor) => total + factor.impact, 0)))
   const healthLabel = score >= 80 ? 'excellent' : score >= 60 ? 'good' : score >= 40 ? 'fair' : 'poor'
 
-  // === Findings ===
   const findings: string[] = []
-  if (readEditHealth === 'critical') findings.push(`Read:Edit ratio ${readEditRatio.toFixed(1)} — editing without sufficient research (benchmark: ≥6.0)`)
-  if (readEditHealth === 'degraded') findings.push(`Read:Edit ratio ${readEditRatio.toFixed(1)} — slightly below research benchmark (≥6.0)`)
-  if (frameworkPct > 30) findings.push(`Framework overhead ${frameworkPct.toFixed(0)}% — system injections consuming significant context`)
-  if (frustrationSignals.length > 3) findings.push(`${frustrationSignals.length} frustration signals detected — frequent corrections or interruptions`)
-  if (antiPatterns.length > 0) findings.push(`${antiPatterns.length} tool anti-patterns — repeated reads or edit-reverts suggest exploration loops`)
-  if (redactedCount > 0) findings.push(`${redactedCount}/${totalBlocks} thinking blocks redacted — reasoning depth may be limited`)
-  if (assistantLatencies.length > 0 && percentile(assistantLatencies, 95) > 30000) {
-    findings.push(`P95 response latency ${(percentile(assistantLatencies, 95) / 1000).toFixed(0)}s — some turns are very slow`)
+  if (readEditHealth === 'critical') {
+    findings.push(`Read:Edit ratio ${readEditRatio.toFixed(1)} — experimental heuristic band; excluded from score`)
+  }
+  if (readEditHealth === 'degraded') {
+    findings.push(`Read:Edit ratio ${readEditRatio.toFixed(1)} — experimental heuristic band; excluded from score`)
+  }
+  if (frameworkPct > 30) findings.push(`Estimated framework overhead ${frameworkPct.toFixed(0)}% — character-based proxy`)
+  if (frustrationSignals.length > 3) findings.push(`${frustrationSignals.length} possible frustration signals detected`)
+  if (antiPatterns.length > 0) findings.push(`${antiPatterns.length} heuristic tool anti-patterns detected`)
+  if (redactedCount > 0) findings.push(`${redactedCount}/${totalBlocks} thinking blocks redacted; reasoning quality cannot be inferred`)
+  if (assistantLatencies.length > 0 && percentile(assistantLatencies, 95) > 30_000) {
+    findings.push(`P95 response latency ${(percentile(assistantLatencies, 95) / 1000).toFixed(0)}s`)
   }
 
-  // Session type classification
-  const totalTools = Object.values(toolCounts).reduce((a, b) => a + b, 0)
-  const editTools = (toolCounts['Edit'] || 0) + (toolCounts['Write'] || 0)
-  const readTools = toolCounts['Read'] || 0
-  const bashTools = toolCounts['Bash'] || 0
-  const searchTools = (toolCounts['WebSearch'] || 0) + (toolCounts['WebFetch'] || 0) + (toolCounts['Grep'] || 0)
-  const sessionType: SessionType =
-    totalTools === 0 ? 'discussion'
+  const totalTools = Object.values(toolCounts).reduce((total, count) => total + count, 0)
+  const editTools = (toolCounts.Edit || 0) + (toolCounts.Write || 0)
+  const readTools = toolCounts.Read || 0
+  const bashTools = toolCounts.Bash || 0
+  const searchTools = (toolCounts.WebSearch || 0) + (toolCounts.WebFetch || 0) + (toolCounts.Grep || 0)
+  const sessionType: SessionType = totalTools === 0 ? 'discussion'
     : editTools > totalTools * 0.3 ? 'coding'
     : searchTools > totalTools * 0.3 ? 'research'
-    : bashTools > totalTools * 0.3 && (toolErrors['Bash'] || 0) > 0 ? 'debugging'
+    : bashTools > totalTools * 0.3 && (toolErrors.Bash || 0) > 0 ? 'debugging'
+    : readTools > totalTools * 0.5 ? 'research'
     : 'mixed'
 
-  // Model usage breakdown
   const modelUsage: ModelUsage[] = Object.entries(modelTurns).map(([model, stats]) => {
-    const p = MODEL_PRICING[model] || { input: 3, output: 15 }
+    const modelPricing = MODEL_PRICING[model] || { input: 3, output: 15 }
     return {
       model: model.replace(/^claude-/, '').replace(/-\d{8}$/, ''),
       turns: stats.turns,
       inputTokens: stats.input,
       outputTokens: stats.output,
-      estimatedCost: (stats.input / 1_000_000) * p.input + (stats.output / 1_000_000) * p.output
+      estimatedCost: (stats.input / 1_000_000) * modelPricing.input +
+        (stats.output / 1_000_000) * modelPricing.output
     }
   }).sort((a, b) => b.turns - a.turns)
 
-  // Tool efficiency
   const toolEfficiency: ToolEfficiency[] = Object.entries(toolCounts)
     .filter(([, count]) => count >= 2)
-    .map(([name, count]) => ({
-      name,
-      count,
-      errorCount: toolErrors[name] || 0,
-      errorRate: (toolErrors[name] || 0) / count,
-      avgLatencyMs: (toolLatencies[name]?.reduce((a, b) => a + b, 0) || 0) / (toolLatencies[name]?.length || 1)
-    }))
-    .sort((a, b) => b.count - a.count)
+    .map(([name, count]) => {
+      const observedLatencies = toolLatencies[name] || []
+      return {
+        name,
+        count,
+        errorCount: toolErrors[name] || 0,
+        errorRate: (toolErrors[name] || 0) / count,
+        avgLatencyMs: observedLatencies.length > 0
+          ? observedLatencies.reduce((total, latency) => total + latency, 0) / observedLatencies.length
+          : 0,
+        evidence: toolEvidence[name] || []
+      }
+    })
+    .sort((left, right) => right.count - left.count)
 
-  // Avg turns per goal change (approximation: user messages without tool results)
-  const pureUserMsgs = turnTimestamps.filter(t => t.role === 'user').length
-  const avgTurnsPerGoal = pureUserMsgs > 0 ? turnIndex / pureUserMsgs : turnIndex
+  const pureUserMessages = turnTimestamps.filter((turn) => turn.role === 'user').length
+  const avgTurnsPerGoal = pureUserMessages > 0 ? turnIndex / pureUserMessages : turnIndex
 
   return {
     sessionId,
-    readEditRatio: { value: readEditRatio, provenance: 'reported' },
+    experimental: true,
+    methodologyVersion: 'experimental-v2',
+    readEditHealthBasis: 'heuristic-unvalidated',
+    limitations: [
+      'Read/Edit health bands and the health score are unvalidated heuristics.',
+      'Cost uses a bundled static price table and is not provider billing.',
+      'Framework tokens are estimated from character count, not provider token attribution.',
+      'Context Inspector category attribution remains estimated even when its total token count is provider-reported.',
+      'Sidechain messages and child transcript files are not recursively audited.',
+      'Thinking blocks, session type, frustration, and anti-pattern signals are proxies rather than quality facts.'
+    ],
+    readEditRatio: {
+      value: readEditRatio,
+      provenance: 'reported',
+      evidence: readEditEvidence,
+      caveat: 'Counts are observed; ≥6/≥2 health bands are an unvalidated heuristic and are excluded from score.'
+    },
     readEditHealth,
     thinkingDepth: {
       value: { avgSignatureLength: Math.round(avgSignatureLength), redactedCount, totalBlocks },
-      provenance: totalBlocks > 0 ? 'reported' : 'unavailable'
+      provenance: totalBlocks > 0 ? 'reported' : 'unavailable',
+      evidence: thinkingBlocks.map((block) => block.evidence),
+      caveat: 'Thinking/signature block shape is observable, but it does not measure reasoning depth or quality.'
     },
     turnLatencies: latencies,
     latencyStats: {
@@ -456,15 +598,21 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
         p95: Math.round(percentile(assistantLatencies, 95)),
         max: assistantLatencies.length > 0 ? assistantLatencies[assistantLatencies.length - 1] : 0
       },
-      provenance: assistantLatencies.length > 0 ? 'reported' : 'unavailable'
+      provenance: assistantLatencies.length > 0 ? 'reported' : 'unavailable',
+      evidence: latencyEvidence,
+      caveat: 'Derived from adjacent message timestamps; queue, network, and user think time are not separated.'
     },
     estimatedCost: {
       value: { inputCost, outputCost, totalCost: inputCost + outputCost, currency: 'USD' },
-      provenance: totalInputTokens > 0 ? 'estimated' : 'unavailable'
+      provenance: totalInputTokens > 0 ? 'estimated' : 'unavailable',
+      evidence: usageEvidence,
+      caveat: 'Reported token counts multiplied by a bundled static price table; not an invoice or live price.'
     },
     frameworkOverhead: {
       value: { frameworkTokens, totalTokens: totalContentTokens, percentage: frameworkPct },
-      provenance: 'estimated'
+      provenance: 'estimated',
+      evidence: frameworkEvidence,
+      caveat: 'Framework-like tags are detected textually and converted at four characters per token.'
     },
     sessionType,
     modelUsage,
@@ -475,6 +623,7 @@ export function auditSession(messages: RawMessage[], sessionId: string): Session
     frustrationSignals,
     healthScore: score,
     healthLabel,
+    scoreFactors,
     findings
   }
 }

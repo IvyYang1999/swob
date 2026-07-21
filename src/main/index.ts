@@ -880,6 +880,10 @@ ipcMain.handle(
 )
 
 ipcMain.handle('sessions:search', async (_event, query: string) => {
+  // Ensure library is initialized before searching backups
+  if (!libraryInitialized) {
+    try { initLibrary() } catch { /* ignore */ }
+  }
   const files = findAllSessionFiles().filter((f) => !f.includes('/subagents/'))
   const missingSourceLibrarySessions = findLibrarySessionsWithMissingSources()
   return searchSessionFiles(query, [

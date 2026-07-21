@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
+
 const api = {
   // Sessions
   loadAllSessions: () => ipcRenderer.invoke('sessions:loadAll'),
@@ -9,8 +11,8 @@ const api = {
     ipcRenderer.invoke('sessions:search', query),
 
   // Terminal
-  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) =>
-    ipcRenderer.invoke('terminal:resume', sessionId, terminalApp, permissionMode, cwd),
+  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string, surface?: ResumeSurface) =>
+    ipcRenderer.invoke('terminal:resume', sessionId, terminalApp, permissionMode, cwd, surface),
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) =>
     ipcRenderer.invoke('terminal:resumeBatch', sessions, terminalApp),
   forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) =>

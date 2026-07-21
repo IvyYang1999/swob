@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
+  buildResumeAction,
   buildResumeCommand,
   resolveSessionActionContext
 } from './session-actions'
@@ -71,13 +72,102 @@ describe('session action context', () => {
     }
   })
 
-  it('zcode resume command uses zcode --session and cd cwd when available', () => {
+  it('zcode raw runtime command uses --resume rather than the invalid --session flag', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-zcode-resume-'))
 
     try {
       const command = buildResumeCommand('sess_b3c1-with-hyphen', undefined, dir, 'zcode')
 
-      expect(command).toBe(`cd ${shellQuote(dir)} && zcode --session ${shellQuote('sess_b3c1-with-hyphen')}`)
+      expect(command).toBe(`cd ${shellQuote(dir)} && zcode --resume ${shellQuote('sess_b3c1-with-hyphen')}`)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('builds a Codex Desktop deep link only for a validated Codex session id', () => {
+    expect(buildResumeAction(
+      '019abcde-1234-7000-8000-0123456789ab',
+      undefined,
+      undefined,
+      'codex',
+      undefined,
+      'codex-desktop'
+    )).toEqual({
+      kind: 'deep-link',
+      url: 'codex://threads/019abcde-1234-7000-8000-0123456789ab'
+    })
+
+    expect(() => buildResumeAction(
+      'thread/../../escape',
+      undefined,
+      undefined,
+      'codex',
+      undefined,
+      'codex-desktop'
+    )).toThrow('codex session id 格式不合法')
+  })
+
+  it('builds the experimental Claude Desktop import deep link for UUID sessions only', () => {
+    const sessionId = '82000000-0000-4000-8000-000000000001'
+    expect(buildResumeAction(
+      sessionId,
+      undefined,
+      undefined,
+      'claude-code',
+      undefined,
+      'claude-desktop'
+    )).toEqual({
+      kind: 'deep-link',
+      url: `claude://resume?session=${sessionId}`
+    })
+
+    expect(() => buildResumeAction(
+      'not-a-uuid',
+      undefined,
+      undefined,
+      'claude-code',
+      undefined,
+      'claude-desktop'
+    )).toThrow('claude session id 格式不合法')
+  })
+
+  it('builds Claude Remote Control as a terminal-hosted action', () => {
+    const action = buildResumeAction(
+      '82000000-0000-4000-8000-000000000001',
+      undefined,
+      undefined,
+      'claude-code',
+      undefined,
+      'remote-control'
+    )
+    expect(action).toEqual({
+      kind: 'remote-control',
+      command: `claude --resume ${shellQuote('82000000-0000-4000-8000-000000000001')} --remote-control`
+    })
+  })
+
+  it('opens the ZCode workspace through its registered scheme but refuses a fake public CLI surface', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-zcode-action-'))
+    try {
+      expect(buildResumeAction(
+        'sess_Zcode1',
+        undefined,
+        dir,
+        'zcode',
+        undefined,
+        'zcode-desktop'
+      )).toEqual({
+        kind: 'deep-link',
+        url: `zcode://workspace/open?path=${encodeURIComponent(dir)}`
+      })
+      expect(() => buildResumeAction(
+        'sess_Zcode1',
+        undefined,
+        dir,
+        'zcode',
+        undefined,
+        'terminal'
+      )).toThrow('ZCode 没有公开 CLI')
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

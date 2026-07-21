@@ -1,6 +1,6 @@
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
-import type { ViewMode, ParsedMessage, SessionDetail, Highlight } from '../store'
+import type { ViewMode, ParsedMessage, SessionDetail, Highlight, ResumeSurface } from '../store'
 import {
   User, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
@@ -720,6 +720,8 @@ function SessionBar({
   const [copiedResumeCmd, setCopiedResumeCmd] = useState(false)
   const [sshResuming, setSshResuming] = useState(false)
   const [cloudDownloading, setCloudDownloading] = useState(false)
+  const [resumeMenuOpen, setResumeMenuOpen] = useState(false)
+  const resumeMenuRef = useRef<HTMLDivElement>(null)
 
   const isCloud = selectedSession ? cloudSessionIds.has(selectedSession.sessionId) : false
   const isRemote = !!selectedSession?.isRemote
@@ -734,10 +736,93 @@ function SessionBar({
     setTimeout(() => setCopied(false), 2000)
   }, [selectedSession, config])
 
+  useEffect(() => {
+    if (!resumeMenuOpen) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!resumeMenuRef.current?.contains(event.target as Node)) setResumeMenuOpen(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setResumeMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [resumeMenuOpen])
+
+  useEffect(() => {
+    setResumeMenuOpen(false)
+  }, [selectedSession?.id])
+
   if (!selectedSession) return null
   const resumeUnavailableReason = selectedSession.canResume === false
     ? (selectedSession.resumeUnavailableReason || '此会话无法直接恢复')
     : undefined
+  const isZcode = selectedSession.source === 'zcode'
+  const copyUnavailableReason = resumeUnavailableReason || (isZcode ? t('chat.zcode_no_cli') : undefined)
+  const forkUnavailableReason = resumeUnavailableReason || (isZcode ? t('chat.zcode_no_fork') : undefined)
+  const experimentalClaudeDesktopImport = config?.preferences?.experimentalClaudeDesktopImport === true
+
+  const resumeSurfaceOptions: Array<{
+    surface: ResumeSurface
+    label: string
+    description?: string
+    tone?: 'warning'
+  }> = selectedSession.source === 'codex'
+    ? [
+      { surface: 'codex-desktop', label: t('chat.resume_codex_app'), description: t('chat.resume_codex_app_hint') },
+      { surface: 'terminal', label: t('chat.resume_terminal') }
+    ]
+    : selectedSession.source === 'zcode'
+      ? [
+        {
+          surface: 'zcode-desktop',
+          label: t('chat.open_zcode_app'),
+          description: t('chat.zcode_no_specific_resume'),
+          tone: 'warning'
+        }
+      ]
+      : selectedSession.source === 'claude-code' || !selectedSession.source
+        ? [
+          ...(experimentalClaudeDesktopImport
+            ? [{
+              surface: 'claude-desktop' as const,
+              label: t('chat.import_claude_desktop'),
+              description: t('chat.claude_desktop_warning'),
+              tone: 'warning' as const
+            }]
+            : []),
+          { surface: 'remote-control', label: t('chat.resume_remote_control'), description: t('chat.resume_remote_control_hint') },
+          { surface: 'terminal', label: t('chat.resume_terminal') }
+        ]
+        : [{ surface: 'terminal', label: t('chat.resume_terminal') }]
+
+  const canChooseResumeSurface = !isRemote &&
+    (selectedSession.source === 'codex' || selectedSession.source === 'zcode' ||
+      selectedSession.source === 'claude-code' || !selectedSession.source)
+
+  const handleResume = async (surface: ResumeSurface): Promise<void> => {
+    if (resumeUnavailableReason) {
+      showToast(resumeUnavailableReason, 'error')
+      return
+    }
+    const sid = independentResumeSessionId(selectedSession)
+    if (!sid) {
+      showToast(t('chat.intra_branch_not_resumable'), 'error')
+      return
+    }
+    if (surface === 'claude-desktop' && !window.confirm(t('chat.claude_desktop_confirm'))) {
+      return
+    }
+    await resumeSession(
+      sid,
+      selectedSession.permissionMode,
+      resolveResumeCwd(selectedSession),
+      surface
+    )
+  }
 
   return (
     <div className="h-9 flex items-center justify-between px-3 border-b border-edge-subtle bg-base/60 shrink-0">
@@ -821,8 +906,8 @@ function SessionBar({
         {/* 复制命令 */}
         <button
           onClick={async () => {
-            if (resumeUnavailableReason) {
-              showToast(resumeUnavailableReason, 'error')
+            if (copyUnavailableReason) {
+              showToast(copyUnavailableReason, 'error')
               return
             }
             const sid = independentResumeSessionId(selectedSession)
@@ -840,67 +925,110 @@ function SessionBar({
             setCopiedResumeCmd(true)
             setTimeout(() => setCopiedResumeCmd(false), 1500)
           }}
-          disabled={!!resumeUnavailableReason}
+          disabled={!!copyUnavailableReason}
           className="px-2 py-0.5 text-[11px] rounded bg-hover hover:bg-pressed text-body flex items-center gap-1 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-hover"
-          title={resumeUnavailableReason || (isRemote && sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : t('chat.copy_resume_cmd'))}
+          title={copyUnavailableReason || (isRemote && sshConfig ? `SSH: ${sshConfig.user}@${sshConfig.host}` : t('chat.copy_resume_cmd'))}
         >
           {copiedResumeCmd ? <Check size={10} className="text-soft-green" /> : <Copy size={10} />}
           {copiedResumeCmd ? t('chat.copied') : t('chat.copy_resume_cmd_short')}
         </button>
 
-        {/* Resume / SSH Resume */}
-        <button
-          onClick={async () => {
-            if (resumeUnavailableReason) {
-              showToast(resumeUnavailableReason, 'error')
-              return
+        {/* Resume surface split button / SSH Resume */}
+        <div ref={resumeMenuRef} className="relative flex items-stretch">
+          <button
+            onClick={async () => {
+              if (isRemote) {
+                if (resumeUnavailableReason) {
+                  showToast(resumeUnavailableReason, 'error')
+                  return
+                }
+                const sid = independentResumeSessionId(selectedSession)
+                if (!sid) {
+                  showToast(t('chat.intra_branch_not_resumable'), 'error')
+                  return
+                }
+                if (sshConfig) {
+                  setSshResuming(true)
+                  await sshResumeSession(sid, selectedSession.permissionMode)
+                  setSshResuming(false)
+                } else {
+                  openSshModal()
+                }
+                return
+              }
+              await handleResume(isZcode ? 'zcode-desktop' : 'terminal')
+            }}
+            disabled={sshResuming || !!resumeUnavailableReason}
+            className={`px-2.5 py-0.5 text-[11px] flex items-center gap-1 ${
+              canChooseResumeSurface ? 'rounded-l' : 'rounded'
+            } ${
+              selectedSession.id?.includes(':intra-')
+                ? 'bg-hover hover:bg-pressed text-body'
+                : isRemote
+                  ? 'bg-teal-600/90 hover:bg-teal-500 text-white'
+                  : 'bg-soft-green/90 hover:bg-soft-green text-white'
+            } disabled:opacity-45 disabled:cursor-not-allowed`}
+            title={
+              resumeUnavailableReason || (selectedSession.id?.includes(':intra-') ? t('chat.intra_branch_not_resumable')
+              : isRemote && sshConfig ? `SSH Resume (${sshConfig.user}@${sshConfig.host})`
+              : isRemote ? '此会话来自其他设备，点击配置 SSH'
+              : isZcode ? t('chat.zcode_no_specific_resume')
+              : undefined)
             }
-            const sid = independentResumeSessionId(selectedSession)
-            if (!sid) {
-              showToast(t('chat.intra_branch_not_resumable'), 'error')
-              return
-            }
-            if (isRemote && sshConfig) {
-              setSshResuming(true)
-              await sshResumeSession(
-                sid,
-                selectedSession.permissionMode
-              )
-              setSshResuming(false)
-            } else if (isRemote && !sshConfig) {
-              openSshModal()
-            } else {
-              resumeSession(
-                sid,
-                selectedSession.permissionMode,
-                resolveResumeCwd(selectedSession)
-              )
-            }
-          }}
-          disabled={sshResuming || !!resumeUnavailableReason}
-          className={`px-2.5 py-0.5 text-[11px] rounded flex items-center gap-1 ${
-            selectedSession.id?.includes(':intra-')
-              ? 'bg-hover hover:bg-pressed text-body'
-              : isRemote
-                ? 'bg-teal-600/90 hover:bg-teal-500 text-white'
-                : 'bg-soft-green/90 hover:bg-soft-green text-white'
-          } disabled:opacity-45 disabled:cursor-not-allowed`}
-          title={
-            resumeUnavailableReason || (selectedSession.id?.includes(':intra-') ? t('chat.intra_branch_not_resumable')
-            : isRemote && sshConfig ? `SSH Resume (${sshConfig.user}@${sshConfig.host})`
-            : isRemote ? '此会话来自其他设备，点击配置 SSH'
-            : undefined)
-          }
-        >
-          {isRemote ? <Terminal size={10} /> : <Play size={10} />}
-          {sshResuming ? '连接中...' : isRemote ? 'SSH Resume' : 'Resume'}
-        </button>
+          >
+            {isRemote ? <Terminal size={10} /> : <Play size={10} />}
+            {sshResuming ? '连接中...' : isRemote ? 'SSH Resume' : isZcode ? t('chat.open_zcode_short') : 'Resume'}
+          </button>
+
+          {canChooseResumeSurface && (
+            <button
+              type="button"
+              aria-label={t('chat.resume_menu')}
+              aria-haspopup="menu"
+              aria-expanded={resumeMenuOpen}
+              onClick={() => setResumeMenuOpen((open) => !open)}
+              disabled={!!resumeUnavailableReason}
+              className="px-1.5 rounded-r border-l border-white/20 bg-soft-green/90 hover:bg-soft-green text-white flex items-center disabled:opacity-45 disabled:cursor-not-allowed"
+              title={t('chat.resume_menu')}
+            >
+              <ChevronDown size={11} />
+            </button>
+          )}
+
+          {resumeMenuOpen && canChooseResumeSurface && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg border border-edge bg-base shadow-2xl p-1.5"
+            >
+              {resumeSurfaceOptions.map((option) => (
+                <button
+                  key={option.surface}
+                  role="menuitem"
+                  onClick={async () => {
+                    setResumeMenuOpen(false)
+                    await handleResume(option.surface)
+                  }}
+                  className="w-full text-left px-2.5 py-2 rounded-md hover:bg-hover transition-colors"
+                >
+                  <span className="block text-[11px] font-medium text-primary">{option.label}</span>
+                  {option.description && (
+                    <span className={`block mt-0.5 text-[10px] leading-snug ${
+                      option.tone === 'warning' ? 'text-soft-amber' : 'text-muted'
+                    }`}>
+                      {option.description}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Fork */}
         <button
           onClick={async () => {
-            if (resumeUnavailableReason) {
-              showToast(resumeUnavailableReason, 'error')
+            if (forkUnavailableReason) {
+              showToast(forkUnavailableReason, 'error')
               return
             }
             const sid = independentResumeSessionId(selectedSession)
@@ -923,9 +1051,9 @@ function SessionBar({
               )
             }
           }}
-          disabled={!!resumeUnavailableReason}
+          disabled={!!forkUnavailableReason}
           className="px-2.5 py-0.5 text-[11px] rounded bg-purple-600/90 hover:bg-purple-500 text-white flex items-center gap-1 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-purple-600/90"
-          title={resumeUnavailableReason || (isRemote ? 'SSH Fork' : t('chat.fork_hint'))}
+          title={forkUnavailableReason || (isRemote ? 'SSH Fork' : t('chat.fork_hint'))}
         >
           <GitBranch size={10} />
           {isRemote ? 'SSH Fork' : t('chat.fork')}

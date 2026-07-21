@@ -1,4 +1,17 @@
-type ResumeActionResult = { ok: boolean; sessionId: string; reason?: string; command?: string }
+type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
+type ResumeLaunchAction =
+  | { kind: 'terminal'; command: string }
+  | { kind: 'deep-link'; url: string }
+  | { kind: 'remote-control'; command: string }
+type ResumeActionResult = {
+  ok: boolean
+  sessionId: string
+  reason?: string
+  surface?: ResumeSurface
+  action?: ResumeLaunchAction
+  command?: string
+  notice?: string
+}
 
 interface ElectronAPI {
   loadAllSessions: () => Promise<any[]>
@@ -13,7 +26,7 @@ interface ElectronAPI {
       matches: Array<{ text: string; timestamp: string }>
     }>
   >
-  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<ResumeActionResult>
+  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string, surface?: ResumeSurface) => Promise<ResumeActionResult>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) => Promise<ResumeActionResult[]>
   forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<ResumeActionResult>
   buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<string>

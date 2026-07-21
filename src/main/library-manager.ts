@@ -1309,7 +1309,8 @@ function inferDevice(sourcePath: string): string {
 function buildResumeCommand(source: SessionSource, sessionId: string): string {
   if (source === 'codex') return `codex resume ${sessionId}`
   if (source === 'cursor') return `cursor-agent --resume=${sessionId}`
-  if (source === 'opencode' || source === 'zcode') return `${source} --session ${sessionId}`
+  if (source === 'opencode') return `opencode --session ${sessionId}`
+  if (source === 'zcode') return `zcode --resume ${sessionId}`
   return `claude --resume ${sessionId}`
 }
 

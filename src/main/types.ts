@@ -182,6 +182,7 @@ export interface UserConfig {
     terminalApp: 'Terminal' | 'iTerm2'
     resumeTerminal?: ResumeTerminal
     resumeTerminalCommandTemplate?: string
+    experimentalClaudeDesktopImport?: boolean
     locale?: 'zh-CN' | 'en'
     themeMode?: ThemeMode
     spotlightShortcut?: string

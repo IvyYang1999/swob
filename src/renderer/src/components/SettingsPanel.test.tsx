@@ -51,6 +51,8 @@ vi.mock('../i18n', () => ({
       'settings.resume_terminal_custom': '自定义模板',
       'settings.resume_terminal_custom_hint': '模板必须包含 {{command}}',
       'settings.resume_terminal_custom_invalid': '模板无效',
+      'settings.experimental_claude_desktop': '实验：导入到 Claude Desktop',
+      'settings.experimental_claude_desktop_warning': '导入可能修改原始 transcript',
       'settings.ssh': 'SSH 远程',
       'settings.ssh_host': '主机',
       'settings.ssh_user': '用户名',
@@ -141,6 +143,22 @@ describe('SettingsPanel Resume 终端设置', () => {
 
     expect(savePreferences).toHaveBeenCalledWith({
       resumeTerminalCommandTemplate: 'wezterm start -- {{command}}'
+    })
+  })
+
+  it('Claude Desktop 实验开关默认关闭，并保存显式启用', () => {
+    render(<SettingsPanel />)
+
+    const terminalTab = screen.queryByText('Terminal') || screen.queryByText('终端与 Resume')
+    if (terminalTab) fireEvent.click(terminalTab)
+
+    const toggle = screen.getByRole('checkbox', { name: '实验：导入到 Claude Desktop' })
+    expect((toggle as HTMLInputElement).checked).toBe(false)
+
+    fireEvent.click(toggle)
+
+    expect(savePreferences).toHaveBeenCalledWith({
+      experimentalClaudeDesktopImport: true
     })
   })
 

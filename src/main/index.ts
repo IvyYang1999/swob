@@ -86,9 +86,26 @@ import { assertPathWithinAllowedRoots, resolvePathWithinRoot } from './path-cont
 import {
   getLlmSettingsForDisplay,
   getLlmSettingsWithSecret,
-  migrateLegacyLlmCredential,
   setLlmSettings as persistLlmSettings
 } from './llm-settings'
+import {
+  deleteLlmProfile,
+  getSmartFeatureAvailability,
+  getSmartFeatureBindings,
+  listLlmProfiles,
+  migrateLegacyLlmProfile,
+  resolveProfileForFeature,
+  saveLlmProfile,
+  setSmartFeatureBindings,
+  type SaveLlmProfileInput,
+  type SmartFeatureBinding
+} from './llm-profiles'
+import {
+  SmartRenameService,
+  serializeSmartRenameError,
+  type SmartRenameApplyItem,
+  type SmartRenameCandidate
+} from './smart-rename'
 import {
   normalizeResumeTerminalSettings,
   openResumeTerminal
@@ -1479,6 +1496,13 @@ ipcMain.handle('insights:setLlmSettings', async (_event, settings: { provider: s
   }
 })
 
+// LLM Profile secrets are accepted on save but are never returned to renderer IPC.
+ipcMain.handle('llm:listProfiles', () => listLlmProfiles())
+ipcMain.handle('llm:saveProfile', (_event, input: SaveLlmProfileInput) => saveLlmProfile(input))
+ipcMain.handle('llm:deleteProfile', (_event, profileId: string) => deleteLlmProfile(profileId))
+ipcMain.handle('llm:getBindings', () => getSmartFeatureBindings())
+ipcMain.handle('llm:setBindings', (_event, bindings: SmartFeatureBinding) => setSmartFeatureBindings(bindings))
+
 ipcMain.handle('session:audit', async (_event, filePath: string) => {
   const safeFilePath = assertSessionSourcePath(filePath)
   try {
@@ -1712,14 +1736,7 @@ ipcMain.handle('organizer:previewProject', () => {
 })
 
 ipcMain.handle('organizer:previewSmart', async () => {
-  const libConfig = loadLibraryConfig()
-  const settings = (libConfig as any).llmSettings as {
-    provider: 'anthropic' | 'openai' | 'custom'
-    apiKey?: string
-    model?: string
-    baseUrl?: string
-  } | undefined
-  if (!settings?.apiKey) throw new Error('missing-api-key')
+  const settings = await resolveProfileForFeature('smartOrganize')
 
   const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
   const candidates = cachedSessions.filter((session) => {
@@ -1777,16 +1794,87 @@ ipcMain.handle('organizer:undo', async () => {
   return { ...result, config }
 })
 
+async function loadSmartRenameCandidates(sessionIds: readonly string[]): Promise<SmartRenameCandidate[]> {
+  const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
+  const candidates: SmartRenameCandidate[] = []
+  for (const sessionId of sessionIds) {
+    const session = cachedSessions.find((item) =>
+      !item.id.includes(':intra-') && !item.id.includes(':branch-') &&
+      (item.sessionId === sessionId || item.id === sessionId)
+    )
+    if (!session || !getSessionDirPath(session.sessionId)) continue
+    let conversationSummary = session.allUserMessages || ''
+    try {
+      const detail = await loadSessionDetail(
+        session.filePath,
+        session.allFilePaths,
+        session.branchParentFilePaths,
+        session.branchPointUuid,
+        session.branchLeafUuid
+      )
+      if (detail) {
+        conversationSummary = detail.messages
+          .filter((message) =>
+            (message.type === 'assistant' && Boolean(message.textContent.trim())) ||
+            (message.type === 'user' && message.origin === 'human' && !message.isSystemGenerated)
+          )
+          .slice(0, 8)
+          .map((message) => `${message.type === 'user' ? '用户' : '助手'}：${message.textContent.trim()}`)
+          .join('\n')
+      }
+    } catch { /* summary fallback is sufficient for rename */ }
+    candidates.push({
+      id: session.sessionId,
+      oldTitle: config.sessionMeta[session.sessionId]?.customTitle || session.firstUserMessage || session.sessionId,
+      firstUserMessage: session.firstUserMessage || '',
+      conversationSummary
+    })
+  }
+  return candidates
+}
+
+function createSmartRenameService(): SmartRenameService {
+  return new SmartRenameService({
+    resolveProfile: () => resolveProfileForFeature('smartRename'),
+    loadCandidates: loadSmartRenameCandidates,
+    setCustomTitle: (sessionId, title) => {
+      const exists = cachedSessions.some((session) => session.sessionId === sessionId) &&
+        Boolean(getSessionDirPath(sessionId))
+      if (!exists) throw new Error('session-not-found')
+      setSessionMetaInLibrary(sessionId, { customTitle: title })
+    }
+  })
+}
+
+ipcMain.handle('smartRename:preview', async (_event, sessionIds: string[]) => {
+  try {
+    return { ok: true as const, items: await createSmartRenameService().preview(sessionIds) }
+  } catch (error) {
+    return { ok: false as const, error: serializeSmartRenameError(error) }
+  }
+})
+
+ipcMain.handle('smartRename:apply', async (_event, items: SmartRenameApplyItem[]) => {
+  try {
+    const applied = await createSmartRenameService().apply(items)
+    const config = await refreshAfterOrganization()
+    return { ok: true as const, items: applied, config }
+  } catch (error) {
+    return { ok: false as const, error: serializeSmartRenameError(error) }
+  }
+})
+
 // --- Native Context Menu ---
 
 ipcMain.handle(
   'context-menu:session',
-  (event, data: {
+  async (event, data: {
     sessionId: string
     canResume?: boolean
     resumeUnavailableReason?: string
     folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }>
   }) => {
+    const smartRename = await getSmartFeatureAvailability('smartRename')
     return new Promise((resolve) => {
       const template: Electron.MenuItemConstructorOptions[] = [
         {
@@ -1798,6 +1886,13 @@ ipcMain.handle(
         },
         { type: 'separator' },
         { label: '重命名', click: () => resolve({ action: 'rename' }) },
+        {
+          label: smartRename.enabled
+            ? '智能重命名'
+            : `智能重命名（${smartRename.reason || '未绑定 Profile'}）`,
+          enabled: smartRename.enabled,
+          click: () => resolve({ action: 'smartRename' })
+        },
       ]
 
       const removeItems = data.folders.filter(f => f.isIn)
@@ -2290,10 +2385,10 @@ app.whenReady().then(async () => {
   initLibrary()
   approveLibraryRoot(getLibraryRoot())
   try {
-    await migrateLegacyLlmCredential()
+    await migrateLegacyLlmProfile()
   } catch (error) {
     console.error(
-      '[llm-settings] Keychain migration failed; plaintext config was preserved:',
+      '[llm-profiles] Keychain migration failed; plaintext config was preserved:',
       error instanceof Error ? error.message : 'unknown error'
     )
   }

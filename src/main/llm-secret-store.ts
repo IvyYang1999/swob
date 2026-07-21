@@ -14,6 +14,79 @@ export type SpawnSecurity = (
 const SECURITY_PATH = '/usr/bin/security'
 const SERVICE = 'com.swob.insights-llm'
 const ACCOUNT = 'default'
+const PROFILE_SERVICE = 'com.swob.llm-profile'
+
+export interface ProfileSecretStore {
+  get(profileId: string): Promise<string | null>
+  set(profileId: string, value: string): Promise<void>
+  delete(profileId: string): Promise<void>
+}
+
+/**
+ * Profile-scoped Keychain storage. Profile ids are account names; secret
+ * values only travel through the child process stdin and are never included
+ * in thrown errors.
+ */
+export class SecurityCliProfileSecretStore implements ProfileSecretStore {
+  constructor(
+    private readonly spawnSecurity: SpawnSecurity =
+      (executable, args, options) => spawn(executable, args, options)
+  ) {}
+
+  async get(profileId: string): Promise<string | null> {
+    this.assertProfileId(profileId)
+    return this.run([
+      'find-generic-password',
+      '-a', profileId,
+      '-s', PROFILE_SERVICE,
+      '-w'
+    ], undefined, true)
+  }
+
+  async set(profileId: string, value: string): Promise<void> {
+    this.assertProfileId(profileId)
+    if (!value) throw new Error('Cannot store an empty LLM profile credential')
+    await this.run([
+      'add-generic-password',
+      '-U',
+      '-a', profileId,
+      '-s', PROFILE_SERVICE,
+      '-w'
+    ], value, false)
+  }
+
+  async delete(profileId: string): Promise<void> {
+    this.assertProfileId(profileId)
+    await this.run([
+      'delete-generic-password',
+      '-a', profileId,
+      '-s', PROFILE_SERVICE
+    ], undefined, true)
+  }
+
+  private assertProfileId(profileId: string): void {
+    if (!profileId || profileId.length > 200 || /[\r\n]/.test(profileId)) {
+      throw new Error('Invalid LLM profile id')
+    }
+  }
+
+  private run(args: string[], input: string | undefined, missingIsNull: boolean): Promise<string | null> {
+    return new Promise((resolve, reject) => {
+      const child = this.spawnSecurity(SECURITY_PATH, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+      let stdout = ''
+      child.stdout.setEncoding('utf8')
+      child.stdout.on('data', (chunk: string) => { stdout += chunk })
+      child.on('error', () => reject(new Error('macOS Keychain command could not start')))
+      child.on('close', (code) => {
+        if (code === 0) resolve(stdout.trim())
+        else if (missingIsNull && code === 44) resolve(null)
+        else reject(new Error(`macOS Keychain command failed (${code ?? 'unknown'})`))
+      })
+      if (input === undefined) child.stdin.end()
+      else child.stdin.end(input)
+    })
+  }
+}
 
 export class SecurityCliSecretStore implements SecretStore {
   constructor(

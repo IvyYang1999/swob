@@ -13,6 +13,26 @@ type ResumeActionResult = {
   notice?: string
 }
 
+type LlmProfile = {
+  id: string
+  name: string
+  provider: 'anthropic' | 'openai' | 'custom'
+  model: string
+  baseUrl?: string
+  keyHint: string
+}
+
+type SmartFeatureBinding = {
+  insights?: string
+  smartOrganize?: string
+  smartRename?: string
+  globalAgent?: string
+}
+
+type SmartRenameResult<T> =
+  | { ok: true; items: T; config?: any }
+  | { ok: false; error: { code: string; message: string } }
+
 interface ElectronAPI {
   loadAllSessions: () => Promise<any[]>
   loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<any>
@@ -137,6 +157,28 @@ interface ElectronAPI {
   listModels: () => Promise<string[]>
   getLlmSettings: () => Promise<{ provider: string; hasKey: boolean; keyHint: string; model: string; baseUrl: string }>
   setLlmSettings: (settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) => Promise<boolean>
+  llmListProfiles: () => Promise<LlmProfile[]>
+  llmSaveProfile: (profile: {
+    id?: string
+    name: string
+    provider: 'anthropic' | 'openai' | 'custom'
+    model?: string
+    baseUrl?: string
+    credential?: string
+    clearCredential?: boolean
+  }) => Promise<LlmProfile>
+  llmDeleteProfile: (profileId: string) => Promise<boolean>
+  llmGetBindings: () => Promise<SmartFeatureBinding>
+  llmSetBindings: (bindings: SmartFeatureBinding) => Promise<SmartFeatureBinding>
+  smartRenamePreview: (sessionIds: string[]) => Promise<SmartRenameResult<Array<{
+    id: string
+    oldTitle: string
+    newTitle: string
+  }>>>
+  smartRenameApply: (items: Array<{ id: string; newTitle: string }>) => Promise<SmartRenameResult<Array<{
+    id: string
+    newTitle: string
+  }>>>
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void
 
   // Session Audit

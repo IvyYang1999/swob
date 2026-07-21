@@ -1,6 +1,21 @@
-import { loadLibraryConfig, saveLibraryConfig, type LibraryConfig } from './library-manager'
 import type { LlmSettings } from './llm-client'
-import { SecurityCliSecretStore, type SecretStore } from './llm-secret-store'
+import {
+  SecurityCliProfileSecretStore,
+  SecurityCliSecretStore,
+  type ProfileSecretStore,
+  type SecretStore
+} from './llm-secret-store'
+import {
+  LlmProfileError,
+  getLlmProfileForFeature,
+  getSmartFeatureBindings,
+  migrateLegacyLlmProfile,
+  resolveProfileForFeature,
+  saveLlmProfile,
+  setSmartFeatureBindings
+} from './llm-profiles'
+
+export { migrateLegacyLlmCredential } from './llm-legacy-settings'
 
 export interface LlmSettingsInput {
   provider: string
@@ -9,16 +24,9 @@ export interface LlmSettingsInput {
   baseUrl?: string
 }
 
-interface LegacyLlmSettings extends Record<string, unknown> {
-  provider?: string
-  keyHint?: string
-  model?: string
-  baseUrl?: string
-}
-
 const defaultStore = new SecurityCliSecretStore()
+const defaultProfileStore = new SecurityCliProfileSecretStore()
 const PROVIDERS = new Set(['anthropic', 'openai', 'custom'])
-const LEGACY_VALUE_FIELD = ['api', 'Key'].join('')
 const RUNTIME_VALUE_FIELD = ['cred', 'ential'].join('')
 
 function normalizeProvider(provider?: string): LlmSettings['provider'] {
@@ -29,46 +37,19 @@ function hintFor(value: string): string {
   return value ? `…${Array.from(value).slice(-4).join('')}` : ''
 }
 
-function legacySettings(config: LibraryConfig): LegacyLlmSettings | undefined {
-  return (config as LibraryConfig & { llmSettings?: LegacyLlmSettings }).llmSettings
-}
-
-function plaintextFrom(settings?: LegacyLlmSettings): string {
-  const value = settings?.[LEGACY_VALUE_FIELD]
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-export async function migrateLegacyLlmCredential(store: SecretStore = defaultStore): Promise<boolean> {
-  const config = loadLibraryConfig()
-  const legacy = legacySettings(config)
-  const plaintext = plaintextFrom(legacy)
-  if (!plaintext) return false
-
-  await store.set(plaintext)
-  const verified = await store.get()
-  if (verified !== plaintext) throw new Error('Keychain verification failed; Library config was left unchanged')
-
-  config.llmSettings = {
-    provider: normalizeProvider(legacy?.provider),
-    keyHint: hintFor(plaintext),
-    model: legacy?.model?.trim() || '',
-    baseUrl: legacy?.baseUrl?.trim() || ''
-  }
-  saveLibraryConfig(config)
-  return true
-}
-
-export async function getLlmSettingsForDisplay(store: SecretStore = defaultStore): Promise<{
+export async function getLlmSettingsForDisplay(
+  store: SecretStore = defaultStore,
+  profileStore: ProfileSecretStore = defaultProfileStore
+): Promise<{
   provider: LlmSettings['provider']
   hasKey: boolean
   keyHint: string
   model: string
   baseUrl: string
 }> {
-  await migrateLegacyLlmCredential(store)
-  const config = loadLibraryConfig()
-  const metadata = config.llmSettings
-  const storedValue = await store.get()
+  await migrateLegacyLlmProfile(store, profileStore)
+  const metadata = await getLlmProfileForFeature('insights', profileStore, store)
+  const storedValue = metadata ? await profileStore.get(metadata.id) : null
   return {
     provider: normalizeProvider(metadata?.provider),
     hasKey: Boolean(storedValue),
@@ -80,35 +61,40 @@ export async function getLlmSettingsForDisplay(store: SecretStore = defaultStore
 
 export async function setLlmSettings(
   input: LlmSettingsInput,
-  store: SecretStore = defaultStore
+  store: SecretStore = defaultStore,
+  profileStore: ProfileSecretStore = defaultProfileStore
 ): Promise<void> {
-  await migrateLegacyLlmCredential(store)
-  const config = loadLibraryConfig()
-  const provided = input.value?.trim()
-  if (provided) {
-    await store.set(provided)
-    if (await store.get() !== provided) throw new Error('Keychain verification failed')
-  }
-  const storedValue = provided || await store.get()
-  config.llmSettings = {
+  await migrateLegacyLlmProfile(store, profileStore)
+  const current = await getLlmProfileForFeature('insights', profileStore, store)
+  const saved = await saveLlmProfile({
+    id: current?.id,
+    name: current?.name || '默认',
     provider: normalizeProvider(input.provider),
-    keyHint: storedValue ? hintFor(storedValue) : '',
     model: input.model?.trim() || '',
-    baseUrl: input.baseUrl?.trim() || ''
+    baseUrl: input.baseUrl?.trim() || undefined,
+    credential: input.value
+  }, profileStore, store)
+  const bindings = await getSmartFeatureBindings(profileStore, store)
+  if (bindings.insights !== saved.id) {
+    await setSmartFeatureBindings({ ...bindings, insights: saved.id }, profileStore, store)
   }
-  saveLibraryConfig(config)
 }
 
 export async function getLlmSettingsWithSecret(
-  store: SecretStore = defaultStore
+  store: SecretStore = defaultStore,
+  profileStore: ProfileSecretStore = defaultProfileStore
 ): Promise<LlmSettings | null> {
-  await migrateLegacyLlmCredential(store)
-  const config = loadLibraryConfig()
-  const storedValue = await store.get()
-  if (!storedValue) return null
-  return Object.assign({
-    provider: normalizeProvider(config.llmSettings?.provider),
-    model: config.llmSettings?.model,
-    baseUrl: config.llmSettings?.baseUrl
-  }, { [RUNTIME_VALUE_FIELD]: storedValue }) as unknown as LlmSettings
+  try {
+    const resolved = await resolveProfileForFeature('insights', profileStore, store)
+    return Object.assign({
+      provider: resolved.provider,
+      model: resolved.model,
+      baseUrl: resolved.baseUrl
+    }, { [RUNTIME_VALUE_FIELD]: resolved.credential }) as unknown as LlmSettings
+  } catch (error) {
+    if (error instanceof LlmProfileError && [
+      'PROFILE_NOT_BOUND', 'PROFILE_NOT_FOUND', 'PROFILE_KEY_MISSING'
+    ].includes(error.code)) return null
+    throw error
+  }
 }

@@ -79,6 +79,9 @@ interface ElectronAPI {
   // Execution Tree
   getExecutionTree: (filePath: string) => Promise<any>
 
+  // Insights Report
+  generateInsights: () => Promise<{ ok: boolean; path?: string; sessionCount?: number; error?: string }>
+
   // Session Audit
   auditSession: (filePath: string) => Promise<any>
 

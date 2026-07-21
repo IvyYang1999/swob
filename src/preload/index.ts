@@ -104,6 +104,9 @@ const api = {
   // Execution Tree
   getExecutionTree: (filePath: string) => ipcRenderer.invoke('session:getExecutionTree', filePath),
 
+  // Insights Report
+  generateInsights: () => ipcRenderer.invoke('insights:generate'),
+
   // Session Audit
   auditSession: (filePath: string) => ipcRenderer.invoke('session:audit', filePath),
 

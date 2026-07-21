@@ -1053,6 +1053,26 @@ ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
   }
 })
 
+ipcMain.handle('insights:generate', async () => {
+  try {
+    const { generateInsightsReport, renderInsightsHtml } = await import('./session-insights')
+    const report = await generateInsightsReport(cachedSessions)
+    const html = renderInsightsHtml(report)
+    const reportDir = path.join(os.homedir(), '.claude-session-manager', 'reports')
+    if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true })
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const reportPath = path.join(reportDir, `insights-${timestamp}.html`)
+    const latestPath = path.join(reportDir, 'insights-latest.html')
+    fs.writeFileSync(reportPath, html, 'utf-8')
+    fs.writeFileSync(latestPath, html, 'utf-8')
+    const { shell } = await import('electron')
+    shell.openPath(reportPath)
+    return { ok: true, path: reportPath, sessionCount: report.totalSessions }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+})
+
 ipcMain.handle('session:audit', async (_event, filePath: string) => {
   try {
     const { parseSessionFile } = await import('./session-loader')

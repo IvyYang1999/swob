@@ -193,10 +193,19 @@ export interface UserConfig {
     resumeTerminal?: ResumeTerminal
     resumeTerminalCommandTemplate?: string
     experimentalClaudeDesktopImport?: boolean
-    locale?: 'zh-CN' | 'en'
+    locale?: 'zh-CN' | 'en' | 'ja'
     themeMode?: ThemeMode
     spotlightShortcut?: string
     sshConfig?: SshConfig
     projectViewMode?: 'folders' | 'paths'
+    /** T103 settings schema; legacy terminal fields remain readable. */
+    settingsSchemaVersion?: 1
+    defaultTerminalId?: string
+    resumeMethodByHarness?: Record<string, import('../shared/settings-capabilities').ResumeMethod>
+    defaultSort?: import('../shared/settings-capabilities').DefaultSort
+    defaultGrouping?: import('../shared/settings-capabilities').DefaultGrouping
+    singleTurnBehavior?: import('../shared/settings-capabilities').SingleTurnBehavior
+    autoCheckUpdates?: boolean
+    updateChannel?: import('../shared/settings-capabilities').UpdateChannel
   }
 }

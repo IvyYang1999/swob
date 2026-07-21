@@ -26,6 +26,24 @@ function formatDate(iso: string, locale: string, t: (key: string, params?: Recor
   return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 }
 
+function sortSessionsForView(sessions: readonly SessionSummary[], mode = 'updated'): SessionSummary[] {
+  return [...sessions].sort((a, b) => {
+    if (mode === 'created') return b.createdAt.localeCompare(a.createdAt)
+    if (mode === 'turns') return b.turnCount - a.turnCount || b.updatedAt.localeCompare(a.updatedAt)
+    if (mode === 'name') {
+      return (a.firstUserMessage || a.id).localeCompare(b.firstUserMessage || b.id, undefined, { numeric: true })
+    }
+    return b.updatedAt.localeCompare(a.updatedAt)
+  })
+}
+
+function isSingleTurnSession(session: SessionSummary): boolean {
+  const bucket = (session as any).ungroupBucket
+  if (bucket === 'single') return true
+  if (bucket === 'multi') return false
+  return session.turnCount <= 1
+}
+
 // ============ Session Item ============
 
 function SessionItem({
@@ -214,10 +232,15 @@ function LensView({
   onDoubleClickRename: (sessionId: string) => void
 }) {
   const { sessions, config, cloudSessionIds, applyOrganization } = useStore()
-  const groups = useMemo(() => groupSessionsByLens(sessions, dimension, {
+  const sortedSessions = useMemo(
+    () => sortSessionsForView(sessions, config?.preferences?.defaultSort)
+      .filter((session) => config?.preferences?.singleTurnBehavior !== 'hide' || !isSingleTurnSession(session)),
+    [sessions, config?.preferences?.defaultSort, config?.preferences?.singleTurnBehavior]
+  )
+  const groups = useMemo(() => groupSessionsByLens(sortedSessions, dimension, {
     metaBySessionId: config?.sessionMeta || {},
     cloudSessionIds
-  }), [sessions, dimension, config?.sessionMeta, cloudSessionIds])
+  }), [sortedSessions, dimension, config?.sessionMeta, cloudSessionIds])
 
   return (
     <div data-testid="lens-view" className="px-2 pb-3 space-y-3">
@@ -546,12 +569,17 @@ export function Sidebar({ width }: { width: number }) {
       return 'folders'
     } catch { return 'folders' }
   })
+  const lensDefaultApplied = useRef(false)
   const [lensDimension, setLensDimension] = useState<LensDimension>(() => {
     try {
       const savedMode = localStorage.getItem('swob:sidebar-mode')
       if (savedMode === 'timeline') return 'date'
       const saved = localStorage.getItem('swob:lens-dimension') as LensDimension | null
-      return LENS_DEFINITIONS.some((item) => item.id === saved) ? saved! : 'date'
+      if (LENS_DEFINITIONS.some((item) => item.id === saved)) {
+        lensDefaultApplied.current = true
+        return saved!
+      }
+      return 'date'
     } catch { return 'date' }
   })
   const [organizerKind, setOrganizerKind] = useState<'project' | 'smart' | null>(null)
@@ -563,9 +591,22 @@ export function Sidebar({ width }: { width: number }) {
   useEffect(() => {
     try {
       localStorage.setItem('swob:sidebar-mode', sidebarMode)
-      localStorage.setItem('swob:lens-dimension', lensDimension)
     } catch { /* renderer storage unavailable */ }
-  }, [sidebarMode, lensDimension])
+  }, [sidebarMode])
+
+  useEffect(() => {
+    if (lensDefaultApplied.current || !config) return
+    const defaults: Record<string, LensDimension> = {
+      none: 'none', project: 'project', date: 'date', harness: 'harness'
+    }
+    setLensDimension(defaults[config.preferences?.defaultGrouping || 'none'] || 'none')
+    lensDefaultApplied.current = true
+  }, [config])
+
+  useEffect(() => {
+    if (!lensDefaultApplied.current) return
+    try { localStorage.setItem('swob:lens-dimension', lensDimension) } catch { /* renderer storage unavailable */ }
+  }, [lensDimension])
 
   // Initial status read only. Library changes are delivered by the main-process
   // watcher; a periodic renderer poll must not create an O(library) idle cost.
@@ -697,25 +738,28 @@ export function Sidebar({ width }: { width: number }) {
     return !ungConfig
   }
   const isSingleTurn = (s: SessionSummary): boolean => {
-    const b = bucketOf(s)
-    if (b === 'single') return true
-    if (b === 'multi') return false
-    return s.turnCount <= 1
+    return isSingleTurnSession(s)
   }
+  const sortedSessions = useMemo(
+    () => sortSessionsForView(sessions, config?.preferences?.defaultSort)
+      .filter((session) => config?.preferences?.singleTurnBehavior !== 'hide' || !isSingleTurnSession(session)),
+    [sessions, config?.preferences?.defaultSort, config?.preferences?.singleTurnBehavior]
+  )
+  const singleTurnBehavior = config?.preferences?.singleTurnBehavior || 'collapse'
   const ungroupedSessions = useMemo(
-    () => sessions.filter((s) => isBottomSession(s) && !isSingleTurn(s)),
-    [sessions, ungConfig]
+    () => sortedSessions.filter((s) => isBottomSession(s) && !isSingleTurn(s)),
+    [sortedSessions, ungConfig]
   )
   const singleTurnSessions = useMemo(
-    () => sessions.filter((s) => isBottomSession(s) && isSingleTurn(s)),
-    [sessions, ungConfig]
+    () => sortedSessions.filter((s) => isBottomSession(s) && isSingleTurn(s)),
+    [sortedSessions, ungConfig]
   )
 
   const sessionMap = useMemo(() => {
     const map = new Map<string, SessionSummary>()
-    sessions.forEach((s) => { map.set(s.id, s); if (s.sessionId && s.sessionId !== s.id && !map.has(s.sessionId)) map.set(s.sessionId, s) })
+    sortedSessions.forEach((s) => { map.set(s.id, s); if (s.sessionId && s.sessionId !== s.id && !map.has(s.sessionId)) map.set(s.sessionId, s) })
     return map
-  }, [sessions])
+  }, [sortedSessions])
 
   // --- Auto-scroll during drag ---
   const handleListDragOver = useCallback((e: React.DragEvent) => {
@@ -819,7 +863,7 @@ export function Sidebar({ width }: { width: number }) {
           />
         ) : (
           <>
-            {rootFolders.length === 0 && sessions.length > 0 && (
+            {rootFolders.length === 0 && sortedSessions.length > 0 && (
               <div className="m-3 p-3 border border-edge rounded bg-surface/40">
                 <div className="flex items-center gap-2 text-sm text-primary"><WandSparkles size={14} className="text-accent" />开始整理你的会话</div>
                 <p className="text-xs text-muted mt-1.5 leading-relaxed">切换到镜头浏览，或一键按项目整理。</p>
@@ -859,20 +903,20 @@ export function Sidebar({ width }: { width: number }) {
                 onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession}
                 onDoubleClickRename={handleDoubleClickRenameSession} />
             ))}
-            {singleTurnSessions.length > 0 && (
+            {singleTurnSessions.length > 0 && singleTurnBehavior !== 'hide' && (
               <>
                 <div className="mx-3 my-2 flex items-center gap-2">
                   <div className="flex-1 border-t border-edge/50" />
                 </div>
                 <button
-                  onClick={() => setSingleTurnExpanded(!singleTurnExpanded)}
+                  onClick={() => singleTurnBehavior !== 'show' && setSingleTurnExpanded(!singleTurnExpanded)}
                   className="w-full px-3 py-1.5 flex items-center gap-1.5 text-xs text-muted hover:text-secondary hover:bg-surface/50"
                 >
-                  {singleTurnExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                  {singleTurnBehavior === 'show' || singleTurnExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
                   <span>{t('sidebar.single_turn')}</span>
                   <span className="text-faint ml-auto">{singleTurnSessions.length}</span>
                 </button>
-                {singleTurnExpanded && singleTurnSessions.map((session) => (
+                {(singleTurnBehavior === 'show' || singleTurnExpanded) && singleTurnSessions.map((session) => (
                   <SessionItem key={session.id} session={session} depth={1} onContextMenu={handleContextMenu}
                     isRenaming={renamingSessionId === session.id} renameValue={sessionRenameValue}
                     onRenameChange={setSessionRenameValue} onRenameSubmit={handleSubmitRenameSession} onRenameCancel={handleCancelRenameSession}

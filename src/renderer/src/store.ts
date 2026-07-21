@@ -6,6 +6,7 @@ import {
   generateFilename
 } from './utils/markdown'
 import type { Locale } from './i18n'
+import { defaultResumeMethodForSource } from '../../shared/settings-capabilities'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
 
@@ -113,8 +114,18 @@ interface UserConfig {
     resumeTerminalCommandTemplate?: string
     experimentalClaudeDesktopImport?: boolean
     locale?: Locale
+    themeMode?: 'dark' | 'light' | 'system'
+    spotlightShortcut?: string
     sshConfig?: SshConfig
     projectViewMode?: 'folders' | 'paths'
+    settingsSchemaVersion?: 1
+    defaultTerminalId?: string
+    resumeMethodByHarness?: Record<string, ResumeSurface>
+    defaultSort?: import('../../shared/settings-capabilities').DefaultSort
+    defaultGrouping?: import('../../shared/settings-capabilities').DefaultGrouping
+    singleTurnBehavior?: import('../../shared/settings-capabilities').SingleTurnBehavior
+    autoCheckUpdates?: boolean
+    updateChannel?: import('../../shared/settings-capabilities').UpdateChannel
   }
 }
 
@@ -487,7 +498,10 @@ export const useStore = create<AppState>((set, get) => ({
     const matchedSession = get().sessions.find((session) =>
       session.id === sessionId || session.sessionId === sessionId || session.resumeSessionId === sessionId
     )
-    const effectiveSurface = surface || (matchedSession?.source === 'zcode' ? 'zcode-desktop' : 'terminal')
+    const effectiveSurface = surface || defaultResumeMethodForSource(
+      get().config?.preferences as unknown as Record<string, unknown>,
+      matchedSession?.source
+    ) as ResumeSurface
     const result = await window.api.resumeSession(
       sessionId,
       terminalApp,

@@ -202,6 +202,10 @@ const api = {
   cliGetStatus: () => ipcRenderer.invoke('cli:getStatus'),
   cliInstall: () => ipcRenderer.invoke('cli:install'),
 
+  // Settings capability discovery
+  getDetectedTerminals: (force = false) => ipcRenderer.invoke('settings:getDetectedTerminals', force),
+  getAppInfo: () => ipcRenderer.invoke('settings:getAppInfo'),
+
   // Auto Update
   onUpdateAvailable: (callback: (version: string, notes: string) => void) => {
     ipcRenderer.on('update:available', (_event, version, notes) => callback(version, notes))

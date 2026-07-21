@@ -66,6 +66,30 @@ describe('Resume 终端打开方式', () => {
     expect(f.execs).toEqual([`open "${f.writes[0].filePath}"`])
   })
 
+  it('选择检测到的 WezTerm 时用 argv 启动，不拼接 shell executable', () => {
+    const f = fakeDeps()
+    const settings = normalizeResumeTerminalSettings({ defaultTerminalId: 'wezterm' })
+    settings.terminalExecutable = '/opt/homebrew/bin/wezterm'
+
+    const result = openResumeTerminal('claude --resume abc', settings, f.deps)
+
+    expect(result).toEqual({ terminal: 'wezterm' })
+    expect(f.execFiles[0]).toEqual({
+      file: '/opt/homebrew/bin/wezterm',
+      args: ['start', '--', '/bin/sh', '-lc', 'claude --resume abc']
+    })
+  })
+
+  it('新终端配置缺少 executable 时明确降级 Terminal.app', () => {
+    const f = fakeDeps()
+    const settings = normalizeResumeTerminalSettings({ defaultTerminalId: 'wezterm' })
+
+    const result = openResumeTerminal('claude --resume abc', settings, f.deps)
+
+    expect(result).toEqual({ terminal: 'terminal-app', fallbackReason: 'terminal-unavailable' })
+    expect(f.warnings[0]).toContain('已改用 Terminal.app')
+  })
+
   it('选择 iTerm 时用 osascript 新建窗口并写入原始 resume 命令', () => {
     const f = fakeDeps()
 

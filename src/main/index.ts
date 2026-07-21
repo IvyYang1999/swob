@@ -94,6 +94,15 @@ import {
   openResumeTerminal
 } from './resume-terminal'
 import {
+  getDetectedTerminals,
+  peekDetectedTerminals,
+  primeTerminalDetection
+} from './terminal-detector'
+import {
+  defaultResumeMethodForSource,
+  migrateSettingsPreferences
+} from '../shared/settings-capabilities'
+import {
   buildGuardedResumeCommand,
   openGuardedForkCommand,
   openGuardedResumeAction,
@@ -1130,16 +1139,24 @@ ipcMain.handle('sessions:search', async (_event, query: string) => {
   return searchIndexedSessions(query)
 })
 
-function openInTerminal(command: string): void {
-  let preferences: Record<string, unknown> | undefined
+function currentSettingsPreferences(): Record<string, unknown> {
   try {
-    preferences = shouldReadLibraryConfig()
+    const preferences = shouldReadLibraryConfig()
       ? loadLibraryConfig().preferences as unknown as Record<string, unknown>
       : loadConfig().preferences as unknown as Record<string, unknown>
+    return migrateSettingsPreferences(preferences)
   } catch {
-    preferences = undefined
+    return migrateSettingsPreferences()
   }
-  openResumeTerminal(command, normalizeResumeTerminalSettings(preferences))
+}
+
+function openInTerminal(command: string): void {
+  const preferences = currentSettingsPreferences()
+  const settings = normalizeResumeTerminalSettings(preferences)
+  settings.terminalExecutable = peekDetectedTerminals()
+    .find((terminal) => terminal.id === settings.defaultTerminalId && terminal.canRunCommand)
+    ?.executable
+  openResumeTerminal(command, settings)
 }
 
 async function openResumeAction(action: ResumeLaunchAction): Promise<void> {
@@ -1191,14 +1208,7 @@ async function openResumeAction(action: ResumeLaunchAction): Promise<void> {
 }
 
 function experimentalClaudeDesktopImportEnabled(): boolean {
-  try {
-    const preferences = shouldReadLibraryConfig()
-      ? loadLibraryConfig().preferences
-      : loadConfig().preferences
-    return preferences?.experimentalClaudeDesktopImport === true
-  } catch {
-    return false
-  }
+  return currentSettingsPreferences().experimentalClaudeDesktopImport === true
 }
 
 function defaultResumeSurfaceForSession(sessionId: string): ResumeSurface {
@@ -1208,7 +1218,7 @@ function defaultResumeSurfaceForSession(sessionId: string): ResumeSurface {
     candidate.resumeSessionId === sessionId ||
     (candidate.continuationSessionIds || []).includes(sessionId)
   )
-  return session?.source === 'zcode' ? 'zcode-desktop' : 'terminal'
+  return defaultResumeMethodForSource(currentSettingsPreferences(), session?.source) as ResumeSurface
 }
 
 ipcMain.handle(
@@ -1499,28 +1509,37 @@ ipcMain.handle('session:getContextInspector', async (_event, filePath: string) =
 // These use the library manager but return the same shape the frontend expects
 
 ipcMain.handle('config:load', () => {
+  let config
   if (!shouldReadLibraryConfig() || !latestLibraryTree) {
     // Fallback to old config during initial load
-    return loadConfig()
+    config = loadConfig()
+  } else {
+    config = libraryTreeToConfig(latestLibraryTree)
   }
-  return libraryTreeToConfig(latestLibraryTree)
+  return { ...config, preferences: migrateSettingsPreferences(config.preferences as unknown as Record<string, unknown>) }
 })
 
 ipcMain.handle('config:save', (_event, config: { preferences: Record<string, unknown> }) => {
+  const migratedPreferences = migrateSettingsPreferences(config.preferences)
+  const migratedConfig = { ...config, preferences: migratedPreferences }
   if (libraryInitialized) {
     const libConfig = loadLibraryConfig()
-    libConfig.preferences = config.preferences as any
+    libConfig.preferences = migratedPreferences as any
     saveLibraryConfig(libConfig)
   } else {
-    saveConfig(config as any)
+    saveConfig(migratedConfig as any)
   }
+  autoUpdater.allowPrerelease = migratedPreferences.updateChannel === 'development'
   // If spotlight shortcut changed, re-register it
-  const shortcut = (config.preferences?.spotlightShortcut as string) || DEFAULT_SPOTLIGHT_SHORTCUT
+  const shortcut = (migratedPreferences.spotlightShortcut as string) || DEFAULT_SPOTLIGHT_SHORTCUT
   if (shortcut !== currentSpotlightShortcut) {
     registerSpotlightShortcut(shortcut)
   }
-  return config
+  return migratedConfig
 })
+
+ipcMain.handle('settings:getDetectedTerminals', (_event, force = false) => getDetectedTerminals(force === true))
+ipcMain.handle('settings:getAppInfo', () => ({ version: app.getVersion(), platform: process.platform }))
 
 ipcMain.handle(
   'config:createFolder',
@@ -2227,9 +2246,17 @@ function autoInstallCliOnStartup(): void {
 
 ipcMain.handle('cli:getStatus', () => {
   const installed = isCliInstalled()
-  const symlinkExists = findInstalledSwobCommandPath() !== null
-  const skillExists = fs.existsSync(join(process.env.HOME || '', '.claude', 'skills', 'swob', 'SKILL.md'))
-  return { cliInstalled: installed, symlinkInstalled: symlinkExists, skillInstalled: skillExists }
+  const commandPath = findInstalledSwobCommandPath()
+  const skillPath = join(process.env.HOME || '', '.claude', 'skills', 'swob', 'SKILL.md')
+  const skillExists = fs.existsSync(skillPath)
+  return {
+    cliInstalled: installed,
+    symlinkInstalled: commandPath !== null,
+    skillInstalled: skillExists,
+    cliPath: installed ? SWOB_APP_CLI_PATH : null,
+    commandPath,
+    skillPath: skillExists ? skillPath : null
+  }
 })
 
 ipcMain.handle('cli:install', () => {
@@ -2241,13 +2268,15 @@ ipcMain.handle('cli:install', () => {
 // --- Auto Update ---
 
 function setupAutoUpdater(): void {
+  const preferences = currentSettingsPreferences()
+  autoUpdater.allowPrerelease = preferences.updateChannel === 'development'
   configureAutoUpdater({
     updater: autoUpdater,
     ipcMain,
     sendToRenderer: (channel, ...args) => mainWindow?.webContents.send(channel, ...args),
     // The window and all startup watchers are already running before this
     // delayed, fire-and-forget request is scheduled.
-    checkOnStartup: !is.dev
+    checkOnStartup: !is.dev && preferences.autoCheckUpdates !== false
   })
 }
 
@@ -2288,6 +2317,7 @@ app.whenReady().then(async () => {
     }
   })
   createWindow()
+  primeTerminalDetection()
   startFileWatcher()
   startLibraryWatcher()
   startCodexWatcher()

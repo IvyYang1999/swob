@@ -127,6 +127,14 @@ export interface LibraryConfig {
     terminalApp: 'Terminal' | 'iTerm2'
     resumeTerminal?: 'terminal-app' | 'iterm' | 'custom'
     resumeTerminalCommandTemplate?: string
+    settingsSchemaVersion?: 1
+    defaultTerminalId?: string
+    resumeMethodByHarness?: Record<string, import('../shared/settings-capabilities').ResumeMethod>
+    defaultSort?: import('../shared/settings-capabilities').DefaultSort
+    defaultGrouping?: import('../shared/settings-capabilities').DefaultGrouping
+    singleTurnBehavior?: import('../shared/settings-capabilities').SingleTurnBehavior
+    autoCheckUpdates?: boolean
+    updateChannel?: import('../shared/settings-capabilities').UpdateChannel
     sshConfig?: SshConfig
     // 指定「未分组容器」：这两个文件夹的会话在 UI 底部按轮数罗列/折叠、不在树里显示。
     // 新中央会话也按轮数落进这俩文件夹。不配则为空，swob 行为完全通用。

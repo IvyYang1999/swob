@@ -86,6 +86,21 @@ body {
   display: none;
 }
 
+/* Settings vertical navigation: fixed left rail, narrower on small windows. */
+.settings-nav {
+  width: 156px;
+}
+
+@media (max-width: 560px) {
+  .settings-nav {
+    width: 118px;
+  }
+  .settings-nav button {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+
 /* In-session search keyword highlighting (CSS Custom Highlight API) */
 ::highlight(swob-search) {
   background-color: rgba(245, 158, 11, 0.35);

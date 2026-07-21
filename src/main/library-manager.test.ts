@@ -943,6 +943,38 @@ describe('buildSshResumeCommand', () => {
   })
 })
 
+describe('首启动引导状态机', () => {
+  it('全新安装（无 app-config、无已初始化库）需要引导', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    expect(lib.isOnboardingNeeded()).toBe(true)
+  })
+
+  it('completeOnboarding 落库路径 + 排除清单，之后不再需要引导', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.completeOnboarding(tmpRoot, ['zcode', 'grok'])
+    expect(lib.isOnboardingNeeded()).toBe(false)
+    expect(lib.getConfiguredLibraryPath()).toBe(tmpRoot)
+    expect(lib.getExcludedSources()).toEqual(['zcode', 'grok'])
+  })
+
+  it('老装机（已配置 libraryPath 但没有引导标记）被豁免并补标记', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.changeConfiguredLibraryPath(tmpRoot)
+    expect(lib.isOnboardingNeeded()).toBe(false)
+    const config = JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
+    expect(config.onboardingCompleted).toBe(true)
+  })
+
+  it('setExcludedSources 空数组清除配置键', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.completeOnboarding(tmpRoot, ['pi'])
+    lib.setExcludedSources([])
+    expect(lib.getExcludedSources()).toEqual([])
+    const config = JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
+    expect('excludedSources' in config).toBe(false)
+  })
+})
+
 describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
   function summary(sessionId: string, cwds: string[]) {
     return {
@@ -973,17 +1005,32 @@ describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
     return ids
   }
 
-  it('vault 内项目目录启动的新会话也只落进 Inbox，不擅自按 cwd 整理', async () => {
+  it('vault 内项目目录启动的新会话散放根目录并带会话包标记，不擅自按 cwd 整理', async () => {
     const cwd = path.join(tmpRoot, '项目', '飞搜')
     fs.mkdirSync(cwd, { recursive: true })
     const dir = await lib.ensureSessionInLibrary(summary('in-vault-1', [cwd]))
-    expect(dir).toBe(path.join(tmpRoot, 'Inbox', '会话 in-vault-1'))
+    expect(dir).toBe(path.join(tmpRoot, '💬 会话 in-vault-1'))
     expect(fs.existsSync(path.join(dir, '.swob-session.json'))).toBe(true)
   })
 
-  it('vault 外启动的新会话同样落进 Inbox', async () => {
+  it('vault 外启动的新会话同样散放根目录', async () => {
     const dir = await lib.ensureSessionInLibrary(summary('outside-1', ['/somewhere/else']))
-    expect(dir).toBe(path.join(tmpRoot, 'Inbox', '会话 outside-1'))
+    expect(dir).toBe(path.join(tmpRoot, '💬 会话 outside-1'))
+  })
+
+  it('勾选自动整理后，新会话按轮数落进用户配置的容器文件夹', async () => {
+    fs.writeFileSync(path.join(tmpRoot, '.swob-config.json'), JSON.stringify({
+      libraryRoot: tmpRoot,
+      preferences: {
+        defaultViewMode: 'compact', terminalApp: 'Terminal',
+        ungrouping: { multiTurn: '未分组', singleTurn: '单轮会话' }
+      }
+    }))
+    lib.initLibrary(tmpRoot)
+    const multi = await lib.ensureSessionInLibrary({ ...summary('auto-multi', ['/x']), turnCount: 8 })
+    expect(multi).toBe(path.join(tmpRoot, '未分组', '💬 会话 auto-multi'))
+    const single = await lib.ensureSessionInLibrary({ ...summary('auto-single', ['/x']), turnCount: 1 })
+    expect(single).toBe(path.join(tmpRoot, '单轮会话', '💬 会话 auto-single'))
   })
 
   it('scanLibrary 暴露普通文件供文件夹模式显示，但绝不把它当会话包', () => {
@@ -1039,18 +1086,18 @@ describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
     expect(fs.existsSync(proj)).toBe(true)
   })
 
-  it('deleteLibraryFolder 正常删除纯会话容器（无散文件）', () => {
+  it('deleteLibraryFolder 正常删除纯会话容器（无散文件），会话退回根目录', () => {
     const folder = path.join(tmpRoot, '纯容器')
     makeSession(path.join(folder, '一个会话'), 'pure-x')
     lib.scanLibrary()
     expect(() => lib.deleteLibraryFolder(folder)).not.toThrow()
     expect(fs.existsSync(folder)).toBe(false)
-    expect(fs.existsSync(path.join(tmpRoot, 'Inbox', '一个会话', '.swob-session.json'))).toBe(true)
+    expect(fs.existsSync(path.join(tmpRoot, '一个会话', '.swob-session.json'))).toBe(true)
 
     const undone = undoLastOrganization(tmpRoot)
     expect(undone.moves.map((move) => move.sessionId)).toEqual(['pure-x'])
     expect(fs.existsSync(path.join(folder, '一个会话', '.swob-session.json'))).toBe(true)
-    expect(fs.existsSync(path.join(tmpRoot, 'Inbox'))).toBe(false)
+    expect(fs.existsSync(path.join(tmpRoot, '一个会话'))).toBe(false)
   })
 
   it('文件夹拖拽只物化会话包，并可用同一份日志完整撤销', () => {

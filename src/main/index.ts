@@ -55,6 +55,11 @@ import {
   getConfiguredLibraryPath,
   changeConfiguredLibraryPath,
   isLibraryInitialized,
+  isOnboardingNeeded,
+  getExcludedSources,
+  setExcludedSources,
+  completeOnboarding,
+  getDefaultLibraryRoot,
   type LibrarySession,
   type LibraryTree
 } from './library-manager'
@@ -933,9 +938,16 @@ ipcMain.handle('image:contextMenu', (_event, options: { path: string }) => {
   menu.popup()
 })
 
+function filterExcludedSources(sessions: SessionSummary[]): SessionSummary[] {
+  const excluded = getExcludedSources()
+  if (excluded.length === 0) return sessions
+  const excludedSet = new Set(excluded)
+  return sessions.filter((s) => !excludedSet.has(s.source || 'claude-code'))
+}
+
 ipcMain.handle('sessions:loadAll', async () => {
   try {
-  const sessions = await loadAllSessions()
+  const sessions = filterExcludedSources(await loadAllSessions())
   cachedSessions = sessions
   scheduleSearchIndexWarmup()
   knownSessionIds.clear()
@@ -962,8 +974,9 @@ ipcMain.handle('sessions:loadAll', async () => {
 
   if (latestLibraryTree) void hydrateLibrarySessions(latestLibraryTree)
 
-  // Sync library in background (non-blocking)
-  if (!libraryInitialized) {
+  // Sync library in background (non-blocking). During first-run onboarding the
+  // library init waits until the user has chosen a vault location.
+  if (!libraryInitialized && !isOnboardingNeeded()) {
     initLibraryFromSessions(sessions).catch(() => { /* ignore */ })
   }
 
@@ -1790,7 +1803,7 @@ ipcMain.handle('library:selectDirectory', async () => {
   return result.filePaths[0]
 })
 
-ipcMain.handle('library:changePath', async (_event, newPath: string) => {
+async function activateLibraryAt(newPath: string): Promise<string> {
   changeConfiguredLibraryPath(newPath)
   initLibrary(newPath)
   latestLibraryTree = null
@@ -1809,9 +1822,111 @@ ipcMain.handle('library:changePath', async (_event, newPath: string) => {
     tree = await worker.scan(getLibraryRoot())
   }
   libraryInitialized = true
+  // An empty vault writes no config on scan; persist the marker so the root
+  // counts as initialized on the next launch.
+  if (!isLibraryInitialized(getLibraryRoot())) {
+    saveLibraryConfig(loadLibraryConfig())
+  }
   adoptLibraryTree(tree)
   await hydrateLibrarySessions(tree)
   return getLibraryRoot()
+}
+
+ipcMain.handle('library:changePath', async (_event, newPath: string) => {
+  return activateLibraryAt(newPath)
+})
+
+// --- Vault migration ---
+
+let vaultMigrationRunning = false
+
+ipcMain.handle('vault:migrate', async (_event, targetPath: string) => {
+  if (vaultMigrationRunning) return { ok: false, error: '已有迁移在进行中' }
+  if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '目标位置无效' }
+  vaultMigrationRunning = true
+  try {
+    const sourceRoot = getLibraryRoot()
+    const { migrateVault } = await import('./vault-migrator')
+    const result = migrateVault(sourceRoot, targetPath, (progress) => {
+      mainWindow?.webContents.send('vault:migrateProgress', progress)
+    })
+    if (!result.ok) return result
+    // Copy verified — point the app at the new home and reindex.
+    await activateLibraryAt(targetPath)
+    return { ...result, newRoot: getLibraryRoot() }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    vaultMigrationRunning = false
+  }
+})
+
+ipcMain.handle('vault:selectMigrationTarget', async () => {
+  if (!mainWindow) return null
+  const { dialog } = require('electron')
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择迁移目标位置（须为空文件夹）',
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: '迁移到这里'
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
+// --- First-run onboarding ---
+
+ipcMain.handle('onboarding:getState', () => {
+  return {
+    needed: isOnboardingNeeded(),
+    defaultPath: getDefaultLibraryRoot(),
+    excludedSources: getExcludedSources()
+  }
+})
+
+ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, excludedSources: string[]) => {
+  const targetPath = typeof libraryPath === 'string' && libraryPath.trim() ? libraryPath : getDefaultLibraryRoot()
+  const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
+  completeOnboarding(targetPath, excluded)
+  cachedSessions = filterExcludedSources(cachedSessions)
+  const root = await activateLibraryAt(targetPath)
+  mainWindow?.webContents.send('sessions:updated', cachedSessions)
+  return root
+})
+
+ipcMain.handle('onboarding:setExcludedSources', (_event, excludedSources: string[]) => {
+  const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
+  setExcludedSources(excluded)
+  cachedSessions = filterExcludedSources(cachedSessions)
+  return excluded
+})
+
+/**
+ * Claude Code deletes session history after cleanupPeriodDays (default 30).
+ * With explicit user consent we extend it to 10 years via ~/.claude/settings.json.
+ */
+ipcMain.handle('onboarding:extendClaudeRetention', () => {
+  const settingsPath = join(require('os').homedir(), '.claude', 'settings.json')
+  let settings: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      settings = parsed as Record<string, unknown>
+    } else {
+      return { ok: false, error: 'settings.json 格式异常，未修改' }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { ok: false, error: '无法读取 ~/.claude/settings.json，未修改' }
+    }
+  }
+  settings.cleanupPeriodDays = 3650
+  try {
+    fs.mkdirSync(join(require('os').homedir(), '.claude'), { recursive: true })
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8')
+    return { ok: true }
+  } catch {
+    return { ok: false, error: '写入 ~/.claude/settings.json 失败' }
+  }
 })
 
 // --- File Operations ---

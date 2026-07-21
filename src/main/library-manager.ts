@@ -151,6 +151,10 @@ export interface AppConfig {
    * It lives in ~/.claude-session-manager/app-config.json, never in Claude data dirs.
    */
   deviceId?: string
+  /** First-run onboarding finished (or inherited from a pre-onboarding install). */
+  onboardingCompleted?: boolean
+  /** Harness sources the user chose to exclude entirely (no display, no backup). */
+  excludedSources?: string[]
 }
 
 function isOriginalSessionSourcePath(filePath: string): boolean {
@@ -238,7 +242,11 @@ function readAppConfigStrict(): AppConfigReadResult {
     const config = parsed as Record<string, unknown>
     if (
       (config.libraryPath !== undefined && typeof config.libraryPath !== 'string') ||
-      (config.deviceId !== undefined && (typeof config.deviceId !== 'string' || config.deviceId.length === 0))
+      (config.deviceId !== undefined && (typeof config.deviceId !== 'string' || config.deviceId.length === 0)) ||
+      (config.onboardingCompleted !== undefined && typeof config.onboardingCompleted !== 'boolean') ||
+      (config.excludedSources !== undefined && (
+        !Array.isArray(config.excludedSources) || !config.excludedSources.every((item) => typeof item === 'string')
+      ))
     ) {
       return invalidAppConfig(content)
     }
@@ -373,6 +381,50 @@ export function getConfiguredLibraryPath(): string {
   return appConfig.libraryPath || DEFAULT_ROOT
 }
 
+/**
+ * First-run onboarding is needed only for genuinely fresh installs. Pre-onboarding
+ * installs (an initialized library already exists at the configured/default root)
+ * are grandfathered in and marked completed on first check.
+ */
+export function isOnboardingNeeded(): boolean {
+  const appConfig = loadAppConfig()
+  if (appConfig.onboardingCompleted) return false
+  if (appConfig.libraryPath || isLibraryInitialized(getConfiguredLibraryPath())) {
+    try {
+      updateAppConfigAtomically((existing) => ({ ...existing, onboardingCompleted: true }))
+    } catch { /* best effort; recheck next launch */ }
+    return false
+  }
+  return true
+}
+
+export function getExcludedSources(): string[] {
+  return loadAppConfig().excludedSources || []
+}
+
+export function completeOnboarding(libraryPath: string, excludedSources: string[]): void {
+  updateAppConfigAtomically(
+    (existing) => ({
+      ...existing,
+      libraryPath,
+      excludedSources: excludedSources.length > 0 ? excludedSources : undefined,
+      onboardingCompleted: true
+    }),
+    true
+  )
+}
+
+export function setExcludedSources(excludedSources: string[]): void {
+  updateAppConfigAtomically((existing) => ({
+    ...existing,
+    excludedSources: excludedSources.length > 0 ? excludedSources : undefined
+  }))
+}
+
+export function getDefaultLibraryRoot(): string {
+  return DEFAULT_ROOT
+}
+
 export function isLibraryInitialized(rootPath: string): boolean {
   const configFile = path.join(rootPath, LIBRARY_CONFIG_FILE)
   return fs.existsSync(configFile)
@@ -469,6 +521,9 @@ export function invalidateLibraryConfigCache(): void {
 }
 
 // --- Session Dir Naming ---
+
+/** Emoji marker distinguishing session packages from ordinary folders in Obsidian/Finder. */
+export const SESSION_DIR_PREFIX = '💬 '
 
 function sanitizeDirName(title: string): string {
   return title
@@ -1473,11 +1528,17 @@ export async function ensureSessionInLibrary(
     return existing
   }
 
-  // Create new session dir. New sessions always land in Inbox. Project/date/topic
-  // organization is explicit: a lens never writes, and an organizer always previews.
+  // Create new session dir. Default: loose in the vault root, marked with an emoji
+  // prefix so session packages are distinguishable from ordinary folders in
+  // Obsidian/Finder. Auto-filing into container folders is opt-in via
+  // preferences.ungrouping — the user consciously chooses where sessions land.
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId.slice(0, 12)
-  const baseName = sanitizeDirName(title)
-  const parentDir = path.join(_root, 'Inbox')
+  const baseName = `${SESSION_DIR_PREFIX}${sanitizeDirName(title)}`
+  const ungrouping = loadLibraryConfig().preferences?.ungrouping
+  const containerName = ungrouping
+    ? (session.turnCount <= 1 ? ungrouping.singleTurn : ungrouping.multiTurn)
+    : null
+  const parentDir = containerName ? path.join(_root, containerName) : _root
   fs.mkdirSync(parentDir, { recursive: true })
   const dirName = findUniqueDirName(parentDir, baseName)
   const dirPath = path.join(parentDir, dirName)
@@ -2065,7 +2126,7 @@ export function deleteLibraryFolder(folderPath: string): void {
   const result = executeOrganization(_root, 'manual', allSessions.map((session) => ({
     sessionId: session.sessionId,
     sourceDir: session.dirPath,
-    targetRelativeFolder: 'Inbox'
+    targetRelativeFolder: '.'
   })))
   for (const move of result.moves) sessionIndex.set(move.sessionId, move.to)
 
@@ -2116,11 +2177,11 @@ export function removeSessionFromFolder(sessionId: string, folderPath: string): 
           return
         }
       } else if (fullPath === realDir) {
-        // Removing a physical assignment returns the session to Inbox.
+        // Removing a physical assignment returns the session to the vault root.
         const result = executeOrganization(_root, 'manual', [{
           sessionId,
           sourceDir: fullPath,
-          targetRelativeFolder: 'Inbox'
+          targetRelativeFolder: '.'
         }])
         const moved = result.moves[0]
         if (moved) sessionIndex.set(sessionId, moved.to)

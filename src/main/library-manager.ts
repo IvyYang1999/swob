@@ -21,6 +21,8 @@ import {
   ensureClaudeResumeTarget,
   type ClaudeResumeRecoveryFailureReason
 } from './resume-recovery-service'
+import { recoveryFailureMessage } from './recovery-failure-message'
+import { recordRecoveryAttempt } from './recovery-metrics'
 import {
   extractRemoteUser,
   isRemoteProjectPathForUser,
@@ -946,21 +948,6 @@ export interface SessionResumePreparationOptions {
   }
 }
 
-function recoveryFailureMessage(reason: ClaudeResumeRecoveryFailureReason): string {
-  if (reason === 'unverified-backup') return '备份缺少 SHA-256/大小证据，需要明确确认后才能复活'
-  if (reason === 'invalid-backup') return '备份未通过严格 JSONL 校验，未写入 Claude 源目录'
-  if (reason === 'target-conflict') return '目标 Claude 实例已有同名或同 ID 会话，已停止以避免覆盖'
-  if (reason === 'recovery-locked') return '另一 Swob 进程正在复活该会话，请稍后重试'
-  if (reason === 'remote-source-requires-explicit-target') return '这是其他安装的会话，需要先选择要导入的 Claude 实例'
-  if (reason === 'target-instance-untrusted' || reason === 'target-instance-unavailable') {
-    return '目标 Claude 实例不可用或未通过路径安全检查'
-  }
-  if (reason === 'materialization-failed') return 'iCloud 备份尚未完整下载或完整性证据不匹配'
-  if (reason === 'missing-backup') return '找不到可用于复活的备份'
-  if (reason === 'post-publish-verification-failed') return '目标已发布但最终校验失败，已保留现场且未自动删除'
-  return `无法复活会话：${reason}`
-}
-
 /** The sole Library-to-Claude recovery adapter used by every local resume entry point. */
 export async function ensureSessionResumeTarget(
   sessionId: string,
@@ -1018,17 +1005,35 @@ export async function ensureSessionResumeTarget(
     localDeviceId: getOrCreateLocalDeviceId(),
     localUsername: os.userInfo().username
   }
-  const recovery = await ensureClaudeResumeTarget({
-    sessionId,
-    libraryMeta: meta,
-    backupPath: path.join(dirPath, BACKUP_FILE),
-    homeDir: runtimeIdentity.homeDir,
-    localDeviceId: runtimeIdentity.localDeviceId,
-    localUsername: runtimeIdentity.localUsername,
-    physicalSessionId: requestedPhysicalId,
-    preferredTargetInstanceId: options.preferredTargetInstanceId,
-    allowUnverifiedBackup: options.allowUnverifiedBackup
-  })
+  const recoveryStartedAt = Date.now()
+  let recovery: Awaited<ReturnType<typeof ensureClaudeResumeTarget>>
+  try {
+    recovery = await ensureClaudeResumeTarget({
+      sessionId,
+      libraryMeta: meta,
+      backupPath: path.join(dirPath, BACKUP_FILE),
+      homeDir: runtimeIdentity.homeDir,
+      localDeviceId: runtimeIdentity.localDeviceId,
+      localUsername: runtimeIdentity.localUsername,
+      physicalSessionId: requestedPhysicalId,
+      preferredTargetInstanceId: options.preferredTargetInstanceId,
+      allowUnverifiedBackup: options.allowUnverifiedBackup
+    })
+  } catch {
+    recovery = { ok: false, reason: 'io-error' }
+  }
+  try {
+    recordRecoveryAttempt(getLibraryRoot(), {
+      sessionId,
+      physicalSessionId: requestedPhysicalId,
+      attemptedAt: new Date(recoveryStartedAt).toISOString(),
+      durationMs: Date.now() - recoveryStartedAt,
+      result: recovery
+    })
+  } catch {
+    // Metrics must never turn a successful recovery into a user-visible failure.
+    console.warn('[recovery-metrics] failed to append recovery attempt')
+  }
   if (recovery.ok) return { ok: true, state: recovery.state, sourcePath: recovery.sourcePath }
   return {
     ok: false,

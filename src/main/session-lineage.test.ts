@@ -455,4 +455,64 @@ describe('session-lineage', () => {
       vi.resetModules()
     }
   })
+
+  it('【血统】手工裁决经过连续两次重建不重复、不漂移', async () => {
+    const home = makeTmpRoot()
+    const project = path.join(home, '.claude', 'projects', '-Users-test-lineage-resolution')
+    const library = path.join(home, 'library')
+    const parentA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const parentB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const childId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    writeJsonl(project, parentA, [message(parentA, 'point-a', null, '2026-07-09T10:00:00.000Z')])
+    writeJsonl(project, parentB, [message(parentB, 'point-b', null, '2026-07-09T10:00:00.000Z')])
+    writeJsonl(project, childId, [
+      message(childId, 'child-1', null, '2026-07-09T10:01:00.000Z', {
+        forkedFrom: { sessionId: parentA, messageUuid: 'point-a' }
+      }),
+      message(childId, 'child-2', 'child-1', '2026-07-09T10:02:00.000Z', {
+        forkedFrom: { sessionId: parentB, messageUuid: 'point-b' }
+      })
+    ])
+    fs.mkdirSync(library, { recursive: true })
+
+    const previousHome = process.env.HOME
+    process.env.HOME = home
+    vi.resetModules()
+    try {
+      const lineage = await import('./session-lineage')
+      const built = await lineage.rebuildSessionLineageRegistry(library, {
+        generatedAt: '2026-07-09T11:00:00.000Z'
+      })
+      const decided = lineage.applyLineageResolution(built, {
+        ambiguitySessionId: childId,
+        parentSessionId: parentA,
+        childSessionId: childId,
+        type: 'continuation',
+        decidedAt: '2026-07-09T11:01:00.000Z'
+      })
+      lineage.writeSessionLineageRegistry(decided, lineage.getSessionLineagePath(library))
+
+      const once = await lineage.rebuildSessionLineageRegistry(library, {
+        generatedAt: '2026-07-09T11:00:00.000Z'
+      })
+      lineage.writeSessionLineageRegistry(once, lineage.getSessionLineagePath(library))
+      const twice = await lineage.rebuildSessionLineageRegistry(library, {
+        generatedAt: '2026-07-09T11:00:00.000Z'
+      })
+
+      expect(twice).toEqual(once)
+      expect(twice.relations).toEqual([expect.objectContaining({
+        parent: parentA,
+        child: childId,
+        type: 'continuation',
+        provenance: 'manual'
+      })])
+      expect(twice.resolutions).toHaveLength(1)
+      expect(twice.ambiguous).toEqual([])
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      vi.resetModules()
+    }
+  })
 })

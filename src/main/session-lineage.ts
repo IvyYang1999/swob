@@ -33,6 +33,9 @@ export interface LineageRelation {
   type: 'fork' | 'continuation'
   pointUuid: string
   pointTs: string
+  /** Auto-detected for legacy edges; explicit on new manual decisions. */
+  provenance?: 'detected' | 'manual'
+  resolutionId?: string
 }
 
 export interface BrokenLineageRelation {
@@ -70,6 +73,21 @@ export interface LineageAmbiguity {
   }>
 }
 
+export interface LineageResolutionInput {
+  ambiguitySessionId: string
+  parentSessionId: string
+  childSessionId: string
+  type: 'fork' | 'continuation'
+  decidedAt: string
+  note?: string
+}
+
+export interface LineageResolution extends LineageResolutionInput {
+  resolutionId: string
+  ambiguityReason: string
+  status: 'applied' | 'stale'
+}
+
 export interface SessionLineageRegistry {
   version: 1
   generatedAt: string
@@ -82,6 +100,8 @@ export interface SessionLineageRegistry {
   /** Absent only in legacy registries read from disk; newly written registries always include it. */
   broken?: BrokenLineageRelation[]
   ambiguous: LineageAmbiguity[]
+  /** Optional only while reading a legacy v1 registry; every new build writes it. */
+  resolutions?: LineageResolution[]
 }
 
 interface LineageRow extends RawJsonlMessage {
@@ -136,6 +156,205 @@ export async function rebuildSessionLineageRegistry(
 export function writeSessionLineageRegistry(registry: SessionLineageRegistry, filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, JSON.stringify(registry, null, 2) + '\n', 'utf-8')
+}
+
+function resolutionId(input: LineageResolutionInput): string {
+  return ['manual', input.ambiguitySessionId, input.parentSessionId, input.childSessionId, input.type].join(':')
+}
+
+function recordsFromRegistry(registry: SessionLineageRegistry): LineageRecord[] {
+  return Object.values(registry.sessions).map((entry) => ({
+    sessionId: entry.sessionId,
+    rows: [],
+    uuidRows: [],
+    uuidSet: new Set<string>(),
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    cwds: new Set<string>()
+  }))
+}
+
+function relationWouldCycle(relations: LineageRelation[], parentId: string, childId: string): boolean {
+  const childToParent = new Map(relations.map((relation) => [relation.child, relation.parent]))
+  let current: string | undefined = parentId
+  const seen = new Set<string>()
+  while (current && !seen.has(current)) {
+    if (current === childId) return true
+    seen.add(current)
+    current = childToParent.get(current)
+  }
+  return false
+}
+
+function ambiguityAcceptsResolution(
+  ambiguity: LineageAmbiguity,
+  input: LineageResolutionInput
+): boolean {
+  const candidateIds = new Set(ambiguity.candidates.map((candidate) => candidate.sessionId))
+  const parentCandidateReasons = new Set([
+    'multiple-exact-lineage-parents',
+    'multiple-unrelated-lineage-parents',
+    'multiple-lineage-parents',
+    'lineage-cycle'
+  ])
+  const childCandidateReasons = new Set([
+    'multiple-equally-plausible-lineage-targets',
+    'missing-cwd-cannot-confirm-lineage'
+  ])
+  if (parentCandidateReasons.has(ambiguity.reason)) {
+    return ambiguity.sessionId === input.childSessionId && candidateIds.has(input.parentSessionId)
+  }
+  if (childCandidateReasons.has(ambiguity.reason)) {
+    return ambiguity.sessionId === input.parentSessionId && candidateIds.has(input.childSessionId)
+  }
+  return false
+}
+
+/** Apply a user-confirmed ambiguity decision without mutating the source registry. */
+export function applyLineageResolution(
+  registry: SessionLineageRegistry,
+  input: LineageResolutionInput
+): SessionLineageRegistry {
+  const id = resolutionId(input)
+  const previous = (registry.resolutions || []).find((resolution) => resolution.resolutionId === id)
+  const matchingRelation = registry.relations.find((relation) =>
+    relation.parent === input.parentSessionId &&
+    relation.child === input.childSessionId &&
+    relation.type === input.type)
+  if (previous?.status === 'applied' && matchingRelation) return registry
+
+  if (!registry.sessions[input.parentSessionId] || !registry.sessions[input.childSessionId]) {
+    throw new Error('Lineage resolution candidate is not a session in the registry')
+  }
+  if (input.parentSessionId === input.childSessionId) {
+    throw new Error('Lineage resolution parent and child must differ')
+  }
+
+  const ambiguity = registry.ambiguous.find((item) => item.sessionId === input.ambiguitySessionId)
+  if (!ambiguity && !matchingRelation) {
+    throw new Error('Lineage resolution candidate is no longer present in the ambiguity')
+  }
+  if (ambiguity && !ambiguityAcceptsResolution(ambiguity, input)) {
+    throw new Error('Lineage resolution must select a candidate shown by the ambiguity')
+  }
+
+  const conflictingRelation = registry.relations.find((relation) =>
+    relation.child === input.childSessionId && relation.parent !== input.parentSessionId)
+  if (conflictingRelation) {
+    throw new Error('Lineage resolution conflicts with an existing parent relation')
+  }
+  const remainingRelations = registry.relations.filter((relation) =>
+    !(relation.child === input.childSessionId && relation.parent === input.parentSessionId))
+  if (relationWouldCycle(remainingRelations, input.parentSessionId, input.childSessionId)) {
+    throw new Error('Lineage resolution would create a cycle')
+  }
+
+  const resolution: LineageResolution = {
+    ...input,
+    resolutionId: id,
+    ambiguityReason: ambiguity?.reason || previous?.ambiguityReason || 'already-detected',
+    status: 'applied'
+  }
+  const manualRelation: LineageRelation = {
+    parent: input.parentSessionId,
+    child: input.childSessionId,
+    type: input.type,
+    pointUuid: `manual:${input.ambiguitySessionId}`,
+    pointTs: input.decidedAt,
+    provenance: 'manual',
+    resolutionId: id
+  }
+  const rebuilt = buildRegistry(
+    recordsFromRegistry(registry),
+    [...remainingRelations, manualRelation],
+    (registry.broken || []).filter((item) => item.child !== input.childSessionId),
+    registry.ambiguous.filter((item) => item.sessionId !== input.ambiguitySessionId),
+    { libraryRoot: registry.libraryRoot, generatedAt: registry.generatedAt }
+  )
+  return {
+    ...rebuilt,
+    resolutions: [
+      ...(registry.resolutions || []).filter((item) => item.resolutionId !== id),
+      resolution
+    ].sort((left, right) => left.resolutionId.localeCompare(right.resolutionId))
+  }
+}
+
+function parseResolution(value: unknown): LineageResolution | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const candidate = value as Partial<LineageResolution>
+  if (typeof candidate.ambiguitySessionId !== 'string' ||
+      typeof candidate.parentSessionId !== 'string' ||
+      typeof candidate.childSessionId !== 'string' ||
+      (candidate.type !== 'fork' && candidate.type !== 'continuation') ||
+      typeof candidate.decidedAt !== 'string') return null
+  const input: LineageResolutionInput = {
+    ambiguitySessionId: candidate.ambiguitySessionId,
+    parentSessionId: candidate.parentSessionId,
+    childSessionId: candidate.childSessionId,
+    type: candidate.type,
+    decidedAt: candidate.decidedAt,
+    ...(typeof candidate.note === 'string' ? { note: candidate.note } : {})
+  }
+  return {
+    ...input,
+    resolutionId: resolutionId(input),
+    ambiguityReason: typeof candidate.ambiguityReason === 'string' ? candidate.ambiguityReason : 'legacy',
+    status: candidate.status === 'stale' ? 'stale' : 'applied'
+  }
+}
+
+/** Read, validate, apply, and atomically replace a registry in its own directory. */
+export function writeLineageResolution(
+  registryPath: string,
+  input: LineageResolutionInput
+): SessionLineageRegistry {
+  let sourceDescriptor: number | undefined
+  let sourceText: string
+  try {
+    sourceDescriptor = fs.openSync(
+      registryPath,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
+    )
+    if (!fs.fstatSync(sourceDescriptor).isFile()) {
+      throw new Error('Lineage registry must be a regular file')
+    }
+    sourceText = fs.readFileSync(sourceDescriptor, 'utf-8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error('Lineage registry must be a regular file')
+    }
+    throw error
+  } finally {
+    if (sourceDescriptor !== undefined) fs.closeSync(sourceDescriptor)
+  }
+  const parsed: unknown = JSON.parse(sourceText)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Lineage registry is invalid')
+  }
+  const resolved = applyLineageResolution(parsed as SessionLineageRegistry, input)
+  const temporaryPath = path.join(
+    path.dirname(registryPath),
+    `.${path.basename(registryPath)}.${process.pid}.${Date.now()}.tmp`
+  )
+  let descriptor: number | undefined
+  try {
+    descriptor = fs.openSync(temporaryPath, 'wx', 0o600)
+    fs.writeSync(descriptor, JSON.stringify(resolved, null, 2) + '\n')
+    fs.fsyncSync(descriptor)
+    fs.closeSync(descriptor)
+    descriptor = undefined
+    fs.renameSync(temporaryPath, registryPath)
+    try {
+      const directory = fs.openSync(path.dirname(registryPath), 'r')
+      try { fs.fsyncSync(directory) } finally { fs.closeSync(directory) }
+    } catch { /* directory fsync is unavailable on some filesystems */ }
+  } catch (error) {
+    if (descriptor !== undefined) fs.closeSync(descriptor)
+    try { fs.unlinkSync(temporaryPath) } catch { /* no temporary file to clean */ }
+    throw error
+  }
+  return resolved
 }
 
 export async function buildSessionLineageRegistryFromClaudeFiles(
@@ -301,6 +520,7 @@ function preserveExistingAliases(
   registryPath: string
 ): SessionLineageRegistry {
   let existingAliases: Record<string, string> = {}
+  let existingResolutions: LineageResolution[] = []
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(registryPath, 'utf-8'))
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -310,10 +530,37 @@ function preserveExistingAliases(
           Object.entries(aliases).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
         )
       }
+      const resolutions = (parsed as { resolutions?: unknown }).resolutions
+      if (Array.isArray(resolutions)) {
+        existingResolutions = resolutions
+          .map(parseResolution)
+          .filter((resolution): resolution is LineageResolution => resolution !== null)
+      }
     }
   } catch { /* no prior registry is normal */ }
 
-  const merged = { ...existingAliases, ...registry.aliases }
+  let resolvedRegistry = registry
+  const staleAliasKeys = new Set<string>()
+  for (const resolution of existingResolutions) {
+    try {
+      resolvedRegistry = applyLineageResolution(resolvedRegistry, resolution)
+    } catch {
+      const stale: LineageResolution = { ...resolution, status: 'stale' }
+      if (stale.type === 'continuation') staleAliasKeys.add(stale.parentSessionId)
+      resolvedRegistry = {
+        ...resolvedRegistry,
+        resolutions: [
+          ...(resolvedRegistry.resolutions || []).filter((item) => item.resolutionId !== stale.resolutionId),
+          stale
+        ].sort((left, right) => left.resolutionId.localeCompare(right.resolutionId))
+      }
+    }
+  }
+
+  const safeExistingAliases = Object.fromEntries(
+    Object.entries(existingAliases).filter(([oldId]) => !staleAliasKeys.has(oldId))
+  )
+  const merged = { ...safeExistingAliases, ...resolvedRegistry.aliases }
   const aliases: Record<string, string> = {}
   for (const oldId of Object.keys(merged)) {
     let latestId = merged[oldId]
@@ -326,7 +573,7 @@ function preserveExistingAliases(
   }
 
   return {
-    ...registry,
+    ...resolvedRegistry,
     aliases: sortObject(aliases)
   }
 }
@@ -850,7 +1097,8 @@ function buildRegistry(
       a.child.localeCompare(b.child) || a.parent.localeCompare(b.parent) || a.type.localeCompare(b.type)),
     broken: [...broken].sort((a, b) =>
       a.child.localeCompare(b.child) || a.pointUuid.localeCompare(b.pointUuid) || a.type.localeCompare(b.type)),
-    ambiguous: [...ambiguous].sort((a, b) => a.sessionId.localeCompare(b.sessionId))
+    ambiguous: [...ambiguous].sort((a, b) => a.sessionId.localeCompare(b.sessionId)),
+    resolutions: []
   }
 }
 

@@ -8,7 +8,7 @@ type Updater = Pick<
 
 type ReleaseInfo = {
   version: string
-  releaseNotes?: string | Array<{ note?: string }> | null
+  releaseNotes?: string | Array<{ note?: string | null }> | null
 }
 
 export type AutoUpdaterOptions = {

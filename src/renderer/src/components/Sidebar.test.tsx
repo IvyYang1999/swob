@@ -9,8 +9,8 @@
  * 这个测试会直接 ReferenceError 挂掉。
  */
 /// <reference types="@testing-library/jest-dom" />
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
 import React from 'react'
 
 // --- Mock store and i18n before importing component ---
@@ -74,6 +74,8 @@ vi.mock('../i18n', () => ({
 
 // Since SessionItem is not exported, we test it through the Sidebar's flat view mode.
 import { Sidebar } from './Sidebar'
+
+afterEach(cleanup)
 
 function makeSession(overrides: Record<string, unknown> = {}) {
   return {

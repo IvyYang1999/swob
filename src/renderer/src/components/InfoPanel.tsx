@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useDeferredValue } from 'react'
 import { useStore } from '../store'
 import type { Highlight } from '../store'
 import { useT } from '../i18n'
@@ -510,9 +510,32 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
 export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (id: string) => void }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
-  const { selectedSession, infoPanelOpen, config, sessions, selectSession } = useStore()
+  const {
+    selectedSession: selectedSessionSnapshot,
+    infoPanelOpen,
+    config,
+    sessions,
+    selectSession
+  } = useStore()
+  const selectedSession = useDeferredValue(selectedSessionSnapshot)
+  const [panelReadySessionId, setPanelReadySessionId] = useState<string | null>(null)
+  const [analysisReadySessionId, setAnalysisReadySessionId] = useState<string | null>(null)
 
-  if (!infoPanelOpen || !selectedSession) return null
+  useEffect(() => {
+    const sessionId = selectedSession?.id
+    if (!sessionId) return
+    const timer = window.setTimeout(() => setPanelReadySessionId(sessionId), 100)
+    return () => window.clearTimeout(timer)
+  }, [selectedSession?.id])
+
+  useEffect(() => {
+    const sessionId = selectedSession?.id
+    if (!sessionId) return
+    const timer = window.setTimeout(() => setAnalysisReadySessionId(sessionId), 300)
+    return () => window.clearTimeout(timer)
+  }, [selectedSession?.id])
+
+  if (!infoPanelOpen || !selectedSession || panelReadySessionId !== selectedSession.id) return null
 
   const s = selectedSession
   const toolEntries = Object.entries(s.toolUsage).sort((a, b) => b[1] - a[1])
@@ -576,17 +599,21 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
         {/* Highlights / annotations */}
         <HighlightList highlights={highlights} sessionId={s.sessionId} />
 
-        {/* Session Audit — health score, metrics, anti-patterns */}
-        <SessionAuditPanel filePath={s.filePath} />
+        {analysisReadySessionId === s.id && (
+          <>
+            {/* Session Audit — health score, metrics, anti-patterns */}
+            <SessionAuditPanel filePath={s.filePath} />
 
-        {/* Session family tree (lineage) */}
-        <SessionFamilyTree sessionId={s.sessionId} />
+            {/* Session family tree (lineage) */}
+            <SessionFamilyTree sessionId={s.sessionId} />
 
-        {/* Execution tree — tool calls, agent spawns, token timeline */}
-        <ExecutionTreePanel filePath={s.filePath} />
+            {/* Execution tree — tool calls, agent spawns, token timeline */}
+            <ExecutionTreePanel filePath={s.filePath} />
 
-        {/* Context Inspector — per-turn context pressure, category breakdown */}
-        <ContextInspectorPanel filePath={s.filePath} />
+            {/* Context Inspector — per-turn context pressure, category breakdown */}
+            <ContextInspectorPanel filePath={s.filePath} />
+          </>
+        )}
 
         {/* Branch relationships */}
         {hasBranches && (

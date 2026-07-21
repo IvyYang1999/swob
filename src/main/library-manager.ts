@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { createHash, randomUUID } from 'crypto'
+import { execFile } from 'node:child_process'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
@@ -13,6 +14,8 @@ import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFi
 import { redactSecrets } from './secret-redactor'
 import { shellQuote } from './resume-terminal'
 import { detectTranscriptOrigin, formatTranscriptOriginHeader } from './transcript-origin'
+import { resolvePathWithinRoot } from './path-containment'
+import { runtimeHome } from './runtime-home'
 import {
   ensureClaudeResumeTarget,
   type ClaudeResumeRecoveryFailureReason
@@ -123,12 +126,18 @@ export interface LibraryConfig {
   derivedFiles?: {
     enabledGenerators?: string[]
   }
+  llmSettings?: {
+    provider: 'anthropic' | 'openai' | 'custom'
+    keyHint: string
+    model: string
+    baseUrl: string
+  }
 }
 
 // ============ Constants ============
 
-const DEFAULT_ROOT = path.join(os.homedir(), 'Documents', 'Swob')
-const APP_CONFIG_DIR = path.join(os.homedir(), '.claude-session-manager')
+const DEFAULT_ROOT = process.env.SWOB_LIBRARY_ROOT || path.join(runtimeHome(), 'Documents', 'Swob')
+const APP_CONFIG_DIR = path.join(runtimeHome(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 
 export interface AppConfig {
@@ -445,7 +454,15 @@ export function loadLibraryConfig(): LibraryConfig {
 
 export function saveLibraryConfig(config: LibraryConfig): void {
   const configPath = path.join(_root, LIBRARY_CONFIG_FILE)
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+  if (!fs.existsSync(_root)) fs.mkdirSync(_root, { recursive: true })
+  const tempPath = `${configPath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 })
+    fs.renameSync(tempPath, configPath)
+    fs.chmodSync(configPath, 0o600)
+  } finally {
+    if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true })
+  }
   _cachedLibraryConfig = config
   _cachedLibraryConfigRoot = _root
 }
@@ -693,7 +710,7 @@ function isPathInside(parentDir: string, childPath: string): boolean {
 }
 
 function isRestorableLocalClaudeSource(sourcePath: string): boolean {
-  const home = os.homedir()
+  const home = runtimeHome()
   const localClaudeProjects = path.join(home, '.claude', 'projects')
   if (isPathInside(localClaudeProjects, sourcePath)) return true
 
@@ -906,7 +923,7 @@ export async function ensureSessionResumeTarget(
   }
 
   const runtimeIdentity = options.runtimeIdentity || {
-    homeDir: os.homedir(),
+    homeDir: runtimeHome(),
     localDeviceId: getOrCreateLocalDeviceId(),
     localUsername: os.userInfo().username
   }
@@ -1926,14 +1943,17 @@ export async function rebuildAllTranscripts(options: { dryRun?: boolean; missing
 // --- Folder Operations ---
 
 export function createLibraryFolder(name: string, parentPath?: string): string {
-  const parent = parentPath || _root
+  const parent = parentPath
+    ? resolvePathWithinRoot(_root, parentPath, { mustExist: true })
+    : path.resolve(_root)
   const dirName = findUniqueDirName(parent, sanitizeDirName(name))
-  const dirPath = path.join(parent, dirName)
+  const dirPath = resolvePathWithinRoot(_root, path.join(parent, dirName))
   fs.mkdirSync(dirPath, { recursive: true })
   return dirPath
 }
 
 export function renameLibraryFolder(folderPath: string, newName: string): string {
+  folderPath = resolvePathWithinRoot(_root, folderPath, { allowRoot: false, mustExist: true })
   const parent = path.dirname(folderPath)
   const currentName = path.basename(folderPath)
   const sanitized = sanitizeDirName(newName)
@@ -1942,7 +1962,7 @@ export function renameLibraryFolder(folderPath: string, newName: string): string
   if (sanitized === currentName) return folderPath
 
   const newDirName = findUniqueDirName(parent, sanitized)
-  const newPath = path.join(parent, newDirName)
+  const newPath = resolvePathWithinRoot(_root, path.join(parent, newDirName), { allowRoot: false })
 
   // Update folderOrder before rename
   updateFolderOrderPaths(path.relative(_root, folderPath), path.relative(_root, newPath))
@@ -1952,11 +1972,13 @@ export function renameLibraryFolder(folderPath: string, newName: string): string
 }
 
 export function moveLibraryFolderToParent(srcPath: string, destParentPath: string): string {
+  srcPath = resolvePathWithinRoot(_root, srcPath, { allowRoot: false, mustExist: true })
+  destParentPath = resolvePathWithinRoot(_root, destParentPath, { mustExist: true })
   if (path.dirname(srcPath) === destParentPath) return srcPath
 
   const baseName = path.basename(srcPath)
   const newName = findUniqueDirName(destParentPath, baseName)
-  const newPath = path.join(destParentPath, newName)
+  const newPath = resolvePathWithinRoot(_root, path.join(destParentPath, newName), { allowRoot: false })
 
   // Update folderOrder before move
   updateFolderOrderPaths(path.relative(_root, srcPath), path.relative(_root, newPath))
@@ -1966,6 +1988,7 @@ export function moveLibraryFolderToParent(srcPath: string, destParentPath: strin
 }
 
 export function deleteLibraryFolder(folderPath: string): void {
+  folderPath = resolvePathWithinRoot(_root, folderPath, { allowRoot: false, mustExist: true })
   // Only delete if it's a folder (no .swob-session.json)
   if (isSessionDir(folderPath)) return
 
@@ -2005,8 +2028,10 @@ export function deleteLibraryFolder(folderPath: string): void {
 }
 
 export function moveSessionToFolder(sessionId: string, folderPath: string): void {
-  const currentDir = sessionIndex.get(sessionId)
-  if (!currentDir || !fs.existsSync(currentDir)) return
+  folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
+  const indexedDir = sessionIndex.get(sessionId)
+  if (!indexedDir || !fs.existsSync(indexedDir)) return
+  const currentDir = resolvePathWithinRoot(_root, indexedDir, { allowRoot: false, mustExist: true })
 
   const baseName = path.basename(currentDir)
   const newName = findUniqueDirName(folderPath, baseName)
@@ -2020,8 +2045,10 @@ export function moveSessionToFolder(sessionId: string, folderPath: string): void
 }
 
 export function addSessionToFolder(sessionId: string, folderPath: string): void {
-  const currentDir = sessionIndex.get(sessionId)
-  if (!currentDir || !fs.existsSync(currentDir)) return
+  folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
+  const indexedDir = sessionIndex.get(sessionId)
+  if (!indexedDir || !fs.existsSync(indexedDir)) return
+  const currentDir = resolvePathWithinRoot(_root, indexedDir, { allowRoot: false, mustExist: true })
 
   // Check if already in this folder (directly or via symlink)
   const baseName = path.basename(currentDir)
@@ -2033,8 +2060,10 @@ export function addSessionToFolder(sessionId: string, folderPath: string): void 
 }
 
 export function removeSessionFromFolder(sessionId: string, folderPath: string): void {
-  const realDir = sessionIndex.get(sessionId)
-  if (!realDir) return
+  folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
+  const indexedDir = sessionIndex.get(sessionId)
+  if (!indexedDir) return
+  const realDir = resolvePathWithinRoot(_root, indexedDir, { allowRoot: false, mustExist: true })
 
   // Find and remove symlinks or the real dir in this folder
   const entries = fs.readdirSync(folderPath, { withFileTypes: true })
@@ -2353,6 +2382,8 @@ function updateFolderOrderPaths(oldRelPath: string, newRelPath: string): void {
 
 // Update folder display order: move folderId before/after targetId
 export function reorderFolder(folderId: string, targetId: string, position: 'before' | 'after'): void {
+  resolveFolderPath(folderId)
+  resolveFolderPath(targetId)
   const config = loadLibraryConfig()
   let order = config.folderOrder || []
 
@@ -2393,12 +2424,16 @@ export function reorderFolder(folderId: string, targetId: string, position: 'bef
 
 // Resolve a folder ID (relative path) to absolute path
 export function resolveFolderPath(folderId: string): string {
-  return path.join(_root, folderId)
+  return resolvePathWithinRoot(_root, folderId, {
+    allowRoot: false,
+    allowAbsolute: false
+  })
 }
 
 // --- Branch folder management (stored in config, not file system) ---
 
 export function addBranchToFolder(branchId: string, folderId: string): void {
+  resolveFolderPath(folderId)
   const config = loadLibraryConfig()
   const map = config.branchFolders || {}
   const folders = map[branchId] || []
@@ -2409,6 +2444,7 @@ export function addBranchToFolder(branchId: string, folderId: string): void {
 }
 
 export function removeBranchFromFolder(branchId: string, folderId: string): void {
+  resolveFolderPath(folderId)
   const config = loadLibraryConfig()
   const map = config.branchFolders || {}
   const folders = map[branchId] || []
@@ -2575,16 +2611,15 @@ export function isSessionCloudOnly(sessionId: string): boolean {
  * Uses `brctl download` command (macOS iCloud daemon).
  * Returns true if download was triggered successfully.
  */
-export function triggerICloudDownload(sessionId: string): boolean {
+export function triggerICloudDownload(sessionId: string): Promise<boolean> {
   const dirPath = sessionIndex.get(sessionId)
-  if (!dirPath || !fs.existsSync(dirPath)) return false
-  try {
-    const { execSync } = require('child_process')
-    execSync(`brctl download "${dirPath}"`, { timeout: 5000 })
-    return true
-  } catch {
-    return false
-  }
+  if (!dirPath || !fs.existsSync(dirPath)) return Promise.resolve(false)
+  const safeDirPath = resolvePathWithinRoot(_root, dirPath, { allowRoot: false, mustExist: true })
+  return new Promise((resolve) => {
+    execFile('/usr/bin/brctl', ['download', safeDirPath], { timeout: 5000 }, (error) => {
+      resolve(!error)
+    })
+  })
 }
 
 // ============ SSH Config ============

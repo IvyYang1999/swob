@@ -2,11 +2,23 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 
+async function parseJsonIpcResult<T>(result: Promise<string | T>): Promise<T> {
+  const value = await result
+  return typeof value === 'string' ? JSON.parse(value) as T : value
+}
+
 const api = {
   // Sessions
   loadAllSessions: () => ipcRenderer.invoke('sessions:loadAll'),
   loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) =>
-    ipcRenderer.invoke('sessions:loadDetail', filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid),
+    parseJsonIpcResult(ipcRenderer.invoke(
+      'sessions:loadDetail',
+      filePath,
+      allFilePaths,
+      branchParentFilePaths,
+      branchPointUuid,
+      branchLeafUuid
+    )),
   searchSessions: (query: string) =>
     ipcRenderer.invoke('sessions:search', query),
 
@@ -111,7 +123,7 @@ const api = {
   generateInsights: (options?: { useLlm?: boolean }) => ipcRenderer.invoke('insights:generate', options),
   listModels: () => ipcRenderer.invoke('insights:listModels'),
   getLlmSettings: () => ipcRenderer.invoke('insights:getLlmSettings'),
-  setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) =>
+  setLlmSettings: (settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) =>
     ipcRenderer.invoke('insights:setLlmSettings', settings),
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => {
     const listener = (_e: unknown, data: { stage: string; current: number; total: number }): void => callback(data)

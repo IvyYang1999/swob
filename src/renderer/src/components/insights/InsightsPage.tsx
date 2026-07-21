@@ -28,21 +28,13 @@ export function InsightsPage() {
 
   const projectViewMode = config?.preferences?.projectViewMode || 'folders'
 
+  const [generating, setGenerating] = useState(false)
+  const [reportResult, setReportResult] = useState<string | null>(null)
+
   const projectData = useMemo(() => {
     if (!data) return []
     return projectViewMode === 'paths' ? data.byProject : data.byFolder
   }, [data, projectViewMode])
-
-  if (loading || !data) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-muted text-sm">
-        Loading...
-      </div>
-    )
-  }
-
-  const [generating, setGenerating] = useState(false)
-  const [reportResult, setReportResult] = useState<string | null>(null)
 
   const handleGenerateReport = useCallback(async () => {
     setGenerating(true)
@@ -60,6 +52,14 @@ export function InsightsPage() {
       setGenerating(false)
     }
   }, [])
+
+  if (loading || !data) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-muted text-sm">
+        Loading...
+      </div>
+    )
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4">

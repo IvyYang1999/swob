@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Swob">
+  <rect width="64" height="64" rx="14" fill="#171719"/>
+  <path d="M17 18v12c0 8 6 14 14 14h16M31 18v26M47 18v26" fill="none" stroke="#f3efe6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="17" cy="18" r="5" fill="#f0a34a"/>
+  <circle cx="31" cy="18" r="5" fill="#8d7cf5"/>
+  <circle cx="47" cy="18" r="5" fill="#65b98f"/>
+  <circle cx="47" cy="44" r="5" fill="#f3efe6"/>
+</svg>

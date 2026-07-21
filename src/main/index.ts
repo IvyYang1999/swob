@@ -1015,7 +1015,8 @@ ipcMain.handle('lineage:getRegistry', async () => {
 
 ipcMain.handle('claude:getCleanupDays', async () => {
   try {
-    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
+    const home = (await import('os')).homedir()
+    const settingsPath = path.join(home, '.claude', 'settings.json')
     if (fs.existsSync(settingsPath)) {
       const data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
       return data.cleanupPeriodDays ?? 30
@@ -1025,8 +1026,9 @@ ipcMain.handle('claude:getCleanupDays', async () => {
 })
 
 ipcMain.handle('claude:setCleanupDays', async (_event, days: number) => {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
   try {
+    const home = (await import('os')).homedir()
+    const settingsPath = path.join(home, '.claude', 'settings.json')
     let data: Record<string, unknown> = {}
     if (fs.existsSync(settingsPath)) {
       data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))

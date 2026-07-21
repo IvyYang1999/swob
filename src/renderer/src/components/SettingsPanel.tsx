@@ -376,10 +376,14 @@ function RetentionSection() {
     window.api.getCleanupDays().then((d) => { setDays(d); setLoaded(true) }).catch(() => setLoaded(true))
   }, [])
 
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handleChange = useCallback((value: number) => {
     setDays(value)
-    setSaving(true)
-    window.api.setCleanupDays(value).finally(() => setSaving(false))
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      setSaving(true)
+      window.api.setCleanupDays(value).finally(() => setSaving(false))
+    }, 500)
   }, [])
 
   const label = days >= 3650

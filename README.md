@@ -23,11 +23,11 @@ Swob reads local histories from **11 AI coding harnesses**, reconstructs session
 </div>
 
 > [!IMPORTANT]
-> **Product channels are intentionally separated.** The screenshots and debugger features below are real captures from current `main` using sanitized demo data. The public **v1.2.0 stable DMGs predate Session Galaxy, 11-harness ingestion, Session Debugger, AI Insights, and SQLite FTS5**. Build `main` from source to try them now; they will ship in the next release.
+> **Product channels are intentionally separated.** The screenshots and debugger features below are real captures from current `main`; identifying text was localized and privacy-sanitized for publication. The public **v1.2.0 stable DMGs predate Session Galaxy, 11-harness ingestion, Session Debugger, AI Insights, and SQLite FTS5**. Build `main` from source to try them now; they will ship in the next release.
 
 ![Swob Session Galaxy — current main with sanitized demo data](site/assets/graph-view.png)
 
-<p align="center"><sub>Current <code>main</code> · real Swob UI · sanitized demo data · no generated product mockups</sub></p>
+<p align="center"><sub>Current <code>main</code> · real Swob capture · identifying text localized and privacy-sanitized</sub></p>
 
 ## Why Swob exists
 

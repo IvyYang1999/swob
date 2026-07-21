@@ -2,18 +2,31 @@ name: Windows Native Alpha
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/t107-windows-alpha
+    paths:
+      - '.github/workflows/windows-alpha.yml'
+      - 'electron-builder.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/install-windows-alpha-smoke.ps1'
+      - 'src/**'
+      - 'e2e/**'
   pull_request:
     paths:
       - '.github/workflows/windows-alpha.yml'
       - 'electron-builder.yml'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/install-windows-alpha-smoke.ps1'
       - 'src/**'
+      - 'e2e/**'
 
 jobs:
   test-and-package:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -25,9 +38,23 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build:win
+      - name: Install and inspect the unsigned NSIS package
+        shell: pwsh
+        run: ./scripts/install-windows-alpha-smoke.ps1
+      - name: Exercise the installed x64 app on native Windows
+        run: npm run test:e2e:windows-native
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: swob-windows-native-alpha-x64
           path: dist/*-windows-x64.exe
-          if-no-files-found: error
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload native Windows screenshots and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swob-windows-native-alpha-evidence
+          path: test-results/**
+          if-no-files-found: warn
           retention-days: 14

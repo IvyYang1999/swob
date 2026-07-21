@@ -12,9 +12,11 @@ npm test
 npm run build:win
 ```
 
-成功后产物位于 `dist/swob-<version>-windows-x64.exe`。这是未签名的 NSIS 内部测试包，SmartScreen 警告属于预期现象。GitHub Actions 的 `Windows Native Alpha` 工作流执行同样的测试和打包，并保留安装包 14 天。
+成功后产物位于 `dist/swob-<version>-windows-x64.exe`。这是未签名的 NSIS 内部测试包，SmartScreen 警告属于预期现象。GitHub Actions 的 `Windows Native Alpha` 工作流在真实 x64 Windows runner 上执行全量单测、NSIS 静默安装、PE x64 与原生模块核验，并启动安装后的应用完成 Claude/Codex 发现和界面截图；安装包及测试证据保留 14 天。
 
 `build:win` 会关闭 electron-builder 的二次 node-gyp rebuild：当前 `better-sqlite3` 依赖已随 npm 包提供 `win32-x64.node` 预编译件，重编译反而会让 macOS 上的 Windows 交叉打包失败。CI 仍先执行 `npm ci` 和全量测试，打包后也会要求 `.exe` 实际存在。
+
+CI 是无人值守的 Windows 系统集成门禁，不等于完整真机验收。它不能证明 SmartScreen 交互、真实 Claude/Codex 客户端、`codex://` 注册或普通用户桌面体验；这些项目仍保留在下方人工清单中。
 
 ## Alpha 边界
 

@@ -105,6 +105,7 @@ const api = {
   getExecutionTree: (filePath: string) => ipcRenderer.invoke('session:getExecutionTree', filePath),
 
   // Insights Report
+  generateInsightsJson: (options?: { startDate?: string; endDate?: string }) => ipcRenderer.invoke('insights:generateJson', options),
   generateInsights: (options?: { useLlm?: boolean }) => ipcRenderer.invoke('insights:generate', options),
   getLlmSettings: () => ipcRenderer.invoke('insights:getLlmSettings'),
   setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) =>

@@ -1068,6 +1068,29 @@ ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
   }
 })
 
+// Return raw JSON report for in-app rendering (no HTML file)
+ipcMain.handle('insights:generateJson', async (event, options?: { startDate?: string; endDate?: string }) => {
+  const sendProgress = (stage: string, current: number, total: number): void => {
+    try { event.sender.send('insights:progress', { stage, current, total }) } catch { /* ignore */ }
+  }
+  try {
+    const { generateInsightsReport } = await import('./session-insights')
+    let sessions = cachedSessions
+    if (options?.startDate) {
+      const start = new Date(options.startDate).getTime()
+      const end = options?.endDate ? new Date(options.endDate).getTime() : Date.now()
+      sessions = sessions.filter(s => {
+        const t = new Date(s.createdAt).getTime()
+        return t >= start && t <= end
+      })
+    }
+    const report = await generateInsightsReport(sessions, 500, sendProgress)
+    return { ok: true, report }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+})
+
 ipcMain.handle('insights:generate', async (event, options?: { useLlm?: boolean }) => {
   const sendProgress = (stage: string, current: number, total: number): void => {
     try { event.sender.send('insights:progress', { stage, current, total }) } catch { /* ignore */ }

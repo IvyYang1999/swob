@@ -77,18 +77,24 @@ export function AuditReportTab() {
   const loadReport = useCallback(async (r: TimeRange) => {
     setLoading(true)
     setProgress(null)
+    setReport(null)
+    const now = new Date()
+    let startDate: string | undefined
+    if (r === 'today') startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+    else if (r === 'week') { const d = new Date(now); d.setDate(d.getDate() - d.getDay()); d.setHours(0,0,0,0); startDate = d.toISOString() }
+    else if (r === 'month') startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
+    else if (r === '30d') { const d = new Date(now); d.setDate(d.getDate() - 30); startDate = d.toISOString() }
+    else if (r === '90d') { const d = new Date(now); d.setDate(d.getDate() - 90); startDate = d.toISOString() }
     try {
       const unsub = window.api.onInsightsProgress((p) => setProgress(p))
-      const result = await window.api.generateInsights({ useLlm: false })
+      const result = await window.api.generateInsightsJson({ startDate })
       unsub()
-      if (result.ok && result.path) {
-        // Read the report JSON from the IPC — for now, re-generate and parse
-        // TODO: IPC should return JSON directly instead of writing HTML
+      if (result.ok && result.report) {
+        setReport(result.report as InsightsReport)
       }
-      setLoading(false)
-    } catch {
-      setLoading(false)
-    }
+    } catch { /* ignore */ }
+    setLoading(false)
+    setProgress(null)
   }, [])
 
   useEffect(() => {

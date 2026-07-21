@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swob——为 AI 对话画一张 Git 图谱</title>
+  <meta name="description" content="在 macOS 本地追踪会话血统、找回压缩上下文、检索 11 类 AI 编程工具，并调试 Agent 的真实执行过程。">
+  <meta name="theme-color" content="#efebe2">
+  <meta name="color-scheme" content="light">
+  <link rel="canonical" href="https://ivyyang1999.github.io/swob/zh/">
+  <link rel="alternate" hreflang="en" href="https://ivyyang1999.github.io/swob/">
+  <link rel="alternate" hreflang="zh-CN" href="https://ivyyang1999.github.io/swob/zh/">
+  <link rel="alternate" hreflang="x-default" href="https://ivyyang1999.github.io/swob/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Swob">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:locale:alternate" content="en_US">
+  <meta property="og:title" content="Swob——为 AI 对话画一张 Git 图谱">
+  <meta property="og:description" content="追踪 AI 编程会话如何分叉、压缩和继续；在本地找回上下文、统一检索并调试执行过程。">
+  <meta property="og:url" content="https://ivyyang1999.github.io/swob/zh/">
+  <meta property="og:image" content="https://ivyyang1999.github.io/swob/assets/social-preview.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Swob Session Galaxy 会话星图，展示本地 AI 编程会话的血统关系">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Swob——为 AI 对话画一张 Git 图谱">
+  <meta name="twitter:description" content="在本地找回上下文、追踪会话血统并调试 AI 编程过程。">
+  <meta name="twitter:image" content="https://ivyyang1999.github.io/swob/assets/social-preview.png">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Swob",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS",
+    "softwareVersion": "1.2.0",
+    "inLanguage": "zh-CN",
+    "url": "https://ivyyang1999.github.io/swob/zh/",
+    "description": "本地优先的 AI 编程会话 Git 图谱与调试器。",
+    "downloadUrl": "https://github.com/IvyYang1999/swob/releases/tag/v1.2.0",
+    "codeRepository": "https://github.com/IvyYang1999/swob",
+    "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+    "isAccessibleForFree": true
+  }
+  </script>
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到正文</a>
+
+  <nav class="site-nav" aria-label="主导航">
+    <div class="shell nav-inner">
+      <a class="brand" href="#top" aria-label="Swob 首页">
+        <img src="../assets/favicon.svg" alt="" width="30" height="30">
+        <span>swob</span>
+      </a>
+      <div class="nav-links">
+        <a href="#proof">证据</a>
+        <a href="#debugger">调试器</a>
+        <a href="#privacy">隐私</a>
+        <a href="#faq">常见问题</a>
+        <a class="lang-switch" href="../" hreflang="en" lang="en" aria-label="View English version">EN</a>
+        <a class="nav-download" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">下载 v1.2.0</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+    <header class="hero" id="top">
+      <div class="shell hero-grid">
+        <div class="hero-copy">
+          <div class="eyebrow">开源 · macOS · 本地优先</div>
+          <h1>为 AI 对话画一张 <span class="hero-last">Git 图谱。</span></h1>
+          <p class="hero-lead">追踪会话如何<strong>分叉、压缩和继续</strong>。找回缺失的上下文，统一检索 11 类 AI 编程工具的历史，并看清每次执行背后的工具调用与上下文压力。</p>
+          <div class="cta-row">
+            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">下载稳定版 · Apple Silicon</a>
+            <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">查看当前 main</a>
+            <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel Mac</a>
+          </div>
+          <p class="release-note"><strong>先讲事实，再讲卖点：</strong>公开的 v1.2.0 是支持五类来源的稳定版，且尚未签名。此处展示的会话星图、调试器、11 类来源导入、AI Insights 与 SQLite FTS 已在当前 <code>main</code> 实现，将随下一版本发布。</p>
+        </div>
+
+        <figure class="product-frame">
+          <div class="frame-tab">当前 main · 英文演示界面</div>
+          <picture>
+            <source srcset="../assets/graph-view.webp" type="image/webp">
+            <img src="../assets/graph-view.png" alt="当前 Swob Session Galaxy 会话星图的英文演示重构图，展示不同来源与会话血统连线" width="1586" height="992" fetchpriority="high" decoding="async">
+          </picture>
+          <figcaption class="frame-caption">
+            <span>基于当前 main 的界面 · 隐私脱敏重构 · 数字仅作演示</span>
+            <span>Canvas 力导向布局 · 平移 · 缩放 · 检查</span>
+          </figcaption>
+        </figure>
+      </div>
+    </header>
+
+    <section class="proof-strip" aria-label="经审计的产品证据">
+      <div class="shell proof-grid">
+        <div class="proof-item"><span class="proof-value">253 / 1,621</span><span class="proof-label">原始会话已缺失；本地备份仍保留</span></div>
+        <div class="proof-item"><span class="proof-value">93.58%</span><span class="proof-label">该审计语料中可验证的续接率</span></div>
+        <div class="proof-item"><span class="proof-value">1,700+</span><span class="proof-label">在当前本地性能语料中验证的会话数</span></div>
+        <div class="proof-item"><span class="proof-value">11</span><span class="proof-label">当前 main 可发现的本地来源家族</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="proof">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">01 · 会话血统</div>
+          <h2>看见 Agent 界面抹平的历史。</h2>
+          <p class="section-intro">续接未必回到同一个文件，分叉也不只是多出一行记录；压缩摘要更不等于原始对话。<strong>Swob 会重建这些关系，而不是假装每份转录都彼此独立。</strong></p>
+        </div>
+
+        <div class="stat-story">
+          <div>
+            <div class="ratio"><span class="lost">253</span> <span class="slash">/</span> <span class="total">1,621</span></div>
+            <div class="ratio-label">一份 Claude Code 审计语料中，15.6% 已找不到原始文件</div>
+          </div>
+          <div class="story-copy">
+            <div class="kicker">真实发生的故障</div>
+            <h3>官方保留策略已经删除了原始记录。</h3>
+            <p>Swob Library 中仍有本地备份，因此这些工作依然可读，也能进一步评估是否可以安全恢复。15.6% 是这份审计语料的结果，并不代表每位用户都会丢失同样比例。</p>
+            <div class="method">方法边界 · 共审计五类来源的 1,621 个会话 · 其中 253 个 Claude Code 会话的原始路径已不存在 · 可恢复性与续接有效性分别检验</div>
+          </div>
+        </div>
+
+        <div class="feature-row">
+          <div class="feature-copy">
+            <div class="kicker">Session Galaxy 会话星图 · 当前 main</div>
+            <h3>经验证的血统关系，一眼可见。</h3>
+            <p>星图会区分可靠的血统证据，以及项目、来源、时间、工作目录和文件等较弱关联。你可以借此导航，但不会把视觉上的聚类误认成真实的继承关系。</p>
+            <ul>
+              <li>分叉与续接关系</li>
+              <li>来源与项目邻域</li>
+              <li>平移、缩放、悬停查看证据与打开会话</li>
+              <li>当前使用 Canvas；不虚构 WebGL 能力</li>
+            </ul>
+          </div>
+          <figure class="feature-visual">
+            <picture>
+              <source srcset="../assets/graph-view.webp" type="image/webp">
+              <img src="../assets/graph-view.png" alt="Swob Session Galaxy 会话星图的英文演示重构图，展示多类 AI 编程工具来源及血统关系" width="1586" height="992" loading="lazy" decoding="async">
+            </picture>
+            <figcaption class="visual-caption"><span>当前 main 界面 · 隐私脱敏英文演示</span><span>已经实现，并非路线图</span></figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="debugger">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">02 · 调试器</div>
+          <h2>别再猜会话为什么跑偏。</h2>
+          <p class="section-intro">答案很少只是“模型不行”。Swob 让你检查会话背后的执行路径、上下文组成、压缩节点、工具错误、延迟、框架开销和证据质量。</p>
+        </div>
+
+        <div class="debug-grid">
+          <figure class="debug-shot">
+            <picture>
+              <source srcset="../assets/session-audit.webp" type="image/webp">
+              <img src="../assets/session-audit.png" alt="Swob 会话审计的英文演示重构图，展示健康分、来源标记、延迟、成本、开销、发现与反模式" width="1586" height="992" loading="lazy" decoding="async">
+            </picture>
+            <figcaption>英文演示 · 会话审计 · 12 个维度 · 每项指标均标明已报告、估算或不可用</figcaption>
+          </figure>
+          <figure class="debug-shot">
+            <picture>
+              <source srcset="../assets/session-debugger.webp" type="image/webp">
+              <img src="../assets/session-debugger.png" alt="Swob 执行树与上下文检查器的英文演示重构图，展示工具调用、Agent 派生、压缩边界与 token 压力" width="1586" height="992" loading="lazy" decoding="async">
+            </picture>
+            <figcaption>英文演示 · 执行树与上下文检查器 · 工具、Agent、错误、上下文切片与压缩边界</figcaption>
+          </figure>
+        </div>
+
+        <div class="feature-row reverse">
+          <div class="feature-copy">
+            <div class="kicker">跨会话洞察</div>
+            <h3>洞察有结论，也保留证据来源。</h3>
+            <p>本地看板汇总 token、成本估算、热力图、来源／模型／项目分布、工具使用和代码改动量。Quick Report 全程本地运行；AI Report 则是单独触发、明确联网的操作。</p>
+            <ul>
+              <li>已用 1,704 个本地会话验证看板</li>
+              <li>11 类来源分布与模型拆解</li>
+              <li>SQLite FTS5 增量检索</li>
+              <li>AI 叙述可选启用，绝不冒充离线能力</li>
+            </ul>
+          </div>
+          <figure class="feature-visual">
+            <picture>
+              <source srcset="../assets/insights-dashboard.webp" type="image/webp">
+              <img src="../assets/insights-dashboard.png" alt="Swob Insights 看板的英文演示重构图，展示示例汇总、热力图、来源分布、模型使用与项目排名" width="1586" height="992" loading="lazy" decoding="async">
+            </picture>
+            <figcaption class="visual-caption"><span>英文演示 · 数字仅作示意</span><span>AI Report 需主动启用</span></figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <div class="source-band">
+      <section class="section" id="sources">
+        <div class="shell">
+          <div class="section-head">
+            <div class="eyebrow">03 · 来源</div>
+            <h2>11 类 AI 编程工具，一份本地历史。</h2>
+            <p class="section-intro">当前 <code>main</code> 能发现下列每类来源。解析深度、血统证据、token 与续接能力取决于原工具实际记录了什么；Swob 不会编造缺失的元数据。</p>
+          </div>
+          <div class="source-list" aria-label="支持的来源家族">
+            <div class="source" style="--source:#e09927"><div class="source-name"><span class="source-dot"></span>Claude Code</div><div class="source-status">深度血统 · 压缩恢复 · 备份 · 续接</div></div>
+            <div class="source" style="--source:#478be1"><div class="source-name"><span class="source-dot"></span>Codex</div><div class="source-status">Rollout 解析 · 检索 · 洞察 · 续接</div></div>
+            <div class="source" style="--source:#61a96f"><div class="source-name"><span class="source-dot"></span>Cursor</div><div class="source-status">本地 Agent 历史 · 检索 · 来源感知续接</div></div>
+            <div class="source" style="--source:#21a7bd"><div class="source-name"><span class="source-dot"></span>OpenCode</div><div class="source-status">SQLite 历史 · 统一查看</div></div>
+            <div class="source" style="--source:#d4554c"><div class="source-name"><span class="source-dot"></span>Zcode</div><div class="source-status">SQLite 历史 · 统一查看</div></div>
+            <div class="source" style="--source:#d3659a"><div class="source-name"><span class="source-dot"></span>CC Mirror</div><div class="source-status">兼容 Claude 的项目历史</div></div>
+            <div class="source" style="--source:#8c79e8"><div class="source-name"><span class="source-dot"></span>Antigravity</div><div class="source-status">当前与旧版转录目录</div></div>
+            <div class="source" style="--source:#8a898c"><div class="source-name"><span class="source-dot"></span>Grok / Factory</div><div class="source-status">Grok 与 Factory／Droid JSONL 历史</div></div>
+            <div class="source" style="--source:#3cab93"><div class="source-name"><span class="source-dot"></span>Pi</div><div class="source-status">本地 Agent 会话历史</div></div>
+            <div class="source" style="--source:#e48a43"><div class="source-name"><span class="source-dot"></span>Kimi Code</div><div class="source-status">本地 wire.jsonl 历史</div></div>
+            <div class="source" style="--source:#7657ca"><div class="source-name"><span class="source-dot"></span>Hermes</div><div class="source-status">本地 JSON 会话历史</div></div>
+          </div>
+          <p class="source-note">公开的稳定版 v1.2.0 支持最初五类来源：Claude Code、Codex、Cursor、OpenCode 与 Zcode。新增的六类来源属于当前 main／下一版本能力。</p>
+        </div>
+      </section>
+    </div>
+
+    <section class="section" id="privacy">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">04 · 信任</div>
+          <h2>本地优先，也把联网边界讲清楚。</h2>
+          <p class="section-intro">“本地优先”应该描述真实架构，而不是掩盖例外。Swob 明确说明哪些操作留在本地、哪些动作会联网，以及可选 AI 分析会采样什么。</p>
+        </div>
+        <div class="privacy-grid">
+          <article class="privacy-item">
+            <div class="privacy-index">本地 / 01</div>
+            <h3>核心证据留在 Mac 上。</h3>
+            <p>浏览、SQLite 索引、检索、血统重建、星图布局、执行检查、上下文分析、审计、Quick Report 与导出均在本地运行。</p>
+          </article>
+          <article class="privacy-item">
+            <div class="privacy-index">联网 / 02</div>
+            <h3>可选联网动作明确可见。</h3>
+            <p>更新检查会访问发布服务；续接可打开终端或已配置的 SSH 主机；AI Report 只会在确认后发送有严格上限的真实用户消息样本。</p>
+          </article>
+          <article class="privacy-item">
+            <div class="privacy-index">凭据 / 03</div>
+            <h3>了解当前限制。</h3>
+            <p>AI 服务商凭据保存在本地 Swob Library 配置中；当前 <code>main</code> 尚未由 Swob 加密这些凭据。</p>
+          </article>
+        </div>
+        <p class="privacy-warning"><strong>AI 采样边界：</strong>最多 60 个近期会话、每个会话 8 条用户消息、每条 300 个字符，采样总量不超过 120,000 个字符。启用 AI Insights 前，请阅读完整的<a href="https://github.com/IvyYang1999/swob/blob/master/PRIVACY.md">隐私文档</a>。</p>
+      </div>
+    </section>
+
+    <section class="section" id="channels">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">05 · 产品事实</div>
+          <h2>稳定版与下一版，不是同一份承诺。</h2>
+          <p class="section-intro">公开安装包不能悄悄落后于官网说法。在下一版本真正发布前，Swob 会标清两个渠道，并为各自提供诚实的使用路径。</p>
+        </div>
+        <div class="channel-grid">
+          <article class="channel stable">
+            <span class="channel-tag">稳定版 · v1.2.0</span>
+            <h3>支持五类来源的会话管理</h3>
+            <p>公开 DMG 包含已经验证的会话浏览与恢复层。</p>
+            <ul>
+              <li>血统检测与注册表</li>
+              <li>上下文压缩展开与全文检索</li>
+              <li>Token Insights、CLI、备份／导出与续接</li>
+              <li>尚未签名，也未公证</li>
+            </ul>
+          </article>
+          <article class="channel next">
+            <span class="channel-tag">当前 main · 下一版</span>
+            <h3>会话星图与调试器</h3>
+            <p>本页截图来自当前 main 已经实现的这些能力。</p>
+            <ul>
+              <li>11 类来源导入与 Session Galaxy 会话星图</li>
+              <li>执行树、上下文检查器与会话审计</li>
+              <li>需确认后启用的可选 AI Insights</li>
+              <li>SQLite FTS5、文件监视与 Worker 性能优化</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="install-box" id="download">
+          <div>
+            <h3>下载稳定版 macOS 安装包</h3>
+            <p>请选择与你的 Mac 匹配的架构。按钮会直接下载官方 v1.2.0 DMG。</p>
+          </div>
+          <div class="install-actions">
+            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">Apple Silicon</a>
+            <a class="button button-secondary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel</a>
+          </div>
+        </div>
+        <p class="gatekeeper"><strong>未签名版本：</strong>确认 DMG 来自本仓库后，若 Gatekeeper 仍阻止运行，可执行 <code>xattr -cr /Applications/Swob.app</code>。签名／公证流程已通过冒烟测试，但目前尚未发布签名后的公开安装包。</p>
+      </div>
+    </section>
+
+    <section class="section" id="faq">
+      <div class="shell">
+        <div class="section-head">
+          <div class="eyebrow">06 · 常见问题</div>
+          <h2>安装之前，先把限制讲清楚。</h2>
+          <p class="section-intro">重要限制本就应该参与决策，而不是藏在下载按钮下面。</p>
+        </div>
+        <div class="faq">
+          <details>
+            <summary>v1.2.0 DMG 里有 Session Galaxy 会话星图和调试器吗？</summary>
+            <p>没有。这些能力已在当前 <code>main</code> 实现，计划随下一版本发布。现在如要体验，请从源码构建。</p>
+          </details>
+          <details>
+            <summary>11 类 AI 编程工具都能提供同样的数据吗？</summary>
+            <p>不能。Swob 已能发现 11 类来源，但血统、token、子 Agent 和续接命令取决于每种来源实际记录的内容。缺失的字段会保持不可用，不会被臆造补齐。</p>
+          </details>
+          <details>
+            <summary>会话内容会离开我的 Mac 吗？</summary>
+            <p>核心浏览与分析不会上传会话内容。可选的 AI Report 会在你明确确认后，把有严格上限的真实用户消息样本发送给你配置的服务商。更新检查与用户主动触发的 SSH／续接操作，也会为各自注明的目的使用网络。</p>
+          </details>
+          <details>
+            <summary>为什么 macOS 提示应用已损坏？</summary>
+            <p>当前公开的 v1.2.0 DMG 尚未签名和公证，因此 Gatekeeper 可能阻止运行。请核对下载地址，再使用上文的隔离属性命令，或从源码构建。目前还没有签名后的公开版本。</p>
+          </details>
+          <details>
+            <summary>支持 Windows 或 Linux 吗？</summary>
+            <p>暂不支持。Swob 目前只针对 Apple Silicon 与 Intel Mac 构建并测试。Windows、Linux 以及无界面／浏览器模式都不是当前产品承诺。</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <section class="final">
+      <div class="shell final-grid">
+        <div>
+          <div class="eyebrow">开源 · AGPL-3.0</div>
+          <h2>你的 Agent 历史，也值得有自己的历史。</h2>
+          <p>现在就从稳定版会话浏览器开始，或检查并构建当前 <code>main</code>，提前体验下一版本的会话星图与调试器。</p>
+        </div>
+        <div class="final-actions">
+          <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">下载稳定版</a>
+          <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">查看源码</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-inner">
+      <span>Swob · 本地优先的 AI 编程会话历史</span>
+      <span class="footer-links">
+        <a href="https://github.com/IvyYang1999/swob">GitHub</a>
+        <a href="https://github.com/IvyYang1999/swob/blob/master/PRIVACY.md">隐私</a>
+        <a href="https://github.com/IvyYang1999/swob/blob/master/SECURITY.md">安全</a>
+        <a href="https://github.com/IvyYang1999/swob/releases">发布版本</a>
+      </span>
+    </div>
+  </footer>
+</body>
+</html>

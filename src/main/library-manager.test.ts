@@ -1596,6 +1596,7 @@ describe('派生文件生成接入', () => {
 
   it('配置关闭某个派生器时 updateTranscript 不生成对应文件', async () => {
     removeDefaultSession()
+    lib.invalidateLibraryConfigCache()
     fs.writeFileSync(path.join(tmpRoot, '.swob-config.json'), JSON.stringify({
       libraryRoot: tmpRoot,
       preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' },

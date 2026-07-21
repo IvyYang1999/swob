@@ -875,7 +875,13 @@ ipcMain.handle('sessions:loadAll', async () => {
 ipcMain.handle(
   'sessions:loadDetail',
   async (_event, filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => {
-    return loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid)
+    const detail = await loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid)
+    if (detail?.messages) {
+      for (const msg of detail.messages) {
+        (msg as any).raw = undefined
+      }
+    }
+    return detail
   }
 )
 

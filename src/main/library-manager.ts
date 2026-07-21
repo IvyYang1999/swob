@@ -390,6 +390,8 @@ export interface InitLibraryOptions {
 }
 
 export function initLibrary(root?: string, options: InitLibraryOptions = {}): void {
+  _cachedLibraryConfig = null
+  _cachedLibraryConfigRoot = ''
   _root = root || getConfiguredLibraryPath()
   if (!options.readOnly && !fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
@@ -399,24 +401,39 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
   _ignoreDirs = new Set(cfg.ignoreDirs && cfg.ignoreDirs.length ? cfg.ignoreDirs : DEFAULT_IGNORE_DIRS)
 }
 
-// --- Config ---
+// --- Config (cached to avoid thousands of readFileSync per load cycle) ---
+
+let _cachedLibraryConfig: LibraryConfig | null = null
+let _cachedLibraryConfigRoot: string = ''
 
 export function loadLibraryConfig(): LibraryConfig {
+  if (_cachedLibraryConfig && _cachedLibraryConfigRoot === _root) return _cachedLibraryConfig
   const configPath = path.join(_root, LIBRARY_CONFIG_FILE)
   try {
     if (fs.existsSync(configPath)) {
-      return JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      _cachedLibraryConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      _cachedLibraryConfigRoot = _root
+      return _cachedLibraryConfig!
     }
   } catch { /* ignore */ }
-  return {
+  _cachedLibraryConfig = {
     libraryRoot: _root,
     preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' }
   }
+  _cachedLibraryConfigRoot = _root
+  return _cachedLibraryConfig
 }
 
 export function saveLibraryConfig(config: LibraryConfig): void {
   const configPath = path.join(_root, LIBRARY_CONFIG_FILE)
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+  _cachedLibraryConfig = config
+  _cachedLibraryConfigRoot = _root
+}
+
+export function invalidateLibraryConfigCache(): void {
+  _cachedLibraryConfig = null
+  _cachedLibraryConfigRoot = ''
 }
 
 // --- Session Dir Naming ---

@@ -45,6 +45,8 @@ interface InMemorySearchCache {
 }
 
 let inMemoryCache: InMemorySearchCache | null = null
+let cacheReleaseTimer: ReturnType<typeof setTimeout> | null = null
+const CACHE_RELEASE_DELAY_MS = 30_000 // release search cache 30s after last search
 
 function searchCacheFile(): string {
   // The override is intentionally only for isolated tests. Production always
@@ -205,6 +207,13 @@ export async function searchSessionFiles(
   }
 
   if (cacheChanged) saveSearchCache(memoryCache.cache)
+
+  // Schedule cache release to avoid 164MB permanent heap retention
+  if (cacheReleaseTimer) clearTimeout(cacheReleaseTimer)
+  cacheReleaseTimer = setTimeout(() => {
+    inMemoryCache = null
+    cacheReleaseTimer = null
+  }, CACHE_RELEASE_DELAY_MS)
 
   results.sort((a, b) => {
     if (b.matches.length !== a.matches.length) return b.matches.length - a.matches.length

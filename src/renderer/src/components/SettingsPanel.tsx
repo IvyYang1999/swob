@@ -523,6 +523,7 @@ export function SettingsPanel() {
   const resumeTerminalTemplate = config?.preferences?.resumeTerminalCommandTemplate || ''
   const resumeTerminalTemplateInvalid = resumeTerminal === 'custom' &&
     (!resumeTerminalTemplate.trim() || !resumeTerminalTemplate.includes('{{command}}'))
+  const experimentalClaudeDesktopImport = config?.preferences?.experimentalClaudeDesktopImport === true
   const [recording, setRecording] = useState(false)
   const [pendingShortcut, setPendingShortcut] = useState<string | null>(null)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
@@ -750,6 +751,30 @@ export function SettingsPanel() {
               </p>
             </div>
           )}
+        </section>
+
+        {/* Experimental Claude Desktop handoff */}
+        <section>
+          <label className="flex items-center justify-between gap-3">
+            <span className="min-w-0">
+              <span className="flex items-center gap-2 text-xs font-medium text-secondary">
+                <AlertCircle size={12} className="text-soft-amber" />
+                {t('settings.experimental_claude_desktop')}
+              </span>
+              <span className="block mt-1 text-[11px] leading-relaxed text-soft-amber">
+                {t('settings.experimental_claude_desktop_warning')}
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              aria-label={t('settings.experimental_claude_desktop')}
+              checked={experimentalClaudeDesktopImport}
+              onChange={(event) => savePreferences({
+                experimentalClaudeDesktopImport: event.target.checked
+              })}
+              className="h-4 w-4 shrink-0 accent-soft-blue"
+            />
+          </label>
         </section>
 
         {/* SSH */}

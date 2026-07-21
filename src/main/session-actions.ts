@@ -24,11 +24,23 @@ export interface ResolveSessionActionOptions {
   home?: string
 }
 
+export type ResumeSurface =
+  | 'terminal'
+  | 'codex-desktop'
+  | 'claude-desktop'
+  | 'zcode-desktop'
+  | 'remote-control'
+
+export type ResumeLaunchAction =
+  | { kind: 'terminal'; command: string }
+  | { kind: 'deep-link'; url: string }
+  | { kind: 'remote-control'; command: string }
+
 function withClaudeConfigDir(cmd: string, claudeConfigDir?: string): string {
   return claudeConfigDir ? `CLAUDE_CONFIG_DIR=${shellQuote(claudeConfigDir)} ${cmd}` : cmd
 }
 
-export function buildResumeCommand(
+function buildTerminalResumeCommand(
   sessionId: string,
   permissionMode?: string,
   cwd?: string,
@@ -51,8 +63,18 @@ export function buildResumeCommand(
     }
     return cmd
   }
-  if (source === 'opencode' || source === 'zcode') {
-    cmd = `${source} --session ${quotedSessionId}`
+  if (source === 'opencode') {
+    cmd = `opencode --session ${quotedSessionId}`
+    if (cwd && fs.existsSync(cwd)) {
+      return `cd ${shellQuote(cwd)} && ${cmd}`
+    }
+    return cmd
+  }
+  if (source === 'zcode') {
+    // ZCode does not install a public launcher today. This raw command mirrors
+    // the bundled runtime syntax for audits/debugging; buildResumeAction()
+    // deliberately does not expose it as a supported terminal surface.
+    cmd = `zcode --resume ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) {
       return `cd ${shellQuote(cwd)} && ${cmd}`
     }
@@ -79,6 +101,82 @@ export function buildResumeCommand(
   return cmd
 }
 
+function assertDeepLinkSessionId(sessionId: string, source: 'codex' | 'claude' | 'zcode'): void {
+  const valid = source === 'claude'
+    ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)
+    : source === 'zcode'
+      ? /^sess_[A-Za-z0-9_-]+$/.test(sessionId)
+      : /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(sessionId)
+  if (!valid) throw new Error(`${source} session id 格式不合法`)
+}
+
+function isClaudeCodeSource(source?: SessionSource): boolean {
+  return !source || source === 'claude-code'
+}
+
+export function buildResumeAction(
+  sessionId: string,
+  permissionMode?: string,
+  cwd?: string,
+  source?: SessionSource,
+  claudeConfigDir?: string,
+  surface: ResumeSurface = 'terminal'
+): ResumeLaunchAction {
+  if (surface === 'terminal') {
+    if (source === 'zcode') {
+      throw new Error('ZCode 没有公开 CLI；请改用“打开 ZCode App”')
+    }
+    return {
+      kind: 'terminal',
+      command: buildTerminalResumeCommand(sessionId, permissionMode, cwd, source, claudeConfigDir)
+    }
+  }
+
+  if (surface === 'codex-desktop') {
+    if (source !== 'codex') throw new Error('只有 Codex 会话可以在 Codex App 中继续')
+    assertDeepLinkSessionId(sessionId, 'codex')
+    return { kind: 'deep-link', url: `codex://threads/${encodeURIComponent(sessionId)}` }
+  }
+
+  if (surface === 'claude-desktop') {
+    if (!isClaudeCodeSource(source)) throw new Error('只有 Claude Code 会话可以导入 Claude Desktop')
+    assertDeepLinkSessionId(sessionId, 'claude')
+    return { kind: 'deep-link', url: `claude://resume?session=${encodeURIComponent(sessionId)}` }
+  }
+
+  if (surface === 'zcode-desktop') {
+    if (source !== 'zcode') throw new Error('只有 ZCode 会话可以打开 ZCode App')
+    assertDeepLinkSessionId(sessionId, 'zcode')
+    const url = cwd && fs.existsSync(cwd)
+      ? `zcode://workspace/open?path=${encodeURIComponent(cwd)}`
+      : 'zcode://'
+    return { kind: 'deep-link', url }
+  }
+
+  if (!isClaudeCodeSource(source)) {
+    throw new Error('Remote Control 只支持 Claude Code 会话')
+  }
+  const command = `${buildTerminalResumeCommand(
+    sessionId,
+    permissionMode,
+    cwd,
+    source,
+    claudeConfigDir
+  )} --remote-control`
+  return { kind: 'remote-control', command }
+}
+
+/** Legacy raw command builder used by copy/audit call sites. Launches must use buildResumeAction. */
+export function buildResumeCommand(
+  sessionId: string,
+  permissionMode?: string,
+  cwd?: string,
+  source?: SessionSource,
+  claudeConfigDir?: string
+): string {
+  return buildTerminalResumeCommand(sessionId, permissionMode, cwd, source, claudeConfigDir)
+}
+
 export function buildForkCommand(
   sessionId: string,
   permissionMode?: string,
@@ -102,12 +200,15 @@ export function buildForkCommand(
     }
     return cmd
   }
-  if (source === 'opencode' || source === 'zcode') {
-    cmd = `${source} --session ${quotedSessionId}`
+  if (source === 'opencode') {
+    cmd = `opencode --session ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) {
       return `cd ${shellQuote(cwd)} && ${cmd}`
     }
     return cmd
+  }
+  if (source === 'zcode') {
+    throw new Error('ZCode 没有公开 CLI，也没有公开的指定会话 Fork 入口')
   }
 
   cmd = permissionMode === 'bypassPermissions'

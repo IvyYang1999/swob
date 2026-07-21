@@ -8,7 +8,12 @@ import {
   scanLibrary,
   LOCAL_RESUME_UNAVAILABLE_REASON
 } from './library-manager'
-import { buildGuardedResumeCommand, openGuardedResumeCommand } from './resume-guard'
+import {
+  buildGuardedResumeAction,
+  buildGuardedResumeCommand,
+  openGuardedResumeAction,
+  openGuardedResumeCommand
+} from './resume-guard'
 import type { SessionSource, SessionSummary } from './types'
 
 let tmpRoot: string
@@ -167,6 +172,146 @@ describe('resume guard', () => {
     expect(opened).toHaveLength(1)
     expect(opened[0]).toContain(expectedCommandPart)
     expect(opened[0]).toContain(sessionId)
+  })
+
+  it('Codex Desktop action 复用同一 guard，并把已验证 session id 交给 deep link', async () => {
+    const sessionId = '019abcde-1234-7000-8000-0123456789ab'
+    const sourcePath = sourcePathFor(sessionId, 'codex', true)
+    writeSource(sourcePath, sessionId, 'codex')
+    const dirPath = path.join(tmpRoot, sessionId)
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: '2026-07-07T00:00:00Z',
+      updatedAt: '2026-07-07T00:01:00Z',
+      projectPath: tmpRoot
+    })
+    scanLibrary()
+
+    const opened: unknown[] = []
+    const result = await openGuardedResumeAction({
+      sessionId,
+      sessions: [summary(sessionId, sourcePath, 'codex')],
+      surface: 'codex-desktop',
+      openAction: (action) => opened.push(action)
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      sessionId,
+      surface: 'codex-desktop',
+      action: {
+        kind: 'deep-link',
+        url: `codex://threads/${sessionId}`
+      }
+    })
+    expect(opened).toEqual([result.action])
+  })
+
+  it('Claude Desktop action 默认被实验门控拒绝，显式开启后才构建 deep link', async () => {
+    const sessionId = '82000000-0000-4000-8000-000000000001'
+    const sourcePath = sourcePathFor(sessionId, 'claude-code', true)
+    writeSource(sourcePath, sessionId, 'claude-code')
+    const dirPath = path.join(tmpRoot, sessionId)
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: '2026-07-07T00:00:00Z',
+      updatedAt: '2026-07-07T00:01:00Z',
+      projectPath: tmpRoot
+    })
+    scanLibrary()
+    const session = summary(sessionId, sourcePath, 'claude-code')
+
+    const blocked = await buildGuardedResumeAction({
+      sessionId,
+      sessions: [session],
+      surface: 'claude-desktop'
+    })
+    expect(blocked).toMatchObject({
+      ok: false,
+      surface: 'claude-desktop',
+      reason: expect.stringContaining('实验')
+    })
+
+    const allowed = await buildGuardedResumeAction({
+      sessionId,
+      sessions: [session],
+      surface: 'claude-desktop',
+      allowExperimentalClaudeDesktop: true
+    })
+    expect(allowed).toMatchObject({
+      ok: true,
+      surface: 'claude-desktop',
+      action: {
+        kind: 'deep-link',
+        url: `claude://resume?session=${sessionId}`
+      }
+    })
+  })
+
+  it('ZCode guard 只生成打开 App/工作区的 action，终端命令 fail closed', async () => {
+    const sessionId = 'sess_ZcodeGuard1'
+    const dbPath = path.join(tmpRoot, '.zcode', 'cli', 'db', 'db.sqlite')
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+    fs.writeFileSync(dbPath, '')
+    const sourceRef = `${dbPath}#${sessionId}`
+    const dirPath = path.join(tmpRoot, sessionId)
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: [sourceRef],
+      createdAt: '2026-07-07T00:00:00Z',
+      updatedAt: '2026-07-07T00:01:00Z',
+      projectPath: tmpRoot
+    })
+    scanLibrary()
+    const session = summary(sessionId, sourceRef, 'zcode')
+
+    const desktop = await buildGuardedResumeAction({
+      sessionId,
+      sessions: [session],
+      surface: 'zcode-desktop'
+    })
+    expect(desktop).toMatchObject({
+      ok: true,
+      surface: 'zcode-desktop',
+      notice: expect.stringContaining('不支持跳转到指定历史会话'),
+      action: {
+        kind: 'deep-link',
+        url: `zcode://workspace/open?path=${encodeURIComponent(tmpRoot)}`
+      }
+    })
+
+    const terminal = await buildGuardedResumeCommand({
+      sessionId,
+      sessions: [session]
+    })
+    expect(terminal).toMatchObject({
+      ok: false,
+      surface: 'terminal',
+      reason: expect.stringContaining('没有公开 CLI')
+    })
+  })
+
+  it('目标客户端启动失败时返回失败，不把 action 构建成功误报为已打开', async () => {
+    const sessionId = '019abcde-1234-7000-8000-0123456789ab'
+    const sourcePath = sourcePathFor(sessionId, 'codex', true)
+    writeSource(sourcePath, sessionId, 'codex')
+
+    const result = await openGuardedResumeAction({
+      sessionId,
+      sessions: [summary(sessionId, sourcePath, 'codex')],
+      surface: 'codex-desktop',
+      openAction: async () => {
+        throw new Error('protocol handler missing')
+      }
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      surface: 'codex-desktop',
+      reason: 'protocol handler missing'
+    })
   })
 
   it('坏 meta 缺 sourceFilePaths 且没有本机 summary 时不抛错并禁用 resume', () => {

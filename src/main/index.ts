@@ -74,9 +74,11 @@ import {
 import {
   buildGuardedResumeCommand,
   openGuardedForkCommand,
+  openGuardedResumeAction,
   openGuardedResumeCommand,
   type ResumeActionResult
 } from './resume-guard'
+import type { ResumeLaunchAction, ResumeSurface } from './session-actions'
 import {
   findInstalledSwobCommandPath,
   installSwobCli,
@@ -736,12 +738,13 @@ ipcMain.handle('spotlight:search', (_event, query: string) => {
 })
 
 ipcMain.handle('spotlight:resume', async (_event, sessionId: string, cwd?: string) => {
-  const result = await openGuardedResumeCommand({
+  const result = await openGuardedResumeAction({
     sessionId,
     sessions: cachedSessions,
     cwd,
+    surface: defaultResumeSurfaceForSession(sessionId),
     reloadSessions: reloadSessionsForAction,
-    openCommand: openInTerminal
+    openAction: openResumeAction
   })
   if (result.ok) spotlightWindow?.hide()
   return result
@@ -1025,16 +1028,95 @@ function openInTerminal(command: string): void {
   openResumeTerminal(command, normalizeResumeTerminalSettings(preferences))
 }
 
+async function openResumeAction(action: ResumeLaunchAction): Promise<void> {
+  if (action.kind === 'terminal' || action.kind === 'remote-control') {
+    openInTerminal(action.command)
+    return
+  }
+
+  let protocol: string
+  try {
+    protocol = new URL(action.url).protocol
+  } catch {
+    throw new Error('Resume deep link 格式不合法')
+  }
+  if (!['codex:', 'claude:', 'zcode:'].includes(protocol)) {
+    throw new Error('Resume deep link 协议不受支持')
+  }
+
+  if (process.platform === 'darwin') {
+    let handler = ''
+    try {
+      handler = app.getApplicationNameForProtocol(action.url)
+    } catch {
+      handler = ''
+    }
+    if (!handler && protocol === 'zcode:') {
+      const zcodeAppPath = '/Applications/ZCode.app'
+      if (fs.existsSync(zcodeAppPath)) {
+        const error = await shell.openPath(zcodeAppPath)
+        if (error) throw new Error(`无法打开 ZCode App：${error}`)
+        return
+      }
+    }
+    if (!handler) {
+      const client = protocol === 'codex:' ? 'Codex/ChatGPT' : protocol === 'claude:' ? 'Claude' : 'ZCode'
+      throw new Error(`未检测到可处理 ${protocol} 的 ${client} App`)
+    }
+    const expectedHandler = protocol === 'codex:'
+      ? /^(Codex|ChatGPT)$/i
+      : protocol === 'claude:'
+        ? /^Claude$/i
+        : /^ZCode$/i
+    if (!expectedHandler.test(handler.trim())) {
+      throw new Error(`${protocol} 当前由非官方应用“${handler}”处理，已拒绝打开`)
+    }
+  }
+
+  await shell.openExternal(action.url)
+}
+
+function experimentalClaudeDesktopImportEnabled(): boolean {
+  try {
+    const preferences = shouldReadLibraryConfig()
+      ? loadLibraryConfig().preferences
+      : loadConfig().preferences
+    return preferences?.experimentalClaudeDesktopImport === true
+  } catch {
+    return false
+  }
+}
+
+function defaultResumeSurfaceForSession(sessionId: string): ResumeSurface {
+  const session = cachedSessions.find((candidate) =>
+    candidate.id === sessionId ||
+    candidate.sessionId === sessionId ||
+    candidate.resumeSessionId === sessionId ||
+    (candidate.continuationSessionIds || []).includes(sessionId)
+  )
+  return session?.source === 'zcode' ? 'zcode-desktop' : 'terminal'
+}
+
 ipcMain.handle(
   'terminal:resume',
-  async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
-    return openGuardedResumeCommand({
+  async (
+    _event,
+    sessionId: string,
+    _terminalApp: string,
+    permissionMode?: string,
+    cwd?: string,
+    surface?: ResumeSurface
+  ) => {
+    const effectiveSurface = surface || defaultResumeSurfaceForSession(sessionId)
+    return openGuardedResumeAction({
       sessionId,
       sessions: cachedSessions,
       permissionMode,
       cwd,
+      surface: effectiveSurface,
+      allowExperimentalClaudeDesktop: experimentalClaudeDesktopImportEnabled(),
       reloadSessions: reloadSessionsForAction,
-      openCommand: openInTerminal
+      openAction: openResumeAction
     })
   }
 )

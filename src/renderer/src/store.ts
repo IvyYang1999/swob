@@ -10,6 +10,7 @@ import type { Locale } from './i18n'
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
 
 export type ViewMode = 'compact' | 'full' | 'markdown'
+export type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 
 interface SessionSummary {
   id: string
@@ -99,6 +100,7 @@ interface UserConfig {
     terminalApp: 'Terminal' | 'iTerm2'
     resumeTerminal?: 'terminal-app' | 'iterm' | 'custom'
     resumeTerminalCommandTemplate?: string
+    experimentalClaudeDesktopImport?: boolean
     locale?: Locale
     sshConfig?: SshConfig
     projectViewMode?: 'folders' | 'paths'
@@ -151,7 +153,7 @@ interface AppState {
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<void>
   search: (query: string) => Promise<void>
   clearSearch: () => void
-  resumeSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
+  resumeSession: (sessionId: string, permissionMode?: string, cwd?: string, surface?: ResumeSurface) => Promise<void>
   forkSession: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<void>
   buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<string>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
@@ -452,13 +454,25 @@ export const useStore = create<AppState>((set, get) => ({
 
   clearSearch: () => set({ searchResults: [], searchQuery: '' }),
 
-  resumeSession: async (sessionId, permissionMode?, cwd?) => {
+  resumeSession: async (sessionId, permissionMode?, cwd?, surface?) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
-    const result = await window.api.resumeSession(sessionId, terminalApp, permissionMode, cwd)
+    const matchedSession = get().sessions.find((session) =>
+      session.id === sessionId || session.sessionId === sessionId || session.resumeSessionId === sessionId
+    )
+    const effectiveSurface = surface || (matchedSession?.source === 'zcode' ? 'zcode-desktop' : 'terminal')
+    const result = await window.api.resumeSession(
+      sessionId,
+      terminalApp,
+      permissionMode,
+      cwd,
+      effectiveSurface
+    )
     if (!result.ok) {
       get().showToast(result.reason || '此会话无法直接恢复', 'error')
       return
     }
+    if (result.notice) get().showToast(result.notice, 'info')
+    if (effectiveSurface === 'zcode-desktop') return
     set((state) => {
       const next = new Set(state.activeSessionIds)
       next.add(sessionId)

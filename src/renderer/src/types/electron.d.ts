@@ -72,6 +72,10 @@ interface ElectronAPI {
   // Lineage
   getLineageRegistry: () => Promise<any>
 
+  // Claude Code Settings
+  getCleanupDays: () => Promise<number>
+  setCleanupDays: (days: number) => Promise<boolean>
+
   // Execution Tree
   getExecutionTree: (filePath: string) => Promise<any>
 

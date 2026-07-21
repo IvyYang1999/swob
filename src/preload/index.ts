@@ -97,6 +97,10 @@ const api = {
   // Lineage
   getLineageRegistry: () => ipcRenderer.invoke('lineage:getRegistry'),
 
+  // Claude Code Settings
+  getCleanupDays: () => ipcRenderer.invoke('claude:getCleanupDays'),
+  setCleanupDays: (days: number) => ipcRenderer.invoke('claude:setCleanupDays', days),
+
   // Execution Tree
   getExecutionTree: (filePath: string) => ipcRenderer.invoke('session:getExecutionTree', filePath),
 

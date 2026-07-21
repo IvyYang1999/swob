@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree, Terminal, Check, AlertCircle, Smartphone, RefreshCw, Copy, Wifi, Globe2, Shield } from 'lucide-react'
+import { X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree, Terminal, Check, AlertCircle, Smartphone, RefreshCw, Copy, Wifi, Globe2, Shield, HardDrive } from 'lucide-react'
 
 const ELECTRON_MODIFIER_MAP: Record<string, string> = {
   Meta: 'CommandOrControl',
@@ -271,6 +271,77 @@ function MobileConnectSection() {
           </p>
         </div>
       )}
+    </section>
+  )
+}
+
+function RetentionSection() {
+  const t = useT()
+  const locale = useStore((s) => s.locale)
+  const [days, setDays] = useState(30)
+  const [loaded, setLoaded] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    window.api.getCleanupDays().then((d) => { setDays(d); setLoaded(true) }).catch(() => setLoaded(true))
+  }, [])
+
+  const handleChange = useCallback((value: number) => {
+    setDays(value)
+    setSaving(true)
+    window.api.setCleanupDays(value).finally(() => setSaving(false))
+  }, [])
+
+  const label = days >= 3650
+    ? (locale === 'zh-CN' ? '永不删除' : 'Never delete')
+    : days === 30
+      ? (locale === 'zh-CN' ? '30 天（官方默认）' : '30 days (official default)')
+      : (locale === 'zh-CN' ? `${days} 天` : `${days} days`)
+
+  if (!loaded) return null
+
+  return (
+    <section>
+      <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
+        <HardDrive size={12} />
+        {locale === 'zh-CN' ? '会话保留与备份' : 'Session Retention & Backup'}
+      </label>
+      <div className="space-y-3">
+        <div>
+          <div className="flex items-center justify-between text-xs mb-1.5">
+            <span className="text-muted">
+              {locale === 'zh-CN' ? 'Claude Code 本地会话保留期' : 'Claude Code local session retention'}
+            </span>
+            <span className={`font-medium ${days >= 3650 ? 'text-soft-emerald' : days <= 30 ? 'text-soft-amber' : 'text-primary'}`}>
+              {label}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={7}
+            max={3650}
+            step={1}
+            value={days}
+            onChange={(e) => handleChange(Number(e.target.value))}
+            className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-edge accent-soft-blue"
+          />
+          <div className="flex justify-between text-[10px] text-faint mt-1">
+            <span>7d</span>
+            <span>30d</span>
+            <span>90d</span>
+            <span>365d</span>
+            <span>{locale === 'zh-CN' ? '永久' : '∞'}</span>
+          </div>
+          {days <= 30 && (
+            <div className="mt-2 text-[10px] text-soft-amber bg-soft-amber/5 rounded px-2 py-1.5">
+              ⚠️ {locale === 'zh-CN'
+                ? `Claude Code 默认 30 天后自动删除本地会话。建议调高以保留完整历史。`
+                : `Claude Code deletes local sessions after 30 days by default. Consider increasing to preserve history.`}
+            </div>
+          )}
+          {saving && <div className="text-[10px] text-muted mt-1">Saving...</div>}
+        </div>
+      </div>
     </section>
   )
 }
@@ -552,6 +623,9 @@ export function SettingsPanel() {
             ))}
           </div>
         </section>
+
+        {/* Session retention & backup */}
+        <RetentionSection />
 
         {/* App updates */}
         <section>

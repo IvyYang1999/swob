@@ -88,6 +88,8 @@ describe('SettingsPanel Resume 终端设置', () => {
         skillInstalled: true
       }),
       cliInstall: vi.fn(),
+      getCleanupDays: vi.fn().mockResolvedValue(30),
+      setCleanupDays: vi.fn().mockResolvedValue(true),
       checkForUpdates: vi.fn().mockResolvedValue(undefined),
       networkGetInfo: vi.fn().mockResolvedValue({
         localIps: [],

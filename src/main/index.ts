@@ -1001,6 +1001,36 @@ ipcMain.handle('lineage:getRegistry', async () => {
   }
 })
 
+// --- Claude Code Settings (cleanupPeriodDays) ---
+
+ipcMain.handle('claude:getCleanupDays', async () => {
+  try {
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
+    if (fs.existsSync(settingsPath)) {
+      const data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+      return data.cleanupPeriodDays ?? 30
+    }
+  } catch { /* ignore */ }
+  return 30
+})
+
+ipcMain.handle('claude:setCleanupDays', async (_event, days: number) => {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
+  try {
+    let data: Record<string, unknown> = {}
+    if (fs.existsSync(settingsPath)) {
+      data = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+    }
+    data.cleanupPeriodDays = Math.max(1, Math.round(days))
+    const tmpPath = settingsPath + '.tmp'
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2))
+    fs.renameSync(tmpPath, settingsPath)
+    return true
+  } catch {
+    return false
+  }
+})
+
 ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
   try {
     const { parseSessionFile } = await import('./session-loader')

@@ -440,6 +440,19 @@ function RetentionSection() {
   )
 }
 
+type SettingsCategory = 'appearance' | 'shortcuts' | 'terminal' | 'retention' | 'ai' | 'ssh' | 'mobile' | 'updates'
+
+const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; icon: string; labelZh: string; labelEn: string }> = [
+  { id: 'appearance', icon: '🎨', labelZh: '外观', labelEn: 'Appearance' },
+  { id: 'shortcuts', icon: '⌨️', labelZh: '快捷键', labelEn: 'Shortcuts' },
+  { id: 'terminal', icon: '🖥️', labelZh: '终端与 Resume', labelEn: 'Terminal' },
+  { id: 'retention', icon: '🔒', labelZh: '会话保留', labelEn: 'Retention' },
+  { id: 'ai', icon: '✨', labelZh: 'AI 分析', labelEn: 'AI Analysis' },
+  { id: 'ssh', icon: '🌐', labelZh: 'SSH 远程', labelEn: 'SSH Remote' },
+  { id: 'mobile', icon: '📱', labelZh: '手机连接', labelEn: 'Mobile' },
+  { id: 'updates', icon: '🔄', labelZh: '更新与 CLI', labelEn: 'Updates & CLI' },
+]
+
 export function SettingsPanel() {
   const {
     settingsOpen, toggleSettings,
@@ -449,6 +462,7 @@ export function SettingsPanel() {
     sshConfig, setSshConfig
   } = useStore()
   const t = useT()
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>('appearance')
 
   const currentShortcut = config?.preferences?.spotlightShortcut || 'CommandOrControl+Shift+Space'
   const resumeTerminal = config?.preferences?.resumeTerminal || 'terminal-app'
@@ -511,17 +525,43 @@ export function SettingsPanel() {
       onClick={toggleSettings}
     >
       <div
-        className="bg-base border border-edge rounded-xl shadow-2xl w-[440px] max-h-[85vh] overflow-y-auto"
+        className="bg-base border border-edge rounded-xl shadow-2xl flex"
+        style={{ width: 640, height: 'min(85vh, 600px)' }}
         onClick={(e) => e.stopPropagation()}
       >
-      <div className="flex items-center justify-between px-5 py-4 border-b border-edge">
-        <h2 className="text-sm font-medium text-primary">{t('settings.title')}</h2>
+      {/* Left sidebar — category nav */}
+      <div className="w-40 shrink-0 border-r border-edge py-3 px-2 overflow-y-auto">
+        <h2 className="text-sm font-medium text-primary px-2 mb-3">{t('settings.title')}</h2>
+        {SETTINGS_CATEGORIES.map((cat) => (
+          <button
+            key={cat.id}
+            onClick={() => setActiveCategory(cat.id)}
+            className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs flex items-center gap-2 mb-0.5 transition-colors ${
+              activeCategory === cat.id
+                ? 'bg-accent/10 text-accent font-medium'
+                : 'text-secondary hover:bg-hover hover:text-primary'
+            }`}
+          >
+            <span className="text-sm">{cat.icon}</span>
+            <span>{locale === 'zh-CN' ? cat.labelZh : cat.labelEn}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Right content area */}
+      <div className="flex-1 overflow-y-auto">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-edge">
+        <h3 className="text-xs font-medium text-primary">
+          {SETTINGS_CATEGORIES.find(c => c.id === activeCategory)?.[locale === 'zh-CN' ? 'labelZh' : 'labelEn']}
+        </h3>
         <button onClick={toggleSettings} className="p-1 rounded hover:bg-hover text-muted hover:text-primary">
           <X size={14} />
         </button>
       </div>
 
       <div className="p-5 space-y-5">
+        {/* ─── Appearance ─── */}
+        {activeCategory === 'appearance' && <>
         {/* Theme */}
         <section>
           <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
@@ -571,6 +611,10 @@ export function SettingsPanel() {
           </div>
         </section>
 
+        </>}
+
+        {/* ─── Shortcuts ─── */}
+        {activeCategory === 'shortcuts' && <>
         {/* Spotlight shortcut */}
         <section>
           <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
@@ -607,6 +651,10 @@ export function SettingsPanel() {
           <p className="text-[11px] text-faint mt-1">{t('settings.spotlight_shortcut_hint')}</p>
         </section>
 
+        </>}
+
+        {/* ─── Terminal ─── */}
+        {activeCategory === 'terminal' && <>
         {/* Resume Terminal */}
         <section>
           <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
@@ -718,12 +766,22 @@ export function SettingsPanel() {
           </div>
         </section>
 
-        {/* Session retention & backup */}
+        </>}
+
+        {/* ─── Retention ─── */}
+        {activeCategory === 'retention' && <>
         <RetentionSection />
 
-        {/* AI Analysis (LLM API keys) */}
+        </>}
+
+        {/* ─── AI Analysis ─── */}
+        {activeCategory === 'ai' && <>
         <LlmSettingsSection />
 
+        </>}
+
+        {/* ─── Updates & CLI ─── */}
+        {activeCategory === 'updates' && <>
         {/* App updates */}
         <section>
           <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
@@ -739,11 +797,25 @@ export function SettingsPanel() {
           </button>
         </section>
 
-        {/* CLI & Agent */}
         <CliSection />
+        </>}
 
-        {/* 手机连接信息 */}
+        {/* ─── SSH ─── */}
+        {activeCategory === 'ssh' && <>
+        <section className="space-y-3">
+          <div className="text-xs text-muted">{locale === 'zh-CN' ? 'SSH 远程连接配置' : 'SSH Remote Connection'}</div>
+          <input value={sshHost} onChange={(e) => setSshHost(e.target.value)} placeholder="Host (e.g. myserver.local)" className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary" />
+          <input value={sshUser} onChange={(e) => setSshUser(e.target.value)} placeholder="Username" className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary" />
+          <input value={sshRemotePath} onChange={(e) => setSshRemotePath(e.target.value)} placeholder="Remote path (e.g. ~/.claude/projects)" className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary" />
+          <button onClick={() => setSshConfig({ host: sshHost, user: sshUser, remotePath: sshRemotePath })} className="px-3 py-1.5 rounded-md text-xs font-medium bg-soft-blue/15 text-soft-blue hover:bg-soft-blue/25 transition-colors">{locale === 'zh-CN' ? '保存' : 'Save'}</button>
+        </section>
+        </>}
+
+        {/* ─── Mobile ─── */}
+        {activeCategory === 'mobile' && <>
         <MobileConnectSection />
+        </>}
+      </div>
       </div>
       </div>
     </div>

@@ -108,6 +108,10 @@ describe('SettingsPanel Resume 终端设置', () => {
   it('点击 iTerm 会写入 Resume 终端偏好', () => {
     render(<SettingsPanel />)
 
+    // Navigate to Terminal category in new split-pane layout
+    const terminalTab = screen.queryByText('Terminal') || screen.queryByText('终端与 Resume')
+    if (terminalTab) fireEvent.click(terminalTab)
+
     fireEvent.click(screen.getByText('iTerm'))
 
     expect(savePreferences).toHaveBeenCalledWith({ resumeTerminal: 'iterm' })
@@ -127,6 +131,9 @@ describe('SettingsPanel Resume 终端设置', () => {
 
     render(<SettingsPanel />)
 
+    const terminalTab = screen.queryByText('Terminal') || screen.queryByText('终端与 Resume')
+    if (terminalTab) fireEvent.click(terminalTab)
+
     const input = screen.getByPlaceholderText('otty {{command}}') as HTMLTextAreaElement
     expect(input.value).toBe('otty {{command}}')
 
@@ -139,6 +146,9 @@ describe('SettingsPanel Resume 终端设置', () => {
 
   it('提供手动检查更新入口', async () => {
     render(<SettingsPanel />)
+
+    const updatesTab = screen.queryByText('Updates & CLI') || screen.queryByText('更新与 CLI')
+    if (updatesTab) fireEvent.click(updatesTab)
 
     fireEvent.click(screen.getByRole('button', { name: '检查更新' }))
 

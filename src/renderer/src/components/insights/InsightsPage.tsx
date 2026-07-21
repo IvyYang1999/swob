@@ -46,7 +46,8 @@ export function InsightsPage() {
 
   const projectData = useMemo(() => {
     if (!data) return []
-    return projectViewMode === 'paths' ? data.byProject : data.byFolder
+    if (projectViewMode === 'paths') return data.byProject
+    return data.byFolder.length > 0 ? data.byFolder : data.byProject
   }, [data, projectViewMode])
 
   const runGenerate = useCallback(async (useLlm: boolean) => {

@@ -8,6 +8,7 @@ import {
   closeApp,
   launchApp,
   resizeAppWindow,
+  revealAllSessions,
   type LaunchedApp
 } from './helpers'
 
@@ -28,9 +29,8 @@ test.describe.serial('多客户端 Resume surfaces', () => {
   test.beforeAll(async () => {
     launched = await launchApp({ viewport: { width: 1100, height: 720 } })
     page = launched.page
-    const allSessionsGroup = page.getByRole('button', { name: /AI会话\(3\)/ })
-    await expect(allSessionsGroup).toBeVisible({ timeout: 20000 })
-    await allSessionsGroup.click()
+    // Root-scatter model: loose sessions render flat; single-turn ones collapse.
+    await revealAllSessions(page)
     await expect(page.locator('[data-session-id]')).toHaveCount(3, { timeout: 20000 })
   })
 

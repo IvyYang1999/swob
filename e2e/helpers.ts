@@ -71,6 +71,18 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
   fs.mkdirSync(project, { recursive: true })
   fs.mkdirSync(libraryRoot, { recursive: true })
 
+  // Sandboxed specs test the main UI, not first-run onboarding (which has its
+  // own dedicated spec). Pre-complete onboarding so the wizard never blocks.
+  fs.mkdirSync(path.join(home, '.claude-session-manager'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.claude-session-manager', 'app-config.json'), JSON.stringify({
+    libraryPath: libraryRoot,
+    onboardingCompleted: true
+  }))
+  fs.writeFileSync(path.join(libraryRoot, '.swob-config.json'), JSON.stringify({
+    libraryRoot,
+    preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' }
+  }))
+
   const claudeRows: unknown[] = []
   let parentUuid: string | null = null
   for (let index = 0; index < claudeTurns; index++) {
@@ -242,19 +254,20 @@ export async function closeApp(launched: LaunchedApp): Promise<void> {
 }
 
 export async function revealAllSessions(page: Page): Promise<void> {
+  // Root-scatter storage model: loose sessions render flat in the sidebar
+  // bottom area. Single-turn sessions collapse into an expandable section.
   const sessions = page.locator('[data-session-id]')
-  const group = page.getByRole('button', { name: /AI会话\(3\)/ })
-  await group.waitFor({ state: 'visible', timeout: 20_000 })
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (await sessions.first().isVisible().catch(() => false)) return
-    await group.click()
-    try {
-      await sessions.first().waitFor({ state: 'visible', timeout: 2_000 })
-      return
-    } catch {
-      // Startup hydration can replace the Library tree after the first click.
-      // Retry against the newly rendered group instead of assuming it stayed open.
-    }
-  }
   await sessions.first().waitFor({ state: 'visible', timeout: 20_000 })
+  const singleTurnToggle = page.getByRole('button', { name: /单轮对话/ })
+  if (await singleTurnToggle.isVisible().catch(() => false)) {
+    const before = await sessions.count()
+    await singleTurnToggle.click()
+    await page.waitForFunction(
+      (count) => document.querySelectorAll('[data-session-id]').length !== count,
+      before,
+      { timeout: 5_000 }
+    ).catch(() => { /* section may be empty */ })
+    // Idempotency: a second call would collapse the section again — undo that.
+    if (await sessions.count() < before) await singleTurnToggle.click()
+  }
 }

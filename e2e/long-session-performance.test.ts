@@ -30,9 +30,8 @@ test('1500-turn session keeps DOM bounded and renderer long tasks below 100ms', 
       state.__swobLongTaskObserver.observe({ entryTypes: ['longtask'] })
     })
 
-    const allSessionsGroup = page.getByRole('button', { name: /AI会话\(3\)/ })
-    await expect(allSessionsGroup).toBeVisible({ timeout: 25_000 })
-    await allSessionsGroup.click()
+    // Root-scatter model: loose sessions render flat, no group to expand.
+    await expect(page.locator('[data-session-id]').first()).toBeVisible({ timeout: 25_000 })
     const openStart = await page.evaluate(() => performance.now())
     await page.locator(`[data-session-id="${CLAUDE_FIXTURE_ID}"]`).click()
 

@@ -1056,9 +1056,10 @@ ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
 ipcMain.handle('insights:generate', async () => {
   try {
     const { generateInsightsReport, renderInsightsHtml } = await import('./session-insights')
+    const osModule = await import('os')
     const report = await generateInsightsReport(cachedSessions)
     const html = renderInsightsHtml(report)
-    const reportDir = path.join(os.homedir(), '.claude-session-manager', 'reports')
+    const reportDir = path.join(osModule.homedir(), '.claude-session-manager', 'reports')
     if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true })
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     const reportPath = path.join(reportDir, `insights-${timestamp}.html`)

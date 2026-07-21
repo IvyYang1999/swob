@@ -943,6 +943,38 @@ describe('buildSshResumeCommand', () => {
   })
 })
 
+describe('首启动引导状态机', () => {
+  it('全新安装（无 app-config、无已初始化库）需要引导', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    expect(lib.isOnboardingNeeded()).toBe(true)
+  })
+
+  it('completeOnboarding 落库路径 + 排除清单，之后不再需要引导', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.completeOnboarding(tmpRoot, ['zcode', 'grok'])
+    expect(lib.isOnboardingNeeded()).toBe(false)
+    expect(lib.getConfiguredLibraryPath()).toBe(tmpRoot)
+    expect(lib.getExcludedSources()).toEqual(['zcode', 'grok'])
+  })
+
+  it('老装机（已配置 libraryPath 但没有引导标记）被豁免并补标记', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.changeConfiguredLibraryPath(tmpRoot)
+    expect(lib.isOnboardingNeeded()).toBe(false)
+    const config = JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
+    expect(config.onboardingCompleted).toBe(true)
+  })
+
+  it('setExcludedSources 空数组清除配置键', () => {
+    fs.rmSync(APP_CONFIG_FILE, { force: true })
+    lib.completeOnboarding(tmpRoot, ['pi'])
+    lib.setExcludedSources([])
+    expect(lib.getExcludedSources()).toEqual([])
+    const config = JSON.parse(fs.readFileSync(APP_CONFIG_FILE, 'utf-8'))
+    expect('excludedSources' in config).toBe(false)
+  })
+})
+
 describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
   function summary(sessionId: string, cwds: string[]) {
     return {

@@ -67,6 +67,14 @@ const api = {
   librarySelectDirectory: () => ipcRenderer.invoke('library:selectDirectory'),
   libraryChangePath: (newPath: string) => ipcRenderer.invoke('library:changePath', newPath),
 
+  // Onboarding
+  onboardingGetState: () => ipcRenderer.invoke('onboarding:getState'),
+  onboardingComplete: (libraryPath: string, excludedSources: string[]) =>
+    ipcRenderer.invoke('onboarding:complete', libraryPath, excludedSources),
+  onboardingSetExcludedSources: (excludedSources: string[]) =>
+    ipcRenderer.invoke('onboarding:setExcludedSources', excludedSources),
+  onboardingExtendClaudeRetention: () => ipcRenderer.invoke('onboarding:extendClaudeRetention'),
+
   // Markdown
   saveMarkdown: (dirPath: string, filename: string, content: string) =>
     ipcRenderer.invoke('session:saveMarkdown', dirPath, filename, content),

@@ -151,6 +151,10 @@ export interface AppConfig {
    * It lives in ~/.claude-session-manager/app-config.json, never in Claude data dirs.
    */
   deviceId?: string
+  /** First-run onboarding finished (or inherited from a pre-onboarding install). */
+  onboardingCompleted?: boolean
+  /** Harness sources the user chose to exclude entirely (no display, no backup). */
+  excludedSources?: string[]
 }
 
 function isOriginalSessionSourcePath(filePath: string): boolean {
@@ -238,7 +242,11 @@ function readAppConfigStrict(): AppConfigReadResult {
     const config = parsed as Record<string, unknown>
     if (
       (config.libraryPath !== undefined && typeof config.libraryPath !== 'string') ||
-      (config.deviceId !== undefined && (typeof config.deviceId !== 'string' || config.deviceId.length === 0))
+      (config.deviceId !== undefined && (typeof config.deviceId !== 'string' || config.deviceId.length === 0)) ||
+      (config.onboardingCompleted !== undefined && typeof config.onboardingCompleted !== 'boolean') ||
+      (config.excludedSources !== undefined && (
+        !Array.isArray(config.excludedSources) || !config.excludedSources.every((item) => typeof item === 'string')
+      ))
     ) {
       return invalidAppConfig(content)
     }
@@ -371,6 +379,50 @@ export function detectSessionSourceInstance(sourceFilePaths: string[]): SessionS
 export function getConfiguredLibraryPath(): string {
   const appConfig = loadAppConfig()
   return appConfig.libraryPath || DEFAULT_ROOT
+}
+
+/**
+ * First-run onboarding is needed only for genuinely fresh installs. Pre-onboarding
+ * installs (an initialized library already exists at the configured/default root)
+ * are grandfathered in and marked completed on first check.
+ */
+export function isOnboardingNeeded(): boolean {
+  const appConfig = loadAppConfig()
+  if (appConfig.onboardingCompleted) return false
+  if (appConfig.libraryPath || isLibraryInitialized(getConfiguredLibraryPath())) {
+    try {
+      updateAppConfigAtomically((existing) => ({ ...existing, onboardingCompleted: true }))
+    } catch { /* best effort; recheck next launch */ }
+    return false
+  }
+  return true
+}
+
+export function getExcludedSources(): string[] {
+  return loadAppConfig().excludedSources || []
+}
+
+export function completeOnboarding(libraryPath: string, excludedSources: string[]): void {
+  updateAppConfigAtomically(
+    (existing) => ({
+      ...existing,
+      libraryPath,
+      excludedSources: excludedSources.length > 0 ? excludedSources : undefined,
+      onboardingCompleted: true
+    }),
+    true
+  )
+}
+
+export function setExcludedSources(excludedSources: string[]): void {
+  updateAppConfigAtomically((existing) => ({
+    ...existing,
+    excludedSources: excludedSources.length > 0 ? excludedSources : undefined
+  }))
+}
+
+export function getDefaultLibraryRoot(): string {
+  return DEFAULT_ROOT
 }
 
 export function isLibraryInitialized(rootPath: string): boolean {

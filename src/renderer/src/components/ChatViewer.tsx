@@ -19,6 +19,7 @@ import {
   COMPACT_SUMMARY_PREFIX
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
+import { defaultResumeMethodForSource } from '../../../shared/settings-capabilities'
 
 import {
   DEFAULT_TOOL_COLOR,
@@ -764,6 +765,10 @@ function SessionBar({
   const copyUnavailableReason = resumeUnavailableReason || (isZcode ? t('chat.zcode_no_cli') : undefined)
   const forkUnavailableReason = resumeUnavailableReason || (isZcode ? t('chat.zcode_no_fork') : undefined)
   const experimentalClaudeDesktopImport = config?.preferences?.experimentalClaudeDesktopImport === true
+  const configuredResumeSurface = defaultResumeMethodForSource(
+    config?.preferences as unknown as Record<string, unknown>,
+    selectedSession.source
+  ) as ResumeSurface
 
   const resumeSurfaceOptions: Array<{
     surface: ResumeSurface
@@ -956,7 +961,7 @@ function SessionBar({
                 }
                 return
               }
-              await handleResume(isZcode ? 'zcode-desktop' : 'terminal')
+              await handleResume(configuredResumeSurface)
             }}
             disabled={sshResuming || !!resumeUnavailableReason}
             className={`px-2.5 py-0.5 text-[11px] flex items-center gap-1 ${

@@ -1,7 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree, Terminal, Check, AlertCircle, Smartphone, RefreshCw, Copy, Wifi, Globe2, Shield, HardDrive } from 'lucide-react'
+import {
+  X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree, Terminal, Check,
+  AlertCircle, RefreshCw, Copy, Wifi, Globe2, Shield, HardDrive
+} from 'lucide-react'
 
 const ELECTRON_MODIFIER_MAP: Record<string, string> = {
   Meta: 'CommandOrControl',
@@ -16,7 +19,7 @@ const DISPLAY_MODIFIER_MAP: Record<string, string> = {
   Shift: '⇧'
 }
 
-function keyEventToAccelerator(e: KeyboardEvent): string | null {
+export function keyEventToAccelerator(e: KeyboardEvent): string | null {
   if (['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) return null
 
   const parts: string[] = []
@@ -32,16 +35,21 @@ function keyEventToAccelerator(e: KeyboardEvent): string | null {
   return parts.join('+')
 }
 
-function formatAccelerator(accel: string): string {
+export function formatAccelerator(accel: string): string {
   return accel
     .split('+')
     .map((p) => DISPLAY_MODIFIER_MAP[p] || p)
     .join('')
 }
 
-function CliSection() {
+export function CliSection() {
   const [status, setStatus] = useState<{
-    cliInstalled: boolean; symlinkInstalled: boolean; skillInstalled: boolean
+    cliInstalled: boolean
+    symlinkInstalled: boolean
+    skillInstalled: boolean
+    cliPath: string | null
+    commandPath: string | null
+    skillPath: string | null
   } | null>(null)
   const [installing, setInstalling] = useState(false)
   const [result, setResult] = useState<{ cliManualInstall?: string; error?: string } | null>(null)
@@ -79,9 +87,9 @@ function CliSection() {
 
         {status && (
           <div className="space-y-1">
-            <StatusRow label="CLI 文件" ok={status.cliInstalled} />
-            <StatusRow label="swob 命令" ok={status.symlinkInstalled} />
-            <StatusRow label="Agent Skill" ok={status.skillInstalled} />
+            <StatusRow label="CLI 文件" ok={status.cliInstalled} path={status.cliPath} />
+            <StatusRow label="swob 命令" ok={status.symlinkInstalled} path={status.commandPath} />
+            <StatusRow label="Agent Skill" ok={status.skillInstalled} path={status.skillPath} />
           </div>
         )}
 
@@ -122,14 +130,17 @@ function CliSection() {
   )
 }
 
-function StatusRow({ label, ok }: { label: string; ok: boolean }) {
+function StatusRow({ label, ok, path: itemPath }: { label: string; ok: boolean; path?: string | null }) {
   return (
-    <div className="flex items-center gap-2 text-[11px]">
-      {ok
-        ? <Check size={10} className="text-green-400" />
+    <div className="flex items-start gap-2 text-[11px] min-w-0">
+      <span className="mt-0.5">{ok
+        ? <Check size={10} className="text-soft-green" />
         : <AlertCircle size={10} className="text-muted" />
-      }
-      <span className={ok ? 'text-primary' : 'text-muted'}>{label}</span>
+      }</span>
+      <span className="min-w-0">
+        <span className={ok ? 'text-primary' : 'text-muted'}>{label}</span>
+        {itemPath && <code className="block text-[10px] font-mono text-faint truncate" title={itemPath}>{itemPath}</code>}
+      </span>
     </div>
   )
 }
@@ -177,7 +188,7 @@ function IpRow({ ip, label, icon, desc, warn }: {
   )
 }
 
-function MobileConnectSection() {
+export function RemoteConnectionSection() {
   const [info, setInfo] = useState<NetworkInfo | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -199,8 +210,8 @@ function MobileConnectSection() {
     <section>
       <div className="flex items-center justify-between mb-2">
         <label className="flex items-center gap-2 text-xs font-medium text-secondary">
-          <Smartphone size={12} />
-          手机连接信息
+          <Server size={12} />
+          远程连接信息
         </label>
         <button
           onClick={load}
@@ -230,7 +241,7 @@ function MobileConnectSection() {
               ip={info.tailscaleIp}
               label="Tailscale（推荐，跨网络可用）"
               icon={<Shield size={10} className="text-purple-400" />}
-              desc="已检测到 Tailscale。只要手机也安装 Tailscale 并登录同一账号，任何网络下都能连接，无需公网 IP。"
+              desc="已检测到 Tailscale。同一账号下的另一台设备可跨网络连接，无需公网 IP。"
             />
           )}
 
@@ -240,7 +251,7 @@ function MobileConnectSection() {
               ip={ip}
               label="局域网 IP（同一 WiFi 下可用）"
               icon={<Wifi size={10} className="text-blue-400" />}
-              desc="仅限手机和 Mac 在同一个 WiFi 网络时使用。IP 可能随网络变化，建议配合路由器固定 IP 使用。"
+              desc="仅限两台设备处于同一局域网时使用。IP 可能随网络变化。"
               warn="跨网络、VPN 下不可用"
             />
           ))}
@@ -261,7 +272,7 @@ function MobileConnectSection() {
 
           {!info.tailscaleIp && (
             <div className="p-2.5 rounded-lg bg-surface border border-edge-subtle text-[10px] text-muted leading-relaxed">
-              <span className="font-medium text-secondary">推荐：安装 Tailscale</span> 实现最简单的跨网络连接——无需公网 IP、无需端口转发，手机和 Mac 各安装一次即可。
+              <span className="font-medium text-secondary">推荐：安装 Tailscale</span> 实现跨网络连接——无需公网 IP、无需端口转发，两端各安装一次即可。
               免费个人计划支持 3 台设备。
             </div>
           )}
@@ -275,7 +286,7 @@ function MobileConnectSection() {
   )
 }
 
-function LlmSettingsSection() {
+export function LlmSettingsSection() {
   const locale = useStore((s) => s.locale)
   const [provider, setProvider] = useState('anthropic')
   const [apiKey, setApiKey] = useState('')
@@ -419,7 +430,7 @@ function LlmSettingsSection() {
   )
 }
 
-function RetentionSection() {
+export function RetentionSection() {
   const t = useT()
   const locale = useStore((s) => s.locale)
   const [days, setDays] = useState(30)
@@ -494,7 +505,7 @@ function RetentionSection() {
   )
 }
 
-type SettingsCategory = 'appearance' | 'shortcuts' | 'terminal' | 'retention' | 'ai' | 'ssh' | 'mobile' | 'updates'
+type SettingsCategory = 'appearance' | 'shortcuts' | 'terminal' | 'retention' | 'ai' | 'ssh' | 'remote' | 'updates'
 
 const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; icon: string; labelZh: string; labelEn: string }> = [
   { id: 'appearance', icon: '🎨', labelZh: '外观', labelEn: 'Appearance' },
@@ -503,11 +514,11 @@ const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; icon: string; labelZh: 
   { id: 'retention', icon: '🔒', labelZh: '会话保留', labelEn: 'Retention' },
   { id: 'ai', icon: '✨', labelZh: 'AI 分析', labelEn: 'AI Analysis' },
   { id: 'ssh', icon: '🌐', labelZh: 'SSH 远程', labelEn: 'SSH Remote' },
-  { id: 'mobile', icon: '📱', labelZh: '手机连接', labelEn: 'Mobile' },
+  { id: 'remote', icon: '↗', labelZh: '远程连接', labelEn: 'Remote' },
   { id: 'updates', icon: '🔄', labelZh: '更新与 CLI', labelEn: 'Updates & CLI' },
 ]
 
-export function SettingsPanel() {
+export function LegacySettingsPanel() {
   const {
     settingsOpen, toggleSettings,
     locale, setLocale,
@@ -890,9 +901,9 @@ export function SettingsPanel() {
         </section>
         </>}
 
-        {/* ─── Mobile ─── */}
-        {activeCategory === 'mobile' && <>
-        <MobileConnectSection />
+        {/* ─── Remote ─── */}
+        {activeCategory === 'remote' && <>
+        <RemoteConnectionSection />
         </>}
       </div>
       </div>

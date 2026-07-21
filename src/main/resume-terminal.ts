@@ -1,21 +1,25 @@
 import * as fs from 'fs'
 import { exec as childExec, execFile as childExecFile } from 'child_process'
+import { migrateSettingsPreferences } from '../shared/settings-capabilities'
 
 export type ResumeTerminal = 'terminal-app' | 'iterm' | 'custom'
 
 export interface ResumeTerminalSettings {
   resumeTerminal: ResumeTerminal
   resumeTerminalCommandTemplate: string
+  defaultTerminalId: string
+  terminalExecutable?: string
 }
 
 export interface ResumeTerminalPreferences {
   resumeTerminal?: unknown
   resumeTerminalCommandTemplate?: unknown
+  defaultTerminalId?: unknown
 }
 
 export interface OpenResumeTerminalResult {
-  terminal: ResumeTerminal
-  fallbackReason?: 'invalid-custom-template'
+  terminal: string
+  fallbackReason?: 'invalid-custom-template' | 'terminal-unavailable'
 }
 
 interface ResumeTerminalDeps {
@@ -57,11 +61,18 @@ export function normalizeResumeTerminal(value: unknown): ResumeTerminal {
 export function normalizeResumeTerminalSettings(
   preferences?: ResumeTerminalPreferences | null
 ): ResumeTerminalSettings {
+  const migrated = migrateSettingsPreferences(preferences as Record<string, unknown> | undefined)
+  const legacyTerminal = migrated.defaultTerminalId === 'iterm2'
+    ? 'iterm'
+    : migrated.defaultTerminalId === 'custom' ? 'custom' : 'terminal-app'
   return {
-    resumeTerminal: normalizeResumeTerminal(preferences?.resumeTerminal),
+    resumeTerminal: preferences?.resumeTerminal === undefined
+      ? legacyTerminal
+      : normalizeResumeTerminal(preferences.resumeTerminal),
     resumeTerminalCommandTemplate: typeof preferences?.resumeTerminalCommandTemplate === 'string'
       ? preferences.resumeTerminalCommandTemplate
-      : ''
+      : '',
+    defaultTerminalId: migrated.defaultTerminalId
   }
 }
 
@@ -105,17 +116,50 @@ export function openWithITerm(command: string, deps: Partial<ResumeTerminalDeps>
   )
 }
 
+function terminalArgs(terminalId: string, command: string): string[] | null {
+  const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/sh'
+  const shellArgs = process.platform === 'win32' ? ['-NoExit', '-Command', command] : ['-lc', command]
+  switch (terminalId) {
+    case 'wezterm': return ['start', '--', shell, ...shellArgs]
+    case 'kitty': return [shell, ...shellArgs]
+    case 'alacritty': return ['-e', shell, ...shellArgs]
+    case 'ghostty': return ['+new-window', '-e', shell, ...shellArgs]
+    case 'windows-terminal': return ['-w', 'new', 'new-tab', shell, ...shellArgs]
+    case 'gnome-terminal': return ['--window', '--', shell, ...shellArgs]
+    case 'konsole': return ['--separate', '-e', shell, ...shellArgs]
+    case 'foot': return [shell, ...shellArgs]
+    case 'xfce4-terminal': return ['--window', '-x', shell, ...shellArgs]
+    default: return null
+  }
+}
+
+function openWithDetectedTerminal(
+  command: string,
+  terminalId: string,
+  executable: string,
+  deps: Partial<ResumeTerminalDeps> = {}
+): boolean {
+  const args = terminalArgs(terminalId, command)
+  if (!args) return false
+  const d = { ...defaultDeps, ...deps }
+  d.execFile(executable, args, { encoding: 'utf8', timeout: 15000 }, (error, _stdout, stderr) => {
+    if (error) d.logger.warn(`${terminalId} 启动失败：${stderr.trim().split('\n')[0] || error.message}`)
+  })
+  return true
+}
+
 export function openResumeTerminal(
   command: string,
   settings: ResumeTerminalSettings,
   deps: Partial<ResumeTerminalDeps> = {}
 ): OpenResumeTerminalResult {
-  if (settings.resumeTerminal === 'iterm') {
+  const terminalId = settings.defaultTerminalId || (settings.resumeTerminal === 'iterm' ? 'iterm2' : settings.resumeTerminal)
+  if (terminalId === 'iterm2' || settings.resumeTerminal === 'iterm') {
     openWithITerm(command, deps)
     return { terminal: 'iterm' }
   }
 
-  if (settings.resumeTerminal === 'custom') {
+  if (terminalId === 'custom' || settings.resumeTerminal === 'custom') {
     const rendered = renderCustomResumeTerminalCommand(settings.resumeTerminalCommandTemplate, command)
     if (!rendered) {
       const d = { ...defaultDeps, ...deps }
@@ -126,6 +170,18 @@ export function openResumeTerminal(
     const d = { ...defaultDeps, ...deps }
     d.exec(rendered)
     return { terminal: 'custom' }
+  }
+
+  if (terminalId !== 'apple-terminal') {
+    if (settings.terminalExecutable && openWithDetectedTerminal(
+      command, terminalId, settings.terminalExecutable, deps
+    )) {
+      return { terminal: terminalId }
+    }
+    const d = { ...defaultDeps, ...deps }
+    d.logger.warn(`${terminalId} 当前没有可执行入口，已改用 Terminal.app`)
+    openWithTerminalApp(command, deps)
+    return { terminal: 'terminal-app', fallbackReason: 'terminal-unavailable' }
   }
 
   openWithTerminalApp(command, deps)

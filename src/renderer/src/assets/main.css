@@ -86,6 +86,14 @@ body {
   display: none;
 }
 
+.settings-tab-strip {
+  scrollbar-width: none;
+}
+
+.settings-tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
 /* In-session search keyword highlighting (CSS Custom Highlight API) */
 ::highlight(swob-search) {
   background-color: rgba(245, 158, 11, 0.35);

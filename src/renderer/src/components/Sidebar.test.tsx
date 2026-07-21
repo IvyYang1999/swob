@@ -320,3 +320,64 @@ describe('未分组底部区域只接受物理归属标签', () => {
     expect(screen.queryByText((text) => text.includes('真正单轮'))).toBeNull()
   })
 })
+
+describe('设置页的视图偏好会驱动侧边栏', () => {
+  beforeEach(() => {
+    mockStore.selectedUniqueId = null
+    mockStore.config = {
+      folders: [],
+      sessionMeta: {},
+      preferences: {
+        defaultViewMode: 'compact' as const,
+        terminalApp: 'Terminal' as const,
+        defaultSort: 'updated',
+        defaultGrouping: 'none',
+        singleTurnBehavior: 'collapse'
+      }
+    } as any
+  })
+
+  it('隐藏单轮会话时不会渲染单轮区域', () => {
+    mockStore.config.preferences.singleTurnBehavior = 'hide'
+    mockStore.sessions = [makeSession({ turnCount: 1, firstUserMessage: '应隐藏的单轮' })] as any
+
+    render(<Sidebar width={260} />)
+
+    expect(screen.queryByText('应隐藏的单轮')).toBeNull()
+    expect(screen.queryByText('sidebar.single_turn')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: /镜头/ }))
+    expect(screen.queryByText('应隐藏的单轮')).toBeNull()
+  })
+
+  it('显示单轮会话时默认展开内容', () => {
+    mockStore.config.preferences.singleTurnBehavior = 'show'
+    mockStore.sessions = [makeSession({ turnCount: 1, firstUserMessage: '直接显示的单轮' })] as any
+
+    render(<Sidebar width={260} />)
+
+    expect(screen.getByText('直接显示的单轮')).toBeTruthy()
+  })
+
+  it('默认排序会作用于未分组会话列表', () => {
+    mockStore.config.preferences.defaultSort = 'turns'
+    mockStore.sessions = [
+      makeSession({ id: 'short', sessionId: 'short', turnCount: 2, firstUserMessage: '短会话' }),
+      makeSession({ id: 'long', sessionId: 'long', turnCount: 20, firstUserMessage: '长会话' })
+    ] as any
+
+    render(<Sidebar width={260} />)
+
+    const ids = [...document.querySelectorAll('[data-session-id]')].map((node) => node.getAttribute('data-session-id'))
+    expect(ids).toEqual(['long', 'short'])
+  })
+
+  it('没有本地镜头偏好时采用默认分组', () => {
+    mockStore.config.preferences.defaultGrouping = 'harness'
+    mockStore.sessions = [makeSession({ source: 'codex' })] as any
+
+    render(<Sidebar width={260} />)
+    fireEvent.click(screen.getByRole('tab', { name: /镜头/ }))
+
+    expect(document.querySelector('[data-lens-group="harness:codex"]')).toBeTruthy()
+  })
+})

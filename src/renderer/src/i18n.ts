@@ -1,6 +1,6 @@
 import { useStore } from './store'
 
-export type Locale = 'zh-CN' | 'en'
+export type Locale = 'zh-CN' | 'en' | 'ja'
 
 const translations: Record<Locale, Record<string, string>> = {
   'zh-CN': {
@@ -315,6 +315,32 @@ const translations: Record<Locale, Record<string, string>> = {
     'info.action_read': 'Read',
     'info.action_upload': 'Upload',
     'info.action_user': 'User',
+  },
+  'ja': {
+    'settings.title': '設定',
+    'settings.theme': 'テーマ',
+    'settings.theme_light': 'ライト',
+    'settings.theme_dark': 'ダーク',
+    'settings.theme_system': 'システム',
+    'settings.language': '言語',
+    'settings.spotlight_shortcut': 'クイックジャンプのショートカット',
+    'settings.spotlight_shortcut_hint': '新しいキーの組み合わせを押してください',
+    'settings.spotlight_shortcut_recording': '入力待ち…',
+    'settings.reset_shortcut': 'リセット',
+    'settings.experimental_claude_desktop': '実験的：Claude Desktop にインポート',
+    'settings.experimental_claude_desktop_warning': 'transcript を変更し、thinking ブロックを削除する可能性があります。',
+    'settings.ssh': 'SSH リモート',
+    'settings.ssh_host': 'ホスト',
+    'settings.ssh_user': 'ユーザー名',
+    'settings.ssh_remote_path': 'リモートパス（任意）',
+    'settings.ssh_save': '保存',
+    'settings.ssh_clear': '削除',
+    'settings.project_view': 'プロジェクト表示',
+    'settings.project_view_folders': '整理済みフォルダ',
+    'settings.project_view_paths': '実際のプロジェクトパス',
+    'settings.update': 'ソフトウェア更新',
+    'settings.check_for_updates': '更新を確認',
+    'settings.checking_update': '確認中…'
   }
 }
 

@@ -139,8 +139,33 @@ interface ElectronAPI {
   getContextInspector: (filePath: string) => Promise<any>
 
   // CLI
-  cliGetStatus: () => Promise<{ cliInstalled: boolean; symlinkInstalled: boolean; skillInstalled: boolean }>
+  cliGetStatus: () => Promise<{
+    cliInstalled: boolean
+    symlinkInstalled: boolean
+    skillInstalled: boolean
+    cliPath: string | null
+    commandPath: string | null
+    skillPath: string | null
+  }>
   cliInstall: () => Promise<{ cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; cliManualInstall?: string; error?: string }>
+  getDetectedTerminals: (force?: boolean) => Promise<Array<{
+    id: string
+    name: string
+    path: string
+    executable?: string
+    commandSupport: 'stable' | 'conditional' | 'none'
+    canRunCommand: boolean
+    limitation?: string
+    evidence: 'system-path' | 'app-path' | 'bundle-id' | 'executable'
+  }>>
+  getAppInfo: () => Promise<{ version: string; platform: string }>
+  networkGetInfo: () => Promise<{
+    localIps: string[]
+    tailscaleIp: string | null
+    publicIp: string | null
+    hostname: string
+    sshEnabled: boolean
+  }>
 }
 
 declare global {

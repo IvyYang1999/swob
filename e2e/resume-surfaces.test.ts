@@ -161,9 +161,6 @@ test.describe.serial('多客户端 Resume surfaces', () => {
     page = await app.firstWindow()
     await page.waitForLoadState('domcontentloaded')
     await page.setViewportSize({ width: 1100, height: 720 })
-    const allSessionsGroup = page.getByRole('button', { name: /AI会话\(3\)/ })
-    await expect(allSessionsGroup).toBeVisible({ timeout: 20000 })
-    await allSessionsGroup.click()
     await expect(page.locator('[data-session-id]')).toHaveCount(3, { timeout: 20000 })
   })
 
@@ -192,7 +189,7 @@ test.describe.serial('多客户端 Resume surfaces', () => {
   test('设置页默认关闭 Claude Desktop 实验入口，并显示不可逆风险警告', async () => {
     await page.setViewportSize({ width: 760, height: 520 })
     await page.getByTitle('设置').click()
-    await page.getByRole('button', { name: /终端与 Resume/ }).click()
+    await page.getByRole('tab', { name: 'Resume' }).click()
 
     const toggle = page.getByRole('checkbox', { name: '实验：导入到 Claude Desktop' })
     await expect(toggle).not.toBeChecked()
@@ -200,10 +197,10 @@ test.describe.serial('多客户端 Resume surfaces', () => {
     await toggle.check()
     await expect(toggle).toBeChecked()
 
-    const section = page.getByText('实验：导入到 Claude Desktop').locator('xpath=ancestor::section')
+    const section = page.getByText('实验：导入到 Claude Desktop').locator('xpath=ancestor::div[contains(@class,"rounded-md")]').first()
     await section.screenshot({ path: path.join(SCREENSHOT_DIR, 'claude-experimental-setting.png') })
 
-    await page.locator('.fixed.inset-0.z-50 .border-b button').click()
+    await page.getByRole('button', { name: '关闭设置' }).click()
   })
 
   test('Claude 菜单在开关开启后显示 Desktop 与 Remote Control，点击导入先弹警告', async () => {

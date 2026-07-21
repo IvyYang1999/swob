@@ -12,7 +12,13 @@ const SUPPORTED_ORIGINS = new Set<TranscriptOrigin>([
 const STRUCTURED_HUMAN_PROMPT_SOURCES = new Set([
   'typed',
   'queued',
-  'suggestion_accepted'
+  'suggestion_accepted',
+  // User-input entrypoints outside the terminal typing path. Empirically these
+  // carry real human prompts (desktop app / remote control = 'external',
+  // SDK-launched interactive sessions = 'sdk'). Machine-injected content in
+  // these sessions still gets caught by the tag/prefix checks above this list.
+  'external',
+  'sdk'
 ])
 
 const COMMAND_TAGS = new Set([
@@ -140,6 +146,14 @@ export function detectTranscriptOrigin(
 
   if (promptSource && STRUCTURED_HUMAN_PROMPT_SOURCES.has(promptSource)) {
     return ordinaryContent ? 'human' : 'unknown'
+  }
+
+  // Legacy transcripts (pre-promptSource Claude Code) have no promptSource field
+  // at all. At this point every machine marker above has already been ruled out,
+  // so ordinary content without the field is a human prompt, not an injection.
+  // A present-but-unrecognized promptSource value still falls through to unknown.
+  if (promptSource === undefined && ordinaryContent) {
+    return 'human'
   }
 
   return 'unknown'

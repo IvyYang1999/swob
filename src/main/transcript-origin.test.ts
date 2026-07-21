@@ -112,10 +112,21 @@ describe('transcript 来源判定', () => {
     expect(detectTranscriptOrigin(notification)).toBe('task-notification')
   })
 
-  it('P1-2 回归：sdk、未来值与缺失 promptSource 均不回退 human', () => {
-    expect(detectTranscriptOrigin(userMessage('普通正文', { promptSource: 'sdk' }))).toBe('unknown')
+  // 2026-07-21 实证修订：原 P1-2 断言 sdk/缺失 promptSource → unknown，导致全库
+  // 85% 有真人消息的会话轮数塌 0（老版本 JSONL 无 promptSource 字段；desktop/
+  // remote-control 入口为 external；swob resume 与 SDK 启动为 sdk）。审计口径
+  // 收窄为：仅「存在但不认识的 promptSource 值」保持 fail-closed。
+  it('P1-2 修订：sdk/external/缺失 promptSource 的普通正文是 human，未来未知值仍 unknown', () => {
+    expect(detectTranscriptOrigin(userMessage('普通正文', { promptSource: 'sdk' }))).toBe('human')
+    expect(detectTranscriptOrigin(userMessage('普通正文', { promptSource: 'external' }))).toBe('human')
+    expect(detectTranscriptOrigin(userMessage('普通正文'))).toBe('human')
     expect(detectTranscriptOrigin(userMessage('普通正文', { promptSource: 'future-source' }))).toBe('unknown')
-    expect(detectTranscriptOrigin(userMessage('普通正文'))).toBe('unknown')
+  })
+
+  it('缺失 promptSource 的机器注入仍被标签/前缀检查拦截，不因宽容化漏判', () => {
+    expect(detectTranscriptOrigin(userMessage('<system-reminder>注入</system-reminder>'))).toBe('hook')
+    expect(detectTranscriptOrigin(userMessage('This session is being continued from a previous conversation'))).toBe('unknown')
+    expect(detectTranscriptOrigin(userMessage('Tool loaded.'))).toBe('unknown')
   })
 
   it('P2-1【曾经的 bug】：纯图片来源占位字符串不是 human', () => {

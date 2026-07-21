@@ -42,7 +42,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 20 // preserve transcript-origin evidence in lineage metadata
+const CACHE_VERSION = 21 // origin whitelist fix: external/sdk/legacy-no-promptSource are human
 
 type CachedSessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode'
 

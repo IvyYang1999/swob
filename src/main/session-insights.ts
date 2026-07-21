@@ -7,7 +7,10 @@
 
 import { auditSession, type SessionAuditResult, type SessionType } from './session-audit'
 import { parseSessionFile } from './session-loader'
+import { callLlm, resolveLlmModel, type LlmSettings } from './llm-client'
 import type { SessionSummary } from './types'
+
+export type InsightsProgress = (stage: string, current: number, total: number) => void
 
 export interface InsightsReport {
   generatedAt: string
@@ -61,7 +64,8 @@ function dayKey(d: Date): string {
 
 export async function generateInsightsReport(
   sessions: SessionSummary[],
-  maxSessions = 200
+  maxSessions = 200,
+  onProgress?: InsightsProgress
 ): Promise<InsightsReport> {
   const eligible = sessions
     .filter(s => s.turnCount > 1 && s.filePath)
@@ -69,11 +73,15 @@ export async function generateInsightsReport(
     .slice(0, maxSessions)
 
   const audits: SessionAuditResult[] = []
-  for (const s of eligible) {
+  for (let i = 0; i < eligible.length; i++) {
+    const s = eligible[i]
     try {
       const msgs = await parseSessionFile(s.filePath)
       if (msgs.length > 0) audits.push(auditSession(msgs, s.sessionId))
     } catch { /* skip */ }
+    if (onProgress && (i % 10 === 0 || i === eligible.length - 1)) {
+      onProgress('analyzing', i + 1, eligible.length)
+    }
   }
 
   const bySource = new Map<string, { sessions: number; turns: number; tokens: number; cost: number }>()
@@ -315,4 +323,129 @@ Covers ${report.bySource.map(s => s.source).join(', ')} · All metrics tagged wi
 </footer>
 </body>
 </html>`
+}
+
+// ============ LLM Narrative（用户提供 API key，session 内容会发送到所选服务商） ============
+
+export interface LlmNarrative {
+  atAGlance: string
+  workPatterns: string
+  frictionAnalysis: string
+  recommendations: string
+  model: string
+  provider: string
+}
+
+/** 采样 session 内容供 LLM 分析。只取真人 user 消息前 300 字符，每 session 最多 8 条。 */
+async function sampleSessionContent(
+  sessions: SessionSummary[],
+  maxSessions: number,
+  onProgress?: InsightsProgress
+): Promise<string> {
+  const lines: string[] = []
+  const picked = sessions
+    .filter(s => s.turnCount > 1 && s.filePath)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, maxSessions)
+
+  for (let i = 0; i < picked.length; i++) {
+    const s = picked[i]
+    try {
+      const msgs = await parseSessionFile(s.filePath)
+      const userTexts: string[] = []
+      for (const m of msgs) {
+        if (m.isSidechain || m.type !== 'user' || !m.message) continue
+        const c = m.message.content
+        const text = typeof c === 'string' ? c
+          : Array.isArray(c) ? c.filter((p: { type?: string; text?: string }) => p.type === 'text' && p.text).map((p: { text?: string }) => p.text).join(' ')
+          : ''
+        if (!text || text.startsWith('<') || text.includes('system-reminder')) continue
+        userTexts.push(text.slice(0, 300))
+        if (userTexts.length >= 8) break
+      }
+      if (userTexts.length > 0) {
+        lines.push(`--- Session (${s.source || 'claude-code'}, ${s.turnCount} turns, ${new Date(s.createdAt).toISOString().slice(0, 10)}) ---`)
+        lines.push(...userTexts.map(t => `[User]: ${t}`))
+      }
+    } catch { /* skip */ }
+    if (onProgress && i % 10 === 0) onProgress('sampling', i + 1, picked.length)
+  }
+  return lines.join('\n').slice(0, 120_000)
+}
+
+export async function generateLlmNarrative(
+  report: InsightsReport,
+  sessions: SessionSummary[],
+  llm: LlmSettings,
+  onProgress?: InsightsProgress
+): Promise<LlmNarrative> {
+  onProgress?.('sampling', 0, 1)
+  const contentSample = await sampleSessionContent(sessions, 60, onProgress)
+
+  const statsBlock = JSON.stringify({
+    totalSessions: report.totalSessions,
+    dateRange: report.dateRange,
+    bySource: report.bySource,
+    bySessionType: report.bySessionType,
+    healthDistribution: { avg: report.healthDistribution.avgScore, poor: report.healthDistribution.poor },
+    topTools: report.topTools.slice(0, 8),
+    topModels: report.topModels,
+    readEditRatio: report.readEditRatio,
+    frameworkOverheadAvgPct: report.frameworkOverhead.avgPercentage,
+    frustrationSignals: report.totalFrustrationSignals,
+    interruptions: report.totalInterruptions,
+    quantFindings: report.findings
+  }, null, 1)
+
+  const systemPrompt = 'You are an AI-coding-workflow analyst writing a usage insights report for a developer who uses multiple AI coding tools (Claude Code, Codex, Cursor, etc). Analyze their aggregated metrics and real session samples. Write in the same language the user predominantly writes in (detect from samples — likely Chinese). Be specific, cite examples from the data, use second person. No flattery; genuinely useful observations only.'
+
+  onProgress?.('llm', 0, 1)
+  const raw = await callLlm(llm, systemPrompt, `## Aggregated metrics (computed locally, provenance-tagged)
+${statsBlock}
+
+## Real user-message samples from recent sessions
+${contentSample}
+
+## Task
+Return STRICT JSON with exactly these keys (values are markdown strings):
+{
+  "atAGlance": "2-3 sentence executive summary of how this user works with AI coding tools",
+  "workPatterns": "2-3 paragraphs analyzing HOW the user interacts: iterate quickly vs detailed specs? interrupt often? multi-tool workflows? cite specific examples with **bold** key insights",
+  "frictionAnalysis": "top friction points visible in the data: repeated corrections, tool errors, context overflows — with concrete examples",
+  "recommendations": "3-5 numbered, actionable recommendations tailored to this user's patterns (e.g. CLAUDE.md rules to add, workflow changes, tool choices)"
+}`, 4096)
+
+  onProgress?.('llm', 1, 1)
+  const jsonMatch = raw.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('llm-response-not-json')
+  const parsed = JSON.parse(jsonMatch[0])
+  return {
+    atAGlance: String(parsed.atAGlance || ''),
+    workPatterns: String(parsed.workPatterns || ''),
+    frictionAnalysis: String(parsed.frictionAnalysis || ''),
+    recommendations: String(parsed.recommendations || ''),
+    model: resolveLlmModel(llm),
+    provider: llm.provider
+  }
+}
+
+function mdToHtml(md: string): string {
+  return md
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>')
+}
+
+export function renderNarrativeHtml(n: LlmNarrative): string {
+  return `
+<h2>At a Glance <span class="provenance">AI · ${n.provider}/${n.model}</span></h2>
+<div style="padding:14px 16px;background:var(--bg-alt);border-radius:8px;border:1px solid var(--border);font-size:14px;margin-bottom:8px"><p>${mdToHtml(n.atAGlance)}</p></div>
+<h2>Work Patterns <span class="provenance">AI</span></h2>
+<div style="font-size:13px;color:var(--fg)"><p>${mdToHtml(n.workPatterns)}</p></div>
+<h2>Friction Analysis <span class="provenance">AI</span></h2>
+<div style="font-size:13px;color:var(--fg)"><p>${mdToHtml(n.frictionAnalysis)}</p></div>
+<h2>Recommendations <span class="provenance">AI</span></h2>
+<div style="font-size:13px;color:var(--fg)"><ol style="padding-left:20px">${mdToHtml(n.recommendations)}</ol></div>`
 }

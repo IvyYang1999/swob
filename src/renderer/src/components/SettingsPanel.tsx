@@ -275,6 +275,96 @@ function MobileConnectSection() {
   )
 }
 
+function LlmSettingsSection() {
+  const locale = useStore((s) => s.locale)
+  const [provider, setProvider] = useState('anthropic')
+  const [apiKey, setApiKey] = useState('')
+  const [keyHint, setKeyHint] = useState('')
+  const [hasKey, setHasKey] = useState(false)
+  const [model, setModel] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    window.api.getLlmSettings().then((s) => {
+      setProvider(s.provider)
+      setKeyHint(s.keyHint)
+      setHasKey(s.hasKey)
+      setModel(s.model)
+      setBaseUrl(s.baseUrl)
+    }).catch(() => {})
+  }, [])
+
+  const handleSave = useCallback(async () => {
+    const ok = await window.api.setLlmSettings({ provider, apiKey, model, baseUrl })
+    if (ok) {
+      setSaved(true)
+      setApiKey('')
+      const s = await window.api.getLlmSettings()
+      setKeyHint(s.keyHint)
+      setHasKey(s.hasKey)
+      setTimeout(() => setSaved(false), 2000)
+    }
+  }, [provider, apiKey, model, baseUrl])
+
+  return (
+    <section>
+      <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
+        ✨ {locale === 'zh-CN' ? 'AI 分析（Insights 报告）' : 'AI Analysis (Insights Report)'}
+      </label>
+      <div className="space-y-2">
+        <div className="flex gap-1.5">
+          {(['anthropic', 'openai', 'custom'] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setProvider(p)}
+              className={`px-2 py-1 rounded text-[11px] capitalize transition-colors ${
+                provider === p ? 'bg-soft-blue/15 text-soft-blue font-medium' : 'bg-surface text-muted hover:text-primary'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={hasKey ? `${locale === 'zh-CN' ? '已保存' : 'Saved'} ${keyHint} — ${locale === 'zh-CN' ? '输入新 key 可替换' : 'enter new key to replace'}` : 'API Key'}
+          className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
+        />
+        <input
+          type="text"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          placeholder={locale === 'zh-CN' ? `模型（留空用默认：${provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : '必填'}）` : `Model (default: ${provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : 'required'})`}
+          className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
+        />
+        {provider === 'custom' && (
+          <input
+            type="text"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="Base URL (OpenAI-compatible, e.g. https://api.example.com/v1)"
+            className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
+          />
+        )}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSave}
+            className="px-3 py-1.5 rounded-md text-xs font-medium bg-soft-blue/15 text-soft-blue hover:bg-soft-blue/25 transition-colors"
+          >
+            {saved ? (locale === 'zh-CN' ? '已保存 ✓' : 'Saved ✓') : (locale === 'zh-CN' ? '保存' : 'Save')}
+          </button>
+          <span className="text-[10px] text-faint">
+            {locale === 'zh-CN' ? 'key 仅存本地，生成 AI 报告时会话内容将发送至所选服务商' : 'Key stored locally. Session content is sent to your provider when generating AI reports.'}
+          </span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function RetentionSection() {
   const t = useT()
   const locale = useStore((s) => s.locale)
@@ -626,6 +716,9 @@ export function SettingsPanel() {
 
         {/* Session retention & backup */}
         <RetentionSection />
+
+        {/* AI Analysis (LLM API keys) */}
+        <LlmSettingsSection />
 
         {/* App updates */}
         <section>

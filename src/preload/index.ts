@@ -105,7 +105,15 @@ const api = {
   getExecutionTree: (filePath: string) => ipcRenderer.invoke('session:getExecutionTree', filePath),
 
   // Insights Report
-  generateInsights: () => ipcRenderer.invoke('insights:generate'),
+  generateInsights: (options?: { useLlm?: boolean }) => ipcRenderer.invoke('insights:generate', options),
+  getLlmSettings: () => ipcRenderer.invoke('insights:getLlmSettings'),
+  setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) =>
+    ipcRenderer.invoke('insights:setLlmSettings', settings),
+  onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => {
+    const listener = (_e: unknown, data: { stage: string; current: number; total: number }): void => callback(data)
+    ipcRenderer.on('insights:progress', listener)
+    return () => ipcRenderer.removeListener('insights:progress', listener)
+  },
 
   // Session Audit
   auditSession: (filePath: string) => ipcRenderer.invoke('session:audit', filePath),

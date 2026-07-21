@@ -1053,12 +1053,36 @@ ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
   }
 })
 
-ipcMain.handle('insights:generate', async () => {
+ipcMain.handle('insights:generate', async (event, options?: { useLlm?: boolean }) => {
+  const sendProgress = (stage: string, current: number, total: number): void => {
+    try { event.sender.send('insights:progress', { stage, current, total }) } catch { /* ignore */ }
+  }
   try {
-    const { generateInsightsReport, renderInsightsHtml } = await import('./session-insights')
+    const { generateInsightsReport, generateLlmNarrative, renderInsightsHtml, renderNarrativeHtml } = await import('./session-insights')
     const osModule = await import('os')
-    const report = await generateInsightsReport(cachedSessions)
-    const html = renderInsightsHtml(report)
+    const report = await generateInsightsReport(cachedSessions, 200, sendProgress)
+    let html = renderInsightsHtml(report)
+
+    let llmUsed = false
+    let llmError: string | undefined
+    if (options?.useLlm) {
+      try {
+        const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
+        const llmSettings = libConfig.llmSettings as { provider: 'anthropic' | 'openai' | 'custom'; apiKey: string; model?: string; baseUrl?: string } | undefined
+        if (!llmSettings?.apiKey) {
+          llmError = 'no-api-key'
+        } else {
+          const narrative = await generateLlmNarrative(report, cachedSessions, llmSettings, sendProgress)
+          const narrativeHtml = renderNarrativeHtml(narrative)
+          html = html.replace('<h2>Health Distribution</h2>', `${narrativeHtml}\n<h2>Health Distribution</h2>`)
+          llmUsed = true
+        }
+      } catch (e) {
+        llmError = e instanceof Error ? e.message : String(e)
+      }
+    }
+
+    sendProgress('writing', 1, 1)
     const reportDir = path.join(osModule.homedir(), '.claude-session-manager', 'reports')
     if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true })
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
@@ -1068,9 +1092,44 @@ ipcMain.handle('insights:generate', async () => {
     fs.writeFileSync(latestPath, html, 'utf-8')
     const { shell } = await import('electron')
     shell.openPath(reportPath)
-    return { ok: true, path: reportPath, sessionCount: report.totalSessions }
-  } catch (e: any) {
-    return { ok: false, error: e.message }
+    return { ok: true, path: reportPath, sessionCount: report.totalSessions, llmUsed, llmError }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+})
+
+ipcMain.handle('insights:getLlmSettings', () => {
+  try {
+    const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
+    const s = libConfig.llmSettings as { provider?: string; apiKey?: string; model?: string; baseUrl?: string } | undefined
+    // Mask the key for display: only reveal last 4 chars
+    return {
+      provider: s?.provider || 'anthropic',
+      hasKey: Boolean(s?.apiKey),
+      keyHint: s?.apiKey ? `…${s.apiKey.slice(-4)}` : '',
+      model: s?.model || '',
+      baseUrl: s?.baseUrl || ''
+    }
+  } catch {
+    return { provider: 'anthropic', hasKey: false, keyHint: '', model: '', baseUrl: '' }
+  }
+})
+
+ipcMain.handle('insights:setLlmSettings', (_event, settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) => {
+  try {
+    const libConfig = loadLibraryConfig() as unknown as Record<string, unknown>
+    const existing = (libConfig.llmSettings as { apiKey?: string } | undefined) || {}
+    libConfig.llmSettings = {
+      provider: settings.provider,
+      // Empty apiKey means "keep existing"
+      apiKey: settings.apiKey?.trim() ? settings.apiKey.trim() : existing.apiKey || '',
+      model: settings.model?.trim() || '',
+      baseUrl: settings.baseUrl?.trim() || ''
+    }
+    saveLibraryConfig(libConfig as never)
+    return true
+  } catch {
+    return false
   }
 })
 

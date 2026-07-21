@@ -90,6 +90,8 @@ describe('SettingsPanel Resume 终端设置', () => {
       cliInstall: vi.fn(),
       getCleanupDays: vi.fn().mockResolvedValue(30),
       setCleanupDays: vi.fn().mockResolvedValue(true),
+      getLlmSettings: vi.fn().mockResolvedValue({ provider: 'anthropic', hasKey: false, keyHint: '', model: '', baseUrl: '' }),
+      setLlmSettings: vi.fn().mockResolvedValue(true),
       checkForUpdates: vi.fn().mockResolvedValue(undefined),
       networkGetInfo: vi.fn().mockResolvedValue({
         localIps: [],

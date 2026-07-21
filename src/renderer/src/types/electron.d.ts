@@ -80,7 +80,10 @@ interface ElectronAPI {
   getExecutionTree: (filePath: string) => Promise<any>
 
   // Insights Report
-  generateInsights: () => Promise<{ ok: boolean; path?: string; sessionCount?: number; error?: string }>
+  generateInsights: (options?: { useLlm?: boolean }) => Promise<{ ok: boolean; path?: string; sessionCount?: number; llmUsed?: boolean; llmError?: string; error?: string }>
+  getLlmSettings: () => Promise<{ provider: string; hasKey: boolean; keyHint: string; model: string; baseUrl: string }>
+  setLlmSettings: (settings: { provider: string; apiKey?: string; model?: string; baseUrl?: string }) => Promise<boolean>
+  onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void
 
   // Session Audit
   auditSession: (filePath: string) => Promise<any>

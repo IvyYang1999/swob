@@ -140,6 +140,7 @@ export interface LibraryConfig {
     resumeTerminal?: 'terminal-app' | 'iterm' | 'custom' | 'windows-terminal' | 'powershell' | 'cmd'
     resumeTerminalCommandTemplate?: string
     experimentalClaudeDesktopImport?: boolean
+    locale?: import('../shared/i18n').LegacyLocale
     settingsSchemaVersion?: 1
     defaultTerminalId?: string
     resumeMethodByHarness?: Record<string, import('../shared/settings-capabilities').ResumeMethod>

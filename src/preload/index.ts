@@ -65,6 +65,7 @@ const api = {
   listResumeTargetInstances: () => ipcRenderer.invoke('resume:listTargetInstances') as Promise<ResumeTargetInstanceOption[]>,
 
   // Config
+  getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
   loadConfig: () => ipcRenderer.invoke('config:load'),
   saveConfig: (config: unknown) => ipcRenderer.invoke('config:save', config),
   createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) =>

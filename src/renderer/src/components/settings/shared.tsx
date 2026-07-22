@@ -18,8 +18,8 @@ export interface DetectedTerminal {
   evidence: 'system-path' | 'app-path' | 'bundle-id' | 'executable'
 }
 
-export function copy(locale: Locale, zh: string, en: string, ja = en): string {
-  return locale === 'zh-CN' ? zh : locale === 'ja' ? ja : en
+export function copy(locale: Locale, zh: string, en: string, _legacyJapanese = en): string {
+  return locale === 'zh-CN' ? zh : en
 }
 
 /** Migrated preferences derived from store config — single source for all setting pages. */

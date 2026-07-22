@@ -48,11 +48,10 @@ export function GeneralSettings() {
         <Segmented
           ariaLabel={t('settings.language')}
           value={locale}
-          onChange={(value) => setLocale(value)}
+          onChange={(value) => { void setLocale(value) }}
           options={[
             { value: 'zh-CN', label: '中文' },
-            { value: 'en', label: 'English' },
-            { value: 'ja', label: '日本語' }
+            { value: 'en', label: 'English' }
           ]}
         />
       </SettingField>

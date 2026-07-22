@@ -257,7 +257,7 @@ export interface UserConfig {
     resumeTerminal?: ResumeTerminal
     resumeTerminalCommandTemplate?: string
     experimentalClaudeDesktopImport?: boolean
-    locale?: 'zh-CN' | 'en' | 'ja'
+    locale?: import('../shared/i18n').LegacyLocale
     themeMode?: ThemeMode
     spotlightShortcut?: string
     sshConfig?: SshConfig

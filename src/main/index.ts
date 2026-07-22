@@ -158,6 +158,7 @@ import {
   defaultResumeMethodForSource,
   migrateSettingsPreferences
 } from '../shared/settings-capabilities'
+import { resolveSystemLocale } from '../shared/i18n'
 import {
   buildGuardedResumeCommand,
   openGuardedForkAction,
@@ -1861,6 +1862,8 @@ ipcMain.handle('config:load', () => {
   }
   return { ...config, preferences: migrateSettingsPreferences(config.preferences as unknown as Record<string, unknown>) }
 })
+
+ipcMain.handle('app:getSystemLocale', () => resolveSystemLocale(app.getPreferredSystemLanguages()))
 
 ipcMain.handle('config:save', (_event, config: { preferences: Record<string, unknown> }) => {
   const migratedPreferences = migrateSettingsPreferences(config.preferences)

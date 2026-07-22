@@ -1,4 +1,4 @@
-export type SettingsLocale = 'zh-CN' | 'en' | 'ja'
+export type SettingsLocale = import('./i18n').Locale
 export type DefaultSort = 'updated' | 'created' | 'turns' | 'name'
 export type DefaultGrouping = 'none' | 'project' | 'date' | 'harness'
 export type SingleTurnBehavior = 'show' | 'hide' | 'collapse'

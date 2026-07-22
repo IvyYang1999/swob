@@ -5,7 +5,7 @@ import {
   downloadMarkdown,
   generateFilename
 } from './utils/markdown'
-import type { Locale } from './i18n'
+import { resolveConfiguredLocale, resolveSystemLocale, type LegacyLocale, type Locale } from './i18n'
 import { defaultResumeMethodForSource } from '../../shared/settings-capabilities'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
@@ -119,7 +119,7 @@ interface UserConfig {
     resumeTerminal?: 'terminal-app' | 'iterm' | 'custom' | 'windows-terminal' | 'powershell' | 'cmd'
     resumeTerminalCommandTemplate?: string
     experimentalClaudeDesktopImport?: boolean
-    locale?: Locale
+    locale?: LegacyLocale
     themeMode?: 'dark' | 'light' | 'system'
     spotlightShortcut?: string
     sshConfig?: SshConfig
@@ -195,7 +195,7 @@ interface AppState {
   buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<string>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   setViewMode: (mode: ViewMode) => void
-  setLocale: (locale: Locale) => void
+  setLocale: (locale: Locale) => Promise<void>
   themeMode: 'dark' | 'light' | 'system'
   setThemeMode: (mode: 'dark' | 'light' | 'system') => void
   toggleTheme: () => void
@@ -245,7 +245,16 @@ export type { SessionSummary, SessionDetail, ParsedMessage, Folder, VaultFile, U
 // Read localStorage at module load time — before first render, zero flicker
 const LOCAL_CACHE_VERSION = 12 // refresh physical resume ids and transcript metadata
 
+function rendererSystemLocale(): Locale {
+  try {
+    return resolveSystemLocale(navigator.languages?.length ? navigator.languages : [navigator.language])
+  } catch {
+    return 'en'
+  }
+}
+
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
+  const systemLocale = rendererSystemLocale()
   try {
     const ver = localStorage.getItem('csm:cacheVersion')
     if (ver !== String(LOCAL_CACHE_VERSION)) {
@@ -257,13 +266,20 @@ function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | 
     if (cached && cachedConfig) {
       const sessions = JSON.parse(cached)
       const config = JSON.parse(cachedConfig)
-      return { sessions, config, loading: false, viewMode: config.preferences?.defaultViewMode || 'compact', locale: config.preferences?.locale || 'zh-CN' }
+      return {
+        sessions,
+        config,
+        loading: false,
+        viewMode: config.preferences?.defaultViewMode || 'compact',
+        locale: resolveConfiguredLocale(config.preferences?.locale, systemLocale)
+      }
     }
   } catch { /* ignore */ }
-  return { sessions: [], config: null, loading: true, viewMode: 'compact', locale: 'zh-CN' }
+  return { sessions: [], config: null, loading: true, viewMode: 'compact', locale: systemLocale }
 }
 
 const hydrated = hydrateFromCache()
+if (typeof document !== 'undefined') document.documentElement.lang = hydrated.locale
 
 function resolveThemeMode(): 'dark' | 'light' | 'system' {
   try {
@@ -332,21 +348,31 @@ export const useStore = create<AppState>((set, get) => ({
     })
 
     try {
-      const [sessions, config, sshConfig] = await Promise.all([
+      const [sessions, config, sshConfig, systemLocale] = await Promise.all([
         window.api.loadAllSessions(),
         window.api.loadConfig(),
-        (window.api as any).sshGetConfig?.() ?? null
+        (window.api as any).sshGetConfig?.() ?? null,
+        window.api.getSystemLocale()
       ])
       const mergedSessions = new Map((sessions as SessionSummary[]).map((session) => [session.id, session]))
       for (const session of queuedLibrarySessions.values()) mergedSessions.set(session.id, session)
       initialLoadComplete = true
       const hydratedSessions = [...mergedSessions.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      const hydratedConfig = queuedLibraryConfig || config
+      let hydratedConfig = (queuedLibraryConfig || config) as UserConfig
+      const locale = resolveConfiguredLocale(hydratedConfig.preferences?.locale, systemLocale)
+      if (hydratedConfig.preferences?.locale === 'ja') {
+        hydratedConfig = {
+          ...hydratedConfig,
+          preferences: { ...hydratedConfig.preferences, locale }
+        }
+        await window.api.saveConfig(hydratedConfig)
+      }
+      document.documentElement.lang = locale
       set({
         sessions: hydratedSessions,
         config: hydratedConfig,
-        viewMode: config.preferences?.defaultViewMode || 'compact',
-        locale: (config.preferences as any)?.locale || 'zh-CN',
+        viewMode: hydratedConfig.preferences?.defaultViewMode || 'compact',
+        locale,
         sshConfig: sshConfig ?? null,
         loading: false
       })
@@ -563,16 +589,21 @@ export const useStore = create<AppState>((set, get) => ({
 
   setViewMode: (mode) => set({ viewMode: mode }),
 
-  setLocale: (locale) => {
-    set({ locale })
+  setLocale: async (locale) => {
     try {
-      const cachedConfig = localStorage.getItem('csm:config')
-      if (cachedConfig) {
-        const config = JSON.parse(cachedConfig)
-        config.preferences = { ...config.preferences, locale }
-        localStorage.setItem('csm:config', JSON.stringify(config))
+      if (get().config) {
+        await get().savePreferences({ locale })
+        const savedConfig = get().config
+        localStorage.setItem('csm:config', JSON.stringify(savedConfig))
+        document.documentElement.lang = locale
+        set({ locale })
+      } else {
+        document.documentElement.lang = locale
+        set({ locale })
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      console.error('Failed to persist locale:', error)
+    }
   },
 
   setThemeMode: (mode) => {

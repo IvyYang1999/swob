@@ -151,6 +151,7 @@ type RendererUsageFactSyncResult = {
 
 interface ElectronAPI {
   platformGetCapabilities: () => Promise<import('../components/WindowsAlphaNotice').PlatformCapabilities>
+  getSystemLocale: () => Promise<import('../../../shared/i18n').Locale>
   loadAllSessions: () => Promise<any[]>
   loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<any>
   searchSessions: (

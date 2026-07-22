@@ -5,7 +5,7 @@
     <loc>https://ivyyang1999.github.io/swob/</loc>
     <xhtml:link rel="alternate" hreflang="en" href="https://ivyyang1999.github.io/swob/"/>
     <xhtml:link rel="alternate" hreflang="zh-CN" href="https://ivyyang1999.github.io/swob/zh/"/>
-    <lastmod>2026-07-21</lastmod>
+    <lastmod>2026-07-23</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
@@ -13,7 +13,7 @@
     <loc>https://ivyyang1999.github.io/swob/zh/</loc>
     <xhtml:link rel="alternate" hreflang="en" href="https://ivyyang1999.github.io/swob/"/>
     <xhtml:link rel="alternate" hreflang="zh-CN" href="https://ivyyang1999.github.io/swob/zh/"/>
-    <lastmod>2026-07-21</lastmod>
+    <lastmod>2026-07-23</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
@@ -28,5 +28,65 @@
     <lastmod>2026-07-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/concepts/vault.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/concepts/lenses-folders.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/concepts/recovery.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/concepts/lineage.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/guides/resume.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/guides/organize.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/guides/profiles.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/guides/cli.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/guides/ssh.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://ivyyang1999.github.io/swob/docs/troubleshooting.html</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
   </url>
 </urlset>

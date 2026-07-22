@@ -371,7 +371,7 @@ function page({ title, description, root = '.', site = '..', active = '', conten
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)} · Swob Docs</title>
+${english ? '  <meta name="robots" content="noindex, follow">\n' : ''}  <title>${escapeHtml(title)} · Swob Docs</title>
   <meta name="description" content="${escapeHtml(description)}">
   <meta name="theme-color" content="#efebe2">
   <link rel="icon" href="${site}/assets/favicon.svg" type="image/svg+xml">

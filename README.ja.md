@@ -8,9 +8,9 @@
 
 **失われたコンテキストを復元し、fork と compact を追跡し、Agent が実際に何をしたかをデバッグします。**
 
-Swob は **11 種類の AI コーディング harness** のローカル履歴を読み取り、セッション系譜を再構築し、SQLite FTS5 で全メッセージを索引化します。さらに実行ツリー、コンテキスト検査、provenance 付き監査、任意の AI Insights を提供します。
+Swob は **5 個のネイティブ形式アダプター**と 1 個の Claude 互換形式でローカル履歴を解析します。ほかの 5 ソースは実験的なファイル検出のみで、メッセージ本文は読み取りません。ソースに証拠がある場合に限り、系譜、SQLite FTS5 増分検索、実行検査、provenance 付き監査、任意の AI Insights を提供します。
 
-[Web サイト](https://ivyyang1999.github.io/swob/) · [Apple Silicon DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) · [Intel DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) · [更新履歴](CHANGELOG.md)
+[Web サイト](https://ivyyang1999.github.io/swob/) · [検証済み Releases](https://github.com/IvyYang1999/swob/releases) · [更新履歴](CHANGELOG.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
@@ -23,7 +23,7 @@ Swob は **11 種類の AI コーディング harness** のローカル履歴を
 </div>
 
 > [!IMPORTANT]
-> **製品チャンネルを明確に分けています。** 以下の機能画像は現在の `main` の画面を基に、英語デモとして再構成し、サンプルデータを匿名化したものです。実装済みのレイアウトとワークフローを示すもので、未編集の本番データ画面ではありません。画像内の数値は例示用で、下記の監査 corpus とは別集計です。公開中の **v1.2.0 安定版 DMG には、Session Galaxy、11-harness 取り込み、Session Debugger、AI Insights、SQLite FTS5 はまだ含まれていません**。今すぐ試す場合は `main` をソースからビルドしてください。次回リリースに搭載予定です。
+> **製品チャンネルを明確に分けています。** 以下の機能画像は現在の `main` の画面を基に、英語デモとして再構成し、サンプルデータを匿名化したものです。実装済みのレイアウトとワークフローを示すもので、未編集の本番データ画面ではありません。画像内の数値は例示用で、下記の監査 corpus とは別集計です。公開中の **v1.2.0 安定版 DMG には、Session Galaxy、multi-harness 取り込み、Session Debugger、AI Insights、SQLite FTS5 はまだ含まれていません**。`main` を source build して試せますが、未公開機能が特定の将来 installer に入ることはここでは約束しません。
 
 ![現在の main を基に再構成した Swob Session Galaxy の英語デモ](site/assets/graph-view.png)
 
@@ -38,7 +38,7 @@ Swob はセッション履歴を証拠として扱います。
 - **系譜を追跡** — 対話型の力指向 Session Galaxy で、検証済みの fork / continuation 関係をたどります。
 - **コンテキストを復元** — Claude Code の compact 前の内容を展開し、元ファイル消失後もローカルバックアップを保持します。
 - **実行をデバッグ** — tool / sub-agent 呼び出し、コンテキスト圧力、compact 境界、遅延、framework overhead、エラー、反パターンを調べます。
-- **全履歴を検索** — SQLite FTS5 がローカルメッセージを増分索引化し、検索ごとの全走査を避けます。
+- **解析済み履歴を検索** — SQLite FTS5 は正規化されたメッセージを増分索引化します。検出専用ソースは本文索引の対象外で、ソース別の検索制限も明示します。
 - **安全に再開** — 対応 CLI へ正しい session ID と作業ディレクトリで戻り、source-aware な検証を行います。
 
 ## 見栄えの数字ではなく、検証可能な根拠
@@ -48,7 +48,7 @@ Swob はセッション履歴を証拠として扱います。
 | **253 / 1,621** | ある実運用 Library の監査で、Claude Code の 253 セッションが既定の 30 日保持ポリシーにより元の保存先から消失していましたが、Swob のローカルバックアップには残っていました。 |
 | **93.58%** | 同じ 1,621 セッション・5 ソースの監査 corpus で確認できた再開可能率です。全環境への成功保証ではありません。 |
 | **1,704 sessions** | 新しい索引とダッシュボードの検証に使う現在のローカル性能/UI corpus です。 |
-| **11 harnesses** | 現在の `main` が検出できる 11 のソースファミリーです。解析深度と resume 対応は、各ソースの記録内容と CLI 機能に依存します。 |
+| **5+1+5 ソース** | 現在の `main` は 5 種の harness をネイティブに読み取り、1 種の互換フォーマットに対応し、5 種を実験的にファイル検出します（ファイル発見のみ、コンテンツ読み取りは未実装）。 |
 
 ## Session Galaxy
 
@@ -77,21 +77,33 @@ Swob は transcript 表示だけではありません。
 
 ## 現在の `main` が読むソース
 
-| ソースファミリー | ローカル履歴検出 | 備考 |
-|---|---:|---|
-| Claude Code | Stable | 系譜、compact 復元、バックアップ、監査、resume が最も充実。 |
-| Codex | Stable | ローカル rollout 解析、検索、Insights、resume。 |
-| Cursor | Stable | ローカル Agent 履歴、検索、Insights。CLI が対応する場合に resume。 |
-| OpenCode | Stable | SQLite 履歴の取り込みと統一表示。 |
-| Zcode | Stable | SQLite 履歴の取り込みと統一表示。 |
-| CC Mirror | Current main | Claude 互換の project 履歴。 |
-| Antigravity | Current main | 現行および旧ローカル transcript root。 |
-| Grok / Factory | Current main | Grok と Factory/Droid の JSONL 履歴。 |
-| Pi | Current main | ローカル Agent session 履歴。 |
-| Kimi Code | Current main | ローカル `wire.jsonl` 履歴。 |
-| Hermes | Current main | ローカル JSON session 履歴。 |
+### ネイティブ形式アダプター（5）— 本文解析は可能、その他の能力はソース別
 
-「検出可能」は、すべてのソースが同じメタデータを提供するという意味ではありません。Swob はソースの限界を残し、存在しない token、系譜、resume command を捏造しません。
+| ソースファミリー | ステータス | 備考 |
+|---|---|---|
+| Claude Code | Native | 本文、検索、usage、live watch、系譜、terminal resume は利用可能。Desktop import は実験的です。 |
+| Codex | Native | 本文、検索、usage、live watch、系譜、terminal/native resume は利用可能です。 |
+| Cursor | Native | 本文、live watch、terminal resume は利用可能。検索は実験的で、usage・系譜・native deep link は利用不可です。 |
+| OpenCode | Native | 本文、usage、archive、terminal resume は利用可能。検索は実験的で、live watch・系譜・native deep link は利用不可です。 |
+| ZCode | Native | 本文、usage、archive は利用可能。検索と workspace を開く deep link は実験的で、live watch と terminal resume は利用不可です。 |
+
+### 互換フォーマット（1）
+
+| ソースファミリー | ステータス | 備考 |
+|---|---|---|
+| CC-Mirror | Compatible | Claude 互換の本文、検索、usage は利用可能。live watch と archive は利用不可で、terminal resume は実験的です。 |
+
+### 実験的検出（5）— ファイル発見のみ、コンテンツ読み取りは未実装
+
+| ソースファミリー | ステータス | 備考 |
+|---|---|---|
+| Antigravity | Experimental | ローカル transcript ファイルを発見可能。 |
+| Grok / Factory | Experimental | JSONL 履歴ファイルを発見可能。 |
+| Pi | Experimental | ローカル session ファイルを発見可能。 |
+| Kimi Code | Experimental | ローカル `wire.jsonl` ファイルを発見可能。 |
+| Hermes | Experimental | ローカル JSON session ファイルを発見可能。 |
+
+> **正確性に関する注記：**「ネイティブ形式アダプター」は本文解析の実装を意味するだけで、全能力の提供を意味しません。検索、usage、系譜、live watch、archive、resume はソース別です。「実験的検出」はファイルとメタデータ用 placeholder の発見のみで、本文の読み取り・索引化はできません。正準マトリクスは [`src/shared/provider-capabilities.ts`](src/shared/provider-capabilities.ts) です。
 
 ## 類似プロジェクトとの機能比較
 
@@ -99,24 +111,23 @@ Swob は transcript 表示だけではありません。
 
 | 機能 | Swob 現在の `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
 |---|---|---|---|---|
-| ローカル multi-harness 履歴 | ✅ 11 source families | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
+| ローカル multi-harness 履歴 | ✅ 5 ネイティブ + 1 互換 + 5 実験的検出 | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
 | 可視化 session lineage graph | ✅ 検証エッジ + grouping edge | ◐ Session Board、lineage ではない | — | ◐ child session 正規化、lineage graph の記載なし |
 | Compact 履歴復元 | ✅ Claude Code | — | — | — |
 | Execution tree / Agent call 分析 | ✅ | ◐ tool rendering | ◐ tool/output navigation | ◐ tool-call mix と child session |
 | Context pressure inspector | ✅ turn 別カテゴリ + compact 境界 | ◐ token analytics | ◐ quota / session runway | ✅ session context/cache analytics |
 | Provenance 付き health audit | ✅ | — | ◐ 検証不能な quota 状態を明示 | — |
-| ローカル全文検索 | ✅ SQLite FTS5 | ✅ | ✅ local index | ✅ SQLite FTS5 |
+| ローカル全文検索 | ✅ 解析済みソースを SQLite FTS5 に索引化。状態はソース別 | ✅ | ✅ local index | ✅ SQLite FTS5 |
 | 元 CLI で resume | ✅ 対応ソース | ◐ session を開く/フォーカス | ✅ 対応 CLI | ✅ 対応ソース |
 | Headless / browser mode | — | ✅ | — | ✅ |
 
 ## インストール
 
-### 安定版 v1.2.0
+### 公開インストーラー
 
-| Mac | 直接ダウンロード |
-|---|---|
-| Apple Silicon（`arm64`） | [`swob-1.2.0-arm64.dmg` をダウンロード](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) |
-| Intel（`x64`） | [`swob-1.2.0-x64.dmg` をダウンロード](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) |
+[GitHub Releases](https://github.com/IvyYang1999/swob/releases) を、現在のバージョン、対応 architecture、署名状態、不変 asset 名の正準情報源とします。この README は installer URL を推測せず、恒久的な fallback version も置きません。
+
+> 2026-07-23 の監査時点では、公開 baseline は v1.2.0 で、Apple Silicon / Intel Mac 向け asset がありました。
 
 **動作環境：** Apple Silicon または Intel の macOS。
 
@@ -171,7 +182,7 @@ CLI は JSON を返すため、他の Agent は UI をスクレイピングせ�
 | チャンネル | 内容 |
 |---|---|
 | **Stable v1.2.0** | 5 ソース閲覧、系譜検出/registry、compact 展開、検索、Token Insights、CLI、バックアップ/エクスポート、resume。公開 DMG は未署名。 |
-| **現在の `main` / 次回リリース** | 11-harness 取り込み、Session Galaxy、Execution Tree、Context Inspector、Session Audit、任意 AI Insights、SQLite FTS5、watcher/worker 性能改善。現在はソースビルド。 |
+| **現在の `main` / 未公開** | multi-harness 取り込み（5 ネイティブ + 1 互換 + 5 実験的検出）、Session Galaxy、Execution Tree、Context Inspector、Session Audit、任意 AI Insights、SQLite FTS5、watcher/worker 性能改善。現在はソースビルド。 |
 
 ## 技術スタック
 

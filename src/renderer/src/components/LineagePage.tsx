@@ -1,7 +1,17 @@
 import { translate } from '../i18n'
 import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { useStore } from '../store'
-import { GitBranch } from 'lucide-react'
+import { GitBranch, RotateCcw } from 'lucide-react'
+import {
+  hashString,
+  stableSessionKey,
+  computeMembershipKey,
+  computeNewNodePosition,
+  nudgeNewNode,
+  deterministicSampleIndex,
+  type CoordinateCache,
+  type CachedPosition
+} from '../graph/stable-layout'
 
 const SOURCE_COLORS: Record<string, string> = {
   'claude-code': '#f59e0b',
@@ -23,6 +33,7 @@ const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode']
 
 interface Node {
   id: string
+  stableKey: string
   x: number
   y: number
   vx: number
@@ -45,7 +56,7 @@ interface Edge {
   type: string // lineage | project | source | time | cwd | files
 }
 
-interface LineageGraphSession {
+export interface LineageGraphSession {
   sessionId: string
   id: string
   source: string
@@ -61,71 +72,123 @@ interface LineageGraphSession {
 
 const LAYOUT_DEBOUNCE_MS = 500
 
+// Re-export for backward compatibility with tests
+export { computeMembershipKey }
+
 /**
- * Library hydration replaces session object/array identities in small batches.
- * The graph must only rebuild when data consumed by buildGraph changes, otherwise
- * an unrelated metadata patch turns the O(sessions * iterations) simulation into
- * a renderer event-loop hot spin.
+ * Legacy fingerprint — DEPRECATED, kept only for test compatibility.
+ * The new architecture uses computeMembershipKey for layout invalidation
+ * and a separate presentation-only update path.
  */
 export function lineageGraphFingerprint(sessions: LineageGraphSession[]): string {
-  return JSON.stringify(sessions.map((session) => [
-    session.id,
-    session.sessionId,
-    session.source || 'claude-code',
-    session.projectPath || '',
-    session.firstUserMessage || '',
-    session.turnCount,
-    session.createdAt,
-    session.tokenUsage?.totalTokens ?? null,
-    session.compactCount || 0,
-    session.cwds || [],
-    (session.referencedFiles || []).map((file) => file.path)
-  ]))
+  return computeMembershipKey(sessions)
 }
 
 function dayKey(ts: number): number {
   return Math.floor(ts / 86400000)
 }
 
+/**
+ * Build graph with coordinate cache: reuses old positions for existing nodes,
+ * computes deterministic positions for new nodes, and sorts by stable key
+ * for input-order independence.
+ */
 function buildGraph(
   sessions: LineageGraphSession[],
-  registry: { relations: Array<{ parent: string; child: string; type: string }> } | null
+  registry: { relations: Array<{ parent: string; child: string; type: string }> } | null,
+  coordCache: CoordinateCache
 ) {
-  const idToIdx = new Map<string, number>()
-  const nodes: Node[] = []
   const now = Date.now()
 
-  const sourceAngleBase = new Map<string, number>()
-  SOURCE_ORDER.forEach((src, idx) => sourceAngleBase.set(src, (idx / SOURCE_ORDER.length) * Math.PI * 2))
-  const sourceCounters = new Map<string, number>()
-  const srcTotals = new Map<string, number>()
-  for (const s of sessions) {
-    const src = s.source || 'claude-code'
-    srcTotals.set(src, (srcTotals.get(src) || 0) + 1)
+  // Build a parent lookup from registry for deterministic placement
+  const parentOf = new Map<string, string>()
+  if (registry) {
+    for (const r of registry.relations) {
+      parentOf.set(r.child, r.parent)
+    }
   }
 
-  for (let i = 0; i < sessions.length; i++) {
-    const s = sessions[i]
+  // Sort sessions by stable key for input-order independence
+  const sorted = [...sessions].sort((a, b) => {
+    const ka = stableSessionKey(a.source || 'claude-code', a.id, a.sessionId)
+    const kb = stableSessionKey(b.source || 'claude-code', b.id, b.sessionId)
+    return ka < kb ? -1 : ka > kb ? 1 : 0
+  })
+
+  // Build node info map for placement context
+  const nodeInfoMap = new Map<string, { source: string; project: string; parentKey?: string }>()
+  const sessionKeyToSession = new Map<string, LineageGraphSession>()
+  for (const s of sorted) {
+    const key = stableSessionKey(s.source || 'claude-code', s.id, s.sessionId)
+    sessionKeyToSession.set(key, s)
+
+    // Find parent stable key if any
+    let parentKey: string | undefined
+    const parentId = parentOf.get(s.sessionId) || parentOf.get(s.id)
+    if (parentId) {
+      // Find the parent session to build its stable key
+      for (const ps of sorted) {
+        if (ps.sessionId === parentId || ps.id === parentId) {
+          parentKey = stableSessionKey(ps.source || 'claude-code', ps.id, ps.sessionId)
+          break
+        }
+      }
+    }
+
+    nodeInfoMap.set(key, {
+      source: s.source || 'claude-code',
+      project: s.projectPath || '',
+      parentKey
+    })
+  }
+
+  // Place nodes: reuse cached positions, compute deterministic positions for new ones
+  const placementCtx = { cache: coordCache, nodeInfo: nodeInfoMap }
+  const existingPositions: CachedPosition[] = []
+
+  // Collect existing positions first (for collision nudging)
+  for (const s of sorted) {
+    const key = stableSessionKey(s.source || 'claude-code', s.id, s.sessionId)
+    const cached = coordCache.get(key)
+    if (cached) {
+      existingPositions.push(cached)
+    }
+  }
+
+  const idToIdx = new Map<string, number>()
+  const nodes: Node[] = []
+
+  for (let i = 0; i < sorted.length; i++) {
+    const s = sorted[i]
     const src = s.source || 'claude-code'
-    const base = sourceAngleBase.get(src) || 0
-    const count = sourceCounters.get(src) || 0
-    sourceCounters.set(src, count + 1)
-    const srcTotal = srcTotals.get(src) || 1
-    const sectorWidth = (2 * Math.PI) / SOURCE_ORDER.length * 0.8
-    const angle = base + (count / Math.max(srcTotal, 1)) * sectorWidth - sectorWidth / 2
-    const r = 20 + Math.random() * 60
+    const key = stableSessionKey(src, s.id, s.sessionId)
     const created = new Date(s.createdAt).getTime() || now
     const ageDays = (now - created) / 86400000
     const recency = Math.max(0, Math.min(1, 1 - ageDays / 180))
     const totalTokens = s.tokenUsage?.totalTokens || 0
     const fileKeys = (s.referencedFiles || []).map(f => f.path).slice(0, 20)
 
+    // Position: cached (old node) or deterministic (new node)
+    let pos: CachedPosition
+    const cached = coordCache.get(key)
+    if (cached) {
+      pos = cached
+    } else {
+      // New node: deterministic placement then collision nudge
+      pos = computeNewNodePosition(key, placementCtx)
+      pos = nudgeNewNode(pos, existingPositions)
+      // Write to cache immediately so subsequent new nodes can reference it
+      coordCache.set(key, { x: pos.x, y: pos.y })
+      existingPositions.push(pos)
+    }
+
     idToIdx.set(s.sessionId, i)
     idToIdx.set(s.id, i)
     nodes.push({
       id: s.sessionId,
-      x: Math.cos(angle) * r + (Math.random() - 0.5) * 20,
-      y: Math.sin(angle) * r + (Math.random() - 0.5) * 20,
+      stableKey: key,
+      x: pos.x,
+      y: pos.y,
       vx: 0, vy: 0,
       source: src,
       project: s.projectPath || '',
@@ -153,7 +216,7 @@ function buildGraph(
     }
   }
 
-  // 2. Same project chain
+  // 2. Same project chain — sorted by stable key within group
   const projectMap = new Map<string, number[]>()
   for (let i = 0; i < nodes.length; i++) {
     const p = nodes[i].project
@@ -163,19 +226,21 @@ function buildGraph(
     }
   }
   for (const [, indices] of projectMap) {
+    indices.sort((a, b) => nodes[a].stableKey < nodes[b].stableKey ? -1 : 1)
     if (indices.length < 2) continue
     for (let i = 0; i < indices.length - 1; i++) {
       edges.push({ from: indices[i], to: indices[i + 1], type: 'project' })
     }
   }
 
-  // 3. Same source chain (harness clustering)
+  // 3. Same source chain — sorted by stable key within group
   const sourceMap = new Map<string, number[]>()
   for (let i = 0; i < nodes.length; i++) {
     if (!sourceMap.has(nodes[i].source)) sourceMap.set(nodes[i].source, [])
     sourceMap.get(nodes[i].source)!.push(i)
   }
   for (const [, indices] of sourceMap) {
+    indices.sort((a, b) => nodes[a].stableKey < nodes[b].stableKey ? -1 : 1)
     for (let i = 0; i < indices.length - 1; i++) {
       edges.push({ from: indices[i], to: indices[i + 1], type: 'source' })
     }
@@ -189,6 +254,7 @@ function buildGraph(
     dayMap.get(dk)!.push(i)
   }
   for (const [, indices] of dayMap) {
+    indices.sort((a, b) => nodes[a].stableKey < nodes[b].stableKey ? -1 : 1)
     if (indices.length < 2) continue
     for (let i = 0; i < Math.min(indices.length - 1, 30); i++) {
       edges.push({ from: indices[i], to: indices[i + 1], type: 'time' })
@@ -204,6 +270,7 @@ function buildGraph(
     }
   }
   for (const [, indices] of cwdMap) {
+    indices.sort((a, b) => nodes[a].stableKey < nodes[b].stableKey ? -1 : 1)
     if (indices.length < 2 || indices.length > 300) continue
     for (let i = 0; i < Math.min(indices.length - 1, 20); i++) {
       edges.push({ from: indices[i], to: indices[i + 1], type: 'cwd' })
@@ -219,6 +286,7 @@ function buildGraph(
     }
   }
   for (const [, indices] of fileMap) {
+    indices.sort((a, b) => nodes[a].stableKey < nodes[b].stableKey ? -1 : 1)
     if (indices.length < 2 || indices.length > 100) continue
     for (let i = 0; i < Math.min(indices.length - 1, 10); i++) {
       edges.push({ from: indices[i], to: indices[i + 1], type: 'files' })
@@ -228,6 +296,10 @@ function buildGraph(
   return { nodes, edges }
 }
 
+/**
+ * Deterministic force simulation — no Math.random().
+ * Uses hash-based sampling for repulsion computation.
+ */
 function simulate(nodes: Node[], edges: Edge[], iterations: number) {
   const n = nodes.length
   const repulsion = 60
@@ -252,7 +324,7 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
 
       const sampleSize = Math.min(50, n)
       for (let s = 0; s < sampleSize; s++) {
-        const j = s < 10 ? (i + s + 1) % n : Math.floor(Math.random() * n)
+        const j = deterministicSampleIndex(i, s, n)
         if (j === i) continue
         const dx = nodes[i].x - nodes[j].x
         const dy = nodes[i].y - nodes[j].y
@@ -309,14 +381,45 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
   return nodes
 }
 
+/**
+ * Presentation-only update: patches mutable display properties on existing nodes
+ * WITHOUT changing positions. Used when turnCount/tokens/title change but no
+ * nodes were added or removed.
+ */
+function patchPresentationData(
+  graph: { nodes: Node[]; edges: Edge[] },
+  sessions: LineageGraphSession[]
+) {
+  const now = Date.now()
+  const sessionByKey = new Map<string, LineageGraphSession>()
+  for (const s of sessions) {
+    const key = stableSessionKey(s.source || 'claude-code', s.id, s.sessionId)
+    sessionByKey.set(key, s)
+  }
+
+  for (const node of graph.nodes) {
+    const s = sessionByKey.get(node.stableKey)
+    if (!s) continue
+    node.turnCount = s.turnCount
+    node.totalTokens = s.tokenUsage?.totalTokens || 0
+    node.compactCount = s.compactCount || 0
+    node.title = s.firstUserMessage?.slice(0, 80) || s.sessionId.slice(0, 12)
+    const created = new Date(s.createdAt).getTime() || now
+    const ageDays = (now - created) / 86400000
+    node.recency = Math.max(0, Math.min(1, 1 - ageDays / 180))
+  }
+}
+
 export function LineagePage() {
   const sessions = useStore((s) => s.sessions)
   const graphSessions = useMemo(
     () => sessions.filter((session) => session.turnCount > 0) as LineageGraphSession[],
     [sessions]
   )
-  const graphFingerprint = useMemo(
-    () => lineageGraphFingerprint(graphSessions),
+
+  // Membership key: only changes when nodes are added/removed (not on presentation updates)
+  const membershipKey = useMemo(
+    () => computeMembershipKey(graphSessions),
     [graphSessions]
   )
   const openSession = useStore((s) => s.openSession)
@@ -332,27 +435,84 @@ export function LineagePage() {
   const userHasInteractedRef = useRef(false)
   const initialFitDoneRef = useRef(false)
 
+  // Long-lived coordinate cache — survives across rebuilds
+  const coordCacheRef = useRef<CoordinateCache>(new Map())
+
+  // Track previous membership key to detect actual node changes
+  const prevMembershipKeyRef = useRef<string>('')
+
+  // Force re-layout counter (incremented by "Re-layout" button)
+  const [forceLayoutCounter, setForceLayoutCounter] = useState(0)
+
+  // ---- MEMBERSHIP CHANGE: full incremental rebuild ----
   useEffect(() => {
     if (graphSessions.length === 0) return
     let cancelled = false
+
     const commitLayout = (registry: { relations: Array<{ parent: string; child: string; type: string }> } | null) => {
       if (cancelled) return
-      const { nodes, edges } = buildGraph(graphSessions, registry)
-      simulate(nodes, edges, 120)
+
+      const cache = coordCacheRef.current
+      const { nodes, edges } = buildGraph(graphSessions, registry, cache)
+
+      // Only run full simulation on first build or manual re-layout
+      const isFirstBuild = prevMembershipKeyRef.current === ''
+      if (isFirstBuild || forceLayoutCounter > 0) {
+        simulate(nodes, edges, 120)
+      }
+
+      // Write final positions back to cache
+      for (const node of nodes) {
+        cache.set(node.stableKey, { x: node.x, y: node.y })
+      }
+
+      // Prune deleted nodes from cache
+      const currentKeys = new Set(nodes.map(n => n.stableKey))
+      for (const key of cache.keys()) {
+        if (!currentKeys.has(key)) cache.delete(key)
+      }
+
       if (cancelled) return
       graphRef.current = { nodes, edges }
+      prevMembershipKeyRef.current = membershipKey
+
+      // Initial auto-fit (only once, and only if user hasn't panned/zoomed)
+      if (!initialFitDoneRef.current && !userHasInteractedRef.current && nodes.length > 0) {
+        initialFitDoneRef.current = true
+      }
+
       setReady(true)
     }
+
     const timer = window.setTimeout(() => {
       void window.api.getLineageRegistry()
         .then((registry: any) => commitLayout(registry))
         .catch(() => commitLayout(null))
     }, LAYOUT_DEBOUNCE_MS)
+
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [graphFingerprint])
+  }, [membershipKey, forceLayoutCounter])
+
+  // ---- PRESENTATION UPDATE: redraw only, no layout ----
+  useEffect(() => {
+    const graph = graphRef.current
+    if (!graph || !ready) return
+    // Only run presentation patch when membership hasn't changed
+    // (if it changed, the membership effect above handles it)
+    if (prevMembershipKeyRef.current === membershipKey) {
+      patchPresentationData(graph, graphSessions)
+      draw()
+    }
+  }, [graphSessions]) // intentionally depends on graphSessions (shallow ref), not membershipKey
+
+  const handleRelayout = useCallback(() => {
+    // Clear coordinate cache to force full recompute
+    coordCacheRef.current = new Map()
+    setForceLayoutCounter(c => c + 1)
+  }, [])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -582,6 +742,14 @@ export function LineagePage() {
           </div>
         ))}
         <span className="text-muted ml-auto">{graphSessions.length} sessions</span>
+        <button
+          onClick={handleRelayout}
+          className="flex items-center gap-1 px-2 py-0.5 rounded border border-edge hover:bg-base-hover text-secondary hover:text-primary transition-colors"
+          title={translate(locale, 'renderer.lineage_page.relayout')}
+        >
+          <RotateCcw size={12} />
+          <span>{translate(locale, 'renderer.lineage_page.relayout')}</span>
+        </button>
       </div>
 
       <canvas

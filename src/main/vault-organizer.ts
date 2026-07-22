@@ -55,6 +55,10 @@ export interface OrganizationResult {
   moves: OrganizationMove[]
 }
 
+export interface OrganizationWriteGate {
+  authorizeMoves(moves: readonly OrganizationMove[]): void
+}
+
 export interface ProjectPreviewSession {
   id: string
   sessionId?: string
@@ -240,10 +244,15 @@ export function executeOrganization(
   root: string,
   kind: OrganizationKind,
   inputs: readonly OrganizationInput[],
+  gate: OrganizationWriteGate,
   options: { now?: Date; beforeFirstMove?: (logPath: string) => void } = {}
 ): OrganizationResult {
   const moves = buildMoves(root, inputs)
   if (moves.length === 0) return { operationId: null, logPath: null, moves: [] }
+
+  // Authorization is deliberately after the read-only plan and immediately
+  // before the first durable operation log write.
+  gate.authorizeMoves(moves)
 
   const now = options.now || new Date()
   const operationId = randomUUID()
@@ -306,7 +315,7 @@ function latestUndoableLog(root: string): { logPath: string; log: OrganizationLo
   return null
 }
 
-export function undoLastOrganization(root: string): OrganizationResult {
+export function undoLastOrganization(root: string, gate: OrganizationWriteGate): OrganizationResult {
   const found = latestUndoableLog(root)
   if (!found) return { operationId: null, logPath: null, moves: [] }
   const { log, logPath } = found
@@ -325,6 +334,10 @@ export function undoLastOrganization(root: string): OrganizationResult {
       throw new Error(`无法撤销：会话包不在记录的任一位置 ${move.sessionId}`)
     }
   }
+
+  // Undo is a write transaction too. Re-authorize the current physical
+  // locations only after the full reverse plan has passed structural checks.
+  gate.authorizeMoves(appliedMoves)
 
   const reversed: OrganizationMove[] = []
   for (const move of [...appliedMoves].reverse()) {

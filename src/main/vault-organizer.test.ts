@@ -11,6 +11,7 @@ import {
 } from './vault-organizer'
 
 let root: string
+const allowWrites = { authorizeMoves: (): void => {} }
 
 function createSession(name: string, sessionId = name, meta: Record<string, unknown> = {}): string {
   const dir = path.join(root, name)
@@ -49,7 +50,7 @@ describe('Vault 整理事务', () => {
       sessionId: 'session-a',
       sourceDir,
       targetRelativeFolder: 'swob'
-    }], {
+    }], allowWrites, {
       beforeFirstMove: (logPath) => {
         const log = JSON.parse(fs.readFileSync(logPath, 'utf-8'))
         observedPlannedLog = log.status === 'planned' && fs.existsSync(sourceDir)
@@ -72,7 +73,7 @@ describe('Vault 整理事务', () => {
       sessionId: 'not-a-session',
       sourceDir: noteDir,
       targetRelativeFolder: '目标'
-    }])).toThrow(/会话包标记/)
+    }], allowWrites)).toThrow(/会话包标记/)
 
     expect(fs.readFileSync(path.join(noteDir, '想法.md'), 'utf-8')).toBe('不能动')
     expect(operationFiles()).toHaveLength(0)
@@ -87,11 +88,11 @@ describe('Vault 整理事务', () => {
       metaPatch: { tags: ['性能', 'Electron'], topic: '性能优化', topicConfidence: 0.93 }
     }
 
-    const applied = executeOrganization(root, 'smart', [input])
+    const applied = executeOrganization(root, 'smart', [input], allowWrites)
     const movedMeta = JSON.parse(fs.readFileSync(path.join(applied.moves[0].to, '.swob-session.json'), 'utf-8'))
     expect(movedMeta).toMatchObject({ tags: ['性能', 'Electron'], topic: '性能优化', topicConfidence: 0.93 })
 
-    const undone = undoLastOrganization(root)
+    const undone = undoLastOrganization(root, allowWrites)
     expect(undone.moves).toHaveLength(1)
     expect(fs.existsSync(sourceDir)).toBe(true)
     const restoredMeta = JSON.parse(fs.readFileSync(path.join(sourceDir, '.swob-session.json'), 'utf-8'))
@@ -118,14 +119,14 @@ describe('Vault 整理事务', () => {
         targetBaseName: '新标题二',
         metaPatch: { customTitle: '新标题二' }
       }
-    ])
+    ], allowWrites)
 
     expect(applied.moves).toHaveLength(2)
     expect(operationFiles()).toHaveLength(1)
     expect(applied.moves.map((move) => path.basename(move.to))).toEqual(['新标题一', '新标题二'])
     expect(JSON.parse(fs.readFileSync(path.join(applied.moves[1].to, '.swob-session.json'), 'utf-8')).customTitle).toBe('新标题二')
 
-    const undone = undoLastOrganization(root)
+    const undone = undoLastOrganization(root, allowWrites)
     expect(undone.moves).toHaveLength(2)
     expect(fs.existsSync(first)).toBe(true)
     expect(fs.existsSync(second)).toBe(true)
@@ -141,7 +142,7 @@ describe('Vault 整理事务', () => {
     expect(() => executeOrganization(root, 'project', [
       { sessionId: 'valid', sourceDir: valid, targetRelativeFolder: '项目A' },
       { sessionId: 'invalid', sourceDir: invalid, targetRelativeFolder: '项目B' }
-    ])).toThrow()
+    ], allowWrites)).toThrow()
 
     expect(fs.existsSync(valid)).toBe(true)
     expect(operationFiles()).toHaveLength(0)

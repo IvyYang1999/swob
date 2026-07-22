@@ -77,6 +77,8 @@ import {
   setExcludedSources,
   completeOnboarding,
   getDefaultLibraryRoot,
+  applyLibraryOrganization,
+  undoLastLibraryOrganization,
   type LibrarySession,
   type LibraryTree
 } from './library-manager'
@@ -111,10 +113,7 @@ import { terminateChildProcess } from './child-process-termination'
 import { runRuntimeCleanup } from './runtime-cleanup'
 import {
   buildProjectOrganizationPreview,
-  executeOrganization,
-  undoLastOrganization,
-  type OrganizationKind,
-  type OrganizationInput
+  type OrganizationKind
 } from './vault-organizer'
 import { requestSmartOrganization } from './smart-organizer'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
@@ -2088,12 +2087,9 @@ ipcMain.handle('organizer:apply', async (_event, kind: OrganizationKind, items: 
   confidence?: number
 }>) => {
   if (!['project', 'smart', 'archive'].includes(kind)) throw new Error('不支持的整理类型')
-  const inputs: OrganizationInput[] = items.map((item) => {
-    const sourceDir = getSessionDirPath(item.sessionId)
-    if (!sourceDir) throw new Error(`会话不在当前 Vault：${item.sessionId}`)
+  const requests = items.map((item) => {
     return {
       sessionId: item.sessionId,
-      sourceDir,
       targetRelativeFolder: item.targetRelativeFolder,
       metaPatch: kind === 'smart' ? {
         topic: item.topic,
@@ -2102,13 +2098,13 @@ ipcMain.handle('organizer:apply', async (_event, kind: OrganizationKind, items: 
       } : undefined
     }
   })
-  const result = executeOrganization(getLibraryRoot(), kind, inputs)
+  const result = applyLibraryOrganization(kind as Exclude<OrganizationKind, 'manual'>, requests)
   const config = await refreshAfterOrganization()
   return { ...result, config }
 })
 
 ipcMain.handle('organizer:undo', async () => {
-  const result = undoLastOrganization(getLibraryRoot())
+  const result = undoLastLibraryOrganization()
   const config = await refreshAfterOrganization()
   return { ...result, config }
 })

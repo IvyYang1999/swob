@@ -5,7 +5,7 @@ interface DisclosureSectionProps {
   title: string
   defaultOpen?: boolean
   children: ReactNode
-  badge?: string | number
+  badge?: ReactNode
   icon?: ReactNode
 }
 

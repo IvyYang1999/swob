@@ -182,6 +182,7 @@ interface AppState {
   sshConfig: SshConfig | null
   sshModalOpen: boolean
   settingsOpen: boolean
+  pendingSettingsCategory: string | null
   insightsOpen: boolean
   lineageOpen: boolean
   toasts: ToastMessage[]
@@ -202,6 +203,8 @@ interface AppState {
   selectFolder: (folderId: string | null) => void
   toggleInfoPanel: () => void
   toggleSettings: () => void
+  openSettingsAt: (category: string) => void
+  consumePendingSettingsCategory: () => string | null
   toggleInsights: () => void
   toggleLineage: () => void
   savePreferences: (prefs: Record<string, unknown>) => Promise<void>
@@ -297,6 +300,7 @@ export const useStore = create<AppState>((set, get) => ({
   theme: effectiveTheme(resolveThemeMode()),
   selectedFolderId: null,
   settingsOpen: false,
+  pendingSettingsCategory: null,
   insightsOpen: false,
   lineageOpen: false,
   infoPanelOpen: true,
@@ -586,6 +590,14 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, insightsOpen: false, lineageOpen: false })),
+  openSettingsAt: (category) => set({
+    settingsOpen: true, insightsOpen: false, lineageOpen: false, pendingSettingsCategory: category
+  }),
+  consumePendingSettingsCategory: () => {
+    const pending = get().pendingSettingsCategory
+    if (pending) set({ pendingSettingsCategory: null })
+    return pending
+  },
   toggleInsights: () => set((s) => ({ insightsOpen: !s.insightsOpen, settingsOpen: false, lineageOpen: false })),
   toggleLineage: () => set((s) => ({ lineageOpen: !s.lineageOpen, settingsOpen: false, insightsOpen: false })),
 
@@ -638,7 +650,13 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const preview = await window.api.smartRenamePreview([sessionId])
       if (!preview.ok) {
-        showToast(`智能重命名失败:${preview.error.message}`, 'error')
+        const needsSetup = ['PROFILE_NOT_BOUND', 'PROFILE_KEY_MISSING', 'INVALID_PROFILE', 'PROFILE_NOT_FOUND']
+          .includes(preview.error.code)
+        showToast(
+          `智能重命名失败:${preview.error.message}`,
+          'error',
+          needsSetup ? { label: '去设置', onClick: () => get().openSettingsAt('ai') } : undefined
+        )
         return
       }
       const item = preview.items[0]

@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Plus, Square, X, Terminal } from 'lucide-react'
+import { Bot, History, Plus, Square, X, Terminal } from 'lucide-react'
+
+/** Turn raw engine errors into something a person can act on. */
+function humanizeAgentError(text: string): string {
+  if (text.includes('EBADF')) {
+    return '助手引擎启动失败(子进程异常)。请退出并重新打开 Swob;如果重启后仍出现,这是 Swob 的 bug,麻烦反馈给我们。'
+  }
+  if (text.includes('ENOENT')) {
+    return '找不到 Claude Code CLI(claude 命令)。助手第一版依赖它作为引擎,安装后重试。'
+  }
+  return text
+}
 
 interface ChatItem {
   role: 'user' | 'assistant' | 'tool' | 'error'
@@ -73,6 +84,13 @@ export function AgentApp() {
         <span className="rounded bg-soft-amber/10 px-1 py-0.5 text-[8px] text-soft-amber">MVP</span>
         <div className="ml-auto flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <button
+            onClick={() => void window.api.agentOpenHistory()}
+            title="历史对话(在主窗口「Swob 助手」文件夹)"
+            className="rounded p-1 text-muted hover:bg-hover hover:text-primary"
+          >
+            <History size={13} />
+          </button>
+          <button
             onClick={() => void newConversation()}
             title="新对话"
             className="rounded p-1 text-muted hover:bg-hover hover:text-primary"
@@ -128,8 +146,8 @@ export function AgentApp() {
               </div>
             )}
             {item.role === 'error' && (
-              <div className="rounded-md border border-red-400/30 bg-red-400/5 px-2.5 py-1.5 text-[11px] text-red-400">
-                {item.text}
+              <div className="rounded-md border border-red-400/30 bg-red-400/5 px-2.5 py-1.5 text-[11px] leading-relaxed text-red-400">
+                {humanizeAgentError(item.text)}
               </div>
             )}
           </div>

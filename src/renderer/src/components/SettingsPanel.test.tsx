@@ -11,6 +11,8 @@ const savePreferences = vi.fn()
 const mockStore: any = {
   settingsOpen: true,
   toggleSettings: vi.fn(),
+  openSettingsAt: vi.fn(),
+  consumePendingSettingsCategory: vi.fn().mockReturnValue(null),
   locale: 'zh-CN',
   setLocale: vi.fn(),
   themeMode: 'system',
@@ -132,11 +134,12 @@ describe('SettingsPanel 纵向导航设置', () => {
 
   afterEach(() => cleanup())
 
-  it('左侧纵向导航显示 7 个分类，通用不再叫外观，无横向 Tab', () => {
+  it('左侧纵向导航显示 8 个分类(含 AI 智能),通用不再叫外观,无横向 Tab', () => {
     render(<SettingsPanel />)
 
     const nav = screen.getByRole('navigation')
-    expect(within(nav).getAllByRole('button')).toHaveLength(7)
+    expect(within(nav).getAllByRole('button')).toHaveLength(8)
+    expect(within(nav).getByRole('button', { name: 'AI 智能' })).not.toBeNull()
     expect(within(nav).getByRole('button', { name: '通用' })).not.toBeNull()
     expect(within(nav).queryByRole('button', { name: '外观' })).toBeNull()
     expect(screen.queryAllByRole('tab')).toHaveLength(0)

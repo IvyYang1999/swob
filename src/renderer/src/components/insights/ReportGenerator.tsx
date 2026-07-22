@@ -4,6 +4,7 @@ import { useStore } from '../../store'
 /** Cross-session HTML report generation (quick / LLM narrative), extracted from the old stats tab. */
 export function ReportGenerator() {
   const locale = useStore((s) => s.locale)
+  const openSettingsAt = useStore((s) => s.openSettingsAt)
   const zh = locale === 'zh-CN'
   const [generating, setGenerating] = useState(false)
   const [reportResult, setReportResult] = useState<string | null>(null)
@@ -84,7 +85,17 @@ export function ReportGenerator() {
           <div className="text-[11px] text-secondary leading-relaxed">
             AI Report samples <strong>real content from your recent sessions</strong> (user messages, up to 60 sessions)
             and sends it to your configured LLM provider for analysis.
-            {!llmAvailable && <span className="text-soft-amber"> No API key configured — set one in Settings → AI Analysis first.</span>}
+            {!llmAvailable && (
+              <span className="text-soft-amber">
+                {' '}{zh ? '还没有配置 API key。' : 'No API key configured yet.'}
+                <button
+                  onClick={() => openSettingsAt('ai')}
+                  className="ml-1 underline underline-offset-2 hover:text-primary"
+                >
+                  {zh ? '去设置 → AI 智能' : 'Open Settings → AI & Smart'}
+                </button>
+              </span>
+            )}
           </div>
           <div className="flex gap-2">
             <button

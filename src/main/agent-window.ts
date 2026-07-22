@@ -76,7 +76,14 @@ function emitToAgentWindow(event: AgentStreamEvent): void {
 export function registerAgentIpc(options: {
   getLibraryRoot: () => string | null
   archiveAgentSession: (sessionId: string) => void
+  showMainWindow: () => void
 }): void {
+  ipcMain.handle('agent:openHistory', () => {
+    agentWindow?.hide()
+    options.showMainWindow()
+    return true
+  })
+
   ipcMain.handle('agent:getStatus', async () => {
     const status = await getAgentEngineStatus()
     return { ...status, sessionId: agentSessionId, busy: currentTurn !== null }

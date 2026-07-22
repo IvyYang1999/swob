@@ -289,6 +289,7 @@ interface ElectronAPI {
   agentToggleWindow: () => Promise<void>
   agentHideWindow: () => Promise<boolean>
   agentNewConversation: () => Promise<boolean>
+  agentOpenHistory: () => Promise<boolean>
   agentSend: (prompt: string) => Promise<{ ok: boolean; error?: string }>
   agentCancel: () => Promise<boolean>
   onAgentEvent: (callback: (event: {

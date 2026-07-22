@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, X
+  Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, Sparkles, X
 } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT, type Locale } from '../../i18n'
 import { copy } from './shared'
 import { GeneralSettings } from './GeneralSettings'
+import { ProfilesSettings } from './ProfilesSettings'
 import { TerminalSettings } from './TerminalSettings'
 import { ResumeSettings } from './ResumeSettings'
 import { SshSettings } from './SshSettings'
@@ -14,7 +15,7 @@ import { UpdateSettings } from './UpdateSettings'
 import { CliSettings } from './CliSettings'
 import { WindowsAlphaNotice, usePlatformCapabilities } from '../WindowsAlphaNotice'
 
-export type SettingsCategory = 'general' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli'
+export type SettingsCategory = 'general' | 'ai' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli'
 
 const CATEGORIES: Array<{
   id: SettingsCategory
@@ -24,6 +25,7 @@ const CATEGORIES: Array<{
   ja: string
 }> = [
   { id: 'general', icon: Monitor, zh: '通用', en: 'General', ja: '一般' },
+  { id: 'ai', icon: Sparkles, zh: 'AI 智能', en: 'AI & Smart', ja: 'AI' },
   { id: 'terminal', icon: Terminal, zh: '终端', en: 'Terminal', ja: 'ターミナル' },
   { id: 'resume', icon: Play, zh: 'Resume', en: 'Resume', ja: 'Resume' },
   { id: 'ssh', icon: Server, zh: 'SSH', en: 'SSH', ja: 'SSH' },
@@ -66,7 +68,7 @@ function SettingsNav({ active, locale, onSelect, hidden }: {
 }
 
 export function SettingsPanel() {
-  const { settingsOpen, toggleSettings, locale } = useStore()
+  const { settingsOpen, toggleSettings, locale, consumePendingSettingsCategory } = useStore()
   const t = useT()
   const platformCapabilities = usePlatformCapabilities()
   const isWindowsAlpha = platformCapabilities?.windowsNativeAlpha === true
@@ -79,6 +81,11 @@ export function SettingsPanel() {
 
   useEffect(() => {
     if (!settingsOpen) return
+    // Deep-link support: "去设置" buttons land on the category they promise.
+    const pending = consumePendingSettingsCategory()
+    if (pending && CATEGORIES.some((item) => item.id === pending)) {
+      setCategory(pending as SettingsCategory)
+    }
     dialogRef.current?.focus()
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') toggleSettings()
@@ -130,6 +137,7 @@ export function SettingsPanel() {
             <div className="max-w-2xl space-y-6">
               <WindowsAlphaNotice capabilities={platformCapabilities} />
               {category === 'general' && <GeneralSettings />}
+              {category === 'ai' && <ProfilesSettings />}
               {category === 'terminal' && <TerminalSettings />}
               {category === 'resume' && <ResumeSettings />}
               {category === 'ssh' && <SshSettings />}

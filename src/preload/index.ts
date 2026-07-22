@@ -191,6 +191,7 @@ const api = {
   agentToggleWindow: () => ipcRenderer.invoke('agent:toggleWindow'),
   agentHideWindow: () => ipcRenderer.invoke('agent:hideWindow'),
   agentNewConversation: () => ipcRenderer.invoke('agent:newConversation'),
+  agentOpenHistory: () => ipcRenderer.invoke('agent:openHistory'),
   agentSend: (prompt: string) => ipcRenderer.invoke('agent:send', prompt),
   agentCancel: () => ipcRenderer.invoke('agent:cancel'),
   onAgentEvent: (callback: (event: Record<string, unknown>) => void) => {

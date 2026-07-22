@@ -41,10 +41,18 @@ export function UpdateSettings() {
           value={preferences.updateChannel}
           onChange={(updateChannel) => savePreferences({ updateChannel })}
           options={[
-            { value: 'stable', label: copy(locale, '稳定', 'Stable', '安定版') },
-            { value: 'development', label: copy(locale, '开发', 'Development', '開発版') }
+            { value: 'stable', label: copy(locale, '稳定版', 'Stable', '安定版') },
+            { value: 'development', label: copy(locale, '尝鲜版', 'Preview', '開発版') }
           ]}
         />
+        <div className="mt-1 text-[10px] leading-relaxed text-faint">
+          {copy(
+            locale,
+            '稳定版:只接收正式发布的更新(推荐)。尝鲜版:第一时间拿到新功能,但可能遇到未打磨的问题。',
+            'Stable: official releases only (recommended). Preview: get new features first, rough edges possible.',
+            '安定版:正式リリースのみ(推奨)。プレビュー版:新機能を先行入手。'
+          )}
+        </div>
       </SettingField>
       <div className="rounded-md bg-surface px-3 py-2.5 flex items-center justify-between gap-3">
         <span>

@@ -7,6 +7,7 @@ const { join, dirname, basename, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
+import { startPackagedUpdateE2E } from './update-e2e-driver'
 import { registerAgentIpc, registerAgentShortcut, shutdownAgentRuntime } from './agent-window'
 import { execFile, execSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
@@ -2410,6 +2411,7 @@ function setupAutoUpdater(): void {
     updater: autoUpdater,
     ipcMain,
     sendToRenderer: (channel, ...args) => mainWindow?.webContents.send(channel, ...args),
+    openDownloadPage: () => shell.openExternal('https://github.com/IvyYang1999/swob/releases/latest'),
     // The window and all startup watchers are already running before this
     // delayed, fire-and-forget request is scheduled.
     checkOnStartup: !is.dev && preferences.autoCheckUpdates !== false
@@ -2418,6 +2420,9 @@ function setupAutoUpdater(): void {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.swob.app')
+  // A dedicated, opt-in canary run owns the updater and exits after writing its
+  // relaunch result. Normal users never enter this branch.
+  if (startPackagedUpdateE2E({ app, updater: autoUpdater })) return
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })

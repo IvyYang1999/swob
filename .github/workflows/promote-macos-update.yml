@@ -1,0 +1,134 @@
+name: Promote macOS Update Channel
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Published signed candidate tag, for example v1.3.1
+        required: true
+        type: string
+      base_app_path:
+        description: Signed previous Swob.app installed on the dedicated canary Mac
+        required: true
+        default: /Applications/Swob.app
+        type: string
+      confirmation:
+        description: Type PROMOTE_SWOB_SIGNED to allow metadata promotion after E2E
+        required: true
+        type: string
+
+concurrency:
+  group: promote-macos-update
+  cancel-in-progress: false
+
+jobs:
+  canary-and-promote:
+    # A dedicated GUI-capable Mac is required because this job launches, replaces
+    # and relaunches a real signed application. It must not run on a build-only host.
+    runs-on: [self-hosted, macOS, swob-update-canary]
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out the exact candidate tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Canary the final ZIP and promote metadata only after relaunch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          BASE_APP_PATH: ${{ inputs.base_app_path }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRMATION" != 'PROMOTE_SWOB_SIGNED' ]]; then
+            echo 'Exact promotion confirmation was not provided.' >&2
+            exit 1
+          fi
+          if [[ "$CANDIDATE_TAG" == 'v1.3.0' ]]; then
+            echo 'v1.3.0 is the manual trust-root migration and may not publish update metadata.' >&2
+            exit 1
+          fi
+
+          node scripts/release/assert-release-version.mjs \
+            --tag "$CANDIDATE_TAG" \
+            --minimum 1.3.0 \
+            --stable
+          version="${CANDIDATE_TAG#v}"
+
+          promotion_dir="$(mktemp -d /private/tmp/swob-update-promotion.XXXXXX)"
+          stable_uploaded=0
+          cleanup() {
+            gh release delete-asset "$CANDIDATE_TAG" swob-canary-mac.yml --yes > /dev/null 2>&1 || true
+            if [[ $stable_uploaded -eq 1 ]]; then
+              gh release delete-asset "$CANDIDATE_TAG" swob-signed-mac.yml --yes > /dev/null 2>&1 || true
+            fi
+            rm -rf "$promotion_dir"
+          }
+          trap cleanup EXIT
+
+          gh release view "$CANDIDATE_TAG" --json assets -q '.assets[].name' \
+            | sort > "$promotion_dir/assets-before.txt"
+          node scripts/release/assert-release-assets.mjs \
+            --names-file "$promotion_dir/assets-before.txt" \
+            --version "$version" \
+            --channel swob-signed
+
+          gh release download "$CANDIDATE_TAG" --dir "$promotion_dir"
+          gh release view "$CANDIDATE_TAG" --json assets > "$promotion_dir/assets-before.json"
+          node scripts/release/assert-release-assets.mjs \
+            --inventory-json "$promotion_dir/assets-before.json" \
+            --dir "$promotion_dir" \
+            --version "$version" \
+            --channel swob-signed
+          node scripts/release/generate-update-metadata.mjs \
+            --dir "$promotion_dir" \
+            --version "$version" \
+            --channel swob-canary
+
+          gh release upload "$CANDIDATE_TAG" "$promotion_dir/swob-canary-mac.yml"
+
+          scripts/release/run-macos-update-e2e.sh \
+            "$BASE_APP_PATH" \
+            "$version" \
+            ZPTA4LP594 \
+            swob-signed
+
+          cp "$promotion_dir/swob-canary-mac.yml" "$promotion_dir/swob-signed-mac.yml"
+          # Arm cleanup before upload so a partially successful gh command cannot
+          # leave stable metadata behind if the shell exits before the next line.
+          stable_uploaded=1
+          gh release upload "$CANDIDATE_TAG" "$promotion_dir/swob-signed-mac.yml"
+          gh release delete-asset "$CANDIDATE_TAG" swob-canary-mac.yml --yes
+
+          gh release view "$CANDIDATE_TAG" --json assets > "$promotion_dir/assets-after.json"
+          node scripts/release/assert-release-assets.mjs \
+            --inventory-json "$promotion_dir/assets-after.json" \
+            --dir "$promotion_dir" \
+            --version "$version" \
+            --channel swob-signed \
+            --promoted
+
+          stable_uploaded=0
+          trap - EXIT
+          rm -rf "$promotion_dir"
+
+          {
+            echo '## macOS signed update promoted'
+            echo
+            echo "- Candidate: ${CANDIDATE_TAG}"
+            echo '- Real check, download, Squirrel install and relaunch passed'
+            echo '- Installed version and Developer ID trust re-verified after relaunch'
+            echo '- swob-canary-mac.yml removed'
+            echo '- swob-signed-mac.yml attached only after E2E success'
+            echo '- latest-mac.yml remains retired'
+          } >> "$GITHUB_STEP_SUMMARY"

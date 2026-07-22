@@ -5,34 +5,68 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: macos-latest
+    timeout-minutes: 60
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out tagged revision
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - name: Verify tag and signed trust-root version
+        run: node scripts/release/assert-release-version.mjs --tag "$GITHUB_REF_NAME" --minimum 1.3.0 --stable
 
-      - name: Generate changelog
+      - name: Preflight notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/release/preflight-notarization.sh
+
+      - name: Install a clean locked dependency tree
         run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -z "$PREV_TAG" ]; then
-            LOGS=$(git log --pretty=format:"%s" --no-merges -30)
-          else
-            LOGS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"%s" --no-merges)
+          set -euo pipefail
+          if [[ -e node_modules || -L node_modules ]]; then
+            echo 'Release checkout must start without node_modules.' >&2
+            exit 1
           fi
-          # 过滤掉非用户相关的 commit
-          echo "$LOGS" | grep -v -i \
+          npm ci
+          if [[ ! -d node_modules || -L node_modules ]]; then
+            echo 'npm ci must produce a real node_modules directory, never a symlink.' >&2
+            exit 1
+          fi
+          npm ls readdirp --all
+
+      - name: Run full logic tests
+        run: npm test
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_tag="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+          if [[ -z "$previous_tag" ]]; then
+            git log --pretty=format:'%s' --no-merges -30 > "$RUNNER_TEMP/release-subjects.txt"
+          else
+            git log "${previous_tag}..HEAD" --pretty=format:'%s' --no-merges > "$RUNNER_TEMP/release-subjects.txt"
+          fi
+
+          grep -v -i \
             -e '^CI:' \
             -e '^ci:' \
             -e '^README' \
@@ -46,30 +80,112 @@ jobs:
             -e '发版 v' \
             -e '搭建 Harness' \
             -e '更新计划文档' \
-            | sed 's/^/- /' > /tmp/changelog.txt || true
+            "$RUNNER_TEMP/release-subjects.txt" \
+            | sed 's/^/- /' > "$RUNNER_TEMP/changelog.txt" || true
 
-      - name: Build & Publish
+          if [[ ! -s "$RUNNER_TEMP/changelog.txt" ]]; then
+            echo '- Maintenance and reliability improvements.' > "$RUNNER_TEMP/changelog.txt"
+          fi
+
+          if [[ "$GITHUB_REF_NAME" == 'v1.3.0' ]]; then
+            {
+              echo '## 一次性手动迁移说明'
+              echo
+              echo 'v1.2.0 及更早版本无法跨越旧的 ad-hoc/unsigned 签名边界自动升级。'
+              echo '请手动下载对应架构的 DMG 并覆盖安装一次；后续版本才会进入新的安全更新通道。'
+              echo
+              cat "$RUNNER_TEMP/changelog.txt"
+            } > "$RUNNER_TEMP/release-notes.txt"
+          else
+            cp "$RUNNER_TEMP/changelog.txt" "$RUNNER_TEMP/release-notes.txt"
+          fi
+
+      - name: Build, sign and notarize without publishing
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ZPTA4LP594
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
+          if [[ -z "$CSC_LINK" || -z "$CSC_KEY_PASSWORD" ]]; then
+            echo 'Required Developer ID signing secrets are missing.' >&2
+            exit 1
+          fi
           npx electron-vite build
-          npx electron-builder --mac --publish always
-          # 删除 blockmap 文件，减少 release 页面杂项
-          rm -f dist/*.blockmap
+          npx electron-builder --mac --publish never
 
-      - name: Update release notes
+      - name: Generate promotion-only update metadata
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          node scripts/release/generate-update-metadata.mjs \
+            --dir dist \
+            --version "$version" \
+            --channel swob-signed
+
+      - name: Verify signed applications, disk images and local asset inventory
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          scripts/release/verify-macos-artifacts.sh dist "$version" swob-signed ZPTA4LP594
+
+      - name: Publish immutable installers without update metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          CHANGELOG=$(cat /tmp/changelog.txt)
-          gh release edit "$TAG" --notes "$CHANGELOG"
-          # 删除 release 中的 blockmap 文件
-          for asset in $(gh release view "$TAG" --json assets -q '.assets[].name' | grep '\.blockmap$'); do
-            gh release delete-asset "$TAG" "$asset" --yes
-          done
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release already exists: $tag" >&2
+            exit 1
+          fi
+
+          published=0
+          cleanup_draft() {
+            if [[ $published -eq 0 ]]; then
+              is_draft="$(gh release view "$tag" --json isDraft -q '.isDraft' 2>/dev/null || true)"
+              if [[ "$is_draft" == 'true' ]]; then
+                gh release delete "$tag" --yes > /dev/null 2>&1 || true
+              fi
+            fi
+          }
+          trap cleanup_draft EXIT
+
+          release_assets=(
+            "dist/swob-${version}-arm64.dmg"
+            "dist/swob-${version}-arm64.zip"
+            "dist/swob-${version}-arm64.zip.blockmap"
+            "dist/swob-${version}-x64.dmg"
+            "dist/swob-${version}-x64.zip"
+            "dist/swob-${version}-x64.zip.blockmap"
+          )
+          gh release create "$tag" \
+            --draft \
+            --verify-tag \
+            --title "Swob ${tag}" \
+            --notes-file "$RUNNER_TEMP/release-notes.txt"
+          gh release upload "$tag" "${release_assets[@]}"
+
+          gh release view "$tag" --json assets > "$RUNNER_TEMP/published-assets.json"
+          node scripts/release/assert-release-assets.mjs \
+            --inventory-json "$RUNNER_TEMP/published-assets.json" \
+            --dir dist \
+            --version "$version" \
+            --channel swob-signed
+
+          gh release edit "$tag" --draft=false
+          published=1
+          trap - EXIT
+
+          {
+            echo '## Signed installer release passed'
+            echo
+            echo "- Version: ${version}"
+            echo '- Developer ID, Team ID, Gatekeeper and stapled tickets verified'
+            echo '- arm64/x64 DMG, ZIP and blockmap names, sizes and SHA-256 digests verified remotely'
+            echo '- latest-mac.yml was not generated or uploaded'
+            echo '- swob-signed-mac.yml remains local until canary E2E promotion'
+            echo '- Release stayed draft until the remote digest gate passed'
+          } >> "$GITHUB_STEP_SUMMARY"

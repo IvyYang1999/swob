@@ -18,6 +18,7 @@ export type AutoUpdaterOptions = {
   checkOnStartup: boolean
   startupDelayMs?: number
   schedule?: (callback: () => void, delayMs: number) => unknown
+  openDownloadPage?: () => Promise<unknown>
 }
 
 export const AUTO_UPDATE_STARTUP_DELAY_MS = 3_000
@@ -32,8 +33,9 @@ function releaseNotes(info: ReleaseInfo): string {
 
 /**
  * Wires electron-updater to the renderer without making app startup wait on a
- * network request. Failures deliberately remain silent: an unavailable release
- * must never interrupt normal use of the app.
+ * network request. Background failures remain silent so release-service
+ * availability never interrupts normal use; user-triggered failures get a
+ * bounded error category and a recovery action.
  */
 export function setupAutoUpdater({
   updater,
@@ -41,11 +43,13 @@ export function setupAutoUpdater({
   sendToRenderer,
   checkOnStartup,
   startupDelayMs = AUTO_UPDATE_STARTUP_DELAY_MS,
-  schedule = setTimeout
+  schedule = setTimeout,
+  openDownloadPage = async () => {}
 }: AutoUpdaterOptions): void {
   let availableUpdate: { version: string; notes: string } | null = null
   let downloadInProgress = false
   let updateDownloaded = false
+  let installRequested = false
 
   updater.autoDownload = false
   updater.autoInstallOnAppQuit = false
@@ -58,6 +62,7 @@ export function setupAutoUpdater({
     const update = { version: info.version, notes: releaseNotes(info) }
     availableUpdate = update
     updateDownloaded = false
+    installRequested = false
     sendToRenderer('update:available', update.version, update.notes)
   })
 
@@ -65,26 +70,32 @@ export function setupAutoUpdater({
     const version = info.version || availableUpdate?.version || ''
     const notes = releaseNotes(info)
     updateDownloaded = true
+    downloadInProgress = false
     sendToRenderer('update:ready', version, notes || availableUpdate?.notes || '')
   })
 
-  // Update availability is non-critical. Network, malformed release, and
-  // signature errors are intentionally quiet, per product requirements.
+  // Errors outside a user-triggered download/install stay quiet. Do not send
+  // the raw updater error to the renderer: it may contain paths or request data.
   updater.on('error', () => {
-    if (downloadInProgress && availableUpdate) {
-      sendToRenderer('update:available', availableUpdate.version, availableUpdate.notes)
-    }
+    if (installRequested) sendToRenderer('update:error', 'install', availableUpdate?.version || '')
+    else if (downloadInProgress) sendToRenderer('update:error', 'download', availableUpdate?.version || '')
   })
 
-  const checkSilently = async (): Promise<void> => {
+  const check = async (manual: boolean): Promise<void> => {
     try {
-      await updater.checkForUpdates()
+      const result = await updater.checkForUpdates()
+      if (manual && result && result.isUpdateAvailable === false) {
+        sendToRenderer('update:notAvailable')
+      }
     } catch {
-      // Offline/no-release errors must not surface to users.
+      // Background checks stay quiet. A user-requested check must explain the
+      // failure and offer the official manual download path.
+      if (manual) sendToRenderer('update:error', 'check', '')
     }
   }
 
-  ipcMain.handle('update:check', checkSilently)
+  ipcMain.handle('update:check', () => check(true))
+  ipcMain.handle('update:openDownload', openDownloadPage)
 
   ipcMain.handle('update:download', async () => {
     if (!availableUpdate || downloadInProgress || updateDownloaded) return
@@ -94,18 +105,20 @@ export function setupAutoUpdater({
     try {
       await updater.downloadUpdate()
     } catch {
-      // Restore the actionable state so a transient network failure can retry.
-      sendToRenderer('update:available', availableUpdate.version, availableUpdate.notes)
+      sendToRenderer('update:error', 'download', availableUpdate.version)
     } finally {
       downloadInProgress = false
     }
   })
 
   ipcMain.handle('update:install', () => {
-    if (updateDownloaded) updater.quitAndInstall()
+    if (updateDownloaded) {
+      installRequested = true
+      updater.quitAndInstall()
+    }
   })
 
   if (checkOnStartup) {
-    schedule(() => { void checkSilently() }, startupDelayMs)
+    schedule(() => { void check(false) }, startupDelayMs)
   }
 }

@@ -44,4 +44,10 @@ publish:
   provider: github
   owner: IvyYang1999
   repo: swob
+  # v1.2.0 used the default latest channel but cannot verify a changed app
+  # (arm64 was ad-hoc, x64 unsigned). Signed releases use an isolated trust root.
+  channel: swob-signed
+  # Release builds generate metadata locally for verification. Only the canary
+  # promotion workflow may attach it after a real install-and-relaunch E2E.
+  publishAutoUpdate: false
   releaseType: release

@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import { useT } from '../i18n'
 import { Search, PanelRight, X, Zap, Settings, BarChart3, GitBranch, Bot } from 'lucide-react'
 import { usePlatformCapabilities } from './WindowsAlphaNotice'
+import { HelpMenu } from './HelpMenu'
 import {
   BUILTIN_COMMAND_IDS,
   createBuiltinCommandRegistry,
@@ -165,6 +166,7 @@ export function Toolbar() {
             </button>
           )
         })}
+        <HelpMenu />
       </div>
     </div>
   )

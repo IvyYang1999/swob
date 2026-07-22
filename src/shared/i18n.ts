@@ -833,6 +833,28 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.shared.test_the_connection": "测试连接",
     "renderer.shared.first_run_ssh_user_host_in_a_terminal": "先在终端运行 ssh user@host。确认无需交互输入密码且目标目录存在后，再交给 Swob。",
     "renderer.shared.connection_guide": "连接教程",
+
+    // About & Feedback
+    'about.title': '关于与反馈',
+    'about.version': '版本',
+    'about.report_bug': '反馈 Bug',
+    'about.bug_description': '在 GitHub 提交 Bug 报告',
+    'about.feature_request': '许愿池',
+    'about.wish_description': '提一个功能想法或改进建议',
+    'about.discord': 'Discord 社区',
+    'about.discord_description': '加入社区讨论',
+    'about.docs': '文档与项目主页',
+    'about.docs_description': '查看文档和源码',
+
+    // Toolbar help
+    'toolbar.help': '帮助',
+    'toolbar.help_docs': '文档',
+    'toolbar.help_shortcuts': '快捷键',
+    'toolbar.help_report_bug': '反馈 Bug',
+    'toolbar.help_discord': 'Discord 社区',
+
+    // First-launch toast
+    'toast.feedback_hint': '遇到问题？设置 → 更新 → 关于 随时反馈',
     // T122_RENDERER_ZH
   },
 
@@ -1667,6 +1689,28 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.shared.test_the_connection": "Test the connection",
     "renderer.shared.first_run_ssh_user_host_in_a_terminal": "First run ssh user@host in a terminal. Confirm key login and the target path before using Swob.",
     "renderer.shared.connection_guide": "Connection guide",
+
+    // About & Feedback
+    'about.title': 'About & Feedback',
+    'about.version': 'Version',
+    'about.report_bug': 'Report a Bug',
+    'about.bug_description': 'File a bug report on GitHub',
+    'about.feature_request': 'Feature Request',
+    'about.wish_description': 'Suggest a feature or improvement',
+    'about.discord': 'Discord Community',
+    'about.discord_description': 'Join the community discussion',
+    'about.docs': 'Documentation & Homepage',
+    'about.docs_description': 'View docs and source code',
+
+    // Toolbar help
+    'toolbar.help': 'Help',
+    'toolbar.help_docs': 'Docs',
+    'toolbar.help_shortcuts': 'Keyboard Shortcuts',
+    'toolbar.help_report_bug': 'Report Bug',
+    'toolbar.help_discord': 'Discord',
+
+    // First-launch toast
+    'toast.feedback_hint': 'Need help? Settings → Updates → About for feedback',
     // T122_RENDERER_EN
   }
 }

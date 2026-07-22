@@ -4,6 +4,7 @@ import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import { SettingField, Segmented, ToggleRow, useSettingsPreferences } from './shared'
 import { usePlatformCapabilities } from '../WindowsAlphaNotice'
+import { AboutSection } from './AboutSection'
 
 export function UpdateSettings() {
   const { savePreferences } = useStore()
@@ -19,9 +20,12 @@ export function UpdateSettings() {
 
   if (isWindowsAlpha) {
     return (
-      <p className="text-[11px] leading-relaxed text-muted">
-        {t('renderer.update_settings.windows_alpha_distribution')}
-      </p>
+      <>
+        <p className="text-[11px] leading-relaxed text-muted">
+          {t('renderer.update_settings.windows_alpha_distribution')}
+        </p>
+        <AboutSection appInfo={appInfo} />
+      </>
     )
   }
 
@@ -65,6 +69,7 @@ export function UpdateSettings() {
           {checkingUpdate ? t('settings.checking_update') : t('settings.check_for_updates')}
         </button>
       </div>
+      <AboutSection appInfo={appInfo} />
     </>
   )
 }

@@ -2570,6 +2570,29 @@ ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
   return shell.openPath(assertProjectOrLibraryPath(filePath))
 })
 
+// --- External URL opening with domain whitelist ---
+const ALLOWED_EXTERNAL_DOMAINS = new Set(['github.com', 'discord.gg', 'discord.com'])
+
+ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new Error('Invalid URL')
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Only HTTPS URLs are allowed')
+  }
+  const hostname = parsed.hostname.toLowerCase()
+  const allowed = [...ALLOWED_EXTERNAL_DOMAINS].some(
+    (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+  )
+  if (!allowed) {
+    throw new Error(`Domain not in allowlist: ${hostname}`)
+  }
+  await shell.openExternal(url)
+})
+
 ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
   shell.showItemInFolder(assertProjectOrLibraryPath(filePath))
 })

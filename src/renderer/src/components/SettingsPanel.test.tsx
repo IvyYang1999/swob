@@ -34,43 +34,14 @@ vi.mock('../store', () => ({
   useStore: () => mockStore
 }))
 
-vi.mock('../i18n', () => ({
-  useT: () => (key: string) => {
-    const labels: Record<string, string> = {
-      'settings.title': '设置',
-      'settings.theme': '外观',
-      'settings.theme_light': '浅色',
-      'settings.theme_dark': '深色',
-      'settings.theme_system': '跟随系统',
-      'settings.language': '语言',
-      'settings.spotlight_shortcut': '全局跳转快捷键',
-      'settings.spotlight_shortcut_hint': '按下新的快捷键组合来更改',
-      'settings.spotlight_shortcut_recording': '正在录制…',
-      'settings.reset_shortcut': '重置',
-      'settings.resume_terminal': 'Resume 终端',
-      'settings.resume_terminal_terminal_app': 'Terminal.app',
-      'settings.resume_terminal_iterm': 'iTerm',
-      'settings.resume_terminal_custom': '自定义模板',
-      'settings.resume_terminal_custom_hint': '模板必须包含 {{command}}',
-      'settings.resume_terminal_custom_invalid': '模板无效',
-      'settings.experimental_claude_desktop': '实验：导入到 Claude Desktop',
-      'settings.experimental_claude_desktop_warning': '导入可能修改原始 transcript',
-      'settings.ssh': 'SSH 远程',
-      'settings.ssh_host': '主机',
-      'settings.ssh_user': '用户名',
-      'settings.ssh_remote_path': '远程路径（可选）',
-      'settings.ssh_save': '保存',
-      'settings.ssh_clear': '清除',
-      'settings.project_view': '项目视图',
-      'settings.project_view_folders': '按整理会话',
-      'settings.project_view_paths': '按实际项目路径',
-      'settings.update': '软件更新',
-      'settings.check_for_updates': '检查更新',
-      'settings.checking_update': '正在检查更新…'
-    }
-    return labels[key] || key
+vi.mock('../i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../i18n')>()
+  return {
+    ...actual,
+    useT: () => (key: string, params?: Record<string, string | number>) =>
+      actual.translate('zh-CN', key, params)
   }
-}))
+})
 
 import { SettingsPanel } from './settings/SettingsPanel'
 
@@ -190,7 +161,7 @@ describe('SettingsPanel 纵向导航设置', () => {
   it('Claude Desktop 实验开关默认关闭，并保存显式启用', () => {
     render(<SettingsPanel />)
 
-    fireEvent.click(navButton('Resume'))
+    fireEvent.click(navButton('继续'))
 
     const toggle = screen.getByRole('checkbox', { name: '实验：导入到 Claude Desktop' })
     expect((toggle as HTMLInputElement).checked).toBe(false)
@@ -214,7 +185,7 @@ describe('SettingsPanel 纵向导航设置', () => {
 
   it('Resume 分类按 harness 过滤方式，ZCode 终端选项明确禁用', () => {
     render(<SettingsPanel />)
-    fireEvent.click(navButton('Resume'))
+    fireEvent.click(navButton('继续'))
 
     const zcode = screen.getByRole('combobox', { name: /ZCode 默认方式/ }) as HTMLSelectElement
     expect(zcode.value).toBe('zcode-desktop')

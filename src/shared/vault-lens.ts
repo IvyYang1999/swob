@@ -1,5 +1,9 @@
 export type LensDimension = 'project' | 'date' | 'tags' | 'harness' | 'turns' | 'source' | 'none'
 
+// This is a stable vault path, not interface copy. Keep it locale-independent so
+// changing the UI language never splits archived sessions across two folders.
+export const SINGLE_TURN_ARCHIVE_FOLDER = '归档/单轮会话'
+
 export type LensColor = 'blue' | 'green' | 'amber' | 'purple' | 'cyan' | 'pink' | 'orange'
 
 export interface LensSession {
@@ -21,7 +25,8 @@ export interface LensSessionMeta {
 
 export interface LensGroup<T extends LensSession = LensSession> {
   id: string
-  label: string
+  label?: string
+  labelKey?: string
   color: LensColor
   items: T[]
 }
@@ -50,7 +55,7 @@ function projectIdentity(session: LensSession): string {
 /** Human-facing project label. The original path remains only an internal grouping key. */
 export function friendlyProjectName(session: LensSession): string {
   const cwd = session.cwds?.find((value) => value.trim())
-  if (cwd) return basename(cwd) || '根目录'
+  if (cwd) return basename(cwd)
 
   const projectPath = session.projectPath?.trim() || ''
   const directName = basename(projectPath)
@@ -59,7 +64,7 @@ export function friendlyProjectName(session: LensSession): string {
   // Claude project directories encode paths with dashes. Showing the final segment is
   // friendlier than leaking the full "-Users-name-projects-foo" storage key.
   const encodedParts = directName.split('-').filter(Boolean)
-  return encodedParts.at(-1) || '无项目'
+  return encodedParts.at(-1) || ''
 }
 
 function startOfLocalDay(value: Date): Date {
@@ -103,7 +108,7 @@ function sessionMeta<T extends LensSession>(
 
 function orderedGroups<T extends LensSession>(
   buckets: Map<string, T[]>,
-  definitions: Array<{ id: string; label: string }>
+  definitions: Array<{ id: string; labelKey: string }>
 ): LensGroup<T>[] {
   return definitions.flatMap((definition, index) => {
     const items = buckets.get(definition.id)
@@ -128,12 +133,19 @@ function groupProjects<T extends LensSession>(sessions: readonly T[]): LensGroup
   for (const label of baseLabels.values()) labelCounts.set(label, (labelCounts.get(label) || 0) + 1)
 
   return Array.from(buckets.entries()).map(([identity, items], index) => {
-    const baseLabel = baseLabels.get(identity) || '无项目'
+    const baseLabel = baseLabels.get(identity) || ''
     const parentLabel = basename(identity.slice(0, identity.lastIndexOf('/')))
     const label = (labelCounts.get(baseLabel) || 0) > 1 && parentLabel
       ? `${baseLabel} · ${parentLabel}`
       : baseLabel
-    return { id: `project:${identity}`, label, color: COLORS[index % COLORS.length], items }
+    return {
+      id: `project:${identity}`,
+      ...(label
+        ? { label }
+        : { labelKey: identity === '/' ? 'renderer.sidebar.group_root' : 'renderer.sidebar.group_no_project' }),
+      color: COLORS[index % COLORS.length],
+      items
+    }
   })
 }
 
@@ -146,7 +158,9 @@ export function groupSessionsByLens<T extends LensSession>(
   const metaBySessionId = options.metaBySessionId || {}
 
   if (dimension === 'none') {
-    return sessions.length ? [{ id: 'all', label: '全部会话', color: 'purple', items: [...sessions] }] : []
+    return sessions.length
+      ? [{ id: 'all', labelKey: 'renderer.sidebar.group_all', color: 'purple', items: [...sessions] }]
+      : []
   }
   if (dimension === 'project') return groupProjects(sessions)
 
@@ -178,38 +192,38 @@ export function groupSessionsByLens<T extends LensSession>(
 
   if (dimension === 'date') {
     return orderedGroups(buckets, [
-      { id: 'today', label: '今天' },
-      { id: 'yesterday', label: '昨天' },
-      { id: 'week', label: '本周' },
-      { id: 'month', label: '本月' },
-      { id: 'older', label: '更早' }
+      { id: 'today', labelKey: 'renderer.sidebar.group_today' },
+      { id: 'yesterday', labelKey: 'renderer.sidebar.group_yesterday' },
+      { id: 'week', labelKey: 'renderer.sidebar.group_week' },
+      { id: 'month', labelKey: 'renderer.sidebar.group_month' },
+      { id: 'older', labelKey: 'renderer.sidebar.group_older' }
     ])
   }
   if (dimension === 'turns') {
     return orderedGroups(buckets, [
-      { id: 'single', label: '单轮' },
-      { id: 'short', label: '短 · 2–9 轮' },
-      { id: 'medium', label: '中 · 10–39 轮' },
-      { id: 'long', label: '长 · 40–99 轮' },
-      { id: 'epic', label: '史诗 · 100+ 轮' }
+      { id: 'single', labelKey: 'renderer.sidebar.group_single' },
+      { id: 'short', labelKey: 'renderer.sidebar.group_short' },
+      { id: 'medium', labelKey: 'renderer.sidebar.group_medium' },
+      { id: 'long', labelKey: 'renderer.sidebar.group_long' },
+      { id: 'epic', labelKey: 'renderer.sidebar.group_epic' }
     ])
   }
   if (dimension === 'source') {
     return orderedGroups(buckets, [
-      { id: 'local', label: '本地' },
-      { id: 'cloud', label: '云端' }
+      { id: 'local', labelKey: 'renderer.sidebar.group_local' },
+      { id: 'cloud', labelKey: 'renderer.sidebar.group_cloud' }
     ])
   }
 
   return Array.from(buckets.entries()).map(([id, items], index) => ({
     id,
-    label: id === 'untagged'
-      ? '未标标签'
-      : id.startsWith('tag:')
+    ...(id === 'untagged'
+      ? { labelKey: 'renderer.sidebar.group_untagged' }
+      : { label: id.startsWith('tag:')
         ? id.slice(4)
         : id.startsWith('harness:')
           ? id.slice(8)
-          : id,
+          : id }),
     color: COLORS[index % COLORS.length],
     items
   }))

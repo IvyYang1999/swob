@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react'
 import { Server } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import { copy, SettingField, SshTutorial } from './shared'
+import { SettingField, SshTutorial } from './shared'
 import { RemoteConnectionSection } from './sections'
 
 export function SshSettings() {
-  const { locale, sshConfig, setSshConfig } = useStore()
+  const { sshConfig, setSshConfig } = useStore()
   const t = useT()
   const [sshHost, setSshHost] = useState(sshConfig?.host || '')
   const [sshUser, setSshUser] = useState(sshConfig?.user || '')
@@ -26,8 +26,8 @@ export function SshSettings() {
   return (
     <>
       <SettingField
-        label={copy(locale, 'SSH 主机', 'SSH host', 'SSH ホスト')}
-        hint={copy(locale, '用于恢复来自另一台机器的会话。', 'Used to resume sessions from another machine.', '別のマシンのセッションを再開するために使用します。')}
+        label={t('renderer.ssh_settings.ssh_host')}
+        hint={t('renderer.ssh_settings.used_to_resume_sessions_from_another_machine')}
         icon={<Server size={12} />}
       >
         <div className="space-y-2 max-w-96">
@@ -41,7 +41,7 @@ export function SshSettings() {
         </div>
       </SettingField>
       <RemoteConnectionSection />
-      <SshTutorial locale={locale} />
+      <SshTutorial />
     </>
   )
 }

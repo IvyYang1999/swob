@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { ByDate } from './shared'
 import { formatTokenCount, formatDuration, PROJECT_COLORS } from './shared'
+import { useStore } from '../../store'
+import { useT } from '../../i18n'
 
 interface DailyTimelineProps {
   data: ByDate[]
@@ -9,6 +11,8 @@ interface DailyTimelineProps {
 }
 
 export function DailyTimeline({ data, projectKey }: DailyTimelineProps) {
+  const locale = useStore((state) => state.locale)
+  const t = useT()
   const [visibleDays, setVisibleDays] = useState(14)
   const [expandedDate, setExpandedDate] = useState<string | null>(null)
 
@@ -37,8 +41,7 @@ export function DailyTimeline({ data, projectKey }: DailyTimelineProps) {
 
   function formatDayHeader(dateStr: string): string {
     const d = new Date(dateStr)
-    const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-    return `${d.getMonth() + 1}/${d.getDate()} (${weekdays[d.getDay()]})`
+    return new Intl.DateTimeFormat(locale, { month: 'numeric', day: 'numeric', weekday: 'short' }).format(d)
   }
 
   return (
@@ -119,7 +122,7 @@ export function DailyTimeline({ data, projectKey }: DailyTimelineProps) {
           onClick={() => setVisibleDays(d => d + 14)}
           className="w-full py-2 text-xs text-muted hover:text-primary hover:bg-surface rounded-lg transition-colors"
         >
-          加载更多
+          {t('renderer.daily_timeline.load_more')}
         </button>
       )}
     </div>

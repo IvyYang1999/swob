@@ -45,7 +45,7 @@ export function Toolbar() {
       icon: Bot,
       iconSize: 14,
       className: 'p-1.5 rounded hover:bg-hover text-secondary hover:text-primary',
-      title: 'Swob 助手 (⌘⇧A)'
+      title: t('renderer.toolbar.agent')
     },
     {
       id: BUILTIN_COMMAND_IDS.viewLineage,

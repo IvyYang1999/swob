@@ -1,4 +1,4 @@
-export type SettingsLocale = 'zh-CN' | 'en' | 'ja'
+export type SettingsLocale = import('./i18n').Locale
 export type DefaultSort = 'updated' | 'created' | 'turns' | 'name'
 export type DefaultGrouping = 'none' | 'project' | 'date' | 'harness'
 export type SingleTurnBehavior = 'show' | 'hide' | 'collapse'
@@ -12,8 +12,11 @@ export type ResumeMethod =
 
 export interface ResumeChoice {
   id: ResumeMethod
-  label: string
+  label?: string
+  labelKey?: string
   support: 'stable' | 'experimental' | 'unsupported'
+  reasonCode?: string
+  /** Dynamic reason injected from the Provider capability registry; overrides reasonCode when present. */
   reason?: string
 }
 
@@ -25,12 +28,14 @@ export interface HarnessCapability {
   defaultMethod: ResumeMethod
 }
 
-const terminal = (label = '终端'): ResumeChoice => ({ id: 'terminal', label, support: 'stable' })
-const experimentalTerminal = (reason: string, label = '终端'): ResumeChoice => ({
-  id: 'terminal', label, support: 'experimental', reason
+const terminal = (): ResumeChoice => ({
+  id: 'terminal', labelKey: 'settings_capability.terminal', support: 'stable'
 })
-const unsupported = (id: ResumeMethod, label: string, reason: string): ResumeChoice => ({
-  id, label, support: 'unsupported', reason
+const experimentalTerminal = (reasonCode: string): ResumeChoice => ({
+  id: 'terminal', labelKey: 'settings_capability.terminal', support: 'experimental', reasonCode
+})
+const unsupported = (id: ResumeMethod, label: string, reasonCode: string): ResumeChoice => ({
+  id, label, support: 'unsupported', reasonCode
 })
 
 const BASE_HARNESS_CAPABILITIES: HarnessCapability[] = [
@@ -38,13 +43,13 @@ const BASE_HARNESS_CAPABILITIES: HarnessCapability[] = [
     id: 'claude-code', name: 'Claude Code', sourceIds: ['claude-code'], defaultMethod: 'terminal',
     choices: [
       terminal(),
-      { id: 'claude-desktop', label: 'Claude Desktop', support: 'experimental', reason: '需开启实验导入；可能改写 transcript' },
+      { id: 'claude-desktop', label: 'Claude Desktop', support: 'experimental', reasonCode: 'settings_capability.claude_desktop_warning' },
       { id: 'remote-control', label: 'Remote Control', support: 'stable' }
     ]
   },
   {
     id: 'cc-mirror', name: 'CC-Mirror', sourceIds: ['cc-mirror'], defaultMethod: 'terminal',
-    choices: [terminal(), unsupported('claude-desktop', 'Claude Desktop', '没有 CC-Mirror 专用桌面恢复入口')]
+    choices: [terminal(), unsupported('claude-desktop', 'Claude Desktop', 'settings_capability.no_mirror_desktop_entry')]
   },
   {
     id: 'codex', name: 'Codex', sourceIds: ['codex'], defaultMethod: 'codex-desktop',
@@ -52,27 +57,27 @@ const BASE_HARNESS_CAPABILITIES: HarnessCapability[] = [
   },
   {
     id: 'cursor', name: 'Cursor Agent', sourceIds: ['cursor'], defaultMethod: 'terminal',
-    choices: [terminal(), unsupported('codex-desktop', 'Cursor App', '官方未提供按会话直达')]
+    choices: [terminal(), unsupported('codex-desktop', 'Cursor App', 'settings_capability.no_session_deep_link')]
   },
   {
     id: 'opencode', name: 'OpenCode', sourceIds: ['opencode'], defaultMethod: 'terminal',
-    choices: [terminal(), unsupported('codex-desktop', 'OpenCode Desktop', '官方未提供按会话直达')]
+    choices: [terminal(), unsupported('codex-desktop', 'OpenCode Desktop', 'settings_capability.no_session_deep_link')]
   },
   {
     id: 'zcode', name: 'ZCode', sourceIds: ['zcode'], defaultMethod: 'zcode-desktop',
     choices: [
-      unsupported('terminal', '终端', '没有公开 CLI Resume'),
-      { id: 'zcode-desktop', label: 'ZCode App', support: 'experimental', reason: '仅打开工作区，不保证恢复指定会话' }
+      { ...terminal(), support: 'unsupported', reasonCode: 'settings_capability.no_public_cli_resume' },
+      { id: 'zcode-desktop', label: 'ZCode App', support: 'experimental', reasonCode: 'settings_capability.workspace_only' }
     ]
   },
   {
     id: 'antigravity', name: 'Antigravity', sourceIds: ['antigravity'], defaultMethod: 'terminal',
-    choices: [experimentalTerminal('命令映射未经来源级 Resume 审计'), unsupported('codex-desktop', 'Antigravity App', '官方未提供按会话直达')]
+    choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping'), unsupported('codex-desktop', 'Antigravity App', 'settings_capability.no_session_deep_link')]
   },
-  { id: 'grok', name: 'Grok Build', sourceIds: ['grok'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] },
-  { id: 'hermes', name: 'Hermes', sourceIds: ['hermes'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] },
-  { id: 'pi', name: 'Pi', sourceIds: ['pi'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] },
-  { id: 'kimi', name: 'Kimi Code', sourceIds: ['kimi'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] }
+  { id: 'grok', name: 'Grok Build', sourceIds: ['grok'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] },
+  { id: 'hermes', name: 'Hermes', sourceIds: ['hermes'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] },
+  { id: 'pi', name: 'Pi', sourceIds: ['pi'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] },
+  { id: 'kimi', name: 'Kimi Code', sourceIds: ['kimi'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] }
 ]
 
 function choiceCapability(choice: ResumeChoice): 'terminal-resume' | 'native-resume' | null {

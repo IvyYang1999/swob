@@ -1,11 +1,11 @@
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import { HARNESS_CAPABILITIES, type ResumeMethod } from '../../../../shared/settings-capabilities'
-import { copy, HarnessMark, ToggleRow, useSettingsPreferences } from './shared'
+import { HarnessMark, ToggleRow, useSettingsPreferences } from './shared'
 import { usePlatformCapabilities } from '../WindowsAlphaNotice'
 
 export function ResumeSettings() {
-  const { locale, savePreferences } = useStore()
+  const { savePreferences } = useStore()
   const t = useT()
   const preferences = useSettingsPreferences()
   const platformCapabilities = usePlatformCapabilities()
@@ -31,7 +31,7 @@ export function ResumeSettings() {
   return (
     <>
       <p className="text-[11px] leading-relaxed text-muted">
-        {copy(locale, '每个 harness 只显示经过验证的入口；「打开 App」和「恢复指定会话」不会混为一谈。', 'Each harness exposes only verified entry points. Opening an app is never presented as exact-session resume.', '検証済みの入口だけを表示し、アプリ起動とセッション復元を区別します。')}
+        {t('renderer.resume_settings.each_harness_exposes_only_verified_entry_points_opening')}
       </p>
       <div className="space-y-2">
         {harnesses.map((harness) => {
@@ -51,11 +51,11 @@ export function ResumeSettings() {
                 <div className="mb-2 sm:mb-0">
                   <div className="text-xs font-medium text-primary">{harness.name}</div>
                   <div className="mt-0.5 text-[10px] text-faint">
-                    {copy(locale, '默认方式', 'Default method', '既定の方法')}
+                    {t('renderer.resume_settings.default_method')}
                   </div>
                 </div>
                 <select
-                  aria-label={`${harness.name} ${copy(locale, '默认方式', 'default method', '既定の方法')}`}
+                  aria-label={`${harness.name} ${t('renderer.resume_settings.default_method_2')}`}
                   value={value}
                   onChange={(event) => saveResumeMethod(harness.id, event.target.value as ResumeMethod)}
                   className="w-full sm:w-64 px-2 py-1.5 rounded-md text-xs bg-base border border-edge focus:border-accent outline-none text-primary"
@@ -63,8 +63,9 @@ export function ResumeSettings() {
                   {choices.map((choice) => {
                     const enabled = choice.support === 'stable' || (choice.id === 'claude-desktop' && experimentalClaudeDesktopImport)
                     return (
-                      <option key={`${choice.id}-${choice.label}`} value={choice.id} disabled={!enabled}>
-                        {choice.label}{choice.reason ? ` — ${choice.reason}` : ''}
+                      <option key={`${choice.id}-${choice.label || choice.labelKey}`} value={choice.id} disabled={!enabled}>
+                        {choice.labelKey ? t(choice.labelKey) : choice.label}
+                        {choice.reason ? ` — ${choice.reason}` : choice.reasonCode ? ` — ${t(choice.reasonCode)}` : ''}
                       </option>
                     )
                   })}

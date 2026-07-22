@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { useStore } from '../../store'
-import { type Locale } from '../../i18n'
+import { useT } from '../../i18n'
 import { migrateSettingsPreferences } from '../../../../shared/settings-capabilities'
 import { getHarnessPresentation } from '../../utils/harness-presentation'
 
@@ -14,10 +14,6 @@ export interface DetectedTerminal {
   canRunCommand: boolean
   limitation?: string
   evidence: 'system-path' | 'app-path' | 'bundle-id' | 'executable'
-}
-
-export function copy(locale: Locale, zh: string, en: string, ja = en): string {
-  return locale === 'zh-CN' ? zh : locale === 'ja' ? ja : en
 }
 
 /** Migrated preferences derived from store config — single source for all setting pages. */
@@ -108,23 +104,24 @@ export function HarnessMark({ id }: { id: string }) {
   )
 }
 
-export function SshTutorial({ locale }: { locale: Locale }) {
+export function SshTutorial() {
+  const t = useT()
   const items = [
     {
-      title: copy(locale, '查找远程机器地址', 'Find the remote machine address', 'リモートマシンのアドレス'),
-      body: copy(locale, '在远程机器运行 hostname，或在网络设置中查看 IP。优先使用稳定 hostname 或 Tailscale 地址。', 'Run hostname remotely or inspect its network IP. Prefer a stable hostname or Tailscale address.', 'リモート側で hostname を実行するか、ネットワーク設定で IP を確認します。')
+      title: t('renderer.shared.find_the_remote_machine_address'),
+      body: t('renderer.shared.run_hostname_remotely_or_inspect_its_network_ip')
     },
     {
-      title: copy(locale, '配置 SSH key', 'Configure an SSH key', 'SSH キーを設定'),
-      body: copy(locale, '本机运行 ssh-keygen，再用 ssh-copy-id user@host 安装公钥。私钥只保留在本机。', 'Run ssh-keygen locally, then ssh-copy-id user@host. Keep the private key only on this machine.', 'ローカルで ssh-keygen を実行し、ssh-copy-id user@host で公開鍵を登録します。')
+      title: t('renderer.shared.configure_an_ssh_key'),
+      body: t('renderer.shared.run_ssh_keygen_locally_then_ssh_copy_id')
     },
     {
-      title: copy(locale, '测试连接', 'Test the connection', '接続をテスト'),
-      body: copy(locale, '先在终端运行 ssh user@host。确认无需交互输入密码且目标目录存在后，再交给 Swob。', 'First run ssh user@host in a terminal. Confirm key login and the target path before using Swob.', 'ターミナルで ssh user@host を実行し、鍵ログインと対象パスを確認します。')
+      title: t('renderer.shared.test_the_connection'),
+      body: t('renderer.shared.first_run_ssh_user_host_in_a_terminal')
     }
   ]
   return (
-    <SettingField label={copy(locale, '连接教程', 'Connection guide', '接続ガイド')} icon={<ChevronDown size={12} />}>
+    <SettingField label={t('renderer.shared.connection_guide')} icon={<ChevronDown size={12} />}>
       <div className="space-y-1">
         {items.map((item) => (
           <details key={item.title} className="group rounded-md bg-surface">

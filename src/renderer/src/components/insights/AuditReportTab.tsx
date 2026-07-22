@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { formatTokenCount, SOURCE_COLORS, type Valuation } from './shared'
+import { useT } from '../../i18n'
 
 type TimeRange = 'today' | 'week' | 'month' | '30d' | '90d' | 'all'
 
@@ -33,13 +34,13 @@ interface InsightsReport {
   findings: string[]
 }
 
-const TIME_RANGES: Array<{ id: TimeRange; labelZh: string; labelEn: string }> = [
-  { id: 'today', labelZh: '今日', labelEn: 'Today' },
-  { id: 'week', labelZh: '本周', labelEn: 'This Week' },
-  { id: 'month', labelZh: '本月', labelEn: 'This Month' },
-  { id: '30d', labelZh: '近 30 天', labelEn: 'Last 30d' },
-  { id: '90d', labelZh: '近 90 天', labelEn: 'Last 90d' },
-  { id: 'all', labelZh: '全部', labelEn: 'All Time' },
+const TIME_RANGES: Array<{ id: TimeRange; labelKey: string }> = [
+  { id: 'today', labelKey: 'renderer.audit_report.range_today' },
+  { id: 'week', labelKey: 'renderer.audit_report.range_week' },
+  { id: 'month', labelKey: 'renderer.audit_report.range_month' },
+  { id: '30d', labelKey: 'renderer.audit_report.range_30d' },
+  { id: '90d', labelKey: 'renderer.audit_report.range_90d' },
+  { id: 'all', labelKey: 'renderer.audit_report.range_all' },
 ]
 
 function StatCard({ value, label, color }: { value: string; label: string; color?: string }) {
@@ -77,6 +78,7 @@ function HealthBar({ d }: { d: InsightsReport['healthDistribution'] }) {
 }
 
 export function AuditReportTab() {
+  const t = useT()
   const [range, setRange] = useState<TimeRange>('30d')
   const [report, setReport] = useState<InsightsReport | null>(null)
   const [loading, setLoading] = useState(false)
@@ -124,7 +126,7 @@ export function AuditReportTab() {
                 : 'bg-surface text-muted hover:text-primary hover:bg-hover'
             }`}
           >
-            {tr.labelZh}
+            {t(tr.labelKey)}
           </button>
         ))}
       </div>
@@ -142,8 +144,8 @@ export function AuditReportTab() {
             <StatCard value={String(report.totalSessions)} label="Sessions" />
             <StatCard value={formatTokenCount(report.totalTokens)} label="Processed Tokens" />
             <StatCard
-              value={report.valuation.usd === undefined ? '未计价' : `$${report.valuation.usd.toFixed(2)}`}
-              label={`API 等价值(估算) · 覆盖 ${report.valuation.coveragePercent.toFixed(1)}%`}
+              value={report.valuation.usd === undefined ? t('renderer.audit_report.unpriced') : `$${report.valuation.usd.toFixed(2)}`}
+              label={t('renderer.audit_report.api_equivalent_coverage', { value0: report.valuation.coveragePercent.toFixed(1) })}
               color="text-soft-amber"
             />
           </div>
@@ -162,7 +164,7 @@ export function AuditReportTab() {
                     {s.unavailableSessions > 0 ? ` · ${s.unavailableSessions} unavailable` : ''}
                   </span>
                   <span className="text-muted ml-auto">
-                    {s.valuation.usd === undefined ? '未计价' : `$${s.valuation.usd.toFixed(2)} · ${s.valuation.coveragePercent.toFixed(1)}%`}
+                    {s.valuation.usd === undefined ? t('renderer.audit_report.unpriced') : `$${s.valuation.usd.toFixed(2)} · ${s.valuation.coveragePercent.toFixed(1)}%`}
                   </span>
                 </div>
               ))}

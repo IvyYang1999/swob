@@ -1,3 +1,4 @@
+import { translate } from '../../i18n'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useStore } from '../../store'
 import { FilterBar } from './FilterBar'
@@ -16,13 +17,13 @@ import { DashboardPageWidgets } from '../../registry/builtin-widget-registry'
 
 type DashboardTab = DashboardPageId
 
-const TABS: Array<{ id: DashboardTab; zh: string; en: string }> = [
-  { id: 'overview', zh: '总览', en: 'Overview' },
-  { id: 'cost', zh: '成本与缓存', en: 'Cost & Cache' },
-  { id: 'sessions', zh: '会话与效率', en: 'Sessions' },
-  { id: 'workflow', zh: '工作流', en: 'Workflow' },
-  { id: 'quality', zh: '数据质量', en: 'Data Quality' },
-  { id: 'audit', zh: '审计报告', en: 'Audit Report' },
+const TABS: Array<{ id: DashboardTab; labelKey: string }> = [
+  { id: 'overview', labelKey: 'renderer.insights_page.tab_overview' },
+  { id: 'cost', labelKey: 'renderer.insights_page.tab_cost' },
+  { id: 'sessions', labelKey: 'renderer.insights_page.tab_sessions' },
+  { id: 'workflow', labelKey: 'renderer.insights_page.tab_workflow' },
+  { id: 'quality', labelKey: 'renderer.insights_page.tab_quality' },
+  { id: 'audit', labelKey: 'renderer.insights_page.tab_audit' },
 ]
 
 interface DrilldownTarget {
@@ -152,7 +153,7 @@ export function InsightsPage() {
                   : 'text-muted hover:text-primary'
               }`}
             >
-              {zh ? tab.zh : tab.en}
+              {translate(locale, tab.labelKey)}
             </button>
           ))}
         </div>

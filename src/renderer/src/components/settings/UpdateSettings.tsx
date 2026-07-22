@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import { copy, SettingField, Segmented, ToggleRow, useSettingsPreferences } from './shared'
+import { SettingField, Segmented, ToggleRow, useSettingsPreferences } from './shared'
 import { usePlatformCapabilities } from '../WindowsAlphaNotice'
 
 export function UpdateSettings() {
-  const { locale, savePreferences } = useStore()
+  const { savePreferences } = useStore()
   const t = useT()
   const preferences = useSettingsPreferences()
   const isWindowsAlpha = usePlatformCapabilities()?.windowsNativeAlpha === true
@@ -20,38 +20,33 @@ export function UpdateSettings() {
   if (isWindowsAlpha) {
     return (
       <p className="text-[11px] leading-relaxed text-muted">
-        Windows Alpha 不提供自动更新；新版本由负责人分发未签名的 x64 NSIS 安装包。
+        {t('renderer.update_settings.windows_alpha_distribution')}
       </p>
     )
   }
 
   return (
     <>
-      <SettingField label={copy(locale, '自动更新', 'Automatic updates', '自動更新')} icon={<RefreshCw size={12} />}>
+      <SettingField label={t('renderer.update_settings.automatic_updates')} icon={<RefreshCw size={12} />}>
         <ToggleRow
           checked={preferences.autoCheckUpdates}
           onChange={(autoCheckUpdates) => savePreferences({ autoCheckUpdates })}
-          label={copy(locale, '启动后自动检查更新', 'Check for updates after launch', '起動後に更新を確認')}
-          hint={copy(locale, '关闭后仍可随时手动检查。', 'You can still check manually at any time.', 'いつでも手動で確認できます。')}
+          label={t('renderer.update_settings.check_for_updates_after_launch')}
+          hint={t('renderer.update_settings.you_can_still_check_manually_at_any_time')}
         />
       </SettingField>
-      <SettingField label={copy(locale, '更新通道', 'Update channel', '更新チャンネル')}>
+      <SettingField label={t('renderer.update_settings.update_channel')}>
         <Segmented
-          ariaLabel={copy(locale, '更新通道', 'Update channel', '更新チャンネル')}
+          ariaLabel={t('renderer.update_settings.update_channel_2')}
           value={preferences.updateChannel}
           onChange={(updateChannel) => savePreferences({ updateChannel })}
           options={[
-            { value: 'stable', label: copy(locale, '稳定版', 'Stable', '安定版') },
-            { value: 'development', label: copy(locale, '尝鲜版', 'Preview', '開発版') }
+            { value: 'stable', label: t('renderer.update_settings.stable') },
+            { value: 'development', label: t('renderer.update_settings.preview') }
           ]}
         />
         <div className="mt-1 text-[10px] leading-relaxed text-faint">
-          {copy(
-            locale,
-            '稳定版:只接收正式发布的更新(推荐)。尝鲜版:第一时间拿到新功能,但可能遇到未打磨的问题。',
-            'Stable: official releases only (recommended). Preview: get new features first, rough edges possible.',
-            '安定版:正式リリースのみ(推奨)。プレビュー版:新機能を先行入手。'
-          )}
+          {t('renderer.update_settings.stable_official_releases_only_recommended_preview_get_new')}
         </div>
       </SettingField>
       <div className="rounded-md bg-surface px-3 py-2.5 flex items-center justify-between gap-3">

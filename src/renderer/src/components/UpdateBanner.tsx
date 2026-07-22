@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Download, RefreshCw, ChevronDown, ChevronUp, X } from 'lucide-react'
+import { useT } from '../i18n'
 
 type UpdateState = 'idle' | 'available' | 'downloading' | 'ready' | 'not-available' | 'error'
 type UpdateErrorKind = 'check' | 'download' | 'install'
 
 export function UpdateBanner() {
+  const t = useT()
   const [state, setState] = useState<UpdateState>('idle')
   const [version, setVersion] = useState('')
   const [notes, setNotes] = useState('')
@@ -55,60 +57,60 @@ export function UpdateBanner() {
         {state === 'downloading' && (
           <>
             <Download size={14} className="text-zinc-400 animate-pulse shrink-0" />
-            <span className="text-zinc-400">正在下载 v{version}…</span>
+            <span className="text-zinc-400">{t('renderer.update_banner.downloading', { value0: version })}</span>
           </>
         )}
         {state === 'available' && (
           <>
             <Download size={14} className="text-zinc-300 shrink-0" />
-            <span>发现新版本 v{version}</span>
+            <span>{t('renderer.update_banner.available', { value0: version })}</span>
             <button
               onClick={() => (window as any).api.downloadUpdate()}
               className="ml-auto px-2 py-0.5 rounded bg-green-600 hover:bg-green-500 text-white text-xs font-medium transition-colors shrink-0"
             >
-              更新
+              {t('renderer.update_banner.update')}
             </button>
           </>
         )}
         {state === 'ready' && (
           <>
             <RefreshCw size={14} className="text-green-400 shrink-0" />
-            <span>v{version} 已就绪</span>
+            <span>{t('renderer.update_banner.ready', { value0: version })}</span>
             <button
               onClick={() => (window as any).api.installUpdate()}
               className="ml-auto px-2 py-0.5 rounded bg-green-600 hover:bg-green-500 text-white text-xs font-medium transition-colors shrink-0"
             >
-              重启更新
+              {t('renderer.update_banner.restart')}
             </button>
           </>
         )}
         {state === 'not-available' && (
           <>
             <CheckCircle2 size={14} className="text-green-400 shrink-0" />
-            <span className="min-w-0">当前已是最新版</span>
+            <span className="min-w-0">{t('renderer.update_banner.up_to_date')}</span>
           </>
         )}
         {state === 'error' && (
           <>
             <AlertTriangle size={14} className="text-amber-400 shrink-0" />
             <span className="min-w-0 leading-snug">
-              {errorKind === 'check' && '暂时无法检查更新'}
-              {errorKind === 'download' && `${version ? `v${version} ` : ''}下载失败`}
-              {errorKind === 'install' && '安全校验未通过，未安装新版'}
+              {errorKind === 'check' && t('renderer.update_banner.check_failed')}
+              {errorKind === 'download' && t('renderer.update_banner.download_failed', { version: version ? `v${version} ` : '' })}
+              {errorKind === 'install' && t('renderer.update_banner.install_failed')}
             </span>
             {errorKind === 'download' ? (
               <button
                 onClick={() => (window as any).api.downloadUpdate()}
                 className="ml-auto px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-xs font-medium transition-colors shrink-0"
               >
-                重试下载
+                {t('renderer.update_banner.retry_download')}
               </button>
             ) : (
               <button
                 onClick={() => (window as any).api.openUpdateDownloadPage()}
                 className="ml-auto px-2 py-0.5 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-200 text-xs font-medium transition-colors shrink-0"
               >
-                手动下载
+                {t('renderer.update_banner.manual_download')}
               </button>
             )}
           </>
@@ -116,7 +118,7 @@ export function UpdateBanner() {
         {(state === 'not-available' || state === 'error') && (
           <button
             onClick={() => setState('idle')}
-            aria-label="关闭更新提示"
+            aria-label={t('renderer.update_banner.dismiss')}
             className="p-0.5 text-zinc-500 hover:text-zinc-300 shrink-0"
           >
             <X size={12} />
@@ -130,7 +132,7 @@ export function UpdateBanner() {
             className="flex items-center gap-1 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-300 w-full border-t border-zinc-700"
           >
             {expanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-            <span>更新内容</span>
+            <span>{t('renderer.update_banner.notes')}</span>
           </button>
           {expanded && (
             <ul className="px-3 pb-2 text-xs text-zinc-400 space-y-0.5">

@@ -17,11 +17,12 @@ import type { SessionSummary } from './types'
 export interface ResumeActionResult {
   ok: boolean
   sessionId: string
-  reason?: string
+  reasonCode?: string
+  reasonParams?: Record<string, string | number>
   surface?: ResumeSurface
   action?: ResumeLaunchAction
   command?: string
-  notice?: string
+  noticeCode?: string
 }
 
 export interface GuardedResumeOptions {
@@ -63,7 +64,7 @@ function unavailableResult(sessionId: string, availability: SessionResumeAvailab
   return {
     ok: false,
     sessionId,
-    reason: availability.reason || '此会话无法直接恢复'
+    reasonCode: 'resume.error.unavailable'
   }
 }
 
@@ -93,7 +94,11 @@ async function buildGuardedAction(
         preferredTargetInstanceId: options.preferredTargetInstanceId
       })
   if (!prepared.ok) {
-    return { ok: false, sessionId: options.sessionId, reason: prepared.reason || '此会话无法直接恢复' }
+    return {
+      ok: false,
+      sessionId: options.sessionId,
+      reasonCode: prepared.failureCode ? `resume.error.${prepared.failureCode}` : 'resume.error.unavailable'
+    }
   }
   const context = await resolveSessionActionContext(options.sessionId, options.sessions, {
     reloadSessions: options.reloadSessions,
@@ -107,7 +112,7 @@ async function buildGuardedAction(
       ok: false,
       sessionId: context.sessionId,
       surface,
-      reason: '请先在设置中开启“实验：导入到 Claude Desktop”'
+      reasonCode: 'resume.error.claude_desktop_disabled'
     }
   }
 
@@ -139,16 +144,17 @@ async function buildGuardedAction(
         )
       }
     const command = action.kind === 'deep-link' ? undefined : action.command
-    const notice = surface === 'zcode-desktop'
-      ? 'ZCode 已打开，但当前不支持跳转到指定历史会话'
+    const noticeCode = surface === 'zcode-desktop'
+      ? 'resume.notice.zcode_opened'
       : undefined
-    return { ok: true, sessionId: context.sessionId, surface, action, command, notice }
+    return { ok: true, sessionId: context.sessionId, surface, action, command, noticeCode }
   } catch (error) {
     return {
       ok: false,
       sessionId: context.sessionId,
       surface,
-      reason: error instanceof Error ? error.message : '无法构建 Resume 动作'
+      reasonCode: 'resume.error.build_action_failed',
+      reasonParams: { details: error instanceof Error ? error.message : 'unknown' }
     }
   }
 }
@@ -173,7 +179,8 @@ export async function openGuardedResumeAction(
     return {
       ...result,
       ok: false,
-      reason: error instanceof Error ? error.message : '无法打开目标客户端'
+      reasonCode: 'resume.error.open_client_failed',
+      reasonParams: { details: error instanceof Error ? error.message : 'unknown' }
     }
   }
 }
@@ -190,7 +197,8 @@ export async function openGuardedForkAction(
     return {
       ...result,
       ok: false,
-      reason: error instanceof Error ? error.message : '无法打开终端'
+      reasonCode: 'resume.error.open_terminal_failed',
+      reasonParams: { details: error instanceof Error ? error.message : 'unknown' }
     }
   }
 }

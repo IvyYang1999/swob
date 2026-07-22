@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../../store'
-import { useT } from '../../i18n'
+import { translate, useT } from '../../i18n'
 import {
   X, Sun, Moon, Monitor, Globe, Keyboard, Server, FolderTree, Terminal, Check,
   AlertCircle, RefreshCw, Copy, Wifi, Globe2, Shield, HardDrive
@@ -43,6 +43,7 @@ export function formatAccelerator(accel: string): string {
 }
 
 export function CliSection() {
+  const t = useT()
   const [status, setStatus] = useState<{
     cliInstalled: boolean
     symlinkInstalled: boolean
@@ -82,13 +83,13 @@ export function CliSection() {
       </label>
       <div className="space-y-2">
         <p className="text-[11px] text-muted">
-          安装 Swob CLI 后，你的 AI Agent 可以通过命令行搜索、整理和恢复会话。
+          {t('renderer.sections.cli_description')}
         </p>
 
         {status && (
           <div className="space-y-1">
-            <StatusRow label="CLI 文件" ok={status.cliInstalled} path={status.cliPath} />
-            <StatusRow label="swob 命令" ok={status.symlinkInstalled} path={status.commandPath} />
+            <StatusRow label={t('renderer.sections.cli_file')} ok={status.cliInstalled} path={status.cliPath} />
+            <StatusRow label={t('renderer.sections.swob_command')} ok={status.symlinkInstalled} path={status.commandPath} />
             <StatusRow label="Agent Skill" ok={status.skillInstalled} path={status.skillPath} />
           </div>
         )}
@@ -99,14 +100,14 @@ export function CliSection() {
             disabled={installing}
             className="w-full px-2 py-1.5 rounded-md text-xs bg-accent/15 text-accent hover:bg-accent/25 disabled:opacity-40 transition-colors"
           >
-            {installing ? '安装中...' : '安装 / 更新 CLI'}
+            {installing ? t('renderer.sections.installing') : t('renderer.sections.install_cli')}
           </button>
         )}
 
         {allGood && (
           <div className="flex items-center gap-1.5 text-[11px] text-green-400">
             <Check size={11} />
-            已安装，Agent 可以使用 swob 命令
+            {t('renderer.sections.cli_ready')}
           </div>
         )}
 
@@ -114,7 +115,7 @@ export function CliSection() {
           <div className="text-[11px] text-muted">
             <p className="flex items-center gap-1 text-amber-400 mb-1">
               <AlertCircle size={10} />
-              需要手动创建 symlink:
+              {t('renderer.sections.symlink_required')}
             </p>
             <code className="block px-2 py-1 bg-surface rounded text-[10px] font-mono text-primary select-all">
               {result.cliManualInstall}
@@ -160,6 +161,7 @@ function IpRow({ ip, label, icon, desc, warn }: {
   desc: string
   warn?: string
 }) {
+  const t = useT()
   const [copied, setCopied] = useState(false)
   const copy = () => {
     navigator.clipboard.writeText(ip)
@@ -177,7 +179,7 @@ function IpRow({ ip, label, icon, desc, warn }: {
         <button
           onClick={copy}
           className="p-1 rounded hover:bg-hover text-muted hover:text-primary"
-          title="复制"
+          title={t('renderer.sections.copy_ip')}
         >
           {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
         </button>
@@ -189,6 +191,7 @@ function IpRow({ ip, label, icon, desc, warn }: {
 }
 
 export function RemoteConnectionSection() {
+  const t = useT()
   const [info, setInfo] = useState<NetworkInfo | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -211,20 +214,20 @@ export function RemoteConnectionSection() {
       <div className="flex items-center justify-between mb-2">
         <label className="flex items-center gap-2 text-xs font-medium text-secondary">
           <Server size={12} />
-          远程连接信息
+          {t('renderer.sections.remote_info')}
         </label>
         <button
           onClick={load}
           disabled={loading}
           className="p-1 rounded hover:bg-hover text-muted hover:text-primary disabled:opacity-40"
-          title="刷新"
+          title={t('renderer.sections.refresh')}
         >
           <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
 
       {!info && loading && (
-        <p className="text-[11px] text-muted">检测中...</p>
+        <p className="text-[11px] text-muted">{t('renderer.sections.detecting')}</p>
       )}
 
       {info && (
@@ -232,16 +235,16 @@ export function RemoteConnectionSection() {
           {!info.sshEnabled && (
             <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-400/10 border border-amber-400/30 text-[11px] text-amber-400">
               <AlertCircle size={12} className="mt-0.5 shrink-0" />
-              <span>未开启「远程登录」(SSH)。请前往 系统设置 → 通用 → 共享 → 远程登录 开启。</span>
+              <span>{t('renderer.sections.ssh_disabled')}</span>
             </div>
           )}
 
           {info.tailscaleIp && (
             <IpRow
               ip={info.tailscaleIp}
-              label="Tailscale（推荐，跨网络可用）"
+              label={t('renderer.sections.tailscale_label')}
               icon={<Shield size={10} className="text-purple-400" />}
-              desc="已检测到 Tailscale。同一账号下的另一台设备可跨网络连接，无需公网 IP。"
+              desc={t('renderer.sections.tailscale_desc')}
             />
           )}
 
@@ -249,36 +252,35 @@ export function RemoteConnectionSection() {
             <IpRow
               key={ip}
               ip={ip}
-              label="局域网 IP（同一 WiFi 下可用）"
+              label={t('renderer.sections.lan_label')}
               icon={<Wifi size={10} className="text-blue-400" />}
-              desc="仅限两台设备处于同一局域网时使用。IP 可能随网络变化。"
-              warn="跨网络、VPN 下不可用"
+              desc={t('renderer.sections.lan_desc')}
+              warn={t('renderer.sections.lan_warn')}
             />
           ))}
 
           {info.publicIp && (
             <IpRow
               ip={info.publicIp}
-              label="公网 IP（跨网络可用，需端口转发）"
+              label={t('renderer.sections.public_label')}
               icon={<Globe2 size={10} className="text-green-400" />}
-              desc="从互联网可见的 IP。需在路由器上将 22 端口转发到这台 Mac。家用 IP 通常会定期变化。"
-              warn="需要路由器端口转发，且 IP 可能随时变化"
+              desc={t('renderer.sections.public_desc')}
+              warn={t('renderer.sections.public_warn')}
             />
           )}
 
           {!info.publicIp && !loading && (
-            <p className="text-[10px] text-muted">公网 IP 获取失败（可能无网络）</p>
+            <p className="text-[10px] text-muted">{t('renderer.sections.public_failed')}</p>
           )}
 
           {!info.tailscaleIp && (
             <div className="p-2.5 rounded-lg bg-surface border border-edge-subtle text-[10px] text-muted leading-relaxed">
-              <span className="font-medium text-secondary">推荐：安装 Tailscale</span> 实现跨网络连接——无需公网 IP、无需端口转发，两端各安装一次即可。
-              免费个人计划支持 3 台设备。
+              <span className="font-medium text-secondary">{t('renderer.sections.tailscale_recommend')}</span> {t('renderer.sections.tailscale_recommend_body')}
             </div>
           )}
 
           <p className="text-[10px] text-faint">
-            用户名：{info.hostname ? <code className="bg-hover px-1 rounded">{info.hostname}</code> : '未知'}。在终端运行 <code className="bg-hover px-1 rounded">whoami</code> 获取用户名。
+            {t('renderer.sections.username')}{info.hostname ? <code className="bg-hover px-1 rounded">{info.hostname}</code> : t('renderer.sections.unknown')}{t('renderer.sections.run_terminal')} <code className="bg-hover px-1 rounded">whoami</code> {t('renderer.sections.get_username')}
           </p>
         </div>
       )}
@@ -344,7 +346,7 @@ export function LlmSettingsSection() {
   return (
     <section>
       <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
-        ✨ {locale === 'zh-CN' ? 'AI 分析（Insights 报告）' : 'AI Analysis (Insights Report)'}
+        ✨ {translate(locale, 'renderer.sections.ai_analysis_insights_report')}
       </label>
       <div className="space-y-2">
         <div className="flex gap-1.5">
@@ -364,14 +366,14 @@ export function LlmSettingsSection() {
           type="password"
           value={credential}
           onChange={(e) => setCredential(e.target.value)}
-          placeholder={hasKey ? `${locale === 'zh-CN' ? '已保存' : 'Saved'} ${keyHint} — ${locale === 'zh-CN' ? '输入新 key 可替换' : 'enter new key to replace'}` : 'API Key'}
+          placeholder={hasKey ? `${translate(locale, 'renderer.sections.saved')} ${keyHint} — ${translate(locale, 'renderer.sections.enter_new_key_to_replace')}` : 'API Key'}
           className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
         />
         {/* Model selector — dropdown when models available, text fallback otherwise */}
         {loadingModels ? (
           <div className="flex items-center gap-2 text-[11px] text-muted py-1.5">
             <div className="animate-spin w-3 h-3 border border-soft-blue border-t-transparent rounded-full" />
-            {locale === 'zh-CN' ? '获取可用模型…' : 'Fetching models…'}
+            {translate(locale, 'renderer.sections.fetching_models')}
           </div>
         ) : models.length > 0 && !modelsFailed ? (
           <select
@@ -379,16 +381,16 @@ export function LlmSettingsSection() {
             onChange={(e) => setModel(e.target.value)}
             className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary"
           >
-            <option value="">{locale === 'zh-CN' ? '自动选择（推荐最便宜）' : 'Auto (cheapest recommended)'}</option>
+            <option value="">{translate(locale, 'renderer.sections.auto_cheapest_recommended')}</option>
             {models.map((m) => <option key={m} value={m}>{m}</option>)}
-            <option value="__custom__">{locale === 'zh-CN' ? '自定义输入…' : 'Custom…'}</option>
+            <option value="__custom__">{translate(locale, 'renderer.sections.custom')}</option>
           </select>
         ) : (
           <input
             type="text"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder={locale === 'zh-CN' ? `模型（留空用默认：${provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : '必填'}）` : `Model (default: ${provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : 'required'})`}
+            placeholder={translate(locale, 'renderer.sections.model_default', { value0: provider === 'anthropic' ? 'claude-haiku-4-5' : provider === 'openai' ? 'gpt-4o-mini' : translate(locale, 'renderer.sections.required') })}
             className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
           />
         )}
@@ -397,13 +399,13 @@ export function LlmSettingsSection() {
             type="text"
             value=""
             onChange={(e) => setModel(e.target.value)}
-            placeholder={locale === 'zh-CN' ? '输入自定义模型 ID' : 'Enter custom model ID'}
+            placeholder={translate(locale, 'renderer.sections.enter_custom_model_id')}
             className="w-full px-2 py-1.5 rounded-md text-xs bg-surface border border-edge focus:border-soft-blue outline-none text-primary placeholder:text-faint"
             autoFocus
           />
         )}
         {modelsFailed && hasKey && (
-          <div className="text-[10px] text-soft-amber">{locale === 'zh-CN' ? '获取模型列表失败，请手动输入' : 'Failed to fetch models, enter manually'}</div>
+          <div className="text-[10px] text-soft-amber">{translate(locale, 'renderer.sections.failed_to_fetch_models_enter_manually')}</div>
         )}
         {provider === 'custom' && (
           <input
@@ -419,10 +421,10 @@ export function LlmSettingsSection() {
             onClick={handleSave}
             className="px-3 py-1.5 rounded-md text-xs font-medium bg-soft-blue/15 text-soft-blue hover:bg-soft-blue/25 transition-colors"
           >
-            {saved ? (locale === 'zh-CN' ? '已保存 ✓' : 'Saved ✓') : (locale === 'zh-CN' ? '保存' : 'Save')}
+            {saved ? (translate(locale, 'renderer.sections.saved_2')) : (translate(locale, 'renderer.sections.save'))}
           </button>
           <span className="text-[10px] text-faint">
-            {locale === 'zh-CN' ? 'key 仅存本地，生成 AI 报告时会话内容将发送至所选服务商' : 'Key stored locally. Session content is sent to your provider when generating AI reports.'}
+            {translate(locale, 'renderer.sections.key_stored_locally_session_content_is_sent_to')}
           </span>
         </div>
       </div>
@@ -452,10 +454,10 @@ export function RetentionSection() {
   }, [])
 
   const label = days >= 3650
-    ? (locale === 'zh-CN' ? '永不删除' : 'Never delete')
+    ? (translate(locale, 'renderer.sections.never_delete'))
     : days === 30
-      ? (locale === 'zh-CN' ? '30 天（官方默认）' : '30 days (official default)')
-      : (locale === 'zh-CN' ? `${days} 天` : `${days} days`)
+      ? (translate(locale, 'renderer.sections.30_days_official_default'))
+      : (translate(locale, 'renderer.sections.value_days', { value0: days }))
 
   if (!loaded) return null
 
@@ -463,13 +465,13 @@ export function RetentionSection() {
     <section>
       <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
         <HardDrive size={12} />
-        {locale === 'zh-CN' ? '会话保留与备份' : 'Session Retention & Backup'}
+        {translate(locale, 'renderer.sections.session_retention_backup')}
       </label>
       <div className="space-y-3">
         <div>
           <div className="flex items-center justify-between text-xs mb-1.5">
             <span className="text-muted">
-              {locale === 'zh-CN' ? 'Claude Code 本地会话保留期' : 'Claude Code local session retention'}
+              {translate(locale, 'renderer.sections.claude_code_local_session_retention')}
             </span>
             <span className={`font-medium ${days >= 3650 ? 'text-soft-emerald' : days <= 30 ? 'text-soft-amber' : 'text-primary'}`}>
               {label}
@@ -489,13 +491,11 @@ export function RetentionSection() {
             <span>30d</span>
             <span>90d</span>
             <span>365d</span>
-            <span>{locale === 'zh-CN' ? '永久' : '∞'}</span>
+            <span>{translate(locale, 'renderer.sections.copy')}</span>
           </div>
           {days <= 30 && (
             <div className="mt-2 text-[10px] text-soft-amber bg-soft-amber/5 rounded px-2 py-1.5">
-              ⚠️ {locale === 'zh-CN'
-                ? `Claude Code 默认 30 天后自动删除本地会话。建议调高以保留完整历史。`
-                : `Claude Code deletes local sessions after 30 days by default. Consider increasing to preserve history.`}
+              ⚠️ {translate(locale, 'renderer.sections.claude_code_deletes_local_sessions_after_30_days')}
             </div>
           )}
           {saving && <div className="text-[10px] text-muted mt-1">Saving...</div>}
@@ -504,4 +504,3 @@ export function RetentionSection() {
     </section>
   )
 }
-

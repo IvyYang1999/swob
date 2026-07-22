@@ -66,14 +66,14 @@ vi.mock('../store', () => {
   return { useStore: fn }
 })
 
-vi.mock('../i18n', () => ({
-  useT: () => (key: string, params?: Record<string, string | number>) => {
-    if (key === 'sidebar.turns') return `${params?.n}轮`
-    if (key === 'sidebar.yesterday') return '昨天'
-    if (key === 'sidebar.days_ago') return `${params?.n}天前`
-    return key
+vi.mock('../i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../i18n')>()
+  return {
+    ...actual,
+    useT: () => (key: string, params?: Record<string, string | number>) =>
+      actual.translate('zh-CN', key, params)
   }
-}))
+})
 
 // Now import the component (after mocks are set up)
 // We need to extract SessionItem — it's not exported, but Sidebar renders it.
@@ -325,7 +325,7 @@ describe('未分组底部区域只接受物理归属标签', () => {
     render(<Sidebar width={260} />)
 
     expect(screen.getByText((text) => text.includes('真正未分组多轮'))).toBeTruthy()
-    expect(screen.getByText('sidebar.single_turn')).toBeTruthy()
+    expect(screen.getByText('单轮会话')).toBeTruthy()
     expect(screen.queryByText((text) => text.includes('真正单轮'))).toBeNull()
   })
 })
@@ -353,7 +353,7 @@ describe('设置页的视图偏好会驱动侧边栏', () => {
     render(<Sidebar width={260} />)
 
     expect(screen.queryByText('应隐藏的单轮')).toBeNull()
-    expect(screen.queryByText('sidebar.single_turn')).toBeNull()
+    expect(screen.queryByText('单轮会话')).toBeNull()
     fireEvent.click(screen.getByRole('tab', { name: /查看全部会话/ }))
     expect(screen.queryByText('应隐藏的单轮')).toBeNull()
   })

@@ -43,7 +43,6 @@ export class SmartRenameError extends Error {
 
 export interface SmartRenameFailure {
   code: SmartRenameErrorCode
-  message: string
 }
 
 type LlmCaller = (
@@ -235,6 +234,6 @@ export class SmartRenameService {
 }
 
 export function serializeSmartRenameError(error: unknown): SmartRenameFailure {
-  if (error instanceof SmartRenameError) return { code: error.code, message: error.message }
-  return { code: 'WRITE_FAILED', message: '智能重命名失败' }
+  if (error instanceof SmartRenameError) return { code: error.code }
+  return { code: 'WRITE_FAILED' }
 }

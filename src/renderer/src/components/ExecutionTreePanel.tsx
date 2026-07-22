@@ -1,3 +1,4 @@
+import { translate } from '../i18n'
 import { useState, useEffect, useMemo } from 'react'
 import { useStore } from '../store'
 import { Wrench, AlertTriangle, Zap, Bot } from 'lucide-react'
@@ -226,6 +227,7 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
     : summaryBadge
 
   return (
+<<<<<<< HEAD
     <DisclosureSection
       title={locale === 'zh-CN' ? '执行树' : 'Execution Tree'}
       icon={<Zap size={12} />}
@@ -247,6 +249,88 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
               {name} {count}
             </span>
           ))}
+=======
+    <section>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-xs font-medium text-soft-blue mb-2 w-full text-left hover:text-primary"
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <Zap size={12} />
+        <span>{translate(locale, 'renderer.execution_tree_panel.execution_tree')}</span>
+        <span className="text-muted text-[10px] ml-auto">
+          {tree.totalToolCalls} tools · {tree.totalAgentSpawns > 0 ? `${tree.totalAgentSpawns} agents · ` : ''}
+          {tree.errors.length > 0 ? `${tree.errors.length} errors` : ''}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="space-y-3">
+          {/* Tool breakdown bar */}
+          <div className="flex gap-1 flex-wrap">
+            {topTools.map(([name, count]) => (
+              <span
+                key={name}
+                className="px-1.5 py-0.5 rounded text-[10px] font-medium"
+                style={{
+                  backgroundColor: `${TOOL_COLORS[name] || '#6b7280'}15`,
+                  color: TOOL_COLORS[name] || '#6b7280'
+                }}
+              >
+                {name} {count}
+              </span>
+            ))}
+          </div>
+
+          {/* Token timeline sparkline */}
+          {tree.tokenTimeline.length > 2 && (
+            <div>
+              <div className="text-[10px] text-muted mb-1">
+                {translate(locale, 'renderer.execution_tree_panel.cumulative_tokens')}: {formatTokens(maxCum)}
+              </div>
+              <TokenBar timeline={tree.tokenTimeline} maxTokens={maxCum} />
+            </div>
+          )}
+
+          {/* Errors */}
+          {tree.errors.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[10px] font-medium text-red-400 flex items-center gap-1">
+                <AlertTriangle size={10} />
+                {tree.errors.length} {translate(locale, 'renderer.execution_tree_panel.errors')}
+              </div>
+              {tree.errors.slice(0, 5).map((err, i) => (
+                <div key={i} className="text-[10px] text-red-300/70 pl-4 truncate">
+                  Turn {err.turnIndex}: {err.toolName} — {err.message.slice(0, 80)}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Execution timeline (collapsible turns) */}
+          <div className="max-h-[300px] overflow-y-auto space-y-0.5">
+            {assistantTurns.slice(0, 50).map((turn) => (
+              <div key={turn.index} className="text-[11px]">
+                <div className="flex items-center gap-1.5 text-secondary">
+                  <span className="text-muted text-[9px] w-6 text-right shrink-0">#{turn.index}</span>
+                  <span className="truncate flex-1">{turn.textPreview.slice(0, 60) || '(tool calls)'}</span>
+                  {turn.tokenUsage && (
+                    <span className="text-muted text-[9px] shrink-0">
+                      {formatTokens(turn.tokenUsage.inputTokens + turn.tokenUsage.outputTokens)}
+                    </span>
+                  )}
+                </div>
+                {turn.agentSpawns.map((s) => <AgentSpawnItem key={s.id} spawn={s} />)}
+                {turn.toolCalls.map((tc) => <ToolCallItem key={tc.id} tc={tc} />)}
+              </div>
+            ))}
+            {assistantTurns.length > 50 && (
+              <div className="text-[10px] text-muted text-center py-1">
+                +{assistantTurns.length - 50} more turns
+              </div>
+            )}
+          </div>
+>>>>>>> fix/tf19-i18n-production-completion
         </div>
 
         {/* Token timeline sparkline */}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Check, FolderKanban, LoaderCircle, Sparkles, X } from 'lucide-react'
 import { useStore, type OrganizationApplyItem } from '../store'
+import { translate } from '../i18n'
 
 type OrganizerKind = 'project' | 'smart'
 
@@ -16,6 +17,8 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
   onClose: () => void
 }) {
   const applyOrganization = useStore((state) => state.applyOrganization)
+  const locale = useStore((state) => state.locale)
+  const t = (key: string, params?: Record<string, string | number>) => translate(locale, key, params)
   const [items, setItems] = useState<PreviewItem[]>([])
   const [loading, setLoading] = useState(true)
   const [applying, setApplying] = useState(false)
@@ -33,26 +36,27 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
           fromRelative: row.fromRelative,
           selected: true
         })))
-      : window.api.organizerPreviewSmart().then((rows) => rows.map((row) => ({
-          sessionId: row.sessionId,
-          targetRelativeFolder: row.folder,
-          title: row.title,
-          topic: row.topic,
-          tags: row.tags,
-          confidence: row.confidence,
-          selected: true
-        })))
+      : window.api.organizerPreviewSmart().then((result) => {
+          if (!result.ok) throw new Error(result.errorCode)
+          return result.items.map((row) => ({
+            sessionId: row.sessionId,
+            targetRelativeFolder: row.folder,
+            title: row.title,
+            topic: row.topic,
+            tags: row.tags,
+            confidence: row.confidence,
+            selected: true
+          }))
+        })
     load.then((rows) => {
       if (!cancelled) setItems(rows)
     }).catch((reason) => {
       if (cancelled) return
-      const message = reason instanceof Error ? reason.message : String(reason)
-      setError(message.includes('missing-api-key') || message.includes('尚未绑定 LLM Profile')
-        ? '智能整理需要先在设置中配置 LLM API。按项目整理不需要 API。'
-        : message)
+      const errorCode = reason instanceof Error ? reason.message : 'organizer.error.preview_failed'
+      setError(t(errorCode.startsWith('organizer.error.') ? errorCode : 'organizer.error.preview_failed'))
     }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [kind])
+  }, [kind, locale])
 
   const selectedItems = useMemo(() => items.filter((item) => item.selected), [items])
 
@@ -76,7 +80,7 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
     }
   }
 
-  const title = kind === 'project' ? '按项目整理' : '智能整理'
+  const title = kind === 'project' ? t('renderer.organizer.project_title') : t('renderer.organizer.smart_title')
   const Icon = kind === 'project' ? FolderKanban : Sparkles
 
   return (
@@ -91,11 +95,11 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
           <h2 className="text-base font-medium text-bright">{title}</h2>
           <p className="text-xs text-muted mt-1">
             {kind === 'project'
-              ? '先看清每个会话将去哪里。确认前不会移动任何文件。'
-              : '仅发送标题和短摘要。可改文件夹、逐条接受，也可一次接受所选建议。'}
+              ? t('renderer.organizer.project_hint')
+              : t('renderer.organizer.smart_hint')}
           </p>
         </div>
-        <button onClick={onClose} className="p-1 text-muted hover:text-primary hover:bg-hover rounded" aria-label="关闭整理预览">
+        <button onClick={onClose} className="p-1 text-muted hover:text-primary hover:bg-hover rounded" aria-label={t('renderer.organizer.close')}>
           <X size={16} />
         </button>
       </header>
@@ -104,7 +108,7 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
         {loading && (
           <div className="h-full flex items-center justify-center gap-2 text-sm text-secondary">
             <LoaderCircle size={16} className="animate-spin" />
-            {kind === 'project' ? '正在生成项目 diff…' : '正在请求分类建议…'}
+            {kind === 'project' ? t('renderer.organizer.loading_project') : t('renderer.organizer.loading_smart')}
           </div>
         )}
         {!loading && error && (
@@ -113,8 +117,8 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
         {!loading && !error && items.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center text-center">
             <Check size={24} className="text-soft-green mb-3" />
-            <div className="text-sm text-primary">已经整理好了</div>
-            <div className="text-xs text-muted mt-1">当前没有需要移动的会话。</div>
+            <div className="text-sm text-primary">{t('renderer.organizer.done')}</div>
+            <div className="text-xs text-muted mt-1">{t('renderer.organizer.empty')}</div>
           </div>
         )}
         {!loading && items.length > 0 && (
@@ -126,7 +130,7 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
                   checked={item.selected}
                   onChange={(event) => patchItem(item.sessionId, { selected: event.target.checked })}
                   className="accent-accent"
-                  aria-label={`选择 ${item.title}`}
+                  aria-label={t('renderer.organizer.select', { value0: item.title })}
                 />
                 <div className="min-w-0">
                   <div className="text-sm text-primary truncate" title={item.title}>{item.title}</div>
@@ -143,10 +147,10 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
                     value={item.targetRelativeFolder}
                     onChange={(event) => patchItem(item.sessionId, { targetRelativeFolder: event.target.value })}
                     className="w-full px-2 py-1.5 text-xs bg-surface border border-edge rounded text-primary focus:outline-none focus:border-accent"
-                    aria-label={`目标文件夹 ${item.title}`}
+                    aria-label={t('renderer.organizer.target_folder', { value0: item.title })}
                   />
                   {item.confidence !== undefined && (
-                    <div className="text-[10px] text-muted mt-1">置信度 {Math.round(item.confidence * 100)}%</div>
+                    <div className="text-[10px] text-muted mt-1">{t('renderer.organizer.confidence', { value0: Math.round(item.confidence * 100) })}</div>
                   )}
                 </div>
                 <button
@@ -154,7 +158,7 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
                   onClick={() => void apply([item])}
                   className="px-2 py-1.5 text-[11px] text-secondary hover:text-primary hover:bg-hover rounded disabled:opacity-40"
                 >
-                  仅此项
+                  {t('renderer.organizer.only_this')}
                 </button>
               </div>
             ))}
@@ -164,14 +168,14 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
 
       {!loading && items.length > 0 && (
         <footer className="p-3 border-t border-edge flex items-center gap-2">
-          <span className="text-xs text-muted">已选 {selectedItems.length} / {items.length}</span>
-          <button onClick={onClose} className="ml-auto px-3 py-1.5 text-xs text-secondary hover:text-primary">取消</button>
+          <span className="text-xs text-muted">{t('renderer.organizer.selected', { value0: selectedItems.length, value1: items.length })}</span>
+          <button onClick={onClose} className="ml-auto px-3 py-1.5 text-xs text-secondary hover:text-primary">{t('renderer.organizer.cancel')}</button>
           <button
             disabled={applying || selectedItems.length === 0}
             onClick={() => void apply(selectedItems)}
             className="px-3 py-1.5 rounded bg-accent text-bright text-xs font-medium hover:opacity-90 disabled:opacity-40"
           >
-            {applying ? '正在整理…' : `接受所选 ${selectedItems.length} 项`}
+            {applying ? t('renderer.organizer.applying') : t('renderer.organizer.accept_selected', { value0: selectedItems.length })}
           </button>
         </footer>
       )}

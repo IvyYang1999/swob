@@ -10,8 +10,18 @@ export interface MigrationProgress {
 
 export interface MigrationResult {
   ok: boolean
-  error?: string
+  errorCode?: string
+  errorParams?: Record<string, string | number>
   movedMarkerPath?: string
+}
+
+class MigrationError extends Error {
+  constructor(
+    readonly code: string,
+    readonly params?: Record<string, string | number>
+  ) {
+    super(code)
+  }
 }
 
 function walkFiles(root: string): string[] {
@@ -39,18 +49,18 @@ function hashFile(filePath: string): string {
 export function validateMigrationTarget(sourceRoot: string, targetRoot: string): string | null {
   const source = path.resolve(sourceRoot)
   const target = path.resolve(targetRoot)
-  if (source === target) return '目标位置与当前库相同'
+  if (source === target) return 'vault.error.same_location'
   const relative = path.relative(source, target)
   if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
-    return '目标位置不能在当前库内部'
+    return 'vault.error.inside_current_library'
   }
   const reverseRelative = path.relative(target, source)
   if (reverseRelative && !reverseRelative.startsWith('..') && !path.isAbsolute(reverseRelative)) {
-    return '目标位置不能是当前库的上级目录'
+    return 'vault.error.parent_of_current_library'
   }
   if (fs.existsSync(target)) {
     const entries = fs.readdirSync(target).filter((name) => name !== '.DS_Store')
-    if (entries.length > 0) return '目标文件夹必须为空'
+    if (entries.length > 0) return 'vault.error.target_not_empty'
   }
   return null
 }
@@ -69,9 +79,9 @@ export function migrateVault(
   const target = path.resolve(targetRoot)
 
   const validationError = validateMigrationTarget(source, target)
-  if (validationError) return { ok: false, error: validationError }
+  if (validationError) return { ok: false, errorCode: validationError }
   if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
-    return { ok: false, error: '当前库目录不存在' }
+    return { ok: false, errorCode: 'vault.error.source_missing' }
   }
 
   const createdTarget = !fs.existsSync(target)
@@ -108,7 +118,10 @@ export function migrateVault(
     onProgress?.({ phase: 'verifying', copied: total, total })
     const targetFiles = walkFiles(target)
     if (targetFiles.length !== total) {
-      throw new Error(`校验失败：文件数不一致（源 ${total}，目标 ${targetFiles.length}）`)
+      throw new MigrationError('vault.error.file_count_mismatch', {
+        sourceCount: total,
+        targetCount: targetFiles.length
+      })
     }
     const sampleStep = Math.max(1, Math.floor(total / 20))
     for (let index = 0; index < total; index += sampleStep) {
@@ -117,7 +130,7 @@ export function migrateVault(
       const relative = path.relative(source, sourceFile)
       const destination = path.join(target, relative)
       if (hashFile(sourceFile) !== hashFile(destination)) {
-        throw new Error(`校验失败：${relative} 内容不一致`)
+        throw new MigrationError('vault.error.content_mismatch', { relative })
       }
     }
 
@@ -140,6 +153,13 @@ export function migrateVault(
     try {
       if (createdTarget) fs.rmSync(target, { recursive: true, force: true })
     } catch { /* leave partial copy for manual inspection */ }
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    if (error instanceof MigrationError) {
+      return { ok: false, errorCode: error.code, errorParams: error.params }
+    }
+    return {
+      ok: false,
+      errorCode: 'vault.error.migration_failed',
+      errorParams: { details: error instanceof Error ? error.message : String(error) }
+    }
   }
 }

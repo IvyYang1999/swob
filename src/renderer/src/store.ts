@@ -5,7 +5,7 @@ import {
   downloadMarkdown,
   generateFilename
 } from './utils/markdown'
-import type { Locale } from './i18n'
+import { resolveConfiguredLocale, resolveSystemLocale, translate, type LegacyLocale, type Locale } from './i18n'
 import { defaultResumeMethodForSource } from '../../shared/settings-capabilities'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
@@ -119,7 +119,7 @@ interface UserConfig {
     resumeTerminal?: 'terminal-app' | 'iterm' | 'custom' | 'windows-terminal' | 'powershell' | 'cmd'
     resumeTerminalCommandTemplate?: string
     experimentalClaudeDesktopImport?: boolean
-    locale?: Locale
+    locale?: LegacyLocale
     themeMode?: 'dark' | 'light' | 'system'
     spotlightShortcut?: string
     sshConfig?: SshConfig
@@ -195,7 +195,7 @@ interface AppState {
   buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<string>
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   setViewMode: (mode: ViewMode) => void
-  setLocale: (locale: Locale) => void
+  setLocale: (locale: Locale) => Promise<void>
   themeMode: 'dark' | 'light' | 'system'
   setThemeMode: (mode: 'dark' | 'light' | 'system') => void
   toggleTheme: () => void
@@ -245,7 +245,16 @@ export type { SessionSummary, SessionDetail, ParsedMessage, Folder, VaultFile, U
 // Read localStorage at module load time — before first render, zero flicker
 const LOCAL_CACHE_VERSION = 12 // refresh physical resume ids and transcript metadata
 
+function rendererSystemLocale(): Locale {
+  try {
+    return resolveSystemLocale(navigator.languages?.length ? navigator.languages : [navigator.language])
+  } catch {
+    return 'en'
+  }
+}
+
 function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
+  const systemLocale = rendererSystemLocale()
   try {
     const ver = localStorage.getItem('csm:cacheVersion')
     if (ver !== String(LOCAL_CACHE_VERSION)) {
@@ -257,13 +266,20 @@ function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | 
     if (cached && cachedConfig) {
       const sessions = JSON.parse(cached)
       const config = JSON.parse(cachedConfig)
-      return { sessions, config, loading: false, viewMode: config.preferences?.defaultViewMode || 'compact', locale: config.preferences?.locale || 'zh-CN' }
+      return {
+        sessions,
+        config,
+        loading: false,
+        viewMode: config.preferences?.defaultViewMode || 'compact',
+        locale: resolveConfiguredLocale(config.preferences?.locale, systemLocale)
+      }
     }
   } catch { /* ignore */ }
-  return { sessions: [], config: null, loading: true, viewMode: 'compact', locale: 'zh-CN' }
+  return { sessions: [], config: null, loading: true, viewMode: 'compact', locale: systemLocale }
 }
 
 const hydrated = hydrateFromCache()
+if (typeof document !== 'undefined') document.documentElement.lang = hydrated.locale
 
 function resolveThemeMode(): 'dark' | 'light' | 'system' {
   try {
@@ -332,21 +348,31 @@ export const useStore = create<AppState>((set, get) => ({
     })
 
     try {
-      const [sessions, config, sshConfig] = await Promise.all([
+      const [sessions, config, sshConfig, systemLocale] = await Promise.all([
         window.api.loadAllSessions(),
         window.api.loadConfig(),
-        (window.api as any).sshGetConfig?.() ?? null
+        (window.api as any).sshGetConfig?.() ?? null,
+        window.api.getSystemLocale()
       ])
       const mergedSessions = new Map((sessions as SessionSummary[]).map((session) => [session.id, session]))
       for (const session of queuedLibrarySessions.values()) mergedSessions.set(session.id, session)
       initialLoadComplete = true
       const hydratedSessions = [...mergedSessions.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      const hydratedConfig = queuedLibraryConfig || config
+      let hydratedConfig = (queuedLibraryConfig || config) as UserConfig
+      const locale = resolveConfiguredLocale(hydratedConfig.preferences?.locale, systemLocale)
+      if (hydratedConfig.preferences?.locale === 'ja') {
+        hydratedConfig = {
+          ...hydratedConfig,
+          preferences: { ...hydratedConfig.preferences, locale }
+        }
+        await window.api.saveConfig(hydratedConfig)
+      }
+      document.documentElement.lang = locale
       set({
         sessions: hydratedSessions,
         config: hydratedConfig,
-        viewMode: config.preferences?.defaultViewMode || 'compact',
-        locale: (config.preferences as any)?.locale || 'zh-CN',
+        viewMode: hydratedConfig.preferences?.defaultViewMode || 'compact',
+        locale,
         sshConfig: sshConfig ?? null,
         loading: false
       })
@@ -520,10 +546,16 @@ export const useStore = create<AppState>((set, get) => ({
       effectiveSurface
     )
     if (!result.ok) {
-      get().showToast(result.reason || '此会话无法直接恢复', 'error')
+      get().showToast(
+        result.reasonCode
+          ? translate(get().locale, result.reasonCode, result.reasonParams)
+          : result.reason || translate(get().locale, 'renderer.store.resume_unavailable'),
+        'error'
+      )
       return
     }
-    if (result.notice) get().showToast(result.notice, 'info')
+    if (result.noticeCode) get().showToast(translate(get().locale, result.noticeCode), 'info')
+    else if (result.notice) get().showToast(result.notice, 'info')
     if (effectiveSurface === 'zcode-desktop') return
     set((state) => {
       const next = new Set(state.activeSessionIds)
@@ -536,7 +568,9 @@ export const useStore = create<AppState>((set, get) => ({
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'
     const result = await window.api.forkSession(sessionId, terminalApp, permissionMode, cwd)
     if (!result.ok) {
-      get().showToast(result.reason || '此会话无法直接恢复', 'error')
+      get().showToast(result.reasonCode
+        ? translate(get().locale, result.reasonCode, result.reasonParams)
+        : result.reason || translate(get().locale, 'renderer.store.resume_unavailable'), 'error')
     }
   },
 
@@ -549,8 +583,11 @@ export const useStore = create<AppState>((set, get) => ({
     const results = await window.api.resumeBatch(sessions, terminalApp)
     const blocked = results.filter((r) => !r.ok)
     if (blocked.length > 0) {
-      const reason = blocked[0].reason || '部分会话无法直接恢复'
-      get().showToast(blocked.length === 1 ? reason : `${blocked.length} 个会话无法直接恢复：${reason}`, 'error')
+      const firstBlocked = blocked[0]
+      const reason = firstBlocked.reasonCode
+        ? translate(get().locale, firstBlocked.reasonCode, firstBlocked.reasonParams)
+        : firstBlocked.reason || translate(get().locale, 'renderer.store.some_resume_unavailable')
+      get().showToast(blocked.length === 1 ? reason : translate(get().locale, 'renderer.store.batch_resume_unavailable', { value0: blocked.length, value1: reason }), 'error')
     }
     set((state) => {
       const next = new Set(state.activeSessionIds)
@@ -563,16 +600,21 @@ export const useStore = create<AppState>((set, get) => ({
 
   setViewMode: (mode) => set({ viewMode: mode }),
 
-  setLocale: (locale) => {
-    set({ locale })
+  setLocale: async (locale) => {
     try {
-      const cachedConfig = localStorage.getItem('csm:config')
-      if (cachedConfig) {
-        const config = JSON.parse(cachedConfig)
-        config.preferences = { ...config.preferences, locale }
-        localStorage.setItem('csm:config', JSON.stringify(config))
+      if (get().config) {
+        await get().savePreferences({ locale })
+        const savedConfig = get().config
+        localStorage.setItem('csm:config', JSON.stringify(savedConfig))
+        document.documentElement.lang = locale
+        set({ locale })
+      } else {
+        document.documentElement.lang = locale
+        set({ locale })
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      console.error('Failed to persist locale:', error)
+    }
   },
 
   setThemeMode: (mode) => {
@@ -654,29 +696,33 @@ export const useStore = create<AppState>((set, get) => ({
         const needsSetup = ['PROFILE_NOT_BOUND', 'PROFILE_KEY_MISSING', 'INVALID_PROFILE', 'PROFILE_NOT_FOUND']
           .includes(preview.error.code)
         showToast(
-          `智能重命名失败:${preview.error.message}`,
+          translate(get().locale, 'renderer.store.smart_rename_failed', {
+            value0: translate(get().locale, `smart_rename.error.${preview.error.code}`)
+          }),
           'error',
-          needsSetup ? { label: '去设置', onClick: () => get().openSettingsAt('ai') } : undefined
+          needsSetup ? { label: translate(get().locale, 'renderer.store.open_settings'), onClick: () => get().openSettingsAt('ai') } : undefined
         )
         return
       }
       const item = preview.items[0]
       if (!item || !item.newTitle || item.newTitle === item.oldTitle) {
-        showToast('AI 认为当前标题已经合适', 'info')
+        showToast(translate(get().locale, 'renderer.store.title_already_good'), 'info')
         return
       }
       const applied = await window.api.smartRenameApply([{ id: item.id, newTitle: item.newTitle }])
       if (!applied.ok) {
-        showToast(`智能重命名失败:${applied.error.message}`, 'error')
+        showToast(translate(get().locale, 'renderer.store.smart_rename_failed', {
+          value0: translate(get().locale, `smart_rename.error.${applied.error.code}`)
+        }), 'error')
         return
       }
       if (applied.config) set({ config: applied.config as UserConfig })
-      showToast(`已重命名为「${item.newTitle}」`, 'success', {
-        label: '撤销',
+      showToast(translate(get().locale, 'renderer.store.renamed', { value0: item.newTitle }), 'success', {
+        label: translate(get().locale, 'renderer.store.undo'),
         onClick: () => { void get().setSessionMeta(sessionId, { customTitle: previousTitle }) }
       })
     } catch (error) {
-      showToast(`智能重命名失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+      showToast(translate(get().locale, 'renderer.store.smart_rename_failed', { value0: error instanceof Error ? error.message : String(error) }), 'error')
     }
   },
   applyOrganization: async (kind, items) => {
@@ -684,12 +730,12 @@ export const useStore = create<AppState>((set, get) => ({
     set({ config: result.config as UserConfig })
     const moved = result.moves.length
     if (moved > 0) {
-      get().showToast(`已整理 ${moved} 个会话`, 'success', {
-        label: '撤销',
+      get().showToast(translate(get().locale, 'renderer.store.organized', { value0: moved }), 'success', {
+        label: translate(get().locale, 'renderer.store.undo'),
         onClick: () => { void get().undoLastOrganization() }
       })
     } else {
-      get().showToast('这些会话已经在目标位置', 'info')
+      get().showToast(translate(get().locale, 'renderer.store.already_organized'), 'info')
     }
     return moved
   },
@@ -697,7 +743,9 @@ export const useStore = create<AppState>((set, get) => ({
     const result = await window.api.organizerUndo()
     set({ config: result.config as UserConfig })
     const moved = result.moves.length
-    get().showToast(moved > 0 ? `已撤销 ${moved} 个会话的整理` : '没有可撤销的整理', moved > 0 ? 'success' : 'info')
+    get().showToast(moved > 0
+      ? translate(get().locale, 'renderer.store.organization_undone', { value0: moved })
+      : translate(get().locale, 'renderer.store.nothing_to_undo'), moved > 0 ? 'success' : 'info')
     return moved
   },
   addHighlight: async (sessionId, highlight) => {
@@ -756,14 +804,14 @@ export const useStore = create<AppState>((set, get) => ({
 
   downloadCloudSession: async (sessionId: string) => {
     const { showToast } = get()
-    showToast('正在触发 iCloud 下载...', 'info')
+    showToast(translate(get().locale, 'renderer.store.icloud_triggering'), 'info')
     const ok = await (window.api as any).icloudDownload?.(sessionId)
     const cloudIds: string[] = await (window.api as any).icloudScanCloudSessions?.() ?? []
     set({ cloudSessionIds: new Set(cloudIds) })
     if (ok) {
-      showToast('已触发下载，iCloud 同步中', 'success')
+      showToast(translate(get().locale, 'renderer.store.icloud_syncing'), 'success')
     } else {
-      showToast('下载触发失败', 'error')
+      showToast(translate(get().locale, 'renderer.store.icloud_failed'), 'error')
     }
   },
 

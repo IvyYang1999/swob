@@ -137,7 +137,7 @@ describe('resume guard', () => {
     })
 
     expect(result.ok).toBe(false)
-    expect(result.reason).toBe(LOCAL_RESUME_UNAVAILABLE_REASON)
+    expect(result.reasonCode).toBe('resume.error.unavailable')
     expect(opened).toEqual([])
   })
 
@@ -231,7 +231,7 @@ describe('resume guard', () => {
     expect(blocked).toMatchObject({
       ok: false,
       surface: 'claude-desktop',
-      reason: expect.stringContaining('实验')
+      reasonCode: 'resume.error.claude_desktop_disabled'
     })
 
     const allowed = await buildGuardedResumeAction({
@@ -275,7 +275,7 @@ describe('resume guard', () => {
     expect(desktop).toMatchObject({
       ok: true,
       surface: 'zcode-desktop',
-      notice: expect.stringContaining('不支持跳转到指定历史会话'),
+      noticeCode: 'resume.notice.zcode_opened',
       action: {
         kind: 'deep-link',
         url: `zcode://workspace/open?path=${encodeURIComponent(tmpRoot)}`
@@ -289,7 +289,8 @@ describe('resume guard', () => {
     expect(terminal).toMatchObject({
       ok: false,
       surface: 'terminal',
-      reason: expect.stringContaining('没有公开 CLI')
+      reasonCode: 'resume.error.build_action_failed',
+      reasonParams: { details: expect.stringContaining('没有公开 CLI') }
     })
   })
 
@@ -310,7 +311,8 @@ describe('resume guard', () => {
     expect(result).toMatchObject({
       ok: false,
       surface: 'codex-desktop',
-      reason: 'protocol handler missing'
+      reasonCode: 'resume.error.open_client_failed',
+      reasonParams: { details: 'protocol handler missing' }
     })
   })
 
@@ -399,7 +401,7 @@ describe('resume guard', () => {
       sessions: [summary(sessionId, sourcePath, 'claude-code')],
       prepareResumeTarget
     })
-    expect(copied).toMatchObject({ ok: false, reason: 'recovery required' })
+    expect(copied).toMatchObject({ ok: false, reasonCode: 'resume.error.recovery-required' })
 
     const opened: string[] = []
     const resumed = await openGuardedResumeCommand({

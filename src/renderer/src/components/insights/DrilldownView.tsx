@@ -1,3 +1,4 @@
+import { translate } from '../../i18n'
 import { useState, useEffect, useCallback } from 'react'
 import { useStore } from '../../store'
 import { useAnalysisScope } from './scope'
@@ -84,7 +85,7 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
 
   const breadcrumbs = (() => {
     const crumbs: Array<{ label: string; onClick?: () => void }> = [
-      { label: zh ? '总览' : 'Overview', onClick: onClose },
+      { label: translate(zh ? 'zh-CN' : 'en', 'renderer.drilldown_view.overview'), onClick: onClose },
     ]
     if (state.level === 'sessions' || state.level === 'session-detail') {
       crumbs.push({
@@ -121,7 +122,7 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
         </nav>
         {coverage && (
           <span className="text-[10px] text-muted shrink-0">
-            {coverage.covered}/{coverage.total} {zh ? '覆盖' : 'covered'}
+            {coverage.covered}/{coverage.total} {translate(zh ? 'zh-CN' : 'en', 'renderer.drilldown_view.covered')}
           </span>
         )}
       </div>
@@ -132,7 +133,7 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
           <div className="text-xs text-muted py-4 text-center">Loading...</div>
         ) : sessionList.length === 0 ? (
           <div className="text-xs text-muted py-4 text-center">
-            {zh ? '无匹配会话' : 'No matching sessions'}
+            {translate(zh ? 'zh-CN' : 'en', 'renderer.drilldown_view.no_matching_sessions')}
           </div>
         ) : (
           <div className="space-y-1 max-h-[400px] overflow-y-auto">

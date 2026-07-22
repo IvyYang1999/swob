@@ -1,32 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, History, Plus, Square, X, Terminal, MessageSquare, Clock, ChevronLeft } from 'lucide-react'
 import { CliMarkdown } from './components/MarkdownContent'
+import { translate, useStandaloneLocale, type Locale } from './i18n'
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /** Turn raw engine errors into something a person can act on. */
-function humanizeAgentError(text: string): string {
+function humanizeAgentError(text: string, locale: Locale): string {
   if (text.includes('EBADF')) {
-    return '助手引擎启动失败(子进程异常)。请退出并重新打开 Swob;如果重启后仍出现,这是 Swob 的 bug,麻烦反馈给我们。'
+    return translate(locale, 'renderer.agent.engine_process_failed')
   }
   if (text.includes('ENOENT')) {
-    return '找不到 Claude Code CLI(claude 命令)。助手第一版依赖它作为引擎,安装后重试。'
+    return translate(locale, 'renderer.agent.cli_not_found')
   }
   return text
 }
 
-function formatRelativeTime(isoDate: string): string {
+function formatRelativeTime(isoDate: string, locale: Locale): string {
   const diff = Date.now() - new Date(isoDate).getTime()
   const mins = Math.floor(diff / 60000)
-  if (mins < 1) return '刚刚'
-  if (mins < 60) return `${mins}分钟前`
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
+  if (mins < 60) return formatter.format(-mins, 'minute')
   const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}小时前`
+  if (hours < 24) return formatter.format(-hours, 'hour')
   const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}天前`
-  return new Date(isoDate).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  if (days < 7) return formatter.format(-days, 'day')
+  return new Date(isoDate).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 }
 
 /** Extract engine name from binary path, e.g. "/usr/local/bin/claude" -> "claude" */
@@ -53,7 +54,7 @@ interface AgentStatus {
   binaryPath?: string
   sessionId?: string
   busy?: boolean
-  reason?: string
+  reasonCode?: string
 }
 
 /** Minimal session shape from loadAllSessions — we only use the fields we need. */
@@ -94,10 +95,12 @@ function ThinkingDots() {
 // HistoryList sub-component
 // ---------------------------------------------------------------------------
 
-function HistoryList({ onSelect, onBack }: {
+function HistoryList({ onSelect, onBack, locale }: {
   onSelect: (session: SessionSummary) => void
   onBack: () => void
+  locale: Locale
 }) {
+  const t = (key: string, params?: Record<string, string | number>) => translate(locale, key, params)
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -126,7 +129,7 @@ function HistoryList({ onSelect, onBack }: {
     return (
       <div className="flex flex-1 items-center justify-center text-[11px] text-muted">
         <div className="h-3 w-3 animate-spin rounded-full border border-soft-blue border-t-transparent mr-2" />
-        加载历史...
+        {t('renderer.agent.loading_history')}
       </div>
     )
   }
@@ -135,12 +138,12 @@ function HistoryList({ onSelect, onBack }: {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 text-[11px] text-muted">
         <MessageSquare size={20} className="text-faint" />
-        <div>还没有助手对话记录</div>
+        <div>{t('renderer.agent.no_history')}</div>
         <button
           onClick={onBack}
           className="mt-2 rounded px-2 py-1 text-[10px] text-accent hover:bg-accent/10"
         >
-          返回对话
+          {t('renderer.agent.back_to_chat')}
         </button>
       </div>
     )
@@ -151,7 +154,7 @@ function HistoryList({ onSelect, onBack }: {
       {sessions.map((session) => {
         const title = session.firstUserMessage
           ? session.firstUserMessage.slice(0, 60) + (session.firstUserMessage.length > 60 ? '...' : '')
-          : '(无消息)'
+          : t('renderer.agent.no_messages')
         return (
           <button
             key={session.id}
@@ -164,9 +167,9 @@ function HistoryList({ onSelect, onBack }: {
               <div className="mt-0.5 flex items-center gap-2 text-[10px] text-faint">
                 <span className="flex items-center gap-0.5">
                   <Clock size={9} />
-                  {formatRelativeTime(session.updatedAt)}
+                  {formatRelativeTime(session.updatedAt, locale)}
                 </span>
-                <span>{session.turnCount} 轮</span>
+                <span>{t('renderer.agent.turns', { value0: session.turnCount })}</span>
               </div>
             </div>
           </button>
@@ -186,6 +189,8 @@ function HistoryList({ onSelect, onBack }: {
  * and every conversation is itself a session that lands in the vault.
  */
 export function AgentApp() {
+  const locale = useStandaloneLocale()
+  const t = (key: string, params?: Record<string, string | number>) => translate(locale, key, params)
   const [status, setStatus] = useState<AgentStatus | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
   const [input, setInput] = useState('')
@@ -202,8 +207,8 @@ export function AgentApp() {
   useEffect(() => {
     void window.api.agentGetStatus()
       .then((s: unknown) => setStatus(s as AgentStatus))
-      .catch(() => setStatus({ available: false, reason: '状态查询失败' }))
-  }, [])
+      .catch(() => setStatus({ available: false, reasonCode: 'renderer.agent.status_failed' }))
+  }, [locale])
 
   // Listen to agent events
   useEffect(() => {
@@ -218,8 +223,11 @@ export function AgentApp() {
         if (event.model && typeof event.model === 'string') {
           setModel(event.model)
         }
-        if (!event.ok && event.error) {
-          setItems((prev) => [...prev, { role: 'error', text: event.error as string }])
+        if (!event.ok && (event.errorCode || event.error)) {
+          const message = event.errorCode
+            ? t(event.errorCode, event.errorParams)
+            : event.error as string
+          setItems((prev) => [...prev, { role: 'error', text: message }])
         }
       } else if (event.type === 'init') {
         // Mark that we have an active (non-history) session
@@ -244,9 +252,12 @@ export function AgentApp() {
     const result = await window.api.agentSend(prompt)
     if (!result.ok) {
       setBusy(false)
-      setItems((prev) => [...prev, { role: 'error', text: result.error || '发送失败' }])
+      setItems((prev) => [...prev, {
+        role: 'error',
+        text: result.errorCode ? t(result.errorCode, result.errorParams) : t('renderer.agent.send_failed')
+      }])
     }
-  }, [input, busy])
+  }, [input, busy, locale])
 
   const newConversation = useCallback(async () => {
     await window.api.agentNewConversation()
@@ -275,14 +286,14 @@ export function AgentApp() {
         setItems(chatItems)
       }
     } catch {
-      setItems([{ role: 'error', text: '无法加载该历史对话' }])
+      setItems([{ role: 'error', text: t('renderer.agent.history_load_failed') }])
     }
     setViewingHistorySession(true)
     // TODO: tF2-resume — 需要新增 IPC `agent:resumeSession(sessionId)` 让 main 进程
     // 将 agentSessionId 设为指定值,这样后续 agentSend 能以 --resume 接续该会话。
     // 当前 main/agent-window.ts 未暴露此 IPC,故历史会话仅只读展示。
     setView('chat')
-  }, [])
+  }, [locale])
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-panel text-primary">
@@ -292,7 +303,7 @@ export function AgentApp() {
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         <Bot size={14} className="text-accent" />
-        <span className="text-xs font-medium">Swob 助手</span>
+        <span className="text-xs font-medium">{t('renderer.agent.title')}</span>
         <span className="rounded bg-soft-amber/10 px-1 py-0.5 text-[8px] text-soft-amber">MVP</span>
         {/* Engine & model transparency */}
         <span className="text-[10px] text-faint" title={status?.binaryPath || 'unknown'}>
@@ -302,7 +313,7 @@ export function AgentApp() {
         <div className="ml-auto flex items-center gap-1" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <button
             onClick={toggleView}
-            title={view === 'chat' ? '历史对话' : '返回对话'}
+            title={view === 'chat' ? t('renderer.agent.history') : t('renderer.agent.back_to_chat')}
             className={`rounded p-1 transition-colors ${
               view === 'history'
                 ? 'bg-accent/15 text-accent'
@@ -313,14 +324,14 @@ export function AgentApp() {
           </button>
           <button
             onClick={() => void newConversation()}
-            title="新对话"
+            title={t('renderer.agent.new_chat')}
             className="rounded p-1 text-muted hover:bg-hover hover:text-primary"
           >
             <Plus size={13} />
           </button>
           <button
             onClick={() => void window.api.agentHideWindow()}
-            title="隐藏 (Cmd+Shift+A)"
+            title={t('renderer.agent.hide')}
             className="rounded p-1 text-muted hover:bg-hover hover:text-primary"
           >
             <X size={13} />
@@ -330,32 +341,32 @@ export function AgentApp() {
 
       {/* View switcher: history list or chat messages */}
       {view === 'history' ? (
-        <HistoryList onSelect={(s) => void loadHistorySession(s)} onBack={() => setView('chat')} />
+        <HistoryList locale={locale} onSelect={(s) => void loadHistorySession(s)} onBack={() => setView('chat')} />
       ) : (
         <>
           {/* Chat messages */}
           <div ref={listRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
             {status && !status.available && (
               <div className="rounded-md border border-soft-amber/30 bg-soft-amber/5 p-2 text-[11px] leading-relaxed text-soft-amber">
-                {status.reason || '引擎不可用'}
+                {status.reasonCode ? t(status.reasonCode) : t('renderer.agent.engine_unavailable')}
               </div>
             )}
             {viewingHistorySession && items.length > 0 && (
               <div className="flex items-center gap-1.5 rounded bg-amber-900/20 px-2 py-1 text-[10px] text-amber-400">
                 <Clock size={10} />
-                <span>历史对话(只读)</span>
+                <span>{t('renderer.agent.history_read_only')}</span>
               </div>
             )}
             {items.length === 0 && status?.available && (
               <div className="space-y-2 pt-6 text-center text-[11px] text-muted">
-                <div>问我任何关于你的 AI 会话历史的问题</div>
+                <div>{t('renderer.agent.empty_title')}</div>
                 <div className="space-y-1 text-[10px] text-faint">
-                  <div>「我昨天用 AI 干了些啥?」</div>
-                  <div>「找一下上周关于登录 bug 的会话」</div>
-                  <div>「这个月哪个项目烧 token 最多?」</div>
+                  <div>{t('renderer.agent.example_yesterday')}</div>
+                  <div>{t('renderer.agent.example_bug')}</div>
+                  <div>{t('renderer.agent.example_tokens')}</div>
                 </div>
                 <div className="pt-2 text-[10px] text-faint">
-                  引擎:{engineName} · 只能使用 swob 命令 · 对话本身也会落入你的 vault
+                  {t('renderer.agent.engine_disclosure', { value0: engineName })}
                 </div>
               </div>
             )}
@@ -379,7 +390,7 @@ export function AgentApp() {
                 )}
                 {item.role === 'error' && (
                   <div className="rounded-md border border-red-400/30 bg-red-400/5 px-2.5 py-1.5 text-[11px] leading-relaxed text-red-400">
-                    {humanizeAgentError(item.text)}
+                    {humanizeAgentError(item.text, locale)}
                   </div>
                 )}
               </div>
@@ -387,7 +398,7 @@ export function AgentApp() {
             {busy && (
               <div className="flex items-center gap-2 px-1 text-[11px] text-muted animate-pulse">
                 <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-soft-blue border-t-transparent" />
-                <span>思考中</span>
+                <span>{t('renderer.agent.thinking')}</span>
                 <ThinkingDots />
               </div>
             )}
@@ -407,14 +418,14 @@ export function AgentApp() {
                   }
                 }}
                 rows={2}
-                placeholder={status?.available === false ? '需要先安装 Claude Code CLI' : '问点什么... (Enter 发送)'}
+                placeholder={status?.available === false ? t('renderer.agent.install_cli') : t('renderer.agent.input_placeholder')}
                 disabled={status?.available === false}
                 className="min-h-0 flex-1 resize-none rounded-md border border-edge bg-surface px-2 py-1.5 text-[12px] text-primary outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
               />
               {busy ? (
                 <button
                   onClick={() => void window.api.agentCancel()}
-                  title="停止"
+                  title={t('renderer.agent.stop')}
                   className="rounded-md bg-red-400/15 p-2 text-red-400 transition-colors hover:bg-red-400/25 active:scale-95"
                 >
                   <Square size={13} />
@@ -425,7 +436,7 @@ export function AgentApp() {
                   disabled={!input.trim() || status?.available === false}
                   className="rounded-md bg-accent/15 px-3 py-2 text-[11px] font-medium text-accent transition-colors hover:bg-accent/25 disabled:opacity-40"
                 >
-                  发送
+                  {t('renderer.agent.send')}
                 </button>
               )}
             </div>

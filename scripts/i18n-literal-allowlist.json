@@ -1,0 +1,11 @@
+{
+  "description": "Exact, counted exceptions for non-translatable CJK literals. New literals still fail.",
+  "entries": [
+    {
+      "file": "src/renderer/src/components/settings/GeneralSettings.tsx",
+      "text": "中文",
+      "count": 1,
+      "reason": "Language names are intentionally displayed in their native form."
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Globe, Keyboard, Sun, UserCircle, Check } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import { copy, SettingField, Segmented, useSettingsPreferences } from './shared'
+import { SettingField, Segmented, useSettingsPreferences } from './shared'
 import { RetentionSection, formatAccelerator, keyEventToAccelerator } from './sections'
 
 const api = (window as any).api
@@ -97,11 +97,15 @@ export function GeneralSettings() {
 
   return (
     <>
+<<<<<<< HEAD
       <IdentitySection />
 
       <SettingField label={copy(locale, '主题', 'Theme', 'テーマ')} icon={<Sun size={12} />}>
+=======
+      <SettingField label={t('renderer.general_settings.theme')} icon={<Sun size={12} />}>
+>>>>>>> fix/tf19-i18n-production-completion
         <Segmented
-          ariaLabel={copy(locale, '主题', 'Theme', 'テーマ')}
+          ariaLabel={t('renderer.general_settings.theme_2')}
           value={themeMode}
           onChange={setThemeMode}
           options={[
@@ -116,11 +120,10 @@ export function GeneralSettings() {
         <Segmented
           ariaLabel={t('settings.language')}
           value={locale}
-          onChange={(value) => setLocale(value)}
+          onChange={(value) => { void setLocale(value) }}
           options={[
             { value: 'zh-CN', label: '中文' },
-            { value: 'en', label: 'English' },
-            { value: 'ja', label: '日本語' }
+            { value: 'en', label: 'English' }
           ]}
         />
       </SettingField>

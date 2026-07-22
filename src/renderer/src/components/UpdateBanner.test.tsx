@@ -4,6 +4,16 @@
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+
+vi.mock('../i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../i18n')>()
+  return {
+    ...actual,
+    useT: () => (key: string, params?: Record<string, string | number>) =>
+      actual.translate('zh-CN', key, params)
+  }
+})
+
 import { UpdateBanner } from './UpdateBanner'
 
 describe('UpdateBanner', () => {

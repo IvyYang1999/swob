@@ -8,9 +8,9 @@
 
 **找回丢失的上下文，追踪 fork 与 compact，调试 Agent 到底做了什么。**
 
-Swob 原生读取 **5 种 AI 编程 harness** 的本地历史（另有 1 种兼容格式、5 种实验性文件检测），重建会话血统，用 SQLite FTS5 索引全部消息，并提供执行树、上下文检查器、带数据来源标记的会话审计，以及可选的 AI Insights。
+Swob 通过 **5 个原生格式适配器**与 1 个 Claude 兼容格式解析本地历史；另有 5 个实验来源只能发现文件，尚不能读取消息正文。来源确有证据时，Swob 才提供血统、SQLite FTS5 增量检索、执行检查、带来源标记的审计和可选 AI Insights。
 
-[官网](https://ivyyang1999.github.io/swob/) · [Apple Silicon DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) · [Intel DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) · [更新日志](CHANGELOG.md)
+[官网](https://ivyyang1999.github.io/swob/) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
@@ -23,7 +23,7 @@ Swob 原生读取 **5 种 AI 编程 harness** 的本地历史（另有 1 种兼�
 </div>
 
 > [!IMPORTANT]
-> **产品通道有意分开。** 下方功能图以当前 `main` 的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。公开的 **v1.2.0 稳定版 DMG 早于 Session Galaxy、多 harness 导入、Session Debugger、AI Insights 和 SQLite FTS5**。现在可从源码构建 `main` 体验；这些能力将在下一次发布中交付。
+> **产品通道有意分开。** 下方功能图以当前 `main` 的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。公开的 **v1.2.0 稳定版 DMG 早于 Session Galaxy、多 harness 导入、Session Debugger、AI Insights 和 SQLite FTS5**。可从源码构建 `main` 体验；这里不承诺未发布能力会进入某个指定安装包。
 
 ![基于当前 main 重构的 Swob Session Galaxy 英文演示图](site/assets/graph-view.png)
 
@@ -38,7 +38,7 @@ Swob 把会话历史当作证据：
 - **追踪血统**——在交互式力导向 Session Galaxy 中浏览经过验证的 fork 与 continuation 关系。
 - **恢复上下文**——展开 Claude Code compact 前的内容，并在源文件消失后保留本地备份。
 - **调试执行过程**——检查工具/子 Agent 调用、上下文压力、compact 边界、延迟、框架开销、错误与反模式。
-- **搜索所有历史**——SQLite FTS5 增量索引本地消息，不再为每次查询重扫整个档案。
+- **检索已解析历史**——SQLite FTS5 增量索引规范化消息；纯检测来源不进入正文索引，各来源的检索缺口保持可见。
 - **可靠续写**——在来源支持时，携带正确的 session ID 和工作目录返回对应 CLI，并进行来源感知校验。
 
 ## 证据，不是虚荣指标
@@ -77,21 +77,21 @@ Swob 不止渲染聊天记录：
 
 ## 当前 `main` 的来源
 
-### 原生读取（5）——完整历史解析、搜索、Insights
+### 原生格式适配器（5）——可解析正文；其余能力按来源区分
 
 | 来源家族 | 状态 | 说明 |
 |---|---|---|
-| Claude Code | 稳定 | 血统、compact 恢复、备份、审计和 resume 支持最完整。 |
-| Codex | 稳定 | 本地 rollout 解析、搜索、Insights 与 resume。 |
-| Cursor | 稳定 | 本地 Agent 历史、搜索、Insights；CLI 提供能力时可 resume。 |
-| OpenCode | 稳定 | SQLite 历史导入和统一浏览。 |
-| Zcode | 稳定 | SQLite 历史导入和统一浏览。 |
+| Claude Code | 原生 | 正文、检索、用量、实时监视、血统和终端 Resume 可用；桌面导入为实验能力。 |
+| Codex | 原生 | 正文、检索、用量、实时监视、血统、终端 Resume 与原生 Resume 可用。 |
+| Cursor | 原生 | 正文、实时监视、终端 Resume 可用；检索为实验能力；用量、血统和原生深链不可用。 |
+| OpenCode | 原生 | 正文、用量、归档、终端 Resume 可用；检索为实验能力；实时监视、血统和原生深链不可用。 |
+| ZCode | 原生 | 正文、用量和归档可用；检索与“打开工作区”深链为实验能力；实时监视和终端 Resume 不可用。 |
 
 ### 兼容格式（1）
 
 | 来源家族 | 状态 | 说明 |
 |---|---|---|
-| CC Mirror | 当前 main | Claude 兼容的项目历史。 |
+| CC-Mirror | 兼容 | Claude 兼容正文、检索和用量可用；实时监视和归档不可用；终端 Resume 为实验能力。 |
 
 ### 实验性检测（5）——仅发现文件，尚不读取正文
 
@@ -103,7 +103,7 @@ Swob 不止渲染聊天记录：
 | Kimi Code | 实验 | 可发现本地 `wire.jsonl` 文件。 |
 | Hermes | 实验 | 可发现本地 JSON session 文件。 |
 
-> **准确性说明：**「原生读取」指 Swob 解析完整消息内容、建索引、纳入搜索和 Insights。「实验性检测」指 Swob 能在磁盘上发现这些文件，但尚未实现内容读取和索引。Swob 会保留来源限制，不会捏造缺失的 token、血统或 resume 命令。
+> **准确性说明：**「原生格式适配器」只代表已实现正文解析，不代表每项能力都可用。检索、用量、血统、实时监视、归档与 Resume 均按来源区分。「实验性检测」只能发现文件并显示元数据占位，不能读取或索引正文。唯一能力真相源是 [`src/shared/provider-capabilities.ts`](src/shared/provider-capabilities.ts)。
 
 ## 与同类项目的能力对照
 
@@ -117,18 +117,17 @@ Swob 不止渲染聊天记录：
 | 执行树 / Agent 调用解剖 | ✅ | ◐ 工具渲染 | ◐ 工具/输出导航 | ◐ 工具混合与子会话 |
 | 上下文压力检查 | ✅ 逐轮类别 + compact 边界 | ◐ token 分析 | ◐ 配额与 session runway | ✅ session context/cache 分析 |
 | 带来源标记的健康审计 | ✅ | — | ◐ 配额状态强调无法验证时不猜 | — |
-| 本地全文搜索 | ✅ SQLite FTS5 | ✅ | ✅ 本地索引 | ✅ SQLite FTS5 |
+| 本地全文搜索 | ✅ 已解析来源进入 SQLite FTS5；状态按来源区分 | ✅ | ✅ 本地索引 | ✅ SQLite FTS5 |
 | 回到来源 CLI 续写 | ✅ 来源支持时 | ◐ 按 session 打开/定位 | ✅ 支持的 CLI | ✅ 来源支持时 |
 | Headless / 浏览器模式 | — | ✅ | — | ✅ |
 
 ## 安装
 
-### 稳定版 v1.2.0
+### 公开安装包
 
-| Mac | 直接下载 |
-|---|---|
-| Apple Silicon（`arm64`） | [下载 `swob-1.2.0-arm64.dmg`](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) |
-| Intel（`x64`） | [下载 `swob-1.2.0-x64.dmg`](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) |
+[GitHub Releases](https://github.com/IvyYang1999/swob/releases) 是当前版本、支持架构、签名状态与不可变资产名的唯一下载真相源。本 README 不猜测安装包 URL，也不设置永久回退版本。
+
+> 截至 2026-07-23 验收，公开基线为 v1.2.0，提供 Apple Silicon 与 Intel Mac 资产。
 
 **系统要求：** Apple Silicon 或 Intel Mac。
 
@@ -183,7 +182,7 @@ CLI 统一返回 JSON，其他 Agent 不需要抓取界面就能查询 Swob。
 | 通道 | 内容 |
 |---|---|
 | **Stable v1.2.0** | 五来源浏览、血统检测/注册表、compact 展开、搜索、Token Insights、CLI、备份/导出和 resume。公开 DMG 未签名。 |
-| **当前 `main` / 下一版** | 新增多 harness 导入（5 原生 + 1 兼容 + 5 实验性检测）、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5，以及 watcher/worker 性能升级。现在可从源码构建。 |
+| **当前 `main` / 尚未发布** | 新增多 harness 导入（5 原生 + 1 兼容 + 5 实验性检测）、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5，以及 watcher/worker 性能升级。现在可从源码构建。 |
 
 ## 技术栈
 

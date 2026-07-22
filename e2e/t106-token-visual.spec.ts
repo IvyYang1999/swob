@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { closeApp, launchApp, resizeAppWindow, revealAllSessions, type LaunchedApp } from './helpers'
+import { closeApp, launchApp, openSessionInChat, resizeAppWindow, revealAllSessions, type LaunchedApp } from './helpers'
 
 let launched: LaunchedApp
 
@@ -52,9 +52,9 @@ test('Cursor session 信息面板明确显示 Token 不可用', async () => {
   const { page } = launched
   await page.getByTitle('Token 洞察').click()
   await revealAllSessions(page)
-  const cursorSession = page.getByText('Cursor token unavailable fixture', { exact: false }).first()
+  const cursorSession = page.locator('[data-session-id]').filter({ hasText: 'Cursor token unavailable fixture' }).first()
   await expect(cursorSession).toBeVisible({ timeout: 20_000 })
-  await cursorSession.click()
+  await openSessionInChat(page, await cursorSession.getAttribute('data-session-id') || undefined)
   await expect(page.getByText('Cursor response without authoritative usage.', { exact: true })).toBeVisible({ timeout: 20_000 })
   const infoTitle = page.getByText('Session Info', { exact: true })
   await page.waitForTimeout(300)

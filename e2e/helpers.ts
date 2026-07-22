@@ -104,11 +104,13 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
       parentUuid: userUuid,
       sessionId: CLAUDE_FIXTURE_ID,
       type: 'assistant',
+      requestId: `claude-request-${index}`,
       timestamp: new Date(Date.UTC(2026, 6, 21, 10, 0, index * 2 + 1)).toISOString(),
       cwd: project,
       message: {
         id: `claude-message-${index}`,
         role: 'assistant',
+        model: 'claude-sonnet-4-20250514',
         content: `Synthetic response ${index} ${'fixture '.repeat(12)}`,
         stop_reason: 'end_turn',
         usage: {
@@ -321,4 +323,28 @@ export async function revealAllSessions(page: Page): Promise<void> {
     // Idempotency: a second call would collapse the section again — undo that.
     if (await sessions.count() < before) await singleTurnToggle.click()
   }
+}
+
+/**
+ * Open a sidebar session in the chat workspace regardless of the current
+ * workspace (ordinary startup now lands in Galaxy; Insights is also a
+ * mutually-exclusive workspace). The Galaxy toolbar command is a toggle, so
+ * leaving Insights can require one click to enter Galaxy and a second to
+ * return to chat.
+ */
+export async function openSessionInChat(page: Page, sessionId?: string): Promise<void> {
+  await revealAllSessions(page)
+  const session = sessionId
+    ? page.locator(`[data-session-id="${sessionId}"]`)
+    : page.locator('[data-session-id]').first()
+  await session.waitFor({ state: 'visible', timeout: 20_000 })
+  await session.click()
+
+  const chat = page.getByTestId('chat-scroll')
+  const galaxyToggle = page.getByTitle(/会话图谱|Session Galaxy/)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (await chat.isVisible().catch(() => false)) break
+    await galaxyToggle.click()
+  }
+  await chat.waitFor({ state: 'visible', timeout: 20_000 })
 }

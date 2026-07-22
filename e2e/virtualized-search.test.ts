@@ -3,7 +3,7 @@ import {
   CLAUDE_FIXTURE_ID,
   closeApp,
   launchApp,
-  revealAllSessions,
+  openSessionInChat,
   type LaunchedApp
 } from './helpers'
 
@@ -13,8 +13,7 @@ test('in-session search finds offscreen virtualized turns and restores a bounded
   try {
     launched = await launchApp({ claudeTurns: 80 })
     const { page } = launched
-    await revealAllSessions(page)
-    await page.locator(`[data-session-id="${CLAUDE_FIXTURE_ID}"]`).click()
+    await openSessionInChat(page, CLAUDE_FIXTURE_ID)
     const scroller = page.getByTestId('chat-scroll')
     await expect(scroller.locator('[data-turn-uuid]').first()).toBeVisible({ timeout: 20_000 })
 

@@ -7,6 +7,7 @@ import {
   ZCODE_FIXTURE_ID,
   closeApp,
   launchApp,
+  openSessionInChat,
   resizeAppWindow,
   revealAllSessions,
   type LaunchedApp
@@ -39,7 +40,7 @@ test.describe.serial('多客户端 Resume surfaces', () => {
   })
 
   test('Codex 菜单显示 Desktop 与终端入口，并在窄窗口内完整可见', async ({}, testInfo) => {
-    await page.locator(`[data-session-id="codex:${CODEX_FIXTURE_ID}"]`).click()
+    await openSessionInChat(page, `codex:${CODEX_FIXTURE_ID}`)
     await resizeAppWindow(launched.app, page, { width: 760, height: 520 })
     const [contentBounds, viewport] = await Promise.all([
       launched.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentBounds()),
@@ -80,7 +81,7 @@ test.describe.serial('多客户端 Resume surfaces', () => {
   })
 
   test('Claude 菜单在开关开启后显示 Desktop 与 Remote Control，点击导入先弹警告', async () => {
-    await page.locator(`[data-session-id="${CLAUDE_FIXTURE_ID}"]`).click()
+    await openSessionInChat(page, CLAUDE_FIXTURE_ID)
     await page.getByRole('button', { name: '选择继续方式' }).click()
 
     await expect(page.getByRole('menuitem', { name: /导入到 Claude Desktop/ })).toBeVisible()
@@ -98,7 +99,7 @@ test.describe.serial('多客户端 Resume surfaces', () => {
   })
 
   test('ZCode 只提供打开 App，明确提示不能恢复指定会话', async ({}, testInfo) => {
-    await page.locator(`[data-session-id="zcode:${ZCODE_FIXTURE_ID}"]`).click()
+    await openSessionInChat(page, `zcode:${ZCODE_FIXTURE_ID}`)
     await expect(page.getByRole('button', { name: /打开 ZCode$/ })).toBeVisible()
     await expect(page.getByRole('button', { name: '复制命令' })).toBeDisabled()
     await expect(page.getByRole('button', { name: /Fork/ })).toBeDisabled()

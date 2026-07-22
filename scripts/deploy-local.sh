@@ -44,9 +44,13 @@ rm -rf "${INSTALL_DIR}/${APP_NAME}.app"
 cp -R "$DIST_APP" "${INSTALL_DIR}/${APP_NAME}.app"
 
 APP_CLI="${INSTALL_DIR}/${APP_NAME}.app/Contents/Resources/cli/cli.js"
+APP_NODE_MODULES="${INSTALL_DIR}/${APP_NAME}.app/Contents/Resources/app.asar.unpacked/node_modules"
 echo "==> 安装/更新 CLI..."
 if [ -f "$APP_CLI" ]; then
-  if CLI_INSTALL_OUTPUT="$(node "$APP_CLI" install 2>&1)"; then
+  # The bootstrap invocation runs under the system Node before the installed
+  # wrapper exists. Native CLI dependencies live in app.asar.unpacked, so this
+  # first invocation needs the same NODE_PATH that the wrapper will persist.
+  if CLI_INSTALL_OUTPUT="$(NODE_PATH="${APP_NODE_MODULES}${NODE_PATH:+:$NODE_PATH}" node "$APP_CLI" install 2>&1)"; then
     echo "$CLI_INSTALL_OUTPUT"
   else
     echo "警告：CLI 安装/更新失败，应用仍会继续启动。"

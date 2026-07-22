@@ -67,6 +67,16 @@ describe('CLI install helper', () => {
     )
   })
 
+  it('bootstraps deployment with the same unpacked native dependency path', () => {
+    const deployScript = fs.readFileSync(path.resolve('scripts/deploy-local.sh'), 'utf8')
+    expect(deployScript).toContain(
+      'APP_NODE_MODULES="${INSTALL_DIR}/${APP_NAME}.app/Contents/Resources/app.asar.unpacked/node_modules"'
+    )
+    expect(deployScript).toContain(
+      'NODE_PATH="${APP_NODE_MODULES}${NODE_PATH:+:$NODE_PATH}" node "$APP_CLI" install'
+    )
+  })
+
   it('keeps /usr/local/bin first, then PATH fallbacks in priority order', () => {
     const homeDir = path.join(tmpRoot, 'home')
     const homebrewDir = path.join(tmpRoot, 'homebrew', 'bin')

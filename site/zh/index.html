@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Swob——为 AI 对话画一张 Git 图谱</title>
-  <meta name="description" content="在 macOS 本地追踪会话血统、找回压缩上下文、检索 11 类 AI 编程工具，并调试 Agent 的真实执行过程。">
+  <meta name="description" content="在 macOS 本地追踪会话血统、检查已解析的 AI 对话历史，并明确展示各来源的能力边界。">
   <meta name="theme-color" content="#efebe2">
   <meta name="color-scheme" content="light">
   <link rel="canonical" href="https://ivyyang1999.github.io/swob/zh/">
@@ -38,7 +38,7 @@
     "inLanguage": "zh-CN",
     "url": "https://ivyyang1999.github.io/swob/zh/",
     "description": "本地优先的 AI 编程会话 Git 图谱与调试器。",
-    "downloadUrl": "https://github.com/IvyYang1999/swob/releases/tag/v1.2.0",
+    "downloadUrl": "https://github.com/IvyYang1999/swob/releases",
     "codeRepository": "https://github.com/IvyYang1999/swob",
     "license": "https://www.gnu.org/licenses/agpl-3.0.html",
     "isAccessibleForFree": true
@@ -62,7 +62,7 @@
         <a href="#faq">常见问题</a>
         <a class="nav-docs" href="../docs/">文档</a>
         <a class="lang-switch" href="../" hreflang="en" lang="en" aria-label="View English version">EN</a>
-        <a class="nav-download" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">下载 v1.2.0</a>
+        <a class="nav-download" href="https://github.com/IvyYang1999/swob/releases">发布版本</a>
       </div>
     </div>
   </nav>
@@ -73,13 +73,13 @@
         <div class="hero-copy">
           <div class="eyebrow">开源 · macOS · 本地优先</div>
           <h1>为 AI 对话画一张 <span class="hero-last">Git 图谱。</span></h1>
-          <p class="hero-lead">追踪会话如何<strong>分叉、压缩和继续</strong>。找回缺失的上下文，统一检索 11 类 AI 编程工具的历史，并看清每次执行背后的工具调用与上下文压力。</p>
+          <p class="hero-lead">追踪会话如何<strong>分叉、压缩和继续</strong>。通过五个原生格式适配器读取历史，保留每个来源的能力缺口，并看清每次执行背后的工具调用与上下文压力。</p>
           <div class="cta-row">
-            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">下载稳定版 · Apple Silicon</a>
+            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases">打开已验证的 Releases</a>
             <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">查看当前 main</a>
-            <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel Mac</a>
+            <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases">版本、签名与架构</a>
           </div>
-          <p class="release-note"><strong>先讲事实，再讲卖点：</strong>公开的 v1.2.0 是未签名的五来源稳定版，无法自动跨越即将启用的 Developer ID 信任根。首个正式签名版发布后，需要手动下载 DMG 覆盖安装一次；之后的签名版本才走独立且经过 E2E 验收的更新通道。此处展示的会话星图、调试器、11 类来源导入、AI Insights 与 SQLite FTS 已在当前 <code>main</code> 实现，将随下一版本发布。</p>
+          <p class="release-note"><strong>先讲事实，再讲卖点：</strong>公开的 v1.2.0 是未签名的五来源稳定版，无法自动跨越即将启用的 Developer ID 信任根。首个正式签名版发布后，需要手动下载 DMG 覆盖安装一次；之后的签名版本才走独立且经过 E2E 验收的更新通道。此处展示的会话星图、调试器、多来源导入（5 原生 + 1 兼容 + 5 实验性检测）、AI Insights 与 SQLite FTS 已在当前 <code>main</code> 实现，但尚未体现在公开安装包中。</p>
         </div>
 
         <figure class="product-frame">
@@ -101,7 +101,7 @@
         <div class="proof-item"><span class="proof-value">253 / 1,621</span><span class="proof-label">原始会话已缺失；本地备份仍保留</span></div>
         <div class="proof-item"><span class="proof-value">93.58%</span><span class="proof-label">该审计语料中可验证的续接率</span></div>
         <div class="proof-item"><span class="proof-value">1,700+</span><span class="proof-label">在当前本地性能语料中验证的会话数</span></div>
-        <div class="proof-item"><span class="proof-value">11</span><span class="proof-label">当前 main 可发现的本地来源家族</span></div>
+        <div class="proof-item"><span class="proof-value">5+1+5</span><span class="proof-label">原生读取 + 兼容 + 实验性检测（当前 main）</span></div>
       </div>
     </section>
 
@@ -181,7 +181,7 @@
             <p>本地看板汇总 token、成本估算、热力图、来源／模型／项目分布、工具使用和代码改动量。Quick Report 全程本地运行；AI Report 则是单独触发、明确联网的操作。</p>
             <ul>
               <li>已用 1,704 个本地会话验证看板</li>
-              <li>11 类来源分布与模型拆解</li>
+              <li>仅在字段可用时展示来源／模型拆解；不可用绝不记作 0</li>
               <li>SQLite FTS5 增量检索</li>
               <li>AI 叙述可选启用，绝不冒充离线能力</li>
             </ul>
@@ -202,23 +202,23 @@
         <div class="shell">
           <div class="section-head">
             <div class="eyebrow">03 · 来源</div>
-            <h2>11 类 AI 编程工具，一份本地历史。</h2>
-            <p class="section-intro">当前 <code>main</code> 能发现下列每类来源。解析深度、血统证据、token 与续接能力取决于原工具实际记录了什么；Swob 不会编造缺失的元数据。</p>
+            <h2>5 个原生适配器、1 个兼容格式、5 个纯检测来源。</h2>
+            <p class="section-intro">层级只说明是否能解析消息正文，不代表检索、用量、血统、实时监视、归档和 Resume 全部可用。当前 <code>main</code> 会明确展示这些差异。</p>
           </div>
           <div class="source-list" aria-label="支持的来源家族">
-            <div class="source" style="--source:#e09927"><div class="source-name"><span class="source-dot"></span>Claude Code</div><div class="source-status">深度血统 · 压缩恢复 · 备份 · 续接</div></div>
-            <div class="source" style="--source:#478be1"><div class="source-name"><span class="source-dot"></span>Codex</div><div class="source-status">Rollout 解析 · 检索 · 洞察 · 续接</div></div>
-            <div class="source" style="--source:#61a96f"><div class="source-name"><span class="source-dot"></span>Cursor</div><div class="source-status">本地 Agent 历史 · 检索 · 来源感知续接</div></div>
-            <div class="source" style="--source:#21a7bd"><div class="source-name"><span class="source-dot"></span>OpenCode</div><div class="source-status">SQLite 历史 · 统一查看</div></div>
-            <div class="source" style="--source:#d4554c"><div class="source-name"><span class="source-dot"></span>Zcode</div><div class="source-status">SQLite 历史 · 统一查看</div></div>
-            <div class="source" style="--source:#d3659a"><div class="source-name"><span class="source-dot"></span>CC Mirror</div><div class="source-status">兼容 Claude 的项目历史</div></div>
-            <div class="source" style="--source:#8c79e8"><div class="source-name"><span class="source-dot"></span>Antigravity</div><div class="source-status">当前与旧版转录目录</div></div>
-            <div class="source" style="--source:#8a898c"><div class="source-name"><span class="source-dot"></span>Grok / Factory</div><div class="source-status">Grok 与 Factory／Droid JSONL 历史</div></div>
-            <div class="source" style="--source:#3cab93"><div class="source-name"><span class="source-dot"></span>Pi</div><div class="source-status">本地 Agent 会话历史</div></div>
-            <div class="source" style="--source:#e48a43"><div class="source-name"><span class="source-dot"></span>Kimi Code</div><div class="source-status">本地 wire.jsonl 历史</div></div>
-            <div class="source" style="--source:#7657ca"><div class="source-name"><span class="source-dot"></span>Hermes</div><div class="source-status">本地 JSON 会话历史</div></div>
+            <div class="source" style="--source:#e09927"><div class="source-name"><span class="source-dot"></span>Claude Code</div><div class="source-status">原生 · 正文／检索／用量／实时监视／血统／终端 Resume</div></div>
+            <div class="source" style="--source:#478be1"><div class="source-name"><span class="source-dot"></span>Codex</div><div class="source-status">原生 · 正文／检索／用量／实时监视／血统／Resume</div></div>
+            <div class="source" style="--source:#61a96f"><div class="source-name"><span class="source-dot"></span>Cursor</div><div class="source-status">原生 · 正文／实时监视／终端 Resume；检索实验；无权威用量</div></div>
+            <div class="source" style="--source:#21a7bd"><div class="source-name"><span class="source-dot"></span>OpenCode</div><div class="source-status">原生 · 正文／用量／归档／终端 Resume；检索实验</div></div>
+            <div class="source" style="--source:#d4554c"><div class="source-name"><span class="source-dot"></span>ZCode</div><div class="source-status">原生 · 正文／用量／归档；检索和工作区深链实验</div></div>
+            <div class="source" style="--source:#d3659a"><div class="source-name"><span class="source-dot"></span>CC-Mirror</div><div class="source-status">兼容 · 正文／检索／用量；终端 Resume 实验</div></div>
+            <div class="source" style="--source:#8c79e8"><div class="source-name"><span class="source-dot"></span>Antigravity</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
+            <div class="source" style="--source:#8a898c"><div class="source-name"><span class="source-dot"></span>Grok / Factory</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
+            <div class="source" style="--source:#3cab93"><div class="source-name"><span class="source-dot"></span>Pi</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
+            <div class="source" style="--source:#e48a43"><div class="source-name"><span class="source-dot"></span>Kimi Code</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
+            <div class="source" style="--source:#7657ca"><div class="source-name"><span class="source-dot"></span>Hermes</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
           </div>
-          <p class="source-note">公开的稳定版 v1.2.0 支持最初五类来源：Claude Code、Codex、Cursor、OpenCode 与 Zcode。新增的六类来源属于当前 main／下一版本能力。</p>
+          <p class="source-note">唯一能力真相源是 <code>src/shared/provider-capabilities.ts</code>。纯检测来源只显示元数据占位，不产生可搜索正文；缺失用量为 unavailable，不是 0。</p>
         </div>
       </section>
     </div>
@@ -271,11 +271,11 @@
             </ul>
           </article>
           <article class="channel next">
-            <span class="channel-tag">当前 main · 下一版</span>
+            <span class="channel-tag">当前 main · 尚未发布</span>
             <h3>会话星图与调试器</h3>
             <p>本页截图来自当前 main 已经实现的这些能力。</p>
             <ul>
-              <li>11 类来源导入与 Session Galaxy 会话星图</li>
+              <li>多来源导入（5 原生 + 1 兼容 + 5 实验性检测）与 Session Galaxy 会话星图</li>
               <li>执行树、上下文检查器与会话审计</li>
               <li>需确认后启用的可选 AI Insights</li>
               <li>SQLite FTS5、文件监视与 Worker 性能优化</li>
@@ -285,12 +285,12 @@
 
         <div class="install-box" id="download">
           <div>
-            <h3>下载稳定版 macOS 安装包</h3>
-            <p>请选择与你的 Mac 匹配的架构。按钮会直接下载官方 v1.2.0 DMG。</p>
+            <h3>选择已验证的 macOS 发布版本</h3>
+            <p>GitHub Releases 是当前版本、支持架构、签名状态与不可变资产名的下载真相源；本静态页不猜安装包 URL。</p>
           </div>
           <div class="install-actions">
-            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">Apple Silicon</a>
-            <a class="button button-secondary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel</a>
+            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases">打开 GitHub Releases</a>
+            <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">构建当前 main</a>
           </div>
         </div>
         <p class="gatekeeper"><strong>未签名版本：</strong>确认 DMG 来自本仓库后，若 Gatekeeper 仍阻止运行，可执行 <code>xattr -cr /Applications/Swob.app</code>。签名／公证流程已通过冒烟测试，但目前尚未发布签名后的公开安装包。</p>
@@ -307,11 +307,11 @@
         <div class="faq">
           <details>
             <summary>v1.2.0 DMG 里有 Session Galaxy 会话星图和调试器吗？</summary>
-            <p>没有。这些能力已在当前 <code>main</code> 实现，计划随下一版本发布。现在如要体验，请从源码构建。</p>
+            <p>没有。这些能力已在当前 <code>main</code> 实现，但尚未体现在公开安装包中。现在如要体验，请从源码构建。</p>
           </details>
           <details>
-            <summary>11 类 AI 编程工具都能提供同样的数据吗？</summary>
-            <p>不能。Swob 已能发现 11 类来源，但血统、token、子 Agent 和续接命令取决于每种来源实际记录的内容。缺失的字段会保持不可用，不会被臆造补齐。</p>
+            <summary>所有支持的来源都能提供同样的数据吗？</summary>
+            <p>不能。Swob 原生读取 5 种 harness（Claude Code、Codex、Cursor、OpenCode、Zcode），支持 1 种兼容格式（CC Mirror），另有 5 种实验性文件检测（Antigravity、Grok/Factory、Pi、Kimi、Hermes——仅发现文件，尚不读取正文）。即使在原生读取的来源中，血统、token、子 Agent 和续接命令也取决于每种来源实际记录的内容。缺失的字段会保持不可用，不会被臆造补齐。</p>
           </details>
           <details>
             <summary>会话内容会离开我的 Mac 吗？</summary>
@@ -323,7 +323,7 @@
           </details>
           <details>
             <summary>支持 Windows 或 Linux 吗？</summary>
-            <p>暂不支持。Swob 目前只针对 Apple Silicon 与 Intel Mac 构建并测试。Windows、Linux 以及无界面／浏览器模式都不是当前产品承诺。</p>
+            <p>macOS 是当前稳定发布平台。Windows x64 有 Native Alpha，只验证 Claude Code 与 Codex 的浏览、搜索、备份、Resume 和最小 Library 闭环，并非 macOS 功能对等版。Linux 与无界面／浏览器模式仍不是当前产品承诺。</p>
           </details>
         </div>
       </div>
@@ -337,7 +337,7 @@
           <p>现在就从稳定版会话浏览器开始，或检查并构建当前 <code>main</code>，提前体验下一版本的会话星图与调试器。</p>
         </div>
         <div class="final-actions">
-          <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">下载稳定版</a>
+          <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases">打开已验证的 Releases</a>
           <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">查看源码</a>
         </div>
       </div>

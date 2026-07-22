@@ -25,9 +25,19 @@ for i in $(seq 1 10); do
   pgrep -x "$APP_NAME" >/dev/null 2>&1 || break
   sleep 0.3
 done
-# 还没退就 kill
+# 还没退就 kill;SIGTERM 无效(进程 not responding)时必须升级 SIGKILL,
+# 否则后面的 open 只会激活旧进程,新版本永远上不去(2026-07-22 实证)。
 pkill -x "$APP_NAME" 2>/dev/null || true
-sleep 0.5
+sleep 1
+if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+  echo "==> 旧进程未响应 SIGTERM,强制结束..."
+  pkill -9 -x "$APP_NAME" 2>/dev/null || true
+  sleep 1
+fi
+if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+  echo "错误：旧 ${APP_NAME} 进程无法结束,中止部署(避免部署假象)"
+  exit 1
+fi
 
 echo "==> 替换 ${INSTALL_DIR}/${APP_NAME}.app..."
 rm -rf "${INSTALL_DIR}/${APP_NAME}.app"

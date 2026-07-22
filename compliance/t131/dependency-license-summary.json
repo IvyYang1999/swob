@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "baseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
+  "lockfileVersion": 3,
+  "packageEntries": 849,
+  "byGroupAndLicense": {
+    "development|MIT": 516,
+    "development|BlueOak-1.0.0": 12,
+    "development|MIT-0": 2,
+    "development|ISC": 75,
+    "development|BSD-2-Clause": 13,
+    "development|Apache-2.0": 25,
+    "development|CC-BY-4.0": 1,
+    "development|BSD-3-Clause": 8,
+    "development|MPL-2.0": 12,
+    "development|CC0-1.0": 1,
+    "development|WTFPL OR ISC": 1,
+    "development|WTFPL": 1,
+    "development|(MIT OR CC0-1.0)": 1,
+    "development|(WTFPL OR MIT)": 1,
+    "production|BSD-2-Clause": 1,
+    "production|MIT": 158,
+    "production|ISC": 16,
+    "production|Python-2.0": 1,
+    "production|BSD-3-Clause": 1,
+    "production|BlueOak-1.0.0": 1,
+    "production|Apache-2.0": 1,
+    "production|MIT AND ISC": 1
+  },
+  "reviewCounts": {
+    "permissive-or-public-domain": 836,
+    "manual-attribution-review": 1,
+    "manual-copyleft-review": 12
+  }
+}

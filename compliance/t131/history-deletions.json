@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "baseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
+  "scope": "Source and visual-asset paths deleted in commits reachable from origin/master, checked against the v1.0.0, v1.1.0 and v1.2.0 release-tag trees.",
+  "releaseTags": [
+    "v1.0.0",
+    "v1.1.0",
+    "v1.2.0"
+  ],
+  "deletedPaths": [
+    "site/assets/chat.png",
+    "site/assets/search.png",
+    "site/assets/sidebar.png",
+    "src/renderer/src/components/InsightsPage.tsx",
+    "src/renderer/src/components/SettingsPanelV2.tsx",
+    "src/renderer/src/graph/CanvasSessionGraphFallback.tsx",
+    "src/renderer/src/graph/SessionGraphRenderer.ts",
+    "src/renderer/src/graph/graph-model.test.ts",
+    "src/renderer/src/graph/graph-model.ts",
+    "src/renderer/src/graph/graph.worker.ts"
+  ],
+  "result": {
+    "pathCount": 10,
+    "presentInAnyAuditedReleaseTag": 0,
+    "disposition": "No known deleted tracked path in this scope was present in the three official release-tag snapshots. The v1.2.0 binary nevertheless carried an unintended untracked worktree copy; see artifact-inventory.json."
+  }
+}

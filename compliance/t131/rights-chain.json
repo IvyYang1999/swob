@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "baseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
+  "scope": "Commits reachable from the audited HEAD only; identities are intentionally anonymized.",
+  "distinctAuthorIdentities": 2,
+  "unresolvedAuthorIdentities": 0,
+  "authors": [
+    {
+      "label": "PROJECT_OWNER",
+      "commits": 395,
+      "mergeCommits": 44,
+      "additions": 117566,
+      "deletions": 18744,
+      "binaryChanges": 28,
+      "firstCommitAt": "2026-03-04T23:18:04+08:00",
+      "lastCommitAt": "2026-07-22T16:56:12+08:00"
+    },
+    {
+      "label": "MERGE_AUTOMATION",
+      "commits": 18,
+      "mergeCommits": 18,
+      "additions": 0,
+      "deletions": 0,
+      "binaryChanges": 0,
+      "firstCommitAt": "2026-07-13T01:41:11+08:00",
+      "lastCommitAt": "2026-07-21T22:16:27+08:00"
+    }
+  ],
+  "evidenceLimit": "Git metadata cannot distinguish AI-assisted changes committed under the project-owner identity. A separate owner attestation is required."
+}

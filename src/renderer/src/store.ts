@@ -137,6 +137,20 @@ interface UserConfig {
   }
 }
 
+// Background Library patches carry complete config snapshots that may have
+// been read before a local preference write finished. Remember fields changed
+// by this renderer and overlay them on every later snapshot for this app run.
+let localPreferenceOverlay: Partial<UserConfig['preferences']> = {}
+let preferenceWriteRevision = 0
+
+function mergeLocalPreferences(config: UserConfig): UserConfig {
+  if (Object.keys(localPreferenceOverlay).length === 0) return config
+  return {
+    ...config,
+    preferences: { ...config.preferences, ...localPreferenceOverlay }
+  }
+}
+
 export interface SshConfig {
   host: string
   user: string
@@ -353,7 +367,7 @@ export const useStore = create<AppState>((set, get) => ({
         for (const session of patch) byId.set(session.id, session)
         return {
           sessions: [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-          config: config || state.config
+          config: config ? mergeLocalPreferences(config) : state.config
         }
       })
     }
@@ -421,10 +435,11 @@ export const useStore = create<AppState>((set, get) => ({
           window.api.loadAllSessions(),
           window.api.loadConfig()
         ])
-        set({ sessions: freshSessions, config: freshConfig })
+        const mergedConfig = mergeLocalPreferences(freshConfig)
+        set({ sessions: freshSessions, config: mergedConfig })
         try {
           localStorage.setItem('csm:sessions', JSON.stringify(freshSessions))
-          localStorage.setItem('csm:config', JSON.stringify(freshConfig))
+          localStorage.setItem('csm:config', JSON.stringify(mergedConfig))
         } catch { /* quota exceeded */ }
       }, 500)
     }
@@ -697,18 +712,23 @@ export const useStore = create<AppState>((set, get) => ({
   savePreferences: async (prefs) => {
     const config = get().config
     if (!config) return
+    const previousOverlay = localPreferenceOverlay
+    localPreferenceOverlay = { ...localPreferenceOverlay, ...prefs } as Partial<UserConfig['preferences']>
+    const revision = ++preferenceWriteRevision
     const updated = { ...config, preferences: { ...config.preferences, ...prefs } }
     // Update controlled settings immediately. Besides avoiding a visible
     // snap-back while the Library writer publishes its patch, this ensures a
     // second rapid preference change merges on top of the first one.
     set({ config: updated as UserConfig })
     try {
-      const persisted = await window.api.saveConfig(updated)
-      // Do not overwrite a newer optimistic preference update that was made
-      // while this IPC request was in flight.
-      if (get().config === updated) set({ config: persisted as UserConfig })
+      await window.api.saveConfig(updated)
     } catch (error) {
-      if (get().config === updated) set({ config })
+      if (revision === preferenceWriteRevision) {
+        localPreferenceOverlay = previousOverlay
+        set((state) => state.config ? {
+          config: { ...state.config, preferences: config.preferences }
+        } : {})
+      }
       throw error
     }
   },
@@ -722,31 +742,31 @@ export const useStore = create<AppState>((set, get) => ({
       color: color || null,
       parentId: parentId || null
     })
-    set({ config: config as UserConfig })
+    set({ config: mergeLocalPreferences(config as UserConfig) })
   },
   moveFolder: async (folderId, newParentId, position?, targetId?) => {
     const config = await window.api.moveFolder(folderId, newParentId, position, targetId)
-    set({ config: config as UserConfig })
+    set({ config: mergeLocalPreferences(config as UserConfig) })
   },
   deleteFolder: async (folderId) => {
     const config = await window.api.deleteFolder(folderId)
-    set({ config: config as UserConfig, selectedFolderId: null })
+    set({ config: mergeLocalPreferences(config as UserConfig), selectedFolderId: null })
   },
   renameFolder: async (folderId, name) => {
     const config = await window.api.renameFolder(folderId, name)
-    set({ config: config as UserConfig })
+    set({ config: mergeLocalPreferences(config as UserConfig) })
   },
   addSessionToFolder: async (folderId, sessionId) => {
     const config = await window.api.addSessionToFolder(folderId, sessionId)
-    set({ config: config as UserConfig })
+    set({ config: mergeLocalPreferences(config as UserConfig) })
   },
   removeSessionFromFolder: async (folderId, sessionId) => {
     const config = await window.api.removeSessionFromFolder(folderId, sessionId)
-    set({ config: config as UserConfig })
+    set({ config: mergeLocalPreferences(config as UserConfig) })
   },
   setSessionMeta: async (sessionId, meta) => {
     const config = await window.api.setSessionMeta(sessionId, meta)
-    set({ config: config as UserConfig })
+    set({ config: mergeLocalPreferences(config as UserConfig) })
   },
   smartRenameSingle: async (sessionId) => {
     const { showToast } = get()
@@ -777,7 +797,7 @@ export const useStore = create<AppState>((set, get) => ({
         }), 'error')
         return
       }
-      if (applied.config) set({ config: applied.config as UserConfig })
+      if (applied.config) set({ config: mergeLocalPreferences(applied.config as UserConfig) })
       showToast(translate(get().locale, 'renderer.store.renamed', { value0: item.newTitle }), 'success', {
         label: translate(get().locale, 'renderer.store.undo'),
         onClick: () => { void get().setSessionMeta(sessionId, { customTitle: previousTitle }) }
@@ -788,7 +808,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
   applyOrganization: async (kind, items) => {
     const result = await window.api.organizerApply(kind, items)
-    set({ config: result.config as UserConfig })
+    set({ config: mergeLocalPreferences(result.config as UserConfig) })
     const moved = result.moves.length
     if (moved > 0) {
       get().showToast(translate(get().locale, 'renderer.store.organized', { value0: moved }), 'success', {
@@ -802,7 +822,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
   undoLastOrganization: async () => {
     const result = await window.api.organizerUndo()
-    set({ config: result.config as UserConfig })
+    set({ config: mergeLocalPreferences(result.config as UserConfig) })
     const moved = result.moves.length
     get().showToast(moved > 0
       ? translate(get().locale, 'renderer.store.organization_undone', { value0: moved })
@@ -821,7 +841,7 @@ export const useStore = create<AppState>((set, get) => ({
     const updated = await window.api.setSessionMeta(sessionId, {
       highlights: [...existing, newHighlight]
     })
-    set({ config: updated as UserConfig })
+    set({ config: mergeLocalPreferences(updated as UserConfig) })
   },
   removeHighlight: async (sessionId, highlightId) => {
     const config = get().config
@@ -830,7 +850,7 @@ export const useStore = create<AppState>((set, get) => ({
     const updated = await window.api.setSessionMeta(sessionId, {
       highlights: existing.filter(h => h.id !== highlightId)
     })
-    set({ config: updated as UserConfig })
+    set({ config: mergeLocalPreferences(updated as UserConfig) })
   },
 
   downloadSessionMarkdown: () => {

@@ -11,6 +11,7 @@ import { defaultResumeMethodForSource } from '../../shared/settings-capabilities
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
 
 export type ViewMode = 'compact' | 'full' | 'markdown'
+export type ColorScheme = 'default' | 'paper' | 'nord'
 export type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 
 interface SessionSummary {
@@ -121,6 +122,7 @@ interface UserConfig {
     experimentalClaudeDesktopImport?: boolean
     locale?: LegacyLocale
     themeMode?: 'dark' | 'light' | 'system'
+    colorScheme?: ColorScheme
     spotlightShortcut?: string
     sshConfig?: SshConfig
     projectViewMode?: 'folders' | 'paths'
@@ -197,7 +199,9 @@ interface AppState {
   resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>) => Promise<void>
   setViewMode: (mode: ViewMode) => void
   setLocale: (locale: Locale) => Promise<void>
+  colorScheme: ColorScheme
   themeMode: 'dark' | 'light' | 'system'
+  setColorScheme: (scheme: ColorScheme) => void
   setThemeMode: (mode: 'dark' | 'light' | 'system') => void
   toggleTheme: () => void
   selectFolder: (folderId: string | null) => void
@@ -292,6 +296,14 @@ function resolveThemeMode(): 'dark' | 'light' | 'system' {
   } catch { return 'system' }
 }
 
+function resolveColorScheme(): ColorScheme {
+  try {
+    const saved = localStorage.getItem('csm:colorScheme')
+    if (saved === 'paper' || saved === 'nord') return saved
+    return 'default'
+  } catch { return 'default' }
+}
+
 function effectiveTheme(mode: 'dark' | 'light' | 'system'): 'dark' | 'light' {
   if (mode === 'system') {
     try {
@@ -311,6 +323,7 @@ export const useStore = create<AppState>((set, get) => ({
   loading: hydrated.loading,
   viewMode: hydrated.viewMode,
   locale: hydrated.locale,
+  colorScheme: resolveColorScheme(),
   themeMode: resolveThemeMode(),
   theme: effectiveTheme(resolveThemeMode()),
   selectedFolderId: null,
@@ -377,6 +390,13 @@ export const useStore = create<AppState>((set, get) => ({
         sshConfig: sshConfig ?? null,
         loading: false
       })
+      // Sync color scheme from preferences (cross-device)
+      const prefScheme = hydratedConfig.preferences?.colorScheme
+      if ((prefScheme === 'paper' || prefScheme === 'nord' || prefScheme === 'default') && prefScheme !== get().colorScheme) {
+        document.documentElement.dataset.colorScheme = prefScheme
+        localStorage.setItem('csm:colorScheme', prefScheme)
+        set({ colorScheme: prefScheme })
+      }
       try {
         localStorage.setItem('csm:sessions', JSON.stringify(hydratedSessions))
         localStorage.setItem('csm:config', JSON.stringify(hydratedConfig))
@@ -630,6 +650,13 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (error) {
       console.error('Failed to persist locale:', error)
     }
+  },
+
+  setColorScheme: (scheme) => {
+    document.documentElement.dataset.colorScheme = scheme
+    localStorage.setItem('csm:colorScheme', scheme)
+    set({ colorScheme: scheme })
+    void get().savePreferences({ colorScheme: scheme })
   },
 
   setThemeMode: (mode) => {

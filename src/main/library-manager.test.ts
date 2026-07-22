@@ -590,7 +590,14 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
 
     const written = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
     expect(written).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      packageId: expect.any(String),
+      logicalIdentity: {
+        schemaVersion: 1,
+        sourceFamily: 'claude-code',
+        sourceInstance: { kind: 'default', id: 'default' },
+        sessionId
+      },
       origin: {
         deviceId: 'device-xx…0002',
         hostname: 'host-xx…0002',

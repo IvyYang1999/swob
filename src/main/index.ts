@@ -10,6 +10,11 @@ import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
 import { registerAgentIpc, registerAgentShortcut, shutdownAgentRuntime } from './agent-window'
 import { getAgentWorkspaceDir } from './agent-runner'
 import { buildAgentHistory, registerFrontendIpc } from './frontend-ipc'
+import { readDashboardLayout, writeDashboardLayout } from './dashboard-layout'
+import {
+  BUILTIN_COMMAND_IDS,
+  createBuiltinCommandRegistry
+} from '../shared/registry/builtin-commands'
 import { execFile, execSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import {
@@ -2179,6 +2184,8 @@ ipcMain.handle('smartRename:apply', async (_event, items: SmartRenameApplyItem[]
 
 // --- Native Context Menu ---
 
+const nativeContextCommandRegistry = createBuiltinCommandRegistry()
+
 ipcMain.handle(
   'context-menu:session',
   async (event, data: {
@@ -2189,22 +2196,28 @@ ipcMain.handle(
   }) => {
     const smartRename = await getSmartFeatureAvailability('smartRename')
     return new Promise((resolve) => {
+      const runCommand = (commandId: string, payload?: { folderId?: string }) => {
+        void nativeContextCommandRegistry.require(commandId).run({
+          payload,
+          sessionAction: (action) => resolve({ action, ...payload })
+        })
+      }
       const template: Electron.MenuItemConstructorOptions[] = [
         {
           label: data.canResume === false
             ? `Resume（${data.resumeUnavailableReason || '不可恢复'}）`
             : 'Resume',
           enabled: data.canResume !== false,
-          click: () => resolve({ action: 'resume' })
+          click: () => runCommand(BUILTIN_COMMAND_IDS.sessionResume)
         },
         { type: 'separator' },
-        { label: '重命名', click: () => resolve({ action: 'rename' }) },
+        { label: '重命名', click: () => runCommand(BUILTIN_COMMAND_IDS.sessionRename) },
         {
           label: smartRename.enabled
             ? '智能重命名'
             : `智能重命名（${smartRename.reason || '未绑定 Profile'}）`,
           enabled: smartRename.enabled,
-          click: () => resolve({ action: 'smartRename' })
+          click: () => runCommand(BUILTIN_COMMAND_IDS.sessionSmartRename)
         },
       ]
 
@@ -2215,7 +2228,7 @@ ipcMain.handle(
         for (const f of removeItems) {
           template.push({
             label: `移出「${f.name}」(回到根目录)`,
-            click: () => resolve({ action: 'removeFromFolder', folderId: f.id })
+            click: () => runCommand(BUILTIN_COMMAND_IDS.sessionRemoveFromFolder, { folderId: f.id })
           })
         }
       }
@@ -2240,11 +2253,11 @@ ipcMain.handle(
           return nodes.map(n => {
             const item: Electron.MenuItemConstructorOptions = {
               label: n.name,
-              click: () => resolve({ action: 'addToFolder', folderId: n.id })
+              click: () => runCommand(BUILTIN_COMMAND_IDS.sessionAddToFolder, { folderId: n.id })
             }
             if (n.children.length > 0) {
               item.submenu = [
-                { label: `移入「${n.name}」`, click: () => resolve({ action: 'addToFolder', folderId: n.id }) },
+                { label: `移入「${n.name}」`, click: () => runCommand(BUILTIN_COMMAND_IDS.sessionAddToFolder, { folderId: n.id }) },
                 { type: 'separator' },
                 ...buildSubmenu(n.children)
               ]
@@ -2273,6 +2286,10 @@ ipcMain.handle(
 // --- Library-specific IPC ---
 
 ipcMain.handle('library:getRoot', () => getLibraryRoot())
+
+ipcMain.handle('dashboard:loadLayout', () => readDashboardLayout(getLibraryRoot()))
+
+ipcMain.handle('dashboard:saveLayout', (_event, layout) => writeDashboardLayout(getLibraryRoot(), layout))
 
 ipcMain.handle('library:getMdPath', (_event, sessionId: string) => {
   if (sessionId.includes(':intra-')) {

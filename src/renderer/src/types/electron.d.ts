@@ -10,6 +10,7 @@ import type {
   UserIdentity,
   UserIdentityInput
 } from '../../../shared/frontend-ipc-contract'
+import type { DashboardLayoutConfig } from '../../../shared/registry/builtin-widgets'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeLaunchSpec = {
@@ -218,6 +219,8 @@ interface ElectronAPI {
   showSessionContextMenu: (data: { sessionId: string; canResume?: boolean; resumeUnavailableReason?: string; folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }> }) =>
     Promise<{ action: string; folderId?: string } | null>
   libraryGetRoot: () => Promise<string>
+  dashboardLoadLayout: () => Promise<DashboardLayoutConfig>
+  dashboardSaveLayout: (layout: DashboardLayoutConfig) => Promise<DashboardLayoutConfig>
   libraryGetMdPath: (sessionId: string) => Promise<string | null>
   libraryGetDirPath: (sessionId: string) => Promise<string | null>
   libraryOpenInFinder: () => Promise<void>

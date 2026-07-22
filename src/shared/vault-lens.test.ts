@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { friendlyProjectName, groupSessionsByLens } from './vault-lens'
 
-const NOW = new Date('2026-07-24T12:00:00+08:00')
+// Construct fixtures in the machine's local timezone because the product's
+// 今天/昨天 buckets intentionally follow the user's system calendar.
+const localTimestamp = (year: number, monthIndex: number, day: number, hour = 12): string =>
+  new Date(year, monthIndex, day, hour).toISOString()
+const NOW = new Date(2026, 6, 24, 12)
 
 function session(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
     sessionId: id,
-    updatedAt: '2026-07-24T03:00:00+08:00',
+    updatedAt: localTimestamp(2026, 6, 24, 3),
     turnCount: 5,
     cwds: ['/Users/yyt/projects/swob'],
     projectPath: '/Users/yyt/.claude/projects/-Users-yyt-projects-swob',
@@ -26,10 +30,10 @@ describe('Vault 镜头分组', () => {
   it('日期镜头按今天、昨天、本周、本月、更早分桶', () => {
     const groups = groupSessionsByLens([
       session('today'),
-      session('yesterday', { updatedAt: '2026-07-23T12:00:00+08:00' }),
-      session('week', { updatedAt: '2026-07-21T12:00:00+08:00' }),
-      session('month', { updatedAt: '2026-07-02T12:00:00+08:00' }),
-      session('old', { updatedAt: '2026-06-30T12:00:00+08:00' })
+      session('yesterday', { updatedAt: localTimestamp(2026, 6, 23) }),
+      session('week', { updatedAt: localTimestamp(2026, 6, 21) }),
+      session('month', { updatedAt: localTimestamp(2026, 6, 2) }),
+      session('old', { updatedAt: localTimestamp(2026, 5, 30) })
     ], 'date', { now: NOW })
 
     expect(groups.map((group) => [group.id, group.items.length])).toEqual([

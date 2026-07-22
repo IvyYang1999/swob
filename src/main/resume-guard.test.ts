@@ -413,6 +413,53 @@ describe('resume guard', () => {
     expect(recoveryFlags).toEqual([false, true])
   })
 
+  it('远程会话显式选择目标实例后透传 preferredTargetInstanceId', async () => {
+    const sessionId = 'remote-import-with-selected-target'
+    const sourcePath = sourcePathFor(sessionId, 'claude-code', false)
+    const dirPath = path.join(tmpRoot, sessionId)
+    writeSessionMeta(dirPath, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: '2026-07-07T00:00:00Z',
+      updatedAt: '2026-07-07T00:01:00Z',
+      projectPath: '/Users/other-machine/project',
+      origin: {
+        deviceId: 'remote-device-selected-target',
+        hostname: 'remote-selected.local',
+        username: 'remote',
+        capturedAt: '2026-07-07T00:00:00Z'
+      }
+    })
+    writeBackup(dirPath, sessionId, 'claude-code')
+    scanLibrary()
+
+    const received: Array<{
+      allowRecovery?: boolean
+      requestedSessionId?: string
+      preferredTargetInstanceId?: string
+    }> = []
+    const opened: string[] = []
+    const result = await openGuardedResumeCommand({
+      sessionId,
+      sessions: [summary(sessionId, sourcePath, 'claude-code')],
+      preferredTargetInstanceId: 'claude-default',
+      prepareResumeTarget: async (_id, options) => {
+        received.push(options)
+        return { ok: true, state: 'restored', sourcePath: path.join(tmpRoot, `${sessionId}.jsonl`) }
+      },
+      openCommand: (command) => opened.push(command)
+    })
+
+    expect(result.ok).toBe(true)
+    expect(opened).toHaveLength(1)
+    expect(received).toEqual([{
+      allowRecovery: true,
+      requestedSessionId: sessionId,
+      preferredTargetInstanceId: 'claude-default'
+    }])
+  })
+
   it('continuation 物理 ID 复活时，用逻辑 Library ID 找备份但仍恢复物理 ID', async () => {
     const logicalId = '86000000-0000-4000-8000-000000000001'
     const physicalId = '86000000-0000-4000-8000-000000000002'

@@ -2,6 +2,20 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AnalysisDimension, AnalysisScope } from '../main/analysis-contract'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
+type ResumeTargetInstanceOption = {
+  id: string
+  kind: 'standard' | 'claude-window' | 'non-standard'
+  available: boolean
+  trusted: boolean
+}
+type SshTargetConfig = {
+  host: string
+  user: string
+  remotePath?: string
+  deviceId?: string
+  hostname?: string
+  isDefault?: boolean
+}
 
 async function parseJsonIpcResult<T>(result: Promise<string | T>): Promise<T> {
   const value = await result
@@ -27,14 +41,15 @@ const api = {
     ipcRenderer.invoke('sessions:search', query),
 
   // Terminal
-  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string, surface?: ResumeSurface) =>
-    ipcRenderer.invoke('terminal:resume', sessionId, terminalApp, permissionMode, cwd, surface),
-  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, terminalApp: string) =>
+  resumeSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string, surface?: ResumeSurface, preferredTargetInstanceId?: string) =>
+    ipcRenderer.invoke('terminal:resume', sessionId, terminalApp, permissionMode, cwd, surface, preferredTargetInstanceId),
+  resumeBatch: (sessions: Array<{ sessionId: string; permissionMode?: string; cwd?: string; preferredTargetInstanceId?: string }>, terminalApp: string) =>
     ipcRenderer.invoke('terminal:resumeBatch', sessions, terminalApp),
-  forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) =>
-    ipcRenderer.invoke('terminal:fork', sessionId, terminalApp, permissionMode, cwd),
+  forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string, preferredTargetInstanceId?: string) =>
+    ipcRenderer.invoke('terminal:fork', sessionId, terminalApp, permissionMode, cwd, preferredTargetInstanceId),
   buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) =>
     ipcRenderer.invoke('terminal:buildResumeCommand', sessionId, permissionMode, cwd),
+  listResumeTargetInstances: () => ipcRenderer.invoke('resume:listTargetInstances') as Promise<ResumeTargetInstanceOption[]>,
 
   // Config
   loadConfig: () => ipcRenderer.invoke('config:load'),
@@ -128,6 +143,8 @@ const api = {
   // SSH
   sshGetConfig: () => ipcRenderer.invoke('ssh:getConfig'),
   sshSetConfig: (config: { host: string; user: string; remotePath?: string } | null) => ipcRenderer.invoke('ssh:setConfig', config),
+  sshGetTargets: () => ipcRenderer.invoke('ssh:getTargets') as Promise<SshTargetConfig[]>,
+  sshSetTargets: (targets: SshTargetConfig[]) => ipcRenderer.invoke('ssh:setTargets', targets),
   sshResume: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:resume', sessionId, permissionMode),
   sshFork: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:fork', sessionId, permissionMode),
   sshBuildCommand: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:buildCommand', sessionId, permissionMode),

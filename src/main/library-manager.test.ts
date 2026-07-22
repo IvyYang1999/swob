@@ -574,6 +574,7 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
     const dirPath = await lib.ensureSessionInLibrary({
       sessionId,
       cwds: ['/fixture/outside-xx…0002'],
+      resumeCwd: '/Users/user-xx…0002/Work/swob-niw alpha',
       firstUserMessage: 'fixture-title-xx…0002',
       createdAt: '2026-07-19T00:00:00.000Z',
       updatedAt: '2026-07-19T00:01:00.000Z',
@@ -598,6 +599,7 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
       },
       sourceInstance: { kind: 'claude-default' }
     })
+    expect(written.resumeCwd).toBe('/Users/user-xx…0002/Work/swob-niw alpha')
     expect(lib.loadAppConfig().deviceId).toBe(written.origin.deviceId)
     expect(fs.existsSync(sourcePath)).toBe(false)
   })
@@ -684,6 +686,80 @@ describe('Library-only sessions（跨设备同步）', () => {
     const result = lib.findLibraryOnlySessions(localIds)
     // 应该不包含没有 backup 的 session
     expect(result.find(r => r.sessionId === 'no-backup-999')).toBeUndefined()
+  })
+
+  it('仅 manifest 落地时仍能构建云端会话摘要', () => {
+    const sessionId = 'manifest-only-remote-999'
+    const sessionDir = path.join(tmpRoot, '只有 manifest 的云端会话')
+    const sourcePath = `/Users/remote/.claude/projects/-Users-remote-work/${sessionId}.jsonl`
+    writeSessionMeta(sessionDir, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: [sourcePath],
+      customTitle: '云端正在下载的会话',
+      createdAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-22T00:01:00Z',
+      projectPath: '/Users/remote/.claude/projects/-Users-remote-work',
+      resumeCwd: '/Users/remote/work/swob-niw alpha',
+      origin: {
+        deviceId: 'remote-manifest-device',
+        hostname: 'remote-manifest.local',
+        username: 'remote',
+        capturedAt: '2026-07-22T00:00:00Z'
+      }
+    })
+
+    const tree = lib.scanLibrary()
+    const manifestSession = tree.ungroupedSessions.find((session) => session.sessionId === sessionId)
+    expect(manifestSession).toBeDefined()
+    const summary = lib.buildSessionSummaryFromManifest(manifestSession!)
+    expect(summary).toMatchObject({
+      sessionId,
+      firstUserMessage: '云端正在下载的会话',
+      resumeCwd: '/Users/remote/work/swob-niw alpha',
+      isManifestOnly: true,
+      cloudBackupState: 'missing'
+    })
+    expect(lib.getSessionResumeAvailability(sessionId)).toMatchObject({
+      canResume: false,
+      reason: lib.ICLOUD_BACKUP_WAITING_REASON,
+      sourcePath
+    })
+    expect(lib.isSessionCloudOnly(sessionId)).toBe(true)
+  })
+
+  it('manifest 已落地但 backup 是 iCloud placeholder 时返回等待下载原因', () => {
+    const sessionId = 'manifest-placeholder-remote-999'
+    const sessionDir = path.join(tmpRoot, 'manifest 和占位备份')
+    const sourcePath = `/Users/remote/.claude/projects/-Users-remote-work/${sessionId}.jsonl`
+    writeSessionMeta(sessionDir, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-22T00:01:00Z',
+      projectPath: '/Users/remote/.claude/projects/-Users-remote-work',
+      origin: {
+        deviceId: 'remote-placeholder-device',
+        hostname: 'remote-placeholder.local',
+        username: 'remote',
+        capturedAt: '2026-07-22T00:00:00Z'
+      }
+    })
+    fs.writeFileSync(path.join(sessionDir, '.backup.jsonl.icloud'), '')
+
+    const tree = lib.scanLibrary()
+    const manifestSession = tree.ungroupedSessions.find((session) => session.sessionId === sessionId)
+    expect(lib.buildSessionSummaryFromManifest(manifestSession!)).toMatchObject({
+      isManifestOnly: true,
+      cloudBackupState: 'icloud-placeholder'
+    })
+    expect(lib.getSessionResumeAvailability(sessionId)).toMatchObject({
+      canResume: false,
+      reason: lib.ICLOUD_BACKUP_WAITING_REASON,
+      sourcePath
+    })
+    expect(lib.isSessionCloudOnly(sessionId)).toBe(true)
   })
 
   it('【曾经的 bug】findLibrarySessionsWithMissingSources 不受 cachedSessions 影响', () => {
@@ -820,6 +896,21 @@ describe('Library-only sessions（跨设备同步）', () => {
         failureCode: 'remote-source-requires-explicit-target'
       })
     ])
+
+    const selected = await lib.ensureSessionResumeTarget(sessionId, {
+      allowRecovery: true,
+      preferredTargetInstanceId: 'claude-default',
+      runtimeIdentity: { homeDir: testHome, localDeviceId: 'test-device', localUsername: 'test' }
+    })
+    const expectedLocalPath = path.join(
+      testHome,
+      '.claude',
+      'projects',
+      'xxx',
+      `${sessionId}.jsonl`
+    )
+    expect(selected).toMatchObject({ ok: true, state: 'restored', sourcePath: expectedLocalPath })
+    expect(fs.readFileSync(expectedLocalPath, 'utf-8')).toBe(backupContent)
   })
 })
 
@@ -942,19 +1033,63 @@ describe('extractRemoteUser', () => {
   })
 })
 
-describe('claudeProjectPathToCwd', () => {
-  it('把 Claude 项目存储路径转为实际目录', () => {
-    expect(lib.claudeProjectPathToCwd('/Users/mac/.claude/projects/-Users-mac-projects-scsp'))
-      .toBe('/Users/mac/projects/scsp')
+describe('SSH cwd 精确性', () => {
+  it('只使用 manifest 里的精确 cwd，保留连字符和空格', () => {
+    const sessionId = 'ssh-exact-cwd-xx…0001'
+    const dirPath = path.join(tmpRoot, sessionId)
+    writeSessionMeta(dirPath, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: [`/Users/remote/.claude/projects/-Users-remote-Work-swob-niw-alpha/${sessionId}.jsonl`],
+      createdAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-22T00:01:00Z',
+      projectPath: '/Users/remote/.claude/projects/-Users-remote-Work-swob-niw-alpha',
+      resumeCwd: '/Users/remote/Work/swob-niw alpha',
+      origin: {
+        deviceId: 'remote-device-exact',
+        hostname: 'remote-exact.local',
+        username: 'remote',
+        capturedAt: '2026-07-22T00:00:00Z'
+      }
+    })
+    lib.scanLibrary()
+
+    expect(lib.getRemoteCwdForSession(sessionId)).toBe('/Users/remote/Work/swob-niw alpha')
+    const command = lib.buildSshResumeCommand(
+      sessionId,
+      { host: 'remote-exact.local', user: 'remote' },
+      undefined,
+      lib.getRemoteCwdForSession(sessionId)
+    )
+    expect(command).toContain("swob-niw alpha")
   })
 
-  it('处理更深层嵌套路径', () => {
-    expect(lib.claudeProjectPathToCwd('/home/user/.claude/projects/-home-user-work-my-project'))
-      .toBe('/home/user/work/my/project')
-  })
+  it('存量 manifest 无精确 cwd 时不猜测反解，并返回降级警告', () => {
+    lib.getOrCreateLocalDeviceId(() => 'local-device-legacy-cwd')
+    lib.setSshConfig({ host: 'legacy-host.local', user: 'remote' })
+    const sessionId = 'ssh-legacy-cwd-xx…0002'
+    const dirPath = path.join(tmpRoot, sessionId)
+    writeSessionMeta(dirPath, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: [`/Users/remote/.claude/projects/-Users-remote-Work-swob-niw-alpha/${sessionId}.jsonl`],
+      createdAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-22T00:01:00Z',
+      projectPath: '/Users/remote/.claude/projects/-Users-remote-Work-swob-niw-alpha',
+      origin: {
+        deviceId: 'remote-device-legacy-cwd',
+        hostname: 'remote-legacy.local',
+        username: 'remote',
+        capturedAt: '2026-07-22T00:00:00Z'
+      }
+    })
+    lib.scanLibrary()
 
-  it('不以连字符开头的路径返回 null', () => {
-    expect(lib.claudeProjectPathToCwd('/Users/mac/.claude/projects/some-random')).toBeNull()
+    expect(lib.getRemoteCwdForSession(sessionId)).toBeNull()
+    expect(lib.getSessionSshResumeAvailability(sessionId)).toMatchObject({
+      canResume: true,
+      warning: expect.stringContaining('路径可能不准')
+    })
   })
 })
 
@@ -991,6 +1126,100 @@ describe('buildSshResumeCommand', () => {
   it('remoteCwd 为 null 时不加 cd', () => {
     const cmd = lib.buildSshResumeCommand('sess-123', { host: 'mac.local', user: 'bob' }, undefined, null)
     expect(cmd).not.toContain('cd ')
+  })
+})
+
+describe('SSH 可用性与 origin 路由', () => {
+  it('无本机 JSONL 的远程会话仍可 SSH Resume', () => {
+    lib.getOrCreateLocalDeviceId(() => 'local-device-ssh-capability')
+    lib.setSshTargets([{
+      deviceId: 'remote-device-ssh-capability',
+      hostname: 'remote-capability.local',
+      host: '100.64.0.10',
+      user: 'remote'
+    }])
+    const sessionId = 'ssh-capability-remote-only'
+    const sourcePath = `/Users/remote/.claude/projects/-Users-remote-project/${sessionId}.jsonl`
+    writeSessionMeta(path.join(tmpRoot, sessionId), {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-22T00:01:00Z',
+      projectPath: '/Users/remote/.claude/projects/-Users-remote-project',
+      resumeCwd: '/Users/remote/project',
+      origin: {
+        deviceId: 'remote-device-ssh-capability',
+        hostname: 'remote-capability.local',
+        username: 'remote',
+        capturedAt: '2026-07-22T00:00:00Z'
+      }
+    })
+    lib.scanLibrary()
+
+    expect(lib.getSessionResumeAvailability(sessionId)).toMatchObject({ canResume: false, sourcePath })
+    expect(lib.getSessionSshResumeAvailability(sessionId)).toMatchObject({
+      canResume: true,
+      target: { host: '100.64.0.10', user: 'remote' }
+    })
+  })
+
+  it('两个 origin 会话分别路由到各自 SSH 配置', () => {
+    lib.getOrCreateLocalDeviceId(() => 'local-device-routing')
+    lib.setSshTargets([
+      { deviceId: 'origin-a', hostname: 'mac-a.local', host: 'ssh-a.local', user: 'alice' },
+      { deviceId: 'origin-b', hostname: 'mac-b.local', host: 'ssh-b.local', user: 'bob' }
+    ])
+    for (const fixture of [
+      { sessionId: 'route-session-a', deviceId: 'origin-a', hostname: 'mac-a.local' },
+      { sessionId: 'route-session-b', deviceId: 'origin-b', hostname: 'mac-b.local' }
+    ]) {
+      writeSessionMeta(path.join(tmpRoot, fixture.sessionId), {
+        schemaVersion: 2,
+        sessionId: fixture.sessionId,
+        sourceFilePaths: [`/Users/remote/.claude/projects/-remote/${fixture.sessionId}.jsonl`],
+        createdAt: '2026-07-22T00:00:00Z',
+        updatedAt: '2026-07-22T00:01:00Z',
+        projectPath: '/Users/remote/.claude/projects/-remote',
+        resumeCwd: '/Users/remote/project',
+        origin: {
+          deviceId: fixture.deviceId,
+          hostname: fixture.hostname,
+          username: 'remote',
+          capturedAt: '2026-07-22T00:00:00Z'
+        }
+      })
+    }
+    lib.scanLibrary()
+
+    expect(lib.getSshConfigForSession('route-session-a')).toMatchObject({ host: 'ssh-a.local', user: 'alice' })
+    expect(lib.getSshConfigForSession('route-session-b')).toMatchObject({ host: 'ssh-b.local', user: 'bob' })
+  })
+
+  it('旧单 SSH 配置自动迁移为默认路由', () => {
+    const migrationRoot = path.join(tmpRoot, 'legacy-ssh-config-root')
+    fs.mkdirSync(migrationRoot, { recursive: true })
+    fs.writeFileSync(path.join(migrationRoot, '.swob-config.json'), JSON.stringify({
+      libraryRoot: migrationRoot,
+      preferences: {
+        defaultViewMode: 'compact',
+        terminalApp: 'Terminal',
+        sshConfig: { host: 'legacy.local', user: 'legacy-user', remotePath: '/opt/claude' }
+      }
+    }), 'utf-8')
+    lib.initLibrary(migrationRoot)
+
+    expect(lib.getSshTargets()).toEqual([{
+      host: 'legacy.local',
+      user: 'legacy-user',
+      remotePath: '/opt/claude',
+      isDefault: true
+    }])
+    const migrated = JSON.parse(fs.readFileSync(path.join(migrationRoot, '.swob-config.json'), 'utf-8'))
+    expect(migrated.preferences.sshTargets).toEqual([expect.objectContaining({
+      host: 'legacy.local',
+      isDefault: true
+    })])
   })
 })
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -387,6 +388,26 @@ describe('UsageFact + AnalysisScope', () => {
       usageCoverage: { covered: 0, total: 1, percent: 0 }
     })
     expect(usageFactStoreStats()).toMatchObject({ sessions: 2, facts: 1 })
+
+    const persisted = new Database(usageFactStoreStats().databasePath, { readonly: true })
+    try {
+      expect(persisted.prepare(`
+        SELECT session_id, detection_status, parse_status, usage_status
+        FROM usage_sessions
+        ORDER BY session_id
+      `).all()).toEqual([
+        {
+          session_id: 'detected-only', detection_status: 'detected',
+          parse_status: 'placeholder', usage_status: 'unavailable'
+        },
+        {
+          session_id: 'parsed', detection_status: 'detected',
+          parse_status: 'parsed', usage_status: 'available'
+        }
+      ])
+    } finally {
+      persisted.close()
+    }
   })
 
   it('1700 session 任意 warm scope 查询 P95 < 200ms', () => {

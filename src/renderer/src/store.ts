@@ -481,7 +481,7 @@ export const useStore = create<AppState>((set, get) => ({
     )
     if (!session) {
       showToast(
-        get().locale === 'zh-CN' ? '找不到该会话，可能已被删除或移动' : 'Session not found — it may have been deleted or moved',
+        translate(get().locale, 'renderer.store.session_not_found'),
         'error'
       )
       return

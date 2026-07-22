@@ -442,10 +442,6 @@ export function LineagePage() {
   // Track previous membership key to detect actual node changes
   const prevMembershipKeyRef = useRef<string>('')
 
-  // Track whether user has interacted with camera — don't reset pan/zoom on updates
-  const userHasInteractedRef = useRef(false)
-  const initialFitDoneRef = useRef(false)
-
   // Force re-layout counter (incremented by "Re-layout" button)
   const [forceLayoutCounter, setForceLayoutCounter] = useState(0)
 

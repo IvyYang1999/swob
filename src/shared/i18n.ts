@@ -243,6 +243,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.inspector_tabs.details": "详情",
     "renderer.inspector_tabs.files": "文件",
     "renderer.inspector_tabs.audit": "审计",
+    "renderer.inspector_tabs.context": "Context",
     "renderer.lineage_page.computing_graph_layout": "正在计算图谱布局…",
     "renderer.lineage_page.session_galaxy": "会话图谱",
     "renderer.lineage_page.relayout": "重新布局",
@@ -828,6 +829,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.shared.test_the_connection": "测试连接",
     "renderer.shared.first_run_ssh_user_host_in_a_terminal": "先在终端运行 ssh user@host。确认无需交互输入密码且目标目录存在后，再交给 Swob。",
     "renderer.shared.connection_guide": "连接教程",
+    "renderer.cloud_session.placeholder": "该会话内容在远端，尚未同步到本地",
     // T122_RENDERER_ZH
   },
 
@@ -1072,6 +1074,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.inspector_tabs.details": "Details",
     "renderer.inspector_tabs.files": "Files",
     "renderer.inspector_tabs.audit": "Audit",
+    "renderer.inspector_tabs.context": "Context",
     "renderer.lineage_page.computing_graph_layout": "Computing graph layout…",
     "renderer.lineage_page.session_galaxy": "Session Galaxy",
     "renderer.lineage_page.relayout": "Re-layout",
@@ -1386,12 +1389,12 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.sidebar.cloud_found": "Found {value0} iCloud-only sessions",
     "renderer.sidebar.cloud_all_local": "iCloud status refreshed — all sessions are local",
     "renderer.sidebar.mode": "Sidebar mode",
-    "renderer.sidebar.folders": "Organized Sessions",
-    "renderer.sidebar.lens": "Browse All Sessions",
+    "renderer.sidebar.folders": "Organized",
+    "renderer.sidebar.lens": "Browse All",
     "renderer.sidebar.lens_dimension": "Group by",
     "renderer.sidebar.empty_title": "Start organizing your sessions",
-    "renderer.sidebar.empty_hint": "Switch to Browse All Sessions, or organize by project in one click.",
-    "renderer.sidebar.browse_lens": "Browse All Sessions",
+    "renderer.sidebar.empty_hint": "Switch to Browse All, or organize by project in one click.",
+    "renderer.sidebar.browse_lens": "Browse All",
     "renderer.sidebar.organize_project_arrow": "Organize by project →",
     "renderer.sidebar.refresh_cloud": "Refresh iCloud sync status",
     "renderer.sidebar.undo_organization": "Undo recent organization",
@@ -1657,6 +1660,7 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.shared.test_the_connection": "Test the connection",
     "renderer.shared.first_run_ssh_user_host_in_a_terminal": "First run ssh user@host in a terminal. Confirm key login and the target path before using Swob.",
     "renderer.shared.connection_guide": "Connection guide",
+    "renderer.cloud_session.placeholder": "Session content is on the remote server and hasn't been synced locally",
     // T122_RENDERER_EN
   }
 }

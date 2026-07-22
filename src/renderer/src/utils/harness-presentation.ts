@@ -34,14 +34,14 @@ const REGISTRY: Record<string, HarnessPresentation> = {
   },
   codex: {
     displayName: 'Codex',
-    shortLabel: 'CX',
+    shortLabel: 'CDX',
     iconImage: openaiIcon,
     badgeClass: 'bg-[#5a9fd4]/15 text-[#5a9fd4]',
     chartColor: '#3b82f6',
   },
   cursor: {
     displayName: 'Cursor',
-    shortLabel: 'CR',
+    shortLabel: 'CUR',
     iconImage: cursorIcon,
     badgeClass: 'bg-[#a1a1aa]/15 text-[#a1a1aa]',
     chartColor: '#a1a1aa',

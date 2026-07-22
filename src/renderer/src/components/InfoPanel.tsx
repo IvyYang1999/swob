@@ -9,8 +9,9 @@ import { ContextInspectorPanel } from './ContextInspectorPanel'
 import { SessionAuditPanel } from './SessionAuditPanel'
 import { InspectorTabs, DisclosureSection } from './inspector'
 import type { InspectorTab } from './inspector'
+import { getHarnessPresentation } from '../utils/harness-presentation'
 
-// ─── Shared types & utilities ───────────────────────────────────────
+// --- Shared types & utilities ---
 
 interface FileRef {
   path: string
@@ -46,7 +47,16 @@ function formatTokenShort(n: number): string {
   return String(n)
 }
 
-// ─── Shared sub-components ──────────────────────────────────────────
+function formatDurationShort(createdAt: string, updatedAt: string): string {
+  const ms = new Date(updatedAt).getTime() - new Date(createdAt).getTime()
+  if (ms < 60_000) return '<1m'
+  if (ms < 3600_000) return `${Math.round(ms / 60_000)}m`
+  const h = Math.floor(ms / 3600_000)
+  const m = Math.round((ms % 3600_000) / 60_000)
+  return m > 0 ? `${h}h${m}m` : `${h}h`
+}
+
+// --- Shared sub-components ---
 
 function ClickablePath({ path, isDir, dimmed }: { path: string; isDir?: boolean; dimmed?: boolean }) {
   const t = useT()
@@ -100,7 +110,7 @@ function ActionIcon({ action }: { action: string }) {
   }
 }
 
-// ─── File tree building ─────────────────────────────────────────────
+// --- File tree building ---
 
 function buildFileTree(files: FileRef[]): TreeNode {
   const root: TreeNode = { name: '', fullPath: '', children: new Map() }
@@ -208,7 +218,7 @@ function FileTreeNode({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
   return null
 }
 
-// ─── CollapsibleFileList ────────────────────────────────────────────
+// --- CollapsibleFileList ---
 
 function CollapsibleFileList({
   icon: Icon, label, paths, isDir, defaultOpen = true, maxShow = 5
@@ -259,7 +269,7 @@ function CollapsibleFileList({
   )
 }
 
-// ─── ImageThumb / ImageGallery ──────────────────────────────────────
+// --- ImageThumb / ImageGallery ---
 
 interface ImageEntry {
   src: string | null
@@ -358,13 +368,14 @@ function useSessionImages(messages: Array<{ uuid: string; type: string; timestam
   return entries
 }
 
-function ImageGallery({ messages, onNavigate }: {
+function ImageGallery({ messages, onNavigate, defaultOpen = true }: {
   messages: Array<{ uuid: string; type: string; timestamp: string; images: string[]; textContent: string }>
   onNavigate: (turnUuid: string) => void
+  defaultOpen?: boolean
 }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(defaultOpen)
   const entries = useSessionImages(messages)
 
   if (entries.length === 0) return null
@@ -402,7 +413,7 @@ function ImageGallery({ messages, onNavigate }: {
   )
 }
 
-// ─── FileTreeSection ────────────────────────────────────────────────
+// --- FileTreeSection ---
 
 function FileTreeSection({ files }: { files: FileRef[] }) {
   const t = useT()
@@ -437,13 +448,13 @@ function FileTreeSection({ files }: { files: FileRef[] }) {
   )
 }
 
-// ─── HighlightList ──────────────────────────────────────────────────
+// --- HighlightList ---
 
-function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; sessionId: string }) {
+function HighlightList({ highlights, sessionId, defaultOpen = true }: { highlights: Highlight[]; sessionId: string; defaultOpen?: boolean }) {
   const { removeHighlight } = useStore()
   const t = useT()
   const locale = useStore((s) => s.locale)
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(defaultOpen)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   if (highlights.length === 0) return null
@@ -510,7 +521,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
   )
 }
 
-// ─── Branch Relationships ───────────────────────────────────────────
+// --- Branch Relationships ---
 
 function BranchRelationships({ session }: { session: any }) {
   const locale = useStore((s) => s.locale)
@@ -607,98 +618,69 @@ function BranchRelationships({ session }: { session: any }) {
   )
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Tab 1: Details
-// ═══════════════════════════════════════════════════════════════════
+// ===================================================================
+// Compact Session Info Card (always visible, replaces old Details tab)
+// ===================================================================
 
-function DetailsTab({ session, highlights, onNavigate }: {
-  session: any
-  highlights: Highlight[]
-  onNavigate?: (id: string) => void
-}) {
+function SessionInfoCard({ session }: { session: any }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
   const s = session
+  const hp = getHarnessPresentation(s.source)
+  const duration = formatDurationShort(s.createdAt, s.updatedAt)
+  const shortCwd = s.cwds?.[0]?.replace(/^\/Users\/[^/]+/, '~') || ''
+
+  const hasTokens = s.tokenUsage && (
+    s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0 ||
+    s.tokenUsage.cacheCreationTokens > 0 || s.tokenUsage.cacheReadTokens > 0
+  )
+  const tokenUnavailable = s.tokenAccounting?.provenance === 'unavailable'
 
   return (
-    <div className="space-y-4">
-      {/* Basic metadata */}
-      <section className="space-y-2 text-xs">
-        <div className="flex items-center gap-2 text-secondary">
-          <Clock size={12} />
-          <span>{t('info.created', { time: formatDateTime(s.createdAt, locale) })}</span>
-        </div>
-        <div className="flex items-center gap-2 text-secondary">
-          <Clock size={12} />
-          <span>{t('info.modified', { time: formatDateTime(s.updatedAt, locale) })}</span>
-        </div>
-        <div className="flex items-center gap-2 text-secondary">
-          <MessageSquare size={12} />
-          <span>{t('info.turns', { n: s.turnCount })}</span>
-        </div>
+    <section className="rounded bg-surface/60 border border-edge px-3 py-2.5 space-y-2">
+      {/* Row 1: source badge + model + turn count + duration */}
+      <div className="flex items-center gap-2 flex-wrap text-xs">
+        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${hp.badgeClass}`}>
+          {hp.shortLabel}
+        </span>
+        <span className="text-secondary">{s.turnCount} {t('renderer.info_panel.turns')}</span>
+        <span className="text-muted">{duration}</span>
         {s.compactCount > 0 && (
-          <div className="flex items-center gap-2 text-soft-amber text-xs">
-            <span>Compact: {s.compactCount}×</span>
-          </div>
+          <span className="text-soft-amber text-[10px]">compact {s.compactCount}x</span>
         )}
-        <div className="flex items-center gap-2 text-secondary">
-          <HardDrive size={12} />
-          <span>{formatSize(s.fileSizeBytes)} · v{s.version}</span>
-        </div>
-        {s.tokenAccounting?.provenance === 'unavailable' ? (
-          <div className="flex items-center gap-2 text-muted" title={s.tokenAccounting.unavailableReason || 'Authoritative token usage is unavailable'}>
-            <Coins size={12} />
-            <span>{translate(locale, 'renderer.info_panel.tokens_unavailable')}</span>
-          </div>
-        ) : s.tokenUsage && (s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0 || s.tokenUsage.cacheCreationTokens > 0 || s.tokenUsage.cacheReadTokens > 0) && (
-          <div className="flex items-center gap-2 text-secondary" title="Processed input = non-cached input + cache read + cache write. Output is added once; reasoning remains an output subset.">
-            <Coins size={12} />
-            <span>
-              {formatTokenShort(s.tokenUsage.inputTokens + s.tokenUsage.cacheCreationTokens + s.tokenUsage.cacheReadTokens)} in / {formatTokenShort(s.tokenUsage.outputTokens)} out
-              {s.tokenUsage.cacheReadTokens > 0 && <span className="text-faint ml-1">({formatTokenShort(s.tokenUsage.cacheReadTokens)} cached)</span>}
-            </span>
-          </div>
+      </div>
+
+      {/* Row 2: tokens */}
+      <div className="text-[11px]">
+        {tokenUnavailable ? (
+          <span className="text-muted">{translate(locale, 'renderer.info_panel.tokens_unavailable')}</span>
+        ) : hasTokens ? (
+          <span className="text-secondary">
+            {formatTokenShort(s.tokenUsage.inputTokens + s.tokenUsage.cacheCreationTokens + s.tokenUsage.cacheReadTokens)} in / {formatTokenShort(s.tokenUsage.outputTokens)} out
+            {s.tokenUsage.cacheReadTokens > 0 && <span className="text-faint ml-1">({formatTokenShort(s.tokenUsage.cacheReadTokens)} cached)</span>}
+          </span>
+        ) : (
+          <span className="text-muted">{formatSize(s.fileSizeBytes)}</span>
         )}
-        <div className="flex items-center gap-2 text-muted text-xs">
-          <span className="text-faint shrink-0">Session ID:</span>
-          <span className="text-[10px] font-mono select-all cursor-text truncate">{s.sessionId}</span>
+      </div>
+
+      {/* Row 3: project path */}
+      {shortCwd && (
+        <div
+          className="text-[10px] text-muted font-mono truncate cursor-pointer hover:text-soft-blue"
+          title={s.cwds?.[0]}
+          onClick={() => { if (s.cwds?.[0]) window.api.openPath(s.cwds[0]) }}
+        >
+          {shortCwd}
         </div>
-      </section>
-
-      {/* Highlights / annotations */}
-      <HighlightList highlights={highlights} sessionId={s.sessionId} />
-
-      {/* Branch relationships */}
-      <BranchRelationships session={s} />
-
-      {/* Session family tree (lineage) — default collapsed */}
-      <DisclosureSection
-        title={translate(locale, 'renderer.session_family_tree.session_lineage')}
-        icon={<GitBranch size={12} className="text-soft-purple" />}
-        defaultOpen={false}
-      >
-        <SessionFamilyTree sessionId={s.sessionId} />
-      </DisclosureSection>
-
-      {/* CLAUDE.md content */}
-      {s.claudeMdContent && (
-        <section>
-          <div className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
-            <FileText size={12} />
-            <span>{t('info.claude_docs')}</span>
-          </div>
-          <pre className="text-[11px] text-muted bg-surface rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
-            {s.claudeMdContent}
-          </pre>
-        </section>
       )}
-    </div>
+    </section>
   )
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Tab 2: Files
-// ═══════════════════════════════════════════════════════════════════
+// ===================================================================
+// Tab 1: Files
+// ===================================================================
 
 function FilesTab({ session, onNavigate }: {
   session: any
@@ -708,7 +690,6 @@ function FilesTab({ session, onNavigate }: {
   const locale = useStore((s) => s.locale)
   const s = session
   const referencedFiles: FileRef[] = s.referencedFiles || []
-  const configFiles: string[] = s.configFiles || []
   const nonImageFiles = referencedFiles.filter((f: FileRef) => !f.actions.includes('user-image'))
 
   // Group files by cwd
@@ -735,7 +716,7 @@ function FilesTab({ session, onNavigate }: {
 
   const totalFileCount = nonImageFiles.length
 
-  if (totalFileCount === 0 && configFiles.length === 0 && s.cwds.length === 0) {
+  if (totalFileCount === 0 && s.cwds.length === 0) {
     return (
       <div className="text-xs text-muted py-8 text-center">
         {translate(locale, 'renderer.info_panel.no_file_operations')}
@@ -794,68 +775,74 @@ function FilesTab({ session, onNavigate }: {
           )}
         </DisclosureSection>
       ))}
-
-      {/* Image gallery */}
-      <ImageGallery
-        messages={s.messages || []}
-        onNavigate={(turnUuid) => onNavigate?.(`turn-${turnUuid}`)}
-      />
-
-      {/* Config files */}
-      <CollapsibleFileList
-        icon={Settings}
-        label={t('info.config_files')}
-        paths={configFiles}
-      />
     </div>
   )
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Tab 3: Audit
-// ═══════════════════════════════════════════════════════════════════
+// ===================================================================
+// Tab 2: Context
+// ===================================================================
 
-function AuditTab({ session, analysisReady }: {
+function ContextTab({ session, highlights, onNavigate, analysisReady }: {
   session: any
+  highlights: Highlight[]
+  onNavigate?: (id: string) => void
   analysisReady: boolean
 }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
   const s = session
+  const configFiles: string[] = s.configFiles || []
   const toolEntries = Object.entries(s.toolUsage).sort((a, b) => (b[1] as number) - (a[1] as number))
-
-  if (!analysisReady) {
-    return (
-      <div className="text-xs text-muted py-8 text-center">
-        {translate(locale, 'renderer.info_panel.loading_audit_data')}
-      </div>
-    )
-  }
 
   return (
     <div className="space-y-4">
-      {/* Session Audit — health score, metrics, anti-patterns */}
-      <SessionAuditPanel filePath={s.filePath} />
+      {/* Uploaded images (default EXPANDED) */}
+      <ImageGallery
+        messages={s.messages || []}
+        onNavigate={(turnUuid) => onNavigate?.(`turn-${turnUuid}`)}
+        defaultOpen={true}
+      />
 
-      {/* Execution tree — default collapsed */}
-      <DisclosureSection
-        title={translate(locale, 'renderer.execution_tree_panel.execution_tree')}
-        icon={<Wrench size={12} />}
-        defaultOpen={false}
-      >
-        <ExecutionTreePanel filePath={s.filePath} />
-      </DisclosureSection>
+      {/* Highlights / notes (default EXPANDED) */}
+      <HighlightList highlights={highlights} sessionId={s.sessionId} defaultOpen={true} />
 
-      {/* Context Inspector — default collapsed */}
-      <DisclosureSection
-        title={translate(locale, 'renderer.info_panel.context_analysis')}
-        icon={<MessageSquare size={12} />}
-        defaultOpen={false}
-      >
+      {/* Config files (moved from Files tab) */}
+      <CollapsibleFileList
+        icon={Settings}
+        label={t('info.config_files')}
+        paths={configFiles}
+      />
+
+      {/* CLAUDE.md content */}
+      {s.claudeMdContent && (
+        <DisclosureSection
+          title={t('info.claude_docs')}
+          icon={<FileText size={12} />}
+          defaultOpen={false}
+        >
+          <pre className="text-[11px] text-muted bg-surface rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
+            {s.claudeMdContent}
+          </pre>
+        </DisclosureSection>
+      )}
+
+      {/* Context Inspector */}
+      {analysisReady && (
         <ContextInspectorPanel filePath={s.filePath} />
-      </DisclosureSection>
+      )}
 
-      {/* Tool usage — default collapsed */}
+      {/* Execution tree */}
+      {analysisReady && (
+        <ExecutionTreePanel filePath={s.filePath} />
+      )}
+
+      {/* Session Audit */}
+      {analysisReady && (
+        <SessionAuditPanel filePath={s.filePath} />
+      )}
+
+      {/* Tool usage */}
       {toolEntries.length > 0 && (
         <DisclosureSection
           title={t('info.tool_usage')}
@@ -874,7 +861,7 @@ function AuditTab({ session, analysisReady }: {
         </DisclosureSection>
       )}
 
-      {/* Skill invocations — default collapsed */}
+      {/* Skill invocations */}
       {s.skillInvocations.length > 0 && (
         <DisclosureSection
           title={t('info.skill_invocations')}
@@ -892,13 +879,25 @@ function AuditTab({ session, analysisReady }: {
           </div>
         </DisclosureSection>
       )}
+
+      {/* Branch relationships */}
+      <BranchRelationships session={s} />
+
+      {/* Session family tree (lineage) */}
+      <DisclosureSection
+        title={translate(locale, 'renderer.session_family_tree.session_lineage')}
+        icon={<GitBranch size={12} className="text-soft-purple" />}
+        defaultOpen={false}
+      >
+        <SessionFamilyTree sessionId={s.sessionId} />
+      </DisclosureSection>
     </div>
   )
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// ===================================================================
 // Main InfoPanel
-// ═══════════════════════════════════════════════════════════════════
+// ===================================================================
 
 export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (id: string) => void }) {
   const t = useT()
@@ -911,11 +910,11 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
   const selectedSession = useDeferredValue(selectedSessionSnapshot)
   const [panelReadySessionId, setPanelReadySessionId] = useState<string | null>(null)
   const [analysisReadySessionId, setAnalysisReadySessionId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<InspectorTab>('details')
+  const [activeTab, setActiveTab] = useState<InspectorTab>('files')
 
-  // Reset tab to 'details' when session changes
+  // Reset tab to 'files' when session changes
   useEffect(() => {
-    setActiveTab('details')
+    setActiveTab('files')
   }, [selectedSession?.id])
 
   useEffect(() => {
@@ -942,22 +941,18 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
       <div className="p-4 space-y-4">
         <h3 className="text-sm font-medium text-body">{t('info.title')}</h3>
 
-        {/* Tab switcher */}
+        {/* Always-visible compact session info card */}
+        <SessionInfoCard session={s} />
+
+        {/* Tab switcher: Files | Context */}
         <InspectorTabs
           activeTab={activeTab}
           onTabChange={setActiveTab}
           locale={locale}
+          tabs={['files', 'context']}
         />
 
         {/* Tab content */}
-        {activeTab === 'details' && (
-          <DetailsTab
-            session={s}
-            highlights={highlights}
-            onNavigate={onNavigate}
-          />
-        )}
-
         {activeTab === 'files' && (
           <FilesTab
             session={s}
@@ -965,9 +960,11 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
           />
         )}
 
-        {activeTab === 'audit' && (
-          <AuditTab
+        {activeTab === 'context' && (
+          <ContextTab
             session={s}
+            highlights={highlights}
+            onNavigate={onNavigate}
             analysisReady={analysisReadySessionId === s.id}
           />
         )}

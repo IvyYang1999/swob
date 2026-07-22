@@ -2,15 +2,10 @@ import { useEffect, useState, useCallback, useRef, Component, type ReactNode, ty
 import { useStore, type ToastMessage } from './store'
 import { useT } from './i18n'
 import { Sidebar } from './components/Sidebar'
-import { ChatViewer } from './components/ChatViewer'
-import { InfoPanel } from './components/InfoPanel'
 import { Toolbar } from './components/Toolbar'
-import { SearchResults } from './components/SearchResults'
 import { UpdateBanner } from './components/UpdateBanner'
-import { SettingsPanel } from './components/settings/SettingsPanel'
-import { InsightsPage } from './components/insights/InsightsPage'
-import { LineagePage } from './components/LineagePage'
 import { Onboarding } from './components/Onboarding'
+import { BUILTIN_VIEW_IDS, builtinViewRegistry } from './registry/builtin-view-registry'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
@@ -153,6 +148,16 @@ export default function App() {
     setInfoPanelWidth(w => Math.max(240, Math.min(600, w + delta)))
   }, [])
 
+  const viewContext = {
+    infoPanelWidth,
+    onInfoNavigate: (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+  const activeViewId = lineageOpen
+    ? BUILTIN_VIEW_IDS.lineage
+    : insightsOpen
+      ? BUILTIN_VIEW_IDS.insights
+      : BUILTIN_VIEW_IDS.chat
+
   if (onboarding?.needed) {
     return (
       <ErrorBoundary>
@@ -183,15 +188,15 @@ export default function App() {
         <div className="flex-1 flex overflow-hidden relative">
           <Sidebar width={sidebarWidth} />
           <ResizeHandle side="left" onResize={handleSidebarResize} />
-          {lineageOpen ? <LineagePage /> : insightsOpen ? <InsightsPage /> : <ChatViewer />}
+          {builtinViewRegistry.require(activeViewId).render(viewContext)}
           {infoPanelOpen && !settingsOpen && !insightsOpen && !lineageOpen && (
             <>
               <ResizeHandle side="right" onResize={handleInfoPanelResize} />
-              <InfoPanel width={infoPanelWidth} onNavigate={(id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />
+              {builtinViewRegistry.require(BUILTIN_VIEW_IDS.info).render(viewContext)}
             </>
           )}
-          {settingsOpen && <SettingsPanel />}
-          {searchQuery && <SearchResults />}
+          {settingsOpen && builtinViewRegistry.require(BUILTIN_VIEW_IDS.settings).render(viewContext)}
+          {searchQuery && builtinViewRegistry.require(BUILTIN_VIEW_IDS.searchResults).render(viewContext)}
         </div>
         <UpdateBanner />
         <ToastContainer />

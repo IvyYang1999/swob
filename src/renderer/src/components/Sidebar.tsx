@@ -14,6 +14,13 @@ import { SshConfigModal } from './SshConfigModal'
 import { resolveResumeCwd } from '../utils/chat-helpers'
 import { OrganizerPanel } from './OrganizerPanel'
 import { VaultLocationModal } from './VaultLocationModal'
+import {
+  SESSION_CONTEXT_ACTION_COMMAND_IDS,
+  createBuiltinCommandRegistry,
+  type BuiltinSessionAction
+} from '../../../shared/registry/builtin-commands'
+
+const sessionContextCommandRegistry = createBuiltinCommandRegistry()
 
 function formatDate(iso: string, locale: string, t: (key: string, params?: Record<string, string | number>) => string): string {
   const d = new Date(iso)
@@ -634,22 +641,27 @@ export function Sidebar({ width }: { width: number }) {
       folders
     })
     if (!result) return
-    if (result.action === 'resume') {
-      if (session) {
-        resumeSession(opId, session.permissionMode, resolveResumeCwd(session))
+    if (!(result.action in SESSION_CONTEXT_ACTION_COMMAND_IDS)) return
+    const action = result.action as BuiltinSessionAction
+    await sessionContextCommandRegistry.require(SESSION_CONTEXT_ACTION_COMMAND_IDS[action]).run({
+      payload: result,
+      sessionAction: (registeredAction) => {
+        if (registeredAction === 'resume') {
+          if (session) resumeSession(opId, session.permissionMode, resolveResumeCwd(session))
+        } else if (registeredAction === 'rename') {
+          const target = sessions.find((item) => item.id === sessionId)
+          const meta = config?.sessionMeta[sessionId] || config?.sessionMeta[target?.sessionId || '']
+          setSessionRenameValue(meta?.customTitle || target?.firstUserMessage || '')
+          setRenamingSessionId(sessionId)
+        } else if (registeredAction === 'smartRename') {
+          void smartRenameSingle(opId)
+        } else if (registeredAction === 'addToFolder' && result.folderId) {
+          addSessionToFolder(result.folderId, opId)
+        } else if (registeredAction === 'removeFromFolder' && result.folderId) {
+          removeSessionFromFolder(result.folderId, opId)
+        }
       }
-    } else if (result.action === 'rename') {
-      const s = sessions.find((s) => s.id === sessionId)
-      const meta = config?.sessionMeta[sessionId] || config?.sessionMeta[s?.sessionId || '']
-      setSessionRenameValue(meta?.customTitle || s?.firstUserMessage || '')
-      setRenamingSessionId(sessionId)
-    } else if (result.action === 'smartRename') {
-      void smartRenameSingle(opId)
-    } else if (result.action === 'addToFolder' && result.folderId) {
-      addSessionToFolder(result.folderId, opId)
-    } else if (result.action === 'removeFromFolder' && result.folderId) {
-      removeSessionFromFolder(result.folderId, opId)
-    }
+    })
   }, [sessions, config, addSessionToFolder, removeSessionFromFolder, resumeSession, smartRenameSingle, t])
 
   const handleSubmitRenameSession = useCallback(() => {

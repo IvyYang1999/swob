@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AnalysisDimension, AnalysisScope } from '../main/analysis-contract'
 import type { OnboardingBackupSizeEstimate } from '../shared/onboarding-backup-size'
+import type { DashboardLayoutConfig } from '../shared/registry/builtin-widgets'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeTargetInstanceOption = {
@@ -91,6 +92,9 @@ const api = {
 
   // Library
   libraryGetRoot: () => ipcRenderer.invoke('library:getRoot'),
+  dashboardLoadLayout: () => ipcRenderer.invoke('dashboard:loadLayout') as Promise<DashboardLayoutConfig>,
+  dashboardSaveLayout: (layout: DashboardLayoutConfig) =>
+    ipcRenderer.invoke('dashboard:saveLayout', layout) as Promise<DashboardLayoutConfig>,
   libraryGetMdPath: (sessionId: string) => ipcRenderer.invoke('library:getMdPath', sessionId),
   libraryGetDirPath: (sessionId: string) => ipcRenderer.invoke('library:getDirPath', sessionId),
   libraryOpenInFinder: () => ipcRenderer.invoke('library:openInFinder'),

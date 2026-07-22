@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, Sparkles, X
+  Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, Sparkles, Bot, X
 } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT, type Locale } from '../../i18n'
@@ -13,9 +13,10 @@ import { SshSettings } from './SshSettings'
 import { ViewSettings } from './ViewSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { CliSettings } from './CliSettings'
+import { AssistantSettings } from './AssistantSettings'
 import { WindowsAlphaNotice, usePlatformCapabilities } from '../WindowsAlphaNotice'
 
-export type SettingsCategory = 'general' | 'ai' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli'
+export type SettingsCategory = 'general' | 'ai' | 'assistant' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli'
 
 const CATEGORIES: Array<{
   id: SettingsCategory
@@ -26,6 +27,7 @@ const CATEGORIES: Array<{
 }> = [
   { id: 'general', icon: Monitor, zh: '通用', en: 'General', ja: '一般' },
   { id: 'ai', icon: Sparkles, zh: 'AI 智能', en: 'AI & Smart', ja: 'AI' },
+  { id: 'assistant', icon: Bot, zh: '助手', en: 'Assistant', ja: 'アシスタント' },
   { id: 'terminal', icon: Terminal, zh: '终端', en: 'Terminal', ja: 'ターミナル' },
   { id: 'resume', icon: Play, zh: 'Resume', en: 'Resume', ja: 'Resume' },
   { id: 'ssh', icon: Server, zh: 'SSH', en: 'SSH', ja: 'SSH' },
@@ -138,6 +140,7 @@ export function SettingsPanel() {
               <WindowsAlphaNotice capabilities={platformCapabilities} />
               {category === 'general' && <GeneralSettings />}
               {category === 'ai' && <ProfilesSettings />}
+              {category === 'assistant' && <AssistantSettings />}
               {category === 'terminal' && <TerminalSettings />}
               {category === 'resume' && <ResumeSettings />}
               {category === 'ssh' && <SshSettings />}

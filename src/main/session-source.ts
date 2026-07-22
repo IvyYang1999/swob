@@ -1,10 +1,10 @@
 import * as fs from 'fs'
-import * as path from 'path'
 import type { SessionSource } from './types'
+import { normalizePortablePath } from './portable-path'
 
 export function detectSessionSourceFromPath(filePath?: string): SessionSource | null {
   if (!filePath) return null
-  const normalized = filePath.split(path.sep).join('/')
+  const normalized = normalizePortablePath(filePath)
   if (normalized.includes('/.codex/sessions/')) return 'codex'
   if (normalized.includes('/.cursor/projects/')) return 'cursor'
   if (normalized.includes('/.local/share/opencode/opencode.db')) return 'opencode'

@@ -5,6 +5,7 @@ import * as path from 'path'
 import {
   buildResumeAction,
   buildResumeCommand,
+  buildResumeLaunchSpec,
   resolveSessionActionContext
 } from './session-actions'
 import { shellQuote } from './resume-terminal'
@@ -60,6 +61,66 @@ function summary(overrides: Partial<SessionSummary>): SessionSummary {
 }
 
 describe('session action context', () => {
+  it('Windows Claude Resume 以 argv/cwd/env 建模，不拼 shell 字符串', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-win-launch-'))
+    try {
+      expect(buildResumeLaunchSpec(
+        '82000000-0000-4000-8000-000000000001',
+        'bypassPermissions',
+        dir,
+        'claude-code',
+        'C:\\Users\\Alice\\.claude-window\\profile',
+        'win32'
+      )).toEqual({
+        executable: 'claude',
+        args: ['--dangerously-skip-permissions', '--resume', '82000000-0000-4000-8000-000000000001'],
+        cwd: dir,
+        env: { CLAUDE_CONFIG_DIR: 'C:\\Users\\Alice\\.claude-window\\profile' },
+        target: 'native',
+        keepOpen: true
+      })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('Windows Codex Resume 保留 -C 参数并禁止 Alpha 外来源', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-win-codex-launch-'))
+    try {
+      expect(buildResumeLaunchSpec('thread-123', undefined, dir, 'codex', undefined, 'win32'))
+        .toMatchObject({ executable: 'codex', args: ['resume', 'thread-123', '-C', dir], cwd: dir })
+      expect(() => buildResumeLaunchSpec('ses_abc', undefined, dir, 'opencode', undefined, 'win32'))
+        .toThrow('Windows Alpha 暂不支持 OpenCode')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('Windows 只允许 Claude 终端 Resume 与 Codex Desktop deep-link', () => {
+    expect(() => buildResumeAction(
+      '82000000-0000-4000-8000-000000000001',
+      undefined,
+      undefined,
+      'claude-code',
+      undefined,
+      'claude-desktop',
+      'win32'
+    )).toThrow('Windows Alpha 暂不支持 claude-desktop Resume')
+
+    expect(buildResumeAction(
+      '019abcde-1234-7000-8000-0123456789ab',
+      undefined,
+      undefined,
+      'codex',
+      undefined,
+      'codex-desktop',
+      'win32'
+    )).toEqual({
+      kind: 'deep-link',
+      url: 'codex://threads/019abcde-1234-7000-8000-0123456789ab'
+    })
+  })
+
   it('opencode resume command uses opencode --session and cd cwd when available', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-opencode-resume-'))
 
@@ -140,7 +201,7 @@ describe('session action context', () => {
       undefined,
       'remote-control'
     )
-    expect(action).toEqual({
+    expect(action).toMatchObject({
       kind: 'remote-control',
       command: `claude --resume ${shellQuote('82000000-0000-4000-8000-000000000001')} --remote-control`
     })

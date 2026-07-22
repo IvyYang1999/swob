@@ -1,0 +1,97 @@
+name: Windows Native Alpha
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/t107-windows-alpha
+    paths:
+      - '.github/workflows/windows-alpha.yml'
+      - 'electron-builder.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/install-windows-alpha-smoke.ps1'
+      - 'src/**'
+      - 'e2e/**'
+  pull_request:
+    paths:
+      - '.github/workflows/windows-alpha.yml'
+      - 'electron-builder.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'scripts/install-windows-alpha-smoke.ps1'
+      - 'src/**'
+      - 'e2e/**'
+
+jobs:
+  test-and-package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # better-sqlite3 13 ships win32-x64.node in its npm tarball, but npm
+      # synthesizes `node-gyp rebuild` from binding.gyp when lifecycle scripts
+      # are enabled. Avoid compiling a prebuilt addon, then initialize only the
+      # JS tool binaries whose postinstall steps are actually required.
+      - name: Install dependencies without native rebuilds
+        run: npm ci --ignore-scripts
+      - name: Initialize tool binaries and verify the SQLite prebuild
+        shell: pwsh
+        run: |
+          node node_modules/electron/install.js
+          node node_modules/esbuild/install.js
+          node node_modules/vite/node_modules/esbuild/install.js
+          node -e "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.prepare('SELECT 1').get(); db.close(); console.log('better-sqlite3 prebuild ok')"
+      # The repository-wide suite includes deliberate macOS contracts (brctl,
+      # /Applications, POSIX mode bits and Claude Desktop). macOS runs that full
+      # gate separately; this runner executes every T107 platform boundary plus
+      # a real NTFS/junction suite before the packaged-app E2E below.
+      - name: Run Windows Alpha unit and integration suites
+        run: >-
+          npx vitest run
+          src/main/platform-support.test.ts
+          src/main/runtime-home.test.ts
+          src/main/codex-loader.test.ts
+          src/main/session-source.test.ts
+          src/main/terminal-detector.test.ts
+          src/main/deep-link.test.ts
+          src/main/resume-recovery-planner.test.ts
+          src/main/resume-recovery-planner-purity.test.ts
+          src/main/windows-native-fs.test.ts
+          src/renderer/src/components/SettingsPanel.test.tsx
+      # These files also contain intentional macOS/POSIX contracts. Select the
+      # Windows cases by name so this gate tests the Alpha boundary, not a
+      # foreign operating system's behavior.
+      - name: Run Windows path discovery contracts
+        run: npx vitest run src/main/session-loader.test.ts -t "Windows"
+      - name: Run Windows session action contracts
+        run: npx vitest run src/main/session-actions.test.ts -t "Windows"
+      - name: Run Windows terminal launch contracts
+        run: npx vitest run src/main/resume-terminal.test.ts -t "Windows|PowerShell"
+      - run: npm run build:win
+      - name: Install and inspect the unsigned NSIS package
+        shell: pwsh
+        run: ./scripts/install-windows-alpha-smoke.ps1
+      - name: Exercise the installed x64 app on native Windows
+        run: npm run test:e2e:windows-native
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: swob-windows-native-alpha-x64
+          path: dist/*-windows-x64.exe
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload native Windows screenshots and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swob-windows-native-alpha-evidence
+          path: test-results/**
+          if-no-files-found: warn
+          retention-days: 14

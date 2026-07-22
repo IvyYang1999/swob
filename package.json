@@ -14,11 +14,13 @@
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:mac": "npm run build && electron-builder --mac",
+    "build:win": "npm run build && electron-builder --win nsis --x64 --publish never --config.npmRebuild=false",
     "deploy": "bash scripts/deploy-local.sh",
     "dmg": "bash scripts/build-dmg-desktop.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npx electron-vite build && npx playwright test",
+    "test:e2e:windows-native": "playwright test e2e/windows-native-packaged.spec.ts",
     "test:all": "vitest run && npx electron-vite build && npx playwright test"
   },
   "dependencies": {

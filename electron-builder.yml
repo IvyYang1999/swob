@@ -27,6 +27,19 @@ mac:
         - arm64
         - x64
   artifactName: swob-${version}-${arch}.${ext}
+win:
+  # t107 Alpha is an internal, unsigned x64 build. ARM64 and signing are intentionally out of scope.
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: swob-${version}-windows-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
 publish:
   provider: github
   owner: IvyYang1999

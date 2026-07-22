@@ -1,11 +1,11 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import * as os from 'os'
 import { randomUUID } from 'crypto'
 import type { UserConfig, Folder, Highlight } from './types'
+import { runtimeHome } from './runtime-home'
 
 function configPaths(): { dir: string; file: string } {
-  const dir = path.join(process.env.HOME || os.homedir(), '.claude-session-manager')
+  const dir = path.join(runtimeHome(), '.claude-session-manager')
   return { dir, file: path.join(dir, 'config.json') }
 }
 

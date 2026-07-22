@@ -1,8 +1,16 @@
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
+type ResumeLaunchSpec = {
+  executable: string
+  args: string[]
+  cwd?: string
+  env?: Record<string, string>
+  target: 'native'
+  keepOpen: boolean
+}
 type ResumeLaunchAction =
-  | { kind: 'terminal'; command: string }
+  | { kind: 'terminal'; command: string; launchSpec: ResumeLaunchSpec }
   | { kind: 'deep-link'; url: string }
-  | { kind: 'remote-control'; command: string }
+  | { kind: 'remote-control'; command: string; launchSpec: ResumeLaunchSpec }
 type ResumeActionResult = {
   ok: boolean
   sessionId: string
@@ -34,6 +42,7 @@ type SmartRenameResult<T> =
   | { ok: false; error: { code: string; message: string } }
 
 interface ElectronAPI {
+  platformGetCapabilities: () => Promise<import('../components/WindowsAlphaNotice').PlatformCapabilities>
   loadAllSessions: () => Promise<any[]>
   loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<any>
   searchSessions: (

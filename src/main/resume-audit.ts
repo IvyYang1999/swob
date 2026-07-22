@@ -3,6 +3,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
 import { spawn } from 'child_process'
+import { runtimeHome } from './runtime-home'
 import {
   findLibraryOnlySessions,
   getSessionResumeAvailability
@@ -298,7 +299,7 @@ function findCursorResumeStores(home: string): string[] {
 
 function buildTargetLists(options: ResumeAuditOptions): Record<SessionSource, string[]> {
   const overrides = options.resumeTargets || {}
-  const home = options.home || process.env.HOME || ''
+  const home = options.home || runtimeHome()
   return {
     'claude-code': overrides['claude-code'] ||
       findSessionFilesInProjectRoots(findClaudeProjectRoots(home)),
@@ -331,7 +332,7 @@ async function loadClaudeTarget(
   claudeConfigDir: string | undefined,
   runtime: ResumeAuditRuntime
 ): Promise<ResumeTargetData> {
-  const home = runtime.options.home || process.env.HOME || ''
+  const home = runtime.options.home || runtimeHome()
   const exactName = `${sessionId}.jsonl`
   const candidates = runtime.targets['claude-code'].filter((candidate) => {
     if (path.basename(candidate) !== exactName) return false

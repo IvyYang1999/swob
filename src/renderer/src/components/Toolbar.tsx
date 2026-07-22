@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
 import { Search, PanelRight, X, Zap, Settings, BarChart3, GitBranch } from 'lucide-react'
+import { usePlatformCapabilities } from './WindowsAlphaNotice'
 
 export function Toolbar() {
   const {
@@ -12,6 +13,7 @@ export function Toolbar() {
     lineageOpen, toggleLineage
   } = useStore()
   const t = useT()
+  const isWindowsAlpha = usePlatformCapabilities()?.windowsNativeAlpha === true
   const [inputValue, setInputValue] = useState(searchQuery)
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -42,8 +44,8 @@ export function Toolbar() {
       className="h-12 flex items-center gap-3 px-4 border-b border-edge bg-base shrink-0"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      {/* Spacer for traffic lights */}
-      <div className="w-16 shrink-0" />
+      {/* Native Windows uses a regular title bar and has no macOS traffic lights. */}
+      {!isWindowsAlpha && <div className="w-16 shrink-0" />}
 
       {/* Search */}
       <div
@@ -69,7 +71,9 @@ export function Toolbar() {
             <X size={14} />
           </button>
         ) : (
-          <kbd className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-faint bg-hover/50 border border-edge-strong/50 rounded px-1 py-0.5 font-mono">⌘K</kbd>
+          <kbd className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-faint bg-hover/50 border border-edge-strong/50 rounded px-1 py-0.5 font-mono">
+            {isWindowsAlpha ? 'Ctrl+K' : '⌘K'}
+          </kbd>
         )}
       </div>
 
@@ -82,7 +86,9 @@ export function Toolbar() {
         >
           <Zap size={13} />
           <span className="hidden sm:inline">{t('toolbar.spotlight_label')}</span>
-          <kbd className="text-[10px] text-faint bg-hover/50 border border-edge-strong/50 rounded px-1 py-0.5 font-mono">⌘⇧Space</kbd>
+          <kbd className="text-[10px] text-faint bg-hover/50 border border-edge-strong/50 rounded px-1 py-0.5 font-mono">
+            {isWindowsAlpha ? 'Ctrl+Shift+Space' : '⌘⇧Space'}
+          </kbd>
         </button>
       </div>
 

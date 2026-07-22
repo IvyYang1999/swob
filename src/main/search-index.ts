@@ -3,9 +3,9 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { parseSessionFile } from './session-loader'
 import type { RawJsonlMessage } from './types'
+import { runtimeHome } from './runtime-home'
 
 const SEARCH_SCHEMA_VERSION = 3
-const DEFAULT_INDEX_DIR = path.join(process.env.HOME || '', '.claude-session-manager')
 
 export interface SearchIndexSource {
   filePath: string
@@ -109,7 +109,7 @@ function invalidateQueryCache(): void {
 }
 
 function indexDirectory(): string {
-  return process.env.SWOB_SEARCH_INDEX_DIR || DEFAULT_INDEX_DIR
+  return process.env.SWOB_SEARCH_INDEX_DIR || path.join(runtimeHome(), '.claude-session-manager')
 }
 
 export function searchDatabasePath(): string {

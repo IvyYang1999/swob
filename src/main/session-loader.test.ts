@@ -17,6 +17,7 @@ import {
   filterMessagesByBranch,
   findClaudeProjectRoots,
   findSessionFilesInProjectRoots,
+  decodeClaudeProjectDirectoryName,
   getClaudeConfigDirForSessionFile,
   isRealUserMessage
 } from './session-loader'
@@ -154,6 +155,14 @@ function incrementalCacheLog(spy: ReturnType<typeof vi.spyOn>): string {
 // Claude session discovery 测试
 // ========================================================
 describe('Claude session discovery', () => {
+  it('Claude 项目目录名支持 Windows 盘符 dash 编码', () => {
+    expect(decodeClaudeProjectDirectoryName('C--Users-Alice-project', 'win32'))
+      .toBe('C:\\Users\\Alice\\project')
+    expect(decodeClaudeProjectDirectoryName('-Users-alice-project', 'darwin'))
+      .toBe('/Users/alice/project')
+    expect(decodeClaudeProjectDirectoryName('relative-project', 'win32')).toBeUndefined()
+  })
+
   it('应该同时扫描 ~/.claude/projects 和 ~/.claude-window/*/projects', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-home-'))
     const standardRoot = path.join(home, '.claude', 'projects')
@@ -335,6 +344,28 @@ describe('buildSessionSummary', () => {
     expect(summary!.createdAt).toBe('2026-03-01T10:00:00Z')
     expect(summary!.firstUserMessage).toBe('你好')
   })
+
+  it('Windows 绝对路径的写入动作不能被丢弃', () => {
+    const windowsFile = 'C:\\Users\\Alice\\project\\src\\main.ts'
+    const msgs = [
+      rawMsg({ type: 'user', message: { role: 'user', content: '修改 Windows 项目' } }),
+      rawMsg({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'write-win-file', name: 'Write', input: { file_path: windowsFile } }]
+        }
+      })
+    ]
+    const summary = buildSessionSummary(writeTempJsonl(msgs), msgs)
+
+    expect(summary?.referencedFiles).toContainEqual({
+      path: windowsFile,
+      actions: ['write'],
+      exists: false
+    })
+  })
+
 
   it('【真实 bug】firstUserMessage 应该跳过 "[Request interrupted..."', () => {
     // 之前这种消息会作为 session 标题显示，用户看到一堆 "[Request interrupted..."

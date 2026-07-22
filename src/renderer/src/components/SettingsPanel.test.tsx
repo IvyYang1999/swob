@@ -114,6 +114,13 @@ describe('SettingsPanel 纵向导航设置', () => {
         publicIp: null,
         hostname: 'test-host',
         sshEnabled: true
+      }),
+      platformGetCapabilities: vi.fn().mockResolvedValue({
+        platform: 'darwin',
+        windowsNativeAlpha: false,
+        supportedSources: ['claude-code', 'codex', 'cursor', 'opencode', 'zcode'],
+        unsupportedSources: [],
+        features: { wsl: false, cloudPlaceholders: true, cliInstall: true, arm64: true, autoUpdate: true, codeSigning: true }
       })
     }
   })
@@ -222,5 +229,27 @@ describe('SettingsPanel 纵向导航设置', () => {
     fireEvent.click(screen.getByRole('button', { name: '轮数' }))
 
     expect(savePreferences).toHaveBeenCalledWith({ defaultSort: 'turns' })
+  })
+
+  it('Windows Alpha 显式告知来源与发布边界，不显示 macOS 终端', async () => {
+    ;(window as any).api.platformGetCapabilities.mockResolvedValue({
+      platform: 'win32',
+      windowsNativeAlpha: true,
+      supportedSources: ['claude-code', 'codex'],
+      unsupportedSources: ['cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity', 'grok', 'pi', 'kimi', 'hermes'],
+      features: { wsl: false, cloudPlaceholders: false, cliInstall: false, arm64: false, autoUpdate: false, codeSigning: false }
+    })
+
+    render(<SettingsPanel />)
+    expect(await screen.findByText('Windows Native Alpha')).toBeTruthy()
+    fireEvent.click(navButton('终端'))
+
+    expect(await screen.findByText('Windows Terminal')).toBeTruthy()
+    expect(screen.getByText('PowerShell')).toBeTruthy()
+    expect(screen.getByText('cmd')).toBeTruthy()
+    expect(screen.queryByText('iTerm2')).toBeNull()
+    expect(screen.getByText(/Cursor、OpenCode、ZCode/)).toBeTruthy()
+    expect(within(screen.getByRole('navigation')).queryByRole('button', { name: 'SSH' })).toBeNull()
+    expect(within(screen.getByRole('navigation')).queryByRole('button', { name: 'CLI' })).toBeNull()
   })
 })

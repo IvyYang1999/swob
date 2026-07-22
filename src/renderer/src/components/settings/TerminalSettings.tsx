@@ -2,10 +2,18 @@ import { useCallback, useEffect, useState } from 'react'
 import { Check, Code2, RefreshCw, Terminal } from 'lucide-react'
 import { useStore } from '../../store'
 import { copy, SettingField, useSettingsPreferences, type DetectedTerminal } from './shared'
+import { usePlatformCapabilities } from '../WindowsAlphaNotice'
+
+const WINDOWS_ALPHA_TERMINALS: DetectedTerminal[] = [
+  { id: 'windows-terminal', name: 'Windows Terminal', path: 'wt.exe', executable: 'wt.exe', commandSupport: 'stable', canRunCommand: true, evidence: 'executable' },
+  { id: 'powershell', name: 'PowerShell', path: 'powershell.exe / pwsh.exe', executable: 'powershell.exe', commandSupport: 'stable', canRunCommand: true, evidence: 'executable' },
+  { id: 'cmd', name: 'cmd', path: 'cmd.exe', executable: 'cmd.exe', commandSupport: 'stable', canRunCommand: true, evidence: 'executable' }
+]
 
 export function TerminalSettings() {
   const { locale, savePreferences } = useStore()
   const preferences = useSettingsPreferences()
+  const isWindowsAlpha = usePlatformCapabilities()?.windowsNativeAlpha === true
   const [terminals, setTerminals] = useState<DetectedTerminal[]>([])
   const [detecting, setDetecting] = useState(false)
 
@@ -23,9 +31,17 @@ export function TerminalSettings() {
   useEffect(() => { void detectTerminals() }, [detectTerminals])
 
   const saveTerminal = (terminalId: string) => {
-    const legacy = terminalId === 'iterm2' ? 'iterm' : terminalId === 'custom' ? 'custom' : 'terminal-app'
+    const legacy = terminalId === 'iterm2'
+      ? 'iterm'
+      : terminalId === 'custom'
+        ? 'custom'
+        : ['windows-terminal', 'powershell', 'cmd'].includes(terminalId)
+          ? terminalId
+          : 'terminal-app'
     savePreferences({ defaultTerminalId: terminalId, resumeTerminal: legacy })
   }
+
+  const visibleTerminals = isWindowsAlpha ? WINDOWS_ALPHA_TERMINALS : terminals
 
   return (
     <>
@@ -35,8 +51,8 @@ export function TerminalSettings() {
         icon={<Terminal size={12} />}
       >
         <div className="space-y-1.5">
-          {detecting && terminals.length === 0 && <p className="text-[11px] text-muted">{copy(locale, '正在检测…', 'Detecting…', '検出中…')}</p>}
-          {terminals.map((terminal) => (
+          {detecting && visibleTerminals.length === 0 && <p className="text-[11px] text-muted">{copy(locale, '正在检测…', 'Detecting…', '検出中…')}</p>}
+          {visibleTerminals.map((terminal) => (
             <button
               key={terminal.id}
               type="button"
@@ -61,22 +77,22 @@ export function TerminalSettings() {
               </span>
             </button>
           ))}
-          <button
+          {!isWindowsAlpha && <button
             type="button"
             onClick={() => saveTerminal('custom')}
             className={`w-full flex items-center gap-3 rounded-md border px-3 py-2 text-left ${preferences.defaultTerminalId === 'custom' ? 'border-accent bg-accent/5' : 'border-edge-subtle bg-surface hover:border-edge'}`}
           >
             <span className="w-6 h-6 rounded bg-hover text-muted flex items-center justify-center"><Code2 size={12} /></span>
             <span className="text-xs text-primary">{copy(locale, '自定义模板', 'Custom template', 'カスタムテンプレート')}</span>
-          </button>
+          </button>}
         </div>
-        <button onClick={() => void detectTerminals(true)} disabled={detecting} className="mt-2 inline-flex items-center gap-1 text-[11px] text-muted hover:text-primary disabled:opacity-40">
+        {!isWindowsAlpha && <button onClick={() => void detectTerminals(true)} disabled={detecting} className="mt-2 inline-flex items-center gap-1 text-[11px] text-muted hover:text-primary disabled:opacity-40">
           <RefreshCw size={10} className={detecting ? 'animate-spin' : ''} />
           {copy(locale, '重新检测', 'Scan again', '再検出')}
-        </button>
+        </button>}
       </SettingField>
 
-      {preferences.defaultTerminalId === 'custom' && (
+      {!isWindowsAlpha && preferences.defaultTerminalId === 'custom' && (
         <SettingField label={copy(locale, '命令模板', 'Command template', 'コマンドテンプレート')}>
           <textarea
             value={customTemplate}

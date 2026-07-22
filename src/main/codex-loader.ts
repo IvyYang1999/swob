@@ -15,8 +15,7 @@ import {
   type CodexUsageSnapshot,
   type TokenAccounting
 } from './token-accounting'
-
-const CODEX_DIR = path.join(process.env.HOME || '', '.codex', 'sessions')
+import { runtimeHome } from './runtime-home'
 
 // --- Codex JSONL envelope types ---
 
@@ -137,9 +136,10 @@ export function extractCodexTokenAccounting(lines: CodexLine[]): TokenAccounting
 
 // --- File discovery ---
 
-export function findCodexSessionFiles(): string[] {
+export function findCodexSessionFiles(home = runtimeHome()): string[] {
   const files: string[] = []
-  if (!fs.existsSync(CODEX_DIR)) return files
+  const codexDir = path.join(home, '.codex', 'sessions')
+  if (!fs.existsSync(codexDir)) return files
 
   function walk(dir: string): void {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -151,7 +151,7 @@ export function findCodexSessionFiles(): string[] {
       }
     }
   }
-  walk(CODEX_DIR)
+  walk(codexDir)
   return files
 }
 

@@ -12,6 +12,7 @@ import { SshSettings } from './SshSettings'
 import { ViewSettings } from './ViewSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { CliSettings } from './CliSettings'
+import { WindowsAlphaNotice, usePlatformCapabilities } from '../WindowsAlphaNotice'
 
 export type SettingsCategory = 'general' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli'
 
@@ -31,17 +32,18 @@ const CATEGORIES: Array<{
   { id: 'cli', icon: SquareTerminal, zh: 'CLI', en: 'CLI', ja: 'CLI' }
 ]
 
-function SettingsNav({ active, locale, onSelect }: {
+function SettingsNav({ active, locale, onSelect, hidden }: {
   active: SettingsCategory
   locale: Locale
   onSelect: (category: SettingsCategory) => void
+  hidden: Set<SettingsCategory>
 }) {
   return (
     <nav
       aria-label={copy(locale, '设置分类', 'Settings categories', '設定カテゴリ')}
       className="settings-nav shrink-0 border-r border-edge overflow-y-auto py-2 px-1.5"
     >
-      {CATEGORIES.map(({ id, icon: Icon, zh, en, ja }) => {
+      {CATEGORIES.filter(({ id }) => !hidden.has(id)).map(({ id, icon: Icon, zh, en, ja }) => {
         const isActive = active === id
         return (
           <button
@@ -66,6 +68,11 @@ function SettingsNav({ active, locale, onSelect }: {
 export function SettingsPanel() {
   const { settingsOpen, toggleSettings, locale } = useStore()
   const t = useT()
+  const platformCapabilities = usePlatformCapabilities()
+  const isWindowsAlpha = platformCapabilities?.windowsNativeAlpha === true
+  const hiddenCategories = isWindowsAlpha
+    ? new Set<SettingsCategory>(['ssh', 'cli'])
+    : new Set<SettingsCategory>()
   const [category, setCategory] = useState<SettingsCategory>('general')
   const dialogRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -83,6 +90,10 @@ export function SettingsPanel() {
   useEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = 0
   }, [category])
+
+  useEffect(() => {
+    if (isWindowsAlpha && (category === 'ssh' || category === 'cli')) setCategory('general')
+  }, [category, isWindowsAlpha])
 
   if (!settingsOpen) return null
 
@@ -110,13 +121,14 @@ export function SettingsPanel() {
         </div>
 
         <div className="flex-1 min-h-0 flex">
-          <SettingsNav active={category} locale={locale} onSelect={setCategory} />
+          <SettingsNav active={category} locale={locale} onSelect={setCategory} hidden={hiddenCategories} />
           <div
             ref={contentRef}
             data-settings-category={category}
             className="flex-1 min-w-0 overflow-y-auto overscroll-contain p-5"
           >
             <div className="max-w-2xl space-y-6">
+              <WindowsAlphaNotice capabilities={platformCapabilities} />
               {category === 'general' && <GeneralSettings />}
               {category === 'terminal' && <TerminalSettings />}
               {category === 'resume' && <ResumeSettings />}

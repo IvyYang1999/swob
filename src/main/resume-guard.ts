@@ -7,6 +7,7 @@ import {
 } from './library-manager'
 import {
   buildForkCommand,
+  buildForkLaunchSpec,
   buildResumeAction,
   resolveSessionActionContext
 } from './session-actions'
@@ -116,6 +117,13 @@ async function buildGuardedAction(
           context.cwd,
           context.source,
           context.claudeConfigDir
+        ),
+        launchSpec: buildForkLaunchSpec(
+          context.sessionId,
+          context.permissionMode,
+          context.cwd,
+          context.source || 'claude-code',
+          context.claudeConfigDir
         )
       }
     const command = action.kind === 'deep-link' ? undefined : action.command
@@ -154,6 +162,23 @@ export async function openGuardedResumeAction(
       ...result,
       ok: false,
       reason: error instanceof Error ? error.message : '无法打开目标客户端'
+    }
+  }
+}
+
+export async function openGuardedForkAction(
+  options: OpenGuardedResumeActionOptions
+): Promise<ResumeActionResult> {
+  const result = await buildGuardedAction({ ...options, allowRecovery: true, surface: 'terminal' }, 'fork')
+  if (!result.ok || !result.action) return result
+  try {
+    await options.openAction(result.action)
+    return result
+  } catch (error) {
+    return {
+      ...result,
+      ok: false,
+      reason: error instanceof Error ? error.message : '无法打开终端'
     }
   }
 }

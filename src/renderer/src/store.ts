@@ -116,7 +116,7 @@ interface UserConfig {
   preferences: {
     defaultViewMode: 'compact' | 'full'
     terminalApp: 'Terminal' | 'iTerm2'
-    resumeTerminal?: 'terminal-app' | 'iterm' | 'custom'
+    resumeTerminal?: 'terminal-app' | 'iterm' | 'custom' | 'windows-terminal' | 'powershell' | 'cmd'
     resumeTerminalCommandTemplate?: string
     experimentalClaudeDesktopImport?: boolean
     locale?: Locale

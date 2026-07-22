@@ -108,6 +108,7 @@ import {
 } from './smart-rename'
 import {
   normalizeResumeTerminalSettings,
+  openResumeLaunchSpec,
   openResumeTerminal
 } from './resume-terminal'
 import {
@@ -121,9 +122,8 @@ import {
 } from '../shared/settings-capabilities'
 import {
   buildGuardedResumeCommand,
-  openGuardedForkCommand,
+  openGuardedForkAction,
   openGuardedResumeAction,
-  openGuardedResumeCommand,
   type ResumeActionResult
 } from './resume-guard'
 import type { ResumeLaunchAction, ResumeSurface } from './session-actions'
@@ -139,6 +139,10 @@ import {
 } from './session-lineage'
 import type { Folder, Highlight, SessionSummary } from './types'
 import { generateSkillContent } from '../cli/command-registry'
+import { runtimeHome } from './runtime-home'
+import { hasPortablePathSegment } from './portable-path'
+import { getPlatformCapabilities, isSessionSourceSupported } from './platform-support'
+import { assertRegisteredResumeProtocol } from './deep-link'
 
 let mainWindow: BrowserWindow | null = null
 let spotlightWindow: BrowserWindow | null = null
@@ -163,6 +167,7 @@ let previousActiveIds: string[] = []
 let activePoller: ReturnType<typeof setInterval> | null = null
 
 function detectActiveSessionsFromProcesses(): Promise<Set<string>> {
+  if (process.platform === 'win32') return Promise.resolve(new Set())
   return new Promise((resolve) => {
     exec('ps -eo command', { timeout: 3000 }, (err, stdout) => {
       if (err) { resolve(new Set()); return }
@@ -197,7 +202,7 @@ let cachedSessions: SessionSummary[] = []
 const approvedLibraryRoots = new Set<string>()
 
 function safeProjectRoots(): string[] {
-  const home = path.resolve(process.env.HOME || app.getPath('home'))
+  const home = path.resolve(runtimeHome())
   const roots = new Set<string>()
   for (const session of cachedSessions) {
     for (const candidate of [session.resumeCwd, ...(session.cwds || [])]) {
@@ -214,16 +219,17 @@ function safeProjectRoots(): string[] {
 }
 
 function sessionSourceRoots(): string[] {
-  const home = process.env.HOME || app.getPath('home')
-  return [
+  const home = runtimeHome()
+  const roots = [
     getLibraryRoot(),
     join(home, '.claude', 'projects'),
     join(home, '.claude-window'),
-    join(home, '.codex', 'sessions'),
-    join(home, '.cursor', 'projects'),
-    join(home, '.local', 'share', 'opencode'),
-    join(home, '.zcode', 'cli', 'db')
+    join(home, '.codex', 'sessions')
   ]
+  if (isSessionSourceSupported('cursor')) roots.push(join(home, '.cursor', 'projects'))
+  if (isSessionSourceSupported('opencode')) roots.push(join(home, '.local', 'share', 'opencode'))
+  if (isSessionSourceSupported('zcode')) roots.push(join(home, '.zcode', 'cli', 'db'))
+  return roots
 }
 
 function assertSessionSourcePath(filePath: string): string {
@@ -441,8 +447,9 @@ function createWindow(): void {
     height: 900,
     minWidth: 1000,
     minHeight: 600,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 15, y: 15 },
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 15, y: 15 } }
+      : {}),
     backgroundColor: '#18181b',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -573,7 +580,7 @@ function getSpotlightShortcut(): string {
 }
 
 function startFileWatcher(): void {
-  const home = process.env.HOME || ''
+  const home = runtimeHome()
   watcher = chokidar.watch([
     join(home, '.claude', 'projects', '*', '*.jsonl'),
     join(home, '.claude-window', '*', 'projects', '*', '*.jsonl')
@@ -583,18 +590,18 @@ function startFileWatcher(): void {
   })
 
   watcher.on('add', (filePath) => {
-    if (filePath.includes('/subagents/')) return
+    if (hasPortablePathSegment(filePath, 'subagents')) return
     scheduleSessionSynchronization({ filePath, source: 'claude-code', reason: 'add' })
   })
 
   watcher.on('change', (filePath) => {
-    if (filePath.includes('/subagents/')) return
+    if (hasPortablePathSegment(filePath, 'subagents')) return
     scheduleSessionSynchronization({ filePath, source: 'claude-code', reason: 'change' })
   })
 }
 
 function startCodexWatcher(): void {
-  const codexDir = join(process.env.HOME || '', '.codex', 'sessions')
+  const codexDir = join(runtimeHome(), '.codex', 'sessions')
   if (!fs.existsSync(codexDir)) return
   codexWatcher = chokidar.watch(join(codexDir, '**/*.jsonl'), {
     ignoreInitial: true,
@@ -611,7 +618,8 @@ function startCodexWatcher(): void {
 }
 
 function startCursorWatcher(): void {
-  const cursorDir = join(process.env.HOME || '', '.cursor', 'projects')
+  if (!isSessionSourceSupported('cursor')) return
+  const cursorDir = join(runtimeHome(), '.cursor', 'projects')
   if (!fs.existsSync(cursorDir)) return
   cursorWatcher = chokidar.watch(join(cursorDir, '*/agent-transcripts/*/*.jsonl'), {
     ignoreInitial: true,
@@ -909,16 +917,21 @@ ipcMain.handle('spotlight:consumePendingNavigation', () => {
 // --- iCloud ---
 
 ipcMain.handle('icloud:isCloudOnly', (_event, sessionId: string) => {
+  if (!getPlatformCapabilities().features.cloudPlaceholders) return false
   return isSessionCloudOnly(sessionId)
 })
 
 ipcMain.handle('icloud:download', (_event, sessionId: string) => {
+  if (!getPlatformCapabilities().features.cloudPlaceholders) {
+    throw new Error('Windows Alpha 暂不支持 OneDrive/iCloud 占位文件下载')
+  }
   return triggerICloudDownload(sessionId)
 })
 
 // Report the current cloud-only set. Library discovery is watcher-driven; this
 // read-only status query must never trigger a full scan/hydration.
 ipcMain.handle('icloud:scanCloudSessions', async () => {
+  if (!getPlatformCapabilities().features.cloudPlaceholders) return []
   const cloudSessions: string[] = []
   for (const session of cachedSessions) {
     if (isSessionCloudOnly(session.sessionId)) {
@@ -1022,7 +1035,7 @@ ipcMain.handle('image:load', async (_event, filePath: string) => {
   const original = tryLoad(safeOriginalPath)
   if (original) return original
   // Try image-cache: scan all subdirs for matching filename
-  const cacheDir = path.join(process.env.HOME || '', '.claude', 'image-cache')
+  const cacheDir = path.join(runtimeHome(), '.claude', 'image-cache')
   try {
     if (fs.existsSync(cacheDir)) {
       const basename = path.basename(safeOriginalPath)
@@ -1063,6 +1076,15 @@ function filterExcludedSources(sessions: SessionSummary[]): SessionSummary[] {
   const excludedSet = new Set(excluded)
   return sessions.filter((s) => !excludedSet.has(s.source || 'claude-code'))
 }
+
+ipcMain.handle('platform:getCapabilities', () => {
+  // Playwright can exercise the Windows-only renderer state on a Mac builder;
+  // production always uses the immutable native process.platform value.
+  const platform = process.env.NODE_ENV === 'test' && process.env.SWOB_TEST_PLATFORM === 'win32'
+    ? 'win32'
+    : process.platform
+  return getPlatformCapabilities(platform)
+})
 
 ipcMain.handle('sessions:loadAll', async () => {
   try {
@@ -1169,6 +1191,9 @@ function currentSettingsPreferences(): Record<string, unknown> {
 }
 
 function openInTerminal(command: string): void {
+  if (process.platform === 'win32') {
+    throw new Error('Windows Alpha 只允许结构化 Resume，不执行原始 shell 命令')
+  }
   const preferences = currentSettingsPreferences()
   const settings = normalizeResumeTerminalSettings(preferences)
   settings.terminalExecutable = peekDetectedTerminals()
@@ -1179,6 +1204,13 @@ function openInTerminal(command: string): void {
 
 async function openResumeAction(action: ResumeLaunchAction): Promise<void> {
   if (action.kind === 'terminal' || action.kind === 'remote-control') {
+    if (process.platform === 'win32') {
+      await openResumeLaunchSpec(
+        action.launchSpec,
+        normalizeResumeTerminalSettings(currentSettingsPreferences(), 'win32')
+      )
+      return
+    }
     openInTerminal(action.command)
     return
   }
@@ -1193,14 +1225,14 @@ async function openResumeAction(action: ResumeLaunchAction): Promise<void> {
     throw new Error('Resume deep link 协议不受支持')
   }
 
-  if (process.platform === 'darwin') {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
     let handler = ''
     try {
       handler = app.getApplicationNameForProtocol(action.url)
     } catch {
       handler = ''
     }
-    if (!handler && protocol === 'zcode:') {
+    if (process.platform === 'darwin' && !handler && protocol === 'zcode:') {
       const zcodeAppPath = '/Applications/ZCode.app'
       if (fs.existsSync(zcodeAppPath)) {
         const error = await shell.openPath(zcodeAppPath)
@@ -1208,18 +1240,7 @@ async function openResumeAction(action: ResumeLaunchAction): Promise<void> {
         return
       }
     }
-    if (!handler) {
-      const client = protocol === 'codex:' ? 'Codex/ChatGPT' : protocol === 'claude:' ? 'Claude' : 'ZCode'
-      throw new Error(`未检测到可处理 ${protocol} 的 ${client} App`)
-    }
-    const expectedHandler = protocol === 'codex:'
-      ? /^(Codex|ChatGPT)$/i
-      : protocol === 'claude:'
-        ? /^Claude$/i
-        : /^ZCode$/i
-    if (!expectedHandler.test(handler.trim())) {
-      throw new Error(`${protocol} 当前由非官方应用“${handler}”处理，已拒绝打开`)
-    }
+    assertRegisteredResumeProtocol(protocol, handler, process.platform)
   }
 
   await shell.openExternal(action.url)
@@ -1236,7 +1257,14 @@ function defaultResumeSurfaceForSession(sessionId: string): ResumeSurface {
     candidate.resumeSessionId === sessionId ||
     (candidate.continuationSessionIds || []).includes(sessionId)
   )
-  return defaultResumeMethodForSource(currentSettingsPreferences(), session?.source) as ResumeSurface
+  const preferred = defaultResumeMethodForSource(
+    currentSettingsPreferences(),
+    session?.source
+  ) as ResumeSurface
+  if (process.platform !== 'win32') return preferred
+  return session?.source === 'codex' && preferred === 'codex-desktop'
+    ? 'codex-desktop'
+    : 'terminal'
 }
 
 ipcMain.handle(
@@ -1270,13 +1298,14 @@ ipcMain.handle(
     const results: ResumeActionResult[] = []
     for (const s of sessionIds) {
       assertResumeCwd(s.sessionId, s.cwd)
-      results.push(await openGuardedResumeCommand({
+      results.push(await openGuardedResumeAction({
         sessionId: s.sessionId,
         sessions: cachedSessions,
         permissionMode: s.permissionMode,
         cwd: s.cwd,
+        surface: 'terminal',
         reloadSessions: reloadSessionsForAction,
-        openCommand: openInTerminal
+        openAction: openResumeAction
       }))
     }
     return results
@@ -1287,13 +1316,13 @@ ipcMain.handle(
   'terminal:fork',
   async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
     assertResumeCwd(sessionId, cwd)
-    return openGuardedForkCommand({
+    return openGuardedForkAction({
       sessionId,
       sessions: cachedSessions,
       permissionMode,
       cwd,
       reloadSessions: reloadSessionsForAction,
-      openCommand: openInTerminal
+      openAction: openResumeAction
     })
   }
 )
@@ -2180,7 +2209,15 @@ function isCliInstalled(): boolean {
 }
 
 function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; cliManualInstall?: string; error?: string } {
-  const home = process.env.HOME || ''
+  if (!getPlatformCapabilities().features.cliInstall) {
+    return {
+      cliInstalled: false,
+      skillInstalled: false,
+      cliPath: null,
+      error: 'Windows Alpha 暂不支持 CLI 安装'
+    }
+  }
+  const home = runtimeHome()
   const cliInstall = installSwobCli({ homeDir: home || undefined })
 
   // 2. Install skill
@@ -2198,6 +2235,7 @@ function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath
 }
 
 function autoInstallCliOnStartup(): void {
+  if (!getPlatformCapabilities().features.cliInstall) return
   try {
     installCli()
   } catch { /* ignore — user can manually install later */ }
@@ -2206,7 +2244,7 @@ function autoInstallCliOnStartup(): void {
 ipcMain.handle('cli:getStatus', () => {
   const installed = isCliInstalled()
   const commandPath = findInstalledSwobCommandPath()
-  const skillPath = join(process.env.HOME || '', '.claude', 'skills', 'swob', 'SKILL.md')
+  const skillPath = join(runtimeHome(), '.claude', 'skills', 'swob', 'SKILL.md')
   const skillExists = fs.existsSync(skillPath)
   return {
     cliInstalled: installed,
@@ -2227,6 +2265,8 @@ ipcMain.handle('cli:install', () => {
 // --- Auto Update ---
 
 function setupAutoUpdater(): void {
+  // t107 Windows Native Alpha: unsigned internal builds do not auto-update.
+  if (!getPlatformCapabilities().features.autoUpdate) return
   const preferences = currentSettingsPreferences()
   autoUpdater.allowPrerelease = preferences.updateChannel === 'development'
   configureAutoUpdater({
@@ -2240,7 +2280,7 @@ function setupAutoUpdater(): void {
 }
 
 app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('com.claude-session-manager')
+  electronApp.setAppUserModelId('com.swob.app')
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })

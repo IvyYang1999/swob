@@ -8,6 +8,9 @@ async function parseJsonIpcResult<T>(result: Promise<string | T>): Promise<T> {
 }
 
 const api = {
+  // Platform capabilities
+  platformGetCapabilities: () => ipcRenderer.invoke('platform:getCapabilities'),
+
   // Sessions
   loadAllSessions: () => ipcRenderer.invoke('sessions:loadAll'),
   loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) =>

@@ -397,6 +397,13 @@ export const useStore = create<AppState>((set, get) => ({
         localStorage.setItem('csm:colorScheme', prefScheme)
         set({ colorScheme: prefScheme })
       }
+      const prefThemeMode = hydratedConfig.preferences?.themeMode
+      if ((prefThemeMode === 'light' || prefThemeMode === 'dark' || prefThemeMode === 'system') && prefThemeMode !== get().themeMode) {
+        const resolvedTheme = effectiveTheme(prefThemeMode)
+        document.documentElement.dataset.theme = resolvedTheme
+        localStorage.setItem('csm:themeMode', prefThemeMode)
+        set({ themeMode: prefThemeMode, theme: resolvedTheme })
+      }
       try {
         localStorage.setItem('csm:sessions', JSON.stringify(hydratedSessions))
         localStorage.setItem('csm:config', JSON.stringify(hydratedConfig))
@@ -664,6 +671,7 @@ export const useStore = create<AppState>((set, get) => ({
     document.documentElement.setAttribute('data-theme', resolved)
     localStorage.setItem('csm:themeMode', mode)
     set({ themeMode: mode, theme: resolved })
+    void get().savePreferences({ themeMode: mode })
   },
 
   toggleTheme: () => {

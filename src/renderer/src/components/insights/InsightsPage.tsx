@@ -65,7 +65,9 @@ export function InsightsPage() {
   // Fetch data using queryInsights API whenever scope changes
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
+    // Keep the last resolved dashboard mounted during background refreshes.
+    // Session watcher updates can arrive while the user is scrolling; replacing
+    // the whole page with Loading here detached controls mid-interaction.
 
     const dimensions: AnalysisDimension[] = ['global', 'time', 'hour', 'source', 'model', 'project', 'session']
     const queries = dimensions.map((dim) =>

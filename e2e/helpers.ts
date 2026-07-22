@@ -305,6 +305,7 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
 }
 
 export async function closeApp(launched: LaunchedApp): Promise<void> {
+  if (!launched) return
   await Promise.race([
     launched.app.close(),
     new Promise((resolve) => setTimeout(resolve, 5000))

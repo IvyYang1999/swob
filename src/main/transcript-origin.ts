@@ -74,9 +74,12 @@ function firstContentText(message: RawJsonlMessage): string {
   const content = message.message?.content
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
-  for (const part of content) {
+  for (const part of content as unknown[]) {
     if (typeof part === 'string' && part.trim()) return part
-    if (part?.type === 'text' && typeof part.text === 'string' && part.text.trim()) return part.text
+    if (part && typeof part === 'object') {
+      const item = part as { type?: unknown; text?: unknown }
+      if (item.type === 'text' && typeof item.text === 'string' && item.text.trim()) return item.text
+    }
   }
   return ''
 }
@@ -91,13 +94,15 @@ function isOrdinaryHumanContent(message: RawJsonlMessage): boolean {
   if (!Array.isArray(content) || content.length === 0) return false
 
   let hasMeaningfulPart = false
-  for (const part of content) {
+  for (const part of content as unknown[]) {
     if (typeof part === 'string') {
       if (part.trim()) hasMeaningfulPart = true
       continue
     }
-    if (!part || !ORDINARY_HUMAN_CONTENT_TYPES.has(part.type)) return false
-    if (part.type !== 'text' || (typeof part.text === 'string' && part.text.trim())) {
+    if (!part || typeof part !== 'object') return false
+    const item = part as { type?: unknown; text?: unknown }
+    if (typeof item.type !== 'string' || !ORDINARY_HUMAN_CONTENT_TYPES.has(item.type)) return false
+    if (item.type !== 'text' || (typeof item.text === 'string' && item.text.trim())) {
       hasMeaningfulPart = true
     }
   }

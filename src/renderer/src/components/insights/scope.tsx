@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { AnalysisScope, AnalysisPreset, MetricBasis } from '../../../../main/analysis-contract'
+import type { AnalysisScope, AnalysisPreset, MetricBasis } from '../../../../shared/analysis-scope-types'
 
 export type { AnalysisScope, AnalysisPreset, MetricBasis }
 

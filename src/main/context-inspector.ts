@@ -8,6 +8,8 @@
  * - 上下文增长预警点
  */
 
+import type { RawJsonlMessage } from './types'
+
 export type ContextCategory =
   | 'user-text'
   | 'assistant-text'
@@ -49,29 +51,11 @@ export interface ContextInspectorData {
   categoryTotals: Record<ContextCategory, number>
 }
 
-interface RawMessage {
-  uuid?: string
-  type?: string
-  timestamp?: string
-  isSidechain?: boolean
-  isMeta?: boolean
-  message?: {
-    role?: string
-    content?: string | Array<Record<string, unknown>>
-    usage?: {
-      input_tokens?: number
-      output_tokens?: number
-      cache_read_input_tokens?: number
-      cache_creation_input_tokens?: number
-    }
-  }
-}
-
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
 
-function classifyContent(msg: RawMessage): ContextSlice[] {
+function classifyContent(msg: RawJsonlMessage): ContextSlice[] {
   const slices: ContextSlice[] = []
   const content = msg.message?.content
   if (!content) return slices
@@ -90,7 +74,7 @@ function classifyContent(msg: RawMessage): ContextSlice[] {
 
   if (!Array.isArray(content)) return slices
 
-  for (const part of content) {
+  for (const part of content as unknown as Array<Record<string, unknown>>) {
     if (part.type === 'text' && typeof part.text === 'string') {
       const text = part.text as string
       const isSystem = text.includes('<system-reminder>') || text.includes('<command-name>') || text.includes('<task-notification>')
@@ -114,7 +98,7 @@ function classifyContent(msg: RawMessage): ContextSlice[] {
       let text = ''
       if (typeof resultContent === 'string') text = resultContent
       else if (Array.isArray(resultContent)) {
-        text = (resultContent as Array<Record<string, unknown>>)
+        text = (resultContent as unknown as Array<Record<string, unknown>>)
           .filter(sub => sub.type === 'text')
           .map(sub => sub.text as string)
           .join('\n')
@@ -130,7 +114,7 @@ function classifyContent(msg: RawMessage): ContextSlice[] {
   return slices
 }
 
-export function buildContextInspector(messages: RawMessage[], sessionId: string): ContextInspectorData {
+export function buildContextInspector(messages: RawJsonlMessage[], sessionId: string): ContextInspectorData {
   const turns: TurnContext[] = []
   const compactEvents: ContextInspectorData['compactEvents'] = []
   const warnings: ContextInspectorData['warnings'] = []

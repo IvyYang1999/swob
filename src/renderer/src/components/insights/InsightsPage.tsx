@@ -24,7 +24,7 @@ import { ScopeContext, DEFAULT_SCOPE, scopeRangeLabel } from './scope'
 import type { AnalysisScope } from './scope'
 import type { InsightsData, QueryBundle, PreviousPeriodComparison } from './shared'
 import { adaptQueryBundle, extractFilterOptions } from './shared'
-import type { AnalysisDimension, InsightsQueryResult } from '../../../../main/analysis-contract'
+import type { AnalysisDimension, InsightsQueryResult } from '../../../../shared/analysis-scope-types'
 
 type DashboardTab = 'overview' | 'cost' | 'sessions' | 'workflow' | 'quality' | 'audit'
 

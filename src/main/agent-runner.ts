@@ -12,7 +12,7 @@ import { terminateChildProcess } from './child-process-termination'
  */
 
 export type AgentStreamEvent =
-  | { type: 'init'; sessionId: string }
+  | { type: 'init'; sessionId: string; model?: string }
   | { type: 'assistant-text'; text: string }
   | { type: 'tool-use'; name: string; summary: string }
   | { type: 'result'; ok: boolean; durationMs?: number; costUsd?: number; error?: string }
@@ -101,7 +101,7 @@ function handleStreamLine(line: string, onEvent: RunTurnOptions['onEvent']): voi
     return
   }
   if (parsed.type === 'system' && parsed.subtype === 'init' && typeof parsed.session_id === 'string') {
-    onEvent({ type: 'init', sessionId: parsed.session_id })
+    onEvent({ type: 'init', sessionId: parsed.session_id, model: typeof parsed.model === 'string' ? parsed.model : undefined })
     return
   }
   if (parsed.type === 'assistant') {

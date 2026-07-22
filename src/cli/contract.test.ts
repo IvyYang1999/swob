@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import Database from 'better-sqlite3'
 import { CLI_COMMANDS, CLI_VERSION, generateSkillContent } from './command-registry'
 import type { CliIo } from './index'
 
@@ -9,6 +10,8 @@ let tempHome = ''
 let libraryRoot = ''
 let sourcePath = ''
 let runCli: typeof import('./index').runCli
+let closeSearchIndex: typeof import('../main/search-index').closeSearchIndex
+let searchDatabasePath: typeof import('../main/search-index').searchDatabasePath
 let previousHome: string | undefined
 let previousIndexDir: string | undefined
 
@@ -90,6 +93,7 @@ beforeAll(async () => {
   writeSource()
   createLibraryPackage()
   ;({ runCli } = await import('./index'))
+  ;({ closeSearchIndex, searchDatabasePath } = await import('../main/search-index'))
 })
 
 afterAll(() => {
@@ -174,6 +178,33 @@ describe.sequential('Swob CLI machine contract', () => {
     const codex = parsed(await invoke(['grep', 'codex-source-needle', '--source', 'codex', '--json'])) as any
     expect(codex).toMatchObject({ sessionCount: 1, sessions: [{ source: 'codex', projectPath: '/repo/codex-project' }] })
   })
+
+  it('grep 遇写锁会等待并返回可重试的结构化错误', async () => {
+    closeSearchIndex()
+    const blocker = new Database(searchDatabasePath())
+    blocker.pragma('journal_mode = DELETE')
+    blocker.exec('BEGIN EXCLUSIVE')
+    const startedAt = performance.now()
+    try {
+      const invocation = await invoke(['grep', 'contract-tool-input-needle', '--json'])
+      const elapsedMs = performance.now() - startedAt
+      expect(invocation.code).toBe(1)
+      expect(invocation.stdout).toBe('')
+      expect(JSON.parse(invocation.stderr)).toEqual({
+        error: {
+          message: '搜索索引暂时被占用',
+          code: 'SEARCH_INDEX_BUSY',
+          hint: 'GUI 正在建索引，稍后再试',
+          retryable: true
+        }
+      })
+      expect(elapsedMs).toBeGreaterThanOrEqual(2_500)
+      expect(elapsedMs).toBeLessThan(5_000)
+    } finally {
+      blocker.exec('ROLLBACK')
+      blocker.close()
+    }
+  }, 10_000)
 
   it('批量 move/rename 是单事务，undo 可完整恢复', async () => {
     parsed(await invoke(['folder', 'create', '目标', '--json']))

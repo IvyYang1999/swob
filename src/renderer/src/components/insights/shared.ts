@@ -177,7 +177,7 @@ import type {
   InsightsQueryResult,
   UsageAggregate,
   PreviousPeriodComparison,
-} from '../../../../main/analysis-contract'
+} from '../../../../shared/analysis-scope-types'
 
 export type { InsightsQueryResult, UsageAggregate, PreviousPeriodComparison }
 

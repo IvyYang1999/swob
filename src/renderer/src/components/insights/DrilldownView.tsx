@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useStore } from '../../store'
 import { useAnalysisScope } from './scope'
 import { formatTokenCount } from './shared'
-import type { AnalysisDimension, InsightsDrilldownSession } from '../../../../main/analysis-contract'
+import type { AnalysisDimension, InsightsDrilldownSession } from '../../../../shared/analysis-scope-types'
 
 type DrilldownState =
   | { level: 'overview' }

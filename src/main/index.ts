@@ -75,6 +75,7 @@ import {
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
+import { detectSessionSourceFromPath } from './session-source'
 import { synchronizeSearchSources } from './search-index'
 import { buildInsights } from './insights'
 import {

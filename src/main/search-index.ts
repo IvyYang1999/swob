@@ -11,6 +11,7 @@ import {
 
 // v4 rebuilds unchanged files so ANSI/CSI/OSC text cannot survive in old FTS rows.
 const SEARCH_SCHEMA_VERSION = 4
+const SEARCH_DATABASE_BUSY_TIMEOUT_MS = 3_000
 
 export interface SearchIndexSource {
   filePath: string
@@ -136,10 +137,10 @@ function computeFileState(filePath: string): FileState | null {
 }
 
 function ensureSchema(db: Database.Database): void {
+  db.pragma(`busy_timeout = ${SEARCH_DATABASE_BUSY_TIMEOUT_MS}`)
   db.pragma('journal_mode = WAL')
   db.pragma('synchronous = NORMAL')
   db.pragma('temp_store = MEMORY')
-  db.pragma('busy_timeout = 2500')
 
   const version = db.pragma('user_version', { simple: true }) as number
   if (version !== SEARCH_SCHEMA_VERSION) {
@@ -191,11 +192,31 @@ function getDatabase(): Database.Database {
   queryCache.clear()
 
   fs.mkdirSync(path.dirname(requestedPath), { recursive: true, mode: 0o700 })
-  database = new Database(requestedPath)
+  const nextDatabase = new Database(requestedPath, { timeout: SEARCH_DATABASE_BUSY_TIMEOUT_MS })
+  try {
+    ensureSchema(nextDatabase)
+    try { fs.chmodSync(requestedPath, 0o600) } catch { /* best effort */ }
+  } catch (error) {
+    nextDatabase.close()
+    throw error
+  }
+  database = nextDatabase
   databasePath = requestedPath
-  ensureSchema(database)
-  try { fs.chmodSync(requestedPath, 0o600) } catch { /* best effort */ }
-  return database
+  return nextDatabase
+}
+
+function withReadOnlyDatabase<T>(query: (db: Database.Database) => T): T {
+  const readOnlyDatabase = new Database(searchDatabasePath(), {
+    readonly: true,
+    fileMustExist: true,
+    timeout: SEARCH_DATABASE_BUSY_TIMEOUT_MS
+  })
+  try {
+    readOnlyDatabase.pragma(`busy_timeout = ${SEARCH_DATABASE_BUSY_TIMEOUT_MS}`)
+    return query(readOnlyDatabase)
+  } finally {
+    readOnlyDatabase.close()
+  }
 }
 
 function searchableValue(value: unknown): string {
@@ -470,12 +491,15 @@ function contextLine(row: Pick<GrepRow, 'role' | 'text' | 'timestamp'>, matched:
  * Search the already synchronized FTS index. Context means the immediately
  * preceding and following indexed transcript messages from the same source.
  */
-export function grepTranscripts(query: string, filters: TranscriptGrepFilters = {}): TranscriptGrepResult[] {
+function grepTranscriptsFromDatabase(
+  db: Database.Database,
+  query: string,
+  filters: TranscriptGrepFilters = {}
+): TranscriptGrepResult[] {
   const ftsQuery = toFtsQuery(query)
   if (!ftsQuery) return []
   if (filters.sessionIds && filters.sessionIds.length === 0) return []
 
-  const db = getDatabase()
   const where = ['messages_fts MATCH ?']
   const params: Array<string | number> = [ftsQuery]
   if (filters.source) {
@@ -554,6 +578,18 @@ export function grepTranscripts(query: string, filters: TranscriptGrepFilters = 
     })
   }
   return [...grouped.values()]
+}
+
+export function grepTranscripts(query: string, filters: TranscriptGrepFilters = {}): TranscriptGrepResult[] {
+  return grepTranscriptsFromDatabase(getDatabase(), query, filters)
+}
+
+/** CLI query path: never runs schema setup or writes to the shared GUI index. */
+export function grepTranscriptsReadOnly(
+  query: string,
+  filters: TranscriptGrepFilters = {}
+): TranscriptGrepResult[] {
+  return withReadOnlyDatabase((db) => grepTranscriptsFromDatabase(db, query, filters))
 }
 
 export function searchIndexStats(): { sessions: number; messages: number; libraryBackups: number; databasePath: string } {

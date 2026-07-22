@@ -298,6 +298,7 @@ interface ElectronAPI {
   onAgentEvent: (callback: (event: {
     type: 'init' | 'assistant-text' | 'tool-use' | 'result'
     sessionId?: string
+    model?: string
     text?: string
     name?: string
     summary?: string

@@ -1,18 +1,18 @@
 import { ArrowUpDown, FolderTree, Layers3, Radio } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import { copy, SettingField, Segmented, useSettingsPreferences } from './shared'
+import { SettingField, Segmented, useSettingsPreferences } from './shared'
 
 export function ViewSettings() {
-  const { locale, savePreferences } = useStore()
+  const { savePreferences } = useStore()
   const t = useT()
   const preferences = useSettingsPreferences()
 
   return (
     <>
-      <SettingField label={copy(locale, '默认视图模式', 'Default project view', '既定のプロジェクト表示')} icon={<FolderTree size={12} />}>
+      <SettingField label={t('renderer.view_settings.default_project_view')} icon={<FolderTree size={12} />}>
         <Segmented
-          ariaLabel={copy(locale, '默认视图模式', 'Default project view', '既定のプロジェクト表示')}
+          ariaLabel={t('renderer.view_settings.default_project_view_2')}
           value={(preferences.projectViewMode === 'paths' ? 'paths' : 'folders') as 'folders' | 'paths'}
           onChange={(projectViewMode) => savePreferences({ projectViewMode })}
           options={[
@@ -21,41 +21,41 @@ export function ViewSettings() {
           ]}
         />
       </SettingField>
-      <SettingField label={copy(locale, '默认排序', 'Default sort', '既定の並び順')} icon={<ArrowUpDown size={12} />}>
+      <SettingField label={t('renderer.view_settings.default_sort')} icon={<ArrowUpDown size={12} />}>
         <Segmented
-          ariaLabel={copy(locale, '默认排序', 'Default sort', '既定の並び順')}
+          ariaLabel={t('renderer.view_settings.default_sort_2')}
           value={preferences.defaultSort}
           onChange={(defaultSort) => savePreferences({ defaultSort })}
           options={[
-            { value: 'updated', label: copy(locale, '最近更新', 'Recently updated', '最近の更新') },
-            { value: 'created', label: copy(locale, '创建时间', 'Created', '作成日時') },
-            { value: 'turns', label: copy(locale, '轮数', 'Turns', 'ターン数') },
-            { value: 'name', label: copy(locale, '名称', 'Name', '名前') }
+            { value: 'updated', label: t('renderer.view_settings.recently_updated') },
+            { value: 'created', label: t('renderer.view_settings.created') },
+            { value: 'turns', label: t('renderer.view_settings.turns') },
+            { value: 'name', label: t('renderer.view_settings.name') }
           ]}
         />
       </SettingField>
-      <SettingField label={copy(locale, '默认分组', 'Default grouping', '既定のグループ')} icon={<Layers3 size={12} />}>
+      <SettingField label={t('renderer.view_settings.default_grouping')} icon={<Layers3 size={12} />}>
         <Segmented
-          ariaLabel={copy(locale, '默认分组', 'Default grouping', '既定のグループ')}
+          ariaLabel={t('renderer.view_settings.default_grouping_2')}
           value={preferences.defaultGrouping}
           onChange={(defaultGrouping) => savePreferences({ defaultGrouping })}
           options={[
-            { value: 'none', label: copy(locale, '无', 'None', 'なし') },
-            { value: 'project', label: copy(locale, '按项目', 'Project', 'プロジェクト') },
-            { value: 'date', label: copy(locale, '按日期', 'Date', '日付') },
+            { value: 'none', label: t('renderer.view_settings.none') },
+            { value: 'project', label: t('renderer.view_settings.project') },
+            { value: 'date', label: t('renderer.view_settings.date') },
             { value: 'harness', label: 'Harness' }
           ]}
         />
       </SettingField>
-      <SettingField label={copy(locale, '单轮会话处理', 'Single-turn sessions', '単一ターンのセッション')} icon={<Radio size={12} />}>
+      <SettingField label={t('renderer.view_settings.single_turn_sessions')} icon={<Radio size={12} />}>
         <Segmented
-          ariaLabel={copy(locale, '单轮会话处理', 'Single-turn sessions', '単一ターンのセッション')}
+          ariaLabel={t('renderer.view_settings.single_turn_sessions_2')}
           value={preferences.singleTurnBehavior}
           onChange={(singleTurnBehavior) => savePreferences({ singleTurnBehavior })}
           options={[
-            { value: 'show', label: copy(locale, '显示', 'Show', '表示') },
-            { value: 'hide', label: copy(locale, '隐藏', 'Hide', '非表示') },
-            { value: 'collapse', label: copy(locale, '折叠', 'Collapse', '折りたたむ') }
+            { value: 'show', label: t('renderer.view_settings.show') },
+            { value: 'hide', label: t('renderer.view_settings.hide') },
+            { value: 'collapse', label: t('renderer.view_settings.collapse') }
           ]}
         />
       </SettingField>

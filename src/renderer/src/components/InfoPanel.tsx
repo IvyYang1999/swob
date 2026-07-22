@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useDeferredValue } from 'react'
 import { useStore } from '../store'
 import type { Highlight } from '../store'
-import { useT } from '../i18n'
+import { translate, useT } from '../i18n'
 import { Clock, MessageSquare, FolderOpen, Wrench, Zap, FileText, HardDrive, Image, File, Settings, ExternalLink, ChevronDown, ChevronRight, Pencil, Plus, Eye, Upload, Highlighter, Trash2, GitBranch, Copy, Check, Coins } from 'lucide-react'
 import { SessionFamilyTree } from './SessionFamilyTree'
 import { ExecutionTreePanel } from './ExecutionTreePanel'
@@ -291,15 +291,15 @@ function ImageThumb({ entry, onClick, onContextMenu }: { entry: ImageEntry; onCl
         ) : (
           <div className="w-full aspect-square flex items-center justify-center bg-surface text-faint text-[10px] p-1 text-center leading-tight">
             {entry.status === 'loading' ? '...' : entry.status === 'missing' ? (
-              <span title={shortPath}>{fileName || '?'}<br /><span className="text-soft-red">{locale === 'zh-CN' ? '已移动' : 'moved'}</span></span>
+              <span title={shortPath}>{fileName || '?'}<br /><span className="text-soft-red">{translate(locale, 'renderer.info_panel.moved')}</span></span>
             ) : '?'}
           </div>
         )}
         <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-[9px] text-white px-1 py-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity">
-          {entry.isPasted ? (locale === 'zh-CN' ? '粘贴' : 'Pasted') : fileName}
+          {entry.isPasted ? (translate(locale, 'renderer.info_panel.pasted')) : fileName}
         </div>
         {entry.originalPath && entry.status === 'cached' && (
-          <div className="absolute top-0.5 right-0.5 bg-soft-amber/80 text-[8px] text-white px-1 rounded">{locale === 'zh-CN' ? '缓存' : 'cache'}</div>
+          <div className="absolute top-0.5 right-0.5 bg-soft-amber/80 text-[8px] text-white px-1 rounded">{translate(locale, 'renderer.info_panel.cache')}</div>
         )}
       </div>
       {lightbox && entry.src && (
@@ -528,7 +528,7 @@ function BranchRelationships({ session }: { session: any }) {
     <section>
       <div className="flex items-center gap-2 text-xs font-medium text-soft-purple mb-2">
         <GitBranch size={12} />
-        <span>{locale === 'zh-CN' ? '分支关系' : 'Branch Tree'}</span>
+        <span>{translate(locale, 'renderer.info_panel.branch_tree')}</span>
       </div>
       <div className="space-y-1.5">
         {branchParentId && (() => {
@@ -542,25 +542,25 @@ function BranchRelationships({ session }: { session: any }) {
               onClick={() => selectSession(parent.filePath, (parent as any).allFilePaths, parent.id, (parent as any).branchParentFilePaths, (parent as any).branchPointUuid, (parent as any).branchLeafUuid)}
               className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
             >
-              <div className="text-soft-purple/60 text-[10px] mb-0.5">{locale === 'zh-CN' ? '↑ 母分支' : '↑ Parent'}</div>
+              <div className="text-soft-purple/60 text-[10px] mb-0.5">{translate(locale, 'renderer.info_panel.parent')}</div>
               <div className="text-body truncate">{pTitle}</div>
-              <div className="text-muted text-[10px] mt-0.5">{parent.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
+              <div className="text-muted text-[10px] mt-0.5">{parent.turnCount} {translate(locale, 'renderer.info_panel.turns')}</div>
             </button>
           )
         })()}
         {isForkBranch && (
           <div className="px-2 py-1 text-[10px] text-soft-blue/60 border-l-2 border-soft-blue/30 ml-1">
-            ● {locale === 'zh-CN' ? '当前（Fork 分支，可独立 Resume）' : 'Current (fork, can resume independently)'}
+            ● {translate(locale, 'renderer.info_panel.current_fork_can_resume_independently')}
           </div>
         )}
         {!isIntraBranch && !isForkBranch && (
           <div className="px-2 py-1 text-[10px] text-soft-emerald/60 border-l-2 border-soft-emerald/30 ml-1">
-            ● {locale === 'zh-CN' ? '当前（主分支）' : 'Current (main)'}
+            ● {translate(locale, 'renderer.info_panel.current_main')}
           </div>
         )}
         {isIntraBranch && (
           <div className="px-2 py-1 text-[10px] text-soft-purple/60 border-l-2 border-soft-purple/30 ml-1">
-            ● {locale === 'zh-CN' ? '当前分支' : 'Current branch'}
+            ● {translate(locale, 'renderer.info_panel.current_branch')}
           </div>
         )}
         {branchChildIds && branchChildIds.length > 0 && branchChildIds.map((childId) => {
@@ -574,28 +574,33 @@ function BranchRelationships({ session }: { session: any }) {
               onClick={() => selectSession(child.filePath, (child as any).allFilePaths, child.id, (child as any).branchParentFilePaths, (child as any).branchPointUuid, (child as any).branchLeafUuid)}
               className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
             >
-              <div className="text-soft-purple/60 text-[10px] mb-0.5">↳ {locale === 'zh-CN' ? '子分支' : 'Child branch'}</div>
+              <div className="text-soft-purple/60 text-[10px] mb-0.5">↳ {translate(locale, 'renderer.info_panel.child_branch')}</div>
               <div className="text-body truncate">{cTitle}</div>
-              <div className="text-muted text-[10px] mt-0.5">{child.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
+              <div className="text-muted text-[10px] mt-0.5">{child.turnCount} {translate(locale, 'renderer.info_panel.turns')}</div>
             </button>
           )
         })}
       </div>
       <div className="mt-2 px-2 py-1.5 rounded bg-surface/30 text-[10px] text-muted leading-relaxed">
         {isForkBranch ? (
-          locale === 'zh-CN'
-            ? <><span className="text-secondary">Fork 分支</span>：通过 <code className="text-soft-purple/80">/branch</code> 或 <code className="text-soft-purple/80">/fork</code> 创建的独立对话，可以单独 Resume。</>
-            : <><span className="text-secondary">Fork branch</span>: Created via <code className="text-soft-purple/80">/branch</code> or <code className="text-soft-purple/80">/fork</code>, can be resumed independently.</>
+          <>
+            <span className="text-secondary">{translate(locale, 'renderer.info_panel.fork_branch')}</span>
+            {translate(locale, 'renderer.info_panel.fork_created_via')}
+            <code className="text-soft-purple/80">/branch</code>
+            {translate(locale, 'renderer.info_panel.or')}
+            <code className="text-soft-purple/80">/fork</code>
+            {translate(locale, 'renderer.info_panel.fork_can_resume')}
+          </>
         ) : (
-          locale === 'zh-CN'
-            ? <>
-                <span className="text-secondary">主对话</span> = 对话轮数最多的那条路径。两个终端同时 resume 同一个 session 会产生分支，谁聊得多谁就是主对话。
-                <br /><span className="text-secondary">Resume 限制</span>：<code className="text-soft-purple/80">claude --resume</code> 只能恢复主对话，无法单独恢复分支（Claude Code CLI 限制）。分支的完整对话可在此处查看。
-              </>
-            : <>
-                <span className="text-secondary">Main session</span> = the path with the most turns. When two terminals resume the same session simultaneously, whichever has more turns becomes main.
-                <br /><span className="text-secondary">Resume limitation</span>: <code className="text-soft-purple/80">claude --resume</code> only restores the main path (CLI limitation). Branch conversations are fully viewable here.
-              </>
+          <>
+            <span className="text-secondary">{translate(locale, 'renderer.info_panel.main_session')}</span>
+            {translate(locale, 'renderer.info_panel.main_session_explanation')}
+            <br />
+            <span className="text-secondary">{translate(locale, 'renderer.info_panel.resume_limitation')}</span>
+            {translate(locale, 'renderer.info_panel.resume_limitation_prefix')}
+            <code className="text-soft-purple/80">claude --resume</code>
+            {translate(locale, 'renderer.info_panel.resume_limitation_explanation')}
+          </>
         )}
       </div>
     </section>
@@ -643,7 +648,7 @@ function DetailsTab({ session, highlights, onNavigate }: {
         {s.tokenAccounting?.provenance === 'unavailable' ? (
           <div className="flex items-center gap-2 text-muted" title={s.tokenAccounting.unavailableReason || 'Authoritative token usage is unavailable'}>
             <Coins size={12} />
-            <span>{locale === 'zh-CN' ? 'Token：不可用' : 'Tokens: unavailable'}</span>
+            <span>{translate(locale, 'renderer.info_panel.tokens_unavailable')}</span>
           </div>
         ) : s.tokenUsage && (s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0 || s.tokenUsage.cacheCreationTokens > 0 || s.tokenUsage.cacheReadTokens > 0) && (
           <div className="flex items-center gap-2 text-secondary" title="Processed input = non-cached input + cache read + cache write. Output is added once; reasoning remains an output subset.">
@@ -668,7 +673,7 @@ function DetailsTab({ session, highlights, onNavigate }: {
 
       {/* Session family tree (lineage) — default collapsed */}
       <DisclosureSection
-        title={locale === 'zh-CN' ? '会话族谱' : 'Session Lineage'}
+        title={translate(locale, 'renderer.session_family_tree.session_lineage')}
         icon={<GitBranch size={12} className="text-soft-purple" />}
         defaultOpen={false}
       >
@@ -722,7 +727,7 @@ function FilesTab({ session, onNavigate }: {
       !allCwdPrefixes.some((prefix: string) => f.path.startsWith(prefix))
     )
     if (orphanFiles.length > 0) {
-      groups.push({ cwd: locale === 'zh-CN' ? '其他路径' : 'Other paths', files: orphanFiles })
+      groups.push({ cwd: translate(locale, 'renderer.info_panel.other_paths'), files: orphanFiles })
     }
 
     return groups
@@ -733,7 +738,7 @@ function FilesTab({ session, onNavigate }: {
   if (totalFileCount === 0 && configFiles.length === 0 && s.cwds.length === 0) {
     return (
       <div className="text-xs text-muted py-8 text-center">
-        {locale === 'zh-CN' ? '此会话没有文件操作记录' : 'No file operations in this session'}
+        {translate(locale, 'renderer.info_panel.no_file_operations')}
       </div>
     )
   }
@@ -784,7 +789,7 @@ function FilesTab({ session, onNavigate }: {
             </div>
           ) : (
             <div className="text-[11px] text-muted ml-1">
-              {locale === 'zh-CN' ? '此目录下无文件操作' : 'No file operations under this directory'}
+              {translate(locale, 'renderer.info_panel.no_file_operations_in_directory')}
             </div>
           )}
         </DisclosureSection>
@@ -822,7 +827,7 @@ function AuditTab({ session, analysisReady }: {
   if (!analysisReady) {
     return (
       <div className="text-xs text-muted py-8 text-center">
-        {locale === 'zh-CN' ? '正在加载审计数据...' : 'Loading audit data...'}
+        {translate(locale, 'renderer.info_panel.loading_audit_data')}
       </div>
     )
   }
@@ -834,7 +839,7 @@ function AuditTab({ session, analysisReady }: {
 
       {/* Execution tree — default collapsed */}
       <DisclosureSection
-        title={locale === 'zh-CN' ? '执行树' : 'Execution Tree'}
+        title={translate(locale, 'renderer.execution_tree_panel.execution_tree')}
         icon={<Wrench size={12} />}
         defaultOpen={false}
       >
@@ -843,7 +848,7 @@ function AuditTab({ session, analysisReady }: {
 
       {/* Context Inspector — default collapsed */}
       <DisclosureSection
-        title={locale === 'zh-CN' ? '上下文分析' : 'Context Analysis'}
+        title={translate(locale, 'renderer.info_panel.context_analysis')}
         icon={<MessageSquare size={12} />}
         defaultOpen={false}
       >

@@ -2,7 +2,12 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useStore, type SessionSummary, type Folder, type VaultFile } from '../store'
 import { useT } from '../i18n'
-import { groupSessionsByLens, type LensDimension, type LensGroup } from '../../../shared/vault-lens'
+import {
+  groupSessionsByLens,
+  SINGLE_TURN_ARCHIVE_FOLDER,
+  type LensDimension,
+  type LensGroup
+} from '../../../shared/vault-lens'
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2,
@@ -133,10 +138,10 @@ function SessionItem({
         />
       ) : (
         <div className="text-sm text-primary truncate flex items-center gap-1.5">
-          <MessageSquare size={12} className="shrink-0 text-muted" aria-label="会话包" />
+          <MessageSquare size={12} className="shrink-0 text-muted" aria-label={t('renderer.sidebar.session_package')} />
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-active shrink-0" title={t('sidebar.opened_in_terminal')} />}
-          {isCloud && <span title="iCloud 云端文件，未下载到本地"><Cloud size={11} className="shrink-0 text-soft-blue" /></span>}
-          {isRemote && !isCloud && <span title={session.remoteHost ? `来自 ${session.remoteHost}` : '来自其他设备'}><Cloud size={11} className="shrink-0 text-soft-cyan" /></span>}
+          {isCloud && <span title={t('renderer.sidebar.icloud_only')}><Cloud size={11} className="shrink-0 text-soft-blue" /></span>}
+          {isRemote && !isCloud && <span title={session.remoteHost ? t('renderer.sidebar.from_host', { value0: session.remoteHost }) : t('renderer.sidebar.from_other_device')}><Cloud size={11} className="shrink-0 text-soft-cyan" /></span>}
           {isIntraBranch && <GitBranch size={12} className="shrink-0 text-soft-purple" />}
           <span className="truncate">{title.slice(0, 60)}</span>
         </div>
@@ -205,14 +210,14 @@ function VaultFileItem({ file, depth = 0 }: { file: VaultFile; depth?: number })
   )
 }
 
-const LENS_DEFINITIONS: Array<{ id: LensDimension; label: string; icon: typeof Focus }> = [
-  { id: 'project', label: '项目', icon: Focus },
-  { id: 'date', label: '日期', icon: CalendarDays },
-  { id: 'tags', label: '标签', icon: Tags },
-  { id: 'harness', label: 'harness', icon: Layers3 },
-  { id: 'turns', label: '轮数', icon: Gauge },
-  { id: 'source', label: '来源', icon: HardDrive },
-  { id: 'none', label: '无分组', icon: Rows3 }
+const LENS_DEFINITIONS: Array<{ id: LensDimension; labelKey: string; icon: typeof Focus }> = [
+  { id: 'project', labelKey: 'renderer.sidebar.lens_project', icon: Focus },
+  { id: 'date', labelKey: 'renderer.sidebar.lens_date', icon: CalendarDays },
+  { id: 'tags', labelKey: 'renderer.sidebar.lens_tags', icon: Tags },
+  { id: 'harness', labelKey: 'renderer.sidebar.lens_harness', icon: Layers3 },
+  { id: 'turns', labelKey: 'renderer.sidebar.lens_turns', icon: Gauge },
+  { id: 'source', labelKey: 'renderer.sidebar.lens_source', icon: HardDrive },
+  { id: 'none', labelKey: 'renderer.sidebar.lens_none', icon: Rows3 }
 ]
 
 const LENS_COLOR_CLASSES: Record<LensGroup['color'], string> = {
@@ -239,6 +244,7 @@ function LensView({
   onDoubleClickRename: (sessionId: string) => void
 }) {
   const { sessions, config, cloudSessionIds, applyOrganization, selectedUniqueId } = useStore()
+  const t = useT()
   const sortedSessions = useMemo(
     () => sortSessionsForView(sessions, config?.preferences?.defaultSort)
       .filter((session) => config?.preferences?.singleTurnBehavior !== 'hide' || !isSingleTurnSession(session)),
@@ -295,18 +301,20 @@ function LensView({
               className={`w-full h-8 px-2 flex items-center gap-2 border-l-2 cursor-pointer select-none ${LENS_COLOR_CLASSES[group.color]}`}
             >
               {expanded ? <ChevronDown size={12} className="shrink-0 text-muted" /> : <ChevronRight size={12} className="shrink-0 text-muted" />}
-              <span className="text-xs font-medium text-body truncate">{group.label}</span>
+              <span className="text-xs font-medium text-body truncate">
+                {group.labelKey ? t(group.labelKey) : group.label || group.id}
+              </span>
               <span className="ml-auto px-1.5 py-0.5 rounded-full text-[10px] bg-surface text-muted">{group.items.length}</span>
               {dimension === 'turns' && group.id === 'single' && group.items.length > 0 && (
                 <span
                   role="button"
                   onClick={(e) => { e.stopPropagation(); void applyOrganization('archive', group.items.map((session) => ({
                     sessionId: session.sessionId || session.id,
-                    targetRelativeFolder: '归档/单轮会话'
+                    targetRelativeFolder: SINGLE_TURN_ARCHIVE_FOLDER
                   }))) }}
                   className="text-[10px] text-muted hover:text-primary"
                 >
-                  批量归档
+                  {t('renderer.sidebar.batch_archive')}
                 </span>
               )}
             </button>
@@ -535,9 +543,9 @@ function FolderNode({
             className="hidden group-hover:block p-0.5 hover:text-soft-green disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-secondary"
             title={
               resumableFolderSessions.length === 0
-                ? (folderSessions[0]?.resumeUnavailableReason || '此会话无法直接恢复')
+                ? (folderSessions[0]?.resumeUnavailableReason || t('renderer.sidebar.resume_unavailable'))
                 : blockedResumeCount > 0
-                  ? `${t('sidebar.batch_resume', { n: resumableFolderSessions.length })}，${blockedResumeCount} 个不可恢复将跳过`
+                  ? t('renderer.sidebar.batch_resume_skip', { value0: t('sidebar.batch_resume', { n: resumableFolderSessions.length }), value1: blockedResumeCount })
                   : t('sidebar.batch_resume', { n: folderSessions.length })
             }
           ><Play size={12} /></button>
@@ -850,9 +858,9 @@ export function Sidebar({ width }: { width: number }) {
     setCloudRefreshing(false)
     const cloudCount = useStore.getState().cloudSessionIds.size
     if (cloudCount > 0) {
-      showToast(`发现 ${cloudCount} 个 iCloud 云端会话`, 'info')
+      showToast(t('renderer.sidebar.cloud_found', { value0: cloudCount }), 'info')
     } else {
-      showToast('iCloud 状态已刷新，所有会话均在本地', 'success')
+      showToast(t('renderer.sidebar.cloud_all_local'), 'success')
     }
   }
 
@@ -860,14 +868,14 @@ export function Sidebar({ width }: { width: number }) {
     <div data-testid="sidebar" className="h-full flex flex-col bg-base shrink-0" style={{ width }}>
       {/* ===== Top: Mode switch (the ONLY thing at the very top) ===== */}
       <div className="px-2 pt-2 pb-1 border-b border-edge space-y-1.5">
-        <div className="grid grid-cols-2 p-0.5 rounded bg-surface" role="tablist" aria-label="侧边栏模式">
+        <div className="grid grid-cols-2 p-0.5 rounded bg-surface" role="tablist" aria-label={t('renderer.sidebar.mode')}>
           <button
             role="tab"
             aria-selected={sidebarMode === 'folders'}
             onClick={() => setSidebarMode('folders')}
             className={`py-1 rounded text-[11px] flex items-center justify-center gap-1.5 ${sidebarMode === 'folders' ? 'bg-hover text-primary' : 'text-muted hover:text-secondary'}`}
           >
-            <FolderTree size={12} />整理会话
+            <FolderTree size={12} />{t('renderer.sidebar.folders')}
           </button>
           <button
             role="tab"
@@ -875,18 +883,18 @@ export function Sidebar({ width }: { width: number }) {
             onClick={() => setSidebarMode('lens')}
             className={`py-1 rounded text-[11px] flex items-center justify-center gap-1.5 ${sidebarMode === 'lens' ? 'bg-hover text-primary' : 'text-muted hover:text-secondary'}`}
           >
-            <Focus size={12} />查看全部会话
+            <Focus size={12} />{t('renderer.sidebar.lens')}
           </button>
         </div>
         {sidebarMode === 'lens' && (
-          <div className="lens-chip-strip flex gap-1 overflow-x-auto pb-0.5" aria-label="分组方式">
-            {LENS_DEFINITIONS.map(({ id, label, icon: Icon }) => (
+          <div className="lens-chip-strip flex gap-1 overflow-x-auto pb-0.5" aria-label={t('renderer.sidebar.lens_dimension')}>
+            {LENS_DEFINITIONS.map(({ id, labelKey, icon: Icon }) => (
               <button
                 key={id}
                 onClick={() => setLensDimension(id)}
                 className={`shrink-0 px-2 py-1 rounded-full text-[10px] flex items-center gap-1 border ${lensDimension === id ? 'border-accent text-primary bg-soft-purple/10' : 'border-edge text-muted hover:text-secondary'}`}
               >
-                <Icon size={10} />{label}
+                <Icon size={10} />{t(labelKey)}
               </button>
             ))}
           </div>
@@ -924,11 +932,11 @@ export function Sidebar({ width }: { width: number }) {
           <>
             {rootFolders.length === 0 && sortedSessions.length > 0 && (
               <div className="m-3 p-3 border border-edge rounded bg-surface/40">
-                <div className="flex items-center gap-2 text-sm text-primary"><WandSparkles size={14} className="text-accent" />开始整理你的会话</div>
-                <p className="text-xs text-muted mt-1.5 leading-relaxed">切换到查看全部会话，或一键按项目整理。</p>
+                <div className="flex items-center gap-2 text-sm text-primary"><WandSparkles size={14} className="text-accent" />{t('renderer.sidebar.empty_title')}</div>
+                <p className="text-xs text-muted mt-1.5 leading-relaxed">{t('renderer.sidebar.empty_hint')}</p>
                 <div className="flex gap-2 mt-2">
-                  <button onClick={() => setSidebarMode('lens')} className="text-[11px] text-accent hover:text-primary">查看全部会话</button>
-                  <button onClick={() => setOrganizerKind('project')} className="text-[11px] text-secondary hover:text-primary">按项目整理 →</button>
+                  <button onClick={() => setSidebarMode('lens')} className="text-[11px] text-accent hover:text-primary">{t('renderer.sidebar.browse_lens')}</button>
+                  <button onClick={() => setOrganizerKind('project')} className="text-[11px] text-secondary hover:text-primary">{t('renderer.sidebar.organize_project_arrow')}</button>
                 </div>
               </div>
             )}
@@ -1031,16 +1039,16 @@ function SidebarFooter({ sessionCount, totalBytes, onOrganize, onNewFolder, onUn
               <FolderPlus size={12} />
             </button>
           )}
-          <button onClick={onRefreshCloud} className="p-1 hover:bg-hover rounded hover:text-primary" title="刷新 iCloud 同步状态">
+          <button onClick={onRefreshCloud} className="p-1 hover:bg-hover rounded hover:text-primary" title={t('renderer.sidebar.refresh_cloud')}>
             <Cloud size={12} className={cloudRefreshing ? 'animate-pulse text-soft-blue' : ''} />
           </button>
-          <button onClick={onUndo} className="p-1 hover:bg-hover rounded hover:text-primary" title="撤销最近整理">
+          <button onClick={onUndo} className="p-1 hover:bg-hover rounded hover:text-primary" title={t('renderer.sidebar.undo_organization')}>
             <Undo2 size={12} />
           </button>
-          <button onClick={() => onOrganize('project')} className="p-1 hover:bg-hover rounded hover:text-primary" title="按项目整理">
+          <button onClick={() => onOrganize('project')} className="p-1 hover:bg-hover rounded hover:text-primary" title={t('renderer.sidebar.organize_project')}>
             <FolderIcon size={12} />
           </button>
-          <button onClick={() => onOrganize('smart')} className="p-1 hover:bg-hover rounded hover:text-primary" title="智能整理">
+          <button onClick={() => onOrganize('smart')} className="p-1 hover:bg-hover rounded hover:text-primary" title={t('renderer.sidebar.organize_smart')}>
             <WandSparkles size={12} />
           </button>
         </div>
@@ -1049,7 +1057,7 @@ function SidebarFooter({ sessionCount, totalBytes, onOrganize, onNewFolder, onUn
         <div
           className="px-2 pb-1.5 flex items-center gap-1 cursor-pointer hover:text-secondary truncate"
           onClick={() => setLocationModalOpen(true)}
-          title={`库位置: ${libraryPath}\n点击切换或迁移`}
+          title={t('renderer.sidebar.library_location', { value0: libraryPath })}
         >
           <FolderIcon size={10} className="shrink-0" />
           <span className="truncate">{shortPath}</span>

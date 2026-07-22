@@ -1,9 +1,11 @@
 {
   "description": "Exact, counted exceptions for non-translatable CJK literals. New literals still fail.",
-  "temporaryMigrationBaseline": {
-    "count": 567,
-    "digest": "bb07f8251b252760938b37a4a4ec0603b1fff95bc26b5b3ffeb2f57ce9d0783f",
-    "reason": "T122 architecture commit only; removed by the renderer migration commit"
-  },
-  "entries": []
+  "entries": [
+    {
+      "file": "src/renderer/src/components/settings/GeneralSettings.tsx",
+      "text": "中文",
+      "count": 1,
+      "reason": "Language names are intentionally displayed in their native form."
+    }
+  ]
 }

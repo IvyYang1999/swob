@@ -146,7 +146,7 @@ export function registerAgentIpc(options: AgentIpcOptions): void {
         value: {
           ...item,
           canResume: status.available,
-          ...(status.available ? {} : { reason: status.reason || 'Agent engine is unavailable' })
+          ...(status.available ? {} : { reasonCode: status.reasonCode || 'agent.error.unavailable' })
         }
       }
     } catch (error) {
@@ -191,8 +191,10 @@ export function registerAgentIpc(options: AgentIpcOptions): void {
   })
 
   ipc.handle('agent:send', async (_event, prompt: string) => {
-    if (typeof prompt !== 'string' || !prompt.trim()) return { ok: false, error: '空消息' }
-    if (currentTurn) return { ok: false, error: '上一轮还在进行中' }
+    if (typeof prompt !== 'string' || !prompt.trim()) {
+      return { ok: false, errorCode: 'agent.error.empty_message' }
+    }
+    if (currentTurn) return { ok: false, errorCode: 'agent.error.turn_in_progress' }
 
     const turn = await startTurn({
       prompt: prompt.trim().slice(0, 8000),
@@ -207,7 +209,7 @@ export function registerAgentIpc(options: AgentIpcOptions): void {
         emitToAgentWindow(event)
       }
     })
-    if ('error' in turn) return { ok: false, error: turn.error }
+    if ('errorCode' in turn) return { ok: false, errorCode: turn.errorCode, errorParams: turn.errorParams }
 
     currentTurn = turn
     void turn.done.finally(() => { currentTurn = null })

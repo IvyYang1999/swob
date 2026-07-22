@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { initLibrary, scanLibrary, LOCAL_RESUME_UNAVAILABLE_REASON } from '../main/library-manager'
+import { initLibrary, scanLibrary } from '../main/library-manager'
 import { shellQuote } from '../main/resume-terminal'
 import { buildCliResumeResponse } from './resume-command'
 
@@ -164,7 +164,7 @@ describe('CLI resume guard', () => {
       loadSessions: async () => []
     })
 
-    expect(result).toEqual({ error: LOCAL_RESUME_UNAVAILABLE_REASON })
+    expect(result).toEqual({ error: 'TODO: resume.error.unavailable' })
   })
 
   it('完全 unknown 的 ad-hoc id 仍保留兼容命令', async () => {

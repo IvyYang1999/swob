@@ -1,3 +1,4 @@
+import { translate } from '../i18n'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useStore } from '../store'
 import { GitBranch } from 'lucide-react'
@@ -222,9 +223,9 @@ export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
     <section>
       <div className="flex items-center gap-2 text-xs font-medium text-soft-purple mb-2">
         <GitBranch size={12} />
-        <span>{locale === 'zh-CN' ? '关联会话' : 'Related Sessions'}</span>
+        <span>{translate(locale, 'renderer.session_family_tree.session_lineage')}</span>
         <span className="text-muted text-[10px]">
-          {family.nodes.length} {locale === 'zh-CN' ? '个节点' : 'nodes'} · {family.edges.length} {locale === 'zh-CN' ? '条边' : 'edges'}
+          {family.nodes.length} {translate(locale, 'renderer.session_family_tree.nodes')} · {family.edges.length} {translate(locale, 'renderer.session_family_tree.edges')}
         </span>
       </div>
       <div className="overflow-x-auto rounded border border-edge bg-surface/30" style={{ maxHeight: 320 }}>

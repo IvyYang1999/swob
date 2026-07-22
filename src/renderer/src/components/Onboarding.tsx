@@ -73,7 +73,7 @@ export function Onboarding({ defaultPath, onDone }: { defaultPath: string; onDon
       setRetentionDone(true)
       showToast(t('onboarding.retention_done'), 'success')
     } else {
-      showToast(result.error || t('onboarding.retention_failed'), 'error')
+      showToast(result.errorCode ? t(result.errorCode) : t('onboarding.retention_failed'), 'error')
     }
   }
 

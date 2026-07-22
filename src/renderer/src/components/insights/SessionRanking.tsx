@@ -1,3 +1,4 @@
+import { translate } from '../../i18n'
 import { useMemo } from 'react'
 import { useStore } from '../../store'
 import { useAnalysisScope } from './scope'
@@ -47,7 +48,7 @@ export function SessionRanking({ data }: { data: InsightsData }) {
   const max = ranked[0]?.tokens || 1
 
   if (measured === 0) {
-    return <div className="text-[11px] text-muted">{zh ? '没有带权威用量的会话' : 'No sessions with authoritative usage'}</div>
+    return <div className="text-[11px] text-muted">{translate(zh ? 'zh-CN' : 'en', 'renderer.session_ranking.no_sessions_with_authoritative_usage')}</div>
   }
 
   return (
@@ -59,7 +60,7 @@ export function SessionRanking({ data }: { data: InsightsData }) {
           </span>
         ))}
         <span className="rounded bg-hover px-1.5 py-0.5 text-faint">
-          {zh ? `${measured} 个可计量会话` : `${measured} measured sessions`}
+          {translate(zh ? 'zh-CN' : 'en', 'renderer.session_ranking.value_measured_sessions', { value0: measured })}
         </span>
       </div>
 
@@ -89,7 +90,7 @@ export function SessionRanking({ data }: { data: InsightsData }) {
               {session.valuation.coveragePercent < 100 && (
                 <span
                   className="shrink-0 text-[9px] text-soft-amber"
-                  title={zh ? '部分 token 未计价' : 'Some tokens are unpriced'}
+                  title={translate(zh ? 'zh-CN' : 'en', 'renderer.session_ranking.some_tokens_are_unpriced')}
                 >
                   {session.valuation.coveragePercent.toFixed(0)}%
                 </span>

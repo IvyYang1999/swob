@@ -1,3 +1,4 @@
+import { translate } from '../i18n'
 import { useState, useEffect, useMemo } from 'react'
 import { useStore } from '../store'
 import { Activity, ChevronDown, ChevronRight, AlertTriangle, Layers } from 'lucide-react'
@@ -153,7 +154,7 @@ export function ContextInspectorPanel({ filePath }: { filePath: string }) {
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <Activity size={12} />
-        <span>{locale === 'zh-CN' ? '上下文检查器' : 'Context Inspector'}</span>
+        <span>{translate(locale, 'renderer.context_inspector_panel.context_inspector')}</span>
         <span className="text-muted text-[10px] ml-auto">
           peak {formatTokens(data!.peakTokens)}
           {data!.compactEvents.length > 0 && ` · ${data!.compactEvents.length} compacts`}
@@ -174,7 +175,7 @@ export function ContextInspectorPanel({ filePath }: { filePath: string }) {
             <div>
               <div className="text-[10px] font-medium text-soft-purple flex items-center gap-1 mb-1">
                 <Layers size={10} />
-                {data!.compactEvents.length} compact {locale === 'zh-CN' ? '事件' : 'events'}
+                {data!.compactEvents.length} compact {translate(locale, 'renderer.context_inspector_panel.events')}
               </div>
               {data!.compactEvents.map((e, i) => (
                 <div key={i} className="text-[10px] text-muted pl-4">
@@ -192,7 +193,7 @@ export function ContextInspectorPanel({ filePath }: { filePath: string }) {
             <div>
               <div className="text-[10px] font-medium text-yellow-400 flex items-center gap-1 mb-1">
                 <AlertTriangle size={10} />
-                {data!.warnings.length} {locale === 'zh-CN' ? '个警告' : 'warnings'}
+                {data!.warnings.length} {translate(locale, 'renderer.context_inspector_panel.warnings')}
               </div>
               {data!.warnings.slice(0, 8).map((w, i) => (
                 <div key={i} className="text-[10px] text-yellow-300/60 pl-4 truncate">
@@ -204,9 +205,7 @@ export function ContextInspectorPanel({ filePath }: { filePath: string }) {
 
           {/* Data provenance note */}
           <div className="text-[9px] text-faint border-t border-edge pt-2">
-            {locale === 'zh-CN'
-              ? 'ⓘ 有 API usage 数据的轮次使用真实 token 数（标记 reported），其余为 chars/4 估算（标记 estimated）。'
-              : 'ⓘ Turns with API usage data use reported tokens; others are estimated via chars/4.'}
+            {translate(locale, 'renderer.context_inspector_panel.turns_with_api_usage_data_use_reported_tokens')}
           </div>
         </div>
       )}

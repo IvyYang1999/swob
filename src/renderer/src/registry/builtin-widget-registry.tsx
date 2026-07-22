@@ -25,6 +25,7 @@ import { TokenHeatmap } from '../components/insights/TokenHeatmap'
 import { ToolUsageChart } from '../components/insights/ToolUsageChart'
 import { TurnDistribution } from '../components/insights/TurnDistribution'
 import type { InsightsData, PreviousPeriodComparison } from '../components/insights/shared'
+import { translate } from '../i18n'
 
 export interface InsightsWidgetContext {
   data: InsightsData
@@ -42,37 +43,39 @@ export interface InsightsWidgetContext {
 
 type WidgetRenderer = (context: InsightsWidgetContext) => ReactNode
 
+function widgetT(zh: boolean, key: string, params?: Record<string, string | number>): string {
+  return translate(zh ? 'zh-CN' : 'en', key, params)
+}
+
 const renderers: Record<string, WidgetRenderer> = {
   'overview.stats': ({ data, previousPeriod }) => (
     <StatsCards data={data} previousPeriod={previousPeriod} />
   ),
   'overview.accounting-note': ({ data, zh }) => (
     <div className="text-[10px] text-muted px-1" title="The same provider-normalized ledger feeds global, project and session totals.">
-      {zh
-        ? '同一账本供给全局/项目/会话;缓存分桶互斥;不可用用量被排除而不是记 0'
-        : 'Processed/billing scope · cache components are mutually exclusive · unavailable usage is excluded, not counted as zero'}
-      {data.tokenUnavailableSessions > 0 && ` · ${data.tokenUnavailableSessions} ${zh ? '个会话用量不可用' : 'sessions unavailable'}`}
+      {widgetT(zh, 'renderer.insights_page.processed_billing_scope_cache_components_are_mutually_exclusive')}
+      {data.tokenUnavailableSessions > 0 && ` · ${data.tokenUnavailableSessions} ${widgetT(zh, 'renderer.insights_page.sessions_unavailable')}`}
     </div>
   ),
-  'overview.token-heatmap': ({ data }) => data.heatmap.length > 0 ? (
-    <CardShell title="Token 热力图" titleEn="Token Heatmap">
+  'overview.token-heatmap': ({ data, zh }) => data.heatmap.length > 0 ? (
+    <CardShell title={widgetT(zh, 'renderer.insights_page.card_heatmap')}>
       <div className="min-w-0">
         <TokenHeatmap data={data.heatmap} />
       </div>
     </CardShell>
   ) : null,
   'overview.by-source': ({ data, zh, openDrilldown }) => (
-    <CardShell title="按来源" titleEn="By Source">
+    <CardShell title={widgetT(zh, 'renderer.insights_page.card_source')}>
       <SourceDonut sources={data.bySource} />
       {data.bySource.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-2">
           {data.bySource.filter((source) => source.totalTokens > 0).map((source) => (
             <button
               key={source.source}
-              onClick={() => openDrilldown('source', zh ? '来源' : 'Source', source.source, source.label)}
+              onClick={() => openDrilldown('source', widgetT(zh, 'renderer.insights_page.source'), source.source, source.label)}
               className="text-[10px] text-accent hover:underline"
             >
-              {zh ? '下钻' : 'drill'} {source.label}
+              {widgetT(zh, 'renderer.insights_page.drill')} {source.label}
             </button>
           ))}
         </div>
@@ -80,17 +83,17 @@ const renderers: Record<string, WidgetRenderer> = {
     </CardShell>
   ),
   'overview.by-model': ({ data, zh, openDrilldown }) => (
-    <CardShell title="按模型" titleEn="By Model">
+    <CardShell title={widgetT(zh, 'renderer.insights_page.card_model')}>
       <ModelBreakdown models={data.byModel ?? []} />
       {(data.byModel ?? []).length > 0 && (
         <div className="flex flex-wrap gap-1 mt-2">
           {(data.byModel ?? []).filter((model) => model.totalTokens > 0).map((model) => (
             <button
               key={model.model}
-              onClick={() => openDrilldown('model', zh ? '模型' : 'Model', model.model, model.model)}
+              onClick={() => openDrilldown('model', widgetT(zh, 'renderer.insights_page.model'), model.model, model.model)}
               className="text-[10px] text-accent hover:underline"
             >
-              {zh ? '下钻' : 'drill'} {model.model.length > 15 ? `${model.model.slice(0, 13)}...` : model.model}
+              {widgetT(zh, 'renderer.insights_page.drill_2')} {model.model.length > 15 ? `${model.model.slice(0, 13)}...` : model.model}
             </button>
           ))}
         </div>
@@ -98,30 +101,30 @@ const renderers: Record<string, WidgetRenderer> = {
     </CardShell>
   ),
   'overview.top-projects': ({ data, projectData, zh, openDrilldown }) => (
-    <CardShell title="Top 项目" titleEn="Top Projects">
+    <CardShell title={widgetT(zh, 'renderer.insights_page.card_projects')}>
       <ProjectRanking projects={projectData} />
       {data.byProject.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-2">
           {data.byProject.slice(0, 5).filter((project) => project.totalTokens > 0).map((project) => (
             <button
               key={project.fullPath}
-              onClick={() => openDrilldown('project', zh ? '项目' : 'Project', project.fullPath, project.project)}
+              onClick={() => openDrilldown('project', widgetT(zh, 'renderer.insights_page.project'), project.fullPath, project.project)}
               className="text-[10px] text-accent hover:underline"
             >
-              {zh ? '下钻' : 'drill'} {project.project}
+              {widgetT(zh, 'renderer.insights_page.drill_3')} {project.project}
             </button>
           ))}
         </div>
       )}
     </CardShell>
   ),
-  'overview.daily-trend': ({ data }) => (
-    <CardShell title="日趋势" titleEn="Daily Trend">
+  'overview.daily-trend': ({ data, zh }) => (
+    <CardShell title={widgetT(zh, 'renderer.insights_page.card_daily_trend')}>
       <DailyTrend data={data.byDate} />
     </CardShell>
   ),
-  'overview.daily-timeline': ({ data, projectViewMode }) => (
-    <CardShell title="每日明细" titleEn="Daily Insights">
+  'overview.daily-timeline': ({ data, projectViewMode, zh }) => (
+    <CardShell title={widgetT(zh, 'renderer.insights_page.card_daily_details')}>
       <DailyTimeline data={data.byDate} projectKey={projectViewMode === 'paths' ? 'byProject' : 'byFolder'} />
     </CardShell>
   ),
@@ -135,18 +138,16 @@ const renderers: Record<string, WidgetRenderer> = {
   ),
   'cost.pricing-trace': ({ data, zh }) => (
     <CardShell
-      title="金额追溯"
-      titleEn="Valuation trace"
-      tooltip={zh ? '每一分钱可追溯到模式、价格规则与目录版本' : 'Every dollar traces to a mode, rule and catalog version'}
+      title={widgetT(zh, 'renderer.insights_page.card_valuation_trace')}
+      tooltip={widgetT(zh, 'renderer.insights_page.every_dollar_traces_to_a_mode_rule_and')}
     >
       <PricingTraceCard valuation={data.valuation} />
     </CardShell>
   ),
   'sessions.ranking': ({ data, zh }) => (
     <CardShell
-      title="会话排名与分布"
-      titleEn="Session ranking & distribution"
-      tooltip={zh ? '按当前口径排序;点击跳转会话;黄色百分比=该会话价格覆盖率' : 'Sorted by active basis; click to open; amber % = pricing coverage'}
+      title={widgetT(zh, 'renderer.insights_page.card_session_ranking')}
+      tooltip={widgetT(zh, 'renderer.insights_page.sorted_by_active_basis_click_to_open_amber')}
     >
       <SessionRanking data={data} />
     </CardShell>

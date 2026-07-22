@@ -15,12 +15,20 @@ export type AgentStreamEvent =
   | { type: 'init'; sessionId: string; model?: string }
   | { type: 'assistant-text'; text: string }
   | { type: 'tool-use'; name: string; summary: string }
-  | { type: 'result'; ok: boolean; durationMs?: number; costUsd?: number; error?: string }
+  | {
+      type: 'result'
+      ok: boolean
+      durationMs?: number
+      costUsd?: number
+      error?: string
+      errorCode?: string
+      errorParams?: Record<string, string | number>
+    }
 
 export interface AgentEngineStatus {
   available: boolean
   binaryPath?: string
-  reason?: string
+  reasonCode?: string
 }
 
 const CLI_CANDIDATES = [
@@ -52,7 +60,7 @@ function resolveClaudeBinary(): Promise<string | null> {
 export async function getAgentEngineStatus(): Promise<AgentEngineStatus> {
   const binary = await resolveClaudeBinary()
   if (!binary) {
-    return { available: false, reason: '未检测到 Claude Code CLI(claude)。全局助手第一版依赖它作为引擎。' }
+    return { available: false, reasonCode: 'agent.error.cli_not_found' }
   }
   return { available: true, binaryPath: binary }
 }
@@ -126,9 +134,11 @@ function handleStreamLine(line: string, onEvent: RunTurnOptions['onEvent']): voi
   }
 }
 
-export async function runAgentTurn(options: RunTurnOptions): Promise<RunningTurn | { error: string }> {
+export async function runAgentTurn(options: RunTurnOptions): Promise<
+  RunningTurn | { errorCode: string; errorParams?: Record<string, string | number> }
+> {
   const binary = await resolveClaudeBinary()
-  if (!binary) return { error: '未检测到 Claude Code CLI(claude)' }
+  if (!binary) return { errorCode: 'agent.error.cli_not_found' }
 
   const args = [
     '-p', options.prompt,
@@ -147,7 +157,10 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<RunningTurn
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) }
+    return {
+      errorCode: 'agent.error.start_failed',
+      errorParams: { details: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   let buffered = ''
@@ -179,13 +192,21 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<RunningTurn
         options.onEvent({
           type: 'result',
           ok: code === 0,
-          error: code === 0 ? undefined : (stderrTail.trim().slice(-400) || `claude 退出码 ${code}`)
+          errorCode: code === 0 ? undefined : 'agent.error.process_failed',
+          errorParams: code === 0 ? undefined : {
+            details: stderrTail.trim().slice(-400) || String(code ?? 'unknown')
+          }
         })
       }
       resolve()
     })
     child.on('error', (error) => {
-      options.onEvent({ type: 'result', ok: false, error: error.message })
+      options.onEvent({
+        type: 'result',
+        ok: false,
+        errorCode: 'agent.error.process_failed',
+        errorParams: { details: error.message }
+      })
       resolve()
     })
   })

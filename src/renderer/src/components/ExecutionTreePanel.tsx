@@ -1,3 +1,4 @@
+import { translate } from '../i18n'
 import { useState, useEffect, useMemo } from 'react'
 import { useStore } from '../store'
 import { GitBranch, Wrench, AlertTriangle, ChevronDown, ChevronRight, Zap, Bot } from 'lucide-react'
@@ -171,7 +172,7 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <Zap size={12} />
-        <span>{locale === 'zh-CN' ? '执行树' : 'Execution Tree'}</span>
+        <span>{translate(locale, 'renderer.execution_tree_panel.execution_tree')}</span>
         <span className="text-muted text-[10px] ml-auto">
           {tree.totalToolCalls} tools · {tree.totalAgentSpawns > 0 ? `${tree.totalAgentSpawns} agents · ` : ''}
           {tree.errors.length > 0 ? `${tree.errors.length} errors` : ''}
@@ -200,7 +201,7 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
           {tree.tokenTimeline.length > 2 && (
             <div>
               <div className="text-[10px] text-muted mb-1">
-                {locale === 'zh-CN' ? 'Token 累计' : 'Cumulative tokens'}: {formatTokens(maxCum)}
+                {translate(locale, 'renderer.execution_tree_panel.cumulative_tokens')}: {formatTokens(maxCum)}
               </div>
               <TokenBar timeline={tree.tokenTimeline} maxTokens={maxCum} />
             </div>
@@ -211,7 +212,7 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
             <div className="space-y-1">
               <div className="text-[10px] font-medium text-red-400 flex items-center gap-1">
                 <AlertTriangle size={10} />
-                {tree.errors.length} {locale === 'zh-CN' ? '个错误' : 'errors'}
+                {tree.errors.length} {translate(locale, 'renderer.execution_tree_panel.errors')}
               </div>
               {tree.errors.slice(0, 5).map((err, i) => (
                 <div key={i} className="text-[10px] text-red-300/70 pl-4 truncate">

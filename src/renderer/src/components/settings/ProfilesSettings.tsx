@@ -1,3 +1,4 @@
+import { translate } from '../../i18n'
 import { useState, useEffect, useCallback } from 'react'
 import { useStore } from '../../store'
 import { Pencil, Trash2, Plus, RefreshCw } from 'lucide-react'
@@ -35,11 +36,11 @@ const EMPTY_DRAFT: ProfileDraft = { name: '', provider: 'anthropic', model: '', 
 
 const CCSWITCH_IMPORT_ENABLED = false
 
-const FEATURES: Array<{ key: FeatureKey; zh: string; en: string; hint?: string }> = [
-  { key: 'insights', zh: 'Insights 报告', en: 'Insights report' },
-  { key: 'smartOrganize', zh: '智能整理', en: 'Smart organize' },
-  { key: 'smartRename', zh: '智能重命名', en: 'Smart rename' },
-  { key: 'globalAgent', zh: '全局助手(自定义 LLM 模式)', en: 'Global agent (custom LLM mode)' }
+const FEATURES: Array<{ key: FeatureKey; labelKey: string; hint?: string }> = [
+  { key: 'insights', labelKey: 'renderer.profiles.feature_insights' },
+  { key: 'smartOrganize', labelKey: 'renderer.profiles.feature_organize' },
+  { key: 'smartRename', labelKey: 'renderer.profiles.feature_rename' },
+  { key: 'globalAgent', labelKey: 'renderer.profiles.feature_agent' }
 ]
 
 /**
@@ -114,12 +115,13 @@ export function ProfilesSettings() {
   }, [draft, reload])
 
   const deleteProfile = useCallback(async (profile: LlmProfile) => {
-    const boundTo = FEATURES.filter((f) => bindings[f.key] === profile.id).map((f) => zh ? f.zh : f.en)
+    const boundTo = FEATURES.filter((f) => bindings[f.key] === profile.id).map((f) => translate(locale, f.labelKey))
     const warning = boundTo.length > 0
-      ? (zh ? `「${profile.name}」正被 ${boundTo.join('、')} 使用,删除后这些功能将失去绑定。确认删除?`
-            : `"${profile.name}" is bound to ${boundTo.join(', ')}. Delete anyway?`)
-      : (zh ? `删除 Profile「${profile.name}」?其 Keychain 密钥将一并清除。`
-            : `Delete profile "${profile.name}"? Its Keychain entry is removed too.`)
+      ? translate(locale, 'renderer.profiles.delete_bound_warning', {
+          value0: profile.name,
+          value1: boundTo.join(locale === 'zh-CN' ? '、' : ', ')
+        })
+      : (translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.delete_profile_value_its_keychain_entry_is_removed', { value0: profile.name }))
     if (!window.confirm(warning)) return
     try {
       await window.api.llmDeleteProfile(profile.id)
@@ -127,7 +129,7 @@ export function ProfilesSettings() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [bindings, reload, zh])
+  }, [bindings, reload, locale])
 
   const bind = useCallback(async (feature: FeatureKey, profileId: string) => {
     try {
@@ -143,7 +145,7 @@ export function ProfilesSettings() {
   return (
     <section>
       <label className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
-        ✨ {zh ? 'AI 与智能功能' : 'AI & Smart Features'}
+        ✨ {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.ai_smart_features')}
       </label>
       <div className="space-y-3">
         {/* Profile list */}
@@ -154,7 +156,7 @@ export function ProfilesSettings() {
                 <div className="truncate text-xs font-medium text-primary">{profile.name}</div>
                 <div className="truncate text-[10px] text-muted">
                   {profile.provider}{profile.model ? ` · ${profile.model}` : ''}
-                  {profile.keyHint ? ` · ${profile.keyHint}` : (zh ? ' · 未配置 key' : ' · no key')}
+                  {profile.keyHint ? ` · ${profile.keyHint}` : (translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.no_key'))}
                 </div>
               </div>
               <button
@@ -163,14 +165,14 @@ export function ProfilesSettings() {
                   model: profile.model || '', baseUrl: profile.baseUrl || '', credential: ''
                 })}
                 className="rounded p-1 text-muted hover:bg-hover hover:text-primary"
-                title={zh ? '编辑' : 'Edit'}
+                title={translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.edit')}
               >
                 <Pencil size={12} />
               </button>
               <button
                 onClick={() => void deleteProfile(profile)}
                 className="rounded p-1 text-muted hover:bg-hover hover:text-red-400"
-                title={zh ? '删除' : 'Delete'}
+                title={translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.delete')}
               >
                 <Trash2 size={12} />
               </button>
@@ -178,7 +180,7 @@ export function ProfilesSettings() {
           ))}
           {profiles.length === 0 && !draft && (
             <div className="rounded-md border border-dashed border-edge px-3 py-2 text-[11px] text-muted">
-              {zh ? '还没有 Profile。智能功能(报告/整理/重命名)需要至少一个带 API key 的 Profile。' : 'No profiles yet. Smart features need at least one profile with an API key.'}
+              {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.no_profiles_yet_smart_features_need_at_least')}
             </div>
           )}
           {!draft && (
@@ -186,7 +188,7 @@ export function ProfilesSettings() {
               onClick={() => setDraft({ ...EMPTY_DRAFT })}
               className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-soft-blue hover:bg-soft-blue/10"
             >
-              <Plus size={12} /> {zh ? '新增 Profile' : 'Add profile'}
+              <Plus size={12} /> {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.add_profile')}
             </button>
           )}
         </div>
@@ -197,7 +199,7 @@ export function ProfilesSettings() {
             <input
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              placeholder={zh ? 'Profile 名称,如「智谱备用」' : 'Profile name'}
+              placeholder={translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.profile_name')}
               className="w-full rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none placeholder:text-faint focus:border-soft-blue"
             />
             <div className="flex gap-1.5">
@@ -217,7 +219,7 @@ export function ProfilesSettings() {
             {loadingModels ? (
               <div className="flex items-center gap-2 text-[11px] text-muted py-1.5">
                 <div className="animate-spin w-3 h-3 border border-soft-blue border-t-transparent rounded-full" />
-                {zh ? '获取可用模型…' : 'Fetching models…'}
+                {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.fetching_models')}
               </div>
             ) : draftModels.length > 0 && !modelsFailed ? (
               <select
@@ -225,23 +227,23 @@ export function ProfilesSettings() {
                 onChange={(e) => setDraft({ ...draft, model: e.target.value === '__custom__' ? '' : e.target.value })}
                 className="w-full rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none focus:border-soft-blue"
               >
-                <option value="">{zh ? '自动选择' : 'Auto'}</option>
+                <option value="">{translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.auto')}</option>
                 {draftModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                <option value="__custom__">{zh ? '自定义输入…' : 'Custom…'}</option>
+                <option value="__custom__">{translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.custom')}</option>
               </select>
             ) : (
               <div className="flex items-center gap-1.5">
                 <input
                   value={draft.model}
                   onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                  placeholder={zh ? '模型 ID(如 claude-haiku-4-5)' : 'Model ID'}
+                  placeholder={translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.model_id')}
                   className="flex-1 rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none placeholder:text-faint focus:border-soft-blue"
                 />
                 <button
                   onClick={() => void fetchDraftModels()}
                   disabled={loadingModels}
                   className="shrink-0 rounded-md p-1.5 text-muted hover:bg-hover hover:text-primary disabled:opacity-40"
-                  title={zh ? '拉取模型列表' : 'Fetch models'}
+                  title={translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.fetch_models')}
                 >
                   <RefreshCw size={12} />
                 </button>
@@ -252,13 +254,13 @@ export function ProfilesSettings() {
                 type="text"
                 value=""
                 onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                placeholder={zh ? '输入自定义模型 ID' : 'Enter custom model ID'}
+                placeholder={translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.enter_custom_model_id')}
                 className="w-full rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none placeholder:text-faint focus:border-soft-blue"
                 autoFocus
               />
             )}
             {modelsFailed && (
-              <div className="text-[10px] text-soft-amber">{zh ? '获取模型列表失败，请手动输入' : 'Failed to fetch models, enter manually'}</div>
+              <div className="text-[10px] text-soft-amber">{translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.failed_to_fetch_models_enter_manually')}</div>
             )}
             {draft.provider === 'custom' && (
               <input
@@ -273,7 +275,7 @@ export function ProfilesSettings() {
               value={draft.credential}
               onChange={(e) => setDraft({ ...draft, credential: e.target.value })}
               placeholder={editingExisting?.keyHint
-                ? (zh ? `已保存 ${editingExisting.keyHint} — 留空保持不变` : `Saved ${editingExisting.keyHint} — leave empty to keep`)
+                ? (translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.saved_value_leave_empty_to_keep', { value0: editingExisting.keyHint }))
                 : 'API Key'}
               className="w-full rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none placeholder:text-faint focus:border-soft-blue"
             />
@@ -283,16 +285,16 @@ export function ProfilesSettings() {
                 disabled={saving || !draft.name.trim()}
                 className="rounded-md bg-soft-blue/15 px-3 py-1 text-[11px] font-medium text-soft-blue hover:bg-soft-blue/25 disabled:opacity-50"
               >
-                {saving ? (zh ? '保存中…' : 'Saving…') : (zh ? '保存' : 'Save')}
+                {saving ? (translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.saving')) : (translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.save'))}
               </button>
               <button
                 onClick={() => setDraft(null)}
                 className="rounded-md px-3 py-1 text-[11px] text-muted hover:text-primary"
               >
-                {zh ? '取消' : 'Cancel'}
+                {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.cancel')}
               </button>
               <span className="text-[9px] text-faint">
-                {zh ? 'key 只进 macOS Keychain,不落明文文件' : 'Keys are stored in the macOS Keychain only'}
+                {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.keys_are_stored_in_the_macos_keychain_only')}
               </span>
             </div>
           </div>
@@ -301,17 +303,17 @@ export function ProfilesSettings() {
         {/* Feature bindings */}
         <div className="space-y-1.5">
           <div className="text-[10px] font-medium uppercase tracking-wide text-faint">
-            {zh ? '功能绑定' : 'Feature bindings'}
+            {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.feature_bindings')}
           </div>
           {FEATURES.map((feature) => (
             <div key={feature.key} className="flex items-center justify-between gap-2 text-[11px]">
-              <span className="text-secondary">{zh ? feature.zh : feature.en}</span>
+              <span className="text-secondary">{translate(locale, feature.labelKey)}</span>
               <select
                 value={bindings[feature.key] || ''}
                 onChange={(e) => void bind(feature.key, e.target.value)}
                 className="max-w-[180px] rounded-md border border-edge bg-surface px-1.5 py-1 text-[11px] text-primary outline-none focus:border-soft-blue"
               >
-                <option value="">{zh ? '未绑定' : 'Not bound'}</option>
+                <option value="">{translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.not_bound')}</option>
                 {profiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>{profile.name}</option>
                 ))}
@@ -319,9 +321,7 @@ export function ProfilesSettings() {
             </div>
           ))}
           <div className="text-[9px] leading-relaxed text-faint">
-            {zh
-              ? '未绑定的功能会在使用时提示先来这里配置。全局助手默认复用本机已装的 CLI(如 Claude Code),仅自定义 LLM 模式才需要绑定。'
-              : 'Unbound features prompt for setup when used. The global agent reuses your installed CLI by default; binding is only for custom-LLM mode.'}
+            {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.unbound_features_prompt_for_setup_when_used_the')}
           </div>
         </div>
 
@@ -331,13 +331,13 @@ export function ProfilesSettings() {
         {CCSWITCH_IMPORT_ENABLED && (
           <div className="pt-2">
             {ccswitchMessage ? (
-              <div className="text-[11px] text-muted">{zh ? '即将支持' : 'Coming soon'}</div>
+              <div className="text-[11px] text-muted">{translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.coming_soon')}</div>
             ) : (
               <button
                 onClick={() => setCcswitchMessage(true)}
                 className="text-[11px] text-soft-blue hover:underline"
               >
-                {zh ? '从 ccswitch 导入' : 'Import from ccswitch'}
+                {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.import_from_ccswitch')}
               </button>
             )}
           </div>

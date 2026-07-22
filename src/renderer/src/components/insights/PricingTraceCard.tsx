@@ -1,13 +1,14 @@
+import { translate } from '../../i18n'
 import { useStore } from '../../store'
 import type { Valuation } from './shared'
 import { formatTokenCount } from './shared'
 
-const MISSING_REASON_LABELS: Record<string, [string, string]> = {
-  'no-exact-provider-model-date-rule': ['无该时点的精确价格规则', 'No exact provider/model/date rule'],
-  'model-not-in-catalog': ['模型不在价格目录', 'Model not in catalog'],
-  'model-unknown': ['模型未知', 'Model unknown'],
-  'provider-unknown': ['Provider 未知', 'Provider unknown'],
-  'timestamp-missing': ['事件缺少时间戳', 'Event has no timestamp']
+const MISSING_REASON_LABELS: Record<string, string> = {
+  'no-exact-provider-model-date-rule': 'renderer.pricing_trace.reason_no_rule',
+  'model-not-in-catalog': 'renderer.pricing_trace.reason_model_missing',
+  'model-unknown': 'renderer.pricing_trace.reason_model_unknown',
+  'provider-unknown': 'renderer.pricing_trace.reason_provider_unknown',
+  'timestamp-missing': 'renderer.pricing_trace.reason_timestamp_missing'
 }
 
 /** Every dollar traceable: mode breakdown + the exact pricing rules used. */
@@ -15,9 +16,9 @@ export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
   const locale = useStore((s) => s.locale)
   const zh = locale === 'zh-CN'
   const modes: Array<[string, string, number | undefined]> = [
-    ['reported', zh ? '日志自带金额' : 'Reported in logs', valuation.modeBreakdown.reported],
-    ['estimated-list-price', zh ? '精确规则估算' : 'Estimated (exact rule)', valuation.modeBreakdown['estimated-list-price']],
-    ['api-equivalent', zh ? '原厂等价估算' : 'API equivalent', valuation.modeBreakdown['api-equivalent']]
+    ['reported', translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.reported_in_logs'), valuation.modeBreakdown.reported],
+    ['estimated-list-price', translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.estimated_exact_rule'), valuation.modeBreakdown['estimated-list-price']],
+    ['api-equivalent', translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.api_equivalent'), valuation.modeBreakdown['api-equivalent']]
   ]
   const catalogVersion = valuation.pricingRules[0]?.catalogVersion
 
@@ -31,7 +32,7 @@ export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
           </div>
         ))}
         <div className="flex justify-between border-t border-edge pt-1">
-          <span className="text-muted">{zh ? '未计价 token' : 'Unpriced tokens'}</span>
+          <span className="text-muted">{translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.unpriced_tokens')}</span>
           <span className="text-soft-amber">
             {formatTokenCount(Math.max(0, valuation.totalBillableTokens - valuation.coveredTokens))}
             {' '}({(100 - valuation.coveragePercent).toFixed(1)}%)
@@ -42,11 +43,11 @@ export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
       {valuation.missingReasons.length > 0 && (
         <div className="space-y-0.5">
           <div className="text-[10px] font-medium uppercase tracking-wide text-faint">
-            {zh ? '未计价原因' : 'Why unpriced'}
+            {translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.why_unpriced')}
           </div>
           {valuation.missingReasons.map((reason) => (
             <div key={reason} className="text-[10px] text-muted">
-              • {zh ? (MISSING_REASON_LABELS[reason]?.[0] || reason) : (MISSING_REASON_LABELS[reason]?.[1] || reason)}
+              • {MISSING_REASON_LABELS[reason] ? translate(locale, MISSING_REASON_LABELS[reason]) : reason}
             </div>
           ))}
         </div>
@@ -55,7 +56,7 @@ export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
       {valuation.pricingRules.length > 0 && (
         <div className="space-y-0.5">
           <div className="text-[10px] font-medium uppercase tracking-wide text-faint">
-            {zh ? '使用的价格规则' : 'Pricing rules used'}
+            {translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.pricing_rules_used')}
           </div>
           <div className="max-h-32 space-y-0.5 overflow-y-auto pr-1">
             {valuation.pricingRules.map((rule) => (
@@ -73,10 +74,8 @@ export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
       )}
 
       <div className="text-[9px] text-faint">
-        {catalogVersion ? `${zh ? '价格目录' : 'Catalog'}: ${catalogVersion} · ` : ''}
-        {zh
-          ? '金额为 API 标价等价值,不代表订阅下的现金支出。'
-          : 'Amounts are list-price equivalents, not cash spend under subscriptions.'}
+        {catalogVersion ? `${translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.catalog')}: ${catalogVersion} · ` : ''}
+        {translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.amounts_are_list_price_equivalents_not_cash_spend')}
       </div>
     </div>
   )

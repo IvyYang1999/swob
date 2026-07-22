@@ -1,3 +1,4 @@
+import { translate } from '../../i18n'
 import { useState, useEffect, useCallback } from 'react'
 import { useStore } from '../../store'
 
@@ -57,7 +58,7 @@ export function ReportGenerator() {
     <div className="bg-surface rounded-lg p-4 border border-edge space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm font-medium text-primary">{zh ? 'HTML 审计报告' : 'Audit Report (HTML)'}</div>
+          <div className="text-sm font-medium text-primary">{translate(zh ? 'zh-CN' : 'en', 'renderer.report_generator.audit_report_html')}</div>
           <div className="text-[11px] text-muted">Cross-session quality audit · health scores · anti-patterns · AI narrative</div>
         </div>
         <div className="flex items-center gap-2">
@@ -87,12 +88,12 @@ export function ReportGenerator() {
             and sends it to your configured LLM provider for analysis.
             {!llmAvailable && (
               <span className="text-soft-amber">
-                {' '}{zh ? '还没有配置 API key。' : 'No API key configured yet.'}
+                {' '}{translate(zh ? 'zh-CN' : 'en', 'renderer.report_generator.no_api_key_configured_yet')}
                 <button
                   onClick={() => openSettingsAt('ai')}
                   className="ml-1 underline underline-offset-2 hover:text-primary"
                 >
-                  {zh ? '去设置 → AI 智能' : 'Open Settings → AI & Smart'}
+                  {translate(zh ? 'zh-CN' : 'en', 'renderer.report_generator.open_settings_ai_smart')}
                 </button>
               </span>
             )}

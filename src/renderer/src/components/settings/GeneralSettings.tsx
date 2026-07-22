@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Globe, Keyboard, Sun } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
-import { copy, SettingField, Segmented, useSettingsPreferences } from './shared'
+import { SettingField, Segmented, useSettingsPreferences } from './shared'
 import { RetentionSection, formatAccelerator, keyEventToAccelerator } from './sections'
 
 export function GeneralSettings() {
@@ -31,9 +31,9 @@ export function GeneralSettings() {
 
   return (
     <>
-      <SettingField label={copy(locale, '主题', 'Theme', 'テーマ')} icon={<Sun size={12} />}>
+      <SettingField label={t('renderer.general_settings.theme')} icon={<Sun size={12} />}>
         <Segmented
-          ariaLabel={copy(locale, '主题', 'Theme', 'テーマ')}
+          ariaLabel={t('renderer.general_settings.theme_2')}
           value={themeMode}
           onChange={setThemeMode}
           options={[

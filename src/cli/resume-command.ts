@@ -3,6 +3,7 @@ import { buildGuardedResumeCommand } from '../main/resume-guard'
 import { buildResumeCommand } from '../main/session-actions'
 import { loadAllSessions } from '../main/session-loader'
 import type { SessionSummary, SessionSource } from '../main/types'
+import { translate } from '../shared/i18n'
 
 export interface CliResumeResponse {
   command?: string
@@ -37,7 +38,9 @@ export async function buildCliResumeResponse(
       permissionMode,
       cwd
     })
-    if (!result.ok || !result.command) return { error: result.reason || '此会话无法直接恢复' }
+    if (!result.ok || !result.command) {
+      return { error: translate('en', result.reasonCode || 'resume.error.unavailable', result.reasonParams) }
+    }
     return { command: result.command }
   }
 

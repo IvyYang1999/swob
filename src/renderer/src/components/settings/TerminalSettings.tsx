@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, Code2, RefreshCw, Terminal } from 'lucide-react'
 import { useStore } from '../../store'
-import { copy, SettingField, useSettingsPreferences, type DetectedTerminal } from './shared'
+import { useT } from '../../i18n'
+import { SettingField, useSettingsPreferences, type DetectedTerminal } from './shared'
 import { usePlatformCapabilities } from '../WindowsAlphaNotice'
 
 const WINDOWS_ALPHA_TERMINALS: DetectedTerminal[] = [
@@ -11,7 +12,8 @@ const WINDOWS_ALPHA_TERMINALS: DetectedTerminal[] = [
 ]
 
 export function TerminalSettings() {
-  const { locale, savePreferences } = useStore()
+  const { savePreferences } = useStore()
+  const t = useT()
   const preferences = useSettingsPreferences()
   const isWindowsAlpha = usePlatformCapabilities()?.windowsNativeAlpha === true
   const [terminals, setTerminals] = useState<DetectedTerminal[]>([])
@@ -46,12 +48,12 @@ export function TerminalSettings() {
   return (
     <>
       <SettingField
-        label={copy(locale, '默认终端', 'Default terminal', '既定のターミナル')}
-        hint={copy(locale, '所有 CLI Resume 都会使用这里选择的终端。只允许选择具备可靠命令入口的应用。', 'All CLI resumes use this terminal. Apps without a reliable command entry point remain visible but disabled.', 'すべての CLI Resume で使用します。信頼できるコマンド入口がないアプリは選択できません。')}
+        label={t('renderer.terminal_settings.default_terminal')}
+        hint={t('renderer.terminal_settings.all_cli_resumes_use_this_terminal_apps_without')}
         icon={<Terminal size={12} />}
       >
         <div className="space-y-1.5">
-          {detecting && visibleTerminals.length === 0 && <p className="text-[11px] text-muted">{copy(locale, '正在检测…', 'Detecting…', '検出中…')}</p>}
+          {detecting && visibleTerminals.length === 0 && <p className="text-[11px] text-muted">{t('renderer.terminal_settings.detecting')}</p>}
           {visibleTerminals.map((terminal) => (
             <button
               key={terminal.id}
@@ -83,17 +85,17 @@ export function TerminalSettings() {
             className={`w-full flex items-center gap-3 rounded-md border px-3 py-2 text-left ${preferences.defaultTerminalId === 'custom' ? 'border-accent bg-accent/5' : 'border-edge-subtle bg-surface hover:border-edge'}`}
           >
             <span className="w-6 h-6 rounded bg-hover text-muted flex items-center justify-center"><Code2 size={12} /></span>
-            <span className="text-xs text-primary">{copy(locale, '自定义模板', 'Custom template', 'カスタムテンプレート')}</span>
+            <span className="text-xs text-primary">{t('renderer.terminal_settings.custom_template')}</span>
           </button>}
         </div>
         {!isWindowsAlpha && <button onClick={() => void detectTerminals(true)} disabled={detecting} className="mt-2 inline-flex items-center gap-1 text-[11px] text-muted hover:text-primary disabled:opacity-40">
           <RefreshCw size={10} className={detecting ? 'animate-spin' : ''} />
-          {copy(locale, '重新检测', 'Scan again', '再検出')}
+          {t('renderer.terminal_settings.scan_again')}
         </button>}
       </SettingField>
 
       {!isWindowsAlpha && preferences.defaultTerminalId === 'custom' && (
-        <SettingField label={copy(locale, '命令模板', 'Command template', 'コマンドテンプレート')}>
+        <SettingField label={t('renderer.terminal_settings.command_template')}>
           <textarea
             value={customTemplate}
             onChange={(event) => savePreferences({ resumeTerminalCommandTemplate: event.target.value })}
@@ -103,8 +105,8 @@ export function TerminalSettings() {
           />
           <p className={`text-[11px] ${customTemplateInvalid ? 'text-soft-amber' : 'text-faint'}`}>
             {customTemplateInvalid
-              ? copy(locale, '模板必须包含 {{command}}，否则会降级到系统终端。', 'Template must include {{command}} or Swob falls back to the system terminal.', 'テンプレートには {{command}} が必要です。')
-              : copy(locale, 'Swob 会对完整 Resume 命令转义后替换 {{command}}。', 'Swob replaces {{command}} with the safely quoted resume command.', 'Swob が Resume コマンドを安全に置換します。')}
+              ? t('renderer.terminal_settings.template_must_include_command_or_swob_falls_back')
+              : t('renderer.terminal_settings.swob_replaces_command_with_the_safely_quoted_resume')}
           </p>
         </SettingField>
       )}

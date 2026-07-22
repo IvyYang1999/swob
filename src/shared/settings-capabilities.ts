@@ -12,9 +12,10 @@ export type ResumeMethod =
 
 export interface ResumeChoice {
   id: ResumeMethod
-  label: string
+  label?: string
+  labelKey?: string
   support: 'stable' | 'experimental' | 'unsupported'
-  reason?: string
+  reasonCode?: string
 }
 
 export interface HarnessCapability {
@@ -25,9 +26,11 @@ export interface HarnessCapability {
   defaultMethod: ResumeMethod
 }
 
-const terminal = (label = '终端'): ResumeChoice => ({ id: 'terminal', label, support: 'stable' })
-const unsupported = (id: ResumeMethod, label: string, reason: string): ResumeChoice => ({
-  id, label, support: 'unsupported', reason
+const terminal = (): ResumeChoice => ({
+  id: 'terminal', labelKey: 'settings_capability.terminal', support: 'stable'
+})
+const unsupported = (id: ResumeMethod, label: string, reasonCode: string): ResumeChoice => ({
+  id, label, support: 'unsupported', reasonCode
 })
 
 export const HARNESS_CAPABILITIES: HarnessCapability[] = [
@@ -35,7 +38,7 @@ export const HARNESS_CAPABILITIES: HarnessCapability[] = [
     id: 'claude-code', name: 'Claude Code', sourceIds: ['claude-code', 'cc-mirror'], defaultMethod: 'terminal',
     choices: [
       terminal(),
-      { id: 'claude-desktop', label: 'Claude Desktop', support: 'experimental', reason: '需开启实验导入；可能改写 transcript' },
+      { id: 'claude-desktop', label: 'Claude Desktop', support: 'experimental', reasonCode: 'settings_capability.claude_desktop_warning' },
       { id: 'remote-control', label: 'Remote Control', support: 'stable' }
     ]
   },
@@ -45,22 +48,22 @@ export const HARNESS_CAPABILITIES: HarnessCapability[] = [
   },
   {
     id: 'cursor', name: 'Cursor Agent', sourceIds: ['cursor'], defaultMethod: 'terminal',
-    choices: [terminal(), unsupported('codex-desktop', 'Cursor App', '官方未提供按会话直达')]
+    choices: [terminal(), unsupported('codex-desktop', 'Cursor App', 'settings_capability.no_session_deep_link')]
   },
   {
     id: 'opencode', name: 'OpenCode', sourceIds: ['opencode'], defaultMethod: 'terminal',
-    choices: [terminal(), unsupported('codex-desktop', 'OpenCode Desktop', '官方未提供按会话直达')]
+    choices: [terminal(), unsupported('codex-desktop', 'OpenCode Desktop', 'settings_capability.no_session_deep_link')]
   },
   {
     id: 'zcode', name: 'ZCode', sourceIds: ['zcode'], defaultMethod: 'zcode-desktop',
     choices: [
-      unsupported('terminal', '终端', '没有公开 CLI Resume'),
-      { id: 'zcode-desktop', label: 'ZCode App', support: 'stable', reason: '仅打开工作区，不保证恢复指定会话' }
+      { ...terminal(), support: 'unsupported', reasonCode: 'settings_capability.no_public_cli_resume' },
+      { id: 'zcode-desktop', label: 'ZCode App', support: 'stable', reasonCode: 'settings_capability.workspace_only' }
     ]
   },
   {
     id: 'antigravity', name: 'Antigravity', sourceIds: ['antigravity'], defaultMethod: 'terminal',
-    choices: [terminal(), unsupported('codex-desktop', 'Antigravity App', '官方未提供按会话直达')]
+    choices: [terminal(), unsupported('codex-desktop', 'Antigravity App', 'settings_capability.no_session_deep_link')]
   },
   { id: 'grok', name: 'Grok Build', sourceIds: ['grok'], defaultMethod: 'terminal', choices: [terminal()] },
   { id: 'hermes', name: 'Hermes', sourceIds: ['hermes'], defaultMethod: 'terminal', choices: [terminal()] },

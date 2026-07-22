@@ -3,6 +3,7 @@ import { Search, Play, ArrowRight, Clock, MessageSquare, FolderOpen } from 'luci
 import claudeIcon from './assets/icons/claude.png'
 import openaiIcon from './assets/icons/openai.png'
 import cursorIcon from './assets/icons/cursor.png'
+import { translate, useStandaloneLocale, type Locale } from './i18n'
 
 const api = (window as any).api
 
@@ -50,16 +51,16 @@ function sourceBadgeClass(source?: string): string {
   return 'bg-[#c88450]/15 text-[#c88450]'
 }
 
-function formatRelativeTime(isoDate: string): string {
+function formatRelativeTime(isoDate: string, locale: Locale): string {
   const diff = Date.now() - new Date(isoDate).getTime()
   const mins = Math.floor(diff / 60000)
-  if (mins < 1) return '刚刚'
-  if (mins < 60) return `${mins}分钟前`
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
+  if (mins < 60) return formatter.format(-mins, 'minute')
   const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}小时前`
+  if (hours < 24) return formatter.format(-hours, 'hour')
   const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}天前`
-  return new Date(isoDate).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  if (days < 7) return formatter.format(-days, 'day')
+  return new Date(isoDate).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 }
 
 function getProjectName(cwds: string[]): string {
@@ -70,6 +71,8 @@ function getProjectName(cwds: string[]): string {
 }
 
 export default function SpotlightApp() {
+  const locale = useStandaloneLocale()
+  const t = (key: string, params?: Record<string, string | number>) => translate(locale, key, params)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SpotlightResultItem[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -154,7 +157,7 @@ export default function SpotlightApp() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="搜索 session… 试试 &quot;飞搜 最新 codex&quot;"
+            placeholder={t('renderer.spotlight.placeholder')}
             className="flex-1 bg-transparent text-primary text-sm outline-none placeholder:text-faint"
             autoFocus
           />
@@ -167,7 +170,7 @@ export default function SpotlightApp() {
         <div ref={listRef} className="flex-1 overflow-y-auto py-1">
           {results.length === 0 && query && !loading && (
             <div className="px-4 py-8 text-center text-muted text-sm">
-              没有找到匹配的 session
+              {t('renderer.spotlight.no_results')}
             </div>
           )}
           {results.map((item, i) => (
@@ -197,11 +200,11 @@ export default function SpotlightApp() {
                 <div className="flex items-center gap-3 mt-0.5 text-xs text-muted">
                   <span className="flex items-center gap-1">
                     <Clock size={10} />
-                    {formatRelativeTime(item.session.updatedAt)}
+                    {formatRelativeTime(item.session.updatedAt, locale)}
                   </span>
                   <span className="flex items-center gap-1">
                     <MessageSquare size={10} />
-                    {item.session.turnCount}轮
+                    {t('renderer.spotlight.turns', { value0: item.session.turnCount })}
                   </span>
                   {getProjectName(item.session.cwds) && (
                     <span className="truncate max-w-[160px]">
@@ -235,7 +238,7 @@ export default function SpotlightApp() {
                     <button
                       onClick={(e) => { e.stopPropagation(); handleNavigate(item) }}
                       className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] bg-surface text-muted hover:text-secondary transition-colors"
-                      title="在 Swob 中查看 (⌘+Enter)"
+                      title={t('renderer.spotlight.open_title')}
                     >
                       <ArrowRight size={10} />
                     </button>
@@ -248,10 +251,10 @@ export default function SpotlightApp() {
 
         {/* Footer hint */}
         <div className="px-4 py-1.5 border-t border-edge text-[11px] text-faint flex items-center gap-4">
-          <span>↑↓ 选择</span>
+          <span>{t('renderer.spotlight.select_hint')}</span>
           <span>↵ Resume</span>
-          <span>⌘↵ 在 Swob 中查看</span>
-          <span>Esc 关闭</span>
+          <span>{t('renderer.spotlight.open_hint')}</span>
+          <span>{t('renderer.spotlight.close_hint')}</span>
         </div>
       </div>
     </div>

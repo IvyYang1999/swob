@@ -1,3 +1,4 @@
+import { translate } from '../i18n'
 import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { GitBranch } from 'lucide-react'
@@ -505,7 +506,7 @@ export function LineagePage() {
     return (
       <div className="flex-1 flex items-center justify-center text-muted text-sm">
         <div className="animate-spin w-6 h-6 border-2 border-edge-strong border-t-body rounded-full mr-2" />
-        {locale === 'zh-CN' ? '正在计算图谱布局…' : 'Computing graph layout…'}
+        {translate(locale, 'renderer.lineage_page.computing_graph_layout')}
       </div>
     )
   }
@@ -520,7 +521,7 @@ export function LineagePage() {
       <div className="flex items-center gap-4 px-4 py-2 border-b border-edge text-xs text-secondary shrink-0 flex-wrap">
         <span className="text-sm font-medium text-primary flex items-center gap-1.5">
           <GitBranch size={14} />
-          {locale === 'zh-CN' ? '会话图谱' : 'Session Galaxy'}
+          {translate(locale, 'renderer.lineage_page.session_galaxy')}
         </span>
         {Object.entries(sourceCounts).map(([src, count]) => (
           <div key={src} className="flex items-center gap-1.5">

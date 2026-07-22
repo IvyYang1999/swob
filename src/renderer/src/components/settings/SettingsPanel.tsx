@@ -3,8 +3,7 @@ import {
   Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, Sparkles, Bot, X
 } from 'lucide-react'
 import { useStore } from '../../store'
-import { useT, type Locale } from '../../i18n'
-import { copy } from './shared'
+import { useT } from '../../i18n'
 import { GeneralSettings } from './GeneralSettings'
 import { ProfilesSettings } from './ProfilesSettings'
 import { TerminalSettings } from './TerminalSettings'
@@ -21,33 +20,31 @@ export type SettingsCategory = 'general' | 'ai' | 'assistant' | 'terminal' | 're
 const CATEGORIES: Array<{
   id: SettingsCategory
   icon: typeof Monitor
-  zh: string
-  en: string
-  ja: string
+  labelKey: string
 }> = [
-  { id: 'general', icon: Monitor, zh: '通用', en: 'General', ja: '一般' },
-  { id: 'ai', icon: Sparkles, zh: 'AI 智能', en: 'AI & Smart', ja: 'AI' },
-  { id: 'assistant', icon: Bot, zh: '助手', en: 'Assistant', ja: 'アシスタント' },
-  { id: 'terminal', icon: Terminal, zh: '终端', en: 'Terminal', ja: 'ターミナル' },
-  { id: 'resume', icon: Play, zh: 'Resume', en: 'Resume', ja: 'Resume' },
-  { id: 'ssh', icon: Server, zh: 'SSH', en: 'SSH', ja: 'SSH' },
-  { id: 'view', icon: PanelsTopLeft, zh: '视图', en: 'View', ja: '表示' },
-  { id: 'updates', icon: RefreshCw, zh: '更新', en: 'Updates', ja: '更新' },
-  { id: 'cli', icon: SquareTerminal, zh: 'CLI', en: 'CLI', ja: 'CLI' }
+  { id: 'general', icon: Monitor, labelKey: 'renderer.settings_panel.category_general' },
+  { id: 'ai', icon: Sparkles, labelKey: 'renderer.settings_panel.category_ai' },
+  { id: 'assistant', icon: Bot, labelKey: 'renderer.settings_panel.category_assistant' },
+  { id: 'terminal', icon: Terminal, labelKey: 'renderer.settings_panel.category_terminal' },
+  { id: 'resume', icon: Play, labelKey: 'renderer.settings_panel.category_resume' },
+  { id: 'ssh', icon: Server, labelKey: 'renderer.settings_panel.category_ssh' },
+  { id: 'view', icon: PanelsTopLeft, labelKey: 'renderer.settings_panel.category_view' },
+  { id: 'updates', icon: RefreshCw, labelKey: 'renderer.settings_panel.category_updates' },
+  { id: 'cli', icon: SquareTerminal, labelKey: 'renderer.settings_panel.category_cli' }
 ]
 
-function SettingsNav({ active, locale, onSelect, hidden }: {
+function SettingsNav({ active, onSelect, hidden }: {
   active: SettingsCategory
-  locale: Locale
   onSelect: (category: SettingsCategory) => void
   hidden: Set<SettingsCategory>
 }) {
+  const t = useT()
   return (
     <nav
-      aria-label={copy(locale, '设置分类', 'Settings categories', '設定カテゴリ')}
+      aria-label={t('renderer.settings_panel.settings_categories')}
       className="settings-nav shrink-0 border-r border-edge overflow-y-auto py-2 px-1.5"
     >
-      {CATEGORIES.filter(({ id }) => !hidden.has(id)).map(({ id, icon: Icon, zh, en, ja }) => {
+      {CATEGORIES.filter(({ id }) => !hidden.has(id)).map(({ id, icon: Icon, labelKey }) => {
         const isActive = active === id
         return (
           <button
@@ -61,7 +58,7 @@ function SettingsNav({ active, locale, onSelect, hidden }: {
             }`}
           >
             <Icon size={13} className={isActive ? 'text-accent' : 'text-muted'} />
-            <span className="truncate">{copy(locale, zh, en, ja)}</span>
+            <span className="truncate">{t(labelKey)}</span>
           </button>
         )
       })}
@@ -70,7 +67,7 @@ function SettingsNav({ active, locale, onSelect, hidden }: {
 }
 
 export function SettingsPanel() {
-  const { settingsOpen, toggleSettings, locale, consumePendingSettingsCategory } = useStore()
+  const { settingsOpen, toggleSettings, consumePendingSettingsCategory } = useStore()
   const t = useT()
   const platformCapabilities = usePlatformCapabilities()
   const isWindowsAlpha = platformCapabilities?.windowsNativeAlpha === true
@@ -123,14 +120,14 @@ export function SettingsPanel() {
           <button
             onClick={toggleSettings}
             className="p-1 rounded hover:bg-hover text-muted hover:text-primary"
-            aria-label={copy(locale, '关闭设置', 'Close settings', '設定を閉じる')}
+            aria-label={t('renderer.settings_panel.close_settings')}
           >
             <X size={14} />
           </button>
         </div>
 
         <div className="flex-1 min-h-0 flex">
-          <SettingsNav active={category} locale={locale} onSelect={setCategory} hidden={hiddenCategories} />
+          <SettingsNav active={category} onSelect={setCategory} hidden={hiddenCategories} />
           <div
             ref={contentRef}
             data-settings-category={category}

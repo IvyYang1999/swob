@@ -1,6 +1,7 @@
 import type { InsightsData, PreviousPeriodComparison } from './shared'
 import { formatTokenCount, formatDuration } from './shared'
 import { useAnalysisScope } from './scope'
+import { useT } from '../../i18n'
 
 function ComparisonArrow({ comparison }: { comparison: PreviousPeriodComparison | null }) {
   if (!comparison || comparison.percentChange == null) return null
@@ -21,6 +22,7 @@ function ComparisonArrow({ comparison }: { comparison: PreviousPeriodComparison 
 
 export function StatsCards({ data, previousPeriod }: { data: InsightsData; previousPeriod?: PreviousPeriodComparison | null }) {
   const { scope } = useAnalysisScope()
+  const t = useT()
   const activeDays = data.activeDays
   const dailyAvgTime = activeDays > 0 ? Math.round(data.totalTime / activeDays) : 0
   const conversationBasis = scope.metricBasis === 'conversation'
@@ -39,9 +41,9 @@ export function StatsCards({ data, previousPeriod }: { data: InsightsData; previ
     },
     {
       value: data.valuation.usd === undefined || data.valuation.mode === 'unpriced' ? '—' : `$${data.valuation.usd.toFixed(2)}`,
-      label: 'API 等价值(估算)',
-      sub: data.valuation.mode === 'unpriced' ? '' : `价格覆盖 ${data.valuation.coveragePercent.toFixed(1)}%`,
-      title: '逐请求按模型/Provider/时点估算的 API 标价等价值;未计价 token 不套默认价。不代表订阅下现金支出。',
+      label: t('renderer.stats_cards.api_equivalent'),
+      sub: data.valuation.mode === 'unpriced' ? '' : t('renderer.stats_cards.coverage', { value0: data.valuation.coveragePercent.toFixed(1) }),
+      title: t('renderer.stats_cards.caveat'),
       showComparison: false,
     },
     {

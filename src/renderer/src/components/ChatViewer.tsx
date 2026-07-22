@@ -170,6 +170,7 @@ function InlineImage({ src }: { src: string }) {
 
 /** File-referenced image: loads from local file via IPC, falls back to base64 */
 function FileImage({ path: filePath, fallbackSrc }: { path: string; fallbackSrc?: string }) {
+  const t = useT()
   const [src, setSrc] = useState<string | null>(null)
   const [status, setStatus] = useState<string>('loading')
   const [open, setOpen] = useState(false)
@@ -196,14 +197,14 @@ function FileImage({ path: filePath, fallbackSrc }: { path: string; fallbackSrc?
           />
           <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[10px] text-white px-1.5 py-0.5 rounded-b-md truncate opacity-0 group-hover:opacity-100 transition-opacity">
             {fileName}
-            {status === 'missing' && <span className="text-soft-red ml-1">(已移动)</span>}
-            {status === 'cached' && <span className="text-soft-amber ml-1">(缓存)</span>}
+            {status === 'missing' && <span className="text-soft-red ml-1">{t('renderer.chat.file_moved_short')}</span>}
+            {status === 'cached' && <span className="text-soft-amber ml-1">{t('renderer.chat.cached_short')}</span>}
           </div>
         </>
       ) : (
         <div className="w-32 h-24 rounded-md bg-surface flex flex-col items-center justify-center text-[10px] text-muted p-2 text-center">
           <span className="truncate max-w-full">{fileName}</span>
-          <span className="text-soft-red mt-1">文件已移动</span>
+          <span className="text-soft-red mt-1">{t('renderer.chat.file_moved')}</span>
         </div>
       )}
       {open && displaySrc && (
@@ -851,7 +852,7 @@ function SessionBar({
 
   if (!selectedSession) return null
   const resumeUnavailableReason = selectedSession.canResume === false
-    ? (selectedSession.resumeUnavailableReason || '此会话无法直接恢复')
+    ? (selectedSession.resumeUnavailableReason || t('renderer.chat.resume_unavailable'))
     : undefined
   const isZcode = selectedSession.source === 'zcode'
   const copyUnavailableReason = resumeUnavailableReason || (isZcode ? t('chat.zcode_no_cli') : undefined)
@@ -1068,13 +1069,13 @@ function SessionBar({
             title={
               resumeUnavailableReason || (selectedSession.id?.includes(':intra-') ? t('chat.intra_branch_not_resumable')
               : isRemote && sshConfig ? `SSH Resume (${sshConfig.user}@${sshConfig.host})`
-              : isRemote ? '此会话来自其他设备，点击配置 SSH'
+              : isRemote ? t('renderer.chat.remote_configure_ssh')
               : isZcode ? t('chat.zcode_no_specific_resume')
               : undefined)
             }
           >
             {isRemote ? <Terminal size={10} /> : <Play size={10} />}
-            {sshResuming ? '连接中...' : isRemote ? 'SSH Resume' : isZcode ? t('chat.open_zcode_short') : 'Resume'}
+            {sshResuming ? t('renderer.chat.connecting') : isRemote ? 'SSH Resume' : isZcode ? t('chat.open_zcode_short') : 'Resume'}
           </button>
 
           {canChooseResumeSurface && (
@@ -1167,10 +1168,10 @@ function SessionBar({
             }}
             disabled={cloudDownloading}
             className="px-2 py-0.5 text-[11px] rounded bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-400/30 flex items-center gap-1"
-            title="此会话文件存储在 iCloud，点击下载到本地"
+            title={t('renderer.chat.icloud_download_hint')}
           >
             {cloudDownloading ? <Cloud size={10} className="animate-pulse" /> : <CloudDownload size={10} />}
-            {cloudDownloading ? '下载中...' : 'iCloud 下载'}
+            {cloudDownloading ? t('renderer.chat.downloading') : t('renderer.chat.icloud_download')}
           </button>
         )}
       </div>

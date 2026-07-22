@@ -4,6 +4,7 @@ import type {
   AgentHistoryItem,
   AgentResumeState,
   FrontendIpcResult,
+  OrganizerSmartPreviewResult,
   ShareCopyPngResult,
   ShareSavePngResult,
   SpotlightNativeShadowState,
@@ -28,6 +29,10 @@ type ResumeLaunchAction =
 type ResumeActionResult = {
   ok: boolean
   sessionId: string
+  reasonCode?: string
+  reasonParams?: Record<string, string | number>
+  noticeCode?: string
+  /** Legacy result fields accepted from an older main process during hot reload. */
   reason?: string
   surface?: ResumeSurface
   action?: ResumeLaunchAction
@@ -53,7 +58,7 @@ type SmartFeatureBinding = {
 
 type SmartRenameResult<T> =
   | { ok: true; items: T; config?: any }
-  | { ok: false; error: { code: string; message: string } }
+  | { ok: false; error: { code: string } }
 
 type RendererAnalysisDimension = 'global' | 'time' | 'hour' | 'source' | 'model' | 'project' | 'folder' | 'session'
 type RendererAnalysisScope = {
@@ -201,14 +206,7 @@ interface ElectronAPI {
     title: string
     fromRelative: string
   }>>
-  organizerPreviewSmart: () => Promise<Array<{
-    sessionId: string
-    folder: string
-    topic: string
-    tags: string[]
-    confidence: number
-    title: string
-  }>>
+  organizerPreviewSmart: () => Promise<OrganizerSmartPreviewResult>
   organizerApply: (kind: 'project' | 'smart' | 'archive', items: Array<{
     sessionId: string
     targetRelativeFolder: string
@@ -225,14 +223,20 @@ interface ElectronAPI {
   libraryGetMdPath: (sessionId: string) => Promise<string | null>
   libraryGetDirPath: (sessionId: string) => Promise<string | null>
   libraryOpenInFinder: () => Promise<void>
-  vaultMigrate: (targetPath: string) => Promise<{ ok: boolean; error?: string; newRoot?: string; movedMarkerPath?: string }>
+  vaultMigrate: (targetPath: string) => Promise<{
+    ok: boolean
+    errorCode?: string
+    errorParams?: Record<string, string | number>
+    newRoot?: string
+    movedMarkerPath?: string
+  }>
   vaultSelectMigrationTarget: () => Promise<string | null>
   onVaultMigrateProgress: (callback: (progress: { phase: string; copied: number; total: number }) => void) => () => void
   onboardingGetState: () => Promise<{ needed: boolean; defaultPath: string; excludedSources: string[] }>
   onboardingEstimateBackupSize: (excludedSources: string[]) => Promise<OnboardingBackupSizeEstimate>
   onboardingComplete: (libraryPath: string, excludedSources: string[]) => Promise<string>
   onboardingSetExcludedSources: (excludedSources: string[]) => Promise<string[]>
-  onboardingExtendClaudeRetention: () => Promise<{ ok: boolean; error?: string }>
+  onboardingExtendClaudeRetention: () => Promise<{ ok: boolean; errorCode?: string }>
   saveMarkdown: (dirPath: string, filename: string, content: string) => Promise<string>
   saveToTemp: (filename: string, content: string) => Promise<string>
   openPath: (filePath: string) => Promise<string>
@@ -311,7 +315,7 @@ interface ElectronAPI {
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void
 
   // Global agent floating window
-  agentGetStatus: () => Promise<{ available: boolean; binaryPath?: string; reason?: string; sessionId: string | null; busy: boolean }>
+  agentGetStatus: () => Promise<{ available: boolean; binaryPath?: string; reasonCode?: string; sessionId: string | null; busy: boolean }>
   agentListHistory: () => Promise<FrontendIpcResult<AgentHistoryItem[]>>
   agentResumeSession: (sessionId: string) => Promise<FrontendIpcResult<AgentResumeState>>
   agentGetAlwaysOnTop: () => Promise<FrontendIpcResult<AgentAlwaysOnTopState>>
@@ -320,7 +324,11 @@ interface ElectronAPI {
   agentHideWindow: () => Promise<boolean>
   agentNewConversation: () => Promise<boolean>
   agentOpenHistory: () => Promise<boolean>
-  agentSend: (prompt: string) => Promise<{ ok: boolean; error?: string }>
+  agentSend: (prompt: string) => Promise<{
+    ok: boolean
+    errorCode?: string
+    errorParams?: Record<string, string | number>
+  }>
   agentCancel: () => Promise<boolean>
   onAgentEvent: (callback: (event: {
     type: 'init' | 'assistant-text' | 'tool-use' | 'result'
@@ -333,6 +341,8 @@ interface ElectronAPI {
     durationMs?: number
     costUsd?: number
     error?: string
+    errorCode?: string
+    errorParams?: Record<string, string | number>
   }) => void) => () => void
 
   // AnalysisScope / UsageFact data layer (renderer integration is intentionally deferred)

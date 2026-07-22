@@ -29,13 +29,26 @@ export interface AgentHistoryItem {
 
 export interface AgentResumeState extends AgentHistoryItem {
   canResume: boolean
-  reason?: string
+  reasonCode?: string
 }
 
 export interface AgentAlwaysOnTopState {
   alwaysOnTop: boolean
   windowOpen: boolean
 }
+
+export interface OrganizerSmartPreviewItem {
+  sessionId: string
+  folder: string
+  topic: string
+  tags: string[]
+  confidence: number
+  title: string
+}
+
+export type OrganizerSmartPreviewResult =
+  | { ok: true; items: OrganizerSmartPreviewItem[] }
+  | { ok: false; errorCode: 'organizer.error.setup_required' | 'organizer.error.preview_failed' }
 
 export interface SpotlightNativeShadowState {
   nativeShadow: boolean

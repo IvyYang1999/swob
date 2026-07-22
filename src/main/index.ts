@@ -135,9 +135,11 @@ import {
   resolveProfileForFeature,
   saveLlmProfile,
   setSmartFeatureBindings,
+  LlmProfileError,
   type SaveLlmProfileInput,
   type SmartFeatureBinding
 } from './llm-profiles'
+import type { OrganizerSmartPreviewResult } from '../shared/frontend-ipc-contract'
 import {
   SmartRenameService,
   serializeSmartRenameError,
@@ -158,7 +160,12 @@ import {
   defaultResumeMethodForSource,
   migrateSettingsPreferences
 } from '../shared/settings-capabilities'
-import { resolveSystemLocale } from '../shared/i18n'
+import {
+  resolveConfiguredLocale,
+  resolveSystemLocale,
+  translate,
+  type Locale
+} from '../shared/i18n'
 import {
   buildGuardedResumeCommand,
   openGuardedForkAction,
@@ -193,6 +200,19 @@ let spotlightNativeShadow = false
 let watcher: SourceDirectoryWatcher | null = null
 let codexWatcher: SourceDirectoryWatcher | null = null
 let cursorWatcher: SourceDirectoryWatcher | null = null
+
+function mainLocale(): Locale {
+  const systemLocale = resolveSystemLocale(app.getPreferredSystemLanguages())
+  try {
+    return resolveConfiguredLocale(currentSettingsPreferences().locale, systemLocale)
+  } catch {
+    return systemLocale
+  }
+}
+
+function mainT(key: string, params?: Record<string, string | number>): string {
+  return translate(mainLocale(), key, params)
+}
 let libraryWatcher: LibraryDirectoryWatcher | null = null
 let transcriptWatcher: TranscriptWatcher | null = null
 let libraryWorker: LibraryWorkerClient | null = null
@@ -1266,10 +1286,10 @@ ipcMain.handle('image:contextMenu', (_event, options: { path: string }) => {
   const { Menu, shell, clipboard } = require('electron')
   const safePath = assertProjectOrLibraryPath(options.path)
   const menu = Menu.buildFromTemplate([
-    { label: '打开图片', click: () => shell.openPath(safePath) },
-    { label: '在 Finder 中显示', click: () => shell.showItemInFolder(safePath) },
+    { label: mainT('native.image.open'), click: () => shell.openPath(safePath) },
+    { label: mainT('native.image.reveal'), click: () => shell.showItemInFolder(safePath) },
     { type: 'separator' },
-    { label: '复制路径', click: () => clipboard.writeText(safePath) }
+    { label: mainT('native.image.copy_path'), click: () => clipboard.writeText(safePath) }
   ])
   menu.popup()
 })
@@ -1603,7 +1623,7 @@ ipcMain.handle(
       cwd,
       reloadSessions: reloadSessionsForAction
     })
-    if (!result.ok || !result.command) throw new Error(result.reason || '此会话无法直接恢复')
+    if (!result.ok || !result.command) throw new Error(result.reasonCode || 'resume.error.unavailable')
     return result.command
   }
 )
@@ -2057,30 +2077,42 @@ ipcMain.handle('organizer:previewProject', () => {
     })))
 })
 
-ipcMain.handle('organizer:previewSmart', async () => {
-  const settings = await resolveProfileForFeature('smartOrganize')
+ipcMain.handle('organizer:previewSmart', async (): Promise<OrganizerSmartPreviewResult> => {
+  try {
+    const settings = await resolveProfileForFeature('smartOrganize')
 
-  const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
-  const candidates = cachedSessions.filter((session) => {
-    if (session.id.includes(':intra-') || session.id.includes(':branch-')) return false
-    if (!getSessionDirPath(session.sessionId)) return false
-    return !config.sessionMeta[session.sessionId]?.topic
-  })
-  const suggestions = await requestSmartOrganization(
-    settings as Parameters<typeof requestSmartOrganization>[0],
-    candidates.map((session) => ({
-      sessionId: session.sessionId,
-      title: config.sessionMeta[session.sessionId]?.customTitle || session.firstUserMessage || session.id,
-      summary: session.firstUserMessage || ''
-    })),
-    config.folders.map((folder) => folder.id)
-  )
-  const byId = new Map(candidates.map((session) => [session.sessionId, session]))
-  return suggestions.map((suggestion) => ({
-    ...suggestion,
-    title: config.sessionMeta[suggestion.sessionId]?.customTitle ||
-      byId.get(suggestion.sessionId)?.firstUserMessage || suggestion.sessionId
-  }))
+    const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
+    const candidates = cachedSessions.filter((session) => {
+      if (session.id.includes(':intra-') || session.id.includes(':branch-')) return false
+      if (!getSessionDirPath(session.sessionId)) return false
+      return !config.sessionMeta[session.sessionId]?.topic
+    })
+    const suggestions = await requestSmartOrganization(
+      settings as Parameters<typeof requestSmartOrganization>[0],
+      candidates.map((session) => ({
+        sessionId: session.sessionId,
+        title: config.sessionMeta[session.sessionId]?.customTitle || session.firstUserMessage || session.id,
+        summary: session.firstUserMessage || ''
+      })),
+      config.folders.map((folder) => folder.id)
+    )
+    const byId = new Map(candidates.map((session) => [session.sessionId, session]))
+    return {
+      ok: true,
+      items: suggestions.map((suggestion) => ({
+        ...suggestion,
+        title: config.sessionMeta[suggestion.sessionId]?.customTitle ||
+          byId.get(suggestion.sessionId)?.firstUserMessage || suggestion.sessionId
+      }))
+    }
+  } catch (error) {
+    const setupRequired = error instanceof LlmProfileError ||
+      (error instanceof Error && error.message.includes('missing-api-key'))
+    return {
+      ok: false,
+      errorCode: setupRequired ? 'organizer.error.setup_required' : 'organizer.error.preview_failed'
+    }
+  }
 })
 
 ipcMain.handle('organizer:apply', async (_event, kind: OrganizationKind, items: Array<{
@@ -2209,17 +2241,19 @@ ipcMain.handle(
       const template: Electron.MenuItemConstructorOptions[] = [
         {
           label: data.canResume === false
-            ? `Resume（${data.resumeUnavailableReason || '不可恢复'}）`
-            : 'Resume',
+            ? mainT('native.session.resume_unavailable', {
+                reason: data.resumeUnavailableReason || mainT('resume.error.unavailable')
+              })
+            : mainT('native.session.resume'),
           enabled: data.canResume !== false,
           click: () => runCommand(BUILTIN_COMMAND_IDS.sessionResume)
         },
         { type: 'separator' },
-        { label: '重命名', click: () => runCommand(BUILTIN_COMMAND_IDS.sessionRename) },
+        { label: mainT('native.session.rename'), click: () => runCommand(BUILTIN_COMMAND_IDS.sessionRename) },
         {
           label: smartRename.enabled
-            ? '智能重命名'
-            : `智能重命名（${smartRename.reason || '未绑定 Profile'}）`,
+            ? mainT('native.session.smart_rename')
+            : mainT('native.session.smart_rename_unavailable'),
           enabled: smartRename.enabled,
           click: () => runCommand(BUILTIN_COMMAND_IDS.sessionSmartRename)
         },
@@ -2231,7 +2265,7 @@ ipcMain.handle(
         template.push({ type: 'separator' })
         for (const f of removeItems) {
           template.push({
-            label: `移出「${f.name}」(回到根目录)`,
+            label: mainT('native.session.remove_from_folder', { name: f.name }),
             click: () => runCommand(BUILTIN_COMMAND_IDS.sessionRemoveFromFolder, { folderId: f.id })
           })
         }
@@ -2261,7 +2295,7 @@ ipcMain.handle(
             }
             if (n.children.length > 0) {
               item.submenu = [
-                { label: `移入「${n.name}」`, click: () => runCommand(BUILTIN_COMMAND_IDS.sessionAddToFolder, { folderId: n.id }) },
+                { label: mainT('native.session.move_into', { name: n.name }), click: () => runCommand(BUILTIN_COMMAND_IDS.sessionAddToFolder, { folderId: n.id }) },
                 { type: 'separator' },
                 ...buildSubmenu(n.children)
               ]
@@ -2271,13 +2305,13 @@ ipcMain.handle(
           })
         }
         template.push({ type: 'separator' })
-        template.push({ label: '移入文件夹', enabled: false })
+        template.push({ label: mainT('native.session.move_to_folder'), enabled: false })
         template.push(...buildSubmenu(roots))
       }
 
       if (data.folders.length === 0) {
         template.push({ type: 'separator' })
-        template.push({ label: '还没有文件夹，先创建一个', enabled: false })
+        template.push({ label: mainT('native.session.no_folders'), enabled: false })
       }
 
       const menu = Menu.buildFromTemplate(template)
@@ -2322,10 +2356,10 @@ ipcMain.handle('library:selectDirectory', async () => {
   if (!mainWindow) return null
   const { dialog } = require('electron')
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择 Swob Library 存储位置',
+    title: mainT('native.library.select_title'),
     defaultPath: getLibraryRoot(),
     properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: '选择此文件夹'
+    buttonLabel: mainT('native.library.select_button')
   })
   if (result.canceled || result.filePaths.length === 0) return null
   const approved = approveLibraryRoot(result.filePaths[0])
@@ -2371,13 +2405,15 @@ ipcMain.handle('library:changePath', async (_event, newPath: string) => {
 let vaultMigrationRunning = false
 
 ipcMain.handle('vault:migrate', async (_event, targetPath: string) => {
-  if (vaultMigrationRunning) return { ok: false, error: '已有迁移在进行中' }
-  if (typeof targetPath !== 'string' || !targetPath.trim()) return { ok: false, error: '目标位置无效' }
+  if (vaultMigrationRunning) return { ok: false, errorCode: 'vault.error.already_running' }
+  if (typeof targetPath !== 'string' || !targetPath.trim()) {
+    return { ok: false, errorCode: 'vault.error.invalid_target' }
+  }
   let approvedTarget: string
   try {
     approvedTarget = assertApprovedLibraryRoot(targetPath)
   } catch {
-    return { ok: false, error: '目标位置未经目录选择器确认' }
+    return { ok: false, errorCode: 'vault.error.unapproved_target' }
   }
   vaultMigrationRunning = true
   try {
@@ -2391,7 +2427,11 @@ ipcMain.handle('vault:migrate', async (_event, targetPath: string) => {
     await activateLibraryAt(approvedTarget)
     return { ...result, newRoot: getLibraryRoot() }
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    return {
+      ok: false,
+      errorCode: 'vault.error.migration_failed',
+      errorParams: { details: error instanceof Error ? error.message : String(error) }
+    }
   } finally {
     vaultMigrationRunning = false
   }
@@ -2401,9 +2441,9 @@ ipcMain.handle('vault:selectMigrationTarget', async () => {
   if (!mainWindow) return null
   const { dialog } = require('electron')
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择迁移目标位置（须为空文件夹）',
+    title: mainT('native.vault.migration_title'),
     properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: '迁移到这里'
+    buttonLabel: mainT('native.vault.migration_button')
   })
   if (result.canceled || result.filePaths.length === 0) return null
   return approveLibraryRoot(result.filePaths[0])
@@ -2477,11 +2517,11 @@ ipcMain.handle('onboarding:extendClaudeRetention', () => {
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       settings = parsed as Record<string, unknown>
     } else {
-      return { ok: false, error: 'settings.json 格式异常，未修改' }
+      return { ok: false, errorCode: 'onboarding.retention.invalid_settings' }
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      return { ok: false, error: '无法读取 ~/.claude/settings.json，未修改' }
+      return { ok: false, errorCode: 'onboarding.retention.read_failed' }
     }
   }
   settings.cleanupPeriodDays = 3650
@@ -2490,7 +2530,7 @@ ipcMain.handle('onboarding:extendClaudeRetention', () => {
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8')
     return { ok: true }
   } catch {
-    return { ok: false, error: '写入 ~/.claude/settings.json 失败' }
+    return { ok: false, errorCode: 'onboarding.retention.write_failed' }
   }
 })
 

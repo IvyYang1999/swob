@@ -6,6 +6,7 @@ import type {
   AgentHistoryItem,
   AgentResumeState,
   FrontendIpcResult,
+  OrganizerSmartPreviewResult,
   ShareCopyPngResult,
   ShareSavePngResult,
   SpotlightNativeShadowState,
@@ -94,7 +95,7 @@ const api = {
 
   // Vault organization
   organizerPreviewProject: () => ipcRenderer.invoke('organizer:previewProject'),
-  organizerPreviewSmart: () => ipcRenderer.invoke('organizer:previewSmart'),
+  organizerPreviewSmart: () => ipcRenderer.invoke('organizer:previewSmart') as Promise<OrganizerSmartPreviewResult>,
   organizerApply: (kind: string, items: unknown[]) => ipcRenderer.invoke('organizer:apply', kind, items),
   organizerUndo: () => ipcRenderer.invoke('organizer:undo'),
 
@@ -317,6 +318,13 @@ const api = {
   openUpdateDownloadPage: () => ipcRenderer.invoke('update:openDownload')
 }
 
-export type ResumeActionResult = { ok: boolean; sessionId: string; reason?: string; command?: string }
+export type ResumeActionResult = {
+  ok: boolean
+  sessionId: string
+  reasonCode?: string
+  reasonParams?: Record<string, string | number>
+  noticeCode?: string
+  command?: string
+}
 
 contextBridge.exposeInMainWorld('api', api)

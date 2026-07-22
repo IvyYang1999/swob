@@ -1,13 +1,12 @@
-import { useStore } from '../../store'
-import { copy } from './shared'
+import { useT } from '../../i18n'
 import { CliSection } from './sections'
 
 export function CliSettings() {
-  const { locale } = useStore()
+  const t = useT()
   return (
     <>
       <p className="text-[11px] leading-relaxed text-muted">
-        {copy(locale, 'CLI 与 Agent Skill 是本地自动化入口；路径仅用于核对当前安装，不会上传。', 'CLI and Agent Skill are local automation surfaces. Paths are shown only for local verification.', 'CLI と Agent Skill はローカル自動化の入口です。パスはローカル確認のみに表示されます。')}
+        {t('renderer.cli_settings.cli_and_agent_skill_are_local_automation_surfaces')}
       </p>
       <CliSection />
     </>

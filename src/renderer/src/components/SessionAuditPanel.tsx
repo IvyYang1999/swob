@@ -1,3 +1,4 @@
+import { translate } from '../i18n'
 import { useState, useEffect } from 'react'
 import { useStore } from '../store'
 import type { Valuation } from './insights/shared'
@@ -109,10 +110,10 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
   const formatCost = (n: number) => n < 0.01 ? '<$0.01' : `$${n.toFixed(2)}`
   const evidenceMetrics: Array<{ label: string; metric: Pick<AuditMetric<unknown>, 'evidence' | 'caveat'> }> = [
     { label: 'Read:Edit Ratio', metric: audit.readEditRatio },
-    { label: locale === 'zh-CN' ? 'Thinking 代理' : 'Thinking Proxy', metric: audit.thinkingDepth },
-    { label: locale === 'zh-CN' ? '响应延迟' : 'Response Latency', metric: audit.latencyStats },
-    { label: locale === 'zh-CN' ? 'API 等价值(估算)' : 'API equivalent (estimate)', metric: audit.valuation },
-    { label: locale === 'zh-CN' ? '可见框架标记' : 'Visible Framework Markers', metric: audit.visibleFrameworkMarkers }
+    { label: translate(locale, 'renderer.session_audit_panel.thinking_proxy'), metric: audit.thinkingDepth },
+    { label: translate(locale, 'renderer.session_audit_panel.response_latency'), metric: audit.latencyStats },
+    { label: translate(locale, 'renderer.session_audit_panel.api_equivalent_estimate'), metric: audit.valuation },
+    { label: translate(locale, 'renderer.session_audit_panel.visible_framework_markers'), metric: audit.visibleFrameworkMarkers }
   ]
 
   return (
@@ -123,10 +124,10 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <Shield size={12} />
-        <span>{locale === 'zh-CN' ? '会话审计' : 'Session Audit'}</span>
+        <span>{translate(locale, 'renderer.session_audit_panel.session_audit')}</span>
         <span className="inline-flex items-center gap-0.5 rounded border border-soft-amber/30 bg-soft-amber/10 px-1 py-0.5 text-[8px] font-medium text-soft-amber">
           <FlaskConical size={8} />
-          {locale === 'zh-CN' ? '实验' : 'Experimental'}
+          {translate(locale, 'renderer.session_audit_panel.experimental')}
         </span>
         <div className="ml-auto">
           <HealthBadge score={audit.healthScore} label={audit.healthLabel} />
@@ -136,9 +137,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
       {expanded && (
         <div className="space-y-3 text-xs">
           <div className="rounded border border-soft-amber/20 bg-soft-amber/5 px-2 py-1.5 text-[10px] leading-relaxed text-muted">
-            {locale === 'zh-CN'
-              ? '分数是可解释的启发式信号，不是客观质量评级；请结合下方原始依据判断。'
-              : 'The score is an explainable heuristic signal, not an objective quality grade. Review its evidence.'}
+            {translate(locale, 'renderer.session_audit_panel.the_score_is_an_explainable_heuristic_signal_not')}
           </div>
 
           {/* Core metrics */}
@@ -151,7 +150,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
             />
             {audit.thinkingDepth.provenance !== 'unavailable' && (
               <MetricRow
-                label={locale === 'zh-CN' ? 'Thinking 深度' : 'Thinking Depth'}
+                label={translate(locale, 'renderer.session_audit_panel.thinking_depth')}
                 value={`${audit.thinkingDepth.value.avgSignatureLength} avg`}
                 unit={audit.thinkingDepth.value.redactedCount > 0 ? `(${audit.thinkingDepth.value.redactedCount} redacted)` : ''}
                 provenance={audit.thinkingDepth.provenance}
@@ -159,7 +158,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
             )}
             {audit.latencyStats.provenance !== 'unavailable' && (
               <MetricRow
-                label={locale === 'zh-CN' ? '响应延迟 P95' : 'Response P95'}
+                label={translate(locale, 'renderer.session_audit_panel.response_p95')}
                 value={formatMs(audit.latencyStats.value.p95)}
                 unit={`(p50: ${formatMs(audit.latencyStats.value.p50)})`}
                 provenance={audit.latencyStats.provenance}
@@ -167,16 +166,16 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
             )}
             {audit.valuation.value.usd !== undefined && (
               <MetricRow
-                label={locale === 'zh-CN' ? 'API 等价值(估算)' : 'API equivalent (estimate)'}
+                label={translate(locale, 'renderer.session_audit_panel.api_equivalent_estimate_2')}
                 value={formatCost(audit.valuation.value.usd)}
-                unit={`${locale === 'zh-CN' ? '价格覆盖' : 'coverage'} ${audit.valuation.value.coveragePercent.toFixed(1)}%`}
+                unit={`${translate(locale, 'renderer.session_audit_panel.coverage')} ${audit.valuation.value.coveragePercent.toFixed(1)}%`}
                 provenance={audit.valuation.provenance}
               />
             )}
             <MetricRow
-              label={locale === 'zh-CN' ? '可见框架标记' : 'Visible Framework Markers'}
+              label={translate(locale, 'renderer.session_audit_panel.visible_framework_markers_2')}
               value={`≈${audit.visibleFrameworkMarkers.value.estimatedMarkerTokens.toLocaleString()}`}
-              unit={locale === 'zh-CN' ? 'tokens（非 API 上下文开销）' : 'tokens (not API context overhead)'}
+              unit={translate(locale, 'renderer.session_audit_panel.tokens_not_api_context_overhead')}
               provenance={audit.visibleFrameworkMarkers.provenance}
             />
           </div>
@@ -186,7 +185,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
             <div>
               <div className="text-[10px] font-medium text-secondary flex items-center gap-1 mb-1">
                 <Info size={10} />
-                {audit.findings.length} {locale === 'zh-CN' ? '项发现' : 'findings'}
+                {audit.findings.length} {translate(locale, 'renderer.session_audit_panel.findings')}
               </div>
               {audit.findings.map((f, i) => (
                 <div key={i} className="text-[10px] text-muted pl-3 py-0.5 border-l-2 border-edge">{f}</div>
@@ -199,7 +198,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
             <div>
               <div className="text-[10px] font-medium text-soft-amber flex items-center gap-1 mb-1">
                 <AlertTriangle size={10} />
-                {audit.antiPatterns.length} {locale === 'zh-CN' ? '个反模式' : 'anti-patterns'}
+                {audit.antiPatterns.length} {translate(locale, 'renderer.session_audit_panel.anti_patterns')}
               </div>
               {audit.antiPatterns.slice(0, 5).map((ap, i) => (
                 <div key={i} className="text-[10px] text-soft-amber/60 pl-3 truncate">T{ap.turnIndex}: {ap.detail}</div>
@@ -211,7 +210,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
           {audit.frustrationSignals.length > 0 && (
             <div>
               <div className="text-[10px] font-medium text-soft-purple flex items-center gap-1 mb-1">
-                😤 {audit.frustrationSignals.length} {locale === 'zh-CN' ? '个挫败信号' : 'frustration signals'}
+                😤 {audit.frustrationSignals.length} {translate(locale, 'renderer.session_audit_panel.frustration_signals')}
               </div>
               {audit.frustrationSignals.slice(0, 5).map((fs, i) => (
                 <div key={i} className="text-[10px] text-soft-purple/60 pl-3 truncate">{fs.type}: {fs.text}</div>
@@ -222,12 +221,12 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
           {/* Session type + model usage */}
           <div className="border-t border-edge pt-2 space-y-1.5">
             <div className="flex items-center justify-between text-[11px]">
-              <span className="text-muted">{locale === 'zh-CN' ? '会话类型' : 'Session Type'}</span>
+              <span className="text-muted">{translate(locale, 'renderer.session_audit_panel.session_type')}</span>
               <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface text-secondary capitalize">{audit.sessionType}</span>
             </div>
             {audit.modelUsage && audit.modelUsage.length > 0 && (
               <div>
-                <div className="text-[10px] text-muted mb-1">{locale === 'zh-CN' ? '模型使用' : 'Model Usage'}</div>
+                <div className="text-[10px] text-muted mb-1">{translate(locale, 'renderer.session_audit_panel.model_usage')}</div>
                 {audit.modelUsage.slice(0, 3).map((m, i) => (
                   <div key={i} className="flex items-center justify-between text-[10px] pl-2">
                     <span className="text-secondary truncate">{m.model}</span>
@@ -240,7 +239,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
             )}
             {audit.toolEfficiency && audit.toolEfficiency.length > 0 && (
               <div>
-                <div className="text-[10px] text-muted mb-1">{locale === 'zh-CN' ? '工具效率' : 'Tool Efficiency'}</div>
+                <div className="text-[10px] text-muted mb-1">{translate(locale, 'renderer.session_audit_panel.tool_efficiency')}</div>
                 {audit.toolEfficiency.slice(0, 5).map((t, i) => (
                   <div key={i} className="flex items-center justify-between text-[10px] pl-2">
                     <span className="text-secondary">{t.name}</span>
@@ -254,7 +253,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
             )}
             {audit.userInterruptions > 0 && (
               <div className="text-[10px] text-soft-amber">
-                ⏸ {audit.userInterruptions} {locale === 'zh-CN' ? '次用户中断' : 'interruptions'}
+                ⏸ {audit.userInterruptions} {translate(locale, 'renderer.session_audit_panel.interruptions')}
               </div>
             )}
           </div>
@@ -266,16 +265,16 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
               className="flex w-full items-center gap-1 text-left text-[10px] font-medium text-secondary hover:text-primary"
             >
               {evidenceOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-              {locale === 'zh-CN' ? '查看评分依据与原始消息行' : 'View score evidence and source lines'}
+              {translate(locale, 'renderer.session_audit_panel.view_score_evidence_and_source_lines')}
             </button>
             {evidenceOpen && (
               <div className="mt-2 space-y-2 rounded bg-surface/60 p-2">
                 <div>
                   <div className="mb-1 text-[9px] font-medium uppercase tracking-wide text-faint">
-                    {locale === 'zh-CN' ? '评分扣分项（基线 80）' : 'Score factors (baseline 80)'}
+                    {translate(locale, 'renderer.session_audit_panel.score_factors_baseline_80')}
                   </div>
                   {audit.scoreFactors.length === 0 ? (
-                    <div className="text-[10px] text-muted">{locale === 'zh-CN' ? '无扣分项' : 'No deductions'}</div>
+                    <div className="text-[10px] text-muted">{translate(locale, 'renderer.session_audit_panel.no_deductions')}</div>
                   ) : audit.scoreFactors.map((factor) => (
                     <div key={factor.key} className="mb-1 text-[10px]">
                       <span className="mr-1 font-medium text-red-400">{factor.impact}</span>
@@ -297,7 +296,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
                       </div>
                     )) : (
                       <div className="mt-0.5 text-[9px] text-faint">
-                        {locale === 'zh-CN' ? '当前会话无可用原始依据' : 'No source evidence available'}
+                        {translate(locale, 'renderer.session_audit_panel.no_source_evidence_available')}
                       </div>
                     )}
                   </div>
@@ -305,7 +304,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
 
                 <div className="border-t border-edge/60 pt-1.5">
                   <div className="text-[10px] font-medium text-secondary">
-                    {locale === 'zh-CN' ? '已知限制' : 'Known limitations'}
+                    {translate(locale, 'renderer.session_audit_panel.known_limitations')}
                   </div>
                   {audit.limitations.map((limitation, index) => (
                     <div key={index} className="mt-0.5 text-[9px] leading-relaxed text-faint">• {limitation}</div>
@@ -317,9 +316,9 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
 
           {/* Provenance legend */}
           <div className="flex gap-2 text-[9px] text-faint border-t border-edge pt-2">
-            <span><ProvenanceBadge p="reported" /> API 真实值</span>
-            <span><ProvenanceBadge p="estimated" /> 估算</span>
-            <span><ProvenanceBadge p="unavailable" /> 无数据</span>
+            <span><ProvenanceBadge p="reported" /> {translate(locale, 'renderer.session_audit.reported')}</span>
+            <span><ProvenanceBadge p="estimated" /> {translate(locale, 'renderer.session_audit.estimated')}</span>
+            <span><ProvenanceBadge p="unavailable" /> {translate(locale, 'renderer.session_audit.unavailable')}</span>
           </div>
         </div>
       )}

@@ -1,3 +1,4 @@
+import { translate } from '../../i18n'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useStore } from '../../store'
 import { useAnalysisScope, scopeBasisLabel, isPresetRange } from './scope'
@@ -5,12 +6,12 @@ import type { AnalysisPreset, AnalysisScope } from './scope'
 import { formatTokenCount } from './shared'
 import type { InsightsData } from './shared'
 
-const TIME_PRESETS: Array<{ value: AnalysisPreset; zh: string; en: string }> = [
-  { value: 'today', zh: '今日', en: 'Today' },
-  { value: '7d', zh: '7d', en: '7d' },
-  { value: '30d', zh: '30d', en: '30d' },
-  { value: '90d', zh: '90d', en: '90d' },
-  { value: 'all', zh: '全部', en: 'All' },
+const TIME_PRESETS: Array<{ value: AnalysisPreset; labelKey: string }> = [
+  { value: 'today', labelKey: 'renderer.filter_bar.preset_today' },
+  { value: '7d', labelKey: 'renderer.filter_bar.preset_7d' },
+  { value: '30d', labelKey: 'renderer.filter_bar.preset_30d' },
+  { value: '90d', labelKey: 'renderer.filter_bar.preset_90d' },
+  { value: 'all', labelKey: 'renderer.filter_bar.preset_all' },
 ]
 
 function TogglePill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
@@ -124,7 +125,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
     <div className="sticky top-0 z-10 -mx-4 -mt-4 border-b border-edge bg-panel/95 px-4 py-2 backdrop-blur">
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         {/* Time presets */}
-        <div className="flex overflow-hidden rounded border border-edge" role="group" aria-label={zh ? '时间范围' : 'Time range'}>
+        <div className="flex overflow-hidden rounded border border-edge" role="group" aria-label={translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.time_range')}>
           {TIME_PRESETS.map((p) => (
             <button
               key={p.value}
@@ -136,7 +137,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
                   : 'text-muted hover:text-primary'
               }`}
             >
-              {zh ? p.zh : p.en}
+              {translate(locale, p.labelKey)}
             </button>
           ))}
           <button
@@ -146,7 +147,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
               !activePreset ? 'bg-accent/15 text-accent' : 'text-muted hover:text-primary'
             }`}
           >
-            {zh ? '自定义' : 'Custom'}
+            {translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.custom')}
           </button>
         </div>
 
@@ -170,7 +171,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
               onClick={handleCustomRangeApply}
               className="px-2 py-0.5 rounded bg-accent/15 text-accent text-[11px] hover:bg-accent/25"
             >
-              {zh ? '应用' : 'Apply'}
+              {translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.apply')}
             </button>
           </div>
         )}
@@ -181,7 +182,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
         {/* Source filter pills */}
         {availableSources.length > 0 && (
           <Dropdown
-            label={`${zh ? '来源' : 'Source'}${activeSourceCount > 0 ? ` (${activeSourceCount})` : ''}`}
+            label={`${translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.source')}${activeSourceCount > 0 ? ` (${activeSourceCount})` : ''}`}
           >
             {availableSources.map((source) => (
               <label key={source} className="flex items-center gap-2 px-2 py-1 hover:bg-hover rounded cursor-pointer">
@@ -200,7 +201,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
         {/* Model filter pills */}
         {availableModels.length > 0 && (
           <Dropdown
-            label={`${zh ? '模型' : 'Model'}${activeModelCount > 0 ? ` (${activeModelCount})` : ''}`}
+            label={`${translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.model')}${activeModelCount > 0 ? ` (${activeModelCount})` : ''}`}
           >
             {availableModels.map((model) => (
               <label key={model} className="flex items-center gap-2 px-2 py-1 hover:bg-hover rounded cursor-pointer">
@@ -219,7 +220,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
         {/* Project dropdown */}
         {availableProjects.length > 0 && (
           <Dropdown
-            label={`${zh ? '项目' : 'Project'}${hasProject ? ' *' : ''}`}
+            label={`${translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.project')}${hasProject ? ' *' : ''}`}
           >
             <button
               onClick={() => selectProject(null)}
@@ -227,7 +228,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
                 !hasProject ? 'text-accent' : 'text-primary'
               }`}
             >
-              {zh ? '全部项目' : 'All projects'}
+              {translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.all_projects')}
             </button>
             {availableProjects.map((p) => (
               <button
@@ -248,7 +249,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
         <div className="w-px h-4 bg-edge" />
 
         {/* Basis toggle */}
-        <div className="flex overflow-hidden rounded border border-edge" role="group" aria-label={zh ? '统计口径' : 'Token basis'}>
+        <div className="flex overflow-hidden rounded border border-edge" role="group" aria-label={translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.token_basis')}>
           {(['billing', 'conversation'] as const).map((basis) => (
             <button
               key={basis}
@@ -258,7 +259,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
                 scope.metricBasis === basis ? 'bg-accent/15 text-accent' : 'text-muted hover:text-primary'
               }`}
             >
-              {basis === 'billing' ? (zh ? '计费口径' : 'Billing') : (zh ? '仅会话' : 'Conversation')}
+              {basis === 'billing' ? (translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.billing')) : (translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.conversation'))}
             </button>
           ))}
         </div>
@@ -273,7 +274,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
             onClick={() => setScope({ ...scope, sources: undefined, models: undefined, projectOrFolder: undefined })}
             className="px-1.5 py-0.5 rounded text-[10px] text-red-400 bg-red-400/10 hover:bg-red-400/20"
           >
-            {zh ? '清除筛选' : 'Clear filters'}
+            {translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.clear_filters')}
           </button>
         )}
       </div>

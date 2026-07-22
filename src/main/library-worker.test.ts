@@ -4,16 +4,44 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { runLibraryWorkerRequest } from './library-worker'
 import { closeSearchIndex } from './search-index'
+import { closeUsageFactStore } from './usage-fact-store'
 
 const roots: string[] = []
 
 afterEach(() => {
   closeSearchIndex()
+  closeUsageFactStore()
   delete process.env.SWOB_SEARCH_INDEX_DIR
+  delete process.env.SWOB_USAGE_INDEX_PATH
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
 describe('Library worker request', () => {
+  it('syncs usage facts without initializing or scanning the Library root', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-usage-worker-'))
+    roots.push(root)
+    process.env.SWOB_USAGE_INDEX_PATH = path.join(root, 'usage.db')
+
+    const result = await runLibraryWorkerRequest({
+      type: 'usage-facts-sync',
+      root: path.join(root, 'intentionally-missing-library'),
+      sessions: [],
+      folders: []
+    })
+
+    expect(result).toEqual({
+      kind: 'usage-facts-sync',
+      value: {
+        changedSessions: 0,
+        unchangedSessions: 0,
+        removedSessions: 0,
+        factCount: 0,
+        rebuilt: false
+      }
+    })
+    expect(fs.existsSync(process.env.SWOB_USAGE_INDEX_PATH)).toBe(true)
+  })
+
   it('scans Library metadata without relying on the main-process index', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-'))
     roots.push(root)

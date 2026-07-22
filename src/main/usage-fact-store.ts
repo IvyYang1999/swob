@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { Folder, SessionSource, SessionSummary } from './types'
-import { accountingForSession, type UsageEvent } from './token-accounting'
+import { accountingForSession, totalCacheWriteTokens, type UsageEvent } from './token-accounting'
+import { valueUsageEvent } from './token-valuation'
 import { searchDatabasePath } from './search-index'
 import {
   USAGE_FACT_SCHEMA_VERSION,
@@ -42,6 +43,13 @@ interface UsageRollupRow {
   calls: number
   conversation_calls: number
   modeled_calls: number
+  conversation_modeled_calls: number
+  billing_priced_tokens: number
+  billing_billable_tokens: number
+  billing_cost_usd: number
+  conversation_priced_tokens: number
+  conversation_billable_tokens: number
+  conversation_cost_usd: number
   session_count: number
   unknown_time_events: number
 }
@@ -69,6 +77,8 @@ interface UsageFactRow {
   turn_count: number
   cost_usd: number | null
   pricing_provenance: string | null
+  priced_tokens: number
+  billable_tokens: number
 }
 
 function usageDatabasePath(): string {
@@ -138,7 +148,9 @@ function ensureSchema(db: Database.Database): void {
       call_count INTEGER NOT NULL,
       turn_count INTEGER NOT NULL,
       cost_usd REAL,
-      pricing_provenance TEXT
+      pricing_provenance TEXT,
+      priced_tokens INTEGER NOT NULL,
+      billable_tokens INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS usage_facts_time_idx ON usage_facts(occurred_day, occurred_hour);
     CREATE INDEX IF NOT EXISTS usage_facts_source_idx ON usage_facts(source_client);
@@ -175,9 +187,16 @@ function ensureSchema(db: Database.Database): void {
       conversation_cache_write INTEGER NOT NULL,
       conversation_output INTEGER NOT NULL,
       conversation_reasoning INTEGER NOT NULL,
+      billing_priced_tokens INTEGER NOT NULL,
+      billing_billable_tokens INTEGER NOT NULL,
+      billing_cost_usd REAL NOT NULL,
+      conversation_priced_tokens INTEGER NOT NULL,
+      conversation_billable_tokens INTEGER NOT NULL,
+      conversation_cost_usd REAL NOT NULL,
       calls INTEGER NOT NULL,
       conversation_calls INTEGER NOT NULL,
       modeled_calls INTEGER NOT NULL,
+      conversation_modeled_calls INTEGER NOT NULL,
       first_occurred_at TEXT,
       last_occurred_at TEXT,
       PRIMARY KEY(occurred_day, occurred_hour, source_client, model_key, project_path, session_id)
@@ -239,36 +258,41 @@ function rootSessionId(session: SessionSummary): string {
   return session.branchParentId || session.sessionId
 }
 
+function resolveRootSessionId(
+  session: SessionSummary,
+  sessionsByIdentity: Map<string, SessionSummary>
+): string {
+  let current = session
+  const visited = new Set<string>()
+  while (current.branchParentId && !visited.has(current.branchParentId)) {
+    visited.add(current.branchParentId)
+    const parent = sessionsByIdentity.get(current.branchParentId)
+    if (!parent) return current.branchParentId
+    current = parent
+  }
+  return current.sessionId
+}
+
 function agentScope(scope: UsageEvent['scope']): UsageFact['agentScope'] {
   if (scope === 'main') return 'main'
   if (scope === 'sidechain' || scope === 'subagent') return 'subagent'
   return 'unknown'
 }
 
-interface AttributionFields {
-  modelRaw?: string
-  modelCanonical?: string
-  modelProvenance?: string
-  reportedCostUsd?: number
-  valuation?: { usd?: number; mode?: string }
-}
-
-export function usageFactsForSession(session: SessionSummary): UsageFact[] {
+export function usageFactsForSession(
+  session: SessionSummary,
+  options: { rootSessionId?: string } = {}
+): UsageFact[] {
   const accounting = accountingForSession(session)
   const source = session.source || accounting.provider || 'claude-code'
   const project = projectPath(session)
-  const rootId = rootSessionId(session)
+  const rootId = options.rootSessionId || rootSessionId(session)
   return accounting.usageEvents.map((event) => {
-    const attribution = event as UsageEvent & AttributionFields
     const time = normalizedTimestamp(event.timestamp)
-    const rawModel = attribution.modelRaw || event.model || null
-    const canonicalModel = attribution.modelCanonical || event.model || null
+    const rawModel = event.modelRaw || event.model || null
+    const canonicalModel = event.modelCanonical || event.model || null
     const eventId = stableHash([source, session.sessionId, event.dedupKey])
-    const reportedCost = typeof attribution.reportedCostUsd === 'number'
-      ? attribution.reportedCostUsd
-      : typeof attribution.valuation?.usd === 'number'
-        ? attribution.valuation.usd
-        : null
+    const valuation = valueUsageEvent(event)
     return {
       eventId,
       occurredAt: time.occurredAt,
@@ -281,17 +305,19 @@ export function usageFactsForSession(session: SessionSummary): UsageFact[] {
       projectPath: project,
       model: canonicalModel,
       modelRaw: rawModel,
-      modelProvenance: attribution.modelProvenance || (event.model ? 'response' : 'unknown'),
+      modelProvenance: event.modelProvenance || (event.model ? 'response' : 'unknown'),
       nonCachedInputTokens: event.components.nonCachedInputTokens,
       cacheReadTokens: event.components.cacheReadTokens,
-      cacheWriteTokens: event.components.cacheWriteTokens,
+      cacheWriteTokens: totalCacheWriteTokens(event.components),
       outputTokens: event.components.outputTokens,
       reasoningTokens: event.components.reasoningTokens || 0,
       usageProvenance: event.provenance,
       callCount: 1,
       turnCount: event.scope === 'main' ? 1 : 0,
-      costUsd: reportedCost,
-      pricingProvenance: attribution.valuation?.mode || null
+      costUsd: valuation.usd ?? null,
+      pricingProvenance: valuation.mode,
+      pricedTokens: valuation.coveredTokens,
+      billableTokens: valuation.totalBillableTokens
     }
   })
 }
@@ -316,13 +342,14 @@ function insertFact(db: Database.Database, fact: UsageFact): void {
       session_id, root_session_id, agent_scope, project_path, model_key,
       model_raw, model_provenance, non_cached_input, cache_read, cache_write,
       output_tokens, reasoning_tokens, usage_provenance, call_count, turn_count,
-      cost_usd, pricing_provenance
+      cost_usd, pricing_provenance, priced_tokens, billable_tokens
     ) VALUES (
       @eventId, @occurredAt, @occurredDay, @occurredHour, @sourceClient,
       @sessionId, @rootSessionId, @agentScope, @projectPath, @model,
       @modelRaw, @modelProvenance, @nonCachedInputTokens, @cacheReadTokens,
       @cacheWriteTokens, @outputTokens, @reasoningTokens, @usageProvenance,
-      @callCount, @turnCount, @costUsd, @pricingProvenance
+      @callCount, @turnCount, @costUsd, @pricingProvenance,
+      @pricedTokens, @billableTokens
     )
   `).run({
     ...fact,
@@ -343,7 +370,10 @@ function rebuildSessionRollup(db: Database.Database, sessionId: string): void {
       billing_output, billing_reasoning,
       conversation_non_cached_input, conversation_cache_read, conversation_cache_write,
       conversation_output, conversation_reasoning,
-      calls, conversation_calls, modeled_calls, first_occurred_at, last_occurred_at
+      billing_priced_tokens, billing_billable_tokens, billing_cost_usd,
+      conversation_priced_tokens, conversation_billable_tokens, conversation_cost_usd,
+      calls, conversation_calls, modeled_calls, conversation_modeled_calls,
+      first_occurred_at, last_occurred_at
     )
     SELECT
       occurred_day, occurred_hour, source_client, model_key, project_path, session_id,
@@ -353,9 +383,14 @@ function rebuildSessionRollup(db: Database.Database, sessionId: string): void {
       SUM(CASE WHEN agent_scope = 'main' THEN cache_write ELSE 0 END),
       SUM(CASE WHEN agent_scope = 'main' THEN output_tokens ELSE 0 END),
       SUM(CASE WHEN agent_scope = 'main' THEN reasoning_tokens ELSE 0 END),
+      SUM(priced_tokens), SUM(billable_tokens), SUM(COALESCE(cost_usd, 0)),
+      SUM(CASE WHEN agent_scope = 'main' THEN priced_tokens ELSE 0 END),
+      SUM(CASE WHEN agent_scope = 'main' THEN billable_tokens ELSE 0 END),
+      SUM(CASE WHEN agent_scope = 'main' THEN COALESCE(cost_usd, 0) ELSE 0 END),
       SUM(call_count),
       SUM(CASE WHEN agent_scope = 'main' THEN turn_count ELSE 0 END),
       SUM(CASE WHEN model_key <> '${UNKNOWN_MODEL}' THEN call_count ELSE 0 END),
+      SUM(CASE WHEN agent_scope = 'main' AND model_key <> '${UNKNOWN_MODEL}' THEN call_count ELSE 0 END),
       MIN(occurred_at), MAX(occurred_at)
     FROM usage_facts
     WHERE session_id = ?
@@ -373,6 +408,11 @@ export function synchronizeUsageFacts(
     !session.branchLeafUuid && session.tokenAccounting?.excludedFromRollups !== true
   )
   const uniqueSessions = new Map(rollupSessions.map((session) => [session.sessionId, session]))
+  const sessionsByIdentity = new Map<string, SessionSummary>()
+  for (const session of rollupSessions) {
+    sessionsByIdentity.set(session.id, session)
+    sessionsByIdentity.set(session.sessionId, session)
+  }
   const folderMap = foldersBySession(folders)
   let changedSessions = 0
   let unchangedSessions = 0
@@ -393,12 +433,13 @@ export function synchronizeUsageFacts(
 
     for (const [sessionId, session] of uniqueSessions) {
       const accounting = accountingForSession(session)
-      const facts = usageFactsForSession(session)
+      const resolvedRoot = resolveRootSessionId(session, sessionsByIdentity)
+      const facts = usageFactsForSession(session, { rootSessionId: resolvedRoot })
       const folderIds = folderMap.get(sessionId) || []
       const factSignature = stableHash({
         source: session.source || 'claude-code',
         project: projectPath(session),
-        root: rootSessionId(session),
+        root: resolvedRoot,
         turns: session.turnCount,
         available: accounting.billingTotal !== null,
         facts
@@ -426,7 +467,7 @@ export function synchronizeUsageFacts(
           updated_at = excluded.updated_at
       `).run(
         sessionId,
-        rootSessionId(session),
+        resolvedRoot,
         session.source || 'claude-code',
         projectPath(session),
         session.turnCount,
@@ -596,6 +637,10 @@ function rowToAggregate(row: UsageRollupRow, basis: MetricBasis): UsageAggregate
     row.conversation_cache_write + row.conversation_output
   const selectedConversation = basis === 'conversation'
   const eventCount = selectedConversation ? row.conversation_calls : row.calls
+  const pricedTokens = selectedConversation ? row.conversation_priced_tokens : row.billing_priced_tokens
+  const billableTokens = selectedConversation ? row.conversation_billable_tokens : row.billing_billable_tokens
+  const costUsd = selectedConversation ? row.conversation_cost_usd : row.billing_cost_usd
+  const modeledCalls = selectedConversation ? row.conversation_modeled_calls : row.modeled_calls
   return {
     key: row.key,
     label: row.key,
@@ -612,8 +657,9 @@ function rowToAggregate(row: UsageRollupRow, basis: MetricBasis): UsageAggregate
     eventCount,
     sessionCount: row.session_count,
     usageCoverage: coverage(row.session_count, row.session_count),
-    modelCoverage: coverage(row.modeled_calls, row.calls),
-    pricingCoverage: { ...coverage(0, row.calls), status: 'pending-t113' },
+    modelCoverage: coverage(modeledCalls, selectedConversation ? row.conversation_calls : row.calls),
+    pricingCoverage: { ...coverage(pricedTokens, billableTokens), status: 'available' },
+    costUsd: pricedTokens > 0 || costUsd !== 0 ? costUsd : null,
     unknownTimeEvents: row.unknown_time_events
   }
 }
@@ -639,9 +685,16 @@ function aggregateRows(
       COALESCE(SUM(r.conversation_cache_write), 0) AS conversation_cache_write,
       COALESCE(SUM(r.conversation_output), 0) AS conversation_output,
       COALESCE(SUM(r.conversation_reasoning), 0) AS conversation_reasoning,
+      COALESCE(SUM(r.billing_priced_tokens), 0) AS billing_priced_tokens,
+      COALESCE(SUM(r.billing_billable_tokens), 0) AS billing_billable_tokens,
+      COALESCE(SUM(r.billing_cost_usd), 0) AS billing_cost_usd,
+      COALESCE(SUM(r.conversation_priced_tokens), 0) AS conversation_priced_tokens,
+      COALESCE(SUM(r.conversation_billable_tokens), 0) AS conversation_billable_tokens,
+      COALESCE(SUM(r.conversation_cost_usd), 0) AS conversation_cost_usd,
       COALESCE(SUM(r.calls), 0) AS calls,
       COALESCE(SUM(r.conversation_calls), 0) AS conversation_calls,
       COALESCE(SUM(r.modeled_calls), 0) AS modeled_calls,
+      COALESCE(SUM(r.conversation_modeled_calls), 0) AS conversation_modeled_calls,
       COUNT(DISTINCT r.session_id) AS session_count,
       COALESCE(SUM(CASE WHEN r.occurred_day = '${UNKNOWN_TIME}' THEN r.calls ELSE 0 END), 0) AS unknown_time_events
     FROM usage_rollups r
@@ -679,9 +732,16 @@ function emptyAggregate(basis: MetricBasis): UsageAggregate {
     conversation_cache_write: 0,
     conversation_output: 0,
     conversation_reasoning: 0,
+    billing_priced_tokens: 0,
+    billing_billable_tokens: 0,
+    billing_cost_usd: 0,
+    conversation_priced_tokens: 0,
+    conversation_billable_tokens: 0,
+    conversation_cost_usd: 0,
     calls: 0,
     conversation_calls: 0,
     modeled_calls: 0,
+    conversation_modeled_calls: 0,
     session_count: 0,
     unknown_time_events: 0
   }, basis)
@@ -996,7 +1056,9 @@ export function sessionUsageEvents(
     callCount: row.call_count,
     turnCount: row.turn_count,
     costUsd: row.cost_usd,
-    pricingProvenance: row.pricing_provenance
+    pricingProvenance: row.pricing_provenance,
+    pricedTokens: row.priced_tokens,
+    billableTokens: row.billable_tokens
   }))
 }
 

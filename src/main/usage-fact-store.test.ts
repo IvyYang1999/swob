@@ -21,11 +21,21 @@ function localTimestamp(year: number, month: number, day: number, hour: number):
   return new Date(year, month - 1, day, hour, 0, 0, 0).toISOString()
 }
 
-function components(input: number, output: number, cacheRead = 0, cacheWrite = 0, reasoning = 0): NormalizedTokenComponents {
+function components(
+  input: number,
+  output: number,
+  cacheRead = 0,
+  cacheWrite = 0,
+  reasoning = 0,
+  cacheWrite5m = 0,
+  cacheWrite1h = 0
+): NormalizedTokenComponents {
   return {
     nonCachedInputTokens: input,
     cacheReadTokens: cacheRead,
     cacheWriteTokens: cacheWrite,
+    cacheWrite5mTokens: cacheWrite5m,
+    cacheWrite1hTokens: cacheWrite1h,
     outputTokens: output,
     reasoningTokens: reasoning
   }
@@ -35,7 +45,12 @@ function usageEvent(
   dedupKey: string,
   timestamp: string | undefined,
   value: NormalizedTokenComponents,
-  options: { scope?: UsageScope; model?: string; provenance?: 'reported' | 'derived' | 'estimated' } = {}
+  options: {
+    scope?: UsageScope
+    model?: string
+    provenance?: 'reported' | 'derived' | 'estimated'
+    reportedCostUsd?: number
+  } = {}
 ): UsageEvent {
   return {
     provider: 'claude-code',
@@ -43,10 +58,18 @@ function usageEvent(
     dedupKey,
     timestamp,
     model: options.model,
+    modelRaw: options.model,
+    modelCanonical: options.model,
+    modelProvenance: options.model ? 'response' : 'unknown',
+    billingProvider: 'anthropic',
+    providerRaw: 'anthropic',
+    providerProvenance: 'explicit',
     scope: options.scope || 'main',
     counterKind: 'incremental',
     provenance: options.provenance || 'reported',
     components: value,
+    semantics: 'anthropic-disjoint',
+    reportedCostUsd: options.reportedCostUsd,
     warnings: []
   }
 }
@@ -56,13 +79,16 @@ function add(left: NormalizedTokenComponents, right: NormalizedTokenComponents):
     nonCachedInputTokens: left.nonCachedInputTokens + right.nonCachedInputTokens,
     cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
     cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+    cacheWrite5mTokens: left.cacheWrite5mTokens + right.cacheWrite5mTokens,
+    cacheWrite1hTokens: left.cacheWrite1hTokens + right.cacheWrite1hTokens,
     outputTokens: left.outputTokens + right.outputTokens,
     reasoningTokens: (left.reasoningTokens || 0) + (right.reasoningTokens || 0)
   }
 }
 
 function total(value: NormalizedTokenComponents): number {
-  return value.nonCachedInputTokens + value.cacheReadTokens + value.cacheWriteTokens + value.outputTokens
+  return value.nonCachedInputTokens + value.cacheReadTokens + value.cacheWriteTokens +
+    value.cacheWrite5mTokens + value.cacheWrite1hTokens + value.outputTokens
 }
 
 function makeSession(
@@ -77,12 +103,12 @@ function makeSession(
     .reduce((sum, event) => add(sum, event.components), components(0, 0))
   const accounting: TokenAccounting = options.unavailable
     ? {
-        provider: options.source || 'claude-code', metricVersion: 1, provenance: 'unavailable',
+        provider: options.source || 'claude-code', metricVersion: 2, provenance: 'unavailable',
         billingTotal: null, conversationOnly: null, components: null, usageEvents: [],
         unavailableReason: 'fixture unavailable', warnings: []
       }
     : {
-        provider: options.source || 'claude-code', metricVersion: 1, provenance: 'reported',
+        provider: options.source || 'claude-code', metricVersion: 2, provenance: 'reported',
         billingTotal: total(summed), conversationOnly: total(conversation), components: summed,
         usageEvents: events.map((event) => ({ ...event, provider: options.source || event.provider })), warnings: []
       }
@@ -145,7 +171,7 @@ describe('UsageFact + AnalysisScope', () => {
   it('跨天会话按事件真实日期拆分，五桶完整且 reasoning 不重复计入 processed', () => {
     const session = makeSession('cross-day', '/repo/alpha', [
       usageEvent('day-one', localTimestamp(2026, 7, 20, 23), components(10, 5, 2, 3, 4), { model: 'model-a' }),
-      usageEvent('day-two', localTimestamp(2026, 7, 21, 1), components(20, 7, 4, 6, 3), { model: 'model-a' })
+      usageEvent('day-two', localTimestamp(2026, 7, 21, 1), components(20, 7, 4, 6, 3, 8, 9), { model: 'model-a' })
     ])
     synchronizeUsageFacts([session], [])
 
@@ -153,17 +179,17 @@ describe('UsageFact + AnalysisScope', () => {
 
     expect(result.items.map((item) => [item.key, item.processedTokens])).toEqual([
       ['2026-07-20', 20],
-      ['2026-07-21', 37]
+      ['2026-07-21', 54]
     ])
     expect(result.total).toMatchObject({
       nonCachedInputTokens: 30,
       cacheReadTokens: 6,
-      cacheWriteTokens: 9,
+      cacheWriteTokens: 26,
       outputTokens: 12,
       reasoningTokens: 7,
-      processedTokens: 57
+      processedTokens: 74
     })
-    expect(result.total.processedTokens).not.toBe(64)
+    expect(result.total.processedTokens).not.toBe(81)
   })
 
   it('无 timestamp 事件进入 unknown-time，受限日期不冒充任何一天但质量计数保留', () => {
@@ -249,6 +275,24 @@ describe('UsageFact + AnalysisScope', () => {
     expect(events[0]).toMatchObject({ model: 'm2', nonCachedInputTokens: 20, outputTokens: 5 })
   })
 
+  it('多级分支会话事实追溯到真正 rootSessionId', () => {
+    const rootSession = makeSession('root', '/repo/alpha', [
+      usageEvent('root-event', localTimestamp(2026, 7, 20, 8), components(1, 1))
+    ])
+    const child = makeSession('child', '/repo/alpha', [
+      usageEvent('child-event', localTimestamp(2026, 7, 20, 9), components(2, 1))
+    ])
+    child.branchParentId = 'root'
+    const grandchild = makeSession('grandchild', '/repo/alpha', [
+      usageEvent('grandchild-event', localTimestamp(2026, 7, 20, 10), components(3, 1))
+    ])
+    grandchild.branchParentId = 'child'
+
+    synchronizeUsageFacts([rootSession, child, grandchild], [])
+
+    expect(sessionUsageEvents('grandchild', scope())[0].rootSessionId).toBe('root')
+  })
+
   it('previous period 自动使用同长度、同过滤口径', () => {
     const session = makeSession('periods', '/repo/alpha', [
       usageEvent('previous', localTimestamp(2026, 7, 20, 8), components(8, 2), { model: 'm1' }),
@@ -275,12 +319,14 @@ describe('UsageFact + AnalysisScope', () => {
     const changedA = makeSession('a', '/repo/alpha', [usageEvent('a1', localTimestamp(2026, 7, 20, 8), components(30, 2))])
     expect(synchronizeUsageFacts([changedA, b], [])).toMatchObject({ changedSessions: 1, unchangedSessions: 1, factCount: 2 })
     expect(synchronizeUsageFacts([changedA], [])).toMatchObject({ removedSessions: 1, factCount: 1 })
-    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 1, sessions: 1, facts: 1 })
+    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 2, sessions: 1, facts: 1 })
   })
 
-  it('usage/model coverage 显式，pricingCoverage 为 t113 留位', () => {
+  it('usage/model/pricing coverage 显式且 pricing 使用 t113 逐请求估值', () => {
     const available = makeSession('available', '/repo/alpha', [
-      usageEvent('known-model', localTimestamp(2026, 7, 20, 8), components(10, 2), { model: 'm1' }),
+      usageEvent('known-model', localTimestamp(2026, 7, 20, 8), components(10, 2), {
+        model: 'm1', reportedCostUsd: 0.25
+      }),
       usageEvent('unknown-model', localTimestamp(2026, 7, 20, 9), components(5, 1))
     ])
     const unavailable = makeSession('unavailable', '/repo/alpha', [], { unavailable: true })
@@ -289,7 +335,10 @@ describe('UsageFact + AnalysisScope', () => {
     const result = queryInsights(scope(), 'global')
     expect(result.total.usageCoverage).toEqual({ covered: 1, total: 2, percent: 50 })
     expect(result.total.modelCoverage).toEqual({ covered: 1, total: 2, percent: 50 })
-    expect(result.total.pricingCoverage).toMatchObject({ status: 'pending-t113', total: 2, percent: 0 })
+    expect(result.total.pricingCoverage).toEqual({
+      status: 'available', covered: 12, total: 18, percent: (12 / 18) * 100
+    })
+    expect(result.total.costUsd).toBe(0.25)
     expect(queryInsights(scope(), 'project').items[0].usageCoverage).toEqual({
       covered: 1, total: 2, percent: 50
     })

@@ -1,6 +1,6 @@
 import type { SessionSource } from './types'
 
-export const USAGE_FACT_SCHEMA_VERSION = 1
+export const USAGE_FACT_SCHEMA_VERSION = 2
 
 export type AnalysisPreset = 'today' | '7d' | '30d' | '90d' | 'all'
 export type MetricBasis = 'billing' | 'conversation'
@@ -39,6 +39,8 @@ export interface UsageFact {
   turnCount: number
   costUsd?: number | null
   pricingProvenance?: string | null
+  pricedTokens: number
+  billableTokens: number
 }
 
 export interface CoverageMetric {
@@ -70,6 +72,7 @@ export interface UsageAggregate {
   usageCoverage: CoverageMetric
   modelCoverage: CoverageMetric
   pricingCoverage: PricingCoveragePlaceholder
+  costUsd: number | null
   unknownTimeEvents: number
 }
 

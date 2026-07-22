@@ -75,6 +75,12 @@ export async function runLibraryWorkerRequest(
   request: LibraryWorkerRequest,
   onProgress?: (progress: LibraryWorkerProgress) => void
 ): Promise<LibraryWorkerResult> {
+  if (request.type === 'usage-facts-sync') {
+    return {
+      kind: 'usage-facts-sync',
+      value: synchronizeUsageFacts(request.sessions, request.folders, { rebuild: request.rebuild })
+    }
+  }
   initLibrary(request.root, {
     readOnly: request.type === 'scan',
     ignoreDirs: request.type === 'scan' || request.type === 'sync' ? request.ignoreDirs : undefined
@@ -85,13 +91,6 @@ export async function runLibraryWorkerRequest(
     await syncLibraryFromSessions(request.sessions, request.sessionMeta, onProgress)
     return { kind: 'tree', tree: scanLibrary() }
   }
-  if (request.type === 'usage-facts-sync') {
-    return {
-      kind: 'usage-facts-sync',
-      value: synchronizeUsageFacts(request.sessions, request.folders, { rebuild: request.rebuild })
-    }
-  }
-
   const detectedSource = request.source === 'transcript'
     ? detectSessionSourceFromPath(request.filePath)
     : request.source || detectSessionSourceFromPath(request.filePath)

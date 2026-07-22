@@ -41,6 +41,100 @@ type SmartRenameResult<T> =
   | { ok: true; items: T; config?: any }
   | { ok: false; error: { code: string; message: string } }
 
+type RendererAnalysisDimension = 'global' | 'time' | 'hour' | 'source' | 'model' | 'project' | 'folder' | 'session'
+type RendererAnalysisScope = {
+  range: { from?: string; to?: string } | 'today' | '7d' | '30d' | '90d' | 'all'
+  sources?: string[]
+  models?: string[]
+  projectOrFolder?: { kind: 'project' | 'folder'; key: string }
+  metricBasis: 'billing' | 'conversation'
+}
+type RendererCoverageMetric = { covered: number; total: number; percent: number | null }
+type RendererUsageAggregate = {
+  key: string
+  label: string
+  nonCachedInputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  processedTokens: number
+  billingTokens: number
+  conversationTokens: number
+  calls: number
+  turns: number
+  eventCount: number
+  sessionCount: number
+  usageCoverage: RendererCoverageMetric
+  modelCoverage: RendererCoverageMetric
+  pricingCoverage: RendererCoverageMetric & { status: 'pending-t113' | 'available' }
+  costUsd: number | null
+  unknownTimeEvents: number
+}
+type RendererInsightsQueryResult = {
+  schemaVersion: number
+  scope: RendererAnalysisScope
+  dimension: RendererAnalysisDimension
+  range: { fromDay: string | null; toDay: string | null; label: string }
+  items: RendererUsageAggregate[]
+  total: RendererUsageAggregate
+  previousPeriod: null | {
+    range: { fromDay: string | null; toDay: string | null; label: string }
+    processedTokens: number
+    absoluteChange: number
+    percentChange: number | null
+  }
+  quality: { unknownTimeEvents: number; lastIndexedAt: string | null }
+}
+type RendererInsightsDrilldownSession = {
+  sessionId: string
+  rootSessionId: string
+  sourceClient: string
+  projectPath: string
+  models: string[]
+  processedTokens: number
+  billingTokens: number
+  conversationTokens: number
+  calls: number
+  turns: number
+  firstOccurredAt: string | null
+  lastOccurredAt: string | null
+  usageProvenance: string[]
+}
+type RendererUsageFact = {
+  eventId: string
+  occurredAt: string | null
+  occurredDay: string
+  occurredHour: number | null
+  sourceClient: string
+  sessionId: string
+  rootSessionId: string
+  agentScope: 'main' | 'subagent' | 'unknown'
+  projectPath: string
+  model: string | null
+  modelRaw: string | null
+  modelProvenance: string
+  nonCachedInputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  usageProvenance: string
+  callCount: number
+  turnCount: number
+  costUsd?: number | null
+  pricingProvenance?: string | null
+  pricedTokens: number
+  billableTokens: number
+}
+type RendererUsageFactSyncResult = {
+  changedSessions: number
+  unchangedSessions: number
+  removedSessions: number
+  factCount: number
+  rebuilt: boolean
+}
+
 interface ElectronAPI {
   platformGetCapabilities: () => Promise<import('../components/WindowsAlphaNotice').PlatformCapabilities>
   loadAllSessions: () => Promise<any[]>
@@ -193,19 +287,19 @@ interface ElectronAPI {
   // AnalysisScope / UsageFact data layer (renderer integration is intentionally deferred)
   getInsights: () => Promise<any>
   queryInsights: (
-    scope: import('../../../main/analysis-contract').AnalysisScope,
-    dimension: import('../../../main/analysis-contract').AnalysisDimension
-  ) => Promise<import('../../../main/analysis-contract').InsightsQueryResult>
+    scope: RendererAnalysisScope,
+    dimension: RendererAnalysisDimension
+  ) => Promise<RendererInsightsQueryResult>
   drilldownInsights: (
-    scope: import('../../../main/analysis-contract').AnalysisScope,
-    dimension: import('../../../main/analysis-contract').AnalysisDimension,
+    scope: RendererAnalysisScope,
+    dimension: RendererAnalysisDimension,
     key: string
-  ) => Promise<import('../../../main/analysis-contract').InsightsDrilldownSession[]>
+  ) => Promise<RendererInsightsDrilldownSession[]>
   getInsightSessionEvents: (
     sessionId: string,
-    scope: import('../../../main/analysis-contract').AnalysisScope
-  ) => Promise<import('../../../main/analysis-contract').UsageFact[]>
-  rebuildInsightsFacts: () => Promise<import('../../../main/analysis-contract').UsageFactSyncResult>
+    scope: RendererAnalysisScope
+  ) => Promise<RendererUsageFact[]>
+  rebuildInsightsFacts: () => Promise<RendererUsageFactSyncResult>
 
   // Session Audit
   auditSession: (filePath: string) => Promise<any>

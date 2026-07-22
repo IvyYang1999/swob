@@ -296,9 +296,21 @@ export async function revealAllSessions(page: Page): Promise<void> {
   // Root-scatter storage model: loose sessions render flat in the sidebar
   // bottom area. Single-turn sessions collapse into an expandable section.
   const sessions = page.locator('[data-session-id]')
-  await sessions.first().waitFor({ state: 'visible', timeout: 20_000 })
   const singleTurnToggle = page.getByRole('button', { name: /单轮对话/ })
-  if (await singleTurnToggle.isVisible().catch(() => false)) {
+  await Promise.race([
+    sessions.first().waitFor({ state: 'visible', timeout: 20_000 }),
+    singleTurnToggle.waitFor({ state: 'visible', timeout: 20_000 })
+  ])
+
+  let openedCollapsedSection = false
+  if (await singleTurnToggle.isVisible().catch(() => false)
+    && !await sessions.first().isVisible().catch(() => false)) {
+    await singleTurnToggle.click()
+    openedCollapsedSection = true
+  }
+  await sessions.first().waitFor({ state: 'visible', timeout: 20_000 })
+
+  if (!openedCollapsedSection && await singleTurnToggle.isVisible().catch(() => false)) {
     const before = await sessions.count()
     await singleTurnToggle.click()
     await page.waitForFunction(

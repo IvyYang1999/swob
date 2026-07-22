@@ -35,6 +35,7 @@ interface DrilldownTarget {
 export function InsightsPage() {
   const api = (window as any).api
   const config = useStore((s) => s.config)
+  const sessions = useStore((s) => s.sessions)
   const locale = useStore((s) => s.locale)
   const zh = locale === 'zh-CN'
   const [data, setData] = useState<InsightsData | null>(null)
@@ -65,7 +66,7 @@ export function InsightsPage() {
     let cancelled = false
     setLoading(true)
 
-    const dimensions: AnalysisDimension[] = ['global', 'time', 'hour', 'source', 'model', 'project']
+    const dimensions: AnalysisDimension[] = ['global', 'time', 'hour', 'source', 'model', 'project', 'session']
     const queries = dimensions.map((dim) =>
       api.queryInsights(scope, dim)
         .then((result: InsightsQueryResult) => ({ dim, result }))
@@ -82,6 +83,7 @@ export function InsightsPage() {
         source: null,
         model: null,
         project: null,
+        session: null,
       }
 
       for (const { dim, result } of results) {
@@ -90,7 +92,7 @@ export function InsightsPage() {
         }
       }
 
-      const adapted = adaptQueryBundle(bundle)
+      const adapted = adaptQueryBundle(bundle, sessions)
       setData(adapted)
 
       // Extract period comparison from global result
@@ -106,7 +108,7 @@ export function InsightsPage() {
     })
 
     return () => { cancelled = true }
-  }, [scope])
+  }, [scope, sessions])
 
   const projectViewMode = config?.preferences?.projectViewMode || 'folders'
   const projectData = useMemo(() => {

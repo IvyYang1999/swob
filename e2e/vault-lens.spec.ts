@@ -93,6 +93,7 @@ test.beforeAll(async () => {
   app = launched.app
   page = launched.page
   // tF4 起侧栏分组默认全折叠:先等分组出现,展开第一组后会话才可见
+  await page.getByRole('tab', { name: /查看全部会话/ }).click()
   await expect(page.locator('[data-lens-group]').first()).toBeVisible({ timeout: 20_000 })
   await page.locator('[data-lens-group] > button').first().click()
   await expect(page.locator('[data-session-id]').first()).toBeVisible({ timeout: 20_000 })

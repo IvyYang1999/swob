@@ -758,13 +758,28 @@ function unknownTimeEvents(db: Database.Database, scope: AnalysisScope): number 
   `).get(...filter.params) as { count: number }).count
 }
 
+function applySessionRangeFilter(
+  where: string[],
+  params: string[],
+  range: ResolvedAnalysisRange
+): void {
+  if (range.fromDay) {
+    where.push("substr(sessions.updated_at, 1, 10) >= ?")
+    params.push(range.fromDay)
+  }
+  if (range.toDay) {
+    where.push("substr(sessions.updated_at, 1, 10) <= ?")
+    params.push(range.toDay)
+  }
+}
+
 function applyGlobalUsageCoverage(
   db: Database.Database,
   scope: AnalysisScope,
   range: ResolvedAnalysisRange,
   total: UsageAggregate
 ): void {
-  if (range.fromDay || range.toDay || scope.models?.length) return
+  if (scope.models?.length) return
   const joins: string[] = []
   const where = ['1 = 1']
   const params: string[] = []
@@ -781,6 +796,7 @@ function applyGlobalUsageCoverage(
     where.push(`sessions.source_client IN (${scope.sources.map(() => '?').join(', ')})`)
     params.push(...scope.sources)
   }
+  applySessionRangeFilter(where, params, range)
   const row = db.prepare(`
     SELECT SUM(usage_available) AS covered, COUNT(*) AS total
     FROM usage_sessions sessions ${joins.join('\n')}
@@ -796,10 +812,9 @@ function applyItemUsageCoverage(
   dimension: AnalysisDimension,
   items: UsageAggregate[]
 ): void {
-  // Sessions without facts cannot be placed on a time/model axis. On an
-  // all-time categorical axis, their source/project/folder is still known and
-  // must remain in the denominator so a partial source is not shown as 100%.
-  if (range.fromDay || range.toDay || scope.models?.length) return
+  // Sessions without facts cannot be placed on an event-time/model axis. For
+  // categorical views, session updated_at provides an honest range boundary.
+  if (scope.models?.length) return
   const keySql: Partial<Record<AnalysisDimension, string>> = {
     global: "'global'",
     source: 'sessions.source_client',
@@ -826,6 +841,7 @@ function applyItemUsageCoverage(
     where.push(`sessions.source_client IN (${scope.sources.map(() => '?').join(', ')})`)
     params.push(...scope.sources)
   }
+  applySessionRangeFilter(where, params, range)
   const rows = db.prepare(`
     SELECT ${key} AS key, SUM(sessions.usage_available) AS covered, COUNT(*) AS total
     FROM usage_sessions sessions ${joins.join('\n')}

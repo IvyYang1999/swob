@@ -95,7 +95,7 @@ function makeSession(
   id: string,
   project: string,
   events: UsageEvent[],
-  options: { source?: SessionSource; unavailable?: boolean; turns?: number } = {}
+  options: { source?: SessionSource; unavailable?: boolean; turns?: number; updatedAt?: string } = {}
 ): SessionSummary {
   const summed = events.reduce((sum, event) => add(sum, event.components), components(0, 0))
   const conversation = events
@@ -117,7 +117,7 @@ function makeSession(
     sessionId: id,
     slug: id,
     createdAt: '2026-07-20T00:00:00Z',
-    updatedAt: '2026-07-22T00:00:00Z',
+    updatedAt: options.updatedAt || '2026-07-22T00:00:00Z',
     messageCount: events.length * 2,
     turnCount: options.turns ?? events.filter((event) => event.scope === 'main').length,
     compactCount: 0,
@@ -349,6 +349,13 @@ describe('UsageFact + AnalysisScope', () => {
     expect(queryInsights(scope(), 'session').items.find((item) => item.key === 'unavailable')).toMatchObject({
       processedTokens: 0,
       usageCoverage: { covered: 0, total: 1, percent: 0 }
+    })
+    const bounded = queryInsights(scope({
+      range: { from: '2026-07-22', to: '2026-07-22' }
+    }), 'source')
+    expect(bounded.total.usageCoverage).toEqual({ covered: 1, total: 2, percent: 50 })
+    expect(bounded.items.find((item) => item.key === 'claude-code')?.usageCoverage).toEqual({
+      covered: 1, total: 2, percent: 50
     })
   })
 

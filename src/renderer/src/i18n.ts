@@ -147,6 +147,25 @@ const translations: Record<Locale, Record<string, string>> = {
     'chat.cancel': '取消',
     'chat.highlight': '划线',
     'chat.highlight_title': '划线收藏',
+    'chat.generate_share_image': '生成分享图',
+
+    // Share image
+    'share.title': '生成分享图',
+    'share.rendering': '正在渲染...',
+    'share.render_error': '渲染失败',
+    'share.theme': '主题',
+    'share.watermark': '水印',
+    'share.privacy': '隐私',
+    'share.strip_paths': '隐藏文件路径',
+    'share.strip_session_ids': '隐藏 Session ID',
+    'share.exclude_tool_results': '排除工具结果',
+    'share.secret_warning': '检测到疑似密钥',
+    'share.secret_warning_detail': '内容中可能包含 API 密钥或令牌，请在导出前确认已清除敏感信息。',
+    'share.copy_png': '复制 PNG',
+    'share.save_png': '保存 PNG',
+    'share.saved': '已保存',
+    'share.page_of': '第 {current}/{total} 页',
+    'share.pages': '分页',
 
     // Sections (markdown.ts)
     'section.shared_context': '共享上下文 — 分支前的对话 ({n} 轮)',
@@ -331,6 +350,25 @@ const translations: Record<Locale, Record<string, string>> = {
     'chat.cancel': 'Cancel',
     'chat.highlight': 'Highlight',
     'chat.highlight_title': 'Highlight & save',
+    'chat.generate_share_image': 'Share Image',
+
+    // Share image
+    'share.title': 'Share Image',
+    'share.rendering': 'Rendering...',
+    'share.render_error': 'Render failed',
+    'share.theme': 'Theme',
+    'share.watermark': 'Watermark',
+    'share.privacy': 'Privacy',
+    'share.strip_paths': 'Hide file paths',
+    'share.strip_session_ids': 'Hide Session ID',
+    'share.exclude_tool_results': 'Exclude tool results',
+    'share.secret_warning': 'Possible secrets detected',
+    'share.secret_warning_detail': 'Content may contain API keys or tokens. Please verify sensitive data is removed before exporting.',
+    'share.copy_png': 'Copy PNG',
+    'share.save_png': 'Save PNG',
+    'share.saved': 'Saved',
+    'share.page_of': 'Page {current}/{total}',
+    'share.pages': 'Pages',
 
     // Sections
     'section.shared_context': 'Shared context — before branch ({n} turns)',

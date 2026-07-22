@@ -548,7 +548,7 @@ function FolderNode({
 // ============ Main Sidebar ============
 
 export function Sidebar({ width }: { width: number }) {
-  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, resumeSession, sshConfig, refreshCloudSessions, undoLastOrganization, showToast } = useStore()
+  const { sessions, config, createFolder, moveFolder, selectedUniqueId, addSessionToFolder, removeSessionFromFolder, resumeSession, sshConfig, refreshCloudSessions, undoLastOrganization, showToast, smartRenameSingle } = useStore()
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
@@ -643,12 +643,14 @@ export function Sidebar({ width }: { width: number }) {
       const meta = config?.sessionMeta[sessionId] || config?.sessionMeta[s?.sessionId || '']
       setSessionRenameValue(meta?.customTitle || s?.firstUserMessage || '')
       setRenamingSessionId(sessionId)
+    } else if (result.action === 'smartRename') {
+      void smartRenameSingle(opId)
     } else if (result.action === 'addToFolder' && result.folderId) {
       addSessionToFolder(result.folderId, opId)
     } else if (result.action === 'removeFromFolder' && result.folderId) {
       removeSessionFromFolder(result.folderId, opId)
     }
-  }, [sessions, config, addSessionToFolder, removeSessionFromFolder, resumeSession, t])
+  }, [sessions, config, addSessionToFolder, removeSessionFromFolder, resumeSession, smartRenameSingle, t])
 
   const handleSubmitRenameSession = useCallback(() => {
     if (renamingSessionId && sessionRenameValue.trim()) {

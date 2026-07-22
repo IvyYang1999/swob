@@ -218,6 +218,7 @@ interface AppState {
     topic?: string
     topicConfidence?: number
   }) => Promise<void>
+  smartRenameSingle: (sessionId: string) => Promise<void>
   applyOrganization: (kind: 'project' | 'smart' | 'archive', items: OrganizationApplyItem[]) => Promise<number>
   undoLastOrganization: () => Promise<number>
   addHighlight: (sessionId: string, highlight: Omit<Highlight, 'id' | 'createdAt'>) => Promise<void>
@@ -630,6 +631,34 @@ export const useStore = create<AppState>((set, get) => ({
   setSessionMeta: async (sessionId, meta) => {
     const config = await window.api.setSessionMeta(sessionId, meta)
     set({ config: config as UserConfig })
+  },
+  smartRenameSingle: async (sessionId) => {
+    const { showToast } = get()
+    const previousTitle = get().config?.sessionMeta[sessionId]?.customTitle || ''
+    try {
+      const preview = await window.api.smartRenamePreview([sessionId])
+      if (!preview.ok) {
+        showToast(`智能重命名失败:${preview.error.message}`, 'error')
+        return
+      }
+      const item = preview.items[0]
+      if (!item || !item.newTitle || item.newTitle === item.oldTitle) {
+        showToast('AI 认为当前标题已经合适', 'info')
+        return
+      }
+      const applied = await window.api.smartRenameApply([{ id: item.id, newTitle: item.newTitle }])
+      if (!applied.ok) {
+        showToast(`智能重命名失败:${applied.error.message}`, 'error')
+        return
+      }
+      if (applied.config) set({ config: applied.config as UserConfig })
+      showToast(`已重命名为「${item.newTitle}」`, 'success', {
+        label: '撤销',
+        onClick: () => { void get().setSessionMeta(sessionId, { customTitle: previousTitle }) }
+      })
+    } catch (error) {
+      showToast(`智能重命名失败:${error instanceof Error ? error.message : String(error)}`, 'error')
+    }
   },
   applyOrganization: async (kind, items) => {
     const result = await window.api.organizerApply(kind, items)

@@ -101,6 +101,11 @@ describe('SettingsPanel 纵向导航设置', () => {
       setCleanupDays: vi.fn().mockResolvedValue(true),
       getLlmSettings: vi.fn().mockResolvedValue({ provider: 'anthropic', hasKey: false, keyHint: '', model: '', baseUrl: '' }),
       setLlmSettings: vi.fn().mockResolvedValue(true),
+      llmListProfiles: vi.fn().mockResolvedValue([]),
+      llmGetBindings: vi.fn().mockResolvedValue({}),
+      llmSetBindings: vi.fn().mockResolvedValue({}),
+      llmSaveProfile: vi.fn().mockResolvedValue(true),
+      llmDeleteProfile: vi.fn().mockResolvedValue(true),
       checkForUpdates: vi.fn().mockResolvedValue(undefined),
       getAppInfo: vi.fn().mockResolvedValue({ version: '1.2.0', platform: 'darwin' }),
       getDetectedTerminals: vi.fn().mockResolvedValue([

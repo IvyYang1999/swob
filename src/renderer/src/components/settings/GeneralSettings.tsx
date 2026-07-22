@@ -3,7 +3,8 @@ import { Globe, Keyboard, Sun } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import { copy, SettingField, Segmented, useSettingsPreferences } from './shared'
-import { LlmSettingsSection, RetentionSection, formatAccelerator, keyEventToAccelerator } from './sections'
+import { RetentionSection, formatAccelerator, keyEventToAccelerator } from './sections'
+import { ProfilesSettings } from './ProfilesSettings'
 
 export function GeneralSettings() {
   const { locale, setLocale, themeMode, setThemeMode, savePreferences } = useStore()
@@ -75,7 +76,7 @@ export function GeneralSettings() {
       </SettingField>
 
       <RetentionSection />
-      <LlmSettingsSection />
+      <ProfilesSettings />
     </>
   )
 }

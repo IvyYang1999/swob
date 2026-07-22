@@ -94,8 +94,11 @@ import { buildInsights } from './insights'
 import {
   drilldownInsights,
   queryInsights,
+  queryInsightsBundle,
   sessionUsageEvents
 } from './usage-fact-store'
+import { LatestSnapshotRunner } from './latest-snapshot-runner'
+import { ReportJobManager, type ReportJobRunner } from './report-job-manager'
 import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transcript-watcher'
 import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worker'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
@@ -142,6 +145,11 @@ import {
   type SmartFeatureBinding
 } from './llm-profiles'
 import type { OrganizerSmartPreviewResult } from '../shared/frontend-ipc-contract'
+import type {
+  ReportJobStartRequest,
+  ReportJobStatusRequest,
+  ReportJobType
+} from '../shared/report-jobs'
 import {
   SmartRenameService,
   serializeSmartRenameError,
@@ -232,7 +240,16 @@ let libraryHydrationGeneration = 0
 let searchIndexWarmScheduled = false
 let usageFactsInitialized = false
 let usageFactSyncError: unknown = null
-let usageFactSyncTail: Promise<void> = Promise.resolve()
+interface UsageFactSyncSnapshot {
+  sessions: SessionSummary[]
+  folders: Folder[]
+  rebuild: boolean
+}
+let usageFactSyncRunner: LatestSnapshotRunner<UsageFactSyncSnapshot, UsageFactSyncResult> | null = null
+const reportJobManager = new ReportJobManager({ maxConcurrent: 2, cacheTtlMs: 5 * 60_000 })
+reportJobManager.onUpdate((job) => {
+  try { mainWindow?.webContents.send('insights:progress', job) } catch { /* window is closing */ }
+})
 
 // --- Active Session Detection ---
 let previousActiveIds: string[] = []
@@ -510,19 +527,40 @@ function currentAnalysisFolders(): Folder[] {
  */
 function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
   usageFactsInitialized = true
-  const sessions = [...cachedSessions]
-  const folders = currentAnalysisFolders()
-  const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
-  const run = usageFactSyncTail
-    .catch(() => { /* the next snapshot supersedes a failed one */ })
-    .then(() => worker.syncUsageFacts(getLibraryRoot(), sessions, folders, options))
-  usageFactSyncTail = run.then(
-    () => { usageFactSyncError = null },
-    (error) => {
-      usageFactSyncError = error
-      console.error('[usage-facts] background synchronization failed:', error)
-    }
-  )
+  if (!usageFactSyncRunner) {
+    usageFactSyncRunner = new LatestSnapshotRunner({
+      run: async (snapshot: UsageFactSyncSnapshot) => {
+        const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+        try {
+          const result = await worker.syncUsageFacts(
+            getLibraryRoot(),
+            snapshot.sessions,
+            snapshot.folders,
+            { rebuild: snapshot.rebuild }
+          )
+          usageFactSyncError = null
+          return result
+        } catch (error) {
+          usageFactSyncError = error
+          throw error
+        }
+      },
+      merge: (current: UsageFactSyncSnapshot, incoming: UsageFactSyncSnapshot) => ({
+        ...incoming,
+        rebuild: current.rebuild || incoming.rebuild
+      }),
+      onError: (error) => {
+        usageFactSyncError = error
+        console.error('[usage-facts] background synchronization failed:', error)
+      }
+    })
+  }
+  const run = usageFactSyncRunner.schedule({
+    sessions: [...cachedSessions],
+    folders: currentAnalysisFolders(),
+    rebuild: options.rebuild === true
+  })
+  void run.catch(() => { /* error is retained for ensureUsageFactsReady */ })
   return run
 }
 
@@ -531,7 +569,7 @@ async function ensureUsageFactsReady(): Promise<void> {
     await scheduleUsageFactSync()
     return
   }
-  await usageFactSyncTail
+  await usageFactSyncRunner?.waitForIdle()
   if (usageFactSyncError) await scheduleUsageFactSync()
 }
 
@@ -1655,6 +1693,11 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle('insights:queryBundle', async (_event, scope: AnalysisScope) => {
+  await ensureUsageFactsReady()
+  return queryInsightsBundle(scope)
+})
+
 ipcMain.handle(
   'insights:drilldown',
   async (_event, scope: AnalysisScope, dimension: AnalysisDimension, key: string) => {
@@ -1744,58 +1787,73 @@ ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
   }
 })
 
-// Return raw JSON report for in-app rendering (no HTML file)
-ipcMain.handle('insights:generateJson', async (event, options?: { startDate?: string; endDate?: string }) => {
-  const sendProgress = (stage: string, current: number, total: number): void => {
-    try { event.sender.send('insights:progress', { stage, current, total }) } catch { /* ignore */ }
+function normalizeReportRequest(request: ReportJobStartRequest): ReportJobStartRequest {
+  const allowed: ReportJobType[] = ['audit', 'quick', 'ai']
+  if (!request || !allowed.includes(request.type)) throw new Error('invalid-report-job-type')
+  if (request.type !== 'audit') return { type: request.type, params: {}, force: request.force === true }
+  const params = request.params || {}
+  for (const value of [params.startDate, params.endDate]) {
+    if (value !== undefined && Number.isNaN(new Date(value).getTime())) throw new Error('invalid-report-date')
   }
-  try {
-    const { generateInsightsReport } = await import('./session-insights')
-    let sessions = cachedSessions
-    if (options?.startDate) {
-      const start = new Date(options.startDate).getTime()
-      const end = options?.endDate ? new Date(options.endDate).getTime() : Date.now()
-      sessions = sessions.filter(s => {
-        const t = new Date(s.createdAt).getTime()
-        return t >= start && t <= end
-      })
+  return { type: 'audit', params, force: request.force === true }
+}
+
+function createReportRunner(request: ReportJobStartRequest): ReportJobRunner {
+  const sessionSnapshot = [...cachedSessions]
+  if (request.type === 'audit') {
+    return async ({ signal, progress }) => {
+      const { generateInsightsReport } = await import('./session-insights')
+      const start = request.params?.startDate ? new Date(request.params.startDate).getTime() : null
+      const end = request.params?.endDate ? new Date(request.params.endDate).getTime() : Date.now()
+      const sessions = start === null
+        ? sessionSnapshot
+        : sessionSnapshot.filter((session) => {
+            const createdAt = new Date(session.createdAt).getTime()
+            return createdAt >= start && createdAt <= end
+          })
+      const report = await generateInsightsReport(sessions, 500, progress, { signal })
+      return { report }
     }
-    const report = await generateInsightsReport(sessions, 500, sendProgress)
-    return { ok: true, report }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
-})
 
-ipcMain.handle('insights:generate', async (event, options?: { useLlm?: boolean }) => {
-  const sendProgress = (stage: string, current: number, total: number): void => {
-    try { event.sender.send('insights:progress', { stage, current, total }) } catch { /* ignore */ }
-  }
-  try {
-    const { generateInsightsReport, generateLlmNarrative, renderInsightsHtml, renderNarrativeHtml } = await import('./session-insights')
+  return async ({ signal, progress }) => {
+    const {
+      generateInsightsReport,
+      generateLlmNarrative,
+      renderInsightsHtml,
+      renderNarrativeHtml
+    } = await import('./session-insights')
     const osModule = await import('os')
-    const report = await generateInsightsReport(cachedSessions, 200, sendProgress)
+    const report = await generateInsightsReport(sessionSnapshot, 200, progress, { signal })
     let html = renderInsightsHtml(report)
-
     let llmUsed = false
     let llmError: string | undefined
-    if (options?.useLlm) {
+    if (request.type === 'ai') {
       try {
         const llmSettings = await getLlmSettingsWithSecret()
         if (!llmSettings) {
           llmError = 'no-api-key'
         } else {
-          const narrative = await generateLlmNarrative(report, cachedSessions, llmSettings, sendProgress)
+          const narrative = await generateLlmNarrative(
+            report,
+            sessionSnapshot,
+            llmSettings,
+            progress,
+            { signal }
+          )
           const narrativeHtml = renderNarrativeHtml(narrative)
           html = html.replace('<h2>Health Distribution</h2>', `${narrativeHtml}\n<h2>Health Distribution</h2>`)
           llmUsed = true
         }
-      } catch (e) {
-        llmError = e instanceof Error ? e.message : String(e)
+      } catch (error) {
+        if (signal.aborted) throw error
+        const typed = error instanceof Error ? error as Error & { code?: unknown } : null
+        llmError = typeof typed?.code === 'string' ? typed.code : 'llm-request-failed'
       }
     }
 
-    sendProgress('writing', 1, 1)
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+    progress('writing', 0, 1)
     const reportDir = path.join(osModule.homedir(), '.claude-session-manager', 'reports')
     if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true })
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
@@ -1803,13 +1861,28 @@ ipcMain.handle('insights:generate', async (event, options?: { useLlm?: boolean }
     const latestPath = path.join(reportDir, 'insights-latest.html')
     fs.writeFileSync(reportPath, html, 'utf-8')
     fs.writeFileSync(latestPath, html, 'utf-8')
-    const { shell } = await import('electron')
-    shell.openPath(reportPath)
-    return { ok: true, path: reportPath, sessionCount: report.totalSessions, llmUsed, llmError }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    progress('writing', 1, 1)
+    await shell.openPath(reportPath)
+    return { path: reportPath, sessionCount: report.totalSessions, llmUsed, llmError }
   }
+}
+
+ipcMain.handle('report:start', (_event, rawRequest: ReportJobStartRequest) => {
+  const request = normalizeReportRequest(rawRequest)
+  return reportJobManager.start(request, createReportRunner(request))
 })
+
+ipcMain.handle('report:status', (_event, request: ReportJobStatusRequest) =>
+  reportJobManager.status(request)
+)
+
+ipcMain.handle('report:subscribe', (_event, jobId: string) =>
+  reportJobManager.subscribe(jobId)
+)
+
+ipcMain.handle('report:cancel', (_event, jobId: string) =>
+  reportJobManager.cancel(jobId)
+)
 
 ipcMain.handle('insights:listModels', async () => {
   try {

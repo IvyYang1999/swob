@@ -1,65 +1,57 @@
-import { translate } from '../../i18n'
-import { useState, useEffect, useCallback } from 'react'
+import { useT } from '../../i18n'
+import { useState, useEffect } from 'react'
 import { useStore } from '../../store'
+import { useReportJob } from './useReportJob'
+import type { ReportJobSnapshot } from '../../../../shared/report-jobs'
+
+const EMPTY_REPORT_PARAMS = {}
+
+function isActive(job: ReportJobSnapshot | null): boolean {
+  return job?.state === 'queued' || job?.state === 'running'
+}
+
+function stageKey(stage: string): string {
+  if (stage === 'queued') return 'renderer.report_job.stage_queued'
+  if (stage === 'starting') return 'renderer.report_job.stage_starting'
+  if (stage === 'analyzing') return 'renderer.report_job.stage_analyzing'
+  if (stage === 'sampling') return 'renderer.report_job.stage_sampling'
+  if (stage === 'llm') return 'renderer.report_job.stage_llm'
+  if (stage === 'writing') return 'renderer.report_job.stage_writing'
+  return 'renderer.report_job.stage_working'
+}
 
 /** Cross-session HTML report generation (quick / LLM narrative), extracted from the old stats tab. */
 export function ReportGenerator() {
-  const locale = useStore((s) => s.locale)
+  const t = useT()
   const openSettingsAt = useStore((s) => s.openSettingsAt)
-  const zh = locale === 'zh-CN'
-  const [generating, setGenerating] = useState(false)
-  const [reportResult, setReportResult] = useState<string | null>(null)
-  const [progress, setProgress] = useState<{ stage: string; current: number; total: number } | null>(null)
   const [llmAvailable, setLlmAvailable] = useState(false)
   const [confirmingLlm, setConfirmingLlm] = useState(false)
+  const quick = useReportJob('quick', EMPTY_REPORT_PARAMS)
+  const ai = useReportJob('ai', EMPTY_REPORT_PARAMS)
 
   useEffect(() => {
     window.api.getLlmSettings().then(s => setLlmAvailable(s.hasKey)).catch(() => {})
   }, [])
 
-  useEffect(() => {
-    if (!generating) return
-    const unsubscribe = window.api.onInsightsProgress((p) => setProgress(p))
-    return unsubscribe
-  }, [generating])
-
-  const runGenerate = useCallback(async (useLlm: boolean) => {
-    setGenerating(true)
-    setReportResult(null)
-    setProgress(null)
+  const runGenerate = (useLlm: boolean): void => {
     setConfirmingLlm(false)
-    try {
-      const result = await window.api.generateInsights({ useLlm })
-      if (result.ok) {
-        let msg = `Report generated: ${result.sessionCount} sessions analyzed`
-        if (useLlm && result.llmUsed) msg += ' · AI narrative included'
-        if (useLlm && result.llmError === 'no-api-key') msg += ' · No API key configured (Settings → AI Analysis)'
-        else if (useLlm && result.llmError) msg += ` · AI failed: ${result.llmError.slice(0, 80)}`
-        setReportResult(msg)
-      } else {
-        setReportResult(`Error: ${result.error}`)
-      }
-    } catch (e) {
-      setReportResult(`Error: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setGenerating(false)
-      setProgress(null)
-    }
-  }, [])
+    void (useLlm ? ai.start(true) : quick.start(true))
+  }
 
-  const stageLabel = (s: string): string =>
-    s === 'analyzing' ? 'Auditing sessions'
-    : s === 'sampling' ? 'Sampling content'
-    : s === 'llm' ? 'AI analyzing'
-    : s === 'writing' ? 'Writing report'
-    : s
+  const jobs = [quick.job, ai.job].filter((job): job is ReportJobSnapshot => job !== null)
+  const activeJob = jobs.find(isActive) || null
+  const latestJob = jobs.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] || null
+  const job = activeJob || latestJob
+  const activeController = activeJob?.type === 'ai' ? ai : quick
+  const generating = isActive(activeJob) || quick.pendingRequest || ai.pendingRequest
+  const requestError = quick.requestError || ai.requestError
 
   return (
     <div className="bg-surface rounded-lg p-4 border border-edge space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm font-medium text-primary">{translate(zh ? 'zh-CN' : 'en', 'renderer.report_generator.audit_report_html')}</div>
-          <div className="text-[11px] text-muted">Cross-session quality audit · health scores · anti-patterns · AI narrative</div>
+          <div className="text-sm font-medium text-primary">{t('renderer.report_generator.audit_report_html')}</div>
+          <div className="text-[11px] text-muted">{t('renderer.report_generator.description')}</div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -67,33 +59,32 @@ export function ReportGenerator() {
             disabled={generating}
             className="px-3 py-1.5 rounded-md text-xs font-medium bg-hover text-secondary hover:text-primary disabled:opacity-50 transition-colors"
           >
-            Quick Report
+            {t('renderer.report_generator.quick_report')}
           </button>
           <button
             onClick={() => setConfirmingLlm(true)}
             disabled={generating}
             className="px-3 py-1.5 rounded-md text-xs font-medium bg-soft-emerald/15 text-soft-emerald hover:bg-soft-emerald/25 disabled:opacity-50 transition-colors flex items-center gap-1.5"
-            title={llmAvailable ? '' : 'Configure API key in Settings first'}
+            title={llmAvailable ? '' : t('renderer.report_generator.configure_api_key_first')}
           >
-            ✨ AI Report
+            ✨ {t('renderer.report_generator.ai_report')}
           </button>
         </div>
       </div>
 
       {confirmingLlm && (
         <div className="bg-soft-amber/5 border border-soft-amber/20 rounded-md p-3 space-y-2">
-          <div className="text-xs text-soft-amber font-medium">⚠️ Privacy Notice</div>
+          <div className="text-xs text-soft-amber font-medium">⚠️ {t('renderer.report_generator.privacy_notice')}</div>
           <div className="text-[11px] text-secondary leading-relaxed">
-            AI Report samples <strong>real content from your recent sessions</strong> (user messages, up to 60 sessions)
-            and sends it to your configured LLM provider for analysis.
+            {t('renderer.report_generator.privacy_body')}
             {!llmAvailable && (
               <span className="text-soft-amber">
-                {' '}{translate(zh ? 'zh-CN' : 'en', 'renderer.report_generator.no_api_key_configured_yet')}
+                {' '}{t('renderer.report_generator.no_api_key_configured_yet')}
                 <button
                   onClick={() => openSettingsAt('ai')}
                   className="ml-1 underline underline-offset-2 hover:text-primary"
                 >
-                  {translate(zh ? 'zh-CN' : 'en', 'renderer.report_generator.open_settings_ai_smart')}
+                  {t('renderer.report_generator.open_settings_ai_smart')}
                 </button>
               </span>
             )}
@@ -104,36 +95,63 @@ export function ReportGenerator() {
               disabled={!llmAvailable}
               className="px-2.5 py-1 rounded text-[11px] font-medium bg-soft-emerald/20 text-soft-emerald hover:bg-soft-emerald/30 disabled:opacity-40"
             >
-              I understand, generate
+              {t('renderer.report_generator.confirm_generate')}
             </button>
             <button
               onClick={() => setConfirmingLlm(false)}
               className="px-2.5 py-1 rounded text-[11px] text-muted hover:text-primary"
             >
-              Cancel
+              {t('renderer.report_job.cancel')}
             </button>
           </div>
         </div>
       )}
 
       {generating && (
-        <div className="space-y-1.5">
+        <div className="space-y-1.5" aria-live="polite">
           <div className="flex items-center gap-2 text-[11px] text-secondary">
             <div className="animate-spin w-3 h-3 border border-soft-blue border-t-transparent rounded-full" />
-            {progress ? `${stageLabel(progress.stage)}… ${progress.current}/${progress.total}` : 'Starting…'}
+            {activeJob
+              ? `${t(stageKey(activeJob.progress.stage))}… ${activeJob.progress.current}/${activeJob.progress.total}`
+              : `${t('renderer.report_job.stage_starting')}…`}
+            {activeJob && (
+              <button onClick={() => void activeController.cancel()} className="ml-1 text-muted hover:text-primary underline underline-offset-2">
+                {t('renderer.report_job.cancel')}
+              </button>
+            )}
           </div>
-          {progress && progress.total > 1 && (
+          {activeJob && activeJob.progress.total > 1 && (
             <div className="h-1 rounded-full bg-edge overflow-hidden">
               <div
                 className="h-full bg-soft-blue rounded-full transition-all duration-300"
-                style={{ width: `${(progress.current / progress.total) * 100}%` }}
+                style={{ width: `${activeJob.progress.percent}%` }}
               />
             </div>
           )}
         </div>
       )}
 
-      {reportResult && !generating && <div className="text-[11px] text-muted">{reportResult}</div>}
+      {!generating && requestError && (
+        <div className="text-[11px] text-red-400">{t('renderer.report_job.failed_with_code', { value0: requestError })}</div>
+      )}
+      {!generating && !requestError && job?.state === 'failed' && (
+        <div className="text-[11px] text-red-400">
+          {t('renderer.report_job.failed_with_code', { value0: job.error?.code || 'report-failed' })}
+          {' · '}{t('renderer.report_job.failed_stage', { value0: t(stageKey(job.error?.stage || job.progress.stage)) })}
+        </div>
+      )}
+      {!generating && !requestError && job?.state === 'cancelled' && (
+        <div className="text-[11px] text-muted">{t('renderer.report_job.cancelled')}</div>
+      )}
+      {!generating && !requestError && job?.state === 'completed' && (
+        <div className="text-[11px] text-muted">
+          {t('renderer.report_generator.generated', { value0: job.result?.sessionCount || 0 })}
+          {job.type === 'ai' && job.result?.llmUsed ? ` · ${t('renderer.report_generator.ai_included')}` : ''}
+          {job.type === 'ai' && job.result?.llmError
+            ? ` · ${t('renderer.report_generator.ai_failed_with_code', { value0: job.result.llmError })}`
+            : ''}
+        </div>
+      )}
     </div>
   )
 }

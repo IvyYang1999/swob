@@ -12,6 +12,13 @@ import type {
   UserIdentityInput
 } from '../../../shared/frontend-ipc-contract'
 import type { DashboardLayoutConfig } from '../../../shared/registry/builtin-widgets'
+import type { InsightsQueryBundleResult } from '../../../shared/analysis-scope-types'
+import type {
+  ReportJobSnapshot,
+  ReportJobStartRequest,
+  ReportJobStatusRequest,
+  ReportJobUpdateEvent
+} from '../../../shared/report-jobs'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeLaunchSpec = {
@@ -286,8 +293,10 @@ interface ElectronAPI {
   getExecutionTree: (filePath: string) => Promise<any>
 
   // Insights Report
-  generateInsightsJson: (options?: { startDate?: string; endDate?: string }) => Promise<{ ok: boolean; report?: any; error?: string }>
-  generateInsights: (options?: { useLlm?: boolean }) => Promise<{ ok: boolean; path?: string; sessionCount?: number; llmUsed?: boolean; llmError?: string; error?: string }>
+  reportStart: (request: ReportJobStartRequest) => Promise<ReportJobSnapshot>
+  reportStatus: (request: ReportJobStatusRequest) => Promise<ReportJobSnapshot | null>
+  reportSubscribe: (jobId: string) => Promise<ReportJobSnapshot | null>
+  reportCancel: (jobId: string) => Promise<ReportJobSnapshot | null>
   listModels: () => Promise<string[]>
   getLlmSettings: () => Promise<{ provider: string; hasKey: boolean; keyHint: string; model: string; baseUrl: string }>
   setLlmSettings: (settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) => Promise<boolean>
@@ -313,7 +322,7 @@ interface ElectronAPI {
     id: string
     newTitle: string
   }>>>
-  onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void
+  onInsightsProgress: (callback: (data: ReportJobUpdateEvent) => void) => () => void
 
   // Global agent floating window
   agentGetStatus: () => Promise<{ available: boolean; binaryPath?: string; reasonCode?: string; sessionId: string | null; busy: boolean }>
@@ -352,6 +361,7 @@ interface ElectronAPI {
     scope: RendererAnalysisScope,
     dimension: RendererAnalysisDimension
   ) => Promise<RendererInsightsQueryResult>
+  queryInsightsBundle: (scope: RendererAnalysisScope) => Promise<InsightsQueryBundleResult>
   drilldownInsights: (
     scope: RendererAnalysisScope,
     dimension: RendererAnalysisDimension,

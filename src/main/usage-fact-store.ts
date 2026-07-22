@@ -13,7 +13,9 @@ import {
   type AnalysisDimension,
   type AnalysisScope,
   type CoverageMetric,
+  type DashboardAnalysisDimension,
   type InsightsDrilldownSession,
+  type InsightsQueryBundleResult,
   type InsightsQueryResult,
   type MetricBasis,
   type PreviousPeriodComparison,
@@ -29,6 +31,10 @@ const UNKNOWN_PROJECT = '(unknown project)'
 
 let database: Database.Database | null = null
 let databasePath = ''
+const insightsBundleCache = new Map<string, InsightsQueryBundleResult>()
+const DASHBOARD_DIMENSIONS: DashboardAnalysisDimension[] = [
+  'global', 'time', 'hour', 'source', 'model', 'project', 'session'
+]
 
 interface UsageRollupRow {
   key: string
@@ -248,6 +254,7 @@ export function closeUsageFactStore(): void {
   if (database) database.close()
   database = null
   databasePath = ''
+  insightsBundleCache.clear()
 }
 
 function stableHash(value: unknown): string {
@@ -1036,6 +1043,79 @@ export function queryInsights(
     previousPeriod,
     quality: { unknownTimeEvents: unknownTimeEvents(db, scope), lastIndexedAt: meta.last_indexed_at }
   }
+}
+
+/**
+ * Returns every dashboard dimension from one database revision. Shared global,
+ * previous-period, coverage and quality work is computed once per scope.
+ */
+export function queryInsightsBundle(rawScope: AnalysisScope): InsightsQueryBundleResult {
+  const scope = normalizeAnalysisScope(rawScope)
+  const range = resolveAnalysisRange(scope)
+  const db = getDatabase()
+  const meta = db.prepare(
+    'SELECT last_indexed_at FROM usage_schema_meta WHERE singleton = 1'
+  ).get() as { last_indexed_at: string | null }
+  const usageRevision = meta.last_indexed_at || 'uninitialized'
+  const cacheKey = stableHash({ usageRevision, scope, range })
+  const cached = insightsBundleCache.get(cacheKey)
+  if (cached) return cached
+
+  const total = aggregateRows(db, scope, range, 'global')[0] || emptyAggregate(scope.metricBasis)
+  total.label = 'All'
+  applyGlobalUsageCoverage(db, scope, range, total)
+
+  const priorRange = previousRange(range)
+  let previousPeriod: PreviousPeriodComparison | null = null
+  if (priorRange) {
+    const previousTotal = aggregateRows(db, scope, priorRange, 'global')[0] || emptyAggregate(scope.metricBasis)
+    previousTotal.label = 'All'
+    applyGlobalUsageCoverage(db, scope, priorRange, previousTotal)
+    const absoluteChange = total.processedTokens - previousTotal.processedTokens
+    previousPeriod = {
+      range: priorRange,
+      processedTokens: previousTotal.processedTokens,
+      absoluteChange,
+      percentChange: previousTotal.processedTokens > 0
+        ? (absoluteChange / previousTotal.processedTokens) * 100
+        : null
+    }
+  }
+
+  const quality = {
+    unknownTimeEvents: unknownTimeEvents(db, scope),
+    lastIndexedAt: meta.last_indexed_at
+  }
+  const results = {} as Record<DashboardAnalysisDimension, InsightsQueryResult>
+  for (const dimension of DASHBOARD_DIMENSIONS) {
+    const items = dimension === 'global'
+      ? [structuredClone(total)]
+      : aggregateRows(db, scope, range, dimension)
+    if (dimension !== 'global') applyItemUsageCoverage(db, scope, range, dimension, items)
+    results[dimension] = {
+      schemaVersion: USAGE_FACT_SCHEMA_VERSION,
+      scope,
+      dimension,
+      range,
+      items,
+      total,
+      previousPeriod,
+      quality
+    }
+  }
+
+  const bundle: InsightsQueryBundleResult = {
+    schemaVersion: USAGE_FACT_SCHEMA_VERSION,
+    usageRevision,
+    scope,
+    results
+  }
+  insightsBundleCache.set(cacheKey, bundle)
+  if (insightsBundleCache.size > 12) {
+    const oldest = insightsBundleCache.keys().next().value
+    if (oldest) insightsBundleCache.delete(oldest)
+  }
+  return bundle
 }
 
 function dimensionConstraint(dimension: AnalysisDimension, key: string): { sql: string; value?: string | number } {

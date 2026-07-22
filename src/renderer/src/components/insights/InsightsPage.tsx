@@ -7,7 +7,7 @@ import { ScopeContext, DEFAULT_SCOPE } from './scope'
 import type { AnalysisScope } from './scope'
 import type { InsightsData, QueryBundle, PreviousPeriodComparison } from './shared'
 import { adaptQueryBundle, extractFilterOptions } from './shared'
-import type { AnalysisDimension, InsightsQueryResult } from '../../../../shared/analysis-scope-types'
+import type { AnalysisDimension, InsightsQueryBundleResult } from '../../../../shared/analysis-scope-types'
 import {
   createDefaultDashboardLayout,
   type DashboardLayoutConfig,
@@ -34,25 +34,22 @@ interface DrilldownTarget {
 }
 
 export function InsightsPage() {
-  const api = (window as any).api
   const config = useStore((s) => s.config)
   const sessions = useStore((s) => s.sessions)
   const locale = useStore((s) => s.locale)
   const zh = locale === 'zh-CN'
-  const [data, setData] = useState<InsightsData | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [bundle, setBundle] = useState<QueryBundle | null>(null)
+  const [refreshing, setRefreshing] = useState(true)
+  const [queryError, setQueryError] = useState(false)
+  const [retryRevision, setRetryRevision] = useState(0)
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview')
   const [scope, setScope] = useState<AnalysisScope>(DEFAULT_SCOPE)
-  const [previousPeriod, setPreviousPeriod] = useState<PreviousPeriodComparison | null>(null)
-  const [availableSources, setAvailableSources] = useState<string[]>([])
-  const [availableModels, setAvailableModels] = useState<string[]>([])
-  const [availableProjects, setAvailableProjects] = useState<Array<{ kind: 'project' | 'folder'; key: string; label: string }>>([])
   const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayoutConfig>(createDefaultDashboardLayout)
 
   useEffect(() => {
     let cancelled = false
-    api.dashboardLoadLayout()
+    window.api.dashboardLoadLayout()
       .then((layout: DashboardLayoutConfig) => {
         if (!cancelled) setDashboardLayout(layout)
       })
@@ -62,56 +59,47 @@ export function InsightsPage() {
     return () => { cancelled = true }
   }, [])
 
-  // Fetch data using queryInsights API whenever scope changes
+  // One atomic query keeps all dashboard dimensions on the same Usage Fact snapshot.
   useEffect(() => {
     let cancelled = false
     // Keep the last resolved dashboard mounted during background refreshes.
     // Session watcher updates can arrive while the user is scrolling; replacing
     // the whole page with Loading here detached controls mid-interaction.
+    setRefreshing(true)
+    setQueryError(false)
 
-    const dimensions: AnalysisDimension[] = ['global', 'time', 'hour', 'source', 'model', 'project', 'session']
-    const queries = dimensions.map((dim) =>
-      api.queryInsights(scope, dim)
-        .then((result: InsightsQueryResult) => ({ dim, result }))
-        .catch(() => ({ dim, result: null as InsightsQueryResult | null }))
-    )
-
-    Promise.all(queries).then((results) => {
+    void window.api.queryInsightsBundle(scope).then((response: InsightsQueryBundleResult) => {
       if (cancelled) return
-
-      const bundle: QueryBundle = {
-        global: null,
-        time: null,
-        hour: null,
-        source: null,
-        model: null,
-        project: null,
-        session: null,
-      }
-
-      for (const { dim, result } of results) {
-        if (result) {
-          bundle[dim as keyof QueryBundle] = result
-        }
-      }
-
-      const adapted = adaptQueryBundle(bundle, sessions)
-      setData(adapted)
-
-      // Extract period comparison from global result
-      setPreviousPeriod(bundle.global?.previousPeriod ?? null)
-
-      // Extract available filter options
-      const options = extractFilterOptions(bundle)
-      setAvailableSources(options.sources)
-      setAvailableModels(options.models)
-      setAvailableProjects(options.projects)
-
-      setLoading(false)
+      setBundle({
+        global: response.results.global,
+        time: response.results.time,
+        hour: response.results.hour,
+        source: response.results.source,
+        model: response.results.model,
+        project: response.results.project,
+        session: response.results.session,
+      })
+    }).catch(() => {
+      if (!cancelled) setQueryError(true)
+    }).finally(() => {
+      if (!cancelled) setRefreshing(false)
     })
 
     return () => { cancelled = true }
-  }, [scope, sessions])
+  }, [scope, retryRevision])
+
+  const data = useMemo<InsightsData | null>(
+    () => bundle ? adaptQueryBundle(bundle, sessions) : null,
+    [bundle, sessions]
+  )
+  const previousPeriod = useMemo<PreviousPeriodComparison | null>(
+    () => bundle?.global?.previousPeriod ?? null,
+    [bundle]
+  )
+  const filterOptions = useMemo(
+    () => bundle ? extractFilterOptions(bundle) : { sources: [], models: [], projects: [] },
+    [bundle]
+  )
 
   const projectViewMode = config?.preferences?.projectViewMode || 'folders'
   const projectData = useMemo(() => {
@@ -128,17 +116,55 @@ export function InsightsPage() {
     setDrilldown(null)
   }, [])
 
-  if (loading || !data) {
+  if (!data && queryError) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted text-sm">
+        <span>{translate(locale, 'renderer.insights_page.load_failed')}</span>
+        <button
+          onClick={() => setRetryRevision((value) => value + 1)}
+          className="px-3 py-1.5 rounded-md bg-accent/15 text-accent hover:bg-accent/25"
+        >
+          {translate(locale, 'renderer.insights_page.retry')}
+        </button>
+      </div>
+    )
+  }
+
+  if (!data) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted text-sm">
-        Loading...
+        {translate(locale, 'renderer.insights_page.loading')}
       </div>
     )
   }
 
   return (
-    <ScopeContext.Provider value={{ scope, setScope, availableSources, availableModels, availableProjects }}>
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <ScopeContext.Provider value={{
+      scope,
+      setScope,
+      availableSources: filterOptions.sources,
+      availableModels: filterOptions.models,
+      availableProjects: filterOptions.projects
+    }}>
+      <div className="relative flex-1 overflow-y-auto p-4 space-y-4">
+        {refreshing && (
+          <div className="absolute top-4 right-4 z-20 pointer-events-none" aria-live="polite">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-edge bg-surface/95 px-2.5 py-1 text-[10px] text-muted shadow-sm">
+              <span className="h-2.5 w-2.5 animate-spin rounded-full border border-soft-blue border-t-transparent" />
+              {translate(locale, 'renderer.insights_page.refreshing')}
+            </span>
+          </div>
+        )}
+        {!refreshing && queryError && (
+          <div className="flex justify-end">
+            <button
+              onClick={() => setRetryRevision((value) => value + 1)}
+              className="text-[10px] text-red-400 hover:text-red-300"
+            >
+              {translate(locale, 'renderer.insights_page.refresh_failed_retry')}
+            </button>
+          </div>
+        )}
         <FilterBar data={data} />
 
         {/* Tab bar */}

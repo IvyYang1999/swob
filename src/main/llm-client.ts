@@ -11,6 +11,22 @@ export interface LlmSettings {
   baseUrl?: string
 }
 
+export interface LlmCallOptions {
+  signal?: AbortSignal
+  connectTimeoutMs?: number
+  totalTimeoutMs?: number
+}
+
+export class LlmRequestError extends Error {
+  readonly code: string
+
+  constructor(code: string, message = code) {
+    super(message)
+    this.name = 'LlmRequestError'
+    this.code = code
+  }
+}
+
 const DEFAULT_MODELS: Record<string, string> = {
   anthropic: 'claude-haiku-4-5-20251001',
   openai: 'gpt-4o-mini',
@@ -21,11 +37,59 @@ export function resolveLlmModel(settings: LlmSettings): string {
   return settings.model?.trim() || DEFAULT_MODELS[settings.provider] || ''
 }
 
+async function withRequestTimeout<T>(
+  operation: (signal: AbortSignal, connected: () => void) => Promise<T>,
+  options: LlmCallOptions
+): Promise<T> {
+  const controller = new AbortController()
+  let abortCode = 'llm-cancelled'
+  let rejectAbort!: (error: Error) => void
+  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject })
+  const abort = (code: string): void => {
+    if (controller.signal.aborted) return
+    abortCode = code
+    controller.abort()
+    rejectAbort(new LlmRequestError(code))
+  }
+  const onParentAbort = (): void => abort('llm-cancelled')
+  if (options.signal?.aborted) abort('llm-cancelled')
+  else options.signal?.addEventListener('abort', onParentAbort, { once: true })
+
+  const connectTimer = setTimeout(
+    () => abort('llm-connect-timeout'),
+    options.connectTimeoutMs ?? 30_000
+  )
+  const totalTimer = setTimeout(
+    () => abort('llm-total-timeout'),
+    options.totalTimeoutMs ?? 120_000
+  )
+  connectTimer.unref?.()
+  totalTimer.unref?.()
+
+  try {
+    return await Promise.race([
+      operation(controller.signal, () => clearTimeout(connectTimer)),
+      aborted
+    ])
+  } catch (error) {
+    if (controller.signal.aborted) {
+      if (error instanceof LlmRequestError) throw error
+      throw new LlmRequestError(abortCode)
+    }
+    throw error
+  } finally {
+    clearTimeout(connectTimer)
+    clearTimeout(totalTimer)
+    options.signal?.removeEventListener('abort', onParentAbort)
+  }
+}
+
 export async function callLlm(
   settings: LlmSettings,
   systemPrompt: string,
   userPrompt: string,
-  maxTokens = 4096
+  maxTokens = 4096,
+  options: LlmCallOptions = {}
 ): Promise<string> {
   const model = resolveLlmModel(settings)
   if (!settings.credential?.trim()) throw new Error('missing-api-key')
@@ -39,54 +103,56 @@ export async function callLlm(
     const endpoint = settings.provider === 'anthropic'
       ? 'https://api.anthropic.com/v1/messages'
       : `${settings.baseUrl!.trim().replace(/\/+$/, '')}/v1/messages`
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': settings.credential,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }]
+    return withRequestTimeout(async (signal, connected) => {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': settings.credential,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }]
+        }),
+        signal
       })
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      throw new Error(`anthropic-${res.status}: ${body.slice(0, 200)}`)
-    }
-    const data = await res.json()
-    const parts = Array.isArray(data.content) ? data.content : []
-    return parts.filter((p: { type: string }) => p.type === 'text').map((p: { text: string }) => p.text).join('\n')
+      connected()
+      if (!res.ok) throw new LlmRequestError(`anthropic-http-${res.status}`)
+      const data = await res.json()
+      const parts = Array.isArray(data.content) ? data.content : []
+      return parts.filter((p: { type: string }) => p.type === 'text').map((p: { text: string }) => p.text).join('\n')
+    }, options)
   }
 
   // OpenAI-compatible (openai / custom baseUrl)
   const baseUrl = (settings.provider === 'custom' && settings.baseUrl?.trim())
     ? settings.baseUrl.trim().replace(/\/+$/, '')
     : 'https://api.openai.com/v1'
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${settings.credential}`
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ]
+  return withRequestTimeout(async (signal, connected) => {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${settings.credential}`
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ]
+      }),
+      signal
     })
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`llm-${res.status}: ${body.slice(0, 200)}`)
-  }
-  const data = await res.json()
-  return data.choices?.[0]?.message?.content || ''
+    connected()
+    if (!res.ok) throw new LlmRequestError(`llm-http-${res.status}`)
+    const data = await res.json()
+    return data.choices?.[0]?.message?.content || ''
+  }, options)
 }
 
 /** Fetch available models from the configured provider. Returns model IDs sorted by recommendation. */

@@ -2,10 +2,11 @@ import Database from 'better-sqlite3'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { Folder, SessionSource, SessionSummary } from './types'
+import type { Folder, SessionSummary } from './types'
 import { accountingForSession, totalCacheWriteTokens, type UsageEvent } from './token-accounting'
 import { valueUsageEvent } from './token-valuation'
 import { searchDatabasePath } from './search-index'
+import { providerCanParseTranscript } from '../shared/provider-capabilities'
 import {
   USAGE_FACT_SCHEMA_VERSION,
   type AnalysisDimension,
@@ -51,6 +52,10 @@ interface UsageRollupRow {
   conversation_billable_tokens: number
   conversation_cost_usd: number
   session_count: number
+  detected_session_count: number
+  parsed_session_count: number
+  usage_available_session_count: number
+  usage_unavailable_session_count: number
   unknown_time_events: number
 }
 
@@ -59,7 +64,7 @@ interface UsageFactRow {
   occurred_at: string | null
   occurred_day: string
   occurred_hour: number
-  source_client: SessionSource
+  source_client: string
   session_id: string
   root_session_id: string
   agent_scope: UsageFact['agentScope']
@@ -433,15 +438,18 @@ export function synchronizeUsageFacts(
 
     for (const [sessionId, session] of uniqueSessions) {
       const accounting = accountingForSession(session)
+      const parsed = providerCanParseTranscript(session.source || 'claude-code')
+      const usageAvailable = parsed && accounting.billingTotal !== null
       const resolvedRoot = resolveRootSessionId(session, sessionsByIdentity)
-      const facts = usageFactsForSession(session, { rootSessionId: resolvedRoot })
+      const facts = parsed ? usageFactsForSession(session, { rootSessionId: resolvedRoot }) : []
       const folderIds = folderMap.get(sessionId) || []
       const factSignature = stableHash({
         source: session.source || 'claude-code',
         project: projectPath(session),
         root: resolvedRoot,
         turns: session.turnCount,
-        available: accounting.billingTotal !== null,
+        parsed,
+        available: usageAvailable,
         facts
       })
       const folderSignature = stableHash(folderIds)
@@ -471,7 +479,7 @@ export function synchronizeUsageFacts(
         session.source || 'claude-code',
         projectPath(session),
         session.turnCount,
-        accounting.billingTotal === null ? 0 : 1,
+        usageAvailable ? 1 : 0,
         factSignature,
         folderSignature,
         session.updatedAt || ''
@@ -630,6 +638,32 @@ function coverage(covered: number, total: number): CoverageMetric {
   return { covered, total, percent: total > 0 ? (covered / total) * 100 : null }
 }
 
+interface SessionInventoryRow {
+  source_client: string
+  usage_available: number
+}
+
+function sessionInventory(rows: SessionInventoryRow[]): {
+  detected: number
+  parsed: number
+  usageAvailable: number
+  usageUnavailable: number
+} {
+  let parsed = 0
+  let usageAvailable = 0
+  for (const row of rows) {
+    const canParse = providerCanParseTranscript(row.source_client)
+    if (canParse) parsed++
+    if (canParse && row.usage_available === 1) usageAvailable++
+  }
+  return {
+    detected: rows.length,
+    parsed,
+    usageAvailable,
+    usageUnavailable: rows.length - usageAvailable
+  }
+}
+
 function rowToAggregate(row: UsageRollupRow, basis: MetricBasis): UsageAggregate {
   const billingTokens = row.billing_non_cached_input + row.billing_cache_read +
     row.billing_cache_write + row.billing_output
@@ -656,6 +690,10 @@ function rowToAggregate(row: UsageRollupRow, basis: MetricBasis): UsageAggregate
     turns: row.conversation_calls,
     eventCount,
     sessionCount: row.session_count,
+    detectedSessionCount: row.detected_session_count,
+    parsedSessionCount: row.parsed_session_count,
+    usageAvailableSessionCount: row.usage_available_session_count,
+    usageUnavailableSessionCount: row.usage_unavailable_session_count,
     usageCoverage: coverage(row.session_count, row.session_count),
     modelCoverage: coverage(modeledCalls, selectedConversation ? row.conversation_calls : row.calls),
     pricingCoverage: { ...coverage(pricedTokens, billableTokens), status: 'available' },
@@ -696,6 +734,10 @@ function aggregateRows(
       COALESCE(SUM(r.modeled_calls), 0) AS modeled_calls,
       COALESCE(SUM(r.conversation_modeled_calls), 0) AS conversation_modeled_calls,
       COUNT(DISTINCT r.session_id) AS session_count,
+      COUNT(DISTINCT r.session_id) AS detected_session_count,
+      COUNT(DISTINCT r.session_id) AS parsed_session_count,
+      COUNT(DISTINCT r.session_id) AS usage_available_session_count,
+      0 AS usage_unavailable_session_count,
       COALESCE(SUM(CASE WHEN r.occurred_day = '${UNKNOWN_TIME}' THEN r.calls ELSE 0 END), 0) AS unknown_time_events
     FROM usage_rollups r
     ${filter.joins.join('\n')}
@@ -743,6 +785,10 @@ function emptyAggregate(basis: MetricBasis): UsageAggregate {
     modeled_calls: 0,
     conversation_modeled_calls: 0,
     session_count: 0,
+    detected_session_count: 0,
+    parsed_session_count: 0,
+    usage_available_session_count: 0,
+    usage_unavailable_session_count: 0,
     unknown_time_events: 0
   }, basis)
 }
@@ -781,12 +827,17 @@ function applyGlobalUsageCoverage(
     where.push(`sessions.source_client IN (${scope.sources.map(() => '?').join(', ')})`)
     params.push(...scope.sources)
   }
-  const row = db.prepare(`
-    SELECT SUM(usage_available) AS covered, COUNT(*) AS total
+  const inventory = sessionInventory(db.prepare(`
+    SELECT DISTINCT sessions.session_id, sessions.source_client, sessions.usage_available
     FROM usage_sessions sessions ${joins.join('\n')}
     WHERE ${where.join(' AND ')}
-  `).get(...params) as { covered: number | null; total: number }
-  total.usageCoverage = coverage(row.covered || 0, row.total)
+  `).all(...params) as SessionInventoryRow[])
+  total.sessionCount = inventory.detected
+  total.detectedSessionCount = inventory.detected
+  total.parsedSessionCount = inventory.parsed
+  total.usageAvailableSessionCount = inventory.usageAvailable
+  total.usageUnavailableSessionCount = inventory.usageUnavailable
+  total.usageCoverage = coverage(inventory.usageAvailable, inventory.detected)
 }
 
 function applyItemUsageCoverage(
@@ -827,12 +878,32 @@ function applyItemUsageCoverage(
     params.push(...scope.sources)
   }
   const rows = db.prepare(`
-    SELECT ${key} AS key, SUM(sessions.usage_available) AS covered, COUNT(*) AS total
+    SELECT
+      ${key} AS key,
+      sessions.session_id,
+      sessions.source_client,
+      sessions.usage_available
     FROM usage_sessions sessions ${joins.join('\n')}
     WHERE ${where.join(' AND ')}
-    GROUP BY ${key}
-  `).all(...params) as Array<{ key: string; covered: number | null; total: number }>
-  const byKey = new Map(rows.map((row) => [row.key, coverage(row.covered || 0, row.total)]))
+  `).all(...params) as Array<{
+    key: string
+    session_id: string
+    source_client: string
+    usage_available: number
+  }>
+  const rowsByKey = new Map<string, Map<string, SessionInventoryRow>>()
+  for (const row of rows) {
+    const values = rowsByKey.get(row.key) || new Map<string, SessionInventoryRow>()
+    values.set(row.session_id, {
+      source_client: row.source_client,
+      usage_available: row.usage_available
+    })
+    rowsByKey.set(row.key, values)
+  }
+  const byKey = new Map([...rowsByKey].map(([keyValue, values]) => [
+    keyValue,
+    sessionInventory([...values.values()])
+  ]))
   const folderLabels = dimension === 'folder'
     ? new Map((db.prepare('SELECT folder_id, name FROM usage_folders').all() as Array<{
         folder_id: string
@@ -840,17 +911,22 @@ function applyItemUsageCoverage(
       }>).map((row) => [row.folder_id, row.name]))
     : new Map<string, string>()
   const existingKeys = new Set(items.map((item) => item.key))
-  for (const row of rows) {
-    if (existingKeys.has(row.key)) continue
+  for (const row of byKey.keys()) {
+    if (existingKeys.has(row)) continue
     const item = emptyAggregate(scope.metricBasis)
-    item.key = row.key
-    item.label = folderLabels.get(row.key) || row.key
-    item.usageCoverage = coverage(row.covered || 0, row.total)
+    item.key = row
+    item.label = folderLabels.get(row) || row
     items.push(item)
   }
   for (const item of items) {
     const value = byKey.get(item.key)
-    if (value) item.usageCoverage = value
+    if (!value) continue
+    item.sessionCount = value.detected
+    item.detectedSessionCount = value.detected
+    item.parsedSessionCount = value.parsed
+    item.usageAvailableSessionCount = value.usageAvailable
+    item.usageUnavailableSessionCount = value.usageUnavailable
+    item.usageCoverage = coverage(value.usageAvailable, value.detected)
   }
 }
 
@@ -960,7 +1036,7 @@ export function drilldownInsights(
   `).all(...filter.params) as Array<{
     session_id: string
     root_session_id: string
-    source_client: SessionSource
+    source_client: string
     project_path: string
     models: string | null
     billing_tokens: number

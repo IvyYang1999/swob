@@ -1,4 +1,5 @@
 import type { TokenAccounting } from './token-accounting'
+import type { LegacySessionSource } from '../shared/provider-capabilities'
 
 export interface TokenUsage {
   inputTokens: number
@@ -112,7 +113,8 @@ export interface SkillInvocation {
   args?: string
 }
 
-export type SessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode' | 'cc-mirror' | 'antigravity' | 'grok' | 'pi' | 'kimi' | 'hermes'
+/** @deprecated Closed compatibility union. New provider contracts use namespaced ProviderId strings. */
+export type SessionSource = LegacySessionSource
 
 export interface SessionSubagentSummary {
   sessionId: string

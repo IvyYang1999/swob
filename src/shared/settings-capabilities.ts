@@ -26,6 +26,9 @@ export interface HarnessCapability {
 }
 
 const terminal = (label = '终端'): ResumeChoice => ({ id: 'terminal', label, support: 'stable' })
+const experimentalTerminal = (reason: string, label = '终端'): ResumeChoice => ({
+  id: 'terminal', label, support: 'experimental', reason
+})
 const unsupported = (id: ResumeMethod, label: string, reason: string): ResumeChoice => ({
   id, label, support: 'unsupported', reason
 })
@@ -55,17 +58,17 @@ export const HARNESS_CAPABILITIES: HarnessCapability[] = [
     id: 'zcode', name: 'ZCode', sourceIds: ['zcode'], defaultMethod: 'zcode-desktop',
     choices: [
       unsupported('terminal', '终端', '没有公开 CLI Resume'),
-      { id: 'zcode-desktop', label: 'ZCode App', support: 'stable', reason: '仅打开工作区，不保证恢复指定会话' }
+      { id: 'zcode-desktop', label: 'ZCode App', support: 'experimental', reason: '仅打开工作区，不保证恢复指定会话' }
     ]
   },
   {
     id: 'antigravity', name: 'Antigravity', sourceIds: ['antigravity'], defaultMethod: 'terminal',
-    choices: [terminal(), unsupported('codex-desktop', 'Antigravity App', '官方未提供按会话直达')]
+    choices: [experimentalTerminal('命令映射未经来源级 Resume 审计'), unsupported('codex-desktop', 'Antigravity App', '官方未提供按会话直达')]
   },
-  { id: 'grok', name: 'Grok Build', sourceIds: ['grok'], defaultMethod: 'terminal', choices: [terminal()] },
-  { id: 'hermes', name: 'Hermes', sourceIds: ['hermes'], defaultMethod: 'terminal', choices: [terminal()] },
-  { id: 'pi', name: 'Pi', sourceIds: ['pi'], defaultMethod: 'terminal', choices: [terminal()] },
-  { id: 'kimi', name: 'Kimi Code', sourceIds: ['kimi'], defaultMethod: 'terminal', choices: [terminal()] }
+  { id: 'grok', name: 'Grok Build', sourceIds: ['grok'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] },
+  { id: 'hermes', name: 'Hermes', sourceIds: ['hermes'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] },
+  { id: 'pi', name: 'Pi', sourceIds: ['pi'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] },
+  { id: 'kimi', name: 'Kimi Code', sourceIds: ['kimi'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] }
 ]
 
 export interface MigratedSettingsPreferences extends Record<string, unknown> {

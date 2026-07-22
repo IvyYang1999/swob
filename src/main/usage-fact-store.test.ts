@@ -334,6 +334,12 @@ describe('UsageFact + AnalysisScope', () => {
 
     const result = queryInsights(scope(), 'global')
     expect(result.total.usageCoverage).toEqual({ covered: 1, total: 2, percent: 50 })
+    expect(result.total).toMatchObject({
+      detectedSessionCount: 2,
+      parsedSessionCount: 2,
+      usageAvailableSessionCount: 1,
+      usageUnavailableSessionCount: 1
+    })
     expect(result.total.modelCoverage).toEqual({ covered: 1, total: 2, percent: 50 })
     expect(result.total.pricingCoverage).toEqual({
       status: 'available', covered: 12, total: 18, percent: (12 / 18) * 100
@@ -350,6 +356,37 @@ describe('UsageFact + AnalysisScope', () => {
       processedTokens: 0,
       usageCoverage: { covered: 0, total: 1, percent: 0 }
     })
+  })
+
+  it('detection-only 来源留在 detected 分母，但没有 usage fact 且 parsed 为 0', () => {
+    const parsed = makeSession('parsed', '/repo/alpha', [
+      usageEvent('known', localTimestamp(2026, 7, 20, 8), components(10, 2))
+    ])
+    const detectionOnly = makeSession('detected-only', '/repo/alpha', [], {
+      source: 'hermes',
+      unavailable: true,
+      turns: 0
+    })
+    synchronizeUsageFacts([parsed, detectionOnly], [])
+
+    expect(queryInsights(scope(), 'global').total).toMatchObject({
+      sessionCount: 2,
+      detectedSessionCount: 2,
+      parsedSessionCount: 1,
+      usageAvailableSessionCount: 1,
+      usageUnavailableSessionCount: 1,
+      usageCoverage: { covered: 1, total: 2, percent: 50 }
+    })
+    expect(queryInsights(scope(), 'source').items.find((item) => item.key === 'hermes')).toMatchObject({
+      processedTokens: 0,
+      sessionCount: 1,
+      detectedSessionCount: 1,
+      parsedSessionCount: 0,
+      usageAvailableSessionCount: 0,
+      usageUnavailableSessionCount: 1,
+      usageCoverage: { covered: 0, total: 1, percent: 0 }
+    })
+    expect(usageFactStoreStats()).toMatchObject({ sessions: 2, facts: 1 })
   })
 
   it('1700 session 任意 warm scope 查询 P95 < 200ms', () => {

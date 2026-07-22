@@ -45,4 +45,14 @@ describe('设置偏好迁移与 Resume 能力', () => {
       expect(choice?.support).not.toBe('unsupported')
     }
   })
+
+  it('五个 detection-only 来源的猜测命令不能标为 stable', () => {
+    for (const source of ['antigravity', 'grok', 'pi', 'kimi', 'hermes']) {
+      const terminal = harnessForSource(source).choices.find((choice) => choice.id === 'terminal')
+      expect(terminal, source).toMatchObject({
+        support: 'experimental',
+        reason: '命令映射未经来源级 Resume 审计'
+      })
+    }
+  })
 })

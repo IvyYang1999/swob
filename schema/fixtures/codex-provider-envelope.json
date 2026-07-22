@@ -1,0 +1,88 @@
+{
+  "protocolVersion": "1.0",
+  "messageId": "fixture-codex-parse-1",
+  "kind": "parse-outcome",
+  "payload": {
+    "providerId": "swob/codex",
+    "parserDataVersion": "1",
+    "formatVersion": "codex-rollout-jsonl-observed",
+    "fingerprint": {
+      "algorithm": "composite-sha256",
+      "value": "fixture-codex-source-v1",
+      "inputs": ["rollout.jsonl", "session-index.jsonl"]
+    },
+    "status": "partial",
+    "sessions": [
+      {
+        "sourceRefId": "source:codex:fixture-session",
+        "sessionRecordId": "session:codex:fixture-session",
+        "status": "partial",
+        "records": [
+          {
+            "id": "session:codex:fixture-session",
+            "provenance": {
+              "providerId": "swob/codex",
+              "sourceRefId": "source:codex:fixture-session",
+              "parserDataVersion": "1",
+              "formatVersion": "codex-rollout-jsonl-observed",
+              "observedAt": null
+            },
+            "recordType": "session",
+            "sourceRef": {
+              "kind": "composite-directory",
+              "stableId": "source:codex:fixture-session",
+              "providerId": "swob/codex",
+              "rootUri": "file:///fixtures/codex",
+              "memberUris": [
+                "file:///fixtures/codex/rollout.jsonl",
+                "file:///fixtures/codex/session-index.jsonl"
+              ],
+              "displayLocator": "fixtures/codex",
+              "fingerprint": {
+                "algorithm": "composite-sha256",
+                "value": "fixture-codex-source-v1",
+                "inputs": ["rollout.jsonl", "session-index.jsonl"]
+              }
+            },
+            "sourceSessionId": "fixture-codex-session",
+            "createdAt": null,
+            "updatedAt": null,
+            "cwd": [],
+            "projectPath": null,
+            "providerTitle": null
+          },
+          {
+            "id": "message:codex:1",
+            "provenance": {
+              "providerId": "swob/codex",
+              "sourceRefId": "source:codex:fixture-session",
+              "parserDataVersion": "1",
+              "formatVersion": "codex-rollout-jsonl-observed",
+              "observedAt": null
+            },
+            "recordType": "message",
+            "sessionRecordId": "session:codex:fixture-session",
+            "ordinal": 0,
+            "role": "assistant",
+            "timestamp": null,
+            "content": [{ "kind": "text", "text": "Available synthetic fragment" }]
+          }
+        ],
+        "errors": [
+          {
+            "code": "partial-data",
+            "message": "A synthetic fixture member is unavailable",
+            "retryable": false,
+            "providerId": "swob/codex",
+            "sourceRefId": "source:codex:fixture-session",
+            "recordId": null,
+            "details": { "member": "session-index.jsonl" }
+          }
+        ],
+        "replaceSessionRecordId": null
+      }
+    ],
+    "errors": [],
+    "tombstones": []
+  }
+}

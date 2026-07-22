@@ -30,4 +30,14 @@ describe('Library session write architecture', () => {
     expect(cli).toContain('rebuildAllTranscripts')
     expect(cli).toContain('redactLibraryTranscripts')
   })
+
+  it('keeps organizer IPC and raw filesystem transactions behind an explicit manager gate', () => {
+    const index = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf-8')
+    const organizer = fs.readFileSync(path.join(__dirname, 'vault-organizer.ts'), 'utf-8')
+    expect(index).not.toMatch(/\b(?:executeOrganization|undoLastOrganization)\s*\(/)
+    expect(index).toContain('applyLibraryOrganization(')
+    expect(index).toContain('undoLastLibraryOrganization()')
+    expect(organizer).toContain('gate.authorizeMoves(moves)')
+    expect(organizer).toContain('gate.authorizeMoves(appliedMoves)')
+  })
 })

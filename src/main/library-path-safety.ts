@@ -120,22 +120,97 @@ export function assertSafeLibraryFileTarget(libraryRoot: string, filePath: strin
   return target
 }
 
+interface PathIdentity {
+  path: string
+  dev: number
+  ino: number
+  birthtimeMs: number
+}
+
+function captureParentIdentities(libraryRoot: string, filePath: string): PathIdentity[] {
+  const root = path.resolve(libraryRoot)
+  const parent = path.dirname(path.resolve(filePath))
+  const relative = path.relative(root, parent)
+  const identities: PathIdentity[] = []
+  let current = root
+  for (const segment of ['', ...relative.split(path.sep).filter(Boolean)]) {
+    if (segment) current = path.join(current, segment)
+    const stat = fs.lstatSync(current)
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new LibraryPathUnsafeError(current, 'parent-identity-not-directory')
+    }
+    identities.push({ path: current, dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs })
+  }
+  return identities
+}
+
+function revalidateParentIdentities(libraryRoot: string, identities: readonly PathIdentity[]): void {
+  for (const identity of identities) {
+    assertSafeLibraryWritePath(libraryRoot, identity.path)
+    const stat = fs.lstatSync(identity.path)
+    if (stat.isSymbolicLink() || !stat.isDirectory() || stat.dev !== identity.dev ||
+      stat.ino !== identity.ino || stat.birthtimeMs !== identity.birthtimeMs) {
+      throw new LibraryPathUnsafeError(identity.path, 'parent-identity-changed')
+    }
+  }
+}
+
+function sameIdentity(stat: fs.Stats, expected: PathIdentity): boolean {
+  return stat.dev === expected.dev && stat.ino === expected.ino && stat.birthtimeMs === expected.birthtimeMs
+}
+
+function cleanupUnvalidatedCreatedFile(target: string, opened: fs.Stats): void {
+  try {
+    const current = fs.lstatSync(target)
+    if (current.isFile() && current.size === 0 && current.nlink === 1 &&
+      sameIdentity(current, { path: target, dev: opened.dev, ino: opened.ino, birthtimeMs: opened.birthtimeMs })) {
+      fs.unlinkSync(target)
+    }
+  } catch { /* the unsafe path stays fail-closed */ }
+}
+
 export function writeSafeLibraryFileSync(
   libraryRoot: string,
   filePath: string,
   content: string | NodeJS.ArrayBufferView,
-  options: { exclusive?: boolean; mode?: number } = {}
+  options: { exclusive?: boolean; mode?: number; beforeOpen?: () => void } = {}
 ): void {
   const target = assertSafeLibraryFileTarget(libraryRoot, filePath)
-  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0
-  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | noFollow |
-    (options.exclusive ? fs.constants.O_EXCL : fs.constants.O_TRUNC)
-  const fd = fs.openSync(target, flags, options.mode ?? 0o600)
+  const parentIdentities = captureParentIdentities(libraryRoot, target)
+  let expectedTarget: PathIdentity | null = null
   try {
+    const stat = fs.lstatSync(target)
+    expectedTarget = { path: target, dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  options.beforeOpen?.()
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0
+  const createsNew = options.exclusive || !expectedTarget
+  const flags = fs.constants.O_WRONLY | noFollow |
+    (createsNew ? fs.constants.O_CREAT | fs.constants.O_EXCL : 0)
+  let fd: number | null = null
+  let opened: fs.Stats | null = null
+  let validated = false
+  try {
+    fd = fs.openSync(target, flags, options.mode ?? 0o600)
+    opened = fs.fstatSync(fd)
+    revalidateParentIdentities(libraryRoot, parentIdentities)
+    assertSafeLibraryFileTarget(libraryRoot, target)
+    if (expectedTarget && !sameIdentity(opened, expectedTarget)) {
+      throw new LibraryPathUnsafeError(target, 'target-identity-changed')
+    }
+    const current = fs.lstatSync(target)
+    if (!sameIdentity(opened, { path: target, dev: current.dev, ino: current.ino, birthtimeMs: current.birthtimeMs })) {
+      throw new LibraryPathUnsafeError(target, 'opened-target-detached')
+    }
+    validated = true
+    fs.ftruncateSync(fd, 0)
     fs.writeFileSync(fd, content)
     fs.fsyncSync(fd)
   } finally {
-    fs.closeSync(fd)
+    if (fd !== null) fs.closeSync(fd)
+    if (!validated && createsNew && opened) cleanupUnvalidatedCreatedFile(target, opened)
   }
 }
 

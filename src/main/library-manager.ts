@@ -9,7 +9,14 @@ import { loadCursorRawMessages } from './cursor-loader'
 import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loader'
 import { loadZcodeRawMessages, stripZcodeSessionRef } from './zcode-loader'
 import { DEFAULT_IGNORE_DIRS } from './session-placement'
-import { executeOrganization, undoLastOrganization, type OrganizationResult } from './vault-organizer'
+import {
+  executeOrganization,
+  undoLastOrganization,
+  type OrganizationInput,
+  type OrganizationKind,
+  type OrganizationMove,
+  type OrganizationResult
+} from './vault-organizer'
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
 import { redactSecrets } from './secret-redactor'
@@ -549,6 +556,7 @@ export interface SessionSshResumeAvailability {
 
 let _root: string = DEFAULT_ROOT
 let _ignoreDirs: Set<string> = new Set(DEFAULT_IGNORE_DIRS)
+let _readOnly = false
 
 export function getLibraryRoot(): string {
   return _root
@@ -574,6 +582,7 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
   _cachedLibraryConfig = null
   _cachedLibraryConfigRoot = ''
   _root = nextRoot
+  _readOnly = options.readOnly === true
   if (!options.readOnly && !fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }
@@ -1425,9 +1434,10 @@ export async function updateBranchTranscript(
 
 export interface LibraryIdentityScanIssue {
   kind: 'corrupt-manifest' | 'icloud-placeholder' | 'unreadable-link' |
-    'unreadable-directory' | 'incomplete-publish'
+    'unreadable-directory' | 'incomplete-publish' | 'identity-evidence-unavailable'
   dirPath: string
   code?: string
+  logicalKeyHash?: string
 }
 
 function scanDir(
@@ -1594,6 +1604,19 @@ export function applyLibraryTree(tree: LibraryTree): void {
 
   indexSessions(tree.ungroupedSessions)
   for (const f of tree.folders) indexFolder(f)
+  if (tree.identityScanStatus === 'authoritative-complete' && lastIdentityScanIssues.length === 0) {
+    try {
+      persistObservedLogicalSessionKeys(registryCandidates)
+    } catch (error) {
+      lastIdentityScanIssues.push({
+        kind: 'identity-evidence-unavailable',
+        dirPath: path.join(_root, '.swob', 'logical-sessions'),
+        code: (error as NodeJS.ErrnoException).code
+      })
+      tree.identityScanStatus = 'incomplete'
+      tree.identityIssues = structuredClone(lastIdentityScanIssues)
+    }
+  }
   sessionRegistry.replace(registryCandidates, {
     authoritative: tree.identityScanStatus === 'authoritative-complete' && lastIdentityScanIssues.length === 0
   })
@@ -1616,6 +1639,17 @@ function refreshSessionRegistryFromDisk(): LibraryIdentityScanIssue[] {
   }
   collectSessions(sessions)
   for (const folder of folders) collectFolder(folder)
+  if (identityIssues.length === 0) {
+    try {
+      persistObservedLogicalSessionKeys(candidates)
+    } catch (error) {
+      identityIssues.push({
+        kind: 'identity-evidence-unavailable',
+        dirPath: path.join(_root, '.swob', 'logical-sessions'),
+        code: (error as NodeJS.ErrnoException).code
+      })
+    }
+  }
   sessionRegistry.replace(candidates, { authoritative: identityIssues.length === 0 })
   lastIdentityScanIssues = structuredClone(identityIssues)
   return identityIssues
@@ -1959,13 +1993,80 @@ interface PackageIdReservation {
   owner?: SessionCreateLockOwner
 }
 
+interface PublishDirectoryClaim {
+  schemaVersion: 1
+  packageId: string
+  logicalKeyHash: string
+  relativeDirPath: string
+  owner: SessionCreateLockOwner
+  createdAt: string
+}
+
+interface PublishDirectoryFingerprint {
+  schemaVersion: 1
+  packageId: string
+  ownerNonce: string
+  dev: number
+  ino: number
+  birthtimeMs: number
+}
+
 export interface SessionCreateInstrumentation {
   packageIdFactory?: () => string
-  onStage?: (stage: 'before-publish-reservation' | 'incomplete-durable' | 'manifest-durable') => void | Promise<void>
+  onStage?: (stage: 'before-publish-reservation' | 'publish-directory-created' | 'publish-directory-durable' |
+    'incomplete-durable' | 'manifest-durable') => void | Promise<void>
 }
 
 function logicalKeyHash(key: LogicalSessionKey): string {
   return createHash('sha256').update(key).digest('hex')
+}
+
+function logicalSeenEvidencePath(keyHash: string): string {
+  return path.join(_root, '.swob', 'logical-sessions', `${keyHash}.seen.json`)
+}
+
+function readLogicalSeenEvidence(keyHash: string): boolean | null {
+  const evidencePath = logicalSeenEvidencePath(keyHash)
+  try {
+    assertSafeLibraryFileTarget(_root, evidencePath)
+    const value = JSON.parse(fs.readFileSync(evidencePath, 'utf-8')) as Record<string, unknown>
+    return value.schemaVersion === 1 && value.logicalKeyHash === keyHash
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : false
+  }
+}
+
+function persistObservedLogicalSessionKeys(candidates: readonly LibrarySessionCandidate[]): void {
+  if (_readOnly || candidates.length === 0) return
+  const evidenceDir = ensureSafeLibraryDirectory(_root, path.join(_root, '.swob', 'logical-sessions'))
+  for (const keyHash of new Set(candidates.map((candidate) => logicalKeyHash(candidate.logicalKey)))) {
+    const evidencePath = logicalSeenEvidencePath(keyHash)
+    const existing = readLogicalSeenEvidence(keyHash)
+    if (existing === true) continue
+    if (existing === false) throw new Error('logical-seen-evidence-corrupt')
+    const content = JSON.stringify({
+      schemaVersion: 1,
+      logicalKeyHash: keyHash,
+      firstObservedAt: new Date().toISOString()
+    })
+    const tempPath = `${evidencePath}.${process.pid}.${randomUUID()}.tmp`
+    try {
+      // Publish a fully written inode with an atomic no-replace hard link.
+      // Readers can observe either ENOENT or complete JSON, never a partial
+      // final evidence file while concurrent scans start.
+      writeSafeLibraryFileSync(_root, tempPath, content, { exclusive: true })
+      assertSafeLibraryFileTarget(_root, evidencePath)
+      fs.linkSync(tempPath, evidencePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || readLogicalSeenEvidence(keyHash) !== true) throw error
+    } finally {
+      try {
+        const stat = fs.lstatSync(tempPath)
+        if (stat.isFile()) fs.unlinkSync(tempPath)
+      } catch { /* already removed or uncertain */ }
+    }
+  }
+  fsyncDirectorySync(evidenceDir)
 }
 
 function packageReservationPath(packageId: string): string {
@@ -1981,6 +2082,16 @@ function packageReservationCommitPath(packageId: string): string {
   return packageReservationPath(packageId).replace(/\.json$/, '.committed.json')
 }
 
+function publishClaimPaths(targetDir: string): { claimPath: string; fingerprintPath: string } {
+  const relative = path.relative(_root, targetDir).split(path.sep).join('/')
+  const digest = createHash('sha256').update(relative).digest('hex')
+  const claimDir = path.join(_root, '.swob', 'publish-paths')
+  return {
+    claimPath: path.join(claimDir, `${digest}.claim.json`),
+    fingerprintPath: path.join(claimDir, `${digest}.created.json`)
+  }
+}
+
 function isValidSessionCreateLockOwner(value: unknown): value is SessionCreateLockOwner {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const owner = value as Partial<SessionCreateLockOwner>
@@ -1988,6 +2099,52 @@ function isValidSessionCreateLockOwner(value: unknown): value is SessionCreateLo
     typeof owner.deviceId === 'string' && typeof owner.pid === 'number' &&
     typeof owner.bootIdentity === 'string' && typeof owner.processStartFingerprint === 'string' &&
     typeof owner.acquiredAt === 'string' && typeof owner.leaseExpiresAt === 'string'
+}
+
+function readPublishDirectoryClaim(filePath: string): PublishDirectoryClaim | null {
+  try {
+    assertSafeLibraryFileTarget(_root, filePath)
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Partial<PublishDirectoryClaim>
+    if (value.schemaVersion !== 1 || typeof value.packageId !== 'string' ||
+      typeof value.logicalKeyHash !== 'string' || !/^[0-9a-f]{64}$/.test(value.logicalKeyHash) ||
+      typeof value.relativeDirPath !== 'string' || path.isAbsolute(value.relativeDirPath) ||
+      !isValidSessionCreateLockOwner(value.owner) || typeof value.createdAt !== 'string') return null
+    const target = path.resolve(_root, value.relativeDirPath)
+    assertSafeLibraryWritePath(_root, target, { allowRoot: false })
+    return value as PublishDirectoryClaim
+  } catch {
+    return null
+  }
+}
+
+function readPublishDirectoryFingerprint(filePath: string): PublishDirectoryFingerprint | null {
+  try {
+    assertSafeLibraryFileTarget(_root, filePath)
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Partial<PublishDirectoryFingerprint>
+    if (value.schemaVersion !== 1 || typeof value.packageId !== 'string' ||
+      typeof value.ownerNonce !== 'string' ||
+      ![value.dev, value.ino, value.birthtimeMs].every((field) => typeof field === 'number' && Number.isFinite(field))) {
+      return null
+    }
+    return value as PublishDirectoryFingerprint
+  } catch {
+    return null
+  }
+}
+
+function removeOwnedPublishDirectoryClaim(claimPath: string, expected: PublishDirectoryClaim): void {
+  const current = readPublishDirectoryClaim(claimPath)
+  if (!current || current.packageId !== expected.packageId ||
+    current.owner.ownerNonce !== expected.owner.ownerNonce ||
+    current.relativeDirPath !== expected.relativeDirPath) return
+  const fingerprintPath = claimPath.replace(/\.claim\.json$/, '.created.json')
+  const fingerprintExists = fs.existsSync(fingerprintPath)
+  const fingerprint = readPublishDirectoryFingerprint(fingerprintPath)
+  if (fingerprintExists && (fingerprint?.packageId !== expected.packageId ||
+    fingerprint.ownerNonce !== expected.owner.ownerNonce)) return
+  if (fingerprint) fs.unlinkSync(fingerprintPath)
+  fs.unlinkSync(claimPath)
+  fsyncDirectorySync(path.dirname(claimPath))
 }
 
 function readPackageReservation(filePath: string): PackageIdReservation | null {
@@ -2079,6 +2236,86 @@ function incompleteOwnerIsProvablyDead(owner: SessionCreateLockOwner, localDevic
   return currentStart === 'missing' || (typeof currentStart === 'string' && currentStart !== owner.processStartFingerprint)
 }
 
+function recoverPublishDirectoryClaims(localDeviceId: string): LibraryIdentityScanIssue[] {
+  const issues: LibraryIdentityScanIssue[] = []
+  const claimDir = path.join(_root, '.swob', 'publish-paths')
+  let names: string[]
+  try {
+    assertSafeLibraryWritePath(_root, claimDir, { allowRoot: false })
+    names = fs.readdirSync(claimDir).filter((name) => name.endsWith('.claim.json'))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return issues
+    return [{ kind: 'unreadable-directory', dirPath: claimDir, code: (error as NodeJS.ErrnoException).code }]
+  }
+
+  for (const name of names) {
+    const claimPath = path.join(claimDir, name)
+    const fingerprintPath = claimPath.replace(/\.claim\.json$/, '.created.json')
+    const claim = readPublishDirectoryClaim(claimPath)
+    if (!claim) {
+      issues.push({ kind: 'incomplete-publish', dirPath: claimPath })
+      continue
+    }
+    const targetDir = path.resolve(_root, claim.relativeDirPath)
+    const blocker = (): void => {
+      issues.push({ kind: 'incomplete-publish', dirPath: targetDir, logicalKeyHash: claim.logicalKeyHash })
+    }
+    if (!incompleteOwnerIsProvablyDead(claim.owner, localDeviceId)) {
+      blocker()
+      continue
+    }
+
+    if (!fs.existsSync(targetDir)) {
+      removeOwnedPublishDirectoryClaim(claimPath, claim)
+      removeOwnedPackageReservation(claim.packageId, claim.logicalKeyHash)
+      continue
+    }
+
+    let stat: fs.Stats
+    let entries: string[]
+    try {
+      assertSafeLibraryWritePath(_root, targetDir, { allowRoot: false })
+      stat = fs.lstatSync(targetDir)
+      entries = fs.readdirSync(targetDir)
+    } catch {
+      blocker()
+      continue
+    }
+    const fingerprintFileExists = fs.existsSync(fingerprintPath)
+    const fingerprint = readPublishDirectoryFingerprint(fingerprintPath)
+    const matches = fingerprint?.packageId === claim.packageId &&
+      fingerprint.ownerNonce === claim.owner.ownerNonce && fingerprint.dev === stat.dev &&
+      fingerprint.ino === stat.ino && fingerprint.birthtimeMs === stat.birthtimeMs
+    // Threat boundary: every Swob writer must first win the exclusive path
+    // claim. If the owner died in the single mkdir->fingerprint window, that
+    // exclusive claim plus an unchanged empty regular directory is sufficient
+    // to recover. Once a fingerprint file exists it must match exactly;
+    // malformed, non-empty, linked, or replaced evidence always blocks.
+    const ownershipProven = fingerprintFileExists ? matches : true
+    if (!stat.isSymbolicLink() && stat.isDirectory() && entries.length === 0 && ownershipProven) {
+      try {
+        // Revalidate immediately before rmdir; rmdir itself refuses any
+        // directory that gained content after this check.
+        const current = fs.lstatSync(targetDir)
+        if (current.dev !== stat.dev || current.ino !== stat.ino || current.birthtimeMs !== stat.birthtimeMs) {
+          blocker()
+          continue
+        }
+        fs.rmdirSync(targetDir)
+        fsyncDirectorySync(path.dirname(targetDir))
+        removeOwnedPublishDirectoryClaim(claimPath, claim)
+        removeOwnedPackageReservation(claim.packageId, claim.logicalKeyHash)
+        continue
+      } catch {
+        blocker()
+        continue
+      }
+    }
+    blocker()
+  }
+  return issues
+}
+
 /** Recover only marker-owned, otherwise-empty reservations or finalize committed packages. */
 function recoverIncompleteSessionPublishes(localDeviceId: string): LibraryIdentityScanIssue[] {
   const issues: LibraryIdentityScanIssue[] = []
@@ -2139,6 +2376,7 @@ function recoverIncompleteSessionPublishes(localDeviceId: string): LibraryIdenti
     }
   }
   walk(_root)
+  issues.push(...recoverPublishDirectoryClaims(localDeviceId))
   return issues
 }
 
@@ -2187,8 +2425,8 @@ function throwIfDurableIdentityWasPreviouslySeen(key: LogicalSessionKey, localDe
   const reservationDir = path.join(_root, '.swob', 'package-ids')
   let names: string[]
   try { names = fs.readdirSync(reservationDir) } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-    throw new SessionIdentityUnresolvedError(['unreadable-directory'])
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') names = []
+    else throw new SessionIdentityUnresolvedError(['unreadable-directory'])
   }
   const wanted = logicalKeyHash(key)
   for (const name of names) {
@@ -2203,6 +2441,9 @@ function throwIfDurableIdentityWasPreviouslySeen(key: LogicalSessionKey, localDe
     }
     throw new SessionIdentityMissingError(key, [])
   }
+  const seen = readLogicalSeenEvidence(wanted)
+  if (seen === false) throw new SessionIdentityUnresolvedError(['identity-evidence-unavailable'])
+  if (seen === true) throw new SessionIdentityMissingError(key, [])
 }
 
 function reserveUniquePackageId(
@@ -2304,6 +2545,7 @@ function unresolvedIssuesForEnsure(
   const wanted = logicalKeyHash(key)
   return issues.filter((issue) => {
     if (issue.kind !== 'incomplete-publish') return true
+    if (issue.logicalKeyHash) return issue.logicalKeyHash !== wanted
     try {
       const marker = parseIncompletePublishMarker(fs.readFileSync(
         path.join(issue.dirPath, '.swob-incomplete.json'),
@@ -2349,17 +2591,72 @@ function resolveExactBindingForEnsure(
   )
 }
 
-function reserveSessionPublishDir(parentDir: string, baseName: string): string {
+async function reserveSessionPublishDir(
+  parentDir: string,
+  baseName: string,
+  packageId: string,
+  key: LogicalSessionKey,
+  owner: SessionCreateLockOwner,
+  instrumentation: SessionCreateInstrumentation
+): Promise<{ dirPath: string; claimPath: string; claim: PublishDirectoryClaim }> {
+  const claimDir = ensureSafeLibraryDirectory(_root, path.join(_root, '.swob', 'publish-paths'))
   for (let counter = 1; counter <= 10_000; counter++) {
     const dirName = counter === 1 ? baseName : `${baseName} (${counter})`
     const finalDir = path.join(parentDir, dirName)
     assertSafeLibraryWritePath(_root, finalDir, { allowRoot: false })
+    const { claimPath, fingerprintPath } = publishClaimPaths(finalDir)
+    const claim: PublishDirectoryClaim = {
+      schemaVersion: 1,
+      packageId,
+      logicalKeyHash: logicalKeyHash(key),
+      relativeDirPath: path.relative(_root, finalDir),
+      owner,
+      createdAt: new Date().toISOString()
+    }
+    try {
+      writeSafeLibraryFileSync(_root, claimPath, JSON.stringify(claim), { exclusive: true })
+      fsyncDirectorySync(claimDir)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
+      throw error
+    }
     try {
       // mkdir is the atomic no-replace reservation on every supported platform.
       fs.mkdirSync(finalDir, { recursive: false, mode: 0o700 })
-      return finalDir
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      try { removeOwnedPublishDirectoryClaim(claimPath, claim) } catch { /* preserve uncertain evidence */ }
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
+      throw error
+    }
+    try {
+      const stat = fs.lstatSync(finalDir)
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new LibraryPathUnsafeError(finalDir, 'publish-target-not-directory')
+      fsyncDirectorySync(parentDir)
+      await instrumentation.onStage?.('publish-directory-created')
+      writeSafeLibraryFileSync(_root, fingerprintPath, JSON.stringify({
+        schemaVersion: 1,
+        packageId,
+        ownerNonce: owner.ownerNonce,
+        dev: stat.dev,
+        ino: stat.ino,
+        birthtimeMs: stat.birthtimeMs
+      } satisfies PublishDirectoryFingerprint), { exclusive: true })
+      fsyncDirectorySync(claimDir)
+      await instrumentation.onStage?.('publish-directory-durable')
+      return { dirPath: finalDir, claimPath, claim }
+    } catch (error) {
+      try {
+        const stat = fs.lstatSync(finalDir)
+        const fingerprint = readPublishDirectoryFingerprint(fingerprintPath)
+        if (fingerprint?.packageId === packageId && fingerprint.ownerNonce === owner.ownerNonce &&
+          fingerprint.dev === stat.dev && fingerprint.ino === stat.ino &&
+          fingerprint.birthtimeMs === stat.birthtimeMs && fs.readdirSync(finalDir).length === 0) {
+          fs.rmdirSync(finalDir)
+          fsyncDirectorySync(parentDir)
+          removeOwnedPublishDirectoryClaim(claimPath, claim)
+        }
+      } catch { /* preserve uncertain evidence */ }
+      throw error
     }
   }
   throw new Error('session-directory-name-exhausted')
@@ -2406,9 +2703,19 @@ export async function ensureSessionInLibrary(
 
     const { packageId } = reserveUniquePackageId(key, lock.owner, instrumentation.packageIdFactory)
     let dirPath: string | null = null
+    let publishClaim: { claimPath: string; claim: PublishDirectoryClaim } | null = null
     try {
       await instrumentation.onStage?.('before-publish-reservation')
-      dirPath = reserveSessionPublishDir(parentDir, baseName)
+      const reservation = await reserveSessionPublishDir(
+        parentDir,
+        baseName,
+        packageId,
+        key,
+        lock.owner,
+        instrumentation
+      )
+      dirPath = reservation.dirPath
+      publishClaim = { claimPath: reservation.claimPath, claim: reservation.claim }
       const markerPath = path.join(dirPath, '.swob-incomplete.json')
       const marker: IncompleteSessionPublishMarker = {
         schemaVersion: 1,
@@ -2419,6 +2726,8 @@ export async function ensureSessionInLibrary(
       }
       writeSafeLibraryFileSync(_root, markerPath, JSON.stringify(marker), { exclusive: true })
       fsyncDirectorySync(dirPath)
+      removeOwnedPublishDirectoryClaim(publishClaim.claimPath, publishClaim.claim)
+      publishClaim = null
       await instrumentation.onStage?.('incomplete-durable')
       const sourceFilePaths = sourceFilePathsForMeta(session)
       const meta: SessionMeta = {
@@ -2475,6 +2784,7 @@ export async function ensureSessionInLibrary(
             fsyncDirectorySync(parentDir)
             removeOwnedPackageReservation(packageId, logicalKeyHash(key))
           }
+          if (publishClaim) removeOwnedPublishDirectoryClaim(publishClaim.claimPath, publishClaim.claim)
         }
       } catch { /* preserve uncertain evidence */ }
       throw error
@@ -2991,6 +3301,54 @@ export async function rebuildAllTranscripts(options: { dryRun?: boolean; missing
 
 // --- Folder Operations ---
 
+function authorizeOrganizationMoves(moves: readonly OrganizationMove[]): void {
+  const issues = refreshSessionRegistryFromDisk()
+  throwIfIdentityScanUnresolved(issues)
+  for (const move of moves) {
+    const currentDir = fs.existsSync(move.from) ? move.from : move.to
+    requireWritableSessionDir(move.sessionId, currentDir)
+    assertSafeLibraryWritePath(_root, move.from, { allowRoot: false })
+    assertSafeLibraryWritePath(_root, move.to, { allowRoot: false })
+    assertSafeLibraryWritePath(_root, path.dirname(move.to))
+  }
+}
+
+function executeAuthorizedOrganization(
+  kind: OrganizationKind,
+  inputs: readonly OrganizationInput[],
+  beforeWriteAuthorization?: () => void
+): OrganizationResult {
+  return executeOrganization(_root, kind, inputs, {
+    authorizeMoves(moves): void {
+      beforeWriteAuthorization?.()
+      authorizeOrganizationMoves(moves)
+    }
+  })
+}
+
+export interface LibraryOrganizationRequest {
+  sessionId: string
+  targetRelativeFolder: string
+  metaPatch?: OrganizationInput['metaPatch']
+}
+
+export function applyLibraryOrganization(
+  kind: Exclude<OrganizationKind, 'manual'>,
+  requests: readonly LibraryOrganizationRequest[],
+  instrumentation: { beforeWriteAuthorization?: () => void } = {}
+): OrganizationResult {
+  if (!['project', 'smart', 'archive'].includes(kind)) throw new Error('不支持的整理类型')
+  const inputs = requests.map((request) => ({
+    sessionId: request.sessionId,
+    sourceDir: requireIndexedSessionDir(request.sessionId),
+    targetRelativeFolder: request.targetRelativeFolder,
+    metaPatch: request.metaPatch
+  }))
+  const result = executeAuthorizedOrganization(kind, inputs, instrumentation.beforeWriteAuthorization)
+  refreshSessionRegistryFromDisk()
+  return result
+}
+
 export function createLibraryFolder(name: string, parentPath?: string): string {
   const parent = parentPath
     ? resolvePathWithinRoot(_root, parentPath, { mustExist: true })
@@ -3045,7 +3403,7 @@ function relocateManagedFolder(folderPath: string, newPath: string): string {
       targetRelativeFolder: path.relative(_root, path.join(newPath, relativeParent))
     }
   })
-  const result = executeOrganization(_root, 'manual', inputs)
+  const result = executeAuthorizedOrganization('manual', inputs)
   refreshSessionRegistryFromDisk()
 
   // The preflight above proved this tree contains no ordinary files. At this
@@ -3108,7 +3466,7 @@ export function deleteLibraryFolder(folderPath: string): void {
   }
 
   const allSessions = collectRealSessionsRecursively(folderPath)
-  const result = executeOrganization(_root, 'manual', allSessions.map((session) => ({
+  const result = executeAuthorizedOrganization('manual', allSessions.map((session) => ({
     sessionId: session.sessionId,
     sourceDir: requireWritableSessionDir(session.sessionId, session.dirPath),
     targetRelativeFolder: '.'
@@ -3150,7 +3508,7 @@ export function moveSessionsToFolders(requests: readonly LibraryMoveRequest[]): 
       targetRelativeFolder: relative === '' ? '.' : relative
     }
   })
-  const result = executeOrganization(_root, 'manual', prepared)
+  const result = executeAuthorizedOrganization('manual', prepared)
   for (const move of result.moves) {
     if (move.from !== move.to) updateSymlinksRecursive(_root, move.from, move.to)
   }
@@ -3172,7 +3530,7 @@ export function renameSessionsInLibrary(requests: readonly LibraryRenameRequest[
       metaPatch: { customTitle: title }
     }
   })
-  const result = executeOrganization(_root, 'manual', prepared)
+  const result = executeAuthorizedOrganization('manual', prepared)
   for (const move of result.moves) {
     if (move.from !== move.to) updateSymlinksRecursive(_root, move.from, move.to)
   }
@@ -3181,7 +3539,7 @@ export function renameSessionsInLibrary(requests: readonly LibraryRenameRequest[
 }
 
 export function undoLastLibraryOrganization(): OrganizationResult {
-  const result = undoLastOrganization(_root)
+  const result = undoLastOrganization(_root, { authorizeMoves: authorizeOrganizationMoves })
   for (const move of result.moves) {
     if (move.from !== move.to) updateSymlinksRecursive(_root, move.from, move.to)
   }
@@ -3199,7 +3557,7 @@ export function moveSessionToFolder(sessionId: string, folderPath: string): void
   // Moves go through executeOrganization so every manual drag is undoable.
   const relative = path.relative(_root, folderPath)
   const targetRelativeFolder = relative === '' ? '.' : relative
-  const result = executeOrganization(_root, 'manual', [{
+  const result = executeAuthorizedOrganization('manual', [{
     sessionId,
     sourceDir: currentDir,
     targetRelativeFolder
@@ -3243,7 +3601,7 @@ export function removeSessionFromFolder(sessionId: string, folderPath: string): 
         }
       } else if (fullPath === realDir) {
         // Removing a physical assignment returns the session to the vault root.
-        const result = executeOrganization(_root, 'manual', [{
+        const result = executeAuthorizedOrganization('manual', [{
           sessionId,
           sourceDir: fullPath,
           targetRelativeFolder: '.'

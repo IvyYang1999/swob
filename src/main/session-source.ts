@@ -23,7 +23,7 @@ export function detectSessionSourceFromPath(filePath?: string): SessionSource | 
 }
 
 function pathLooksWindowsNative(filePath: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('\\\\') || filePath.includes('\\')
+  return /^[a-zA-Z]:[\\/]/.test(filePath) || /^[\\/]{2}[^\\/]/.test(filePath) || filePath.includes('\\')
 }
 
 function readFirstJsonlObject(filePath: string): Record<string, unknown> | null {

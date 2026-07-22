@@ -1381,7 +1381,7 @@ describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
     expect(fs.existsSync(folder)).toBe(false)
     expect(fs.existsSync(path.join(tmpRoot, '一个会话', '.swob-session.json'))).toBe(true)
 
-    const undone = undoLastOrganization(tmpRoot)
+    const undone = undoLastOrganization(tmpRoot, { authorizeMoves: () => {} })
     expect(undone.moves.map((move) => move.sessionId)).toEqual(['pure-x'])
     expect(fs.existsSync(path.join(folder, '一个会话', '.swob-session.json'))).toBe(true)
     expect(fs.existsSync(path.join(tmpRoot, '一个会话'))).toBe(false)
@@ -1401,7 +1401,7 @@ describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
     expect(fs.existsSync(path.join(movedFolder, '会话乙', '.swob-session.json'))).toBe(true)
     expect(fs.existsSync(source)).toBe(false)
 
-    const undone = undoLastOrganization(tmpRoot)
+    const undone = undoLastOrganization(tmpRoot, { authorizeMoves: () => {} })
     expect(new Set(undone.moves.map((move) => move.sessionId))).toEqual(
       new Set(['folder-move-a', 'folder-move-b'])
     )

@@ -64,6 +64,21 @@ describe('LogicalSessionKey', () => {
     expect(logicalSessionKey(upper)).toBe(logicalSessionKey(lower))
   })
 
+  it('normalizes forward-slash UNC aliases with Windows case semantics', () => {
+    const lower = buildLogicalSessionIdentityFromSummary(summary(
+      'unc-session',
+      '//server/share/Users/Alice/.claude-window/work/projects/repo/unc-session.jsonl',
+      'claude-code'
+    ))
+    const upper = buildLogicalSessionIdentityFromSummary(summary(
+      'unc-session',
+      '//SERVER/SHARE/USERS/ALICE/.CLAUDE-WINDOW/WORK/PROJECTS/REPO/unc-session.jsonl',
+      'claude-code'
+    ))
+    expect(logicalSessionKey(upper)).toBe(logicalSessionKey(lower))
+    expect(upper.sourceFamily).toBe('claude-code')
+  })
+
   it('keeps multiple verified config roots for one provider distinct without path disclosure', () => {
     const work = buildLogicalSessionIdentityFromSummary(summary(
       'same-codex-session',

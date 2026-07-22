@@ -84,6 +84,8 @@ function findEvidence(libraryRoot: string): { manifests: string[]; incomplete: s
 describe('session publish crash recovery', () => {
   const stages = {
     'before-publish-reservation': 'dd000000-0000-4000-8000-0000000000dd',
+    'publish-directory-created': 'df000000-0000-4000-8000-0000000000df',
+    'publish-directory-durable': 'de000000-0000-4000-8000-0000000000de',
     'incomplete-durable': 'e0000000-0000-4000-8000-00000000000e',
     'manifest-durable': 'f0000000-0000-4000-8000-00000000000f'
   } as const
@@ -102,11 +104,15 @@ describe('session publish crash recovery', () => {
       const evidence = findEvidence(libraryRoot)
       expect(evidence.manifests).toHaveLength(1)
       expect(evidence.incomplete).toEqual([])
+      expect(fs.readdirSync(libraryRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name !== '.swob')).toHaveLength(1)
       const meta = JSON.parse(fs.readFileSync(path.join(evidence.manifests[0], '.swob-session.json'), 'utf-8'))
       expect(meta).toMatchObject({ schemaVersion: 3, sessionId, packageId: expect.any(String) })
       const reservationNames = fs.readdirSync(path.join(libraryRoot, '.swob', 'package-ids'))
       expect(reservationNames.filter((name) => /^[0-9a-f]{64}\.json$/.test(name))).toHaveLength(1)
       expect(reservationNames.filter((name) => name.endsWith('.committed.json'))).toHaveLength(1)
+      const claimDir = path.join(libraryRoot, '.swob', 'publish-paths')
+      expect(fs.existsSync(claimDir) ? fs.readdirSync(claimDir) : []).toEqual([])
     }, 20_000)
   }
 })

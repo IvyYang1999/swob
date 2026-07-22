@@ -325,6 +325,37 @@ describe('Library logical identity integration', () => {
     expect(fs.readFileSync(path.join(secondDir, 'transcript.md'), 'utf-8')).toBe(beforeSecond)
   })
 
+  it('re-authorizes organizer apply and undo immediately before their first write', async () => {
+    const sessionId = 'cd000000-0000-4000-8000-0000000000cd'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+    const originalDir = await lib.ensureSessionInLibrary(summary(sessionId, sourcePath))
+    const duplicateDir = path.join(root, 'organizer-conflict-copy')
+    const operationsDir = path.join(root, '.swob', 'operations')
+    const manifestBefore = fs.readFileSync(path.join(originalDir, '.swob-session.json'), 'utf-8')
+
+    expect(() => lib.applyLibraryOrganization('project', [{
+      sessionId,
+      targetRelativeFolder: 'project-target'
+    }], {
+      beforeWriteAuthorization: () => fs.cpSync(originalDir, duplicateDir, { recursive: true })
+    })).toThrow(lib.SessionIdentityConflictError)
+    expect(fs.existsSync(operationsDir) ? fs.readdirSync(operationsDir) : []).toEqual([])
+    expect(fs.readFileSync(path.join(originalDir, '.swob-session.json'), 'utf-8')).toBe(manifestBefore)
+    expect(fs.readFileSync(path.join(duplicateDir, '.swob-session.json'), 'utf-8')).toBe(manifestBefore)
+
+    fs.rmSync(duplicateDir, { recursive: true, force: true })
+    lib.scanLibrary()
+    const applied = lib.applyLibraryOrganization('project', [{ sessionId, targetRelativeFolder: 'project-target' }])
+    const movedDir = applied.moves[0].to
+    fs.cpSync(movedDir, duplicateDir, { recursive: true })
+    const logBefore = fs.readFileSync(applied.logPath!, 'utf-8')
+
+    expect(() => lib.undoLastLibraryOrganization()).toThrow(lib.SessionIdentityConflictError)
+    expect(fs.existsSync(movedDir)).toBe(true)
+    expect(fs.existsSync(originalDir)).toBe(false)
+    expect(fs.readFileSync(applied.logPath!, 'utf-8')).toBe(logBefore)
+  })
+
   it('rejects a symlink transcript target without changing its external file', async () => {
     const sessionId = 'd0000000-0000-4000-8000-00000000000d'
     const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)

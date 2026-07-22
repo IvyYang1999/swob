@@ -54,7 +54,7 @@ function stableNamedInstance(namespace: string, semanticName: string): LogicalSo
 }
 
 function normalizedSegments(filePath: string): string[] {
-  const windowsPath = /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('\\\\') || filePath.includes('\\')
+  const windowsPath = /^[a-zA-Z]:[\\/]/.test(filePath) || /^[\\/]{2}[^\\/]/.test(filePath) || filePath.includes('\\')
   const normalized = filePath.replace(/\\/g, '/').normalize('NFC')
   return normalized.split('/').filter(Boolean).map((segment) =>
     windowsPath ? segment.toLocaleLowerCase('en-US') : segment

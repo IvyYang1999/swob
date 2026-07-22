@@ -3,9 +3,7 @@ import { ChevronDown } from 'lucide-react'
 import { useStore } from '../../store'
 import { type Locale } from '../../i18n'
 import { migrateSettingsPreferences } from '../../../../shared/settings-capabilities'
-import claudeIcon from '../../assets/icons/claude.png'
-import openaiIcon from '../../assets/icons/openai.png'
-import cursorIcon from '../../assets/icons/cursor.png'
+import { getHarnessPresentation } from '../../utils/harness-presentation'
 
 export interface DetectedTerminal {
   id: string
@@ -101,20 +99,11 @@ export function ToggleRow({ checked, onChange, label, hint }: {
 }
 
 export function HarnessMark({ id }: { id: string }) {
-  const image = id === 'claude-code' ? claudeIcon : id === 'codex' ? openaiIcon : id === 'cursor' ? cursorIcon : null
-  if (image) return <img src={image} alt="" className="w-6 h-6 rounded-full shrink-0" />
-  const tones: Record<string, string> = {
-    opencode: 'bg-soft-emerald/15 text-soft-emerald',
-    zcode: 'bg-soft-cyan/15 text-soft-cyan',
-    antigravity: 'bg-soft-purple/15 text-soft-purple',
-    grok: 'bg-soft-blue/15 text-soft-blue',
-    hermes: 'bg-soft-amber/15 text-soft-amber',
-    pi: 'bg-soft-pink/15 text-soft-pink',
-    kimi: 'bg-soft-orange/15 text-soft-orange'
-  }
+  const p = getHarnessPresentation(id)
+  if (p.iconImage) return <img src={p.iconImage} alt="" className="w-6 h-6 rounded-full shrink-0" />
   return (
-    <span className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-medium ${tones[id] || 'bg-surface text-secondary'}`}>
-      {id.slice(0, 2).toUpperCase()}
+    <span className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-medium ${p.badgeClass}`}>
+      {p.shortLabel}
     </span>
   )
 }

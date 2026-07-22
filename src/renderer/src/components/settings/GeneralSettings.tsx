@@ -1,9 +1,75 @@
-import { useEffect, useRef, useState } from 'react'
-import { Globe, Keyboard, Sun } from 'lucide-react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { Globe, Keyboard, Sun, UserCircle, Check } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import { copy, SettingField, Segmented, useSettingsPreferences } from './shared'
 import { RetentionSection, formatAccelerator, keyEventToAccelerator } from './sections'
+
+const api = (window as any).api
+
+function IdentitySection() {
+  const locale = useStore((s) => s.locale)
+  const [displayName, setDisplayName] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const zh = locale === 'zh-CN'
+
+  useEffect(() => {
+    if (!api?.profileGetUserIdentity) {
+      setLoading(false)
+      return
+    }
+    api.profileGetUserIdentity().then((result: { ok: boolean; value?: { displayName: string } }) => {
+      if (result.ok && result.value?.displayName) {
+        setDisplayName(result.value.displayName)
+      }
+    }).catch(() => { /* ignore */ }).finally(() => setLoading(false))
+  }, [])
+
+  const handleSave = useCallback(() => {
+    if (!api?.profileSetUserIdentity) return
+    const trimmed = displayName.trim()
+    api.profileSetUserIdentity({ displayName: trimmed }).then((result: { ok: boolean }) => {
+      if (result.ok) {
+        setSaved(true)
+        setTimeout(() => setSaved(false), 1500)
+      }
+    }).catch(() => { /* ignore */ })
+  }, [displayName])
+
+  if (loading) return null
+
+  return (
+    <SettingField
+      label={copy(locale, '身份', 'Identity', 'アイデンティティ')}
+      hint={copy(
+        locale,
+        '设置显示名称，在聊天记录中替代默认的 "User"',
+        'Set a display name to replace the default "User" in chat messages',
+        'チャットメッセージのデフォルト "User" を置き換える表示名を設定'
+      )}
+      icon={<UserCircle size={12} />}
+    >
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          placeholder={copy(locale, '显示名称', 'Display name', '表示名')}
+          className="flex-1 max-w-64 px-3 py-1.5 rounded-md text-xs border border-edge bg-surface text-primary placeholder:text-faint focus:border-edge-focus focus:outline-none"
+        />
+        <button
+          onClick={handleSave}
+          disabled={!displayName.trim()}
+          className="px-3 py-1.5 rounded-md text-xs bg-accent/15 text-accent hover:bg-accent/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+        >
+          {saved ? <Check size={11} /> : null}
+          {saved ? (zh ? '已保存' : 'Saved') : (zh ? '保存' : 'Save')}
+        </button>
+      </div>
+    </SettingField>
+  )
+}
 
 export function GeneralSettings() {
   const { locale, setLocale, themeMode, setThemeMode, savePreferences } = useStore()
@@ -31,6 +97,8 @@ export function GeneralSettings() {
 
   return (
     <>
+      <IdentitySection />
+
       <SettingField label={copy(locale, '主题', 'Theme', 'テーマ')} icon={<Sun size={12} />}>
         <Segmented
           ariaLabel={copy(locale, '主题', 'Theme', 'テーマ')}

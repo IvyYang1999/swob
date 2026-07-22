@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Search, Play, ArrowRight, Clock, MessageSquare, FolderOpen } from 'lucide-react'
-import claudeIcon from './assets/icons/claude.png'
-import openaiIcon from './assets/icons/openai.png'
-import cursorIcon from './assets/icons/cursor.png'
+import { getHarnessPresentation } from './utils/harness-presentation'
 
 const api = (window as any).api
 
@@ -27,27 +25,15 @@ interface SpotlightResultItem {
 }
 
 function sourceIcon(source?: string): string {
-  if (source === 'codex') return openaiIcon
-  if (source === 'opencode') return openaiIcon
-  if (source === 'zcode') return openaiIcon
-  if (source === 'cursor') return cursorIcon
-  return claudeIcon
+  return getHarnessPresentation(source).iconImage || ''
 }
 
 function sourceLabel(source?: string): string {
-  if (source === 'codex') return 'Codex'
-  if (source === 'cursor') return 'Cursor'
-  if (source === 'opencode') return 'OC'
-  if (source === 'zcode') return 'ZC'
-  return 'CC'
+  return getHarnessPresentation(source).shortLabel
 }
 
 function sourceBadgeClass(source?: string): string {
-  if (source === 'codex') return 'bg-[#5a9fd4]/15 text-[#5a9fd4]'
-  if (source === 'cursor') return 'bg-[#a1a1aa]/15 text-[#a1a1aa]'
-  if (source === 'opencode') return 'bg-[#4aad76]/15 text-[#4aad76]'
-  if (source === 'zcode') return 'bg-[#22b8a8]/15 text-[#22b8a8]'
-  return 'bg-[#c88450]/15 text-[#c88450]'
+  return getHarnessPresentation(source).badgeClass
 }
 
 function formatRelativeTime(isoDate: string): string {
@@ -180,11 +166,17 @@ export default function SpotlightApp() {
               onMouseEnter={() => setSelectedIndex(i)}
               title={item.session.canResume === false ? item.session.resumeUnavailableReason : undefined}
             >
-              <img
-                src={sourceIcon(item.session.source)}
-                className="w-6 h-6 rounded-full shrink-0 mt-0.5"
-                alt=""
-              />
+              {sourceIcon(item.session.source) ? (
+                <img
+                  src={sourceIcon(item.session.source)}
+                  className="w-6 h-6 rounded-full shrink-0 mt-0.5"
+                  alt=""
+                />
+              ) : (
+                <span className={`w-6 h-6 rounded-full shrink-0 mt-0.5 flex items-center justify-center text-[10px] font-medium ${sourceBadgeClass(item.session.source)}`}>
+                  {sourceLabel(item.session.source)}
+                </span>
+              )}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-primary truncate font-medium">

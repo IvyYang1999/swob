@@ -1,6 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AnalysisDimension, AnalysisScope } from '../main/analysis-contract'
 import type { OnboardingBackupSizeEstimate } from '../shared/onboarding-backup-size'
+import type {
+  AgentAlwaysOnTopState,
+  AgentHistoryItem,
+  AgentResumeState,
+  FrontendIpcResult,
+  ShareCopyPngResult,
+  ShareSavePngResult,
+  SpotlightNativeShadowState,
+  UserIdentity,
+  UserIdentityInput
+} from '../shared/frontend-ipc-contract'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeTargetInstanceOption = {
@@ -208,6 +219,10 @@ const api = {
   smartRenameApply: (items: Array<{ id: string; newTitle: string }>) =>
     ipcRenderer.invoke('smartRename:apply', items),
   agentGetStatus: () => ipcRenderer.invoke('agent:getStatus'),
+  agentListHistory: () => ipcRenderer.invoke('agent:listHistory') as Promise<FrontendIpcResult<AgentHistoryItem[]>>,
+  agentResumeSession: (sessionId: string) => ipcRenderer.invoke('agent:resumeSession', sessionId) as Promise<FrontendIpcResult<AgentResumeState>>,
+  agentGetAlwaysOnTop: () => ipcRenderer.invoke('agent:getAlwaysOnTop') as Promise<FrontendIpcResult<AgentAlwaysOnTopState>>,
+  agentSetAlwaysOnTop: (flag: boolean) => ipcRenderer.invoke('agent:setAlwaysOnTop', flag) as Promise<FrontendIpcResult<AgentAlwaysOnTopState>>,
   agentToggleWindow: () => ipcRenderer.invoke('agent:toggleWindow'),
   agentHideWindow: () => ipcRenderer.invoke('agent:hideWindow'),
   agentNewConversation: () => ipcRenderer.invoke('agent:newConversation'),
@@ -238,6 +253,11 @@ const api = {
   spotlightSelectInMain: (sessionId: string) => ipcRenderer.invoke('spotlight:selectInMain', sessionId),
   spotlightConsumePendingNavigation: () => ipcRenderer.invoke('spotlight:consumePendingNavigation'),
   spotlightToggle: () => ipcRenderer.invoke('spotlight:toggle'),
+  spotlightSetNativeShadow: (flag: boolean) => ipcRenderer.invoke('spotlight:setNativeShadow', flag) as Promise<FrontendIpcResult<SpotlightNativeShadowState>>,
+  profileGetUserIdentity: () => ipcRenderer.invoke('profile:getUserIdentity') as Promise<FrontendIpcResult<UserIdentity>>,
+  profileSetUserIdentity: (identity: UserIdentityInput) => ipcRenderer.invoke('profile:setUserIdentity', identity) as Promise<FrontendIpcResult<UserIdentity>>,
+  shareSavePng: (base64: string, suggestedName: string) => ipcRenderer.invoke('share:savePng', base64, suggestedName) as Promise<FrontendIpcResult<ShareSavePngResult>>,
+  shareCopyPngToClipboard: (base64: string) => ipcRenderer.invoke('share:copyPngToClipboard', base64) as Promise<FrontendIpcResult<ShareCopyPngResult>>,
   onSpotlightNavigate: (callback: (sessionId: string) => void) => {
     ipcRenderer.on('spotlight:navigate', (_event, sessionId) => callback(sessionId))
   },

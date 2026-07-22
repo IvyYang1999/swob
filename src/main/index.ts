@@ -1,13 +1,15 @@
 // MUST stay the first import: rebinds defunct stdio fds before anything
 // writes to console or spawns a child (see stdio-repair.ts).
 import { logSpawnSelfTest } from './stdio-repair'
-import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen, dialog, clipboard, nativeImage } from 'electron'
 import path from 'path'
 const { join, dirname, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
 import { registerAgentIpc, registerAgentShortcut, shutdownAgentRuntime } from './agent-window'
+import { getAgentWorkspaceDir } from './agent-runner'
+import { buildAgentHistory, registerFrontendIpc } from './frontend-ipc'
 import { execFile, execSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import {
@@ -179,6 +181,8 @@ import { buildClaudeRecoveryInventory } from './resume-recovery-service'
 
 let mainWindow: BrowserWindow | null = null
 let spotlightWindow: BrowserWindow | null = null
+// Keep the historical default: the experiment only changes this through IPC.
+let spotlightNativeShadow = false
 let watcher: SourceDirectoryWatcher | null = null
 let codexWatcher: SourceDirectoryWatcher | null = null
 let cursorWatcher: SourceDirectoryWatcher | null = null
@@ -682,7 +686,7 @@ function createSpotlightWindow(): void {
     movable: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    hasShadow: false,
+    hasShadow: process.platform === 'darwin' ? spotlightNativeShadow : false,
     show: false,
     backgroundColor: '#00000000',
     roundedCorners: false,
@@ -1395,6 +1399,27 @@ function currentSettingsPreferences(): Record<string, unknown> {
     return migrateSettingsPreferences(preferences)
   } catch {
     return migrateSettingsPreferences()
+  }
+}
+
+function updateCurrentSettingsPreferences(patch: Record<string, unknown>): Record<string, unknown> {
+  if (shouldReadLibraryConfig()) {
+    const config = loadLibraryConfig()
+    const preferences = {
+      ...migrateSettingsPreferences(config.preferences as unknown as Record<string, unknown>),
+      ...patch
+    }
+    config.preferences = preferences as any
+    saveLibraryConfig(config)
+    return preferences
+  } else {
+    const config = loadConfig()
+    const preferences = {
+      ...migrateSettingsPreferences(config.preferences as unknown as Record<string, unknown>),
+      ...patch
+    }
+    saveConfig({ ...config, preferences } as any)
+    return preferences
   }
 }
 
@@ -2606,11 +2631,39 @@ app.whenReady().then(async () => {
 
   logSpawnSelfTest()
   registerSpotlightShortcut(getSpotlightShortcut())
+  registerFrontendIpc({
+    ipcMain,
+    profile: {
+      getLibraryRoot,
+      getPreferences: currentSettingsPreferences,
+      updatePreferences: (patch) => { updateCurrentSettingsPreferences(patch) }
+    },
+    spotlight: {
+      platform: process.platform,
+      getWindow: () => spotlightWindow,
+      setPreference: (flag) => { spotlightNativeShadow = flag }
+    },
+    share: {
+      showSaveDialog: (options) => dialog.showSaveDialog(options),
+      writeFile: (filePath, data, options) => fs.promises.writeFile(filePath, data, options),
+      createImage: (data) => nativeImage.createFromBuffer(data),
+      writeImage: (image) => clipboard.writeImage(image as Electron.NativeImage)
+    }
+  })
   registerAgentIpc({
     getLibraryRoot: () => {
       try { return getLibraryRoot() } catch { return null }
     },
     showMainWindow: () => showMainWindow(),
+    listAgentHistory: async () => {
+      const sessions = await loadAllSessions({ readOnly: true, quiet: true })
+      const config = latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig()
+      return buildAgentHistory(sessions, getAgentWorkspaceDir(), (session) =>
+        config.sessionMeta?.[session.sessionId]?.customTitle
+      )
+    },
+    getAgentAlwaysOnTop: () => currentSettingsPreferences().agentAlwaysOnTop !== false,
+    persistAgentAlwaysOnTop: (flag) => { updateCurrentSettingsPreferences({ agentAlwaysOnTop: flag }) },
     archiveAgentSession: (sessionId: string) => {
       // The scanner needs a beat to index the fresh session before it can be
       // filed under the assistant folder; failure just leaves it in the root.

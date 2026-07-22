@@ -413,7 +413,20 @@ describe('buildSessionSummary', () => {
     expect(summary!.turnCount).toBe(1)
     expect(summary!.messageCount).toBe(2)
     expect(summary!.createdAt).toBe('2026-03-01T10:00:00Z')
+    expect(summary!.activityDays).toEqual(['2026-03-01'])
     expect(summary!.firstUserMessage).toBe('你好')
+  })
+
+  it('仅 detection/system timestamp 不构成 bounded activity evidence', () => {
+    const msgs = [rawMsg({
+      type: 'system',
+      timestamp: '2026-03-01T10:00:00Z',
+      message: { role: 'system', content: 'detected placeholder' }
+    })]
+    const summary = buildSessionSummary(writeTempJsonl(msgs), msgs)
+    expect(summary).not.toBeNull()
+    expect(summary?.turnCount).toBe(0)
+    expect(summary?.activityDays).toEqual([])
   })
 
   it('Windows 绝对路径的写入动作不能被丢弃', () => {
@@ -920,7 +933,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
       const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
-      expect(diskCache.version).toBe(24)
+      expect(diskCache.version).toBe(25)
       expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
       expect(diskCache.entries[firstFile]).toMatchObject({
         sig: expect.any(String),
@@ -1092,7 +1105,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
       expect(summary).toMatchObject({ firstUserMessage: 'old-cache-session', turnCount: 0 })
-      expect(refreshedCache.version).toBe(24)
+      expect(refreshedCache.version).toBe(25)
       expect(refreshedCache.entries[file].perFile.lineageMeta.leafUuidRefs[0]).toMatchObject({
         origin: { kind: 'task-notification' },
         promptSource: 'sdk'
@@ -1174,7 +1187,7 @@ describe('loadAllSessions per-file incremental cache', () => {
       expect(parent?.tokenAccounting?.conversationOnly).toBe(120)
       expect(parent?.tokenAccounting?.usageEvents).toHaveLength(3)
       expect(parent?.tokenAccounting?.usageEvents.filter((event) => event.scope === 'subagent')).toHaveLength(2)
-      expect(cache.version).toBe(24)
+      expect(cache.version).toBe(25)
       expect(cache.entries[guardianFile].perFile).toMatchObject({
         summary: null,
         codexSubagent: { role: 'guardian', parentSessionId: parentId }
@@ -1191,7 +1204,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const hot = await loadAllSessionsFromTempHome(home)
       expect(hot.map((session) => session.sessionId)).toEqual([parentId])
-      expect(JSON.parse(fs.readFileSync(cachePath, 'utf-8')).version).toBe(24)
+      expect(JSON.parse(fs.readFileSync(cachePath, 'utf-8')).version).toBe(25)
 
       fs.rmSync(childFile)
       fs.rmSync(guardianFile)

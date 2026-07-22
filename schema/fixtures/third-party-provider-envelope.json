@@ -1,0 +1,66 @@
+{
+  "protocolVersion": "1.0",
+  "messageId": "fixture-third-party-parse-1",
+  "kind": "parse-outcome",
+  "payload": {
+    "providerId": "example/sqlite-agent",
+    "parserDataVersion": "fixture-1",
+    "formatVersion": "sqlite-fixture-v1",
+    "fingerprint": {
+      "algorithm": "sha256",
+      "value": "fixture-third-party-source-v1"
+    },
+    "status": "complete",
+    "sessions": [
+      {
+        "sourceRefId": "source:example:sqlite:42",
+        "sessionRecordId": "session:example:sqlite:42",
+        "status": "complete",
+        "records": [
+          {
+            "id": "session:example:sqlite:42",
+            "provenance": {
+              "providerId": "example/sqlite-agent",
+              "sourceRefId": "source:example:sqlite:42",
+              "parserDataVersion": "fixture-1",
+              "formatVersion": "sqlite-fixture-v1",
+              "observedAt": "2026-07-22T02:00:00.000Z",
+              "evidence": [
+                {
+                  "kind": "observed-format",
+                  "locator": "synthetic-fixture",
+                  "note": "No third-party code or production data is included."
+                }
+              ]
+            },
+            "recordType": "session",
+            "sourceRef": {
+              "kind": "sqlite-row",
+              "stableId": "source:example:sqlite:42",
+              "providerId": "example/sqlite-agent",
+              "databaseUri": "file:///fixtures/example/state.db",
+              "table": "sessions",
+              "primaryKey": { "id": 42 },
+              "displayLocator": "fixtures/example/state.db#sessions/42",
+              "fingerprint": {
+                "algorithm": "sha256",
+                "value": "fixture-third-party-source-v1"
+              }
+            },
+            "sourceSessionId": "42",
+            "createdAt": "2026-07-22T02:00:00.000Z",
+            "updatedAt": "2026-07-22T02:00:00.000Z",
+            "cwd": ["/fixtures/example"],
+            "projectPath": "/fixtures/example",
+            "providerTitle": "Synthetic provider session"
+          }
+        ],
+        "errors": [],
+        "replaceSessionRecordId": null,
+        "noDataReason": null
+      }
+    ],
+    "errors": [],
+    "tombstones": []
+  }
+}

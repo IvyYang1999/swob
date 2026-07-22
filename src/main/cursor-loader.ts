@@ -11,6 +11,7 @@ import type {
 } from './types'
 import { tokenUsageFromAccounting, unavailableTokenAccounting } from './token-accounting'
 import { runtimeHome } from './runtime-home'
+import { activityDaysFromTimestamps, localActivityDay } from './activity-time'
 
 const HOME = runtimeHome()
 const CURSOR_PROJECTS_DIR = path.join(HOME, '.cursor', 'projects')
@@ -41,6 +42,7 @@ export function findCursorSessionFiles(home = HOME): string[] {
 // --- Cursor JSONL line format ---
 
 interface CursorLine {
+  timestamp?: string
   role: 'user' | 'assistant' | 'tool'
   message: {
     content: string | CursorContentPart[]
@@ -114,6 +116,9 @@ function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: s
   for (const line of lines) {
     const uuid = `cursor-${sessionId}-${msgIndex++}`
     const parentUuid = messages.length > 0 ? messages[messages.length - 1].uuid : null
+    // Some Cursor transcript versions expose an event timestamp. Older ones
+    // do not; file mtime remains a display fallback but is not activity proof.
+    const timestamp = localActivityDay(line.timestamp) ? line.timestamp! : fileTime
 
     if (line.role === 'user') {
       const content = line.message.content
@@ -146,7 +151,7 @@ function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: s
         parentUuid,
         sessionId,
         type: 'user',
-        timestamp: fileTime,
+        timestamp,
         cwd,
         message: {
           role: 'user',
@@ -161,7 +166,7 @@ function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: s
           parentUuid,
           sessionId,
           type: 'assistant',
-          timestamp: fileTime,
+          timestamp,
           cwd,
           message: { role: 'assistant', content }
         })
@@ -188,7 +193,7 @@ function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: s
           parentUuid,
           sessionId,
           type: 'assistant',
-          timestamp: fileTime,
+          timestamp,
           cwd,
           message: { role: 'assistant', content: parts }
         })
@@ -211,7 +216,7 @@ function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: s
           parentUuid,
           sessionId,
           type: 'user',
-          timestamp: fileTime,
+          timestamp,
           cwd,
           message: { role: 'user', content: parts }
         })
@@ -311,6 +316,7 @@ export async function buildCursorSessionSummary(filePath: string, sessionIdOverr
     'Local Cursor transcripts do not expose authoritative token usage'
   )
   const totalTokenUsage = tokenUsageFromAccounting(tokenAccounting)
+  const activityDays = activityDaysFromTimestamps(lines.map((line) => line.timestamp))
 
   return {
     id: `cursor:${sessionId}`,
@@ -318,6 +324,7 @@ export async function buildCursorSessionSummary(filePath: string, sessionIdOverr
     slug: '',
     createdAt: stat.birthtime.toISOString(),
     updatedAt: stat.mtime.toISOString(),
+    activityDays,
     messageCount: rawMessages.length,
     turnCount,
     compactCount: 0,
@@ -335,6 +342,7 @@ export async function buildCursorSessionSummary(filePath: string, sessionIdOverr
     pastedImageCount: 0,
     tokenUsage: totalTokenUsage,
     tokenAccounting,
+    providerOutcome: { detected: 'detected', parse: 'parsed', usage: 'unavailable' },
     referencedFiles: [],
     configFiles: [],
     source: 'cursor',

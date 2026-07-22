@@ -17,6 +17,7 @@ import {
   type TokenAccounting
 } from './token-accounting'
 import { runtimeHome } from './runtime-home'
+import { activityDaysFromTimestamps } from './activity-time'
 import {
   stripTerminalControlSequences,
   stripTerminalControlSequencesDeep
@@ -512,6 +513,7 @@ function buildCodexSessionSummaryFromLines(
   const turnCount = Math.min(userMessages.length, assistantMessages.length)
 
   const timestamps = rawMessages.map((m) => m.timestamp).filter(Boolean).sort()
+  const activityDays = activityDaysFromTimestamps(timestamps)
   const firstUser = userMessages[0]
   const firstUserMessage = firstUser?.message
     ? (typeof firstUser.message.content === 'string' ? firstUser.message.content : '').slice(0, 200)
@@ -552,6 +554,7 @@ function buildCodexSessionSummaryFromLines(
     slug: '',
     createdAt: timestamps[0] || '',
     updatedAt: timestamps[timestamps.length - 1] || '',
+    activityDays,
     messageCount: rawMessages.length,
     turnCount,
     compactCount: 0,
@@ -569,6 +572,11 @@ function buildCodexSessionSummaryFromLines(
     pastedImageCount: 0,
     tokenUsage: totalTokenUsage,
     tokenAccounting,
+    providerOutcome: {
+      detected: 'detected',
+      parse: 'parsed',
+      usage: tokenAccounting.billingTotal === null ? 'unavailable' : 'available'
+    },
     referencedFiles: [],
     configFiles: [],
     source: 'codex',

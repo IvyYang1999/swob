@@ -2,10 +2,12 @@ import Database from 'better-sqlite3'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { Folder, SessionSource, SessionSummary } from './types'
+import type { Folder, SessionSummary } from './types'
 import { accountingForSession, totalCacheWriteTokens, type UsageEvent } from './token-accounting'
 import { valueUsageEvent } from './token-valuation'
 import { searchDatabasePath } from './search-index'
+import { isActivityDay, localActivityDay } from './activity-time'
+import { providerOutcomeForSession } from './session-provider-outcome'
 import {
   USAGE_FACT_SCHEMA_VERSION,
   type AnalysisDimension,
@@ -51,6 +53,10 @@ interface UsageRollupRow {
   conversation_billable_tokens: number
   conversation_cost_usd: number
   session_count: number
+  detected_session_count: number
+  parsed_session_count: number
+  usage_available_session_count: number
+  usage_unavailable_session_count: number
   unknown_time_events: number
 }
 
@@ -59,7 +65,7 @@ interface UsageFactRow {
   occurred_at: string | null
   occurred_day: string
   occurred_hour: number
-  source_client: SessionSource
+  source_client: string
   session_id: string
   root_session_id: string
   agent_scope: UsageFact['agentScope']
@@ -105,6 +111,7 @@ function ensureSchema(db: Database.Database): void {
     db.exec(`
       DROP TABLE IF EXISTS usage_rollups;
       DROP TABLE IF EXISTS usage_session_folders;
+      DROP TABLE IF EXISTS usage_session_activity;
       DROP TABLE IF EXISTS usage_folders;
       DROP TABLE IF EXISTS usage_facts;
       DROP TABLE IF EXISTS usage_sessions;
@@ -118,13 +125,25 @@ function ensureSchema(db: Database.Database): void {
       source_client TEXT NOT NULL,
       project_path TEXT NOT NULL,
       turn_count INTEGER NOT NULL,
+      detection_status TEXT NOT NULL CHECK(detection_status = 'detected'),
+      parse_status TEXT NOT NULL CHECK(parse_status IN ('parsed', 'no-data', 'placeholder', 'error')),
+      usage_status TEXT NOT NULL CHECK(usage_status IN ('available', 'unavailable')),
       usage_available INTEGER NOT NULL,
       fact_signature TEXT NOT NULL,
       folder_signature TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      activity_time_status TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS usage_sessions_source_idx ON usage_sessions(source_client);
     CREATE INDEX IF NOT EXISTS usage_sessions_project_idx ON usage_sessions(project_path);
+
+    CREATE TABLE IF NOT EXISTS usage_session_activity (
+      session_id TEXT NOT NULL REFERENCES usage_sessions(session_id) ON DELETE CASCADE,
+      occurred_day TEXT NOT NULL,
+      PRIMARY KEY(session_id, occurred_day)
+    );
+    CREATE INDEX IF NOT EXISTS usage_session_activity_day_idx
+      ON usage_session_activity(occurred_day, session_id);
 
     CREATE TABLE IF NOT EXISTS usage_facts (
       event_id TEXT PRIMARY KEY,
@@ -235,19 +254,11 @@ function stableHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
-function localDay(date: Date): string {
-  return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, '0'),
-    String(date.getDate()).padStart(2, '0')
-  ].join('-')
-}
-
 function normalizedTimestamp(value?: string): { occurredAt: string | null; day: string; hour: number } {
   if (!value) return { occurredAt: null, day: UNKNOWN_TIME, hour: -1 }
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return { occurredAt: null, day: UNKNOWN_TIME, hour: -1 }
-  return { occurredAt: value, day: localDay(date), hour: date.getHours() }
+  return { occurredAt: value, day: localActivityDay(value)!, hour: date.getHours() }
 }
 
 function projectPath(session: SessionSummary): string {
@@ -320,6 +331,21 @@ export function usageFactsForSession(
       billableTokens: valuation.totalBillableTokens
     }
   })
+}
+
+function activityDaysForSession(session: SessionSummary, facts: UsageFact[]): string[] {
+  const days = new Set<string>()
+  for (const day of session.activityDays || []) {
+    if (isActivityDay(day)) days.add(day)
+  }
+  // A timestamped UsageFact is independently verified event-time evidence,
+  // including provider events that are not represented as chat messages.
+  for (const fact of facts) {
+    if (fact.occurredDay !== UNKNOWN_TIME && isActivityDay(fact.occurredDay)) {
+      days.add(fact.occurredDay)
+    }
+  }
+  return [...days].sort()
 }
 
 function foldersBySession(folders: Folder[]): Map<string, string[]> {
@@ -424,7 +450,7 @@ export function synchronizeUsageFacts(
     for (const folder of folders) insertFolderName.run(folder.id, folder.name)
 
     if (options.rebuild) {
-      db.exec('DELETE FROM usage_rollups; DELETE FROM usage_session_folders; DELETE FROM usage_facts; DELETE FROM usage_sessions;')
+      db.exec('DELETE FROM usage_rollups; DELETE FROM usage_session_folders; DELETE FROM usage_session_activity; DELETE FROM usage_facts; DELETE FROM usage_sessions;')
     }
     const existingRows = db.prepare(
       'SELECT session_id, fact_signature, folder_signature FROM usage_sessions'
@@ -433,16 +459,22 @@ export function synchronizeUsageFacts(
 
     for (const [sessionId, session] of uniqueSessions) {
       const accounting = accountingForSession(session)
+      const outcome = providerOutcomeForSession(session)
+      const parsed = outcome.parse === 'parsed'
+      const usageAvailable = parsed && outcome.usage === 'available' && accounting.billingTotal !== null
       const resolvedRoot = resolveRootSessionId(session, sessionsByIdentity)
-      const facts = usageFactsForSession(session, { rootSessionId: resolvedRoot })
+      const facts = parsed ? usageFactsForSession(session, { rootSessionId: resolvedRoot }) : []
+      const activityDays = activityDaysForSession(session, facts)
       const folderIds = folderMap.get(sessionId) || []
       const factSignature = stableHash({
         source: session.source || 'claude-code',
         project: projectPath(session),
         root: resolvedRoot,
         turns: session.turnCount,
-        available: accounting.billingTotal !== null,
-        facts
+        outcome,
+        available: usageAvailable,
+        facts,
+        activityDays
       })
       const folderSignature = stableHash(folderIds)
       const prior = existing.get(sessionId)
@@ -454,32 +486,46 @@ export function synchronizeUsageFacts(
       db.prepare(`
         INSERT INTO usage_sessions(
           session_id, root_session_id, source_client, project_path, turn_count,
-          usage_available, fact_signature, folder_signature, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          detection_status, parse_status, usage_status, usage_available,
+          fact_signature, folder_signature, updated_at, activity_time_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           root_session_id = excluded.root_session_id,
           source_client = excluded.source_client,
           project_path = excluded.project_path,
           turn_count = excluded.turn_count,
+          detection_status = excluded.detection_status,
+          parse_status = excluded.parse_status,
+          usage_status = excluded.usage_status,
           usage_available = excluded.usage_available,
           fact_signature = excluded.fact_signature,
           folder_signature = excluded.folder_signature,
-          updated_at = excluded.updated_at
+          updated_at = excluded.updated_at,
+          activity_time_status = excluded.activity_time_status
       `).run(
         sessionId,
         resolvedRoot,
         session.source || 'claude-code',
         projectPath(session),
         session.turnCount,
-        accounting.billingTotal === null ? 0 : 1,
+        outcome.detected,
+        outcome.parse,
+        outcome.usage,
+        usageAvailable ? 1 : 0,
         factSignature,
         folderSignature,
-        session.updatedAt || ''
+        session.updatedAt || '',
+        activityDays.length > 0 ? 'known' : 'unknown'
       )
 
       if (factChanged) {
         db.prepare('DELETE FROM usage_facts WHERE session_id = ?').run(sessionId)
+        db.prepare('DELETE FROM usage_session_activity WHERE session_id = ?').run(sessionId)
         for (const fact of facts) insertFact(db, fact)
+        const insertActivity = db.prepare(
+          'INSERT INTO usage_session_activity(session_id, occurred_day) VALUES (?, ?)'
+        )
+        for (const day of activityDays) insertActivity.run(sessionId, day)
         rebuildSessionRollup(db, sessionId)
       }
       if (folderChanged) {
@@ -539,7 +585,7 @@ function dayFromInput(value: string, field: string): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) throw new Error(`${field} 不是有效日期`)
-  return localDay(date)
+  return localActivityDay(date.toISOString())!
 }
 
 function shiftDay(day: string, offset: number): string {
@@ -556,7 +602,7 @@ function daysBetween(from: string, to: string): number {
 
 export function resolveAnalysisRange(scope: AnalysisScope, now = new Date()): ResolvedAnalysisRange {
   if (scope.range === 'all') return { fromDay: null, toDay: null, label: 'All time' }
-  const today = localDay(now)
+  const today = localActivityDay(now.toISOString())!
   if (scope.range === 'today') return { fromDay: today, toDay: today, label: today }
   if (scope.range === '7d' || scope.range === '30d' || scope.range === '90d') {
     const days = Number(scope.range.slice(0, -1))
@@ -630,6 +676,24 @@ function coverage(covered: number, total: number): CoverageMetric {
   return { covered, total, percent: total > 0 ? (covered / total) * 100 : null }
 }
 
+interface CoverageInventory {
+  detected: number | null
+  parsed: number | null
+  usage_available: number | null
+}
+
+function applyCoverageInventory(aggregate: UsageAggregate, row: CoverageInventory): void {
+  const detected = row.detected || 0
+  const parsed = row.parsed || 0
+  const usageAvailable = row.usage_available || 0
+  aggregate.sessionCount = parsed
+  aggregate.detectedSessionCount = detected
+  aggregate.parsedSessionCount = parsed
+  aggregate.usageAvailableSessionCount = usageAvailable
+  aggregate.usageUnavailableSessionCount = parsed - usageAvailable
+  aggregate.usageCoverage = coverage(usageAvailable, parsed)
+}
+
 function rowToAggregate(row: UsageRollupRow, basis: MetricBasis): UsageAggregate {
   const billingTokens = row.billing_non_cached_input + row.billing_cache_read +
     row.billing_cache_write + row.billing_output
@@ -656,6 +720,10 @@ function rowToAggregate(row: UsageRollupRow, basis: MetricBasis): UsageAggregate
     turns: row.conversation_calls,
     eventCount,
     sessionCount: row.session_count,
+    detectedSessionCount: row.detected_session_count,
+    parsedSessionCount: row.parsed_session_count,
+    usageAvailableSessionCount: row.usage_available_session_count,
+    usageUnavailableSessionCount: row.usage_unavailable_session_count,
     usageCoverage: coverage(row.session_count, row.session_count),
     modelCoverage: coverage(modeledCalls, selectedConversation ? row.conversation_calls : row.calls),
     pricingCoverage: { ...coverage(pricedTokens, billableTokens), status: 'available' },
@@ -696,6 +764,10 @@ function aggregateRows(
       COALESCE(SUM(r.modeled_calls), 0) AS modeled_calls,
       COALESCE(SUM(r.conversation_modeled_calls), 0) AS conversation_modeled_calls,
       COUNT(DISTINCT r.session_id) AS session_count,
+      COUNT(DISTINCT r.session_id) AS detected_session_count,
+      COUNT(DISTINCT r.session_id) AS parsed_session_count,
+      COUNT(DISTINCT r.session_id) AS usage_available_session_count,
+      0 AS usage_unavailable_session_count,
       COALESCE(SUM(CASE WHEN r.occurred_day = '${UNKNOWN_TIME}' THEN r.calls ELSE 0 END), 0) AS unknown_time_events
     FROM usage_rollups r
     ${filter.joins.join('\n')}
@@ -743,6 +815,10 @@ function emptyAggregate(basis: MetricBasis): UsageAggregate {
     modeled_calls: 0,
     conversation_modeled_calls: 0,
     session_count: 0,
+    detected_session_count: 0,
+    parsed_session_count: 0,
+    usage_available_session_count: 0,
+    usage_unavailable_session_count: 0,
     unknown_time_events: 0
   }, basis)
 }
@@ -758,13 +834,57 @@ function unknownTimeEvents(db: Database.Database, scope: AnalysisScope): number 
   `).get(...filter.params) as { count: number }).count
 }
 
+function applyCoverageTimeScope(
+  joins: string[],
+  where: string[],
+  params: string[],
+  range: ResolvedAnalysisRange,
+  basis: MetricBasis
+): { detected: string; parsed: string; usageAvailable: string } {
+  const detected = 'COUNT(DISTINCT sessions.session_id)'
+  const parsed = `COUNT(DISTINCT CASE
+    WHEN sessions.parse_status = 'parsed' THEN sessions.session_id END)`
+  if (!range.fromDay && !range.toDay) {
+    return {
+      detected,
+      parsed,
+      usageAvailable: `COUNT(DISTINCT CASE
+        WHEN sessions.parse_status = 'parsed'
+          AND sessions.usage_status = 'available'
+          AND sessions.usage_available = 1
+        THEN sessions.session_id END)`
+    }
+  }
+  joins.push('JOIN usage_session_activity activity ON activity.session_id = sessions.session_id')
+  joins.push(`LEFT JOIN usage_facts coverage_facts
+    ON coverage_facts.session_id = sessions.session_id
+    AND coverage_facts.occurred_day = activity.occurred_day${basis === 'conversation' ? "\n    AND coverage_facts.agent_scope = 'main'" : ''}`)
+  if (range.fromDay) {
+    where.push('activity.occurred_day >= ?')
+    params.push(range.fromDay)
+  }
+  if (range.toDay) {
+    where.push('activity.occurred_day <= ?')
+    params.push(range.toDay)
+  }
+  return {
+    detected,
+    parsed,
+    usageAvailable: `COUNT(DISTINCT CASE
+      WHEN sessions.parse_status = 'parsed'
+        AND sessions.usage_status = 'available'
+        AND coverage_facts.event_id IS NOT NULL
+      THEN sessions.session_id END)`
+  }
+}
+
 function applyGlobalUsageCoverage(
   db: Database.Database,
   scope: AnalysisScope,
   range: ResolvedAnalysisRange,
   total: UsageAggregate
 ): void {
-  if (range.fromDay || range.toDay || scope.models?.length) return
+  if (scope.models?.length) return
   const joins: string[] = []
   const where = ['1 = 1']
   const params: string[] = []
@@ -781,12 +901,16 @@ function applyGlobalUsageCoverage(
     where.push(`sessions.source_client IN (${scope.sources.map(() => '?').join(', ')})`)
     params.push(...scope.sources)
   }
+  const counts = applyCoverageTimeScope(joins, where, params, range, scope.metricBasis)
   const row = db.prepare(`
-    SELECT SUM(usage_available) AS covered, COUNT(*) AS total
+    SELECT
+      ${counts.detected} AS detected,
+      ${counts.parsed} AS parsed,
+      ${counts.usageAvailable} AS usage_available
     FROM usage_sessions sessions ${joins.join('\n')}
     WHERE ${where.join(' AND ')}
-  `).get(...params) as { covered: number | null; total: number }
-  total.usageCoverage = coverage(row.covered || 0, row.total)
+  `).get(...params) as CoverageInventory
+  applyCoverageInventory(total, row)
 }
 
 function applyItemUsageCoverage(
@@ -796,10 +920,9 @@ function applyItemUsageCoverage(
   dimension: AnalysisDimension,
   items: UsageAggregate[]
 ): void {
-  // Sessions without facts cannot be placed on a time/model axis. On an
-  // all-time categorical axis, their source/project/folder is still known and
-  // must remain in the denominator so a partial source is not shown as 100%.
-  if (range.fromDay || range.toDay || scope.models?.length) return
+  // Time/hour are UsageFact axes. Model cannot safely place an unavailable
+  // session. Categorical axes use the independent activity-day ledger.
+  if (scope.models?.length) return
   const keySql: Partial<Record<AnalysisDimension, string>> = {
     global: "'global'",
     source: 'sessions.source_client',
@@ -826,13 +949,18 @@ function applyItemUsageCoverage(
     where.push(`sessions.source_client IN (${scope.sources.map(() => '?').join(', ')})`)
     params.push(...scope.sources)
   }
+  const counts = applyCoverageTimeScope(joins, where, params, range, scope.metricBasis)
   const rows = db.prepare(`
-    SELECT ${key} AS key, SUM(sessions.usage_available) AS covered, COUNT(*) AS total
+    SELECT
+      ${key} AS key,
+      ${counts.detected} AS detected,
+      ${counts.parsed} AS parsed,
+      ${counts.usageAvailable} AS usage_available
     FROM usage_sessions sessions ${joins.join('\n')}
     WHERE ${where.join(' AND ')}
     GROUP BY ${key}
-  `).all(...params) as Array<{ key: string; covered: number | null; total: number }>
-  const byKey = new Map(rows.map((row) => [row.key, coverage(row.covered || 0, row.total)]))
+  `).all(...params) as Array<CoverageInventory & { key: string }>
+  const byKey = new Map(rows.map((row) => [row.key, row]))
   const folderLabels = dimension === 'folder'
     ? new Map((db.prepare('SELECT folder_id, name FROM usage_folders').all() as Array<{
         folder_id: string
@@ -840,17 +968,19 @@ function applyItemUsageCoverage(
       }>).map((row) => [row.folder_id, row.name]))
     : new Map<string, string>()
   const existingKeys = new Set(items.map((item) => item.key))
-  for (const row of rows) {
-    if (existingKeys.has(row.key)) continue
+  for (const [keyValue, inventory] of byKey) {
+    if (existingKeys.has(keyValue)) continue
+    if (dimension === 'session' && (inventory.parsed || 0) === 0) continue
     const item = emptyAggregate(scope.metricBasis)
-    item.key = row.key
-    item.label = folderLabels.get(row.key) || row.key
-    item.usageCoverage = coverage(row.covered || 0, row.total)
+    item.key = keyValue
+    item.label = folderLabels.get(keyValue) || keyValue
+    applyCoverageInventory(item, inventory)
     items.push(item)
   }
   for (const item of items) {
     const value = byKey.get(item.key)
-    if (value) item.usageCoverage = value
+    if (!value) continue
+    applyCoverageInventory(item, value)
   }
 }
 
@@ -960,7 +1090,7 @@ export function drilldownInsights(
   `).all(...filter.params) as Array<{
     session_id: string
     root_session_id: string
-    source_client: SessionSource
+    source_client: string
     project_path: string
     models: string | null
     billing_tokens: number
@@ -1065,6 +1195,9 @@ export function sessionUsageEvents(
 export function usageFactStoreStats(): {
   schemaVersion: number
   sessions: number
+  activityDays: number
+  timedSessions: number
+  unknownActivitySessions: number
   facts: number
   rollups: number
   databasePath: string
@@ -1076,9 +1209,18 @@ export function usageFactStoreStats(): {
   const meta = db.prepare(
     'SELECT schema_version, last_indexed_at FROM usage_schema_meta WHERE singleton = 1'
   ).get() as { schema_version: number; last_indexed_at: string | null }
+  const activityStatus = db.prepare(`
+    SELECT
+      SUM(CASE WHEN activity_time_status = 'known' THEN 1 ELSE 0 END) AS timed,
+      SUM(CASE WHEN activity_time_status = 'unknown' THEN 1 ELSE 0 END) AS unknown
+    FROM usage_sessions
+  `).get() as { timed: number | null; unknown: number | null }
   return {
     schemaVersion: meta.schema_version,
     sessions: count('usage_sessions'),
+    activityDays: count('usage_session_activity'),
+    timedSessions: activityStatus.timed || 0,
+    unknownActivitySessions: activityStatus.unknown || 0,
     facts: count('usage_facts'),
     rollups: count('usage_rollups'),
     databasePath: usageDatabasePath(),

@@ -13,6 +13,11 @@ import {
   type Valuation
 } from './token-valuation'
 import { usageFactsForSession } from './usage-fact-store'
+import { BUILTIN_PROVIDER_DEFINITIONS } from '../shared/provider-capabilities'
+import {
+  sessionHasAuthoritativeUsage,
+  sessionHasParsedTranscript
+} from './session-provider-outcome'
 
 export type TokenDataStatus = 'available' | 'partial' | 'unavailable' | 'no-data'
 
@@ -22,7 +27,12 @@ export interface SourceStats {
   totalTokens: number
   inputTokens: number
   outputTokens: number
+  /** @deprecated Compatibility alias for detectedSessionCount. */
   sessionCount: number
+  detectedSessionCount: number
+  parsedSessionCount: number
+  usageAvailableSessionCount: number
+  usageUnavailableSessionCount: number
   turnCount: number
   tokenAvailableSessions: number
   tokenUnavailableSessions: number
@@ -35,7 +45,12 @@ export interface ProjectStats {
   totalTokens: number
   inputTokens: number
   outputTokens: number
+  /** @deprecated Compatibility alias for detectedSessionCount. */
   sessionCount: number
+  detectedSessionCount: number
+  parsedSessionCount: number
+  usageAvailableSessionCount: number
+  usageUnavailableSessionCount: number
   turnCount: number
   sources: string[]
   tokenAvailableSessions: number
@@ -48,7 +63,12 @@ export interface FolderStats {
   totalTokens: number
   inputTokens: number
   outputTokens: number
+  /** @deprecated Compatibility alias for detectedSessionCount. */
   sessionCount: number
+  detectedSessionCount: number
+  parsedSessionCount: number
+  usageAvailableSessionCount: number
+  usageUnavailableSessionCount: number
   turnCount: number
   tokenAvailableSessions: number
   tokenUnavailableSessions: number
@@ -87,7 +107,12 @@ export interface InsightsData {
   /** Processed input = non-cached input + cache read + cache write. */
   totalInputTokens: number
   totalOutputTokens: number
+  /** @deprecated Compatibility alias for detectedSessionCount. */
   totalSessions: number
+  detectedSessionCount: number
+  parsedSessionCount: number
+  usageAvailableSessionCount: number
+  usageUnavailableSessionCount: number
   tokenAvailableSessions: number
   tokenUnavailableSessions: number
   totalTurns: number
@@ -133,23 +158,10 @@ export interface InsightsData {
   codeChanges: { filesRead: number; filesWritten: number; filesEdited: number }
 }
 
-const SOURCE_ORDER: SessionSource[] = [
-  'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror',
-  'antigravity', 'grok', 'pi', 'kimi', 'hermes'
-]
-const SOURCE_LABELS: Record<string, string> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  cursor: 'Cursor',
-  opencode: 'OpenCode',
-  zcode: 'ZCode',
-  'cc-mirror': 'CC Mirror',
-  antigravity: 'Antigravity',
-  grok: 'Grok / Factory',
-  pi: 'Pi',
-  kimi: 'Kimi Code',
-  hermes: 'Hermes'
-}
+const SOURCE_ORDER: SessionSource[] = BUILTIN_PROVIDER_DEFINITIONS.map((entry) => entry.sourceId)
+const SOURCE_LABELS: Record<string, string> = Object.fromEntries(
+  BUILTIN_PROVIDER_DEFINITIONS.map((entry) => [entry.sourceId, entry.manifest.displayName])
+)
 
 function getProjectFromCwds(cwds: string[]): { project: string; fullPath: string } {
   const cwd = cwds[0] || '(unknown project)'
@@ -254,6 +266,10 @@ export function buildInsights(
       inputTokens: 0,
       outputTokens: 0,
       sessionCount: 0,
+      detectedSessionCount: 0,
+      parsedSessionCount: 0,
+      usageAvailableSessionCount: 0,
+      usageUnavailableSessionCount: 0,
       turnCount: 0,
       tokenAvailableSessions: 0,
       tokenUnavailableSessions: 0,
@@ -289,6 +305,7 @@ export function buildInsights(
   let totalTime = 0
   let tokenAvailableSessions = 0
   let tokenUnavailableSessions = 0
+  let parsedSessionCount = 0
   let filesRead = 0
   let filesWritten = 0
   let filesEdited = 0
@@ -297,29 +314,32 @@ export function buildInsights(
 
   for (const session of rollupSessions) {
     const source = session.source || 'claude-code'
+    const parsed = sessionHasParsedTranscript(session)
     const accounting = accountingForSession(session)
-    const facts = usageFactsForSession(session)
-    const available = accounting.billingTotal !== null && accounting.components !== null
+    const facts = parsed ? usageFactsForSession(session) : []
+    const available = sessionHasAuthoritativeUsage(session) && accounting.billingTotal !== null && accounting.components !== null
     const input = available ? accountingInput(accounting) : 0
     const output = available ? accounting.components!.outputTokens : 0
     const tokens = available ? accounting.billingTotal! : 0
     const sessionValuation = valuationForAccounting(accounting)
     const { project, fullPath } = getProjectFromCwds(session.cwds)
 
-    sessionValuations.push(sessionValuation)
-    for (const event of accounting.usageEvents) {
-      uniqueValuationEvents.set(`${session.sessionId}:${event.dedupKey}`, event)
+    if (parsed) {
+      parsedSessionCount++
+      sessionValuations.push(sessionValuation)
+      for (const event of accounting.usageEvents) {
+        uniqueValuationEvents.set(`${session.sessionId}:${event.dedupKey}`, event)
+      }
+      bySession.push({
+        sessionId: session.sessionId,
+        projectPath: fullPath,
+        source,
+        totalTokens: accounting.billingTotal,
+        conversationOnlyTokens: accounting.conversationOnly,
+        provenance: accounting.provenance,
+        valuation: sessionValuation
+      })
     }
-
-    bySession.push({
-      sessionId: session.sessionId,
-      projectPath: fullPath,
-      source,
-      totalTokens: accounting.billingTotal,
-      conversationOnlyTokens: accounting.conversationOnly,
-      provenance: accounting.provenance,
-      valuation: sessionValuation
-    })
 
     let sourceStats = sourceMap.get(source)
     if (!sourceStats) {
@@ -330,6 +350,10 @@ export function buildInsights(
         inputTokens: 0,
         outputTokens: 0,
         sessionCount: 0,
+        detectedSessionCount: 0,
+        parsedSessionCount: 0,
+        usageAvailableSessionCount: 0,
+        usageUnavailableSessionCount: 0,
         turnCount: 0,
         tokenAvailableSessions: 0,
         tokenUnavailableSessions: 0,
@@ -338,7 +362,11 @@ export function buildInsights(
       sourceMap.set(source, sourceStats)
     }
     sourceStats.sessionCount++
-    sourceStats.turnCount += session.turnCount
+    sourceStats.detectedSessionCount++
+    if (parsed) {
+      sourceStats.parsedSessionCount++
+      sourceStats.turnCount += session.turnCount
+    }
 
     let projectStats = projectMap.get(fullPath)
     if (!projectStats) {
@@ -349,6 +377,10 @@ export function buildInsights(
         inputTokens: 0,
         outputTokens: 0,
         sessionCount: 0,
+        detectedSessionCount: 0,
+        parsedSessionCount: 0,
+        usageAvailableSessionCount: 0,
+        usageUnavailableSessionCount: 0,
         turnCount: 0,
         sources: [],
         tokenAvailableSessions: 0,
@@ -357,13 +389,23 @@ export function buildInsights(
       projectMap.set(fullPath, projectStats)
     }
     projectStats.sessionCount++
-    projectStats.turnCount += session.turnCount
+    projectStats.detectedSessionCount++
+    if (parsed) {
+      projectStats.parsedSessionCount++
+      projectStats.turnCount += session.turnCount
+    }
     if (!projectStats.sources.includes(source)) projectStats.sources.push(source)
+
+    // Detected-only, empty and manifest placeholders remain visible as detected
+    // inventory, but never enter usage/turn/session statistical denominators.
+    if (!parsed) continue
 
     if (available) {
       tokenAvailableSessions++
       sourceStats.tokenAvailableSessions++
       projectStats.tokenAvailableSessions++
+      sourceStats.usageAvailableSessionCount++
+      projectStats.usageAvailableSessionCount++
       totalTokens += tokens
       conversationOnlyTokens += accounting.conversationOnly || 0
       totalInputTokens += input
@@ -391,6 +433,8 @@ export function buildInsights(
       tokenUnavailableSessions++
       sourceStats.tokenUnavailableSessions++
       projectStats.tokenUnavailableSessions++
+      sourceStats.usageUnavailableSessionCount++
+      projectStats.usageUnavailableSessionCount++
     }
 
     totalTurns += session.turnCount
@@ -476,6 +520,10 @@ export function buildInsights(
       inputTokens: 0,
       outputTokens: 0,
       sessionCount: 0,
+      detectedSessionCount: 0,
+      parsedSessionCount: 0,
+      usageAvailableSessionCount: 0,
+      usageUnavailableSessionCount: 0,
       turnCount: 0,
       tokenAvailableSessions: 0,
       tokenUnavailableSessions: 0
@@ -484,12 +532,17 @@ export function buildInsights(
       if (!sessionIds.has(session.sessionId)) continue
       const accounting = accountingForSession(session)
       stats.sessionCount++
+      stats.detectedSessionCount++
+      if (!sessionHasParsedTranscript(session)) continue
+      stats.parsedSessionCount++
       stats.turnCount += session.turnCount
-      if (accounting.billingTotal === null || !accounting.components) {
+      if (!sessionHasAuthoritativeUsage(session) || accounting.billingTotal === null || !accounting.components) {
         stats.tokenUnavailableSessions++
+        stats.usageUnavailableSessionCount++
         continue
       }
       stats.tokenAvailableSessions++
+      stats.usageAvailableSessionCount++
       stats.totalTokens += accounting.billingTotal
       stats.inputTokens += accountingInput(accounting)
       stats.outputTokens += accounting.components.outputTokens
@@ -541,6 +594,10 @@ export function buildInsights(
     totalInputTokens,
     totalOutputTokens,
     totalSessions: rollupSessions.length,
+    detectedSessionCount: rollupSessions.length,
+    parsedSessionCount,
+    usageAvailableSessionCount: tokenAvailableSessions,
+    usageUnavailableSessionCount: tokenUnavailableSessions,
     tokenAvailableSessions,
     tokenUnavailableSessions,
     totalTurns,

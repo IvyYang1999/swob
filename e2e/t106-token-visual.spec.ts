@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { closeApp, launchApp, resizeAppWindow, revealAllSessions, type LaunchedApp } from './helpers'
+import { closeApp, launchApp, openSessionInChat, resizeAppWindow, revealAllSessions, type LaunchedApp } from './helpers'
 
 let launched: LaunchedApp
 
@@ -18,7 +18,7 @@ test('Token Insights 在真实 Electron 窗口展示统一口径与 unavailable'
   await expect(page.getByText('2 with usage · 2 unavailable', { exact: true })).toBeVisible()
   await expect(page.getByText('Cursor', { exact: true })).toBeVisible()
   await expect(page.getByText('Unavailable', { exact: true }).first()).toBeVisible()
-  await expect(page.getByText(/cache components are mutually exclusive/)).toBeVisible()
+  await expect(page.getByText(/缓存分桶互斥|cache components are mutually exclusive/)).toBeVisible()
 
   const processedCard = page.getByText('Processed Tokens', { exact: true }).first().locator('..')
   await processedCard.hover()
@@ -33,7 +33,7 @@ test('Token Insights 在真实 Electron 窗口展示统一口径与 unavailable'
   }))
   expect(overflow.body).toBeLessThanOrEqual(1)
   expect(overflow.root).toBeLessThanOrEqual(1)
-  const heatmapScroller = page.getByText('Token Heatmap', { exact: true }).locator('..').locator('div.relative.overflow-x-auto')
+  const heatmapScroller = page.getByText(/Token 热力图|Token Heatmap/).locator('../..').locator('div.relative.overflow-x-auto')
   await expect(heatmapScroller).toBeVisible()
   const horizontalScroll = await heatmapScroller.evaluate((element) => {
     const before = element.scrollLeft
@@ -42,7 +42,7 @@ test('Token Insights 在真实 Electron 窗口展示统一口径与 unavailable'
   })
   expect(horizontalScroll.scrollWidth).toBeGreaterThan(horizontalScroll.clientWidth)
   expect(horizontalScroll.after).toBeGreaterThan(horizontalScroll.before)
-  const bySource = page.getByText('By Source', { exact: true })
+  const bySource = page.getByText(/按来源|By Source/)
   await bySource.scrollIntoViewIfNeeded()
   await expect(bySource).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('token-insights-narrow.png'), fullPage: true })
@@ -52,9 +52,9 @@ test('Cursor session 信息面板明确显示 Token 不可用', async () => {
   const { page } = launched
   await page.getByTitle('Token 洞察').click()
   await revealAllSessions(page)
-  const cursorSession = page.getByText('Cursor token unavailable fixture', { exact: false }).first()
+  const cursorSession = page.locator('[data-session-id]').filter({ hasText: 'Cursor token unavailable fixture' }).first()
   await expect(cursorSession).toBeVisible({ timeout: 20_000 })
-  await cursorSession.click()
+  await openSessionInChat(page, await cursorSession.getAttribute('data-session-id') || undefined)
   await expect(page.getByText('Cursor response without authoritative usage.', { exact: true })).toBeVisible({ timeout: 20_000 })
   const infoTitle = page.getByText('Session Info', { exact: true })
   await page.waitForTimeout(300)

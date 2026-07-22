@@ -27,6 +27,20 @@ export const SOURCE_COLORS: Record<string, string> = {
   hermes: '#8b5cf6',
 }
 
+export const SOURCE_LABELS: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  opencode: 'OpenCode',
+  zcode: 'ZCode',
+  'cc-mirror': 'CC Mirror',
+  antigravity: 'Antigravity',
+  grok: 'Grok / Factory',
+  pi: 'Pi',
+  kimi: 'Kimi Code',
+  hermes: 'Hermes',
+}
+
 export const PROJECT_COLORS = [
   '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
   '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
@@ -188,6 +202,15 @@ export interface QueryBundle {
   source: InsightsQueryResult | null
   model: InsightsQueryResult | null
   project: InsightsQueryResult | null
+  session: InsightsQueryResult | null
+}
+
+interface SessionLookupItem {
+  id: string
+  sessionId: string
+  cwds?: string[]
+  projectPath?: string
+  source?: string
 }
 
 /**
@@ -195,25 +218,39 @@ export interface QueryBundle {
  * Fields that the new API does not surface (topTools, codeChanges, valuation, etc.)
  * get safe defaults so existing cards degrade gracefully.
  */
-export function adaptQueryBundle(bundle: QueryBundle): InsightsData {
+export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupItem[] = []): InsightsData {
   const g = bundle.global?.total
   const totalTokens = g?.processedTokens ?? 0
   const billingTokens = g?.billingTokens ?? 0
   const convTokens = g?.conversationTokens ?? 0
+  const tokenAvailableSessions = g?.usageCoverage.covered ?? g?.sessionCount ?? 0
+  const scopedSessionCount = g?.usageCoverage.total ?? g?.sessionCount ?? 0
+  const tokenUnavailableSessions = Math.max(0, scopedSessionCount - tokenAvailableSessions)
 
   // By source
-  const bySource: BySource[] = (bundle.source?.items ?? []).map((a) => ({
-    source: a.key,
-    label: a.label,
-    totalTokens: a.processedTokens,
-    inputTokens: a.nonCachedInputTokens + a.cacheReadTokens + a.cacheWriteTokens,
-    outputTokens: a.outputTokens,
-    sessionCount: a.sessionCount,
-    turnCount: a.turns,
-    tokenAvailableSessions: a.sessionCount,
-    tokenUnavailableSessions: 0,
-    tokenDataStatus: a.processedTokens > 0 ? 'available' as const : 'no-data' as const,
-  }))
+  const bySource: BySource[] = (bundle.source?.items ?? []).map((a) => {
+    const available = a.usageCoverage.covered
+    const unavailable = Math.max(0, a.usageCoverage.total - available)
+    const tokenDataStatus = a.usageCoverage.total === 0
+      ? 'no-data' as const
+      : available === 0
+        ? 'unavailable' as const
+        : unavailable > 0
+          ? 'partial' as const
+          : 'available' as const
+    return {
+      source: a.key,
+      label: SOURCE_LABELS[a.key] || a.label,
+      totalTokens: a.processedTokens,
+      inputTokens: a.nonCachedInputTokens + a.cacheReadTokens + a.cacheWriteTokens,
+      outputTokens: a.outputTokens,
+      sessionCount: a.usageCoverage.total,
+      turnCount: a.turns,
+      tokenAvailableSessions: available,
+      tokenUnavailableSessions: unavailable,
+      tokenDataStatus,
+    }
+  })
 
   // By model
   const byModel: ByModel[] = (bundle.model?.items ?? [])
@@ -221,7 +258,7 @@ export function adaptQueryBundle(bundle: QueryBundle): InsightsData {
     .map((a) => ({
       model: a.key,
       totalTokens: a.processedTokens,
-      sessionCount: a.sessionCount,
+      sessionCount: a.usageCoverage.total,
     }))
 
   // By project
@@ -236,8 +273,8 @@ export function adaptQueryBundle(bundle: QueryBundle): InsightsData {
       sessionCount: a.sessionCount,
       turnCount: a.turns,
       sources: [],
-      tokenAvailableSessions: a.sessionCount,
-      tokenUnavailableSessions: 0,
+      tokenAvailableSessions: a.usageCoverage.covered,
+      tokenUnavailableSessions: Math.max(0, a.usageCoverage.total - a.usageCoverage.covered),
     }))
 
   // By date (from time dimension)
@@ -282,14 +319,41 @@ export function adaptQueryBundle(bundle: QueryBundle): InsightsData {
     modeBreakdown: {},
   }
 
+  const sessionsById = new Map<string, SessionLookupItem>()
+  for (const session of sessions) {
+    sessionsById.set(session.id, session)
+    sessionsById.set(session.sessionId, session)
+  }
+  const bySession = (bundle.session?.items ?? []).map((aggregate) => {
+    const session = sessionsById.get(aggregate.key)
+    const available = aggregate.usageCoverage.covered > 0
+    return {
+      sessionId: aggregate.key,
+      projectPath: session?.cwds?.find(Boolean) || session?.projectPath || '(unknown project)',
+      source: session?.source || 'unknown',
+      totalTokens: available ? aggregate.billingTokens : null,
+      conversationOnlyTokens: available ? aggregate.conversationTokens : null,
+      provenance: available ? 'usage-fact' : 'unavailable',
+      valuation: {
+        ...emptyValuation,
+        coveredTokens: aggregate.pricingCoverage.covered,
+        totalBillableTokens: aggregate.pricingCoverage.total,
+        coveragePercent: aggregate.pricingCoverage.percent ?? 0,
+      },
+    }
+  })
+  const projectTotal = byProject.reduce((sum, project) => sum + project.totalTokens, 0)
+  const sessionTotal = (bundle.session?.items ?? []).reduce((sum, session) => sum + session.processedTokens, 0)
+  const tokenDifference = totalTokens - sessionTotal
+
   return {
     totalTokens,
     conversationOnlyTokens: convTokens,
     totalInputTokens: g ? g.nonCachedInputTokens + g.cacheReadTokens + g.cacheWriteTokens : 0,
     totalOutputTokens: g?.outputTokens ?? 0,
-    totalSessions: g?.sessionCount ?? 0,
-    tokenAvailableSessions: g?.sessionCount ?? 0,
-    tokenUnavailableSessions: 0,
+    totalSessions: scopedSessionCount,
+    tokenAvailableSessions,
+    tokenUnavailableSessions,
     totalTurns: g?.turns ?? 0,
     totalTime: 0,
     activeDays: byDate.filter((d) => d.totalTokens > 0).length,
@@ -306,13 +370,13 @@ export function adaptQueryBundle(bundle: QueryBundle): InsightsData {
     turnCountDistribution: [0, 0, 0, 0, 0, 0],
     topTools: [],
     codeChanges: { filesRead: 0, filesWritten: 0, filesEdited: 0 },
-    bySession: [],
+    bySession,
     reconciliation: {
       global: totalTokens,
-      projects: byProject.reduce((s, p) => s + p.totalTokens, 0),
-      sessions: 0,
-      difference: 0,
-      ok: true,
+      projects: projectTotal,
+      sessions: sessionTotal,
+      difference: tokenDifference,
+      ok: Math.abs(totalTokens - projectTotal) < 0.000001 && Math.abs(tokenDifference) < 0.000001,
       valuation: {
         globalUsd: null,
         sessionsUsd: null,

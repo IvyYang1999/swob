@@ -69,7 +69,7 @@ interface WorkerEnvelope {
 type WorkerReply =
   | { requestId: number; type: 'progress'; progress: LibraryWorkerProgress }
   | { requestId: number; type: 'result'; result: LibraryWorkerResult }
-  | { requestId: number; type: 'error'; error: string }
+  | { requestId: number; type: 'error'; error: string; errorName?: string; errorCode?: string }
 
 export async function runLibraryWorkerRequest(
   request: LibraryWorkerRequest,
@@ -114,11 +114,11 @@ export async function runLibraryWorkerRequest(
       setSessionTurnCount(dirPath, summary.turnCount)
     }
     if (parsedRaw) {
-      updateTranscriptFromRaw(summary.sessionId, parsedRaw, 'claude-code', request.filePath)
+      updateTranscriptFromRaw(summary.sessionId, parsedRaw, 'claude-code', request.filePath, undefined, dirPath)
     } else {
-      await updateTranscript(summary.sessionId)
+      await updateTranscript(summary.sessionId, undefined, dirPath)
     }
-    await syncBackup(summary.sessionId)
+    await syncBackup(summary.sessionId, dirPath)
   }
   if (parsedRaw) {
     await indexParsedSearchSource({
@@ -146,10 +146,13 @@ if (!isMainThread && parentPort) {
         })
         parentPort!.postMessage({ requestId, type: 'result', result } satisfies WorkerReply)
       } catch (error) {
+        const typedError = error instanceof Error ? error as Error & { code?: unknown } : null
         parentPort!.postMessage({
           requestId,
           type: 'error',
-          error: error instanceof Error ? error.message : String(error)
+          error: typedError?.message || String(error),
+          errorName: typedError?.name,
+          errorCode: typeof typedError?.code === 'string' ? typedError.code : undefined
         } satisfies WorkerReply)
       }
     })
@@ -248,7 +251,12 @@ export class LibraryWorkerClient {
       }
       this.pending.delete(reply.requestId)
       if (reply.type === 'result') pending.resolve(reply.result)
-      else pending.reject(new Error(reply.error))
+      else {
+        const error = new Error(reply.error) as Error & { code?: string }
+        if (reply.errorName) error.name = reply.errorName
+        if (reply.errorCode) error.code = reply.errorCode
+        pending.reject(error)
+      }
     })
     worker.on('error', (error) => this.failAll(error instanceof Error ? error : new Error(String(error))))
     worker.on('exit', (code) => {

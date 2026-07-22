@@ -1,14 +1,16 @@
 import type { SessionSource } from './types'
 
-export const USAGE_FACT_SCHEMA_VERSION = 2
+export const USAGE_FACT_SCHEMA_VERSION = 4
 
 export type AnalysisPreset = 'today' | '7d' | '30d' | '90d' | 'all'
 export type MetricBasis = 'billing' | 'conversation'
 export type AnalysisDimension = 'global' | 'time' | 'hour' | 'source' | 'model' | 'project' | 'folder' | 'session'
+/** Legacy source IDs remain readable; future providers may use namespaced ProviderId strings. */
+export type AnalysisSourceId = string
 
 export interface AnalysisScope {
   range: { from?: string; to?: string } | AnalysisPreset
-  sources?: SessionSource[]
+  sources?: AnalysisSourceId[]
   models?: string[]
   projectOrFolder?: { kind: 'project' | 'folder'; key: string }
   metricBasis: MetricBasis
@@ -20,7 +22,7 @@ export interface UsageFact {
   /** Local calendar key derived from occurredAt, or the explicit unknown bucket. */
   occurredDay: string | 'unknown-time'
   occurredHour: number | null
-  sourceClient: SessionSource
+  sourceClient: AnalysisSourceId
   sessionId: string
   rootSessionId: string
   agentScope: 'main' | 'subagent' | 'unknown'
@@ -68,7 +70,12 @@ export interface UsageAggregate {
   calls: number
   turns: number
   eventCount: number
+  /** Compatibility total; on all-time categorical queries this equals detectedSessionCount. */
   sessionCount: number
+  detectedSessionCount: number
+  parsedSessionCount: number
+  usageAvailableSessionCount: number
+  usageUnavailableSessionCount: number
   usageCoverage: CoverageMetric
   modelCoverage: CoverageMetric
   pricingCoverage: PricingCoveragePlaceholder
@@ -106,7 +113,7 @@ export interface InsightsQueryResult {
 export interface InsightsDrilldownSession {
   sessionId: string
   rootSessionId: string
-  sourceClient: SessionSource
+  sourceClient: AnalysisSourceId
   projectPath: string
   models: string[]
   processedTokens: number

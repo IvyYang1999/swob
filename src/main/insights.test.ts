@@ -387,6 +387,40 @@ describe('buildInsights', () => {
       expect(result.totalSessions).toBe(2)
     })
 
+    it('detection-only 占位只计 detected，不污染 parsed 会话与 turn 分布', () => {
+      const parsed = makeSession({ sessionId: 'parsed', turnCount: 7 })
+      const detectedOnlyAccounting = unavailableTokenAccounting('hermes', 'no transcript parser')
+      const detectedOnly = makeSession({
+        sessionId: 'detected-only',
+        source: 'hermes',
+        messageCount: 0,
+        turnCount: 0,
+        tokenAccounting: detectedOnlyAccounting,
+        tokenUsage: tokenUsageFromAccounting(detectedOnlyAccounting)
+      })
+
+      const result = buildInsights([parsed, detectedOnly], [])
+
+      expect(result).toMatchObject({
+        totalSessions: 2,
+        detectedSessionCount: 2,
+        parsedSessionCount: 1,
+        usageAvailableSessionCount: 1,
+        usageUnavailableSessionCount: 0,
+        totalTurns: 7
+      })
+      expect(result.bySession.map((session) => session.sessionId)).toEqual(['parsed'])
+      expect(result.bySource.find((source) => source.source === 'hermes')).toMatchObject({
+        sessionCount: 1,
+        detectedSessionCount: 1,
+        parsedSessionCount: 0,
+        usageAvailableSessionCount: 0,
+        usageUnavailableSessionCount: 0,
+        turnCount: 0
+      })
+      expect(result.turnCountDistribution.reduce((sum, count) => sum + count, 0)).toBe(1)
+    })
+
     it('【回归】cache 口径互斥、unavailable 不作零值，且 global/project/session 严格对账', () => {
       const claudeAccounting = accountingFromMutuallyExclusiveUsage('claude-code', {
         inputTokens: 100,

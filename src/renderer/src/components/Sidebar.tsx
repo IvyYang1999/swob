@@ -67,7 +67,7 @@ function SessionItem({
   onDoubleClickRename?: (sessionId: string) => void
   allowDrag?: boolean
 }) {
-  const { selectedUniqueId, selectSession, config, activeSessionIds, cloudSessionIds, locale, sessions } = useStore()
+  const { selectedUniqueId, selectSession, setWorkspaceView, config, activeSessionIds, cloudSessionIds, locale, sessions } = useStore()
   const t = useT()
   const isIntraBranch = session.id.includes(':intra-')
   const meta = isIntraBranch
@@ -107,6 +107,7 @@ function SessionItem({
       onClick={() => {
         if (!isRenaming) {
           const fresh = sessions.find((s) => s.id === session.id) || session
+          setWorkspaceView('chat')
           selectSession(
             fresh.filePath,
             (fresh as any).allFilePaths,

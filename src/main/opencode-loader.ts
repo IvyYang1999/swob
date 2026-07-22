@@ -13,6 +13,7 @@ import type {
 } from './types'
 import { accountingFromMutuallyExclusiveUsage, tokenUsageFromAccounting } from './token-accounting'
 import { runtimeHome } from './runtime-home'
+import { activityDaysFromTimestamps } from './activity-time'
 
 const SESSION_ID_RE = /^sess?_[A-Za-z0-9_-]+$/
 const SQLITE_TIMEOUT_MS = 5000
@@ -600,6 +601,7 @@ function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: Lo
     return extractText(content).trim().length > 0 || extractToolCalls(content).length > 0
   })
   const timestamps = rawMessages.map((m) => m.timestamp).filter(Boolean).sort()
+  const activityDays = activityDaysFromTimestamps(timestamps)
   const cwds = [...new Set(rawMessages.map((m) => m.cwd).filter(Boolean) as string[])]
   const sessionTitle = source === 'zcode'
     ? asString(sessionRow.title) || asString(sessionRow.slug)
@@ -662,6 +664,7 @@ function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: Lo
     slug: sessionTitle,
     createdAt: timestamps[0] || '',
     updatedAt: timestamps[timestamps.length - 1] || '',
+    activityDays,
     messageCount: validMessages.length,
     turnCount: Math.min(userMessages.length, assistantMessages.length),
     compactCount: 0,
@@ -680,6 +683,11 @@ function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: Lo
     pastedImageCount: 0,
     tokenUsage: normalizedTokenUsage,
     tokenAccounting,
+    providerOutcome: {
+      detected: 'detected',
+      parse: 'parsed',
+      usage: tokenAccounting.billingTotal === null ? 'unavailable' : 'available'
+    },
     referencedFiles: [],
     configFiles: [],
     source: source as SessionSource,

@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Folder, SessionSource, SessionSummary } from './types'
 import type { NormalizedTokenComponents, TokenAccounting, UsageEvent, UsageScope } from './token-accounting'
 import type { AnalysisDimension, AnalysisScope } from './analysis-contract'
+import { activityDaysFromTimestamps } from './activity-time'
 import {
   closeUsageFactStore,
   drilldownInsights,
@@ -95,7 +97,14 @@ function makeSession(
   id: string,
   project: string,
   events: UsageEvent[],
-  options: { source?: SessionSource; unavailable?: boolean; turns?: number } = {}
+  options: {
+    source?: SessionSource
+    unavailable?: boolean
+    turns?: number
+    updatedAt?: string
+    activityDays?: string[]
+    parse?: 'parsed' | 'no-data' | 'placeholder' | 'error'
+  } = {}
 ): SessionSummary {
   const summed = events.reduce((sum, event) => add(sum, event.components), components(0, 0))
   const conversation = events
@@ -117,7 +126,8 @@ function makeSession(
     sessionId: id,
     slug: id,
     createdAt: '2026-07-20T00:00:00Z',
-    updatedAt: '2026-07-22T00:00:00Z',
+    updatedAt: options.updatedAt || '2026-07-22T00:00:00Z',
+    activityDays: options.activityDays ?? activityDaysFromTimestamps(events.map((event) => event.timestamp)),
     messageCount: events.length * 2,
     turnCount: options.turns ?? events.filter((event) => event.scope === 'main').length,
     compactCount: 0,
@@ -138,6 +148,11 @@ function makeSession(
       cacheReadTokens: summed.cacheReadTokens
     },
     tokenAccounting: accounting,
+    providerOutcome: {
+      detected: 'detected',
+      parse: options.parse || (events.length > 0 ? 'parsed' : 'placeholder'),
+      usage: options.unavailable ? 'unavailable' : 'available'
+    },
     referencedFiles: [],
     configFiles: [],
     source: options.source || 'claude-code',
@@ -319,7 +334,7 @@ describe('UsageFact + AnalysisScope', () => {
     const changedA = makeSession('a', '/repo/alpha', [usageEvent('a1', localTimestamp(2026, 7, 20, 8), components(30, 2))])
     expect(synchronizeUsageFacts([changedA, b], [])).toMatchObject({ changedSessions: 1, unchangedSessions: 1, factCount: 2 })
     expect(synchronizeUsageFacts([changedA], [])).toMatchObject({ removedSessions: 1, factCount: 1 })
-    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 2, sessions: 1, facts: 1 })
+    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 4, sessions: 1, facts: 1 })
   })
 
   it('usage/model/pricing coverage 显式且 pricing 使用 t113 逐请求估值', () => {
@@ -329,11 +344,20 @@ describe('UsageFact + AnalysisScope', () => {
       }),
       usageEvent('unknown-model', localTimestamp(2026, 7, 20, 9), components(5, 1))
     ])
-    const unavailable = makeSession('unavailable', '/repo/alpha', [], { unavailable: true })
+    const unavailable = makeSession('unavailable', '/repo/alpha', [], {
+      unavailable: true,
+      parse: 'parsed'
+    })
     synchronizeUsageFacts([available, unavailable], [folder('mixed-folder', ['available', 'unavailable'])])
 
     const result = queryInsights(scope(), 'global')
     expect(result.total.usageCoverage).toEqual({ covered: 1, total: 2, percent: 50 })
+    expect(result.total).toMatchObject({
+      detectedSessionCount: 2,
+      parsedSessionCount: 2,
+      usageAvailableSessionCount: 1,
+      usageUnavailableSessionCount: 1
+    })
     expect(result.total.modelCoverage).toEqual({ covered: 1, total: 2, percent: 50 })
     expect(result.total.pricingCoverage).toEqual({
       status: 'available', covered: 12, total: 18, percent: (12 / 18) * 100
@@ -350,6 +374,234 @@ describe('UsageFact + AnalysisScope', () => {
       processedTokens: 0,
       usageCoverage: { covered: 0, total: 1, percent: 0 }
     })
+    const bounded = queryInsights(scope({
+      range: { from: '2026-07-22', to: '2026-07-22' }
+    }), 'source')
+    expect(bounded.total.processedTokens).toBe(0)
+    expect(bounded.total.sessionCount).toBe(0)
+    expect(bounded.total.usageCoverage).toEqual({ covered: 0, total: 0, percent: null })
+    expect(bounded.items).toEqual([])
+  })
+
+  it('bounded coverage 只认事件活动日，updatedAt 不得替代事件时间', () => {
+    const availableInRange = makeSession('available-in-range', '/repo/alpha', [
+      usageEvent('available-day-20', localTimestamp(2026, 7, 20, 8), components(10, 2), { model: 'm1' })
+    ], { updatedAt: '2026-07-22T00:00:00Z' })
+    const unavailableInRange = makeSession('unavailable-in-range', '/repo/alpha', [], {
+      source: 'cursor', unavailable: true, updatedAt: '2026-07-19T00:00:00Z',
+      activityDays: ['2026-07-20'], parse: 'parsed'
+    })
+    const updatedOnlyInRange = makeSession('updated-only-in-range', '/repo/alpha', [
+      usageEvent('event-day-21', localTimestamp(2026, 7, 21, 9), components(20, 2), { model: 'm1' })
+    ], { updatedAt: '2026-07-20T00:00:00Z' })
+    const crossDay = makeSession('cross-day-activity', '/repo/alpha', [
+      usageEvent('cross-day-20', localTimestamp(2026, 7, 20, 10), components(5, 1), { model: 'm1' }),
+      usageEvent('cross-day-21', localTimestamp(2026, 7, 21, 10), components(7, 2), { model: 'm1' })
+    ])
+    const noTime = makeSession('no-time', '/repo/alpha', [], {
+      unavailable: true, updatedAt: '2026-07-20T00:00:00Z', activityDays: []
+    })
+    const placeholder = makeSession('placeholder', '/repo/alpha', [], {
+      unavailable: true, turns: 0, updatedAt: '2026-07-20T00:00:00Z', activityDays: []
+    })
+    const sessions = [availableInRange, unavailableInRange, updatedOnlyInRange, crossDay, noTime, placeholder]
+    synchronizeUsageFacts(sessions, [folder('all-sessions', sessions.map((session) => session.sessionId))])
+
+    expect(queryInsights(scope(), 'global').total).toMatchObject({
+      sessionCount: 4,
+      detectedSessionCount: 6,
+      parsedSessionCount: 4,
+      usageCoverage: { covered: 3, total: 4, percent: 75 }
+    })
+
+    const day20 = scope({ range: { from: '2026-07-20', to: '2026-07-20' } })
+    const global = queryInsights(day20, 'global')
+    expect(global.total).toMatchObject({
+      processedTokens: 18,
+      sessionCount: 3,
+      usageCoverage: { covered: 2, total: 3, percent: (2 / 3) * 100 }
+    })
+
+    const source = queryInsights(day20, 'source')
+    expect(source.items.find((item) => item.key === 'claude-code')).toMatchObject({
+      processedTokens: 18,
+      sessionCount: 2,
+      usageCoverage: { covered: 2, total: 2, percent: 100 }
+    })
+    expect(source.items.find((item) => item.key === 'cursor')).toMatchObject({
+      processedTokens: 0,
+      sessionCount: 1,
+      usageCoverage: { covered: 0, total: 1, percent: 0 }
+    })
+
+    for (const dimension of ['project', 'folder'] as const) {
+      const item = queryInsights(day20, dimension).items[0]
+      expect(item).toMatchObject({
+        processedTokens: 18,
+        sessionCount: 3,
+        usageCoverage: { covered: 2, total: 3, percent: (2 / 3) * 100 }
+      })
+    }
+
+    const bySession = queryInsights(day20, 'session')
+    expect(new Set(bySession.items.map((item) => item.key))).toEqual(new Set([
+      'available-in-range', 'unavailable-in-range', 'cross-day-activity'
+    ]))
+    expect(bySession.items.find((item) => item.key === 'unavailable-in-range')).toMatchObject({
+      processedTokens: 0,
+      sessionCount: 1,
+      usageCoverage: { covered: 0, total: 1, percent: 0 }
+    })
+    expect(bySession.items.some((item) => item.key === 'updated-only-in-range')).toBe(false)
+    expect(bySession.items.some((item) => item.key === 'no-time')).toBe(false)
+    expect(bySession.items.some((item) => item.key === 'placeholder')).toBe(false)
+
+    const model = queryInsights(day20, 'model')
+    expect(model.items.map((item) => item.key)).toEqual(['m1'])
+    expect(model.items[0].sessionCount).toBe(2)
+    expect(model.total.usageCoverage).toEqual({ covered: 2, total: 3, percent: (2 / 3) * 100 })
+
+    expect(usageFactStoreStats()).toMatchObject({
+      schemaVersion: 4,
+      sessions: 6,
+      activityDays: 5,
+      timedSessions: 4,
+      unknownActivitySessions: 2
+    })
+  })
+
+  it('无可验证时间的 UsageFact 与空 placeholder 只进入 all-time typed truth', () => {
+    const unknownUsageTime = makeSession('unknown-usage-time', '/repo/alpha', [
+      usageEvent('unknown-time-event', undefined, components(10, 1), { model: 'm1' })
+    ], { activityDays: [] })
+    const placeholder = makeSession('empty-placeholder', '/repo/alpha', [], {
+      unavailable: true, turns: 0, activityDays: []
+    })
+    synchronizeUsageFacts([unknownUsageTime, placeholder], [])
+
+    expect(queryInsights(scope(), 'global').total).toMatchObject({
+      processedTokens: 11,
+      sessionCount: 1,
+      detectedSessionCount: 2,
+      parsedSessionCount: 1,
+      usageCoverage: { covered: 1, total: 1, percent: 100 }
+    })
+    const boundedScope = scope({ range: { from: '2026-07-20', to: '2026-07-20' } })
+    expect(queryInsights(boundedScope, 'global').total).toMatchObject({
+      processedTokens: 0,
+      sessionCount: 0,
+      usageCoverage: { covered: 0, total: 0, percent: null }
+    })
+    expect(queryInsights(boundedScope, 'session').items).toEqual([])
+    expect(usageFactStoreStats()).toMatchObject({
+      timedSessions: 0,
+      unknownActivitySessions: 2
+    })
+  })
+
+  it('bounded coverage 的分子与 billing/conversation 事件 scope 一致', () => {
+    const session = makeSession('subagent-only', '/repo/alpha', [
+      usageEvent('subagent', localTimestamp(2026, 7, 20, 12), components(100, 20), {
+        scope: 'subagent', model: 'm1'
+      })
+    ])
+    synchronizeUsageFacts([session], [])
+    const bounded = { from: '2026-07-20', to: '2026-07-20' }
+
+    expect(queryInsights(scope({ range: bounded }), 'global').total).toMatchObject({
+      processedTokens: 120,
+      sessionCount: 1,
+      usageCoverage: { covered: 1, total: 1, percent: 100 }
+    })
+    expect(queryInsights(scope({ range: bounded, metricBasis: 'conversation' }), 'global').total).toMatchObject({
+      processedTokens: 0,
+      sessionCount: 1,
+      usageCoverage: { covered: 0, total: 1, percent: 0 }
+    })
+  })
+
+  it('activity evidence 单独变化会增量重建 bounded 分母', () => {
+    const day20 = makeSession('activity-only', '/repo/alpha', [], {
+      unavailable: true, activityDays: ['2026-07-20'], parse: 'parsed'
+    })
+    expect(synchronizeUsageFacts([day20], [])).toMatchObject({ changedSessions: 1 })
+    expect(queryInsights(scope({ range: { from: '2026-07-20', to: '2026-07-20' } }), 'global').total)
+      .toMatchObject({ sessionCount: 1, usageCoverage: { covered: 0, total: 1, percent: 0 } })
+
+    const day21 = makeSession('activity-only', '/repo/alpha', [], {
+      unavailable: true, activityDays: ['2026-07-21'], parse: 'parsed'
+    })
+    expect(synchronizeUsageFacts([day21], [])).toMatchObject({ changedSessions: 1 })
+    expect(queryInsights(scope({ range: { from: '2026-07-20', to: '2026-07-20' } }), 'global').total)
+      .toMatchObject({ sessionCount: 0, usageCoverage: { covered: 0, total: 0, percent: null } })
+    expect(queryInsights(scope({ range: { from: '2026-07-21', to: '2026-07-21' } }), 'global').total)
+      .toMatchObject({ sessionCount: 1, usageCoverage: { covered: 0, total: 1, percent: 0 } })
+  })
+
+  it('detection-only 保留 detected 事实，但不进入 coverage/bySession 分母', () => {
+    const parsed = makeSession('parsed', '/repo/alpha', [
+      usageEvent('known', localTimestamp(2026, 7, 20, 8), components(10, 2))
+    ])
+    const detectionOnly = makeSession('detected-only', '/repo/alpha', [], {
+      source: 'hermes',
+      unavailable: true,
+      turns: 0
+    })
+    const noData = makeSession('no-data', '/repo/alpha', [], {
+      source: 'hermes', unavailable: true, parse: 'no-data'
+    })
+    const parseError = makeSession('parse-error', '/repo/alpha', [], {
+      source: 'hermes', unavailable: true, parse: 'error'
+    })
+    synchronizeUsageFacts([parsed, detectionOnly, noData, parseError], [])
+
+    expect(queryInsights(scope(), 'global').total).toMatchObject({
+      sessionCount: 1,
+      detectedSessionCount: 4,
+      parsedSessionCount: 1,
+      usageAvailableSessionCount: 1,
+      usageUnavailableSessionCount: 0,
+      usageCoverage: { covered: 1, total: 1, percent: 100 }
+    })
+    expect(queryInsights(scope(), 'source').items.find((item) => item.key === 'hermes')).toMatchObject({
+      processedTokens: 0,
+      sessionCount: 0,
+      detectedSessionCount: 3,
+      parsedSessionCount: 0,
+      usageAvailableSessionCount: 0,
+      usageUnavailableSessionCount: 0,
+      usageCoverage: { covered: 0, total: 0, percent: null }
+    })
+    expect(queryInsights(scope(), 'session').items.map((item) => item.key)).toEqual(['parsed'])
+    expect(usageFactStoreStats()).toMatchObject({ sessions: 4, facts: 1 })
+
+    const persisted = new Database(usageFactStoreStats().databasePath, { readonly: true })
+    try {
+      expect(persisted.prepare(`
+        SELECT session_id, detection_status, parse_status, usage_status
+        FROM usage_sessions
+        ORDER BY session_id
+      `).all()).toEqual([
+        {
+          session_id: 'detected-only', detection_status: 'detected',
+          parse_status: 'placeholder', usage_status: 'unavailable'
+        },
+        {
+          session_id: 'no-data', detection_status: 'detected',
+          parse_status: 'no-data', usage_status: 'unavailable'
+        },
+        {
+          session_id: 'parse-error', detection_status: 'detected',
+          parse_status: 'error', usage_status: 'unavailable'
+        },
+        {
+          session_id: 'parsed', detection_status: 'detected',
+          parse_status: 'parsed', usage_status: 'available'
+        }
+      ])
+    } finally {
+      persisted.close()
+    }
   })
 
   it('1700 session 任意 warm scope 查询 P95 < 200ms', () => {

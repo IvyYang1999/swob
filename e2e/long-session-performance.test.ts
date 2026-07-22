@@ -3,6 +3,7 @@ import {
   CLAUDE_FIXTURE_ID,
   closeApp,
   launchApp,
+  openSessionInChat,
   type LaunchedApp
 } from './helpers'
 
@@ -30,10 +31,8 @@ test('1500-turn session keeps DOM bounded and renderer long tasks below 100ms', 
       state.__swobLongTaskObserver.observe({ entryTypes: ['longtask'] })
     })
 
-    // Root-scatter model: loose sessions render flat, no group to expand.
-    await expect(page.locator('[data-session-id]').first()).toBeVisible({ timeout: 25_000 })
     const openStart = await page.evaluate(() => performance.now())
-    await page.locator(`[data-session-id="${CLAUDE_FIXTURE_ID}"]`).click()
+    await openSessionInChat(page, CLAUDE_FIXTURE_ID)
 
     const scroller = page.getByTestId('chat-scroll')
     await expect(scroller.locator('[data-turn-uuid]').first()).toBeVisible({ timeout: 25_000 })

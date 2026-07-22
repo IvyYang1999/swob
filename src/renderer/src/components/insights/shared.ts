@@ -168,3 +168,178 @@ export interface HeatmapCell {
   value: number
   level: 0 | 1 | 2 | 3 | 4
 }
+
+// ---------------------------------------------------------------------------
+// Adapter: map queryInsights results into InsightsData-compatible shape
+// so existing cards keep working with minimal changes.
+// ---------------------------------------------------------------------------
+import type {
+  InsightsQueryResult,
+  UsageAggregate,
+  PreviousPeriodComparison,
+} from '../../../../main/analysis-contract'
+
+export type { InsightsQueryResult, UsageAggregate, PreviousPeriodComparison }
+
+export interface QueryBundle {
+  global: InsightsQueryResult | null
+  time: InsightsQueryResult | null
+  hour: InsightsQueryResult | null
+  source: InsightsQueryResult | null
+  model: InsightsQueryResult | null
+  project: InsightsQueryResult | null
+}
+
+/**
+ * Build an InsightsData-compatible object from multiple queryInsights results.
+ * Fields that the new API does not surface (topTools, codeChanges, valuation, etc.)
+ * get safe defaults so existing cards degrade gracefully.
+ */
+export function adaptQueryBundle(bundle: QueryBundle): InsightsData {
+  const g = bundle.global?.total
+  const totalTokens = g?.processedTokens ?? 0
+  const billingTokens = g?.billingTokens ?? 0
+  const convTokens = g?.conversationTokens ?? 0
+
+  // By source
+  const bySource: BySource[] = (bundle.source?.items ?? []).map((a) => ({
+    source: a.key,
+    label: a.label,
+    totalTokens: a.processedTokens,
+    inputTokens: a.nonCachedInputTokens + a.cacheReadTokens + a.cacheWriteTokens,
+    outputTokens: a.outputTokens,
+    sessionCount: a.sessionCount,
+    turnCount: a.turns,
+    tokenAvailableSessions: a.sessionCount,
+    tokenUnavailableSessions: 0,
+    tokenDataStatus: a.processedTokens > 0 ? 'available' as const : 'no-data' as const,
+  }))
+
+  // By model
+  const byModel: ByModel[] = (bundle.model?.items ?? [])
+    .sort((a, b) => b.processedTokens - a.processedTokens)
+    .map((a) => ({
+      model: a.key,
+      totalTokens: a.processedTokens,
+      sessionCount: a.sessionCount,
+    }))
+
+  // By project
+  const byProject: ByProject[] = (bundle.project?.items ?? [])
+    .sort((a, b) => b.processedTokens - a.processedTokens)
+    .map((a) => ({
+      project: a.label,
+      fullPath: a.key,
+      totalTokens: a.processedTokens,
+      inputTokens: a.nonCachedInputTokens + a.cacheReadTokens + a.cacheWriteTokens,
+      outputTokens: a.outputTokens,
+      sessionCount: a.sessionCount,
+      turnCount: a.turns,
+      sources: [],
+      tokenAvailableSessions: a.sessionCount,
+      tokenUnavailableSessions: 0,
+    }))
+
+  // By date (from time dimension)
+  const byDate: ByDate[] = (bundle.time?.items ?? []).map((a) => ({
+    date: a.key,
+    totalTokens: a.processedTokens,
+    inputTokens: a.nonCachedInputTokens + a.cacheReadTokens + a.cacheWriteTokens,
+    outputTokens: a.outputTokens,
+    sessionCount: a.sessionCount,
+    turnCount: a.turns,
+    bySource: {},
+    byProject: {},
+    totalTime: 0,
+    byProjectTime: {},
+  }))
+
+  // Hourly distribution from hour dimension
+  const hourlyDistribution = new Array(24).fill(0)
+  for (const a of bundle.hour?.items ?? []) {
+    const h = parseInt(a.key, 10)
+    if (!isNaN(h) && h >= 0 && h < 24) {
+      hourlyDistribution[h] = a.processedTokens
+    }
+  }
+
+  // Heatmap: build from time items
+  const maxTokensForHeatmap = Math.max(1, ...byDate.map((d) => d.totalTokens))
+  const heatmap: HeatmapCell[] = byDate.map((d) => {
+    const ratio = d.totalTokens / maxTokensForHeatmap
+    const level: 0 | 1 | 2 | 3 | 4 = ratio === 0 ? 0 : ratio < 0.25 ? 1 : ratio < 0.5 ? 2 : ratio < 0.75 ? 3 : 4
+    return { date: d.date, value: d.totalTokens, level }
+  })
+
+  const emptyValuation: Valuation = {
+    mode: 'unpriced',
+    pricingMatch: 'none',
+    coveredTokens: 0,
+    totalBillableTokens: billingTokens,
+    coveragePercent: 0,
+    missingReasons: [],
+    pricingRules: [],
+    modeBreakdown: {},
+  }
+
+  return {
+    totalTokens,
+    conversationOnlyTokens: convTokens,
+    totalInputTokens: g ? g.nonCachedInputTokens + g.cacheReadTokens + g.cacheWriteTokens : 0,
+    totalOutputTokens: g?.outputTokens ?? 0,
+    totalSessions: g?.sessionCount ?? 0,
+    tokenAvailableSessions: g?.sessionCount ?? 0,
+    tokenUnavailableSessions: 0,
+    totalTurns: g?.turns ?? 0,
+    totalTime: 0,
+    activeDays: byDate.filter((d) => d.totalTokens > 0).length,
+    bySource,
+    byModel,
+    byProject,
+    byFolder: [],
+    byDate,
+    heatmap,
+    totalCacheReadTokens: g?.cacheReadTokens ?? 0,
+    totalCacheCreationTokens: g?.cacheWriteTokens ?? 0,
+    valuation: emptyValuation,
+    hourlyDistribution,
+    turnCountDistribution: [0, 0, 0, 0, 0, 0],
+    topTools: [],
+    codeChanges: { filesRead: 0, filesWritten: 0, filesEdited: 0 },
+    bySession: [],
+    reconciliation: {
+      global: totalTokens,
+      projects: byProject.reduce((s, p) => s + p.totalTokens, 0),
+      sessions: 0,
+      difference: 0,
+      ok: true,
+      valuation: {
+        globalUsd: null,
+        sessionsUsd: null,
+        uniqueEventsUsd: null,
+        difference: 0,
+        coverageDifference: 0,
+        ok: true,
+      },
+    },
+  }
+}
+
+/**
+ * Extract discovered sources, models, projects from query results
+ * for populating FilterBar pill options.
+ */
+export function extractFilterOptions(bundle: QueryBundle): {
+  sources: string[]
+  models: string[]
+  projects: Array<{ kind: 'project' | 'folder'; key: string; label: string }>
+} {
+  const sources = (bundle.source?.items ?? []).map((a) => a.key)
+  const models = (bundle.model?.items ?? []).map((a) => a.key)
+  const projects = (bundle.project?.items ?? []).map((a) => ({
+    kind: 'project' as const,
+    key: a.key,
+    label: a.label,
+  }))
+  return { sources, models, projects }
+}

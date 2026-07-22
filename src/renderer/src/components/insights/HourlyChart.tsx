@@ -4,8 +4,8 @@ export function HourlyChart({ hours }: { hours: number[] }) {
     <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="text-sm font-medium text-primary">会话开始时刻分布</div>
-        <span className="rounded bg-hover px-1.5 py-0.5 text-[9px] text-faint" title="按 session 创建时间统计每小时开始的会话数;不是 token 或活跃时间分布(事件级数据随 t114 上线)">
-          按创建时间
+        <span className="rounded bg-hover px-1.5 py-0.5 text-[10px] text-faint">
+          按事件时间
         </span>
       </div>
       <div className="flex items-end gap-[2px] h-16">
@@ -19,7 +19,7 @@ export function HourlyChart({ hours }: { hours: number[] }) {
           </div>
         ))}
       </div>
-      <div className="flex justify-between text-[9px] text-faint">
+      <div className="flex justify-between text-[10px] text-faint">
         <span>0h</span><span>6h</span><span>12h</span><span>18h</span><span>24h</span>
       </div>
     </div>

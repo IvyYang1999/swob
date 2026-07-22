@@ -22,7 +22,7 @@ export function CardShell({ title, titleEn, children, tooltip, rangeOverride, cl
     <div className={`bg-surface rounded-lg p-4 border border-edge space-y-2 min-w-0 ${className || ''}`} title={tooltip}>
       <div className="flex items-center justify-between gap-2">
         <div className="text-sm font-medium text-primary truncate">{label}</div>
-        <span className="shrink-0 rounded bg-hover px-1.5 py-0.5 text-[9px] text-faint">
+        <span className="shrink-0 rounded bg-hover px-1.5 py-0.5 text-[10px] text-faint">
           {scopeRangeLabel(scope, locale, rangeOverride)}
         </span>
       </div>

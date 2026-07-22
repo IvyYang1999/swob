@@ -29,7 +29,7 @@ export function SessionRanking({ data }: { data: InsightsData }) {
 
   const { ranked, p50, p90, p95, measured } = useMemo(() => {
     const value = (s: InsightsData['bySession'][number]): number | null =>
-      scope.basis === 'conversation' ? s.conversationOnlyTokens : s.totalTokens
+      scope.metricBasis === 'conversation' ? s.conversationOnlyTokens : s.totalTokens
     const withTokens = data.bySession
       .map((session) => ({ session, tokens: value(session) }))
       .filter((item): item is { session: InsightsData['bySession'][number]; tokens: number } =>
@@ -42,7 +42,7 @@ export function SessionRanking({ data }: { data: InsightsData }) {
       p95: percentile(sortedValues, 95),
       measured: withTokens.length
     }
-  }, [data.bySession, scope.basis])
+  }, [data.bySession, scope.metricBasis])
 
   const max = ranked[0]?.tokens || 1
 

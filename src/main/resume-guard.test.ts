@@ -193,7 +193,7 @@ describe('resume guard', () => {
       sessionId,
       sessions: [summary(sessionId, sourcePath, 'codex')],
       surface: 'codex-desktop',
-      openAction: (action) => opened.push(action)
+      openAction: (action) => { opened.push(action) }
     })
 
     expect(result).toMatchObject({

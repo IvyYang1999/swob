@@ -50,7 +50,7 @@ describe('智能整理 LLM 边界', () => {
   it('请求函数把结构化建议返回给调用方，不在预览阶段写盘', async () => {
     const call = vi.fn().mockResolvedValue('[{"sessionId":"s1","folder":"产品","topic":"需求","tags":["产品"],"confidence":0.9}]')
     const result = await requestSmartOrganization(
-      { provider: 'openai', apiKey: ['unit', 'test'].join('-'), model: 'test' },
+      { provider: 'openai', credential: ['unit', 'test'].join('-'), model: 'test' },
       [{ sessionId: 's1', title: '需求讨论', summary: '确定 Vault 模型' }],
       ['工程'],
       call

@@ -53,6 +53,8 @@ export const RESUME_AUDIT_SOURCES = [
   'zcode'
 ] as const satisfies readonly SessionSource[]
 
+export type ResumeAuditSource = (typeof RESUME_AUDIT_SOURCES)[number]
+
 export type ResumeAuditFailureCode =
   | 'resume-unavailable'
   | 'intra-file-branch'
@@ -123,7 +125,7 @@ export interface ResumeAuditStats extends ResumeAuditLevelStats {
 export interface ResumeAuditReport extends ResumeAuditStats {
   generatedAt: string
   readOnly: true
-  perSource: Record<SessionSource, ResumeAuditStats>
+  perSource: Record<ResumeAuditSource, ResumeAuditStats>
 }
 
 export interface ResumeAuditOptions {
@@ -133,7 +135,7 @@ export interface ResumeAuditOptions {
   now?: () => Date
   binaryAvailable?: (binary: string, pathEnv: string) => boolean
   /** Canonical harness targets; tests may override discovery without changing HOME. */
-  resumeTargets?: Partial<Record<SessionSource, string[]>>
+  resumeTargets?: Partial<Record<ResumeAuditSource, string[]>>
   dbRecordExists?: (
     source: SqliteAgentSource,
     sourceRef: string,
@@ -142,7 +144,7 @@ export interface ResumeAuditOptions {
 }
 
 interface AuditOutcome {
-  source: SessionSource
+  source: ResumeAuditSource
   sessionId: string
   status: 'ok' | 'fail' | 'env-missing' | 'skipped'
   level: 'L1' | 'L2' | 'L3'
@@ -160,7 +162,7 @@ type ResumeTargetData = ResumeL3TargetData
 
 interface ResumeAuditRuntime {
   options: ResumeAuditOptions
-  targets: Record<SessionSource, string[]>
+  targets: Record<ResumeAuditSource, string[]>
   rawFileCache: Map<string, Promise<RawJsonlMessage[]>>
   sqliteSnapshots: Map<string, string>
   snapshotDirs: string[]
@@ -180,7 +182,7 @@ interface WireField {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-const BINARY_BY_SOURCE: Record<SessionSource, string> = {
+const BINARY_BY_SOURCE: Record<ResumeAuditSource, string> = {
   'claude-code': 'claude',
   codex: 'codex',
   cursor: 'cursor',
@@ -205,8 +207,8 @@ const MISMATCH_FIXES: Record<ResumeAuditMismatchKind, string> = {
 
 const SQLITE_TIMEOUT_MS = 10_000
 
-function sourceOf(session: SessionSummary): SessionSource {
-  return session.source || 'claude-code'
+function sourceOf(session: SessionSummary): ResumeAuditSource {
+  return (session.source || 'claude-code') as ResumeAuditSource
 }
 
 function emptyTarget(status: ResumeTargetData['status']): ResumeTargetData {
@@ -297,7 +299,7 @@ function findCursorResumeStores(home: string): string[] {
   return stores
 }
 
-function buildTargetLists(options: ResumeAuditOptions): Record<SessionSource, string[]> {
+function buildTargetLists(options: ResumeAuditOptions): Record<ResumeAuditSource, string[]> {
   const overrides = options.resumeTargets || {}
   const home = options.home || runtimeHome()
   return {
@@ -373,7 +375,7 @@ async function loadCodexTarget(sessionId: string, runtime: ResumeAuditRuntime): 
     return emptyTarget('unparseable')
   }
   if (raw.length === 0) return emptyTarget(fileHasData(target) ? 'unparseable' : 'empty')
-  const messages = rawAnchorMessages(raw, 'codex')
+  const messages = rawAnchorMessages(raw)
   return { status: messages.length > 0 ? 'found' : 'empty', defaultMessages: messages, allMessages: messages }
 }
 
@@ -663,7 +665,7 @@ async function loadSqliteAgentTarget(
     if (!exists) return emptyTarget('missing')
     const raw = await loadSqliteAgentRawMessages(source, sourceRef, sessionId)
     if (raw.length === 0) return emptyTarget('empty')
-    const messages = rawAnchorMessages(raw, source)
+    const messages = rawAnchorMessages(raw)
     return {
       status: messages.length > 0 ? 'found' : 'empty',
       defaultMessages: messages,
@@ -691,7 +693,7 @@ async function loadResumeTarget(
 }
 
 function classifyL3(
-  source: SessionSource,
+  source: ResumeAuditSource,
   sessionId: string,
   expected: ResumeAuditAnchors,
   target: ResumeTargetData
@@ -795,7 +797,7 @@ function sourceReferences(session: SessionSummary): string[] {
 }
 
 function fail(
-  source: SessionSource,
+  source: ResumeAuditSource,
   sessionId: string,
   level: 'L1' | 'L2',
   failureCode: ResumeAuditFailureCode
@@ -1001,7 +1003,7 @@ export async function runResumeAudit(options: ResumeAuditOptions = {}): Promise<
         source,
         summarize(outcomes.filter((outcome) => outcome.source === source))
       ])
-    ) as Record<SessionSource, ResumeAuditStats>
+    ) as Record<ResumeAuditSource, ResumeAuditStats>
 
     return {
       generatedAt: (options.now || (() => new Date()))().toISOString(),

@@ -8,6 +8,8 @@
  * - 错误/失败
  */
 
+import type { RawJsonlMessage } from './types'
+
 export interface ToolCall {
   id: string
   name: string
@@ -57,23 +59,6 @@ export interface ExecutionTree {
   tokenTimeline: Array<{ turnIndex: number; cumulative: number; delta: number }>
 }
 
-interface RawMessage {
-  uuid?: string
-  type?: string
-  timestamp?: string
-  message?: {
-    role?: string
-    content?: string | Array<Record<string, unknown>>
-    usage?: {
-      input_tokens?: number
-      output_tokens?: number
-      cache_read_input_tokens?: number
-      cache_creation_input_tokens?: number
-    }
-  }
-  isSidechain?: boolean
-}
-
 function extractText(content: unknown): string {
   if (!content) return ''
   if (typeof content === 'string') return content
@@ -117,7 +102,7 @@ function extractToolResults(content: unknown): Array<{ toolUseId: string; text: 
     })
 }
 
-export function buildExecutionTree(messages: RawMessage[], sessionId: string): ExecutionTree {
+export function buildExecutionTree(messages: RawJsonlMessage[], sessionId: string): ExecutionTree {
   const turns: TurnInfo[] = []
   const pendingToolCalls = new Map<string, ToolCall>()
   const pendingAgents = new Map<string, AgentSpawn>()

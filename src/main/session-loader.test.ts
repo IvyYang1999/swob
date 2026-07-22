@@ -312,8 +312,8 @@ describe('Claude session discovery', () => {
       }
     ]
     fs.mkdirSync(codexDir, { recursive: true })
-    fs.writeFileSync(path.join(codexDir, 'rollout-copy-a.jsonl'), codexRows(500, 200, '1').map(JSON.stringify).join('\n'))
-    fs.writeFileSync(path.join(codexDir, 'rollout-copy-b.jsonl'), codexRows(650, 250, '2').map(JSON.stringify).join('\n'))
+    fs.writeFileSync(path.join(codexDir, 'rollout-copy-a.jsonl'), codexRows(500, 200, '1').map((row) => JSON.stringify(row)).join('\n'))
+    fs.writeFileSync(path.join(codexDir, 'rollout-copy-b.jsonl'), codexRows(650, 250, '2').map((row) => JSON.stringify(row)).join('\n'))
 
     const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
     const codexSessions = sessions.filter((session) => session.source === 'codex')

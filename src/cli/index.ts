@@ -40,7 +40,7 @@ import {
   writeSessionLineageRegistry
 } from '../main/session-lineage'
 import { detectSessionSourceForJsonl } from '../main/session-source'
-import { grepTranscripts, synchronizeSearchSources, type SearchIndexSource } from '../main/search-index'
+import { grepTranscriptsReadOnly, synchronizeSearchSources, type SearchIndexSource } from '../main/search-index'
 import { findCodexSessionFiles, loadCodexRawMessages } from '../main/codex-loader'
 import { findCursorSessionFiles, loadCursorRawMessages } from '../main/cursor-loader'
 import {
@@ -77,7 +77,11 @@ const processIo: CliIo = {
 let activeIo = processIo
 
 class CliFailure extends Error {
-  constructor(message: string, readonly exitCode = 1) {
+  constructor(
+    message: string,
+    readonly exitCode = 1,
+    readonly details?: { code: string; hint: string; retryable: boolean }
+  ) {
     super(message)
   }
 }
@@ -366,16 +370,32 @@ async function cmdGrep(query: string, flags: Record<string, string | true>): Pro
   for (const backup of findLibrarySessionsWithMissingSources()) {
     sources.push({ filePath: backup.backupPath, source: 'library-backup' })
   }
-  await synchronizeSearchSources(sources)
+  let results: ReturnType<typeof grepTranscriptsReadOnly>
   const startedAt = performance.now()
-  const results = grepTranscripts(query, {
-    source: typeof flags.source === 'string' ? flags.source : undefined,
-    sessionIds: typeof flags.folder === 'string' ? folderSessionIds(flags.folder) : undefined,
-    after: dateBoundary(flags.after, false),
-    before: dateBoundary(flags.before, true),
-    project: typeof flags.project === 'string' ? flags.project : undefined,
-    limit: positiveInteger(flags.limit, 100)
-  })
+  try {
+    await synchronizeSearchSources(sources)
+    results = grepTranscriptsReadOnly(query, {
+      source: typeof flags.source === 'string' ? flags.source : undefined,
+      sessionIds: typeof flags.folder === 'string' ? folderSessionIds(flags.folder) : undefined,
+      after: dateBoundary(flags.after, false),
+      before: dateBoundary(flags.before, true),
+      project: typeof flags.project === 'string' ? flags.project : undefined,
+      limit: positiveInteger(flags.limit, 100)
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String(error.code)
+      : ''
+    if (code === 'SQLITE_BUSY' || /database is locked/i.test(message)) {
+      throw new CliFailure('搜索索引暂时被占用', 1, {
+        code: 'SEARCH_INDEX_BUSY',
+        hint: 'GUI 正在建索引，稍后再试',
+        retryable: true
+      })
+    }
+    throw error
+  }
   out({
     query,
     filters: {
@@ -743,7 +763,10 @@ export async function runCli(
     return await dispatch(cmd, flags)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    activeIo.stderr(JSON.stringify({ error: message }) + '\n')
+    const details = error instanceof CliFailure ? error.details : undefined
+    activeIo.stderr(JSON.stringify({
+      error: details ? { message, ...details } : message
+    }) + '\n')
     return errorExitCode(error)
   } finally {
     console.log = originalConsole.log

@@ -231,7 +231,7 @@ function LensView({
   onRenameCancel: () => void
   onDoubleClickRename: (sessionId: string) => void
 }) {
-  const { sessions, config, cloudSessionIds, applyOrganization } = useStore()
+  const { sessions, config, cloudSessionIds, applyOrganization, selectedUniqueId } = useStore()
   const sortedSessions = useMemo(
     () => sortSessionsForView(sessions, config?.preferences?.defaultSort)
       .filter((session) => config?.preferences?.singleTurnBehavior !== 'hide' || !isSingleTurnSession(session)),
@@ -242,44 +242,89 @@ function LensView({
     cloudSessionIds
   }), [sortedSessions, dimension, config?.sessionMeta, cloudSessionIds])
 
+  // Collapse state: Map<groupId, boolean (expanded)>. Default all collapsed.
+  const [expandedGroups, setExpandedGroups] = useState<Map<string, boolean>>(new Map())
+
+  // Reset collapse state when dimension changes
+  const prevDimension = useRef(dimension)
+  useEffect(() => {
+    if (prevDimension.current !== dimension) {
+      setExpandedGroups(new Map())
+      prevDimension.current = dimension
+    }
+  }, [dimension])
+
+  // Auto-expand group containing the currently selected session
+  const selectedGroupId = useMemo(() => {
+    if (!selectedUniqueId) return null
+    for (const group of groups) {
+      if (group.items.some((s) => s.id === selectedUniqueId)) return group.id
+    }
+    return null
+  }, [groups, selectedUniqueId])
+
+  const isGroupExpanded = useCallback((groupId: string): boolean => {
+    if (groupId === selectedGroupId) return true
+    return expandedGroups.get(groupId) ?? false
+  }, [expandedGroups, selectedGroupId])
+
+  const toggleGroup = useCallback((groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Map(prev)
+      next.set(groupId, !isGroupExpanded(groupId))
+      return next
+    })
+  }, [isGroupExpanded])
+
   return (
     <div data-testid="lens-view" className="px-2 pb-3 space-y-3">
-      {groups.map((group) => (
-        <section key={group.id} data-lens-group={group.id} className="min-w-0">
-          <div className={`h-8 px-2 flex items-center gap-2 border-l-2 ${LENS_COLOR_CLASSES[group.color]}`}>
-            <span className="text-xs font-medium text-body truncate">{group.label}</span>
-            <span className="ml-auto px-1.5 py-0.5 rounded-full text-[10px] bg-surface text-muted">{group.items.length}</span>
-            {dimension === 'turns' && group.id === 'single' && group.items.length > 0 && (
-              <button
-                onClick={() => void applyOrganization('archive', group.items.map((session) => ({
-                  sessionId: session.sessionId || session.id,
-                  targetRelativeFolder: '归档/单轮会话'
-                })))}
-                className="text-[10px] text-muted hover:text-primary"
-              >
-                批量归档
-              </button>
+      {groups.map((group) => {
+        const expanded = isGroupExpanded(group.id)
+        return (
+          <section key={group.id} data-lens-group={group.id} className="min-w-0">
+            <button
+              type="button"
+              onClick={() => toggleGroup(group.id)}
+              className={`w-full h-8 px-2 flex items-center gap-2 border-l-2 cursor-pointer select-none ${LENS_COLOR_CLASSES[group.color]}`}
+            >
+              {expanded ? <ChevronDown size={12} className="shrink-0 text-muted" /> : <ChevronRight size={12} className="shrink-0 text-muted" />}
+              <span className="text-xs font-medium text-body truncate">{group.label}</span>
+              <span className="ml-auto px-1.5 py-0.5 rounded-full text-[10px] bg-surface text-muted">{group.items.length}</span>
+              {dimension === 'turns' && group.id === 'single' && group.items.length > 0 && (
+                <span
+                  role="button"
+                  onClick={(e) => { e.stopPropagation(); void applyOrganization('archive', group.items.map((session) => ({
+                    sessionId: session.sessionId || session.id,
+                    targetRelativeFolder: '归档/单轮会话'
+                  }))) }}
+                  className="text-[10px] text-muted hover:text-primary"
+                >
+                  批量归档
+                </span>
+              )}
+            </button>
+            {expanded && (
+              <div className="pt-1">
+                {group.items.map((session) => (
+                  <SessionItem
+                    key={`${group.id}:${session.id}`}
+                    session={session}
+                    depth={0}
+                    allowDrag={false}
+                    onContextMenu={onContextMenu}
+                    isRenaming={renamingSessionId === session.id}
+                    renameValue={sessionRenameValue}
+                    onRenameChange={onRenameChange}
+                    onRenameSubmit={onRenameSubmit}
+                    onRenameCancel={onRenameCancel}
+                    onDoubleClickRename={onDoubleClickRename}
+                  />
+                ))}
+              </div>
             )}
-          </div>
-          <div className="pt-1">
-            {group.items.map((session) => (
-              <SessionItem
-                key={`${group.id}:${session.id}`}
-                session={session}
-                depth={0}
-                allowDrag={false}
-                onContextMenu={onContextMenu}
-                isRenaming={renamingSessionId === session.id}
-                renameValue={sessionRenameValue}
-                onRenameChange={onRenameChange}
-                onRenameSubmit={onRenameSubmit}
-                onRenameCancel={onRenameCancel}
-                onDoubleClickRename={onDoubleClickRename}
-              />
-            ))}
-          </div>
-        </section>
-      ))}
+          </section>
+        )
+      })}
     </div>
   )
 }
@@ -810,7 +855,7 @@ export function Sidebar({ width }: { width: number }) {
             onClick={() => setSidebarMode('folders')}
             className={`py-1 rounded text-[11px] flex items-center justify-center gap-1.5 ${sidebarMode === 'folders' ? 'bg-hover text-primary' : 'text-muted hover:text-secondary'}`}
           >
-            <FolderTree size={12} />文件夹
+            <FolderTree size={12} />整理会话
           </button>
           <button
             role="tab"
@@ -818,11 +863,11 @@ export function Sidebar({ width }: { width: number }) {
             onClick={() => setSidebarMode('lens')}
             className={`py-1 rounded text-[11px] flex items-center justify-center gap-1.5 ${sidebarMode === 'lens' ? 'bg-hover text-primary' : 'text-muted hover:text-secondary'}`}
           >
-            <Focus size={12} />镜头
+            <Focus size={12} />查看全部会话
           </button>
         </div>
         {sidebarMode === 'lens' && (
-          <div className="lens-chip-strip flex gap-1 overflow-x-auto pb-0.5" aria-label="镜头维度">
+          <div className="lens-chip-strip flex gap-1 overflow-x-auto pb-0.5" aria-label="分组方式">
             {LENS_DEFINITIONS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
@@ -868,9 +913,9 @@ export function Sidebar({ width }: { width: number }) {
             {rootFolders.length === 0 && sortedSessions.length > 0 && (
               <div className="m-3 p-3 border border-edge rounded bg-surface/40">
                 <div className="flex items-center gap-2 text-sm text-primary"><WandSparkles size={14} className="text-accent" />开始整理你的会话</div>
-                <p className="text-xs text-muted mt-1.5 leading-relaxed">切换到镜头浏览，或一键按项目整理。</p>
+                <p className="text-xs text-muted mt-1.5 leading-relaxed">切换到查看全部会话，或一键按项目整理。</p>
                 <div className="flex gap-2 mt-2">
-                  <button onClick={() => setSidebarMode('lens')} className="text-[11px] text-accent hover:text-primary">用镜头浏览</button>
+                  <button onClick={() => setSidebarMode('lens')} className="text-[11px] text-accent hover:text-primary">查看全部会话</button>
                   <button onClick={() => setOrganizerKind('project')} className="text-[11px] text-secondary hover:text-primary">按项目整理 →</button>
                 </div>
               </div>

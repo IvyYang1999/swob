@@ -164,25 +164,32 @@ describe('Vault 与镜头双层导航', () => {
     mockStore.sessions = [makeSession({ firstUserMessage: '镜头测试会话' })] as any
   })
 
-  it('切换到镜头后显示 7 个维度，且会话不可拖拽', () => {
+  it('切换到查看全部会话后显示 7 个维度，展开分组后会话不可拖拽', () => {
     render(<Sidebar width={260} />)
-    fireEvent.click(screen.getByRole('tab', { name: /镜头/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /查看全部会话/ }))
 
     for (const label of ['项目', '日期', '标签', 'harness', '轮数', '来源', '无分组']) {
       expect(screen.getByRole('button', { name: new RegExp(`^${label}$`, 'i') })).toBeTruthy()
     }
+    // Groups default collapsed -- click the first group header to expand it
+    const groupHeader = document.querySelector('[data-lens-group] button')
+    expect(groupHeader).toBeTruthy()
+    fireEvent.click(groupHeader!)
     const sessionButton = document.querySelector('[data-session-id="parent-uuid"]')
     expect(sessionButton?.getAttribute('draggable')).toBe('false')
   })
 
-  it('标签镜头会把同一会话平铺进多个分组', () => {
+  it('标签分组会把同一会话平铺进多个分组', () => {
     mockStore.config.sessionMeta = { 'parent-uuid': { tags: ['产品', '性能'] } } as any
     render(<Sidebar width={260} />)
-    fireEvent.click(screen.getByRole('tab', { name: /镜头/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /查看全部会话/ }))
     fireEvent.click(screen.getByRole('button', { name: /标签/ }))
 
     expect(document.querySelector('[data-lens-group="tag:产品"]')).toBeTruthy()
     expect(document.querySelector('[data-lens-group="tag:性能"]')).toBeTruthy()
+    // Expand both groups (groups default collapsed)
+    const groupHeaders = document.querySelectorAll('[data-lens-group] button')
+    groupHeaders.forEach((header) => fireEvent.click(header))
     expect(screen.getAllByText('镜头测试会话')).toHaveLength(2)
   })
 
@@ -347,7 +354,7 @@ describe('设置页的视图偏好会驱动侧边栏', () => {
 
     expect(screen.queryByText('应隐藏的单轮')).toBeNull()
     expect(screen.queryByText('sidebar.single_turn')).toBeNull()
-    fireEvent.click(screen.getByRole('tab', { name: /镜头/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /查看全部会话/ }))
     expect(screen.queryByText('应隐藏的单轮')).toBeNull()
   })
 
@@ -378,7 +385,7 @@ describe('设置页的视图偏好会驱动侧边栏', () => {
     mockStore.sessions = [makeSession({ source: 'codex' })] as any
 
     render(<Sidebar width={260} />)
-    fireEvent.click(screen.getByRole('tab', { name: /镜头/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /查看全部会话/ }))
 
     expect(document.querySelector('[data-lens-group="harness:codex"]')).toBeTruthy()
   })

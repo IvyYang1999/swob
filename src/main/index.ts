@@ -1,37 +1,9 @@
+// MUST stay the first import: rebinds defunct stdio fds before anything
+// writes to console or spawns a child (see stdio-repair.ts).
+import { logSpawnSelfTest } from './stdio-repair'
 import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen } from 'electron'
 import path from 'path'
 const { join, dirname, basename, relative } = path
-
-// GUI-launched (LaunchServices/`open`) apps can start with stdio fds 0-2
-// closed; Node's posix_spawn then fails every child_process call with EBADF
-// (Keychain reads, terminal detection, the agent engine). Reopen closed fds
-// to /dev/null before anything spawns. openSync grabs the lowest free fd, so
-// running in order 0→2 repairs exactly the closed ones.
-{
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const nodeFs = require('fs') as typeof import('fs')
-  const repaired: number[] = []
-  for (const fd of [0, 1, 2]) {
-    try {
-      nodeFs.fstatSync(fd)
-    } catch {
-      try {
-        nodeFs.openSync('/dev/null', fd === 0 ? 'r' : 'w')
-        repaired.push(fd)
-      } catch { /* leave as-is */ }
-    }
-  }
-  if (repaired.length > 0) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const nodeOs = require('os') as typeof import('os')
-      nodeFs.appendFileSync(
-        path.join(nodeOs.homedir(), '.claude-session-manager', 'stdio-repair.log'),
-        `${new Date().toISOString()} repaired fds: ${repaired.join(',')}\n`
-      )
-    } catch { /* diagnostics only */ }
-  }
-}
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
@@ -2431,6 +2403,7 @@ app.whenReady().then(async () => {
   setupAutoUpdater()
   autoInstallCliOnStartup()
 
+  logSpawnSelfTest()
   registerSpotlightShortcut(getSpotlightShortcut())
   registerAgentIpc({
     getLibraryRoot: () => {

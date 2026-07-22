@@ -73,7 +73,7 @@ export function AgentApp() {
   }, [])
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden rounded-xl border border-edge bg-panel text-primary">
+    <div className="flex h-screen flex-col overflow-hidden bg-panel text-primary">
       {/* Drag bar */}
       <div
         className="flex shrink-0 items-center gap-2 border-b border-edge px-3 py-2"

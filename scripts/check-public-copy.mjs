@@ -39,7 +39,7 @@ const providers = [...providerSource.matchAll(definitionPattern)].map((match) =>
   tier: match[3]
 }))
 
-for (const [tier, expected] of [['native', 5], ['compatible', 1], ['detection-only', 5]]) {
+for (const [tier, expected] of [['native', 6], ['compatible', 1], ['detection-only', 4]]) {
   const actual = providers.filter((provider) => provider.tier === tier).length
   if (actual !== expected) {
     errors.push(`provider registry tier ${tier}: expected ${expected}, found ${actual}`)

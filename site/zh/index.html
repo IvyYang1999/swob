@@ -73,13 +73,13 @@
         <div class="hero-copy">
           <div class="eyebrow">开源 · macOS · 本地优先</div>
           <h1>为 AI 对话画一张 <span class="hero-last">Git 图谱。</span></h1>
-          <p class="hero-lead">追踪会话如何<strong>分叉、压缩和继续</strong>。通过五个原生格式适配器读取历史，保留每个来源的能力缺口，并看清每次执行背后的工具调用与上下文压力。</p>
+          <p class="hero-lead">追踪会话如何<strong>分叉、压缩和继续</strong>。通过六个原生格式适配器读取历史，保留每个来源的能力缺口，并看清每次执行背后的工具调用与上下文压力。</p>
           <div class="cta-row">
             <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases">打开已验证的 Releases</a>
             <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">查看当前 main</a>
             <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases">版本、签名与架构</a>
           </div>
-          <p class="release-note"><strong>先讲事实，再讲卖点：</strong>公开的 v1.2.0 是未签名的五来源稳定版，无法自动跨越即将启用的 Developer ID 信任根。首个正式签名版发布后，需要手动下载 DMG 覆盖安装一次；之后的签名版本才走独立且经过 E2E 验收的更新通道。此处展示的会话星图、调试器、多来源导入（5 原生 + 1 兼容 + 5 实验性检测）、AI Insights 与 SQLite FTS 已在当前 <code>main</code> 实现，但尚未体现在公开安装包中。</p>
+          <p class="release-note"><strong>先讲事实，再讲卖点：</strong>公开的 v1.2.0 是未签名的五来源稳定版，无法自动跨越即将启用的 Developer ID 信任根。首个正式签名版发布后，需要手动下载 DMG 覆盖安装一次；之后的签名版本才走独立且经过 E2E 验收的更新通道。此处展示的会话星图、调试器、多来源导入（6 原生 + 1 兼容 + 4 实验性检测）、AI Insights 与 SQLite FTS 已在当前 <code>main</code> 实现，但尚未体现在公开安装包中。</p>
         </div>
 
         <figure class="product-frame">
@@ -101,7 +101,7 @@
         <div class="proof-item"><span class="proof-value">253 / 1,621</span><span class="proof-label">原始会话已缺失；本地备份仍保留</span></div>
         <div class="proof-item"><span class="proof-value">93.58%</span><span class="proof-label">该审计语料中可验证的续接率</span></div>
         <div class="proof-item"><span class="proof-value">1,700+</span><span class="proof-label">在当前本地性能语料中验证的会话数</span></div>
-        <div class="proof-item"><span class="proof-value">5+1+5</span><span class="proof-label">原生读取 + 兼容 + 实验性检测（当前 main）</span></div>
+        <div class="proof-item"><span class="proof-value">6+1+4</span><span class="proof-label">原生读取 + 兼容 + 实验性检测（当前 main）</span></div>
       </div>
     </section>
 
@@ -202,7 +202,7 @@
         <div class="shell">
           <div class="section-head">
             <div class="eyebrow">03 · 来源</div>
-            <h2>5 个原生适配器、1 个兼容格式、5 个纯检测来源。</h2>
+            <h2>6 个原生适配器、1 个兼容格式、4 个纯检测来源。</h2>
             <p class="section-intro">层级只说明是否能解析消息正文，不代表检索、用量、血统、实时监视、归档和 Resume 全部可用。当前 <code>main</code> 会明确展示这些差异。</p>
           </div>
           <div class="source-list" aria-label="支持的来源家族">
@@ -211,10 +211,10 @@
             <div class="source" style="--source:#61a96f"><div class="source-name"><span class="source-dot"></span>Cursor</div><div class="source-status">原生 · 正文／实时监视／终端 Resume；检索实验；无权威用量</div></div>
             <div class="source" style="--source:#21a7bd"><div class="source-name"><span class="source-dot"></span>OpenCode</div><div class="source-status">原生 · 正文／用量／归档／终端 Resume；检索实验</div></div>
             <div class="source" style="--source:#d4554c"><div class="source-name"><span class="source-dot"></span>ZCode</div><div class="source-status">原生 · 正文／用量／归档；检索和工作区深链实验</div></div>
+            <div class="source" style="--source:#3cab93"><div class="source-name"><span class="source-dot"></span>Pi</div><div class="source-status">原生 · 正文／工具／thinking／用量／关系／检索／归档；Resume 实验</div></div>
             <div class="source" style="--source:#d3659a"><div class="source-name"><span class="source-dot"></span>CC-Mirror</div><div class="source-status">兼容 · 正文／检索／用量；终端 Resume 实验</div></div>
             <div class="source" style="--source:#8c79e8"><div class="source-name"><span class="source-dot"></span>Antigravity</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
             <div class="source" style="--source:#8a898c"><div class="source-name"><span class="source-dot"></span>Grok / Factory</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
-            <div class="source" style="--source:#3cab93"><div class="source-name"><span class="source-dot"></span>Pi</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
             <div class="source" style="--source:#e48a43"><div class="source-name"><span class="source-dot"></span>Kimi Code</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
             <div class="source" style="--source:#7657ca"><div class="source-name"><span class="source-dot"></span>Hermes</div><div class="source-status">纯检测 · 只发现文件，不读取消息正文</div></div>
           </div>
@@ -275,7 +275,7 @@
             <h3>会话星图与调试器</h3>
             <p>本页截图来自当前 main 已经实现的这些能力。</p>
             <ul>
-              <li>多来源导入（5 原生 + 1 兼容 + 5 实验性检测）与 Session Galaxy 会话星图</li>
+              <li>多来源导入（6 原生 + 1 兼容 + 4 实验性检测）与 Session Galaxy 会话星图</li>
               <li>执行树、上下文检查器与会话审计</li>
               <li>需确认后启用的可选 AI Insights</li>
               <li>SQLite FTS5、文件监视与 Worker 性能优化</li>

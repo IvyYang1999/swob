@@ -89,7 +89,10 @@ import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
 import { detectSessionSourceFromPath } from './session-source'
+import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
 import { synchronizeSearchSources } from './search-index'
+import { cancelCanonicalProviders } from './provider-runtime'
+import { closeCanonicalSessionStore } from './canonical-store'
 import { buildInsights } from './insights'
 import {
   drilldownInsights,
@@ -311,6 +314,7 @@ function sessionSourceRoots(): string[] {
   if (isSessionSourceSupported('cursor')) roots.push(join(home, '.cursor', 'projects'))
   if (isSessionSourceSupported('opencode')) roots.push(join(home, '.local', 'share', 'opencode'))
   if (isSessionSourceSupported('zcode')) roots.push(join(home, '.zcode', 'cli', 'db'))
+  if (isSessionSourceSupported('pi')) roots.push(join(home, '.pi', 'agent', 'sessions'))
   return roots
 }
 
@@ -625,6 +629,14 @@ function cleanupRuntimeResources(): Promise<void> {
         currentLibraryRescanController?.dispose()
         currentTranscriptWatcher?.stop()
         currentSessionSyncCoordinator?.stop()
+      }
+    },
+    {
+      name: 'canonical-providers',
+      timeoutMs: 100,
+      run: () => {
+        cancelCanonicalProviders()
+        closeCanonicalSessionStore()
       }
     },
     {
@@ -1403,7 +1415,10 @@ function currentSearchSources(): Array<{
   isLibraryBackup?: boolean
   loadRaw?: () => Promise<import('./types').RawJsonlMessage[]>
 }> {
-  const files = findAllSessionFiles().filter((filePath) => !filePath.includes('/subagents/'))
+  const files = findAllSessionFiles().filter((filePath) =>
+    !filePath.includes('/subagents/') &&
+    !providerUsesCanonicalRuntime(detectSessionSourceFromPath(filePath) || '')
+  )
   const physicalSources = filterVisibleSearchSources(files.map((filePath) => {
     const source = detectSessionSourceFromPath(filePath) || undefined
     return {

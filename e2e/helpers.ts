@@ -31,7 +31,7 @@ export async function launchAppWithEnv(options: { env?: Record<string, string> }
       SWOB_TEST_LOCALE: 'zh-CN',
       ...options.env,
       NODE_ENV: 'test',
-      SWOB_TEST_HOME: options.env?.SWOB_TEST_HOME || options.env?.HOME || ''
+      SWOB_TEST_HOME: testHome
     }
   })
   const page = await app.firstWindow()
@@ -43,6 +43,7 @@ export interface LaunchAppOptions {
   claudeTurns?: number
   viewport?: { width: number; height: number }
   includeCursorFixture?: boolean
+  includePiFixture?: boolean
   env?: Record<string, string>
 }
 
@@ -80,7 +81,13 @@ function writeJsonl(filePath: string, rows: unknown[]): void {
   fs.writeFileSync(filePath, rows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf-8')
 }
 
-function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: number, includeCursorFixture = false): void {
+function createSyntheticCorpus(
+  home: string,
+  libraryRoot: string,
+  claudeTurns: number,
+  includeCursorFixture = false,
+  includePiFixture = false
+): void {
   const project = path.join(home, 'project')
   fs.mkdirSync(project, { recursive: true })
   fs.mkdirSync(libraryRoot, { recursive: true })
@@ -145,6 +152,12 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
     path.join(home, '.claude', 'projects', '-synthetic-project', `${CLAUDE_FIXTURE_ID}.jsonl`),
     claudeRows
   )
+
+  if (includePiFixture) {
+    const piPath = path.join(home, '.pi', 'agent', 'sessions', 'synthetic-project', 'session.jsonl')
+    fs.mkdirSync(path.dirname(piPath), { recursive: true })
+    fs.copyFileSync(path.join(__dirname, '..', 'testdata', 'pi', 'session.jsonl'), piPath)
+  }
 
   writeJsonl(
     path.join(
@@ -287,7 +300,13 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
   for (const dir of [home, libraryRoot, userData, cache, logs, temp]) {
     fs.mkdirSync(dir, { recursive: true })
   }
-  createSyntheticCorpus(home, libraryRoot, options.claudeTurns ?? 3, options.includeCursorFixture ?? false)
+  createSyntheticCorpus(
+    home,
+    libraryRoot,
+    options.claudeTurns ?? 3,
+    options.includeCursorFixture ?? false,
+    options.includePiFixture ?? false
+  )
 
   const app = await electron.launch({
     args: [
@@ -298,10 +317,20 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     ],
     env: { ...isolatedEnvironment(home, libraryRoot, sandboxRoot), ...options.env }
   })
-  const page = await app.firstWindow()
-  await page.waitForLoadState('domcontentloaded')
-  if (options.viewport) await resizeAppWindow(app, page, options.viewport)
-  return { app, page, sandboxRoot, home, libraryRoot, userData }
+  try {
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    if (options.viewport) await resizeAppWindow(app, page, options.viewport)
+    return { app, page, sandboxRoot, home, libraryRoot, userData }
+  } catch (error) {
+    await Promise.race([
+      app.close().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 5000))
+    ])
+    try { app.process().kill('SIGKILL') } catch { /* already closed */ }
+    fs.rmSync(sandboxRoot, { recursive: true, force: true })
+    throw error
+  }
 }
 
 export async function closeApp(launched: LaunchedApp): Promise<void> {

@@ -79,15 +79,20 @@ test.describe.serial('merged tF10/tF21 visual acceptance', () => {
     }
 
     const pngByTheme = new Map<string, string>()
+    let previousSource: string | null = null
     for (const theme of ['Light', 'Dark', 'Minimal']) {
       await page.getByRole('button', { name: theme }).click()
       await expect(preview).toBeVisible({ timeout: 20_000 })
+      if (previousSource) {
+        await expect.poll(() => preview.getAttribute('src')).not.toBe(previousSource)
+      }
       const source = await preview.getAttribute('src')
       expect(source).toMatch(/^data:image\/png;base64,/)
       const bytes = Buffer.from(source!.split(',')[1], 'base64')
       expect([...bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
       expect(bytes.byteLength).toBeGreaterThan(10_000)
       pngByTheme.set(theme, source!)
+      previousSource = source
       await page.screenshot({ path: testInfo.outputPath(`share-${theme.toLowerCase()}.png`) })
     }
     expect(new Set(pngByTheme.values()).size).toBe(3)

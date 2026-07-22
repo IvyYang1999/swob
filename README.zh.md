@@ -8,7 +8,7 @@
 
 **找回丢失的上下文，追踪 fork 与 compact，调试 Agent 到底做了什么。**
 
-Swob 通过 **5 个原生格式适配器**与 1 个 Claude 兼容格式解析本地历史；另有 5 个实验来源只能发现文件，尚不能读取消息正文。来源确有证据时，Swob 才提供血统、SQLite FTS5 增量检索、执行检查、带来源标记的审计和可选 AI Insights。
+Swob 通过 **6 个原生格式适配器**与 1 个 Claude 兼容格式解析本地历史；另有 4 个实验来源只能发现文件，尚不能读取消息正文。来源确有证据时，Swob 才提供血统、SQLite FTS5 增量检索、执行检查、带来源标记的审计和可选 AI Insights。
 
 [官网](https://ivyyang1999.github.io/swob/) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.md)
 
@@ -48,7 +48,7 @@ Swob 把会话历史当作证据：
 | **253 / 1,621** | 一份真实审计 Library 中，253 个 Claude Code 源会话已在默认 30 天保留策略下消失；Swob 仍保有本地备份。 |
 | **93.58%** | 同一份 1,621 会话、五来源语料的可验证续写率。这是已观察到的语料结果，不是对所有环境的成功率承诺。 |
 | **1,704 sessions** | 当前本地性能和界面验证语料，用来压测新索引与 Insights。 |
-| **5+1+5 来源** | 当前 `main` 原生读取 5 种 harness，支持 1 种兼容格式，另有 5 种实验性文件检测（仅发现文件，尚不读取正文）。 |
+| **6+1+4 来源** | 当前 `main` 原生读取 6 种 harness，支持 1 种兼容格式，另有 4 种实验性文件检测（仅发现文件，尚不读取正文）。 |
 
 ## Session Galaxy
 
@@ -77,7 +77,7 @@ Swob 不止渲染聊天记录：
 
 ## 当前 `main` 的来源
 
-### 原生格式适配器（5）——可解析正文；其余能力按来源区分
+### 原生格式适配器（6）——可解析正文；其余能力按来源区分
 
 | 来源家族 | 状态 | 说明 |
 |---|---|---|
@@ -86,6 +86,7 @@ Swob 不止渲染聊天记录：
 | Cursor | 原生 | 正文、实时监视、终端 Resume 可用；检索为实验能力；用量、血统和原生深链不可用。 |
 | OpenCode | 原生 | 正文、用量、归档、终端 Resume 可用；检索为实验能力；实时监视、血统和原生深链不可用。 |
 | ZCode | 原生 | 正文、用量和归档可用；检索与“打开工作区”深链为实验能力；实时监视和终端 Resume 不可用。 |
+| Pi | 原生 | 正文、工具、thinking、用量、关系、检索和归档可用；实时监视不可用，终端 Resume 仍为实验能力。 |
 
 ### 兼容格式（1）
 
@@ -93,13 +94,12 @@ Swob 不止渲染聊天记录：
 |---|---|---|
 | CC-Mirror | 兼容 | Claude 兼容正文、检索和用量可用；实时监视和归档不可用；终端 Resume 为实验能力。 |
 
-### 实验性检测（5）——仅发现文件，尚不读取正文
+### 实验性检测（4）——仅发现文件，尚不读取正文
 
 | 来源家族 | 状态 | 说明 |
 |---|---|---|
 | Antigravity | 实验 | 可发现本地 transcript 文件。 |
 | Grok / Factory | 实验 | 可发现 JSONL 历史文件。 |
-| Pi | 实验 | 可发现本地 session 文件。 |
 | Kimi Code | 实验 | 可发现本地 `wire.jsonl` 文件。 |
 | Hermes | 实验 | 可发现本地 JSON session 文件。 |
 
@@ -111,7 +111,7 @@ Swob 不止渲染聊天记录：
 
 | 能力 | Swob 当前 `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
 |---|---|---|---|---|
-| 本地多 harness 历史 | ✅ 5 原生 + 1 兼容 + 5 实验检测 | ✅ 9 个 provider | ✅ 9+ 个 Agent | ✅ 9 个工具 |
+| 本地多 harness 历史 | ✅ 6 原生 + 1 兼容 + 4 实验检测 | ✅ 9 个 provider | ✅ 9+ 个 Agent | ✅ 9 个工具 |
 | 可视化会话血统图 | ✅ 验证边 + 分组边 | ◐ Session Board，不是血统图 | — | ◐ 会规范化子会话，未记录血统图 |
 | Compact 历史恢复 | ✅ Claude Code | — | — | — |
 | 执行树 / Agent 调用解剖 | ✅ | ◐ 工具渲染 | ◐ 工具/输出导航 | ◐ 工具混合与子会话 |
@@ -182,7 +182,7 @@ CLI 统一返回 JSON，其他 Agent 不需要抓取界面就能查询 Swob。
 | 通道 | 内容 |
 |---|---|
 | **Stable v1.2.0** | 五来源浏览、血统检测/注册表、compact 展开、搜索、Token Insights、CLI、备份/导出和 resume。公开 DMG 未签名。 |
-| **当前 `main` / 尚未发布** | 新增多 harness 导入（5 原生 + 1 兼容 + 5 实验性检测）、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5，以及 watcher/worker 性能升级。现在可从源码构建。 |
+| **当前 `main` / 尚未发布** | 新增多 harness 导入（6 原生 + 1 兼容 + 4 实验性检测）、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5，以及 watcher/worker 性能升级。现在可从源码构建。 |
 
 ## 技术栈
 

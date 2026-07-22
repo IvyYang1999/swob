@@ -3,7 +3,7 @@ import { builtinProviderForSource } from '../shared/provider-capabilities'
 import { sessionBackupSourcePaths } from './library-manager'
 
 describe('Provider capability snapshots match real call chains', () => {
-  it('archive status follows the physical backup allowlist exactly', () => {
+  it('keeps physical backup and canonical provider archive capabilities distinct', () => {
     expect(sessionBackupSourcePaths({
       filePath: '/fixture/.claude/projects/project/session.jsonl'
     })).toHaveLength(1)
@@ -15,7 +15,6 @@ describe('Provider capability snapshots match real call chains', () => {
     const paths: Record<string, string> = {
       antigravity: '/fixture/.gemini/antigravity/session.json',
       grok: '/fixture/.grok/sessions/session.jsonl',
-      pi: '/fixture/.pi/agent/sessions/session.jsonl',
       kimi: '/fixture/.kimi/sessions/session.jsonl',
       hermes: '/fixture/.hermes/sessions/session.json'
     }
@@ -23,5 +22,8 @@ describe('Provider capability snapshots match real call chains', () => {
       expect(sessionBackupSourcePaths({ filePath }), source).toEqual([])
       expect(builtinProviderForSource(source)?.manifest.capabilities.archive.status, source).toBe('unavailable')
     }
+    const piPath = '/fixture/.pi/agent/sessions/session.jsonl'
+    expect(sessionBackupSourcePaths({ filePath: piPath }), 'pi never copies source JSONL').toEqual([])
+    expect(builtinProviderForSource('pi')?.manifest.capabilities.archive.status).toBe('available')
   })
 })

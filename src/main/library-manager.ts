@@ -42,6 +42,7 @@ import {
   type SessionRemoteState
 } from './session-remote-state'
 import {
+  buildCanonicalLogicalSessionIdentity,
   buildLogicalSessionIdentityFromMeta,
   buildLogicalSessionIdentityFromSummary,
   isValidLogicalSessionIdentity,
@@ -49,6 +50,25 @@ import {
   type LogicalSessionIdentity,
   type LogicalSessionKey
 } from './library-session-identity'
+import {
+  CANONICAL_PROVENANCE_FILE,
+  CANONICAL_RECORDS_FILE,
+  encodeCanonicalPackageProvenance,
+  encodeCanonicalPackageRecords,
+  isCanonicalPackageDescriptor,
+  readCanonicalPackageRecords,
+  type CanonicalPackageDescriptor,
+  type CanonicalPackageProvenance,
+  type CanonicalPackageRecords
+} from './canonical-package'
+import { canonicalRecordsToSessionDetail, canonicalRecordsToSessionSummary } from './canonical-projection'
+import { getCanonicalSessionStore, getLoadedCanonicalSession } from './canonical-store'
+import {
+  builtinProviderForId,
+  builtinProviderForSource,
+  isLegacySessionSource
+} from '../shared/provider-capabilities'
+import type { CanonicalRecord, SourceRef, Tombstone } from '../shared/provider-schema.generated'
 import {
   candidateFromManifest,
   LibrarySessionRegistry,
@@ -136,6 +156,8 @@ export interface SessionMeta {
   origin?: SessionOrigin
   /** Describes the original harness instance; it is never an authorization to write there. */
   sourceInstance?: SessionSourceInstance
+  /** Canonical provider package metadata. backup.jsonl remains absent for this path. */
+  canonicalProvider?: CanonicalPackageDescriptor
 }
 
 export interface SessionOrigin {
@@ -870,6 +892,10 @@ export function parseSessionMeta(
       (typeof meta.topicConfidence !== 'number' || !Number.isFinite(meta.topicConfidence) ||
         meta.topicConfidence < 0 || meta.topicConfidence > 1)) {
       warn('[library-manager] Ignoring invalid session metadata: topicConfidence must be between 0 and 1')
+      return null
+    }
+    if (meta.canonicalProvider !== undefined && !isCanonicalPackageDescriptor(meta.canonicalProvider)) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed canonicalProvider')
       return null
     }
     return parsed as SessionMeta
@@ -1762,8 +1788,32 @@ function refreshSessionRegistryFromDisk(): LibraryIdentityScanIssue[] {
  */
 export function buildSessionSummaryFromManifest(session: LibrarySession): SessionSummary {
   const { meta } = session
-  const persistedSource = meta.logicalIdentity?.sourceFamily !== 'legacy-ambiguous'
-    ? meta.logicalIdentity?.sourceFamily
+  if (meta.canonicalProvider) {
+    const descriptor = meta.canonicalProvider
+    const canonicalPath = path.join(session.dirPath, descriptor.recordsFile)
+    const canonicalPackage = readCanonicalPackageRecords(canonicalPath)
+    const source = builtinProviderForId(descriptor.providerId)?.sourceId
+    if (canonicalPackage && source &&
+      canonicalPackage.providerId === descriptor.providerId &&
+      canonicalPackage.sourceRef.stableId === descriptor.sourceRefStableId &&
+      canonicalPackage.sessionRecordId === descriptor.sessionRecordId) {
+      const summary = canonicalRecordsToSessionSummary(canonicalPackage.records, {
+        filePath: canonicalPath,
+        source,
+        fileSizeBytes: fs.statSync(canonicalPath).size
+      })
+      return {
+        ...summary,
+        libraryDirPath: session.dirPath,
+        libraryMdPath: fs.existsSync(session.mdPath) ? session.mdPath : undefined,
+        cloudBackupState: 'ready',
+        isManifestOnly: false
+      }
+    }
+  }
+  const logicalSource = meta.logicalIdentity?.sourceFamily
+  const persistedSource = logicalSource && isLegacySessionSource(logicalSource)
+    ? logicalSource
     : undefined
   const source = detectSourceFromSourcePaths(sourceFilePathsFromMeta(meta) || [], persistedSource)
   const backupState = backupStateForDir(session.dirPath)
@@ -2769,6 +2819,24 @@ export async function ensureSessionInLibrary(
   originOverride?: Partial<SessionOrigin>,
   instrumentation: SessionCreateInstrumentation = {}
 ): Promise<string> {
+  const canonical = getLoadedCanonicalSession(session.id)
+  if (canonical) {
+    const providerId = canonical.sessionRecord.provenance.providerId
+    const definition = builtinProviderForId(providerId)
+    if (!definition || definition.sourceId !== session.source) {
+      throw new Error('canonical-package-summary-provider-mismatch')
+    }
+    return (await ensureCanonicalPackage(
+      providerId,
+      canonical.sessionRecord.sourceRef,
+      canonical.records
+    )).dirPath
+  }
+  // Pi has no legacy backup path after the runtime bridge. Falling through
+  // here would copy its raw JSONL and create a second logical package.
+  if (session.source && builtinProviderForSource(session.source)?.ingestion === 'provider-host') {
+    throw new Error('canonical-provider-session-not-found')
+  }
   return withLibraryWriter('package-create', () =>
     ensureSessionInLibraryUnderWriter(session, customTitle, originOverride, instrumentation))
 }
@@ -2777,9 +2845,14 @@ async function ensureSessionInLibraryUnderWriter(
   session: SessionSummary,
   customTitle?: string,
   originOverride?: Partial<SessionOrigin>,
-  instrumentation: SessionCreateInstrumentation = {}
+  instrumentation: SessionCreateInstrumentation = {},
+  canonicalOptions?: {
+    identity: LogicalSessionIdentity
+    descriptor: CanonicalPackageDescriptor
+    beforeManifest?: (dirPath: string, meta: SessionMeta) => void | Promise<void>
+  }
 ): Promise<string> {
-  const identity = buildLogicalSessionIdentityFromSummary(session)
+  const identity = canonicalOptions?.identity || buildLogicalSessionIdentityFromSummary(session)
   const key = logicalSessionKey(identity)
   const localDeviceId = getOrCreateLocalDeviceId()
 
@@ -2854,8 +2927,10 @@ async function ensureSessionInLibraryUnderWriter(
         resumeCwd: session.resumeCwd,
         turnCount: session.turnCount,
         origin: captureLocalSessionOrigin(originOverride),
-        sourceInstance: detectSessionSourceInstance(sourceFilePaths)
+        sourceInstance: detectSessionSourceInstance(sourceFilePaths),
+        ...(canonicalOptions ? { canonicalProvider: canonicalOptions.descriptor } : {})
       }
+      await canonicalOptions?.beforeManifest?.(dirPath, meta)
       // Manifest is the commit marker and is created exclusively only after
       // every incomplete marker and directory entry is durable.
       writeSessionMetaFile(dirPath, meta, true)
@@ -2903,6 +2978,217 @@ async function ensureSessionInLibraryUnderWriter(
   } finally {
     lock.release()
   }
+}
+
+export interface EnsureCanonicalPackageResult {
+  dirPath: string
+  recordsPath: string
+  provenancePath: string
+  contentChanged: boolean
+}
+
+function writeCanonicalFileIfChanged(filePath: string, content: string): boolean {
+  assertSafeLibraryFileTarget(_root, filePath)
+  try {
+    if (fs.readFileSync(filePath, 'utf8') === content) return false
+  } catch { /* write the missing or unreadable projection */ }
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    writeSafeLibraryFileSync(_root, tempPath, content, { exclusive: true })
+    fs.renameSync(tempPath, filePath)
+    fs.chmodSync(filePath, 0o600)
+    fsyncDirectorySync(path.dirname(filePath))
+    return true
+  } finally {
+    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath) } catch { /* preserve final result */ }
+  }
+}
+
+function canonicalTranscript(records: CanonicalRecord[], filePath: string, source: SessionSource): string {
+  const detail = canonicalRecordsToSessionDetail(records, { filePath, source })
+  const lines = [`# ${detail.firstUserMessage || detail.sessionId}`, '']
+  for (const message of detail.messages) {
+    const label = message.type === 'assistant' ? 'Assistant' : message.type === 'user' ? 'User' : 'System'
+    lines.push(`**${label}**${message.timestamp ? ` [${formatTs(message.timestamp)}]` : ''}`)
+    for (const call of message.toolCalls) {
+      lines.push(`[${call.name}] ${JSON.stringify(call.input)}`)
+      if (call.result) lines.push(call.result)
+    }
+    if (message.textContent) lines.push(demoteMarkdownHeadings(message.textContent))
+    lines.push('')
+  }
+  return redactSecrets(lines.join('\n')).text
+}
+
+async function ensureCanonicalPackageUnderWriter(
+  providerId: string,
+  sourceRef: SourceRef,
+  canonicalRecords: CanonicalRecord[]
+): Promise<EnsureCanonicalPackageResult> {
+  assertLibraryWriterHeld(_root)
+  const sourceDefinition = builtinProviderForId(providerId)
+  if (!sourceDefinition) throw new Error('canonical-package-provider-not-registered')
+  const source = sourceDefinition.sourceId
+  const summary = canonicalRecordsToSessionSummary(canonicalRecords, {
+    filePath: sourceRef.displayLocator,
+    source
+  })
+  const sessionRecord = canonicalRecords.find((record) => record.recordType === 'session')
+  if (!sessionRecord || sessionRecord.recordType !== 'session' ||
+    sourceRef.providerId !== providerId ||
+    sessionRecord.sourceRef.providerId !== providerId ||
+    sessionRecord.sourceRef.stableId !== sourceRef.stableId ||
+    sessionRecord.provenance.providerId !== providerId) {
+    throw new Error('canonical-package-session-identity-mismatch')
+  }
+  const identity = buildCanonicalLogicalSessionIdentity(
+    providerId,
+    sourceRef.stableId,
+    sessionRecord.sourceSessionId
+  )
+  const descriptor: CanonicalPackageDescriptor = {
+    schemaVersion: 1,
+    providerId,
+    sourceRefStableId: sourceRef.stableId,
+    sessionRecordId: sessionRecord.id,
+    fingerprint: sourceRef.fingerprint,
+    parserDataVersion: sessionRecord.provenance.parserDataVersion,
+    formatVersion: sessionRecord.provenance.formatVersion,
+    recordsFile: CANONICAL_RECORDS_FILE,
+    provenanceFile: CANONICAL_PROVENANCE_FILE
+  }
+  const recordsPackage: CanonicalPackageRecords = {
+    schemaVersion: 1,
+    providerId,
+    parserDataVersion: descriptor.parserDataVersion,
+    formatVersion: descriptor.formatVersion,
+    fingerprint: descriptor.fingerprint,
+    sourceRef,
+    sessionRecordId: sessionRecord.id,
+    records: canonicalRecords
+  }
+  const provenancePackage: CanonicalPackageProvenance = {
+    schemaVersion: 1,
+    providerId,
+    parserDataVersion: descriptor.parserDataVersion,
+    formatVersion: descriptor.formatVersion,
+    fingerprint: descriptor.fingerprint,
+    sourceRef,
+    sessionRecordId: sessionRecord.id,
+    archivedAt: sessionRecord.provenance.observedAt || summary.updatedAt || summary.createdAt,
+    tombstone: null
+  }
+  const recordsContent = encodeCanonicalPackageRecords(recordsPackage)
+  const provenanceContent = encodeCanonicalPackageProvenance(provenancePackage)
+  let createdRecordsPath = ''
+  let createdProvenancePath = ''
+  let contentChanged = false
+  const dirPath = await ensureSessionInLibraryUnderWriter(
+    summary,
+    undefined,
+    undefined,
+    {},
+    {
+      identity,
+      descriptor,
+      beforeManifest: (createdDir) => {
+        createdRecordsPath = path.join(createdDir, CANONICAL_RECORDS_FILE)
+        createdProvenancePath = path.join(createdDir, CANONICAL_PROVENANCE_FILE)
+        contentChanged = writeCanonicalFileIfChanged(createdRecordsPath, recordsContent) || contentChanged
+        contentChanged = writeCanonicalFileIfChanged(createdProvenancePath, provenanceContent) || contentChanged
+      }
+    }
+  )
+  const recordsPath = createdRecordsPath || path.join(dirPath, CANONICAL_RECORDS_FILE)
+  const provenancePath = createdProvenancePath || path.join(dirPath, CANONICAL_PROVENANCE_FILE)
+  contentChanged = writeCanonicalFileIfChanged(recordsPath, recordsContent) || contentChanged
+  contentChanged = writeCanonicalFileIfChanged(provenancePath, provenanceContent) || contentChanged
+  const transcriptPath = path.join(dirPath, TRANSCRIPT_FILE)
+  contentChanged = writeCanonicalFileIfChanged(
+    transcriptPath,
+    canonicalTranscript(canonicalRecords, recordsPath, source)
+  ) || contentChanged
+
+  const meta = readSessionMeta(dirPath)
+  if (!meta) throw new Error('canonical-package-manifest-missing')
+  const nextSourcePaths = [sourceRef.displayLocator]
+  if (JSON.stringify(meta.canonicalProvider) !== JSON.stringify(descriptor) ||
+    JSON.stringify(meta.sourceFilePaths) !== JSON.stringify(nextSourcePaths) ||
+    meta.updatedAt !== summary.updatedAt || meta.turnCount !== summary.turnCount) {
+    meta.canonicalProvider = descriptor
+    meta.sourceFilePaths = nextSourcePaths
+    meta.updatedAt = summary.updatedAt
+    meta.turnCount = summary.turnCount
+    writeSessionMeta(dirPath, meta)
+  }
+  return { dirPath, recordsPath, provenancePath, contentChanged }
+}
+
+export async function ensureCanonicalPackage(
+  providerId: string,
+  sourceRef: SourceRef,
+  canonicalRecords: CanonicalRecord[]
+): Promise<EnsureCanonicalPackageResult> {
+  return withLibraryWriter('maintenance', () =>
+    ensureCanonicalPackageUnderWriter(providerId, sourceRef, canonicalRecords))
+}
+
+function librarySessions(tree: LibraryTree): LibrarySession[] {
+  const sessions = [...tree.ungroupedSessions]
+  const visit = (folders: LibraryFolder[]): void => {
+    for (const folder of folders) {
+      sessions.push(...folder.sessions)
+      visit(folder.children)
+    }
+  }
+  visit(tree.folders)
+  return sessions
+}
+
+export async function markCanonicalPackageTombstone(
+  providerId: string,
+  sourceRefStableId: string,
+  sessionRecordId: string,
+  tombstone: Tombstone
+): Promise<string | null> {
+  if (!fs.existsSync(_root)) return null
+  return withLibraryWriter('maintenance', () => {
+    const tree = scanLibrary()
+    const candidate = librarySessions(tree).find((session) => {
+      const descriptor = session.meta.canonicalProvider
+      return descriptor?.providerId === providerId &&
+        descriptor.sourceRefStableId === sourceRefStableId &&
+        descriptor.sessionRecordId === sessionRecordId
+    })
+    if (!candidate?.meta.canonicalProvider) return null
+    const recordsPath = path.join(candidate.dirPath, candidate.meta.canonicalProvider.recordsFile)
+    const recordsPackage = readCanonicalPackageRecords(recordsPath)
+    if (!recordsPackage || recordsPackage.providerId !== providerId ||
+      recordsPackage.sourceRef.stableId !== sourceRefStableId ||
+      recordsPackage.sessionRecordId !== sessionRecordId) return null
+    const descriptor = { ...candidate.meta.canonicalProvider, tombstone }
+    const provenance: CanonicalPackageProvenance = {
+      schemaVersion: 1,
+      providerId,
+      parserDataVersion: descriptor.parserDataVersion,
+      formatVersion: descriptor.formatVersion,
+      fingerprint: descriptor.fingerprint,
+      sourceRef: recordsPackage.sourceRef,
+      sessionRecordId,
+      archivedAt: new Date().toISOString(),
+      tombstone
+    }
+    writeCanonicalFileIfChanged(
+      path.join(candidate.dirPath, descriptor.provenanceFile),
+      encodeCanonicalPackageProvenance(provenance)
+    )
+    const meta = readSessionMeta(candidate.dirPath)
+    if (!meta) return null
+    meta.canonicalProvider = descriptor
+    meta.updatedAt = tombstone.deletedAt || meta.updatedAt
+    writeSessionMeta(candidate.dirPath, meta)
+    return candidate.dirPath
+  })
 }
 
 // --- Sync JSONL Backup ---
@@ -3044,8 +3330,9 @@ interface TranscriptSummaryForWrite {
 }
 
 function detectSourceForTranscript(meta: SessionMeta, filePath: string): SessionSource {
-  if (meta.logicalIdentity?.sourceFamily && meta.logicalIdentity.sourceFamily !== 'legacy-ambiguous') {
-    return meta.logicalIdentity.sourceFamily
+  const sourceFamily = meta.logicalIdentity?.sourceFamily
+  if (sourceFamily && isLegacySessionSource(sourceFamily)) {
+    return sourceFamily as SessionSource
   }
   return detectSessionSourceForJsonl(filePath, sourceFilePathsFromMeta(meta) || [], { preferSourcePaths: true })
 }
@@ -3911,6 +4198,20 @@ async function syncLibraryFromSessionsUnderWriter(
   for (let index = 0; index < sessions.length; index++) {
     const session = sessions[index]
     const customTitle = sessionMeta[session.sessionId]?.customTitle
+    const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
+    if (canonicalDefinition?.ingestion === 'provider-host') {
+      const stored = getCanonicalSessionStore().getSession(session.id)
+      if (stored) {
+        await ensureCanonicalPackageUnderWriter(
+          canonicalDefinition.manifest.providerId,
+          stored.sessionRecord.sourceRef,
+          stored.records
+        )
+        onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
+        continue
+      }
+      throw new Error('canonical-provider-session-not-found')
+    }
     const dirPath = await ensureSessionInLibrary(session, customTitle)
 
     // 持久化 swob 权威 turnCount 进 meta（各会话类型统一），供外部整理脚本按真实轮数归档

@@ -1,0 +1,9 @@
+This directory contains a fully synthetic Pi JSONL fixture created for Swob.
+
+The field layout was informed by the Pi parser and synthetic fixture structure in
+kenn-io/agentsview at commit 75b9e8bdc8b9c831710afb89a0f414bfd1a8fd23.
+No real transcript or user data was copied.
+
+AgentsView copyright: Kenn Software LLC
+AgentsView license: MIT
+Source: https://github.com/kenn-io/agentsview/tree/75b9e8bdc8b9c831710afb89a0f414bfd1a8fd23/internal/parser

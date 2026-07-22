@@ -102,7 +102,7 @@ export function SessionRanking({ data }: { data: InsightsData }) {
                 {session.valuation.coveragePercent < 100 && (
                   <span
                     className="shrink-0 text-[9px] text-soft-amber"
-                    title={zh ? '部分 token 未计价' : 'Some tokens are unpriced'}
+                    title={translate(zh ? 'zh-CN' : 'en', 'renderer.session_ranking.some_tokens_are_unpriced')}
                   >
                     {session.valuation.coveragePercent.toFixed(0)}%
                   </span>

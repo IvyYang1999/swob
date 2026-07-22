@@ -3,7 +3,7 @@ SWOB THIRD-PARTY NOTICES
 This file is generated. Do not edit it by hand.
 Source: package-lock.json production dependency graph.
 Generator: scripts/generate-third-party-notices.mjs
-package-lock.json SHA-256: e87564f2e36f30e21c967159a40985b2ebeeae722700604e1f0b79a90c457d15
+package-lock.json SHA-256: 190bb983cd30d6bd75a760cbba051c0300fee266580b35935a89cd21ee6aeba4
 Unique production packages: 172
 
 Electron and Chromium notices are distributed separately as

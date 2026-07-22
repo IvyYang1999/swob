@@ -138,3 +138,11 @@ export function registerAgentShortcut(): void {
     console.warn('[agent] failed to register global shortcut')
   }
 }
+
+export async function shutdownAgentRuntime(): Promise<void> {
+  const turn = currentTurn
+  currentTurn = null
+  if (turn) await turn.shutdown()
+  if (agentWindow && !agentWindow.isDestroyed()) agentWindow.destroy()
+  agentWindow = null
+}

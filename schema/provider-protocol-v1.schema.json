@@ -1,0 +1,1086 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swob.dev/schema/provider-protocol/v1",
+  "title": "Swob Provider Protocol v1",
+  "description": "Language-neutral provider envelope and canonical conversation graph. Vault user state is intentionally excluded.",
+  "$ref": "#/$defs/ProviderEnvelope",
+  "$defs": {
+    "ProtocolVersion": {
+      "type": "string",
+      "enum": ["1.0"]
+    },
+    "ProviderId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$",
+      "description": "Namespaced provider identifier. Built-ins use the swob/ namespace."
+    },
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "StableSourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$",
+      "description": "Opaque provider identity. Path separators and absolute local paths are forbidden."
+    },
+    "NullableString": {
+      "type": ["string", "null"],
+      "maxLength": 65536
+    },
+    "NullableInteger": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "JsonPrimitive": {
+      "oneOf": [
+        { "type": "string", "maxLength": 262144 },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" }
+      ]
+    },
+    "JsonArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/JsonValue" },
+      "maxItems": 10000
+    },
+    "JsonObject": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/JsonValue" },
+      "maxProperties": 256
+    },
+    "JsonValue": {
+      "anyOf": [
+        { "$ref": "#/$defs/JsonPrimitive" },
+        { "$ref": "#/$defs/JsonArray" },
+        { "$ref": "#/$defs/JsonObject" }
+      ]
+    },
+    "CapabilityName": {
+      "type": "string",
+      "enum": [
+        "discover",
+        "summary",
+        "transcript",
+        "tools",
+        "thinking",
+        "usage",
+        "relationships",
+        "subagents",
+        "live-watch",
+        "search",
+        "archive",
+        "terminal-resume",
+        "native-resume",
+        "format-provenance"
+      ]
+    },
+    "CapabilityStatus": {
+      "type": "string",
+      "enum": ["available", "unavailable", "not-applicable", "experimental"]
+    },
+    "EvidenceKind": {
+      "type": "string",
+      "enum": ["implementation", "test", "official-documentation", "upstream-source", "observed-format", "compatibility-contract", "missing"]
+    },
+    "CapabilityEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "locator"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/EvidenceKind" },
+        "locator": { "$ref": "#/$defs/NonEmptyString" },
+        "note": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "CapabilityDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "evidence"],
+      "properties": {
+        "status": { "$ref": "#/$defs/CapabilityStatus" },
+        "reason": { "$ref": "#/$defs/NullableString" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CapabilityEvidence" },
+          "maxItems": 64
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "enum": ["unavailable", "not-applicable", "experimental"] } },
+            "required": ["status"]
+          },
+          "then": { "properties": { "reason": { "$ref": "#/$defs/NonEmptyString" } } }
+        },
+        {
+          "if": {
+            "properties": { "status": { "enum": ["available", "experimental"] } },
+            "required": ["status"]
+          },
+          "then": { "properties": { "evidence": { "type": "array", "minItems": 1 } } }
+        }
+      ]
+    },
+    "ProviderCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "discover",
+        "summary",
+        "transcript",
+        "tools",
+        "thinking",
+        "usage",
+        "relationships",
+        "subagents",
+        "live-watch",
+        "search",
+        "archive",
+        "terminal-resume",
+        "native-resume",
+        "format-provenance"
+      ],
+      "properties": {
+        "discover": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "summary": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "transcript": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "tools": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "thinking": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "usage": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "relationships": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "subagents": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "live-watch": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "search": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "archive": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "terminal-resume": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "native-resume": { "$ref": "#/$defs/CapabilityDeclaration" },
+        "format-provenance": { "$ref": "#/$defs/CapabilityDeclaration" }
+      }
+    },
+    "ProviderManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "providerId", "displayName", "implementationVersion", "parserDataVersion", "formatVersions", "capabilities"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "displayName": { "$ref": "#/$defs/NonEmptyString" },
+        "implementationVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "parserDataVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "formatVersions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" },
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "legacySourceIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" },
+          "uniqueItems": true
+        },
+        "capabilities": { "$ref": "#/$defs/ProviderCapabilities" }
+      }
+    },
+    "ProtocolHello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "schemaId", "providerId", "implementationVersion", "manifestFingerprint"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "schemaId": { "const": "https://swob.dev/schema/provider-protocol/v1" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "implementationVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "manifestFingerprint": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "Fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["sha256", "composite-sha256", "upstream-version"]
+        },
+        "value": { "$ref": "#/$defs/NonEmptyString" },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" }
+        }
+      }
+    },
+    "FileSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "stableId", "providerId", "uri", "displayLocator", "fingerprint"],
+      "properties": {
+        "kind": { "const": "file" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "uri": { "$ref": "#/$defs/NonEmptyString" },
+        "displayLocator": { "$ref": "#/$defs/NonEmptyString" },
+        "fingerprint": { "$ref": "#/$defs/Fingerprint" }
+      }
+    },
+    "CompositeDirectorySourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "stableId", "providerId", "rootUri", "memberUris", "displayLocator", "fingerprint"],
+      "properties": {
+        "kind": { "const": "composite-directory" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "rootUri": { "$ref": "#/$defs/NonEmptyString" },
+        "memberUris": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "displayLocator": { "$ref": "#/$defs/NonEmptyString" },
+        "fingerprint": { "$ref": "#/$defs/Fingerprint" }
+      }
+    },
+    "SqliteRowSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "stableId", "providerId", "databaseUri", "table", "primaryKey", "displayLocator", "fingerprint"],
+      "properties": {
+        "kind": { "const": "sqlite-row" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "databaseUri": { "$ref": "#/$defs/NonEmptyString" },
+        "table": { "$ref": "#/$defs/NonEmptyString" },
+        "primaryKey": { "$ref": "#/$defs/JsonObject" },
+        "displayLocator": { "$ref": "#/$defs/NonEmptyString" },
+        "fingerprint": { "$ref": "#/$defs/Fingerprint" }
+      }
+    },
+    "VirtualMemberSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "stableId", "providerId", "containerRefId", "memberKey", "displayLocator", "fingerprint"],
+      "properties": {
+        "kind": { "const": "virtual-member" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "containerRefId": { "$ref": "#/$defs/NonEmptyString" },
+        "memberKey": { "$ref": "#/$defs/NonEmptyString" },
+        "displayLocator": { "$ref": "#/$defs/NonEmptyString" },
+        "fingerprint": { "$ref": "#/$defs/Fingerprint" }
+      }
+    },
+    "ImportPackageSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "stableId", "providerId", "packageUri", "entryPath", "displayLocator", "fingerprint"],
+      "properties": {
+        "kind": { "const": "import-package" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "packageUri": { "$ref": "#/$defs/NonEmptyString" },
+        "entryPath": { "$ref": "#/$defs/NonEmptyString" },
+        "displayLocator": { "$ref": "#/$defs/NonEmptyString" },
+        "fingerprint": { "$ref": "#/$defs/Fingerprint" }
+      }
+    },
+    "SourceRef": {
+      "oneOf": [
+        { "$ref": "#/$defs/FileSourceRef" },
+        { "$ref": "#/$defs/CompositeDirectorySourceRef" },
+        { "$ref": "#/$defs/SqliteRowSourceRef" },
+        { "$ref": "#/$defs/VirtualMemberSourceRef" },
+        { "$ref": "#/$defs/ImportPackageSourceRef" }
+      ]
+    },
+    "RecordProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "sourceRefId", "parserDataVersion", "formatVersion", "observedAt"],
+      "properties": {
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "sourceRefId": { "$ref": "#/$defs/NonEmptyString" },
+        "parserDataVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "formatVersion": { "$ref": "#/$defs/NullableString" },
+        "observedAt": { "$ref": "#/$defs/NullableString" },
+        "rawRecordFingerprint": { "$ref": "#/$defs/Fingerprint" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CapabilityEvidence" }
+        }
+      }
+    },
+    "CanonicalRecordBase": {
+      "type": "object",
+      "required": ["id", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/NonEmptyString" },
+        "provenance": { "$ref": "#/$defs/RecordProvenance" }
+      }
+    },
+    "SessionRecord": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/CanonicalRecordBase" },
+        {
+          "type": "object",
+          "required": ["recordType", "sourceRef", "sourceSessionId", "createdAt", "updatedAt", "cwd", "projectPath"],
+          "properties": {
+            "recordType": { "const": "session" },
+            "sourceRef": { "$ref": "#/$defs/SourceRef" },
+            "sourceSessionId": { "$ref": "#/$defs/NonEmptyString" },
+            "createdAt": { "$ref": "#/$defs/NullableString" },
+            "updatedAt": { "$ref": "#/$defs/NullableString" },
+            "cwd": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/NonEmptyString" },
+              "uniqueItems": true
+            },
+            "projectPath": { "$ref": "#/$defs/NullableString" },
+            "providerTitle": { "$ref": "#/$defs/NullableString" }
+          }
+        }
+      ]
+    },
+    "TextContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text"],
+      "properties": {
+        "kind": { "const": "text" },
+        "text": { "type": "string", "maxLength": 262144 }
+      }
+    },
+    "ThinkingContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text"],
+      "properties": {
+        "kind": { "const": "thinking" },
+        "text": { "type": "string", "maxLength": 262144 }
+      }
+    },
+    "MediaRefContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "uri", "mimeType"],
+      "properties": {
+        "kind": { "const": "media-ref" },
+        "uri": { "$ref": "#/$defs/NonEmptyString" },
+        "mimeType": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "MessageContent": {
+      "oneOf": [
+        { "$ref": "#/$defs/TextContent" },
+        { "$ref": "#/$defs/ThinkingContent" },
+        { "$ref": "#/$defs/MediaRefContent" }
+      ]
+    },
+    "MessageRecord": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/CanonicalRecordBase" },
+        {
+          "type": "object",
+          "required": ["recordType", "sessionRecordId", "ordinal", "role", "timestamp", "content"],
+          "properties": {
+            "recordType": { "const": "message" },
+            "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "ordinal": { "type": "integer", "minimum": 0 },
+            "role": {
+              "type": "string",
+              "enum": ["user", "assistant", "system", "tool", "unknown"]
+            },
+            "timestamp": { "$ref": "#/$defs/NullableString" },
+            "content": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/MessageContent" },
+              "maxItems": 10000
+            }
+          }
+        }
+      ]
+    },
+    "ToolCallRecord": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/CanonicalRecordBase" },
+        {
+          "type": "object",
+          "required": ["recordType", "sessionRecordId", "messageRecordId", "ordinal", "name", "input"],
+          "properties": {
+            "recordType": { "const": "tool-call" },
+            "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "messageRecordId": { "$ref": "#/$defs/NullableString" },
+            "ordinal": { "type": "integer", "minimum": 0 },
+            "name": { "$ref": "#/$defs/NonEmptyString" },
+            "input": { "$ref": "#/$defs/JsonValue" }
+          }
+        }
+      ]
+    },
+    "ToolResultEvent": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/CanonicalRecordBase" },
+        {
+          "type": "object",
+          "required": ["recordType", "sessionRecordId", "toolCallRecordId", "timestamp", "content", "isError"],
+          "properties": {
+            "recordType": { "const": "tool-result" },
+            "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "toolCallRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "timestamp": { "$ref": "#/$defs/NullableString" },
+            "content": { "$ref": "#/$defs/JsonValue" },
+            "isError": { "type": ["boolean", "null"] }
+          }
+        }
+      ]
+    },
+    "UsageRecord": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/CanonicalRecordBase" },
+        {
+          "type": "object",
+          "required": ["recordType", "sessionRecordId", "messageRecordId", "timestamp", "model", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens", "costUsd", "usageProvenance"],
+          "properties": {
+            "recordType": { "const": "usage" },
+            "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "messageRecordId": { "$ref": "#/$defs/NullableString" },
+            "timestamp": { "$ref": "#/$defs/NullableString" },
+            "model": { "$ref": "#/$defs/NullableString" },
+            "inputTokens": { "$ref": "#/$defs/NullableInteger" },
+            "outputTokens": { "$ref": "#/$defs/NullableInteger" },
+            "cacheReadTokens": { "$ref": "#/$defs/NullableInteger" },
+            "cacheWriteTokens": { "$ref": "#/$defs/NullableInteger" },
+            "reasoningTokens": { "$ref": "#/$defs/NullableInteger" },
+            "costUsd": { "type": ["number", "null"], "minimum": 0 },
+            "usageProvenance": {
+              "type": "string",
+              "enum": ["reported", "derived", "estimated", "unavailable"]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "usageProvenance": { "const": "unavailable" } },
+            "required": ["usageProvenance"]
+          },
+          "then": {
+            "properties": {
+              "inputTokens": { "type": "null" },
+              "outputTokens": { "type": "null" },
+              "cacheReadTokens": { "type": "null" },
+              "cacheWriteTokens": { "type": "null" },
+              "reasoningTokens": { "type": "null" },
+              "costUsd": { "type": "null" }
+            }
+          },
+          "else": {
+            "anyOf": [
+              { "properties": { "inputTokens": { "type": "integer" } }, "required": ["inputTokens"] },
+              { "properties": { "outputTokens": { "type": "integer" } }, "required": ["outputTokens"] },
+              { "properties": { "cacheReadTokens": { "type": "integer" } }, "required": ["cacheReadTokens"] },
+              { "properties": { "cacheWriteTokens": { "type": "integer" } }, "required": ["cacheWriteTokens"] },
+              { "properties": { "reasoningTokens": { "type": "integer" } }, "required": ["reasoningTokens"] },
+              { "properties": { "costUsd": { "type": "number" } }, "required": ["costUsd"] }
+            ]
+          }
+        }
+      ]
+    },
+    "RelationshipRecord": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/CanonicalRecordBase" },
+        {
+          "type": "object",
+          "required": ["recordType", "fromSessionRecordId", "toSessionRecordId", "relationshipType"],
+          "properties": {
+            "recordType": { "const": "relationship" },
+            "fromSessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "toSessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "relationshipType": {
+              "type": "string",
+              "enum": ["parent-child", "continuation", "fork", "import-copy", "subagent", "related"]
+            }
+          }
+        }
+      ]
+    },
+    "ArtifactRecord": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/CanonicalRecordBase" },
+        {
+          "type": "object",
+          "required": ["recordType", "sessionRecordId", "messageRecordId", "uri", "action", "exists", "fingerprint"],
+          "properties": {
+            "recordType": { "const": "artifact" },
+            "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "messageRecordId": { "$ref": "#/$defs/NullableString" },
+            "uri": { "$ref": "#/$defs/NonEmptyString" },
+            "action": {
+              "type": "string",
+              "enum": ["read", "write", "edit", "create", "delete", "reference"]
+            },
+            "exists": { "type": ["boolean", "null"] },
+            "fingerprint": {
+              "oneOf": [
+                { "$ref": "#/$defs/Fingerprint" },
+                { "type": "null" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "CanonicalRecord": {
+      "oneOf": [
+        { "$ref": "#/$defs/SessionRecord" },
+        { "$ref": "#/$defs/MessageRecord" },
+        { "$ref": "#/$defs/ToolCallRecord" },
+        { "$ref": "#/$defs/ToolResultEvent" },
+        { "$ref": "#/$defs/UsageRecord" },
+        { "$ref": "#/$defs/RelationshipRecord" },
+        { "$ref": "#/$defs/ArtifactRecord" }
+      ]
+    },
+    "Tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRefId", "sessionRecordId", "deletedAt", "reason", "previousFingerprint"],
+      "properties": {
+        "sourceRefId": { "$ref": "#/$defs/NonEmptyString" },
+        "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+        "deletedAt": { "$ref": "#/$defs/NullableString" },
+        "reason": {
+          "type": "string",
+          "enum": ["source-missing", "provider-deleted", "replaced"]
+        },
+        "previousFingerprint": {
+          "oneOf": [
+            { "$ref": "#/$defs/Fingerprint" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "ProviderErrorCode": {
+      "type": "string",
+      "enum": [
+        "protocol-version-mismatch",
+        "schema-validation-failed",
+        "source-unreadable",
+        "format-unsupported",
+        "parse-failed",
+        "partial-data",
+        "cancelled",
+        "internal"
+        ,"resource-limit-exceeded"
+      ]
+    },
+    "ProviderError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "providerId", "sourceRefId", "recordId", "details"],
+      "properties": {
+        "code": { "$ref": "#/$defs/ProviderErrorCode" },
+        "message": { "$ref": "#/$defs/NonEmptyString" },
+        "retryable": { "type": "boolean" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "sourceRefId": { "$ref": "#/$defs/NullableString" },
+        "recordId": { "$ref": "#/$defs/NullableString" },
+        "details": {
+          "oneOf": [
+            { "$ref": "#/$defs/JsonObject" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "ParseStatus": {
+      "type": "string",
+      "enum": ["complete", "partial", "skipped", "error", "replace", "no-data"]
+    },
+    "NoDataReason": {
+      "type": ["string", "null"],
+      "enum": [null, "empty-source", "detected-only", "unsupported-format", "no-parseable-session"]
+    },
+    "SessionParseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRefId", "sessionRecordId", "status", "records", "errors", "replaceSessionRecordId", "noDataReason"],
+      "properties": {
+        "sourceRefId": { "$ref": "#/$defs/StableSourceId" },
+        "sessionRecordId": { "$ref": "#/$defs/NullableString" },
+        "status": { "$ref": "#/$defs/ParseStatus" },
+        "records": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CanonicalRecord" },
+          "maxItems": 10000
+        },
+        "errors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProviderError" },
+          "maxItems": 1000
+        },
+        "replaceSessionRecordId": { "$ref": "#/$defs/NullableString" },
+        "noDataReason": { "$ref": "#/$defs/NoDataReason" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+              "records": {
+                "type": "array",
+                "minItems": 1,
+                "contains": { "type": "object", "properties": { "recordType": { "const": "session" } }, "required": ["recordType"] },
+                "minContains": 1
+              },
+              "errors": { "type": "array", "maxItems": 0 },
+              "replaceSessionRecordId": { "type": "null" },
+              "noDataReason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+              "records": {
+                "type": "array",
+                "minItems": 1,
+                "contains": { "type": "object", "properties": { "recordType": { "const": "session" } }, "required": ["recordType"] },
+                "minContains": 1
+              },
+              "errors": { "type": "array", "minItems": 1 },
+              "replaceSessionRecordId": { "type": "null" },
+              "noDataReason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "enum": ["skipped", "error"] } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "type": "null" },
+              "records": { "type": "array", "maxItems": 0 },
+              "errors": { "type": "array", "minItems": 1 },
+              "replaceSessionRecordId": { "type": "null" },
+              "noDataReason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "replace" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+              "records": {
+                "type": "array",
+                "minItems": 1,
+                "contains": { "type": "object", "properties": { "recordType": { "const": "session" } }, "required": ["recordType"] },
+                "minContains": 1
+              },
+              "errors": { "type": "array", "maxItems": 0 },
+              "replaceSessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+              "noDataReason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "no-data" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "type": "null" },
+              "records": { "type": "array", "maxItems": 0 },
+              "errors": { "type": "array", "maxItems": 0 },
+              "replaceSessionRecordId": { "type": "null" },
+              "noDataReason": { "type": "string", "enum": ["empty-source", "detected-only", "unsupported-format", "no-parseable-session"] }
+            }
+          }
+        }
+      ]
+    },
+    "ParseOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "parserDataVersion", "formatVersion", "fingerprint", "status", "sessions", "errors", "tombstones"],
+      "properties": {
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "parserDataVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "formatVersion": { "$ref": "#/$defs/NullableString" },
+        "fingerprint": { "$ref": "#/$defs/Fingerprint" },
+        "status": { "$ref": "#/$defs/ParseStatus" },
+        "sessions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SessionParseResult" },
+          "maxItems": 5000
+        },
+        "errors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProviderError" },
+          "maxItems": 1000
+        },
+        "tombstones": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Tombstone" },
+          "maxItems": 10000
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/CompleteSessionParseResult" } },
+              "errors": { "type": "array", "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessions": {
+                "type": "array",
+                "minItems": 1,
+                "contains": { "type": "object", "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+                "minContains": 1
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "enum": ["skipped", "error"] } }, "required": ["status"] },
+          "then": { "properties": { "sessions": { "type": "array", "maxItems": 0 }, "errors": { "type": "array", "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "replace" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ReplaceSessionParseResult" } },
+              "errors": { "type": "array", "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "no-data" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/NoDataSessionParseResult" } },
+              "errors": { "type": "array", "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "CompleteSessionParseResult": {
+      "allOf": [
+        { "$ref": "#/$defs/SessionParseResult" },
+        { "type": "object", "properties": { "status": { "const": "complete" } }, "required": ["status"] }
+      ]
+    },
+    "ReplaceSessionParseResult": {
+      "allOf": [
+        { "$ref": "#/$defs/SessionParseResult" },
+        { "type": "object", "properties": { "status": { "const": "replace" } }, "required": ["status"] }
+      ]
+    },
+    "NoDataSessionParseResult": {
+      "allOf": [
+        { "$ref": "#/$defs/SessionParseResult" },
+        { "type": "object", "properties": { "status": { "const": "no-data" } }, "required": ["status"] }
+      ]
+    },
+    "QueryFrameFieldType": {
+      "type": "string",
+      "enum": ["string", "number", "boolean", "timestamp", "json"]
+    },
+    "QueryStringCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "string" },
+        "nullable": { "const": false },
+        "value": { "type": "string", "maxLength": 262144 }
+      }
+    },
+    "QueryNullableStringCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "string" },
+        "nullable": { "const": true },
+        "value": { "type": ["string", "null"], "maxLength": 262144 }
+      }
+    },
+    "QueryNumberCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "number" },
+        "nullable": { "const": false },
+        "value": { "type": "number" }
+      }
+    },
+    "QueryNullableNumberCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "number" },
+        "nullable": { "const": true },
+        "value": { "type": ["number", "null"] }
+      }
+    },
+    "QueryBooleanCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "boolean" },
+        "nullable": { "const": false },
+        "value": { "type": "boolean" }
+      }
+    },
+    "QueryNullableBooleanCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "boolean" },
+        "nullable": { "const": true },
+        "value": { "type": ["boolean", "null"] }
+      }
+    },
+    "QueryTimestampCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "timestamp" },
+        "nullable": { "const": false },
+        "value": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "QueryNullableTimestampCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "timestamp" },
+        "nullable": { "const": true },
+        "value": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
+    "JsonNonNullValue": {
+      "oneOf": [
+        { "type": "string", "maxLength": 262144 },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "$ref": "#/$defs/JsonArray" },
+        { "$ref": "#/$defs/JsonObject" }
+      ]
+    },
+    "QueryJsonCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "json" },
+        "nullable": { "const": false },
+        "value": { "$ref": "#/$defs/JsonNonNullValue" }
+      }
+    },
+    "QueryNullableJsonCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "json" },
+        "nullable": { "const": true },
+        "value": { "$ref": "#/$defs/JsonValue" }
+      }
+    },
+    "QueryFrameCell": {
+      "oneOf": [
+        { "$ref": "#/$defs/QueryStringCell" },
+        { "$ref": "#/$defs/QueryNullableStringCell" },
+        { "$ref": "#/$defs/QueryNumberCell" },
+        { "$ref": "#/$defs/QueryNullableNumberCell" },
+        { "$ref": "#/$defs/QueryBooleanCell" },
+        { "$ref": "#/$defs/QueryNullableBooleanCell" },
+        { "$ref": "#/$defs/QueryTimestampCell" },
+        { "$ref": "#/$defs/QueryNullableTimestampCell" },
+        { "$ref": "#/$defs/QueryJsonCell" },
+        { "$ref": "#/$defs/QueryNullableJsonCell" }
+      ]
+    },
+    "QueryFrameRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rowId", "cells"],
+      "properties": {
+        "rowId": { "$ref": "#/$defs/NonEmptyString" },
+        "cells": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/QueryFrameCell" },
+          "maxProperties": 256
+        }
+      }
+    },
+    "QueryProjectionStatus": {
+      "type": "string",
+      "enum": ["complete", "partial", "unavailable"]
+    },
+    "QueryProjectionProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "parserDataVersion", "formatVersion", "sourceRecordTypes", "sourceFingerprint"],
+      "properties": {
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "parserDataVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "formatVersion": { "$ref": "#/$defs/NullableString" },
+        "sourceRecordTypes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["session", "message", "tool-call", "tool-result", "usage", "relationship", "artifact"]
+          },
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "sourceFingerprint": { "$ref": "#/$defs/Fingerprint" }
+      }
+    },
+    "QueryFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "projectionId", "lossy", "status", "provenance", "rows", "errors", "unavailableReason"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "projectionId": { "$ref": "#/$defs/NonEmptyString" },
+        "lossy": { "const": true },
+        "status": { "$ref": "#/$defs/QueryProjectionStatus" },
+        "provenance": { "$ref": "#/$defs/QueryProjectionProvenance" },
+        "rows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/QueryFrameRow" },
+          "maxItems": 10000
+        },
+        "errors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProviderError" },
+          "maxItems": 1000
+        },
+        "unavailableReason": { "$ref": "#/$defs/NullableString" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+          "then": { "properties": { "errors": { "type": "array", "maxItems": 0 }, "unavailableReason": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+          "then": { "properties": { "errors": { "type": "array", "minItems": 1 }, "unavailableReason": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "unavailable" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "rows": { "type": "array", "maxItems": 0 },
+              "errors": { "type": "array", "minItems": 1 },
+              "unavailableReason": { "$ref": "#/$defs/NonEmptyString" }
+            }
+          }
+        }
+      ]
+    },
+    "HelloEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "hello" },
+        "payload": { "$ref": "#/$defs/ProtocolHello" }
+      }
+    },
+    "ManifestEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "manifest" },
+        "payload": { "$ref": "#/$defs/ProviderManifest" }
+      }
+    },
+    "ParseOutcomeEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "parse-outcome" },
+        "payload": { "$ref": "#/$defs/ParseOutcome" }
+      }
+    },
+    "QueryFrameEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "query-frame" },
+        "payload": { "$ref": "#/$defs/QueryFrame" }
+      }
+    },
+    "ErrorEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "error" },
+        "payload": { "$ref": "#/$defs/ProviderError" }
+      }
+    },
+    "ProviderEnvelope": {
+      "oneOf": [
+        { "$ref": "#/$defs/HelloEnvelope" },
+        { "$ref": "#/$defs/ManifestEnvelope" },
+        { "$ref": "#/$defs/ParseOutcomeEnvelope" },
+        { "$ref": "#/$defs/QueryFrameEnvelope" },
+        { "$ref": "#/$defs/ErrorEnvelope" }
+      ]
+    }
+  }
+}

@@ -17,5 +17,5 @@
       "@renderer/*": ["./src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/renderer/src/**/*.d.ts", "src/shared/**/*"]
+  "include": ["src/renderer/src/**/*", "src/renderer/src/**/*.d.ts", "src/shared/**/*", "schema/**/*.json"]
 }

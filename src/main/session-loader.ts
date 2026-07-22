@@ -458,6 +458,12 @@ function buildUnavailableSourceSummary(
     pastedImageCount: 0,
     tokenUsage: tokenUsageFromAccounting(tokenAccounting),
     tokenAccounting,
+    providerOutcome: {
+      detected: 'detected',
+      parse: 'placeholder',
+      usage: 'unavailable',
+      reason: 'detected-only-source'
+    },
     referencedFiles: [],
     configFiles: [],
     source,
@@ -683,6 +689,11 @@ export function buildSessionSummary(
       pastedImageCount,
       tokenUsage: totalTokenUsage,
       tokenAccounting,
+      providerOutcome: {
+        detected: 'detected',
+        parse: 'parsed',
+        usage: tokenAccounting.billingTotal === null ? 'unavailable' : 'available'
+      },
       referencedFiles: [],
       configFiles: [],
       source: sourceOverride,
@@ -811,6 +822,11 @@ export function buildSessionSummary(
     pastedImageCount,
     tokenUsage: totalTokenUsage,
     tokenAccounting,
+    providerOutcome: {
+      detected: 'detected',
+      parse: 'parsed',
+      usage: tokenAccounting.billingTotal === null ? 'unavailable' : 'available'
+    },
     referencedFiles: [...referencedFiles],
     configFiles,
     source: sourceOverride,

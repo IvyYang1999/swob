@@ -572,6 +572,11 @@ function buildCodexSessionSummaryFromLines(
     pastedImageCount: 0,
     tokenUsage: totalTokenUsage,
     tokenAccounting,
+    providerOutcome: {
+      detected: 'detected',
+      parse: 'parsed',
+      usage: tokenAccounting.billingTotal === null ? 'unavailable' : 'available'
+    },
     referencedFiles: [],
     configFiles: [],
     source: 'codex',

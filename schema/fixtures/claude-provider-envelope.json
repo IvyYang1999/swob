@@ -1,0 +1,144 @@
+{
+  "protocolVersion": "1.0",
+  "messageId": "fixture-claude-parse-1",
+  "kind": "parse-outcome",
+  "payload": {
+    "providerId": "swob/claude-code",
+    "parserDataVersion": "1",
+    "formatVersion": "claude-jsonl-observed",
+    "fingerprint": {
+      "algorithm": "sha256",
+      "value": "fixture-claude-source-v1"
+    },
+    "status": "complete",
+    "sessions": [
+      {
+        "sourceRefId": "source:claude:fixture-session",
+        "sessionRecordId": "session:claude:fixture-session",
+        "status": "complete",
+        "records": [
+          {
+            "id": "session:claude:fixture-session",
+            "provenance": {
+              "providerId": "swob/claude-code",
+              "sourceRefId": "source:claude:fixture-session",
+              "parserDataVersion": "1",
+              "formatVersion": "claude-jsonl-observed",
+              "observedAt": "2026-07-22T01:00:00.000Z"
+            },
+            "recordType": "session",
+            "sourceRef": {
+              "kind": "file",
+              "stableId": "source:claude:fixture-session",
+              "providerId": "swob/claude-code",
+              "uri": "file:///fixtures/claude/session.jsonl",
+              "displayLocator": "fixtures/claude/session.jsonl",
+              "fingerprint": {
+                "algorithm": "sha256",
+                "value": "fixture-claude-source-v1"
+              }
+            },
+            "sourceSessionId": "00000000-0000-4000-8000-000000000001",
+            "createdAt": "2026-07-22T01:00:00.000Z",
+            "updatedAt": "2026-07-22T01:01:00.000Z",
+            "cwd": ["/fixtures/project"],
+            "projectPath": "/fixtures/project",
+            "providerTitle": null
+          },
+          {
+            "id": "message:claude:1",
+            "provenance": {
+              "providerId": "swob/claude-code",
+              "sourceRefId": "source:claude:fixture-session",
+              "parserDataVersion": "1",
+              "formatVersion": "claude-jsonl-observed",
+              "observedAt": "2026-07-22T01:00:00.000Z"
+            },
+            "recordType": "message",
+            "sessionRecordId": "session:claude:fixture-session",
+            "ordinal": 0,
+            "role": "user",
+            "timestamp": "2026-07-22T01:00:00.000Z",
+            "content": [{ "kind": "text", "text": "Synthetic hello" }]
+          },
+          {
+            "id": "tool-call:claude:1",
+            "provenance": {
+              "providerId": "swob/claude-code",
+              "sourceRefId": "source:claude:fixture-session",
+              "parserDataVersion": "1",
+              "formatVersion": "claude-jsonl-observed",
+              "observedAt": "2026-07-22T01:00:10.000Z"
+            },
+            "recordType": "tool-call",
+            "sessionRecordId": "session:claude:fixture-session",
+            "messageRecordId": null,
+            "ordinal": 1,
+            "name": "Read",
+            "input": { "path": "/fixtures/project/README.md" }
+          },
+          {
+            "id": "tool-result:claude:1",
+            "provenance": {
+              "providerId": "swob/claude-code",
+              "sourceRefId": "source:claude:fixture-session",
+              "parserDataVersion": "1",
+              "formatVersion": "claude-jsonl-observed",
+              "observedAt": "2026-07-22T01:00:11.000Z"
+            },
+            "recordType": "tool-result",
+            "sessionRecordId": "session:claude:fixture-session",
+            "toolCallRecordId": "tool-call:claude:1",
+            "timestamp": "2026-07-22T01:00:11.000Z",
+            "content": "synthetic file contents",
+            "isError": false
+          },
+          {
+            "id": "usage:claude:1",
+            "provenance": {
+              "providerId": "swob/claude-code",
+              "sourceRefId": "source:claude:fixture-session",
+              "parserDataVersion": "1",
+              "formatVersion": "claude-jsonl-observed",
+              "observedAt": "2026-07-22T01:01:00.000Z"
+            },
+            "recordType": "usage",
+            "sessionRecordId": "session:claude:fixture-session",
+            "messageRecordId": null,
+            "timestamp": "2026-07-22T01:01:00.000Z",
+            "model": "fixture-model",
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "reasoningTokens": null,
+            "costUsd": null,
+            "usageProvenance": "reported"
+          },
+          {
+            "id": "artifact:claude:1",
+            "provenance": {
+              "providerId": "swob/claude-code",
+              "sourceRefId": "source:claude:fixture-session",
+              "parserDataVersion": "1",
+              "formatVersion": "claude-jsonl-observed",
+              "observedAt": "2026-07-22T01:00:10.000Z"
+            },
+            "recordType": "artifact",
+            "sessionRecordId": "session:claude:fixture-session",
+            "messageRecordId": null,
+            "uri": "file:///fixtures/project/README.md",
+            "action": "read",
+            "exists": true,
+            "fingerprint": null
+          }
+        ],
+        "errors": [],
+        "replaceSessionRecordId": null,
+        "noDataReason": null
+      }
+    ],
+    "errors": [],
+    "tombstones": []
+  }
+}

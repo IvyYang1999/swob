@@ -261,7 +261,7 @@ function sourceFilePathsForMeta(session: SessionSummary): string[] {
 
 function isFileBackedBackupSource(filePath: string): boolean {
   const source = detectSessionSourceFromPath(filePath)
-  return source !== 'opencode' && source !== 'zcode'
+  return source === 'claude-code' || source === 'codex' || source === 'cursor'
 }
 
 /** Source files that syncBackup physically writes into backup.jsonl. */

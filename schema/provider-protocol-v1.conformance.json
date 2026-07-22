@@ -1,0 +1,59 @@
+{
+  "contractVersion": "1.1.0",
+  "wireProtocolVersion": "1.0",
+  "schemaId": "https://swob.dev/schema/provider-protocol/v1",
+  "validationOrder": [
+    "envelope-bytes",
+    "lexical-json-budget",
+    "json-decode",
+    "iterative-value-budget",
+    "draft-2020-schema"
+  ],
+  "resourceLimits": {
+    "maxEnvelopeBytes": 1048576,
+    "maxJsonDepth": 64,
+    "maxNodes": 50000,
+    "maxStringCodeUnits": 262144,
+    "maxArrayItems": 10000,
+    "maxObjectProperties": 256,
+    "maxRecordsPerSession": 10000,
+    "maxSessionsPerOutcome": 5000,
+    "maxQueryRows": 10000,
+    "maxQueryColumns": 256
+  },
+  "schemaLimitBindings": {
+    "maxStringCodeUnits": [
+      "/$defs/JsonPrimitive/oneOf/0/maxLength",
+      "/$defs/TextContent/properties/text/maxLength",
+      "/$defs/ThinkingContent/properties/text/maxLength",
+      "/$defs/QueryStringCell/properties/value/maxLength",
+      "/$defs/QueryNullableStringCell/properties/value/maxLength",
+      "/$defs/JsonNonNullValue/oneOf/0/maxLength"
+    ],
+    "maxArrayItems": [
+      "/$defs/JsonArray/maxItems",
+      "/$defs/MessageRecord/allOf/1/properties/content/maxItems",
+      "/$defs/ParseOutcome/properties/tombstones/maxItems"
+    ],
+    "maxObjectProperties": [
+      "/$defs/JsonObject/maxProperties"
+    ],
+    "maxRecordsPerSession": [
+      "/$defs/SessionParseResult/properties/records/maxItems"
+    ],
+    "maxSessionsPerOutcome": [
+      "/$defs/ParseOutcome/properties/sessions/maxItems"
+    ],
+    "maxQueryRows": [
+      "/$defs/QueryFrame/properties/rows/maxItems"
+    ],
+    "maxQueryColumns": [
+      "/$defs/QueryFrameRow/properties/cells/maxProperties"
+    ]
+  },
+  "queryFrame": {
+    "currentSchemaVersion": 2,
+    "legacySchemaVersion": 1,
+    "compatibility": "QueryFrame schema v1 rows/fields are rejected by the current validator. Migrate each value to a self-describing typed cell in a v2 row and add projection provenance/status."
+  }
+}

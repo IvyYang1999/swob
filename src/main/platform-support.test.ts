@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   alphaUnsupportedReason,
   getPlatformCapabilities,
+  getPlatformProviderCapabilities,
+  isSessionSourceDiscoverable,
   isSessionSourceSupported
 } from './platform-support'
 
@@ -18,13 +20,33 @@ describe('Windows Native Alpha capabilities', () => {
   it('macOS 现有来源与能力保持不变', () => {
     expect(isSessionSourceSupported('opencode', 'darwin')).toBe(true)
     expect(isSessionSourceSupported('zcode', 'darwin')).toBe(true)
-    expect(getPlatformCapabilities('darwin').unsupportedSources).toEqual([])
+    const capabilities = getPlatformCapabilities('darwin')
+    expect(capabilities.undiscoverableSources).toEqual([])
+    expect(capabilities.supportedSources).toEqual(capabilities.discoverableSources)
+    expect(capabilities.providers).toHaveLength(11)
+    expect(capabilities.providers.find((provider) => provider.sourceId === 'hermes')).toMatchObject({
+      tier: 'detection-only',
+      discoverableOnPlatform: true,
+      capabilities: {
+        transcript: { status: 'unavailable' },
+        usage: { status: 'unavailable' }
+      }
+    })
+  })
+
+  it('platform discovery does not imply transcript support', () => {
+    expect(isSessionSourceDiscoverable('hermes', 'darwin')).toBe(true)
+    const hermes = getPlatformProviderCapabilities('darwin')
+      .find((provider) => provider.sourceId === 'hermes')!
+    expect(hermes.capabilities.discover.status).toBe('experimental')
+    expect(hermes.capabilities.transcript.status).toBe('unavailable')
   })
 
   it('Windows Alpha 显式声明不做的边界', () => {
     expect(getPlatformCapabilities('win32')).toMatchObject({
       platform: 'win32',
       windowsNativeAlpha: true,
+      discoverableSources: ['claude-code', 'codex'],
       supportedSources: ['claude-code', 'codex'],
       unsupportedSources: expect.arrayContaining(['cursor', 'opencode', 'zcode']),
       features: {

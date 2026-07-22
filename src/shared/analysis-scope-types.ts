@@ -44,6 +44,10 @@ export interface UsageAggregate {
   turns: number
   eventCount: number
   sessionCount: number
+  detectedSessionCount: number
+  parsedSessionCount: number
+  usageAvailableSessionCount: number
+  usageUnavailableSessionCount: number
   usageCoverage: CoverageMetric
   modelCoverage: CoverageMetric
   pricingCoverage: PricingCoveragePlaceholder

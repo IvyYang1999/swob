@@ -1,4 +1,5 @@
 import type { TokenAccounting } from './token-accounting'
+import type { LegacySessionSource } from '../shared/provider-capabilities'
 
 export interface TokenUsage {
   inputTokens: number
@@ -112,7 +113,8 @@ export interface SkillInvocation {
   args?: string
 }
 
-export type SessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode' | 'cc-mirror' | 'antigravity' | 'grok' | 'pi' | 'kimi' | 'hermes'
+/** @deprecated Closed compatibility union. New provider contracts use namespaced ProviderId strings. */
+export type SessionSource = LegacySessionSource
 
 export interface SessionSubagentSummary {
   sessionId: string
@@ -126,6 +128,13 @@ export interface SessionSubagentSummary {
   agentRole?: string
   model?: string
   status: 'completed' | 'unknown'
+}
+
+export interface SessionProviderOutcome {
+  detected: 'detected'
+  parse: 'parsed' | 'no-data' | 'placeholder' | 'error'
+  usage: 'available' | 'unavailable'
+  reason?: string
 }
 
 export interface SessionSummary {
@@ -166,6 +175,8 @@ export interface SessionSummary {
   tokenUsage: TokenUsage
   /** Provider-aware, deduplicated ledger. tokenUsage remains a compatibility view. */
   tokenAccounting?: TokenAccounting
+  /** Actual per-session loader outcome; capability declarations never substitute for this fact. */
+  providerOutcome?: SessionProviderOutcome
   referencedFiles: FileRef[]
   configFiles: string[]
   libraryDirPath?: string

@@ -1,30 +1,36 @@
 import type { SessionSource } from './types'
-
-const ALL_SOURCES: SessionSource[] = [
-  'claude-code', 'codex', 'cursor', 'opencode', 'zcode',
-  'cc-mirror', 'antigravity', 'grok', 'pi', 'kimi', 'hermes'
-]
+import {
+  BUILTIN_PROVIDER_DEFINITIONS,
+  type BuiltinProviderTier
+} from '../shared/provider-capabilities'
+import type { ProviderCapabilities } from '../shared/provider-schema.generated'
 
 const WINDOWS_ALPHA_SOURCES = new Set<SessionSource>(['claude-code', 'codex'])
 
-const SOURCE_LABELS: Record<SessionSource, string> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  cursor: 'Cursor',
-  opencode: 'OpenCode',
-  zcode: 'ZCode',
-  'cc-mirror': 'CC-Mirror',
-  antigravity: 'Antigravity',
-  grok: 'Grok',
-  pi: 'Pi',
-  kimi: 'Kimi',
-  hermes: 'Hermes'
+const SOURCE_LABELS = new Map(BUILTIN_PROVIDER_DEFINITIONS.map((entry) => [
+  entry.sourceId,
+  entry.manifest.displayName
+]))
+
+export interface PlatformProviderCapabilities {
+  sourceId: SessionSource
+  providerId: string
+  displayName: string
+  tier: BuiltinProviderTier
+  discoverableOnPlatform: boolean
+  capabilities: ProviderCapabilities
 }
 
 export interface PlatformCapabilities {
   platform: NodeJS.Platform
   windowsNativeAlpha: boolean
+  /** Sources whose discovery path is implemented on this platform. */
+  discoverableSources: SessionSource[]
+  undiscoverableSources: SessionSource[]
+  providers: PlatformProviderCapabilities[]
+  /** @deprecated This means platform discovery, not full transcript support. */
   supportedSources: SessionSource[]
+  /** @deprecated Use undiscoverableSources. */
   unsupportedSources: SessionSource[]
   features: {
     wsl: boolean
@@ -36,30 +42,56 @@ export interface PlatformCapabilities {
   }
 }
 
-export function isSessionSourceSupported(
+export function isSessionSourceDiscoverable(
   source: SessionSource,
   platform: NodeJS.Platform = process.platform
 ): boolean {
   return platform !== 'win32' || WINDOWS_ALPHA_SOURCES.has(source)
 }
 
+/** @deprecated This checks platform discovery only, not parser capabilities. */
+export const isSessionSourceSupported = isSessionSourceDiscoverable
+
 export function alphaUnsupportedReason(
   source: SessionSource,
   platform: NodeJS.Platform = process.platform
 ): string | undefined {
-  if (isSessionSourceSupported(source, platform)) return undefined
-  return `Windows Alpha 暂不支持 ${SOURCE_LABELS[source]}`
+  if (isSessionSourceDiscoverable(source, platform)) return undefined
+  return `Windows Alpha 暂不支持 ${SOURCE_LABELS.get(source) || source}`
+}
+
+export function getPlatformProviderCapabilities(
+  platform: NodeJS.Platform = process.platform
+): PlatformProviderCapabilities[] {
+  return BUILTIN_PROVIDER_DEFINITIONS.map((entry) => ({
+    sourceId: entry.sourceId,
+    providerId: entry.manifest.providerId,
+    displayName: entry.manifest.displayName,
+    tier: entry.tier,
+    discoverableOnPlatform: isSessionSourceDiscoverable(entry.sourceId, platform),
+    capabilities: entry.manifest.capabilities
+  }))
 }
 
 export function getPlatformCapabilities(
   platform: NodeJS.Platform = process.platform
 ): PlatformCapabilities {
+  const providers = getPlatformProviderCapabilities(platform)
+  const discoverableSources = providers
+    .filter((provider) => provider.discoverableOnPlatform)
+    .map((provider) => provider.sourceId)
+  const undiscoverableSources = providers
+    .filter((provider) => !provider.discoverableOnPlatform)
+    .map((provider) => provider.sourceId)
   if (platform !== 'win32') {
     return {
       platform,
       windowsNativeAlpha: false,
-      supportedSources: [...ALL_SOURCES],
-      unsupportedSources: [],
+      discoverableSources,
+      undiscoverableSources,
+      providers,
+      supportedSources: [...discoverableSources],
+      unsupportedSources: [...undiscoverableSources],
       features: {
         wsl: false,
         cloudPlaceholders: platform === 'darwin',
@@ -74,8 +106,11 @@ export function getPlatformCapabilities(
   return {
     platform,
     windowsNativeAlpha: true,
-    supportedSources: ALL_SOURCES.filter((source) => WINDOWS_ALPHA_SOURCES.has(source)),
-    unsupportedSources: ALL_SOURCES.filter((source) => !WINDOWS_ALPHA_SOURCES.has(source)),
+    discoverableSources,
+    undiscoverableSources,
+    providers,
+    supportedSources: [...discoverableSources],
+    unsupportedSources: [...undiscoverableSources],
     // t107 Alpha intentionally fails closed for every unimplemented surface.
     features: {
       wsl: false,

@@ -683,6 +683,11 @@ function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: Lo
     pastedImageCount: 0,
     tokenUsage: normalizedTokenUsage,
     tokenAccounting,
+    providerOutcome: {
+      detected: 'detected',
+      parse: 'parsed',
+      usage: tokenAccounting.billingTotal === null ? 'unavailable' : 'available'
+    },
     referencedFiles: [],
     configFiles: [],
     source: source as SessionSource,

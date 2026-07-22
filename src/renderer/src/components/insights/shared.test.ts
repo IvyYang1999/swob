@@ -25,7 +25,11 @@ function aggregate(
     calls: coverage.covered,
     turns: coverage.covered,
     eventCount: coverage.covered,
-    sessionCount: coverage.covered,
+    sessionCount: coverage.total,
+    detectedSessionCount: coverage.total,
+    parsedSessionCount: coverage.total,
+    usageAvailableSessionCount: coverage.covered,
+    usageUnavailableSessionCount: coverage.total - coverage.covered,
     usageCoverage: {
       ...coverage,
       percent: coverage.total > 0 ? (coverage.covered / coverage.total) * 100 : null
@@ -43,7 +47,7 @@ function query(
   total: UsageAggregate
 ): InsightsQueryResult {
   return {
-    schemaVersion: 2,
+    schemaVersion: 4,
     scope: { range: 'all', metricBasis: 'billing' },
     dimension,
     range: { fromDay: null, toDay: null, label: 'All time' },

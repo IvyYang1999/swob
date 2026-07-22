@@ -3,18 +3,18 @@
 import { logSpawnSelfTest } from './stdio-repair'
 import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen } from 'electron'
 import path from 'path'
-const { join, dirname, basename, relative } = path
+const { join, dirname, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
 import { registerAgentIpc, registerAgentShortcut, shutdownAgentRuntime } from './agent-window'
 import { execFile, execSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
-import * as chokidar from 'chokidar'
 import {
   loadAllSessions,
   loadSessionDetail,
   findAllSessionFiles,
+  findClaudeSessionFiles,
   buildSessionSummaryFromBackup
 } from './session-loader'
 import { findCodexSessionFiles } from './codex-loader'
@@ -85,6 +85,14 @@ import {
   watchLibraryDirectory,
   type LibraryDirectoryWatcher
 } from './library-directory-watcher'
+import {
+  createSourceWatchDefinition,
+  watchSourceDirectory,
+  type SourceDirectoryWatcher,
+  type SourceWatcherErrorContext,
+  type SourceWatcherId,
+  type SourceWatchDefinition
+} from './source-directory-watcher'
 import { terminateChildProcess } from './child-process-termination'
 import { runRuntimeCleanup } from './runtime-cleanup'
 import {
@@ -156,15 +164,14 @@ import type { Folder, Highlight, SessionSummary } from './types'
 import type { AnalysisDimension, AnalysisScope, UsageFactSyncResult } from './analysis-contract'
 import { generateSkillContent } from '../cli/command-registry'
 import { runtimeHome } from './runtime-home'
-import { hasPortablePathSegment } from './portable-path'
 import { getPlatformCapabilities, isSessionSourceSupported } from './platform-support'
 import { assertRegisteredResumeProtocol } from './deep-link'
 
 let mainWindow: BrowserWindow | null = null
 let spotlightWindow: BrowserWindow | null = null
-let watcher: chokidar.FSWatcher | null = null
-let codexWatcher: chokidar.FSWatcher | null = null
-let cursorWatcher: chokidar.FSWatcher | null = null
+let watcher: SourceDirectoryWatcher | null = null
+let codexWatcher: SourceDirectoryWatcher | null = null
+let cursorWatcher: SourceDirectoryWatcher | null = null
 let libraryWatcher: LibraryDirectoryWatcher | null = null
 let transcriptWatcher: TranscriptWatcher | null = null
 let libraryWorker: LibraryWorkerClient | null = null
@@ -514,7 +521,7 @@ let runtimeCleanupPromise: Promise<void> | null = null
 function cleanupRuntimeResources(): Promise<void> {
   if (runtimeCleanupPromise) return runtimeCleanupPromise
   const sourceWatchers = [watcher, codexWatcher, cursorWatcher].filter(
-    (candidate): candidate is chokidar.FSWatcher => candidate !== null
+    (candidate): candidate is SourceDirectoryWatcher => candidate !== null
   )
   watcher = null
   codexWatcher = null
@@ -716,59 +723,87 @@ function getSpotlightShortcut(): string {
   } catch { return DEFAULT_SPOTLIGHT_SHORTCUT }
 }
 
+function sourceWatcherErrorHandler(source: SourceWatcherId) {
+  return (error: unknown, context: SourceWatcherErrorContext): void => {
+    const errorName = error instanceof Error ? error.name : typeof error
+    const errorCode = typeof error === 'object' && error !== null && 'code' in error
+      ? String(error.code)
+      : undefined
+    console.error(`[source-watcher:${source}] ${context.phase} failed; ${
+      context.retryInMs === null ? 'continuing' : `retrying in ${context.retryInMs}ms`
+    }:`, error)
+    writeLifecycleLog('source-watcher-error', {
+      source,
+      phase: context.phase,
+      attempt: context.attempt,
+      retryInMs: context.retryInMs,
+      backend: context.backend,
+      errorName,
+      errorCode
+    })
+  }
+}
+
+function sourceWatcherReadyHandler(definition: SourceWatchDefinition) {
+  return (attempt: number, backend: SourceDirectoryWatcher['backend']): void => {
+    writeLifecycleLog('source-watcher-ready', {
+      source: definition.id,
+      backend,
+      attempt
+    })
+    if (attempt === 0) return
+    const files = definition.id === 'claude-code'
+      ? findClaudeSessionFiles().filter(definition.matches)
+      : definition.id === 'codex'
+        ? findCodexSessionFiles().filter(definition.matches)
+        : findCursorSessionFiles().filter(definition.matches)
+    for (const filePath of files) {
+      scheduleSessionSynchronization({ filePath, source: definition.id, reason: 'change' })
+    }
+    writeLifecycleLog('source-watcher-recovery-scheduled', {
+      source: definition.id,
+      fileCount: files.length
+    })
+  }
+}
+
 function startFileWatcher(): void {
-  const home = runtimeHome()
-  watcher = chokidar.watch([
-    join(home, '.claude', 'projects', '*', '*.jsonl'),
-    join(home, '.claude-window', '*', 'projects', '*', '*.jsonl')
-  ], {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 }
-  })
-
-  watcher.on('add', (filePath) => {
-    if (hasPortablePathSegment(filePath, 'subagents')) return
-    scheduleSessionSynchronization({ filePath, source: 'claude-code', reason: 'add' })
-  })
-
-  watcher.on('change', (filePath) => {
-    if (hasPortablePathSegment(filePath, 'subagents')) return
-    scheduleSessionSynchronization({ filePath, source: 'claude-code', reason: 'change' })
+  const definition = createSourceWatchDefinition('claude-code', runtimeHome())
+  watcher = watchSourceDirectory({
+    definition,
+    onReady: sourceWatcherReadyHandler(definition),
+    onError: sourceWatcherErrorHandler(definition.id),
+    onFile: (filePath, event) => {
+      scheduleSessionSynchronization({ filePath, source: definition.id, reason: event })
+    }
   })
 }
 
 function startCodexWatcher(): void {
-  const codexDir = join(runtimeHome(), '.codex', 'sessions')
-  if (!fs.existsSync(codexDir)) return
-  codexWatcher = chokidar.watch(join(codexDir, '**/*.jsonl'), {
-    ignoreInitial: true,
-    depth: 4
+  const definition = createSourceWatchDefinition('codex', runtimeHome())
+  if (!fs.existsSync(definition.roots[0])) return
+  codexWatcher = watchSourceDirectory({
+    definition,
+    onReady: sourceWatcherReadyHandler(definition),
+    onError: sourceWatcherErrorHandler(definition.id),
+    onFile: (filePath) => {
+      scheduleSessionSynchronization({ filePath, source: definition.id, reason: 'change' })
+    }
   })
-
-  const handleCodexFile = (filePath: string) => {
-    if (!basename(filePath).startsWith('rollout-')) return
-    scheduleSessionSynchronization({ filePath, source: 'codex', reason: 'change' })
-  }
-
-  codexWatcher.on('add', handleCodexFile)
-  codexWatcher.on('change', handleCodexFile)
 }
 
 function startCursorWatcher(): void {
   if (!isSessionSourceSupported('cursor')) return
-  const cursorDir = join(runtimeHome(), '.cursor', 'projects')
-  if (!fs.existsSync(cursorDir)) return
-  cursorWatcher = chokidar.watch(join(cursorDir, '*/agent-transcripts/*/*.jsonl'), {
-    ignoreInitial: true,
-    depth: 4
+  const definition = createSourceWatchDefinition('cursor', runtimeHome())
+  if (!fs.existsSync(definition.roots[0])) return
+  cursorWatcher = watchSourceDirectory({
+    definition,
+    onReady: sourceWatcherReadyHandler(definition),
+    onError: sourceWatcherErrorHandler(definition.id),
+    onFile: (filePath) => {
+      scheduleSessionSynchronization({ filePath, source: definition.id, reason: 'change' })
+    }
   })
-
-  const handleCursorFile = (filePath: string) => {
-    scheduleSessionSynchronization({ filePath, source: 'cursor', reason: 'change' })
-  }
-
-  cursorWatcher.on('add', handleCursorFile)
-  cursorWatcher.on('change', handleCursorFile)
 }
 
 function collectLibrarySessionsFromTree(tree: LibraryTree): LibrarySession[] {

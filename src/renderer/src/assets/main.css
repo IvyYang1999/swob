@@ -129,3 +129,19 @@ body {
 .thinking-dot-1 { animation: thinking-dot 1.4s ease-in-out 0s infinite; }
 .thinking-dot-2 { animation: thinking-dot 1.4s ease-in-out 0.2s infinite; }
 .thinking-dot-3 { animation: thinking-dot 1.4s ease-in-out 0.4s infinite; }
+
+/* Spotlight window — single-layer CSS shadow
+   TODO: t127 合并后改用 spotlight:setNativeShadow IPC，届时移除此段并在
+         SpotlightApp.tsx 去掉 .spotlight-shadow class */
+.spotlight-shadow {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 8px 30px rgba(0, 0, 0, 0.45),
+    0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="light"] .spotlight-shadow {
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.18),
+    0 2px 8px rgba(0, 0, 0, 0.12);
+}

@@ -143,7 +143,7 @@ export default function SpotlightApp() {
   return (
     <div className="w-full h-full flex flex-col select-none p-5" style={{ WebkitAppRegion: 'drag' } as any}>
       <div
-        className="mx-auto w-full max-w-[680px] rounded-2xl bg-base/95 backdrop-blur-xl border border-edge shadow-2xl overflow-hidden flex flex-col"
+        className="mx-auto w-full max-w-[680px] rounded-2xl bg-base backdrop-blur-sm border border-edge spotlight-shadow overflow-hidden flex flex-col"
         style={{ maxHeight: '480px', WebkitAppRegion: 'no-drag' } as any}
       >
         {/* Search input */}

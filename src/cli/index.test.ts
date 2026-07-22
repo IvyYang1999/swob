@@ -164,7 +164,7 @@ describe('CLI resume guard', () => {
       loadSessions: async () => []
     })
 
-    expect(result).toEqual({ error: 'TODO: resume.error.unavailable' })
+    expect(result).toEqual({ error: 'This session cannot be resumed directly' })
   })
 
   it('完全 unknown 的 ad-hoc id 仍保留兼容命令', async () => {

@@ -193,8 +193,8 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
         'cursor-token-unavailable.jsonl'
       ),
       [
-        { role: 'user', message: { content: [{ type: 'text', text: '<user_query>Cursor token unavailable fixture</user_query>' }] } },
-        { role: 'assistant', message: { content: [{ type: 'text', text: 'Cursor response without authoritative usage.' }] } }
+        { timestamp: '2026-07-21T09:00:00Z', role: 'user', message: { content: [{ type: 'text', text: '<user_query>Cursor token unavailable fixture</user_query>' }] } },
+        { timestamp: '2026-07-21T09:00:05Z', role: 'assistant', message: { content: [{ type: 'text', text: 'Cursor response without authoritative usage.' }] } }
       ]
     )
   }

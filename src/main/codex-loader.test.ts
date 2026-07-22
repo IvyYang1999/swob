@@ -164,6 +164,7 @@ describe('codex-loader', () => {
       expect(summary!.cwds).toEqual(['/Users/test/projects/myapp'])
       expect(summary!.firstUserMessage).toBe('帮我看看这个项目的目录')
       expect(summary!.turnCount).toBeGreaterThanOrEqual(2)
+      expect(summary!.activityDays).toEqual(['2026-03-27'])
       expect(summary!.toolUsage['exec_command']).toBe(1)
       expect(summary!.tokenUsage.inputTokens).toBe(500)
       expect(summary!.tokenUsage.outputTokens).toBe(200)

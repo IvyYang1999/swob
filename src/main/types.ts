@@ -135,6 +135,11 @@ export interface SessionSummary {
   slug: string
   createdAt: string
   updatedAt: string
+  /**
+   * Distinct local calendar days backed by parsed message/event timestamps.
+   * File mtimes, detection timestamps and manifest metadata must not enter it.
+   */
+  activityDays?: string[]
   messageCount: number
   turnCount: number
   compactCount: number

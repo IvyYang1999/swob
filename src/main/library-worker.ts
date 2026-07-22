@@ -215,12 +215,12 @@ export class LibraryWorkerClient {
     })
   }
 
-  close(): void {
+  async close(): Promise<void> {
     const worker = this.worker
     this.worker = null
-    if (worker) void worker.terminate()
     for (const pending of this.pending.values()) pending.reject(new Error('Library worker closed'))
     this.pending.clear()
+    if (worker) await worker.terminate()
   }
 
   private request(

@@ -7,8 +7,8 @@ const { join, dirname, basename, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
-import { registerAgentIpc, registerAgentShortcut } from './agent-window'
-import { exec, execSync } from 'child_process'
+import { registerAgentIpc, registerAgentShortcut, shutdownAgentRuntime } from './agent-window'
+import { execFile, execSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as chokidar from 'chokidar'
 import {
@@ -81,6 +81,12 @@ import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transc
 import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worker'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
 import { LibraryRescanController } from './library-rescan-controller'
+import {
+  watchLibraryDirectory,
+  type LibraryDirectoryWatcher
+} from './library-directory-watcher'
+import { terminateChildProcess } from './child-process-termination'
+import { runRuntimeCleanup } from './runtime-cleanup'
 import {
   buildProjectOrganizationPreview,
   executeOrganization,
@@ -159,7 +165,7 @@ let spotlightWindow: BrowserWindow | null = null
 let watcher: chokidar.FSWatcher | null = null
 let codexWatcher: chokidar.FSWatcher | null = null
 let cursorWatcher: chokidar.FSWatcher | null = null
-let libraryWatcher: chokidar.FSWatcher | null = null
+let libraryWatcher: LibraryDirectoryWatcher | null = null
 let transcriptWatcher: TranscriptWatcher | null = null
 let libraryWorker: LibraryWorkerClient | null = null
 let sessionSyncCoordinator: SessionSyncCoordinator | null = null
@@ -178,11 +184,19 @@ let usageFactSyncTail: Promise<void> = Promise.resolve()
 // --- Active Session Detection ---
 let previousActiveIds: string[] = []
 let activePoller: ReturnType<typeof setInterval> | null = null
+let activePollProcess: ChildProcess | null = null
 
 function detectActiveSessionsFromProcesses(): Promise<Set<string>> {
   if (process.platform === 'win32') return Promise.resolve(new Set())
+  if (activePollProcess) return Promise.resolve(new Set(previousActiveIds))
   return new Promise((resolve) => {
-    exec('ps -eo command', { timeout: 3000 }, (err, stdout) => {
+    let child!: ChildProcess
+    child = execFile('/bin/ps', ['-eo', 'command'], {
+      encoding: 'utf-8',
+      timeout: 3000,
+      maxBuffer: 4 * 1024 * 1024
+    }, (err, stdout) => {
+      if (activePollProcess === child) activePollProcess = null
       if (err) { resolve(new Set()); return }
       const active = new Set<string>()
       for (const line of stdout.split('\n')) {
@@ -192,6 +206,7 @@ function detectActiveSessionsFromProcesses(): Promise<Set<string>> {
       }
       resolve(active)
     })
+    activePollProcess = child
   })
 }
 
@@ -207,8 +222,8 @@ async function pushActiveSessionIds(): Promise<void> {
 
 function startActiveSessionPoller(): void {
   // Run immediately, then every 1 second (async, non-blocking)
-  pushActiveSessionIds()
-  activePoller = setInterval(() => { pushActiveSessionIds() }, 1000)
+  void pushActiveSessionIds()
+  activePoller = setInterval(() => { void pushActiveSessionIds() }, 1000)
 }
 let cachedSessions: SessionSummary[] = []
 
@@ -475,27 +490,92 @@ function shouldReadLibraryConfig(): boolean {
   return libraryInitialized || isLibraryInitialized(getLibraryRoot())
 }
 
-function cleanupRuntimeResources(): void {
-  watcher?.close()
-  codexWatcher?.close()
-  cursorWatcher?.close()
+function openFileDescriptorCount(): number | null {
+  if (process.platform !== 'darwin') return null
+  try { return fs.readdirSync('/dev/fd').length } catch { return null }
+}
+
+function writeLifecycleLog(event: string, fields: Record<string, unknown> = {}): void {
+  try {
+    const logPath = join(runtimeHome(), '.claude-session-manager', 'lifecycle.log')
+    fs.mkdirSync(dirname(logPath), { recursive: true })
+    fs.appendFileSync(logPath, `${JSON.stringify({
+      at: new Date().toISOString(),
+      pid: process.pid,
+      event,
+      openFds: openFileDescriptorCount(),
+      ...fields
+    })}\n`)
+  } catch { /* lifecycle diagnostics must never block startup or quit */ }
+}
+
+let runtimeCleanupPromise: Promise<void> | null = null
+
+function cleanupRuntimeResources(): Promise<void> {
+  if (runtimeCleanupPromise) return runtimeCleanupPromise
+  const sourceWatchers = [watcher, codexWatcher, cursorWatcher].filter(
+    (candidate): candidate is chokidar.FSWatcher => candidate !== null
+  )
   watcher = null
   codexWatcher = null
   cursorWatcher = null
-  libraryWatcher?.close()
+  const currentLibraryWatcher = libraryWatcher
   libraryWatcher = null
-  libraryRescanController?.dispose()
+  const currentLibraryRescanController = libraryRescanController
   libraryRescanController = null
-  transcriptWatcher?.stop()
+  const currentTranscriptWatcher = transcriptWatcher
   transcriptWatcher = null
-  libraryWorker?.close()
+  const currentLibraryWorker = libraryWorker
   libraryWorker = null
-  sessionSyncCoordinator?.stop()
+  const currentSessionSyncCoordinator = sessionSyncCoordinator
   sessionSyncCoordinator = null
-  if (activePoller) {
-    clearInterval(activePoller)
-    activePoller = null
-  }
+  const currentActivePoller = activePoller
+  activePoller = null
+  const currentActivePollProcess = activePollProcess
+  activePollProcess = null
+
+  runtimeCleanupPromise = runRuntimeCleanup([
+    { name: 'agent-child', timeoutMs: 800, run: shutdownAgentRuntime },
+    {
+      name: 'active-session-poller',
+      timeoutMs: 250,
+      run: async () => {
+        if (currentActivePoller) clearInterval(currentActivePoller)
+        if (currentActivePollProcess) {
+          await terminateChildProcess(currentActivePollProcess, { graceMs: 100, killWaitMs: 100 })
+        }
+      }
+    },
+    {
+      name: 'source-watchers',
+      timeoutMs: 300,
+      run: async () => { await Promise.all(sourceWatchers.map((sourceWatcher) => sourceWatcher.close())) }
+    },
+    {
+      name: 'library-watcher',
+      timeoutMs: 200,
+      run: async () => { await currentLibraryWatcher?.close() }
+    },
+    {
+      name: 'controllers',
+      timeoutMs: 100,
+      run: () => {
+        currentLibraryRescanController?.dispose()
+        currentTranscriptWatcher?.stop()
+        currentSessionSyncCoordinator?.stop()
+      }
+    },
+    {
+      name: 'library-worker',
+      timeoutMs: 300,
+      run: async () => { await currentLibraryWorker?.close() }
+    },
+    { name: 'global-shortcuts', timeoutMs: 50, run: () => globalShortcut.unregisterAll() }
+  ], {
+    totalBudgetMs: 1_800,
+    log: writeLifecycleLog
+  }).then(() => undefined)
+  return runtimeCleanupPromise
 }
 
 function createWindow(): void {
@@ -826,12 +906,10 @@ async function initializeLibraryScanInBackground(): Promise<void> {
   }
 }
 
-// 监听库目录本身的「文件夹」变化。swob 原本只监听 ~/.claude 的 jsonl，察觉不到外部对库的
-// 结构改动（整理脚本移动、iCloud 从别的机器同步进来的移动、手动挪动），导致目录树状态不及时。
-// 这里只对 addDir/unlinkDir 反应（文件写入不触发，clipii/wiki 编辑很安静），debounce 后重扫并
-// 通知前端刷新；前端收到 sessions:refresh 会重载会话与目录树。
+// 监听库目录本身的结构变化。macOS 必须使用 FSEvents 的单一目录树事件流；chokidar 5/Node
+// fs.watch 会为库内每个路径保留 fd，大库会撞上 launchd 的 10k fd 上限，令后续 spawn EBADF。
 function startLibraryWatcher(): void {
-  if (libraryWatcher) { libraryWatcher.close(); libraryWatcher = null }
+  if (libraryWatcher) { void libraryWatcher.close(); libraryWatcher = null }
   libraryRescanController?.dispose()
   libraryRescanController = null
   const root = getLibraryRoot()
@@ -840,30 +918,12 @@ function startLibraryWatcher(): void {
     const tree = await requestLibraryScan()
     await hydrateLibrarySessions(tree)
   }, 750)
-  libraryWatcher = chokidar.watch(root, {
-    ignoreInitial: true,
-    ignorePermissionErrors: true,
-    depth: 6,
-    ignored: (p: string) =>
-      p.includes('/node_modules/') || p.includes('/.git/') ||
-      p.includes('/.obsidian/')
+  libraryWatcher = watchLibraryDirectory({
+    root,
+    onDirty: () => libraryRescanController?.markDirty(),
+    onError: (error) => console.error('[library-watcher] failed:', error)
   })
-  const markDirty = (changedPath: string): void => {
-    const name = path.basename(changedPath)
-    const relevantFile = name === '.swob-session.json' ||
-      name === '.swob-config.json' ||
-      name === 'backup.jsonl' ||
-      name.endsWith('.icloud')
-    if (!relevantFile && path.extname(name)) return
-    libraryRescanController?.markDirty()
-  }
-  libraryWatcher
-    .on('addDir', markDirty)
-    .on('unlinkDir', markDirty)
-    .on('add', markDirty)
-    .on('unlink', markDirty)
-    .on('change', markDirty)
-    .on('error', (error) => console.error('[library-watcher] failed:', error))
+  writeLifecycleLog('library-watcher-started', { backend: libraryWatcher.backend })
 }
 
 // --- Library Initialization ---
@@ -2436,12 +2496,31 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   // macOS: don't unregister shortcuts — app stays alive and user expects Cmd+Shift+Space to work
   if (process.platform !== 'darwin') {
-    cleanupRuntimeResources()
-    globalShortcut.unregisterAll()
     app.quit()
   }
 })
 
-app.on('before-quit', () => {
-  cleanupRuntimeResources()
+let quitCleanupStartedAt: number | null = null
+let quitCleanupComplete = false
+
+app.on('before-quit', (event) => {
+  writeLifecycleLog('before-quit', {
+    cleanupStarted: quitCleanupStartedAt !== null,
+    cleanupComplete: quitCleanupComplete
+  })
+  if (quitCleanupComplete) return
+  event.preventDefault()
+  if (quitCleanupStartedAt !== null) return
+  quitCleanupStartedAt = Date.now()
+  void cleanupRuntimeResources().finally(() => {
+    quitCleanupComplete = true
+    writeLifecycleLog('cleanup-release-quit', { durationMs: Date.now() - quitCleanupStartedAt! })
+    app.quit()
+  })
+})
+
+app.on('will-quit', () => {
+  writeLifecycleLog('will-quit', {
+    durationSinceBeforeQuitMs: quitCleanupStartedAt === null ? null : Date.now() - quitCleanupStartedAt
+  })
 })

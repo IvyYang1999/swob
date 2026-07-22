@@ -2,6 +2,7 @@ import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { terminateChildProcess } from './child-process-termination'
 
 /**
  * Global agent engine: reuse the user's installed Claude Code CLI in headless
@@ -81,6 +82,7 @@ interface RunTurnOptions {
 
 export interface RunningTurn {
   cancel: () => void
+  shutdown: () => Promise<void>
   done: Promise<void>
 }
 
@@ -190,6 +192,7 @@ export async function runAgentTurn(options: RunTurnOptions): Promise<RunningTurn
 
   return {
     cancel: () => { try { child.kill('SIGTERM') } catch { /* already gone */ } },
+    shutdown: async () => { await terminateChildProcess(child, { graceMs: 500, killWaitMs: 250 }) },
     done
   }
 }

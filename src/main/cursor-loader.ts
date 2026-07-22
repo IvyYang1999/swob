@@ -335,6 +335,7 @@ export async function buildCursorSessionSummary(filePath: string, sessionIdOverr
     pastedImageCount: 0,
     tokenUsage: totalTokenUsage,
     tokenAccounting,
+    providerOutcome: { detected: 'detected', parse: 'parsed', usage: 'unavailable' },
     referencedFiles: [],
     configFiles: [],
     source: 'cursor',

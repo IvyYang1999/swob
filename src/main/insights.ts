@@ -13,10 +13,11 @@ import {
   type Valuation
 } from './token-valuation'
 import { usageFactsForSession } from './usage-fact-store'
+import { BUILTIN_PROVIDER_DEFINITIONS } from '../shared/provider-capabilities'
 import {
-  BUILTIN_PROVIDER_DEFINITIONS,
-  providerCanParseTranscript
-} from '../shared/provider-capabilities'
+  sessionHasAuthoritativeUsage,
+  sessionHasParsedTranscript
+} from './session-provider-outcome'
 
 export type TokenDataStatus = 'available' | 'partial' | 'unavailable' | 'no-data'
 
@@ -313,10 +314,10 @@ export function buildInsights(
 
   for (const session of rollupSessions) {
     const source = session.source || 'claude-code'
-    const parsed = providerCanParseTranscript(source)
+    const parsed = sessionHasParsedTranscript(session)
     const accounting = accountingForSession(session)
     const facts = parsed ? usageFactsForSession(session) : []
-    const available = parsed && accounting.billingTotal !== null && accounting.components !== null
+    const available = sessionHasAuthoritativeUsage(session) && accounting.billingTotal !== null && accounting.components !== null
     const input = available ? accountingInput(accounting) : 0
     const output = available ? accounting.components!.outputTokens : 0
     const tokens = available ? accounting.billingTotal! : 0
@@ -395,6 +396,10 @@ export function buildInsights(
     }
     if (!projectStats.sources.includes(source)) projectStats.sources.push(source)
 
+    // Detected-only, empty and manifest placeholders remain visible as detected
+    // inventory, but never enter usage/turn/session statistical denominators.
+    if (!parsed) continue
+
     if (available) {
       tokenAvailableSessions++
       sourceStats.tokenAvailableSessions++
@@ -431,8 +436,6 @@ export function buildInsights(
       sourceStats.usageUnavailableSessionCount++
       projectStats.usageUnavailableSessionCount++
     }
-
-    if (!parsed) continue
 
     totalTurns += session.turnCount
     const turns = session.turnCount
@@ -530,14 +533,10 @@ export function buildInsights(
       const accounting = accountingForSession(session)
       stats.sessionCount++
       stats.detectedSessionCount++
-      if (!providerCanParseTranscript(session.source || 'claude-code')) {
-        stats.tokenUnavailableSessions++
-        stats.usageUnavailableSessionCount++
-        continue
-      }
+      if (!sessionHasParsedTranscript(session)) continue
       stats.parsedSessionCount++
       stats.turnCount += session.turnCount
-      if (accounting.billingTotal === null || !accounting.components) {
+      if (!sessionHasAuthoritativeUsage(session) || accounting.billingTotal === null || !accounting.components) {
         stats.tokenUnavailableSessions++
         stats.usageUnavailableSessionCount++
         continue

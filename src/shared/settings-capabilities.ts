@@ -33,14 +33,18 @@ const unsupported = (id: ResumeMethod, label: string, reason: string): ResumeCho
   id, label, support: 'unsupported', reason
 })
 
-export const HARNESS_CAPABILITIES: HarnessCapability[] = [
+const BASE_HARNESS_CAPABILITIES: HarnessCapability[] = [
   {
-    id: 'claude-code', name: 'Claude Code', sourceIds: ['claude-code', 'cc-mirror'], defaultMethod: 'terminal',
+    id: 'claude-code', name: 'Claude Code', sourceIds: ['claude-code'], defaultMethod: 'terminal',
     choices: [
       terminal(),
       { id: 'claude-desktop', label: 'Claude Desktop', support: 'experimental', reason: '需开启实验导入；可能改写 transcript' },
       { id: 'remote-control', label: 'Remote Control', support: 'stable' }
     ]
+  },
+  {
+    id: 'cc-mirror', name: 'CC-Mirror', sourceIds: ['cc-mirror'], defaultMethod: 'terminal',
+    choices: [terminal(), unsupported('claude-desktop', 'Claude Desktop', '没有 CC-Mirror 专用桌面恢复入口')]
   },
   {
     id: 'codex', name: 'Codex', sourceIds: ['codex'], defaultMethod: 'codex-desktop',
@@ -70,6 +74,41 @@ export const HARNESS_CAPABILITIES: HarnessCapability[] = [
   { id: 'pi', name: 'Pi', sourceIds: ['pi'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] },
   { id: 'kimi', name: 'Kimi Code', sourceIds: ['kimi'], defaultMethod: 'terminal', choices: [experimentalTerminal('命令映射未经来源级 Resume 审计')] }
 ]
+
+function choiceCapability(choice: ResumeChoice): 'terminal-resume' | 'native-resume' | null {
+  if (choice.id === 'terminal') return 'terminal-resume'
+  if (choice.id === 'remote-control') return null
+  return 'native-resume'
+}
+
+function resumeSupport(declaration: CapabilityDeclaration): ResumeChoice['support'] {
+  if (declaration.status === 'available') return 'stable'
+  if (declaration.status === 'experimental') return 'experimental'
+  return 'unsupported'
+}
+
+function synchronizeHarnessResumeTruth(harness: HarnessCapability): HarnessCapability {
+  const source = harness.sourceIds[0]
+  const capabilities = providerCapabilitiesForSource(source)
+  if (!capabilities) return harness
+  return {
+    ...harness,
+    choices: harness.choices.map((choice) => {
+      const capability = choiceCapability(choice)
+      if (!capability) return choice
+      const declaration = capabilities[capability]
+      return {
+        ...choice,
+        support: resumeSupport(declaration),
+        ...(declaration.reason ? { reason: declaration.reason } : { reason: undefined })
+      }
+    })
+  }
+}
+
+/** Resume surfaces are labels only; support status/reason come from the Provider registry. */
+export const HARNESS_CAPABILITIES: HarnessCapability[] =
+  BASE_HARNESS_CAPABILITIES.map(synchronizeHarnessResumeTruth)
 
 export interface MigratedSettingsPreferences extends Record<string, unknown> {
   settingsSchemaVersion: 1
@@ -148,3 +187,5 @@ export function defaultResumeMethodForSource(
   const enabled = enabledResumeChoices(harness, migrated.experimentalClaudeDesktopImport === true)
   return enabled.some((choice) => choice.id === requested) ? requested : harness.defaultMethod
 }
+import { providerCapabilitiesForSource } from './provider-capabilities'
+import type { CapabilityDeclaration } from './provider-schema.generated'

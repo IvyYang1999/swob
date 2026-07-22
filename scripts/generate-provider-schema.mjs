@@ -4,9 +4,23 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const schemaPath = path.join(root, 'schema/provider-protocol-v1.schema.json')
+const conformancePath = path.join(root, 'schema/provider-protocol-v1.conformance.json')
 const outputPath = path.join(root, 'src/shared/provider-schema.generated.ts')
 const checkOnly = process.argv.includes('--check')
 const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'))
+const conformance = JSON.parse(fs.readFileSync(conformancePath, 'utf8'))
+
+if (conformance.wireProtocolVersion !== schema.$defs.ProtocolVersion.enum[0]) {
+  throw new Error('provider conformance wireProtocolVersion must match the schema protocol version')
+}
+if (conformance.schemaId !== schema.$id) {
+  throw new Error('provider conformance schemaId must match the schema $id')
+}
+for (const [name, value] of Object.entries(conformance.resourceLimits)) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`provider resource limit ${name} must be a positive safe integer`)
+  }
+}
 
 function refName(ref) {
   const prefix = '#/$defs/'
@@ -24,7 +38,17 @@ function typeExpression(node) {
   if (node.enum) return node.enum.map((value) => JSON.stringify(value)).join(' | ')
   if (node.oneOf) return node.oneOf.map(typeExpression).join(' | ')
   if (node.anyOf) return node.anyOf.map(typeExpression).join(' | ')
-  if (node.allOf) return node.allOf.map((value) => `(${typeExpression(value)})`).join(' & ')
+  if (node.allOf) {
+    const structuralChildren = node.allOf.filter((value) => !value.if)
+    const base = { ...node }
+    delete base.allOf
+    const hasBaseShape = base.type || base.properties || base.additionalProperties || base.$ref || base.oneOf || base.anyOf
+    const parts = [
+      ...(hasBaseShape ? [typeExpression(base)] : []),
+      ...structuralChildren.map(typeExpression)
+    ]
+    return parts.length > 0 ? parts.map((value) => `(${value})`).join(' & ') : 'unknown'
+  }
   if (Array.isArray(node.type)) return node.type.map((value) => typeExpression({ ...node, type: value })).join(' | ')
   if (node.type === 'string') return 'string'
   if (node.type === 'number' || node.type === 'integer') return 'number'
@@ -65,12 +89,16 @@ const parseStatuses = schema.$defs.ParseStatus.enum
 const generated = `/* eslint-disable */
 /**
  * GENERATED FILE. DO NOT EDIT.
- * Source: schema/provider-protocol-v1.schema.json
+ * Sources: schema/provider-protocol-v1.schema.json,
+ *          schema/provider-protocol-v1.conformance.json
  * Run: npm run schema:gen
  */
 
 export const PROVIDER_PROTOCOL_SCHEMA_ID = ${JSON.stringify(schema.$id)} as const
 export const PROVIDER_PROTOCOL_VERSION = ${JSON.stringify(schema.$defs.ProtocolVersion.enum[0])} as const
+export const PROVIDER_CONFORMANCE_VERSION = ${JSON.stringify(conformance.contractVersion)} as const
+export const PROVIDER_RESOURCE_LIMITS = ${JSON.stringify(conformance.resourceLimits, null, 2)} as const
+export const PROVIDER_QUERY_FRAME_VERSION = ${JSON.stringify(conformance.queryFrame.currentSchemaVersion)} as const
 export const PROVIDER_CAPABILITY_NAMES = ${JSON.stringify(capabilityNames)} as const
 export const PROVIDER_CAPABILITY_STATES = ${JSON.stringify(capabilityStates)} as const
 export const PROVIDER_PARSE_STATUSES = ${JSON.stringify(parseStatuses)} as const

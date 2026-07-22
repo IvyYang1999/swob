@@ -45,7 +45,8 @@ describe('provider capability static truth gate', () => {
     const insights = fs.readFileSync(path.join(root, 'src/main/insights.ts'), 'utf8')
     expect(platform).toContain('BUILTIN_PROVIDER_DEFINITIONS')
     expect(platform).toContain('discoverableSources')
-    expect(insights).toContain('providerCanParseTranscript')
+    expect(insights).toContain('sessionHasParsedTranscript')
+    expect(insights).not.toContain('providerCanParseTranscript')
     expect(insights).toContain('BUILTIN_PROVIDER_DEFINITIONS.map')
   })
 

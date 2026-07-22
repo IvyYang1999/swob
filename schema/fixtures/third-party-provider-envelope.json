@@ -56,7 +56,8 @@
           }
         ],
         "errors": [],
-        "replaceSessionRecordId": null
+        "replaceSessionRecordId": null,
+        "noDataReason": null
       }
     ],
     "errors": [],

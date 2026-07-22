@@ -79,7 +79,8 @@
             "details": { "member": "session-index.jsonl" }
           }
         ],
-        "replaceSessionRecordId": null
+        "replaceSessionRecordId": null,
+        "noDataReason": null
       }
     ],
     "errors": [],

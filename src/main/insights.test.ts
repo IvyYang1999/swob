@@ -406,7 +406,7 @@ describe('buildInsights', () => {
         detectedSessionCount: 2,
         parsedSessionCount: 1,
         usageAvailableSessionCount: 1,
-        usageUnavailableSessionCount: 1,
+        usageUnavailableSessionCount: 0,
         totalTurns: 7
       })
       expect(result.bySession.map((session) => session.sessionId)).toEqual(['parsed'])
@@ -415,7 +415,7 @@ describe('buildInsights', () => {
         detectedSessionCount: 1,
         parsedSessionCount: 0,
         usageAvailableSessionCount: 0,
-        usageUnavailableSessionCount: 1,
+        usageUnavailableSessionCount: 0,
         turnCount: 0
       })
       expect(result.turnCountDistribution.reduce((sum, count) => sum + count, 0)).toBe(1)

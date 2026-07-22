@@ -1,17 +1,15 @@
 import { createHash } from 'node:crypto'
+import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js'
 import schemaDocument from '../../schema/provider-protocol-v1.schema.json'
 import {
-  PROVIDER_CAPABILITY_NAMES,
   PROVIDER_PROTOCOL_SCHEMA_ID,
   PROVIDER_PROTOCOL_VERSION,
-  type CapabilityDeclaration,
-  type ParseOutcome,
+  PROVIDER_RESOURCE_LIMITS,
   type ProviderEnvelope,
+  type ProviderError,
   type ProviderManifest,
   type ProtocolHello
 } from './provider-schema.generated'
-
-type SchemaNode = Record<string, unknown>
 
 export interface ProviderSchemaIssue {
   path: string
@@ -23,6 +21,7 @@ export interface ProviderSchemaValidation<T> {
   ok: boolean
   value?: T
   issues: ProviderSchemaIssue[]
+  error?: ProviderError
 }
 
 export interface ProviderConformanceReport {
@@ -31,6 +30,30 @@ export interface ProviderConformanceReport {
   issues: ProviderSchemaIssue[]
   checkedEnvelopes: number
 }
+
+export class ProviderProtocolValidationError extends Error {
+  readonly providerError: ProviderError
+  readonly issues: ProviderSchemaIssue[]
+
+  constructor(providerError: ProviderError, issues: ProviderSchemaIssue[]) {
+    super(`ProviderProtocol v1 validation failed: ${issues.map((entry) => `${entry.path}: ${entry.message}`).join('; ')}`)
+    this.name = 'ProviderProtocolValidationError'
+    this.providerError = providerError
+    this.issues = issues
+  }
+}
+
+const ajv = new Ajv2020({ strict: true, allErrors: true })
+ajv.addSchema(schemaDocument)
+
+function schemaValidator<T>(definition: string): ValidateFunction<T> {
+  const validator = ajv.getSchema<T>(`${PROVIDER_PROTOCOL_SCHEMA_ID}#/$defs/${definition}`)
+  if (!validator) throw new Error(`Provider schema definition is missing: ${definition}`)
+  return validator
+}
+
+const validateEnvelopeSchema = schemaValidator<ProviderEnvelope>('ProviderEnvelope')
+const validateManifestSchema = schemaValidator<ProviderManifest>('ProviderManifest')
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize)
@@ -67,227 +90,333 @@ export function stableCanonicalRecordId(input: {
   return `swob:${input.providerId}:${input.recordType}:${digest}`
 }
 
-function schemaRef(ref: string): SchemaNode {
-  const prefix = '#/$defs/'
-  if (!ref.startsWith(prefix)) throw new Error(`Unsupported schema ref: ${ref}`)
-  const name = ref.slice(prefix.length)
-  const definition = (schemaDocument.$defs as Record<string, SchemaNode>)[name]
-  if (!definition) throw new Error(`Unknown schema definition: ${name}`)
-  return definition
-}
-
-function valueTypeMatches(expected: string, value: unknown): boolean {
-  if (expected === 'null') return value === null
-  if (expected === 'array') return Array.isArray(value)
-  if (expected === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value)
-  if (expected === 'integer') return typeof value === 'number' && Number.isInteger(value)
-  if (expected === 'number') return typeof value === 'number' && Number.isFinite(value)
-  return typeof value === expected
-}
-
-function knownProperties(node: SchemaNode): Set<string> {
-  if (typeof node.$ref === 'string') return knownProperties(schemaRef(node.$ref))
-  const result = new Set(Object.keys((node.properties as Record<string, SchemaNode> | undefined) || {}))
-  for (const child of (node.allOf as SchemaNode[] | undefined) || []) {
-    for (const key of knownProperties(child)) result.add(key)
-  }
-  return result
-}
-
 function issue(path: string, keyword: string, message: string): ProviderSchemaIssue {
   return { path, keyword, message }
 }
 
-function validateNode(node: SchemaNode, value: unknown, path: string): ProviderSchemaIssue[] {
-  if (typeof node.$ref === 'string') return validateNode(schemaRef(node.$ref), value, path)
+function providerIdFrom(value: unknown): string {
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const payload = record.payload
+    const candidates = [
+      record.providerId,
+      payload && typeof payload === 'object' ? (payload as Record<string, unknown>).providerId : null
+    ]
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/.test(candidate)) {
+        return candidate
+      }
+    }
+  }
+  return 'swob/protocol'
+}
 
-  if (Object.prototype.hasOwnProperty.call(node, 'const') &&
-    canonicalProviderJson(value) !== canonicalProviderJson(node.const)) {
-    return [issue(path, 'const', `must equal ${JSON.stringify(node.const)}`)]
+function protocolError(
+  value: unknown,
+  code: ProviderError['code'],
+  message: string,
+  details: Record<string, string | number | boolean | null>
+): ProviderError {
+  return {
+    code,
+    message,
+    retryable: false,
+    providerId: providerIdFrom(value),
+    sourceRefId: null,
+    recordId: null,
+    details
   }
-  if (Array.isArray(node.enum) && !node.enum.some((entry) =>
-    canonicalProviderJson(entry) === canonicalProviderJson(value))) {
-    return [issue(path, 'enum', `must be one of ${node.enum.map(String).join(', ')}`)]
+}
+
+function failed<T>(
+  value: unknown,
+  code: ProviderError['code'],
+  issues: ProviderSchemaIssue[],
+  details: Record<string, string | number | boolean | null> = {}
+): ProviderSchemaValidation<T> {
+  return {
+    ok: false,
+    issues,
+    error: protocolError(value, code, issues[0]?.message || 'Provider protocol validation failed.', details)
+  }
+}
+
+function resourceFailure<T>(
+  value: unknown,
+  limitName: keyof typeof PROVIDER_RESOURCE_LIMITS,
+  actual: number,
+  path = '$'
+): ProviderSchemaValidation<T> {
+  const limit = PROVIDER_RESOURCE_LIMITS[limitName]
+  return failed(value, 'resource-limit-exceeded', [
+    issue(path, 'resource-limit', `${limitName} exceeded: ${actual} > ${limit}`)
+  ], { limitName, actual, limit })
+}
+
+function namedArrayLimit(path: string): { name: keyof typeof PROVIDER_RESOURCE_LIMITS; value: number } | null {
+  const key = path.slice(path.lastIndexOf('/') + 1)
+  if (key === 'records') return { name: 'maxRecordsPerSession', value: PROVIDER_RESOURCE_LIMITS.maxRecordsPerSession }
+  if (key === 'sessions') return { name: 'maxSessionsPerOutcome', value: PROVIDER_RESOURCE_LIMITS.maxSessionsPerOutcome }
+  if (key === 'rows') return { name: 'maxQueryRows', value: PROVIDER_RESOURCE_LIMITS.maxQueryRows }
+  return null
+}
+
+function preflightValueBudget<T>(value: unknown): ProviderSchemaValidation<T> | null {
+  type BudgetEntry =
+    | { kind: 'enter'; value: unknown; path: string; depth: number }
+    | { kind: 'leave'; value: object }
+  const stack: BudgetEntry[] = [{ kind: 'enter', value, path: '$', depth: 1 }]
+  const ancestors = new WeakSet<object>()
+  let nodes = 0
+
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    if (current.kind === 'leave') {
+      ancestors.delete(current.value)
+      continue
+    }
+    nodes++
+    if (nodes > PROVIDER_RESOURCE_LIMITS.maxNodes) {
+      return resourceFailure(value, 'maxNodes', nodes, current.path)
+    }
+    if (current.depth > PROVIDER_RESOURCE_LIMITS.maxJsonDepth) {
+      return resourceFailure(value, 'maxJsonDepth', current.depth, current.path)
+    }
+    if (typeof current.value === 'string') {
+      if (current.value.length > PROVIDER_RESOURCE_LIMITS.maxStringCodeUnits) {
+        return resourceFailure(value, 'maxStringCodeUnits', current.value.length, current.path)
+      }
+      continue
+    }
+    if (!current.value || typeof current.value !== 'object') continue
+    if (ancestors.has(current.value)) {
+      return failed(value, 'schema-validation-failed', [
+        issue(current.path, 'json-cycle', 'JSON values must not contain object cycles')
+      ])
+    }
+    ancestors.add(current.value)
+    stack.push({ kind: 'leave', value: current.value })
+
+    if (Array.isArray(current.value)) {
+      if (current.value.length > PROVIDER_RESOURCE_LIMITS.maxArrayItems) {
+        return resourceFailure(value, 'maxArrayItems', current.value.length, current.path)
+      }
+      const named = namedArrayLimit(current.path)
+      if (named && current.value.length > named.value) {
+        return resourceFailure(value, named.name, current.value.length, current.path)
+      }
+      for (let index = current.value.length - 1; index >= 0; index--) {
+        stack.push({ kind: 'enter', value: current.value[index], path: `${current.path}/${index}`, depth: current.depth + 1 })
+      }
+      continue
+    }
+
+    const entries = Object.entries(current.value as Record<string, unknown>)
+    const columnLimit = current.path.endsWith('/cells')
+      ? PROVIDER_RESOURCE_LIMITS.maxQueryColumns
+      : PROVIDER_RESOURCE_LIMITS.maxObjectProperties
+    if (entries.length > columnLimit) {
+      return resourceFailure(
+        value,
+        current.path.endsWith('/cells') ? 'maxQueryColumns' : 'maxObjectProperties',
+        entries.length,
+        current.path
+      )
+    }
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const [key, child] = entries[index]
+      if (key.length > PROVIDER_RESOURCE_LIMITS.maxStringCodeUnits) {
+        return resourceFailure(value, 'maxStringCodeUnits', key.length, `${current.path}/${key}`)
+      }
+      stack.push({ kind: 'enter', value: child, path: `${current.path}/${key}`, depth: current.depth + 1 })
+    }
+  }
+  return null
+}
+
+interface LexicalContext {
+  kind: 'array' | 'object'
+  count: number
+  expectingKey: boolean
+  expectingValue: boolean
+  key: string | null
+  path: string
+  limitName: keyof typeof PROVIDER_RESOURCE_LIMITS
+  limit: number
+}
+
+function lexicalArrayLimit(key: string | null): {
+  name: keyof typeof PROVIDER_RESOURCE_LIMITS
+  value: number
+} {
+  if (key === 'records') return { name: 'maxRecordsPerSession', value: PROVIDER_RESOURCE_LIMITS.maxRecordsPerSession }
+  if (key === 'sessions') return { name: 'maxSessionsPerOutcome', value: PROVIDER_RESOURCE_LIMITS.maxSessionsPerOutcome }
+  if (key === 'rows') return { name: 'maxQueryRows', value: PROVIDER_RESOURCE_LIMITS.maxQueryRows }
+  return { name: 'maxArrayItems', value: PROVIDER_RESOURCE_LIMITS.maxArrayItems }
+}
+
+function preflightJsonText<T>(text: string): ProviderSchemaValidation<T> | null {
+  const stack: LexicalContext[] = []
+  let nodes = 0
+
+  const registerNode = (path: string): ProviderSchemaValidation<T> | null => {
+    nodes++
+    return nodes > PROVIDER_RESOURCE_LIMITS.maxNodes
+      ? resourceFailure(text, 'maxNodes', nodes, path)
+      : null
   }
 
-  if (Array.isArray(node.oneOf)) {
-    const candidates = node.oneOf.map((candidate) => validateNode(candidate as SchemaNode, value, path))
-    const valid = candidates.filter((errors) => errors.length === 0)
-    if (valid.length !== 1) {
-      const detail = valid.length === 0
-        ? candidates.flat().slice(0, 4).map((entry) => `${entry.path} ${entry.message}`).join('; ')
-        : `${valid.length} alternatives matched`
-      return [issue(path, 'oneOf', detail || 'must match exactly one alternative')]
+  const registerValue = (): ProviderSchemaValidation<T> | null => {
+    const parent = stack.at(-1)
+    if (!parent || !parent.expectingValue) return null
+    parent.expectingValue = false
+    if (parent.kind === 'array') {
+      parent.count++
+      if (parent.count > parent.limit) {
+        return resourceFailure(text, parent.limitName, parent.count, parent.path)
+      }
     }
-  }
-  if (Array.isArray(node.anyOf)) {
-    const valid = node.anyOf.some((candidate) => validateNode(candidate as SchemaNode, value, path).length === 0)
-    if (!valid) return [issue(path, 'anyOf', 'must match at least one alternative')]
-  }
-  if (Array.isArray(node.allOf)) {
-    const errors = node.allOf.flatMap((candidate) => validateNode(candidate as SchemaNode, value, path))
-    if (errors.length > 0) return errors
+    return null
   }
 
-  if (node.type) {
-    const expected = Array.isArray(node.type) ? node.type as string[] : [node.type as string]
-    if (!expected.some((type) => valueTypeMatches(type, value))) {
-      return [issue(path, 'type', `must be ${expected.join(' or ')}`)]
+  for (let index = 0; index < text.length;) {
+    const char = text[index]
+    if (/\s/.test(char) || char === ':') {
+      index++
+      continue
     }
-  }
-
-  if (typeof value === 'string') {
-    if (typeof node.minLength === 'number' && value.length < node.minLength) {
-      return [issue(path, 'minLength', `must contain at least ${node.minLength} character(s)`)]
+    if (char === ',') {
+      const parent = stack.at(-1)
+      if (parent) {
+        parent.expectingValue = true
+        if (parent.kind === 'object') parent.expectingKey = true
+      }
+      index++
+      continue
     }
-    if (typeof node.pattern === 'string' && !(new RegExp(node.pattern)).test(value)) {
-      return [issue(path, 'pattern', `must match ${node.pattern}`)]
+    if (char === ']' || char === '}') {
+      stack.pop()
+      index++
+      continue
     }
-  }
-  if (typeof value === 'number' && typeof node.minimum === 'number' && value < node.minimum) {
-    return [issue(path, 'minimum', `must be >= ${node.minimum}`)]
-  }
-
-  if (Array.isArray(value)) {
-    const errors: ProviderSchemaIssue[] = []
-    if (typeof node.minItems === 'number' && value.length < node.minItems) {
-      errors.push(issue(path, 'minItems', `must contain at least ${node.minItems} item(s)`))
+    if (char === '"') {
+      let length = 0
+      let keyText = ''
+      index++
+      while (index < text.length && text[index] !== '"') {
+        if (text[index] === '\\' && index + 1 < text.length) {
+          index += 2
+          length++
+        } else {
+          if (keyText.length < 64) keyText += text[index]
+          index++
+          length++
+        }
+        if (length > PROVIDER_RESOURCE_LIMITS.maxStringCodeUnits) {
+          return resourceFailure(text, 'maxStringCodeUnits', length)
+        }
+      }
+      index++
+      const parent = stack.at(-1)
+      if (parent?.kind === 'object' && parent.expectingKey) {
+        parent.count++
+        if (parent.count > PROVIDER_RESOURCE_LIMITS.maxObjectProperties) {
+          return resourceFailure(text, 'maxObjectProperties', parent.count, parent.path)
+        }
+        parent.expectingKey = false
+        parent.expectingValue = true
+        parent.key = keyText
+      } else {
+        const budget = registerNode(parent?.path || '$') || registerValue()
+        if (budget) return budget
+      }
+      continue
     }
-    if (node.uniqueItems === true) {
-      const keys = value.map(canonicalProviderJson)
-      if (new Set(keys).size !== keys.length) errors.push(issue(path, 'uniqueItems', 'must not contain duplicates'))
-    }
-    if (node.items && typeof node.items === 'object') {
-      value.forEach((entry, index) => {
-        errors.push(...validateNode(node.items as SchemaNode, entry, `${path}/${index}`))
+    if (char === '[' || char === '{') {
+      const parent = stack.at(-1)
+      const parentKey = parent?.kind === 'object' ? parent.key : null
+      const path = parent ? `${parent.path}/${parentKey || parent.count}` : '$'
+      const nodeBudget = registerNode(path) || registerValue()
+      if (nodeBudget) return nodeBudget
+      const arrayLimit = lexicalArrayLimit(parentKey)
+      stack.push({
+        kind: char === '[' ? 'array' : 'object',
+        count: 0,
+        expectingKey: char === '{',
+        expectingValue: char === '[',
+        key: null,
+        path,
+        limitName: char === '[' ? arrayLimit.name : 'maxObjectProperties',
+        limit: char === '[' ? arrayLimit.value : PROVIDER_RESOURCE_LIMITS.maxObjectProperties
       })
+      if (stack.length > PROVIDER_RESOURCE_LIMITS.maxJsonDepth) {
+        return resourceFailure(text, 'maxJsonDepth', stack.length, path)
+      }
+      index++
+      continue
     }
-    return errors
-  }
 
-  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    const object = value as Record<string, unknown>
-    const properties = (node.properties as Record<string, SchemaNode> | undefined) || {}
-    const errors: ProviderSchemaIssue[] = []
-    for (const name of (node.required as string[] | undefined) || []) {
-      if (!Object.prototype.hasOwnProperty.call(object, name)) {
-        errors.push(issue(`${path}/${name}`, 'required', 'is required'))
-      }
-    }
-    for (const [name, child] of Object.entries(properties)) {
-      if (Object.prototype.hasOwnProperty.call(object, name)) {
-        errors.push(...validateNode(child, object[name], `${path}/${name}`))
-      }
-    }
-    const known = new Set(Object.keys(properties))
-    if (node.unevaluatedProperties === false) {
-      for (const name of knownProperties(node)) known.add(name)
-    }
-    for (const [name, child] of Object.entries(object)) {
-      if (known.has(name)) continue
-      if (node.additionalProperties === false || node.unevaluatedProperties === false) {
-        errors.push(issue(`${path}/${name}`, 'additionalProperties', 'is not allowed'))
-      } else if (node.additionalProperties && typeof node.additionalProperties === 'object') {
-        errors.push(...validateNode(node.additionalProperties as SchemaNode, child, `${path}/${name}`))
-      }
-    }
-    return errors
+    const parent = stack.at(-1)
+    const budget = registerNode(parent?.path || '$') || registerValue()
+    if (budget) return budget
+    while (index < text.length && !/[\s,\]}]/.test(text[index])) index++
   }
-
-  return []
+  return null
 }
 
-function validateDefinition<T>(name: string, value: unknown): ProviderSchemaValidation<T> {
-  const definition = (schemaDocument.$defs as Record<string, SchemaNode>)[name]
-  if (!definition) throw new Error(`Unknown schema definition: ${name}`)
-  const issues = validateNode(definition, value, '$')
-  return issues.length > 0 ? { ok: false, issues } : { ok: true, value: value as T, issues: [] }
+function ajvIssues(errors: ErrorObject[] | null | undefined): ProviderSchemaIssue[] {
+  return (errors || []).map((entry) => ({
+    path: `$${entry.instancePath}`,
+    keyword: entry.keyword,
+    message: entry.message || 'schema validation failed'
+  }))
 }
 
-function capabilitySemanticIssues(capability: CapabilityDeclaration, path: string): ProviderSchemaIssue[] {
-  const issues: ProviderSchemaIssue[] = []
-  if (capability.status !== 'available' && !capability.reason?.trim()) {
-    issues.push(issue(`${path}/reason`, 'capability-reason', 'non-available capability requires a reason'))
+function validateWithSchema<T>(
+  value: unknown,
+  validator: ValidateFunction<T>
+): ProviderSchemaValidation<T> {
+  const resource = preflightValueBudget<T>(value)
+  if (resource) return resource
+  if (!validator(value)) {
+    return failed(value, 'schema-validation-failed', ajvIssues(validator.errors))
   }
-  if ((capability.status === 'available' || capability.status === 'experimental') && capability.evidence.length === 0) {
-    issues.push(issue(`${path}/evidence`, 'capability-evidence', 'available or experimental capability requires evidence'))
-  }
-  return issues
-}
-
-function manifestSemanticIssues(manifest: ProviderManifest): ProviderSchemaIssue[] {
-  return PROVIDER_CAPABILITY_NAMES.flatMap((name) =>
-    capabilitySemanticIssues(manifest.capabilities[name], `$/capabilities/${name}`)
-  )
-}
-
-function parseOutcomeSemanticIssues(outcome: ParseOutcome): ProviderSchemaIssue[] {
-  const issues: ProviderSchemaIssue[] = []
-  if ((outcome.status === 'partial' || outcome.status === 'error') && outcome.errors.length === 0 &&
-    outcome.sessions.every((session) => session.errors.length === 0)) {
-    issues.push(issue('$/errors', 'parse-errors', `${outcome.status} outcome requires a typed error`))
-  }
-  outcome.sessions.forEach((session, index) => {
-    const path = `$/sessions/${index}`
-    if ((session.status === 'partial' || session.status === 'skipped' || session.status === 'error') && session.errors.length === 0) {
-      issues.push(issue(`${path}/errors`, 'parse-errors', `${session.status} session requires a typed error`))
-    }
-    if (session.status === 'replace' && !session.replaceSessionRecordId) {
-      issues.push(issue(`${path}/replaceSessionRecordId`, 'replace-target', 'replace session requires a target'))
-    }
-    for (const record of session.records) {
-      if (record.provenance.providerId !== outcome.providerId) {
-        issues.push(issue(`${path}/records`, 'provider-identity', 'record provenance providerId must match outcome providerId'))
-      }
-      if (record.provenance.sourceRefId !== session.sourceRefId) {
-        issues.push(issue(`${path}/records`, 'source-identity', 'record provenance sourceRefId must match session sourceRefId'))
-      }
-    }
-  })
-  return issues
+  return { ok: true, value, issues: [] }
 }
 
 export function validateProviderManifest(value: unknown): ProviderSchemaValidation<ProviderManifest> {
-  const structural = validateDefinition<ProviderManifest>('ProviderManifest', value)
-  if (!structural.ok) return structural
-  const issues = manifestSemanticIssues(structural.value!)
-  return issues.length > 0 ? { ok: false, issues } : structural
+  return validateWithSchema(value, validateManifestSchema)
 }
 
 export function validateProviderEnvelope(value: unknown): ProviderSchemaValidation<ProviderEnvelope> {
-  const structural = validateDefinition<ProviderEnvelope>('ProviderEnvelope', value)
-  if (!structural.ok) return structural
-  const envelope = structural.value!
-  const issues: ProviderSchemaIssue[] = []
-  if (envelope.protocolVersion !== PROVIDER_PROTOCOL_VERSION) {
-    issues.push(issue('$/protocolVersion', 'protocol-version', `must equal ${PROVIDER_PROTOCOL_VERSION}`))
+  return validateWithSchema(value, validateEnvelopeSchema)
+}
+
+export function decodeProviderEnvelope(input: string | Uint8Array): ProviderSchemaValidation<ProviderEnvelope> {
+  const bytes = typeof input === 'string' ? Buffer.byteLength(input, 'utf8') : input.byteLength
+  if (bytes > PROVIDER_RESOURCE_LIMITS.maxEnvelopeBytes) {
+    return resourceFailure(input, 'maxEnvelopeBytes', bytes)
   }
-  if (envelope.kind === 'manifest') issues.push(...manifestSemanticIssues(envelope.payload))
-  if (envelope.kind === 'parse-outcome') issues.push(...parseOutcomeSemanticIssues(envelope.payload))
-  if (envelope.kind === 'query-frame') {
-    const fieldNames = envelope.payload.fields.map((field) => field.name)
-    if (new Set(fieldNames).size !== fieldNames.length) {
-      issues.push(issue('$/payload/fields', 'query-frame-fields', 'field names must be unique'))
-    }
-    envelope.payload.rows.forEach((row, index) => {
-      if (row.length !== envelope.payload.fields.length) {
-        issues.push(issue(
-          `$/payload/rows/${index}`,
-          'query-frame-width',
-          `row width ${row.length} does not match field count ${envelope.payload.fields.length}`
-        ))
-      }
-    })
+  let text: string
+  try {
+    text = typeof input === 'string' ? input : new TextDecoder('utf-8', { fatal: true }).decode(input)
+  } catch {
+    return failed(input, 'schema-validation-failed', [issue('$', 'utf8', 'provider envelope must be valid UTF-8')])
   }
-  return issues.length > 0 ? { ok: false, issues } : structural
+  const lexical = preflightJsonText<ProviderEnvelope>(text)
+  if (lexical) return lexical
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return failed(input, 'schema-validation-failed', [issue('$', 'json-parse', 'provider envelope must be valid JSON')])
+  }
+  return validateProviderEnvelope(value)
 }
 
 export function assertProviderEnvelope(value: unknown): ProviderEnvelope {
   const result = validateProviderEnvelope(value)
-  if (!result.ok) {
-    const summary = result.issues.map((entry) => `${entry.path}: ${entry.message}`).join('; ')
-    throw new Error(`ProviderProtocol v1 validation failed: ${summary}`)
-  }
+  if (!result.ok) throw new ProviderProtocolValidationError(result.error!, result.issues)
   return result.value!
 }
 

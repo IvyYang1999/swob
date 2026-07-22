@@ -6,6 +6,7 @@ import {
   harnessForSource,
   migrateSettingsPreferences
 } from './settings-capabilities'
+import { providerCapabilitiesForSource } from './provider-capabilities'
 
 describe('设置偏好迁移与 Resume 能力', () => {
   it('旧 iTerm 配置自动迁移，同时保留未知旧字段', () => {
@@ -51,8 +52,34 @@ describe('设置偏好迁移与 Resume 能力', () => {
       const terminal = harnessForSource(source).choices.find((choice) => choice.id === 'terminal')
       expect(terminal, source).toMatchObject({
         support: 'experimental',
-        reason: '命令映射未经来源级 Resume 审计'
+        reason: providerCapabilitiesForSource(source)?.['terminal-resume'].reason
       })
+    }
+  })
+
+  it('CC-Mirror 不再继承 Claude Code 的 stable terminal 真相', () => {
+    const mirror = harnessForSource('cc-mirror')
+    expect(mirror.id).toBe('cc-mirror')
+    expect(mirror.choices.find((choice) => choice.id === 'terminal')).toMatchObject({
+      support: 'experimental',
+      reason: providerCapabilitiesForSource('cc-mirror')?.['terminal-resume'].reason
+    })
+  })
+
+  it('settings terminal/native support is projected from the Provider registry', () => {
+    const support = (status: string): string => status === 'available'
+      ? 'stable'
+      : status === 'experimental' ? 'experimental' : 'unsupported'
+    for (const harness of HARNESS_CAPABILITIES) {
+      const capabilities = providerCapabilitiesForSource(harness.sourceIds[0])!
+      for (const choice of harness.choices) {
+        if (choice.id === 'remote-control') continue
+        const declaration = choice.id === 'terminal'
+          ? capabilities['terminal-resume']
+          : capabilities['native-resume']
+        expect(choice.support, `${harness.id}/${choice.id}`).toBe(support(declaration.status))
+        expect(choice.reason, `${harness.id}/${choice.id}`).toBe(declaration.reason || undefined)
+      }
     }
   })
 })

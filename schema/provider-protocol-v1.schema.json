@@ -16,25 +16,41 @@
     },
     "NonEmptyString": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "StableSourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@-]*$",
+      "description": "Opaque provider identity. Path separators and absolute local paths are forbidden."
     },
     "NullableString": {
-      "type": ["string", "null"]
+      "type": ["string", "null"],
+      "maxLength": 65536
     },
     "NullableInteger": {
       "type": ["integer", "null"],
       "minimum": 0
     },
     "JsonPrimitive": {
-      "type": ["string", "number", "boolean", "null"]
+      "oneOf": [
+        { "type": "string", "maxLength": 262144 },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" }
+      ]
     },
     "JsonArray": {
       "type": "array",
-      "items": { "$ref": "#/$defs/JsonValue" }
+      "items": { "$ref": "#/$defs/JsonValue" },
+      "maxItems": 10000
     },
     "JsonObject": {
       "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/JsonValue" }
+      "additionalProperties": { "$ref": "#/$defs/JsonValue" },
+      "maxProperties": 256
     },
     "JsonValue": {
       "anyOf": [
@@ -89,9 +105,26 @@
         "reason": { "$ref": "#/$defs/NullableString" },
         "evidence": {
           "type": "array",
-          "items": { "$ref": "#/$defs/CapabilityEvidence" }
+          "items": { "$ref": "#/$defs/CapabilityEvidence" },
+          "maxItems": 64
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "enum": ["unavailable", "not-applicable", "experimental"] } },
+            "required": ["status"]
+          },
+          "then": { "properties": { "reason": { "$ref": "#/$defs/NonEmptyString" } } }
+        },
+        {
+          "if": {
+            "properties": { "status": { "enum": ["available", "experimental"] } },
+            "required": ["status"]
+          },
+          "then": { "properties": { "evidence": { "type": "array", "minItems": 1 } } }
+        }
+      ]
     },
     "ProviderCapabilities": {
       "type": "object",
@@ -142,7 +175,7 @@
         "formatVersions": {
           "type": "array",
           "items": { "$ref": "#/$defs/NonEmptyString" },
-          "minItems": 1,
+          "maxItems": 64,
           "uniqueItems": true
         },
         "legacySourceIds": {
@@ -187,7 +220,7 @@
       "required": ["kind", "stableId", "providerId", "uri", "displayLocator", "fingerprint"],
       "properties": {
         "kind": { "const": "file" },
-        "stableId": { "$ref": "#/$defs/NonEmptyString" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
         "providerId": { "$ref": "#/$defs/ProviderId" },
         "uri": { "$ref": "#/$defs/NonEmptyString" },
         "displayLocator": { "$ref": "#/$defs/NonEmptyString" },
@@ -200,7 +233,7 @@
       "required": ["kind", "stableId", "providerId", "rootUri", "memberUris", "displayLocator", "fingerprint"],
       "properties": {
         "kind": { "const": "composite-directory" },
-        "stableId": { "$ref": "#/$defs/NonEmptyString" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
         "providerId": { "$ref": "#/$defs/ProviderId" },
         "rootUri": { "$ref": "#/$defs/NonEmptyString" },
         "memberUris": {
@@ -219,7 +252,7 @@
       "required": ["kind", "stableId", "providerId", "databaseUri", "table", "primaryKey", "displayLocator", "fingerprint"],
       "properties": {
         "kind": { "const": "sqlite-row" },
-        "stableId": { "$ref": "#/$defs/NonEmptyString" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
         "providerId": { "$ref": "#/$defs/ProviderId" },
         "databaseUri": { "$ref": "#/$defs/NonEmptyString" },
         "table": { "$ref": "#/$defs/NonEmptyString" },
@@ -234,7 +267,7 @@
       "required": ["kind", "stableId", "providerId", "containerRefId", "memberKey", "displayLocator", "fingerprint"],
       "properties": {
         "kind": { "const": "virtual-member" },
-        "stableId": { "$ref": "#/$defs/NonEmptyString" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
         "providerId": { "$ref": "#/$defs/ProviderId" },
         "containerRefId": { "$ref": "#/$defs/NonEmptyString" },
         "memberKey": { "$ref": "#/$defs/NonEmptyString" },
@@ -248,7 +281,7 @@
       "required": ["kind", "stableId", "providerId", "packageUri", "entryPath", "displayLocator", "fingerprint"],
       "properties": {
         "kind": { "const": "import-package" },
-        "stableId": { "$ref": "#/$defs/NonEmptyString" },
+        "stableId": { "$ref": "#/$defs/StableSourceId" },
         "providerId": { "$ref": "#/$defs/ProviderId" },
         "packageUri": { "$ref": "#/$defs/NonEmptyString" },
         "entryPath": { "$ref": "#/$defs/NonEmptyString" },
@@ -291,6 +324,7 @@
       }
     },
     "SessionRecord": {
+      "type": "object",
       "unevaluatedProperties": false,
       "allOf": [
         { "$ref": "#/$defs/CanonicalRecordBase" },
@@ -320,7 +354,7 @@
       "required": ["kind", "text"],
       "properties": {
         "kind": { "const": "text" },
-        "text": { "type": "string" }
+        "text": { "type": "string", "maxLength": 262144 }
       }
     },
     "ThinkingContent": {
@@ -329,7 +363,7 @@
       "required": ["kind", "text"],
       "properties": {
         "kind": { "const": "thinking" },
-        "text": { "type": "string" }
+        "text": { "type": "string", "maxLength": 262144 }
       }
     },
     "MediaRefContent": {
@@ -350,6 +384,7 @@
       ]
     },
     "MessageRecord": {
+      "type": "object",
       "unevaluatedProperties": false,
       "allOf": [
         { "$ref": "#/$defs/CanonicalRecordBase" },
@@ -367,13 +402,15 @@
             "timestamp": { "$ref": "#/$defs/NullableString" },
             "content": {
               "type": "array",
-              "items": { "$ref": "#/$defs/MessageContent" }
+              "items": { "$ref": "#/$defs/MessageContent" },
+              "maxItems": 10000
             }
           }
         }
       ]
     },
     "ToolCallRecord": {
+      "type": "object",
       "unevaluatedProperties": false,
       "allOf": [
         { "$ref": "#/$defs/CanonicalRecordBase" },
@@ -392,6 +429,7 @@
       ]
     },
     "ToolResultEvent": {
+      "type": "object",
       "unevaluatedProperties": false,
       "allOf": [
         { "$ref": "#/$defs/CanonicalRecordBase" },
@@ -410,6 +448,7 @@
       ]
     },
     "UsageRecord": {
+      "type": "object",
       "unevaluatedProperties": false,
       "allOf": [
         { "$ref": "#/$defs/CanonicalRecordBase" },
@@ -433,10 +472,37 @@
               "enum": ["reported", "derived", "estimated", "unavailable"]
             }
           }
+        },
+        {
+          "if": {
+            "properties": { "usageProvenance": { "const": "unavailable" } },
+            "required": ["usageProvenance"]
+          },
+          "then": {
+            "properties": {
+              "inputTokens": { "type": "null" },
+              "outputTokens": { "type": "null" },
+              "cacheReadTokens": { "type": "null" },
+              "cacheWriteTokens": { "type": "null" },
+              "reasoningTokens": { "type": "null" },
+              "costUsd": { "type": "null" }
+            }
+          },
+          "else": {
+            "anyOf": [
+              { "properties": { "inputTokens": { "type": "integer" } }, "required": ["inputTokens"] },
+              { "properties": { "outputTokens": { "type": "integer" } }, "required": ["outputTokens"] },
+              { "properties": { "cacheReadTokens": { "type": "integer" } }, "required": ["cacheReadTokens"] },
+              { "properties": { "cacheWriteTokens": { "type": "integer" } }, "required": ["cacheWriteTokens"] },
+              { "properties": { "reasoningTokens": { "type": "integer" } }, "required": ["reasoningTokens"] },
+              { "properties": { "costUsd": { "type": "number" } }, "required": ["costUsd"] }
+            ]
+          }
         }
       ]
     },
     "RelationshipRecord": {
+      "type": "object",
       "unevaluatedProperties": false,
       "allOf": [
         { "$ref": "#/$defs/CanonicalRecordBase" },
@@ -456,6 +522,7 @@
       ]
     },
     "ArtifactRecord": {
+      "type": "object",
       "unevaluatedProperties": false,
       "allOf": [
         { "$ref": "#/$defs/CanonicalRecordBase" },
@@ -524,6 +591,7 @@
         "partial-data",
         "cancelled",
         "internal"
+        ,"resource-limit-exceeded"
       ]
     },
     "ProviderError": {
@@ -547,26 +615,110 @@
     },
     "ParseStatus": {
       "type": "string",
-      "enum": ["complete", "partial", "skipped", "error", "replace"]
+      "enum": ["complete", "partial", "skipped", "error", "replace", "no-data"]
+    },
+    "NoDataReason": {
+      "type": ["string", "null"],
+      "enum": [null, "empty-source", "detected-only", "unsupported-format", "no-parseable-session"]
     },
     "SessionParseResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sourceRefId", "sessionRecordId", "status", "records", "errors", "replaceSessionRecordId"],
+      "required": ["sourceRefId", "sessionRecordId", "status", "records", "errors", "replaceSessionRecordId", "noDataReason"],
       "properties": {
-        "sourceRefId": { "$ref": "#/$defs/NonEmptyString" },
+        "sourceRefId": { "$ref": "#/$defs/StableSourceId" },
         "sessionRecordId": { "$ref": "#/$defs/NullableString" },
         "status": { "$ref": "#/$defs/ParseStatus" },
         "records": {
           "type": "array",
-          "items": { "$ref": "#/$defs/CanonicalRecord" }
+          "items": { "$ref": "#/$defs/CanonicalRecord" },
+          "maxItems": 10000
         },
         "errors": {
           "type": "array",
-          "items": { "$ref": "#/$defs/ProviderError" }
+          "items": { "$ref": "#/$defs/ProviderError" },
+          "maxItems": 1000
         },
-        "replaceSessionRecordId": { "$ref": "#/$defs/NullableString" }
-      }
+        "replaceSessionRecordId": { "$ref": "#/$defs/NullableString" },
+        "noDataReason": { "$ref": "#/$defs/NoDataReason" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+              "records": {
+                "type": "array",
+                "minItems": 1,
+                "contains": { "type": "object", "properties": { "recordType": { "const": "session" } }, "required": ["recordType"] },
+                "minContains": 1
+              },
+              "errors": { "type": "array", "maxItems": 0 },
+              "replaceSessionRecordId": { "type": "null" },
+              "noDataReason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+              "records": {
+                "type": "array",
+                "minItems": 1,
+                "contains": { "type": "object", "properties": { "recordType": { "const": "session" } }, "required": ["recordType"] },
+                "minContains": 1
+              },
+              "errors": { "type": "array", "minItems": 1 },
+              "replaceSessionRecordId": { "type": "null" },
+              "noDataReason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "enum": ["skipped", "error"] } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "type": "null" },
+              "records": { "type": "array", "maxItems": 0 },
+              "errors": { "type": "array", "minItems": 1 },
+              "replaceSessionRecordId": { "type": "null" },
+              "noDataReason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "replace" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+              "records": {
+                "type": "array",
+                "minItems": 1,
+                "contains": { "type": "object", "properties": { "recordType": { "const": "session" } }, "required": ["recordType"] },
+                "minContains": 1
+              },
+              "errors": { "type": "array", "maxItems": 0 },
+              "replaceSessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+              "noDataReason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "no-data" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessionRecordId": { "type": "null" },
+              "records": { "type": "array", "maxItems": 0 },
+              "errors": { "type": "array", "maxItems": 0 },
+              "replaceSessionRecordId": { "type": "null" },
+              "noDataReason": { "type": "string", "enum": ["empty-source", "detected-only", "unsupported-format", "no-parseable-session"] }
+            }
+          }
+        }
+      ]
     },
     "ParseOutcome": {
       "type": "object",
@@ -580,60 +732,291 @@
         "status": { "$ref": "#/$defs/ParseStatus" },
         "sessions": {
           "type": "array",
-          "items": { "$ref": "#/$defs/SessionParseResult" }
+          "items": { "$ref": "#/$defs/SessionParseResult" },
+          "maxItems": 5000
         },
         "errors": {
           "type": "array",
-          "items": { "$ref": "#/$defs/ProviderError" }
+          "items": { "$ref": "#/$defs/ProviderError" },
+          "maxItems": 1000
         },
         "tombstones": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Tombstone" }
+          "items": { "$ref": "#/$defs/Tombstone" },
+          "maxItems": 10000
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/CompleteSessionParseResult" } },
+              "errors": { "type": "array", "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessions": {
+                "type": "array",
+                "minItems": 1,
+                "contains": { "type": "object", "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+                "minContains": 1
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "enum": ["skipped", "error"] } }, "required": ["status"] },
+          "then": { "properties": { "sessions": { "type": "array", "maxItems": 0 }, "errors": { "type": "array", "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "replace" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ReplaceSessionParseResult" } },
+              "errors": { "type": "array", "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "no-data" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "sessions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/NoDataSessionParseResult" } },
+              "errors": { "type": "array", "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "CompleteSessionParseResult": {
+      "allOf": [
+        { "$ref": "#/$defs/SessionParseResult" },
+        { "type": "object", "properties": { "status": { "const": "complete" } }, "required": ["status"] }
+      ]
+    },
+    "ReplaceSessionParseResult": {
+      "allOf": [
+        { "$ref": "#/$defs/SessionParseResult" },
+        { "type": "object", "properties": { "status": { "const": "replace" } }, "required": ["status"] }
+      ]
+    },
+    "NoDataSessionParseResult": {
+      "allOf": [
+        { "$ref": "#/$defs/SessionParseResult" },
+        { "type": "object", "properties": { "status": { "const": "no-data" } }, "required": ["status"] }
+      ]
     },
     "QueryFrameFieldType": {
       "type": "string",
       "enum": ["string", "number", "boolean", "timestamp", "json"]
     },
-    "QueryFrameField": {
+    "QueryStringCell": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "type", "nullable"],
+      "required": ["type", "nullable", "value"],
       "properties": {
-        "name": { "$ref": "#/$defs/NonEmptyString" },
-        "type": { "$ref": "#/$defs/QueryFrameFieldType" },
-        "nullable": { "type": "boolean" }
+        "type": { "const": "string" },
+        "nullable": { "const": false },
+        "value": { "type": "string", "maxLength": 262144 }
       }
     },
-    "QueryFrame": {
+    "QueryNullableStringCell": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "projectionId", "lossy", "sourceRecordTypes", "fields", "rows"],
+      "required": ["type", "nullable", "value"],
       "properties": {
-        "schemaVersion": { "const": 1 },
-        "projectionId": { "$ref": "#/$defs/NonEmptyString" },
-        "lossy": { "const": true },
+        "type": { "const": "string" },
+        "nullable": { "const": true },
+        "value": { "type": ["string", "null"], "maxLength": 262144 }
+      }
+    },
+    "QueryNumberCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "number" },
+        "nullable": { "const": false },
+        "value": { "type": "number" }
+      }
+    },
+    "QueryNullableNumberCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "number" },
+        "nullable": { "const": true },
+        "value": { "type": ["number", "null"] }
+      }
+    },
+    "QueryBooleanCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "boolean" },
+        "nullable": { "const": false },
+        "value": { "type": "boolean" }
+      }
+    },
+    "QueryNullableBooleanCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "boolean" },
+        "nullable": { "const": true },
+        "value": { "type": ["boolean", "null"] }
+      }
+    },
+    "QueryTimestampCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "timestamp" },
+        "nullable": { "const": false },
+        "value": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "QueryNullableTimestampCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "timestamp" },
+        "nullable": { "const": true },
+        "value": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
+    "JsonNonNullValue": {
+      "oneOf": [
+        { "type": "string", "maxLength": 262144 },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "$ref": "#/$defs/JsonArray" },
+        { "$ref": "#/$defs/JsonObject" }
+      ]
+    },
+    "QueryJsonCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "json" },
+        "nullable": { "const": false },
+        "value": { "$ref": "#/$defs/JsonNonNullValue" }
+      }
+    },
+    "QueryNullableJsonCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "nullable", "value"],
+      "properties": {
+        "type": { "const": "json" },
+        "nullable": { "const": true },
+        "value": { "$ref": "#/$defs/JsonValue" }
+      }
+    },
+    "QueryFrameCell": {
+      "oneOf": [
+        { "$ref": "#/$defs/QueryStringCell" },
+        { "$ref": "#/$defs/QueryNullableStringCell" },
+        { "$ref": "#/$defs/QueryNumberCell" },
+        { "$ref": "#/$defs/QueryNullableNumberCell" },
+        { "$ref": "#/$defs/QueryBooleanCell" },
+        { "$ref": "#/$defs/QueryNullableBooleanCell" },
+        { "$ref": "#/$defs/QueryTimestampCell" },
+        { "$ref": "#/$defs/QueryNullableTimestampCell" },
+        { "$ref": "#/$defs/QueryJsonCell" },
+        { "$ref": "#/$defs/QueryNullableJsonCell" }
+      ]
+    },
+    "QueryFrameRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rowId", "cells"],
+      "properties": {
+        "rowId": { "$ref": "#/$defs/NonEmptyString" },
+        "cells": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/QueryFrameCell" },
+          "maxProperties": 256
+        }
+      }
+    },
+    "QueryProjectionStatus": {
+      "type": "string",
+      "enum": ["complete", "partial", "unavailable"]
+    },
+    "QueryProjectionProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "parserDataVersion", "formatVersion", "sourceRecordTypes", "sourceFingerprint"],
+      "properties": {
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "parserDataVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "formatVersion": { "$ref": "#/$defs/NullableString" },
         "sourceRecordTypes": {
           "type": "array",
           "items": {
             "type": "string",
             "enum": ["session", "message", "tool-call", "tool-result", "usage", "relationship", "artifact"]
           },
+          "maxItems": 7,
           "uniqueItems": true
         },
-        "fields": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/QueryFrameField" }
-        },
+        "sourceFingerprint": { "$ref": "#/$defs/Fingerprint" }
+      }
+    },
+    "QueryFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "projectionId", "lossy", "status", "provenance", "rows", "errors", "unavailableReason"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "projectionId": { "$ref": "#/$defs/NonEmptyString" },
+        "lossy": { "const": true },
+        "status": { "$ref": "#/$defs/QueryProjectionStatus" },
+        "provenance": { "$ref": "#/$defs/QueryProjectionProvenance" },
         "rows": {
           "type": "array",
-          "items": {
-            "type": "array",
-            "items": { "$ref": "#/$defs/JsonValue" }
+          "items": { "$ref": "#/$defs/QueryFrameRow" },
+          "maxItems": 10000
+        },
+        "errors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProviderError" },
+          "maxItems": 1000
+        },
+        "unavailableReason": { "$ref": "#/$defs/NullableString" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+          "then": { "properties": { "errors": { "type": "array", "maxItems": 0 }, "unavailableReason": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+          "then": { "properties": { "errors": { "type": "array", "minItems": 1 }, "unavailableReason": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "unavailable" } }, "required": ["status"] },
+          "then": {
+            "properties": {
+              "rows": { "type": "array", "maxItems": 0 },
+              "errors": { "type": "array", "minItems": 1 },
+              "unavailableReason": { "$ref": "#/$defs/NonEmptyString" }
+            }
           }
         }
-      }
+      ]
     },
     "HelloEnvelope": {
       "type": "object",

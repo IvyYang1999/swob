@@ -131,8 +131,8 @@ function detectionOnlyCapabilities(source: LegacySessionSource): ProviderCapabil
     subagents: unavailable('No subagent parser exists.', unavailableSummary),
     'live-watch': unavailable('No source-specific watcher exists.', watcher),
     search: unavailable('No reliable normalized transcript is available to the search index.', searchIndex),
-    archive: experimental(
-      'Only the detected physical file is copied; compound DB/WAL/sidecar completeness is unverified.',
+    archive: unavailable(
+      'The archive call chain rejects this source; no physical source path is copied.',
       archive
     ),
     'terminal-resume': experimental(
@@ -149,7 +149,7 @@ function definition(
   displayName: string,
   tier: BuiltinProviderTier,
   capabilities: ProviderCapabilities,
-  formatVersions: string[] = ['unknown']
+  formatVersions: string[] = []
 ): BuiltinProviderDefinition {
   return {
     sourceId,
@@ -232,7 +232,7 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
     subagents: unavailable('No ZCode subagent identity parser is implemented.', implementation('src/main/zcode-loader.ts')),
     liveWatch: unavailable('No ZCode source watcher is registered.', watcher),
     search: experimental('Normalized SQLite transcript indexing exists, but full parity is not audited.', searchIndex, implementation('src/main/zcode-loader.ts')),
-    terminalResume: unavailable('ZCode has no verified public CLI resume entry point.', resume),
+    terminalResume: unavailable('没有公开 CLI Resume', resume),
     nativeResume: experimental('The deep link opens a workspace, not a verified specific session.', resume, test('src/main/session-actions.test.ts'))
   }), ['zcode-sqlite-observed']),
 
@@ -251,7 +251,11 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
     subagents: experimental('Claude-compatible subagent loading exists but mirror-specific layouts are not audited.', loader),
     'live-watch': unavailable('No CC-Mirror source watcher is registered.', watcher),
     search: available(searchIndex, compatibility('Claude JSONL compatibility')),
-    archive: available(archive, compatibility('Claude JSONL compatibility')),
+    archive: unavailable(
+      'The archive path allowlist excludes .cc-mirror sources.',
+      archive,
+      compatibility('Claude JSONL compatibility does not imply archive path eligibility.')
+    ),
     'terminal-resume': experimental('The Claude command is reused without an independently audited mirror config root.', resume),
     'native-resume': notApplicable('No CC-Mirror-specific native session entry point exists.', resume),
     'format-provenance': unavailable('Compatibility is known, but records do not carry an authoritative mirror format version.', loader)

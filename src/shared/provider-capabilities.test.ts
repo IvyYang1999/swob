@@ -37,6 +37,8 @@ describe('current provider capability truth', () => {
       expect(capability.usage.status, definition.sourceId).toBe('unavailable')
       expect(capability['terminal-resume'].status, definition.sourceId).not.toBe('available')
       expect(capability['native-resume'].status, definition.sourceId).not.toBe('available')
+      expect(capability.archive.status, definition.sourceId).toBe('unavailable')
+      expect(definition.manifest.formatVersions, definition.sourceId).toEqual([])
     }
   })
 

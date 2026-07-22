@@ -130,6 +130,13 @@ export interface SessionSubagentSummary {
   status: 'completed' | 'unknown'
 }
 
+export interface SessionProviderOutcome {
+  detected: 'detected'
+  parse: 'parsed' | 'no-data' | 'placeholder' | 'error'
+  usage: 'available' | 'unavailable'
+  reason?: string
+}
+
 export interface SessionSummary {
   id: string
   sessionId: string
@@ -163,6 +170,8 @@ export interface SessionSummary {
   tokenUsage: TokenUsage
   /** Provider-aware, deduplicated ledger. tokenUsage remains a compatibility view. */
   tokenAccounting?: TokenAccounting
+  /** Actual per-session loader outcome; capability declarations never substitute for this fact. */
+  providerOutcome?: SessionProviderOutcome
   referencedFiles: FileRef[]
   configFiles: string[]
   libraryDirPath?: string

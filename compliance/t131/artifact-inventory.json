@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "auditDate": "2026-07-22",
+  "baseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
+  "artifacts": [
+    {
+      "platform": "macOS arm64",
+      "format": "DMG",
+      "version": "v1.2.0",
+      "source": "https://github.com/IvyYang1999/swob/releases/tag/v1.2.0",
+      "sourceCommit": "9bd6bbc92554bfaab71d0badd9923af7f1c6334b",
+      "bytes": 142659456,
+      "sha256": "bc056d043dcf6d1a1d41b373b14e8c03fd8f91e73901dd41f9dba0427d7ab239",
+      "inspection": "Mounted read-only. Its app.asar SHA-256 matched the ZIP payload exactly.",
+      "disposition": "BLOCKED_BY_SHARED_MACOS_PAYLOAD_FINDINGS"
+    },
+    {
+      "platform": "macOS arm64",
+      "format": "ZIP",
+      "version": "v1.2.0",
+      "source": "https://github.com/IvyYang1999/swob/releases/tag/v1.2.0",
+      "sourceCommit": "9bd6bbc92554bfaab71d0badd9923af7f1c6334b",
+      "bytes": 138378279,
+      "sha256": "69bd0e8a4655f1b5fde18d335a485f1bc967c2194d9a1236370ec9ff3dad36e3",
+      "outerEntries": 605,
+      "asarFiles": 8869,
+      "disposition": "BLOCKED_BY_SHARED_MACOS_PAYLOAD_FINDINGS"
+    },
+    {
+      "platform": "Windows x64",
+      "format": "NSIS EXE",
+      "version": "1.2.0 alpha",
+      "source": "https://github.com/IvyYang1999/swob/actions/runs/29883831603",
+      "sourceCommit": "d970cbf469ac7416c0a4a847c1f85ce484d5f1cd",
+      "sourceBranch": "feature/t107-windows-alpha",
+      "formalRelease": false,
+      "bytes": 131828373,
+      "sha256": "114e9b31d2574742839828c41fd05605efacc192b916990978fff2b9f0abe3c4",
+      "extractedOuterFiles": 150,
+      "asarFiles": 8971,
+      "disposition": "REFERENCE_SAMPLE_ONLY_NOT_CURRENT_MASTER_RELEASE"
+    }
+  ],
+  "payloadFindings": {
+    "macOS": {
+      "projectLicense": "AGPL-3.0 license text present at app.asar root.",
+      "dependencyLicenses": "Per-package license files are present for many packaged npm dependencies.",
+      "electronNotice": "LICENSE.electron.txt not found in the outer app or framework inventory.",
+      "chromiumNotice": "LICENSES.chromium.html not found in the outer app or framework inventory.",
+      "unexpectedWorktree": {
+        "path": ".claude/worktrees/curious-shimmying-quokka/",
+        "fileCount": 58,
+        "exactTagMatches": 23,
+        "differentFromTag": 27,
+        "absentFromTag": 8,
+        "sensitiveCategory": "A local settings file path was included. Its contents were deliberately not read or reported.",
+        "disposition": "BLOCKER: treat the public artifact as a packaging/privacy incident; review locally and rotate or revoke any affected secret if the owner finds one."
+      }
+    },
+    "windows": {
+      "projectLicense": "AGPL-3.0 license text present at app.asar root.",
+      "electronNotice": "LICENSE.electron.txt present in the extracted outer payload.",
+      "chromiumNotice": "LICENSES.chromium.html present in the extracted outer payload.",
+      "unexpectedWorktreeFiles": 0
+    },
+    "fonts": "No bundled font file was found in the source asset inventory; the website uses system font stacks.",
+    "nativeAndRuntime": "The inventories include Electron runtime files and packaged native/runtime dependencies. File-level raw listings remain local and uncommitted."
+  },
+  "coverageLimit": "No DMG, ZIP or formal NSIS artifact exists for the audited baseline commit. A fresh post-fix three-format build and re-inspection is mandatory before relicensing or publishing another release."
+}

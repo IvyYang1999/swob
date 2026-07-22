@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "auditedAt": "2026-07-22T11:09:36Z",
+  "swobBaseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
+  "selectionRule": "Every external GitHub source repository explicitly named in the two prerequisite licensing/relicensing reports, excluding the Swob target itself.",
+  "repositories": [
+    {
+      "repository": "HizTam/codex-history-viewer",
+      "commit": "07a8288f24ae172560e28945e24983d6956f70f3",
+      "committedAt": "2026-07-21T23:24:41+09:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "Nimbalyst/nimbalyst",
+      "commit": "aac6ef5412e07ae659ab94186f677f9a8b9915c2",
+      "committedAt": "2026-07-21T19:29:52-04:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "bkuan001/halo-record",
+      "commit": "a0549b61b9bc881b9a3631f684cd8cfe313cdb42",
+      "committedAt": "2026-07-21T20:17:40-07:00",
+      "role": "adjacent-source-reference",
+      "license": "Apache-2.0",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "continuedev/continue",
+      "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+      "committedAt": "2026-07-20T21:00:09-07:00",
+      "role": "adjacent-source-reference",
+      "license": "Apache-2.0",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "d-kimuson/claude-code-viewer",
+      "commit": "3c8eb62f4edbd700055c63f361078122d53339b2",
+      "committedAt": "2026-05-11T02:15:21+09:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "delexw/claude-code-trace",
+      "commit": "8b284aab8bf7de1779cc487adf5ea353d29875eb",
+      "committedAt": "2026-07-18T13:02:08+12:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "entireio/cli",
+      "commit": "c4cf0886f44ff389eb7e059d256c7940ef6cddc8",
+      "committedAt": "2026-07-22T10:34:08+02:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "esc5221/claude-code-viewer",
+      "commit": "7996be0b991e114fa371c24ce8a9ffef0484fdfd",
+      "committedAt": "2025-08-17T03:30:56+09:00",
+      "role": "direct-competitor",
+      "license": "NOASSERTION",
+      "licenseEvidence": "No root LICENSE/COPYING/NOTICE at pinned commit; package metadata alone is insufficient"
+    },
+    {
+      "repository": "hex/claude-sessions",
+      "commit": "34ab911cafeed10d1f5e7b1e90719951b836b400",
+      "committedAt": "2026-07-22T13:41:09+03:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "jazzyalex/agent-sessions",
+      "commit": "0b7a0bc1a04ed1088f32cc71f7b4e90a8b7e9a5d",
+      "committedAt": "2026-07-21T11:02:57-07:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "jhlee0409/claude-code-history-viewer",
+      "commit": "2e29912c8743c997f203e903e6ae0054865cb8e3",
+      "committedAt": "2026-07-22T13:16:44+09:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "lingtaolf/cxresume",
+      "commit": "71225c58f1420f73f3c98f9cd44f1fa4ba690b67",
+      "committedAt": "2025-10-14T21:30:16+08:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "logseq/logseq",
+      "commit": "ab5709218b8ae51acb055d5e6441cdb519c1f575",
+      "committedAt": "2026-07-21T22:13:28+08:00",
+      "role": "adjacent-source-reference",
+      "license": "AGPL-3.0",
+      "licenseEvidence": "LICENSE.md at pinned commit"
+    },
+    {
+      "repository": "matt1398/claude-devtools",
+      "commit": "16cc3c87c1e4d0e08ee101fb52dad1b85dbbe48a",
+      "committedAt": "2026-05-13T17:37:57+09:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "nolabs-ai/nono",
+      "commit": "275559098c39189fdc3fd27a1c6f067faaffe084",
+      "committedAt": "2026-07-22T06:52:43+01:00",
+      "role": "adjacent-source-reference",
+      "license": "Apache-2.0",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "ozankasikci/agent-sessions",
+      "commit": "12ee7ccfe841520b8520937810fef2103d85eb57",
+      "committedAt": "2026-04-08T18:19:53+03:00",
+      "role": "direct-competitor",
+      "license": "NOASSERTION",
+      "licenseEvidence": "No root LICENSE/COPYING/NOTICE and no license metadata at pinned commit"
+    },
+    {
+      "repository": "superset-sh/superset",
+      "commit": "976241ca1e6fb4696849e31371fc5a9c18a5060b",
+      "committedAt": "2026-07-22T02:08:06-07:00",
+      "role": "adjacent-source-reference",
+      "license": "LicenseRef-Elastic-2.0",
+      "licenseEvidence": "LICENSE.md at pinned commit"
+    },
+    {
+      "repository": "tuongaz/clawview",
+      "commit": "e2f3e13305cbe14bbdd25815ecbede1dee9416c9",
+      "committedAt": "2026-04-16T11:42:42+10:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "tyql688/sessionview",
+      "commit": "762fcb7185a5a901185a7c290f63ab9761901a08",
+      "committedAt": "2026-07-21T18:43:02+08:00",
+      "role": "direct-competitor",
+      "license": "MIT",
+      "licenseEvidence": "LICENSE at pinned commit"
+    },
+    {
+      "repository": "zed-industries/zed",
+      "commit": "bb87c47c92d0110790ee79a0fdf4a9c8b7119fb3",
+      "committedAt": "2026-07-22T10:20:23Z",
+      "role": "adjacent-source-reference",
+      "license": "GPL-3.0-or-later AND Apache-2.0 (component-marked)",
+      "licenseEvidence": "README licensing section and per-crate Cargo.toml at pinned commit"
+    }
+  ]
+}

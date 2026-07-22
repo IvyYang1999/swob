@@ -17,6 +17,8 @@
     "build:win": "npm run build && electron-builder --win nsis --x64 --publish never --config.npmRebuild=false",
     "deploy": "bash scripts/deploy-local.sh",
     "dmg": "bash scripts/build-dmg-desktop.sh",
+    "docs:gen": "node scripts/generate-docs.mjs",
+    "docs:check": "node scripts/generate-docs.mjs --check",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npx electron-vite build && npx playwright test",

@@ -79,6 +79,8 @@ import {
   getDefaultLibraryRoot,
   applyLibraryOrganization,
   undoLastLibraryOrganization,
+  recoverInterruptedLibraryOrganization,
+  withLibraryMaintenanceWriter,
   type LibrarySession,
   type LibraryTree
 } from './library-manager'
@@ -872,23 +874,26 @@ function emitLibraryPatch(sessions: SessionSummary[], tree?: LibraryTree): void 
   })
 }
 
-function adoptLibraryTree(tree: LibraryTree, notifyRenderer = true): LibraryTree {
+function adoptLibraryTree(tree: LibraryTree, notifyRenderer = true): boolean {
   // Ignore a queued response for a root that was replaced while the worker was scanning.
-  if (path.resolve(tree.root) !== path.resolve(getLibraryRoot())) return tree
+  if (path.resolve(tree.root) !== path.resolve(getLibraryRoot())) return false
+  if (!applyLibraryTree(tree)) return false
   latestLibraryTree = tree
-  applyLibraryTree(tree)
   refreshCachedMissingSources()
   scheduleSearchIndexWarmup()
   if (cachedSessions.length > 0) void scheduleUsageFactSync()
   transcriptWatcher?.refresh()
   if (notifyRenderer) emitLibraryPatch([], tree)
-  return tree
+  return true
 }
 
 async function requestLibraryScan(notifyRenderer = true): Promise<LibraryTree> {
   const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
-  const tree = await worker.scan(getLibraryRoot())
-  return adoptLibraryTree(tree, notifyRenderer)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const tree = await worker.scan(getLibraryRoot())
+    if (adoptLibraryTree(tree, notifyRenderer)) return tree
+  }
+  throw new Error('Library 在持续写入，扫描结果已过期；请稍后重试')
 }
 
 function reportLibrarySyncProgress(progress: LibraryWorkerProgress): void {
@@ -1019,7 +1024,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
     tree = await worker.sync(getLibraryRoot(), sessions, oldConfig.sessionMeta, {
       onProgress: reportLibrarySyncProgress
     })
-    adoptLibraryTree(tree, false)
+    if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
 
     if (needsMigration) {
       // This one-time directory migration needs the worker-built index but does not parse transcripts.
@@ -1035,11 +1040,11 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
       tree = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
         onProgress: reportLibrarySyncProgress
       })
-      adoptLibraryTree(tree, false)
+      if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
     }
 
     libraryInitialized = true
-    adoptLibraryTree(tree)
+    if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
     await hydrateLibrarySessions(tree)
   })()
   libraryInitializationPromise = work
@@ -1655,7 +1660,9 @@ ipcMain.handle('lineage:getRegistry', async () => {
   } catch { /* fall through to rebuild */ }
   try {
     const registry = await rebuildSessionLineageRegistry(libraryRoot)
-    try { writeSessionLineageRegistry(registry, registryPath) } catch { /* ignore write failure */ }
+    try {
+      await withLibraryMaintenanceWriter(() => writeSessionLineageRegistry(registry, registryPath))
+    } catch { /* ignore write failure */ }
     return registry
   } catch {
     return null
@@ -2286,7 +2293,8 @@ ipcMain.handle('library:getRoot', () => getLibraryRoot())
 
 ipcMain.handle('dashboard:loadLayout', () => readDashboardLayout(getLibraryRoot()))
 
-ipcMain.handle('dashboard:saveLayout', (_event, layout) => writeDashboardLayout(getLibraryRoot(), layout))
+ipcMain.handle('dashboard:saveLayout', (_event, layout) =>
+  withLibraryMaintenanceWriter(() => writeDashboardLayout(getLibraryRoot(), layout)))
 
 ipcMain.handle('library:getMdPath', (_event, sessionId: string) => {
   if (sessionId.includes(':intra-')) {
@@ -2350,7 +2358,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   if (!isLibraryInitialized(getLibraryRoot())) {
     saveLibraryConfig(loadLibraryConfig())
   }
-  adoptLibraryTree(tree)
+  if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
   await hydrateLibrarySessions(tree)
   return getLibraryRoot()
 }
@@ -2376,9 +2384,9 @@ ipcMain.handle('vault:migrate', async (_event, targetPath: string) => {
   try {
     const sourceRoot = getLibraryRoot()
     const { migrateVault } = await import('./vault-migrator')
-    const result = migrateVault(sourceRoot, approvedTarget, (progress) => {
+    const result = await withLibraryMaintenanceWriter(() => migrateVault(sourceRoot, approvedTarget, (progress) => {
       mainWindow?.webContents.send('vault:migrateProgress', progress)
-    })
+    }))
     if (!result.ok) return result
     // Copy verified — point the app at the new home and reindex.
     await activateLibraryAt(approvedTarget)
@@ -2597,7 +2605,12 @@ function setupAutoUpdater(): void {
   })
 }
 
+const ownsGuiInstance = app.requestSingleInstanceLock()
+if (!ownsGuiInstance) app.quit()
+app.on('second-instance', () => showMainWindow())
+
 app.whenReady().then(async () => {
+  if (!ownsGuiInstance) return
   electronApp.setAppUserModelId('com.swob.app')
   // A dedicated, opt-in canary run owns the updater and exits after writing its
   // relaunch result. Normal users never enter this branch.
@@ -2609,6 +2622,12 @@ app.whenReady().then(async () => {
   // Only resolve/create the root synchronously. Recursive scan and batch sync run in a Worker.
   initLibrary()
   approveLibraryRoot(getLibraryRoot())
+  try {
+    recoverInterruptedLibraryOrganization()
+  } catch (error) {
+    console.error('[library-move] Interrupted transaction could not be rolled back:',
+      error instanceof Error ? error.message : 'unknown error')
+  }
   try {
     await migrateLegacyLlmProfile()
   } catch (error) {
@@ -2654,7 +2673,8 @@ app.whenReady().then(async () => {
     profile: {
       getLibraryRoot,
       getPreferences: currentSettingsPreferences,
-      updatePreferences: (patch) => { updateCurrentSettingsPreferences(patch) }
+      updatePreferences: (patch) => { updateCurrentSettingsPreferences(patch) },
+      withLibraryWriter: withLibraryMaintenanceWriter
     },
     spotlight: {
       platform: process.platform,
@@ -2692,8 +2712,11 @@ app.whenReady().then(async () => {
               const summary = cachedSessions.find((s) => s.sessionId === sessionId)
               if (summary) await ensureSessionInLibrary(summary)
             }
-            fs.mkdirSync(path.join(getLibraryRoot(), 'Swob 助手'), { recursive: true })
-            moveSessionToFolder(sessionId, 'Swob 助手')
+            await withLibraryMaintenanceWriter(async () => {
+              const assistantFolder = path.join(getLibraryRoot(), 'Swob 助手')
+              if (!fs.existsSync(assistantFolder)) createLibraryFolder('Swob 助手')
+              moveSessionToFolder(sessionId, assistantFolder)
+            })
           } catch { /* not indexed yet; session stays in vault root */ }
         })()
       }, 8000)

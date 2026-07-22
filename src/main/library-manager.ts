@@ -11,6 +11,7 @@ import { loadZcodeRawMessages, stripZcodeSessionRef } from './zcode-loader'
 import { DEFAULT_IGNORE_DIRS } from './session-placement'
 import {
   executeOrganization,
+  recoverInterruptedOrganization,
   undoLastOrganization,
   type OrganizationInput,
   type OrganizationKind,
@@ -71,6 +72,14 @@ import {
   LibraryPathUnsafeError,
   writeSafeLibraryFileSync
 } from './library-path-safety'
+import {
+  assertLibraryWriterHeld,
+  readLibraryWriteGeneration,
+  runWithLibraryWriter,
+  runWithLibraryWriterSync,
+  staleScanEvent
+} from './library-write-coordinator'
+import { LibraryWriterBusyError, type LibraryWriterMode } from './library-writer-lease'
 import type {
   RawJsonlMessage,
   ContentPart,
@@ -143,6 +152,7 @@ export interface SessionSourceInstance {
 
 export { SessionCreateBusyError }
 export { LibraryPathUnsafeError }
+export { LibraryWriterBusyError }
 export type { LogicalSessionIdentity, LogicalSessionKey, LibrarySessionBinding, SessionIdResolution }
 
 export interface LibrarySession {
@@ -179,6 +189,10 @@ export interface LibraryTree {
   identityIssues?: LibraryIdentityScanIssue[]
   /** Explicit evidence quality; omitted worker trees are never authoritative. */
   identityScanStatus?: 'authoritative-complete' | 'incomplete'
+  /** Persisted Library write generation captured before this scan started. */
+  writeGeneration?: number
+  /** True when a writer committed while the recursive scan was in flight. */
+  scanStale?: boolean
 }
 
 export interface LibraryConfig {
@@ -557,6 +571,35 @@ export interface SessionSshResumeAvailability {
 let _root: string = DEFAULT_ROOT
 let _ignoreDirs: Set<string> = new Set(DEFAULT_IGNORE_DIRS)
 let _readOnly = false
+let _appliedWriteGeneration = 0
+let _localWriterDepth = 0
+
+async function withLibraryWriter<T>(mode: LibraryWriterMode, operation: () => Promise<T> | T): Promise<T> {
+  const writerRoot = _root
+  _localWriterDepth++
+  try {
+    return await runWithLibraryWriter(writerRoot, getOrCreateLocalDeviceId(), mode, operation)
+  } finally {
+    _localWriterDepth--
+    _appliedWriteGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(writerRoot))
+  }
+}
+
+function withLibraryWriterSync<T>(mode: LibraryWriterMode, operation: () => T): T {
+  const writerRoot = _root
+  _localWriterDepth++
+  try {
+    return runWithLibraryWriterSync(writerRoot, getOrCreateLocalDeviceId(), mode, operation)
+  } finally {
+    _localWriterDepth--
+    _appliedWriteGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(writerRoot))
+  }
+}
+
+/** Batch boundary used by the worker so ensure/transcript/backup cannot be interleaved with a CLI move. */
+export function withLibraryMaintenanceWriter<T>(operation: () => Promise<T> | T): Promise<T> {
+  return withLibraryWriter('maintenance', operation)
+}
 
 export function getLibraryRoot(): string {
   return _root
@@ -573,6 +616,9 @@ export interface InitLibraryOptions {
 
 export function initLibrary(root?: string, options: InitLibraryOptions = {}): void {
   const nextRoot = root || getConfiguredLibraryPath()
+  if (path.resolve(nextRoot) !== path.resolve(_root) && _localWriterDepth > 0) {
+    throw new LibraryWriterBusyError('active-owner')
+  }
   if (path.resolve(nextRoot) !== path.resolve(_root)) {
     sessionMetaCache.clear()
     sessionMetaDiskReads = 0
@@ -583,6 +629,7 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
   _cachedLibraryConfigRoot = ''
   _root = nextRoot
   _readOnly = options.readOnly === true
+  _appliedWriteGeneration = readLibraryWriteGeneration(_root)
   if (!options.readOnly && !fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }
@@ -618,6 +665,11 @@ export function loadLibraryConfig(): LibraryConfig {
 }
 
 export function saveLibraryConfig(config: LibraryConfig): void {
+  withLibraryWriterSync('config', () => saveLibraryConfigUnderWriter(config))
+}
+
+function saveLibraryConfigUnderWriter(config: LibraryConfig): void {
+  assertLibraryWriterHeld(_root)
   const configPath = path.join(_root, LIBRARY_CONFIG_FILE)
   if (!fs.existsSync(_root)) fs.mkdirSync(_root, { recursive: true })
   canonicalLibraryRootForWrite(_root)
@@ -842,6 +894,7 @@ function assertCurrentSessionWriteAuthorized(dirPath: string, meta: SessionMeta)
 }
 
 function writeSessionMetaFile(dirPath: string, meta: SessionMeta, exclusive = false): void {
+  assertLibraryWriterHeld(_root)
   const metaPath = path.join(dirPath, SESSION_META_FILE)
   if (!exclusive && fs.existsSync(metaPath)) {
     const existing = readSessionMeta(dirPath)
@@ -909,6 +962,10 @@ function sessionDirHasUserFiles(dirPath: string): boolean {
 
 /** 把 swob 权威 turnCount 持久化进会话 meta（供外部整理脚本按真实轮数归档）。变化才写盘。 */
 export function setSessionTurnCount(dirPath: string, turnCount: number): void {
+  return withLibraryWriterSync('metadata', () => setSessionTurnCountUnderWriter(dirPath, turnCount))
+}
+
+function setSessionTurnCountUnderWriter(dirPath: string, turnCount: number): void {
   if (typeof turnCount !== 'number') return
   const m = readSessionMeta(dirPath)
   if (m && m.turnCount !== turnCount) {
@@ -1331,12 +1388,14 @@ export async function ensureSessionResumeTarget(
     recovery = { ok: false, reason: 'io-error' }
   }
   try {
-    recordRecoveryAttempt(getLibraryRoot(), {
-      sessionId,
-      physicalSessionId: requestedPhysicalId,
-      attemptedAt: new Date(recoveryStartedAt).toISOString(),
-      durationMs: Date.now() - recoveryStartedAt,
-      result: recovery
+    withLibraryWriterSync('metadata', () => {
+      recordRecoveryAttempt(getLibraryRoot(), {
+        sessionId,
+        physicalSessionId: requestedPhysicalId,
+        attemptedAt: new Date(recoveryStartedAt).toISOString(),
+        durationMs: Date.now() - recoveryStartedAt,
+        result: recovery
+      })
     })
   } catch {
     // Metrics must never turn a successful recovery into a user-visible failure.
@@ -1371,6 +1430,15 @@ export function getBranchMdPath(branchId: string): string | null {
  * Generate and write a branch-specific transcript.
  */
 export async function updateBranchTranscript(
+  branchId: string,
+  branchLeafUuid: string,
+  customTitle?: string
+): Promise<string | null> {
+  return withLibraryWriter('transcript', () =>
+    updateBranchTranscriptUnderWriter(branchId, branchLeafUuid, customTitle))
+}
+
+async function updateBranchTranscriptUnderWriter(
   branchId: string,
   branchLeafUuid: string,
   customTitle?: string
@@ -1556,23 +1624,34 @@ function scanDir(
 }
 
 export function scanLibrary(): LibraryTree {
+  const writeGeneration = readLibraryWriteGeneration(_root)
   const identityIssues: LibraryIdentityScanIssue[] = []
   const { sessions, folders, files } = scanDir(_root, identityIssues)
+  const scanCompletedGeneration = readLibraryWriteGeneration(_root)
   const tree: LibraryTree = {
     root: _root,
     folders,
     ungroupedSessions: sessions,
     rootFiles: files,
     identityIssues,
-    identityScanStatus: identityIssues.length === 0 ? 'authoritative-complete' : 'incomplete'
+    identityScanStatus: identityIssues.length === 0 ? 'authoritative-complete' : 'incomplete',
+    writeGeneration,
+    scanStale: scanCompletedGeneration !== writeGeneration
   }
   applyLibraryTree(tree)
   return tree
 }
 
 /** Apply a tree scanned by the Library worker without rereading every meta file. */
-export function applyLibraryTree(tree: LibraryTree): void {
-  _root = tree.root
+export function applyLibraryTree(tree: LibraryTree): boolean {
+  if (path.resolve(tree.root) !== path.resolve(_root)) return false
+  const incomingGeneration = tree.writeGeneration ?? 0
+  const currentGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(_root))
+  if (tree.scanStale || incomingGeneration < currentGeneration) {
+    staleScanEvent(_root, incomingGeneration, currentGeneration)
+    return false
+  }
+  _appliedWriteGeneration = incomingGeneration
   lastIdentityScanIssues = structuredClone(tree.identityIssues || [])
   const registryCandidates: LibrarySessionCandidate[] = []
   const liveMetaPaths = new Set<string>()
@@ -1623,6 +1702,7 @@ export function applyLibraryTree(tree: LibraryTree): void {
   for (const metaPath of sessionMetaCache.keys()) {
     if (!liveMetaPaths.has(metaPath)) sessionMetaCache.delete(metaPath)
   }
+  return true
 }
 
 /** Read-only disk recovery used after a stale/missing binding and before every create transaction. */
@@ -1651,6 +1731,7 @@ function refreshSessionRegistryFromDisk(): LibraryIdentityScanIssue[] {
     }
   }
   sessionRegistry.replace(candidates, { authoritative: identityIssues.length === 0 })
+  _appliedWriteGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(_root))
   lastIdentityScanIssues = structuredClone(identityIssues)
   return identityIssues
 }
@@ -2668,6 +2749,16 @@ export async function ensureSessionInLibrary(
   originOverride?: Partial<SessionOrigin>,
   instrumentation: SessionCreateInstrumentation = {}
 ): Promise<string> {
+  return withLibraryWriter('package-create', () =>
+    ensureSessionInLibraryUnderWriter(session, customTitle, originOverride, instrumentation))
+}
+
+async function ensureSessionInLibraryUnderWriter(
+  session: SessionSummary,
+  customTitle?: string,
+  originOverride?: Partial<SessionOrigin>,
+  instrumentation: SessionCreateInstrumentation = {}
+): Promise<string> {
   const identity = buildLogicalSessionIdentityFromSummary(session)
   const key = logicalSessionKey(identity)
   const localDeviceId = getOrCreateLocalDeviceId()
@@ -2863,6 +2954,10 @@ async function replaceBackupFromSource(sourcePath: string, backupPath: string): 
 }
 
 export async function syncBackup(sessionId: string, expectedDirPath?: string): Promise<void> {
+  return withLibraryWriter('maintenance', () => syncBackupUnderWriter(sessionId, expectedDirPath))
+}
+
+async function syncBackupUnderWriter(sessionId: string, expectedDirPath?: string): Promise<void> {
   const dirPath = writableSessionDirOrNull(sessionId, expectedDirPath)
   if (!dirPath) return
 
@@ -3101,6 +3196,15 @@ export async function updateTranscript(
   customTitle?: string,
   expectedDirPath?: string
 ): Promise<boolean> {
+  return withLibraryWriter('transcript', () =>
+    updateTranscriptUnderWriter(sessionId, customTitle, expectedDirPath))
+}
+
+async function updateTranscriptUnderWriter(
+  sessionId: string,
+  customTitle?: string,
+  expectedDirPath?: string
+): Promise<boolean> {
   const dirPath = writableSessionDirOrNull(sessionId, expectedDirPath)
   if (!dirPath) return false
 
@@ -3118,6 +3222,18 @@ export async function updateTranscript(
 
 /** Reuse a coordinator/worker parse instead of rereading a large Claude JSONL. */
 export function updateTranscriptFromRaw(
+  sessionId: string,
+  raw: RawJsonlMessage[],
+  source: SessionSource,
+  filePath: string,
+  customTitle?: string,
+  expectedDirPath?: string
+): boolean {
+  return withLibraryWriterSync('transcript', () =>
+    updateTranscriptFromRawUnderWriter(sessionId, raw, source, filePath, customTitle, expectedDirPath))
+}
+
+function updateTranscriptFromRawUnderWriter(
   sessionId: string,
   raw: RawJsonlMessage[],
   source: SessionSource,
@@ -3185,6 +3301,13 @@ function redactableMarkdownPaths(dirPath: string): string[] {
  * notes are deliberately outside this traversal.
  */
 export function redactLibraryTranscripts(options: { dryRun?: boolean } = {}): RedactLibraryTranscriptsResult {
+  if (options.dryRun === true) return redactLibraryTranscriptsUnderWriter(options)
+  return withLibraryWriterSync('transcript', () => redactLibraryTranscriptsUnderWriter(options))
+}
+
+function redactLibraryTranscriptsUnderWriter(
+  options: { dryRun?: boolean } = {}
+): RedactLibraryTranscriptsResult {
   const dryRun = options.dryRun === true
   const sessions = collectLibrarySessions(scanLibrary())
   if (!dryRun) {
@@ -3231,6 +3354,13 @@ export function redactLibraryTranscripts(options: { dryRun?: boolean } = {}): Re
 }
 
 export async function rebuildAllTranscripts(options: { dryRun?: boolean; missingOnly?: boolean } = {}): Promise<RebuildTranscriptsResult> {
+  if (options.dryRun === true) return rebuildAllTranscriptsUnderWriter(options)
+  return withLibraryWriter('transcript', () => rebuildAllTranscriptsUnderWriter(options))
+}
+
+async function rebuildAllTranscriptsUnderWriter(
+  options: { dryRun?: boolean; missingOnly?: boolean } = {}
+): Promise<RebuildTranscriptsResult> {
   const dryRun = options.dryRun === true
   const missingOnly = options.missingOnly === true
   const tree = scanLibrary()
@@ -3337,6 +3467,16 @@ export function applyLibraryOrganization(
   requests: readonly LibraryOrganizationRequest[],
   instrumentation: { beforeWriteAuthorization?: () => void } = {}
 ): OrganizationResult {
+  const result = withLibraryWriterSync('move', () =>
+    applyLibraryOrganizationUnderWriter(kind, requests, instrumentation))
+  return { ...result, writeGeneration: readLibraryWriteGeneration(_root) }
+}
+
+function applyLibraryOrganizationUnderWriter(
+  kind: Exclude<OrganizationKind, 'manual'>,
+  requests: readonly LibraryOrganizationRequest[],
+  instrumentation: { beforeWriteAuthorization?: () => void }
+): OrganizationResult {
   if (!['project', 'smart', 'archive'].includes(kind)) throw new Error('不支持的整理类型')
   const inputs = requests.map((request) => ({
     sessionId: request.sessionId,
@@ -3350,6 +3490,10 @@ export function applyLibraryOrganization(
 }
 
 export function createLibraryFolder(name: string, parentPath?: string): string {
+  return withLibraryWriterSync('config', () => createLibraryFolderUnderWriter(name, parentPath))
+}
+
+function createLibraryFolderUnderWriter(name: string, parentPath?: string): string {
   const parent = parentPath
     ? resolvePathWithinRoot(_root, parentPath, { mustExist: true })
     : path.resolve(_root)
@@ -3413,6 +3557,10 @@ function relocateManagedFolder(folderPath: string, newPath: string): string {
 }
 
 export function renameLibraryFolder(folderPath: string, newName: string): string {
+  return withLibraryWriterSync('move', () => renameLibraryFolderUnderWriter(folderPath, newName))
+}
+
+function renameLibraryFolderUnderWriter(folderPath: string, newName: string): string {
   folderPath = resolvePathWithinRoot(_root, folderPath, { allowRoot: false, mustExist: true })
   const parent = path.dirname(folderPath)
   const currentName = path.basename(folderPath)
@@ -3430,6 +3578,10 @@ export function renameLibraryFolder(folderPath: string, newName: string): string
 }
 
 export function moveLibraryFolderToParent(srcPath: string, destParentPath: string): string {
+  return withLibraryWriterSync('move', () => moveLibraryFolderToParentUnderWriter(srcPath, destParentPath))
+}
+
+function moveLibraryFolderToParentUnderWriter(srcPath: string, destParentPath: string): string {
   srcPath = resolvePathWithinRoot(_root, srcPath, { allowRoot: false, mustExist: true })
   destParentPath = resolvePathWithinRoot(_root, destParentPath, { mustExist: true })
   if (path.dirname(srcPath) === destParentPath) return srcPath
@@ -3452,6 +3604,10 @@ export function moveLibraryFolderToParent(srcPath: string, destParentPath: strin
 }
 
 export function deleteLibraryFolder(folderPath: string): void {
+  return withLibraryWriterSync('move', () => deleteLibraryFolderUnderWriter(folderPath))
+}
+
+function deleteLibraryFolderUnderWriter(folderPath: string): void {
   folderPath = resolvePathWithinRoot(_root, folderPath, { allowRoot: false, mustExist: true })
   // Only delete if it's a folder (no .swob-session.json)
   if (isSessionDir(folderPath)) return
@@ -3494,6 +3650,11 @@ function requireIndexedSessionDir(sessionId: string): string {
 }
 
 export function moveSessionsToFolders(requests: readonly LibraryMoveRequest[]): OrganizationResult {
+  const result = withLibraryWriterSync('move', () => moveSessionsToFoldersUnderWriter(requests))
+  return { ...result, writeGeneration: readLibraryWriteGeneration(_root) }
+}
+
+function moveSessionsToFoldersUnderWriter(requests: readonly LibraryMoveRequest[]): OrganizationResult {
   if (requests.length === 0) throw new Error('批量移动输入为空')
   const prepared = requests.map(({ sessionId, folderId }) => {
     const currentDir = requireIndexedSessionDir(sessionId)
@@ -3517,6 +3678,11 @@ export function moveSessionsToFolders(requests: readonly LibraryMoveRequest[]): 
 }
 
 export function renameSessionsInLibrary(requests: readonly LibraryRenameRequest[]): OrganizationResult {
+  const result = withLibraryWriterSync('move', () => renameSessionsInLibraryUnderWriter(requests))
+  return { ...result, writeGeneration: readLibraryWriteGeneration(_root) }
+}
+
+function renameSessionsInLibraryUnderWriter(requests: readonly LibraryRenameRequest[]): OrganizationResult {
   if (requests.length === 0) throw new Error('批量重命名输入为空')
   const prepared = requests.map(({ sessionId, title }) => {
     if (!title.trim()) throw new Error(`Session "${sessionId}" 的标题不能为空`)
@@ -3539,6 +3705,20 @@ export function renameSessionsInLibrary(requests: readonly LibraryRenameRequest[
 }
 
 export function undoLastLibraryOrganization(): OrganizationResult {
+  const result = withLibraryWriterSync('move', undoLastLibraryOrganizationUnderWriter)
+  return { ...result, writeGeneration: readLibraryWriteGeneration(_root) }
+}
+
+export function recoverInterruptedLibraryOrganization(): OrganizationResult {
+  const result = withLibraryWriterSync('move', () => {
+    const result = recoverInterruptedOrganization(_root, { authorizeMoves: authorizeOrganizationMoves })
+    if (result.operationId) refreshSessionRegistryFromDisk()
+    return result
+  })
+  return { ...result, writeGeneration: readLibraryWriteGeneration(_root) }
+}
+
+function undoLastLibraryOrganizationUnderWriter(): OrganizationResult {
   const result = undoLastOrganization(_root, { authorizeMoves: authorizeOrganizationMoves })
   for (const move of result.moves) {
     if (move.from !== move.to) updateSymlinksRecursive(_root, move.from, move.to)
@@ -3548,6 +3728,10 @@ export function undoLastLibraryOrganization(): OrganizationResult {
 }
 
 export function moveSessionToFolder(sessionId: string, folderPath: string): void {
+  return withLibraryWriterSync('move', () => moveSessionToFolderUnderWriter(sessionId, folderPath))
+}
+
+function moveSessionToFolderUnderWriter(sessionId: string, folderPath: string): void {
   folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
   const currentDir = requireIndexedSessionDir(sessionId)
 
@@ -3566,6 +3750,10 @@ export function moveSessionToFolder(sessionId: string, folderPath: string): void
 }
 
 export function addSessionToFolder(sessionId: string, folderPath: string): void {
+  return withLibraryWriterSync('move', () => addSessionToFolderUnderWriter(sessionId, folderPath))
+}
+
+function addSessionToFolderUnderWriter(sessionId: string, folderPath: string): void {
   folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
   const indexedDir = writableSessionDirOrNull(sessionId)
   if (!indexedDir || !fs.existsSync(indexedDir)) return
@@ -3582,6 +3770,10 @@ export function addSessionToFolder(sessionId: string, folderPath: string): void 
 }
 
 export function removeSessionFromFolder(sessionId: string, folderPath: string): void {
+  return withLibraryWriterSync('move', () => removeSessionFromFolderUnderWriter(sessionId, folderPath))
+}
+
+function removeSessionFromFolderUnderWriter(sessionId: string, folderPath: string): void {
   folderPath = resolvePathWithinRoot(_root, folderPath, { mustExist: true })
   const indexedDir = writableSessionDirOrNull(sessionId)
   if (!indexedDir) return
@@ -3634,6 +3826,10 @@ function removeSessionSymlinksIn(realDir: string, searchDir: string): void {
 // --- Rename Session Dir (when custom title changes) ---
 
 export function renameSessionDir(sessionId: string, newTitle: string): string | null {
+  return withLibraryWriterSync('move', () => renameSessionDirUnderWriter(sessionId, newTitle))
+}
+
+function renameSessionDirUnderWriter(sessionId: string, newTitle: string): string | null {
   const currentDir = writableSessionDirOrNull(sessionId)
   if (!currentDir || !fs.existsSync(currentDir)) return null
 
@@ -3641,15 +3837,15 @@ export function renameSessionDir(sessionId: string, newTitle: string): string | 
   const newBaseName = sanitizeDirName(newTitle)
   if (newBaseName === path.basename(currentDir)) return currentDir
 
-  const newDirName = findUniqueDirName(parent, newBaseName)
-  const newPath = path.join(parent, newDirName)
-  assertSafeLibraryWritePath(_root, currentDir, { allowRoot: false })
-  assertSafeLibraryWritePath(_root, newPath, { allowRoot: false })
-
-  // Update any symlinks pointing to the old path
-  updateSymlinksRecursive(_root, currentDir, newPath)
-
-  fs.renameSync(currentDir, newPath)
+  const result = executeAuthorizedOrganization('manual', [{
+    sessionId,
+    sourceDir: currentDir,
+    targetRelativeFolder: path.relative(_root, parent) || '.',
+    targetBaseName: newBaseName,
+    metaPatch: { customTitle: newTitle }
+  }])
+  const newPath = result.moves[0]?.to || currentDir
+  if (newPath !== currentDir) updateSymlinksRecursive(_root, currentDir, newPath)
   refreshSessionRegistryFromDisk()
 
   return newPath
@@ -3679,6 +3875,15 @@ function updateSymlinksRecursive(searchDir: string, oldTarget: string, newTarget
 // --- Batch Initialize Library from Sessions ---
 
 export async function syncLibraryFromSessions(
+  sessions: SessionSummary[],
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
+  onProgress?: (progress: { current: number; total: number; sessionId: string }) => void
+): Promise<void> {
+  return withLibraryWriter('maintenance', () =>
+    syncLibraryFromSessionsUnderWriter(sessions, sessionMeta, onProgress))
+}
+
+async function syncLibraryFromSessionsUnderWriter(
   sessions: SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
   onProgress?: (progress: { current: number; total: number; sessionId: string }) => void
@@ -3749,6 +3954,13 @@ export async function syncLibraryFromSessions(
 // --- Migrate from Old Config ---
 
 export async function migrateFromOldConfig(
+  oldFolders: Array<{ id: string; name: string; parentId?: string | null; sessionIds: string[]; color?: string }>,
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }>
+): Promise<void> {
+  return withLibraryWriter('maintenance', () => migrateFromOldConfigUnderWriter(oldFolders, sessionMeta))
+}
+
+async function migrateFromOldConfigUnderWriter(
   oldFolders: Array<{ id: string; name: string; parentId?: string | null; sessionIds: string[]; color?: string }>,
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>
 ): Promise<void> {
@@ -3918,6 +4130,10 @@ function updateFolderOrderPaths(oldRelPath: string, newRelPath: string): void {
 
 // Update folder display order: move folderId before/after targetId
 export function reorderFolder(folderId: string, targetId: string, position: 'before' | 'after'): void {
+  return withLibraryWriterSync('config', () => reorderFolderUnderWriter(folderId, targetId, position))
+}
+
+function reorderFolderUnderWriter(folderId: string, targetId: string, position: 'before' | 'after'): void {
   resolveFolderPath(folderId)
   resolveFolderPath(targetId)
   const config = loadLibraryConfig()
@@ -3969,6 +4185,10 @@ export function resolveFolderPath(folderId: string): string {
 // --- Branch folder management (stored in config, not file system) ---
 
 export function addBranchToFolder(branchId: string, folderId: string): void {
+  return withLibraryWriterSync('config', () => addBranchToFolderUnderWriter(branchId, folderId))
+}
+
+function addBranchToFolderUnderWriter(branchId: string, folderId: string): void {
   resolveFolderPath(folderId)
   const config = loadLibraryConfig()
   const map = config.branchFolders || {}
@@ -3980,6 +4200,10 @@ export function addBranchToFolder(branchId: string, folderId: string): void {
 }
 
 export function removeBranchFromFolder(branchId: string, folderId: string): void {
+  return withLibraryWriterSync('config', () => removeBranchFromFolderUnderWriter(branchId, folderId))
+}
+
+function removeBranchFromFolderUnderWriter(branchId: string, folderId: string): void {
   resolveFolderPath(folderId)
   const config = loadLibraryConfig()
   const map = config.branchFolders || {}
@@ -3993,6 +4217,13 @@ export function removeBranchFromFolder(branchId: string, folderId: string): void
 }
 
 export function setBranchMeta(
+  branchId: string,
+  meta: { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }
+): void {
+  return withLibraryWriterSync('metadata', () => setBranchMetaUnderWriter(branchId, meta))
+}
+
+function setBranchMetaUnderWriter(
   branchId: string,
   meta: { customTitle?: string; notes?: string; highlights?: SessionMeta['highlights'] }
 ): void {
@@ -4015,25 +4246,49 @@ export function setSessionMetaInLibrary(
     topicConfidence?: number
   }
 ): void {
+  return withLibraryWriterSync('metadata', () => setSessionMetaInLibraryUnderWriter(sessionId, meta))
+}
+
+function setSessionMetaInLibraryUnderWriter(
+  sessionId: string,
+  meta: {
+    customTitle?: string
+    notes?: string
+    highlights?: SessionMeta['highlights']
+    tags?: string[]
+    topic?: string
+    topicConfidence?: number
+  }
+): void {
   const dirPath = writableSessionDirOrNull(sessionId)
   if (!dirPath) return
 
   const existing = readSessionMeta(dirPath)
   if (!existing) return
 
-  if (meta.customTitle !== undefined) existing.customTitle = meta.customTitle
+  let directMetaChanged = false
   if (meta.notes !== undefined) existing.notes = meta.notes
   if (meta.highlights !== undefined) existing.highlights = meta.highlights
-  if (meta.tags !== undefined) existing.tags = [...new Set(meta.tags.map((tag) => tag.trim()).filter(Boolean))]
-  if (meta.topic !== undefined) existing.topic = meta.topic.trim()
-  if (meta.topicConfidence !== undefined) {
-    existing.topicConfidence = Math.max(0, Math.min(1, meta.topicConfidence))
-  }
-  writeSessionMeta(dirPath, existing)
+  if (meta.notes !== undefined || meta.highlights !== undefined) directMetaChanged = true
+  if (directMetaChanged) writeSessionMeta(dirPath, existing)
 
-  // Rename dir if title changed
-  if (meta.customTitle) {
-    renameSessionDir(sessionId, meta.customTitle)
+  const classificationPatch = {
+    ...(meta.customTitle !== undefined ? { customTitle: meta.customTitle } : {}),
+    ...(meta.tags !== undefined ? { tags: meta.tags } : {}),
+    ...(meta.topic !== undefined ? { topic: meta.topic } : {}),
+    ...(meta.topicConfidence !== undefined ? { topicConfidence: meta.topicConfidence } : {})
+  }
+  if (Object.keys(classificationPatch).length > 0) {
+    const result = executeAuthorizedOrganization('manual', [{
+      sessionId,
+      sourceDir: dirPath,
+      targetRelativeFolder: path.relative(_root, path.dirname(dirPath)) || '.',
+      targetBaseName: meta.customTitle?.trim() ? meta.customTitle : path.basename(dirPath),
+      metaPatch: classificationPatch
+    }])
+    const move = result.moves[0]
+    if (move && move.from !== move.to) updateSymlinksRecursive(_root, move.from, move.to)
+    refreshSessionRegistryFromDisk()
   }
 }
 

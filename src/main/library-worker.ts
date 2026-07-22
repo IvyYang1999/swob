@@ -9,6 +9,7 @@ import {
   updateTranscriptFromRaw,
   syncBackup,
   setSessionTurnCount,
+  withLibraryMaintenanceWriter,
   type LibraryTree
 } from './library-manager'
 import { parseSessionFile, buildSessionSummary, resolvePhysicalSessionId } from './session-loader'
@@ -109,16 +110,19 @@ export async function runLibraryWorkerRequest(
 
   let dirPath: string | undefined
   if (request.maintainLibrary !== false) {
-    dirPath = await ensureSessionInLibrary(summary)
-    if (!summary.id.includes(':intra-') && !summary.id.includes(':branch-')) {
-      setSessionTurnCount(dirPath, summary.turnCount)
-    }
-    if (parsedRaw) {
-      updateTranscriptFromRaw(summary.sessionId, parsedRaw, 'claude-code', request.filePath, undefined, dirPath)
-    } else {
-      await updateTranscript(summary.sessionId, undefined, dirPath)
-    }
-    await syncBackup(summary.sessionId, dirPath)
+    dirPath = await withLibraryMaintenanceWriter(async () => {
+      const maintainedDir = await ensureSessionInLibrary(summary!)
+      if (!summary!.id.includes(':intra-') && !summary!.id.includes(':branch-')) {
+        setSessionTurnCount(maintainedDir, summary!.turnCount)
+      }
+      if (parsedRaw) {
+        updateTranscriptFromRaw(summary!.sessionId, parsedRaw, 'claude-code', request.filePath, undefined, maintainedDir)
+      } else {
+        await updateTranscript(summary!.sessionId, undefined, maintainedDir)
+      }
+      await syncBackup(summary!.sessionId, maintainedDir)
+      return maintainedDir
+    })
   }
   if (parsedRaw) {
     await indexParsedSearchSource({

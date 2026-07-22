@@ -123,6 +123,7 @@ export interface ProfileDependencies {
   getLibraryRoot: () => string
   getPreferences: () => Record<string, unknown>
   updatePreferences: (patch: Record<string, unknown>) => void | Promise<void>
+  withLibraryWriter: <T>(operation: () => Promise<T> | T) => Promise<T>
 }
 
 interface PersistedIdentity {
@@ -295,7 +296,8 @@ export async function setUserIdentity(
       if (!input.avatarRelPath) {
         avatarRelPath = undefined
       } else if (path.isAbsolute(input.avatarRelPath)) {
-        avatarRelPath = importAvatar(dependencies.getLibraryRoot(), input.avatarRelPath)
+        avatarRelPath = await dependencies.withLibraryWriter(() =>
+          importAvatar(dependencies.getLibraryRoot(), input.avatarRelPath!))
         avatarAvailable = true
       } else {
         const managedPath = resolveManagedAvatar(dependencies.getLibraryRoot(), input.avatarRelPath, true)

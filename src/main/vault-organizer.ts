@@ -1,7 +1,8 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { friendlyProjectName } from '../shared/vault-lens'
+import { assertLibraryWriterHeld } from './library-write-coordinator'
 
 const SESSION_MARKER = '.swob-session.json'
 const OPERATIONS_DIR = path.join('.swob', 'operations')
@@ -53,6 +54,58 @@ export interface OrganizationResult {
   operationId: string | null
   logPath: string | null
   moves: OrganizationMove[]
+  /** Added by the Library manager after the enclosing writer commits. */
+  writeGeneration?: number
+}
+
+export type OrganizationFaultStage =
+  | 'after-plan'
+  | 'before-move'
+  | 'after-move'
+  | 'after-meta'
+  | 'before-finalize'
+
+export interface OrganizationOptions {
+  now?: Date
+  /** Kept for compatibility with the original durability-boundary tests. */
+  beforeFirstMove?: (logPath: string) => void
+  /** Test-only crash boundary; production callers leave this unset. */
+  faultInjector?: (stage: OrganizationFaultStage, moveIndex: number | null) => void
+  eventSink?: (event: OrganizationEvent) => void
+}
+
+export interface OrganizationEvent {
+  component: 'library-move'
+  event: 'planned' | 'step-applied' | 'applied' | 'partial' | 'rollback'
+  libraryHash: string
+  operationHash: string
+  kind: OrganizationKind
+  moveIndex?: number
+  moveCount: number
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 20)
+}
+
+function emitOrganizationEvent(
+  root: string,
+  log: OrganizationLog,
+  event: OrganizationEvent['event'],
+  eventSink?: OrganizationOptions['eventSink'],
+  moveIndex?: number
+): void {
+  const value: OrganizationEvent = {
+    component: 'library-move',
+    event,
+    libraryHash: shortHash(path.resolve(root)),
+    operationHash: shortHash(log.id),
+    kind: log.kind,
+    moveCount: log.moves.length,
+    ...(moveIndex === undefined ? {} : { moveIndex })
+  }
+  if (eventSink) eventSink(value)
+  else process.emit('swob:library-move-event', value)
 }
 
 export interface OrganizationWriteGate {
@@ -245,8 +298,9 @@ export function executeOrganization(
   kind: OrganizationKind,
   inputs: readonly OrganizationInput[],
   gate: OrganizationWriteGate,
-  options: { now?: Date; beforeFirstMove?: (logPath: string) => void } = {}
+  options: OrganizationOptions = {}
 ): OrganizationResult {
+  assertLibraryWriterHeld(root)
   const moves = buildMoves(root, inputs)
   if (moves.length === 0) return { operationId: null, logPath: null, moves: [] }
 
@@ -270,28 +324,44 @@ export function executeOrganization(
 
   // Durability boundary: the complete reverse plan exists before the first rename.
   writeJsonAtomically(logPath, log)
+  emitOrganizationEvent(root, log, 'planned', options.eventSink)
+  options.faultInjector?.('after-plan', null)
   options.beforeFirstMove?.(logPath)
 
   try {
-    for (const move of moves) {
+    for (const [moveIndex, move] of moves.entries()) {
       fs.mkdirSync(path.dirname(move.to), { recursive: true })
       readMarker(move.from, move.sessionId)
+      if (move.from !== move.to && fs.existsSync(move.to)) {
+        throw new Error('移动目标在事务执行期间被占用；已停止且未覆盖任何目标')
+      }
       // Persist the reverse step before mutating the package. If the process
       // dies between rename and the next log write, undo still has a plan.
       log.appliedCount++
       log.status = 'partial'
       log.updatedAt = new Date().toISOString()
       writeJsonAtomically(logPath, log)
+      options.faultInjector?.('before-move', moveIndex)
       if (move.from !== move.to) fs.renameSync(move.from, move.to)
+      options.faultInjector?.('after-move', moveIndex)
+      readMarker(move.to, move.sessionId)
+      if (move.from !== move.to && fs.existsSync(move.from)) {
+        throw new Error('移动后源会话包仍然存在；事务已停止等待恢复')
+      }
       if (move.metaAfter) applyMetaPatch(move.to, move.metaAfter)
+      options.faultInjector?.('after-meta', moveIndex)
+      emitOrganizationEvent(root, log, 'step-applied', options.eventSink, moveIndex)
     }
+    options.faultInjector?.('before-finalize', null)
     log.status = 'applied'
     log.updatedAt = new Date().toISOString()
     writeJsonAtomically(logPath, log)
+    emitOrganizationEvent(root, log, 'applied', options.eventSink)
   } catch (error) {
     log.status = 'partial'
     log.updatedAt = new Date().toISOString()
     try { writeJsonAtomically(logPath, log) } catch { /* preserve original move error */ }
+    emitOrganizationEvent(root, log, 'partial', options.eventSink)
     throw error
   }
 
@@ -315,8 +385,12 @@ function latestUndoableLog(root: string): { logPath: string; log: OrganizationLo
   return null
 }
 
-export function undoLastOrganization(root: string, gate: OrganizationWriteGate): OrganizationResult {
-  const found = latestUndoableLog(root)
+function undoOrganizationLog(
+  root: string,
+  found: { logPath: string; log: OrganizationLog } | null,
+  gate: OrganizationWriteGate,
+  eventSink?: OrganizationOptions['eventSink']
+): OrganizationResult {
   if (!found) return { operationId: null, logPath: null, moves: [] }
   const { log, logPath } = found
   const appliedMoves = log.moves.slice(0, log.appliedCount)
@@ -362,7 +436,44 @@ export function undoLastOrganization(root: string, gate: OrganizationWriteGate):
   log.status = 'undone'
   log.updatedAt = new Date().toISOString()
   writeJsonAtomically(logPath, log)
+  emitOrganizationEvent(root, log, 'rollback', eventSink)
   return { operationId: log.id, logPath, moves: reversed }
+}
+
+export function undoLastOrganization(
+  root: string,
+  gate: OrganizationWriteGate,
+  options: Pick<OrganizationOptions, 'eventSink'> = {}
+): OrganizationResult {
+  assertLibraryWriterHeld(root)
+  return undoOrganizationLog(root, latestUndoableLog(root), gate, options.eventSink)
+}
+
+function latestInterruptedLog(root: string): { logPath: string; log: OrganizationLog } | null {
+  const dir = path.join(root, OPERATIONS_DIR)
+  if (!fs.existsSync(dir)) return null
+  const candidates = fs.readdirSync(dir).filter((name) => name.endsWith('.json')).sort().reverse()
+  for (const name of candidates) {
+    const logPath = path.join(dir, name)
+    try {
+      const log = JSON.parse(fs.readFileSync(logPath, 'utf-8')) as OrganizationLog
+      if (log.status === 'planned' || log.status === 'partial') return { logPath, log }
+    } catch { /* corrupt recovery plans are never guessed */ }
+  }
+  return null
+}
+
+/** Restart recovery is deliberately rollback-only: it never guesses a forward destination. */
+export function recoverInterruptedOrganization(
+  root: string,
+  gate: OrganizationWriteGate,
+  options: Pick<OrganizationOptions, 'eventSink'> = {}
+): OrganizationResult {
+  assertLibraryWriterHeld(root)
+  const found = latestInterruptedLog(root)
+  if (!found) return { operationId: null, logPath: null, moves: [] }
+  const result = undoOrganizationLog(root, found, gate, options.eventSink)
+  return result
 }
 
 function projectIdentity(session: ProjectPreviewSession): string {

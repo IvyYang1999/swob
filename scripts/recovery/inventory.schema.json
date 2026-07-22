@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swob.local/schemas/duplicate-recovery-inventory-v1.json",
+  "title": "Swob Duplicate Recovery Inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "mode",
+    "snapshotFingerprint",
+    "planId",
+    "contentPolicy",
+    "sourceHashing",
+    "validity",
+    "quarantine",
+    "summary",
+    "conflicts"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "mode": { "const": "dry-run" },
+    "snapshotFingerprint": { "$ref": "#/$defs/sha256" },
+    "planId": { "type": "string", "pattern": "^plan:[0-9a-f]{24}$" },
+    "contentPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bodiesIncluded", "titlesIncluded", "fullSourcePathsIncluded", "filesystemPathsIncluded"],
+      "properties": {
+        "bodiesIncluded": { "const": false },
+        "titlesIncluded": { "const": false },
+        "fullSourcePathsIncluded": { "const": false },
+        "filesystemPathsIncluded": { "const": false }
+      }
+    },
+    "sourceHashing": { "enum": ["enabled", "disabled"] },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "snapshotFingerprint"],
+      "properties": {
+        "rule": { "const": "rebuild-and-match-snapshot-fingerprint" },
+        "snapshotFingerprint": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "quarantine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outsideLibraryRequired", "verifiedOutsideLibrary", "rootId", "layout"],
+      "properties": {
+        "outsideLibraryRequired": { "const": true },
+        "verifiedOutsideLibrary": { "const": true },
+        "rootId": { "type": "string", "pattern": "^quarantine-root:[0-9a-f]{24}$" },
+        "layout": { "const": "<external-quarantine-root>/<planId>/<packagePathId>" }
+      }
+    },
+    "summary": { "$ref": "#/$defs/summary" },
+    "conflicts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/conflict" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "pathId": { "type": "string", "pattern": "^path:[0-9a-f]{24}$" },
+    "classification": {
+      "enum": ["canonical-candidate", "merge-required", "manual-review", "missing-source", "corrupt"]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["packageCount", "validPackageCount", "conflictCount", "unresolvedCount", "classificationCounts"],
+      "properties": {
+        "packageCount": { "type": "integer", "minimum": 0 },
+        "validPackageCount": { "type": "integer", "minimum": 0 },
+        "conflictCount": { "type": "integer", "minimum": 0 },
+        "unresolvedCount": { "type": "integer", "minimum": 0 },
+        "classificationCounts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["canonical-candidate", "merge-required", "manual-review", "missing-source", "corrupt"],
+          "properties": {
+            "canonical-candidate": { "type": "integer", "minimum": 0 },
+            "merge-required": { "type": "integer", "minimum": 0 },
+            "manual-review": { "type": "integer", "minimum": 0 },
+            "missing-source": { "type": "integer", "minimum": 0 },
+            "corrupt": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conflictId", "logicalSessionKeyHashes", "registryReason", "classification", "reasons", "packages", "recovery"],
+      "properties": {
+        "conflictId": { "type": "string", "pattern": "^conflict:[0-9a-f]{24}$" },
+        "logicalSessionKeyHashes": { "type": "array", "items": { "$ref": "#/$defs/sha256" }, "uniqueItems": true },
+        "registryReason": { "enum": ["duplicate-packages", "package-id-collision", "symlink-only", "unresolved-manifest"] },
+        "classification": { "$ref": "#/$defs/classification" },
+        "reasons": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "packages": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/package" } },
+        "recovery": { "$ref": "#/$defs/recovery" }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relativePath", "role", "kind", "size", "mtime"],
+      "properties": {
+        "relativePath": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["manifest", "backup", "transcript", "branch-transcript", "derived", "user-file", "icloud-placeholder", "symlink"] },
+        "kind": { "enum": ["file", "symlink", "other"] },
+        "size": { "type": "integer", "minimum": 0 },
+        "mtime": { "type": "string", "format": "date-time" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "symlinkTargetHash": { "type": "string" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourcePathId", "state"],
+      "properties": {
+        "sourcePathId": { "type": "string", "pattern": "^source:[0-9a-f]{24}$" },
+        "state": { "enum": ["not-requested", "missing", "file", "symlink", "icloud-placeholder", "unreadable"] },
+        "size": { "type": "integer", "minimum": 0 },
+        "mtime": { "type": "string", "format": "date-time" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "packageState", "sourcePathCount"],
+      "properties": {
+        "state": { "enum": ["valid", "corrupt", "icloud-placeholder"] },
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "packageId": { "type": "string", "format": "uuid" },
+        "packageIdHash": { "$ref": "#/$defs/sha256" },
+        "packageState": { "enum": ["package-id", "legacy", "unreadable"] },
+        "sessionIdHash": { "$ref": "#/$defs/sha256" },
+        "logicalIdentity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schemaVersion", "sourceFamily", "sourceInstanceKind", "sourceInstanceId"],
+          "properties": {
+            "schemaVersion": { "type": "integer", "minimum": 1 },
+            "sourceFamily": { "type": "string", "minLength": 1 },
+            "sourceInstanceKind": { "enum": ["default", "named", "legacy-ambiguous"] },
+            "sourceInstanceId": { "type": "string", "minLength": 1 }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "turnCount": { "type": "number", "minimum": 0 },
+        "sourcePathCount": { "type": "integer", "minimum": 0 },
+        "customTitle": { "$ref": "#/$defs/textDigestWithLength" },
+        "notes": { "$ref": "#/$defs/textDigestWithBytes" },
+        "highlights": { "$ref": "#/$defs/collectionDigest" },
+        "tags": { "$ref": "#/$defs/collectionDigest" },
+        "topic": { "$ref": "#/$defs/textDigest" },
+        "backupSha256": { "$ref": "#/$defs/sha256" },
+        "backupSha256State": { "enum": ["valid", "invalid"] },
+        "backupSize": { "type": "number", "minimum": 0 }
+      }
+    },
+    "textDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "sha256"],
+      "properties": {
+        "present": { "const": true },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "textDigestWithLength": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "sha256", "codePoints"],
+      "properties": {
+        "present": { "const": true },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "codePoints": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "textDigestWithBytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "sha256", "bytes"],
+      "properties": {
+        "present": { "const": true },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "collectionDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "sha256"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pathId", "packageTreeHash", "isSymlink", "cloudState", "inventoryState", "manifest", "files", "sources", "backupSourceRelationship", "uniqueEvidence", "role"],
+      "properties": {
+        "pathId": { "$ref": "#/$defs/pathId" },
+        "packageTreeHash": { "$ref": "#/$defs/sha256" },
+        "isSymlink": { "type": "boolean" },
+        "symlinkTargetHash": { "type": "string" },
+        "cloudState": { "enum": ["local", "icloud-placeholder"] },
+        "inventoryState": { "enum": ["complete", "unreadable"] },
+        "manifest": { "$ref": "#/$defs/manifest" },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+        "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
+        "backupSourceRelationship": { "enum": ["not-requested", "identical", "different", "missing-source", "no-source-declared", "missing-backup", "unverifiable"] },
+        "uniqueEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["userFiles", "branchTranscripts", "notes", "highlights", "backup"],
+          "properties": {
+            "userFiles": { "type": "array", "items": { "type": "string" } },
+            "branchTranscripts": { "type": "array", "items": { "type": "string" } },
+            "notes": { "type": "boolean" },
+            "highlights": { "type": "boolean" },
+            "backup": { "type": "boolean" }
+          }
+        },
+        "role": { "enum": ["canonical", "quarantine-candidate", "preserve", "unresolved"] }
+      }
+    },
+    "move": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "fromPathId", "quarantinePathId", "expectedPackageTreeHash"],
+      "properties": {
+        "action": { "const": "future-quarantine" },
+        "fromPathId": { "$ref": "#/$defs/pathId" },
+        "quarantinePathId": { "type": "string", "pattern": "^quarantine:[0-9a-f]{24}$" },
+        "expectedPackageTreeHash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "reverse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "quarantinePathId", "originalPathId", "expectedPackageTreeHash"],
+      "properties": {
+        "action": { "const": "restore-from-quarantine" },
+        "quarantinePathId": { "type": "string", "pattern": "^quarantine:[0-9a-f]{24}$" },
+        "originalPathId": { "$ref": "#/$defs/pathId" },
+        "expectedPackageTreeHash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "moves", "reverse", "preconditions"],
+      "properties": {
+        "action": { "enum": ["quarantine-equivalent-duplicates", "manual-merge", "preserve-all"] },
+        "canonicalPathId": { "$ref": "#/$defs/pathId" },
+        "moves": { "type": "array", "items": { "$ref": "#/$defs/move" } },
+        "reverse": { "type": "array", "items": { "$ref": "#/$defs/reverse" } },
+        "preconditions": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

@@ -20,11 +20,21 @@ export function SessionRanking({ data }: { data: InsightsData }) {
   const zh = locale === 'zh-CN'
   const { scope } = useAnalysisScope()
   const sessions = useStore((s) => s.sessions)
-  const selectSession = useStore((s) => s.selectSession)
+  const config = useStore((s) => s.config)
+  const storeOpenSession = useStore((s) => s.openSession)
 
-  const openSession = (sessionId: string): void => {
-    const session = sessions.find((item) => item.id === sessionId || item.sessionId === sessionId)
-    if (session) void selectSession(session.filePath, session.allFilePaths, session.id)
+  /** Resolve a stable display title: custom title > first user message > short session ID. */
+  const getDisplayTitle = (sessionId: string): string => {
+    const customTitle = config?.sessionMeta?.[sessionId]?.customTitle
+    if (customTitle) return customTitle
+    const summary = sessions.find((s) => s.id === sessionId || s.sessionId === sessionId)
+    if (summary) {
+      const metaTitle = config?.sessionMeta?.[summary.sessionId]?.customTitle
+        || config?.sessionMeta?.[summary.id]?.customTitle
+      if (metaTitle) return metaTitle
+      if (summary.firstUserMessage) return summary.firstUserMessage.slice(0, 60)
+    }
+    return sessionId.slice(0, 12)
   }
 
   const { ranked, p50, p90, p95, measured } = useMemo(() => {
@@ -64,39 +74,45 @@ export function SessionRanking({ data }: { data: InsightsData }) {
       </div>
 
       <div className="space-y-1">
-        {ranked.map(({ session, tokens }) => (
-          <button
-            key={session.sessionId}
-            onClick={() => openSession(session.sessionId)}
-            className="group block w-full text-left"
-            title={session.projectPath}
-          >
-            <div className="flex items-center gap-2 text-[11px]">
-              <span
-                className="h-2 w-2 shrink-0 rounded-full"
-                style={{ background: SOURCE_COLORS[session.source] || '#6b7280' }}
-              />
-              <span className="w-28 shrink-0 truncate text-secondary group-hover:text-primary">
-                {projectTail(session.projectPath)}
-              </span>
-              <div className="h-2 min-w-0 flex-1 overflow-hidden rounded bg-hover">
-                <div
-                  className="h-full rounded bg-soft-blue/70"
-                  style={{ width: `${(tokens / max) * 100}%` }}
-                />
-              </div>
-              <span className="w-14 shrink-0 text-right font-medium text-primary">{formatTokenCount(tokens)}</span>
-              {session.valuation.coveragePercent < 100 && (
+        {ranked.map(({ session, tokens }) => {
+          const displayTitle = getDisplayTitle(session.sessionId)
+          return (
+            <button
+              key={session.sessionId}
+              onClick={() => storeOpenSession(session.sessionId)}
+              className="group block w-full text-left"
+              title={`${displayTitle}\n${session.projectPath}`}
+            >
+              <div className="flex items-center gap-2 text-[11px]">
                 <span
-                  className="shrink-0 text-[9px] text-soft-amber"
-                  title={zh ? '部分 token 未计价' : 'Some tokens are unpriced'}
-                >
-                  {session.valuation.coveragePercent.toFixed(0)}%
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: SOURCE_COLORS[session.source] || '#6b7280' }}
+                />
+                <span className="w-28 shrink-0 truncate text-secondary group-hover:text-primary">
+                  {displayTitle}
                 </span>
-              )}
-            </div>
-          </button>
-        ))}
+                <div className="h-2 min-w-0 flex-1 overflow-hidden rounded bg-hover">
+                  <div
+                    className="h-full rounded bg-soft-blue/70"
+                    style={{ width: `${(tokens / max) * 100}%` }}
+                  />
+                </div>
+                <span className="w-14 shrink-0 text-right font-medium text-primary">{formatTokenCount(tokens)}</span>
+                {session.valuation.coveragePercent < 100 && (
+                  <span
+                    className="shrink-0 text-[9px] text-soft-amber"
+                    title={zh ? '部分 token 未计价' : 'Some tokens are unpriced'}
+                  >
+                    {session.valuation.coveragePercent.toFixed(0)}%
+                  </span>
+                )}
+              </div>
+              <div className="ml-4 text-[10px] text-muted truncate">
+                {projectTail(session.projectPath)}
+              </div>
+            </button>
+          )
+        })}
       </div>
     </div>
   )

@@ -187,6 +187,7 @@ interface AppState {
   toasts: ToastMessage[]
 
   initialize: () => Promise<void>
+  openSession: (sessionId: string) => void
   selectSession: (filePath: string, allFilePaths?: string[], uniqueId?: string, branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<void>
   search: (query: string) => Promise<void>
   clearSearch: () => void
@@ -437,24 +438,38 @@ export const useStore = create<AppState>((set, get) => ({
 
     // Spotlight: navigate to session from spotlight window
     window.api.onSpotlightNavigate?.((sessionId: string) => {
-      const { sessions, selectSession } = get()
-      const session = sessions.find((s) => s.id === sessionId || s.sessionId === sessionId)
-      if (session) {
-        set({ workspaceView: 'chat', settingsOpen: false })
-        selectSession(session.filePath, session.allFilePaths, session.id)
-      }
+      get().openSession(sessionId)
     })
     try {
       const pendingSessionId = await (window.api as any).spotlightConsumePendingNavigation?.()
       if (pendingSessionId) {
-        const { sessions, selectSession } = get()
-        const session = sessions.find((s) => s.id === pendingSessionId || s.sessionId === pendingSessionId)
-        if (session) {
-          set({ workspaceView: 'chat', settingsOpen: false })
-          selectSession(session.filePath, session.allFilePaths, session.id)
-        }
+        get().openSession(pendingSessionId)
       }
     } catch { /* ignore */ }
+  },
+
+  openSession: (sessionId) => {
+    const { sessions, selectSession, clearSearch, showToast } = get()
+    const session = sessions.find(
+      (s) => s.id === sessionId || s.sessionId === sessionId || s.filePath === sessionId
+    )
+    if (!session) {
+      showToast(
+        get().locale === 'zh-CN' ? '找不到该会话，可能已被删除或移动' : 'Session not found — it may have been deleted or moved',
+        'error'
+      )
+      return
+    }
+    set({ workspaceView: 'chat', settingsOpen: false })
+    clearSearch()
+    void selectSession(
+      session.filePath,
+      session.allFilePaths,
+      session.id,
+      session.branchParentFilePaths,
+      session.branchPointUuid,
+      session.branchLeafUuid
+    )
   },
 
   selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?, branchLeafUuid?) => {

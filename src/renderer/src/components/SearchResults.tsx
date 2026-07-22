@@ -21,7 +21,7 @@ function HighlightText({ text, query }: { text: string; query: string }) {
 }
 
 export function SearchResults() {
-  const { searchResults, searchQuery, selectSession, clearSearch, sessions } = useStore()
+  const { searchResults, searchQuery, openSession, clearSearch } = useStore()
   const locale = useStore((s) => s.locale)
   const t = useT()
 
@@ -49,9 +49,7 @@ export function SearchResults() {
             <button
               key={result.sessionId}
               onClick={() => {
-                const s = sessions.find(s => s.sessionId === result.sessionId || s.id === result.sessionId)
-                selectSession(result.filePath, s?.allFilePaths, s?.id, s?.branchParentFilePaths, s?.branchPointUuid)
-                clearSearch()
+                openSession(result.sessionId)
               }}
               className="w-full text-left p-4 bg-surface hover:bg-hover/50 rounded-lg border border-edge hover:border-edge-strong transition-colors"
             >

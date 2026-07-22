@@ -514,7 +514,7 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
 
 function BranchRelationships({ session }: { session: any }) {
   const locale = useStore((s) => s.locale)
-  const { sessions, config, selectSession } = useStore()
+  const { sessions, config, openSession } = useStore()
 
   const branchParentId = session.branchParentId as string | undefined
   const branchChildIds = session.branchChildIds as string[] | undefined
@@ -539,7 +539,7 @@ function BranchRelationships({ session }: { session: any }) {
           return (
             <button
               key="parent"
-              onClick={() => selectSession(parent.filePath, (parent as any).allFilePaths, parent.id, (parent as any).branchParentFilePaths, (parent as any).branchPointUuid, (parent as any).branchLeafUuid)}
+              onClick={() => openSession(parent.id)}
               className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
             >
               <div className="text-soft-purple/60 text-[10px] mb-0.5">{locale === 'zh-CN' ? '↑ 母分支' : '↑ Parent'}</div>
@@ -571,7 +571,7 @@ function BranchRelationships({ session }: { session: any }) {
           return (
             <button
               key={childId}
-              onClick={() => selectSession(child.filePath, (child as any).allFilePaths, child.id, (child as any).branchParentFilePaths, (child as any).branchPointUuid, (child as any).branchLeafUuid)}
+              onClick={() => openSession(child.id)}
               className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
             >
               <div className="text-soft-purple/60 text-[10px] mb-0.5">↳ {locale === 'zh-CN' ? '子分支' : 'Child branch'}</div>

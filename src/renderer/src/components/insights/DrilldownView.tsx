@@ -35,9 +35,7 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
   const locale = useStore((s) => s.locale)
   const zh = locale === 'zh-CN'
   const { scope } = useAnalysisScope()
-  const sessions = useStore((s) => s.sessions)
-  const selectSession = useStore((s) => s.selectSession)
-  const setWorkspaceView = useStore((s) => s.setWorkspaceView)
+  const openSession = useStore((s) => s.openSession)
 
   const [state, setState] = useState<DrilldownState>({
     level: 'sessions',
@@ -74,13 +72,8 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
 
   const handleSessionClick = useCallback((sessionId: string) => {
     if (state.level !== 'sessions') return
-    // Navigate to the session in the main session list
-    const summary = sessions.find((s) => s.sessionId === sessionId)
-    if (summary) {
-      setWorkspaceView('chat') // close insights
-      selectSession(summary.filePath, summary.allFilePaths, summary.id)
-    }
-  }, [sessions, selectSession, setWorkspaceView, state])
+    openSession(sessionId)
+  }, [openSession, state])
 
   const breadcrumbs = (() => {
     const crumbs: Array<{ label: string; onClick?: () => void }> = [

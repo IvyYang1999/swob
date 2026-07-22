@@ -2,7 +2,12 @@ export function HourlyChart({ hours }: { hours: number[] }) {
   const max = Math.max(...hours, 1)
   return (
     <div className="bg-surface rounded-lg p-4 border border-edge space-y-2">
-      <div className="text-sm font-medium text-primary">Activity by Hour</div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-medium text-primary">会话开始时刻分布</div>
+        <span className="rounded bg-hover px-1.5 py-0.5 text-[9px] text-faint" title="按 session 创建时间统计每小时开始的会话数;不是 token 或活跃时间分布(事件级数据随 t114 上线)">
+          按创建时间
+        </span>
+      </div>
       <div className="flex items-end gap-[2px] h-16">
         {hours.map((count, hour) => (
           <div key={hour} className="flex-1 flex flex-col items-center justify-end gap-0.5">

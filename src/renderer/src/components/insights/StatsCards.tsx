@@ -1,16 +1,29 @@
 import type { InsightsData } from './shared'
 import { formatTokenCount, formatDuration } from './shared'
+import { useAnalysisScope } from './scope'
 
 export function StatsCards({ data }: { data: InsightsData }) {
+  const { scope } = useAnalysisScope()
   const activeDays = data.activeDays
   const dailyAvgTime = activeDays > 0 ? Math.round(data.totalTime / activeDays) : 0
+  const conversationBasis = scope.basis === 'conversation'
 
   const cards = [
     {
-      value: formatTokenCount(data.totalTokens),
-      label: 'Processed Tokens',
-      sub: `${formatTokenCount(data.totalInputTokens)} processed in / ${formatTokenCount(data.totalOutputTokens)} out`,
-      title: 'Processed/billing total = non-cached input + cache read + cache write + output, after provider-specific deduplication. Sessions without authoritative usage are excluded.',
+      value: formatTokenCount(conversationBasis ? data.conversationOnlyTokens : data.totalTokens),
+      label: conversationBasis ? 'Conversation Tokens' : 'Processed Tokens',
+      sub: conversationBasis
+        ? `billing total ${formatTokenCount(data.totalTokens)}`
+        : `${formatTokenCount(data.totalInputTokens)} processed in / ${formatTokenCount(data.totalOutputTokens)} out`,
+      title: conversationBasis
+        ? 'Conversation-only restricts the same deduplicated ledger to main-thread events (excludes sidechains/subagents).'
+        : 'Processed/billing total = non-cached input + cache read + cache write + output, after provider-specific deduplication. Sessions without authoritative usage are excluded.',
+    },
+    {
+      value: data.valuation.usd === undefined ? '未计价' : `$${data.valuation.usd.toFixed(2)}`,
+      label: 'API 等价值(估算)',
+      sub: `价格覆盖 ${data.valuation.coveragePercent.toFixed(1)}%`,
+      title: '逐请求按模型/Provider/时点估算的 API 标价等价值;未计价 token 不套默认价。不代表订阅下现金支出。',
     },
     {
       value: String(data.totalSessions),
@@ -27,16 +40,10 @@ export function StatsCards({ data }: { data: InsightsData }) {
       title: '',
     },
     {
-      value: String(activeDays),
-      label: 'Active Days',
-      sub: '',
-      title: '',
-    },
-    {
       value: formatDuration(data.totalTime),
       label: 'Est. Time',
-      sub: dailyAvgTime > 0 ? `${formatDuration(dailyAvgTime)}/day` : '',
-      title: '',
+      sub: dailyAvgTime > 0 ? `${formatDuration(dailyAvgTime)}/day · ${activeDays} active days` : `${activeDays} active days`,
+      title: 'Estimated from message timestamps; wall-clock and think time are not separated.',
     },
   ]
 

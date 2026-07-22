@@ -41,7 +41,7 @@ describe('Profile Keychain account isolation', () => {
       expect(call.args).toContain('com.swob.llm-profile')
       expect(call.args).toContain(profileId)
     }
-    expect(calls[1].input).toBe('fixture-value')
+    expect(calls[1].input).toBe('fixture-value\nfixture-value\n')
   })
 
   it('only treats Keychain item-not-found as empty and reports other failures', async () => {

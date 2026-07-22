@@ -62,6 +62,7 @@ const FEATURES: readonly SmartFeature[] = ['insights', 'smartOrganize', 'smartRe
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const defaultProfileStore = new SecurityCliProfileSecretStore()
 const defaultLegacyStore = new SecurityCliSecretStore()
+let legacyProfileMigrationInFlight: Promise<boolean> | null = null
 
 function hintFor(value: string): string {
   return value ? `…${Array.from(value).slice(-4).join('')}` : ''
@@ -143,7 +144,7 @@ function legacyProfileId(libraryRoot: string): string {
 }
 
 /** Move the legacy single LLM setting into a deterministic first Profile. */
-export async function migrateLegacyLlmProfile(
+async function runLegacyLlmProfileMigration(
   legacyStore: SecretStore = defaultLegacyStore,
   profileStore: ProfileSecretStore = defaultProfileStore
 ): Promise<boolean> {
@@ -177,10 +178,27 @@ export async function migrateLegacyLlmProfile(
     bindings.insights = profileId
   }
 
+  if (alreadyBound && (!bindings.insights || !(await profileStore.get(bindings.insights)))) {
+    throw new LlmProfileError('KEYCHAIN_WRITE_FAILED', '已绑定 Profile 无法读回，旧凭据保持不变')
+  }
+  await legacyStore.delete()
   writeProfilePreferences(config, profiles, bindings)
   delete config.llmSettings
   saveLibraryConfig(config)
   return true
+}
+
+/** Move the legacy single LLM setting into a deterministic first Profile. */
+export function migrateLegacyLlmProfile(
+  legacyStore: SecretStore = defaultLegacyStore,
+  profileStore: ProfileSecretStore = defaultProfileStore
+): Promise<boolean> {
+  if (legacyProfileMigrationInFlight) return legacyProfileMigrationInFlight
+  const migration = runLegacyLlmProfileMigration(legacyStore, profileStore).finally(() => {
+    if (legacyProfileMigrationInFlight === migration) legacyProfileMigrationInFlight = null
+  })
+  legacyProfileMigrationInFlight = migration
+  return migration
 }
 
 export async function listLlmProfiles(
@@ -196,7 +214,14 @@ export async function saveLlmProfile(
   profileStore: ProfileSecretStore = defaultProfileStore,
   legacyStore: SecretStore = defaultLegacyStore
 ): Promise<LlmProfile> {
-  await migrateLegacyLlmProfile(legacyStore, profileStore)
+  try {
+    await migrateLegacyLlmProfile(legacyStore, profileStore)
+  } catch (error) {
+    console.warn(
+      '[llm-profiles] legacy migration deferred; continuing explicit Profile save',
+      error instanceof Error ? error.message : 'unknown error'
+    )
+  }
   const normalized = normalizeProfileInput(input)
   const profileId = input.id || randomUUID()
   validateProfileId(profileId)

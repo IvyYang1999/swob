@@ -4,7 +4,10 @@ import { normalizePortablePath } from './portable-path'
 
 export function detectSessionSourceFromPath(filePath?: string): SessionSource | null {
   if (!filePath) return null
-  const normalized = normalizePortablePath(filePath)
+  const portable = normalizePortablePath(filePath).normalize('NFC')
+  // Windows paths are case-insensitive for the supported local filesystems.
+  // Do not fold POSIX paths: `.Claude` can be a genuinely different directory.
+  const normalized = pathLooksWindowsNative(filePath) ? portable.toLocaleLowerCase('en-US') : portable
   if (normalized.includes('/.codex/sessions/')) return 'codex'
   if (normalized.includes('/.cursor/projects/')) return 'cursor'
   if (normalized.includes('/.local/share/opencode/opencode.db')) return 'opencode'
@@ -17,6 +20,10 @@ export function detectSessionSourceFromPath(filePath?: string): SessionSource | 
   if (normalized.includes('/.hermes/sessions/')) return 'hermes'
   if (normalized.includes('/.claude/projects/') || normalized.includes('/.claude-window/')) return 'claude-code'
   return null
+}
+
+function pathLooksWindowsNative(filePath: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('\\\\') || filePath.includes('\\')
 }
 
 function readFirstJsonlObject(filePath: string): Record<string, unknown> | null {

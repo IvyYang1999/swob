@@ -1,9 +1,8 @@
 import { ensureSessionInLibrary, initLibrary, scanLibrary } from '../library-manager'
 
-const [libraryRoot, sourcePath, sessionId] = process.argv.slice(2)
+const [libraryRoot, sourcePath, sessionId, pauseStage] = process.argv.slice(2)
 
 async function main(): Promise<void> {
-  process.stdout.write(`${process.pid}\n`)
   initLibrary(libraryRoot)
   scanLibrary()
   await ensureSessionInLibrary({
@@ -12,13 +11,19 @@ async function main(): Promise<void> {
     source: 'claude-code',
     filePath: sourcePath,
     allFilePaths: [sourcePath],
-    firstUserMessage: 't130 concurrent package',
+    firstUserMessage: `crash ${pauseStage}`,
     createdAt: '2026-07-22T00:00:00.000Z',
     updatedAt: '2026-07-22T00:01:00.000Z',
     projectPath: '/fixture/project',
     cwds: ['/fixture/project'],
     turnCount: 1
-  } as any)
+  } as any, undefined, undefined, {
+    onStage: async (stage) => {
+      if (stage !== pauseStage) return
+      process.stdout.write(`${stage}\n`)
+      await new Promise<void>(() => {})
+    }
+  })
 }
 
 main().catch((error) => {

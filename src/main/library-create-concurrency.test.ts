@@ -39,16 +39,19 @@ beforeAll(async () => {
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }))
 
-function runWorker(sourcePath: string, sessionId: string): Promise<{ code: number | null; stderr: string }> {
+function runWorker(sourcePath: string, sessionId: string): Promise<{ code: number | null; stderr: string; pid: number }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [workerBundle, libraryRoot, sourcePath, sessionId], {
       env: { ...process.env, HOME: testHome },
-      stdio: ['ignore', 'ignore', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe']
     })
     let stderr = ''
+    let stdout = ''
+    child.stdout.setEncoding('utf-8')
+    child.stdout.on('data', (chunk) => { stdout += chunk })
     child.stderr.setEncoding('utf-8')
     child.stderr.on('data', (chunk) => { stderr += chunk })
-    child.on('exit', (code) => resolve({ code, stderr }))
+    child.on('exit', (code) => resolve({ code, stderr, pid: Number(stdout.trim()) }))
   })
 }
 
@@ -74,6 +77,7 @@ describe('multi-process session creation', () => {
     expect(results, results.map((result) => result.stderr).join('\n')).toSatisfy(
       (items: Array<{ code: number | null }>) => items.every((item) => item.code === 0)
     )
+    expect(new Set(results.map((result) => result.pid)).size).toBe(12)
     const manifests = findManifests(libraryRoot)
     expect(manifests).toHaveLength(1)
     const meta = JSON.parse(fs.readFileSync(manifests[0], 'utf-8'))

@@ -54,7 +54,24 @@ function stableNamedInstance(namespace: string, semanticName: string): LogicalSo
 }
 
 function normalizedSegments(filePath: string): string[] {
-  return filePath.replace(/\\/g, '/').split('/').filter(Boolean)
+  const windowsPath = /^[a-zA-Z]:[\\/]/.test(filePath) || filePath.startsWith('\\\\') || filePath.includes('\\')
+  const normalized = filePath.replace(/\\/g, '/').normalize('NFC')
+  return normalized.split('/').filter(Boolean).map((segment) =>
+    windowsPath ? segment.toLocaleLowerCase('en-US') : segment
+  )
+}
+
+function configuredRootInstance(
+  sourceFamily: SessionSource,
+  segments: string[],
+  anchor: string,
+  defaultRootNames: string[]
+): LogicalSourceInstance | null {
+  const anchorIndex = segments.lastIndexOf(anchor)
+  if (anchorIndex <= 0) return null
+  const rootName = segments[anchorIndex - 1]
+  if (defaultRootNames.includes(rootName)) return { kind: 'default', id: 'default' }
+  return stableNamedInstance(`${sourceFamily}-config`, rootName)
 }
 
 function semanticInstanceFromPath(
@@ -81,7 +98,41 @@ function semanticInstanceFromPath(
     return null
   }
 
-  return { kind: 'default', id: 'default' }
+  if (sourceFamily === 'codex') {
+    return configuredRootInstance(sourceFamily, segments, 'sessions', ['.codex'])
+  }
+  if (sourceFamily === 'cursor') {
+    return configuredRootInstance(sourceFamily, segments, 'projects', ['.cursor'])
+  }
+  if (sourceFamily === 'zcode') {
+    const defaultIndex = segments.lastIndexOf('.zcode')
+    if (defaultIndex >= 0) return { kind: 'default', id: 'default' }
+    const named = segments.find((segment) => segment.startsWith('.zcode-'))
+    return named ? stableNamedInstance('zcode-config', named) : null
+  }
+  if (sourceFamily === 'opencode') {
+    const dbIndex = segments.lastIndexOf('opencode.db')
+    if (dbIndex > 0 && segments[dbIndex - 1] === 'opencode') return { kind: 'default', id: 'default' }
+    return null
+  }
+  if (sourceFamily === 'antigravity') {
+    return segments.includes('antigravity') ? { kind: 'default', id: 'default' } : null
+  }
+  if (sourceFamily === 'grok') {
+    if (segments.includes('.grok')) return stableNamedInstance('grok-config', '.grok')
+    if (segments.includes('.factory')) return stableNamedInstance('grok-config', '.factory')
+    return null
+  }
+  if (sourceFamily === 'pi') {
+    return segments.includes('.pi') ? { kind: 'default', id: 'default' } : null
+  }
+  if (sourceFamily === 'kimi') {
+    return segments.includes('.kimi-code') ? { kind: 'default', id: 'default' } : null
+  }
+  if (sourceFamily === 'hermes') {
+    return segments.includes('.hermes') ? { kind: 'default', id: 'default' } : null
+  }
+  return null
 }
 
 function identityFromEvidence(
@@ -101,7 +152,9 @@ function identityFromEvidence(
   const sourceFamily = [...detectedSources][0]
   let sourceInstance: LogicalSourceInstance | null = null
   for (const sourceFilePath of sourceFilePaths) {
-    if (detectSessionSourceFromPath(sourceFilePath) !== sourceFamily) continue
+    const detected = detectSessionSourceFromPath(sourceFilePath)
+    if (detected && detected !== sourceFamily) continue
+    if (!detected && explicitSource !== sourceFamily) continue
     const candidate = semanticInstanceFromPath(sourceFamily, sourceFilePath)
     if (!candidate) continue
     if (sourceInstance && JSON.stringify(sourceInstance) !== JSON.stringify(candidate)) {
@@ -110,12 +163,8 @@ function identityFromEvidence(
     sourceInstance = candidate
   }
 
-  // An explicit provider is stable evidence for providers whose public data model
-  // has one default local instance. Claude and CC-Mirror require path evidence to
-  // distinguish their named installations.
-  if (!sourceInstance && sourceFamily !== 'claude-code' && sourceFamily !== 'cc-mirror') {
-    sourceInstance = { kind: 'default', id: 'default' }
-  }
+  // Provider names alone cannot prove which configurable installation produced
+  // the session. Require path evidence instead of collapsing all roots to default.
   if (!sourceInstance) return legacyAmbiguousIdentity(sessionId)
 
   return {

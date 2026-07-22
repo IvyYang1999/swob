@@ -48,7 +48,22 @@ import {
   type LibrarySessionCandidate,
   type SessionIdResolution
 } from './library-session-registry'
-import { acquireSessionCreateLock, SessionCreateBusyError } from './session-create-lock'
+import {
+  acquireSessionCreateLock,
+  getLocalBootIdentity,
+  getProcessStartFingerprint,
+  SessionCreateBusyError,
+  type SessionCreateLockOwner
+} from './session-create-lock'
+import {
+  assertSafeLibraryFileTarget,
+  assertSafeLibraryWritePath,
+  canonicalLibraryRootForWrite,
+  ensureSafeLibraryDirectory,
+  fsyncDirectorySync,
+  LibraryPathUnsafeError,
+  writeSafeLibraryFileSync
+} from './library-path-safety'
 import type {
   RawJsonlMessage,
   ContentPart,
@@ -120,6 +135,7 @@ export interface SessionSourceInstance {
 }
 
 export { SessionCreateBusyError }
+export { LibraryPathUnsafeError }
 export type { LogicalSessionIdentity, LogicalSessionKey, LibrarySessionBinding, SessionIdResolution }
 
 export interface LibrarySession {
@@ -154,6 +170,8 @@ export interface LibraryTree {
   rootFiles: LibraryFile[]
   /** Read-only identity blockers; callers must not infer a package from these paths. */
   identityIssues?: LibraryIdentityScanIssue[]
+  /** Explicit evidence quality; omitted worker trees are never authoritative. */
+  identityScanStatus?: 'authoritative-complete' | 'incomplete'
 }
 
 export interface LibraryConfig {
@@ -550,7 +568,7 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
   if (path.resolve(nextRoot) !== path.resolve(_root)) {
     sessionMetaCache.clear()
     sessionMetaDiskReads = 0
-    sessionRegistry.replace([])
+    sessionRegistry.clear()
     lastIdentityScanIssues = []
   }
   _cachedLibraryConfig = null
@@ -559,6 +577,7 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
   if (!options.readOnly && !fs.existsSync(_root)) {
     fs.mkdirSync(_root, { recursive: true })
   }
+  if (!options.readOnly) canonicalLibraryRootForWrite(_root)
   // 库根可能是整个 vault：加载忽略名单，避免扫描 wiki/clipii/日记 等非项目目录
   const cfg = loadLibraryConfig()
   _ignoreDirs = new Set(
@@ -592,10 +611,13 @@ export function loadLibraryConfig(): LibraryConfig {
 export function saveLibraryConfig(config: LibraryConfig): void {
   const configPath = path.join(_root, LIBRARY_CONFIG_FILE)
   if (!fs.existsSync(_root)) fs.mkdirSync(_root, { recursive: true })
+  canonicalLibraryRootForWrite(_root)
+  assertSafeLibraryFileTarget(_root, configPath)
   const tempPath = `${configPath}.${process.pid}.${randomUUID()}.tmp`
   try {
-    fs.writeFileSync(tempPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 })
+    writeSafeLibraryFileSync(_root, tempPath, JSON.stringify(config, null, 2), { exclusive: true })
     fs.renameSync(tempPath, configPath)
+    fsyncDirectorySync(_root)
     fs.chmodSync(configPath, 0o600)
   } finally {
     if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true })
@@ -779,6 +801,7 @@ export function parseSessionMeta(
 function readSessionMeta(dirPath: string): SessionMeta | null {
   const metaPath = path.join(dirPath, SESSION_META_FILE)
   try {
+    assertSafeLibraryFileTarget(_root, metaPath)
     const stat = fs.statSync(metaPath)
     const cached = sessionMetaCache.get(metaPath)
     if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
@@ -793,9 +816,25 @@ function readSessionMeta(dirPath: string): SessionMeta | null {
   return null
 }
 
-function writeSessionMeta(dirPath: string, meta: SessionMeta): void {
+function assertCurrentSessionWriteAuthorized(dirPath: string, meta: SessionMeta): void {
+  assertSafeLibraryWritePath(_root, dirPath, { allowRoot: false })
+  const key = logicalSessionKey(buildLogicalSessionIdentityFromMeta(meta))
+  const binding = sessionRegistry.get(key)
+  if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
+  if (binding.state === 'missing') {
+    if (binding.reason === 'previously-seen') {
+      throw new SessionIdentityMissingError(key, binding.lastKnownCandidates)
+    }
+    throw new Error('session-write-without-bound-registry')
+  }
+  if (path.resolve(binding.candidate.dirPath) !== path.resolve(dirPath)) {
+    throw new Error('session-binding-mismatch')
+  }
+}
+
+function writeSessionMetaFile(dirPath: string, meta: SessionMeta, exclusive = false): void {
   const metaPath = path.join(dirPath, SESSION_META_FILE)
-  if (fs.existsSync(metaPath)) {
+  if (!exclusive && fs.existsSync(metaPath)) {
     const existing = readSessionMeta(dirPath)
     if (existing?.packageId && existing.packageId !== meta.packageId) {
       throw new Error('immutable-package-id')
@@ -806,13 +845,18 @@ function writeSessionMeta(dirPath: string, meta: SessionMeta): void {
       throw new Error('immutable-logical-session-identity')
     }
   }
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8')
+  writeSafeLibraryFileSync(_root, metaPath, JSON.stringify(meta, null, 2), { exclusive })
   try {
     const stat = fs.statSync(metaPath)
     sessionMetaCache.set(metaPath, { mtimeMs: stat.mtimeMs, size: stat.size, meta: structuredClone(meta) })
   } catch {
     sessionMetaCache.delete(metaPath)
   }
+}
+
+function writeSessionMeta(dirPath: string, meta: SessionMeta): void {
+  assertCurrentSessionWriteAuthorized(dirPath, meta)
+  writeSessionMetaFile(dirPath, meta)
 }
 
 function isSessionDir(dirPath: string): boolean {
@@ -857,15 +901,11 @@ function sessionDirHasUserFiles(dirPath: string): boolean {
 /** 把 swob 权威 turnCount 持久化进会话 meta（供外部整理脚本按真实轮数归档）。变化才写盘。 */
 export function setSessionTurnCount(dirPath: string, turnCount: number): void {
   if (typeof turnCount !== 'number') return
-  try {
-    const m = readSessionMeta(dirPath)
-    if (m && m.turnCount !== turnCount) {
-      requireWritableSessionDir(m.sessionId, dirPath)
-      m.turnCount = turnCount
-      writeSessionMeta(dirPath, m)
-    }
-  } catch (error) {
-    if (error instanceof SessionIdentityConflictError || error instanceof SessionIdentityAmbiguousError) throw error
+  const m = readSessionMeta(dirPath)
+  if (m && m.turnCount !== turnCount) {
+    requireWritableSessionDir(m.sessionId, dirPath)
+    m.turnCount = turnCount
+    writeSessionMeta(dirPath, m)
   }
 }
 
@@ -940,9 +980,27 @@ export class SessionIdentityAmbiguousError extends Error {
 export class SessionIdentityUnresolvedError extends Error {
   readonly code = 'SESSION_IDENTITY_UNRESOLVED'
 
-  constructor(readonly issueKinds: Array<'corrupt-manifest' | 'icloud-placeholder' | 'unreadable-link'>) {
+  constructor(readonly issueKinds: LibraryIdentityScanIssue['kind'][]) {
     super('Library identity cannot be proven while unresolved package markers exist')
     this.name = 'SessionIdentityUnresolvedError'
+  }
+}
+
+export class SessionIdentityMissingError extends Error {
+  readonly code = 'SESSION_IDENTITY_MISSING'
+
+  constructor(readonly logicalKey: LogicalSessionKey, readonly lastKnownCandidates: LibrarySessionCandidate[]) {
+    super('A previously observed Library package is temporarily missing; automatic recreation is blocked')
+    this.name = 'SessionIdentityMissingError'
+  }
+}
+
+export class SessionPackageIdCollisionError extends Error {
+  readonly code = 'SESSION_PACKAGE_ID_COLLISION'
+
+  constructor() {
+    super('Unable to allocate a unique package identity')
+    this.name = 'SessionPackageIdCollisionError'
   }
 }
 
@@ -971,34 +1029,34 @@ function throwForUnsafeResolution(resolution: SessionIdResolution): never {
   if (resolution.state === 'ambiguous') {
     throw new SessionIdentityAmbiguousError(resolution.sessionId, resolution.candidates)
   }
+  if (resolution.state === 'missing' && resolution.logicalKey && resolution.reason === 'previously-seen') {
+    throw new SessionIdentityMissingError(resolution.logicalKey, resolution.lastKnownCandidates || [])
+  }
   throw new Error(`Session "${resolution.sessionId}" 不存在`)
 }
 
 function requireWritableSessionDir(sessionId: string, expectedDirPath?: string): string {
-  throwIfIdentityScanUnresolved(lastIdentityScanIssues)
+  const issues = refreshSessionRegistryFromDisk()
+  throwIfIdentityScanUnresolved(issues)
   if (expectedDirPath) {
     const meta = readSessionMeta(expectedDirPath)
     if (!meta || meta.sessionId !== sessionId) throw new Error('session-binding-mismatch')
     const key = logicalSessionKey(buildLogicalSessionIdentityFromMeta(meta))
-    let binding = sessionRegistry.get(key)
-    if (binding.state === 'missing' ||
-      (binding.state === 'bound' && path.resolve(binding.candidate.dirPath) !== path.resolve(expectedDirPath))) {
-      refreshSessionRegistryFromDisk()
-      binding = sessionRegistry.get(key)
-    }
+    const binding = sessionRegistry.get(key)
     if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
+    if (binding.state === 'missing' && binding.reason === 'previously-seen') {
+      throw new SessionIdentityMissingError(key, binding.lastKnownCandidates)
+    }
     if (binding.state !== 'bound' || path.resolve(binding.candidate.dirPath) !== path.resolve(expectedDirPath)) {
       throw new Error('session-binding-mismatch')
     }
+    assertSafeLibraryWritePath(_root, expectedDirPath, { allowRoot: false })
     return expectedDirPath
   }
 
-  let resolution = sessionRegistry.resolveSessionId(sessionId)
-  if (resolution.state === 'bound' && !fs.existsSync(resolution.candidate.dirPath)) {
-    refreshSessionRegistryFromDisk()
-    resolution = sessionRegistry.resolveSessionId(sessionId)
-  }
+  const resolution = sessionRegistry.resolveSessionId(sessionId)
   if (resolution.state !== 'bound') return throwForUnsafeResolution(resolution)
+  assertSafeLibraryWritePath(_root, resolution.candidate.dirPath, { allowRoot: false })
   return resolution.candidate.dirPath
 }
 
@@ -1358,15 +1416,18 @@ export async function updateBranchTranscript(
   })
 
   const mdPath = path.join(dirPath, `transcript-${suffix}.md`)
-  fs.writeFileSync(mdPath, md, 'utf-8')
+  assertCurrentSessionWriteAuthorized(dirPath, meta)
+  writeSafeLibraryFileSync(_root, mdPath, md)
   return mdPath
 }
 
 // --- Scan Library ---
 
 export interface LibraryIdentityScanIssue {
-  kind: 'corrupt-manifest' | 'icloud-placeholder' | 'unreadable-link'
+  kind: 'corrupt-manifest' | 'icloud-placeholder' | 'unreadable-link' |
+    'unreadable-directory' | 'incomplete-publish'
   dirPath: string
+  code?: string
 }
 
 function scanDir(
@@ -1381,8 +1442,18 @@ function scanDir(
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(dirPath, { withFileTypes: true })
-  } catch {
+  } catch (error) {
+    identityIssues.push({
+      kind: 'unreadable-directory',
+      dirPath,
+      code: (error as NodeJS.ErrnoException).code
+    })
     return { sessions, folders, files }
+  }
+
+  const incompleteMarker = path.join(dirPath, '.swob-incomplete.json')
+  if (fs.existsSync(incompleteMarker) && !fs.existsSync(path.join(dirPath, SESSION_META_FILE))) {
+    identityIssues.push({ kind: 'incomplete-publish', dirPath })
   }
 
   if (!fs.existsSync(path.join(dirPath, SESSION_META_FILE)) &&
@@ -1392,7 +1463,12 @@ function scanDir(
   }
 
   for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue
+    if (entry.name.startsWith('.')) {
+      if (entry.isDirectory() && entry.name.startsWith('.swob-create-')) {
+        identityIssues.push({ kind: 'incomplete-publish', dirPath: path.join(dirPath, entry.name) })
+      }
+      continue
+    }
     // Skip iCloud placeholder files (e.g. .filename.icloud)
     if (entry.name.includes('.icloud')) continue
     // 库根设为整个 vault 时，跳过 wiki/clipii/日记 等非项目目录
@@ -1426,6 +1502,16 @@ function scanDir(
     }
 
     if (isSessionDir(realPath)) {
+      try {
+        fs.accessSync(path.join(realPath, SESSION_META_FILE), fs.constants.R_OK)
+      } catch (error) {
+        identityIssues.push({
+          kind: 'unreadable-directory',
+          dirPath: realPath,
+          code: (error as NodeJS.ErrnoException).code
+        })
+        continue
+      }
       const meta = readSessionMeta(realPath)
       if (meta) {
         const metaSignature = sessionMetaCache.get(path.join(realPath, SESSION_META_FILE))
@@ -1462,7 +1548,14 @@ function scanDir(
 export function scanLibrary(): LibraryTree {
   const identityIssues: LibraryIdentityScanIssue[] = []
   const { sessions, folders, files } = scanDir(_root, identityIssues)
-  const tree = { root: _root, folders, ungroupedSessions: sessions, rootFiles: files, identityIssues }
+  const tree: LibraryTree = {
+    root: _root,
+    folders,
+    ungroupedSessions: sessions,
+    rootFiles: files,
+    identityIssues,
+    identityScanStatus: identityIssues.length === 0 ? 'authoritative-complete' : 'incomplete'
+  }
   applyLibraryTree(tree)
   return tree
 }
@@ -1501,7 +1594,9 @@ export function applyLibraryTree(tree: LibraryTree): void {
 
   indexSessions(tree.ungroupedSessions)
   for (const f of tree.folders) indexFolder(f)
-  sessionRegistry.replace(registryCandidates)
+  sessionRegistry.replace(registryCandidates, {
+    authoritative: tree.identityScanStatus === 'authoritative-complete' && lastIdentityScanIssues.length === 0
+  })
   for (const metaPath of sessionMetaCache.keys()) {
     if (!liveMetaPaths.has(metaPath)) sessionMetaCache.delete(metaPath)
   }
@@ -1521,7 +1616,7 @@ function refreshSessionRegistryFromDisk(): LibraryIdentityScanIssue[] {
   }
   collectSessions(sessions)
   for (const folder of folders) collectFolder(folder)
-  sessionRegistry.replace(candidates)
+  sessionRegistry.replace(candidates, { authoritative: identityIssues.length === 0 })
   lastIdentityScanIssues = structuredClone(identityIssues)
   return identityIssues
 }
@@ -1849,6 +1944,284 @@ export function generateTranscript(
 
 // --- Ensure Session in Library ---
 
+interface IncompleteSessionPublishMarker {
+  schemaVersion: 1
+  packageId: string
+  logicalKeyHash: string
+  owner: SessionCreateLockOwner
+  createdAt: string
+}
+
+interface PackageIdReservation {
+  packageId: string
+  logicalKeyHash: string
+  state: 'pending' | 'committed'
+  owner?: SessionCreateLockOwner
+}
+
+export interface SessionCreateInstrumentation {
+  packageIdFactory?: () => string
+  onStage?: (stage: 'before-publish-reservation' | 'incomplete-durable' | 'manifest-durable') => void | Promise<void>
+}
+
+function logicalKeyHash(key: LogicalSessionKey): string {
+  return createHash('sha256').update(key).digest('hex')
+}
+
+function packageReservationPath(packageId: string): string {
+  return path.join(
+    _root,
+    '.swob',
+    'package-ids',
+    `${createHash('sha256').update(packageId).digest('hex')}.json`
+  )
+}
+
+function packageReservationCommitPath(packageId: string): string {
+  return packageReservationPath(packageId).replace(/\.json$/, '.committed.json')
+}
+
+function isValidSessionCreateLockOwner(value: unknown): value is SessionCreateLockOwner {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const owner = value as Partial<SessionCreateLockOwner>
+  return owner.schemaVersion === 1 && typeof owner.ownerNonce === 'string' &&
+    typeof owner.deviceId === 'string' && typeof owner.pid === 'number' &&
+    typeof owner.bootIdentity === 'string' && typeof owner.processStartFingerprint === 'string' &&
+    typeof owner.acquiredAt === 'string' && typeof owner.leaseExpiresAt === 'string'
+}
+
+function readPackageReservation(filePath: string): PackageIdReservation | null {
+  try {
+    assertSafeLibraryFileTarget(_root, filePath)
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+    if (value.schemaVersion !== 1 || typeof value.packageId !== 'string' ||
+      typeof value.logicalKeyHash !== 'string' || !/^[0-9a-f]{64}$/.test(value.logicalKeyHash)) return null
+    const state = value.state === undefined ? 'committed' : value.state
+    if (state !== 'pending' && state !== 'committed') return null
+    if (state === 'pending' && !isValidSessionCreateLockOwner(value.owner)) return null
+    return {
+      packageId: value.packageId,
+      logicalKeyHash: value.logicalKeyHash,
+      state,
+      owner: isValidSessionCreateLockOwner(value.owner) ? value.owner : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+function packageReservationIsCommitted(reservation: PackageIdReservation): boolean {
+  if (reservation.state === 'committed') return true
+  const commitPath = packageReservationCommitPath(reservation.packageId)
+  try {
+    assertSafeLibraryFileTarget(_root, commitPath)
+    const value = JSON.parse(fs.readFileSync(commitPath, 'utf-8')) as Record<string, unknown>
+    if (value.schemaVersion === 1 && value.packageId === reservation.packageId &&
+      value.logicalKeyHash === reservation.logicalKeyHash) return true
+    throw new SessionIdentityUnresolvedError(['corrupt-manifest'])
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    if (error instanceof SessionIdentityUnresolvedError) throw error
+    throw new SessionIdentityUnresolvedError(['corrupt-manifest'])
+  }
+}
+
+function markPackageReservationCommitted(packageId: string, expectedLogicalKeyHash: string): void {
+  const reservationPath = packageReservationPath(packageId)
+  const reservation = readPackageReservation(reservationPath)
+  if (!reservation || reservation.packageId !== packageId ||
+    reservation.logicalKeyHash !== expectedLogicalKeyHash) throw new SessionPackageIdCollisionError()
+  if (packageReservationIsCommitted(reservation)) return
+  const commitPath = packageReservationCommitPath(packageId)
+  try {
+    writeSafeLibraryFileSync(_root, commitPath, JSON.stringify({
+      schemaVersion: 1,
+      packageId,
+      logicalKeyHash: expectedLogicalKeyHash,
+      committedAt: new Date().toISOString()
+    }), { exclusive: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !packageReservationIsCommitted(reservation)) {
+      throw error
+    }
+  }
+  fsyncDirectorySync(path.dirname(commitPath))
+}
+
+function removeOwnedPackageReservation(packageId: string, expectedLogicalKeyHash: string): void {
+  const reservationPath = packageReservationPath(packageId)
+  const reservation = readPackageReservation(reservationPath)
+  if (!reservation || reservation.packageId !== packageId ||
+    reservation.logicalKeyHash !== expectedLogicalKeyHash || packageReservationIsCommitted(reservation)) return
+  fs.unlinkSync(reservationPath)
+  fsyncDirectorySync(path.dirname(reservationPath))
+}
+
+function parseIncompletePublishMarker(content: string): IncompleteSessionPublishMarker | null {
+  try {
+    const value = JSON.parse(content) as Partial<IncompleteSessionPublishMarker>
+    if (value.schemaVersion !== 1 || typeof value.packageId !== 'string' ||
+      typeof value.logicalKeyHash !== 'string' || !/^[0-9a-f]{64}$/.test(value.logicalKeyHash) ||
+      !value.owner || typeof value.owner !== 'object' || typeof value.createdAt !== 'string') return null
+    if (!isValidSessionCreateLockOwner(value.owner)) return null
+    return value as IncompleteSessionPublishMarker
+  } catch {
+    return null
+  }
+}
+
+function incompleteOwnerIsProvablyDead(owner: SessionCreateLockOwner, localDeviceId: string): boolean {
+  if (owner.deviceId !== localDeviceId) return false
+  const bootIdentity = getLocalBootIdentity()
+  if (!bootIdentity) return false
+  if (owner.bootIdentity !== bootIdentity) return true
+  const currentStart = getProcessStartFingerprint(owner.pid)
+  return currentStart === 'missing' || (typeof currentStart === 'string' && currentStart !== owner.processStartFingerprint)
+}
+
+/** Recover only marker-owned, otherwise-empty reservations or finalize committed packages. */
+function recoverIncompleteSessionPublishes(localDeviceId: string): LibraryIdentityScanIssue[] {
+  const issues: LibraryIdentityScanIssue[] = []
+  canonicalLibraryRootForWrite(_root)
+
+  const walk = (dirPath: string): void => {
+    assertSafeLibraryWritePath(_root, dirPath)
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true })
+    } catch (error) {
+      issues.push({ kind: 'unreadable-directory', dirPath, code: (error as NodeJS.ErrnoException).code })
+      return
+    }
+
+    const markerPath = path.join(dirPath, '.swob-incomplete.json')
+    const markerEntry = entries.find((entry) => entry.name === '.swob-incomplete.json' && entry.isFile())
+    if (markerEntry) {
+      let marker: IncompleteSessionPublishMarker | null = null
+      try { marker = parseIncompletePublishMarker(fs.readFileSync(markerPath, 'utf-8')) } catch { /* blocker below */ }
+      const manifestPath = path.join(dirPath, SESSION_META_FILE)
+      if (marker && fs.existsSync(manifestPath)) {
+        const meta = readSessionMeta(dirPath)
+        if (meta?.schemaVersion === 3 && meta.packageId === marker.packageId) {
+          markPackageReservationCommitted(marker.packageId, marker.logicalKeyHash)
+          fs.unlinkSync(markerPath)
+          fsyncDirectorySync(dirPath)
+          fsyncDirectorySync(path.dirname(dirPath))
+          return
+        }
+      }
+      if (marker && !fs.existsSync(manifestPath) && entries.length === 1 &&
+        incompleteOwnerIsProvablyDead(marker.owner, localDeviceId)) {
+        fs.unlinkSync(markerPath)
+        fs.rmdirSync(dirPath)
+        fsyncDirectorySync(path.dirname(dirPath))
+        removeOwnedPackageReservation(marker.packageId, marker.logicalKeyHash)
+        return
+      }
+      issues.push({ kind: 'incomplete-publish', dirPath })
+      return
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === '.swob') continue
+      if (entry.name.startsWith('.swob-create-')) {
+        issues.push({ kind: 'incomplete-publish', dirPath: path.join(dirPath, entry.name) })
+        continue
+      }
+      const child = path.join(dirPath, entry.name)
+      let stat: fs.Stats
+      try { stat = fs.lstatSync(child) } catch {
+        issues.push({ kind: 'unreadable-link', dirPath: child })
+        continue
+      }
+      if (stat.isSymbolicLink()) continue
+      walk(child)
+    }
+  }
+  walk(_root)
+  return issues
+}
+
+function reservePackageIdRecord(
+  packageId: string,
+  key: LogicalSessionKey,
+  owner?: SessionCreateLockOwner
+): string {
+  const reservationDir = ensureSafeLibraryDirectory(_root, path.join(_root, '.swob', 'package-ids'))
+  const reservationPath = packageReservationPath(packageId)
+  writeSafeLibraryFileSync(_root, reservationPath, JSON.stringify({
+    schemaVersion: 1,
+    packageId,
+    logicalKeyHash: logicalKeyHash(key),
+    state: owner ? 'pending' : 'committed',
+    ...(owner ? { owner } : {}),
+    reservedAt: new Date().toISOString()
+  }), { exclusive: true })
+  fsyncDirectorySync(reservationDir)
+  return reservationPath
+}
+
+function ensureExistingPackageIdReservation(packageId: string | undefined, key: LogicalSessionKey): void {
+  if (!packageId) return
+  const reservationPath = packageReservationPath(packageId)
+  const existing = readPackageReservation(reservationPath)
+  if (existing) {
+    if (existing.packageId !== packageId || existing.logicalKeyHash !== logicalKeyHash(key)) {
+      throw new SessionPackageIdCollisionError()
+    }
+    markPackageReservationCommitted(packageId, logicalKeyHash(key))
+    return
+  }
+  try {
+    reservePackageIdRecord(packageId, key)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    const raced = readPackageReservation(reservationPath)
+    if (!raced || raced.packageId !== packageId || raced.logicalKeyHash !== logicalKeyHash(key)) {
+      throw new SessionPackageIdCollisionError()
+    }
+  }
+}
+
+function throwIfDurableIdentityWasPreviouslySeen(key: LogicalSessionKey, localDeviceId: string): void {
+  const reservationDir = path.join(_root, '.swob', 'package-ids')
+  let names: string[]
+  try { names = fs.readdirSync(reservationDir) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw new SessionIdentityUnresolvedError(['unreadable-directory'])
+  }
+  const wanted = logicalKeyHash(key)
+  for (const name of names) {
+    if (!/^[0-9a-f]{64}\.json$/.test(name)) continue
+    const reservation = readPackageReservation(path.join(reservationDir, name))
+    if (!reservation) throw new SessionIdentityUnresolvedError(['corrupt-manifest'])
+    if (reservation.logicalKeyHash !== wanted) continue
+    if (!packageReservationIsCommitted(reservation) && reservation.owner &&
+      incompleteOwnerIsProvablyDead(reservation.owner, localDeviceId)) {
+      removeOwnedPackageReservation(reservation.packageId, wanted)
+      continue
+    }
+    throw new SessionIdentityMissingError(key, [])
+  }
+}
+
+function reserveUniquePackageId(
+  key: LogicalSessionKey,
+  owner: SessionCreateLockOwner,
+  packageIdFactory: () => string = randomUUID
+): { packageId: string; reservationPath: string } {
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const packageId = packageIdFactory()
+    if (!packageId || sessionRegistry.hasPackageId(packageId)) continue
+    try {
+      return { packageId, reservationPath: reservePackageIdRecord(packageId, key, owner) }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+  }
+  throw new SessionPackageIdCollisionError()
+}
+
 function preserveSchemaV3OrUpgradeToV2(meta: SessionMeta): void {
   if (meta.schemaVersion !== 3) meta.schemaVersion = 2
 }
@@ -1924,17 +2297,49 @@ function throwIfIdentityScanUnresolved(issues: LibraryIdentityScanIssue[]): void
   if (issues.length > 0) throw new SessionIdentityUnresolvedError([...new Set(issues.map((issue) => issue.kind))])
 }
 
+function unresolvedIssuesForEnsure(
+  issues: LibraryIdentityScanIssue[],
+  key: LogicalSessionKey
+): LibraryIdentityScanIssue[] {
+  const wanted = logicalKeyHash(key)
+  return issues.filter((issue) => {
+    if (issue.kind !== 'incomplete-publish') return true
+    try {
+      const marker = parseIncompletePublishMarker(fs.readFileSync(
+        path.join(issue.dirPath, '.swob-incomplete.json'),
+        'utf-8'
+      ))
+      return marker?.logicalKeyHash !== wanted
+    } catch {
+      return true
+    }
+  })
+}
+
 function resolveExactBindingForEnsure(
   key: LogicalSessionKey,
   session: SessionSummary,
   customTitle?: string,
-  originOverride?: Partial<SessionOrigin>
+  originOverride?: Partial<SessionOrigin>,
+  allowOwnedIncomplete = false
 ): string | null {
-  throwIfIdentityScanUnresolved(lastIdentityScanIssues)
+  throwIfIdentityScanUnresolved(
+    allowOwnedIncomplete ? unresolvedIssuesForEnsure(lastIdentityScanIssues, key) : lastIdentityScanIssues
+  )
   const binding = sessionRegistry.get(key)
   if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
-  if (binding.state === 'missing') return null
+  if (binding.state === 'missing') {
+    if (allowOwnedIncomplete && binding.reason === 'scan-incomplete') return null
+    if (!binding.creationAllowed || binding.reason !== 'never-seen') {
+      if (binding.reason === 'previously-seen') {
+        throw new SessionIdentityMissingError(key, binding.lastKnownCandidates)
+      }
+      throw new SessionIdentityUnresolvedError(['unreadable-directory'])
+    }
+    return null
+  }
   if (!fs.existsSync(binding.candidate.dirPath)) return null
+  ensureExistingPackageIdReservation(binding.candidate.packageId, key)
   return updateExistingLibrarySession(
     binding.candidate.dirPath,
     session,
@@ -1944,17 +2349,17 @@ function resolveExactBindingForEnsure(
   )
 }
 
-function commitSessionTempDir(parentDir: string, baseName: string, tempDir: string): string {
+function reserveSessionPublishDir(parentDir: string, baseName: string): string {
   for (let counter = 1; counter <= 10_000; counter++) {
     const dirName = counter === 1 ? baseName : `${baseName} (${counter})`
     const finalDir = path.join(parentDir, dirName)
-    if (fs.existsSync(finalDir)) continue
+    assertSafeLibraryWritePath(_root, finalDir, { allowRoot: false })
     try {
-      fs.renameSync(tempDir, finalDir)
+      // mkdir is the atomic no-replace reservation on every supported platform.
+      fs.mkdirSync(finalDir, { recursive: false, mode: 0o700 })
       return finalDir
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     }
   }
   throw new Error('session-directory-name-exhausted')
@@ -1963,19 +2368,21 @@ function commitSessionTempDir(parentDir: string, baseName: string, tempDir: stri
 export async function ensureSessionInLibrary(
   session: SessionSummary,
   customTitle?: string,
-  originOverride?: Partial<SessionOrigin>
+  originOverride?: Partial<SessionOrigin>,
+  instrumentation: SessionCreateInstrumentation = {}
 ): Promise<string> {
   const identity = buildLogicalSessionIdentityFromSummary(session)
   const key = logicalSessionKey(identity)
+  const localDeviceId = getOrCreateLocalDeviceId()
 
-  const current = resolveExactBindingForEnsure(key, session, customTitle, originOverride)
-  if (current) return current
-
-  // A stale/missing binding is recovered from manifests, never from a directory name.
+  // Recover only cryptographically/owner-bound incomplete evidence before the
+  // authoritative scan. Existing complete bindings can never be erased by 0.
+  const recoveryIssues = recoverIncompleteSessionPublishes(localDeviceId)
+  throwIfIdentityScanUnresolved(unresolvedIssuesForEnsure(recoveryIssues, key))
   const initialIssues = refreshSessionRegistryFromDisk()
-  throwIfIdentityScanUnresolved(initialIssues)
-  const recovered = resolveExactBindingForEnsure(key, session, customTitle, originOverride)
-  if (recovered) return recovered
+  throwIfIdentityScanUnresolved(unresolvedIssuesForEnsure(initialIssues, key))
+  const current = resolveExactBindingForEnsure(key, session, customTitle, originOverride, true)
+  if (current) return current
   assertCreationIdentityIsUnambiguous(identity, key)
 
   const title = customTitle || session.firstUserMessage?.slice(0, 60) || session.sessionId.slice(0, 12)
@@ -1985,19 +2392,34 @@ export async function ensureSessionInLibrary(
     ? (session.turnCount <= 1 ? ungrouping.singleTurn : ungrouping.multiTurn)
     : null
   const parentDir = containerName ? path.join(_root, containerName) : _root
-  fs.mkdirSync(parentDir, { recursive: true })
-  const lock = await acquireSessionCreateLock(_root, key, getOrCreateLocalDeviceId())
+  ensureSafeLibraryDirectory(_root, parentDir)
+  const lock = await acquireSessionCreateLock(_root, key, localDeviceId)
   try {
+    const lockedRecoveryIssues = recoverIncompleteSessionPublishes(localDeviceId)
+    throwIfIdentityScanUnresolved(lockedRecoveryIssues)
     const lockedIssues = refreshSessionRegistryFromDisk()
     throwIfIdentityScanUnresolved(lockedIssues)
     const concurrentlyCreated = resolveExactBindingForEnsure(key, session, customTitle, originOverride)
     if (concurrentlyCreated) return concurrentlyCreated
     assertCreationIdentityIsUnambiguous(identity, key)
+    throwIfDurableIdentityWasPreviouslySeen(key, localDeviceId)
 
-    const packageId = randomUUID()
-    const tempDir = path.join(parentDir, `.swob-create-${packageId}`)
-    fs.mkdirSync(tempDir, { recursive: false, mode: 0o700 })
+    const { packageId } = reserveUniquePackageId(key, lock.owner, instrumentation.packageIdFactory)
+    let dirPath: string | null = null
     try {
+      await instrumentation.onStage?.('before-publish-reservation')
+      dirPath = reserveSessionPublishDir(parentDir, baseName)
+      const markerPath = path.join(dirPath, '.swob-incomplete.json')
+      const marker: IncompleteSessionPublishMarker = {
+        schemaVersion: 1,
+        packageId,
+        logicalKeyHash: logicalKeyHash(key),
+        owner: lock.owner,
+        createdAt: new Date().toISOString()
+      }
+      writeSafeLibraryFileSync(_root, markerPath, JSON.stringify(marker), { exclusive: true })
+      fsyncDirectorySync(dirPath)
+      await instrumentation.onStage?.('incomplete-durable')
       const sourceFilePaths = sourceFilePathsForMeta(session)
       const meta: SessionMeta = {
         schemaVersion: 3,
@@ -2014,10 +2436,21 @@ export async function ensureSessionInLibrary(
         origin: captureLocalSessionOrigin(originOverride),
         sourceInstance: detectSessionSourceInstance(sourceFilePaths)
       }
-      writeSessionMeta(tempDir, meta)
-      const metaFd = fs.openSync(path.join(tempDir, SESSION_META_FILE), 'r')
-      try { fs.fsyncSync(metaFd) } finally { fs.closeSync(metaFd) }
-      const dirPath = commitSessionTempDir(parentDir, baseName, tempDir)
+      // Manifest is the commit marker and is created exclusively only after
+      // every incomplete marker and directory entry is durable.
+      writeSessionMetaFile(dirPath, meta, true)
+      fsyncDirectorySync(dirPath)
+      markPackageReservationCommitted(packageId, logicalKeyHash(key))
+      await instrumentation.onStage?.('manifest-durable')
+      try {
+        fs.unlinkSync(markerPath)
+      } catch (error) {
+        // A concurrent recovery may already have finalized this committed
+        // package. Missing is success; every other unlink failure is unsafe.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      fsyncDirectorySync(dirPath)
+      fsyncDirectorySync(parentDir)
       refreshSessionRegistryFromDisk()
       const binding = sessionRegistry.get(key)
       if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
@@ -2025,8 +2458,26 @@ export async function ensureSessionInLibrary(
         throw new Error('session-create-binding-verification-failed')
       }
       return dirPath
-    } finally {
-      if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true })
+    } catch (error) {
+      // Synchronous failures are cleaned only when this transaction still owns
+      // the exact incomplete marker and no committed manifest exists. SIGKILL
+      // intentionally leaves durable evidence for the next process to recover.
+      try {
+        if (!dirPath) {
+          removeOwnedPackageReservation(packageId, logicalKeyHash(key))
+        } else {
+          const markerPath = path.join(dirPath, '.swob-incomplete.json')
+          const currentMarker = parseIncompletePublishMarker(fs.readFileSync(markerPath, 'utf-8'))
+          if (currentMarker?.owner.ownerNonce === lock.owner.ownerNonce &&
+            !fs.existsSync(path.join(dirPath, SESSION_META_FILE)) && fs.readdirSync(dirPath).length === 1) {
+            fs.unlinkSync(markerPath)
+            fs.rmdirSync(dirPath)
+            fsyncDirectorySync(parentDir)
+            removeOwnedPackageReservation(packageId, logicalKeyHash(key))
+          }
+        }
+      } catch { /* preserve uncertain evidence */ }
+      throw error
     }
   } finally {
     lock.release()
@@ -2042,7 +2493,10 @@ async function hashFileSha256(filePath: string): Promise<string> {
 }
 
 async function appendSourceTail(sourcePath: string, backupPath: string, start: number): Promise<void> {
-  const output = fs.createWriteStream(backupPath, { flags: 'a', mode: 0o600 })
+  assertSafeLibraryFileTarget(_root, backupPath)
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0
+  const fd = fs.openSync(backupPath, fs.constants.O_WRONLY | fs.constants.O_APPEND | noFollow)
+  const output = fs.createWriteStream(backupPath, { fd, autoClose: true })
   try {
     for await (const chunk of fs.createReadStream(sourcePath, { start })) {
       if (!output.write(chunk)) await new Promise<void>((resolve) => output.once('drain', resolve))
@@ -2058,8 +2512,10 @@ async function appendSourceTail(sourcePath: string, backupPath: string, start: n
 }
 
 async function concatenateSources(sourcePaths: string[], destination: string): Promise<void> {
-  const tempPath = `${destination}.tmp-${process.pid}`
-  const handle = await fs.promises.open(tempPath, 'w', 0o600)
+  assertSafeLibraryFileTarget(_root, destination)
+  const tempPath = `${destination}.tmp-${process.pid}-${randomUUID()}`
+  assertSafeLibraryFileTarget(_root, tempPath)
+  const handle = await fs.promises.open(tempPath, 'wx', 0o600)
   try {
     for (let index = 0; index < sourcePaths.length; index++) {
       for await (const chunk of fs.createReadStream(sourcePaths[index])) {
@@ -2074,7 +2530,26 @@ async function concatenateSources(sourcePaths: string[], destination: string): P
     throw error
   }
   await handle.close()
+  assertSafeLibraryFileTarget(_root, destination)
   await fs.promises.rename(tempPath, destination)
+  fsyncDirectorySync(path.dirname(destination))
+}
+
+async function replaceBackupFromSource(sourcePath: string, backupPath: string): Promise<void> {
+  assertSafeLibraryFileTarget(_root, backupPath)
+  const tempPath = `${backupPath}.tmp-${process.pid}-${randomUUID()}`
+  assertSafeLibraryFileTarget(_root, tempPath)
+  await fs.promises.copyFile(sourcePath, tempPath, fs.constants.COPYFILE_EXCL)
+  await fs.promises.chmod(tempPath, 0o600).catch(() => {})
+  const handle = await fs.promises.open(tempPath, 'r')
+  try { await handle.sync() } finally { await handle.close() }
+  try {
+    assertSafeLibraryFileTarget(_root, backupPath)
+    await fs.promises.rename(tempPath, backupPath)
+    fsyncDirectorySync(path.dirname(backupPath))
+  } finally {
+    await fs.promises.unlink(tempPath).catch(() => {})
+  }
 }
 
 export async function syncBackup(sessionId: string, expectedDirPath?: string): Promise<void> {
@@ -2085,6 +2560,7 @@ export async function syncBackup(sessionId: string, expectedDirPath?: string): P
   if (!meta) return
 
   const backupPath = path.join(dirPath, BACKUP_FILE)
+  assertSafeLibraryFileTarget(_root, backupPath)
 
   const sourcePaths = (sourceFilePathsFromMeta(meta) || []).filter((src) => {
     return isFileBackedBackupSource(src) && fs.existsSync(src)
@@ -2105,8 +2581,7 @@ export async function syncBackup(sessionId: string, expectedDirPath?: string): P
 
     if (canAppend) await appendSourceTail(sourcePath, backupPath, previous!.size)
     else if (!backupStat || sourceStat.size !== backupStat.size || sourceStat.mtimeMs !== previous?.mtimeMs) {
-      await fs.promises.copyFile(sourcePath, backupPath)
-      await fs.promises.chmod(backupPath, 0o600).catch(() => {})
+      await replaceBackupFromSource(sourcePath, backupPath)
     }
 
     nextSourceState = {
@@ -2264,13 +2739,16 @@ function getEnabledDerivedGeneratorNames(config: LibraryConfig): string[] | unde
 }
 
 function writeDerivedFilesFromLoadedRaw(sessionId: string, dirPath: string, rawMessages: RawJsonlMessage[]): void {
+  const meta = readSessionMeta(dirPath)
+  if (!meta || meta.sessionId !== sessionId) throw new Error('session-binding-mismatch')
+  assertCurrentSessionWriteAuthorized(dirPath, meta)
   const config = loadLibraryConfig()
   const generators = getEnabledDerivedFileGenerators(getEnabledDerivedGeneratorNames(config))
 
   for (const generator of generators) {
     const content = generator.generate(rawMessages, { sessionId })
     if (content === null) continue
-    fs.writeFileSync(path.join(dirPath, generator.fileName), redactSecrets(content).text, 'utf-8')
+    writeSafeLibraryFileSync(_root, path.join(dirPath, generator.fileName), redactSecrets(content).text)
   }
 }
 
@@ -2282,6 +2760,7 @@ function writeTranscriptFromLoadedRaw(
   summary: TranscriptSummaryForWrite,
   customTitle?: string
 ): void {
+  assertCurrentSessionWriteAuthorized(dirPath, meta)
   const title = customTitle || meta.customTitle || summary.firstUserMessage?.slice(0, 60) || sessionId.slice(0, 12)
   const md = generateTranscript(loaded.raw, title, {
     createdAt: meta.createdAt,
@@ -2299,7 +2778,7 @@ function writeTranscriptFromLoadedRaw(
   })
 
   const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
-  fs.writeFileSync(mdPath, md, 'utf-8')
+  writeSafeLibraryFileSync(_root, mdPath, md)
 
   // Update meta timestamps + 权威轮数
   meta.updatedAt = summary.updatedAt
@@ -2398,6 +2877,17 @@ function redactableMarkdownPaths(dirPath: string): string[] {
 export function redactLibraryTranscripts(options: { dryRun?: boolean } = {}): RedactLibraryTranscriptsResult {
   const dryRun = options.dryRun === true
   const sessions = collectLibrarySessions(scanLibrary())
+  if (!dryRun) {
+    throwIfIdentityScanUnresolved(lastIdentityScanIssues)
+    for (const binding of sessionRegistry.diagnostics()) {
+      if (binding.state === 'bound') continue
+      if (binding.state === 'conflict') {
+        throw new SessionIdentityConflictError(binding.logicalKey, binding.candidates)
+      }
+    }
+    // Gate every target before the first byte is changed.
+    for (const session of sessions) requireWritableSessionDir(session.sessionId, session.dirPath)
+  }
   const visitedDirs = new Set<string>()
   let files = 0
   let hits = 0
@@ -2412,7 +2902,7 @@ export function redactLibraryTranscripts(options: { dryRun?: boolean } = {}): Re
     if (visitedDirs.has(realDir)) continue
     visitedDirs.add(realDir)
 
-    for (const mdPath of redactableMarkdownPaths(realDir)) {
+    for (const mdPath of redactableMarkdownPaths(session.dirPath)) {
       let content: string
       try {
         content = fs.readFileSync(mdPath, 'utf-8')
@@ -2423,7 +2913,7 @@ export function redactLibraryTranscripts(options: { dryRun?: boolean } = {}): Re
       if (result.hits === 0) continue
       files++
       hits += result.hits
-      if (!dryRun) fs.writeFileSync(mdPath, result.text, 'utf-8')
+      if (!dryRun) writeSafeLibraryFileSync(_root, mdPath, result.text)
     }
   }
 
@@ -2435,6 +2925,16 @@ export async function rebuildAllTranscripts(options: { dryRun?: boolean; missing
   const missingOnly = options.missingOnly === true
   const tree = scanLibrary()
   const sessions = collectLibrarySessions(tree)
+  if (!dryRun) {
+    throwIfIdentityScanUnresolved(lastIdentityScanIssues)
+    for (const binding of sessionRegistry.diagnostics()) {
+      if (binding.state === 'bound') continue
+      if (binding.state === 'conflict') {
+        throw new SessionIdentityConflictError(binding.logicalKey, binding.candidates)
+      }
+    }
+    for (const session of sessions) requireWritableSessionDir(session.sessionId, session.dirPath)
+  }
   const config = loadLibraryConfig()
   let branchCount = 0
   let written = 0
@@ -2497,7 +2997,7 @@ export function createLibraryFolder(name: string, parentPath?: string): string {
     : path.resolve(_root)
   const dirName = findUniqueDirName(parent, sanitizeDirName(name))
   const dirPath = resolvePathWithinRoot(_root, path.join(parent, dirName))
-  fs.mkdirSync(dirPath, { recursive: true })
+  ensureSafeLibraryDirectory(_root, dirPath)
   return dirPath
 }
 
@@ -2530,6 +3030,8 @@ function relocateManagedFolder(folderPath: string, newPath: string): string {
   const sessions = collectRealSessionsRecursively(folderPath)
 
   if (sessions.length === 0) {
+    assertSafeLibraryWritePath(_root, folderPath, { allowRoot: false })
+    assertSafeLibraryWritePath(_root, newPath, { allowRoot: false })
     fs.renameSync(folderPath, newPath)
     return newPath
   }
@@ -2783,6 +3285,8 @@ export function renameSessionDir(sessionId: string, newTitle: string): string | 
 
   const newDirName = findUniqueDirName(parent, newBaseName)
   const newPath = path.join(parent, newDirName)
+  assertSafeLibraryWritePath(_root, currentDir, { allowRoot: false })
+  assertSafeLibraryWritePath(_root, newPath, { allowRoot: false })
 
   // Update any symlinks pointing to the old path
   updateSymlinksRecursive(_root, currentDir, newPath)
@@ -2827,13 +3331,12 @@ export async function syncLibraryFromSessions(
     const dirPath = await ensureSessionInLibrary(session, customTitle)
 
     // 持久化 swob 权威 turnCount 进 meta（各会话类型统一），供外部整理脚本按真实轮数归档
-    try {
-      const m = readSessionMeta(dirPath)
-      if (m && m.turnCount !== session.turnCount) {
-        m.turnCount = session.turnCount
-        writeSessionMeta(dirPath, m)
-      }
-    } catch { /* ignore */ }
+    const m = readSessionMeta(dirPath)
+    if (m && m.turnCount !== session.turnCount) {
+      requireWritableSessionDir(m.sessionId, dirPath)
+      m.turnCount = session.turnCount
+      writeSessionMeta(dirPath, m)
+    }
 
     // Update transcript
     const mdPath = path.join(dirPath, TRANSCRIPT_FILE)

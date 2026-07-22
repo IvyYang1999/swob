@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { acquireSessionCreateLock, SessionCreateBusyError } from './session-create-lock'
+import { LibraryPathUnsafeError } from './library-path-safety'
 import type { LogicalSessionKey } from './library-session-identity'
 
 const roots: string[] = []
@@ -72,5 +73,83 @@ describe('session create lock', () => {
       first.release()
     }
   })
-})
 
+  it('never removes a replacement owner during release', async () => {
+    const root = tempRoot()
+    const first = await acquireSessionCreateLock(root, key, 'device-a', {
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: () => 'start-a'
+    })
+    const oldOwnerPath = path.join(first.lockPath, `${first.owner.ownerNonce}.owner.json`)
+    fs.unlinkSync(oldOwnerPath)
+    const replacementPath = path.join(first.lockPath, 'replacement.owner.json')
+    fs.writeFileSync(replacementPath, JSON.stringify({ ...first.owner, ownerNonce: 'replacement' }))
+
+    first.release()
+    expect(fs.existsSync(replacementPath)).toBe(true)
+  })
+
+  it('uses process identity instead of wall clock when time jumps', async () => {
+    const root = tempRoot()
+    const first = await acquireSessionCreateLock(root, key, 'device-a', {
+      pid: 401,
+      now: () => 10_000,
+      leaseMs: 1,
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: () => 'start-live'
+    })
+    await expect(acquireSessionCreateLock(root, key, 'device-a', {
+      pid: 402,
+      now: (() => { let value = 10 ** 12; return () => value++ })(),
+      timeoutMs: 2,
+      pollMs: 1,
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: (pid) => pid === 401 ? 'start-live' : 'start-new'
+    })).rejects.toBeInstanceOf(SessionCreateBusyError)
+    first.release()
+  })
+
+  it('recovers PID reuse and prior-boot owners but fails closed on truncated owner data', async () => {
+    for (const scenario of ['pid-reuse', 'prior-boot'] as const) {
+      const root = tempRoot()
+      const first = await acquireSessionCreateLock(root, key, 'device-a', {
+        pid: 501,
+        bootIdentity: () => 'boot-old',
+        processStartFingerprint: () => 'start-old'
+      })
+      const second = await acquireSessionCreateLock(root, key, 'device-a', {
+        pid: 502,
+        bootIdentity: () => scenario === 'prior-boot' ? 'boot-new' : 'boot-old',
+        processStartFingerprint: (pid) => pid === 501 ? 'start-reused' : 'start-new'
+      })
+      expect(second.owner.ownerNonce).not.toBe(first.owner.ownerNonce)
+      first.release()
+      second.release()
+    }
+
+    const root = tempRoot()
+    const owner = await acquireSessionCreateLock(root, key, 'device-a', {
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: () => 'start-a'
+    })
+    fs.writeFileSync(path.join(owner.lockPath, `${owner.owner.ownerNonce}.owner.json`), '{')
+    await expect(acquireSessionCreateLock(root, key, 'device-a', {
+      timeoutMs: 2,
+      pollMs: 1,
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: () => 'start-b'
+    })).rejects.toBeInstanceOf(SessionCreateBusyError)
+    owner.release()
+  })
+
+  it('rejects a symlink in the lock directory ancestry before writing outside', async () => {
+    const root = tempRoot()
+    const external = tempRoot()
+    fs.symlinkSync(external, path.join(root, '.swob'), process.platform === 'win32' ? 'junction' : 'dir')
+    await expect(acquireSessionCreateLock(root, key, 'device-a', {
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: () => 'start-a'
+    })).rejects.toBeInstanceOf(LibraryPathUnsafeError)
+    expect(fs.readdirSync(external)).toEqual([])
+  })
+})

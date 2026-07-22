@@ -3,6 +3,12 @@ import * as path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import type { LogicalSessionKey } from './library-session-identity'
+import {
+  assertSafeLibraryWritePath,
+  ensureSafeLibraryDirectory,
+  fsyncDirectorySync,
+  writeSafeLibraryFileSync
+} from './library-path-safety'
 
 export interface SessionCreateLockOwner {
   schemaVersion: 1
@@ -146,13 +152,34 @@ function staleRecoveryDecision(
   if (owner.deviceId !== deviceId) return 'remote-owner'
   const leaseExpiresAt = Date.parse(owner.leaseExpiresAt)
   if (!Number.isFinite(leaseExpiresAt)) return 'unverifiable-owner'
-  if (leaseExpiresAt > nowMs) return 'active-owner'
   if (owner.bootIdentity !== localBootIdentity) return 'recover'
   const currentStart = readProcessStart(owner.pid)
   if (currentStart === 'missing') return 'recover'
   if (!currentStart) return 'unverifiable-owner'
   if (currentStart !== owner.processStartFingerprint) return 'recover'
+  // A matching boot + PID start fingerprint is stronger evidence than a wall
+  // clock lease. Forward/backward clock jumps must never evict a live owner.
+  void nowMs
   return 'active-owner'
+}
+
+interface ExistingDirectoryOwner {
+  ownerPath: string
+  owner: SessionCreateLockOwner
+}
+
+function readDirectoryOwner(lockPath: string): ExistingDirectoryOwner | null {
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(lockPath).filter((name) => name.endsWith('.owner.json'))
+  } catch {
+    return null
+  }
+  if (entries.length !== 1) return null
+  const ownerPath = path.join(lockPath, entries[0])
+  let owner: SessionCreateLockOwner | null = null
+  try { owner = parseOwner(fs.readFileSync(ownerPath, 'utf-8')) } catch { /* fail closed */ }
+  return owner ? { ownerPath, owner } : null
 }
 
 export async function acquireSessionCreateLock(
@@ -176,9 +203,10 @@ export async function acquireSessionCreateLock(
   }
 
   const lockDir = path.join(libraryRoot, '.swob', 'locks', 'session-create')
-  fs.mkdirSync(lockDir, { recursive: true, mode: 0o700 })
+  ensureSafeLibraryDirectory(libraryRoot, lockDir)
   const lockName = `${createHash('sha256').update(logicalKey).digest('hex')}.lock`
   const lockPath = path.join(lockDir, lockName)
+  assertSafeLibraryWritePath(libraryRoot, lockPath)
   const startedAt = now()
   let lastReason: SessionCreateBusyError['reason'] = 'timeout'
 
@@ -195,33 +223,54 @@ export async function acquireSessionCreateLock(
       leaseExpiresAt: new Date(acquiredAtMs + leaseMs).toISOString()
     }
     try {
-      fs.writeFileSync(lockPath, JSON.stringify(owner), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+      fs.mkdirSync(lockPath, { mode: 0o700 })
+      const ownerPath = path.join(lockPath, `${owner.ownerNonce}.owner.json`)
+      try {
+        writeSafeLibraryFileSync(libraryRoot, ownerPath, JSON.stringify(owner), { exclusive: true })
+        fsyncDirectorySync(lockPath)
+        fsyncDirectorySync(lockDir)
+      } catch (error) {
+        try { fs.rmdirSync(lockPath) } catch { /* malformed lock remains fail-closed */ }
+        throw error
+      }
       return {
         lockPath,
         owner,
         release(): void {
           try {
-            const current = parseOwner(fs.readFileSync(lockPath, 'utf-8'))
-            if (current?.ownerNonce === owner.ownerNonce) fs.unlinkSync(lockPath)
-          } catch { /* already released or replaced */ }
+            // The owner filename is nonce-specific. Removing it can never
+            // remove a replacement owner, and rmdir refuses a non-empty lock.
+            fs.unlinkSync(ownerPath)
+            fs.rmdirSync(lockPath)
+            fsyncDirectorySync(lockDir)
+          } catch { /* already released, recovered, or replaced */ }
         }
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     }
 
-    let existing: SessionCreateLockOwner | null = null
-    try { existing = parseOwner(fs.readFileSync(lockPath, 'utf-8')) } catch { /* retry below */ }
+    const existingRecord = readDirectoryOwner(lockPath)
+    const existing = existingRecord?.owner || null
     if (!existing) {
       lastReason = 'unverifiable-owner'
     } else {
       const decision = staleRecoveryDecision(existing, deviceId, bootIdentity, readProcessStart, now())
       if (decision === 'recover') {
-        // Re-read before unlinking so a replaced owner is never removed by stale evidence.
+        const recoveryClaim = path.join(lockPath, 'recovery.claim')
         try {
-          const current = parseOwner(fs.readFileSync(lockPath, 'utf-8'))
-          if (current?.ownerNonce === existing.ownerNonce) fs.unlinkSync(lockPath)
-        } catch { /* another writer won the recovery race */ }
+          writeSafeLibraryFileSync(libraryRoot, recoveryClaim, existing.ownerNonce, { exclusive: true })
+          const current = readDirectoryOwner(lockPath)
+          if (current?.owner.ownerNonce === existing.ownerNonce && current.ownerPath === existingRecord?.ownerPath &&
+            staleRecoveryDecision(current.owner, deviceId, bootIdentity, readProcessStart, now()) === 'recover') {
+            fs.unlinkSync(current.ownerPath)
+            fs.unlinkSync(recoveryClaim)
+            fs.rmdirSync(lockPath)
+            fsyncDirectorySync(lockDir)
+          } else {
+            fs.unlinkSync(recoveryClaim)
+          }
+        } catch { /* another writer owns recovery, or evidence changed */ }
         continue
       }
       lastReason = decision

@@ -50,6 +50,36 @@ describe('LogicalSessionKey', () => {
     expect(codex.sourceFamily).toBe('codex')
   })
 
+  it('normalizes Windows drive, separator, case, and Unicode aliases deterministically', () => {
+    const lower = buildLogicalSessionIdentityFromSummary(summary(
+      'windows-session',
+      'c:\\Users\\Alice\\.claude-window\\café\\projects\\repo\\windows-session.jsonl',
+      'claude-code'
+    ))
+    const upper = buildLogicalSessionIdentityFromSummary(summary(
+      'windows-session',
+      'C:/USERS/ALICE/.CLAUDE-WINDOW/CAFE\u0301/PROJECTS/REPO/windows-session.jsonl',
+      'claude-code'
+    ))
+    expect(logicalSessionKey(upper)).toBe(logicalSessionKey(lower))
+  })
+
+  it('keeps multiple verified config roots for one provider distinct without path disclosure', () => {
+    const work = buildLogicalSessionIdentityFromSummary(summary(
+      'same-codex-session',
+      '/Users/alice/.codex-work/sessions/2026/07/22/same-codex-session.jsonl',
+      'codex'
+    ))
+    const personal = buildLogicalSessionIdentityFromSummary(summary(
+      'same-codex-session',
+      '/home/bob/.codex-personal/sessions/2026/07/22/same-codex-session.jsonl',
+      'codex'
+    ))
+    expect(logicalSessionKey(work)).not.toBe(logicalSessionKey(personal))
+    expect(JSON.stringify([work, personal])).not.toContain('/Users')
+    expect(JSON.stringify([work, personal])).not.toContain('alice')
+  })
+
   it('marks contradictory or insufficient legacy evidence ambiguous instead of guessing', () => {
     expect(buildLogicalSessionIdentityFromMeta({
       sessionId: 'legacy',
@@ -122,5 +152,28 @@ describe('LibrarySessionRegistry', () => {
       })
     ])
     expect(registry.resolveSessionId(baseMeta.sessionId).state).toBe('ambiguous')
+  })
+
+  it('is deterministic when scan order reverses', () => {
+    const first = candidateFromManifest('/library/a', baseMeta)
+    const second = candidateFromManifest('/library/b', baseMeta)
+    const forward = new LibrarySessionRegistry()
+    const reverse = new LibrarySessionRegistry()
+    forward.replace([first, second])
+    reverse.replace([second, first])
+    expect(reverse.resolveSessionId(baseMeta.sessionId)).toEqual(forward.resolveSessionId(baseMeta.sessionId))
+  })
+
+  it('preserves a previously observed binding as read-only missing evidence', () => {
+    const registry = new LibrarySessionRegistry()
+    const candidate = candidateFromManifest('/library/a', baseMeta)
+    registry.replace([candidate], { authoritative: true })
+    registry.replace([], { authoritative: true })
+    const binding = registry.get(candidate.logicalKey)
+    expect(binding).toMatchObject({
+      state: 'missing',
+      reason: 'previously-seen',
+      creationAllowed: false
+    })
   })
 })

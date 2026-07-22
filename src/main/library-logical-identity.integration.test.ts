@@ -160,7 +160,7 @@ describe('Library logical identity integration', () => {
       }))
       fs.symlinkSync(externalDir, path.join(root, 'symlink-only'))
       lib.scanLibrary()
-      await expect(lib.ensureSessionInLibrary(session)).rejects.toBeInstanceOf(lib.SessionIdentityConflictError)
+      await expect(lib.ensureSessionInLibrary(session)).rejects.toBeInstanceOf(lib.SessionIdentityUnresolvedError)
       expect(packageDirs()).toHaveLength(0)
     } finally {
       fs.rmSync(externalDir, { recursive: true, force: true })
@@ -182,5 +182,197 @@ describe('Library logical identity integration', () => {
       testHome, '.claude', 'projects', '-fixture', 'cloud-target.jsonl'
     )))).rejects.toBeInstanceOf(lib.SessionIdentityUnresolvedError)
   })
-})
 
+  it('keeps a previously bound identity conservatively missing after an authoritative zero scan', async () => {
+    const sessionId = '60000000-0000-4000-8000-000000000006'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+    const session = summary(sessionId, sourcePath)
+    const originalDir = await lib.ensureSessionInLibrary(session)
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-temporarily-missing-'))
+    const movedDir = path.join(outside, 'moved-package')
+    try {
+      fs.renameSync(originalDir, movedDir)
+      lib.scanLibrary()
+      await expect(lib.ensureSessionInLibrary(session)).rejects.toBeInstanceOf(lib.SessionIdentityMissingError)
+      expect(packageDirs()).toHaveLength(0)
+    } finally {
+      if (fs.existsSync(movedDir)) fs.renameSync(movedDir, originalDir)
+      fs.rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('treats unreadable directories as typed scan blockers rather than empty collections', async () => {
+    const blockedDir = path.join(root, 'permission-denied')
+    fs.mkdirSync(blockedDir)
+    fs.chmodSync(blockedDir, 0o000)
+    try {
+      const sessionId = '70000000-0000-4000-8000-000000000007'
+      const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+      await expect(lib.ensureSessionInLibrary(summary(sessionId, sourcePath)))
+        .rejects.toBeInstanceOf(lib.SessionIdentityUnresolvedError)
+      expect(packageDirs()).toHaveLength(0)
+    } finally {
+      fs.chmodSync(blockedDir, 0o700)
+    }
+  })
+
+  it('rejects a symlink Library root before creating lock or package evidence outside it', async () => {
+    const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-root-target-'))
+    const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-root-link-'))
+    const linkedRoot = path.join(linkParent, 'library')
+    fs.symlinkSync(externalRoot, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir')
+    try {
+      expect(() => lib.initLibrary(linkedRoot)).toThrow(lib.LibraryPathUnsafeError)
+      expect(fs.existsSync(path.join(externalRoot, '.swob'))).toBe(false)
+    } finally {
+      fs.rmSync(linkParent, { recursive: true, force: true })
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+      lib.initLibrary(root)
+      lib.scanLibrary()
+    }
+  })
+
+  it('rejects a symlink storage container before the first external write', async () => {
+    const externalContainer = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-container-target-'))
+    const containerName = 'managed-container'
+    fs.symlinkSync(externalContainer, path.join(root, containerName), process.platform === 'win32' ? 'junction' : 'dir')
+    lib.saveLibraryConfig({
+      libraryRoot: root,
+      preferences: {
+        defaultViewMode: 'compact',
+        terminalApp: 'Terminal',
+        ungrouping: { multiTurn: containerName, singleTurn: containerName }
+      }
+    })
+    try {
+      const sessionId = '80000000-0000-4000-8000-000000000008'
+      const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+      await expect(lib.ensureSessionInLibrary(summary(sessionId, sourcePath)))
+        .rejects.toBeInstanceOf(lib.LibraryPathUnsafeError)
+      expect(fs.readdirSync(externalContainer)).toEqual([])
+    } finally {
+      fs.rmSync(externalContainer, { recursive: true, force: true })
+    }
+  })
+
+  it('atomically reserves a publish directory without replacing a competitor empty target', async () => {
+    const sessionId = '90000000-0000-4000-8000-000000000009'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+    const competitorDir = path.join(root, '💬 competitor target')
+
+    const created = await lib.ensureSessionInLibrary(summary(sessionId, sourcePath, {
+      firstUserMessage: 'competitor target'
+    }), undefined, undefined, {
+      onStage: (stage) => {
+        if (stage === 'before-publish-reservation') fs.mkdirSync(competitorDir)
+      }
+    })
+    expect(created).not.toBe(competitorDir)
+    expect(fs.readdirSync(competitorDir)).toEqual([])
+    expect(fs.existsSync(path.join(created, '.swob-session.json'))).toBe(true)
+  })
+
+  it('bounds packageId collision retries before any second visible package is written', async () => {
+    const packageId = 'fixed-package-id-collision'
+    const firstId = 'a0000000-0000-4000-8000-00000000000a'
+    const secondId = 'b0000000-0000-4000-8000-00000000000b'
+    await lib.ensureSessionInLibrary(summary(firstId, path.join(
+      testHome, '.claude', 'projects', '-fixture', `${firstId}.jsonl`
+    )), undefined, undefined, { packageIdFactory: () => packageId })
+
+    await expect(lib.ensureSessionInLibrary(summary(secondId, path.join(
+      testHome, '.claude', 'projects', '-fixture', `${secondId}.jsonl`
+    )), undefined, undefined, { packageIdFactory: () => packageId }))
+      .rejects.toBeInstanceOf(lib.SessionPackageIdCollisionError)
+    expect(packageDirs()).toHaveLength(1)
+  })
+
+  it('releases an owned packageId reservation when publishing fails before directory reservation', async () => {
+    const packageId = 'retryable-package-id'
+    const sessionId = 'aa000000-0000-4000-8000-0000000000aa'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+    const session = summary(sessionId, sourcePath)
+
+    await expect(lib.ensureSessionInLibrary(session, undefined, undefined, {
+      packageIdFactory: () => packageId,
+      onStage: (stage) => {
+        if (stage === 'before-publish-reservation') throw new Error('injected-before-publish-failure')
+      }
+    })).rejects.toThrow('injected-before-publish-failure')
+
+    const created = await lib.ensureSessionInLibrary(session, undefined, undefined, {
+      packageIdFactory: () => packageId
+    })
+    expect(packageDirs()).toEqual([created])
+    expect(JSON.parse(fs.readFileSync(path.join(created, '.swob-session.json'), 'utf-8')).packageId).toBe(packageId)
+  })
+
+  it('preflights conflict groups so redaction and rebuild perform zero writes', async () => {
+    const sessionId = 'c0000000-0000-4000-8000-00000000000c'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+    writeJsonl(sourcePath, `WK${'a'.repeat(34)}`)
+    const firstDir = await lib.ensureSessionInLibrary(summary(sessionId, sourcePath))
+    const secondDir = path.join(root, 'duplicate-conflict')
+    fs.writeFileSync(path.join(firstDir, 'transcript.md'), `WK${'a'.repeat(34)}`)
+    fs.cpSync(firstDir, secondDir, { recursive: true })
+    const beforeFirst = fs.readFileSync(path.join(firstDir, 'transcript.md'), 'utf-8')
+    const beforeSecond = fs.readFileSync(path.join(secondDir, 'transcript.md'), 'utf-8')
+    lib.scanLibrary()
+
+    expect(() => lib.redactLibraryTranscripts()).toThrow(lib.SessionIdentityConflictError)
+    await expect(lib.rebuildAllTranscripts()).rejects.toBeInstanceOf(lib.SessionIdentityConflictError)
+    expect(fs.readFileSync(path.join(firstDir, 'transcript.md'), 'utf-8')).toBe(beforeFirst)
+    expect(fs.readFileSync(path.join(secondDir, 'transcript.md'), 'utf-8')).toBe(beforeSecond)
+  })
+
+  it('rejects a symlink transcript target without changing its external file', async () => {
+    const sessionId = 'd0000000-0000-4000-8000-00000000000d'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+    writeJsonl(sourcePath, 'safe transcript source')
+    const dirPath = await lib.ensureSessionInLibrary(summary(sessionId, sourcePath))
+    const externalFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'swob-transcript-target-')), 'outside.md')
+    fs.writeFileSync(externalFile, 'outside unchanged')
+    fs.symlinkSync(externalFile, path.join(dirPath, 'transcript.md'))
+    try {
+      await expect(lib.updateTranscript(sessionId, undefined, dirPath))
+        .rejects.toBeInstanceOf(lib.LibraryPathUnsafeError)
+      expect(fs.readFileSync(externalFile, 'utf-8')).toBe('outside unchanged')
+    } finally {
+      fs.rmSync(path.dirname(externalFile), { recursive: true, force: true })
+    }
+  })
+
+  it('treats a manifest symlink outside the Library as unresolved evidence', async () => {
+    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-manifest-target-'))
+    const packageDir = path.join(root, 'linked-manifest-package')
+    const outsideManifest = path.join(externalDir, '.swob-session.json')
+    fs.mkdirSync(packageDir)
+    fs.writeFileSync(outsideManifest, JSON.stringify({
+      schemaVersion: 3,
+      packageId: randomUUID(),
+      logicalIdentity: {
+        schemaVersion: 1,
+        sourceFamily: 'claude-code',
+        sourceInstanceId: 'claude-default',
+        sessionId: 'outside-manifest'
+      },
+      sessionId: 'outside-manifest',
+      sourceFilePaths: [],
+      createdAt: '2026-07-22T00:00:00.000Z',
+      updatedAt: '2026-07-22T00:00:00.000Z',
+      projectPath: '/outside'
+    }))
+    fs.symlinkSync(outsideManifest, path.join(packageDir, '.swob-session.json'))
+    try {
+      const sessionId = 'ab000000-0000-4000-8000-0000000000ab'
+      const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+      await expect(lib.ensureSessionInLibrary(summary(sessionId, sourcePath)))
+        .rejects.toBeInstanceOf(lib.SessionIdentityUnresolvedError)
+      expect(fs.readFileSync(outsideManifest, 'utf-8')).toContain('outside-manifest')
+      expect(packageDirs()).toEqual([packageDir])
+      expect(fs.lstatSync(path.join(packageDir, '.swob-session.json')).isSymbolicLink()).toBe(true)
+    } finally {
+      fs.rmSync(externalDir, { recursive: true, force: true })
+    }
+  })
+})

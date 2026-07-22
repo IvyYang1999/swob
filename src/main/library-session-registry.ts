@@ -17,7 +17,14 @@ export interface LibrarySessionCandidate {
 }
 
 export type LibrarySessionBinding =
-  | { state: 'missing'; logicalKey: LogicalSessionKey; candidates: [] }
+  | {
+      state: 'missing'
+      logicalKey: LogicalSessionKey
+      candidates: []
+      lastKnownCandidates: LibrarySessionCandidate[]
+      reason: 'never-seen' | 'previously-seen' | 'scan-incomplete'
+      creationAllowed: boolean
+    }
   | { state: 'bound'; logicalKey: LogicalSessionKey; candidate: LibrarySessionCandidate; candidates: [LibrarySessionCandidate] }
   | {
       state: 'conflict'
@@ -27,7 +34,13 @@ export type LibrarySessionBinding =
     }
 
 export type SessionIdResolution =
-  | { state: 'missing'; sessionId: string }
+  | {
+      state: 'missing'
+      sessionId: string
+      logicalKey?: LogicalSessionKey
+      lastKnownCandidates?: LibrarySessionCandidate[]
+      reason?: 'never-seen' | 'previously-seen' | 'scan-incomplete'
+    }
   | { state: 'bound'; sessionId: string; logicalKey: LogicalSessionKey; candidate: LibrarySessionCandidate }
   | { state: 'ambiguous'; sessionId: string; logicalKeys: LogicalSessionKey[]; candidates: LibrarySessionCandidate[] }
   | { state: 'conflict'; sessionId: string; logicalKey: LogicalSessionKey; candidates: LibrarySessionCandidate[] }
@@ -68,10 +81,20 @@ export function candidateFromManifest(
 export class LibrarySessionRegistry {
   private readonly bindings = new Map<LogicalSessionKey, LibrarySessionBinding>()
   private readonly logicalKeysBySessionId = new Map<string, Set<LogicalSessionKey>>()
+  private lastScanAuthoritative = false
 
-  replace(candidates: LibrarySessionCandidate[]): void {
+  clear(): void {
     this.bindings.clear()
     this.logicalKeysBySessionId.clear()
+    this.lastScanAuthoritative = false
+  }
+
+  replace(
+    candidates: LibrarySessionCandidate[],
+    evidence: { authoritative: boolean } = { authoritative: true }
+  ): void {
+    const previousBindings = new Map(this.bindings)
+    const nextBindings = new Map<LogicalSessionKey, LibrarySessionBinding>()
 
     const grouped = new Map<LogicalSessionKey, LibrarySessionCandidate[]>()
     for (const candidate of candidates) {
@@ -119,9 +142,34 @@ export class LibrarySessionRegistry {
       } else {
         binding = { state: 'conflict', logicalKey: key, reason: 'symlink-only', candidates: deduplicated }
       }
-      this.bindings.set(key, binding)
+      nextBindings.set(key, binding)
+    }
 
-      for (const candidate of deduplicated) {
+    // A scan may prove that a path is temporarily absent, but it can never
+    // prove that a previously observed logical package is safe to recreate.
+    // Keep that historical evidence as a real read-only registry state.
+    for (const [key, previous] of previousBindings) {
+      if (nextBindings.has(key)) continue
+      const lastKnownCandidates = previous.state === 'missing'
+        ? previous.lastKnownCandidates
+        : previous.candidates
+      nextBindings.set(key, {
+        state: 'missing',
+        logicalKey: key,
+        candidates: [],
+        lastKnownCandidates: structuredClone(lastKnownCandidates),
+        reason: lastKnownCandidates.length > 0 ? 'previously-seen' : 'scan-incomplete',
+        creationAllowed: false
+      })
+    }
+
+    this.bindings.clear()
+    this.logicalKeysBySessionId.clear()
+    this.lastScanAuthoritative = evidence.authoritative
+    for (const [key, binding] of nextBindings) {
+      this.bindings.set(key, binding)
+      const indexedCandidates = binding.state === 'missing' ? binding.lastKnownCandidates : binding.candidates
+      for (const candidate of indexedCandidates) {
         const keys = this.logicalKeysBySessionId.get(candidate.sessionId) || new Set<LogicalSessionKey>()
         keys.add(key)
         this.logicalKeysBySessionId.set(candidate.sessionId, keys)
@@ -130,7 +178,14 @@ export class LibrarySessionRegistry {
   }
 
   get(logicalKey: LogicalSessionKey): LibrarySessionBinding {
-    return this.bindings.get(logicalKey) || { state: 'missing', logicalKey, candidates: [] }
+    return this.bindings.get(logicalKey) || {
+      state: 'missing',
+      logicalKey,
+      candidates: [],
+      lastKnownCandidates: [],
+      reason: this.lastScanAuthoritative ? 'never-seen' : 'scan-incomplete',
+      creationAllowed: this.lastScanAuthoritative
+    }
   }
 
   resolveSessionId(sessionId: string): SessionIdResolution {
@@ -142,12 +197,27 @@ export class LibrarySessionRegistry {
     if (binding.state === 'bound') {
       return { state: 'bound', sessionId, logicalKey: keys[0], candidate: binding.candidate }
     }
+    if (binding.state === 'missing') return {
+      state: 'missing',
+      sessionId,
+      logicalKey: keys[0],
+      lastKnownCandidates: binding.lastKnownCandidates,
+      reason: binding.reason
+    }
     return { state: 'conflict', sessionId, logicalKey: keys[0], candidates: binding.candidates }
+  }
+
+  hasPackageId(packageId: string): boolean {
+    for (const binding of this.bindings.values()) {
+      const candidates = binding.state === 'missing' ? binding.lastKnownCandidates : binding.candidates
+      if (candidates.some((candidate) => candidate.packageId === packageId)) return true
+    }
+    return false
   }
 
   diagnostics(): LibrarySessionBinding[] {
     return [...this.bindings.values()]
-      .filter((binding) => binding.state === 'conflict')
+      .filter((binding) => binding.state !== 'bound')
       .map((binding) => structuredClone(binding))
   }
 }

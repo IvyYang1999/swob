@@ -3,8 +3,34 @@ productName: Swob
 directories:
   buildResources: build
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
+  # Runtime allowlist. Production node_modules are added by electron-builder
+  # from package.json/package-lock.json; everything else must be named here.
+  - out/main/**/*
+  - out/preload/**/*
+  - out/renderer/**/*
+  - package.json
+  - LICENSE
+  - THIRD_PARTY_NOTICES
+  # Defense in depth: keep private worktrees and non-runtime project trees out
+  # even if a future allowlist entry becomes too broad.
+  - '!**/.claude/**'
+  - '!**/.git/**'
+  - '!**/.git'
+  - '!**/.worktrees/**'
+  - '!compliance/**'
+  - '!website/**'
+  - '!site/**'
+  - '!e2e/**'
+  - '!docs/**'
+  - '!test/**'
+  - '!tests/**'
+  - '!**/__tests__/**'
+  - '!**/*.test.*'
+  - '!**/*.spec.*'
+  - '!scripts/**'
+  - '!README*'
+  - '!CHANGELOG.md'
+  - '!CLAUDE.md'
   - '!electron.vite.config.*'
   - '!{tsconfig,tsconfig.*}.json'
 extraResources:
@@ -12,6 +38,15 @@ extraResources:
     to: cli/cli.js
   - from: out/main/chunks/
     to: cli/chunks/
+  # Keep the same outer notices contract on macOS, Windows, and Linux.
+  - from: LICENSE
+    to: LICENSE.txt
+  - from: THIRD_PARTY_NOTICES
+    to: THIRD_PARTY_NOTICES
+  - from: node_modules/electron/dist/LICENSE
+    to: LICENSE.electron.txt
+  - from: node_modules/electron/dist/LICENSES.chromium.html
+    to: LICENSES.chromium.html
 mac:
   # Release builds must fail closed: Developer ID signing, hardened runtime,
   # notarization, and stapling are all required for Gatekeeper acceptance.

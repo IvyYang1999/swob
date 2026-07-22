@@ -37,3 +37,29 @@ The recorded run used Node.js 24.2.0 and TypeScript 5.9.3. `scripts/compliance/*
 - DMG was mounted read-only; ZIP and NSIS payloads were extracted locally. No binary, source, asset or result was sent to an online scanner.
 
 All committed summaries are evidence scoped to the recorded baseline, not legal advice.
+
+## t154 packaging and notice gates
+
+Generate or verify the lockfile-derived production notice inventory:
+
+```sh
+npm run notices:generate
+npm run notices:check
+```
+
+Regenerate both SBOMs after `npm ls --package-lock-only --all` succeeds. The
+script deliberately does not pass `--ignore-npm-errors`:
+
+```sh
+npm run sbom:generate
+```
+
+After electron-builder creates an unpacked application, inspect every
+`app.asar` path and the outer notice files. A successful run writes the full,
+sanitized path inventory under `dist/package-inventory/`; a rejected package
+does not persist its inventory.
+
+```sh
+npm run check:package
+npm run test:package-policy
+```

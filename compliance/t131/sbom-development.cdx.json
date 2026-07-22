@@ -1473,6 +1473,122 @@
           "name": "cdx:npm:package:path",
           "value": "node_modules/@develar/schema-utils"
         }
+      ],
+      "components": [
+        {
+          "type": "library",
+          "name": "ajv-keywords",
+          "version": "3.5.2",
+          "bom-ref": "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|ajv-keywords@3.5.2",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/ajv-keywords@3.5.2?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fajv-keywords%2F-%2Fajv-keywords-3.5.2.tgz",
+          "externalReferences": [
+            {
+              "url": "https://registry.npmmirror.com/ajv-keywords/-/ajv-keywords-3.5.2.tgz",
+              "type": "distribution",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "e69e964cdd03753195424e958dc123bb5f4881a1ee75a95c7da6c3ef284319e03a6dc42798bf82a6f78b26aff786f7f07756a87fa2f7f3a3ae824c7a45fc8c21"
+                }
+              ],
+              "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@develar/schema-utils/node_modules/ajv-keywords"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "ajv",
+          "version": "6.15.0",
+          "bom-ref": "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|ajv@6.15.0",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/ajv@6.15.0?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fajv%2F-%2Fajv-6.15.0.tgz",
+          "externalReferences": [
+            {
+              "url": "https://registry.npmmirror.com/ajv/-/ajv-6.15.0.tgz",
+              "type": "distribution",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "7e0171ec77e8abad32b4ad9cec386717c8c8bf362038cc5fba08cb3923078cb20f81e9ea6bb4bba1a6a001352af7d995e8862f376b51982d309d3617ea23db33"
+                }
+              ],
+              "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@develar/schema-utils/node_modules/ajv"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "json-schema-traverse",
+          "version": "0.4.1",
+          "bom-ref": "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|json-schema-traverse@0.4.1",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/json-schema-traverse@0.4.1?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fjson-schema-traverse%2F-%2Fjson-schema-traverse-0.4.1.tgz",
+          "externalReferences": [
+            {
+              "url": "https://registry.npmmirror.com/json-schema-traverse/-/json-schema-traverse-0.4.1.tgz",
+              "type": "distribution",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "c5b6c21f9742614e53f0b704861ba1ec727cf075ee5b7aac237634cce64529f6441dca5688753f271ce4eb6f41aec69bfe63221d0b62f7030ffbce3944f7b756"
+                }
+              ],
+              "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@develar/schema-utils/node_modules/json-schema-traverse"
+            }
+          ]
+        }
       ]
     },
     {
@@ -7105,6 +7221,193 @@
           "name": "cdx:npm:package:path",
           "value": "node_modules/@tailwindcss/oxide-wasm32-wasi"
         }
+      ],
+      "components": [
+        {
+          "type": "library",
+          "name": "core",
+          "group": "@emnapi",
+          "version": "1.8.1",
+          "bom-ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/core@1.8.1",
+          "scope": "optional",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/%40emnapi/core@1.8.1",
+          "properties": [
+            {
+              "name": "cdx:npm:package:bundled",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/core"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "runtime",
+          "group": "@emnapi",
+          "version": "1.8.1",
+          "bom-ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/runtime@1.8.1",
+          "scope": "optional",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/%40emnapi/runtime@1.8.1",
+          "properties": [
+            {
+              "name": "cdx:npm:package:bundled",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/runtime"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "wasi-threads",
+          "group": "@emnapi",
+          "version": "1.1.0",
+          "bom-ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/wasi-threads@1.1.0",
+          "scope": "optional",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/%40emnapi/wasi-threads@1.1.0",
+          "properties": [
+            {
+              "name": "cdx:npm:package:bundled",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/wasi-threads"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "wasm-runtime",
+          "group": "@napi-rs",
+          "version": "1.1.1",
+          "bom-ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@napi-rs/wasm-runtime@1.1.1",
+          "scope": "optional",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/%40napi-rs/wasm-runtime@1.1.1",
+          "properties": [
+            {
+              "name": "cdx:npm:package:bundled",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@napi-rs/wasm-runtime"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "wasm-util",
+          "group": "@tybys",
+          "version": "0.10.1",
+          "bom-ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@tybys/wasm-util@0.10.1",
+          "scope": "optional",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/%40tybys/wasm-util@0.10.1",
+          "properties": [
+            {
+              "name": "cdx:npm:package:bundled",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@tybys/wasm-util"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "tslib",
+          "version": "2.8.1",
+          "bom-ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|tslib@2.8.1",
+          "scope": "optional",
+          "licenses": [
+            {
+              "license": {
+                "id": "0BSD",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/tslib@2.8.1",
+          "properties": [
+            {
+              "name": "cdx:npm:package:bundled",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/tslib"
+            }
+          ]
+        }
       ]
     },
     {
@@ -9913,47 +10216,9 @@
     },
     {
       "type": "library",
-      "name": "ajv-keywords",
-      "version": "3.5.2",
-      "bom-ref": "claude-session-manager@1.2.0|ajv-keywords@3.5.2",
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT",
-            "acknowledgement": "declared"
-          }
-        }
-      ],
-      "purl": "pkg:npm/ajv-keywords@3.5.2?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fajv-keywords%2F-%2Fajv-keywords-3.5.2.tgz",
-      "externalReferences": [
-        {
-          "url": "https://registry.npmmirror.com/ajv-keywords/-/ajv-keywords-3.5.2.tgz",
-          "type": "distribution",
-          "hashes": [
-            {
-              "alg": "SHA-512",
-              "content": "e69e964cdd03753195424e958dc123bb5f4881a1ee75a95c7da6c3ef284319e03a6dc42798bf82a6f78b26aff786f7f07756a87fa2f7f3a3ae824c7a45fc8c21"
-            }
-          ],
-          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
-        }
-      ],
-      "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        },
-        {
-          "name": "cdx:npm:package:path",
-          "value": "node_modules/ajv-keywords"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "name": "ajv",
-      "version": "6.14.0",
-      "bom-ref": "claude-session-manager@1.2.0|ajv@6.14.0",
+      "version": "8.17.1",
+      "bom-ref": "claude-session-manager@1.2.0|ajv@8.17.1",
       "licenses": [
         {
           "license": {
@@ -9962,25 +10227,21 @@
           }
         }
       ],
-      "purl": "pkg:npm/ajv@6.14.0?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fajv%2F-%2Fajv-6.14.0.tgz",
+      "purl": "pkg:npm/ajv@8.17.1?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fajv%2F-%2Fajv-8.17.1.tgz",
       "externalReferences": [
         {
-          "url": "https://registry.npmmirror.com/ajv/-/ajv-6.14.0.tgz",
+          "url": "https://registry.npmmirror.com/ajv/-/ajv-8.17.1.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "216ae8b26ff2ae7e377a22aa91f9078aced08a80e579a5d01dd0d53ca834152c3077f0eebf25fbf5366714e9d8a41edd72c140326b45ced66e5cf0ef49e3e417"
+              "content": "07f801b8d8394a2313acf902f80dbe716d11b33c316269fa558c41fe29e5052b52e67c7ac4722dfde84a46120c86abac97b6bc2e34286678c2b39be1c31390d6"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
         }
       ],
       "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        },
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/ajv"
@@ -14537,6 +14798,86 @@
           "name": "cdx:npm:package:path",
           "value": "node_modules/dmg-license"
         }
+      ],
+      "components": [
+        {
+          "type": "library",
+          "name": "ajv",
+          "version": "6.15.0",
+          "bom-ref": "claude-session-manager@1.2.0|dmg-license@1.0.11|ajv@6.15.0",
+          "scope": "optional",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/ajv@6.15.0?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fajv%2F-%2Fajv-6.15.0.tgz",
+          "externalReferences": [
+            {
+              "url": "https://registry.npmmirror.com/ajv/-/ajv-6.15.0.tgz",
+              "type": "distribution",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "7e0171ec77e8abad32b4ad9cec386717c8c8bf362038cc5fba08cb3923078cb20f81e9ea6bb4bba1a6a001352af7d995e8862f376b51982d309d3617ea23db33"
+                }
+              ],
+              "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/dmg-license/node_modules/ajv"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "json-schema-traverse",
+          "version": "0.4.1",
+          "bom-ref": "claude-session-manager@1.2.0|dmg-license@1.0.11|json-schema-traverse@0.4.1",
+          "scope": "optional",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/json-schema-traverse@0.4.1?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fjson-schema-traverse%2F-%2Fjson-schema-traverse-0.4.1.tgz",
+          "externalReferences": [
+            {
+              "url": "https://registry.npmmirror.com/json-schema-traverse/-/json-schema-traverse-0.4.1.tgz",
+              "type": "distribution",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "c5b6c21f9742614e53f0b704861ba1ec727cf075ee5b7aac237634cce64529f6441dca5688753f271ce4eb6f41aec69bfe63221d0b62f7030ffbce3944f7b756"
+                }
+              ],
+              "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/dmg-license/node_modules/json-schema-traverse"
+            }
+          ]
+        }
       ]
     },
     {
@@ -16334,6 +16675,84 @@
           "name": "cdx:npm:package:path",
           "value": "node_modules/eslint"
         }
+      ],
+      "components": [
+        {
+          "type": "library",
+          "name": "ajv",
+          "version": "6.15.0",
+          "bom-ref": "claude-session-manager@1.2.0|eslint@10.0.2|ajv@6.15.0",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/ajv@6.15.0?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fajv%2F-%2Fajv-6.15.0.tgz",
+          "externalReferences": [
+            {
+              "url": "https://registry.npmmirror.com/ajv/-/ajv-6.15.0.tgz",
+              "type": "distribution",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "7e0171ec77e8abad32b4ad9cec386717c8c8bf362038cc5fba08cb3923078cb20f81e9ea6bb4bba1a6a001352af7d995e8862f376b51982d309d3617ea23db33"
+                }
+              ],
+              "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/eslint/node_modules/ajv"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "name": "json-schema-traverse",
+          "version": "0.4.1",
+          "bom-ref": "claude-session-manager@1.2.0|eslint@10.0.2|json-schema-traverse@0.4.1",
+          "licenses": [
+            {
+              "license": {
+                "id": "MIT",
+                "acknowledgement": "declared"
+              }
+            }
+          ],
+          "purl": "pkg:npm/json-schema-traverse@0.4.1?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fjson-schema-traverse%2F-%2Fjson-schema-traverse-0.4.1.tgz",
+          "externalReferences": [
+            {
+              "url": "https://registry.npmmirror.com/json-schema-traverse/-/json-schema-traverse-0.4.1.tgz",
+              "type": "distribution",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "c5b6c21f9742614e53f0b704861ba1ec727cf075ee5b7aac237634cce64529f6441dca5688753f271ce4eb6f41aec69bfe63221d0b62f7030ffbce3944f7b756"
+                }
+              ],
+              "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+            }
+          ],
+          "properties": [
+            {
+              "name": "cdx:npm:package:development",
+              "value": "true"
+            },
+            {
+              "name": "cdx:npm:package:path",
+              "value": "node_modules/eslint/node_modules/json-schema-traverse"
+            }
+          ]
+        }
       ]
     },
     {
@@ -16810,10 +17229,6 @@
       ],
       "properties": [
         {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        },
-        {
           "name": "cdx:npm:package:path",
           "value": "node_modules/fast-deep-equal"
         }
@@ -16892,6 +17307,40 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/fast-levenshtein"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "fast-uri",
+      "version": "3.1.4",
+      "bom-ref": "claude-session-manager@1.2.0|fast-uri@3.1.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/fast-uri@3.1.4?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Ffast-uri%2F-%2Ffast-uri-3.1.4.tgz",
+      "externalReferences": [
+        {
+          "url": "https://registry.npmmirror.com/fast-uri/-/fast-uri-3.1.4.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "f099db910e23b83caf62ce26805190aa0e32098b450ed52d9a9d90210ab5d5965ee42150e7072a9b5aea0e0021fd074cc92b819cfccc5222543591b937f02243"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/fast-uri"
         }
       ]
     },
@@ -20014,8 +20463,8 @@
     {
       "type": "library",
       "name": "json-schema-traverse",
-      "version": "0.4.1",
-      "bom-ref": "claude-session-manager@1.2.0|json-schema-traverse@0.4.1",
+      "version": "1.0.0",
+      "bom-ref": "claude-session-manager@1.2.0|json-schema-traverse@1.0.0",
       "licenses": [
         {
           "license": {
@@ -20024,25 +20473,21 @@
           }
         }
       ],
-      "purl": "pkg:npm/json-schema-traverse@0.4.1?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fjson-schema-traverse%2F-%2Fjson-schema-traverse-0.4.1.tgz",
+      "purl": "pkg:npm/json-schema-traverse@1.0.0?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fjson-schema-traverse%2F-%2Fjson-schema-traverse-1.0.0.tgz",
       "externalReferences": [
         {
-          "url": "https://registry.npmmirror.com/json-schema-traverse/-/json-schema-traverse-0.4.1.tgz",
+          "url": "https://registry.npmmirror.com/json-schema-traverse/-/json-schema-traverse-1.0.0.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "c5b6c21f9742614e53f0b704861ba1ec727cf075ee5b7aac237634cce64529f6441dca5688753f271ce4eb6f41aec69bfe63221d0b62f7030ffbce3944f7b756"
+              "content": "34cf3f3fd9f75e35e12199f594b86415a0024ce5114178d6855e0103f4673aff31be0aadaa9017f483b89914314b1d51968e2dab37aa6f4b0e96bb9a3b2dddba"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
         }
       ],
       "properties": [
-        {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        },
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/json-schema-traverse"
@@ -26461,10 +26906,6 @@
       ],
       "properties": [
         {
-          "name": "cdx:npm:package:development",
-          "value": "true"
-        },
-        {
           "name": "cdx:npm:package:path",
           "value": "node_modules/require-from-string"
         }
@@ -32143,6 +32584,7 @@
         "claude-session-manager@1.2.0|@electron-toolkit/eslint-config-ts@3.1.0",
         "claude-session-manager@1.2.0|@electron-toolkit/preload@3.0.2",
         "claude-session-manager@1.2.0|@electron-toolkit/utils@4.0.0",
+        "claude-session-manager@1.2.0|@electron/asar@3.4.1",
         "claude-session-manager@1.2.0|@playwright/test@1.58.2",
         "claude-session-manager@1.2.0|@tailwindcss/vite@4.2.1",
         "claude-session-manager@1.2.0|@tanstack/react-virtual@3.14.7",
@@ -32153,6 +32595,7 @@
         "claude-session-manager@1.2.0|@types/react-dom@19.2.3",
         "claude-session-manager@1.2.0|@types/react@19.2.14",
         "claude-session-manager@1.2.0|@vitejs/plugin-react@5.1.4",
+        "claude-session-manager@1.2.0|ajv@8.17.1",
         "claude-session-manager@1.2.0|better-sqlite3@13.0.1",
         "claude-session-manager@1.2.0|chokidar@5.0.0",
         "claude-session-manager@1.2.0|electron-builder@26.8.1",
@@ -32394,9 +32837,27 @@
     {
       "ref": "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5",
       "dependsOn": [
-        "claude-session-manager@1.2.0|ajv-keywords@3.5.2",
-        "claude-session-manager@1.2.0|ajv@6.14.0"
+        "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|ajv-keywords@3.5.2",
+        "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|ajv@6.15.0"
       ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|ajv-keywords@3.5.2",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|ajv@6.15.0"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|ajv@6.15.0",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|json-schema-traverse@0.4.1",
+        "claude-session-manager@1.2.0|fast-deep-equal@3.1.3",
+        "claude-session-manager@1.2.0|fast-json-stable-stringify@2.1.0",
+        "claude-session-manager@1.2.0|uri-js@4.4.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@develar/schema-utils@2.6.5|json-schema-traverse@0.4.1"
     },
     {
       "ref": "claude-session-manager@1.2.0|@electron-internal/extract-zip@1.0.4"
@@ -33077,7 +33538,51 @@
       "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-linux-x64-musl@4.2.1"
     },
     {
-      "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1"
+      "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/core@1.8.1",
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/runtime@1.8.1",
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/wasi-threads@1.1.0",
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@napi-rs/wasm-runtime@1.1.1",
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@tybys/wasm-util@0.10.1",
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|tslib@2.8.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/core@1.8.1",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/wasi-threads@1.1.0",
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|tslib@2.8.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/runtime@1.8.1",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|tslib@2.8.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/wasi-threads@1.1.0",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|tslib@2.8.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@napi-rs/wasm-runtime@1.1.1",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/core@1.8.1",
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@emnapi/runtime@1.8.1",
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@tybys/wasm-util@0.10.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|@tybys/wasm-util@0.10.1",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|tslib@2.8.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-wasm32-wasi@4.2.1|tslib@2.8.1"
     },
     {
       "ref": "claude-session-manager@1.2.0|@tailwindcss/oxide-win32-arm64-msvc@4.2.1"
@@ -33538,18 +34043,12 @@
       "ref": "claude-session-manager@1.2.0|agent-base@7.1.4"
     },
     {
-      "ref": "claude-session-manager@1.2.0|ajv-keywords@3.5.2",
-      "dependsOn": [
-        "claude-session-manager@1.2.0|ajv@6.14.0"
-      ]
-    },
-    {
-      "ref": "claude-session-manager@1.2.0|ajv@6.14.0",
+      "ref": "claude-session-manager@1.2.0|ajv@8.17.1",
       "dependsOn": [
         "claude-session-manager@1.2.0|fast-deep-equal@3.1.3",
-        "claude-session-manager@1.2.0|fast-json-stable-stringify@2.1.0",
-        "claude-session-manager@1.2.0|json-schema-traverse@0.4.1",
-        "claude-session-manager@1.2.0|uri-js@4.4.1"
+        "claude-session-manager@1.2.0|fast-uri@3.1.4",
+        "claude-session-manager@1.2.0|json-schema-traverse@1.0.0",
+        "claude-session-manager@1.2.0|require-from-string@2.0.2"
       ]
     },
     {
@@ -34209,13 +34708,25 @@
       "dependsOn": [
         "claude-session-manager@1.2.0|@types/plist@3.0.5",
         "claude-session-manager@1.2.0|@types/verror@1.10.11",
-        "claude-session-manager@1.2.0|ajv@6.14.0",
         "claude-session-manager@1.2.0|crc@3.8.0",
+        "claude-session-manager@1.2.0|dmg-license@1.0.11|ajv@6.15.0",
         "claude-session-manager@1.2.0|iconv-corefoundation@1.1.7",
         "claude-session-manager@1.2.0|plist@3.1.0",
         "claude-session-manager@1.2.0|smart-buffer@4.2.0",
         "claude-session-manager@1.2.0|verror@1.10.1"
       ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|dmg-license@1.0.11|ajv@6.15.0",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|dmg-license@1.0.11|json-schema-traverse@0.4.1",
+        "claude-session-manager@1.2.0|fast-deep-equal@3.1.3",
+        "claude-session-manager@1.2.0|fast-json-stable-stringify@2.1.0",
+        "claude-session-manager@1.2.0|uri-js@4.4.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|dmg-license@1.0.11|json-schema-traverse@0.4.1"
     },
     {
       "ref": "claude-session-manager@1.2.0|dom-accessibility-api@0.5.16"
@@ -34533,12 +35044,12 @@
         "claude-session-manager@1.2.0|@humanwhocodes/module-importer@1.0.1",
         "claude-session-manager@1.2.0|@humanwhocodes/retry@0.4.3",
         "claude-session-manager@1.2.0|@types/estree@1.0.8",
-        "claude-session-manager@1.2.0|ajv@6.14.0",
         "claude-session-manager@1.2.0|cross-spawn@7.0.6",
         "claude-session-manager@1.2.0|debug@4.4.3",
         "claude-session-manager@1.2.0|escape-string-regexp@4.0.0",
         "claude-session-manager@1.2.0|eslint-scope@9.1.1",
         "claude-session-manager@1.2.0|eslint-visitor-keys@5.0.1",
+        "claude-session-manager@1.2.0|eslint@10.0.2|ajv@6.15.0",
         "claude-session-manager@1.2.0|espree@11.1.1",
         "claude-session-manager@1.2.0|esquery@1.7.0",
         "claude-session-manager@1.2.0|esutils@2.0.3",
@@ -34555,6 +35066,18 @@
         "claude-session-manager@1.2.0|natural-compare@1.4.0",
         "claude-session-manager@1.2.0|optionator@0.9.4"
       ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|eslint@10.0.2|ajv@6.15.0",
+      "dependsOn": [
+        "claude-session-manager@1.2.0|eslint@10.0.2|json-schema-traverse@0.4.1",
+        "claude-session-manager@1.2.0|fast-deep-equal@3.1.3",
+        "claude-session-manager@1.2.0|fast-json-stable-stringify@2.1.0",
+        "claude-session-manager@1.2.0|uri-js@4.4.1"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|eslint@10.0.2|json-schema-traverse@0.4.1"
     },
     {
       "ref": "claude-session-manager@1.2.0|espree@11.1.1",
@@ -34614,6 +35137,9 @@
     },
     {
       "ref": "claude-session-manager@1.2.0|fast-levenshtein@2.0.6"
+    },
+    {
+      "ref": "claude-session-manager@1.2.0|fast-uri@3.1.4"
     },
     {
       "ref": "claude-session-manager@1.2.0|fdir@6.5.0",
@@ -35067,7 +35593,7 @@
       "ref": "claude-session-manager@1.2.0|json-buffer@3.0.1"
     },
     {
-      "ref": "claude-session-manager@1.2.0|json-schema-traverse@0.4.1"
+      "ref": "claude-session-manager@1.2.0|json-schema-traverse@1.0.0"
     },
     {
       "ref": "claude-session-manager@1.2.0|json-stable-stringify-without-jsonify@1.0.1"

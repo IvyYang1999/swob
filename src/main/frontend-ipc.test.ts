@@ -88,7 +88,8 @@ describe('user identity', () => {
       libraryRoot,
       getLibraryRoot: () => libraryRoot,
       getPreferences: () => preferences,
-      updatePreferences: vi.fn(async (patch: Record<string, unknown>) => { preferences = { ...preferences, ...patch } })
+      updatePreferences: vi.fn(async (patch: Record<string, unknown>) => { preferences = { ...preferences, ...patch } }),
+      withLibraryWriter: async <T>(operation: () => Promise<T> | T) => operation()
     }
   }
 
@@ -190,7 +191,12 @@ describe('PNG sharing and registration', () => {
     const channels: string[] = []
     registerFrontendIpc({
       ipcMain: { handle: (channel) => { channels.push(channel) } },
-      profile: { getLibraryRoot: () => '/tmp', getPreferences: () => ({}), updatePreferences: vi.fn() },
+      profile: {
+        getLibraryRoot: () => '/tmp',
+        getPreferences: () => ({}),
+        updatePreferences: vi.fn(),
+        withLibraryWriter: async <T>(operation: () => Promise<T> | T) => operation()
+      },
       spotlight: { platform: 'darwin', getWindow: () => null, setPreference: vi.fn() },
       share: { showSaveDialog: vi.fn(), writeFile: vi.fn(), createImage: vi.fn(), writeImage: vi.fn() }
     })

@@ -4,14 +4,36 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   buildProjectOrganizationPreview,
-  executeOrganization,
+  executeOrganization as executeOrganizationRaw,
+  recoverInterruptedOrganization as recoverInterruptedOrganizationRaw,
   sanitizeRelativeFolder,
-  undoLastOrganization,
+  undoLastOrganization as undoLastOrganizationRaw,
+  type OrganizationFaultStage,
   type OrganizationInput
 } from './vault-organizer'
+import { runWithLibraryWriterSync } from './library-write-coordinator'
 
 let root: string
 const allowWrites = { authorizeMoves: (): void => {} }
+
+function executeOrganization(...args: Parameters<typeof executeOrganizationRaw>): ReturnType<typeof executeOrganizationRaw> {
+  return runWithLibraryWriterSync(root, 'test-device', 'move',
+    () => executeOrganizationRaw(...args), { eventSink: () => {} })
+}
+
+function undoLastOrganization(
+  targetRoot: string,
+  gate = allowWrites
+): ReturnType<typeof undoLastOrganizationRaw> {
+  return runWithLibraryWriterSync(targetRoot, 'test-device', 'move',
+    () => undoLastOrganizationRaw(targetRoot, gate), { eventSink: () => {} })
+}
+
+function recoverInterruptedOrganization(targetRoot: string): ReturnType<typeof recoverInterruptedOrganizationRaw> {
+  return runWithLibraryWriterSync(targetRoot, 'test-device', 'move',
+    () => recoverInterruptedOrganizationRaw(targetRoot, allowWrites, { eventSink: () => {} }),
+    { eventSink: () => {} })
+}
 
 function createSession(name: string, sessionId = name, meta: Record<string, unknown> = {}): string {
   const dir = path.join(root, name)
@@ -132,6 +154,33 @@ describe('Vault 整理事务', () => {
     expect(fs.existsSync(second)).toBe(true)
     expect(JSON.parse(fs.readFileSync(path.join(first, '.swob-session.json'), 'utf-8')).customTitle).toBe('旧标题一')
     expect(JSON.parse(fs.readFileSync(path.join(second, '.swob-session.json'), 'utf-8')).customTitle).toBeUndefined()
+  })
+
+  it.each<OrganizationFaultStage>([
+    'after-plan',
+    'before-move',
+    'after-move',
+    'after-meta',
+    'before-finalize'
+  ])('模拟进程在 %s 被 kill 后，重启恢复器按落盘反向计划回滚', (faultStage) => {
+    const source = createSession(`crash-${faultStage}`, `session-${faultStage}`, { customTitle: '旧标题' })
+    expect(() => executeOrganization(root, 'manual', [{
+      sessionId: `session-${faultStage}`,
+      sourceDir: source,
+      targetRelativeFolder: '恢复目标',
+      metaPatch: { customTitle: '新标题' }
+    }], allowWrites, {
+      eventSink: () => {},
+      faultInjector: (stage) => {
+        if (stage === faultStage) throw new Error('simulated-process-kill')
+      }
+    })).toThrow('simulated-process-kill')
+
+    const recovered = recoverInterruptedOrganization(root)
+    expect(recovered.operationId).toBeTruthy()
+    expect(fs.existsSync(source)).toBe(true)
+    expect(JSON.parse(fs.readFileSync(path.join(source, '.swob-session.json'), 'utf-8')).customTitle).toBe('旧标题')
+    expect(fs.existsSync(path.join(root, '恢复目标', `crash-${faultStage}`))).toBe(false)
   })
 
   it('预检整批输入，任何非法项都不会造成部分移动', () => {

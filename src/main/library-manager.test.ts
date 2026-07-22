@@ -11,7 +11,6 @@ import * as os from 'os'
 import { createHash } from 'node:crypto'
 import { shellQuote } from './resume-terminal'
 import { buildSessionSummaryFromBackup } from './session-loader'
-import { undoLastOrganization } from './vault-organizer'
 import { readRecoveryAttempts } from './recovery-metrics'
 
 // 隔离测试环境：用临时目录作为 Library root
@@ -160,6 +159,41 @@ afterAll(() => {
     process.env.HOME = savedHome
   }
   fs.rmSync(testHome, { recursive: true, force: true })
+})
+
+describe('Library scan generation', () => {
+  it('拒绝 watcher 队列里的旧扫描覆盖已提交移动后的 binding', () => {
+    const staleTree = lib.scanLibrary()
+    const folder = lib.createLibraryFolder('新位置')
+    lib.moveSessionToFolder('abc-123', folder)
+    const committedPath = lib.getSessionDirPath('abc-123')
+
+    expect(committedPath).toBeTruthy()
+    expect(path.dirname(committedPath!)).toBe(folder)
+    for (let watcherReplay = 0; watcherReplay < 20; watcherReplay++) {
+      expect(lib.applyLibraryTree(staleTree)).toBe(false)
+    }
+    expect(lib.getSessionDirPath('abc-123')).toBe(committedPath)
+    expect(lib.resolveSessionBinding('abc-123')).toMatchObject({ state: 'bound' })
+  })
+
+  it('本进程存在异步 writer 时拒绝切换 Library root', async () => {
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const writing = lib.withLibraryMaintenanceWriter(async () => {
+      entered()
+      await gate
+    })
+    await started
+
+    expect(() => lib.initLibrary(path.join(tmpRoot, '另一个库')))
+      .toThrow(lib.LibraryWriterBusyError)
+    expect(lib.getLibraryRoot()).toBe(tmpRoot)
+    release()
+    await writing
+  })
 })
 
 describe('Library metadata cache', () => {
@@ -1381,7 +1415,7 @@ describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
     expect(fs.existsSync(folder)).toBe(false)
     expect(fs.existsSync(path.join(tmpRoot, '一个会话', '.swob-session.json'))).toBe(true)
 
-    const undone = undoLastOrganization(tmpRoot, { authorizeMoves: () => {} })
+    const undone = lib.undoLastLibraryOrganization()
     expect(undone.moves.map((move) => move.sessionId)).toEqual(['pure-x'])
     expect(fs.existsSync(path.join(folder, '一个会话', '.swob-session.json'))).toBe(true)
     expect(fs.existsSync(path.join(tmpRoot, '一个会话'))).toBe(false)
@@ -1401,7 +1435,7 @@ describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
     expect(fs.existsSync(path.join(movedFolder, '会话乙', '.swob-session.json'))).toBe(true)
     expect(fs.existsSync(source)).toBe(false)
 
-    const undone = undoLastOrganization(tmpRoot, { authorizeMoves: () => {} })
+    const undone = lib.undoLastLibraryOrganization()
     expect(new Set(undone.moves.map((move) => move.sessionId))).toEqual(
       new Set(['folder-move-a', 'folder-move-b'])
     )

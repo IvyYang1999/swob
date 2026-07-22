@@ -1,4 +1,15 @@
 import type { OnboardingBackupSizeEstimate } from '../../../shared/onboarding-backup-size'
+import type {
+  AgentAlwaysOnTopState,
+  AgentHistoryItem,
+  AgentResumeState,
+  FrontendIpcResult,
+  ShareCopyPngResult,
+  ShareSavePngResult,
+  SpotlightNativeShadowState,
+  UserIdentity,
+  UserIdentityInput
+} from '../../../shared/frontend-ipc-contract'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeLaunchSpec = {
@@ -237,6 +248,11 @@ interface ElectronAPI {
   spotlightSelectInMain: (sessionId: string) => Promise<void>
   spotlightConsumePendingNavigation: () => Promise<string | null>
   spotlightToggle: () => Promise<void>
+  spotlightSetNativeShadow: (flag: boolean) => Promise<FrontendIpcResult<SpotlightNativeShadowState>>
+  profileGetUserIdentity: () => Promise<FrontendIpcResult<UserIdentity>>
+  profileSetUserIdentity: (identity: UserIdentityInput) => Promise<FrontendIpcResult<UserIdentity>>
+  shareSavePng: (base64: string, suggestedName: string) => Promise<FrontendIpcResult<ShareSavePngResult>>
+  shareCopyPngToClipboard: (base64: string) => Promise<FrontendIpcResult<ShareCopyPngResult>>
   onSpotlightNavigate: (callback: (sessionId: string) => void) => void
 
   // Auto Update
@@ -289,6 +305,10 @@ interface ElectronAPI {
 
   // Global agent floating window
   agentGetStatus: () => Promise<{ available: boolean; binaryPath?: string; reason?: string; sessionId: string | null; busy: boolean }>
+  agentListHistory: () => Promise<FrontendIpcResult<AgentHistoryItem[]>>
+  agentResumeSession: (sessionId: string) => Promise<FrontendIpcResult<AgentResumeState>>
+  agentGetAlwaysOnTop: () => Promise<FrontendIpcResult<AgentAlwaysOnTopState>>
+  agentSetAlwaysOnTop: (flag: boolean) => Promise<FrontendIpcResult<AgentAlwaysOnTopState>>
   agentToggleWindow: () => Promise<void>
   agentHideWindow: () => Promise<boolean>
   agentNewConversation: () => Promise<boolean>

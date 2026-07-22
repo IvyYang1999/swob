@@ -4,9 +4,17 @@ import { is } from '@electron-toolkit/utils'
 import {
   getAgentEngineStatus,
   runAgentTurn,
+  type AgentEngineStatus,
   type AgentStreamEvent,
   type RunningTurn
 } from './agent-runner'
+import { setAlwaysOnTopPreference } from './frontend-ipc'
+import type {
+  AgentHistoryItem,
+  AgentResumeState,
+  FrontendIpcErrorCode,
+  FrontendIpcResult
+} from '../shared/frontend-ipc-contract'
 
 /**
  * Floating global agent window (t111 MVP). Frameless, bottom-right,
@@ -16,9 +24,14 @@ import {
 let agentWindow: BrowserWindow | null = null
 let currentTurn: RunningTurn | null = null
 let agentSessionId: string | null = null
+let registeredOptions: AgentIpcOptions | null = null
 
 const WIDTH = 360
 const HEIGHT = 540
+
+function configuredAlwaysOnTop(): boolean {
+  try { return registeredOptions?.getAgentAlwaysOnTop() ?? true } catch { return true }
+}
 
 function createAgentWindow(): BrowserWindow {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
@@ -32,7 +45,7 @@ function createAgentWindow(): BrowserWindow {
     frame: false,
     resizable: true,
     movable: true,
-    alwaysOnTop: true,
+    alwaysOnTop: configuredAlwaysOnTop(),
     skipTaskbar: true,
     show: false,
     minWidth: 300,
@@ -73,34 +86,115 @@ function emitToAgentWindow(event: AgentStreamEvent): void {
   }
 }
 
-export function registerAgentIpc(options: {
+interface IpcHandleRegistrar {
+  handle(channel: string, handler: (event: unknown, ...args: any[]) => unknown): void
+}
+
+export interface AgentIpcOptions {
   getLibraryRoot: () => string | null
   archiveAgentSession: (sessionId: string) => void
   showMainWindow: () => void
-}): void {
-  ipcMain.handle('agent:openHistory', () => {
+  listAgentHistory: () => AgentHistoryItem[] | Promise<AgentHistoryItem[]>
+  getAgentAlwaysOnTop: () => boolean
+  persistAgentAlwaysOnTop: (flag: boolean) => void | Promise<void>
+  ipcMain?: IpcHandleRegistrar
+  getEngineStatus?: () => Promise<AgentEngineStatus>
+  runTurn?: typeof runAgentTurn
+}
+
+function agentFailure<T>(code: FrontendIpcErrorCode, message: string): FrontendIpcResult<T> {
+  return { ok: false, error: { code, message } }
+}
+
+export function registerAgentIpc(options: AgentIpcOptions): void {
+  registeredOptions = options
+  const ipc = options.ipcMain || ipcMain
+  const engineStatus = options.getEngineStatus || getAgentEngineStatus
+  const startTurn = options.runTurn || runAgentTurn
+
+  ipc.handle('agent:openHistory', () => {
     agentWindow?.hide()
     options.showMainWindow()
     return true
   })
 
-  ipcMain.handle('agent:getStatus', async () => {
-    const status = await getAgentEngineStatus()
+  ipc.handle('agent:getStatus', async () => {
+    const status = await engineStatus()
     return { ...status, sessionId: agentSessionId, busy: currentTurn !== null }
   })
 
-  ipcMain.handle('agent:toggleWindow', () => { toggleAgentWindow() })
+  ipc.handle('agent:listHistory', async (): Promise<FrontendIpcResult<AgentHistoryItem[]>> => {
+    try {
+      return { ok: true, value: await options.listAgentHistory() }
+    } catch (error) {
+      return agentFailure('OPERATION_FAILED', error instanceof Error ? error.message : 'Failed to list agent history')
+    }
+  })
 
-  ipcMain.handle('agent:newConversation', () => {
+  ipc.handle('agent:resumeSession', async (_event, sessionId: unknown): Promise<FrontendIpcResult<AgentResumeState>> => {
+    if (typeof sessionId !== 'string' || !sessionId.trim()) {
+      return agentFailure('INVALID_INPUT', 'sessionId must be a non-empty string')
+    }
+    if (currentTurn) return agentFailure('BUSY', 'Cannot switch sessions while a turn is running')
+    try {
+      const item = (await options.listAgentHistory()).find((candidate) => candidate.id === sessionId)
+      if (!item) return agentFailure('SESSION_NOT_FOUND', 'Agent session was not found')
+      const status = await engineStatus()
+      agentSessionId = item.id
+      return {
+        ok: true,
+        value: {
+          ...item,
+          canResume: status.available,
+          ...(status.available ? {} : { reason: status.reason || 'Agent engine is unavailable' })
+        }
+      }
+    } catch (error) {
+      return agentFailure('OPERATION_FAILED', error instanceof Error ? error.message : 'Failed to resume agent session')
+    }
+  })
+
+  ipc.handle('agent:getAlwaysOnTop', (): FrontendIpcResult<{
+    alwaysOnTop: boolean
+    windowOpen: boolean
+  }> => {
+    try {
+      return {
+        ok: true,
+        value: {
+          alwaysOnTop: options.getAgentAlwaysOnTop(),
+          windowOpen: Boolean(agentWindow && !agentWindow.isDestroyed())
+        }
+      }
+    } catch (error) {
+      return agentFailure('OPERATION_FAILED', error instanceof Error ? error.message : 'Failed to read window preference')
+    }
+  })
+
+  ipc.handle('agent:setAlwaysOnTop', (_event, flag: unknown) => {
+    try {
+      return setAlwaysOnTopPreference(flag, {
+        previousValue: options.getAgentAlwaysOnTop(),
+        getWindow: () => agentWindow,
+        persist: options.persistAgentAlwaysOnTop
+      })
+    } catch (error) {
+      return agentFailure('OPERATION_FAILED', error instanceof Error ? error.message : 'Failed to update window preference')
+    }
+  })
+
+  ipc.handle('agent:toggleWindow', () => { toggleAgentWindow() })
+
+  ipc.handle('agent:newConversation', () => {
     agentSessionId = null
     return true
   })
 
-  ipcMain.handle('agent:send', async (_event, prompt: string) => {
+  ipc.handle('agent:send', async (_event, prompt: string) => {
     if (typeof prompt !== 'string' || !prompt.trim()) return { ok: false, error: '空消息' }
     if (currentTurn) return { ok: false, error: '上一轮还在进行中' }
 
-    const turn = await runAgentTurn({
+    const turn = await startTurn({
       prompt: prompt.trim().slice(0, 8000),
       resumeSessionId: agentSessionId || undefined,
       libraryRoot: options.getLibraryRoot(),
@@ -120,12 +214,12 @@ export function registerAgentIpc(options: {
     return { ok: true }
   })
 
-  ipcMain.handle('agent:cancel', () => {
+  ipc.handle('agent:cancel', () => {
     currentTurn?.cancel()
     return true
   })
 
-  ipcMain.handle('agent:hideWindow', () => {
+  ipc.handle('agent:hideWindow', () => {
     agentWindow?.hide()
     return true
   })
@@ -145,4 +239,5 @@ export async function shutdownAgentRuntime(): Promise<void> {
   if (turn) await turn.shutdown()
   if (agentWindow && !agentWindow.isDestroyed()) agentWindow.destroy()
   agentWindow = null
+  agentSessionId = null
 }

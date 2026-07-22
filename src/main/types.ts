@@ -274,5 +274,7 @@ export interface UserConfig {
     updateChannel?: import('../shared/settings-capabilities').UpdateChannel
     llmProfiles?: import('./llm-profiles').LlmProfile[]
     smartFeatureBindings?: import('./llm-profiles').SmartFeatureBinding
+    agentAlwaysOnTop?: boolean
+    userIdentity?: { displayName: string; avatarRelPath?: string }
   }
 }

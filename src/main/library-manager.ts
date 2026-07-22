@@ -152,6 +152,8 @@ export interface LibraryConfig {
     sshTargets?: SshTargetConfig[]
     llmProfiles?: import('./llm-profiles').LlmProfile[]
     smartFeatureBindings?: import('./llm-profiles').SmartFeatureBinding
+    agentAlwaysOnTop?: boolean
+    userIdentity?: { displayName: string; avatarRelPath?: string }
     // 指定「未分组容器」：这两个文件夹的会话在 UI 底部按轮数罗列/折叠、不在树里显示。
     // 新中央会话也按轮数落进这俩文件夹。不配则为空，swob 行为完全通用。
     ungrouping?: { multiTurn: string; singleTurn: string }

@@ -329,6 +329,8 @@ export function LineagePage() {
   const transformRef = useRef({ x: 0, y: 0, scale: 1 })
   const dragRef = useRef<{ dragging: boolean; lastX: number; lastY: number }>({ dragging: false, lastX: 0, lastY: 0 })
   const [ready, setReady] = useState(false)
+  const userHasInteractedRef = useRef(false)
+  const initialFitDoneRef = useRef(false)
 
   useEffect(() => {
     if (graphSessions.length === 0) return
@@ -427,15 +429,67 @@ export function LineagePage() {
     ctx.restore()
   }, [hoveredNode])
 
-  useEffect(() => {
-    if (ready) draw()
-  }, [ready, draw])
+  // Keep a ref to the latest draw so stable effects can call it without re-subscribing
+  const drawRef = useRef(draw)
+  drawRef.current = draw
+
+  // Compute bounding box of all nodes and set transform to fill the viewport
+  const fitAll = useCallback(() => {
+    const graph = graphRef.current
+    const canvas = canvasRef.current
+    if (!graph || !canvas || graph.nodes.length === 0) return
+
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const node of graph.nodes) {
+      if (node.x < minX) minX = node.x
+      if (node.x > maxX) maxX = node.x
+      if (node.y < minY) minY = node.y
+      if (node.y > maxY) maxY = node.y
+    }
+
+    const bboxW = maxX - minX || 1
+    const bboxH = maxY - minY || 1
+    const centerX = (minX + maxX) / 2
+    const centerY = (minY + maxY) / 2
+
+    // 0.85 factor leaves ~7.5% padding per edge (within the 5-8% spec)
+    const scale = Math.min(1.5, rect.width * 0.85 / bboxW, rect.height * 0.85 / bboxH)
+
+    transformRef.current = { x: -centerX * scale, y: -centerY * scale, scale }
+  }, [])
 
   useEffect(() => {
-    const handleResize = () => draw()
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [draw])
+    if (!ready) return
+    if (!initialFitDoneRef.current) {
+      initialFitDoneRef.current = true
+      fitAll()
+    }
+    draw()
+  }, [ready, draw, fitAll])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !ready) return
+
+    let timer: ReturnType<typeof setTimeout>
+    const observer = new ResizeObserver(() => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (!userHasInteractedRef.current) {
+          fitAll()
+        }
+        drawRef.current()
+      }, 200)
+    })
+    observer.observe(container)
+    return () => {
+      clearTimeout(timer)
+      observer.disconnect()
+    }
+  }, [ready, fitAll])
 
   const findNodeAt = useCallback((clientX: number, clientY: number): Node | null => {
     const canvas = canvasRef.current
@@ -456,6 +510,7 @@ export function LineagePage() {
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (dragRef.current.dragging) {
+      userHasInteractedRef.current = true
       transformRef.current.x += e.clientX - dragRef.current.lastX
       transformRef.current.y += e.clientY - dragRef.current.lastY
       dragRef.current.lastX = e.clientX
@@ -490,6 +545,7 @@ export function LineagePage() {
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
+    userHasInteractedRef.current = true
     const delta = e.deltaY > 0 ? 0.9 : 1.1
     transformRef.current.scale = Math.max(0.1, Math.min(8, transformRef.current.scale * delta))
     draw()

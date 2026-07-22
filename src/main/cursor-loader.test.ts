@@ -83,8 +83,18 @@ describe('cursor-loader', () => {
       expect(summary!.toolUsage['Read']).toBe(1)
       expect(summary!.toolUsage['Write']).toBe(1)
       expect(summary!.tokenAccounting?.provenance).toBe('unavailable')
+      expect(summary!.activityDays).toEqual([])
       expect(summary!.tokenAccounting?.billingTotal).toBeNull()
       expect(summary!.tokenAccounting?.unavailableReason).toContain('do not expose authoritative token usage')
+    })
+
+    it('只把 transcript 自带时间计入 activity evidence，不把文件 mtime 当事件时间', async () => {
+      const lines = makeCursorLines().map((line, index) => ({
+        ...line,
+        timestamp: index < 2 ? '2026-07-20T10:00:00Z' : '2026-07-21T10:00:00Z'
+      }))
+      const summary = await buildCursorSessionSummary(writeTempJsonl(lines))
+      expect(summary?.activityDays).toEqual(['2026-07-20', '2026-07-21'])
     })
 
     it('【曾经的 bug】user_query XML 标签应被清理', async () => {

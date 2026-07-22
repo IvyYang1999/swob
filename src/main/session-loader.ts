@@ -38,6 +38,7 @@ import {
 import { runtimeHome } from './runtime-home'
 import { hasPortablePathSegment, isPortableAbsolutePath } from './portable-path'
 import { isSessionSourceSupported } from './platform-support'
+import { activityDaysFromTimestamps } from './activity-time'
 import {
   stripTerminalControlSequences,
   stripTerminalControlSequencesDeep
@@ -64,7 +65,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 24 // Codex role classification + child usage attribution
+const CACHE_VERSION = 25 // parsed activity-day evidence for bounded Insights coverage
 
 type CachedSessionSource = SessionSource
 
@@ -590,6 +591,12 @@ export function buildSessionSummary(
   const mainTimestamps = mainChainMessages.map((m) => m.timestamp).filter(Boolean).sort()
   const allTimestamps = rawMessages.map((m) => m.timestamp).filter(Boolean).sort()
   const timestamps = mainTimestamps.length > 0 ? mainTimestamps : allTimestamps
+  const activityDays = activityDaysFromTimestamps([
+    ...rawMessages
+      .filter((message) => message.type === 'assistant' || isRealUserMessage(message))
+      .map((message) => message.timestamp),
+    ...subagentUsageMessages.map((message) => message.timestamp)
+  ])
 
   const realUserMsgCount = validMessages.filter(isRealUserMessage).length
   const assistantMsgCount = validMessages.filter((m) => m.type === 'assistant').length
@@ -658,6 +665,7 @@ export function buildSessionSummary(
       slug: rawMessages.find((m) => m.slug)?.slug || '',
       createdAt: timestamps[0] || '',
       updatedAt: timestamps[timestamps.length - 1] || '',
+      activityDays,
       messageCount: validMessages.length,
       turnCount,
       compactCount,
@@ -784,6 +792,7 @@ export function buildSessionSummary(
     slug: rawMessages.find((m) => m.slug)?.slug || '',
     createdAt: timestamps[0] || '',
     updatedAt: timestamps[timestamps.length - 1] || '',
+    activityDays,
     messageCount: validMessages.length,
     turnCount,
     compactCount,

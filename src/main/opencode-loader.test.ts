@@ -133,6 +133,7 @@ describe('opencode-loader', () => {
       expect(JSON.stringify(raw)).not.toContain('hidden reasoning')
 
       const summary = await buildOpencodeSessionSummary(fixture.sourceRef)
+      expect(summary?.activityDays).toEqual(['2026-07-08'])
       expect(summary).not.toBeNull()
       expect(summary!.source).toBe('opencode')
       expect(summary!.id).toBe(`opencode:${SESSION_ID}`)

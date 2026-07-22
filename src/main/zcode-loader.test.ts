@@ -103,6 +103,7 @@ describe('zcode-loader', () => {
         branchParentId: PARENT_ID,
         resumeCwd: '/Users/test/projects/zcode-app'
       })
+      expect(summary?.activityDays).toEqual(['2026-07-08'])
 
       const detail = await buildZcodeSessionDetail(fixture.sourceRef)
       expect(detail?.messages.map((message) => message.textContent)).toEqual([

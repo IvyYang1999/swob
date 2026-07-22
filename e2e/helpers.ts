@@ -104,11 +104,13 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
       parentUuid: userUuid,
       sessionId: CLAUDE_FIXTURE_ID,
       type: 'assistant',
+      requestId: `claude-request-${index}`,
       timestamp: new Date(Date.UTC(2026, 6, 21, 10, 0, index * 2 + 1)).toISOString(),
       cwd: project,
       message: {
         id: `claude-message-${index}`,
         role: 'assistant',
+        model: 'claude-sonnet-4-20250514',
         content: `Synthetic response ${index} ${'fixture '.repeat(12)}`,
         stop_reason: 'end_turn',
         usage: {
@@ -191,8 +193,8 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
         'cursor-token-unavailable.jsonl'
       ),
       [
-        { role: 'user', message: { content: [{ type: 'text', text: '<user_query>Cursor token unavailable fixture</user_query>' }] } },
-        { role: 'assistant', message: { content: [{ type: 'text', text: 'Cursor response without authoritative usage.' }] } }
+        { timestamp: '2026-07-21T09:00:00Z', role: 'user', message: { content: [{ type: 'text', text: '<user_query>Cursor token unavailable fixture</user_query>' }] } },
+        { timestamp: '2026-07-21T09:00:05Z', role: 'assistant', message: { content: [{ type: 'text', text: 'Cursor response without authoritative usage.' }] } }
       ]
     )
   }
@@ -321,4 +323,15 @@ export async function revealAllSessions(page: Page): Promise<void> {
     // Idempotency: a second call would collapse the section again — undo that.
     if (await sessions.count() < before) await singleTurnToggle.click()
   }
+}
+
+/** Open a sidebar session and require the user-facing navigation to reach chat. */
+export async function openSessionInChat(page: Page, sessionId?: string): Promise<void> {
+  await revealAllSessions(page)
+  const session = sessionId
+    ? page.locator(`[data-session-id="${sessionId}"]`)
+    : page.locator('[data-session-id]').first()
+  await session.waitFor({ state: 'visible', timeout: 20_000 })
+  await session.click()
+  await page.getByTestId('chat-scroll').waitFor({ state: 'visible', timeout: 20_000 })
 }

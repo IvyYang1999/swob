@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useStore } from '../../store'
-import { Pencil, Trash2, Plus } from 'lucide-react'
+import { Pencil, Trash2, Plus, RefreshCw } from 'lucide-react'
 
 type Provider = 'anthropic' | 'openai' | 'custom'
 
@@ -33,6 +33,8 @@ interface ProfileDraft {
 
 const EMPTY_DRAFT: ProfileDraft = { name: '', provider: 'anthropic', model: '', baseUrl: '', credential: '' }
 
+const CCSWITCH_IMPORT_ENABLED = false
+
 const FEATURES: Array<{ key: FeatureKey; zh: string; en: string; hint?: string }> = [
   { key: 'insights', zh: 'Insights 报告', en: 'Insights report' },
   { key: 'smartOrganize', zh: '智能整理', en: 'Smart organize' },
@@ -52,6 +54,12 @@ export function ProfilesSettings() {
   const [draft, setDraft] = useState<ProfileDraft | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Model dropdown states for draft editor
+  const [draftModels, setDraftModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsFailed, setModelsFailed] = useState(false)
+  // ccswitch import placeholder
+  const [ccswitchMessage, setCcswitchMessage] = useState(false)
 
   const reload = useCallback(async () => {
     try {
@@ -67,6 +75,21 @@ export function ProfilesSettings() {
   }, [])
 
   useEffect(() => { void reload() }, [reload])
+
+  // Fetch available models from API. Note: listModels() uses the globally configured
+  // insights API key, not the draft's own provider/key — a limitation of the current IPC.
+  const fetchDraftModels = useCallback(async () => {
+    setLoadingModels(true)
+    setModelsFailed(false)
+    try {
+      const list = await window.api.listModels()
+      setDraftModels(list)
+      if (list.length === 0) setModelsFailed(true)
+    } catch {
+      setModelsFailed(true)
+    }
+    setLoadingModels(false)
+  }, [])
 
   const saveDraft = useCallback(async () => {
     if (!draft || !draft.name.trim()) return
@@ -190,12 +213,53 @@ export function ProfilesSettings() {
                 </button>
               ))}
             </div>
-            <input
-              value={draft.model}
-              onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-              placeholder={zh ? '模型 ID(如 claude-haiku-4-5)' : 'Model ID'}
-              className="w-full rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none placeholder:text-faint focus:border-soft-blue"
-            />
+            {/* Model selector — dropdown when models fetched, text fallback otherwise */}
+            {loadingModels ? (
+              <div className="flex items-center gap-2 text-[11px] text-muted py-1.5">
+                <div className="animate-spin w-3 h-3 border border-soft-blue border-t-transparent rounded-full" />
+                {zh ? '获取可用模型…' : 'Fetching models…'}
+              </div>
+            ) : draftModels.length > 0 && !modelsFailed ? (
+              <select
+                value={draft.model}
+                onChange={(e) => setDraft({ ...draft, model: e.target.value === '__custom__' ? '' : e.target.value })}
+                className="w-full rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none focus:border-soft-blue"
+              >
+                <option value="">{zh ? '自动选择' : 'Auto'}</option>
+                {draftModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                <option value="__custom__">{zh ? '自定义输入…' : 'Custom…'}</option>
+              </select>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={draft.model}
+                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  placeholder={zh ? '模型 ID(如 claude-haiku-4-5)' : 'Model ID'}
+                  className="flex-1 rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none placeholder:text-faint focus:border-soft-blue"
+                />
+                <button
+                  onClick={() => void fetchDraftModels()}
+                  disabled={loadingModels}
+                  className="shrink-0 rounded-md p-1.5 text-muted hover:bg-hover hover:text-primary disabled:opacity-40"
+                  title={zh ? '拉取模型列表' : 'Fetch models'}
+                >
+                  <RefreshCw size={12} />
+                </button>
+              </div>
+            )}
+            {draft.model === '__custom__' && (
+              <input
+                type="text"
+                value=""
+                onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                placeholder={zh ? '输入自定义模型 ID' : 'Enter custom model ID'}
+                className="w-full rounded-md border border-edge bg-panel px-2 py-1.5 text-xs text-primary outline-none placeholder:text-faint focus:border-soft-blue"
+                autoFocus
+              />
+            )}
+            {modelsFailed && (
+              <div className="text-[10px] text-soft-amber">{zh ? '获取模型列表失败，请手动输入' : 'Failed to fetch models, enter manually'}</div>
+            )}
             {draft.provider === 'custom' && (
               <input
                 value={draft.baseUrl}
@@ -262,6 +326,22 @@ export function ProfilesSettings() {
         </div>
 
         {error && <div className="text-[10px] text-red-400">{error}</div>}
+
+        {/* ccswitch import — hidden behind feature flag */}
+        {CCSWITCH_IMPORT_ENABLED && (
+          <div className="pt-2">
+            {ccswitchMessage ? (
+              <div className="text-[11px] text-muted">{zh ? '即将支持' : 'Coming soon'}</div>
+            ) : (
+              <button
+                onClick={() => setCcswitchMessage(true)}
+                className="text-[11px] text-soft-blue hover:underline"
+              >
+                {zh ? '从 ccswitch 导入' : 'Import from ccswitch'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </section>
   )

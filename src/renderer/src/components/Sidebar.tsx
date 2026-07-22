@@ -2,17 +2,8 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useStore, type SessionSummary, type Folder, type VaultFile } from '../store'
 import { useT } from '../i18n'
-<<<<<<< HEAD
-import { groupSessionsByLens, type LensDimension, type LensGroup } from '../../../shared/vault-lens'
+import { groupSessionsByLens, SINGLE_TURN_ARCHIVE_FOLDER, type LensDimension, type LensGroup } from '../../../shared/vault-lens'
 import { getHarnessPresentation } from '../utils/harness-presentation'
-=======
-import {
-  groupSessionsByLens,
-  SINGLE_TURN_ARCHIVE_FOLDER,
-  type LensDimension,
-  type LensGroup
-} from '../../../shared/vault-lens'
->>>>>>> fix/tf19-i18n-production-completion
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2,

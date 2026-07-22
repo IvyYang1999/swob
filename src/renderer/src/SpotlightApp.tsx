@@ -1,13 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Search, Play, ArrowRight, Clock, MessageSquare, FolderOpen } from 'lucide-react'
-<<<<<<< HEAD
 import { getHarnessPresentation } from './utils/harness-presentation'
-=======
-import claudeIcon from './assets/icons/claude.png'
-import openaiIcon from './assets/icons/openai.png'
-import cursorIcon from './assets/icons/cursor.png'
 import { translate, useStandaloneLocale, type Locale } from './i18n'
->>>>>>> fix/tf19-i18n-production-completion
 
 const api = (window as any).api
 

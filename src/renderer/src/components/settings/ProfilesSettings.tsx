@@ -293,13 +293,8 @@ export function ProfilesSettings() {
               >
                 {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.cancel')}
               </button>
-<<<<<<< HEAD
               <span className="text-[10px] text-faint">
-                {zh ? 'key 只进 macOS Keychain,不落明文文件' : 'Keys are stored in the macOS Keychain only'}
-=======
-              <span className="text-[9px] text-faint">
                 {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.keys_are_stored_in_the_macos_keychain_only')}
->>>>>>> fix/tf19-i18n-production-completion
               </span>
             </div>
           </div>
@@ -325,15 +320,8 @@ export function ProfilesSettings() {
               </select>
             </div>
           ))}
-<<<<<<< HEAD
           <div className="text-[10px] leading-relaxed text-faint">
-            {zh
-              ? '未绑定的功能会在使用时提示先来这里配置。全局助手默认复用本机已装的 CLI(如 Claude Code),仅自定义 LLM 模式才需要绑定。'
-              : 'Unbound features prompt for setup when used. The global agent reuses your installed CLI by default; binding is only for custom-LLM mode.'}
-=======
-          <div className="text-[9px] leading-relaxed text-faint">
             {translate(zh ? 'zh-CN' : 'en', 'renderer.profiles_settings.unbound_features_prompt_for_setup_when_used_the')}
->>>>>>> fix/tf19-i18n-production-completion
           </div>
         </div>
 

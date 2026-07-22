@@ -290,12 +290,11 @@ export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
   /** Convert node + dot index to Y coordinate */
   const dotY = (node: LineNode, dotIdx: number) => node.startY + dotIdx * DOT_GAP
 
-  const badge = `${layout.nodes.length} ${locale === 'zh-CN' ? '个会话' : 'sessions'}`
+  const badge = `${layout.nodes.length} ${translate(locale, 'renderer.session_family_tree.sessions')}`
 
   return (
-<<<<<<< HEAD
     <DisclosureSection
-      title={locale === 'zh-CN' ? '关联会话' : 'Related Sessions'}
+      title={translate(locale, 'renderer.session_family_tree.session_lineage')}
       icon={<GitBranch size={12} />}
       badge={badge}
       defaultOpen
@@ -320,34 +319,6 @@ export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
             const py = dotY(parentNode, edge.parentDotIdx)
             const cx = colX(childNode.col)
             const cy = childNode.startY
-=======
-    <section>
-      <div className="flex items-center gap-2 text-xs font-medium text-soft-purple mb-2">
-        <GitBranch size={12} />
-        <span>{translate(locale, 'renderer.session_family_tree.session_lineage')}</span>
-        <span className="text-muted text-[10px]">
-          {family.nodes.length} {translate(locale, 'renderer.session_family_tree.nodes')} · {family.edges.length} {translate(locale, 'renderer.session_family_tree.edges')}
-        </span>
-      </div>
-      <div className="overflow-x-auto rounded border border-edge bg-surface/30" style={{ maxHeight: 320 }}>
-        <svg width={family.width} height={family.height} className="block">
-          <defs>
-            <marker id="ft-arrow" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
-              <path d="M0,0 L6,3 L0,6" fill="none" stroke="#60a5fa" strokeWidth="1" />
-            </marker>
-            <marker id="ft-arrow-fork" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
-              <path d="M0,0 L6,3 L0,6" fill="none" stroke="#a78bfa" strokeWidth="1" />
-            </marker>
-          </defs>
-          {family.edges.map((edge, i) => {
-            const from = posMap.get(edge.parent)
-            const to = posMap.get(edge.child)
-            if (!from || !to) return null
-            const x1 = from.x + NODE_W / 2
-            const y1 = from.y + NODE_H
-            const x2 = to.x + NODE_W / 2
-            const y2 = to.y
->>>>>>> fix/tf19-i18n-production-completion
             const isFork = edge.type === 'fork'
 
             if (parentNode.col === childNode.col) {
@@ -457,7 +428,7 @@ export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
 
                 {/* Hover title — rendered as SVG title for tooltip */}
                 <title>
-                  {title} ({node.totalTurns} {locale === 'zh-CN' ? '轮' : 'turns'})
+                  {title} ({node.totalTurns} {translate(locale, 'renderer.session_family_tree.turns')})
                 </title>
               </g>
             )

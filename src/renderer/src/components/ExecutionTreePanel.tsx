@@ -90,7 +90,7 @@ function formatTokens(n: number): string {
 /*  Sub-components                                                     */
 /* ------------------------------------------------------------------ */
 
-function ToolCallItem({ tc, locale }: { tc: ToolCall; locale: string }) {
+function ToolCallItem({ tc, locale }: { tc: ToolCall; locale: import('../i18n').Locale }) {
   const color = TOOL_COLORS[tc.name] || 'var(--color-muted)'
   return (
     <div className="ml-4 border-l-2 border-edge pl-2 py-0.5">
@@ -103,7 +103,7 @@ function ToolCallItem({ tc, locale }: { tc: ToolCall; locale: string }) {
       {tc.result && (
         <div className="ml-3 mt-0.5">
           <DisclosureSection
-            title={locale === 'zh-CN' ? '原始输出' : 'Raw output'}
+            title={translate(locale, 'renderer.execution_tree_panel.raw_output')}
             defaultOpen={false}
           >
             <pre className="text-[10px] text-muted bg-surface/50 rounded p-1.5 overflow-x-auto max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all">
@@ -116,7 +116,7 @@ function ToolCallItem({ tc, locale }: { tc: ToolCall; locale: string }) {
   )
 }
 
-function AgentSpawnItem({ spawn, locale }: { spawn: AgentSpawn; locale: string }) {
+function AgentSpawnItem({ spawn, locale }: { spawn: AgentSpawn; locale: import('../i18n').Locale }) {
   const statusClass =
     spawn.status === 'completed'
       ? 'text-soft-green'
@@ -136,7 +136,7 @@ function AgentSpawnItem({ spawn, locale }: { spawn: AgentSpawn; locale: string }
       {spawn.resultSummary && (
         <div className="ml-3 mt-0.5">
           <DisclosureSection
-            title={locale === 'zh-CN' ? '原始输出' : 'Raw output'}
+            title={translate(locale, 'renderer.execution_tree_panel.raw_output')}
             defaultOpen={false}
           >
             <pre className="text-[10px] text-muted bg-surface/50 rounded p-1.5 overflow-x-auto max-h-[100px] overflow-y-auto whitespace-pre-wrap break-all">
@@ -170,14 +170,14 @@ function TokenBar({ timeline, maxTokens }: { timeline: ExecutionTree['tokenTimel
 /*  Summary badge builder                                              */
 /* ------------------------------------------------------------------ */
 
-function buildSummaryBadge(tree: ExecutionTree, locale: string): string {
+function buildSummaryBadge(tree: ExecutionTree, locale: import('../i18n').Locale): string {
   const parts: string[] = []
-  parts.push(`${tree.totalToolCalls} ${locale === 'zh-CN' ? '工具' : 'tools'}`)
+  parts.push(`${tree.totalToolCalls} ${translate(locale, 'renderer.execution_tree_panel.tools')}`)
   if (tree.totalAgentSpawns > 0) {
-    parts.push(`${tree.totalAgentSpawns} ${locale === 'zh-CN' ? '子代理' : 'agents'}`)
+    parts.push(`${tree.totalAgentSpawns} ${translate(locale, 'renderer.execution_tree_panel.agents')}`)
   }
   if (tree.errors.length > 0) {
-    parts.push(`${tree.errors.length} ${locale === 'zh-CN' ? '错误' : 'errors'}`)
+    parts.push(`${tree.errors.length} ${translate(locale, 'renderer.execution_tree_panel.errors_short')}`)
   }
   return parts.join(' · ')
 }
@@ -221,15 +221,14 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
   // Error badge fragment for the DisclosureSection — shows error count prominently
   const badgeContent = tree.errors.length > 0
     ? <span>{summaryBadge.replace(
-        `${tree.errors.length} ${locale === 'zh-CN' ? '错误' : 'errors'}`,
+        `${tree.errors.length} ${translate(locale, 'renderer.execution_tree_panel.errors_short')}`,
         ''
-      ).replace(/\s*·\s*$/, '')}<span className="text-soft-red ml-1">{tree.errors.length} {locale === 'zh-CN' ? '错误' : 'err'}</span></span>
+      ).replace(/\s*·\s*$/, '')}<span className="text-soft-red ml-1">{tree.errors.length} {translate(locale, 'renderer.execution_tree_panel.errors_short')}</span></span>
     : summaryBadge
 
   return (
-<<<<<<< HEAD
     <DisclosureSection
-      title={locale === 'zh-CN' ? '执行树' : 'Execution Tree'}
+      title={translate(locale, 'renderer.execution_tree_panel.execution_tree')}
       icon={<Zap size={12} />}
       badge={badgeContent}
       defaultOpen={false}
@@ -249,95 +248,13 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
               {name} {count}
             </span>
           ))}
-=======
-    <section>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-xs font-medium text-soft-blue mb-2 w-full text-left hover:text-primary"
-      >
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <Zap size={12} />
-        <span>{translate(locale, 'renderer.execution_tree_panel.execution_tree')}</span>
-        <span className="text-muted text-[10px] ml-auto">
-          {tree.totalToolCalls} tools · {tree.totalAgentSpawns > 0 ? `${tree.totalAgentSpawns} agents · ` : ''}
-          {tree.errors.length > 0 ? `${tree.errors.length} errors` : ''}
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="space-y-3">
-          {/* Tool breakdown bar */}
-          <div className="flex gap-1 flex-wrap">
-            {topTools.map(([name, count]) => (
-              <span
-                key={name}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium"
-                style={{
-                  backgroundColor: `${TOOL_COLORS[name] || '#6b7280'}15`,
-                  color: TOOL_COLORS[name] || '#6b7280'
-                }}
-              >
-                {name} {count}
-              </span>
-            ))}
-          </div>
-
-          {/* Token timeline sparkline */}
-          {tree.tokenTimeline.length > 2 && (
-            <div>
-              <div className="text-[10px] text-muted mb-1">
-                {translate(locale, 'renderer.execution_tree_panel.cumulative_tokens')}: {formatTokens(maxCum)}
-              </div>
-              <TokenBar timeline={tree.tokenTimeline} maxTokens={maxCum} />
-            </div>
-          )}
-
-          {/* Errors */}
-          {tree.errors.length > 0 && (
-            <div className="space-y-1">
-              <div className="text-[10px] font-medium text-red-400 flex items-center gap-1">
-                <AlertTriangle size={10} />
-                {tree.errors.length} {translate(locale, 'renderer.execution_tree_panel.errors')}
-              </div>
-              {tree.errors.slice(0, 5).map((err, i) => (
-                <div key={i} className="text-[10px] text-red-300/70 pl-4 truncate">
-                  Turn {err.turnIndex}: {err.toolName} — {err.message.slice(0, 80)}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Execution timeline (collapsible turns) */}
-          <div className="max-h-[300px] overflow-y-auto space-y-0.5">
-            {assistantTurns.slice(0, 50).map((turn) => (
-              <div key={turn.index} className="text-[11px]">
-                <div className="flex items-center gap-1.5 text-secondary">
-                  <span className="text-muted text-[9px] w-6 text-right shrink-0">#{turn.index}</span>
-                  <span className="truncate flex-1">{turn.textPreview.slice(0, 60) || '(tool calls)'}</span>
-                  {turn.tokenUsage && (
-                    <span className="text-muted text-[9px] shrink-0">
-                      {formatTokens(turn.tokenUsage.inputTokens + turn.tokenUsage.outputTokens)}
-                    </span>
-                  )}
-                </div>
-                {turn.agentSpawns.map((s) => <AgentSpawnItem key={s.id} spawn={s} />)}
-                {turn.toolCalls.map((tc) => <ToolCallItem key={tc.id} tc={tc} />)}
-              </div>
-            ))}
-            {assistantTurns.length > 50 && (
-              <div className="text-[10px] text-muted text-center py-1">
-                +{assistantTurns.length - 50} more turns
-              </div>
-            )}
-          </div>
->>>>>>> fix/tf19-i18n-production-completion
         </div>
 
         {/* Token timeline sparkline */}
         {tree.tokenTimeline.length > 2 && (
           <div>
             <div className="text-[10px] text-muted mb-1">
-              {locale === 'zh-CN' ? 'Token 累计' : 'Cumulative tokens'}: {formatTokens(maxCum)}
+              {translate(locale, 'renderer.execution_tree_panel.cumulative_tokens')}: {formatTokens(maxCum)}
             </div>
             <TokenBar timeline={tree.tokenTimeline} maxTokens={maxCum} />
           </div>
@@ -348,7 +265,7 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
           <div className="space-y-1">
             <div className="text-[10px] font-medium text-soft-red flex items-center gap-1">
               <AlertTriangle size={10} />
-              {tree.errors.length} {locale === 'zh-CN' ? '个错误' : 'errors'}
+              {tree.errors.length} {translate(locale, 'renderer.execution_tree_panel.errors')}
             </div>
             {tree.errors.slice(0, 5).map((err, i) => (
               <div key={i} className="text-[10px] text-soft-red/70 pl-4 truncate">

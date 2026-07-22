@@ -70,13 +70,35 @@ export class SecurityCliProfileSecretStore implements ProfileSecretStore {
     }
   }
 
-  private run(args: string[], input: string | undefined, missingIsNull: boolean): Promise<string | null> {
+  private async run(args: string[], input: string | undefined, missingIsNull: boolean): Promise<string | null> {
+    // spawn can THROW synchronously (e.g. transient EBADF in GUI-launched
+    // apps) instead of emitting 'error' — catch both shapes and retry once.
+    let lastError: Error | null = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await this.runOnce(args, input, missingIsNull)
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        if (!String(lastError.message).includes('EBADF')) throw lastError
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    }
+    throw new Error(`Keychain 调用失败(${lastError?.message || 'unknown'});请重启 Swob 后重试`)
+  }
+
+  private runOnce(args: string[], input: string | undefined, missingIsNull: boolean): Promise<string | null> {
     return new Promise((resolve, reject) => {
-      const child = this.spawnSecurity(SECURITY_PATH, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+      let child: ChildProcessWithoutNullStreams
+      try {
+        child = this.spawnSecurity(SECURITY_PATH, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+      } catch (error) {
+        reject(error)
+        return
+      }
       let stdout = ''
       child.stdout.setEncoding('utf8')
       child.stdout.on('data', (chunk: string) => { stdout += chunk })
-      child.on('error', () => reject(new Error('macOS Keychain command could not start')))
+      child.on('error', (error) => reject(new Error(`macOS Keychain command could not start (${String(error)})`)))
       child.on('close', (code) => {
         if (code === 0) resolve(stdout.trim())
         else if (missingIsNull && code === 44) resolve(null)
@@ -117,12 +139,32 @@ export class SecurityCliSecretStore implements SecretStore {
     ], `${value}\n`, false)
   }
 
-  private run(args: string[], input: string | undefined, missingIsNull: boolean): Promise<string | null> {
+  private async run(args: string[], input: string | undefined, missingIsNull: boolean): Promise<string | null> {
     if (process.platform !== 'darwin') {
-      return Promise.reject(new Error('macOS Keychain is unavailable on this platform'))
+      throw new Error('macOS Keychain is unavailable on this platform')
     }
+    let lastError: Error | null = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await this.runOnce(args, input, missingIsNull)
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        if (!String(lastError.message).includes('EBADF')) throw lastError
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    }
+    throw new Error(`Keychain 调用失败(${lastError?.message || 'unknown'});请重启 Swob 后重试`)
+  }
+
+  private runOnce(args: string[], input: string | undefined, missingIsNull: boolean): Promise<string | null> {
     return new Promise((resolve, reject) => {
-      const child = this.spawnSecurity(SECURITY_PATH, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+      let child: ChildProcessWithoutNullStreams
+      try {
+        child = this.spawnSecurity(SECURITY_PATH, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+      } catch (error) {
+        reject(error)
+        return
+      }
       const stdout: Buffer[] = []
       let stdoutLength = 0
       child.stdout.on('data', (chunk: Buffer) => {

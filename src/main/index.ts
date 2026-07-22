@@ -68,6 +68,11 @@ import { spotlightSearch } from './spotlight-search'
 import { searchIndexedSessions } from './session-search'
 import { synchronizeSearchSources } from './search-index'
 import { buildInsights } from './insights'
+import {
+  drilldownInsights,
+  queryInsights,
+  sessionUsageEvents
+} from './usage-fact-store'
 import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transcript-watcher'
 import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worker'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
@@ -138,6 +143,7 @@ import {
   writeSessionLineageRegistry
 } from './session-lineage'
 import type { Folder, Highlight, SessionSummary } from './types'
+import type { AnalysisDimension, AnalysisScope, UsageFactSyncResult } from './analysis-contract'
 import { generateSkillContent } from '../cli/command-registry'
 import { runtimeHome } from './runtime-home'
 import { hasPortablePathSegment } from './portable-path'
@@ -161,6 +167,9 @@ let latestLibraryTree: LibraryTree | null = null
 let libraryInitializationPromise: Promise<void> | null = null
 let libraryHydrationGeneration = 0
 let searchIndexWarmScheduled = false
+let usageFactsInitialized = false
+let usageFactSyncError: unknown = null
+let usageFactSyncTail: Promise<void> = Promise.resolve()
 
 // --- Active Session Detection ---
 let previousActiveIds: string[] = []
@@ -363,6 +372,7 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     const parentIndex = cachedSessions.findIndex((session) => session.id === continuationParent.id)
     if (parentIndex >= 0) cachedSessions[parentIndex] = updatedParent
     mainWindow?.webContents.send('session:summaryUpdated', updatedParent)
+    void scheduleUsageFactSync()
     return
   }
 
@@ -378,6 +388,7 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     knownSessionIds.add(summary.sessionId)
     mainWindow?.webContents.send('session:added', summary)
   }
+  void scheduleUsageFactSync()
 }
 
 function scheduleSessionSynchronization(request: SessionSyncRequest): void {
@@ -402,6 +413,47 @@ function scheduleSearchIndexWarmup(): void {
   timer.unref?.()
 }
 
+function currentAnalysisFolders(): Folder[] {
+  try {
+    return latestLibraryTree
+      ? libraryTreeToConfig(latestLibraryTree).folders || []
+      : loadConfig().folders || []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Serialize fact writes in the Library worker. The query path only waits for
+ * the current snapshot; it never parses source JSONL or performs a new scan.
+ */
+function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
+  usageFactsInitialized = true
+  const sessions = [...cachedSessions]
+  const folders = currentAnalysisFolders()
+  const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+  const run = usageFactSyncTail
+    .catch(() => { /* the next snapshot supersedes a failed one */ })
+    .then(() => worker.syncUsageFacts(getLibraryRoot(), sessions, folders, options))
+  usageFactSyncTail = run.then(
+    () => { usageFactSyncError = null },
+    (error) => {
+      usageFactSyncError = error
+      console.error('[usage-facts] background synchronization failed:', error)
+    }
+  )
+  return run
+}
+
+async function ensureUsageFactsReady(): Promise<void> {
+  if (!usageFactsInitialized) {
+    await scheduleUsageFactSync()
+    return
+  }
+  await usageFactSyncTail
+  if (usageFactSyncError) await scheduleUsageFactSync()
+}
+
 async function reloadSessionsForAction(): Promise<SessionSummary[]> {
   cachedSessions = await loadAllSessions()
   for (const s of cachedSessions) {
@@ -411,6 +463,7 @@ async function reloadSessionsForAction(): Promise<SessionSummary[]> {
       knownSessionIds.add(continuationId)
     }
   }
+  void scheduleUsageFactSync()
   return cachedSessions
 }
 
@@ -679,6 +732,7 @@ function adoptLibraryTree(tree: LibraryTree, notifyRenderer = true): LibraryTree
   applyLibraryTree(tree)
   refreshCachedMissingSources()
   scheduleSearchIndexWarmup()
+  if (cachedSessions.length > 0) void scheduleUsageFactSync()
   transcriptWatcher?.refresh()
   if (notifyRenderer) emitLibraryPatch([], tree)
   return tree
@@ -755,6 +809,7 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
     } catch { /* skip an unparseable or unavailable iCloud backup */ }
   }
   await flush()
+  void scheduleUsageFactSync()
 }
 
 async function initializeLibraryScanInBackground(): Promise<void> {
@@ -1091,6 +1146,7 @@ ipcMain.handle('sessions:loadAll', async () => {
   const sessions = filterExcludedSources(await loadAllSessions())
   cachedSessions = sessions
   scheduleSearchIndexWarmup()
+  void scheduleUsageFactSync()
   knownSessionIds.clear()
 
   // Phase 1 only: return source summaries immediately. Library annotation and
@@ -1346,22 +1402,39 @@ ipcMain.handle(
 // --- Insights IPC ---
 ipcMain.handle('insights:get', () => {
   const sessions = cachedSessions
-  let folders: Folder[] = []
-  try {
-    if (latestLibraryTree) {
-      const cfg = libraryTreeToConfig(latestLibraryTree)
-      folders = cfg.folders || []
-    } else {
-      const cfg = loadConfig()
-      folders = cfg.folders || []
-    }
-  } catch { /* ignore */ }
+  const folders = currentAnalysisFolders()
   const sessionTimes = new Map<string, number>()
   for (const s of sessions) {
     if (s.estimatedTime) sessionTimes.set(s.sessionId, s.estimatedTime)
   }
   return buildInsights(sessions, folders, sessionTimes)
 })
+
+ipcMain.handle(
+  'insights:query',
+  async (_event, scope: AnalysisScope, dimension: AnalysisDimension) => {
+    await ensureUsageFactsReady()
+    return queryInsights(scope, dimension)
+  }
+)
+
+ipcMain.handle(
+  'insights:drilldown',
+  async (_event, scope: AnalysisScope, dimension: AnalysisDimension, key: string) => {
+    await ensureUsageFactsReady()
+    return drilldownInsights(scope, dimension, key)
+  }
+)
+
+ipcMain.handle(
+  'insights:sessionEvents',
+  async (_event, sessionId: string, scope: AnalysisScope) => {
+    await ensureUsageFactsReady()
+    return sessionUsageEvents(sessionId, scope)
+  }
+)
+
+ipcMain.handle('insights:rebuildFacts', () => scheduleUsageFactSync({ rebuild: true }))
 
 // --- Lineage IPC ---
 

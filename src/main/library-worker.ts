@@ -16,7 +16,9 @@ import { buildCodexSessionSummary } from './codex-loader'
 import { buildCursorSessionSummary } from './cursor-loader'
 import { detectSessionSourceFromPath } from './session-source'
 import { indexParsedSearchSource, indexSearchSource } from './search-index'
-import type { SessionSummary } from './types'
+import { synchronizeUsageFacts } from './usage-fact-store'
+import type { Folder, SessionSummary } from './types'
+import type { UsageFactSyncResult } from './analysis-contract'
 
 export type LibraryWorkerRequest =
   | { type: 'scan'; root: string; ignoreDirs?: string[] }
@@ -35,6 +37,13 @@ export type LibraryWorkerRequest =
       source?: 'claude-code' | 'codex' | 'cursor' | 'transcript'
       maintainLibrary?: boolean
     }
+  | {
+      type: 'usage-facts-sync'
+      root: string
+      sessions: SessionSummary[]
+      folders: Folder[]
+      rebuild?: boolean
+    }
 
 export interface LibraryWorkerSessionSyncResult {
   summary: SessionSummary
@@ -44,6 +53,7 @@ export interface LibraryWorkerSessionSyncResult {
 type LibraryWorkerResult =
   | { kind: 'tree'; tree: LibraryTree }
   | { kind: 'session-sync'; value: LibraryWorkerSessionSyncResult }
+  | { kind: 'usage-facts-sync'; value: UsageFactSyncResult }
 
 export interface LibraryWorkerProgress {
   current: number
@@ -65,9 +75,15 @@ export async function runLibraryWorkerRequest(
   request: LibraryWorkerRequest,
   onProgress?: (progress: LibraryWorkerProgress) => void
 ): Promise<LibraryWorkerResult> {
+  if (request.type === 'usage-facts-sync') {
+    return {
+      kind: 'usage-facts-sync',
+      value: synchronizeUsageFacts(request.sessions, request.folders, { rebuild: request.rebuild })
+    }
+  }
   initLibrary(request.root, {
     readOnly: request.type === 'scan',
-    ignoreDirs: request.type === 'session-sync' ? undefined : request.ignoreDirs
+    ignoreDirs: request.type === 'scan' || request.type === 'sync' ? request.ignoreDirs : undefined
   })
   if (request.type === 'scan') return { kind: 'tree', tree: scanLibrary() }
   if (request.type === 'sync') {
@@ -75,7 +91,6 @@ export async function runLibraryWorkerRequest(
     await syncLibraryFromSessions(request.sessions, request.sessionMeta, onProgress)
     return { kind: 'tree', tree: scanLibrary() }
   }
-
   const detectedSource = request.source === 'transcript'
     ? detectSessionSourceFromPath(request.filePath)
     : request.source || detectSessionSourceFromPath(request.filePath)
@@ -182,6 +197,24 @@ export class LibraryWorkerClient {
     })
   }
 
+  syncUsageFacts(
+    root: string,
+    sessions: SessionSummary[],
+    folders: Folder[],
+    options: { rebuild?: boolean } = {}
+  ): Promise<UsageFactSyncResult> {
+    return this.request({
+      type: 'usage-facts-sync',
+      root,
+      sessions,
+      folders,
+      rebuild: options.rebuild
+    }).then((result) => {
+      if (result.kind !== 'usage-facts-sync') throw new Error('Library worker returned an invalid usage fact result')
+      return result.value
+    })
+  }
+
   close(): void {
     const worker = this.worker
     this.worker = null
@@ -217,7 +250,7 @@ export class LibraryWorkerClient {
       if (reply.type === 'result') pending.resolve(reply.result)
       else pending.reject(new Error(reply.error))
     })
-    worker.on('error', (error) => this.failAll(error))
+    worker.on('error', (error) => this.failAll(error instanceof Error ? error : new Error(String(error))))
     worker.on('exit', (code) => {
       if (this.worker === worker) this.worker = null
       if (code !== 0) this.failAll(new Error(`Library worker exited with code ${code}`))

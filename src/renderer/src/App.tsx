@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { UpdateBanner } from './components/UpdateBanner'
 import { Onboarding } from './components/Onboarding'
+import { useFeedbackToast } from './hooks/useFeedbackToast'
 import { BUILTIN_VIEW_IDS, builtinViewRegistry } from './registry/builtin-view-registry'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 
@@ -130,6 +131,8 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [infoPanelWidth, setInfoPanelWidth] = useState(320)
   const [onboarding, setOnboarding] = useState<{ needed: boolean; defaultPath: string } | null>(null)
+
+  useFeedbackToast()
 
   useEffect(() => {
     initialize()

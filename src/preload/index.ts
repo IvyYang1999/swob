@@ -144,6 +144,7 @@ const api = {
   // Shell
   openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
   showItemInFolder: (filePath: string) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
+  openExternalUrl: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 
   // Native drag
   startDrag: (filePath: string, title: string) => ipcRenderer.send('session:startDrag', filePath, title),

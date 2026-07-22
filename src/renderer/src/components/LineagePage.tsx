@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { GitBranch } from 'lucide-react'
 
@@ -44,17 +44,50 @@ interface Edge {
   type: string // lineage | project | source | time | cwd | files
 }
 
+interface LineageGraphSession {
+  sessionId: string
+  id: string
+  source: string
+  projectPath?: string
+  firstUserMessage?: string
+  turnCount: number
+  createdAt: string
+  tokenUsage?: { totalTokens: number }
+  compactCount: number
+  cwds?: string[]
+  referencedFiles?: Array<{ path: string }>
+}
+
+const LAYOUT_DEBOUNCE_MS = 500
+
+/**
+ * Library hydration replaces session object/array identities in small batches.
+ * The graph must only rebuild when data consumed by buildGraph changes, otherwise
+ * an unrelated metadata patch turns the O(sessions * iterations) simulation into
+ * a renderer event-loop hot spin.
+ */
+export function lineageGraphFingerprint(sessions: LineageGraphSession[]): string {
+  return JSON.stringify(sessions.map((session) => [
+    session.id,
+    session.sessionId,
+    session.source || 'claude-code',
+    session.projectPath || '',
+    session.firstUserMessage || '',
+    session.turnCount,
+    session.createdAt,
+    session.tokenUsage?.totalTokens ?? null,
+    session.compactCount || 0,
+    session.cwds || [],
+    (session.referencedFiles || []).map((file) => file.path)
+  ]))
+}
+
 function dayKey(ts: number): number {
   return Math.floor(ts / 86400000)
 }
 
 function buildGraph(
-  sessions: Array<{
-    sessionId: string; id: string; source: string; projectPath?: string;
-    firstUserMessage?: string; turnCount: number; createdAt: string;
-    tokenUsage?: { totalTokens: number }; compactCount: number;
-    cwds?: string[]; referencedFiles?: Array<{ path: string }>
-  }>,
+  sessions: LineageGraphSession[],
   registry: { relations: Array<{ parent: string; child: string; type: string }> } | null
 ) {
   const idToIdx = new Map<string, number>()
@@ -277,7 +310,14 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
 
 export function LineagePage() {
   const sessions = useStore((s) => s.sessions)
-  const graphSessions = sessions.filter((session) => session.turnCount > 0)
+  const graphSessions = useMemo(
+    () => sessions.filter((session) => session.turnCount > 0) as LineageGraphSession[],
+    [sessions]
+  )
+  const graphFingerprint = useMemo(
+    () => lineageGraphFingerprint(graphSessions),
+    [graphSessions]
+  )
   const selectSession = useStore((s) => s.selectSession)
   const toggleLineage = useStore((s) => s.toggleLineage)
   const locale = useStore((s) => s.locale)
@@ -292,19 +332,25 @@ export function LineagePage() {
 
   useEffect(() => {
     if (graphSessions.length === 0) return
-
-    window.api.getLineageRegistry().then((registry: any) => {
-      const { nodes, edges } = buildGraph(graphSessions as any, registry)
+    let cancelled = false
+    const commitLayout = (registry: { relations: Array<{ parent: string; child: string; type: string }> } | null) => {
+      if (cancelled) return
+      const { nodes, edges } = buildGraph(graphSessions, registry)
       simulate(nodes, edges, 120)
+      if (cancelled) return
       graphRef.current = { nodes, edges }
       setReady(true)
-    }).catch(() => {
-      const { nodes, edges } = buildGraph(graphSessions as any, null)
-      simulate(nodes, edges, 120)
-      graphRef.current = { nodes, edges }
-      setReady(true)
-    })
-  }, [sessions])
+    }
+    const timer = window.setTimeout(() => {
+      void window.api.getLineageRegistry()
+        .then((registry: any) => commitLayout(registry))
+        .catch(() => commitLayout(null))
+    }, LAYOUT_DEBOUNCE_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [graphFingerprint])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current

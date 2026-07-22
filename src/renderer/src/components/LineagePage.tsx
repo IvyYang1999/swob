@@ -319,8 +319,7 @@ export function LineagePage() {
     () => lineageGraphFingerprint(graphSessions),
     [graphSessions]
   )
-  const selectSession = useStore((s) => s.selectSession)
-  const setWorkspaceView = useStore((s) => s.setWorkspaceView)
+  const openSession = useStore((s) => s.openSession)
   const locale = useStore((s) => s.locale)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -536,13 +535,9 @@ export function LineagePage() {
     if (dragRef.current.dragging) return
     const node = findNodeAt(e.clientX, e.clientY)
     if (node) {
-      const session = sessions.find((s) => s.sessionId === node.id)
-      if (session) {
-        setWorkspaceView('chat')
-        selectSession(session.filePath, session.allFilePaths, session.id)
-      }
+      openSession(node.id)
     }
-  }, [findNodeAt, sessions, selectSession, setWorkspaceView])
+  }, [findNodeAt, openSession])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()

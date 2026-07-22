@@ -33,6 +33,7 @@ import React from 'react'
 const mockStore: any = {
   selectedUniqueId: null,
   selectSession: vi.fn(),
+  openSession: vi.fn(),
   config: {
     folders: [],
     sessionMeta: {

@@ -218,7 +218,7 @@ function layoutLines(
 export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
   const storeSessions = useStore((s) => s.sessions)
   const config = useStore((s) => s.config)
-  const selectSession = useStore((s) => s.selectSession)
+  const openSession = useStore((s) => s.openSession)
   const locale = useStore((s) => s.locale)
 
   const [registry, setRegistry] = useState<Registry | null>(null)
@@ -274,12 +274,9 @@ export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
 
   const handleClick = useCallback(
     (sid: string) => {
-      const session = storeSessions.find((s) => s.sessionId === sid)
-      if (session) {
-        selectSession(session.filePath, session.allFilePaths, session.id)
-      }
+      openSession(sid)
     },
-    [storeSessions, selectSession]
+    [openSession]
   )
 
   if (!layout || layout.nodes.length === 0) return null

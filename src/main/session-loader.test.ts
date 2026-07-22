@@ -1204,6 +1204,41 @@ describe('loadAllSessions per-file incremental cache', () => {
     }
   })
 
+  it('t117：报告固定快照中的 44 个 guardian 全部退出顶层，正常 Codex 数量不变', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-44-guardian-home-'))
+    const codexDir = path.join(home, '.codex', 'sessions', '2026', '07', '22')
+    const normalIds = ['normal-codex-a', 'normal-codex-b']
+
+    for (const [index, sessionId] of normalIds.entries()) {
+      writeJsonlAt(path.join(codexDir, `rollout-normal-${index}.jsonl`), codexRoleRows({
+        sessionId,
+        userText: `正常会话 ${index}`,
+        inputTokens: 10,
+        outputTokens: 2,
+        turnId: `normal-turn-${index}`
+      }) as RawJsonlMessage[])
+    }
+    for (let index = 0; index < 44; index++) {
+      writeJsonlAt(path.join(codexDir, `rollout-guardian-${index}.jsonl`), codexRoleRows({
+        sessionId: `guardian-${index}`,
+        userText: 'The following is the Codex agent history whose request action you are assessing.',
+        inputTokens: 3,
+        outputTokens: 1,
+        turnId: `guardian-turn-${index}`,
+        parentThreadId: normalIds[0],
+        source: { subagent: { other: 'guardian' } }
+      }) as RawJsonlMessage[])
+    }
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home)
+      expect(46 - sessions.length).toBe(44)
+      expect(sessions.map((session) => session.sessionId).sort()).toEqual(normalIds)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('当前不存在的文件会从新缓存删除', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cache-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'removed.jsonl')

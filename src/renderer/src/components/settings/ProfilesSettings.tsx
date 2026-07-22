@@ -291,7 +291,7 @@ export function ProfilesSettings() {
               >
                 {zh ? '取消' : 'Cancel'}
               </button>
-              <span className="text-[9px] text-faint">
+              <span className="text-[10px] text-faint">
                 {zh ? 'key 只进 macOS Keychain,不落明文文件' : 'Keys are stored in the macOS Keychain only'}
               </span>
             </div>
@@ -318,7 +318,7 @@ export function ProfilesSettings() {
               </select>
             </div>
           ))}
-          <div className="text-[9px] leading-relaxed text-faint">
+          <div className="text-[10px] leading-relaxed text-faint">
             {zh
               ? '未绑定的功能会在使用时提示先来这里配置。全局助手默认复用本机已装的 CLI(如 Claude Code),仅自定义 LLM 模式才需要绑定。'
               : 'Unbound features prompt for setup when used. The global agent reuses your installed CLI by default; binding is only for custom-LLM mode.'}

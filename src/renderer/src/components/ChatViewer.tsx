@@ -90,29 +90,25 @@ function scrollVirtualElement(
   element.scrollTo({ top: target, behavior })
 }
 
-// --- Source-specific assistant avatars (using official brand icons) ---
+// --- Source-specific assistant avatars (via HarnessPresentationRegistry) ---
 
-import claudeIcon from '../assets/icons/claude.png'
-import openaiIcon from '../assets/icons/openai.png'
-import cursorIcon from '../assets/icons/cursor.png'
+import { getHarnessPresentation } from '../utils/harness-presentation'
 
 function AssistantAvatar({ source }: { source?: string }) {
-  if (source === 'opencode') {
-    return <div className="w-7 h-7 rounded-full shrink-0 mt-0.5 bg-soft-emerald/15 text-soft-emerald flex items-center justify-center text-[10px] font-semibold">OC</div>
+  const p = getHarnessPresentation(source)
+  if (p.iconImage) {
+    return <img src={p.iconImage} className="w-7 h-7 rounded-full shrink-0 mt-0.5" alt="" />
   }
-  if (source === 'zcode') {
-    return <div className="w-7 h-7 rounded-full shrink-0 mt-0.5 bg-soft-cyan/15 text-soft-cyan flex items-center justify-center text-[10px] font-semibold">ZC</div>
-  }
-  const icon = source === 'codex' ? openaiIcon : source === 'cursor' ? cursorIcon : claudeIcon
-  return <img src={icon} className="w-7 h-7 rounded-full shrink-0 mt-0.5" alt="" />
+  return (
+    <div className={`w-7 h-7 rounded-full shrink-0 mt-0.5 flex items-center justify-center text-[10px] font-semibold ${p.badgeClass}`}>
+      {p.shortLabel}
+    </div>
+  )
 }
 
 function AssistantLabel({ source }: { source?: string }) {
-  if (source === 'codex') return <span className="text-xs font-medium text-secondary">Codex</span>
-  if (source === 'cursor') return <span className="text-xs font-medium text-secondary">Cursor</span>
-  if (source === 'opencode') return <span className="text-xs font-medium text-secondary">opencode</span>
-  if (source === 'zcode') return <span className="text-xs font-medium text-secondary">Zcode</span>
-  return <span className="text-xs font-medium text-secondary">Claude Code</span>
+  const p = getHarnessPresentation(source)
+  return <span className="text-xs font-medium text-secondary">{p.displayName}</span>
 }
 
 function independentResumeSessionId(session: SessionDetail): string | null {
@@ -376,9 +372,10 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
 
 // --- Turn block ---
 
-const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
+const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userDisplayName, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
   turn: Turn; viewMode: 'compact' | 'full'
   sessionSource?: string
+  userDisplayName?: string
   qSelected?: boolean; aSelected?: boolean
   selectMode?: boolean
   onSelectQ?: (uuid: string) => void; onSelectA?: (uuid: string) => void
@@ -431,7 +428,7 @@ const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, qSele
             <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#5a8fb8] text-white"><User size={14} /></div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs font-medium text-secondary">User</span>
+                <span className="text-xs font-medium text-secondary">{userDisplayName || 'User'}</span>
                 <span className="text-[11px] text-faint">{formatTime(turn.userMsg.timestamp, locale)}</span>
                 <button
                   onClick={copyQuery}
@@ -1298,6 +1295,18 @@ export function ChatViewer() {
   const firstVisibleTurnRef = useRef<string | null>(null)
   const [virtualRenderVersion, setVirtualRenderVersion] = useState(0)
 
+  // User identity for display name in chat
+  const [userDisplayName, setUserDisplayName] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    const api = (window as any).api
+    if (!api?.profileGetUserIdentity) return
+    api.profileGetUserIdentity().then((result: { ok: boolean; value?: { displayName: string } }) => {
+      if (result.ok && result.value?.displayName) {
+        setUserDisplayName(result.value.displayName)
+      }
+    }).catch(() => { /* identity unavailable — use fallback */ })
+  }, [])
+
   const sections = useMemo<CompactSection[]>(() => {
     if (!selectedSession) return []
     return computeSections(selectedSession, locale)
@@ -2069,6 +2078,7 @@ export function ChatViewer() {
                             turn={row.turn}
                             viewMode={viewMode as 'compact' | 'full'}
                             sessionSource={selectedSession.source}
+                            userDisplayName={userDisplayName}
                             qSelected={row.turn.userMsg ? selectedItems.has(`q:${row.turn.userMsg.uuid}`) : false}
                             aSelected={row.turn.userMsg ? selectedItems.has(`a:${row.turn.userMsg.uuid}`) : false}
                             selectMode={selectMode}

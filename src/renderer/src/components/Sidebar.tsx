@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useStore, type SessionSummary, type Folder, type VaultFile } from '../store'
 import { useT } from '../i18n'
 import { groupSessionsByLens, type LensDimension, type LensGroup } from '../../../shared/vault-lens'
+import { getHarnessPresentation } from '../utils/harness-presentation'
 import {
   FolderPlus, Folder as FolderIcon, ChevronRight, ChevronDown,
   MessageSquare, Clock, Trash2,
@@ -144,39 +145,14 @@ function SessionItem({
       <div className="flex items-center gap-2 mt-0.5 text-xs text-muted overflow-hidden">
         <Clock size={10} className="shrink-0" /><span className="whitespace-nowrap">{formatDate(session.updatedAt, locale, t)}</span>
         <MessageSquare size={10} className="shrink-0" /><span className="whitespace-nowrap">{t('sidebar.turns', { n: session.turnCount })}</span>
-        {(!session.source || session.source === 'claude-code') && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-orange/15 text-soft-orange font-medium">CC</span>
-        )}
-        {session.source === 'codex' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-blue/15 text-soft-blue font-medium">Codex</span>
-        )}
-        {session.source === 'cursor' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-secondary/10 text-secondary font-medium">Cursor</span>
-        )}
-        {session.source === 'opencode' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-emerald/15 text-soft-emerald font-medium">OC</span>
-        )}
-        {session.source === 'zcode' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-cyan/15 text-soft-cyan font-medium">ZC</span>
-        )}
-        {session.source === 'cc-mirror' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-pink/15 text-soft-pink font-medium">Mirror</span>
-        )}
-        {session.source === 'antigravity' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-purple/15 text-soft-purple font-medium">AGY</span>
-        )}
-        {session.source === 'grok' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-secondary/10 text-secondary font-medium">Grok</span>
-        )}
-        {session.source === 'pi' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-teal/15 text-soft-teal font-medium">Pi</span>
-        )}
-        {session.source === 'kimi' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-orange/15 text-soft-orange font-medium">Kimi</span>
-        )}
-        {session.source === 'hermes' && (
-          <span className="px-1 rounded text-[10px] whitespace-nowrap shrink-0 bg-soft-purple/15 text-soft-purple font-medium">Hermes</span>
-        )}
+        {(() => {
+          const hp = getHarnessPresentation(session.source)
+          return (
+            <span className={`px-1 rounded text-[10px] whitespace-nowrap shrink-0 font-medium ${hp.badgeClass}`}>
+              {hp.shortLabel}
+            </span>
+          )
+        })()}
         {session.compactCount > 0 && (
           <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
         )}

@@ -7,6 +7,10 @@ import { SessionFamilyTree } from './SessionFamilyTree'
 import { ExecutionTreePanel } from './ExecutionTreePanel'
 import { ContextInspectorPanel } from './ContextInspectorPanel'
 import { SessionAuditPanel } from './SessionAuditPanel'
+import { InspectorTabs, DisclosureSection } from './inspector'
+import type { InspectorTab } from './inspector'
+
+// ─── Shared types & utilities ───────────────────────────────────────
 
 interface FileRef {
   path: string
@@ -41,6 +45,8 @@ function formatTokenShort(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
 }
+
+// ─── Shared sub-components ──────────────────────────────────────────
 
 function ClickablePath({ path, isDir, dimmed }: { path: string; isDir?: boolean; dimmed?: boolean }) {
   const t = useT()
@@ -94,7 +100,8 @@ function ActionIcon({ action }: { action: string }) {
   }
 }
 
-// Build a directory tree from flat file list, collapsing single-child intermediate dirs
+// ─── File tree building ─────────────────────────────────────────────
+
 function buildFileTree(files: FileRef[]): TreeNode {
   const root: TreeNode = { name: '', fullPath: '', children: new Map() }
 
@@ -115,7 +122,6 @@ function buildFileTree(files: FileRef[]): TreeNode {
     node.file = f
   }
 
-  // Collapse single-child dirs that aren't files
   function collapse(node: TreeNode): TreeNode {
     for (const [key, child] of node.children) {
       node.children.set(key, collapse(child))
@@ -202,6 +208,8 @@ function FileTreeNode({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
   return null
 }
 
+// ─── CollapsibleFileList ────────────────────────────────────────────
+
 function CollapsibleFileList({
   icon: Icon, label, paths, isDir, defaultOpen = true, maxShow = 5
 }: {
@@ -251,16 +259,16 @@ function CollapsibleFileList({
   )
 }
 
-/** A single image entry collected from session messages */
+// ─── ImageThumb / ImageGallery ──────────────────────────────────────
+
 interface ImageEntry {
-  src: string | null // data URL, null if not yet loaded
+  src: string | null
   turnUuid: string
   originalPath?: string
   isPasted: boolean
   status: 'exists' | 'cached' | 'missing' | 'loading'
 }
 
-/** Thumbnail that lazy-loads file-path images via IPC */
 function ImageThumb({ entry, onClick, onContextMenu }: { entry: ImageEntry; onClick: () => void; onContextMenu: (e: React.MouseEvent) => void }) {
   const [lightbox, setLightbox] = useState(false)
   const locale = useStore((s) => s.locale)
@@ -287,11 +295,9 @@ function ImageThumb({ entry, onClick, onContextMenu }: { entry: ImageEntry; onCl
             ) : '?'}
           </div>
         )}
-        {/* Label overlay */}
         <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-[9px] text-white px-1 py-0.5 truncate opacity-0 group-hover:opacity-100 transition-opacity">
           {entry.isPasted ? (locale === 'zh-CN' ? '粘贴' : 'Pasted') : fileName}
         </div>
-        {/* Status badge for moved/cached */}
         {entry.originalPath && entry.status === 'cached' && (
           <div className="absolute top-0.5 right-0.5 bg-soft-amber/80 text-[8px] text-white px-1 rounded">{locale === 'zh-CN' ? '缓存' : 'cache'}</div>
         )}
@@ -305,24 +311,19 @@ function ImageThumb({ entry, onClick, onContextMenu }: { entry: ImageEntry; onCl
   )
 }
 
-/** Collect all images from session messages, lazy-load file-path ones */
-/** Collect deduplicated images: prefer file-path entries, pure pasted as fallback */
 function useSessionImages(messages: Array<{ uuid: string; type: string; timestamp: string; images: string[]; textContent: string }>) {
   const [entries, setEntries] = useState<ImageEntry[]>([])
 
   useEffect(() => {
     const collected: ImageEntry[] = []
     const filePathsToLoad: Array<{ idx: number; path: string }> = []
-    // Track timestamps that have file-path references (to skip their base64 duplicates)
     const timestampsWithPaths = new Set<string>()
 
-    // Pass 1: collect file-path references
     for (const msg of messages) {
       if (msg.type !== 'user') continue
       const paths = [...msg.textContent.matchAll(/\[Image: source: ([^\]]+)\]/g)]
       if (paths.length === 0) continue
       timestampsWithPaths.add(msg.timestamp)
-      // Find the message with base64 images at same timestamp (for navigation UUID + fallback)
       const imageMsg = messages.find(m => m.type === 'user' && m.uuid !== msg.uuid && m.images.length > 0 && m.timestamp === msg.timestamp)
       const navUuid = imageMsg?.uuid || msg.uuid
       for (let i = 0; i < paths.length; i++) {
@@ -333,7 +334,6 @@ function useSessionImages(messages: Array<{ uuid: string; type: string; timestam
       }
     }
 
-    // Pass 2: collect pure pasted images (no file-path at same timestamp)
     for (const msg of messages) {
       if (msg.type !== 'user' || msg.images.length === 0) continue
       if (timestampsWithPaths.has(msg.timestamp)) continue
@@ -344,7 +344,6 @@ function useSessionImages(messages: Array<{ uuid: string; type: string; timestam
 
     setEntries(collected)
 
-    // Async load file-path images (overrides base64 fallback with actual file)
     for (const { idx, path: fp } of filePathsToLoad) {
       ;(window as any).api.loadImage(fp).then((result: { dataUrl: string | null; status: string }) => {
         setEntries(prev => {
@@ -403,6 +402,8 @@ function ImageGallery({ messages, onNavigate }: {
   )
 }
 
+// ─── FileTreeSection ────────────────────────────────────────────────
+
 function FileTreeSection({ files }: { files: FileRef[] }) {
   const t = useT()
   const [open, setOpen] = useState(true)
@@ -435,6 +436,8 @@ function FileTreeSection({ files }: { files: FileRef[] }) {
     </section>
   )
 }
+
+// ─── HighlightList ──────────────────────────────────────────────────
 
 function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; sessionId: string }) {
   const { removeHighlight } = useStore()
@@ -507,6 +510,391 @@ function HighlightList({ highlights, sessionId }: { highlights: Highlight[]; ses
   )
 }
 
+// ─── Branch Relationships ───────────────────────────────────────────
+
+function BranchRelationships({ session }: { session: any }) {
+  const locale = useStore((s) => s.locale)
+  const { sessions, config, selectSession } = useStore()
+
+  const branchParentId = session.branchParentId as string | undefined
+  const branchChildIds = session.branchChildIds as string[] | undefined
+  const isIntraBranch = !!session.branchLeafUuid
+  const isForkBranch = !!branchParentId && !isIntraBranch
+  const hasBranches = (branchChildIds && branchChildIds.length > 0) || isIntraBranch || isForkBranch
+
+  if (!hasBranches) return null
+
+  return (
+    <section>
+      <div className="flex items-center gap-2 text-xs font-medium text-soft-purple mb-2">
+        <GitBranch size={12} />
+        <span>{locale === 'zh-CN' ? '分支关系' : 'Branch Tree'}</span>
+      </div>
+      <div className="space-y-1.5">
+        {branchParentId && (() => {
+          const parent = sessions.find((ps) => ps.id === branchParentId)
+          if (!parent) return null
+          const pMeta = config?.sessionMeta?.[parent.sessionId] || config?.sessionMeta?.[parent.id]
+          const pTitle = pMeta?.customTitle || parent.firstUserMessage?.slice(0, 40) || parent.id.slice(0, 12)
+          return (
+            <button
+              key="parent"
+              onClick={() => selectSession(parent.filePath, (parent as any).allFilePaths, parent.id, (parent as any).branchParentFilePaths, (parent as any).branchPointUuid, (parent as any).branchLeafUuid)}
+              className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
+            >
+              <div className="text-soft-purple/60 text-[10px] mb-0.5">{locale === 'zh-CN' ? '↑ 母分支' : '↑ Parent'}</div>
+              <div className="text-body truncate">{pTitle}</div>
+              <div className="text-muted text-[10px] mt-0.5">{parent.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
+            </button>
+          )
+        })()}
+        {isForkBranch && (
+          <div className="px-2 py-1 text-[10px] text-soft-blue/60 border-l-2 border-soft-blue/30 ml-1">
+            ● {locale === 'zh-CN' ? '当前（Fork 分支，可独立 Resume）' : 'Current (fork, can resume independently)'}
+          </div>
+        )}
+        {!isIntraBranch && !isForkBranch && (
+          <div className="px-2 py-1 text-[10px] text-soft-emerald/60 border-l-2 border-soft-emerald/30 ml-1">
+            ● {locale === 'zh-CN' ? '当前（主分支）' : 'Current (main)'}
+          </div>
+        )}
+        {isIntraBranch && (
+          <div className="px-2 py-1 text-[10px] text-soft-purple/60 border-l-2 border-soft-purple/30 ml-1">
+            ● {locale === 'zh-CN' ? '当前分支' : 'Current branch'}
+          </div>
+        )}
+        {branchChildIds && branchChildIds.length > 0 && branchChildIds.map((childId) => {
+          const child = sessions.find((cs) => cs.id === childId)
+          if (!child) return null
+          const cMeta = config?.sessionMeta?.[child.sessionId] || config?.sessionMeta?.[child.id]
+          const cTitle = cMeta?.customTitle || child.firstUserMessage?.slice(0, 40) || child.id.slice(0, 12)
+          return (
+            <button
+              key={childId}
+              onClick={() => selectSession(child.filePath, (child as any).allFilePaths, child.id, (child as any).branchParentFilePaths, (child as any).branchPointUuid, (child as any).branchLeafUuid)}
+              className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
+            >
+              <div className="text-soft-purple/60 text-[10px] mb-0.5">↳ {locale === 'zh-CN' ? '子分支' : 'Child branch'}</div>
+              <div className="text-body truncate">{cTitle}</div>
+              <div className="text-muted text-[10px] mt-0.5">{child.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
+            </button>
+          )
+        })}
+      </div>
+      <div className="mt-2 px-2 py-1.5 rounded bg-surface/30 text-[10px] text-muted leading-relaxed">
+        {isForkBranch ? (
+          locale === 'zh-CN'
+            ? <><span className="text-secondary">Fork 分支</span>：通过 <code className="text-soft-purple/80">/branch</code> 或 <code className="text-soft-purple/80">/fork</code> 创建的独立对话，可以单独 Resume。</>
+            : <><span className="text-secondary">Fork branch</span>: Created via <code className="text-soft-purple/80">/branch</code> or <code className="text-soft-purple/80">/fork</code>, can be resumed independently.</>
+        ) : (
+          locale === 'zh-CN'
+            ? <>
+                <span className="text-secondary">主对话</span> = 对话轮数最多的那条路径。两个终端同时 resume 同一个 session 会产生分支，谁聊得多谁就是主对话。
+                <br /><span className="text-secondary">Resume 限制</span>：<code className="text-soft-purple/80">claude --resume</code> 只能恢复主对话，无法单独恢复分支（Claude Code CLI 限制）。分支的完整对话可在此处查看。
+              </>
+            : <>
+                <span className="text-secondary">Main session</span> = the path with the most turns. When two terminals resume the same session simultaneously, whichever has more turns becomes main.
+                <br /><span className="text-secondary">Resume limitation</span>: <code className="text-soft-purple/80">claude --resume</code> only restores the main path (CLI limitation). Branch conversations are fully viewable here.
+              </>
+        )}
+      </div>
+    </section>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Tab 1: Details
+// ═══════════════════════════════════════════════════════════════════
+
+function DetailsTab({ session, highlights, onNavigate }: {
+  session: any
+  highlights: Highlight[]
+  onNavigate?: (id: string) => void
+}) {
+  const t = useT()
+  const locale = useStore((s) => s.locale)
+  const s = session
+
+  return (
+    <div className="space-y-4">
+      {/* Basic metadata */}
+      <section className="space-y-2 text-xs">
+        <div className="flex items-center gap-2 text-secondary">
+          <Clock size={12} />
+          <span>{t('info.created', { time: formatDateTime(s.createdAt, locale) })}</span>
+        </div>
+        <div className="flex items-center gap-2 text-secondary">
+          <Clock size={12} />
+          <span>{t('info.modified', { time: formatDateTime(s.updatedAt, locale) })}</span>
+        </div>
+        <div className="flex items-center gap-2 text-secondary">
+          <MessageSquare size={12} />
+          <span>{t('info.turns', { n: s.turnCount })}</span>
+        </div>
+        {s.compactCount > 0 && (
+          <div className="flex items-center gap-2 text-soft-amber text-xs">
+            <span>Compact: {s.compactCount}×</span>
+          </div>
+        )}
+        <div className="flex items-center gap-2 text-secondary">
+          <HardDrive size={12} />
+          <span>{formatSize(s.fileSizeBytes)} · v{s.version}</span>
+        </div>
+        {s.tokenAccounting?.provenance === 'unavailable' ? (
+          <div className="flex items-center gap-2 text-muted" title={s.tokenAccounting.unavailableReason || 'Authoritative token usage is unavailable'}>
+            <Coins size={12} />
+            <span>{locale === 'zh-CN' ? 'Token：不可用' : 'Tokens: unavailable'}</span>
+          </div>
+        ) : s.tokenUsage && (s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0 || s.tokenUsage.cacheCreationTokens > 0 || s.tokenUsage.cacheReadTokens > 0) && (
+          <div className="flex items-center gap-2 text-secondary" title="Processed input = non-cached input + cache read + cache write. Output is added once; reasoning remains an output subset.">
+            <Coins size={12} />
+            <span>
+              {formatTokenShort(s.tokenUsage.inputTokens + s.tokenUsage.cacheCreationTokens + s.tokenUsage.cacheReadTokens)} in / {formatTokenShort(s.tokenUsage.outputTokens)} out
+              {s.tokenUsage.cacheReadTokens > 0 && <span className="text-faint ml-1">({formatTokenShort(s.tokenUsage.cacheReadTokens)} cached)</span>}
+            </span>
+          </div>
+        )}
+        <div className="flex items-center gap-2 text-muted text-xs">
+          <span className="text-faint shrink-0">Session ID:</span>
+          <span className="text-[10px] font-mono select-all cursor-text truncate">{s.sessionId}</span>
+        </div>
+      </section>
+
+      {/* Highlights / annotations */}
+      <HighlightList highlights={highlights} sessionId={s.sessionId} />
+
+      {/* Branch relationships */}
+      <BranchRelationships session={s} />
+
+      {/* Session family tree (lineage) — default collapsed */}
+      <DisclosureSection
+        title={locale === 'zh-CN' ? '会话族谱' : 'Session Lineage'}
+        icon={<GitBranch size={12} className="text-soft-purple" />}
+        defaultOpen={false}
+      >
+        <SessionFamilyTree sessionId={s.sessionId} />
+      </DisclosureSection>
+
+      {/* CLAUDE.md content */}
+      {s.claudeMdContent && (
+        <section>
+          <div className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
+            <FileText size={12} />
+            <span>{t('info.claude_docs')}</span>
+          </div>
+          <pre className="text-[11px] text-muted bg-surface rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
+            {s.claudeMdContent}
+          </pre>
+        </section>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Tab 2: Files
+// ═══════════════════════════════════════════════════════════════════
+
+function FilesTab({ session, onNavigate }: {
+  session: any
+  onNavigate?: (id: string) => void
+}) {
+  const t = useT()
+  const locale = useStore((s) => s.locale)
+  const s = session
+  const referencedFiles: FileRef[] = s.referencedFiles || []
+  const configFiles: string[] = s.configFiles || []
+  const nonImageFiles = referencedFiles.filter((f: FileRef) => !f.actions.includes('user-image'))
+
+  // Group files by cwd
+  const cwdFileGroups = useMemo(() => {
+    if (s.cwds.length === 0 && nonImageFiles.length === 0) return []
+
+    const groups: Array<{ cwd: string; files: FileRef[] }> = []
+    for (const cwd of s.cwds) {
+      const cwdFiles = nonImageFiles.filter((f: FileRef) => f.path.startsWith(cwd + '/'))
+      groups.push({ cwd, files: cwdFiles })
+    }
+
+    // Files not under any cwd
+    const allCwdPrefixes = s.cwds.map((c: string) => c + '/')
+    const orphanFiles = nonImageFiles.filter((f: FileRef) =>
+      !allCwdPrefixes.some((prefix: string) => f.path.startsWith(prefix))
+    )
+    if (orphanFiles.length > 0) {
+      groups.push({ cwd: locale === 'zh-CN' ? '其他路径' : 'Other paths', files: orphanFiles })
+    }
+
+    return groups
+  }, [s.cwds, nonImageFiles, locale])
+
+  const totalFileCount = nonImageFiles.length
+
+  if (totalFileCount === 0 && configFiles.length === 0 && s.cwds.length === 0) {
+    return (
+      <div className="text-xs text-muted py-8 text-center">
+        {locale === 'zh-CN' ? '此会话没有文件操作记录' : 'No file operations in this session'}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* File tree grouped by cwd */}
+      {cwdFileGroups.map((group) => (
+        <DisclosureSection
+          key={group.cwd}
+          title={group.cwd.replace(/^\/Users\/[^/]+/, '~')}
+          icon={<FolderOpen size={12} />}
+          badge={group.files.length || undefined}
+          defaultOpen={false}
+        >
+          {group.files.length > 0 ? (
+            <div className="space-y-0.5 ml-1">
+              {group.files.map((f) => {
+                const relativePath = f.path.startsWith(group.cwd + '/')
+                  ? f.path.slice(group.cwd.length + 1)
+                  : f.path
+                const primaryAction = f.actions.includes('write') ? 'write'
+                  : f.actions.includes('edit') ? 'edit'
+                  : f.actions.includes('user-image') ? 'user-image'
+                  : f.actions.includes('user-input') ? 'user-input'
+                  : 'read'
+                return (
+                  <div
+                    key={f.path}
+                    className={`flex items-center gap-1 text-xs font-mono truncate cursor-pointer group ${
+                      f.exists ? 'text-secondary hover:text-soft-blue' : 'text-faint line-through'
+                    }`}
+                    title={`${f.path}\n${t('info.file_actions', { actions: f.actions.join(', ') })}${f.exists ? '' : '\n' + t('info.file_deleted')}\n${t('info.file_click_hint')}`}
+                    onClick={() => window.api.openPath(f.path)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      window.api.showItemInFolder(f.path)
+                    }}
+                  >
+                    <ActionIcon action={primaryAction} />
+                    <span className="truncate">{relativePath}</span>
+                    <div className="flex gap-0.5 shrink-0 ml-auto">
+                      {f.actions.map(a => <ActionBadge key={a} action={a} />)}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="text-[11px] text-muted ml-1">
+              {locale === 'zh-CN' ? '此目录下无文件操作' : 'No file operations under this directory'}
+            </div>
+          )}
+        </DisclosureSection>
+      ))}
+
+      {/* Image gallery */}
+      <ImageGallery
+        messages={s.messages || []}
+        onNavigate={(turnUuid) => onNavigate?.(`turn-${turnUuid}`)}
+      />
+
+      {/* Config files */}
+      <CollapsibleFileList
+        icon={Settings}
+        label={t('info.config_files')}
+        paths={configFiles}
+      />
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Tab 3: Audit
+// ═══════════════════════════════════════════════════════════════════
+
+function AuditTab({ session, analysisReady }: {
+  session: any
+  analysisReady: boolean
+}) {
+  const t = useT()
+  const locale = useStore((s) => s.locale)
+  const s = session
+  const toolEntries = Object.entries(s.toolUsage).sort((a, b) => (b[1] as number) - (a[1] as number))
+
+  if (!analysisReady) {
+    return (
+      <div className="text-xs text-muted py-8 text-center">
+        {locale === 'zh-CN' ? '正在加载审计数据...' : 'Loading audit data...'}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Session Audit — health score, metrics, anti-patterns */}
+      <SessionAuditPanel filePath={s.filePath} />
+
+      {/* Execution tree — default collapsed */}
+      <DisclosureSection
+        title={locale === 'zh-CN' ? '执行树' : 'Execution Tree'}
+        icon={<Wrench size={12} />}
+        defaultOpen={false}
+      >
+        <ExecutionTreePanel filePath={s.filePath} />
+      </DisclosureSection>
+
+      {/* Context Inspector — default collapsed */}
+      <DisclosureSection
+        title={locale === 'zh-CN' ? '上下文分析' : 'Context Analysis'}
+        icon={<MessageSquare size={12} />}
+        defaultOpen={false}
+      >
+        <ContextInspectorPanel filePath={s.filePath} />
+      </DisclosureSection>
+
+      {/* Tool usage — default collapsed */}
+      {toolEntries.length > 0 && (
+        <DisclosureSection
+          title={t('info.tool_usage')}
+          icon={<Wrench size={12} />}
+          badge={toolEntries.length}
+          defaultOpen={false}
+        >
+          <div className="space-y-1">
+            {toolEntries.map(([name, count]) => (
+              <div key={name} className="flex items-center justify-between text-xs">
+                <span className="text-secondary font-mono">{name}</span>
+                <span className="text-muted">{count as number}</span>
+              </div>
+            ))}
+          </div>
+        </DisclosureSection>
+      )}
+
+      {/* Skill invocations — default collapsed */}
+      {s.skillInvocations.length > 0 && (
+        <DisclosureSection
+          title={t('info.skill_invocations')}
+          icon={<Zap size={12} />}
+          badge={s.skillInvocations.length}
+          defaultOpen={false}
+        >
+          <div className="space-y-1">
+            {s.skillInvocations.map((si: { skillName: string; timestamp: string }, i: number) => (
+              <div key={i} className="text-xs">
+                <span className="text-secondary font-mono">{si.skillName}</span>
+                <span className="text-faint ml-2">{formatDateTime(si.timestamp, locale)}</span>
+              </div>
+            ))}
+          </div>
+        </DisclosureSection>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Main InfoPanel
+// ═══════════════════════════════════════════════════════════════════
+
 export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (id: string) => void }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
@@ -514,12 +902,16 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
     selectedSession: selectedSessionSnapshot,
     infoPanelOpen,
     config,
-    sessions,
-    selectSession
   } = useStore()
   const selectedSession = useDeferredValue(selectedSessionSnapshot)
   const [panelReadySessionId, setPanelReadySessionId] = useState<string | null>(null)
   const [analysisReadySessionId, setAnalysisReadySessionId] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<InspectorTab>('details')
+
+  // Reset tab to 'details' when session changes
+  useEffect(() => {
+    setActiveTab('details')
+  }, [selectedSession?.id])
 
   useEffect(() => {
     const sessionId = selectedSession?.id
@@ -538,237 +930,41 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
   if (!infoPanelOpen || !selectedSession || panelReadySessionId !== selectedSession.id) return null
 
   const s = selectedSession
-  const toolEntries = Object.entries(s.toolUsage).sort((a, b) => b[1] - a[1])
-  const referencedFiles: FileRef[] = (s as any).referencedFiles || []
-  const configFiles: string[] = (s as any).configFiles || []
   const highlights: Highlight[] = config?.sessionMeta?.[s.sessionId]?.highlights || []
-
-  // Branch relationship data
-  const branchParentId = (s as any).branchParentId as string | undefined
-  const branchChildIds = (s as any).branchChildIds as string[] | undefined
-  const isIntraBranch = !!(s as any).branchLeafUuid
-  const isForkBranch = !!branchParentId && !isIntraBranch
-  const hasBranches = (branchChildIds && branchChildIds.length > 0) || isIntraBranch || isForkBranch
-
-  // Non-image referenced files for the tree
-  const nonImageFiles = referencedFiles.filter(f => !f.actions.includes('user-image'))
 
   return (
     <div className="h-full bg-base overflow-y-auto shrink-0" style={{ width }}>
       <div className="p-4 space-y-4">
         <h3 className="text-sm font-medium text-body">{t('info.title')}</h3>
 
-        {/* Basic metadata */}
-        <section className="space-y-2 text-xs">
-          <div className="flex items-center gap-2 text-secondary">
-            <Clock size={12} />
-            <span>{t('info.created', { time: formatDateTime(s.createdAt, locale) })}</span>
-          </div>
-          <div className="flex items-center gap-2 text-secondary">
-            <Clock size={12} />
-            <span>{t('info.modified', { time: formatDateTime(s.updatedAt, locale) })}</span>
-          </div>
-          <div className="flex items-center gap-2 text-secondary">
-            <MessageSquare size={12} />
-            <span>{t('info.turns', { n: s.turnCount })}</span>
-          </div>
-          {s.compactCount > 0 && (
-            <div className="flex items-center gap-2 text-soft-amber text-xs">
-              <span>Compact: {s.compactCount}×</span>
-            </div>
-          )}
-          <div className="flex items-center gap-2 text-secondary">
-            <HardDrive size={12} />
-            <span>{formatSize(s.fileSizeBytes)} · v{s.version}</span>
-          </div>
-          {s.tokenAccounting?.provenance === 'unavailable' ? (
-            <div className="flex items-center gap-2 text-muted" title={s.tokenAccounting.unavailableReason || 'Authoritative token usage is unavailable'}>
-              <Coins size={12} />
-              <span>{locale === 'zh-CN' ? 'Token：不可用' : 'Tokens: unavailable'}</span>
-            </div>
-          ) : s.tokenUsage && (s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0 || s.tokenUsage.cacheCreationTokens > 0 || s.tokenUsage.cacheReadTokens > 0) && (
-            <div className="flex items-center gap-2 text-secondary" title="Processed input = non-cached input + cache read + cache write. Output is added once; reasoning remains an output subset.">
-              <Coins size={12} />
-              <span>
-                {formatTokenShort(s.tokenUsage.inputTokens + s.tokenUsage.cacheCreationTokens + s.tokenUsage.cacheReadTokens)} in / {formatTokenShort(s.tokenUsage.outputTokens)} out
-                {s.tokenUsage.cacheReadTokens > 0 && <span className="text-faint ml-1">({formatTokenShort(s.tokenUsage.cacheReadTokens)} cached)</span>}
-              </span>
-            </div>
-          )}
-          <div className="flex items-center gap-2 text-muted text-xs">
-            <span className="text-faint shrink-0">Session ID:</span>
-            <span className="text-[10px] font-mono select-all cursor-text truncate">{s.sessionId}</span>
-          </div>
-        </section>
-
-        {/* Highlights / annotations */}
-        <HighlightList highlights={highlights} sessionId={s.sessionId} />
-
-        {analysisReadySessionId === s.id && (
-          <>
-            {/* Session Audit — health score, metrics, anti-patterns */}
-            <SessionAuditPanel filePath={s.filePath} />
-
-            {/* Session family tree (lineage) */}
-            <SessionFamilyTree sessionId={s.sessionId} />
-
-            {/* Execution tree — tool calls, agent spawns, token timeline */}
-            <ExecutionTreePanel filePath={s.filePath} />
-
-            {/* Context Inspector — per-turn context pressure, category breakdown */}
-            <ContextInspectorPanel filePath={s.filePath} />
-          </>
-        )}
-
-        {/* Branch relationships */}
-        {hasBranches && (
-          <section>
-            <div className="flex items-center gap-2 text-xs font-medium text-soft-purple mb-2">
-              <GitBranch size={12} />
-              <span>{locale === 'zh-CN' ? '分支关系' : 'Branch Tree'}</span>
-            </div>
-            <div className="space-y-1.5">
-              {branchParentId && (() => {
-                const parent = sessions.find((ps) => ps.id === branchParentId)
-                if (!parent) return null
-                const pMeta = config?.sessionMeta?.[parent.sessionId] || config?.sessionMeta?.[parent.id]
-                const pTitle = pMeta?.customTitle || parent.firstUserMessage?.slice(0, 40) || parent.id.slice(0, 12)
-                return (
-                  <button
-                    key="parent"
-                    onClick={() => selectSession(parent.filePath, (parent as any).allFilePaths, parent.id, (parent as any).branchParentFilePaths, (parent as any).branchPointUuid, (parent as any).branchLeafUuid)}
-                    className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
-                  >
-                    <div className="text-soft-purple/60 text-[10px] mb-0.5">{locale === 'zh-CN' ? '↑ 母分支' : '↑ Parent'}</div>
-                    <div className="text-body truncate">{pTitle}</div>
-                    <div className="text-muted text-[10px] mt-0.5">{parent.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
-                  </button>
-                )
-              })()}
-              {isForkBranch && (
-                <div className="px-2 py-1 text-[10px] text-soft-blue/60 border-l-2 border-soft-blue/30 ml-1">
-                  ● {locale === 'zh-CN' ? '当前（Fork 分支，可独立 Resume）' : 'Current (fork, can resume independently)'}
-                </div>
-              )}
-              {!isIntraBranch && !isForkBranch && (
-                <div className="px-2 py-1 text-[10px] text-soft-emerald/60 border-l-2 border-soft-emerald/30 ml-1">
-                  ● {locale === 'zh-CN' ? '当前（主分支）' : 'Current (main)'}
-                </div>
-              )}
-              {isIntraBranch && (
-                <div className="px-2 py-1 text-[10px] text-soft-purple/60 border-l-2 border-soft-purple/30 ml-1">
-                  ● {locale === 'zh-CN' ? '当前分支' : 'Current branch'}
-                </div>
-              )}
-              {branchChildIds && branchChildIds.length > 0 && branchChildIds.map((childId) => {
-                const child = sessions.find((cs) => cs.id === childId)
-                if (!child) return null
-                const cMeta = config?.sessionMeta?.[child.sessionId] || config?.sessionMeta?.[child.id]
-                const cTitle = cMeta?.customTitle || child.firstUserMessage?.slice(0, 40) || child.id.slice(0, 12)
-                return (
-                  <button
-                    key={childId}
-                    onClick={() => selectSession(child.filePath, (child as any).allFilePaths, child.id, (child as any).branchParentFilePaths, (child as any).branchPointUuid, (child as any).branchLeafUuid)}
-                    className="w-full text-left text-xs px-2 py-1.5 rounded bg-surface/50 hover:bg-surface transition-colors"
-                  >
-                    <div className="text-soft-purple/60 text-[10px] mb-0.5">↳ {locale === 'zh-CN' ? '子分支' : 'Child branch'}</div>
-                    <div className="text-body truncate">{cTitle}</div>
-                    <div className="text-muted text-[10px] mt-0.5">{child.turnCount} {locale === 'zh-CN' ? '轮' : 'turns'}</div>
-                  </button>
-                )
-              })}
-            </div>
-            <div className="mt-2 px-2 py-1.5 rounded bg-surface/30 text-[10px] text-muted leading-relaxed">
-              {isForkBranch ? (
-                locale === 'zh-CN'
-                  ? <><span className="text-secondary">Fork 分支</span>：通过 <code className="text-soft-purple/80">/branch</code> 或 <code className="text-soft-purple/80">/fork</code> 创建的独立对话，可以单独 Resume。</>
-                  : <><span className="text-secondary">Fork branch</span>: Created via <code className="text-soft-purple/80">/branch</code> or <code className="text-soft-purple/80">/fork</code>, can be resumed independently.</>
-              ) : (
-                locale === 'zh-CN'
-                  ? <>
-                      <span className="text-secondary">主对话</span> = 对话轮数最多的那条路径。两个终端同时 resume 同一个 session 会产生分支，谁聊得多谁就是主对话。
-                      <br /><span className="text-secondary">Resume 限制</span>：<code className="text-soft-purple/80">claude --resume</code> 只能恢复主对话，无法单独恢复分支（Claude Code CLI 限制）。分支的完整对话可在此处查看。
-                    </>
-                  : <>
-                      <span className="text-secondary">Main session</span> = the path with the most turns. When two terminals resume the same session simultaneously, whichever has more turns becomes main.
-                      <br /><span className="text-secondary">Resume limitation</span>: <code className="text-soft-purple/80">claude --resume</code> only restores the main path (CLI limitation). Branch conversations are fully viewable here.
-                    </>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* Working directories */}
-        <CollapsibleFileList
-          icon={FolderOpen}
-          label={t('info.working_dirs')}
-          paths={s.cwds}
-          isDir
+        {/* Tab switcher */}
+        <InspectorTabs
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          locale={locale}
         />
 
-        {/* Image gallery: pasted + file-referenced images */}
-        <ImageGallery
-          messages={(s as any).messages || []}
-          onNavigate={(turnUuid) => onNavigate?.(`turn-${turnUuid}`)}
-        />
-
-        {/* Referenced files - directory tree */}
-        <FileTreeSection files={nonImageFiles} />
-
-        {/* Config files */}
-        <CollapsibleFileList
-          icon={Settings}
-          label={t('info.config_files')}
-          paths={configFiles}
-        />
-
-        {/* Tool usage */}
-        {toolEntries.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
-              <Wrench size={12} />
-              <span>{t('info.tool_usage')}</span>
-            </div>
-            <div className="space-y-1">
-              {toolEntries.map(([name, count]) => (
-                <div key={name} className="flex items-center justify-between text-xs">
-                  <span className="text-secondary font-mono">{name}</span>
-                  <span className="text-muted">{count}</span>
-                </div>
-              ))}
-            </div>
-          </section>
+        {/* Tab content */}
+        {activeTab === 'details' && (
+          <DetailsTab
+            session={s}
+            highlights={highlights}
+            onNavigate={onNavigate}
+          />
         )}
 
-        {/* Skill invocations */}
-        {s.skillInvocations.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
-              <Zap size={12} />
-              <span>{t('info.skill_invocations')}</span>
-            </div>
-            <div className="space-y-1">
-              {s.skillInvocations.map((si, i) => (
-                <div key={i} className="text-xs">
-                  <span className="text-secondary font-mono">{si.skillName}</span>
-                  <span className="text-faint ml-2">{formatDateTime(si.timestamp, locale)}</span>
-                </div>
-              ))}
-            </div>
-          </section>
+        {activeTab === 'files' && (
+          <FilesTab
+            session={s}
+            onNavigate={onNavigate}
+          />
         )}
 
-        {/* CLAUDE.md content */}
-        {s.claudeMdContent && (
-          <section>
-            <div className="flex items-center gap-2 text-xs font-medium text-secondary mb-2">
-              <FileText size={12} />
-              <span>{t('info.claude_docs')}</span>
-            </div>
-            <pre className="text-[11px] text-muted bg-surface rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">
-              {s.claudeMdContent}
-            </pre>
-          </section>
+        {activeTab === 'audit' && (
+          <AuditTab
+            session={s}
+            analysisReady={analysisReadySessionId === s.id}
+          />
         )}
       </div>
     </div>

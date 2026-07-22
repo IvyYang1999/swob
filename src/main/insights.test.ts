@@ -53,6 +53,22 @@ function makeFolder(overrides: Partial<Folder> = {}): Folder {
   }
 }
 
+function makeTimestampedSession(timestamp: string, overrides: Partial<SessionSummary> = {}): SessionSummary {
+  const session = makeSession(overrides)
+  const accounting = accountingFromMutuallyExclusiveUsage(
+    session.source || 'claude-code',
+    session.tokenUsage,
+    'reported'
+  )
+  return {
+    ...session,
+    tokenAccounting: {
+      ...accounting,
+      usageEvents: accounting.usageEvents.map((event) => ({ ...event, timestamp }))
+    }
+  }
+}
+
 describe('buildInsights', () => {
   describe('空数据', () => {
     it('空 sessions 返回正确的空结构', () => {
@@ -240,8 +256,8 @@ describe('buildInsights', () => {
     it('level 分级正确: 0=0, 1=<10k, 2=<50k, 3=<200k, 4=>=200k', () => {
       const today = new Date().toISOString().slice(0, 10)
       const sessions = [
-        makeSession({ sessionId: 's0', updatedAt: `${today}T00:00:00Z`, tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 } }),
-        makeSession({ sessionId: 's1', updatedAt: `${today}T01:00:00Z`, tokenUsage: { inputTokens: 5000, outputTokens: 4999, cacheCreationTokens: 0, cacheReadTokens: 0 } }),
+        makeTimestampedSession(`${today}T00:00:00`, { sessionId: 's0', tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 } }),
+        makeTimestampedSession(`${today}T01:00:00`, { sessionId: 's1', tokenUsage: { inputTokens: 5000, outputTokens: 4999, cacheCreationTokens: 0, cacheReadTokens: 0 } }),
       ]
       const result = buildInsights(sessions, [])
       const todayEntry = result.heatmap.find(h => h.date === today)!
@@ -252,7 +268,7 @@ describe('buildInsights', () => {
     it('level 2: tokens >= 10k 且 < 50k', () => {
       const today = new Date().toISOString().slice(0, 10)
       const sessions = [
-        makeSession({ sessionId: 's1', updatedAt: `${today}T01:00:00Z`, tokenUsage: { inputTokens: 10000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 } })
+        makeTimestampedSession(`${today}T01:00:00`, { sessionId: 's1', tokenUsage: { inputTokens: 10000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 } })
       ]
       const result = buildInsights(sessions, [])
       const todayEntry = result.heatmap.find(h => h.date === today)!
@@ -262,7 +278,7 @@ describe('buildInsights', () => {
     it('level 3: tokens >= 50k 且 < 200k', () => {
       const today = new Date().toISOString().slice(0, 10)
       const sessions = [
-        makeSession({ sessionId: 's1', updatedAt: `${today}T01:00:00Z`, tokenUsage: { inputTokens: 50000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 } })
+        makeTimestampedSession(`${today}T01:00:00`, { sessionId: 's1', tokenUsage: { inputTokens: 50000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 } })
       ]
       const result = buildInsights(sessions, [])
       const todayEntry = result.heatmap.find(h => h.date === today)!
@@ -272,7 +288,7 @@ describe('buildInsights', () => {
     it('level 4: tokens >= 200k', () => {
       const today = new Date().toISOString().slice(0, 10)
       const sessions = [
-        makeSession({ sessionId: 's1', updatedAt: `${today}T01:00:00Z`, tokenUsage: { inputTokens: 200000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 } })
+        makeTimestampedSession(`${today}T01:00:00`, { sessionId: 's1', tokenUsage: { inputTokens: 200000, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 } })
       ]
       const result = buildInsights(sessions, [])
       const todayEntry = result.heatmap.find(h => h.date === today)!
@@ -313,19 +329,47 @@ describe('buildInsights', () => {
     it('同一天多个 session 合并统计', () => {
       const today = new Date().toISOString().slice(0, 10)
       const sessions = [
-        makeSession({ sessionId: 's1', updatedAt: `${today}T10:00:00Z`, tokenUsage: { inputTokens: 100, outputTokens: 50, cacheCreationTokens: 0, cacheReadTokens: 0 }, turnCount: 3, source: 'claude-code', cwds: ['/a/proj1'] }),
-        makeSession({ sessionId: 's2', updatedAt: `${today}T14:00:00Z`, tokenUsage: { inputTokens: 200, outputTokens: 100, cacheCreationTokens: 0, cacheReadTokens: 0 }, turnCount: 5, source: 'codex', cwds: ['/a/proj2'] })
+        makeTimestampedSession(`${today}T10:00:00`, { sessionId: 's1', tokenUsage: { inputTokens: 100, outputTokens: 50, cacheCreationTokens: 0, cacheReadTokens: 0 }, turnCount: 3, source: 'claude-code', cwds: ['/a/proj1'] }),
+        makeTimestampedSession(`${today}T14:00:00`, { sessionId: 's2', tokenUsage: { inputTokens: 200, outputTokens: 100, cacheCreationTokens: 0, cacheReadTokens: 0 }, turnCount: 5, source: 'codex', cwds: ['/a/proj2'] })
       ]
       const result = buildInsights(sessions, [])
       const todayStats = result.byDate.find(d => d.date === today)!
 
       expect(todayStats.totalTokens).toBe(450)
       expect(todayStats.sessionCount).toBe(2)
-      expect(todayStats.turnCount).toBe(8)
+      expect(todayStats.turnCount).toBe(2)
       expect(todayStats.bySource['claude-code']).toBe(150)
       expect(todayStats.bySource['codex']).toBe(300)
       expect(todayStats.byProject['proj1']).toBe(150)
       expect(todayStats.byProject['proj2']).toBe(300)
+    })
+
+    it('按 UsageEvent 时间归属小时和文件夹，不使用 session.updatedAt', () => {
+      const today = new Date().toISOString().slice(0, 10)
+      const session = makeTimestampedSession(`${today}T03:15:00`, {
+        sessionId: 'event-time',
+        updatedAt: '2035-01-01T23:00:00Z',
+        tokenUsage: { inputTokens: 80, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0 }
+      })
+      const result = buildInsights([session], [makeFolder({ id: 'fact-folder', sessionIds: ['event-time'] })])
+      const todayStats = result.byDate.find((date) => date.date === today)!
+
+      expect(todayStats.totalTokens).toBe(100)
+      expect(todayStats.byFolder['fact-folder']).toBe(100)
+      expect(result.hourlyDistribution[3]).toBe(1)
+      expect(result.byDate.some((date) => date.date === '2035-01-01' && date.totalTokens > 0)).toBe(false)
+    })
+
+    it('缺失事件时间不会伪装成 updatedAt', () => {
+      const result = buildInsights([makeSession({
+        sessionId: 'unknown-time',
+        updatedAt: new Date().toISOString(),
+        tokenUsage: { inputTokens: 40, outputTokens: 10, cacheCreationTokens: 0, cacheReadTokens: 0 }
+      })], [])
+
+      expect(result.unknownTimeUsage).toEqual({ eventCount: 1, totalTokens: 50 })
+      expect(result.byDate.reduce((sum, date) => sum + date.totalTokens, 0)).toBe(0)
+      expect(result.activeDays).toBe(0)
     })
   })
 
@@ -449,8 +493,8 @@ describe('buildInsights 时间字段', () => {
     const today = new Date().toISOString().slice(0, 10)
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
     const sessions = [
-      makeSession({ sessionId: 's1', updatedAt: `${today}T10:00:00Z` }),
-      makeSession({ sessionId: 's2', updatedAt: `${yesterday}T10:00:00Z` }),
+      makeTimestampedSession(`${today}T10:00:00`, { sessionId: 's1' }),
+      makeTimestampedSession(`${yesterday}T10:00:00`, { sessionId: 's2' }),
     ]
     const sessionTimes = new Map<string, number>()
     sessionTimes.set('s1', 600_000)
@@ -464,7 +508,7 @@ describe('buildInsights 时间字段', () => {
   it('byDate 包含 totalTime 和 byProjectTime', () => {
     const today = new Date().toISOString().slice(0, 10)
     const sessions = [
-      makeSession({ sessionId: 's1', updatedAt: `${today}T10:00:00Z`, cwds: ['/a/swob'] }),
+      makeTimestampedSession(`${today}T10:00:00`, { sessionId: 's1', cwds: ['/a/swob'] }),
     ]
     const sessionTimes = new Map<string, number>()
     sessionTimes.set('s1', 600_000)

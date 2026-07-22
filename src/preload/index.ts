@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { AnalysisDimension, AnalysisScope } from '../main/analysis-contract'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 
@@ -140,6 +141,13 @@ const api = {
 
   // Insights
   getInsights: () => ipcRenderer.invoke('insights:get'),
+  queryInsights: (scope: AnalysisScope, dimension: AnalysisDimension) =>
+    ipcRenderer.invoke('insights:query', scope, dimension),
+  drilldownInsights: (scope: AnalysisScope, dimension: AnalysisDimension, key: string) =>
+    ipcRenderer.invoke('insights:drilldown', scope, dimension, key),
+  getInsightSessionEvents: (sessionId: string, scope: AnalysisScope) =>
+    ipcRenderer.invoke('insights:sessionEvents', sessionId, scope),
+  rebuildInsightsFacts: () => ipcRenderer.invoke('insights:rebuildFacts'),
 
   // Lineage
   getLineageRegistry: () => ipcRenderer.invoke('lineage:getRegistry'),

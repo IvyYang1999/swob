@@ -190,6 +190,23 @@ interface ElectronAPI {
   }>>>
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void
 
+  // AnalysisScope / UsageFact data layer (renderer integration is intentionally deferred)
+  getInsights: () => Promise<any>
+  queryInsights: (
+    scope: import('../../../main/analysis-contract').AnalysisScope,
+    dimension: import('../../../main/analysis-contract').AnalysisDimension
+  ) => Promise<import('../../../main/analysis-contract').InsightsQueryResult>
+  drilldownInsights: (
+    scope: import('../../../main/analysis-contract').AnalysisScope,
+    dimension: import('../../../main/analysis-contract').AnalysisDimension,
+    key: string
+  ) => Promise<import('../../../main/analysis-contract').InsightsDrilldownSession[]>
+  getInsightSessionEvents: (
+    sessionId: string,
+    scope: import('../../../main/analysis-contract').AnalysisScope
+  ) => Promise<import('../../../main/analysis-contract').UsageFact[]>
+  rebuildInsightsFacts: () => Promise<import('../../../main/analysis-contract').UsageFactSyncResult>
+
   // Session Audit
   auditSession: (filePath: string) => Promise<any>
 

@@ -12,6 +12,7 @@ import {
   valueUsageEvent,
   type Valuation
 } from './token-valuation'
+import { usageFactsForSession } from './usage-fact-store'
 
 export type TokenDataStatus = 'available' | 'partial' | 'unavailable' | 'no-data'
 
@@ -62,6 +63,7 @@ export interface DateStats {
   turnCount: number
   bySource: Record<string, number>
   byProject: Record<string, number>
+  byFolder: Record<string, number>
   totalTime: number
   byProjectTime: Record<string, number>
 }
@@ -91,6 +93,7 @@ export interface InsightsData {
   totalTurns: number
   totalTime: number
   activeDays: number
+  unknownTimeUsage: { eventCount: number; totalTokens: number }
   bySource: SourceStats[]
   byModel: ModelStats[]
   byProject: ProjectStats[]
@@ -164,10 +167,6 @@ function normalizeModelName(raw: string): string {
   return model.replace(/^claude-(opus|sonnet|haiku)-(\d+)\.(\d+)$/, 'claude-$1-$2-$3')
 }
 
-function toDateStr(iso: string): string {
-  return iso.slice(0, 10)
-}
-
 function getHeatmapLevel(tokens: number): 0 | 1 | 2 | 3 | 4 {
   if (tokens === 0) return 0
   if (tokens < 10_000) return 1
@@ -201,6 +200,7 @@ function emptyDateStats(date: string): DateStats {
     turnCount: 0,
     bySource: {},
     byProject: {},
+    byFolder: {},
     totalTime: 0,
     byProjectTime: {}
   }
@@ -263,6 +263,15 @@ export function buildInsights(
 
   const projectMap = new Map<string, ProjectStats>()
   const dateMap = new Map<string, DateStats>()
+  const dateSessionIds = new Map<string, Set<string>>()
+  const folderIdsBySession = new Map<string, string[]>()
+  for (const folder of folders) {
+    for (const sessionId of folder.sessionIds) {
+      const ids = folderIdsBySession.get(sessionId) || []
+      if (!ids.includes(folder.id)) ids.push(folder.id)
+      folderIdsBySession.set(sessionId, ids)
+    }
+  }
   const modelMap = new Map<string, { totalTokens: number; sessionIds: Set<string> }>()
   const toolAgg = new Map<string, number>()
   const bySession: InsightsData['bySession'] = []
@@ -283,10 +292,13 @@ export function buildInsights(
   let filesRead = 0
   let filesWritten = 0
   let filesEdited = 0
+  let unknownTimeEvents = 0
+  let unknownTimeTokens = 0
 
   for (const session of rollupSessions) {
     const source = session.source || 'claude-code'
     const accounting = accountingForSession(session)
+    const facts = usageFactsForSession(session)
     const available = accounting.billingTotal !== null && accounting.components !== null
     const input = available ? accountingInput(accounting) : 0
     const output = available ? accounting.components!.outputTokens : 0
@@ -382,10 +394,6 @@ export function buildInsights(
     }
 
     totalTurns += session.turnCount
-    try {
-      const hour = new Date(session.createdAt).getHours()
-      if (hour >= 0 && hour < 24) hourly[hour]++
-    } catch { /* ignore invalid dates */ }
     const turns = session.turnCount
     if (turns <= 5) turnBuckets[0]++
     else if (turns <= 20) turnBuckets[1]++
@@ -402,23 +410,56 @@ export function buildInsights(
       else if (file.actions.includes('read')) filesRead++
     }
 
-    const dateKey = toDateStr(session.updatedAt)
-    let dateStats = dateMap.get(dateKey)
-    if (!dateStats) {
-      dateStats = emptyDateStats(dateKey)
-      dateMap.set(dateKey, dateStats)
-    }
-    dateStats.totalTokens += tokens
-    dateStats.inputTokens += input
-    dateStats.outputTokens += output
-    dateStats.sessionCount++
-    dateStats.turnCount += session.turnCount
-    dateStats.bySource[source] = (dateStats.bySource[source] || 0) + tokens
-    dateStats.byProject[project] = (dateStats.byProject[project] || 0) + tokens
     const estimatedTime = sessionTimes?.get(session.sessionId) || session.estimatedTime || 0
     totalTime += estimatedTime
-    dateStats.totalTime += estimatedTime
-    dateStats.byProjectTime[project] = (dateStats.byProjectTime[project] || 0) + estimatedTime
+
+    const factDays = new Map<string, number>()
+    for (const fact of facts) {
+      const factInput = fact.nonCachedInputTokens + fact.cacheReadTokens + fact.cacheWriteTokens
+      const factTokens = factInput + fact.outputTokens
+      if (fact.occurredDay === 'unknown-time' || fact.occurredHour === null) {
+        unknownTimeEvents += fact.callCount
+        unknownTimeTokens += factTokens
+        continue
+      }
+
+      hourly[fact.occurredHour] += fact.callCount
+      let dateStats = dateMap.get(fact.occurredDay)
+      if (!dateStats) {
+        dateStats = emptyDateStats(fact.occurredDay)
+        dateMap.set(fact.occurredDay, dateStats)
+      }
+      dateStats.totalTokens += factTokens
+      dateStats.inputTokens += factInput
+      dateStats.outputTokens += fact.outputTokens
+      dateStats.turnCount += fact.turnCount
+      dateStats.bySource[source] = (dateStats.bySource[source] || 0) + factTokens
+      dateStats.byProject[project] = (dateStats.byProject[project] || 0) + factTokens
+      for (const folderId of folderIdsBySession.get(session.sessionId) || []) {
+        dateStats.byFolder[folderId] = (dateStats.byFolder[folderId] || 0) + factTokens
+      }
+      const ids = dateSessionIds.get(fact.occurredDay) || new Set<string>()
+      ids.add(session.sessionId)
+      dateSessionIds.set(fact.occurredDay, ids)
+      factDays.set(fact.occurredDay, (factDays.get(fact.occurredDay) || 0) + fact.callCount)
+    }
+
+    // Active time has no request-level timestamp. Distribute it across the
+    // session's real event days by call count instead of assigning it to updatedAt.
+    const timedCalls = [...factDays.values()].reduce((sum, count) => sum + count, 0)
+    if (estimatedTime > 0 && timedCalls > 0) {
+      for (const [day, calls] of factDays) {
+        const dateStats = dateMap.get(day)!
+        const share = estimatedTime * calls / timedCalls
+        dateStats.totalTime += share
+        dateStats.byProjectTime[project] = (dateStats.byProjectTime[project] || 0) + share
+      }
+    }
+  }
+
+  for (const [date, sessionIds] of dateSessionIds) {
+    const stats = dateMap.get(date)
+    if (stats) stats.sessionCount = sessionIds.size
   }
 
   for (const stats of sourceMap.values()) {
@@ -473,7 +514,9 @@ export function buildInsights(
     const value = dateMap.get(date)?.totalTokens || 0
     return { date, value, level: getHeatmapLevel(value) }
   })
-  const activeDays = byDate.filter((date) => date.sessionCount > 0).length
+  // activeDays intentionally spans the full fact history, while byDate and
+  // heatmap retain their legacy 365-day presentation window.
+  const activeDays = dateSessionIds.size
   const projectsTotal = byProject.reduce((sum, project) => sum + project.totalTokens, 0)
   const sessionsTotal = bySession.reduce((sum, session) => sum + (session.totalTokens || 0), 0)
   const difference = Math.max(Math.abs(totalTokens - projectsTotal), Math.abs(totalTokens - sessionsTotal))
@@ -503,6 +546,7 @@ export function buildInsights(
     totalTurns,
     totalTime,
     activeDays,
+    unknownTimeUsage: { eventCount: unknownTimeEvents, totalTokens: unknownTimeTokens },
     bySource,
     byModel,
     byProject,

@@ -1,7 +1,8 @@
 import { translate } from '../i18n'
 import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { useStore } from '../store'
-import { GitBranch, RotateCcw } from 'lucide-react'
+import { GitBranch, RotateCcw, Share2 } from 'lucide-react'
+import { GalaxySharePreview } from './share/GalaxySharePreview'
 import {
   hashString,
   stableSessionKey,
@@ -428,6 +429,7 @@ export function LineagePage() {
   const containerRef = useRef<HTMLDivElement>(null)
   const [hoveredNode, setHoveredNode] = useState<Node | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const [showSharePreview, setShowSharePreview] = useState(false)
   const graphRef = useRef<{ nodes: Node[]; edges: Edge[] } | null>(null)
   const transformRef = useRef({ x: 0, y: 0, scale: 1 })
   const dragRef = useRef<{ dragging: boolean; lastX: number; lastY: number }>({ dragging: false, lastX: 0, lastY: 0 })
@@ -750,6 +752,14 @@ export function LineagePage() {
           <RotateCcw size={12} />
           <span>{translate(locale, 'renderer.lineage_page.relayout')}</span>
         </button>
+        <button
+          onClick={() => setShowSharePreview(true)}
+          className="flex items-center gap-1 px-2 py-0.5 rounded border border-edge hover:bg-base-hover text-secondary hover:text-primary transition-colors"
+          title={translate(locale, 'galaxy.share_button')}
+        >
+          <Share2 size={12} />
+          <span>{translate(locale, 'galaxy.share_button')}</span>
+        </button>
       </div>
 
       <canvas
@@ -784,6 +794,23 @@ export function LineagePage() {
             <div className="text-muted truncate mt-0.5">{hoveredNode.cwds[0]}</div>
           )}
         </div>
+      )}
+
+      {showSharePreview && graphRef.current && (
+        <GalaxySharePreview
+          nodes={graphRef.current.nodes.map((n) => ({
+            x: n.x,
+            y: n.y,
+            source: n.source,
+            turnCount: n.turnCount,
+            recency: n.recency,
+            totalTokens: n.totalTokens,
+            compactCount: n.compactCount,
+          }))}
+          sourceColors={SOURCE_COLORS}
+          sourceLabels={SOURCE_LABELS}
+          onClose={() => setShowSharePreview(false)}
+        />
       )}
     </div>
   )

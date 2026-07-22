@@ -3,8 +3,8 @@ SWOB THIRD-PARTY NOTICES
 This file is generated. Do not edit it by hand.
 Source: package-lock.json production dependency graph.
 Generator: scripts/generate-third-party-notices.mjs
-package-lock.json SHA-256: 190bb983cd30d6bd75a760cbba051c0300fee266580b35935a89cd21ee6aeba4
-Unique production packages: 172
+package-lock.json SHA-256: b5e10bf06635c179370aa63e51b06f89b40bc3567a57ec23255bd833e430ae28
+Unique production packages: 201
 
 Electron and Chromium notices are distributed separately as
 LICENSE.electron.txt and LICENSES.chromium.html. Where an npm publisher
@@ -23,6 +23,7 @@ alongside the corresponding packaged module.
 === ISC ===
 
 - @ungap/structured-clone@1.3.0  https://www.npmjs.com/package/@ungap/structured-clone/v/1.3.0
+- cliui@6.0.0  https://www.npmjs.com/package/cliui/v/6.0.0
 - d3-array@3.2.4  https://www.npmjs.com/package/d3-array/v/3.2.4
 - d3-color@3.1.0  https://www.npmjs.com/package/d3-color/v/3.1.0
 - d3-format@3.1.2  https://www.npmjs.com/package/d3-format/v/3.1.2
@@ -33,10 +34,16 @@ alongside the corresponding packaged module.
 - d3-time@3.1.0  https://www.npmjs.com/package/d3-time/v/3.1.0
 - d3-time-format@4.1.0  https://www.npmjs.com/package/d3-time-format/v/4.1.0
 - d3-timer@3.0.1  https://www.npmjs.com/package/d3-timer/v/3.0.1
+- get-caller-file@2.0.5  https://www.npmjs.com/package/get-caller-file/v/2.0.5
 - graceful-fs@4.2.11  https://www.npmjs.com/package/graceful-fs/v/4.2.11
 - internmap@2.0.3  https://www.npmjs.com/package/internmap/v/2.0.3
 - lucide-react@0.577.0  https://www.npmjs.com/package/lucide-react/v/0.577.0
+- require-main-filename@2.0.0  https://www.npmjs.com/package/require-main-filename/v/2.0.0
 - semver@7.7.4  https://www.npmjs.com/package/semver/v/7.7.4
+- set-blocking@2.0.0  https://www.npmjs.com/package/set-blocking/v/2.0.0
+- which-module@2.0.1  https://www.npmjs.com/package/which-module/v/2.0.1
+- y18n@4.0.3  https://www.npmjs.com/package/y18n/v/4.0.3
+- yargs-parser@18.1.3  https://www.npmjs.com/package/yargs-parser/v/18.1.3
 
 === MIT ===
 
@@ -66,9 +73,12 @@ alongside the corresponding packaged module.
 - @types/unist@3.0.3  https://www.npmjs.com/package/@types/unist/v/3.0.3
 - @types/use-sync-external-store@0.0.6  https://www.npmjs.com/package/@types/use-sync-external-store/v/0.0.6
 - ajv@8.17.1  https://www.npmjs.com/package/ajv/v/8.17.1
+- ansi-regex@5.0.1  https://www.npmjs.com/package/ansi-regex/v/5.0.1
+- ansi-styles@4.3.0  https://www.npmjs.com/package/ansi-styles/v/4.3.0
 - bail@2.0.2  https://www.npmjs.com/package/bail/v/2.0.2
 - better-sqlite3@13.0.1  https://www.npmjs.com/package/better-sqlite3/v/13.0.1
 - builder-util-runtime@9.7.0  https://www.npmjs.com/package/builder-util-runtime/v/9.7.0
+- camelcase@5.3.1  https://www.npmjs.com/package/camelcase/v/5.3.1
 - ccount@2.0.1  https://www.npmjs.com/package/ccount/v/2.0.1
 - character-entities@2.0.2  https://www.npmjs.com/package/character-entities/v/2.0.2
 - character-entities-html4@2.1.0  https://www.npmjs.com/package/character-entities-html4/v/2.1.0
@@ -76,19 +86,25 @@ alongside the corresponding packaged module.
 - character-reference-invalid@2.0.1  https://www.npmjs.com/package/character-reference-invalid/v/2.0.1
 - chokidar@5.0.0  https://www.npmjs.com/package/chokidar/v/5.0.0
 - clsx@2.1.1  https://www.npmjs.com/package/clsx/v/2.1.1
+- color-convert@2.0.1  https://www.npmjs.com/package/color-convert/v/2.0.1
+- color-name@1.1.4  https://www.npmjs.com/package/color-name/v/1.1.4
 - comma-separated-tokens@2.0.3  https://www.npmjs.com/package/comma-separated-tokens/v/2.0.3
 - debug@4.4.3  https://www.npmjs.com/package/debug/v/4.4.3
+- decamelize@1.2.0  https://www.npmjs.com/package/decamelize/v/1.2.0
 - decimal.js-light@2.5.1  https://www.npmjs.com/package/decimal.js-light/v/2.5.1
 - decode-named-character-reference@1.3.0  https://www.npmjs.com/package/decode-named-character-reference/v/1.3.0
 - dequal@2.0.3  https://www.npmjs.com/package/dequal/v/2.0.3
 - devlop@1.1.0  https://www.npmjs.com/package/devlop/v/1.1.0
+- dijkstrajs@1.0.3  https://www.npmjs.com/package/dijkstrajs/v/1.0.3
 - electron-updater@6.8.9  https://www.npmjs.com/package/electron-updater/v/6.8.9
+- emoji-regex@8.0.0  https://www.npmjs.com/package/emoji-regex/v/8.0.0
 - es-toolkit@1.46.0  https://www.npmjs.com/package/es-toolkit/v/1.46.0
 - escape-string-regexp@5.0.0  https://www.npmjs.com/package/escape-string-regexp/v/5.0.0
 - estree-util-is-identifier-name@3.0.0  https://www.npmjs.com/package/estree-util-is-identifier-name/v/3.0.0
 - eventemitter3@5.0.4  https://www.npmjs.com/package/eventemitter3/v/5.0.4
 - extend@3.0.2  https://www.npmjs.com/package/extend/v/3.0.2
 - fast-deep-equal@3.1.3  https://www.npmjs.com/package/fast-deep-equal/v/3.1.3
+- find-up@4.1.0  https://www.npmjs.com/package/find-up/v/4.1.0
 - fs-extra@10.1.0  https://www.npmjs.com/package/fs-extra/v/10.1.0
 - fsevents@2.3.3  https://www.npmjs.com/package/fsevents/v/2.3.3
 - hast-util-to-jsx-runtime@2.3.6  https://www.npmjs.com/package/hast-util-to-jsx-runtime/v/2.3.6
@@ -100,12 +116,14 @@ alongside the corresponding packaged module.
 - is-alphabetical@2.0.1  https://www.npmjs.com/package/is-alphabetical/v/2.0.1
 - is-alphanumerical@2.0.1  https://www.npmjs.com/package/is-alphanumerical/v/2.0.1
 - is-decimal@2.0.1  https://www.npmjs.com/package/is-decimal/v/2.0.1
+- is-fullwidth-code-point@3.0.0  https://www.npmjs.com/package/is-fullwidth-code-point/v/3.0.0
 - is-hexadecimal@2.0.1  https://www.npmjs.com/package/is-hexadecimal/v/2.0.1
 - is-plain-obj@4.1.0  https://www.npmjs.com/package/is-plain-obj/v/4.1.0
 - js-yaml@4.3.0  https://www.npmjs.com/package/js-yaml/v/4.3.0
 - json-schema-traverse@1.0.0  https://www.npmjs.com/package/json-schema-traverse/v/1.0.0
 - jsonfile@6.2.0  https://www.npmjs.com/package/jsonfile/v/6.2.0
 - lazy-val@1.0.5  https://www.npmjs.com/package/lazy-val/v/1.0.5
+- locate-path@5.0.0  https://www.npmjs.com/package/locate-path/v/5.0.0
 - lodash.escaperegexp@4.1.2  https://www.npmjs.com/package/lodash.escaperegexp/v/4.1.2
 - lodash.isequal@4.5.0  https://www.npmjs.com/package/lodash.isequal/v/4.5.0
 - longest-streak@3.1.0  https://www.npmjs.com/package/longest-streak/v/3.1.0
@@ -155,8 +173,14 @@ alongside the corresponding packaged module.
 - micromark-util-types@2.0.2  https://www.npmjs.com/package/micromark-util-types/v/2.0.2
 - ms@2.1.3  https://www.npmjs.com/package/ms/v/2.1.3
 - node-addon-api@8.9.0  https://www.npmjs.com/package/node-addon-api/v/8.9.0
+- p-limit@2.3.0  https://www.npmjs.com/package/p-limit/v/2.3.0
+- p-locate@4.1.0  https://www.npmjs.com/package/p-locate/v/4.1.0
+- p-try@2.2.0  https://www.npmjs.com/package/p-try/v/2.2.0
 - parse-entities@4.0.2  https://www.npmjs.com/package/parse-entities/v/4.0.2
+- path-exists@4.0.0  https://www.npmjs.com/package/path-exists/v/4.0.0
+- pngjs@5.0.0  https://www.npmjs.com/package/pngjs/v/5.0.0
 - property-information@7.1.0  https://www.npmjs.com/package/property-information/v/7.1.0
+- qrcode@1.5.4  https://www.npmjs.com/package/qrcode/v/1.5.4
 - react@19.2.4  https://www.npmjs.com/package/react/v/19.2.4
 - react-dom@19.2.4  https://www.npmjs.com/package/react-dom/v/19.2.4
 - react-markdown@10.1.0  https://www.npmjs.com/package/react-markdown/v/10.1.0
@@ -169,11 +193,14 @@ alongside the corresponding packaged module.
 - remark-parse@11.0.0  https://www.npmjs.com/package/remark-parse/v/11.0.0
 - remark-rehype@11.1.2  https://www.npmjs.com/package/remark-rehype/v/11.1.2
 - remark-stringify@11.0.0  https://www.npmjs.com/package/remark-stringify/v/11.0.0
+- require-directory@2.1.1  https://www.npmjs.com/package/require-directory/v/2.1.1
 - require-from-string@2.0.2  https://www.npmjs.com/package/require-from-string/v/2.0.2
 - reselect@5.1.1  https://www.npmjs.com/package/reselect/v/5.1.1
 - scheduler@0.27.0  https://www.npmjs.com/package/scheduler/v/0.27.0
 - space-separated-tokens@2.0.2  https://www.npmjs.com/package/space-separated-tokens/v/2.0.2
+- string-width@4.2.3  https://www.npmjs.com/package/string-width/v/4.2.3
 - stringify-entities@4.0.4  https://www.npmjs.com/package/stringify-entities/v/4.0.4
+- strip-ansi@6.0.1  https://www.npmjs.com/package/strip-ansi/v/6.0.1
 - style-to-js@1.1.21  https://www.npmjs.com/package/style-to-js/v/1.1.21
 - style-to-object@1.0.14  https://www.npmjs.com/package/style-to-object/v/1.0.14
 - tiny-invariant@1.3.3  https://www.npmjs.com/package/tiny-invariant/v/1.3.3
@@ -190,6 +217,8 @@ alongside the corresponding packaged module.
 - use-sync-external-store@1.6.0  https://www.npmjs.com/package/use-sync-external-store/v/1.6.0
 - vfile@6.0.3  https://www.npmjs.com/package/vfile/v/6.0.3
 - vfile-message@4.0.3  https://www.npmjs.com/package/vfile-message/v/4.0.3
+- wrap-ansi@6.2.0  https://www.npmjs.com/package/wrap-ansi/v/6.2.0
+- yargs@15.4.1  https://www.npmjs.com/package/yargs/v/15.4.1
 - zustand@5.0.11  https://www.npmjs.com/package/zustand/v/5.0.11
 - zwitch@2.0.4  https://www.npmjs.com/package/zwitch/v/2.0.4
 

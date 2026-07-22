@@ -855,6 +855,15 @@ const translations: Record<Locale, Record<string, string>> = {
 
     // First-launch toast
     'toast.feedback_hint': '遇到问题？设置 → 更新 → 关于 随时反馈',
+
+    // Galaxy share
+    'galaxy.share_button': '分享我的会话星图',
+    'galaxy.share_tagline': '我的 AI 编程星图',
+    'galaxy.stat_sessions': '会话',
+    'galaxy.stat_turns': '总轮次',
+    'galaxy.stat_sources': '工具来源',
+    'galaxy.stat_longest': '最长会话',
+    'galaxy.share_preview_alt': '会话星图分享预览',
     // T122_RENDERER_ZH
   },
 
@@ -1711,6 +1720,15 @@ const translations: Record<Locale, Record<string, string>> = {
 
     // First-launch toast
     'toast.feedback_hint': 'Need help? Settings → Updates → About for feedback',
+
+    // Galaxy share
+    'galaxy.share_button': 'Share my Session Galaxy',
+    'galaxy.share_tagline': 'My AI Coding Galaxy',
+    'galaxy.stat_sessions': 'Sessions',
+    'galaxy.stat_turns': 'Total turns',
+    'galaxy.stat_sources': 'Sources',
+    'galaxy.stat_longest': 'Longest',
+    'galaxy.share_preview_alt': 'Session Galaxy share preview',
     // T122_RENDERER_EN
   }
 }

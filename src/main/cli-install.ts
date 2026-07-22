@@ -23,6 +23,12 @@ export type CliInstallOptions = {
   localTargetDir?: string
 }
 
+type CliInstallEnvironment = NodeJS.ProcessEnv & {
+  SWOB_TEST_APP_CLI_PATH?: string
+  SWOB_TEST_CLI_TARGET_DIR?: string
+  SWOB_TEST_HOME?: string
+}
+
 export type CliInstallResult = {
   cliInstalled: boolean
   cliPath: string | null
@@ -31,6 +37,47 @@ export type CliInstallResult = {
   attemptedCliPaths: string[]
   fallbackUsed: boolean
   error?: string
+}
+
+/** Electron E2E homes are disposable and must never own a global CLI symlink. */
+export function shouldAutoInstallCli(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return !environment.SWOB_TEST_HOME && environment.NODE_ENV !== 'test'
+}
+
+/**
+ * Packaged CLI tests need to exercise `swob install` without touching the
+ * machine's real /usr/local/bin or /opt/homebrew/bin. Overrides are accepted
+ * only when the process is already running under an explicit SWOB_TEST_HOME.
+ */
+export function cliInstallOptionsForEnvironment(
+  homeDir: string,
+  environment: CliInstallEnvironment = process.env
+): CliInstallOptions {
+  if (!environment.SWOB_TEST_HOME) return { homeDir }
+
+  const testHome = path.resolve(environment.SWOB_TEST_HOME)
+  const resolvedHome = path.resolve(homeDir)
+  const relativeHome = path.relative(testHome, resolvedHome)
+  if (relativeHome.startsWith('..') || path.isAbsolute(relativeHome)) {
+    throw new Error('SWOB_TEST_HOME must contain the CLI home directory')
+  }
+
+  const resolvedTarget = path.resolve(
+    environment.SWOB_TEST_CLI_TARGET_DIR || path.join(testHome, 'bin')
+  )
+  const relativeTarget = path.relative(testHome, resolvedTarget)
+  if (relativeTarget.startsWith('..') || path.isAbsolute(relativeTarget)) {
+    throw new Error('SWOB_TEST_CLI_TARGET_DIR must stay inside SWOB_TEST_HOME')
+  }
+
+  return {
+    homeDir,
+    appCliPath: environment.SWOB_TEST_APP_CLI_PATH,
+    pathEnv: [resolvedTarget, environment.PATH || ''].filter(Boolean).join(path.delimiter),
+    primaryTargetDir: resolvedTarget,
+    homebrewTargetDir: path.join(testHome, 'unreachable-homebrew-bin'),
+    localTargetDir: path.join(testHome, 'unreachable-local-bin')
+  }
 }
 
 function expandHome(entry: string, homeDir: string): string {

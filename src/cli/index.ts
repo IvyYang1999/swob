@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import { execSync } from 'node:child_process'
 import { format as formatLog } from 'node:util'
@@ -30,7 +29,8 @@ import {
 } from '../main/library-manager'
 import { spotlightSearch } from '../main/spotlight-search'
 import { buildInsights } from '../main/insights'
-import { installSwobCli } from '../main/cli-install'
+import { cliInstallOptionsForEnvironment, installSwobCli } from '../main/cli-install'
+import { runtimeHome } from '../main/runtime-home'
 import { formatResumeAuditReport, runResumeAudit } from '../main/resume-audit'
 import { buildCliResumeResponse } from './resume-command'
 import { formatResolveCliOutput, resolveSessionId } from './resolve-command'
@@ -635,8 +635,9 @@ async function cmdTranscript(args: string[], flags: Record<string, string | true
 }
 
 async function cmdInstall(): Promise<void> {
-  const cliInstall = installSwobCli()
-  const skillDir = path.join(os.homedir(), '.claude', 'skills', 'swob')
+  const home = runtimeHome()
+  const cliInstall = installSwobCli(cliInstallOptionsForEnvironment(home))
+  const skillDir = path.join(home, '.claude', 'skills', 'swob')
   fs.mkdirSync(skillDir, { recursive: true })
   const skillPath = path.join(skillDir, 'SKILL.md')
   fs.writeFileSync(skillPath, generateSkillContent(), 'utf-8')

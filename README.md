@@ -127,6 +127,9 @@ Public README claims checked on 2026-07-21. `✅` = explicitly documented; `◐`
 > xattr -cr /Applications/Swob.app
 > ```
 
+> [!IMPORTANT]
+> **One manual migration will be required.** Because v1.2.0 predates the Developer ID trust root, it cannot safely auto-update into the first signed release. When that release ships, download the matching DMG from this repository and overwrite Swob once. Signed releases after that migration will use an isolated, E2E-gated update channel.
+
 ### Current `main`
 
 ```bash

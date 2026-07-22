@@ -78,7 +78,7 @@
             <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">Explore current main</a>
             <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel Mac</a>
           </div>
-          <p class="release-note"><strong>Truth before launch copy:</strong> public v1.2.0 is the five-source stable build and is unsigned. The graph, debugger, 11-harness ingestion, AI Insights, and SQLite FTS shown here are implemented on current <code>main</code> and ship in the next release.</p>
+          <p class="release-note"><strong>Truth before launch copy:</strong> public v1.2.0 is the unsigned five-source stable build. It cannot auto-update across the upcoming Developer ID trust-root change, so the first signed release will require one manual DMG download. Later signed releases will use a separate E2E-gated update channel. The graph, debugger, 11-harness ingestion, AI Insights, and SQLite FTS shown here are implemented on current <code>main</code> and ship in the next release.</p>
         </div>
 
         <figure class="product-frame">
@@ -318,7 +318,7 @@
           </details>
           <details>
             <summary>Why does macOS say the app is damaged?</summary>
-            <p>The current public v1.2.0 DMGs are unsigned and not notarized, so Gatekeeper can block them. Verify the download URL and use the documented quarantine command, or build from source. A signed public release has not shipped yet.</p>
+            <p>The current public v1.2.0 DMGs are unsigned and not notarized, so Gatekeeper can block them. They also cannot auto-update into the first Developer ID release. When that signed version ships, download its DMG manually and overwrite Swob once; later signed versions will update through the new verified channel.</p>
           </details>
           <details>
             <summary>Is Windows or Linux supported?</summary>

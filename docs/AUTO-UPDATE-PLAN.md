@@ -1,101 +1,120 @@
-# 自动更新计划
+# macOS 自动更新与签名信任根
 
-让用户打开 Swob 时自动检查新版本、下载安装，不用手动下 DMG。
+## 当前结论
 
-## 技术方案
+Swob 的 Developer ID 签名、公证、Gatekeeper 与 stapling 已在 GitHub Actions smoke run `29727895945` 跑通，但公开 v1.2.0 不能自动迁移到首个正式签名版本：
 
-使用 `electron-updater` + GitHub Releases。这是 Electron 生态最成熟的方案。
+- arm64 v1.2.0 是 ad-hoc 签名，designated requirement 绑定当前构建的精确 CDHash；
+- x64 v1.2.0 完全未签名；
+- 两者都不能成为 Squirrel.Mac 后续正式签名更新的信任起点。
 
-流程：
-1. 你在 master 上 commit + push
-2. GitHub Actions 自动打包 DMG + 发布到 GitHub Releases
-3. 用户打开 Swob → 后台检查 GitHub Releases 有没有新版本
-4. 有新版 → 自动下载 → 提示用户"有新版本，重启即可更新"
-5. 用户点重启 → 自动替换 → 完成
+因此，v1.2.0 用户必须从官网或 GitHub Release **手动覆盖安装首个正式签名版本一次**。这次迁移之后，正式签名版本之间才启用自动更新。
 
-## ⚠️ 代码签名问题
+## 通道隔离
 
-现在没有 Apple Developer 证书（`0 valid identities found`）。
+旧版与正式签名版不能共享更新 feed：
 
-**没有签名的后果：**
-- macOS 会弹"无法验证开发者"警告（用户可以右键打开绕过，但体验差）
-- `electron-updater` 的自动更新在未签名时**仍然可以工作**，但用户首次安装需要手动信任
+```text
+v1.2.0
+  └── latest-mac.yml（永久退役；后续 Release 不再上传）
 
-**已解决：** 证书已安装。
-- Developer ID Application: `Yuntong Yang (ZPTA4LP594)`
-- Team ID: `ZPTA4LP594`
-
-electron-builder.yml 里加上签名配置即可自动签名。
-
-## 实现步骤
-
-### 第一步：安装 electron-updater
-
-```bash
-npm install electron-updater
+首个正式签名版及以后
+  └── swob-signed-mac.yml
+      └── 只有真实 canary 安装与重启 E2E 通过后才上传
 ```
 
-### 第二步：修改 electron-builder.yml
+`electron-builder.yml` 中固定：
 
 ```yaml
-appId: com.swob.app
-productName: Swob
-directories:
-  buildResources: build
-files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron.vite.config.*'
-  - '!{tsconfig,tsconfig.*}.json'
-mac:
-  target:
-    - target: dmg
-      arch:
-        - arm64
-        - x64
-  artifactName: swob-${version}-${arch}.${ext}
 publish:
   provider: github
   owner: IvyYang1999
   repo: swob
+  channel: swob-signed
+  publishAutoUpdate: false
 ```
 
-### 第三步：在 main 进程加自动更新检查
+`publishAutoUpdate: false` 是发布安全门：electron-builder 可以把 `swob-signed` 写入 packaged `app-update.yml`，但普通 tag workflow 无权自动上传更新 metadata。
 
-在 `src/main/index.ts` 的 `app.whenReady()` 中加：
+## 发布职责分离
 
-```typescript
-import { autoUpdater } from 'electron-updater'
+### `release.yml`：只发布可手动安装的不可变资产
 
-// 启动后静默检查更新
-autoUpdater.checkForUpdatesAndNotify()
-```
+Tag 发布流程：
 
-`autoUpdater` 会：
-- 启动时自动检查 GitHub Releases
-- 有新版本自动下载
-- 下载完弹系统通知"新版本已就绪，重启即可更新"
-- 用户点击后自动安装重启
+1. 断言 `tag = package.json = package-lock.json`；
+2. 断言版本不低于首个签名信任根 `1.3.0`；
+3. Apple 公证凭据预检；
+4. 在干净 checkout 中运行 `npm ci`，拒绝 symlink `node_modules`；
+5. 运行全量测试；
+6. `electron-builder --publish never` 构建、签名、公证；
+7. 验证 Developer ID、Team ID、Bundle ID、版本、架构、Gatekeeper、stapler、DMG、ZIP 与 metadata；
+8. 创建 draft Release，只上传两个 DMG、两个 ZIP、两个 blockmap；
+9. 从 GitHub 重新读取并核对每个资产的名称、大小与 SHA-256 digest；
+10. 全部通过后才把 draft 转为正式 Release，失败则清理 draft；
+11. 不上传 `latest-mac.yml`，也不上传 `swob-signed-mac.yml`。
 
-### 第四步：加 GitHub Actions 自动发版
+`v1.3.0` 是一次性手动信任根迁移版，Release notes 必须包含手动覆盖安装说明。
 
-创建 `.github/workflows/release.yml`，在打 tag 时自动：
-1. 编译
-2. 打包 DMG（arm64 + x64）
-3. 发布到 GitHub Releases
+### `promote-macos-update.yml`：真实 E2E 后开放自动更新
 
-### 第五步：修改版本号流程
+该 workflow 只能手动触发，并且必须运行在专用 GUI Mac：
 
-以后发版流程变成：
-1. 改 `package.json` 里的 `version`（比如 `1.0.0` → `1.1.0`）
-2. commit + push
-3. 打 tag：`git tag v1.1.0 && git push origin v1.1.0`
-4. GitHub Actions 自动打包 + 发布
-5. 用户下次打开 Swob 自动收到更新
+1. 候选 Release 必须已经存在，且只能包含六个已验收的不可变安装资产；
+2. 从候选的真实 arm64/x64 ZIP 计算 `swob-canary-mac.yml`；
+3. 临时上传 canary metadata；
+4. 启动已安装的上一正式版本；
+5. 强制走 `swob-canary`，检查指定候选版本；
+6. 下载、Squirrel 安装、退出并重新启动；
+7. 验证重启后的版本、Developer ID、Team ID、Gatekeeper 与 stapled ticket；
+8. 成功后把同一份 metadata 晋升为 `swob-signed-mac.yml`；
+9. 删除 canary metadata；
+10. 任一步失败都删除临时 metadata，禁止 stable promotion。
 
-## 注意事项
+`v1.3.0` 被 workflow 明确禁止发布自动更新 metadata。
 
-- `electron-updater` 对比的是 `package.json` 的 `version` 和 GitHub Releases 的 tag
-- 版本号必须用 semver 格式（x.y.z）
-- 不需要每次 commit 都发版，只有想推给用户时才打 tag
-- post-commit hook 的自动部署只影响你本地的 `/Applications/Swob.app`，不影响用户
+## 本地与 CI 验证
+
+### 零副作用门禁空跑
+
+手动运行 `Release Gates Dry Run`：
+
+- 使用干净 `npm ci` 依赖树；
+- 证明版本不一致会失败；
+- 证明缺 Apple 凭据会失败；
+- 构建一份 unsigned 目录 fixture，证明签名门禁会拒绝；
+- 运行全量测试和编译；
+- 不创建 tag、Release、release asset 或 workflow artifact。
+
+### 正式签名 smoke
+
+`macOS Signing Smoke Test` 继续验证签名、公证和独立安装。它不等于自动更新 E2E。
+
+### 本地开发包
+
+`npm run deploy` 生成 unsigned `--dir` 包，通常没有可用的线上更新上下文。它不能代表公开 Release，也不能用于判定自动更新是否正常。
+
+## 用户可见错误
+
+后台自动检查失败保持安静，不中断 Swob；用户主动检查、下载或安装失败必须给出可恢复路径：
+
+- 已是最新版：明确确认；
+- 检查失败：允许打开官方 Release 页手动下载；
+- 下载失败：提供重试；
+- 安全校验/安装失败：明确说明未安装新版，并提供官方手动下载入口。
+
+Renderer 只接收错误类别，不接收原始 updater error，避免把路径、请求或环境信息带进界面和日志。
+
+## 不允许的操作
+
+- 不再为任何新 Release 上传 `latest-mac.yml`；
+- 不让 `release.yml` 直接调用 `electron-builder --publish always`；
+- 不在真实 E2E 之前上传 `swob-signed-mac.yml`；
+- 不删除 blockmap 来换发布页整洁；
+- 不用 `xattr -cr` 作为正式签名版的安装方案；
+- 不覆盖已经发布的同版本 ZIP/DMG；
+- 不在日志、文档或参数中输出 Apple/GitHub Secret。
+
+## v1.2.0 用户文案
+
+> **首个正式签名版需要手动更新一次。**Swob v1.2.0 使用了早期 macOS 构建签名，无法安全地自动迁移到新的 Developer ID 正式签名版本。新版本发布后，请从 Swob 官网或 GitHub Release 下载与你的 Mac 匹配的 DMG，并覆盖安装一次。完成迁移后，后续版本将通过新的安全更新通道提供。

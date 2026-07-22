@@ -262,9 +262,12 @@ interface ElectronAPI {
   onUpdateAvailable: (callback: (version: string, notes: string) => void) => void
   onUpdateDownloading: (callback: (version: string) => void) => void
   onUpdateReady: (callback: (version: string, notes: string) => void) => void
+  onUpdateNotAvailable: (callback: () => void) => void
+  onUpdateError: (callback: (kind: 'check' | 'download' | 'install', version: string) => void) => void
   checkForUpdates: () => Promise<void>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
+  openUpdateDownloadPage: () => Promise<void>
 
   // Lineage
   getLineageRegistry: () => Promise<any>

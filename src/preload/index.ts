@@ -304,9 +304,16 @@ const api = {
   onUpdateReady: (callback: (version: string, notes: string) => void) => {
     ipcRenderer.on('update:ready', (_event, version, notes) => callback(version, notes))
   },
+  onUpdateNotAvailable: (callback: () => void) => {
+    ipcRenderer.on('update:notAvailable', () => callback())
+  },
+  onUpdateError: (callback: (kind: 'check' | 'download' | 'install', version: string) => void) => {
+    ipcRenderer.on('update:error', (_event, kind, version) => callback(kind, version))
+  },
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
-  installUpdate: () => ipcRenderer.invoke('update:install')
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  openUpdateDownloadPage: () => ipcRenderer.invoke('update:openDownload')
 }
 
 export type ResumeActionResult = { ok: boolean; sessionId: string; reason?: string; command?: string }

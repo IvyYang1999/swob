@@ -1,0 +1,93 @@
+name: Release Gates Dry Run
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out requested revision
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install a clean locked dependency tree
+        run: |
+          set -euo pipefail
+          if [[ -e node_modules || -L node_modules ]]; then
+            echo 'Dry-run checkout must start without node_modules.' >&2
+            exit 1
+          fi
+          npm ci
+          test -d node_modules
+          test ! -L node_modules
+          npm ls readdirp --all
+
+      - name: Prove version gate success and mismatch rejection
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          node scripts/release/assert-release-version.mjs --tag "v${version}"
+          if node scripts/release/assert-release-version.mjs --tag v0.0.0; then
+            echo 'Version mismatch gate unexpectedly passed.' >&2
+            exit 1
+          fi
+
+      - name: Prove missing Apple credentials fail closed
+        run: |
+          set -euo pipefail
+          if env -u APPLE_ID -u APPLE_APP_SPECIFIC_PASSWORD -u APPLE_TEAM_ID \
+            scripts/release/preflight-notarization.sh; then
+            echo 'Credential preflight unexpectedly passed without credentials.' >&2
+            exit 1
+          fi
+          echo 'Credential preflight correctly rejected missing secrets.'
+
+      - name: Run all tests and compile
+        run: |
+          npm test
+          npx electron-vite build
+
+      - name: Build an unsigned directory fixture
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --mac dir --arm64 --publish never --config.mac.notarize=false
+
+      - name: Prove signature gate rejects the unsigned fixture
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if scripts/release/verify-signed-app.sh \
+            dist/mac-arm64/Swob.app \
+            "$version" \
+            swob-signed \
+            ZPTA4LP594 \
+            arm64; then
+            echo 'Signature gate unexpectedly accepted an unsigned build.' >&2
+            exit 1
+          fi
+          echo 'Signature gate correctly rejected the unsigned fixture.'
+
+      - name: Summarize zero-side-effect validation
+        run: |
+          {
+            echo '## Release gates dry run passed'
+            echo
+            echo '- Clean npm ci dependency tree verified (node_modules is not a symlink)'
+            echo '- Tag/package/lock mismatch rejected'
+            echo '- Missing Apple credentials rejected'
+            echo '- Unsigned application rejected by the signing gate'
+            echo '- Full test suite and compile passed'
+            echo '- No tag, GitHub Release, release asset or workflow artifact created'
+          } >> "$GITHUB_STEP_SUMMARY"

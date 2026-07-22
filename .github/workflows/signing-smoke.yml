@@ -2,13 +2,27 @@ name: macOS Signing Smoke Test
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Choose zero-side-effect gates or the credentialed signing smoke
+        required: true
+        default: signing-smoke
+        type: choice
+        options:
+          - signing-smoke
+          - release-gates
 
 concurrency:
   group: macos-signing-smoke
   cancel-in-progress: false
 
 jobs:
+  release-gates-dry-run:
+    if: inputs.mode == 'release-gates'
+    uses: ./.github/workflows/release-gates-dry-run.yml
+
   signing-smoke:
+    if: inputs.mode == 'signing-smoke'
     name: Sign, notarize, and verify
     runs-on: macos-latest
     timeout-minutes: 45
@@ -32,25 +46,22 @@ jobs:
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ZPTA4LP594
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/release/preflight-notarization.sh
+
+      - name: Install a clean locked dependency tree
         run: |
           set -euo pipefail
-
-          if [[ -z "$APPLE_ID" || -z "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
-            echo "Required Apple notarization secrets are missing." >&2
+          if [[ -e node_modules || -L node_modules ]]; then
+            echo 'Signing smoke checkout must start without node_modules.' >&2
             exit 1
           fi
-
-          xcrun notarytool history \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --output-format json > /dev/null
-
-          echo "Apple notarization credentials accepted."
-
-      - name: Install dependencies
-        run: npm ci
+          npm ci
+          if [[ ! -d node_modules || -L node_modules ]]; then
+            echo 'npm ci must produce a real node_modules directory, never a symlink.' >&2
+            exit 1
+          fi
+          npm ls readdirp --all
 
       - name: Build, sign, and notarize both architectures
         shell: bash
@@ -59,7 +70,7 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ZPTA4LP594
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
 

@@ -828,6 +828,13 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.shared.test_the_connection": "测试连接",
     "renderer.shared.first_run_ssh_user_host_in_a_terminal": "先在终端运行 ssh user@host。确认无需交互输入密码且目标目录存在后，再交给 Swob。",
     "renderer.shared.connection_guide": "连接教程",
+    // Galaxy share
+    'galaxy.share_button': '分享我的会话星图',
+    'galaxy.share_tagline': '我的 AI 编程星图',
+    'galaxy.stat_sessions': '会话',
+    'galaxy.stat_turns': '总轮次',
+    'galaxy.stat_sources': '工具来源',
+    'galaxy.stat_longest': '最长会话',
     // T122_RENDERER_ZH
   },
 
@@ -1657,6 +1664,13 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.shared.test_the_connection": "Test the connection",
     "renderer.shared.first_run_ssh_user_host_in_a_terminal": "First run ssh user@host in a terminal. Confirm key login and the target path before using Swob.",
     "renderer.shared.connection_guide": "Connection guide",
+    // Galaxy share
+    'galaxy.share_button': 'Share my Session Galaxy',
+    'galaxy.share_tagline': 'My AI Coding Galaxy',
+    'galaxy.stat_sessions': 'Sessions',
+    'galaxy.stat_turns': 'Total turns',
+    'galaxy.stat_sources': 'Sources',
+    'galaxy.stat_longest': 'Longest',
     // T122_RENDERER_EN
   }
 }

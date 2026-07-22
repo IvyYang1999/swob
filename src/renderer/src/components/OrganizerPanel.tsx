@@ -47,7 +47,7 @@ export function OrganizerPanel({ kind, sidebarWidth, onClose }: {
     }).catch((reason) => {
       if (cancelled) return
       const message = reason instanceof Error ? reason.message : String(reason)
-      setError(message.includes('missing-api-key')
+      setError(message.includes('missing-api-key') || message.includes('尚未绑定 LLM Profile')
         ? '智能整理需要先在设置中配置 LLM API。按项目整理不需要 API。'
         : message)
     }).finally(() => { if (!cancelled) setLoading(false) })

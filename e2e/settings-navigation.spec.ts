@@ -51,18 +51,18 @@ test.afterAll(async () => {
   if (fixtureHome) fs.rmSync(fixtureHome, { recursive: true, force: true })
 })
 
-test('纵向左栏七项同时可见，无横向 Tab，旧配置迁移生效', async () => {
+test('纵向左栏九项同时可见，无横向 Tab，旧配置迁移生效', async () => {
   const dialog = page.getByRole('dialog', { name: '设置' })
   const nav = dialog.getByRole('navigation', { name: '设置分类' })
   const items = nav.getByRole('button')
-  await expect(items).toHaveCount(7)
-  await expect(items).toHaveText(['通用', '终端', 'Resume', 'SSH', '视图', '更新', 'CLI'])
+  await expect(items).toHaveCount(9)
+  await expect(items).toHaveText(['通用', 'AI 智能', '助手', '终端', 'Resume', 'SSH', '视图', '更新', 'CLI'])
   await expect(dialog.getByRole('tab')).toHaveCount(0)
   await expect(nav.getByRole('button', { name: '外观' })).toHaveCount(0)
   await expect(nav.getByRole('button', { name: '通用' })).toHaveAttribute('aria-current', 'page')
 
-  // 七项都在可视区(左栏不滚动即可见)
-  for (const name of ['通用', '终端', 'Resume', 'SSH', '视图', '更新', 'CLI']) {
+  // 九项都在可视区(左栏不滚动即可见)
+  for (const name of ['通用', 'AI 智能', '助手', '终端', 'Resume', 'SSH', '视图', '更新', 'CLI']) {
     await expect(nav.getByRole('button', { name })).toBeInViewport()
   }
 
@@ -140,7 +140,7 @@ test('窄窗口仍是纵向导航,左栏固定,右侧内容独立滚动', async 
   const dialog = page.getByRole('dialog', { name: '设置' })
   const nav = dialog.getByRole('navigation', { name: '设置分类' })
 
-  // 仍是纵向导航,七项可见,无横向 tablist
+  // 仍是纵向导航,九项可见,无横向 tablist
   await expect(nav).toBeVisible()
   await expect(dialog.getByRole('tablist')).toHaveCount(0)
   for (const name of ['通用', 'CLI']) {

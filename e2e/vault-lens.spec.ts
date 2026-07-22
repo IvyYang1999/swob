@@ -92,6 +92,9 @@ test.beforeAll(async () => {
   const launched = await launchApp({ env: { HOME: fixtureHome } })
   app = launched.app
   page = launched.page
+  // tF4 起侧栏分组默认全折叠:先等分组出现,展开第一组后会话才可见
+  await expect(page.locator('[data-lens-group]').first()).toBeVisible({ timeout: 20_000 })
+  await page.locator('[data-lens-group] > button').first().click()
   await expect(page.locator('[data-session-id]').first()).toBeVisible({ timeout: 20_000 })
   await page.waitForTimeout(1500)
 })
@@ -102,8 +105,8 @@ test.afterAll(async () => {
 })
 
 test('文件夹与镜头切换、7 维分组不会写 Vault', async () => {
-  await page.getByRole('tab', { name: /文件夹/ }).click()
-  await expect(page.getByRole('tab', { name: /文件夹/ })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('tab', { name: /整理会话/ }).click()
+  await expect(page.getByRole('tab', { name: /整理会话/ })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByText('项目说明.md')).toBeVisible()
   // 根目录散放：不再有 Inbox 容器；游离会话直接显示
   await expect(page.getByText('Inbox', { exact: true })).toHaveCount(0)
@@ -122,7 +125,7 @@ test('文件夹与镜头切换、7 维分组不会写 Vault', async () => {
   await page.screenshot({ path: path.join(screenshotDir, 'folders.png') })
 
   const before = snapshot(vaultRoot)
-  await page.getByRole('tab', { name: /镜头/ }).click()
+  await page.getByRole('tab', { name: /查看全部会话/ }).click()
   for (const label of ['项目', '日期', '标签', 'harness', '轮数', '来源', '无分组']) {
     await page.getByRole('button', { name: label, exact: true }).click()
     await expect(page.locator('[data-testid="lens-view"]')).toBeVisible()
@@ -130,9 +133,11 @@ test('文件夹与镜头切换、7 维分组不会写 Vault', async () => {
   await page.getByRole('button', { name: '标签', exact: true }).click()
   await expect(page.locator('[data-lens-group="tag:产品"]')).toBeVisible()
   await expect(page.locator('[data-lens-group="tag:性能"]')).toBeVisible()
+  // tF4 起分组默认折叠:展开「产品」组后才有会话项;折叠组头部自带 chevron-right,断言只限会话项内
+  await page.locator('[data-lens-group="tag:产品"] > button').click()
   await expect(page.locator('[data-testid="lens-view"] [data-session-id]').first()).toHaveAttribute('draggable', 'false')
-  await expect(page.locator('[data-testid="lens-view"] .lucide-folder')).toHaveCount(0)
-  await expect(page.locator('[data-testid="lens-view"] .lucide-chevron-right')).toHaveCount(0)
+  await expect(page.locator('[data-testid="lens-view"] [data-session-id] .lucide-folder')).toHaveCount(0)
+  await expect(page.locator('[data-testid="lens-view"] [data-session-id] .lucide-chevron-right')).toHaveCount(0)
   await page.locator('[data-testid="lens-view"] [data-session-id]').first().click()
   await page.screenshot({ path: path.join(screenshotDir, 'lens-tags.png') })
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))

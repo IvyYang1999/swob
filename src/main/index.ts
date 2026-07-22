@@ -33,6 +33,7 @@ import {
   libraryTreeToConfig,
   loadLibraryConfig,
   saveLibraryConfig,
+  saveLibraryConfigAsync,
   ensureSessionInLibrary,
   updateTranscript,
   getSessionMdPath,
@@ -1896,13 +1897,17 @@ ipcMain.handle('app:getSystemLocale', () => resolveSystemLocale(
   preferredSystemLanguagesForRuntime(app.getPreferredSystemLanguages())
 ))
 
-ipcMain.handle('config:save', (_event, config: { preferences: Record<string, unknown> }) => {
+ipcMain.handle('config:save', async (_event, config: { preferences: Record<string, unknown> }) => {
   const migratedPreferences = migrateSettingsPreferences(config.preferences)
   const migratedConfig = { ...config, preferences: migratedPreferences }
   if (shouldReadLibraryConfig()) {
     const libConfig = loadLibraryConfig()
-    libConfig.preferences = migratedPreferences as any
-    saveLibraryConfig(libConfig)
+    // Do not mutate the cached config before the write lease is acquired: if
+    // acquisition fails, memory and disk must continue to describe one state.
+    await saveLibraryConfigAsync({
+      ...libConfig,
+      preferences: migratedPreferences as any
+    })
   } else {
     saveConfig(migratedConfig as any)
   }

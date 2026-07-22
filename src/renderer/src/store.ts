@@ -698,8 +698,19 @@ export const useStore = create<AppState>((set, get) => ({
     const config = get().config
     if (!config) return
     const updated = { ...config, preferences: { ...config.preferences, ...prefs } }
-    await window.api.saveConfig(updated)
+    // Update controlled settings immediately. Besides avoiding a visible
+    // snap-back while the Library writer publishes its patch, this ensures a
+    // second rapid preference change merges on top of the first one.
     set({ config: updated as UserConfig })
+    try {
+      const persisted = await window.api.saveConfig(updated)
+      // Do not overwrite a newer optimistic preference update that was made
+      // while this IPC request was in flight.
+      if (get().config === updated) set({ config: persisted as UserConfig })
+    } catch (error) {
+      if (get().config === updated) set({ config })
+      throw error
+    }
   },
 
   selectFolder: (folderId) => set({ selectedFolderId: folderId }),

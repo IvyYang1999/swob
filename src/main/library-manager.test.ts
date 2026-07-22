@@ -194,6 +194,47 @@ describe('Library scan generation', () => {
     release()
     await writing
   })
+
+  it('异步配置保存等待维护 writer 释放后再持久化', async () => {
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const writing = lib.withLibraryMaintenanceWriter(async () => {
+      entered()
+      await gate
+    })
+    await started
+
+    const current = lib.loadLibraryConfig()
+    let settled = false
+    const savingFirst = lib.saveLibraryConfigAsync({
+      ...current,
+      preferences: {
+        ...current.preferences,
+        defaultViewMode: 'full'
+      }
+    }).then(() => { settled = true })
+    const savingSecond = lib.saveLibraryConfigAsync({
+      ...current,
+      preferences: {
+        ...current.preferences,
+        defaultViewMode: 'full',
+        terminalApp: 'iTerm2'
+      }
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(settled).toBe(false)
+
+    release()
+    await writing
+    await Promise.all([savingFirst, savingSecond])
+    expect(lib.loadLibraryConfig().preferences).toMatchObject({
+      defaultViewMode: 'full',
+      terminalApp: 'iTerm2'
+    })
+  })
 })
 
 describe('Library metadata cache', () => {

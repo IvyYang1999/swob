@@ -646,6 +646,7 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
 
 let _cachedLibraryConfig: LibraryConfig | null = null
 let _cachedLibraryConfigRoot: string = ''
+let _configSaveQueue: Promise<void> = Promise.resolve()
 
 export function loadLibraryConfig(): LibraryConfig {
   if (_cachedLibraryConfig && _cachedLibraryConfigRoot === _root) return _cachedLibraryConfig
@@ -667,6 +668,24 @@ export function loadLibraryConfig(): LibraryConfig {
 
 export function saveLibraryConfig(config: LibraryConfig): void {
   withLibraryWriterSync('config', () => saveLibraryConfigUnderWriter(config))
+}
+
+/**
+ * Persist config without blocking the main event loop while another local
+ * Library operation owns the writer lease. IPC handlers should prefer this
+ * variant so an in-flight maintenance batch can finish and release its lock.
+ */
+export async function saveLibraryConfigAsync(config: LibraryConfig): Promise<void> {
+  // The filesystem lease coordinates processes but does not promise FIFO to
+  // several waiters in this process. Preserve IPC arrival order explicitly so
+  // a slower, older preferences snapshot can never overwrite a newer one.
+  _localWriterDepth++
+  const pending = _configSaveQueue.then(() =>
+    withLibraryWriter('config', () => saveLibraryConfigUnderWriter(config))
+  )
+  const completed = pending.finally(() => { _localWriterDepth-- })
+  _configSaveQueue = completed.catch(() => undefined)
+  await completed
 }
 
 function saveLibraryConfigUnderWriter(config: LibraryConfig): void {

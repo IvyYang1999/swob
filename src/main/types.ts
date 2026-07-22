@@ -114,6 +114,20 @@ export interface SkillInvocation {
 
 export type SessionSource = 'claude-code' | 'codex' | 'cursor' | 'opencode' | 'zcode' | 'cc-mirror' | 'antigravity' | 'grok' | 'pi' | 'kimi' | 'hermes'
 
+export interface SessionSubagentSummary {
+  sessionId: string
+  parentSessionId?: string
+  role: 'guardian' | 'thread-spawn' | 'subagent'
+  filePath: string
+  createdAt: string
+  updatedAt: string
+  agentPath?: string
+  agentNickname?: string
+  agentRole?: string
+  model?: string
+  status: 'completed' | 'unknown'
+}
+
 export interface SessionSummary {
   id: string
   sessionId: string
@@ -160,6 +174,8 @@ export interface SessionSummary {
   allUserMessages?: string
   estimatedTime?: number  // 预估活跃时间（毫秒），相邻消息间隔累加，30min 截断
   models?: string[]  // 该 session 使用的模型列表（去重）
+  /** Internal Codex children linked to this top-level session; never top-level rows themselves. */
+  subagents?: SessionSubagentSummary[]
 }
 
 export interface FileRef {

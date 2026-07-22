@@ -111,6 +111,77 @@ function codexBackupRows(sessionId: string): unknown[] {
   ]
 }
 
+function codexRoleRows(params: {
+  sessionId: string
+  userText: string
+  inputTokens: number
+  outputTokens: number
+  turnId: string
+  source?: unknown
+  parentThreadId?: string
+}): unknown[] {
+  return [
+    {
+      timestamp: '2026-07-22T00:00:00Z',
+      type: 'session_meta',
+      payload: {
+        id: params.sessionId,
+        timestamp: '2026-07-22T00:00:00Z',
+        cwd: '/Users/test/projects/swob',
+        cli_version: 'codex-test',
+        model_provider: 'openai',
+        source: params.source || 'vscode',
+        ...(params.parentThreadId
+          ? { thread_source: 'subagent', parent_thread_id: params.parentThreadId }
+          : {})
+      }
+    },
+    {
+      timestamp: '2026-07-22T00:00:01Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: params.userText }]
+      }
+    },
+    {
+      timestamp: '2026-07-22T00:00:02Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '完成' }]
+      }
+    },
+    {
+      timestamp: '2026-07-22T00:00:02Z',
+      type: 'turn_context',
+      payload: { turn_id: params.turnId, model: 'gpt-5.4', model_provider: 'openai' }
+    },
+    {
+      timestamp: '2026-07-22T00:00:03Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          turn_id: params.turnId,
+          last_token_usage: {
+            input_tokens: params.inputTokens,
+            output_tokens: params.outputTokens,
+            cached_input_tokens: 0
+          }
+        }
+      }
+    },
+    {
+      timestamp: '2026-07-22T00:00:04Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete' }
+    }
+  ]
+}
+
 function cursorBackupRows(prompt = '从 Cursor backup 建 detail'): unknown[] {
   return [
     { role: 'user', message: { content: `<user_query>${prompt}</user_query>` } },
@@ -849,7 +920,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
       const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
-      expect(diskCache.version).toBe(23)
+      expect(diskCache.version).toBe(24)
       expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
       expect(diskCache.entries[firstFile]).toMatchObject({
         sig: expect.any(String),
@@ -1021,13 +1092,149 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
       expect(summary).toMatchObject({ firstUserMessage: 'old-cache-session', turnCount: 0 })
-      expect(refreshedCache.version).toBe(23)
+      expect(refreshedCache.version).toBe(24)
       expect(refreshedCache.entries[file].perFile.lineageMeta.leafUuidRefs[0]).toMatchObject({
         origin: { kind: 'task-notification' },
         promptSource: 'sdk'
       })
     } finally {
       infoSpy.mockRestore()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('t117：guardian/thread_spawn 不作顶层，子用量归父且旧缓存不能复活 guardian', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-role-cache-home-'))
+    const codexDir = path.join(home, '.codex', 'sessions', '2026', '07', '22')
+    const parentId = '019f8476-88d9-7b12-9b78-0e6d5ec8f640'
+    const childId = '019f4a2a-d46a-7d63-93e8-3a542bfe1c1d'
+    const guardianId = '019f8786-bfca-7b12-a541-fe89cc3b242a'
+    const parentFile = path.join(codexDir, `rollout-parent-${parentId}.jsonl`)
+    const childFile = path.join(codexDir, `rollout-child-${childId}.jsonl`)
+    const guardianFile = path.join(codexDir, `rollout-guardian-${guardianId}.jsonl`)
+
+    writeJsonlAt(parentFile, codexRoleRows({
+      sessionId: parentId,
+      userText: '正常父会话',
+      inputTokens: 100,
+      outputTokens: 20,
+      turnId: 'shared-turn'
+    }) as RawJsonlMessage[])
+    const childRows = codexRoleRows({
+      sessionId: childId,
+      userText: '真实子 Agent',
+      inputTokens: 100,
+      outputTokens: 20,
+      turnId: 'shared-turn',
+      parentThreadId: parentId,
+      source: {
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: parentId,
+            depth: 1,
+            agent_path: '/root/review',
+            agent_nickname: 'Reviewer'
+          }
+        }
+      }
+    }) as any[]
+    childRows.splice(childRows.length - 1, 0, {
+      timestamp: '2026-07-22T00:00:03.500Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          turn_id: 'child-only',
+          last_token_usage: { input_tokens: 50, output_tokens: 5, cached_input_tokens: 0 }
+        }
+      }
+    })
+    writeJsonlAt(childFile, childRows as RawJsonlMessage[])
+    writeJsonlAt(guardianFile, codexRoleRows({
+      sessionId: guardianId,
+      userText: 'The following is the Codex agent history whose request action you are assessing.',
+      inputTokens: 30,
+      outputTokens: 3,
+      turnId: 'guardian-only',
+      parentThreadId: parentId,
+      source: { subagent: { other: 'guardian' } }
+    }) as RawJsonlMessage[])
+
+    try {
+      const cold = await loadAllSessionsFromTempHome(home)
+      const parent = cold.find((session) => session.sessionId === parentId)
+      const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+      const cache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+
+      expect(cold.map((session) => session.sessionId)).toEqual([parentId])
+      expect(parent?.subagents).toEqual([
+        expect.objectContaining({ sessionId: childId, role: 'thread-spawn', parentSessionId: parentId })
+      ])
+      expect(parent?.tokenAccounting?.billingTotal).toBe(208)
+      expect(parent?.tokenAccounting?.conversationOnly).toBe(120)
+      expect(parent?.tokenAccounting?.usageEvents).toHaveLength(3)
+      expect(parent?.tokenAccounting?.usageEvents.filter((event) => event.scope === 'subagent')).toHaveLength(2)
+      expect(cache.version).toBe(24)
+      expect(cache.entries[guardianFile].perFile).toMatchObject({
+        summary: null,
+        codexSubagent: { role: 'guardian', parentSessionId: parentId }
+      })
+
+      cache.version = 23
+      cache.entries[guardianFile].perFile.summary = {
+        ...parent,
+        id: `codex:${guardianId}`,
+        sessionId: guardianId,
+        firstUserMessage: '旧缓存中的 guardian'
+      }
+      fs.writeFileSync(cachePath, JSON.stringify(cache))
+
+      const hot = await loadAllSessionsFromTempHome(home)
+      expect(hot.map((session) => session.sessionId)).toEqual([parentId])
+      expect(JSON.parse(fs.readFileSync(cachePath, 'utf-8')).version).toBe(24)
+
+      fs.rmSync(childFile)
+      fs.rmSync(guardianFile)
+      const afterChildrenRemoved = await loadAllSessionsFromTempHome(home)
+      expect(afterChildrenRemoved[0].tokenAccounting?.billingTotal).toBe(120)
+      expect(afterChildrenRemoved[0].tokenAccounting?.conversationOnly).toBe(120)
+      expect(afterChildrenRemoved[0].subagents).toBeUndefined()
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('t117：报告固定快照中的 44 个 guardian 全部退出顶层，正常 Codex 数量不变', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-44-guardian-home-'))
+    const codexDir = path.join(home, '.codex', 'sessions', '2026', '07', '22')
+    const normalIds = ['normal-codex-a', 'normal-codex-b']
+
+    for (const [index, sessionId] of normalIds.entries()) {
+      writeJsonlAt(path.join(codexDir, `rollout-normal-${index}.jsonl`), codexRoleRows({
+        sessionId,
+        userText: `正常会话 ${index}`,
+        inputTokens: 10,
+        outputTokens: 2,
+        turnId: `normal-turn-${index}`
+      }) as RawJsonlMessage[])
+    }
+    for (let index = 0; index < 44; index++) {
+      writeJsonlAt(path.join(codexDir, `rollout-guardian-${index}.jsonl`), codexRoleRows({
+        sessionId: `guardian-${index}`,
+        userText: 'The following is the Codex agent history whose request action you are assessing.',
+        inputTokens: 3,
+        outputTokens: 1,
+        turnId: `guardian-turn-${index}`,
+        parentThreadId: normalIds[0],
+        source: { subagent: { other: 'guardian' } }
+      }) as RawJsonlMessage[])
+    }
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home)
+      expect(46 - sessions.length).toBe(44)
+      expect(sessions.map((session) => session.sessionId).sort()).toEqual(normalIds)
+    } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }
   })

@@ -4,8 +4,13 @@ import * as path from 'path'
 import { parseSessionFile } from './session-loader'
 import type { RawJsonlMessage } from './types'
 import { runtimeHome } from './runtime-home'
+import {
+  stripTerminalControlSequences,
+  stripTerminalControlSequencesDeep
+} from '../shared/chat-format'
 
-const SEARCH_SCHEMA_VERSION = 3
+// v4 rebuilds unchanged files so ANSI/CSI/OSC text cannot survive in old FTS rows.
+const SEARCH_SCHEMA_VERSION = 4
 
 export interface SearchIndexSource {
   filePath: string
@@ -195,14 +200,14 @@ function getDatabase(): Database.Database {
 
 function searchableValue(value: unknown): string {
   if (value === null || value === undefined) return ''
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') return stripTerminalControlSequences(value)
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  try { return JSON.stringify(value) }
+  try { return JSON.stringify(stripTerminalControlSequencesDeep(value)) }
   catch { return String(value) }
 }
 
 function extractContentText(content: unknown): string {
-  if (typeof content === 'string') return content
+  if (typeof content === 'string') return stripTerminalControlSequences(content)
   if (!Array.isArray(content)) return ''
 
   let text = ''

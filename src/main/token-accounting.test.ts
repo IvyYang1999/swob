@@ -4,6 +4,7 @@ import {
   accountClaudeUsage,
   accountCodexUsage,
   accountingFromLegacyUsage,
+  mergeTokenAccountings,
   processedTotal
 } from './token-accounting'
 
@@ -96,6 +97,25 @@ describe('token accounting', () => {
     expect(accounting.billingTotal).toBe(1_660)
     expect(accounting.provenance).toBe('derived')
     expect(accounting.usageEvents.every((event) => event.counterKind === 'cumulative-delta')).toBe(true)
+  })
+
+  it('Codex 子会话用量归为 subagent，合并到父会话时按事件键去重且不进入 conversation-only', () => {
+    const parent = accountCodexUsage([
+      { kind: 'incremental', inputTokens: 100, outputTokens: 20, dedupHint: 'shared-turn' }
+    ])
+    const child = accountCodexUsage([
+      { kind: 'incremental', inputTokens: 100, outputTokens: 20, dedupHint: 'shared-turn' },
+      { kind: 'incremental', inputTokens: 50, outputTokens: 5, dedupHint: 'child-only' }
+    ], 'subagent')
+
+    const merged = mergeTokenAccountings([parent, child])
+
+    expect(child.usageEvents.every((event) => event.scope === 'subagent')).toBe(true)
+    expect(merged.billingTotal).toBe(175)
+    expect(merged.conversationOnly).toBe(120)
+    expect(merged.usageEvents).toHaveLength(2)
+    expect(merged.usageEvents.find((event) => event.dedupKey === 'shared-turn')?.scope).toBe('main')
+    expect(merged.warnings.join(' ')).toContain('deduplicated 1 cross-session usage event')
   })
 
   it('Cursor 与未验证 harness 明确 unavailable，不把未知值伪装成零', () => {

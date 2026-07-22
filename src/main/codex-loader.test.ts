@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { buildCodexSessionSummary, buildCodexSessionDetail, findCodexSessionFiles } from './codex-loader'
+import {
+  buildCodexSessionSummary,
+  buildCodexSessionDetail,
+  classifyCodexSession,
+  findCodexSessionFiles,
+  loadCodexSessionRecord
+} from './codex-loader'
 
 function writeTempJsonl(lines: object[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-test-'))
@@ -12,6 +18,7 @@ function writeTempJsonl(lines: object[]): string {
 }
 
 const SESSION_ID = '019d2f83-912b-7933-8860-00156f6f333e'
+const PARENT_ID = '019f8476-88d9-7b12-9b78-0e6d5ec8f640'
 
 function makeCodexLines() {
   return [
@@ -93,6 +100,36 @@ function makeCodexLines() {
 }
 
 describe('codex-loader', () => {
+  describe('classifyCodexSession', () => {
+    it('只根据结构化 session_meta 区分 guardian、thread_spawn 与顶层会话', () => {
+      expect(classifyCodexSession({
+        source: { subagent: { other: 'guardian' } },
+        thread_source: 'subagent',
+        parent_thread_id: PARENT_ID
+      })).toMatchObject({ role: 'guardian', parentThreadId: PARENT_ID })
+
+      expect(classifyCodexSession({
+        source: {
+          subagent: {
+            thread_spawn: {
+              parent_thread_id: PARENT_ID,
+              depth: 1,
+              agent_path: '/root/review',
+              agent_nickname: 'Reviewer'
+            }
+          }
+        }
+      })).toMatchObject({
+        role: 'thread-spawn',
+        parentThreadId: PARENT_ID,
+        agentPath: '/root/review',
+        agentNickname: 'Reviewer'
+      })
+
+      expect(classifyCodexSession({ source: 'vscode' })).toEqual({ role: 'top-level' })
+    })
+  })
+
   describe('findCodexSessionFiles', () => {
     it('可从注入的 Windows USERPROFILE fixture 发现会话', () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-win-codex-home-'))
@@ -186,6 +223,105 @@ describe('codex-loader', () => {
       const fp = writeTempJsonl([])
       const summary = await buildCodexSessionSummary(fp)
       expect(summary).toBeNull()
+    })
+
+    it('guardian 与 thread_spawn 不生成顶层 summary/detail，但保留父子关系和子会话用量', async () => {
+      const guardianLines: any[] = makeCodexLines()
+      guardianLines[0] = {
+        ...guardianLines[0],
+        payload: {
+          ...guardianLines[0].payload,
+          source: { subagent: { other: 'guardian' } },
+          thread_source: 'subagent',
+          parent_thread_id: PARENT_ID,
+          originator: 'Codex Desktop'
+        }
+      }
+      const guardianFile = writeTempJsonl(guardianLines)
+
+      expect(await buildCodexSessionSummary(guardianFile)).toBeNull()
+      expect(await buildCodexSessionDetail(guardianFile)).toBeNull()
+      expect(await loadCodexSessionRecord(guardianFile)).toMatchObject({
+        summary: null,
+        subagent: {
+          role: 'guardian',
+          parentSessionId: PARENT_ID,
+          tokenAccounting: {
+            usageEvents: [{ scope: 'subagent' }]
+          }
+        }
+      })
+
+      const threadSpawnLines: any[] = makeCodexLines()
+      threadSpawnLines[0] = {
+        ...threadSpawnLines[0],
+        payload: {
+          ...threadSpawnLines[0].payload,
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: PARENT_ID,
+                depth: 1,
+                agent_path: '/root/review',
+                agent_nickname: 'Reviewer'
+              }
+            }
+          },
+          thread_source: 'subagent',
+          parent_thread_id: PARENT_ID
+        }
+      }
+      const threadSpawnFile = writeTempJsonl(threadSpawnLines)
+      expect(await loadCodexSessionRecord(threadSpawnFile)).toMatchObject({
+        summary: null,
+        subagent: {
+          role: 'thread-spawn',
+          parentSessionId: PARENT_ID,
+          agentPath: '/root/review',
+          agentNickname: 'Reviewer'
+        }
+      })
+    })
+
+    it('普通用户即使输入审批器固定开场白也不能被文本误杀', async () => {
+      const lines: any[] = makeCodexLines()
+      lines[0] = { ...lines[0], payload: { ...lines[0].payload, source: 'vscode' } }
+      lines[1] = {
+        ...lines[1],
+        payload: {
+          ...lines[1].payload,
+          content: [{ type: 'input_text', text: 'The following is the Codex agent history whose request action you are assessing.' }]
+        }
+      }
+
+      const summary = await buildCodexSessionSummary(writeTempJsonl(lines))
+      expect(summary?.firstUserMessage).toBe('The following is the Codex agent history whose request action you are assessing.')
+    })
+
+    it('用户、assistant 与 tool result 的 ANSI/CSI/OSC 在解析入口统一清理', async () => {
+      const lines: any[] = makeCodexLines()
+      lines[1].payload.content[0].text = '\u001b[2m用户\u001b[22m'
+      lines[3].payload.message = '\u001b]8;;https://example.com\u0007助手\u001b]8;;\u0007'
+      lines[5].payload.output = '\u001b[31m失败\u001b[0m\u001b[2J'
+
+      const detail = await buildCodexSessionDetail(writeTempJsonl(lines))
+      expect(detail?.firstUserMessage).toBe('用户')
+      expect(detail?.messages.some((message) => message.textContent === '助手')).toBe(true)
+      expect(detail?.messages.flatMap((message) => message.toolCalls).find((tool) => tool.id === 'call_abc123')?.result)
+        .toBe('失败')
+      expect(JSON.stringify(detail)).not.toMatch(/\u001b|\[2m|\[31m/)
+    })
+
+    it('兼容新版 Codex 数组格式的 function_call_output，并清理每个文本块', async () => {
+      const lines: any[] = makeCodexLines()
+      lines[5].payload.output = [
+        { type: 'input_text', text: '\u001b[2m第一段\u001b[22m' },
+        { type: 'input_text', text: '\u001b]0;title\u0007第二段\u001b[2J' }
+      ]
+
+      const detail = await buildCodexSessionDetail(writeTempJsonl(lines))
+      expect(detail?.messages.flatMap((message) => message.toolCalls).find((tool) => tool.id === 'call_abc123')?.result)
+        .toBe('第一段\n第二段')
     })
 
     it('没有 session_meta 时从文件名提取 session ID', async () => {

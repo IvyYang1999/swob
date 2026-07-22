@@ -8,6 +8,8 @@
  * - 错误/失败
  */
 
+import type { SessionSubagentSummary } from './types'
+
 export interface ToolCall {
   id: string
   name: string
@@ -117,7 +119,11 @@ function extractToolResults(content: unknown): Array<{ toolUseId: string; text: 
     })
 }
 
-export function buildExecutionTree(messages: RawMessage[], sessionId: string): ExecutionTree {
+export function buildExecutionTree(
+  messages: RawMessage[],
+  sessionId: string,
+  linkedSubagents: SessionSubagentSummary[] = []
+): ExecutionTree {
   const turns: TurnInfo[] = []
   const pendingToolCalls = new Map<string, ToolCall>()
   const pendingAgents = new Map<string, AgentSpawn>()
@@ -233,12 +239,38 @@ export function buildExecutionTree(messages: RawMessage[], sessionId: string): E
     }
   }
 
+  const visibleCodexAgents = linkedSubagents.filter((subagent) =>
+    subagent.role === 'thread-spawn' &&
+    (!subagent.parentSessionId || subagent.parentSessionId === sessionId)
+  )
+  if (visibleCodexAgents.length > 0) {
+    const agentSpawns: AgentSpawn[] = visibleCodexAgents.map((subagent) => ({
+      id: subagent.sessionId,
+      description: subagent.agentPath || subagent.agentRole || subagent.sessionId,
+      subagentType: subagent.agentNickname || subagent.agentRole || 'Codex subagent',
+      model: subagent.model,
+      timestamp: subagent.createdAt,
+      status: subagent.status,
+      resultTimestamp: subagent.updatedAt,
+      toolCalls: []
+    }))
+    toolCallsByName.Agent = (toolCallsByName.Agent || 0) + agentSpawns.length
+    turns.push({
+      index: turnIndex,
+      role: 'assistant',
+      timestamp: agentSpawns[0].timestamp,
+      textPreview: 'Codex subagents',
+      toolCalls: [],
+      agentSpawns,
+      cumulativeTokens: cumTokens
+    })
+  }
+
   return {
     sessionId,
     turns,
     totalToolCalls: Object.values(toolCallsByName).reduce((a, b) => a + b, 0),
-    totalAgentSpawns: Object.values(toolCallsByName).filter((_, i) =>
-      Object.keys(toolCallsByName)[i] === 'Agent').reduce((a, b) => a + b, 0),
+    totalAgentSpawns: toolCallsByName.Agent || 0,
     toolCallsByName,
     errors,
     tokenTimeline

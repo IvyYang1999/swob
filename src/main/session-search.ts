@@ -4,9 +4,28 @@ import {
   type SearchIndexResult,
   type SearchIndexSource
 } from './search-index'
+import type { SessionSummary } from './types'
 
 export type SessionSearchResult = SearchIndexResult
 export type SessionSearchSource = SearchIndexSource
+
+/**
+ * Codex internal rollouts remain valid raw evidence, but only files represented
+ * by a top-level summary may enter the user-facing search index.
+ */
+export function filterVisibleSearchSources(
+  sources: SessionSearchSource[],
+  sessions: SessionSummary[]
+): SessionSearchSource[] {
+  const visibleCodexPaths = new Set(
+    sessions
+      .filter((session) => session.source === 'codex')
+      .flatMap((session) => session.allFilePaths || [session.filePath])
+  )
+  return sources.filter((source) =>
+    source.source !== 'codex' || visibleCodexPaths.has(source.filePath)
+  )
+}
 
 /**
  * Keep the public API stable for IPC and CLI callers while replacing the old

@@ -19,13 +19,21 @@ import type { ProfileSecretStore, SecretStore } from './llm-secret-store'
 class MemoryStore implements SecretStore {
   stored: string | null = null
   failVerification = false
+  setCalls = 0
+  deleteCalls = 0
 
   async get(): Promise<string | null> {
     return this.failVerification ? 'different' : this.stored
   }
 
   async set(value: string): Promise<void> {
+    this.setCalls++
     this.stored = value
+  }
+
+  async delete(): Promise<void> {
+    this.deleteCalls++
+    this.stored = null
   }
 }
 
@@ -93,6 +101,25 @@ describe('LLM Keychain settings', () => {
     await expect(migrateLegacyLlmCredential(store)).rejects.toThrow(/verification/)
     expect(fs.readFileSync(path.join(root, '.swob-config.json'), 'utf-8'))
       .toContain('legacy-example-5678')
+
+    store.failVerification = false
+    await expect(migrateLegacyLlmCredential(store)).resolves.toBe(true)
+    expect(fs.readFileSync(path.join(root, '.swob-config.json'), 'utf-8'))
+      .not.toContain('legacy-example-5678')
+  })
+
+  it('shares one in-flight plaintext migration across concurrent callers', async () => {
+    writeLegacy('legacy-concurrent-2468')
+    const store = new MemoryStore()
+
+    const results = await Promise.all([
+      migrateLegacyLlmCredential(store),
+      migrateLegacyLlmCredential(store),
+      migrateLegacyLlmCredential(store)
+    ])
+
+    expect(results).toEqual([true, true, true])
+    expect(store.setCalls).toBe(1)
   })
 
   it('stores only metadata in Library and resolves the value at use time', async () => {

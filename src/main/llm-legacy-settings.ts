@@ -12,6 +12,7 @@ interface LegacyLlmSettings extends Record<string, unknown> {
 const defaultStore = new SecurityCliSecretStore()
 const PROVIDERS = new Set(['anthropic', 'openai', 'custom'])
 const LEGACY_VALUE_FIELD = ['api', 'Key'].join('')
+let legacyCredentialMigrationInFlight: Promise<boolean> | null = null
 
 function normalizeProvider(provider?: string): LlmSettings['provider'] {
   return PROVIDERS.has(provider || '') ? provider as LlmSettings['provider'] : 'anthropic'
@@ -30,8 +31,7 @@ function plaintextFrom(settings?: LegacyLlmSettings): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-/** Move a pre-t099 plaintext credential into the legacy Keychain account. */
-export async function migrateLegacyLlmCredential(store: SecretStore = defaultStore): Promise<boolean> {
+async function runLegacyLlmCredentialMigration(store: SecretStore): Promise<boolean> {
   const config = loadLibraryConfig()
   const legacy = legacySettings(config)
   const plaintext = plaintextFrom(legacy)
@@ -49,4 +49,18 @@ export async function migrateLegacyLlmCredential(store: SecretStore = defaultSto
   }
   saveLibraryConfig(config)
   return true
+}
+
+/**
+ * Move a pre-t099 plaintext credential into the legacy Keychain account.
+ * Concurrent callers share one attempt; a rejected attempt is cleared so the
+ * plaintext config remains the retry anchor for the next call.
+ */
+export function migrateLegacyLlmCredential(store: SecretStore = defaultStore): Promise<boolean> {
+  if (legacyCredentialMigrationInFlight) return legacyCredentialMigrationInFlight
+  const migration = runLegacyLlmCredentialMigration(store).finally(() => {
+    if (legacyCredentialMigrationInFlight === migration) legacyCredentialMigrationInFlight = null
+  })
+  legacyCredentialMigrationInFlight = migration
+  return migration
 }

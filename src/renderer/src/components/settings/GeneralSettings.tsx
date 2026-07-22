@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Globe, Keyboard, Sun, UserCircle, Check } from 'lucide-react'
+import { Globe, Keyboard, Palette, Sun, UserCircle, Check } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import { SettingField, Segmented, useSettingsPreferences } from './shared'
@@ -68,7 +68,7 @@ function IdentitySection() {
 }
 
 export function GeneralSettings() {
-  const { locale, setLocale, themeMode, setThemeMode, savePreferences } = useStore()
+  const { locale, setLocale, themeMode, setThemeMode, colorScheme, setColorScheme, savePreferences } = useStore()
   const t = useT()
   const preferences = useSettingsPreferences()
   const [recording, setRecording] = useState(false)
@@ -106,6 +106,20 @@ export function GeneralSettings() {
             { value: 'system', label: t('settings.theme_system') }
           ]}
         />
+      </SettingField>
+
+      <SettingField label={t('settings.color_scheme')} icon={<Palette size={12} />}>
+        <Segmented
+          ariaLabel={t('settings.color_scheme')}
+          value={colorScheme}
+          onChange={setColorScheme}
+          options={[
+            { value: 'default', label: t('settings.scheme_default') },
+            { value: 'paper', label: t('settings.scheme_paper') },
+            { value: 'nord', label: t('settings.scheme_nord') }
+          ]}
+        />
+        <p className="mt-2 text-faint text-[10px]">{t('settings.theme_ecosystem_teaser')}</p>
       </SettingField>
 
       <SettingField label={t('settings.language')} icon={<Globe size={12} />}>

@@ -72,6 +72,152 @@
   --color-soft-emerald: #288868;
 }
 
+/* ── Color scheme: Paper (warm) ─────────────────────────────────
+   Inspired by Obsidian Minimal / Things light themes, Typora Gitbook.
+   Colors derived from warm zinc/stone scale; accent #7452a8 (soft purple).
+   Source: hand-tuned warm neutrals, Obsidian Minimal (MIT).              */
+
+/* Paper — dark mode variant */
+[data-color-scheme="paper"] {
+  --color-base: #1e1c1a;
+  --color-surface: #2a2725;
+  --color-hover: #3a3633;
+  --color-pressed: #4a4642;
+
+  --color-bright: #f5f2ee;
+  --color-primary: #e8e4df;
+  --color-body: #d5d0ca;
+  --color-secondary: #a09a93;
+  --color-muted: #706a63;
+  --color-faint: #504a44;
+
+  --color-edge: #3a3633;
+  --color-edge-subtle: #2a2725;
+  --color-edge-strong: #504a44;
+  --color-edge-focus: #706a63;
+
+  --color-accent: #a88fd0;
+  --color-active: #5aad7a;
+
+  --color-soft-blue: #6aaad0;
+  --color-soft-green: #5aad78;
+  --color-soft-red: #d07070;
+  --color-soft-amber: #c8a04a;
+  --color-soft-purple: #a88fd0;
+  --color-soft-cyan: #5ab8c8;
+  --color-soft-indigo: #8080c0;
+  --color-soft-pink: #c06888;
+  --color-soft-orange: #d09060;
+  --color-soft-emerald: #50b888;
+}
+
+/* Paper — light mode variant (primary, optimized for this) */
+[data-color-scheme="paper"][data-theme="light"] {
+  --color-base: #faf8f5;
+  --color-surface: #f0ede8;
+  --color-hover: #e5e1db;
+  --color-pressed: #d8d3cc;
+
+  --color-bright: #1c1a18;
+  --color-primary: #2d2a27;
+  --color-body: #3d3a37;
+  --color-secondary: #6b6560;
+  --color-muted: #8a847e;
+  --color-faint: #b0aaa3;
+
+  --color-edge: #d8d3cc;
+  --color-edge-subtle: #e5e1db;
+  --color-edge-strong: #b0aaa3;
+  --color-edge-focus: #8a847e;
+
+  --color-accent: #7452a8;
+  --color-active: #4a9a6a;
+
+  --color-soft-blue: #4888b0;
+  --color-soft-green: #3a8a56;
+  --color-soft-red: #b85050;
+  --color-soft-amber: #9a7428;
+  --color-soft-purple: #7452a8;
+  --color-soft-cyan: #338898;
+  --color-soft-indigo: #5c5ca0;
+  --color-soft-pink: #a84870;
+  --color-soft-orange: #a86c34;
+  --color-soft-emerald: #2e8866;
+}
+
+/* ── Color scheme: Nordic Night (deep blue) ────────────────────
+   Inspired by Nord palette (nordtheme.com, MIT license).
+   Polar Night background, Snow Storm text, Frost accent #88c0d0.
+   Source: Nord palette by Arctic Ice Studio, MIT.                        */
+
+/* Nord — dark mode variant (primary, optimized for this) */
+[data-color-scheme="nord"] {
+  --color-base: #2e3440;
+  --color-surface: #3b4252;
+  --color-hover: #434c5e;
+  --color-pressed: #4c566a;
+
+  --color-bright: #eceff4;
+  --color-primary: #d8dee9;
+  --color-body: #c8ceda;
+  --color-secondary: #a8b4c4;
+  --color-muted: #6a7b96;
+  --color-faint: #4c566a;
+
+  --color-edge: #434c5e;
+  --color-edge-subtle: #3b4252;
+  --color-edge-strong: #4c566a;
+  --color-edge-focus: #6a7b96;
+
+  --color-accent: #88c0d0;
+  --color-active: #a3be8c;
+
+  --color-soft-blue: #81a1c1;
+  --color-soft-green: #a3be8c;
+  --color-soft-red: #bf616a;
+  --color-soft-amber: #ebcb8b;
+  --color-soft-purple: #b48ead;
+  --color-soft-cyan: #8fbcbb;
+  --color-soft-indigo: #7b9ec4;
+  --color-soft-pink: #c47e99;
+  --color-soft-orange: #d08770;
+  --color-soft-emerald: #8cc4a0;
+}
+
+/* Nord — light mode variant */
+[data-color-scheme="nord"][data-theme="light"] {
+  --color-base: #eceff4;
+  --color-surface: #e5e9f0;
+  --color-hover: #d8dee9;
+  --color-pressed: #c8ceda;
+
+  --color-bright: #2e3440;
+  --color-primary: #2e3440;
+  --color-body: #3b4252;
+  --color-secondary: #4c566a;
+  --color-muted: #6a7b96;
+  --color-faint: #a0acbc;
+
+  --color-edge: #d8dee9;
+  --color-edge-subtle: #e5e9f0;
+  --color-edge-strong: #a0acbc;
+  --color-edge-focus: #6a7b96;
+
+  --color-accent: #426b96;
+  --color-active: #4a8a5a;
+
+  --color-soft-blue: #4a6f9e;
+  --color-soft-green: #4a7e4a;
+  --color-soft-red: #a04850;
+  --color-soft-amber: #886820;
+  --color-soft-purple: #6e5080;
+  --color-soft-cyan: #387878;
+  --color-soft-indigo: #4a5898;
+  --color-soft-pink: #984870;
+  --color-soft-orange: #985830;
+  --color-soft-emerald: #387858;
+}
+
 body {
   margin: 0;
   padding: 0;

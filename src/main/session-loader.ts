@@ -24,6 +24,7 @@ import { isSystemText } from './session-message-classifier'
 import {
   accountClaudeUsage,
   markExcludedFromRollups,
+  totalCacheWriteTokens,
   tokenUsageFromAccounting,
   unavailableTokenAccounting
 } from './token-accounting'
@@ -49,7 +50,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 22 // provider-aware token accounting + source-correct new harness discovery
+const CACHE_VERSION = 23 // request model/provider attribution + token valuation ledger
 
 type CachedSessionSource = SessionSource
 
@@ -793,7 +794,7 @@ export function buildSessionDetail(
       .map((event) => [event.sourceRowId!, {
         inputTokens: event.components.nonCachedInputTokens,
         outputTokens: event.components.outputTokens,
-        cacheCreationTokens: event.components.cacheWriteTokens,
+        cacheCreationTokens: totalCacheWriteTokens(event.components),
         cacheReadTokens: event.components.cacheReadTokens
       } satisfies TokenUsage])
   )

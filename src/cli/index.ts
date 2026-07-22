@@ -564,6 +564,7 @@ async function cmdInsights(flags: Record<string, string | true>): Promise<void> 
       totalTurns: insights.totalTurns,
       totalTokens: insights.totalTokens,
       totalTokensMetric: 'input_plus_output',
+      valuation: insights.valuation,
       totalTime: insights.totalTime,
       totalTimeFormatted: formatTime(insights.totalTime),
       activeDays: insights.activeDays,

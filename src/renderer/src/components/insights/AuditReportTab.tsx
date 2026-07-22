@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { formatTokenCount, SOURCE_COLORS } from './shared'
+import { formatTokenCount, SOURCE_COLORS, type Valuation } from './shared'
 
 type TimeRange = 'today' | 'week' | 'month' | '30d' | '90d' | 'all'
 
@@ -10,14 +10,21 @@ interface InsightsReport {
   totalTurns: number
   totalTokens: number
   tokenAvailability: { availableSessions: number; unavailableSessions: number }
-  totalEstimatedCost: number
+  valuation: Valuation
   activeDays: number
   totalActiveHours: number
-  bySource: Array<{ source: string; sessions: number; turns: number; tokens: number; cost: number; unavailableSessions: number }>
+  bySource: Array<{
+    source: string
+    sessions: number
+    turns: number
+    tokens: number
+    valuation: Valuation
+    unavailableSessions: number
+  }>
   bySessionType: Record<string, number>
   healthDistribution: { excellent: number; good: number; fair: number; poor: number; avgScore: number }
   topTools: Array<{ name: string; count: number; errorRate: number }>
-  topModels: Array<{ model: string; turns: number; cost: number }>
+  topModels: Array<{ model: string; turns: number; valuation: Valuation }>
   visibleFrameworkMarkers: { avgEstimatedTokens: number }
   readEditRatio: { avg: number; healthyCnt: number; degradedCnt: number; criticalCnt: number }
   totalAntiPatterns: number
@@ -134,7 +141,11 @@ export function AuditReportTab() {
           <div className="grid grid-cols-3 gap-3">
             <StatCard value={String(report.totalSessions)} label="Sessions" />
             <StatCard value={formatTokenCount(report.totalTokens)} label="Processed Tokens" />
-            <StatCard value={`$${report.totalEstimatedCost.toFixed(0)}`} label="Est. Cost" color="text-soft-amber" />
+            <StatCard
+              value={report.valuation.usd === undefined ? '未计价' : `$${report.valuation.usd.toFixed(2)}`}
+              label={`API 等价值(估算) · 覆盖 ${report.valuation.coveragePercent.toFixed(1)}%`}
+              color="text-soft-amber"
+            />
           </div>
 
           <HealthBar d={report.healthDistribution} />
@@ -150,7 +161,9 @@ export function AuditReportTab() {
                     {s.sessions} sessions · {formatTokenCount(s.tokens)}
                     {s.unavailableSessions > 0 ? ` · ${s.unavailableSessions} unavailable` : ''}
                   </span>
-                  <span className="text-muted ml-auto">${s.cost.toFixed(1)}</span>
+                  <span className="text-muted ml-auto">
+                    {s.valuation.usd === undefined ? '未计价' : `$${s.valuation.usd.toFixed(2)} · ${s.valuation.coveragePercent.toFixed(1)}%`}
+                  </span>
                 </div>
               ))}
             </div>

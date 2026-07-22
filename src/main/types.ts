@@ -27,11 +27,27 @@ export interface RawJsonlMessage {
   isMeta?: boolean
   sourceToolAssistantUUID?: string
   requestId?: string
+  provider?: string
+  providerId?: string
+  model_provider?: string
+  costUSD?: number
+  cost?: { total?: number }
   toolUseResult?: unknown
   message?: {
     id?: string
     role: string
     model?: string
+    provider?: string
+    providerId?: string
+    provider_id?: string
+    model_provider?: string
+    costUSD?: number
+    cost?: { total?: number }
+    service_tier?: string
+    inference_geo?: string
+    region?: string
+    speed?: string
+    is_batch?: boolean
     stop_reason?: string | null
     content: string | ContentPart[]
     usage?: {
@@ -39,6 +55,13 @@ export interface RawJsonlMessage {
       output_tokens?: number
       cache_creation_input_tokens?: number
       cache_read_input_tokens?: number
+      cache_creation?: {
+        ephemeral_5m_input_tokens?: number
+        ephemeral_1h_input_tokens?: number
+      }
+      costUSD?: number
+      cost?: { total?: number }
+      service_tier?: string
     }
   }
   data?: unknown

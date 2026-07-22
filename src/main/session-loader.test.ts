@@ -818,7 +818,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
       const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
-      expect(diskCache.version).toBe(22)
+      expect(diskCache.version).toBe(23)
       expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
       expect(diskCache.entries[firstFile]).toMatchObject({
         sig: expect.any(String),
@@ -990,7 +990,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
       expect(summary).toMatchObject({ firstUserMessage: 'old-cache-session', turnCount: 0 })
-      expect(refreshedCache.version).toBe(22)
+      expect(refreshedCache.version).toBe(23)
       expect(refreshedCache.entries[file].perFile.lineageMeta.leafUuidRefs[0]).toMatchObject({
         origin: { kind: 'task-notification' },
         promptSource: 'sdk'

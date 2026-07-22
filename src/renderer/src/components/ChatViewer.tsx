@@ -7,7 +7,8 @@ import {
   User, Terminal, ChevronDown, ChevronRight,
   History, GitBranch, Copy, Check, Download, Play,
   List, Code2, CheckSquare, Cloud, CloudDownload,
-  Search, X, ArrowUp, ArrowDown, Highlighter, Trash2
+  Search, X, ArrowUp, ArrowDown, Highlighter, Trash2,
+  Image
 } from 'lucide-react'
 import { useT } from '../i18n'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
@@ -22,6 +23,8 @@ import {
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
 import { defaultResumeMethodForSource } from '../../../shared/settings-capabilities'
+import { SharePreview } from './share/SharePreview'
+import type { ShareMessage } from './share/ShareRenderer'
 
 import {
   DEFAULT_TOOL_COLOR,
@@ -1841,6 +1844,44 @@ export function ChatViewer() {
 
   const selectedCount = selectedItems.size
 
+  // Share image modal
+  const [shareModalOpen, setShareModalOpen] = useState(false)
+  const shareMessages = useMemo<ShareMessage[]>(() => {
+    if (!shareModalOpen || selectedItems.size === 0) return []
+    const result: ShareMessage[] = []
+    for (const turn of allTurns) {
+      if (!turn.userMsg) continue
+      const uuid = turn.userMsg.uuid
+      const qSel = selectedItems.has(`q:${uuid}`)
+      const aSel = selectedItems.has(`a:${uuid}`)
+      if (qSel) {
+        result.push({
+          uuid: `q-${uuid}`,
+          role: 'user',
+          text: turn.userMsg.textContent,
+          timestamp: turn.userMsg.timestamp,
+        })
+      }
+      if (aSel) {
+        const assistantText = turn.assistantMsgs
+          .filter((m) => m.type === 'assistant')
+          .map((m) => m.textContent)
+          .join('\n')
+        const toolCalls = turn.assistantMsgs
+          .flatMap((m) => m.toolCalls || [])
+          .map((tc) => ({ name: tc.name }))
+        result.push({
+          uuid: `a-${uuid}`,
+          role: 'assistant',
+          text: assistantText,
+          timestamp: turn.assistantMsgs[0]?.timestamp,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        })
+      }
+    }
+    return result
+  }, [shareModalOpen, selectedItems, allTurns])
+
   const handleBatchExport = useCallback(() => {
     if (selectedItems.size === 0) return
     const lines: string[] = []
@@ -2002,6 +2043,9 @@ export function ChatViewer() {
               <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
                 <Download size={10} /> {t('chat.download_md')}
               </button>
+              <button onClick={() => setShareModalOpen(true)} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
+                <Image size={10} /> {t('chat.generate_share_image')}
+              </button>
               <button onClick={() => { setSelectedItems(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-muted hover:text-body">
                 {t('chat.cancel')}
               </button>
@@ -2093,6 +2137,15 @@ export function ChatViewer() {
                 })}
               </div>
             </div>
+          )}
+          {/* Share image modal */}
+          {shareModalOpen && shareMessages.length > 0 && (
+            <SharePreview
+              messages={shareMessages}
+              sessionSource={selectedSession.source}
+              userDisplayName={userDisplayName}
+              onClose={() => setShareModalOpen(false)}
+            />
           )}
           {/* Floating highlight button — fixed position near selection */}
           {selectionPos && pendingHighlight && (

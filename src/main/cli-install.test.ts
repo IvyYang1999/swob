@@ -4,8 +4,10 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   buildCliWrapperScript,
+  cliInstallOptionsForEnvironment,
   getCliTargetCandidates,
   installSwobCli,
+  shouldAutoInstallCli,
   SWOB_APP_CLI_PATH
 } from './cli-install'
 
@@ -22,6 +24,37 @@ describe('CLI install helper', () => {
 
   afterEach(() => {
     fs.rmSync(tmpRoot, { recursive: true, force: true })
+  })
+
+  it('disables startup installation for disposable test homes', () => {
+    expect(shouldAutoInstallCli({})).toBe(true)
+    expect(shouldAutoInstallCli({ SWOB_TEST_HOME: '/tmp/swob-test' })).toBe(false)
+    expect(shouldAutoInstallCli({ NODE_ENV: 'test' })).toBe(false)
+  })
+
+  it('contains packaged-test install targets inside SWOB_TEST_HOME', () => {
+    const homeDir = path.join(tmpRoot, 'home')
+    const targetDir = path.join(homeDir, 'bin')
+    expect(cliInstallOptionsForEnvironment(homeDir, {
+      SWOB_TEST_HOME: homeDir,
+      SWOB_TEST_CLI_TARGET_DIR: targetDir,
+      SWOB_TEST_APP_CLI_PATH: path.join(tmpRoot, 'Swob.app', 'cli.js'),
+      PATH: '/usr/bin'
+    })).toMatchObject({
+      homeDir,
+      primaryTargetDir: targetDir,
+      appCliPath: path.join(tmpRoot, 'Swob.app', 'cli.js')
+    })
+    expect(cliInstallOptionsForEnvironment(homeDir, {
+      SWOB_TEST_HOME: homeDir
+    })).toMatchObject({
+      homeDir,
+      primaryTargetDir: targetDir
+    })
+    expect(() => cliInstallOptionsForEnvironment(homeDir, {
+      SWOB_TEST_HOME: homeDir,
+      SWOB_TEST_CLI_TARGET_DIR: '/opt/homebrew/bin'
+    })).toThrow('must stay inside SWOB_TEST_HOME')
   })
 
   it('generates a wrapper pinned to the app bundle CLI, with NODE_PATH reaching unpacked native deps', () => {

@@ -137,6 +137,7 @@ import {
 } from './resume-guard'
 import type { ResumeLaunchAction, ResumeSurface } from './session-actions'
 import {
+  shouldAutoInstallCli,
   findInstalledSwobCommandPath,
   installSwobCli,
   SWOB_APP_CLI_PATH
@@ -2313,6 +2314,7 @@ function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath
 
 function autoInstallCliOnStartup(): void {
   if (!getPlatformCapabilities().features.cliInstall) return
+  if (!shouldAutoInstallCli()) return
   try {
     installCli()
   } catch { /* ignore — user can manually install later */ }

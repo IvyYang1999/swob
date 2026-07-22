@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Swob — A git graph for your AI conversations</title>
-  <meta name="description" content="Trace lineage, recover compacted context, search 11 AI coding harnesses, and debug agent execution locally on macOS.">
+  <meta name="description" content="Trace lineage, recover compacted context, search 5 natively supported AI coding harnesses, and debug agent execution locally on macOS.">
   <meta name="theme-color" content="#efebe2">
   <meta name="color-scheme" content="light">
   <link rel="canonical" href="https://ivyyang1999.github.io/swob/">
@@ -17,7 +17,7 @@
   <meta property="og:locale" content="en_US">
   <meta property="og:locale:alternate" content="zh_CN">
   <meta property="og:title" content="Swob — A git graph for your AI conversations">
-  <meta property="og:description" content="Trace how AI coding sessions fork, compact, and continue. Recover context, search locally, and debug execution across 11 harnesses.">
+  <meta property="og:description" content="Trace how AI coding sessions fork, compact, and continue. Recover context, search locally, and debug execution across 5 natively supported harnesses (plus 1 compatible, 5 experimental detection).">
   <meta property="og:url" content="https://ivyyang1999.github.io/swob/">
   <meta property="og:image" content="https://ivyyang1999.github.io/swob/assets/social-preview.png">
   <meta property="og:image:width" content="1200">
@@ -73,13 +73,13 @@
         <div class="hero-copy">
           <div class="eyebrow">Open source · macOS · local-first</div>
           <h1>A git graph for your AI <span class="hero-last">conversations.</span></h1>
-          <p class="hero-lead">Trace how sessions <strong>fork, compact, and continue</strong>. Recover missing context, search histories from 11 coding harnesses, and debug the tool calls and context pressure behind every run.</p>
+          <p class="hero-lead">Trace how sessions <strong>fork, compact, and continue</strong>. Recover missing context, search histories from 5 natively supported coding harnesses, and debug the tool calls and context pressure behind every run.</p>
           <div class="cta-row">
             <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg">Download stable · Apple Silicon</a>
             <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">Explore current main</a>
             <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel Mac</a>
           </div>
-          <p class="release-note"><strong>Truth before launch copy:</strong> public v1.2.0 is the unsigned five-source stable build. It cannot auto-update across the upcoming Developer ID trust-root change, so the first signed release will require one manual DMG download. Later signed releases will use a separate E2E-gated update channel. The graph, debugger, 11-harness ingestion, AI Insights, and SQLite FTS shown here are implemented on current <code>main</code> and ship in the next release.</p>
+          <p class="release-note"><strong>Truth before launch copy:</strong> public v1.2.0 is the unsigned five-source stable build. It cannot auto-update across the upcoming Developer ID trust-root change, so the first signed release will require one manual DMG download. Later signed releases will use a separate E2E-gated update channel. The graph, debugger, multi-harness ingestion (5 native + 1 compatible + 5 experimental detection), AI Insights, and SQLite FTS shown here are implemented on current <code>main</code> and ship in the next release.</p>
         </div>
 
         <figure class="product-frame">
@@ -101,7 +101,7 @@
         <div class="proof-item"><span class="proof-value">253 / 1,621</span><span class="proof-label">source sessions missing; local backups survived</span></div>
         <div class="proof-item"><span class="proof-value">93.58%</span><span class="proof-label">verified resumability in that audited corpus</span></div>
         <div class="proof-item"><span class="proof-value">1,700+</span><span class="proof-label">sessions exercised in the current local performance corpus</span></div>
-        <div class="proof-item"><span class="proof-value">11</span><span class="proof-label">local harness families discovered on current main</span></div>
+        <div class="proof-item"><span class="proof-value">5+1+5</span><span class="proof-label">native read + compatible + experimental detection on current main</span></div>
       </div>
     </section>
 
@@ -181,7 +181,7 @@
             <p>The local dashboard combines tokens, cost estimates, heatmaps, source/model/project breakdowns, tool use, and code-change counts. Quick Report stays local. AI Report is a separate, explicit network action.</p>
             <ul>
               <li>1,704-session dashboard exercised locally</li>
-              <li>11-source distribution and model breakdown</li>
+              <li>source distribution and model breakdown across 5 native harnesses</li>
               <li>SQLite FTS5 incremental search</li>
               <li>Optional AI narrative, never implied offline</li>
             </ul>
@@ -202,7 +202,7 @@
         <div class="shell">
           <div class="section-head">
             <div class="eyebrow">03 · Sources</div>
-            <h2>One local history across 11 harness families.</h2>
+            <h2>One local history across 5 natively supported harnesses.</h2>
             <p class="section-intro">Current <code>main</code> discovers each source below. Parsing depth, lineage evidence, tokens, and resume support depend on what the original tool records; Swob does not fabricate missing metadata.</p>
           </div>
           <div class="source-list" aria-label="Supported source families">
@@ -275,7 +275,7 @@
             <h3>Session graph and debugger</h3>
             <p>The screenshots on this page come from these implemented current-main capabilities.</p>
             <ul>
-              <li>11-harness ingestion and Session Galaxy</li>
+              <li>Multi-harness ingestion (5 native + 1 compatible + 5 experimental) and Session Galaxy</li>
               <li>Execution Tree, Context Inspector, Session Audit</li>
               <li>Optional AI Insights with confirmation</li>
               <li>SQLite FTS5, watcher, and worker performance work</li>
@@ -310,8 +310,8 @@
             <p>No. Those capabilities are implemented on current <code>main</code> and are planned for the next release. Build from source to try them today.</p>
           </details>
           <details>
-            <summary>Does every one of the 11 harnesses expose the same data?</summary>
-            <p>No. Discovery is implemented for 11 source families, but lineage, tokens, child agents, and resume commands depend on what each source records. Swob leaves unavailable fields unavailable.</p>
+            <summary>Does every supported harness expose the same data?</summary>
+            <p>No. Swob natively reads 5 harnesses (Claude Code, Codex, Cursor, OpenCode, Zcode), supports 1 compatible format (CC Mirror), and experimentally detects files from 5 more (Antigravity, Grok/Factory, Pi, Kimi, Hermes — file discovery only, content reading not yet implemented). Even among natively read sources, lineage, tokens, child agents, and resume commands depend on what each source records. Swob leaves unavailable fields unavailable.</p>
           </details>
           <details>
             <summary>Does session content ever leave my Mac?</summary>

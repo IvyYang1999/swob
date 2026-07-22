@@ -79,7 +79,7 @@
             <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">查看当前 main</a>
             <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg">Intel Mac</a>
           </div>
-          <p class="release-note"><strong>先讲事实，再讲卖点：</strong>公开的 v1.2.0 是未签名的五来源稳定版，无法自动跨越即将启用的 Developer ID 信任根。首个正式签名版发布后，需要手动下载 DMG 覆盖安装一次；之后的签名版本才走独立且经过 E2E 验收的更新通道。此处展示的会话星图、调试器、11 类来源导入、AI Insights 与 SQLite FTS 已在当前 <code>main</code> 实现，将随下一版本发布。</p>
+          <p class="release-note"><strong>先讲事实，再讲卖点：</strong>公开的 v1.2.0 是未签名的五来源稳定版，无法自动跨越即将启用的 Developer ID 信任根。首个正式签名版发布后，需要手动下载 DMG 覆盖安装一次；之后的签名版本才走独立且经过 E2E 验收的更新通道。此处展示的会话星图、调试器、多来源导入（5 原生 + 1 兼容 + 5 实验性检测）、AI Insights 与 SQLite FTS 已在当前 <code>main</code> 实现，将随下一版本发布。</p>
         </div>
 
         <figure class="product-frame">
@@ -101,7 +101,7 @@
         <div class="proof-item"><span class="proof-value">253 / 1,621</span><span class="proof-label">原始会话已缺失；本地备份仍保留</span></div>
         <div class="proof-item"><span class="proof-value">93.58%</span><span class="proof-label">该审计语料中可验证的续接率</span></div>
         <div class="proof-item"><span class="proof-value">1,700+</span><span class="proof-label">在当前本地性能语料中验证的会话数</span></div>
-        <div class="proof-item"><span class="proof-value">11</span><span class="proof-label">当前 main 可发现的本地来源家族</span></div>
+        <div class="proof-item"><span class="proof-value">5+1+5</span><span class="proof-label">原生读取 + 兼容 + 实验性检测（当前 main）</span></div>
       </div>
     </section>
 
@@ -181,7 +181,7 @@
             <p>本地看板汇总 token、成本估算、热力图、来源／模型／项目分布、工具使用和代码改动量。Quick Report 全程本地运行；AI Report 则是单独触发、明确联网的操作。</p>
             <ul>
               <li>已用 1,704 个本地会话验证看板</li>
-              <li>11 类来源分布与模型拆解</li>
+              <li>来源分布与模型拆解（5 种原生来源）</li>
               <li>SQLite FTS5 增量检索</li>
               <li>AI 叙述可选启用，绝不冒充离线能力</li>
             </ul>
@@ -275,7 +275,7 @@
             <h3>会话星图与调试器</h3>
             <p>本页截图来自当前 main 已经实现的这些能力。</p>
             <ul>
-              <li>11 类来源导入与 Session Galaxy 会话星图</li>
+              <li>多来源导入（5 原生 + 1 兼容 + 5 实验性检测）与 Session Galaxy 会话星图</li>
               <li>执行树、上下文检查器与会话审计</li>
               <li>需确认后启用的可选 AI Insights</li>
               <li>SQLite FTS5、文件监视与 Worker 性能优化</li>
@@ -310,8 +310,8 @@
             <p>没有。这些能力已在当前 <code>main</code> 实现，计划随下一版本发布。现在如要体验，请从源码构建。</p>
           </details>
           <details>
-            <summary>11 类 AI 编程工具都能提供同样的数据吗？</summary>
-            <p>不能。Swob 已能发现 11 类来源，但血统、token、子 Agent 和续接命令取决于每种来源实际记录的内容。缺失的字段会保持不可用，不会被臆造补齐。</p>
+            <summary>所有支持的来源都能提供同样的数据吗？</summary>
+            <p>不能。Swob 原生读取 5 种 harness（Claude Code、Codex、Cursor、OpenCode、Zcode），支持 1 种兼容格式（CC Mirror），另有 5 种实验性文件检测（Antigravity、Grok/Factory、Pi、Kimi、Hermes——仅发现文件，尚不读取正文）。即使在原生读取的来源中，血统、token、子 Agent 和续接命令也取决于每种来源实际记录的内容。缺失的字段会保持不可用，不会被臆造补齐。</p>
           </details>
           <details>
             <summary>会话内容会离开我的 Mac 吗？</summary>

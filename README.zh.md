@@ -8,7 +8,7 @@
 
 **找回丢失的上下文，追踪 fork 与 compact，调试 Agent 到底做了什么。**
 
-Swob 读取 **11 种 AI 编程 harness** 的本地历史，重建会话血统，用 SQLite FTS5 索引全部消息，并提供执行树、上下文检查器、带数据来源标记的会话审计，以及可选的 AI Insights。
+Swob 原生读取 **5 种 AI 编程 harness** 的本地历史（另有 1 种兼容格式、5 种实验性文件检测），重建会话血统，用 SQLite FTS5 索引全部消息，并提供执行树、上下文检查器、带数据来源标记的会话审计，以及可选的 AI Insights。
 
 [官网](https://ivyyang1999.github.io/swob/) · [Apple Silicon DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) · [Intel DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) · [更新日志](CHANGELOG.md)
 
@@ -23,7 +23,7 @@ Swob 读取 **11 种 AI 编程 harness** 的本地历史，重建会话血统，
 </div>
 
 > [!IMPORTANT]
-> **产品通道有意分开。** 下方功能图以当前 `main` 的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。公开的 **v1.2.0 稳定版 DMG 早于 Session Galaxy、11 harness、Session Debugger、AI Insights 和 SQLite FTS5**。现在可从源码构建 `main` 体验；这些能力将在下一次发布中交付。
+> **产品通道有意分开。** 下方功能图以当前 `main` 的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。公开的 **v1.2.0 稳定版 DMG 早于 Session Galaxy、多 harness 导入、Session Debugger、AI Insights 和 SQLite FTS5**。现在可从源码构建 `main` 体验；这些能力将在下一次发布中交付。
 
 ![基于当前 main 重构的 Swob Session Galaxy 英文演示图](site/assets/graph-view.png)
 
@@ -48,7 +48,7 @@ Swob 把会话历史当作证据：
 | **253 / 1,621** | 一份真实审计 Library 中，253 个 Claude Code 源会话已在默认 30 天保留策略下消失；Swob 仍保有本地备份。 |
 | **93.58%** | 同一份 1,621 会话、五来源语料的可验证续写率。这是已观察到的语料结果，不是对所有环境的成功率承诺。 |
 | **1,704 sessions** | 当前本地性能和界面验证语料，用来压测新索引与 Insights。 |
-| **11 harnesses** | 当前 `main` 可发现 11 个来源家族；解析深度和 resume 能力取决于来源记录和 CLI 能力。 |
+| **5+1+5 来源** | 当前 `main` 原生读取 5 种 harness，支持 1 种兼容格式，另有 5 种实验性文件检测（仅发现文件，尚不读取正文）。 |
 
 ## Session Galaxy
 
@@ -77,21 +77,33 @@ Swob 不止渲染聊天记录：
 
 ## 当前 `main` 的来源
 
-| 来源家族 | 本地历史发现 | 说明 |
-|---|---:|---|
+### 原生读取（5）——完整历史解析、搜索、Insights
+
+| 来源家族 | 状态 | 说明 |
+|---|---|---|
 | Claude Code | 稳定 | 血统、compact 恢复、备份、审计和 resume 支持最完整。 |
 | Codex | 稳定 | 本地 rollout 解析、搜索、Insights 与 resume。 |
 | Cursor | 稳定 | 本地 Agent 历史、搜索、Insights；CLI 提供能力时可 resume。 |
 | OpenCode | 稳定 | SQLite 历史导入和统一浏览。 |
 | Zcode | 稳定 | SQLite 历史导入和统一浏览。 |
-| CC Mirror | 当前 main | Claude 兼容的项目历史。 |
-| Antigravity | 当前 main | 当前与旧版本地 transcript 路径。 |
-| Grok / Factory | 当前 main | Grok 和 Factory/Droid 根目录下的 JSONL 历史。 |
-| Pi | 当前 main | 本地 Agent session 历史。 |
-| Kimi Code | 当前 main | 本地 `wire.jsonl` 历史。 |
-| Hermes | 当前 main | 本地 JSON session 历史。 |
 
-“可发现”不代表所有来源都提供相同元数据。Swob 会保留来源限制，不会捏造缺失的 token、血统或 resume 命令。
+### 兼容格式（1）
+
+| 来源家族 | 状态 | 说明 |
+|---|---|---|
+| CC Mirror | 当前 main | Claude 兼容的项目历史。 |
+
+### 实验性检测（5）——仅发现文件，尚不读取正文
+
+| 来源家族 | 状态 | 说明 |
+|---|---|---|
+| Antigravity | 实验 | 可发现本地 transcript 文件。 |
+| Grok / Factory | 实验 | 可发现 JSONL 历史文件。 |
+| Pi | 实验 | 可发现本地 session 文件。 |
+| Kimi Code | 实验 | 可发现本地 `wire.jsonl` 文件。 |
+| Hermes | 实验 | 可发现本地 JSON session 文件。 |
+
+> **准确性说明：**「原生读取」指 Swob 解析完整消息内容、建索引、纳入搜索和 Insights。「实验性检测」指 Swob 能在磁盘上发现这些文件，但尚未实现内容读取和索引。Swob 会保留来源限制，不会捏造缺失的 token、血统或 resume 命令。
 
 ## 与同类项目的能力对照
 
@@ -99,7 +111,7 @@ Swob 不止渲染聊天记录：
 
 | 能力 | Swob 当前 `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
 |---|---|---|---|---|
-| 本地多 harness 历史 | ✅ 11 个来源家族 | ✅ 9 个 provider | ✅ 9+ 个 Agent | ✅ 9 个工具 |
+| 本地多 harness 历史 | ✅ 5 原生 + 1 兼容 + 5 实验检测 | ✅ 9 个 provider | ✅ 9+ 个 Agent | ✅ 9 个工具 |
 | 可视化会话血统图 | ✅ 验证边 + 分组边 | ◐ Session Board，不是血统图 | — | ◐ 会规范化子会话，未记录血统图 |
 | Compact 历史恢复 | ✅ Claude Code | — | — | — |
 | 执行树 / Agent 调用解剖 | ✅ | ◐ 工具渲染 | ◐ 工具/输出导航 | ◐ 工具混合与子会话 |
@@ -171,7 +183,7 @@ CLI 统一返回 JSON，其他 Agent 不需要抓取界面就能查询 Swob。
 | 通道 | 内容 |
 |---|---|
 | **Stable v1.2.0** | 五来源浏览、血统检测/注册表、compact 展开、搜索、Token Insights、CLI、备份/导出和 resume。公开 DMG 未签名。 |
-| **当前 `main` / 下一版** | 新增 11 harness 导入、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5，以及 watcher/worker 性能升级。现在可从源码构建。 |
+| **当前 `main` / 下一版** | 新增多 harness 导入（5 原生 + 1 兼容 + 5 实验性检测）、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5，以及 watcher/worker 性能升级。现在可从源码构建。 |
 
 ## 技术栈
 

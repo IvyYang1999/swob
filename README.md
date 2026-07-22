@@ -8,7 +8,7 @@
 
 **Recover lost context. Trace forks and compactions. Debug how your agents actually worked.**
 
-Swob reads local histories from **11 AI coding harnesses**, reconstructs session lineage, indexes every message with SQLite FTS5, and adds an execution tree, context inspector, provenance-aware audit, and optional AI Insights.
+Swob natively reads local histories from **5 AI coding harnesses**, with 1 compatible format and 5 in experimental file detection. It reconstructs session lineage, indexes every message with SQLite FTS5, and adds an execution tree, context inspector, provenance-aware audit, and optional AI Insights.
 
 [Website](https://ivyyang1999.github.io/swob/) · [Apple Silicon DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-arm64.dmg) · [Intel DMG](https://github.com/IvyYang1999/swob/releases/download/v1.2.0/swob-1.2.0-x64.dmg) · [Changelog](CHANGELOG.md)
 
@@ -23,7 +23,7 @@ Swob reads local histories from **11 AI coding harnesses**, reconstructs session
 </div>
 
 > [!IMPORTANT]
-> **Product channels are intentionally separated.** The feature images below are English demo reconstructions based on current `main`; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below. The public **v1.2.0 stable DMGs predate Session Galaxy, 11-harness ingestion, Session Debugger, AI Insights, and SQLite FTS5**. Build `main` from source to try them now; they will ship in the next release.
+> **Product channels are intentionally separated.** The feature images below are English demo reconstructions based on current `main`; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below. The public **v1.2.0 stable DMGs predate Session Galaxy, multi-harness ingestion, Session Debugger, AI Insights, and SQLite FTS5**. Build `main` from source to try them now; they will ship in the next release.
 
 ![English demo reconstruction of the Swob Session Galaxy in current main](site/assets/graph-view.png)
 
@@ -48,7 +48,7 @@ Swob treats session history as evidence:
 | **253 / 1,621** | 253 Claude Code source sessions in one audited library were already missing under the default 30-day retention policy; Swob still had local backups. |
 | **93.58%** | Verified resumability in the same 1,621-session, five-source audit corpus. This is an observed corpus result, not a universal success guarantee. |
 | **1,704 sessions** | Current local performance and UI corpus used to exercise the new index and dashboard. |
-| **11 harnesses** | Current `main` discovers histories from 11 source families; parsing depth and resume support vary with source data and CLI capabilities. |
+| **5+1+5 sources** | Current `main` natively reads 5 harnesses, supports 1 compatible format, and experimentally detects 5 more (file discovery only, content reading not yet implemented). |
 
 ## Session Galaxy
 
@@ -77,21 +77,33 @@ The local dashboard includes token and cost totals, a 365-day heatmap, source/mo
 
 ## Sources in current `main`
 
-| Source family | Local history discovery | Notes |
-|---|---:|---|
+### Native read (5) — full history parsing, search, insights
+
+| Source family | Status | Notes |
+|---|---|---|
 | Claude Code | Stable | Deepest lineage, compact recovery, backup, audit, and resume support. |
 | Codex | Stable | Local rollout parsing, search, insights, and resume. |
 | Cursor | Stable | Local agent history, search, insights, and resume where the CLI exposes it. |
 | OpenCode | Stable | SQLite history ingestion and normalized viewing. |
 | Zcode | Stable | SQLite history ingestion and normalized viewing. |
-| CC Mirror | Current main | Claude-compatible project histories. |
-| Antigravity | Current main | Current and legacy local transcript roots. |
-| Grok / Factory | Current main | JSONL histories from Grok and Factory/Droid roots. |
-| Pi | Current main | Local agent session histories. |
-| Kimi Code | Current main | Local `wire.jsonl` histories. |
-| Hermes | Current main | Local JSON session histories. |
 
-“Discovered” does not mean every source exposes identical metadata. Swob preserves source limitations instead of manufacturing missing tokens, lineage, or resume commands.
+### Compatible format (1)
+
+| Source family | Status | Notes |
+|---|---|---|
+| CC Mirror | Current main | Claude-compatible project histories. |
+
+### Experimental detection (5) — file discovery only, content reading not yet implemented
+
+| Source family | Status | Notes |
+|---|---|---|
+| Antigravity | Experimental | Can discover local transcript files. |
+| Grok / Factory | Experimental | Can discover JSONL history files. |
+| Pi | Experimental | Can discover local session files. |
+| Kimi Code | Experimental | Can discover local `wire.jsonl` files. |
+| Hermes | Experimental | Can discover local JSON session files. |
+
+> **Accuracy note:** “Native read” means Swob parses full message content, indexes it, and exposes it in search and insights. “Experimental detection” means Swob can find the files on disk but does not yet read or index their content. Swob preserves source limitations instead of manufacturing missing tokens, lineage, or resume commands.
 
 ## How Swob compares
 
@@ -99,7 +111,7 @@ Public README claims checked on 2026-07-21. `✅` = explicitly documented; `◐`
 
 | Capability | Swob current `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
 |---|---|---|---|---|
-| Local multi-harness history | ✅ 11 source families | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
+| Local multi-harness history | ✅ 5 native + 1 compatible + 5 experimental | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
 | Visual session lineage graph | ✅ verified + grouping edges | ◐ Session Board, not lineage | — | ◐ child-session normalization, no lineage graph documented |
 | Compact-history recovery | ✅ Claude Code | — | — | — |
 | Execution tree / agent-call anatomy | ✅ | ◐ tool rendering | ◐ tool/output navigation | ◐ tool-call mix and child sessions |
@@ -174,7 +186,7 @@ Read the complete boundaries in [PRIVACY.md](PRIVACY.md). Report vulnerabilities
 | Channel | What it contains |
 |---|---|
 | **Stable v1.2.0** | Five-source browsing, lineage detection/registry, compact expansion, search, token insights, CLI, backup/export, and resume. Public DMGs are unsigned. |
-| **Current `main` / next release** | Adds 11-harness ingestion, Session Galaxy, Execution Tree, Context Inspector, Session Audit, optional AI Insights, SQLite FTS5, and watcher/worker performance work. Build from source today. |
+| **Current `main` / next release** | Adds multi-harness ingestion (5 native + 1 compatible + 5 experimental detection), Session Galaxy, Execution Tree, Context Inspector, Session Audit, optional AI Insights, SQLite FTS5, and watcher/worker performance work. Build from source today. |
 
 ## Tech stack
 

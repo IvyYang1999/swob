@@ -8,7 +8,7 @@ const store = vi.hoisted(() => ({
   state: {
     sessions: [] as any[],
     selectSession: vi.fn(),
-    toggleLineage: vi.fn(),
+    setWorkspaceView: vi.fn(),
     locale: 'zh-CN'
   }
 }))

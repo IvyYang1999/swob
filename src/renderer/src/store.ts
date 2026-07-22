@@ -183,8 +183,7 @@ interface AppState {
   sshModalOpen: boolean
   settingsOpen: boolean
   pendingSettingsCategory: string | null
-  insightsOpen: boolean
-  lineageOpen: boolean
+  workspaceView: 'galaxy' | 'chat' | 'insights'
   toasts: ToastMessage[]
 
   initialize: () => Promise<void>
@@ -205,8 +204,7 @@ interface AppState {
   toggleSettings: () => void
   openSettingsAt: (category: string) => void
   consumePendingSettingsCategory: () => string | null
-  toggleInsights: () => void
-  toggleLineage: () => void
+  setWorkspaceView: (view: 'galaxy' | 'chat' | 'insights') => void
   savePreferences: (prefs: Record<string, unknown>) => Promise<void>
   createFolder: (name: string, color?: string, parentId?: string) => Promise<void>
   moveFolder: (folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => Promise<void>
@@ -301,8 +299,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectedFolderId: null,
   settingsOpen: false,
   pendingSettingsCategory: null,
-  insightsOpen: false,
-  lineageOpen: false,
+  workspaceView: 'galaxy',
   infoPanelOpen: true,
   selectedSessionMdPath: null,
   activeSessionIds: new Set<string>(),
@@ -443,6 +440,7 @@ export const useStore = create<AppState>((set, get) => ({
       const { sessions, selectSession } = get()
       const session = sessions.find((s) => s.id === sessionId || s.sessionId === sessionId)
       if (session) {
+        set({ workspaceView: 'chat', settingsOpen: false })
         selectSession(session.filePath, session.allFilePaths, session.id)
       }
     })
@@ -452,6 +450,7 @@ export const useStore = create<AppState>((set, get) => ({
         const { sessions, selectSession } = get()
         const session = sessions.find((s) => s.id === pendingSessionId || s.sessionId === pendingSessionId)
         if (session) {
+          set({ workspaceView: 'chat', settingsOpen: false })
           selectSession(session.filePath, session.allFilePaths, session.id)
         }
       }
@@ -589,17 +588,19 @@ export const useStore = create<AppState>((set, get) => ({
     get().setThemeMode(next)
   },
 
-  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, insightsOpen: false, lineageOpen: false })),
+  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, workspaceView: 'chat' })),
   openSettingsAt: (category) => set({
-    settingsOpen: true, insightsOpen: false, lineageOpen: false, pendingSettingsCategory: category
+    settingsOpen: true, workspaceView: 'chat', pendingSettingsCategory: category
   }),
   consumePendingSettingsCategory: () => {
     const pending = get().pendingSettingsCategory
     if (pending) set({ pendingSettingsCategory: null })
     return pending
   },
-  toggleInsights: () => set((s) => ({ insightsOpen: !s.insightsOpen, settingsOpen: false, lineageOpen: false })),
-  toggleLineage: () => set((s) => ({ lineageOpen: !s.lineageOpen, settingsOpen: false, insightsOpen: false })),
+  setWorkspaceView: (view) => set((s) => ({
+    workspaceView: s.workspaceView === view ? 'chat' : view,
+    settingsOpen: false
+  })),
 
   savePreferences: async (prefs) => {
     const config = get().config

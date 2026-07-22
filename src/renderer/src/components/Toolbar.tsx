@@ -9,8 +9,7 @@ export function Toolbar() {
     searchQuery, search, clearSearch,
     infoPanelOpen, toggleInfoPanel,
     settingsOpen, toggleSettings,
-    insightsOpen, toggleInsights,
-    lineageOpen, toggleLineage
+    workspaceView, setWorkspaceView
   } = useStore()
   const t = useT()
   const isWindowsAlpha = usePlatformCapabilities()?.windowsNativeAlpha === true
@@ -105,15 +104,15 @@ export function Toolbar() {
           <Bot size={14} />
         </button>
         <button
-          onClick={toggleLineage}
-          className={`p-1.5 rounded hover:bg-hover ${lineageOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}
+          onClick={() => setWorkspaceView('galaxy')}
+          className={`p-1.5 rounded hover:bg-hover ${workspaceView === 'galaxy' ? 'text-primary' : 'text-secondary hover:text-primary'}`}
           title={t('toolbar.lineage')}
         >
           <GitBranch size={14} />
         </button>
         <button
-          onClick={toggleInsights}
-          className={`p-1.5 rounded hover:bg-hover ${insightsOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}
+          onClick={() => setWorkspaceView('insights')}
+          className={`p-1.5 rounded hover:bg-hover ${workspaceView === 'insights' ? 'text-primary' : 'text-secondary hover:text-primary'}`}
           title={t('toolbar.insights')}
         >
           <BarChart3 size={14} />

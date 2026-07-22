@@ -131,7 +131,7 @@ function ToastContainer() {
 }
 
 export default function App() {
-  const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen, insightsOpen, lineageOpen } = useStore()
+  const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen, workspaceView } = useStore()
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [infoPanelWidth, setInfoPanelWidth] = useState(320)
   const [onboarding, setOnboarding] = useState<{ needed: boolean; defaultPath: string } | null>(null)
@@ -183,8 +183,8 @@ export default function App() {
         <div className="flex-1 flex overflow-hidden relative">
           <Sidebar width={sidebarWidth} />
           <ResizeHandle side="left" onResize={handleSidebarResize} />
-          {lineageOpen ? <LineagePage /> : insightsOpen ? <InsightsPage /> : <ChatViewer />}
-          {infoPanelOpen && !settingsOpen && !insightsOpen && !lineageOpen && (
+          {workspaceView === 'galaxy' ? <LineagePage /> : workspaceView === 'insights' ? <InsightsPage /> : <ChatViewer />}
+          {infoPanelOpen && !settingsOpen && workspaceView === 'chat' && (
             <>
               <ResizeHandle side="right" onResize={handleInfoPanelResize} />
               <InfoPanel width={infoPanelWidth} onNavigate={(id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })} />

@@ -319,7 +319,7 @@ export function LineagePage() {
     [graphSessions]
   )
   const selectSession = useStore((s) => s.selectSession)
-  const toggleLineage = useStore((s) => s.toggleLineage)
+  const setWorkspaceView = useStore((s) => s.setWorkspaceView)
   const locale = useStore((s) => s.locale)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -482,11 +482,11 @@ export function LineagePage() {
     if (node) {
       const session = sessions.find((s) => s.sessionId === node.id)
       if (session) {
-        toggleLineage()
+        setWorkspaceView('chat')
         selectSession(session.filePath, session.allFilePaths, session.id)
       }
     }
-  }, [findNodeAt, sessions, selectSession, toggleLineage])
+  }, [findNodeAt, sessions, selectSession, setWorkspaceView])
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()

@@ -222,7 +222,7 @@ export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
     <section>
       <div className="flex items-center gap-2 text-xs font-medium text-soft-purple mb-2">
         <GitBranch size={12} />
-        <span>{locale === 'zh-CN' ? '会话族谱' : 'Session Lineage'}</span>
+        <span>{locale === 'zh-CN' ? '关联会话' : 'Related Sessions'}</span>
         <span className="text-muted text-[10px]">
           {family.nodes.length} {locale === 'zh-CN' ? '个节点' : 'nodes'} · {family.edges.length} {locale === 'zh-CN' ? '条边' : 'edges'}
         </span>

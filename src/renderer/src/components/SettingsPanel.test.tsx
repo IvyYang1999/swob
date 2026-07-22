@@ -62,7 +62,7 @@ vi.mock('../i18n', () => ({
       'settings.ssh_save': '保存',
       'settings.ssh_clear': '清除',
       'settings.project_view': '项目视图',
-      'settings.project_view_folders': '按整理的文件夹',
+      'settings.project_view_folders': '按整理会话',
       'settings.project_view_paths': '按实际项目路径',
       'settings.update': '软件更新',
       'settings.check_for_updates': '检查更新',

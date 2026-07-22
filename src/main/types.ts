@@ -151,8 +151,19 @@ export interface SessionSummary {
   configFiles: string[]
   libraryDirPath?: string
   libraryMdPath?: string
+  /** Compatibility field: retains the historical local/direct resume meaning. */
   canResume?: boolean
   resumeUnavailableReason?: string
+  /** Explicit local/direct resume capability; mirrors canResume for now. */
+  canResumeLocal?: boolean
+  /** SSH resume is evaluated independently from local source-file availability. */
+  canResumeSsh?: boolean
+  sshResumeUnavailableReason?: string
+  /** Non-blocking warning, for example when a legacy manifest has no exact cwd. */
+  sshResumeWarning?: string
+  /** True when the summary was built from .swob-session.json without parsing backup.jsonl. */
+  isManifestOnly?: boolean
+  cloudBackupState?: 'ready' | 'icloud-placeholder' | 'missing'
   isRemote?: boolean
   remoteHost?: string  // hostname of the device that created this session (e.g. "macbooka.local")
   source?: SessionSource
@@ -203,6 +214,13 @@ export interface SshConfig {
   remotePath?: string   // optional: remote path override for claude executable
 }
 
+/** A local connection route for one origin device. */
+export interface SshTargetConfig extends SshConfig {
+  deviceId?: string
+  hostname?: string
+  isDefault?: boolean
+}
+
 export type ThemeMode = 'dark' | 'light' | 'system'
 export type ResumeTerminal = 'terminal-app' | 'iterm' | 'custom' | 'windows-terminal' | 'powershell' | 'cmd'
 
@@ -227,6 +245,7 @@ export interface UserConfig {
     themeMode?: ThemeMode
     spotlightShortcut?: string
     sshConfig?: SshConfig
+    sshTargets?: SshTargetConfig[]
     projectViewMode?: 'folders' | 'paths'
     /** T103 settings schema; legacy terminal fields remain readable. */
     settingsSchemaVersion?: 1

@@ -34,9 +34,15 @@ export interface GuardedResumeOptions {
   reloadSessions?: () => Promise<SessionSummary[]>
   /** Internal action boundary: command builders/copy never enable recovery. */
   allowRecovery?: boolean
+  /** Explicit user choice required before importing a known-remote backup. */
+  preferredTargetInstanceId?: string
   prepareResumeTarget?: (
     sessionId: string,
-    options: { allowRecovery?: boolean; requestedSessionId?: string }
+    options: {
+      allowRecovery?: boolean
+      requestedSessionId?: string
+      preferredTargetInstanceId?: string
+    }
   ) => Promise<SessionResumePreparationResult>
 }
 
@@ -66,19 +72,25 @@ async function buildGuardedAction(
   kind: 'resume' | 'fork'
 ): Promise<ResumeActionResult> {
   const summary = findSessionForGuard(options.sessions, options.sessionId)
-  const availability = getSessionResumeAvailability(options.sessionId, summary)
-  if (!availability.canResume) return unavailableResult(options.sessionId, availability)
-
   const indexedSessionId = getSessionDirPath(options.sessionId)
     ? options.sessionId
     : summary?.sessionId && getSessionDirPath(summary.sessionId)
       ? summary.sessionId
       : null
+  const availability = getSessionResumeAvailability(options.sessionId, summary)
+  const explicitlyAuthorizedRemoteImport = options.allowRecovery === true &&
+    !!options.preferredTargetInstanceId &&
+    !!indexedSessionId
+  if (!availability.canResume && !explicitlyAuthorizedRemoteImport) {
+    return unavailableResult(options.sessionId, availability)
+  }
+
   const prepared: SessionResumePreparationResult = !options.prepareResumeTarget && !indexedSessionId
     ? { ok: true, sourcePath: availability.sourcePath || null }
     : await (options.prepareResumeTarget || ensureSessionResumeTarget)(indexedSessionId || options.sessionId, {
         allowRecovery: options.allowRecovery === true,
-        requestedSessionId: options.sessionId
+        requestedSessionId: options.sessionId,
+        preferredTargetInstanceId: options.preferredTargetInstanceId
       })
   if (!prepared.ok) {
     return { ok: false, sessionId: options.sessionId, reason: prepared.reason || '此会话无法直接恢复' }

@@ -30,7 +30,16 @@ import {
   resolveSessionRemoteState,
   type SessionRemoteState
 } from './session-remote-state'
-import type { RawJsonlMessage, ContentPart, SessionSource, SessionSummary, Folder, UserConfig } from './types'
+import type {
+  RawJsonlMessage,
+  ContentPart,
+  SessionSource,
+  SessionSummary,
+  Folder,
+  UserConfig,
+  SshConfig,
+  SshTargetConfig
+} from './types'
 
 export { extractRemoteUser, resolveSessionRemoteState, type SessionRemoteState } from './session-remote-state'
 
@@ -50,6 +59,8 @@ export interface SessionMeta {
   createdAt: string
   updatedAt: string
   projectPath: string
+  /** Exact cwd captured from the source transcript; never reconstructed from projectPath. */
+  resumeCwd?: string
   turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
   /** Multi-membership metadata used by the tag lens. */
   tags?: string[]
@@ -117,12 +128,6 @@ export interface LibraryTree {
   rootFiles: LibraryFile[]
 }
 
-export interface SshConfig {
-  host: string
-  user: string
-  remotePath?: string
-}
-
 export interface LibraryConfig {
   libraryRoot: string
   preferences: {
@@ -140,6 +145,7 @@ export interface LibraryConfig {
     autoCheckUpdates?: boolean
     updateChannel?: import('../shared/settings-capabilities').UpdateChannel
     sshConfig?: SshConfig
+    sshTargets?: SshTargetConfig[]
     llmProfiles?: import('./llm-profiles').LlmProfile[]
     smartFeatureBindings?: import('./llm-profiles').SmartFeatureBinding
     // 指定「未分组容器」：这两个文件夹的会话在 UI 底部按轮数罗列/折叠、不在树里显示。
@@ -457,6 +463,9 @@ const LIBRARY_CONFIG_FILE = '.swob-config.json'
 const TRANSCRIPT_FILE = 'transcript.md'
 const BACKUP_FILE = 'backup.jsonl'
 export const LOCAL_RESUME_UNAVAILABLE_REASON = '此会话数据在备份中，本机无源文件，无法直接恢复'
+export const ICLOUD_BACKUP_WAITING_REASON = '会话备份正在等待 iCloud 下载'
+export const SSH_RESUME_UNAVAILABLE_REASON = '此会话没有可用的远程设备 SSH 配置'
+export const SSH_RESUME_CWD_WARNING = '存量会话缺少精确工作目录；SSH Resume 将在远程默认目录启动，路径可能不准'
 
 const SESSION_COMPANION_FILE_NAMES = new Set<string>([
   TRANSCRIPT_FILE,
@@ -469,6 +478,13 @@ export interface SessionResumeAvailability {
   canResume: boolean
   reason?: string
   sourcePath?: string | null
+}
+
+export interface SessionSshResumeAvailability {
+  canResume: boolean
+  reason?: string
+  warning?: string
+  target?: SshTargetConfig
 }
 
 // ============ Library Manager ============
@@ -651,6 +667,10 @@ export function parseSessionMeta(
     }
     if (!Array.isArray(meta.sourceFilePaths) || !meta.sourceFilePaths.every(isNonEmptyString)) {
       warn('[library-manager] Ignoring invalid session metadata: sourceFilePaths must be strings')
+      return null
+    }
+    if (meta.resumeCwd !== undefined && !isNonEmptyString(meta.resumeCwd)) {
+      warn('[library-manager] Ignoring invalid session metadata: resumeCwd must be a non-empty string')
       return null
     }
     if (meta.origin !== undefined && !isValidSessionOrigin(meta.origin)) {
@@ -857,12 +877,21 @@ function backupPathForDir(dirPath?: string | null): string | null {
   return dirPath ? path.join(dirPath, BACKUP_FILE) : null
 }
 
-function hasBackupForDir(dirPath?: string | null): boolean {
+export type SessionBackupState = 'ready' | 'icloud-placeholder' | 'missing'
+
+function backupStateForDir(dirPath?: string | null): SessionBackupState {
   const backupPath = backupPathForDir(dirPath)
-  return !!backupPath && (
-    fs.existsSync(backupPath) ||
-    fs.existsSync(path.join(path.dirname(backupPath), `.${path.basename(backupPath)}.icloud`))
-  )
+  if (!backupPath) return 'missing'
+  if (fs.existsSync(backupPath)) return 'ready'
+  return isICloudPlaceholder(backupPath) ? 'icloud-placeholder' : 'missing'
+}
+
+export function getSessionBackupState(sessionId: string): SessionBackupState {
+  return backupStateForDir(sessionIndex.get(sessionId))
+}
+
+function hasBackupForDir(dirPath?: string | null): boolean {
+  return backupStateForDir(dirPath) !== 'missing'
 }
 
 function detectSourceFromSourcePaths(sourceFilePaths: string[], fallback?: SessionSource): SessionSource {
@@ -890,7 +919,8 @@ function sourceFilePathsFromMeta(meta: SessionMeta): string[] | null {
 function evaluateSourceResumeAvailability(
   sourceFilePaths: string[],
   source: SessionSource,
-  dirPath?: string | null
+  dirPath?: string | null,
+  remoteManifestOnly = false
 ): SessionResumeAvailability {
   const existingSource = sourceFilePaths.find((src) => fs.existsSync(sourceStatPath(src)))
   if (existingSource) return { canResume: true, sourcePath: existingSource }
@@ -902,7 +932,10 @@ function evaluateSourceResumeAvailability(
 
   return {
     canResume: false,
-    reason: LOCAL_RESUME_UNAVAILABLE_REASON,
+    reason: backupStateForDir(dirPath) === 'icloud-placeholder' ||
+      (backupStateForDir(dirPath) === 'missing' && remoteManifestOnly)
+      ? ICLOUD_BACKUP_WAITING_REASON
+      : LOCAL_RESUME_UNAVAILABLE_REASON,
     sourcePath: sourceFilePaths[0] || null
   }
 }
@@ -921,7 +954,8 @@ export function getSessionResumeAvailability(
       return evaluateSourceResumeAvailability(
         metaSourceFilePaths,
         detectSourceFromSourcePaths(metaSourceFilePaths, session?.source),
-        dirPath
+        dirPath,
+        resolveLibrarySessionRemoteState(meta).isRemote
       )
     }
 
@@ -1282,6 +1316,54 @@ export function applyLibraryTree(tree: LibraryTree): void {
   }
 }
 
+/**
+ * Build a lightweight renderer summary from the manifest only. This keeps a
+ * remote session discoverable while backup.jsonl is still an iCloud placeholder.
+ */
+export function buildSessionSummaryFromManifest(session: LibrarySession): SessionSummary {
+  const { meta } = session
+  const source = detectSourceFromSourcePaths(sourceFilePathsFromMeta(meta) || [])
+  const backupState = backupStateForDir(session.dirPath)
+  let fileSizeBytes = meta.backupSize || 0
+  if (backupState === 'ready') {
+    try { fileSizeBytes = fs.statSync(session.jsonlPath).size } catch { /* keep manifest size */ }
+  }
+  const id = source === 'claude-code' ? meta.sessionId : `${source}:${meta.sessionId}`
+  const firstUserMessage = meta.customTitle || `云端会话 ${meta.sessionId.slice(0, 12)}`
+  return {
+    id,
+    sessionId: meta.sessionId,
+    resumeSessionId: meta.sessionId,
+    slug: '',
+    createdAt: meta.createdAt || meta.updatedAt || '',
+    updatedAt: meta.updatedAt || meta.createdAt || '',
+    messageCount: 0,
+    turnCount: meta.turnCount || 0,
+    compactCount: 0,
+    cwds: meta.resumeCwd ? [meta.resumeCwd] : [],
+    version: '',
+    firstUserMessage,
+    toolUsage: {},
+    skillInvocations: [],
+    projectPath: meta.projectPath,
+    filePath: session.jsonlPath,
+    fileSizeBytes,
+    allFilePaths: [session.jsonlPath],
+    resumeCwd: meta.resumeCwd,
+    userImages: [],
+    pastedImageCount: 0,
+    tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
+    referencedFiles: [],
+    configFiles: [],
+    libraryDirPath: session.dirPath,
+    libraryMdPath: fs.existsSync(session.mdPath) ? session.mdPath : undefined,
+    source,
+    models: [],
+    isManifestOnly: true,
+    cloudBackupState: backupState
+  }
+}
+
 // --- Transcript Generation (main process) ---
 // Format optimized for AI consumption: minimal tokens, max information.
 
@@ -1592,6 +1674,14 @@ export async function ensureSessionInLibrary(
         meta.schemaVersion = 2
         changed = true
       }
+      // Only backfill from a locally parsed source. A remote installation must not
+      // replace the origin cwd with its own post-import path.
+      if (!meta.resumeCwd && session.resumeCwd &&
+        currentSourceFilePaths.some((sourcePath) => fs.existsSync(sourceStatPath(sourcePath)))) {
+        meta.resumeCwd = session.resumeCwd
+        meta.schemaVersion = 2
+        changed = true
+      }
       if (changed) writeSessionMeta(existing, meta)
     }
     return existing
@@ -1623,6 +1713,7 @@ export async function ensureSessionInLibrary(
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     projectPath: session.projectPath,
+    resumeCwd: session.resumeCwd,
     turnCount: session.turnCount,
     origin: captureLocalSessionOrigin(originOverride),
     sourceInstance: detectSessionSourceInstance(sourceFilePaths)
@@ -2884,7 +2975,12 @@ export function isSessionCloudOnly(sessionId: string): boolean {
   if (!dirPath) return false
   // Check if session meta file is a cloud placeholder
   const metaFile = path.join(dirPath, SESSION_META_FILE)
-  return isICloudPlaceholder(metaFile) || !fs.existsSync(metaFile)
+  if (isICloudPlaceholder(metaFile) || !fs.existsSync(metaFile)) return true
+  const backupState = backupStateForDir(dirPath)
+  if (backupState === 'icloud-placeholder') return true
+  if (backupState !== 'missing') return false
+  const meta = readSessionMeta(dirPath)
+  return !!meta && resolveLibrarySessionRemoteState(meta).isRemote
 }
 
 /**
@@ -2905,19 +3001,154 @@ export function triggerICloudDownload(sessionId: string): Promise<boolean> {
 
 // ============ SSH Config ============
 
-export function getSshConfig(): SshConfig | undefined {
+function normalizeSshTarget(target: SshTargetConfig): SshTargetConfig | null {
+  const host = typeof target.host === 'string' ? target.host.trim() : ''
+  const user = typeof target.user === 'string' ? target.user.trim() : ''
+  if (!host || !user) return null
+  const deviceId = typeof target.deviceId === 'string' && target.deviceId.trim()
+    ? target.deviceId.trim()
+    : undefined
+  const hostname = typeof target.hostname === 'string' && target.hostname.trim()
+    ? target.hostname.trim()
+    : undefined
+  const remotePath = typeof target.remotePath === 'string' && target.remotePath.trim()
+    ? target.remotePath.trim()
+    : undefined
+  return {
+    host,
+    user,
+    ...(remotePath ? { remotePath } : {}),
+    ...(deviceId ? { deviceId } : {}),
+    ...(hostname ? { hostname } : {}),
+    ...(target.isDefault === true ? { isDefault: true } : {})
+  }
+}
+
+function toLegacySshConfig(target: SshTargetConfig): SshConfig {
+  return {
+    host: target.host,
+    user: target.user,
+    ...(target.remotePath ? { remotePath: target.remotePath } : {})
+  }
+}
+
+/**
+ * Read per-device routes. A historical single sshConfig is migrated once to a
+ * default route so old settings keep working without pretending to know a device ID.
+ */
+export function getSshTargets(): SshTargetConfig[] {
   const config = loadLibraryConfig()
-  return config.preferences?.sshConfig
+  const configured = Array.isArray(config.preferences?.sshTargets)
+    ? config.preferences.sshTargets.map(normalizeSshTarget).filter((target): target is SshTargetConfig => !!target)
+    : []
+  if (configured.length > 0) return configured.map((target) => ({ ...target }))
+
+  const legacy = config.preferences?.sshConfig
+    ? normalizeSshTarget({ ...config.preferences.sshConfig, isDefault: true })
+    : null
+  if (!legacy) return []
+
+  config.preferences.sshTargets = [legacy]
+  saveLibraryConfig(config)
+  return [{ ...legacy }]
+}
+
+export function setSshTargets(targets: SshTargetConfig[]): void {
+  const normalized = targets.map(normalizeSshTarget)
+  if (normalized.some((target) => !target)) throw new Error('Invalid SSH target configuration')
+
+  const next = normalized as SshTargetConfig[]
+  if (next.some((target) => !target.deviceId && !target.hostname && !target.isDefault)) {
+    throw new Error('SSH target requires a deviceId, hostname, or default marker')
+  }
+  const defaultIndexes = next.flatMap((target, index) => target.isDefault ? [index] : [])
+  if (defaultIndexes.length > 1) throw new Error('Only one SSH target can be the default')
+  const deviceIds = new Set<string>()
+  const hostnames = new Set<string>()
+  for (const target of next) {
+    if (target.deviceId) {
+      if (deviceIds.has(target.deviceId)) throw new Error('Duplicate SSH target deviceId')
+      deviceIds.add(target.deviceId)
+    }
+    if (target.hostname) {
+      const hostname = target.hostname.toLocaleLowerCase()
+      if (hostnames.has(hostname)) throw new Error('Duplicate SSH target hostname')
+      hostnames.add(hostname)
+    }
+  }
+
+  const config = loadLibraryConfig()
+  if (next.length === 0) {
+    delete config.preferences.sshTargets
+    delete config.preferences.sshConfig
+  } else {
+    config.preferences.sshTargets = next.map((target) => ({ ...target }))
+    const fallback = next.find((target) => target.isDefault) || next[0]
+    config.preferences.sshConfig = toLegacySshConfig(fallback)
+  }
+  saveLibraryConfig(config)
+}
+
+export function getSshConfig(): SshConfig | undefined {
+  const targets = getSshTargets()
+  const target = targets.find((candidate) => candidate.isDefault) || targets[0]
+  return target ? toLegacySshConfig(target) : undefined
 }
 
 export function setSshConfig(sshConfig: SshConfig | null): void {
-  const config = loadLibraryConfig()
   if (sshConfig === null) {
-    delete config.preferences.sshConfig
-  } else {
-    config.preferences.sshConfig = sshConfig
+    // Preserve the historical single-config contract: clearing it clears all
+    // routes. Future per-device UI uses setSshTargets for selective removal.
+    setSshTargets([])
+    return
   }
-  saveLibraryConfig(config)
+
+  const defaultTarget = normalizeSshTarget({ ...sshConfig, isDefault: true })
+  if (!defaultTarget) throw new Error('Invalid SSH configuration')
+  const targets = getSshTargets()
+  const existingDefault = targets.findIndex((target) => target.isDefault)
+  if (existingDefault >= 0) targets.splice(existingDefault, 1, defaultTarget)
+  else targets.unshift(defaultTarget)
+  setSshTargets(targets)
+}
+
+export function resolveSshTargetForOrigin(
+  origin: Pick<SessionOrigin, 'deviceId' | 'hostname'>,
+  targets: SshTargetConfig[] = getSshTargets()
+): SshTargetConfig | null {
+  const byDeviceId = targets.find((target) => target.deviceId === origin.deviceId)
+  if (byDeviceId) return { ...byDeviceId }
+
+  const hostname = origin.hostname.trim().toLocaleLowerCase()
+  const byHostname = targets.find((target) => target.hostname?.trim().toLocaleLowerCase() === hostname)
+  if (byHostname) return { ...byHostname }
+
+  const fallback = targets.find((target) => target.isDefault)
+  return fallback ? { ...fallback } : null
+}
+
+export function getSshConfigForSession(sessionId: string): SshTargetConfig | null {
+  const dirPath = sessionIndex.get(sessionId)
+  if (!dirPath) return null
+  const meta = readSessionMeta(dirPath)
+  if (!meta?.origin || !resolveLibrarySessionRemoteState(meta).isRemote) return null
+  return resolveSshTargetForOrigin(meta.origin)
+}
+
+export function getSessionSshResumeAvailability(sessionId: string): SessionSshResumeAvailability {
+  const dirPath = sessionIndex.get(sessionId)
+  if (!dirPath) return { canResume: false, reason: SSH_RESUME_UNAVAILABLE_REASON }
+  const meta = readSessionMeta(dirPath)
+  if (!meta?.origin || !resolveLibrarySessionRemoteState(meta).isRemote) {
+    return { canResume: false, reason: SSH_RESUME_UNAVAILABLE_REASON }
+  }
+  const target = resolveSshTargetForOrigin(meta.origin)
+  if (!target) return { canResume: false, reason: SSH_RESUME_UNAVAILABLE_REASON }
+  return {
+    canResume: true,
+    target,
+    ...(meta.resumeCwd ? {} : { warning: SSH_RESUME_CWD_WARNING })
+  }
 }
 
 /**
@@ -2929,25 +3160,15 @@ export function isRemoteProjectPath(projectPath: string): boolean {
 }
 
 /**
- * Convert a Claude project storage path like
- *   `/Users/mac/.claude/projects/-Users-mac-projects-scsp`
- * to the actual project directory: `/Users/mac/projects/scsp`
- */
-export function claudeProjectPathToCwd(projectPath: string): string | null {
-  const dirName = path.basename(projectPath)
-  if (!dirName.startsWith('-')) return null
-  return dirName.replace(/^-/, '/').replace(/-/g, '/')
-}
-
-/**
- * Look up the remote working directory for a session from its Library metadata.
+ * Look up the exact remote working directory captured in Library metadata.
+ * Legacy storage-directory names are deliberately not decoded: that transform
+ * is lossy for hyphens, spaces, dots and other normalized characters.
  */
 export function getRemoteCwdForSession(sessionId: string): string | null {
   const dirPath = sessionIndex.get(sessionId)
   if (!dirPath) return null
   const meta = readSessionMeta(dirPath)
-  if (!meta?.projectPath) return null
-  return claudeProjectPathToCwd(meta.projectPath)
+  return meta?.resumeCwd || null
 }
 
 export function buildSshResumeCommand(

@@ -30,6 +30,8 @@ import {
   getSessionMdPath,
   getSessionDirPath,
   getSessionResumeAvailability,
+  getSessionSshResumeAvailability,
+  buildSessionSummaryFromManifest,
   createLibraryFolder,
   renameLibraryFolder,
   deleteLibraryFolder,
@@ -50,7 +52,10 @@ import {
   isSessionCloudOnly,
   triggerICloudDownload,
   getSshConfig,
+  getSshTargets,
+  getSshConfigForSession,
   setSshConfig,
+  setSshTargets,
   buildSshResumeCommand,
   getRemoteCwdForSession,
   isRemoteProjectPath,
@@ -153,12 +158,14 @@ import {
   writeSessionLineageRegistry
 } from './session-lineage'
 import type { Folder, Highlight, SessionSummary } from './types'
+import type { SshTargetConfig } from './types'
 import type { AnalysisDimension, AnalysisScope, UsageFactSyncResult } from './analysis-contract'
 import { generateSkillContent } from '../cli/command-registry'
 import { runtimeHome } from './runtime-home'
 import { hasPortablePathSegment } from './portable-path'
 import { getPlatformCapabilities, isSessionSourceSupported } from './platform-support'
 import { assertRegisteredResumeProtocol } from './deep-link'
+import { buildClaudeRecoveryInventory } from './resume-recovery-service'
 
 let mainWindow: BrowserWindow | null = null
 let spotlightWindow: BrowserWindow | null = null
@@ -328,11 +335,19 @@ function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | 
 
   const resumeAvailability = getSessionResumeAvailability(session.sessionId, session)
   session.canResume = resumeAvailability.canResume
+  session.canResumeLocal = resumeAvailability.canResume
   if (resumeAvailability.canResume) {
     delete session.resumeUnavailableReason
   } else {
     session.resumeUnavailableReason = resumeAvailability.reason
   }
+
+  const sshAvailability = getSessionSshResumeAvailability(session.sessionId)
+  session.canResumeSsh = sshAvailability.canResume
+  if (sshAvailability.canResume) delete session.sshResumeUnavailableReason
+  else session.sshResumeUnavailableReason = sshAvailability.reason
+  if (sshAvailability.warning) session.sshResumeWarning = sshAvailability.warning
+  else delete session.sshResumeWarning
 
   const bucket = computeUngroupBucket(session, resolvedDir)
   if (bucket) (session as any).ungroupBucket = bucket
@@ -873,13 +888,17 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
   await flush()
 
   // Phase 2b: parse Library-only backups incrementally instead of blocking the first paint.
+  // If backup.jsonl is absent/placeholder/unparseable, the small manifest still
+  // produces a visible session with explicit download/SSH capabilities.
   const coveredIds = collectSessionCoverage(cachedSessions)
   for (const librarySession of librarySessions) {
     if (generation !== libraryHydrationGeneration) return
     const { sessionId, jsonlPath: backupPath, meta } = librarySession
-    if (coveredIds.has(sessionId) || !fs.existsSync(backupPath)) continue
+    if (coveredIds.has(sessionId)) continue
     try {
-      const summary = await buildSessionSummaryFromBackup(backupPath, sessionId, meta)
+      const summary = fs.existsSync(backupPath)
+        ? await buildSessionSummaryFromBackup(backupPath, sessionId, meta) || buildSessionSummaryFromManifest(librarySession)
+        : buildSessionSummaryFromManifest(librarySession)
       if (!summary || coveredIds.has(summary.id) || coveredIds.has(summary.sessionId)) continue
       summary.allFilePaths = [backupPath]
       annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
@@ -890,7 +909,18 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
       addSessionCoverage(coveredIds, summary)
       batch.push(summary)
       if (batch.length >= batchSize) await flush()
-    } catch { /* skip an unparseable or unavailable iCloud backup */ }
+    } catch {
+      const summary = buildSessionSummaryFromManifest(librarySession)
+      if (coveredIds.has(summary.id) || coveredIds.has(summary.sessionId)) continue
+      annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
+      const remoteState = resolveLibrarySessionRemoteState(meta)
+      summary.isRemote = remoteState.isRemote
+      if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
+      if (meta.customTitle) (summary as any)._libraryTitle = meta.customTitle
+      addSessionCoverage(coveredIds, summary)
+      batch.push(summary)
+      if (batch.length >= batchSize) await flush()
+    }
   }
   await flush()
   void scheduleUsageFactSync()
@@ -1064,6 +1094,7 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
 // --- SSH ---
 
 ipcMain.handle('ssh:getConfig', () => getSshConfig())
+ipcMain.handle('ssh:getTargets', () => getSshTargets())
 
 ipcMain.handle('network:getInfo', async () => {
   const os = await import('os')
@@ -1110,9 +1141,13 @@ ipcMain.handle('ssh:setConfig', (_event, sshConfig: { host: string; user: string
   setSshConfig(sshConfig)
 })
 
+ipcMain.handle('ssh:setTargets', (_event, targets: SshTargetConfig[]) => {
+  setSshTargets(targets)
+})
+
 ipcMain.handle('ssh:resume', (_event, sessionId: string, permissionMode?: string) => {
-  const sshConfig = getSshConfig()
-  if (!sshConfig) throw new Error('SSH config not set')
+  const sshConfig = getSshConfigForSession(sessionId)
+  if (!sshConfig) throw new Error('SSH config not set for this origin device')
   // SSH resume/fork executes on the remote host, so local source-file availability is not authoritative here.
   // Do not attach the local resume guard to this path; the remote machine owns the recoverability check.
   const remoteCwd = getRemoteCwdForSession(sessionId)
@@ -1120,8 +1155,8 @@ ipcMain.handle('ssh:resume', (_event, sessionId: string, permissionMode?: string
 })
 
 ipcMain.handle('ssh:fork', (_event, sessionId: string, permissionMode?: string) => {
-  const sshConfig = getSshConfig()
-  if (!sshConfig) throw new Error('SSH config not set')
+  const sshConfig = getSshConfigForSession(sessionId)
+  if (!sshConfig) throw new Error('SSH config not set for this origin device')
   // Same SSH exemption as ssh:resume: the actual restore happens remotely, not on this machine.
   const remoteCwd = getRemoteCwdForSession(sessionId)
   const cmd = buildSshResumeCommand(sessionId, sshConfig, permissionMode, remoteCwd)
@@ -1129,7 +1164,7 @@ ipcMain.handle('ssh:fork', (_event, sessionId: string, permissionMode?: string) 
 })
 
 ipcMain.handle('ssh:buildCommand', (_event, sessionId: string, permissionMode?: string) => {
-  const sshConfig = getSshConfig()
+  const sshConfig = getSshConfigForSession(sessionId)
   if (!sshConfig) return null
   // Builds a remote command only; local Library/source guard would be the wrong boundary.
   const remoteCwd = getRemoteCwdForSession(sessionId)
@@ -1387,6 +1422,15 @@ function defaultResumeSurfaceForSession(sessionId: string): ResumeSurface {
     : 'terminal'
 }
 
+ipcMain.handle('resume:listTargetInstances', () => {
+  return buildClaudeRecoveryInventory(runtimeHome()).map((instance) => ({
+    id: instance.id,
+    kind: instance.kind,
+    available: instance.available,
+    trusted: instance.trusted
+  }))
+})
+
 ipcMain.handle(
   'terminal:resume',
   async (
@@ -1395,7 +1439,8 @@ ipcMain.handle(
     _terminalApp: string,
     permissionMode?: string,
     cwd?: string,
-    surface?: ResumeSurface
+    surface?: ResumeSurface,
+    preferredTargetInstanceId?: string
   ) => {
     assertResumeCwd(sessionId, cwd)
     const effectiveSurface = surface || defaultResumeSurfaceForSession(sessionId)
@@ -1406,6 +1451,7 @@ ipcMain.handle(
       cwd,
       surface: effectiveSurface,
       allowExperimentalClaudeDesktop: experimentalClaudeDesktopImportEnabled(),
+      preferredTargetInstanceId,
       reloadSessions: reloadSessionsForAction,
       openAction: openResumeAction
     })
@@ -1414,7 +1460,12 @@ ipcMain.handle(
 
 ipcMain.handle(
   'terminal:resumeBatch',
-  async (_event, sessionIds: Array<{ sessionId: string; permissionMode?: string; cwd?: string }>, _terminalApp: string) => {
+  async (_event, sessionIds: Array<{
+    sessionId: string
+    permissionMode?: string
+    cwd?: string
+    preferredTargetInstanceId?: string
+  }>, _terminalApp: string) => {
     const results: ResumeActionResult[] = []
     for (const s of sessionIds) {
       assertResumeCwd(s.sessionId, s.cwd)
@@ -1424,6 +1475,7 @@ ipcMain.handle(
         permissionMode: s.permissionMode,
         cwd: s.cwd,
         surface: 'terminal',
+        preferredTargetInstanceId: s.preferredTargetInstanceId,
         reloadSessions: reloadSessionsForAction,
         openAction: openResumeAction
       }))
@@ -1434,13 +1486,21 @@ ipcMain.handle(
 
 ipcMain.handle(
   'terminal:fork',
-  async (_event, sessionId: string, _terminalApp: string, permissionMode?: string, cwd?: string) => {
+  async (
+    _event,
+    sessionId: string,
+    _terminalApp: string,
+    permissionMode?: string,
+    cwd?: string,
+    preferredTargetInstanceId?: string
+  ) => {
     assertResumeCwd(sessionId, cwd)
     return openGuardedForkAction({
       sessionId,
       sessions: cachedSessions,
       permissionMode,
       cwd,
+      preferredTargetInstanceId,
       reloadSessions: reloadSessionsForAction,
       openAction: openResumeAction
     })

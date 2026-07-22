@@ -59,18 +59,45 @@ export function repairStdio(): void {
 
 repairStdio()
 
-/** Post-repair self-test: prove child_process works in this launch context. */
-export function logSpawnSelfTest(): void {
+function logLine(text: string): void {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { spawnSync } = require('node:child_process') as typeof import('node:child_process')
-    const result = spawnSync('/bin/echo', ['ok'], { encoding: 'utf-8', timeout: 3000 })
-    const verdict = result.error
-      ? `spawn-error:${String((result.error as NodeJS.ErrnoException).code || result.error)}`
-      : `spawn-ok:status=${result.status}`
     fs.appendFileSync(
       path.join(os.homedir(), '.claude-session-manager', 'stdio-repair.log'),
-      `${new Date().toISOString()} pid=${process.pid} selftest=${verdict}\n`
+      `${new Date().toISOString()} pid=${process.pid} ${text}\n`
     )
   } catch { /* diagnostics only */ }
+}
+
+/**
+ * Post-repair self-tests: prove each spawn shape works in this launch context.
+ * Variant B replicates the exact Keychain call shape (async spawn, stdio all
+ * pipes, stdin.end()) that reportedly fails with a raw synchronous EBADF.
+ */
+export function logSpawnSelfTest(): void {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const cp = require('node:child_process') as typeof import('node:child_process')
+
+  try {
+    const result = cp.spawnSync('/bin/echo', ['ok'], { encoding: 'utf-8', timeout: 3000 })
+    logLine(`selftest-sync=${result.error ? `error:${String(result.error)}` : `ok:${result.status}`}`)
+  } catch (error) {
+    logLine(`selftest-sync=threw:${String(error)}`)
+  }
+
+  const variants: Array<[string, ('pipe' | 'ignore')[]]> = [
+    ['security-pipes', ['pipe', 'pipe', 'pipe']],
+    ['security-ignore-stdin', ['ignore', 'pipe', 'pipe']]
+  ]
+  for (const [name, stdio] of variants) {
+    try {
+      const child = cp.spawn('/usr/bin/security', [
+        'find-generic-password', '-a', 'swob-selftest', '-s', 'swob-selftest', '-w'
+      ], { stdio: stdio as ('pipe' | 'ignore')[] })
+      child.on('error', (error) => logLine(`selftest-${name}=error-event:${String(error)}`))
+      child.on('close', (code) => logLine(`selftest-${name}=closed:${code}`))
+      if (stdio[0] === 'pipe') child.stdin?.end()
+    } catch (error) {
+      logLine(`selftest-${name}=threw-sync:${String(error)}`)
+    }
+  }
 }

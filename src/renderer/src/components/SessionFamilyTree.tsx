@@ -1,6 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useStore } from '../store'
 import { GitBranch } from 'lucide-react'
+import { DisclosureSection } from './inspector'
+
+/* ------------------------------------------------------------------ */
+/*  Data types (unchanged from original)                               */
+/* ------------------------------------------------------------------ */
 
 interface Relation {
   parent: string
@@ -21,19 +26,22 @@ interface Registry {
   relations: Relation[]
 }
 
-const NODE_W = 160
-const NODE_H = 36
-const GAP_X = 16
-const GAP_Y = 48
-const PAD = 16
+/* ------------------------------------------------------------------ */
+/*  Layout constants — line + circle model                             */
+/* ------------------------------------------------------------------ */
 
-const SOURCE_COLORS: Record<string, string> = {
-  'claude-code': '#fbbf24',
-  codex: '#60a5fa',
-  cursor: '#4ade80',
-  opencode: '#22d3ee',
-  zcode: '#f87171'
-}
+const DOT_R = 3          // dot radius
+const DOT_GAP = 11       // vertical spacing between dots
+const COL_W = 36          // horizontal spacing between session columns
+const PAD_X = 14          // left/right padding
+const PAD_Y = 10          // top/bottom padding
+const MAX_DOTS = 8        // max dots shown per session (vertically compact)
+const FORK_CURVE_R = 6    // radius for the fork connector curve
+const LABEL_OFFSET_Y = 10 // gap below last dot for source label
+
+/* ------------------------------------------------------------------ */
+/*  Source labels (kept from original)                                  */
+/* ------------------------------------------------------------------ */
 
 const SOURCE_LABELS: Record<string, string> = {
   'claude-code': 'CC',
@@ -42,6 +50,10 @@ const SOURCE_LABELS: Record<string, string> = {
   opencode: 'OC',
   zcode: 'ZC'
 }
+
+/* ------------------------------------------------------------------ */
+/*  findFamily — BFS to find all connected sessions (unchanged logic)  */
+/* ------------------------------------------------------------------ */
 
 function findFamily(sessionId: string, registry: Registry): { ids: Set<string>; relations: Relation[] } {
   const visited = new Set<string>()
@@ -71,91 +83,136 @@ function findFamily(sessionId: string, registry: Registry): { ids: Set<string>; 
   return { ids: visited, relations: familyRelations }
 }
 
-function layoutTree(
+/* ------------------------------------------------------------------ */
+/*  Line layout — assign columns and dot positions                     */
+/* ------------------------------------------------------------------ */
+
+interface LineNode {
+  id: string
+  col: number            // horizontal column index
+  startY: number         // top of the line (first dot center Y)
+  dots: number           // number of dots to render
+  totalTurns: number     // actual turn count (may exceed dots)
+  truncated: boolean     // whether dots < totalTurns
+}
+
+interface LineEdge {
+  parentId: string
+  childId: string
+  type: string
+  /** Dot index on the parent where the fork/continue happens */
+  parentDotIdx: number
+}
+
+interface LineLayout {
+  nodes: LineNode[]
+  edges: LineEdge[]
+  width: number
+  height: number
+}
+
+function layoutLines(
   ids: Set<string>,
   relations: Relation[],
-  sessions: Record<string, RegistrySession>
-) {
+  sessions: Record<string, RegistrySession>,
+  getTurnCount: (sid: string) => number
+): LineLayout | null {
   const validIds = [...ids].filter((id) => sessions[id])
-  if (validIds.length === 0) return { nodes: [], edges: relations, width: 0, height: 0 }
+  if (validIds.length === 0) return null
 
-  const childrenMap = new Map<string, string[]>()
-  const parentMap = new Map<string, string[]>()
+  // Build adjacency
+  const childrenMap = new Map<string, Array<{ childId: string; type: string }>>()
+  const parentSet = new Set<string>()
   for (const r of relations) {
     if (!childrenMap.has(r.parent)) childrenMap.set(r.parent, [])
-    if (!parentMap.has(r.child)) parentMap.set(r.child, [])
-    childrenMap.get(r.parent)!.push(r.child)
-    parentMap.get(r.child)!.push(r.parent)
+    childrenMap.get(r.parent)!.push({ childId: r.child, type: r.type })
+    parentSet.add(r.child)
   }
 
-  const roots = validIds.filter((id) => !parentMap.has(id))
+  // Find root(s) — sessions with no parent
+  const roots = validIds.filter((id) => !parentSet.has(id))
   if (roots.length === 0) roots.push(validIds[0])
 
-  const layers = new Map<string, number>()
-  const queue: string[] = []
-  for (const r of roots) {
-    layers.set(r, 0)
-    queue.push(r)
-  }
-  while (queue.length > 0) {
-    const id = queue.shift()!
-    const layer = layers.get(id)!
-    for (const cid of childrenMap.get(id) || []) {
-      const existing = layers.get(cid)
-      if (existing === undefined || existing < layer + 1) {
-        layers.set(cid, layer + 1)
-        queue.push(cid)
-      }
+  // DFS to assign columns and compute vertical positions
+  const nodes: LineNode[] = []
+  const edges: LineEdge[] = []
+  let nextCol = 0
+  const visited = new Set<string>()
+
+  function dfs(sid: string, startY: number): void {
+    if (visited.has(sid)) return
+    visited.add(sid)
+
+    const col = nextCol
+    const totalTurns = Math.max(getTurnCount(sid), 1)
+    const dots = Math.min(totalTurns, MAX_DOTS)
+    const truncated = totalTurns > MAX_DOTS
+
+    nodes.push({ id: sid, col, startY, dots, totalTurns, truncated })
+
+    const children = childrenMap.get(sid) || []
+    // Sort: continuations first (they stay in the same column conceptually),
+    // then forks (branch to the right)
+    const continuations = children.filter((c) => c.type === 'continuation')
+    const forks = children.filter((c) => c.type !== 'continuation')
+
+    // Continuations extend below this session
+    const lineEndY = startY + (dots - 1) * DOT_GAP
+    for (const cont of continuations) {
+      if (visited.has(cont.childId)) continue
+      const parentDotIdx = dots - 1 // continue from the last dot
+      edges.push({ parentId: sid, childId: cont.childId, type: cont.type, parentDotIdx })
+      dfs(cont.childId, lineEndY + DOT_GAP * 2) // gap then continue
+    }
+
+    // Forks branch to a new column
+    for (const fork of forks) {
+      if (visited.has(fork.childId)) continue
+      // Estimate fork point: middle of the parent session
+      const parentDotIdx = Math.max(0, Math.floor(dots / 2) - 1)
+      const forkY = startY + parentDotIdx * DOT_GAP
+      nextCol++
+      edges.push({ parentId: sid, childId: fork.childId, type: fork.type, parentDotIdx })
+      dfs(fork.childId, forkY)
     }
   }
+
+  // Layout each root tree
+  let globalStartY = PAD_Y
+  for (const root of roots) {
+    if (visited.has(root)) continue
+    nextCol = 0
+    dfs(root, globalStartY)
+  }
+
+  // Any unvisited sessions (cycles or disconnected) — add them
   for (const id of validIds) {
-    if (!layers.has(id)) layers.set(id, 0)
-  }
-
-  const layerGroups = new Map<number, string[]>()
-  for (const id of validIds) {
-    const l = layers.get(id)!
-    if (!layerGroups.has(l)) layerGroups.set(l, [])
-    layerGroups.get(l)!.push(id)
-  }
-  const maxLayer = Math.max(0, ...layerGroups.keys())
-
-  const nodeOrder = new Map<string, number>()
-  const layer0 = layerGroups.get(0) || []
-  layer0.sort((a, b) => (sessions[a]?.sessionId || '').localeCompare(sessions[b]?.sessionId || ''))
-  layer0.forEach((id, i) => nodeOrder.set(id, i))
-
-  for (let l = 1; l <= maxLayer; l++) {
-    const layerIds = layerGroups.get(l) || []
-    const scored = layerIds.map((id) => {
-      const parents = parentMap.get(id) || []
-      const xs = parents.map((p) => nodeOrder.get(p) ?? 0)
-      const avg = xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : 0
-      return { id, score: avg }
-    })
-    scored.sort((a, b) => a.score - b.score)
-    scored.forEach(({ id }, i) => nodeOrder.set(id, i))
-    layerGroups.set(l, scored.map((s) => s.id))
-  }
-
-  const nodes: Array<{ id: string; x: number; y: number }> = []
-  let maxX = 0
-  for (const [layer, layerIds] of layerGroups) {
-    for (let i = 0; i < layerIds.length; i++) {
-      const x = PAD + i * (NODE_W + GAP_X)
-      const y = PAD + layer * (NODE_H + GAP_Y)
-      nodes.push({ id: layerIds[i], x, y })
-      maxX = Math.max(maxX, x + NODE_W)
+    if (!visited.has(id)) {
+      nextCol++
+      const totalTurns = Math.max(getTurnCount(id), 1)
+      const dots = Math.min(totalTurns, MAX_DOTS)
+      nodes.push({ id, col: nextCol, startY: PAD_Y, dots, totalTurns, truncated: totalTurns > MAX_DOTS })
     }
   }
+
+  // Compute final dimensions
+  const maxCol = Math.max(0, ...nodes.map((n) => n.col))
+  const maxBottom = Math.max(
+    0,
+    ...nodes.map((n) => n.startY + (n.dots - 1) * DOT_GAP + LABEL_OFFSET_Y + 12)
+  )
 
   return {
     nodes,
-    edges: relations,
-    width: Math.max(maxX + PAD, NODE_W + PAD * 2),
-    height: PAD * 2 + (maxLayer + 1) * NODE_H + maxLayer * GAP_Y
+    edges,
+    width: PAD_X * 2 + (maxCol + 1) * COL_W,
+    height: maxBottom + PAD_Y
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  Component                                                          */
+/* ------------------------------------------------------------------ */
 
 export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
   const storeSessions = useStore((s) => s.sessions)
@@ -173,18 +230,26 @@ export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
     return () => { cancelled = true }
   }, [])
 
-  const family = useMemo(() => {
+  const getTurnCount = useCallback(
+    (sid: string): number => {
+      const s = storeSessions.find((ss) => ss.sessionId === sid)
+      return s?.turnCount ?? 1
+    },
+    [storeSessions]
+  )
+
+  const layout = useMemo(() => {
     if (!registry) return null
     const { ids, relations } = findFamily(sessionId, registry)
     if (relations.length === 0) return null
-    return layoutTree(ids, relations, registry.sessions)
-  }, [registry, sessionId])
+    return layoutLines(ids, relations, registry.sessions, getTurnCount)
+  }, [registry, sessionId, getTurnCount])
 
-  const posMap = useMemo(() => {
-    const m = new Map<string, { x: number; y: number }>()
-    if (family) for (const n of family.nodes) m.set(n.id, { x: n.x, y: n.y })
+  const nodeMap = useMemo(() => {
+    const m = new Map<string, LineNode>()
+    if (layout) for (const n of layout.nodes) m.set(n.id, n)
     return m
-  }, [family])
+  }, [layout])
 
   const getTitle = useCallback(
     (sid: string): string => {
@@ -216,103 +281,159 @@ export function SessionFamilyTree({ sessionId }: { sessionId: string }) {
     [storeSessions, selectSession]
   )
 
-  if (!family || family.nodes.length === 0) return null
+  if (!layout || layout.nodes.length === 0) return null
+
+  /** Convert column index to X center coordinate */
+  const colX = (col: number) => PAD_X + col * COL_W + COL_W / 2
+
+  /** Convert node + dot index to Y coordinate */
+  const dotY = (node: LineNode, dotIdx: number) => node.startY + dotIdx * DOT_GAP
+
+  const badge = `${layout.nodes.length} ${locale === 'zh-CN' ? '个会话' : 'sessions'}`
 
   return (
-    <section>
-      <div className="flex items-center gap-2 text-xs font-medium text-soft-purple mb-2">
-        <GitBranch size={12} />
-        <span>{locale === 'zh-CN' ? '关联会话' : 'Related Sessions'}</span>
-        <span className="text-muted text-[10px]">
-          {family.nodes.length} {locale === 'zh-CN' ? '个节点' : 'nodes'} · {family.edges.length} {locale === 'zh-CN' ? '条边' : 'edges'}
-        </span>
-      </div>
-      <div className="overflow-x-auto rounded border border-edge bg-surface/30" style={{ maxHeight: 320 }}>
-        <svg width={family.width} height={family.height} className="block">
-          <defs>
-            <marker id="ft-arrow" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
-              <path d="M0,0 L6,3 L0,6" fill="none" stroke="#60a5fa" strokeWidth="1" />
-            </marker>
-            <marker id="ft-arrow-fork" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
-              <path d="M0,0 L6,3 L0,6" fill="none" stroke="#a78bfa" strokeWidth="1" />
-            </marker>
-          </defs>
-          {family.edges.map((edge, i) => {
-            const from = posMap.get(edge.parent)
-            const to = posMap.get(edge.child)
-            if (!from || !to) return null
-            const x1 = from.x + NODE_W / 2
-            const y1 = from.y + NODE_H
-            const x2 = to.x + NODE_W / 2
-            const y2 = to.y
+    <DisclosureSection
+      title={locale === 'zh-CN' ? '关联会话' : 'Related Sessions'}
+      icon={<GitBranch size={12} />}
+      badge={badge}
+      defaultOpen
+    >
+      <div
+        className="overflow-x-auto overflow-y-auto rounded border border-edge bg-surface/30"
+        style={{ maxHeight: 320 }}
+      >
+        <svg
+          width={Math.max(layout.width, 80)}
+          height={layout.height}
+          className="block"
+          style={{ minWidth: '100%' }}
+        >
+          {/* Edge connectors */}
+          {layout.edges.map((edge, i) => {
+            const parentNode = nodeMap.get(edge.parentId)
+            const childNode = nodeMap.get(edge.childId)
+            if (!parentNode || !childNode) return null
+
+            const px = colX(parentNode.col)
+            const py = dotY(parentNode, edge.parentDotIdx)
+            const cx = colX(childNode.col)
+            const cy = childNode.startY
             const isFork = edge.type === 'fork'
+
+            if (parentNode.col === childNode.col) {
+              // Same column — vertical connector (continuation)
+              return (
+                <line
+                  key={i}
+                  x1={px}
+                  y1={py}
+                  x2={cx}
+                  y2={cy}
+                  className="stroke-muted"
+                  strokeWidth={1}
+                  strokeDasharray="3 3"
+                  opacity={0.5}
+                />
+              )
+            }
+
+            // Fork — horizontal then vertical with a curve
+            const midX = cx
+            const r = Math.min(FORK_CURVE_R, Math.abs(cx - px) / 2, Math.abs(cy - py) / 2 || FORK_CURVE_R)
+            const dir = cx > px ? 1 : -1
+
             return (
               <path
                 key={i}
-                d={`M${x1},${y1} C${x1},${y1 + GAP_Y / 2} ${x2},${y2 - GAP_Y / 2} ${x2},${y2}`}
+                d={
+                  isFork
+                    ? `M${px},${py} L${midX - dir * r},${py} Q${midX},${py} ${midX},${py + r} L${midX},${cy}`
+                    : `M${px},${py} C${px},${(py + cy) / 2} ${cx},${(py + cy) / 2} ${cx},${cy}`
+                }
                 fill="none"
-                stroke={isFork ? '#a78bfa' : '#60a5fa'}
-                strokeWidth={1.5}
-                strokeDasharray={isFork ? '4 3' : undefined}
-                markerEnd={isFork ? 'url(#ft-arrow-fork)' : 'url(#ft-arrow)'}
-                opacity={0.7}
+                className={isFork ? 'stroke-soft-purple' : 'stroke-muted'}
+                strokeWidth={1}
+                strokeDasharray={isFork ? '4 2' : undefined}
+                opacity={0.5}
               />
             )
           })}
-          {family.nodes.map((node) => {
+
+          {/* Session lines and dots */}
+          {layout.nodes.map((node) => {
             const isCurrent = node.id === sessionId
+            const x = colX(node.col)
+            const firstDotY = node.startY
+            const lastDotY = dotY(node, node.dots - 1)
             const source = getSource(node.id)
-            const color = SOURCE_COLORS[source] || '#94a3b8'
+            const title = getTitle(node.id)
+
             return (
               <g
                 key={node.id}
                 onClick={() => handleClick(node.id)}
                 style={{ cursor: 'pointer' }}
+                opacity={isCurrent ? 1 : 0.6}
               >
-                <rect
-                  x={node.x}
-                  y={node.y}
-                  width={NODE_W}
-                  height={NODE_H}
-                  rx={4}
-                  fill={isCurrent ? 'rgba(96,165,250,0.15)' : 'rgba(255,255,255,0.05)'}
-                  stroke={isCurrent ? '#60a5fa' : 'rgba(255,255,255,0.1)'}
-                  strokeWidth={isCurrent ? 2 : 1}
-                />
-                <rect
-                  x={node.x + 6}
-                  y={node.y + 10}
-                  width={28}
-                  height={16}
-                  rx={3}
-                  fill={color}
-                  opacity={0.2}
-                />
+                {/* Vertical line through dots */}
+                {node.dots > 1 && (
+                  <line
+                    x1={x}
+                    y1={firstDotY}
+                    x2={x}
+                    y2={lastDotY}
+                    className={isCurrent ? 'stroke-accent' : 'stroke-faint'}
+                    strokeWidth={isCurrent ? 2 : 1}
+                  />
+                )}
+
+                {/* Truncation indicator (dashed extension) */}
+                {node.truncated && (
+                  <line
+                    x1={x}
+                    y1={lastDotY}
+                    x2={x}
+                    y2={lastDotY + 8}
+                    className={isCurrent ? 'stroke-accent' : 'stroke-faint'}
+                    strokeWidth={1}
+                    strokeDasharray="2 2"
+                    opacity={0.5}
+                  />
+                )}
+
+                {/* Dots */}
+                {Array.from({ length: node.dots }, (_, di) => {
+                  const dy = dotY(node, di)
+                  return (
+                    <circle
+                      key={di}
+                      cx={x}
+                      cy={dy}
+                      r={isCurrent ? DOT_R + 0.5 : DOT_R}
+                      className={isCurrent ? 'fill-accent' : 'fill-faint'}
+                    />
+                  )
+                })}
+
+                {/* Source label below the line */}
                 <text
-                  x={node.x + 20}
-                  y={node.y + 22}
+                  x={x}
+                  y={(node.truncated ? lastDotY + 8 : lastDotY) + LABEL_OFFSET_Y}
                   textAnchor="middle"
-                  fontSize={9}
-                  fontWeight={600}
-                  fill={color}
+                  className={`text-[10px] font-semibold ${isCurrent ? 'fill-accent' : 'fill-muted'}`}
                 >
                   {SOURCE_LABELS[source] || '?'}
                 </text>
-                <text
-                  x={node.x + 40}
-                  y={node.y + 23}
-                  fontSize={11}
-                  fill={isCurrent ? '#60a5fa' : '#e2e8f0'}
-                  fontWeight={isCurrent ? 600 : 400}
-                >
-                  {getTitle(node.id).slice(0, 14)}
-                  {getTitle(node.id).length > 14 ? '…' : ''}
-                </text>
+
+                {/* Hover title — rendered as SVG title for tooltip */}
+                <title>
+                  {title} ({node.totalTurns} {locale === 'zh-CN' ? '轮' : 'turns'})
+                </title>
               </g>
             )
           })}
         </svg>
       </div>
-    </section>
+    </DisclosureSection>
   )
 }

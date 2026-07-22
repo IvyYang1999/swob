@@ -1,6 +1,11 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useStore } from '../store'
-import { GitBranch, Wrench, AlertTriangle, ChevronDown, ChevronRight, Zap, Bot } from 'lucide-react'
+import { Wrench, AlertTriangle, Zap, Bot } from 'lucide-react'
+import { DisclosureSection } from './inspector'
+
+/* ------------------------------------------------------------------ */
+/*  Data types (unchanged)                                             */
+/* ------------------------------------------------------------------ */
 
 interface ToolCall {
   id: string
@@ -46,19 +51,27 @@ interface ExecutionTree {
   tokenTimeline: Array<{ turnIndex: number; cumulative: number; delta: number }>
 }
 
+/* ------------------------------------------------------------------ */
+/*  Semantic tool colors (using CSS variable approach where possible)   */
+/* ------------------------------------------------------------------ */
+
 const TOOL_COLORS: Record<string, string> = {
-  Read: '#3b82f6',
-  Write: '#22c55e',
-  Edit: '#f59e0b',
-  Bash: '#ef4444',
-  Agent: '#a78bfa',
-  Grep: '#06b6d4',
-  Glob: '#8b5cf6',
-  Skill: '#ec4899',
-  TaskCreate: '#f97316',
-  WebSearch: '#14b8a6',
-  WebFetch: '#0ea5e9'
+  Read: 'var(--color-soft-blue)',
+  Write: 'var(--color-soft-green)',
+  Edit: 'var(--color-soft-amber)',
+  Bash: 'var(--color-soft-red)',
+  Agent: 'var(--color-soft-purple)',
+  Grep: 'var(--color-soft-cyan)',
+  Glob: 'var(--color-soft-indigo)',
+  Skill: 'var(--color-soft-pink)',
+  TaskCreate: 'var(--color-soft-orange)',
+  WebSearch: 'var(--color-soft-emerald)',
+  WebFetch: 'var(--color-soft-blue)'
 }
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
@@ -72,43 +85,64 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function ToolCallItem({ tc }: { tc: ToolCall }) {
-  const [open, setOpen] = useState(false)
-  const color = TOOL_COLORS[tc.name] || '#6b7280'
+/* ------------------------------------------------------------------ */
+/*  Sub-components                                                     */
+/* ------------------------------------------------------------------ */
+
+function ToolCallItem({ tc, locale }: { tc: ToolCall; locale: string }) {
+  const color = TOOL_COLORS[tc.name] || 'var(--color-muted)'
   return (
     <div className="ml-4 border-l-2 border-edge pl-2 py-0.5">
-      <button onClick={() => setOpen(!open)} className="flex items-center gap-1.5 text-[11px] hover:text-primary w-full text-left">
-        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+      <div className="flex items-center gap-1.5 text-[11px] w-full text-left">
         <Wrench size={10} style={{ color }} />
         <span className="font-medium" style={{ color }}>{tc.name}</span>
-        {tc.error && <AlertTriangle size={10} className="text-red-400" />}
+        {tc.error && <AlertTriangle size={10} className="text-soft-red" />}
         {tc.durationMs != null && <span className="text-muted">{formatDuration(tc.durationMs)}</span>}
-      </button>
-      {open && tc.result && (
-        <pre className="mt-1 ml-5 text-[10px] text-muted bg-surface/50 rounded p-1.5 overflow-x-auto max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all">
-          {tc.result.slice(0, 500)}
-        </pre>
+      </div>
+      {tc.result && (
+        <div className="ml-3 mt-0.5">
+          <DisclosureSection
+            title={locale === 'zh-CN' ? '原始输出' : 'Raw output'}
+            defaultOpen={false}
+          >
+            <pre className="text-[10px] text-muted bg-surface/50 rounded p-1.5 overflow-x-auto max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all">
+              {tc.result.slice(0, 500)}
+            </pre>
+          </DisclosureSection>
+        </div>
       )}
     </div>
   )
 }
 
-function AgentSpawnItem({ spawn }: { spawn: AgentSpawn }) {
-  const [open, setOpen] = useState(false)
-  const statusColor = spawn.status === 'completed' ? 'text-green-400' : spawn.status === 'failed' ? 'text-red-400' : 'text-yellow-400'
+function AgentSpawnItem({ spawn, locale }: { spawn: AgentSpawn; locale: string }) {
+  const statusClass =
+    spawn.status === 'completed'
+      ? 'text-soft-green'
+      : spawn.status === 'failed'
+        ? 'text-soft-red'
+        : 'text-soft-amber'
   return (
     <div className="ml-4 border-l-2 border-soft-purple/30 pl-2 py-0.5">
-      <button onClick={() => setOpen(!open)} className="flex items-center gap-1.5 text-[11px] hover:text-primary w-full text-left">
-        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+      <div className="flex items-center gap-1.5 text-[11px] w-full text-left">
         <Bot size={10} className="text-soft-purple" />
         <span className="font-medium text-soft-purple">{spawn.subagentType}</span>
-        <span className={`text-[9px] ${statusColor}`}>● {spawn.status}</span>
-      </button>
+        <span className={`text-[10px] ${statusClass}`}>
+          {spawn.status === 'completed' ? '✓' : spawn.status === 'failed' ? '✗' : '●'} {spawn.status}
+        </span>
+      </div>
       <div className="ml-5 text-[10px] text-muted truncate">{spawn.description}</div>
-      {open && spawn.resultSummary && (
-        <pre className="mt-1 ml-5 text-[10px] text-muted bg-surface/50 rounded p-1.5 overflow-x-auto max-h-[100px] overflow-y-auto whitespace-pre-wrap break-all">
-          {spawn.resultSummary}
-        </pre>
+      {spawn.resultSummary && (
+        <div className="ml-3 mt-0.5">
+          <DisclosureSection
+            title={locale === 'zh-CN' ? '原始输出' : 'Raw output'}
+            defaultOpen={false}
+          >
+            <pre className="text-[10px] text-muted bg-surface/50 rounded p-1.5 overflow-x-auto max-h-[100px] overflow-y-auto whitespace-pre-wrap break-all">
+              {spawn.resultSummary}
+            </pre>
+          </DisclosureSection>
+        </div>
       )}
     </div>
   )
@@ -125,17 +159,36 @@ function TokenBar({ timeline, maxTokens }: { timeline: ExecutionTree['tokenTimel
   const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
   return (
     <svg width={w} height={h} className="block">
-      <path d={path} fill="none" stroke="var(--color-soft-blue, #60a5fa)" strokeWidth={1.5} opacity={0.7} />
-      <path d={`${path} L${w},${h} L0,${h} Z`} fill="var(--color-soft-blue, #60a5fa)" opacity={0.08} />
+      <path d={path} fill="none" stroke="var(--color-soft-blue)" strokeWidth={1.5} opacity={0.7} />
+      <path d={`${path} L${w},${h} L0,${h} Z`} fill="var(--color-soft-blue)" opacity={0.08} />
     </svg>
   )
 }
+
+/* ------------------------------------------------------------------ */
+/*  Summary badge builder                                              */
+/* ------------------------------------------------------------------ */
+
+function buildSummaryBadge(tree: ExecutionTree, locale: string): string {
+  const parts: string[] = []
+  parts.push(`${tree.totalToolCalls} ${locale === 'zh-CN' ? '工具' : 'tools'}`)
+  if (tree.totalAgentSpawns > 0) {
+    parts.push(`${tree.totalAgentSpawns} ${locale === 'zh-CN' ? '子代理' : 'agents'}`)
+  }
+  if (tree.errors.length > 0) {
+    parts.push(`${tree.errors.length} ${locale === 'zh-CN' ? '错误' : 'errors'}`)
+  }
+  return parts.join(' · ')
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main component                                                     */
+/* ------------------------------------------------------------------ */
 
 export function ExecutionTreePanel({ filePath }: { filePath: string }) {
   const locale = useStore((s) => s.locale)
   const [tree, setTree] = useState<ExecutionTree | null>(null)
   const [loading, setLoading] = useState(true)
-  const [expanded, setExpanded] = useState(true)
 
   useEffect(() => {
     let cancelled = false
@@ -162,90 +215,89 @@ export function ExecutionTreePanel({ filePath }: { filePath: string }) {
   if (!tree || tree.totalToolCalls === 0) return null
 
   const maxCum = tree.tokenTimeline.length > 0 ? tree.tokenTimeline[tree.tokenTimeline.length - 1].cumulative : 0
+  const summaryBadge = buildSummaryBadge(tree, locale)
+
+  // Error badge fragment for the DisclosureSection — shows error count prominently
+  const badgeContent = tree.errors.length > 0
+    ? <span>{summaryBadge.replace(
+        `${tree.errors.length} ${locale === 'zh-CN' ? '错误' : 'errors'}`,
+        ''
+      ).replace(/\s*·\s*$/, '')}<span className="text-soft-red ml-1">{tree.errors.length} {locale === 'zh-CN' ? '错误' : 'err'}</span></span>
+    : summaryBadge
 
   return (
-    <section>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-xs font-medium text-soft-blue mb-2 w-full text-left hover:text-primary"
-      >
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <Zap size={12} />
-        <span>{locale === 'zh-CN' ? '执行树' : 'Execution Tree'}</span>
-        <span className="text-muted text-[10px] ml-auto">
-          {tree.totalToolCalls} tools · {tree.totalAgentSpawns > 0 ? `${tree.totalAgentSpawns} agents · ` : ''}
-          {tree.errors.length > 0 ? `${tree.errors.length} errors` : ''}
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="space-y-3">
-          {/* Tool breakdown bar */}
-          <div className="flex gap-1 flex-wrap">
-            {topTools.map(([name, count]) => (
-              <span
-                key={name}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium"
-                style={{
-                  backgroundColor: `${TOOL_COLORS[name] || '#6b7280'}15`,
-                  color: TOOL_COLORS[name] || '#6b7280'
-                }}
-              >
-                {name} {count}
-              </span>
-            ))}
-          </div>
-
-          {/* Token timeline sparkline */}
-          {tree.tokenTimeline.length > 2 && (
-            <div>
-              <div className="text-[10px] text-muted mb-1">
-                {locale === 'zh-CN' ? 'Token 累计' : 'Cumulative tokens'}: {formatTokens(maxCum)}
-              </div>
-              <TokenBar timeline={tree.tokenTimeline} maxTokens={maxCum} />
-            </div>
-          )}
-
-          {/* Errors */}
-          {tree.errors.length > 0 && (
-            <div className="space-y-1">
-              <div className="text-[10px] font-medium text-red-400 flex items-center gap-1">
-                <AlertTriangle size={10} />
-                {tree.errors.length} {locale === 'zh-CN' ? '个错误' : 'errors'}
-              </div>
-              {tree.errors.slice(0, 5).map((err, i) => (
-                <div key={i} className="text-[10px] text-red-300/70 pl-4 truncate">
-                  Turn {err.turnIndex}: {err.toolName} — {err.message.slice(0, 80)}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Execution timeline (collapsible turns) */}
-          <div className="max-h-[300px] overflow-y-auto space-y-0.5">
-            {assistantTurns.slice(0, 50).map((turn) => (
-              <div key={turn.index} className="text-[11px]">
-                <div className="flex items-center gap-1.5 text-secondary">
-                  <span className="text-muted text-[9px] w-6 text-right shrink-0">#{turn.index}</span>
-                  <span className="truncate flex-1">{turn.textPreview.slice(0, 60) || '(tool calls)'}</span>
-                  {turn.tokenUsage && (
-                    <span className="text-muted text-[9px] shrink-0">
-                      {formatTokens(turn.tokenUsage.inputTokens + turn.tokenUsage.outputTokens)}
-                    </span>
-                  )}
-                </div>
-                {turn.agentSpawns.map((s) => <AgentSpawnItem key={s.id} spawn={s} />)}
-                {turn.toolCalls.map((tc) => <ToolCallItem key={tc.id} tc={tc} />)}
-              </div>
-            ))}
-            {assistantTurns.length > 50 && (
-              <div className="text-[10px] text-muted text-center py-1">
-                +{assistantTurns.length - 50} more turns
-              </div>
-            )}
-          </div>
+    <DisclosureSection
+      title={locale === 'zh-CN' ? '执行树' : 'Execution Tree'}
+      icon={<Zap size={12} />}
+      badge={badgeContent}
+      defaultOpen={false}
+    >
+      <div className="space-y-3">
+        {/* Tool breakdown bar */}
+        <div className="flex gap-1 flex-wrap">
+          {topTools.map(([name, count]) => (
+            <span
+              key={name}
+              className="px-1.5 py-0.5 rounded text-[10px] font-medium"
+              style={{
+                backgroundColor: `color-mix(in srgb, ${TOOL_COLORS[name] || 'var(--color-muted)'} 12%, transparent)`,
+                color: TOOL_COLORS[name] || 'var(--color-muted)'
+              }}
+            >
+              {name} {count}
+            </span>
+          ))}
         </div>
-      )}
-    </section>
+
+        {/* Token timeline sparkline */}
+        {tree.tokenTimeline.length > 2 && (
+          <div>
+            <div className="text-[10px] text-muted mb-1">
+              {locale === 'zh-CN' ? 'Token 累计' : 'Cumulative tokens'}: {formatTokens(maxCum)}
+            </div>
+            <TokenBar timeline={tree.tokenTimeline} maxTokens={maxCum} />
+          </div>
+        )}
+
+        {/* Errors */}
+        {tree.errors.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-[10px] font-medium text-soft-red flex items-center gap-1">
+              <AlertTriangle size={10} />
+              {tree.errors.length} {locale === 'zh-CN' ? '个错误' : 'errors'}
+            </div>
+            {tree.errors.slice(0, 5).map((err, i) => (
+              <div key={i} className="text-[10px] text-soft-red/70 pl-4 truncate">
+                Turn {err.turnIndex}: {err.toolName} — {err.message.slice(0, 80)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Execution timeline (collapsible turns) */}
+        <div className="max-h-[300px] overflow-y-auto space-y-0.5">
+          {assistantTurns.slice(0, 50).map((turn) => (
+            <div key={turn.index} className="text-[11px]">
+              <div className="flex items-center gap-1.5 text-secondary">
+                <span className="text-muted text-[10px] w-6 text-right shrink-0">#{turn.index}</span>
+                <span className="truncate flex-1">{turn.textPreview.slice(0, 60) || '(tool calls)'}</span>
+                {turn.tokenUsage && (
+                  <span className="text-muted text-[10px] shrink-0">
+                    {formatTokens(turn.tokenUsage.inputTokens + turn.tokenUsage.outputTokens)}
+                  </span>
+                )}
+              </div>
+              {turn.agentSpawns.map((s) => <AgentSpawnItem key={s.id} spawn={s} locale={locale} />)}
+              {turn.toolCalls.map((tc) => <ToolCallItem key={tc.id} tc={tc} locale={locale} />)}
+            </div>
+          ))}
+          {assistantTurns.length > 50 && (
+            <div className="text-[10px] text-muted text-center py-1">
+              +{assistantTurns.length - 50} more turns
+            </div>
+          )}
+        </div>
+      </div>
+    </DisclosureSection>
   )
 }

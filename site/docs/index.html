@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>快速上手 · Swob Docs</title>
+  <meta name="description" content="从安装、首启动三步引导到第一次 Resume。">
+  <meta name="theme-color" content="#efebe2">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./assets/docs.css">
+</head>
+<body data-section="quickstart">
+  <a class="skip-link" href="#content">跳到正文</a>
+  <header class="docs-header">
+    <a class="docs-brand" href="../zh/"><img src="../assets/favicon.svg" width="28" height="28" alt=""><span>swob</span><em>docs</em></a>
+    <nav aria-label="文档工具"><a href="../zh/">官网</a><a href="./en/index.html" lang="en">EN structure</a><a class="github-link" href="https://github.com/IvyYang1999/swob">GitHub</a></nav>
+  </header>
+  <details class="mobile-chapters"><summary>浏览五章</summary><nav class="chapter-nav" aria-label="文档章节">
+    <a href="./index.html"><span>01</span>快速上手</a>
+    <a href="./concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="./metrics.html"><span>03</span>统计口径</a>
+    <a href="./guides/resume.html"><span>04</span>功能手册</a>
+    <a href="./troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav></details>
+  <div class="docs-layout">
+    <aside class="docs-sidebar"><nav class="chapter-nav" aria-label="文档章节">
+    <a href="./index.html"><span>01</span>快速上手</a>
+    <a href="./concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="./metrics.html"><span>03</span>统计口径</a>
+    <a href="./guides/resume.html"><span>04</span>功能手册</a>
+    <a href="./troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav>
+      <div class="side-group"><strong>核心概念</strong><a href="./concepts/vault.html">Vault</a><a href="./concepts/lenses-folders.html">镜头 vs 文件夹</a><a href="./concepts/recovery.html">复活与备份</a><a href="./concepts/lineage.html">血统图谱</a></div>
+      <div class="side-group"><strong>功能手册</strong><a href="./guides/resume.html">多客户端 Resume</a><a href="./guides/organize.html">整理与撤销</a><a href="./guides/profiles.html">Profile 与智能重命名</a><a href="./guides/cli.html">CLI 全命令</a><a href="./guides/ssh.html">SSH 远程</a></div>
+    </aside>
+    <main class="docs-content" id="content"><header class="doc-hero"><p class="doc-kicker">01 · QUICK START</p><h1>先保住历史，再继续工作。</h1><p class="doc-lead">Swob 把各家 AI 编程客户端的本地会话汇到一个由你控制的 Vault。下面是从零到第一次续接的最短路径。</p><div class="hero-badges"><span>macOS current main</span><span>本地优先</span><span>约 3 分钟</span></div></header>
+      <section><h2>1. 下载与安装</h2><ol class="steps"><li><strong>下载当前稳定版</strong><p>从官网或 GitHub Releases 下载与你 Mac 芯片对应的 DMG。稳定版和 current main 的功能边界以官网标注为准。</p></li><li><strong>首次打开未签名应用</strong><p>如果 macOS 拦截，在系统设置 → 隐私与安全性中确认打开。不要从不明镜像下载。</p></li></ol></section>
+      <section><h2>2. 首启动三步</h2><div class="card-grid three"><article><span class="card-index">01</span><h3>选择 Vault</h3><p>选一个你掌控、会备份的位置。Vault 保存 Swob 会话包、索引和组织元数据；改变位置不是改变原客户端目录。</p></article><article><span class="card-index">02</span><h3>排除来源</h3><p>取消勾选的 harness 将不显示、也不备份。以后可在设置里调整；排除不是“隐藏筛选”，而是数据边界。</p></article><article><span class="card-index">03</span><h3>延长保留期</h3><p>发现 Claude Code 时，建议把本地会话保留期从默认值延长。它降低源文件被自动清理的风险，但不能替代 Vault 备份。</p></article></div></section>
+      <section><h2>3. 第一次 Resume</h2><ol class="steps"><li><strong>在左侧选择会话</strong><p>先核对来源、项目和最后更新时间。旧 ID 会尽量解析到最新的物理续接会话。</p></li><li><strong>点击 Resume</strong><p>默认走该来源可验证的终端命令；下拉菜单里只展示支持的桌面入口。</p></li><li><strong>看清降级提示</strong><p>“打开客户端”不等于“跳到指定会话”。尤其 ZCode 目前只能打开 App/工作区，Swob 会明确提示不能直达历史会话。</p></li></ol><div class="callout"><strong>恢复前的安全边界</strong><p>源文件缺失时，只有实际点击 Resume 才允许进入受控复活流程；复制命令和审计保持只读。</p></div></section>
+      <figure class="doc-shot"><img src="../assets/main.png" alt="Swob 会话浏览器合成界面" loading="lazy"><figcaption>当前主界面示意 · 合成数据 / 隐私清洗重建</figcaption></figure>
+      <nav class="next-links"><a href="./concepts/vault.html">下一章：理解 Vault →</a><a href="./guides/resume.html">直接看多客户端 Resume →</a></nav></main>
+  </div>
+  <footer><span>Swob Docs · 口径先于结论</span><span>本地优先 · 证据可追溯 · 局限明示</span></footer>
+</body>
+</html>

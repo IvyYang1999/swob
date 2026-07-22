@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vault：会话是你的文件 · Swob Docs</title>
+  <meta name="description" content="Vault 是 Swob 的本地资料库边界。它不是某个云账号，也不是把源客户端目录据为己有。">
+  <meta name="theme-color" content="#efebe2">
+  <link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/docs.css">
+</head>
+<body data-section="concepts">
+  <a class="skip-link" href="#content">跳到正文</a>
+  <header class="docs-header">
+    <a class="docs-brand" href="../../zh/"><img src="../../assets/favicon.svg" width="28" height="28" alt=""><span>swob</span><em>docs</em></a>
+    <nav aria-label="文档工具"><a href="../../zh/">官网</a><a href="../en/index.html" lang="en">EN structure</a><a class="github-link" href="https://github.com/IvyYang1999/swob">GitHub</a></nav>
+  </header>
+  <details class="mobile-chapters"><summary>浏览五章</summary><nav class="chapter-nav" aria-label="文档章节">
+    <a href="../index.html"><span>01</span>快速上手</a>
+    <a href="../concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="../metrics.html"><span>03</span>统计口径</a>
+    <a href="../guides/resume.html"><span>04</span>功能手册</a>
+    <a href="../troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav></details>
+  <div class="docs-layout">
+    <aside class="docs-sidebar"><nav class="chapter-nav" aria-label="文档章节">
+    <a href="../index.html"><span>01</span>快速上手</a>
+    <a href="../concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="../metrics.html"><span>03</span>统计口径</a>
+    <a href="../guides/resume.html"><span>04</span>功能手册</a>
+    <a href="../troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav>
+      <div class="side-group"><strong>核心概念</strong><a href="../concepts/vault.html">Vault</a><a href="../concepts/lenses-folders.html">镜头 vs 文件夹</a><a href="../concepts/recovery.html">复活与备份</a><a href="../concepts/lineage.html">血统图谱</a></div>
+      <div class="side-group"><strong>功能手册</strong><a href="../guides/resume.html">多客户端 Resume</a><a href="../guides/organize.html">整理与撤销</a><a href="../guides/profiles.html">Profile 与智能重命名</a><a href="../guides/cli.html">CLI 全命令</a><a href="../guides/ssh.html">SSH 远程</a></div>
+    </aside>
+    <main class="docs-content" id="content"><header class="doc-hero"><p class="doc-kicker">02 · CORE CONCEPT</p><h1>Vault：会话是你的文件</h1><p class="doc-lead">Vault 是 Swob 的本地资料库边界。它不是某个云账号，也不是把源客户端目录据为己有。</p></header><figure class="doc-shot"><img src="../../assets/sidebar.png" alt="Swob Vault 左侧栏合成界面" loading="lazy"><figcaption>当前 UI 示意 · 合成数据 / 隐私清洗重建</figcaption></figure><section><h2>它保存什么</h2><p>每个会话以受管会话包存在，带有标记、派生 transcript、来源证据和组织元数据。SQLite 搜索索引可以重建；原始 harness transcript 与 Swob 转录都不应靠手工编辑来“修复”。</p><div class="principle"><strong>第一原则</strong><p>原始记录是证据，Vault 是可管理、可备份的本地副本。浏览、整理与恢复都应保留这条边界。</p></div></section><section><h2>你负责的两件事</h2><ul class="checks"><li>把 Vault 放在你理解其同步/备份语义的位置。</li><li>不要手工移动单个会话包；在 Swob 里整理，才能记录可撤销事务。</li></ul></section><nav class="concept-index"><a href="../concepts/vault.html">Vault</a><a href="../concepts/lenses-folders.html">镜头 vs 文件夹</a><a href="../concepts/recovery.html">复活与备份</a><a href="../concepts/lineage.html">血统图谱</a></nav></main>
+  </div>
+  <footer><span>Swob Docs · 口径先于结论</span><span>本地优先 · 证据可追溯 · 局限明示</span></footer>
+</body>
+</html>

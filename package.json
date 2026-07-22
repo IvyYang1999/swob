@@ -20,6 +20,8 @@
     "check:conflicts": "node scripts/check-conflict-markers.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "check": "npm run check:conflicts && npm run typecheck",
+    "docs:gen": "node scripts/generate-docs.mjs",
+    "docs:check": "node scripts/generate-docs.mjs --check",
     "test": "npm run check && vitest run",
     "test:watch": "vitest",
     "test:e2e": "npx electron-vite build && npx playwright test",

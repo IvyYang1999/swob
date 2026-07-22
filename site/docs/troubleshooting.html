@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FAQ 与故障排查 · Swob Docs</title>
+  <meta name="description" content="会话消失、复活失败原因与 Windows Native Alpha 能力边界。">
+  <meta name="theme-color" content="#efebe2">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./assets/docs.css">
+</head>
+<body data-section="troubleshooting">
+  <a class="skip-link" href="#content">跳到正文</a>
+  <header class="docs-header">
+    <a class="docs-brand" href="../zh/"><img src="../assets/favicon.svg" width="28" height="28" alt=""><span>swob</span><em>docs</em></a>
+    <nav aria-label="文档工具"><a href="../zh/">官网</a><a href="./en/index.html" lang="en">EN structure</a><a class="github-link" href="https://github.com/IvyYang1999/swob">GitHub</a></nav>
+  </header>
+  <details class="mobile-chapters"><summary>浏览五章</summary><nav class="chapter-nav" aria-label="文档章节">
+    <a href="./index.html"><span>01</span>快速上手</a>
+    <a href="./concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="./metrics.html"><span>03</span>统计口径</a>
+    <a href="./guides/resume.html"><span>04</span>功能手册</a>
+    <a href="./troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav></details>
+  <div class="docs-layout">
+    <aside class="docs-sidebar"><nav class="chapter-nav" aria-label="文档章节">
+    <a href="./index.html"><span>01</span>快速上手</a>
+    <a href="./concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="./metrics.html"><span>03</span>统计口径</a>
+    <a href="./guides/resume.html"><span>04</span>功能手册</a>
+    <a href="./troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav>
+      <div class="side-group"><strong>核心概念</strong><a href="./concepts/vault.html">Vault</a><a href="./concepts/lenses-folders.html">镜头 vs 文件夹</a><a href="./concepts/recovery.html">复活与备份</a><a href="./concepts/lineage.html">血统图谱</a></div>
+      <div class="side-group"><strong>功能手册</strong><a href="./guides/resume.html">多客户端 Resume</a><a href="./guides/organize.html">整理与撤销</a><a href="./guides/profiles.html">Profile 与智能重命名</a><a href="./guides/cli.html">CLI 全命令</a><a href="./guides/ssh.html">SSH 远程</a></div>
+    </aside>
+    <main class="docs-content" id="content"><!-- generated recovery table: src/main/recovery-failure-message.ts --><header class="doc-hero"><p class="doc-kicker">05 · TROUBLESHOOTING</p><h1>先定位失败层，再决定下一步。</h1><p class="doc-lead">会话“看不见”、备份“还在”和目标客户端“能 Resume”属于三层问题。不要用一次重试掩盖证据缺口。</p></header>
+      <section id="missing-session"><h2>为什么会话突然消失？</h2><p>先确认它是从 Swob 视图消失，还是原客户端源文件真的被清理。Claude Code 的本地保留策略可能删除旧源文件：一次真实审计中，1,621 个会话里有 253 个原路径已缺失，但 Vault 备份仍在。这个比例只描述该审计语料，不是每个人的预言。</p><ol class="steps"><li><strong>检查来源排除</strong><p>首启动或设置里排除的来源既不显示也不备份。</p></li><li><strong>搜索 Vault</strong><p>用标题、项目或 transcript 全文确认 Swob 副本是否存在。</p></li><li><strong>检查保留期</strong><p>对 Claude Code 延长本地会话保留期；它只能降低未来风险，不能凭空恢复已删除文件。</p></li><li><strong>需要续接时再复活</strong><p>只有点击 Resume 才进入受控写回；先核对目标实例和冲突。</p></li></ol></section>
+      <section id="recovery-failures"><h2>复活失败原因（当前 23 类）</h2><p class="section-lead">本表直接从代码消息表生成。任务设计稿曾写“24 类”，当前主干真相源实际是 23 类；以后代码增删而文档未更新，生成检查会失败。</p><div class="table-scroll"><table><thead><tr><th>reason</th><th>用户可见说明</th></tr></thead><tbody><tr id="recovery-session-id-mismatch"><td><code>session-id-mismatch</code></td><td>备份中的会话 ID 与当前会话不一致，已停止以避免导入错误记录</td></tr>
+<tr id="recovery-missing-source-path"><td><code>missing-source-path</code></td><td>会话没有可定位的 Claude 源路径</td></tr>
+<tr id="recovery-invalid-source-path"><td><code>invalid-source-path</code></td><td>Claude 源路径格式无效，无法安全确定复活位置</td></tr>
+<tr id="recovery-missing-backup"><td><code>missing-backup</code></td><td>找不到可用于复活的备份</td></tr>
+<tr id="recovery-invalid-backup"><td><code>invalid-backup</code></td><td>备份未通过严格 JSONL 校验，未写入 Claude 源目录</td></tr>
+<tr id="recovery-remote-source-requires-explicit-target"><td><code>remote-source-requires-explicit-target</code></td><td>这是其他安装的会话，需要先选择要导入的 Claude 实例</td></tr>
+<tr id="recovery-non-standard-source-requires-explicit-target"><td><code>non-standard-source-requires-explicit-target</code></td><td>源路径不是标准 Claude 目录，需要先明确选择导入目标</td></tr>
+<tr id="recovery-target-instance-not-found"><td><code>target-instance-not-found</code></td><td>找不到所选的 Claude 实例，请重新选择可用实例</td></tr>
+<tr id="recovery-target-instance-unavailable"><td><code>target-instance-unavailable</code></td><td>目标 Claude 实例当前不可用，请确认该实例已安装且目录可访问</td></tr>
+<tr id="recovery-target-instance-untrusted"><td><code>target-instance-untrusted</code></td><td>目标 Claude 实例未通过路径安全检查，已停止写入</td></tr>
+<tr id="recovery-missing-target-inventory"><td><code>missing-target-inventory</code></td><td>缺少目标实例的文件清单，无法排除覆盖风险</td></tr>
+<tr id="recovery-target-inventory-incomplete"><td><code>target-inventory-incomplete</code></td><td>目标实例文件清单不完整，无法安全复活</td></tr>
+<tr id="recovery-target-instance-missing-config-dir"><td><code>target-instance-missing-config-dir</code></td><td>目标 Claude 实例缺少配置目录，无法确定安全写入边界</td></tr>
+<tr id="recovery-missing-local-device-id"><td><code>missing-local-device-id</code></td><td>本机缺少设备标识，无法判断会话是否来自其他安装</td></tr>
+<tr id="recovery-missing-local-username"><td><code>missing-local-username</code></td><td>本机缺少用户名信息，无法安全判断旧版会话来源</td></tr>
+<tr id="recovery-non-standard-target-refused"><td><code>non-standard-target-refused</code></td><td>所选目标不是受支持的 Claude 实例，已拒绝写入</td></tr>
+<tr id="recovery-target-conflict"><td><code>target-conflict</code></td><td>目标 Claude 实例已有同名或同 ID 会话，已停止以避免覆盖</td></tr>
+<tr id="recovery-source-not-claude"><td><code>source-not-claude</code></td><td>此会话没有可复活到 Claude 的源记录</td></tr>
+<tr id="recovery-unverified-backup"><td><code>unverified-backup</code></td><td>备份缺少 SHA-256/大小证据，需要明确确认后才能复活</td></tr>
+<tr id="recovery-materialization-failed"><td><code>materialization-failed</code></td><td>iCloud 备份尚未完整下载或完整性证据不匹配</td></tr>
+<tr id="recovery-recovery-locked"><td><code>recovery-locked</code></td><td>另一 Swob 进程正在复活该会话，请稍后重试</td></tr>
+<tr id="recovery-post-publish-verification-failed"><td><code>post-publish-verification-failed</code></td><td>目标已发布但最终校验失败，已保留现场且未自动删除</td></tr>
+<tr id="recovery-io-error"><td><code>io-error</code></td><td>读取备份或写入目标时发生本地 I/O 错误，请检查磁盘和目录权限</td></tr></tbody></table></div></section>
+      <section id="windows-alpha"><h2>Windows Native Alpha 边界</h2><p>Alpha 只验证 Windows x64 上 Claude Code 与 Codex 的本地浏览、搜索、备份、Resume 和 Library 最小闭环，不是 macOS 功能对等版。</p><div class="card-grid"><article><h3>支持</h3><p>Windows Native x64；Claude Code、Codex；Windows Terminal / PowerShell / cmd Resume。</p></article><article><h3>不支持 / 不在本阶段</h3><p>其他九类 harness、WSL、OneDrive 占位文件、Windows CLI 安装、ARM64、自动更新、签名、SSH 和手机连接。</p></article></div><p>本站只保留用户能力边界；构建、CI 证据与真机验收清单见仓库的 <a href="https://github.com/IvyYang1999/swob/blob/master/docs/windows-alpha.md">Windows Alpha 工程文档</a>，不把 CI 证据包装成已经交付的功能承诺。</p></section></main>
+  </div>
+  <footer><span>Swob Docs · 口径先于结论</span><span>本地优先 · 证据可追溯 · 局限明示</span></footer>
+</body>
+</html>

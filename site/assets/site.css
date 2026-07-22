@@ -200,7 +200,7 @@ footer{background:var(--panel);color:#85827d;border-top:1px solid #343438;paddin
 
 @media(max-width:900px){
   .shell{width:min(var(--max),calc(100% - 32px))}
-  .nav-links{gap:.8rem}.nav-links a:not(.nav-download):not(.lang-switch){display:none}
+  .nav-links{gap:.8rem}.nav-links a:not(.nav-download):not(.lang-switch):not(.nav-docs){display:none}
   .hero-grid{grid-template-columns:1fr}.hero::before{left:35%}.hero-copy{max-width:720px}
   .proof-grid{grid-template-columns:1fr 1fr}.proof-item:nth-child(2){border-right:0}.proof-item:nth-child(-n+2){border-bottom:1px solid var(--line)}.proof-item:nth-child(3){padding-left:0}
   .section-head{grid-template-columns:1fr;gap:1rem}.section-intro{align-self:auto}

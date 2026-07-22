@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>复活与备份 · Swob Docs</title>
+  <meta name="description" content="备份回答“内容还在吗”，复活回答“能否安全写回原客户端并继续”。两者不是同一件事。">
+  <meta name="theme-color" content="#efebe2">
+  <link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/docs.css">
+</head>
+<body data-section="concepts">
+  <a class="skip-link" href="#content">跳到正文</a>
+  <header class="docs-header">
+    <a class="docs-brand" href="../../zh/"><img src="../../assets/favicon.svg" width="28" height="28" alt=""><span>swob</span><em>docs</em></a>
+    <nav aria-label="文档工具"><a href="../../zh/">官网</a><a href="../en/index.html" lang="en">EN structure</a><a class="github-link" href="https://github.com/IvyYang1999/swob">GitHub</a></nav>
+  </header>
+  <details class="mobile-chapters"><summary>浏览五章</summary><nav class="chapter-nav" aria-label="文档章节">
+    <a href="../index.html"><span>01</span>快速上手</a>
+    <a href="../concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="../metrics.html"><span>03</span>统计口径</a>
+    <a href="../guides/resume.html"><span>04</span>功能手册</a>
+    <a href="../troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav></details>
+  <div class="docs-layout">
+    <aside class="docs-sidebar"><nav class="chapter-nav" aria-label="文档章节">
+    <a href="../index.html"><span>01</span>快速上手</a>
+    <a href="../concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="../metrics.html"><span>03</span>统计口径</a>
+    <a href="../guides/resume.html"><span>04</span>功能手册</a>
+    <a href="../troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav>
+      <div class="side-group"><strong>核心概念</strong><a href="../concepts/vault.html">Vault</a><a href="../concepts/lenses-folders.html">镜头 vs 文件夹</a><a href="../concepts/recovery.html">复活与备份</a><a href="../concepts/lineage.html">血统图谱</a></div>
+      <div class="side-group"><strong>功能手册</strong><a href="../guides/resume.html">多客户端 Resume</a><a href="../guides/organize.html">整理与撤销</a><a href="../guides/profiles.html">Profile 与智能重命名</a><a href="../guides/cli.html">CLI 全命令</a><a href="../guides/ssh.html">SSH 远程</a></div>
+    </aside>
+    <main class="docs-content" id="content"><header class="doc-hero"><p class="doc-kicker">02 · CORE CONCEPT</p><h1>复活与备份</h1><p class="doc-lead">备份回答“内容还在吗”，复活回答“能否安全写回原客户端并继续”。两者不是同一件事。</p></header><figure class="doc-shot"><img src="../../assets/main.png" alt="Swob 会话详情与恢复入口合成界面" loading="lazy"><figcaption>当前 UI 示意 · 合成数据 / 隐私清洗重建</figcaption></figure><section><h2>恢复链路</h2><div class="flow"><span>Vault 备份</span><b>校验 ID / JSONL / SHA-256</b><span>选择可信目标实例</span><b>冲突与锁检查</b><span>原子发布并复核</span></div></section><section><h2>保守失败是功能</h2><p>目标目录不可信、清单缺失、同 ID 冲突或备份未验证时，Swob 会停下来，而不是“尽量写进去”。完整失败原因见<a href="../troubleshooting.html#recovery-failures">恢复失败原因表</a>。</p><div class="callout warning"><strong>备份可读 ≠ 可直接 Resume</strong><p>恢复有效性还依赖来源、物理 session ID、目标客户端实例和写回后的验证。</p></div></section><nav class="concept-index"><a href="../concepts/vault.html">Vault</a><a href="../concepts/lenses-folders.html">镜头 vs 文件夹</a><a href="../concepts/recovery.html">复活与备份</a><a href="../concepts/lineage.html">血统图谱</a></nav></main>
+  </div>
+  <footer><span>Swob Docs · 口径先于结论</span><span>本地优先 · 证据可追溯 · 局限明示</span></footer>
+</body>
+</html>

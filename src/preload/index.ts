@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AnalysisDimension, AnalysisScope } from '../main/analysis-contract'
+import type { OnboardingBackupSizeEstimate } from '../shared/onboarding-backup-size'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 
@@ -94,6 +95,8 @@ const api = {
 
   // Onboarding
   onboardingGetState: () => ipcRenderer.invoke('onboarding:getState'),
+  onboardingEstimateBackupSize: (excludedSources: string[]) =>
+    ipcRenderer.invoke('onboarding:estimateBackupSize', excludedSources) as Promise<OnboardingBackupSizeEstimate>,
   onboardingComplete: (libraryPath: string, excludedSources: string[]) =>
     ipcRenderer.invoke('onboarding:complete', libraryPath, excludedSources),
   onboardingSetExcludedSources: (excludedSources: string[]) =>

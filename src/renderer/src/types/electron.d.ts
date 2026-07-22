@@ -1,3 +1,5 @@
+import type { OnboardingBackupSizeEstimate } from '../../../shared/onboarding-backup-size'
+
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeLaunchSpec = {
   executable: string
@@ -212,6 +214,7 @@ interface ElectronAPI {
   vaultSelectMigrationTarget: () => Promise<string | null>
   onVaultMigrateProgress: (callback: (progress: { phase: string; copied: number; total: number }) => void) => () => void
   onboardingGetState: () => Promise<{ needed: boolean; defaultPath: string; excludedSources: string[] }>
+  onboardingEstimateBackupSize: (excludedSources: string[]) => Promise<OnboardingBackupSizeEstimate>
   onboardingComplete: (libraryPath: string, excludedSources: string[]) => Promise<string>
   onboardingSetExcludedSources: (excludedSources: string[]) => Promise<string[]>
   onboardingExtendClaudeRetention: () => Promise<{ ok: boolean; error?: string }>

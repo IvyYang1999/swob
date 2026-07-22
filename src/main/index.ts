@@ -4,6 +4,7 @@ const { join, dirname, basename, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
+import { registerAgentIpc, registerAgentShortcut } from './agent-window'
 import { exec, execSync } from 'child_process'
 import * as fs from 'fs'
 import * as chokidar from 'chokidar'
@@ -2400,6 +2401,28 @@ app.whenReady().then(async () => {
   autoInstallCliOnStartup()
 
   registerSpotlightShortcut(getSpotlightShortcut())
+  registerAgentIpc({
+    getLibraryRoot: () => {
+      try { return getLibraryRoot() } catch { return null }
+    },
+    archiveAgentSession: (sessionId: string) => {
+      // The scanner needs a beat to index the fresh session before it can be
+      // filed under the assistant folder; failure just leaves it in the root.
+      setTimeout(() => {
+        void (async () => {
+          try {
+            if (!getSessionDirPath(sessionId)) {
+              const summary = cachedSessions.find((s) => s.sessionId === sessionId)
+              if (summary) await ensureSessionInLibrary(summary)
+            }
+            fs.mkdirSync(path.join(getLibraryRoot(), 'Swob 助手'), { recursive: true })
+            moveSessionToFolder(sessionId, 'Swob 助手')
+          } catch { /* not indexed yet; session stays in vault root */ }
+        })()
+      }, 8000)
+    }
+  })
+  registerAgentShortcut()
   app.on('activate', () => {
     showMainWindow()
   })

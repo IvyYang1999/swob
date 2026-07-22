@@ -284,6 +284,25 @@ interface ElectronAPI {
   }>>>
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => () => void
 
+  // Global agent floating window
+  agentGetStatus: () => Promise<{ available: boolean; binaryPath?: string; reason?: string; sessionId: string | null; busy: boolean }>
+  agentToggleWindow: () => Promise<void>
+  agentHideWindow: () => Promise<boolean>
+  agentNewConversation: () => Promise<boolean>
+  agentSend: (prompt: string) => Promise<{ ok: boolean; error?: string }>
+  agentCancel: () => Promise<boolean>
+  onAgentEvent: (callback: (event: {
+    type: 'init' | 'assistant-text' | 'tool-use' | 'result'
+    sessionId?: string
+    text?: string
+    name?: string
+    summary?: string
+    ok?: boolean
+    durationMs?: number
+    costUsd?: number
+    error?: string
+  }) => void) => () => void
+
   // AnalysisScope / UsageFact data layer (renderer integration is intentionally deferred)
   getInsights: () => Promise<any>
   queryInsights: (

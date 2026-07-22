@@ -187,6 +187,17 @@ const api = {
   smartRenamePreview: (sessionIds: string[]) => ipcRenderer.invoke('smartRename:preview', sessionIds),
   smartRenameApply: (items: Array<{ id: string; newTitle: string }>) =>
     ipcRenderer.invoke('smartRename:apply', items),
+  agentGetStatus: () => ipcRenderer.invoke('agent:getStatus'),
+  agentToggleWindow: () => ipcRenderer.invoke('agent:toggleWindow'),
+  agentHideWindow: () => ipcRenderer.invoke('agent:hideWindow'),
+  agentNewConversation: () => ipcRenderer.invoke('agent:newConversation'),
+  agentSend: (prompt: string) => ipcRenderer.invoke('agent:send', prompt),
+  agentCancel: () => ipcRenderer.invoke('agent:cancel'),
+  onAgentEvent: (callback: (event: Record<string, unknown>) => void) => {
+    const listener = (_e: unknown, data: Record<string, unknown>): void => callback(data)
+    ipcRenderer.on('agent:event', listener)
+    return () => ipcRenderer.removeListener('agent:event', listener)
+  },
   onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => {
     const listener = (_e: unknown, data: { stage: string; current: number; total: number }): void => callback(data)
     ipcRenderer.on('insights:progress', listener)

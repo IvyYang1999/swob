@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { Search, PanelRight, X, Zap, Settings, BarChart3, GitBranch } from 'lucide-react'
+import { Search, PanelRight, X, Zap, Settings, BarChart3, GitBranch, Bot } from 'lucide-react'
 import { usePlatformCapabilities } from './WindowsAlphaNotice'
 
 export function Toolbar() {
@@ -97,6 +97,13 @@ export function Toolbar() {
         className="flex items-center gap-1 ml-auto"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
+        <button
+          onClick={() => void window.api.agentToggleWindow()}
+          className="p-1.5 rounded hover:bg-hover text-secondary hover:text-primary"
+          title="Swob 助手 (⌘⇧A)"
+        >
+          <Bot size={14} />
+        </button>
         <button
           onClick={toggleLineage}
           className={`p-1.5 rounded hover:bg-hover ${lineageOpen ? 'text-primary' : 'text-secondary hover:text-primary'}`}

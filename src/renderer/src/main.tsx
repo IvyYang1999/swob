@@ -11,8 +11,17 @@ document.documentElement.setAttribute(
 )
 
 const isSpotlight = window.location.hash === '#spotlight'
+const isAgent = window.location.hash === '#agent'
 
-if (isSpotlight) {
+if (isAgent) {
+  import('./AgentApp').then(({ AgentApp }) => {
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <AgentApp />
+      </React.StrictMode>
+    )
+  })
+} else if (isSpotlight) {
   import('./SpotlightApp').then(({ default: SpotlightApp }) => {
     document.body.style.background = 'transparent'
     ReactDOM.createRoot(document.getElementById('root')!).render(

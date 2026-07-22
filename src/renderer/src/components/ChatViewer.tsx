@@ -1,4 +1,5 @@
 import { useRef, useState, useMemo, useCallback, useEffect, useDeferredValue, memo } from 'react'
+import { flushSync } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Rect, Virtualizer } from '@tanstack/react-virtual'
 import { useStore } from '../store'
@@ -1880,7 +1881,11 @@ export function ChatViewer() {
         })
       }
     }
-    if (result.length > 0) setShareMessages(result)
+    if (result.length > 0) {
+      // Commit this explicit user action before a concurrent deferred session
+      // refresh can replace the interaction surface.
+      flushSync(() => setShareMessages(result))
+    }
   }, [selectedItems, allTurns])
 
   const handleBatchExport = useCallback(() => {

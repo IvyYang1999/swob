@@ -476,11 +476,6 @@ export function LineagePage() {
       graphRef.current = { nodes, edges }
       prevMembershipKeyRef.current = membershipKey
 
-      // Initial auto-fit (only once, and only if user hasn't panned/zoomed)
-      if (!initialFitDoneRef.current && !userHasInteractedRef.current && nodes.length > 0) {
-        initialFitDoneRef.current = true
-      }
-
       setReady(true)
     }
 
@@ -511,6 +506,11 @@ export function LineagePage() {
   const handleRelayout = useCallback(() => {
     // Clear coordinate cache to force full recompute
     coordCacheRef.current = new Map()
+    // Re-layout is the one explicit action allowed to reset the camera and fit
+    // the recomputed graph. Toggling ready guarantees the fit effect runs even
+    // when the page was already rendered.
+    initialFitDoneRef.current = false
+    setReady(false)
     setForceLayoutCounter(c => c + 1)
   }, [])
 

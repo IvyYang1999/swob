@@ -56,13 +56,13 @@ test('纵向左栏九项同时可见，无横向 Tab，旧配置迁移生效', a
   const nav = dialog.getByRole('navigation', { name: '设置分类' })
   const items = nav.getByRole('button')
   await expect(items).toHaveCount(9)
-  await expect(items).toHaveText(['通用', 'AI 智能', '助手', '终端', 'Resume', 'SSH', '视图', '更新', 'CLI'])
+  await expect(items).toHaveText(['通用', 'AI 智能', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI'])
   await expect(dialog.getByRole('tab')).toHaveCount(0)
   await expect(nav.getByRole('button', { name: '外观' })).toHaveCount(0)
   await expect(nav.getByRole('button', { name: '通用' })).toHaveAttribute('aria-current', 'page')
 
   // 九项都在可视区(左栏不滚动即可见)
-  for (const name of ['通用', 'AI 智能', '助手', '终端', 'Resume', 'SSH', '视图', '更新', 'CLI']) {
+  for (const name of ['通用', 'AI 智能', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI']) {
     await expect(nav.getByRole('button', { name })).toBeInViewport()
   }
 
@@ -74,7 +74,7 @@ test('终端分类展示检测结果和路径，可靠入口才可选', async ()
   await navItem('终端').click()
   const terminalButton = page.getByRole('button', { name: /Terminal.*System\/Applications\/Utilities\/Terminal\.app/ }).first()
   await expect(terminalButton).toBeVisible()
-  await expect(page.getByText('所有 CLI Resume 都会使用这里选择的终端。')).toBeVisible()
+  await expect(page.getByText('所有 CLI 继续会话操作都会使用这里选择的终端。只允许选择具备可靠命令入口的应用。')).toBeVisible()
   await expect(page.getByRole('button', { name: '重新检测' })).toBeVisible()
   await terminalButton.hover()
   await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'terminals-light.png') })
@@ -83,7 +83,7 @@ test('终端分类展示检测结果和路径，可靠入口才可选', async ()
 test('Resume 分类按 harness 动态过滤，实验开关在本分类', async () => {
   await navItem('通用').click()
   await page.getByRole('button', { name: '深色' }).click()
-  await navItem('Resume').click()
+  await navItem('继续').click()
   // CC-Mirror has its own Provider registry truth and no longer inherits the
   // Claude Code Resume declaration, so all 11 discoverable sources are listed.
   await expect(page.getByRole('combobox')).toHaveCount(11)
@@ -156,8 +156,8 @@ test('窄窗口仍是纵向导航,左栏固定,右侧内容独立滚动', async 
   expect(navMetrics.scrollWidth).toBeLessThanOrEqual(navMetrics.clientWidth + 1)
 
   // 右侧内容独立纵向滚动
-  await navItem('通用').click()
-  const content = page.locator('[data-settings-category="general"]')
+  await navItem('继续').click()
+  const content = page.locator('[data-settings-category="resume"]')
   const contentMetrics = await content.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,

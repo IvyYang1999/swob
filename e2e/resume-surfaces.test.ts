@@ -32,7 +32,13 @@ test.describe.serial('多客户端 Resume surfaces', () => {
     page = launched.page
     // Root-scatter model: loose sessions render flat; single-turn ones collapse.
     await revealAllSessions(page)
-    await expect(page.locator('[data-session-id]')).toHaveCount(3, { timeout: 20000 })
+    await expect.poll(async () => page.locator('[data-session-id]').evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute('data-session-id')).filter(Boolean).sort()
+    ), { timeout: 20000 }).toEqual([
+      CLAUDE_FIXTURE_ID,
+      `codex:${CODEX_FIXTURE_ID}`,
+      `zcode:${ZCODE_FIXTURE_ID}`
+    ].sort())
   })
 
   test.afterAll(async () => {
@@ -66,13 +72,16 @@ test.describe.serial('多客户端 Resume surfaces', () => {
   test('设置页默认关闭 Claude Desktop 实验入口，并显示不可逆风险警告', async ({}, testInfo) => {
     await resizeAppWindow(launched.app, page, { width: 760, height: 520 })
     await page.getByTitle('设置').click()
-    await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: 'Resume' }).click()
+    await page.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '继续' }).click()
 
     const toggle = page.getByRole('checkbox', { name: '实验：导入到 Claude Desktop' })
     await expect(toggle).not.toBeChecked()
     await expect(page.getByText(/导入可能修改原始 transcript/)).toBeVisible()
     await toggle.check()
     await expect(toggle).toBeChecked()
+    await expect.poll(async () => page.evaluate(async () =>
+      (await window.api.loadConfig()).preferences?.experimentalClaudeDesktopImport
+    )).toBe(true)
 
     const section = page.getByText('实验：导入到 Claude Desktop').locator('xpath=ancestor::div[contains(@class,"rounded-md")]').first()
     await section.screenshot({ path: testInfo.outputPath('claude-experimental-setting.png') })

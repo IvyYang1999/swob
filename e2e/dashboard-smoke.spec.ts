@@ -18,7 +18,7 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  await closeApp(launched)
+  if (launched) await closeApp(launched)
 })
 
 test('五页仪表盘可达且带范围标签与口径切换', async () => {

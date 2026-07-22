@@ -18,8 +18,10 @@ export async function launchAppWithEnv(options: { env?: Record<string, string> }
     args: [path.join(__dirname, '..', 'out', 'main', 'index.js')],
     env: {
       ...process.env,
+      SWOB_TEST_LOCALE: 'zh-CN',
       ...options.env,
-      NODE_ENV: 'test'
+      NODE_ENV: 'test',
+      SWOB_TEST_HOME: options.env?.SWOB_TEST_HOME || options.env?.HOME || ''
     }
   })
   const page = await app.firstWindow()
@@ -82,7 +84,13 @@ function createSyntheticCorpus(home: string, libraryRoot: string, claudeTurns: n
   }))
   fs.writeFileSync(path.join(libraryRoot, '.swob-config.json'), JSON.stringify({
     libraryRoot,
-    preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' }
+    preferences: {
+      defaultViewMode: 'compact',
+      terminalApp: 'Terminal',
+      // Session-focused specs must not depend on the transient expansion state
+      // of the single-turn disclosure while background Library patches arrive.
+      singleTurnBehavior: 'show'
+    }
   }))
 
   const claudeRows: unknown[] = []
@@ -250,6 +258,7 @@ function isolatedEnvironment(home: string, libraryRoot: string, sandboxRoot: str
     HOME: home,
     NODE_ENV: 'test',
     SWOB_TEST_HOME: home,
+    SWOB_TEST_LOCALE: 'zh-CN',
     SWOB_LIBRARY_ROOT: libraryRoot,
     XDG_CACHE_HOME: path.join(sandboxRoot, 'cache'),
     XDG_CONFIG_HOME: path.join(sandboxRoot, 'config'),

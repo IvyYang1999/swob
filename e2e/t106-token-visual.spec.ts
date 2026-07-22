@@ -56,7 +56,7 @@ test('Cursor session 信息面板明确显示 Token 不可用', async () => {
   await expect(cursorSession).toBeVisible({ timeout: 20_000 })
   await openSessionInChat(page, await cursorSession.getAttribute('data-session-id') || undefined)
   await expect(page.getByText('Cursor response without authoritative usage.', { exact: true })).toBeVisible({ timeout: 20_000 })
-  const infoTitle = page.getByText('Session Info', { exact: true })
+  const infoTitle = page.getByText(/^(会话信息|Session Info)$/)
   await page.waitForTimeout(300)
   if (!await infoTitle.isVisible().catch(() => false)) {
     await page.getByTitle(/信息面板|Toggle Info Panel/).click()

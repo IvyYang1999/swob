@@ -193,6 +193,7 @@ import { runtimeHome } from './runtime-home'
 import { getPlatformCapabilities, isSessionSourceSupported } from './platform-support'
 import { assertRegisteredResumeProtocol } from './deep-link'
 import { buildClaudeRecoveryInventory } from './resume-recovery-service'
+import { preferredSystemLanguagesForRuntime } from './runtime-locale'
 
 let mainWindow: BrowserWindow | null = null
 let spotlightWindow: BrowserWindow | null = null
@@ -203,7 +204,9 @@ let codexWatcher: SourceDirectoryWatcher | null = null
 let cursorWatcher: SourceDirectoryWatcher | null = null
 
 function mainLocale(): Locale {
-  const systemLocale = resolveSystemLocale(app.getPreferredSystemLanguages())
+  const systemLocale = resolveSystemLocale(
+    preferredSystemLanguagesForRuntime(app.getPreferredSystemLanguages())
+  )
   try {
     return resolveConfiguredLocale(currentSettingsPreferences().locale, systemLocale)
   } catch {
@@ -765,7 +768,7 @@ function registerSpotlightShortcut(shortcut?: string): void {
 
 function getSpotlightShortcut(): string {
   try {
-    if (libraryInitialized) {
+    if (shouldReadLibraryConfig()) {
       const libConfig = loadLibraryConfig()
       return (libConfig.preferences as any)?.spotlightShortcut || DEFAULT_SPOTLIGHT_SHORTCUT
     }
@@ -1889,12 +1892,14 @@ ipcMain.handle('config:load', () => {
   return { ...config, preferences: migrateSettingsPreferences(config.preferences as unknown as Record<string, unknown>) }
 })
 
-ipcMain.handle('app:getSystemLocale', () => resolveSystemLocale(app.getPreferredSystemLanguages()))
+ipcMain.handle('app:getSystemLocale', () => resolveSystemLocale(
+  preferredSystemLanguagesForRuntime(app.getPreferredSystemLanguages())
+))
 
 ipcMain.handle('config:save', (_event, config: { preferences: Record<string, unknown> }) => {
   const migratedPreferences = migrateSettingsPreferences(config.preferences)
   const migratedConfig = { ...config, preferences: migratedPreferences }
-  if (libraryInitialized) {
+  if (shouldReadLibraryConfig()) {
     const libConfig = loadLibraryConfig()
     libConfig.preferences = migratedPreferences as any
     saveLibraryConfig(libConfig)
@@ -1916,7 +1921,7 @@ ipcMain.handle('settings:getAppInfo', () => ({ version: app.getVersion(), platfo
 ipcMain.handle(
   'config:createFolder',
   async (_event, opts: { name: string; color?: string | null; parentId?: string | null }) => {
-    if (libraryInitialized) {
+    if (shouldReadLibraryConfig()) {
       const parentPath = opts.parentId ? resolveFolderPath(opts.parentId) : undefined
       createLibraryFolder(opts.name, parentPath)
       const tree = await requestLibraryScan()
@@ -1932,7 +1937,7 @@ ipcMain.handle(
 ipcMain.handle(
   'config:moveFolder',
   async (_event, folderId: string, newParentId: string | null, position?: 'before' | 'after' | 'inside', targetId?: string) => {
-    if (libraryInitialized) {
+    if (shouldReadLibraryConfig()) {
       const srcPath = resolveFolderPath(folderId)
 
       if (position && position !== 'inside' && targetId) {
@@ -1964,7 +1969,7 @@ ipcMain.handle(
 )
 
 ipcMain.handle('config:deleteFolder', async (_event, folderId: string) => {
-  if (libraryInitialized) {
+  if (shouldReadLibraryConfig()) {
     const folderPath = resolveFolderPath(folderId)
     deleteLibraryFolder(folderPath)
     const tree = await requestLibraryScan()
@@ -1978,7 +1983,7 @@ ipcMain.handle('config:deleteFolder', async (_event, folderId: string) => {
 ipcMain.handle(
   'config:renameFolder',
   async (_event, folderId: string, name: string) => {
-    if (libraryInitialized) {
+    if (shouldReadLibraryConfig()) {
       const folderPath = resolveFolderPath(folderId)
       renameLibraryFolder(folderPath, name)
       const tree = await requestLibraryScan()
@@ -1994,7 +1999,7 @@ ipcMain.handle(
   'config:addSessionToFolder',
   async (_event, folderId: string, sessionId: string) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
-    if (libraryInitialized) {
+    if (shouldReadLibraryConfig()) {
       if (isBranch) {
         // Branch sessions: store in config (independent of parent's file system location)
         addBranchToFolder(sessionId, folderId)
@@ -2023,7 +2028,7 @@ ipcMain.handle(
   'config:removeSessionFromFolder',
   async (_event, folderId: string, sessionId: string) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
-    if (libraryInitialized) {
+    if (shouldReadLibraryConfig()) {
       if (isBranch) {
         removeBranchFromFolder(sessionId, folderId)
       } else {
@@ -2050,7 +2055,7 @@ ipcMain.handle(
     topicConfidence?: number
   }) => {
     const isBranch = sessionId.includes(':intra-') || sessionId.includes(':branch-')
-    if (libraryInitialized) {
+    if (shouldReadLibraryConfig()) {
       if (isBranch) {
         setBranchMeta(sessionId, meta as Parameters<typeof setBranchMeta>[1])
       } else {

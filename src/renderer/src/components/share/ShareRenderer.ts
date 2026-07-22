@@ -241,32 +241,42 @@ async function renderPageToPng(options: ShareRenderOptions): Promise<string> {
 
   const totalWidth = CARD_WIDTH + CARD_PADDING * 2
 
-  // Convert SVG to data URL
-  const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' })
-  const svgUrl = URL.createObjectURL(svgBlob)
+  // A blob: SVG containing foreignObject can stay pending forever in packaged
+  // Electron renderers. An encoded data URL is handled by Chromium's image
+  // decoder directly and has deterministic bytes for the same card markup.
+  const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgContent)}`
 
   return new Promise<string>((resolve, reject) => {
     const img = new Image()
+    let settled = false
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeout)
+      callback()
+    }
+    const timeout = window.setTimeout(() => {
+      finish(() => reject(new Error('Timed out loading SVG for rendering')))
+    }, 10_000)
     img.onload = () => {
-      // Render at 2x for retina quality
-      const scale = 2
-      const canvas = document.createElement('canvas')
-      canvas.width = totalWidth * scale
-      canvas.height = height * scale
-      const ctx = canvas.getContext('2d')
-      if (!ctx) {
-        URL.revokeObjectURL(svgUrl)
-        reject(new Error('Canvas context unavailable'))
-        return
-      }
-      ctx.scale(scale, scale)
-      ctx.drawImage(img, 0, 0, totalWidth, height)
-      URL.revokeObjectURL(svgUrl)
-      resolve(canvas.toDataURL('image/png'))
+      finish(() => {
+        // Render at 2x for retina quality
+        const scale = 2
+        const canvas = document.createElement('canvas')
+        canvas.width = totalWidth * scale
+        canvas.height = height * scale
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('Canvas context unavailable'))
+          return
+        }
+        ctx.scale(scale, scale)
+        ctx.drawImage(img, 0, 0, totalWidth, height)
+        resolve(canvas.toDataURL('image/png'))
+      })
     }
     img.onerror = () => {
-      URL.revokeObjectURL(svgUrl)
-      reject(new Error('Failed to load SVG for rendering'))
+      finish(() => reject(new Error('Failed to load SVG for rendering')))
     }
     img.src = svgUrl
   })

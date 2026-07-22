@@ -464,7 +464,10 @@ function delta(current: number, previous: number): { value: number; reset: boole
 }
 
 /** Normalize Codex per-turn usage, falling back to deltas of cumulative counters. */
-export function accountCodexUsage(snapshots: CodexUsageSnapshot[]): TokenAccounting {
+export function accountCodexUsage(
+  snapshots: CodexUsageSnapshot[],
+  scope: UsageScope = 'main'
+): TokenAccounting {
   const events: UsageEvent[] = []
   const seenIncremental = new Set<string>()
   let previous: CodexUsageSnapshot | null = null
@@ -525,7 +528,7 @@ export function accountCodexUsage(snapshots: CodexUsageSnapshot[]): TokenAccount
       timestamp: snapshot.timestamp,
       model: snapshot.model,
       ...attribution,
-      scope: 'main',
+      scope,
       counterKind,
       provenance,
       rawInputTokens: nonNegative(normalizedSnapshot.inputTokens),
@@ -547,6 +550,48 @@ export function accountCodexUsage(snapshots: CodexUsageSnapshot[]): TokenAccount
   const warnings = resetCount > 0 ? [`handled ${resetCount} cumulative counter reset(s)`] : []
   const provenance: TokenProvenance = events.some((event) => event.provenance === 'derived') ? 'derived' : 'reported'
   return accountingFromEvents('codex', events, provenance, warnings)
+}
+
+/**
+ * Merge a top-level ledger with child ledgers without double counting copied
+ * events. Main-thread evidence wins a dedup collision so conversation-only
+ * remains conservative while billing still includes child-only work once.
+ */
+export function mergeTokenAccountings(
+  accountings: Array<TokenAccounting | null | undefined>
+): TokenAccounting {
+  const available = accountings.filter((accounting): accounting is TokenAccounting => Boolean(accounting))
+  const first = available[0]
+  if (!first) return unavailableTokenAccounting('codex', 'No token accounting ledgers were provided')
+
+  const selected = new Map<string, UsageEvent>()
+  let duplicateCount = 0
+  for (const accounting of available) {
+    for (const event of accounting.usageEvents) {
+      const current = selected.get(event.dedupKey)
+      if (!current) {
+        selected.set(event.dedupKey, event)
+        continue
+      }
+      duplicateCount++
+      if (current.scope !== 'main' && event.scope === 'main') selected.set(event.dedupKey, event)
+    }
+  }
+
+  const events = [...selected.values()]
+  if (events.length === 0) return first
+  const provenance: TokenProvenance = events.some((event) => event.provenance === 'estimated')
+    ? 'estimated'
+    : events.some((event) => event.provenance === 'derived')
+      ? 'derived'
+      : 'reported'
+  const warnings = [...new Set(available.flatMap((accounting) => accounting.warnings))]
+  if (duplicateCount > 0) {
+    warnings.push(
+      `deduplicated ${duplicateCount} cross-session usage event${duplicateCount === 1 ? '' : 's'}`
+    )
+  }
+  return accountingFromEvents(first.provider, events, provenance, warnings)
 }
 
 export function accountingFromMutuallyExclusiveUsage(

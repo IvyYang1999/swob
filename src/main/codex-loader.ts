@@ -7,7 +7,8 @@ import type {
   SessionSummary,
   SessionDetail,
   ToolCallInfo,
-  ContentPart
+  ContentPart,
+  SessionSubagentSummary
 } from './types'
 import {
   accountCodexUsage,
@@ -16,6 +17,10 @@ import {
   type TokenAccounting
 } from './token-accounting'
 import { runtimeHome } from './runtime-home'
+import {
+  stripTerminalControlSequences,
+  stripTerminalControlSequencesDeep
+} from '../shared/chat-format'
 
 // --- Codex JSONL envelope types ---
 
@@ -25,13 +30,77 @@ export interface CodexLine {
   payload: Record<string, unknown>
 }
 
-interface CodexSessionMeta {
+interface CodexThreadSpawnSource {
+  parent_thread_id?: string
+  depth?: number
+  agent_path?: string
+  agent_nickname?: string
+  agent_role?: string | null
+}
+
+interface CodexSubagentSource {
+  other?: string
+  thread_spawn?: CodexThreadSpawnSource
+}
+
+export interface CodexSessionMeta {
   id: string
   timestamp: string
   cwd: string
   cli_version: string
   model_provider?: string
   git?: { branch?: string; repository_url?: string }
+  source?: string | { subagent?: CodexSubagentSource }
+  thread_source?: string
+  parent_thread_id?: string
+  originator?: string
+}
+
+export type CodexSessionRole = 'top-level' | 'guardian' | 'thread-spawn' | 'subagent'
+
+export interface CodexSessionClassification {
+  role: CodexSessionRole
+  parentThreadId?: string
+  agentPath?: string
+  agentNickname?: string
+  agentRole?: string
+}
+
+export interface CodexSubagentRecord extends SessionSubagentSummary {
+  tokenAccounting: TokenAccounting
+}
+
+export interface CodexSessionRecord {
+  summary: SessionSummary | null
+  subagent: CodexSubagentRecord | null
+  classification: CodexSessionClassification
+}
+
+/** Classify only from structured metadata; never infer a role from conversation text. */
+export function classifyCodexSession(
+  meta?: Partial<CodexSessionMeta>
+): CodexSessionClassification {
+  const source = meta?.source
+  const subagent = source && typeof source === 'object' ? source.subagent : undefined
+  const spawn = subagent?.thread_spawn
+  const parentThreadId = spawn?.parent_thread_id || meta?.parent_thread_id
+
+  if (subagent?.other === 'guardian') {
+    return { role: 'guardian', ...(parentThreadId ? { parentThreadId } : {}) }
+  }
+  if (spawn) {
+    return {
+      role: 'thread-spawn',
+      ...(parentThreadId ? { parentThreadId } : {}),
+      ...(spawn.agent_path ? { agentPath: spawn.agent_path } : {}),
+      ...(spawn.agent_nickname ? { agentNickname: spawn.agent_nickname } : {}),
+      ...(spawn.agent_role ? { agentRole: spawn.agent_role } : {})
+    }
+  }
+  if (subagent || meta?.thread_source === 'subagent') {
+    return { role: 'subagent', ...(parentThreadId ? { parentThreadId } : {}) }
+  }
+  return { role: 'top-level' }
 }
 
 function tokenNumber(value: unknown): number {
@@ -79,7 +148,10 @@ function codexSnapshot(
   }
 }
 
-export function extractCodexTokenAccounting(lines: CodexLine[]): TokenAccounting {
+export function extractCodexTokenAccounting(
+  lines: CodexLine[],
+  scope: 'main' | 'subagent' = 'main'
+): TokenAccounting {
   const perTurn: CodexUsageSnapshot[] = []
   const cumulative: CodexUsageSnapshot[] = []
   let currentModel: string | undefined
@@ -131,7 +203,7 @@ export function extractCodexTokenAccounting(lines: CodexLine[]): TokenAccounting
     }
   }
 
-  return accountCodexUsage(perTurn.length > 0 ? perTurn : cumulative)
+  return accountCodexUsage(perTurn.length > 0 ? perTurn : cumulative, scope)
 }
 
 // --- File discovery ---
@@ -238,7 +310,8 @@ function isCodexBootstrapInjection(trimmed: string, beforeFirstRealUser: boolean
 }
 
 function normalizeCodexUserText(text: string, beforeFirstRealUser: boolean): string | null {
-  const trimmed = text.trim()
+  const normalized = stripTerminalControlSequences(text)
+  const trimmed = normalized.trim()
   if (!trimmed) return null
 
   const shellMatch = trimmed.match(/^<user_shell_command>\s*([\s\S]*?)\s*<\/user_shell_command>$/)
@@ -252,7 +325,7 @@ function normalizeCodexUserText(text: string, beforeFirstRealUser: boolean): str
   if (isCodexCollaborationInjection(trimmed, beforeFirstRealUser)) return null
   if (isCodexBootstrapInjection(trimmed, beforeFirstRealUser)) return null
   if (CODEX_SYSTEM_WRAPPER_TAGS.some((tag) => isWholeWrappedByCodexTag(trimmed, tag))) return null
-  return text
+  return normalized
 }
 
 function modeString(values: Array<string | undefined>): string | undefined {
@@ -279,6 +352,16 @@ function extractCodexModel(lines: CodexLine[]): string | undefined {
   }))
 }
 
+function codexFunctionOutputText(output: unknown): string {
+  if (typeof output === 'string') return output
+  if (!Array.isArray(output)) return ''
+  return output.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const text = (item as Record<string, unknown>).text
+    return typeof text === 'string' ? [text] : []
+  }).join('\n')
+}
+
 // --- Convert Codex lines to unified RawJsonlMessage[] ---
 
 function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMessage[] {
@@ -291,7 +374,8 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
   const assistantTextSourcesInTurn = new Map<string, 'event_msg' | 'response_item'>()
 
   const pushAssistantText = (text: string, timestamp: string, source: 'event_msg' | 'response_item'): void => {
-    const dedupeKey = text.trim()
+    const normalizedText = stripTerminalControlSequences(text)
+    const dedupeKey = normalizedText.trim()
     if (!dedupeKey) return
 
     const previousSource = assistantTextSourcesInTurn.get(dedupeKey)
@@ -309,7 +393,7 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
       message: {
         role: 'assistant',
         model,
-        content: text
+        content: normalizedText
       }
     })
   }
@@ -377,13 +461,13 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
               type: 'tool_use',
               id: callId,
               name,
-              input: args
+              input: stripTerminalControlSequencesDeep(args)
             }] as unknown as ContentPart[]
           }
         })
       } else if (rtype === 'function_call_output') {
         const callId = p.call_id as string
-        const output = p.output as string || ''
+        const output = stripTerminalControlSequences(codexFunctionOutputText(p.output))
         messages.push({
           uuid: `codex-${sessionId}-${msgIndex++}`,
           parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
@@ -411,11 +495,12 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
 
 // --- Build summary ---
 
-export async function buildCodexSessionSummary(filePath: string, sessionIdOverride?: string): Promise<SessionSummary | null> {
-  const lines = await parseCodexFile(filePath)
-  const sessionId = sessionIdOverride || extractSessionId(filePath, lines)
-  if (!sessionId) return null
-
+function buildCodexSessionSummaryFromLines(
+  filePath: string,
+  lines: CodexLine[],
+  sessionId: string,
+  tokenAccounting: TokenAccounting
+): SessionSummary | null {
   const rawMessages = codexToRawMessages(lines, sessionId)
   if (rawMessages.length === 0) return null
 
@@ -447,9 +532,6 @@ export async function buildCodexSessionSummary(filePath: string, sessionIdOverri
   }
   const allUserMessages = allUserTexts.length > 0 ? allUserTexts.join(' ') : undefined
 
-  // Codex input_tokens already includes cached_input_tokens. Normalize them to
-  // mutually exclusive components and prefer per-turn usage when it is present.
-  const tokenAccounting = extractCodexTokenAccounting(lines)
   const totalTokenUsage = tokenUsageFromAccounting(tokenAccounting)
 
   // Tool usage
@@ -495,6 +577,60 @@ export async function buildCodexSessionSummary(filePath: string, sessionIdOverri
   }
 }
 
+export async function loadCodexSessionRecord(
+  filePath: string,
+  sessionIdOverride?: string
+): Promise<CodexSessionRecord> {
+  const lines = await parseCodexFile(filePath)
+  const meta = lines.find((line) => line.type === 'session_meta')?.payload as unknown as CodexSessionMeta | undefined
+  const classification = classifyCodexSession(meta)
+  const sessionId = sessionIdOverride || extractSessionId(filePath, lines)
+  if (!sessionId) return { summary: null, subagent: null, classification }
+
+  const tokenAccounting = extractCodexTokenAccounting(
+    lines,
+    classification.role === 'top-level' ? 'main' : 'subagent'
+  )
+  if (classification.role === 'top-level') {
+    return {
+      summary: buildCodexSessionSummaryFromLines(filePath, lines, sessionId, tokenAccounting),
+      subagent: null,
+      classification
+    }
+  }
+
+  const timestamps = lines.map((line) => line.timestamp).filter(Boolean).sort()
+  const model = extractCodexModel(lines)
+  const completed = lines.some((line) =>
+    line.type === 'event_msg' && line.payload.type === 'task_complete'
+  )
+  return {
+    summary: null,
+    classification,
+    subagent: {
+      sessionId,
+      ...(classification.parentThreadId ? { parentSessionId: classification.parentThreadId } : {}),
+      role: classification.role,
+      filePath,
+      createdAt: timestamps[0] || meta?.timestamp || '',
+      updatedAt: timestamps[timestamps.length - 1] || meta?.timestamp || '',
+      ...(classification.agentPath ? { agentPath: classification.agentPath } : {}),
+      ...(classification.agentNickname ? { agentNickname: classification.agentNickname } : {}),
+      ...(classification.agentRole ? { agentRole: classification.agentRole } : {}),
+      ...(model ? { model } : {}),
+      status: completed ? 'completed' : 'unknown',
+      tokenAccounting
+    }
+  }
+}
+
+export async function buildCodexSessionSummary(
+  filePath: string,
+  sessionIdOverride?: string
+): Promise<SessionSummary | null> {
+  return (await loadCodexSessionRecord(filePath, sessionIdOverride)).summary
+}
+
 export async function buildCodexSessionSummaryFromBackup(
   filePath: string,
   sessionIdOverride?: string
@@ -508,8 +644,16 @@ export async function buildCodexSessionDetail(filePath: string, sessionIdOverrid
   const lines = await parseCodexFile(filePath)
   const sessionId = sessionIdOverride || extractSessionId(filePath, lines)
   if (!sessionId) return null
+  const meta = lines.find((line) => line.type === 'session_meta')?.payload as unknown as CodexSessionMeta | undefined
+  const classification = classifyCodexSession(meta)
+  if (classification.role !== 'top-level') return null
 
-  const summary = await buildCodexSessionSummary(filePath, sessionId)
+  const summary = buildCodexSessionSummaryFromLines(
+    filePath,
+    lines,
+    sessionId,
+    extractCodexTokenAccounting(lines, 'main')
+  )
   if (!summary) return null
 
   const rawMessages = codexToRawMessages(lines, sessionId)

@@ -1349,6 +1349,33 @@ describe('transcript markdown heading semantics', () => {
     expect(md).toContain('WK……aaaa（已脱敏）')
   })
 
+  it('generateTranscript 全链移除用户、assistant 与工具参数中的 ANSI/CSI/OSC', () => {
+    const md = lib.generateTranscript([
+      {
+        uuid: 'u1', parentUuid: null, sessionId: 'ansi', type: 'user',
+        timestamp: '2026-07-22T00:00:00Z', promptSource: 'typed',
+        message: { role: 'user', content: '\u001b[2m用户\u001b[22m' }
+      },
+      {
+        uuid: 'a1', parentUuid: 'u1', sessionId: 'ansi', type: 'assistant',
+        timestamp: '2026-07-22T00:00:01Z',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '\u001b]8;;https://example.com\u0007助手\u001b]8;;\u0007' },
+            { type: 'tool_use', id: 'tool', name: 'Bash', input: { command: '\u001b[31mecho ok\u001b[0m' } }
+          ]
+        }
+      }
+    ] as any, '\u001b[33m标题\u001b[0m', { createdAt: '2026-07-22T00:00:00Z', turnCount: 1 })
+
+    expect(md).toContain('# 标题')
+    expect(md).toContain('## 用户')
+    expect(md).toContain('助手')
+    expect(md).toContain('[Bash] echo ok')
+    expect(md).not.toMatch(/\u001b|\[2m|\[31m|\[33m/)
+  })
+
   it('redactLibraryTranscripts 仅回填生成 Markdown，dry-run 不写盘', () => {
     removeDefaultSession()
     const candidate = `WK${'a'.repeat(34)}`

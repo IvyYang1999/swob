@@ -13,7 +13,13 @@ import type {
   TokenUsage,
   SessionSource
 } from './types'
-import { findCodexSessionFiles, buildCodexSessionSummary, buildCodexSessionDetail, buildCodexSessionSummaryFromBackup } from './codex-loader'
+import {
+  findCodexSessionFiles,
+  buildCodexSessionDetail,
+  buildCodexSessionSummaryFromBackup,
+  loadCodexSessionRecord,
+  type CodexSubagentRecord
+} from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup } from './cursor-loader'
 import { findOpencodeSessionFiles, buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, stripOpencodeSessionRef } from './opencode-loader'
 import { findZcodeSessionFiles, buildZcodeSessionSummary, buildZcodeSessionDetail, buildZcodeSessionSummaryFromBackup, stripZcodeSessionRef } from './zcode-loader'
@@ -24,6 +30,7 @@ import { isSystemText } from './session-message-classifier'
 import {
   accountClaudeUsage,
   markExcludedFromRollups,
+  mergeTokenAccountings,
   totalCacheWriteTokens,
   tokenUsageFromAccounting,
   unavailableTokenAccounting
@@ -31,6 +38,10 @@ import {
 import { runtimeHome } from './runtime-home'
 import { hasPortablePathSegment, isPortableAbsolutePath } from './portable-path'
 import { isSessionSourceSupported } from './platform-support'
+import {
+  stripTerminalControlSequences,
+  stripTerminalControlSequencesDeep
+} from '../shared/chat-format'
 
 const HOME = runtimeHome()
 
@@ -53,7 +64,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 23 // request model/provider attribution + token valuation ledger
+const CACHE_VERSION = 24 // Codex role classification + child usage attribution
 
 type CachedSessionSource = SessionSource
 
@@ -77,6 +88,7 @@ interface PerFileCache {
   summary: SessionSummary | null
   lineageMeta: CachedLineageMeta
   source: CachedSessionSource
+  codexSubagent?: CodexSubagentRecord
 }
 
 interface DiskCacheEntry {
@@ -454,30 +466,34 @@ function buildUnavailableSourceSummary(
 
 function extractText(content: string | ContentPart[] | undefined): string {
   if (!content) return ''
-  if (typeof content === 'string') return content
-  return content
+  if (typeof content === 'string') return stripTerminalControlSequences(content)
+  return stripTerminalControlSequences(content
     .filter((p) => p.type === 'text' && p.text)
     .map((p) => p.text!)
-    .join('\n')
+    .join('\n'))
 }
 
 function extractToolCalls(content: string | ContentPart[] | undefined): ToolCallInfo[] {
   if (!content || typeof content === 'string') return []
   return content
     .filter((p) => p.type === 'tool_use' && p.name)
-    .map((p) => ({ id: p.id, name: p.name!, input: (p.input as Record<string, unknown>) || {} }))
+    .map((p) => ({
+      id: p.id,
+      name: p.name!,
+      input: stripTerminalControlSequencesDeep((p.input as Record<string, unknown>) || {})
+    }))
 }
 
 function extractToolResultText(content: string | ContentPart[]): string {
-  if (typeof content === 'string') return content
-  return content
+  if (typeof content === 'string') return stripTerminalControlSequences(content)
+  return stripTerminalControlSequences(content
     .map((p) => {
       if (p.type === 'text' && p.text) return p.text
       if (typeof p === 'string') return p
       return ''
     })
     .filter(Boolean)
-    .join('\n')
+    .join('\n'))
 }
 
 /** Extract base64 images as data URLs from message content */
@@ -1774,7 +1790,15 @@ async function buildPerFileCache(filePath: string, source: CachedSessionSource):
   }
 
   let summary: SessionSummary | null = null
-  if (source === 'codex') summary = await buildCodexSessionSummary(filePath)
+  if (source === 'codex') {
+    const record = await loadCodexSessionRecord(filePath)
+    return {
+      summary: record.summary,
+      lineageMeta: emptyLineageMeta(record.summary),
+      source,
+      ...(record.subagent ? { codexSubagent: record.subagent } : {})
+    }
+  }
   else if (source === 'cursor') summary = await buildCursorSessionSummary(filePath)
   else if (source === 'opencode') summary = await buildOpencodeSessionSummary(filePath)
   else if (source === 'zcode') summary = await buildZcodeSessionSummary(filePath)
@@ -2062,6 +2086,54 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
         : preferred.tokenAccounting
     })
   }
+
+  // Codex persists guardian and thread-spawn workers as independent rollout
+  // files. They are not user-facing sessions. Attach their identity and
+  // child-only usage to the structured parent without double counting a copied
+  // event; main evidence wins any dedup collision.
+  const codexSubagentsByParent = new Map<string, Map<string, CodexSubagentRecord>>()
+  for (const { filePath, source } of descriptors) {
+    if (source !== 'codex') continue
+    const subagent = entries[filePath]?.perFile.codexSubagent
+    if (!subagent?.parentSessionId) continue
+    let children = codexSubagentsByParent.get(subagent.parentSessionId)
+    if (!children) {
+      children = new Map()
+      codexSubagentsByParent.set(subagent.parentSessionId, children)
+    }
+    const current = children.get(subagent.sessionId)
+    const currentTotal = current?.tokenAccounting.billingTotal ?? -1
+    const candidateTotal = subagent.tokenAccounting.billingTotal ?? -1
+    if (!current || candidateTotal > currentTotal ||
+        (candidateTotal === currentTotal && subagent.updatedAt > current.updatedAt)) {
+      children.set(subagent.sessionId, subagent)
+    }
+  }
+
+  for (const [parentSessionId, childrenById] of codexSubagentsByParent) {
+    const parentKey = `codex:${parentSessionId}`
+    const parent = nonClaudeBySession.get(parentKey)
+    if (!parent) continue
+    const children = [...childrenById.values()].sort((left, right) =>
+      left.role.localeCompare(right.role) || left.createdAt.localeCompare(right.createdAt) ||
+      left.sessionId.localeCompare(right.sessionId)
+    )
+    const subagents = children
+      .filter((child) => child.role === 'thread-spawn')
+      .map(({ tokenAccounting: _tokenAccounting, ...subagent }) => subagent)
+    const mergedAccounting = mergeTokenAccountings([
+      parent.tokenAccounting,
+      ...children.map((child) => child.tokenAccounting)
+    ])
+    // Do not mutate the per-file cache object: child attribution is a derived
+    // view and must disappear if the child rollout is later removed.
+    nonClaudeBySession.set(parentKey, {
+      ...parent,
+      subagents,
+      tokenAccounting: mergedAccounting,
+      tokenUsage: tokenUsageFromAccounting(mergedAccounting)
+    })
+  }
   summaries.push(...nonClaudeBySession.values())
 
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -2075,6 +2147,28 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
   return summaries
 }
 
+function sanitizeSessionDetail(detail: SessionDetail | null): SessionDetail | null {
+  if (!detail) return null
+  return {
+    ...detail,
+    firstUserMessage: stripTerminalControlSequences(detail.firstUserMessage),
+    ...(detail.allUserMessages
+      ? { allUserMessages: stripTerminalControlSequences(detail.allUserMessages) }
+      : {}),
+    messages: detail.messages.map((message) => ({
+      ...message,
+      textContent: stripTerminalControlSequences(message.textContent),
+      toolCalls: message.toolCalls.map((toolCall) => ({
+        ...toolCall,
+        input: stripTerminalControlSequencesDeep(toolCall.input),
+        ...(toolCall.result !== undefined
+          ? { result: stripTerminalControlSequences(toolCall.result) }
+          : {})
+      }))
+    }))
+  }
+}
+
 export async function loadSessionDetail(
   filePath: string,
   allFilePaths?: string[],
@@ -2084,17 +2178,23 @@ export async function loadSessionDetail(
 ): Promise<SessionDetail | null> {
   // Dispatch to source-specific loaders
   const source = detectSessionSourceFromPath(filePath) || sniffSessionSourceFromJsonl(filePath)
-  if (source === 'codex') return buildCodexSessionDetail(filePath, readBackupSessionIdOverride(filePath))
-  if (source === 'opencode') return buildOpencodeSessionDetail(filePath, readBackupSessionIdOverride(filePath))
-  if (source === 'zcode') return buildZcodeSessionDetail(filePath, readBackupSessionIdOverride(filePath))
+  if (source === 'codex') {
+    return sanitizeSessionDetail(await buildCodexSessionDetail(filePath, readBackupSessionIdOverride(filePath)))
+  }
+  if (source === 'opencode') {
+    return sanitizeSessionDetail(await buildOpencodeSessionDetail(filePath, readBackupSessionIdOverride(filePath)))
+  }
+  if (source === 'zcode') {
+    return sanitizeSessionDetail(await buildZcodeSessionDetail(filePath, readBackupSessionIdOverride(filePath)))
+  }
   if (source === 'cursor') {
     const sessionIdOverride = readBackupSessionIdOverride(filePath)
     if (path.basename(filePath) === 'backup.jsonl' && !sessionIdOverride) return null
-    return buildCursorSessionDetail(filePath, sessionIdOverride)
+    return sanitizeSessionDetail(await buildCursorSessionDetail(filePath, sessionIdOverride))
   }
   if (source === 'antigravity' || source === 'grok' || source === 'pi' || source === 'kimi' || source === 'hermes') {
     const summary = buildUnavailableSourceSummary(filePath, source, readBackupSessionIdOverride(filePath))
-    return summary ? { ...summary, messages: [] } : null
+    return sanitizeSessionDetail(summary ? { ...summary, messages: [] } : null)
   }
 
   let mainRaw: RawJsonlMessage[]
@@ -2223,5 +2323,5 @@ export async function loadSessionDetail(
     detail.messages = [...sharedMessages, ...detail.messages]
   }
 
-  return detail
+  return sanitizeSessionDetail(detail)
 }

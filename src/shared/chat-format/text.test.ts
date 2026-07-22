@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { parseCommandOutput, splitImagePaths, stripUserText } from './text'
+import {
+  parseCommandOutput,
+  splitImagePaths,
+  stripTerminalControlSequences,
+  stripUserText
+} from './text'
+
+describe('stripTerminalControlSequences', () => {
+  it('统一移除 SGR、光标/清屏 CSI 与 BEL/ST 终止的 OSC', () => {
+    const input = [
+      '\u001b[2m灰色\u001b[22m',
+      '\u001b[2J\u001b[1;1H正文',
+      '\u001b]8;;https://example.com\u0007链接\u001b]8;;\u0007',
+      '\u001b]0;窗口标题\u001b\\保留'
+    ].join('|')
+
+    expect(stripTerminalControlSequences(input)).toBe('灰色|正文|链接|保留')
+  })
+
+  it('移除 C1 CSI/OSC 和未终止 OSC，不吞掉下一行正常文本', () => {
+    expect(stripTerminalControlSequences('\u009b31m红\u009b0m|\u009d0;标题\u009c正文'))
+      .toBe('红|正文')
+    expect(stripTerminalControlSequences('前\u001b]0;坏标题\n后')).toBe('前后')
+  })
+})
 
 describe('stripUserText', () => {
   it('strips Claude system-reminder blocks wherever they appear', () => {
@@ -32,6 +56,10 @@ describe('stripUserText', () => {
     expect(stripUserText('[Image #2] question')).toBe('question')
     expect(stripUserText('[Image: source: /tmp/image.png] question'))
       .toBe('[Image: source: /tmp/image.png] question')
+  })
+
+  it('在用户文本规范化入口移除终端控制序列', () => {
+    expect(stripUserText('\u001b[33m警告\u001b[0m')).toBe('警告')
   })
 })
 

@@ -13,6 +13,10 @@ import { executeOrganization, undoLastOrganization, type OrganizationResult } fr
 import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
 import { DERIVED_FILE_NAMES, SESSION_SUMMARY_COMPANION_FILE, getEnabledDerivedFileGenerators } from './derived-files'
 import { redactSecrets } from './secret-redactor'
+import {
+  stripTerminalControlSequences,
+  stripTerminalControlSequencesDeep
+} from '../shared/chat-format'
 import { shellQuote } from './resume-terminal'
 import { detectTranscriptOrigin, formatTranscriptOriginHeader } from './transcript-origin'
 import { resolvePathWithinRoot } from './path-containment'
@@ -1287,11 +1291,11 @@ export function applyLibraryTree(tree: LibraryTree): void {
 
 function extractText(content: string | ContentPart[] | undefined): string {
   if (!content) return ''
-  if (typeof content === 'string') return content
-  return content
+  if (typeof content === 'string') return stripTerminalControlSequences(content)
+  return stripTerminalControlSequences(content
     .filter((p) => p.type === 'text' && p.text)
     .map((p) => p.text!)
-    .join('\n')
+    .join('\n'))
 }
 
 function extractToolCalls(content: string | ContentPart[] | undefined): string[] {
@@ -1299,7 +1303,7 @@ function extractToolCalls(content: string | ContentPart[] | undefined): string[]
   const calls: string[] = []
   for (const part of content) {
     if (part.type !== 'tool_use' || !part.name) continue
-    const input = part.input || {}
+    const input = stripTerminalControlSequencesDeep(part.input || {})
     // Compact summary: tool name + most informative param
     if (part.name === 'Bash' && input.command) {
       const cmd = String(input.command).split('\n')[0].slice(0, 120)
@@ -1510,7 +1514,7 @@ export function generateTranscript(
   lines.push(...formatTranscriptFrontmatter(meta.frontmatter))
 
   // Header: one compact block
-  lines.push(`# ${title}\n`)
+  lines.push(`# ${stripTerminalControlSequences(title)}\n`)
   const created = formatTs(meta.createdAt)
   const toolSummary = meta.toolUsage
     ? Object.entries(meta.toolUsage).sort(([, a], [, b]) => b - a).slice(0, 6)

@@ -41,6 +41,7 @@ import {
 } from '../main/session-lineage'
 import { detectSessionSourceForJsonl } from '../main/session-source'
 import { grepTranscripts, synchronizeSearchSources, type SearchIndexSource } from '../main/search-index'
+import { filterVisibleSearchSources } from '../main/session-search'
 import { findCodexSessionFiles, loadCodexRawMessages } from '../main/codex-loader'
 import { findCursorSessionFiles, loadCursorRawMessages } from '../main/cursor-loader'
 import {
@@ -366,7 +367,11 @@ async function cmdGrep(query: string, flags: Record<string, string | true>): Pro
   for (const backup of findLibrarySessionsWithMissingSources()) {
     sources.push({ filePath: backup.backupPath, source: 'library-backup' })
   }
-  await synchronizeSearchSources(sources)
+  const visibleSources = filterVisibleSearchSources(
+    sources,
+    await loadAllSessions({ readOnly: true, quiet: true })
+  )
+  await synchronizeSearchSources(visibleSources)
   const startedAt = performance.now()
   const results = grepTranscripts(query, {
     source: typeof flags.source === 'string' ? flags.source : undefined,

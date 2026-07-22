@@ -17,7 +17,7 @@ import {
   findAllSessionFiles,
   buildSessionSummaryFromBackup
 } from './session-loader'
-import { findCodexSessionFiles } from './codex-loader'
+import { findCodexSessionFiles, loadCodexRawMessages } from './codex-loader'
 import { findCursorSessionFiles } from './cursor-loader'
 import {
   initLibrary,
@@ -69,7 +69,7 @@ import {
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
-import { searchIndexedSessions } from './session-search'
+import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
 import { synchronizeSearchSources } from './search-index'
 import { buildInsights } from './insights'
 import {
@@ -1283,10 +1283,24 @@ function refreshCachedMissingSources(): void {
     .map((session) => ({ sessionId: session.sessionId, backupPath: session.jsonlPath }))
 }
 
-function currentSearchSources(): Array<{ filePath: string; sessionId?: string; isLibraryBackup?: boolean }> {
+function currentSearchSources(): Array<{
+  filePath: string
+  sessionId?: string
+  source?: string
+  isLibraryBackup?: boolean
+  loadRaw?: () => Promise<import('./types').RawJsonlMessage[]>
+}> {
   const files = findAllSessionFiles().filter((filePath) => !filePath.includes('/subagents/'))
+  const physicalSources = filterVisibleSearchSources(files.map((filePath) => {
+    const source = detectSessionSourceFromPath(filePath) || undefined
+    return {
+      filePath,
+      source,
+      ...(source === 'codex' ? { loadRaw: () => loadCodexRawMessages(filePath) } : {})
+    }
+  }), cachedSessions)
   return [
-    ...files.map((filePath) => ({ filePath })),
+    ...physicalSources,
     ...(cachedMissingSources || []).map(({ sessionId, backupPath }) => ({
       filePath: backupPath,
       sessionId,
@@ -1556,9 +1570,14 @@ ipcMain.handle('session:getExecutionTree', async (_event, filePath: string) => {
   try {
     const { parseSessionFile } = await import('./session-loader')
     const { buildExecutionTree } = await import('./execution-tree')
-    const messages = await parseSessionFile(safeFilePath)
-    const sessionId = path.basename(safeFilePath, '.jsonl')
-    return buildExecutionTree(messages, sessionId)
+    const cached = cachedSessions.find((session) =>
+      session.filePath === safeFilePath || session.allFilePaths?.includes(safeFilePath)
+    )
+    const sessionId = cached?.sessionId || path.basename(safeFilePath, '.jsonl')
+    const messages = cached?.source === 'codex'
+      ? await loadCodexRawMessages(safeFilePath, sessionId)
+      : await parseSessionFile(safeFilePath)
+    return buildExecutionTree(messages, sessionId, cached?.subagents || [])
   } catch {
     return null
   }

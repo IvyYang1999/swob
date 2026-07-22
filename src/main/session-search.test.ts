@@ -2,11 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { searchIndexedSessions, searchSessionFiles } from './session-search'
+import {
+  filterVisibleSearchSources,
+  searchIndexedSessions,
+  searchSessionFiles
+} from './session-search'
 import { parseSessionFile } from './session-loader'
 import {
   closeSearchIndex,
   grepTranscripts,
+  indexParsedSearchSource,
   searchDatabasePath,
   searchIndexStats,
   synchronizeSearchSources
@@ -109,6 +114,49 @@ afterEach(() => {
 })
 
 describe('searchSessionFiles', () => {
+  it('guardian 即使曾进入旧索引也会由顶层可见性快照主动清除', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-guardian-test-'))
+    const parentPath = writeJsonl(dir, 'parent.jsonl', [
+      { uuid: 'p1', sessionId: 'parent', type: 'user', timestamp: '2026-07-22T00:00:00Z', message: { role: 'user', content: 'normal-visible-session' } }
+    ])
+    const guardianPath = writeJsonl(dir, 'guardian.jsonl', [
+      { uuid: 'g1', sessionId: 'guardian', type: 'user', timestamp: '2026-07-22T00:00:00Z', message: { role: 'user', content: 'guardian-private-protocol' } }
+    ])
+    const allSources = [
+      { filePath: parentPath, source: 'codex' },
+      { filePath: guardianPath, source: 'codex' }
+    ]
+    await synchronizeSearchSources(allSources)
+    expect(searchIndexedSessions('guardian-private-protocol')).toHaveLength(1)
+
+    const visible = filterVisibleSearchSources(allSources, [{
+      source: 'codex',
+      filePath: parentPath,
+      sessionId: 'parent'
+    } as any])
+    await synchronizeSearchSources(visible)
+
+    expect(visible.map((source) => source.filePath)).toEqual([parentPath])
+    expect(searchIndexedSessions('guardian-private-protocol')).toHaveLength(0)
+    expect(searchIndexedSessions('normal-visible-session')).toHaveLength(1)
+  })
+
+  it('搜索索引移除文本与工具参数中的 ANSI/CSI/OSC', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-ansi-test-'))
+    const filePath = writeJsonl(dir, 'ansi.jsonl', [
+      { uuid: 'u1', sessionId: 'ansi', type: 'user', timestamp: '2026-07-22T00:00:00Z', message: { role: 'user', content: '\u001b[2mvisibleuser\u001b[22m' } },
+      { uuid: 'a1', sessionId: 'ansi', type: 'assistant', timestamp: '2026-07-22T00:01:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: '\u001b]0;title\u0007visiblecommand\u001b[2J' } }] } }
+    ])
+
+    await indexParsedSearchSource({ filePath }, [
+      { uuid: 'u1', parentUuid: null, sessionId: 'ansi', type: 'user', timestamp: '2026-07-22T00:00:00Z', message: { role: 'user', content: '\u001b[2mvisibleuser\u001b[22m' } },
+      { uuid: 'a1', parentUuid: 'u1', sessionId: 'ansi', type: 'assistant', timestamp: '2026-07-22T00:01:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: '\u001b]0;title\u0007visiblecommand\u001b[2J' } }] } }
+    ] as any)
+
+    expect(searchIndexedSessions('visibleuser')[0].firstUserMessage).toBe('visibleuser')
+    expect(searchIndexedSessions('visiblecommand')[0].matches[0].text).not.toMatch(/[\u001b\u009b\u009d]/)
+  })
+
   it('搜索普通 JSONL 文件', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-test-'))
     const filePath = writeJsonl(dir, 'session.jsonl', [

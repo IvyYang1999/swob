@@ -84,7 +84,9 @@ test('Resume 分类按 harness 动态过滤，实验开关在本分类', async (
   await navItem('通用').click()
   await page.getByRole('button', { name: '深色' }).click()
   await navItem('Resume').click()
-  await expect(page.getByRole('combobox')).toHaveCount(10)
+  // CC-Mirror has its own Provider registry truth and no longer inherits the
+  // Claude Code Resume declaration, so all 11 discoverable sources are listed.
+  await expect(page.getByRole('combobox')).toHaveCount(11)
   const zcode = page.getByRole('combobox', { name: /ZCode 默认方式/ })
   await expect(zcode).toHaveValue('zcode-desktop')
   expect(await zcode.locator('option[value="terminal"]').isDisabled()).toBe(true)

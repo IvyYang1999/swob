@@ -96,7 +96,12 @@ function makeSession(
   id: string,
   project: string,
   events: UsageEvent[],
-  options: { source?: SessionSource; unavailable?: boolean; turns?: number } = {}
+  options: {
+    source?: SessionSource
+    unavailable?: boolean
+    turns?: number
+    parse?: 'parsed' | 'no-data' | 'placeholder' | 'error'
+  } = {}
 ): SessionSummary {
   const summed = events.reduce((sum, event) => add(sum, event.components), components(0, 0))
   const conversation = events
@@ -139,6 +144,11 @@ function makeSession(
       cacheReadTokens: summed.cacheReadTokens
     },
     tokenAccounting: accounting,
+    providerOutcome: {
+      detected: 'detected',
+      parse: options.parse || (events.length > 0 ? 'parsed' : 'placeholder'),
+      usage: options.unavailable ? 'unavailable' : 'available'
+    },
     referencedFiles: [],
     configFiles: [],
     source: options.source || 'claude-code',
@@ -320,7 +330,7 @@ describe('UsageFact + AnalysisScope', () => {
     const changedA = makeSession('a', '/repo/alpha', [usageEvent('a1', localTimestamp(2026, 7, 20, 8), components(30, 2))])
     expect(synchronizeUsageFacts([changedA, b], [])).toMatchObject({ changedSessions: 1, unchangedSessions: 1, factCount: 2 })
     expect(synchronizeUsageFacts([changedA], [])).toMatchObject({ removedSessions: 1, factCount: 1 })
-    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 2, sessions: 1, facts: 1 })
+    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 3, sessions: 1, facts: 1 })
   })
 
   it('usage/model/pricing coverage 显式且 pricing 使用 t113 逐请求估值', () => {
@@ -330,7 +340,10 @@ describe('UsageFact + AnalysisScope', () => {
       }),
       usageEvent('unknown-model', localTimestamp(2026, 7, 20, 9), components(5, 1))
     ])
-    const unavailable = makeSession('unavailable', '/repo/alpha', [], { unavailable: true })
+    const unavailable = makeSession('unavailable', '/repo/alpha', [], {
+      unavailable: true,
+      parse: 'parsed'
+    })
     synchronizeUsageFacts([available, unavailable], [folder('mixed-folder', ['available', 'unavailable'])])
 
     const result = queryInsights(scope(), 'global')
@@ -359,7 +372,7 @@ describe('UsageFact + AnalysisScope', () => {
     })
   })
 
-  it('detection-only 来源留在 detected 分母，但没有 usage fact 且 parsed 为 0', () => {
+  it('detection-only 保留 detected 事实，但不进入 coverage/bySession 分母', () => {
     const parsed = makeSession('parsed', '/repo/alpha', [
       usageEvent('known', localTimestamp(2026, 7, 20, 8), components(10, 2))
     ])
@@ -368,26 +381,33 @@ describe('UsageFact + AnalysisScope', () => {
       unavailable: true,
       turns: 0
     })
-    synchronizeUsageFacts([parsed, detectionOnly], [])
+    const noData = makeSession('no-data', '/repo/alpha', [], {
+      source: 'hermes', unavailable: true, parse: 'no-data'
+    })
+    const parseError = makeSession('parse-error', '/repo/alpha', [], {
+      source: 'hermes', unavailable: true, parse: 'error'
+    })
+    synchronizeUsageFacts([parsed, detectionOnly, noData, parseError], [])
 
     expect(queryInsights(scope(), 'global').total).toMatchObject({
-      sessionCount: 2,
-      detectedSessionCount: 2,
+      sessionCount: 1,
+      detectedSessionCount: 4,
       parsedSessionCount: 1,
       usageAvailableSessionCount: 1,
-      usageUnavailableSessionCount: 1,
-      usageCoverage: { covered: 1, total: 2, percent: 50 }
+      usageUnavailableSessionCount: 0,
+      usageCoverage: { covered: 1, total: 1, percent: 100 }
     })
     expect(queryInsights(scope(), 'source').items.find((item) => item.key === 'hermes')).toMatchObject({
       processedTokens: 0,
-      sessionCount: 1,
-      detectedSessionCount: 1,
+      sessionCount: 0,
+      detectedSessionCount: 3,
       parsedSessionCount: 0,
       usageAvailableSessionCount: 0,
-      usageUnavailableSessionCount: 1,
-      usageCoverage: { covered: 0, total: 1, percent: 0 }
+      usageUnavailableSessionCount: 0,
+      usageCoverage: { covered: 0, total: 0, percent: null }
     })
-    expect(usageFactStoreStats()).toMatchObject({ sessions: 2, facts: 1 })
+    expect(queryInsights(scope(), 'session').items.map((item) => item.key)).toEqual(['parsed'])
+    expect(usageFactStoreStats()).toMatchObject({ sessions: 4, facts: 1 })
 
     const persisted = new Database(usageFactStoreStats().databasePath, { readonly: true })
     try {
@@ -399,6 +419,14 @@ describe('UsageFact + AnalysisScope', () => {
         {
           session_id: 'detected-only', detection_status: 'detected',
           parse_status: 'placeholder', usage_status: 'unavailable'
+        },
+        {
+          session_id: 'no-data', detection_status: 'detected',
+          parse_status: 'no-data', usage_status: 'unavailable'
+        },
+        {
+          session_id: 'parse-error', detection_status: 'detected',
+          parse_status: 'error', usage_status: 'unavailable'
         },
         {
           session_id: 'parsed', detection_status: 'detected',

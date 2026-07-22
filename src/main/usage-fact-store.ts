@@ -6,7 +6,7 @@ import type { Folder, SessionSummary } from './types'
 import { accountingForSession, totalCacheWriteTokens, type UsageEvent } from './token-accounting'
 import { valueUsageEvent } from './token-valuation'
 import { searchDatabasePath } from './search-index'
-import { providerCanParseTranscript } from '../shared/provider-capabilities'
+import { providerOutcomeForSession } from './session-provider-outcome'
 import {
   USAGE_FACT_SCHEMA_VERSION,
   type AnalysisDimension,
@@ -123,6 +123,9 @@ function ensureSchema(db: Database.Database): void {
       source_client TEXT NOT NULL,
       project_path TEXT NOT NULL,
       turn_count INTEGER NOT NULL,
+      detection_status TEXT NOT NULL CHECK(detection_status = 'detected'),
+      parse_status TEXT NOT NULL CHECK(parse_status IN ('parsed', 'no-data', 'placeholder', 'error')),
+      usage_status TEXT NOT NULL CHECK(usage_status IN ('available', 'unavailable')),
       usage_available INTEGER NOT NULL,
       fact_signature TEXT NOT NULL,
       folder_signature TEXT NOT NULL,
@@ -438,8 +441,9 @@ export function synchronizeUsageFacts(
 
     for (const [sessionId, session] of uniqueSessions) {
       const accounting = accountingForSession(session)
-      const parsed = providerCanParseTranscript(session.source || 'claude-code')
-      const usageAvailable = parsed && accounting.billingTotal !== null
+      const outcome = providerOutcomeForSession(session)
+      const parsed = outcome.parse === 'parsed'
+      const usageAvailable = parsed && outcome.usage === 'available' && accounting.billingTotal !== null
       const resolvedRoot = resolveRootSessionId(session, sessionsByIdentity)
       const facts = parsed ? usageFactsForSession(session, { rootSessionId: resolvedRoot }) : []
       const folderIds = folderMap.get(sessionId) || []
@@ -448,7 +452,7 @@ export function synchronizeUsageFacts(
         project: projectPath(session),
         root: resolvedRoot,
         turns: session.turnCount,
-        parsed,
+        outcome,
         available: usageAvailable,
         facts
       })
@@ -462,13 +466,17 @@ export function synchronizeUsageFacts(
       db.prepare(`
         INSERT INTO usage_sessions(
           session_id, root_session_id, source_client, project_path, turn_count,
-          usage_available, fact_signature, folder_signature, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          detection_status, parse_status, usage_status, usage_available,
+          fact_signature, folder_signature, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           root_session_id = excluded.root_session_id,
           source_client = excluded.source_client,
           project_path = excluded.project_path,
           turn_count = excluded.turn_count,
+          detection_status = excluded.detection_status,
+          parse_status = excluded.parse_status,
+          usage_status = excluded.usage_status,
           usage_available = excluded.usage_available,
           fact_signature = excluded.fact_signature,
           folder_signature = excluded.folder_signature,
@@ -479,6 +487,9 @@ export function synchronizeUsageFacts(
         session.source || 'claude-code',
         projectPath(session),
         session.turnCount,
+        outcome.detected,
+        outcome.parse,
+        outcome.usage,
         usageAvailable ? 1 : 0,
         factSignature,
         folderSignature,
@@ -639,7 +650,8 @@ function coverage(covered: number, total: number): CoverageMetric {
 }
 
 interface SessionInventoryRow {
-  source_client: string
+  parse_status: 'parsed' | 'no-data' | 'placeholder' | 'error'
+  usage_status: 'available' | 'unavailable'
   usage_available: number
 }
 
@@ -652,15 +664,16 @@ function sessionInventory(rows: SessionInventoryRow[]): {
   let parsed = 0
   let usageAvailable = 0
   for (const row of rows) {
-    const canParse = providerCanParseTranscript(row.source_client)
-    if (canParse) parsed++
-    if (canParse && row.usage_available === 1) usageAvailable++
+    if (row.parse_status === 'parsed') parsed++
+    if (row.parse_status === 'parsed' && row.usage_status === 'available' && row.usage_available === 1) {
+      usageAvailable++
+    }
   }
   return {
     detected: rows.length,
     parsed,
     usageAvailable,
-    usageUnavailable: rows.length - usageAvailable
+    usageUnavailable: parsed - usageAvailable
   }
 }
 
@@ -828,16 +841,17 @@ function applyGlobalUsageCoverage(
     params.push(...scope.sources)
   }
   const inventory = sessionInventory(db.prepare(`
-    SELECT DISTINCT sessions.session_id, sessions.source_client, sessions.usage_available
+    SELECT DISTINCT sessions.session_id, sessions.parse_status, sessions.usage_status,
+      sessions.usage_available
     FROM usage_sessions sessions ${joins.join('\n')}
     WHERE ${where.join(' AND ')}
   `).all(...params) as SessionInventoryRow[])
-  total.sessionCount = inventory.detected
+  total.sessionCount = inventory.parsed
   total.detectedSessionCount = inventory.detected
   total.parsedSessionCount = inventory.parsed
   total.usageAvailableSessionCount = inventory.usageAvailable
   total.usageUnavailableSessionCount = inventory.usageUnavailable
-  total.usageCoverage = coverage(inventory.usageAvailable, inventory.detected)
+  total.usageCoverage = coverage(inventory.usageAvailable, inventory.parsed)
 }
 
 function applyItemUsageCoverage(
@@ -881,21 +895,24 @@ function applyItemUsageCoverage(
     SELECT
       ${key} AS key,
       sessions.session_id,
-      sessions.source_client,
+      sessions.parse_status,
+      sessions.usage_status,
       sessions.usage_available
     FROM usage_sessions sessions ${joins.join('\n')}
     WHERE ${where.join(' AND ')}
   `).all(...params) as Array<{
     key: string
     session_id: string
-    source_client: string
+    parse_status: SessionInventoryRow['parse_status']
+    usage_status: SessionInventoryRow['usage_status']
     usage_available: number
   }>
   const rowsByKey = new Map<string, Map<string, SessionInventoryRow>>()
   for (const row of rows) {
     const values = rowsByKey.get(row.key) || new Map<string, SessionInventoryRow>()
     values.set(row.session_id, {
-      source_client: row.source_client,
+      parse_status: row.parse_status,
+      usage_status: row.usage_status,
       usage_available: row.usage_available
     })
     rowsByKey.set(row.key, values)
@@ -913,6 +930,7 @@ function applyItemUsageCoverage(
   const existingKeys = new Set(items.map((item) => item.key))
   for (const row of byKey.keys()) {
     if (existingKeys.has(row)) continue
+    if (dimension === 'session' && byKey.get(row)?.parsed === 0) continue
     const item = emptyAggregate(scope.metricBasis)
     item.key = row
     item.label = folderLabels.get(row) || row
@@ -921,12 +939,12 @@ function applyItemUsageCoverage(
   for (const item of items) {
     const value = byKey.get(item.key)
     if (!value) continue
-    item.sessionCount = value.detected
+    item.sessionCount = value.parsed
     item.detectedSessionCount = value.detected
     item.parsedSessionCount = value.parsed
     item.usageAvailableSessionCount = value.usageAvailable
     item.usageUnavailableSessionCount = value.usageUnavailable
-    item.usageCoverage = coverage(value.usageAvailable, value.detected)
+    item.usageCoverage = coverage(value.usageAvailable, value.parsed)
   }
 }
 

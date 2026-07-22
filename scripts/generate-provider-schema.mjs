@@ -22,6 +22,35 @@ for (const [name, value] of Object.entries(conformance.resourceLimits)) {
   }
 }
 
+function jsonPointerValue(document, pointer) {
+  if (!pointer.startsWith('/')) throw new Error(`invalid schema JSON pointer: ${pointer}`)
+  return pointer.slice(1).split('/').reduce((value, segment) => {
+    const key = segment.replaceAll('~1', '/').replaceAll('~0', '~')
+    if (value === null || typeof value !== 'object' || !(key in value)) {
+      throw new Error(`provider schema limit binding does not exist: ${pointer}`)
+    }
+    return value[key]
+  }, document)
+}
+
+for (const [limitName, pointers] of Object.entries(conformance.schemaLimitBindings || {})) {
+  const expected = conformance.resourceLimits[limitName]
+  if (!Number.isSafeInteger(expected)) {
+    throw new Error(`provider schema binding references unknown resource limit: ${limitName}`)
+  }
+  if (!Array.isArray(pointers) || pointers.length === 0) {
+    throw new Error(`provider schema limit binding must contain JSON pointers: ${limitName}`)
+  }
+  for (const pointer of pointers) {
+    const actual = jsonPointerValue(schema, pointer)
+    if (actual !== expected) {
+      throw new Error(
+        `provider schema limit ${pointer} (${actual}) must match ${limitName} (${expected})`
+      )
+    }
+  }
+}
+
 function refName(ref) {
   const prefix = '#/$defs/'
   if (!ref.startsWith(prefix)) throw new Error(`Unsupported external $ref: ${ref}`)

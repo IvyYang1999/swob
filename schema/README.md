@@ -60,8 +60,9 @@ third-party fixtures.
   v2: replace positional `fields`/array rows with rows keyed by field name whose
   cells carry `type`, `nullable` and `value`; set `lossy: true`; and include
   projection `status`, provenance, typed errors and an unavailable reason.
-- The UsageFact SQLite index schema is v4 after the event-time and actual
-  provider-outcome changes. It is a disposable local projection and is rebuilt
+- The standalone Provider outcome change uses UsageFact SQLite schema v3. The
+  Wave A integration must assign a later version when it also replays event-day
+  activity semantics. This index is a disposable local projection and is rebuilt
   from session facts on version mismatch; transcripts, Provider sources and
   Library identity are never migrated or rewritten by that rebuild.
 

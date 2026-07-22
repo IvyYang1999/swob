@@ -1844,10 +1844,11 @@ export function ChatViewer() {
 
   const selectedCount = selectedItems.size
 
-  // Share image modal
-  const [shareModalOpen, setShareModalOpen] = useState(false)
-  const shareMessages = useMemo<ShareMessage[]>(() => {
-    if (!shareModalOpen || selectedItems.size === 0) return []
+  // Share image modal. Snapshot the selected content when opening so a source
+  // watcher refresh cannot replace or temporarily empty an in-progress export.
+  const [shareMessages, setShareMessages] = useState<ShareMessage[] | null>(null)
+  const openShareModal = useCallback(() => {
+    if (selectedItems.size === 0) return
     const result: ShareMessage[] = []
     for (const turn of allTurns) {
       if (!turn.userMsg) continue
@@ -1879,8 +1880,8 @@ export function ChatViewer() {
         })
       }
     }
-    return result
-  }, [shareModalOpen, selectedItems, allTurns])
+    if (result.length > 0) setShareMessages(result)
+  }, [selectedItems, allTurns])
 
   const handleBatchExport = useCallback(() => {
     if (selectedItems.size === 0) return
@@ -2043,7 +2044,7 @@ export function ChatViewer() {
               <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
                 <Download size={10} /> {t('chat.download_md')}
               </button>
-              <button onClick={() => setShareModalOpen(true)} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
+              <button onClick={openShareModal} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
                 <Image size={10} /> {t('chat.generate_share_image')}
               </button>
               <button onClick={() => { setSelectedItems(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-muted hover:text-body">
@@ -2139,12 +2140,12 @@ export function ChatViewer() {
             </div>
           )}
           {/* Share image modal */}
-          {shareModalOpen && shareMessages.length > 0 && (
+          {shareMessages && (
             <SharePreview
               messages={shareMessages}
               sessionSource={selectedSession.source}
               userDisplayName={userDisplayName}
-              onClose={() => setShareModalOpen(false)}
+              onClose={() => setShareMessages(null)}
             />
           )}
           {/* Floating highlight button — fixed position near selection */}

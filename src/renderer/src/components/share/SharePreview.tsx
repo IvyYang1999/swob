@@ -20,7 +20,7 @@ import type { ShareTheme } from './share-themes'
 import { DEFAULT_PRIVACY, detectSecrets } from './privacy-utils'
 import type { PrivacyOptions } from './privacy-utils'
 import { renderShareImage, dataUrlToBase64 } from './ShareRenderer'
-import type { ShareMessage } from './ShareRenderer'
+import type { ShareMessage, ShareRenderOptions } from './ShareRenderer'
 
 interface SharePreviewProps {
   messages: ShareMessage[]
@@ -42,8 +42,18 @@ export function SharePreview({ messages, sessionSource, userDisplayName, onClose
   // Privacy state (privacy-first defaults: all stripping ON)
   const [privacy, setPrivacy] = useState<PrivacyOptions>({ ...DEFAULT_PRIVACY })
 
+  const renderInput = useMemo<ShareRenderOptions>(() => ({
+    messages,
+    theme,
+    showWatermark,
+    privacy,
+    sessionSource,
+    userDisplayName,
+  }), [messages, theme, showWatermark, privacy, sessionSource, userDisplayName])
+
   // Rendered images
   const [images, setImages] = useState<string[]>([])
+  const [completedRenderInput, setCompletedRenderInput] = useState<ShareRenderOptions | null>(null)
   const [currentPage, setCurrentPage] = useState(0)
   const [rendering, setRendering] = useState(false)
   const [renderError, setRenderError] = useState<string | null>(null)
@@ -64,30 +74,25 @@ export function SharePreview({ messages, sessionSource, userDisplayName, onClose
     setRendering(true)
     setRenderError(null)
 
-    renderShareImage({
-      messages,
-      theme,
-      showWatermark,
-      privacy,
-      sessionSource,
-      userDisplayName,
-    })
+    renderShareImage(renderInput)
       .then((results) => {
         if (cancelled) return
         setImages(results)
+        setCompletedRenderInput(renderInput)
         setCurrentPage(0)
         setRendering(false)
       })
       .catch((err) => {
         if (cancelled) return
         setRenderError(String(err?.message || err))
+        setCompletedRenderInput(renderInput)
         setRendering(false)
       })
 
     return () => {
       cancelled = true
     }
-  }, [messages, theme, showWatermark, privacy, sessionSource, userDisplayName])
+  }, [renderInput])
 
   const handleCopy = useCallback(async () => {
     const dataUrl = images[currentPage]
@@ -186,7 +191,7 @@ export function SharePreview({ messages, sessionSource, userDisplayName, onClose
         <div className="flex-1 min-h-0 flex overflow-hidden">
           {/* Preview area */}
           <div className="flex-1 min-w-0 p-4 overflow-auto bg-surface/30 flex items-start justify-center">
-            {rendering ? (
+            {rendering || completedRenderInput !== renderInput ? (
               <div className="flex items-center gap-2 text-sm text-muted py-20">
                 <div className="w-4 h-4 border-2 border-soft-blue/30 border-t-soft-blue rounded-full animate-spin" />
                 {t('share.rendering')}

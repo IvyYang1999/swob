@@ -14,8 +14,18 @@ export const ZCODE_FIXTURE_ID = 'sess_ZcodeUI099'
  * should prefer the fully sandboxed launchApp below.
  */
 export async function launchAppWithEnv(options: { env?: Record<string, string> } = {}): Promise<{ app: ElectronApplication; page: Page }> {
+  const testHome = options.env?.SWOB_TEST_HOME || options.env?.HOME
+  if (!testHome) throw new Error('launchAppWithEnv requires an isolated HOME or SWOB_TEST_HOME')
+  const userData = path.join(testHome, '.swob-e2e-user-data')
+  const cache = path.join(testHome, '.swob-e2e-cache')
+  fs.mkdirSync(userData, { recursive: true })
+  fs.mkdirSync(cache, { recursive: true })
   const app = await electron.launch({
-    args: [path.join(__dirname, '..', 'out', 'main', 'index.js')],
+    args: [
+      path.join(__dirname, '..', 'out', 'main', 'index.js'),
+      `--user-data-dir=${userData}`,
+      `--disk-cache-dir=${cache}`
+    ],
     env: {
       ...process.env,
       SWOB_TEST_LOCALE: 'zh-CN',

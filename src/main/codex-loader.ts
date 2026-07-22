@@ -39,16 +39,37 @@ function tokenNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
+function costNumber(record?: Record<string, unknown>): number | undefined {
+  if (!record) return undefined
+  for (const value of [record.costUSD, record.costUsd, record.cost_usd]) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
+  }
+  const cost = record.cost
+  if (cost && typeof cost === 'object') {
+    const total = (cost as Record<string, unknown>).total
+    if (typeof total === 'number' && Number.isFinite(total) && total >= 0) return total
+  }
+  return undefined
+}
+
 function codexSnapshot(
   raw: Record<string, unknown>,
   kind: CodexUsageSnapshot['kind'],
   timestamp: string,
   model?: string,
-  dedupHint?: string
+  dedupHint?: string,
+  providerRaw?: string,
+  reportedCostUsd?: number
 ): CodexUsageSnapshot {
   return {
     timestamp,
     model,
+    providerRaw,
+    reportedCostUsd: reportedCostUsd ?? costNumber(raw),
+    serviceTier: typeof raw.service_tier === 'string' ? raw.service_tier : undefined,
+    inferenceRegion: typeof raw.inference_geo === 'string' ? raw.inference_geo : undefined,
+    speed: typeof raw.speed === 'string' ? raw.speed : undefined,
+    isBatch: typeof raw.is_batch === 'boolean' ? raw.is_batch : undefined,
     kind,
     inputTokens: tokenNumber(raw.input_tokens),
     outputTokens: tokenNumber(raw.output_tokens),
@@ -63,10 +84,13 @@ export function extractCodexTokenAccounting(lines: CodexLine[]): TokenAccounting
   const perTurn: CodexUsageSnapshot[] = []
   const cumulative: CodexUsageSnapshot[] = []
   let currentModel: string | undefined
+  let currentProvider = (lines.find((line) => line.type === 'session_meta')?.payload as Partial<CodexSessionMeta> | undefined)?.model_provider
 
   for (const line of lines) {
     if (line.type === 'turn_context') {
       if (typeof line.payload.model === 'string') currentModel = line.payload.model
+      if (typeof line.payload.model_provider === 'string') currentProvider = line.payload.model_provider
+      else if (typeof line.payload.provider === 'string') currentProvider = line.payload.provider
     }
     if (line.type !== 'event_msg' || line.payload.type !== 'token_count') continue
     const info = line.payload.info as Record<string, unknown> | undefined
@@ -86,9 +110,25 @@ export function extractCodexTokenAccounting(lines: CodexLine[]): TokenAccounting
           ].join(':')
         : undefined
       const dedupHint = turnId ? `codex:turn:${turnId}` : totalKey ? `codex:total:${totalKey}` : undefined
-      perTurn.push(codexSnapshot(last, 'incremental', line.timestamp, currentModel, dedupHint))
+      perTurn.push(codexSnapshot(
+        last,
+        'incremental',
+        line.timestamp,
+        currentModel,
+        dedupHint,
+        currentProvider,
+        costNumber(last) ?? costNumber(info) ?? costNumber(line.payload)
+      ))
     } else if (total) {
-      cumulative.push(codexSnapshot(total, 'cumulative', line.timestamp, currentModel))
+      cumulative.push(codexSnapshot(
+        total,
+        'cumulative',
+        line.timestamp,
+        currentModel,
+        undefined,
+        currentProvider,
+        costNumber(total) ?? costNumber(info) ?? costNumber(line.payload)
+      ))
     }
   }
 

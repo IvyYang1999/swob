@@ -388,7 +388,15 @@ describe('buildInsights', () => {
         projects: 1_280,
         sessions: 1_280,
         difference: 0,
-        ok: true
+        ok: true,
+        valuation: {
+          globalUsd: null,
+          sessionsUsd: null,
+          uniqueEventsUsd: null,
+          difference: 0,
+          coverageDifference: 0,
+          ok: true
+        }
       })
       expect(result.bySession.find((session) => session.sessionId === 'cursor')?.totalTokens).toBeNull()
       expect(result.bySession.some((session) => session.sessionId === 'synthetic')).toBe(false)

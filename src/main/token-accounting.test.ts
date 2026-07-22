@@ -78,6 +78,8 @@ describe('token accounting', () => {
       nonCachedInputTokens: 400,
       cacheReadTokens: 600,
       cacheWriteTokens: 0,
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 0,
       outputTokens: 100,
       reasoningTokens: 40
     })

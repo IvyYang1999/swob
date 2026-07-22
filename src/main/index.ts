@@ -1511,7 +1511,10 @@ ipcMain.handle('session:audit', async (_event, filePath: string) => {
     const { auditSession } = await import('./session-audit')
     const messages = await parseSessionFile(safeFilePath)
     const sessionId = path.basename(safeFilePath, '.jsonl')
-    return auditSession(messages, sessionId)
+    const session = cachedSessions.find((candidate) =>
+      candidate.filePath === safeFilePath || candidate.allFilePaths?.includes(safeFilePath)
+    )
+    return auditSession(messages, sessionId, session?.tokenAccounting)
   } catch {
     return null
   }

@@ -8,6 +8,13 @@
  * it is not API context overhead (t106 semantics).
  */
 import type { RawJsonlMessage } from './types'
+import { accountClaudeUsage, type TokenAccounting } from './token-accounting'
+import {
+  aggregateValuations,
+  valuationForAccounting,
+  valueUsageEvent,
+  type Valuation
+} from './token-valuation'
 
 export type AuditProvenance = 'reported' | 'estimated' | 'unavailable'
 export type AuditEvidenceKind =
@@ -60,7 +67,7 @@ export interface ModelUsage {
   turns: number
   inputTokens: number
   outputTokens: number
-  estimatedCost: number
+  valuation: Valuation
 }
 
 export interface ToolEfficiency {
@@ -93,7 +100,7 @@ export interface SessionAuditResult {
   thinkingDepth: AuditMetric<{ avgSignatureLength: number; redactedCount: number; totalBlocks: number }>
   turnLatencies: TurnLatency[]
   latencyStats: AuditMetric<{ p50: number; p95: number; max: number }>
-  estimatedCost: AuditMetric<{ inputCost: number; outputCost: number; totalCost: number; currency: string }>
+  valuation: AuditMetric<Valuation>
   visibleFrameworkMarkers: AuditMetric<{
     estimatedMarkerTokens: number
     estimatedVisibleUserTokens: number
@@ -123,14 +130,6 @@ interface ToolUse {
 interface ThinkingBlock {
   length: number
   signature?: string
-}
-
-// Bundled fallback prices (USD per million tokens). They are estimates, not bills.
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  'claude-sonnet-4-20250514': { input: 3, output: 15 },
-  'claude-opus-4-20250514': { input: 15, output: 75 },
-  'claude-haiku-3-5-20241022': { input: 0.8, output: 4 },
-  'claude-3-5-sonnet-20241022': { input: 3, output: 15 },
 }
 
 const FRUSTRATION_KEYWORDS_ZH = ['不对', '错了', '别这样', '回滚', '撤销', '不是这个意思', '搞错了', '重来']
@@ -210,7 +209,11 @@ function evidence(
   return { line, messageUuid: message.uuid, role, kind, excerpt: excerpt.slice(0, 160) }
 }
 
-export function auditSession(messages: RawJsonlMessage[], sessionId: string): SessionAuditResult {
+export function auditSession(
+  messages: RawJsonlMessage[],
+  sessionId: string,
+  tokenAccounting?: TokenAccounting
+): SessionAuditResult {
   const toolCounts: Record<string, number> = {}
   const toolErrors: Record<string, number> = {}
   const toolLatencies: Record<string, number[]> = {}
@@ -227,12 +230,9 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
   }> = []
   const antiPatterns: ToolAntiPattern[] = []
   const frustrationSignals: FrustrationSignal[] = []
-  const modelTurns: Record<string, { turns: number; input: number; output: number }> = {}
-  let totalInputTokens = 0
-  let totalOutputTokens = 0
+  const modelTurns: Record<string, number> = {}
   let visibleFrameworkMarkerTokens = 0
   let visibleUserTextTokens = 0
-  let lastModel = ''
   let turnIndex = 0
   let userInterruptions = 0
 
@@ -270,8 +270,6 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
 
       const usage = message.message.usage
       if (usage) {
-        totalInputTokens += usage.input_tokens || 0
-        totalOutputTokens += usage.output_tokens || 0
         usageEvidence.push(evidence(
           line,
           message,
@@ -281,13 +279,7 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
         ))
       }
       if (message.message.model) {
-        lastModel = message.message.model
-        if (!modelTurns[lastModel]) modelTurns[lastModel] = { turns: 0, input: 0, output: 0 }
-        modelTurns[lastModel].turns++
-        if (usage) {
-          modelTurns[lastModel].input += usage.input_tokens || 0
-          modelTurns[lastModel].output += usage.output_tokens || 0
-        }
+        modelTurns[message.message.model] = (modelTurns[message.message.model] || 0) + 1
       }
 
       if (timestamp > 0) {
@@ -439,9 +431,8 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
     .filter((latency) => latency.role === 'assistant')
     .flatMap((latency) => latency.evidence)
 
-  const pricing = MODEL_PRICING[lastModel] || { input: 3, output: 15 }
-  const inputCost = (totalInputTokens / 1_000_000) * pricing.input
-  const outputCost = (totalOutputTokens / 1_000_000) * pricing.output
+  const accounting = tokenAccounting || accountClaudeUsage(messages)
+  const valuation = valuationForAccounting(accounting)
   // Visible framework-marker share within user text. Never treat as context overhead.
   const visibleMarkerShare = visibleUserTextTokens > 0
     ? (visibleFrameworkMarkerTokens / visibleUserTextTokens) * 100
@@ -543,15 +534,36 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
     : readTools > totalTools * 0.5 ? 'research'
     : 'mixed'
 
-  const modelUsage: ModelUsage[] = Object.entries(modelTurns).map(([model, stats]) => {
-    const modelPricing = MODEL_PRICING[model] || { input: 3, output: 15 }
+  const modelEvents = new Map<string, typeof accounting.usageEvents>()
+  const attributedRawModels = new Set<string>()
+  for (const event of accounting.usageEvents) {
+    const model = event.modelCanonical || event.modelRaw
+    if (!model) continue
+    if (event.modelRaw) attributedRawModels.add(event.modelRaw)
+    const events = modelEvents.get(model) || []
+    events.push(event)
+    modelEvents.set(model, events)
+  }
+  const modelNames = new Set([
+    ...modelEvents.keys(),
+    ...Object.keys(modelTurns).filter((model) => !attributedRawModels.has(model))
+  ])
+  const modelUsage: ModelUsage[] = [...modelNames].map((model) => {
+    const events = modelEvents.get(model) || []
+    const components = events.reduce((total, event) => ({
+      input: total.input + event.components.nonCachedInputTokens + event.components.cacheReadTokens +
+        event.components.cacheWriteTokens + event.components.cacheWrite5mTokens + event.components.cacheWrite1hTokens,
+      output: total.output + event.components.outputTokens
+    }), { input: 0, output: 0 })
     return {
-      model: model.replace(/^claude-/, '').replace(/-\d{8}$/, ''),
-      turns: stats.turns,
-      inputTokens: stats.input,
-      outputTokens: stats.output,
-      estimatedCost: (stats.input / 1_000_000) * modelPricing.input +
-        (stats.output / 1_000_000) * modelPricing.output
+      model,
+      turns: events.length > 0
+        ? [...new Set(events.map((event) => event.modelRaw).filter((raw): raw is string => Boolean(raw)))]
+            .reduce((sum, raw) => sum + (modelTurns[raw] || 0), 0) || events.length
+        : modelTurns[model] || 0,
+      inputTokens: components.input,
+      outputTokens: components.output,
+      valuation: aggregateValuations(events.map((event) => valueUsageEvent(event)))
     }
   }).sort((a, b) => b.turns - a.turns)
 
@@ -582,7 +594,7 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
     readEditHealthBasis: 'heuristic-unvalidated',
     limitations: [
       'Read/Edit health bands and the health score are unvalidated heuristics.',
-      'Cost uses a bundled static price table and is not provider billing.',
+      'API equivalent (estimate) uses an embedded, versioned public-price snapshot; it is not provider billing or cash spend.',
       'Framework tokens are estimated from character count, not provider token attribution.',
       'Context Inspector category attribution remains estimated even when its total token count is provider-reported.',
       'Sidechain messages and child transcript files are not recursively audited.',
@@ -612,11 +624,11 @@ export function auditSession(messages: RawJsonlMessage[], sessionId: string): Se
       evidence: latencyEvidence,
       caveat: 'Derived from adjacent message timestamps; queue, network, and user think time are not separated.'
     },
-    estimatedCost: {
-      value: { inputCost, outputCost, totalCost: inputCost + outputCost, currency: 'USD' },
-      provenance: totalInputTokens > 0 ? 'estimated' : 'unavailable',
+    valuation: {
+      value: valuation,
+      provenance: valuation.mode === 'reported' ? 'reported' : valuation.mode === 'unpriced' ? 'unavailable' : 'estimated',
       evidence: usageEvidence,
-      caveat: 'Reported token counts multiplied by a bundled static price table; not an invoice or live price.'
+      caveat: 'API 等价值(估算)：逐请求按模型、Provider、事件时间与缓存桶计算；未匹配项保持未计价，不代表实际现金支出。'
     },
     visibleFrameworkMarkers: {
       value: {

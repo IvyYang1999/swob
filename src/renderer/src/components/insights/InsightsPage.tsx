@@ -232,7 +232,7 @@ export function InsightsPage() {
       {/* New insight dimensions */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <CostCard
-          costUsd={data.estimatedCostUsd || 0}
+          valuation={data.valuation}
           cacheRead={data.totalCacheReadTokens || 0}
           cacheCreate={data.totalCacheCreationTokens || 0}
           totalInput={data.totalInputTokens || 0}

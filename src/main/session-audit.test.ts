@@ -82,7 +82,7 @@ describe('session audit evidence and accuracy', () => {
       audit.readEditRatio,
       audit.thinkingDepth,
       audit.latencyStats,
-      audit.estimatedCost,
+      audit.valuation,
       audit.visibleFrameworkMarkers
     ]) {
       expect(metric).toHaveProperty('evidence')
@@ -91,13 +91,13 @@ describe('session audit evidence and accuracy', () => {
     expect(audit.thinkingDepth.evidence).toContainEqual(
       expect.objectContaining({ line: 2, messageUuid: 'a1', kind: 'thinking' })
     )
-    expect(audit.estimatedCost.evidence).toContainEqual(
+    expect(audit.valuation.evidence).toContainEqual(
       expect.objectContaining({ line: 2, messageUuid: 'a1', kind: 'usage' })
     )
     expect(audit.visibleFrameworkMarkers.evidence).toContainEqual(
       expect.objectContaining({ line: 1, messageUuid: 'u1', kind: 'framework' })
     )
-    expect(audit.estimatedCost.caveat).toMatch(/static|bundled|静态/i)
+    expect(audit.valuation.caveat).toMatch(/API 等价值|provider|cash/i)
     expect(audit.limitations.join(' ')).toMatch(/Context Inspector.*estimated/i)
     expect(audit.limitations.join(' ')).toMatch(/sidechain|child transcript/i)
   })

@@ -1,5 +1,17 @@
 import type { SessionSummary, Folder, SessionSource } from './types'
-import { accountingForSession, processedTotal, type TokenAccounting } from './token-accounting'
+import {
+  accountingForSession,
+  processedTotal,
+  totalCacheWriteTokens,
+  type TokenAccounting,
+  type UsageEvent
+} from './token-accounting'
+import {
+  aggregateValuations,
+  valuationForAccounting,
+  valueUsageEvent,
+  type Valuation
+} from './token-valuation'
 
 export type TokenDataStatus = 'available' | 'partial' | 'unavailable' | 'no-data'
 
@@ -92,6 +104,7 @@ export interface InsightsData {
     totalTokens: number | null
     conversationOnlyTokens: number | null
     provenance: string
+    valuation: Valuation
   }>
   reconciliation: {
     global: number
@@ -99,10 +112,18 @@ export interface InsightsData {
     sessions: number
     difference: number
     ok: boolean
+    valuation: {
+      globalUsd: number | null
+      sessionsUsd: number | null
+      uniqueEventsUsd: number | null
+      difference: number
+      coverageDifference: number
+      ok: boolean
+    }
   }
   totalCacheReadTokens: number
   totalCacheCreationTokens: number
-  estimatedCostUsd: number
+  valuation: Valuation
   hourlyDistribution: number[]
   turnCountDistribution: number[]
   topTools: Array<{ name: string; count: number }>
@@ -195,7 +216,7 @@ function tokenStatus(available: number, unavailable: number): TokenDataStatus {
 function accountingInput(accounting: TokenAccounting): number {
   const components = accounting.components
   return components
-    ? components.nonCachedInputTokens + components.cacheReadTokens + components.cacheWriteTokens
+    ? components.nonCachedInputTokens + components.cacheReadTokens + totalCacheWriteTokens(components)
     : 0
 }
 
@@ -245,6 +266,8 @@ export function buildInsights(
   const modelMap = new Map<string, { totalTokens: number; sessionIds: Set<string> }>()
   const toolAgg = new Map<string, number>()
   const bySession: InsightsData['bySession'] = []
+  const sessionValuations: Valuation[] = []
+  const uniqueValuationEvents = new Map<string, UsageEvent>()
   const hourly = new Array(24).fill(0) as number[]
   const turnBuckets = [0, 0, 0, 0, 0, 0]
   let totalTokens = 0
@@ -268,7 +291,13 @@ export function buildInsights(
     const input = available ? accountingInput(accounting) : 0
     const output = available ? accounting.components!.outputTokens : 0
     const tokens = available ? accounting.billingTotal! : 0
+    const sessionValuation = valuationForAccounting(accounting)
     const { project, fullPath } = getProjectFromCwds(session.cwds)
+
+    sessionValuations.push(sessionValuation)
+    for (const event of accounting.usageEvents) {
+      uniqueValuationEvents.set(`${session.sessionId}:${event.dedupKey}`, event)
+    }
 
     bySession.push({
       sessionId: session.sessionId,
@@ -276,7 +305,8 @@ export function buildInsights(
       source,
       totalTokens: accounting.billingTotal,
       conversationOnlyTokens: accounting.conversationOnly,
-      provenance: accounting.provenance
+      provenance: accounting.provenance,
+      valuation: sessionValuation
     })
 
     let sourceStats = sourceMap.get(source)
@@ -327,7 +357,7 @@ export function buildInsights(
       totalInputTokens += input
       totalOutputTokens += output
       totalCacheRead += accounting.components!.cacheReadTokens
-      totalCacheCreate += accounting.components!.cacheWriteTokens
+      totalCacheCreate += totalCacheWriteTokens(accounting.components!)
       sourceStats.totalTokens += tokens
       sourceStats.inputTokens += input
       sourceStats.outputTokens += output
@@ -335,21 +365,15 @@ export function buildInsights(
       projectStats.inputTokens += input
       projectStats.outputTokens += output
 
-      const eventsWithModels = accounting.usageEvents.filter((event) => event.model)
+      const eventsWithModels = accounting.usageEvents.filter((event) => event.modelCanonical || event.modelRaw)
       if (eventsWithModels.length > 0) {
         for (const event of eventsWithModels) {
-          const model = normalizeModelName(event.model!)
+          const model = event.modelCanonical || normalizeModelName(event.modelRaw!)
           const entry = modelMap.get(model) || { totalTokens: 0, sessionIds: new Set<string>() }
           entry.totalTokens += processedTotal(event.components)
           entry.sessionIds.add(session.sessionId)
           modelMap.set(model, entry)
         }
-      } else if (session.models?.length === 1) {
-        const model = normalizeModelName(session.models[0])
-        const entry = modelMap.get(model) || { totalTokens: 0, sessionIds: new Set<string>() }
-        entry.totalTokens += tokens
-        entry.sessionIds.add(session.sessionId)
-        modelMap.set(model, entry)
       }
     } else {
       tokenUnavailableSessions++
@@ -453,6 +477,20 @@ export function buildInsights(
   const projectsTotal = byProject.reduce((sum, project) => sum + project.totalTokens, 0)
   const sessionsTotal = bySession.reduce((sum, session) => sum + (session.totalTokens || 0), 0)
   const difference = Math.max(Math.abs(totalTokens - projectsTotal), Math.abs(totalTokens - sessionsTotal))
+  const valuation = aggregateValuations(sessionValuations)
+  const uniqueEventsValuation = aggregateValuations(
+    [...uniqueValuationEvents.values()].map((event) => valueUsageEvent(event))
+  )
+  const globalUsd = valuation.usd ?? null
+  const sessionsUsd = sessionValuations.some((item) => item.usd !== undefined)
+    ? sessionValuations.reduce((sum, item) => sum + (item.usd || 0), 0)
+    : null
+  const uniqueEventsUsd = uniqueEventsValuation.usd ?? null
+  const valuationDifference = Math.max(
+    Math.abs((globalUsd || 0) - (sessionsUsd || 0)),
+    Math.abs((globalUsd || 0) - (uniqueEventsUsd || 0))
+  )
+  const coverageDifference = Math.abs(valuation.coveragePercent - uniqueEventsValuation.coveragePercent)
 
   return {
     totalTokens,
@@ -477,12 +515,19 @@ export function buildInsights(
       projects: projectsTotal,
       sessions: sessionsTotal,
       difference,
-      ok: difference === 0
+      ok: difference === 0,
+      valuation: {
+        globalUsd,
+        sessionsUsd,
+        uniqueEventsUsd,
+        difference: valuationDifference,
+        coverageDifference,
+        ok: valuationDifference < 1e-12 && coverageDifference < 1e-12
+      }
     },
     totalCacheReadTokens: totalCacheRead,
     totalCacheCreationTokens: totalCacheCreate,
-    // Deliberately retained as a rough estimate; UI labels the fixed-rate assumption.
-    estimatedCostUsd: (totalInputTokens / 1_000_000) * 3 + (totalOutputTokens / 1_000_000) * 15,
+    valuation,
     hourlyDistribution: hourly,
     turnCountDistribution: turnBuckets,
     topTools: [...toolAgg.entries()]

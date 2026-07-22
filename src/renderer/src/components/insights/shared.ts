@@ -58,7 +58,7 @@ export interface InsightsData {
   // New dimensions
   totalCacheReadTokens: number
   totalCacheCreationTokens: number
-  estimatedCostUsd: number
+  valuation: Valuation
   hourlyDistribution: number[]     // 24 items, index = hour
   turnCountDistribution: number[]  // [1-5, 6-20, 21-50, 51-100, 101-500, 500+]
   topTools: Array<{ name: string; count: number }>
@@ -70,8 +70,46 @@ export interface InsightsData {
     totalTokens: number | null
     conversationOnlyTokens: number | null
     provenance: string
+    valuation: Valuation
   }>
-  reconciliation: { global: number; projects: number; sessions: number; difference: number; ok: boolean }
+  reconciliation: {
+    global: number
+    projects: number
+    sessions: number
+    difference: number
+    ok: boolean
+    valuation: {
+      globalUsd: number | null
+      sessionsUsd: number | null
+      uniqueEventsUsd: number | null
+      difference: number
+      coverageDifference: number
+      ok: boolean
+    }
+  }
+}
+
+export interface Valuation {
+  usd?: number
+  mode: 'reported' | 'estimated-list-price' | 'api-equivalent' | 'unpriced'
+  pricingMatch: 'reported' | 'exact' | 'alias' | 'mixed' | 'none'
+  coveredTokens: number
+  totalBillableTokens: number
+  coveragePercent: number
+  missingReasons: string[]
+  pricingRules: Array<{
+    pricingRuleId: string
+    provider: string
+    modelCanonical: string
+    eventTimestamp: string
+    effectiveFrom: string
+    effectiveTo?: string
+    source: string
+    sourceUrl: string
+    catalogVersion: string
+    longContext: boolean
+  }>
+  modeBreakdown: Partial<Record<'reported' | 'estimated-list-price' | 'api-equivalent', number>>
 }
 
 export interface BySource {

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../store'
+import type { Valuation } from './insights/shared'
 import {
   Shield, ChevronDown, ChevronRight, AlertTriangle, CheckCircle, XCircle, Info, FlaskConical
 } from 'lucide-react'
@@ -29,7 +30,7 @@ interface SessionAuditResult {
   readEditHealth: 'healthy' | 'degraded' | 'critical' | 'unavailable'
   thinkingDepth: AuditMetric<{ avgSignatureLength: number; redactedCount: number; totalBlocks: number }>
   latencyStats: AuditMetric<{ p50: number; p95: number; max: number }>
-  estimatedCost: AuditMetric<{ inputCost: number; outputCost: number; totalCost: number; currency: string }>
+  valuation: AuditMetric<Valuation>
   visibleFrameworkMarkers: AuditMetric<{
     estimatedMarkerTokens: number
     estimatedVisibleUserTokens: number
@@ -38,7 +39,7 @@ interface SessionAuditResult {
   antiPatterns: Array<{ type: string; turnIndex: number; detail: string; evidence: AuditEvidence[] }>
   frustrationSignals: Array<{ type: string; turnIndex: number; text: string; evidence: AuditEvidence[] }>
   sessionType: string
-  modelUsage: Array<{ model: string; turns: number; estimatedCost: number }>
+  modelUsage: Array<{ model: string; turns: number; valuation: Valuation }>
   toolEfficiency: Array<{
     name: string; count: number; errorCount: number; avgLatencyMs: number; evidence: AuditEvidence[]
   }>
@@ -110,7 +111,7 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
     { label: 'Read:Edit Ratio', metric: audit.readEditRatio },
     { label: locale === 'zh-CN' ? 'Thinking 代理' : 'Thinking Proxy', metric: audit.thinkingDepth },
     { label: locale === 'zh-CN' ? '响应延迟' : 'Response Latency', metric: audit.latencyStats },
-    { label: locale === 'zh-CN' ? '成本估算' : 'Cost Estimate', metric: audit.estimatedCost },
+    { label: locale === 'zh-CN' ? 'API 等价值(估算)' : 'API equivalent (estimate)', metric: audit.valuation },
     { label: locale === 'zh-CN' ? '可见框架标记' : 'Visible Framework Markers', metric: audit.visibleFrameworkMarkers }
   ]
 
@@ -164,12 +165,12 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
                 provenance={audit.latencyStats.provenance}
               />
             )}
-            {audit.estimatedCost.provenance !== 'unavailable' && (
+            {audit.valuation.value.usd !== undefined && (
               <MetricRow
-                label={locale === 'zh-CN' ? '估算成本' : 'Est. Cost'}
-                value={formatCost(audit.estimatedCost.value.totalCost)}
-                unit={`(in: ${formatCost(audit.estimatedCost.value.inputCost)} + out: ${formatCost(audit.estimatedCost.value.outputCost)})`}
-                provenance={audit.estimatedCost.provenance}
+                label={locale === 'zh-CN' ? 'API 等价值(估算)' : 'API equivalent (estimate)'}
+                value={formatCost(audit.valuation.value.usd)}
+                unit={`${locale === 'zh-CN' ? '价格覆盖' : 'coverage'} ${audit.valuation.value.coveragePercent.toFixed(1)}%`}
+                provenance={audit.valuation.provenance}
               />
             )}
             <MetricRow
@@ -230,7 +231,9 @@ export function SessionAuditPanel({ filePath }: { filePath: string }) {
                 {audit.modelUsage.slice(0, 3).map((m, i) => (
                   <div key={i} className="flex items-center justify-between text-[10px] pl-2">
                     <span className="text-secondary truncate">{m.model}</span>
-                    <span className="text-muted">{m.turns} turns · ${m.estimatedCost.toFixed(2)}</span>
+                    <span className="text-muted">
+                      {m.turns} turns · {m.valuation.usd === undefined ? 'unpriced' : `$${m.valuation.usd.toFixed(2)} · ${m.valuation.coveragePercent.toFixed(1)}%`}
+                    </span>
                   </div>
                 ))}
               </div>

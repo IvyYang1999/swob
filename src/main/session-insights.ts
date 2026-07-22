@@ -9,6 +9,7 @@ import { auditSession, type SessionAuditResult, type SessionType } from './sessi
 import { parseSessionFile } from './session-loader'
 import { callLlm, resolveLlmModel, type LlmSettings } from './llm-client'
 import { accountingForSession } from './token-accounting'
+import { aggregateValuations, type Valuation } from './token-valuation'
 import type { SessionSummary } from './types'
 
 export type InsightsProgress = (stage: string, current: number, total: number) => void
@@ -20,7 +21,7 @@ export interface InsightsReport {
   totalTurns: number
   totalTokens: number
   tokenAvailability: { availableSessions: number; unavailableSessions: number }
-  totalEstimatedCost: number
+  valuation: Valuation
   activeDays: number
   totalActiveHours: number
 
@@ -29,7 +30,7 @@ export interface InsightsReport {
     sessions: number
     turns: number
     tokens: number
-    cost: number
+    valuation: Valuation
     unavailableSessions: number
   }>
 
@@ -45,7 +46,7 @@ export interface InsightsReport {
 
   topTools: Array<{ name: string; count: number; errorRate: number }>
 
-  topModels: Array<{ model: string; turns: number; cost: number }>
+  topModels: Array<{ model: string; turns: number; valuation: Valuation }>
 
   visibleFrameworkMarkers: { avgEstimatedTokens: number; maxEstimatedTokens: number; maxSessionId: string }
 
@@ -80,18 +81,27 @@ export async function generateInsightsReport(
     const s = eligible[i]
     try {
       const msgs = await parseSessionFile(s.filePath)
-      if (msgs.length > 0) analyzed.push({ session: s, audit: auditSession(msgs, s.sessionId) })
+      if (msgs.length > 0) analyzed.push({
+        session: s,
+        audit: auditSession(msgs, s.sessionId, accountingForSession(s))
+      })
     } catch { /* skip */ }
     if (onProgress && (i % 10 === 0 || i === eligible.length - 1)) {
       onProgress('analyzing', i + 1, eligible.length)
     }
   }
 
-  const bySource = new Map<string, { sessions: number; turns: number; tokens: number; cost: number; unavailableSessions: number }>()
+  const bySource = new Map<string, {
+    sessions: number
+    turns: number
+    tokens: number
+    valuations: Valuation[]
+    unavailableSessions: number
+  }>()
   const byType: Record<SessionType, number> = { coding: 0, research: 0, debugging: 0, discussion: 0, mixed: 0 }
   const health = { excellent: 0, good: 0, fair: 0, poor: 0, totalScore: 0 }
   const toolAgg = new Map<string, { count: number; errors: number }>()
-  const modelAgg = new Map<string, { turns: number; cost: number }>()
+  const modelAgg = new Map<string, { turns: number; valuations: Valuation[] }>()
   const hours: number[] = new Array(24).fill(0)
   const daily = new Map<string, number>()
   let totalAntiPatterns = 0
@@ -101,7 +111,7 @@ export async function generateInsightsReport(
   let availableTokenSessions = 0
   let unavailableTokenSessions = 0
   let totalTurns = 0
-  let totalCost = 0
+  const valuations: Valuation[] = []
   let markerTotal = 0
   let markerCount = 0
   let markerMax = 0
@@ -116,15 +126,18 @@ export async function generateInsightsReport(
   for (const { audit, session } of analyzed) {
     const src = session.source || 'claude-code'
     const accounting = accountingForSession(session)
-    const billingTokens = accounting.excludedFromRollups ? null : accounting.billingTotal
+    const excludedFromRollups = accounting.excludedFromRollups === true
+    const billingTokens = excludedFromRollups ? null : accounting.billingTotal
 
-    if (!bySource.has(src)) bySource.set(src, { sessions: 0, turns: 0, tokens: 0, cost: 0, unavailableSessions: 0 })
+    if (!bySource.has(src)) bySource.set(src, {
+      sessions: 0, turns: 0, tokens: 0, valuations: [], unavailableSessions: 0
+    })
     const srcEntry = bySource.get(src)!
     srcEntry.sessions++
     srcEntry.turns += session.turnCount
     if (billingTokens === null) srcEntry.unavailableSessions++
     else srcEntry.tokens += billingTokens
-    srcEntry.cost += audit.estimatedCost.value.totalCost
+    if (!excludedFromRollups) srcEntry.valuations.push(audit.valuation.value)
 
     byType[audit.sessionType]++
 
@@ -142,10 +155,10 @@ export async function generateInsightsReport(
     }
 
     for (const m of audit.modelUsage) {
-      if (!modelAgg.has(m.model)) modelAgg.set(m.model, { turns: 0, cost: 0 })
+      if (!modelAgg.has(m.model)) modelAgg.set(m.model, { turns: 0, valuations: [] })
       const me = modelAgg.get(m.model)!
       me.turns += m.turns
-      me.cost += m.estimatedCost
+      if (!excludedFromRollups) me.valuations.push(m.valuation)
     }
 
     totalAntiPatterns += audit.antiPatterns.length
@@ -157,7 +170,7 @@ export async function generateInsightsReport(
       totalTokens += billingTokens
     }
     totalTurns += session.turnCount
-    totalCost += audit.estimatedCost.value.totalCost
+    if (!excludedFromRollups) valuations.push(audit.valuation.value)
 
     if (audit.visibleFrameworkMarkers.value.estimatedMarkerTokens > 0) {
       const markerTokens = audit.visibleFrameworkMarkers.value.estimatedMarkerTokens
@@ -193,8 +206,21 @@ export async function generateInsightsReport(
   if (avgHealth < 50) findings.push(`Average health score ${avgHealth.toFixed(0)}/100 — significant quality issues across sessions`)
   if (totalInterruptions > analyzed.length * 0.5) findings.push(`${totalInterruptions} interruptions across ${analyzed.length} sessions — frequent workflow breaks`)
   if (reCount > 0 && reSum / reCount < 3) findings.push(`Average Read:Edit ratio ${(reSum / reCount).toFixed(1)} — tendency to edit before thoroughly reading`)
-  const topSrc = [...bySource.entries()].sort((a, b) => b[1].cost - a[1].cost)
-  if (topSrc.length > 1) findings.push(`Highest cost source: ${topSrc[0][0]} ($${topSrc[0][1].cost.toFixed(2)}) across ${topSrc[0][1].sessions} sessions`)
+  const sourceRows = [...bySource.entries()].map(([source, data]) => ({
+    source,
+    sessions: data.sessions,
+    turns: data.turns,
+    tokens: data.tokens,
+    unavailableSessions: data.unavailableSessions,
+    valuation: aggregateValuations(data.valuations)
+  }))
+  const topSrc = [...sourceRows].sort((a, b) => (b.valuation.usd || 0) - (a.valuation.usd || 0))
+  if (topSrc.length > 1 && topSrc[0].valuation.usd !== undefined) {
+    findings.push(
+      `Highest API equivalent (estimate) source: ${topSrc[0].source} ($${topSrc[0].valuation.usd.toFixed(2)}, ` +
+      `${topSrc[0].valuation.coveragePercent.toFixed(1)}% covered) across ${topSrc[0].sessions} sessions`
+    )
+  }
 
   const activeDays = daily.size
   const totalHours = eligible.reduce((a, s) => a + (s.estimatedTime || 0), 0) / 3600000
@@ -209,10 +235,10 @@ export async function generateInsightsReport(
     totalTurns,
     totalTokens,
     tokenAvailability: { availableSessions: availableTokenSessions, unavailableSessions: unavailableTokenSessions },
-    totalEstimatedCost: totalCost,
+    valuation: aggregateValuations(valuations),
     activeDays,
     totalActiveHours: Math.round(totalHours),
-    bySource: [...bySource.entries()].map(([source, d]) => ({ source, ...d })).sort((a, b) => b.sessions - a.sessions),
+    bySource: sourceRows.sort((a, b) => b.sessions - a.sessions),
     bySessionType: byType,
     healthDistribution: { ...health, avgScore: avgHealth },
     topTools: [...toolAgg.entries()]
@@ -220,7 +246,11 @@ export async function generateInsightsReport(
       .sort((a, b) => b.count - a.count)
       .slice(0, 15),
     topModels: [...modelAgg.entries()]
-      .map(([model, d]) => ({ model, ...d }))
+      .map(([model, data]) => ({
+        model,
+        turns: data.turns,
+        valuation: aggregateValuations(data.valuations)
+      }))
       .sort((a, b) => b.turns - a.turns),
     visibleFrameworkMarkers: {
       avgEstimatedTokens: markerCount > 0 ? markerTotal / markerCount : 0,
@@ -239,7 +269,7 @@ export async function generateInsightsReport(
 
 export function renderInsightsHtml(report: InsightsReport): string {
   const srcRows = report.bySource.map(s =>
-    `<tr><td>${s.source}</td><td>${s.sessions}</td><td>${s.turns.toLocaleString()}</td><td>${Math.round(s.tokens / 1000).toLocaleString()}k</td><td>$${s.cost.toFixed(2)}</td></tr>`
+    `<tr><td>${s.source}</td><td>${s.sessions}</td><td>${s.turns.toLocaleString()}</td><td>${Math.round(s.tokens / 1000).toLocaleString()}k</td><td>${s.valuation.usd === undefined ? 'unpriced' : `$${s.valuation.usd.toFixed(2)} (${s.valuation.coveragePercent.toFixed(1)}%)`}</td></tr>`
   ).join('')
 
   const toolRows = report.topTools.slice(0, 10).map(t =>
@@ -247,7 +277,7 @@ export function renderInsightsHtml(report: InsightsReport): string {
   ).join('')
 
   const modelRows = report.topModels.map(m =>
-    `<tr><td>${m.model}</td><td>${m.turns.toLocaleString()}</td><td>$${m.cost.toFixed(2)}</td></tr>`
+    `<tr><td>${m.model}</td><td>${m.turns.toLocaleString()}</td><td>${m.valuation.usd === undefined ? 'unpriced' : `$${m.valuation.usd.toFixed(2)} (${m.valuation.coveragePercent.toFixed(1)}%)`}</td></tr>`
   ).join('')
 
   const healthBar = (label: string, count: number, color: string) =>
@@ -297,7 +327,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);text-
 <div class="stat"><div class="stat-value">${report.totalSessions}</div><div class="stat-label">Sessions</div></div>
 <div class="stat"><div class="stat-value">${report.totalTurns.toLocaleString()}</div><div class="stat-label">Turns</div></div>
 <div class="stat"><div class="stat-value">${Math.round(report.totalTokens / 1000).toLocaleString()}k</div><div class="stat-label">Processed Tokens</div></div>
-<div class="stat"><div class="stat-value">$${report.totalEstimatedCost.toFixed(0)}</div><div class="stat-label">Est. Cost</div></div>
+<div class="stat"><div class="stat-value">${report.valuation.usd === undefined ? 'unpriced' : `$${report.valuation.usd.toFixed(2)}`}</div><div class="stat-label">API 等价值(估算) · ${report.valuation.coveragePercent.toFixed(1)}% covered</div></div>
 <div class="stat"><div class="stat-value">${report.activeDays}</div><div class="stat-label">Active Days</div></div>
 <div class="stat"><div class="stat-value">${report.totalActiveHours}h</div><div class="stat-label">Active Time</div></div>
 </div>
@@ -312,7 +342,7 @@ ${healthBar('Poor', report.healthDistribution.poor, '#f85149')}
 <p style="font-size:12px;color:var(--dim)">Average health score: <strong style="color:var(--fg)">${report.healthDistribution.avgScore.toFixed(0)}/100</strong> · Read:Edit avg: ${report.readEditRatio.avg.toFixed(1)} · Visible marker estimate avg: ${Math.round(report.visibleFrameworkMarkers.avgEstimatedTokens).toLocaleString()} tokens (not API context overhead)</p>
 
 <h2>By Source</h2>
-<table><tr><th>Source</th><th>Sessions</th><th>Turns</th><th>Tokens</th><th>Cost</th></tr>${srcRows}</table>
+<table><tr><th>Source</th><th>Sessions</th><th>Turns</th><th>Tokens</th><th>API equivalent (estimate) / coverage</th></tr>${srcRows}</table>
 
 <h2>Session Types</h2>
 <p style="font-size:13px">Coding: <strong>${report.bySessionType.coding}</strong> · Research: <strong>${report.bySessionType.research}</strong> · Debugging: <strong>${report.bySessionType.debugging}</strong> · Discussion: <strong>${report.bySessionType.discussion}</strong> · Mixed: <strong>${report.bySessionType.mixed}</strong></p>
@@ -321,7 +351,7 @@ ${healthBar('Poor', report.healthDistribution.poor, '#f85149')}
 <table><tr><th>Tool</th><th>Uses</th><th>Error Rate</th></tr>${toolRows}</table>
 
 <h2>Models</h2>
-<table><tr><th>Model</th><th>Turns</th><th>Cost</th></tr>${modelRows}</table>
+<table><tr><th>Model</th><th>Turns</th><th>API equivalent (estimate) / coverage</th></tr>${modelRows}</table>
 
 <h2>Signals</h2>
 <div class="stats" style="grid-template-columns:repeat(3,1fr)">

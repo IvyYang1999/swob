@@ -215,6 +215,23 @@ function sourceFilePathsForMeta(session: SessionSummary): string[] {
   return candidates.filter(isOriginalSessionSourcePath)
 }
 
+function isFileBackedBackupSource(filePath: string): boolean {
+  const source = detectSessionSourceFromPath(filePath)
+  return source !== 'opencode' && source !== 'zcode'
+}
+
+/** Source files that syncBackup physically writes into backup.jsonl. */
+export function sessionBackupSourcePaths(
+  session: Pick<SessionSummary, 'filePath' | 'allFilePaths'>
+): string[] {
+  const candidates = session.allFilePaths && session.allFilePaths.length > 0
+    ? session.allFilePaths
+    : [session.filePath]
+  return candidates.filter((filePath) =>
+    isOriginalSessionSourcePath(filePath) && isFileBackedBackupSource(filePath)
+  )
+}
+
 export function loadAppConfig(): AppConfig {
   return readAppConfigStrict().config
 }
@@ -1782,8 +1799,7 @@ export async function syncBackup(sessionId: string): Promise<void> {
   const backupPath = path.join(dirPath, BACKUP_FILE)
 
   const sourcePaths = (sourceFilePathsFromMeta(meta) || []).filter((src) => {
-    const source = detectSessionSourceFromPath(src)
-    return source !== 'opencode' && source !== 'zcode' && fs.existsSync(src)
+    return isFileBackedBackupSource(src) && fs.existsSync(src)
   })
   if (sourcePaths.length === 0) return
 

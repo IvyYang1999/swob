@@ -111,6 +111,7 @@ import { requestSmartOrganization } from './smart-organizer'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
 import { toRendererSessionDetail } from './renderer-session-detail'
 import { assertPathWithinAllowedRoots, resolvePathWithinRoot } from './path-containment'
+import { onboardingBackupSizeEstimator } from './onboarding-backup-size'
 import {
   getLlmSettingsForDisplay,
   getLlmSettingsWithSecret,
@@ -242,6 +243,7 @@ function startActiveSessionPoller(): void {
 let cachedSessions: SessionSummary[] = []
 
 const approvedLibraryRoots = new Set<string>()
+let onboardingEstimateTargetPath: string | null = null
 
 function safeProjectRoots(): string[] {
   const home = path.resolve(runtimeHome())
@@ -2278,7 +2280,9 @@ ipcMain.handle('library:selectDirectory', async () => {
     buttonLabel: '选择此文件夹'
   })
   if (result.canceled || result.filePaths.length === 0) return null
-  return approveLibraryRoot(result.filePaths[0])
+  const approved = approveLibraryRoot(result.filePaths[0])
+  onboardingEstimateTargetPath = approved
+  return approved
 })
 
 async function activateLibraryAt(newPath: string): Promise<string> {
@@ -2360,11 +2364,23 @@ ipcMain.handle('vault:selectMigrationTarget', async () => {
 // --- First-run onboarding ---
 
 ipcMain.handle('onboarding:getState', () => {
+  onboardingEstimateTargetPath ||= getDefaultLibraryRoot()
   return {
     needed: isOnboardingNeeded(),
     defaultPath: getDefaultLibraryRoot(),
     excludedSources: getExcludedSources()
   }
+})
+
+ipcMain.handle('onboarding:estimateBackupSize', (_event, excludedSources: string[]) => {
+  const excluded = Array.isArray(excludedSources)
+    ? excludedSources.filter((item) => typeof item === 'string')
+    : []
+  return onboardingBackupSizeEstimator.estimate({
+    sessions: cachedSessions,
+    excludedSources: excluded,
+    targetPath: onboardingEstimateTargetPath || getDefaultLibraryRoot()
+  })
 })
 
 ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, excludedSources: string[]) => {
@@ -2379,6 +2395,14 @@ ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, exclud
     targetPath = assertApprovedLibraryRoot(requested)
   }
   const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
+  // Active transcripts may have grown while the user was reading onboarding.
+  // Force the same estimator used by the preview to refresh at the commit boundary.
+  onboardingBackupSizeEstimator.estimate({
+    sessions: cachedSessions,
+    excludedSources: excluded,
+    targetPath,
+    forceRefresh: true
+  })
   completeOnboarding(targetPath, excluded)
   cachedSessions = filterExcludedSources(cachedSessions)
   const root = await activateLibraryAt(targetPath)

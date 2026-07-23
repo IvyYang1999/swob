@@ -58,6 +58,25 @@ export function writeUpdateMetadata(options) {
   return { ...metadata, output }
 }
 
+export function assertUpdateMetadata(options) {
+  const input = options.input
+    ? path.resolve(options.input)
+    : path.join(options.releaseDir, `${options.channel}-mac.yml`)
+  const actual = fs.readFileSync(input, 'utf8')
+  const releaseDateMatch = actual.match(/^releaseDate: '([^'\\r\\n]+)'$/m)
+  if (!releaseDateMatch) throw new Error(`Update metadata has no valid releaseDate: ${input}`)
+  const expected = buildUpdateMetadata({
+    releaseDir: options.releaseDir,
+    version: options.version,
+    channel: options.channel,
+    releaseDate: releaseDateMatch[1]
+  })
+  if (actual !== expected.content) {
+    throw new Error(`Update metadata does not match the verified ZIP inventory: ${input}`)
+  }
+  return { ...expected, input }
+}
+
 function readOption(name, fallback = null) {
   const index = process.argv.indexOf(name)
   return index === -1 ? fallback : process.argv[index + 1]
@@ -68,6 +87,16 @@ async function main() {
   const version = readOption('--version')
   const channel = readOption('--channel', 'swob-signed')
   const output = readOption('--output')
+  if (process.argv.includes('--verify')) {
+    const result = assertUpdateMetadata({
+      releaseDir,
+      version,
+      channel,
+      input: readOption('--input')
+    })
+    process.stdout.write(`Verified ${result.input} against ${result.files.length} signed update ZIPs\n`)
+    return
+  }
   const result = writeUpdateMetadata({ releaseDir, version, channel, output })
   process.stdout.write(`Generated ${result.output} from ${result.files.length} signed update ZIPs\n`)
 }

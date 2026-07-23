@@ -40,8 +40,9 @@ test('Token Insights 在真实 Electron 窗口展示统一口径与 unavailable'
     element.scrollLeft = element.scrollWidth
     return { before, after: element.scrollLeft, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }
   })
-  expect(horizontalScroll.scrollWidth).toBeGreaterThan(horizontalScroll.clientWidth)
-  expect(horizontalScroll.after).toBeGreaterThan(horizontalScroll.before)
+  expect(await heatmapScroller.locator('[data-heatmap-day]').count()).toBe(7)
+  expect(horizontalScroll.scrollWidth).toBeLessThanOrEqual(horizontalScroll.clientWidth + 1)
+  expect(horizontalScroll.after).toBe(horizontalScroll.before)
   const bySource = page.getByText(/按来源|By Source/)
   await bySource.scrollIntoViewIfNeeded()
   await expect(bySource).toBeVisible()

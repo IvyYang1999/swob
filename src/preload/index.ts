@@ -194,6 +194,7 @@ const api = {
 
   // Lineage
   getLineageRegistry: () => ipcRenderer.invoke('lineage:getRegistry'),
+  getSessionSuccessor: (sessionId: string) => ipcRenderer.invoke('sessions:getSuccessor', sessionId),
 
   // Claude Code Settings
   getCleanupDays: () => ipcRenderer.invoke('claude:getCleanupDays'),

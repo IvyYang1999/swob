@@ -203,6 +203,11 @@ export interface QueryBundle {
   model: InsightsQueryResult | null
   project: InsightsQueryResult | null
   session: InsightsQueryResult | null
+  filterOptions?: {
+    sources: string[]
+    models: string[]
+    projects: Array<{ kind: 'project' | 'folder'; key: string; label: string }>
+  }
 }
 
 interface SessionLookupItem {
@@ -398,8 +403,9 @@ export function extractFilterOptions(bundle: QueryBundle): {
   models: string[]
   projects: Array<{ kind: 'project' | 'folder'; key: string; label: string }>
 } {
-  const sources = (bundle.source?.items ?? []).map((a) => a.key)
-  const models = (bundle.model?.items ?? []).map((a) => a.key)
+  if (bundle.filterOptions) return bundle.filterOptions
+  const sources = [...new Set((bundle.source?.items ?? []).map((a) => a.key))]
+  const models = [...new Set((bundle.model?.items ?? []).map((a) => a.key))]
   const projects = (bundle.project?.items ?? []).map((a) => ({
     kind: 'project' as const,
     key: a.key,

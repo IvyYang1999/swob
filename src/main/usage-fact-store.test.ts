@@ -202,6 +202,30 @@ describe('UsageFact + AnalysisScope', () => {
     expect(first.results.model.items[0]).toMatchObject({ key: 'model-a', processedTokens: 15 })
   })
 
+  it('keeps filter choices from the unfiltered range when the selected filter returns no rows', () => {
+    const alpha = makeSession('filter-alpha', '/repo/alpha', [
+      usageEvent('filter-alpha-event', localTimestamp(2026, 7, 20, 12), components(10, 5), { model: 'model-a' })
+    ])
+    const beta = makeSession('filter-beta', '/repo/beta', [
+      usageEvent('filter-beta-event', localTimestamp(2026, 7, 20, 13), components(20, 5), { model: 'model-b' })
+    ], { source: 'codex' })
+    synchronizeUsageFacts([alpha, beta], [folder('work', ['filter-alpha'])])
+
+    const bundle = queryInsightsBundle(scope({
+      sources: ['source-with-no-results'],
+      projectOrFolder: { kind: 'project', key: '/repo/missing' }
+    }))
+
+    expect(bundle.results.global.total.processedTokens).toBe(0)
+    expect(bundle.filterOptions.sources.sort()).toEqual(['claude-code', 'codex'])
+    expect(bundle.filterOptions.models.sort()).toEqual(['model-a', 'model-b'])
+    expect(bundle.filterOptions.projects).toEqual(expect.arrayContaining([
+      { kind: 'project', key: '/repo/alpha', label: '/repo/alpha' },
+      { kind: 'project', key: '/repo/beta', label: '/repo/beta' },
+      { kind: 'folder', key: 'work', label: 'work' }
+    ]))
+  })
+
   it('invalidates the bundle cache for distinct snapshots committed in the same millisecond', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-23T00:00:00.000Z'))

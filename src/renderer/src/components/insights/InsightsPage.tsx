@@ -78,6 +78,7 @@ export function InsightsPage() {
         model: response.results.model,
         project: response.results.project,
         session: response.results.session,
+        filterOptions: response.filterOptions,
       })
     }).catch(() => {
       if (!cancelled) setQueryError(true)
@@ -201,7 +202,7 @@ export function InsightsPage() {
           <DashboardPageWidgets
             layout={dashboardLayout}
             page={activeTab}
-            context={{ data, previousPeriod, projectData, projectViewMode, zh, openDrilldown }}
+            context={{ data, previousPeriod, projectData, projectViewMode, scope, zh, openDrilldown }}
           />
         )}
       </div>

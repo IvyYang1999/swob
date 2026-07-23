@@ -12,6 +12,11 @@ on:
         required: true
         default: /Applications/Swob.app
         type: string
+      expected_base_version:
+        description: Exact installed version that must receive the candidate update
+        required: true
+        default: 1.3.0
+        type: string
       confirmation:
         description: Type PROMOTE_SWOB_SIGNED to allow metadata promotion after E2E
         required: true
@@ -46,6 +51,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           BASE_APP_PATH: ${{ inputs.base_app_path }}
+          EXPECTED_BASE_VERSION: ${{ inputs.expected_base_version }}
           CONFIRMATION: ${{ inputs.confirmation }}
         shell: bash
         run: |
@@ -64,13 +70,21 @@ jobs:
             --minimum 1.3.0 \
             --stable
           version="${CANDIDATE_TAG#v}"
+          actual_base_version="$(plutil -extract CFBundleShortVersionString raw "$BASE_APP_PATH/Contents/Info.plist")"
+          if [[ "$actual_base_version" != "$EXPECTED_BASE_VERSION" ]]; then
+            echo "Canary base version is $actual_base_version; expected $EXPECTED_BASE_VERSION." >&2
+            exit 1
+          fi
 
           promotion_dir="$(mktemp -d /private/tmp/swob-update-promotion.XXXXXX)"
           stable_uploaded=0
+          canary_removed=0
           cleanup() {
-            gh release delete-asset "$CANDIDATE_TAG" swob-canary-mac.yml --yes > /dev/null 2>&1 || true
             if [[ $stable_uploaded -eq 1 ]]; then
               gh release delete-asset "$CANDIDATE_TAG" swob-signed-mac.yml --yes > /dev/null 2>&1 || true
+            fi
+            if [[ $canary_removed -eq 1 && -f "$promotion_dir/swob-canary-mac.yml" ]]; then
+              gh release upload "$CANDIDATE_TAG" "$promotion_dir/swob-canary-mac.yml" --clobber > /dev/null 2>&1 || true
             fi
             rm -rf "$promotion_dir"
           }
@@ -91,11 +105,10 @@ jobs:
             --version "$version" \
             --channel swob-signed
           node scripts/release/generate-update-metadata.mjs \
+            --verify \
             --dir "$promotion_dir" \
             --version "$version" \
             --channel swob-canary
-
-          gh release upload "$CANDIDATE_TAG" "$promotion_dir/swob-canary-mac.yml"
 
           scripts/release/run-macos-update-e2e.sh \
             "$BASE_APP_PATH" \
@@ -108,6 +121,7 @@ jobs:
           # leave stable metadata behind if the shell exits before the next line.
           stable_uploaded=1
           gh release upload "$CANDIDATE_TAG" "$promotion_dir/swob-signed-mac.yml"
+          canary_removed=1
           gh release delete-asset "$CANDIDATE_TAG" swob-canary-mac.yml --yes
 
           gh release view "$CANDIDATE_TAG" --json assets > "$promotion_dir/assets-after.json"
@@ -119,6 +133,7 @@ jobs:
             --promoted
 
           stable_uploaded=0
+          canary_removed=0
           trap - EXIT
           rm -rf "$promotion_dir"
 

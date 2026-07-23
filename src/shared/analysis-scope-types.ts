@@ -87,6 +87,11 @@ export interface InsightsQueryBundleResult {
   schemaVersion: number
   usageRevision: string
   scope: AnalysisScope
+  filterOptions: {
+    sources: string[]
+    models: string[]
+    projects: Array<{ kind: 'project' | 'folder'; key: string; label: string }>
+  }
   results: Record<DashboardAnalysisDimension, InsightsQueryResult>
 }
 

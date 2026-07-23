@@ -1,7 +1,9 @@
 import { useMemo } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import type { AnalysisScope } from '../../../../shared/analysis-scope-types'
 import type { ByDate } from './shared'
 import { formatTokenCount } from './shared'
+import { filterDaysToAnalysisRange } from './insights-range'
 
 interface CustomTooltipProps {
   active?: boolean
@@ -23,16 +25,16 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   )
 }
 
-export function DailyTrend({ data }: { data: ByDate[] }) {
-  const last30 = useMemo(() => data.slice(-30), [data])
+export function DailyTrend({ data, range }: { data: ByDate[]; range: AnalysisScope['range'] }) {
+  const visibleData = useMemo(() => filterDaysToAnalysisRange(data, range), [data, range])
 
   const chartData = useMemo(() =>
-    last30.map((d) => ({
+    visibleData.map((d) => ({
       date: d.date.slice(5),
       inputTokens: d.inputTokens,
       outputTokens: d.outputTokens,
     })),
-    [last30]
+    [visibleData]
   )
 
   if (chartData.length === 0) return null

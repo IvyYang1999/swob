@@ -6,8 +6,18 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { assertReleaseRef, assertReleaseVersion, assertUpgradePath, compareSemver } from './assert-release-version.mjs'
-import { assertBuildAssets, assertExactNames, assertRemoteAssets, expectedPublishedAssets } from './assert-release-assets.mjs'
-import { buildUpdateMetadata } from './generate-update-metadata.mjs'
+import {
+  assertBuildAssets,
+  assertExactNames,
+  assertRemoteAssets,
+  expectedCandidateAssets,
+  expectedPublishedAssets
+} from './assert-release-assets.mjs'
+import {
+  assertUpdateMetadata,
+  buildUpdateMetadata,
+  writeUpdateMetadata
+} from './generate-update-metadata.mjs'
 
 const temporaryDirectories = []
 const releaseScriptsDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -190,6 +200,29 @@ describe('promotion metadata', () => {
     expect(metadata.content).toContain('swob-1.3.1-x64.zip')
     expect(metadata.content).not.toContain('latest-mac.yml')
   })
+
+  it('fails closed when candidate metadata no longer matches either ZIP', () => {
+    const releaseDir = createReleaseFixture()
+    const metadata = writeUpdateMetadata({
+      releaseDir,
+      version: '1.3.1',
+      channel: 'swob-canary',
+      releaseDate: '2026-07-23T00:00:00.000Z'
+    })
+    expect(() => assertUpdateMetadata({
+      releaseDir,
+      version: '1.3.1',
+      channel: 'swob-canary'
+    })).not.toThrow()
+
+    fs.writeFileSync(path.join(releaseDir, 'swob-1.3.1-x64.zip'), 'tampered payload')
+    expect(() => assertUpdateMetadata({
+      releaseDir,
+      version: '1.3.1',
+      channel: 'swob-canary',
+      input: metadata.output
+    })).toThrow(/does not match the verified ZIP inventory/)
+  })
 })
 
 describe('release asset gate', () => {
@@ -208,7 +241,7 @@ describe('release asset gate', () => {
   })
 
   it('fails closed when a published asset is missing or metadata leaks into the release', () => {
-    const expected = expectedPublishedAssets('1.3.1')
+    const expected = expectedCandidateAssets('1.3.1')
     expect(() => assertExactNames(expected.slice(1), expected, 'remote')).toThrow(/missing=/)
     expect(() => assertExactNames([...expected, 'swob-signed-mac.yml'], expected, 'remote'))
       .toThrow(/unexpected=/)
@@ -245,7 +278,13 @@ describe('release asset gate', () => {
 
   it('binds every published asset to the locally verified size and sha256 digest', () => {
     const releaseDir = createReleaseFixture()
-    const names = expectedPublishedAssets('1.3.1')
+    writeUpdateMetadata({
+      releaseDir,
+      version: '1.3.1',
+      channel: 'swob-canary',
+      releaseDate: '2026-07-23T00:00:00.000Z'
+    })
+    const names = expectedCandidateAssets('1.3.1')
     const inventory = {
       assets: names.map((name) => {
         const contents = fs.readFileSync(path.join(releaseDir, name))
@@ -295,6 +334,17 @@ describe('shared macOS artifact verifier contract', () => {
     expect(smokeWorkflow).toContain('npm run check')
     expect(releaseWorkflow).toContain('scripts/release/verify-macos-artifacts.sh')
     expect(releaseWorkflow).toContain('--bind-ref origin/master')
+    expect(releaseWorkflow).toContain('--channel swob-canary')
+    expect(releaseWorkflow).toContain('release_assets+=("dist/swob-canary-mac.yml")')
+    expect(releaseWorkflow).not.toContain('release_assets+=("dist/swob-signed-mac.yml")')
+    const promotionWorkflow = fs.readFileSync(
+      path.join(repositoryRoot, '.github/workflows/promote-macos-update.yml'),
+      'utf8'
+    )
+    expect(promotionWorkflow).toContain('--verify')
+    expect(promotionWorkflow).not.toMatch(
+      /^\s*gh release upload "\$CANDIDATE_TAG" "\$promotion_dir\/swob-canary-mac\.yml"\s*$/m
+    )
     expect(smokeWorkflow).toContain('scripts/release/verify-macos-artifacts.sh')
     expect(smokeWorkflow).not.toContain('codesign --verify')
     for (const workflow of [releaseWorkflow, smokeWorkflow]) {
@@ -309,6 +359,7 @@ describe('shared macOS artifact verifier contract', () => {
     expect(artifactVerifier).toContain('verify_app "$dmg_app"')
     expect(appVerifier).toContain('scripts/check-package.mjs')
     expect(builderConfig).toMatch(/dmg:\s+[\s\S]*writeUpdateInfo: false/)
+    expect(builderConfig).toContain('publishAutoUpdate: false')
   })
 
   if (process.platform === 'darwin') {

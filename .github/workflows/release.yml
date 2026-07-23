@@ -136,7 +136,23 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           scripts/release/verify-macos-artifacts.sh dist "$version" swob-signed ZPTA4LP594
 
-      - name: Publish immutable installers without update metadata
+      - name: Generate immutable canary metadata without exposing the stable channel
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$version" != '1.3.0' ]]; then
+            node scripts/release/generate-update-metadata.mjs \
+              --dir dist \
+              --version "$version" \
+              --channel swob-canary
+            node scripts/release/generate-update-metadata.mjs \
+              --verify \
+              --dir dist \
+              --version "$version" \
+              --channel swob-canary
+          fi
+
+      - name: Publish immutable installers and canary candidate metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -174,6 +190,9 @@ jobs:
             "dist/swob-${version}-x64.zip"
             "dist/swob-${version}-x64.zip.blockmap"
           )
+          if [[ "$version" != '1.3.0' ]]; then
+            release_assets+=("dist/swob-canary-mac.yml")
+          fi
           gh release create "$tag" \
             --draft \
             --verify-tag \
@@ -198,6 +217,7 @@ jobs:
             echo "- Version: ${version}"
             echo '- Developer ID, Team ID, Gatekeeper and stapled tickets verified'
             echo '- arm64/x64 DMG, ZIP and blockmap names, sizes and SHA-256 digests verified remotely'
-            echo '- No update metadata or DMG blockmap was generated or uploaded'
+            echo '- Canary metadata was bound to both ZIPs; stable update metadata remains absent'
+            echo '- No DMG blockmap was generated or uploaded'
             echo '- Release stayed draft until the remote digest gate passed'
           } >> "$GITHUB_STEP_SUMMARY"

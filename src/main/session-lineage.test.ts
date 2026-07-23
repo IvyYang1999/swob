@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildSessionLineageRegistryFromClaudeFiles,
   getSessionLineagePath,
+  resolveSessionSuccessor,
   writeSessionLineageRegistry
 } from './session-lineage'
 
@@ -53,6 +54,36 @@ function message(
 }
 
 describe('session-lineage', () => {
+  it('【逻辑线程】successor 只读取 continuation alias，fork 和未知会话均不跳转', () => {
+    const registry = {
+      version: 1 as const,
+      generatedAt: '2026-07-23T00:00:00.000Z',
+      libraryRoot: '/tmp/library',
+      aliases: { old: 'latest' },
+      latestByRoot: { old: 'latest', fork: 'fork' },
+      sessions: {
+        old: {
+          sessionId: 'old', rootSessionId: 'old', latestResumeId: 'latest', isAlias: true,
+          source: 'claude-code' as const, createdAt: '', updatedAt: ''
+        },
+        latest: {
+          sessionId: 'latest', rootSessionId: 'old', latestResumeId: 'latest', isAlias: false,
+          source: 'claude-code' as const, createdAt: '', updatedAt: ''
+        }
+      },
+      relations: [
+        { parent: 'old', child: 'latest', type: 'continuation' as const, pointUuid: 'u1', pointTs: '' },
+        { parent: 'old', child: 'fork', type: 'fork' as const, pointUuid: 'u2', pointTs: '' }
+      ],
+      ambiguous: []
+    }
+
+    expect(resolveSessionSuccessor(registry, 'old')).toBe('latest')
+    expect(resolveSessionSuccessor(registry, 'latest')).toBeNull()
+    expect(resolveSessionSuccessor(registry, 'fork')).toBeNull()
+    expect(resolveSessionSuccessor(registry, 'same-title-but-unrelated')).toBeNull()
+  })
+
   it('【血统】有共享 uuid 与 parentUuid 续链时把旧 id 指向新 id', async () => {
     const root = makeTmpRoot()
     const oldId = '99999999-1111-4111-8111-111111111111'

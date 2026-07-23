@@ -1108,6 +1108,30 @@ export function queryInsightsBundle(rawScope: AnalysisScope): InsightsQueryBundl
       unknownTimeEvents: unknownTimeEvents(db, scope),
       lastIndexedAt: meta.last_indexed_at
     }
+    // Discover choices without categorical filters. Retaining the selected
+    // date range and token basis keeps the list relevant while ensuring an
+    // empty result can never erase the controls needed to clear the filter.
+    const optionScope: AnalysisScope = {
+      range: scope.range,
+      metricBasis: scope.metricBasis
+    }
+    const optionRange = resolveAnalysisRange(optionScope)
+    const filterOptions = {
+      sources: aggregateRows(db, optionScope, optionRange, 'source').map((item) => item.key),
+      models: aggregateRows(db, optionScope, optionRange, 'model').map((item) => item.key),
+      projects: [
+        ...aggregateRows(db, optionScope, optionRange, 'project').map((item) => ({
+          kind: 'project' as const,
+          key: item.key,
+          label: item.label
+        })),
+        ...aggregateRows(db, optionScope, optionRange, 'folder').map((item) => ({
+          kind: 'folder' as const,
+          key: item.key,
+          label: item.label
+        }))
+      ]
+    }
     const results = {} as Record<DashboardAnalysisDimension, InsightsQueryResult>
     for (const dimension of DASHBOARD_DIMENSIONS) {
       const items = dimension === 'global'
@@ -1130,6 +1154,7 @@ export function queryInsightsBundle(rawScope: AnalysisScope): InsightsQueryBundl
       schemaVersion: USAGE_FACT_SCHEMA_VERSION,
       usageRevision,
       scope,
+      filterOptions,
       results
     }
     insightsBundleCache.set(cacheKey, bundle)

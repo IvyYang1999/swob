@@ -104,6 +104,20 @@ export interface SessionLineageRegistry {
   resolutions?: LineageResolution[]
 }
 
+/**
+ * Resolve only the continuation alias surface. Fork relations and display
+ * metadata are deliberately excluded, so a similar title can never create a
+ * logical-thread jump.
+ */
+export function resolveSessionSuccessor(
+  registry: SessionLineageRegistry | null | undefined,
+  sessionId: string
+): string | null {
+  if (!registry || !sessionId) return null
+  const successor = registry.aliases[sessionId] || registry.sessions[sessionId]?.latestResumeId
+  return successor && successor !== sessionId ? successor : null
+}
+
 interface LineageRow extends RawJsonlMessage {
   __filePath: string
   __lineIndex: number

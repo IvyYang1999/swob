@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   adaptQueryBundle,
+  extractFilterOptions,
   type InsightsQueryResult,
   type QueryBundle,
   type UsageAggregate
@@ -95,5 +96,26 @@ describe('adaptQueryBundle', () => {
     })
     expect(adapted.bySession.map((session) => session.totalTokens)).toEqual([100, 50, null])
     expect(adapted.bySession[0]).toMatchObject({ projectPath: '/repo/project', source: 'claude-code' })
+  })
+})
+
+describe('extractFilterOptions', () => {
+  it('uses unfiltered bundle options even when current dimension rows are empty', () => {
+    const total = aggregate('global', 0, { covered: 0, total: 0 })
+    const bundle: QueryBundle = {
+      global: query('global', [total], total),
+      time: query('time', [], total),
+      hour: query('hour', [], total),
+      source: query('source', [], total),
+      model: query('model', [], total),
+      project: query('project', [], total),
+      session: query('session', [], total),
+      filterOptions: {
+        sources: ['codex'],
+        models: ['gpt-5'],
+        projects: [{ kind: 'project', key: '/repo', label: '/repo' }]
+      }
+    }
+    expect(extractFilterOptions(bundle)).toEqual(bundle.filterOptions)
   })
 })

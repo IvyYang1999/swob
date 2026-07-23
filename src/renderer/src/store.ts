@@ -18,6 +18,10 @@ interface SessionSummary {
   id: string
   sessionId: string
   resumeSessionId?: string
+  successor?: string
+  logicalSessionKey?: string
+  duplicate?: boolean
+  duplicatePackageCount?: number
   slug: string
   createdAt: string
   updatedAt: string

@@ -5,7 +5,7 @@ import {
   type DashboardPageId
 } from '../../../shared/registry/builtin-widgets'
 import { WidgetRegistry } from '../../../shared/registry/widget-registry'
-import type { AnalysisDimension } from '../../../shared/analysis-scope-types'
+import type { AnalysisDimension, AnalysisScope } from '../../../shared/analysis-scope-types'
 import { AuditReportTab } from '../components/insights/AuditReportTab'
 import { CardShell } from '../components/insights/CardShell'
 import { CodeChangesCard } from '../components/insights/CodeChangesCard'
@@ -32,6 +32,7 @@ export interface InsightsWidgetContext {
   previousPeriod: PreviousPeriodComparison | null
   projectData: InsightsData['byProject'] | InsightsData['byFolder']
   projectViewMode: string
+  scope: AnalysisScope
   zh: boolean
   openDrilldown: (
     dimension: AnalysisDimension,
@@ -57,13 +58,13 @@ const renderers: Record<string, WidgetRenderer> = {
       {data.tokenUnavailableSessions > 0 && ` · ${data.tokenUnavailableSessions} ${widgetT(zh, 'renderer.insights_page.sessions_unavailable')}`}
     </div>
   ),
-  'overview.token-heatmap': ({ data, zh }) => data.heatmap.length > 0 ? (
+  'overview.token-heatmap': ({ data, scope, zh }) => (
     <CardShell title={widgetT(zh, 'renderer.insights_page.card_heatmap')}>
       <div className="min-w-0">
-        <TokenHeatmap data={data.heatmap} />
+        <TokenHeatmap data={data.heatmap} range={scope.range} />
       </div>
     </CardShell>
-  ) : null,
+  ),
   'overview.by-source': ({ data, zh, openDrilldown }) => (
     <CardShell title={widgetT(zh, 'renderer.insights_page.card_source')}>
       <SourceDonut sources={data.bySource} />
@@ -118,9 +119,9 @@ const renderers: Record<string, WidgetRenderer> = {
       )}
     </CardShell>
   ),
-  'overview.daily-trend': ({ data, zh }) => (
+  'overview.daily-trend': ({ data, scope, zh }) => (
     <CardShell title={widgetT(zh, 'renderer.insights_page.card_daily_trend')}>
-      <DailyTrend data={data.byDate} />
+      <DailyTrend data={data.byDate} range={scope.range} />
     </CardShell>
   ),
   'overview.daily-timeline': ({ data, projectViewMode, zh }) => (

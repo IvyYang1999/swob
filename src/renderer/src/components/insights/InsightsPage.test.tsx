@@ -85,7 +85,13 @@ function bundle(tokens: number, scope: AnalysisScope): InsightsQueryBundleResult
       quality: { unknownTimeEvents: 0, lastIndexedAt: '2026-07-23T00:00:00.000Z' }
     }
   }
-  return { schemaVersion: 1, usageRevision: String(tokens), scope, results }
+  return {
+    schemaVersion: 1,
+    usageRevision: String(tokens),
+    scope,
+    filterOptions: { sources: [], models: [], projects: [] },
+    results
+  }
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

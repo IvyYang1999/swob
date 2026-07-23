@@ -31,9 +31,15 @@ test('五页仪表盘可达且带范围标签与口径切换', async () => {
   await page.screenshot({ path: path.join(screenshotDir, '1-overview.png') })
 
   // Basis toggle switches KPI label
-  await page.getByRole('button', { name: /仅会话|Conversation/ }).first().click()
+  await page.getByRole('button', { name: /仅主对话 Token|Main-conversation tokens/ }).first().click()
   await expect(page.getByText(/Conversation Tokens/)).toBeVisible()
-  await page.getByRole('button', { name: /计费口径|Billing/ }).first().click()
+  await page.getByRole('button', { name: /含全部来源的 Token|All-source tokens/ }).first().click()
+
+  // Heatmap range is semantic, not a fixed one-year viewport.
+  await page.getByRole('button', { name: /今日|Today/, exact: true }).click()
+  await expect(page.locator('[data-heatmap-day]')).toHaveCount(1)
+  await page.getByRole('button', { name: '7d', exact: true }).click()
+  await expect(page.locator('[data-heatmap-day]')).toHaveCount(7)
 
   // Cost & Cache
   await page.getByRole('tab', { name: /成本与缓存|Cost & Cache/ }).click()

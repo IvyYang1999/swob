@@ -295,6 +295,7 @@ interface ElectronAPI {
 
   // Lineage
   getLineageRegistry: () => Promise<any>
+  getSessionSuccessor: (sessionId: string) => Promise<string | null>
 
   // Claude Code Settings
   getCleanupDays: () => Promise<number>

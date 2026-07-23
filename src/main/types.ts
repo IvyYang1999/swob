@@ -147,6 +147,14 @@ export interface SessionSummary {
   id: string
   sessionId: string
   resumeSessionId?: string
+  /** Latest physical session reached through explicit continuation/resume evidence. */
+  successor?: string
+  /** Stable package identity used to collapse duplicate Library packages. */
+  logicalSessionKey?: string
+  /** True when more than one Library package represents this logical session. */
+  duplicate?: boolean
+  /** Number of physical Library packages represented by this visible row. */
+  duplicatePackageCount?: number
   slug: string
   createdAt: string
   updatedAt: string

@@ -81,6 +81,7 @@ import {
   completeOnboarding,
   getDefaultLibraryRoot,
   migrateLegacyDetailAvailability,
+  collapseLibrarySessionsByLogicalKey,
   applyLibraryOrganization,
   undoLastLibraryOrganization,
   recoverInterruptedLibraryOrganization,
@@ -196,8 +197,10 @@ import {
   SWOB_APP_CLI_PATH
 } from './cli-install'
 import {
+  type SessionLineageRegistry,
   getSessionLineagePath,
   rebuildSessionLineageRegistry,
+  resolveSessionSuccessor,
   writeSessionLineageRegistry
 } from './session-lineage'
 import type { Folder, Highlight, SessionSummary } from './types'
@@ -302,6 +305,9 @@ function startActiveSessionPoller(): void {
   activePoller = setInterval(() => { void pushActiveSessionIds() }, 1000)
 }
 let cachedSessions: SessionSummary[] = []
+let currentLineageRegistry: SessionLineageRegistry | null = null
+let currentLineageRegistryRoot: string | null = null
+let lineageRegistryLoadPromise: Promise<SessionLineageRegistry | null> | null = null
 
 const approvedLibraryRoots = new Set<string>()
 let onboardingEstimateTargetPath: string | null = null
@@ -916,20 +922,26 @@ function startCursorWatcher(): void {
 }
 
 function collectLibrarySessionsFromTree(tree: LibraryTree): LibrarySession[] {
-  const bySessionId = new Map<string, LibrarySession>()
-  const add = (session: LibrarySession): void => {
-    const existing = bySessionId.get(session.sessionId)
-    if (!existing || (existing.isSymlink && !session.isSymlink)) {
-      bySessionId.set(session.sessionId, session)
-    }
-  }
+  const sessions: LibrarySession[] = []
   const visit = (folder: LibraryTree['folders'][number]): void => {
-    folder.sessions.forEach(add)
+    sessions.push(...folder.sessions)
     folder.children.forEach(visit)
   }
-  tree.ungroupedSessions.forEach(add)
+  sessions.push(...tree.ungroupedSessions)
   tree.folders.forEach(visit)
-  return [...bySessionId.values()]
+  return collapseLibrarySessionsByLogicalKey(sessions)
+}
+
+function annotateDuplicatePackageEvidence(summary: SessionSummary, session: LibrarySession): void {
+  summary.logicalSessionKey = session.logicalSessionKey
+  summary.duplicate = session.duplicate === true
+  summary.duplicatePackageCount = session.duplicatePackageCount || 1
+}
+
+function annotateSessionSuccessor(summary: SessionSummary): void {
+  const successor = resolveSessionSuccessor(currentLineageRegistry, summary.sessionId)
+  if (successor) summary.successor = successor
+  else delete summary.successor
 }
 
 function mergeSessionPatch(patch: SessionSummary[]): void {
@@ -984,6 +996,10 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
   const batchSize = 20
   const librarySessions = collectLibrarySessionsFromTree(tree)
   const backupPaths = new Set(librarySessions.map((session) => session.jsonlPath))
+  const librarySessionById = new Map(librarySessions.map((session) => [session.sessionId, session]))
+  const librarySessionBySource = new Map(librarySessions.flatMap((session) =>
+    session.meta.sourceFilePaths.map((sourceFilePath) => [sourceFilePath, session] as const)
+  ))
   const yieldToMainLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
   let batch: SessionSummary[] = []
   const flush = async (): Promise<void> => {
@@ -1000,7 +1016,11 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
   for (const session of localSnapshot) {
     if (generation !== libraryHydrationGeneration) return
     if (backupPaths.has(session.filePath)) continue
-    const dirPath = getSessionDirPath(session.sessionId)
+    const librarySession = librarySessionById.get(session.sessionId) ||
+      librarySessionBySource.get(session.filePath)
+    const dirPath = librarySession?.dirPath || getSessionDirPath(session.sessionId)
+    if (librarySession) annotateDuplicatePackageEvidence(session, librarySession)
+    annotateSessionSuccessor(session)
     annotateSessionForFrontend(session, dirPath)
     if (dirPath && session.id.includes(':intra-')) {
       let branchMd: string | null | undefined = getBranchMdPath(session.id)
@@ -1033,7 +1053,9 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
         : buildSessionSummaryFromManifest(librarySession)
       if (!summary || coveredIds.has(summary.id) || coveredIds.has(summary.sessionId)) continue
       summary.allFilePaths = [backupPath]
-      annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
+      annotateDuplicatePackageEvidence(summary, librarySession)
+      annotateSessionSuccessor(summary)
+      annotateSessionForFrontend(summary, librarySession.dirPath)
       const remoteState = resolveLibrarySessionRemoteState(meta)
       summary.isRemote = remoteState.isRemote
       if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
@@ -1044,7 +1066,9 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
     } catch {
       const summary = buildSessionSummaryFromManifest(librarySession)
       if (coveredIds.has(summary.id) || coveredIds.has(summary.sessionId)) continue
-      annotateSessionForFrontend(summary, getSessionDirPath(sessionId))
+      annotateDuplicatePackageEvidence(summary, librarySession)
+      annotateSessionSuccessor(summary)
+      annotateSessionForFrontend(summary, librarySession.dirPath)
       const remoteState = resolveLibrarySessionRemoteState(meta)
       summary.isRemote = remoteState.isRemote
       if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
@@ -1331,6 +1355,46 @@ function filterExcludedSources(sessions: SessionSummary[]): SessionSummary[] {
   return sessions.filter((s) => !excludedSet.has(s.source || 'claude-code'))
 }
 
+function readSessionLineageRegistry(): SessionLineageRegistry | null {
+  const libraryRoot = getLibraryRoot()
+  const registryPath = getSessionLineagePath(libraryRoot)
+  try {
+    if (fs.existsSync(registryPath)) {
+      const registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8')) as SessionLineageRegistry
+      currentLineageRegistry = registry
+      currentLineageRegistryRoot = libraryRoot
+      return registry
+    }
+  } catch { /* a corrupt registry is rebuilt below */ }
+  currentLineageRegistry = null
+  currentLineageRegistryRoot = libraryRoot
+  return null
+}
+
+async function loadSessionLineageRegistry(): Promise<SessionLineageRegistry | null> {
+  const existing = readSessionLineageRegistry()
+  if (existing) return existing
+  if (lineageRegistryLoadPromise) return lineageRegistryLoadPromise
+  const libraryRoot = getLibraryRoot()
+  const registryPath = getSessionLineagePath(libraryRoot)
+  lineageRegistryLoadPromise = (async () => {
+    try {
+      const registry = await rebuildSessionLineageRegistry(libraryRoot)
+      currentLineageRegistry = registry
+      currentLineageRegistryRoot = libraryRoot
+      try {
+        await withLibraryMaintenanceWriter(() => writeSessionLineageRegistry(registry, registryPath))
+      } catch { /* a read-only Library still gets the in-memory evidence */ }
+      return registry
+    } catch {
+      return null
+    } finally {
+      lineageRegistryLoadPromise = null
+    }
+  })()
+  return lineageRegistryLoadPromise
+}
+
 ipcMain.handle('platform:getCapabilities', () => {
   // Playwright can exercise the Windows-only renderer state on a Mac builder;
   // production always uses the immutable native process.platform value.
@@ -1342,7 +1406,11 @@ ipcMain.handle('platform:getCapabilities', () => {
 
 ipcMain.handle('sessions:loadAll', async () => {
   try {
-  const sessions = filterExcludedSources(await loadAllSessions())
+  // Reading an existing registry is cheap. A first-run rebuild stays in the
+  // background so lineage cannot delay the first session-list paint.
+  const diskLineage = readSessionLineageRegistry()
+  const loadedSessions = await loadAllSessions()
+  const sessions = filterExcludedSources(loadedSessions)
   cachedSessions = sessions
   scheduleSearchIndexWarmup()
   void scheduleUsageFactSync()
@@ -1352,6 +1420,7 @@ ipcMain.handle('sessions:loadAll', async () => {
   // cross-device backups arrive through sessions:libraryPatch after worker scan.
   for (const s of sessions) {
     s.detailAvailability = 'ready'
+    annotateSessionSuccessor(s)
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
     for (const continuationId of s.continuationSessionIds || []) {
@@ -1370,6 +1439,18 @@ ipcMain.handle('sessions:loadAll', async () => {
   cachedSessions = sessions
 
   if (latestLibraryTree) void hydrateLibrarySessions(latestLibraryTree)
+  if (!diskLineage) {
+    void loadSessionLineageRegistry().then((registry) => {
+      if (!registry) return
+      const patch: SessionSummary[] = []
+      for (const summary of cachedSessions) {
+        const before = summary.successor
+        annotateSessionSuccessor(summary)
+        if (before !== summary.successor) patch.push(summary)
+      }
+      emitLibraryPatch(patch)
+    })
+  }
 
   // Sync library in background (non-blocking). During first-run onboarding the
   // library init waits until the user has chosen a vault location.
@@ -1723,22 +1804,15 @@ ipcMain.handle('insights:rebuildFacts', () => scheduleUsageFactSync({ rebuild: t
 // --- Lineage IPC ---
 
 ipcMain.handle('lineage:getRegistry', async () => {
-  const libraryRoot = getLibraryRoot()
-  const registryPath = getSessionLineagePath(libraryRoot)
-  try {
-    if (fs.existsSync(registryPath)) {
-      return JSON.parse(fs.readFileSync(registryPath, 'utf-8'))
-    }
-  } catch { /* fall through to rebuild */ }
-  try {
-    const registry = await rebuildSessionLineageRegistry(libraryRoot)
-    try {
-      await withLibraryMaintenanceWriter(() => writeSessionLineageRegistry(registry, registryPath))
-    } catch { /* ignore write failure */ }
-    return registry
-  } catch {
-    return null
-  }
+  return loadSessionLineageRegistry()
+})
+
+ipcMain.handle('sessions:getSuccessor', async (_event, sessionId: string) => {
+  if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 512) return null
+  const registry = currentLineageRegistryRoot === getLibraryRoot()
+    ? currentLineageRegistry || await loadSessionLineageRegistry()
+    : await loadSessionLineageRegistry()
+  return resolveSessionSuccessor(registry, sessionId)
 })
 
 // --- Claude Code Settings (cleanupPeriodDays) ---

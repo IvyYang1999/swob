@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback } from 'react'
+import type { AnalysisScope } from '../../../../shared/analysis-scope-types'
 import type { HeatmapCell } from './shared'
 import { formatTokenCount } from './shared'
+import { enumerateAnalysisDays } from './insights-range'
 
 const HEATMAP_LEVELS = [
   'bg-edge/60',
@@ -25,33 +27,38 @@ function HeatmapTooltip({ date, value, x, y }: { date: string; value: number; x:
 
 type GridCell = HeatmapCell & { key: string; pad: boolean }
 
-export function TokenHeatmap({ data }: { data: HeatmapCell[] }) {
+export function TokenHeatmap({
+  data,
+  range,
+  now
+}: {
+  data: HeatmapCell[]
+  range: AnalysisScope['range']
+  /** Deterministic clock for tests; production intentionally omits it. */
+  now?: Date
+}) {
   const [tooltip, setTooltip] = useState<{ date: string; value: number; x: number; y: number } | null>(null)
 
   // Build weeks[][day] structure — each week is a column, each day is a row
   const weeks = useMemo<GridCell[][]>(() => {
     const map = new Map(data.map((d) => [d.date, d]))
-    const today = new Date()
-
-    // Go back 364 days and snap to the previous Sunday
-    const start = new Date(today)
-    start.setDate(start.getDate() - 364)
-    const dow = start.getDay()
-    if (dow !== 0) start.setDate(start.getDate() - dow)
+    const days = enumerateAnalysisDays(range, data.map((item) => item.date), now)
+    if (days.length === 0) return []
 
     const result: GridCell[][] = []
     let week: GridCell[] = []
-    const cursor = new Date(start)
+    const firstDow = new Date(`${days[0]}T12:00:00`).getDay()
+    for (let index = 0; index < firstDow; index++) {
+      week.push({ date: '', value: 0, level: 0, key: `pad-start-${index}`, pad: true })
+    }
 
-    while (cursor <= today) {
-      if (cursor.getDay() === 0 && week.length > 0) {
+    for (const iso of days) {
+      if (week.length === 7) {
         result.push(week)
         week = []
       }
-      const iso = cursor.toISOString().slice(0, 10)
       const cell = map.get(iso) ?? { date: iso, value: 0, level: 0 as const }
       week.push({ ...cell, key: iso, pad: false })
-      cursor.setDate(cursor.getDate() + 1)
     }
     // Pad last week to 7 days so the grid is rectangular
     if (week.length > 0) {
@@ -62,18 +69,18 @@ export function TokenHeatmap({ data }: { data: HeatmapCell[] }) {
     }
 
     return result
-  }, [data])
+  }, [data, range, now])
 
   // Month labels: show at the first week of each new month
   const months = useMemo(() => {
     const labels: Array<{ label: string; col: number }> = []
     let lastMonth = -1
     for (let col = 0; col < weeks.length; col++) {
-      const sun = weeks[col][0]
-      if (!sun || sun.pad) continue
-      const m = new Date(sun.key).getMonth()
+      const firstVisible = weeks[col].find((cell) => !cell.pad)
+      if (!firstVisible) continue
+      const m = new Date(`${firstVisible.key}T12:00:00`).getMonth()
       if (m !== lastMonth) {
-        labels.push({ label: new Date(sun.key).toLocaleString('default', { month: 'short' }), col })
+        labels.push({ label: new Date(`${firstVisible.key}T12:00:00`).toLocaleString('default', { month: 'short' }), col })
         lastMonth = m
       }
     }
@@ -131,6 +138,8 @@ export function TokenHeatmap({ data }: { data: HeatmapCell[] }) {
             week.map((cell) => (
               <div
                 key={cell.key}
+                data-heatmap-day={cell.pad ? undefined : cell.date}
+                aria-label={cell.pad ? undefined : `${cell.date}: ${formatTokenCount(cell.value)} tokens`}
                 className={`rounded-[3px] ${cell.pad ? 'invisible' : HEATMAP_LEVELS[cell.level]}`}
                 style={{ width: CELL, height: CELL }}
                 onMouseEnter={!cell.pad && cell.value > 0 ? (e) => handleMouseEnter(e, cell) : undefined}

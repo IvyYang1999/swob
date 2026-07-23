@@ -115,6 +115,11 @@ export interface InsightsQueryBundleResult {
   schemaVersion: typeof USAGE_FACT_SCHEMA_VERSION
   usageRevision: string
   scope: AnalysisScope
+  filterOptions: {
+    sources: string[]
+    models: string[]
+    projects: Array<{ kind: 'project' | 'folder'; key: string; label: string }>
+  }
   results: Record<DashboardAnalysisDimension, InsightsQueryResult>
 }
 

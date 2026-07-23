@@ -22,6 +22,13 @@ export function expectedBuildAssets(version) {
   return expectedPublishedAssets(version)
 }
 
+export function expectedCandidateAssets(version) {
+  const installers = expectedPublishedAssets(version)
+  return version === '1.3.0'
+    ? installers
+    : [...installers, 'swob-canary-mac.yml'].sort()
+}
+
 export function assertExactNames(actualNames, expectedNames, label) {
   const actual = [...new Set(actualNames)].sort()
   const expected = [...new Set(expectedNames)].sort()
@@ -61,7 +68,7 @@ export function assertRemoteAssets({ inventory, releaseDir, version, channel, pr
   }
   const expectedNames = promoted
     ? [...expectedPublishedAssets(version), `${channel}-mac.yml`]
-    : expectedPublishedAssets(version)
+    : expectedCandidateAssets(version)
   assertExactNames(inventory.assets.map((asset) => asset.name), expectedNames, 'Published release asset inventory')
 
   for (const asset of inventory.assets) {
@@ -115,7 +122,7 @@ async function main() {
     }
     const expected = promoted
       ? [...expectedPublishedAssets(version), `${channel}-mac.yml`]
-      : expectedPublishedAssets(version)
+      : expectedCandidateAssets(version)
     assertExactNames(names, expected, 'Published release asset inventory')
     process.stdout.write(`Published asset gate passed: ${names.length} immutable assets\n`)
     return

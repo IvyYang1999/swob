@@ -190,6 +190,56 @@ export interface LibrarySession {
   /** Worker-scanned signature lets the main thread prime its cache without stat calls. */
   metaMtimeMs?: number
   metaSize?: number
+  /** Runtime-only duplicate evidence; never persisted into the package manifest. */
+  logicalSessionKey?: string
+  duplicate?: boolean
+  duplicatePackageCount?: number
+}
+
+/**
+ * Collapse physical packages only when their canonical LogicalSessionKey is
+ * identical. Content is never merged: the newest manifest remains visible and
+ * carries the number of packages it represents.
+ */
+export function collapseLibrarySessionsByLogicalKey(sessions: LibrarySession[]): LibrarySession[] {
+  const groups = new Map<string, LibrarySession[]>()
+  for (const session of sessions) {
+    const key = String(logicalSessionKey(buildLogicalSessionIdentityFromMeta(session.meta)))
+    const group = groups.get(key) || []
+    group.push(session)
+    groups.set(key, group)
+  }
+
+  return [...groups.entries()].map(([key, group]) => {
+    // Folder views can contain a symlink and its canonical target. They are
+    // two navigation entries, not two packages, so count immutable packageId
+    // (or real path for legacy manifests) before declaring a duplicate.
+    const physicalPackages = new Map<string, LibrarySession>()
+    for (const session of group) {
+      let physicalPath = path.resolve(session.dirPath)
+      try { physicalPath = fs.realpathSync.native(session.dirPath) } catch { /* unresolved legacy path */ }
+      const physicalKey = session.meta.packageId
+        ? `package:${session.meta.packageId}`
+        : `path:${physicalPath}`
+      const existing = physicalPackages.get(physicalKey)
+      if (!existing || (existing.isSymlink && !session.isSymlink)) {
+        physicalPackages.set(physicalKey, session)
+      }
+    }
+    const packages = [...physicalPackages.values()]
+    const sorted = packages.sort((left, right) =>
+      right.meta.updatedAt.localeCompare(left.meta.updatedAt) ||
+      Number(left.isSymlink) - Number(right.isSymlink) ||
+      right.dirPath.localeCompare(left.dirPath)
+    )
+    const winner = sorted[0]
+    return {
+      ...winner,
+      logicalSessionKey: key,
+      duplicate: packages.length > 1,
+      duplicatePackageCount: packages.length
+    }
+  })
 }
 
 export interface LibraryFolder {

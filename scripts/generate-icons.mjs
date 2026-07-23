@@ -9,7 +9,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const sourcePath = path.join(repoRoot, 'build/brand/swob-logo-session-galaxy.png')
 const checkOnly = process.argv.includes('--check')
 const masterSize = 1024
-const visibleSize = 820 // Apple-style 10% optical margin on every side.
 
 const iconsetEntries = [
   ['icon_16x16.png', 16],
@@ -34,17 +33,32 @@ async function assertSource() {
   const metadata = await sharp(sourcePath).metadata()
   if (
     metadata.format !== 'png' ||
-    metadata.width !== metadata.height ||
-    (metadata.width ?? 0) < masterSize ||
+    metadata.width !== masterSize ||
+    metadata.height !== masterSize ||
     !metadata.hasAlpha
   ) {
     throw new Error(
-      `Brand source must be a square, alpha-enabled PNG at least ${masterSize}px; got ${JSON.stringify({
+      `Brand source must be an alpha-enabled ${masterSize}×${masterSize} PNG; got ${JSON.stringify({
         format: metadata.format,
         width: metadata.width,
         height: metadata.height,
         hasAlpha: metadata.hasAlpha
       })}`
+    )
+  }
+
+  const bounds = await alphaBounds()
+  const margins = [
+    bounds.minX,
+    bounds.minY,
+    metadata.width - 1 - bounds.maxX,
+    metadata.height - 1 - bounds.maxY
+  ]
+  const minimumMargin = Math.floor(metadata.width * 0.08)
+  const maximumMargin = Math.ceil(metadata.width * 0.12)
+  if (margins.some((margin) => margin < minimumMargin || margin > maximumMargin)) {
+    throw new Error(
+      `Brand source must preserve an 8–12% Apple-style optical margin; got ${margins.join(', ')}px`
     )
   }
 }
@@ -68,31 +82,13 @@ async function alphaBounds() {
   }
 
   if (maxX < minX || maxY < minY) throw new Error('Brand source has no visible pixels')
-  return { width: maxX - minX + 1, height: maxY - minY + 1 }
+  return { minX, minY, maxX, maxY, width: maxX - minX + 1, height: maxY - minY + 1 }
 }
 
 async function renderMaster() {
-  const bounds = await alphaBounds()
-  const sourceMetadata = await sharp(sourcePath).metadata()
-  const sourceMax = Math.max(bounds.width, bounds.height)
-  const resizedSize = Math.round((sourceMetadata.width * visibleSize) / sourceMax)
-  const offset = Math.floor((masterSize - resizedSize) / 2)
-  const source = await sharp(sourcePath)
-    .resize(resizedSize, resizedSize, { fit: 'contain', kernel: sharp.kernel.lanczos3 })
-    .png({ compressionLevel: 9 })
-    .toBuffer()
-
-  return sharp({
-    create: {
-      width: masterSize,
-      height: masterSize,
-      channels: 4,
-      background: { r: 0, g: 0, b: 0, alpha: 0 }
-    }
-  })
-    .composite([{ input: source, left: offset, top: offset }])
-    .png({ compressionLevel: 9 })
-    .toBuffer()
+  // The owner-designated formal export already contains its final Big Sur
+  // silhouette and optical margin. Preserve it byte-for-byte as build/icon.png.
+  return readFile(sourcePath)
 }
 
 async function resizePng(master, size) {

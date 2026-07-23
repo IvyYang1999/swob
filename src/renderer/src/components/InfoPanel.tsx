@@ -675,7 +675,10 @@ function SessionInfoCard({ session }: { session: any }) {
       </div>
 
       {/* Row 2: tokens */}
-      <div className="text-[11px]">
+      <div
+        className="text-[11px]"
+        title={tokenUnavailable ? s.tokenAccounting?.unavailableReason : undefined}
+      >
         {tokenUnavailable ? (
           <span className="text-muted">{translate(locale, 'renderer.info_panel.tokens_unavailable')}</span>
         ) : hasTokens ? (

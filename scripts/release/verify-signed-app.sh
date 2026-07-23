@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-if [[ $# -ne 5 ]]; then
-  echo "Usage: $0 <Swob.app> <version> <channel> <team-id> <arm64|x86_64>" >&2
+if [[ $# -lt 5 || $# -gt 6 ]]; then
+  echo "Usage: $0 <Swob.app> <version> <channel> <team-id> <arm64|x86_64> [source-bound|published-predecessor]" >&2
   exit 2
 fi
 
@@ -11,6 +11,7 @@ expected_version="$2"
 expected_channel="$3"
 expected_team_id="$4"
 expected_arch="$5"
+verification_profile="${6:-source-bound}"
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 
@@ -20,6 +21,10 @@ if [[ ! -d "$app_bundle" ]]; then
 fi
 if [[ "$expected_arch" != "arm64" && "$expected_arch" != "x86_64" ]]; then
   echo "Unsupported expected architecture: $expected_arch" >&2
+  exit 2
+fi
+if [[ "$verification_profile" != "source-bound" && "$verification_profile" != "published-predecessor" ]]; then
+  echo "Unsupported verification profile: $verification_profile" >&2
   exit 2
 fi
 
@@ -99,10 +104,16 @@ cleanup_inventory() {
   rm -rf "$inventory_dir"
 }
 trap cleanup_inventory EXIT
-node "$repo_root/scripts/check-package.mjs" \
-  --asar "$app_asar" \
-  --inventory-dir "$inventory_dir"
+if [[ "$verification_profile" == "source-bound" ]]; then
+  node "$repo_root/scripts/check-package.mjs" \
+    --asar "$app_asar" \
+    --inventory-dir "$inventory_dir"
+fi
 cleanup_inventory
 trap - EXIT
 
-echo "Verified signed, notarized and package-allowlisted Swob ${expected_version} (${expected_arch}, channel=${expected_channel})."
+if [[ "$verification_profile" == "source-bound" ]]; then
+  echo "Verified signed, notarized and package-allowlisted Swob ${expected_version} (${expected_arch}, channel=${expected_channel})."
+else
+  echo "Verified signed and notarized published predecessor Swob ${expected_version} (${expected_arch}, channel=${expected_channel})."
+fi

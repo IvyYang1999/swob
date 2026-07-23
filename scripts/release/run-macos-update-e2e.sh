@@ -29,7 +29,8 @@ if grep -qw x86_64 <<< "$architectures" && ! grep -qw arm64 <<< "$architectures"
   "$base_version" \
   "$stable_channel" \
   "$expected_team_id" \
-  "$base_arch"
+  "$base_arch" \
+  published-predecessor
 
 e2e_dir="$(mktemp -d /private/tmp/swob-update-e2e.XXXXXX)"
 trap 'rm -rf "$e2e_dir"' EXIT

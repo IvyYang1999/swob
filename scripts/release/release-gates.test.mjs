@@ -325,6 +325,7 @@ describe('shared macOS artifact verifier contract', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8'))
     const artifactVerifier = fs.readFileSync(path.join(releaseScriptsDirectory, 'verify-macos-artifacts.sh'), 'utf8')
     const appVerifier = fs.readFileSync(path.join(releaseScriptsDirectory, 'verify-signed-app.sh'), 'utf8')
+    const updateE2E = fs.readFileSync(path.join(releaseScriptsDirectory, 'run-macos-update-e2e.sh'), 'utf8')
     const builderConfig = fs.readFileSync(path.join(repositoryRoot, 'electron-builder.yml'), 'utf8')
 
     expect(packageJson.scripts.test).toContain('npm run check')
@@ -358,6 +359,12 @@ describe('shared macOS artifact verifier contract', () => {
     expect(artifactVerifier).toContain('verify_app "$zip_app"')
     expect(artifactVerifier).toContain('verify_app "$dmg_app"')
     expect(appVerifier).toContain('scripts/check-package.mjs')
+    expect(appVerifier).toContain('published-predecessor')
+    expect(appVerifier).toContain('source-bound')
+    expect(updateE2E).toMatch(
+      /"\$base_arch"\s+\\\s*\n\s+published-predecessor/
+    )
+    expect(updateE2E.match(/published-predecessor/g)).toHaveLength(1)
     expect(builderConfig).toMatch(/dmg:\s+[\s\S]*writeUpdateInfo: false/)
     expect(builderConfig).toContain('publishAutoUpdate: false')
   })

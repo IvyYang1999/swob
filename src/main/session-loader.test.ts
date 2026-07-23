@@ -27,6 +27,7 @@ import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import Database from 'better-sqlite3'
 
 // --- 造假 JSONL 消息的工具函数 ---
 function rawMsg(overrides: Partial<RawJsonlMessage> & { type: RawJsonlMessage['type'] }): RawJsonlMessage {
@@ -333,6 +334,47 @@ describe('Claude session discovery', () => {
     // session header and must not fall back to the old synthetic placeholder.
     expect(sessions.filter((session) => session.source === 'pi')).toHaveLength(0)
     expect(sessions.filter((session) => session.source === 'claude-code')).toHaveLength(0)
+  })
+
+  it('【回归】Canonical store 故障不能让健康的旧来源首屏变空', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-canonical-failure-home-'))
+    try {
+      const sessionPath = path.join(
+        home,
+        '.claude',
+        'projects',
+        '-Users-test-projects-legacy',
+        'legacy-session.jsonl'
+      )
+      writeJsonlAt(sessionPath, [
+        rawMsg({
+          type: 'user',
+          sessionId: 'legacy-survives-canonical-failure',
+          cwd: '/Users/test/projects/legacy',
+          message: { role: 'user', content: 'legacy source remains visible' }
+        }),
+        rawMsg({
+          type: 'assistant',
+          sessionId: 'legacy-survives-canonical-failure',
+          cwd: '/Users/test/projects/legacy',
+          message: { role: 'assistant', content: 'still here' }
+        })
+      ])
+      const canonicalDir = path.join(home, '.claude-session-manager')
+      fs.mkdirSync(canonicalDir, { recursive: true })
+      const broken = new Database(path.join(canonicalDir, 'canonical.db'))
+      broken.pragma('user_version = 999')
+      broken.close()
+
+      const sessions = await loadAllSessionsFromTempHome(home, { quiet: true })
+      expect(sessions).toContainEqual(expect.objectContaining({
+        sessionId: 'legacy-survives-canonical-failure',
+        source: 'claude-code',
+        firstUserMessage: 'legacy source remains visible'
+      }))
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
   })
 
   it('【回归】Claude 主文件与 subagent 共用去重表，同时保留 billing/conversation 两种 scope', async () => {

@@ -23,6 +23,12 @@ function runningJob(current = 1): ReportJobSnapshot {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolver) => { resolve = resolver })
+  return { promise, resolve }
+}
+
 describe('AuditReportTab report lifecycle', () => {
   let progressListener: ((update: ReportJobUpdateEvent) => void) | null
   let unsubscribe: ReturnType<typeof vi.fn>
@@ -70,5 +76,25 @@ describe('AuditReportTab report lifecycle', () => {
 
     view.unmount()
     expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not let a stale subscribe response overwrite a newer terminal event', async () => {
+    const subscription = deferred<ReportJobSnapshot | null>()
+    vi.mocked(window.api.reportStatus).mockResolvedValue(runningJob())
+    vi.mocked(window.api.reportSubscribe).mockReturnValue(subscription.promise)
+    render(<AuditReportTab />)
+
+    await waitFor(() => expect(progressListener).not.toBeNull())
+    progressListener?.({
+      ...runningJob(10),
+      state: 'failed',
+      completedAt: '2026-07-23T00:00:01.000Z',
+      updatedAt: '2026-07-23T00:00:01.000Z',
+      error: { code: 'terminal-race-proof', message: 'terminal-race-proof', stage: 'analyzing' }
+    })
+    subscription.resolve(runningJob(2))
+
+    await waitFor(() => expect(screen.getByText(/terminal-race-proof/)).toBeTruthy())
+    expect(screen.queryByText(/2\/10/)).toBeNull()
   })
 })

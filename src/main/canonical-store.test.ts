@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import Database from 'better-sqlite3'
 import type {
   CanonicalRecord,
   FileSourceRef,
@@ -98,6 +99,20 @@ afterEach(() => {
 })
 
 describe('CanonicalSessionStore', () => {
+  it('recovers an interrupted version-0 migration atomically', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-canonical-migration-'))
+    temporaryRoots.push(root)
+    const databasePath = path.join(root, 'canonical.db')
+    const interrupted = new Database(databasePath)
+    interrupted.exec('CREATE TABLE canonical_sources(partial TEXT)')
+    interrupted.close()
+
+    const recovered = new CanonicalSessionStore(databasePath)
+    expect(recovered.schemaVersion()).toBe(CANONICAL_STORE_SCHEMA_VERSION)
+    expect(recovered.listSessions()).toHaveLength(0)
+    recovered.close()
+  })
+
   it('persists versioned canonical records and atomically replaces a session', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-canonical-store-'))
     temporaryRoots.push(root)

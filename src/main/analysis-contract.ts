@@ -1,6 +1,6 @@
 import type { SessionSource } from './types'
 
-export const USAGE_FACT_SCHEMA_VERSION = 4
+export const USAGE_FACT_SCHEMA_VERSION = 5
 
 export type AnalysisPreset = 'today' | '7d' | '30d' | '90d' | 'all'
 export type MetricBasis = 'billing' | 'conversation'

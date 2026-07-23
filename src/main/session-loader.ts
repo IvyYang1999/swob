@@ -44,7 +44,10 @@ import {
   stripTerminalControlSequencesDeep
 } from '../shared/chat-format'
 import { refreshCanonicalProviders } from './provider-runtime'
-import { getCanonicalSessionStore } from './canonical-store'
+import {
+  getCanonicalSessionStore,
+  type CanonicalStoredSession
+} from './canonical-store'
 import { canonicalRecordsToSessionDetail, canonicalRecordsToSessionSummary } from './canonical-projection'
 import { isCanonicalRecordsPath, readCanonicalPackageRecords } from './canonical-package'
 import {
@@ -1937,12 +1940,24 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
     .filter((definition) => definition.ingestion === 'provider-host')
     .filter((definition) => isSessionSourceSupported(definition.sourceId))
   const includeCanonicalProviders = canonicalSources.length > 0 && !options.readOnly
+  let canonicalSessions: CanonicalStoredSession[] = []
   if (includeCanonicalProviders) {
-    const refresh = await refreshCanonicalProviders()
-    for (const report of refresh.reports) {
-      for (const error of report.errors) {
-        console.warn(`[provider-host] ${report.providerId}: ${error.code}: ${error.message}`)
+    try {
+      const refresh = await refreshCanonicalProviders()
+      for (const report of refresh.reports) {
+        for (const error of report.errors) {
+          console.warn(`[provider-host] ${report.providerId}: ${error.code}: ${error.message}`)
+        }
       }
+      canonicalSessions = getCanonicalSessionStore().listSessions()
+    } catch (error) {
+      // Canonical providers are an additive projection. Store/search
+      // corruption or a provider bug must never suppress healthy legacy
+      // loaders during app startup.
+      console.warn(
+        '[provider-host] canonical refresh unavailable; continuing with legacy loaders:',
+        error instanceof Error ? error.message : String(error)
+      )
     }
   }
   const claudeFiles = isSessionSourceSupported('claude-code') ? findClaudeSessionFiles() : []
@@ -2197,14 +2212,21 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
   summaries.push(...nonClaudeBySession.values())
 
   if (includeCanonicalProviders) {
-    for (const stored of getCanonicalSessionStore().listSessions()) {
-      const definition = builtinProviderForId(stored.sessionRecord.provenance.providerId)
-      if (!definition || definition.ingestion !== 'provider-host' ||
-        !isSessionSourceSupported(definition.sourceId)) continue
-      summaries.push(canonicalRecordsToSessionSummary(stored.records, {
-        filePath: stored.sessionRecord.sourceRef.displayLocator,
-        source: definition.sourceId
-      }))
+    for (const stored of canonicalSessions) {
+      try {
+        const definition = builtinProviderForId(stored.sessionRecord.provenance.providerId)
+        if (!definition || definition.ingestion !== 'provider-host' ||
+          !isSessionSourceSupported(definition.sourceId)) continue
+        summaries.push(canonicalRecordsToSessionSummary(stored.records, {
+          filePath: stored.sessionRecord.sourceRef.displayLocator,
+          source: definition.sourceId
+        }))
+      } catch (error) {
+        console.warn(
+          `[provider-host] skipped invalid canonical session ${stored.sessionRecord.id}:`,
+          error instanceof Error ? error.message : String(error)
+        )
+      }
     }
   }
 

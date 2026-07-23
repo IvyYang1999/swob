@@ -40,6 +40,8 @@ import {
   writeSessionLineageRegistry
 } from '../main/session-lineage'
 import { detectSessionSourceForJsonl } from '../main/session-source'
+import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
+import { refreshCanonicalProviders } from '../main/provider-runtime'
 import { grepTranscriptsReadOnly, synchronizeSearchSources, type SearchIndexSource } from '../main/search-index'
 import { filterVisibleSearchSources } from '../main/session-search'
 import { findCodexSessionFiles, loadCodexRawMessages } from '../main/codex-loader'
@@ -341,7 +343,9 @@ function dateBoundary(value: string | true | undefined, endOfDay: boolean): stri
 }
 
 async function cmdGrep(query: string, flags: Record<string, string | true>): Promise<void> {
-  const sourceFiles = findAllSessionFiles()
+  const sourceFiles = findAllSessionFiles().filter((filePath) =>
+    !providerUsesCanonicalRuntime(detectSessionSourceForJsonl(filePath))
+  )
   const sources: SearchIndexSource[] = sourceFiles.map((filePath) => ({
     filePath,
     source: detectSessionSourceForJsonl(filePath)
@@ -377,8 +381,30 @@ async function cmdGrep(query: string, flags: Record<string, string | true>): Pro
     await loadAllSessions({ readOnly: true, quiet: true })
   )
   let results: ReturnType<typeof grepTranscriptsReadOnly>
+  const canonicalWarnings: string[] = []
   const startedAt = performance.now()
   try {
+    // `grep` already refreshes the shared FTS index. Refresh canonical
+    // providers in the same write phase so a cold CLI invocation can search Pi
+    // without requiring the GUI to have run first.
+    try {
+      const canonical = await refreshCanonicalProviders()
+      for (const report of canonical.reports) {
+        for (const error of report.errors) {
+          canonicalWarnings.push(`${report.providerId}:${error.code}`)
+        }
+      }
+    } catch (error) {
+      // Canonical search is additive; legacy grep must remain available.
+      const message = error instanceof Error ? error.message : String(error)
+      const code = error && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : ''
+      if (code === 'SQLITE_BUSY' || /database is locked/i.test(message)) throw error
+      canonicalWarnings.push(
+        `canonical-refresh:${message}`
+      )
+    }
     await synchronizeSearchSources(visibleSources)
     results = grepTranscriptsReadOnly(query, {
       source: typeof flags.source === 'string' ? flags.source : undefined,
@@ -412,6 +438,7 @@ async function cmdGrep(query: string, flags: Record<string, string | true>): Pro
       project: typeof flags.project === 'string' ? flags.project : null
     },
     elapsedMs: Number((performance.now() - startedAt).toFixed(3)),
+    warnings: canonicalWarnings,
     sessionCount: results.length,
     matchCount: results.reduce((sum, result) => sum + result.matches.length, 0),
     sessions: results

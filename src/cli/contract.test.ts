@@ -12,6 +12,7 @@ let sourcePath = ''
 let runCli: typeof import('./index').runCli
 let closeSearchIndex: typeof import('../main/search-index').closeSearchIndex
 let searchDatabasePath: typeof import('../main/search-index').searchDatabasePath
+let closeCanonicalSessionStore: typeof import('../main/canonical-store').closeCanonicalSessionStore
 let previousHome: string | undefined
 let previousIndexDir: string | undefined
 
@@ -94,9 +95,12 @@ beforeAll(async () => {
   createLibraryPackage()
   ;({ runCli } = await import('./index'))
   ;({ closeSearchIndex, searchDatabasePath } = await import('../main/search-index'))
+  ;({ closeCanonicalSessionStore } = await import('../main/canonical-store'))
 })
 
 afterAll(() => {
+  closeSearchIndex()
+  closeCanonicalSessionStore()
   if (previousHome === undefined) delete process.env.HOME
   else process.env.HOME = previousHome
   if (previousIndexDir === undefined) delete process.env.SWOB_SEARCH_INDEX_DIR
@@ -177,6 +181,17 @@ describe.sequential('Swob CLI machine contract', () => {
     ].map((row) => JSON.stringify(row)).join('\n'))
     const codex = parsed(await invoke(['grep', 'codex-source-needle', '--source', 'codex', '--json'])) as any
     expect(codex).toMatchObject({ sessionCount: 1, sessions: [{ source: 'codex', projectPath: '/repo/codex-project' }] })
+
+    const piPath = path.join(tempHome, '.pi', 'agent', 'sessions', 'contract', 'session.jsonl')
+    fs.mkdirSync(path.dirname(piPath), { recursive: true })
+    fs.copyFileSync(path.resolve(__dirname, '../../testdata/pi/session.jsonl'), piPath)
+    const pi = parsed(await invoke([
+      'grep', 'synthetic-search-needle', '--source', 'pi', '--json'
+    ])) as any
+    expect(pi).toMatchObject({
+      sessionCount: 1,
+      sessions: [{ source: 'pi' }]
+    })
   })
 
   it('grep 遇写锁会等待并返回可重试的结构化错误', async () => {

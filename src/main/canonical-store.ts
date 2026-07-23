@@ -69,55 +69,65 @@ function ensureSchema(database: Database.Database): void {
     throw new Error(`canonical-store-schema-too-new:${version}`)
   }
   if (version === 0) {
-    database.exec(`
-      CREATE TABLE canonical_schema_migrations (
-        version INTEGER PRIMARY KEY,
-        applied_at TEXT NOT NULL
-      );
-      CREATE TABLE canonical_sources (
-        provider_id TEXT NOT NULL,
-        source_ref_id TEXT NOT NULL,
-        source_ref_json TEXT NOT NULL,
-        fingerprint_json TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL,
-        tombstoned_at TEXT,
-        PRIMARY KEY(provider_id, source_ref_id)
-      );
-      CREATE TABLE canonical_sessions (
-        session_record_id TEXT PRIMARY KEY,
-        provider_id TEXT NOT NULL,
-        source_ref_id TEXT NOT NULL,
-        source_session_id TEXT NOT NULL,
-        project_path TEXT,
-        created_at TEXT,
-        updated_at TEXT,
-        fingerprint_json TEXT NOT NULL,
-        session_json TEXT NOT NULL,
-        tombstoned_at TEXT,
-        tombstone_reason TEXT,
-        UNIQUE(provider_id, source_ref_id, source_session_id),
-        FOREIGN KEY(provider_id, source_ref_id)
-          REFERENCES canonical_sources(provider_id, source_ref_id)
-      );
-      CREATE INDEX canonical_sessions_provider_idx
-        ON canonical_sessions(provider_id, source_session_id);
-      CREATE INDEX canonical_sessions_source_idx
-        ON canonical_sessions(provider_id, source_ref_id);
-      CREATE TABLE canonical_records (
-        record_id TEXT PRIMARY KEY,
-        session_record_id TEXT NOT NULL,
-        record_type TEXT NOT NULL,
-        ordinal INTEGER,
-        record_json TEXT NOT NULL,
-        FOREIGN KEY(session_record_id) REFERENCES canonical_sessions(session_record_id) ON DELETE CASCADE
-      );
-      CREATE INDEX canonical_records_session_idx
-        ON canonical_records(session_record_id, ordinal, record_id);
-    `)
-    database.prepare(
-      'INSERT INTO canonical_schema_migrations(version, applied_at) VALUES (?, ?)'
-    ).run(CANONICAL_STORE_SCHEMA_VERSION, new Date().toISOString())
-    database.pragma(`user_version = ${CANONICAL_STORE_SCHEMA_VERSION}`)
+    const migrate = database.transaction(() => {
+      // Version 0 is either a new database or an interrupted pre-v1 setup.
+      // Canonical state is a rebuildable projection, so remove any partial DDL
+      // and publish the whole schema atomically.
+      database.exec(`
+        DROP TABLE IF EXISTS canonical_records;
+        DROP TABLE IF EXISTS canonical_sessions;
+        DROP TABLE IF EXISTS canonical_sources;
+        DROP TABLE IF EXISTS canonical_schema_migrations;
+        CREATE TABLE canonical_schema_migrations (
+          version INTEGER PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        CREATE TABLE canonical_sources (
+          provider_id TEXT NOT NULL,
+          source_ref_id TEXT NOT NULL,
+          source_ref_json TEXT NOT NULL,
+          fingerprint_json TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          tombstoned_at TEXT,
+          PRIMARY KEY(provider_id, source_ref_id)
+        );
+        CREATE TABLE canonical_sessions (
+          session_record_id TEXT PRIMARY KEY,
+          provider_id TEXT NOT NULL,
+          source_ref_id TEXT NOT NULL,
+          source_session_id TEXT NOT NULL,
+          project_path TEXT,
+          created_at TEXT,
+          updated_at TEXT,
+          fingerprint_json TEXT NOT NULL,
+          session_json TEXT NOT NULL,
+          tombstoned_at TEXT,
+          tombstone_reason TEXT,
+          UNIQUE(provider_id, source_ref_id, source_session_id),
+          FOREIGN KEY(provider_id, source_ref_id)
+            REFERENCES canonical_sources(provider_id, source_ref_id)
+        );
+        CREATE INDEX canonical_sessions_provider_idx
+          ON canonical_sessions(provider_id, source_session_id);
+        CREATE INDEX canonical_sessions_source_idx
+          ON canonical_sessions(provider_id, source_ref_id);
+        CREATE TABLE canonical_records (
+          record_id TEXT PRIMARY KEY,
+          session_record_id TEXT NOT NULL,
+          record_type TEXT NOT NULL,
+          ordinal INTEGER,
+          record_json TEXT NOT NULL,
+          FOREIGN KEY(session_record_id) REFERENCES canonical_sessions(session_record_id) ON DELETE CASCADE
+        );
+        CREATE INDEX canonical_records_session_idx
+          ON canonical_records(session_record_id, ordinal, record_id);
+      `)
+      database.prepare(
+        'INSERT INTO canonical_schema_migrations(version, applied_at) VALUES (?, ?)'
+      ).run(CANONICAL_STORE_SCHEMA_VERSION, new Date().toISOString())
+      database.pragma(`user_version = ${CANONICAL_STORE_SCHEMA_VERSION}`)
+    })
+    migrate()
   }
 }
 

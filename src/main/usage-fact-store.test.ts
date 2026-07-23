@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -202,6 +202,31 @@ describe('UsageFact + AnalysisScope', () => {
     expect(first.results.model.items[0]).toMatchObject({ key: 'model-a', processedTokens: 15 })
   })
 
+  it('invalidates the bundle cache for distinct snapshots committed in the same millisecond', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-23T00:00:00.000Z'))
+    try {
+      const firstSession = makeSession('same-ms', '/repo/same-ms', [
+        usageEvent('same-ms-event', '2026-07-22T12:00:00.000Z', components(10, 5))
+      ])
+      synchronizeUsageFacts([firstSession], [])
+      const first = queryInsightsBundle(scope())
+
+      const secondSession = makeSession('same-ms', '/repo/same-ms', [
+        usageEvent('same-ms-event', '2026-07-22T12:00:00.000Z', components(20, 5))
+      ])
+      synchronizeUsageFacts([secondSession], [])
+      const second = queryInsightsBundle(scope())
+
+      expect(first.results.global.total.processedTokens).toBe(15)
+      expect(second.results.global.total.processedTokens).toBe(25)
+      expect(second.usageRevision).not.toBe(first.usageRevision)
+      expect(second).not.toBe(first)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('跨天会话按事件真实日期拆分，五桶完整且 reasoning 不重复计入 processed', () => {
     const session = makeSession('cross-day', '/repo/alpha', [
       usageEvent('day-one', localTimestamp(2026, 7, 20, 23), components(10, 5, 2, 3, 4), { model: 'model-a' }),
@@ -353,7 +378,7 @@ describe('UsageFact + AnalysisScope', () => {
     const changedA = makeSession('a', '/repo/alpha', [usageEvent('a1', localTimestamp(2026, 7, 20, 8), components(30, 2))])
     expect(synchronizeUsageFacts([changedA, b], [])).toMatchObject({ changedSessions: 1, unchangedSessions: 1, factCount: 2 })
     expect(synchronizeUsageFacts([changedA], [])).toMatchObject({ removedSessions: 1, factCount: 1 })
-    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 4, sessions: 1, facts: 1 })
+    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 5, sessions: 1, facts: 1 })
   })
 
   it('usage/model/pricing coverage 显式且 pricing 使用 t113 逐请求估值', () => {
@@ -481,7 +506,7 @@ describe('UsageFact + AnalysisScope', () => {
     expect(model.total.usageCoverage).toEqual({ covered: 2, total: 3, percent: (2 / 3) * 100 })
 
     expect(usageFactStoreStats()).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       sessions: 6,
       activityDays: 5,
       timedSessions: 4,

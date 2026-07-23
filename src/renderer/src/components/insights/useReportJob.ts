@@ -39,12 +39,19 @@ export function useReportJob(type: ReportJobType, params: ReportJobParams): Repo
   useEffect(() => {
     if (!job?.jobId) return
     let active = true
+    let receivedLiveUpdate = false
     const jobId = job.jobId
     const unsubscribe = window.api.onInsightsProgress((update) => {
-      if (active && update.jobId === jobId) setJob(update)
+      if (active && update.jobId === jobId) {
+        receivedLiveUpdate = true
+        setJob(update)
+      }
     })
     void window.api.reportSubscribe(jobId).then((snapshot) => {
-      if (active && snapshot) setJob(snapshot)
+      // The invoke response and the pushed event travel on different IPC
+      // channels. A terminal event can arrive before an older subscribe
+      // snapshot resolves; never let that stale response move the job backward.
+      if (active && snapshot && !receivedLiveUpdate) setJob(snapshot)
     }).catch(() => {
       if (active) setRequestError('report-status-failed')
     })

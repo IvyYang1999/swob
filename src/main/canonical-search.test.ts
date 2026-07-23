@@ -114,13 +114,13 @@ describe('canonical search projection', () => {
     expect(searchFTS('synthetic-tool-result')).toHaveLength(1)
 
     const filtered = grepTranscripts('synthetic', {
-      source: 'swob/pi',
+      source: 'pi',
       sessionIds: ['canonical-search-session'],
       project: '/synthetic/search-project'
     })
     expect(filtered).toHaveLength(1)
     expect(filtered[0].filePath).toBe('ssh://example.invalid/sessions/pi.jsonl')
-    expect(grepTranscripts('synthetic', { source: 'swob/hermes' })).toHaveLength(0)
+    expect(grepTranscripts('synthetic', { source: 'hermes' })).toHaveLength(0)
 
     await indexCanonicalSession('canonical-search-session', canonicalRecords('canonical-text-marker'))
     expect(searchFTS('private-thinking-marker')).toHaveLength(1)

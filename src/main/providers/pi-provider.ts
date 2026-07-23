@@ -158,7 +158,12 @@ function sourcePath(source: SourceRef): string {
   return resolved
 }
 
-async function readHeader(filePath: string, signal?: AbortSignal): Promise<PiHeader | null> {
+function isMissingPathError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+}
+
+async function readHeader(filePath: string, signal?: AbortSignal): Promise<PiHeader> {
   const handle = await fs.promises.open(filePath, 'r')
   try {
     if (signal?.aborted) throw new Error('cancelled')
@@ -169,12 +174,17 @@ async function readHeader(filePath: string, signal?: AbortSignal): Promise<PiHea
       const line = rawLine.trim()
       if (!line) continue
       let value: unknown
-      try { value = JSON.parse(line) } catch { return null }
+      try { value = JSON.parse(line) } catch {
+        throw new Error(`pi-session-header-malformed:${filePath}`)
+      }
       const candidate = asObject(value)
       if (candidate?.type === 'title') continue
-      return candidate?.type === 'session' ? candidate as unknown as PiHeader : null
+      if (candidate?.type !== 'session') {
+        throw new Error(`pi-session-header-missing:${filePath}`)
+      }
+      return candidate as unknown as PiHeader
     }
-    return null
+    throw new Error(`pi-session-header-missing:${filePath}`)
   } finally {
     await handle.close()
   }
@@ -187,11 +197,21 @@ async function discoverFiles(root: string, signal: AbortSignal): Promise<string[
     if (signal.aborted) throw new Error('cancelled')
     if (depth > 6) return
     let realDirectory: string
-    try { realDirectory = await fs.promises.realpath(directory) } catch { return }
+    try {
+      realDirectory = await fs.promises.realpath(directory)
+    } catch (error) {
+      if (isMissingPathError(error)) return
+      throw error
+    }
     if (visited.has(realDirectory)) return
     visited.add(realDirectory)
     let entries: fs.Dirent[]
-    try { entries = await fs.promises.readdir(directory, { withFileTypes: true }) } catch { return }
+    try {
+      entries = await fs.promises.readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (isMissingPathError(error)) return
+      throw error
+    }
     for (const entry of entries) {
       if (signal.aborted) throw new Error('cancelled')
       if (entry.name.startsWith('.')) continue
@@ -238,7 +258,12 @@ function provenance(
 
 async function parsePiSource(source: SourceRef, fingerprint: Fingerprint, signal: AbortSignal): Promise<ParseOutcome> {
   const filePath = sourcePath(source)
-  const text = await fs.promises.readFile(filePath, { encoding: 'utf8', signal })
+  const bytes = await fs.promises.readFile(filePath, { signal })
+  const observedFingerprint = createHash('sha256').update(bytes).digest('hex')
+  if (fingerprint.algorithm !== 'sha256' || observedFingerprint !== fingerprint.value) {
+    throw new Error('pi-source-changed-during-parse')
+  }
+  const text = bytes.toString('utf8')
   const lines = text.split(/\r?\n/)
   let header: PiHeader | null = null
   let headerLine = ''
@@ -473,7 +498,6 @@ export function createPiProvider(options: PiProviderOptions): BuiltinProviderRun
       const byStableId = new Map<string, { source: SourceRef; mtimeMs: number }>()
       for (const filePath of candidates) {
         const header = await readHeader(filePath, signal)
-        if (!header) continue
         const stableId = stableSourceId(header, filePath)
         const stat = await fs.promises.stat(filePath)
         const source: SourceRef = {

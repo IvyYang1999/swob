@@ -47,12 +47,12 @@ function formatTokenShort(n: number): string {
   return String(n)
 }
 
-function formatDurationShort(createdAt: string, updatedAt: string): string {
-  const ms = new Date(updatedAt).getTime() - new Date(createdAt).getTime()
-  if (ms < 60_000) return '<1m'
-  if (ms < 3600_000) return `${Math.round(ms / 60_000)}m`
-  const h = Math.floor(ms / 3600_000)
-  const m = Math.round((ms % 3600_000) / 60_000)
+function formatDurationShort(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 60_000) return '<1m'
+  const totalMinutes = Math.max(1, Math.round(ms / 60_000))
+  if (totalMinutes < 60) return `${totalMinutes}m`
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
   return m > 0 ? `${h}h${m}m` : `${h}h`
 }
 
@@ -112,18 +112,22 @@ function ActionIcon({ action }: { action: string }) {
 
 // --- File tree building ---
 
-function buildFileTree(files: FileRef[]): TreeNode {
+function buildFileTree(files: FileRef[], basePath?: string): TreeNode {
   const root: TreeNode = { name: '', fullPath: '', children: new Map() }
+  const normalizedBase = basePath?.replace(/\/+$/, '')
 
   for (const f of files) {
-    const parts = f.path.split('/').filter(Boolean)
+    const displayPath = normalizedBase && f.path.startsWith(`${normalizedBase}/`)
+      ? f.path.slice(normalizedBase.length + 1)
+      : f.path
+    const parts = displayPath.split('/').filter(Boolean)
     let node = root
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i]
       if (!node.children.has(part)) {
         node.children.set(part, {
           name: part,
-          fullPath: '/' + parts.slice(0, i + 1).join('/'),
+          fullPath: `${normalizedBase || ''}/${parts.slice(0, i + 1).join('/')}`,
           children: new Map()
         })
       }
@@ -448,6 +452,19 @@ function FileTreeSection({ files }: { files: FileRef[] }) {
   )
 }
 
+function CwdFileTree({ cwd, files }: { cwd: string; files: FileRef[] }) {
+  const basePath = files.every((file) => file.path.startsWith(`${cwd.replace(/\/+$/, '')}/`))
+    ? cwd
+    : undefined
+  const tree = useMemo(() => buildFileTree(files, basePath), [basePath, files])
+
+  return (
+    <div className="space-y-0.5 ml-1" data-testid="cwd-file-tree">
+      <FileTreeNode node={tree} />
+    </div>
+  )
+}
+
 // --- HighlightList ---
 
 function HighlightList({ highlights, sessionId, defaultOpen = true }: { highlights: Highlight[]; sessionId: string; defaultOpen?: boolean }) {
@@ -627,8 +644,10 @@ function SessionInfoCard({ session }: { session: any }) {
   const locale = useStore((s) => s.locale)
   const s = session
   const hp = getHarnessPresentation(s.source)
-  const duration = formatDurationShort(s.createdAt, s.updatedAt)
+  const wallClockMs = new Date(s.updatedAt).getTime() - new Date(s.createdAt).getTime()
+  const duration = formatDurationShort(s.estimatedTime ?? wallClockMs)
   const shortCwd = s.cwds?.[0]?.replace(/^\/Users\/[^/]+/, '~') || ''
+  const modelLabel = s.models?.filter(Boolean).join(', ') || ''
 
   const hasTokens = s.tokenUsage && (
     s.tokenUsage.inputTokens > 0 || s.tokenUsage.outputTokens > 0 ||
@@ -643,6 +662,11 @@ function SessionInfoCard({ session }: { session: any }) {
         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${hp.badgeClass}`}>
           {hp.shortLabel}
         </span>
+        {modelLabel && (
+          <span className="max-w-full truncate text-secondary font-mono" title={modelLabel}>
+            {modelLabel}
+          </span>
+        )}
         <span className="text-secondary">{s.turnCount} {t('renderer.info_panel.turns')}</span>
         <span className="text-muted">{duration}</span>
         {s.compactCount > 0 && (
@@ -736,38 +760,7 @@ function FilesTab({ session, onNavigate }: {
           defaultOpen={false}
         >
           {group.files.length > 0 ? (
-            <div className="space-y-0.5 ml-1">
-              {group.files.map((f) => {
-                const relativePath = f.path.startsWith(group.cwd + '/')
-                  ? f.path.slice(group.cwd.length + 1)
-                  : f.path
-                const primaryAction = f.actions.includes('write') ? 'write'
-                  : f.actions.includes('edit') ? 'edit'
-                  : f.actions.includes('user-image') ? 'user-image'
-                  : f.actions.includes('user-input') ? 'user-input'
-                  : 'read'
-                return (
-                  <div
-                    key={f.path}
-                    className={`flex items-center gap-1 text-xs font-mono truncate cursor-pointer group ${
-                      f.exists ? 'text-secondary hover:text-soft-blue' : 'text-faint line-through'
-                    }`}
-                    title={`${f.path}\n${t('info.file_actions', { actions: f.actions.join(', ') })}${f.exists ? '' : '\n' + t('info.file_deleted')}\n${t('info.file_click_hint')}`}
-                    onClick={() => window.api.openPath(f.path)}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      window.api.showItemInFolder(f.path)
-                    }}
-                  >
-                    <ActionIcon action={primaryAction} />
-                    <span className="truncate">{relativePath}</span>
-                    <div className="flex gap-0.5 shrink-0 ml-auto">
-                      {f.actions.map(a => <ActionBadge key={a} action={a} />)}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+            <CwdFileTree cwd={group.cwd} files={group.files} />
           ) : (
             <div className="text-[11px] text-muted ml-1">
               {translate(locale, 'renderer.info_panel.no_file_operations_in_directory')}

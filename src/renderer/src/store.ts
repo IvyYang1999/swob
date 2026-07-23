@@ -60,6 +60,8 @@ interface SessionSummary {
   remoteHost?: string
   source?: string
   claudeConfigDir?: string
+  estimatedTime?: number
+  models?: string[]
 }
 
 interface ParsedMessage {

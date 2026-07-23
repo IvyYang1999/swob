@@ -1289,7 +1289,11 @@ export function ChatViewer() {
   const addHighlight = useStore((state) => state.addHighlight)
   const removeHighlight = useStore((state) => state.removeHighlight)
   const locale = useStore((state) => state.locale)
+  const cloudSessionIds = useStore((state) => state.cloudSessionIds)
   const selectedSession = useDeferredValue(selectedSessionSnapshot)
+  const selectedSessionIsCloud = selectedSession
+    ? cloudSessionIds.has(selectedSession.sessionId)
+    : false
   const t = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
@@ -2061,8 +2065,12 @@ export function ChatViewer() {
           {selectedSession.messages.length === 0 ? (
             <div className="flex-1 flex items-center justify-center text-muted">
               <div className="text-center max-w-xs space-y-3">
-                <Cloud size={28} className="mx-auto text-soft-blue/50" />
-                <div className="text-sm text-secondary">{t('renderer.cloud_session.placeholder')}</div>
+                {selectedSessionIsCloud && <Cloud size={28} className="mx-auto text-soft-blue/50" />}
+                <div className="text-sm text-secondary">
+                  {t(selectedSessionIsCloud
+                    ? 'renderer.cloud_session.placeholder'
+                    : 'renderer.agent.no_messages')}
+                </div>
               </div>
             </div>
           ) : mdMode ? (

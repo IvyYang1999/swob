@@ -212,4 +212,27 @@ describe('canonical provider runtime full chain', () => {
     expect(metas.every((meta) => meta.sourceFilePaths[0].startsWith('ssh://'))).toBe(true)
     expect(packageDirs().some((dirPath) => fs.existsSync(path.join(dirPath, 'backup.jsonl')))).toBe(false)
   })
+
+  it('preserves the last valid Pi snapshot when a live header is temporarily malformed', async () => {
+    const piRoot = path.join(home, '.pi', 'agent', 'sessions')
+    const sourcePath = path.join(piRoot, 'project', 'session.jsonl')
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    fs.copyFileSync(fixturePath(), sourcePath)
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({
+      runtimes: [createPiProvider({ homeDir: home, roots: [piRoot] })]
+    })
+
+    const first = await refreshCanonicalProviders({ host, store })
+    expect(first.changedSessionRecordIds).toHaveLength(1)
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
+
+    fs.writeFileSync(sourcePath, '{temporarily-incomplete')
+    const transient = await refreshCanonicalProviders({ host, store })
+
+    expect(transient.reports[0].errors).toMatchObject([{ code: 'provider-failed' }])
+    expect(transient.tombstonedSessionRecordIds).toHaveLength(0)
+    expect(store.listSessions('swob/pi')).toHaveLength(1)
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
+  })
 })

@@ -107,13 +107,17 @@ function ensureSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS usage_schema_meta (
       singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
       schema_version INTEGER NOT NULL,
-      last_indexed_at TEXT
+      last_indexed_at TEXT,
+      revision INTEGER NOT NULL DEFAULT 0
     );
   `)
   const version = db.prepare(
     'SELECT schema_version FROM usage_schema_meta WHERE singleton = 1'
   ).get() as { schema_version: number } | undefined
-  if (version && version.schema_version !== USAGE_FACT_SCHEMA_VERSION) {
+  const metaColumns = db.prepare('PRAGMA table_info(usage_schema_meta)').all() as Array<{ name: string }>
+  const metaIsCurrent = version?.schema_version === USAGE_FACT_SCHEMA_VERSION &&
+    metaColumns.some((column) => column.name === 'revision')
+  if (!metaIsCurrent) {
     db.exec(`
       DROP TABLE IF EXISTS usage_rollups;
       DROP TABLE IF EXISTS usage_session_folders;
@@ -121,10 +125,17 @@ function ensureSchema(db: Database.Database): void {
       DROP TABLE IF EXISTS usage_folders;
       DROP TABLE IF EXISTS usage_facts;
       DROP TABLE IF EXISTS usage_sessions;
-      DELETE FROM usage_schema_meta;
+      DROP TABLE IF EXISTS usage_schema_meta;
     `)
   }
   db.exec(`
+    CREATE TABLE IF NOT EXISTS usage_schema_meta (
+      singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+      schema_version INTEGER NOT NULL,
+      last_indexed_at TEXT,
+      revision INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS usage_sessions (
       session_id TEXT PRIMARY KEY,
       root_session_id TEXT NOT NULL,
@@ -232,8 +243,8 @@ function ensureSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS usage_rollups_project_idx ON usage_rollups(project_path);
     CREATE INDEX IF NOT EXISTS usage_rollups_session_idx ON usage_rollups(session_id);
 
-    INSERT INTO usage_schema_meta(singleton, schema_version, last_indexed_at)
-    VALUES (1, ${USAGE_FACT_SCHEMA_VERSION}, NULL)
+    INSERT INTO usage_schema_meta(singleton, schema_version, last_indexed_at, revision)
+    VALUES (1, ${USAGE_FACT_SCHEMA_VERSION}, NULL, 0)
     ON CONFLICT(singleton) DO UPDATE SET schema_version = excluded.schema_version;
   `)
 }
@@ -550,7 +561,9 @@ export function synchronizeUsageFacts(
       removedSessions++
     }
     db.prepare(`
-      UPDATE usage_schema_meta SET last_indexed_at = ? WHERE singleton = 1
+      UPDATE usage_schema_meta
+      SET last_indexed_at = ?, revision = revision + 1
+      WHERE singleton = 1
     `).run(new Date().toISOString())
   })
   sync()
@@ -1053,69 +1066,74 @@ export function queryInsightsBundle(rawScope: AnalysisScope): InsightsQueryBundl
   const scope = normalizeAnalysisScope(rawScope)
   const range = resolveAnalysisRange(scope)
   const db = getDatabase()
-  const meta = db.prepare(
-    'SELECT last_indexed_at FROM usage_schema_meta WHERE singleton = 1'
-  ).get() as { last_indexed_at: string | null }
-  const usageRevision = meta.last_indexed_at || 'uninitialized'
-  const cacheKey = stableHash({ usageRevision, scope, range })
-  const cached = insightsBundleCache.get(cacheKey)
-  if (cached) return cached
+  // The Library worker writes through another SQLite connection. Hold one
+  // explicit read transaction so all seven dimensions and the revision come
+  // from exactly the same committed snapshot.
+  return db.transaction((): InsightsQueryBundleResult => {
+    const meta = db.prepare(
+      'SELECT last_indexed_at, revision FROM usage_schema_meta WHERE singleton = 1'
+    ).get() as { last_indexed_at: string | null; revision: number }
+    const usageRevision = String(meta.revision)
+    const cacheKey = stableHash({ usageRevision, scope, range })
+    const cached = insightsBundleCache.get(cacheKey)
+    if (cached) return cached
 
-  const total = aggregateRows(db, scope, range, 'global')[0] || emptyAggregate(scope.metricBasis)
-  total.label = 'All'
-  applyGlobalUsageCoverage(db, scope, range, total)
+    const total = aggregateRows(db, scope, range, 'global')[0] || emptyAggregate(scope.metricBasis)
+    total.label = 'All'
+    applyGlobalUsageCoverage(db, scope, range, total)
 
-  const priorRange = previousRange(range)
-  let previousPeriod: PreviousPeriodComparison | null = null
-  if (priorRange) {
-    const previousTotal = aggregateRows(db, scope, priorRange, 'global')[0] || emptyAggregate(scope.metricBasis)
-    previousTotal.label = 'All'
-    applyGlobalUsageCoverage(db, scope, priorRange, previousTotal)
-    const absoluteChange = total.processedTokens - previousTotal.processedTokens
-    previousPeriod = {
-      range: priorRange,
-      processedTokens: previousTotal.processedTokens,
-      absoluteChange,
-      percentChange: previousTotal.processedTokens > 0
-        ? (absoluteChange / previousTotal.processedTokens) * 100
-        : null
+    const priorRange = previousRange(range)
+    let previousPeriod: PreviousPeriodComparison | null = null
+    if (priorRange) {
+      const previousTotal = aggregateRows(db, scope, priorRange, 'global')[0] || emptyAggregate(scope.metricBasis)
+      previousTotal.label = 'All'
+      applyGlobalUsageCoverage(db, scope, priorRange, previousTotal)
+      const absoluteChange = total.processedTokens - previousTotal.processedTokens
+      previousPeriod = {
+        range: priorRange,
+        processedTokens: previousTotal.processedTokens,
+        absoluteChange,
+        percentChange: previousTotal.processedTokens > 0
+          ? (absoluteChange / previousTotal.processedTokens) * 100
+          : null
+      }
     }
-  }
 
-  const quality = {
-    unknownTimeEvents: unknownTimeEvents(db, scope),
-    lastIndexedAt: meta.last_indexed_at
-  }
-  const results = {} as Record<DashboardAnalysisDimension, InsightsQueryResult>
-  for (const dimension of DASHBOARD_DIMENSIONS) {
-    const items = dimension === 'global'
-      ? [structuredClone(total)]
-      : aggregateRows(db, scope, range, dimension)
-    if (dimension !== 'global') applyItemUsageCoverage(db, scope, range, dimension, items)
-    results[dimension] = {
+    const quality = {
+      unknownTimeEvents: unknownTimeEvents(db, scope),
+      lastIndexedAt: meta.last_indexed_at
+    }
+    const results = {} as Record<DashboardAnalysisDimension, InsightsQueryResult>
+    for (const dimension of DASHBOARD_DIMENSIONS) {
+      const items = dimension === 'global'
+        ? [structuredClone(total)]
+        : aggregateRows(db, scope, range, dimension)
+      if (dimension !== 'global') applyItemUsageCoverage(db, scope, range, dimension, items)
+      results[dimension] = {
+        schemaVersion: USAGE_FACT_SCHEMA_VERSION,
+        scope,
+        dimension,
+        range,
+        items,
+        total,
+        previousPeriod,
+        quality
+      }
+    }
+
+    const bundle: InsightsQueryBundleResult = {
       schemaVersion: USAGE_FACT_SCHEMA_VERSION,
+      usageRevision,
       scope,
-      dimension,
-      range,
-      items,
-      total,
-      previousPeriod,
-      quality
+      results
     }
-  }
-
-  const bundle: InsightsQueryBundleResult = {
-    schemaVersion: USAGE_FACT_SCHEMA_VERSION,
-    usageRevision,
-    scope,
-    results
-  }
-  insightsBundleCache.set(cacheKey, bundle)
-  if (insightsBundleCache.size > 12) {
-    const oldest = insightsBundleCache.keys().next().value
-    if (oldest) insightsBundleCache.delete(oldest)
-  }
-  return bundle
+    insightsBundleCache.set(cacheKey, bundle)
+    if (insightsBundleCache.size > 12) {
+      const oldest = insightsBundleCache.keys().next().value
+      if (oldest) insightsBundleCache.delete(oldest)
+    }
+    return bundle
+  })()
 }
 
 function dimensionConstraint(dimension: AnalysisDimension, key: string): { sql: string; value?: string | number } {

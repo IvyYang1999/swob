@@ -47,7 +47,7 @@ function query(
   total: UsageAggregate
 ): InsightsQueryResult {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     scope: { range: 'all', metricBasis: 'billing' },
     dimension,
     range: { fromDay: null, toDay: null, label: 'All time' },

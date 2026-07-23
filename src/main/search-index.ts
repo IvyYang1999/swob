@@ -15,6 +15,7 @@ import {
   stripTerminalControlSequences,
   stripTerminalControlSequencesDeep
 } from '../shared/chat-format'
+import { builtinProviderForId } from '../shared/provider-capabilities'
 
 // v4 rebuilds unchanged files so ANSI/CSI/OSC text cannot survive in old FTS rows.
 const SEARCH_SCHEMA_VERSION = 5
@@ -501,7 +502,8 @@ export async function indexCanonicalSession(
         indexKey,
         session.sourceRef.displayLocator,
         session.sourceSessionId,
-        session.provenance.providerId,
+        builtinProviderForId(session.provenance.providerId)?.sourceId ||
+          session.provenance.providerId,
         session.projectPath || session.cwd[0] || '',
         session.sourceRef.fingerprint.value,
         firstUserText,

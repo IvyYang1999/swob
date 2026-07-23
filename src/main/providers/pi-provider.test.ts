@@ -120,4 +120,17 @@ describe('Pi builtin provider', () => {
     expect(moved.stableId).toBe(first.stableId)
     expect(moved.displayLocator).toBe(movedPath)
   })
+
+  it('rejects a parse when the file changed after fingerprinting', async () => {
+    const { root, sessionPath } = temporaryPiRoot()
+    const provider = createPiProvider({ homeDir: root, roots: [root] })
+    const signal = new AbortController().signal
+    const source = (await provider.discover(signal))[0]
+    const fingerprint = await provider.fingerprint(source, signal)
+
+    fs.appendFileSync(sessionPath, '\n{"type":"title","title":"changed"}\n')
+
+    await expect(provider.parse(source, fingerprint, signal))
+      .rejects.toThrow('pi-source-changed-during-parse')
+  })
 })

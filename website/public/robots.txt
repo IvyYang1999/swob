@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://swob.app/sitemap.xml

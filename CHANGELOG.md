@@ -2,6 +2,24 @@
 
 [中文](CHANGELOG.zh.md)
 
+## v1.3.1 — 2026-07-24
+
+### New
+
+- **Logical conversation history** — duplicate packages and compact/resume continuations are now connected as one explainable history without hiding the underlying physical sessions.
+- **Personal presentation** — choose a user avatar and override built-in provider icons with locally managed PNG, JPEG, WebP, or sanitized SVG assets.
+- **Signed update channel** — v1.3.0 and later can receive a gated, signed in-app update after the candidate has passed a real install-and-relaunch check.
+
+### Fixed
+
+- Session counts, source health, and Insights now stay aligned with authoritative local evidence; stale or partial data no longer crashes the Insights page.
+- Sessions with incomplete detail data now show the available transcript or a recoverable/unavailable explanation instead of an empty pane.
+- “All sessions” groups collapse reliably, large groups remain responsive, search reports real empty results, and compact windows preserve a readable conversation column.
+- The detail inspector now exposes Outcomes, Activity, and Details consistently; file trees and continuation relationships no longer silently omit known evidence.
+- CLI installation now performs the required privileged symlink step through the macOS authorization flow instead of asking users to paste a `sudo ln` command.
+- User and provider presentation changes persist in the Library, reload live, and reject unregistered providers or unsafe SVG content.
+- The official website now downloads the detected Mac build directly and always exposes an explicit alternate-architecture link.
+
 ## v1.3.0 — 2026-07-23
 
 > **Manual upgrade required:** v1.2.0 and earlier cannot cross the previous ad-hoc/unsigned trust boundary through auto-update. Download the matching v1.3.0 DMG and replace the installed app once; v1.3.0 intentionally publishes no update metadata.

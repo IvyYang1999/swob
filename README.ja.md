@@ -23,7 +23,7 @@ Swob は **6 個のネイティブ形式アダプター**と 1 個の Claude 互
 </div>
 
 > [!IMPORTANT]
-> **公開 v1.3.0 は、ここで示す製品機能と一致しています。** 以下の機能画像はリリース済み source の画面を基に、英語デモとして再構成し、サンプルデータを匿名化したものです。実装済みのレイアウトとワークフローを示すもので、未編集の本番データ画面ではありません。画像内の数値は例示用で、下記の監査 corpus とは別集計です。
+> **公開 v1.3.1 は、ここで示す製品機能と一致しています。** 以下の機能画像はリリース済み source の画面を基に、英語デモとして再構成し、サンプルデータを匿名化したものです。実装済みのレイアウトとワークフローを示すもので、未編集の本番データ画面ではありません。画像内の数値は例示用で、下記の監査 corpus とは別集計です。
 
 ![現在の main を基に再構成した Swob Session Galaxy の英語デモ](site/assets/graph-view.png)
 
@@ -127,12 +127,12 @@ Swob は transcript 表示だけではありません。
 
 [GitHub Releases](https://github.com/IvyYang1999/swob/releases) を、現在のバージョン、対応 architecture、署名状態、不変 asset 名の正準情報源とします。この README は installer URL を推測せず、恒久的な fallback version も置きません。
 
-> 2026-07-23 時点の公開 baseline は、Developer ID 署名・公証済みの v1.3.0 で、Apple Silicon / Intel Mac 向け asset があります。
+> 2026-07-24 時点の公開 baseline は、Developer ID 署名・公証済みの v1.3.1 で、Apple Silicon / Intel Mac 向け asset があります。
 
 **動作環境：** Apple Silicon または Intel の macOS。
 
 > [!IMPORTANT]
-> **v1.2.0 ユーザーは一度だけ手動移行が必要です。** v1.2.0 は Developer ID trust root より前のため、v1.3.0 へ安全に自動更新できません。本リポジトリから対応する v1.3.0 DMG をダウンロードして Swob を一度上書きしてください。移行後の署名版は、隔離され E2E gate 済みの更新 channel を利用できます。
+> **v1.2.0 ユーザーは一度だけ手動移行が必要です。** v1.2.0 は Developer ID trust root より前のため、署名済み release line へ安全に自動更新できません。本リポジトリから対応する v1.3.1 DMG をダウンロードして Swob を一度上書きしてください。既存の v1.3.0 は、隔離され E2E gate 済みの署名 update channel を利用できます。
 
 ### 現在の `main`
 
@@ -177,8 +177,8 @@ CLI は JSON を返すため、他の Agent は UI をスクレイピングせ�
 
 | チャンネル | 内容 |
 |---|---|
-| **Stable v1.3.0** | Developer ID 署名・公証済み macOS 正式版。multi-harness 取り込み（6 ネイティブ + 1 互換 + 4 実験的検出）、Session Galaxy、Execution Tree、Context Inspector、Session Audit、任意 AI Insights、SQLite FTS5、CLI、バックアップ/エクスポート、resume を含みます。 |
-| **現在の `main`** | v1.3.0 以降の開発 source。安定版 installer に未収録の変更を含む場合があり、ダウンロードの正準情報源は引き続き GitHub Releases です。 |
+| **Stable v1.3.1** | Developer ID 署名・公証済み macOS 正式版。信頼できる detail fallback、logical conversation history、確実な group folding、avatar/provider icon override、自動 CLI install と v1.3.0 の全機能を含みます。 |
+| **現在の `main`** | v1.3.1 以降の開発 source。安定版 installer に未収録の変更を含む場合があり、ダウンロードの正準情報源は引き続き GitHub Releases です。 |
 
 ## 技術スタック
 

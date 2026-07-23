@@ -214,12 +214,15 @@ describe.sequential('Swob CLI machine contract', () => {
         }
       })
       expect(elapsedMs).toBeGreaterThanOrEqual(2_500)
-      expect(elapsedMs).toBeLessThan(5_000)
+      // SQLite owns the 3s busy timeout. A loaded CI runner can deschedule this
+      // process after SQLite returns, so the upper bound is a deadlock guard,
+      // not a second assertion about scheduler latency.
+      expect(elapsedMs).toBeLessThan(9_000)
     } finally {
       blocker.exec('ROLLBACK')
       blocker.close()
     }
-  }, 10_000)
+  }, 12_000)
 
   it('批量 move/rename 是单事务，undo 可完整恢复', async () => {
     parsed(await invoke(['folder', 'create', '目标', '--json']))

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>整理与撤销 · Swob Docs</title>
+  <meta name="description" content="移动和重命名不是散落的文件操作，而是一笔先记反向计划、再执行的 Vault 事务。">
+  <meta name="theme-color" content="#efebe2">
+  <link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/docs.css">
+</head>
+<body data-section="guides">
+  <a class="skip-link" href="#content">跳到正文</a>
+  <header class="docs-header">
+    <a class="docs-brand" href="../../zh/"><img src="../../assets/favicon.svg" width="28" height="28" alt=""><span>swob</span><em>docs</em></a>
+    <nav aria-label="文档工具"><a href="../../zh/">官网</a><a href="../en/index.html" lang="en">EN structure</a><a class="github-link" href="https://github.com/IvyYang1999/swob">GitHub</a></nav>
+  </header>
+  <details class="mobile-chapters"><summary>浏览五章</summary><nav class="chapter-nav" aria-label="文档章节">
+    <a href="../index.html"><span>01</span>快速上手</a>
+    <a href="../concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="../metrics.html"><span>03</span>统计口径</a>
+    <a href="../guides/resume.html"><span>04</span>功能手册</a>
+    <a href="../troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav></details>
+  <div class="docs-layout">
+    <aside class="docs-sidebar"><nav class="chapter-nav" aria-label="文档章节">
+    <a href="../index.html"><span>01</span>快速上手</a>
+    <a href="../concepts/vault.html"><span>02</span>核心概念</a>
+    <a href="../metrics.html"><span>03</span>统计口径</a>
+    <a href="../guides/resume.html"><span>04</span>功能手册</a>
+    <a href="../troubleshooting.html"><span>05</span>FAQ 与排障</a>
+  </nav>
+      <div class="side-group"><strong>核心概念</strong><a href="../concepts/vault.html">Vault</a><a href="../concepts/lenses-folders.html">镜头 vs 文件夹</a><a href="../concepts/recovery.html">复活与备份</a><a href="../concepts/lineage.html">血统图谱</a></div>
+      <div class="side-group"><strong>功能手册</strong><a href="../guides/resume.html">多客户端 Resume</a><a href="../guides/organize.html">整理与撤销</a><a href="../guides/profiles.html">Profile 与智能重命名</a><a href="../guides/cli.html">CLI 全命令</a><a href="../guides/ssh.html">SSH 远程</a></div>
+    </aside>
+    <main class="docs-content" id="content"><header class="doc-hero"><p class="doc-kicker">04 · FEATURE GUIDE</p><h1>整理与撤销</h1><p class="doc-lead">移动和重命名不是散落的文件操作，而是一笔先记反向计划、再执行的 Vault 事务。</p></header><section><h2>安全整理</h2><ol class="steps"><li><strong>先预览</strong><p>项目整理与智能整理先给出目标文件夹和元数据变化。</p></li><li><strong>整批提交</strong><p>每个会话包必须有正确标记，目标必须在当前 Vault 内；重名会生成安全后缀。</p></li><li><strong>需要时撤销</strong><p>“撤销最近整理”只处理最近一笔 applied/partial 事务，先完整预检再反向移动。</p></li></ol></section><section><h2>撤销不会做什么</h2><ul class="checks"><li>不会覆盖后来占据原位置的内容。</li><li>不会删除整理后新增的非空文件夹。</li><li>不会猜测损坏日志的反向路径。</li><li>每次只撤销最近一笔组织事务。</li></ul></section><nav class="next-links"><a href="../guides/cli.html">CLI 全命令 →</a><a href="../troubleshooting.html">遇到问题？看排障 →</a></nav></main>
+  </div>
+  <footer><span>Swob Docs · 口径先于结论</span><span>本地优先 · 证据可追溯 · 局限明示</span></footer>
+</body>
+</html>

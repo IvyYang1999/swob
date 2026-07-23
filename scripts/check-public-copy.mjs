@@ -84,7 +84,6 @@ const forbidden = [
   [/11\s*種類[^。\n]{0,60}(?:取り込み|検索|履歴)/, 'must not claim 11 readable Japanese sources'],
   [/indexes every message/i, 'must not claim every detected message is indexed'],
   [/索引全部消息|全メッセージ[^。\n]{0,40}索引/, 'must not claim every detected message is indexed'],
-  [/releases\/download\//i, 'public entry points must use the verified Releases page, not a guessed asset URL'],
   [/ChatGPT\s*\((?:via export|通过导出)\)/i, 'ChatGPT import is not a verified current capability'],
   [/Most AI tools[^.\n]{0,80}30 days|大多数 AI 工具[^。\n]{0,80}30 天/i, 'the 30-day default is verified for Claude Code only'],
   [/one[- ]click[^.\n]{0,100}(?:restore|recover)[^.\n]{0,100}continue|一键[^。\n]{0,80}(?:恢复|复活)[^。\n]{0,80}继续/i, 'recovery is conditional, not universally one-click'],
@@ -98,6 +97,22 @@ for (const [file, content] of contentByFile) {
   }
 }
 
+const packageVersion = JSON.parse(
+  fs.readFileSync(path.join(root, 'package.json'), 'utf8')
+).version
+const directDownloadPattern = /https:\/\/github\.com\/IvyYang1999\/swob\/releases\/download\/v([^/"'\s]+)\/swob-([^/"'\s]+)-(arm64|x64)\.dmg/g
+for (const [file, content] of contentByFile) {
+  for (const match of content.matchAll(directDownloadPattern)) {
+    if (match[1] !== packageVersion || match[2] !== packageVersion) {
+      errors.push(`${file}: direct installer URL must match package version ${packageVersion}`)
+    }
+  }
+}
+const websiteDownloadSource = contentByFile.get('website/src/download.ts')
+if (websiteDownloadSource && !websiteDownloadSource.includes(`RELEASE_VERSION = '${packageVersion}'`)) {
+  errors.push(`website/src/download.ts: RELEASE_VERSION must match package version ${packageVersion}`)
+}
+
 for (const file of ['site/index.html', 'site/zh/index.html']) {
   const content = contentByFile.get(file)
   const jsonLdText = content.match(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/)?.[1]
@@ -109,8 +124,8 @@ for (const file of ['site/index.html', 'site/zh/index.html']) {
   if (software.softwareVersion === '1.2.0' && !/agpl-3\.0/i.test(software.license ?? '')) {
     errors.push(`${file}: the public v1.2.0 SoftwareApplication must retain its AGPL-3.0 license`)
   }
-  if (software.softwareVersion === '1.3.0' && !/apache.*2\.0/i.test(software.license ?? '')) {
-    errors.push(`${file}: a public v1.3.0 SoftwareApplication must use Apache-2.0`)
+  if (/^1\.(?:[3-9]|\d{2,})\./.test(software.softwareVersion ?? '') && !/apache.*2\.0/i.test(software.license ?? '')) {
+    errors.push(`${file}: a public v1.3.0+ SoftwareApplication must use Apache-2.0`)
   }
 }
 

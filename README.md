@@ -23,7 +23,7 @@ Swob parses local histories through **6 native-format adapters** and 1 Claude-co
 </div>
 
 > [!IMPORTANT]
-> **The public v1.3.0 release now matches the product shown here.** The feature images below are English demo reconstructions based on the released source; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below.
+> **The public v1.3.1 release matches the product shown here.** The feature images below are English demo reconstructions based on the released source; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below.
 
 ![English demo reconstruction of the Swob Session Galaxy in current main](site/assets/graph-view.png)
 
@@ -127,12 +127,12 @@ Public README claims checked on 2026-07-21. `✅` = explicitly documented; `◐`
 
 [GitHub Releases](https://github.com/IvyYang1999/swob/releases) is the truth source for the current version, supported architectures, signatures, and immutable asset names. This README deliberately does not synthesize or permanently fall back to an installer URL.
 
-> As of 2026-07-23, the public baseline is the Developer ID signed and notarized v1.3.0 release for Apple Silicon and Intel Mac.
+> As of 2026-07-24, the public baseline is the Developer ID signed and notarized v1.3.1 release for Apple Silicon and Intel Mac.
 
 **System requirement:** macOS on Apple Silicon or Intel.
 
 > [!IMPORTANT]
-> **One manual migration is required for v1.2.0 users.** Because v1.2.0 predates the Developer ID trust root, it cannot safely auto-update into v1.3.0. Download the matching v1.3.0 DMG from this repository and overwrite Swob once. Signed releases after that migration can use the isolated, E2E-gated update channel.
+> **One manual migration is required for v1.2.0 users.** Because v1.2.0 predates the Developer ID trust root, it cannot safely auto-update into the signed release line. Download the matching v1.3.1 DMG from this repository and overwrite Swob once. Existing v1.3.0 users can update through the isolated, E2E-gated signed channel.
 
 ### Current `main`
 
@@ -177,8 +177,8 @@ Read the complete boundaries in [PRIVACY.md](PRIVACY.md). Report vulnerabilities
 
 | Channel | What it contains |
 |---|---|
-| **Stable v1.3.0** | Developer ID signed and notarized macOS release with multi-harness ingestion (6 native + 1 compatible + 4 experimental detection), Session Galaxy, Execution Tree, Context Inspector, Session Audit, optional AI Insights, SQLite FTS5, CLI, backup/export, and resume. |
-| **Current `main`** | Development source after v1.3.0. It may contain changes not yet represented by a stable installer; GitHub Releases remains the download truth source. |
+| **Stable v1.3.1** | Developer ID signed and notarized macOS release with trustworthy session detail fallbacks, logical conversation history, reliable group folding, avatar/provider-icon overrides, automatic CLI installation, and the v1.3.0 feature set. |
+| **Current `main`** | Development source after v1.3.1. It may contain changes not yet represented by a stable installer; GitHub Releases remains the download truth source. |
 
 ## Tech stack
 

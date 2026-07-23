@@ -31,6 +31,11 @@ export function GalaxySharePreview({
   const colorScheme = useStore((s) => s.colorScheme)
   const isDark = theme === 'dark'
 
+  // Freeze nodes snapshot on mount — parent re-renders produce new array refs
+  // but the share image must stay stable for the entire modal lifecycle.
+  // A new snapshot is created automatically on the next open (remount).
+  const [frozenNodes] = useState<readonly GalaxyNode[]>(() => nodes)
+
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [rendering, setRendering] = useState(true)
   const [renderError, setRenderError] = useState<string | null>(null)
@@ -44,7 +49,7 @@ export function GalaxySharePreview({
     setRenderError(null)
 
     const options: GalaxyShareOptions = {
-      nodes,
+      nodes: frozenNodes,
       sourceColors,
       sourceLabels,
       locale,
@@ -65,7 +70,7 @@ export function GalaxySharePreview({
       })
 
     return () => { cancelled = true }
-  }, [nodes, sourceColors, sourceLabels, locale, isDark, colorScheme])
+  }, [frozenNodes, sourceColors, sourceLabels, locale, isDark, colorScheme])
 
   const handleCopy = useCallback(async () => {
     if (!imageUrl) return

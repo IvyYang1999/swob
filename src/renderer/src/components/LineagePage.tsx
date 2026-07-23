@@ -542,9 +542,16 @@ export function LineagePage() {
 
     const dpr = window.devicePixelRatio || 1
     const rect = canvas.getBoundingClientRect()
-    canvas.width = rect.width * dpr
-    canvas.height = rect.height * dpr
-    ctx.scale(dpr, dpr)
+    const newW = Math.round(rect.width * dpr)
+    const newH = Math.round(rect.height * dpr)
+
+    // Only reset backing store when size actually changed — avoids white-frame flicker
+    if (canvas.width !== newW || canvas.height !== newH) {
+      canvas.width = newW
+      canvas.height = newH
+    }
+    // setTransform is absolute (not cumulative like ctx.scale), safe to call every frame
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     const t = transformRef.current
     ctx.clearRect(0, 0, rect.width, rect.height)

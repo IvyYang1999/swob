@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "baseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
+  "baseline": "6d43ae36f19d9eee227618c7307749d711cab12d",
   "tool": {
     "name": "ScanCode Toolkit",
     "version": "32.5.0",
@@ -18,26 +18,18 @@
       "--classify",
       "--processes 2"
     ],
-    "input": "Git archive of 405 tracked files at the baseline, excluding .git, node_modules, environment files, user data and audit outputs.",
+    "input": "Git archive of the 591 tracked files at the product baseline. ScanCode processed 590 files; its default inventory omitted .gitignore. The archive excludes .git, node_modules, environment files, user data and later audit-output edits.",
     "rawResult": "Retained only in the local temporary audit area; intentionally not committed because it contains machine-local execution metadata."
   },
   "result": {
-    "filesScanned": 405,
+    "filesScanned": 590,
     "scanErrors": 0,
     "scanWarnings": 0,
-    "licenseBearingProjectFiles": [
-      "LICENSE",
-      "package.json",
-      "package-lock.json",
-      "README.md",
-      "README.ja.md",
-      "README.zh.md",
-      "site/index.html",
-      "site/zh/index.html",
-      "site/卖点事实包.md"
-    ],
-    "projectSourceHeaderFinding": "No third-party SPDX, license or copyright header was detected in product source files.",
-    "copyrightFinding": "The only detected copyright statement was the Free Software Foundation notice in the repository AGPL-3.0 license text.",
+    "licenseBearingFiles": 35,
+    "copyrightBearingFiles": 5,
+    "projectSourceHeaderFinding": "The only product-source license detection was the intentional MIT attribution in src/renderer/src/assets/main.css for the Paper/Minimal and Nordic Night/Nord color schemes. Their complete copyright and MIT notices are pinned in compliance/third-party-static-notices.json and reproduced in THIRD_PARTY_NOTICES.",
+    "unaccountedThirdPartySourceHeaderFinding": "No unaccounted third-party SPDX, license or copyright header was detected in product source files.",
+    "projectMetadataFinding": "Apache-2.0 appears in the current LICENSE and product metadata. AGPL-3.0 references remain only where the changelog, compatibility boundary and historical versions require them.",
     "vendoredSourceFinding": "No vendored source tree was identified in the audited tracked source scope."
   },
   "interpretation": "This is a source-tree license scan, not proof of authorship and not a substitute for the package, asset, history, similarity and final-artifact reviews in this audit."

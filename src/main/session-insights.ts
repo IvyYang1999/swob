@@ -14,6 +14,14 @@ import type { SessionSummary } from './types'
 
 export type InsightsProgress = (stage: string, current: number, total: number) => void
 
+export interface InsightsGenerationOptions {
+  signal?: AbortSignal
+}
+
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+}
+
 export interface InsightsReport {
   generatedAt: string
   dateRange: { start: string; end: string }
@@ -69,7 +77,8 @@ function dayKey(d: Date): string {
 export async function generateInsightsReport(
   sessions: SessionSummary[],
   maxSessions = 200,
-  onProgress?: InsightsProgress
+  onProgress?: InsightsProgress,
+  options: InsightsGenerationOptions = {}
 ): Promise<InsightsReport> {
   const eligible = sessions
     .filter(s => s.turnCount > 1 && s.filePath)
@@ -78,6 +87,7 @@ export async function generateInsightsReport(
 
   const analyzed: Array<{ session: SessionSummary; audit: SessionAuditResult }> = []
   for (let i = 0; i < eligible.length; i++) {
+    throwIfCancelled(options.signal)
     const s = eligible[i]
     try {
       const msgs = await parseSessionFile(s.filePath)
@@ -385,7 +395,8 @@ export interface LlmNarrative {
 async function sampleSessionContent(
   sessions: SessionSummary[],
   maxSessions: number,
-  onProgress?: InsightsProgress
+  onProgress?: InsightsProgress,
+  signal?: AbortSignal
 ): Promise<string> {
   const lines: string[] = []
   const picked = sessions
@@ -394,6 +405,7 @@ async function sampleSessionContent(
     .slice(0, maxSessions)
 
   for (let i = 0; i < picked.length; i++) {
+    throwIfCancelled(signal)
     const s = picked[i]
     try {
       const msgs = await parseSessionFile(s.filePath)
@@ -422,10 +434,11 @@ export async function generateLlmNarrative(
   report: InsightsReport,
   sessions: SessionSummary[],
   llm: LlmSettings,
-  onProgress?: InsightsProgress
+  onProgress?: InsightsProgress,
+  options: InsightsGenerationOptions = {}
 ): Promise<LlmNarrative> {
   onProgress?.('sampling', 0, 1)
-  const contentSample = await sampleSessionContent(sessions, 60, onProgress)
+  const contentSample = await sampleSessionContent(sessions, 60, onProgress, options.signal)
 
   const statsBlock = JSON.stringify({
     totalSessions: report.totalSessions,
@@ -459,7 +472,7 @@ Return STRICT JSON with exactly these keys (values are markdown strings):
   "workPatterns": "2-3 paragraphs analyzing HOW the user interacts: iterate quickly vs detailed specs? interrupt often? multi-tool workflows? cite specific examples with **bold** key insights",
   "frictionAnalysis": "top friction points visible in the data: repeated corrections, tool errors, context overflows — with concrete examples",
   "recommendations": "3-5 numbered, actionable recommendations tailored to this user's patterns (e.g. CLAUDE.md rules to add, workflow changes, tool choices)"
-}`, 4096)
+}`, 4096, { signal: options.signal, connectTimeoutMs: 30_000, totalTimeoutMs: 120_000 })
 
   onProgress?.('llm', 1, 1)
   const jsonMatch = raw.match(/\{[\s\S]*\}/)

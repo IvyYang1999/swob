@@ -5,6 +5,7 @@ export const USAGE_FACT_SCHEMA_VERSION = 4
 export type AnalysisPreset = 'today' | '7d' | '30d' | '90d' | 'all'
 export type MetricBasis = 'billing' | 'conversation'
 export type AnalysisDimension = 'global' | 'time' | 'hour' | 'source' | 'model' | 'project' | 'folder' | 'session'
+export type DashboardAnalysisDimension = Exclude<AnalysisDimension, 'folder'>
 /** Legacy source IDs remain readable; future providers may use namespaced ProviderId strings. */
 export type AnalysisSourceId = string
 
@@ -108,6 +109,13 @@ export interface InsightsQueryResult {
     unknownTimeEvents: number
     lastIndexedAt: string | null
   }
+}
+
+export interface InsightsQueryBundleResult {
+  schemaVersion: typeof USAGE_FACT_SCHEMA_VERSION
+  usageRevision: string
+  scope: AnalysisScope
+  results: Record<DashboardAnalysisDimension, InsightsQueryResult>
 }
 
 export interface InsightsDrilldownSession {

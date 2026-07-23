@@ -18,6 +18,7 @@ export interface AnalysisScope {
 export type AnalysisDimension =
   | 'global' | 'time' | 'hour' | 'source'
   | 'model' | 'project' | 'folder' | 'session'
+export type DashboardAnalysisDimension = Exclude<AnalysisDimension, 'folder'>
 
 export interface CoverageMetric {
   covered: number
@@ -80,6 +81,13 @@ export interface InsightsQueryResult {
     unknownTimeEvents: number
     lastIndexedAt: string | null
   }
+}
+
+export interface InsightsQueryBundleResult {
+  schemaVersion: number
+  usageRevision: string
+  scope: AnalysisScope
+  results: Record<DashboardAnalysisDimension, InsightsQueryResult>
 }
 
 export interface InsightsDrilldownSession {

@@ -59,7 +59,7 @@ test('五页仪表盘可达且带范围标签与口径切换', async () => {
 
   // Audit tab keeps report generator
   await page.getByRole('tab', { name: /审计报告|Audit Report/ }).click()
-  await expect(page.getByText(/Quick Report/)).toBeVisible()
+  await expect(page.getByText(/快速报告|Quick Report/)).toBeVisible()
 
   // Narrow window: tabs remain reachable, no horizontal body scroll
   await page.setViewportSize({ width: 640, height: 700 })

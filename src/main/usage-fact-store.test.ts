@@ -11,6 +11,7 @@ import {
   closeUsageFactStore,
   drilldownInsights,
   queryInsights,
+  queryInsightsBundle,
   sessionUsageEvents,
   synchronizeUsageFacts,
   usageFactStoreStats
@@ -183,6 +184,24 @@ afterEach(() => {
 })
 
 describe('UsageFact + AnalysisScope', () => {
+  it('returns all dashboard dimensions from one cached usage revision', () => {
+    const session = makeSession('bundle', '/repo/bundle', [
+      usageEvent('bundle-event', localTimestamp(2026, 7, 20, 12), components(10, 5), { model: 'model-a' })
+    ])
+    synchronizeUsageFacts([session], [])
+
+    const first = queryInsightsBundle(scope({ range: '30d' }))
+    const second = queryInsightsBundle(scope({ range: '30d' }))
+
+    expect(second).toBe(first)
+    expect(Object.keys(first.results).sort()).toEqual([
+      'global', 'hour', 'model', 'project', 'session', 'source', 'time'
+    ])
+    expect(first.results.global.total.processedTokens).toBe(15)
+    expect(first.results.session.items[0]).toMatchObject({ key: 'bundle', processedTokens: 15 })
+    expect(first.results.model.items[0]).toMatchObject({ key: 'model-a', processedTokens: 15 })
+  })
+
   it('跨天会话按事件真实日期拆分，五桶完整且 reasoning 不重复计入 processed', () => {
     const session = makeSession('cross-day', '/repo/alpha', [
       usageEvent('day-one', localTimestamp(2026, 7, 20, 23), components(10, 5, 2, 3, 4), { model: 'model-a' }),

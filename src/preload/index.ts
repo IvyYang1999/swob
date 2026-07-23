@@ -14,6 +14,12 @@ import type {
   UserIdentityInput
 } from '../shared/frontend-ipc-contract'
 import type { DashboardLayoutConfig } from '../shared/registry/builtin-widgets'
+import type {
+  ReportJobSnapshot,
+  ReportJobStartRequest,
+  ReportJobStatusRequest,
+  ReportJobUpdateEvent
+} from '../shared/report-jobs'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeTargetInstanceOption = {
@@ -181,6 +187,8 @@ const api = {
   getInsights: () => ipcRenderer.invoke('insights:get'),
   queryInsights: (scope: AnalysisScope, dimension: AnalysisDimension) =>
     ipcRenderer.invoke('insights:query', scope, dimension),
+  queryInsightsBundle: (scope: AnalysisScope) =>
+    ipcRenderer.invoke('insights:queryBundle', scope),
   drilldownInsights: (scope: AnalysisScope, dimension: AnalysisDimension, key: string) =>
     ipcRenderer.invoke('insights:drilldown', scope, dimension, key),
   getInsightSessionEvents: (sessionId: string, scope: AnalysisScope) =>
@@ -198,8 +206,10 @@ const api = {
   getExecutionTree: (filePath: string) => ipcRenderer.invoke('session:getExecutionTree', filePath),
 
   // Insights Report
-  generateInsightsJson: (options?: { startDate?: string; endDate?: string }) => ipcRenderer.invoke('insights:generateJson', options),
-  generateInsights: (options?: { useLlm?: boolean }) => ipcRenderer.invoke('insights:generate', options),
+  reportStart: (request: ReportJobStartRequest): Promise<ReportJobSnapshot> => ipcRenderer.invoke('report:start', request),
+  reportStatus: (request: ReportJobStatusRequest): Promise<ReportJobSnapshot | null> => ipcRenderer.invoke('report:status', request),
+  reportSubscribe: (jobId: string): Promise<ReportJobSnapshot | null> => ipcRenderer.invoke('report:subscribe', jobId),
+  reportCancel: (jobId: string): Promise<ReportJobSnapshot | null> => ipcRenderer.invoke('report:cancel', jobId),
   listModels: () => ipcRenderer.invoke('insights:listModels'),
   getLlmSettings: () => ipcRenderer.invoke('insights:getLlmSettings'),
   setLlmSettings: (settings: { provider: string; credential?: string; model?: string; baseUrl?: string }) =>
@@ -241,8 +251,8 @@ const api = {
     ipcRenderer.on('agent:event', listener)
     return () => ipcRenderer.removeListener('agent:event', listener)
   },
-  onInsightsProgress: (callback: (data: { stage: string; current: number; total: number }) => void) => {
-    const listener = (_e: unknown, data: { stage: string; current: number; total: number }): void => callback(data)
+  onInsightsProgress: (callback: (data: ReportJobUpdateEvent) => void) => {
+    const listener = (_e: unknown, data: ReportJobUpdateEvent): void => callback(data)
     ipcRenderer.on('insights:progress', listener)
     return () => ipcRenderer.removeListener('insights:progress', listener)
   },

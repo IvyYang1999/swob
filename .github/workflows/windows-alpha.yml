@@ -7,18 +7,22 @@ on:
       - feature/t107-windows-alpha
     paths:
       - '.github/workflows/windows-alpha.yml'
+      - 'build/**'
       - 'electron-builder.yml'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/generate-icons.mjs'
       - 'scripts/install-windows-alpha-smoke.ps1'
       - 'src/**'
       - 'e2e/**'
   pull_request:
     paths:
       - '.github/workflows/windows-alpha.yml'
+      - 'build/**'
       - 'electron-builder.yml'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/generate-icons.mjs'
       - 'scripts/install-windows-alpha-smoke.ps1'
       - 'src/**'
       - 'e2e/**'
@@ -48,6 +52,8 @@ jobs:
           node node_modules/esbuild/install.js
           node node_modules/vite/node_modules/esbuild/install.js
           node -e "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.prepare('SELECT 1').get(); db.close(); console.log('better-sqlite3 prebuild ok')"
+      - name: Verify the approved cross-platform icon set
+        run: npm run icons:check
       # The repository-wide suite includes deliberate macOS contracts (brctl,
       # /Applications, POSIX mode bits and Claude Desktop). macOS runs that full
       # gate separately; this runner executes every T107 platform boundary plus

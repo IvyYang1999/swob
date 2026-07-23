@@ -11,10 +11,16 @@ expected_version="$2"
 expected_channel="$3"
 expected_team_id="$4"
 expected_arch="$5"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$script_dir/../.." && pwd)"
 
 if [[ ! -d "$app_bundle" ]]; then
   echo "Missing application bundle: $app_bundle" >&2
   exit 1
+fi
+if [[ "$expected_arch" != "arm64" && "$expected_arch" != "x86_64" ]]; then
+  echo "Unsupported expected architecture: $expected_arch" >&2
+  exit 2
 fi
 
 codesign --verify --deep --strict --verbose=2 "$app_bundle"
@@ -55,8 +61,8 @@ fi
 
 executable="$app_bundle/Contents/MacOS/Swob"
 architectures="$(lipo -archs "$executable")"
-if ! grep -qw "$expected_arch" <<< "$architectures"; then
-  echo "Expected architecture $expected_arch, got: $architectures" >&2
+if [[ "$architectures" != "$expected_arch" ]]; then
+  echo "Expected a single $expected_arch architecture, got: $architectures" >&2
   exit 1
 fi
 
@@ -83,4 +89,20 @@ fi
 spctl --assess --type execute --verbose=4 "$app_bundle"
 xcrun stapler validate "$app_bundle"
 
-echo "Verified signed Swob ${expected_version} (${expected_arch}, channel=${expected_channel})."
+app_asar="$app_bundle/Contents/Resources/app.asar"
+if [[ ! -f "$app_asar" ]]; then
+  echo "Missing packaged app.asar: $app_bundle" >&2
+  exit 1
+fi
+inventory_dir="$(mktemp -d /private/tmp/swob-package-inventory.XXXXXX)"
+cleanup_inventory() {
+  rm -rf "$inventory_dir"
+}
+trap cleanup_inventory EXIT
+node "$repo_root/scripts/check-package.mjs" \
+  --asar "$app_asar" \
+  --inventory-dir "$inventory_dir"
+cleanup_inventory
+trap - EXIT
+
+echo "Verified signed, notarized and package-allowlisted Swob ${expected_version} (${expected_arch}, channel=${expected_channel})."

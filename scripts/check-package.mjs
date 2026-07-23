@@ -48,7 +48,7 @@ for (const packagePath of productionPackagePaths(lock)) {
   productionPackageVersions.set(name, versions)
 }
 
-const exactRuntimeFiles = new Set(['/package.json', '/LICENSE', '/THIRD_PARTY_NOTICES'])
+const exactRuntimeFiles = new Set(['/package.json', '/LICENSE', '/NOTICE', '/THIRD_PARTY_NOTICES'])
 const runtimeRoots = ['/out/main', '/out/preload', '/out/renderer']
 const privateSegments = new Set(['.claude', '.git', '.worktrees', 'worktrees'])
 const projectOnlySegments = new Set(['compliance', 'website', 'site', 'e2e', 'test', 'tests', '__tests__', 'docs'])
@@ -132,6 +132,7 @@ function assertRequiredEntries(entries, violations) {
 
 const noticeContract = [
   ['LICENSE.txt', path.join(repoRoot, 'LICENSE'), 100],
+  ['NOTICE', path.join(repoRoot, 'NOTICE'), 50],
   ['THIRD_PARTY_NOTICES', path.join(repoRoot, 'THIRD_PARTY_NOTICES'), 100],
   ['LICENSE.electron.txt', path.join(repoRoot, 'node_modules/electron/dist/LICENSE'), 100],
   ['LICENSES.chromium.html', path.join(repoRoot, 'node_modules/electron/dist/LICENSES.chromium.html'), 100_000],
@@ -182,6 +183,7 @@ function checkOuterPayload(resourcesRoot, asarEntries, violations) {
     'app-update.yml',
     'icon.icns',
     'LICENSE.txt',
+    'NOTICE',
     'THIRD_PARTY_NOTICES',
     'LICENSE.electron.txt',
     'LICENSES.chromium.html',

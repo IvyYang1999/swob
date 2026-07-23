@@ -1,5 +1,5 @@
 /** Keep in lockstep with package.json; covered by the CLI contract test. */
-export const CLI_VERSION = '1.2.0'
+export const CLI_VERSION = '1.3.0'
 
 export const CLI_EXIT_CODES = [
   { code: 0, meaning: '成功' },

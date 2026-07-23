@@ -113,7 +113,7 @@ function SessionItem({
       onDoubleClick={(e) => { e.stopPropagation(); onDoubleClickRename?.(session.id) }}
       className={`w-full py-1.5 pr-3 text-left hover:bg-surface group ${
         isSelected ? 'bg-surface border-l-2 border-accent' : ''
-      }`}
+      } ${isCloud ? 'opacity-60' : ''}`}
       style={{ paddingLeft: `${depth * 16 + (isSelected ? 10 : 12)}px` }}
     >
       {isRenaming ? (

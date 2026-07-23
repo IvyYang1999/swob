@@ -1,25 +1,27 @@
 import { translate, type Locale } from '../../i18n'
 
-export type InspectorTab = 'details' | 'files' | 'audit'
+export type InspectorTab = 'details' | 'files' | 'audit' | 'context'
 
 interface InspectorTabsProps {
   activeTab: InspectorTab
   onTabChange: (tab: InspectorTab) => void
   locale: Locale
+  tabs?: InspectorTab[]
 }
 
 const TAB_LABEL_KEYS: Record<InspectorTab, string> = {
   details: 'renderer.inspector_tabs.details',
   files: 'renderer.inspector_tabs.files',
-  audit: 'renderer.inspector_tabs.audit'
+  audit: 'renderer.inspector_tabs.audit',
+  context: 'renderer.inspector_tabs.context'
 }
 
-const TABS: InspectorTab[] = ['details', 'files', 'audit']
+const DEFAULT_TABS: InspectorTab[] = ['files', 'context']
 
-export function InspectorTabs({ activeTab, onTabChange, locale }: InspectorTabsProps) {
+export function InspectorTabs({ activeTab, onTabChange, locale, tabs = DEFAULT_TABS }: InspectorTabsProps) {
   return (
-    <div className="grid grid-cols-3 p-0.5 rounded bg-surface" role="tablist" aria-label="Inspector tabs">
-      {TABS.map((tab) => (
+    <div className={`grid p-0.5 rounded bg-surface`} style={{ gridTemplateColumns: `repeat(${tabs.length}, 1fr)` }} role="tablist" aria-label="Inspector tabs">
+      {tabs.map((tab) => (
         <button
           key={tab}
           role="tab"

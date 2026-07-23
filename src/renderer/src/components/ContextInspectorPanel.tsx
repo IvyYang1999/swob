@@ -33,15 +33,15 @@ interface ContextInspectorData {
 }
 
 const CATEGORY_COLORS: Record<ContextCategory, string> = {
-  'user-text': '#3b82f6',
-  'assistant-text': '#22c55e',
-  'tool-input': '#f59e0b',
-  'tool-output': '#ef4444',
-  'system-injection': '#a78bfa',
-  thinking: '#ec4899',
-  image: '#06b6d4',
-  'compact-summary': '#6b7280',
-  unknown: '#374151'
+  'user-text': 'var(--color-soft-blue)',
+  'assistant-text': 'var(--color-soft-green)',
+  'tool-input': 'var(--color-soft-amber)',
+  'tool-output': 'var(--color-soft-red)',
+  'system-injection': 'var(--color-soft-purple)',
+  thinking: 'var(--color-soft-pink)',
+  image: 'var(--color-soft-cyan)',
+  'compact-summary': 'var(--color-muted)',
+  unknown: 'var(--color-faint)'
 }
 
 const CATEGORY_LABELS: Record<ContextCategory, string> = {
@@ -117,10 +117,10 @@ function PressureChart({ turns, peak }: { turns: TurnContext[]; peak: number }) 
         <span>Peak: {formatTokens(peak)}</span>
       </div>
       <svg width={w} height={h} className="block">
-        <path d={`${linePath} L${w},${h} L0,${h} Z`} fill="var(--color-soft-amber, #f59e0b)" opacity={0.08} />
-        <path d={linePath} fill="none" stroke="var(--color-soft-amber, #f59e0b)" strokeWidth={1.5} opacity={0.7} />
+        <path d={`${linePath} L${w},${h} L0,${h} Z`} fill="var(--color-soft-amber)" opacity={0.08} />
+        <path d={linePath} fill="none" stroke="var(--color-soft-amber)" strokeWidth={1.5} opacity={0.7} />
         {points.filter(p => p.isCompact).map((p, i) => (
-          <line key={i} x1={p.x} y1={0} x2={p.x} y2={h} stroke="var(--color-soft-purple, #a78bfa)" strokeWidth={1} strokeDasharray="2 2" opacity={0.5} />
+          <line key={i} x1={p.x} y1={0} x2={p.x} y2={h} stroke="var(--color-soft-purple)" strokeWidth={1} strokeDasharray="2 2" opacity={0.5} />
         ))}
       </svg>
     </div>
@@ -191,12 +191,12 @@ export function ContextInspectorPanel({ filePath }: { filePath: string }) {
           {/* Warnings */}
           {data!.warnings.length > 0 && (
             <div>
-              <div className="text-[10px] font-medium text-yellow-400 flex items-center gap-1 mb-1">
+              <div className="text-[10px] font-medium text-soft-amber flex items-center gap-1 mb-1">
                 <AlertTriangle size={10} />
                 {data!.warnings.length} {translate(locale, 'renderer.context_inspector_panel.warnings')}
               </div>
               {data!.warnings.slice(0, 8).map((w, i) => (
-                <div key={i} className="text-[10px] text-yellow-300/60 pl-4 truncate">
+                <div key={i} className="text-[10px] text-soft-amber/60 pl-4 truncate">
                   T{w.turnIndex}: {w.message}
                 </div>
               ))}

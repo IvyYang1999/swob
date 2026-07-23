@@ -2058,7 +2058,14 @@ export function ChatViewer() {
             </div>
           )}
 
-          {mdMode ? (
+          {selectedSession.messages.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center text-muted">
+              <div className="text-center max-w-xs space-y-3">
+                <Cloud size={28} className="mx-auto text-soft-blue/50" />
+                <div className="text-sm text-secondary">{t('renderer.cloud_session.placeholder')}</div>
+              </div>
+            </div>
+          ) : mdMode ? (
             sourceView ? (
               <SourceView session={selectedSession} sections={sections} customTitle={customTitle} contentRef={contentRef} />
             ) : (

@@ -915,6 +915,25 @@ const translations: Record<Locale, Record<string, string>> = {
     'galaxy.stat_longest': '最长会话',
     'galaxy.share_preview_alt': '会话星图分享预览',
     "renderer.cloud_session.placeholder": "该会话内容在远端，尚未同步到本地",
+    // tF28: detail availability degradation
+    "renderer.detail.transcript_only_banner": "仅有 Markdown 转录，原始对话数据不可用",
+    "renderer.detail.source_recoverable_banner": "原始来源仍存在，可重建",
+    "renderer.detail.source_recoverable_rebuild": "重建",
+    "renderer.detail.unavailable_banner": "会话详情不可用",
+    "renderer.detail.unavailable_badge": "不可用",
+    // tF28: right panel 3-tab
+    "renderer.info_panel.tab_outcomes": "成果",
+    "renderer.info_panel.tab_activity": "活动",
+    "renderer.info_panel.tab_details": "详情",
+    "renderer.info_panel.outputs": "产出文件",
+    "renderer.info_panel.sources": "来源",
+    "renderer.info_panel.no_outputs": "此会话没有创建或编辑文件",
+    "renderer.info_panel.related_sessions": "关联会话",
+    // tF28: successor field
+    "renderer.detail.successor_banner": "该工作已在新会话继续",
+    "renderer.detail.successor_jump": "跳转到新会话",
+    // tF28: insights filter bar
+    "renderer.report_generator.partial_complete": "部分完成",
     // T122_RENDERER_ZH
   },
 
@@ -1831,6 +1850,25 @@ const translations: Record<Locale, Record<string, string>> = {
     'galaxy.stat_longest': 'Longest',
     'galaxy.share_preview_alt': 'Session Galaxy share preview',
     "renderer.cloud_session.placeholder": "Session content is on the remote server and hasn't been synced locally",
+    // tF28: detail availability degradation
+    "renderer.detail.transcript_only_banner": "Markdown transcript only — original conversation data unavailable",
+    "renderer.detail.source_recoverable_banner": "Original source still exists, can be rebuilt",
+    "renderer.detail.source_recoverable_rebuild": "Rebuild",
+    "renderer.detail.unavailable_banner": "Session details unavailable",
+    "renderer.detail.unavailable_badge": "Unavailable",
+    // tF28: right panel 3-tab
+    "renderer.info_panel.tab_outcomes": "Outcomes",
+    "renderer.info_panel.tab_activity": "Activity",
+    "renderer.info_panel.tab_details": "Details",
+    "renderer.info_panel.outputs": "Output files",
+    "renderer.info_panel.sources": "Sources",
+    "renderer.info_panel.no_outputs": "No files created or edited in this session",
+    "renderer.info_panel.related_sessions": "Related sessions",
+    // tF28: successor field
+    "renderer.detail.successor_banner": "Work continued in a newer session",
+    "renderer.detail.successor_jump": "Jump to newer session",
+    // tF28: insights filter bar
+    "renderer.report_generator.partial_complete": "Partially complete",
     // T122_RENDERER_EN
   }
 }

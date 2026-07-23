@@ -706,30 +706,148 @@ function SessionInfoCard({ session }: { session: any }) {
 }
 
 // ===================================================================
-// Tab 1: Files
+// Detail availability degradation banners (tF28 FIX 2)
 // ===================================================================
 
-function FilesTab({ session, onNavigate }: {
+type DetailAvailability = 'ready' | 'transcript-only' | 'source-recoverable' | 'unavailable'
+
+function DetailAvailabilityBanner({ status }: { status: DetailAvailability }) {
+  const t = useT()
+  if (status === 'ready') return null
+
+  const config: Record<Exclude<DetailAvailability, 'ready'>, { labelKey: string; color: string; showRebuild?: boolean }> = {
+    'transcript-only': { labelKey: 'renderer.detail.transcript_only_banner', color: 'bg-soft-amber/10 border-soft-amber/30 text-soft-amber' },
+    'source-recoverable': { labelKey: 'renderer.detail.source_recoverable_banner', color: 'bg-soft-blue/10 border-soft-blue/30 text-soft-blue', showRebuild: true },
+    'unavailable': { labelKey: 'renderer.detail.unavailable_banner', color: 'bg-soft-red/10 border-soft-red/30 text-soft-red' }
+  }
+  const c = config[status]
+  return (
+    <div className={`px-3 py-2 rounded border text-xs ${c.color}`}>
+      {t(c.labelKey)}
+      {/* TODO: wire rebuild IPC when backend ships source-recoverable */}
+      {c.showRebuild && (
+        <button className="ml-2 underline opacity-70 hover:opacity-100" onClick={() => { /* TODO: call rebuild IPC */ }}>
+          {t('renderer.detail.source_recoverable_rebuild')}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ===================================================================
+// Successor banner (tF28 FIX 4)
+// ===================================================================
+
+function SuccessorBanner({ session }: { session: any }) {
+  const t = useT()
+  const { openSession } = useStore()
+  // TODO: wire to session.successor when backend ships the field
+  const successorId: string | undefined = (session as any).successor
+  if (!successorId) return null
+
+  return (
+    <div className="px-3 py-2 rounded border bg-soft-blue/10 border-soft-blue/30 text-xs text-soft-blue flex items-center gap-2">
+      <span>{t('renderer.detail.successor_banner')}</span>
+      <button
+        onClick={() => openSession(successorId)}
+        className="underline hover:text-primary"
+      >
+        {t('renderer.detail.successor_jump')} &rarr;
+      </button>
+    </div>
+  )
+}
+
+// ===================================================================
+// Tab 1: Outcomes (outputs + sources + highlights)
+// ===================================================================
+
+function OutcomesTab({ session, highlights, onNavigate }: {
   session: any
+  highlights: Highlight[]
   onNavigate?: (id: string) => void
 }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
   const s = session
   const referencedFiles: FileRef[] = s.referencedFiles || []
+
+  // Outputs = created + edited files only (NOT reads)
+  const outputFiles = useMemo(
+    () => referencedFiles.filter((f: FileRef) =>
+      f.actions.includes('write') || f.actions.includes('edit')
+    ),
+    [referencedFiles]
+  )
+
+  const outputTree = useMemo(() => buildFileTree(outputFiles, s.cwds?.[0]), [outputFiles, s.cwds])
+
+  // Sources = images expanded, refs collapsed
+  const hasImages = (s.messages || []).some((m: any) => m.type === 'user' && m.images?.length > 0)
+
+  return (
+    <div className="space-y-4">
+      {/* Output files (created + edited only) */}
+      <DisclosureSection
+        title={t('renderer.info_panel.outputs')}
+        icon={<Pencil size={12} />}
+        badge={outputFiles.length || undefined}
+        defaultOpen={true}
+      >
+        {outputFiles.length > 0 ? (
+          <div className="space-y-0.5 ml-1">
+            <FileTreeNode node={outputTree} />
+          </div>
+        ) : (
+          <div className="text-[11px] text-muted ml-1">
+            {t('renderer.info_panel.no_outputs')}
+          </div>
+        )}
+      </DisclosureSection>
+
+      {/* Sources: images expanded */}
+      {hasImages && (
+        <ImageGallery
+          messages={s.messages || []}
+          onNavigate={(turnUuid) => {
+            // Dispatch swob:navigateToTurn for ChatViewer to scroll + highlight
+            window.dispatchEvent(new CustomEvent('swob:navigateToTurn', { detail: { turnUuid } }))
+            onNavigate?.(`turn-${turnUuid}`)
+          }}
+          defaultOpen={true}
+        />
+      )}
+
+      {/* Highlights (expanded) */}
+      <HighlightList highlights={highlights} sessionId={s.sessionId} defaultOpen={true} />
+    </div>
+  )
+}
+
+// ===================================================================
+// Tab 2: Activity (full file operations + tool stats + execution tree)
+// ===================================================================
+
+function ActivityTab({ session, onNavigate, analysisReady }: {
+  session: any
+  onNavigate?: (id: string) => void
+  analysisReady: boolean
+}) {
+  const t = useT()
+  const locale = useStore((s) => s.locale)
+  const s = session
+  const referencedFiles: FileRef[] = s.referencedFiles || []
   const nonImageFiles = referencedFiles.filter((f: FileRef) => !f.actions.includes('user-image'))
+  const toolEntries = Object.entries(s.toolUsage).sort((a, b) => (b[1] as number) - (a[1] as number))
 
   // Group files by cwd
   const cwdFileGroups = useMemo(() => {
     if (s.cwds.length === 0 && nonImageFiles.length === 0) return []
-
     const groups: Array<{ cwd: string; files: FileRef[] }> = []
     for (const cwd of s.cwds) {
       const cwdFiles = nonImageFiles.filter((f: FileRef) => f.path.startsWith(cwd + '/'))
       groups.push({ cwd, files: cwdFiles })
     }
-
-    // Files not under any cwd
     const allCwdPrefixes = s.cwds.map((c: string) => c + '/')
     const orphanFiles = nonImageFiles.filter((f: FileRef) =>
       !allCwdPrefixes.some((prefix: string) => f.path.startsWith(prefix))
@@ -737,23 +855,12 @@ function FilesTab({ session, onNavigate }: {
     if (orphanFiles.length > 0) {
       groups.push({ cwd: translate(locale, 'renderer.info_panel.other_paths'), files: orphanFiles })
     }
-
     return groups
   }, [s.cwds, nonImageFiles, locale])
 
-  const totalFileCount = nonImageFiles.length
-
-  if (totalFileCount === 0 && s.cwds.length === 0) {
-    return (
-      <div className="text-xs text-muted py-8 text-center">
-        {translate(locale, 'renderer.info_panel.no_file_operations')}
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-4">
-      {/* File tree grouped by cwd */}
+      {/* Full file operations tree grouped by cwd */}
       {cwdFileGroups.map((group) => (
         <DisclosureSection
           key={group.cwd}
@@ -771,15 +878,39 @@ function FilesTab({ session, onNavigate }: {
           )}
         </DisclosureSection>
       ))}
+
+      {/* Tool usage stats */}
+      {toolEntries.length > 0 && (
+        <DisclosureSection
+          title={t('info.tool_usage')}
+          icon={<Wrench size={12} />}
+          badge={toolEntries.length}
+          defaultOpen={false}
+        >
+          <div className="space-y-1">
+            {toolEntries.map(([name, count]) => (
+              <div key={name} className="flex items-center justify-between text-xs">
+                <span className="text-secondary font-mono">{name}</span>
+                <span className="text-muted">{count as number}</span>
+              </div>
+            ))}
+          </div>
+        </DisclosureSection>
+      )}
+
+      {/* Execution tree */}
+      {analysisReady && (
+        <ExecutionTreePanel filePath={s.filePath} />
+      )}
     </div>
   )
 }
 
 // ===================================================================
-// Tab 2: Context
+// Tab 3: Details (context inspector + config + audit + related sessions)
 // ===================================================================
 
-function ContextTab({ session, highlights, onNavigate, analysisReady }: {
+function DetailsTab({ session, highlights, onNavigate, analysisReady }: {
   session: any
   highlights: Highlight[]
   onNavigate?: (id: string) => void
@@ -789,21 +920,15 @@ function ContextTab({ session, highlights, onNavigate, analysisReady }: {
   const locale = useStore((s) => s.locale)
   const s = session
   const configFiles: string[] = s.configFiles || []
-  const toolEntries = Object.entries(s.toolUsage).sort((a, b) => (b[1] as number) - (a[1] as number))
 
   return (
     <div className="space-y-4">
-      {/* Uploaded images (default EXPANDED) */}
-      <ImageGallery
-        messages={s.messages || []}
-        onNavigate={(turnUuid) => onNavigate?.(`turn-${turnUuid}`)}
-        defaultOpen={true}
-      />
+      {/* Context Inspector */}
+      {analysisReady && (
+        <ContextInspectorPanel filePath={s.filePath} />
+      )}
 
-      {/* Highlights / notes (default EXPANDED) */}
-      <HighlightList highlights={highlights} sessionId={s.sessionId} defaultOpen={true} />
-
-      {/* Config files (moved from Files tab) */}
+      {/* Config files with relative paths */}
       <CollapsibleFileList
         icon={Settings}
         label={t('info.config_files')}
@@ -823,38 +948,9 @@ function ContextTab({ session, highlights, onNavigate, analysisReady }: {
         </DisclosureSection>
       )}
 
-      {/* Context Inspector */}
-      {analysisReady && (
-        <ContextInspectorPanel filePath={s.filePath} />
-      )}
-
-      {/* Execution tree */}
-      {analysisReady && (
-        <ExecutionTreePanel filePath={s.filePath} />
-      )}
-
       {/* Session Audit */}
       {analysisReady && (
         <SessionAuditPanel filePath={s.filePath} />
-      )}
-
-      {/* Tool usage */}
-      {toolEntries.length > 0 && (
-        <DisclosureSection
-          title={t('info.tool_usage')}
-          icon={<Wrench size={12} />}
-          badge={toolEntries.length}
-          defaultOpen={false}
-        >
-          <div className="space-y-1">
-            {toolEntries.map(([name, count]) => (
-              <div key={name} className="flex items-center justify-between text-xs">
-                <span className="text-secondary font-mono">{name}</span>
-                <span className="text-muted">{count as number}</span>
-              </div>
-            ))}
-          </div>
-        </DisclosureSection>
       )}
 
       {/* Skill invocations */}
@@ -879,9 +975,9 @@ function ContextTab({ session, highlights, onNavigate, analysisReady }: {
       {/* Branch relationships */}
       <BranchRelationships session={s} />
 
-      {/* Session family tree (lineage) */}
+      {/* Session family tree (lineage / related sessions) */}
       <DisclosureSection
-        title={translate(locale, 'renderer.session_family_tree.session_lineage')}
+        title={translate(locale, 'renderer.info_panel.related_sessions')}
         icon={<GitBranch size={12} className="text-soft-purple" />}
         defaultOpen={false}
       >
@@ -906,11 +1002,11 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
   const selectedSession = useDeferredValue(selectedSessionSnapshot)
   const [panelReadySessionId, setPanelReadySessionId] = useState<string | null>(null)
   const [analysisReadySessionId, setAnalysisReadySessionId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<InspectorTab>('files')
+  const [activeTab, setActiveTab] = useState<InspectorTab>('outcomes')
 
-  // Reset tab to 'files' when session changes
+  // Reset tab to 'outcomes' (default) when session changes
   useEffect(() => {
-    setActiveTab('files')
+    setActiveTab('outcomes')
   }, [selectedSession?.id])
 
   useEffect(() => {
@@ -932,6 +1028,9 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
   const s = selectedSession
   const highlights: Highlight[] = config?.sessionMeta?.[s.sessionId]?.highlights || []
 
+  // tF28 FIX 2: detail availability (stub — ready when backend ships the field)
+  const detailAvailability: DetailAvailability = (s as any).detailAvailability || 'ready'
+
   return (
     <div data-testid="info-panel" className="h-full bg-base overflow-y-auto shrink-0" style={{ width }}>
       <div className="p-4 space-y-4">
@@ -940,24 +1039,39 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
         {/* Always-visible compact session info card */}
         <SessionInfoCard session={s} />
 
-        {/* Tab switcher: Files | Context */}
+        {/* tF28 FIX 4: successor banner */}
+        <SuccessorBanner session={s} />
+
+        {/* tF28 FIX 2: detail availability degradation banner */}
+        <DetailAvailabilityBanner status={detailAvailability} />
+
+        {/* Tab switcher: Outcomes | Activity | Details */}
         <InspectorTabs
           activeTab={activeTab}
           onTabChange={setActiveTab}
           locale={locale}
-          tabs={['files', 'context']}
+          tabs={['outcomes', 'activity', 'details']}
         />
 
         {/* Tab content */}
-        {activeTab === 'files' && (
-          <FilesTab
+        {activeTab === 'outcomes' && (
+          <OutcomesTab
             session={s}
+            highlights={highlights}
             onNavigate={onNavigate}
           />
         )}
 
-        {activeTab === 'context' && (
-          <ContextTab
+        {activeTab === 'activity' && (
+          <ActivityTab
+            session={s}
+            onNavigate={onNavigate}
+            analysisReady={analysisReadySessionId === s.id}
+          />
+        )}
+
+        {activeTab === 'details' && (
+          <DetailsTab
             session={s}
             highlights={highlights}
             onNavigate={onNavigate}

@@ -1734,6 +1734,7 @@ export function ChatViewer() {
     return () => window.removeEventListener('swob:scrollToHighlight', handler)
   }, [scrollToAnnotation])
 
+
   // Build all turns flat list for batch export
   const allTurns = useMemo(() => {
     const result: Turn[] = []
@@ -1984,6 +1985,17 @@ export function ChatViewer() {
     const el = contentRef.current?.querySelector(`#${CSS.escape(id)}`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [mdMode, turnSectionMap, expandedSections, sections, rowIndexById, chatVirtualizer])
+
+  // tF28: Listen for image-jump events from the right panel (swob:navigateToTurn)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const turnUuid = (e as CustomEvent).detail?.turnUuid
+      if (!turnUuid) return
+      handleNavigate(`turn-${turnUuid}`)
+    }
+    window.addEventListener('swob:navigateToTurn', handler)
+    return () => window.removeEventListener('swob:navigateToTurn', handler)
+  }, [handleNavigate])
 
   if (!selectedSession) {
     return (

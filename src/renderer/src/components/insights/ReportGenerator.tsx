@@ -148,7 +148,11 @@ export function ReportGenerator() {
           {t('renderer.report_generator.generated', { value0: job.result?.sessionCount || 0 })}
           {job.type === 'ai' && job.result?.llmUsed ? ` · ${t('renderer.report_generator.ai_included')}` : ''}
           {job.type === 'ai' && job.result?.llmError
-            ? ` · ${t('renderer.report_generator.ai_failed_with_code', { value0: job.result.llmError })}`
+            ? ` · ${
+                String(job.result.llmError).toLowerCase().includes('timeout')
+                  ? t('renderer.report_generator.partial_complete')
+                  : t('renderer.report_generator.ai_failed_with_code', { value0: job.result.llmError })
+              }`
             : ''}
         </div>
       )}

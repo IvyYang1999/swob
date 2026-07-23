@@ -113,7 +113,7 @@ function SessionItem({
       onDoubleClick={(e) => { e.stopPropagation(); onDoubleClickRename?.(session.id) }}
       className={`w-full py-1.5 pr-3 text-left hover:bg-surface group ${
         isSelected ? 'bg-surface border-l-2 border-accent' : ''
-      } ${isCloud ? 'opacity-60' : ''}`}
+      } ${isCloud ? 'opacity-60' : ''} ${(session as any).detailAvailability === 'unavailable' ? 'opacity-50' : ''}`}
       style={{ paddingLeft: `${depth * 16 + (isSelected ? 10 : 12)}px` }}
     >
       {isRenaming ? (
@@ -151,6 +151,12 @@ function SessionItem({
         {hasBranchChildren && (
           <span className="px-1 bg-soft-purple/10 text-soft-purple rounded text-[10px] flex items-center gap-0.5 shrink-0">
             <GitBranch size={9} />{branchChildIds!.length}
+          </span>
+        )}
+        {/* tF28 FIX 2: unavailable sessions get a grayed badge */}
+        {(session as any).detailAvailability === 'unavailable' && (
+          <span className="px-1 bg-soft-red/10 text-soft-red rounded text-[10px] shrink-0">
+            {t('renderer.detail.unavailable_badge')}
           </span>
         )}
       </div>
@@ -193,9 +199,88 @@ const LENS_COLOR_CLASSES: Record<LensGroup['color'], string> = {
   orange: 'border-soft-orange bg-soft-orange/5'
 }
 
+/** Windowed rendering for large groups (>100 items) without react-virtuoso. */
+function WindowedGroupItems({
+  items, groupId, scrollRef, onContextMenu, renamingSessionId, sessionRenameValue,
+  onRenameChange, onRenameSubmit, onRenameCancel, onDoubleClickRename
+}: {
+  items: SessionSummary[]
+  groupId: string
+  scrollRef: React.RefObject<HTMLDivElement | null>
+  onContextMenu: (e: React.MouseEvent, sessionId: string) => void
+  renamingSessionId: string | null
+  sessionRenameValue: string
+  onRenameChange: (v: string) => void
+  onRenameSubmit: () => void
+  onRenameCancel: () => void
+  onDoubleClickRename: (sessionId: string) => void
+}) {
+  const ITEM_HEIGHT = 52
+  const BUFFER = 20
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewHeight, setViewHeight] = useState(600)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onScroll = () => setScrollTop(el.scrollTop)
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) setViewHeight(entry.contentRect.height)
+    })
+    el.addEventListener('scroll', onScroll, { passive: true })
+    ro.observe(el)
+    setScrollTop(el.scrollTop)
+    setViewHeight(el.clientHeight)
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      ro.disconnect()
+    }
+  }, [scrollRef])
+
+  const totalHeight = items.length * ITEM_HEIGHT
+  const containerTop = containerRef.current?.offsetTop ?? 0
+  const relativeScroll = scrollTop - containerTop
+  const startIdx = Math.max(0, Math.floor(relativeScroll / ITEM_HEIGHT) - BUFFER)
+  const endIdx = Math.min(items.length, Math.ceil((relativeScroll + viewHeight) / ITEM_HEIGHT) + BUFFER)
+  const visibleItems = items.slice(startIdx, endIdx)
+
+  return (
+    <div ref={containerRef} style={{ height: totalHeight, position: 'relative' }}>
+      {visibleItems.map((session, i) => (
+        <div
+          key={`${groupId}:${session.id}`}
+          style={{
+            position: 'absolute',
+            top: (startIdx + i) * ITEM_HEIGHT,
+            left: 0,
+            right: 0,
+            height: ITEM_HEIGHT
+          }}
+        >
+          <SessionItem
+            session={session}
+            depth={0}
+            allowDrag={false}
+            onContextMenu={onContextMenu}
+            isRenaming={renamingSessionId === session.id}
+            renameValue={sessionRenameValue}
+            onRenameChange={onRenameChange}
+            onRenameSubmit={onRenameSubmit}
+            onRenameCancel={onRenameCancel}
+            onDoubleClickRename={onDoubleClickRename}
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function LensView({
   dimension, onContextMenu, renamingSessionId, sessionRenameValue,
-  onRenameChange, onRenameSubmit, onRenameCancel, onDoubleClickRename
+  onRenameChange, onRenameSubmit, onRenameCancel, onDoubleClickRename,
+  scrollRef
 }: {
   dimension: LensDimension
   onContextMenu: (e: React.MouseEvent, sessionId: string) => void
@@ -205,6 +290,7 @@ function LensView({
   onRenameSubmit: () => void
   onRenameCancel: () => void
   onDoubleClickRename: (sessionId: string) => void
+  scrollRef: React.RefObject<HTMLDivElement | null>
 }) {
   const { sessions, config, cloudSessionIds, applyOrganization, selectedUniqueId } = useStore()
   const t = useT()
@@ -221,16 +307,21 @@ function LensView({
   // Collapse state: Map<groupId, boolean (expanded)>. Default all collapsed.
   const [expandedGroups, setExpandedGroups] = useState<Map<string, boolean>>(new Map())
 
-  // Reset collapse state when dimension changes
+  // Track which groups have been auto-expanded so auto-expand only fires once per group.
+  // After the first auto-expand, manual toggle takes priority.
+  const hasAutoExpandedRef = useRef<Set<string>>(new Set())
+
+  // Reset collapse state AND hasAutoExpanded when dimension changes
   const prevDimension = useRef(dimension)
   useEffect(() => {
     if (prevDimension.current !== dimension) {
       setExpandedGroups(new Map())
+      hasAutoExpandedRef.current = new Set()
       prevDimension.current = dimension
     }
   }, [dimension])
 
-  // Auto-expand group containing the currently selected session
+  // Auto-expand group containing the currently selected session (once per group)
   const selectedGroupId = useMemo(() => {
     if (!selectedUniqueId) return null
     for (const group of groups) {
@@ -239,10 +330,23 @@ function LensView({
     return null
   }, [groups, selectedUniqueId])
 
+  useEffect(() => {
+    if (!selectedGroupId) return
+    if (hasAutoExpandedRef.current.has(selectedGroupId)) return
+    // Auto-expand only once; after that manual toggle takes priority
+    hasAutoExpandedRef.current.add(selectedGroupId)
+    setExpandedGroups((prev) => {
+      // Don't override an explicit manual collapse (value === false)
+      if (prev.has(selectedGroupId)) return prev
+      const next = new Map(prev)
+      next.set(selectedGroupId, true)
+      return next
+    })
+  }, [selectedGroupId])
+
   const isGroupExpanded = useCallback((groupId: string): boolean => {
-    if (groupId === selectedGroupId) return true
     return expandedGroups.get(groupId) ?? false
-  }, [expandedGroups, selectedGroupId])
+  }, [expandedGroups])
 
   const toggleGroup = useCallback((groupId: string) => {
     setExpandedGroups((prev) => {
@@ -256,11 +360,13 @@ function LensView({
     <div data-testid="lens-view" className="px-2 pb-3 space-y-3">
       {groups.map((group) => {
         const expanded = isGroupExpanded(group.id)
+        const isLargeGroup = group.items.length > 100
         return (
           <section key={group.id} data-lens-group={group.id} className="min-w-0">
             <button
               type="button"
               onClick={() => toggleGroup(group.id)}
+              aria-expanded={expanded}
               className={`w-full h-8 px-2 flex items-center gap-2 border-l-2 cursor-pointer select-none ${LENS_COLOR_CLASSES[group.color]}`}
             >
               {expanded ? <ChevronDown size={12} className="shrink-0 text-muted" /> : <ChevronRight size={12} className="shrink-0 text-muted" />}
@@ -283,21 +389,36 @@ function LensView({
             </button>
             {expanded && (
               <div className="pt-1">
-                {group.items.map((session) => (
-                  <SessionItem
-                    key={`${group.id}:${session.id}`}
-                    session={session}
-                    depth={0}
-                    allowDrag={false}
+                {isLargeGroup ? (
+                  <WindowedGroupItems
+                    items={group.items}
+                    groupId={group.id}
+                    scrollRef={scrollRef}
                     onContextMenu={onContextMenu}
-                    isRenaming={renamingSessionId === session.id}
-                    renameValue={sessionRenameValue}
+                    renamingSessionId={renamingSessionId}
+                    sessionRenameValue={sessionRenameValue}
                     onRenameChange={onRenameChange}
                     onRenameSubmit={onRenameSubmit}
                     onRenameCancel={onRenameCancel}
                     onDoubleClickRename={onDoubleClickRename}
                   />
-                ))}
+                ) : (
+                  group.items.map((session) => (
+                    <SessionItem
+                      key={`${group.id}:${session.id}`}
+                      session={session}
+                      depth={0}
+                      allowDrag={false}
+                      onContextMenu={onContextMenu}
+                      isRenaming={renamingSessionId === session.id}
+                      renameValue={sessionRenameValue}
+                      onRenameChange={onRenameChange}
+                      onRenameSubmit={onRenameSubmit}
+                      onRenameCancel={onRenameCancel}
+                      onDoubleClickRename={onDoubleClickRename}
+                    />
+                  ))
+                )}
               </div>
             )}
           </section>
@@ -890,6 +1011,7 @@ export function Sidebar({ width }: { width: number }) {
             onRenameSubmit={handleSubmitRenameSession}
             onRenameCancel={handleCancelRenameSession}
             onDoubleClickRename={handleDoubleClickRenameSession}
+            scrollRef={scrollRef}
           />
         ) : (
           <>

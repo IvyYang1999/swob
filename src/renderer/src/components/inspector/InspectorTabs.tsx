@@ -1,6 +1,6 @@
 import { translate, type Locale } from '../../i18n'
 
-export type InspectorTab = 'details' | 'files' | 'audit' | 'context'
+export type InspectorTab = 'details' | 'files' | 'audit' | 'context' | 'outcomes' | 'activity'
 
 interface InspectorTabsProps {
   activeTab: InspectorTab
@@ -10,13 +10,15 @@ interface InspectorTabsProps {
 }
 
 const TAB_LABEL_KEYS: Record<InspectorTab, string> = {
-  details: 'renderer.inspector_tabs.details',
+  details: 'renderer.info_panel.tab_details',
   files: 'renderer.inspector_tabs.files',
   audit: 'renderer.inspector_tabs.audit',
-  context: 'renderer.inspector_tabs.context'
+  context: 'renderer.inspector_tabs.context',
+  outcomes: 'renderer.info_panel.tab_outcomes',
+  activity: 'renderer.info_panel.tab_activity'
 }
 
-const DEFAULT_TABS: InspectorTab[] = ['files', 'context']
+const DEFAULT_TABS: InspectorTab[] = ['outcomes', 'activity', 'details']
 
 export function InspectorTabs({ activeTab, onTabChange, locale, tabs = DEFAULT_TABS }: InspectorTabsProps) {
   return (

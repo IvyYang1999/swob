@@ -56,7 +56,7 @@ function Dropdown({ label, children, className }: { label: string; children: Rea
         </svg>
       </button>
       {open && (
-        <div className="absolute left-0 top-full mt-1 z-20 min-w-[180px] max-h-[240px] overflow-y-auto rounded border border-edge bg-panel shadow-lg p-1">
+        <div className="absolute left-0 top-full mt-1 z-20 min-w-[180px] max-h-[240px] overflow-y-auto rounded border border-edge bg-base shadow-lg p-1">
           {children}
         </div>
       )}
@@ -122,7 +122,7 @@ export function FilterBar({ data }: { data: InsightsData }) {
   const hasProject = !!scope.projectOrFolder
 
   return (
-    <div className="sticky top-0 z-10 -mx-4 -mt-4 border-b border-edge bg-panel/95 px-4 py-2 backdrop-blur">
+    <div className="sticky top-0 z-10 -mx-4 -mt-4 border-b border-edge bg-base/95 px-4 py-2 backdrop-blur">
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         {/* Time presets */}
         <div className="flex overflow-hidden rounded border border-edge" role="group" aria-label={translate(zh ? 'zh-CN' : 'en', 'renderer.filter_bar.time_range')}>

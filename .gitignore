@@ -12,5 +12,3 @@ test-results
 
 # 本机 Agent 配置 / worktree（本机特有，跨机复用走 vault harness/）
 /.claude/
-/website/.vercel/
-/website/tsconfig.tsbuildinfo

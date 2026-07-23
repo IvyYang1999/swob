@@ -211,12 +211,11 @@ async function buildOutputs() {
     [path.join(repoRoot, 'build/icon.ico'), ico]
   ])
 
-  for (const targetRoot of [path.join(repoRoot, 'site/assets'), path.join(repoRoot, 'website/public')]) {
-    outputs.set(path.join(targetRoot, 'favicon-32.png'), resized.get(32))
-    outputs.set(path.join(targetRoot, 'apple-touch-icon.png'), resized.get(180))
-    outputs.set(path.join(targetRoot, 'favicon-512.png'), resized.get(512))
-    outputs.set(path.join(targetRoot, 'favicon.svg'), faviconSvg)
-  }
+  const siteAssets = path.join(repoRoot, 'site/assets')
+  outputs.set(path.join(siteAssets, 'favicon-32.png'), resized.get(32))
+  outputs.set(path.join(siteAssets, 'apple-touch-icon.png'), resized.get(180))
+  outputs.set(path.join(siteAssets, 'favicon-512.png'), resized.get(512))
+  outputs.set(path.join(siteAssets, 'favicon.svg'), faviconSvg)
 
   return outputs
 }

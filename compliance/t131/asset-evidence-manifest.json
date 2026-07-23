@@ -57,15 +57,11 @@
           "site/assets/apple-touch-icon.png",
           "site/assets/favicon-32.png",
           "site/assets/favicon-512.png",
-          "site/assets/favicon.svg",
-          "website/public/apple-touch-icon.png",
-          "website/public/favicon-32.png",
-          "website/public/favicon-512.png",
-          "website/public/favicon.svg"
+          "site/assets/favicon.svg"
         ]
       },
-      "fileCount": 12,
-      "aggregateSha256": "0eea9665897be7ea99cf7cebdced8752c29cec6eafdc108050c29d48eedf0759",
+      "fileCount": 8,
+      "aggregateSha256": "68fca01e440de8ec9cdf7e6917584d99bf5573beccdcb47079f291ce2d2392d8",
       "repositoryEvidence": "Owner-designated formal Swob Session Galaxy source plus deterministic outputs verified by build/brand/icon-manifest.json and scripts/generate-icons.mjs.",
       "disposition": "CLEARED_REPRODUCIBLE_BRAND_ASSET"
     },

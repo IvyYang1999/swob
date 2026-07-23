@@ -10,19 +10,7 @@ const fixedPublicFiles = [
   'site/zh/index.html'
 ]
 
-function walkTextFiles(directory) {
-  if (!fs.existsSync(directory)) return []
-  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const absolute = path.join(directory, entry.name)
-    if (entry.isDirectory()) return walkTextFiles(absolute)
-    return /\.(?:html|ts|tsx|md)$/.test(entry.name)
-      ? [path.relative(root, absolute)]
-      : []
-  })
-}
-
-const optionalWebsiteFiles = walkTextFiles(path.join(root, 'website'))
-const publicFiles = [...fixedPublicFiles, ...optionalWebsiteFiles]
+const publicFiles = fixedPublicFiles
 const contentByFile = new Map(
   publicFiles.map((file) => [file, fs.readFileSync(path.join(root, file), 'utf8')])
 )
@@ -108,11 +96,6 @@ for (const [file, content] of contentByFile) {
     }
   }
 }
-const websiteDownloadSource = contentByFile.get('website/src/download.ts')
-if (websiteDownloadSource && !websiteDownloadSource.includes(`RELEASE_VERSION = '${packageVersion}'`)) {
-  errors.push(`website/src/download.ts: RELEASE_VERSION must match package version ${packageVersion}`)
-}
-
 for (const file of ['site/index.html', 'site/zh/index.html']) {
   const content = contentByFile.get(file)
   const jsonLdText = content.match(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/)?.[1]

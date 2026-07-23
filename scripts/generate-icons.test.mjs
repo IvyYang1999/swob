@@ -7,7 +7,7 @@ describe('brand icon manifest paths', () => {
     expect(toManifestPath('build\\brand\\swob-logo-session-galaxy.png')).toBe(
       'build/brand/swob-logo-session-galaxy.png'
     )
-    expect(toManifestPath('website\\public\\favicon.svg')).toBe('website/public/favicon.svg')
+    expect(toManifestPath('site\\assets\\favicon.svg')).toBe('site/assets/favicon.svg')
   })
 
   it('preserves already-portable paths', () => {

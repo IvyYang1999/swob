@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { toManifestPath } from './generate-icons.mjs'
 
@@ -7,20 +6,10 @@ describe('brand icon manifest paths', () => {
     expect(toManifestPath('build\\brand\\swob-logo-session-galaxy.png')).toBe(
       'build/brand/swob-logo-session-galaxy.png'
     )
-    expect(toManifestPath('site\\assets\\favicon.svg')).toBe('site/assets/favicon.svg')
+    expect(toManifestPath('build\\icon.icns')).toBe('build/icon.icns')
   })
 
   it('preserves already-portable paths', () => {
-    expect(toManifestPath('site/assets/favicon-512.png')).toBe('site/assets/favicon-512.png')
-  })
-
-  it('pins hash-bound SVG checkouts to LF on every platform', () => {
-    const attributes = execFileSync(
-      'git',
-      ['check-attr', 'text', 'eol', '--', 'site/assets/favicon.svg'],
-      { encoding: 'utf8' }
-    )
-    expect(attributes).toContain('text: set')
-    expect(attributes).toContain('eol: lf')
+    expect(toManifestPath('build/icon.png')).toBe('build/icon.png')
   })
 })

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="site/assets/favicon.svg" alt="Swob" width="72" height="72" />
+<img src="build/icon.png" alt="Swob" width="72" height="72" />
 
 # Swob
 
@@ -10,7 +10,7 @@
 
 Swob parses local histories through **6 native-format adapters** and 1 Claude-compatible format. It can also detect files from 4 experimental sources without reading their message bodies. Where a source exposes the evidence, Swob adds lineage, incremental SQLite FTS5 search, execution inspection, provenance-aware audit, and optional AI Insights.
 
-[Website](https://swob.app/) · [Verified releases](https://github.com/IvyYang1999/swob/releases) · [Changelog](CHANGELOG.md)
+[Website](https://swob.app/) · [Website source](https://github.com/IvyYang1999/swob-website) · [Verified releases](https://github.com/IvyYang1999/swob/releases) · [Changelog](CHANGELOG.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
@@ -25,7 +25,7 @@ Swob parses local histories through **6 native-format adapters** and 1 Claude-co
 > [!IMPORTANT]
 > **The public v1.3.1 release matches the product shown here.** The feature images below are English demo reconstructions based on the released source; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below.
 
-![English demo reconstruction of the Swob Session Galaxy in current main](site/assets/graph-view.png)
+![English demo reconstruction of the Swob Session Galaxy in current main](docs/readme-assets/graph-view.png)
 
 <p align="center"><sub>Current <code>main</code> · English demo reconstruction · privacy-sanitized illustrative data</sub></p>
 
@@ -65,7 +65,7 @@ Swob goes beyond transcript rendering:
 
 | Session Audit | Execution Tree + Context Inspector |
 |---|---|
-| ![Session Audit in current Swob main](site/assets/session-audit.png) | ![Execution Tree and Context Inspector in current Swob main](site/assets/session-debugger.png) |
+| ![Session Audit in current Swob main](docs/readme-assets/session-audit.png) | ![Execution Tree and Context Inspector in current Swob main](docs/readme-assets/session-debugger.png) |
 
 ## Insights across all sessions
 
@@ -73,7 +73,7 @@ The local dashboard includes token and cost totals, a 365-day heatmap, source/mo
 
 **AI Insights is optional and off until configured.** When explicitly invoked, it sends aggregate metrics plus a bounded sample of real user messages to the provider you configure. Read [PRIVACY.md](PRIVACY.md) before enabling it.
 
-![Swob Insights dashboard in current main](site/assets/insights-dashboard.png)
+![Swob Insights dashboard in current main](docs/readme-assets/insights-dashboard.png)
 
 ## Sources in current `main`
 

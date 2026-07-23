@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="site/assets/favicon.svg" alt="Swob" width="72" height="72" />
+<img src="build/icon.png" alt="Swob" width="72" height="72" />
 
 # Swob
 
@@ -10,7 +10,7 @@
 
 Swob は **6 個のネイティブ形式アダプター**と 1 個の Claude 互換形式でローカル履歴を解析します。ほかの 4 ソースは実験的なファイル検出のみで、メッセージ本文は読み取りません。ソースに証拠がある場合に限り、系譜、SQLite FTS5 増分検索、実行検査、provenance 付き監査、任意の AI Insights を提供します。
 
-[Web サイト](https://swob.app/) · [検証済み Releases](https://github.com/IvyYang1999/swob/releases) · [更新履歴](CHANGELOG.md)
+[Web サイト](https://swob.app/) · [Web サイトのソース](https://github.com/IvyYang1999/swob-website) · [検証済み Releases](https://github.com/IvyYang1999/swob/releases) · [更新履歴](CHANGELOG.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
@@ -25,7 +25,7 @@ Swob は **6 個のネイティブ形式アダプター**と 1 個の Claude 互
 > [!IMPORTANT]
 > **公開 v1.3.1 は、ここで示す製品機能と一致しています。** 以下の機能画像はリリース済み source の画面を基に、英語デモとして再構成し、サンプルデータを匿名化したものです。実装済みのレイアウトとワークフローを示すもので、未編集の本番データ画面ではありません。画像内の数値は例示用で、下記の監査 corpus とは別集計です。
 
-![現在の main を基に再構成した Swob Session Galaxy の英語デモ](site/assets/graph-view.png)
+![現在の main を基に再構成した Swob Session Galaxy の英語デモ](docs/readme-assets/graph-view.png)
 
 <p align="center"><sub>現在の <code>main</code> · 英語デモ再構成 · 匿名化した例示データ</sub></p>
 
@@ -65,7 +65,7 @@ Swob は transcript 表示だけではありません。
 
 | Session Audit | Execution Tree + Context Inspector |
 |---|---|
-| ![現在の Swob main の Session Audit](site/assets/session-audit.png) | ![現在の Swob main の Execution Tree と Context Inspector](site/assets/session-debugger.png) |
+| ![現在の Swob main の Session Audit](docs/readme-assets/session-audit.png) | ![現在の Swob main の Execution Tree と Context Inspector](docs/readme-assets/session-debugger.png) |
 
 ## 全セッション Insights
 
@@ -73,7 +73,7 @@ Swob は transcript 表示だけではありません。
 
 **AI Insights は任意で、設定するまで無効です。** 明示的に実行したときだけ、集計指標と上限付きの実ユーザーメッセージサンプルを、ユーザーが設定したプロバイダーへ送信します。有効化前に [PRIVACY.md](PRIVACY.md) を確認してください。
 
-![現在の main の Swob Insights ダッシュボード](site/assets/insights-dashboard.png)
+![現在の main の Swob Insights ダッシュボード](docs/readme-assets/insights-dashboard.png)
 
 ## 現在の `main` が読むソース
 

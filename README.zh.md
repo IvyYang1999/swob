@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="site/assets/favicon.svg" alt="Swob" width="72" height="72" />
+<img src="build/icon.png" alt="Swob" width="72" height="72" />
 
 # Swob
 
@@ -10,7 +10,7 @@
 
 Swob 通过 **6 个原生格式适配器**与 1 个 Claude 兼容格式解析本地历史；另有 4 个实验来源只能发现文件，尚不能读取消息正文。来源确有证据时，Swob 才提供血统、SQLite FTS5 增量检索、执行检查、带来源标记的审计和可选 AI Insights。
 
-[官网](https://swob.app/) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.zh.md)
+[官网](https://swob.app/) · [官网源码](https://github.com/IvyYang1999/swob-website) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.zh.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
@@ -25,7 +25,7 @@ Swob 通过 **6 个原生格式适配器**与 1 个 Claude 兼容格式解析本
 > [!IMPORTANT]
 > **公开的 v1.3.1 已与这里展示的产品能力对齐。** 下方功能图以已发布源码的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。
 
-![基于当前 main 重构的 Swob Session Galaxy 英文演示图](site/assets/graph-view.png)
+![基于当前 main 重构的 Swob Session Galaxy 英文演示图](docs/readme-assets/graph-view.png)
 
 <p align="center"><sub>当前 <code>main</code> · 英文演示重构 · 使用隐私脱敏的示例数据</sub></p>
 
@@ -65,7 +65,7 @@ Swob 不止渲染聊天记录：
 
 | 会话审计 | 执行树 + 上下文检查器 |
 |---|---|
-| ![当前 Swob main 的会话审计](site/assets/session-audit.png) | ![当前 Swob main 的执行树与上下文检查器](site/assets/session-debugger.png) |
+| ![当前 Swob main 的会话审计](docs/readme-assets/session-audit.png) | ![当前 Swob main 的执行树与上下文检查器](docs/readme-assets/session-debugger.png) |
 
 ## 跨会话 Insights
 
@@ -73,7 +73,7 @@ Swob 不止渲染聊天记录：
 
 **AI Insights 是可选功能，配置前不会启用。** 用户明确触发后，它会把聚合指标和有上限的真实用户消息样本发送给用户配置的模型供应商。启用前请阅读 [PRIVACY.md](PRIVACY.md)。
 
-![当前 main 的 Swob Insights 面板](site/assets/insights-dashboard.png)
+![当前 main 的 Swob Insights 面板](docs/readme-assets/insights-dashboard.png)
 
 ## 当前 `main` 的来源
 

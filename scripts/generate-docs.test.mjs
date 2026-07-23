@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { collectTruth, renderAll, validateTruth, writeOrCheck } from './generate-docs.mjs'
@@ -7,8 +8,16 @@ const repoRoot = path.resolve(import.meta.dirname, '..')
 const html = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;')
 
 describe('Swob docs code synchronization', () => {
-  it('keeps every committed generated page synchronized with source truth', () => {
-    expect(() => writeOrCheck({ check: true })).not.toThrow()
+  it('exports a self-contained snapshot without requiring a website checkout', () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-doc-export-'))
+    try {
+      expect(() => writeOrCheck({ outputDir })).not.toThrow()
+      expect(() => writeOrCheck({ check: true, outputDir })).not.toThrow()
+      fs.writeFileSync(path.join(outputDir, 'index.html'), 'stale')
+      expect(() => writeOrCheck({ check: true, outputDir })).toThrow(/文档导出已过期/)
+    } finally {
+      fs.rmSync(outputDir, { recursive: true, force: true })
+    }
   })
 
   it('renders every CLI command and recovery failure message from their registries', () => {

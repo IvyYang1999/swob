@@ -184,38 +184,18 @@ function encodeIcns(resized) {
   return output
 }
 
-function svgWrapper(png128) {
-  return Buffer.from(
-    [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Swob">',
-      `  <image width="512" height="512" href="data:image/png;base64,${png128.toString('base64')}"/>`,
-      '</svg>',
-      ''
-    ].join('\n')
-  )
-}
-
 async function buildOutputs() {
   await assertSource()
   const master = await renderMaster()
-  const uniqueSizes = [...new Set([...iconsetEntries.map(([, size]) => size), ...icoSizes, 180])]
+  const uniqueSizes = [...new Set([...iconsetEntries.map(([, size]) => size), ...icoSizes])]
   const resized = new Map(await Promise.all(uniqueSizes.map(async (size) => [size, await resizePng(master, size)])))
   const icns = encodeIcns(resized)
   const ico = encodeIco(icoSizes.map((size) => ({ size, buffer: resized.get(size) })))
-  const faviconSvg = svgWrapper(resized.get(128))
-
   const outputs = new Map([
     [path.join(repoRoot, 'build/icon.png'), master],
     [path.join(repoRoot, 'build/icon.icns'), icns],
     [path.join(repoRoot, 'build/icon.ico'), ico]
   ])
-
-  const siteAssets = path.join(repoRoot, 'site/assets')
-  outputs.set(path.join(siteAssets, 'favicon-32.png'), resized.get(32))
-  outputs.set(path.join(siteAssets, 'apple-touch-icon.png'), resized.get(180))
-  outputs.set(path.join(siteAssets, 'favicon-512.png'), resized.get(512))
-  outputs.set(path.join(siteAssets, 'favicon.svg'), faviconSvg)
 
   return outputs
 }

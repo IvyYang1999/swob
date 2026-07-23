@@ -19,8 +19,6 @@ files:
   - '!**/.git'
   - '!**/.worktrees/**'
   - '!compliance/**'
-  - '!website/**'
-  - '!site/**'
   - '!e2e/**'
   - '!docs/**'
   - '!test/**'

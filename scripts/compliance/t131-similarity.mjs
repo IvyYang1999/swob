@@ -28,7 +28,7 @@ const EXCLUDED_FILE_PATTERNS = [
 ]
 const TARGET_PREFIXES = [
   'src/main/', 'src/preload/', 'src/renderer/', 'src/shared/', 'src/cli/',
-  'scripts/', 'e2e/', 'site/'
+  'scripts/', 'e2e/'
 ]
 const TARGET_ROOT_FILES = new Set([
   'electron-builder.yml', 'electron.vite.config.ts', 'playwright.config.ts',

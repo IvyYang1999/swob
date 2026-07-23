@@ -9,23 +9,14 @@
         "paths": [
           "docs/banner.png",
           "docs/screenshot.png",
-          "site/assets/chat.png",
-          "site/assets/graph-view.png",
-          "site/assets/graph-view.webp",
-          "site/assets/insights-dashboard.png",
-          "site/assets/insights-dashboard.webp",
-          "site/assets/main.png",
-          "site/assets/search.png",
-          "site/assets/session-audit.png",
-          "site/assets/session-audit.webp",
-          "site/assets/session-debugger.png",
-          "site/assets/session-debugger.webp",
-          "site/assets/sidebar.png",
-          "site/assets/social-preview.png"
+          "docs/readme-assets/graph-view.png",
+          "docs/readme-assets/insights-dashboard.png",
+          "docs/readme-assets/session-audit.png",
+          "docs/readme-assets/session-debugger.png"
         ]
       },
-      "fileCount": 15,
-      "aggregateSha256": "e1344c493f05fe4b49785cbd25e24f83d190a466920c20a9aa81279913531a7c",
+      "fileCount": 6,
+      "aggregateSha256": "e558809a9b4805507b823abb30b04450ebe6d6368268ef86c44d2f9bb2c92936",
       "repositoryEvidence": "Owner provenance, creation/capture method, redistribution rights and screenshot sanitization are recorded in compliance/t131/资产来源确认表-待yyt填写.md.",
       "disposition": "CLEARED_OWNER_ATTESTATION"
     },
@@ -53,15 +44,11 @@
           "build/brand/swob-logo-session-galaxy.png",
           "build/icon.icns",
           "build/icon.ico",
-          "build/icon.png",
-          "site/assets/apple-touch-icon.png",
-          "site/assets/favicon-32.png",
-          "site/assets/favicon-512.png",
-          "site/assets/favicon.svg"
+          "build/icon.png"
         ]
       },
-      "fileCount": 8,
-      "aggregateSha256": "68fca01e440de8ec9cdf7e6917584d99bf5573beccdcb47079f291ce2d2392d8",
+      "fileCount": 4,
+      "aggregateSha256": "ae5e9d17d796bf6712bbef577883bbacb5df37056bf9af088dd60d63f6bf5011",
       "repositoryEvidence": "Owner-designated formal Swob Session Galaxy source plus deterministic outputs verified by build/brand/icon-manifest.json and scripts/generate-icons.mjs.",
       "disposition": "CLEARED_REPRODUCIBLE_BRAND_ASSET"
     },

@@ -51,7 +51,7 @@ for (const packagePath of productionPackagePaths(lock)) {
 const exactRuntimeFiles = new Set(['/package.json', '/LICENSE', '/NOTICE', '/THIRD_PARTY_NOTICES'])
 const runtimeRoots = ['/out/main', '/out/preload', '/out/renderer']
 const privateSegments = new Set(['.claude', '.git', '.worktrees', 'worktrees'])
-const projectOnlySegments = new Set(['compliance', 'website', 'site', 'e2e', 'test', 'tests', '__tests__', 'docs'])
+const projectOnlySegments = new Set(['compliance', 'e2e', 'test', 'tests', '__tests__', 'docs'])
 const sensitiveBasenamePatterns = [
   /^\.env(?:\..+)?$/i,
   /^settings(?:\.local)?\.(?:json|ya?ml|toml)$/i,

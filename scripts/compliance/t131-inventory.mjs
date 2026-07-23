@@ -140,7 +140,7 @@ function imageDimensions(buffer, extension) {
 function assetCategory(assetPath) {
   if (/src\/renderer\/src\/assets\/icons\/(claude|cursor|openai)\.png$/.test(assetPath)) return ['third-party-brand-icon', 'BLOCKER_SOURCE_AND_REDISTRIBUTION_TERMS_UNKNOWN']
   if (assetPath === 'build/brand/swob-logo-session-galaxy.png') return ['project-brand-source', 'BLOCKER_CREATION_SOURCE_ATTESTATION_MISSING']
-  if (/^(?:build\/icon\.(?:png|icns|ico)|(?:site\/assets|website\/public)\/(?:apple-touch-icon\.png|favicon-(?:32|512)\.png|favicon\.svg))$/.test(assetPath)) {
+  if (/^build\/icon\.(?:png|icns|ico)$/.test(assetPath)) {
     return ['generated-brand-derivative', 'BLOCKER_CREATION_SOURCE_ATTESTATION_MISSING']
   }
   if (/^context\/swob-研究与设计\/assets\/tw5-2026-07-23\/.*\.png$/.test(assetPath)) {

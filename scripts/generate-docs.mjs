@@ -7,7 +7,7 @@ import vm from 'node:vm'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const siteDocs = path.join(repoRoot, 'site', 'docs')
+const defaultOutputDir = path.join(repoRoot, 'dist', 'website-docs')
 
 const sourceFiles = {
   accounting: 'src/main/token-accounting.ts',
@@ -560,11 +560,11 @@ export function renderAll(truth = collectTruth()) {
   return outputs
 }
 
-export function writeOrCheck({ check = false } = {}) {
+export function writeOrCheck({ check = false, outputDir = defaultOutputDir } = {}) {
   const outputs = renderAll()
   const stale = []
   for (const [relativePath, expected] of outputs) {
-    const filePath = path.join(siteDocs, relativePath)
+    const filePath = path.join(outputDir, relativePath)
     if (check) {
       const actual = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null
       if (actual !== expected) stale.push(relativePath)
@@ -574,17 +574,25 @@ export function writeOrCheck({ check = false } = {}) {
     fs.writeFileSync(filePath, expected)
   }
   if (stale.length) {
-    throw new Error(`文档生成物已过期：${stale.join(', ')}。请运行 npm run docs:gen。`)
+    throw new Error(`文档导出已过期：${stale.join(', ')}。请重新运行 npm run docs:export。`)
   }
   return outputs
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const outputs = writeOrCheck({ check: process.argv.includes('--check') })
-    console.log(process.argv.includes('--check')
-      ? `docs:check 通过（${outputs.size} 个生成物）`
-      : `已生成 ${outputs.size} 个文档文件`)
+    const args = process.argv.slice(2)
+    const outputIndex = args.indexOf('--output-dir')
+    const outputDir = outputIndex >= 0
+      ? path.resolve(args[outputIndex + 1])
+      : defaultOutputDir
+    if (outputIndex >= 0 && !args[outputIndex + 1]) {
+      throw new Error('--output-dir 需要目录路径')
+    }
+    const outputs = writeOrCheck({ check: args.includes('--check'), outputDir })
+    console.log(args.includes('--check')
+      ? `文档导出检查通过（${outputs.size} 个生成物）`
+      : `已导出 ${outputs.size} 个网站文档文件到 ${path.relative(repoRoot, outputDir)}`)
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
     process.exitCode = 1

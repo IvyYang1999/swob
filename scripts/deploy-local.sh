@@ -18,6 +18,15 @@ if [ ! -d "$DIST_APP" ]; then
   exit 1
 fi
 
+DIST_CLI="${DIST_APP}/Contents/Resources/cli/cli.js"
+DIST_NODE_MODULES="${DIST_APP}/Contents/Resources/app.asar.unpacked/node_modules"
+if [ ! -f "$DIST_CLI" ]; then
+  echo "错误：找不到打包后的 CLI 入口 $DIST_CLI"
+  exit 1
+fi
+echo "==> 验证打包后的 CLI..."
+NODE_PATH="${DIST_NODE_MODULES}${NODE_PATH:+:$NODE_PATH}" node "$DIST_CLI" --version --json >/dev/null
+
 echo "==> 退出 ${APP_NAME}..."
 osascript -e "tell application \"${APP_NAME}\" to quit" 2>/dev/null || true
 # 等进程完全退出
@@ -53,11 +62,13 @@ if [ -f "$APP_CLI" ]; then
   if CLI_INSTALL_OUTPUT="$(NODE_PATH="${APP_NODE_MODULES}${NODE_PATH:+:$NODE_PATH}" node "$APP_CLI" install 2>&1)"; then
     echo "$CLI_INSTALL_OUTPUT"
   else
-    echo "警告：CLI 安装/更新失败，应用仍会继续启动。"
+    echo "错误：CLI 安装/更新失败。"
     echo "$CLI_INSTALL_OUTPUT"
+    exit 1
   fi
 else
-  echo "警告：找不到 CLI 入口 $APP_CLI"
+  echo "错误：找不到 CLI 入口 $APP_CLI"
+  exit 1
 fi
 
 echo "==> 启动 ${APP_NAME}..."

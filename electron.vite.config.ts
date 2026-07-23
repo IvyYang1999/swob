@@ -5,7 +5,10 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // The CLI is copied outside app.asar and runs under the system Node.
+    // Bundle pure-JS Ajv into the shared output so that only native
+    // better-sqlite3 needs NODE_PATH from app.asar.unpacked.
+    plugins: [externalizeDepsPlugin({ exclude: ['ajv'] })],
     build: {
       rollupOptions: {
         input: {

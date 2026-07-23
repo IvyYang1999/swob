@@ -6,24 +6,30 @@ on:
     paths:
       - '.github/workflows/cli-packaged.yml'
       - 'electron-builder.yml'
+      - 'electron.vite.config.ts'
       - 'package.json'
       - 'package-lock.json'
       - 'scripts/run-cli-packaged-contract.mjs'
       - 'src/cli/**'
+      - 'src/main/**'
       - 'src/main/cli-install*'
       - 'src/main/runtime-home*'
+      - 'src/shared/**'
   push:
     branches:
       - master
     paths:
       - '.github/workflows/cli-packaged.yml'
       - 'electron-builder.yml'
+      - 'electron.vite.config.ts'
       - 'package.json'
       - 'package-lock.json'
       - 'scripts/run-cli-packaged-contract.mjs'
       - 'src/cli/**'
+      - 'src/main/**'
       - 'src/main/cli-install*'
       - 'src/main/runtime-home*'
+      - 'src/shared/**'
 
 jobs:
   packaged-cli:

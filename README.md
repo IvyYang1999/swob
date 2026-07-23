@@ -10,7 +10,7 @@
 
 Swob parses local histories through **6 native-format adapters** and 1 Claude-compatible format. It can also detect files from 4 experimental sources without reading their message bodies. Where a source exposes the evidence, Swob adds lineage, incremental SQLite FTS5 search, execution inspection, provenance-aware audit, and optional AI Insights.
 
-[Website](https://ivyyang1999.github.io/swob/) · [Verified releases](https://github.com/IvyYang1999/swob/releases) · [Changelog](CHANGELOG.md)
+[Website](https://swob.app/) · [Verified releases](https://github.com/IvyYang1999/swob/releases) · [Changelog](CHANGELOG.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 

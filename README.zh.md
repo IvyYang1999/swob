@@ -10,7 +10,7 @@
 
 Swob 通过 **6 个原生格式适配器**与 1 个 Claude 兼容格式解析本地历史；另有 4 个实验来源只能发现文件，尚不能读取消息正文。来源确有证据时，Swob 才提供血统、SQLite FTS5 增量检索、执行检查、带来源标记的审计和可选 AI Insights。
 
-[官网](https://ivyyang1999.github.io/swob/) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.zh.md)
+[官网](https://swob.app/) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.zh.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 

@@ -10,7 +10,7 @@
 
 Swob は **6 個のネイティブ形式アダプター**と 1 個の Claude 互換形式でローカル履歴を解析します。ほかの 4 ソースは実験的なファイル検出のみで、メッセージ本文は読み取りません。ソースに証拠がある場合に限り、系譜、SQLite FTS5 増分検索、実行検査、provenance 付き監査、任意の AI Insights を提供します。
 
-[Web サイト](https://ivyyang1999.github.io/swob/) · [検証済み Releases](https://github.com/IvyYang1999/swob/releases) · [更新履歴](CHANGELOG.md)
+[Web サイト](https://swob.app/) · [検証済み Releases](https://github.com/IvyYang1999/swob/releases) · [更新履歴](CHANGELOG.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 

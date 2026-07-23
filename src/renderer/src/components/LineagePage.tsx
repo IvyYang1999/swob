@@ -54,7 +54,7 @@ interface Node {
 interface Edge {
   from: number
   to: number
-  type: string // lineage | project | source | time | cwd | files
+  type: string // lineage | continuation | project | source | time | cwd | files
 }
 
 export interface LineageGraphSession {
@@ -67,6 +67,7 @@ export interface LineageGraphSession {
   createdAt: string
   tokenUsage?: { totalTokens: number }
   compactCount: number
+  successor?: string
   cwds?: string[]
   referencedFiles?: Array<{ path: string }>
 }
@@ -217,6 +218,20 @@ function buildGraph(
     }
   }
 
+  // Explicit continuation/resume links are authoritative logical-thread
+  // relationships even when the historical lineage registry is incomplete.
+  const continuationPairs = new Set(edges.map((edge) => `${edge.from}:${edge.to}`))
+  for (const session of sorted) {
+    if (!session.successor) continue
+    const from = idToIdx.get(session.id) ?? idToIdx.get(session.sessionId)
+    const to = idToIdx.get(session.successor)
+    if (from === undefined || to === undefined || from === to) continue
+    const key = `${from}:${to}`
+    if (continuationPairs.has(key)) continue
+    continuationPairs.add(key)
+    edges.push({ from, to, type: 'continuation' })
+  }
+
   // 2. Same project chain — sorted by stable key within group
   const projectMap = new Map<string, number[]>()
   for (let i = 0; i < nodes.length; i++) {
@@ -309,6 +324,7 @@ function simulate(nodes: Node[], edges: Edge[], iterations: number) {
 
   const STRENGTH: Record<string, number> = {
     lineage: 0.1,
+    continuation: 0.12,
     project: 0.012,
     source: 0.025,
     time: 0.008,
@@ -540,7 +556,11 @@ export function LineagePage() {
     for (const e of graph.edges) {
       const a = graph.nodes[e.from]
       const b = graph.nodes[e.to]
-      if (e.type === 'lineage') {
+      if (e.type === 'continuation') {
+        ctx.globalAlpha = 0.65
+        ctx.lineWidth = 1.6
+        ctx.strokeStyle = '#34d399'
+      } else if (e.type === 'lineage') {
         ctx.globalAlpha = 0.4
         ctx.lineWidth = 1.2
         ctx.strokeStyle = '#60a5fa'

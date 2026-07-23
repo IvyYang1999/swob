@@ -6,9 +6,12 @@ import type { SessionSummary } from './types'
 import {
   buildAgentHistory,
   copyPngToClipboard,
+  getHarnessIconOverrides,
   getUserIdentity,
   registerFrontendIpc,
   savePng,
+  selectProfileImage,
+  setHarnessIconOverride,
   setAlwaysOnTopPreference,
   setNativeShadowPreference,
   setUserIdentity
@@ -159,6 +162,36 @@ describe('user identity', () => {
       .toMatchObject({ ok: false, error: { code: 'INVALID_AVATAR_PATH' } })
     expect(fs.readdirSync(outside)).toEqual([])
   })
+
+  it('uses the native picker and persists per-harness icons inside Library assets', async () => {
+    const harness = profileHarness()
+    const source = path.join(tempDir('swob-profile-harness-source-'), 'codex.png')
+    fs.writeFileSync(source, PNG)
+    const picker = {
+      ...harness,
+      showOpenDialog: vi.fn(async () => ({ canceled: false, filePaths: [source] }))
+    }
+
+    expect(await selectProfileImage(picker)).toEqual({
+      ok: true,
+      value: { canceled: false, filePath: source }
+    })
+    const saved = await setHarnessIconOverride({ source: 'codex', iconRelPath: source }, picker)
+    expect(saved).toMatchObject({
+      ok: true,
+      value: { source: 'codex', iconAvailable: true }
+    })
+    const available = await getHarnessIconOverrides(picker)
+    expect(available).toMatchObject({
+      ok: true,
+      value: [{ source: 'codex', iconAvailable: true }]
+    })
+    expect(await setHarnessIconOverride({ source: 'codex', iconRelPath: '' }, picker))
+      .toEqual({ ok: true, value: { source: 'codex', iconAvailable: false } })
+    expect(await getHarnessIconOverrides(picker)).toEqual({ ok: true, value: [] })
+    expect(await setHarnessIconOverride({ source: 'not-a-registered-harness', iconRelPath: source }, picker))
+      .toMatchObject({ ok: false, error: { code: 'INVALID_INPUT' } })
+  })
 })
 
 describe('PNG sharing and registration', () => {
@@ -204,6 +237,9 @@ describe('PNG sharing and registration', () => {
       'spotlight:setNativeShadow',
       'profile:getUserIdentity',
       'profile:setUserIdentity',
+      'profile:selectImage',
+      'profile:getHarnessIconOverrides',
+      'profile:setHarnessIconOverride',
       'share:savePng',
       'share:copyPngToClipboard'
     ])

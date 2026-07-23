@@ -7,6 +7,9 @@ import type {
   AgentHistoryItem,
   AgentResumeState,
   FrontendIpcResult,
+  HarnessIconOverride,
+  HarnessIconOverrideInput,
+  ImageSelectionResult,
   OrganizerSmartPreviewResult,
   ShareCopyPngResult,
   ShareSavePngResult,
@@ -58,6 +61,8 @@ const api = {
       branchPointUuid,
       branchLeafUuid
     )),
+  rebuildSessionDetail: (sessionId: string) =>
+    ipcRenderer.invoke('sessions:rebuildDetail', sessionId) as Promise<{ ok: boolean; error?: string }>,
   searchSessions: (query: string) =>
     ipcRenderer.invoke('sessions:search', query),
 
@@ -271,6 +276,9 @@ const api = {
   spotlightSetNativeShadow: (flag: boolean) => ipcRenderer.invoke('spotlight:setNativeShadow', flag) as Promise<FrontendIpcResult<SpotlightNativeShadowState>>,
   profileGetUserIdentity: () => ipcRenderer.invoke('profile:getUserIdentity') as Promise<FrontendIpcResult<UserIdentity>>,
   profileSetUserIdentity: (identity: UserIdentityInput) => ipcRenderer.invoke('profile:setUserIdentity', identity) as Promise<FrontendIpcResult<UserIdentity>>,
+  profileSelectImage: () => ipcRenderer.invoke('profile:selectImage') as Promise<FrontendIpcResult<ImageSelectionResult>>,
+  profileGetHarnessIconOverrides: () => ipcRenderer.invoke('profile:getHarnessIconOverrides') as Promise<FrontendIpcResult<HarnessIconOverride[]>>,
+  profileSetHarnessIconOverride: (input: HarnessIconOverrideInput) => ipcRenderer.invoke('profile:setHarnessIconOverride', input) as Promise<FrontendIpcResult<HarnessIconOverride>>,
   shareSavePng: (base64: string, suggestedName: string) => ipcRenderer.invoke('share:savePng', base64, suggestedName) as Promise<FrontendIpcResult<ShareSavePngResult>>,
   shareCopyPngToClipboard: (base64: string) => ipcRenderer.invoke('share:copyPngToClipboard', base64) as Promise<FrontendIpcResult<ShareCopyPngResult>>,
   onSpotlightNavigate: (callback: (sessionId: string) => void) => {

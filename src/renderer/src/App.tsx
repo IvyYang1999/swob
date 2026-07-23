@@ -8,6 +8,7 @@ import { Onboarding } from './components/Onboarding'
 import { useFeedbackToast } from './hooks/useFeedbackToast'
 import { BUILTIN_VIEW_IDS, builtinViewRegistry } from './registry/builtin-view-registry'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
+import { HARNESS_PRESENTATION_CHANGED_EVENT } from './utils/harness-presentation'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const t = useT()
@@ -127,6 +128,7 @@ function ToastContainer() {
 }
 
 export default function App() {
+  const [, setHarnessPresentationRevision] = useState(0)
   const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen, workspaceView } = useStore()
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [infoPanelWidth, setInfoPanelWidth] = useState(320)
@@ -142,6 +144,12 @@ export default function App() {
   }, [])
 
   useFeedbackToast()
+
+  useEffect(() => {
+    const refresh = () => setHarnessPresentationRevision((revision) => revision + 1)
+    window.addEventListener(HARNESS_PRESENTATION_CHANGED_EVENT, refresh)
+    return () => window.removeEventListener(HARNESS_PRESENTATION_CHANGED_EVENT, refresh)
+  }, [])
 
   useEffect(() => {
     initialize()

@@ -81,12 +81,15 @@ function SessionItem({
   const title = meta?.customTitle || session.firstUserMessage || session.id.slice(0, 12)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const isSelected = selectedUniqueId === session.id
+  const [duplicateHistoryOpen, setDuplicateHistoryOpen] = useState(false)
+  const duplicateHistory = session.duplicatePackageHistory || []
 
   useEffect(() => {
     if (isRenaming) renameInputRef.current?.focus()
   }, [isRenaming])
 
   return (
+    <div className="relative">
     <button
       data-session-id={session.id}
       draggable={allowDrag && !isRenaming}
@@ -111,7 +114,7 @@ function SessionItem({
       }}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, session.id) }}
       onDoubleClick={(e) => { e.stopPropagation(); onDoubleClickRename?.(session.id) }}
-      className={`w-full py-1.5 pr-3 text-left hover:bg-surface group ${
+      className={`w-full py-1.5 ${duplicateHistory.length > 1 ? 'pr-12' : 'pr-3'} text-left hover:bg-surface group ${
         isSelected ? 'bg-surface border-l-2 border-accent' : ''
       } ${isCloud ? 'opacity-60' : ''} ${(session as any).detailAvailability === 'unavailable' ? 'opacity-50' : ''}`}
       style={{ paddingLeft: `${depth * 16 + (isSelected ? 10 : 12)}px` }}
@@ -161,6 +164,39 @@ function SessionItem({
         )}
       </div>
     </button>
+    {duplicateHistory.length > 1 && !isRenaming && (
+      <>
+        <button
+          type="button"
+          aria-expanded={duplicateHistoryOpen}
+          aria-label={t('renderer.sidebar.duplicate_history')}
+          onClick={(event) => {
+            event.stopPropagation()
+            setDuplicateHistoryOpen((open) => !open)
+          }}
+          className="absolute right-2 bottom-1 px-1 rounded text-[9px] text-soft-amber bg-soft-amber/10 hover:bg-soft-amber/20"
+        >
+          {duplicateHistory.length}
+        </button>
+        {duplicateHistoryOpen && (
+          <div className="absolute right-2 top-[calc(100%_-_2px)] z-50 w-52 rounded-md border border-edge bg-base shadow-xl p-2">
+            <div className="text-[10px] font-medium text-secondary mb-1.5">
+              {t('renderer.sidebar.duplicate_history')}
+            </div>
+            <div className="space-y-1">
+              {duplicateHistory.map((item, index) => (
+                <div key={`${item.updatedAt}:${index}`} className="flex items-center justify-between text-[10px] text-muted">
+                  <span>{formatDate(item.updatedAt, locale, t)}</span>
+                  <span>{t('sidebar.turns', { n: item.turnCount })}</span>
+                  {index === 0 && <span className="text-soft-green">{t('renderer.sidebar.current_package')}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </>
+    )}
+    </div>
   )
 }
 

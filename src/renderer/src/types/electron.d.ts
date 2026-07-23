@@ -5,6 +5,9 @@ import type {
   AgentHistoryItem,
   AgentResumeState,
   FrontendIpcResult,
+  HarnessIconOverride,
+  HarnessIconOverrideInput,
+  ImageSelectionResult,
   OrganizerSmartPreviewResult,
   ShareCopyPngResult,
   ShareSavePngResult,
@@ -177,6 +180,7 @@ interface ElectronAPI {
     | { fallback: 'transcript'; transcriptMarkdown: string }
     | { fallback: null; error: 'DETAIL_UNAVAILABLE' | 'DETAIL_LOAD_FAILED' }
   >
+  rebuildSessionDetail: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
   searchSessions: (
     query: string
   ) => Promise<
@@ -278,6 +282,9 @@ interface ElectronAPI {
   spotlightSetNativeShadow: (flag: boolean) => Promise<FrontendIpcResult<SpotlightNativeShadowState>>
   profileGetUserIdentity: () => Promise<FrontendIpcResult<UserIdentity>>
   profileSetUserIdentity: (identity: UserIdentityInput) => Promise<FrontendIpcResult<UserIdentity>>
+  profileSelectImage: () => Promise<FrontendIpcResult<ImageSelectionResult>>
+  profileGetHarnessIconOverrides: () => Promise<FrontendIpcResult<HarnessIconOverride[]>>
+  profileSetHarnessIconOverride: (input: HarnessIconOverrideInput) => Promise<FrontendIpcResult<HarnessIconOverride>>
   shareSavePng: (base64: string, suggestedName: string) => Promise<FrontendIpcResult<ShareSavePngResult>>
   shareCopyPngToClipboard: (base64: string) => Promise<FrontendIpcResult<ShareCopyPngResult>>
   onSpotlightNavigate: (callback: (sessionId: string) => void) => void

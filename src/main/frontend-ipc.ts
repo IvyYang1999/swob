@@ -3,11 +3,15 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { SessionSummary } from './types'
 import { PathContainmentError, resolvePathWithinRoot } from './path-containment'
+import { HARNESS_CAPABILITIES } from '../shared/settings-capabilities'
 import type {
   AgentAlwaysOnTopState,
   AgentHistoryItem,
   FrontendIpcErrorCode,
   FrontendIpcResult,
+  HarnessIconOverride,
+  HarnessIconOverrideInput,
+  ImageSelectionResult,
   ShareCopyPngResult,
   ShareSavePngResult,
   SpotlightNativeShadowState,
@@ -19,6 +23,9 @@ const MAX_AVATAR_BYTES = 2 * 1024 * 1024
 const MAX_SHARE_PNG_BYTES = 32 * 1024 * 1024
 const DEFAULT_DISPLAY_NAME = 'User'
 const MANAGED_ASSET_DIR = path.join('.swob', 'assets')
+const REGISTERED_HARNESS_SOURCES = new Set(
+  HARNESS_CAPABILITIES.flatMap((harness) => [harness.id, ...harness.sourceIds])
+)
 
 class FrontendIpcException extends Error {
   constructor(readonly code: FrontendIpcErrorCode, message: string) {
@@ -124,6 +131,11 @@ export interface ProfileDependencies {
   getPreferences: () => Record<string, unknown>
   updatePreferences: (patch: Record<string, unknown>) => void | Promise<void>
   withLibraryWriter: <T>(operation: () => Promise<T> | T) => Promise<T>
+  showOpenDialog?: (options: {
+    properties: Array<'openFile'>
+    filters: Array<{ name: string; extensions: string[] }>
+  }) => Promise<{ canceled: boolean; filePaths: string[] }>
+  convertSvgToPng?: (buffer: Buffer) => Buffer
 }
 
 interface PersistedIdentity {
@@ -155,20 +167,30 @@ function validateDisplayName(input: unknown): string {
   return value
 }
 
-type SupportedImage = 'png' | 'jpg' | 'webp'
+type SupportedImage = 'png' | 'jpg' | 'webp' | 'svg'
 
 function canonicalImageExtension(filePath: string): SupportedImage {
   const extension = path.extname(filePath).toLowerCase().slice(1)
   if (extension === 'png') return 'png'
   if (extension === 'jpg' || extension === 'jpeg') return 'jpg'
   if (extension === 'webp') return 'webp'
-  throw new FrontendIpcException('INVALID_IMAGE_FORMAT', 'Avatar must be a PNG, JPG, or WebP image')
+  if (extension === 'svg') return 'svg'
+  throw new FrontendIpcException('INVALID_IMAGE_FORMAT', 'Image must be a PNG, JPG, WebP, or SVG file')
 }
 
 function hasImageSignature(buffer: Buffer, extension: SupportedImage): boolean {
   if (extension === 'png') return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
   if (extension === 'jpg') return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
-  return buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  if (extension === 'webp') {
+    return buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  }
+  const source = buffer.toString('utf8').trim()
+  return /^(?:<\?xml[\s\S]*?\?>\s*)?<svg[\s>]/i.test(source) &&
+    !/<(?:script|style|foreignObject|iframe|object|embed)\b/i.test(source) &&
+    !/\bon[a-z]+\s*=/i.test(source) &&
+    !/\b(?:href|xlink:href)\s*=/i.test(source) &&
+    !/(?:javascript:|data:text\/html|url\s*\(|<!DOCTYPE|<!ENTITY)/i.test(source)
 }
 
 function readValidatedAvatar(filePath: string): { buffer: Buffer; extension: SupportedImage } {
@@ -242,11 +264,29 @@ function ensureManagedAssetDirectory(libraryRoot: string): string {
   }
 }
 
-function importAvatar(libraryRoot: string, sourcePath: string): string {
-  const { buffer, extension } = readValidatedAvatar(sourcePath)
+function importManagedImage(
+  libraryRoot: string,
+  sourcePath: string,
+  prefix: string,
+  convertSvgToPng?: (buffer: Buffer) => Buffer
+): string {
+  const validated = readValidatedAvatar(sourcePath)
+  let buffer = validated.buffer
+  let extension: SupportedImage = validated.extension
+  if (extension === 'svg') {
+    if (!convertSvgToPng) {
+      throw new FrontendIpcException('INVALID_IMAGE_FORMAT', 'SVG conversion is unavailable')
+    }
+    buffer = convertSvgToPng(buffer)
+    extension = 'png'
+    if (!hasImageSignature(buffer, 'png')) {
+      throw new FrontendIpcException('INVALID_IMAGE_FORMAT', 'SVG could not be converted to a PNG')
+    }
+  }
   const assetsDir = ensureManagedAssetDirectory(libraryRoot)
   const digest = crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 16)
-  const filename = `avatar-${digest}.${extension}`
+  const safePrefix = prefix.replace(/[^a-z0-9-]/gi, '-').slice(0, 80)
+  const filename = `${safePrefix}-${digest}.${extension}`
   const destination = resolvePathWithinRoot(assetsDir, filename, { allowRoot: false, allowAbsolute: false })
   if (!fs.existsSync(destination)) {
     const temporary = resolvePathWithinRoot(assetsDir, `.${filename}.${process.pid}.${crypto.randomUUID()}.tmp`, {
@@ -261,6 +301,29 @@ function importAvatar(libraryRoot: string, sourcePath: string): string {
     }
   }
   return path.relative(libraryRoot, destination).split(path.sep).join('/')
+}
+
+function importAvatar(libraryRoot: string, sourcePath: string, convertSvgToPng?: (buffer: Buffer) => Buffer): string {
+  return importManagedImage(libraryRoot, sourcePath, 'avatar', convertSvgToPng)
+}
+
+function validateHarnessSource(input: unknown): string {
+  if (typeof input !== 'string' || !REGISTERED_HARNESS_SOURCES.has(input)) {
+    throw new FrontendIpcException('INVALID_INPUT', 'source must be a registered harness identifier')
+  }
+  return input
+}
+
+function readPersistedHarnessIconOverrides(preferences: Record<string, unknown>): Record<string, string> {
+  const candidate = preferences.harnessIconOverrides
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return {}
+  const result: Record<string, string> = {}
+  for (const [source, value] of Object.entries(candidate as Record<string, unknown>)) {
+    if (REGISTERED_HARNESS_SOURCES.has(source) && typeof value === 'string' && value) {
+      result[source] = value
+    }
+  }
+  return result
 }
 
 export async function getUserIdentity(dependencies: ProfileDependencies): Promise<FrontendIpcResult<UserIdentity>> {
@@ -297,7 +360,7 @@ export async function setUserIdentity(
         avatarRelPath = undefined
       } else if (path.isAbsolute(input.avatarRelPath)) {
         avatarRelPath = await dependencies.withLibraryWriter(() =>
-          importAvatar(dependencies.getLibraryRoot(), input.avatarRelPath!))
+          importAvatar(dependencies.getLibraryRoot(), input.avatarRelPath!, dependencies.convertSvgToPng))
         avatarAvailable = true
       } else {
         const managedPath = resolveManagedAvatar(dependencies.getLibraryRoot(), input.avatarRelPath, true)
@@ -320,6 +383,83 @@ export async function setUserIdentity(
     const persisted: PersistedIdentity = { displayName, ...(avatarRelPath ? { avatarRelPath } : {}) }
     await dependencies.updatePreferences({ userIdentity: persisted })
     return { ok: true, value: { ...persisted, avatarAvailable } }
+  } catch (error) {
+    return fail(error, 'OPERATION_FAILED')
+  }
+}
+
+export async function selectProfileImage(
+  dependencies: ProfileDependencies
+): Promise<FrontendIpcResult<ImageSelectionResult>> {
+  try {
+    if (!dependencies.showOpenDialog) {
+      throw new FrontendIpcException('WINDOW_UNAVAILABLE', 'Native image picker is unavailable')
+    }
+    const selection = await dependencies.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'svg'] }]
+    })
+    const filePath = selection.filePaths[0]
+    return {
+      ok: true,
+      value: selection.canceled || !filePath
+        ? { canceled: true }
+        : { canceled: false, filePath }
+    }
+  } catch (error) {
+    return fail(error, 'OPERATION_FAILED')
+  }
+}
+
+export async function getHarnessIconOverrides(
+  dependencies: ProfileDependencies
+): Promise<FrontendIpcResult<HarnessIconOverride[]>> {
+  try {
+    const persisted = readPersistedHarnessIconOverrides(dependencies.getPreferences())
+    const overrides: HarnessIconOverride[] = []
+    for (const [source, iconRelPath] of Object.entries(persisted)) {
+      try {
+        const managedPath = resolveManagedAvatar(dependencies.getLibraryRoot(), iconRelPath, true)
+        readValidatedAvatar(managedPath)
+        overrides.push({ source, iconRelPath, iconAvailable: true })
+      } catch {
+        overrides.push({ source, iconAvailable: false })
+      }
+    }
+    return { ok: true, value: overrides }
+  } catch (error) {
+    return fail(error)
+  }
+}
+
+export async function setHarnessIconOverride(
+  input: HarnessIconOverrideInput,
+  dependencies: ProfileDependencies
+): Promise<FrontendIpcResult<HarnessIconOverride>> {
+  try {
+    if (!input || typeof input !== 'object') {
+      throw new FrontendIpcException('INVALID_INPUT', 'harness icon input is required')
+    }
+    const source = validateHarnessSource(input.source)
+    const current = readPersistedHarnessIconOverrides(dependencies.getPreferences())
+    if (input.iconRelPath === undefined || input.iconRelPath === '') {
+      delete current[source]
+      await dependencies.updatePreferences({ harnessIconOverrides: current })
+      return { ok: true, value: { source, iconAvailable: false } }
+    }
+    if (typeof input.iconRelPath !== 'string' || !path.isAbsolute(input.iconRelPath)) {
+      throw new FrontendIpcException('INVALID_INPUT', 'A selected absolute image path is required')
+    }
+    const iconRelPath = await dependencies.withLibraryWriter(() =>
+      importManagedImage(
+        dependencies.getLibraryRoot(),
+        input.iconRelPath!,
+        `harness-${source}`,
+        dependencies.convertSvgToPng
+      ))
+    current[source] = iconRelPath
+    await dependencies.updatePreferences({ harnessIconOverrides: current })
+    return { ok: true, value: { source, iconRelPath, iconAvailable: true } }
   } catch (error) {
     return fail(error, 'OPERATION_FAILED')
   }
@@ -428,6 +568,10 @@ export function registerFrontendIpc(options: {
   })
   options.ipcMain.handle('profile:getUserIdentity', () => getUserIdentity(options.profile))
   options.ipcMain.handle('profile:setUserIdentity', (_event, input: UserIdentityInput) => setUserIdentity(input, options.profile))
+  options.ipcMain.handle('profile:selectImage', () => selectProfileImage(options.profile))
+  options.ipcMain.handle('profile:getHarnessIconOverrides', () => getHarnessIconOverrides(options.profile))
+  options.ipcMain.handle('profile:setHarnessIconOverride', (_event, input: HarnessIconOverrideInput) =>
+    setHarnessIconOverride(input, options.profile))
   options.ipcMain.handle('share:savePng', (_event, base64: unknown, suggestedName: unknown) => savePng(base64, suggestedName, options.share))
   options.ipcMain.handle('share:copyPngToClipboard', (_event, base64: unknown) => copyPngToClipboard(base64, options.share))
 }

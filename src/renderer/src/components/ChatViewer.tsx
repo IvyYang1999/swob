@@ -9,7 +9,7 @@ import {
   History, GitBranch, Copy, Check, Download, Play,
   List, Code2, CheckSquare, Cloud, CloudDownload,
   Search, X, ArrowUp, ArrowDown, Highlighter, Trash2,
-  Image
+  Image, MoreHorizontal
 } from 'lucide-react'
 import { useT } from '../i18n'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
@@ -827,7 +827,13 @@ function SessionBar({
   const [sshResuming, setSshResuming] = useState(false)
   const [cloudDownloading, setCloudDownloading] = useState(false)
   const [resumeMenuOpen, setResumeMenuOpen] = useState(false)
+  const [overflowMenuOpen, setOverflowMenuOpen] = useState(false)
   const resumeMenuRef = useRef<HTMLDivElement>(null)
+  const overflowMenuRef = useRef<HTMLDivElement>(null)
+  const copyCommandButtonRef = useRef<HTMLButtonElement>(null)
+  const resumeButtonRef = useRef<HTMLButtonElement>(null)
+  const forkButtonRef = useRef<HTMLButtonElement>(null)
+  const cloudDownloadButtonRef = useRef<HTMLButtonElement>(null)
 
   const isCloud = selectedSession ? cloudSessionIds.has(selectedSession.sessionId) : false
   const isRemote = !!selectedSession?.isRemote
@@ -843,12 +849,16 @@ function SessionBar({
   }, [selectedSession, config])
 
   useEffect(() => {
-    if (!resumeMenuOpen) return
+    if (!resumeMenuOpen && !overflowMenuOpen) return
     const handlePointerDown = (event: MouseEvent) => {
       if (!resumeMenuRef.current?.contains(event.target as Node)) setResumeMenuOpen(false)
+      if (!overflowMenuRef.current?.contains(event.target as Node)) setOverflowMenuOpen(false)
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setResumeMenuOpen(false)
+      if (event.key === 'Escape') {
+        setResumeMenuOpen(false)
+        setOverflowMenuOpen(false)
+      }
     }
     document.addEventListener('mousedown', handlePointerDown)
     document.addEventListener('keydown', handleKeyDown)
@@ -856,10 +866,11 @@ function SessionBar({
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [resumeMenuOpen])
+  }, [resumeMenuOpen, overflowMenuOpen])
 
   useEffect(() => {
     setResumeMenuOpen(false)
+    setOverflowMenuOpen(false)
   }, [selectedSession?.id])
 
   if (!selectedSession) return null
@@ -990,7 +1001,7 @@ function SessionBar({
         )}
       </div>
 
-      <div className="flex items-center gap-1.5">
+      <div className="hidden min-[900px]:flex items-center gap-1.5">
         <button
           onClick={handleCopyMd}
           className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-muted hover:text-body hover:bg-surface transition-colors"
@@ -1015,6 +1026,7 @@ function SessionBar({
 
         {/* 复制命令 */}
         <button
+          ref={copyCommandButtonRef}
           onClick={async () => {
             if (copyUnavailableReason) {
               showToast(copyUnavailableReason, 'error')
@@ -1046,6 +1058,7 @@ function SessionBar({
         {/* Resume surface split button / SSH Resume */}
         <div ref={resumeMenuRef} className="relative flex items-stretch">
           <button
+            ref={resumeButtonRef}
             onClick={async () => {
               if (isRemote) {
                 if (resumeUnavailableReason) {
@@ -1136,6 +1149,7 @@ function SessionBar({
 
         {/* Fork */}
         <button
+          ref={forkButtonRef}
           onClick={async () => {
             if (forkUnavailableReason) {
               showToast(forkUnavailableReason, 'error')
@@ -1172,6 +1186,7 @@ function SessionBar({
         {/* iCloud 云端下载 */}
         {isCloud && (
           <button
+            ref={cloudDownloadButtonRef}
             onClick={async () => {
               if (!selectedSession) return
               setCloudDownloading(true)
@@ -1185,6 +1200,70 @@ function SessionBar({
             {cloudDownloading ? <Cloud size={10} className="animate-pulse" /> : <CloudDownload size={10} />}
             {cloudDownloading ? t('renderer.chat.downloading') : t('renderer.chat.icloud_download')}
           </button>
+        )}
+      </div>
+      <div ref={overflowMenuRef} className="relative min-[900px]:hidden">
+        <button
+          type="button"
+          aria-label={t('a11y.overflow_menu')}
+          aria-haspopup="menu"
+          aria-expanded={overflowMenuOpen}
+          onClick={() => setOverflowMenuOpen((open) => !open)}
+          className="p-1 rounded text-muted hover:text-body hover:bg-surface"
+        >
+          <MoreHorizontal size={16} />
+        </button>
+        {overflowMenuOpen && (
+          <div role="menu" className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-edge bg-base shadow-2xl p-1.5">
+            <button
+              role="menuitem"
+              onClick={() => { handleCopyMd(); setOverflowMenuOpen(false) }}
+              className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover"
+            >
+              {t('chat.copy')}
+            </button>
+            <button
+              role="menuitem"
+              onClick={() => { downloadSessionMarkdown(); setOverflowMenuOpen(false) }}
+              className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover"
+            >
+              {t('chat.download_md')}
+            </button>
+            <button
+              role="menuitem"
+              disabled={!!copyUnavailableReason}
+              onClick={() => { copyCommandButtonRef.current?.click(); setOverflowMenuOpen(false) }}
+              className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
+            >
+              {t('chat.copy_resume_cmd')}
+            </button>
+            <button
+              role="menuitem"
+              disabled={!!resumeUnavailableReason || sshResuming}
+              onClick={() => { resumeButtonRef.current?.click(); setOverflowMenuOpen(false) }}
+              className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
+            >
+              {isRemote ? 'SSH Resume' : 'Resume'}
+            </button>
+            <button
+              role="menuitem"
+              disabled={!!forkUnavailableReason}
+              onClick={() => { forkButtonRef.current?.click(); setOverflowMenuOpen(false) }}
+              className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
+            >
+              {isRemote ? 'SSH Fork' : t('chat.fork')}
+            </button>
+            {isCloud && (
+              <button
+                role="menuitem"
+                disabled={cloudDownloading}
+                onClick={() => { cloudDownloadButtonRef.current?.click(); setOverflowMenuOpen(false) }}
+                className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
+              >
+                {t('renderer.chat.icloud_download')}
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -1308,12 +1387,21 @@ export function ChatViewer() {
   const t = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set())
-  const [tocOpen, setTocOpen] = useState(true)
+  const [tocOpen, setTocOpen] = useState(() => window.innerWidth > 640)
   const [tocWidth, setTocWidth] = useState(200)
   const [sourceView, setSourceView] = useState(false)
   const pendingScrollRef = useRef<string | null>(null)
   const firstVisibleTurnRef = useRef<string | null>(null)
   const [virtualRenderVersion, setVirtualRenderVersion] = useState(0)
+
+  useEffect(() => {
+    const collapseForNarrowWindow = () => {
+      if (window.innerWidth <= 640) setTocOpen(false)
+    }
+    collapseForNarrowWindow()
+    window.addEventListener('resize', collapseForNarrowWindow)
+    return () => window.removeEventListener('resize', collapseForNarrowWindow)
+  }, [])
 
   // User identity for display name + avatar in chat
   const [userDisplayName, setUserDisplayName] = useState<string | undefined>(undefined)
@@ -2096,7 +2184,29 @@ export function ChatViewer() {
             </div>
           )}
 
-          {selectedSession.messages.length === 0 ? (
+          {selectedSession.detailFallback === 'transcript' && selectedSession.transcriptMarkdown ? (
+            <div className="flex-1 overflow-y-auto">
+              <div className="sticky top-0 z-10 px-4 py-2 text-xs text-soft-amber bg-base/95 border-b border-soft-amber/20">
+                {t('renderer.detail.transcript_only_banner')}
+              </div>
+              <div className="max-w-3xl mx-auto px-8 py-6 select-text">
+                <DocMarkdown content={selectedSession.transcriptMarkdown} tocEntries={[]} />
+              </div>
+            </div>
+          ) : selectedSession.detailError ? (
+            <div className="flex-1 flex items-center justify-center text-muted">
+              <div className="text-center max-w-sm space-y-2 px-6">
+                <div className="text-sm font-medium text-secondary">
+                  {t(selectedSession.detailAvailability === 'source-recoverable'
+                    ? 'renderer.detail.source_recoverable_banner'
+                    : 'renderer.detail.unavailable_banner')}
+                </div>
+                <div className="text-xs text-muted">
+                  {t('renderer.detail.unavailable_reason')}
+                </div>
+              </div>
+            </div>
+          ) : selectedSession.messages.length === 0 ? (
             <div className="flex-1 flex items-center justify-center text-muted">
               <div className="text-center max-w-xs space-y-3">
                 {selectedSessionIsCloud && <Cloud size={28} className="mx-auto text-soft-blue/50" />}

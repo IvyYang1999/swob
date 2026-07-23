@@ -67,6 +67,22 @@ export interface UserIdentity {
   avatarAvailable: boolean
 }
 
+export interface ImageSelectionResult {
+  canceled: boolean
+  filePath?: string
+}
+
+export interface HarnessIconOverrideInput {
+  source: string
+  iconRelPath?: string
+}
+
+export interface HarnessIconOverride {
+  source: string
+  iconRelPath?: string
+  iconAvailable: boolean
+}
+
 export interface ShareSavePngResult {
   canceled: boolean
   filePath?: string

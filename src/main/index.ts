@@ -38,6 +38,7 @@ import {
   saveLibraryConfigAsync,
   ensureSessionInLibrary,
   updateTranscript,
+  syncBackup,
   getSessionMdPath,
   getSessionDirPath,
   getSessionResumeAvailability,
@@ -936,6 +937,7 @@ function annotateDuplicatePackageEvidence(summary: SessionSummary, session: Libr
   summary.logicalSessionKey = session.logicalSessionKey
   summary.duplicate = session.duplicate === true
   summary.duplicatePackageCount = session.duplicatePackageCount || 1
+  summary.duplicatePackageHistory = session.duplicatePackageHistory
 }
 
 function annotateSessionSuccessor(summary: SessionSummary): void {
@@ -1813,6 +1815,31 @@ ipcMain.handle('sessions:getSuccessor', async (_event, sessionId: string) => {
     ? currentLineageRegistry || await loadSessionLineageRegistry()
     : await loadSessionLineageRegistry()
   return resolveSessionSuccessor(registry, sessionId)
+})
+
+ipcMain.handle('sessions:rebuildDetail', async (_event, sessionId: string) => {
+  if (typeof sessionId !== 'string' || !sessionId.trim()) {
+    return { ok: false, error: 'INVALID_SESSION_ID' }
+  }
+  const summary = cachedSessions.find((session) =>
+    session.id === sessionId || session.sessionId === sessionId
+  )
+  if (!summary) return { ok: false, error: 'SESSION_NOT_FOUND' }
+  try {
+    const dirPath = getSessionDirPath(summary.sessionId) ||
+      await ensureSessionInLibrary(summary)
+    const customTitle = (latestLibraryTree ? libraryTreeToConfig(latestLibraryTree) : loadConfig())
+      .sessionMeta?.[summary.sessionId]?.customTitle
+    const transcriptWritten = await updateTranscript(summary.sessionId, customTitle, dirPath)
+    await syncBackup(summary.sessionId, dirPath)
+    if (!transcriptWritten) return { ok: false, error: 'SOURCE_UNREADABLE' }
+    const tree = await requestLibraryScan()
+    await hydrateLibrarySessions(tree)
+    return { ok: true }
+  } catch (error) {
+    console.error('[detail-rebuild] failed:', error)
+    return { ok: false, error: 'REBUILD_FAILED' }
+  }
 })
 
 // --- Claude Code Settings (cleanupPeriodDays) ---
@@ -2923,7 +2950,15 @@ app.whenReady().then(async () => {
       getLibraryRoot,
       getPreferences: currentSettingsPreferences,
       updatePreferences: (patch) => { updateCurrentSettingsPreferences(patch) },
-      withLibraryWriter: withLibraryMaintenanceWriter
+      withLibraryWriter: withLibraryMaintenanceWriter,
+      showOpenDialog: (options) => dialog.showOpenDialog(options),
+      convertSvgToPng: (buffer) => {
+        const image = nativeImage.createFromDataURL(
+          `data:image/svg+xml;base64,${buffer.toString('base64')}`
+        )
+        if (image.isEmpty()) throw new Error('SVG image could not be decoded')
+        return image.toPNG()
+      }
     },
     spotlight: {
       platform: process.platform,

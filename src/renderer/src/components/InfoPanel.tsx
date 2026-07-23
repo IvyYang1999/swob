@@ -711,8 +711,10 @@ function SessionInfoCard({ session }: { session: any }) {
 
 type DetailAvailability = 'ready' | 'transcript-only' | 'source-recoverable' | 'unavailable'
 
-function DetailAvailabilityBanner({ status }: { status: DetailAvailability }) {
+function DetailAvailabilityBanner({ status, session }: { status: DetailAvailability; session: any }) {
   const t = useT()
+  const { selectSession, showToast } = useStore()
+  const [rebuilding, setRebuilding] = useState(false)
   if (status === 'ready') return null
 
   const config: Record<Exclude<DetailAvailability, 'ready'>, { labelKey: string; color: string; showRebuild?: boolean }> = {
@@ -724,10 +726,30 @@ function DetailAvailabilityBanner({ status }: { status: DetailAvailability }) {
   return (
     <div className={`px-3 py-2 rounded border text-xs ${c.color}`}>
       {t(c.labelKey)}
-      {/* TODO: wire rebuild IPC when backend ships source-recoverable */}
       {c.showRebuild && (
-        <button className="ml-2 underline opacity-70 hover:opacity-100" onClick={() => { /* TODO: call rebuild IPC */ }}>
-          {t('renderer.detail.source_recoverable_rebuild')}
+        <button
+          disabled={rebuilding}
+          className="ml-2 underline opacity-70 hover:opacity-100 disabled:opacity-40"
+          onClick={() => {
+            setRebuilding(true)
+            void window.api.rebuildSessionDetail(session.sessionId).then((result) => {
+              if (!result.ok) {
+                showToast(t('renderer.detail.rebuild_failed'), 'error')
+                return
+              }
+              showToast(t('renderer.detail.rebuild_complete'), 'success')
+              return selectSession(
+                session.filePath,
+                session.allFilePaths,
+                session.id,
+                session.branchParentFilePaths,
+                session.branchPointUuid,
+                session.branchLeafUuid
+              )
+            }).finally(() => setRebuilding(false))
+          }}
+        >
+          {t(rebuilding ? 'renderer.detail.rebuilding' : 'renderer.detail.source_recoverable_rebuild')}
         </button>
       )}
     </div>
@@ -1043,7 +1065,7 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
         <SuccessorBanner session={s} />
 
         {/* tF28 FIX 2: detail availability degradation banner */}
-        <DetailAvailabilityBanner status={detailAvailability} />
+        <DetailAvailabilityBanner status={detailAvailability} session={s} />
 
         {/* Tab switcher: Outcomes | Activity | Details */}
         <InspectorTabs

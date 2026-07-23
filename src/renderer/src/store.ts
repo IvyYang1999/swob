@@ -7,6 +7,7 @@ import {
 } from './utils/markdown'
 import { resolveConfiguredLocale, resolveSystemLocale, translate, type LegacyLocale, type Locale } from './i18n'
 import { defaultResumeMethodForSource } from '../../shared/settings-capabilities'
+import { refreshHarnessIconOverrides } from './utils/harness-presentation'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
 
@@ -22,6 +23,8 @@ interface SessionSummary {
   logicalSessionKey?: string
   duplicate?: boolean
   duplicatePackageCount?: number
+  duplicatePackageHistory?: Array<{ createdAt: string; updatedAt: string; turnCount: number }>
+  detailAvailability?: 'ready' | 'transcript-only' | 'source-recoverable' | 'unavailable'
   slug: string
   createdAt: string
   updatedAt: string
@@ -84,6 +87,46 @@ interface ParsedMessage {
 
 interface SessionDetail extends SessionSummary {
   messages: ParsedMessage[]
+  detailFallback?: 'transcript'
+  transcriptMarkdown?: string
+  detailError?: 'DETAIL_UNAVAILABLE' | 'DETAIL_LOAD_FAILED'
+}
+
+type SessionDetailLoadResult =
+  | (SessionDetail & { fallback: null; error?: never })
+  | { fallback: 'transcript'; transcriptMarkdown: string; error?: never }
+  | { fallback: null; error: 'DETAIL_UNAVAILABLE' | 'DETAIL_LOAD_FAILED' }
+
+export function materializeSessionDetail(
+  result: SessionDetailLoadResult,
+  summary: SessionSummary
+): SessionDetail {
+  if (result.fallback === 'transcript') {
+    return {
+      ...summary,
+      messages: [],
+      detailAvailability: 'transcript-only',
+      detailFallback: 'transcript',
+      transcriptMarkdown: result.transcriptMarkdown
+    }
+  }
+  if (result.error) {
+    return {
+      ...summary,
+      messages: [],
+      detailAvailability: summary.detailAvailability === 'source-recoverable'
+        ? 'source-recoverable'
+        : 'unavailable',
+      detailError: result.error
+    }
+  }
+  const { fallback: _fallback, ...detail } = result
+  return {
+    ...detail,
+    ...summary,
+    messages: detail.messages,
+    detailAvailability: summary.detailAvailability || 'ready'
+  }
 }
 
 interface Folder {
@@ -404,6 +447,9 @@ export const useStore = create<AppState>((set, get) => ({
         await window.api.saveConfig(hydratedConfig)
       }
       document.documentElement.lang = locale
+      try {
+        await refreshHarnessIconOverrides()
+      } catch { /* custom icons are optional; bundled glyphs remain available */ }
       set({
         sessions: hydratedSessions,
         config: hydratedConfig,
@@ -469,17 +515,16 @@ export const useStore = create<AppState>((set, get) => ({
       // Auto-reload detail if this is the currently selected session
       const current = get().selectedSession
       if (current && current.id === u.id) {
-        const detail = await window.api.loadSessionDetail(
+        const result = await window.api.loadSessionDetail(
           u.filePath, u.allFilePaths, u.branchParentFilePaths, u.branchPointUuid, u.branchLeafUuid
-        )
-        set({ selectedSession: detail as unknown as SessionDetail | null })
+        ) as SessionDetailLoadResult
+        const detail = materializeSessionDetail(result, u)
+        set({ selectedSession: detail })
         // Library transcript is auto-updated by main process file watcher
-        if (detail) {
-          try {
-            const mdPath = await window.api.libraryGetMdPath((detail as unknown as SessionDetail).sessionId)
-            set({ selectedSessionMdPath: mdPath })
-          } catch { /* ignore */ }
-        }
+        try {
+          const mdPath = await window.api.libraryGetMdPath(detail.sessionId)
+          set({ selectedSessionMdPath: mdPath })
+        } catch { /* ignore */ }
       }
     })
     window.api.onSessionSummaryUpdated((updated) => {
@@ -549,37 +594,27 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   selectSession: async (filePath, allFilePaths?, uniqueId?, branchParentFilePaths?, branchPointUuid?, branchLeafUuid?) => {
-    const detail = await window.api.loadSessionDetail(filePath, allFilePaths, branchParentFilePaths, branchPointUuid, branchLeafUuid)
-    // Merge branch relationship fields from summary into detail (detail is freshly built and lacks them)
-    if (detail && uniqueId) {
-      const summary = get().sessions.find((s) => s.id === uniqueId)
-      if (summary) {
-        const d = detail as any
-        d.id = summary.id
-        d.sessionId = summary.sessionId
-        d.resumeSessionId = summary.resumeSessionId
-        d.filePath = summary.filePath
-        d.allFilePaths = summary.allFilePaths
-        d.branchParentFilePaths = summary.branchParentFilePaths
-        d.branchPointUuid = summary.branchPointUuid
-        d.branchParentId = summary.branchParentId
-        d.branchChildIds = summary.branchChildIds
-        d.branchLeafUuid = summary.branchLeafUuid
-        d.libraryDirPath = summary.libraryDirPath
-        d.libraryMdPath = summary.libraryMdPath
-        d.isRemote = summary.isRemote
-        d.remoteHost = summary.remoteHost
-      }
+    const result = await window.api.loadSessionDetail(
+      filePath,
+      allFilePaths,
+      branchParentFilePaths,
+      branchPointUuid,
+      branchLeafUuid
+    ) as SessionDetailLoadResult
+    const summary = get().sessions.find((session) =>
+      session.id === uniqueId || session.filePath === filePath
+    )
+    if (!summary) {
+      set({ selectedSession: null, selectedUniqueId: uniqueId || null })
+      return
     }
-    set({ selectedSession: detail as unknown as SessionDetail | null, selectedUniqueId: uniqueId || null })
+    const detail = materializeSessionDetail(result, summary)
+    set({ selectedSession: detail, selectedUniqueId: uniqueId || null })
     // Get library markdown path for drag
-    if (detail) {
-      const d = detail as unknown as SessionDetail
-      try {
-        const mdPath = await window.api.libraryGetMdPath(d.sessionId)
-        set({ selectedSessionMdPath: mdPath })
-      } catch { /* ignore */ }
-    }
+    try {
+      const mdPath = await window.api.libraryGetMdPath(detail.sessionId)
+      set({ selectedSessionMdPath: mdPath })
+    } catch { /* ignore */ }
   },
 
   search: async (query) => {

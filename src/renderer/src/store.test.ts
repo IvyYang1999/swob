@@ -72,4 +72,48 @@ describe('renderer preference persistence', () => {
       colorScheme: 'nord'
     })
   })
+
+  it('materializes transcript and unavailable IPC branches without pretending they contain messages', async () => {
+    const { materializeSessionDetail } = await import('./store')
+    const summary = {
+      id: 'visible-id',
+      sessionId: 'logical-id',
+      successor: 'next-id',
+      filePath: '/library/session/backup.jsonl',
+      slug: '',
+      createdAt: '2026-07-20T00:00:00Z',
+      updatedAt: '2026-07-21T00:00:00Z',
+      messageCount: 4,
+      turnCount: 2,
+      compactCount: 0,
+      cwds: [],
+      version: '',
+      firstUserMessage: 'hello',
+      toolUsage: {},
+      skillInvocations: [],
+      projectPath: '',
+      fileSizeBytes: 1
+    } as any
+
+    expect(materializeSessionDetail({
+      fallback: 'transcript',
+      transcriptMarkdown: '# Restored transcript'
+    }, summary)).toMatchObject({
+      id: 'visible-id',
+      successor: 'next-id',
+      messages: [],
+      detailAvailability: 'transcript-only',
+      detailFallback: 'transcript',
+      transcriptMarkdown: '# Restored transcript'
+    })
+
+    expect(materializeSessionDetail({
+      fallback: null,
+      error: 'DETAIL_UNAVAILABLE'
+    }, { ...summary, detailAvailability: 'source-recoverable' })).toMatchObject({
+      messages: [],
+      detailAvailability: 'source-recoverable',
+      detailError: 'DETAIL_UNAVAILABLE'
+    })
+  })
 })

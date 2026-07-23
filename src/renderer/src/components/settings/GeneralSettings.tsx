@@ -4,7 +4,11 @@ import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import { SettingField, Segmented, useSettingsPreferences } from './shared'
 import { RetentionSection, formatAccelerator, keyEventToAccelerator } from './sections'
-import { getRegisteredSources, getHarnessPresentation } from '../../utils/harness-presentation'
+import {
+  getRegisteredSources,
+  getHarnessPresentation,
+  refreshHarnessIconOverrides
+} from '../../utils/harness-presentation'
 
 const api = (window as any).api
 
@@ -16,7 +20,7 @@ function IdentitySection() {
   const [loading, setLoading] = useState(true)
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
   const [avatarAvailable, setAvatarAvailable] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [avatarError, setAvatarError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!api?.profileGetUserIdentity) {
@@ -53,22 +57,15 @@ function IdentitySection() {
     }).catch(() => { /* ignore */ })
   }, [displayName])
 
-  const handleAvatarSelect = useCallback(() => {
-    fileInputRef.current?.click()
-  }, [])
-
-  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    // Electron's File objects expose .path with the absolute filesystem path
-    const absolutePath = (file as any).path as string | undefined
-    if (!absolutePath) return
-
-    if (!api?.profileSetUserIdentity) return
+  const handleAvatarSelect = useCallback(async () => {
+    if (!api?.profileSelectImage || !api?.profileSetUserIdentity) return
+    setAvatarError(null)
     try {
+      const selection = await api.profileSelectImage()
+      if (!selection.ok || selection.value.canceled || !selection.value.filePath) return
       const result = await api.profileSetUserIdentity({
         displayName: displayName.trim() || 'User',
-        avatarRelPath: absolutePath
+        avatarRelPath: selection.value.filePath
       })
       if (result.ok && result.value?.avatarAvailable) {
         setAvatarAvailable(true)
@@ -81,12 +78,15 @@ function IdentitySection() {
         }
         setSaved(true)
         setTimeout(() => setSaved(false), 1500)
+      } else if (!result.ok) {
+        setAvatarError(result.error.code === 'FILE_TOO_LARGE'
+          ? t('renderer.general_settings.avatar_too_large')
+          : t('renderer.general_settings.avatar_invalid'))
       }
-    } catch { /* avatar import failed — backend validates format/size */ }
-
-    // Reset file input so the same file can be re-selected
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }, [displayName])
+    } catch {
+      setAvatarError(t('renderer.general_settings.avatar_invalid'))
+    }
+  }, [displayName, t])
 
   const handleAvatarRemove = useCallback(async () => {
     if (!api?.profileSetUserIdentity) return
@@ -145,13 +145,6 @@ function IdentitySection() {
               <X size={10} />
             </button>
           )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            onChange={handleFileChange}
-            className="hidden"
-          />
         </div>
 
         <div className="flex items-center gap-2 flex-1">
@@ -172,14 +165,64 @@ function IdentitySection() {
           </button>
         </div>
       </div>
+      {avatarError && <p className="mt-1.5 text-[10px] text-soft-red">{avatarError}</p>}
     </SettingField>
   )
 }
 
-/** FIX 2: Per-harness custom icon override UI */
 function HarnessIconSection() {
   const t = useT()
   const sources = getRegisteredSources()
+  const [customSources, setCustomSources] = useState<Set<string>>(new Set())
+  const [busySource, setBusySource] = useState<string | null>(null)
+  const [, setRevision] = useState(0)
+
+  useEffect(() => {
+    if (!api?.profileGetHarnessIconOverrides) return
+    void api.profileGetHarnessIconOverrides().then((result: any) => {
+      if (!result.ok) return
+      setCustomSources(new Set(result.value
+        .filter((item: any) => item.iconAvailable)
+        .map((item: any) => item.source)))
+    })
+  }, [])
+
+  const chooseIcon = useCallback(async (source: string) => {
+    if (!api?.profileSelectImage || !api?.profileSetHarnessIconOverride) return
+    setBusySource(source)
+    try {
+      const selection = await api.profileSelectImage()
+      if (!selection.ok || selection.value.canceled || !selection.value.filePath) return
+      const result = await api.profileSetHarnessIconOverride({
+        source,
+        iconRelPath: selection.value.filePath
+      })
+      if (!result.ok) return
+      await refreshHarnessIconOverrides(api)
+      setCustomSources((current) => new Set(current).add(source))
+      setRevision((revision) => revision + 1)
+    } finally {
+      setBusySource(null)
+    }
+  }, [])
+
+  const removeIcon = useCallback(async (source: string) => {
+    if (!api?.profileSetHarnessIconOverride) return
+    setBusySource(source)
+    try {
+      const result = await api.profileSetHarnessIconOverride({ source, iconRelPath: '' })
+      if (!result.ok) return
+      await refreshHarnessIconOverrides(api)
+      setCustomSources((current) => {
+        const next = new Set(current)
+        next.delete(source)
+        return next
+      })
+      setRevision((revision) => revision + 1)
+    } finally {
+      setBusySource(null)
+    }
+  }, [])
 
   return (
     <SettingField
@@ -187,13 +230,13 @@ function HarnessIconSection() {
       hint={t('renderer.general_settings.custom_icon_hint')}
       icon={<ImageIcon size={12} />}
     >
-      <div className="flex flex-wrap gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {sources.map((source) => {
           const p = getHarnessPresentation(source)
           return (
             <div
               key={source}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-edge bg-surface text-xs"
+              className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-edge bg-surface text-xs"
             >
               {p.iconImage ? (
                 <img src={p.iconImage} className="w-4 h-4 rounded-full" alt="" />
@@ -202,16 +245,29 @@ function HarnessIconSection() {
                   {p.shortLabel}
                 </span>
               )}
-              <span className="text-secondary">{p.displayName}</span>
-              {/* TODO: Custom icon upload — requires a persistent asset IPC.
-                  The backend profileSetUserIdentity only handles user avatars;
-                  per-harness custom icons need a dedicated IPC (e.g., harness:setCustomIcon)
-                  that saves to Library/.swob/assets/harness-icons/ and persists in config. */}
+              <span className="text-secondary flex-1 truncate">{p.displayName}</span>
+              <button
+                type="button"
+                disabled={busySource === source}
+                onClick={() => { void chooseIcon(source) }}
+                className="shrink-0 px-1.5 py-0.5 rounded text-[10px] text-accent hover:bg-accent/10 disabled:opacity-40"
+              >
+                {t('renderer.general_settings.choose_icon')}
+              </button>
+              {customSources.has(source) && (
+                <button
+                  type="button"
+                  disabled={busySource === source}
+                  onClick={() => { void removeIcon(source) }}
+                  className="shrink-0 px-1.5 py-0.5 rounded text-[10px] text-soft-red hover:bg-soft-red/10 disabled:opacity-40"
+                >
+                  {t('renderer.general_settings.remove_icon')}
+                </button>
+              )}
             </div>
           )
         })}
       </div>
-      <p className="mt-1.5 text-faint text-[10px]">{t('settings.theme_ecosystem_teaser')}</p>
     </SettingField>
   )
 }

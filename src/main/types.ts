@@ -155,6 +155,12 @@ export interface SessionSummary {
   duplicate?: boolean
   /** Number of physical Library packages represented by this visible row. */
   duplicatePackageCount?: number
+  /** Non-sensitive summary of the physical package versions folded into this row. */
+  duplicatePackageHistory?: Array<{
+    createdAt: string
+    updatedAt: string
+    turnCount: number
+  }>
   slug: string
   createdAt: string
   updatedAt: string
@@ -332,5 +338,6 @@ export interface UserConfig {
     smartFeatureBindings?: import('./llm-profiles').SmartFeatureBinding
     agentAlwaysOnTop?: boolean
     userIdentity?: { displayName: string; avatarRelPath?: string }
+    harnessIconOverrides?: Record<string, string>
   }
 }

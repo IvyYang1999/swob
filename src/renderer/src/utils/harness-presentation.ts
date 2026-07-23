@@ -4,7 +4,6 @@
  * Single source of truth for how each AI harness/source is displayed
  * throughout the app: name, icon, and color.
  *
- * TODO: Per-harness name/avatar customization (user overrides) — planned for a future task.
  */
 
 import claudeIcon from '../assets/icons/claude-neutral.svg'
@@ -112,13 +111,42 @@ const FALLBACK: HarnessPresentation = {
   chartColor: '#71717a',
 }
 
+const iconOverrides: Record<string, string> = {}
+export const HARNESS_PRESENTATION_CHANGED_EVENT = 'swob:harnessPresentationChanged'
+
+export function replaceHarnessIconOverrides(next: Record<string, string>): void {
+  for (const source of Object.keys(iconOverrides)) delete iconOverrides[source]
+  Object.assign(iconOverrides, next)
+  window.dispatchEvent(new Event(HARNESS_PRESENTATION_CHANGED_EVENT))
+}
+
+export async function refreshHarnessIconOverrides(
+  api: Pick<Window['api'], 'profileGetHarnessIconOverrides' | 'libraryGetRoot' | 'loadImage'> = window.api
+): Promise<void> {
+  const result = await api.profileGetHarnessIconOverrides()
+  if (!result.ok) return
+  const root = await api.libraryGetRoot()
+  if (!root) return
+  const loaded: Record<string, string> = {}
+  await Promise.all(result.value.map(async (override) => {
+    if (!override.iconAvailable || !override.iconRelPath) return
+    try {
+      const image = await api.loadImage(`${root}/${override.iconRelPath}`)
+      if (image?.dataUrl) loaded[override.source] = image.dataUrl
+    } catch { /* a missing/corrupt override falls back to the bundled glyph */ }
+  }))
+  replaceHarnessIconOverrides(loaded)
+}
+
 /**
  * Look up presentation metadata for a source/harness client ID.
  * Unknown IDs get a safe fallback.
  */
 export function getHarnessPresentation(source: string | undefined): HarnessPresentation {
-  if (!source) return REGISTRY['claude-code']
-  return REGISTRY[source] ?? FALLBACK
+  const key = source || 'claude-code'
+  const presentation = REGISTRY[key] ?? FALLBACK
+  const iconImage = iconOverrides[key]
+  return iconImage ? { ...presentation, iconImage } : presentation
 }
 
 /**

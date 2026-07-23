@@ -194,6 +194,11 @@ export interface LibrarySession {
   logicalSessionKey?: string
   duplicate?: boolean
   duplicatePackageCount?: number
+  duplicatePackageHistory?: Array<{
+    createdAt: string
+    updatedAt: string
+    turnCount: number
+  }>
 }
 
 /**
@@ -237,7 +242,12 @@ export function collapseLibrarySessionsByLogicalKey(sessions: LibrarySession[]):
       ...winner,
       logicalSessionKey: key,
       duplicate: packages.length > 1,
-      duplicatePackageCount: packages.length
+      duplicatePackageCount: packages.length,
+      duplicatePackageHistory: sorted.map((session) => ({
+        createdAt: session.meta.createdAt,
+        updatedAt: session.meta.updatedAt,
+        turnCount: session.meta.turnCount || 0
+      }))
     }
   })
 }

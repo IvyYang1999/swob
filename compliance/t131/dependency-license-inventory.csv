@@ -34,6 +34,9 @@ development,@csstools/css-parser-algorithms,4.0.0,MIT,false,false,permissive-or-
 development,@csstools/css-syntax-patches-for-csstree,1.1.1,MIT-0,false,false,permissive-or-public-domain,node_modules/@csstools/css-syntax-patches-for-csstree
 development,@csstools/css-tokenizer,4.0.0,MIT,false,false,permissive-or-public-domain,node_modules/@csstools/css-tokenizer
 development,@develar/schema-utils,2.6.5,MIT,false,false,permissive-or-public-domain,node_modules/@develar/schema-utils
+development,@develar/schema-utils/node_modules/ajv,6.15.0,MIT,false,false,permissive-or-public-domain,node_modules/@develar/schema-utils/node_modules/ajv
+development,@develar/schema-utils/node_modules/ajv-keywords,3.5.2,MIT,false,false,permissive-or-public-domain,node_modules/@develar/schema-utils/node_modules/ajv-keywords
+development,@develar/schema-utils/node_modules/json-schema-traverse,0.4.1,MIT,false,false,permissive-or-public-domain,node_modules/@develar/schema-utils/node_modules/json-schema-traverse
 development,@electron-toolkit/eslint-config-ts,3.1.0,MIT,false,false,permissive-or-public-domain,node_modules/@electron-toolkit/eslint-config-ts
 development,@electron/asar,3.4.1,MIT,false,false,permissive-or-public-domain,node_modules/@electron/asar
 development,@electron/asar/node_modules/balanced-match,1.0.2,MIT,false,false,permissive-or-public-domain,node_modules/@electron/asar/node_modules/balanced-match
@@ -65,6 +68,7 @@ development,@electron/windows-sign,1.2.2,BSD-2-Clause,true,false,permissive-or-p
 development,@electron/windows-sign/node_modules/fs-extra,11.3.4,MIT,true,false,permissive-or-public-domain,node_modules/@electron/windows-sign/node_modules/fs-extra
 development,@electron/windows-sign/node_modules/jsonfile,6.2.0,MIT,true,false,permissive-or-public-domain,node_modules/@electron/windows-sign/node_modules/jsonfile
 development,@electron/windows-sign/node_modules/universalify,2.0.1,MIT,true,false,permissive-or-public-domain,node_modules/@electron/windows-sign/node_modules/universalify
+development,@emnapi/runtime,1.11.2,MIT,true,false,permissive-or-public-domain,node_modules/@emnapi/runtime
 development,@esbuild/aix-ppc64,0.25.12,MIT,true,false,permissive-or-public-domain,node_modules/@esbuild/aix-ppc64
 development,@esbuild/android-arm,0.25.12,MIT,true,false,permissive-or-public-domain,node_modules/@esbuild/android-arm
 development,@esbuild/android-arm64,0.25.12,MIT,true,false,permissive-or-public-domain,node_modules/@esbuild/android-arm64
@@ -105,6 +109,31 @@ development,@humanfs/core,0.19.1,Apache-2.0,false,false,permissive-or-public-dom
 development,@humanfs/node,0.16.7,Apache-2.0,false,false,permissive-or-public-domain,node_modules/@humanfs/node
 development,@humanwhocodes/module-importer,1.0.1,Apache-2.0,false,false,permissive-or-public-domain,node_modules/@humanwhocodes/module-importer
 development,@humanwhocodes/retry,0.4.3,Apache-2.0,false,false,permissive-or-public-domain,node_modules/@humanwhocodes/retry
+development,@img/colour,1.1.0,MIT,false,false,permissive-or-public-domain,node_modules/@img/colour
+development,@img/sharp-darwin-arm64,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-darwin-arm64
+development,@img/sharp-darwin-x64,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-darwin-x64
+development,@img/sharp-libvips-darwin-arm64,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-darwin-arm64
+development,@img/sharp-libvips-darwin-x64,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-darwin-x64
+development,@img/sharp-libvips-linux-arm,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-linux-arm
+development,@img/sharp-libvips-linux-arm64,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-linux-arm64
+development,@img/sharp-libvips-linux-ppc64,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-linux-ppc64
+development,@img/sharp-libvips-linux-riscv64,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-linux-riscv64
+development,@img/sharp-libvips-linux-s390x,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-linux-s390x
+development,@img/sharp-libvips-linux-x64,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-linux-x64
+development,@img/sharp-libvips-linuxmusl-arm64,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-linuxmusl-arm64
+development,@img/sharp-libvips-linuxmusl-x64,1.2.4,LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-libvips-linuxmusl-x64
+development,@img/sharp-linux-arm,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-linux-arm
+development,@img/sharp-linux-arm64,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-linux-arm64
+development,@img/sharp-linux-ppc64,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-linux-ppc64
+development,@img/sharp-linux-riscv64,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-linux-riscv64
+development,@img/sharp-linux-s390x,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-linux-s390x
+development,@img/sharp-linux-x64,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-linux-x64
+development,@img/sharp-linuxmusl-arm64,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-linuxmusl-arm64
+development,@img/sharp-linuxmusl-x64,0.34.5,Apache-2.0,true,false,permissive-or-public-domain,node_modules/@img/sharp-linuxmusl-x64
+development,@img/sharp-wasm32,0.34.5,Apache-2.0 AND LGPL-3.0-or-later AND MIT,true,false,manual-copyleft-review,node_modules/@img/sharp-wasm32
+development,@img/sharp-win32-arm64,0.34.5,Apache-2.0 AND LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-win32-arm64
+development,@img/sharp-win32-ia32,0.34.5,Apache-2.0 AND LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-win32-ia32
+development,@img/sharp-win32-x64,0.34.5,Apache-2.0 AND LGPL-3.0-or-later,true,false,manual-copyleft-review,node_modules/@img/sharp-win32-x64
 development,@isaacs/cliui,8.0.2,ISC,false,false,permissive-or-public-domain,node_modules/@isaacs/cliui
 development,@isaacs/cliui/node_modules/ansi-regex,6.2.2,MIT,false,false,permissive-or-public-domain,node_modules/@isaacs/cliui/node_modules/ansi-regex
 development,@isaacs/cliui/node_modules/ansi-styles,6.2.3,MIT,false,false,permissive-or-public-domain,node_modules/@isaacs/cliui/node_modules/ansi-styles
@@ -169,6 +198,12 @@ development,@tailwindcss/oxide-linux-arm64-musl,4.2.1,MIT,true,false,permissive-
 development,@tailwindcss/oxide-linux-x64-gnu,4.2.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-linux-x64-gnu
 development,@tailwindcss/oxide-linux-x64-musl,4.2.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-linux-x64-musl
 development,@tailwindcss/oxide-wasm32-wasi,4.2.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-wasm32-wasi
+development,@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/core,1.8.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/core
+development,@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/runtime,1.8.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/runtime
+development,@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/wasi-threads,1.1.0,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/wasi-threads
+development,@tailwindcss/oxide-wasm32-wasi/node_modules/@napi-rs/wasm-runtime,1.1.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@napi-rs/wasm-runtime
+development,@tailwindcss/oxide-wasm32-wasi/node_modules/@tybys/wasm-util,0.10.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@tybys/wasm-util
+development,@tailwindcss/oxide-wasm32-wasi/node_modules/tslib,2.8.1,0BSD,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/tslib
 development,@tailwindcss/oxide-win32-arm64-msvc,4.2.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-win32-arm64-msvc
 development,@tailwindcss/oxide-win32-x64-msvc,4.2.1,MIT,true,false,permissive-or-public-domain,node_modules/@tailwindcss/oxide-win32-x64-msvc
 development,@tailwindcss/vite,4.2.1,MIT,false,false,permissive-or-public-domain,node_modules/@tailwindcss/vite
@@ -192,6 +227,7 @@ development,@types/json-schema,7.0.15,MIT,false,false,permissive-or-public-domai
 development,@types/keyv,3.1.4,MIT,false,false,permissive-or-public-domain,node_modules/@types/keyv
 development,@types/node,25.3.3,MIT,false,false,permissive-or-public-domain,node_modules/@types/node
 development,@types/plist,3.0.5,MIT,true,false,permissive-or-public-domain,node_modules/@types/plist
+development,@types/qrcode,1.5.6,MIT,false,false,permissive-or-public-domain,node_modules/@types/qrcode
 development,@types/react-dom,19.2.3,MIT,false,false,permissive-or-public-domain,node_modules/@types/react-dom
 development,@types/responselike,1.0.3,MIT,false,false,permissive-or-public-domain,node_modules/@types/responselike
 development,@types/verror,1.10.11,MIT,true,false,permissive-or-public-domain,node_modules/@types/verror
@@ -221,10 +257,6 @@ development,abbrev,3.0.1,ISC,false,false,permissive-or-public-domain,node_module
 development,acorn,8.16.0,MIT,false,false,permissive-or-public-domain,node_modules/acorn
 development,acorn-jsx,5.3.2,MIT,false,false,permissive-or-public-domain,node_modules/acorn-jsx
 development,agent-base,7.1.4,MIT,false,false,permissive-or-public-domain,node_modules/agent-base
-development,ajv,6.14.0,MIT,false,false,permissive-or-public-domain,node_modules/ajv
-development,ajv-keywords,3.5.2,MIT,false,false,permissive-or-public-domain,node_modules/ajv-keywords
-development,ansi-regex,5.0.1,MIT,false,false,permissive-or-public-domain,node_modules/ansi-regex
-development,ansi-styles,4.3.0,MIT,false,false,permissive-or-public-domain,node_modules/ansi-styles
 development,app-builder-bin,5.0.0-alpha.12,MIT,false,false,permissive-or-public-domain,node_modules/app-builder-bin
 development,app-builder-lib,26.8.1,MIT,false,false,permissive-or-public-domain,node_modules/app-builder-lib
 development,app-builder-lib/node_modules/@electron/get,3.1.0,MIT,false,false,permissive-or-public-domain,node_modules/app-builder-lib/node_modules/@electron/get
@@ -280,8 +312,6 @@ development,cli-truncate,2.1.0,MIT,true,false,permissive-or-public-domain,node_m
 development,cliui,8.0.1,ISC,false,false,permissive-or-public-domain,node_modules/cliui
 development,clone,1.0.4,MIT,false,false,permissive-or-public-domain,node_modules/clone
 development,clone-response,1.0.3,MIT,false,false,permissive-or-public-domain,node_modules/clone-response
-development,color-convert,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/color-convert
-development,color-name,1.1.4,MIT,false,false,permissive-or-public-domain,node_modules/color-name
 development,combined-stream,1.0.8,MIT,false,false,permissive-or-public-domain,node_modules/combined-stream
 development,commander,5.1.0,MIT,false,false,permissive-or-public-domain,node_modules/commander
 development,compare-version,0.1.2,MIT,false,false,permissive-or-public-domain,node_modules/compare-version
@@ -316,6 +346,8 @@ development,dmg-builder/node_modules/fs-extra,10.1.0,MIT,false,false,permissive-
 development,dmg-builder/node_modules/jsonfile,6.2.0,MIT,false,false,permissive-or-public-domain,node_modules/dmg-builder/node_modules/jsonfile
 development,dmg-builder/node_modules/universalify,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/dmg-builder/node_modules/universalify
 development,dmg-license,1.0.11,MIT,true,false,permissive-or-public-domain,node_modules/dmg-license
+development,dmg-license/node_modules/ajv,6.15.0,MIT,true,false,permissive-or-public-domain,node_modules/dmg-license/node_modules/ajv
+development,dmg-license/node_modules/json-schema-traverse,0.4.1,MIT,true,false,permissive-or-public-domain,node_modules/dmg-license/node_modules/json-schema-traverse
 development,dom-accessibility-api,0.5.16,MIT,false,false,permissive-or-public-domain,node_modules/dom-accessibility-api
 development,dotenv,16.6.1,BSD-2-Clause,false,false,permissive-or-public-domain,node_modules/dotenv
 development,dotenv-expand,11.0.7,BSD-2-Clause,false,false,permissive-or-public-domain,node_modules/dotenv-expand
@@ -335,7 +367,6 @@ development,electron-to-chromium,1.5.307,ISC,false,false,permissive-or-public-do
 development,electron-vite,5.0.0,MIT,false,false,permissive-or-public-domain,node_modules/electron-vite
 development,electron-winstaller,5.4.0,MIT,false,true,permissive-or-public-domain,node_modules/electron-winstaller
 development,electron-winstaller/node_modules/fs-extra,7.0.1,MIT,false,false,permissive-or-public-domain,node_modules/electron-winstaller/node_modules/fs-extra
-development,emoji-regex,8.0.0,MIT,false,false,permissive-or-public-domain,node_modules/emoji-regex
 development,encoding,0.1.13,MIT,true,false,permissive-or-public-domain,node_modules/encoding
 development,end-of-stream,1.4.5,MIT,false,false,permissive-or-public-domain,node_modules/end-of-stream
 development,enhanced-resolve,5.20.0,MIT,false,false,permissive-or-public-domain,node_modules/enhanced-resolve
@@ -354,6 +385,8 @@ development,escape-string-regexp,4.0.0,MIT,false,false,permissive-or-public-doma
 development,eslint,10.0.2,MIT,false,false,permissive-or-public-domain,node_modules/eslint
 development,eslint-scope,9.1.1,BSD-2-Clause,false,false,permissive-or-public-domain,node_modules/eslint-scope
 development,eslint-visitor-keys,5.0.1,Apache-2.0,false,false,permissive-or-public-domain,node_modules/eslint-visitor-keys
+development,eslint/node_modules/ajv,6.15.0,MIT,false,false,permissive-or-public-domain,node_modules/eslint/node_modules/ajv
+development,eslint/node_modules/json-schema-traverse,0.4.1,MIT,false,false,permissive-or-public-domain,node_modules/eslint/node_modules/json-schema-traverse
 development,espree,11.1.1,BSD-2-Clause,false,false,permissive-or-public-domain,node_modules/espree
 development,esquery,1.7.0,BSD-3-Clause,false,false,permissive-or-public-domain,node_modules/esquery
 development,esrecurse,4.3.0,BSD-2-Clause,false,false,permissive-or-public-domain,node_modules/esrecurse
@@ -363,7 +396,6 @@ development,esutils,2.0.3,BSD-2-Clause,false,false,permissive-or-public-domain,n
 development,expect-type,1.3.0,Apache-2.0,false,false,permissive-or-public-domain,node_modules/expect-type
 development,exponential-backoff,3.1.3,Apache-2.0,false,false,permissive-or-public-domain,node_modules/exponential-backoff
 development,extsprintf,1.4.1,MIT,true,false,permissive-or-public-domain,node_modules/extsprintf
-development,fast-deep-equal,3.1.3,MIT,false,false,permissive-or-public-domain,node_modules/fast-deep-equal
 development,fast-json-stable-stringify,2.1.0,MIT,false,false,permissive-or-public-domain,node_modules/fast-json-stable-stringify
 development,fast-levenshtein,2.0.6,MIT,false,false,permissive-or-public-domain,node_modules/fast-levenshtein
 development,fdir,6.5.0,MIT,false,false,permissive-or-public-domain,node_modules/fdir
@@ -382,7 +414,6 @@ development,fs-minipass,3.0.3,ISC,false,false,permissive-or-public-domain,node_m
 development,fs.realpath,1.0.0,ISC,false,false,permissive-or-public-domain,node_modules/fs.realpath
 development,function-bind,1.1.2,MIT,false,false,permissive-or-public-domain,node_modules/function-bind
 development,gensync,1.0.0-beta.2,MIT,false,false,permissive-or-public-domain,node_modules/gensync
-development,get-caller-file,2.0.5,ISC,false,false,permissive-or-public-domain,node_modules/get-caller-file
 development,get-intrinsic,1.3.0,MIT,false,false,permissive-or-public-domain,node_modules/get-intrinsic
 development,get-proto,1.0.1,MIT,false,false,permissive-or-public-domain,node_modules/get-proto
 development,get-stream,5.2.0,MIT,false,false,permissive-or-public-domain,node_modules/get-stream
@@ -420,7 +451,6 @@ development,inflight,1.0.6,ISC,false,false,permissive-or-public-domain,node_modu
 development,inherits,2.0.4,ISC,false,false,permissive-or-public-domain,node_modules/inherits
 development,ip-address,10.1.0,MIT,false,false,permissive-or-public-domain,node_modules/ip-address
 development,is-extglob,2.1.1,MIT,false,false,permissive-or-public-domain,node_modules/is-extglob
-development,is-fullwidth-code-point,3.0.0,MIT,false,false,permissive-or-public-domain,node_modules/is-fullwidth-code-point
 development,is-glob,4.0.3,MIT,false,false,permissive-or-public-domain,node_modules/is-glob
 development,is-interactive,1.0.0,MIT,false,false,permissive-or-public-domain,node_modules/is-interactive
 development,is-potential-custom-element-name,1.0.1,MIT,false,false,permissive-or-public-domain,node_modules/is-potential-custom-element-name
@@ -435,7 +465,6 @@ development,jsdom,29.0.1,MIT,false,false,permissive-or-public-domain,node_module
 development,jsdom/node_modules/lru-cache,11.2.7,BlueOak-1.0.0,false,false,permissive-or-public-domain,node_modules/jsdom/node_modules/lru-cache
 development,jsesc,3.1.0,MIT,false,false,permissive-or-public-domain,node_modules/jsesc
 development,json-buffer,3.0.1,MIT,false,false,permissive-or-public-domain,node_modules/json-buffer
-development,json-schema-traverse,0.4.1,MIT,false,false,permissive-or-public-domain,node_modules/json-schema-traverse
 development,json-stable-stringify-without-jsonify,1.0.1,MIT,false,false,permissive-or-public-domain,node_modules/json-stable-stringify-without-jsonify
 development,json-stringify-safe,5.0.1,ISC,true,false,permissive-or-public-domain,node_modules/json-stringify-safe
 development,json5,2.2.3,MIT,false,false,permissive-or-public-domain,node_modules/json5
@@ -512,7 +541,6 @@ development,p-locate,5.0.0,MIT,false,false,permissive-or-public-domain,node_modu
 development,p-map,7.0.4,MIT,false,false,permissive-or-public-domain,node_modules/p-map
 development,package-json-from-dist,1.0.1,BlueOak-1.0.0,false,false,permissive-or-public-domain,node_modules/package-json-from-dist
 development,parse5,8.0.0,MIT,false,false,permissive-or-public-domain,node_modules/parse5
-development,path-exists,4.0.0,MIT,false,false,permissive-or-public-domain,node_modules/path-exists
 development,path-is-absolute,1.0.1,MIT,false,false,permissive-or-public-domain,node_modules/path-is-absolute
 development,path-key,3.1.1,MIT,false,false,permissive-or-public-domain,node_modules/path-key
 development,path-scurry,1.11.1,BlueOak-1.0.0,false,false,permissive-or-public-domain,node_modules/path-scurry
@@ -541,8 +569,6 @@ development,react-refresh,0.18.0,MIT,false,false,permissive-or-public-domain,nod
 development,read-binary-file-arch,1.0.6,MIT,false,false,permissive-or-public-domain,node_modules/read-binary-file-arch
 development,readable-stream,3.6.2,MIT,false,false,permissive-or-public-domain,node_modules/readable-stream
 development,redent,3.0.0,MIT,false,false,permissive-or-public-domain,node_modules/redent
-development,require-directory,2.1.1,MIT,false,false,permissive-or-public-domain,node_modules/require-directory
-development,require-from-string,2.0.2,MIT,false,false,permissive-or-public-domain,node_modules/require-from-string
 development,resedit,1.7.2,MIT,false,false,permissive-or-public-domain,node_modules/resedit
 development,resolve-alpn,1.2.1,MIT,false,false,permissive-or-public-domain,node_modules/resolve-alpn
 development,responselike,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/responselike
@@ -558,6 +584,8 @@ development,saxes,6.0.0,ISC,false,false,permissive-or-public-domain,node_modules
 development,semver,6.3.1,ISC,false,false,permissive-or-public-domain,node_modules/semver
 development,semver-compare,1.0.0,MIT,true,false,permissive-or-public-domain,node_modules/semver-compare
 development,serialize-error,7.0.1,MIT,true,false,permissive-or-public-domain,node_modules/serialize-error
+development,sharp,0.34.5,Apache-2.0,false,true,permissive-or-public-domain,node_modules/sharp
+development,sharp/node_modules/semver,7.8.5,ISC,false,false,permissive-or-public-domain,node_modules/sharp/node_modules/semver
 development,shebang-command,2.0.0,MIT,false,false,permissive-or-public-domain,node_modules/shebang-command
 development,shebang-regex,3.0.0,MIT,false,false,permissive-or-public-domain,node_modules/shebang-regex
 development,siginfo,2.0.0,ISC,false,false,permissive-or-public-domain,node_modules/siginfo
@@ -577,9 +605,7 @@ development,stackback,0.0.2,MIT,false,false,permissive-or-public-domain,node_mod
 development,stat-mode,1.0.0,MIT,false,false,permissive-or-public-domain,node_modules/stat-mode
 development,std-env,4.0.0,MIT,false,false,permissive-or-public-domain,node_modules/std-env
 development,string_decoder,1.3.0,MIT,false,false,permissive-or-public-domain,node_modules/string_decoder
-development,string-width,4.2.3,MIT,false,false,permissive-or-public-domain,node_modules/string-width
 development,string-width,4.2.3,MIT,false,false,permissive-or-public-domain,node_modules/string-width-cjs
-development,strip-ansi,6.0.1,MIT,false,false,permissive-or-public-domain,node_modules/strip-ansi
 development,strip-ansi,6.0.1,MIT,false,false,permissive-or-public-domain,node_modules/strip-ansi-cjs
 development,strip-indent,3.0.0,MIT,false,false,permissive-or-public-domain,node_modules/strip-indent
 development,supports-color,7.2.0,MIT,false,false,permissive-or-public-domain,node_modules/supports-color
@@ -607,6 +633,7 @@ development,tough-cookie,6.0.1,BSD-3-Clause,false,false,permissive-or-public-dom
 development,tr46,6.0.0,MIT,false,false,permissive-or-public-domain,node_modules/tr46
 development,truncate-utf8-bytes,1.0.2,WTFPL,false,false,permissive-or-public-domain,node_modules/truncate-utf8-bytes
 development,ts-api-utils,2.4.0,MIT,false,false,permissive-or-public-domain,node_modules/ts-api-utils
+development,tslib,2.8.1,0BSD,true,false,permissive-or-public-domain,node_modules/tslib
 development,type-check,0.4.0,MIT,false,false,permissive-or-public-domain,node_modules/type-check
 development,type-fest,0.13.1,(MIT OR CC0-1.0),true,false,permissive-or-public-domain,node_modules/type-fest
 development,typescript,5.9.3,Apache-2.0,false,false,permissive-or-public-domain,node_modules/typescript
@@ -699,10 +726,14 @@ production,@types/react,19.2.14,MIT,false,false,permissive-or-public-domain,node
 production,@types/unist,3.0.3,MIT,false,false,permissive-or-public-domain,node_modules/@types/unist
 production,@types/use-sync-external-store,0.0.6,MIT,false,false,permissive-or-public-domain,node_modules/@types/use-sync-external-store
 production,@ungap/structured-clone,1.3.0,ISC,false,false,permissive-or-public-domain,node_modules/@ungap/structured-clone
+production,ajv,8.17.1,MIT,false,false,permissive-or-public-domain,node_modules/ajv
+production,ansi-regex,5.0.1,MIT,false,false,permissive-or-public-domain,node_modules/ansi-regex
+production,ansi-styles,4.3.0,MIT,false,false,permissive-or-public-domain,node_modules/ansi-styles
 production,argparse,2.0.1,Python-2.0,false,false,permissive-or-public-domain,node_modules/argparse
 production,bail,2.0.2,MIT,false,false,permissive-or-public-domain,node_modules/bail
 production,better-sqlite3,13.0.1,MIT,false,true,permissive-or-public-domain,node_modules/better-sqlite3
 production,better-sqlite3/node_modules/node-addon-api,8.9.0,MIT,false,false,permissive-or-public-domain,node_modules/better-sqlite3/node_modules/node-addon-api
+production,camelcase,5.3.1,MIT,false,false,permissive-or-public-domain,node_modules/camelcase
 production,ccount,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/ccount
 production,character-entities,2.0.2,MIT,false,false,permissive-or-public-domain,node_modules/character-entities
 production,character-entities-html4,2.1.0,MIT,false,false,permissive-or-public-domain,node_modules/character-entities-html4
@@ -710,6 +741,8 @@ production,character-entities-legacy,3.0.0,MIT,false,false,permissive-or-public-
 production,character-reference-invalid,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/character-reference-invalid
 production,chokidar,5.0.0,MIT,false,false,permissive-or-public-domain,node_modules/chokidar
 production,clsx,2.1.1,MIT,false,false,permissive-or-public-domain,node_modules/clsx
+production,color-convert,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/color-convert
+production,color-name,1.1.4,MIT,false,false,permissive-or-public-domain,node_modules/color-name
 production,comma-separated-tokens,2.0.3,MIT,false,false,permissive-or-public-domain,node_modules/comma-separated-tokens
 production,csstype,3.2.3,MIT,false,false,permissive-or-public-domain,node_modules/csstype
 production,d3-array,3.2.4,ISC,false,false,permissive-or-public-domain,node_modules/d3-array
@@ -724,10 +757,12 @@ production,d3-time,3.1.0,ISC,false,false,permissive-or-public-domain,node_module
 production,d3-time-format,4.1.0,ISC,false,false,permissive-or-public-domain,node_modules/d3-time-format
 production,d3-timer,3.0.1,ISC,false,false,permissive-or-public-domain,node_modules/d3-timer
 production,debug,4.4.3,MIT,false,false,permissive-or-public-domain,node_modules/debug
+production,decamelize,1.2.0,MIT,false,false,permissive-or-public-domain,node_modules/decamelize
 production,decimal.js-light,2.5.1,MIT,false,false,permissive-or-public-domain,node_modules/decimal.js-light
 production,decode-named-character-reference,1.3.0,MIT,false,false,permissive-or-public-domain,node_modules/decode-named-character-reference
 production,dequal,2.0.3,MIT,false,false,permissive-or-public-domain,node_modules/dequal
 production,devlop,1.1.0,MIT,false,false,permissive-or-public-domain,node_modules/devlop
+production,dijkstrajs,1.0.3,MIT,false,false,permissive-or-public-domain,node_modules/dijkstrajs
 production,electron,40.10.6,MIT,false,true,permissive-or-public-domain,node_modules/electron
 production,electron-updater,6.8.9,MIT,false,false,permissive-or-public-domain,node_modules/electron-updater
 production,electron-updater/node_modules/builder-util-runtime,9.7.0,MIT,false,false,permissive-or-public-domain,node_modules/electron-updater/node_modules/builder-util-runtime
@@ -737,11 +772,15 @@ production,electron-updater/node_modules/semver,7.7.4,ISC,false,false,permissive
 production,electron-updater/node_modules/universalify,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/electron-updater/node_modules/universalify
 production,electron/node_modules/@types/node,24.11.0,MIT,false,false,permissive-or-public-domain,node_modules/electron/node_modules/@types/node
 production,electron/node_modules/undici-types,7.16.0,MIT,false,false,permissive-or-public-domain,node_modules/electron/node_modules/undici-types
+production,emoji-regex,8.0.0,MIT,false,false,permissive-or-public-domain,node_modules/emoji-regex
 production,es-toolkit,1.46.0,MIT,false,false,permissive-or-public-domain,node_modules/es-toolkit
 production,estree-util-is-identifier-name,3.0.0,MIT,false,false,permissive-or-public-domain,node_modules/estree-util-is-identifier-name
 production,eventemitter3,5.0.4,MIT,false,false,permissive-or-public-domain,node_modules/eventemitter3
 production,extend,3.0.2,MIT,false,false,permissive-or-public-domain,node_modules/extend
+production,fast-deep-equal,3.1.3,MIT,false,false,permissive-or-public-domain,node_modules/fast-deep-equal
+production,fast-uri,3.1.4,BSD-3-Clause,false,false,permissive-or-public-domain,node_modules/fast-uri
 production,fsevents,2.3.3,MIT,true,true,permissive-or-public-domain,node_modules/fsevents
+production,get-caller-file,2.0.5,ISC,false,false,permissive-or-public-domain,node_modules/get-caller-file
 production,graceful-fs,4.2.11,ISC,false,false,permissive-or-public-domain,node_modules/graceful-fs
 production,hast-util-to-jsx-runtime,2.3.6,MIT,false,false,permissive-or-public-domain,node_modules/hast-util-to-jsx-runtime
 production,hast-util-whitespace,3.0.0,MIT,false,false,permissive-or-public-domain,node_modules/hast-util-whitespace
@@ -752,9 +791,11 @@ production,internmap,2.0.3,ISC,false,false,permissive-or-public-domain,node_modu
 production,is-alphabetical,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/is-alphabetical
 production,is-alphanumerical,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/is-alphanumerical
 production,is-decimal,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/is-decimal
+production,is-fullwidth-code-point,3.0.0,MIT,false,false,permissive-or-public-domain,node_modules/is-fullwidth-code-point
 production,is-hexadecimal,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/is-hexadecimal
 production,is-plain-obj,4.1.0,MIT,false,false,permissive-or-public-domain,node_modules/is-plain-obj
 production,js-yaml,4.3.0,MIT,false,false,permissive-or-public-domain,node_modules/js-yaml
+production,json-schema-traverse,1.0.0,MIT,false,false,permissive-or-public-domain,node_modules/json-schema-traverse
 production,lazy-val,1.0.5,MIT,false,false,permissive-or-public-domain,node_modules/lazy-val
 production,lodash.escaperegexp,4.1.2,MIT,false,false,permissive-or-public-domain,node_modules/lodash.escaperegexp
 production,lodash.isequal,4.5.0,MIT,false,false,permissive-or-public-domain,node_modules/lodash.isequal
@@ -806,10 +847,23 @@ production,micromark-util-subtokenize,2.1.0,MIT,false,false,permissive-or-public
 production,micromark-util-symbol,2.0.1,MIT,false,false,permissive-or-public-domain,node_modules/micromark-util-symbol
 production,micromark-util-types,2.0.2,MIT,false,false,permissive-or-public-domain,node_modules/micromark-util-types
 production,ms,2.1.3,MIT,false,false,permissive-or-public-domain,node_modules/ms
+production,p-try,2.2.0,MIT,false,false,permissive-or-public-domain,node_modules/p-try
 production,parse-entities,4.0.2,MIT,false,false,permissive-or-public-domain,node_modules/parse-entities
 production,parse-entities/node_modules/@types/unist,2.0.11,MIT,false,false,permissive-or-public-domain,node_modules/parse-entities/node_modules/@types/unist
+production,path-exists,4.0.0,MIT,false,false,permissive-or-public-domain,node_modules/path-exists
+production,pngjs,5.0.0,MIT,false,false,permissive-or-public-domain,node_modules/pngjs
 production,progress,2.0.3,MIT,false,false,permissive-or-public-domain,node_modules/progress
 production,property-information,7.1.0,MIT,false,false,permissive-or-public-domain,node_modules/property-information
+production,qrcode,1.5.4,MIT,false,false,permissive-or-public-domain,node_modules/qrcode
+production,qrcode/node_modules/cliui,6.0.0,ISC,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/cliui
+production,qrcode/node_modules/find-up,4.1.0,MIT,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/find-up
+production,qrcode/node_modules/locate-path,5.0.0,MIT,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/locate-path
+production,qrcode/node_modules/p-limit,2.3.0,MIT,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/p-limit
+production,qrcode/node_modules/p-locate,4.1.0,MIT,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/p-locate
+production,qrcode/node_modules/wrap-ansi,6.2.0,MIT,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/wrap-ansi
+production,qrcode/node_modules/y18n,4.0.3,ISC,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/y18n
+production,qrcode/node_modules/yargs,15.4.1,MIT,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/yargs
+production,qrcode/node_modules/yargs-parser,18.1.3,ISC,false,false,permissive-or-public-domain,node_modules/qrcode/node_modules/yargs-parser
 production,react,19.2.4,MIT,false,false,permissive-or-public-domain,node_modules/react
 production,react-dom,19.2.4,MIT,false,false,permissive-or-public-domain,node_modules/react-dom
 production,react-is,17.0.2,MIT,false,false,permissive-or-public-domain,node_modules/react-is
@@ -823,11 +877,17 @@ production,remark-gfm,4.0.1,MIT,false,false,permissive-or-public-domain,node_mod
 production,remark-parse,11.0.0,MIT,false,false,permissive-or-public-domain,node_modules/remark-parse
 production,remark-rehype,11.1.2,MIT,false,false,permissive-or-public-domain,node_modules/remark-rehype
 production,remark-stringify,11.0.0,MIT,false,false,permissive-or-public-domain,node_modules/remark-stringify
+production,require-directory,2.1.1,MIT,false,false,permissive-or-public-domain,node_modules/require-directory
+production,require-from-string,2.0.2,MIT,false,false,permissive-or-public-domain,node_modules/require-from-string
+production,require-main-filename,2.0.0,ISC,false,false,permissive-or-public-domain,node_modules/require-main-filename
 production,reselect,5.1.1,MIT,false,false,permissive-or-public-domain,node_modules/reselect
 production,sax,1.5.0,BlueOak-1.0.0,false,false,permissive-or-public-domain,node_modules/sax
 production,scheduler,0.27.0,MIT,false,false,permissive-or-public-domain,node_modules/scheduler
+production,set-blocking,2.0.0,ISC,false,false,permissive-or-public-domain,node_modules/set-blocking
 production,space-separated-tokens,2.0.2,MIT,false,false,permissive-or-public-domain,node_modules/space-separated-tokens
+production,string-width,4.2.3,MIT,false,false,permissive-or-public-domain,node_modules/string-width
 production,stringify-entities,4.0.4,MIT,false,false,permissive-or-public-domain,node_modules/stringify-entities
+production,strip-ansi,6.0.1,MIT,false,false,permissive-or-public-domain,node_modules/strip-ansi
 production,style-to-js,1.1.21,MIT,false,false,permissive-or-public-domain,node_modules/style-to-js
 production,style-to-object,1.0.14,MIT,false,false,permissive-or-public-domain,node_modules/style-to-object
 production,sumchecker,3.0.1,Apache-2.0,false,false,permissive-or-public-domain,node_modules/sumchecker
@@ -846,5 +906,6 @@ production,use-sync-external-store,1.6.0,MIT,false,false,permissive-or-public-do
 production,vfile,6.0.3,MIT,false,false,permissive-or-public-domain,node_modules/vfile
 production,vfile-message,4.0.3,MIT,false,false,permissive-or-public-domain,node_modules/vfile-message
 production,victory-vendor,37.3.6,MIT AND ISC,false,false,permissive-or-public-domain,node_modules/victory-vendor
+production,which-module,2.0.1,ISC,false,false,permissive-or-public-domain,node_modules/which-module
 production,zustand,5.0.11,MIT,false,false,permissive-or-public-domain,node_modules/zustand
 production,zwitch,2.0.4,MIT,false,false,permissive-or-public-domain,node_modules/zwitch

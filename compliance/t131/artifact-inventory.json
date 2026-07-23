@@ -1,70 +1,85 @@
 {
-  "schemaVersion": 1,
-  "auditDate": "2026-07-22",
-  "baseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
-  "artifacts": [
-    {
-      "platform": "macOS arm64",
-      "format": "DMG",
-      "version": "v1.2.0",
-      "source": "https://github.com/IvyYang1999/swob/releases/tag/v1.2.0",
-      "sourceCommit": "9bd6bbc92554bfaab71d0badd9923af7f1c6334b",
-      "bytes": 142659456,
-      "sha256": "bc056d043dcf6d1a1d41b373b14e8c03fd8f91e73901dd41f9dba0427d7ab239",
-      "inspection": "Mounted read-only. Its app.asar SHA-256 matched the ZIP payload exactly.",
-      "disposition": "BLOCKED_BY_SHARED_MACOS_PAYLOAD_FINDINGS"
-    },
-    {
-      "platform": "macOS arm64",
-      "format": "ZIP",
-      "version": "v1.2.0",
-      "source": "https://github.com/IvyYang1999/swob/releases/tag/v1.2.0",
-      "sourceCommit": "9bd6bbc92554bfaab71d0badd9923af7f1c6334b",
-      "bytes": 138378279,
-      "sha256": "69bd0e8a4655f1b5fde18d335a485f1bc967c2194d9a1236370ec9ff3dad36e3",
-      "outerEntries": 605,
-      "asarFiles": 8869,
-      "disposition": "BLOCKED_BY_SHARED_MACOS_PAYLOAD_FINDINGS"
-    },
-    {
-      "platform": "Windows x64",
-      "format": "NSIS EXE",
-      "version": "1.2.0 alpha",
-      "source": "https://github.com/IvyYang1999/swob/actions/runs/29883831603",
-      "sourceCommit": "d970cbf469ac7416c0a4a847c1f85ce484d5f1cd",
-      "sourceBranch": "feature/t107-windows-alpha",
-      "formalRelease": false,
-      "bytes": 131828373,
-      "sha256": "114e9b31d2574742839828c41fd05605efacc192b916990978fff2b9f0abe3c4",
-      "extractedOuterFiles": 150,
-      "asarFiles": 8971,
-      "disposition": "REFERENCE_SAMPLE_ONLY_NOT_CURRENT_MASTER_RELEASE"
-    }
-  ],
-  "payloadFindings": {
-    "macOS": {
-      "projectLicense": "AGPL-3.0 license text present at app.asar root.",
-      "dependencyLicenses": "Per-package license files are present for many packaged npm dependencies.",
-      "electronNotice": "LICENSE.electron.txt not found in the outer app or framework inventory.",
-      "chromiumNotice": "LICENSES.chromium.html not found in the outer app or framework inventory.",
-      "unexpectedWorktree": {
-        "path": ".claude/worktrees/curious-shimmying-quokka/",
-        "fileCount": 58,
-        "exactTagMatches": 23,
-        "differentFromTag": 27,
-        "absentFromTag": 8,
-        "sensitiveCategory": "A local settings file path was included. Its contents were deliberately not read or reported.",
-        "disposition": "BLOCKER: treat the public artifact as a packaging/privacy incident; review locally and rotate or revoke any affected secret if the owner finds one."
+  "schemaVersion": 2,
+  "auditDate": "2026-07-23",
+  "productBaseline": "f95baf1e9d219e8fed0884484378df7778f3f290",
+  "historicalIncident": {
+    "version": "v1.2.0",
+    "sourceCommit": "9bd6bbc92554bfaab71d0badd9923af7f1c6334b",
+    "license": "AGPL-3.0-only",
+    "artifacts": [
+      {
+        "name": "v1.2.0 macOS arm64 DMG",
+        "sha256": "bc056d043dcf6d1a1d41b373b14e8c03fd8f91e73901dd41f9dba0427d7ab239",
+        "bytes": 142659456
+      },
+      {
+        "name": "v1.2.0 macOS arm64 ZIP",
+        "sha256": "69bd0e8a4655f1b5fde18d335a485f1bc967c2194d9a1236370ec9ff3dad36e3",
+        "bytes": 138378279
       }
-    },
-    "windows": {
-      "projectLicense": "AGPL-3.0 license text present at app.asar root.",
-      "electronNotice": "LICENSE.electron.txt present in the extracted outer payload.",
-      "chromiumNotice": "LICENSES.chromium.html present in the extracted outer payload.",
-      "unexpectedWorktreeFiles": 0
-    },
-    "fonts": "No bundled font file was found in the source asset inventory; the website uses system font stacks.",
-    "nativeAndRuntime": "The inventories include Electron runtime files and packaged native/runtime dependencies. File-level raw listings remain local and uncommitted."
+    ],
+    "finding": "The DMG and ZIP shared an app.asar containing 58 unintended files under a local worktree path, including one settings-category filename whose contents were deliberately not read. The macOS outer payload also lacked the separately expected Electron and Chromium notices.",
+    "disposition": "HISTORICAL_ARTIFACT_BLOCKED_DO_NOT_REUSE"
   },
-  "coverageLimit": "No DMG, ZIP or formal NSIS artifact exists for the audited baseline commit. A fresh post-fix three-format build and re-inspection is mandatory before relicensing or publishing another release."
+  "localUnsignedCandidate": {
+    "version": "1.3.0",
+    "channel": "swob-signed",
+    "purpose": "Content, architecture, container integrity and exact asset-contract evidence only. These local artifacts are deliberately unsigned and are not publishable.",
+    "assets": [
+      {
+        "name": "swob-1.3.0-arm64.dmg",
+        "bytes": 137676994,
+        "sha256": "64f7ea14403037928215a06feafaa20a11ab2fbecd92ac8b753c01e5d9affa23"
+      },
+      {
+        "name": "swob-1.3.0-arm64.zip",
+        "bytes": 132393920,
+        "sha256": "1b75b3b8a0f62b3eabebc8ff9f33687e43c164d2021dde9eafa993c76f78e81c"
+      },
+      {
+        "name": "swob-1.3.0-arm64.zip.blockmap",
+        "bytes": 138651,
+        "sha256": "f90fffd206f444dfbbcdc320df1a63f707ab6c2ca5ac9fff08307f7dfe6c1c82"
+      },
+      {
+        "name": "swob-1.3.0-x64.dmg",
+        "bytes": 142638507,
+        "sha256": "e7e0bb378c5889ac95f0a68df456bb84dc17112e9cbb738592cd6d6c02ed27d4"
+      },
+      {
+        "name": "swob-1.3.0-x64.zip",
+        "bytes": 137306514,
+        "sha256": "eebceca2a1362e2dbd6347aeb6a7b0a5cc3acc34be0697b55a7e4a252dbb051a"
+      },
+      {
+        "name": "swob-1.3.0-x64.zip.blockmap",
+        "bytes": 144352,
+        "sha256": "d85914d5fd6dd100258155fc28c8b428481b32450be2d1e3baf6f543eb3db57c"
+      }
+    ],
+    "checks": {
+      "exactAssetContract": "PASS: exactly two DMGs, two ZIPs and two ZIP blockmaps; no DMG blockmap or update metadata.",
+      "architectures": "PASS: one arm64 app and one x86_64 app.",
+      "dmgIntegrity": "PASS: hdiutil verify succeeded for arm64 and x64.",
+      "containerInspection": "PASS: package policy ran against both unpacked apps, both extracted ZIP apps and both mounted-DMG apps.",
+      "asarPolicy": "PASS: 10,109 paths in each app.asar; runtime allowlist and sensitive/private path deny rules passed.",
+      "asarSha256": "c6fb2fe0e7870f7c804dbf1dbaf1f68c3683346dca3db7a81fbf85a9a5ca6d66",
+      "outerNotices": "PASS: project LICENSE/NOTICE/THIRD_PARTY_NOTICES and Electron/Chromium notices matched their pinned local sources in every inspected app.",
+      "signingAndNotarization": "NOT_TESTED_LOCALLY_BY_DESIGN"
+    }
+  },
+  "remoteReleaseGate": {
+    "requiredOnPullRequestHead": [
+      "signing-smoke.yml mode=release-gates",
+      "signing-smoke.yml mode=signing-smoke"
+    ],
+    "requiredOnMergedMaster": [
+      "signing-smoke.yml mode=release-gates",
+      "signing-smoke.yml mode=signing-smoke"
+    ],
+    "requiredVerifierCoverage": "Every unpacked, extracted-ZIP and mounted-DMG app must pass Developer ID, expected Team ID, hardened runtime, Gatekeeper, notarization/stapler, version/channel and package-policy checks.",
+    "tagBinding": "The release tag commit must equal the current origin/master tip at both pre-build and pre-publish checks; master is frozen between tag creation and release publication.",
+    "sideEffectBoundary": "The smoke workflow must not create a tag, GitHub Release, published update metadata or Pages deployment.",
+    "status": "PENDING_FINAL_SHA_REMOTE_EVIDENCE"
+  }
 }

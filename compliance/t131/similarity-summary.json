@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "baseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
+  "baseline": "f95baf1e9d219e8fed0884484378df7778f3f290",
   "tool": {
     "name": "swob-t131-similarity",
     "version": "1.0.0",
@@ -9,59 +9,43 @@
   },
   "corpus": {
     "repositories": 20,
+    "acceptedFiles": 18304,
+    "acceptedBytes": 172448382,
     "pinnedCommits": "source-corpus.lock.json",
     "targetSnapshots": [
-      "current@dc6bf2409640248bc75b3a22fadfea6636f69383",
+      "current@f95baf1e9d219e8fed0884484378df7778f3f290",
       "v1.0.0",
       "v1.1.0",
       "v1.2.0"
     ]
   },
   "targetStatistics": {
-    "files": 499,
-    "bytes": 4417553,
-    "normalized16LineWindows": 74233,
-    "token80Windows": 710132,
-    "astFragments": 2112
+    "files": 592,
+    "bytes": 5272856,
+    "normalized16LineWindows": 88794,
+    "token80Windows": 827518,
+    "astFragments": 2463
   },
   "methods": {
     "exact": "SHA-256 of nontrivial complete source files.",
     "normalized": "16 consecutive nontrivial lines after comment and whitespace removal; at least 240 characters.",
     "token": "80-token windows after comment removal.",
     "ast": "Exact identifier/literal-free TypeScript/JavaScript subtree hashes of at least 60 nodes.",
-    "rareTerms": "Long identifiers and strings used only to route candidates to manual review; values are not stored in this committed summary."
+    "rareTerms": "Long identifiers and strings are used only to route candidates to manual review; values are not stored in committed evidence."
   },
   "automaticResult": {
     "exactFileMatches": 0,
     "normalized16LineMatches": 0,
     "token80Matches": 0,
     "exactAstMatches": 0,
-    "manualCandidates": 4
+    "manualCandidates": 0
   },
-  "manualResult": [
-    {
-      "target": "current and v1.2.0: src/main/codex-loader.ts",
-      "external": "HizTam/codex-history-viewer@07a8288f24ae172560e28945e24983d6956f70f3: src/transcript/transcriptRenderer.ts",
-      "trigger": "Two rare identifiers and three rare strings; zero exact, normalized, token or AST match.",
-      "classification": "B_PROTOCOL_BOILERPLATE_INDEPENDENT_IMPLEMENTATION",
-      "review": "Both programs parse the same public Codex JSONL protocol. Manual structural review found different control flow, output models and implementation structure; the shared terms are protocol field/type names.",
-      "status": "CLOSED"
-    },
-    {
-      "target": "current and v1.2.0: src/main/codex-loader.ts",
-      "external": "HizTam/codex-history-viewer@07a8288f24ae172560e28945e24983d6956f70f3: src/transcript/resumeRenderer.ts",
-      "trigger": "Two rare identifiers and two rare strings; zero exact, normalized, token or AST match.",
-      "classification": "B_PROTOCOL_BOILERPLATE_INDEPENDENT_IMPLEMENTATION",
-      "review": "Shared terms are dictated by the same Codex JSONL protocol. No protectable sequence or structure match was detected or found manually.",
-      "status": "CLOSED"
-    }
-  ],
+  "manualResult": [],
   "exclusions": [
     "Dependencies, vendored code, build output, generated content, lockfiles, source maps and minified files.",
     "LICENSE, NOTICE and COPYING texts whose mandated verbatim similarity is not source-copying evidence.",
     "Fingerprints appearing more than eight times in the target, treated as framework or syntax boilerplate.",
-    "The audit scripts under scripts/compliance, so the audit does not compare its own new implementation."
+    "The audit scripts under scripts/compliance, so the audit does not compare its own implementation."
   ],
-  "falsePositiveCorrection": "An earlier dry run treated decorative comment separators as token matches. The tokenizer was corrected to remove block, line and HTML comments; those candidates disappeared in the final run.",
   "scopeLimit": "This result applies only to the 20 pinned repositories and four target snapshots. It is not an internet-wide originality guarantee or a legal conclusion. No source snippets, matched literals, transcript bodies or credentials are committed."
 }

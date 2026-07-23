@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-07-23",
+  "artifacts": [
+    {
+      "id": "ip-assignment",
+      "sha256": "6dd272244a3679908b12423dcd729f592f2e9429cf71d959b41b86b19c83d0c7",
+      "pages": 3,
+      "visibleSignatureBlocksCompleted": 2,
+      "pdfCryptographicSignature": false
+    },
+    {
+      "id": "rights-chain-declaration",
+      "sha256": "f0d155a3224f29f81257183e6531a66be64b1d075e7600acc4a67adeb5b89c5c",
+      "pages": 2,
+      "visibleSignatureBlocksCompleted": 1,
+      "pdfCryptographicSignature": false
+    }
+  ],
+  "storage": "Owner-controlled private archive. Signed PDFs are intentionally not committed because they contain signatures and personal data.",
+  "reviewConclusion": "All required visible signature, date, identity/capacity, and place fields were completed. The PDFs use flattened visible signatures rather than cryptographic PDF signature fields."
+}

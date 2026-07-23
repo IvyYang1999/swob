@@ -1,9 +1,6 @@
 name: Deploy landing page to GitHub Pages
 
 on:
-  push:
-    branches: [master]
-    paths: ['site/**']
   workflow_dispatch:
 
 permissions:

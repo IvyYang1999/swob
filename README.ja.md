@@ -18,7 +18,7 @@ Swob は **6 個のネイティブ形式アダプター**と 1 個の Claude 互
 ![プラットフォーム](https://img.shields.io/badge/platform-macOS-2d2d30)
 ![ビルド](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
 ![ダウンロード](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
-![ライセンス](https://img.shields.io/badge/license-AGPL--3.0-5b4fc4)
+![ライセンス](https://img.shields.io/badge/license-Apache--2.0-5b4fc4)
 
 </div>
 
@@ -190,8 +190,8 @@ Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · SQLite FTS
 
 ## コントリビュート
 
-Issue と PR を歓迎します。fixture やスクリーンショットを共有する前に、transcript 本文、絶対パス、credential、cookie、端末識別子を削除してください。セキュリティ報告は [SECURITY.md](SECURITY.md) に従ってください。
+Issue と PR を歓迎します。すべての contribution commit に DCO の `Signed-off-by` trailer が必要です。詳細は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。fixture やスクリーンショットを共有する前に、transcript 本文、絶対パス、credential、cookie、端末識別子を削除してください。セキュリティ報告は [SECURITY.md](SECURITY.md) に従ってください。
 
 ## ライセンス
 
-[AGPL-3.0-only](LICENSE)。変更版を配布、またはネットワーク越しに提供する場合は、該当する AGPL 義務を確認してください。
+**v1.3.0** 以降の Swob は [Apache License 2.0](LICENSE) で提供されます。**v1.2.0 以前は引き続き AGPL-3.0-only** であり、この変更は過去のリリースに遡及しません。著作権・商標表示は [NOTICE](NOTICE) を参照してください。

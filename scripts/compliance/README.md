@@ -12,6 +12,18 @@ node scripts/compliance/t131-inventory.mjs \
 
 This regenerates the anonymized git rights-chain summary, package-lock license inventory, tracked-asset provenance table and tracked-file scope inventory. It requires Node.js and Git. It reads public repository metadata and tracked files only.
 
+Asset clearance is hash-bound by
+`compliance/t131/asset-evidence-manifest.json`; path names alone never grant a
+cleared disposition. The release-facing fail-closed check is:
+
+```sh
+npm run check:asset-evidence
+```
+
+Any new asset, byte drift, missing manifest member, or aggregate mismatch makes
+that command fail until the evidence manifest is explicitly reviewed and
+updated.
+
 ## Similarity scan
 
 Prepare local, pinned checkouts from `compliance/t131/source-corpus.lock.json` and release-tag archives for v1.0.0, v1.1.0 and v1.2.0. Then run:

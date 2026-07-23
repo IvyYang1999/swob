@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "auditedAt": "2026-07-22T11:09:36Z",
-  "swobBaseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
+  "swobBaseline": "45fccdd12536f4ecad5bcc12e8b4f067317452e4",
   "selectionRule": "Every external GitHub source repository explicitly named in the two prerequisite licensing/relicensing reports, excluding the Swob target itself.",
   "repositories": [
     {

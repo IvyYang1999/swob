@@ -59,6 +59,11 @@ npm run notices:generate
 npm run notices:check
 ```
 
+The notice generator also includes the reviewed non-npm sources pinned in
+`compliance/third-party-static-notices.json`. Both the lockfile hash and static
+notice manifest hash are embedded in `THIRD_PARTY_NOTICES`, so either input
+drifting makes `notices:check` fail.
+
 Regenerate both SBOMs after `npm ls --package-lock-only --all` succeeds. The
 script deliberately does not pass `--ignore-npm-errors`:
 

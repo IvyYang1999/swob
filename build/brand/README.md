@@ -2,6 +2,9 @@
 
 `swob-logo-session-galaxy.png` is the single source consumed by
 `scripts/generate-icons.mjs`.
+`icon-manifest.json` binds the approved source and every generated output to
+reviewed SHA-256 values; `npm run icons:check` fails if either the master or a
+derivative drifts.
 
 - Design: Swob session galaxy with a lavender fork/resume lineage.
 - Ownership: original Swob brand artwork, owned by the project; no third-party
@@ -15,7 +18,8 @@
   set, which confirms this is the intended cross-platform master.
 
 Do not hand-edit generated icons. Replace this source only with a formally
-approved 1024px RGBA export that retains an 8–12% optical margin, then run:
+approved 1024px RGBA export that retains an 8–12% optical margin. Review and
+update `icon-manifest.json` in the same change, then run:
 
 ```sh
 npm run icons:generate

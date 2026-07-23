@@ -169,8 +169,8 @@ test('installed x64 app discovers only supported USERPROFILE sources and renders
   await expect(page.locator(`[data-session-id="zcode:${ZCODE_ID}"]`)).toHaveCount(0)
   await expect(page.getByText('Ctrl+K')).toBeVisible()
 
-  await page.locator('button[title="设置"]').click()
-  await page.getByRole('button', { name: '终端', exact: true }).click()
+  await page.locator('button[title="设置"], button[title="Settings"]').click()
+  await page.getByRole('button', { name: /^(终端|Terminal)$/ }).click()
   await expect(page.locator('[data-testid="windows-alpha-notice"]')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Windows Terminal' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'PowerShell' })).toBeVisible()

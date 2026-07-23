@@ -74,6 +74,7 @@ for (const file of ['site/index.html', 'site/zh/index.html']) {
 
 const forbidden = [
   [/\b11[- ]harness(?:es)?\b/i, 'must not market 11 harnesses as one ingestion tier'],
+  [/\beleven local harness sources?\b/i, 'must not market eleven harnesses as one ingestion tier'],
   [/\bnatively reads?\s+5\s+harness(?:es)?\b/i, 'current main has 6 native providers, not 5'],
   [/原生读取\s*5\s*种\s*harness|5\s*種の harness をネイティブ/i, 'current main has 6 native providers, not 5'],
   [/\bexperimentally detects? files from 5\b/i, 'current main has 4 detection-only providers, not 5'],
@@ -97,6 +98,22 @@ for (const [file, content] of contentByFile) {
   }
 }
 
+for (const file of ['site/index.html', 'site/zh/index.html']) {
+  const content = contentByFile.get(file)
+  const jsonLdText = content.match(/<script type="application\/ld\+json">\s*([\s\S]*?)\s*<\/script>/)?.[1]
+  if (!jsonLdText) {
+    errors.push(`${file}: missing SoftwareApplication JSON-LD`)
+    continue
+  }
+  const software = JSON.parse(jsonLdText)
+  if (software.softwareVersion === '1.2.0' && !/agpl-3\.0/i.test(software.license ?? '')) {
+    errors.push(`${file}: the public v1.2.0 SoftwareApplication must retain its AGPL-3.0 license`)
+  }
+  if (software.softwareVersion === '1.3.0' && !/apache.*2\.0/i.test(software.license ?? '')) {
+    errors.push(`${file}: a public v1.3.0 SoftwareApplication must use Apache-2.0`)
+  }
+}
+
 const packageLicense = JSON.parse(
   fs.readFileSync(path.join(root, 'package.json'), 'utf8')
 ).license
@@ -107,7 +124,7 @@ if (packageLicense === 'AGPL-3.0-only') {
     errors.push('public entry points must match the current AGPL-3.0-only package license')
   }
 } else if (packageLicense === 'Apache-2.0') {
-  if (!fixedPublicFiles.every((file) => /Apache-2\.0/i.test(contentByFile.get(file)))) {
+  if (!fixedPublicFiles.every((file) => /Apache(?:-|\s+License\s+)2\.0/i.test(contentByFile.get(file)))) {
     errors.push('public entry points must match the current Apache-2.0 package license')
   }
   if (!/v1\.3\.0[^\n]{0,120}Apache-2\.0|Apache-2\.0[^\n]{0,120}v1\.3\.0/i.test(combinedFixedCopy)) {

@@ -13,8 +13,7 @@ source:
 
 `build/brand/swob-logo-session-galaxy.png`
 
-The owner explicitly designated
-`/Users/yytyyf/Desktop/swob新logo/正式版/图标.png` as the final export on
+The owner explicitly designated a privately stored formal export as final on
 2026-07-23. The checked-in source and `build/icon.png` preserve those bytes
 exactly:
 
@@ -55,7 +54,10 @@ npm run icons:check
 
 The generation command writes only changed files. `--check` regenerates all
 expected bytes in memory and fails when any checked-in derivative is missing or
-stale. `npm run check` now includes this gate.
+stale. It also verifies the approved source hash and every output hash against
+`build/brand/icon-manifest.json`, so replacing the formal master and
+regenerating derivatives cannot silently pass. `npm run check` includes this
+gate.
 
 Container inspection:
 
@@ -133,11 +135,13 @@ Playwright loaded the local site at 1440×1000 and confirmed:
 
 ## Compliance
 
-`compliance/t131/asset-provenance.csv` records the canonical source as an
-original Swob project brand asset, AI-assisted and finalized by owner-directed
-editing on 2026-07-22, with no third-party material. `build/brand/README.md`
-records the source lineage and regeneration contract. Adding `sharp` as a
-direct development dependency also regenerated `THIRD_PARTY_NOTICES`.
+`compliance/t131/asset-evidence-manifest.json` binds the canonical source and
+all deterministic derivatives to a reviewed aggregate hash.
+`asset-provenance.csv` records the canonical source as an original Swob project
+brand asset, AI-assisted and finalized by owner-directed editing on 2026-07-22,
+with no third-party material. `build/brand/README.md` records the source lineage
+and regeneration contract. Adding `sharp` as a direct development dependency
+also regenerated `THIRD_PARTY_NOTICES`.
 
 ## Gates
 

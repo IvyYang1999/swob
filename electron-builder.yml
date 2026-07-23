@@ -10,6 +10,7 @@ files:
   - out/renderer/**/*
   - package.json
   - LICENSE
+  - NOTICE
   - THIRD_PARTY_NOTICES
   # Defense in depth: keep private worktrees and non-runtime project trees out
   # even if a future allowlist entry becomes too broad.
@@ -41,6 +42,8 @@ extraResources:
   # Keep the same outer notices contract on macOS, Windows, and Linux.
   - from: LICENSE
     to: LICENSE.txt
+  - from: NOTICE
+    to: NOTICE
   - from: THIRD_PARTY_NOTICES
     to: THIRD_PARTY_NOTICES
   - from: node_modules/electron/dist/LICENSE
@@ -62,6 +65,10 @@ mac:
         - arm64
         - x64
   artifactName: swob-${version}-${arch}.${ext}
+dmg:
+  # ZIP blockmaps are the only immutable update inputs. DMG blockmaps are not
+  # published and would violate the exact-six release asset contract.
+  writeUpdateInfo: false
 win:
   # t107 Alpha is an internal, unsigned x64 build. ARM64 and signing are intentionally out of scope.
   target:

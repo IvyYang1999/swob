@@ -7,9 +7,9 @@
  * TODO: Per-harness name/avatar customization (user overrides) — planned for a future task.
  */
 
-import claudeIcon from '../assets/icons/claude.png'
-import openaiIcon from '../assets/icons/openai.png'
-import cursorIcon from '../assets/icons/cursor.png'
+import claudeIcon from '../assets/icons/claude-neutral.svg'
+import openaiIcon from '../assets/icons/openai-neutral.svg'
+import cursorIcon from '../assets/icons/cursor-neutral.svg'
 
 export interface HarnessPresentation {
   /** Human-readable label shown in UI */

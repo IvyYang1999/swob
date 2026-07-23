@@ -2,6 +2,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/
@@ -70,6 +71,33 @@ export function assertUpgradePath(fromVersion, toVersion) {
   }
 }
 
+function resolveGitCommit(rootDir, revision) {
+  const result = spawnSync('git', ['rev-parse', '--verify', `${revision}^{commit}`], {
+    cwd: rootDir,
+    encoding: 'utf8'
+  })
+  if (result.status !== 0) {
+    throw new Error(`Cannot resolve release revision ${revision}: ${result.stderr.trim() || 'git rev-parse failed'}`)
+  }
+  return result.stdout.trim()
+}
+
+export function assertReleaseRef({ rootDir, tag, remoteBranch = 'origin/master' }) {
+  const tagCommit = resolveGitCommit(rootDir, tag)
+  const headCommit = resolveGitCommit(rootDir, 'HEAD')
+  const remoteCommit = resolveGitCommit(rootDir, remoteBranch)
+
+  if (headCommit !== tagCommit) {
+    throw new Error(`Checked-out HEAD is not the release tag commit: HEAD=${headCommit}, ${tag}=${tagCommit}`)
+  }
+
+  if (tagCommit !== remoteCommit) {
+    throw new Error(`Release tag commit is not the current ${remoteBranch} tip: tag=${tagCommit}, remote=${remoteCommit}`)
+  }
+
+  return { tagCommit, remoteBranch, remoteCommit }
+}
+
 export function assertReleaseVersion({ rootDir, tag, minimumVersion = null, requireStable = false }) {
   if (!tag?.startsWith('v')) throw new Error(`Release tag must start with v: ${tag || '<empty>'}`)
   const tagVersion = tag.slice(1)
@@ -129,6 +157,10 @@ async function main() {
     minimumVersion,
     requireStable: process.argv.includes('--stable')
   })
+  const bindRef = readOption('--bind-ref')
+  if (bindRef) {
+    assertReleaseRef({ rootDir, tag, remoteBranch: bindRef })
+  }
   process.stdout.write(`Release version gate passed: v${versions.tag}\n`)
 }
 

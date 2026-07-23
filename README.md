@@ -18,7 +18,7 @@ Swob parses local histories through **6 native-format adapters** and 1 Claude-co
 ![Platform](https://img.shields.io/badge/platform-macOS-2d2d30)
 ![Build](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
 ![Downloads](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
-![License](https://img.shields.io/badge/license-AGPL--3.0-5b4fc4)
+![License](https://img.shields.io/badge/license-Apache--2.0-5b4fc4)
 
 </div>
 
@@ -193,8 +193,8 @@ Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · SQLite FTS
 
 ## Contributing
 
-Issues and pull requests are welcome. Before sharing a fixture or screenshot, remove transcript content, absolute paths, credentials, cookies, and device identifiers. Security reports follow [SECURITY.md](SECURITY.md).
+Issues and pull requests are welcome. Contributions require a DCO `Signed-off-by` trailer; see [CONTRIBUTING.md](CONTRIBUTING.md). Before sharing a fixture or screenshot, remove transcript content, absolute paths, credentials, cookies, and device identifiers. Security reports follow [SECURITY.md](SECURITY.md).
 
 ## License
 
-[AGPL-3.0-only](LICENSE). If you distribute a modified network-accessible version, review the AGPL obligations that apply to your use.
+Starting with **v1.3.0**, Swob is licensed under the [Apache License 2.0](LICENSE). Releases **v1.2.0 and earlier remain AGPL-3.0-only**; this change is not retroactive. See [NOTICE](NOTICE) for copyright and trademark notices.

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "approvedAt": "2026-07-23",
+  "source": {
+    "path": "build/brand/swob-logo-session-galaxy.png",
+    "sha256": "19b75ad0a6f5d85f054b045cacd0c112346b0823e31d992aece323c16fc33846"
+  },
+  "outputs": {
+    "build/icon.png": "19b75ad0a6f5d85f054b045cacd0c112346b0823e31d992aece323c16fc33846",
+    "build/icon.icns": "45ba87854907732f6256e37390a637a1bd3acd9ff5bd7e137f66e86a7f063a63",
+    "build/icon.ico": "d2f89789a41063c93a10fd0ad2ffdf598062bfe1e37a4d548a1db1d3fa1ab828",
+    "site/assets/favicon-32.png": "1ca8161661b68cbbade79c02cc2489c45964d94b412d0d4372fd2c571841b102",
+    "site/assets/apple-touch-icon.png": "1c9521be7a0461e085a74ccab443c807b82f0211d95066d8725452ccb8926ba4",
+    "site/assets/favicon-512.png": "d42e66a7561c4d7da61bddf009d196117a30ae480289d7f8f529a4d77e468ba5",
+    "site/assets/favicon.svg": "4d1f8e90629a5513cf805dfd2a8deb701581e9e3a21a7b60393d9f6998ece836",
+    "website/public/favicon-32.png": "1ca8161661b68cbbade79c02cc2489c45964d94b412d0d4372fd2c571841b102",
+    "website/public/apple-touch-icon.png": "1c9521be7a0461e085a74ccab443c807b82f0211d95066d8725452ccb8926ba4",
+    "website/public/favicon-512.png": "d42e66a7561c4d7da61bddf009d196117a30ae480289d7f8f529a4d77e468ba5",
+    "website/public/favicon.svg": "4d1f8e90629a5513cf805dfd2a8deb701581e9e3a21a7b60393d9f6998ece836"
+  }
+}

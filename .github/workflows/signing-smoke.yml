@@ -34,6 +34,8 @@ jobs:
     steps:
       - name: Check out requested revision
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -63,6 +65,9 @@ jobs:
           fi
           npm ls readdirp --all
 
+      - name: Run repository compliance and consistency gates
+        run: npm run check
+
       - name: Build, sign, and notarize both architectures
         shell: bash
         env:
@@ -81,89 +86,33 @@ jobs:
 
           npx electron-vite build
           npx electron-builder --mac --publish never
+          for dmg_file in dist/*.dmg; do
+            xcrun notarytool submit "$dmg_file" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$dmg_file"
+          done
 
-      - name: Verify Developer ID, Gatekeeper, tickets, and disk images
+      - name: Verify every unpacked, ZIP, and mounted-DMG application
         shell: bash
-        env:
-          EXPECTED_TEAM_ID: ZPTA4LP594
         run: |
           set -euo pipefail
-
-          app_bundles=()
-          while IFS= read -r -d '' app_bundle; do
-            app_bundles+=("$app_bundle")
-          done < <(find dist -type d -name 'Swob.app' -print0)
-
-          if [[ ${#app_bundles[@]} -ne 2 ]]; then
-            echo "Expected two Swob.app bundles, found ${#app_bundles[@]}." >&2
-            find dist -maxdepth 3 -name '*.app' -print >&2
-            exit 1
-          fi
-
-          found_arm64=0
-          found_x86_64=0
-
-          for app_bundle in "${app_bundles[@]}"; do
-            echo "Verifying $app_bundle"
-            codesign --verify --deep --strict --verbose=2 "$app_bundle"
-
-            signature_info=$(codesign -dv --verbose=4 "$app_bundle" 2>&1)
-            echo "$signature_info"
-
-            if ! grep -q '^Authority=Developer ID Application:' <<< "$signature_info"; then
-              echo "Developer ID Application authority is missing from $app_bundle." >&2
-              exit 1
-            fi
-
-            if ! grep -q "^TeamIdentifier=${EXPECTED_TEAM_ID}$" <<< "$signature_info"; then
-              echo "Unexpected or missing TeamIdentifier in $app_bundle." >&2
-              exit 1
-            fi
-
-            if grep -q '^Signature=adhoc$' <<< "$signature_info"; then
-              echo "Ad-hoc signature is not allowed for $app_bundle." >&2
-              exit 1
-            fi
-
-            spctl --assess --type execute --verbose=4 "$app_bundle"
-            xcrun stapler validate "$app_bundle"
-
-            executable="$app_bundle/Contents/MacOS/Swob"
-            architectures=$(lipo -archs "$executable")
-            echo "Architectures: $architectures"
-
-            if grep -qw arm64 <<< "$architectures"; then found_arm64=1; fi
-            if grep -qw x86_64 <<< "$architectures"; then found_x86_64=1; fi
-          done
-
-          if [[ $found_arm64 -ne 1 || $found_x86_64 -ne 1 ]]; then
-            echo "Expected separate arm64 and x86_64 application bundles." >&2
-            exit 1
-          fi
-
-          dmg_files=()
-          while IFS= read -r -d '' dmg_file; do
-            dmg_files+=("$dmg_file")
-          done < <(find dist -maxdepth 1 -type f -name '*.dmg' -print0)
-
-          if [[ ${#dmg_files[@]} -ne 2 ]]; then
-            echo "Expected two DMG files, found ${#dmg_files[@]}." >&2
-            exit 1
-          fi
-
-          for dmg_file in "${dmg_files[@]}"; do
-            hdiutil verify "$dmg_file"
-          done
+          version="$(node -p "require('./package.json').version")"
+          scripts/release/verify-macos-artifacts.sh \
+            dist \
+            "$version" \
+            swob-signed \
+            ZPTA4LP594
 
           {
             echo '## macOS signing smoke test passed'
             echo
-            echo '- Developer ID authority verified'
-            echo "- Team ID verified: ${EXPECTED_TEAM_ID}"
-            echo '- Hardened runtime signatures verified'
-            echo '- Gatekeeper accepted both architectures'
-            echo '- Stapled notarization tickets validated'
-            echo '- arm64 and x86_64 DMGs verified'
+            echo '- Shared verifier passed for unpacked, ZIP, and mounted-DMG apps'
+            echo '- Developer ID, Team ID, hardened runtime, Gatekeeper, and notarization verified'
+            echo '- Package allowlist passed for every application copy'
+            echo '- Exactly six local assets; no update metadata or DMG blockmap'
             echo '- No tag or GitHub Release was created'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -174,5 +123,6 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/*.zip.blockmap
           if-no-files-found: error
           retention-days: 3

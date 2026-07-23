@@ -1,0 +1,2 @@
+# Hash-bound SVG assets must retain identical bytes on every checkout platform.
+*.svg text eol=lf

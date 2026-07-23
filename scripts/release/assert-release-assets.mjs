@@ -5,7 +5,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseSemver } from './assert-release-version.mjs'
-import { buildUpdateMetadata } from './generate-update-metadata.mjs'
 
 export function expectedPublishedAssets(version) {
   parseSemver(version)
@@ -19,13 +18,16 @@ export function expectedPublishedAssets(version) {
   ].sort()
 }
 
-export function expectedBuildAssets(version, channel) {
-  return [...expectedPublishedAssets(version), `${channel}-mac.yml`].sort()
+export function expectedBuildAssets(version) {
+  return expectedPublishedAssets(version)
 }
 
 export function assertExactNames(actualNames, expectedNames, label) {
   const actual = [...new Set(actualNames)].sort()
   const expected = [...new Set(expectedNames)].sort()
+  if (actual.length !== actualNames.length) {
+    throw new Error(`${label} contains duplicate asset names`)
+  }
   const missing = expected.filter((name) => !actual.includes(name))
   const unexpected = actual.filter((name) => !expected.includes(name))
   if (missing.length || unexpected.length) {
@@ -41,30 +43,7 @@ export function assertBuildAssets({ releaseDir, version, channel }) {
   const releaseLike = fs.readdirSync(releaseDir).filter((name) =>
     name.endsWith('.dmg') || name.endsWith('.zip') || name.endsWith('.blockmap') || name.endsWith('-mac.yml')
   )
-  assertExactNames(releaseLike, expectedBuildAssets(version, channel), 'Local release asset inventory')
-
-  const expectedMetadata = buildUpdateMetadata({
-    releaseDir,
-    version,
-    channel,
-    releaseDate: 'IGNORED'
-  })
-  const metadataFile = path.join(releaseDir, `${channel}-mac.yml`)
-  const actualMetadata = fs.readFileSync(metadataFile, 'utf8')
-  for (const file of expectedMetadata.files) {
-    for (const expectedLine of [
-      `  - url: ${file.url}`,
-      `    sha512: ${file.sha512}`,
-      `    size: ${file.size}`
-    ]) {
-      if (!actualMetadata.includes(expectedLine)) {
-        throw new Error(`Update metadata does not match ${file.url}: missing ${expectedLine.trim()}`)
-      }
-    }
-  }
-  if (!actualMetadata.startsWith(`version: ${version}\n`)) {
-    throw new Error(`Update metadata version does not match ${version}`)
-  }
+  assertExactNames(releaseLike, expectedBuildAssets(version), 'Local release asset inventory')
 }
 
 function sha256Hex(fileName) {
@@ -76,6 +55,9 @@ function sha256Hex(fileName) {
 export function assertRemoteAssets({ inventory, releaseDir, version, channel, promoted }) {
   if (!inventory || !Array.isArray(inventory.assets)) {
     throw new Error('Remote release inventory must contain an assets array')
+  }
+  if (promoted && version === '1.3.0') {
+    throw new Error('v1.3.0 is the manual trust-root release and must never contain update metadata')
   }
   const expectedNames = promoted
     ? [...expectedPublishedAssets(version), `${channel}-mac.yml`]
@@ -128,6 +110,9 @@ async function main() {
 
   if (namesFile) {
     const names = fs.readFileSync(path.resolve(namesFile), 'utf8').split(/\r?\n/).filter(Boolean)
+    if (promoted && version === '1.3.0') {
+      throw new Error('v1.3.0 is the manual trust-root release and must never contain update metadata')
+    }
     const expected = promoted
       ? [...expectedPublishedAssets(version), `${channel}-mac.yml`]
       : expectedPublishedAssets(version)
@@ -138,7 +123,7 @@ async function main() {
 
   const releaseDir = path.resolve(readOption('--dir', 'dist'))
   assertBuildAssets({ releaseDir, version, channel })
-  process.stdout.write(`Local asset gate passed for ${version}; ${channel}-mac.yml remains promotion-only\n`)
+  process.stdout.write(`Local asset gate passed for ${version}: exactly six immutable assets and no update metadata\n`)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

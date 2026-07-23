@@ -6,6 +6,10 @@ for required_name in APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
     echo "Required Apple notarization credential is missing: ${required_name}" >&2
     exit 1
   fi
+  if [[ "${!required_name}" == *$'\r'* || "${!required_name}" == *$'\n'* ]]; then
+    echo "Required Apple notarization credential contains a CR/LF character: ${required_name}" >&2
+    exit 1
+  fi
 done
 
 expected_team_id="${EXPECTED_APPLE_TEAM_ID:-ZPTA4LP594}"

@@ -1,7 +1,11 @@
 {
   "schemaVersion": 1,
-  "baseline": "dc6bf2409640248bc75b3a22fadfea6636f69383",
-  "scope": "Source and visual-asset paths deleted in commits reachable from origin/master, checked against the v1.0.0, v1.1.0 and v1.2.0 release-tag trees.",
+  "baseline": "7a7eab3059d274c3d7959cdca92889eb1888ab3a",
+  "scope": "Source and visual-asset paths deleted in commits reachable from the product baseline under src/ and site/, checked against the v1.0.0, v1.1.0 and v1.2.0 release-tag trees.",
+  "generation": {
+    "deletedPaths": "Unique sorted paths from git log --diff-filter=D at the product baseline, limited to src/ and site/.",
+    "releaseTagPresence": "For every deleted path, test exact tree membership with git cat-file -e <tag>:<path> for each audited release tag."
+  },
   "releaseTags": [
     "v1.0.0",
     "v1.1.0",
@@ -11,6 +15,9 @@
     "site/assets/chat.png",
     "site/assets/search.png",
     "site/assets/sidebar.png",
+    "src/renderer/src/assets/icons/claude.png",
+    "src/renderer/src/assets/icons/cursor.png",
+    "src/renderer/src/assets/icons/openai.png",
     "src/renderer/src/components/InsightsPage.tsx",
     "src/renderer/src/components/SettingsPanelV2.tsx",
     "src/renderer/src/graph/CanvasSessionGraphFallback.tsx",
@@ -19,9 +26,20 @@
     "src/renderer/src/graph/graph-model.ts",
     "src/renderer/src/graph/graph.worker.ts"
   ],
+  "releaseTagPresence": {
+    "src/renderer/src/assets/icons/claude.png": [
+      "v1.2.0"
+    ],
+    "src/renderer/src/assets/icons/cursor.png": [
+      "v1.2.0"
+    ],
+    "src/renderer/src/assets/icons/openai.png": [
+      "v1.2.0"
+    ]
+  },
   "result": {
-    "pathCount": 10,
-    "presentInAnyAuditedReleaseTag": 0,
-    "disposition": "No known deleted tracked path in this scope was present in the three official release-tag snapshots. The v1.2.0 binary nevertheless carried an unintended untracked worktree copy; see artifact-inventory.json."
+    "pathCount": 13,
+    "presentInAnyAuditedReleaseTag": 3,
+    "disposition": "Three third-party provider brand images were present in v1.2.0 and were deliberately removed from the 1.3.0 product baseline because their redistribution basis was not closed; Swob-owned neutral glyphs replace them. The other ten known deleted tracked paths in scope were absent from all three official release-tag snapshots. The v1.2.0 binary also carried an unintended untracked worktree copy; see artifact-inventory.json."
   }
 }

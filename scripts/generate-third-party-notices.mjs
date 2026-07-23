@@ -8,6 +8,7 @@ import { packageNameFromLockPath, productionPackagePaths } from './production-lo
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const lockPath = path.join(repoRoot, 'package-lock.json')
+const staticNoticesPath = path.join(repoRoot, 'compliance', 'third-party-static-notices.json')
 const defaultOutput = path.join(repoRoot, 'THIRD_PARTY_NOTICES')
 const args = process.argv.slice(2)
 const checkOnly = args.includes('--check')
@@ -20,6 +21,19 @@ if (outputIndex >= 0 && !args[outputIndex + 1]) {
 
 const lockBytes = fs.readFileSync(lockPath)
 const lock = JSON.parse(lockBytes)
+const staticNoticesBytes = fs.readFileSync(staticNoticesPath)
+const staticNoticesDocument = JSON.parse(staticNoticesBytes)
+if (staticNoticesDocument.schemaVersion !== 1 || !Array.isArray(staticNoticesDocument.notices)) {
+  throw new Error('compliance/third-party-static-notices.json must use schemaVersion 1 with a notices array')
+}
+const staticNotices = [...staticNoticesDocument.notices].sort((a, b) => a.name.localeCompare(b.name))
+for (const notice of staticNotices) {
+  for (const field of ['name', 'source', 'usedBy', 'license', 'licenseText']) {
+    if (typeof notice[field] !== 'string' || notice[field].trim() === '') {
+      throw new Error(`Static third-party notice ${notice.name ?? '<unnamed>'} is missing ${field}`)
+    }
+  }
+}
 
 const unique = new Map()
 for (const packagePath of productionPackagePaths(lock)) {
@@ -43,10 +57,13 @@ const lines = [
   'SWOB THIRD-PARTY NOTICES',
   '',
   'This file is generated. Do not edit it by hand.',
-  'Source: package-lock.json production dependency graph.',
+  'Sources: package-lock.json production dependency graph and',
+  'compliance/third-party-static-notices.json.',
   `Generator: scripts/generate-third-party-notices.mjs`,
   `package-lock.json SHA-256: ${crypto.createHash('sha256').update(lockBytes).digest('hex')}`,
+  `Static notices SHA-256: ${crypto.createHash('sha256').update(staticNoticesBytes).digest('hex')}`,
   `Unique production packages: ${packages.length}`,
+  `Non-npm notices: ${staticNotices.length}`,
   '',
   'Electron and Chromium notices are distributed separately as',
   'LICENSE.electron.txt and LICENSES.chromium.html. Where an npm publisher',
@@ -54,6 +71,19 @@ const lines = [
   'alongside the corresponding packaged module.',
   '',
 ]
+
+for (const notice of staticNotices) {
+  lines.push(
+    `=== Non-npm component: ${notice.name} ===`,
+    '',
+    `Source: ${notice.source}`,
+    `Used by: ${notice.usedBy}`,
+    `License: ${notice.license}`,
+    '',
+    notice.licenseText.trim(),
+    ''
+  )
+}
 
 for (const [license, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
   lines.push(`=== ${license} ===`, '')

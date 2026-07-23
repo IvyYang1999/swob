@@ -16,8 +16,9 @@ import {
   BUILTIN_COMMAND_IDS,
   createBuiltinCommandRegistry
 } from '../shared/registry/builtin-commands'
-import { execFile, execSync, type ChildProcess } from 'child_process'
+import { execFile, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
+import { getLocalNetworkInfo, queryPublicIp } from './network-info'
 import {
   loadAllSessions,
   loadSessionDetail,
@@ -1224,46 +1225,8 @@ ipcMain.handle('icloud:scanCloudSessions', async () => {
 ipcMain.handle('ssh:getConfig', () => getSshConfig())
 ipcMain.handle('ssh:getTargets', () => getSshTargets())
 
-ipcMain.handle('network:getInfo', async () => {
-  const os = await import('os')
-  const nets = os.networkInterfaces()
-  const localIps: string[] = []
-  for (const iface of Object.values(nets)) {
-    for (const addr of iface ?? []) {
-      if (addr.family === 'IPv4' && !addr.internal) {
-        localIps.push(addr.address)
-      }
-    }
-  }
-
-  // Tailscale IP (100.x.x.x range)
-  const tailscaleIp = localIps.find((ip) => ip.startsWith('100.')) ?? null
-
-  // Public IP via external service (fast, no dependency)
-  let publicIp: string | null = null
-  try {
-    const res = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(5000) })
-    const data = await res.json() as { ip: string }
-    publicIp = data.ip
-  } catch {
-    // offline or slow
-  }
-
-  // macOS hostname
-  let hostname = ''
-  try {
-    hostname = execSync('hostname', { encoding: 'utf-8' }).trim()
-  } catch { /* ignore */ }
-
-  // SSH remote login status (check if sshd is listening on port 22)
-  let sshEnabled = false
-  try {
-    const out = execSync('launchctl list com.openssh.sshd 2>/dev/null || true', { encoding: 'utf-8' })
-    sshEnabled = out.trim().length > 0 && !out.includes('-\t0\tcom.openssh.sshd')
-  } catch { /* ignore */ }
-
-  return { localIps, tailscaleIp, publicIp, hostname, sshEnabled }
-})
+ipcMain.handle('network:getInfo', () => getLocalNetworkInfo())
+ipcMain.handle('network:queryPublicIp', () => queryPublicIp())
 
 ipcMain.handle('ssh:setConfig', (_event, sshConfig: { host: string; user: string; remotePath?: string } | null) => {
   setSshConfig(sshConfig)

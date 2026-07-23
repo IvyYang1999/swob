@@ -19,6 +19,7 @@
 - Made Library writes fail closed with a single-writer lease, generation checks, and recovery-safe state transitions.
 - Restored reliable source watchers, Keychain access, packaged CLI native dependencies, SSH/cloud resume routing, session navigation, and update-safe provider identities.
 - Closed path-containment, private-fixture, credential-redaction, provider-protocol, package-boundary, and release-signing gaps found during security and compliance review.
+- Made SSH public-IP discovery opt-in: opening or refreshing SSH settings stays local, and only an explicit button click sends a five-second request to `api.ipify.org`.
 - Unified user-visible copy, locale enforcement, navigation entry points, Insights coverage semantics, and Galaxy layout stability.
 
 ### Architecture

@@ -99,13 +99,117 @@ test('Resume 分类按 harness 动态过滤，实验开关在本分类', async (
   await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'resume-dark.png') })
 })
 
-test('SSH 包含远程连接信息和三段教程，不出现手机文案', async () => {
+test('【曾经的 bug】SSH 公网 IP 仅在明确点击后查询，并覆盖成功与失败视觉态', async () => {
+  await app.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      __swobT162FetchCalls?: number
+      __swobT162FetchUrls?: string[]
+      __swobT162OriginalFetch?: typeof fetch
+    }
+    state.__swobT162FetchCalls = 0
+    state.__swobT162FetchUrls = []
+    state.__swobT162OriginalFetch = globalThis.fetch
+    globalThis.fetch = async (input) => {
+      state.__swobT162FetchCalls = (state.__swobT162FetchCalls ?? 0) + 1
+      state.__swobT162FetchUrls?.push(String(input))
+      throw new Error('Unexpected network request before explicit public-IP query')
+    }
+  })
+
   await navItem('SSH').click()
   await expect(page.getByText('远程连接信息')).toBeVisible()
   await expect(page.getByRole('dialog').getByText(/手机/)).toHaveCount(0)
+  await expect(page.getByText(/只有点击下方按钮后.*api\.ipify\.org/)).toBeVisible()
+  const queryButton = page.getByRole('button', { name: '查询公网 IP' })
+  await expect(queryButton).toBeVisible()
+  expect(await app.evaluate(() =>
+    (globalThis as typeof globalThis & { __swobT162FetchCalls?: number }).__swobT162FetchCalls
+  )).toBe(0)
+
+  const refreshButton = page.getByRole('button', { name: '刷新', exact: true })
+  await refreshButton.click()
+  await expect(refreshButton).toBeEnabled()
+  expect(await app.evaluate(() =>
+    (globalThis as typeof globalThis & { __swobT162FetchCalls?: number }).__swobT162FetchCalls
+  )).toBe(0)
+
+  await app.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      __swobT162FetchCalls?: number
+      __swobT162FetchUrls?: string[]
+    }
+    globalThis.fetch = async (input) => {
+      state.__swobT162FetchCalls = (state.__swobT162FetchCalls ?? 0) + 1
+      state.__swobT162FetchUrls?.push(String(input))
+      return {
+        ok: true,
+        json: async () => ({ ip: '203.0.113.10' })
+      } as Response
+    }
+  })
+  await queryButton.click()
+  await expect(page.getByText('203.0.113.10')).toBeVisible()
+  expect(await app.evaluate(() =>
+    (globalThis as typeof globalThis & { __swobT162FetchCalls?: number }).__swobT162FetchCalls
+  )).toBe(1)
+  expect(await app.evaluate(() =>
+    (globalThis as typeof globalThis & { __swobT162FetchUrls?: string[] }).__swobT162FetchUrls
+  )).toEqual(['https://api.ipify.org?format=json'])
+  await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'ssh-public-ip-success.png') })
+
+  await app.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      __swobT162FetchCalls?: number
+      __swobT162FetchUrls?: string[]
+    }
+    globalThis.fetch = async (input) => {
+      state.__swobT162FetchCalls = (state.__swobT162FetchCalls ?? 0) + 1
+      state.__swobT162FetchUrls?.push(String(input))
+      const error = new Error('timed out')
+      error.name = 'TimeoutError'
+      throw error
+    }
+  })
+  await page.getByRole('button', { name: '重新查询公网 IP' }).click()
+  await expect(page.getByRole('status')).toContainText('公网 IP 查询超时')
+  expect(await app.evaluate(() =>
+    (globalThis as typeof globalThis & { __swobT162FetchCalls?: number }).__swobT162FetchCalls
+  )).toBe(2)
+  expect(await app.evaluate(() =>
+    (globalThis as typeof globalThis & { __swobT162FetchUrls?: string[] }).__swobT162FetchUrls
+  )).toEqual([
+    'https://api.ipify.org?format=json',
+    'https://api.ipify.org?format=json'
+  ])
+
+  await page.setViewportSize({ width: 480, height: 520 })
+  const sshContent = page.locator('[data-settings-category="ssh"]')
+  const sshMetrics = await sshContent.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    scrollHeight: element.scrollHeight,
+    clientHeight: element.clientHeight
+  }))
+  expect(sshMetrics.scrollWidth).toBeLessThanOrEqual(sshMetrics.clientWidth + 1)
+  expect(sshMetrics.scrollHeight).toBeGreaterThan(sshMetrics.clientHeight)
+  await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'ssh-public-ip-narrow.png') })
+  await page.setViewportSize({ width: 760, height: 660 })
+
   await page.getByText('查找远程机器地址').click()
   await expect(page.getByText(/远程机器运行 hostname/)).toBeVisible()
   await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'ssh-guide.png') })
+
+  await app.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      __swobT162FetchCalls?: number
+      __swobT162FetchUrls?: string[]
+      __swobT162OriginalFetch?: typeof fetch
+    }
+    if (state.__swobT162OriginalFetch) globalThis.fetch = state.__swobT162OriginalFetch
+    delete state.__swobT162FetchCalls
+    delete state.__swobT162FetchUrls
+    delete state.__swobT162OriginalFetch
+  })
 })
 
 test('视图设置写入新结构，同时保留旧配置字段', async () => {

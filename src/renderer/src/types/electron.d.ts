@@ -1,4 +1,5 @@
 import type { OnboardingBackupSizeEstimate } from '../../../shared/onboarding-backup-size'
+import type { LocalNetworkInfo, PublicIpQueryResult } from '../../../shared/network-info'
 import type {
   AgentAlwaysOnTopState,
   AgentHistoryItem,
@@ -400,13 +401,8 @@ interface ElectronAPI {
     evidence: 'system-path' | 'app-path' | 'bundle-id' | 'executable'
   }>>
   getAppInfo: () => Promise<{ version: string; platform: string }>
-  networkGetInfo: () => Promise<{
-    localIps: string[]
-    tailscaleIp: string | null
-    publicIp: string | null
-    hostname: string
-    sshEnabled: boolean
-  }>
+  networkGetInfo: () => Promise<LocalNetworkInfo>
+  networkQueryPublicIp: () => Promise<PublicIpQueryResult>
 }
 
 declare global {

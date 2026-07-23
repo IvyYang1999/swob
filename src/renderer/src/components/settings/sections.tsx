@@ -149,7 +149,6 @@ function StatusRow({ label, ok, path: itemPath }: { label: string; ok: boolean; 
 type NetworkInfo = {
   localIps: string[]
   tailscaleIp: string | null
-  publicIp: string | null
   hostname: string
   sshEnabled: boolean
 }
@@ -194,6 +193,9 @@ export function RemoteConnectionSection() {
   const t = useT()
   const [info, setInfo] = useState<NetworkInfo | null>(null)
   const [loading, setLoading] = useState(false)
+  const [publicIp, setPublicIp] = useState<string | null>(null)
+  const [publicIpLoading, setPublicIpLoading] = useState(false)
+  const [publicIpError, setPublicIpError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -206,6 +208,28 @@ export function RemoteConnectionSection() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  const queryPublicIp = useCallback(async () => {
+    setPublicIpLoading(true)
+    setPublicIpError(null)
+    setPublicIp(null)
+    try {
+      const result = await window.api.networkQueryPublicIp()
+      if (result.ok) {
+        setPublicIp(result.ip)
+      } else {
+        setPublicIpError(
+          result.error === 'timeout'
+            ? t('renderer.sections.public_timeout')
+            : t('renderer.sections.public_failed')
+        )
+      }
+    } catch {
+      setPublicIpError(t('renderer.sections.public_failed'))
+    } finally {
+      setPublicIpLoading(false)
+    }
+  }, [t])
 
   const localIpsWithoutTailscale = info?.localIps.filter(ip => !ip.startsWith('100.')) ?? []
 
@@ -259,9 +283,9 @@ export function RemoteConnectionSection() {
             />
           ))}
 
-          {info.publicIp && (
+          {publicIp && (
             <IpRow
-              ip={info.publicIp}
+              ip={publicIp}
               label={t('renderer.sections.public_label')}
               icon={<Globe2 size={10} className="text-green-400" />}
               desc={t('renderer.sections.public_desc')}
@@ -269,9 +293,32 @@ export function RemoteConnectionSection() {
             />
           )}
 
-          {!info.publicIp && !loading && (
-            <p className="text-[10px] text-muted">{t('renderer.sections.public_failed')}</p>
-          )}
+          <div className="flex flex-col gap-2 p-2.5 rounded-lg bg-surface border border-edge-subtle">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-secondary">
+              <Globe2 size={10} className="text-green-400" />
+              {t('renderer.sections.public_query_title')}
+            </div>
+            <p className="text-[10px] text-muted leading-relaxed">
+              {t('renderer.sections.public_query_disclosure')}
+            </p>
+            <button
+              type="button"
+              onClick={queryPublicIp}
+              disabled={publicIpLoading}
+              className="self-start rounded-md border border-edge-subtle bg-hover px-2.5 py-1.5 text-[11px] text-secondary hover:text-primary disabled:opacity-40"
+            >
+              {publicIpLoading
+                ? t('renderer.sections.public_query_loading')
+                : publicIp
+                  ? t('renderer.sections.public_query_again')
+                  : t('renderer.sections.public_query')}
+            </button>
+            {publicIpError && (
+              <p role="status" className="text-[10px] text-amber-400">
+                {publicIpError}
+              </p>
+            )}
+          </div>
 
           {!info.tailscaleIp && (
             <div className="p-2.5 rounded-lg bg-surface border border-edge-subtle text-[10px] text-muted leading-relaxed">

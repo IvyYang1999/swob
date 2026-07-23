@@ -4,7 +4,7 @@
 /// <reference types="@testing-library/jest-dom" />
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 const savePreferences = vi.fn()
 
@@ -91,9 +91,12 @@ describe('SettingsPanel 纵向导航设置', () => {
       networkGetInfo: vi.fn().mockResolvedValue({
         localIps: [],
         tailscaleIp: null,
-        publicIp: null,
         hostname: 'test-host',
         sshEnabled: true
+      }),
+      networkQueryPublicIp: vi.fn().mockResolvedValue({
+        ok: true,
+        ip: '203.0.113.10'
       }),
       platformGetCapabilities: vi.fn().mockResolvedValue({
         platform: 'darwin',
@@ -194,7 +197,7 @@ describe('SettingsPanel 纵向导航设置', () => {
     expect(terminalOption?.textContent).toContain('没有公开 CLI Resume')
   })
 
-  it('SSH 分类提供三段折叠教程，且不再出现手机文案', () => {
+  it('【曾经的 bug】SSH 分类挂载和刷新只读取本地信息，点击后才查询公网 IP', async () => {
     render(<SettingsPanel />)
     fireEvent.click(navButton('SSH'))
 
@@ -202,6 +205,31 @@ describe('SettingsPanel 纵向导航设置', () => {
     expect(screen.getByText('配置 SSH key')).not.toBeNull()
     expect(screen.getByText('测试连接')).not.toBeNull()
     expect(screen.queryByText(/手机/)).toBeNull()
+
+    await waitFor(() => expect((window as any).api.networkGetInfo).toHaveBeenCalledTimes(1))
+    expect((window as any).api.networkQueryPublicIp).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTitle('刷新'))
+    await waitFor(() => expect((window as any).api.networkGetInfo).toHaveBeenCalledTimes(2))
+    expect((window as any).api.networkQueryPublicIp).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '查询公网 IP' }))
+    await waitFor(() => expect((window as any).api.networkQueryPublicIp).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('203.0.113.10')).not.toBeNull()
+  })
+
+  it('SSH 公网 IP 查询超时显示可重试错误', async () => {
+    ;(window as any).api.networkQueryPublicIp.mockResolvedValue({
+      ok: false,
+      error: 'timeout'
+    })
+    render(<SettingsPanel />)
+    fireEvent.click(navButton('SSH'))
+
+    fireEvent.click(await screen.findByRole('button', { name: '查询公网 IP' }))
+
+    expect((await screen.findByRole('status')).textContent).toBe('公网 IP 查询超时，请稍后重试。')
+    expect((screen.getByRole('button', { name: '查询公网 IP' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('视图分类能保存默认排序', () => {

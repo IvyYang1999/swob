@@ -72,9 +72,13 @@ export function assertUpgradePath(fromVersion, toVersion) {
 }
 
 function resolveGitCommit(rootDir, revision) {
+  const isolatedEnvironment = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_'))
+  )
   const result = spawnSync('git', ['rev-parse', '--verify', `${revision}^{commit}`], {
     cwd: rootDir,
-    encoding: 'utf8'
+    encoding: 'utf8',
+    env: isolatedEnvironment
   })
   if (result.status !== 0) {
     throw new Error(`Cannot resolve release revision ${revision}: ${result.stderr.trim() || 'git rev-parse failed'}`)

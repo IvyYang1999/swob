@@ -1,6 +1,6 @@
 # Swob Privacy Boundaries
 
-Last reviewed against current `main`: 2026-07-21.
+Last reviewed against current `main`: 2026-07-23.
 
 Swob is local-first, not network-free. Core session browsing and analysis stay on the Mac, while a small number of explicit features can use the network. This document states the boundary precisely so “local-first” is not mistaken for an unconditional offline guarantee.
 
@@ -51,6 +51,12 @@ Swob does not include product analytics, advertising identifiers, or session-upl
 
 Swob can check the configured release service after startup. Automatic download is disabled; an update is downloaded only after the user chooses to do so. Update requests do not intentionally include session content.
 
+### SSH public IP lookup
+
+Opening SSH settings and refreshing the local connection information reads only the Mac's hostname, LAN addresses, Tailscale address, and local SSH status. Those actions do not contact `api.ipify.org`.
+
+Swob contacts `https://api.ipify.org?format=json` only after the user explicitly clicks **Query public IP**. The lookup sends one HTTPS request with a five-second timeout. The service necessarily receives the request's source IP and ordinary request metadata, but Swob does not intentionally include session content, credentials, or Library data. The returned address is displayed locally and is not retained by Swob.
+
 ### Optional AI Insights
 
 AI Insights is off until a user configures a provider credential and explicitly confirms generation. When invoked, current `main` sends the configured provider:
@@ -97,7 +103,7 @@ Deleting only an original agent session does not delete its Swob Library backup.
 
 ## Stable release boundary
 
-Public v1.2.0 does not include optional AI Insights. Its public DMGs are unsigned. Current `main` contains the features and boundaries described above; check the release notes again when the next stable build ships.
+The planned public v1.3.0 release contains the features and privacy boundaries described above. It will be published only if its macOS installers pass Developer ID signing, notarization, stapling, and release-asset verification. The current public v1.2.0 release does not include optional AI Insights and its DMGs are unsigned; after v1.3.0 is published, v1.2.0 users must manually replace the app once to cross into the new signing trust root.
 
 ## Changes to this document
 

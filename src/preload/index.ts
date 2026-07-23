@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AnalysisDimension, AnalysisScope } from '../main/analysis-contract'
 import type { OnboardingBackupSizeEstimate } from '../shared/onboarding-backup-size'
+import type { LocalNetworkInfo, PublicIpQueryResult } from '../shared/network-info'
 import type {
   AgentAlwaysOnTopState,
   AgentHistoryItem,
@@ -175,13 +176,9 @@ const api = {
   sshResume: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:resume', sessionId, permissionMode),
   sshFork: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:fork', sessionId, permissionMode),
   sshBuildCommand: (sessionId: string, permissionMode?: string) => ipcRenderer.invoke('ssh:buildCommand', sessionId, permissionMode),
-  networkGetInfo: () => ipcRenderer.invoke('network:getInfo') as Promise<{
-    localIps: string[]
-    tailscaleIp: string | null
-    publicIp: string | null
-    hostname: string
-    sshEnabled: boolean
-  }>,
+  networkGetInfo: () => ipcRenderer.invoke('network:getInfo') as Promise<LocalNetworkInfo>,
+  networkQueryPublicIp: () =>
+    ipcRenderer.invoke('network:queryPublicIp') as Promise<PublicIpQueryResult>,
 
   // Insights
   getInsights: () => ipcRenderer.invoke('insights:get'),

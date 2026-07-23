@@ -182,6 +182,23 @@ const translations: Record<Locale, Record<string, string>> = {
     // SearchResults
     'search.summary': '搜索 "{query}" — {sessions} 个会话，{matches} 处匹配',
     'search.matches': '{n} 处匹配',
+    'search.no_results': '没有找到匹配的会话',
+    'search.searching': '正在搜索…',
+    'search.error': '搜索出错',
+    'search.retry': '重试',
+
+    // Galaxy empty state
+    'galaxy.empty_title': '还没有会话',
+    'galaxy.empty_body': '使用 Claude Code、Codex 或 Cursor 开始一次对话，Swob 会自动发现它',
+    'galaxy.switch_library': '切换 Library',
+    'galaxy.check_sources': '检查数据源',
+
+    // Accessibility
+    'a11y.select_message': '选中此消息',
+    'a11y.overflow_menu': '更多操作',
+
+    // Spotlight
+    'spotlight.loading': '正在加载…',
 
     // InfoPanel
     'info.title': '会话信息',
@@ -377,6 +394,14 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.general_settings.display_name": "显示名称",
     "renderer.general_settings.save": "保存",
     "renderer.general_settings.saved": "已保存",
+    "renderer.general_settings.choose_avatar": "选择头像",
+    "renderer.general_settings.remove_avatar": "移除头像",
+    "renderer.general_settings.avatar_hint": "选择一张图片作为聊天头像",
+    "renderer.general_settings.avatar_too_large": "头像文件不能超过 2 MiB",
+    "renderer.general_settings.avatar_invalid": "头像格式无效",
+    "renderer.general_settings.custom_icon": "自定义图标",
+    "renderer.general_settings.custom_icon_hint": "为每个 AI 工具设置专属图标",
+    "renderer.general_settings.reset_icon": "重置",
     "renderer.general_settings.theme_2": "主题",
     "renderer.profiles_settings.delete_profile_value_its_keychain_entry_is_removed": "删除 Profile「{value0}」?其 Keychain 密钥将一并清除。",
     "renderer.profiles_settings.ai_smart_features": "AI 与智能功能",
@@ -1117,6 +1142,23 @@ const translations: Record<Locale, Record<string, string>> = {
     // SearchResults
     'search.summary': 'Search "{query}" — {sessions} sessions, {matches} matches',
     'search.matches': '{n} matches',
+    'search.no_results': 'No matching sessions found',
+    'search.searching': 'Searching...',
+    'search.error': 'Search failed',
+    'search.retry': 'Retry',
+
+    // Galaxy empty state
+    'galaxy.empty_title': 'No sessions yet',
+    'galaxy.empty_body': 'Start a conversation with Claude Code, Codex, or Cursor, and Swob will discover it automatically',
+    'galaxy.switch_library': 'Switch Library',
+    'galaxy.check_sources': 'Check source paths',
+
+    // Accessibility
+    'a11y.select_message': 'Select this message',
+    'a11y.overflow_menu': 'More actions',
+
+    // Spotlight
+    'spotlight.loading': 'Loading...',
 
     // InfoPanel
     'info.title': 'Session Info',
@@ -1312,6 +1354,14 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.general_settings.display_name": "Display name",
     "renderer.general_settings.save": "Save",
     "renderer.general_settings.saved": "Saved",
+    "renderer.general_settings.choose_avatar": "Choose Avatar",
+    "renderer.general_settings.remove_avatar": "Remove Avatar",
+    "renderer.general_settings.avatar_hint": "Choose an image for your chat avatar",
+    "renderer.general_settings.avatar_too_large": "Avatar file must be 2 MiB or smaller",
+    "renderer.general_settings.avatar_invalid": "Invalid avatar format",
+    "renderer.general_settings.custom_icon": "Custom Icon",
+    "renderer.general_settings.custom_icon_hint": "Set a custom icon for each AI tool",
+    "renderer.general_settings.reset_icon": "Reset",
     "renderer.general_settings.theme_2": "Theme",
     "renderer.profiles_settings.delete_profile_value_its_keychain_entry_is_removed": "Delete profile \"{value0}\"? Its Keychain entry is removed too.",
     "renderer.profiles_settings.ai_smart_features": "AI & Smart Features",

@@ -131,6 +131,15 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [infoPanelWidth, setInfoPanelWidth] = useState(320)
   const [onboarding, setOnboarding] = useState<{ needed: boolean; defaultPath: string } | null>(null)
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth)
+  const narrowWindow = windowWidth <= 640
+
+  // Track window width for responsive layout
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   useFeedbackToast()
 
@@ -192,7 +201,7 @@ export default function App() {
           <Sidebar width={sidebarWidth} />
           <ResizeHandle side="left" onResize={handleSidebarResize} />
           {builtinViewRegistry.require(activeViewId).render(viewContext)}
-          {infoPanelOpen && !settingsOpen && workspaceView === 'chat' && (
+          {infoPanelOpen && !narrowWindow && !settingsOpen && workspaceView === 'chat' && (
             <>
               <ResizeHandle side="right" onResize={handleInfoPanelResize} />
               {builtinViewRegistry.require(BUILTIN_VIEW_IDS.info).render(viewContext)}

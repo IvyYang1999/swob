@@ -377,10 +377,11 @@ function ToolCallFull({ tc }: { tc: ToolCallInfo }) {
 
 // --- Turn block ---
 
-const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userDisplayName, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
+const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userDisplayName, userAvatarUrl, qSelected, aSelected, selectMode, onSelectQ, onSelectA }: {
   turn: Turn; viewMode: 'compact' | 'full'
   sessionSource?: string
   userDisplayName?: string
+  userAvatarUrl?: string | null
   qSelected?: boolean; aSelected?: boolean
   selectMode?: boolean
   onSelectQ?: (uuid: string) => void; onSelectA?: (uuid: string) => void
@@ -425,12 +426,20 @@ const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userD
             {selectMode && onSelectQ && (
               <button
                 onClick={() => onSelectQ(turn.userMsg!.uuid)}
+                aria-label={t('a11y.select_message')}
+                aria-pressed={!!qSelected}
                 className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 mt-1.5 ${qSelected ? 'bg-soft-blue border-accent text-white' : 'border-edge-strong hover:border-secondary text-muted'}`}
               >
                 {qSelected ? '✓' : ''}
               </button>
             )}
-            <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#5a8fb8] text-white"><User size={14} /></div>
+            {userAvatarUrl ? (
+              <img src={userAvatarUrl} className="w-7 h-7 rounded-full object-cover shrink-0 mt-0.5" alt="" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+            ) : (
+              <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-[#5a8fb8] text-white text-[11px] font-semibold">
+                {(userDisplayName || 'U').charAt(0).toUpperCase()}
+              </div>
+            )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-xs font-medium text-secondary">{userDisplayName || 'User'}</span>
@@ -493,6 +502,8 @@ const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userD
             {selectMode && onSelectA && turn.userMsg && (
               <button
                 onClick={() => onSelectA(turn.userMsg!.uuid)}
+                aria-label={t('a11y.select_message')}
+                aria-pressed={!!aSelected}
                 className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] shrink-0 mt-1.5 ${aSelected ? 'bg-soft-blue border-accent text-white' : 'border-edge-strong hover:border-secondary text-muted'}`}
               >
                 {aSelected ? '✓' : ''}
@@ -1076,7 +1087,7 @@ function SessionBar({
             }
           >
             {isRemote ? <Terminal size={10} /> : <Play size={10} />}
-            {sshResuming ? t('renderer.chat.connecting') : isRemote ? 'SSH Resume' : isZcode ? t('chat.open_zcode_short') : 'Resume'}
+            <span className="whitespace-nowrap">{sshResuming ? t('renderer.chat.connecting') : isRemote ? 'SSH Resume' : isZcode ? t('chat.open_zcode_short') : 'Resume'}</span>
           </button>
 
           {canChooseResumeSurface && (
@@ -1155,7 +1166,7 @@ function SessionBar({
           title={forkUnavailableReason || (isRemote ? 'SSH Fork' : t('chat.fork_hint'))}
         >
           <GitBranch size={10} />
-          {isRemote ? 'SSH Fork' : t('chat.fork')}
+          <span className="whitespace-nowrap">{isRemote ? 'SSH Fork' : t('chat.fork')}</span>
         </button>
 
         {/* iCloud 云端下载 */}
@@ -1304,14 +1315,25 @@ export function ChatViewer() {
   const firstVisibleTurnRef = useRef<string | null>(null)
   const [virtualRenderVersion, setVirtualRenderVersion] = useState(0)
 
-  // User identity for display name in chat
+  // User identity for display name + avatar in chat
   const [userDisplayName, setUserDisplayName] = useState<string | undefined>(undefined)
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null)
   useEffect(() => {
     const api = (window as any).api
     if (!api?.profileGetUserIdentity) return
-    api.profileGetUserIdentity().then((result: { ok: boolean; value?: { displayName: string } }) => {
-      if (result.ok && result.value?.displayName) {
-        setUserDisplayName(result.value.displayName)
+    api.profileGetUserIdentity().then(async (result: { ok: boolean; value?: { displayName: string; avatarRelPath?: string; avatarAvailable: boolean } }) => {
+      if (result.ok && result.value) {
+        if (result.value.displayName) setUserDisplayName(result.value.displayName)
+        if (result.value.avatarAvailable && result.value.avatarRelPath) {
+          try {
+            const root = await api.libraryGetRoot()
+            if (root) {
+              const absPath = `${root}/${result.value.avatarRelPath}`
+              const imgResult = await api.loadImage(absPath)
+              if (imgResult?.dataUrl) setUserAvatarUrl(imgResult.dataUrl)
+            }
+          } catch { /* avatar display failed gracefully */ }
+        }
       }
     }).catch(() => { /* identity unavailable — use fallback */ })
   }, [])
@@ -2157,6 +2179,7 @@ export function ChatViewer() {
                             viewMode={viewMode as 'compact' | 'full'}
                             sessionSource={selectedSession.source}
                             userDisplayName={userDisplayName}
+                            userAvatarUrl={userAvatarUrl}
                             qSelected={row.turn.userMsg ? selectedItems.has(`q:${row.turn.userMsg.uuid}`) : false}
                             aSelected={row.turn.userMsg ? selectedItems.has(`a:${row.turn.userMsg.uuid}`) : false}
                             selectMode={selectMode}

@@ -1,5 +1,5 @@
 import { useStore } from '../store'
-import { Search } from 'lucide-react'
+import { Search, RotateCcw, SearchX } from 'lucide-react'
 import { useT } from '../i18n'
 
 function HighlightText({ text, query }: { text: string; query: string }) {
@@ -21,11 +21,11 @@ function HighlightText({ text, query }: { text: string; query: string }) {
 }
 
 export function SearchResults() {
-  const { searchResults, searchQuery, openSession, clearSearch } = useStore()
+  const { searchResults, searchQuery, searchState, openSession, clearSearch, search } = useStore()
   const locale = useStore((s) => s.locale)
   const t = useT()
 
-  if (!searchQuery || searchResults.length === 0) return null
+  if (!searchQuery) return null
 
   const totalMatches = searchResults.reduce((acc, r) => acc + r.matches.length, 0)
 
@@ -35,7 +35,13 @@ export function SearchResults() {
         <div className="flex items-center justify-between mb-4">
           <div className="text-sm text-secondary">
             <Search size={14} className="inline mr-2" />
-            {t('search.summary', { query: searchQuery, sessions: searchResults.length, matches: totalMatches })}
+            {searchState === 'searching'
+              ? t('search.searching')
+              : searchState === 'error'
+                ? t('search.error')
+                : searchState === 'empty'
+                  ? t('search.no_results')
+                  : t('search.summary', { query: searchQuery, sessions: searchResults.length, matches: totalMatches })}
           </div>
           <button
             onClick={clearSearch}
@@ -44,42 +50,75 @@ export function SearchResults() {
             {t('chat.close')}
           </button>
         </div>
-        <div className="space-y-4">
-          {searchResults.map((result) => (
+
+        {/* Searching spinner */}
+        {searchState === 'searching' && (
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-spin w-6 h-6 border-2 border-edge-strong border-t-body rounded-full" />
+          </div>
+        )}
+
+        {/* Empty state */}
+        {searchState === 'empty' && (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <SearchX size={28} className="text-faint mb-3" />
+            <div className="text-sm text-muted">{t('search.no_results')}</div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {searchState === 'error' && (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <div className="text-sm text-soft-red mb-3">{t('search.error')}</div>
             <button
-              key={result.sessionId}
-              onClick={() => {
-                openSession(result.sessionId)
-              }}
-              className="w-full text-left p-4 bg-surface hover:bg-hover/50 rounded-lg border border-edge hover:border-edge-strong transition-colors"
+              onClick={() => search(searchQuery)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-edge hover:bg-surface text-secondary hover:text-primary transition-colors"
             >
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-sm text-primary font-medium truncate flex-1 mr-3">
-                  <HighlightText text={result.firstUserMessage.slice(0, 100) || result.sessionId.slice(0, 12)} query={searchQuery} />
-                </div>
-                <span className="text-[10px] text-muted bg-hover px-1.5 py-0.5 rounded shrink-0">{t('search.matches', { n: result.matches.length })}</span>
-              </div>
-              <div className="space-y-1.5">
-                {result.matches.map((match, i) => (
-                  <div
-                    key={i}
-                    className="text-xs text-secondary font-mono bg-base rounded px-2.5 py-1.5 leading-relaxed"
-                  >
-                    <span className="text-faint mr-2 text-[10px]">
-                      {new Date(match.timestamp).toLocaleString(locale, {
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </span>
-                    <HighlightText text={match.text} query={searchQuery} />
-                  </div>
-                ))}
-              </div>
+              <RotateCcw size={12} />
+              {t('search.retry')}
             </button>
-          ))}
-        </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {searchState === 'success' && (
+          <div className="space-y-4">
+            {searchResults.map((result) => (
+              <button
+                key={result.sessionId}
+                onClick={() => {
+                  openSession(result.sessionId)
+                }}
+                className="w-full text-left p-4 bg-surface hover:bg-hover/50 rounded-lg border border-edge hover:border-edge-strong transition-colors"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-sm text-primary font-medium truncate flex-1 mr-3">
+                    <HighlightText text={result.firstUserMessage.slice(0, 100) || result.sessionId.slice(0, 12)} query={searchQuery} />
+                  </div>
+                  <span className="text-[10px] text-muted bg-hover px-1.5 py-0.5 rounded shrink-0">{t('search.matches', { n: result.matches.length })}</span>
+                </div>
+                <div className="space-y-1.5">
+                  {result.matches.map((match, i) => (
+                    <div
+                      key={i}
+                      className="text-xs text-secondary font-mono bg-base rounded px-2.5 py-1.5 leading-relaxed"
+                    >
+                      <span className="text-faint mr-2 text-[10px]">
+                        {new Date(match.timestamp).toLocaleString(locale, {
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                      <HighlightText text={match.text} query={searchQuery} />
+                    </div>
+                  ))}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

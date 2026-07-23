@@ -192,6 +192,7 @@ interface AppState {
   config: UserConfig | null
   searchResults: SearchResult[]
   searchQuery: string
+  searchState: 'idle' | 'searching' | 'success' | 'empty' | 'error'
   loading: boolean
   viewMode: ViewMode
   locale: Locale
@@ -340,6 +341,7 @@ export const useStore = create<AppState>((set, get) => ({
   config: hydrated.config,
   searchResults: [],
   searchQuery: '',
+  searchState: 'idle' as const,
   loading: hydrated.loading,
   viewMode: hydrated.viewMode,
   locale: hydrated.locale,
@@ -582,15 +584,22 @@ export const useStore = create<AppState>((set, get) => ({
 
   search: async (query) => {
     if (!query.trim()) {
-      set({ searchResults: [], searchQuery: '' })
+      set({ searchResults: [], searchQuery: '', searchState: 'idle' })
       return
     }
-    set({ searchQuery: query })
-    const results = await window.api.searchSessions(query)
-    set({ searchResults: results })
+    set({ searchQuery: query, searchState: 'searching' })
+    try {
+      const results = await window.api.searchSessions(query)
+      set({
+        searchResults: results,
+        searchState: results.length > 0 ? 'success' : 'empty'
+      })
+    } catch {
+      set({ searchResults: [], searchState: 'error' })
+    }
   },
 
-  clearSearch: () => set({ searchResults: [], searchQuery: '' }),
+  clearSearch: () => set({ searchResults: [], searchQuery: '', searchState: 'idle' }),
 
   resumeSession: async (sessionId, permissionMode?, cwd?, surface?) => {
     const terminalApp = get().config?.preferences.terminalApp || 'Terminal'

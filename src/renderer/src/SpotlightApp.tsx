@@ -56,6 +56,23 @@ function getProjectName(cwds: string[]): string {
   return parts[parts.length - 1] || parts[parts.length - 2] || ''
 }
 
+/** Skeleton rows shown during cold start before initial results arrive */
+function SpotlightSkeleton() {
+  return (
+    <div className="py-2 space-y-1 animate-pulse">
+      {[1, 2, 3, 4].map((i) => (
+        <div key={i} className="px-4 py-2.5 flex items-start gap-3">
+          <div className="w-6 h-6 rounded-full bg-edge shrink-0" />
+          <div className="flex-1 min-w-0 space-y-2">
+            <div className="h-3.5 bg-edge rounded w-3/4" />
+            <div className="h-2.5 bg-edge/60 rounded w-1/2" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function SpotlightApp() {
   const locale = useStandaloneLocale()
   const t = (key: string, params?: Record<string, string | number>) => translate(locale, key, params)
@@ -63,6 +80,7 @@ export default function SpotlightApp() {
   const [results, setResults] = useState<SpotlightResultItem[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [initialLoad, setInitialLoad] = useState(true)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -77,6 +95,7 @@ export default function SpotlightApp() {
       setResults([])
     }
     setLoading(false)
+    setInitialLoad(false)
   }, [])
 
   useEffect(() => {
@@ -154,7 +173,8 @@ export default function SpotlightApp() {
 
         {/* Results list */}
         <div ref={listRef} className="flex-1 overflow-y-auto py-1">
-          {results.length === 0 && query && !loading && (
+          {initialLoad && <SpotlightSkeleton />}
+          {!initialLoad && results.length === 0 && query && !loading && (
             <div className="px-4 py-8 text-center text-muted text-sm">
               {t('renderer.spotlight.no_results')}
             </div>

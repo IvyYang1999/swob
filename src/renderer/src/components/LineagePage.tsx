@@ -1,7 +1,7 @@
 import { translate } from '../i18n'
 import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { useStore } from '../store'
-import { GitBranch, RotateCcw, Share2 } from 'lucide-react'
+import { GitBranch, RotateCcw, Share2, Compass, Settings } from 'lucide-react'
 import { GalaxySharePreview } from './share/GalaxySharePreview'
 import {
   hashString,
@@ -714,6 +714,28 @@ export function LineagePage() {
     acc[src] = (acc[src] || 0) + 1
     return acc
   }, {} as Record<string, number>)
+
+  // Empty library: show friendly empty state instead of infinite spinner
+  if (graphSessions.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-muted text-sm">
+        <div className="text-center max-w-sm space-y-4">
+          <Compass size={36} className="mx-auto text-faint" />
+          <div className="text-base font-medium text-secondary">{translate(locale, 'galaxy.empty_title')}</div>
+          <div className="text-xs text-muted leading-relaxed">{translate(locale, 'galaxy.empty_body')}</div>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <button
+              onClick={() => useStore.getState().toggleSettings()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs border border-edge hover:bg-surface text-secondary hover:text-primary transition-colors"
+            >
+              <Settings size={12} />
+              {translate(locale, 'galaxy.check_sources')}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (!ready) {
     return (

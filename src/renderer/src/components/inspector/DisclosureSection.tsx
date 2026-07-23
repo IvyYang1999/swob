@@ -22,12 +22,14 @@ export function DisclosureSection({
     <section>
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 text-xs font-medium text-secondary mb-2 hover:text-body w-full"
+        className="flex min-w-0 items-center gap-2 overflow-hidden text-xs font-medium text-secondary mb-2 hover:text-body w-full"
       >
-        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-        {icon}
-        <span>{title}</span>
-        {badge != null && <span className="text-faint ml-auto">{badge}</span>}
+        <span className="shrink-0">
+          {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        </span>
+        {icon && <span className="shrink-0">{icon}</span>}
+        <span className="min-w-0 flex-1 truncate text-left" title={title}>{title}</span>
+        {badge != null && <span className="text-faint ml-auto shrink-0">{badge}</span>}
       </button>
       {open && children}
     </section>

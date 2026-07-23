@@ -44,6 +44,7 @@ export interface LaunchAppOptions {
   viewport?: { width: number; height: number }
   includeCursorFixture?: boolean
   includePiFixture?: boolean
+  includeInspectorFixture?: boolean
   env?: Record<string, string>
 }
 
@@ -86,11 +87,17 @@ function createSyntheticCorpus(
   libraryRoot: string,
   claudeTurns: number,
   includeCursorFixture = false,
-  includePiFixture = false
+  includePiFixture = false,
+  includeInspectorFixture = false
 ): void {
   const project = path.join(home, 'project')
   fs.mkdirSync(project, { recursive: true })
   fs.mkdirSync(libraryRoot, { recursive: true })
+  const inspectorFile = path.join(project, 'src', 'nested', 'fixture.ts')
+  if (includeInspectorFixture) {
+    fs.mkdirSync(path.dirname(inspectorFile), { recursive: true })
+    fs.writeFileSync(inspectorFile, 'export const inspectorFixture = true\n', 'utf8')
+  }
 
   // Sandboxed specs test the main UI, not first-run onboarding (which has its
   // own dedicated spec). Pre-complete onboarding so the wizard never blocks.
@@ -136,7 +143,21 @@ function createSyntheticCorpus(
         id: `claude-message-${index}`,
         role: 'assistant',
         model: 'claude-sonnet-4-20250514',
-        content: `Synthetic response ${index} ${'fixture '.repeat(12)}`,
+        content: includeInspectorFixture && index === 0
+          ? [
+              { type: 'text', text: `Synthetic response ${index} ${'fixture '.repeat(12)}` },
+              {
+                type: 'tool_use',
+                id: 'inspector-edit-0',
+                name: 'Edit',
+                input: {
+                  file_path: inspectorFile,
+                  old_string: 'false',
+                  new_string: 'true'
+                }
+              }
+            ]
+          : `Synthetic response ${index} ${'fixture '.repeat(12)}`,
         stop_reason: 'end_turn',
         usage: {
           input_tokens: 100,
@@ -305,7 +326,8 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     libraryRoot,
     options.claudeTurns ?? 3,
     options.includeCursorFixture ?? false,
-    options.includePiFixture ?? false
+    options.includePiFixture ?? false,
+    options.includeInspectorFixture ?? false
   )
 
   const app = await electron.launch({

@@ -933,7 +933,7 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
   const highlights: Highlight[] = config?.sessionMeta?.[s.sessionId]?.highlights || []
 
   return (
-    <div className="h-full bg-base overflow-y-auto shrink-0" style={{ width }}>
+    <div data-testid="info-panel" className="h-full bg-base overflow-y-auto shrink-0" style={{ width }}>
       <div className="p-4 space-y-4">
         <h3 className="text-sm font-medium text-body">{t('info.title')}</h3>
 

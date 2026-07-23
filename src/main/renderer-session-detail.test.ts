@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { toRendererSessionDetail } from './renderer-session-detail'
+import { toRendererSessionDetail, toRendererSessionDetailLoadResult } from './renderer-session-detail'
 import type { ParsedMessage, SessionDetail } from './types'
 
 function message(overrides: Partial<ParsedMessage> = {}): ParsedMessage {
@@ -63,6 +63,16 @@ describe('toRendererSessionDetail', () => {
       isSharedContext: true,
       isSystemGenerated: true,
       tokenUsage: { inputTokens: 1, outputTokens: 2 }
+    })
+  })
+
+  it('preserves the typed transcript fallback contract', () => {
+    expect(toRendererSessionDetailLoadResult({
+      fallback: 'transcript',
+      transcriptMarkdown: '# transcript'
+    })).toEqual({
+      fallback: 'transcript',
+      transcriptMarkdown: '# transcript'
     })
   })
 })

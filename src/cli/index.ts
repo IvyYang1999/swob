@@ -684,7 +684,12 @@ async function cmdTranscript(args: string[], flags: Record<string, string | true
 
 async function cmdInstall(): Promise<void> {
   const home = runtimeHome()
-  const cliInstall = installSwobCli(cliInstallOptionsForEnvironment(home))
+  const environmentOptions = cliInstallOptionsForEnvironment(home)
+  const cliInstall = installSwobCli({
+    ...environmentOptions,
+    allowShellRcUpdate: environmentOptions.testHomeDir ? false : true,
+    allowAuthorization: environmentOptions.testHomeDir ? false : true
+  })
   const skillDir = path.join(home, '.claude', 'skills', 'swob')
   fs.mkdirSync(skillDir, { recursive: true })
   const skillPath = path.join(skillDir, 'SKILL.md')
@@ -696,6 +701,9 @@ async function cmdInstall(): Promise<void> {
     cliWrapperPath: cliInstall.wrapperPath,
     cliFallbackUsed: cliInstall.fallbackUsed,
     cliAttemptedPaths: cliInstall.attemptedCliPaths,
+    cliVerified: cliInstall.cliVerified,
+    shellRcUpdated: cliInstall.shellRcUpdated,
+    error: cliInstall.error,
     skillInstalled: true,
     skillPath
   })

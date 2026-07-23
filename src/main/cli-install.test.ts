@@ -7,12 +7,18 @@ import {
   cliInstallOptionsForEnvironment,
   getCliTargetCandidates,
   installSwobCli,
+  findInstalledSwobCommandPath,
   shouldAutoInstallCli,
   SWOB_APP_CLI_PATH
 } from './cli-install'
 
-function expectedShellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`
+function successfulLoginShell(
+  _shellPath: string,
+  command: string,
+  environment: NodeJS.ProcessEnv
+): string {
+  if (command.includes('printf')) return environment.PATH || ''
+  return '1.3.0'
 }
 
 describe('CLI install helper', () => {
@@ -77,22 +83,27 @@ describe('CLI install helper', () => {
     )
   })
 
-  it('keeps /usr/local/bin first, then PATH fallbacks in priority order', () => {
+  it('prefers writable login-PATH targets independently of the GUI PATH', () => {
     const homeDir = path.join(tmpRoot, 'home')
     const homebrewDir = path.join(tmpRoot, 'homebrew', 'bin')
     const localDir = path.join(homeDir, '.local', 'bin')
+    const primaryDir = path.join(tmpRoot, 'usr-local-bin')
+    fs.mkdirSync(homebrewDir, { recursive: true })
+    fs.mkdirSync(primaryDir, { recursive: true })
     const candidates = getCliTargetCandidates({
       homeDir,
-      pathEnv: [localDir, homebrewDir].join(path.delimiter),
-      primaryTargetDir: path.join(tmpRoot, 'usr-local-bin'),
+      pathEnv: '',
+      loginPathEnv: [homebrewDir, primaryDir, localDir].join(path.delimiter),
+      primaryTargetDir: primaryDir,
       homebrewTargetDir: homebrewDir,
       localTargetDir: localDir
     })
 
-    expect(candidates.map((candidate) => candidate.kind)).toEqual(['primary', 'homebrew', 'local'])
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(['homebrew', 'primary', 'local'])
+    expect(candidates.every((candidate) => candidate.inLoginPath)).toBe(true)
   })
 
-  it('skips fallback directories that are not on PATH', () => {
+  it('reports fallback directories that are not on the login PATH instead of hiding them', () => {
     const homeDir = path.join(tmpRoot, 'home')
     const homebrewDir = path.join(tmpRoot, 'homebrew', 'bin')
     const localDir = path.join(homeDir, '.local', 'bin')
@@ -104,7 +115,8 @@ describe('CLI install helper', () => {
       localTargetDir: localDir
     })
 
-    expect(candidates.map((candidate) => candidate.kind)).toEqual(['primary'])
+    expect(candidates).toHaveLength(3)
+    expect(candidates.every((candidate) => candidate.inLoginPath === false)).toBe(true)
   })
 
   it('falls back to ~/.local/bin when it is on PATH and the primary target is unavailable', () => {
@@ -117,7 +129,8 @@ describe('CLI install helper', () => {
       pathEnv: localDir,
       primaryTargetDir,
       homebrewTargetDir: path.join(tmpRoot, 'homebrew', 'bin'),
-      localTargetDir: localDir
+      localTargetDir: localDir,
+      runLoginShell: successfulLoginShell
     })
 
     expect(result.cliInstalled).toBe(true)
@@ -137,7 +150,9 @@ describe('CLI install helper', () => {
     const result = installSwobCli({
       homeDir,
       pathEnv: '',
-      primaryTargetDir
+      loginPathEnv: primaryTargetDir,
+      primaryTargetDir,
+      runLoginShell: successfulLoginShell
     })
 
     expect(result.cliInstalled).toBe(true)
@@ -146,7 +161,7 @@ describe('CLI install helper', () => {
     expect(fs.readFileSync(wrapperPath, 'utf-8')).toBe(buildCliWrapperScript())
   })
 
-  it('quotes shell metacharacters in the manual sudo command', () => {
+  it('does not fall back to asking the user to create a sudo symlink', () => {
     const homeDir = path.join(tmpRoot, 'home dir \' " $(touch bad) `touch bad`')
     const primaryTargetDir = path.join(tmpRoot, 'target dir \' " $(touch bad) `touch bad`')
     const wrapperPath = path.join(homeDir, '.claude-session-manager', 'swob-cli.sh')
@@ -159,8 +174,111 @@ describe('CLI install helper', () => {
     })
 
     expect(result.cliInstalled).toBe(false)
-    expect(result.cliManualInstall).toBe(
-      `sudo ln -sf ${expectedShellQuote(wrapperPath)} ${expectedShellQuote(manualTarget)}`
+    expect(result.cliManualInstall).toBeNull()
+    expect(result.error).toContain('No writable CLI directory')
+    expect(fs.existsSync(wrapperPath)).toBe(true)
+    expect(fs.existsSync(manualTarget)).toBe(false)
+  })
+
+  it('an explicit install can add ~/.local/bin to the login shell and verify end to end', () => {
+    const homeDir = path.join(tmpRoot, 'home')
+    const localDir = path.join(homeDir, '.local', 'bin')
+    const result = installSwobCli({
+      homeDir,
+      pathEnv: '',
+      primaryTargetDir: path.join(tmpRoot, 'missing-primary'),
+      homebrewTargetDir: path.join(tmpRoot, 'missing-homebrew'),
+      localTargetDir: localDir,
+      loginShell: '/bin/zsh',
+      allowShellRcUpdate: true,
+      expectedVersion: '1.3.0',
+      runLoginShell: successfulLoginShell
+    })
+
+    expect(result).toMatchObject({
+      cliInstalled: true,
+      cliPath: path.join(localDir, 'swob'),
+      cliVerified: true,
+      shellRcUpdated: true
+    })
+    expect(fs.readFileSync(path.join(homeDir, '.zprofile'), 'utf-8')).toContain(localDir)
+  })
+
+  it('runs the installed command through a real login shell and checks its version', () => {
+    const homeDir = path.join(tmpRoot, 'home')
+    const targetDir = path.join(homeDir, 'bin')
+    const appCliPath = path.join(tmpRoot, 'fake-app-cli.js')
+    fs.mkdirSync(targetDir, { recursive: true })
+    fs.writeFileSync(
+      appCliPath,
+      "if (process.argv.includes('--version')) process.stdout.write('1.3.0\\n')\n",
+      'utf-8'
     )
+    const loginPathEnv = [targetDir, process.env.PATH || '/usr/bin:/bin'].join(path.delimiter)
+    const result = installSwobCli({
+      homeDir,
+      appCliPath,
+      loginPathEnv,
+      loginShell: '/bin/zsh',
+      expectedVersion: '1.3.0',
+      primaryTargetDir: targetDir,
+      homebrewTargetDir: path.join(tmpRoot, 'missing-homebrew'),
+      localTargetDir: path.join(homeDir, '.local', 'bin')
+    })
+
+    expect(result).toMatchObject({
+      cliInstalled: true,
+      cliPath: path.join(targetDir, 'swob'),
+      cliVerified: true
+    })
+  })
+
+  it('ignores dangling commands and repairs them only inside the selected target', () => {
+    const homeDir = path.join(tmpRoot, 'home')
+    const homebrewDir = path.join(tmpRoot, 'homebrew', 'bin')
+    fs.mkdirSync(homebrewDir, { recursive: true })
+    fs.symlinkSync(path.join(tmpRoot, 'deleted-e2e-home', 'swob-cli.sh'), path.join(homebrewDir, 'swob'))
+    const options = {
+      homeDir,
+      loginPathEnv: homebrewDir,
+      primaryTargetDir: path.join(tmpRoot, 'missing-primary'),
+      homebrewTargetDir: homebrewDir,
+      localTargetDir: path.join(homeDir, '.local', 'bin'),
+      runLoginShell: successfulLoginShell
+    }
+
+    expect(findInstalledSwobCommandPath(options)).toBeNull()
+    const installed = installSwobCli(options)
+    expect(installed.cliInstalled).toBe(true)
+    expect(fs.readlinkSync(path.join(homebrewDir, 'swob'))).toBe(installed.wrapperPath)
+  })
+
+  it('SWOB_TEST_HOME installation leaves global command paths byte-for-byte unchanged', () => {
+    const inspect = (filePath: string): string => {
+      try {
+        const stat = fs.lstatSync(filePath)
+        return stat.isSymbolicLink()
+          ? `symlink:${fs.readlinkSync(filePath)}`
+          : `file:${stat.mode}:${stat.size}:${stat.mtimeMs}`
+      } catch {
+        return 'missing'
+      }
+    }
+    const globalPaths = ['/usr/local/bin/swob', '/opt/homebrew/bin/swob']
+    const before = globalPaths.map(inspect)
+    const testHome = path.join(tmpRoot, 'isolated-home')
+    fs.mkdirSync(path.join(testHome, 'bin'), { recursive: true })
+    const isolated = cliInstallOptionsForEnvironment(testHome, {
+      SWOB_TEST_HOME: testHome,
+      SWOB_TEST_APP_CLI_PATH: path.join(tmpRoot, 'Swob.app', 'cli.js'),
+      PATH: '/usr/bin'
+    })
+    const result = installSwobCli({
+      ...isolated,
+      runLoginShell: successfulLoginShell
+    })
+
+    expect(result.cliPath?.startsWith(testHome + path.sep)).toBe(true)
+    expect(globalPaths.map(inspect)).toEqual(before)
   })
 })

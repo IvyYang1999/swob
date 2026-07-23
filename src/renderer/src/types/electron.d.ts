@@ -166,7 +166,17 @@ interface ElectronAPI {
   platformGetCapabilities: () => Promise<import('../components/WindowsAlphaNotice').PlatformCapabilities>
   getSystemLocale: () => Promise<import('../../../shared/i18n').Locale>
   loadAllSessions: () => Promise<any[]>
-  loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => Promise<any>
+  loadSessionDetail: (
+    filePath: string,
+    allFilePaths?: string[],
+    branchParentFilePaths?: string[],
+    branchPointUuid?: string,
+    branchLeafUuid?: string
+  ) => Promise<
+    | ({ fallback: null; error?: never } & Record<string, unknown>)
+    | { fallback: 'transcript'; transcriptMarkdown: string }
+    | { fallback: null; error: 'DETAIL_UNAVAILABLE' | 'DETAIL_LOAD_FAILED' }
+  >
   searchSessions: (
     query: string
   ) => Promise<
@@ -389,7 +399,15 @@ interface ElectronAPI {
     commandPath: string | null
     skillPath: string | null
   }>
-  cliInstall: () => Promise<{ cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; cliManualInstall?: string; error?: string }>
+  cliInstall: () => Promise<{
+    cliInstalled: boolean
+    skillInstalled: boolean
+    cliPath: string | null
+    cliManualInstall?: string
+    cliVerified?: boolean
+    shellRcUpdated?: boolean
+    error?: string
+  }>
   getDetectedTerminals: (force?: boolean) => Promise<Array<{
     id: string
     name: string

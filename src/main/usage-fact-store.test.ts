@@ -251,7 +251,7 @@ describe('UsageFact + AnalysisScope', () => {
     expect(result.total.processedTokens).not.toBe(81)
   })
 
-  it('无 timestamp 事件进入 unknown-time，受限日期不冒充任何一天但质量计数保留', () => {
+  it('无 timestamp 事件保留在总量和质量计数中，但所有时间轴都不接收 unknown-time', () => {
     const session = makeSession('unknown-time', '/repo/alpha', [
       usageEvent('known', localTimestamp(2026, 7, 20, 12), components(10, 1)),
       usageEvent('unknown', undefined, components(50, 5))
@@ -259,9 +259,17 @@ describe('UsageFact + AnalysisScope', () => {
     synchronizeUsageFacts([session], [])
 
     const all = queryInsights(scope(), 'time')
-    expect(all.items.map((item) => item.key)).toEqual(['2026-07-20', 'unknown-time'])
+    expect(all.items.map((item) => item.key)).toEqual(['2026-07-20'])
     expect(all.quality.unknownTimeEvents).toBe(1)
     expect(all.total.processedTokens).toBe(66)
+    expect(queryInsights(scope(), 'hour').items.every((item) => item.key !== 'unknown-time')).toBe(true)
+
+    const bundle = queryInsightsBundle(scope())
+    expect(bundle.results.time.items.map((item) => item.key)).toEqual(['2026-07-20'])
+    expect(bundle.results.hour.items.every((item) => item.key !== 'unknown-time')).toBe(true)
+    for (const dimension of ['global', 'time', 'hour', 'source', 'model', 'project', 'session'] as const) {
+      expect(() => structuredClone(bundle.results[dimension])).not.toThrow()
+    }
 
     const bounded = queryInsights(scope({ range: { from: '2026-07-20', to: '2026-07-20' } }), 'time')
     expect(bounded.items).toHaveLength(1)

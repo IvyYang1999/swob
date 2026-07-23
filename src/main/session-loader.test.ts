@@ -13,6 +13,7 @@ import {
   buildSessionSummaryFromBackup,
   buildSessionDetail,
   loadSessionDetail,
+  loadSessionDetailWithFallback,
   detectIntraFileBranches,
   filterMessagesByBranch,
   findClaudeProjectRoots,
@@ -759,6 +760,28 @@ describe('buildSessionSummaryFromBackup', () => {
 })
 
 describe('loadSessionDetail source-aware backup', () => {
+  it('backup 缺失时回退到同包 transcript，二者都缺失时返回 typed error', async () => {
+    const dirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-transcript-fallback-'))
+    const backupPath = path.join(dirPath, 'backup.jsonl')
+    const transcriptPath = path.join(dirPath, 'transcript.md')
+    fs.writeFileSync(transcriptPath, '# OpenCode transcript\n\n可读正文', 'utf-8')
+
+    await expect(loadSessionDetailWithFallback(
+      backupPath, undefined, undefined, undefined, undefined, [transcriptPath]
+    )).resolves.toEqual({
+      fallback: 'transcript',
+      transcriptMarkdown: '# OpenCode transcript\n\n可读正文'
+    })
+
+    fs.rmSync(transcriptPath)
+    await expect(loadSessionDetailWithFallback(
+      backupPath, undefined, undefined, undefined, undefined, [transcriptPath]
+    )).resolves.toEqual({
+      fallback: null,
+      error: 'DETAIL_UNAVAILABLE'
+    })
+  })
+
   it('【曾经的 bug】loadSessionDetail 喂 codex backup.jsonl 应返回非 null detail', async () => {
     const sessionId = '33333333-3333-4333-8333-333333333333'
     const fp = writeObjectJsonl('backup.jsonl', codexBackupRows(sessionId))

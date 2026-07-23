@@ -658,8 +658,13 @@ function rollupFilter(scope: AnalysisScope, range: ResolvedAnalysisRange, dimens
   const params: Array<string | number> = []
   const needsFolder = dimension === 'folder' || scope.projectOrFolder?.kind === 'folder'
   if (needsFolder) joins.push('JOIN usage_session_folders folders ON folders.session_id = r.session_id')
-  if (range.fromDay) { where.push("r.occurred_day <> 'unknown-time' AND r.occurred_day >= ?"); params.push(range.fromDay) }
-  if (range.toDay) { where.push("r.occurred_day <> 'unknown-time' AND r.occurred_day <= ?"); params.push(range.toDay) }
+  // Unknown timestamps still contribute to truthful all-time totals and the
+  // quality counter, but can never be plotted on a calendar/hour axis.
+  if (dimension === 'time' || dimension === 'hour') {
+    where.push(`r.occurred_day <> '${UNKNOWN_TIME}'`)
+  }
+  if (range.fromDay) { where.push('r.occurred_day >= ?'); params.push(range.fromDay) }
+  if (range.toDay) { where.push('r.occurred_day <= ?'); params.push(range.toDay) }
   if (scope.sources?.length) {
     where.push(`r.source_client IN (${scope.sources.map(() => '?').join(', ')})`)
     params.push(...scope.sources)

@@ -30,6 +30,19 @@ let packageB = ''
 let childProcess: ChildProcess | null = null
 let commandEnvironment: NodeJS.ProcessEnv = {}
 const exercised = new Set<string>()
+const GLOBAL_CLI_PATHS = ['/usr/local/bin/swob', '/opt/homebrew/bin/swob']
+let globalCliStateBefore: string[] = []
+
+function inspectGlobalCliPath(filePath: string): string {
+  try {
+    const stat = fs.lstatSync(filePath)
+    return stat.isSymbolicLink()
+      ? `symlink:${fs.readlinkSync(filePath)}`
+      : `file:${stat.mode}:${stat.size}:${stat.mtimeMs}`
+  } catch {
+    return 'missing'
+  }
+}
 
 function writeJsonl(filePath: string, rows: unknown[]): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
@@ -127,6 +140,7 @@ function waitForProcessStart(): Promise<void> {
 
 beforeAll(() => {
   if (!packagedApp) return
+  globalCliStateBefore = GLOBAL_CLI_PATHS.map(inspectGlobalCliPath)
   const appPath = packagedApp
   packagedCli = path.join(appPath, 'Contents', 'Resources', 'cli', 'cli.js')
   unpackedNodeModules = path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules')
@@ -176,6 +190,9 @@ beforeAll(() => {
 afterAll(() => {
   if (childProcess && childProcess.exitCode === null) childProcess.kill('SIGTERM')
   if (sandboxRoot) fs.rmSync(sandboxRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  if (packagedApp) {
+    expect(GLOBAL_CLI_PATHS.map(inspectGlobalCliPath)).toEqual(globalCliStateBefore)
+  }
 })
 
 describePackaged('packaged Swob CLI complete command contract', () => {

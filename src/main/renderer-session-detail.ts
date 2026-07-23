@@ -1,4 +1,4 @@
-import type { ParsedMessage, SessionDetail } from './types'
+import type { ParsedMessage, SessionDetail, SessionDetailLoadResult } from './types'
 
 type RendererMessage = Pick<
   ParsedMessage,
@@ -34,5 +34,15 @@ export function toRendererSessionDetail(detail: SessionDetail | null): SessionDe
   return {
     ...detail,
     messages: detail.messages.map(toRendererMessage) as ParsedMessage[]
+  }
+}
+
+export function toRendererSessionDetailLoadResult(
+  result: SessionDetailLoadResult
+): SessionDetailLoadResult {
+  if (result.fallback !== null || result.error) return result
+  return {
+    ...toRendererSessionDetail(result)!,
+    fallback: null
   }
 }

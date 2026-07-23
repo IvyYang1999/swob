@@ -105,6 +105,7 @@ import type {
   ContentPart,
   SessionSource,
   SessionSummary,
+  SessionDetailAvailability,
   Folder,
   UserConfig,
   SshConfig,
@@ -158,6 +159,8 @@ export interface SessionMeta {
   sourceInstance?: SessionSourceInstance
   /** Canonical provider package metadata. backup.jsonl remains absent for this path. */
   canonicalProvider?: CanonicalPackageDescriptor
+  /** Migrated capability hint. Runtime summaries always recompute this from live files. */
+  detailAvailability?: SessionDetailAvailability
 }
 
 export interface SessionOrigin {
@@ -896,6 +899,13 @@ export function parseSessionMeta(
     }
     if (meta.canonicalProvider !== undefined && !isCanonicalPackageDescriptor(meta.canonicalProvider)) {
       warn('[library-manager] Ignoring invalid session metadata: malformed canonicalProvider')
+      return null
+    }
+    if (meta.detailAvailability !== undefined &&
+      !['ready', 'transcript-only', 'source-recoverable', 'unavailable'].includes(
+        meta.detailAvailability as string
+      )) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed detailAvailability')
       return null
     }
     return parsed as SessionMeta
@@ -1688,6 +1698,51 @@ export function scanLibrary(): LibraryTree {
   return tree
 }
 
+function sessionsFromLibraryTree(tree: LibraryTree): LibrarySession[] {
+  const sessions: LibrarySession[] = [...tree.ungroupedSessions]
+  const visit = (folder: LibraryFolder): void => {
+    sessions.push(...folder.sessions)
+    folder.children.forEach(visit)
+  }
+  tree.folders.forEach(visit)
+  return sessions
+}
+
+/**
+ * One-time schema-v2 repair for packages that retained a Markdown transcript
+ * but lost their JSONL backup. The live file check remains authoritative; the
+ * persisted field lets older packages advertise the capability to other Swob
+ * installations before they have been reparsed.
+ */
+export async function migrateLegacyDetailAvailability(tree: LibraryTree): Promise<number> {
+  if (_readOnly) return 0
+  const candidates = sessionsFromLibraryTree(tree).filter((session) =>
+    !session.isSymlink &&
+    session.meta.schemaVersion === 2 &&
+    session.meta.detailAvailability === undefined &&
+    resolveLibraryDetailAvailability(session) === 'transcript-only'
+  )
+  if (candidates.length === 0) return 0
+
+  return withLibraryWriter('metadata', () => {
+    let migrated = 0
+    for (const session of candidates) {
+      try {
+        const current = readSessionMeta(session.dirPath)
+        if (!current || current.schemaVersion !== 2 || current.detailAvailability !== undefined) continue
+        requireWritableSessionDir(current.sessionId, session.dirPath)
+        current.detailAvailability = 'transcript-only'
+        writeSessionMeta(session.dirPath, current)
+        migrated++
+      } catch {
+        // Identity conflicts and concurrent package changes are intentionally
+        // skipped; a later authoritative scan can retry without guessing.
+      }
+    }
+    return migrated
+  })
+}
+
 /** Apply a tree scanned by the Library worker without rereading every meta file. */
 export function applyLibraryTree(tree: LibraryTree): boolean {
   if (path.resolve(tree.root) !== path.resolve(_root)) return false
@@ -1786,6 +1841,21 @@ function refreshSessionRegistryFromDisk(): LibraryIdentityScanIssue[] {
  * Build a lightweight renderer summary from the manifest only. This keeps a
  * remote session discoverable while backup.jsonl is still an iCloud placeholder.
  */
+export function resolveLibraryDetailAvailability(session: LibrarySession): SessionDetailAvailability {
+  if (backupStateForDir(session.dirPath) === 'ready') return 'ready'
+  try {
+    if (fs.statSync(session.mdPath).isFile()) return 'transcript-only'
+  } catch { /* no readable transcript */ }
+  if ((sourceFilePathsFromMeta(session.meta) || []).some((sourcePath) => {
+    try {
+      return fs.statSync(sourceStatPath(sourcePath)).isFile()
+    } catch {
+      return false
+    }
+  })) return 'source-recoverable'
+  return 'unavailable'
+}
+
 export function buildSessionSummaryFromManifest(session: LibrarySession): SessionSummary {
   const { meta } = session
   if (meta.canonicalProvider) {
@@ -1807,7 +1877,8 @@ export function buildSessionSummaryFromManifest(session: LibrarySession): Sessio
         libraryDirPath: session.dirPath,
         libraryMdPath: fs.existsSync(session.mdPath) ? session.mdPath : undefined,
         cloudBackupState: 'ready',
-        isManifestOnly: false
+        isManifestOnly: false,
+        detailAvailability: 'ready'
       }
     }
   }
@@ -1853,6 +1924,7 @@ export function buildSessionSummaryFromManifest(session: LibrarySession): Sessio
     source,
     models: [],
     isManifestOnly: true,
+    detailAvailability: resolveLibraryDetailAvailability(session),
     cloudBackupState: backupState
   }
 }

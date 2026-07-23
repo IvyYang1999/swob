@@ -466,11 +466,11 @@ export const useStore = create<AppState>((set, get) => ({
         const detail = await window.api.loadSessionDetail(
           u.filePath, u.allFilePaths, u.branchParentFilePaths, u.branchPointUuid, u.branchLeafUuid
         )
-        set({ selectedSession: detail as SessionDetail | null })
+        set({ selectedSession: detail as unknown as SessionDetail | null })
         // Library transcript is auto-updated by main process file watcher
         if (detail) {
           try {
-            const mdPath = await window.api.libraryGetMdPath((detail as SessionDetail).sessionId)
+            const mdPath = await window.api.libraryGetMdPath((detail as unknown as SessionDetail).sessionId)
             set({ selectedSessionMdPath: mdPath })
           } catch { /* ignore */ }
         }
@@ -565,10 +565,10 @@ export const useStore = create<AppState>((set, get) => ({
         d.remoteHost = summary.remoteHost
       }
     }
-    set({ selectedSession: detail as SessionDetail | null, selectedUniqueId: uniqueId || null })
+    set({ selectedSession: detail as unknown as SessionDetail | null, selectedUniqueId: uniqueId || null })
     // Get library markdown path for drag
     if (detail) {
-      const d = detail as SessionDetail
+      const d = detail as unknown as SessionDetail
       try {
         const mdPath = await window.api.libraryGetMdPath(d.sessionId)
         set({ selectedSessionMdPath: mdPath })

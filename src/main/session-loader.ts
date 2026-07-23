@@ -6,6 +6,7 @@ import type {
   ParsedMessage,
   SessionSummary,
   SessionDetail,
+  SessionDetailLoadResult,
   ToolCallInfo,
   SkillInvocation,
   ContentPart,
@@ -2438,4 +2439,45 @@ export async function loadSessionDetail(
   }
 
   return sanitizeSessionDetail(detail)
+}
+
+/**
+ * IPC-facing detail loader. Transcript candidates must already have passed the
+ * main-process path capability check before entering this function.
+ */
+export async function loadSessionDetailWithFallback(
+  filePath: string,
+  allFilePaths?: string[],
+  branchParentFilePaths?: string[],
+  branchPointUuid?: string,
+  branchLeafUuid?: string,
+  transcriptFilePaths: string[] = []
+): Promise<SessionDetailLoadResult> {
+  let failed = false
+  try {
+    const detail = await loadSessionDetail(
+      filePath,
+      allFilePaths,
+      branchParentFilePaths,
+      branchPointUuid,
+      branchLeafUuid
+    )
+    if (detail) return { ...detail, fallback: null }
+  } catch (error) {
+    failed = (error as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
+
+  for (const transcriptPath of transcriptFilePaths) {
+    try {
+      const transcriptMarkdown = fs.readFileSync(transcriptPath, 'utf-8')
+      if (transcriptMarkdown.trim()) {
+        return { fallback: 'transcript', transcriptMarkdown }
+      }
+    } catch { /* try the next package-local transcript */ }
+  }
+
+  return {
+    fallback: null,
+    error: failed ? 'DETAIL_LOAD_FAILED' : 'DETAIL_UNAVAILABLE'
+  }
 }

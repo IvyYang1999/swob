@@ -800,6 +800,7 @@ describe('Library-only sessions（跨设备同步）', () => {
       firstUserMessage: '云端正在下载的会话',
       resumeCwd: '/Users/remote/work/swob-niw alpha',
       isManifestOnly: true,
+      detailAvailability: 'unavailable',
       cloudBackupState: 'missing'
     })
     expect(lib.getSessionResumeAvailability(sessionId)).toMatchObject({
@@ -808,6 +809,34 @@ describe('Library-only sessions（跨设备同步）', () => {
       sourcePath
     })
     expect(lib.isSessionCloudOnly(sessionId)).toBe(true)
+  })
+
+  it('schema v2 旧包只有 transcript 时标记并迁移为 transcript-only', async () => {
+    const sessionId = 'manifest-transcript-only-999'
+    const sessionDir = path.join(tmpRoot, '只有 transcript 的旧包')
+    writeSessionMeta(sessionDir, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: [],
+      createdAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-22T00:01:00Z',
+      projectPath: '/missing/project',
+      turnCount: 22
+    })
+    fs.writeFileSync(path.join(sessionDir, 'transcript.md'), '# 可读转录\n\n正文', 'utf-8')
+
+    const tree = lib.scanLibrary()
+    const manifestSession = tree.ungroupedSessions.find((session) => session.sessionId === sessionId)
+    expect(manifestSession).toBeDefined()
+    expect(lib.buildSessionSummaryFromManifest(manifestSession!)).toMatchObject({
+      turnCount: 22,
+      detailAvailability: 'transcript-only'
+    })
+
+    expect(await lib.migrateLegacyDetailAvailability(tree)).toBe(1)
+    expect(JSON.parse(fs.readFileSync(path.join(sessionDir, '.swob-session.json'), 'utf-8')))
+      .toMatchObject({ detailAvailability: 'transcript-only' })
+    expect(await lib.migrateLegacyDetailAvailability(lib.scanLibrary())).toBe(0)
   })
 
   it('manifest 已落地但 backup 是 iCloud placeholder 时返回等待下载原因', () => {

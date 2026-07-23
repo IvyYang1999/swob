@@ -22,6 +22,7 @@ import { getLocalNetworkInfo, queryPublicIp } from './network-info'
 import {
   loadAllSessions,
   loadSessionDetail,
+  loadSessionDetailWithFallback,
   findAllSessionFiles,
   findClaudeSessionFiles,
   buildSessionSummaryFromBackup
@@ -79,6 +80,7 @@ import {
   setExcludedSources,
   completeOnboarding,
   getDefaultLibraryRoot,
+  migrateLegacyDetailAvailability,
   applyLibraryOrganization,
   undoLastLibraryOrganization,
   recoverInterruptedLibraryOrganization,
@@ -127,7 +129,7 @@ import {
 } from './vault-organizer'
 import { requestSmartOrganization } from './smart-organizer'
 import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
-import { toRendererSessionDetail } from './renderer-session-detail'
+import { toRendererSessionDetail, toRendererSessionDetailLoadResult } from './renderer-session-detail'
 import { assertPathWithinAllowedRoots, resolvePathWithinRoot } from './path-containment'
 import { onboardingBackupSizeEstimator } from './onboarding-backup-size'
 import {
@@ -401,6 +403,7 @@ function annotateSessionForFrontend(session: SessionSummary, dirPath?: string | 
     session.libraryDirPath = resolvedDir
     session.libraryMdPath = getSessionMdPath(session.sessionId) || session.libraryMdPath
   }
+  if (!session.detailAvailability) session.detailAvailability = 'ready'
 
   const resumeAvailability = getSessionResumeAvailability(session.sessionId, session)
   session.canResume = resumeAvailability.canResume
@@ -1057,7 +1060,10 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
 
 async function initializeLibraryScanInBackground(): Promise<void> {
   try {
-    const tree = await requestLibraryScan()
+    let tree = await requestLibraryScan()
+    if (await migrateLegacyDetailAvailability(tree) > 0) {
+      tree = await requestLibraryScan()
+    }
     transcriptWatcher?.start()
     if (cachedSessions.length > 0) void hydrateLibrarySessions(tree)
   } catch (error) {
@@ -1119,6 +1125,9 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
       if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
     }
 
+    if (await migrateLegacyDetailAvailability(tree) > 0) {
+      tree = await requestLibraryScan(false)
+    }
     libraryInitialized = true
     if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
     await hydrateLibrarySessions(tree)
@@ -1342,6 +1351,7 @@ ipcMain.handle('sessions:loadAll', async () => {
   // Phase 1 only: return source summaries immediately. Library annotation and
   // cross-device backups arrive through sessions:libraryPatch after worker scan.
   for (const s of sessions) {
+    s.detailAvailability = 'ready'
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
     for (const continuationId of s.continuationSessionIds || []) {
@@ -1380,11 +1390,27 @@ ipcMain.handle(
     const safeFilePath = assertSessionSourcePath(filePath)
     const safeAllPaths = allFilePaths?.map(assertSessionSourcePath)
     const safeParentPaths = branchParentFilePaths?.map(assertSessionSourcePath)
-    const detail = await loadSessionDetail(safeFilePath, safeAllPaths, safeParentPaths, branchPointUuid, branchLeafUuid)
+    const transcriptPaths = [...new Set([safeFilePath, ...(safeAllPaths || [])]
+      .map((candidate) => path.join(path.dirname(candidate), 'transcript.md')))]
+      .flatMap((candidate) => {
+        try {
+          return [assertSessionSourcePath(candidate)]
+        } catch {
+          return []
+        }
+      })
+    const detail = await loadSessionDetailWithFallback(
+      safeFilePath,
+      safeAllPaths,
+      safeParentPaths,
+      branchPointUuid,
+      branchLeafUuid,
+      transcriptPaths
+    )
     // Electron's structured clone of thousands of nested message objects can
     // monopolize the renderer thread. One JSON string crosses IPC cheaply; the
     // preload restores the existing object-shaped API in a single parse.
-    return JSON.stringify(toRendererSessionDetail(detail))
+    return JSON.stringify(toRendererSessionDetailLoadResult(detail))
   }
 )
 
@@ -2457,6 +2483,9 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     saveLibraryConfig(loadLibraryConfig())
   }
   if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
+  if (await migrateLegacyDetailAvailability(tree) > 0) {
+    tree = await requestLibraryScan()
+  }
   await hydrateLibrarySessions(tree)
   return getLibraryRoot()
 }
@@ -2659,7 +2688,18 @@ function isCliInstalled(): boolean {
   return fs.existsSync(SWOB_APP_CLI_PATH)
 }
 
-function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath: string | null; cliManualInstall?: string; error?: string } {
+function installCli(options: {
+  allowShellRcUpdate?: boolean
+  allowAuthorization?: boolean
+} = {}): {
+  cliInstalled: boolean
+  skillInstalled: boolean
+  cliPath: string | null
+  cliManualInstall?: string
+  cliVerified?: boolean
+  shellRcUpdated?: boolean
+  error?: string
+} {
   if (!getPlatformCapabilities().features.cliInstall) {
     return {
       cliInstalled: false,
@@ -2669,7 +2709,12 @@ function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath
     }
   }
   const home = runtimeHome()
-  const cliInstall = installSwobCli({ homeDir: home || undefined })
+  const cliInstall = installSwobCli({
+    homeDir: home || undefined,
+    expectedVersion: app.getVersion(),
+    allowShellRcUpdate: options.allowShellRcUpdate,
+    allowAuthorization: options.allowAuthorization
+  })
 
   // 2. Install skill
   const skillDir = join(home, '.claude', 'skills', 'swob')
@@ -2681,7 +2726,10 @@ function installCli(): { cliInstalled: boolean; skillInstalled: boolean; cliPath
     cliInstalled: cliInstall.cliInstalled,
     skillInstalled: true,
     cliPath: cliInstall.cliPath,
-    cliManualInstall: cliInstall.cliManualInstall ?? undefined
+    cliManualInstall: cliInstall.cliManualInstall ?? undefined,
+    cliVerified: cliInstall.cliVerified,
+    shellRcUpdated: cliInstall.shellRcUpdated,
+    error: cliInstall.error
   }
 }
 
@@ -2695,7 +2743,7 @@ function autoInstallCliOnStartup(): void {
 
 ipcMain.handle('cli:getStatus', () => {
   const installed = isCliInstalled()
-  const commandPath = findInstalledSwobCommandPath()
+  const commandPath = findInstalledSwobCommandPath({ expectedVersion: app.getVersion() })
   const skillPath = join(runtimeHome(), '.claude', 'skills', 'swob', 'SKILL.md')
   const skillExists = fs.existsSync(skillPath)
   return {
@@ -2709,7 +2757,7 @@ ipcMain.handle('cli:getStatus', () => {
 })
 
 ipcMain.handle('cli:install', () => {
-  return installCli()
+  return installCli({ allowShellRcUpdate: true, allowAuthorization: true })
 })
 
 // --- App Lifecycle ---

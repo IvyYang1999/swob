@@ -137,6 +137,12 @@ export interface SessionProviderOutcome {
   reason?: string
 }
 
+export type SessionDetailAvailability =
+  | 'ready'
+  | 'transcript-only'
+  | 'source-recoverable'
+  | 'unavailable'
+
 export interface SessionSummary {
   id: string
   sessionId: string
@@ -193,6 +199,8 @@ export interface SessionSummary {
   sshResumeWarning?: string
   /** True when the summary was built from .swob-session.json without parsing backup.jsonl. */
   isManifestOnly?: boolean
+  /** Live detail capability. A non-zero turn count alone never promises readable detail. */
+  detailAvailability?: SessionDetailAvailability
   cloudBackupState?: 'ready' | 'icloud-placeholder' | 'missing'
   isRemote?: boolean
   remoteHost?: string  // hostname of the device that created this session (e.g. "macbooka.local")
@@ -216,6 +224,30 @@ export type FileAction = 'read' | 'write' | 'edit' | 'user-image' | 'user-input'
 export interface SessionDetail extends SessionSummary {
   messages: ParsedMessage[]
 }
+
+export type SessionDetailLoadError = 'DETAIL_UNAVAILABLE' | 'DETAIL_LOAD_FAILED'
+
+/**
+ * The ready branch intentionally preserves the historical SessionDetail
+ * shape. Existing consumers keep working while newer renderers handle the
+ * explicit transcript/error branches.
+ */
+export type SessionDetailLoadResult =
+  | (SessionDetail & {
+      fallback: null
+      error?: never
+      transcriptMarkdown?: never
+    })
+  | {
+      fallback: 'transcript'
+      transcriptMarkdown: string
+      error?: never
+    }
+  | {
+      fallback: null
+      error: SessionDetailLoadError
+      transcriptMarkdown?: never
+    }
 
 export interface Folder {
   id: string

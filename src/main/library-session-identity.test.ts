@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildCanonicalLogicalSessionIdentity,
   buildLogicalSessionIdentityFromMeta,
   buildLogicalSessionIdentityFromSummary,
   logicalSessionKey
@@ -11,6 +12,17 @@ function summary(sessionId: string, filePath: string, source?: any): any {
 }
 
 describe('LogicalSessionKey', () => {
+  it('keys canonical providers by provider, stable source, and canonical session without leaking locators', () => {
+    const original = buildCanonicalLogicalSessionIdentity('swob/pi', 'pi:stable-source', 'session-one')
+    const afterMove = buildCanonicalLogicalSessionIdentity('swob/pi', 'pi:stable-source', 'session-one')
+    const anotherSession = buildCanonicalLogicalSessionIdentity('swob/pi', 'pi:stable-source', 'session-two')
+    const anotherProvider = buildCanonicalLogicalSessionIdentity('swob/hermes', 'pi:stable-source', 'session-one')
+
+    expect(logicalSessionKey(afterMove)).toBe(logicalSessionKey(original))
+    expect(new Set([original, anotherSession, anotherProvider].map(logicalSessionKey)).size).toBe(3)
+    expect(JSON.stringify(original)).not.toContain('/Users/')
+  })
+
   it('normalizes named Claude instances without persisting home paths or usernames', () => {
     const first = buildLogicalSessionIdentityFromSummary(summary(
       'same-session',

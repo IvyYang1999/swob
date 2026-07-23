@@ -22,10 +22,12 @@ export const LEGACY_SESSION_SOURCES = [
 
 export type LegacySessionSource = typeof LEGACY_SESSION_SOURCES[number]
 export type BuiltinProviderTier = 'native' | 'compatible' | 'detection-only'
+export type BuiltinProviderIngestion = 'legacy-loader' | 'provider-host' | 'detection-only'
 
 export interface BuiltinProviderDefinition {
   sourceId: LegacySessionSource
   tier: BuiltinProviderTier
+  ingestion: BuiltinProviderIngestion
   manifest: ProviderManifest
 }
 
@@ -144,16 +146,41 @@ function detectionOnlyCapabilities(source: LegacySessionSource): ProviderCapabil
   }
 }
 
+function piCanonicalCapabilities(): ProviderCapabilities {
+  const provider = implementation('src/main/providers/pi-provider.ts')
+  const host = implementation('src/main/provider-host.ts')
+  const canonicalStore = implementation('src/main/canonical-store.ts')
+  const fixture = test('src/main/provider-runtime.test.ts', 'Synthetic Pi full-chain fixture.')
+  return {
+    discover: available(provider, host, fixture),
+    summary: available(provider, canonicalStore, fixture),
+    transcript: available(provider, canonicalStore, fixture),
+    tools: available(provider, fixture),
+    thinking: available(provider, fixture),
+    usage: available(provider, fixture),
+    relationships: available(provider, fixture),
+    subagents: unavailable('The Pi parent/branch relation is parsed; a verified spawned-child fixture is not yet available.', provider),
+    'live-watch': unavailable('Pi is refreshed by provider discovery; no dedicated live watcher is registered.', watcher),
+    search: available(searchIndex, canonicalStore, fixture),
+    archive: available(archive, canonicalStore, fixture),
+    'terminal-resume': experimental('The Pi CLI resume mapping is inferred and has no source-level resume audit.', resume),
+    'native-resume': notApplicable('Pi exposes no verified native per-session entry point.', resume),
+    'format-provenance': available(provider, canonicalStore, fixture)
+  }
+}
+
 function definition(
   sourceId: LegacySessionSource,
   displayName: string,
   tier: BuiltinProviderTier,
   capabilities: ProviderCapabilities,
-  formatVersions: string[] = []
+  formatVersions: string[] = [],
+  ingestion: BuiltinProviderIngestion = tier === 'detection-only' ? 'detection-only' : 'legacy-loader'
 ): BuiltinProviderDefinition {
   return {
     sourceId,
     tier,
+    ingestion,
     manifest: {
       schemaVersion: 1,
       providerId: `swob/${sourceId}`,
@@ -263,7 +290,10 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
 
   definition('antigravity', 'Antigravity', 'detection-only', detectionOnlyCapabilities('antigravity')),
   definition('grok', 'Grok / Factory', 'detection-only', detectionOnlyCapabilities('grok')),
-  definition('pi', 'Pi', 'detection-only', detectionOnlyCapabilities('pi')),
+  definition('pi', 'Pi', 'native', piCanonicalCapabilities(), [
+    'pi-jsonl-v1',
+    'pi-jsonl-v3'
+  ], 'provider-host'),
   definition('kimi', 'Kimi Code', 'detection-only', detectionOnlyCapabilities('kimi')),
   definition('hermes', 'Hermes', 'detection-only', detectionOnlyCapabilities('hermes'))
 ] as const
@@ -286,6 +316,10 @@ export function builtinProviderForSource(source: string): BuiltinProviderDefinit
 
 export function builtinProviderForId(providerId: string): BuiltinProviderDefinition | undefined {
   return definitionsByProvider.get(providerId)
+}
+
+export function providerUsesCanonicalRuntime(source: string): boolean {
+  return builtinProviderForSource(source)?.ingestion === 'provider-host'
 }
 
 export function providerCapabilitiesForSource(source: string): ProviderCapabilities | undefined {

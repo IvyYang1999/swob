@@ -5,16 +5,17 @@ import {
   builtinProviderForId,
   builtinProviderForSource,
   currentProviderCapabilitySnapshot,
-  providerCanParseTranscript
+  providerCanParseTranscript,
+  providerUsesCanonicalRuntime
 } from './provider-capabilities'
 import { validateProviderManifest } from './provider-protocol'
 
 describe('current provider capability truth', () => {
-  it('locks 5 native + 1 compatible + 5 detection-only sources', () => {
+  it('locks 6 native + 1 compatible + 4 detection-only sources', () => {
     expect(LEGACY_SESSION_SOURCES).toHaveLength(11)
-    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'native')).toHaveLength(5)
+    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'native')).toHaveLength(6)
     expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'compatible')).toHaveLength(1)
-    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'detection-only')).toHaveLength(5)
+    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'detection-only')).toHaveLength(4)
     expect(new Set(BUILTIN_PROVIDER_DEFINITIONS.map((entry) => entry.manifest.providerId)).size).toBe(11)
   })
 
@@ -45,7 +46,7 @@ describe('current provider capability truth', () => {
   it('transcript-capable count comes from capabilities, not the 11-source discovery count', () => {
     expect(LEGACY_SESSION_SOURCES).toHaveLength(11)
     expect(LEGACY_SESSION_SOURCES.filter(providerCanParseTranscript)).toEqual([
-      'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror'
+      'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'pi'
     ])
   })
 
@@ -54,5 +55,7 @@ describe('current provider capability truth', () => {
     expect(builtinProviderForId('swob/codex')?.sourceId).toBe('codex')
     expect(builtinProviderForId('example/sqlite-agent')).toBeUndefined()
     expect(currentProviderCapabilitySnapshot()).toHaveLength(11)
+    expect(providerUsesCanonicalRuntime('pi')).toBe(true)
+    expect(providerUsesCanonicalRuntime('claude-code')).toBe(false)
   })
 })

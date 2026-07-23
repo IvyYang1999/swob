@@ -39,7 +39,7 @@ const providers = [...providerSource.matchAll(definitionPattern)].map((match) =>
   tier: match[3]
 }))
 
-for (const [tier, expected] of [['native', 5], ['compatible', 1], ['detection-only', 5]]) {
+for (const [tier, expected] of [['native', 6], ['compatible', 1], ['detection-only', 4]]) {
   const actual = providers.filter((provider) => provider.tier === tier).length
   if (actual !== expected) {
     errors.push(`provider registry tier ${tier}: expected ${expected}, found ${actual}`)
@@ -74,6 +74,10 @@ for (const file of ['site/index.html', 'site/zh/index.html']) {
 
 const forbidden = [
   [/\b11[- ]harness(?:es)?\b/i, 'must not market 11 harnesses as one ingestion tier'],
+  [/\bnatively reads?\s+5\s+harness(?:es)?\b/i, 'current main has 6 native providers, not 5'],
+  [/原生读取\s*5\s*种\s*harness|5\s*種の harness をネイティブ/i, 'current main has 6 native providers, not 5'],
+  [/\bexperimentally detects? files from 5\b/i, 'current main has 4 detection-only providers, not 5'],
+  [/5\s*种实验性文件检测|5\s*種を実験的にファイル検出/, 'current main has 4 detection-only providers, not 5'],
   [/search(?:es|ing)?[^.\n]{0,80}\b11\b[^.\n]{0,40}(?:harness|source)/i, 'must not claim search across 11 sources'],
   [/检索[^。\n]{0,60}11\s*类|11\s*类[^。\n]{0,60}(?:导入|检索|历史)/, 'must not claim 11 readable Chinese sources'],
   [/11\s*種類[^。\n]{0,60}(?:取り込み|検索|履歴)/, 'must not claim 11 readable Japanese sources'],

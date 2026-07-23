@@ -322,13 +322,16 @@ describe('Claude session discovery', () => {
     expect(cc?.firstUserMessage).toBe('CC Mirror 真实消息')
     expect(cc?.tokenAccounting?.billingTotal).toBe(15)
 
-    for (const source of ['antigravity', 'grok', 'pi', 'kimi', 'hermes'] as const) {
+    for (const source of ['antigravity', 'grok', 'kimi', 'hermes'] as const) {
       const summary = sessions.find((session) => session.source === source)
       expect(summary, source).toBeDefined()
       expect(summary?.tokenAccounting?.provider, source).toBe(source)
       expect(summary?.tokenAccounting?.provenance, source).toBe('unavailable')
       expect(summary?.tokenAccounting?.billingTotal, source).toBeNull()
     }
+    // Pi is now a native canonical provider. A blank JSONL has no verified Pi
+    // session header and must not fall back to the old synthetic placeholder.
+    expect(sessions.filter((session) => session.source === 'pi')).toHaveLength(0)
     expect(sessions.filter((session) => session.source === 'claude-code')).toHaveLength(0)
   })
 
@@ -905,6 +908,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(sessions.some((session) => session.sessionId === 'readonly-session')).toBe(true)
       expect(fs.existsSync(path.join(home, '.claude-session-manager', 'summary-cache.json'))).toBe(false)
+      expect(fs.existsSync(path.join(home, '.claude-session-manager', 'canonical.db'))).toBe(false)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }

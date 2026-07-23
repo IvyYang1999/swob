@@ -8,7 +8,7 @@
 
 **失われたコンテキストを復元し、fork と compact を追跡し、Agent が実際に何をしたかをデバッグします。**
 
-Swob は **5 個のネイティブ形式アダプター**と 1 個の Claude 互換形式でローカル履歴を解析します。ほかの 5 ソースは実験的なファイル検出のみで、メッセージ本文は読み取りません。ソースに証拠がある場合に限り、系譜、SQLite FTS5 増分検索、実行検査、provenance 付き監査、任意の AI Insights を提供します。
+Swob は **6 個のネイティブ形式アダプター**と 1 個の Claude 互換形式でローカル履歴を解析します。ほかの 4 ソースは実験的なファイル検出のみで、メッセージ本文は読み取りません。ソースに証拠がある場合に限り、系譜、SQLite FTS5 増分検索、実行検査、provenance 付き監査、任意の AI Insights を提供します。
 
 [Web サイト](https://ivyyang1999.github.io/swob/) · [検証済み Releases](https://github.com/IvyYang1999/swob/releases) · [更新履歴](CHANGELOG.md)
 
@@ -48,7 +48,7 @@ Swob はセッション履歴を証拠として扱います。
 | **253 / 1,621** | ある実運用 Library の監査で、Claude Code の 253 セッションが既定の 30 日保持ポリシーにより元の保存先から消失していましたが、Swob のローカルバックアップには残っていました。 |
 | **93.58%** | 同じ 1,621 セッション・5 ソースの監査 corpus で確認できた再開可能率です。全環境への成功保証ではありません。 |
 | **1,704 sessions** | 新しい索引とダッシュボードの検証に使う現在のローカル性能/UI corpus です。 |
-| **5+1+5 ソース** | 現在の `main` は 5 種の harness をネイティブに読み取り、1 種の互換フォーマットに対応し、5 種を実験的にファイル検出します（ファイル発見のみ、コンテンツ読み取りは未実装）。 |
+| **6+1+4 ソース** | 現在の `main` は 6 種の harness をネイティブに読み取り、1 種の互換フォーマットに対応し、4 種を実験的にファイル検出します（ファイル発見のみ、コンテンツ読み取りは未実装）。 |
 
 ## Session Galaxy
 
@@ -77,7 +77,7 @@ Swob は transcript 表示だけではありません。
 
 ## 現在の `main` が読むソース
 
-### ネイティブ形式アダプター（5）— 本文解析は可能、その他の能力はソース別
+### ネイティブ形式アダプター（6）— 本文解析は可能、その他の能力はソース別
 
 | ソースファミリー | ステータス | 備考 |
 |---|---|---|
@@ -86,6 +86,7 @@ Swob は transcript 表示だけではありません。
 | Cursor | Native | 本文、live watch、terminal resume は利用可能。検索は実験的で、usage・系譜・native deep link は利用不可です。 |
 | OpenCode | Native | 本文、usage、archive、terminal resume は利用可能。検索は実験的で、live watch・系譜・native deep link は利用不可です。 |
 | ZCode | Native | 本文、usage、archive は利用可能。検索と workspace を開く deep link は実験的で、live watch と terminal resume は利用不可です。 |
+| Pi | Native | 本文、tool、thinking、usage、relationship、検索、archive は利用可能。live watch は利用不可で、terminal resume は実験的です。 |
 
 ### 互換フォーマット（1）
 
@@ -93,13 +94,12 @@ Swob は transcript 表示だけではありません。
 |---|---|---|
 | CC-Mirror | Compatible | Claude 互換の本文、検索、usage は利用可能。live watch と archive は利用不可で、terminal resume は実験的です。 |
 
-### 実験的検出（5）— ファイル発見のみ、コンテンツ読み取りは未実装
+### 実験的検出（4）— ファイル発見のみ、コンテンツ読み取りは未実装
 
 | ソースファミリー | ステータス | 備考 |
 |---|---|---|
 | Antigravity | Experimental | ローカル transcript ファイルを発見可能。 |
 | Grok / Factory | Experimental | JSONL 履歴ファイルを発見可能。 |
-| Pi | Experimental | ローカル session ファイルを発見可能。 |
 | Kimi Code | Experimental | ローカル `wire.jsonl` ファイルを発見可能。 |
 | Hermes | Experimental | ローカル JSON session ファイルを発見可能。 |
 
@@ -111,7 +111,7 @@ Swob は transcript 表示だけではありません。
 
 | 機能 | Swob 現在の `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
 |---|---|---|---|---|
-| ローカル multi-harness 履歴 | ✅ 5 ネイティブ + 1 互換 + 5 実験的検出 | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
+| ローカル multi-harness 履歴 | ✅ 6 ネイティブ + 1 互換 + 4 実験的検出 | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
 | 可視化 session lineage graph | ✅ 検証エッジ + grouping edge | ◐ Session Board、lineage ではない | — | ◐ child session 正規化、lineage graph の記載なし |
 | Compact 履歴復元 | ✅ Claude Code | — | — | — |
 | Execution tree / Agent call 分析 | ✅ | ◐ tool rendering | ◐ tool/output navigation | ◐ tool-call mix と child session |
@@ -182,7 +182,7 @@ CLI は JSON を返すため、他の Agent は UI をスクレイピングせ�
 | チャンネル | 内容 |
 |---|---|
 | **Stable v1.2.0** | 5 ソース閲覧、系譜検出/registry、compact 展開、検索、Token Insights、CLI、バックアップ/エクスポート、resume。公開 DMG は未署名。 |
-| **現在の `main` / 未公開** | multi-harness 取り込み（5 ネイティブ + 1 互換 + 5 実験的検出）、Session Galaxy、Execution Tree、Context Inspector、Session Audit、任意 AI Insights、SQLite FTS5、watcher/worker 性能改善。現在はソースビルド。 |
+| **現在の `main` / 未公開** | multi-harness 取り込み（6 ネイティブ + 1 互換 + 4 実験的検出）、Session Galaxy、Execution Tree、Context Inspector、Session Audit、任意 AI Insights、SQLite FTS5、watcher/worker 性能改善。現在はソースビルド。 |
 
 ## 技術スタック
 

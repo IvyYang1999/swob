@@ -43,6 +43,16 @@ import {
   stripTerminalControlSequences,
   stripTerminalControlSequencesDeep
 } from '../shared/chat-format'
+import { refreshCanonicalProviders } from './provider-runtime'
+import { getCanonicalSessionStore } from './canonical-store'
+import { canonicalRecordsToSessionDetail, canonicalRecordsToSessionSummary } from './canonical-projection'
+import { isCanonicalRecordsPath, readCanonicalPackageRecords } from './canonical-package'
+import {
+  BUILTIN_PROVIDER_DEFINITIONS,
+  builtinProviderForId,
+  builtinProviderForSource,
+  providerUsesCanonicalRuntime
+} from '../shared/provider-capabilities'
 
 const HOME = runtimeHome()
 
@@ -1511,6 +1521,16 @@ export async function buildSessionSummaryFromBackup(
   sessionIdOverride: string,
   meta?: BackupSummaryMeta
 ): Promise<SessionSummary | null> {
+  if (isCanonicalRecordsPath(backupPath)) {
+    const canonical = readCanonicalPackageRecords(backupPath)
+    const canonicalSource = canonical ? builtinProviderForId(canonical.providerId)?.sourceId : undefined
+    if (!canonical || !canonicalSource) return null
+    return canonicalRecordsToSessionSummary(canonical.records, {
+      filePath: backupPath,
+      source: canonicalSource,
+      fileSizeBytes: fs.statSync(backupPath).size
+    })
+  }
   const source = detectSessionSourceForJsonl(backupPath, meta?.sourceFilePaths || [])
   if (source === 'codex') return buildCodexSessionSummaryFromBackup(backupPath, sessionIdOverride)
   if (source === 'cursor') return buildCursorSessionSummaryFromBackup(backupPath, sessionIdOverride)
@@ -1910,6 +1930,21 @@ export interface LoadAllSessionsOptions {
 
 export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
   const startedAt = Date.now()
+  // Audit/CLI callers rely on this entry point being physically read-only.
+  // Opening the canonical store can create/migrate SQLite even when no Pi
+  // source exists, so the provider runtime is intentionally excluded here.
+  const canonicalSources = BUILTIN_PROVIDER_DEFINITIONS
+    .filter((definition) => definition.ingestion === 'provider-host')
+    .filter((definition) => isSessionSourceSupported(definition.sourceId))
+  const includeCanonicalProviders = canonicalSources.length > 0 && !options.readOnly
+  if (includeCanonicalProviders) {
+    const refresh = await refreshCanonicalProviders()
+    for (const report of refresh.reports) {
+      for (const error of report.errors) {
+        console.warn(`[provider-host] ${report.providerId}: ${error.code}: ${error.message}`)
+      }
+    }
+  }
   const claudeFiles = isSessionSourceSupported('claude-code') ? findClaudeSessionFiles() : []
   const newSourceFiles = findNewSourceSessionFiles().filter((filePath) => {
     const source = detectSessionSourceFromPath(filePath)
@@ -1925,7 +1960,7 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
     ...newSourceFiles.flatMap((filePath) => {
       const source = detectSessionSourceFromPath(filePath)
       return source && source !== 'claude-code' && source !== 'codex' && source !== 'cursor' &&
-        source !== 'opencode' && source !== 'zcode'
+        source !== 'opencode' && source !== 'zcode' && !providerUsesCanonicalRuntime(source)
         ? [{ filePath, source }]
         : []
     }),
@@ -2161,6 +2196,18 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
   }
   summaries.push(...nonClaudeBySession.values())
 
+  if (includeCanonicalProviders) {
+    for (const stored of getCanonicalSessionStore().listSessions()) {
+      const definition = builtinProviderForId(stored.sessionRecord.provenance.providerId)
+      if (!definition || definition.ingestion !== 'provider-host' ||
+        !isSessionSourceSupported(definition.sourceId)) continue
+      summaries.push(canonicalRecordsToSessionSummary(stored.records, {
+        filePath: stored.sessionRecord.sourceRef.displayLocator,
+        source: definition.sourceId
+      }))
+    }
+  }
+
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   if (!options.readOnly) saveDiskCache(entries)
   if (!options.quiet) {
@@ -2201,8 +2248,28 @@ export async function loadSessionDetail(
   branchPointUuid?: string,
   branchLeafUuid?: string
 ): Promise<SessionDetail | null> {
+  if (isCanonicalRecordsPath(filePath)) {
+    const canonical = readCanonicalPackageRecords(filePath)
+    const canonicalSource = canonical ? builtinProviderForId(canonical.providerId)?.sourceId : undefined
+    return sanitizeSessionDetail(canonical && canonicalSource
+      ? canonicalRecordsToSessionDetail(canonical.records, {
+          filePath,
+          source: canonicalSource,
+          fileSizeBytes: fs.statSync(filePath).size
+        })
+      : null)
+  }
   // Dispatch to source-specific loaders
   const source = detectSessionSourceFromPath(filePath) || sniffSessionSourceFromJsonl(filePath)
+  const canonicalDefinition = source ? builtinProviderForSource(source) : undefined
+  if (source && canonicalDefinition?.ingestion === 'provider-host') {
+    await refreshCanonicalProviders()
+    const stored = getCanonicalSessionStore().listSessions(canonicalDefinition.manifest.providerId)
+      .find((session) => path.resolve(session.sessionRecord.sourceRef.displayLocator) === path.resolve(filePath))
+    return sanitizeSessionDetail(stored
+      ? canonicalRecordsToSessionDetail(stored.records, { filePath, source })
+      : null)
+  }
   if (source === 'codex') {
     return sanitizeSessionDetail(await buildCodexSessionDetail(filePath, readBackupSessionIdOverride(filePath)))
   }
@@ -2217,7 +2284,7 @@ export async function loadSessionDetail(
     if (path.basename(filePath) === 'backup.jsonl' && !sessionIdOverride) return null
     return sanitizeSessionDetail(await buildCursorSessionDetail(filePath, sessionIdOverride))
   }
-  if (source === 'antigravity' || source === 'grok' || source === 'pi' || source === 'kimi' || source === 'hermes') {
+  if (source === 'antigravity' || source === 'grok' || source === 'kimi' || source === 'hermes') {
     const summary = buildUnavailableSourceSummary(filePath, source, readBackupSessionIdOverride(filePath))
     return sanitizeSessionDetail(summary ? { ...summary, messages: [] } : null)
   }

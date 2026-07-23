@@ -8,7 +8,8 @@ import {
   type ProviderEnvelope,
   type ProviderError,
   type ProviderManifest,
-  type ProtocolHello
+  type ProtocolHello,
+  type SourceRef
 } from './provider-schema.generated'
 
 export interface ProviderSchemaIssue {
@@ -54,6 +55,7 @@ function schemaValidator<T>(definition: string): ValidateFunction<T> {
 
 const validateEnvelopeSchema = schemaValidator<ProviderEnvelope>('ProviderEnvelope')
 const validateManifestSchema = schemaValidator<ProviderManifest>('ProviderManifest')
+const validateSourceRefSchema = schemaValidator<SourceRef>('SourceRef')
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize)
@@ -390,6 +392,10 @@ export function validateProviderManifest(value: unknown): ProviderSchemaValidati
 
 export function validateProviderEnvelope(value: unknown): ProviderSchemaValidation<ProviderEnvelope> {
   return validateWithSchema(value, validateEnvelopeSchema)
+}
+
+export function validateProviderSourceRef(value: unknown): ProviderSchemaValidation<SourceRef> {
+  return validateWithSchema(value, validateSourceRefSchema)
 }
 
 export function decodeProviderEnvelope(input: string | Uint8Array): ProviderSchemaValidation<ProviderEnvelope> {

@@ -4,7 +4,7 @@ import type { SessionSource, SessionSummary } from './types'
 
 export const LOGICAL_SESSION_IDENTITY_SCHEMA_VERSION = 1 as const
 
-export type LogicalSourceFamily = SessionSource | 'legacy-ambiguous'
+export type LogicalSourceFamily = SessionSource | 'legacy-ambiguous' | `${string}/${string}`
 
 export type LogicalSourceInstance =
   | { kind: 'default'; id: 'default' }
@@ -44,6 +44,8 @@ const SOURCE_FAMILIES = new Set<LogicalSourceFamily>([
   'hermes',
   'legacy-ambiguous'
 ])
+
+const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/
 
 function stableNamedInstance(namespace: string, semanticName: string): LogicalSourceInstance {
   const digest = createHash('sha256')
@@ -184,6 +186,27 @@ export function legacyAmbiguousIdentity(sessionId: string): LogicalSessionIdenti
   }
 }
 
+/**
+ * Canonical providers identify a logical package without persisting an
+ * absolute source path. The stable source ref is hashed into the semantic
+ * instance while the namespaced provider id remains visible in the key.
+ */
+export function buildCanonicalLogicalSessionIdentity(
+  providerId: string,
+  sourceRefStableId: string,
+  canonicalSessionId: string
+): LogicalSessionIdentity {
+  if (!PROVIDER_ID_RE.test(providerId) || !sourceRefStableId || !canonicalSessionId) {
+    throw new Error('invalid-canonical-logical-session-identity')
+  }
+  return {
+    schemaVersion: LOGICAL_SESSION_IDENTITY_SCHEMA_VERSION,
+    sourceFamily: providerId as `${string}/${string}`,
+    sourceInstance: stableNamedInstance('provider-source', `${providerId}\0${sourceRefStableId}`),
+    sessionId: canonicalSessionId
+  }
+}
+
 export function buildLogicalSessionIdentityFromSummary(
   session: Pick<SessionSummary, 'sessionId' | 'filePath' | 'allFilePaths' | 'source'>
 ): LogicalSessionIdentity {
@@ -233,7 +256,8 @@ export function isValidLogicalSessionIdentity(value: unknown): value is LogicalS
   const identity = value as Record<string, unknown>
   if (identity.schemaVersion !== LOGICAL_SESSION_IDENTITY_SCHEMA_VERSION ||
     typeof identity.sessionId !== 'string' || identity.sessionId.length === 0 ||
-    typeof identity.sourceFamily !== 'string' || !SOURCE_FAMILIES.has(identity.sourceFamily as LogicalSourceFamily) ||
+    typeof identity.sourceFamily !== 'string' ||
+    (!SOURCE_FAMILIES.has(identity.sourceFamily as LogicalSourceFamily) && !PROVIDER_ID_RE.test(identity.sourceFamily)) ||
     !identity.sourceInstance || typeof identity.sourceInstance !== 'object' || Array.isArray(identity.sourceInstance)) {
     return false
   }

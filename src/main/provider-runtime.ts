@@ -1,0 +1,104 @@
+import { ProviderHost, type ProviderRunReport } from './provider-host'
+import {
+  getCanonicalSessionStore,
+  type CanonicalSessionStore
+} from './canonical-store'
+import { indexCanonicalSession, tombstoneCanonicalSession } from './search-index'
+
+export interface CanonicalProviderRefreshOptions {
+  host?: ProviderHost
+  store?: CanonicalSessionStore
+  archive?: boolean
+}
+
+export interface CanonicalProviderRefreshResult {
+  reports: ProviderRunReport[]
+  changedSessionRecordIds: string[]
+  tombstonedSessionRecordIds: string[]
+}
+
+let defaultHost: ProviderHost | null = null
+let refreshTail: Promise<CanonicalProviderRefreshResult> = Promise.resolve({
+  reports: [],
+  changedSessionRecordIds: [],
+  tombstonedSessionRecordIds: []
+})
+
+function getDefaultHost(): ProviderHost {
+  return defaultHost || (defaultHost = new ProviderHost())
+}
+
+async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<CanonicalProviderRefreshResult> {
+  const host = options.host || getDefaultHost()
+  const store = options.store || getCanonicalSessionStore()
+  const previousSources = new Map(host.manifests().map((manifest) => [
+    manifest.providerId,
+    store.sourceStates(manifest.providerId)
+  ]))
+  const reports = await host.runAll({ previousSources })
+  const changedSessionRecordIds: string[] = []
+  const tombstonedSessionRecordIds: string[] = []
+
+  for (const report of reports) {
+    for (const source of report.unchangedSources) {
+      store.rebindSource(source)
+      for (const sessionRecordId of store.sourceStates(report.providerId)
+        .find((state) => state.sourceRef.stableId === source.stableId)?.sessionRecordIds || []) {
+        const stored = store.getSession(sessionRecordId)
+        if (!stored || stored.tombstone) continue
+        await indexCanonicalSession(stored.sessionRecord.sourceSessionId, stored.records)
+        if (options.archive) {
+          const { ensureCanonicalPackage } = await import('./library-manager')
+          await ensureCanonicalPackage(report.providerId, stored.sessionRecord.sourceRef, stored.records)
+        }
+      }
+    }
+    for (const outcome of report.outcomes) {
+      store.applyParseOutcome(outcome)
+      for (const result of outcome.sessions) {
+        if (!result.sessionRecordId) continue
+        const stored = store.getSession(result.sessionRecordId)
+        if (!stored || stored.tombstone) continue
+        changedSessionRecordIds.push(result.sessionRecordId)
+        await indexCanonicalSession(stored.sessionRecord.sourceSessionId, stored.records)
+        if (options.archive) {
+          const { ensureCanonicalPackage } = await import('./library-manager')
+          await ensureCanonicalPackage(
+            report.providerId,
+            stored.sessionRecord.sourceRef,
+            stored.records
+          )
+        }
+      }
+      for (const tombstone of outcome.tombstones) {
+        tombstonedSessionRecordIds.push(tombstone.sessionRecordId)
+        await tombstoneCanonicalSession(tombstone.sessionRecordId)
+        const { markCanonicalPackageTombstone } = await import('./library-manager')
+        await markCanonicalPackageTombstone(
+          report.providerId,
+          tombstone.sourceRefId,
+          tombstone.sessionRecordId,
+          tombstone
+        ).catch(() => null)
+      }
+    }
+  }
+  return {
+    reports,
+    changedSessionRecordIds: [...new Set(changedSessionRecordIds)],
+    tombstonedSessionRecordIds: [...new Set(tombstonedSessionRecordIds)]
+  }
+}
+
+export function refreshCanonicalProviders(
+  options: CanonicalProviderRefreshOptions = {}
+): Promise<CanonicalProviderRefreshResult> {
+  if (options.host || options.store) return runRefresh(options)
+  const next = refreshTail.then(() => runRefresh(options), () => runRefresh(options))
+  refreshTail = next
+  return next
+}
+
+export function cancelCanonicalProviders(): void {
+  defaultHost?.cancelAll()
+}

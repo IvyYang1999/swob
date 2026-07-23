@@ -3,6 +3,13 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { parseSessionFile } from './session-loader'
 import type { RawJsonlMessage } from './types'
+import type {
+  CanonicalRecord,
+  MessageRecord,
+  SessionRecord,
+  ToolCallRecord,
+  ToolResultEvent
+} from '../shared/provider-schema.generated'
 import { runtimeHome } from './runtime-home'
 import {
   stripTerminalControlSequences,
@@ -10,7 +17,7 @@ import {
 } from '../shared/chat-format'
 
 // v4 rebuilds unchanged files so ANSI/CSI/OSC text cannot survive in old FTS rows.
-const SEARCH_SCHEMA_VERSION = 4
+const SEARCH_SCHEMA_VERSION = 5
 const SEARCH_DATABASE_BUSY_TIMEOUT_MS = 3_000
 
 export interface SearchIndexSource {
@@ -64,6 +71,7 @@ export interface TranscriptGrepResult {
 
 interface IndexedSessionRow {
   file_path: string
+  display_path: string
   session_id: string
   file_signature: string
   indexed_size: number
@@ -71,6 +79,7 @@ interface IndexedSessionRow {
   file_ino: number
   indexed_raw_count: number
   project_path: string
+  projection_kind: 'legacy' | 'canonical'
 }
 
 interface FileState {
@@ -82,7 +91,9 @@ interface FileState {
 
 interface SearchRow {
   session_id: string
+  index_key: string
   file_path: string
+  projection_kind: 'legacy' | 'canonical'
   first_user_message: string
   snippet: string
   timestamp: string
@@ -92,6 +103,7 @@ interface GrepRow {
   rowid: number
   session_id: string
   file_path: string
+  display_path: string
   source: string
   project_path: string
   role: string
@@ -154,6 +166,7 @@ function ensureSchema(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       file_path TEXT PRIMARY KEY,
+      display_path TEXT NOT NULL,
       session_id TEXT NOT NULL,
       source TEXT NOT NULL,
       project_path TEXT NOT NULL,
@@ -162,7 +175,8 @@ function ensureSchema(db: Database.Database): void {
       indexed_size INTEGER NOT NULL,
       file_dev INTEGER NOT NULL,
       file_ino INTEGER NOT NULL,
-      indexed_raw_count INTEGER NOT NULL
+      indexed_raw_count INTEGER NOT NULL,
+      projection_kind TEXT NOT NULL CHECK(projection_kind IN ('legacy', 'canonical'))
     );
     CREATE INDEX IF NOT EXISTS sessions_session_id_idx ON sessions(session_id);
 
@@ -321,11 +335,12 @@ function writeIndexedRawSource(
     if (!canAppend) db.prepare('DELETE FROM messages_fts WHERE file_path = ?').run(source.filePath)
     db.prepare(`
       INSERT INTO sessions(
-        file_path, session_id, source, project_path, file_signature, first_user_message,
-        indexed_size, file_dev, file_ino, indexed_raw_count
+        file_path, display_path, session_id, source, project_path, file_signature, first_user_message,
+        indexed_size, file_dev, file_ino, indexed_raw_count, projection_kind
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(file_path) DO UPDATE SET
+        display_path = excluded.display_path,
         session_id = excluded.session_id,
         source = excluded.source,
         project_path = excluded.project_path,
@@ -334,8 +349,10 @@ function writeIndexedRawSource(
         indexed_size = excluded.indexed_size,
         file_dev = excluded.file_dev,
         file_ino = excluded.file_ino,
-        indexed_raw_count = excluded.indexed_raw_count
+        indexed_raw_count = excluded.indexed_raw_count,
+        projection_kind = excluded.projection_kind
     `).run(
+      source.filePath,
       source.filePath,
       sessionId,
       source.source || (isLibraryBackup ? 'library-backup' : 'claude-code'),
@@ -345,7 +362,8 @@ function writeIndexedRawSource(
       state.size,
       state.dev,
       state.ino,
-      raw.length
+      raw.length,
+      'legacy'
     )
 
     const insertMessage = db.prepare(`
@@ -404,6 +422,112 @@ export async function indexParsedSearchSource(
   })
 }
 
+function canonicalIndexKey(sessionRecordId: string): string {
+  return `canonical:${sessionRecordId}`
+}
+
+function canonicalMessageText(message: MessageRecord, includeThinking: boolean): string {
+  return message.content.flatMap((content) => {
+    if (content.kind === 'text') return [content.text]
+    if (content.kind === 'thinking' && includeThinking) return [content.text]
+    if (content.kind === 'media-ref') return [content.uri]
+    return []
+  }).map(searchableValue).filter(Boolean).join('\n')
+}
+
+function canonicalSessionRecord(records: CanonicalRecord[]): SessionRecord {
+  const sessions = records.filter((record): record is SessionRecord => record.recordType === 'session')
+  if (sessions.length !== 1) throw new Error('canonical-search-requires-one-session-record')
+  return sessions[0]
+}
+
+export async function indexCanonicalSession(
+  sessionId: string,
+  records: CanonicalRecord[],
+  options: { includeThinking?: boolean } = {}
+): Promise<void> {
+  return serializeSynchronization(async () => {
+    const session = canonicalSessionRecord(records)
+    if (session.sourceSessionId !== sessionId) throw new Error('canonical-search-session-id-mismatch')
+    const includeThinking = options.includeThinking !== false
+    const indexKey = canonicalIndexKey(session.id)
+    const messages = records
+      .filter((record): record is MessageRecord => record.recordType === 'message')
+      .sort((left, right) => left.ordinal - right.ordinal)
+    const calls = records
+      .filter((record): record is ToolCallRecord => record.recordType === 'tool-call')
+      .sort((left, right) => left.ordinal - right.ordinal)
+    const results = records.filter((record): record is ToolResultEvent => record.recordType === 'tool-result')
+    const firstUser = messages.find((message) => message.role === 'user')
+    const firstUserText = firstUser ? canonicalMessageText(firstUser, false).slice(0, 200) : ''
+    const searchableRows: Array<{ role: string; text: string; timestamp: string }> = []
+    for (const message of messages) {
+      const text = canonicalMessageText(message, includeThinking)
+      if (text) searchableRows.push({ role: message.role, text, timestamp: message.timestamp || '' })
+    }
+    for (const call of calls) {
+      searchableRows.push({
+        role: 'tool-call',
+        text: [searchableValue(call.name), searchableValue(call.input)].filter(Boolean).join('\n'),
+        timestamp: ''
+      })
+    }
+    for (const result of results) {
+      const text = searchableValue(result.content)
+      if (text) searchableRows.push({ role: 'tool-result', text, timestamp: result.timestamp || '' })
+    }
+    const encodedSize = Buffer.byteLength(JSON.stringify(records), 'utf8')
+    const db = getDatabase()
+    const write = db.transaction(() => {
+      db.prepare('DELETE FROM messages_fts WHERE file_path = ?').run(indexKey)
+      db.prepare(`
+        INSERT INTO sessions(
+          file_path, display_path, session_id, source, project_path, file_signature,
+          first_user_message, indexed_size, file_dev, file_ino, indexed_raw_count, projection_kind
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 'canonical')
+        ON CONFLICT(file_path) DO UPDATE SET
+          display_path = excluded.display_path,
+          session_id = excluded.session_id,
+          source = excluded.source,
+          project_path = excluded.project_path,
+          file_signature = excluded.file_signature,
+          first_user_message = excluded.first_user_message,
+          indexed_size = excluded.indexed_size,
+          file_dev = 0,
+          file_ino = 0,
+          indexed_raw_count = excluded.indexed_raw_count,
+          projection_kind = 'canonical'
+      `).run(
+        indexKey,
+        session.sourceRef.displayLocator,
+        session.sourceSessionId,
+        session.provenance.providerId,
+        session.projectPath || session.cwd[0] || '',
+        session.sourceRef.fingerprint.value,
+        firstUserText,
+        encodedSize,
+        records.length
+      )
+      const insert = db.prepare(`
+        INSERT INTO messages_fts(session_id, file_path, role, text, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      for (const row of searchableRows) {
+        insert.run(session.sourceSessionId, indexKey, row.role, row.text, row.timestamp)
+      }
+      db.prepare('DELETE FROM library_backup WHERE backup_path = ?').run(indexKey)
+    })
+    write()
+    invalidateQueryCache()
+  })
+}
+
+export async function tombstoneCanonicalSession(sessionRecordId: string): Promise<void> {
+  return serializeSynchronization(async () => {
+    removeIndexedFile(getDatabase(), canonicalIndexKey(sessionRecordId))
+  })
+}
+
 export async function synchronizeSearchSources(
   sources: SearchIndexSource[],
   options: { prune?: boolean } = { prune: true }
@@ -420,7 +544,9 @@ export async function synchronizeSearchSources(
     if (options.prune !== false) {
       const db = getDatabase()
       const livePaths = new Set(uniqueSources.keys())
-      const indexed = db.prepare('SELECT file_path, file_signature FROM sessions').all() as IndexedSessionRow[]
+      const indexed = db.prepare(
+        "SELECT file_path, file_signature FROM sessions WHERE projection_kind = 'legacy'"
+      ).all() as IndexedSessionRow[]
       for (const row of indexed) {
         if (!livePaths.has(row.file_path)) removeIndexedFile(db, row.file_path)
       }
@@ -449,7 +575,9 @@ export function searchFTS(query: string, limit = 50): SearchIndexResult[] {
   const rows = db.prepare(`
     SELECT
       sessions.session_id,
-      sessions.file_path,
+      sessions.file_path AS index_key,
+      sessions.display_path AS file_path,
+      sessions.projection_kind,
       sessions.first_user_message,
       snippet(messages_fts, 3, '', '', '...', 32) AS snippet,
       messages_fts.timestamp AS timestamp
@@ -462,7 +590,10 @@ export function searchFTS(query: string, limit = 50): SearchIndexResult[] {
 
   const results = new Map<string, SearchIndexResult>()
   for (const row of rows) {
-    let result = results.get(row.session_id)
+    const resultKey = row.projection_kind === 'canonical'
+      ? `${row.session_id}\0${row.index_key}`
+      : row.session_id
+    let result = results.get(resultKey)
     if (!result) {
       if (results.size >= limit) continue
       result = {
@@ -471,7 +602,7 @@ export function searchFTS(query: string, limit = 50): SearchIndexResult[] {
         firstUserMessage: row.first_user_message,
         matches: []
       }
-      results.set(row.session_id, result)
+      results.set(resultKey, result)
     }
     if (result.matches.length < 10) {
       result.matches.push({ text: row.snippet, timestamp: row.timestamp })
@@ -530,6 +661,7 @@ function grepTranscriptsFromDatabase(
       messages_fts.rowid AS rowid,
       sessions.session_id,
       sessions.file_path,
+      sessions.display_path,
       sessions.source,
       sessions.project_path,
       messages_fts.role,
@@ -557,7 +689,7 @@ function grepTranscriptsFromDatabase(
     if (!result) {
       result = {
         sessionId: row.session_id,
-        filePath: row.file_path,
+        filePath: row.display_path,
         source: row.source,
         projectPath: row.project_path,
         matches: []

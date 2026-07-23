@@ -17,7 +17,7 @@
   <meta property="og:locale" content="en_US">
   <meta property="og:locale:alternate" content="zh_CN">
   <meta property="og:title" content="Swob — A git graph for your AI conversations">
-  <meta property="og:description" content="Five native-format adapters, one compatible format, and five detection-only sources—with parsing, search, usage, and resume boundaries stated explicitly.">
+  <meta property="og:description" content="Six native-format adapters, one compatible format, and four detection-only sources—with parsing, search, usage, and resume boundaries stated explicitly.">
   <meta property="og:url" content="https://ivyyang1999.github.io/swob/">
   <meta property="og:image" content="https://ivyyang1999.github.io/swob/assets/social-preview.png">
   <meta property="og:image:width" content="1200">
@@ -73,13 +73,13 @@
         <div class="hero-copy">
           <div class="eyebrow">Open source · macOS · local-first</div>
           <h1>A git graph for your AI <span class="hero-last">conversations.</span></h1>
-          <p class="hero-lead">Trace how sessions <strong>fork, compact, and continue</strong>. Read histories through five native-format adapters, keep source-specific gaps visible, and debug the tool calls and context pressure behind every run.</p>
+          <p class="hero-lead">Trace how sessions <strong>fork, compact, and continue</strong>. Read histories through six native-format adapters, keep source-specific gaps visible, and debug the tool calls and context pressure behind every run.</p>
           <div class="cta-row">
             <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases">Open verified releases</a>
             <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">Explore current main</a>
             <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases">Versions, signatures &amp; architectures</a>
           </div>
-          <p class="release-note"><strong>Truth before launch copy:</strong> public v1.2.0 is the unsigned five-source stable build. It cannot auto-update across the upcoming Developer ID trust-root change, so the first signed release will require one manual DMG download. Later signed releases will use a separate E2E-gated update channel. The graph, debugger, multi-harness ingestion (5 native + 1 compatible + 5 experimental detection), AI Insights, and SQLite FTS shown here are implemented on current <code>main</code> but are not represented by the public installer.</p>
+          <p class="release-note"><strong>Truth before launch copy:</strong> public v1.2.0 is the unsigned five-source stable build. It cannot auto-update across the upcoming Developer ID trust-root change, so the first signed release will require one manual DMG download. Later signed releases will use a separate E2E-gated update channel. The graph, debugger, multi-harness ingestion (6 native + 1 compatible + 4 experimental detection), AI Insights, and SQLite FTS shown here are implemented on current <code>main</code> but are not represented by the public installer.</p>
         </div>
 
         <figure class="product-frame">
@@ -101,7 +101,7 @@
         <div class="proof-item"><span class="proof-value">253 / 1,621</span><span class="proof-label">source sessions missing; local backups survived</span></div>
         <div class="proof-item"><span class="proof-value">93.58%</span><span class="proof-label">verified resumability in that audited corpus</span></div>
         <div class="proof-item"><span class="proof-value">1,700+</span><span class="proof-label">sessions exercised in the current local performance corpus</span></div>
-        <div class="proof-item"><span class="proof-value">5+1+5</span><span class="proof-label">native read + compatible + experimental detection on current main</span></div>
+        <div class="proof-item"><span class="proof-value">6+1+4</span><span class="proof-label">native read + compatible + experimental detection on current main</span></div>
       </div>
     </section>
 
@@ -202,7 +202,7 @@
         <div class="shell">
           <div class="section-head">
             <div class="eyebrow">03 · Sources</div>
-            <h2>Five native adapters, one compatible format, five detection-only sources.</h2>
+            <h2>Six native adapters, one compatible format, four detection-only sources.</h2>
             <p class="section-intro">A tier says whether Swob can parse transcript bodies; it does not promise identical search, usage, lineage, live-watch, archive, or resume support. Current <code>main</code> keeps those differences explicit.</p>
           </div>
           <div class="source-list" aria-label="Supported source families">
@@ -211,10 +211,10 @@
             <div class="source" style="--source:#61a96f"><div class="source-name"><span class="source-dot"></span>Cursor</div><div class="source-status">Native · transcript/live watch/terminal resume; search experimental; no usage</div></div>
             <div class="source" style="--source:#21a7bd"><div class="source-name"><span class="source-dot"></span>OpenCode</div><div class="source-status">Native · transcript/usage/archive/terminal resume; search experimental</div></div>
             <div class="source" style="--source:#d4554c"><div class="source-name"><span class="source-dot"></span>ZCode</div><div class="source-status">Native · transcript/usage/archive; search and workspace link experimental</div></div>
+            <div class="source" style="--source:#3cab93"><div class="source-name"><span class="source-dot"></span>Pi</div><div class="source-status">Native · transcript/tools/thinking/usage/relationships/search/archive; resume experimental</div></div>
             <div class="source" style="--source:#d3659a"><div class="source-name"><span class="source-dot"></span>CC-Mirror</div><div class="source-status">Compatible · transcript/search/usage; terminal resume experimental</div></div>
             <div class="source" style="--source:#8c79e8"><div class="source-name"><span class="source-dot"></span>Antigravity</div><div class="source-status">Detection only · file discovery; no message-body reading</div></div>
             <div class="source" style="--source:#8a898c"><div class="source-name"><span class="source-dot"></span>Grok / Factory</div><div class="source-status">Detection only · file discovery; no message-body reading</div></div>
-            <div class="source" style="--source:#3cab93"><div class="source-name"><span class="source-dot"></span>Pi</div><div class="source-status">Detection only · file discovery; no message-body reading</div></div>
             <div class="source" style="--source:#e48a43"><div class="source-name"><span class="source-dot"></span>Kimi Code</div><div class="source-status">Detection only · file discovery; no message-body reading</div></div>
             <div class="source" style="--source:#7657ca"><div class="source-name"><span class="source-dot"></span>Hermes</div><div class="source-status">Detection only · file discovery; no message-body reading</div></div>
           </div>
@@ -275,7 +275,7 @@
             <h3>Session graph and debugger</h3>
             <p>The screenshots on this page come from these implemented current-main capabilities.</p>
             <ul>
-              <li>Multi-harness ingestion (5 native + 1 compatible + 5 experimental) and Session Galaxy</li>
+              <li>Multi-harness ingestion (6 native + 1 compatible + 4 experimental) and Session Galaxy</li>
               <li>Execution Tree, Context Inspector, Session Audit</li>
               <li>Optional AI Insights with confirmation</li>
               <li>SQLite FTS5, watcher, and worker performance work</li>
@@ -311,7 +311,7 @@
           </details>
           <details>
             <summary>Does every supported harness expose the same data?</summary>
-            <p>No. Swob natively reads 5 harnesses (Claude Code, Codex, Cursor, OpenCode, Zcode), supports 1 compatible format (CC Mirror), and experimentally detects files from 5 more (Antigravity, Grok/Factory, Pi, Kimi, Hermes — file discovery only, content reading not yet implemented). Even among natively read sources, lineage, tokens, child agents, and resume commands depend on what each source records. Swob leaves unavailable fields unavailable.</p>
+            <p>No. Swob natively reads 6 harnesses (Claude Code, Codex, Cursor, OpenCode, Zcode, Pi), supports 1 compatible format (CC Mirror), and experimentally detects files from 4 more (Antigravity, Grok/Factory, Kimi, Hermes — file discovery only, content reading not yet implemented). Even among natively read sources, lineage, tokens, child agents, and resume commands depend on what each source records. Swob leaves unavailable fields unavailable.</p>
           </details>
           <details>
             <summary>Does session content ever leave my Mac?</summary>

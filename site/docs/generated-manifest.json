@@ -57,7 +57,7 @@
     "api-equivalent",
     "unpriced"
   ],
-  "cliVersion": "1.2.0",
+  "cliVersion": "1.3.0",
   "cliCommandCount": 24,
   "recoveryFailureCount": 23,
   "stableMetricAnchors": [

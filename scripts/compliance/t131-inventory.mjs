@@ -139,22 +139,92 @@ function imageDimensions(buffer, extension) {
 
 function assetCategory(assetPath) {
   if (/src\/renderer\/src\/assets\/icons\/(claude|cursor|openai)\.png$/.test(assetPath)) return ['third-party-brand-icon', 'BLOCKER_SOURCE_AND_REDISTRIBUTION_TERMS_UNKNOWN']
+  if (assetPath === 'build/brand/swob-logo-session-galaxy.png') return ['project-brand-source', 'BLOCKER_CREATION_SOURCE_ATTESTATION_MISSING']
+  if (/^(?:build\/icon\.(?:png|icns|ico)|(?:site\/assets|website\/public)\/(?:apple-touch-icon\.png|favicon-(?:32|512)\.png|favicon\.svg))$/.test(assetPath)) {
+    return ['generated-brand-derivative', 'BLOCKER_CREATION_SOURCE_ATTESTATION_MISSING']
+  }
+  if (/^context\/swob-研究与设计\/assets\/tw5-2026-07-23\/.*\.png$/.test(assetPath)) {
+    return ['public-or-synthetic-acceptance-capture', 'BLOCKER_CAPTURE_AND_SANITIZATION_ATTESTATION_MISSING']
+  }
+  if (/^docs\/reports\/t156-logo-pipeline\/assets\/.*\.png$/.test(assetPath)) {
+    return ['local-brand-acceptance-capture', 'BLOCKER_CAPTURE_AND_SANITIZATION_ATTESTATION_MISSING']
+  }
   if (/\.webp$/i.test(assetPath)) return ['generated-image-derivative', 'BLOCKED_BY_SOURCE_PNG_CLEARANCE']
   if (/^(docs|site\/assets)\/.*\.(png|jpg|jpeg)$/i.test(assetPath)) return ['product-or-marketing-capture', 'BLOCKER_CAPTURE_AND_SANITIZATION_ATTESTATION_MISSING']
-  if (/^(build\/icon|site\/assets\/favicon)/.test(assetPath)) return ['project-brand-asset', 'BLOCKER_CREATION_SOURCE_ATTESTATION_MISSING']
   return ['other-asset', 'MANUAL_REVIEW']
+}
+
+function loadAssetEvidence(assetPaths) {
+  const manifestPath = path.join(repoRoot, 'compliance/t131/asset-evidence-manifest.json')
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.groups)) {
+    throw new Error('Unsupported asset evidence manifest schema')
+  }
+
+  const evidenceByPath = new Map()
+  const knownPaths = new Set(assetPaths)
+  for (const group of manifest.groups) {
+    const explicitPaths = group.match?.paths
+    const prefix = group.match?.prefix
+    if ((Array.isArray(explicitPaths) ? 1 : 0) + (typeof prefix === 'string' ? 1 : 0) !== 1) {
+      throw new Error(`Asset evidence group ${group.id} must define exactly one path matcher`)
+    }
+
+    const matchedPaths = Array.isArray(explicitPaths)
+      ? explicitPaths
+      : assetPaths.filter((assetPath) => assetPath.startsWith(prefix))
+    const missingPaths = matchedPaths.filter((assetPath) => !knownPaths.has(assetPath))
+    if (missingPaths.length > 0) {
+      throw new Error(`Asset evidence group ${group.id} references missing paths: ${missingPaths.join(', ')}`)
+    }
+    if (matchedPaths.length !== group.fileCount) {
+      throw new Error(`Asset evidence group ${group.id} expected ${group.fileCount} files but matched ${matchedPaths.length}`)
+    }
+
+    const digestRecords = matchedPaths
+      .slice()
+      .sort()
+      .map((assetPath) => {
+        const fileHash = sha256(fs.readFileSync(path.join(repoRoot, assetPath)))
+        return `${assetPath}\u0000${fileHash}\n`
+      })
+      .join('')
+    const currentAggregate = sha256(Buffer.from(digestRecords))
+    const digestMatches = currentAggregate === group.aggregateSha256
+
+    for (const assetPath of matchedPaths) {
+      if (evidenceByPath.has(assetPath)) {
+        throw new Error(`Asset evidence path belongs to multiple groups: ${assetPath}`)
+      }
+      evidenceByPath.set(assetPath, digestMatches
+        ? {
+            repositoryEvidence: group.repositoryEvidence,
+            disposition: group.disposition
+          }
+        : {
+            repositoryEvidence: `Evidence group ${group.id} hash mismatch: expected ${group.aggregateSha256}, got ${currentAggregate}.`,
+            disposition: 'BLOCKER_EVIDENCE_HASH_MISMATCH'
+          })
+    }
+  }
+  return evidenceByPath
 }
 
 function assetInventory() {
   const assetPattern = /\.(png|webp|jpe?g|gif|svg|ico|icns|woff2?|ttf|otf)$/i
   const paths = git(['ls-files', '-z']).split('\u0000').filter((file) => assetPattern.test(file))
+  const evidenceByPath = loadAssetEvidence(paths)
   return paths.map((assetPath) => {
     const absolute = path.join(repoRoot, assetPath)
     const buffer = fs.readFileSync(absolute)
     const extension = path.extname(assetPath).toLowerCase()
     const additions = git(['log', '--diff-filter=A', '--follow', '--format=%H%x09%aI%x09%s', '--', assetPath]).trim().split('\n').filter(Boolean)
     const first = (additions.at(-1) ?? '').split('\t')
-    const [category, disposition] = assetCategory(assetPath)
+    const [category, defaultDisposition] = assetCategory(assetPath)
+    const evidence = evidenceByPath.get(assetPath) ?? {
+      repositoryEvidence: 'No hash-bound entry exists in compliance/t131/asset-evidence-manifest.json.',
+      disposition: defaultDisposition
+    }
     return {
       path: assetPath,
       category,
@@ -164,8 +234,7 @@ function assetInventory() {
       firstCommit: first[0] ?? '',
       firstCommitAt: first[1] ?? '',
       firstCommitSubject: first.slice(2).join('\t'),
-      repositoryEvidence: 'No machine-readable source URL, license, or generator manifest found next to the asset.',
-      disposition
+      ...evidence
     }
   }).sort((a, b) => a.path.localeCompare(b.path))
 }
@@ -183,12 +252,23 @@ function scopeInventory() {
   return { schemaVersion: 1, baseline, trackedFiles: tracked.length, byTopLevel, byExtension }
 }
 
+const assets = assetInventory()
+if (args.includes('--check-assets')) {
+  const uncleared = assets.filter((asset) => !asset.disposition.startsWith('CLEARED_'))
+  if (uncleared.length > 0) {
+    console.error('Asset evidence check failed:')
+    for (const asset of uncleared) console.error(`- ${asset.path}: ${asset.disposition}`)
+    process.exit(1)
+  }
+  console.log(`Asset evidence check passed: ${assets.length} hash-bound assets.`)
+  process.exit(0)
+}
+
 fs.mkdirSync(outputRoot, { recursive: true })
 writeJson('rights-chain.json', rightsChain())
 const dependencies = dependencyInventory()
 writeJson('dependency-license-summary.json', dependencies.summary)
 writeCsv('dependency-license-inventory.csv', ['group', 'name', 'version', 'license', 'optional', 'installScript', 'review', 'lockPath'], dependencies.rows)
-const assets = assetInventory()
 writeCsv('asset-provenance.csv', ['path', 'category', 'bytes', 'dimensions', 'sha256', 'firstCommit', 'firstCommitAt', 'firstCommitSubject', 'repositoryEvidence', 'disposition'], assets)
 writeJson('scope-inventory.json', scopeInventory())
 

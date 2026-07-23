@@ -10,7 +10,7 @@
 
 Swob 通过 **6 个原生格式适配器**与 1 个 Claude 兼容格式解析本地历史；另有 4 个实验来源只能发现文件，尚不能读取消息正文。来源确有证据时，Swob 才提供血统、SQLite FTS5 增量检索、执行检查、带来源标记的审计和可选 AI Insights。
 
-[官网](https://ivyyang1999.github.io/swob/) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.md)
+[官网](https://ivyyang1999.github.io/swob/) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.zh.md)
 
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
@@ -18,7 +18,7 @@ Swob 通过 **6 个原生格式适配器**与 1 个 Claude 兼容格式解析本
 ![平台](https://img.shields.io/badge/platform-macOS-2d2d30)
 ![构建](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
 ![下载量](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
-![许可证](https://img.shields.io/badge/license-AGPL--3.0-5b4fc4)
+![许可证](https://img.shields.io/badge/license-Apache--2.0-5b4fc4)
 
 </div>
 
@@ -190,8 +190,8 @@ Electron 40 · React 19 · TypeScript · Zustand · Tailwind CSS 4 · SQLite FTS
 
 ## 参与贡献
 
-欢迎 issue 和 PR。分享 fixture 或截图前，请移除 transcript 内容、绝对路径、凭据、cookie 与设备标识。安全问题遵循 [SECURITY.md](SECURITY.md)。
+欢迎 issue 和 PR。所有贡献 commit 都必须带 DCO `Signed-off-by` 尾注，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。分享 fixture 或截图前，请移除 transcript 内容、绝对路径、凭据、cookie 与设备标识。安全问题遵循 [SECURITY.md](SECURITY.md)。
 
 ## 许可证
 
-[AGPL-3.0-only](LICENSE)。如果你分发修改版或提供可通过网络访问的修改版，请自行核对 AGPL 对应义务。
+从 **v1.3.0** 起，Swob 使用 [Apache License 2.0](LICENSE)。**v1.2.0 及更早版本仍为 AGPL-3.0-only**，本次变更不追溯适用于历史版本。版权与商标声明见 [NOTICE](NOTICE)。

@@ -1,5 +1,33 @@
 # Changelog
 
+[中文](CHANGELOG.zh.md)
+
+## v1.3.0 — 2026-07-23
+
+> **Manual upgrade required:** v1.2.0 and earlier cannot cross the previous ad-hoc/unsigned trust boundary through auto-update. Download the matching v1.3.0 DMG and replace the installed app once; v1.3.0 intentionally publishes no update metadata.
+
+### New
+
+- **Session Galaxy and lineage navigation** — explore large session collections as a stable, filterable graph, follow related-session and execution trees, and inspect context pressure without leaving the conversation view.
+- **Provider capability tiers** — parse six native formats plus one Claude-compatible format; detect four additional experimental sources without claiming transcript, search, or audit support where message bodies are unavailable.
+- **Session Audit and AI Insights** — added evidence-backed quality diagnostics, bounded analysis scopes, request-level token attribution and valuation, plus explicit privacy confirmation before any optional LLM request.
+- **Agent workflows** — added the packaged CLI contract, multi-profile LLM configuration, smart rename, the in-app agent panel, share-image export, and command/view/widget registries.
+- **Library and onboarding tools** — added source-aware onboarding, capacity estimates, Vault migration, lenses, undoable organization, duplicate recovery planning, and clearer source-health surfaces.
+
+### Fixed
+
+- Made Library writes fail closed with a single-writer lease, generation checks, and recovery-safe state transitions.
+- Restored reliable source watchers, Keychain access, packaged CLI native dependencies, SSH/cloud resume routing, session navigation, and update-safe provider identities.
+- Closed path-containment, private-fixture, credential-redaction, provider-protocol, package-boundary, and release-signing gaps found during security and compliance review.
+- Unified user-visible copy, locale enforcement, navigation entry points, Insights coverage semantics, and Galaxy layout stability.
+
+### Architecture
+
+- Moved search to SQLite FTS5, bounded renderer work with virtualization, coalesced watchers, and isolated graph/layout work in workers.
+- Froze a canonical provider protocol and capability truth layer, then moved presentation and extension points behind typed registries.
+- Added fail-closed release gates for Developer ID signing, notarization, stapling, package contents, update metadata, and signed-update trust roots.
+- Relicensed Swob under Apache-2.0 starting with v1.3.0. Releases v1.2.0 and earlier remain AGPL-3.0-only.
+
 ## v1.2.0 — 2026-07-18
 
 ### New

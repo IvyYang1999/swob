@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-07-23",
+  "digestFormat": "SHA-256 over sorted UTF-8 records: path + NUL + file SHA-256 + LF",
+  "groups": [
+    {
+      "id": "legacy-owner-attested-assets",
+      "match": {
+        "paths": [
+          "docs/banner.png",
+          "docs/screenshot.png",
+          "site/assets/chat.png",
+          "site/assets/graph-view.png",
+          "site/assets/graph-view.webp",
+          "site/assets/insights-dashboard.png",
+          "site/assets/insights-dashboard.webp",
+          "site/assets/main.png",
+          "site/assets/search.png",
+          "site/assets/session-audit.png",
+          "site/assets/session-audit.webp",
+          "site/assets/session-debugger.png",
+          "site/assets/session-debugger.webp",
+          "site/assets/sidebar.png",
+          "site/assets/social-preview.png"
+        ]
+      },
+      "fileCount": 15,
+      "aggregateSha256": "e1344c493f05fe4b49785cbd25e24f83d190a466920c20a9aa81279913531a7c",
+      "repositoryEvidence": "Owner provenance, creation/capture method, redistribution rights and screenshot sanitization are recorded in compliance/t131/资产来源确认表-待yyt填写.md.",
+      "disposition": "CLEARED_OWNER_ATTESTATION"
+    },
+    {
+      "id": "project-neutral-glyphs",
+      "match": {
+        "paths": [
+          "build/icons-neutral/claude-neutral.svg",
+          "build/icons-neutral/cursor-neutral.svg",
+          "build/icons-neutral/openai-neutral.svg",
+          "src/renderer/src/assets/icons/claude-neutral.svg",
+          "src/renderer/src/assets/icons/cursor-neutral.svg",
+          "src/renderer/src/assets/icons/openai-neutral.svg"
+        ]
+      },
+      "fileCount": 6,
+      "aggregateSha256": "786978d8b983b473d21e2e3f9fbadd0de8a4ae1b5167add3cd0d91cdbb3c4a96",
+      "repositoryEvidence": "Swob-owned neutral geometric glyphs created in-repository for t154/t140; they do not reproduce third-party brand artwork.",
+      "disposition": "CLEARED_PROJECT_ORIGINAL_NEUTRAL_GLYPH"
+    },
+    {
+      "id": "formal-brand-source-and-derivatives",
+      "match": {
+        "paths": [
+          "build/brand/swob-logo-session-galaxy.png",
+          "build/icon.icns",
+          "build/icon.ico",
+          "build/icon.png",
+          "site/assets/apple-touch-icon.png",
+          "site/assets/favicon-32.png",
+          "site/assets/favicon-512.png",
+          "site/assets/favicon.svg",
+          "website/public/apple-touch-icon.png",
+          "website/public/favicon-32.png",
+          "website/public/favicon-512.png",
+          "website/public/favicon.svg"
+        ]
+      },
+      "fileCount": 12,
+      "aggregateSha256": "0eea9665897be7ea99cf7cebdced8752c29cec6eafdc108050c29d48eedf0759",
+      "repositoryEvidence": "Owner-designated formal Swob Session Galaxy source plus deterministic outputs verified by build/brand/icon-manifest.json and scripts/generate-icons.mjs.",
+      "disposition": "CLEARED_REPRODUCIBLE_BRAND_ASSET"
+    },
+    {
+      "id": "tw5-public-or-synthetic-acceptance-captures",
+      "match": {
+        "prefix": "context/swob-研究与设计/assets/tw5-2026-07-23/"
+      },
+      "fileCount": 25,
+      "aggregateSha256": "20c0b5afeff5dd048d62ed9621e49b3f6af29d62a58f190e8c5e12ac66258040",
+      "repositoryEvidence": "The tW5 launch-readiness report records that browser captures use public pages and product captures use isolated synthetic data, with no real user sessions.",
+      "disposition": "CLEARED_PUBLIC_OR_SYNTHETIC_ACCEPTANCE_CAPTURE"
+    },
+    {
+      "id": "t156-local-brand-acceptance-captures",
+      "match": {
+        "prefix": "docs/reports/t156-logo-pipeline/assets/"
+      },
+      "fileCount": 6,
+      "aggregateSha256": "10331c200349f5fd40378afd2fc0849af6099734f08158bf06aaeb341e22d3ea",
+      "repositoryEvidence": "The t156 report and visual review show only Swob package, macOS shell, About, comparison, and local public-site surfaces; no transcript or customer data.",
+      "disposition": "CLEARED_LOCAL_BRAND_ACCEPTANCE_CAPTURE"
+    }
+  ]
+}

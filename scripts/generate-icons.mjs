@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7,6 +8,7 @@ import sharp from 'sharp'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const sourcePath = path.join(repoRoot, 'build/brand/swob-logo-session-galaxy.png')
+const manifestPath = path.join(repoRoot, 'build/brand/icon-manifest.json')
 const checkOnly = process.argv.includes('--check')
 const masterSize = 1024
 
@@ -26,7 +28,40 @@ const iconsetEntries = [
 const icoSizes = [16, 24, 32, 48, 64, 128, 256]
 
 function relative(filePath) {
-  return path.relative(repoRoot, filePath)
+  return toManifestPath(path.relative(repoRoot, filePath))
+}
+
+export function toManifestPath(filePath) {
+  return filePath.replaceAll('\\', '/')
+}
+
+function sha256(buffer) {
+  return createHash('sha256').update(buffer).digest('hex')
+}
+
+async function assertApprovedManifest(outputs) {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  if (manifest.schemaVersion !== 1 || manifest.source?.path !== relative(sourcePath)) {
+    throw new Error('Unsupported or inconsistent brand icon manifest')
+  }
+
+  const sourceHash = sha256(await readFile(sourcePath))
+  if (sourceHash !== manifest.source.sha256) {
+    throw new Error(`Brand source hash is not owner-approved: expected ${manifest.source.sha256}, got ${sourceHash}`)
+  }
+
+  const expectedPaths = Object.keys(manifest.outputs ?? {}).sort()
+  const generatedPaths = [...outputs.keys()].map(relative).sort()
+  if (JSON.stringify(expectedPaths) !== JSON.stringify(generatedPaths)) {
+    throw new Error('Brand icon manifest output paths do not match the generator contract')
+  }
+  for (const [filePath, contents] of outputs) {
+    const outputPath = relative(filePath)
+    const outputHash = sha256(contents)
+    if (outputHash !== manifest.outputs[outputPath]) {
+      throw new Error(`Generated icon hash is not approved for ${outputPath}: expected ${manifest.outputs[outputPath]}, got ${outputHash}`)
+    }
+  }
 }
 
 async function assertSource() {
@@ -196,6 +231,7 @@ async function writeIfChanged(filePath, contents) {
 
 async function main() {
   const outputs = await buildOutputs()
+  await assertApprovedManifest(outputs)
   if (checkOnly) {
     const stale = []
     for (const [filePath, expected] of outputs) {
@@ -216,7 +252,9 @@ async function main() {
   console.log(changed.length > 0 ? `Updated ${changed.length} icon assets:\n${changed.join('\n')}` : 'Icon assets already current.')
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error)
-  process.exitCode = 1
-})
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error)
+    process.exitCode = 1
+  })
+}

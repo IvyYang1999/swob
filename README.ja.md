@@ -23,7 +23,7 @@ Swob は **6 個のネイティブ形式アダプター**と 1 個の Claude 互
 </div>
 
 > [!IMPORTANT]
-> **製品チャンネルを明確に分けています。** 以下の機能画像は現在の `main` の画面を基に、英語デモとして再構成し、サンプルデータを匿名化したものです。実装済みのレイアウトとワークフローを示すもので、未編集の本番データ画面ではありません。画像内の数値は例示用で、下記の監査 corpus とは別集計です。公開中の **v1.2.0 安定版 DMG には、Session Galaxy、multi-harness 取り込み、Session Debugger、AI Insights、SQLite FTS5 はまだ含まれていません**。`main` を source build して試せますが、未公開機能が特定の将来 installer に入ることはここでは約束しません。
+> **公開 v1.3.0 は、ここで示す製品機能と一致しています。** 以下の機能画像はリリース済み source の画面を基に、英語デモとして再構成し、サンプルデータを匿名化したものです。実装済みのレイアウトとワークフローを示すもので、未編集の本番データ画面ではありません。画像内の数値は例示用で、下記の監査 corpus とは別集計です。
 
 ![現在の main を基に再構成した Swob Session Galaxy の英語デモ](site/assets/graph-view.png)
 
@@ -127,16 +127,12 @@ Swob は transcript 表示だけではありません。
 
 [GitHub Releases](https://github.com/IvyYang1999/swob/releases) を、現在のバージョン、対応 architecture、署名状態、不変 asset 名の正準情報源とします。この README は installer URL を推測せず、恒久的な fallback version も置きません。
 
-> 2026-07-23 の監査時点では、公開 baseline は v1.2.0 で、Apple Silicon / Intel Mac 向け asset がありました。
+> 2026-07-23 時点の公開 baseline は、Developer ID 署名・公証済みの v1.3.0 で、Apple Silicon / Intel Mac 向け asset があります。
 
 **動作環境：** Apple Silicon または Intel の macOS。
 
-> [!WARNING]
-> 公開中の v1.2.0 DMG は**署名・公証されていません**。署名パイプラインの隔離 smoke test は成功しましたが、署名済み公開リリースはまだありません。Gatekeeper が破損または開けないと表示した場合は、本リポジトリからのダウンロードであることを確認してから実行してください。
->
-> ```bash
-> xattr -cr /Applications/Swob.app
-> ```
+> [!IMPORTANT]
+> **v1.2.0 ユーザーは一度だけ手動移行が必要です。** v1.2.0 は Developer ID trust root より前のため、v1.3.0 へ安全に自動更新できません。本リポジトリから対応する v1.3.0 DMG をダウンロードして Swob を一度上書きしてください。移行後の署名版は、隔離され E2E gate 済みの更新 channel を利用できます。
 
 ### 現在の `main`
 
@@ -181,8 +177,8 @@ CLI は JSON を返すため、他の Agent は UI をスクレイピングせ�
 
 | チャンネル | 内容 |
 |---|---|
-| **Stable v1.2.0** | 5 ソース閲覧、系譜検出/registry、compact 展開、検索、Token Insights、CLI、バックアップ/エクスポート、resume。公開 DMG は未署名。 |
-| **現在の `main` / 未公開** | multi-harness 取り込み（6 ネイティブ + 1 互換 + 4 実験的検出）、Session Galaxy、Execution Tree、Context Inspector、Session Audit、任意 AI Insights、SQLite FTS5、watcher/worker 性能改善。現在はソースビルド。 |
+| **Stable v1.3.0** | Developer ID 署名・公証済み macOS 正式版。multi-harness 取り込み（6 ネイティブ + 1 互換 + 4 実験的検出）、Session Galaxy、Execution Tree、Context Inspector、Session Audit、任意 AI Insights、SQLite FTS5、CLI、バックアップ/エクスポート、resume を含みます。 |
+| **現在の `main`** | v1.3.0 以降の開発 source。安定版 installer に未収録の変更を含む場合があり、ダウンロードの正準情報源は引き続き GitHub Releases です。 |
 
 ## 技術スタック
 

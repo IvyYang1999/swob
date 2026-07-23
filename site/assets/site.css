@@ -141,10 +141,10 @@ p{max-width:70ch}
 .source-band .eyebrow,.source-band .section-intro{color:#aaa6a0}
 .source-band .section-head h2{color:#f2eee6}
 .source-list{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid #3a393c;border-left:1px solid #3a393c}
-.source{padding:1rem;border-right:1px solid #3a393c;border-bottom:1px solid #3a393c;min-height:102px}
+.source{padding:1rem;border-right:1px solid #3a393c;border-bottom:1px solid #3a393c;min-width:0;min-height:102px}
 .source-name{display:flex;align-items:center;gap:.55rem;font-weight:650}
 .source-dot{width:8px;height:8px;border-radius:50%;background:var(--source,var(--purple))}
-.source-status{margin-top:.55rem;color:#8f8c88;font:500 .67rem/1.45 var(--mono)}
+.source-status{margin-top:.55rem;color:#8f8c88;font:500 .67rem/1.45 var(--mono);overflow-wrap:anywhere}
 .source-note{margin-top:1.4rem;color:#aaa6a0;font-size:.82rem;max-width:62rem}
 
 .privacy-grid{display:grid;grid-template-columns:repeat(3,1fr);border-block:1px solid var(--line)}

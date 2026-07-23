@@ -34,13 +34,13 @@
     "name": "Swob",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS",
-    "softwareVersion": "1.2.0",
+    "softwareVersion": "1.3.0",
     "inLanguage": "zh-CN",
     "url": "https://ivyyang1999.github.io/swob/zh/",
     "description": "本地优先的 AI 编程会话 Git 图谱与调试器。",
-    "downloadUrl": "https://github.com/IvyYang1999/swob/releases",
+    "downloadUrl": "https://github.com/IvyYang1999/swob/releases/tag/v1.3.0",
     "codeRepository": "https://github.com/IvyYang1999/swob",
-    "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
     "isAccessibleForFree": true
   }
   </script>
@@ -62,7 +62,7 @@
         <a href="#faq">常见问题</a>
         <a class="nav-docs" href="../docs/">文档</a>
         <a class="lang-switch" href="../" hreflang="en" lang="en" aria-label="View English version">EN</a>
-        <a class="nav-download" href="https://github.com/IvyYang1999/swob/releases">发布版本</a>
+        <a class="nav-download" href="https://github.com/IvyYang1999/swob/releases/tag/v1.3.0">下载 v1.3.0</a>
       </div>
     </div>
   </nav>
@@ -75,21 +75,21 @@
           <h1>为 AI 对话画一张 <span class="hero-last">Git 图谱。</span></h1>
           <p class="hero-lead">追踪会话如何<strong>分叉、压缩和继续</strong>。通过六个原生格式适配器读取历史，保留每个来源的能力缺口，并看清每次执行背后的工具调用与上下文压力。</p>
           <div class="cta-row">
-            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases">打开已验证的 Releases</a>
+            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/tag/v1.3.0">下载已签名的 v1.3.0</a>
             <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">查看当前 main</a>
             <a class="micro-link" href="https://github.com/IvyYang1999/swob/releases">版本、签名与架构</a>
           </div>
-          <p class="release-note"><strong>先讲事实，再讲卖点：</strong>公开的 v1.2.0 是未签名的五来源稳定版，无法自动跨越即将启用的 Developer ID 信任根。首个正式签名版发布后，需要手动下载 DMG 覆盖安装一次；之后的签名版本才走独立且经过 E2E 验收的更新通道。此处展示的会话星图、调试器、多来源导入（6 原生 + 1 兼容 + 4 实验性检测）、AI Insights 与 SQLite FTS 已在当前 <code>main</code> 实现，但尚未体现在公开安装包中。</p>
+          <p class="release-note"><strong>已签名正式版：</strong>v1.3.0 已通过 Developer ID 签名和公证，并包含这里展示的会话星图、调试器、多来源导入（6 原生 + 1 兼容 + 4 实验性检测）、AI Insights 与 SQLite FTS。仍在使用未签名 v1.2.0 的用户必须手动下载 v1.3.0 DMG 覆盖安装一次，因为旧版本无法通过自动更新安全跨越新的签名信任根。</p>
         </div>
 
         <figure class="product-frame">
-          <div class="frame-tab">当前 main · 英文演示界面</div>
+          <div class="frame-tab">v1.3.0 · 英文演示界面</div>
           <picture>
             <source srcset="../assets/graph-view.webp" type="image/webp">
             <img src="../assets/graph-view.png" alt="当前 Swob Session Galaxy 会话星图的英文演示重构图，展示不同来源与会话血统连线" width="1586" height="992" fetchpriority="high" decoding="async">
           </picture>
           <figcaption class="frame-caption">
-            <span>基于当前 main 的界面 · 隐私脱敏重构 · 数字仅作演示</span>
+            <span>v1.3.0 界面 · 隐私脱敏重构 · 数字仅作演示</span>
             <span>Canvas 力导向布局 · 平移 · 缩放 · 检查</span>
           </figcaption>
         </figure>
@@ -255,30 +255,30 @@
       <div class="shell">
         <div class="section-head">
           <div class="eyebrow">05 · 产品事实</div>
-          <h2>稳定版与下一版，不是同一份承诺。</h2>
-          <p class="section-intro">公开安装包不能悄悄落后于官网说法。在下一版本真正发布前，Swob 会标清两个渠道，并为各自提供诚实的使用路径。</p>
+          <h2>稳定正式版与开发源码。</h2>
+          <p class="section-intro">v1.3.0 是本页所展示产品对应的已验证安装包。发布后当前 <code>main</code> 可能继续前进，因此 GitHub Releases 始终是下载真相源。</p>
         </div>
         <div class="channel-grid">
           <article class="channel stable">
-            <span class="channel-tag">稳定版 · v1.2.0</span>
-            <h3>支持五类来源的会话管理</h3>
-            <p>公开 DMG 包含已经验证的会话浏览与恢复层。</p>
+            <span class="channel-tag">稳定版 · v1.3.0</span>
+            <h3>已签名的会话星图与调试器</h3>
+            <p>公开 DMG 包含本页展示的正式产品能力。</p>
             <ul>
-              <li>血统检测与注册表</li>
-              <li>上下文压缩展开与全文检索</li>
-              <li>Token Insights、CLI、备份／导出与续接</li>
-              <li>尚未签名，也未公证</li>
+              <li>多来源导入与 Session Galaxy 会话星图</li>
+              <li>执行树、上下文检查器与会话审计</li>
+              <li>可选 AI Insights、SQLite FTS5、CLI、备份／导出与续接</li>
+              <li>Developer ID 签名并完成公证</li>
             </ul>
           </article>
           <article class="channel next">
-            <span class="channel-tag">当前 main · 尚未发布</span>
-            <h3>会话星图与调试器</h3>
-            <p>本页截图来自当前 main 已经实现的这些能力。</p>
+            <span class="channel-tag">当前 main · 开发中</span>
+            <h3>发布后的开发源码</h3>
+            <p>仓库可能包含 v1.3.0 发布后的继续开发。</p>
             <ul>
-              <li>多来源导入（6 原生 + 1 兼容 + 4 实验性检测）与 Session Galaxy 会话星图</li>
-              <li>执行树、上下文检查器与会话审计</li>
-              <li>需确认后启用的可选 AI Insights</li>
-              <li>SQLite FTS5、文件监视与 Worker 性能优化</li>
+              <li>发布源码以 v1.3.0 tag 为准</li>
+              <li>签名安装包以 Releases 为准</li>
+              <li>开发变化不会自动成为稳定版承诺</li>
+              <li>不同来源的能力缺口仍会如实保留</li>
             </ul>
           </article>
         </div>
@@ -286,14 +286,14 @@
         <div class="install-box" id="download">
           <div>
             <h3>选择已验证的 macOS 发布版本</h3>
-            <p>GitHub Releases 是当前版本、支持架构、签名状态与不可变资产名的下载真相源；本静态页不猜安装包 URL。</p>
+            <p>v1.3.0 Release 页面是支持架构、签名状态与不可变资产名的下载真相源。</p>
           </div>
           <div class="install-actions">
-            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases">打开 GitHub Releases</a>
+            <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/tag/v1.3.0">下载 v1.3.0</a>
             <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">构建当前 main</a>
           </div>
         </div>
-        <p class="gatekeeper"><strong>未签名版本：</strong>确认 DMG 来自本仓库后，若 Gatekeeper 仍阻止运行，可执行 <code>xattr -cr /Applications/Swob.app</code>。签名／公证流程已通过冒烟测试，但目前尚未发布签名后的公开安装包。</p>
+        <p class="gatekeeper"><strong>已验证的 macOS 正式版：</strong>v1.3.0 已完成 Developer ID 签名、公证与 staple。现有 v1.2.0 用户必须手动覆盖安装一次；这次信任根迁移不能使用旧未签名版本的更新路径。</p>
       </div>
     </section>
 
@@ -306,8 +306,8 @@
         </div>
         <div class="faq">
           <details>
-            <summary>v1.2.0 DMG 里有 Session Galaxy 会话星图和调试器吗？</summary>
-            <p>没有。这些能力已在当前 <code>main</code> 实现，但尚未体现在公开安装包中。现在如要体验，请从源码构建。</p>
+            <summary>v1.3.0 包含 Session Galaxy 会话星图和调试器吗？</summary>
+            <p>包含。已签名的 v1.3.0 安装包具备本页展示的正式发布能力。</p>
           </details>
           <details>
             <summary>所有支持的来源都能提供同样的数据吗？</summary>
@@ -319,7 +319,7 @@
           </details>
           <details>
             <summary>为什么 macOS 提示应用已损坏？</summary>
-            <p>当前公开的 v1.2.0 DMG 尚未签名和公证，因此 Gatekeeper 可能阻止运行，也无法自动迁移到首个 Developer ID 正式版。签名版发布后，请手动下载 DMG 覆盖安装一次；完成这次迁移后，后续版本才会通过新的安全更新通道提供。</p>
+            <p>旧 v1.2.0 DMG 未签名，可能被 Gatekeeper 阻止。v1.3.0 已签名并完成公证，但 v1.2.0 无法安全自动跨越新的信任根；请下载匹配架构的 v1.3.0 DMG 并覆盖安装一次。</p>
           </details>
           <details>
             <summary>支持 Windows 或 Linux 吗？</summary>
@@ -334,10 +334,10 @@
         <div>
           <div class="eyebrow">开源 · v1.3.0 起 Apache-2.0</div>
           <h2>你的 Agent 历史，也值得有自己的历史。</h2>
-          <p>现在就从稳定版会话浏览器开始，或检查并构建当前 <code>main</code>，提前体验下一版本的会话星图与调试器。</p>
+          <p>下载已签名的 v1.3.0 正式版，或检查当前 <code>main</code> 了解发布后的继续开发。</p>
         </div>
         <div class="final-actions">
-          <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases">打开已验证的 Releases</a>
+          <a class="button button-primary" href="https://github.com/IvyYang1999/swob/releases/tag/v1.3.0">下载 v1.3.0</a>
           <a class="button button-secondary" href="https://github.com/IvyYang1999/swob">查看源码</a>
         </div>
       </div>

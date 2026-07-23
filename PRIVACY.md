@@ -103,7 +103,7 @@ Deleting only an original agent session does not delete its Swob Library backup.
 
 ## Stable release boundary
 
-The planned public v1.3.0 release contains the features and privacy boundaries described above. It will be published only if its macOS installers pass Developer ID signing, notarization, stapling, and release-asset verification. The current public v1.2.0 release does not include optional AI Insights and its DMGs are unsigned; after v1.3.0 is published, v1.2.0 users must manually replace the app once to cross into the new signing trust root.
+Public v1.3.0 includes the features and privacy boundaries described above and ships as Developer ID signed and notarized macOS installers. Public v1.2.0 did not include optional AI Insights and its DMGs were unsigned; v1.2.0 users must manually replace the app once to cross into the v1.3.0 signing trust root.
 
 ## Changes to this document
 

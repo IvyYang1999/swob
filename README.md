@@ -23,7 +23,7 @@ Swob parses local histories through **6 native-format adapters** and 1 Claude-co
 </div>
 
 > [!IMPORTANT]
-> **Product channels are intentionally separated.** The feature images below are English demo reconstructions based on current `main`; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below. The public **v1.2.0 stable DMGs predate Session Galaxy, multi-harness ingestion, Session Debugger, AI Insights, and SQLite FTS5**. Build `main` from source to try them; no unreleased feature is promised for a specific future installer here.
+> **The public v1.3.0 release now matches the product shown here.** The feature images below are English demo reconstructions based on the released source; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below.
 
 ![English demo reconstruction of the Swob Session Galaxy in current main](site/assets/graph-view.png)
 
@@ -127,19 +127,12 @@ Public README claims checked on 2026-07-21. `✅` = explicitly documented; `◐`
 
 [GitHub Releases](https://github.com/IvyYang1999/swob/releases) is the truth source for the current version, supported architectures, signatures, and immutable asset names. This README deliberately does not synthesize or permanently fall back to an installer URL.
 
-> At the 2026-07-23 audit, the public baseline was v1.2.0 for Apple Silicon and Intel Mac.
+> As of 2026-07-23, the public baseline is the Developer ID signed and notarized v1.3.0 release for Apple Silicon and Intel Mac.
 
 **System requirement:** macOS on Apple Silicon or Intel.
 
-> [!WARNING]
-> The public v1.2.0 DMGs are **not signed or notarized**. The signing pipeline has passed an isolated smoke test, but no signed public release exists yet. If Gatekeeper reports that Swob is damaged or cannot be opened, verify the download came from this repository, then run:
->
-> ```bash
-> xattr -cr /Applications/Swob.app
-> ```
-
 > [!IMPORTANT]
-> **One manual migration will be required.** Because v1.2.0 predates the Developer ID trust root, it cannot safely auto-update into the first signed release. When that release ships, download the matching DMG from this repository and overwrite Swob once. Signed releases after that migration will use an isolated, E2E-gated update channel.
+> **One manual migration is required for v1.2.0 users.** Because v1.2.0 predates the Developer ID trust root, it cannot safely auto-update into v1.3.0. Download the matching v1.3.0 DMG from this repository and overwrite Swob once. Signed releases after that migration can use the isolated, E2E-gated update channel.
 
 ### Current `main`
 
@@ -184,8 +177,8 @@ Read the complete boundaries in [PRIVACY.md](PRIVACY.md). Report vulnerabilities
 
 | Channel | What it contains |
 |---|---|
-| **Stable v1.2.0** | Five-source browsing, lineage detection/registry, compact expansion, search, token insights, CLI, backup/export, and resume. Public DMGs are unsigned. |
-| **Current `main` / unreleased** | Adds multi-harness ingestion (6 native + 1 compatible + 4 experimental detection), Session Galaxy, Execution Tree, Context Inspector, Session Audit, optional AI Insights, SQLite FTS5, and watcher/worker performance work. Build from source today. |
+| **Stable v1.3.0** | Developer ID signed and notarized macOS release with multi-harness ingestion (6 native + 1 compatible + 4 experimental detection), Session Galaxy, Execution Tree, Context Inspector, Session Audit, optional AI Insights, SQLite FTS5, CLI, backup/export, and resume. |
+| **Current `main`** | Development source after v1.3.0. It may contain changes not yet represented by a stable installer; GitHub Releases remains the download truth source. |
 
 ## Tech stack
 

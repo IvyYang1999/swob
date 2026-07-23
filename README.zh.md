@@ -23,7 +23,7 @@ Swob 通过 **6 个原生格式适配器**与 1 个 Claude 兼容格式解析本
 </div>
 
 > [!IMPORTANT]
-> **产品通道有意分开。** 下方功能图以当前 `main` 的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。公开的 **v1.2.0 稳定版 DMG 早于 Session Galaxy、多 harness 导入、Session Debugger、AI Insights 和 SQLite FTS5**。可从源码构建 `main` 体验；这里不承诺未发布能力会进入某个指定安装包。
+> **公开的 v1.3.0 已与这里展示的产品能力对齐。** 下方功能图以已发布源码的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。
 
 ![基于当前 main 重构的 Swob Session Galaxy 英文演示图](site/assets/graph-view.png)
 
@@ -127,16 +127,12 @@ Swob 不止渲染聊天记录：
 
 [GitHub Releases](https://github.com/IvyYang1999/swob/releases) 是当前版本、支持架构、签名状态与不可变资产名的唯一下载真相源。本 README 不猜测安装包 URL，也不设置永久回退版本。
 
-> 截至 2026-07-23 验收，公开基线为 v1.2.0，提供 Apple Silicon 与 Intel Mac 资产。
+> 截至 2026-07-23，公开基线为已通过 Developer ID 签名和公证的 v1.3.0，提供 Apple Silicon 与 Intel Mac 资产。
 
 **系统要求：** Apple Silicon 或 Intel Mac。
 
-> [!WARNING]
-> 公开的 v1.2.0 DMG **尚未签名或公证**。签名流水线已通过隔离 smoke test，但公开发行版仍未更新。如果 Gatekeeper 提示 Swob 已损坏或无法打开，请先确认安装包来自本仓库，再运行：
->
-> ```bash
-> xattr -cr /Applications/Swob.app
-> ```
+> [!IMPORTANT]
+> **v1.2.0 用户需要手动迁移一次。** v1.2.0 早于 Developer ID 信任根，无法安全自动更新到 v1.3.0。请从本仓库下载匹配架构的 v1.3.0 DMG 并覆盖 Swob 一次；完成迁移后，后续签名版才能使用隔离且经过 E2E 门禁的更新通道。
 
 ### 当前 `main`
 
@@ -181,8 +177,8 @@ CLI 统一返回 JSON，其他 Agent 不需要抓取界面就能查询 Swob。
 
 | 通道 | 内容 |
 |---|---|
-| **Stable v1.2.0** | 五来源浏览、血统检测/注册表、compact 展开、搜索、Token Insights、CLI、备份/导出和 resume。公开 DMG 未签名。 |
-| **当前 `main` / 尚未发布** | 新增多 harness 导入（6 原生 + 1 兼容 + 4 实验性检测）、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5，以及 watcher/worker 性能升级。现在可从源码构建。 |
+| **Stable v1.3.0** | 已通过 Developer ID 签名和公证的 macOS 正式版，包含多 harness 导入（6 原生 + 1 兼容 + 4 实验性检测）、Session Galaxy、执行树、上下文检查器、会话审计、可选 AI Insights、SQLite FTS5、CLI、备份/导出和 resume。 |
+| **当前 `main`** | v1.3.0 之后的开发源码，可能包含尚未进入稳定安装包的变化；GitHub Releases 仍是下载真相源。 |
 
 ## 技术栈
 

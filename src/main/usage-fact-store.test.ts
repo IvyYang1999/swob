@@ -423,6 +423,24 @@ describe('UsageFact + AnalysisScope', () => {
     expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 6, sessions: 1, facts: 1 })
   })
 
+  it('cancels a background rebuild at a transaction boundary and preserves the last committed snapshot', () => {
+    const original = makeSession('cancelled', '/repo/cancelled', [
+      usageEvent('before', localTimestamp(2026, 7, 20, 8), components(10, 2))
+    ])
+    synchronizeUsageFacts([original], [])
+
+    const changed = makeSession('cancelled', '/repo/cancelled', [
+      usageEvent('after', localTimestamp(2026, 7, 20, 8), components(100, 20))
+    ])
+    let checks = 0
+    expect(() => synchronizeUsageFacts([changed], [], {
+      shouldCancel: () => ++checks > 3
+    })).toThrowError(/cancelled/)
+
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(12)
+    expect(usageFactStoreStats()).toMatchObject({ sessions: 1, facts: 1 })
+  })
+
   it('usage/model/pricing coverage 显式且 pricing 使用 t113 逐请求估值', () => {
     const available = makeSession('available', '/repo/alpha', [
       usageEvent('known-model', localTimestamp(2026, 7, 20, 8), components(10, 2), {

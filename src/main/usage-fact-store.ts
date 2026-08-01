@@ -594,8 +594,8 @@ function insertFact(db: Database.Database, fact: UsageFact): void {
   }
 }
 
-function rebuildSessionRollup(db: Database.Database, sessionId: string): void {
-  db.prepare('DELETE FROM usage_rollups WHERE session_id = ?').run(sessionId)
+function rebuildAllSessionRollups(db: Database.Database): void {
+  db.prepare('DELETE FROM usage_rollups').run()
   db.prepare(`
     INSERT INTO usage_rollups(
       occurred_day, occurred_hour, source_client, model_key, project_path, session_id,
@@ -645,36 +645,50 @@ function rebuildSessionRollup(db: Database.Database, sessionId: string): void {
       SUM(CASE WHEN agent_scope = 'main' AND model_key <> '${UNKNOWN_MODEL}' THEN call_count ELSE 0 END),
       MIN(occurred_at), MAX(occurred_at)
     FROM usage_facts
-    WHERE session_id = ? AND billing_included = 1
+    WHERE billing_included = 1
     GROUP BY occurred_day, occurred_hour, source_client, model_key, project_path, session_id
-  `).run(sessionId)
+  `).run()
 }
 
-function canonicalizeBillingFacts(db: Database.Database): void {
+function canonicalizeBillingFacts(db: Database.Database, shouldCancel?: () => boolean): void {
+  throwIfUsageFactSyncCancelled(shouldCancel)
+  // Rank every billing identity once. The former correlated UPDATE performed
+  // one ordered lookup per fact and made a cold 80k-fact rebuild take minutes.
+  db.prepare('UPDATE usage_facts SET billing_included = 0 WHERE billing_included <> 0').run()
   db.prepare(`
-    UPDATE usage_facts AS current
-    SET billing_included = CASE WHEN current.event_id = (
-      SELECT candidate.event_id
-      FROM usage_facts AS candidate
-      WHERE candidate.billing_fact_id = current.billing_fact_id
-      ORDER BY
-        CASE candidate.agent_scope WHEN 'main' THEN 0 WHEN 'subagent' THEN 1 ELSE 2 END,
-        CASE WHEN candidate.occurred_at IS NULL THEN 1 ELSE 0 END,
-        candidate.occurred_at,
-        candidate.event_id
-      LIMIT 1
-    ) THEN 1 ELSE 0 END
+    WITH ranked AS (
+      SELECT
+        event_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY billing_fact_id
+          ORDER BY
+            CASE agent_scope WHEN 'main' THEN 0 WHEN 'subagent' THEN 1 ELSE 2 END,
+            CASE WHEN occurred_at IS NULL THEN 1 ELSE 0 END,
+            occurred_at,
+            event_id
+        ) AS billing_rank
+      FROM usage_facts
+    )
+    UPDATE usage_facts
+    SET billing_included = 1
+    WHERE event_id IN (SELECT event_id FROM ranked WHERE billing_rank = 1)
   `).run()
+  throwIfUsageFactSyncCancelled(shouldCancel)
+  rebuildAllSessionRollups(db)
+  throwIfUsageFactSyncCancelled(shouldCancel)
+}
 
-  db.prepare('DELETE FROM usage_rollups').run()
-  const sessionIds = db.prepare('SELECT session_id FROM usage_sessions').all() as Array<{ session_id: string }>
-  for (const row of sessionIds) rebuildSessionRollup(db, row.session_id)
+function throwIfUsageFactSyncCancelled(shouldCancel?: () => boolean): void {
+  if (!shouldCancel?.()) return
+  const error = new Error('Usage fact synchronization cancelled')
+  error.name = 'AbortError'
+  throw error
 }
 
 export function synchronizeUsageFacts(
   sessions: SessionSummary[],
   folders: Folder[],
-  options: { rebuild?: boolean } = {}
+  options: { rebuild?: boolean; shouldCancel?: () => boolean } = {}
 ): UsageFactSyncResult {
   const db = getDatabase()
   const rollupSessions = sessions.filter((session) =>
@@ -692,9 +706,13 @@ export function synchronizeUsageFacts(
   let removedSessions = 0
 
   const sync = db.transaction(() => {
+    throwIfUsageFactSyncCancelled(options.shouldCancel)
     db.prepare('DELETE FROM usage_folders').run()
     const insertFolderName = db.prepare('INSERT INTO usage_folders(folder_id, name) VALUES (?, ?)')
-    for (const folder of folders) insertFolderName.run(folder.id, folder.name)
+    for (const folder of folders) {
+      throwIfUsageFactSyncCancelled(options.shouldCancel)
+      insertFolderName.run(folder.id, folder.name)
+    }
 
     if (options.rebuild) {
       db.exec('DELETE FROM usage_rollups; DELETE FROM usage_session_folders; DELETE FROM usage_session_activity; DELETE FROM usage_facts; DELETE FROM usage_sessions;')
@@ -710,6 +728,7 @@ export function synchronizeUsageFacts(
     const existing = new Map(existingRows.map((row) => [row.session_id, row]))
 
     for (const [sessionId, session] of uniqueSessions) {
+      throwIfUsageFactSyncCancelled(options.shouldCancel)
       const accounting = accountingForSession(session)
       const outcome = providerOutcomeForSession(session)
       const parsed = outcome.parse === 'parsed'
@@ -769,7 +788,10 @@ export function synchronizeUsageFacts(
       if (factChanged) {
         db.prepare('DELETE FROM usage_facts WHERE session_id = ?').run(sessionId)
         db.prepare('DELETE FROM usage_session_activity WHERE session_id = ?').run(sessionId)
-        for (const fact of facts) insertFact(db, fact)
+        for (const fact of facts) {
+          throwIfUsageFactSyncCancelled(options.shouldCancel)
+          insertFact(db, fact)
+        }
         const insertActivity = db.prepare(
           'INSERT INTO usage_session_activity(session_id, occurred_day) VALUES (?, ?)'
         )
@@ -785,12 +807,16 @@ export function synchronizeUsageFacts(
     }
 
     for (const row of existingRows) {
+      throwIfUsageFactSyncCancelled(options.shouldCancel)
       if (uniqueSessions.has(row.session_id)) continue
       db.prepare('DELETE FROM usage_valuation_history WHERE session_id = ?').run(row.session_id)
       db.prepare('DELETE FROM usage_sessions WHERE session_id = ?').run(row.session_id)
       removedSessions++
     }
-    if (changedSessions > 0 || removedSessions > 0 || options.rebuild) canonicalizeBillingFacts(db)
+    if (changedSessions > 0 || removedSessions > 0 || options.rebuild) {
+      canonicalizeBillingFacts(db, options.shouldCancel)
+    }
+    throwIfUsageFactSyncCancelled(options.shouldCancel)
     db.prepare(`
       UPDATE usage_schema_meta
       SET last_indexed_at = ?, revision = revision + 1

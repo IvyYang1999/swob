@@ -577,7 +577,7 @@ function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<Usa
       }),
       onError: (error) => {
         usageFactSyncError = error
-        console.error('[usage-facts] background synchronization failed:', error)
+        if (!runtimeShuttingDown) console.error('[usage-facts] background synchronization failed:', error)
       }
     })
   }

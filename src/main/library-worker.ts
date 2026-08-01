@@ -44,6 +44,7 @@ export type LibraryWorkerRequest =
       sessions: SessionSummary[]
       folders: Folder[]
       rebuild?: boolean
+      cancelBuffer?: SharedArrayBuffer
     }
 
 export interface LibraryWorkerSessionSyncResult {
@@ -77,9 +78,13 @@ export async function runLibraryWorkerRequest(
   onProgress?: (progress: LibraryWorkerProgress) => void
 ): Promise<LibraryWorkerResult> {
   if (request.type === 'usage-facts-sync') {
+    const cancelFlag = request.cancelBuffer ? new Int32Array(request.cancelBuffer) : null
     return {
       kind: 'usage-facts-sync',
-      value: synchronizeUsageFacts(request.sessions, request.folders, { rebuild: request.rebuild })
+      value: synchronizeUsageFacts(request.sessions, request.folders, {
+        rebuild: request.rebuild,
+        shouldCancel: cancelFlag ? () => Atomics.load(cancelFlag, 0) === 1 : undefined
+      })
     }
   }
   initLibrary(request.root, {
@@ -173,6 +178,7 @@ export class LibraryWorkerClient {
     resolve: (result: LibraryWorkerResult) => void
     reject: (error: Error) => void
     onProgress?: (progress: LibraryWorkerProgress) => void
+    cancelFlag?: Int32Array
   }>()
 
   scan(root: string, ignoreDirs?: string[]): Promise<LibraryTree> {
@@ -236,6 +242,10 @@ export class LibraryWorkerClient {
     const worker = this.worker
     if (!worker) return
 
+    for (const pending of this.pending.values()) {
+      if (pending.cancelFlag) Atomics.store(pending.cancelFlag, 0, 1)
+    }
+
     // worker.terminate() can abort better-sqlite3 while native code is inside a
     // transaction and crash the entire Electron process. Process teardown also
     // destroys unref'ed worker isolates, so there is no safe timeout fallback:
@@ -262,9 +272,15 @@ export class LibraryWorkerClient {
     if (this.closing) return Promise.reject(new Error('Library worker is closing'))
     const worker = this.ensureWorker()
     const requestId = this.nextRequestId++
+    const cancelFlag = request.type === 'usage-facts-sync'
+      ? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+      : undefined
+    const workerRequest = cancelFlag
+      ? { ...request, cancelBuffer: cancelFlag.buffer as SharedArrayBuffer }
+      : request
     return new Promise<LibraryWorkerResult>((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject, onProgress })
-      worker.postMessage({ requestId, request } satisfies WorkerEnvelope)
+      this.pending.set(requestId, { resolve, reject, onProgress, cancelFlag })
+      worker.postMessage({ requestId, request: workerRequest } satisfies WorkerEnvelope)
     })
   }
 

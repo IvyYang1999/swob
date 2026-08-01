@@ -12,8 +12,12 @@ describe('Provider capability snapshots match real call chains', () => {
     })).toEqual([])
     expect(builtinProviderForSource('cc-mirror')?.manifest.capabilities.archive.status).toBe('unavailable')
 
+    expect(sessionBackupSourcePaths({
+      filePath: '/fixture/.gemini/antigravity-cli/brain/session/.system_generated/logs/transcript.jsonl'
+    }), 'Antigravity archives canonical records rather than copying physical sources').toEqual([])
+    expect(builtinProviderForSource('antigravity')?.manifest.capabilities.archive.status).toBe('available')
+
     const paths: Record<string, string> = {
-      antigravity: '/fixture/.gemini/antigravity/session.json',
       hermes: '/fixture/.hermes/sessions/session.json'
     }
     for (const [source, filePath] of Object.entries(paths)) {

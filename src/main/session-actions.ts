@@ -9,6 +9,7 @@ import type { RawJsonlMessage, SessionSource, SessionSummary } from './types'
 import { runtimeHome } from './runtime-home'
 import { alphaUnsupportedReason } from './platform-support'
 import { supportsVerifiedSessionFork } from '../shared/session-action-capabilities'
+import { isAntigravityConversationId } from './providers/antigravity-resume'
 
 export interface SessionActionContext {
   sessionId: string
@@ -91,11 +92,14 @@ export function buildResumeLaunchSpec(
   } else if (source === 'kimi') {
     executable = 'kimi'
     args = ['--session', sessionId]
+  } else if (source === 'antigravity') {
+    if (!isAntigravityConversationId(sessionId)) throw new Error('antigravity-conversation-id-invalid')
+    executable = 'agy'
+    args = ['--conversation', sessionId]
   } else {
     const executableBySource: Partial<Record<SessionSource, string>> = {
       'claude-code': 'claude',
       'cc-mirror': 'claude',
-      antigravity: 'agy',
       grok: 'grok',
       pi: 'pi',
       kimi: 'kimi',
@@ -201,8 +205,14 @@ function buildTerminalResumeCommand(
     if (cwd && fs.existsSync(cwd)) return `cd ${shellQuote(cwd)} && ${cmd}`
     return cmd
   }
+  if (source === 'antigravity') {
+    if (!isAntigravityConversationId(sessionId)) throw new Error('antigravity-conversation-id-invalid')
+    cmd = `agy --conversation ${quotedSessionId}`
+    if (cwd && fs.existsSync(cwd)) return `cd ${shellQuote(cwd)} && ${cmd}`
+    return cmd
+  }
   const newSourceCmds: Partial<Record<SessionSource, string>> = {
-    'cc-mirror': 'claude', antigravity: 'agy', grok: 'grok',
+    'cc-mirror': 'claude', grok: 'grok',
     pi: 'pi', hermes: 'hermes'
   }
   const newCmd = source && newSourceCmds[source]

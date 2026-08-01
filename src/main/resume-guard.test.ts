@@ -92,6 +92,7 @@ function sourcePathFor(sessionId: string, source: SessionSource, exists: boolean
   const base = exists ? tmpRoot : '/Users/other-machine'
   if (source === 'codex') return path.join(base, '.codex', 'sessions', '2026', '07', `rollout-2026-07-07T00-00-00-${sessionId}.jsonl`)
   if (source === 'cursor') return path.join(base, '.cursor', 'projects', '-Users-other-project', 'agent-transcripts', sessionId, `${sessionId}.jsonl`)
+  if (source === 'antigravity') return path.join(base, '.gemini', 'antigravity-cli', 'brain', sessionId, '.system_generated', 'logs', 'transcript.jsonl')
   return path.join(base, '.claude', 'projects', '-Users-other-project', `${sessionId}.jsonl`)
 }
 
@@ -172,6 +173,56 @@ describe('resume guard', () => {
     expect(opened).toHaveLength(1)
     expect(opened[0]).toContain(expectedCommandPart)
     expect(opened[0]).toContain(sessionId)
+  })
+
+  it('Antigravity Resume 必须先证明本机 CLI 真实支持 --conversation', async () => {
+    const sessionId = 'agy-local-conversation'
+    const sourcePath = sourcePathFor(sessionId, 'antigravity', true)
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    fs.writeFileSync(sourcePath, '{"step_index":0,"type":"USER_INPUT","content":"synthetic"}\n')
+    const dirPath = path.join(tmpRoot, sessionId)
+    writeSessionMeta(dirPath, {
+      sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: '2026-07-07T00:00:00Z',
+      updatedAt: '2026-07-07T00:01:00Z',
+      projectPath: tmpRoot
+    })
+    scanLibrary()
+    const session = summary(sessionId, sourcePath, 'antigravity')
+    const opened: unknown[] = []
+
+    const blocked = await openGuardedResumeAction({
+      sessionId,
+      sessions: [session],
+      openAction: (action) => { opened.push(action) },
+      antigravityResumePreflight: async () => ({
+        available: false, reason: 'conversation-flag-unavailable', helpOutput: 'agy --resume <id>'
+      })
+    })
+    expect(blocked).toMatchObject({
+      ok: false,
+      reasonCode: 'resume.error.build_action_failed',
+      reasonParams: { details: 'antigravity-resume-conversation-flag-unavailable' }
+    })
+    expect(opened).toEqual([])
+
+    const allowed = await openGuardedResumeAction({
+      sessionId,
+      sessions: [session],
+      openAction: (action) => { opened.push(action) },
+      antigravityResumePreflight: async () => ({
+        available: true, reason: 'available', helpOutput: 'agy --conversation <id>'
+      })
+    })
+    expect(allowed).toMatchObject({
+      ok: true,
+      action: {
+        kind: 'terminal',
+        launchSpec: { executable: 'agy', args: ['--conversation', sessionId] }
+      }
+    })
+    expect(opened).toEqual([allowed.action])
   })
 
   it('Codex Desktop action 复用同一 guard，并把已验证 session id 交给 deep link', async () => {

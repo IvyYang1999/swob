@@ -358,6 +358,13 @@ function sessionSourceRoots(): string[] {
     roots.push(join(home, '.kimi', 'sessions'))
   }
   if (isSessionSourceSupported('grok')) roots.push(join(home, '.grok', 'sessions'))
+  if (isSessionSourceSupported('antigravity')) {
+    roots.push(
+      join(home, '.gemini', 'antigravity'),
+      join(home, '.gemini', 'antigravity-cli'),
+      join(home, '.gemini', 'antigravity-ide')
+    )
+  }
   return roots
 }
 

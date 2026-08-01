@@ -1,0 +1,10 @@
+{
+  "timestampSeconds": 1785542400,
+  "userText": "Synthetic SQLite prompt",
+  "assistantText": "Synthetic SQLite answer",
+  "providerInputLimit": 1000,
+  "uncachedInputTokens": 120,
+  "outputTokens": 30,
+  "cacheReadTokens": 20,
+  "modelId": "synthetic-gemini-model"
+}

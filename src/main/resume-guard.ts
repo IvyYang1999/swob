@@ -13,6 +13,10 @@ import {
 } from './session-actions'
 import type { ResumeLaunchAction, ResumeSurface } from './session-actions'
 import type { SessionSummary } from './types'
+import {
+  probeAntigravityResumeCapability,
+  type AntigravityResumeCapability
+} from './providers/antigravity-resume'
 
 export interface ResumeActionResult {
   ok: boolean
@@ -45,6 +49,8 @@ export interface GuardedResumeOptions {
       preferredTargetInstanceId?: string
     }
   ) => Promise<SessionResumePreparationResult>
+  /** Test seam for the shell-free `agy --help` capability probe. */
+  antigravityResumePreflight?: () => Promise<AntigravityResumeCapability>
 }
 
 export interface OpenGuardedResumeOptions extends GuardedResumeOptions {
@@ -113,6 +119,19 @@ async function buildGuardedAction(
       sessionId: context.sessionId,
       surface,
       reasonCode: 'resume.error.claude_desktop_disabled'
+    }
+  }
+
+  if (kind === 'resume' && context.source === 'antigravity') {
+    const capability = await (options.antigravityResumePreflight || probeAntigravityResumeCapability)()
+    if (!capability.available) {
+      return {
+        ok: false,
+        sessionId: context.sessionId,
+        surface,
+        reasonCode: 'resume.error.build_action_failed',
+        reasonParams: { details: `antigravity-resume-${capability.reason}` }
+      }
     }
   }
 

@@ -11,11 +11,11 @@ import {
 import { validateProviderManifest } from './provider-protocol'
 
 describe('current provider capability truth', () => {
-  it('locks 8 native + 1 compatible + 2 detection-only sources', () => {
+  it('locks 9 native + 1 compatible + 1 detection-only source', () => {
     expect(LEGACY_SESSION_SOURCES).toHaveLength(11)
-    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'native')).toHaveLength(8)
+    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'native')).toHaveLength(9)
     expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'compatible')).toHaveLength(1)
-    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'detection-only')).toHaveLength(2)
+    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'detection-only')).toHaveLength(1)
     expect(new Set(BUILTIN_PROVIDER_DEFINITIONS.map((entry) => entry.manifest.providerId)).size).toBe(11)
   })
 
@@ -46,7 +46,7 @@ describe('current provider capability truth', () => {
   it('transcript-capable count comes from capabilities, not the 11-source discovery count', () => {
     expect(LEGACY_SESSION_SOURCES).toHaveLength(11)
     expect(LEGACY_SESSION_SOURCES.filter(providerCanParseTranscript)).toEqual([
-      'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'grok', 'pi', 'kimi'
+      'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity', 'grok', 'pi', 'kimi'
     ])
   })
 
@@ -58,6 +58,7 @@ describe('current provider capability truth', () => {
     expect(providerUsesCanonicalRuntime('pi')).toBe(true)
     expect(providerUsesCanonicalRuntime('kimi')).toBe(true)
     expect(providerUsesCanonicalRuntime('grok')).toBe(true)
+    expect(providerUsesCanonicalRuntime('antigravity')).toBe(true)
     expect(providerUsesCanonicalRuntime('claude-code')).toBe(false)
   })
 })

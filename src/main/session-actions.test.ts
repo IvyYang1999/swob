@@ -221,6 +221,27 @@ describe('session action context', () => {
     })
   })
 
+  it('Antigravity resume uses the documented conversation flag, never a guessed resume flag', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-antigravity-resume-'))
+    try {
+      expect(buildResumeLaunchSpec('agy-conversation-123', undefined, dir, 'antigravity')).toMatchObject({
+        executable: 'agy',
+        args: ['--conversation', 'agy-conversation-123'],
+        cwd: dir
+      })
+      expect(buildResumeCommand('agy-conversation-123', undefined, dir, 'antigravity'))
+        .toBe(`cd ${shellQuote(dir)} && agy --conversation ${shellQuote('agy-conversation-123')}`)
+      expect(() => buildResumeLaunchSpec('../unsafe', undefined, dir, 'antigravity'))
+        .toThrow('antigravity-conversation-id-invalid')
+      expect(() => buildForkLaunchSpec('agy-conversation-123', undefined, dir, 'antigravity'))
+        .toThrow('session-fork-unavailable:antigravity')
+      expect(() => buildForkCommand('agy-conversation-123', undefined, dir, 'antigravity'))
+        .toThrow('session-fork-unavailable:antigravity')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('builds a Codex Desktop deep link only for a validated Codex session id', () => {
     expect(buildResumeAction(
       '019abcde-1234-7000-8000-0123456789ab',

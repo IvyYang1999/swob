@@ -229,6 +229,52 @@ function grokCanonicalCapabilities(): ProviderCapabilities {
   }
 }
 
+function antigravityCanonicalCapabilities(): ProviderCapabilities {
+  const provider = implementation('src/main/providers/antigravity-provider.ts')
+  const fixture = test(
+    'src/main/providers/antigravity-provider.test.ts',
+    'Synthetic JSONL, Markdown and known-schema SQLite conformance fixtures.'
+  )
+  const officialStorage = {
+    kind: 'official-documentation' as const,
+    locator: 'https://antigravity.google/docs/hooks',
+    note: 'Google documents conversationId and the persistent transcript.jsonl path.'
+  }
+  return {
+    discover: available(provider, officialStorage, fixture),
+    summary: available(provider, fixture),
+    transcript: available(provider, officialStorage, fixture),
+    tools: available(provider, fixture),
+    thinking: available(provider, fixture),
+    usage: experimental(
+      'Only the pinned known SQLite schema exposes provider-produced gen_metadata counters. The field mapping is reverse-engineered; JSONL, Markdown, and encrypted protobuf usage remain unavailable. Swob never applies chars/4.',
+      provider,
+      fixture
+    ),
+    relationships: experimental(
+      'Structured subagent conversationId results are linked; other relationship encodings remain unavailable.',
+      provider,
+      fixture
+    ),
+    subagents: experimental(
+      'Structured INVOKE_SUBAGENT results are parsed, but a real installed-version fixture is still required.',
+      provider,
+      fixture
+    ),
+    'live-watch': unavailable('Antigravity is refreshed by provider discovery; no dedicated live watcher is registered.', watcher),
+    search: available(searchIndex, provider, fixture),
+    archive: available(archive, provider, fixture),
+    'terminal-resume': experimental(
+      'The documented agy --conversation flag is checked at runtime, but post-launch anchor verification is not yet enforced.',
+      provider,
+      officialStorage,
+      fixture
+    ),
+    'native-resume': notApplicable('No verified per-session Antigravity desktop deep link is published.', resume),
+    'format-provenance': available(provider, fixture)
+  }
+}
+
 function definition(
   sourceId: LegacySessionSource,
   displayName: string,
@@ -341,7 +387,12 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
     'format-provenance': unavailable('Compatibility is known, but records do not carry an authoritative mirror format version.', loader)
   }, ['claude-jsonl-compatible']),
 
-  definition('antigravity', 'Antigravity', 'detection-only', detectionOnlyCapabilities('antigravity')),
+  definition('antigravity', 'Antigravity', 'native', antigravityCanonicalCapabilities(), [
+    'antigravity-step-jsonl-v1',
+    'antigravity-sqlite-1.0.7-1.0.10',
+    'antigravity-brain-markdown-v1',
+    'antigravity-encrypted-protobuf-unknown'
+  ], 'provider-host'),
   definition('grok', 'Grok Build', 'native', grokCanonicalCapabilities(), [
     'grok-build-composite-v0',
     'grok-build-composite-v1',

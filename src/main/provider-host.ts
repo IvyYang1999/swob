@@ -34,6 +34,7 @@ import {
 import { createPiProvider } from './providers/pi-provider'
 import { createKimiProvider } from './providers/kimi-provider'
 import { createGrokProvider } from './providers/grok-provider'
+import { createAntigravityProvider } from './providers/antigravity-provider'
 import {
   migrateProviderV1ManifestToV2,
   migrateProviderV1OutcomeToV2Chunks
@@ -241,7 +242,11 @@ function builtinRuntimes(homeDir: string): BuiltinProviderRuntime[] {
 }
 
 function builtinRuntimesV2(homeDir: string): BuiltinProviderRuntimeV2[] {
-  return [createKimiProvider({ homeDir }), createGrokProvider({ homeDir })]
+  return [
+    createKimiProvider({ homeDir }),
+    createGrokProvider({ homeDir }),
+    createAntigravityProvider({ homeDir })
+  ]
 }
 
 export class ProviderHost {

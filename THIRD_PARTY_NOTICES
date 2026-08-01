@@ -5,14 +5,46 @@ Sources: package-lock.json production dependency graph and
 compliance/third-party-static-notices.json.
 Generator: scripts/generate-third-party-notices.mjs
 package-lock.json SHA-256: 920d30204d94d2f4d2e5626c3bf126428fa74bf69ebf09c0f2589c17a72f0303
-Static notices SHA-256: bc0f6530dadb5993fa11b1669548904e2a73a9d5ab32e1964d40d6c28930b29c
+Static notices SHA-256: 9e9aa834f58398bc859c9491fe48a8a1df465e32bcac4874a0a75511801563d2
 Unique production packages: 201
-Non-npm notices: 2
+Non-npm notices: 5
 
 Electron and Chromium notices are distributed separately as
 LICENSE.electron.txt and LICENSES.chromium.html. Where an npm publisher
 ships package-specific license files, electron-builder preserves them
 alongside the corresponding packaged module.
+
+=== Non-npm component: Agent Sessions ===
+
+Source: https://github.com/jazzyalex/agent-sessions/tree/e881b78a102942455eb178426cbf51008d732c96
+Used by: Antigravity Markdown, JSONL discovery, and CLI resume behavioral reference; independently reimplemented in Swob
+License: MIT
+
+MIT License
+
+Copyright (c) 2026 Alexander Malakhov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+=== Non-npm component: AgentsView ===
+
+Source: https://github.com/kenn-io/agentsview/tree/1cd581fe34e87e134160c6668deffb674b7eaa4e
+Used by: Antigravity format and capability behavioral reference; independently reimplemented in src/main/providers/antigravity-provider.ts
+License: MIT
+
+MIT License
+
+Copyright (c) 2026 Kenn Software LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 === Non-npm component: Minimal for Obsidian ===
 
@@ -39,6 +71,22 @@ License: MIT
 MIT License (MIT)
 
 Copyright (c) 2016-present Sven Greb (https://www.svengreb.de)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+=== Non-npm component: SessionView ===
+
+Source: https://github.com/tyql688/sessionview/tree/4adbd178a16a219b14c9d5f73c640c31764b8e59
+Used by: Antigravity JSONL parser behavioral reference; independently reimplemented without its chars/4 token estimate
+License: MIT
+
+MIT License
+
+Copyright (c) 2026 tyql688
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

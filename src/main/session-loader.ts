@@ -2200,7 +2200,9 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
     const mergedAccounting = mergeTokenAccountings([
       parent.tokenAccounting,
       ...children.map((child) => child.tokenAccounting)
-    ])
+    ], {
+      auditSourceIds: [parentSessionId, ...children.map((child) => child.sessionId)]
+    })
     // Do not mutate the per-file cache object: child attribution is a derived
     // view and must disappear if the child rollout is later removed.
     nonClaudeBySession.set(parentKey, {

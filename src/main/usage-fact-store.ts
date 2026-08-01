@@ -402,7 +402,12 @@ export function usageFactsForSession(
     const time = normalizedTimestamp(event.timestamp)
     const rawModel = event.modelRaw || event.model || null
     const canonicalModel = event.modelCanonical || event.model || null
-    const eventId = stableHash([source, session.sessionId, event.dedupKey])
+    const eventId = stableHash([
+      source,
+      session.sessionId,
+      event.auditSourceId || session.sessionId,
+      event.dedupKey
+    ])
     const billingFactId = event.billingFactKey
       ? stableHash([source, event.billingFactKey])
       : eventId

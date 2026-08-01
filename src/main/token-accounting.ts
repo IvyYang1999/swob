@@ -75,6 +75,12 @@ export interface UsageEvent {
   dedupKey: string
   /** Cross-file/session identity for one unique billable request. */
   billingFactKey?: string
+  /**
+   * Identity of the source stream that carried this audit copy. Two source
+   * streams may contain the same billing fact; keep both rows for audit while
+   * billingFactKey controls whether the amount is counted once.
+   */
+  auditSourceId?: string
   sourceRowId?: string
   timestamp?: string
   /** @deprecated Prefer modelRaw/modelCanonical. */
@@ -288,6 +294,18 @@ function sumComponents(events: UsageEvent[]): NormalizedTokenComponents {
   })
 }
 
+function uniqueBillingEvents(events: UsageEvent[]): UsageEvent[] {
+  const selected = new Map<string, UsageEvent>()
+  for (const event of events) {
+    const key = event.billingFactKey || event.dedupKey
+    const current = selected.get(key)
+    if (!current || (current.scope !== 'main' && event.scope === 'main')) {
+      selected.set(key, event)
+    }
+  }
+  return [...selected.values()]
+}
+
 function accountingFromEvents(
   provider: SessionSource,
   events: UsageEvent[],
@@ -297,8 +315,11 @@ function accountingFromEvents(
   if (events.length === 0) {
     return unavailableTokenAccounting(provider, 'No authoritative token usage was found', warnings)
   }
-  const components = sumComponents(events)
-  const mainComponents = sumComponents(events.filter((event) => event.scope === 'main'))
+  // Audit rows are not billing rows. Preserve every observed copy in
+  // usageEvents, but derive totals from one owner per billing fact.
+  const billableEvents = uniqueBillingEvents(events)
+  const components = sumComponents(billableEvents)
+  const mainComponents = sumComponents(billableEvents.filter((event) => event.scope === 'main'))
   return {
     provider,
     metricVersion: 2,
@@ -652,35 +673,37 @@ export function accountCodexUsage(
  * remains conservative while billing still includes child-only work once.
  */
 export function mergeTokenAccountings(
-  accountings: Array<TokenAccounting | null | undefined>
+  accountings: Array<TokenAccounting | null | undefined>,
+  options: { auditSourceIds?: Array<string | undefined> } = {}
 ): TokenAccounting {
-  const available = accountings.filter((accounting): accounting is TokenAccounting => Boolean(accounting))
-  const first = available[0]
+  const available = accountings
+    .map((accounting, index) => ({ accounting, auditSourceId: options.auditSourceIds?.[index] }))
+    .filter((entry): entry is { accounting: TokenAccounting; auditSourceId: string | undefined } =>
+      Boolean(entry.accounting)
+    )
+  const first = available[0]?.accounting
   if (!first) return unavailableTokenAccounting('codex', 'No token accounting ledgers were provided')
 
-  const selected = new Map<string, UsageEvent>()
+  const seenBillingFacts = new Set<string>()
+  const events: UsageEvent[] = []
   let duplicateCount = 0
-  for (const accounting of available) {
+  for (const { accounting, auditSourceId } of available) {
     for (const event of accounting.usageEvents) {
       const ledgerKey = event.billingFactKey || event.dedupKey
-      const current = selected.get(ledgerKey)
-      if (!current) {
-        selected.set(ledgerKey, event)
-        continue
-      }
-      duplicateCount++
-      if (current.scope !== 'main' && event.scope === 'main') selected.set(ledgerKey, event)
+      if (seenBillingFacts.has(ledgerKey)) duplicateCount++
+      else seenBillingFacts.add(ledgerKey)
+      events.push(auditSourceId ? { ...event, auditSourceId } : event)
     }
   }
 
-  const events = [...selected.values()]
   if (events.length === 0) return first
-  const provenance: TokenProvenance = events.some((event) => event.provenance === 'estimated')
+  const billableEvents = uniqueBillingEvents(events)
+  const provenance: TokenProvenance = billableEvents.some((event) => event.provenance === 'estimated')
     ? 'estimated'
-    : events.some((event) => event.provenance === 'derived')
+    : billableEvents.some((event) => event.provenance === 'derived')
       ? 'derived'
       : 'reported'
-  const warnings = [...new Set(available.flatMap((accounting) => accounting.warnings))]
+  const warnings = [...new Set(available.flatMap(({ accounting }) => accounting.warnings))]
   if (duplicateCount > 0) {
     warnings.push(
       `deduplicated ${duplicateCount} cross-session usage event${duplicateCount === 1 ? '' : 's'}`

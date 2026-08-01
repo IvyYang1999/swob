@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Folder, SessionSource, SessionSummary } from './types'
+import { mergeTokenAccountings } from './token-accounting'
 import type { NormalizedTokenComponents, TokenAccounting, UsageEvent, UsageScope } from './token-accounting'
 import type { AnalysisDimension, AnalysisScope } from './analysis-contract'
 import { activityDaysFromTimestamps } from './activity-time'
@@ -624,6 +625,39 @@ describe('UsageFact + AnalysisScope', () => {
     expect(copies).toHaveLength(2)
     expect(new Set(copies.map((fact) => fact.billingFactId)).size).toBe(1)
     expect(copies.filter((fact) => fact.billingIncluded)).toHaveLength(1)
+  })
+
+  it('thread-spawn 合并链保留 copied-prefix 审计副本但账单只计一次', () => {
+    const copiedAt = localTimestamp(2026, 7, 20, 12)
+    const parentEvent = usageEvent('shared-copy', copiedAt, components(100, 20), {
+      scope: 'main', model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:shared'
+    })
+    const childCopy = usageEvent('shared-copy', copiedAt, components(100, 20), {
+      scope: 'subagent', model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:shared'
+    })
+    const childOnly = usageEvent('child-only', copiedAt, components(50, 5), {
+      scope: 'subagent', model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:child'
+    })
+    const parentAccounting = makeSession('parent-accounting', '/repo/alpha', [parentEvent], { source: 'codex' })
+      .tokenAccounting!
+    const childAccounting = makeSession('child-accounting', '/repo/alpha', [childCopy, childOnly], { source: 'codex' })
+      .tokenAccounting!
+    const merged = mergeTokenAccountings([parentAccounting, childAccounting], {
+      auditSourceIds: ['parent-session', 'child-session']
+    })
+    const session = makeSession('merged-parent', '/repo/alpha', merged.usageEvents, { source: 'codex' })
+    session.tokenAccounting = merged
+
+    synchronizeUsageFacts([session], [])
+
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(175)
+    const facts = sessionUsageEvents('merged-parent', scope())
+    expect(facts).toHaveLength(3)
+    const copiedBillingFactId = [...new Set(facts.map((fact) => fact.billingFactId))]
+      .find((billingFactId) => facts.filter((fact) => fact.billingFactId === billingFactId).length === 2)
+    const copiedFacts = facts.filter((fact) => fact.billingFactId === copiedBillingFactId)
+    expect(copiedFacts).toHaveLength(2)
+    expect(copiedFacts.filter((fact) => fact.billingIncluded)).toHaveLength(1)
   })
 
   it('价格目录更新保留旧新估值版本与逐分桶计算证据', () => {

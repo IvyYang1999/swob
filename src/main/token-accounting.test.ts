@@ -115,8 +115,9 @@ describe('token accounting', () => {
     expect(child.usageEvents.every((event) => event.scope === 'subagent')).toBe(true)
     expect(merged.billingTotal).toBe(175)
     expect(merged.conversationOnly).toBe(120)
-    expect(merged.usageEvents).toHaveLength(2)
+    expect(merged.usageEvents).toHaveLength(3)
     expect(merged.usageEvents.find((event) => event.dedupKey === 'shared-turn')?.scope).toBe('main')
+    expect(merged.usageEvents.filter((event) => event.dedupKey === 'shared-turn')).toHaveLength(2)
     expect(merged.warnings.join(' ')).toContain('deduplicated 1 cross-session usage event')
   })
 
@@ -188,9 +189,18 @@ describe('token accounting', () => {
       }
     ], 'subagent')
 
-    expect(mergeTokenAccountings([parent, child])).toMatchObject({
+    const merged = mergeTokenAccountings([parent, child], {
+      auditSourceIds: ['parent-session', 'child-session']
+    })
+    expect(merged).toMatchObject({
       billingTotal: 175,
       conversationOnly: 120
     })
+    expect(merged.usageEvents).toHaveLength(3)
+    expect(merged.usageEvents.filter((event) => event.billingFactKey === 'codex:turn:shared'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ auditSourceId: 'parent-session', scope: 'main' }),
+        expect.objectContaining({ auditSourceId: 'child-session', scope: 'subagent' })
+      ]))
   })
 })

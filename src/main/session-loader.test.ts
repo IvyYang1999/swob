@@ -1254,8 +1254,12 @@ describe('loadAllSessions per-file incremental cache', () => {
       ])
       expect(parent?.tokenAccounting?.billingTotal).toBe(208)
       expect(parent?.tokenAccounting?.conversationOnly).toBe(120)
-      expect(parent?.tokenAccounting?.usageEvents).toHaveLength(3)
-      expect(parent?.tokenAccounting?.usageEvents.filter((event) => event.scope === 'subagent')).toHaveLength(2)
+      expect(parent?.tokenAccounting?.usageEvents).toHaveLength(4)
+      expect(parent?.tokenAccounting?.usageEvents.filter((event) => event.scope === 'subagent')).toHaveLength(3)
+      const copiedPrefix = parent?.tokenAccounting?.usageEvents
+        .filter((event) => event.billingFactKey && event.billingFactKey === parent.tokenAccounting?.usageEvents[0]?.billingFactKey)
+      expect(copiedPrefix).toHaveLength(2)
+      expect(new Set(copiedPrefix?.map((event) => event.auditSourceId))).toEqual(new Set([parentId, childId]))
       expect(cache.version).toBe(25)
       expect(cache.entries[guardianFile].perFile).toMatchObject({
         summary: null,

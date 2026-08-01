@@ -3442,7 +3442,10 @@ async function replaceBackupFromSource(sourcePath: string, backupPath: string): 
   assertSafeLibraryFileTarget(_root, tempPath)
   await fs.promises.copyFile(sourcePath, tempPath, fs.constants.COPYFILE_EXCL)
   await fs.promises.chmod(tempPath, 0o600).catch(() => {})
-  const handle = await fs.promises.open(tempPath, 'r')
+  // Windows requires a writable file handle for FlushFileBuffers, which backs
+  // FileHandle.sync(). The copied bytes are already complete; r+ preserves
+  // them while giving sync() the access it needs before the atomic rename.
+  const handle = await fs.promises.open(tempPath, 'r+')
   try { await handle.sync() } finally { await handle.close() }
   try {
     assertSafeLibraryFileTarget(_root, backupPath)

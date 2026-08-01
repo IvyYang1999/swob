@@ -14,6 +14,8 @@ describe('Library session write architecture', () => {
     expect(librarySurface).not.toMatch(/\bfs\.promises\.writeFile\s*\(/)
     expect(librarySurface).not.toMatch(/copyFile\s*\(\s*sourcePath\s*,\s*backupPath/)
     expect(librarySurface).not.toMatch(/createWriteStream\s*\(\s*backupPath\s*,\s*\{\s*flags:/)
+    expect(librarySurface).toContain("fs.promises.open(tempPath, 'r+')")
+    expect(librarySurface).not.toContain("fs.promises.open(tempPath, 'r')")
 
     expect(source).toContain('function requireWritableSessionDir(')
     expect(source).toContain('assertCurrentSessionWriteAuthorized(dirPath, meta)')

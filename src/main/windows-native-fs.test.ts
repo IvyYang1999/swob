@@ -44,4 +44,21 @@ describe.skipIf(process.platform !== 'win32')('Windows native filesystem integra
     expect(names).toEqual(['_CON', '_PRN.txt', 'report', '💬 中文会话'])
     expect(fs.readdirSync(root).sort()).toEqual([...names].sort())
   })
+
+  it('flushes copied backup candidates through a writable handle', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-native-backup-sync-'))
+    roots.push(root)
+    const source = path.join(root, 'source.jsonl')
+    const candidate = path.join(root, 'backup.jsonl.tmp')
+    fs.writeFileSync(source, '{"type":"user"}\n', 'utf8')
+    await fs.promises.copyFile(source, candidate, fs.constants.COPYFILE_EXCL)
+
+    const handle = await fs.promises.open(candidate, 'r+')
+    try {
+      await expect(handle.sync()).resolves.toBeUndefined()
+    } finally {
+      await handle.close()
+    }
+    expect(fs.readFileSync(candidate, 'utf8')).toBe('{"type":"user"}\n')
+  })
 })

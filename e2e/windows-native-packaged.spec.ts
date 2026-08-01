@@ -29,6 +29,10 @@ function stringEnvironment(): Record<string, string> {
   )
 }
 
+function windowsPathIdentity(candidate: string): string {
+  return path.win32.normalize(fs.realpathSync.native(candidate)).toLowerCase()
+}
+
 function createProductionHomeFixture(): { project: string } {
   sandboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-windows-beta-packaged-'))
   fixtureHome = path.join(sandboxRoot, '用户 Home')
@@ -223,8 +227,10 @@ test('installed x64 Beta completes onboarding, discovery, reading, search, Insig
   await expect(settings.getByText('iTerm')).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('06-settings.png'), fullPage: true })
 
-  await expect.poll(() => page.evaluate(() => window.api.libraryGetRoot()), { timeout: 20_000 })
-    .toBe(libraryRoot)
+  await expect.poll(async () => {
+    const actualRoot = await page.evaluate(() => window.api.libraryGetRoot())
+    return windowsPathIdentity(actualRoot)
+  }, { timeout: 20_000 }).toBe(windowsPathIdentity(libraryRoot))
   await expect.poll(() => page.evaluate((id) => window.api.libraryGetDirPath(id), CLAUDE_ID), { timeout: 20_000 })
     .not.toBeNull()
 })

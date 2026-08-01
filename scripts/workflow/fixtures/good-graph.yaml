@@ -1,0 +1,17 @@
+batch: fixture-good
+workItems:
+  - id: mapper
+    owner: codex-mapper
+    depends_on: []
+    write_scope:
+      - docs/**
+    evidence_required:
+      - fact inventory
+  - id: builder
+    owner: opus-builder
+    depends_on:
+      - mapper
+    write_scope:
+      - docs/PROJECT.md
+    evidence_required:
+      - npm run check

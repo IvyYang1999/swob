@@ -199,6 +199,7 @@ export class LibraryWorkerClient {
     reject: (error: Error) => void
     onProgress?: (progress: LibraryWorkerProgress) => void
     cancelFlag?: Int32Array
+    promise?: Promise<LibraryWorkerResult>
   }>()
 
   scan(root: string, ignoreDirs?: string[]): Promise<LibraryTree> {
@@ -263,7 +264,13 @@ export class LibraryWorkerClient {
     if (!worker) return
 
     for (const pending of this.pending.values()) {
-      if (pending.cancelFlag) Atomics.store(pending.cancelFlag, 0, 1)
+      if (pending.cancelFlag) {
+        // Some background callers intentionally do not await their work. Once
+        // shutdown initiates cancellation, mark that expected rejection as
+        // observed without changing the promise seen by an awaiting caller.
+        if (pending.promise) void pending.promise.catch(() => {})
+        Atomics.store(pending.cancelFlag, 0, 1)
+      }
     }
 
     // worker.terminate() can abort better-sqlite3 while native code is inside a
@@ -309,10 +316,21 @@ export class LibraryWorkerClient {
     const requestId = this.nextRequestId++
     const cancelFlag = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
     const workerRequest = { ...request, cancelBuffer: cancelFlag.buffer as SharedArrayBuffer }
-    return new Promise<LibraryWorkerResult>((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject, onProgress, cancelFlag })
-      worker.postMessage({ requestId, request: workerRequest } satisfies WorkerEnvelope)
+    let resolveRequest!: (result: LibraryWorkerResult) => void
+    let rejectRequest!: (error: Error) => void
+    const promise = new Promise<LibraryWorkerResult>((resolve, reject) => {
+      resolveRequest = resolve
+      rejectRequest = reject
     })
+    this.pending.set(requestId, {
+      resolve: resolveRequest,
+      reject: rejectRequest,
+      onProgress,
+      cancelFlag,
+      promise
+    })
+    worker.postMessage({ requestId, request: workerRequest } satisfies WorkerEnvelope)
+    return promise
   }
 
   private ensureWorker(): Worker {

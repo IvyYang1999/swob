@@ -650,6 +650,14 @@ describe('UsageFact + AnalysisScope', () => {
     expect(copies).toHaveLength(2)
     expect(new Set(copies.map((fact) => fact.billingFactId)).size).toBe(1)
     expect(copies.filter((fact) => fact.billingIncluded)).toHaveLength(1)
+
+    // Removing the former winner must promote the surviving copy and rebuild
+    // its session rollup without rewriting unrelated billing identities.
+    synchronizeUsageFacts([fork], [])
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(120)
+    expect(sessionUsageEvents('dedup-fork', scope()).events).toMatchObject([
+      { billingIncluded: true }
+    ])
   })
 
   it('thread-spawn 合并链保留 copied-prefix 审计副本但账单只计一次', () => {

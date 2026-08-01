@@ -606,8 +606,9 @@ function insertFact(
   }
 }
 
-function rebuildAllSessionRollups(db: Database.Database): void {
-  db.prepare('DELETE FROM usage_rollups').run()
+function rebuildSessionRollups(db: Database.Database, sessionId?: string): void {
+  if (sessionId) db.prepare('DELETE FROM usage_rollups WHERE session_id = ?').run(sessionId)
+  else db.prepare('DELETE FROM usage_rollups').run()
   db.prepare(`
     INSERT INTO usage_rollups(
       occurred_day, occurred_hour, source_client, model_key, project_path, session_id,
@@ -657,37 +658,77 @@ function rebuildAllSessionRollups(db: Database.Database): void {
       SUM(CASE WHEN agent_scope = 'main' AND model_key <> '${UNKNOWN_MODEL}' THEN call_count ELSE 0 END),
       MIN(occurred_at), MAX(occurred_at)
     FROM usage_facts
-    WHERE billing_included = 1
+    WHERE ${sessionId ? 'session_id = ? AND ' : ''}billing_included = 1
     GROUP BY occurred_day, occurred_hour, source_client, model_key, project_path, session_id
-  `).run()
+  `).run(...(sessionId ? [sessionId] : []))
 }
 
-function canonicalizeBillingFacts(db: Database.Database, shouldCancel?: () => boolean): void {
+function canonicalizeBillingFacts(
+  db: Database.Database,
+  affectedBillingFactIds: Set<string>,
+  changedSessionIds: Set<string>,
+  fullRebuild: boolean,
+  shouldCancel?: () => boolean
+): void {
   throwIfUsageFactSyncCancelled(shouldCancel)
-  // Rank every billing identity once. The former correlated UPDATE performed
-  // one ordered lookup per fact and made a cold 80k-fact rebuild take minutes.
-  db.prepare('UPDATE usage_facts SET billing_included = 0 WHERE billing_included <> 0').run()
-  db.prepare(`
-    WITH ranked AS (
-      SELECT
-        event_id,
-        ROW_NUMBER() OVER (
-          PARTITION BY billing_fact_id
-          ORDER BY
-            CASE agent_scope WHEN 'main' THEN 0 WHEN 'subagent' THEN 1 ELSE 2 END,
-            CASE WHEN occurred_at IS NULL THEN 1 ELSE 0 END,
-            occurred_at,
-            event_id
-        ) AS billing_rank
-      FROM usage_facts
-    )
-    UPDATE usage_facts
-    SET billing_included = 1
-    WHERE event_id IN (SELECT event_id FROM ranked WHERE billing_rank = 1)
-  `).run()
-  throwIfUsageFactSyncCancelled(shouldCancel)
-  rebuildAllSessionRollups(db)
-  throwIfUsageFactSyncCancelled(shouldCancel)
+  if (fullRebuild) {
+    db.prepare('UPDATE usage_facts SET billing_included = 0 WHERE billing_included <> 0').run()
+    db.prepare(`
+      WITH ranked AS (
+        SELECT
+          event_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY billing_fact_id
+            ORDER BY
+              CASE agent_scope WHEN 'main' THEN 0 WHEN 'subagent' THEN 1 ELSE 2 END,
+              CASE WHEN occurred_at IS NULL THEN 1 ELSE 0 END,
+              occurred_at,
+              event_id
+          ) AS billing_rank
+        FROM usage_facts
+      )
+      UPDATE usage_facts
+      SET billing_included = 1
+      WHERE event_id IN (SELECT event_id FROM ranked WHERE billing_rank = 1)
+    `).run()
+    throwIfUsageFactSyncCancelled(shouldCancel)
+    rebuildSessionRollups(db)
+    throwIfUsageFactSyncCancelled(shouldCancel)
+    return
+  }
+
+  const affectedSessionIds = new Set(changedSessionIds)
+  const billingIds = [...affectedBillingFactIds]
+  const chunkSize = 400
+  for (let offset = 0; offset < billingIds.length; offset += chunkSize) {
+    throwIfUsageFactSyncCancelled(shouldCancel)
+    const chunk = billingIds.slice(offset, offset + chunkSize)
+    const placeholders = chunk.map(() => '?').join(', ')
+    db.prepare(`
+      UPDATE usage_facts AS current
+      SET billing_included = CASE WHEN current.event_id = (
+        SELECT candidate.event_id
+        FROM usage_facts AS candidate
+        WHERE candidate.billing_fact_id = current.billing_fact_id
+        ORDER BY
+          CASE candidate.agent_scope WHEN 'main' THEN 0 WHEN 'subagent' THEN 1 ELSE 2 END,
+          CASE WHEN candidate.occurred_at IS NULL THEN 1 ELSE 0 END,
+          candidate.occurred_at,
+          candidate.event_id
+        LIMIT 1
+      ) THEN 1 ELSE 0 END
+      WHERE current.billing_fact_id IN (${placeholders})
+    `).run(...chunk)
+    const rows = db.prepare(`
+      SELECT DISTINCT session_id FROM usage_facts
+      WHERE billing_fact_id IN (${placeholders})
+    `).all(...chunk) as Array<{ session_id: string }>
+    for (const row of rows) affectedSessionIds.add(row.session_id)
+  }
+  for (const sessionId of affectedSessionIds) {
+    throwIfUsageFactSyncCancelled(shouldCancel)
+    rebuildSessionRollups(db, sessionId)
+  }
 }
 
 function throwIfUsageFactSyncCancelled(shouldCancel?: () => boolean): void {
@@ -716,10 +757,15 @@ export function synchronizeUsageFacts(
   let changedSessions = 0
   let unchangedSessions = 0
   let removedSessions = 0
+  const affectedBillingFactIds = new Set<string>()
+  const changedSessionIds = new Set<string>()
 
   const sync = db.transaction(() => {
     throwIfUsageFactSyncCancelled(options.shouldCancel)
     const factWriter = prepareUsageFactWriter(db)
+    const selectSessionBillingIds = db.prepare(
+      'SELECT DISTINCT billing_fact_id FROM usage_facts WHERE session_id = ?'
+    )
     db.prepare('DELETE FROM usage_folders').run()
     const insertFolderName = db.prepare('INSERT INTO usage_folders(folder_id, name) VALUES (?, ?)')
     for (const folder of folders) {
@@ -799,10 +845,14 @@ export function synchronizeUsageFacts(
       )
 
       if (factChanged) {
+        changedSessionIds.add(sessionId)
+        const oldBillingIds = selectSessionBillingIds.all(sessionId) as Array<{ billing_fact_id: string }>
+        for (const row of oldBillingIds) affectedBillingFactIds.add(row.billing_fact_id)
         db.prepare('DELETE FROM usage_facts WHERE session_id = ?').run(sessionId)
         db.prepare('DELETE FROM usage_session_activity WHERE session_id = ?').run(sessionId)
         for (const fact of facts) {
           throwIfUsageFactSyncCancelled(options.shouldCancel)
+          affectedBillingFactIds.add(fact.billingFactId)
           insertFact(factWriter, fact)
         }
         const insertActivity = db.prepare(
@@ -822,12 +872,21 @@ export function synchronizeUsageFacts(
     for (const row of existingRows) {
       throwIfUsageFactSyncCancelled(options.shouldCancel)
       if (uniqueSessions.has(row.session_id)) continue
+      changedSessionIds.add(row.session_id)
+      const oldBillingIds = selectSessionBillingIds.all(row.session_id) as Array<{ billing_fact_id: string }>
+      for (const fact of oldBillingIds) affectedBillingFactIds.add(fact.billing_fact_id)
       db.prepare('DELETE FROM usage_valuation_history WHERE session_id = ?').run(row.session_id)
       db.prepare('DELETE FROM usage_sessions WHERE session_id = ?').run(row.session_id)
       removedSessions++
     }
     if (changedSessions > 0 || removedSessions > 0 || options.rebuild) {
-      canonicalizeBillingFacts(db, options.shouldCancel)
+      canonicalizeBillingFacts(
+        db,
+        affectedBillingFactIds,
+        changedSessionIds,
+        options.rebuild === true || existingRows.length === 0,
+        options.shouldCancel
+      )
     }
     throwIfUsageFactSyncCancelled(options.shouldCancel)
     db.prepare(`

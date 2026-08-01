@@ -661,7 +661,6 @@ function cleanupRuntimeResources(): Promise<void> {
   const currentTranscriptWatcher = transcriptWatcher
   transcriptWatcher = null
   const currentLibraryWorker = libraryWorker
-  libraryWorker = null
   const currentUsageFactSyncRunner = usageFactSyncRunner
   usageFactSyncRunner = null
   const currentSessionSyncCoordinator = sessionSyncCoordinator
@@ -670,6 +669,12 @@ function cleanupRuntimeResources(): Promise<void> {
   activePoller = null
   const currentActivePollProcess = activePollProcess
   activePollProcess = null
+  currentUsageFactSyncRunner?.stop(new Error('Runtime is shutting down'))
+  // Start draining immediately and overlap it with the bounded cleanup below.
+  // LibraryWorkerClient refuses new requests once close() begins. Unlike the
+  // other resources this promise must not be deadline-cancelled because
+  // terminating active better-sqlite3 work can abort the whole process.
+  const libraryWorkerClosePromise = currentLibraryWorker?.close() || Promise.resolve()
 
   runtimeCleanupPromise = runRuntimeCleanup([
     { name: 'agent-child', timeoutMs: 800, run: shutdownAgentRuntime },
@@ -700,7 +705,6 @@ function cleanupRuntimeResources(): Promise<void> {
         currentLibraryRescanController?.dispose()
         currentTranscriptWatcher?.stop()
         currentSessionSyncCoordinator?.stop()
-        currentUsageFactSyncRunner?.stop(new Error('Runtime is shutting down'))
       }
     },
     {
@@ -711,16 +715,17 @@ function cleanupRuntimeResources(): Promise<void> {
         closeCanonicalSessionStore()
       }
     },
-    {
-      name: 'library-worker',
-      timeoutMs: 300,
-      run: async () => { await currentLibraryWorker?.close() }
-    },
     { name: 'global-shortcuts', timeoutMs: 50, run: () => globalShortcut.unregisterAll() }
   ], {
     totalBudgetMs: 1_800,
     log: writeLifecycleLog
-  }).then(() => undefined)
+  }).then(async () => {
+    const startedAt = Date.now()
+    writeLifecycleLog('library-worker-drain-start')
+    await libraryWorkerClosePromise
+    if (libraryWorker === currentLibraryWorker) libraryWorker = null
+    writeLifecycleLog('library-worker-drain-complete', { durationMs: Date.now() - startedAt })
+  })
   return runtimeCleanupPromise
 }
 

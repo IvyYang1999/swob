@@ -237,28 +237,22 @@ export class LibraryWorkerClient {
     if (!worker) return
 
     // worker.terminate() can abort better-sqlite3 while native code is inside a
-    // transaction and crash the entire Electron process. Give in-flight work a
-    // short grace period. If it is still busy, unref the worker so app shutdown
-    // can end the process as a whole instead of tearing down one native thread.
+    // transaction and crash the entire Electron process. Process teardown also
+    // destroys unref'ed worker isolates, so there is no safe timeout fallback:
+    // in-flight native work must reach its reply boundary before termination.
     if (this.pending.size > 0) {
       await new Promise<void>((resolve) => {
-        let settled = false
         const finish = (): void => {
-          if (settled) return
-          settled = true
-          clearTimeout(timer)
           this.drainWaiters.delete(finish)
           resolve()
         }
-        const timer = setTimeout(finish, 250)
         this.drainWaiters.add(finish)
         if (this.pending.size === 0) finish()
       })
     }
 
     this.worker = null
-    if (this.pending.size === 0) await worker.terminate()
-    else worker.unref()
+    await worker.terminate()
   }
 
   private request(

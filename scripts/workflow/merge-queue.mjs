@@ -10,6 +10,10 @@ export const DEFAULT_LAYER_GATES = [
   { id: 'check', command: 'npm run check' }
 ]
 
+export const DEFAULT_BOOTSTRAP_GATES = [
+  { id: 'npm-ci', command: 'npm ci' }
+]
+
 export const DEFAULT_FULL_GATES = [
   { id: 'check', command: 'npm run check' },
   { id: 'vitest', command: 'npx vitest run --maxWorkers=2' },
@@ -43,6 +47,12 @@ function dependenciesOf(manifest) {
 function overlaps(left, right) {
   const rightFiles = new Set(right.changedFiles)
   return left.changedFiles.filter((file) => rightFiles.has(file))
+}
+
+function changesDependencyManifest(manifest) {
+  return manifest.changedFiles.some((file) =>
+    /(^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json)$/.test(file)
+  )
 }
 
 export function validateManifestShape(manifest, source = '<memory>') {
@@ -268,7 +278,15 @@ export function assertSafeGates(gates) {
 }
 
 function parseArgs(argv) {
-  const options = { manifests: [], baseRef: 'origin/master', staleThreshold: 20, dryRun: false, layerGates: [], fullGates: [] }
+  const options = {
+    manifests: [],
+    baseRef: 'origin/master',
+    staleThreshold: 20,
+    dryRun: false,
+    bootstrapGates: [],
+    layerGates: [],
+    fullGates: []
+  }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--manifests') {
@@ -287,13 +305,15 @@ function parseArgs(argv) {
   if (options.branch && (!options.branch.startsWith('integration/') || options.branch.includes('..'))) {
     throw new Error('--branch 必须是 integration/* 专用分支')
   }
+  if (options.bootstrapGates.length === 0) options.bootstrapGates = DEFAULT_BOOTSTRAP_GATES
   if (options.layerGates.length === 0) options.layerGates = DEFAULT_LAYER_GATES
   if (options.fullGates.length === 0) options.fullGates = DEFAULT_FULL_GATES
-  assertSafeGates([...options.layerGates, ...options.fullGates])
+  assertSafeGates([...options.bootstrapGates, ...options.layerGates, ...options.fullGates])
   return options
 }
 
 export function runMergeQueue(options, repo = process.cwd()) {
+  const bootstrapGates = options.bootstrapGates ?? DEFAULT_BOOTSTRAP_GATES
   const runId = `merge-queue-${new Date().toISOString().replace(/[:.]/g, '-')}`
   const reportPath = options.reportPath ?? defaultReportPath(repo, runId)
   const manifests = loadManifests(options.manifests)
@@ -311,7 +331,12 @@ export function runMergeQueue(options, repo = process.cwd()) {
       order: preflight.ordered.map((manifest) => manifest.workItemId),
       potentialConflicts: preflight.potentialConflicts
     },
-    gatePlan: { layer: options.layerGates, full: options.fullGates, conflictScan: "git grep -n '^<<<<<<<' -- ." },
+    gatePlan: {
+      bootstrap: bootstrapGates,
+      layer: options.layerGates,
+      full: options.fullGates,
+      conflictScan: "git grep -n '^<<<<<<<' -- ."
+    },
     items: preflight.ordered.map((manifest) => ({
       workItemId: manifest.workItemId,
       source: manifest.__source,
@@ -321,6 +346,7 @@ export function runMergeQueue(options, repo = process.cwd()) {
       tests: manifest.tests,
       depends_on: dependenciesOf(manifest),
       status: 'pending',
+      bootstrapGates: [],
       gates: []
     })),
     fullGates: [],
@@ -343,6 +369,8 @@ export function runMergeQueue(options, repo = process.cwd()) {
   git(['worktree', 'add', '-b', branch, integrationDir, options.baseRef], repo)
   report.integration = { worktree: integrationDir, branch, retained: true }
 
+  let dependenciesReady = false
+
   for (const [index, manifest] of preflight.ordered.entries()) {
     const item = report.items[index]
     const merge = gitResult(['merge', '--no-commit', '--no-ff', manifest.headSha], integrationDir)
@@ -363,6 +391,21 @@ export function runMergeQueue(options, repo = process.cwd()) {
       report.finishedAt = new Date().toISOString()
       writeReport(reportPath, report)
       return { report, reportPath, exitCode: 2 }
+    }
+
+    if (!dependenciesReady || changesDependencyManifest(manifest)) {
+      for (const gate of bootstrapGates) {
+        const gateResult = runGate(gate, integrationDir)
+        item.bootstrapGates.push(gateResult)
+        if (gateResult.status !== 'passed') {
+          item.status = 'paused-bootstrap'
+          report.conclusion = `不可 push：${manifest.workItemId} 依赖引导失败`
+          report.finishedAt = new Date().toISOString()
+          writeReport(reportPath, report)
+          return { report, reportPath, exitCode: 3 }
+        }
+      }
+      dependenciesReady = true
     }
 
     for (const gate of options.layerGates) {
@@ -387,7 +430,7 @@ export function runMergeQueue(options, repo = process.cwd()) {
         'Agent-Harness: merge-queue',
         'Agent-Model: deterministic-script',
         `Agent-Session: ${sanitizeTrailer(provenance.session)}`,
-        `Agent-Decision: topo merge after ${options.layerGates.map((gate) => gate.id).join('+')} passed`,
+        `Agent-Decision: topo merge after ${[...item.bootstrapGates, ...item.gates].map((gate) => gate.id).join('+')} passed`,
         'Agent-Limitation: semantic conflict resolution intentionally disabled'
       ].join('\n')
       const commit = gitResult(['commit', '-m', message], integrationDir)

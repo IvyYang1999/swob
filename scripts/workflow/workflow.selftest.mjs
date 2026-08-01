@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  DEFAULT_BOOTSTRAP_GATES,
   DEFAULT_FULL_GATES,
   DEFAULT_LAYER_GATES,
   assertSafeGates,
@@ -38,9 +39,10 @@ assert.deepEqual(preflight.errors, [])
 assert.ok(preflight.warnings.length > 0, '低 stale threshold 应接通陈旧基线警告')
 assert.ok(preflight.potentialConflicts.every((item) => item.adjacent), '潜在冲突工作包应相邻')
 
+assert.deepEqual(DEFAULT_BOOTSTRAP_GATES.map((gate) => gate.id), ['npm-ci'])
 assert.deepEqual(DEFAULT_LAYER_GATES.map((gate) => gate.id), ['check'])
 assert.deepEqual(DEFAULT_FULL_GATES.map((gate) => gate.id), ['check', 'vitest', 'build', 'e2e-non-windows'])
-assert.equal(assertSafeGates([...DEFAULT_LAYER_GATES, ...DEFAULT_FULL_GATES]), true)
+assert.equal(assertSafeGates([...DEFAULT_BOOTSTRAP_GATES, ...DEFAULT_LAYER_GATES, ...DEFAULT_FULL_GATES]), true)
 assert.throws(() => assertSafeGates([{ id: 'bad', command: 'git push origin master' }]), /禁止/)
 assert.throws(() => assertSafeGates([{ id: 'bad', command: 'vercel --prod' }]), /禁止/)
 assert.throws(() => assertSafeGates([{ id: 'bad', command: 'npm publish' }]), /禁止/)
@@ -115,6 +117,7 @@ try {
   }
   const cleanA = createHead('clean-a', 'a.txt', 'a\n')
   const cleanB = createHead('clean-b', 'b.txt', 'b\n')
+  const cleanPackage = createHead('clean-package', 'package.json', '{"private":true}\n')
   const conflictA = createHead('conflict-a', 'shared.txt', 'alpha\n')
   const conflictB = createHead('conflict-b', 'shared.txt', 'beta\n')
   const manifestRoot = path.join(integrationFixture, 'manifests')
@@ -138,18 +141,26 @@ try {
   }
   const gates = [{ id: 'fixture-gate', command: 'node --version' }]
   const cleanResult = runMergeQueue({
-    manifests: [writeManifest('clean-a', cleanA, ['a.txt']), writeManifest('clean-b', cleanB, ['b.txt'], ['clean-a'])],
+    manifests: [
+      writeManifest('clean-a', cleanA, ['a.txt']),
+      writeManifest('clean-b', cleanB, ['b.txt'], ['clean-a']),
+      writeManifest('clean-package', cleanPackage, ['package.json'], ['clean-b'])
+    ],
     baseRef: 'master',
     staleThreshold: 20,
     integrationDir: path.join(integrationFixture, 'clean-worktree'),
     branch: 'integration/clean',
     reportPath: path.join(integrationFixture, 'clean-report.json'),
+    bootstrapGates: gates,
     layerGates: gates,
     fullGates: gates
   }, fixtureRepo)
   assert.equal(cleanResult.exitCode, 0)
   assert.equal(cleanResult.report.canPush, true)
   assert.ok(cleanResult.report.items.every((item) => item.status === 'integrated'))
+  assert.equal(cleanResult.report.items[0].bootstrapGates[0].status, 'passed')
+  assert.equal(cleanResult.report.items[1].bootstrapGates.length, 0, '依赖清单未变化时应复用已安装依赖')
+  assert.equal(cleanResult.report.items[2].bootstrapGates[0].status, 'passed', '依赖清单变化后必须重新引导')
 
   const conflictResult = runMergeQueue({
     manifests: [
@@ -161,6 +172,7 @@ try {
     integrationDir: path.join(integrationFixture, 'conflict-worktree'),
     branch: 'integration/conflict',
     reportPath: path.join(integrationFixture, 'conflict-report.json'),
+    bootstrapGates: gates,
     layerGates: gates,
     fullGates: gates
   }, fixtureRepo)

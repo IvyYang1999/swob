@@ -6,6 +6,7 @@ import {
   buildCodexSessionSummary,
   buildCodexSessionDetail,
   classifyCodexSession,
+  extractCodexTokenAccounting,
   findCodexSessionFiles,
   loadCodexSessionRecord
 } from './codex-loader'
@@ -153,6 +154,39 @@ describe('codex-loader', () => {
   })
 
   describe('buildCodexSessionSummary', () => {
+    it('resume/fork 复制前缀在无 turn_id 的真实格式下生成相同计费事实指纹', () => {
+      const lines = [
+        {
+          timestamp: '2026-07-31T12:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'one', timestamp: '2026-07-31T12:00:00.000Z', cwd: '/repo', cli_version: '1', model_provider: 'openai' }
+        },
+        {
+          timestamp: '2026-07-31T12:00:01.000Z',
+          type: 'turn_context',
+          payload: { turn_id: 'context-only', model: 'gpt-5.6-luna' }
+        },
+        {
+          timestamp: '2026-07-31T12:00:02.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              last_token_usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 10 },
+              total_token_usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 10 }
+            }
+          }
+        }
+      ] as any[]
+
+      const original = extractCodexTokenAccounting(lines)
+      const copied = extractCodexTokenAccounting(structuredClone(lines))
+
+      expect(original.usageEvents).toHaveLength(1)
+      expect(original.usageEvents[0].billingFactKey).toMatch(/^codex:event:/)
+      expect(copied.usageEvents[0].billingFactKey).toBe(original.usageEvents[0].billingFactKey)
+    })
+
     it('正确解析 Codex session 为 SessionSummary', async () => {
       const fp = writeTempJsonl(makeCodexLines())
       const summary = await buildCodexSessionSummary(fp)
@@ -238,6 +272,22 @@ describe('codex-loader', () => {
           originator: 'Codex Desktop'
         }
       }
+      guardianLines.push({
+        timestamp: '2026-03-27T13:38:20.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: 550,
+              output_tokens: 220,
+              cached_input_tokens: 0,
+              total_tokens: 770
+            }
+          },
+          rate_limits: {}
+        }
+      })
       const guardianFile = writeTempJsonl(guardianLines)
 
       expect(await buildCodexSessionSummary(guardianFile)).toBeNull()

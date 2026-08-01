@@ -64,7 +64,11 @@ function aggregate(tokens: number): UsageAggregate {
     usageCoverage: { covered: 1, total: 1, percent: 100 },
     modelCoverage: { covered: 1, total: 1, percent: 100 },
     pricingCoverage: { covered: 0, total: tokens, percent: 0, status: 'pending-t113' },
+    financialCoverage: { covered: 0, total: tokens, percent: 0 },
     costUsd: null,
+    costLedgers: {},
+    priceRevisions: [],
+    pricingRevisionNotices: [],
     unknownTimeEvents: 0
   }
 }

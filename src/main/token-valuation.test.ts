@@ -10,6 +10,7 @@ import {
 } from './token-accounting'
 import {
   aggregateValuations,
+  previewUsageEventRepricing,
   valuationForAccounting,
   valueUsageEvent,
   valueUsageEvents
@@ -194,7 +195,7 @@ describe('t113 §11 valuation invariants', () => {
     }
   })
 
-  it('7. coverage 仅覆盖 reported 或可靠规则，未知事件仍进入分母', () => {
+  it('7. price coverage 只认 Swob 可追溯规则，未知事件仍进入分母', () => {
     const priced = accounting(claudeUsageRow({
       id: 'covered',
       model: 'claude-sonnet-4-5',
@@ -232,7 +233,7 @@ describe('t113 §11 valuation invariants', () => {
     expect(valueUsageEvents([short, long]).usd).toBeCloseTo(2.375)
   })
 
-  it('9. 历史金额追溯到 rule version、effective date 和 event timestamp', () => {
+  it('9. 历史金额追溯到 rule、snapshot hash、effective date 和 event timestamp', () => {
     const event = accounting(claudeUsageRow({
       id: 'trace', model: 'claude-sonnet-4-5-20250929', provider: 'anthropic',
       timestamp: '2026-01-02T03:04:05Z'
@@ -244,7 +245,11 @@ describe('t113 §11 valuation invariants', () => {
       pricingRuleId: 'anthropic:claude-sonnet-4-5:2025-09-29T00:00:00Z',
       eventTimestamp: '2026-01-02T03:04:05Z',
       effectiveFrom: '2025-09-29T00:00:00Z',
-      catalogVersion: 'official-snapshot-2026-07-22.v1'
+      catalogVersion: 'official-snapshot-2026-08-01.v2',
+      priceSnapshotHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      calculation: expect.arrayContaining([
+        expect.objectContaining({ component: 'input', tokens: 1_000_000, usdPerMillion: 3 })
+      ])
     })
   })
 
@@ -309,14 +314,22 @@ describe('t113 golden parser and priority fixtures', () => {
     expect(valuation.missingReasons).toContain('cache-write-ttl-unknown')
   })
 
-  it('reported cost 优先于同一事件的目录重算', () => {
+  it('Claude Code reported cost 标为 harness 估值，并与 Swob 重算两账并存', () => {
     const event = accounting(claudeUsageRow({
       id: 'reported', model: 'claude-sonnet-4-5', provider: 'anthropic', reportedCostUsd: 1.23
     })).usageEvents[0]
     const valuation = valueUsageEvent(event)
 
-    expect(valuation).toMatchObject({ usd: 1.23, mode: 'reported', pricingMatch: 'reported' })
-    expect(valuation.pricingRules).toEqual([])
+    expect(event.reportedCostKind).toBe('harness-list-estimate')
+    expect(valuation).toMatchObject({
+      usd: 18,
+      mode: 'swob-estimate',
+      pricingMatch: 'exact',
+      ledgerBreakdown: { harnessListEstimateUsd: 1.23, swobEstimateUsd: 18 },
+      financialCoveragePercent: 0,
+      coveragePercent: 100
+    })
+    expect(valuation.pricingRules).toHaveLength(1)
   })
 
   it('Codex JSONL 贯通 turn_context 模型、session provider 与 cost.total', () => {
@@ -357,7 +370,10 @@ describe('t113 golden parser and priority fixtures', () => {
       providerProvenance: 'explicit',
       reportedCostUsd: 0.42
     })
-    expect(valueUsageEvent(event)).toMatchObject({ usd: 0.42, mode: 'reported' })
+    expect(valueUsageEvent(event)).toMatchObject({
+      mode: 'swob-estimate',
+      ledgerBreakdown: { harnessListEstimateUsd: 0.42 }
+    })
   })
 
   it('实际高频 gpt-5.6-sol 覆盖 cached subset 与 1.25x cache write', () => {
@@ -379,7 +395,7 @@ describe('t113 golden parser and priority fixtures', () => {
       cacheReadTokens: 100_000,
       cacheWriteTokens: 50_000
     })
-    expect(valuation).toMatchObject({ mode: 'estimated-list-price', coveragePercent: 100 })
+    expect(valuation).toMatchObject({ mode: 'swob-estimate', coveragePercent: 100 })
     expect(valuation.usd).toBeCloseTo(0.9125)
   })
 
@@ -393,8 +409,8 @@ describe('t113 golden parser and priority fixtures', () => {
       timestamp: '2026-09-01T00:00:00Z'
     })).usageEvents[0]
 
-    expect(valueUsageEvent(introductory)).toMatchObject({ usd: 12, mode: 'estimated-list-price' })
-    expect(valueUsageEvent(standard)).toMatchObject({ usd: 18, mode: 'estimated-list-price' })
+    expect(valueUsageEvent(introductory)).toMatchObject({ usd: 12, mode: 'swob-estimate' })
+    expect(valueUsageEvent(standard)).toMatchObject({ usd: 18, mode: 'swob-estimate' })
     expect(valueUsageEvent(introductory).pricingRules[0].pricingRuleId)
       .not.toBe(valueUsageEvent(standard).pricingRules[0].pricingRuleId)
   })
@@ -426,15 +442,62 @@ describe('t113 golden parser and priority fixtures', () => {
       }),
       claudeUsageRow({ id: 'missing', model: 'future-model-9' })
     ).usageEvents
-    const reported = valueUsageEvent({ ...events[0], dedupKey: 'reported-copy', reportedCostUsd: 2 })
+    const reported = valueUsageEvent({
+      ...events[0], dedupKey: 'reported-copy', reportedCostUsd: 2,
+      reportedCostKind: 'provider-billed'
+    })
     const valuation = aggregateValuations([
       reported,
       valueUsageEvent(events[1]),
       valueUsageEvent(events[2])
     ])
 
-    expect(valuation.mode).toBe('api-equivalent')
-    expect(valuation.modeBreakdown).toMatchObject({ reported: 2, 'api-equivalent': 1.75 })
+    expect(valuation.mode).toBe('mixed')
+    expect(valuation.modeBreakdown).toMatchObject({
+      'provider-billed': 2,
+      'swob-estimate': 18,
+      'api-equivalent': 1.75
+    })
+    expect(reported.financialCoveragePercent).toBe(100)
+    expect(valueUsageEvent(events[0]).financialCoveragePercent).toBe(0)
     expect(valuation.missingReasons).toContain('model-not-in-catalog')
+  })
+
+  it('Terra/Luna 在 2026-07-30 调价边界按调用时间分段计价', () => {
+    const before = accountCodexUsage([{
+      kind: 'incremental', timestamp: '2026-07-29T23:59:59Z', model: 'gpt-5.6-luna', providerRaw: 'openai',
+      inputTokens: 100_000, outputTokens: 100_000, dedupHint: 'luna-before'
+    }]).usageEvents[0]
+    const after = accountCodexUsage([{
+      kind: 'incremental', timestamp: '2026-07-30T00:00:00Z', model: 'gpt-5.6-luna', providerRaw: 'openai',
+      inputTokens: 100_000, outputTokens: 100_000, dedupHint: 'luna-after'
+    }]).usageEvents[0]
+
+    expect(valueUsageEvent(before).usd).toBeCloseTo(0.7)
+    expect(valueUsageEvent(after)).toMatchObject({
+      usd: 0.14,
+      revision: {
+        previousRevision: 'official-snapshot-2026-07-22.v1',
+        reason: 'official-price-catalog-update'
+      }
+    })
+    expect(valueUsageEvents([before, after]).usd).toBeCloseTo(0.84)
+  })
+
+  it('What-if repricing 必须显式指定 snapshot，不改写当前估值', () => {
+    const event = accountCodexUsage([{
+      kind: 'incremental', timestamp: '2026-07-30T00:00:00Z', model: 'gpt-5.6-terra', providerRaw: 'openai',
+      inputTokens: 100_000, outputTokens: 100_000, dedupHint: 'terra-what-if'
+    }]).usageEvents[0]
+    const current = valueUsageEvent(event)
+    const legacyPreview = previewUsageEventRepricing(event, 'official-snapshot-2026-07-22.v1')
+
+    expect(current.usd).toBeCloseTo(1.4)
+    expect(legacyPreview).toMatchObject({
+      usd: 1.75,
+      priceRevision: 'official-snapshot-2026-07-22.v1',
+      whatIf: true
+    })
+    expect(valueUsageEvent(event)).toEqual(current)
   })
 })

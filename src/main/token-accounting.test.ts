@@ -4,7 +4,9 @@ import {
   accountClaudeUsage,
   accountCodexUsage,
   accountingFromLegacyUsage,
+  HARNESS_USAGE_CONTRACTS,
   mergeTokenAccountings,
+  normalizeGeminiOutput,
   processedTotal
 } from './token-accounting'
 
@@ -128,5 +130,67 @@ describe('token accounting', () => {
       expect(accounting.billingTotal, source).toBeNull()
       expect(accounting.components, source).toBeNull()
     }
+  })
+
+  it('Harness 字段代数契约显式锁定 Claude/Codex/Gemini 包含关系', () => {
+    expect(HARNESS_USAGE_CONTRACTS['claude-code']).toMatchObject({
+      status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'subset-of-output'
+    })
+    expect(HARNESS_USAGE_CONTRACTS.codex).toMatchObject({
+      status: 'verified', inputCacheRelation: 'cache-subset-of-input', reasoningRelation: 'subset-of-output'
+    })
+    expect(HARNESS_USAGE_CONTRACTS.gemini).toMatchObject({
+      status: 'reserved', reasoningRelation: 'disjoint-from-visible-output'
+    })
+    expect(normalizeGeminiOutput(10, 6)).toEqual({
+      visibleOutputTokens: 10, reasoningTokens: 6, billableOutputTokens: 16
+    })
+  })
+
+  it('Codex 累计 reset 与乱序快照按事件时间归一，不生成负数', () => {
+    const accounting = accountCodexUsage([
+      { kind: 'cumulative', timestamp: '2026-07-30T00:02:00Z', inputTokens: 150, outputTokens: 0 },
+      { kind: 'cumulative', timestamp: '2026-07-30T00:01:00Z', inputTokens: 100, outputTokens: 0 },
+      { kind: 'cumulative', timestamp: '2026-07-30T00:03:00Z', inputTokens: 20, outputTokens: 0 }
+    ])
+
+    expect(accounting.billingTotal).toBe(170)
+    expect(accounting.usageEvents.map((event) => event.components.nonCachedInputTokens)).toEqual([100, 50, 20])
+    expect(accounting.warnings.join(' ')).toContain('reset')
+  })
+
+  it('Codex resume/subagent 的首个累计快照只作继承基线', () => {
+    const accounting = accountCodexUsage([
+      { kind: 'cumulative', timestamp: '2026-07-30T00:00:00Z', inputTokens: 1_000, outputTokens: 100 },
+      { kind: 'cumulative', timestamp: '2026-07-30T00:01:00Z', inputTokens: 1_200, outputTokens: 120 }
+    ], 'subagent', { startsWithInheritedBaseline: true })
+
+    expect(accounting.billingTotal).toBe(220)
+    expect(accounting.usageEvents).toHaveLength(1)
+    expect(accounting.warnings.join(' ')).toContain('inherited cumulative baseline')
+  })
+
+  it('Codex 父子 copied prefix 共享 billingFactKey，子会话独立请求仍保留', () => {
+    const parent = accountCodexUsage([
+      {
+        kind: 'incremental', inputTokens: 100, outputTokens: 20,
+        dedupHint: 'codex:turn:shared', billingFactKey: 'codex:turn:shared'
+      }
+    ])
+    const child = accountCodexUsage([
+      {
+        kind: 'incremental', inputTokens: 100, outputTokens: 20,
+        dedupHint: 'codex:turn:shared', billingFactKey: 'codex:turn:shared'
+      },
+      {
+        kind: 'incremental', inputTokens: 50, outputTokens: 5,
+        dedupHint: 'codex:turn:child', billingFactKey: 'codex:turn:child'
+      }
+    ], 'subagent')
+
+    expect(mergeTokenAccountings([parent, child])).toMatchObject({
+      billingTotal: 175,
+      conversationOnly: 120
+    })
   })
 })

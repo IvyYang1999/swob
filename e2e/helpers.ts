@@ -6,6 +6,7 @@ import * as path from 'node:path'
 
 export const CLAUDE_FIXTURE_ID = '82000000-0000-4000-8000-000000000099'
 export const CODEX_FIXTURE_ID = '019abcde-1234-7000-8000-012345670099'
+export const CODEX_PRICING_FIXTURE_ID = '019abcde-1234-7000-8000-012345670171'
 export const ZCODE_FIXTURE_ID = 'sess_ZcodeUI099'
 
 /**
@@ -45,6 +46,7 @@ export interface LaunchAppOptions {
   includeCursorFixture?: boolean
   includePiFixture?: boolean
   includeInspectorFixture?: boolean
+  includePricingFixture?: boolean
   env?: Record<string, string>
 }
 
@@ -88,7 +90,8 @@ function createSyntheticCorpus(
   claudeTurns: number,
   includeCursorFixture = false,
   includePiFixture = false,
-  includeInspectorFixture = false
+  includeInspectorFixture = false,
+  includePricingFixture = false
 ): void {
   const project = path.join(home, 'project')
   fs.mkdirSync(project, { recursive: true })
@@ -173,6 +176,65 @@ function createSyntheticCorpus(
     path.join(home, '.claude', 'projects', '-synthetic-project', `${CLAUDE_FIXTURE_ID}.jsonl`),
     claudeRows
   )
+
+  if (includePricingFixture) {
+    writeJsonl(
+      path.join(
+        home,
+        '.codex',
+        'sessions',
+        '2026',
+        '07',
+        '31',
+        `rollout-2026-07-31T12-00-00-${CODEX_PRICING_FIXTURE_ID}.jsonl`
+      ),
+      [
+        {
+          timestamp: '2026-07-31T12:00:00Z',
+          type: 'session_meta',
+          payload: {
+            id: CODEX_PRICING_FIXTURE_ID,
+            timestamp: '2026-07-31T12:00:00Z',
+            cwd: project,
+            cli_version: 'test',
+            model_provider: 'openai'
+          }
+        },
+        {
+          timestamp: '2026-07-31T12:00:01Z',
+          type: 'turn_context',
+          payload: { turn_id: 'pricing-turn', model: 'gpt-5.6-luna', model_provider: 'openai' }
+        },
+        {
+          timestamp: '2026-07-31T12:00:02Z',
+          type: 'response_item',
+          payload: {
+            type: 'message', role: 'user',
+            content: [{ type: 'input_text', text: 'Auditable pricing fixture' }]
+          }
+        },
+        {
+          timestamp: '2026-07-31T12:00:03Z',
+          type: 'response_item',
+          payload: {
+            type: 'message', role: 'assistant',
+            content: [{ type: 'output_text', text: 'Pricing fixture response' }]
+          }
+        },
+        {
+          timestamp: '2026-07-31T12:00:04Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              last_token_usage: { input_tokens: 100000, cached_input_tokens: 0, output_tokens: 100000 },
+              total_token_usage: { input_tokens: 100000, cached_input_tokens: 0, output_tokens: 100000 }
+            }
+          }
+        }
+      ]
+    )
+  }
 
   if (includePiFixture) {
     const piPath = path.join(home, '.pi', 'agent', 'sessions', 'synthetic-project', 'session.jsonl')
@@ -327,7 +389,8 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     options.claudeTurns ?? 3,
     options.includeCursorFixture ?? false,
     options.includePiFixture ?? false,
-    options.includeInspectorFixture ?? false
+    options.includeInspectorFixture ?? false,
+    options.includePricingFixture ?? false
   )
 
   const app = await electron.launch({

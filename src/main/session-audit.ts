@@ -626,7 +626,11 @@ export function auditSession(
     },
     valuation: {
       value: valuation,
-      provenance: valuation.mode === 'reported' ? 'reported' : valuation.mode === 'unpriced' ? 'unavailable' : 'estimated',
+      provenance: valuation.mode === 'provider-billed' || valuation.mode === 'harness-list-estimate'
+        ? 'reported'
+        : valuation.mode === 'unpriced'
+          ? 'unavailable'
+          : 'estimated',
       evidence: usageEvidence,
       caveat: 'API 等价值(估算)：逐请求按模型、Provider、事件时间与缓存桶计算；未匹配项保持未计价，不代表实际现金支出。'
     },

@@ -17,6 +17,7 @@ import {
   totalCacheWriteTokens,
   unavailableTokenAccounting,
   type NormalizedTokenComponents,
+  type ReportedCostKind,
   type TokenAccounting,
   type UsageEvent
 } from './token-accounting'
@@ -109,7 +110,13 @@ function accountingFor(records: UsageRecord[], source: SessionSource): TokenAcco
   if (reported.length === 0) {
     return unavailableTokenAccounting(source, 'No authoritative canonical usage records were reported.')
   }
-  const events: UsageEvent[] = reported.map((record) => ({
+  const events: UsageEvent[] = reported.map((record) => {
+    const declaredCostKind = (record as UsageRecord & { reportedCostKind?: string }).reportedCostKind
+    const reportedCostKind: ReportedCostKind = declaredCostKind === 'provider-billed' ||
+      declaredCostKind === 'harness-list-estimate' || declaredCostKind === 'swob-estimate'
+      ? declaredCostKind
+      : 'harness-list-estimate'
+    return ({
     provider: source,
     providerFormatVersion: record.provenance.formatVersion || 'canonical-v1',
     dedupKey: record.id,
@@ -127,9 +134,10 @@ function accountingFor(records: UsageRecord[], source: SessionSource): TokenAcco
         : 'reported',
     components: usageComponents(record),
     semantics: 'provider-specific',
-    ...(record.costUsd !== null ? { reportedCostUsd: record.costUsd } : {}),
+    ...(record.costUsd !== null ? { reportedCostUsd: record.costUsd, reportedCostKind } : {}),
     warnings: []
-  }))
+    })
+  })
   const components = events.reduce<NormalizedTokenComponents>(
     (total, event) => addComponents(total, event.components),
     {

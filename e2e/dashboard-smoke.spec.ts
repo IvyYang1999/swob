@@ -27,7 +27,7 @@ test('五页仪表盘可达且带范围标签与口径切换', async () => {
   // Overview
   await expect(page.getByRole('tab', { name: /总览|Overview/ })).toBeVisible({ timeout: 15000 })
   await expect(page.getByText(/Processed Tokens/)).toBeVisible()
-  await expect(page.getByText(/API 等价值/).first()).toBeVisible()
+  await expect(page.getByText(/成本账本|Cost ledgers/).first()).toBeVisible()
   await page.screenshot({ path: path.join(screenshotDir, '1-overview.png') })
 
   // Basis toggle switches KPI label
@@ -50,6 +50,7 @@ test('五页仪表盘可达且带范围标签与口径切换', async () => {
   await page.screenshot({ path: path.join(screenshotDir, '2-cost.png') })
 
   // Sessions
+  await page.getByRole('button', { name: /^全部$|^All$/ }).click()
   await page.getByRole('tab', { name: /会话与效率|Sessions/ }).click()
   await expect(page.getByText(/会话排名|Session ranking/)).toBeVisible()
   await expect(page.getByText(/P95/)).toBeVisible()

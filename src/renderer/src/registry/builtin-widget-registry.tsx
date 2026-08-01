@@ -137,12 +137,20 @@ const renderers: Record<string, WidgetRenderer> = {
       totalInput={data.totalInputTokens || 0}
     />
   ),
-  'cost.pricing-trace': ({ data, zh }) => (
+  'cost.pricing-trace': ({ data, zh, openDrilldown }) => (
     <CardShell
       title={widgetT(zh, 'renderer.insights_page.card_valuation_trace')}
       tooltip={widgetT(zh, 'renderer.insights_page.every_dollar_traces_to_a_mode_rule_and')}
     >
-      <PricingTraceCard valuation={data.valuation} />
+      <PricingTraceCard
+        valuation={data.valuation}
+        onOpenAudit={() => openDrilldown(
+          'global',
+          widgetT(zh, 'renderer.stats_cards.cost_ledgers'),
+          'global',
+          widgetT(zh, 'renderer.pricing_trace_card.audit_calls')
+        )}
+      />
     </CardShell>
   ),
   'sessions.ranking': ({ data, zh }) => (

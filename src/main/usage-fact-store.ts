@@ -4,7 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { Folder, SessionSummary } from './types'
 import { accountingForSession, totalCacheWriteTokens, type UsageEvent } from './token-accounting'
-import { valueUsageEvent } from './token-valuation'
+import { previewUsageEventRepricing, valueUsageEvent, type Valuation } from './token-valuation'
 import { searchDatabasePath } from './search-index'
 import { isActivityDay, localActivityDay } from './activity-time'
 import { providerOutcomeForSession } from './session-provider-outcome'
@@ -55,9 +55,22 @@ interface UsageRollupRow {
   billing_priced_tokens: number
   billing_billable_tokens: number
   billing_cost_usd: number
+  billing_provider_billed_usd: number
+  billing_harness_list_estimate_usd: number
+  billing_swob_estimate_usd: number
+  billing_subscription_allocated_usd: number
+  billing_financial_covered_tokens: number
   conversation_priced_tokens: number
   conversation_billable_tokens: number
   conversation_cost_usd: number
+  conversation_provider_billed_usd: number
+  conversation_harness_list_estimate_usd: number
+  conversation_swob_estimate_usd: number
+  conversation_subscription_allocated_usd: number
+  conversation_financial_covered_tokens: number
+  price_revisions: string | null
+  revision_notice_zh: string | null
+  revision_notice_en: string | null
   session_count: number
   detected_session_count: number
   parsed_session_count: number
@@ -68,6 +81,8 @@ interface UsageRollupRow {
 
 interface UsageFactRow {
   event_id: string
+  billing_fact_id: string
+  billing_included: number
   occurred_at: string | null
   occurred_day: string
   occurred_hour: number
@@ -91,6 +106,15 @@ interface UsageFactRow {
   pricing_provenance: string | null
   priced_tokens: number
   billable_tokens: number
+  financial_covered_tokens: number
+  provider_billed_usd: number | null
+  harness_list_estimate_usd: number | null
+  swob_estimate_usd: number | null
+  subscription_allocated_usd: number | null
+  price_revision: string
+  price_snapshot_hash: string
+  pricing_trace_json: string
+  revision_notice_json: string | null
 }
 
 function usageDatabasePath(): string {
@@ -164,6 +188,8 @@ function ensureSchema(db: Database.Database): void {
 
     CREATE TABLE IF NOT EXISTS usage_facts (
       event_id TEXT PRIMARY KEY,
+      billing_fact_id TEXT NOT NULL,
+      billing_included INTEGER NOT NULL CHECK(billing_included IN (0, 1)),
       occurred_at TEXT,
       occurred_day TEXT NOT NULL,
       occurred_hour INTEGER NOT NULL,
@@ -186,13 +212,41 @@ function ensureSchema(db: Database.Database): void {
       cost_usd REAL,
       pricing_provenance TEXT,
       priced_tokens INTEGER NOT NULL,
-      billable_tokens INTEGER NOT NULL
+      billable_tokens INTEGER NOT NULL,
+      financial_covered_tokens INTEGER NOT NULL,
+      provider_billed_usd REAL,
+      harness_list_estimate_usd REAL,
+      swob_estimate_usd REAL,
+      subscription_allocated_usd REAL,
+      price_revision TEXT NOT NULL,
+      price_snapshot_hash TEXT NOT NULL,
+      pricing_trace_json TEXT NOT NULL,
+      revision_notice_json TEXT,
+      revision_notice_zh TEXT,
+      revision_notice_en TEXT
     );
     CREATE INDEX IF NOT EXISTS usage_facts_time_idx ON usage_facts(occurred_day, occurred_hour);
     CREATE INDEX IF NOT EXISTS usage_facts_source_idx ON usage_facts(source_client);
     CREATE INDEX IF NOT EXISTS usage_facts_model_idx ON usage_facts(model_key);
     CREATE INDEX IF NOT EXISTS usage_facts_project_idx ON usage_facts(project_path);
     CREATE INDEX IF NOT EXISTS usage_facts_session_idx ON usage_facts(session_id);
+    CREATE INDEX IF NOT EXISTS usage_facts_billing_fact_idx
+      ON usage_facts(billing_fact_id, billing_included);
+
+    -- Append-only valuation history deliberately has no usage_facts foreign key:
+    -- re-indexing may replace current facts, but must never silently rewrite old dollars.
+    CREATE TABLE IF NOT EXISTS usage_valuation_history (
+      event_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      price_revision TEXT NOT NULL,
+      price_snapshot_hash TEXT NOT NULL,
+      valuation_hash TEXT NOT NULL,
+      valuation_json TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      PRIMARY KEY(event_id, price_revision, valuation_hash)
+    );
+    CREATE INDEX IF NOT EXISTS usage_valuation_history_session_idx
+      ON usage_valuation_history(session_id, event_id, recorded_at);
 
     CREATE TABLE IF NOT EXISTS usage_session_folders (
       session_id TEXT NOT NULL REFERENCES usage_sessions(session_id) ON DELETE CASCADE,
@@ -226,9 +280,22 @@ function ensureSchema(db: Database.Database): void {
       billing_priced_tokens INTEGER NOT NULL,
       billing_billable_tokens INTEGER NOT NULL,
       billing_cost_usd REAL NOT NULL,
+      billing_provider_billed_usd REAL NOT NULL,
+      billing_harness_list_estimate_usd REAL NOT NULL,
+      billing_swob_estimate_usd REAL NOT NULL,
+      billing_subscription_allocated_usd REAL NOT NULL,
+      billing_financial_covered_tokens INTEGER NOT NULL,
       conversation_priced_tokens INTEGER NOT NULL,
       conversation_billable_tokens INTEGER NOT NULL,
       conversation_cost_usd REAL NOT NULL,
+      conversation_provider_billed_usd REAL NOT NULL,
+      conversation_harness_list_estimate_usd REAL NOT NULL,
+      conversation_swob_estimate_usd REAL NOT NULL,
+      conversation_subscription_allocated_usd REAL NOT NULL,
+      conversation_financial_covered_tokens INTEGER NOT NULL,
+      price_revisions TEXT NOT NULL,
+      revision_notice_zh TEXT,
+      revision_notice_en TEXT,
       calls INTEGER NOT NULL,
       conversation_calls INTEGER NOT NULL,
       modeled_calls INTEGER NOT NULL,
@@ -272,6 +339,11 @@ function stableHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
+function parseJson<T>(value: string | null, fallback: T): T {
+  if (!value) return fallback
+  try { return JSON.parse(value) as T } catch { return fallback }
+}
+
 function normalizedTimestamp(value?: string): { occurredAt: string | null; day: string; hour: number } {
   if (!value) return { occurredAt: null, day: UNKNOWN_TIME, hour: -1 }
   const date = new Date(value)
@@ -308,6 +380,16 @@ function agentScope(scope: UsageEvent['scope']): UsageFact['agentScope'] {
   return 'unknown'
 }
 
+function valuationHistoryEntry(valuation: Valuation): UsageFact['valuationHistory'][number] {
+  return {
+    priceRevision: valuation.priceRevision,
+    priceSnapshotHash: valuation.priceSnapshotHash,
+    costUsd: valuation.usd ?? null,
+    costLedgers: valuation.ledgerBreakdown,
+    pricingTrace: valuation.pricingRules
+  }
+}
+
 export function usageFactsForSession(
   session: SessionSummary,
   options: { rootSessionId?: string } = {}
@@ -321,9 +403,20 @@ export function usageFactsForSession(
     const rawModel = event.modelRaw || event.model || null
     const canonicalModel = event.modelCanonical || event.model || null
     const eventId = stableHash([source, session.sessionId, event.dedupKey])
+    const billingFactId = event.billingFactKey
+      ? stableHash([source, event.billingFactKey])
+      : eventId
     const valuation = valueUsageEvent(event)
+    const valuationHistory = valuation.revision
+      ? [
+          valuationHistoryEntry(previewUsageEventRepricing(event, valuation.revision.previousRevision)),
+          valuationHistoryEntry(valuation)
+        ]
+      : [valuationHistoryEntry(valuation)]
     return {
       eventId,
+      billingFactId,
+      billingIncluded: true,
       occurredAt: time.occurredAt,
       occurredDay: time.day,
       occurredHour: time.hour < 0 ? null : time.hour,
@@ -346,7 +439,14 @@ export function usageFactsForSession(
       costUsd: valuation.usd ?? null,
       pricingProvenance: valuation.mode,
       pricedTokens: valuation.coveredTokens,
-      billableTokens: valuation.totalBillableTokens
+      billableTokens: valuation.totalBillableTokens,
+      financialCoveredTokens: valuation.financialCoveredTokens,
+      costLedgers: valuation.ledgerBreakdown,
+      priceRevision: valuation.priceRevision,
+      priceSnapshotHash: valuation.priceSnapshotHash,
+      pricingTrace: valuation.pricingRules,
+      ...(valuation.revisionNotices[0] ? { revisionNotice: valuation.revisionNotices[0] } : {}),
+      valuationHistory
     }
   })
 }
@@ -382,18 +482,27 @@ function foldersBySession(folders: Folder[]): Map<string, string[]> {
 function insertFact(db: Database.Database, fact: UsageFact): void {
   db.prepare(`
     INSERT INTO usage_facts(
-      event_id, occurred_at, occurred_day, occurred_hour, source_client,
+      event_id, billing_fact_id, billing_included,
+      occurred_at, occurred_day, occurred_hour, source_client,
       session_id, root_session_id, agent_scope, project_path, model_key,
       model_raw, model_provenance, non_cached_input, cache_read, cache_write,
       output_tokens, reasoning_tokens, usage_provenance, call_count, turn_count,
-      cost_usd, pricing_provenance, priced_tokens, billable_tokens
+      cost_usd, pricing_provenance, priced_tokens, billable_tokens,
+      financial_covered_tokens, provider_billed_usd, harness_list_estimate_usd,
+      swob_estimate_usd, subscription_allocated_usd, price_revision,
+      price_snapshot_hash, pricing_trace_json, revision_notice_json,
+      revision_notice_zh, revision_notice_en
     ) VALUES (
-      @eventId, @occurredAt, @occurredDay, @occurredHour, @sourceClient,
+      @eventId, @billingFactId, @billingIncluded,
+      @occurredAt, @occurredDay, @occurredHour, @sourceClient,
       @sessionId, @rootSessionId, @agentScope, @projectPath, @model,
       @modelRaw, @modelProvenance, @nonCachedInputTokens, @cacheReadTokens,
       @cacheWriteTokens, @outputTokens, @reasoningTokens, @usageProvenance,
       @callCount, @turnCount, @costUsd, @pricingProvenance,
-      @pricedTokens, @billableTokens
+      @pricedTokens, @billableTokens, @financialCoveredTokens,
+      @providerBilledUsd, @harnessListEstimateUsd, @swobEstimateUsd,
+      @subscriptionAllocatedUsd, @priceRevision, @priceSnapshotHash,
+      @pricingTraceJson, @revisionNoticeJson, @revisionNoticeZh, @revisionNoticeEn
     )
   `).run({
     ...fact,
@@ -401,8 +510,35 @@ function insertFact(db: Database.Database, fact: UsageFact): void {
     model: fact.model || UNKNOWN_MODEL,
     modelRaw: fact.modelRaw || '',
     costUsd: fact.costUsd ?? null,
-    pricingProvenance: fact.pricingProvenance ?? null
+    pricingProvenance: fact.pricingProvenance ?? null,
+    billingIncluded: fact.billingIncluded ? 1 : 0,
+    providerBilledUsd: fact.costLedgers.providerBilledUsd ?? null,
+    harnessListEstimateUsd: fact.costLedgers.harnessListEstimateUsd ?? null,
+    swobEstimateUsd: fact.costLedgers.swobEstimateUsd ?? null,
+    subscriptionAllocatedUsd: fact.costLedgers.subscriptionAllocatedUsd ?? null,
+    pricingTraceJson: JSON.stringify(fact.pricingTrace),
+    revisionNoticeJson: fact.revisionNotice ? JSON.stringify(fact.revisionNotice) : null,
+    revisionNoticeZh: fact.revisionNotice?.notice['zh-CN'] ?? null,
+    revisionNoticeEn: fact.revisionNotice?.notice.en ?? null
   })
+  const insertHistory = db.prepare(`
+    INSERT OR IGNORE INTO usage_valuation_history(
+      event_id, session_id, price_revision, price_snapshot_hash,
+      valuation_hash, valuation_json, recorded_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  const recordedAt = new Date().toISOString()
+  for (const entry of fact.valuationHistory) {
+    insertHistory.run(
+      fact.eventId,
+      fact.sessionId,
+      entry.priceRevision,
+      entry.priceSnapshotHash,
+      stableHash(entry),
+      JSON.stringify(entry),
+      recordedAt
+    )
+  }
 }
 
 function rebuildSessionRollup(db: Database.Database, sessionId: string): void {
@@ -415,7 +551,14 @@ function rebuildSessionRollup(db: Database.Database, sessionId: string): void {
       conversation_non_cached_input, conversation_cache_read, conversation_cache_write,
       conversation_output, conversation_reasoning,
       billing_priced_tokens, billing_billable_tokens, billing_cost_usd,
+      billing_provider_billed_usd, billing_harness_list_estimate_usd,
+      billing_swob_estimate_usd, billing_subscription_allocated_usd,
+      billing_financial_covered_tokens,
       conversation_priced_tokens, conversation_billable_tokens, conversation_cost_usd,
+      conversation_provider_billed_usd, conversation_harness_list_estimate_usd,
+      conversation_swob_estimate_usd, conversation_subscription_allocated_usd,
+      conversation_financial_covered_tokens,
+      price_revisions, revision_notice_zh, revision_notice_en,
       calls, conversation_calls, modeled_calls, conversation_modeled_calls,
       first_occurred_at, last_occurred_at
     )
@@ -428,18 +571,51 @@ function rebuildSessionRollup(db: Database.Database, sessionId: string): void {
       SUM(CASE WHEN agent_scope = 'main' THEN output_tokens ELSE 0 END),
       SUM(CASE WHEN agent_scope = 'main' THEN reasoning_tokens ELSE 0 END),
       SUM(priced_tokens), SUM(billable_tokens), SUM(COALESCE(cost_usd, 0)),
+      SUM(COALESCE(provider_billed_usd, 0)),
+      SUM(COALESCE(harness_list_estimate_usd, 0)),
+      SUM(COALESCE(swob_estimate_usd, 0)),
+      SUM(COALESCE(subscription_allocated_usd, 0)),
+      SUM(financial_covered_tokens),
       SUM(CASE WHEN agent_scope = 'main' THEN priced_tokens ELSE 0 END),
       SUM(CASE WHEN agent_scope = 'main' THEN billable_tokens ELSE 0 END),
       SUM(CASE WHEN agent_scope = 'main' THEN COALESCE(cost_usd, 0) ELSE 0 END),
+      SUM(CASE WHEN agent_scope = 'main' THEN COALESCE(provider_billed_usd, 0) ELSE 0 END),
+      SUM(CASE WHEN agent_scope = 'main' THEN COALESCE(harness_list_estimate_usd, 0) ELSE 0 END),
+      SUM(CASE WHEN agent_scope = 'main' THEN COALESCE(swob_estimate_usd, 0) ELSE 0 END),
+      SUM(CASE WHEN agent_scope = 'main' THEN COALESCE(subscription_allocated_usd, 0) ELSE 0 END),
+      SUM(CASE WHEN agent_scope = 'main' THEN financial_covered_tokens ELSE 0 END),
+      GROUP_CONCAT(DISTINCT price_revision),
+      MAX(revision_notice_zh), MAX(revision_notice_en),
       SUM(call_count),
       SUM(CASE WHEN agent_scope = 'main' THEN turn_count ELSE 0 END),
       SUM(CASE WHEN model_key <> '${UNKNOWN_MODEL}' THEN call_count ELSE 0 END),
       SUM(CASE WHEN agent_scope = 'main' AND model_key <> '${UNKNOWN_MODEL}' THEN call_count ELSE 0 END),
       MIN(occurred_at), MAX(occurred_at)
     FROM usage_facts
-    WHERE session_id = ?
+    WHERE session_id = ? AND billing_included = 1
     GROUP BY occurred_day, occurred_hour, source_client, model_key, project_path, session_id
   `).run(sessionId)
+}
+
+function canonicalizeBillingFacts(db: Database.Database): void {
+  db.prepare(`
+    UPDATE usage_facts AS current
+    SET billing_included = CASE WHEN current.event_id = (
+      SELECT candidate.event_id
+      FROM usage_facts AS candidate
+      WHERE candidate.billing_fact_id = current.billing_fact_id
+      ORDER BY
+        CASE candidate.agent_scope WHEN 'main' THEN 0 WHEN 'subagent' THEN 1 ELSE 2 END,
+        CASE WHEN candidate.occurred_at IS NULL THEN 1 ELSE 0 END,
+        candidate.occurred_at,
+        candidate.event_id
+      LIMIT 1
+    ) THEN 1 ELSE 0 END
+  `).run()
+
+  db.prepare('DELETE FROM usage_rollups').run()
+  const sessionIds = db.prepare('SELECT session_id FROM usage_sessions').all() as Array<{ session_id: string }>
+  for (const row of sessionIds) rebuildSessionRollup(db, row.session_id)
 }
 
 export function synchronizeUsageFacts(
@@ -544,7 +720,6 @@ export function synchronizeUsageFacts(
           'INSERT INTO usage_session_activity(session_id, occurred_day) VALUES (?, ?)'
         )
         for (const day of activityDays) insertActivity.run(sessionId, day)
-        rebuildSessionRollup(db, sessionId)
       }
       if (folderChanged) {
         db.prepare('DELETE FROM usage_session_folders WHERE session_id = ?').run(sessionId)
@@ -557,9 +732,11 @@ export function synchronizeUsageFacts(
 
     for (const row of existingRows) {
       if (uniqueSessions.has(row.session_id)) continue
+      db.prepare('DELETE FROM usage_valuation_history WHERE session_id = ?').run(row.session_id)
       db.prepare('DELETE FROM usage_sessions WHERE session_id = ?').run(row.session_id)
       removedSessions++
     }
+    if (changedSessions > 0 || removedSessions > 0 || options.rebuild) canonicalizeBillingFacts(db)
     db.prepare(`
       UPDATE usage_schema_meta
       SET last_indexed_at = ?, revision = revision + 1
@@ -729,6 +906,21 @@ function rowToAggregate(row: UsageRollupRow, basis: MetricBasis): UsageAggregate
   const pricedTokens = selectedConversation ? row.conversation_priced_tokens : row.billing_priced_tokens
   const billableTokens = selectedConversation ? row.conversation_billable_tokens : row.billing_billable_tokens
   const costUsd = selectedConversation ? row.conversation_cost_usd : row.billing_cost_usd
+  const financialCoveredTokens = selectedConversation
+    ? row.conversation_financial_covered_tokens
+    : row.billing_financial_covered_tokens
+  const providerBilledUsd = selectedConversation
+    ? row.conversation_provider_billed_usd
+    : row.billing_provider_billed_usd
+  const harnessListEstimateUsd = selectedConversation
+    ? row.conversation_harness_list_estimate_usd
+    : row.billing_harness_list_estimate_usd
+  const swobEstimateUsd = selectedConversation
+    ? row.conversation_swob_estimate_usd
+    : row.billing_swob_estimate_usd
+  const subscriptionAllocatedUsd = selectedConversation
+    ? row.conversation_subscription_allocated_usd
+    : row.billing_subscription_allocated_usd
   const modeledCalls = selectedConversation ? row.conversation_modeled_calls : row.modeled_calls
   return {
     key: row.key,
@@ -752,7 +944,21 @@ function rowToAggregate(row: UsageRollupRow, basis: MetricBasis): UsageAggregate
     usageCoverage: coverage(row.session_count, row.session_count),
     modelCoverage: coverage(modeledCalls, selectedConversation ? row.conversation_calls : row.calls),
     pricingCoverage: { ...coverage(pricedTokens, billableTokens), status: 'available' },
+    financialCoverage: coverage(financialCoveredTokens, billableTokens),
     costUsd: pricedTokens > 0 || costUsd !== 0 ? costUsd : null,
+    costLedgers: {
+      ...(providerBilledUsd !== 0 || financialCoveredTokens > 0 ? { providerBilledUsd } : {}),
+      ...(harnessListEstimateUsd !== 0 ? { harnessListEstimateUsd } : {}),
+      ...(swobEstimateUsd !== 0 ? { swobEstimateUsd } : {}),
+      ...(subscriptionAllocatedUsd !== 0 ? { subscriptionAllocatedUsd } : {})
+    },
+    priceRevisions: [...new Set((row.price_revisions || '').split(',').filter(Boolean))],
+    pricingRevisionNotices: row.revision_notice_zh && row.revision_notice_en
+      ? [{
+          revision: [...new Set((row.price_revisions || '').split(',').filter(Boolean))].at(-1) || '',
+          notice: { 'zh-CN': row.revision_notice_zh, en: row.revision_notice_en }
+        }]
+      : [],
     unknownTimeEvents: row.unknown_time_events
   }
 }
@@ -781,9 +987,22 @@ function aggregateRows(
       COALESCE(SUM(r.billing_priced_tokens), 0) AS billing_priced_tokens,
       COALESCE(SUM(r.billing_billable_tokens), 0) AS billing_billable_tokens,
       COALESCE(SUM(r.billing_cost_usd), 0) AS billing_cost_usd,
+      COALESCE(SUM(r.billing_provider_billed_usd), 0) AS billing_provider_billed_usd,
+      COALESCE(SUM(r.billing_harness_list_estimate_usd), 0) AS billing_harness_list_estimate_usd,
+      COALESCE(SUM(r.billing_swob_estimate_usd), 0) AS billing_swob_estimate_usd,
+      COALESCE(SUM(r.billing_subscription_allocated_usd), 0) AS billing_subscription_allocated_usd,
+      COALESCE(SUM(r.billing_financial_covered_tokens), 0) AS billing_financial_covered_tokens,
       COALESCE(SUM(r.conversation_priced_tokens), 0) AS conversation_priced_tokens,
       COALESCE(SUM(r.conversation_billable_tokens), 0) AS conversation_billable_tokens,
       COALESCE(SUM(r.conversation_cost_usd), 0) AS conversation_cost_usd,
+      COALESCE(SUM(r.conversation_provider_billed_usd), 0) AS conversation_provider_billed_usd,
+      COALESCE(SUM(r.conversation_harness_list_estimate_usd), 0) AS conversation_harness_list_estimate_usd,
+      COALESCE(SUM(r.conversation_swob_estimate_usd), 0) AS conversation_swob_estimate_usd,
+      COALESCE(SUM(r.conversation_subscription_allocated_usd), 0) AS conversation_subscription_allocated_usd,
+      COALESCE(SUM(r.conversation_financial_covered_tokens), 0) AS conversation_financial_covered_tokens,
+      GROUP_CONCAT(DISTINCT r.price_revisions) AS price_revisions,
+      MAX(r.revision_notice_zh) AS revision_notice_zh,
+      MAX(r.revision_notice_en) AS revision_notice_en,
       COALESCE(SUM(r.calls), 0) AS calls,
       COALESCE(SUM(r.conversation_calls), 0) AS conversation_calls,
       COALESCE(SUM(r.modeled_calls), 0) AS modeled_calls,
@@ -832,9 +1051,22 @@ function emptyAggregate(basis: MetricBasis): UsageAggregate {
     billing_priced_tokens: 0,
     billing_billable_tokens: 0,
     billing_cost_usd: 0,
+    billing_provider_billed_usd: 0,
+    billing_harness_list_estimate_usd: 0,
+    billing_swob_estimate_usd: 0,
+    billing_subscription_allocated_usd: 0,
+    billing_financial_covered_tokens: 0,
     conversation_priced_tokens: 0,
     conversation_billable_tokens: 0,
     conversation_cost_usd: 0,
+    conversation_provider_billed_usd: 0,
+    conversation_harness_list_estimate_usd: 0,
+    conversation_swob_estimate_usd: 0,
+    conversation_subscription_allocated_usd: 0,
+    conversation_financial_covered_tokens: 0,
+    price_revisions: null,
+    revision_notice_zh: null,
+    revision_notice_en: null,
     calls: 0,
     conversation_calls: 0,
     modeled_calls: 0,
@@ -1292,8 +1524,16 @@ export function sessionUsageEvents(
     WHERE ${filter.where.join(' AND ')}
     ORDER BY CASE WHEN occurred_at IS NULL THEN 1 ELSE 0 END, occurred_at, event_id
   `).all(...filter.params) as UsageFactRow[]
+  const historyForEvent = db.prepare(`
+    SELECT valuation_json, recorded_at
+    FROM usage_valuation_history
+    WHERE event_id = ?
+    ORDER BY recorded_at, price_revision
+  `)
   return rows.map((row) => ({
     eventId: row.event_id,
+    billingFactId: row.billing_fact_id,
+    billingIncluded: row.billing_included === 1,
     occurredAt: row.occurred_at,
     occurredDay: row.occurred_day,
     occurredHour: row.occurred_hour < 0 ? null : row.occurred_hour,
@@ -1316,7 +1556,37 @@ export function sessionUsageEvents(
     costUsd: row.cost_usd,
     pricingProvenance: row.pricing_provenance,
     pricedTokens: row.priced_tokens,
-    billableTokens: row.billable_tokens
+    billableTokens: row.billable_tokens,
+    financialCoveredTokens: row.financial_covered_tokens,
+    costLedgers: {
+      ...(row.provider_billed_usd !== null ? { providerBilledUsd: row.provider_billed_usd } : {}),
+      ...(row.harness_list_estimate_usd !== null
+        ? { harnessListEstimateUsd: row.harness_list_estimate_usd }
+        : {}),
+      ...(row.swob_estimate_usd !== null ? { swobEstimateUsd: row.swob_estimate_usd } : {}),
+      ...(row.subscription_allocated_usd !== null
+        ? { subscriptionAllocatedUsd: row.subscription_allocated_usd }
+        : {})
+    },
+    priceRevision: row.price_revision,
+    priceSnapshotHash: row.price_snapshot_hash,
+    pricingTrace: parseJson(row.pricing_trace_json, []),
+    ...(row.revision_notice_json
+      ? { revisionNotice: parseJson(row.revision_notice_json, undefined) }
+      : {}),
+    valuationHistory: (historyForEvent.all(row.event_id) as Array<{
+      valuation_json: string
+      recorded_at: string
+    }>).map((history) => ({
+      ...parseJson<UsageFact['valuationHistory'][number]>(history.valuation_json, {
+        priceRevision: 'unknown',
+        priceSnapshotHash: '',
+        costUsd: null,
+        costLedgers: {},
+        pricingTrace: []
+      }),
+      recordedAt: history.recorded_at
+    }))
   }))
 }
 

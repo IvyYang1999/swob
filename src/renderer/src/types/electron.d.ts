@@ -16,7 +16,7 @@ import type {
   UserIdentityInput
 } from '../../../shared/frontend-ipc-contract'
 import type { DashboardLayoutConfig } from '../../../shared/registry/builtin-widgets'
-import type { InsightsQueryBundleResult } from '../../../shared/analysis-scope-types'
+import type { InsightsQueryBundleResult, UsageFact } from '../../../shared/analysis-scope-types'
 import type {
   ReportJobSnapshot,
   ReportJobStartRequest,
@@ -98,7 +98,19 @@ type RendererUsageAggregate = {
   usageCoverage: RendererCoverageMetric
   modelCoverage: RendererCoverageMetric
   pricingCoverage: RendererCoverageMetric & { status: 'pending-t113' | 'available' }
+  financialCoverage: RendererCoverageMetric
   costUsd: number | null
+  costLedgers: {
+    providerBilledUsd?: number
+    harnessListEstimateUsd?: number
+    swobEstimateUsd?: number
+    subscriptionAllocatedUsd?: number
+  }
+  priceRevisions: string[]
+  pricingRevisionNotices: Array<{
+    revision: string
+    notice: { 'zh-CN': string; en: string }
+  }>
   unknownTimeEvents: number
 }
 type RendererInsightsQueryResult = {
@@ -131,32 +143,7 @@ type RendererInsightsDrilldownSession = {
   lastOccurredAt: string | null
   usageProvenance: string[]
 }
-type RendererUsageFact = {
-  eventId: string
-  occurredAt: string | null
-  occurredDay: string
-  occurredHour: number | null
-  sourceClient: string
-  sessionId: string
-  rootSessionId: string
-  agentScope: 'main' | 'subagent' | 'unknown'
-  projectPath: string
-  model: string | null
-  modelRaw: string | null
-  modelProvenance: string
-  nonCachedInputTokens: number
-  cacheReadTokens: number
-  cacheWriteTokens: number
-  outputTokens: number
-  reasoningTokens: number
-  usageProvenance: string
-  callCount: number
-  turnCount: number
-  costUsd?: number | null
-  pricingProvenance?: string | null
-  pricedTokens: number
-  billableTokens: number
-}
+type RendererUsageFact = UsageFact
 type RendererUsageFactSyncResult = {
   changedSessions: number
   unchangedSessions: number

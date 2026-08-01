@@ -1,6 +1,6 @@
 import type { SessionSource } from './types'
 
-export const USAGE_FACT_SCHEMA_VERSION = 5
+export const USAGE_FACT_SCHEMA_VERSION = 6
 
 export type AnalysisPreset = 'today' | '7d' | '30d' | '90d' | 'all'
 export type MetricBasis = 'billing' | 'conversation'
@@ -19,6 +19,10 @@ export interface AnalysisScope {
 
 export interface UsageFact {
   eventId: string
+  /** Stable identity of the provider billing fact, shared by copied/forked transcripts. */
+  billingFactId: string
+  /** Exactly one copy of a billing fact participates in aggregates. All copies remain auditable. */
+  billingIncluded: boolean
   occurredAt: string | null
   /** Local calendar key derived from occurredAt, or the explicit unknown bucket. */
   occurredDay: string | 'unknown-time'
@@ -44,6 +48,57 @@ export interface UsageFact {
   pricingProvenance?: string | null
   pricedTokens: number
   billableTokens: number
+  financialCoveredTokens: number
+  costLedgers: CostLedgerTotals
+  priceRevision: string
+  priceSnapshotHash: string
+  pricingTrace: PricingTraceAudit[]
+  revisionNotice?: PricingRevisionNotice
+  valuationHistory: ValuationHistoryEntry[]
+}
+
+export interface CostLedgerTotals {
+  providerBilledUsd?: number
+  harnessListEstimateUsd?: number
+  swobEstimateUsd?: number
+  subscriptionAllocatedUsd?: number
+}
+
+export interface PricingTraceAudit {
+  eventDedupKey: string
+  pricingRuleId: string
+  provider: string
+  modelCanonical: string
+  eventTimestamp: string
+  effectiveFrom: string
+  effectiveTo?: string
+  source: string
+  sourceUrl: string
+  catalogVersion: string
+  priceSnapshotHash: string
+  longContext: boolean
+  calculation: Array<{
+    component: string
+    tokens: number
+    usdPerMillion: number
+    multiplier: number
+    usd: number
+  }>
+}
+
+export interface PricingRevisionNotice {
+  revision: string
+  notice: { 'zh-CN': string; en: string }
+}
+
+export interface ValuationHistoryEntry {
+  priceRevision: string
+  priceSnapshotHash: string
+  costUsd: number | null
+  costLedgers: CostLedgerTotals
+  pricingTrace: PricingTraceAudit[]
+  recordedAt?: string
+  whatIf?: boolean
 }
 
 export interface CoverageMetric {
@@ -80,7 +135,11 @@ export interface UsageAggregate {
   usageCoverage: CoverageMetric
   modelCoverage: CoverageMetric
   pricingCoverage: PricingCoveragePlaceholder
+  financialCoverage: CoverageMetric
   costUsd: number | null
+  costLedgers: CostLedgerTotals
+  priceRevisions: string[]
+  pricingRevisionNotices: PricingRevisionNotice[]
   unknownTimeEvents: number
 }
 

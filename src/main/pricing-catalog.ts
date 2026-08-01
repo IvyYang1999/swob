@@ -1,4 +1,8 @@
+import { createHash } from 'node:crypto'
+import snapshotDocument from './pricing-snapshots.json'
+
 export type PricingSource = 'official' | 'litellm' | 'models.dev' | 'openrouter' | 'user-override'
+export type PriceSourceRole = 'history-formula' | 'coverage-diff' | 'model-identity' | 'official-review-override'
 
 export interface PricingRule {
   id: string
@@ -22,150 +26,147 @@ export interface PricingRule {
   catalogVersion: string
 }
 
+export interface PriceSnapshotSource {
+  name: string
+  role: PriceSourceRole
+  revision: string
+  evidenceUrl: string
+}
+
+export interface PriceSnapshot {
+  revision: string
+  status: 'approved'
+  generatedAt: string
+  reviewedAt: string
+  replaces?: string
+  revisionReason?: 'official-price-catalog-update'
+  revisionNotice?: { 'zh-CN': string; en: string }
+  contentHash: string
+  sourcePipeline: readonly PriceSnapshotSource[]
+  rules: readonly PricingRule[]
+}
+
 export interface CanonicalModelMatch {
   modelCanonical: string
   originalProvider: string
   match: 'exact' | 'alias'
 }
 
-export const PRICING_CATALOG_VERSION = 'official-snapshot-2026-07-22.v1'
+type RawRule = Omit<PricingRule, 'catalogVersion'>
+type RawSnapshot = Omit<PriceSnapshot, 'rules' | 'sourcePipeline'> & {
+  sourcePipeline: PriceSnapshotSource[]
+  patches: Array<
+    | { op: 'add'; rule: RawRule }
+    | { op: 'replace'; ruleId: string; rule: RawRule }
+  >
+}
 
-const ANTHROPIC_PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing'
-const OPENAI_PRICING_URL = 'https://developers.openai.com/api/docs/pricing'
+function stableJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableJson)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => [key, stableJson(item)]))
+}
 
-function anthropicRule(
-  modelCanonical: string,
-  effectiveFrom: string,
-  input: number,
-  output: number
-): PricingRule {
+function snapshotHashInput(snapshot: PriceSnapshot): unknown {
   return {
-    id: `anthropic:${modelCanonical}:${effectiveFrom}`,
-    provider: 'anthropic',
-    modelCanonical,
-    effectiveFrom,
-    usdPerMillion: {
-      input,
-      output,
-      cacheRead: input * 0.1,
-      cacheWrite5m: input * 1.25,
-      cacheWrite1h: input * 2
-    },
-    source: 'official',
-    sourceUrl: ANTHROPIC_PRICING_URL,
-    catalogVersion: PRICING_CATALOG_VERSION
+    schemaVersion: snapshotDocument.schemaVersion,
+    revision: snapshot.revision,
+    status: snapshot.status,
+    generatedAt: snapshot.generatedAt,
+    reviewedAt: snapshot.reviewedAt,
+    ...(snapshot.replaces ? { replaces: snapshot.replaces } : {}),
+    ...(snapshot.revisionReason ? { revisionReason: snapshot.revisionReason } : {}),
+    ...(snapshot.revisionNotice ? { revisionNotice: snapshot.revisionNotice } : {}),
+    sourcePipeline: snapshot.sourcePipeline,
+    rules: snapshot.rules.map(({ catalogVersion: _catalogVersion, ...rule }) => rule)
   }
 }
 
-/**
- * Embedded, reviewable snapshot. Runtime valuation never fetches pricing data.
- * The first catalog intentionally covers models observed in Swob's live rollup
- * and golden fixtures, plus exact aliases; an absent rule is unpriced.
- * When an official page does not publish a release-effective timestamp, the
- * snapshot date is the conservative lower bound; we never back-price history.
- */
-export const EMBEDDED_PRICING_CATALOG: readonly PricingRule[] = [
-  anthropicRule('claude-sonnet-4', '2025-05-22T00:00:00Z', 3, 15),
-  anthropicRule('claude-opus-4', '2025-05-22T00:00:00Z', 15, 75),
-  anthropicRule('claude-opus-4-1', '2025-08-05T00:00:00Z', 15, 75),
-  anthropicRule('claude-sonnet-4-5', '2025-09-29T00:00:00Z', 3, 15),
-  anthropicRule('claude-haiku-4-5', '2025-10-15T00:00:00Z', 1, 5),
-  anthropicRule('claude-opus-4-5', '2025-11-24T00:00:00Z', 5, 25),
-  anthropicRule('claude-opus-4-6', '2026-02-05T00:00:00Z', 5, 25),
-  anthropicRule('claude-sonnet-4-6', '2026-02-17T00:00:00Z', 3, 15),
-  anthropicRule('claude-fable-5', '2026-07-22T00:00:00Z', 10, 50),
-  anthropicRule('claude-opus-4-8', '2026-07-22T00:00:00Z', 5, 25),
-  {
-    ...anthropicRule('claude-sonnet-5', '2026-07-22T00:00:00Z', 2, 10),
-    effectiveTo: '2026-09-01T00:00:00Z'
-  },
-  anthropicRule('claude-sonnet-5', '2026-09-01T00:00:00Z', 3, 15),
-  {
-    id: 'openai:gpt-5.5:2026-07-22',
-    provider: 'openai',
-    modelCanonical: 'gpt-5.5',
-    effectiveFrom: '2026-07-22T00:00:00Z',
-    usdPerMillion: { input: 5, output: 30, cacheRead: 0.5 },
-    contextThresholdTokens: 272_000,
-    thresholdMode: 'whole-request',
-    longContextMultiplier: { input: 2, output: 1.5 },
-    source: 'official',
-    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-5.5',
-    catalogVersion: PRICING_CATALOG_VERSION
-  },
-  {
-    id: 'openai:gpt-5.6-sol:2026-07-22',
-    provider: 'openai',
-    modelCanonical: 'gpt-5.6-sol',
-    effectiveFrom: '2026-07-22T00:00:00Z',
-    usdPerMillion: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-    contextThresholdTokens: 272_000,
-    thresholdMode: 'whole-request',
-    longContextMultiplier: { input: 2, output: 1.5 },
-    source: 'official',
-    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-5.6-sol',
-    catalogVersion: PRICING_CATALOG_VERSION
-  },
-  {
-    id: 'openai:gpt-5.6-terra:2026-07-22',
-    provider: 'openai',
-    modelCanonical: 'gpt-5.6-terra',
-    effectiveFrom: '2026-07-22T00:00:00Z',
-    usdPerMillion: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-    contextThresholdTokens: 272_000,
-    thresholdMode: 'whole-request',
-    longContextMultiplier: { input: 2, output: 1.5 },
-    source: 'official',
-    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-5.6-terra',
-    catalogVersion: PRICING_CATALOG_VERSION
-  },
-  {
-    id: 'openai:gpt-5.6-luna:2026-07-22',
-    provider: 'openai',
-    modelCanonical: 'gpt-5.6-luna',
-    effectiveFrom: '2026-07-22T00:00:00Z',
-    usdPerMillion: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-    contextThresholdTokens: 272_000,
-    thresholdMode: 'whole-request',
-    longContextMultiplier: { input: 2, output: 1.5 },
-    source: 'official',
-    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-5.6-luna',
-    catalogVersion: PRICING_CATALOG_VERSION
-  },
-  {
-    id: 'openai:gpt-5.4:2026-03-05',
-    provider: 'openai',
-    modelCanonical: 'gpt-5.4',
-    effectiveFrom: '2026-03-05T00:00:00Z',
-    usdPerMillion: { input: 2.5, output: 15, cacheRead: 0.25 },
-    contextThresholdTokens: 272_000,
-    thresholdMode: 'whole-request',
-    longContextMultiplier: { input: 2, output: 1.5 },
-    source: 'official',
-    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-5.4',
-    catalogVersion: PRICING_CATALOG_VERSION
-  },
-  {
-    id: 'openai:gpt-5:2025-08-07',
-    provider: 'openai',
-    modelCanonical: 'gpt-5',
-    effectiveFrom: '2025-08-07T00:00:00Z',
-    usdPerMillion: { input: 1.25, output: 10, cacheRead: 0.125 },
-    source: 'official',
-    sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-5',
-    catalogVersion: PRICING_CATALOG_VERSION
-  },
-  {
-    id: 'openai:gpt-4o-mini:2024-07-18',
-    provider: 'openai',
-    modelCanonical: 'gpt-4o-mini',
-    effectiveFrom: '2024-07-18T00:00:00Z',
-    usdPerMillion: { input: 0.15, output: 0.6, cacheRead: 0.075 },
-    source: 'official',
-    sourceUrl: OPENAI_PRICING_URL,
-    catalogVersion: PRICING_CATALOG_VERSION
+export function calculatePriceSnapshotHash(snapshot: PriceSnapshot): string {
+  return createHash('sha256').update(JSON.stringify(stableJson(snapshotHashInput(snapshot)))).digest('hex')
+}
+
+export function assertPriceSnapshotIntegrity(snapshot: PriceSnapshot): void {
+  if (snapshot.status !== 'approved') throw new Error(`Price snapshot ${snapshot.revision} is not approved`)
+  const expectedRoles: PriceSourceRole[] = [
+    'history-formula', 'coverage-diff', 'model-identity', 'official-review-override'
+  ]
+  if (snapshot.sourcePipeline.map((source) => source.role).join('\0') !== expectedRoles.join('\0')) {
+    throw new Error(`Price snapshot ${snapshot.revision} has an incomplete source pipeline`)
   }
-]
+  const actual = calculatePriceSnapshotHash(snapshot)
+  if (actual !== snapshot.contentHash) {
+      throw new Error(`Price snapshot ${snapshot.revision} hash mismatch: expected ${snapshot.contentHash}, got ${actual}`)
+  }
+  const byModel = new Map<string, PricingRule[]>()
+  for (const rule of snapshot.rules) {
+    const key = `${rule.provider}\0${rule.modelCanonical}`
+    const values = byModel.get(key) || []
+    values.push(rule)
+    byModel.set(key, values)
+  }
+  for (const [key, rules] of byModel) {
+    rules.sort((left, right) => Date.parse(left.effectiveFrom) - Date.parse(right.effectiveFrom))
+    for (let index = 1; index < rules.length; index++) {
+      const previousTo = rules[index - 1].effectiveTo
+        ? Date.parse(rules[index - 1].effectiveTo!)
+        : Number.POSITIVE_INFINITY
+      if (previousTo > Date.parse(rules[index].effectiveFrom)) {
+        throw new Error(`Price snapshot ${snapshot.revision} has overlapping rules for ${key}`)
+      }
+    }
+  }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child)
+  }
+  return value
+}
+
+function resolveSnapshots(): Map<string, PriceSnapshot> {
+  const registry = new Map<string, PriceSnapshot>()
+  let rules = new Map((snapshotDocument.baseRules as RawRule[]).map((rule) => [rule.id, rule]))
+  for (const raw of snapshotDocument.snapshots as RawSnapshot[]) {
+    if (raw.replaces) {
+      const previous = registry.get(raw.replaces)
+      if (!previous) throw new Error(`Price snapshot ${raw.revision} replaces unknown ${raw.replaces}`)
+      rules = new Map(previous.rules.map(({ catalogVersion: _catalogVersion, ...rule }) => [rule.id, rule]))
+    }
+    for (const patch of raw.patches) {
+      if (patch.op === 'replace' && !rules.has(patch.ruleId)) {
+        throw new Error(`Price snapshot ${raw.revision} replaces missing rule ${patch.ruleId}`)
+      }
+      if (patch.op === 'replace') rules.delete(patch.ruleId)
+      if (rules.has(patch.rule.id)) throw new Error(`Price snapshot ${raw.revision} duplicates ${patch.rule.id}`)
+      rules.set(patch.rule.id, patch.rule)
+    }
+    const snapshot: PriceSnapshot = {
+      revision: raw.revision,
+      status: raw.status,
+      generatedAt: raw.generatedAt,
+      reviewedAt: raw.reviewedAt,
+      ...(raw.replaces ? { replaces: raw.replaces } : {}),
+      ...(raw.revisionReason ? { revisionReason: raw.revisionReason } : {}),
+      ...(raw.revisionNotice ? { revisionNotice: raw.revisionNotice } : {}),
+      contentHash: raw.contentHash,
+      sourcePipeline: raw.sourcePipeline,
+      rules: [...rules.values()].map((rule) => ({ ...rule, catalogVersion: raw.revision }))
+    }
+    assertPriceSnapshotIntegrity(snapshot)
+    registry.set(snapshot.revision, deepFreeze(snapshot))
+  }
+  return registry
+}
+
+export const PRICE_SNAPSHOT_REGISTRY: ReadonlyMap<string, PriceSnapshot> = resolveSnapshots()
+export const ACTIVE_PRICE_SNAPSHOT = PRICE_SNAPSHOT_REGISTRY.get('official-snapshot-2026-08-01.v2')!
+export const PRICING_CATALOG_VERSION = ACTIVE_PRICE_SNAPSHOT.revision
+export const EMBEDDED_PRICING_CATALOG: readonly PricingRule[] = ACTIVE_PRICE_SNAPSHOT.rules
 
 const MODEL_ALIASES: Readonly<Record<string, { canonical: string; provider: string }>> = {
   'claude-sonnet-4': { canonical: 'claude-sonnet-4', provider: 'anthropic' },

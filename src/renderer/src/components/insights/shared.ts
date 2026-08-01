@@ -105,13 +105,23 @@ export interface InsightsData {
 
 export interface Valuation {
   usd?: number
-  mode: 'reported' | 'estimated-list-price' | 'api-equivalent' | 'unpriced'
+  mode: 'provider-billed' | 'harness-list-estimate' | 'swob-estimate' | 'api-equivalent' | 'subscription-allocated' | 'mixed' | 'unpriced'
+  selectedLedger?: 'provider-billed' | 'harness-list-estimate' | 'swob-estimate' | 'api-equivalent' | 'subscription-allocated'
   pricingMatch: 'reported' | 'exact' | 'alias' | 'mixed' | 'none'
+  ledgerBreakdown: {
+    providerBilledUsd?: number
+    harnessListEstimateUsd?: number
+    swobEstimateUsd?: number
+    subscriptionAllocatedUsd?: number
+  }
   coveredTokens: number
   totalBillableTokens: number
   coveragePercent: number
+  financialCoveredTokens: number
+  financialCoveragePercent: number
   missingReasons: string[]
   pricingRules: Array<{
+    eventDedupKey: string
     pricingRuleId: string
     provider: string
     modelCanonical: string
@@ -121,9 +131,27 @@ export interface Valuation {
     source: string
     sourceUrl: string
     catalogVersion: string
+    priceSnapshotHash: string
     longContext: boolean
+    calculation: Array<{
+      component: string
+      tokens: number
+      usdPerMillion: number
+      multiplier: number
+      usd: number
+    }>
   }>
-  modeBreakdown: Partial<Record<'reported' | 'estimated-list-price' | 'api-equivalent', number>>
+  priceRevision: string
+  priceSnapshotHash: string
+  priceRevisions: string[]
+  revisionNotices: Array<{
+    revision: string
+    notice: { 'zh-CN': string; en: string }
+  }>
+  modeBreakdown: Partial<Record<
+    'provider-billed' | 'harness-list-estimate' | 'swob-estimate' | 'api-equivalent' | 'subscription-allocated',
+    number
+  >>
 }
 
 export interface BySource {
@@ -216,6 +244,44 @@ interface SessionLookupItem {
   cwds?: string[]
   projectPath?: string
   source?: string
+}
+
+function valuationFromAggregate(aggregate: UsageAggregate | undefined, fallbackTokens = 0): Valuation {
+  const ledgers = aggregate?.costLedgers || {}
+  const modeBreakdown: Valuation['modeBreakdown'] = {
+    ...(ledgers.providerBilledUsd !== undefined ? { 'provider-billed': ledgers.providerBilledUsd } : {}),
+    ...(ledgers.harnessListEstimateUsd !== undefined
+      ? { 'harness-list-estimate': ledgers.harnessListEstimateUsd }
+      : {}),
+    ...(ledgers.swobEstimateUsd !== undefined ? { 'swob-estimate': ledgers.swobEstimateUsd } : {}),
+    ...(ledgers.subscriptionAllocatedUsd !== undefined
+      ? { 'subscription-allocated': ledgers.subscriptionAllocatedUsd }
+      : {})
+  }
+  const modes = Object.keys(modeBreakdown) as Array<keyof Valuation['modeBreakdown']>
+  const mode: Valuation['mode'] = modes.length === 0 ? 'unpriced' : modes.length === 1 ? modes[0] : 'mixed'
+  const totalBillableTokens = aggregate?.pricingCoverage.total ?? fallbackTokens
+  const coveredTokens = aggregate?.pricingCoverage.covered ?? 0
+  const financialCoveredTokens = aggregate?.financialCoverage.covered ?? 0
+  return {
+    ...(aggregate?.costUsd !== null && aggregate?.costUsd !== undefined ? { usd: aggregate.costUsd } : {}),
+    mode,
+    ...(modes.length === 1 ? { selectedLedger: modes[0] } : {}),
+    pricingMatch: coveredTokens > 0 ? 'exact' : modes.length > 0 ? 'reported' : 'none',
+    ledgerBreakdown: ledgers,
+    coveredTokens,
+    totalBillableTokens,
+    coveragePercent: aggregate?.pricingCoverage.percent ?? 0,
+    financialCoveredTokens,
+    financialCoveragePercent: aggregate?.financialCoverage.percent ?? 0,
+    missingReasons: totalBillableTokens > coveredTokens ? ['aggregate-unpriced-tokens'] : [],
+    pricingRules: [],
+    priceRevision: aggregate?.priceRevisions.length === 1 ? aggregate.priceRevisions[0] : 'mixed',
+    priceSnapshotHash: '',
+    priceRevisions: aggregate?.priceRevisions || [],
+    revisionNotices: aggregate?.pricingRevisionNotices || [],
+    modeBreakdown
+  }
 }
 
 /**
@@ -313,16 +379,7 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
     return { date: d.date, value: d.totalTokens, level }
   })
 
-  const emptyValuation: Valuation = {
-    mode: 'unpriced',
-    pricingMatch: 'none',
-    coveredTokens: 0,
-    totalBillableTokens: billingTokens,
-    coveragePercent: 0,
-    missingReasons: [],
-    pricingRules: [],
-    modeBreakdown: {},
-  }
+  const valuation = valuationFromAggregate(g, billingTokens)
 
   const sessionsById = new Map<string, SessionLookupItem>()
   for (const session of sessions) {
@@ -340,10 +397,7 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
       conversationOnlyTokens: available ? aggregate.conversationTokens : null,
       provenance: available ? 'usage-fact' : 'unavailable',
       valuation: {
-        ...emptyValuation,
-        coveredTokens: aggregate.pricingCoverage.covered,
-        totalBillableTokens: aggregate.pricingCoverage.total,
-        coveragePercent: aggregate.pricingCoverage.percent ?? 0,
+        ...valuationFromAggregate(aggregate, aggregate.billingTokens),
       },
     }
   })
@@ -370,7 +424,7 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
     heatmap,
     totalCacheReadTokens: g?.cacheReadTokens ?? 0,
     totalCacheCreationTokens: g?.cacheWriteTokens ?? 0,
-    valuation: emptyValuation,
+    valuation,
     hourlyDistribution,
     turnCountDistribution: [0, 0, 0, 0, 0, 0],
     topTools: [],
@@ -383,12 +437,18 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
       difference: tokenDifference,
       ok: Math.abs(totalTokens - projectTotal) < 0.000001 && Math.abs(tokenDifference) < 0.000001,
       valuation: {
-        globalUsd: null,
-        sessionsUsd: null,
-        uniqueEventsUsd: null,
-        difference: 0,
+        globalUsd: valuation.usd ?? null,
+        sessionsUsd: bySession.some((session) => session.valuation.usd !== undefined)
+          ? bySession.reduce((sum, session) => sum + (session.valuation.usd || 0), 0)
+          : null,
+        uniqueEventsUsd: valuation.usd ?? null,
+        difference: valuation.usd === undefined
+          ? 0
+          : valuation.usd - bySession.reduce((sum, session) => sum + (session.valuation.usd || 0), 0),
         coverageDifference: 0,
-        ok: true,
+        ok: valuation.usd === undefined || Math.abs(
+          valuation.usd - bySession.reduce((sum, session) => sum + (session.valuation.usd || 0), 0)
+        ) < 0.000001,
       },
     },
   }

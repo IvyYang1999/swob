@@ -16,6 +16,7 @@ test('Token Insights 在真实 Electron 窗口展示统一口径与 unavailable'
   await page.getByTitle('Token 洞察').click()
   await page.getByRole('button', { name: /^(全部|All)$/ }).click()
   await expect(page.getByText('Processed Tokens', { exact: true }).first()).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('button', { name: /^全部$|^All$/ }).click()
   await expect(page.getByText('2 with usage · 2 unavailable', { exact: true })).toBeVisible()
   await expect(page.getByText('Cursor', { exact: true })).toBeVisible()
   await expect(page.getByText('Unavailable', { exact: true }).first()).toBeVisible()

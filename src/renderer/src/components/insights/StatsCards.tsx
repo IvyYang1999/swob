@@ -26,6 +26,15 @@ export function StatsCards({ data, previousPeriod }: { data: InsightsData; previ
   const activeDays = data.activeDays
   const dailyAvgTime = activeDays > 0 ? Math.round(data.totalTime / activeDays) : 0
   const conversationBasis = scope.metricBasis === 'conversation'
+  const primaryCost = data.valuation.ledgerBreakdown.providerBilledUsd !== undefined
+    ? { amount: data.valuation.ledgerBreakdown.providerBilledUsd, label: t('renderer.cost_card.provider_billed') }
+    : data.valuation.ledgerBreakdown.swobEstimateUsd !== undefined
+      ? { amount: data.valuation.ledgerBreakdown.swobEstimateUsd, label: t('renderer.cost_card.swob_estimate') }
+      : data.valuation.ledgerBreakdown.harnessListEstimateUsd !== undefined
+        ? { amount: data.valuation.ledgerBreakdown.harnessListEstimateUsd, label: t('renderer.cost_card.harness_estimate') }
+        : data.valuation.ledgerBreakdown.subscriptionAllocatedUsd !== undefined
+          ? { amount: data.valuation.ledgerBreakdown.subscriptionAllocatedUsd, label: t('renderer.cost_card.subscription_allocated') }
+          : null
 
   const cards = [
     {
@@ -40,9 +49,12 @@ export function StatsCards({ data, previousPeriod }: { data: InsightsData; previ
       showComparison: true,
     },
     {
-      value: data.valuation.usd === undefined || data.valuation.mode === 'unpriced' ? '—' : `$${data.valuation.usd.toFixed(2)}`,
-      label: t('renderer.stats_cards.api_equivalent'),
-      sub: data.valuation.mode === 'unpriced' ? '' : t('renderer.stats_cards.coverage', { value0: data.valuation.coveragePercent.toFixed(1) }),
+      value: primaryCost ? `$${primaryCost.amount.toFixed(2)}` : '—',
+      label: primaryCost?.label || t('renderer.stats_cards.cost_ledgers'),
+      sub: primaryCost ? t('renderer.stats_cards.coverage_both', {
+        value0: data.valuation.coveragePercent.toFixed(1),
+        value1: data.valuation.financialCoveragePercent.toFixed(1)
+      }) : '',
       title: t('renderer.stats_cards.caveat'),
       showComparison: false,
     },

@@ -30,6 +30,18 @@ export interface PricingCoveragePlaceholder extends CoverageMetric {
   status: 'pending-t113' | 'available'
 }
 
+export interface CostLedgerTotals {
+  providerBilledUsd?: number
+  harnessListEstimateUsd?: number
+  swobEstimateUsd?: number
+  subscriptionAllocatedUsd?: number
+}
+
+export interface PricingRevisionNotice {
+  revision: string
+  notice: { 'zh-CN': string; en: string }
+}
+
 export interface UsageAggregate {
   key: string
   label: string
@@ -52,8 +64,76 @@ export interface UsageAggregate {
   usageCoverage: CoverageMetric
   modelCoverage: CoverageMetric
   pricingCoverage: PricingCoveragePlaceholder
+  financialCoverage: CoverageMetric
   costUsd: number | null
+  costLedgers: CostLedgerTotals
+  priceRevisions: string[]
+  pricingRevisionNotices: PricingRevisionNotice[]
   unknownTimeEvents: number
+}
+
+export interface UsageFact {
+  eventId: string
+  billingFactId: string
+  billingIncluded: boolean
+  occurredAt: string | null
+  occurredDay: string | 'unknown-time'
+  occurredHour: number | null
+  sourceClient: string
+  sessionId: string
+  rootSessionId: string
+  agentScope: 'main' | 'subagent' | 'unknown'
+  projectPath: string
+  model: string | null
+  modelRaw: string | null
+  modelProvenance: string
+  nonCachedInputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  usageProvenance: string
+  callCount: number
+  turnCount: number
+  costUsd?: number | null
+  pricingProvenance?: string | null
+  pricedTokens: number
+  billableTokens: number
+  financialCoveredTokens: number
+  costLedgers: CostLedgerTotals
+  priceRevision: string
+  priceSnapshotHash: string
+  pricingTrace: Array<{
+    eventDedupKey: string
+    pricingRuleId: string
+    provider: string
+    modelCanonical: string
+    eventTimestamp: string
+    effectiveFrom: string
+    effectiveTo?: string
+    source: string
+    sourceUrl: string
+    catalogVersion: string
+    priceSnapshotHash: string
+    longContext: boolean
+    calculation: Array<{
+      component: string
+      tokens: number
+      usdPerMillion: number
+      multiplier: number
+      usd: number
+    }>
+  }>
+  revisionNotice?: PricingRevisionNotice
+  valuationHistory: Array<{
+    priceRevision: string
+    priceSnapshotHash: string
+    costUsd: number | null
+    costLedgers: CostLedgerTotals
+    pricingTrace: UsageFact['pricingTrace']
+    recordedAt?: string
+    whatIf?: boolean
+  }>
 }
 
 export interface ResolvedAnalysisRange {

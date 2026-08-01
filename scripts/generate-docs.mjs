@@ -79,7 +79,7 @@ export function extractBalanced(source, marker, open, close) {
 }
 
 export function interfaceFields(source, interfaceName) {
-  const block = extractBalanced(source, `export interface ${interfaceName}`, '{', '}')
+  const block = extractBalanced(source, `export interface ${interfaceName} {`, '{', '}')
   const fields = []
   let depth = 1
   for (const line of block.slice(1, -1).split('\n')) {
@@ -119,8 +119,13 @@ function escapeHtml(value) {
 }
 
 function stringUnionValues(source, typeName) {
-  const line = source.match(new RegExp(`export type ${typeName} = ([^\\n]+)`))?.[1] || ''
-  return [...line.matchAll(/'([^']+)'/g)].map((match) => match[1])
+  const marker = `export type ${typeName} =`
+  const start = source.indexOf(marker)
+  if (start < 0) return []
+  const tail = source.slice(start + marker.length)
+  const nextExport = tail.search(/\nexport\s/)
+  const declaration = nextExport >= 0 ? tail.slice(0, nextExport) : tail
+  return [...declaration.matchAll(/'([^']+)'/g)].map((match) => match[1])
 }
 
 const componentDocs = {
@@ -179,6 +184,14 @@ const componentDocs = {
     formula: 'min(outputTokens, reported reasoningTokens)；仅作拆分观察，不计入 processed total 的额外加项。',
     limits: '不是“思考质量”，也不能与 Session Audit 的 thinking block 指标互换。',
     surfaces: '支持该字段的会话 token 明细；无来源证据时不展示为 0。'
+  },
+  visibleOutputTokens: {
+    anchor: 'visible-output', title: 'Visible output Token', status: '预留契约',
+    definition: '提供商将可见输出与 thinking 分开报告时，仅表示用户可见的输出 token。',
+    source: 'Gemini 适配器预留字段；当前已验证 Claude/Codex 不使用这个独立桶。',
+    formula: 'billable output = visible output + thinking；两者互斥，不再把 thinking 当 visible output 子集。',
+    limits: '仅在 harness 字段语义已验证时可用；未验证来源必须 unavailable，不能从总输出猜测。',
+    surfaces: '未来 Gemini 用量明细与逐调用成本审计。'
   }
 }
 
@@ -216,23 +229,23 @@ const accountingDocs = [
     surfaces: 'Insights 数据质量提示与 Session Audit 证据标记。'
   },
   {
-    anchor: 'api-equivalent-usd', title: 'API 等价值（估算）', status: '已实现 · Valuation v1',
-    definition: '把已覆盖的 token 按对应模型公开 API 单价折算的比较值；界面总额保留底层 mode 明细，不等于用户实际支出。',
-    source: '逐请求 UsageEvent 的模型、billing provider、事件时间、缓存 TTL 与内置版本化官方价格快照；日志自带金额优先。',
+    anchor: 'api-equivalent-usd', title: 'API 等价值（估算）', status: '已实现 · Valuation v2',
+    definition: '把已覆盖的 token 按对应模型公开 API 单价折算的比较值；它与 Provider 账单、Harness 估算和订阅摊销并列，不互相覆盖。',
+    source: '逐请求 UsageEvent 的模型、billing provider、事件时间、缓存 TTL 与带 SHA-256 的审核价格快照。',
     formula: '每个可定价桶按百万 token 单价与可验证的长上下文倍数计算，再按去重事件求和。',
     limits: '不等于订阅现金支出；batch、非标准 service tier/speed、区域价或请求级模型证据不足时保守 unpriced。',
     surfaces: 'Insights 总览、成本与缓存、数据质量、会话排名、Audit Report 与 Session Audit。'
   },
   {
-    anchor: 'valuation-modes', title: '金额 mode（来源语义）', status: '已实现 · 4 种',
-    definition: 'reported 是日志自带金额；estimated-list-price 是显式 provider 的精确目录估算；api-equivalent 是从模型推断原厂后的等价估算；unpriced 表示不能可靠定价。',
-    source: 'Valuation.mode、UsageEvent.reportedCostUsd 与 providerProvenance。',
-    formula: '日志金额优先；否则只有请求级模型、provider、时间和计价修饰符都满足保守门槛时才查价格目录。',
-    limits: 'reported 只表示来源日志报告，并不自动等于信用卡账单；混合聚合必须继续展示 modeBreakdown。',
+    anchor: 'valuation-modes', title: '金额 mode（来源语义）', status: '已实现 · 7 种',
+    definition: 'provider-billed 是 Provider 账单；harness-list-estimate 是客户端估价；swob-estimate/api-equivalent 是 Swob 价格快照估算；subscription-allocated 是订阅摊销；mixed 是多账聚合；unpriced 表示不能可靠定价。',
+    source: 'Valuation.mode、ReportedCostKind、subscriptionAllocation 与 providerProvenance。',
+    formula: '每种账独立累计；兼容总额按 Provider 账单、Swob 估算、Harness 估算、订阅摊销的顺序选择，但 UI 必须并列展示 ledgerBreakdown。',
+    limits: '只有 provider-billed 计入 financial coverage；Harness/Swob 估算即使有金额也不能伪装成现金支出。',
     surfaces: 'Insights 定价追溯、Audit Report 与 Session Audit 估值证据。'
   },
   {
-    anchor: 'valuation-coverage', title: '估值覆盖率', status: '已实现 · Valuation v1',
+    anchor: 'valuation-coverage', title: '估值覆盖率', status: '已实现 · Valuation v2',
     definition: '有可靠价格匹配的 token，占有可靠 token 数据总量的比例。',
     source: '每个 Valuation 的 coveredTokens 与 totalBillableTokens，跨去重事件聚合。',
     formula: 'coveredTokens ÷ totalBillableTokens × 100；无 billable token 时，有金额证据为 100，否则为 0。',
@@ -271,7 +284,7 @@ const auditDocs = {
   thinkingDepth: ['Thinking block 形态', '统计 thinking/signature block 的数量、签名/正文平均长度与脱敏数。', '转录中的 thinking block 形态。', '对可见 block 求数量和长度均值。', '只能说明记录形态，不能衡量推理深度或质量。', 'Session Audit 指标卡。'],
   turnLatencies: ['相邻消息延迟', '相邻消息时间戳之差组成的逐轮序列。', '主线程用户/助手消息时间戳。', '只保留 0 到 1 小时内的正差。', '混合了排队、网络、工具和用户思考时间。', 'Session Audit 延迟明细。'],
   latencyStats: ['响应延迟 P50 / P95 / Max', '助手消息相对前一条消息的延迟分布。', '相邻消息延迟中的 assistant 项。', '排序后取 nearest-rank P50/P95 与最大值。', '不是端到端模型服务延迟，时间戳缺失时 unavailable。', 'Session Audit 指标卡与 findings。'],
-  valuation: ['Session Audit 逐请求估值', '把会话 TokenAccounting 交给统一 Valuation 引擎，返回金额、mode、覆盖率、缺失原因与价格追溯。', '去重 UsageEvent 与内置版本化价格目录。', '逐请求按模型、provider、事件时间、缓存 TTL 和可验证的长上下文规则定价，再聚合。', 'API 等价值不是现金账单；无法精确匹配的请求保持 unpriced，不使用回退价。', 'Session Audit 估值卡与模型分布。'],
+  valuation: ['Session Audit 逐请求估值', '把会话 TokenAccounting 交给统一 Valuation 引擎，返回并列账本、双覆盖率、价格版本与逐桶计算证据。', '去重 UsageEvent、ReportedCostKind 与带哈希的审核价格快照。', '逐请求按模型、provider、事件时间、缓存 TTL 和可验证的长上下文规则定价；Provider/Harness/Swob/订阅账独立聚合。', '只有 Provider 账单代表财务覆盖；无法精确匹配的请求保持 unpriced，不使用回退价。', 'Session Audit 估值卡、Insights 成本账本与逐调用审计。'],
   visibleFrameworkMarkers: ['可见框架标记占比', '只估算用户消息中可见的框架标签文本及其占可见用户文本的比例。', '转录里实际可见的 framework marker。', '字符数 ÷ 4 估 token，再除以同法估算的可见用户文本 token。', '绝不是隐藏 API context overhead，也不是 provider token attribution。', 'Session Audit 框架标记卡。'],
   sessionType: ['会话类型', '按工具调用组合分类 coding/research/debugging/discussion/mixed。', '主线程工具调用计数与 Bash 错误。', '无工具为 discussion；编辑、搜索、报错 Bash、读取超过各自阈值时依次分类。', '代理分类且有顺序偏差，不是用户意图的事实标签。', 'Session Audit 概览。'],
   modelUsage: ['模型使用分布', '按模型汇总 assistant turn、input/output token 与静态估算成本。', 'assistant 消息 model 和 usage。', '按 model 分组求和并按 turns 降序。', '模型名和 usage 缺失会造成不完整；成本不是账单。', 'Session Audit 模型分布。'],
@@ -314,9 +327,17 @@ export function validateTruth(truth) {
   const staleAuditDocs = Object.keys(auditDocs).filter((field) => !codeAuditFields.includes(field))
   const requiredTotals = ['billingTotal', 'conversationOnly', 'provenance', 'unavailableReason']
   const missingAccountingFields = requiredTotals.filter((field) => !truth.accountingFields.includes(field))
-  const requiredValuationFields = ['usd', 'mode', 'pricingMatch', 'coveredTokens', 'totalBillableTokens', 'coveragePercent', 'missingReasons', 'pricingRules', 'modeBreakdown', 'componentUsd']
+  const requiredValuationFields = [
+    'usd', 'mode', 'pricingMatch', 'ledgerBreakdown', 'coveredTokens',
+    'totalBillableTokens', 'coveragePercent', 'financialCoveredTokens',
+    'financialCoveragePercent', 'missingReasons', 'pricingRules', 'priceRevision',
+    'priceSnapshotHash', 'priceRevisions', 'revisionNotices', 'modeBreakdown', 'componentUsd'
+  ]
   const missingValuationFields = requiredValuationFields.filter((field) => !truth.valuationFields.includes(field))
-  const documentedValuationModes = ['reported', 'estimated-list-price', 'api-equivalent', 'unpriced']
+  const documentedValuationModes = [
+    'provider-billed', 'harness-list-estimate', 'swob-estimate', 'api-equivalent',
+    'subscription-allocated', 'mixed', 'unpriced'
+  ]
   const valuationModeDrift = truth.valuationModes.filter((mode) => !documentedValuationModes.includes(mode))
   const missingValuationModes = documentedValuationModes.filter((mode) => !truth.valuationModes.includes(mode))
   const problems = [

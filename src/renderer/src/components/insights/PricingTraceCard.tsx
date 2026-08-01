@@ -11,16 +11,23 @@ const MISSING_REASON_LABELS: Record<string, string> = {
   'timestamp-missing': 'renderer.pricing_trace.reason_timestamp_missing'
 }
 
-/** Every dollar traceable: mode breakdown + the exact pricing rules used. */
-export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
+/** Every dollar traceable: parallel ledgers + exact snapshot/rule evidence. */
+export function PricingTraceCard({ valuation, onOpenAudit }: {
+  valuation: Valuation
+  onOpenAudit?: () => void
+}) {
   const locale = useStore((s) => s.locale)
   const zh = locale === 'zh-CN'
   const modes: Array<[string, string, number | undefined]> = [
-    ['reported', translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.reported_in_logs'), valuation.modeBreakdown.reported],
-    ['estimated-list-price', translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.estimated_exact_rule'), valuation.modeBreakdown['estimated-list-price']],
-    ['api-equivalent', translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.api_equivalent'), valuation.modeBreakdown['api-equivalent']]
+    ['provider-billed', translate(locale, 'renderer.pricing_trace_card.provider_billed'), valuation.modeBreakdown['provider-billed']],
+    ['harness-list-estimate', translate(locale, 'renderer.pricing_trace_card.harness_list_estimate'), valuation.modeBreakdown['harness-list-estimate']],
+    ['swob-estimate', translate(locale, 'renderer.pricing_trace_card.swob_estimate'), valuation.modeBreakdown['swob-estimate']],
+    ['api-equivalent', translate(locale, 'renderer.pricing_trace_card.api_equivalent'), valuation.modeBreakdown['api-equivalent']],
+    ['subscription-allocated', translate(locale, 'renderer.pricing_trace_card.subscription_allocated'), valuation.modeBreakdown['subscription-allocated']]
   ]
-  const catalogVersion = valuation.pricingRules[0]?.catalogVersion
+  const catalogVersions = valuation.priceRevisions.length > 0
+    ? valuation.priceRevisions
+    : valuation.pricingRules.map((rule) => rule.catalogVersion)
 
   return (
     <div className="space-y-3">
@@ -38,7 +45,17 @@ export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
             {' '}({(100 - valuation.coveragePercent).toFixed(1)}%)
           </span>
         </div>
+        <div className="flex justify-between">
+          <span className="text-muted">{translate(locale, 'renderer.pricing_trace_card.financial_coverage')}</span>
+          <span className="font-medium text-primary">{valuation.financialCoveragePercent.toFixed(1)}%</span>
+        </div>
       </div>
+
+      {valuation.revisionNotices.map((notice) => (
+        <div key={notice.revision} className="rounded border border-soft-amber/25 bg-soft-amber/5 px-2 py-1.5 text-[10px] text-soft-amber">
+          {notice.notice[locale] || notice.notice.en}
+        </div>
+      ))}
 
       {valuation.missingReasons.length > 0 && (
         <div className="space-y-0.5">
@@ -60,7 +77,7 @@ export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
           </div>
           <div className="max-h-32 space-y-0.5 overflow-y-auto pr-1">
             {valuation.pricingRules.map((rule) => (
-              <div key={rule.pricingRuleId} className="flex items-center justify-between gap-2 text-[10px]">
+              <div key={`${rule.eventDedupKey}:${rule.pricingRuleId}`} className="flex items-center justify-between gap-2 text-[10px]">
                 <span className="truncate text-secondary" title={`${rule.pricingRuleId} · ${rule.sourceUrl}`}>
                   {rule.modelCanonical}
                 </span>
@@ -73,8 +90,20 @@ export function PricingTraceCard({ valuation }: { valuation: Valuation }) {
         </div>
       )}
 
-      <div className="text-[9px] text-faint">
-        {catalogVersion ? `${translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.catalog')}: ${catalogVersion} · ` : ''}
+      {onOpenAudit && (
+        <button
+          type="button"
+          onClick={onOpenAudit}
+          className="text-[11px] font-medium text-accent hover:underline"
+        >
+          {translate(locale, 'renderer.pricing_trace_card.audit_calls')}
+        </button>
+      )}
+
+      <div className="text-[10px] leading-relaxed text-faint">
+        {catalogVersions.length > 0
+          ? `${translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.catalog')}: ${catalogVersions.join(', ')} · `
+          : ''}
         {translate(zh ? 'zh-CN' : 'en', 'renderer.pricing_trace_card.amounts_are_list_price_equivalents_not_cash_spend')}
       </div>
     </div>

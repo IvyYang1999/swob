@@ -3,7 +3,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { useStore } from '../../store'
 import { useAnalysisScope } from './scope'
 import { formatTokenCount } from './shared'
-import type { AnalysisDimension, InsightsDrilldownSession } from '../../../../shared/analysis-scope-types'
+import type {
+  AnalysisDimension,
+  InsightsDrilldownSession,
+  UsageFact
+} from '../../../../shared/analysis-scope-types'
 
 type DrilldownState =
   | { level: 'overview' }
@@ -47,6 +51,7 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
   })
 
   const [sessionList, setSessionList] = useState<InsightsDrilldownSession[]>([])
+  const [usageEvents, setUsageEvents] = useState<UsageFact[]>([])
   const [loading, setLoading] = useState(true)
   const [coverage, setCoverage] = useState<{ covered: number; total: number } | null>(null)
 
@@ -56,10 +61,13 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
     let cancelled = false
     setLoading(true)
     api.drilldownInsights(scope, state.dimension, state.key)
-      .then((result: { sessions: InsightsDrilldownSession[]; coverage: { covered: number; total: number } }) => {
+      .then((result: InsightsDrilldownSession[] | {
+        sessions: InsightsDrilldownSession[]
+        coverage?: { covered: number; total: number }
+      }) => {
         if (cancelled) return
-        setSessionList(result.sessions ?? [])
-        setCoverage(result.coverage ?? null)
+        setSessionList(Array.isArray(result) ? result : result.sessions ?? [])
+        setCoverage(Array.isArray(result) ? null : result.coverage ?? null)
         setLoading(false)
       })
       .catch(() => {
@@ -71,10 +79,34 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
     return () => { cancelled = true }
   }, [state.level === 'sessions' ? `${(state as any).dimension}:${(state as any).key}` : '', scope])
 
+  useEffect(() => {
+    if (state.level !== 'session-detail') return
+    let cancelled = false
+    setLoading(true)
+    api.getInsightSessionEvents(state.sessionId, scope)
+      .then((events: UsageFact[]) => {
+        if (cancelled) return
+        setUsageEvents(events ?? [])
+        setLoading(false)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUsageEvents([])
+          setLoading(false)
+        }
+      })
+    return () => { cancelled = true }
+  }, [state.level === 'session-detail' ? (state as any).sessionId : '', scope])
+
   const handleSessionClick = useCallback((sessionId: string) => {
     if (state.level !== 'sessions') return
     openSession(sessionId)
   }, [openSession, state])
+
+  const handleAuditClick = useCallback((sessionId: string) => {
+    if (state.level !== 'sessions') return
+    setState({ ...state, level: 'session-detail', sessionId })
+  }, [state])
 
   const breadcrumbs = (() => {
     const crumbs: Array<{ label: string; onClick?: () => void }> = [
@@ -92,6 +124,7 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
         }) : undefined,
       })
     }
+    if (state.level === 'session-detail') crumbs.push({ label: state.sessionId.slice(0, 8) })
     return crumbs
   })()
 
@@ -131,13 +164,14 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
         ) : (
           <div className="space-y-1 max-h-[400px] overflow-y-auto">
             {/* Header */}
-            <div className="grid grid-cols-[1fr_80px_60px_60px_60px_100px] gap-2 px-2 py-1 text-[10px] text-faint border-b border-edge">
+            <div className="grid grid-cols-[minmax(120px,1fr)_72px_44px_44px_60px_96px_72px] gap-2 px-2 py-1 text-[10px] text-faint border-b border-edge">
               <span>Session</span>
               <span className="text-right">Tokens</span>
               <span className="text-right">Calls</span>
               <span className="text-right">Turns</span>
               <span>Source</span>
               <span>Time</span>
+              <span />
             </div>
             {sessionList.map((s) => {
               const displayProject = s.projectPath
@@ -147,21 +181,112 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
                 ? new Date(s.firstOccurredAt).toLocaleString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                 : '—'
               return (
-                <button
+                <div
                   key={s.sessionId}
-                  onClick={() => handleSessionClick(s.sessionId)}
-                  className="w-full grid grid-cols-[1fr_80px_60px_60px_60px_100px] gap-2 px-2 py-1.5 text-xs hover:bg-hover rounded transition-colors text-left"
+                  className="grid grid-cols-[minmax(120px,1fr)_72px_44px_44px_60px_96px_72px] items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-hover"
                 >
-                  <span className="text-primary truncate" title={s.sessionId}>
+                  <button
+                    type="button"
+                    onClick={() => handleSessionClick(s.sessionId)}
+                    className="truncate text-left text-primary hover:text-accent"
+                    title={translate(locale, 'renderer.drilldown_view.open_session')}
+                  >
                     {displayProject}
                     <span className="text-faint ml-1">{s.sessionId.slice(0, 8)}</span>
-                  </span>
+                  </button>
                   <span className="text-muted text-right">{formatTokenCount(s.processedTokens)}</span>
                   <span className="text-muted text-right">{s.calls}</span>
                   <span className="text-muted text-right">{s.turns}</span>
                   <span className="text-muted truncate">{s.sourceClient}</span>
                   <span className="text-faint truncate">{firstTime}</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAuditClick(s.sessionId)}
+                    className="text-right text-[10px] font-medium text-accent hover:underline"
+                  >
+                    {translate(locale, 'renderer.drilldown_view.audit_ledger')}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )
+      )}
+
+      {state.level === 'session-detail' && (
+        loading ? (
+          <div className="py-4 text-center text-xs text-muted">Loading...</div>
+        ) : usageEvents.length === 0 ? (
+          <div className="py-4 text-center text-xs text-muted">
+            {translate(locale, 'renderer.drilldown_view.no_usage_events')}
+          </div>
+        ) : (
+          <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
+            {usageEvents.map((event) => {
+              const ledgers = [
+                [translate(locale, 'renderer.cost_card.provider_billed'), event.costLedgers.providerBilledUsd],
+                [translate(locale, 'renderer.cost_card.harness_estimate'), event.costLedgers.harnessListEstimateUsd],
+                [translate(locale, 'renderer.cost_card.swob_estimate'), event.costLedgers.swobEstimateUsd],
+                [translate(locale, 'renderer.cost_card.subscription_allocated'), event.costLedgers.subscriptionAllocatedUsd]
+              ] as const
+              return (
+                <article key={event.eventId} className="space-y-2 rounded border border-edge bg-base/30 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-primary">
+                        {event.model || event.modelRaw || 'unknown-model'}
+                      </div>
+                      <div className="text-[10px] text-faint">
+                        {event.occurredAt ? new Date(event.occurredAt).toLocaleString(locale) : 'unknown-time'}
+                      </div>
+                    </div>
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] ${
+                      event.billingIncluded
+                        ? 'bg-soft-emerald/10 text-soft-emerald'
+                        : 'bg-soft-amber/10 text-soft-amber'
+                    }`}>
+                      {translate(locale, event.billingIncluded
+                        ? 'renderer.drilldown_view.counted'
+                        : 'renderer.drilldown_view.deduplicated_copy')}
+                    </span>
+                  </div>
+
+                  <div className="grid gap-x-4 gap-y-1 text-[10px] sm:grid-cols-2">
+                    {ledgers.filter(([, amount]) => amount !== undefined).map(([label, amount]) => (
+                      <div key={label} className="flex justify-between gap-2">
+                        <span className="text-muted">{label}</span>
+                        <span className="font-medium tabular-nums text-primary">${amount!.toFixed(6)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="space-y-0.5 border-t border-edge pt-2 text-[10px]">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted">{translate(locale, 'renderer.drilldown_view.price_revision')}</span>
+                      <span className="truncate font-mono text-primary" title={event.priceRevision}>{event.priceRevision}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-muted">{translate(locale, 'renderer.drilldown_view.snapshot_hash')}</span>
+                      <span className="truncate font-mono text-faint" title={event.priceSnapshotHash}>{event.priceSnapshotHash.slice(0, 16)}…</span>
+                    </div>
+                  </div>
+
+                  {event.pricingTrace.flatMap((trace) => trace.calculation.map((line) => (
+                    <div key={`${trace.pricingRuleId}:${line.component}`} className="flex flex-wrap justify-between gap-2 text-[10px]">
+                      <span className="text-muted">{translate(locale, 'renderer.drilldown_view.calculation')} · {line.component}</span>
+                      <span className="font-mono text-secondary">
+                        {formatTokenCount(line.tokens)} × ${line.usdPerMillion}/M × {line.multiplier} = ${line.usd.toFixed(6)}
+                      </span>
+                    </div>
+                  )))}
+
+                  {event.revisionNotice && (
+                    <div className="rounded border border-soft-amber/25 bg-soft-amber/5 px-2 py-1 text-[10px] text-soft-amber">
+                      {event.revisionNotice.notice[locale] || event.revisionNotice.notice.en}
+                      {' · '}{event.valuationHistory.map((item) => item.priceRevision).join(' → ')}
+                    </div>
+                  )}
+                </article>
               )
             })}
           </div>

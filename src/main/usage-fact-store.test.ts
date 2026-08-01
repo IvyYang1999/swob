@@ -53,12 +53,14 @@ function usageEvent(
     model?: string
     provenance?: 'reported' | 'derived' | 'estimated'
     reportedCostUsd?: number
+    billingFactKey?: string
   } = {}
 ): UsageEvent {
   return {
     provider: 'claude-code',
     providerFormatVersion: 'test-v1',
     dedupKey,
+    billingFactKey: options.billingFactKey,
     timestamp,
     model: options.model,
     modelRaw: options.model,
@@ -410,7 +412,7 @@ describe('UsageFact + AnalysisScope', () => {
     const changedA = makeSession('a', '/repo/alpha', [usageEvent('a1', localTimestamp(2026, 7, 20, 8), components(30, 2))])
     expect(synchronizeUsageFacts([changedA, b], [])).toMatchObject({ changedSessions: 1, unchangedSessions: 1, factCount: 2 })
     expect(synchronizeUsageFacts([changedA], [])).toMatchObject({ removedSessions: 1, factCount: 1 })
-    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 5, sessions: 1, facts: 1 })
+    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 6, sessions: 1, facts: 1 })
   })
 
   it('usage/model/pricing coverage 显式且 pricing 使用 t113 逐请求估值', () => {
@@ -436,9 +438,11 @@ describe('UsageFact + AnalysisScope', () => {
     })
     expect(result.total.modelCoverage).toEqual({ covered: 1, total: 2, percent: 50 })
     expect(result.total.pricingCoverage).toEqual({
-      status: 'available', covered: 12, total: 18, percent: (12 / 18) * 100
+      status: 'available', covered: 0, total: 18, percent: 0
     })
+    expect(result.total.financialCoverage).toEqual({ covered: 0, total: 18, percent: 0 })
     expect(result.total.costUsd).toBe(0.25)
+    expect(result.total.costLedgers).toEqual({ harnessListEstimateUsd: 0.25 })
     expect(queryInsights(scope(), 'project').items[0].usageCoverage).toEqual({
       covered: 1, total: 2, percent: 50
     })
@@ -538,7 +542,7 @@ describe('UsageFact + AnalysisScope', () => {
     expect(model.total.usageCoverage).toEqual({ covered: 2, total: 3, percent: (2 / 3) * 100 })
 
     expect(usageFactStoreStats()).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       sessions: 6,
       activityDays: 5,
       timedSessions: 4,
@@ -594,6 +598,61 @@ describe('UsageFact + AnalysisScope', () => {
       sessionCount: 1,
       usageCoverage: { covered: 0, total: 1, percent: 0 }
     })
+  })
+
+  it('fork 与 copied prefix 共用 billingFactKey 时全局只计一次但保留两份审计事实', () => {
+    const copiedAt = localTimestamp(2026, 7, 20, 12)
+    const parent = makeSession('dedup-parent', '/repo/alpha', [
+      usageEvent('parent-copy', copiedAt, components(100, 20), {
+        model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:shared'
+      })
+    ], { source: 'codex' })
+    const fork = makeSession('dedup-fork', '/repo/alpha', [
+      usageEvent('fork-copy', copiedAt, components(100, 20), {
+        model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:shared'
+      })
+    ], { source: 'codex' })
+    fork.branchParentId = 'dedup-parent'
+
+    synchronizeUsageFacts([parent, fork], [])
+
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(120)
+    const copies = [
+      ...sessionUsageEvents('dedup-parent', scope()),
+      ...sessionUsageEvents('dedup-fork', scope())
+    ]
+    expect(copies).toHaveLength(2)
+    expect(new Set(copies.map((fact) => fact.billingFactId)).size).toBe(1)
+    expect(copies.filter((fact) => fact.billingIncluded)).toHaveLength(1)
+  })
+
+  it('价格目录更新保留旧新估值版本与逐分桶计算证据', () => {
+    const event = usageEvent(
+      'luna-after-cutover',
+      '2026-07-31T12:00:00.000Z',
+      components(100_000, 100_000),
+      { model: 'gpt-5.6-luna' }
+    )
+    event.billingProvider = 'openai'
+    event.providerRaw = 'openai'
+    const session = makeSession('repriced-luna', '/repo/pricing', [event], { source: 'codex' })
+
+    synchronizeUsageFacts([session], [])
+
+    const fact = sessionUsageEvents('repriced-luna', scope())[0]
+    expect(fact.priceRevision).toBe('official-snapshot-2026-08-01.v2')
+    expect(fact.revisionNotice?.notice['zh-CN']).toBe('因官方价格目录更新而修订')
+    expect(fact.valuationHistory.map((entry) => entry.priceRevision)).toEqual([
+      'official-snapshot-2026-07-22.v1',
+      'official-snapshot-2026-08-01.v2'
+    ])
+    expect(fact.valuationHistory[0].costLedgers.swobEstimateUsd).toBeCloseTo(0.7)
+    expect(fact.valuationHistory[1].costLedgers.swobEstimateUsd).toBeCloseTo(0.14)
+    expect(fact.pricingTrace[0]).toMatchObject({
+      modelCanonical: 'gpt-5.6-luna',
+      catalogVersion: 'official-snapshot-2026-08-01.v2'
+    })
+    expect(fact.pricingTrace[0].calculation).toHaveLength(2)
   })
 
   it('activity evidence 单独变化会增量重建 bounded 分母', () => {

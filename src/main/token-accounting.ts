@@ -5,6 +5,55 @@ export type TokenProvenance = 'reported' | 'derived' | 'estimated' | 'unavailabl
 export type UsageScope = 'main' | 'sidechain' | 'subagent' | 'inherited'
 export type ModelProvenance = 'response' | 'turn-context' | 'session-fallback' | 'unknown'
 export type ProviderProvenance = 'explicit' | 'model-prefix' | 'inferred' | 'unknown'
+export type ReportedCostKind = 'provider-billed' | 'harness-list-estimate' | 'swob-estimate'
+
+export interface HarnessUsageSemanticsContract {
+  status: 'verified' | 'reserved' | 'unverified'
+  inputCacheRelation: 'disjoint' | 'cache-subset-of-input' | 'provider-specific' | 'unknown'
+  reasoningRelation: 'subset-of-output' | 'disjoint-from-visible-output' | 'unknown'
+  counterKinds: ReadonlyArray<'per-request' | 'per-turn' | 'cumulative-session' | 'unknown'>
+}
+
+export const HARNESS_USAGE_CONTRACTS: Readonly<Record<string, HarnessUsageSemanticsContract>> = {
+  'claude-code': {
+    status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'subset-of-output',
+    counterKinds: ['per-request']
+  },
+  'cc-mirror': {
+    status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'subset-of-output',
+    counterKinds: ['per-request']
+  },
+  codex: {
+    status: 'verified', inputCacheRelation: 'cache-subset-of-input', reasoningRelation: 'subset-of-output',
+    counterKinds: ['per-turn', 'cumulative-session']
+  },
+  gemini: {
+    status: 'reserved', inputCacheRelation: 'provider-specific', reasoningRelation: 'disjoint-from-visible-output',
+    counterKinds: ['per-request']
+  },
+  opencode: {
+    status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'unknown',
+    counterKinds: ['per-request']
+  },
+  zcode: {
+    status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'unknown',
+    counterKinds: ['per-request']
+  }
+}
+
+export function normalizeGeminiOutput(visibleOutput: unknown, reasoning: unknown): {
+  visibleOutputTokens: number
+  reasoningTokens: number
+  billableOutputTokens: number
+} {
+  const visibleOutputTokens = nonNegative(visibleOutput)
+  const reasoningTokens = nonNegative(reasoning)
+  return {
+    visibleOutputTokens,
+    reasoningTokens,
+    billableOutputTokens: visibleOutputTokens + reasoningTokens
+  }
+}
 
 /** Components are mutually exclusive. Reasoning is metadata inside output. */
 export interface NormalizedTokenComponents {
@@ -15,6 +64,8 @@ export interface NormalizedTokenComponents {
   cacheWrite5mTokens: number
   cacheWrite1hTokens: number
   outputTokens: number
+  /** Gemini-style visible output when thinking is a separate billable bucket. */
+  visibleOutputTokens?: number
   reasoningTokens?: number
 }
 
@@ -22,6 +73,8 @@ export interface UsageEvent {
   provider: SessionSource
   providerFormatVersion: string
   dedupKey: string
+  /** Cross-file/session identity for one unique billable request. */
+  billingFactKey?: string
   sourceRowId?: string
   timestamp?: string
   /** @deprecated Prefer modelRaw/modelCanonical. */
@@ -43,6 +96,8 @@ export interface UsageEvent {
   components: NormalizedTokenComponents
   semantics: 'anthropic-disjoint' | 'openai-input-subset' | 'provider-specific'
   reportedCostUsd?: number
+  reportedCostKind?: ReportedCostKind
+  subscriptionAllocation?: { usd: number; policyId: string }
   serviceTier?: string
   inferenceRegion?: string
   speed?: string
@@ -83,6 +138,7 @@ export interface CodexUsageSnapshot {
   cacheWriteTokens?: number
   reasoningTokens?: number
   dedupHint?: string
+  billingFactKey?: string
 }
 
 const UNVERIFIED_TOKEN_SOURCES = new Set<SessionSource>([
@@ -404,6 +460,9 @@ export function accountClaudeUsage(
       provider,
       providerFormatVersion: 'claude-message-usage-v1',
       dedupKey: key,
+      ...(aliases.some((alias) => /^(claude:(?:message|request|uuid):)/.test(alias))
+        ? { billingFactKey: key }
+        : {}),
       sourceRowId: message.uuid || undefined,
       timestamp: message.timestamp || undefined,
       model: modelRaw,
@@ -418,6 +477,7 @@ export function accountClaudeUsage(
       components,
       semantics: 'anthropic-disjoint',
       reportedCostUsd,
+      ...(reportedCostUsd !== undefined ? { reportedCostKind: 'harness-list-estimate' as const } : {}),
       serviceTier: firstString(rawMessage.service_tier, (usage as unknown as Record<string, unknown>).service_tier),
       inferenceRegion: firstString(rawMessage.inference_geo, rawMessage.region),
       speed: firstString(rawMessage.speed),
@@ -463,18 +523,33 @@ function delta(current: number, previous: number): { value: number; reset: boole
   return { value: current, reset: true }
 }
 
+function eventTime(timestamp?: string): number | undefined {
+  if (!timestamp) return undefined
+  const value = new Date(timestamp).getTime()
+  return Number.isFinite(value) ? value : undefined
+}
+
 /** Normalize Codex per-turn usage, falling back to deltas of cumulative counters. */
 export function accountCodexUsage(
   snapshots: CodexUsageSnapshot[],
-  scope: UsageScope = 'main'
+  scope: UsageScope = 'main',
+  options: { startsWithInheritedBaseline?: boolean } = {}
 ): TokenAccounting {
   const events: UsageEvent[] = []
   const seenIncremental = new Set<string>()
   let previous: CodexUsageSnapshot | null = null
   let resetCount = 0
+  let inheritedBaselineCount = 0
 
-  for (let index = 0; index < snapshots.length; index++) {
-    const snapshot = snapshots[index]
+  const orderedSnapshots = snapshots.map((snapshot, index) => ({ snapshot, index })).sort((left, right) => {
+    const leftTime = eventTime(left.snapshot.timestamp)
+    const rightTime = eventTime(right.snapshot.timestamp)
+    if (leftTime === undefined || rightTime === undefined) return left.index - right.index
+    return leftTime - rightTime || left.index - right.index
+  }).map((item) => item.snapshot)
+
+  for (let index = 0; index < orderedSnapshots.length; index++) {
+    const snapshot = orderedSnapshots[index]
     let normalizedSnapshot = snapshot
     let counterKind: UsageEvent['counterKind'] = 'incremental'
     let provenance: UsageEvent['provenance'] = 'reported'
@@ -482,6 +557,11 @@ export function accountCodexUsage(
     if (snapshot.kind === 'cumulative') {
       counterKind = 'cumulative-delta'
       provenance = 'derived'
+      if (!previous && options.startsWithInheritedBaseline) {
+        previous = snapshot
+        inheritedBaselineCount++
+        continue
+      }
       if (previous) {
         const input = delta(nonNegative(snapshot.inputTokens), nonNegative(previous.inputTokens))
         const output = delta(nonNegative(snapshot.outputTokens), nonNegative(previous.outputTokens))
@@ -525,6 +605,7 @@ export function accountCodexUsage(
       provider: 'codex',
       providerFormatVersion: 'codex-token-count-v1',
       dedupKey,
+      ...(snapshot.billingFactKey ? { billingFactKey: snapshot.billingFactKey } : {}),
       timestamp: snapshot.timestamp,
       model: snapshot.model,
       ...attribution,
@@ -543,11 +624,24 @@ export function accountCodexUsage(
       inferenceRegion: normalizedSnapshot.inferenceRegion,
       speed: normalizedSnapshot.speed,
       isBatch: normalizedSnapshot.isBatch,
-      warnings: []
+      reportedCostKind: normalizedSnapshot.reportedCostUsd !== undefined
+        ? 'harness-list-estimate'
+        : undefined,
+      warnings: [
+        ...(nonNegative(normalizedSnapshot.cachedInputTokens) > nonNegative(normalizedSnapshot.inputTokens)
+          ? ['cached-input-exceeds-input']
+          : []),
+        ...(nonNegative(normalizedSnapshot.reasoningTokens) > nonNegative(normalizedSnapshot.outputTokens)
+          ? ['reasoning-exceeds-output']
+          : [])
+      ]
     })
   }
 
-  const warnings = resetCount > 0 ? [`handled ${resetCount} cumulative counter reset(s)`] : []
+  const warnings = [
+    ...(resetCount > 0 ? [`handled ${resetCount} cumulative counter reset(s)`] : []),
+    ...(inheritedBaselineCount > 0 ? [`excluded ${inheritedBaselineCount} inherited cumulative baseline(s)`] : [])
+  ]
   const provenance: TokenProvenance = events.some((event) => event.provenance === 'derived') ? 'derived' : 'reported'
   return accountingFromEvents('codex', events, provenance, warnings)
 }
@@ -568,13 +662,14 @@ export function mergeTokenAccountings(
   let duplicateCount = 0
   for (const accounting of available) {
     for (const event of accounting.usageEvents) {
-      const current = selected.get(event.dedupKey)
+      const ledgerKey = event.billingFactKey || event.dedupKey
+      const current = selected.get(ledgerKey)
       if (!current) {
-        selected.set(event.dedupKey, event)
+        selected.set(ledgerKey, event)
         continue
       }
       duplicateCount++
-      if (current.scope !== 'main' && event.scope === 'main') selected.set(event.dedupKey, event)
+      if (current.scope !== 'main' && event.scope === 'main') selected.set(ledgerKey, event)
     }
   }
 

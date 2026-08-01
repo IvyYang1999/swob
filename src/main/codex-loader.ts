@@ -121,6 +121,18 @@ function costNumber(record?: Record<string, unknown>): number | undefined {
   return undefined
 }
 
+function usageSignature(record?: Record<string, unknown>): string {
+  if (!record) return 'none'
+  return [
+    tokenNumber(record.input_tokens),
+    tokenNumber(record.output_tokens),
+    tokenNumber(record.cached_input_tokens),
+    tokenNumber(record.cache_write_tokens) || tokenNumber(record.cache_creation_input_tokens),
+    tokenNumber(record.reasoning_output_tokens) || tokenNumber(record.reasoning_tokens),
+    costNumber(record) ?? ''
+  ].join(':')
+}
+
 function codexSnapshot(
   raw: Record<string, unknown>,
   kind: CodexUsageSnapshot['kind'],
@@ -175,14 +187,13 @@ export function extractCodexTokenAccounting(
           ? line.payload.turn_id
           : undefined
     if (last) {
-      const totalKey = total
-        ? [
-            tokenNumber(total.input_tokens), tokenNumber(total.output_tokens),
-            tokenNumber(total.cached_input_tokens), tokenNumber(total.reasoning_output_tokens) || tokenNumber(total.reasoning_tokens)
-          ].join(':')
-        : undefined
-      const dedupHint = turnId ? `codex:turn:${turnId}` : totalKey ? `codex:total:${totalKey}` : undefined
-      perTurn.push(codexSnapshot(
+      const totalKey = total ? usageSignature(total) : undefined
+      const dedupHint = totalKey
+        ? `codex:total:${totalKey}`
+        : turnId
+          ? `codex:turn:${turnId}:${usageSignature(last)}`
+          : undefined
+      const snapshot = codexSnapshot(
         last,
         'incremental',
         line.timestamp,
@@ -190,7 +201,15 @@ export function extractCodexTokenAccounting(
         dedupHint,
         currentProvider,
         costNumber(last) ?? costNumber(info) ?? costNumber(line.payload)
-      ))
+      )
+      snapshot.billingFactKey = totalKey || turnId
+        ? [
+            'codex:event', line.timestamp, currentModel || 'unknown-model',
+            currentProvider || 'unknown-provider', turnId || 'no-turn-id',
+            usageSignature(last), totalKey || 'no-total'
+          ].join(':')
+        : undefined
+      perTurn.push(snapshot)
     } else if (total) {
       cumulative.push(codexSnapshot(
         total,
@@ -204,7 +223,11 @@ export function extractCodexTokenAccounting(
     }
   }
 
-  return accountCodexUsage(perTurn.length > 0 ? perTurn : cumulative, scope)
+  return accountCodexUsage(
+    perTurn.length > 0 ? perTurn : cumulative,
+    scope,
+    { startsWithInheritedBaseline: scope === 'subagent' && perTurn.length === 0 }
+  )
 }
 
 // --- File discovery ---

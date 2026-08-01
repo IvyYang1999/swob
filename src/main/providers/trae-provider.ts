@@ -10,7 +10,6 @@ import type {
 } from '../../shared/provider-schema.generated'
 import {
   PROVIDER_CAPABILITY_NAMES,
-  PROVIDER_PROTOCOL_VERSION,
   PROVIDER_RESOURCE_LIMITS,
   type CanonicalEvent,
   type CapabilityDeclaration,
@@ -631,9 +630,7 @@ export function createTraeProvider(options: TraeProviderOptions): BuiltinProvide
     definition.manifest.formatVersions
   )
   return {
-    protocolVersion: PROVIDER_PROTOCOL_VERSION,
-    manifest: structuredClone(definition.manifest),
-    manifestV2,
+    manifest: manifestV2,
     async discover(signal) {
       const candidates = new Map<string, TraeSessionRecord>()
       for (const root of roots) {
@@ -673,11 +670,11 @@ export function createTraeProvider(options: TraeProviderOptions): BuiltinProvide
       const snapshot = snapshotFor(source)
       return Buffer.byteLength(snapshot.record.raw, 'utf8') + Buffer.byteLength(snapshot.workspace.raw, 'utf8')
     },
-    async parseV2(source, fingerprint, mode, signal) {
+    async parse(source, fingerprint, signal) {
       signalCheckpoint(signal)
       const snapshot = snapshotFor(source)
       if (!sameFingerprint(snapshot.fingerprint, fingerprint)) throw new Error('trae-source-changed-during-parse')
-      return chunksFor(snapshot, source, fingerprint, mode)
+      return chunksFor(snapshot, source, fingerprint, 'initial')
     }
   }
 }

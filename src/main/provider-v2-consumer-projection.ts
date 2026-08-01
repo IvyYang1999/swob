@@ -245,13 +245,24 @@ function projectSession(source: SourceRef, chunks: ParseChunk[]): SessionParseRe
     const payload = objectValue(event.payload)
     return typeof payload?.phase === 'string' ? [payload.phase] : []
   })
-  const providerTitle = metadataPhases
+  const metadata = objectValue(events.find((event) => event.kind === 'session.metadata')?.payload ?? null)
+  const metadataTitle = typeof metadata?.title === 'string' && metadata.title.trim()
+    ? metadata.title.trim()
+    : null
+  const legacyProviderTitle = metadataPhases
     .find((phase) => phase.startsWith('metadata.title:'))
     ?.slice('metadata.title:'.length).trim() || null
-  const metadataCwds = metadataPhases
+  const eventCwds = Array.isArray(metadata?.cwd)
+    ? metadata.cwd.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+    : []
+  const legacyCwds = metadataPhases
     .filter((phase) => phase.startsWith('metadata.cwd:'))
     .map((phase) => phase.slice('metadata.cwd:'.length).trim())
+  const metadataCwds = [...eventCwds, ...legacyCwds]
     .filter((cwd, index, all) => Boolean(cwd) && all.indexOf(cwd) === index)
+  const metadataProjectPath = typeof metadata?.projectPath === 'string' && metadata.projectPath.trim()
+    ? metadata.projectPath.trim()
+    : null
   const fallbackProjectPath = sourceProjectPath(source)
   const firstEvent = events[0]
   const baseProvenance: RecordProvenance = firstEvent ? provenance(firstEvent) : {
@@ -269,8 +280,8 @@ function projectSession(source: SourceRef, chunks: ParseChunk[]): SessionParseRe
     createdAt: timestamps[0] || null,
     updatedAt: timestamps.at(-1) || timestamps[0] || null,
     cwd: metadataCwds,
-    projectPath: metadataCwds[0] || fallbackProjectPath,
-    providerTitle,
+    projectPath: metadataProjectPath || metadataCwds[0] || fallbackProjectPath,
+    providerTitle: metadataTitle || legacyProviderTitle,
     provenance: baseProvenance
   }]
   const messages = new Map<string, MessageRecord>()

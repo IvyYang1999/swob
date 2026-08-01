@@ -240,7 +240,7 @@ function tombstoneOutcome(
 }
 
 function builtinRuntimes(homeDir: string): BuiltinProviderRuntime[] {
-  return [createPiProvider({ homeDir }), createTraeProvider({ homeDir })]
+  return [createPiProvider({ homeDir })]
 }
 
 function builtinRuntimesV2(homeDir: string): BuiltinProviderRuntimeV2[] {
@@ -248,7 +248,8 @@ function builtinRuntimesV2(homeDir: string): BuiltinProviderRuntimeV2[] {
     createKimiProvider({ homeDir }),
     createGrokProvider({ homeDir }),
     createAntigravityProvider({ homeDir }),
-    createHermesProvider({ homeDir })
+    createHermesProvider({ homeDir }),
+    createTraeProvider({ homeDir })
   ]
 }
 

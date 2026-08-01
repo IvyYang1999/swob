@@ -70,7 +70,7 @@ describe('Trae native Provider Protocol v2 runtime', () => {
         .toEqual({ layer: 'token', measurement: 'unavailable', capability: 'unavailable' })
       expect(TRAE_CAPABILITY_MATRIX.find((entry) => entry.layer === 'resume'))
         .toEqual({ layer: 'resume', measurement: 'unavailable', capability: 'unavailable' })
-      expect(validateProviderManifestV2(provider.manifestV2).ok).toBe(true)
+      expect(validateProviderManifestV2(provider.manifest).ok).toBe(true)
       const sources = await provider.discover(signal)
       expect(sources).toHaveLength(1)
       expect(sources[0]).toMatchObject({
@@ -92,7 +92,7 @@ describe('Trae native Provider Protocol v2 runtime', () => {
       expect((await provider.fingerprint(sources[0], signal)).value).not.toBe(beforeWorkspaceChange)
       fs.writeFileSync(sample.workspacePath, JSON.stringify({ folder: 'file:///tmp/synthetic-trae-project' }))
 
-      const chunks = await provider.parseV2(sources[0], fingerprint, 'initial', signal)
+      const chunks = await provider.parse(sources[0], fingerprint, signal)
       const assembler = new ProviderChunkAssembler()
       for (const chunk of chunks) {
         expect(validateParseChunkV2(chunk).ok).toBe(true)
@@ -129,13 +129,13 @@ describe('Trae native Provider Protocol v2 runtime', () => {
           protocolVersion: PROVIDER_PROTOCOL_VERSION,
           messageId: randomUUID(),
           kind: 'hello' as const,
-          payload: helloForProviderV2(provider.manifestV2)
+          payload: helloForProviderV2(provider.manifest)
         },
         {
           protocolVersion: PROVIDER_PROTOCOL_VERSION,
           messageId: randomUUID(),
           kind: 'manifest' as const,
-          payload: provider.manifestV2
+          payload: provider.manifest
         },
         ...chunks.map((chunk) => ({
           protocolVersion: PROVIDER_PROTOCOL_VERSION,
@@ -144,7 +144,7 @@ describe('Trae native Provider Protocol v2 runtime', () => {
           payload: chunk
         }))
       ]
-      expect(runProviderConformanceV2({ manifest: provider.manifestV2, envelopes })).toMatchObject({
+      expect(runProviderConformanceV2({ manifest: provider.manifest, envelopes })).toMatchObject({
         ok: true,
         providerId: 'swob/trae',
         completedSessions: 1
@@ -168,12 +168,13 @@ describe('Trae native Provider Protocol v2 runtime', () => {
     const provider = createTraeProvider({ homeDir: sample.root, roots: [sample.root] })
 
     try {
-      const report = (await new ProviderHost({ runtimes: [provider] }).runAll())[0]
+      const report = (await new ProviderHost({ runtimes: [], v2Runtimes: [provider] }).runAll())[0]
       expect(report.discoveredSources.map((source) => source.stableId).sort()).toEqual([
         'trae:synthetic-trae-malformed',
         'trae:synthetic-trae-session'
       ])
-      expect(report.outcomes).toHaveLength(1)
+      expect(report.outcomes).toHaveLength(0)
+      expect(report.consumerProjections).toHaveLength(0)
       expect(report.v2Chunks.length).toBeGreaterThan(0)
       expect(report.errors).toMatchObject([{
         code: 'provider-failed',
@@ -201,7 +202,7 @@ describe('Trae native Provider Protocol v2 runtime', () => {
     try {
       const source = (await provider.discover(signal))[0]
       const fingerprint = await provider.fingerprint(source, signal)
-      const chunks = await provider.parseV2(source, fingerprint, 'initial', signal)
+      const chunks = await provider.parse(source, fingerprint, signal)
       expect(chunks.length).toBeGreaterThan(1)
       expect(chunks.flatMap((chunk) => chunk.events)).toHaveLength(2_301)
       const assembler = new ProviderChunkAssembler()

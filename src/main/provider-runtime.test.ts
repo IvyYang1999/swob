@@ -136,11 +136,12 @@ describe('canonical provider runtime full chain', () => {
     )
     const store = getCanonicalSessionStore()
     const host = new ProviderHost({
-      runtimes: [createTraeProvider({ homeDir: home, roots: [traeRoot] })]
+      runtimes: [],
+      v2Runtimes: [createTraeProvider({ homeDir: home, roots: [traeRoot] })]
     })
 
     const result = await refreshCanonicalProviders({ host, store, archive: true })
-    expect(result.reports[0].errors).toHaveLength(0)
+    expect(result.reports[0].errors, JSON.stringify(result.reports[0].errors)).toHaveLength(0)
     expect(result.reports[0].v2Chunks.length).toBeGreaterThan(0)
     expect(result.changedSessionRecordIds).toHaveLength(1)
     expect(store.listSessions('swob/trae')).toHaveLength(1)

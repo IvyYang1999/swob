@@ -149,7 +149,7 @@ beforeAll(() => {
 
   sandboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-packaged-cli-'))
   fixtureHome = path.join(sandboxRoot, 'home')
-  libraryRoot = path.join(sandboxRoot, 'Library')
+  libraryRoot = path.join(fixtureHome, 'Library')
   projectRoot = path.join(sandboxRoot, 'project with space')
   const cliTargetDir = path.join(fixtureHome, 'bin')
   const tempDir = path.join(sandboxRoot, 'tmp')
@@ -175,7 +175,7 @@ beforeAll(() => {
     SWOB_CLI_DISABLE_AUTO_RUN: '0',
     SWOB_LIBRARY_ROOT: libraryRoot,
     SWOB_PACKAGED_APP: appPath,
-    SWOB_SEARCH_INDEX_DIR: path.join(sandboxRoot, 'search-index'),
+    SWOB_SEARCH_INDEX_DIR: path.join(fixtureHome, 'search-index'),
     SWOB_TEST_APP_CLI_PATH: packagedCli,
     SWOB_TEST_CLI_TARGET_DIR: cliTargetDir,
     SWOB_TEST_HOME: fixtureHome,

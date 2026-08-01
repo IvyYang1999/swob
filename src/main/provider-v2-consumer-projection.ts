@@ -172,6 +172,14 @@ function projectUsage(
   sessionRecordId: string,
   payload: UsageRecordV2
 ): UsageRecordV1 {
+  const relationAmbiguous = (
+    payload.input.cacheRead !== null && payload.relations.cacheRead === 'provider-defined'
+  ) || (
+    (payload.input.cacheWrite5m !== null || payload.input.cacheWrite1h !== null) &&
+      payload.relations.cacheWrite === 'provider-defined'
+  ) || (
+    payload.output.reasoning !== null && payload.relations.reasoning === 'provider-defined'
+  )
   const input = usageInput(payload)
   const output = usageOutput(payload)
   return {
@@ -186,13 +194,13 @@ function projectUsage(
     messageRecordId: event.messageId ? projectedMessageId(event) : null,
     timestamp: event.timestamp,
     model: payload.modelId,
-    inputTokens: input.input,
-    outputTokens: output.output,
-    cacheReadTokens: input.cacheRead,
-    cacheWriteTokens: input.cacheWrite,
-    reasoningTokens: output.reasoning,
-    costUsd: payload.cost?.amount ?? null,
-    usageProvenance: payload.measurement.source,
+    inputTokens: relationAmbiguous ? null : input.input,
+    outputTokens: relationAmbiguous ? null : output.output,
+    cacheReadTokens: relationAmbiguous ? null : input.cacheRead,
+    cacheWriteTokens: relationAmbiguous ? null : input.cacheWrite,
+    reasoningTokens: relationAmbiguous ? null : output.reasoning,
+    costUsd: relationAmbiguous ? null : payload.cost?.amount ?? null,
+    usageProvenance: relationAmbiguous ? 'unavailable' : payload.measurement.source,
     provenance: provenance(event)
   }
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { pathToFileURL } from 'node:url'
 import piGolden from '../../schema/fixtures/v2/pi-golden.json'
 import type { SourceRef } from '../shared/provider-schema.generated'
-import type { ParseChunk } from '../shared/provider-schema-v2.generated'
+import type { ParseChunk, UsageRecord } from '../shared/provider-schema-v2.generated'
 import { validateParseChunkV2 } from '../shared/provider-protocol-v2'
 import { canonicalRecordsToSessionSummary } from './canonical-projection'
 import { projectNativeV2ChunksForConsumers } from './provider-v2-consumer-projection'
@@ -221,5 +221,36 @@ describe('native v2 legacy-consumer projection', () => {
       { kind: 'text', text: 'Timestamped pre-compaction event' },
       { kind: 'text', text: 'Undated current event' }
     ])
+  })
+
+  it('fails closed when provider-defined usage relations cannot be represented by v1', () => {
+    const chunk = structuredClone(
+      piGolden.envelopes.find((entry) => entry.kind === 'parse-chunk')!.payload
+    ) as unknown as ParseChunk
+    const usage = chunk.events.find((event) => event.kind === 'usage')!
+    const payload = usage.payload as unknown as UsageRecord
+    payload.relations = { cacheRead: 'provider-defined', cacheWrite: 'provider-defined', reasoning: 'provider-defined' }
+    const sourceRoot = '/synthetic/ambiguous-usage'
+    const source: SourceRef = {
+      kind: 'composite-directory', stableId: chunk.identity.physicalSourceId, providerId: chunk.providerId,
+      rootUri: pathToFileURL(sourceRoot).href,
+      memberUris: [pathToFileURL(`${sourceRoot}/session.jsonl`).href],
+      displayLocator: sourceRoot, fingerprint: chunk.fingerprint
+    }
+
+    const records = projectNativeV2ChunksForConsumers(
+      chunk.providerId, chunk.parserDataVersion, [source], [chunk]
+    )[0].sessions[0].records
+    const projected = records.find((record) => record.recordType === 'usage')
+
+    expect(projected).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: null,
+      costUsd: null,
+      usageProvenance: 'unavailable'
+    })
   })
 })

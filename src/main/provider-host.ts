@@ -605,6 +605,16 @@ export class ProviderHost {
       }
       processedIds.add(sourceTemplate.stableId)
       try {
+        const inputBytes = await runtime.inputBytes(sourceTemplate, signal)
+        if (!Number.isSafeInteger(inputBytes) || inputBytes < 0 || inputBytes > this.maxSessionInputBytes) {
+          throw runtimeError(
+            providerId,
+            'resource-limit-exceeded',
+            `Provider source exceeds the ${this.maxSessionInputBytes} byte per-session parse limit.`,
+            sourceTemplate.stableId,
+            { actual: inputBytes, limit: this.maxSessionInputBytes, limitName: 'maxSessionInputBytes' }
+          )
+        }
         const fingerprint = await runtime.fingerprint(sourceTemplate, signal)
         const source = { ...sourceTemplate, fingerprint } as SourceRef
         report.discoveredSources.push(source)
@@ -612,16 +622,6 @@ export class ProviderHost {
         if (previous && !previous.forceReparse && fingerprintEqual(previous.fingerprint, fingerprint)) {
           report.unchangedSources.push(source)
           continue
-        }
-        const inputBytes = await runtime.inputBytes(source, signal)
-        if (!Number.isSafeInteger(inputBytes) || inputBytes < 0 || inputBytes > this.maxSessionInputBytes) {
-          throw runtimeError(
-            providerId,
-            'resource-limit-exceeded',
-            `Provider source exceeds the ${this.maxSessionInputBytes} byte per-session parse limit.`,
-            source.stableId,
-            { actual: inputBytes, limit: this.maxSessionInputBytes, limitName: 'maxSessionInputBytes' }
-          )
         }
         const assembler = new ProviderChunkAssembler()
         const parsedChunks = await runtime.parse(source, fingerprint, signal)
@@ -751,6 +751,16 @@ export class ProviderHost {
       }
       processedIds.add(sourceTemplate.stableId)
       try {
+        const inputBytes = await runtime.inputBytes(sourceTemplate, signal)
+        if (!Number.isSafeInteger(inputBytes) || inputBytes < 0 || inputBytes > this.maxSessionInputBytes) {
+          throw runtimeError(
+            providerId,
+            'resource-limit-exceeded',
+            `Provider source exceeds the ${this.maxSessionInputBytes} byte per-session parse limit.`,
+            sourceTemplate.stableId,
+            { actual: inputBytes, limit: this.maxSessionInputBytes, limitName: 'maxSessionInputBytes' }
+          )
+        }
         const fingerprint = await runtime.fingerprint(sourceTemplate, signal)
         const source = { ...sourceTemplate, fingerprint } as SourceRef
         report.discoveredSources.push(source)
@@ -758,16 +768,6 @@ export class ProviderHost {
         if (previous && !previous.forceReparse && fingerprintEqual(previous.fingerprint, fingerprint)) {
           report.unchangedSources.push(source)
           continue
-        }
-        const inputBytes = await runtime.inputBytes(source, signal)
-        if (!Number.isSafeInteger(inputBytes) || inputBytes < 0 || inputBytes > this.maxSessionInputBytes) {
-          throw runtimeError(
-            providerId,
-            'resource-limit-exceeded',
-            `Provider source exceeds the ${this.maxSessionInputBytes} byte per-session parse limit.`,
-            source.stableId,
-            { actual: inputBytes, limit: this.maxSessionInputBytes, limitName: 'maxSessionInputBytes' }
-          )
         }
         const parsedOutcome = await runtime.parse(source, fingerprint, signal)
         let outcome: ParseOutcome = previous && parsedOutcome.status === 'complete'

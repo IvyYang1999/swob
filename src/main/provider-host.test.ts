@@ -188,13 +188,34 @@ describe('ProviderHost isolation and resource boundaries', () => {
   })
 
   it('returns typed resource and cancellation errors', async () => {
+    let v1FingerprintCalls = 0
     const oversized = new ProviderHost({
-      runtimes: [runtime('pi', { inputBytes: async () => 51 })],
+      runtimes: [runtime('pi', {
+        inputBytes: async () => 51,
+        fingerprint: async () => { v1FingerprintCalls++; return parsedFingerprint }
+      })],
       maxSessionInputBytes: 50
     })
     const oversizedReport = (await oversized.runAll())[0]
     expect(oversizedReport.errors).toMatchObject([{ code: 'resource-limit-exceeded' }])
     expect(oversizedReport.outcomes).toHaveLength(0)
+    expect(v1FingerprintCalls).toBe(0)
+
+    let v2FingerprintCalls = 0
+    const oversizedV2Runtime = directV2Runtime()
+    oversizedV2Runtime.inputBytes = async () => 51
+    oversizedV2Runtime.fingerprint = async () => {
+      v2FingerprintCalls++
+      return parsedFingerprint
+    }
+    const oversizedV2 = new ProviderHost({
+      runtimes: [],
+      v2Runtimes: [oversizedV2Runtime],
+      maxSessionInputBytes: 50
+    })
+    expect((await oversizedV2.runAll())[0].errors)
+      .toMatchObject([{ code: 'resource-limit-exceeded' }])
+    expect(v2FingerprintCalls).toBe(0)
 
     const waiting = runtime('pi', {
       discover: (signal) => new Promise((_resolve, reject) => {

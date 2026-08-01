@@ -260,6 +260,13 @@ interface UsageFactSyncSnapshot {
 }
 let usageFactSyncRunner: LatestSnapshotRunner<UsageFactSyncSnapshot, UsageFactSyncResult> | null = null
 let runtimeShuttingDown = false
+process.on('unhandledRejection', (reason) => {
+  // Cooperative worker cancellation can reject a fire-and-forget chain after
+  // its owner has already been stopped. That is an expected shutdown outcome,
+  // not a process warning. Keep every other unhandled rejection visible.
+  if (runtimeShuttingDown && reason instanceof Error && reason.name === 'AbortError') return
+  console.error('[runtime] Unhandled promise rejection:', reason)
+})
 const reportJobManager = new ReportJobManager({ maxConcurrent: 2, cacheTtlMs: 5 * 60_000 })
 reportJobManager.onUpdate((job) => {
   try { mainWindow?.webContents.send('insights:progress', job) } catch { /* window is closing */ }

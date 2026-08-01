@@ -196,6 +196,8 @@ test('installed x64 Beta completes onboarding, discovery, reading, search, Insig
   await expect(page.locator(`[data-session-id="codex:${CODEX_ID}"]`)).toBeVisible()
   await expect(page.locator(`[data-session-id="zcode:${ZCODE_ID}"]`)).toHaveCount(0)
   await expect(page.getByText('Ctrl+K')).toBeVisible()
+  await expect(page.getByText(/Computing graph layout|\u6b63\u5728\u8ba1\u7b97.*\u5e03\u5c40/))
+    .toHaveCount(0, { timeout: 30_000 })
   await page.screenshot({ path: testInfo.outputPath('02-discovery.png'), fullPage: true })
 
   // 3. Reading: open a real packaged Claude transcript and prove both roles render.

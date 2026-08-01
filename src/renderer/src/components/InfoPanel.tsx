@@ -10,6 +10,7 @@ import { SessionAuditPanel } from './SessionAuditPanel'
 import { InspectorTabs, DisclosureSection } from './inspector'
 import type { InspectorTab } from './inspector'
 import { getHarnessPresentation } from '../utils/harness-presentation'
+import { useLensEnabled } from '../hooks/useLens'
 
 // --- Shared types & utilities ---
 
@@ -791,6 +792,9 @@ function OutcomesTab({ session, highlights, onNavigate }: {
 }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
+  const outputsEnabled = useLensEnabled('outputs')
+  const imageIndexEnabled = useLensEnabled('image-index')
+  const highlightsEnabled = useLensEnabled('highlights')
   const s = session
   const referencedFiles: FileRef[] = s.referencedFiles || []
 
@@ -809,26 +813,28 @@ function OutcomesTab({ session, highlights, onNavigate }: {
 
   return (
     <div className="space-y-4">
-      {/* Output files (created + edited only) */}
-      <DisclosureSection
-        title={t('renderer.info_panel.outputs')}
-        icon={<Pencil size={12} />}
-        badge={outputFiles.length || undefined}
-        defaultOpen={true}
-      >
-        {outputFiles.length > 0 ? (
-          <div className="space-y-0.5 ml-1">
-            <FileTreeNode node={outputTree} />
-          </div>
-        ) : (
-          <div className="text-[11px] text-muted ml-1">
-            {t('renderer.info_panel.no_outputs')}
-          </div>
-        )}
-      </DisclosureSection>
+      {/* Output files (created + edited only) — gated by 'outputs' lens */}
+      {outputsEnabled && (
+        <DisclosureSection
+          title={t('renderer.info_panel.outputs')}
+          icon={<Pencil size={12} />}
+          badge={outputFiles.length || undefined}
+          defaultOpen={true}
+        >
+          {outputFiles.length > 0 ? (
+            <div className="space-y-0.5 ml-1">
+              <FileTreeNode node={outputTree} />
+            </div>
+          ) : (
+            <div className="text-[11px] text-muted ml-1">
+              {t('renderer.info_panel.no_outputs')}
+            </div>
+          )}
+        </DisclosureSection>
+      )}
 
-      {/* Sources: images expanded */}
-      {hasImages && (
+      {/* Sources: images expanded — gated by 'image-index' lens */}
+      {imageIndexEnabled && hasImages && (
         <ImageGallery
           messages={s.messages || []}
           onNavigate={(turnUuid) => {
@@ -840,8 +846,10 @@ function OutcomesTab({ session, highlights, onNavigate }: {
         />
       )}
 
-      {/* Highlights (expanded) */}
-      <HighlightList highlights={highlights} sessionId={s.sessionId} defaultOpen={true} />
+      {/* Highlights (expanded) — gated by 'highlights' lens */}
+      {highlightsEnabled && (
+        <HighlightList highlights={highlights} sessionId={s.sessionId} defaultOpen={true} />
+      )}
     </div>
   )
 }
@@ -940,6 +948,7 @@ function DetailsTab({ session, highlights, onNavigate, analysisReady }: {
 }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
+  const auditEnabled = useLensEnabled('audit')
   const s = session
   const configFiles: string[] = s.configFiles || []
 
@@ -970,8 +979,8 @@ function DetailsTab({ session, highlights, onNavigate, analysisReady }: {
         </DisclosureSection>
       )}
 
-      {/* Session Audit */}
-      {analysisReady && (
+      {/* Session Audit — gated by 'audit' lens */}
+      {auditEnabled && analysisReady && (
         <SessionAuditPanel filePath={s.filePath} />
       )}
 

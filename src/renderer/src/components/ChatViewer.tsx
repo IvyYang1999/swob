@@ -12,6 +12,7 @@ import {
   Image, MoreHorizontal
 } from 'lucide-react'
 import { useT } from '../i18n'
+import { useLensEnabled } from '../hooks/useLens'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
 import {
   computeSections,
@@ -1402,6 +1403,7 @@ export function ChatViewer() {
   const removeHighlight = useStore((state) => state.removeHighlight)
   const locale = useStore((state) => state.locale)
   const cloudSessionIds = useStore((state) => state.cloudSessionIds)
+  const shareTemplatesEnabled = useLensEnabled('share-templates')
   const selectedSession = useDeferredValue(selectedSessionSnapshot)
   const selectedSessionIsCloud = selectedSession
     ? cloudSessionIds.has(selectedSession.sessionId)
@@ -2197,9 +2199,12 @@ export function ChatViewer() {
               <button onClick={handleBatchDownload} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
                 <Download size={10} /> {t('chat.download_md')}
               </button>
-              <button onClick={openShareModal} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
-                <Image size={10} /> {t('chat.generate_share_image')}
-              </button>
+              {/* tF30: share button gated by 'share-templates' lens */}
+              {shareTemplatesEnabled && (
+                <button onClick={openShareModal} className="px-2 py-0.5 text-[10px] rounded bg-soft-blue/12 text-soft-blue hover:bg-soft-blue/18 flex items-center gap-1">
+                  <Image size={10} /> {t('chat.generate_share_image')}
+                </button>
+              )}
               <button onClick={() => { setSelectedItems(new Set()); setSelectMode(false) }} className="px-2 py-0.5 text-[10px] rounded text-muted hover:text-body">
                 {t('chat.cancel')}
               </button>

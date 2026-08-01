@@ -3,11 +3,13 @@ import { useStore } from '../store'
 import { useT } from '../i18n'
 import {
   MessageSquare, FolderHeart, Sparkles, ScanSearch, ArchiveRestore,
-  ChevronRight, FolderOpen, ShieldAlert, Check
+  ChevronRight, FolderOpen, ShieldAlert, Check,
+  BookOpen, Code2, Layers
 } from 'lucide-react'
 import { WindowsAlphaNotice, usePlatformCapabilities } from './WindowsAlphaNotice'
+import { lensIdsForScene } from '../../../shared/lens-registry'
 
-type Step = 'welcome' | 'vault' | 'scan'
+type Step = 'welcome' | 'scene' | 'vault' | 'scan'
 
 const SOURCE_LABELS: Record<string, string> = {
   'claude-code': 'Claude Code',
@@ -24,7 +26,7 @@ const SOURCE_LABELS: Record<string, string> = {
 }
 
 function StepDots({ step }: { step: Step }) {
-  const order: Step[] = ['welcome', 'vault', 'scan']
+  const order: Step[] = ['welcome', 'scene', 'vault', 'scan']
   return (
     <div className="flex items-center justify-center gap-1.5 mt-8">
       {order.map((s) => (
@@ -40,12 +42,18 @@ function StepDots({ step }: { step: Step }) {
 export function Onboarding({ defaultPath, onDone }: { defaultPath: string; onDone: () => void }) {
   const t = useT()
   const platformCapabilities = usePlatformCapabilities()
-  const { sessions, showToast } = useStore()
+  const { sessions, showToast, savePreferences } = useStore()
   const [step, setStep] = useState<Step>('welcome')
   const [vaultPath, setVaultPath] = useState(defaultPath)
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const [retentionDone, setRetentionDone] = useState(false)
   const [busy, setBusy] = useState(false)
+
+  function handleSceneSelect(scene: 'knowledge' | 'developer' | 'both') {
+    const ids = lensIdsForScene(scene)
+    void savePreferences({ enabledLenses: scene === 'both' ? null : ids })
+    setStep('vault')
+  }
 
   const shortPath = vaultPath
     .replace(/^\/Users\/[^/]+/, '~')
@@ -115,10 +123,65 @@ export function Onboarding({ defaultPath, onDone }: { defaultPath: string; onDon
             </div>
 
             <button
-              onClick={() => setStep('vault')}
+              onClick={() => setStep('scene')}
               className="w-full py-2.5 rounded-lg bg-accent/90 hover:bg-accent text-white text-sm font-medium flex items-center justify-center gap-1.5"
             >
               {t('onboarding.start')} <ChevronRight size={15} />
+            </button>
+          </div>
+        )}
+
+        {step === 'scene' && (
+          <div className="text-center">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-soft-blue/15 flex items-center justify-center mb-5">
+              <Layers size={26} className="text-soft-blue" />
+            </div>
+            <h1 className="text-xl font-semibold mb-2">{t('onboarding.scene_title')}</h1>
+            <div className="space-y-2.5 mt-6 mb-6">
+              {([
+                {
+                  scene: 'knowledge' as const,
+                  icon: BookOpen,
+                  title: t('onboarding.scene_knowledge'),
+                  hint: t('onboarding.scene_knowledge_hint'),
+                  color: 'soft-blue'
+                },
+                {
+                  scene: 'developer' as const,
+                  icon: Code2,
+                  title: t('onboarding.scene_developer'),
+                  hint: t('onboarding.scene_developer_hint'),
+                  color: 'soft-purple'
+                },
+                {
+                  scene: 'both' as const,
+                  icon: Layers,
+                  title: t('onboarding.scene_both'),
+                  hint: t('onboarding.scene_both_hint'),
+                  color: 'soft-green'
+                }
+              ]).map(({ scene, icon: Icon, title, hint, color }) => (
+                <button
+                  key={scene}
+                  onClick={() => handleSceneSelect(scene)}
+                  className={`w-full p-4 rounded-lg border border-edge hover:border-${color}/50 bg-surface/60 hover:bg-surface flex items-center gap-3 text-left transition-colors group`}
+                >
+                  <div className={`w-10 h-10 rounded-lg bg-${color}/15 flex items-center justify-center shrink-0`}>
+                    <Icon size={20} className={`text-${color}`} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-primary">{title}</div>
+                    <div className="text-xs text-muted mt-0.5">{hint}</div>
+                  </div>
+                  <ChevronRight size={14} className="ml-auto text-muted group-hover:text-primary" />
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setStep('vault')}
+              className="text-xs text-muted hover:text-primary"
+            >
+              {t('onboarding.scene_skip')}
             </button>
           </div>
         )}

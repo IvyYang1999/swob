@@ -992,6 +992,24 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.detail.successor_jump": "跳转到新会话",
     // tF28: insights filter bar
     "renderer.report_generator.partial_complete": "部分完成",
+    // tF30: Lens platform preview
+    "renderer.settings_panel.category_lens": "Lens",
+    "renderer.lens.built_in": "内置",
+    "renderer.lens.marketplace_teaser": "社区 Lens 市场即将开放",
+    "renderer.lens.scene_knowledge": "写作与知识",
+    "renderer.lens.scene_developer": "开发与调试",
+    "renderer.lens.scene_team": "团队",
+    "renderer.lens.galaxy_disabled_title": "会话图谱已关闭",
+    "renderer.lens.galaxy_disabled_body": "前往设置 → Lens 开启「会话图谱」",
+    "onboarding.scene_title": "你主要用 Swob 做什么？",
+    "onboarding.scene_knowledge": "写作与知识",
+    "onboarding.scene_knowledge_hint": "金句划线、图片索引、分享图",
+    "onboarding.scene_developer": "开发与调试",
+    "onboarding.scene_developer_hint": "Token 洞察、审计报告、会话图谱",
+    "onboarding.scene_both": "都要",
+    "onboarding.scene_both_hint": "启用全部功能",
+    "onboarding.scene_skip": "跳过（默认全部启用）",
+
     // T122_RENDERER_ZH
   },
 
@@ -1985,6 +2003,24 @@ const translations: Record<Locale, Record<string, string>> = {
     "renderer.detail.successor_jump": "Jump to newer session",
     // tF28: insights filter bar
     "renderer.report_generator.partial_complete": "Partially complete",
+    // tF30: Lens platform preview
+    "renderer.settings_panel.category_lens": "Lens",
+    "renderer.lens.built_in": "Built-in",
+    "renderer.lens.marketplace_teaser": "Community Lens marketplace coming soon",
+    "renderer.lens.scene_knowledge": "Writing & Knowledge",
+    "renderer.lens.scene_developer": "Development & Debugging",
+    "renderer.lens.scene_team": "Team",
+    "renderer.lens.galaxy_disabled_title": "Session Galaxy is disabled",
+    "renderer.lens.galaxy_disabled_body": "Go to Settings → Lens to enable Session Galaxy",
+    "onboarding.scene_title": "What do you mainly use Swob for?",
+    "onboarding.scene_knowledge": "Writing & Knowledge",
+    "onboarding.scene_knowledge_hint": "Highlights, image index, share templates",
+    "onboarding.scene_developer": "Development & Debugging",
+    "onboarding.scene_developer_hint": "Token insights, audit reports, session galaxy",
+    "onboarding.scene_both": "Both",
+    "onboarding.scene_both_hint": "Enable all features",
+    "onboarding.scene_skip": "Skip (all enabled by default)",
+
     // T122_RENDERER_EN
   }
 }

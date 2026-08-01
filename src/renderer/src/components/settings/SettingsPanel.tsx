@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, Sparkles, Bot, X
+  Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, Sparkles, Bot, Puzzle, X
 } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
@@ -13,9 +13,10 @@ import { ViewSettings } from './ViewSettings'
 import { UpdateSettings } from './UpdateSettings'
 import { CliSettings } from './CliSettings'
 import { AssistantSettings } from './AssistantSettings'
+import { LensSettings } from './LensSettings'
 import { WindowsAlphaNotice, usePlatformCapabilities } from '../WindowsAlphaNotice'
 
-export type SettingsCategory = 'general' | 'ai' | 'assistant' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli'
+export type SettingsCategory = 'general' | 'ai' | 'lens' | 'assistant' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli'
 
 const CATEGORIES: Array<{
   id: SettingsCategory
@@ -24,6 +25,7 @@ const CATEGORIES: Array<{
 }> = [
   { id: 'general', icon: Monitor, labelKey: 'renderer.settings_panel.category_general' },
   { id: 'ai', icon: Sparkles, labelKey: 'renderer.settings_panel.category_ai' },
+  { id: 'lens', icon: Puzzle, labelKey: 'renderer.settings_panel.category_lens' },
   { id: 'assistant', icon: Bot, labelKey: 'renderer.settings_panel.category_assistant' },
   { id: 'terminal', icon: Terminal, labelKey: 'renderer.settings_panel.category_terminal' },
   { id: 'resume', icon: Play, labelKey: 'renderer.settings_panel.category_resume' },
@@ -137,6 +139,7 @@ export function SettingsPanel() {
               <WindowsAlphaNotice capabilities={platformCapabilities} />
               {category === 'general' && <GeneralSettings />}
               {category === 'ai' && <ProfilesSettings />}
+              {category === 'lens' && <LensSettings />}
               {category === 'assistant' && <AssistantSettings />}
               {category === 'terminal' && <TerminalSettings />}
               {category === 'resume' && <ResumeSettings />}

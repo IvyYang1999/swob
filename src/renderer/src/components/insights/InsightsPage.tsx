@@ -14,10 +14,11 @@ import {
   type DashboardPageId
 } from '../../../../shared/registry/builtin-widgets'
 import { DashboardPageWidgets } from '../../registry/builtin-widget-registry'
+import { useLensEnabled } from '../../hooks/useLens'
 
 type DashboardTab = DashboardPageId
 
-const TABS: Array<{ id: DashboardTab; labelKey: string }> = [
+const ALL_TABS: Array<{ id: DashboardTab; labelKey: string }> = [
   { id: 'overview', labelKey: 'renderer.insights_page.tab_overview' },
   { id: 'cost', labelKey: 'renderer.insights_page.tab_cost' },
   { id: 'sessions', labelKey: 'renderer.insights_page.tab_sessions' },
@@ -38,6 +39,12 @@ export function InsightsPage() {
   const sessions = useStore((s) => s.sessions)
   const locale = useStore((s) => s.locale)
   const zh = locale === 'zh-CN'
+  // tF30: filter tabs by Lens state
+  const auditLensEnabled = useLensEnabled('audit')
+  const TABS = useMemo(
+    () => auditLensEnabled ? ALL_TABS : ALL_TABS.filter((tab) => tab.id !== 'audit'),
+    [auditLensEnabled]
+  )
   const [bundle, setBundle] = useState<QueryBundle | null>(null)
   const [refreshing, setRefreshing] = useState(true)
   const [queryError, setQueryError] = useState(false)

@@ -202,6 +202,9 @@ interface UserConfig {
     singleTurnBehavior?: import('../../shared/settings-capabilities').SingleTurnBehavior
     autoCheckUpdates?: boolean
     updateChannel?: import('../../shared/settings-capabilities').UpdateChannel
+    // tF30: Lens platform preview
+    enabledLenses?: string[] | null  // null/undefined = all enabled (backwards compat)
+    lensOrder?: string[] | null      // custom ordering of lens cards
   }
 }
 
@@ -326,6 +329,9 @@ interface AppState {
   sshBuildCommand: (sessionId: string, permissionMode?: string) => Promise<string | null>
   openSshModal: () => void
   closeSshModal: () => void
+  // tF30: Lens
+  toggleLens: (lensId: string) => void
+  reorderLenses: (orderedIds: string[]) => void
 }
 
 export type { SessionSummary, SessionDetail, ParsedMessage, Folder, VaultFile, UserConfig, SearchResult, Highlight, Locale }
@@ -984,5 +990,20 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   openSshModal: () => set({ sshModalOpen: true }),
-  closeSshModal: () => set({ sshModalOpen: false })
+  closeSshModal: () => set({ sshModalOpen: false }),
+
+  // tF30: Lens
+  toggleLens: (lensId) => {
+    const config = get().config
+    if (!config) return
+    const allIds = ['highlights', 'image-index', 'outputs', 'token-insights', 'galaxy', 'audit', 'share-templates']
+    const current = config.preferences.enabledLenses ?? allIds
+    const next = current.includes(lensId)
+      ? current.filter((id) => id !== lensId)
+      : [...current, lensId]
+    void get().savePreferences({ enabledLenses: next })
+  },
+  reorderLenses: (orderedIds) => {
+    void get().savePreferences({ lensOrder: orderedIds })
+  }
 }))

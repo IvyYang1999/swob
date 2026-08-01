@@ -9,6 +9,7 @@ import {
   createBuiltinCommandRegistry,
   type BuiltinCommandContext
 } from '../../../shared/registry/builtin-commands'
+import { useLensEnabled } from '../hooks/useLens'
 
 const toolbarCommandRegistry = createBuiltinCommandRegistry()
 
@@ -21,6 +22,8 @@ export function Toolbar() {
   } = useStore()
   const t = useT()
   const isWindowsAlpha = usePlatformCapabilities()?.windowsNativeAlpha === true
+  const galaxyLensEnabled = useLensEnabled('galaxy')
+  const insightsLensEnabled = useLensEnabled('token-insights')
   const [inputValue, setInputValue] = useState(searchQuery)
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -48,18 +51,20 @@ export function Toolbar() {
       className: 'p-1.5 rounded hover:bg-hover text-secondary hover:text-primary',
       title: t('renderer.toolbar.agent')
     },
-    {
+    // tF30: Galaxy button hidden when 'galaxy' lens is disabled
+    ...(galaxyLensEnabled ? [{
       id: BUILTIN_COMMAND_IDS.viewLineage,
       icon: GitBranch,
       iconSize: 14,
       className: `p-1.5 rounded hover:bg-hover ${workspaceView === 'galaxy' ? 'text-primary' : 'text-secondary hover:text-primary'}`
-    },
-    {
+    }] : []),
+    // tF30: Insights button hidden when 'token-insights' lens is disabled
+    ...(insightsLensEnabled ? [{
       id: BUILTIN_COMMAND_IDS.viewInsights,
       icon: BarChart3,
       iconSize: 14,
       className: `p-1.5 rounded hover:bg-hover ${workspaceView === 'insights' ? 'text-primary' : 'text-secondary hover:text-primary'}`
-    },
+    }] : []),
     {
       id: BUILTIN_COMMAND_IDS.viewSettings,
       icon: Settings,

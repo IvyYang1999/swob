@@ -110,12 +110,13 @@ describe('SettingsPanel 纵向导航设置', () => {
 
   afterEach(() => cleanup())
 
-  it('左侧纵向导航显示 9 个分类(含 AI 智能和助手),通用不再叫外观,无横向 Tab', () => {
+  it('左侧纵向导航显示 10 个分类(含 AI 智能、Lens 和助手),通用不再叫外观,无横向 Tab', () => {
     render(<SettingsPanel />)
 
     const nav = screen.getByRole('navigation')
-    expect(within(nav).getAllByRole('button')).toHaveLength(9)
+    expect(within(nav).getAllByRole('button')).toHaveLength(10)
     expect(within(nav).getByRole('button', { name: 'AI 智能' })).not.toBeNull()
+    expect(within(nav).getByRole('button', { name: 'Lens' })).not.toBeNull()
     expect(within(nav).getByRole('button', { name: '通用' })).not.toBeNull()
     expect(within(nav).queryByRole('button', { name: '外观' })).toBeNull()
     expect(screen.queryAllByRole('tab')).toHaveLength(0)

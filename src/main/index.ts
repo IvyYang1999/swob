@@ -257,6 +257,7 @@ interface UsageFactSyncSnapshot {
   rebuild: boolean
 }
 let usageFactSyncRunner: LatestSnapshotRunner<UsageFactSyncSnapshot, UsageFactSyncResult> | null = null
+let runtimeShuttingDown = false
 const reportJobManager = new ReportJobManager({ maxConcurrent: 2, cacheTtlMs: 5 * 60_000 })
 reportJobManager.onUpdate((job) => {
   try { mainWindow?.webContents.send('insights:progress', job) } catch { /* window is closing */ }
@@ -542,6 +543,11 @@ function currentAnalysisFolders(): Folder[] {
  * the current snapshot; it never parses source JSONL or performs a new scan.
  */
 function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
+  if (runtimeShuttingDown) {
+    const stopped = Promise.reject<UsageFactSyncResult>(new Error('Runtime is shutting down'))
+    void stopped.catch(() => { /* shutdown intentionally refuses new background work */ })
+    return stopped
+  }
   if (!usageFactSyncRunner) {
     usageFactSyncRunner = new LatestSnapshotRunner({
       run: async (snapshot: UsageFactSyncSnapshot) => {
@@ -641,6 +647,7 @@ let runtimeCleanupPromise: Promise<void> | null = null
 
 function cleanupRuntimeResources(): Promise<void> {
   if (runtimeCleanupPromise) return runtimeCleanupPromise
+  runtimeShuttingDown = true
   const sourceWatchers = [watcher, codexWatcher, cursorWatcher].filter(
     (candidate): candidate is SourceDirectoryWatcher => candidate !== null
   )
@@ -655,6 +662,8 @@ function cleanupRuntimeResources(): Promise<void> {
   transcriptWatcher = null
   const currentLibraryWorker = libraryWorker
   libraryWorker = null
+  const currentUsageFactSyncRunner = usageFactSyncRunner
+  usageFactSyncRunner = null
   const currentSessionSyncCoordinator = sessionSyncCoordinator
   sessionSyncCoordinator = null
   const currentActivePoller = activePoller
@@ -691,6 +700,7 @@ function cleanupRuntimeResources(): Promise<void> {
         currentLibraryRescanController?.dispose()
         currentTranscriptWatcher?.stop()
         currentSessionSyncCoordinator?.stop()
+        currentUsageFactSyncRunner?.stop(new Error('Runtime is shutting down'))
       }
     },
     {

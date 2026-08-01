@@ -45,4 +45,24 @@ describe('LatestSnapshotRunner', () => {
     await expect(latest).resolves.toBe('2:true')
     await runner.waitForIdle()
   })
+
+  it('drops queued work and refuses new work after stop while allowing the active run to finish', async () => {
+    const first = deferred<number>()
+    const run = vi.fn().mockImplementation(() => first.promise)
+    const runner = new LatestSnapshotRunner<number, number>({ run })
+
+    const active = runner.schedule(1)
+    const queued = runner.schedule(2)
+    const stopped = new Error('runtime shutting down')
+    runner.stop(stopped)
+
+    await expect(queued).rejects.toBe(stopped)
+    await expect(runner.schedule(3)).rejects.toBe(stopped)
+    expect(run).toHaveBeenCalledTimes(1)
+
+    first.resolve(1)
+    await expect(active).resolves.toBe(1)
+    await runner.waitForIdle()
+    expect(run).toHaveBeenCalledTimes(1)
+  })
 })

@@ -22,6 +22,7 @@ export class LatestSnapshotRunner<TInput, TResult> {
   private readonly onError?: (error: unknown) => void
   private pending: PendingRun<TInput, TResult> | null = null
   private running = false
+  private stoppedError: unknown = null
   private idleWaiters = new Set<() => void>()
 
   constructor(options: LatestSnapshotRunnerOptions<TInput, TResult>) {
@@ -31,6 +32,7 @@ export class LatestSnapshotRunner<TInput, TResult> {
   }
 
   schedule(input: TInput): Promise<TResult> {
+    if (this.stoppedError) return Promise.reject(this.stoppedError)
     const promise = new Promise<TResult>((resolve, reject) => {
       if (this.pending) {
         this.pending.input = this.merge(this.pending.input, input)
@@ -41,6 +43,22 @@ export class LatestSnapshotRunner<TInput, TResult> {
     })
     if (!this.running) void this.drain()
     return promise
+  }
+
+  /**
+   * Refuse new work and discard the not-yet-started snapshot. The active run
+   * is deliberately allowed to finish: callers may be inside native database
+   * code that cannot be terminated safely mid-transaction.
+   */
+  stop(error: unknown = new Error('Snapshot runner stopped')): void {
+    if (this.stoppedError) return
+    this.stoppedError = error
+    const pending = this.pending
+    this.pending = null
+    if (pending) {
+      for (const waiter of pending.waiters) waiter.reject(error)
+    }
+    if (!this.running) this.resolveIdleWaiters()
   }
 
   async waitForIdle(): Promise<void> {
@@ -71,6 +89,10 @@ export class LatestSnapshotRunner<TInput, TResult> {
       }
     }
     this.running = false
+    this.resolveIdleWaiters()
+  }
+
+  private resolveIdleWaiters(): void {
     for (const resolve of this.idleWaiters) resolve()
     this.idleWaiters.clear()
   }

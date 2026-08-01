@@ -165,7 +165,10 @@ if (!isMainThread && parentPort) {
 
 export class LibraryWorkerClient {
   private worker: Worker | null = null
+  private closing = false
+  private closePromise: Promise<void> | null = null
   private nextRequestId = 1
+  private readonly drainWaiters = new Set<() => void>()
   private readonly pending = new Map<number, {
     resolve: (result: LibraryWorkerResult) => void
     reject: (error: Error) => void
@@ -223,17 +226,46 @@ export class LibraryWorkerClient {
   }
 
   async close(): Promise<void> {
+    if (this.closePromise) return this.closePromise
+    this.closing = true
+    this.closePromise = this.finishClose()
+    return this.closePromise
+  }
+
+  private async finishClose(): Promise<void> {
     const worker = this.worker
+    if (!worker) return
+
+    // worker.terminate() can abort better-sqlite3 while native code is inside a
+    // transaction and crash the entire Electron process. Give in-flight work a
+    // short grace period. If it is still busy, unref the worker so app shutdown
+    // can end the process as a whole instead of tearing down one native thread.
+    if (this.pending.size > 0) {
+      await new Promise<void>((resolve) => {
+        let settled = false
+        const finish = (): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          this.drainWaiters.delete(finish)
+          resolve()
+        }
+        const timer = setTimeout(finish, 250)
+        this.drainWaiters.add(finish)
+        if (this.pending.size === 0) finish()
+      })
+    }
+
     this.worker = null
-    for (const pending of this.pending.values()) pending.reject(new Error('Library worker closed'))
-    this.pending.clear()
-    if (worker) await worker.terminate()
+    if (this.pending.size === 0) await worker.terminate()
+    else worker.unref()
   }
 
   private request(
     request: LibraryWorkerRequest,
     onProgress?: (progress: LibraryWorkerProgress) => void
   ): Promise<LibraryWorkerResult> {
+    if (this.closing) return Promise.reject(new Error('Library worker is closing'))
     const worker = this.ensureWorker()
     const requestId = this.nextRequestId++
     return new Promise<LibraryWorkerResult>((resolve, reject) => {
@@ -254,6 +286,7 @@ export class LibraryWorkerClient {
         return
       }
       this.pending.delete(reply.requestId)
+      this.notifyIfDrained()
       if (reply.type === 'result') pending.resolve(reply.result)
       else {
         const error = new Error(reply.error) as Error & { code?: string }
@@ -274,5 +307,11 @@ export class LibraryWorkerClient {
   private failAll(error: Error): void {
     for (const pending of this.pending.values()) pending.reject(error)
     this.pending.clear()
+    this.notifyIfDrained()
+  }
+
+  private notifyIfDrained(): void {
+    if (this.pending.size !== 0) return
+    for (const resolve of this.drainWaiters) resolve()
   }
 }

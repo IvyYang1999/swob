@@ -13,6 +13,24 @@ const HEATMAP_LEVELS = [
 ]
 
 const DOW_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
+const CELL = 13
+const GAP = 3
+const STEP = CELL + GAP
+const MONTH_LABEL_WIDTH = 24
+const MONTH_LABEL_GAP = 2
+
+type MonthLabel = { label: string; col: number }
+
+export function fitHeatmapMonthLabels(labels: MonthLabel[], weekCount: number): MonthLabel[] {
+  const gridWidth = weekCount > 0 ? weekCount * CELL + (weekCount - 1) * GAP : 0
+  let previousRight = -Infinity
+  return labels.filter(({ col }) => {
+    const left = col * STEP
+    if (left + MONTH_LABEL_WIDTH > gridWidth || left < previousRight + MONTH_LABEL_GAP) return false
+    previousRight = left + MONTH_LABEL_WIDTH
+    return true
+  })
+}
 
 function HeatmapTooltip({ date, value, x, y }: { date: string; value: number; x: number; y: number }) {
   return (
@@ -73,7 +91,7 @@ export function TokenHeatmap({
 
   // Month labels: show at the first week of each new month
   const months = useMemo(() => {
-    const labels: Array<{ label: string; col: number }> = []
+    const labels: MonthLabel[] = []
     let lastMonth = -1
     for (let col = 0; col < weeks.length; col++) {
       const firstVisible = weeks[col].find((cell) => !cell.pad)
@@ -84,12 +102,8 @@ export function TokenHeatmap({
         lastMonth = m
       }
     }
-    return labels
+    return fitHeatmapMonthLabels(labels, weeks.length)
   }, [weeks])
-
-  const CELL = 13
-  const GAP = 3
-  const STEP = CELL + GAP
 
   const handleMouseEnter = useCallback((e: React.MouseEvent, cell: HeatmapCell) => {
     const rect = (e.target as HTMLElement).getBoundingClientRect()
@@ -116,8 +130,8 @@ export function TokenHeatmap({
           {months.map((m) => (
             <span
               key={m.col}
-              className="absolute text-[10px] text-muted"
-              style={{ left: m.col * STEP }}
+              className="absolute overflow-hidden whitespace-nowrap text-[10px] text-muted"
+              style={{ left: m.col * STEP, maxWidth: MONTH_LABEL_WIDTH }}
             >
               {m.label}
             </span>

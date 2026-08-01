@@ -41,7 +41,7 @@ test('Hermes state.db and JSON cards open their real Electron chat details', asy
   db.exec(fs.readFileSync(path.join(__dirname, '..', 'testdata', 'hermes', 'state-db.sql'), 'utf8'))
   db.close()
 
-  const launched = await launchAppWithEnv({ env: {
+  const launched = await launchAppWithEnv({ sandboxRoot: root, env: {
     HOME: home,
     SWOB_TEST_HOME: home,
     SWOB_LIBRARY_ROOT: libraryRoot

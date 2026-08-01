@@ -289,6 +289,35 @@ describe('Windows Library filesystem policy', () => {
   })
 })
 
+describe('phase-one Resume capability truth', () => {
+  it('fails closed for an unavailable provider command before Library hydration', () => {
+    const grokRoot = path.join(testHome, '.grok', 'sessions', 'synthetic-grok')
+    fs.mkdirSync(grokRoot, { recursive: true })
+
+    expect(lib.getImmediateSessionResumeAvailability({
+      filePath: grokRoot,
+      allFilePaths: [grokRoot],
+      source: 'grok'
+    })).toMatchObject({
+      canResume: false,
+      sourcePath: grokRoot,
+      reason: expect.stringContaining('binary/help/source/post-launch anchor verification')
+    })
+  })
+
+  it('allows an evidenced experimental command only when its source exists', () => {
+    const kimiWire = path.join(testHome, '.kimi-code', 'sessions', 'synthetic', 'wire.jsonl')
+    fs.mkdirSync(path.dirname(kimiWire), { recursive: true })
+    fs.writeFileSync(kimiWire, '')
+
+    expect(lib.getImmediateSessionResumeAvailability({
+      filePath: kimiWire,
+      allFilePaths: [kimiWire],
+      source: 'kimi'
+    })).toEqual({ canResume: true, sourcePath: kimiWire })
+  })
+})
+
 describe('【曾经的 bug】重命名分支 session 不应该影响母 session', () => {
   it('分支重命名后，母 session 的标题不变', () => {
     const branchId = 'abc-123:intra-0'

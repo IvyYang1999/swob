@@ -1378,6 +1378,33 @@ function evaluateSourceResumeAvailability(
   }
 }
 
+/**
+ * Conservative phase-one Resume truth for freshly discovered summaries.
+ * This deliberately avoids Library registry/meta reads so the first session
+ * list remains fast. Background Library hydration may later upgrade a missing
+ * local source to a recoverable backup or SSH path.
+ */
+export function getImmediateSessionResumeAvailability(
+  session: Pick<SessionSummary, 'filePath' | 'allFilePaths' | 'source'>
+): SessionResumeAvailability {
+  const sourceFilePaths = sourceFilePathsFromSummary(session)
+  if (sourceFilePaths.length === 0) {
+    const provider = session.source ? builtinProviderForSource(session.source) : undefined
+    const terminal = provider?.manifest.capabilities['terminal-resume']
+    const native = provider?.manifest.capabilities['native-resume']
+    return {
+      canResume: false,
+      reason: terminal?.reason || native?.reason || LOCAL_RESUME_UNAVAILABLE_REASON,
+      sourcePath: null
+    }
+  }
+  return evaluateSourceResumeAvailability(
+    sourceFilePaths,
+    detectSourceFromSourcePaths(sourceFilePaths, session.source),
+    null
+  )
+}
+
 export function getSessionResumeAvailability(
   sessionId: string,
   session?: Pick<SessionSummary, 'sessionId' | 'filePath' | 'allFilePaths' | 'source'>

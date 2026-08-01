@@ -377,7 +377,10 @@ function usagePayload(value: unknown, model: unknown, turn: number, authority: '
     output: { total: output, visible: null, reasoning: null },
     providerTotal: null,
     aggregation: 'per-turn',
-    relations: { cacheRead: 'provider-defined', cacheWrite: 'provider-defined', reasoning: 'provider-defined' },
+    // `total` is constructed from inputOther + inputCacheRead +
+    // inputCacheCreation above, so cacheRead is provably a partition of the
+    // total. Cache-write TTL and reasoning relations remain unknown.
+    relations: { cacheRead: 'subset-of-input', cacheWrite: 'provider-defined', reasoning: 'provider-defined' },
     dedupKey: `kimi:${key}:turn-${turn}`,
     billingFactKey: `kimi:${key}:turn-${turn}`,
     measurement: {

@@ -120,6 +120,7 @@ describe('Kimi native Provider Protocol v2 runtime', () => {
     expect(mainUsage[0]).toMatchObject({
       input: { total: 58, uncached: 26, cacheRead: 32, cacheWrite5m: null, cacheWrite1h: null },
       output: { total: 9, visible: null, reasoning: null },
+      relations: { cacheRead: 'subset-of-input', cacheWrite: 'provider-defined', reasoning: 'provider-defined' },
       measurement: { source: 'reported', confidence: 'exact' }
     })
     expect(main.diagnostics.some((entry) => entry.code === 'kimi-step-usage-deduplicated')).toBe(true)

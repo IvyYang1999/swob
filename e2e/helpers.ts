@@ -15,9 +15,20 @@ export const ZCODE_FIXTURE_ID = 'sess_ZcodeUI099'
  * after the app closes (onboarding, vault-lens, visual capture). New specs
  * should prefer the fully sandboxed launchApp below.
  */
-export async function launchAppWithEnv(options: { env?: Record<string, string> } = {}): Promise<{ app: ElectronApplication; page: Page }> {
+export async function launchAppWithEnv(options: {
+  env?: Record<string, string>
+  sandboxRoot?: string
+} = {}): Promise<{ app: ElectronApplication; page: Page }> {
   const testHome = options.env?.SWOB_TEST_HOME || options.env?.HOME
   if (!testHome) throw new Error('launchAppWithEnv requires an isolated HOME or SWOB_TEST_HOME')
+  const sandboxRoot = options.sandboxRoot || testHome
+  // A wider sandbox is allowed only when it is itself below the operating
+  // system temp root. This supports sibling home/Library fixtures without
+  // letting a test weaken the guard to HOME, /Users, or the filesystem root.
+  assertTestDefaultLibraryPath(sandboxRoot, {
+    NODE_ENV: 'test',
+    SWOB_E2E_SANDBOX_ROOT: os.tmpdir()
+  })
   const userData = path.join(testHome, '.swob-e2e-user-data')
   const cache = path.join(testHome, '.swob-e2e-cache')
   fs.mkdirSync(userData, { recursive: true })
@@ -29,8 +40,9 @@ export async function launchAppWithEnv(options: { env?: Record<string, string> }
     NODE_ENV: 'test',
     SWOB_TEST_HOME: testHome,
     SWOB_TEST_LOCALE: 'zh-CN',
-    SWOB_E2E_SANDBOX_ROOT: testHome
+    SWOB_E2E_SANDBOX_ROOT: sandboxRoot
   }
+  assertTestDefaultLibraryPath(testHome, environment)
   assertTestDefaultLibraryPath(
     environment.SWOB_LIBRARY_ROOT || path.join(testHome, 'Documents', 'Swob'),
     environment

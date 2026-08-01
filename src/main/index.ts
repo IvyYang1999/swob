@@ -42,6 +42,7 @@ import {
   syncBackup,
   getSessionMdPath,
   getSessionDirPath,
+  getImmediateSessionResumeAvailability,
   getSessionResumeAvailability,
   getSessionSshResumeAvailability,
   buildSessionSummaryFromManifest,
@@ -1500,6 +1501,11 @@ ipcMain.handle('sessions:loadAll', async () => {
   for (const s of sessions) {
     s.detailAvailability = 'ready'
     annotateSessionSuccessor(s)
+    const immediateResume = getImmediateSessionResumeAvailability(s)
+    s.canResume = immediateResume.canResume
+    s.canResumeLocal = immediateResume.canResume
+    if (immediateResume.canResume) delete s.resumeUnavailableReason
+    else s.resumeUnavailableReason = immediateResume.reason
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
     for (const continuationId of s.continuationSessionIds || []) {

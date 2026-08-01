@@ -42,6 +42,7 @@ const SOURCE_FAMILIES = new Set<LogicalSourceFamily>([
   'pi',
   'kimi',
   'hermes',
+  'trae',
   'legacy-ambiguous'
 ])
 
@@ -133,6 +134,11 @@ function semanticInstanceFromPath(
   }
   if (sourceFamily === 'hermes') {
     return segments.includes('.hermes') ? { kind: 'default', id: 'default' } : null
+  }
+  if (sourceFamily === 'trae') {
+    return segments.some((segment) => ['trae', 'trae cn', 'trae solo cn'].includes(segment.toLocaleLowerCase('en-US')))
+      ? { kind: 'default', id: 'default' }
+      : null
   }
   return null
 }

@@ -8,6 +8,7 @@ export function detectSessionSourceFromPath(filePath?: string): SessionSource | 
   // Windows paths are case-insensitive for the supported local filesystems.
   // Do not fold POSIX paths: `.Claude` can be a genuinely different directory.
   const normalized = pathLooksWindowsNative(filePath) ? portable.toLocaleLowerCase('en-US') : portable
+  const normalizedTraePath = portable.toLocaleLowerCase('en-US')
   if (normalized.includes('/.codex/sessions/')) return 'codex'
   if (normalized.includes('/.cursor/projects/')) return 'cursor'
   if (normalized.includes('/.local/share/opencode/opencode.db')) return 'opencode'
@@ -18,6 +19,14 @@ export function detectSessionSourceFromPath(filePath?: string): SessionSource | 
   if (normalized.includes('/.pi/agent/sessions/')) return 'pi'
   if (normalized.includes('/.kimi-code/sessions/') || normalized.includes('/.kimi/sessions/')) return 'kimi'
   if (normalized.includes('/.hermes/sessions/') || normalized.includes('/.hermes/state.db')) return 'hermes'
+  if (
+    normalizedTraePath.includes('/library/application support/trae/user/workspacestorage/') ||
+    normalizedTraePath.includes('/library/application support/trae/user/globalstorage/') ||
+    normalizedTraePath.includes('/library/application support/trae cn/user/workspacestorage/') ||
+    normalizedTraePath.includes('/library/application support/trae cn/user/globalstorage/') ||
+    normalizedTraePath.includes('/library/application support/trae solo cn/user/workspacestorage/') ||
+    normalizedTraePath.includes('/library/application support/trae solo cn/user/globalstorage/')
+  ) return 'trae'
   if (normalized.includes('/.claude/projects/') || normalized.includes('/.claude-window/')) return 'claude-code'
   return null
 }

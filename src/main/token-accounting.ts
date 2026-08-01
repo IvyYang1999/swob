@@ -152,7 +152,8 @@ const UNVERIFIED_TOKEN_SOURCES = new Set<SessionSource>([
   'grok',
   'pi',
   'kimi',
-  'hermes'
+  'hermes',
+  'trae'
 ])
 
 function nonNegative(value: unknown): number {

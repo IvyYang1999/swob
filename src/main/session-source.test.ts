@@ -38,6 +38,15 @@ describe('detectSessionSourceForJsonl', () => {
     )).toBe('kimi')
   })
 
+  it('Trae state.vscdb 虚拟会话定位符按产品目录识别来源', () => {
+    expect(detectSessionSourceFromPath(
+      '/Users/synthetic/Library/Application Support/Trae/User/workspaceStorage/hash/state.vscdb#session'
+    )).toBe('trae')
+    expect(detectSessionSourceFromPath(
+      'C:\\Users\\synthetic\\Library\\Application Support\\TRAE SOLO CN\\User\\globalStorage\\state.vscdb#session'
+    )).toBe('trae')
+  })
+
   it('backup/detail 场景 source path 与内容冲突时优先嗅探内容', () => {
     const backupPath = writeBackupJsonl([
       { role: 'user', message: { content: 'Cursor backup content' } }

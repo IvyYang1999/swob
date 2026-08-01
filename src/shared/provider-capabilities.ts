@@ -17,7 +17,8 @@ export const LEGACY_SESSION_SOURCES = [
   'grok',
   'pi',
   'kimi',
-  'hermes'
+  'hermes',
+  'trae'
 ] as const
 
 export type LegacySessionSource = typeof LEGACY_SESSION_SOURCES[number]
@@ -33,7 +34,8 @@ export interface BuiltinProviderDefinition {
 }
 
 const V2_ADAPTER_SOURCES = new Set<LegacySessionSource>([
-  'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'pi'
+  'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror',
+  'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'trae'
 ])
 
 const implementation = (locator: string, note?: string): CapabilityEvidence => ({
@@ -310,6 +312,37 @@ function hermesCanonicalCapabilities(): ProviderCapabilities {
   }
 }
 
+function traeCanonicalCapabilities(): ProviderCapabilities {
+  const provider = implementation('src/main/providers/trae-provider.ts')
+  const host = implementation('src/main/provider-host.ts')
+  const canonicalStore = implementation('src/main/canonical-store.ts')
+  const fixture = test(
+    'src/main/providers/trae-provider.test.ts',
+    'Fully synthetic legacy state.vscdb full-chain fixture.'
+  )
+  return {
+    discover: experimental(
+      'Legacy plaintext state.vscdb is supported; current ModularData is encrypted and unavailable.',
+      provider,
+      host,
+      fixture
+    ),
+    summary: experimental('Summary metadata is exact only for the evidenced legacy layout.', provider, fixture),
+    transcript: experimental('Transcript parsing is exact only for the evidenced legacy layout.', provider, fixture),
+    tools: unavailable('No verified Trae plaintext field exposes tool calls or results.', provider),
+    thinking: unavailable('No verified Trae plaintext field distinguishes model thinking.', provider),
+    usage: unavailable('No authoritative usage counters exist in the evidenced Trae layout.', provider),
+    relationships: unavailable('No verified parent, fork, or continuation field exists.', provider),
+    subagents: unavailable('No verified subagent identity field exists.', provider),
+    'live-watch': unavailable('Trae is refreshed by provider discovery; no dedicated live watcher is registered.', watcher),
+    search: experimental('Search is available for parsed legacy transcripts only.', searchIndex, canonicalStore, fixture),
+    archive: experimental('Library archive is available for parsed legacy transcripts only.', archive, canonicalStore, fixture),
+    'terminal-resume': unavailable('No verified Trae per-session CLI resume command exists.', resume),
+    'native-resume': unavailable('No verified Trae per-session deep link with a source postcondition exists.', resume),
+    'format-provenance': available(provider, canonicalStore, fixture)
+  }
+}
+
 function definition(
   sourceId: LegacySessionSource,
   displayName: string,
@@ -445,6 +478,9 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
   definition('hermes', 'Hermes', 'native', hermesCanonicalCapabilities(), [
     'hermes-state-db-v1-plus',
     'hermes-json-snapshot-v1'
+  ], 'provider-host'),
+  definition('trae', 'Trae', 'native', traeCanonicalCapabilities(), [
+    'trae-state-vscdb-legacy-v1'
   ], 'provider-host')
 ] as const
 

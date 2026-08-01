@@ -341,6 +341,17 @@ describe('session action context', () => {
     }
   })
 
+  it('refuses to invent a Trae terminal resume command', () => {
+    expect(() => buildResumeAction(
+      'synthetic-trae-session',
+      undefined,
+      undefined,
+      'trae',
+      undefined,
+      'terminal'
+    )).toThrow('No verified Trae per-session CLI resume command exists.')
+  })
+
   it('resume 命令会 shell-quote cwd 和 sessionId，避免特殊字符被 shell 解释', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-action-quote-'))
     const dir = path.join(tmpRoot, "project '$HOME")

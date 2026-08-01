@@ -1,0 +1,9 @@
+This directory contains a fully synthetic Trae legacy state.vscdb fixture created for Swob.
+
+The field layout and encrypted-layout negative-space checks were informed by
+kenn-io/agentsview at commit 1cd581fe34e87e134160c6668deffb674b7eaa4e.
+No real transcript, account state, workspace state, cookie, or credential was copied.
+
+AgentsView copyright: Copyright (c) 2026 Kenn Software LLC
+AgentsView license: MIT
+Source: https://github.com/kenn-io/agentsview/tree/1cd581fe34e87e134160c6668deffb674b7eaa4e/internal/parser

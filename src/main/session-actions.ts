@@ -9,6 +9,7 @@ import type { RawJsonlMessage, SessionSource, SessionSummary } from './types'
 import { runtimeHome } from './runtime-home'
 import { alphaUnsupportedReason } from './platform-support'
 import { supportsVerifiedSessionFork } from '../shared/session-action-capabilities'
+import { providerCapabilitiesForSource } from '../shared/provider-capabilities'
 import { isAntigravityConversationId } from './providers/antigravity-resume'
 
 export interface SessionActionContext {
@@ -72,6 +73,10 @@ export function buildResumeLaunchSpec(
 ): LaunchSpec {
   const unsupportedReason = alphaUnsupportedReason(source, platform)
   if (unsupportedReason) throw new Error(unsupportedReason)
+  const terminalCapability = providerCapabilitiesForSource(source)?.['terminal-resume']
+  if (terminalCapability && !['available', 'experimental'].includes(terminalCapability.status)) {
+    throw new Error(terminalCapability.reason || `${source} does not expose a verified terminal resume command.`)
+  }
 
   const launchCwd = existingDirectory(cwd)
   let executable: string

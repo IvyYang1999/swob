@@ -36,6 +36,7 @@ import { createKimiProvider } from './providers/kimi-provider'
 import { createGrokProvider } from './providers/grok-provider'
 import { createAntigravityProvider } from './providers/antigravity-provider'
 import { createHermesProvider } from './providers/hermes-provider'
+import { createTraeProvider } from './providers/trae-provider'
 import {
   migrateProviderV1ManifestToV2,
   migrateProviderV1OutcomeToV2Chunks
@@ -239,7 +240,7 @@ function tombstoneOutcome(
 }
 
 function builtinRuntimes(homeDir: string): BuiltinProviderRuntime[] {
-  return [createPiProvider({ homeDir })]
+  return [createPiProvider({ homeDir }), createTraeProvider({ homeDir })]
 }
 
 function builtinRuntimesV2(homeDir: string): BuiltinProviderRuntimeV2[] {

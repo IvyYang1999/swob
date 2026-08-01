@@ -20,6 +20,7 @@ import { refreshCanonicalProviders } from './provider-runtime'
 import { createPiProvider } from './providers/pi-provider'
 import { createKimiProvider } from './providers/kimi-provider'
 import { createHermesProvider } from './providers/hermes-provider'
+import { createTraeProvider } from './providers/trae-provider'
 import { closeSearchIndex, searchFTS } from './search-index'
 
 let root = ''
@@ -114,6 +115,51 @@ afterEach(() => {
 })
 
 describe('canonical provider runtime full chain', () => {
+  it('runs a synthetic Trae legacy session through discover, native store, search, and Library', async () => {
+    const fixture = JSON.parse(fs.readFileSync(
+      path.resolve(__dirname, '../../testdata/trae/legacy-state-vscdb.json'),
+      'utf8'
+    ))
+    const traeRoot = path.join(home, 'Library', 'Application Support', 'Trae', 'User')
+    const workspaceRoot = path.join(traeRoot, 'workspaceStorage', 'synthetic-workspace')
+    const databasePath = path.join(workspaceRoot, 'state.vscdb')
+    fs.mkdirSync(workspaceRoot, { recursive: true })
+    const database = new Database(databasePath)
+    database.pragma('journal_mode = WAL')
+    database.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)')
+    database.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)')
+      .run(fixture.storageKey, JSON.stringify(fixture.store))
+    database.close()
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'workspace.json'),
+      JSON.stringify({ folder: 'file:///tmp/synthetic-trae-project' })
+    )
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({
+      runtimes: [createTraeProvider({ homeDir: home, roots: [traeRoot] })]
+    })
+
+    const result = await refreshCanonicalProviders({ host, store, archive: true })
+    expect(result.reports[0].errors).toHaveLength(0)
+    expect(result.reports[0].v2Chunks.length).toBeGreaterThan(0)
+    expect(result.changedSessionRecordIds).toHaveLength(1)
+    expect(store.listSessions('swob/trae')).toHaveLength(1)
+    expect(store.listSessions('swob/trae')[0].sessionRecord.providerTitle).toBe('Synthetic Trae session')
+    expect(searchFTS('synthetic-trae-search-needle')).toHaveLength(1)
+    expect(packageDirs()).toHaveLength(1)
+
+    const recordsPath = path.join(packageDirs()[0], CANONICAL_RECORDS_FILE)
+    expect(fs.readFileSync(recordsPath, 'utf8')).toContain('synthetic-trae-search-needle')
+    const detail = await (await import('./session-loader')).loadSessionDetail(recordsPath)
+    expect(detail).toMatchObject({ source: 'trae', projectPath: '/tmp/synthetic-trae-project' })
+    expect(detail?.messages.flatMap((message) => message.toolCalls)).toEqual([])
+    expect(detail?.tokenAccounting).toMatchObject({
+      provider: 'trae', provenance: 'unavailable', billingTotal: null, conversationOnly: null
+    })
+    expect(library.getSessionResumeAvailability('synthetic-trae-session', detail || undefined))
+      .toMatchObject({ canResume: false })
+  })
+
   it('runs Kimi native-v2 through sidebar read model, search and Vault without a v1 provider outcome', async () => {
     fs.cpSync(path.resolve('testdata/kimi/home/.kimi-code'), path.join(home, '.kimi-code'), { recursive: true })
     const store = getCanonicalSessionStore()

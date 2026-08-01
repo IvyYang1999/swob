@@ -51,6 +51,15 @@ describe('设置偏好迁移与 Resume 能力', () => {
     }
   })
 
+  it('Trae 不暴露伪终端 Resume 入口', () => {
+    expect(harnessForSource('trae')).toMatchObject({
+      id: 'trae',
+      defaultMethod: 'terminal',
+      choices: [{ id: 'terminal', support: 'unsupported' }]
+    })
+    expect(enabledResumeChoices(harnessForSource('trae'), false)).toEqual([])
+  })
+
   it('未审计来源的猜测命令不能标为 stable', () => {
     for (const source of ['antigravity', 'pi', 'kimi', 'hermes']) {
       const terminal = harnessForSource(source).choices.find((choice) => choice.id === 'terminal')

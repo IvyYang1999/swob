@@ -1,0 +1,57 @@
+{
+  "storageKey": "memento/icube-ai-agent-storage",
+  "store": {
+    "list": [
+      {
+        "sessionId": "synthetic-trae-session",
+        "title": "Synthetic Trae session",
+        "createdAt": 1754006400000,
+        "updatedAt": 1754006460000,
+        "model": "synthetic-trae-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "text", "text": "Inspect the synthetic workspace." },
+              { "type": "tab", "content": { "text": "synthetic-trae-search-needle" } }
+            ],
+            "timestamp": 1754006400000,
+            "turnIndex": 0
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "agentTaskContent": {
+              "guideline": {
+                "planItems": [
+                  { "content": "Read only the synthetic fixture." },
+                  { "content": "Return a deterministic answer." }
+                ]
+              }
+            },
+            "timestamp": 1754006430000,
+            "turnIndex": 1
+          },
+          {
+            "role": "assistant",
+            "content": {
+              "bubbles": [
+                { "text": "First synthetic bubble." },
+                { "markdown": "Second synthetic bubble." }
+              ]
+            },
+            "timestamp": "2025-08-01T00:01:00.000Z",
+            "turnIndex": 2,
+            "model": "synthetic-trae-model"
+          },
+          {
+            "role": "future-role",
+            "content": { "opaque": { "phase": "synthetic" } },
+            "timestamp": 1754006460000,
+            "turnIndex": 3
+          }
+        ]
+      }
+    ]
+  }
+}

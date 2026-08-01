@@ -77,7 +77,11 @@ const BASE_HARNESS_CAPABILITIES: HarnessCapability[] = [
   { id: 'grok', name: 'Grok Build', sourceIds: ['grok'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] },
   { id: 'hermes', name: 'Hermes', sourceIds: ['hermes'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] },
   { id: 'pi', name: 'Pi', sourceIds: ['pi'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] },
-  { id: 'kimi', name: 'Kimi Code', sourceIds: ['kimi'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] }
+  { id: 'kimi', name: 'Kimi Code', sourceIds: ['kimi'], defaultMethod: 'terminal', choices: [experimentalTerminal('settings_capability.unaudited_resume_mapping')] },
+  {
+    id: 'trae', name: 'Trae', sourceIds: ['trae'], defaultMethod: 'terminal',
+    choices: [unsupported('terminal', 'Terminal', 'settings_capability.no_public_cli_resume')]
+  }
 ]
 
 function choiceCapability(choice: ResumeChoice): 'terminal-resume' | 'native-resume' | null {

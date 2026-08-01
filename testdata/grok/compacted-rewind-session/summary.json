@@ -1,0 +1,13 @@
+{
+  "info": {
+    "id": "22222222-3333-7444-8555-666666666666",
+    "cwd": "/workspace/swob-grok-rewind-fixture"
+  },
+  "session_summary": "Synthetic compacted rewind exercise",
+  "generated_title": "Discard a rewound Grok branch",
+  "created_at": "2026-07-31T10:00:00.000Z",
+  "updated_at": "2026-07-31T10:30:00.000Z",
+  "current_model_id": "grok-fixture-main",
+  "session_kind": "root",
+  "chat_format_version": 1
+}

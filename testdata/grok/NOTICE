@@ -17,4 +17,5 @@ public references:
 
 No upstream transcript was copied. The references establish the compound
 summary.json + chat_history.jsonl + updates.jsonl storage contract, compaction
-behavior, legacy/current discriminators, and reported usage field semantics.
+and rewind behavior, legacy/current discriminators, and reported usage field
+semantics.

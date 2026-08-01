@@ -26,12 +26,19 @@ function fixtureDirectory(): string {
   return path.resolve(__dirname, '../../../testdata/grok/compacted-session')
 }
 
-function temporaryFixture(): { root: string; sessionDir: string } {
+function rewindFixtureDirectory(): string {
+  return path.resolve(__dirname, '../../../testdata/grok/compacted-rewind-session')
+}
+
+function temporaryFixture(
+  sourceDirectory = fixtureDirectory(),
+  sessionId = '11111111-2222-7333-8444-555555555555'
+): { root: string; sessionDir: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-grok-provider-'))
   temporaryRoots.push(root)
-  const sessionDir = path.join(root, 'workspace', '11111111-2222-7333-8444-555555555555')
+  const sessionDir = path.join(root, 'workspace', sessionId)
   fs.mkdirSync(path.dirname(sessionDir), { recursive: true })
-  fs.cpSync(fixtureDirectory(), sessionDir, { recursive: true })
+  fs.cpSync(sourceDirectory, sessionDir, { recursive: true })
   return { root, sessionDir }
 }
 
@@ -137,6 +144,51 @@ describe('Grok Build native Provider Protocol v2 provider', () => {
     ]))
     expect(events.some((event) => event.kind === 'session.lifecycle' &&
       (event.payload as any).parentBranchViewId === 'grok:branch:aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee')).toBe(true)
+  })
+
+  it('drops a rewound prompt branch before reconstructing compacted history', async () => {
+    const { root } = temporaryFixture(
+      rewindFixtureDirectory(),
+      '22222222-3333-7444-8555-666666666666'
+    )
+    const { chunks, events } = await parseFixture(root)
+    const texts = events.flatMap((event) => {
+      const payload = event.payload as Record<string, unknown>
+      return typeof payload.text === 'string' ? [payload.text] : []
+    })
+
+    expect(texts).toEqual(expect.arrayContaining([
+      'live prompt 0',
+      'live prompt 0 continued',
+      'live answer 0',
+      'replacement prompt 1',
+      'replacement answer 1',
+      'current prompt',
+      'current answer'
+    ]))
+    expect(texts).not.toContain('dead prompt 1')
+    expect(texts).not.toContain('dead answer 1')
+    expect(events.some((event) => JSON.stringify(event.payload).includes('dead-call'))).toBe(false)
+    expect(usage(events).map((record) => record.turnId)).toEqual([
+      'live-prompt-0',
+      'replacement-prompt-1'
+    ])
+    expect(chunks.flatMap((chunk) => chunk.diagnostics)).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'grok-unknown-update-kind' })
+    ]))
+
+    const compact = events.find((event) => event.kind === 'context.compaction')!
+    const replacement = events.find((event) =>
+      event.kind === 'message.text' && (event.payload as any).text === 'replacement prompt 1')!
+    const current = events.find((event) =>
+      event.kind === 'message.text' && (event.payload as any).text === 'current prompt')!
+    expect(replacement.timeline.modelContext.at(-1)).toMatchObject({
+      state: 'archived',
+      fromSequence: compact.sequence
+    })
+    expect(current.timeline.modelContext).toEqual([
+      { contextRevision: 1, state: 'visible-to-model', fromSequence: compact.sequence, untilSequence: null }
+    ])
   })
 
   it('keeps provider-reported token subsets exact and never duplicates a turn total across model rows', async () => {

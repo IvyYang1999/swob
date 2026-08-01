@@ -473,6 +473,61 @@ function toolOutput(update: Record<string, unknown>): JsonValue | null {
   return raw === undefined ? null : jsonValue(raw)
 }
 
+class UserRunTracker {
+  private seenPromptIndex = false
+  private inUserRun = false
+  private currentPromptIndex: number | null = null
+
+  onUserChunk(index: number | null): boolean {
+    if (index !== null) this.seenPromptIndex = true
+    const countsAsPrompt = this.seenPromptIndex ? index !== null : true
+    const startsNewRun = !this.inUserRun ||
+      ((this.seenPromptIndex || index !== null) && index !== this.currentPromptIndex)
+
+    if (startsNewRun) {
+      this.currentPromptIndex = index
+      this.inUserRun = true
+      return countsAsPrompt
+    }
+
+    this.inUserRun = true
+    return false
+  }
+
+  onNonUser(): void {
+    this.inUserRun = false
+    this.currentPromptIndex = null
+  }
+}
+
+function filterRewoundUpdates(records: JsonlRecord[]): JsonlRecord[] {
+  const retained: JsonlRecord[] = []
+  const promptStarts: number[] = []
+  const tracker = new UserRunTracker()
+
+  for (const record of records) {
+    const update = asObject(nested(record.value, 'params', 'update'))
+    const kind = nonEmptyString(update?.sessionUpdate)
+    const target = promptIndex(update?.target_prompt_index)
+    if (record.value.method === '_x.ai/session/update' && kind === 'rewind_marker' && target !== null) {
+      retained.length = promptStarts[target] ?? retained.length
+      promptStarts.length = Math.min(promptStarts.length, target)
+      tracker.onNonUser()
+      continue
+    }
+
+    if (kind === 'user_message_chunk') {
+      const index = promptIndex(nested(update, '_meta', 'promptIndex'))
+      if (tracker.onUserChunk(index)) promptStarts.push(retained.length)
+    } else {
+      tracker.onNonUser()
+    }
+    retained.push(record)
+  }
+
+  return retained
+}
+
 function scanUpdates(
   records: JsonlRecord[],
   compacted: boolean,
@@ -499,7 +554,7 @@ function scanUpdates(
     'subagent_finished', 'plan', 'goal_updated', 'session_recap', 'image_compressed'
   ])
 
-  for (const record of records) {
+  for (const record of filterRewoundUpdates(records)) {
     const update = asObject(nested(record.value, 'params', 'update'))
     const kind = nonEmptyString(update?.sessionUpdate)
     if (!update || !kind) continue

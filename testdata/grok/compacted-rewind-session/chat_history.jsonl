@@ -1,0 +1,3 @@
+{"type":"user","content":"Summary: compacted live state","synthetic_reason":"compaction_meta"}
+{"type":"user","content":"current prompt","prompt_index":2}
+{"type":"assistant","content":"current answer","model_id":"grok-fixture-main"}

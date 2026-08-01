@@ -272,6 +272,289 @@ function HarnessIconSection() {
   )
 }
 
+/* ── Theme families data ── */
+
+interface FamilyColors {
+  base: string; sidebar: string; surface: string
+  text: string; accent: string; line: string
+}
+
+interface ThemeFamily {
+  id: 'default' | 'paper' | 'nord'
+  light: FamilyColors
+  dark: FamilyColors
+}
+
+const THEME_FAMILIES: ThemeFamily[] = [
+  {
+    id: 'default',
+    light: { base: '#ffffff', sidebar: '#e4e4e7', surface: '#f4f4f5', text: '#a1a1aa', accent: '#7a60a8', line: '#d4d4d8' },
+    dark: { base: '#18181b', sidebar: '#27272a', surface: '#1e1e22', text: '#52525b', accent: '#8c72b8', line: '#3f3f46' },
+  },
+  {
+    id: 'paper',
+    light: { base: '#faf8f5', sidebar: '#e5e1db', surface: '#f0ede8', text: '#8a847e', accent: '#7452a8', line: '#d8d3cc' },
+    dark: { base: '#1e1c1a', sidebar: '#2a2725', surface: '#2a2725', text: '#706a63', accent: '#a88fd0', line: '#3a3633' },
+  },
+  {
+    id: 'nord',
+    light: { base: '#eceff4', sidebar: '#d8dee9', surface: '#e5e9f0', text: '#6a7b96', accent: '#426b96', line: '#d8dee9' },
+    dark: { base: '#2e3440', sidebar: '#3b4252', surface: '#3b4252', text: '#6a7b96', accent: '#88c0d0', line: '#434c5e' },
+  },
+]
+
+type SchemeId = 'default' | 'paper' | 'nord'
+
+function sLabel(id: string, t: (k: string) => string): string {
+  const map: Record<string, string> = { default: t('settings.scheme_default'), paper: t('settings.scheme_paper'), nord: t('settings.scheme_nord') }
+  return map[id] || id
+}
+
+/* ── Neutral app frame preview (no macOS traffic lights) ── */
+
+function AppPreview({ colors, className }: { colors: FamilyColors; className?: string }) {
+  return (
+    <div className={`overflow-hidden flex flex-col ${className || ''}`} style={{ background: colors.base }}>
+      {/* Toolbar */}
+      <div className="h-[8px] flex items-center px-[4px] gap-[3px]" style={{ background: colors.sidebar }}>
+        <div className="h-[3px] rounded-sm flex-1" style={{ background: colors.line, maxWidth: '40%' }} />
+      </div>
+      {/* Body */}
+      <div className="flex-1 flex min-h-0">
+        <div className="w-[26%] p-[3px] space-y-[2px]" style={{ background: colors.sidebar }}>
+          <div className="h-[3px] rounded-sm" style={{ background: colors.accent, width: '65%', opacity: 0.5 }} />
+          <div className="h-[3px] rounded-sm" style={{ background: colors.line, width: '80%' }} />
+          <div className="h-[3px] rounded-sm" style={{ background: colors.line, width: '55%' }} />
+        </div>
+        <div className="flex-1 p-[4px] flex flex-col gap-[3px]" style={{ background: colors.surface }}>
+          <div className="h-[4px] rounded-sm" style={{ background: colors.accent, width: '35%' }} />
+          <div className="h-[4px] rounded-sm" style={{ background: colors.text, width: '70%' }} />
+          <div className="h-[4px] rounded-sm" style={{ background: colors.text, width: '50%', opacity: 0.5 }} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Shared: radio keyboard navigation for card groups ── */
+
+function useRadioKeyboard(items: string[], selected: string, onSelect: (v: string) => void) {
+  return useCallback((e: React.KeyboardEvent) => {
+    const idx = items.indexOf(selected)
+    if (idx < 0) return
+    let next = -1
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % items.length
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + items.length) % items.length
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = items.length - 1
+    if (next >= 0) { e.preventDefault(); onSelect(items[next]) }
+  }, [items, selected, onSelect])
+}
+
+const GRID_CLASS = 'flex flex-wrap gap-2.5 max-w-[486px]'
+const CARD_W = 'w-[152px] flex-none'
+
+/* ── Mode picker ── */
+
+const MODE_IDS: Array<'light' | 'dark' | 'system'> = ['light', 'dark', 'system']
+
+function ThemeModePicker({ value, onChange, t }: {
+  value: string
+  onChange: (v: 'light' | 'dark' | 'system') => void
+  t: (key: string) => string
+}) {
+  const light = THEME_FAMILIES[0].light
+  const dark = THEME_FAMILIES[0].dark
+  const onKey = useRadioKeyboard(MODE_IDS, value, onChange as (v: string) => void)
+
+  return (
+    <div className={GRID_CLASS} role="radiogroup" aria-label={t('renderer.general_settings.theme_2')} onKeyDown={onKey}>
+      {MODE_IDS.map((mode) => {
+        const selected = value === mode
+        return (
+          <button
+            key={mode}
+            role="radio"
+            aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(mode)}
+            className={`${CARD_W} rounded-md border-[1.5px] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
+              selected ? 'border-accent' : 'border-edge hover:border-edge-strong'
+            }`}
+          >
+            <div className="h-[90px] rounded-t-[5px] overflow-hidden">
+              {mode === 'system' ? (
+                <div className="relative h-full">
+                  <div className="absolute inset-0" style={{ clipPath: 'inset(0 50% 0 0)' }}>
+                    <AppPreview colors={light} className="h-full" />
+                  </div>
+                  <div className="absolute inset-0" style={{ clipPath: 'inset(0 0 0 50%)' }}>
+                    <AppPreview colors={dark} className="h-full" />
+                  </div>
+                </div>
+              ) : (
+                <AppPreview colors={mode === 'light' ? light : dark} className="h-full" />
+              )}
+            </div>
+            <div className="flex items-center justify-center gap-1.5 py-1">
+              <div className={`w-3 h-3 rounded-full border-[1.5px] flex items-center justify-center shrink-0 ${
+                selected ? 'border-accent' : 'border-edge-strong'
+              }`}>
+                {selected && <div className="w-1.5 h-1.5 rounded-full bg-accent" />}
+              </div>
+              <span className={`text-xs ${selected ? 'text-accent font-medium' : 'text-primary'}`}>
+                {t(`settings.theme_${mode}`)}
+              </span>
+            </div>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ── Theme family picker — checkmark, same width as mode cards ── */
+
+const FAMILY_IDS = THEME_FAMILIES.map((f) => f.id)
+
+function ColorSchemePicker({ value, onChange, isCustomPair, t }: {
+  value: SchemeId
+  onChange: (v: SchemeId) => void
+  isCustomPair: boolean
+  t: (key: string) => string
+}) {
+  const themeMode = useStore((s) => s.themeMode)
+  const isSystem = themeMode === 'system'
+  const isDark = themeMode === 'dark' || (isSystem && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const onKey = useRadioKeyboard(FAMILY_IDS, value, onChange as (v: string) => void)
+
+  return (
+    <div className={GRID_CLASS} role="radiogroup" aria-label={t('settings.color_scheme')} onKeyDown={onKey}>
+      {THEME_FAMILIES.map((family) => {
+        const selected = !isCustomPair && value === family.id
+        return (
+          <button
+            key={family.id}
+            role="radio"
+            aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(family.id)}
+            className={`${CARD_W} rounded-md border-[1.5px] transition-colors relative focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
+              selected ? 'border-accent' : 'border-edge hover:border-edge-strong'
+            }`}
+          >
+            {selected && (
+              <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-accent flex items-center justify-center z-10">
+                <Check size={10} style={{ color: isDark ? '#18181b' : '#ffffff' }} />
+              </div>
+            )}
+            <div className="h-[76px] rounded-t-[5px] overflow-hidden">
+              {isSystem ? (
+                <div className="relative h-full">
+                  <div className="absolute inset-0" style={{ clipPath: 'inset(0 50% 0 0)' }}>
+                    <AppPreview colors={family.light} className="h-full" />
+                  </div>
+                  <div className="absolute inset-0" style={{ clipPath: 'inset(0 0 0 50%)' }}>
+                    <AppPreview colors={family.dark} className="h-full" />
+                  </div>
+                </div>
+              ) : (
+                <AppPreview colors={isDark ? family.dark : family.light} className="h-full" />
+              )}
+            </div>
+            <div className="py-1 px-2 text-left">
+              <span className={`text-xs ${selected ? 'text-accent font-medium' : 'text-primary'}`}>
+                {sLabel(family.id, t)}
+              </span>
+            </div>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/* ── "分别设置" expandable section ── */
+
+function CustomPairSection({ t, savePreferences, preferences, onFamilySelect }: {
+  t: (k: string) => string
+  savePreferences: (prefs: Record<string, unknown>) => Promise<void>
+  preferences: Record<string, unknown>
+  onFamilySelect: (id: SchemeId) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const colorScheme = useStore((s) => s.colorScheme)
+  const setColorScheme = useStore((s) => s.setColorScheme)
+  const lightScheme = (preferences.lightScheme as SchemeId) || colorScheme
+  const darkScheme = (preferences.darkScheme as SchemeId) || colorScheme
+  const isCustom = lightScheme !== darkScheme
+
+  const handleChange = useCallback((slot: 'light' | 'dark', scheme: SchemeId) => {
+    const next = { lightScheme: slot === 'light' ? scheme : lightScheme, darkScheme: slot === 'dark' ? scheme : darkScheme }
+    void savePreferences(next)
+    const tm = useStore.getState().themeMode
+    const effectiveDark = tm === 'dark' || (tm === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+    setColorScheme(effectiveDark ? next.darkScheme : next.lightScheme)
+  }, [lightScheme, darkScheme, savePreferences, setColorScheme])
+
+  const resetToFamily = useCallback(() => {
+    void savePreferences({ lightScheme: colorScheme, darkScheme: colorScheme })
+    onFamilySelect(colorScheme)
+    setOpen(false)
+  }, [colorScheme, savePreferences, onFamilySelect])
+
+  const fam = (id: SchemeId) => THEME_FAMILIES.find((f) => f.id === id)!
+
+  return (
+    <div className="rounded-md border border-edge max-w-[486px]">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-secondary hover:text-primary"
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}>
+          <path d="M3 1l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" />
+        </svg>
+        <span>{t('settings.custom_pair')}</span>
+        {isCustom && !open && (
+          <span className="text-[11px] text-muted ml-auto">
+            {sLabel(lightScheme, t)} · {sLabel(darkScheme, t)}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {(['light', 'dark'] as const).map((slot) => {
+              const current = slot === 'light' ? lightScheme : darkScheme
+              return (
+                <div key={slot} className="space-y-1.5">
+                  <div className="text-[11px] font-medium text-secondary">
+                    {t(`settings.${slot}_theme_slot`)}
+                  </div>
+                  <div className="text-[11px] text-muted">{t(`settings.${slot}_theme_slot_hint`)}</div>
+                  <select
+                    value={current}
+                    onChange={(e) => handleChange(slot, e.target.value as SchemeId)}
+                    className="w-full rounded border border-edge bg-surface px-2 py-1.5 text-xs text-primary outline-none focus:border-accent"
+                  >
+                    {THEME_FAMILIES.map((f) => <option key={f.id} value={f.id}>{sLabel(f.id, t)}</option>)}
+                  </select>
+                  <AppPreview colors={fam(current)[slot]} className="h-10 rounded border border-edge" />
+                </div>
+              )
+            })}
+          </div>
+          {isCustom && (
+            <button onClick={resetToFamily} className="text-[11px] text-muted hover:text-accent">
+              {t('settings.reset_to_family')}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function GeneralSettings() {
   const { locale, setLocale, themeMode, setThemeMode, colorScheme, setColorScheme, savePreferences } = useStore()
   const t = useT()
@@ -301,31 +584,30 @@ export function GeneralSettings() {
       <IdentitySection />
       <HarnessIconSection />
 
-      <SettingField label={t('renderer.general_settings.theme')} icon={<Sun size={12} />}>
-        <Segmented
-          ariaLabel={t('renderer.general_settings.theme_2')}
-          value={themeMode}
-          onChange={setThemeMode}
-          options={[
-            { value: 'light', label: t('settings.theme_light') },
-            { value: 'dark', label: t('settings.theme_dark') },
-            { value: 'system', label: t('settings.theme_system') }
-          ]}
-        />
+      <SettingField label={t('settings.appearance_mode')} hint={t('settings.appearance_mode_hint')} icon={<Sun size={12} />}>
+        <ThemeModePicker value={themeMode} onChange={setThemeMode} t={t} />
       </SettingField>
 
-      <SettingField label={t('settings.color_scheme')} icon={<Palette size={12} />}>
-        <Segmented
-          ariaLabel={t('settings.color_scheme')}
+      <SettingField label={t('settings.color_scheme')} hint={t('settings.color_scheme_hint')} icon={<Palette size={12} />}>
+        <ColorSchemePicker
           value={colorScheme}
-          onChange={setColorScheme}
-          options={[
-            { value: 'default', label: t('settings.scheme_default') },
-            { value: 'paper', label: t('settings.scheme_paper') },
-            { value: 'nord', label: t('settings.scheme_nord') }
-          ]}
+          isCustomPair={
+            themeMode === 'system' &&
+            typeof preferences.lightScheme === 'string' &&
+            typeof preferences.darkScheme === 'string' &&
+            preferences.lightScheme !== preferences.darkScheme
+          }
+          onChange={(id) => {
+            setColorScheme(id)
+            void savePreferences({ lightScheme: id, darkScheme: id })
+          }}
+          t={t}
         />
-        <p className="mt-2 text-faint text-[10px]">{t('settings.theme_ecosystem_teaser')}</p>
+        {themeMode === 'system' && (
+          <div className="mt-3">
+            <CustomPairSection t={t} savePreferences={savePreferences} preferences={preferences} onFamilySelect={setColorScheme} />
+          </div>
+        )}
       </SettingField>
 
       <SettingField label={t('settings.language')} icon={<Globe size={12} />}>

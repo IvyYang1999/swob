@@ -37,7 +37,7 @@ export function SettingField({ label, hint, icon, children }: {
         <div className="flex items-center gap-2 text-xs font-medium text-secondary">
           {icon}{label}
         </div>
-        {hint && <p className="mt-1 text-[11px] leading-relaxed text-faint">{hint}</p>}
+        {hint && <p className="mt-1 text-[11px] leading-relaxed text-muted">{hint}</p>}
       </div>
       {children}
     </section>

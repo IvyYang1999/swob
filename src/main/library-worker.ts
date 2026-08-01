@@ -73,7 +73,14 @@ interface WorkerEnvelope {
 type WorkerReply =
   | { requestId: number; type: 'progress'; progress: LibraryWorkerProgress }
   | { requestId: number; type: 'result'; result: LibraryWorkerResult }
-  | { requestId: number; type: 'error'; error: string; errorName?: string; errorCode?: string }
+  | {
+      requestId: number
+      type: 'error'
+      error: string
+      errorName?: string
+      errorCode?: string
+      errorStack?: string
+    }
 
 export async function runLibraryWorkerRequest(
   request: LibraryWorkerRequest,
@@ -181,7 +188,8 @@ if (!isMainThread && parentPort) {
           type: 'error',
           error: typedError?.message || String(error),
           errorName: typedError?.name,
-          errorCode: typeof typedError?.code === 'string' ? typedError.code : undefined
+          errorCode: typeof typedError?.code === 'string' ? typedError.code : undefined,
+          errorStack: process.env.SWOB_E2E_SANDBOX_ROOT ? typedError?.stack : undefined
         } satisfies WorkerReply)
       }
     })
@@ -359,6 +367,7 @@ export class LibraryWorkerClient {
         const error = new Error(reply.error) as Error & { code?: string }
         if (reply.errorName) error.name = reply.errorName
         if (reply.errorCode) error.code = reply.errorCode
+        if (reply.errorStack) error.stack = reply.errorStack
         pending.reject(error)
       }
     })

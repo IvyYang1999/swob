@@ -629,6 +629,16 @@ export function createTraeProvider(options: TraeProviderOptions): BuiltinProvide
     definition.manifest.parserDataVersion,
     definition.manifest.formatVersions
   )
+  // One discovery pass owns one immutable parse snapshot. This both preserves
+  // SQLite snapshot consistency and avoids rereading an all-sessions KV row
+  // once per virtual session at fingerprint/input/parse time.
+  const discoveredSnapshots = new Map<string, TraeSourceSnapshot>()
+  const discoveredSnapshotFor = (source: SourceRef): TraeSourceSnapshot => {
+    const snapshot = discoveredSnapshots.get(source.stableId)
+    if (snapshot && snapshot.record.databasePath === databasePathFor(source) &&
+      snapshot.record.sessionId === sessionIdFor(source)) return snapshot
+    return snapshotFor(source)
+  }
   return {
     manifest: manifestV2,
     async discover(signal) {
@@ -648,8 +658,18 @@ export function createTraeProvider(options: TraeProviderOptions): BuiltinProvide
           }
         }
       }
-      return [...candidates.entries()]
+      const selected = [...candidates.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
+      discoveredSnapshots.clear()
+      for (const [stableId, record] of selected) {
+        const workspace = workspaceMetadata(record.databasePath, record.session)
+        discoveredSnapshots.set(stableId, {
+          record,
+          workspace,
+          fingerprint: fingerprintFor(record, workspace)
+        })
+      }
+      return selected
         .map(([stableId, record]): TraeSqliteSource => ({
           kind: 'sqlite-row',
           stableId,
@@ -663,16 +683,16 @@ export function createTraeProvider(options: TraeProviderOptions): BuiltinProvide
     },
     async fingerprint(source, signal) {
       signalCheckpoint(signal)
-      return snapshotFor(source).fingerprint
+      return discoveredSnapshotFor(source).fingerprint
     },
     async inputBytes(source, signal) {
       signalCheckpoint(signal)
-      const snapshot = snapshotFor(source)
+      const snapshot = discoveredSnapshotFor(source)
       return Buffer.byteLength(snapshot.record.raw, 'utf8') + Buffer.byteLength(snapshot.workspace.raw, 'utf8')
     },
     async parse(source, fingerprint, signal) {
       signalCheckpoint(signal)
-      const snapshot = snapshotFor(source)
+      const snapshot = discoveredSnapshotFor(source)
       if (!sameFingerprint(snapshot.fingerprint, fingerprint)) throw new Error('trae-source-changed-during-parse')
       return chunksFor(snapshot, source, fingerprint, 'initial')
     }

@@ -89,10 +89,13 @@ describe('Trae native Provider Protocol v2 runtime', () => {
       })
       const beforeWorkspaceChange = fingerprint.value
       fs.writeFileSync(sample.workspacePath, JSON.stringify({ folder: 'file:///tmp/moved-synthetic-project' }))
-      expect((await provider.fingerprint(sources[0], signal)).value).not.toBe(beforeWorkspaceChange)
+      const rediscovered = (await provider.discover(signal))[0]
+      expect((await provider.fingerprint(rediscovered, signal)).value).not.toBe(beforeWorkspaceChange)
       fs.writeFileSync(sample.workspacePath, JSON.stringify({ folder: 'file:///tmp/synthetic-trae-project' }))
+      const restoredSource = (await provider.discover(signal))[0]
+      const restoredFingerprint = await provider.fingerprint(restoredSource, signal)
 
-      const chunks = await provider.parse(sources[0], fingerprint, signal)
+      const chunks = await provider.parse(restoredSource, restoredFingerprint, signal)
       const assembler = new ProviderChunkAssembler()
       for (const chunk of chunks) {
         expect(validateParseChunkV2(chunk).ok).toBe(true)

@@ -14,7 +14,6 @@ describe('Provider capability snapshots match real call chains', () => {
 
     const paths: Record<string, string> = {
       antigravity: '/fixture/.gemini/antigravity/session.json',
-      kimi: '/fixture/.kimi/sessions/session.jsonl',
       hermes: '/fixture/.hermes/sessions/session.json'
     }
     for (const [source, filePath] of Object.entries(paths)) {

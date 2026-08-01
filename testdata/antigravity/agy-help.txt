@@ -1,2 +1,3 @@
 Usage: agy [options]
-  -c, --conversation <conversation-id>  Resume a conversation
+  -c, --continue                        Resume the latest conversation
+      --conversation <conversation-id>  Resume a specific conversation

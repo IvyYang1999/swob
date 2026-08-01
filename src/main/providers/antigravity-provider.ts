@@ -115,9 +115,9 @@ export const ANTIGRAVITY_CAPABILITY_MATRIX: readonly AntigravityCapabilityLayer[
     conformanceTestId: 'antigravity-v2.relationships.structured-conversation-id'
   },
   {
-    layer: 'resume', status: 'derived',
-    evidence: 'Google documents agy --conversation=<conv_id>; the runtime requires binary/help/source preflight.',
-    limit: 'This machine has no agy binary, so launch and post-resume anchor verification require a real installation.',
+    layer: 'resume', status: 'unavailable',
+    evidence: 'Google documents agy --conversation=<conv_id>; the runtime requires exact --conversation help output plus binary/source preflight before launch.',
+    limit: 'Swob does not yet observe a post-launch source/message anchor, so a successful launch is not verified as a successful Resume.',
     fixture: 'testdata/antigravity/agy-help.txt',
     conformanceTestId: 'antigravity-v2.resume.help-preflight'
   }
@@ -1058,8 +1058,8 @@ export const ANTIGRAVITY_MANIFEST_V2: ProviderManifestV2 = {
     idTransform: null,
     preflight: ['binary', 'version', 'help-capability', 'source-exists'],
     commandTemplate: 'agy --conversation {sessionId}',
-    expectedSideEffects: ['append-source-after-launch', 'verify-selected-conversation-anchor'],
-    postcondition: 'anchor-match'
+    expectedSideEffects: ['append-source-after-launch'],
+    postcondition: 'unverifiable'
   }
 }
 

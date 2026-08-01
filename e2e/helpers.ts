@@ -3,6 +3,7 @@ import Database from 'better-sqlite3'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { assertTestDefaultLibraryPath } from '../src/main/e2e-library-isolation'
 
 export const CLAUDE_FIXTURE_ID = '82000000-0000-4000-8000-000000000099'
 export const CODEX_FIXTURE_ID = '019abcde-1234-7000-8000-012345670099'
@@ -21,19 +22,26 @@ export async function launchAppWithEnv(options: { env?: Record<string, string> }
   const cache = path.join(testHome, '.swob-e2e-cache')
   fs.mkdirSync(userData, { recursive: true })
   fs.mkdirSync(cache, { recursive: true })
+  const environment = {
+    ...process.env,
+    ...options.env,
+    HOME: testHome,
+    NODE_ENV: 'test',
+    SWOB_TEST_HOME: testHome,
+    SWOB_TEST_LOCALE: 'zh-CN',
+    SWOB_E2E_SANDBOX_ROOT: testHome
+  }
+  assertTestDefaultLibraryPath(
+    environment.SWOB_LIBRARY_ROOT || path.join(testHome, 'Documents', 'Swob'),
+    environment
+  )
   const app = await electron.launch({
     args: [
       path.join(__dirname, '..', 'out', 'main', 'index.js'),
       `--user-data-dir=${userData}`,
       `--disk-cache-dir=${cache}`
     ],
-    env: {
-      ...process.env,
-      SWOB_TEST_LOCALE: 'zh-CN',
-      ...options.env,
-      NODE_ENV: 'test',
-      SWOB_TEST_HOME: testHome
-    }
+    env: environment
   })
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
@@ -458,6 +466,21 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     options.includePricingFixture ?? false
   )
 
+  const environment = {
+    ...isolatedEnvironment(home, libraryRoot, sandboxRoot),
+    ...options.env,
+    HOME: home,
+    NODE_ENV: 'test',
+    SWOB_TEST_HOME: home,
+    SWOB_E2E_SANDBOX_ROOT: sandboxRoot
+  }
+  try {
+    assertTestDefaultLibraryPath(environment.SWOB_LIBRARY_ROOT || libraryRoot, environment)
+  } catch (error) {
+    fs.rmSync(sandboxRoot, { recursive: true, force: true })
+    throw error
+  }
+
   const app = await electron.launch({
     args: [
       path.join(__dirname, '..', 'out', 'main', 'index.js'),
@@ -465,7 +488,7 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
       `--disk-cache-dir=${cache}`,
       `--crash-dumps-dir=${logs}`
     ],
-    env: { ...isolatedEnvironment(home, libraryRoot, sandboxRoot), ...options.env }
+    env: environment
   })
   try {
     const page = await app.firstWindow()

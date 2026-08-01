@@ -65,4 +65,11 @@ describe('current provider capability truth', () => {
     expect(providerUsesCanonicalRuntime('trae')).toBe(true)
     expect(providerUsesCanonicalRuntime('claude-code')).toBe(false)
   })
+
+  it('keeps Antigravity terminal Resume explicitly experimental until post-launch anchors are observed', () => {
+    const resume = builtinProviderForSource('antigravity')?.manifest.capabilities['terminal-resume']
+    expect(resume?.status).toBe('experimental')
+    expect(resume?.reason).toContain('post-launch source/message anchor')
+    expect(resume?.reason).not.toContain('This machine')
+  })
 })

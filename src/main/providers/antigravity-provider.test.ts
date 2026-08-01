@@ -145,6 +145,14 @@ describe('Antigravity native Provider Protocol v2', () => {
     }
     expect(ANTIGRAVITY_CAPABILITY_MATRIX.find((entry) => entry.layer === 'tokens')?.limit)
       .toContain('chars/4 is not used')
+    const resume = ANTIGRAVITY_CAPABILITY_MATRIX.find((entry) => entry.layer === 'resume')
+    expect(resume).toMatchObject({ status: 'unavailable' })
+    expect(resume?.limit).toContain('post-launch source/message anchor')
+    expect(resume?.limit).not.toContain('This machine')
+    expect(ANTIGRAVITY_MANIFEST_V2.resumeContract).toMatchObject({
+      expectedSideEffects: ['append-source-after-launch'],
+      postcondition: 'unverifiable'
+    })
     expect(validateProviderManifestV2(ANTIGRAVITY_MANIFEST_V2).ok).toBe(true)
   })
 
@@ -308,6 +316,11 @@ describe('Antigravity native Provider Protocol v2', () => {
     const help = fs.readFileSync(path.join(fixtureRoot, 'agy-help.txt'), 'utf8')
     expect(antigravityCliSupportsConversation(help)).toBe(true)
     expect(buildAntigravityResumeArgs(FIXTURE_ID, help)).toEqual(['--conversation', FIXTURE_ID])
+    expect(antigravityCliSupportsConversation('Usage:\n  -c  Short alias for --continue')).toBe(false)
+    expect(antigravityCliSupportsConversation('Usage:\n  -c, --continue  Resume latest')).toBe(false)
+    expect(antigravityCliSupportsConversation('Usage:\n  --conversation-id <id>')).toBe(false)
+    expect(() => buildAntigravityResumeArgs(FIXTURE_ID, 'Usage:\n  -c, --continue'))
+      .toThrow('antigravity-conversation-flag-unavailable')
     expect(() => buildAntigravityResumeArgs(FIXTURE_ID, 'Usage: agy --resume <id>'))
       .toThrow('antigravity-conversation-flag-unavailable')
     expect(() => buildAntigravityResumeArgs('../unsafe', help)).toThrow('antigravity-conversation-id-invalid')

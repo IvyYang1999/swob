@@ -29,6 +29,7 @@ import { shellQuote } from './resume-terminal'
 import { detectTranscriptOrigin, formatTranscriptOriginHeader } from './transcript-origin'
 import { resolvePathWithinRoot } from './path-containment'
 import { runtimeHome } from './runtime-home'
+import { assertE2ELibraryPath, assertTestDefaultLibraryPath } from './e2e-library-isolation'
 import {
   ensureClaudeResumeTarget,
   type ClaudeResumeRecoveryFailureReason
@@ -324,7 +325,9 @@ export interface LibraryConfig {
 
 // ============ Constants ============
 
-const DEFAULT_ROOT = process.env.SWOB_LIBRARY_ROOT || path.join(runtimeHome(), 'Documents', 'Swob')
+const DEFAULT_ROOT = assertTestDefaultLibraryPath(
+  process.env.SWOB_LIBRARY_ROOT || path.join(runtimeHome(), 'Documents', 'Swob')
+)
 const APP_CONFIG_DIR = path.join(runtimeHome(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
 
@@ -378,7 +381,9 @@ export function sessionBackupSourcePaths(
 }
 
 export function loadAppConfig(): AppConfig {
-  return readAppConfigStrict().config
+  const config = readAppConfigStrict().config
+  if (config.libraryPath) assertE2ELibraryPath(config.libraryPath)
+  return config
 }
 
 type AppConfigReadResult =
@@ -492,6 +497,7 @@ function updateAppConfigAtomically(
       if (!current.backupPath) throw new Error('invalid-app-config-backup-failed')
     }
     const next = update(current.config)
+    if (next.libraryPath) assertE2ELibraryPath(next.libraryPath)
     writeAppConfigAtomically(next)
     return next
   } finally {

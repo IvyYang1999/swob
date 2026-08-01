@@ -6,6 +6,8 @@
  */
 import { test, expect } from '@playwright/test'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { closeApp, launchApp, revealAllSessions, type LaunchedApp } from './helpers'
 import type { ElectronApplication, Page } from '@playwright/test'
 
@@ -33,6 +35,16 @@ test('应用能正常启动，窗口标题存在', async () => {
   }))
   expect(paths.home).toBe(launched.home)
   expect(fs.realpathSync(paths.userData)).toBe(fs.realpathSync(launched.userData))
+})
+
+test('E2E launcher 在启动 Electron 前拒绝 sandbox 外的 Library', async () => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-real-library-sentinel-'))
+  try {
+    await expect(launchApp({ env: { SWOB_LIBRARY_ROOT: outside } }))
+      .rejects.toThrow('E2E Library path is unsafe: outside-sandbox')
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true })
+  }
 })
 
 test('侧边栏加载出 session 列表', async ({}, testInfo) => {

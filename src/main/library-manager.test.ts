@@ -360,6 +360,18 @@ describe('App 配置：Library 路径管理', () => {
     expect(config.libraryPath).toBe(tmpRoot)
   })
 
+  it('E2E sandbox 拒绝把配置切到隔离目录外的真实 Library', () => {
+    const previousSandbox = process.env.SWOB_E2E_SANDBOX_ROOT
+    process.env.SWOB_E2E_SANDBOX_ROOT = testHome
+    try {
+      expect(() => lib.changeConfiguredLibraryPath(tmpRoot)).toThrow('E2E Library path is unsafe: outside-sandbox')
+      expect(lib.loadAppConfig().libraryPath).not.toBe(tmpRoot)
+    } finally {
+      if (previousSandbox === undefined) delete process.env.SWOB_E2E_SANDBOX_ROOT
+      else process.env.SWOB_E2E_SANDBOX_ROOT = previousSandbox
+    }
+  })
+
   it('deviceId 在 app-config.json 中只生成一次并持久化', () => {
     const first = lib.getOrCreateLocalDeviceId(() => 'device-xx…0001')
     const second = lib.getOrCreateLocalDeviceId(() => 'device-xx…9999')

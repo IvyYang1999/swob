@@ -8,6 +8,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
 import { startPackagedUpdateE2E } from './update-e2e-driver'
+import { assertE2ELibraryPath } from './e2e-library-isolation'
 import { registerAgentIpc, registerAgentShortcut, shutdownAgentRuntime } from './agent-window'
 import { getAgentWorkspaceDir } from './agent-runner'
 import { buildAgentHistory, registerFrontendIpc } from './frontend-ipc'
@@ -411,6 +412,7 @@ function approveLibraryRoot(rootPath: string): string {
     throw new Error('Library root must be an existing absolute directory')
   }
   const canonical = fs.realpathSync.native(resolved)
+  assertE2ELibraryPath(canonical)
   approvedLibraryRoots.add(canonical)
   return canonical
 }

@@ -268,7 +268,7 @@ function antigravityCanonicalCapabilities(): ProviderCapabilities {
     search: available(searchIndex, provider, fixture),
     archive: available(archive, provider, fixture),
     'terminal-resume': experimental(
-      'The documented agy --conversation flag is checked at runtime, but post-launch anchor verification is not yet enforced.',
+      'Google documents agy --conversation. Swob probes the installed binary for that exact long flag before launch, but does not yet observe a post-launch source/message anchor, so Resume success is not verified.',
       provider,
       officialStorage,
       fixture

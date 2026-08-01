@@ -13,7 +13,7 @@ export function isAntigravityConversationId(value: string): boolean {
 }
 
 export function antigravityCliSupportsConversation(helpOutput: string): boolean {
-  return /(?:^|\s)(?:-c(?:,|\s)+|--conversation(?:[=\s,]|$))/m.test(helpOutput)
+  return /(?:^|\s)--conversation(?:[=\s,]|$)/m.test(helpOutput)
 }
 
 export function buildAntigravityResumeArgs(sessionId: string, helpOutput: string): string[] {

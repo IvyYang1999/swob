@@ -1,0 +1,6 @@
+{
+  "title": "Synthetic Kimi migrated session",
+  "createdAt": "2026-08-01T09:00:00.000Z",
+  "updatedAt": "2026-08-01T09:01:00.000Z",
+  "agents": { "main": { "type": "main", "parentAgentId": null } }
+}

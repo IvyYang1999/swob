@@ -32,6 +32,7 @@ import {
   validateProviderManifestV2
 } from '../shared/provider-protocol-v2'
 import { createPiProvider } from './providers/pi-provider'
+import { createKimiProvider } from './providers/kimi-provider'
 import {
   migrateProviderV1ManifestToV2,
   migrateProviderV1OutcomeToV2Chunks
@@ -238,6 +239,10 @@ function builtinRuntimes(homeDir: string): BuiltinProviderRuntime[] {
   return [createPiProvider({ homeDir })]
 }
 
+function builtinRuntimesV2(homeDir: string): BuiltinProviderRuntimeV2[] {
+  return [createKimiProvider({ homeDir })]
+}
+
 export class ProviderHost {
   private readonly runtimes: BuiltinProviderRuntime[]
   private readonly v2Runtimes: BuiltinProviderRuntimeV2[]
@@ -248,7 +253,9 @@ export class ProviderHost {
 
   constructor(options: ProviderHostOptions = {}) {
     this.runtimes = options.runtimes || builtinRuntimes(options.homeDir || runtimeHome())
-    this.v2Runtimes = options.v2Runtimes || []
+    this.v2Runtimes = options.v2Runtimes || (options.runtimes
+      ? []
+      : builtinRuntimesV2(options.homeDir || runtimeHome()))
     const providerIds = [...this.runtimes, ...this.v2Runtimes].map((runtime) => runtime.manifest.providerId)
     if (new Set(providerIds).size !== providerIds.length) {
       throw new Error('provider-host-duplicate-runtime-id')

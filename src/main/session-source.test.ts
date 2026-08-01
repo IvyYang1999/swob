@@ -29,6 +29,15 @@ describe('detectSessionSourceForJsonl', () => {
     expect(source).toBe('zcode')
   })
 
+  it('Kimi Code 新旧两个会话根都按路径识别', () => {
+    expect(detectSessionSourceFromPath(
+      '/Users/test/.kimi-code/sessions/workdir/session/agents/main/wire.jsonl'
+    )).toBe('kimi')
+    expect(detectSessionSourceFromPath(
+      '/Users/test/.kimi/sessions/session/wire.jsonl'
+    )).toBe('kimi')
+  })
+
   it('backup/detail 场景 source path 与内容冲突时优先嗅探内容', () => {
     const backupPath = writeBackupJsonl([
       { role: 'user', message: { content: 'Cursor backup content' } }

@@ -1,0 +1,18 @@
+This directory contains fully synthetic Kimi Code wire fixtures created for Swob.
+
+The field layout was independently implemented from these pinned public sources:
+
+- MoonshotAI/kimi-code at commit e22479a62eed9c3b78a67b313f4332c2c0ba9670
+  (Apache-2.0), especially packages/agent-core-v2/docs/wire-manifest.d.ts.
+- MoonshotAI/kimi-cli tag 1.30.0 at commit
+  e7ce633fa578c4d819740c109d3f5997656f4139 (Apache-2.0).
+- tyql688/sessionview at commit
+  4adbd178a16a219b14c9d5f73c640c31764b8e59 (MIT), used only to compare
+  the two Kimi on-disk wire families and identify unsupported event classes.
+
+No source code, real transcript, account identifier, machine path, credential,
+or user content was copied into these fixtures.
+
+SessionView copyright: tyql688 and contributors
+SessionView license: MIT
+Source: https://github.com/tyql688/sessionview/tree/4adbd178a16a219b14c9d5f73c640c31764b8e59/src-tauri/src/providers/kimi

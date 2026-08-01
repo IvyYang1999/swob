@@ -47,14 +47,20 @@ describe('设置偏好迁移与 Resume 能力', () => {
     }
   })
 
-  it('五个 detection-only 来源的猜测命令不能标为 stable', () => {
-    for (const source of ['antigravity', 'grok', 'pi', 'kimi', 'hermes']) {
+  it('未审计来源的猜测命令不能标为 stable', () => {
+    for (const source of ['antigravity', 'grok', 'pi', 'hermes']) {
       const terminal = harnessForSource(source).choices.find((choice) => choice.id === 'terminal')
       expect(terminal, source).toMatchObject({
         support: 'experimental',
         reason: providerCapabilitiesForSource(source)?.['terminal-resume'].reason
       })
     }
+  })
+
+  it('Kimi --session 经来源级契约审计后标为 stable', () => {
+    expect(harnessForSource('kimi').choices.find((choice) => choice.id === 'terminal')).toMatchObject({
+      support: 'stable'
+    })
   })
 
   it('CC-Mirror 不再继承 Claude Code 的 stable terminal 真相', () => {

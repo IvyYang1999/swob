@@ -1,0 +1,4 @@
+{"type":"metadata","protocol_version":"1.0","created_at":1785574800000}
+{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"Read the migrated synthetic fixture."}],"toolCalls":[]}}
+{"type":"context.append_message","message":{"role":"assistant","content":[{"type":"think","think":"This is the migrated wire family."},{"type":"text","text":"The migrated fixture is readable."}],"toolCalls":[{"type":"function","id":"legacy-tool-1","function":{"name":"Read","arguments":"{\"file_path\":\"/workspace/synthetic-kimi-legacy/README.md\"}"}}]}}
+{"type":"context.append_message","message":{"role":"tool","content":[{"type":"text","text":"synthetic-kimi-migrated-needle"}],"toolCallId":"legacy-tool-1","isError":false}}

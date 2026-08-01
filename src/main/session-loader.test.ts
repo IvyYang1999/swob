@@ -324,7 +324,7 @@ describe('Claude session discovery', () => {
     expect(cc?.firstUserMessage).toBe('CC Mirror 真实消息')
     expect(cc?.tokenAccounting?.billingTotal).toBe(15)
 
-    for (const source of ['antigravity', 'grok', 'kimi', 'hermes'] as const) {
+    for (const source of ['antigravity', 'grok', 'hermes'] as const) {
       const summary = sessions.find((session) => session.source === source)
       expect(summary, source).toBeDefined()
       expect(summary?.tokenAccounting?.provider, source).toBe(source)
@@ -334,6 +334,9 @@ describe('Claude session discovery', () => {
     // Pi is now a native canonical provider. A blank JSONL has no verified Pi
     // session header and must not fall back to the old synthetic placeholder.
     expect(sessions.filter((session) => session.source === 'pi')).toHaveLength(0)
+    // Kimi is also native canonical. readOnly intentionally never opens the
+    // canonical SQLite store, and this path is not a valid Kimi agent source.
+    expect(sessions.filter((session) => session.source === 'kimi')).toHaveLength(0)
     expect(sessions.filter((session) => session.source === 'claude-code')).toHaveLength(0)
   })
 

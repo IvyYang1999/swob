@@ -45,6 +45,7 @@ export interface LaunchAppOptions {
   viewport?: { width: number; height: number }
   includeCursorFixture?: boolean
   includePiFixture?: boolean
+  includeKimiFixture?: boolean
   includeInspectorFixture?: boolean
   includePricingFixture?: boolean
   env?: Record<string, string>
@@ -90,6 +91,7 @@ function createSyntheticCorpus(
   claudeTurns: number,
   includeCursorFixture = false,
   includePiFixture = false,
+  includeKimiFixture = false,
   includeInspectorFixture = false,
   includePricingFixture = false
 ): void {
@@ -242,6 +244,14 @@ function createSyntheticCorpus(
     fs.copyFileSync(path.join(__dirname, '..', 'testdata', 'pi', 'session.jsonl'), piPath)
   }
 
+  if (includeKimiFixture) {
+    fs.cpSync(
+      path.join(__dirname, '..', 'testdata', 'kimi', 'home', '.kimi-code'),
+      path.join(home, '.kimi-code'),
+      { recursive: true }
+    )
+  }
+
   writeJsonl(
     path.join(
       home,
@@ -389,6 +399,7 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     options.claudeTurns ?? 3,
     options.includeCursorFixture ?? false,
     options.includePiFixture ?? false,
+    options.includeKimiFixture ?? false,
     options.includeInspectorFixture ?? false,
     options.includePricingFixture ?? false
   )

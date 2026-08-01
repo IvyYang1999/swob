@@ -145,6 +145,26 @@ describe('session action context', () => {
     }
   })
 
+  it('Kimi uses its audited --session contract instead of the generic --resume guess', () => {
+    const action = buildResumeAction(
+      'session_synthetic_native',
+      undefined,
+      undefined,
+      'kimi'
+    )
+
+    expect(action).toEqual({
+      kind: 'terminal',
+      command: `kimi --session ${shellQuote('session_synthetic_native')}`,
+      launchSpec: {
+        executable: 'kimi',
+        args: ['--session', 'session_synthetic_native'],
+        target: 'native',
+        keepOpen: true
+      }
+    })
+  })
+
   it('builds a Codex Desktop deep link only for a validated Codex session id', () => {
     expect(buildResumeAction(
       '019abcde-1234-7000-8000-0123456789ab',

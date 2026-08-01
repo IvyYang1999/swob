@@ -1,0 +1,9 @@
+{
+  "title": "Synthetic Kimi native session",
+  "createdAt": "2026-08-01T08:00:00.000Z",
+  "updatedAt": "2026-08-01T08:02:00.000Z",
+  "agents": {
+    "main": { "type": "main", "parentAgentId": null },
+    "agent-0": { "type": "subagent", "parentAgentId": "main", "swarmItem": "Inspect the synthetic module" }
+  }
+}

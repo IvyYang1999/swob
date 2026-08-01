@@ -17,6 +17,7 @@ import {
 import { ProviderHost, type BuiltinProviderRuntimeV2 } from './provider-host'
 import { refreshCanonicalProviders } from './provider-runtime'
 import { createPiProvider } from './providers/pi-provider'
+import { createKimiProvider } from './providers/kimi-provider'
 import { closeSearchIndex, searchFTS } from './search-index'
 
 let root = ''
@@ -107,6 +108,41 @@ afterEach(() => {
 })
 
 describe('canonical provider runtime full chain', () => {
+  it('runs Kimi native-v2 through sidebar read model, search and Vault without a v1 provider outcome', async () => {
+    fs.cpSync(path.resolve('testdata/kimi/home/.kimi-code'), path.join(home, '.kimi-code'), { recursive: true })
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({
+      runtimes: [],
+      v2Runtimes: [createKimiProvider({ homeDir: home })]
+    })
+
+    const result = await refreshCanonicalProviders({ host, store, archive: true })
+
+    expect(result.reports).toHaveLength(1)
+    expect(result.reports[0]).toMatchObject({
+      providerId: 'swob/kimi',
+      runtimeProtocolVersion: 2,
+      outcomes: [],
+      errors: []
+    })
+    expect(result.reports[0].v2Chunks).toHaveLength(3)
+    expect(result.reports[0].consumerProjections).toHaveLength(3)
+    expect(result.changedSessionRecordIds).toHaveLength(3)
+    expect(store.listSessions('swob/kimi')).toHaveLength(3)
+    expect(store.listSessions('swob/kimi').some((session) =>
+      session.sessionRecord.providerTitle === 'Synthetic Kimi native session' &&
+      session.sessionRecord.projectPath === '/workspace/synthetic-kimi')).toBe(true)
+    expect(searchFTS('synthetic-kimi-search-needle')).toHaveLength(1)
+    expect(searchFTS('synthetic-kimi-migrated-needle')).toHaveLength(1)
+    expect(packageDirs()).toHaveLength(3)
+    const packageRecords = packageDirs().map((dirPath) =>
+      fs.readFileSync(path.join(dirPath, CANONICAL_RECORDS_FILE), 'utf8'))
+    expect(packageRecords.some((content) => content.includes('I should inspect only the fixture.'))).toBe(true)
+    expect(packageRecords.some((content) => content.includes('synthetic-kimi-search-needle'))).toBe(true)
+    expect(result.reports[0].v2Chunks.every((chunk) =>
+      store.getV2Session(chunk.identity.logicalSessionKey, chunk.identity.branchViewId)?.complete === true)).toBe(true)
+  })
+
   it('projects a pure native-v2 runtime into sidebar/search/Vault consumers without v1 migration', async () => {
     const sourcePath = path.join(home, '.pi', 'agent', 'sessions', 'native-v2.jsonl')
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true })

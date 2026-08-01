@@ -16,7 +16,7 @@ export function detectSessionSourceFromPath(filePath?: string): SessionSource | 
   if (normalized.includes('/.gemini/antigravity')) return 'antigravity'
   if (normalized.includes('/.grok/sessions/') || normalized.includes('/.factory/sessions/')) return 'grok'
   if (normalized.includes('/.pi/agent/sessions/')) return 'pi'
-  if (normalized.includes('/.kimi-code/sessions/')) return 'kimi'
+  if (normalized.includes('/.kimi-code/sessions/') || normalized.includes('/.kimi/sessions/')) return 'kimi'
   if (normalized.includes('/.hermes/sessions/')) return 'hermes'
   if (normalized.includes('/.claude/projects/') || normalized.includes('/.claude-window/')) return 'claude-code'
   return null

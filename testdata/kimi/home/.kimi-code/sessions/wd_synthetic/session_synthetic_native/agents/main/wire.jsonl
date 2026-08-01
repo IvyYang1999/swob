@@ -1,0 +1,32 @@
+{"type":"metadata","protocol_version":"1.5","created_at":1785571200000}
+{"type":"config.update","modelAlias":"kimi-code/synthetic-model","thinkingEffort":"on","time":1785571200100}
+{"type":"turn.prompt","input":[{"type":"text","text":"Inspect the synthetic fixture."}],"origin":{"kind":"user"},"time":1785571200200}
+{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"Inspect the synthetic fixture."}],"toolCalls":[],"origin":{"kind":"user"},"id":"user-1"},"time":1785571200200}
+{"type":"interaction.request","id":"question-1","kind":"question","toolCallId":"question-tool-1","request":{"question":"Choose a safe scope","options":[{"label":"Fixture only","description":"Do not read private data"}],"multiSelect":false},"time":1785571200300}
+{"type":"interaction.resolved","id":"question-1","response":{"answers":["Fixture only"]},"time":1785571200400}
+{"type":"plan_mode.enter","id":"plan-1","time":1785571200500}
+{"type":"plan.revision","id":"plan-1","version":1,"path":"/workspace/synthetic-kimi/PLAN.md","sha256":"0fca3e8a95fdfc0f3d0ea9fc1fce3bf2e548db355a497d9c96c2bcfc591c82f9","bytes":42,"time":1785571200600}
+{"type":"goal.create","goalId":"goal-1","objective":"Validate the synthetic parser","status":"active","actor":"user","time":1785571200700}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"think","think":"I should inspect only the fixture."}},"time":1785571200800}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"I will inspect the synthetic file."}},"time":1785571200900}
+{"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":"tool-1","name":"Read","args":{"file_path":"/workspace/synthetic-kimi/README.md"},"description":"Read the synthetic README"},"time":1785571201000}
+{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool-1","result":{"output":"synthetic-kimi-search-needle","isError":false}},"time":1785571201100}
+{"type":"context.append_loop_event","event":{"type":"step.end","usage":{"model":"kimi-code/synthetic-model","inputOther":20,"output":8,"inputCacheRead":30,"inputCacheCreation":2}},"time":1785571201200}
+{"type":"usage.record","model":"kimi-code/synthetic-model","usage":{"inputOther":24,"output":9,"inputCacheRead":32,"inputCacheCreation":2},"usageScope":"turn","time":1785571201300}
+{"type":"turn.steer","input":[{"type":"text","text":"Also preserve the compact boundary."}],"origin":{"kind":"user"},"time":1785571201400}
+{"type":"context.apply_compaction","summary":"The synthetic fixture was inspected without private data.","compactedCount":4,"time":1785571201500}
+{"type":"context.undo","count":1,"time":1785571201600}
+{"type":"permission.set_mode","mode":"manual","time":1785571201700}
+{"type":"interaction.request","id":"approval-1","kind":"approval","toolCallId":"tool-2","request":{"permission":"write","resource":{"path":"/workspace/synthetic-kimi/output.txt"},"action":"create file"},"time":1785571201800}
+{"type":"permission.record_approval_result","turnId":1,"toolCallId":"tool-2","toolName":"Write","action":"create file","result":{"response":"reject"},"time":1785571201900}
+{"type":"interaction.resolved","id":"approval-1","response":{"response":"reject"},"time":1785571201950}
+{"type":"swarm_mode.enter","trigger":"tool","time":1785571202000}
+{"type":"task.started","info":{"kind":"subagent","agentId":"agent-0","parentAgentId":"main"},"time":1785571202100}
+{"type":"future.synthetic_event","payload":{"safe":true},"time":1785571202200}
+{malformed synthetic line
+{"type":"turn.ended","turnId":1,"reason":"completed","durationMs":2200,"time":1785571202300}
+{"type":"turn.prompt","input":[{"type":"text","text":"This cancelled turn stays archived."}],"origin":{"kind":"user"},"time":1785571202400}
+{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"This cancelled turn stays archived."}],"toolCalls":[],"origin":{"kind":"user"},"id":"user-cancelled"},"time":1785571202400}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Partial answer before cancellation."}},"time":1785571202500}
+{"type":"turn.cancel","turnId":2,"target":"active","reason":"user_cancelled","time":1785571202600}
+{"type":"turn.ended","turnId":2,"reason":"cancelled","durationMs":200,"time":1785571202700}

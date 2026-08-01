@@ -87,6 +87,9 @@ export function buildResumeLaunchSpec(
     args = [...(launchCwd ? [launchCwd] : []), '--session', sessionId]
   } else if (source === 'zcode') {
     throw new Error('ZCode 没有公开 CLI；请改用“打开 ZCode App”')
+  } else if (source === 'kimi') {
+    executable = 'kimi'
+    args = ['--session', sessionId]
   } else {
     const executableBySource: Partial<Record<SessionSource, string>> = {
       'claude-code': 'claude',
@@ -189,9 +192,14 @@ function buildTerminalResumeCommand(
     }
     return cmd
   }
+  if (source === 'kimi') {
+    cmd = `kimi --session ${quotedSessionId}`
+    if (cwd && fs.existsSync(cwd)) return `cd ${shellQuote(cwd)} && ${cmd}`
+    return cmd
+  }
   const newSourceCmds: Partial<Record<SessionSource, string>> = {
     'cc-mirror': 'claude', antigravity: 'agy', grok: 'grok',
-    pi: 'pi', kimi: 'kimi', hermes: 'hermes'
+    pi: 'pi', hermes: 'hermes'
   }
   const newCmd = source && newSourceCmds[source]
   if (newCmd) {

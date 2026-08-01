@@ -174,6 +174,29 @@ function piCanonicalCapabilities(): ProviderCapabilities {
   }
 }
 
+function kimiCanonicalCapabilities(): ProviderCapabilities {
+  const provider = implementation('src/main/providers/kimi-provider.ts')
+  const host = implementation('src/main/provider-host.ts#runProviderV2')
+  const projection = implementation('src/main/provider-v2-consumer-projection.ts', 'Lossy read model for existing consumers; v2 remains authoritative.')
+  const fixture = test('src/main/providers/kimi-provider.test.ts', 'Synthetic native, migrated and subagent wires.')
+  return {
+    discover: available(provider, host, fixture),
+    summary: available(provider, projection, fixture),
+    transcript: available(provider, projection, fixture),
+    tools: available(provider, projection, fixture),
+    thinking: available(provider, projection, fixture),
+    usage: available(provider, projection, fixture),
+    relationships: available(provider, fixture),
+    subagents: available(provider, fixture),
+    'live-watch': unavailable('Kimi is refreshed by provider discovery; no dedicated live watcher is registered.', watcher),
+    search: available(searchIndex, projection, fixture),
+    archive: available(archive, projection, fixture),
+    'terminal-resume': available(resume, test('src/main/session-actions.test.ts')),
+    'native-resume': notApplicable('Kimi Code exposes a CLI session entry point, not a desktop deep link.', resume),
+    'format-provenance': available(provider, host, fixture)
+  }
+}
+
 function definition(
   sourceId: LegacySessionSource,
   displayName: string,
@@ -293,7 +316,10 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
     'pi-jsonl-v2',
     'pi-jsonl-v3'
   ], 'provider-host'),
-  definition('kimi', 'Kimi Code', 'detection-only', detectionOnlyCapabilities('kimi')),
+  definition('kimi', 'Kimi Code', 'native', kimiCanonicalCapabilities(), [
+    'kimi-code-wire-native-v1.5',
+    'kimi-code-wire-migrated-v1.0'
+  ], 'provider-host'),
   definition('hermes', 'Hermes', 'detection-only', detectionOnlyCapabilities('hermes'))
 ] as const
 

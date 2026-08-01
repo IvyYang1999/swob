@@ -353,6 +353,10 @@ function sessionSourceRoots(): string[] {
   if (isSessionSourceSupported('opencode')) roots.push(join(home, '.local', 'share', 'opencode'))
   if (isSessionSourceSupported('zcode')) roots.push(join(home, '.zcode', 'cli', 'db'))
   if (isSessionSourceSupported('pi')) roots.push(join(home, '.pi', 'agent', 'sessions'))
+  if (isSessionSourceSupported('kimi')) {
+    roots.push(join(home, '.kimi-code', 'sessions'))
+    roots.push(join(home, '.kimi', 'sessions'))
+  }
   return roots
 }
 

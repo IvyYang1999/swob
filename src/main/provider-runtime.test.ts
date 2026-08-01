@@ -2,13 +2,19 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { CanonicalRecord, SourceRef } from '../shared/provider-schema.generated'
+import piGolden from '../../schema/fixtures/v2/pi-golden.json'
+import type {
+  ParseChunk as ParseChunkV2,
+  ProviderManifest as ProviderManifestV2
+} from '../shared/provider-schema-v2.generated'
 import { closeCanonicalSessionStore, getCanonicalSessionStore } from './canonical-store'
 import {
   CANONICAL_PROVENANCE_FILE,
   CANONICAL_RECORDS_FILE
 } from './canonical-package'
-import { ProviderHost } from './provider-host'
+import { ProviderHost, type BuiltinProviderRuntimeV2 } from './provider-host'
 import { refreshCanonicalProviders } from './provider-runtime'
 import { createPiProvider } from './providers/pi-provider'
 import { closeSearchIndex, searchFTS } from './search-index'
@@ -101,6 +107,59 @@ afterEach(() => {
 })
 
 describe('canonical provider runtime full chain', () => {
+  it('projects a pure native-v2 runtime into sidebar/search/Vault consumers without v1 migration', async () => {
+    const sourcePath = path.join(home, '.pi', 'agent', 'sessions', 'native-v2.jsonl')
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    fs.writeFileSync(sourcePath, '{"synthetic":true}\n')
+    const manifest = structuredClone(piGolden.manifest) as unknown as ProviderManifestV2
+    manifest.displayName = 'Pi'
+    const chunk = structuredClone(
+      piGolden.envelopes.find((entry) => entry.kind === 'parse-chunk')!.payload
+    ) as unknown as ParseChunkV2
+    const fingerprint = { algorithm: 'sha256' as const, value: 'native-v2-source' }
+    const stableId = 'pi:native-v2-source'
+    chunk.fingerprint = fingerprint
+    chunk.identity.physicalSourceId = stableId
+    for (const event of chunk.events) {
+      event.identity.physicalSourceId = stableId
+      event.provenance.sourceRefId = stableId
+    }
+    const sourceRef: SourceRef = {
+      kind: 'file',
+      providerId: manifest.providerId,
+      stableId,
+      uri: pathToFileURL(sourcePath).href,
+      displayLocator: sourcePath,
+      fingerprint
+    }
+    const runtime: BuiltinProviderRuntimeV2 = {
+      manifest,
+      discover: async () => [sourceRef],
+      fingerprint: async () => fingerprint,
+      inputBytes: async () => fs.statSync(sourcePath).size,
+      parse: async () => [chunk]
+    }
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({ runtimes: [], v2Runtimes: [runtime] })
+
+    const result = await refreshCanonicalProviders({ host, store, archive: true })
+
+    expect(result.reports[0]).toMatchObject({
+      runtimeProtocolVersion: 2,
+      outcomes: [],
+      errors: []
+    })
+    expect(result.reports[0].consumerProjections).toHaveLength(1)
+    expect(result.changedSessionRecordIds).toHaveLength(1)
+    expect(store.listSessions('swob/pi')).toHaveLength(1)
+    expect(store.getV2Session(chunk.identity.logicalSessionKey, chunk.identity.branchViewId))
+      .toMatchObject({ complete: true, eventCount: chunk.events.length })
+    expect(searchFTS('Synthetic shared root event')).toHaveLength(1)
+    expect(packageDirs()).toHaveLength(1)
+    expect(fs.readFileSync(path.join(packageDirs()[0], CANONICAL_RECORDS_FILE), 'utf8'))
+      .toContain('Synthetic shared root event')
+  })
+
   it('runs Pi through discover, store, search, Library, rescan, move, replace, and tombstone', async () => {
     const piRoot = path.join(home, '.pi', 'agent', 'sessions')
     const sourcePath = path.join(piRoot, 'project', 'session.jsonl')

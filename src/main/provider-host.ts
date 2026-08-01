@@ -27,6 +27,7 @@ import {
 import {
   decodeProviderEnvelopeV2,
   helloForProviderV2,
+  ProviderChunkAssembler,
   validateParseChunkV2,
   validateProviderManifestV2
 } from '../shared/provider-protocol-v2'
@@ -67,6 +68,16 @@ export interface BuiltinProviderRuntime {
   parse(source: SourceRef, fingerprint: Fingerprint, signal: AbortSignal): Promise<ParseOutcome>
 }
 
+/** Native Provider Protocol v2 runtime. It shares the hardened discovery and
+ * source fingerprint boundary with v1, but never creates a v1 ParseOutcome. */
+export interface BuiltinProviderRuntimeV2 {
+  readonly manifest: ProviderManifestV2
+  discover(signal: AbortSignal): Promise<SourceRef[]>
+  fingerprint(source: SourceRef, signal: AbortSignal): Promise<Fingerprint>
+  inputBytes(source: SourceRef, signal: AbortSignal): Promise<number>
+  parse(source: SourceRef, fingerprint: Fingerprint, signal: AbortSignal): Promise<ParseChunkV2[]>
+}
+
 export interface PreviousProviderSourceState {
   sourceRef: SourceRef
   fingerprint: Fingerprint
@@ -77,14 +88,23 @@ export interface PreviousProviderSourceState {
 
 export interface ProviderRunReport {
   providerId: string
-  manifest: ProviderManifest
+  runtimeProtocolVersion: 1 | 2
+  manifest: ProviderManifest | null
   envelopes: ProviderEnvelope[]
   discoveredSources: SourceRef[]
   unchangedSources: SourceRef[]
   outcomes: ParseOutcome[]
+  /** Lossy read models generated after native-v2 validation for legacy UI/search/Vault consumers. */
+  consumerProjections: ParseOutcome[]
   v2Manifest: ProviderManifestV2 | null
   v2Envelopes: ProviderEnvelopeV2[]
   v2Chunks: ParseChunkV2[]
+  removedSources: Array<{
+    sourceRefId: string
+    sessionRecordIds: string[]
+    deletedAt: string
+    previousFingerprint: Fingerprint
+  }>
   errors: ProviderRuntimeError[]
 }
 
@@ -94,6 +114,7 @@ export interface ProviderHostRunOptions {
 
 export interface ProviderHostOptions {
   runtimes?: BuiltinProviderRuntime[]
+  v2Runtimes?: BuiltinProviderRuntimeV2[]
   timeoutMs?: number
   maxSessionInputBytes?: number
   homeDir?: string
@@ -219,6 +240,7 @@ function builtinRuntimes(homeDir: string): BuiltinProviderRuntime[] {
 
 export class ProviderHost {
   private readonly runtimes: BuiltinProviderRuntime[]
+  private readonly v2Runtimes: BuiltinProviderRuntimeV2[]
   private readonly timeoutMs: number
   private readonly maxSessionInputBytes: number
   private readonly activeControllers = new Set<AbortController>()
@@ -226,12 +248,17 @@ export class ProviderHost {
 
   constructor(options: ProviderHostOptions = {}) {
     this.runtimes = options.runtimes || builtinRuntimes(options.homeDir || runtimeHome())
+    this.v2Runtimes = options.v2Runtimes || []
+    const providerIds = [...this.runtimes, ...this.v2Runtimes].map((runtime) => runtime.manifest.providerId)
+    if (new Set(providerIds).size !== providerIds.length) {
+      throw new Error('provider-host-duplicate-runtime-id')
+    }
     this.timeoutMs = options.timeoutMs ?? PROVIDER_RUNTIME_TIMEOUT_MS
     this.maxSessionInputBytes = options.maxSessionInputBytes ?? PROVIDER_SESSION_INPUT_LIMIT_BYTES
   }
 
-  manifests(): ProviderManifest[] {
-    return this.runtimes.map((runtime) => structuredClone(runtime.manifest))
+  manifests(): Array<ProviderManifest | ProviderManifestV2> {
+    return [...this.runtimes, ...this.v2Runtimes].map((runtime) => structuredClone(runtime.manifest))
   }
 
   cancelAll(): void {
@@ -241,23 +268,33 @@ export class ProviderHost {
 
   async runAll(options: ProviderHostRunOptions = {}): Promise<ProviderRunReport[]> {
     if (this.cancelled) {
-      return this.runtimes.map((runtime) => ({
+      return [...this.runtimes.map((runtime) => ({ runtime, protocolVersion: 1 as const })),
+        ...this.v2Runtimes.map((runtime) => ({ runtime, protocolVersion: 2 as const }))].map(({ runtime, protocolVersion }) => ({
         providerId: runtime.manifest.providerId,
-        manifest: runtime.manifest,
+        runtimeProtocolVersion: protocolVersion,
+        manifest: protocolVersion === 1 ? runtime.manifest as ProviderManifest : null,
         envelopes: [],
         discoveredSources: [],
         unchangedSources: [],
         outcomes: [],
+        consumerProjections: [],
         v2Manifest: null,
         v2Envelopes: [],
         v2Chunks: [],
+        removedSources: [],
         errors: [runtimeError(runtime.manifest.providerId, 'cancelled', 'Provider host is cancelled.')]
       }))
     }
-    return Promise.all(this.runtimes.map((runtime) => this.runProvider(
-      runtime,
-      options.previousSources?.get(runtime.manifest.providerId) || []
-    )))
+    return Promise.all([
+      ...this.runtimes.map((runtime) => this.runProvider(
+        runtime,
+        options.previousSources?.get(runtime.manifest.providerId) || []
+      )),
+      ...this.v2Runtimes.map((runtime) => this.runProviderV2(
+        runtime,
+        options.previousSources?.get(runtime.manifest.providerId) || []
+      ))
+    ])
   }
 
   private async runProvider(
@@ -267,14 +304,17 @@ export class ProviderHost {
     const providerId = runtime.manifest.providerId
     const report: ProviderRunReport = {
       providerId,
+      runtimeProtocolVersion: 1,
       manifest: runtime.manifest,
       envelopes: [],
       discoveredSources: [],
       unchangedSources: [],
       outcomes: [],
+      consumerProjections: [],
       v2Manifest: null,
       v2Envelopes: [],
       v2Chunks: [],
+      removedSources: [],
       errors: []
     }
     const controller = new AbortController()
@@ -331,14 +371,17 @@ export class ProviderHost {
       // mutate the report already returned to the app.
       const pendingReport: ProviderRunReport = {
         providerId,
+        runtimeProtocolVersion: 1,
         manifest: runtime.manifest,
         envelopes: [],
         discoveredSources: [],
         unchangedSources: [],
         outcomes: [],
+        consumerProjections: [],
         v2Manifest: null,
         v2Envelopes: [],
         v2Chunks: [],
+        removedSources: [],
         errors: []
       }
 
@@ -373,6 +416,7 @@ export class ProviderHost {
       report.outcomes.push(...pendingReport.outcomes)
       report.v2Envelopes.push(...pendingReport.v2Envelopes)
       report.v2Chunks.push(...pendingReport.v2Chunks)
+      report.removedSources.push(...pendingReport.removedSources)
       report.errors.push(...pendingReport.errors)
     } catch (error) {
       report.errors.push(error instanceof ProviderRuntimeError
@@ -383,6 +427,256 @@ export class ProviderHost {
       this.activeControllers.delete(controller)
     }
     return report
+  }
+
+  private async runProviderV2(
+    runtime: BuiltinProviderRuntimeV2,
+    previousSources: PreviousProviderSourceState[]
+  ): Promise<ProviderRunReport> {
+    const providerId = runtime.manifest.providerId
+    const report: ProviderRunReport = {
+      providerId,
+      runtimeProtocolVersion: 2,
+      manifest: null,
+      envelopes: [],
+      discoveredSources: [],
+      unchangedSources: [],
+      outcomes: [],
+      consumerProjections: [],
+      v2Manifest: null,
+      v2Envelopes: [],
+      v2Chunks: [],
+      removedSources: [],
+      errors: []
+    }
+    const controller = new AbortController()
+    this.activeControllers.add(controller)
+    let timeout: ReturnType<typeof setTimeout> | undefined
+
+    try {
+      const registryDefinition = builtinProviderForId(providerId)
+      const manifestValidation = validateProviderManifestV2(runtime.manifest)
+      if (!manifestValidation.ok || !registryDefinition ||
+        registryDefinition.manifest.displayName !== runtime.manifest.displayName) {
+        throw runtimeError(
+          providerId,
+          'schema-validation-failed',
+          !registryDefinition
+            ? `Provider ${providerId} is not registered in the builtin manifest registry.`
+            : !manifestValidation.ok
+              ? `Native Provider v2 manifest failed validation: ${manifestValidation.issues[0]?.message || 'unknown'}`
+              : 'Native Provider v2 display name does not match the builtin registry.'
+        )
+      }
+      const hello = assertValidEnvelopeV2(providerId, {
+        protocolVersion: PROVIDER_PROTOCOL_VERSION_V2,
+        messageId: randomUUID(),
+        kind: 'hello',
+        payload: helloForProviderV2(runtime.manifest)
+      })
+      const manifest = assertValidEnvelopeV2(providerId, {
+        protocolVersion: PROVIDER_PROTOCOL_VERSION_V2,
+        messageId: randomUUID(),
+        kind: 'manifest',
+        payload: runtime.manifest
+      })
+      report.v2Manifest = structuredClone(runtime.manifest)
+      report.v2Envelopes.push(hello, manifest)
+      const pendingReport: ProviderRunReport = {
+        providerId,
+        runtimeProtocolVersion: 2,
+        manifest: null,
+        envelopes: [],
+        discoveredSources: [],
+        unchangedSources: [],
+        outcomes: [],
+        consumerProjections: [],
+        v2Manifest: runtime.manifest,
+        v2Envelopes: [],
+        v2Chunks: [],
+        removedSources: [],
+        errors: []
+      }
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort('timeout')
+          reject(runtimeError(
+            providerId,
+            'timeout',
+            `Provider ${providerId} exceeded the ${this.timeoutMs}ms runtime limit.`,
+            null,
+            { timeoutMs: this.timeoutMs, runtimeCode: 'timeout' }
+          ))
+        }, this.timeoutMs)
+        timeout.unref?.()
+      })
+      const abortPromise = new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener('abort', () => {
+          if (controller.signal.reason === 'timeout') return
+          reject(runtimeError(providerId, 'cancelled', `Provider ${providerId} was cancelled.`))
+        }, { once: true })
+      })
+      await Promise.race([
+        this.runProviderV2WithinDeadline(runtime, previousSources, pendingReport, controller.signal),
+        timeoutPromise,
+        abortPromise
+      ])
+      report.discoveredSources.push(...pendingReport.discoveredSources)
+      report.unchangedSources.push(...pendingReport.unchangedSources)
+      report.v2Envelopes.push(...pendingReport.v2Envelopes)
+      report.v2Chunks.push(...pendingReport.v2Chunks)
+      report.removedSources.push(...pendingReport.removedSources)
+      report.errors.push(...pendingReport.errors)
+    } catch (error) {
+      report.errors.push(error instanceof ProviderRuntimeError
+        ? error
+        : runtimeError(providerId, 'provider-failed', error instanceof Error ? error.message : String(error)))
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      this.activeControllers.delete(controller)
+    }
+    return report
+  }
+
+  private async runProviderV2WithinDeadline(
+    runtime: BuiltinProviderRuntimeV2,
+    previousSources: PreviousProviderSourceState[],
+    report: ProviderRunReport,
+    signal: AbortSignal
+  ): Promise<void> {
+    const providerId = runtime.manifest.providerId
+    const previousById = new Map(previousSources.map((source) => [source.sourceRef.stableId, source]))
+    const discoveredIds = new Set<string>()
+    const processedIds = new Set<string>()
+    const discovered = await runtime.discover(signal)
+
+    for (const unvalidatedSource of discovered) {
+      if (signal.aborted) throw runtimeError(providerId, 'cancelled', `Provider ${providerId} was cancelled.`)
+      const candidateId = typeof unvalidatedSource?.stableId === 'string' ? unvalidatedSource.stableId : null
+      if (candidateId) discoveredIds.add(candidateId)
+      const sourceValidation = validateProviderSourceRef(unvalidatedSource)
+      if (!sourceValidation.ok) {
+        report.errors.push(runtimeError(
+          providerId,
+          sourceValidation.error?.code === 'resource-limit-exceeded'
+            ? 'resource-limit-exceeded'
+            : 'schema-validation-failed',
+          'Discovered source failed Provider Protocol schema validation.',
+          candidateId,
+          { issueCount: sourceValidation.issues.length }
+        ))
+        continue
+      }
+      const sourceTemplate = sourceValidation.value!
+      if (sourceTemplate.providerId !== providerId) {
+        report.errors.push(runtimeError(
+          providerId,
+          'schema-validation-failed',
+          'Discovered source providerId does not match its runtime manifest.',
+          sourceTemplate.stableId
+        ))
+        continue
+      }
+      if (processedIds.has(sourceTemplate.stableId)) {
+        report.errors.push(runtimeError(
+          providerId,
+          'schema-validation-failed',
+          'Provider discovery returned the same stable source id more than once.',
+          sourceTemplate.stableId
+        ))
+        continue
+      }
+      processedIds.add(sourceTemplate.stableId)
+      try {
+        const fingerprint = await runtime.fingerprint(sourceTemplate, signal)
+        const source = { ...sourceTemplate, fingerprint } as SourceRef
+        report.discoveredSources.push(source)
+        const previous = previousById.get(source.stableId)
+        if (previous && !previous.forceReparse && fingerprintEqual(previous.fingerprint, fingerprint)) {
+          report.unchangedSources.push(source)
+          continue
+        }
+        const inputBytes = await runtime.inputBytes(source, signal)
+        if (!Number.isSafeInteger(inputBytes) || inputBytes < 0 || inputBytes > this.maxSessionInputBytes) {
+          throw runtimeError(
+            providerId,
+            'resource-limit-exceeded',
+            `Provider source exceeds the ${this.maxSessionInputBytes} byte per-session parse limit.`,
+            source.stableId,
+            { actual: inputBytes, limit: this.maxSessionInputBytes, limitName: 'maxSessionInputBytes' }
+          )
+        }
+        const assembler = new ProviderChunkAssembler()
+        const parsedChunks = await runtime.parse(source, fingerprint, signal)
+        const chunks: ParseChunkV2[] = []
+        const envelopes: ProviderEnvelopeV2[] = []
+        for (const originalChunk of parsedChunks) {
+          const chunk = structuredClone(originalChunk)
+          if (previous && chunk.mode === 'initial') chunk.mode = 'replace'
+          if (chunk.providerId !== providerId ||
+            chunk.parserDataVersion !== runtime.manifest.parserDataVersion ||
+            chunk.identity.physicalSourceId !== source.stableId ||
+            chunk.fingerprint.algorithm !== fingerprint.algorithm ||
+            chunk.fingerprint.value !== fingerprint.value ||
+            JSON.stringify(chunk.fingerprint.inputs || []) !== JSON.stringify(fingerprint.inputs || []) ||
+            (chunk.formatVersion !== null && !runtime.manifest.formatVersions.includes(chunk.formatVersion))) {
+            throw runtimeError(
+              providerId,
+              'schema-validation-failed',
+              'Native Provider v2 chunk does not match its manifest or physical source.',
+              source.stableId
+            )
+          }
+          const validation = validateParseChunkV2(chunk)
+          if (!validation.ok) {
+            throw runtimeError(
+              providerId,
+              'schema-validation-failed',
+              `Native Provider v2 chunk failed schema validation: ${validation.issues[0]?.message || 'unknown'}`,
+              source.stableId
+            )
+          }
+          assembler.accept(chunk)
+          envelopes.push(assertValidEnvelopeV2(providerId, {
+            protocolVersion: PROVIDER_PROTOCOL_VERSION_V2,
+            messageId: randomUUID(),
+            kind: 'parse-chunk',
+            payload: chunk
+          }))
+          chunks.push(chunk)
+        }
+        if (assembler.incompleteSessions() > 0) {
+          throw runtimeError(
+            providerId,
+            'schema-validation-failed',
+            'Native Provider v2 parse returned an incomplete chunk stream.',
+            source.stableId
+          )
+        }
+        report.v2Chunks.push(...chunks)
+        report.v2Envelopes.push(...envelopes)
+      } catch (error) {
+        report.errors.push(error instanceof ProviderRuntimeError
+          ? error
+          : runtimeError(
+            providerId,
+            signal.aborted ? 'cancelled' : 'provider-failed',
+            error instanceof Error ? error.message : String(error),
+            sourceTemplate.stableId
+          ))
+      }
+    }
+
+    const deletedAt = new Date().toISOString()
+    for (const previous of previousSources) {
+      if (discoveredIds.has(previous.sourceRef.stableId)) continue
+      report.removedSources.push({
+        sourceRefId: previous.sourceRef.stableId,
+        sessionRecordIds: [...previous.sessionRecordIds],
+        deletedAt,
+        previousFingerprint: previous.fingerprint
+      })
+    }
   }
 
   private async runProviderWithinDeadline(

@@ -6,9 +6,15 @@ import type {
   ProviderManifest,
   SourceRef
 } from '../shared/provider-schema.generated'
+import piGolden from '../../schema/fixtures/v2/pi-golden.json'
+import type {
+  ParseChunk as ParseChunkV2,
+  ProviderManifest as ProviderManifestV2
+} from '../shared/provider-schema-v2.generated'
 import {
   ProviderHost,
-  type BuiltinProviderRuntime
+  type BuiltinProviderRuntime,
+  type BuiltinProviderRuntimeV2
 } from './provider-host'
 import { PROVIDER_RESOURCE_LIMITS as PROVIDER_V2_LIMITS } from '../shared/provider-schema-v2.generated'
 
@@ -115,7 +121,39 @@ function runtime(
   }
 }
 
+function directV2Runtime(): BuiltinProviderRuntimeV2 {
+  const providerManifest = structuredClone(piGolden.manifest) as unknown as ProviderManifestV2
+  providerManifest.displayName = 'Pi'
+  const chunk = structuredClone(piGolden.envelopes.find((entry) => entry.kind === 'parse-chunk')!.payload) as unknown as ParseChunkV2
+  const providerSource = source(providerManifest.providerId, chunk.identity.physicalSourceId)
+  return {
+    manifest: providerManifest,
+    discover: async () => [providerSource],
+    fingerprint: async () => chunk.fingerprint,
+    inputBytes: async () => 128,
+    parse: async () => [chunk]
+  }
+}
+
 describe('ProviderHost isolation and resource boundaries', () => {
+  it('accepts native v2 chunks without creating or migrating a v1 outcome', async () => {
+    const report = (await new ProviderHost({
+      runtimes: [],
+      v2Runtimes: [directV2Runtime()]
+    }).runAll())[0]
+
+    expect(report.runtimeProtocolVersion).toBe(2)
+    expect(report.manifest).toBeNull()
+    expect(report.outcomes).toEqual([])
+    expect(report.consumerProjections).toEqual([])
+    expect(report.v2Manifest).toMatchObject({ schemaVersion: 2, providerId: 'swob/pi' })
+    expect(report.v2Envelopes.map((entry) => entry.kind)).toEqual([
+      'hello', 'manifest', 'parse-chunk'
+    ])
+    expect(report.v2Chunks).toHaveLength(1)
+    expect(report.errors).toEqual([])
+  })
+
   it('times out one provider without delaying or corrupting another provider report', async () => {
     const slowPi = runtime('pi', {
       parse: async () => {

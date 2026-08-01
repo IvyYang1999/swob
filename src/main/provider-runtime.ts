@@ -4,6 +4,7 @@ import {
   type CanonicalSessionStore
 } from './canonical-store'
 import { indexCanonicalSession, tombstoneCanonicalSession } from './search-index'
+import { projectNativeV2ChunksForConsumers } from './provider-v2-consumer-projection'
 
 export interface CanonicalProviderRefreshOptions {
   host?: ProviderHost
@@ -60,7 +61,17 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
         }
       }
     }
-    for (const outcome of report.outcomes) {
+    if (report.runtimeProtocolVersion === 2 && report.v2Manifest) {
+      report.consumerProjections.push(...projectNativeV2ChunksForConsumers(
+        report.providerId,
+        report.v2Manifest.parserDataVersion,
+        report.discoveredSources,
+        report.v2Chunks
+      ))
+    }
+    // Native-v2 streams remain authoritative. This read-model projection only
+    // feeds consumers that have not yet moved off CanonicalRecord v1.
+    for (const outcome of [...report.outcomes, ...report.consumerProjections]) {
       store.applyParseOutcome(outcome)
       for (const result of outcome.sessions) {
         if (!result.sessionRecordId) continue
@@ -96,6 +107,28 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
       }
     }
     for (const chunk of report.v2Chunks) store.applyParseChunkV2(chunk)
+    for (const removal of report.removedSources) {
+      store.tombstoneV2Source(report.providerId, removal.sourceRefId, removal.deletedAt, 'source-missing')
+      for (const sessionRecordId of removal.sessionRecordIds) {
+        const tombstone = {
+          sourceRefId: removal.sourceRefId,
+          sessionRecordId,
+          deletedAt: removal.deletedAt,
+          reason: 'source-missing' as const,
+          previousFingerprint: removal.previousFingerprint
+        }
+        store.applyTombstone(tombstone)
+        tombstonedSessionRecordIds.push(sessionRecordId)
+        await tombstoneCanonicalSession(sessionRecordId)
+        const { markCanonicalPackageTombstone } = await import('./library-manager')
+        await markCanonicalPackageTombstone(
+          report.providerId,
+          removal.sourceRefId,
+          sessionRecordId,
+          tombstone
+        ).catch(() => null)
+      }
+    }
   }
   return {
     reports,

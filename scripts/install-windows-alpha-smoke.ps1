@@ -9,10 +9,44 @@ if (-not $installer) {
   throw 'Windows x64 installer was not produced.'
 }
 
-$installRoot = Join-Path $env:RUNNER_TEMP ("swob-beta-installed-{0}" -f [guid]::NewGuid().ToString('N'))
-$process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installRoot") -PassThru -Wait
-if ($process.ExitCode -ne 0) {
-  throw "NSIS installer exited with code $($process.ExitCode)."
+$accessViolationExitCode = -1073741819 # 0xC0000005 from the Windows process exit status.
+$installRoot = $null
+$maxInstallAttempts = 2
+
+for ($attempt = 1; $attempt -le $maxInstallAttempts; $attempt++) {
+  $attemptRoot = Join-Path $env:RUNNER_TEMP ("swob-beta-installed-{0}" -f [guid]::NewGuid().ToString('N'))
+  $startedAt = Get-Date
+  $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$attemptRoot") -PassThru -Wait
+  if ($process.ExitCode -eq 0) {
+    $installRoot = $attemptRoot
+    break
+  }
+
+  if ($process.ExitCode -ne $accessViolationExitCode -or $attempt -eq $maxInstallAttempts) {
+    throw "NSIS installer exited with code $($process.ExitCode) on attempt $attempt/$maxInstallAttempts."
+  }
+
+  Write-Warning "NSIS installer hit Windows access violation 0xC0000005 on attempt $attempt/$maxInstallAttempts; retrying once in a fresh directory."
+  Start-Sleep -Seconds 2
+  try {
+    $eventText = Get-WinEvent -FilterHashtable @{
+      LogName = 'Application'
+      StartTime = $startedAt.AddSeconds(-2)
+    } -MaxEvents 30 -ErrorAction Stop |
+      Where-Object { $_.ProviderName -in @('Application Error', 'Windows Error Reporting') } |
+      Select-Object -First 4 TimeCreated, ProviderName, Id, LevelDisplayName, Message |
+      Format-List |
+      Out-String
+    if ($eventText.Trim()) {
+      Write-Warning "Windows crash evidence for the failed installer attempt:`n$eventText"
+    }
+  } catch {
+    Write-Warning "Unable to read Windows crash evidence: $($_.Exception.Message)"
+  }
+}
+
+if (-not $installRoot) {
+  throw 'NSIS installer did not produce a successful installation root.'
 }
 
 $executable = Join-Path $installRoot 'Swob.exe'

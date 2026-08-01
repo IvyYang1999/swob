@@ -15,6 +15,16 @@ afterEach(() => {
 })
 
 describe('Library path safety', () => {
+  it('writes, flushes, and reads back a regular file', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-path-write-'))
+    cleanup.push(root)
+    const target = path.join(root, 'regular.json')
+
+    writeSafeLibraryFileSync(root, target, '{"ok":true}', { exclusive: true })
+
+    expect(fs.readFileSync(target, 'utf8')).toBe('{"ok":true}')
+  })
+
   it('only tolerates known unsupported directory fsync errors on Windows', () => {
     const error = (code: string): NodeJS.ErrnoException => Object.assign(new Error(code), { code })
 

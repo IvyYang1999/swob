@@ -207,7 +207,14 @@ export function writeSafeLibraryFileSync(
     validated = true
     fs.ftruncateSync(fd, 0)
     fs.writeFileSync(fd, content)
-    fs.fsyncSync(fd)
+    try {
+      fs.fsyncSync(fd)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code || 'unknown'
+      // Keep the write fail-closed, but retain enough non-sensitive context to
+      // distinguish a lock/config/manifest flush in packaged Windows logs.
+      throw new LibraryPathUnsafeError(target, `file-fsync-failed:${code}:${path.basename(target)}`)
+    }
   } finally {
     if (fd !== null) fs.closeSync(fd)
     if (!validated && createsNew && opened) cleanupUnvalidatedCreatedFile(target, opened)

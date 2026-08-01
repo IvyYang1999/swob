@@ -95,6 +95,7 @@ jobs:
           src/main/resume-recovery-planner.test.ts
           src/main/resume-recovery-planner-purity.test.ts
           src/main/windows-native-fs.test.ts
+          src/main/library-path-safety.test.ts
           src/renderer/src/components/SettingsPanel.test.tsx
       - name: Run Windows path discovery contracts
         run: npx vitest run src/main/session-loader.test.ts -t "Windows"

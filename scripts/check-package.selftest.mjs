@@ -7,6 +7,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createPackage } from '@electron/asar'
+import { nativeAsarLookupPath } from './asar-paths.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-package-policy-'))
@@ -14,6 +15,15 @@ const sourceRoot = path.join(tempRoot, 'source')
 const resourcesRoot = path.join(tempRoot, 'resources')
 const asarPath = path.join(resourcesRoot, 'app.asar')
 const inventoryRoot = path.join(tempRoot, 'inventory')
+
+assert.equal(
+  nativeAsarLookupPath('/node_modules/@electron-toolkit/preload/package.json', '\\'),
+  'node_modules\\@electron-toolkit\\preload\\package.json'
+)
+assert.equal(
+  nativeAsarLookupPath('/node_modules/@electron-toolkit/preload/package.json', '/'),
+  'node_modules/@electron-toolkit/preload/package.json'
+)
 
 function write(relative, content = 'fixture\n') {
   const target = path.join(sourceRoot, relative)

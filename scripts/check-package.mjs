@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { extractFile, listPackage } from '@electron/asar'
+import { nativeAsarLookupPath } from './asar-paths.mjs'
 import { packageNameFromLockPath, productionPackagePaths } from './production-lock-graph.mjs'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -105,7 +106,7 @@ function policyViolations(entries, asarPath) {
   // electron-builder hoists nested production dependencies into the packaged
   // node_modules root. Verify identity and version, not their lockfile location.
   for (const [packageRoot, expectedName] of packagedRoots) {
-    const packageJsonPath = `${packageRoot.slice(1)}/package.json`
+    const packageJsonPath = nativeAsarLookupPath(`${packageRoot}/package.json`)
     try {
       const metadata = JSON.parse(extractFile(asarPath, packageJsonPath).toString('utf8'))
       const allowedVersions = productionPackageVersions.get(expectedName)

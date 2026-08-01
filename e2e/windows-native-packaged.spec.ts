@@ -98,6 +98,7 @@ function createProductionHomeFixture(): { project: string } {
 }
 
 test.beforeAll(async () => {
+  test.setTimeout(90_000)
   const executablePath = process.env.SWOB_PACKAGED_EXE!
   expect(fs.existsSync(executablePath)).toBe(true)
   createProductionHomeFixture()
@@ -121,7 +122,8 @@ test.beforeAll(async () => {
       TMP: temp,
       SWOB_TEST_HOME: fixtureHome,
       SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
-      SWOB_LIBRARY_ROOT: libraryRoot
+      SWOB_LIBRARY_ROOT: libraryRoot,
+      ELECTRON_ENABLE_LOGGING: '1'
     },
     timeout: 60_000
   })

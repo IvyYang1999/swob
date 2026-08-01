@@ -108,6 +108,8 @@ jobs:
         shell: pwsh
         run: ./scripts/install-windows-alpha-smoke.ps1
       - name: Exercise the installed package and capture the six core paths
+        env:
+          DEBUG: pw:browser*
         run: npm run test:e2e:windows-native
       - name: Require all six core-path screenshots
         shell: pwsh

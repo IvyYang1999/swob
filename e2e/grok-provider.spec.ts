@@ -42,7 +42,7 @@ test('Grok composite source opens from sidebar and renders compact history, tool
     const resumeButton = page.getByRole('button', { name: 'Resume', exact: true })
     await expect(resumeButton).toBeDisabled()
     await expect(resumeButton).toHaveAttribute('title', /binary\/help\/source\/post-launch anchor verification/)
-    await expect(page.getByRole('button', { name: /Fork|分叉/ })).toBeDisabled()
+    await expect(page.getByRole('button', { name: /Fork|分叉/ })).toHaveCount(0)
     await expect.poll(async () => {
       const [oldBox, currentBox] = await Promise.all([oldPrompt.boundingBox(), currentPrompt.boundingBox()])
       return Boolean(oldBox && currentBox && oldBox.y < currentBox.y)

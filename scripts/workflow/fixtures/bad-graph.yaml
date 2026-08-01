@@ -1,0 +1,15 @@
+batch: fixture-bad
+workItems:
+  - id: alpha
+    owner: duplicate-owner
+    depends_on:
+      - beta
+    write_scope:
+      - src/**
+    evidence_required: []
+  - id: beta
+    owner: duplicate-owner
+    depends_on:
+      - alpha
+    write_scope:
+      - src/main/**

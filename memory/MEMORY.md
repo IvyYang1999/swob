@@ -2,8 +2,8 @@
 
 ## 项目概要
 - **名称**: Swob (claude-session-manager)
-- **定位**: Claude Code 会话管理桌面应用，像整理云文档一样管理 CC 聊天记录
-- **版本**: 1.1.1
+- **定位**: local-first 的多 harness AI 编码会话桌面工作台
+- **版本**: 以根目录 `package.json` 为准
 - **GitHub**: https://github.com/IvyYang1999/swob
 
 ## 技术栈
@@ -23,7 +23,8 @@
 - `docs/DESIGN.md`: UI 设计规范（颜色/字号/间距），写 UI 必读
 - `docs/ROADMAP.md`: 产品路线图
 - `docs/PARALLEL.md`: 并行开发规范
-- `CLAUDE.md`: 开发规则（Git、测试、并行开发）
+- `AGENTS.md`: 协作、验收、合并与发布的唯一流程权威
+- `CLAUDE.md`: 仅引用 `AGENTS.md`
 
 ## 开发规则
 - `npm run dev` 热重载开发
@@ -31,7 +32,7 @@
 - `npm run test:e2e` E2E 测试
 - 修 bug 必须先写测试
 - 测试名用中文，回归加 `【曾经的 bug】` 前缀
-- 每个 commit 自动 push + 编译 + 部署到 /Applications/Swob.app
+- Worker 只在独立 worktree 提交，不 push；仅 yyt 可以决定 push、部署与发布
 
 ## 已知技术债
 - ChatViewer.tsx 1400+ 行，需拆分

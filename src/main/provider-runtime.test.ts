@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { CanonicalRecord, SourceRef } from '../shared/provider-schema.generated'
+import type { CanonicalRecord, ParseOutcome, ProviderManifest, SourceRef } from '../shared/provider-schema.generated'
 import piGolden from '../../schema/fixtures/v2/pi-golden.json'
 import type {
   ParseChunk as ParseChunkV2,
@@ -14,7 +14,7 @@ import {
   CANONICAL_PROVENANCE_FILE,
   CANONICAL_RECORDS_FILE
 } from './canonical-package'
-import { ProviderHost, type BuiltinProviderRuntimeV2 } from './provider-host'
+import { ProviderHost, type BuiltinProviderRuntime, type BuiltinProviderRuntimeV2 } from './provider-host'
 import { refreshCanonicalProviders } from './provider-runtime'
 import { createPiProvider } from './providers/pi-provider'
 import { createKimiProvider } from './providers/kimi-provider'
@@ -194,6 +194,114 @@ describe('canonical provider runtime full chain', () => {
     expect(packageDirs()).toHaveLength(1)
     expect(fs.readFileSync(path.join(packageDirs()[0], CANONICAL_RECORDS_FILE), 'utf8'))
       .toContain('Synthetic shared root event')
+  })
+
+  it('invalidates a native-v2 cache when parserDataVersion changes with identical source bytes', async () => {
+    const sourcePath = path.join(home, '.pi', 'agent', 'sessions', 'v2-parser-upgrade.jsonl')
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    fs.writeFileSync(sourcePath, '{"synthetic":true}\n')
+    const manifest = structuredClone(piGolden.manifest) as unknown as ProviderManifestV2
+    manifest.displayName = 'Pi'
+    const chunk = structuredClone(
+      piGolden.envelopes.find((entry) => entry.kind === 'parse-chunk')!.payload
+    ) as unknown as ParseChunkV2
+    const fingerprint = { algorithm: 'sha256' as const, value: 'v2-parser-upgrade-source' }
+    const stableId = 'pi:v2-parser-upgrade-source'
+    chunk.fingerprint = fingerprint
+    chunk.identity.physicalSourceId = stableId
+    for (const event of chunk.events) {
+      event.identity.physicalSourceId = stableId
+      event.provenance.sourceRefId = stableId
+    }
+    const sourceRef: SourceRef = {
+      kind: 'file', providerId: manifest.providerId, stableId,
+      uri: pathToFileURL(sourcePath).href, displayLocator: sourcePath, fingerprint
+    }
+    let parseCount = 0
+    const runtime: BuiltinProviderRuntimeV2 = {
+      manifest,
+      discover: async () => [sourceRef],
+      fingerprint: async () => fingerprint,
+      inputBytes: async () => fs.statSync(sourcePath).size,
+      parse: async () => { parseCount++; return [structuredClone(chunk)] }
+    }
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({ runtimes: [], v2Runtimes: [runtime] })
+
+    const first = await refreshCanonicalProviders({ host, store })
+    expect(first.reports[0].errors).toEqual([])
+    await refreshCanonicalProviders({ host, store })
+    expect(parseCount).toBe(1)
+
+    manifest.parserDataVersion = 'synthetic-v2-upgrade'
+    chunk.parserDataVersion = manifest.parserDataVersion
+    for (const event of chunk.events) event.provenance.parserDataVersion = manifest.parserDataVersion
+    const upgraded = await refreshCanonicalProviders({ host, store })
+    expect(parseCount).toBe(2)
+    expect(upgraded.changedSessionRecordIds).toHaveLength(1)
+    expect(store.listSessions('swob/pi')[0].sessionRecord.provenance.parserDataVersion)
+      .toBe('synthetic-v2-upgrade')
+  })
+
+  it('invalidates a v1 cache whose stored parserDataVersion is stale despite identical source bytes', async () => {
+    const sourcePath = path.join(home, '.pi', 'agent', 'sessions', 'v1-parser-upgrade.jsonl')
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    fs.writeFileSync(sourcePath, '{"synthetic":true}\n')
+    const fingerprint = { algorithm: 'sha256' as const, value: 'v1-parser-upgrade-source' }
+    const stableId = 'pi:v1-parser-upgrade-source'
+    const sourceRef: SourceRef = {
+      kind: 'file', providerId: 'swob/pi', stableId,
+      uri: pathToFileURL(sourcePath).href, displayLocator: sourcePath, fingerprint
+    }
+    const manifest = structuredClone(
+      (await import('../shared/provider-capabilities')).builtinProviderForSource('pi')!.manifest
+    ) as ProviderManifest
+    const v1Format = manifest.formatVersions[0]
+    let parseCount = 0
+    const runtime: BuiltinProviderRuntime = {
+      manifest,
+      discover: async () => [sourceRef],
+      fingerprint: async () => fingerprint,
+      inputBytes: async () => fs.statSync(sourcePath).size,
+      parse: async (): Promise<ParseOutcome> => {
+        parseCount++
+        const recordParserVersion = parseCount === 1 ? 'synthetic-v1-stale' : manifest.parserDataVersion
+        const records = remoteRecords('v1-parser-upgrade', sourceRef).map((record) => ({
+          ...record,
+          provenance: { ...record.provenance, parserDataVersion: recordParserVersion }
+        })) as CanonicalRecord[]
+        return {
+          providerId: manifest.providerId,
+          parserDataVersion: manifest.parserDataVersion,
+          formatVersion: v1Format,
+          fingerprint,
+          status: 'complete',
+          sessions: [{
+            sourceRefId: stableId,
+            sessionRecordId: records[0].id,
+            status: 'complete',
+            records,
+            errors: [],
+            replaceSessionRecordId: null,
+            noDataReason: null
+          }],
+          errors: [],
+          tombstones: []
+        }
+      }
+    }
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({ runtimes: [runtime], v2Runtimes: [] })
+
+    const first = await refreshCanonicalProviders({ host, store })
+    expect(first.reports[0].errors).toEqual([])
+    await refreshCanonicalProviders({ host, store })
+    expect(parseCount).toBe(2)
+    const unchanged = await refreshCanonicalProviders({ host, store })
+    expect(parseCount).toBe(2)
+    expect(unchanged.changedSessionRecordIds).toHaveLength(0)
+    expect(store.listSessions('swob/pi')[0].sessionRecord.provenance.parserDataVersion)
+      .toBe(manifest.parserDataVersion)
   })
 
   it('runs Pi through discover, store, search, Library, rescan, move, replace, and tombstone', async () => {

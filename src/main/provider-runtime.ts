@@ -34,14 +34,19 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
   const store = options.store || getCanonicalSessionStore()
   const previousSources = new Map(host.manifests().map((manifest) => [
     manifest.providerId,
-    store.sourceStates(manifest.providerId).map((state) => ({
-      ...state,
-      forceReparse: !store.hasCompleteV2Source(
-        manifest.providerId,
-        state.sourceRef.stableId,
-        state.sessionRecordIds.length
-      )
-    }))
+    store.sourceStates(manifest.providerId).map((state) => {
+      const parserVersionChanged = state.sessionRecordIds.some((sessionRecordId) =>
+        store.getSession(sessionRecordId)?.sessionRecord.provenance.parserDataVersion !==
+          manifest.parserDataVersion)
+      return {
+        ...state,
+        forceReparse: parserVersionChanged || !store.hasCompleteV2Source(
+          manifest.providerId,
+          state.sourceRef.stableId,
+          state.sessionRecordIds.length
+        )
+      }
+    })
   ]))
   const reports = await host.runAll({ previousSources })
   const changedSessionRecordIds: string[] = []

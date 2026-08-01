@@ -206,7 +206,10 @@ function projectSession(source: SourceRef, chunks: ParseChunk[]): SessionParseRe
   const seenSharedEvents = new Set<string>()
   const events = chunks
     .flatMap((chunk) => chunk.events)
-    .sort((left, right) => (left.timestamp || '').localeCompare(right.timestamp || '') || left.sequence - right.sequence)
+    // Provider v2 sequence is the authoritative transcript order. Timestamps
+    // are optional anchors, so sorting on them would move undated current rows
+    // ahead of timestamped pre-compaction history.
+    .sort((left, right) => left.sequence - right.sequence)
     .filter((event) => {
       if (seenSharedEvents.has(event.sharedEventKey)) return false
       seenSharedEvents.add(event.sharedEventKey)

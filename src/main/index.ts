@@ -253,7 +253,7 @@ let libraryInitialized = false
 let latestLibraryTree: LibraryTree | null = null
 let libraryInitializationPromise: Promise<void> | null = null
 let libraryHydrationGeneration = 0
-let searchIndexWarmScheduled = false
+let searchIndexWarmupRunner: LatestSnapshotRunner<void, void> | null = null
 let usageFactSyncError: unknown = null
 interface UsageFactSyncSnapshot {
   sessions: SessionSummary[]
@@ -556,14 +556,24 @@ function scheduleSessionSynchronization(request: SessionSyncRequest): void {
 }
 
 function scheduleSearchIndexWarmup(): void {
-  if (searchIndexWarmScheduled) return
-  searchIndexWarmScheduled = true
+  if (runtimeShuttingDown) return
+  if (!searchIndexWarmupRunner) {
+    searchIndexWarmupRunner = new LatestSnapshotRunner({
+      // Resolve the source list when the run starts. A Library scan or
+      // sessions:loadAll call that lands during an earlier warmup therefore
+      // queues one fresh snapshot instead of being dropped behind a boolean.
+      run: async () => synchronizeSearchSources(currentSearchSources()),
+      onError: (error) => {
+        if (!runtimeShuttingDown) console.error('[search-index] background warmup failed:', error)
+      }
+    })
+  }
+  const runner = searchIndexWarmupRunner
   const timer = setTimeout(() => {
-    void synchronizeSearchSources(currentSearchSources())
-      .catch((error) => {
-        console.error('[search-index] background warmup failed:', error)
-      })
-      .finally(() => { searchIndexWarmScheduled = false })
+    void runner.schedule(undefined).catch(() => {
+      // onError records operational failures; shutdown intentionally rejects
+      // queued work after the runner has been stopped.
+    })
   }, 0)
   timer.unref?.()
 }
@@ -707,6 +717,8 @@ function cleanupRuntimeResources(): Promise<void> {
   const currentUsageFactWorker = usageFactWorker
   const currentUsageFactSyncRunner = usageFactSyncRunner
   usageFactSyncRunner = null
+  const currentSearchIndexWarmupRunner = searchIndexWarmupRunner
+  searchIndexWarmupRunner = null
   const currentSessionSyncCoordinator = sessionSyncCoordinator
   sessionSyncCoordinator = null
   const currentActivePoller = activePoller
@@ -714,6 +726,7 @@ function cleanupRuntimeResources(): Promise<void> {
   const currentActivePollProcess = activePollProcess
   activePollProcess = null
   currentUsageFactSyncRunner?.stop(new Error('Runtime is shutting down'))
+  currentSearchIndexWarmupRunner?.stop(new Error('Runtime is shutting down'))
   // Start draining immediately and overlap it with the bounded cleanup below.
   // LibraryWorkerClient refuses new requests once close() begins. Unlike the
   // other resources this promise must not be deadline-cancelled because

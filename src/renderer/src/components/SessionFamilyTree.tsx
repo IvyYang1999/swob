@@ -50,7 +50,8 @@ const SOURCE_LABELS: Record<string, string> = {
   cursor: 'CUR',
   opencode: 'OC',
   zcode: 'ZC',
-  qoder: 'QD'
+  qoder: 'QD',
+  trae: 'TR'
 }
 
 /* ------------------------------------------------------------------ */

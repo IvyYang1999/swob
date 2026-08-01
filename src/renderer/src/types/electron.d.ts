@@ -162,7 +162,8 @@ interface ElectronAPI {
     allFilePaths?: string[],
     branchParentFilePaths?: string[],
     branchPointUuid?: string,
-    branchLeafUuid?: string
+    branchLeafUuid?: string,
+    canonicalSessionRecordId?: string
   ) => Promise<
     | ({ fallback: null; error?: never } & Record<string, unknown>)
     | { fallback: 'transcript'; transcriptMarkdown: string }

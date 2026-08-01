@@ -108,6 +108,13 @@ const REGISTRY: Record<string, HarnessPresentation> = {
     badgeClass: 'bg-soft-cyan/15 text-soft-cyan',
     chartColor: '#06b6d4',
   },
+  trae: {
+    displayName: 'Trae',
+    shortLabel: 'TR',
+    iconImage: null,
+    badgeClass: 'bg-soft-purple/15 text-soft-purple',
+    chartColor: '#c084fc',
+  },
 }
 
 const FALLBACK: HarnessPresentation = {

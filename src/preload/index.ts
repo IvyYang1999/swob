@@ -52,14 +52,15 @@ const api = {
 
   // Sessions
   loadAllSessions: () => ipcRenderer.invoke('sessions:loadAll'),
-  loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) =>
+  loadSessionDetail: (filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string, canonicalSessionRecordId?: string) =>
     parseJsonIpcResult(ipcRenderer.invoke(
       'sessions:loadDetail',
       filePath,
       allFilePaths,
       branchParentFilePaths,
       branchPointUuid,
-      branchLeafUuid
+      branchLeafUuid,
+      canonicalSessionRecordId
     )),
   rebuildSessionDetail: (sessionId: string) =>
     ipcRenderer.invoke('sessions:rebuildDetail', sessionId) as Promise<{ ok: boolean; error?: string }>,

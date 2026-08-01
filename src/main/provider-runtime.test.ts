@@ -157,6 +157,16 @@ describe('canonical provider runtime full chain', () => {
     expect(detail?.tokenAccounting).toMatchObject({
       provider: 'trae', provenance: 'unavailable', billingTotal: null, conversationOnly: null
     })
+    const sourceDetail = await (await import('./session-loader')).loadSessionDetail(
+      store.listSessions('swob/trae')[0].sessionRecord.sourceRef.displayLocator,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      result.changedSessionRecordIds[0]
+    )
+    expect(sourceDetail?.messages.some((message) =>
+      message.textContent.includes('Inspect the synthetic workspace'))).toBe(true)
     expect(library.getSessionResumeAvailability('synthetic-trae-session', detail || undefined))
       .toMatchObject({ canResume: false })
   })

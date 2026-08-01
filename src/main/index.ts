@@ -366,6 +366,14 @@ function sessionSourceRoots(): string[] {
     )
   }
   if (isSessionSourceSupported('hermes')) roots.push(join(home, '.hermes', 'sessions'))
+  if (isSessionSourceSupported('qoder')) roots.push(join(home, '.qoder', 'projects'))
+  if (isSessionSourceSupported('trae')) {
+    roots.push(
+      join(home, 'Library', 'Application Support', 'Trae', 'User'),
+      join(home, 'Library', 'Application Support', 'Trae CN', 'User'),
+      join(home, 'Library', 'Application Support', 'TRAE SOLO CN', 'User')
+    )
+  }
   return roots
 }
 
@@ -1536,7 +1544,7 @@ ipcMain.handle('sessions:loadAll', async () => {
 
 ipcMain.handle(
   'sessions:loadDetail',
-  async (_event, filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string) => {
+  async (_event, filePath: string, allFilePaths?: string[], branchParentFilePaths?: string[], branchPointUuid?: string, branchLeafUuid?: string, canonicalSessionRecordId?: string) => {
     const safeFilePath = assertSessionSourcePath(filePath)
     const safeAllPaths = allFilePaths?.map(assertSessionSourcePath)
     const safeParentPaths = branchParentFilePaths?.map(assertSessionSourcePath)
@@ -1555,7 +1563,8 @@ ipcMain.handle(
       safeParentPaths,
       branchPointUuid,
       branchLeafUuid,
-      transcriptPaths
+      transcriptPaths,
+      canonicalSessionRecordId
     )
     // Electron's structured clone of thousands of nested message objects can
     // monopolize the renderer thread. One JSON string crosses IPC cheaply; the
@@ -2430,7 +2439,8 @@ async function loadSmartRenameCandidates(sessionIds: readonly string[]): Promise
         session.allFilePaths,
         session.branchParentFilePaths,
         session.branchPointUuid,
-        session.branchLeafUuid
+        session.branchLeafUuid,
+        session.id
       )
       if (detail) {
         conversationSummary = detail.messages

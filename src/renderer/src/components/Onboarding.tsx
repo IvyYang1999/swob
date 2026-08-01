@@ -23,7 +23,8 @@ const SOURCE_LABELS: Record<string, string> = {
   pi: 'Pi',
   kimi: 'Kimi',
   hermes: 'Hermes',
-  qoder: 'Qoder'
+  qoder: 'Qoder',
+  trae: 'Trae'
 }
 
 function StepDots({ step }: { step: Step }) {

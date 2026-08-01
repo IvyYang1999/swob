@@ -26,6 +26,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   kimi: '#fb923c',
   hermes: '#8b5cf6',
   qoder: '#06b6d4',
+  trae: '#c084fc',
 }
 
 export const SOURCE_LABELS: Record<string, string> = {
@@ -41,6 +42,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   kimi: 'Kimi Code',
   hermes: 'Hermes',
   qoder: 'Qoder',
+  trae: 'Trae',
 }
 
 export const PROJECT_COLORS = [

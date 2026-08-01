@@ -238,7 +238,8 @@ async function loadExpectedAnchors(
       session.allFilePaths,
       session.branchParentFilePaths,
       session.branchPointUuid,
-      session.branchLeafUuid
+      session.branchLeafUuid,
+      session.id
     )
     return anchorsFromMessages(parsedAnchorMessages(detail?.messages || []))
   } catch {

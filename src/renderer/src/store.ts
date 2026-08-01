@@ -562,7 +562,7 @@ export const useStore = create<AppState>((set, get) => ({
       const current = get().selectedSession
       if (current && current.id === u.id) {
         const result = await window.api.loadSessionDetail(
-          u.filePath, u.allFilePaths, u.branchParentFilePaths, u.branchPointUuid, u.branchLeafUuid
+          u.filePath, u.allFilePaths, u.branchParentFilePaths, u.branchPointUuid, u.branchLeafUuid, u.id
         ) as SessionDetailLoadResult
         const detail = materializeSessionDetail(result, u)
         set({ selectedSession: detail })
@@ -648,7 +648,8 @@ export const useStore = create<AppState>((set, get) => ({
       allFilePaths,
       branchParentFilePaths,
       branchPointUuid,
-      branchLeafUuid
+      branchLeafUuid,
+      uniqueId
     ) as SessionDetailLoadResult
     const summary = get().sessions.find((session) =>
       session.id === uniqueId || session.filePath === filePath

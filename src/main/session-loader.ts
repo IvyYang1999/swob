@@ -2275,7 +2275,8 @@ async function loadLegacySessionDetail(
   allFilePaths?: string[],
   branchParentFilePaths?: string[],
   branchPointUuid?: string,
-  branchLeafUuid?: string
+  branchLeafUuid?: string,
+  canonicalSessionRecordId?: string
 ): Promise<SessionDetail | null> {
   if (isCanonicalRecordsPath(filePath)) {
     const canonical = readCanonicalPackageRecords(filePath)
@@ -2287,6 +2288,23 @@ async function loadLegacySessionDetail(
           fileSizeBytes: fs.statSync(filePath).size
         })
       : null)
+  }
+  // A single physical provider source can contain multiple logical sessions
+  // (Trae stores them as virtual rows in one state.vscdb). The renderer's
+  // canonical session-record ID is therefore the only unambiguous detail key;
+  // a path-only lookup can select the wrong row or no row at all.
+  if (canonicalSessionRecordId) {
+    const current = getCanonicalSessionStore().getSession(canonicalSessionRecordId)
+    const definition = current
+      ? builtinProviderForId(current.sessionRecord.provenance.providerId)
+      : undefined
+    if (current && definition?.ingestion === 'provider-host' &&
+      path.resolve(current.sessionRecord.sourceRef.displayLocator) === path.resolve(filePath)) {
+      return sanitizeSessionDetail(canonicalRecordsToSessionDetail(
+        current.records,
+        { filePath, source: definition.sourceId }
+      ))
+    }
   }
   // Dispatch to source-specific loaders
   const source = detectSessionSourceFromPath(filePath) || sniffSessionSourceFromJsonl(filePath)
@@ -2498,7 +2516,8 @@ export async function loadSessionDetailWithFallback(
   branchParentFilePaths?: string[],
   branchPointUuid?: string,
   branchLeafUuid?: string,
-  transcriptFilePaths: string[] = []
+  transcriptFilePaths: string[] = [],
+  canonicalSessionRecordId?: string
 ): Promise<SessionDetailLoadResult> {
   let failed = false
   try {
@@ -2507,7 +2526,8 @@ export async function loadSessionDetailWithFallback(
       allFilePaths,
       branchParentFilePaths,
       branchPointUuid,
-      branchLeafUuid
+      branchLeafUuid,
+      canonicalSessionRecordId
     )
     if (detail) return { ...detail, fallback: null }
   } catch (error) {

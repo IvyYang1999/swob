@@ -212,7 +212,7 @@ describe('SettingsPanel 纵向导航设置', () => {
     expect((window as any).api.checkForUpdates).toHaveBeenCalledTimes(1)
   })
 
-  it('Resume 分类按 harness 过滤方式，ZCode 终端选项明确禁用', () => {
+  it('Resume 分类按 harness 过滤方式，不可用入口明确禁用', () => {
     render(<SettingsPanel />)
     fireEvent.click(navButton('继续'))
 
@@ -221,6 +221,11 @@ describe('SettingsPanel 纵向导航设置', () => {
     const terminalOption = Array.from(zcode.options).find((option) => option.value === 'terminal')
     expect(terminalOption?.disabled).toBe(true)
     expect(terminalOption?.textContent).toContain('没有公开 CLI Resume')
+
+    const trae = screen.getByRole('combobox', { name: /Trae 默认方式/ }) as HTMLSelectElement
+    expect(trae.disabled).toBe(true)
+    expect(trae.options[0].disabled).toBe(true)
+    expect(trae.options[0].textContent).toContain('No verified Trae per-session CLI resume command')
   })
 
   it('【曾经的 bug】SSH 分类挂载和刷新只读取本地信息，点击后才查询公网 IP', async () => {
@@ -271,7 +276,7 @@ describe('SettingsPanel 纵向导航设置', () => {
       platform: 'win32',
       windowsNativeAlpha: true,
       supportedSources: ['claude-code', 'codex'],
-      unsupportedSources: ['cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity', 'grok', 'pi', 'kimi', 'hermes'],
+      unsupportedSources: ['cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae'],
       features: { wsl: false, cloudPlaceholders: false, cliInstall: false, arm64: false, autoUpdate: false, codeSigning: false }
     })
 

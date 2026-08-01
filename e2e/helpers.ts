@@ -47,6 +47,8 @@ export interface LaunchAppOptions {
   includePiFixture?: boolean
   includeKimiFixture?: boolean
   includeGrokFixture?: boolean
+  includeQoderFixture?: boolean
+  includeTraeFixture?: boolean
   includeInspectorFixture?: boolean
   includePricingFixture?: boolean
   env?: Record<string, string>
@@ -94,6 +96,8 @@ function createSyntheticCorpus(
   includePiFixture = false,
   includeKimiFixture = false,
   includeGrokFixture = false,
+  includeQoderFixture = false,
+  includeTraeFixture = false,
   includeInspectorFixture = false,
   includePricingFixture = false
 ): void {
@@ -265,6 +269,40 @@ function createSyntheticCorpus(
     )
   }
 
+  if (includeQoderFixture) {
+    fs.cpSync(
+      path.join(__dirname, '..', 'testdata', 'qoder', '-workspace-synthetic-qoder'),
+      path.join(home, '.qoder', 'projects', '-workspace-synthetic-qoder'),
+      { recursive: true }
+    )
+  }
+
+  if (includeTraeFixture) {
+    const fixture = JSON.parse(fs.readFileSync(
+      path.join(__dirname, '..', 'testdata', 'trae', 'legacy-state-vscdb.json'),
+      'utf8'
+    )) as { storageKey: string; store: unknown }
+    const workspaceRoot = path.join(
+      home,
+      'Library',
+      'Application Support',
+      'Trae',
+      'User',
+      'workspaceStorage',
+      'synthetic-workspace'
+    )
+    fs.mkdirSync(workspaceRoot, { recursive: true })
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'workspace.json'),
+      JSON.stringify({ folder: 'file:///workspace/synthetic-trae' })
+    )
+    const traeDb = new Database(path.join(workspaceRoot, 'state.vscdb'))
+    traeDb.pragma('journal_mode = WAL')
+    traeDb.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)')
+    traeDb.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)')
+      .run(fixture.storageKey, JSON.stringify(fixture.store))
+    traeDb.close()
+  }
   writeJsonl(
     path.join(
       home,
@@ -414,6 +452,8 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     options.includePiFixture ?? false,
     options.includeKimiFixture ?? false,
     options.includeGrokFixture ?? false,
+    options.includeQoderFixture ?? false,
+    options.includeTraeFixture ?? false,
     options.includeInspectorFixture ?? false,
     options.includePricingFixture ?? false
   )

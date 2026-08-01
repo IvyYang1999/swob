@@ -1,0 +1,77 @@
+{
+  "manifest": {
+    "schemaVersion": 2,
+    "providerId": "swob/pi",
+    "displayName": "Pi synthetic golden",
+    "implementationVersion": "fixture-v2",
+    "parserDataVersion": "2",
+    "formatVersions": ["pi-jsonl-v1", "pi-jsonl-v3"],
+    "capabilities": {
+      "transcript": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-V1-V3-MIGRATION" }] },
+      "tools": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-TOOLS" }] },
+      "thinking": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-THINKING" }] },
+      "usage": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-REPORTED-COST" }] },
+      "relationships": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-TREE-BRANCH" }] },
+      "context-timeline": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-CONTEXT-MEMBERSHIP" }] },
+      "identity": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-IDENTITY" }] },
+      "chunked-transport": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-CHUNK" }] }
+    },
+    "resumeContract": { "mode": "native-cli", "supportedSurfaces": ["terminal"], "supportsSubagent": false, "idTransform": null, "preflight": ["binary", "version", "help-capability", "source-exists"], "commandTemplate": "pi --session {sessionId}", "expectedSideEffects": ["observe-source-after-launch"], "postcondition": "anchor-match" }
+  },
+  "envelopes": [
+    {
+      "protocolVersion": "2.0",
+      "messageId": "pi-hello",
+      "kind": "hello",
+      "payload": { "protocolVersion": "2.0", "schemaId": "https://swob.dev/schema/provider-protocol/v2", "providerId": "swob/pi", "implementationVersion": "fixture-v2", "manifestFingerprint": "9d2e5dda96674e8c91ff4386756de45fb6a5b1bde971ef8c9c7bd30148eaf0aa" }
+    },
+    {
+      "protocolVersion": "2.0",
+      "messageId": "pi-manifest",
+      "kind": "manifest",
+      "payload": {
+        "schemaVersion": 2,
+        "providerId": "swob/pi",
+        "displayName": "Pi synthetic golden",
+        "implementationVersion": "fixture-v2",
+        "parserDataVersion": "2",
+        "formatVersions": ["pi-jsonl-v1", "pi-jsonl-v3"],
+        "capabilities": {
+          "transcript": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-V1-V3-MIGRATION" }] },
+          "tools": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-TOOLS" }] },
+          "thinking": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-THINKING" }] },
+          "usage": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-REPORTED-COST" }] },
+          "relationships": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-TREE-BRANCH" }] },
+          "context-timeline": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-PI-CONTEXT-MEMBERSHIP" }] },
+          "identity": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-IDENTITY" }] },
+          "chunked-transport": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/pi-golden.json", "conformanceTestId": "PPV2-CHUNK" }] }
+        },
+        "resumeContract": { "mode": "native-cli", "supportedSurfaces": ["terminal"], "supportsSubagent": false, "idTransform": null, "preflight": ["binary", "version", "help-capability", "source-exists"], "commandTemplate": "pi --session {sessionId}", "expectedSideEffects": ["observe-source-after-launch"], "postcondition": "anchor-match" }
+      }
+    },
+    {
+      "protocolVersion": "2.0",
+      "messageId": "pi-chunk-0",
+      "kind": "parse-chunk",
+      "payload": {
+        "providerId": "swob/pi",
+        "parserDataVersion": "2",
+        "formatVersion": "pi-jsonl-v3",
+        "fingerprint": { "algorithm": "sha256", "value": "pi-synthetic-source" },
+        "identity": { "physicalSourceId": "pi:fixture", "logicalSessionKey": "v1\u0000swob/pi\u0000named\u0000fixture\u0000pi-session", "logicalSessionId": "pi-session", "branchViewId": "pi:branch:active", "parentBranchViewId": "pi:branch:parent" },
+        "mode": "initial",
+        "chunkIndex": 0,
+        "previousCursor": null,
+        "cursor": null,
+        "done": true,
+        "events": [
+          { "id": "pi:e0", "identity": { "physicalSourceId": "pi:fixture", "logicalSessionKey": "v1\u0000swob/pi\u0000named\u0000fixture\u0000pi-session", "logicalSessionId": "pi-session", "branchViewId": "pi:branch:active", "parentBranchViewId": "pi:branch:parent" }, "sharedEventKey": "pi:shared:event:root-user", "messageId": "pi:m0", "sequence": 0, "messageBlockIndex": 0, "timestamp": null, "actor": "user", "kind": "message.text", "payload": { "text": "Synthetic shared root event" }, "visibility": "primary", "classification": "user-content", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 0, "state": "archived", "fromSequence": 0, "untilSequence": null }] }, "provenance": { "providerId": "swob/pi", "sourceRefId": "pi:fixture", "parserDataVersion": "2", "formatVersion": "pi-jsonl-v3", "observedAt": null, "sourceRecordId": "pi-row:0", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "pi:e1", "identity": { "physicalSourceId": "pi:fixture", "logicalSessionKey": "v1\u0000swob/pi\u0000named\u0000fixture\u0000pi-session", "logicalSessionId": "pi-session", "branchViewId": "pi:branch:active", "parentBranchViewId": "pi:branch:parent" }, "sharedEventKey": "pi:shared:event:branch-thinking", "messageId": "pi:m1", "sequence": 1, "messageBlockIndex": 0, "timestamp": null, "actor": "assistant", "kind": "message.thinking", "payload": { "text": "Synthetic active branch thinking" }, "visibility": "collapsed", "classification": "user-content", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 1, "state": "visible-to-model", "fromSequence": 1, "untilSequence": null }] }, "provenance": { "providerId": "swob/pi", "sourceRefId": "pi:fixture", "parserDataVersion": "2", "formatVersion": "pi-jsonl-v3", "observedAt": null, "sourceRecordId": "pi-row:1", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "pi:e2", "identity": { "physicalSourceId": "pi:fixture", "logicalSessionKey": "v1\u0000swob/pi\u0000named\u0000fixture\u0000pi-session", "logicalSessionId": "pi-session", "branchViewId": "pi:branch:active", "parentBranchViewId": "pi:branch:parent" }, "sharedEventKey": "pi:shared:event:relationship", "messageId": null, "sequence": 2, "messageBlockIndex": null, "timestamp": null, "actor": "system", "kind": "session.lifecycle", "payload": { "relationshipType": "fork", "parentBranchViewId": "pi:branch:parent" }, "visibility": "collapsed", "classification": "lifecycle", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 1, "state": "unknown", "fromSequence": 2, "untilSequence": null }] }, "provenance": { "providerId": "swob/pi", "sourceRefId": "pi:fixture", "parserDataVersion": "2", "formatVersion": "pi-jsonl-v3", "observedAt": null, "sourceRecordId": "pi-row:2", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "pi:e3", "identity": { "physicalSourceId": "pi:fixture", "logicalSessionKey": "v1\u0000swob/pi\u0000named\u0000fixture\u0000pi-session", "logicalSessionId": "pi-session", "branchViewId": "pi:branch:active", "parentBranchViewId": "pi:branch:parent" }, "sharedEventKey": "pi:shared:event:usage", "messageId": "pi:m1", "sequence": 3, "messageBlockIndex": null, "timestamp": null, "actor": "assistant", "kind": "usage", "payload": { "eventId": "pi:e3", "turnId": "pi:m1", "modelId": "synthetic-pi", "input": { "total": 120, "uncached": 90, "cacheRead": 20, "cacheWrite5m": 10, "cacheWrite1h": 0 }, "output": { "total": 30, "visible": 30, "reasoning": 0 }, "providerTotal": 150, "aggregation": "per-message", "relations": { "cacheRead": "subset-of-input", "cacheWrite": "subset-of-input", "reasoning": "subset-of-output" }, "dedupKey": "pi:usage:assistant-1", "billingFactKey": "pi:billing:assistant-1", "measurement": { "source": "reported", "confidence": "exact", "sourceField": "message.usage" }, "cost": { "amount": 0.0042, "currency": "USD", "kind": "reported" }, "priceRevision": null }, "visibility": "collapsed", "classification": "lifecycle", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 1, "state": "unknown", "fromSequence": 3, "untilSequence": null }] }, "provenance": { "providerId": "swob/pi", "sourceRefId": "pi:fixture", "parserDataVersion": "2", "formatVersion": "pi-jsonl-v3", "observedAt": null, "sourceRecordId": "pi-row:3", "rawRecordFingerprint": null }, "rawRef": null }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}

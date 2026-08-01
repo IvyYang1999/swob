@@ -9,9 +9,15 @@ import type {
   SourceRef,
   Tombstone
 } from '../shared/provider-schema.generated'
+import type {
+  CanonicalEvent,
+  ParseChunk,
+  SessionIdentity
+} from '../shared/provider-schema-v2.generated'
+import { validateParseChunkV2 } from '../shared/provider-protocol-v2'
 import { runtimeHome } from './runtime-home'
 
-export const CANONICAL_STORE_SCHEMA_VERSION = 1
+export const CANONICAL_STORE_SCHEMA_VERSION = 2
 const CANONICAL_STORE_BUSY_TIMEOUT_MS = 3_000
 
 export interface CanonicalStoredSession {
@@ -47,6 +53,37 @@ interface SourceRow {
   tombstoned_at: string | null
 }
 
+interface V2SessionRow {
+  identity_json: string
+  fingerprint_json: string
+  complete: number
+  last_chunk_index: number
+  last_cursor: string | null
+  event_count: number
+  tombstoned_at: string | null
+  tombstone_reason: Tombstone['reason'] | null
+}
+
+interface V2EventRow {
+  event_json: string
+}
+
+export interface CanonicalStoredEventSession {
+  identity: SessionIdentity
+  fingerprint: Fingerprint
+  complete: boolean
+  lastChunkIndex: number
+  lastCursor: string | null
+  eventCount: number
+  tombstonedAt: string | null
+  tombstoneReason: Tombstone['reason'] | null
+}
+
+export interface CanonicalEventPage {
+  events: CanonicalEvent[]
+  nextSequence: number | null
+}
+
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T
 }
@@ -74,6 +111,8 @@ function ensureSchema(database: Database.Database): void {
       // Canonical state is a rebuildable projection, so remove any partial DDL
       // and publish the whole schema atomically.
       database.exec(`
+        DROP TABLE IF EXISTS canonical_v2_events;
+        DROP TABLE IF EXISTS canonical_v2_sessions;
         DROP TABLE IF EXISTS canonical_records;
         DROP TABLE IF EXISTS canonical_sessions;
         DROP TABLE IF EXISTS canonical_sources;
@@ -121,6 +160,79 @@ function ensureSchema(database: Database.Database): void {
         );
         CREATE INDEX canonical_records_session_idx
           ON canonical_records(session_record_id, ordinal, record_id);
+        CREATE TABLE canonical_v2_sessions (
+          logical_session_key TEXT NOT NULL,
+          branch_view_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          physical_source_id TEXT NOT NULL,
+          identity_json TEXT NOT NULL,
+          fingerprint_json TEXT NOT NULL,
+          complete INTEGER NOT NULL,
+          last_chunk_index INTEGER NOT NULL,
+          last_cursor TEXT,
+          event_count INTEGER NOT NULL,
+          tombstoned_at TEXT,
+          tombstone_reason TEXT,
+          PRIMARY KEY(logical_session_key, branch_view_id)
+        );
+        CREATE INDEX canonical_v2_sessions_source_idx
+          ON canonical_v2_sessions(provider_id, physical_source_id);
+        CREATE TABLE canonical_v2_events (
+          logical_session_key TEXT NOT NULL,
+          branch_view_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          message_block_index INTEGER,
+          event_json TEXT NOT NULL,
+          PRIMARY KEY(logical_session_key, branch_view_id, event_id),
+          UNIQUE(logical_session_key, branch_view_id, sequence),
+          FOREIGN KEY(logical_session_key, branch_view_id)
+            REFERENCES canonical_v2_sessions(logical_session_key, branch_view_id) ON DELETE CASCADE
+        );
+        CREATE INDEX canonical_v2_events_page_idx
+          ON canonical_v2_events(logical_session_key, branch_view_id, sequence);
+      `)
+      database.prepare(
+        'INSERT INTO canonical_schema_migrations(version, applied_at) VALUES (?, ?)'
+      ).run(CANONICAL_STORE_SCHEMA_VERSION, new Date().toISOString())
+      database.pragma(`user_version = ${CANONICAL_STORE_SCHEMA_VERSION}`)
+    })
+    migrate()
+  }
+  if (version === 1) {
+    const migrate = database.transaction(() => {
+      database.exec(`
+        CREATE TABLE canonical_v2_sessions (
+          logical_session_key TEXT NOT NULL,
+          branch_view_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          physical_source_id TEXT NOT NULL,
+          identity_json TEXT NOT NULL,
+          fingerprint_json TEXT NOT NULL,
+          complete INTEGER NOT NULL,
+          last_chunk_index INTEGER NOT NULL,
+          last_cursor TEXT,
+          event_count INTEGER NOT NULL,
+          tombstoned_at TEXT,
+          tombstone_reason TEXT,
+          PRIMARY KEY(logical_session_key, branch_view_id)
+        );
+        CREATE INDEX canonical_v2_sessions_source_idx
+          ON canonical_v2_sessions(provider_id, physical_source_id);
+        CREATE TABLE canonical_v2_events (
+          logical_session_key TEXT NOT NULL,
+          branch_view_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          message_block_index INTEGER,
+          event_json TEXT NOT NULL,
+          PRIMARY KEY(logical_session_key, branch_view_id, event_id),
+          UNIQUE(logical_session_key, branch_view_id, sequence),
+          FOREIGN KEY(logical_session_key, branch_view_id)
+            REFERENCES canonical_v2_sessions(logical_session_key, branch_view_id) ON DELETE CASCADE
+        );
+        CREATE INDEX canonical_v2_events_page_idx
+          ON canonical_v2_events(logical_session_key, branch_view_id, sequence);
       `)
       database.prepare(
         'INSERT INTO canonical_schema_migrations(version, applied_at) VALUES (?, ?)'
@@ -309,6 +421,178 @@ export class CanonicalSessionStore {
     })
     apply()
     this.reloadMemory()
+  }
+
+  applyParseChunkV2(chunk: ParseChunk): void {
+    const validation = validateParseChunkV2(chunk)
+    if (!validation.ok) {
+      throw new Error(`canonical-v2-chunk-schema-invalid:${validation.issues[0]?.message || 'unknown'}`)
+    }
+    const key = chunk.identity.logicalSessionKey
+    const branch = chunk.identity.branchViewId
+    const apply = this.database.transaction(() => {
+      let current = this.database.prepare(`
+        SELECT identity_json, fingerprint_json, complete, last_chunk_index, last_cursor, event_count,
+               tombstoned_at, tombstone_reason
+        FROM canonical_v2_sessions
+        WHERE logical_session_key = ? AND branch_view_id = ?
+      `).get(key, branch) as V2SessionRow | undefined
+
+      if (chunk.chunkIndex === 0) {
+        if (chunk.previousCursor !== null) throw new Error('canonical-v2-first-chunk-cursor-invalid')
+        if (chunk.mode === 'append') {
+          if (!current) throw new Error('canonical-v2-append-session-missing')
+          this.database.prepare(`
+            UPDATE canonical_v2_sessions
+            SET fingerprint_json = ?, complete = 0, last_chunk_index = -1, last_cursor = NULL,
+                tombstoned_at = NULL, tombstone_reason = NULL
+            WHERE logical_session_key = ? AND branch_view_id = ?
+          `).run(JSON.stringify(chunk.fingerprint), key, branch)
+          current = {
+            ...current,
+            fingerprint_json: JSON.stringify(chunk.fingerprint),
+            complete: 0,
+            last_chunk_index: -1,
+            last_cursor: null,
+            tombstoned_at: null,
+            tombstone_reason: null
+          }
+        } else {
+          this.database.prepare(`
+            DELETE FROM canonical_v2_sessions
+            WHERE logical_session_key = ? AND branch_view_id = ?
+          `).run(key, branch)
+          this.database.prepare(`
+            INSERT INTO canonical_v2_sessions(
+              logical_session_key, branch_view_id, provider_id, physical_source_id,
+              identity_json, fingerprint_json, complete, last_chunk_index, last_cursor, event_count,
+              tombstoned_at, tombstone_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, -1, NULL, 0, NULL, NULL)
+          `).run(
+            key,
+            branch,
+            chunk.providerId,
+            chunk.identity.physicalSourceId,
+            JSON.stringify(chunk.identity),
+            JSON.stringify(chunk.fingerprint)
+          )
+          current = {
+            identity_json: JSON.stringify(chunk.identity),
+            fingerprint_json: JSON.stringify(chunk.fingerprint),
+            complete: 0,
+            last_chunk_index: -1,
+            last_cursor: null,
+            event_count: 0,
+            tombstoned_at: null,
+            tombstone_reason: null
+          }
+        }
+      }
+      if (!current) throw new Error('canonical-v2-chunk-session-missing')
+      const currentIdentity = parseJson<SessionIdentity>(current.identity_json)
+      if (JSON.stringify(currentIdentity) !== JSON.stringify(chunk.identity) ||
+        current.fingerprint_json !== JSON.stringify(chunk.fingerprint)) {
+        throw new Error('canonical-v2-chunk-identity-mismatch')
+      }
+      if (current.complete) throw new Error('canonical-v2-chunk-session-complete')
+      if (chunk.chunkIndex !== current.last_chunk_index + 1) throw new Error('canonical-v2-chunk-index-mismatch')
+      if (chunk.previousCursor !== current.last_cursor) throw new Error('canonical-v2-chunk-cursor-mismatch')
+      if (chunk.done === (chunk.cursor !== null)) throw new Error('canonical-v2-chunk-done-cursor-invalid')
+
+      const insertEvent = this.database.prepare(`
+        INSERT INTO canonical_v2_events(
+          logical_session_key, branch_view_id, event_id, sequence, message_block_index, event_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      let expectedSequence = current.event_count
+      for (const event of chunk.events) {
+        if (event.sequence !== expectedSequence) throw new Error('canonical-v2-event-sequence-gap')
+        if (JSON.stringify(event.identity) !== current.identity_json ||
+          event.provenance.providerId !== chunk.providerId ||
+          event.provenance.sourceRefId !== chunk.identity.physicalSourceId) {
+          throw new Error('canonical-v2-event-identity-mismatch')
+        }
+        insertEvent.run(
+          key,
+          branch,
+          event.id,
+          event.sequence,
+          event.messageBlockIndex,
+          JSON.stringify(event)
+        )
+        expectedSequence++
+      }
+      this.database.prepare(`
+        UPDATE canonical_v2_sessions
+        SET complete = ?, last_chunk_index = ?, last_cursor = ?, event_count = ?
+        WHERE logical_session_key = ? AND branch_view_id = ?
+      `).run(chunk.done ? 1 : 0, chunk.chunkIndex, chunk.cursor, expectedSequence, key, branch)
+    })
+    apply()
+  }
+
+  getV2Session(logicalSessionKey: string, branchViewId: string): CanonicalStoredEventSession | null {
+    const row = this.database.prepare(`
+      SELECT identity_json, fingerprint_json, complete, last_chunk_index, last_cursor, event_count,
+             tombstoned_at, tombstone_reason
+      FROM canonical_v2_sessions
+      WHERE logical_session_key = ? AND branch_view_id = ?
+    `).get(logicalSessionKey, branchViewId) as V2SessionRow | undefined
+    return row ? {
+      identity: parseJson<SessionIdentity>(row.identity_json),
+      fingerprint: parseJson<Fingerprint>(row.fingerprint_json),
+      complete: row.complete === 1,
+      lastChunkIndex: row.last_chunk_index,
+      lastCursor: row.last_cursor,
+      eventCount: row.event_count,
+      tombstonedAt: row.tombstoned_at,
+      tombstoneReason: row.tombstone_reason
+    } : null
+  }
+
+  tombstoneV2Source(
+    providerId: string,
+    physicalSourceId: string,
+    deletedAt: string | null,
+    reason: Tombstone['reason']
+  ): void {
+    this.database.prepare(`
+      UPDATE canonical_v2_sessions
+      SET tombstoned_at = ?, tombstone_reason = ?
+      WHERE provider_id = ? AND physical_source_id = ?
+    `).run(deletedAt || new Date().toISOString(), reason, providerId, physicalSourceId)
+  }
+
+  hasCompleteV2Source(providerId: string, physicalSourceId: string, expectedSessions: number): boolean {
+    if (!Number.isSafeInteger(expectedSessions) || expectedSessions < 0) return false
+    const row = this.database.prepare(`
+      SELECT count(*) AS count
+      FROM canonical_v2_sessions
+      WHERE provider_id = ? AND physical_source_id = ? AND complete = 1 AND tombstoned_at IS NULL
+    `).get(providerId, physicalSourceId) as { count: number }
+    return row.count === expectedSessions
+  }
+
+  readV2EventPage(
+    logicalSessionKey: string,
+    branchViewId: string,
+    options: { afterSequence?: number | null; limit?: number } = {}
+  ): CanonicalEventPage {
+    const limit = Math.min(Math.max(options.limit ?? 512, 1), 4_096)
+    const afterSequence = options.afterSequence ?? -1
+    const rows = this.database.prepare(`
+      SELECT event_json FROM canonical_v2_events
+      WHERE logical_session_key = ? AND branch_view_id = ? AND sequence > ?
+      ORDER BY sequence
+      LIMIT ?
+    `).all(logicalSessionKey, branchViewId, afterSequence, limit + 1) as V2EventRow[]
+    const hasMore = rows.length > limit
+    const pageRows = hasMore ? rows.slice(0, limit) : rows
+    const events = pageRows.map((row) => parseJson<CanonicalEvent>(row.event_json))
+    return {
+      events,
+      nextSequence: hasMore ? events.at(-1)?.sequence ?? null : null
+    }
   }
 
   applyTombstone(tombstone: Tombstone): void {

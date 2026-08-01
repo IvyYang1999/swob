@@ -12,13 +12,29 @@ import {
   type SourceRef
 } from '../shared/provider-schema.generated'
 import {
+  PROVIDER_PROTOCOL_VERSION as PROVIDER_PROTOCOL_VERSION_V2,
+  type ParseChunk as ParseChunkV2,
+  type ProviderEnvelope as ProviderEnvelopeV2,
+  type ProviderManifest as ProviderManifestV2
+} from '../shared/provider-schema-v2.generated'
+import {
   helloForProvider,
   providerFingerprint,
   validateProviderEnvelope,
   validateProviderManifest,
   validateProviderSourceRef
 } from '../shared/provider-protocol'
+import {
+  decodeProviderEnvelopeV2,
+  helloForProviderV2,
+  validateParseChunkV2,
+  validateProviderManifestV2
+} from '../shared/provider-protocol-v2'
 import { createPiProvider } from './providers/pi-provider'
+import {
+  migrateProviderV1ManifestToV2,
+  migrateProviderV1OutcomeToV2Chunks
+} from './provider-v1-migration'
 import { runtimeHome } from './runtime-home'
 
 export const PROVIDER_RUNTIME_TIMEOUT_MS = 30_000
@@ -55,6 +71,8 @@ export interface PreviousProviderSourceState {
   sourceRef: SourceRef
   fingerprint: Fingerprint
   sessionRecordIds: string[]
+  /** Reparse even when the physical fingerprint matches, e.g. to repair an incomplete v2 projection. */
+  forceReparse?: boolean
 }
 
 export interface ProviderRunReport {
@@ -64,6 +82,9 @@ export interface ProviderRunReport {
   discoveredSources: SourceRef[]
   unchangedSources: SourceRef[]
   outcomes: ParseOutcome[]
+  v2Manifest: ProviderManifestV2 | null
+  v2Envelopes: ProviderEnvelopeV2[]
+  v2Chunks: ParseChunkV2[]
   errors: ProviderRuntimeError[]
 }
 
@@ -143,6 +164,20 @@ function assertValidEnvelope(providerId: string, envelope: ProviderEnvelope): Pr
   return validation.value!
 }
 
+function assertValidEnvelopeV2(providerId: string, envelope: ProviderEnvelopeV2): ProviderEnvelopeV2 {
+  const validation = decodeProviderEnvelopeV2(JSON.stringify(envelope))
+  if (!validation.ok) {
+    throw runtimeError(
+      providerId,
+      validation.issues.some((entry) => entry.keyword === 'resource-limit')
+        ? 'resource-limit-exceeded'
+        : 'schema-validation-failed',
+      `Provider v2 envelope failed validation: ${validation.issues[0]?.message || 'unknown'}`
+    )
+  }
+  return validation.value!
+}
+
 function fingerprintEqual(left: Fingerprint, right: Fingerprint): boolean {
   return left.algorithm === right.algorithm && left.value === right.value &&
     JSON.stringify(left.inputs || []) === JSON.stringify(right.inputs || [])
@@ -213,6 +248,9 @@ export class ProviderHost {
         discoveredSources: [],
         unchangedSources: [],
         outcomes: [],
+        v2Manifest: null,
+        v2Envelopes: [],
+        v2Chunks: [],
         errors: [runtimeError(runtime.manifest.providerId, 'cancelled', 'Provider host is cancelled.')]
       }))
     }
@@ -234,6 +272,9 @@ export class ProviderHost {
       discoveredSources: [],
       unchangedSources: [],
       outcomes: [],
+      v2Manifest: null,
+      v2Envelopes: [],
+      v2Chunks: [],
       errors: []
     }
     const controller = new AbortController()
@@ -257,6 +298,34 @@ export class ProviderHost {
       const hello = assertValidEnvelope(providerId, envelopeFor('hello', helloForProvider(runtime.manifest)))
       const manifest = assertValidEnvelope(providerId, envelopeFor('manifest', runtime.manifest))
       report.envelopes.push(hello, manifest)
+      const migratedManifest = migrateProviderV1ManifestToV2(runtime.manifest, {
+        evidenceFixture: providerId === 'swob/pi'
+          ? 'testdata/pi/session.jsonl'
+          : 'schema/fixtures/v2/provider-v1-migration.json',
+        conformanceTestPrefix: `PPV2-V1-MIGRATION-${providerId.replace('/', '-').toUpperCase()}`
+      })
+      const migratedManifestValidation = validateProviderManifestV2(migratedManifest)
+      if (!migratedManifestValidation.ok) {
+        throw runtimeError(
+          providerId,
+          'schema-validation-failed',
+          `Migrated Provider v2 manifest failed validation: ${migratedManifestValidation.issues[0]?.message || 'unknown'}`
+        )
+      }
+      const v2Hello = assertValidEnvelopeV2(providerId, {
+        protocolVersion: PROVIDER_PROTOCOL_VERSION_V2,
+        messageId: randomUUID(),
+        kind: 'hello',
+        payload: helloForProviderV2(migratedManifest)
+      })
+      const v2Manifest = assertValidEnvelopeV2(providerId, {
+        protocolVersion: PROVIDER_PROTOCOL_VERSION_V2,
+        messageId: randomUUID(),
+        kind: 'manifest',
+        payload: migratedManifest
+      })
+      report.v2Manifest = migratedManifest
+      report.v2Envelopes.push(v2Hello, v2Manifest)
       // Keep deadline work isolated until it completes. A provider that ignores
       // AbortSignal may continue running after the race, but it can no longer
       // mutate the report already returned to the app.
@@ -267,6 +336,9 @@ export class ProviderHost {
         discoveredSources: [],
         unchangedSources: [],
         outcomes: [],
+        v2Manifest: null,
+        v2Envelopes: [],
+        v2Chunks: [],
         errors: []
       }
 
@@ -299,6 +371,8 @@ export class ProviderHost {
       report.discoveredSources.push(...pendingReport.discoveredSources)
       report.unchangedSources.push(...pendingReport.unchangedSources)
       report.outcomes.push(...pendingReport.outcomes)
+      report.v2Envelopes.push(...pendingReport.v2Envelopes)
+      report.v2Chunks.push(...pendingReport.v2Chunks)
       report.errors.push(...pendingReport.errors)
     } catch (error) {
       report.errors.push(error instanceof ProviderRuntimeError
@@ -370,7 +444,7 @@ export class ProviderHost {
         const source = { ...sourceTemplate, fingerprint } as SourceRef
         report.discoveredSources.push(source)
         const previous = previousById.get(source.stableId)
-        if (previous && fingerprintEqual(previous.fingerprint, fingerprint)) {
+        if (previous && !previous.forceReparse && fingerprintEqual(previous.fingerprint, fingerprint)) {
           report.unchangedSources.push(source)
           continue
         }
@@ -428,8 +502,31 @@ export class ProviderHost {
             source.stableId
           )
         }
+        const v2Chunks: ParseChunkV2[] = []
+        const v2Envelopes: ProviderEnvelopeV2[] = []
+        for (const chunk of migrateProviderV1OutcomeToV2Chunks(envelope.payload)) {
+          const chunkValidation = validateParseChunkV2(chunk)
+          if (!chunkValidation.ok) {
+            throw runtimeError(
+              providerId,
+              'schema-validation-failed',
+              `Migrated Provider v2 chunk failed schema validation: ${chunkValidation.issues[0]?.message || 'unknown'}`,
+              source.stableId
+            )
+          }
+          const v2Envelope = assertValidEnvelopeV2(providerId, {
+            protocolVersion: PROVIDER_PROTOCOL_VERSION_V2,
+            messageId: randomUUID(),
+            kind: 'parse-chunk',
+            payload: chunk
+          })
+          v2Chunks.push(chunk)
+          v2Envelopes.push(v2Envelope)
+        }
         report.envelopes.push(envelope)
         report.outcomes.push(envelope.payload)
+        report.v2Chunks.push(...v2Chunks)
+        report.v2Envelopes.push(...v2Envelopes)
       } catch (error) {
         report.errors.push(error instanceof ProviderRuntimeError
           ? error

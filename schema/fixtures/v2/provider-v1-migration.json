@@ -1,0 +1,7 @@
+{
+  "synthetic": true,
+  "sourceProtocolVersion": "1.0",
+  "targetProtocolVersion": "2.0",
+  "purpose": "Evidence anchor for fail-closed v1 manifest and ParseOutcome migration tests.",
+  "containsPrivateData": false
+}

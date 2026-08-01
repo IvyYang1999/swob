@@ -6,6 +6,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const schemaPath = path.join(root, 'schema/provider-protocol-v1.schema.json')
 const conformancePath = path.join(root, 'schema/provider-protocol-v1.conformance.json')
 const outputPath = path.join(root, 'src/shared/provider-schema.generated.ts')
+const schemaV2Path = path.join(root, 'schema/provider-protocol-v2.schema.json')
+const conformanceV2Path = path.join(root, 'schema/provider-protocol-v2.conformance.json')
+const outputV2Path = path.join(root, 'src/shared/provider-schema-v2.generated.ts')
 const checkOnly = process.argv.includes('--check')
 const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'))
 const conformance = JSON.parse(fs.readFileSync(conformancePath, 'utf8'))
@@ -143,4 +146,69 @@ if (checkOnly) {
   }
 } else {
   fs.writeFileSync(outputPath, generated)
+}
+
+const schemaV2 = JSON.parse(fs.readFileSync(schemaV2Path, 'utf8'))
+const conformanceV2 = JSON.parse(fs.readFileSync(conformanceV2Path, 'utf8'))
+
+if (conformanceV2.wireProtocolVersion !== schemaV2.$defs.ProtocolVersion.enum[0]) {
+  throw new Error('provider v2 conformance wireProtocolVersion must match the schema protocol version')
+}
+if (conformanceV2.schemaId !== schemaV2.$id) {
+  throw new Error('provider v2 conformance schemaId must match the schema $id')
+}
+for (const [name, value] of Object.entries(conformanceV2.resourceLimits)) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`provider v2 resource limit ${name} must be a positive safe integer`)
+  }
+}
+for (const [limitName, pointers] of Object.entries(conformanceV2.schemaLimitBindings || {})) {
+  const expected = conformanceV2.resourceLimits[limitName]
+  if (!Number.isSafeInteger(expected)) {
+    throw new Error(`provider v2 schema binding references unknown resource limit: ${limitName}`)
+  }
+  if (!Array.isArray(pointers) || pointers.length === 0) {
+    throw new Error(`provider v2 schema limit binding must contain JSON pointers: ${limitName}`)
+  }
+  for (const pointer of pointers) {
+    const actual = jsonPointerValue(schemaV2, pointer)
+    if (actual !== expected) {
+      throw new Error(
+        `provider v2 schema limit ${pointer} (${actual}) must match ${limitName} (${expected})`
+      )
+    }
+  }
+}
+
+const definitionsV2 = Object.entries(schemaV2.$defs).map(([name, definition]) => {
+  if (name === 'JsonObject') return 'export interface JsonObject { [key: string]: JsonValue }'
+  return `export type ${name} = ${typeExpression(definition)}`
+})
+const generatedV2 = `/* eslint-disable */
+/**
+ * GENERATED FILE. DO NOT EDIT.
+ * Sources: schema/provider-protocol-v2.schema.json,
+ *          schema/provider-protocol-v2.conformance.json
+ * Run: npm run schema:gen
+ */
+
+export const PROVIDER_PROTOCOL_SCHEMA_ID = ${JSON.stringify(schemaV2.$id)} as const
+export const PROVIDER_PROTOCOL_VERSION = ${JSON.stringify(schemaV2.$defs.ProtocolVersion.enum[0])} as const
+export const PROVIDER_CONFORMANCE_VERSION = ${JSON.stringify(conformanceV2.contractVersion)} as const
+export const PROVIDER_RESOURCE_LIMITS = ${JSON.stringify(conformanceV2.resourceLimits, null, 2)} as const
+export const PROVIDER_CAPABILITY_NAMES = ${JSON.stringify(schemaV2.$defs.CapabilityName.enum)} as const
+export const PROVIDER_CAPABILITY_STATES = ${JSON.stringify(schemaV2.$defs.CapabilityStatus.enum)} as const
+export const PROVIDER_EVENT_KINDS = ${JSON.stringify(schemaV2.$defs.CanonicalEventKind.enum)} as const
+
+${definitionsV2.join('\n\n')}
+`
+
+if (checkOnly) {
+  const current = fs.existsSync(outputV2Path) ? fs.readFileSync(outputV2Path, 'utf8') : ''
+  if (current !== generatedV2) {
+    console.error('provider v2 schema generated types are stale; run npm run schema:gen')
+    process.exit(1)
+  }
+} else {
+  fs.writeFileSync(outputV2Path, generatedV2)
 }

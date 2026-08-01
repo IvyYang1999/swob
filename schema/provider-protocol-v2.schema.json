@@ -1,0 +1,747 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swob.dev/schema/provider-protocol/v2",
+  "title": "Swob Provider Protocol v2",
+  "$ref": "#/$defs/ProviderEnvelope",
+  "$defs": {
+    "ProtocolVersion": { "type": "string", "enum": ["2.0"] },
+    "ProviderId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$",
+      "maxLength": 255
+    },
+    "NonEmptyString": { "type": "string", "minLength": 1, "maxLength": 262144 },
+    "NullableString": { "oneOf": [{ "type": "string", "maxLength": 262144 }, { "type": "null" }] },
+    "NullableInteger": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+    "JsonPrimitive": {
+      "oneOf": [
+        { "type": "string", "maxLength": 262144 },
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" }
+      ]
+    },
+    "JsonArray": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/JsonValue" }
+    },
+    "JsonObject": {
+      "type": "object",
+      "maxProperties": 256,
+      "additionalProperties": { "$ref": "#/$defs/JsonValue" }
+    },
+    "JsonValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/JsonPrimitive" },
+        { "$ref": "#/$defs/JsonArray" },
+        { "$ref": "#/$defs/JsonObject" }
+      ]
+    },
+    "Fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "enum": ["sha256", "composite-sha256", "upstream-version"] },
+        "value": { "$ref": "#/$defs/NonEmptyString" },
+        "inputs": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/NonEmptyString" } }
+      }
+    },
+    "CapabilityName": {
+      "enum": [
+        "discover", "summary", "transcript", "tools", "thinking", "usage",
+        "relationships", "subagents", "interactions", "permissions", "context-timeline",
+        "identity", "chunked-transport", "terminal-resume", "native-resume", "format-provenance"
+      ]
+    },
+    "CapabilityStatus": { "enum": ["available", "unavailable", "not-applicable", "experimental"] },
+    "CapabilityEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fixture", "conformanceTestId"],
+      "properties": {
+        "kind": { "enum": ["test", "observed-format", "upstream-source", "compatibility-contract", "missing"] },
+        "fixture": { "$ref": "#/$defs/NonEmptyString" },
+        "conformanceTestId": { "$ref": "#/$defs/NonEmptyString" },
+        "locator": { "$ref": "#/$defs/NonEmptyString" },
+        "note": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "CapabilityDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "evidence"],
+      "properties": {
+        "status": { "$ref": "#/$defs/CapabilityStatus" },
+        "reason": { "$ref": "#/$defs/NullableString" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/CapabilityEvidence" }
+        }
+      }
+    },
+    "ProviderCapabilities": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 16,
+      "propertyNames": { "$ref": "#/$defs/CapabilityName" },
+      "additionalProperties": { "$ref": "#/$defs/CapabilityDeclaration" }
+    },
+    "ProviderManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion", "providerId", "displayName", "implementationVersion",
+        "parserDataVersion", "formatVersions", "capabilities", "resumeContract"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "displayName": { "$ref": "#/$defs/NonEmptyString" },
+        "implementationVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "parserDataVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "formatVersions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/NonEmptyString" }
+        },
+        "capabilities": { "$ref": "#/$defs/ProviderCapabilities" },
+        "resumeContract": { "oneOf": [{ "$ref": "#/$defs/ResumeContract" }, { "type": "null" }] }
+      }
+    },
+    "ProtocolHello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "schemaId", "providerId", "implementationVersion", "manifestFingerprint"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "schemaId": { "const": "https://swob.dev/schema/provider-protocol/v2" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "implementationVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "manifestFingerprint": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "SessionIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "physicalSourceId", "logicalSessionKey", "logicalSessionId",
+        "branchViewId", "parentBranchViewId"
+      ],
+      "properties": {
+        "physicalSourceId": { "$ref": "#/$defs/NonEmptyString" },
+        "logicalSessionKey": { "$ref": "#/$defs/NonEmptyString" },
+        "logicalSessionId": { "$ref": "#/$defs/NonEmptyString" },
+        "branchViewId": { "$ref": "#/$defs/NonEmptyString" },
+        "parentBranchViewId": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "ContextMembershipInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contextRevision", "state", "fromSequence", "untilSequence"],
+      "properties": {
+        "contextRevision": { "type": "integer", "minimum": 0 },
+        "state": { "enum": ["visible-to-model", "archived", "unknown"] },
+        "fromSequence": { "type": "integer", "minimum": 0 },
+        "untilSequence": { "$ref": "#/$defs/NullableInteger" }
+      }
+    },
+    "EventTimeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["archived", "modelContext"],
+      "properties": {
+        "archived": { "const": true },
+        "modelContext": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/ContextMembershipInterval" }
+        }
+      }
+    },
+    "EventProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providerId", "sourceRefId", "parserDataVersion", "formatVersion",
+        "observedAt", "sourceRecordId", "rawRecordFingerprint"
+      ],
+      "properties": {
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "sourceRefId": { "$ref": "#/$defs/NonEmptyString" },
+        "parserDataVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "formatVersion": { "$ref": "#/$defs/NullableString" },
+        "observedAt": { "$ref": "#/$defs/NullableString" },
+        "sourceRecordId": { "$ref": "#/$defs/NonEmptyString" },
+        "rawRecordFingerprint": {
+          "oneOf": [{ "$ref": "#/$defs/Fingerprint" }, { "type": "null" }]
+        }
+      }
+    },
+    "RawRecordReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locatorHash", "offset", "length"],
+      "properties": {
+        "locatorHash": { "$ref": "#/$defs/NonEmptyString" },
+        "offset": { "type": "integer", "minimum": 0 },
+        "length": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "InteractionState": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["state", "answered"],
+          "properties": { "state": { "const": "historical" }, "answered": { "type": "boolean" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["state", "channelId", "expiresAt"],
+          "properties": {
+            "state": { "const": "live-pending" },
+            "channelId": { "$ref": "#/$defs/NonEmptyString" },
+            "expiresAt": { "$ref": "#/$defs/NullableString" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["state"],
+          "properties": { "state": { "enum": ["expired", "cancelled"] } }
+        }
+      ]
+    },
+    "InteractionOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "description"],
+      "properties": {
+        "id": { "$ref": "#/$defs/NullableString" },
+        "label": { "$ref": "#/$defs/NonEmptyString" },
+        "description": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "InteractionRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "prompt", "options", "multiSelect", "state", "toolCallId", "rawInput"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/NonEmptyString" },
+        "prompt": { "type": "string", "maxLength": 262144 },
+        "options": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/InteractionOption" } },
+        "multiSelect": { "type": "boolean" },
+        "state": { "$ref": "#/$defs/InteractionState" },
+        "toolCallId": { "$ref": "#/$defs/NullableString" },
+        "rawInput": { "$ref": "#/$defs/JsonValue" }
+      }
+    },
+    "InteractionResponsePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "outcome", "answers", "toolCallId"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/NonEmptyString" },
+        "outcome": { "enum": ["answered", "cancelled", "expired"] },
+        "answers": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 262144 } },
+        "toolCallId": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "PermissionRequestPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "permission", "resource", "state", "toolCallId", "rawInput"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/NonEmptyString" },
+        "permission": { "$ref": "#/$defs/NonEmptyString" },
+        "resource": { "$ref": "#/$defs/JsonValue" },
+        "state": { "$ref": "#/$defs/InteractionState" },
+        "toolCallId": { "$ref": "#/$defs/NullableString" },
+        "rawInput": { "$ref": "#/$defs/JsonValue" }
+      }
+    },
+    "PermissionResponsePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "decision", "toolCallId"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/NonEmptyString" },
+        "decision": { "enum": ["allow", "deny", "cancelled", "expired"] },
+        "toolCallId": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "TextPayload": {
+      "type": "object", "additionalProperties": false, "required": ["text"],
+      "properties": { "text": { "type": "string", "maxLength": 262144 } }
+    },
+    "ReasoningPayload": {
+      "type": "object", "additionalProperties": false, "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "maxLength": 262144 },
+        "stream": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "RedactedThinkingPayload": {
+      "type": "object", "additionalProperties": false, "required": ["reason", "digest"],
+      "properties": {
+        "reason": { "$ref": "#/$defs/NullableString" },
+        "digest": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "ToolCallPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["callId", "rawName", "semanticToolId", "input"],
+      "properties": {
+        "callId": { "$ref": "#/$defs/NonEmptyString" },
+        "rawName": { "$ref": "#/$defs/NonEmptyString" },
+        "semanticToolId": { "$ref": "#/$defs/NonEmptyString" },
+        "input": { "$ref": "#/$defs/JsonValue" }
+      }
+    },
+    "ToolProgressPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["callId", "state", "output"],
+      "properties": {
+        "callId": { "$ref": "#/$defs/NonEmptyString" },
+        "state": { "enum": ["pending", "running", "streaming"] },
+        "output": { "$ref": "#/$defs/JsonValue" }
+      }
+    },
+    "ToolResultPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["callId", "output", "isError", "state"],
+      "properties": {
+        "callId": { "$ref": "#/$defs/NonEmptyString" },
+        "output": { "$ref": "#/$defs/JsonValue" },
+        "isError": { "oneOf": [{ "type": "boolean" }, { "type": "null" }] },
+        "state": { "enum": ["complete", "error", "cancelled", "orphan"] }
+      }
+    },
+    "ContextCompactionPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contextRevision", "archivedThroughSequence", "summaryEventId"],
+      "properties": {
+        "contextRevision": { "type": "integer", "minimum": 0 },
+        "archivedThroughSequence": { "type": "integer", "minimum": 0 },
+        "summaryEventId": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "ContextSummaryPayload": {
+      "type": "object", "additionalProperties": false, "required": ["text", "contextRevision"],
+      "properties": {
+        "text": { "type": "string", "maxLength": 262144 },
+        "contextRevision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ModelChangedPayload": {
+      "type": "object", "additionalProperties": false, "required": ["fromModelId", "toModelId"],
+      "properties": {
+        "fromModelId": { "$ref": "#/$defs/NullableString" },
+        "toModelId": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "ModeChangedPayload": {
+      "type": "object", "additionalProperties": false, "required": ["fromMode", "toMode"],
+      "properties": {
+        "fromMode": { "$ref": "#/$defs/NullableString" },
+        "toMode": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "SessionLifecyclePayload": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["phase"],
+          "properties": { "phase": { "$ref": "#/$defs/NonEmptyString" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["relationshipType", "fromSessionRecordId", "toSessionRecordId"],
+          "properties": {
+            "relationshipType": { "enum": ["parent-child", "continuation", "fork", "import-copy", "subagent", "related"] },
+            "fromSessionRecordId": { "$ref": "#/$defs/NonEmptyString" },
+            "toSessionRecordId": { "$ref": "#/$defs/NonEmptyString" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["relationshipType", "parentBranchViewId"],
+          "properties": {
+            "relationshipType": { "enum": ["parent-child", "continuation", "fork", "import-copy", "subagent", "related"] },
+            "parentBranchViewId": { "$ref": "#/$defs/NonEmptyString" }
+          }
+        }
+      ]
+    },
+    "SubagentSpawnPayload": {
+      "type": "object", "additionalProperties": false, "required": ["agentId", "parentAgentId"],
+      "properties": {
+        "agentId": { "$ref": "#/$defs/NonEmptyString" },
+        "parentAgentId": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "RollbackPayload": {
+      "type": "object", "additionalProperties": false, "required": ["toEventId", "reason"],
+      "properties": {
+        "toEventId": { "$ref": "#/$defs/NonEmptyString" },
+        "reason": { "$ref": "#/$defs/NonEmptyString" }
+      }
+    },
+    "ArtifactPayload": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["uri", "mimeType"],
+          "properties": {
+            "uri": { "$ref": "#/$defs/NonEmptyString" },
+            "mimeType": { "$ref": "#/$defs/NullableString" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["uri", "action", "exists", "fingerprint"],
+          "properties": {
+            "uri": { "$ref": "#/$defs/NonEmptyString" },
+            "action": { "enum": ["read", "write", "edit", "create", "delete", "reference"] },
+            "exists": { "oneOf": [{ "type": "boolean" }, { "type": "null" }] },
+            "fingerprint": { "oneOf": [{ "$ref": "#/$defs/Fingerprint" }, { "type": "null" }] }
+          }
+        }
+      ]
+    },
+    "UsageInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "uncached", "cacheRead", "cacheWrite5m", "cacheWrite1h"],
+      "properties": {
+        "total": { "$ref": "#/$defs/NullableInteger" },
+        "uncached": { "$ref": "#/$defs/NullableInteger" },
+        "cacheRead": { "$ref": "#/$defs/NullableInteger" },
+        "cacheWrite5m": { "$ref": "#/$defs/NullableInteger" },
+        "cacheWrite1h": { "$ref": "#/$defs/NullableInteger" }
+      }
+    },
+    "UsageOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "visible", "reasoning"],
+      "properties": {
+        "total": { "$ref": "#/$defs/NullableInteger" },
+        "visible": { "$ref": "#/$defs/NullableInteger" },
+        "reasoning": { "$ref": "#/$defs/NullableInteger" }
+      }
+    },
+    "UsageRelations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cacheRead", "cacheWrite", "reasoning"],
+      "properties": {
+        "cacheRead": { "enum": ["subset-of-input", "independent", "provider-defined"] },
+        "cacheWrite": { "enum": ["subset-of-input", "independent", "provider-defined"] },
+        "reasoning": { "enum": ["subset-of-output", "independent", "provider-defined"] }
+      }
+    },
+    "UsageMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "confidence", "sourceField"],
+      "properties": {
+        "source": { "enum": ["reported", "derived", "estimated", "unavailable"] },
+        "confidence": { "enum": ["exact", "high", "medium", "low", "unavailable"] },
+        "sourceField": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "UsageCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency", "kind"],
+      "properties": {
+        "amount": { "type": "number", "minimum": 0 },
+        "currency": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "enum": ["reported", "derived"] }
+      }
+    },
+    "UsageRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventId", "turnId", "modelId", "input", "output", "providerTotal",
+        "aggregation", "relations", "dedupKey", "billingFactKey", "measurement",
+        "cost", "priceRevision"
+      ],
+      "properties": {
+        "eventId": { "$ref": "#/$defs/NullableString" },
+        "turnId": { "$ref": "#/$defs/NullableString" },
+        "modelId": { "$ref": "#/$defs/NullableString" },
+        "input": { "$ref": "#/$defs/UsageInput" },
+        "output": { "$ref": "#/$defs/UsageOutput" },
+        "providerTotal": { "$ref": "#/$defs/NullableInteger" },
+        "aggregation": { "enum": ["per-message", "per-turn", "delta", "cumulative"] },
+        "relations": { "$ref": "#/$defs/UsageRelations" },
+        "dedupKey": { "$ref": "#/$defs/NonEmptyString" },
+        "billingFactKey": { "$ref": "#/$defs/NonEmptyString" },
+        "measurement": { "$ref": "#/$defs/UsageMeasurement" },
+        "cost": { "oneOf": [{ "$ref": "#/$defs/UsageCost" }, { "type": "null" }] },
+        "priceRevision": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "UnknownPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rawType", "rawPayload"],
+      "properties": {
+        "rawType": { "$ref": "#/$defs/NonEmptyString" },
+        "rawPayload": { "$ref": "#/$defs/JsonValue" }
+      }
+    },
+    "CanonicalEventKind": {
+      "enum": [
+        "message.text", "message.thinking", "message.redacted-thinking", "message.reasoning",
+        "tool.call", "tool.progress", "tool.result", "interaction.request", "interaction.response",
+        "permission.request", "permission.response", "context.compaction", "context.summary",
+        "model.changed", "mode.changed", "session.lifecycle", "subagent.spawn", "rollback",
+        "usage", "artifact", "unknown"
+      ]
+    },
+    "CanonicalEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "identity", "sharedEventKey", "messageId", "sequence", "messageBlockIndex",
+        "timestamp", "actor", "kind", "payload", "visibility", "classification", "timeline",
+        "provenance", "rawRef"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/NonEmptyString" },
+        "identity": { "$ref": "#/$defs/SessionIdentity" },
+        "sharedEventKey": { "$ref": "#/$defs/NonEmptyString" },
+        "messageId": { "$ref": "#/$defs/NullableString" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "messageBlockIndex": { "$ref": "#/$defs/NullableInteger" },
+        "timestamp": { "$ref": "#/$defs/NullableString" },
+        "actor": { "enum": ["user", "assistant", "system", "tool", "subagent", "unknown"] },
+        "kind": { "$ref": "#/$defs/CanonicalEventKind" },
+        "payload": { "$ref": "#/$defs/JsonValue" },
+        "visibility": { "enum": ["primary", "collapsed", "hidden-noise"] },
+        "classification": { "enum": ["noise", "promoted-system", "lifecycle", "interaction", "user-content", "unknown"] },
+        "timeline": { "$ref": "#/$defs/EventTimeline" },
+        "provenance": { "$ref": "#/$defs/EventProvenance" },
+        "rawRef": { "oneOf": [{ "$ref": "#/$defs/RawRecordReference" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "enum": ["message.text", "message.thinking"] } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/TextPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "message.reasoning" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ReasoningPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "message.redacted-thinking" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/RedactedThinkingPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "tool.call" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ToolCallPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "tool.progress" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ToolProgressPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "tool.result" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ToolResultPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "usage" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/UsageRecord" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "interaction.request" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/InteractionRequestPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "interaction.response" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/InteractionResponsePayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "permission.request" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/PermissionRequestPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "permission.response" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/PermissionResponsePayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "unknown" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/UnknownPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "context.compaction" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ContextCompactionPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "context.summary" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ContextSummaryPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "model.changed" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ModelChangedPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "mode.changed" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ModeChangedPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "session.lifecycle" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/SessionLifecyclePayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "subagent.spawn" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/SubagentSpawnPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "rollback" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/RollbackPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "artifact" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/ArtifactPayload" } } }
+        }
+      ]
+    },
+    "Diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "code", "message", "eventId"],
+      "properties": {
+        "level": { "enum": ["info", "warning", "error"] },
+        "code": { "$ref": "#/$defs/NonEmptyString" },
+        "message": { "$ref": "#/$defs/NonEmptyString" },
+        "eventId": { "$ref": "#/$defs/NullableString" }
+      }
+    },
+    "ParseChunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providerId", "parserDataVersion", "formatVersion", "fingerprint", "identity",
+        "mode", "chunkIndex", "previousCursor", "cursor", "done", "events", "diagnostics"
+      ],
+      "properties": {
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "parserDataVersion": { "$ref": "#/$defs/NonEmptyString" },
+        "formatVersion": { "$ref": "#/$defs/NullableString" },
+        "fingerprint": { "$ref": "#/$defs/Fingerprint" },
+        "identity": { "$ref": "#/$defs/SessionIdentity" },
+        "mode": { "enum": ["initial", "append", "replace"] },
+        "chunkIndex": { "type": "integer", "minimum": 0 },
+        "previousCursor": { "$ref": "#/$defs/NullableString" },
+        "cursor": { "$ref": "#/$defs/NullableString" },
+        "done": { "type": "boolean" },
+        "events": {
+          "type": "array",
+          "maxItems": 2048,
+          "items": { "$ref": "#/$defs/CanonicalEvent" }
+        },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 2048,
+          "items": { "$ref": "#/$defs/Diagnostic" }
+        }
+      }
+    },
+    "ProviderError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "providerId", "details"],
+      "properties": {
+        "code": { "$ref": "#/$defs/NonEmptyString" },
+        "message": { "$ref": "#/$defs/NonEmptyString" },
+        "retryable": { "type": "boolean" },
+        "providerId": { "$ref": "#/$defs/ProviderId" },
+        "details": { "oneOf": [{ "$ref": "#/$defs/JsonObject" }, { "type": "null" }] }
+      }
+    },
+    "ResumeContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode", "supportedSurfaces", "supportsSubagent", "idTransform", "preflight",
+        "commandTemplate", "expectedSideEffects", "postcondition"
+      ],
+      "properties": {
+        "mode": { "enum": ["native-cli", "deep-link", "import", "fork-primer"] },
+        "supportedSurfaces": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/NonEmptyString" } },
+        "supportsSubagent": { "type": "boolean" },
+        "idTransform": { "$ref": "#/$defs/NullableString" },
+        "preflight": {
+          "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+          "items": { "enum": ["binary", "version", "help-capability", "source-exists"] }
+        },
+        "commandTemplate": { "$ref": "#/$defs/NullableString" },
+        "expectedSideEffects": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/NonEmptyString" } },
+        "postcondition": { "enum": ["anchor-match", "source-id-match", "unverifiable"] }
+      }
+    },
+    "HelloEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "hello" },
+        "payload": { "$ref": "#/$defs/ProtocolHello" }
+      }
+    },
+    "ManifestEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "manifest" },
+        "payload": { "$ref": "#/$defs/ProviderManifest" }
+      }
+    },
+    "ParseChunkEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "parse-chunk" },
+        "payload": { "$ref": "#/$defs/ParseChunk" }
+      }
+    },
+    "ErrorEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["protocolVersion", "messageId", "kind", "payload"],
+      "properties": {
+        "protocolVersion": { "$ref": "#/$defs/ProtocolVersion" },
+        "messageId": { "$ref": "#/$defs/NonEmptyString" },
+        "kind": { "const": "error" },
+        "payload": { "$ref": "#/$defs/ProviderError" }
+      }
+    },
+    "ProviderEnvelope": {
+      "oneOf": [
+        { "$ref": "#/$defs/HelloEnvelope" },
+        { "$ref": "#/$defs/ManifestEnvelope" },
+        { "$ref": "#/$defs/ParseChunkEnvelope" },
+        { "$ref": "#/$defs/ErrorEnvelope" }
+      ]
+    },
+    "ProviderConformanceSample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "envelopes"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/ProviderManifest" },
+        "envelopes": { "type": "array", "minItems": 3, "maxItems": 256, "items": { "$ref": "#/$defs/ProviderEnvelope" } }
+      }
+    }
+  }
+}

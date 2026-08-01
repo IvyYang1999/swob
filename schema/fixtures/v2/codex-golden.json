@@ -1,0 +1,80 @@
+{
+  "manifest": {
+    "schemaVersion": 2,
+    "providerId": "swob/codex",
+    "displayName": "Codex synthetic golden",
+    "implementationVersion": "fixture-v2",
+    "parserDataVersion": "2",
+    "formatVersions": ["codex-rollout-v1"],
+    "capabilities": {
+      "transcript": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-DUAL-STREAM" }] },
+      "tools": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-TOOLS" }] },
+      "thinking": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-REASONING" }] },
+      "usage": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-CUMULATIVE-DELTA" }] },
+      "relationships": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-ROLLBACK" }] },
+      "subagents": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-MULTI-AGENT" }] },
+      "identity": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-IDENTITY" }] },
+      "chunked-transport": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CHUNK" }] }
+    },
+    "resumeContract": { "mode": "native-cli", "supportedSurfaces": ["terminal", "app"], "supportsSubagent": false, "idTransform": null, "preflight": ["binary", "version", "help-capability", "source-exists"], "commandTemplate": "codex resume {sessionId}", "expectedSideEffects": ["observe-source-after-launch"], "postcondition": "anchor-match" }
+  },
+  "envelopes": [
+    {
+      "protocolVersion": "2.0",
+      "messageId": "codex-hello",
+      "kind": "hello",
+      "payload": { "protocolVersion": "2.0", "schemaId": "https://swob.dev/schema/provider-protocol/v2", "providerId": "swob/codex", "implementationVersion": "fixture-v2", "manifestFingerprint": "1f4434e1e3e8801c2776e3955fd7e281df1c68dd94715f411db0d4fa47ae6f92" }
+    },
+    {
+      "protocolVersion": "2.0",
+      "messageId": "codex-manifest",
+      "kind": "manifest",
+      "payload": {
+        "schemaVersion": 2,
+        "providerId": "swob/codex",
+        "displayName": "Codex synthetic golden",
+        "implementationVersion": "fixture-v2",
+        "parserDataVersion": "2",
+        "formatVersions": ["codex-rollout-v1"],
+        "capabilities": {
+          "transcript": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-DUAL-STREAM" }] },
+          "tools": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-TOOLS" }] },
+          "thinking": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-REASONING" }] },
+          "usage": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-CUMULATIVE-DELTA" }] },
+          "relationships": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-ROLLBACK" }] },
+          "subagents": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CODEX-MULTI-AGENT" }] },
+          "identity": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-IDENTITY" }] },
+          "chunked-transport": { "status": "available", "reason": null, "evidence": [{ "kind": "test", "fixture": "schema/fixtures/v2/codex-golden.json", "conformanceTestId": "PPV2-CHUNK" }] }
+        },
+        "resumeContract": { "mode": "native-cli", "supportedSurfaces": ["terminal", "app"], "supportsSubagent": false, "idTransform": null, "preflight": ["binary", "version", "help-capability", "source-exists"], "commandTemplate": "codex resume {sessionId}", "expectedSideEffects": ["observe-source-after-launch"], "postcondition": "anchor-match" }
+      }
+    },
+    {
+      "protocolVersion": "2.0",
+      "messageId": "codex-chunk-0",
+      "kind": "parse-chunk",
+      "payload": {
+        "providerId": "swob/codex",
+        "parserDataVersion": "2",
+        "formatVersion": "codex-rollout-v1",
+        "fingerprint": { "algorithm": "sha256", "value": "codex-synthetic-source" },
+        "identity": { "physicalSourceId": "codex:fixture", "logicalSessionKey": "v1\u0000swob/codex\u0000named\u0000fixture\u0000codex-session", "logicalSessionId": "codex-session", "branchViewId": "codex:branch:main", "parentBranchViewId": null },
+        "mode": "initial",
+        "chunkIndex": 0,
+        "previousCursor": null,
+        "cursor": null,
+        "done": true,
+        "events": [
+          { "id": "codex:e0", "identity": { "physicalSourceId": "codex:fixture", "logicalSessionKey": "v1\u0000swob/codex\u0000named\u0000fixture\u0000codex-session", "logicalSessionId": "codex-session", "branchViewId": "codex:branch:main", "parentBranchViewId": null }, "sharedEventKey": "codex:shared:response-item:0", "messageId": "codex:m0", "sequence": 0, "messageBlockIndex": 0, "timestamp": null, "actor": "user", "kind": "message.text", "payload": { "text": "Synthetic Codex task" }, "visibility": "primary", "classification": "user-content", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 0, "state": "visible-to-model", "fromSequence": 0, "untilSequence": null }] }, "provenance": { "providerId": "swob/codex", "sourceRefId": "codex:fixture", "parserDataVersion": "2", "formatVersion": "codex-rollout-v1", "observedAt": null, "sourceRecordId": "response_item:0", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "codex:e1", "identity": { "physicalSourceId": "codex:fixture", "logicalSessionKey": "v1\u0000swob/codex\u0000named\u0000fixture\u0000codex-session", "logicalSessionId": "codex-session", "branchViewId": "codex:branch:main", "parentBranchViewId": null }, "sharedEventKey": "codex:shared:event-msg:1", "messageId": "codex:m1", "sequence": 1, "messageBlockIndex": 0, "timestamp": null, "actor": "assistant", "kind": "message.reasoning", "payload": { "text": "Synthetic reasoning summary", "stream": "event_msg" }, "visibility": "collapsed", "classification": "user-content", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 0, "state": "visible-to-model", "fromSequence": 1, "untilSequence": null }] }, "provenance": { "providerId": "swob/codex", "sourceRefId": "codex:fixture", "parserDataVersion": "2", "formatVersion": "codex-rollout-v1", "observedAt": null, "sourceRecordId": "event_msg:1", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "codex:e2", "identity": { "physicalSourceId": "codex:fixture", "logicalSessionKey": "v1\u0000swob/codex\u0000named\u0000fixture\u0000codex-session", "logicalSessionId": "codex-session", "branchViewId": "codex:branch:main", "parentBranchViewId": null }, "sharedEventKey": "codex:shared:response-item:2", "messageId": "codex:m1", "sequence": 2, "messageBlockIndex": 1, "timestamp": null, "actor": "assistant", "kind": "tool.call", "payload": { "callId": "codex:call:1", "rawName": "exec_command", "semanticToolId": "shell.execute", "input": { "cmd": "printf synthetic" } }, "visibility": "primary", "classification": "user-content", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 0, "state": "visible-to-model", "fromSequence": 2, "untilSequence": null }] }, "provenance": { "providerId": "swob/codex", "sourceRefId": "codex:fixture", "parserDataVersion": "2", "formatVersion": "codex-rollout-v1", "observedAt": null, "sourceRecordId": "response_item:2", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "codex:e3", "identity": { "physicalSourceId": "codex:fixture", "logicalSessionKey": "v1\u0000swob/codex\u0000named\u0000fixture\u0000codex-session", "logicalSessionId": "codex-session", "branchViewId": "codex:branch:main", "parentBranchViewId": null }, "sharedEventKey": "codex:shared:agent:child", "messageId": null, "sequence": 3, "messageBlockIndex": null, "timestamp": null, "actor": "subagent", "kind": "subagent.spawn", "payload": { "agentId": "synthetic-child", "parentAgentId": "synthetic-root" }, "visibility": "collapsed", "classification": "lifecycle", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 0, "state": "unknown", "fromSequence": 3, "untilSequence": null }] }, "provenance": { "providerId": "swob/codex", "sourceRefId": "codex:fixture", "parserDataVersion": "2", "formatVersion": "codex-rollout-v1", "observedAt": null, "sourceRecordId": "event_msg:agent", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "codex:e4", "identity": { "physicalSourceId": "codex:fixture", "logicalSessionKey": "v1\u0000swob/codex\u0000named\u0000fixture\u0000codex-session", "logicalSessionId": "codex-session", "branchViewId": "codex:branch:main", "parentBranchViewId": null }, "sharedEventKey": "codex:shared:rollback:1", "messageId": null, "sequence": 4, "messageBlockIndex": null, "timestamp": null, "actor": "system", "kind": "rollback", "payload": { "toEventId": "codex:e0", "reason": "synthetic-test" }, "visibility": "collapsed", "classification": "lifecycle", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 1, "state": "visible-to-model", "fromSequence": 4, "untilSequence": null }] }, "provenance": { "providerId": "swob/codex", "sourceRefId": "codex:fixture", "parserDataVersion": "2", "formatVersion": "codex-rollout-v1", "observedAt": null, "sourceRecordId": "event_msg:rollback", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "codex:e5", "identity": { "physicalSourceId": "codex:fixture", "logicalSessionKey": "v1\u0000swob/codex\u0000named\u0000fixture\u0000codex-session", "logicalSessionId": "codex-session", "branchViewId": "codex:branch:main", "parentBranchViewId": null }, "sharedEventKey": "codex:shared:usage:1", "messageId": "codex:m1", "sequence": 5, "messageBlockIndex": null, "timestamp": null, "actor": "assistant", "kind": "usage", "payload": { "eventId": "codex:e5", "turnId": null, "modelId": "synthetic-codex", "input": { "total": 100, "uncached": 80, "cacheRead": 20, "cacheWrite5m": 0, "cacheWrite1h": 0 }, "output": { "total": 30, "visible": 20, "reasoning": 10 }, "providerTotal": 130, "aggregation": "cumulative", "relations": { "cacheRead": "subset-of-input", "cacheWrite": "subset-of-input", "reasoning": "subset-of-output" }, "dedupKey": "codex:usage:snapshot:1", "billingFactKey": "codex:billing:snapshot:1", "measurement": { "source": "reported", "confidence": "exact", "sourceField": "last_token_usage" }, "cost": null, "priceRevision": null }, "visibility": "collapsed", "classification": "lifecycle", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 1, "state": "unknown", "fromSequence": 5, "untilSequence": null }] }, "provenance": { "providerId": "swob/codex", "sourceRefId": "codex:fixture", "parserDataVersion": "2", "formatVersion": "codex-rollout-v1", "observedAt": null, "sourceRecordId": "event_msg:usage:1", "rawRecordFingerprint": null }, "rawRef": null },
+          { "id": "codex:e6", "identity": { "physicalSourceId": "codex:fixture", "logicalSessionKey": "v1\u0000swob/codex\u0000named\u0000fixture\u0000codex-session", "logicalSessionId": "codex-session", "branchViewId": "codex:branch:main", "parentBranchViewId": null }, "sharedEventKey": "codex:shared:usage:2", "messageId": "codex:m2", "sequence": 6, "messageBlockIndex": null, "timestamp": null, "actor": "assistant", "kind": "usage", "payload": { "eventId": "codex:e6", "turnId": null, "modelId": "synthetic-codex", "input": { "total": 150, "uncached": 120, "cacheRead": 30, "cacheWrite5m": 0, "cacheWrite1h": 0 }, "output": { "total": 40, "visible": 28, "reasoning": 12 }, "providerTotal": 190, "aggregation": "cumulative", "relations": { "cacheRead": "subset-of-input", "cacheWrite": "subset-of-input", "reasoning": "subset-of-output" }, "dedupKey": "codex:usage:snapshot:2", "billingFactKey": "codex:billing:snapshot:2", "measurement": { "source": "reported", "confidence": "exact", "sourceField": "last_token_usage" }, "cost": null, "priceRevision": null }, "visibility": "collapsed", "classification": "lifecycle", "timeline": { "archived": true, "modelContext": [{ "contextRevision": 1, "state": "unknown", "fromSequence": 6, "untilSequence": null }] }, "provenance": { "providerId": "swob/codex", "sourceRefId": "codex:fixture", "parserDataVersion": "2", "formatVersion": "codex-rollout-v1", "observedAt": null, "sourceRecordId": "event_msg:usage:2", "rawRecordFingerprint": null }, "rawRef": null }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}

@@ -112,6 +112,7 @@ describe('canonical provider runtime full chain', () => {
 
     const first = await refreshCanonicalProviders({ host, store, archive: true })
     expect(first.reports[0].errors).toHaveLength(0)
+    expect(first.reports[0].v2Chunks.length).toBeGreaterThan(0)
     expect(first.changedSessionRecordIds).toHaveLength(1)
     expect(store.listSessions('swob/pi')).toHaveLength(1)
     expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
@@ -126,6 +127,11 @@ describe('canonical provider runtime full chain', () => {
     expect(fs.existsSync(provenancePath)).toBe(true)
     expect(fs.existsSync(path.join(packageDir, 'backup.jsonl'))).toBe(false)
     const stored = store.getSession(first.changedSessionRecordIds[0])!
+    const v2Identity = first.reports[0].v2Chunks[0].identity
+    expect(store.getV2Session(v2Identity.logicalSessionKey, v2Identity.branchViewId)).toMatchObject({
+      complete: true,
+      eventCount: first.reports[0].v2Chunks.flatMap((chunk) => chunk.events).length
+    })
     const canonicalSummary = (await import('./canonical-projection')).canonicalRecordsToSessionSummary(
       stored.records,
       { filePath: stored.sessionRecord.sourceRef.displayLocator, source: 'pi' }
@@ -180,6 +186,9 @@ describe('canonical provider runtime full chain', () => {
     expect(removed.tombstonedSessionRecordIds).toEqual(first.changedSessionRecordIds)
     expect(store.listSessions('swob/pi')).toHaveLength(0)
     expect(store.listSessions('swob/pi', { includeTombstoned: true })).toHaveLength(1)
+    expect(store.getV2Session(v2Identity.logicalSessionKey, v2Identity.branchViewId)).toMatchObject({
+      tombstoneReason: 'source-missing'
+    })
     expect(searchFTS('replacement-search-needle')).toHaveLength(0)
     expect(fs.existsSync(recordsPath)).toBe(true)
     const tombstonedMeta = JSON.parse(fs.readFileSync(path.join(packageDir, '.swob-session.json'), 'utf8'))

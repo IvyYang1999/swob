@@ -113,6 +113,46 @@ describe('CanonicalSessionStore', () => {
     recovered.close()
   })
 
+  it('migrates an existing v1 database by adding v2 event tables without rewriting v1 records', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-canonical-v1-to-v2-'))
+    temporaryRoots.push(root)
+    const databasePath = path.join(root, 'canonical.db')
+    const legacy = new Database(databasePath)
+    legacy.exec(`
+      CREATE TABLE canonical_schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      INSERT INTO canonical_schema_migrations VALUES (1, '2026-07-23T00:00:00.000Z');
+      CREATE TABLE canonical_sources(
+        provider_id TEXT, source_ref_id TEXT, source_ref_json TEXT, fingerprint_json TEXT,
+        last_seen_at TEXT, tombstoned_at TEXT
+      );
+      CREATE TABLE canonical_sessions(
+        session_record_id TEXT, provider_id TEXT, source_ref_id TEXT, source_session_id TEXT,
+        project_path TEXT, created_at TEXT, updated_at TEXT, fingerprint_json TEXT,
+        session_json TEXT, tombstoned_at TEXT, tombstone_reason TEXT
+      );
+      CREATE TABLE canonical_records(
+        record_id TEXT, session_record_id TEXT, record_type TEXT, ordinal INTEGER, record_json TEXT
+      );
+      PRAGMA user_version = 1;
+    `)
+    legacy.close()
+
+    const migrated = new CanonicalSessionStore(databasePath)
+    expect(migrated.schemaVersion()).toBe(2)
+    const inspection = new Database(databasePath, { readonly: true })
+    expect(inspection.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN ('canonical_sessions', 'canonical_v2_sessions', 'canonical_v2_events')
+      ORDER BY name
+    `).all()).toEqual([
+      { name: 'canonical_sessions' },
+      { name: 'canonical_v2_events' },
+      { name: 'canonical_v2_sessions' }
+    ])
+    inspection.close()
+    migrated.close()
+  })
+
   it('persists versioned canonical records and atomically replaces a session', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-canonical-store-'))
     temporaryRoots.push(root)

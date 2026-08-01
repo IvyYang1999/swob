@@ -1,0 +1,36 @@
+{
+  "contractVersion": "2.0.0",
+  "wireProtocolVersion": "2.0",
+  "schemaId": "https://swob.dev/schema/provider-protocol/v2",
+  "validationOrder": [
+    "envelope-bytes",
+    "json-decode",
+    "iterative-value-budget",
+    "draft-2020-schema",
+    "stream-invariants"
+  ],
+  "resourceLimits": {
+    "maxEnvelopeBytes": 1048576,
+    "maxJsonDepth": 64,
+    "maxNodes": 250000,
+    "maxStringCodeUnits": 262144,
+    "maxArrayItems": 4096,
+    "maxObjectProperties": 256,
+    "maxEventsPerChunk": 2048
+  },
+  "schemaLimitBindings": {
+    "maxStringCodeUnits": [
+      "/$defs/NonEmptyString/maxLength",
+      "/$defs/JsonPrimitive/oneOf/0/maxLength"
+    ],
+    "maxArrayItems": [
+      "/$defs/JsonArray/maxItems"
+    ],
+    "maxObjectProperties": [
+      "/$defs/JsonObject/maxProperties"
+    ],
+    "maxEventsPerChunk": [
+      "/$defs/ParseChunk/properties/events/maxItems"
+    ]
+  }
+}

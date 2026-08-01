@@ -3,7 +3,9 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { validateProviderEnvelope } from '../../shared/provider-protocol'
+import { ProviderChunkAssembler, validateParseChunkV2 } from '../../shared/provider-protocol-v2'
 import { PROVIDER_PROTOCOL_VERSION } from '../../shared/provider-schema.generated'
+import { migrateProviderV1OutcomeToV2Chunks } from '../provider-v1-migration'
 import { createPiProvider } from './pi-provider'
 
 const temporaryRoots: string[] = []
@@ -105,6 +107,30 @@ describe('Pi builtin provider', () => {
 
     expect(outcome).toMatchObject({ status: 'complete', formatVersion: 'pi-jsonl-v1' })
     expect(outcome.sessions[0].records.some((record) => record.recordType === 'usage')).toBe(true)
+
+    const chunks = migrateProviderV1OutcomeToV2Chunks(outcome, 2)
+    const assembler = new ProviderChunkAssembler()
+    for (const chunk of chunks) {
+      expect(validateParseChunkV2(chunk).ok).toBe(true)
+      assembler.accept(chunk)
+    }
+    expect(assembler.completedSessions()).toBe(1)
+    const migrated = chunks.flatMap((chunk) => chunk.events)
+    expect(migrated.map((event) => event.sequence)).toEqual(migrated.map((_, index) => index))
+    expect(migrated).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'message.thinking' }),
+      expect.objectContaining({ kind: 'tool.call' }),
+      expect.objectContaining({ kind: 'usage' })
+    ]))
+    expect(migrated.find((event) => event.kind === 'usage')?.payload).toMatchObject({
+      aggregation: 'per-message',
+      relations: {
+        cacheRead: 'subset-of-input',
+        cacheWrite: 'subset-of-input',
+        reasoning: 'subset-of-output'
+      },
+      measurement: { source: 'reported', confidence: 'exact' }
+    })
   })
 
   it('keeps stable source identity when the same session file moves', async () => {

@@ -10,6 +10,7 @@ import {
   ProviderHost,
   type BuiltinProviderRuntime
 } from './provider-host'
+import { PROVIDER_RESOURCE_LIMITS as PROVIDER_V2_LIMITS } from '../shared/provider-schema-v2.generated'
 
 const pendingFingerprint: Fingerprint = { algorithm: 'sha256', value: 'pending' }
 const parsedFingerprint: Fingerprint = { algorithm: 'sha256', value: 'parsed' }
@@ -201,6 +202,14 @@ describe('ProviderHost isolation and resource boundaries', () => {
     }))[0]
     expect(partialReport.errors).toHaveLength(0)
     expect(partialReport.outcomes).toMatchObject([{ status: 'partial' }])
+    expect(partialReport.v2Manifest).toMatchObject({ schemaVersion: 2, providerId: 'swob/pi' })
+    expect(partialReport.v2Envelopes.map((entry) => entry.kind)).toEqual([
+      'hello', 'manifest', 'parse-chunk'
+    ])
+    expect(partialReport.v2Envelopes.every((entry) =>
+      Buffer.byteLength(JSON.stringify(entry), 'utf8') <= PROVIDER_V2_LIMITS.maxEnvelopeBytes)).toBe(true)
+    expect(Object.values(partialReport.v2Manifest!.capabilities).every((declaration) =>
+      declaration.evidence.every((entry) => entry.fixture && entry.conformanceTestId))).toBe(true)
   })
 
   it('keeps the last valid snapshot when discovery sees the stable id with invalid metadata', async () => {
@@ -224,5 +233,31 @@ describe('ProviderHost isolation and resource boundaries', () => {
 
     expect(report.errors).toMatchObject([{ code: 'schema-validation-failed' }])
     expect(report.outcomes).toHaveLength(0)
+  })
+
+  it('forces a same-fingerprint reparse when the v2 projection needs crash repair', async () => {
+    const providerManifest = manifest('pi')
+    const providerSource = source(providerManifest.providerId, 'repair')
+    let parseCalls = 0
+    const repairing = runtime('pi', {
+      discover: async () => [providerSource],
+      fingerprint: async () => parsedFingerprint,
+      parse: async () => {
+        parseCalls++
+        return noData(providerManifest.providerId, providerManifest.parserDataVersion, providerSource.stableId)
+      }
+    })
+    const report = (await new ProviderHost({ runtimes: [repairing] }).runAll({
+      previousSources: new Map([[providerManifest.providerId, [{
+        sourceRef: { ...providerSource, fingerprint: parsedFingerprint } as SourceRef,
+        fingerprint: parsedFingerprint,
+        sessionRecordIds: ['v1-only-session'],
+        forceReparse: true
+      }]]])
+    }))[0]
+
+    expect(parseCalls).toBe(1)
+    expect(report.unchangedSources).toHaveLength(0)
+    expect(report.outcomes).toHaveLength(1)
   })
 })

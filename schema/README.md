@@ -1,6 +1,41 @@
-# ProviderProtocol v1
+# ProviderProtocol v1 and v2
 
-`provider-protocol-v1.schema.json` is the only language-neutral type truth for
+Provider Protocol v2 is the canonical ordered fact stream. Its language-neutral
+truth is `provider-protocol-v2.schema.json`; validation order and per-chunk
+budgets live in `provider-protocol-v2.conformance.json`. Generated TypeScript is
+`src/shared/provider-schema-v2.generated.ts`.
+
+v2 deliberately separates five identities that v1 could conflate:
+
+- `physicalSourceId`: the observed file/row/container;
+- `logicalSessionKey`: the t130 Library identity;
+- `branchViewId`: one view through a logical session tree;
+- `sharedEventKey`: the same event visible from multiple branch views;
+- `billingFactKey`: one chargeable fact, independent of event duplication.
+
+`CanonicalEvent.sequence + messageBlockIndex` preserves text/thinking/tool
+ordering. Every event remains in the archive timeline; `timeline.modelContext`
+records when it was model-visible, archived, or unknown. Unknown upstream facts
+use the typed `unknown` event rather than disappearing.
+
+Usage v2 stores aggregation mode, total/subset relations, measurement source and
+confidence, de-duplication/billing keys, provider cost and price revision before
+any sum is calculated. Tool handling is a three-layer registry: provider alias,
+semantic tool, then presentation. Interaction/permission events carry historical
+or live-pending state explicitly.
+
+Transport uses ordered `parse-chunk` envelopes. Each envelope keeps the 1 MiB
+untrusted-input safety budget, but a session has no envelope-count or total-event
+limit. Cursor, chunk index and event sequence are checked before storage.
+
+Provider v1 remains a compatibility input. The current Pi runtime still emits a
+strict v1 `ParseOutcome`; `ProviderHost` validates it, migrates manifest and
+records to validated v2 envelopes, then the canonical store dual-writes v1 and
+v2. This is a boundary migration, not an in-place reinterpretation of v1.
+
+## ProviderProtocol v1 compatibility
+
+`provider-protocol-v1.schema.json` remains the language-neutral type truth for
 the provider wire envelope and canonical conversation graph.
 `provider-protocol-v1.conformance.json` is the matching machine-readable truth
 for validation order, resource limits and non-wire schema migrations. The
@@ -14,9 +49,9 @@ npm run schema:gen
 npm run schema:check
 ```
 
-The generated file is `src/shared/provider-schema.generated.ts`. Do not edit it
-by hand. CI runs `schema:check` through `npm run check` so schema/type drift
-fails closed.
+The generated files are `src/shared/provider-schema.generated.ts` and
+`src/shared/provider-schema-v2.generated.ts`. Do not edit them by hand. CI runs
+`schema:check` through `npm run check` so schema/type drift fails closed.
 
 ## Ownership boundary
 

@@ -33,7 +33,14 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
   const store = options.store || getCanonicalSessionStore()
   const previousSources = new Map(host.manifests().map((manifest) => [
     manifest.providerId,
-    store.sourceStates(manifest.providerId)
+    store.sourceStates(manifest.providerId).map((state) => ({
+      ...state,
+      forceReparse: !store.hasCompleteV2Source(
+        manifest.providerId,
+        state.sourceRef.stableId,
+        state.sessionRecordIds.length
+      )
+    }))
   ]))
   const reports = await host.runAll({ previousSources })
   const changedSessionRecordIds: string[] = []
@@ -72,6 +79,12 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
       }
       for (const tombstone of outcome.tombstones) {
         tombstonedSessionRecordIds.push(tombstone.sessionRecordId)
+        store.tombstoneV2Source(
+          outcome.providerId,
+          tombstone.sourceRefId,
+          tombstone.deletedAt,
+          tombstone.reason
+        )
         await tombstoneCanonicalSession(tombstone.sessionRecordId)
         const { markCanonicalPackageTombstone } = await import('./library-manager')
         await markCanonicalPackageTombstone(
@@ -82,6 +95,7 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
         ).catch(() => null)
       }
     }
+    for (const chunk of report.v2Chunks) store.applyParseChunkV2(chunk)
   }
   return {
     reports,

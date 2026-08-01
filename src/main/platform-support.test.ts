@@ -23,7 +23,7 @@ describe('Windows Native Alpha capabilities', () => {
     const capabilities = getPlatformCapabilities('darwin')
     expect(capabilities.undiscoverableSources).toEqual([])
     expect(capabilities.supportedSources).toEqual(capabilities.discoverableSources)
-    expect(capabilities.providers).toHaveLength(12)
+    expect(capabilities.providers).toHaveLength(13)
     expect(capabilities.providers.find((provider) => provider.sourceId === 'hermes')).toMatchObject({
       tier: 'native',
       discoverableOnPlatform: true,

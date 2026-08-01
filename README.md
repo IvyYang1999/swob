@@ -8,7 +8,7 @@
 
 **Recover lost context. Trace forks and compactions. Debug how your agents actually worked.**
 
-Swob parses local histories through **8 native-format adapters** and 1 Claude-compatible format. It can also detect files from 4 experimental sources without reading their message bodies. Where a source exposes the evidence, Swob adds lineage, incremental SQLite FTS5 search, execution inspection, provenance-aware audit, and optional AI Insights.
+Swob parses local histories through **12 native-format adapters** and 1 Claude-compatible format. Where a source exposes the evidence, Swob adds lineage, incremental SQLite FTS5 search, execution inspection, provenance-aware audit, and optional AI Insights.
 
 [Website](https://swob.app/) · [Website source](https://github.com/IvyYang1999/swob-website) · [Verified releases](https://github.com/IvyYang1999/swob/releases) · [Changelog](CHANGELOG.md)
 
@@ -23,7 +23,7 @@ Swob parses local histories through **8 native-format adapters** and 1 Claude-co
 </div>
 
 > [!IMPORTANT]
-> **The public v1.3.1 release matches the product shown here.** The feature images below are English demo reconstructions based on the released source; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below.
+> **v1.3.1 remains the current public installer; `main` may contain unreleased capabilities.** The feature images below are English demo reconstructions based on the source UI; identifying text and sample data were localized and privacy-sanitized for publication. They show implemented layouts and workflows, not untouched production-data captures. Counts inside the images are illustrative and separate from the audited corpora below.
 
 ![English demo reconstruction of the Swob Session Galaxy in current main](docs/readme-assets/graph-view.png)
 
@@ -38,7 +38,7 @@ Swob treats session history as evidence:
 - **Trace lineage** — navigate verified fork and continuation relationships in an interactive, force-directed Session Galaxy.
 - **Recover context** — expand compacted Claude Code turns and preserve local backups after the source has disappeared.
 - **Debug execution** — inspect tool/agent calls, token pressure, compaction boundaries, latency, framework overhead, errors, and anti-patterns.
-- **Search parsed histories** — SQLite FTS5 indexes normalized messages incrementally. Detection-only sources are excluded, and source-specific search gaps stay visible.
+- **Search parsed histories** — SQLite FTS5 indexes normalized messages incrementally. Formats without reliable body parsing are excluded, and source-specific search gaps stay visible.
 - **Resume safely** — return to a supported CLI with its session ID and working directory, with source-aware validation.
 
 ## Evidence, not vanity metrics
@@ -48,7 +48,7 @@ Swob treats session history as evidence:
 | **253 / 1,621** | 253 Claude Code source sessions in one audited library were already missing under the default 30-day retention policy; Swob still had local backups. |
 | **93.58%** | Verified resumability in the same 1,621-session, five-source audit corpus. This is an observed corpus result, not a universal success guarantee. |
 | **1,704 sessions** | Current local performance and UI corpus used to exercise the new index and dashboard. |
-| **8+1+4 sources** | Current `main` natively reads 8 harnesses, supports 1 compatible format, and experimentally detects 4 more (file discovery only, content reading not yet implemented). |
+| **12+1 sources** | Current `main` reads 12 native harness formats and 1 compatible format. Capability status remains source-specific and evidence-bound. |
 
 ## Session Galaxy
 
@@ -77,7 +77,7 @@ The local dashboard includes token and cost totals, a 365-day heatmap, source/mo
 
 ## Sources in current `main`
 
-### Native-format adapters (8) — transcript parsing is available; other capabilities vary
+### Native-format adapters (12) — transcript parsing is available; other capabilities vary
 
 | Source family | Status | Notes |
 |---|---|---|
@@ -86,7 +86,11 @@ The local dashboard includes token and cost totals, a 365-day heatmap, source/mo
 | Cursor | Native | Transcript, live watch, and terminal resume are available; search is experimental; usage, lineage, and a native deep link are unavailable. |
 | OpenCode | Native | Transcript, usage, archive, and terminal resume are available; search is experimental; live watch, lineage, and a native deep link are unavailable. |
 | Zcode | Native | Transcript, usage, and archive are available; search and its workspace-opening deep link are experimental; live watch and terminal resume are unavailable. |
+| Antigravity | Native | JSONL, Markdown, and known-schema SQLite transcripts, tools, search, and archive are available. Usage, relationships, subagents, and terminal resume remain experimental; encrypted protobuf is unavailable. |
+| Grok / Factory | Native | Composite transcripts, tools, thinking, usage, relationships, search, archive, and compact/rewind boundaries are available. Terminal resume is unavailable pending installed-binary and post-launch verification. |
 | Pi | Native | Transcript, tools, thinking, usage, relationships, search, and archive are available; live watch is unavailable and terminal resume remains experimental. |
+| Kimi Code | Native | Native and migrated wire transcripts, tools, thinking, usage, relationships, subagents, search, and archive are available. Terminal resume remains experimental pending post-launch verification. |
+| Hermes | Native | JSON snapshots and `state.db` transcripts, tools, thinking, search, and archive are available. Usage, relationships, subagents, and terminal resume remain evidence-scoped and experimental. |
 | Qoder | Native | Compound JSONL transcript, tools, relationships, subagents, search, and archive are available. Persisted usage is retained without estimation in canonical v2, but product totals, thinking, format provenance, and terminal resume remain experimental pending first-party/local sampling. |
 | Trae | Native (legacy layout) | Legacy plaintext `state.vscdb` transcript, search, and archive are experimental. Current encrypted `ModularData`, tools, thinking, usage, relationships, and Resume are unavailable. |
 
@@ -96,16 +100,7 @@ The local dashboard includes token and cost totals, a 365-day heatmap, source/mo
 |---|---|---|
 | CC Mirror | Compatible | Claude-compatible transcript, search, and usage are available; live watch and archive are unavailable; terminal resume is experimental. |
 
-### Experimental detection (4) — file discovery only, content reading not yet implemented
-
-| Source family | Status | Notes |
-|---|---|---|
-| Antigravity | Experimental | Can discover local transcript files. |
-| Grok / Factory | Experimental | Can discover JSONL history files. |
-| Kimi Code | Experimental | Can discover local `wire.jsonl` files. |
-| Hermes | Experimental | Can discover local JSON session files. |
-
-> **Accuracy note:** “Native-format adapter” means transcript parsing is implemented, not that every capability is available. Search, usage, lineage, live watch, archive, and resume vary by source. “Experimental detection” means Swob can find files and show metadata-only placeholders, but cannot read or index their message bodies. The canonical matrix is [`src/shared/provider-capabilities.ts`](src/shared/provider-capabilities.ts).
+> **Accuracy note:** “Native-format adapter” means transcript parsing is implemented, not that every capability is available. Search, usage, lineage, live watch, archive, and resume vary by source. The canonical matrix is [`src/shared/provider-capabilities.ts`](src/shared/provider-capabilities.ts).
 
 ## How Swob compares
 
@@ -113,7 +108,7 @@ Public README claims checked on 2026-07-21. `✅` = explicitly documented; `◐`
 
 | Capability | Swob current `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
 |---|---|---|---|---|
-| Local multi-harness history | ✅ 8 native + 1 compatible + 4 experimental | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
+| Local multi-harness history | ✅ 12 native + 1 compatible | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
 | Visual session lineage graph | ✅ verified + grouping edges | ◐ Session Board, not lineage | — | ◐ child-session normalization, no lineage graph documented |
 | Compact-history recovery | ✅ Claude Code | — | — | — |
 | Execution tree / agent-call anatomy | ✅ | ◐ tool rendering | ◐ tool/output navigation | ◐ tool-call mix and child sessions |

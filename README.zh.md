@@ -8,7 +8,7 @@
 
 **找回丢失的上下文，追踪 fork 与 compact，调试 Agent 到底做了什么。**
 
-Swob 通过 **8 个原生格式适配器**与 1 个 Claude 兼容格式解析本地历史；另有 4 个实验来源只能发现文件，尚不能读取消息正文。来源确有证据时，Swob 才提供血统、SQLite FTS5 增量检索、执行检查、带来源标记的审计和可选 AI Insights。
+Swob 通过 **12 个原生格式适配器**与 1 个 Claude 兼容格式解析本地历史。来源确有证据时，Swob 才提供血统、SQLite FTS5 增量检索、执行检查、带来源标记的审计和可选 AI Insights。
 
 [官网](https://swob.app/) · [官网源码](https://github.com/IvyYang1999/swob-website) · [已验证的 Releases](https://github.com/IvyYang1999/swob/releases) · [更新日志](CHANGELOG.zh.md)
 
@@ -23,7 +23,7 @@ Swob 通过 **8 个原生格式适配器**与 1 个 Claude 兼容格式解析本
 </div>
 
 > [!IMPORTANT]
-> **公开的 v1.3.1 已与这里展示的产品能力对齐。** 下方功能图以已发布源码的界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。
+> **v1.3.1 仍是当前公开安装包；`main` 可能包含尚未发布的能力。** 下方功能图以源码界面为依据，英文化重构并使用了隐私脱敏的演示数据；它们展示的是已实现的布局与流程，不是未经编辑的生产数据截图。图内数字仅用于演示，与下方审计语料分开统计。
 
 ![基于当前 main 重构的 Swob Session Galaxy 英文演示图](docs/readme-assets/graph-view.png)
 
@@ -38,7 +38,7 @@ Swob 把会话历史当作证据：
 - **追踪血统**——在交互式力导向 Session Galaxy 中浏览经过验证的 fork 与 continuation 关系。
 - **恢复上下文**——展开 Claude Code compact 前的内容，并在源文件消失后保留本地备份。
 - **调试执行过程**——检查工具/子 Agent 调用、上下文压力、compact 边界、延迟、框架开销、错误与反模式。
-- **检索已解析历史**——SQLite FTS5 增量索引规范化消息；纯检测来源不进入正文索引，各来源的检索缺口保持可见。
+- **检索已解析历史**——SQLite FTS5 增量索引规范化消息；无法可靠解析正文的格式不进入索引，各来源的检索缺口保持可见。
 - **可靠续写**——在来源支持时，携带正确的 session ID 和工作目录返回对应 CLI，并进行来源感知校验。
 
 ## 证据，不是虚荣指标
@@ -48,7 +48,7 @@ Swob 把会话历史当作证据：
 | **253 / 1,621** | 一份真实审计 Library 中，253 个 Claude Code 源会话已在默认 30 天保留策略下消失；Swob 仍保有本地备份。 |
 | **93.58%** | 同一份 1,621 会话、五来源语料的可验证续写率。这是已观察到的语料结果，不是对所有环境的成功率承诺。 |
 | **1,704 sessions** | 当前本地性能和界面验证语料，用来压测新索引与 Insights。 |
-| **8+1+4 来源** | 当前 `main` 原生读取 8 种 harness，支持 1 种兼容格式，另有 4 种实验性文件检测（仅发现文件，尚不读取正文）。 |
+| **12+1 来源** | 当前 `main` 读取 12 种原生 harness 格式与 1 种兼容格式；各项能力仍按来源证据分别声明。 |
 
 ## Session Galaxy
 
@@ -77,7 +77,7 @@ Swob 不止渲染聊天记录：
 
 ## 当前 `main` 的来源
 
-### 原生格式适配器（8）——可解析正文；其余能力按来源区分
+### 原生格式适配器（12）——可解析正文；其余能力按来源区分
 
 | 来源家族 | 状态 | 说明 |
 |---|---|---|
@@ -86,7 +86,11 @@ Swob 不止渲染聊天记录：
 | Cursor | 原生 | 正文、实时监视、终端 Resume 可用；检索为实验能力；用量、血统和原生深链不可用。 |
 | OpenCode | 原生 | 正文、用量、归档、终端 Resume 可用；检索为实验能力；实时监视、血统和原生深链不可用。 |
 | ZCode | 原生 | 正文、用量和归档可用；检索与“打开工作区”深链为实验能力；实时监视和终端 Resume 不可用。 |
+| Antigravity | 原生 | JSONL、Markdown 与已知 SQLite schema 的正文、工具、检索和归档可用；用量、关系、子 Agent 与终端 Resume 仍为实验能力，加密 protobuf 不可用。 |
+| Grok / Factory | 原生 | 复合正文、工具、thinking、用量、关系、检索、归档及 compact/rewind 边界可用；终端 Resume 尚缺已安装二进制与启动后验证，因此不可用。 |
 | Pi | 原生 | 正文、工具、thinking、用量、关系、检索和归档可用；实时监视不可用，终端 Resume 仍为实验能力。 |
+| Kimi Code | 原生 | 原生及迁移 wire 正文、工具、thinking、用量、关系、子 Agent、检索和归档可用；终端 Resume 在启动后验证完成前保持实验能力。 |
+| Hermes | 原生 | JSON 快照与 `state.db` 正文、工具、thinking、检索和归档可用；用量、关系、子 Agent 与终端 Resume 按证据范围保持实验能力。 |
 | Qoder | 原生 | 复合 JSONL 正文、工具、关系、子 Agent、检索和归档可用。持久化 usage 在规范 v2 中原样保留且不估算，但产品汇总、thinking、格式来源与终端 Resume 在第一方/本机采样前保持实验能力。 |
 | Trae | 原生（旧版布局） | 旧版明文 `state.vscdb` 的正文、检索和归档为实验能力；当前加密 `ModularData`、工具、thinking、用量、关系与 Resume 不可用。 |
 
@@ -96,16 +100,7 @@ Swob 不止渲染聊天记录：
 |---|---|---|
 | CC-Mirror | 兼容 | Claude 兼容正文、检索和用量可用；实时监视和归档不可用；终端 Resume 为实验能力。 |
 
-### 实验性检测（4）——仅发现文件，尚不读取正文
-
-| 来源家族 | 状态 | 说明 |
-|---|---|---|
-| Antigravity | 实验 | 可发现本地 transcript 文件。 |
-| Grok / Factory | 实验 | 可发现 JSONL 历史文件。 |
-| Kimi Code | 实验 | 可发现本地 `wire.jsonl` 文件。 |
-| Hermes | 实验 | 可发现本地 JSON session 文件。 |
-
-> **准确性说明：**「原生格式适配器」只代表已实现正文解析，不代表每项能力都可用。检索、用量、血统、实时监视、归档与 Resume 均按来源区分。「实验性检测」只能发现文件并显示元数据占位，不能读取或索引正文。唯一能力真相源是 [`src/shared/provider-capabilities.ts`](src/shared/provider-capabilities.ts)。
+> **准确性说明：**「原生格式适配器」只代表已实现正文解析，不代表每项能力都可用。检索、用量、血统、实时监视、归档与 Resume 均按来源区分。唯一能力真相源是 [`src/shared/provider-capabilities.ts`](src/shared/provider-capabilities.ts)。
 
 ## 与同类项目的能力对照
 
@@ -113,7 +108,7 @@ Swob 不止渲染聊天记录：
 
 | 能力 | Swob 当前 `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
 |---|---|---|---|---|
-| 本地多 harness 历史 | ✅ 8 原生 + 1 兼容 + 4 实验检测 | ✅ 9 个 provider | ✅ 9+ 个 Agent | ✅ 9 个工具 |
+| 本地多 harness 历史 | ✅ 12 原生 + 1 兼容 | ✅ 9 个 provider | ✅ 9+ 个 Agent | ✅ 9 个工具 |
 | 可视化会话血统图 | ✅ 验证边 + 分组边 | ◐ Session Board，不是血统图 | — | ◐ 会规范化子会话，未记录血统图 |
 | Compact 历史恢复 | ✅ Claude Code | — | — | — |
 | 执行树 / Agent 调用解剖 | ✅ | ◐ 工具渲染 | ◐ 工具/输出导航 | ◐ 工具混合与子会话 |

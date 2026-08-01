@@ -2310,9 +2310,18 @@ async function loadLegacySessionDetail(
   const source = detectSessionSourceFromPath(filePath) || sniffSessionSourceFromJsonl(filePath)
   const canonicalDefinition = source ? builtinProviderForSource(source) : undefined
   if (source && canonicalDefinition?.ingestion === 'provider-host') {
-    await refreshCanonicalProviders()
-    const stored = getCanonicalSessionStore().listSessions(canonicalDefinition.manifest.providerId)
-      .find((session) => path.resolve(session.sessionRecord.sourceRef.displayLocator) === path.resolve(filePath))
+    const findStored = () =>
+      getCanonicalSessionStore().listSessions(canonicalDefinition.manifest.providerId)
+        .find((session) => path.resolve(session.sessionRecord.sourceRef.displayLocator) === path.resolve(filePath))
+    // The canonical store is already the authoritative read model. Consult it
+    // before triggering discovery: tests may rotate HOME, and production detail
+    // reads should not pay for a full provider refresh when the exact virtual
+    // locator (for example Hermes state.db#session) is already present.
+    let stored = findStored()
+    if (!stored) {
+      await refreshCanonicalProviders()
+      stored = findStored()
+    }
     return sanitizeSessionDetail(stored
       ? canonicalRecordsToSessionDetail(stored.records, { filePath, source })
       : null)
@@ -2475,14 +2484,16 @@ export async function loadSessionDetail(
   allFilePaths?: string[],
   branchParentFilePaths?: string[],
   branchPointUuid?: string,
-  branchLeafUuid?: string
+  branchLeafUuid?: string,
+  canonicalSessionRecordId?: string
 ): Promise<SessionDetail | null> {
   const detail = await loadLegacySessionDetail(
     filePath,
     allFilePaths,
     branchParentFilePaths,
     branchPointUuid,
-    branchLeafUuid
+    branchLeafUuid,
+    canonicalSessionRecordId
   )
   if (!detail?.source) return detail
   if (providerAdapterMode(detail.source, loadConfig()).mode === 'legacy') return detail

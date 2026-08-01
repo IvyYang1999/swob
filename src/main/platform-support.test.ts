@@ -7,14 +7,14 @@ import {
   isSessionSourceSupported
 } from './platform-support'
 
-describe('Windows Native Alpha capabilities', () => {
-  it('Windows Alpha 只启用 Claude Code 和 Codex', () => {
+describe('Windows Native Beta capabilities', () => {
+  it('Windows Beta 只启用 Claude Code 和 Codex', () => {
     expect(isSessionSourceSupported('claude-code', 'win32')).toBe(true)
     expect(isSessionSourceSupported('codex', 'win32')).toBe(true)
     expect(isSessionSourceSupported('cursor', 'win32')).toBe(false)
     expect(isSessionSourceSupported('opencode', 'win32')).toBe(false)
     expect(isSessionSourceSupported('zcode', 'win32')).toBe(false)
-    expect(alphaUnsupportedReason('opencode', 'win32')).toBe('Windows Alpha 暂不支持 OpenCode')
+    expect(alphaUnsupportedReason('opencode', 'win32')).toBe('Windows Beta 暂不支持 OpenCode')
   })
 
   it('macOS 现有来源与能力保持不变', () => {
@@ -42,7 +42,7 @@ describe('Windows Native Alpha capabilities', () => {
     expect(hermes.capabilities.transcript.status).toBe('available')
   })
 
-  it('Windows Alpha 显式声明不做的边界', () => {
+  it('Windows Beta 显式声明不做的边界', () => {
     expect(getPlatformCapabilities('win32')).toMatchObject({
       platform: 'win32',
       windowsNativeAlpha: true,

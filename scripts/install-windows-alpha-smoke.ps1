@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$installer = Get-ChildItem -Path 'dist' -Filter '*-windows-x64.exe' |
+$installer = Get-ChildItem -Path 'dist' -Filter '*-windows-beta-x64.exe' |
   Sort-Object LastWriteTimeUtc -Descending |
   Select-Object -First 1
 
@@ -9,7 +9,7 @@ if (-not $installer) {
   throw 'Windows x64 installer was not produced.'
 }
 
-$installRoot = Join-Path $env:RUNNER_TEMP ("swob-alpha-installed-{0}" -f [guid]::NewGuid().ToString('N'))
+$installRoot = Join-Path $env:RUNNER_TEMP ("swob-beta-installed-{0}" -f [guid]::NewGuid().ToString('N'))
 $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installRoot") -PassThru -Wait
 if ($process.ExitCode -ne 0) {
   throw "NSIS installer exited with code $($process.ExitCode)."

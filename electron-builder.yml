@@ -68,12 +68,13 @@ dmg:
   # published and would violate the exact-six release asset contract.
   writeUpdateInfo: false
 win:
-  # t107 Alpha is an internal, unsigned x64 build. ARM64 and signing are intentionally out of scope.
+  # Windows Beta remains unsigned until Artifact Signing identity validation is complete.
+  # The beta marker is part of the immutable public asset contract.
   target:
     - target: nsis
       arch:
         - x64
-  artifactName: swob-${version}-windows-${arch}.${ext}
+  artifactName: swob-${version}-windows-beta-${arch}.${ext}
 nsis:
   oneClick: false
   perMachine: false

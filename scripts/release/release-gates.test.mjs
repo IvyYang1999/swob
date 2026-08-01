@@ -11,7 +11,9 @@ import {
   assertExactNames,
   assertRemoteAssets,
   expectedCandidateAssets,
-  expectedPublishedAssets
+  expectedPublishedAssets,
+  includesWindowsBeta,
+  windowsBetaAssetName
 } from './assert-release-assets.mjs'
 import {
   assertUpdateMetadata,
@@ -240,6 +242,20 @@ describe('release asset gate', () => {
       .toThrow(/dmg\.blockmap/)
   })
 
+  it('requires one explicitly named unsigned Windows Beta installer from v1.4.0 onward', () => {
+    expect(includesWindowsBeta('1.3.9')).toBe(false)
+    expect(includesWindowsBeta('1.4.0')).toBe(true)
+    expect(windowsBetaAssetName('1.4.0')).toBe('swob-1.4.0-windows-beta-x64.exe')
+
+    const releaseDir = createReleaseFixture('1.4.0')
+    expect(() => assertBuildAssets({ releaseDir, version: '1.4.0', channel: 'swob-signed' }))
+      .toThrow(/windows-beta-x64\.exe/)
+
+    fs.writeFileSync(path.join(releaseDir, windowsBetaAssetName('1.4.0')), 'unsigned Windows Beta')
+    expect(() => assertBuildAssets({ releaseDir, version: '1.4.0', channel: 'swob-signed' })).not.toThrow()
+    expect(expectedCandidateAssets('1.4.0')).toContain('swob-1.4.0-windows-beta-x64.exe')
+  })
+
   it('fails closed when a published asset is missing or metadata leaks into the release', () => {
     const expected = expectedCandidateAssets('1.3.1')
     expect(() => assertExactNames(expected.slice(1), expected, 'remote')).toThrow(/missing=/)
@@ -327,6 +343,10 @@ describe('shared macOS artifact verifier contract', () => {
     const appVerifier = fs.readFileSync(path.join(releaseScriptsDirectory, 'verify-signed-app.sh'), 'utf8')
     const updateE2E = fs.readFileSync(path.join(releaseScriptsDirectory, 'run-macos-update-e2e.sh'), 'utf8')
     const builderConfig = fs.readFileSync(path.join(repositoryRoot, 'electron-builder.yml'), 'utf8')
+    const windowsBetaWorkflow = fs.readFileSync(
+      path.join(repositoryRoot, '.github/workflows/windows-beta.yml'),
+      'utf8'
+    )
 
     expect(packageJson.scripts.test).toContain('npm run check')
     for (const workflow of [qualityWorkflow, dryRunWorkflow, releaseWorkflow]) {
@@ -334,6 +354,14 @@ describe('shared macOS artifact verifier contract', () => {
     }
     expect(smokeWorkflow).toContain('npm run check')
     expect(releaseWorkflow).toContain('scripts/release/verify-macos-artifacts.sh')
+    expect(releaseWorkflow).toContain('uses: ./.github/workflows/windows-beta.yml')
+    expect(releaseWorkflow).toContain('needs: windows-beta')
+    expect(releaseWorkflow).toContain('dist/swob-${version}-windows-beta-x64.exe')
+    expect(windowsBetaWorkflow).toContain('npm run build:win')
+    expect(windowsBetaWorkflow).toContain('npm run test:e2e:windows-native')
+    expect(windowsBetaWorkflow).toContain('01-onboarding.png')
+    expect(windowsBetaWorkflow).toContain('06-settings.png')
+    expect(builderConfig).toContain('swob-${version}-windows-beta-${arch}.${ext}')
     expect(releaseWorkflow).toContain('--bind-ref origin/master')
     expect(releaseWorkflow).toContain('--channel swob-canary')
     expect(releaseWorkflow).toContain('release_assets+=("dist/swob-canary-mac.yml")')

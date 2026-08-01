@@ -10,7 +10,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  windows-beta:
+    uses: ./.github/workflows/windows-beta.yml
+    with:
+      release_mode: true
+
   release:
+    needs: windows-beta
     runs-on: macos-latest
     timeout-minutes: 60
     permissions:
@@ -34,7 +40,7 @@ jobs:
           git fetch --no-tags origin '+refs/heads/master:refs/remotes/origin/master'
           node scripts/release/assert-release-version.mjs \
             --tag "$GITHUB_REF_NAME" \
-            --minimum 1.3.0 \
+            --minimum 1.4.0 \
             --stable \
             --bind-ref origin/master
 
@@ -131,6 +137,32 @@ jobs:
             xcrun stapler staple "$dmg_file"
           done
 
+      - name: Download the Windows Beta artifact produced from the same tag
+        uses: actions/download-artifact@v4
+        with:
+          name: swob-windows-beta-release
+          path: ${{ runner.temp }}/windows-beta
+
+      - name: Stage exactly one unsigned Windows Beta installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          expected="swob-${version}-windows-beta-x64.exe"
+          find "$RUNNER_TEMP/windows-beta" -type f -name '*-windows-beta-x64.exe' -print > "$RUNNER_TEMP/windows-beta-assets.txt"
+          candidate_count="$(wc -l < "$RUNNER_TEMP/windows-beta-assets.txt" | tr -d ' ')"
+          if [[ "$candidate_count" -ne 1 ]]; then
+            echo "Expected exactly one Windows Beta installer, found $candidate_count." >&2
+            find "$RUNNER_TEMP/windows-beta" -maxdepth 3 -type f -print >&2
+            exit 1
+          fi
+          candidate="$(sed -n '1p' "$RUNNER_TEMP/windows-beta-assets.txt")"
+          if [[ "$(basename "$candidate")" != "$expected" ]]; then
+            echo "Unexpected Windows Beta asset name: $(basename "$candidate")" >&2
+            exit 1
+          fi
+          cp "$candidate" "dist/$expected"
+
       - name: Verify signed applications, disk images and local asset inventory
         run: |
           version="$(node -p "require('./package.json').version")"
@@ -163,7 +195,7 @@ jobs:
           git fetch --no-tags origin '+refs/heads/master:refs/remotes/origin/master'
           node scripts/release/assert-release-version.mjs \
             --tag "$tag" \
-            --minimum 1.3.0 \
+            --minimum 1.4.0 \
             --stable \
             --bind-ref origin/master
           if gh release view "$tag" > /dev/null 2>&1; then
@@ -189,6 +221,7 @@ jobs:
             "dist/swob-${version}-x64.dmg"
             "dist/swob-${version}-x64.zip"
             "dist/swob-${version}-x64.zip.blockmap"
+            "dist/swob-${version}-windows-beta-x64.exe"
           )
           if [[ "$version" != '1.3.0' ]]; then
             release_assets+=("dist/swob-canary-mac.yml")
@@ -212,11 +245,12 @@ jobs:
           trap - EXIT
 
           {
-            echo '## Signed installer release passed'
+            echo '## Cross-platform release asset gate passed'
             echo
             echo "- Version: ${version}"
-            echo '- Developer ID, Team ID, Gatekeeper and stapled tickets verified'
+            echo '- macOS Developer ID, Team ID, Gatekeeper and stapled tickets verified'
             echo '- arm64/x64 DMG, ZIP and blockmap names, sizes and SHA-256 digests verified remotely'
+            echo '- Unsigned Windows x64 Beta package passed allowlist, install and packaged-app E2E gates'
             echo '- Canary metadata was bound to both ZIPs; stable update metadata remains absent'
             echo '- No DMG blockmap was generated or uploaded'
             echo '- Release stayed draft until the remote digest gate passed'

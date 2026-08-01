@@ -1,64 +1,89 @@
-name: Windows Native Alpha
+name: Windows Native Beta
 
 on:
+  workflow_call:
+    inputs:
+      release_mode:
+        description: Require a stable v1.4.0+ tag bound to origin/master
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
+    inputs:
+      release_mode:
+        description: Require a stable v1.4.0+ tag bound to origin/master
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
-      - feature/t107-windows-alpha
+      - master
+      - feat/t178-windows-beta
     paths:
-      - '.github/workflows/windows-alpha.yml'
+      - '.github/workflows/windows-beta.yml'
       - 'build/**'
       - 'electron-builder.yml'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/check-package*'
       - 'scripts/generate-icons.mjs'
       - 'scripts/install-windows-alpha-smoke.ps1'
       - 'src/**'
-      - 'e2e/**'
+      - 'e2e/windows-native-packaged.spec.ts'
   pull_request:
     paths:
-      - '.github/workflows/windows-alpha.yml'
+      - '.github/workflows/windows-beta.yml'
       - 'build/**'
       - 'electron-builder.yml'
       - 'package.json'
       - 'package-lock.json'
+      - 'scripts/check-package*'
       - 'scripts/generate-icons.mjs'
       - 'scripts/install-windows-alpha-smoke.ps1'
       - 'src/**'
-      - 'e2e/**'
+      - 'e2e/windows-native-packaged.spec.ts'
+
+permissions:
+  contents: read
 
 jobs:
   test-and-package:
     runs-on: windows-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      # better-sqlite3 13 ships win32-x64.node in its npm tarball, but npm
-      # synthesizes `node-gyp rebuild` from binding.gyp when lifecycle scripts
-      # are enabled. Avoid compiling a prebuilt addon, then initialize only the
-      # JS tool binaries whose postinstall steps are actually required.
+      - name: Bind a release build to a stable v1.4.0+ master tag
+        if: ${{ inputs.release_mode }}
+        shell: pwsh
+        run: |
+          git fetch --no-tags origin '+refs/heads/master:refs/remotes/origin/master'
+          node scripts/release/assert-release-version.mjs `
+            --tag "$env:GITHUB_REF_NAME" `
+            --minimum 1.4.0 `
+            --stable `
+            --bind-ref origin/master
+      # better-sqlite3 ships win32-x64.node. Avoid npm's synthesized node-gyp
+      # rebuild, then initialize only the JS tool binaries used by the build.
       - name: Install dependencies without native rebuilds
         run: npm ci --ignore-scripts
-      - name: Initialize tool binaries and verify the SQLite prebuild
+      - name: Initialize build tools and verify the SQLite prebuild
         shell: pwsh
         run: |
           node node_modules/electron/install.js
           node node_modules/esbuild/install.js
           node node_modules/vite/node_modules/esbuild/install.js
           node -e "const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.prepare('SELECT 1').get(); db.close(); console.log('better-sqlite3 prebuild ok')"
-      - name: Verify the approved cross-platform icon set
-        run: npm run icons:check
-      # The repository-wide suite includes deliberate macOS contracts (brctl,
-      # /Applications, POSIX mode bits and Claude Desktop). macOS runs that full
-      # gate separately; this runner executes every T107 platform boundary plus
-      # a real NTFS/junction suite before the packaged-app E2E below.
-      - name: Run Windows Alpha unit and integration suites
+      - name: Verify icon and package-policy contracts
+        run: |
+          npm run icons:check
+          npm run test:package-policy
+      - name: Run Windows platform contracts
         run: >-
           npx vitest run
           src/main/platform-support.test.ts
@@ -71,33 +96,48 @@ jobs:
           src/main/resume-recovery-planner-purity.test.ts
           src/main/windows-native-fs.test.ts
           src/renderer/src/components/SettingsPanel.test.tsx
-      # These files also contain intentional macOS/POSIX contracts. Select the
-      # Windows cases by name so this gate tests the Alpha boundary, not a
-      # foreign operating system's behavior.
       - name: Run Windows path discovery contracts
         run: npx vitest run src/main/session-loader.test.ts -t "Windows"
       - name: Run Windows session action contracts
         run: npx vitest run src/main/session-actions.test.ts -t "Windows"
       - name: Run Windows terminal launch contracts
         run: npx vitest run src/main/resume-terminal.test.ts -t "Windows|PowerShell"
-      - run: npm run build:win
+      - name: Build unsigned x64 Beta and enforce the runtime allowlist
+        run: npm run build:win
       - name: Install and inspect the unsigned NSIS package
         shell: pwsh
         run: ./scripts/install-windows-alpha-smoke.ps1
-      - name: Exercise the installed x64 app on native Windows
+      - name: Exercise the installed package and capture the six core paths
         run: npm run test:e2e:windows-native
+      - name: Require all six core-path screenshots
+        shell: pwsh
+        run: |
+          $required = @(
+            '01-onboarding.png',
+            '02-discovery.png',
+            '03-reading.png',
+            '04-search.png',
+            '05-insights.png',
+            '06-settings.png'
+          )
+          $found = Get-ChildItem test-results -Recurse -File | Select-Object -ExpandProperty Name
+          foreach ($name in $required) {
+            if ($found -notcontains $name) { throw "Missing Windows Beta evidence screenshot: $name" }
+          }
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: swob-windows-native-alpha-x64
-          path: dist/*-windows-x64.exe
-          if-no-files-found: warn
+          name: swob-windows-beta-release
+          path: |
+            dist/*-windows-beta-x64.exe
+            dist/package-inventory/**
+          if-no-files-found: error
           retention-days: 14
       - name: Upload native Windows screenshots and traces
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: swob-windows-native-alpha-evidence
+          name: swob-windows-native-beta-evidence
           path: test-results/**
           if-no-files-found: warn
           retention-days: 14

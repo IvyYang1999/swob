@@ -5,9 +5,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { revealAllSessions } from './helpers'
 
-const CLAUDE_ID = '82000000-0000-4000-8000-000000000107'
-const CODEX_ID = '019abcde-1234-7000-8000-012345670107'
-const ZCODE_ID = 'sess_windows_native_unsupported_107'
+const CLAUDE_ID = '82000000-0000-4000-8000-000000000178'
+const CODEX_ID = '019abcde-1234-7000-8000-012345670178'
+const ZCODE_ID = 'sess_windows_native_unsupported_178'
 
 let app: ElectronApplication
 let page: Page
@@ -29,56 +29,57 @@ function stringEnvironment(): Record<string, string> {
   )
 }
 
-function createProductionHomeFixture(): { project: string; claudeFile: string } {
-  sandboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-windows-packaged-'))
+function createProductionHomeFixture(): { project: string } {
+  sandboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-windows-beta-packaged-'))
   fixtureHome = path.join(sandboxRoot, '用户 Home')
   libraryRoot = path.join(sandboxRoot, 'Local Library')
   const project = path.join(fixtureHome, '项目 with space')
   for (const dir of [fixtureHome, libraryRoot, project]) fs.mkdirSync(dir, { recursive: true })
 
-  fs.mkdirSync(path.join(fixtureHome, '.claude-session-manager'), { recursive: true })
-  fs.writeFileSync(path.join(fixtureHome, '.claude-session-manager', 'app-config.json'), JSON.stringify({
-    libraryPath: libraryRoot,
-    onboardingCompleted: true
-  }), 'utf8')
-  fs.writeFileSync(path.join(libraryRoot, '.swob-config.json'), JSON.stringify({
-    libraryRoot,
-    preferences: { defaultViewMode: 'compact', defaultTerminalId: 'powershell' }
-  }), 'utf8')
-
   const encodedProject = project.replace(/[:\\/]/g, '-')
-  const claudeFile = path.join(fixtureHome, '.claude', 'projects', encodedProject, `${CLAUDE_ID}.jsonl`)
-  writeJsonl(claudeFile, [
+  writeJsonl(path.join(fixtureHome, '.claude', 'projects', encodedProject, `${CLAUDE_ID}.jsonl`), [
     {
       uuid: 'windows-native-user', parentUuid: null, sessionId: CLAUDE_ID,
-      type: 'user', timestamp: '2026-07-22T00:00:00Z', cwd: project,
-      message: { role: 'user', content: 'Windows native Claude fixture' }
+      type: 'user', timestamp: '2026-08-02T00:00:00Z', cwd: project,
+      message: { role: 'user', content: 'Windows native Claude reading fixture' }
     },
     {
       uuid: 'windows-native-assistant', parentUuid: 'windows-native-user', sessionId: CLAUDE_ID,
-      type: 'assistant', timestamp: '2026-07-22T00:00:01Z', cwd: project,
+      type: 'assistant', timestamp: '2026-08-02T00:00:01Z', cwd: project,
       message: { role: 'assistant', content: 'Windows native Claude response' }
     }
   ])
 
   writeJsonl(path.join(
-    fixtureHome, '.codex', 'sessions', '2026', '07', '22',
-    `rollout-2026-07-22T00-00-00-${CODEX_ID}.jsonl`
+    fixtureHome, '.codex', 'sessions', '2026', '08', '02',
+    `rollout-2026-08-02T00-00-00-${CODEX_ID}.jsonl`
   ), [
     {
-      timestamp: '2026-07-22T00:00:00Z', type: 'session_meta',
-      payload: { id: CODEX_ID, timestamp: '2026-07-22T00:00:00Z', cwd: project, cli_version: 'native-test' }
+      timestamp: '2026-08-02T00:00:00Z', type: 'session_meta',
+      payload: { id: CODEX_ID, timestamp: '2026-08-02T00:00:00Z', cwd: project, cli_version: 'native-test' }
     },
     {
-      timestamp: '2026-07-22T00:00:01Z', type: 'response_item',
-      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Windows native Codex fixture' }] }
+      timestamp: '2026-08-02T00:00:01Z', type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Windows native Codex search needle' }] }
     },
     {
-      timestamp: '2026-07-22T00:00:02Z', type: 'response_item',
-      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Native response' }] }
+      timestamp: '2026-08-02T00:00:02Z', type: 'response_item',
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Native Codex response' }] }
+    },
+    {
+      timestamp: '2026-08-02T00:00:03Z', type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 20, output_tokens: 40 },
+          total_token_usage: { input_tokens: 120, cached_input_tokens: 20, output_tokens: 40 }
+        }
+      }
     }
   ])
 
+  // A real unsupported-source fixture proves that the Beta boundary is enforced
+  // by source discovery rather than merely hidden in the renderer.
   const dbPath = path.join(fixtureHome, '.zcode', 'cli', 'db', 'db.sqlite')
   fs.mkdirSync(path.dirname(dbPath), { recursive: true })
   const db = new Database(dbPath)
@@ -89,11 +90,11 @@ function createProductionHomeFixture(): { project: string; claudeFile: string } 
     'CREATE TABLE session_message(sessionID TEXT, messageID TEXT)'
   ].join(';'))
   db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?, ?)').run(
-    ZCODE_ID, 'Unsupported native ZCode fixture', project, 'test', 1784678400000, 1784678401000
+    ZCODE_ID, 'Unsupported native ZCode fixture', project, 'test', 1785628800000, 1785628801000
   )
   db.close()
 
-  return { project, claudeFile }
+  return { project }
 }
 
 test.beforeAll(async () => {
@@ -118,12 +119,15 @@ test.beforeAll(async () => {
       LOCALAPPDATA: localAppData,
       TEMP: temp,
       TMP: temp,
+      SWOB_TEST_HOME: fixtureHome,
+      SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
       SWOB_LIBRARY_ROOT: libraryRoot
     },
     timeout: 60_000
   })
   page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  await page.setViewportSize({ width: 1200, height: 800 })
 })
 
 test.afterAll(async () => {
@@ -133,7 +137,9 @@ test.afterAll(async () => {
   }
 })
 
-test('installed x64 app discovers only supported USERPROFILE sources and renders Windows UI', async ({}, testInfo) => {
+test('installed x64 Beta completes onboarding, discovery, reading, search, Insights and settings', async ({}, testInfo) => {
+  test.setTimeout(120_000)
+
   const runtime = await app.evaluate(({ app: electronApp }) => ({
     isPackaged: electronApp.isPackaged,
     platform: process.platform,
@@ -153,34 +159,70 @@ test('installed x64 app discovers only supported USERPROFILE sources and renders
   expect(capabilities.windowsNativeAlpha).toBe(true)
   expect(capabilities.supportedSources).toEqual(['claude-code', 'codex'])
 
+  // 1. Onboarding: exercise the real first-run flow and capture the source boundary.
+  const onboarding = page.locator('[data-testid="onboarding"]')
+  await expect(onboarding).toBeVisible({ timeout: 20_000 })
+  await onboarding.getByRole('button', { name: /开始设置|Start/ }).click()
+  await onboarding.getByRole('button', { name: /都要|Both/ }).click()
+  await onboarding.getByRole('button', { name: /就放这里|Use this/ }).click()
+  await expect(onboarding.getByText('Claude Code', { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect(onboarding.getByText('Codex', { exact: true })).toBeVisible()
+  await expect(onboarding.locator('[data-testid="windows-alpha-notice"]')).toContainText('Windows Native Beta')
+  await page.screenshot({ path: testInfo.outputPath('01-onboarding.png'), fullPage: true })
+  await onboarding.getByRole('button', { name: /^完成$|^Finish$/ }).click()
+  await expect(onboarding).toHaveCount(0, { timeout: 30_000 })
+
+  // 2. Discovery: both allowed sources are visible and the unsupported fixture is absent.
   const sessions = await page.evaluate(() => window.api.loadAllSessions())
   const claude = sessions.find((session) => session.sessionId === CLAUDE_ID)
   const codex = sessions.find((session) => session.sessionId === CODEX_ID)
   expect(claude?.filePath).toContain(path.win32.join(fixtureHome, '.claude', 'projects'))
   expect(claude?.resumeCwd).toBe(path.win32.join(fixtureHome, '项目 with space'))
-  expect(claude?.cwds).toContain(path.win32.join(fixtureHome, '项目 with space'))
   expect(codex?.source).toBe('codex')
   expect(codex?.resumeCwd).toBe(path.win32.join(fixtureHome, '项目 with space'))
   expect(sessions.some((session) => session.source === 'zcode')).toBe(false)
 
   await revealAllSessions(page)
-  await expect(page.locator(`[data-session-id="${CLAUDE_ID}"]`)).toBeVisible()
+  await expect(page.locator(`[data-session-id="${CLAUDE_ID}"]`)).toBeVisible({ timeout: 20_000 })
   await expect(page.locator(`[data-session-id="codex:${CODEX_ID}"]`)).toBeVisible()
   await expect(page.locator(`[data-session-id="zcode:${ZCODE_ID}"]`)).toHaveCount(0)
   await expect(page.getByText('Ctrl+K')).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('02-discovery.png'), fullPage: true })
 
+  // 3. Reading: open a real packaged Claude transcript and prove both roles render.
+  await page.locator(`[data-session-id="${CLAUDE_ID}"]`).click()
+  await expect(page.getByText('Windows native Claude reading fixture', { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText('Windows native Claude response', { exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('03-reading.png'), fullPage: true })
+
+  // 4. Search: wait for the incremental SQLite index and require the Codex body hit.
+  const search = page.getByPlaceholder(/搜索所有会话|Search all sessions/)
+  await search.fill('Windows native Codex search needle')
+  await expect(page.getByText('Windows native Codex search needle', { exact: true }).first())
+    .toBeVisible({ timeout: 30_000 })
+  await page.screenshot({ path: testInfo.outputPath('04-search.png'), fullPage: true })
+  await search.fill('')
+
+  // 5. Insights: enter the actual packaged dashboard and wait for its first tab.
+  await page.getByTitle(/Token 洞察|Token Insights/).click()
+  await expect(page.getByRole('tab', { name: /总览|Overview/ })).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText(/Processed Tokens/)).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('05-insights.png'), fullPage: true })
+
+  // 6. Settings: prove the Beta boundary and Windows terminal choices are visible.
   await page.locator('button[title="设置"], button[title="Settings"]').click()
-  await page.getByRole('button', { name: /^(终端|Terminal)$/ }).click()
-  await expect(page.locator('[data-testid="windows-alpha-notice"]')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Windows Terminal' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'PowerShell' })).toBeVisible()
-  await expect(page.getByRole('button', { name: /^cmd\b/ })).toBeVisible()
-  await expect(page.getByText('iTerm')).toHaveCount(0)
+  const settings = page.getByRole('dialog', { name: /设置|Settings/ })
+  await expect(settings).toBeVisible()
+  await settings.getByRole('button', { name: /^(终端|Terminal)$/ }).click()
+  await expect(settings.locator('[data-testid="windows-alpha-notice"]')).toContainText('Windows Native Beta')
+  await expect(settings.getByRole('button', { name: 'Windows Terminal' })).toBeVisible()
+  await expect(settings.getByRole('button', { name: 'PowerShell' })).toBeVisible()
+  await expect(settings.getByRole('button', { name: /^cmd\b/ })).toBeVisible()
+  await expect(settings.getByText('iTerm')).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('06-settings.png'), fullPage: true })
 
   await expect.poll(() => page.evaluate(() => window.api.libraryGetRoot()), { timeout: 20_000 })
     .toBe(libraryRoot)
   await expect.poll(() => page.evaluate((id) => window.api.libraryGetDirPath(id), CLAUDE_ID), { timeout: 20_000 })
     .not.toBeNull()
-
-  await page.screenshot({ path: testInfo.outputPath('windows-native-installed.png'), fullPage: true })
 })

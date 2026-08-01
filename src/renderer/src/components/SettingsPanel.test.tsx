@@ -271,7 +271,7 @@ describe('SettingsPanel 纵向导航设置', () => {
     expect(savePreferences).toHaveBeenCalledWith({ defaultSort: 'turns' })
   })
 
-  it('Windows Alpha 显式告知来源与发布边界，不显示 macOS 终端', async () => {
+  it('Windows Beta 显式告知来源与发布边界，不显示 macOS 终端', async () => {
     ;(window as any).api.platformGetCapabilities.mockResolvedValue({
       platform: 'win32',
       windowsNativeAlpha: true,
@@ -281,7 +281,7 @@ describe('SettingsPanel 纵向导航设置', () => {
     })
 
     render(<SettingsPanel />)
-    expect(await screen.findByText('Windows Native Alpha')).toBeTruthy()
+    expect(await screen.findByText('Windows Native Beta')).toBeTruthy()
     fireEvent.click(navButton('终端'))
 
     expect(await screen.findByText('Windows Terminal')).toBeTruthy()

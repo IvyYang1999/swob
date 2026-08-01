@@ -156,7 +156,7 @@ describe('session action context', () => {
       expect(buildResumeLaunchSpec('thread-123', undefined, dir, 'codex', undefined, 'win32'))
         .toMatchObject({ executable: 'codex', args: ['resume', 'thread-123', '-C', dir], cwd: dir })
       expect(() => buildResumeLaunchSpec('ses_abc', undefined, dir, 'opencode', undefined, 'win32'))
-        .toThrow('Windows Alpha 暂不支持 OpenCode')
+        .toThrow('Windows Beta 暂不支持 OpenCode')
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
@@ -171,7 +171,7 @@ describe('session action context', () => {
       undefined,
       'claude-desktop',
       'win32'
-    )).toThrow('Windows Alpha 暂不支持 claude-desktop Resume')
+    )).toThrow('Windows Beta 暂不支持 claude-desktop Resume')
 
     expect(buildResumeAction(
       '019abcde-1234-7000-8000-0123456789ab',

@@ -52,6 +52,16 @@ try {
   const clean = runCheck()
   assert.equal(clean.status, 0, clean.stderr || clean.stdout)
 
+  fs.writeFileSync(path.join(resourcesRoot, 'elevate.exe'), 'electron-builder NSIS helper fixture\n')
+  const windowsHelper = runCheck()
+  assert.equal(windowsHelper.status, 0, windowsHelper.stderr || windowsHelper.stdout)
+
+  fs.writeFileSync(path.join(resourcesRoot, 'unexpected.exe'), 'must not be accepted\n')
+  const unexpectedExecutable = runCheck()
+  assert.notEqual(unexpectedExecutable.status, 0, 'unexpected outer executable passed')
+  assert.match(unexpectedExecutable.stderr, /unexpected\.exe: outside outer payload allowlist/)
+  fs.rmSync(path.join(resourcesRoot, 'unexpected.exe'))
+
   write('.claude/settings.local.json', '{"private":true}\n')
   await createPackage(sourceRoot, asarPath)
   const dirty = runCheck()
@@ -65,7 +75,7 @@ try {
   const dirtyOuter = runCheck()
   assert.notEqual(dirtyOuter.status, 0, 'dirty outer payload unexpectedly passed')
   assert.match(dirtyOuter.stderr, /outer payload contains private segment \.claude/)
-  console.log('Package policy self-test passed: clean fixture accepted; private settings rejected in asar and outer payload.')
+  console.log('Package policy self-test passed: Windows NSIS helper accepted; unexpected executable and private settings rejected.')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }

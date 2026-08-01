@@ -4,18 +4,31 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseSemver } from './assert-release-version.mjs'
+import { compareSemver, parseSemver } from './assert-release-version.mjs'
+
+export const WINDOWS_BETA_FIRST_VERSION = '1.4.0'
+
+export function windowsBetaAssetName(version) {
+  parseSemver(version)
+  return `swob-${version}-windows-beta-x64.exe`
+}
+
+export function includesWindowsBeta(version) {
+  return compareSemver(version, WINDOWS_BETA_FIRST_VERSION) >= 0
+}
 
 export function expectedPublishedAssets(version) {
   parseSemver(version)
-  return [
+  const assets = [
     `swob-${version}-arm64.dmg`,
     `swob-${version}-arm64.zip`,
     `swob-${version}-arm64.zip.blockmap`,
     `swob-${version}-x64.dmg`,
     `swob-${version}-x64.zip`,
     `swob-${version}-x64.zip.blockmap`
-  ].sort()
+  ]
+  if (includesWindowsBeta(version)) assets.push(windowsBetaAssetName(version))
+  return assets.sort()
 }
 
 export function expectedBuildAssets(version) {
@@ -48,7 +61,8 @@ export function assertExactNames(actualNames, expectedNames, label) {
 
 export function assertBuildAssets({ releaseDir, version, channel }) {
   const releaseLike = fs.readdirSync(releaseDir).filter((name) =>
-    name.endsWith('.dmg') || name.endsWith('.zip') || name.endsWith('.blockmap') || name.endsWith('-mac.yml')
+    name.endsWith('.dmg') || name.endsWith('.zip') || name.endsWith('.blockmap') ||
+    name.endsWith('.exe') || name.endsWith('-mac.yml')
   )
   assertExactNames(releaseLike, expectedBuildAssets(version), 'Local release asset inventory')
 }
@@ -130,7 +144,7 @@ async function main() {
 
   const releaseDir = path.resolve(readOption('--dir', 'dist'))
   assertBuildAssets({ releaseDir, version, channel })
-  process.stdout.write(`Local asset gate passed for ${version}: exactly six immutable assets and no update metadata\n`)
+  process.stdout.write(`Local asset gate passed for ${version}: exact immutable platform assets and no update metadata\n`)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

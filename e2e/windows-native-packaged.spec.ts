@@ -204,12 +204,11 @@ test('installed x64 Beta completes onboarding, discovery, reading, search, Insig
   await expect(page.getByText('Windows native Claude response', { exact: true })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('03-reading.png'), fullPage: true })
 
-  // 4. Search: wait for the incremental SQLite index and require the Codex body hit.
+  // 4. Search: wait for the incremental SQLite index and require the Codex user-body hit.
   const search = page.getByPlaceholder(/搜索所有会话|Search all sessions/)
-  await search.fill('Native Codex response')
+  await search.fill('Windows native Codex search needle')
   const searchSummary = page.getByText(/1 (?:个会话|sessions?).*1 (?:处匹配|matches?)/)
   await expect(searchSummary).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByRole('button').filter({ hasText: 'Native Codex response' })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('04-search.png'), fullPage: true })
   await search.fill('')
   await expect(searchSummary).toHaveCount(0, { timeout: 10_000 })

@@ -350,6 +350,18 @@
         "toMode": { "$ref": "#/$defs/NonEmptyString" }
       }
     },
+    "SessionMetadataPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["title", "cwd", "projectPath"],
+      "properties": {
+        "title": { "$ref": "#/$defs/NullableString" },
+        "cwd": {
+          "type": "array", "maxItems": 256,
+          "items": { "$ref": "#/$defs/NonEmptyString" }
+        },
+        "projectPath": { "$ref": "#/$defs/NullableString" }
+      }
+    },
     "SessionLifecyclePayload": {
       "oneOf": [
         {
@@ -500,7 +512,7 @@
         "message.text", "message.thinking", "message.redacted-thinking", "message.reasoning",
         "tool.call", "tool.progress", "tool.result", "interaction.request", "interaction.response",
         "permission.request", "permission.response", "context.compaction", "context.summary",
-        "model.changed", "mode.changed", "session.lifecycle", "subagent.spawn", "rollback",
+        "model.changed", "mode.changed", "session.metadata", "session.lifecycle", "subagent.spawn", "rollback",
         "usage", "artifact", "unknown"
       ]
     },
@@ -593,6 +605,10 @@
         {
           "if": { "properties": { "kind": { "const": "mode.changed" } }, "required": ["kind"] },
           "then": { "properties": { "payload": { "$ref": "#/$defs/ModeChangedPayload" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "session.metadata" } }, "required": ["kind"] },
+          "then": { "properties": { "payload": { "$ref": "#/$defs/SessionMetadataPayload" } } }
         },
         {
           "if": { "properties": { "kind": { "const": "session.lifecycle" } }, "required": ["kind"] },

@@ -20,7 +20,7 @@ export const PROVIDER_RESOURCE_LIMITS = {
 } as const
 export const PROVIDER_CAPABILITY_NAMES = ["discover","summary","transcript","tools","thinking","usage","relationships","subagents","interactions","permissions","context-timeline","identity","chunked-transport","terminal-resume","native-resume","format-provenance"] as const
 export const PROVIDER_CAPABILITY_STATES = ["available","unavailable","not-applicable","experimental"] as const
-export const PROVIDER_EVENT_KINDS = ["message.text","message.thinking","message.redacted-thinking","message.reasoning","tool.call","tool.progress","tool.result","interaction.request","interaction.response","permission.request","permission.response","context.compaction","context.summary","model.changed","mode.changed","session.lifecycle","subagent.spawn","rollback","usage","artifact","unknown"] as const
+export const PROVIDER_EVENT_KINDS = ["message.text","message.thinking","message.redacted-thinking","message.reasoning","tool.call","tool.progress","tool.result","interaction.request","interaction.response","permission.request","permission.response","context.compaction","context.summary","model.changed","mode.changed","session.metadata","session.lifecycle","subagent.spawn","rollback","usage","artifact","unknown"] as const
 
 export type ProtocolVersion = "2.0"
 
@@ -98,6 +98,8 @@ export type ModelChangedPayload = { fromModelId: NullableString; toModelId: NonE
 
 export type ModeChangedPayload = { fromMode: NullableString; toMode: NonEmptyString }
 
+export type SessionMetadataPayload = { title: NullableString; cwd: Array<NonEmptyString>; projectPath: NullableString }
+
 export type SessionLifecyclePayload = { phase: NonEmptyString } | { relationshipType: "parent-child" | "continuation" | "fork" | "import-copy" | "subagent" | "related"; fromSessionRecordId: NonEmptyString; toSessionRecordId: NonEmptyString } | { relationshipType: "parent-child" | "continuation" | "fork" | "import-copy" | "subagent" | "related"; parentBranchViewId: NonEmptyString }
 
 export type SubagentSpawnPayload = { agentId: NonEmptyString; parentAgentId: NonEmptyString }
@@ -120,7 +122,7 @@ export type UsageRecord = { eventId: NullableString; turnId: NullableString; mod
 
 export type UnknownPayload = { rawType: NonEmptyString; rawPayload: JsonValue }
 
-export type CanonicalEventKind = "message.text" | "message.thinking" | "message.redacted-thinking" | "message.reasoning" | "tool.call" | "tool.progress" | "tool.result" | "interaction.request" | "interaction.response" | "permission.request" | "permission.response" | "context.compaction" | "context.summary" | "model.changed" | "mode.changed" | "session.lifecycle" | "subagent.spawn" | "rollback" | "usage" | "artifact" | "unknown"
+export type CanonicalEventKind = "message.text" | "message.thinking" | "message.redacted-thinking" | "message.reasoning" | "tool.call" | "tool.progress" | "tool.result" | "interaction.request" | "interaction.response" | "permission.request" | "permission.response" | "context.compaction" | "context.summary" | "model.changed" | "mode.changed" | "session.metadata" | "session.lifecycle" | "subagent.spawn" | "rollback" | "usage" | "artifact" | "unknown"
 
 export type CanonicalEvent = ({ id: NonEmptyString; identity: SessionIdentity; sharedEventKey: NonEmptyString; messageId: NullableString; sequence: number; messageBlockIndex: NullableInteger; timestamp: NullableString; actor: "user" | "assistant" | "system" | "tool" | "subagent" | "unknown"; kind: CanonicalEventKind; payload: JsonValue; visibility: "primary" | "collapsed" | "hidden-noise"; classification: "noise" | "promoted-system" | "lifecycle" | "interaction" | "user-content" | "unknown"; timeline: EventTimeline; provenance: EventProvenance; rawRef: RawRecordReference | null })
 

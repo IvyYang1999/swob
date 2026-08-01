@@ -40,7 +40,12 @@ function canonicalPathThroughExistingAncestor(candidatePath: string): string {
     missing.unshift(path.basename(existing))
     existing = parent
   }
-  const canonicalExisting = fs.realpathSync(existing)
+  // On Windows, the portable JS implementation can preserve an 8.3 segment
+  // (for example RUNNER~1) for the sandbox root while a deeper child resolves
+  // to the long form (runneradmin). The native call asks Windows to canonicalize
+  // both sides consistently; containment still uses the resolved real paths, so
+  // a sandbox-local junction/symlink escape remains rejected.
+  const canonicalExisting = fs.realpathSync.native(existing)
   return path.resolve(canonicalExisting, ...missing)
 }
 

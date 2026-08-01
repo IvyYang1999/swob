@@ -127,7 +127,7 @@ test.beforeAll(async () => {
     },
     timeout: 60_000
   })
-  page = await app.firstWindow()
+  page = await app.firstWindow({ timeout: 60_000 })
   await page.waitForLoadState('domcontentloaded')
   await page.setViewportSize({ width: 1200, height: 800 })
 })

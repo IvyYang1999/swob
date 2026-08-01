@@ -163,7 +163,7 @@ export function preflightManifests(manifests, repo, { baseRef = 'origin/master',
         const distance = Number(git(['rev-list', '--count', `${manifest.baseSha}..${baseRef}`], repo))
         if (distance > staleThreshold) warnings.push(`${manifest.workItemId}: 基线落后 ${baseRef} ${distance} 个提交（阈值 ${staleThreshold}）`)
       } else {
-        warnings.push(`${manifest.workItemId}: baseSha 已偏离 ${baseRef}，需 Integrator 复核`)
+        errors.push(`${manifest.workItemId}: baseSha 不是 ${baseRef} 的祖先；禁止把旁支基线带入集成`)
       }
     } catch (error) {
       errors.push(error.message)

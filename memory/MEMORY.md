@@ -32,7 +32,7 @@
 - `npm run test:e2e` E2E 测试
 - 修 bug 必须先写测试
 - 测试名用中文，回归加 `【曾经的 bug】` 前缀
-- Worker 只在独立 worktree 提交，不 push；仅 yyt 可以决定 push、部署与发布
+- Worker 只在独立 worktree 提交，不 push；仅 yyt 可以授权 push、部署与发布，Integrator 只在当前批次获明确授权时代执行 push/本地部署
 
 ## 已知技术债
 - ChatViewer.tsx 1400+ 行，需拆分

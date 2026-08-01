@@ -81,6 +81,29 @@ try {
   runGit(fixtureRepo, 'commit', '-m', 'fixture base')
   const baseSha = runGit(fixtureRepo, 'rev-parse', 'HEAD')
 
+  const divergentSha = execFileSync('git', ['commit-tree', `${baseSha}^{tree}`], {
+    cwd: fixtureRepo,
+    encoding: 'utf8',
+    input: 'divergent base\n'
+  }).trim()
+  const divergentPreflight = preflightManifests([{
+    workItemId: 'divergent-base',
+    baseSha: divergentSha,
+    headSha: divergentSha,
+    changedFiles: [],
+    contractsProduced: [],
+    tests: [{ command: 'fixture', status: 'passed' }],
+    visualEvidence: [],
+    deviations: [],
+    knownRisks: [],
+    provenance: { harness: 'fixture', model: 'n/a', session: 'selftest' },
+    depends_on: []
+  }], fixtureRepo, { baseRef: 'master', staleThreshold: 20 })
+  assert.ok(
+    divergentPreflight.errors.some((error) => error.includes('禁止把旁支基线带入集成')),
+    '旁支 baseSha 必须 fail-closed，不能只给 warning 后继续 merge'
+  )
+
   const createHead = (branch, file, content) => {
     runGit(fixtureRepo, 'switch', '-c', branch, baseSha)
     fs.writeFileSync(path.join(fixtureRepo, file), content)

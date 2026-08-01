@@ -4,9 +4,10 @@ Swob 是 local-first 的 AI 编码会话桌面工作台，基于 Electron、Reac
 
 ## 当前数据源
 
-- 原生运行时：Claude Code、Codex、Cursor、OpenCode、ZCode、Pi。
+- 原生运行时：Claude Code、Codex、Cursor、OpenCode、ZCode、Antigravity、Grok、Pi、Kimi、Hermes、Qoder、Trae。
 - 兼容运行时：CC-Mirror。
-- 仅发现/识别：Antigravity、Grok/Factory、Kimi、Hermes。
+
+共 **12 native + 1 compatible**。单项能力按可观察证据独立标注；加密/私有格式、未验证 Resume 与 provider-defined usage 关系必须 fail-closed，不能因来源已注册就推断全部能力可用。
 
 能力等级的代码真相源是 `src/shared/provider-capabilities.ts`，新增或升级数据源时必须同步其契约测试与公开文案检查。
 

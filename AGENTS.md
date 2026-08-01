@@ -7,7 +7,7 @@
 - Worker 只能在独立 worktree 和任务分支工作；不得直接修改 `master`，不得 push。
 - 一个工作包只有一个 Owner。Builder 完成实现与本地证据，但 Builder 不得充当该工作包的 Verifier。
 - 只有 Integrator 可以把已验收的工作包送入集成分支；语义冲突必须暂停并交回 Integrator/人类，不得自动猜测解决。
-- 只有 yyt 可以发布。Agent、脚本和 Git hook 均不得自动 push、部署、替换或重启应用。
+- 只有 yyt 可以授权 push、部署与公开发布。Agent、脚本和 Git hook 均不得自行推断授权或自动 push、部署、替换、重启应用；当前批次得到 yyt 明确授权时，Integrator 才可代为执行该批 push/本地部署，tag、Release 与官网发布仍须逐项授权。
 - 每个独立改动单独提交；提交前运行与风险相称的验证。不得混入其他工作包或用户未提交改动。
 
 ## 角色与职责
@@ -20,8 +20,8 @@
 | Contract Owner | 对目标领域最强的模型/人 | 固化接口、数据与行为契约 | 不同时分配重叠 Owner |
 | Builder | Codex 或 Opus，按工作包选择 | 在独立 worktree 实现一个明确工作包并提交证据 | 不提前集成，不验证自己的高风险产出 |
 | Verifier | 独立上下文；高风险时换模型或人 | 按验收标准复核结果与证据 | 不以 Builder 自证代替独立验收 |
-| Integrator | Codex + Merge Queue | 只接收合格 `result.json`，顺序合并、运行门禁、报告冲突 | 不发布，不自动解决语义冲突 |
-| Release | yyt | 审阅集成结论后决定 push/部署/发布 | 不把发布授权隐含给 Agent 或 hook |
+| Integrator | Codex + Merge Queue | 只接收合格 `result.json`，顺序合并、运行门禁、报告冲突；有当批明确授权时执行 push/本地部署 | 不自动解决语义冲突，不把一次授权外推到后续批次或公开发布 |
+| Release | yyt | 审阅集成结论，授权 push/部署，并逐项决定 tag、Release 与官网发布 | 不把发布授权隐含给 Agent 或 hook |
 | Learning Miner | GLM | 从已完成批次提炼可复用经验 | 不改变当批实现或验收结论 |
 
 ## 生命周期
@@ -49,7 +49,7 @@
    ```
 
 4. Worker 完成后只提交 `result.json` 和分支/commit 定位，不 push。Verifier 独立复核后，Integrator 才可运行 Merge Queue。
-5. Merge Queue 只能生成“可 push”或“不可 push/需处理”的结论；真正的 push、部署和发布始终由 yyt 执行。
+5. Merge Queue 只能生成“可 push”或“不可 push/需处理”的结论，绝不执行 push/deploy。Integrator 复核报告后，只有在 yyt 对当前批次已有明确授权时才能代执行 push/本地部署；否则停在“可 push”等待授权。tag、Release 与官网发布必须逐项授权。
 
 ## `result.json` 交接契约
 

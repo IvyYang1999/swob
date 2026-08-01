@@ -20,6 +20,8 @@ import type {
 } from '../shared/provider-schema-v2.generated'
 import { stableCanonicalRecordId } from '../shared/provider-protocol'
 
+export const V2_LIFECYCLE_PROJECTION_EVIDENCE = 'provider-v2-consumer-projection:session-lifecycle'
+
 /**
  * Provider Protocol v2 is the source of truth. The current sidebar, search and
  * Vault writers still consume v1 CanonicalRecord arrays, so this module creates
@@ -62,6 +64,13 @@ function provenance(event: CanonicalEvent): RecordProvenance {
     parserDataVersion: event.provenance.parserDataVersion,
     formatVersion: event.provenance.formatVersion,
     observedAt: event.provenance.observedAt,
+    ...(event.kind === 'session.lifecycle' ? {
+      evidence: [{
+        kind: 'compatibility-contract' as const,
+        locator: V2_LIFECYCLE_PROJECTION_EVIDENCE,
+        note: 'Projected lifecycle text is not a context compaction marker.'
+      }]
+    } : {}),
     ...(event.provenance.rawRecordFingerprint
       ? { rawRecordFingerprint: event.provenance.rawRecordFingerprint }
       : {})

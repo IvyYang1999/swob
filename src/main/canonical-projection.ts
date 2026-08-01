@@ -11,6 +11,7 @@ import type {
 import { stripTerminalControlSequences, stripTerminalControlSequencesDeep } from '../shared/chat-format'
 import { activityDaysFromTimestamps } from './activity-time'
 import { estimateActiveTime } from './insights'
+import { V2_LIFECYCLE_PROJECTION_EVIDENCE } from './provider-v2-consumer-projection'
 import {
   processedTotal,
   tokenUsageFromAccounting,
@@ -232,7 +233,9 @@ export function canonicalRecordsToSessionSummary(
     activityDays: activityDaysFromTimestamps(timestamps),
     messageCount: messages.length,
     turnCount: Math.min(userMessages.length, assistantMessages.length),
-    compactCount: messages.filter((message) => message.role === 'system').length,
+    compactCount: messages.filter((message) => message.role === 'system' &&
+      !message.provenance.evidence?.some((entry) =>
+        entry.locator === V2_LIFECYCLE_PROJECTION_EVIDENCE)).length,
     cwds: session.cwd,
     version: session.provenance.formatVersion || '',
     firstUserMessage: (firstUser ? plainTextForMessage(firstUser) : session.providerTitle || session.sourceSessionId).slice(0, 200),

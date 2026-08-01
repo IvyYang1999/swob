@@ -357,6 +357,7 @@ function sessionSourceRoots(): string[] {
     roots.push(join(home, '.kimi-code', 'sessions'))
     roots.push(join(home, '.kimi', 'sessions'))
   }
+  if (isSessionSourceSupported('grok')) roots.push(join(home, '.grok', 'sessions'))
   return roots
 }
 

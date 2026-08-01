@@ -3,6 +3,7 @@
 /** Format timestamps as HH:MM today and M/D HH:MM on every other date. */
 export function formatTime(iso: string, locale: string = 'zh-CN'): string {
   const date = new Date(iso)
+  if (!Number.isFinite(date.getTime())) return ''
   const now = new Date()
   const isToday = date.getFullYear() === now.getFullYear()
     && date.getMonth() === now.getMonth()

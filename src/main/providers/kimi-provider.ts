@@ -84,6 +84,11 @@ const unavailable = (reason: string, cell: KimiEvidenceCell) => ({
   reason,
   evidence: [...evidence(cell, 'observed-format')]
 })
+const experimental = (reason: string, cell: KimiEvidenceCell) => ({
+  status: 'experimental' as const,
+  reason,
+  evidence: [...evidence(cell)]
+})
 
 export const KIMI_PROVIDER_MANIFEST_V2: ProviderManifest = {
   schemaVersion: 2,
@@ -106,7 +111,10 @@ export const KIMI_PROVIDER_MANIFEST_V2: ProviderManifest = {
     'context-timeline': available(KIMI_EIGHT_LAYER_EVIDENCE.systemCompact),
     identity: available(KIMI_EIGHT_LAYER_EVIDENCE.relationships),
     'chunked-transport': available(KIMI_EIGHT_LAYER_EVIDENCE.discovery),
-    'terminal-resume': available(KIMI_EIGHT_LAYER_EVIDENCE.resume),
+    'terminal-resume': experimental(
+      'The CLI command is source-audited, but the launch path does not yet enforce its declared anchor-match postcondition.',
+      KIMI_EIGHT_LAYER_EVIDENCE.resume
+    ),
     'native-resume': unavailable('Kimi Code exposes a CLI session entry point, not a desktop deep link.', KIMI_EIGHT_LAYER_EVIDENCE.resume),
     'format-provenance': available(KIMI_EIGHT_LAYER_EVIDENCE.metadata)
   },

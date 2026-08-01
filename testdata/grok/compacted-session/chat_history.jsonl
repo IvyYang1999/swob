@@ -1,0 +1,8 @@
+{"type":"system","content":"You are a fully synthetic Grok Build fixture."}
+{"type":"user","content":[{"type":"text","text":"<user_info>\nWorkspace Path: /workspace/swob-grok-fixture\n</user_info>"}],"synthetic_reason":"compaction_meta"}
+{"type":"user","content":[{"type":"text","text":"<user_query>\ninspect the synthetic workspace\n</user_query>"}]}
+{"type":"user","content":[{"type":"text","text":"This session is being continued from a previous conversation that ran out of context. Summary: inspected a synthetic README and identified the provider boundary."}],"synthetic_reason":"compaction_meta"}
+{"type":"user","content":[{"type":"text","text":"<user_query>\nimplement the direct v2 parser\n</user_query>"}],"prompt_index":2}
+{"type":"reasoning","summary":[{"text":"Preserve reported cache and reasoning subset semantics."}],"encrypted_reasoning":"synthetic-ciphertext-not-a-real-secret"}
+{"type":"assistant","content":"I will update the synthetic provider file.","model_id":"grok-fixture-main","tool_calls":[{"id":"call-current","name":"apply_patch","arguments":"{\"file\":\"src/main/providers/grok-provider.ts\"}"}]}
+{"type":"tool_result","tool_call_id":"call-current","content":"synthetic patch applied"}

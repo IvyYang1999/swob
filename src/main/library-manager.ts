@@ -1330,6 +1330,21 @@ function evaluateSourceResumeAvailability(
   dirPath?: string | null,
   remoteManifestOnly = false
 ): SessionResumeAvailability {
+  const provider = builtinProviderForSource(source)
+  if (provider) {
+    const terminal = provider.manifest.capabilities['terminal-resume']
+    const native = provider.manifest.capabilities['native-resume']
+    const supported = [terminal, native].some((declaration) =>
+      declaration.status === 'available' || declaration.status === 'experimental'
+    )
+    if (!supported) {
+      return {
+        canResume: false,
+        reason: terminal.reason || native.reason || LOCAL_RESUME_UNAVAILABLE_REASON,
+        sourcePath: sourceFilePaths[0] || null
+      }
+    }
+  }
   const existingSource = sourceFilePaths.find((src) => fs.existsSync(sourceStatPath(src)))
   if (existingSource) return { canResume: true, sourcePath: existingSource }
 

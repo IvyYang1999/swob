@@ -1,0 +1,20 @@
+Grok Build synthetic fixture notice
+===================================
+
+All data below testdata/grok is synthetic. Session IDs, paths, prompts, tool
+arguments, timestamps, usage and cost values were invented for Swob tests and
+do not contain a real user's transcript or credentials.
+
+The independently written parser and fixture were checked against these pinned
+public references:
+
+- xai-org/grok-build, Apache-2.0, commit
+  7cfcb20d2b50b0d18801a6c0af2e401c0e060894.
+- tyql688/SessionView, MIT, commit
+  4adbd178a16a219b14c9d5f73c640c31764b8e59. Copyright 2026 tyql688.
+- lyu-kaiwen/AgentsView, MIT, commit
+  75b9e8bdc8b9c831710afb89a0f414bfd1a8fd23.
+
+No upstream transcript was copied. The references establish the compound
+summary.json + chat_history.jsonl + updates.jsonl storage contract, compaction
+behavior, legacy/current discriminators, and reported usage field semantics.

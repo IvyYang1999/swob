@@ -39,27 +39,35 @@ describe('设置偏好迁移与 Resume 能力', () => {
     expect(defaultResumeMethodForSource({}, 'cursor')).toBe('terminal')
   })
 
-  it('每个 harness 的默认方式都必须出现在稳定或实验能力声明中', () => {
+  it('有可用 Resume 面的 harness 默认值不得指向 unsupported；全部不可用时必须失败关闭', () => {
     for (const harness of HARNESS_CAPABILITIES) {
       const choice = harness.choices.find((item) => item.id === harness.defaultMethod)
       expect(choice, harness.id).toBeDefined()
-      expect(choice?.support).not.toBe('unsupported')
+      if (harness.choices.some((item) => item.support !== 'unsupported')) {
+        expect(choice?.support).not.toBe('unsupported')
+      } else {
+        expect(choice?.support).toBe('unsupported')
+      }
     }
   })
 
   it('未审计来源的猜测命令不能标为 stable', () => {
-    for (const source of ['antigravity', 'grok', 'pi', 'hermes']) {
+    for (const source of ['antigravity', 'pi', 'kimi', 'hermes']) {
       const terminal = harnessForSource(source).choices.find((choice) => choice.id === 'terminal')
       expect(terminal, source).toMatchObject({
         support: 'experimental',
         reason: providerCapabilitiesForSource(source)?.['terminal-resume'].reason
       })
     }
+    expect(harnessForSource('grok').choices.find((choice) => choice.id === 'terminal')).toMatchObject({
+      support: 'unsupported',
+      reason: providerCapabilitiesForSource('grok')?.['terminal-resume'].reason
+    })
   })
 
-  it('Kimi --session 经来源级契约审计后标为 stable', () => {
+  it('Kimi --session 未完成启动后锚点闭环前只能标为 experimental', () => {
     expect(harnessForSource('kimi').choices.find((choice) => choice.id === 'terminal')).toMatchObject({
-      support: 'stable'
+      support: 'experimental'
     })
   })
 

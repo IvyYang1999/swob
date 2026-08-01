@@ -10,6 +10,11 @@ afterEach(() => {
 })
 
 describe('formatTime', () => {
+  it('renders an unavailable timestamp as empty instead of Invalid Date', () => {
+    expect(formatTime('', locale)).toBe('')
+    expect(formatTime('not-a-timestamp', locale)).toBe('')
+  })
+
   it('shows only HH:MM for the same local calendar day', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 6, 12, 23, 59))

@@ -1,0 +1,14 @@
+{
+  "info": {
+    "id": "11111111-2222-7333-8444-555555555555",
+    "cwd": "/workspace/swob-grok-fixture"
+  },
+  "session_summary": "Synthetic direct-v2 provider exercise",
+  "generated_title": "Build a truthful Grok provider",
+  "created_at": "2026-07-31T08:00:00.000Z",
+  "updated_at": "2026-07-31T09:00:00.000Z",
+  "current_model_id": "grok-fixture-main",
+  "session_kind": "subagent_fork",
+  "parent_session_id": "aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee",
+  "chat_format_version": 1
+}

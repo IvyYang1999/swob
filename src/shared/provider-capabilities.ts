@@ -191,9 +191,41 @@ function kimiCanonicalCapabilities(): ProviderCapabilities {
     'live-watch': unavailable('Kimi is refreshed by provider discovery; no dedicated live watcher is registered.', watcher),
     search: available(searchIndex, projection, fixture),
     archive: available(archive, projection, fixture),
-    'terminal-resume': available(resume, test('src/main/session-actions.test.ts')),
+    'terminal-resume': experimental(
+      'The kimi --session contract is source-audited, but launch-after-anchor verification is not wired into the action path.',
+      resume,
+      test('src/main/session-actions.test.ts')
+    ),
     'native-resume': notApplicable('Kimi Code exposes a CLI session entry point, not a desktop deep link.', resume),
     'format-provenance': available(provider, host, fixture)
+  }
+}
+
+function grokCanonicalCapabilities(): ProviderCapabilities {
+  const provider = implementation('src/main/providers/grok-provider.ts')
+  const host = implementation('src/main/provider-host.ts')
+  const canonicalStore = implementation('src/main/canonical-store.ts')
+  const projection = implementation('src/main/provider-v2-consumer-projection.ts')
+  const fixture = test('src/main/providers/grok-provider.test.ts', 'Fully synthetic Grok Build composite and compaction fixture.')
+  return {
+    discover: available(provider, host, fixture),
+    summary: available(provider, projection, fixture),
+    transcript: available(provider, projection, fixture),
+    tools: available(provider, projection, fixture),
+    thinking: available(provider, projection, fixture),
+    usage: available(provider, canonicalStore, fixture),
+    relationships: available(provider, fixture),
+    subagents: unavailable('Parent/fork identity is parsed, but no verified child-agent event stream is available.', provider, fixture),
+    'live-watch': unavailable('Grok Build is refreshed by provider discovery; no dedicated live watcher is registered.', watcher),
+    search: available(searchIndex, projection, fixture),
+    archive: available(archive, projection, fixture),
+    'terminal-resume': unavailable(
+      'Upstream documents grok --resume, but binary/help/source/post-launch anchor verification could not run on this build machine.',
+      provider,
+      fixture
+    ),
+    'native-resume': notApplicable('Grok Build exposes no verified native desktop deep link.', provider),
+    'format-provenance': available(provider, canonicalStore, fixture)
   }
 }
 
@@ -310,7 +342,11 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
   }, ['claude-jsonl-compatible']),
 
   definition('antigravity', 'Antigravity', 'detection-only', detectionOnlyCapabilities('antigravity')),
-  definition('grok', 'Grok / Factory', 'detection-only', detectionOnlyCapabilities('grok')),
+  definition('grok', 'Grok Build', 'native', grokCanonicalCapabilities(), [
+    'grok-build-composite-v0',
+    'grok-build-composite-v1',
+    'grok-build-composite-mixed-v0-v1'
+  ], 'provider-host'),
   definition('pi', 'Pi', 'native', piCanonicalCapabilities(), [
     'pi-jsonl-v1',
     'pi-jsonl-v2',

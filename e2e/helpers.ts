@@ -46,6 +46,7 @@ export interface LaunchAppOptions {
   includeCursorFixture?: boolean
   includePiFixture?: boolean
   includeKimiFixture?: boolean
+  includeGrokFixture?: boolean
   includeInspectorFixture?: boolean
   includePricingFixture?: boolean
   env?: Record<string, string>
@@ -92,6 +93,7 @@ function createSyntheticCorpus(
   includeCursorFixture = false,
   includePiFixture = false,
   includeKimiFixture = false,
+  includeGrokFixture = false,
   includeInspectorFixture = false,
   includePricingFixture = false
 ): void {
@@ -102,6 +104,17 @@ function createSyntheticCorpus(
   if (includeInspectorFixture) {
     fs.mkdirSync(path.dirname(inspectorFile), { recursive: true })
     fs.writeFileSync(inspectorFile, 'export const inspectorFixture = true\n', 'utf8')
+  }
+  if (includeGrokFixture) {
+    const grokSession = path.join(
+      home,
+      '.grok',
+      'sessions',
+      '%2Fworkspace%2Fswob-grok-fixture',
+      '11111111-2222-7333-8444-555555555555'
+    )
+    fs.mkdirSync(path.dirname(grokSession), { recursive: true })
+    fs.cpSync(path.resolve(__dirname, '../testdata/grok/compacted-session'), grokSession, { recursive: true })
   }
 
   // Sandboxed specs test the main UI, not first-run onboarding (which has its
@@ -400,6 +413,7 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     options.includeCursorFixture ?? false,
     options.includePiFixture ?? false,
     options.includeKimiFixture ?? false,
+    options.includeGrokFixture ?? false,
     options.includeInspectorFixture ?? false,
     options.includePricingFixture ?? false
   )

@@ -14,13 +14,16 @@ describe('Provider capability snapshots match real call chains', () => {
 
     const paths: Record<string, string> = {
       antigravity: '/fixture/.gemini/antigravity/session.json',
-      grok: '/fixture/.grok/sessions/session.jsonl',
+      kimi: '/fixture/.kimi/sessions/session.jsonl',
       hermes: '/fixture/.hermes/sessions/session.json'
     }
     for (const [source, filePath] of Object.entries(paths)) {
       expect(sessionBackupSourcePaths({ filePath }), source).toEqual([])
       expect(builtinProviderForSource(source)?.manifest.capabilities.archive.status, source).toBe('unavailable')
     }
+    const grokPath = '/fixture/.grok/sessions/project/session/chat_history.jsonl'
+    expect(sessionBackupSourcePaths({ filePath: grokPath }), 'Grok source members are never copied as physical backups').toEqual([])
+    expect(builtinProviderForSource('grok')?.manifest.capabilities.archive.status).toBe('available')
     const piPath = '/fixture/.pi/agent/sessions/session.jsonl'
     expect(sessionBackupSourcePaths({ filePath: piPath }), 'pi never copies source JSONL').toEqual([])
     expect(builtinProviderForSource('pi')?.manifest.capabilities.archive.status).toBe('available')

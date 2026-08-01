@@ -132,6 +132,42 @@ describe('Kimi native Provider Protocol v2 runtime', () => {
     expect(events(migrated, 'usage')).toHaveLength(0)
   })
 
+  it('keeps an earlier turn fallback when only a later turn has authoritative usage', async () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-kimi-usage-turns-'))
+    const copiedHome = path.join(temp, 'home')
+    fs.cpSync(fixtureHome, copiedHome, { recursive: true })
+    const wirePath = path.join(copiedHome, '.kimi-code', 'sessions', 'wd_synthetic',
+      'session_synthetic_native', 'agents', 'main', 'wire.jsonl')
+    const records = [
+      { type: 'metadata', protocol_version: '1.5' },
+      { type: 'turn.prompt', input: [{ type: 'text', text: 'first' }] },
+      { type: 'context.append_message', message: { role: 'user', content: [{ type: 'text', text: 'first' }] } },
+      { type: 'context.append_loop_event', event: { type: 'step.end', usage: { inputOther: 10, inputCacheRead: 2, inputCacheCreation: 1, output: 3 } } },
+      { type: 'turn.ended', turnId: 1, reason: 'completed' },
+      { type: 'turn.prompt', input: [{ type: 'text', text: 'second' }] },
+      { type: 'context.append_message', message: { role: 'user', content: [{ type: 'text', text: 'second' }] } },
+      { type: 'usage.record', usage: { inputOther: 20, inputCacheRead: 4, inputCacheCreation: 2, output: 6 } }
+    ]
+    fs.writeFileSync(wirePath, records.map((record) => JSON.stringify(record)).join('\n'))
+
+    try {
+      const runtime = createKimiProvider({ homeDir: copiedHome })
+      const controller = new AbortController()
+      const source = (await runtime.discover(controller.signal))
+        .find((candidate) => candidate.stableId === 'kimi:session_synthetic_native:main')!
+      const fingerprint = await runtime.fingerprint(source, controller.signal)
+      const [chunk] = await runtime.parse(source, fingerprint, controller.signal)
+      const usage = events(chunk, 'usage').map((event) => event.payload as unknown as UsageRecord)
+
+      expect(usage).toHaveLength(2)
+      expect(usage[0]).toMatchObject({ turnId: 'turn-1', input: { total: 13 }, measurement: { source: 'derived' } })
+      expect(usage[1]).toMatchObject({ turnId: 'turn-2', input: { total: 26 }, measurement: { source: 'reported' } })
+      expect(chunk.diagnostics.some((entry) => entry.code === 'kimi-step-usage-deduplicated')).toBe(false)
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true })
+    }
+  })
+
   it('KIMI-SYSTEM-COMPACT-001 retains interactions, permissions, plan/goal, steer, rollback and unknown data', async () => {
     const { chunks } = await parsedFixtures()
     const main = chunks.get('kimi:session_synthetic_native:main')!

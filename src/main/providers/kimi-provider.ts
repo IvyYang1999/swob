@@ -329,8 +329,12 @@ function interactionResolution(lines: ParsedLine[]): { ids: Set<string>; approva
 function authoritativeUsageTurns(lines: ParsedLine[]): Map<number, boolean> {
   const result = new Map<number, boolean>()
   let turn = 1
+  let sawTurnPrompt = false
   for (const line of lines) {
-    if (line.value.type === 'turn.prompt') turn = result.size === 0 && !result.has(1) ? 1 : turn + 1
+    if (line.value.type === 'turn.prompt') {
+      if (sawTurnPrompt) turn++
+      sawTurnPrompt = true
+    }
     if (line.value.type === 'usage.record') result.set(turn, true)
   }
   return result
@@ -420,6 +424,7 @@ async function parseKimiSource(
   let contextRevision = 0
   let modelId: string | null = null
   let turn = 1
+  let sawTurnPrompt = false
   let messageBlockIndex = 0
   let lastContentEventId: string | null = null
   const resolutions = interactionResolution(parsed.lines)
@@ -528,7 +533,8 @@ async function parseKimiSource(
     }
 
     if (type === 'turn.prompt') {
-      if (events.some((event) => event.provenance.sourceRecordId.startsWith('line:') && event.kind === 'message.text')) turn++
+      if (sawTurnPrompt) turn++
+      sawTurnPrompt = true
       // Native wires also persist the prompt as context.append_message. That record is the canonical text.
       continue
     }

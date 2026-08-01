@@ -43,4 +43,80 @@ describe('native v2 legacy-consumer projection', () => {
       content: [{ kind: 'text', text: 'Synthetic compact summary' }]
     })
   })
+
+  it('projects lifecycle metadata into title and cwd without rendering it as chat text', () => {
+    const chunk = structuredClone(
+      piGolden.envelopes.find((entry) => entry.kind === 'parse-chunk')!.payload
+    ) as unknown as ParseChunk
+    const template = chunk.events[0]
+    chunk.events = [
+      {
+        ...structuredClone(template),
+        id: 'synthetic-metadata-title',
+        sharedEventKey: 'synthetic-metadata-title',
+        sequence: 0,
+        messageId: null,
+        kind: 'session.lifecycle',
+        actor: 'system',
+        classification: 'lifecycle',
+        visibility: 'hidden-noise',
+        payload: { phase: 'metadata.title:Synthetic Antigravity conversation' }
+      },
+      {
+        ...structuredClone(template),
+        id: 'synthetic-metadata-cwd',
+        sharedEventKey: 'synthetic-metadata-cwd',
+        sequence: 1,
+        messageId: null,
+        kind: 'session.lifecycle',
+        actor: 'system',
+        classification: 'lifecycle',
+        visibility: 'hidden-noise',
+        payload: { phase: 'metadata.cwd:/workspace/synthetic-antigravity' }
+      },
+      {
+        ...structuredClone(template),
+        id: 'synthetic-user-message',
+        sharedEventKey: 'synthetic-user-message',
+        sequence: 2,
+        messageId: 'synthetic-message',
+        kind: 'message.text',
+        actor: 'user',
+        classification: 'user-content',
+        visibility: 'primary',
+        payload: { text: 'Only this event is visible.' }
+      }
+    ]
+    chunk.done = true
+    chunk.cursor = null
+    expect(validateParseChunkV2(chunk).ok).toBe(true)
+    const sourceRoot = '/synthetic/antigravity-data'
+    const source: SourceRef = {
+      kind: 'composite-directory',
+      stableId: chunk.identity.physicalSourceId,
+      providerId: chunk.providerId,
+      rootUri: pathToFileURL(sourceRoot).href,
+      memberUris: [pathToFileURL(`${sourceRoot}/transcript.jsonl`).href],
+      displayLocator: sourceRoot,
+      fingerprint: chunk.fingerprint
+    }
+
+    const projected = projectNativeV2ChunksForConsumers(
+      chunk.providerId,
+      chunk.parserDataVersion,
+      [source],
+      [chunk]
+    )[0]
+    const records = projected.sessions[0].records
+    const session = records.find((record) => record.recordType === 'session')
+    const messages = records.filter((record) => record.recordType === 'message')
+
+    expect(session).toMatchObject({
+      providerTitle: 'Synthetic Antigravity conversation',
+      projectPath: '/workspace/synthetic-antigravity',
+      cwd: ['/workspace/synthetic-antigravity']
+    })
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ content: [{ kind: 'text', text: 'Only this event is visible.' }] })
+  })
 })

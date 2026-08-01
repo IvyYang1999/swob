@@ -85,7 +85,8 @@ function eventText(event: CanonicalEvent): MessageContent | null {
   if (event.kind === 'context.summary') {
     return { kind: 'text', text: typeof payload.text === 'string' ? payload.text : '' }
   }
-  if (event.kind === 'session.lifecycle' && typeof payload.phase === 'string') {
+  if (event.kind === 'session.lifecycle' && typeof payload.phase === 'string' &&
+    !payload.phase.startsWith('metadata.title:') && !payload.phase.startsWith('metadata.cwd:')) {
     return { kind: 'text', text: payload.phase }
   }
   return null
@@ -218,6 +219,19 @@ function projectSession(source: SourceRef, chunks: ParseChunk[]): SessionParseRe
     identity.logicalSessionId
   )
   const timestamps = events.flatMap((event) => event.timestamp ? [event.timestamp] : []).sort()
+  const metadataPhases = events.flatMap((event) => {
+    if (event.kind !== 'session.lifecycle') return []
+    const payload = objectValue(event.payload)
+    return typeof payload?.phase === 'string' ? [payload.phase] : []
+  })
+  const providerTitle = metadataPhases
+    .find((phase) => phase.startsWith('metadata.title:'))
+    ?.slice('metadata.title:'.length).trim() || null
+  const metadataCwds = metadataPhases
+    .filter((phase) => phase.startsWith('metadata.cwd:'))
+    .map((phase) => phase.slice('metadata.cwd:'.length).trim())
+    .filter((cwd, index, all) => Boolean(cwd) && all.indexOf(cwd) === index)
+  const fallbackProjectPath = sourceProjectPath(source)
   const firstEvent = events[0]
   const baseProvenance: RecordProvenance = firstEvent ? provenance(firstEvent) : {
     providerId: firstChunk.providerId,
@@ -233,9 +247,9 @@ function projectSession(source: SourceRef, chunks: ParseChunk[]): SessionParseRe
     sourceSessionId: identity.logicalSessionId,
     createdAt: timestamps[0] || null,
     updatedAt: timestamps.at(-1) || timestamps[0] || null,
-    cwd: [],
-    projectPath: sourceProjectPath(source),
-    providerTitle: null,
+    cwd: metadataCwds,
+    projectPath: metadataCwds[0] || fallbackProjectPath,
+    providerTitle,
     provenance: baseProvenance
   }]
   const messages = new Map<string, MessageRecord>()

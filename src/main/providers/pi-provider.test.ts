@@ -133,6 +133,18 @@ describe('Pi builtin provider', () => {
     })
   })
 
+  it('preserves an explicit v2 format identity instead of folding it into v1', async () => {
+    const { root, sessionPath } = temporaryPiRoot()
+    const v2 = fs.readFileSync(sessionPath, 'utf8').replace('"version":3', '"version":2')
+    fs.writeFileSync(sessionPath, v2)
+    const provider = createPiProvider({ homeDir: root, roots: [root] })
+    const signal = new AbortController().signal
+    const source = (await provider.discover(signal))[0]
+    const outcome = await provider.parse(source, await provider.fingerprint(source, signal), signal)
+
+    expect(outcome).toMatchObject({ status: 'complete', formatVersion: 'pi-jsonl-v2' })
+  })
+
   it('keeps stable source identity when the same session file moves', async () => {
     const { root, sessionPath } = temporaryPiRoot()
     const provider = createPiProvider({ homeDir: root, roots: [root] })

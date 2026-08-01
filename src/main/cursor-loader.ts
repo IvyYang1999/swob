@@ -39,6 +39,35 @@ export function findCursorSessionFiles(home = HOME): string[] {
   return files
 }
 
+export function findCursorResumeStores(home = HOME): string[] {
+  const chatsRoot = path.join(home, '.cursor', 'chats')
+  const stores: string[] = []
+  let workspaces: fs.Dirent[]
+  try { workspaces = fs.readdirSync(chatsRoot, { withFileTypes: true }) } catch { return stores }
+  for (const workspace of workspaces) {
+    if (!workspace.isDirectory()) continue
+    const workspaceDir = path.join(chatsRoot, workspace.name)
+    let sessions: fs.Dirent[]
+    try { sessions = fs.readdirSync(workspaceDir, { withFileTypes: true }) } catch { continue }
+    for (const session of sessions) {
+      if (!session.isDirectory()) continue
+      const storePath = path.join(workspaceDir, session.name, 'store.db')
+      if (fs.existsSync(storePath)) stores.push(storePath)
+    }
+  }
+  return stores.sort()
+}
+
+export function findCursorSourceGenerations(home = HOME): {
+  transcriptJsonl: string[]
+  resumeStoreDb: string[]
+} {
+  return {
+    transcriptJsonl: findCursorSessionFiles(home),
+    resumeStoreDb: findCursorResumeStores(home)
+  }
+}
+
 // --- Cursor JSONL line format ---
 
 interface CursorLine {
@@ -61,6 +90,7 @@ interface CursorContentPart {
   result?: string
   content?: string | CursorContentPart[]
   args?: Record<string, unknown>
+  source?: { type: string; media_type?: string; data?: string; url?: string }
 }
 
 // --- Parse raw lines ---
@@ -183,8 +213,11 @@ function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: s
           if (p.type === 'text') {
             return { type: 'text', text: p.text || '' } as ContentPart
           }
-          if (p.type === 'reasoning') {
-            return { type: 'text', text: '' } as ContentPart
+          if (p.type === 'reasoning' || p.type === 'thinking') {
+            return { type: 'reasoning', text: p.text || '' } as ContentPart
+          }
+          if (p.type === 'image' && p.source) {
+            return { type: 'image', source: p.source } as ContentPart
           }
           return { type: 'text', text: '' } as ContentPart
         })
@@ -243,6 +276,17 @@ function extractToolCalls(content: string | ContentPart[] | undefined): ToolCall
   return content
     .filter((p) => p.type === 'tool_use' && p.name)
     .map((p) => ({ id: p.id, name: p.name!, input: (p.input as Record<string, unknown>) || {} }))
+}
+
+function extractImages(content: string | ContentPart[] | undefined): string[] {
+  if (!Array.isArray(content)) return []
+  return content.flatMap((part) => {
+    if (part.type !== 'image' || !part.source) return []
+    if (part.source.type === 'base64' && part.source.data) {
+      return [`data:${part.source.media_type || 'image/png'};base64,${part.source.data}`]
+    }
+    return part.source.url ? [part.source.url] : []
+  })
 }
 
 // --- Strip XML wrappers from user queries ---
@@ -384,7 +428,7 @@ export async function buildCursorSessionDetail(filePath: string, sessionIdOverri
         origin: 'unknown',
         textContent,
         toolCalls,
-        images: [],
+        images: extractImages(content as string | ContentPart[] | undefined),
         tokenUsage: undefined,
         isPreCompact: false,
         isSidechain: false,

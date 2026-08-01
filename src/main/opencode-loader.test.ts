@@ -3,6 +3,8 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { execFileSync } from 'child_process'
+import { createHash } from 'crypto'
+import Database from 'better-sqlite3'
 import {
   buildOpencodeSessionDetail,
   buildOpencodeSessionSummary,
@@ -119,7 +121,7 @@ function createOpencodeDb(): { dir: string; dbPath: string; sourceRef: string } 
 }
 
 describe('opencode-loader', () => {
-  fixtureIt('【opencode】summary/detail/raw 能从最小 SQLite fixture 解析并过滤 step/reasoning', async () => {
+  fixtureIt('【opencode】summary/detail/raw 保留 reasoning，但过滤 step marker', async () => {
     const fixture = createOpencodeDb()
     try {
       const refs = await findOpencodeSessionFiles(fixture.dbPath)
@@ -130,7 +132,7 @@ describe('opencode-loader', () => {
       expect(raw[0].uuid).toBe('msg_user')
       expect(raw[1].parentUuid).toBe('msg_user')
       expect(JSON.stringify(raw)).not.toContain('hidden step marker')
-      expect(JSON.stringify(raw)).not.toContain('hidden reasoning')
+      expect(JSON.stringify(raw)).toContain('hidden reasoning')
 
       const summary = await buildOpencodeSessionSummary(fixture.sourceRef)
       expect(summary?.activityDays).toEqual(['2026-07-08'])
@@ -149,6 +151,8 @@ describe('opencode-loader', () => {
       expect(detail).not.toBeNull()
       expect(detail!.messages).toHaveLength(2)
       expect(detail!.messages[1].textContent).toBe('我来读取文件。')
+      expect((detail!.messages[1].raw.message?.content as any[]))
+        .toEqual(expect.arrayContaining([expect.objectContaining({ type: 'reasoning', text: 'hidden reasoning' })]))
       expect(detail!.messages[1].toolCalls[0]).toMatchObject({
         id: 'tool_read_1',
         name: 'Read',
@@ -168,7 +172,36 @@ describe('opencode-loader', () => {
       expect(detail!.source).toBe('opencode')
       expect(detail!.sessionId).toBe(SESSION_ID)
       expect(detail!.messages[0].textContent).toBe('请读取 src/index.ts')
+      expect(detail!.messages.some((message) => message.textContent.includes('[Reasoning]'))).toBe(true)
     } finally {
+      fs.rmSync(fixture.dir, { recursive: true, force: true })
+    }
+  })
+
+  fixtureIt('【opencode】解析只读 snapshot，不修改源 DB 或留下临时 sidecar', async () => {
+    const fixture = createOpencodeDb()
+    const writer = new Database(fixture.dbPath)
+    try {
+      writer.pragma('journal_mode = WAL')
+      writer.pragma('wal_autocheckpoint = 0')
+      writer.prepare('UPDATE part SET data = ? WHERE id = ?').run(
+        JSON.stringify({ text: 'reasoning committed only in WAL' }),
+        'part_reasoning'
+      )
+      expect(fs.existsSync(`${fixture.dbPath}-wal`)).toBe(true)
+      const beforeHash = (filePath: string) =>
+        createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+      const beforeDbHash = beforeHash(fixture.dbPath)
+      const beforeWalHash = beforeHash(`${fixture.dbPath}-wal`)
+      const beforeFiles = fs.readdirSync(path.dirname(fixture.dbPath)).sort()
+      const detail = await buildOpencodeSessionDetail(fixture.sourceRef)
+
+      expect(JSON.stringify(detail?.messages)).toContain('reasoning committed only in WAL')
+      expect(beforeHash(fixture.dbPath)).toBe(beforeDbHash)
+      expect(beforeHash(`${fixture.dbPath}-wal`)).toBe(beforeWalHash)
+      expect(fs.readdirSync(path.dirname(fixture.dbPath)).sort()).toEqual(beforeFiles)
+    } finally {
+      writer.close()
       fs.rmSync(fixture.dir, { recursive: true, force: true })
     }
   })

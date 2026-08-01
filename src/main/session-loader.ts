@@ -57,6 +57,10 @@ import {
   builtinProviderForSource,
   providerUsesCanonicalRuntime
 } from '../shared/provider-capabilities'
+import { loadConfig } from './config-store'
+import { providerAdapterMode } from './provider-adapter-mode'
+import { adaptSessionDetailV2 } from './unified-session-adapter-v2'
+import { enrichPiSessionDetailV2 } from './pi-detail-adapter'
 
 const HOME = runtimeHome()
 
@@ -2266,7 +2270,7 @@ function sanitizeSessionDetail(detail: SessionDetail | null): SessionDetail | nu
   }
 }
 
-export async function loadSessionDetail(
+async function loadLegacySessionDetail(
   filePath: string,
   allFilePaths?: string[],
   branchParentFilePaths?: string[],
@@ -2441,6 +2445,47 @@ export async function loadSessionDetail(
   }
 
   return sanitizeSessionDetail(detail)
+}
+
+/**
+ * Default read path for the seven migrated providers. A failed v2 conformance
+ * projection fails closed to that source's retained legacy loader, while the
+ * global/provider flags make rollback explicit and reversible.
+ */
+export async function loadSessionDetail(
+  filePath: string,
+  allFilePaths?: string[],
+  branchParentFilePaths?: string[],
+  branchPointUuid?: string,
+  branchLeafUuid?: string
+): Promise<SessionDetail | null> {
+  const detail = await loadLegacySessionDetail(
+    filePath,
+    allFilePaths,
+    branchParentFilePaths,
+    branchPointUuid,
+    branchLeafUuid
+  )
+  if (!detail?.source) return detail
+  if (providerAdapterMode(detail.source, loadConfig()).mode === 'legacy') return detail
+  try {
+    const adapterDetail = detail.source === 'pi'
+      ? await enrichPiSessionDetailV2(detail)
+      : detail
+    return sanitizeSessionDetail(adaptSessionDetailV2(adapterDetail).detail)
+  } catch (error) {
+    return sanitizeSessionDetail({
+      ...detail,
+      providerOutcome: {
+        ...(detail.providerOutcome || {
+          detected: 'detected' as const,
+          parse: 'parsed' as const,
+          usage: detail.tokenAccounting?.billingTotal === null ? 'unavailable' as const : 'available' as const
+        }),
+        reason: `unified-v2-fallback:${error instanceof Error ? error.message : String(error)}`
+      }
+    })
+  }
 }
 
 /**

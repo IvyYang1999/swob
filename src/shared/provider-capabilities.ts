@@ -28,8 +28,13 @@ export interface BuiltinProviderDefinition {
   sourceId: LegacySessionSource
   tier: BuiltinProviderTier
   ingestion: BuiltinProviderIngestion
+  adapterContract: 'provider-protocol-v2' | 'legacy'
   manifest: ProviderManifest
 }
+
+const V2_ADAPTER_SOURCES = new Set<LegacySessionSource>([
+  'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'pi'
+])
 
 const implementation = (locator: string, note?: string): CapabilityEvidence => ({
   kind: 'implementation',
@@ -181,6 +186,7 @@ function definition(
     sourceId,
     tier,
     ingestion,
+    adapterContract: V2_ADAPTER_SOURCES.has(sourceId) ? 'provider-protocol-v2' : 'legacy',
     manifest: {
       schemaVersion: 1,
       providerId: `swob/${sourceId}`,
@@ -197,11 +203,7 @@ function definition(
 export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] = [
   definition('claude-code', 'Claude Code', 'native', nativeCapabilities({
     loaderFile: 'src/main/session-loader.ts#buildSessionSummary',
-    thinking: unavailable(
-      'Thinking blocks may be searchable in raw content but are not preserved in normalized session detail.',
-      loader,
-      searchIndex
-    ),
+    thinking: available(loader, test('src/main/unified-session-adapter-v2.test.ts')),
     usage: available(loader, test('src/main/token-accounting.test.ts')),
     relationships: available(loader, test('src/main/session-lineage.test.ts')),
     subagents: available(loader, test('src/main/session-loader.test.ts')),
@@ -217,7 +219,7 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
 
   definition('codex', 'Codex', 'native', nativeCapabilities({
     loaderFile: 'src/main/codex-loader.ts',
-    thinking: unavailable('Reasoning content is not preserved by the current normalizer.', implementation('src/main/codex-loader.ts')),
+    thinking: available(implementation('src/main/codex-loader.ts'), test('src/main/codex-loader.test.ts')),
     usage: available(implementation('src/main/codex-loader.ts'), test('src/main/codex-loader.test.ts')),
     relationships: available(implementation('src/main/codex-loader.ts'), test('src/main/session-lineage.test.ts')),
     subagents: available(implementation('src/main/codex-loader.ts'), test('src/main/codex-loader.test.ts')),
@@ -229,7 +231,7 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
 
   definition('cursor', 'Cursor', 'native', nativeCapabilities({
     loaderFile: 'src/main/cursor-loader.ts',
-    thinking: unavailable('Reasoning parts are deliberately omitted from normalized messages.', implementation('src/main/cursor-loader.ts')),
+    thinking: available(implementation('src/main/cursor-loader.ts'), test('src/main/cursor-loader.test.ts')),
     usage: unavailable('The current Cursor fixtures contain no authoritative usage counters.', implementation('src/main/cursor-loader.ts')),
     relationships: unavailable('No source relationship parser is implemented.', implementation('src/main/cursor-loader.ts')),
     subagents: unavailable('No Cursor subagent identity parser is implemented.', implementation('src/main/cursor-loader.ts')),
@@ -241,9 +243,9 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
 
   definition('opencode', 'OpenCode', 'native', nativeCapabilities({
     loaderFile: 'src/main/opencode-loader.ts',
-    thinking: unavailable('Reasoning parts are deliberately ignored by the current normalizer.', implementation('src/main/opencode-loader.ts')),
+    thinking: available(implementation('src/main/opencode-loader.ts'), test('src/main/opencode-loader.test.ts')),
     usage: available(implementation('src/main/opencode-loader.ts'), test('src/main/opencode-loader.test.ts')),
-    relationships: unavailable('No source relationship parser is implemented.', implementation('src/main/opencode-loader.ts')),
+    relationships: available(implementation('src/main/opencode-loader.ts'), test('src/main/opencode-loader.test.ts')),
     subagents: unavailable('No OpenCode subagent identity parser is implemented.', implementation('src/main/opencode-loader.ts')),
     liveWatch: unavailable('No OpenCode source watcher is registered.', watcher),
     search: experimental('Normalized SQLite transcript indexing exists, but full parity is not audited.', searchIndex, implementation('src/main/opencode-loader.ts')),
@@ -253,9 +255,9 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
 
   definition('zcode', 'ZCode', 'native', nativeCapabilities({
     loaderFile: 'src/main/zcode-loader.ts',
-    thinking: unavailable('Reasoning parts are not preserved by the OpenCode-family normalizer.', implementation('src/main/opencode-loader.ts')),
+    thinking: available(implementation('src/main/opencode-loader.ts'), test('src/main/zcode-loader.test.ts')),
     usage: available(implementation('src/main/zcode-loader.ts'), test('src/main/zcode-loader.test.ts')),
-    relationships: unavailable('No source relationship parser is implemented.', implementation('src/main/zcode-loader.ts')),
+    relationships: available(implementation('src/main/zcode-loader.ts'), test('src/main/zcode-loader.test.ts')),
     subagents: unavailable('No ZCode subagent identity parser is implemented.', implementation('src/main/zcode-loader.ts')),
     liveWatch: unavailable('No ZCode source watcher is registered.', watcher),
     search: experimental('Normalized SQLite transcript indexing exists, but full parity is not audited.', searchIndex, implementation('src/main/zcode-loader.ts')),
@@ -268,11 +270,7 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
     summary: available(loader, compatibility('Claude JSONL compatibility')),
     transcript: available(loader, compatibility('Claude JSONL compatibility')),
     tools: available(loader, compatibility('Claude JSONL compatibility')),
-    thinking: unavailable(
-      'Claude-compatible thinking blocks are not preserved in normalized session detail.',
-      loader,
-      compatibility('Claude JSONL compatibility')
-    ),
+    thinking: available(loader, test('src/main/unified-session-adapter-v2.test.ts')),
     usage: available(loader, compatibility('Claude JSONL compatibility')),
     relationships: experimental('Claude-compatible lineage is reused but mirror-specific lineage is not audited.', loader),
     subagents: experimental('Claude-compatible subagent loading exists but mirror-specific layouts are not audited.', loader),
@@ -292,6 +290,7 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
   definition('grok', 'Grok / Factory', 'detection-only', detectionOnlyCapabilities('grok')),
   definition('pi', 'Pi', 'native', piCanonicalCapabilities(), [
     'pi-jsonl-v1',
+    'pi-jsonl-v2',
     'pi-jsonl-v3'
   ], 'provider-host'),
   definition('kimi', 'Kimi Code', 'detection-only', detectionOnlyCapabilities('kimi')),

@@ -18,6 +18,7 @@ import {
   parseSessionFile
 } from './session-loader'
 import { findCodexSessionFiles, loadCodexRawMessages } from './codex-loader'
+import { findCursorResumeStores } from './cursor-loader'
 import {
   getSqliteAgentDbPath,
   hasSqliteAgentSessionRecord,
@@ -269,34 +270,6 @@ function exampleFor(outcome: AuditOutcome): ResumeAuditAnchorExample {
     assistantAnchor: anchorExcerpt(outcome.expectedAnchors?.assistant || ''),
     ...(outcome.mismatchKind ? { classification: outcome.mismatchKind } : {})
   }
-}
-
-function findCursorResumeStores(home: string): string[] {
-  const chatsRoot = path.join(home, '.cursor', 'chats')
-  const stores: string[] = []
-  let workspaces: fs.Dirent[]
-  try {
-    workspaces = fs.readdirSync(chatsRoot, { withFileTypes: true })
-  } catch {
-    return stores
-  }
-
-  for (const workspace of workspaces) {
-    if (!workspace.isDirectory()) continue
-    const workspaceDir = path.join(chatsRoot, workspace.name)
-    let sessions: fs.Dirent[]
-    try {
-      sessions = fs.readdirSync(workspaceDir, { withFileTypes: true })
-    } catch {
-      continue
-    }
-    for (const session of sessions) {
-      if (!session.isDirectory()) continue
-      const storePath = path.join(workspaceDir, session.name, 'store.db')
-      if (fs.existsSync(storePath)) stores.push(storePath)
-    }
-  }
-  return stores
 }
 
 function buildTargetLists(options: ResumeAuditOptions): Record<ResumeAuditSource, string[]> {

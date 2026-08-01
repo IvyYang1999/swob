@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup, findCursorSessionFiles } from './cursor-loader'
+import {
+  buildCursorSessionSummary,
+  buildCursorSessionDetail,
+  buildCursorSessionSummaryFromBackup,
+  findCursorSessionFiles,
+  findCursorSourceGenerations
+} from './cursor-loader'
 
 function writeTempJsonl(lines: object[], sessionId = 'abc-def-123'): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cursor-test-'))
@@ -66,6 +72,24 @@ describe('cursor-loader', () => {
       for (const f of files) {
         expect(f).toContain('agent-transcripts')
         expect(f).toMatch(/\.jsonl$/)
+      }
+    })
+
+    it('分别发现 transcript/ACP JSONL 与 store.db resume 源', () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cursor-generations-'))
+      const transcript = path.join(home, '.cursor', 'projects', 'fixture', 'agent-transcripts', 'session-1', 'session-1.jsonl')
+      const store = path.join(home, '.cursor', 'chats', 'workspace', 'session-1', 'store.db')
+      fs.mkdirSync(path.dirname(transcript), { recursive: true })
+      fs.mkdirSync(path.dirname(store), { recursive: true })
+      fs.writeFileSync(transcript, '{}\n')
+      fs.writeFileSync(store, '')
+      try {
+        expect(findCursorSourceGenerations(home)).toEqual({
+          transcriptJsonl: [transcript],
+          resumeStoreDb: [store]
+        })
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true })
       }
     })
   })
@@ -180,6 +204,23 @@ describe('cursor-loader', () => {
       for (const m of userMsgs) {
         expect(m.textContent).not.toContain('<user_query>')
       }
+    })
+
+    it('保留 ACP reasoning 与 base64 image，usage 仍明确 unavailable', async () => {
+      const fp = writeTempJsonl([
+        { role: 'user', message: { content: [{ type: 'text', text: 'inspect' }] } },
+        { role: 'assistant', message: { content: [
+          { type: 'reasoning', text: 'reason first' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'YWJj' } },
+          { type: 'text', text: 'done' }
+        ] } }
+      ])
+      const detail = await buildCursorSessionDetail(fp)
+      const assistant = detail?.messages.find((message) => message.type === 'assistant')
+
+      expect(JSON.stringify(assistant?.raw)).toContain('reason first')
+      expect(assistant?.images).toEqual(['data:image/png;base64,YWJj'])
+      expect(detail?.tokenAccounting?.provenance).toBe('unavailable')
     })
   })
 })

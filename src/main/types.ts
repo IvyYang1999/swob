@@ -74,10 +74,14 @@ export interface RawJsonlMessage {
 export interface ContentPart {
   type: string
   text?: string
+  reason?: string
+  digest?: string
+  data?: unknown
   name?: string
   id?: string // tool_use id
   input?: Record<string, unknown>
   tool_use_id?: string // for tool_result, links to tool_use
+  is_error?: boolean
   content?: string | ContentPart[]
   source?: { type: string; media_type?: string; data?: string; url?: string }
 }
@@ -344,5 +348,9 @@ export interface UserConfig {
     harnessIconOverrides?: Record<string, string>
     enabledLenses?: string[] | null
     lensOrder?: string[] | null
+    /** t173 global migration kill switch. Defaults to unified-v2 when omitted. */
+    providerAdapterMode?: 'unified-v2' | 'legacy'
+    /** Per-source fail-closed fallback while other v2 adapters stay active. */
+    legacyProviderSources?: import('../shared/seven-source-contract-v2').UnifiedProviderSource[]
   }
 }

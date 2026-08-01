@@ -21,6 +21,7 @@ import type { BuiltinProviderRuntime } from '../provider-host'
 
 const PI_PROVIDER_ID = 'swob/pi'
 const PI_FORMAT_V1 = 'pi-jsonl-v1'
+const PI_FORMAT_V2 = 'pi-jsonl-v2'
 const PI_FORMAT_V3 = 'pi-jsonl-v3'
 
 interface PiProviderOptions {
@@ -297,7 +298,9 @@ async function parsePiSource(source: SourceRef, fingerprint: Fingerprint, signal
   }
 
   const sourceSessionId = header.id?.trim() || path.basename(filePath, path.extname(filePath))
-  const formatVersion = typeof header.version === 'number' && header.version >= 3 ? PI_FORMAT_V3 : PI_FORMAT_V1
+  const formatVersion = header.version === 2
+    ? PI_FORMAT_V2
+    : typeof header.version === 'number' && header.version >= 3 ? PI_FORMAT_V3 : PI_FORMAT_V1
   const sessionRecordId = recordId(source, 'session', `session:${sourceSessionId}`)
   const observedAt = new Date().toISOString()
   const records: CanonicalRecord[] = []

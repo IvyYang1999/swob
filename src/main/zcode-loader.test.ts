@@ -45,7 +45,8 @@ function createZcodeDb(): { dir: string; dbPath: string; sourceRef: string } {
     role: 'assistant',
     parentID: 'msg_user',
     time: { created: '2026-07-08T10:00:05Z' },
-    model: 'glm-4.5'
+    model: 'glm-4.5',
+    tokens: { input: 13, output: 5 }
   })
   const sql = `
     CREATE TABLE session (
@@ -82,6 +83,8 @@ function createZcodeDb(): { dir: string; dbPath: string; sourceRef: string } {
     INSERT INTO message VALUES ('msg_assistant', ${sqlString(SESSION_ID)}, ${sqlString(assistantData)}, 1783504805);
     INSERT INTO part VALUES ('part_user_text', ${sqlString(SESSION_ID)}, 'msg_user', ${sqlString(JSON.stringify({ type: 'text', text: '请检查 Zcode 会话' }))});
     INSERT INTO part VALUES ('part_assistant_text', ${sqlString(SESSION_ID)}, 'msg_assistant', ${sqlString(JSON.stringify({ type: 'text', text: 'Zcode 会话已加载。' }))});
+    INSERT INTO part VALUES ('part_assistant_reasoning', ${sqlString(SESSION_ID)}, 'msg_assistant', ${sqlString(JSON.stringify({ type: 'reasoning', text: 'Zcode independent reasoning' }))});
+    INSERT INTO part VALUES ('part_assistant_tool', ${sqlString(SESSION_ID)}, 'msg_assistant', ${sqlString(JSON.stringify({ type: 'tool', id: 'zcode-tool-1', name: 'read', input: { file_path: '/Users/test/projects/zcode-app/README.md' } }))});
   `
 
   execFileSync('sqlite3', [dbPath], { input: sql })
@@ -103,16 +106,22 @@ describe('zcode-loader', () => {
         branchParentId: PARENT_ID,
         resumeCwd: '/Users/test/projects/zcode-app'
       })
+      expect(summary?.tokenUsage).toMatchObject({ inputTokens: 13, outputTokens: 5 })
+      expect(summary?.toolUsage).toEqual({ Read: 1 })
       expect(summary?.activityDays).toEqual(['2026-07-08'])
 
       const detail = await buildZcodeSessionDetail(fixture.sourceRef)
-      expect(detail?.messages.map((message) => message.textContent)).toEqual([
-        '请检查 Zcode 会话',
-        'Zcode 会话已加载。'
+      expect(detail?.messages[0].textContent).toBe('请检查 Zcode 会话')
+      expect(detail?.messages[1].textContent).toBe('Zcode 会话已加载。')
+      expect(JSON.stringify(detail?.messages[1].raw)).toContain('Zcode independent reasoning')
+      expect(detail?.messages[1].toolCalls).toEqual([
+        expect.objectContaining({ id: 'zcode-tool-1', name: 'Read' })
       ])
 
       const dispatched = await loadSessionDetail(fixture.sourceRef)
       expect(dispatched?.source).toBe('zcode')
+      expect(dispatched?.messages.some((message) =>
+        message.textContent.includes('[Reasoning]'))).toBe(true)
     } finally {
       fs.rmSync(fixture.dir, { recursive: true, force: true })
     }

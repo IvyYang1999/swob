@@ -1,6 +1,8 @@
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 import { spawn } from 'child_process'
+import Database from 'better-sqlite3'
 import type {
   RawJsonlMessage,
   ParsedMessage,
@@ -264,6 +266,53 @@ async function loadSqliteAgentSession(
   const { dbPath, sessionId } = parseSqliteAgentSessionRef(source, sourceRef, sessionIdOverride)
   if (!sessionId || !fs.existsSync(dbPath)) return null
 
+  return withReadOnlySqliteSnapshot(dbPath, async (snapshotPath) =>
+    loadSqliteAgentSessionSnapshot(source, dbPath, snapshotPath, sessionId)
+  )
+}
+
+async function withReadOnlySqliteSnapshot<T>(
+  dbPath: string,
+  read: (snapshotPath: string) => Promise<T>
+): Promise<T> {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-provider-sqlite-'))
+  const snapshotPath = path.join(tempDir, path.basename(dbPath) || 'source.db')
+  const source = new Database(dbPath, {
+    readonly: true,
+    fileMustExist: true,
+    timeout: SQLITE_TIMEOUT_MS
+  })
+  try {
+    source.pragma('query_only = ON')
+    // SQLite's online backup API reads one transactionally consistent image,
+    // including committed WAL pages, while the provider DB remains read-only.
+    await source.backup(snapshotPath)
+    // A WAL-mode backup may leave committed pages in the temporary sidecar.
+    // Fold those pages into the disposable snapshot so downstream readonly
+    // sqlite3 processes never need to recover or write beside the source DB.
+    const snapshot = new Database(snapshotPath)
+    try {
+      snapshot.pragma('wal_checkpoint(TRUNCATE)')
+      snapshot.pragma('journal_mode = DELETE')
+    } finally {
+      snapshot.close()
+    }
+    return await read(snapshotPath)
+  } finally {
+    source.close()
+    schemaCache.delete(snapshotPath)
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function loadSqliteAgentSessionSnapshot(
+  source: SqliteAgentSource,
+  sourceDbPath: string,
+  snapshotPath: string,
+  sessionId: string
+): Promise<LoadedOpencodeSession | null> {
+  const dbPath = snapshotPath
+
   const schema = await getSchema(dbPath)
   if (!schema || !hasMinimumSchema(schema)) return null
 
@@ -282,8 +331,8 @@ async function loadSqliteAgentSession(
   const rawMessages = opencodeToRawMessages(sessionId, sessionRow, messageRows, partRows)
 
   return {
-    dbPath,
-    sourceRef: makeSqliteAgentSessionRef(source, sessionId, dbPath),
+    dbPath: sourceDbPath,
+    sourceRef: makeSqliteAgentSessionRef(source, sessionId, sourceDbPath),
     sessionId,
     sessionRow,
     rawMessages
@@ -512,6 +561,12 @@ function buildMessageContent(
     if (type === 'text') {
       const text = extractPartText(part, data)
       if (text) contentParts.push({ type: 'text', text })
+      continue
+    }
+
+    if (type === 'reasoning') {
+      const text = extractPartText(part, data)
+      if (text) contentParts.push({ type: 'reasoning', text })
       continue
     }
 
@@ -814,8 +869,7 @@ function extractAggregateUsage(tokensValue: unknown): TokenUsage | null {
 
 function isIgnoredPartType(partType: string): boolean {
   return partType === 'step-start' ||
-    partType === 'step-finish' ||
-    partType === 'reasoning'
+    partType === 'step-finish'
 }
 
 function normalizeToolName(name: string): string {

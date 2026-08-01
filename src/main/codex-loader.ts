@@ -22,6 +22,7 @@ import {
   stripTerminalControlSequences,
   stripTerminalControlSequencesDeep
 } from '../shared/chat-format'
+import { providerFingerprintV2 } from '../shared/provider-protocol-v2'
 
 // --- Codex JSONL envelope types ---
 
@@ -386,6 +387,17 @@ function codexFunctionOutputText(output: unknown): string {
   }).join('\n')
 }
 
+function codexReasoningText(payload: Record<string, unknown>): string {
+  const values = [payload.summary, payload.content]
+  return values.flatMap((value) => Array.isArray(value)
+    ? value.flatMap((item) => {
+        if (!item || typeof item !== 'object') return []
+        const text = (item as Record<string, unknown>).text
+        return typeof text === 'string' ? [text] : []
+      })
+    : typeof value === 'string' ? [value] : []).join('\n')
+}
+
 // --- Convert Codex lines to unified RawJsonlMessage[] ---
 
 function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMessage[] {
@@ -395,7 +407,10 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
   const model = extractCodexModel(lines)
   let msgIndex = 0
   let seenRealUserMessage = false
+  let turnOrdinal = 0
   const assistantTextSourcesInTurn = new Map<string, 'event_msg' | 'response_item'>()
+  const visibleAssistantTextByTurn = new Map<number, Set<string>>()
+  const reasoningTurnByMessageId = new Map<string, number>()
 
   const pushAssistantText = (text: string, timestamp: string, source: 'event_msg' | 'response_item'): void => {
     const normalizedText = stripTerminalControlSequences(text)
@@ -405,6 +420,9 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
     const previousSource = assistantTextSourcesInTurn.get(dedupeKey)
     if (previousSource && previousSource !== source) return
     if (!previousSource) assistantTextSourcesInTurn.set(dedupeKey, source)
+    const visibleInTurn = visibleAssistantTextByTurn.get(turnOrdinal) || new Set<string>()
+    visibleInTurn.add(dedupeKey)
+    visibleAssistantTextByTurn.set(turnOrdinal, visibleInTurn)
 
     messages.push({
       uuid: `codex-${sessionId}-${msgIndex++}`,
@@ -422,22 +440,71 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
     })
   }
 
+  const pushSystemFact = (subtype: string, timestamp: string, data: Record<string, unknown>): void => {
+    messages.push({
+      uuid: `codex-${sessionId}-${msgIndex++}`,
+      parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
+      sessionId,
+      type: 'system',
+      subtype,
+      timestamp,
+      cwd,
+      version: model,
+      data
+    })
+  }
+
   for (const line of lines) {
     const ts = line.timestamp
 
     if (line.type === 'event_msg') {
       const p = line.payload as Record<string, unknown>
-      const etype = p.type as string
+      const etype = typeof p.type === 'string' ? p.type : ''
 
       // Skip user_message from event_msg — it duplicates response_item
       if (etype === 'agent_message') {
         pushAssistantText((p.message as string) || '', ts, 'event_msg')
+      } else if (etype.includes('compact')) {
+        pushSystemFact('compact_boundary', ts, p)
+      } else if (etype.includes('rollback') || etype.includes('undo')) {
+        pushSystemFact('rollback', ts, {
+          toEventId: typeof p.to_event_id === 'string' ? p.to_event_id : undefined,
+          reason: typeof p.reason === 'string' ? p.reason : etype
+        })
+      } else if ((etype.includes('agent') || etype.includes('collab')) && etype.includes('spawn')) {
+        pushSystemFact('subagent-spawn', ts, {
+          agentId: typeof p.agent_id === 'string' ? p.agent_id : undefined,
+          parentAgentId: typeof p.parent_agent_id === 'string' ? p.parent_agent_id : sessionId
+        })
+      } else if (etype.includes('review')) {
+        pushSystemFact('review', ts, p)
       }
     } else if (line.type === 'response_item') {
       const p = line.payload as Record<string, unknown>
       const rtype = p.type as string
 
-      if (rtype === 'message') {
+      if (rtype === 'reasoning') {
+        const reasoning = codexReasoningText(p)
+        if (reasoning || typeof p.encrypted_content === 'string') {
+          const content: ContentPart[] = reasoning
+            ? [{ type: 'reasoning', text: reasoning }]
+            : [{ type: 'redacted_thinking', digest: providerFingerprintV2(p.encrypted_content) }]
+          const uuid = `codex-${sessionId}-${msgIndex++}`
+          messages.push({
+            uuid,
+            parentUuid: messages.length > 0 ? messages[messages.length - 1].uuid : null,
+            sessionId,
+            type: 'assistant',
+            timestamp: ts,
+            cwd,
+            version: model,
+            message: { role: 'assistant', model, content }
+          })
+          reasoningTurnByMessageId.set(uuid, turnOrdinal)
+        }
+      } else if (rtype === 'compaction') {
+        pushSystemFact('compact_boundary', ts, p)
+      } else if (rtype === 'message') {
         const role = p.role as string
         if (role === 'developer') continue
         if (role === 'user') {
@@ -446,6 +513,7 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
           const normalizedText = normalizeCodexUserText(text, !seenRealUserMessage)
           if (normalizedText) {
             seenRealUserMessage = true
+            turnOrdinal++
             assistantTextSourcesInTurn.clear()
             messages.push({
               uuid: `codex-${sessionId}-${msgIndex++}`,
@@ -514,7 +582,14 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
     }
   }
 
-  return messages
+  return messages.filter((message) => {
+    const content = message.message?.content
+    if (message.type !== 'assistant' || !Array.isArray(content) || content.length === 0) return true
+    if (!content.every((part) => part.type === 'reasoning')) return true
+    const reasoning = content.map((part) => part.text || '').join('\n').trim()
+    const messageTurn = reasoningTurnByMessageId.get(message.uuid)
+    return messageTurn === undefined || !visibleAssistantTextByTurn.get(messageTurn)?.has(reasoning)
+  })
 }
 
 // --- Build summary ---
@@ -580,7 +655,7 @@ function buildCodexSessionSummaryFromLines(
     activityDays,
     messageCount: rawMessages.length,
     turnCount,
-    compactCount: 0,
+    compactCount: rawMessages.filter((message) => message.type === 'system' && message.subtype === 'compact_boundary').length,
     cwds,
     version: meta?.cli_version || model || '',
     firstUserMessage,
@@ -690,7 +765,7 @@ export async function buildCodexSessionDetail(filePath: string, sessionIdOverrid
   const rawMessages = codexToRawMessages(lines, sessionId)
 
   const messages: ParsedMessage[] = rawMessages
-    .filter((m) => m.type === 'user' || m.type === 'assistant')
+    .filter((m) => m.type === 'user' || m.type === 'assistant' || m.type === 'system')
     .map((m) => {
       const content = m.message?.content
       const isToolResult = Array.isArray(content) && content.some((p: any) => p.type === 'tool_result')
@@ -712,7 +787,7 @@ export async function buildCodexSessionDetail(filePath: string, sessionIdOverrid
       return {
         uuid: m.uuid,
         type: m.type as ParsedMessage['type'],
-        subtype: undefined,
+        subtype: m.subtype,
         timestamp: m.timestamp,
         role: m.message?.role,
         origin: 'unknown',

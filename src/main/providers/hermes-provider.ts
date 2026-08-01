@@ -26,7 +26,7 @@ import type { BuiltinProviderRuntimeV2 } from '../provider-host'
 export const HERMES_PROVIDER_ID = 'swob/hermes'
 export const HERMES_JSON_FORMAT = 'hermes-json-snapshot-v1'
 export const HERMES_DB_FORMAT = 'hermes-state-db-v1-plus'
-export const HERMES_PARSER_DATA_VERSION = '1'
+export const HERMES_PARSER_DATA_VERSION = '2'
 
 const OFFICIAL_HERMES_COMMIT = '84952e89f922415f47b6e483105e1fcae95ace7f'
 const AGENT_SESSIONS_COMMIT = 'e881b78a102942455eb178426cbf51008d732c96'
@@ -80,12 +80,12 @@ export const HERMES_EIGHT_LAYER_TRUTH: Readonly<Record<'stateDbCurrent' | 'state
       'Function calls and linked tool results retain native IDs, arguments and output.'),
     systemContext: truthCell('state-db-current', 'systemContext', 'exact', 'testdata/hermes/state-db.sql',
       'system_prompt and active/compacted flags map to classified preamble and context boundary events.'),
-    usage: truthCell('state-db-current', 'usage', 'exact', 'testdata/hermes/state-db.sql',
-      'Authoritative session counters and actual_cost_usd are reported; estimates are excluded.'),
-    relationships: truthCell('state-db-current', 'relationships', 'exact', 'testdata/hermes/state-db.sql',
-      'parent_session_id maps to an exact continuation relationship.'),
-    resume: truthCell('state-db-current', 'resume', 'exact', 'testdata/hermes/state-db.sql',
-      'A present state.db row binds the native hermes --resume session ID and anchor verification contract.')
+    usage: truthCell('state-db-current', 'usage', 'exact', 'testdata/hermes/state-db-multi-model-usage.sql',
+      'session_model_usage rows provide exact model attribution; aggregate-only residuals remain unattributed.'),
+    relationships: truthCell('state-db-current', 'relationships', 'exact', 'testdata/hermes/state-db-relationships.sql',
+      '_branched_from, _delegate_from, and a compression-ended parent distinguish fork, subagent, and continuation; unproved parent links stay generic.'),
+    resume: truthCell('state-db-current', 'resume', 'unavailable', 'testdata/hermes/state-db.sql',
+      'The native command is source-backed, but no executed launch plus post-launch anchor observation proves Resume in this fixture.')
   },
   stateDbLegacy: {
     discovery: truthCell('state-db-legacy', 'discovery', 'exact', 'testdata/hermes/state-db-legacy.sql',
@@ -102,8 +102,8 @@ export const HERMES_EIGHT_LAYER_TRUTH: Readonly<Record<'stateDbCurrent' | 'state
       'The fixture has no authoritative token or cost counters; all usage fields remain null.'),
     relationships: truthCell('state-db-legacy', 'relationships', 'unavailable', 'testdata/hermes/state-db-legacy.sql',
       'The fixture has no parent_session_id and no lineage is guessed.'),
-    resume: truthCell('state-db-legacy', 'resume', 'exact', 'testdata/hermes/state-db-legacy.sql',
-      'The source remains a real state.db row addressable by hermes --resume.')
+    resume: truthCell('state-db-legacy', 'resume', 'unavailable', 'testdata/hermes/state-db-legacy.sql',
+      'The row supplies a candidate native ID, but no executed launch plus post-launch anchor observation proves Resume.')
   },
   jsonSnapshot: {
     discovery: truthCell('json-snapshot', 'discovery', 'exact', 'testdata/hermes/session_legacy-only.json',
@@ -136,7 +136,10 @@ type DbRow = Record<string, unknown>
 interface HermesDbSnapshot {
   schemaVersion: number | null
   session: DbRow
+  parent: DbRow | null
   messages: DbRow[]
+  modelUsage: DbRow[] | null
+  modelUsageState: 'available' | 'table-absent' | 'unsupported-schema'
 }
 
 interface HermesJsonSnapshot extends DbRow {
@@ -248,12 +251,39 @@ function readDbSnapshot(databasePath: string, sessionId: string, signal: AbortSi
     }
     const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as DbRow | undefined
     if (!session) throw new Error('hermes-state-db-session-missing')
+    const parentId = sessionColumns.has('parent_session_id') ? nonEmpty(session.parent_session_id) : null
+    const parent = parentId
+      ? db.prepare('SELECT * FROM sessions WHERE id = ?').get(parentId) as DbRow | undefined
+      : undefined
     const order = messageColumns.has('timestamp') && messageColumns.has('id')
       ? 'timestamp ASC, id ASC'
       : messageColumns.has('id') ? 'id ASC' : 'rowid ASC'
     const messages = db.prepare(`SELECT * FROM messages WHERE session_id = ? ORDER BY ${order}`).all(sessionId) as DbRow[]
+    const modelUsageColumns = tableColumns(db, 'session_model_usage')
+    const requiredModelUsageColumns = [
+      'session_id', 'model', 'api_call_count', 'input_tokens', 'output_tokens',
+      'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens', 'actual_cost_usd'
+    ]
+    const modelUsageState = modelUsageColumns.size === 0
+      ? 'table-absent'
+      : requiredModelUsageColumns.every((column) => modelUsageColumns.has(column))
+        ? 'available'
+        : 'unsupported-schema'
+    const modelUsageOrder = [
+      'model', 'billing_provider', 'billing_base_url', 'billing_mode', 'task'
+    ].filter((column) => modelUsageColumns.has(column)).join(', ') || 'rowid'
+    const modelUsage = modelUsageState === 'available'
+      ? db.prepare(`SELECT * FROM session_model_usage WHERE session_id = ? ORDER BY ${modelUsageOrder}`).all(sessionId) as DbRow[]
+      : null
     signalCheck(signal)
-    return { schemaVersion: schemaVersion(db), session, messages }
+    return {
+      schemaVersion: schemaVersion(db),
+      session,
+      parent: parent || null,
+      messages,
+      modelUsage,
+      modelUsageState
+    }
   } finally {
     if (begun) {
       try { db.exec('ROLLBACK') } catch { /* read-only snapshot is already closing */ }
@@ -321,6 +351,68 @@ function identity(source: SourceRef, sessionId: string, parentSessionId: string 
     logicalSessionId: sessionId,
     branchViewId: `${HERMES_PROVIDER_ID}:${sessionId}:default`,
     parentBranchViewId: parentSessionId ? `${HERMES_PROVIDER_ID}:${parentSessionId}:default` : null
+  }
+}
+
+type HermesRelationshipType = 'continuation' | 'fork' | 'subagent' | 'related'
+
+function relationshipForSnapshot(snapshot: HermesDbSnapshot): {
+  relationshipType: HermesRelationshipType
+  diagnostic: Diagnostic | null
+} | null {
+  const parentId = nonEmpty(snapshot.session.parent_session_id)
+  if (!parentId) return null
+
+  const rawConfig = snapshot.session.model_config
+  const parsedConfig = parseJsonValue(rawConfig)
+  const configAbsent = rawConfig === null || rawConfig === undefined || rawConfig === ''
+  if (!configAbsent && !isObject(parsedConfig)) {
+    return {
+      relationshipType: 'related',
+      diagnostic: {
+        level: 'warning',
+        code: 'hermes-parent-relationship-unclassified',
+        message: 'parent_session_id was preserved as generic related because model_config could not prove the absence of branch/delegate markers.',
+        eventId: null
+      }
+    }
+  }
+  const config = isObject(parsedConfig) ? parsedConfig : {}
+  const branchedFrom = nonEmpty(config._branched_from)
+  const delegatedFrom = nonEmpty(config._delegate_from)
+  const branchMarkerMalformed = Object.hasOwn(config, '_branched_from') && !branchedFrom
+  const delegateMarkerMalformed = Object.hasOwn(config, '_delegate_from') && !delegatedFrom
+
+  if (branchedFrom === parentId && !delegatedFrom && !delegateMarkerMalformed) {
+    return { relationshipType: 'fork', diagnostic: null }
+  }
+  if (delegatedFrom === parentId && !branchedFrom && !branchMarkerMalformed) {
+    return { relationshipType: 'subagent', diagnostic: null }
+  }
+  if (branchedFrom || delegatedFrom || branchMarkerMalformed || delegateMarkerMalformed) {
+    return {
+      relationshipType: 'related',
+      diagnostic: {
+        level: 'warning',
+        code: 'hermes-parent-relationship-unclassified',
+        message: 'Hermes lineage markers conflicted with parent_session_id or with each other; the link was preserved as generic related.',
+        eventId: null
+      }
+    }
+  }
+
+  const childIsToolSession = nonEmpty(snapshot.session.source) === 'tool'
+  if (!childIsToolSession && nonEmpty(snapshot.parent?.end_reason) === 'compression') {
+    return { relationshipType: 'continuation', diagnostic: null }
+  }
+  return {
+    relationshipType: 'related',
+    diagnostic: {
+      level: 'info',
+      code: 'hermes-parent-relationship-unclassified',
+      message: 'parent_session_id alone does not distinguish a compression continuation, branch, or delegate; the link was preserved as generic related.',
+      eventId: null
+    }
   }
 }
 
@@ -416,7 +508,77 @@ function unavailableUsage(sessionId: string, model: string | null, scope: string
   }
 }
 
-function usageForSession(session: DbRow, sessionId: string): UsageRecord | null {
+interface HermesUsageCounters {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  reasoning: number
+  apiCalls: number
+  actualCost: number | null
+}
+
+function usageCounters(row: DbRow): HermesUsageCounters | null {
+  const input = nonNegativeInteger(row.input_tokens)
+  const output = nonNegativeInteger(row.output_tokens)
+  const cacheRead = nonNegativeInteger(row.cache_read_tokens)
+  const cacheWrite = nonNegativeInteger(row.cache_write_tokens)
+  const reasoning = nonNegativeInteger(row.reasoning_tokens)
+  const apiCalls = nonNegativeInteger(row.api_call_count)
+  if ([input, output, cacheRead, cacheWrite, reasoning, apiCalls].some((value) => value === null)) return null
+  return {
+    input: input!,
+    output: output!,
+    cacheRead: cacheRead!,
+    cacheWrite: cacheWrite!,
+    reasoning: reasoning!,
+    apiCalls: apiCalls!,
+    actualCost: nonNegativeNumber(row.actual_cost_usd)
+  }
+}
+
+function usageRecord(input: {
+  sessionId: string
+  scope: string
+  modelId: string | null
+  counters: HermesUsageCounters
+  measurement: UsageRecord['measurement']
+}): UsageRecord {
+  const counters = input.counters
+  return {
+    eventId: null,
+    turnId: null,
+    modelId: input.modelId,
+    input: {
+      total: counters.input + counters.cacheRead + counters.cacheWrite,
+      uncached: counters.input,
+      cacheRead: counters.cacheRead,
+      cacheWrite5m: counters.cacheWrite,
+      cacheWrite1h: null
+    },
+    output: {
+      total: counters.output,
+      visible: Math.max(0, counters.output - counters.reasoning),
+      reasoning: counters.reasoning
+    },
+    providerTotal: counters.input + counters.cacheRead + counters.cacheWrite + counters.output,
+    aggregation: 'cumulative',
+    relations: {
+      cacheRead: 'independent',
+      cacheWrite: 'independent',
+      reasoning: 'subset-of-output'
+    },
+    dedupKey: `hermes:${input.sessionId}:${input.scope}`,
+    billingFactKey: `hermes:${input.sessionId}:${input.scope}`,
+    measurement: input.measurement,
+    cost: counters.actualCost !== null && counters.actualCost > 0
+      ? { amount: counters.actualCost, currency: 'USD', kind: 'reported' }
+      : null,
+    priceRevision: null
+  }
+}
+
+function aggregateUsageForSession(session: DbRow, sessionId: string): UsageRecord | null {
   const fields = [
     'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens',
     'reasoning_tokens', 'api_call_count'
@@ -425,54 +587,135 @@ function usageForSession(session: DbRow, sessionId: string): UsageRecord | null 
   if (!fields.some((field) => Object.hasOwn(session, field))) {
     return model ? unavailableUsage(sessionId, model, 'state-db') : null
   }
-  const input = nonNegativeInteger(session.input_tokens)
-  const output = nonNegativeInteger(session.output_tokens)
-  const cacheRead = nonNegativeInteger(session.cache_read_tokens)
-  const cacheWrite = nonNegativeInteger(session.cache_write_tokens)
-  const reasoning = nonNegativeInteger(session.reasoning_tokens)
-  const apiCalls = nonNegativeInteger(session.api_call_count)
-  const hasReportedTokens = [input, output, cacheRead, cacheWrite, reasoning].some((value) => (value || 0) > 0)
-  const exactZero = !hasReportedTokens && apiCalls === 0 &&
-    [input, output, cacheRead, cacheWrite, reasoning].every((value) => value === 0)
-  const unavailable = !hasReportedTokens && !exactZero
-  const actualCost = nonNegativeNumber(session.actual_cost_usd)
-  return {
-    eventId: null,
-    turnId: null,
-    modelId: model,
-    input: {
-      total: unavailable ? null : (input || 0) + (cacheRead || 0) + (cacheWrite || 0),
-      uncached: unavailable ? null : input || 0,
-      cacheRead: unavailable ? null : cacheRead || 0,
-      cacheWrite5m: unavailable ? null : cacheWrite || 0,
-      cacheWrite1h: null
-    },
-    output: {
-      total: unavailable ? null : output || 0,
-      visible: unavailable ? null : Math.max(0, (output || 0) - (reasoning || 0)),
-      reasoning: unavailable ? null : reasoning || 0
-    },
-    providerTotal: unavailable
-      ? null
-      : (input || 0) + (cacheRead || 0) + (cacheWrite || 0) + (output || 0),
-    aggregation: 'cumulative',
-    relations: {
-      cacheRead: 'independent',
-      cacheWrite: 'independent',
-      reasoning: 'subset-of-output'
-    },
-    dedupKey: `hermes:${sessionId}:session-aggregate`,
-    billingFactKey: `hermes:${sessionId}:session-aggregate`,
-    measurement: unavailable
-      ? { source: 'unavailable', confidence: 'unavailable', sourceField: null }
-      : {
+  const counters = usageCounters(session)
+  if (!counters) return unavailableUsage(sessionId, null, 'state-db-aggregate')
+  return usageRecord({
+    sessionId,
+    scope: 'session-aggregate-unattributed',
+    modelId: null,
+    counters,
+    measurement: {
+      source: 'reported',
+      confidence: 'high',
+      sourceField: 'sessions aggregate counters; model attribution unavailable'
+    }
+  })
+}
+
+function usageForSnapshot(
+  snapshot: HermesDbSnapshot,
+  sessionId: string,
+  diagnostics: Diagnostic[]
+): UsageRecord[] {
+  const rows = snapshot.modelUsage || []
+  if (snapshot.modelUsageState !== 'available' || rows.length === 0) {
+    const aggregate = aggregateUsageForSession(snapshot.session, sessionId)
+    if (aggregate?.measurement.source !== 'unavailable') {
+      diagnostics.push({
+        level: 'info',
+        code: 'hermes-model-usage-attribution-unavailable',
+        message: snapshot.modelUsageState === 'unsupported-schema'
+          ? 'session_model_usage has an unsupported schema; session totals remain unattributed.'
+          : 'No session_model_usage rows exist for this session; session totals remain unattributed.',
+        eventId: null
+      })
+    }
+    return aggregate ? [aggregate] : []
+  }
+
+  const grouped = new Map<string, HermesUsageCounters>()
+  for (const row of rows) {
+    const model = nonEmpty(row.model)
+    const counters = usageCounters(row)
+    if (!model || !counters) {
+      diagnostics.push({
+        level: 'warning',
+        code: 'hermes-model-usage-row-invalid',
+        message: 'A session_model_usage row lacked a model or non-negative integer counters and was not attributed.',
+        eventId: null
+      })
+      continue
+    }
+    const existing = grouped.get(model) || {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, apiCalls: 0, actualCost: 0
+    }
+    existing.input += counters.input
+    existing.output += counters.output
+    existing.cacheRead += counters.cacheRead
+    existing.cacheWrite += counters.cacheWrite
+    existing.reasoning += counters.reasoning
+    existing.apiCalls += counters.apiCalls
+    existing.actualCost = (existing.actualCost || 0) + (counters.actualCost || 0)
+    grouped.set(model, existing)
+  }
+
+  const records = [...grouped.entries()]
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([model, counters]) =>
+      usageRecord({
+        sessionId,
+        scope: `model-${sha256(model).slice(0, 16)}`,
+        modelId: model,
+        counters,
+        measurement: {
           source: 'reported',
           confidence: 'exact',
-          sourceField: 'sessions.input_tokens/output_tokens/cache_read_tokens/cache_write_tokens/reasoning_tokens'
-        },
-    cost: unavailable || actualCost === null ? null : { amount: actualCost, currency: 'USD', kind: 'reported' },
-    priceRevision: null
+          sourceField: 'session_model_usage grouped by model'
+        }
+      }))
+
+  const sessionCounters = usageCounters(snapshot.session)
+  if (!sessionCounters) return records
+  const attributed = [...grouped.values()].reduce<HermesUsageCounters>((total, counters) => ({
+    input: total.input + counters.input,
+    output: total.output + counters.output,
+    cacheRead: total.cacheRead + counters.cacheRead,
+    cacheWrite: total.cacheWrite + counters.cacheWrite,
+    reasoning: total.reasoning + counters.reasoning,
+    apiCalls: total.apiCalls + counters.apiCalls,
+    actualCost: (total.actualCost || 0) + (counters.actualCost || 0)
+  }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, apiCalls: 0, actualCost: 0 })
+  const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'apiCalls'] as const
+  if (fields.some((field) => attributed[field] > sessionCounters[field])) {
+    diagnostics.push({
+      level: 'warning',
+      code: 'hermes-model-usage-exceeds-session-total',
+      message: 'session_model_usage exceeds at least one session aggregate counter; per-model rows were preserved without inventing a correction.',
+      eventId: null
+    })
   }
+  const residual: HermesUsageCounters = {
+    input: Math.max(0, sessionCounters.input - attributed.input),
+    output: Math.max(0, sessionCounters.output - attributed.output),
+    cacheRead: Math.max(0, sessionCounters.cacheRead - attributed.cacheRead),
+    cacheWrite: Math.max(0, sessionCounters.cacheWrite - attributed.cacheWrite),
+    reasoning: Math.max(0, sessionCounters.reasoning - attributed.reasoning),
+    apiCalls: Math.max(0, sessionCounters.apiCalls - attributed.apiCalls),
+    actualCost: sessionCounters.actualCost === null
+      ? null
+      : Math.max(0, sessionCounters.actualCost - (attributed.actualCost || 0))
+  }
+  const hasResidual = fields.some((field) => residual[field] > 0) || (residual.actualCost || 0) > 0.000000001
+  if (hasResidual) {
+    diagnostics.push({
+      level: 'info',
+      code: 'hermes-model-usage-residual-unattributed',
+      message: 'Session aggregate usage not covered by session_model_usage was emitted without a model attribution.',
+      eventId: null
+    })
+    records.push(usageRecord({
+      sessionId,
+      scope: 'session-aggregate-residual-unattributed',
+      modelId: null,
+      counters: residual,
+      measurement: {
+        source: 'derived',
+        confidence: 'high',
+        sourceField: 'sessions aggregate counters minus session_model_usage counters'
+      }
+    }))
+  }
+  return records
 }
 
 function emitMessages(input: {
@@ -614,6 +857,7 @@ function chunks(source: SourceRef, formatVersion: string, sessionIdentity: Sessi
 function eventsForDb(source: SourceRef, snapshot: HermesDbSnapshot, fingerprint: Fingerprint): ParseChunk[] {
   const sessionId = String(snapshot.session.id)
   const parentId = nonEmpty(snapshot.session.parent_session_id)
+  const relationship = relationshipForSnapshot(snapshot)
   const sessionIdentity = identity(source, sessionId, parentId)
   const diagnostics: Diagnostic[] = [{
     level: 'info', code: 'hermes-state-db-schema-version',
@@ -626,6 +870,7 @@ function eventsForDb(source: SourceRef, snapshot: HermesDbSnapshot, fingerprint:
       message: 'Hermes estimated cost was not imported as an exact billing fact.', eventId: null
     })
   }
+  if (relationship?.diagnostic) diagnostics.push(relationship.diagnostic)
   const events: CanonicalEvent[] = []
   const title = nonEmpty(snapshot.session.title) || nonEmpty(snapshot.session.display_name)
   const cwd = nonEmpty(snapshot.session.cwd) || nonEmpty(snapshot.session.git_repo_root)
@@ -650,13 +895,13 @@ function eventsForDb(source: SourceRef, snapshot: HermesDbSnapshot, fingerprint:
       kind: 'message.text', payload: { text: systemPrompt }, visibility: 'collapsed', classification: 'promoted-system'
     }))
   }
-  if (parentId) {
+  if (parentId && relationship) {
     events.push(event({
       source, formatVersion: HERMES_DB_FORMAT, identity: sessionIdentity,
       sourceRecordId: `session:${sessionId}`, raw: snapshot.session, suffix: 'parent', sequence: events.length,
       messageId: null, timestamp: timestamp(snapshot.session.started_at), actor: 'system', kind: 'session.lifecycle',
       payload: {
-        relationshipType: 'continuation',
+        relationshipType: relationship.relationshipType,
         fromSessionRecordId: canonicalSessionRecordId(
           `hermes:db:${stableSessionComponent(parentId)}`,
           parentId
@@ -701,11 +946,14 @@ function eventsForDb(source: SourceRef, snapshot: HermesDbSnapshot, fingerprint:
   } else {
     events.push(...messageEvents)
   }
-  const usage = usageForSession(snapshot.session, sessionId)
-  if (usage) {
+  const usageRecords = usageForSnapshot(snapshot, sessionId, diagnostics)
+  for (const [index, usage] of usageRecords.entries()) {
     events.push(event({
       source, formatVersion: HERMES_DB_FORMAT, identity: sessionIdentity,
-      sourceRecordId: `session:${sessionId}`, raw: snapshot.session, suffix: 'usage', sequence: events.length,
+      sourceRecordId: `session:${sessionId}`,
+      raw: usage.modelId ? snapshot.modelUsage : snapshot.session,
+      suffix: `usage:${index}:${usage.dedupKey}`,
+      sequence: events.length,
       messageId: null, timestamp: timestamp(snapshot.session.ended_at) || timestamp(snapshot.session.started_at),
       actor: 'system', kind: 'usage', payload: usage as unknown as JsonValue,
       visibility: 'collapsed', classification: 'lifecycle'
@@ -765,13 +1013,13 @@ function capabilityEvidence(name: string) {
 function capabilities(): ProviderCapabilities {
   const available = new Set(['discover', 'summary', 'transcript', 'tools', 'thinking', 'identity', 'chunked-transport', 'format-provenance'])
   const experimental: Record<string, string> = {
-    usage: 'Exact for authoritative state.db counters; unavailable for legacy JSON or sessions without upstream usage.',
-    relationships: 'Exact parent_session_id in state.db; unavailable in legacy JSON snapshots.',
+    usage: 'Exact per-model attribution requires compatible session_model_usage rows; aggregate-only usage stays unattributed with reduced confidence.',
+    relationships: 'Exact only with _branched_from, _delegate_from, or an unmarked non-tool child of a compression-ended parent; other parent links are generic.',
+    subagents: 'Exact only for state.db children whose _delegate_from marker matches parent_session_id.',
     'context-timeline': 'Exact active/compacted state in current DB schemas; unknown in older DB/JSON layouts.',
-    'terminal-resume': 'Exact hermes --resume for state.db sessions; legacy JSON snapshots are not resumable.'
+    'terminal-resume': 'The hermes --resume command is source-backed, but Swob has no executed post-launch anchor proof yet.'
   }
   const reasons: Record<string, string> = {
-    subagents: 'Hermes parent lineage is not sufficient proof of a spawned subagent.',
     interactions: 'No stable historical interaction request schema is present in both source formats.',
     permissions: 'No stable historical permission request schema is present in both source formats.',
     'native-resume': 'Hermes exposes a CLI resume surface, not a native application deep link.'
@@ -789,7 +1037,7 @@ export const HERMES_PROVIDER_MANIFEST: ProviderManifest = {
   schemaVersion: 2,
   providerId: HERMES_PROVIDER_ID,
   displayName: 'Hermes',
-  implementationVersion: 'builtin-hermes-v1',
+  implementationVersion: 'builtin-hermes-v2',
   parserDataVersion: HERMES_PARSER_DATA_VERSION,
   formatVersions: [HERMES_DB_FORMAT, HERMES_JSON_FORMAT],
   capabilities: capabilities(),

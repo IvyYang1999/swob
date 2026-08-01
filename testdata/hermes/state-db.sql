@@ -6,10 +6,12 @@ CREATE TABLE sessions (
   source TEXT NOT NULL,
   display_name TEXT,
   model TEXT,
+  model_config TEXT,
   system_prompt TEXT,
   parent_session_id TEXT,
   started_at REAL NOT NULL,
   ended_at REAL,
+  end_reason TEXT,
   message_count INTEGER DEFAULT 0,
   tool_call_count INTEGER DEFAULT 0,
   input_tokens INTEGER DEFAULT 0,
@@ -43,14 +45,36 @@ CREATE TABLE messages (
   display_metadata TEXT
 );
 
+CREATE TABLE session_model_usage (
+  session_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  billing_provider TEXT NOT NULL DEFAULT '',
+  billing_base_url TEXT NOT NULL DEFAULT '',
+  billing_mode TEXT NOT NULL DEFAULT '',
+  task TEXT NOT NULL DEFAULT '',
+  api_call_count INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+  estimated_cost_usd REAL NOT NULL DEFAULT 0,
+  actual_cost_usd REAL NOT NULL DEFAULT 0,
+  cost_status TEXT,
+  cost_source TEXT,
+  first_seen REAL,
+  last_seen REAL,
+  PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
+);
+
 INSERT INTO sessions(
   id, source, display_name, model, system_prompt, parent_session_id,
-  started_at, ended_at, message_count, tool_call_count,
+  started_at, ended_at, end_reason, message_count, tool_call_count,
   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
   reasoning_tokens, cwd, actual_cost_usd, title, api_call_count
 ) VALUES (
   'synthetic-hermes-parent', 'cli', 'Synthetic parent', 'synthetic-model-db',
-  'Synthetic parent prompt.', NULL, 1785542390, 1785542391, 0, 0,
+  'Synthetic parent prompt.', NULL, 1785542390, 1785542391, 'compression', 0, 0,
   0, 0, 0, 0, 0, '/synthetic/project', NULL, 'Synthetic parent', 0
 );
 
@@ -64,6 +88,16 @@ INSERT INTO sessions(
   'Synthetic DB system preamble.', 'synthetic-hermes-parent',
   1785542400, 1785542405, 4, 1,
   100, 30, 20, 5, 10, '/synthetic/project', 0.99, 0.0123, 'Synthetic Hermes DB', 1
+);
+
+INSERT INTO session_model_usage(
+  session_id, model, billing_provider, billing_base_url, billing_mode, task,
+  api_call_count, input_tokens, output_tokens, cache_read_tokens,
+  cache_write_tokens, reasoning_tokens, estimated_cost_usd, actual_cost_usd,
+  cost_status, cost_source, first_seen, last_seen
+) VALUES (
+  'synthetic-hermes-db', 'synthetic-model-db', 'synthetic-provider', '', '', '',
+  1, 100, 30, 20, 5, 10, 0.99, 0.0123, 'actual', 'fixture', 1785542401, 1785542404
 );
 
 INSERT INTO messages(session_id, role, content, timestamp, active, compacted)

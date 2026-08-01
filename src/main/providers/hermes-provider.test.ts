@@ -77,6 +77,8 @@ describe('Hermes native Provider Protocol v2 adapter', () => {
     expect(HERMES_EIGHT_LAYER_TRUTH.stateDbCurrent.usage.status).toBe('exact')
     expect(HERMES_EIGHT_LAYER_TRUTH.stateDbLegacy.usage.status).toBe('unavailable')
     expect(HERMES_EIGHT_LAYER_TRUTH.jsonSnapshot.usage.status).toBe('unavailable')
+    expect(HERMES_EIGHT_LAYER_TRUTH.stateDbCurrent.resume.status).toBe('unavailable')
+    expect(HERMES_EIGHT_LAYER_TRUTH.stateDbLegacy.resume.status).toBe('unavailable')
     expect(HERMES_EIGHT_LAYER_TRUTH.jsonSnapshot.resume.status).toBe('unavailable')
   })
 
@@ -130,12 +132,17 @@ describe('Hermes native Provider Protocol v2 adapter', () => {
       expect.objectContaining({ kind: 'usage' }),
       expect.objectContaining({ kind: 'session.lifecycle' })
     ]))
-    expect(events.find((entry) => entry.kind === 'usage')?.payload).toMatchObject({
-      input: { total: 125, uncached: 100, cacheRead: 20, cacheWrite5m: 5 },
+    const usageEvents = events.filter((entry) => entry.kind === 'usage')
+    expect(usageEvents).toHaveLength(1)
+    expect(usageEvents[0].payload).toMatchObject({
+      modelId: 'synthetic-model-db',
+      input: { total: 125, uncached: 100, cacheRead: 20, cacheWrite5m: 5, cacheWrite1h: null },
       output: { total: 30, visible: 20, reasoning: 10 },
-      measurement: { source: 'reported', confidence: 'exact' },
+      measurement: { source: 'reported', confidence: 'exact', sourceField: 'session_model_usage grouped by model' },
       cost: { amount: 0.0123, currency: 'USD', kind: 'reported' }
     })
+    expect(events.some((entry) => entry.kind === 'session.lifecycle' &&
+      (entry.payload as { relationshipType?: string }).relationshipType === 'continuation')).toBe(true)
     expect(events.find((entry) => entry.kind === 'message.text' &&
       (entry.payload as { text?: string }).text === 'Archived synthetic context.')?.timeline.modelContext[0].state)
       .toBe('archived')
@@ -148,6 +155,89 @@ describe('Hermes native Provider Protocol v2 adapter', () => {
     expect(compactionIndex).toBeLessThan(activeIndex)
     expect(events.some((entry) => entry.kind === 'session.lifecycle' &&
       JSON.stringify(entry.payload).includes('metadata.title:Synthetic Hermes DB'))).toBe(true)
+  })
+
+  it('classifies branch, delegate, and compression lineage only from pinned Hermes evidence', async () => {
+    const { home, dbPath } = setup()
+    const db = new Database(dbPath)
+    db.exec(fs.readFileSync(fixture('state-db-relationships.sql'), 'utf8'))
+    db.close()
+    const provider = createHermesProvider({ homeDir: home })
+    const signal = new AbortController().signal
+    const sources = await provider.discover(signal)
+    const expected = new Map([
+      ['synthetic-hermes-db', 'continuation'],
+      ['synthetic-hermes-branch', 'fork'],
+      ['synthetic-hermes-delegate', 'subagent'],
+      ['synthetic-hermes-unclassified', 'related']
+    ])
+
+    for (const [sessionId, relationshipType] of expected) {
+      const source = sources.find((entry) => entry.stableId === `hermes:db:${sessionId}`)!
+      const fingerprint = await provider.fingerprint(source, signal)
+      const chunks = await provider.parse(source, fingerprint, signal)
+      const relationship = allEvents(chunks).find((entry) => entry.kind === 'session.lifecycle' &&
+        Object.hasOwn(entry.payload as object, 'relationshipType'))
+      expect(relationship?.payload).toMatchObject({ relationshipType })
+      if (relationshipType === 'related') {
+        expect(chunks[0].diagnostics.map((entry) => entry.code)).toContain('hermes-parent-relationship-unclassified')
+      }
+    }
+    expect(HERMES_PROVIDER_MANIFEST.capabilities.subagents.status).toBe('experimental')
+  })
+
+  it('attributes v23 session_model_usage to every model instead of the session initial model', async () => {
+    const { home, dbPath } = setup()
+    const db = new Database(dbPath)
+    db.exec(fs.readFileSync(fixture('state-db-multi-model-usage.sql'), 'utf8'))
+    db.close()
+    const provider = createHermesProvider({ homeDir: home })
+    const signal = new AbortController().signal
+    const source = (await provider.discover(signal)).find((entry) => entry.stableId === 'hermes:db:synthetic-hermes-db')!
+    const fingerprint = await provider.fingerprint(source, signal)
+    const chunks = await provider.parse(source, fingerprint, signal)
+    const usage = allEvents(chunks).filter((entry) => entry.kind === 'usage').map((entry) => entry.payload)
+
+    expect(usage).toHaveLength(2)
+    expect(usage).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        modelId: 'synthetic-model-db',
+        input: { total: 100, uncached: 80, cacheRead: 15, cacheWrite5m: 5, cacheWrite1h: null },
+        output: { total: 25, visible: 17, reasoning: 8 },
+        measurement: { source: 'reported', confidence: 'exact', sourceField: 'session_model_usage grouped by model' },
+        cost: { amount: 0.009, currency: 'USD', kind: 'reported' }
+      }),
+      expect.objectContaining({
+        modelId: 'synthetic-vision-model',
+        input: { total: 25, uncached: 20, cacheRead: 5, cacheWrite5m: 0, cacheWrite1h: null },
+        output: { total: 5, visible: 3, reasoning: 2 },
+        measurement: { source: 'reported', confidence: 'exact', sourceField: 'session_model_usage grouped by model' },
+        cost: { amount: 0.0033, currency: 'USD', kind: 'reported' }
+      })
+    ]))
+  })
+
+  it('keeps aggregate usage unattributed when per-model rows are unavailable', async () => {
+    const { home, dbPath } = setup()
+    const db = new Database(dbPath)
+    db.prepare('DELETE FROM session_model_usage WHERE session_id = ?').run('synthetic-hermes-db')
+    db.close()
+    const provider = createHermesProvider({ homeDir: home })
+    const signal = new AbortController().signal
+    const source = (await provider.discover(signal)).find((entry) => entry.stableId === 'hermes:db:synthetic-hermes-db')!
+    const fingerprint = await provider.fingerprint(source, signal)
+    const chunks = await provider.parse(source, fingerprint, signal)
+    const usage = allEvents(chunks).find((entry) => entry.kind === 'usage')
+
+    expect(usage?.payload).toMatchObject({
+      modelId: null,
+      input: { total: 125, uncached: 100, cacheRead: 20, cacheWrite5m: 5 },
+      output: { total: 30, visible: 20, reasoning: 10 },
+      measurement: { source: 'reported', confidence: 'high' },
+      cost: { amount: 0.0123, currency: 'USD', kind: 'reported' }
+    })
+    expect(chunks[0].diagnostics.map((entry) => entry.code))
+      .toContain('hermes-model-usage-attribution-unavailable')
   })
 
   it('parses legacy JSON and represents missing usage explicitly without inventing counters or Resume', async () => {
@@ -209,7 +299,7 @@ describe('Hermes native Provider Protocol v2 adapter', () => {
     await expect(provider.parse(source, fingerprint, signal)).rejects.toThrow('hermes-source-changed-during-parse')
   })
 
-  it('passes protocol conformance and verifies the real --resume contract by source plus anchors', async () => {
+  it('passes protocol conformance but keeps --resume experimental until a launch produces observed anchors', async () => {
     const { home } = setup()
     const provider = createHermesProvider({ homeDir: home })
     const signal = new AbortController().signal
@@ -230,20 +320,15 @@ describe('Hermes native Provider Protocol v2 adapter', () => {
     expect(buildResumeLaunchSpec('synthetic-hermes-db', undefined, undefined, 'hermes')).toMatchObject({
       executable: 'hermes', args: ['--resume', 'synthetic-hermes-db']
     })
+    expect(provider.manifest.capabilities['terminal-resume']).toMatchObject({ status: 'experimental' })
     expect(verifyResumeContractV2(provider.manifest.resumeContract!, {
-      launched: true,
+      launched: false,
       expectedSourceRefId: source.stableId,
-      observedSourceRefId: source.stableId,
+      observedSourceRefId: null,
       sourceExists: true,
-      expectedAnchors: { user: 'resume-user-anchor', assistant: 'resume-assistant-anchor' },
-      observedDefaultMessages: [
-        { role: 'user', text: 'resume-user-anchor' },
-        { role: 'assistant', text: 'resume-assistant-anchor' }
-      ],
-      observedAllMessages: [
-        { role: 'user', text: 'resume-user-anchor' },
-        { role: 'assistant', text: 'resume-assistant-anchor' }
-      ]
-    })).toMatchObject({ ok: true, status: 'verified', sourceMatched: true })
+      expectedAnchors: { user: '', assistant: '' },
+      observedDefaultMessages: [],
+      observedAllMessages: []
+    })).toMatchObject({ ok: false, status: 'launch-failed', sourceMatched: false })
   })
 })

@@ -11,7 +11,15 @@ echo "==> 编译..."
 npx electron-vite build
 
 echo "==> 打包 .app (跳过 DMG，跳过签名)..."
-CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir --config.mac.target=dir
+# `CSC_IDENTITY_AUTO_DISCOVERY=false` alone still lets recent electron-builder
+# fall back to ad-hoc signing. That fails when a worktree lives under a macOS
+# File Provider directory whose Electron bundle carries Finder metadata. Local
+# deployment deliberately produces an unsigned app; release signing is a
+# separate, explicit pipeline.
+CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir \
+  --config.mac.target=dir \
+  --config.mac.identity=null \
+  --config.mac.notarize=false
 
 if [ ! -d "$DIST_APP" ]; then
   echo "错误：找不到 $DIST_APP"

@@ -62,7 +62,7 @@ test('Hermes state.db and JSON cards open their real Electron chat details', asy
     await dbChat.getByText('read_file', { exact: true }).locator('xpath=ancestor::button[1]').click()
     await expect(dbChat.getByText(/hermes-db-tool-result/)).toBeVisible()
     await expect(page.getByRole('button', { name: 'Resume' })).toBeEnabled()
-    await expect(page.getByRole('button', { name: 'Fork', exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Fork', exact: true })).toHaveCount(0)
     await expect(page.getByText('compact 1x', { exact: true })).toBeVisible()
     await expect(dbChat.getByRole('button', { name: '系统上下文', exact: true })).toHaveCount(0)
     await page.getByRole('button', { name: '完整', exact: true }).click()
@@ -80,7 +80,7 @@ test('Hermes state.db and JSON cards open their real Electron chat details', asy
       .toBeVisible()
     await expect(page.getByText('synthetic-model-json', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Resume' })).toBeDisabled()
-    await expect(page.getByRole('button', { name: 'Fork', exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Fork', exact: true })).toHaveCount(0)
     await expect(page.getByText(/compact \d+x/)).toHaveCount(0)
     await page.screenshot({ path: testInfo.outputPath('hermes-json-detail.png') })
   } finally {

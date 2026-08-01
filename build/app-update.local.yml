@@ -1,0 +1,5 @@
+provider: github
+owner: IvyYang1999
+repo: swob
+channel: swob-signed
+updaterCacheDirName: claude-session-manager-updater

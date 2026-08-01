@@ -4,6 +4,7 @@ set -e
 APP_NAME="Swob"
 DIST_APP="dist/mac-arm64/${APP_NAME}.app"
 INSTALL_DIR="/Applications"
+LOCAL_UPDATE_CONFIG="build/app-update.local.yml"
 
 cd "$(dirname "$0")/.."
 
@@ -25,6 +26,27 @@ if [ ! -d "$DIST_APP" ]; then
   echo "错误：找不到 $DIST_APP"
   exit 1
 fi
+
+# Directory-only builds do not generate app-update.yml, even when a publish
+# provider is configured. A packaged app without this file cannot check the
+# signed update channel. Keep a reviewed, non-secret local-deploy copy beside
+# the builder resources and install it before validating/replacing the app.
+if [ ! -f "$LOCAL_UPDATE_CONFIG" ]; then
+  echo "错误：找不到本地更新配置 $LOCAL_UPDATE_CONFIG"
+  exit 1
+fi
+cp "$LOCAL_UPDATE_CONFIG" "$DIST_APP/Contents/Resources/app-update.yml"
+for expected_line in \
+  'provider: github' \
+  'owner: IvyYang1999' \
+  'repo: swob' \
+  'channel: swob-signed' \
+  'updaterCacheDirName: claude-session-manager-updater'; do
+  if ! grep -qx "$expected_line" "$DIST_APP/Contents/Resources/app-update.yml"; then
+    echo "错误：app-update.yml 缺少 $expected_line"
+    exit 1
+  fi
+done
 
 DIST_CLI="${DIST_APP}/Contents/Resources/cli/cli.js"
 DIST_NODE_MODULES="${DIST_APP}/Contents/Resources/app.asar.unpacked/node_modules"

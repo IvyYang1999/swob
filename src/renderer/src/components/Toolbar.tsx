@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useT } from '../i18n'
-import { Search, PanelRight, X, Zap, Settings, BarChart3, GitBranch, Bot } from 'lucide-react'
+import { Search, PanelRight, X, Zap, Settings, BarChart3, GitBranch, Bot, ShieldCheck } from 'lucide-react'
 import { usePlatformCapabilities } from './WindowsAlphaNotice'
 import { HelpMenu } from './HelpMenu'
 import {
@@ -23,14 +23,16 @@ export function Toolbar() {
   const t = useT()
   const isWindowsAlpha = usePlatformCapabilities()?.windowsNativeAlpha === true
   const galaxyLensEnabled = useLensEnabled('galaxy')
-  const insightsLensEnabled = useLensEnabled('token-insights')
+  const tokenInsightsLensEnabled = useLensEnabled('token-insights')
+  const auditLensEnabled = useLensEnabled('audit')
+  const insightsLensEnabled = tokenInsightsLensEnabled || auditLensEnabled
   const [inputValue, setInputValue] = useState(searchQuery)
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const commandContext: BuiltinCommandContext = {
     openView: (target) => {
-      if (target === 'lineage') setWorkspaceView('galaxy')
-      if (target === 'insights') setWorkspaceView('insights')
+      if (target === 'lineage' && galaxyLensEnabled) setWorkspaceView('galaxy')
+      if (target === 'insights' && insightsLensEnabled) setWorkspaceView('insights')
       if (target === 'settings') toggleSettings()
     },
     togglePanel: (target) => {
@@ -58,12 +60,13 @@ export function Toolbar() {
       iconSize: 14,
       className: `p-1.5 rounded hover:bg-hover ${workspaceView === 'galaxy' ? 'text-primary' : 'text-secondary hover:text-primary'}`
     }] : []),
-    // tF30: Insights button hidden when 'token-insights' lens is disabled
+    // Keep the shared Insights entry available when either contributing Lens is enabled.
     ...(insightsLensEnabled ? [{
       id: BUILTIN_COMMAND_IDS.viewInsights,
-      icon: BarChart3,
+      icon: tokenInsightsLensEnabled ? BarChart3 : ShieldCheck,
       iconSize: 14,
-      className: `p-1.5 rounded hover:bg-hover ${workspaceView === 'insights' ? 'text-primary' : 'text-secondary hover:text-primary'}`
+      className: `p-1.5 rounded hover:bg-hover ${workspaceView === 'insights' ? 'text-primary' : 'text-secondary hover:text-primary'}`,
+      title: tokenInsightsLensEnabled ? undefined : t('renderer.insights_page.tab_audit')
     }] : []),
     {
       id: BUILTIN_COMMAND_IDS.viewSettings,

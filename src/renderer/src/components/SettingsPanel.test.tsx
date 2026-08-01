@@ -17,6 +17,8 @@ const mockStore: any = {
   setLocale: vi.fn(),
   themeMode: 'system',
   setThemeMode: vi.fn(),
+  colorScheme: 'default',
+  setColorScheme: vi.fn(),
   config: {
     folders: [],
     sessionMeta: {},
@@ -26,12 +28,14 @@ const mockStore: any = {
     }
   },
   savePreferences,
+  toggleLens: vi.fn(),
+  reorderLenses: vi.fn(),
   sshConfig: null,
   setSshConfig: vi.fn()
 }
 
 vi.mock('../store', () => ({
-  useStore: () => mockStore
+  useStore: (selector?: (state: typeof mockStore) => unknown) => selector ? selector(mockStore) : mockStore
 }))
 
 vi.mock('../i18n', async (importOriginal) => {
@@ -51,7 +55,13 @@ function navButton(name: string): HTMLElement {
 
 describe('SettingsPanel 纵向导航设置', () => {
   beforeEach(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    })
     savePreferences.mockClear()
+    mockStore.toggleLens.mockClear()
+    mockStore.reorderLenses.mockClear()
     mockStore.config = {
       folders: [],
       sessionMeta: {},
@@ -133,6 +143,21 @@ describe('SettingsPanel 纵向导航设置', () => {
     fireEvent.click(screen.getByRole('button', { name: /iTerm2/ }))
 
     expect(savePreferences).toHaveBeenCalledWith({ defaultTerminalId: 'iterm2', resumeTerminal: 'iterm' })
+  })
+
+  it('Lens 管理页的开关与排序按钮调用持久化动作', () => {
+    render(<SettingsPanel />)
+    fireEvent.click(navButton('Lens'))
+
+    const switches = screen.getAllByRole('switch')
+    expect(switches).toHaveLength(7)
+    fireEvent.click(screen.getByRole('switch', { name: '金句划线' }))
+    expect(mockStore.toggleLens).toHaveBeenCalledWith('highlights')
+
+    fireEvent.click(screen.getByRole('button', { name: '图片索引 ↑' }))
+    expect(mockStore.reorderLenses).toHaveBeenCalledWith([
+      'image-index', 'highlights', 'outputs', 'token-insights', 'galaxy', 'audit', 'share-templates'
+    ])
   })
 
   it('自定义模板会从配置读出并保存修改', () => {

@@ -7,6 +7,7 @@ import {
 } from './utils/markdown'
 import { resolveConfiguredLocale, resolveSystemLocale, translate, type LegacyLocale, type Locale } from './i18n'
 import { defaultResumeMethodForSource } from '../../shared/settings-capabilities'
+import { BUILTIN_LENSES, isLensEnabled } from '../../shared/lens-registry'
 import { refreshHarnessIconOverrides } from './utils/harness-presentation'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
@@ -191,6 +192,8 @@ interface UserConfig {
     locale?: LegacyLocale
     themeMode?: 'dark' | 'light' | 'system'
     colorScheme?: ColorScheme
+    lightScheme?: ColorScheme
+    darkScheme?: ColorScheme
     spotlightShortcut?: string
     sshConfig?: SshConfig
     projectViewMode?: 'folders' | 'paths'
@@ -402,6 +405,27 @@ function effectiveTheme(mode: 'dark' | 'light' | 'system'): 'dark' | 'light' {
   return mode
 }
 
+function validColorScheme(value: unknown): ColorScheme | undefined {
+  return value === 'default' || value === 'paper' || value === 'nord' ? value : undefined
+}
+
+function colorSchemeForTheme(
+  preferences: UserConfig['preferences'] | undefined,
+  theme: 'dark' | 'light',
+  fallback: ColorScheme
+): ColorScheme {
+  const paired = theme === 'dark' ? preferences?.darkScheme : preferences?.lightScheme
+  return validColorScheme(paired) || validColorScheme(preferences?.colorScheme) || fallback
+}
+
+const initialThemeMode = resolveThemeMode()
+const initialTheme = effectiveTheme(initialThemeMode)
+const initialColorScheme = colorSchemeForTheme(
+  hydrated.config?.preferences,
+  initialTheme,
+  resolveColorScheme()
+)
+
 export const useStore = create<AppState>((set, get) => ({
   sessions: hydrated.sessions,
   selectedSession: null,
@@ -413,13 +437,13 @@ export const useStore = create<AppState>((set, get) => ({
   loading: hydrated.loading,
   viewMode: hydrated.viewMode,
   locale: hydrated.locale,
-  colorScheme: resolveColorScheme(),
-  themeMode: resolveThemeMode(),
-  theme: effectiveTheme(resolveThemeMode()),
+  colorScheme: initialColorScheme,
+  themeMode: initialThemeMode,
+  theme: initialTheme,
   selectedFolderId: null,
   settingsOpen: false,
   pendingSettingsCategory: null,
-  workspaceView: 'galaxy',
+  workspaceView: isLensEnabled('galaxy', hydrated.config?.preferences || {}) ? 'galaxy' : 'chat',
   infoPanelOpen: true,
   selectedSessionMdPath: null,
   activeSessionIds: new Set<string>(),
@@ -483,20 +507,17 @@ export const useStore = create<AppState>((set, get) => ({
         sshConfig: sshConfig ?? null,
         loading: false
       })
-      // Sync color scheme from preferences (cross-device)
-      const prefScheme = hydratedConfig.preferences?.colorScheme
-      if ((prefScheme === 'paper' || prefScheme === 'nord' || prefScheme === 'default') && prefScheme !== get().colorScheme) {
-        document.documentElement.dataset.colorScheme = prefScheme
-        localStorage.setItem('csm:colorScheme', prefScheme)
-        set({ colorScheme: prefScheme })
-      }
       const prefThemeMode = hydratedConfig.preferences?.themeMode
-      if ((prefThemeMode === 'light' || prefThemeMode === 'dark' || prefThemeMode === 'system') && prefThemeMode !== get().themeMode) {
-        const resolvedTheme = effectiveTheme(prefThemeMode)
-        document.documentElement.dataset.theme = resolvedTheme
-        localStorage.setItem('csm:themeMode', prefThemeMode)
-        set({ themeMode: prefThemeMode, theme: resolvedTheme })
-      }
+      const nextThemeMode = prefThemeMode === 'light' || prefThemeMode === 'dark' || prefThemeMode === 'system'
+        ? prefThemeMode
+        : get().themeMode
+      const resolvedTheme = effectiveTheme(nextThemeMode)
+      const resolvedScheme = colorSchemeForTheme(hydratedConfig.preferences, resolvedTheme, get().colorScheme)
+      document.documentElement.dataset.theme = resolvedTheme
+      document.documentElement.dataset.colorScheme = resolvedScheme
+      localStorage.setItem('csm:themeMode', nextThemeMode)
+      localStorage.setItem('csm:colorScheme', resolvedScheme)
+      set({ themeMode: nextThemeMode, theme: resolvedTheme, colorScheme: resolvedScheme })
       try {
         localStorage.setItem('csm:sessions', JSON.stringify(hydratedSessions))
         localStorage.setItem('csm:config', JSON.stringify(hydratedConfig))
@@ -577,8 +598,11 @@ export const useStore = create<AppState>((set, get) => ({
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
       if (get().themeMode === 'system') {
         const resolved = effectiveTheme('system')
+        const scheme = colorSchemeForTheme(get().config?.preferences, resolved, get().colorScheme)
         document.documentElement.setAttribute('data-theme', resolved)
-        set({ theme: resolved })
+        document.documentElement.dataset.colorScheme = scheme
+        localStorage.setItem('csm:colorScheme', scheme)
+        set({ theme: resolved, colorScheme: scheme })
       }
     })
 
@@ -758,9 +782,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   setThemeMode: (mode) => {
     const resolved = effectiveTheme(mode)
+    const scheme = colorSchemeForTheme(get().config?.preferences, resolved, get().colorScheme)
     document.documentElement.setAttribute('data-theme', resolved)
+    document.documentElement.dataset.colorScheme = scheme
     localStorage.setItem('csm:themeMode', mode)
-    set({ themeMode: mode, theme: resolved })
+    localStorage.setItem('csm:colorScheme', scheme)
+    set({ themeMode: mode, theme: resolved, colorScheme: scheme })
     void get().savePreferences({ themeMode: mode })
   },
 
@@ -779,10 +806,18 @@ export const useStore = create<AppState>((set, get) => ({
     if (pending) set({ pendingSettingsCategory: null })
     return pending
   },
-  setWorkspaceView: (view) => set((s) => ({
-    workspaceView: s.workspaceView === view ? 'chat' : view,
-    settingsOpen: false
-  })),
+  setWorkspaceView: (view) => set((s) => {
+    const preferences = s.config?.preferences || {}
+    const allowed = view === 'galaxy'
+      ? isLensEnabled('galaxy', preferences)
+      : view === 'insights'
+        ? isLensEnabled('token-insights', preferences) || isLensEnabled('audit', preferences)
+        : true
+    return {
+      workspaceView: allowed && s.workspaceView !== view ? view : 'chat',
+      settingsOpen: false
+    }
+  }),
 
   savePreferences: async (prefs) => {
     const config = get().config
@@ -996,14 +1031,22 @@ export const useStore = create<AppState>((set, get) => ({
   toggleLens: (lensId) => {
     const config = get().config
     if (!config) return
-    const allIds = ['highlights', 'image-index', 'outputs', 'token-insights', 'galaxy', 'audit', 'share-templates']
+    const allIds = BUILTIN_LENSES.map((lens) => lens.id)
+    if (!allIds.includes(lensId)) return
     const current = config.preferences.enabledLenses ?? allIds
     const next = current.includes(lensId)
       ? current.filter((id) => id !== lensId)
       : [...current, lensId]
+    const currentView = get().workspaceView
+    const routeInvalid = (currentView === 'galaxy' && !next.includes('galaxy')) ||
+      (currentView === 'insights' && !next.includes('token-insights') && !next.includes('audit'))
+    if (routeInvalid) set({ workspaceView: 'chat' })
     void get().savePreferences({ enabledLenses: next })
   },
   reorderLenses: (orderedIds) => {
-    void get().savePreferences({ lensOrder: orderedIds })
+    const known = BUILTIN_LENSES.map((lens) => lens.id)
+    const sanitized = [...new Set(orderedIds.filter((id) => known.includes(id)))]
+    for (const id of known) if (!sanitized.includes(id)) sanitized.push(id)
+    void get().savePreferences({ lensOrder: sanitized })
   }
 }))

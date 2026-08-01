@@ -9,6 +9,7 @@ import { useFeedbackToast } from './hooks/useFeedbackToast'
 import { BUILTIN_VIEW_IDS, builtinViewRegistry } from './registry/builtin-view-registry'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 import { HARNESS_PRESENTATION_CHANGED_EVENT } from './utils/harness-presentation'
+import { useLensEnabled } from './hooks/useLens'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const t = useT()
@@ -130,6 +131,9 @@ function ToastContainer() {
 export default function App() {
   const [, setHarnessPresentationRevision] = useState(0)
   const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen, workspaceView } = useStore()
+  const galaxyLensEnabled = useLensEnabled('galaxy')
+  const tokenInsightsLensEnabled = useLensEnabled('token-insights')
+  const auditLensEnabled = useLensEnabled('audit')
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [infoPanelWidth, setInfoPanelWidth] = useState(320)
   const [onboarding, setOnboarding] = useState<{ needed: boolean; defaultPath: string } | null>(null)
@@ -157,6 +161,12 @@ export default function App() {
       .then((state) => setOnboarding({ needed: state.needed, defaultPath: state.defaultPath }))
       .catch(() => setOnboarding({ needed: false, defaultPath: '' }))
   }, [initialize])
+
+  useEffect(() => {
+    const routeInvalid = (workspaceView === 'galaxy' && !galaxyLensEnabled) ||
+      (workspaceView === 'insights' && !tokenInsightsLensEnabled && !auditLensEnabled)
+    if (routeInvalid) useStore.setState({ workspaceView: 'chat' })
+  }, [workspaceView, galaxyLensEnabled, tokenInsightsLensEnabled, auditLensEnabled])
 
   // External file drop navigation is prevented by main process will-navigate handler
 

@@ -57,6 +57,14 @@ export interface UsageFact {
   valuationHistory: ValuationHistoryEntry[]
 }
 
+export interface UsageFactPage {
+  events: UsageFact[]
+  offset: number
+  limit: number
+  total: number
+  hasMore: boolean
+}
+
 export interface CostLedgerTotals {
   providerBilledUsd?: number
   harnessListEstimateUsd?: number

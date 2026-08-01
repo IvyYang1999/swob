@@ -1,13 +1,16 @@
 import { translate } from '../../i18n'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useStore } from '../../store'
 import { useAnalysisScope } from './scope'
 import { formatTokenCount } from './shared'
 import type {
   AnalysisDimension,
   InsightsDrilldownSession,
-  UsageFact
+  UsageFact,
+  UsageFactPage
 } from '../../../../shared/analysis-scope-types'
+
+const USAGE_EVENT_PAGE_SIZE = 100
 
 type DrilldownState =
   | { level: 'overview' }
@@ -52,8 +55,13 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
 
   const [sessionList, setSessionList] = useState<InsightsDrilldownSession[]>([])
   const [usageEvents, setUsageEvents] = useState<UsageFact[]>([])
+  const [usageEventPage, setUsageEventPage] = useState<UsageFactPage | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [eventLoadError, setEventLoadError] = useState(false)
+  const [eventRetryRevision, setEventRetryRevision] = useState(0)
   const [coverage, setCoverage] = useState<{ covered: number; total: number } | null>(null)
+  const eventRequestGeneration = useRef(0)
 
   // Fetch session list for level 2
   useEffect(() => {
@@ -81,22 +89,53 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
 
   useEffect(() => {
     if (state.level !== 'session-detail') return
+    const generation = ++eventRequestGeneration.current
     let cancelled = false
     setLoading(true)
-    api.getInsightSessionEvents(state.sessionId, scope)
-      .then((events: UsageFact[]) => {
-        if (cancelled) return
-        setUsageEvents(events ?? [])
+    setLoadingMore(false)
+    setEventLoadError(false)
+    setUsageEvents([])
+    setUsageEventPage(null)
+    api.getInsightSessionEvents(state.sessionId, scope, { offset: 0, limit: USAGE_EVENT_PAGE_SIZE })
+      .then((page: UsageFactPage) => {
+        if (cancelled || generation !== eventRequestGeneration.current) return
+        setUsageEvents(page.events ?? [])
+        setUsageEventPage(page)
         setLoading(false)
       })
       .catch(() => {
-        if (!cancelled) {
-          setUsageEvents([])
-          setLoading(false)
-        }
+        if (cancelled || generation !== eventRequestGeneration.current) return
+        setEventLoadError(true)
+        setLoading(false)
       })
-    return () => { cancelled = true }
-  }, [state.level === 'session-detail' ? (state as any).sessionId : '', scope])
+    return () => {
+      cancelled = true
+      eventRequestGeneration.current += 1
+    }
+  }, [state.level === 'session-detail' ? (state as any).sessionId : '', scope, eventRetryRevision])
+
+  const loadMoreUsageEvents = useCallback(async () => {
+    if (state.level !== 'session-detail' || !usageEventPage?.hasMore || loadingMore) return
+    const generation = eventRequestGeneration.current
+    setLoadingMore(true)
+    setEventLoadError(false)
+    try {
+      const page = await api.getInsightSessionEvents(state.sessionId, scope, {
+        offset: usageEventPage.offset + usageEventPage.events.length,
+        limit: USAGE_EVENT_PAGE_SIZE
+      }) as UsageFactPage
+      if (generation !== eventRequestGeneration.current) return
+      setUsageEvents((current) => {
+        const known = new Set(current.map((event) => event.eventId))
+        return [...current, ...page.events.filter((event) => !known.has(event.eventId))]
+      })
+      setUsageEventPage(page)
+    } catch {
+      if (generation === eventRequestGeneration.current) setEventLoadError(true)
+    } finally {
+      if (generation === eventRequestGeneration.current) setLoadingMore(false)
+    }
+  }, [api, loadingMore, scope, state, usageEventPage])
 
   const handleSessionClick = useCallback((sessionId: string) => {
     if (state.level !== 'sessions') return
@@ -216,6 +255,13 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
       {state.level === 'session-detail' && (
         loading ? (
           <div className="py-4 text-center text-xs text-muted">Loading...</div>
+        ) : eventLoadError && usageEvents.length === 0 ? (
+          <div className="space-y-2 py-4 text-center text-xs text-muted">
+            <div>{translate(locale, 'renderer.drilldown_view.load_failed')}</div>
+            <button type="button" onClick={() => setEventRetryRevision((revision) => revision + 1)} className="text-accent hover:underline">
+              {translate(locale, 'renderer.drilldown_view.retry')}
+            </button>
+          </div>
         ) : usageEvents.length === 0 ? (
           <div className="py-4 text-center text-xs text-muted">
             {translate(locale, 'renderer.drilldown_view.no_usage_events')}
@@ -289,6 +335,27 @@ export function DrilldownView({ onClose, dimension, dimensionLabel, itemKey, ite
                 </article>
               )
             })}
+            <div className="sticky bottom-0 flex items-center justify-center gap-3 border-t border-edge bg-surface/95 py-2 text-[10px] text-muted backdrop-blur-sm">
+              <span>
+                {translate(locale, 'renderer.drilldown_view.showing_events')}
+                {' '}{usageEvents.length}/{usageEventPage?.total ?? usageEvents.length}
+              </span>
+              {usageEventPage?.hasMore && (
+                <button
+                  type="button"
+                  onClick={loadMoreUsageEvents}
+                  disabled={loadingMore}
+                  className="font-medium text-accent hover:underline disabled:cursor-wait disabled:opacity-60"
+                >
+                  {loadingMore
+                    ? translate(locale, 'renderer.drilldown_view.loading_more')
+                    : translate(locale, 'renderer.drilldown_view.load_more')}
+                </button>
+              )}
+              {eventLoadError && usageEvents.length > 0 && (
+                <span className="text-soft-amber">{translate(locale, 'renderer.drilldown_view.load_failed')}</span>
+              )}
+            </div>
           </div>
         )
       )}

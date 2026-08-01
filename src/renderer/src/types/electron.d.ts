@@ -16,7 +16,7 @@ import type {
   UserIdentityInput
 } from '../../../shared/frontend-ipc-contract'
 import type { DashboardLayoutConfig } from '../../../shared/registry/builtin-widgets'
-import type { InsightsQueryBundleResult, UsageFact } from '../../../shared/analysis-scope-types'
+import type { InsightsQueryBundleResult, UsageFact, UsageFactPage } from '../../../shared/analysis-scope-types'
 import type {
   ReportJobSnapshot,
   ReportJobStartRequest,
@@ -144,6 +144,7 @@ type RendererInsightsDrilldownSession = {
   usageProvenance: string[]
 }
 type RendererUsageFact = UsageFact
+type RendererUsageFactPage = UsageFactPage
 type RendererUsageFactSyncResult = {
   changedSessions: number
   unchangedSessions: number
@@ -375,9 +376,11 @@ interface ElectronAPI {
   ) => Promise<RendererInsightsDrilldownSession[]>
   getInsightSessionEvents: (
     sessionId: string,
-    scope: RendererAnalysisScope
-  ) => Promise<RendererUsageFact[]>
+    scope: RendererAnalysisScope,
+    page?: { offset?: number; limit?: number }
+  ) => Promise<RendererUsageFactPage>
   rebuildInsightsFacts: () => Promise<RendererUsageFactSyncResult>
+  onInsightsFactsUpdated: (callback: (result: RendererUsageFactSyncResult) => void) => () => void
 
   // Session Audit
   auditSession: (filePath: string) => Promise<any>

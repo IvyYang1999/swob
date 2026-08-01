@@ -24,7 +24,7 @@ test.afterAll(async () => {
   else console.log('[diag] fixture kept at:', fixtureHome)
 })
 
-test('全新安装走完三步引导后进入主界面，配置落盘', async () => {
+test('全新安装完成场景选择与引导后进入主界面，配置落盘', async () => {
   const onboarding = page.locator('[data-testid="onboarding"]')
   await expect(onboarding).toBeVisible({ timeout: 20_000 })
 
@@ -32,12 +32,16 @@ test('全新安装走完三步引导后进入主界面，配置落盘', async ()
   await expect(onboarding.getByText('你的 AI 会话，永不丢失')).toBeVisible()
   await onboarding.getByRole('button', { name: /开始设置/ }).click()
 
-  // 第二步：Vault 位置（默认路径预填）
+  // 第二步：选择使用场景；“全部都要”保留所有内置 Lens。
+  await expect(onboarding.getByText('你主要用 Swob 做什么？')).toBeVisible()
+  await onboarding.getByRole('button', { name: /都要/ }).click()
+
+  // 第三步：Vault 位置（默认路径预填）
   await expect(onboarding.getByText('为你的会话安个家')).toBeVisible()
   await expect(onboarding.getByText(/Documents\/Swob|~\/Documents\/Swob/)).toBeVisible()
   await onboarding.getByRole('button', { name: /就放这里/ }).click()
 
-  // 第三步：扫描页（全新 HOME 无会话 → 空态文案）
+  // 第四步：扫描页（全新 HOME 无会话 → 空态文案）
   await expect(onboarding.getByText('发现了这些会话')).toBeVisible()
   await expect(onboarding.getByText(/还没有发现会话/)).toBeVisible()
   await onboarding.getByRole('button', { name: '完成', exact: true }).click()

@@ -40,10 +40,11 @@ export function InsightsPage() {
   const locale = useStore((s) => s.locale)
   const zh = locale === 'zh-CN'
   // tF30: filter tabs by Lens state
+  const tokenInsightsLensEnabled = useLensEnabled('token-insights')
   const auditLensEnabled = useLensEnabled('audit')
   const TABS = useMemo(
-    () => auditLensEnabled ? ALL_TABS : ALL_TABS.filter((tab) => tab.id !== 'audit'),
-    [auditLensEnabled]
+    () => ALL_TABS.filter((tab) => tab.id === 'audit' ? auditLensEnabled : tokenInsightsLensEnabled),
+    [auditLensEnabled, tokenInsightsLensEnabled]
   )
   const [bundle, setBundle] = useState<QueryBundle | null>(null)
   const [refreshing, setRefreshing] = useState(true)
@@ -53,6 +54,13 @@ export function InsightsPage() {
   const [scope, setScope] = useState<AnalysisScope>(DEFAULT_SCOPE)
   const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
   const [dashboardLayout, setDashboardLayout] = useState<DashboardLayoutConfig>(createDefaultDashboardLayout)
+
+  useEffect(() => {
+    if (!TABS.some((tab) => tab.id === activeTab) && TABS[0]) {
+      setActiveTab(TABS[0].id)
+      setDrilldown(null)
+    }
+  }, [TABS, activeTab])
 
   useEffect(() => {
     let cancelled = false
@@ -65,6 +73,10 @@ export function InsightsPage() {
       })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => window.api.onInsightsFactsUpdated(() => {
+    setRetryRevision((revision) => revision + 1)
+  }), [])
 
   // One atomic query keeps all dashboard dimensions on the same Usage Fact snapshot.
   useEffect(() => {

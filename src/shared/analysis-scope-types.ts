@@ -136,6 +136,14 @@ export interface UsageFact {
   }>
 }
 
+export interface UsageFactPage {
+  events: UsageFact[]
+  offset: number
+  limit: number
+  total: number
+  hasMore: boolean
+}
+
 export interface ResolvedAnalysisRange {
   fromDay: string | null
   toDay: string | null

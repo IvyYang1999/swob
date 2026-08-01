@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import type { Folder, SessionSummary } from './types'
 import { accountingForSession, totalCacheWriteTokens, type UsageEvent } from './token-accounting'
 import { previewUsageEventRepricing, valueUsageEvent, type Valuation } from './token-valuation'
+import { PRICING_CATALOG_VERSION } from './pricing-catalog'
 import { searchDatabasePath } from './search-index'
 import { isActivityDay, localActivityDay } from './activity-time'
 import { providerOutcomeForSession } from './session-provider-outcome'
@@ -22,6 +23,7 @@ import {
   type ResolvedAnalysisRange,
   type UsageAggregate,
   type UsageFact,
+  type UsageFactPage,
   type UsageFactSyncResult
 } from './analysis-contract'
 
@@ -118,7 +120,7 @@ interface UsageFactRow {
 }
 
 function usageDatabasePath(): string {
-  return process.env.SWOB_USAGE_INDEX_PATH || searchDatabasePath()
+  return process.env.SWOB_USAGE_INDEX_PATH || path.join(path.dirname(searchDatabasePath()), 'usage-facts.db')
 }
 
 function ensureSchema(db: Database.Database): void {
@@ -335,8 +337,54 @@ export function closeUsageFactStore(): void {
   insightsBundleCache.clear()
 }
 
+export function initializeUsageFactStore(): void {
+  void getDatabase()
+}
+
+export function hasCompletedUsageFactSnapshot(): boolean {
+  const row = getDatabase().prepare(
+    'SELECT last_indexed_at FROM usage_schema_meta WHERE singleton = 1'
+  ).get() as { last_indexed_at: string | null } | undefined
+  return Boolean(row?.last_indexed_at)
+}
+
 function stableHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
+function usageFactInputSignature(
+  session: SessionSummary,
+  accounting: ReturnType<typeof accountingForSession>,
+  outcome: ReturnType<typeof providerOutcomeForSession>,
+  resolvedRoot: string
+): string {
+  const hash = createHash('sha256')
+  hash.update(JSON.stringify({
+    schemaVersion: USAGE_FACT_SCHEMA_VERSION,
+    pricingCatalogVersion: PRICING_CATALOG_VERSION,
+    source: session.source || 'claude-code',
+    project: projectPath(session),
+    root: resolvedRoot,
+    turns: session.turnCount,
+    outcome,
+    activityDays: session.activityDays || [],
+    accounting: {
+      provider: accounting.provider,
+      metricVersion: accounting.metricVersion,
+      provenance: accounting.provenance,
+      billingTotal: accounting.billingTotal,
+      conversationOnly: accounting.conversationOnly,
+      components: accounting.components,
+      unavailableReason: accounting.unavailableReason,
+      warnings: accounting.warnings,
+      excludedFromRollups: accounting.excludedFromRollups === true
+    }
+  }))
+  for (const event of accounting.usageEvents) {
+    hash.update('\0')
+    hash.update(JSON.stringify(event))
+  }
+  return hash.digest('hex')
 }
 
 function parseJson<T>(value: string | null, fallback: T): T {
@@ -652,8 +700,13 @@ export function synchronizeUsageFacts(
       db.exec('DELETE FROM usage_rollups; DELETE FROM usage_session_folders; DELETE FROM usage_session_activity; DELETE FROM usage_facts; DELETE FROM usage_sessions;')
     }
     const existingRows = db.prepare(
-      'SELECT session_id, fact_signature, folder_signature FROM usage_sessions'
-    ).all() as Array<{ session_id: string; fact_signature: string; folder_signature: string }>
+      'SELECT session_id, fact_signature, folder_signature, activity_time_status FROM usage_sessions'
+    ).all() as Array<{
+      session_id: string
+      fact_signature: string
+      folder_signature: string
+      activity_time_status: 'known' | 'unknown'
+    }>
     const existing = new Map(existingRows.map((row) => [row.session_id, row]))
 
     for (const [sessionId, session] of uniqueSessions) {
@@ -662,23 +715,19 @@ export function synchronizeUsageFacts(
       const parsed = outcome.parse === 'parsed'
       const usageAvailable = parsed && outcome.usage === 'available' && accounting.billingTotal !== null
       const resolvedRoot = resolveRootSessionId(session, sessionsByIdentity)
-      const facts = parsed ? usageFactsForSession(session, { rootSessionId: resolvedRoot }) : []
-      const activityDays = activityDaysForSession(session, facts)
       const folderIds = folderMap.get(sessionId) || []
-      const factSignature = stableHash({
-        source: session.source || 'claude-code',
-        project: projectPath(session),
-        root: resolvedRoot,
-        turns: session.turnCount,
-        outcome,
-        available: usageAvailable,
-        facts,
-        activityDays
-      })
+      const factSignature = usageFactInputSignature(session, accounting, outcome, resolvedRoot)
       const folderSignature = stableHash(folderIds)
       const prior = existing.get(sessionId)
       const factChanged = !prior || prior.fact_signature !== factSignature
       const folderChanged = !prior || prior.folder_signature !== folderSignature
+      const facts = factChanged && parsed
+        ? usageFactsForSession(session, { rootSessionId: resolvedRoot })
+        : []
+      const activityDays = factChanged ? activityDaysForSession(session, facts) : []
+      const activityTimeStatus = factChanged
+        ? (activityDays.length > 0 ? 'known' : 'unknown')
+        : prior!.activity_time_status
       if (factChanged) changedSessions++
       else unchangedSessions++
 
@@ -714,7 +763,7 @@ export function synchronizeUsageFacts(
         factSignature,
         folderSignature,
         session.updatedAt || '',
-        activityDays.length > 0 ? 'known' : 'unknown'
+        activityTimeStatus
       )
 
       if (factChanged) {
@@ -1517,25 +1566,48 @@ function factFilter(scope: AnalysisScope, range: ResolvedAnalysisRange, sessionI
 export function sessionUsageEvents(
   sessionId: string,
   rawScope: AnalysisScope,
-  options: { now?: Date } = {}
-): UsageFact[] {
+  options: { now?: Date; offset?: number; limit?: number } = {}
+): UsageFactPage {
   const scope = normalizeAnalysisScope(rawScope)
   const range = resolveAnalysisRange(scope, options.now)
   const db = getDatabase()
   const filter = factFilter(scope, range, sessionId)
+  const offset = Math.max(0, Math.trunc(options.offset ?? 0))
+  const limit = Math.min(200, Math.max(1, Math.trunc(options.limit ?? 100)))
+  const total = (db.prepare(`
+    SELECT COUNT(*) AS count FROM usage_facts facts
+    ${filter.joins.join('\n')}
+    WHERE ${filter.where.join(' AND ')}
+  `).get(...filter.params) as { count: number }).count
   const rows = db.prepare(`
     SELECT facts.* FROM usage_facts facts
     ${filter.joins.join('\n')}
     WHERE ${filter.where.join(' AND ')}
     ORDER BY CASE WHEN occurred_at IS NULL THEN 1 ELSE 0 END, occurred_at, event_id
-  `).all(...filter.params) as UsageFactRow[]
-  const historyForEvent = db.prepare(`
-    SELECT valuation_json, recorded_at
-    FROM usage_valuation_history
-    WHERE event_id = ?
-    ORDER BY recorded_at, price_revision
-  `)
-  return rows.map((row) => ({
+    LIMIT ? OFFSET ?
+  `).all(...filter.params, limit, offset) as UsageFactRow[]
+  const historyByEvent = new Map<string, Array<{
+    valuation_json: string
+    recorded_at: string
+  }>>()
+  if (rows.length > 0) {
+    const histories = db.prepare(`
+      SELECT event_id, valuation_json, recorded_at
+      FROM usage_valuation_history
+      WHERE event_id IN (${rows.map(() => '?').join(', ')})
+      ORDER BY event_id, recorded_at, price_revision
+    `).all(...rows.map((row) => row.event_id)) as Array<{
+      event_id: string
+      valuation_json: string
+      recorded_at: string
+    }>
+    for (const history of histories) {
+      const list = historyByEvent.get(history.event_id) ?? []
+      list.push(history)
+      historyByEvent.set(history.event_id, list)
+    }
+  }
+  const events = rows.map((row) => ({
     eventId: row.event_id,
     billingFactId: row.billing_fact_id,
     billingIncluded: row.billing_included === 1,
@@ -1579,10 +1651,7 @@ export function sessionUsageEvents(
     ...(row.revision_notice_json
       ? { revisionNotice: parseJson(row.revision_notice_json, undefined) }
       : {}),
-    valuationHistory: (historyForEvent.all(row.event_id) as Array<{
-      valuation_json: string
-      recorded_at: string
-    }>).map((history) => ({
+    valuationHistory: (historyByEvent.get(row.event_id) ?? []).map((history) => ({
       ...parseJson<UsageFact['valuationHistory'][number]>(history.valuation_json, {
         priceRevision: 'unknown',
         priceSnapshotHash: '',
@@ -1593,6 +1662,13 @@ export function sessionUsageEvents(
       recordedAt: history.recorded_at
     }))
   }))
+  return {
+    events,
+    offset,
+    limit,
+    total,
+    hasMore: offset + events.length < total
+  }
 }
 
 export function usageFactStoreStats(): {

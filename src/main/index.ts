@@ -101,6 +101,8 @@ import { closeCanonicalSessionStore } from './canonical-store'
 import { buildInsights } from './insights'
 import {
   drilldownInsights,
+  hasCompletedUsageFactSnapshot,
+  initializeUsageFactStore,
   queryInsights,
   queryInsightsBundle,
   sessionUsageEvents
@@ -248,7 +250,6 @@ let latestLibraryTree: LibraryTree | null = null
 let libraryInitializationPromise: Promise<void> | null = null
 let libraryHydrationGeneration = 0
 let searchIndexWarmScheduled = false
-let usageFactsInitialized = false
 let usageFactSyncError: unknown = null
 interface UsageFactSyncSnapshot {
   sessions: SessionSummary[]
@@ -541,10 +542,13 @@ function currentAnalysisFolders(): Folder[] {
  * the current snapshot; it never parses source JSONL or performs a new scan.
  */
 function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
-  usageFactsInitialized = true
   if (!usageFactSyncRunner) {
     usageFactSyncRunner = new LatestSnapshotRunner({
       run: async (snapshot: UsageFactSyncSnapshot) => {
+        // Establish the main-thread WAL reader and finish any schema work
+        // before the worker starts its long write transaction. Subsequent
+        // Insights reads can then use the last committed snapshot immediately.
+        initializeUsageFactStore()
         const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
         try {
           const result = await worker.syncUsageFacts(
@@ -554,6 +558,7 @@ function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<Usa
             { rebuild: snapshot.rebuild }
           )
           usageFactSyncError = null
+          mainWindow?.webContents.send('insights:factsUpdated', result)
           return result
         } catch (error) {
           usageFactSyncError = error
@@ -580,12 +585,20 @@ function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<Usa
 }
 
 async function ensureUsageFactsReady(): Promise<void> {
-  if (!usageFactsInitialized) {
-    await scheduleUsageFactSync()
-    return
+  // A committed snapshot is transactionally consistent even while the worker
+  // is preparing a newer one. Waiting for the runner to become fully idle can
+  // starve forever when active transcripts continuously enqueue new snapshots.
+  // Serve the last complete snapshot immediately; the renderer requeries when
+  // `insights:factsUpdated` announces the next committed revision.
+  try {
+    if (hasCompletedUsageFactSnapshot()) return
+  } catch {
+    // First-run schema creation may briefly race the worker. Fall through and
+    // await one scheduled snapshot rather than exposing a false empty ledger.
   }
-  await usageFactSyncRunner?.waitForIdle()
-  if (usageFactSyncError) await scheduleUsageFactSync()
+
+  await scheduleUsageFactSync()
+  if (usageFactSyncError) throw usageFactSyncError
 }
 
 async function reloadSessionsForAction(): Promise<SessionSummary[]> {
@@ -1795,9 +1808,17 @@ ipcMain.handle(
 
 ipcMain.handle(
   'insights:sessionEvents',
-  async (_event, sessionId: string, scope: AnalysisScope) => {
+  async (
+    _event,
+    sessionId: string,
+    scope: AnalysisScope,
+    page: { offset?: number; limit?: number } = {}
+  ) => {
+    if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 512) {
+      throw new Error('Invalid session id')
+    }
     await ensureUsageFactsReady()
-    return sessionUsageEvents(sessionId, scope)
+    return sessionUsageEvents(sessionId, scope, page)
   }
 )
 

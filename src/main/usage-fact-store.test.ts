@@ -364,9 +364,16 @@ describe('UsageFact + AnalysisScope', () => {
       models: ['m2'],
       processedTokens: 25
     }])
-    const events = sessionUsageEvents('drill', scope({ range: { from: '2026-07-21', to: '2026-07-21' } }))
-    expect(events).toHaveLength(1)
-    expect(events[0]).toMatchObject({ model: 'm2', nonCachedInputTokens: 20, outputTokens: 5 })
+    const page = sessionUsageEvents('drill', scope({ range: { from: '2026-07-21', to: '2026-07-21' } }))
+    expect(page).toMatchObject({ offset: 0, limit: 100, total: 1, hasMore: false })
+    expect(page.events).toHaveLength(1)
+    expect(page.events[0]).toMatchObject({ model: 'm2', nonCachedInputTokens: 20, outputTokens: 5 })
+
+    const firstPage = sessionUsageEvents('drill', scope(), { limit: 1 })
+    const secondPage = sessionUsageEvents('drill', scope(), { limit: 1, offset: 1 })
+    expect(firstPage).toMatchObject({ offset: 0, limit: 1, total: 2, hasMore: true })
+    expect(secondPage).toMatchObject({ offset: 1, limit: 1, total: 2, hasMore: false })
+    expect(firstPage.events[0].eventId).not.toBe(secondPage.events[0].eventId)
   })
 
   it('多级分支会话事实追溯到真正 rootSessionId', () => {
@@ -384,7 +391,7 @@ describe('UsageFact + AnalysisScope', () => {
 
     synchronizeUsageFacts([rootSession, child, grandchild], [])
 
-    expect(sessionUsageEvents('grandchild', scope())[0].rootSessionId).toBe('root')
+    expect(sessionUsageEvents('grandchild', scope()).events[0].rootSessionId).toBe('root')
   })
 
   it('previous period 自动使用同长度、同过滤口径', () => {
@@ -619,8 +626,8 @@ describe('UsageFact + AnalysisScope', () => {
 
     expect(queryInsights(scope(), 'global').total.processedTokens).toBe(120)
     const copies = [
-      ...sessionUsageEvents('dedup-parent', scope()),
-      ...sessionUsageEvents('dedup-fork', scope())
+      ...sessionUsageEvents('dedup-parent', scope()).events,
+      ...sessionUsageEvents('dedup-fork', scope()).events
     ]
     expect(copies).toHaveLength(2)
     expect(new Set(copies.map((fact) => fact.billingFactId)).size).toBe(1)
@@ -651,7 +658,7 @@ describe('UsageFact + AnalysisScope', () => {
     synchronizeUsageFacts([session], [])
 
     expect(queryInsights(scope(), 'global').total.processedTokens).toBe(175)
-    const facts = sessionUsageEvents('merged-parent', scope())
+    const facts = sessionUsageEvents('merged-parent', scope()).events
     expect(facts).toHaveLength(3)
     const copiedBillingFactId = [...new Set(facts.map((fact) => fact.billingFactId))]
       .find((billingFactId) => facts.filter((fact) => fact.billingFactId === billingFactId).length === 2)
@@ -673,7 +680,7 @@ describe('UsageFact + AnalysisScope', () => {
 
     synchronizeUsageFacts([session], [])
 
-    const fact = sessionUsageEvents('repriced-luna', scope())[0]
+    const fact = sessionUsageEvents('repriced-luna', scope()).events[0]
     expect(fact.priceRevision).toBe('official-snapshot-2026-08-01.v2')
     expect(fact.revisionNotice?.notice['zh-CN']).toBe('因官方价格目录更新而修订')
     expect(fact.valuationHistory.map((entry) => entry.priceRevision)).toEqual([

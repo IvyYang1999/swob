@@ -14,7 +14,7 @@ import { InsightsPage } from './InsightsPage'
 
 const store = vi.hoisted(() => ({
   state: {
-    config: { preferences: { projectViewMode: 'folders' } },
+    config: { preferences: { projectViewMode: 'folders', enabledLenses: null as string[] | null } },
     sessions: [] as Array<Record<string, unknown>>,
     locale: 'zh-CN'
   }
@@ -37,8 +37,8 @@ vi.mock('./FilterBar', async () => {
 
 vi.mock('./DrilldownView', () => ({ DrilldownView: () => null }))
 vi.mock('../../registry/builtin-widget-registry', () => ({
-  DashboardPageWidgets: ({ context }: { context: { data: { totalTokens: number } } }) =>
-    <div data-testid="total-tokens">{context.data.totalTokens}</div>
+  DashboardPageWidgets: ({ context, page }: { context: { data: { totalTokens: number } }; page: string }) =>
+    <div data-testid="total-tokens" data-page={page}>{context.data.totalTokens}</div>
 }))
 
 function aggregate(tokens: number): UsageAggregate {
@@ -105,12 +105,20 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 describe('InsightsPage query lifecycle', () => {
+  let notifyFactsUpdated: (() => void) | null
+
   beforeEach(() => {
+    notifyFactsUpdated = null
     store.state.sessions = []
+    store.state.config.preferences.enabledLenses = null
     const scope: AnalysisScope = { range: '7d', metricBasis: 'billing' }
     ;(window as unknown as { api: Record<string, unknown> }).api = {
       dashboardLoadLayout: vi.fn().mockRejectedValue(new Error('use default')),
-      queryInsightsBundle: vi.fn().mockResolvedValue(bundle(42, scope))
+      queryInsightsBundle: vi.fn().mockResolvedValue(bundle(42, scope)),
+      onInsightsFactsUpdated: vi.fn((callback: () => void) => {
+        notifyFactsUpdated = callback
+        return () => { notifyFactsUpdated = null }
+      })
     }
   })
 
@@ -146,5 +154,39 @@ describe('InsightsPage query lifecycle', () => {
     await act(async () => next.resolve(bundle(7, nextScope)))
     await waitFor(() => expect(screen.getByTestId('total-tokens').textContent).toBe('7'))
     expect(window.api.queryInsightsBundle).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes from the next committed Usage Fact snapshot', async () => {
+    const scope: AnalysisScope = { range: '7d', metricBasis: 'billing' }
+    vi.mocked(window.api.queryInsightsBundle)
+      .mockResolvedValueOnce(bundle(42, scope))
+      .mockResolvedValueOnce(bundle(84, scope))
+
+    render(<InsightsPage />)
+    await screen.findByText('42')
+
+    act(() => notifyFactsUpdated?.())
+
+    await waitFor(() => expect(screen.getByTestId('total-tokens').textContent).toBe('84'))
+    expect(window.api.queryInsightsBundle).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps Token and Audit independently reachable and resets a disabled active tab', async () => {
+    const view = render(<InsightsPage />)
+    await screen.findByText('42')
+
+    fireEvent.click(screen.getByRole('tab', { name: '审计报告' }))
+    expect(screen.getByTestId('total-tokens').getAttribute('data-page')).toBe('audit')
+
+    store.state.config.preferences.enabledLenses = ['token-insights']
+    view.rerender(<InsightsPage />)
+    await waitFor(() => expect(screen.queryByRole('tab', { name: '审计报告' })).toBeNull())
+    await waitFor(() => expect(screen.getByTestId('total-tokens').getAttribute('data-page')).toBe('overview'))
+
+    store.state.config.preferences.enabledLenses = ['audit']
+    view.rerender(<InsightsPage />)
+    await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(1))
+    expect(screen.getByRole('tab', { name: '审计报告' })).not.toBeNull()
+    await waitFor(() => expect(screen.getByTestId('total-tokens').getAttribute('data-page')).toBe('audit'))
   })
 })

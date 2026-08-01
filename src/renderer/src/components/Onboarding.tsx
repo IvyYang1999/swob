@@ -144,30 +144,36 @@ export function Onboarding({ defaultPath, onDone }: { defaultPath: string; onDon
                   icon: BookOpen,
                   title: t('onboarding.scene_knowledge'),
                   hint: t('onboarding.scene_knowledge_hint'),
-                  color: 'soft-blue'
+                  cardClass: 'hover:border-soft-blue/50',
+                  iconWrapClass: 'bg-soft-blue/15',
+                  iconClass: 'text-soft-blue'
                 },
                 {
                   scene: 'developer' as const,
                   icon: Code2,
                   title: t('onboarding.scene_developer'),
                   hint: t('onboarding.scene_developer_hint'),
-                  color: 'soft-purple'
+                  cardClass: 'hover:border-soft-purple/50',
+                  iconWrapClass: 'bg-soft-purple/15',
+                  iconClass: 'text-soft-purple'
                 },
                 {
                   scene: 'both' as const,
                   icon: Layers,
                   title: t('onboarding.scene_both'),
                   hint: t('onboarding.scene_both_hint'),
-                  color: 'soft-green'
+                  cardClass: 'hover:border-soft-green/50',
+                  iconWrapClass: 'bg-soft-green/15',
+                  iconClass: 'text-soft-green'
                 }
-              ]).map(({ scene, icon: Icon, title, hint, color }) => (
+              ]).map(({ scene, icon: Icon, title, hint, cardClass, iconWrapClass, iconClass }) => (
                 <button
                   key={scene}
                   onClick={() => handleSceneSelect(scene)}
-                  className={`w-full p-4 rounded-lg border border-edge hover:border-${color}/50 bg-surface/60 hover:bg-surface flex items-center gap-3 text-left transition-colors group`}
+                  className={`w-full p-4 rounded-lg border border-edge ${cardClass} bg-surface/60 hover:bg-surface flex items-center gap-3 text-left transition-colors group`}
                 >
-                  <div className={`w-10 h-10 rounded-lg bg-${color}/15 flex items-center justify-center shrink-0`}>
-                    <Icon size={20} className={`text-${color}`} />
+                  <div className={`w-10 h-10 rounded-lg ${iconWrapClass} flex items-center justify-center shrink-0`}>
+                    <Icon size={20} className={iconClass} />
                   </div>
                   <div>
                     <div className="text-sm font-medium text-primary">{title}</div>

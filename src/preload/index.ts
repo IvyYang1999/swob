@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AnalysisDimension, AnalysisScope } from '../main/analysis-contract'
+import type { AnalysisDimension, AnalysisScope, UsageFactSyncResult } from '../main/analysis-contract'
 import type { OnboardingBackupSizeEstimate } from '../shared/onboarding-backup-size'
 import type { LocalNetworkInfo, PublicIpQueryResult } from '../shared/network-info'
 import type {
@@ -193,9 +193,17 @@ const api = {
     ipcRenderer.invoke('insights:queryBundle', scope),
   drilldownInsights: (scope: AnalysisScope, dimension: AnalysisDimension, key: string) =>
     ipcRenderer.invoke('insights:drilldown', scope, dimension, key),
-  getInsightSessionEvents: (sessionId: string, scope: AnalysisScope) =>
-    ipcRenderer.invoke('insights:sessionEvents', sessionId, scope),
+  getInsightSessionEvents: (
+    sessionId: string,
+    scope: AnalysisScope,
+    page?: { offset?: number; limit?: number }
+  ) => ipcRenderer.invoke('insights:sessionEvents', sessionId, scope, page),
   rebuildInsightsFacts: () => ipcRenderer.invoke('insights:rebuildFacts'),
+  onInsightsFactsUpdated: (callback: (result: UsageFactSyncResult) => void) => {
+    const listener = (_event: unknown, result: UsageFactSyncResult) => callback(result)
+    ipcRenderer.on('insights:factsUpdated', listener)
+    return () => ipcRenderer.removeListener('insights:factsUpdated', listener)
+  },
 
   // Lineage
   getLineageRegistry: () => ipcRenderer.invoke('lineage:getRegistry'),

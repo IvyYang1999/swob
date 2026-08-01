@@ -73,6 +73,52 @@ describe('renderer preference persistence', () => {
     })
   })
 
+  it('applies per-mode color schemes and refuses routes disabled by Lens state', async () => {
+    const config = {
+      ...structuredClone(baseConfig),
+      preferences: {
+        ...structuredClone(baseConfig.preferences),
+        themeMode: 'system' as const,
+        colorScheme: 'default' as const,
+        lightScheme: 'paper' as const,
+        darkScheme: 'nord' as const,
+        enabledLenses: ['audit']
+      }
+    }
+    ;(window as any).api = {
+      onLibraryPatch: vi.fn(),
+      loadAllSessions: vi.fn(async () => []),
+      loadConfig: vi.fn(async () => structuredClone(config)),
+      getSystemLocale: vi.fn(async () => 'en'),
+      saveConfig: vi.fn(async () => undefined),
+      onSessionAdded: vi.fn(),
+      onSessionUpdated: vi.fn(),
+      onSessionSummaryUpdated: vi.fn(),
+      onSessionsRefresh: vi.fn(),
+      getActiveSessions: vi.fn(async () => []),
+      onActiveSessionsChanged: vi.fn(),
+      onSpotlightNavigate: vi.fn()
+    }
+
+    const { useStore } = await import('./store')
+    await useStore.getState().initialize()
+
+    expect(useStore.getState()).toMatchObject({ themeMode: 'system', theme: 'dark', colorScheme: 'nord' })
+    useStore.getState().setThemeMode('light')
+    expect(useStore.getState()).toMatchObject({ theme: 'light', colorScheme: 'paper' })
+    useStore.getState().setThemeMode('dark')
+    expect(useStore.getState()).toMatchObject({ theme: 'dark', colorScheme: 'nord' })
+
+    useStore.setState({ workspaceView: 'chat' })
+    useStore.getState().setWorkspaceView('insights')
+    expect(useStore.getState().workspaceView).toBe('insights')
+    useStore.getState().setWorkspaceView('galaxy')
+    expect(useStore.getState().workspaceView).toBe('chat')
+    useStore.setState({ workspaceView: 'insights' })
+    useStore.getState().toggleLens('audit')
+    expect(useStore.getState().workspaceView).toBe('chat')
+  })
+
   it('materializes transcript and unavailable IPC branches without pretending they contain messages', async () => {
     const { materializeSessionDetail } = await import('./store')
     const summary = {

@@ -347,7 +347,12 @@ function useRadioKeyboard(items: string[], selected: string, onSelect: (v: strin
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + items.length) % items.length
     else if (e.key === 'Home') next = 0
     else if (e.key === 'End') next = items.length - 1
-    if (next >= 0) { e.preventDefault(); onSelect(items[next]) }
+    if (next >= 0) {
+      e.preventDefault()
+      onSelect(items[next])
+      const buttons = e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')
+      requestAnimationFrame(() => buttons[next]?.focus())
+    }
   }, [items, selected, onSelect])
 }
 
@@ -432,12 +437,13 @@ function ColorSchemePicker({ value, onChange, isCustomPair, t }: {
     <div className={GRID_CLASS} role="radiogroup" aria-label={t('settings.color_scheme')} onKeyDown={onKey}>
       {THEME_FAMILIES.map((family) => {
         const selected = !isCustomPair && value === family.id
+        const focusAnchor = value === family.id
         return (
           <button
             key={family.id}
             role="radio"
             aria-checked={selected}
-            tabIndex={selected ? 0 : -1}
+            tabIndex={focusAnchor ? 0 : -1}
             onClick={() => onChange(family.id)}
             className={`${CARD_W} rounded-md border-[1.5px] transition-colors relative focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
               selected ? 'border-accent' : 'border-edge hover:border-edge-strong'

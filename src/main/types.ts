@@ -321,6 +321,9 @@ export interface UserConfig {
     experimentalClaudeDesktopImport?: boolean
     locale?: import('../shared/i18n').LegacyLocale
     themeMode?: ThemeMode
+    colorScheme?: 'default' | 'paper' | 'nord'
+    lightScheme?: 'default' | 'paper' | 'nord'
+    darkScheme?: 'default' | 'paper' | 'nord'
     spotlightShortcut?: string
     sshConfig?: SshConfig
     sshTargets?: SshTargetConfig[]
@@ -339,5 +342,7 @@ export interface UserConfig {
     agentAlwaysOnTop?: boolean
     userIdentity?: { displayName: string; avatarRelPath?: string }
     harnessIconOverrides?: Record<string, string>
+    enabledLenses?: string[] | null
+    lensOrder?: string[] | null
   }
 }

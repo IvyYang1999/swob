@@ -112,18 +112,20 @@ function LensCard({
         {/* Reorder buttons */}
         <div className="flex flex-col gap-px mr-1">
           <button
+            type="button"
             onClick={onMoveUp}
             disabled={isFirst}
             className="p-0.5 rounded hover:bg-hover text-muted hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed"
-            aria-label="Move up"
+            aria-label={`${lens.name[locale]} ↑`}
           >
             <ChevronUp size={12} />
           </button>
           <button
+            type="button"
             onClick={onMoveDown}
             disabled={isLast}
             className="p-0.5 rounded hover:bg-hover text-muted hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed"
-            aria-label="Move down"
+            aria-label={`${lens.name[locale]} ↓`}
           >
             <ChevronDown size={12} />
           </button>
@@ -131,8 +133,10 @@ function LensCard({
 
         {/* Toggle switch */}
         <button
+          type="button"
           role="switch"
           aria-checked={enabled}
+          aria-label={lens.name[locale]}
           onClick={onToggle}
           className={`relative w-9 h-5 rounded-full transition-colors ${
             enabled ? 'bg-accent' : 'bg-edge-strong'

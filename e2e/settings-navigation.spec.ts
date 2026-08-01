@@ -51,22 +51,22 @@ test.afterAll(async () => {
   if (fixtureHome) fs.rmSync(fixtureHome, { recursive: true, force: true })
 })
 
-test('纵向左栏九项同时可见，无横向 Tab，旧配置迁移生效', async () => {
+test('纵向左栏十项同时可见，无横向 Tab，旧配置迁移生效', async () => {
   const dialog = page.getByRole('dialog', { name: '设置' })
   const nav = dialog.getByRole('navigation', { name: '设置分类' })
   const items = nav.getByRole('button')
-  await expect(items).toHaveCount(9)
-  await expect(items).toHaveText(['通用', 'AI 智能', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI'])
+  await expect(items).toHaveCount(10)
+  await expect(items).toHaveText(['通用', 'AI 智能', 'Lens', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI'])
   await expect(dialog.getByRole('tab')).toHaveCount(0)
   await expect(nav.getByRole('button', { name: '外观' })).toHaveCount(0)
   await expect(nav.getByRole('button', { name: '通用' })).toHaveAttribute('aria-current', 'page')
 
-  // 九项都在可视区(左栏不滚动即可见)
-  for (const name of ['通用', 'AI 智能', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI']) {
+  // 十项都在可视区(左栏不滚动即可见)
+  for (const name of ['通用', 'AI 智能', 'Lens', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI']) {
     await expect(nav.getByRole('button', { name })).toBeInViewport()
   }
 
-  await page.getByRole('button', { name: '浅色' }).click()
+  await page.getByRole('radio', { name: '浅色' }).click()
   await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'general-light.png') })
 })
 
@@ -82,7 +82,7 @@ test('终端分类展示检测结果和路径，可靠入口才可选', async ()
 
 test('Resume 分类按 harness 动态过滤，实验开关在本分类', async () => {
   await navItem('通用').click()
-  await page.getByRole('button', { name: '深色' }).click()
+  await page.getByRole('radio', { name: '深色' }).click()
   await navItem('继续').click()
   // CC-Mirror has its own Provider registry truth and no longer inherits the
   // Claude Code Resume declaration, so all 11 discoverable sources are listed.

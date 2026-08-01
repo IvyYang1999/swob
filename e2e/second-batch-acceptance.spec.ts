@@ -12,7 +12,7 @@ import {
 interface ThemeCase {
   name: string
   mode: '浅色' | '深色'
-  scheme: '默认' | '纸原' | '深蓝夜'
+  scheme: '默认' | '纸原' | '北境蓝'
   datasetTheme: 'light' | 'dark'
   datasetScheme: 'default' | 'paper' | 'nord'
   background: [number, number, number]
@@ -22,7 +22,7 @@ const themeCases: ThemeCase[] = [
   { name: 'default-light', mode: '浅色', scheme: '默认', datasetTheme: 'light', datasetScheme: 'default', background: [248, 249, 250] },
   { name: 'default-dark', mode: '深色', scheme: '默认', datasetTheme: 'dark', datasetScheme: 'default', background: [13, 17, 23] },
   { name: 'paper-light', mode: '浅色', scheme: '纸原', datasetTheme: 'light', datasetScheme: 'paper', background: [250, 248, 245] },
-  { name: 'nord-dark', mode: '深色', scheme: '深蓝夜', datasetTheme: 'dark', datasetScheme: 'nord', background: [46, 52, 64] }
+  { name: 'nord-dark', mode: '深色', scheme: '北境蓝', datasetTheme: 'dark', datasetScheme: 'nord', background: [46, 52, 64] }
 ]
 
 test.describe.serial('second merge batch visual acceptance', () => {
@@ -42,11 +42,11 @@ test.describe.serial('second merge batch visual acceptance', () => {
     const dialog = page.getByRole('dialog', { name: '设置' })
     await expect(dialog).toBeVisible()
 
-    const themeGroup = dialog.getByRole('group', { name: '主题' })
-    const schemeGroup = dialog.getByRole('group', { name: '配色' })
+    const themeGroup = dialog.getByRole('radiogroup', { name: '主题' })
+    const schemeGroup = dialog.getByRole('radiogroup', { name: '配色主题' })
     for (const themeCase of themeCases) {
-      await themeGroup.getByRole('button', { name: themeCase.mode, exact: true }).click()
-      await schemeGroup.getByRole('button', { name: themeCase.scheme, exact: true }).click()
+      await themeGroup.getByRole('radio', { name: themeCase.mode, exact: true }).click()
+      await schemeGroup.getByRole('radio', { name: themeCase.scheme, exact: true }).click()
       await expect.poll(() => page.evaluate(() => ({
         theme: document.documentElement.dataset.theme,
         scheme: document.documentElement.dataset.colorScheme
@@ -88,8 +88,8 @@ test.describe.serial('second merge batch visual acceptance', () => {
     for (const themeCase of themeCases) {
       await page.getByTitle('设置').click()
       const dialog = page.getByRole('dialog', { name: '设置' })
-      await dialog.getByRole('group', { name: '主题' }).getByRole('button', { name: themeCase.mode, exact: true }).click()
-      await dialog.getByRole('group', { name: '配色' }).getByRole('button', { name: themeCase.scheme, exact: true }).click()
+      await dialog.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: themeCase.mode, exact: true }).click()
+      await dialog.getByRole('radiogroup', { name: '配色主题' }).getByRole('radio', { name: themeCase.scheme, exact: true }).click()
       await page.keyboard.press('Escape')
 
       await page.getByTitle('会话图谱').click()

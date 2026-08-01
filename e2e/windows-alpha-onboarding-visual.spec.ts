@@ -16,6 +16,7 @@ test('Windows Alpha 首次启动扫描页显式告知支持边界', async ({}, t
     const onboarding = page.locator('[data-testid="onboarding"]')
     await expect(onboarding).toBeVisible({ timeout: 20_000 })
     await onboarding.getByRole('button', { name: /开始设置/ }).click()
+    await onboarding.getByRole('button', { name: /都要/ }).click()
     await onboarding.getByRole('button', { name: /就放这里/ }).click()
 
     const notice = onboarding.locator('[data-testid="windows-alpha-notice"]')

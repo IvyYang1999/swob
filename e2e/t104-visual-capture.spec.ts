@@ -11,7 +11,7 @@ test.beforeAll(() => {
   fs.mkdirSync(SHOT_DIR, { recursive: true })
 })
 
-test('引导三步截图', async () => {
+test('引导四步截图', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-t104-shot-'))
   const { app, page } = await launchApp({ env: { HOME: home } })
   try {
@@ -20,11 +20,14 @@ test('引导三步截图', async () => {
     await expect(onboarding).toBeVisible({ timeout: 20_000 })
     await page.screenshot({ path: path.join(SHOT_DIR, '1-welcome.png') })
     await onboarding.getByRole('button', { name: /开始设置/ }).click()
+    await expect(onboarding.getByText('你主要用 Swob 做什么？')).toBeVisible()
+    await page.screenshot({ path: path.join(SHOT_DIR, '2-scene.png') })
+    await onboarding.getByRole('button', { name: /都要/ }).click()
     await expect(onboarding.getByText('为你的会话安个家')).toBeVisible()
-    await page.screenshot({ path: path.join(SHOT_DIR, '2-vault.png') })
+    await page.screenshot({ path: path.join(SHOT_DIR, '3-vault.png') })
     await onboarding.getByRole('button', { name: /就放这里/ }).click()
     await expect(onboarding.getByText('发现了这些会话')).toBeVisible()
-    await page.screenshot({ path: path.join(SHOT_DIR, '3-scan.png') })
+    await page.screenshot({ path: path.join(SHOT_DIR, '4-scan.png') })
   } finally {
     await app.close()
     fs.rmSync(home, { recursive: true, force: true })

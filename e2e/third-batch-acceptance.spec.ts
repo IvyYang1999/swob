@@ -11,7 +11,7 @@ const themes = [
   { name: 'default-light', mode: '浅色', scheme: '默认', theme: 'light', colorScheme: 'default' },
   { name: 'default-dark', mode: '深色', scheme: '默认', theme: 'dark', colorScheme: 'default' },
   { name: 'paper-light', mode: '浅色', scheme: '纸原', theme: 'light', colorScheme: 'paper' },
-  { name: 'nord-dark', mode: '深色', scheme: '深蓝夜', theme: 'dark', colorScheme: 'nord' }
+  { name: 'nord-dark', mode: '深色', scheme: '北境蓝', theme: 'dark', colorScheme: 'nord' }
 ] as const
 
 function relativeLuminance(rgb: number[]): number {
@@ -46,10 +46,10 @@ test('third batch keeps the inspector structured and readable in all four palett
     for (const themeCase of themes) {
       await page.getByTitle('设置').click()
       const dialog = page.getByRole('dialog', { name: '设置' })
-      await dialog.getByRole('group', { name: '主题' })
-        .getByRole('button', { name: themeCase.mode, exact: true }).click()
-      await dialog.getByRole('group', { name: '配色' })
-        .getByRole('button', { name: themeCase.scheme, exact: true }).click()
+      await dialog.getByRole('radiogroup', { name: '主题' })
+        .getByRole('radio', { name: themeCase.mode, exact: true }).click()
+      await dialog.getByRole('radiogroup', { name: '配色主题' })
+        .getByRole('radio', { name: themeCase.scheme, exact: true }).click()
       await page.keyboard.press('Escape')
 
       await expect.poll(() => page.evaluate(() => ({

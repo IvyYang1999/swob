@@ -79,4 +79,25 @@ describe('SessionSyncCoordinator', () => {
     await coordinator.waitForIdle()
     expect(peak).toBe(2)
   })
+
+  it('does not report an expected AbortError after shutdown stops active work', async () => {
+    let rejectSync!: (error: Error) => void
+    const active = new Promise<void>((_resolve, reject) => { rejectSync = reject })
+    const logger = { error: vi.fn() }
+    const coordinator = new SessionSyncCoordinator({
+      sync: () => active,
+      quietWindowMs: 10,
+      logger
+    })
+
+    coordinator.schedule({ sessionId: 'shutdown-active' })
+    await vi.advanceTimersByTimeAsync(10)
+    coordinator.stop()
+    const cancelled = new Error('cancelled')
+    cancelled.name = 'AbortError'
+    rejectSync(cancelled)
+    await coordinator.waitForIdle()
+
+    expect(logger.error).not.toHaveBeenCalled()
+  })
 })

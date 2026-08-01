@@ -203,10 +203,10 @@ export class LibraryWorkerClient {
   }>()
 
   scan(root: string, ignoreDirs?: string[]): Promise<LibraryTree> {
-    return this.request({ type: 'scan', root, ignoreDirs }).then((result) => {
+    return this.observe(this.request({ type: 'scan', root, ignoreDirs }).then((result) => {
       if (result.kind !== 'tree') throw new Error('Library worker returned an invalid scan result')
       return result.tree
-    })
+    }))
   }
 
   sync(
@@ -215,7 +215,7 @@ export class LibraryWorkerClient {
     sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
     options: { ignoreDirs?: string[]; onProgress?: (progress: LibraryWorkerProgress) => void } = {}
   ): Promise<LibraryTree> {
-    return this.request({
+    return this.observe(this.request({
       type: 'sync',
       root,
       ignoreDirs: options.ignoreDirs,
@@ -224,14 +224,14 @@ export class LibraryWorkerClient {
     }, options.onProgress).then((result) => {
       if (result.kind !== 'tree') throw new Error('Library worker returned an invalid sync result')
       return result.tree
-    })
+    }))
   }
 
   syncSession(request: Omit<Extract<LibraryWorkerRequest, { type: 'session-sync' }>, 'type'>): Promise<LibraryWorkerSessionSyncResult> {
-    return this.request({ type: 'session-sync', ...request }).then((result) => {
+    return this.observe(this.request({ type: 'session-sync', ...request }).then((result) => {
       if (result.kind !== 'session-sync') throw new Error('Library worker returned an invalid session result')
       return result.value
-    })
+    }))
   }
 
   syncUsageFacts(
@@ -240,7 +240,7 @@ export class LibraryWorkerClient {
     folders: Folder[],
     options: { rebuild?: boolean } = {}
   ): Promise<UsageFactSyncResult> {
-    return this.request({
+    return this.observe(this.request({
       type: 'usage-facts-sync',
       root,
       sessions,
@@ -249,7 +249,15 @@ export class LibraryWorkerClient {
     }).then((result) => {
       if (result.kind !== 'usage-facts-sync') throw new Error('Library worker returned an invalid usage fact result')
       return result.value
-    })
+    }))
+  }
+
+  private observe<T>(promise: Promise<T>): Promise<T> {
+    // Preserve rejection for awaiting callers while preventing deliberately
+    // fire-and-forget background work from becoming a process-level unhandled
+    // rejection during coordinated shutdown.
+    void promise.catch(() => {})
+    return promise
   }
 
   async close(): Promise<void> {

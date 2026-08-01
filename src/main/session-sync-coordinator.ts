@@ -155,7 +155,9 @@ export class SessionSyncCoordinator {
     try {
       await this.sync(request)
     } catch (error) {
-      this.logger.error('[session-sync] session synchronization failed:', error)
+      if (!(this.stopped && error instanceof Error && error.name === 'AbortError')) {
+        this.logger.error('[session-sync] session synchronization failed:', error)
+      }
     } finally {
       entry.running = false
       this.activeCount--

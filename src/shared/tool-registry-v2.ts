@@ -148,7 +148,11 @@ export function createBuiltinToolRegistryV2(): ToolRegistryV2 {
     { providerId: 'swob/cc-mirror', rawName: 'RequestPermissions', semanticToolId: 'permission.request' },
     { providerId: 'swob/pi', rawName: 'read', semanticToolId: 'filesystem.read' },
     { providerId: 'swob/pi', rawName: 'write', semanticToolId: 'filesystem.write' },
-    { providerId: 'swob/pi', rawName: 'bash', semanticToolId: 'shell.execute' }
+    { providerId: 'swob/pi', rawName: 'bash', semanticToolId: 'shell.execute' },
+    { providerId: 'swob/qoder', rawName: 'Read', semanticToolId: 'filesystem.read' },
+    { providerId: 'swob/qoder', rawName: 'Write', semanticToolId: 'filesystem.write' },
+    { providerId: 'swob/qoder', rawName: 'Edit', semanticToolId: 'diff.apply' },
+    { providerId: 'swob/qoder', rawName: 'Bash', semanticToolId: 'shell.execute' }
   ]
   for (const alias of aliases) registry.registerAlias(alias)
   return registry

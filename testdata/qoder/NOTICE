@@ -1,0 +1,13 @@
+This directory contains fully synthetic Qoder compound-session fixtures created
+for Swob. No real transcript, account record, credential, or user data was read
+or copied.
+
+The project JSONL, `-session.json`, and nested `subagents/agent-*.jsonl` layout
+was informed by kenn-io/agentsview at commit
+1cd581fe34e87e134160c6668deffb674b7eaa4e. That implementation explicitly
+records that no public producer-side Qoder session schema was available, so
+Swob treats format provenance, usage, thinking, and Resume claims conservatively.
+
+AgentsView copyright: Kenn Software LLC
+AgentsView license: MIT
+Source: https://github.com/kenn-io/agentsview/tree/1cd581fe34e87e134160c6668deffb674b7eaa4e/internal/parser

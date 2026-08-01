@@ -4,7 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { launchAppWithEnv } from './helpers'
 
-test('Windows Alpha 首次启动扫描页显式告知支持边界', async ({}, testInfo) => {
+test('Windows Beta 首次启动扫描页显式告知支持边界', async ({}, testInfo) => {
   test.setTimeout(60_000)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-win-alpha-onboarding-'))
   const { app, page } = await launchAppWithEnv({
@@ -23,7 +23,7 @@ test('Windows Alpha 首次启动扫描页显式告知支持边界', async ({}, t
     await expect(notice).toBeVisible()
     await expect(notice).toContainText('Claude Code、Codex')
     await expect(notice).toContainText('WSL、OneDrive')
-    await page.screenshot({ path: testInfo.outputPath('windows-alpha-onboarding-scan.png') })
+    await page.screenshot({ path: testInfo.outputPath('windows-beta-onboarding-scan.png') })
   } finally {
     await Promise.race([
       app.close(),

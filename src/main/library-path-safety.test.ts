@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { LibraryPathUnsafeError, writeSafeLibraryFileSync } from './library-path-safety'
+import {
+  isUnsupportedDirectoryFsyncError,
+  LibraryPathUnsafeError,
+  writeSafeLibraryFileSync
+} from './library-path-safety'
 
 const cleanup: string[] = []
 
@@ -11,6 +15,16 @@ afterEach(() => {
 })
 
 describe('Library path safety', () => {
+  it('only tolerates known unsupported directory fsync errors on Windows', () => {
+    const error = (code: string): NodeJS.ErrnoException => Object.assign(new Error(code), { code })
+
+    for (const code of ['EPERM', 'EINVAL', 'EISDIR']) {
+      expect(isUnsupportedDirectoryFsyncError(error(code), 'win32')).toBe(true)
+      expect(isUnsupportedDirectoryFsyncError(error(code), 'darwin')).toBe(false)
+    }
+    expect(isUnsupportedDirectoryFsyncError(error('EIO'), 'win32')).toBe(false)
+  })
+
   it('detects an ancestor swap after validation and writes no content outside the Library', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-path-root-'))
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-path-outside-'))

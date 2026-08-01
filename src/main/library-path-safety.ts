@@ -214,10 +214,27 @@ export function writeSafeLibraryFileSync(
   }
 }
 
+export function isUnsupportedDirectoryFsyncError(
+  error: unknown,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  if (platform !== 'win32') return false
+  const code = (error as NodeJS.ErrnoException)?.code
+  return code === 'EPERM' || code === 'EINVAL' || code === 'EISDIR'
+}
+
 export function fsyncDirectorySync(dirPath: string): void {
   const fd = fs.openSync(dirPath, 'r')
   try {
-    fs.fsyncSync(fd)
+    try {
+      fs.fsyncSync(fd)
+    } catch (error) {
+      // Windows does not expose a portable directory-handle flush through
+      // Node. File contents are still fsynced before this durability barrier;
+      // only the unsupported directory-entry flush is skipped. All other
+      // platforms and unexpected Windows errors remain fail-closed.
+      if (!isUnsupportedDirectoryFsyncError(error)) throw error
+    }
   } finally {
     fs.closeSync(fd)
   }

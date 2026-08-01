@@ -164,7 +164,7 @@ test('installed x64 Beta completes onboarding, discovery, reading, search, Insig
   // 1. Onboarding: exercise the real first-run flow and capture the source boundary.
   const onboarding = page.locator('[data-testid="onboarding"]')
   await expect(onboarding).toBeVisible({ timeout: 20_000 })
-  await onboarding.getByRole('button', { name: /开始设置|Start/ }).click()
+  await onboarding.getByRole('button', { name: /开始设置|Get started/ }).click()
   await onboarding.getByRole('button', { name: /都要|Both/ }).click()
   await onboarding.getByRole('button', { name: /就放这里|Use this/ }).click()
   await expect(onboarding.getByText('Claude Code', { exact: true })).toBeVisible({ timeout: 20_000 })

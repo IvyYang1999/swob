@@ -324,22 +324,15 @@ describe('Claude session discovery', () => {
     expect(cc?.firstUserMessage).toBe('CC Mirror 真实消息')
     expect(cc?.tokenAccounting?.billingTotal).toBe(15)
 
-    for (const source of ['hermes'] as const) {
-      const summary = sessions.find((session) => session.source === source)
-      expect(summary, source).toBeDefined()
-      expect(summary?.tokenAccounting?.provider, source).toBe(source)
-      expect(summary?.tokenAccounting?.provenance, source).toBe('unavailable')
-      expect(summary?.tokenAccounting?.billingTotal, source).toBeNull()
-    }
     // Native canonical providers are excluded from this physical readOnly scan.
     // Invalid legacy singleton files must not fall back to synthetic placeholders.
-    // JSONL files must not fall back to the old synthetic placeholders.
     expect(sessions.filter((session) => session.source === 'pi')).toHaveLength(0)
     // Kimi is also native canonical. readOnly intentionally never opens the
     // canonical SQLite store, and this path is not a valid Kimi agent source.
     expect(sessions.filter((session) => session.source === 'kimi')).toHaveLength(0)
     expect(sessions.filter((session) => session.source === 'grok')).toHaveLength(0)
     expect(sessions.filter((session) => session.source === 'antigravity')).toHaveLength(0)
+    expect(sessions.filter((session) => session.source === 'hermes')).toHaveLength(0)
     expect(sessions.filter((session) => session.source === 'claude-code')).toHaveLength(0)
   })
 

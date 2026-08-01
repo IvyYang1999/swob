@@ -17,13 +17,6 @@ describe('Provider capability snapshots match real call chains', () => {
     }), 'Antigravity archives canonical records rather than copying physical sources').toEqual([])
     expect(builtinProviderForSource('antigravity')?.manifest.capabilities.archive.status).toBe('available')
 
-    const paths: Record<string, string> = {
-      hermes: '/fixture/.hermes/sessions/session.json'
-    }
-    for (const [source, filePath] of Object.entries(paths)) {
-      expect(sessionBackupSourcePaths({ filePath }), source).toEqual([])
-      expect(builtinProviderForSource(source)?.manifest.capabilities.archive.status, source).toBe('unavailable')
-    }
     const grokPath = '/fixture/.grok/sessions/project/session/chat_history.jsonl'
     expect(sessionBackupSourcePaths({ filePath: grokPath }), 'Grok source members are never copied as physical backups').toEqual([])
     expect(builtinProviderForSource('grok')?.manifest.capabilities.archive.status).toBe('available')
@@ -33,5 +26,8 @@ describe('Provider capability snapshots match real call chains', () => {
     const kimiPath = '/fixture/.kimi-code/sessions/workdir/session/agents/main/wire.jsonl'
     expect(sessionBackupSourcePaths({ filePath: kimiPath }), 'Kimi never copies source wire').toEqual([])
     expect(builtinProviderForSource('kimi')?.manifest.capabilities.archive.status).toBe('available')
+    const hermesPath = '/fixture/.hermes/sessions/session.json'
+    expect(sessionBackupSourcePaths({ filePath: hermesPath }), 'Hermes never copies the mutable source').toEqual([])
+    expect(builtinProviderForSource('hermes')?.manifest.capabilities.archive.status).toBe('available')
   })
 })

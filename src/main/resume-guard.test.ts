@@ -11,6 +11,7 @@ import {
 import {
   buildGuardedResumeAction,
   buildGuardedResumeCommand,
+  openGuardedForkAction,
   openGuardedResumeAction,
   openGuardedResumeCommand
 } from './resume-guard'
@@ -106,6 +107,33 @@ afterEach(() => {
 })
 
 describe('resume guard', () => {
+  it('Hermes Fork fails before preparation or terminal launch', async () => {
+    const sessionId = 'hermes-no-fork'
+    const sourcePath = path.join(tmpRoot, '.hermes', 'state.db') + `#${sessionId}`
+    const session = summary(sessionId, sourcePath, 'hermes')
+    let prepared = false
+    const opened: unknown[] = []
+
+    const result = await openGuardedForkAction({
+      sessionId,
+      sessions: [session],
+      prepareResumeTarget: async () => {
+        prepared = true
+        return { ok: true, sourcePath }
+      },
+      openAction: (action) => { opened.push(action) }
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      surface: 'terminal',
+      reasonCode: 'resume.error.build_action_failed',
+      reasonParams: { details: expect.stringContaining('no verified CLI surface for forking') }
+    })
+    expect(prepared).toBe(false)
+    expect(opened).toEqual([])
+  })
+
   it.each([
     ['claude-code' as const],
     ['codex' as const],

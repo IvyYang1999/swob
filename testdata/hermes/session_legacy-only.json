@@ -1,0 +1,43 @@
+{
+  "session_id": "synthetic-hermes-json",
+  "session_start": "2026-08-01T00:00:00.000Z",
+  "last_updated": "2026-08-01T00:00:03.000Z",
+  "model": "synthetic-model-json",
+  "platform": "cli",
+  "base_url": "https://example.invalid/v1",
+  "system_prompt": "Synthetic system preamble. This fixture contains no real user data.",
+  "tools": [
+    { "type": "function", "function": { "name": "read_file" } }
+  ],
+  "message_count": 3,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Find hermes-json-search-needle in the synthetic fixture.",
+      "timestamp": "2026-08-01T00:00:01.000Z"
+    },
+    {
+      "role": "assistant",
+      "content": "I will inspect the synthetic path.",
+      "reasoning": "Use only the sanitized fixture.",
+      "tool_calls": [
+        {
+          "id": "call-json-1",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\":\"/synthetic/README.md\"}"
+          }
+        }
+      ],
+      "timestamp": "2026-08-01T00:00:02.000Z"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-json-1",
+      "tool_name": "read_file",
+      "content": "synthetic tool result",
+      "timestamp": "2026-08-01T00:00:03.000Z"
+    }
+  ]
+}

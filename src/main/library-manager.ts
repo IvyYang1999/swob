@@ -349,6 +349,7 @@ function sourceStatPath(filePath: string): string {
   const source = detectSessionSourceFromPath(filePath)
   if (source === 'opencode') return stripOpencodeSessionRef(filePath)
   if (source === 'zcode') return stripZcodeSessionRef(filePath)
+  if (source === 'hermes' && filePath.includes('/.hermes/state.db#')) return filePath.split('#')[0]
   return filePath
 }
 
@@ -1343,6 +1344,14 @@ function evaluateSourceResumeAvailability(
         reason: terminal.reason || native.reason || LOCAL_RESUME_UNAVAILABLE_REASON,
         sourcePath: sourceFilePaths[0] || null
       }
+    }
+  }
+  if (source === 'hermes' && sourceFilePaths.every((sourcePath) =>
+    sourceStatPath(sourcePath).toLocaleLowerCase('en-US').endsWith('.json'))) {
+    return {
+      canResume: false,
+      reason: 'Legacy Hermes JSON snapshots are read-only; Hermes resumes sessions from state.db.',
+      sourcePath: sourceFilePaths[0] || null
     }
   }
   const existingSource = sourceFilePaths.find((src) => fs.existsSync(sourceStatPath(src)))

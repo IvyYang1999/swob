@@ -275,6 +275,41 @@ function antigravityCanonicalCapabilities(): ProviderCapabilities {
   }
 }
 
+function hermesCanonicalCapabilities(): ProviderCapabilities {
+  const provider = implementation('src/main/providers/hermes-provider.ts')
+  const host = implementation('src/main/provider-host.ts')
+  const canonicalStore = implementation('src/main/canonical-store.ts')
+  const fixture = test('src/main/providers/hermes-provider.test.ts', 'Synthetic JSON/state.db plus full-chain fixture.')
+  return {
+    discover: available(provider, host, fixture),
+    summary: available(provider, canonicalStore, fixture),
+    transcript: available(provider, canonicalStore, fixture),
+    tools: available(provider, fixture),
+    thinking: available(provider, fixture),
+    usage: experimental(
+      'Authoritative aggregate counters are preserved, but exact per-model attribution requires session_model_usage evidence.',
+      provider,
+      fixture
+    ),
+    relationships: experimental(
+      'Continuation, branch and delegate relationships are reported only when their Hermes markers are provable.',
+      provider,
+      fixture
+    ),
+    subagents: experimental('Only explicit Hermes delegate markers prove a delegated child session.', provider, fixture),
+    'live-watch': unavailable('Hermes is refreshed by provider discovery; no dedicated live watcher is registered.', watcher),
+    search: available(searchIndex, canonicalStore, fixture),
+    archive: available(archive, canonicalStore, fixture),
+    'terminal-resume': experimental(
+      'hermes --resume is source-audited for state.db sessions, but post-launch anchor verification is not enforced.',
+      resume,
+      fixture
+    ),
+    'native-resume': notApplicable('Hermes exposes a CLI resume surface, not a native application deep link.', resume),
+    'format-provenance': available(provider, canonicalStore, fixture)
+  }
+}
+
 function definition(
   sourceId: LegacySessionSource,
   displayName: string,
@@ -407,7 +442,10 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
     'kimi-code-wire-native-v1.5',
     'kimi-code-wire-migrated-v1.0'
   ], 'provider-host'),
-  definition('hermes', 'Hermes', 'detection-only', detectionOnlyCapabilities('hermes'))
+  definition('hermes', 'Hermes', 'native', hermesCanonicalCapabilities(), [
+    'hermes-state-db-v1-plus',
+    'hermes-json-snapshot-v1'
+  ], 'provider-host')
 ] as const
 
 const definitionsBySource = new Map(

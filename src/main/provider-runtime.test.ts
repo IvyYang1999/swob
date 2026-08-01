@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import Database from 'better-sqlite3'
 import type { CanonicalRecord, ParseOutcome, ProviderManifest, SourceRef } from '../shared/provider-schema.generated'
 import piGolden from '../../schema/fixtures/v2/pi-golden.json'
 import type {
@@ -18,6 +19,7 @@ import { ProviderHost, type BuiltinProviderRuntime, type BuiltinProviderRuntimeV
 import { refreshCanonicalProviders } from './provider-runtime'
 import { createPiProvider } from './providers/pi-provider'
 import { createKimiProvider } from './providers/kimi-provider'
+import { createHermesProvider } from './providers/hermes-provider'
 import { closeSearchIndex, searchFTS } from './search-index'
 
 let root = ''
@@ -31,6 +33,10 @@ let library: typeof import('./library-manager')
 
 function fixturePath(): string {
   return path.resolve(__dirname, '../../testdata/pi/session.jsonl')
+}
+
+function hermesFixture(name: string): string {
+  return path.resolve(__dirname, `../../testdata/hermes/${name}`)
 }
 
 function packageDirs(): string[] {
@@ -302,6 +308,85 @@ describe('canonical provider runtime full chain', () => {
     expect(unchanged.changedSessionRecordIds).toHaveLength(0)
     expect(store.listSessions('swob/pi')[0].sessionRecord.provenance.parserDataVersion)
       .toBe(manifest.parserDataVersion)
+  })
+
+  it('runs Hermes JSON/state.db through direct v2, search, Vault, detail and format-scoped Resume truth', async () => {
+    const hermesRoot = path.join(home, '.hermes')
+    const sessionRoot = path.join(hermesRoot, 'sessions')
+    const dbPath = path.join(hermesRoot, 'state.db')
+    fs.mkdirSync(sessionRoot, { recursive: true })
+    fs.copyFileSync(hermesFixture('session_legacy-only.json'), path.join(sessionRoot, 'session_legacy-only.json'))
+    const db = new Database(dbPath)
+    db.exec(fs.readFileSync(hermesFixture('state-db.sql'), 'utf8'))
+    db.close()
+    const provider = createHermesProvider({ homeDir: home })
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({ runtimes: [], v2Runtimes: [provider] })
+
+    const result = await refreshCanonicalProviders({ host, store, archive: true })
+
+    expect(result.reports).toMatchObject([{
+      providerId: 'swob/hermes', runtimeProtocolVersion: 2, outcomes: [], errors: []
+    }])
+    expect(result.reports[0].consumerProjections).toHaveLength(3)
+    expect(result.changedSessionRecordIds).toHaveLength(3)
+    expect(store.listSessions('swob/hermes')).toHaveLength(3)
+    expect(searchFTS('hermes-db-search-needle')).toHaveLength(1)
+    expect(searchFTS('hermes-json-search-needle')).toHaveLength(1)
+    expect(packageDirs()).toHaveLength(3)
+
+    const child = store.listSessions('swob/hermes').find((stored) =>
+      stored.sessionRecord.sourceSessionId === 'synthetic-hermes-db')!
+    const parent = store.listSessions('swob/hermes').find((stored) =>
+      stored.sessionRecord.sourceSessionId === 'synthetic-hermes-parent')!
+    const legacy = store.listSessions('swob/hermes').find((stored) =>
+      stored.sessionRecord.sourceSessionId === 'synthetic-hermes-json')!
+    expect(child.records.find((record) => record.recordType === 'relationship')).toMatchObject({
+      relationshipType: 'continuation',
+      fromSessionRecordId: parent.sessionRecord.id,
+      toSessionRecordId: child.sessionRecord.id
+    })
+    const { canonicalRecordsToSessionSummary } = await import('./canonical-projection')
+    const childSummary = canonicalRecordsToSessionSummary(child.records, {
+      filePath: child.sessionRecord.sourceRef.displayLocator,
+      source: 'hermes'
+    })
+    const legacySummary = canonicalRecordsToSessionSummary(legacy.records, {
+      filePath: legacy.sessionRecord.sourceRef.displayLocator,
+      source: 'hermes'
+    })
+    expect(childSummary).toMatchObject({
+      firstUserMessage: 'Locate hermes-db-search-needle.',
+      projectPath: '/synthetic/project',
+      models: ['synthetic-model-db'],
+      compactCount: 1
+    })
+    expect(legacySummary.compactCount).toBe(0)
+    expect(legacySummary.models).toEqual(['synthetic-model-json'])
+    expect(library.getSessionResumeAvailability(childSummary.sessionId, childSummary))
+      .toMatchObject({ canResume: true, sourcePath: `${dbPath}#synthetic-hermes-db` })
+    expect(library.getSessionResumeAvailability(legacySummary.sessionId, legacySummary))
+      .toMatchObject({ canResume: false, sourcePath: path.join(sessionRoot, 'session_legacy-only.json') })
+
+    const childPackage = packageDirs().find((dirPath) =>
+      fs.readFileSync(path.join(dirPath, CANONICAL_RECORDS_FILE), 'utf8').includes('hermes-db-search-needle'))!
+    const sessionLoader = await import('./session-loader')
+    const detail = await sessionLoader.loadSessionDetail(
+      path.join(childPackage, CANONICAL_RECORDS_FILE)
+    )
+    expect(detail?.messages.find((message) => message.textContent === 'Synthetic DB system preamble.')?.subtype)
+      .toBe('provider-preamble')
+    expect(detail?.messages.some((message) => message.subtype === 'compact_boundary')).toBe(true)
+    expect(detail?.messages.some((message) => message.textContent.includes('[Thinking]'))).toBe(true)
+    expect(detail?.messages.flatMap((message) => message.toolCalls)).toMatchObject([
+      expect.objectContaining({ name: 'read_file', result: expect.stringContaining('hermes-db-tool-result') })
+    ])
+    // The v1 detail read model keeps reasoning as a subset of output and does
+    // not double-count that subset in its billingTotal compatibility field.
+    expect(detail?.tokenAccounting?.billingTotal).toBe(145)
+    const directDetail = await sessionLoader.loadSessionDetail(`${dbPath}#synthetic-hermes-db`)
+    expect(directDetail?.messages.some((message) =>
+      message.textContent.includes('hermes-db-search-needle'))).toBe(true)
   })
 
   it('runs Pi through discover, store, search, Library, rescan, move, replace, and tombstone', async () => {

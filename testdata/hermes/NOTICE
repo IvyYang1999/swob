@@ -1,0 +1,16 @@
+Hermes provider fixture notice
+==============================
+
+All fixture values in this directory are synthetic and contain no copied user
+transcripts, credentials, or proprietary data.
+
+The adapter was informed by these fixed upstream revisions:
+
+- Hermes Agent, commit 84952e89f922415f47b6e483105e1fcae95ace7f,
+  MIT License, Copyright (c) 2025 Nous Research.
+- Agent Sessions, commit e881b78a102942455eb178426cbf51008d732c96,
+  MIT License.
+
+No upstream source or fixture content is redistributed here. The commit hashes
+pin the format and command evidence used to write the independent adapter and
+tests.

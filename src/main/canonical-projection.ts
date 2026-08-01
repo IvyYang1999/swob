@@ -233,9 +233,15 @@ export function canonicalRecordsToSessionSummary(
     activityDays: activityDaysFromTimestamps(timestamps),
     messageCount: messages.length,
     turnCount: Math.min(userMessages.length, assistantMessages.length),
-    compactCount: messages.filter((message) => message.role === 'system' &&
-      !message.provenance.evidence?.some((entry) =>
-        entry.locator === V2_LIFECYCLE_PROJECTION_EVIDENCE)).length,
+    // Hermes carries a real system preamble separately from compaction state.
+    // Counting every system message would turn that preamble into a fake
+    // compaction. Its native-v2 adapter emits an explicit context marker.
+    compactCount: source === 'hermes'
+      ? messages.filter((message) => message.role === 'system' &&
+        plainTextForMessage(message).startsWith('[Context compacted')).length
+      : messages.filter((message) => message.role === 'system' &&
+        !message.provenance.evidence?.some((entry) =>
+          entry.locator === V2_LIFECYCLE_PROJECTION_EVIDENCE)).length,
     cwds: session.cwd,
     version: session.provenance.formatVersion || '',
     firstUserMessage: (firstUser ? plainTextForMessage(firstUser) : session.providerTitle || session.sourceSessionId).slice(0, 200),
@@ -297,13 +303,20 @@ export function canonicalRecordsToSessionDetail(
       : message.role === 'system'
         ? 'system'
         : 'user'
+    const textContent = textForMessage(message)
+    const subtype = type === 'system' && summary.source === 'hermes'
+      ? textContent.startsWith('[Context compacted')
+        ? 'compact_boundary'
+        : 'provider-preamble'
+      : undefined
     return {
       uuid: message.id,
       type,
+      ...(subtype ? { subtype } : {}),
       timestamp: message.timestamp || '',
       role: message.role,
       origin: type === 'user' ? 'human' : 'unknown',
-      textContent: textForMessage(message),
+      textContent,
       toolCalls: callsByMessage.get(message.id) || [],
       images: [],
       tokenUsage: messageTokenUsage(usageByMessage.get(message.id)),

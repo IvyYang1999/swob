@@ -117,6 +117,16 @@ describe('session action context', () => {
     }
   })
 
+  it('Hermes Resume uses --resume while both Fork builders fail closed', () => {
+    expect(buildResumeLaunchSpec('hermes-session', undefined, undefined, 'hermes')).toMatchObject({
+      executable: 'hermes', args: ['--resume', 'hermes-session']
+    })
+    expect(() => buildForkLaunchSpec('hermes-session', undefined, undefined, 'hermes'))
+      .toThrow('session-fork-unavailable:hermes')
+    expect(() => buildForkCommand('hermes-session', undefined, undefined, 'hermes'))
+      .toThrow('session-fork-unavailable:hermes')
+  })
+
   it('Windows Claude Resume 以 argv/cwd/env 建模，不拼 shell 字符串', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-win-launch-'))
     try {

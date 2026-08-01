@@ -94,6 +94,15 @@ function eventText(event: CanonicalEvent): MessageContent | null {
   if (event.kind === 'context.summary') {
     return { kind: 'text', text: typeof payload.text === 'string' ? payload.text : '' }
   }
+  if (event.kind === 'context.compaction') {
+    const through = typeof payload.archivedThroughSequence === 'number'
+      ? payload.archivedThroughSequence
+      : null
+    return {
+      kind: 'text',
+      text: through === null ? '[Context compacted]' : `[Context compacted through sequence ${through}]`
+    }
+  }
   if (event.kind === 'session.lifecycle' && typeof payload.phase === 'string' &&
     !payload.phase.startsWith('metadata.title:') && !payload.phase.startsWith('metadata.cwd:')) {
     return { kind: 'text', text: payload.phase }

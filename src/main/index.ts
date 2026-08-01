@@ -365,10 +365,18 @@ function sessionSourceRoots(): string[] {
       join(home, '.gemini', 'antigravity-ide')
     )
   }
+  if (isSessionSourceSupported('hermes')) roots.push(join(home, '.hermes', 'sessions'))
   return roots
 }
 
 function assertSessionSourcePath(filePath: string): string {
+  const hermesStateDb = join(runtimeHome(), '.hermes', 'state.db')
+  if (filePath.startsWith(`${hermesStateDb}#`) && !filePath.slice(hermesStateDb.length + 1).includes(path.sep)) {
+    // A sqlite-row display locator is a virtual ref. Authorize only the exact
+    // state.db physical file, never the whole ~/.hermes directory.
+    assertPathWithinAllowedRoots(hermesStateDb, [hermesStateDb])
+    return filePath
+  }
   return assertPathWithinAllowedRoots(filePath, sessionSourceRoots())
 }
 

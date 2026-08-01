@@ -35,6 +35,7 @@ import { createPiProvider } from './providers/pi-provider'
 import { createKimiProvider } from './providers/kimi-provider'
 import { createGrokProvider } from './providers/grok-provider'
 import { createAntigravityProvider } from './providers/antigravity-provider'
+import { createHermesProvider } from './providers/hermes-provider'
 import {
   migrateProviderV1ManifestToV2,
   migrateProviderV1OutcomeToV2Chunks
@@ -245,7 +246,8 @@ function builtinRuntimesV2(homeDir: string): BuiltinProviderRuntimeV2[] {
   return [
     createKimiProvider({ homeDir }),
     createGrokProvider({ homeDir }),
-    createAntigravityProvider({ homeDir })
+    createAntigravityProvider({ homeDir }),
+    createHermesProvider({ homeDir })
   ]
 }
 
@@ -258,10 +260,10 @@ export class ProviderHost {
   private cancelled = false
 
   constructor(options: ProviderHostOptions = {}) {
-    this.runtimes = options.runtimes || builtinRuntimes(options.homeDir || runtimeHome())
-    this.v2Runtimes = options.v2Runtimes || (options.runtimes
-      ? []
-      : builtinRuntimesV2(options.homeDir || runtimeHome()))
+    const useDefaults = options.runtimes === undefined && options.v2Runtimes === undefined
+    const homeDir = options.homeDir || runtimeHome()
+    this.runtimes = options.runtimes ?? (useDefaults ? builtinRuntimes(homeDir) : [])
+    this.v2Runtimes = options.v2Runtimes ?? (useDefaults ? builtinRuntimesV2(homeDir) : [])
     const providerIds = [...this.runtimes, ...this.v2Runtimes].map((runtime) => runtime.manifest.providerId)
     if (new Set(providerIds).size !== providerIds.length) {
       throw new Error('provider-host-duplicate-runtime-id')

@@ -150,6 +150,32 @@ function SystemNoticePill({ text }: { text: string }) {
   )
 }
 
+/** A provider-supplied system prompt is source context, not user input. */
+function ProviderPreamblePill({ text }: { text: string }) {
+  const t = useT()
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface/60 border border-edge/40 hover:border-edge-strong/50 transition-colors"
+      >
+        {expanded
+          ? <ChevronDown size={11} className="text-muted shrink-0" />
+          : <ChevronRight size={11} className="text-muted shrink-0" />}
+        <Code2 size={11} className="text-muted shrink-0" />
+        <span className="text-[11px] text-secondary">{t('chat.system_context')}</span>
+      </button>
+      {expanded && (
+        <pre className="mt-1 ml-5 px-3 py-2 text-[11px] text-secondary bg-surface/30 border border-edge/50 rounded-md overflow-x-auto max-h-48 overflow-y-auto font-mono whitespace-pre-wrap break-words">{text}</pre>
+      )}
+    </div>
+  )
+}
+
 // --- Inline image with lightbox ---
 
 function InlineImage({ src }: { src: string }) {
@@ -409,6 +435,17 @@ const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userD
     setCopiedA(true)
     setTimeout(() => setCopiedA(false), 1500)
   }, [turn.assistantMsgs])
+
+  // Provider preambles are useful provenance in Full mode, but should not
+  // masquerade as a user turn in the default compact conversation view.
+  if (turn.userMsg?.subtype === 'provider-preamble') {
+    if (viewMode !== 'full') return null
+    return (
+      <div id={turnId} data-turn-uuid={turn.userMsg.uuid} className="scroll-mt-0">
+        <ProviderPreamblePill text={turn.userMsg.textContent} />
+      </div>
+    )
+  }
 
   // Command output: render as collapsible system notice pill
   if (turn.userMsg?.subtype === 'command-output') {
@@ -1179,7 +1216,7 @@ function SessionBar({
             }
           }}
           disabled={!!forkUnavailableReason}
-          className="px-2.5 py-0.5 text-[11px] rounded bg-purple-600/90 hover:bg-purple-500 text-white flex items-center gap-1 disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-purple-600/90"
+          className="px-2.5 py-0.5 text-[11px] rounded bg-purple-600/90 hover:bg-purple-500 text-white flex items-center gap-1 disabled:bg-surface disabled:text-muted disabled:border disabled:border-edge/50 disabled:opacity-100 disabled:cursor-not-allowed disabled:hover:bg-surface"
           title={forkUnavailableReason || (isRemote ? 'SSH Fork' : t('chat.fork_hint'))}
         >
           <GitBranch size={10} />

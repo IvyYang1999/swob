@@ -21,6 +21,7 @@ function msg(overrides: {
   uuid?: string
   isSidechain?: boolean
   isSharedContext?: boolean
+  isSystemGenerated?: boolean
 }) {
   return {
     uuid: overrides.uuid || Math.random().toString(36).slice(2),
@@ -33,6 +34,7 @@ function msg(overrides: {
     isPreCompact: false,
     isSidechain: overrides.isSidechain ?? false,
     isSharedContext: overrides.isSharedContext ?? false,
+    isSystemGenerated: overrides.isSystemGenerated ?? false,
     raw: {}
   } as any
 }
@@ -102,6 +104,18 @@ describe('groupIntoTurns', () => {
     ]
     const turns = groupIntoTurns(msgs)
     expect(turns).toHaveLength(1)
+  })
+
+  it('provider preamble 保留为独立系统上下文，不冒充用户消息', () => {
+    const preamble = msg({ type: 'system', subtype: 'provider-preamble', textContent: 'Synthetic system prompt' })
+    const turns = groupIntoTurns([
+      preamble,
+      msg({ type: 'user', textContent: '你好' }),
+      msg({ type: 'assistant', textContent: '你好！' })
+    ])
+    expect(turns).toHaveLength(2)
+    expect(turns[0]).toEqual({ userMsg: preamble, assistantMsgs: [] })
+    expect(turns[1].userMsg?.textContent).toBe('你好')
   })
 
   it('空文本的用户消息应该被跳过', () => {
@@ -274,6 +288,36 @@ describe('computeSections', () => {
     // progress 消息不应该出现在 section 里
     const allMsgs = sections.flatMap(s => s.messages)
     expect(allMsgs.every(m => m.type !== 'progress')).toBe(true)
+  })
+
+  it('provider preamble 即使是 system-generated 也保留给完整视图', () => {
+    const preamble = msg({
+      type: 'system', subtype: 'provider-preamble', textContent: 'Synthetic system prompt', isSystemGenerated: true
+    })
+    const sections = computeSections(makeSession([
+      preamble,
+      msg({ type: 'user', textContent: '你好' }),
+      msg({ type: 'assistant', textContent: '你好！' })
+    ]))
+    expect(sections).toHaveLength(1)
+    expect(sections[0].messages[0]).toBe(preamble)
+  })
+
+  it('provider preamble 是会话级上下文，compact 后仍归当前 section', () => {
+    const preamble = msg({
+      type: 'system', subtype: 'provider-preamble', textContent: 'Synthetic system prompt', isSystemGenerated: true
+    })
+    const sections = computeSections(makeSession([
+      preamble,
+      msg({ type: 'assistant', textContent: '旧上下文' }),
+      msg({ type: 'system', subtype: 'compact_boundary', textContent: '[Context compacted]' }),
+      msg({ type: 'user', textContent: '当前问题' }),
+      msg({ type: 'assistant', textContent: '当前回答' })
+    ]))
+    expect(sections).toHaveLength(2)
+    expect(sections[0].messages).not.toContain(preamble)
+    expect(sections[1]).toMatchObject({ isCurrent: true })
+    expect(sections[1].messages[0]).toBe(preamble)
   })
 })
 

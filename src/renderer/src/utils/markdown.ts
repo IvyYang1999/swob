@@ -35,9 +35,12 @@ export const COMPACT_SUMMARY_PREFIX = 'This session is being continued from a pr
 export function computeSections(session: SessionDetail, locale: Locale = 'zh-CN'): CompactSection[] {
   const sharedMsgs = session.messages.filter((m) => m.isSharedContext)
   const ownMsgs = session.messages.filter((m) => !m.isSharedContext)
+  const providerPreambles = ownMsgs.filter((m) =>
+    m.type === 'system' && m.subtype === 'provider-preamble')
 
   const allMsgs = ownMsgs.filter((m) => {
     if (m.type === 'system' && m.subtype === 'compact_boundary') return true
+    if (m.type === 'system' && m.subtype === 'provider-preamble') return false
     if ((m as any).isSystemGenerated) return false
     return m.type === 'user' || m.type === 'assistant'
   })
@@ -62,7 +65,7 @@ export function computeSections(session: SessionDetail, locale: Locale = 'zh-CN'
   }
 
   if (boundaryIndices.length === 0) {
-    return [...sharedSection, { label: '', messages: allMsgs, isCurrent: true }]
+    return [...sharedSection, { label: '', messages: [...providerPreambles, ...allMsgs], isCurrent: true }]
   }
 
   const result: CompactSection[] = []
@@ -79,12 +82,16 @@ export function computeSections(session: SessionDetail, locale: Locale = 'zh-CN'
     const isLast = i === boundaryIndices.length - 1
     if (sectionMsgs.length > 0) {
       if (isLast) {
-        result.push({ label: '', messages: sectionMsgs, isCurrent: true })
+        result.push({ label: '', messages: [...providerPreambles, ...sectionMsgs], isCurrent: true })
       } else {
         const turnCount = sectionMsgs.filter((m) => m.type === 'user').length
         result.push({ label: translate(locale, 'section.compact_after', { i: i + 1, n: turnCount }), messages: sectionMsgs, isCurrent: false })
       }
     }
+  }
+
+  if (!result.some((section) => section.isCurrent) && providerPreambles.length > 0) {
+    result.push({ label: '', messages: providerPreambles, isCurrent: true })
   }
 
   return [...sharedSection, ...result]
@@ -96,6 +103,12 @@ export function groupIntoTurns(messages: ParsedMessage[]): Turn[] {
   const turns: Turn[] = []
   let current: Turn | null = null
   for (const msg of messages) {
+    if (msg.type === 'system' && msg.subtype === 'provider-preamble') {
+      if (current) turns.push(current)
+      turns.push({ userMsg: msg, assistantMsgs: [] })
+      current = null
+      continue
+    }
     if (msg.type === 'system') continue
     // Skip system-injected messages (type=user but not real user input)
     if (msg.subtype === 'task-notification' || msg.subtype === 'skill-output' || msg.subtype === 'system-reminder') continue

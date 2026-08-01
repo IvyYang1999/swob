@@ -25,21 +25,21 @@ describe('Windows Native Alpha capabilities', () => {
     expect(capabilities.supportedSources).toEqual(capabilities.discoverableSources)
     expect(capabilities.providers).toHaveLength(11)
     expect(capabilities.providers.find((provider) => provider.sourceId === 'hermes')).toMatchObject({
-      tier: 'detection-only',
+      tier: 'native',
       discoverableOnPlatform: true,
       capabilities: {
-        transcript: { status: 'unavailable' },
-        usage: { status: 'unavailable' }
+        transcript: { status: 'available' },
+        usage: { status: 'experimental' }
       }
     })
   })
 
-  it('platform discovery does not imply transcript support', () => {
+  it('platform discovery projects the audited Hermes transcript support', () => {
     expect(isSessionSourceDiscoverable('hermes', 'darwin')).toBe(true)
     const hermes = getPlatformProviderCapabilities('darwin')
       .find((provider) => provider.sourceId === 'hermes')!
-    expect(hermes.capabilities.discover.status).toBe('experimental')
-    expect(hermes.capabilities.transcript.status).toBe('unavailable')
+    expect(hermes.capabilities.discover.status).toBe('available')
+    expect(hermes.capabilities.transcript.status).toBe('available')
   })
 
   it('Windows Alpha 显式声明不做的边界', () => {

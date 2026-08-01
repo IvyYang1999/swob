@@ -79,6 +79,15 @@ async function buildGuardedAction(
   kind: 'resume' | 'fork'
 ): Promise<ResumeActionResult> {
   const summary = findSessionForGuard(options.sessions, options.sessionId)
+  if (kind === 'fork' && summary?.source === 'hermes') {
+    return {
+      ok: false,
+      sessionId: options.sessionId,
+      surface: 'terminal',
+      reasonCode: 'resume.error.build_action_failed',
+      reasonParams: { details: 'Hermes has no verified CLI surface for forking a historical session' }
+    }
+  }
   const indexedSessionId = getSessionDirPath(options.sessionId)
     ? options.sessionId
     : summary?.sessionId && getSessionDirPath(summary.sessionId)

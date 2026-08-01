@@ -15,7 +15,7 @@ Swob 通过 **12 个原生格式适配器**与 1 个 Claude 兼容格式解析�
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
 ![最新稳定版](https://img.shields.io/github/v/release/IvyYang1999/swob?label=stable)
-![平台](https://img.shields.io/badge/platform-macOS-2d2d30)
+![平台](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20Beta-2d2d30)
 ![构建](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
 ![下载量](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
 ![许可证](https://img.shields.io/badge/license-Apache--2.0-5b4fc4)
@@ -126,7 +126,7 @@ Swob 不止渲染聊天记录：
 
 > 截至 2026-07-24，公开基线为已通过 Developer ID 签名和公证的 v1.3.1，提供 Apple Silicon 与 Intel Mac 资产。
 
-**系统要求：** Apple Silicon 或 Intel Mac。
+**系统要求：** Apple Silicon 或 Intel Mac。从 v1.4.0 起，Releases 还计划包含未签名的 Windows x64 Beta，文件名为 `swob-<version>-windows-beta-x64.exe`；该 Beta 不支持 Windows ARM64、自动更新、CLI/Skill 自动安装、WSL 和 Claude Code/Codex 以外的来源。安装前请阅读 [Windows Beta 指南](docs/windows-alpha.md)。当前公开版 v1.3.1 仍只有 macOS。
 
 > [!IMPORTANT]
 > **v1.2.0 用户需要手动迁移一次。** v1.2.0 早于 Developer ID 信任根，无法安全自动更新到签名发布线。请从本仓库下载匹配架构的 v1.3.1 DMG 并覆盖 Swob 一次；现有 v1.3.0 用户可以通过隔离且经过 E2E 门禁的签名更新通道升级。

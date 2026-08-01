@@ -15,7 +15,7 @@ Swob parses local histories through **12 native-format adapters** and 1 Claude-c
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
 ![Latest release](https://img.shields.io/github/v/release/IvyYang1999/swob?label=stable)
-![Platform](https://img.shields.io/badge/platform-macOS-2d2d30)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20Beta-2d2d30)
 ![Build](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
 ![Downloads](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
 ![License](https://img.shields.io/badge/license-Apache--2.0-5b4fc4)
@@ -126,7 +126,7 @@ Public README claims checked on 2026-07-21. `✅` = explicitly documented; `◐`
 
 > As of 2026-07-24, the public baseline is the Developer ID signed and notarized v1.3.1 release for Apple Silicon and Intel Mac.
 
-**System requirement:** macOS on Apple Silicon or Intel.
+**System requirement:** macOS on Apple Silicon or Intel. Starting with v1.4.0, Releases are also expected to include an unsigned Windows x64 Beta installer named `swob-<version>-windows-beta-x64.exe`; Windows ARM64, auto-update, CLI/Skill auto-install, WSL, and sources other than Claude Code/Codex are not supported in this Beta. See the [Windows Beta guide](docs/windows-alpha.md) before installing. The current public v1.3.1 release remains macOS-only.
 
 > [!IMPORTANT]
 > **One manual migration is required for v1.2.0 users.** Because v1.2.0 predates the Developer ID trust root, it cannot safely auto-update into the signed release line. Download the matching v1.3.1 DMG from this repository and overwrite Swob once. Existing v1.3.0 users can update through the isolated, E2E-gated signed channel.

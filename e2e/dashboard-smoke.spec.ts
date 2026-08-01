@@ -40,6 +40,9 @@ test('五页仪表盘可达且带范围标签与口径切换', async () => {
   await expect(page.locator('[data-heatmap-day]')).toHaveCount(1)
   await page.getByRole('button', { name: '7d', exact: true }).click()
   await expect(page.locator('[data-heatmap-day]')).toHaveCount(7)
+  // Fixed-date fixtures eventually fall outside the default seven-day window.
+  // Switch back to all history before asserting usage-derived session metrics.
+  await page.getByRole('button', { name: /^(全部|All)$/ }).click()
 
   // Cost & Cache
   await page.getByRole('tab', { name: /成本与缓存|Cost & Cache/ }).click()

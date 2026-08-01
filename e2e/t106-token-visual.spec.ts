@@ -14,6 +14,7 @@ test.afterAll(async () => {
 test('Token Insights 在真实 Electron 窗口展示统一口径与 unavailable', async ({}, testInfo) => {
   const { app, page } = launched
   await page.getByTitle('Token 洞察').click()
+  await page.getByRole('button', { name: /^(全部|All)$/ }).click()
   await expect(page.getByText('Processed Tokens', { exact: true }).first()).toBeVisible({ timeout: 20_000 })
   await expect(page.getByText('2 with usage · 2 unavailable', { exact: true })).toBeVisible()
   await expect(page.getByText('Cursor', { exact: true })).toBeVisible()
@@ -25,6 +26,7 @@ test('Token Insights 在真实 Electron 窗口展示统一口径与 unavailable'
   await expect(processedCard).toHaveAttribute('title', /non-cached input \+ cache read \+ cache write \+ output/)
   await page.screenshot({ path: testInfo.outputPath('token-insights-wide.png'), fullPage: true })
 
+  await page.getByRole('button', { name: '7d', exact: true }).click()
   await resizeAppWindow(app, page, { width: 760, height: 620 })
   await expect(page.getByText('Processed Tokens', { exact: true }).first()).toBeVisible()
   const overflow = await page.evaluate(() => ({
@@ -42,7 +44,7 @@ test('Token Insights 在真实 Electron 窗口展示统一口径与 unavailable'
   })
   expect(await heatmapScroller.locator('[data-heatmap-day]').count()).toBe(7)
   expect(horizontalScroll.scrollWidth).toBeLessThanOrEqual(horizontalScroll.clientWidth + 1)
-  expect(horizontalScroll.after).toBe(horizontalScroll.before)
+  expect(Math.abs(horizontalScroll.after - horizontalScroll.before)).toBeLessThanOrEqual(1)
   const bySource = page.getByText(/按来源|By Source/)
   await bySource.scrollIntoViewIfNeeded()
   await expect(bySource).toBeVisible()

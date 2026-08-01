@@ -97,6 +97,27 @@ type SessionDetailLoadResult =
   | { fallback: 'transcript'; transcriptMarkdown: string; error?: never }
   | { fallback: null; error: 'DETAIL_UNAVAILABLE' | 'DETAIL_LOAD_FAILED' }
 
+export function mergeSessionSummaryIntoDetail(
+  detail: SessionDetail,
+  summary: SessionSummary
+): SessionDetail {
+  return {
+    ...detail,
+    ...summary,
+    // Summary owns the visible/logical identity, while the freshly parsed
+    // detail owns fields intentionally omitted from lightweight projections.
+    cwds: detail.cwds,
+    toolUsage: detail.toolUsage,
+    skillInvocations: detail.skillInvocations,
+    claudeMdContent: detail.claudeMdContent,
+    referencedFiles: detail.referencedFiles,
+    configFiles: detail.configFiles,
+    userImages: detail.userImages,
+    pastedImageCount: detail.pastedImageCount,
+    messages: detail.messages
+  }
+}
+
 export function materializeSessionDetail(
   result: SessionDetailLoadResult,
   summary: SessionSummary
@@ -122,9 +143,7 @@ export function materializeSessionDetail(
   }
   const { fallback: _fallback, ...detail } = result
   return {
-    ...detail,
-    ...summary,
-    messages: detail.messages,
+    ...mergeSessionSummaryIntoDetail(detail, summary),
     detailAvailability: summary.detailAvailability || 'ready'
   }
 }
@@ -532,7 +551,7 @@ export const useStore = create<AppState>((set, get) => ({
       set((state) => ({
         sessions: state.sessions.map((session) => session.id === summary.id ? summary : session),
         selectedSession: state.selectedSession?.id === summary.id
-          ? { ...state.selectedSession, ...summary, messages: state.selectedSession.messages }
+          ? mergeSessionSummaryIntoDetail(state.selectedSession, summary)
           : state.selectedSession
       }))
     })

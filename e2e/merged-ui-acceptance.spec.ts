@@ -33,7 +33,12 @@ async function canvasColorCentroid(
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const offset = (y * width + x) * 4
-        if (pixels[offset] !== target[0] || pixels[offset + 1] !== target[1] || pixels[offset + 2] !== target[2]) continue
+        // Canvas alpha compositing and device-pixel scaling may round an
+        // otherwise identical source colour by a few channel values.
+        const matches = Math.abs(pixels[offset] - target[0]) <= 8
+          && Math.abs(pixels[offset + 1] - target[1]) <= 8
+          && Math.abs(pixels[offset + 2] - target[2]) <= 8
+        if (!matches) continue
         const alpha = pixels[offset + 3] / 255
         weight += alpha
         minX = Math.min(minX, x)

@@ -23,6 +23,10 @@ async function assertMenuFitsViewport(page: Page): Promise<void> {
   expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(viewport.height)
 }
 
+async function openNarrowResumeMenu(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /更多操作|More actions/ }).click()
+}
+
 test.describe.serial('多客户端 Resume surfaces', () => {
   let launched: LaunchedApp
   let page: Page
@@ -53,7 +57,7 @@ test.describe.serial('多客户端 Resume surfaces', () => {
       page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
     ])
     expect({ width: contentBounds.width, height: contentBounds.height }).toEqual(viewport)
-    await page.getByRole('button', { name: '选择继续方式' }).click()
+    await openNarrowResumeMenu(page)
 
     await expect(page.getByRole('menuitem', { name: /在 Codex App 中继续/ })).toBeVisible()
     await expect(page.getByRole('menuitem', { name: /在终端中继续/ })).toBeVisible()
@@ -91,7 +95,7 @@ test.describe.serial('多客户端 Resume surfaces', () => {
 
   test('Claude 菜单在开关开启后显示 Desktop 与 Remote Control，点击导入先弹警告', async () => {
     await openSessionInChat(page, CLAUDE_FIXTURE_ID)
-    await page.getByRole('button', { name: '选择继续方式' }).click()
+    await openNarrowResumeMenu(page)
 
     await expect(page.getByRole('menuitem', { name: /导入到 Claude Desktop/ })).toBeVisible()
     await expect(page.getByRole('menuitem', { name: /在网页\/手机中继续/ })).toBeVisible()
@@ -109,14 +113,16 @@ test.describe.serial('多客户端 Resume surfaces', () => {
 
   test('ZCode 只提供打开 App，明确提示不能恢复指定会话', async ({}, testInfo) => {
     await openSessionInChat(page, `zcode:${ZCODE_FIXTURE_ID}`)
-    await expect(page.getByRole('button', { name: /打开 ZCode$/ })).toBeVisible()
-    await expect(page.getByRole('button', { name: '复制命令' })).toBeDisabled()
-    await expect(page.getByRole('button', { name: /Fork/ })).toBeDisabled()
-
-    await page.getByRole('button', { name: '选择继续方式' }).click()
-    await expect(page.getByRole('menuitem', { name: /打开 ZCode App/ })).toContainText(
+    // chat-scroll remains mounted across session switches; wait for the new
+    // detail instead of racing its async load with the overflow-menu click.
+    await expect(page.getByText('Synthetic response', { exact: true })).toBeVisible()
+    await openNarrowResumeMenu(page)
+    const menu = page.getByRole('menu')
+    await expect(menu.getByRole('menuitem', { name: /打开 ZCode App/ })).toContainText(
       'ZCode 当前不支持从外部跳转到指定历史会话'
     )
+    await expect(menu.getByRole('menuitem', { name: /复制.*命令|Copy.*command/ })).toBeDisabled()
+    await expect(menu.getByRole('menuitem', { name: /Fork/ })).toBeDisabled()
     await assertMenuFitsViewport(page)
     await page.getByRole('menu').screenshot({ path: testInfo.outputPath('zcode-open-app-menu.png') })
   })

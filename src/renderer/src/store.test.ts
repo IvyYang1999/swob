@@ -115,5 +115,38 @@ describe('renderer preference persistence', () => {
       detailAvailability: 'source-recoverable',
       detailError: 'DETAIL_UNAVAILABLE'
     })
+
+    expect(materializeSessionDetail({
+      ...summary,
+      fallback: null,
+      id: 'physical-id',
+      referencedFiles: [{ path: '/project/src/output.ts', actions: ['edit'], exists: true }],
+      configFiles: ['/project/CLAUDE.md'],
+      cwds: ['/project'],
+      toolUsage: { Edit: 1 },
+      skillInvocations: [{ skillName: 'audit', timestamp: '2026-07-21T00:00:00Z' }],
+      userImages: ['/project/image.png'],
+      pastedImageCount: 1,
+      messages: [{ uuid: 'message-1' }]
+    } as any, {
+      ...summary,
+      id: 'visible-id',
+      referencedFiles: [],
+      configFiles: [],
+      cwds: [],
+      toolUsage: {},
+      skillInvocations: [],
+      userImages: [],
+      pastedImageCount: 0
+    })).toMatchObject({
+      id: 'visible-id',
+      referencedFiles: [{ path: '/project/src/output.ts', actions: ['edit'], exists: true }],
+      configFiles: ['/project/CLAUDE.md'],
+      cwds: ['/project'],
+      toolUsage: { Edit: 1 },
+      userImages: ['/project/image.png'],
+      pastedImageCount: 1,
+      messages: [{ uuid: 'message-1' }]
+    })
   })
 })

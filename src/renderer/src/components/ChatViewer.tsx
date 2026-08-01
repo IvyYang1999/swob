@@ -1237,14 +1237,36 @@ function SessionBar({
             >
               {t('chat.copy_resume_cmd')}
             </button>
-            <button
-              role="menuitem"
-              disabled={!!resumeUnavailableReason || sshResuming}
-              onClick={() => { resumeButtonRef.current?.click(); setOverflowMenuOpen(false) }}
-              className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
-            >
-              {isRemote ? 'SSH Resume' : 'Resume'}
-            </button>
+            {canChooseResumeSurface ? resumeSurfaceOptions.map((option) => (
+              <button
+                key={option.surface}
+                role="menuitem"
+                disabled={!!resumeUnavailableReason || sshResuming}
+                onClick={async () => {
+                  setOverflowMenuOpen(false)
+                  await handleResume(option.surface)
+                }}
+                className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
+              >
+                <span className="block font-medium">{option.label}</span>
+                {option.description && (
+                  <span className={`mt-0.5 block text-[10px] leading-snug ${
+                    option.tone === 'warning' ? 'text-soft-amber' : 'text-muted'
+                  }`}>
+                    {option.description}
+                  </span>
+                )}
+              </button>
+            )) : (
+              <button
+                role="menuitem"
+                disabled={!!resumeUnavailableReason || sshResuming}
+                onClick={() => { resumeButtonRef.current?.click(); setOverflowMenuOpen(false) }}
+                className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
+              >
+                {isRemote ? 'SSH Resume' : 'Resume'}
+              </button>
+            )}
             <button
               role="menuitem"
               disabled={!!forkUnavailableReason}

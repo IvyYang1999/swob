@@ -39,11 +39,8 @@ test('third batch keeps the inspector structured and readable in all four palett
     await expect(inspector).toBeVisible()
     await expect(inspector.getByTitle('claude-sonnet-4-20250514')).toBeVisible()
     await expect(inspector.getByText(/130 in \/ 50 out/)).toBeVisible()
-    await expect(inspector.getByRole('tab')).toHaveCount(2)
-    await expect(inspector.getByRole('tab', { name: '文件' })).toHaveAttribute('aria-selected', 'true')
-
-    await inspector.getByRole('button', { name: /project/ }).click()
-    await expect(inspector.getByTestId('cwd-file-tree')).toBeVisible()
+    await expect(inspector.getByRole('tab')).toHaveCount(3)
+    await expect(inspector.getByRole('tab', { name: /成果|Outcomes/ })).toHaveAttribute('aria-selected', 'true')
     await expect(inspector.getByText('src/nested/fixture.ts', { exact: true })).toBeVisible()
 
     for (const themeCase of themes) {
@@ -60,9 +57,6 @@ test('third batch keeps the inspector structured and readable in all four palett
         colorScheme: document.documentElement.dataset.colorScheme
       }))).toEqual({ theme: themeCase.theme, colorScheme: themeCase.colorScheme })
 
-      if (!await inspector.getByTestId('cwd-file-tree').isVisible()) {
-        await inspector.getByRole('button', { name: /project/ }).click()
-      }
       await expect(inspector.getByText('src/nested/fixture.ts', { exact: true })).toBeVisible()
 
       const colors = await inspector.getByTitle('claude-sonnet-4-20250514').evaluate((element) => {
@@ -130,9 +124,11 @@ test('third batch keeps the inspector structured and readable in all four palett
       await page.screenshot({ path: testInfo.outputPath(`inspector-${themeCase.name}.png`) })
     }
 
-    await inspector.getByRole('tab', { name: 'Context' }).click()
-    await expect(inspector.getByRole('tab', { name: 'Context' })).toHaveAttribute('aria-selected', 'true')
+    await inspector.getByRole('tab', { name: /活动|Activity/ }).click()
+    await expect(inspector.getByRole('tab', { name: /活动|Activity/ })).toHaveAttribute('aria-selected', 'true')
     await expect(inspector.getByText('执行树', { exact: true })).toHaveCount(1)
+    await inspector.getByRole('tab', { name: /详情|Details/ }).click()
+    await expect(inspector.getByRole('tab', { name: /详情|Details/ })).toHaveAttribute('aria-selected', 'true')
     await expect(inspector.getByText('上下文检查器', { exact: true })).toHaveCount(1)
     await page.screenshot({ path: testInfo.outputPath('inspector-context-nord-dark.png') })
   } finally {

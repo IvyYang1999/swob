@@ -8,7 +8,7 @@
 
 **失われたコンテキストを復元し、fork と compact を追跡し、Agent が実際に何をしたかをデバッグします。**
 
-Swob は **6 個のネイティブ形式アダプター**と 1 個の Claude 互換形式でローカル履歴を解析します。ほかの 4 ソースは実験的なファイル検出のみで、メッセージ本文は読み取りません。ソースに証拠がある場合に限り、系譜、SQLite FTS5 増分検索、実行検査、provenance 付き監査、任意の AI Insights を提供します。
+Swob は **7 個のネイティブ形式アダプター**と 1 個の Claude 互換形式でローカル履歴を解析します。ほかの 4 ソースは実験的なファイル検出のみで、メッセージ本文は読み取りません。ソースに証拠がある場合に限り、系譜、SQLite FTS5 増分検索、実行検査、provenance 付き監査、任意の AI Insights を提供します。
 
 [Web サイト](https://swob.app/) · [Web サイトのソース](https://github.com/IvyYang1999/swob-website) · [検証済み Releases](https://github.com/IvyYang1999/swob/releases) · [更新履歴](CHANGELOG.md)
 
@@ -48,7 +48,7 @@ Swob はセッション履歴を証拠として扱います。
 | **253 / 1,621** | ある実運用 Library の監査で、Claude Code の 253 セッションが既定の 30 日保持ポリシーにより元の保存先から消失していましたが、Swob のローカルバックアップには残っていました。 |
 | **93.58%** | 同じ 1,621 セッション・5 ソースの監査 corpus で確認できた再開可能率です。全環境への成功保証ではありません。 |
 | **1,704 sessions** | 新しい索引とダッシュボードの検証に使う現在のローカル性能/UI corpus です。 |
-| **6+1+4 ソース** | 現在の `main` は 6 種の harness をネイティブに読み取り、1 種の互換フォーマットに対応し、4 種を実験的にファイル検出します（ファイル発見のみ、コンテンツ読み取りは未実装）。 |
+| **7+1+4 ソース** | 現在の `main` は 7 種の harness をネイティブに読み取り、1 種の互換フォーマットに対応し、4 種を実験的にファイル検出します（ファイル発見のみ、コンテンツ読み取りは未実装）。 |
 
 ## Session Galaxy
 
@@ -77,7 +77,7 @@ Swob は transcript 表示だけではありません。
 
 ## 現在の `main` が読むソース
 
-### ネイティブ形式アダプター（6）— 本文解析は可能、その他の能力はソース別
+### ネイティブ形式アダプター（7）— 本文解析は可能、その他の能力はソース別
 
 | ソースファミリー | ステータス | 備考 |
 |---|---|---|
@@ -87,6 +87,7 @@ Swob は transcript 表示だけではありません。
 | OpenCode | Native | 本文、usage、archive、terminal resume は利用可能。検索は実験的で、live watch・系譜・native deep link は利用不可です。 |
 | ZCode | Native | 本文、usage、archive は利用可能。検索と workspace を開く deep link は実験的で、live watch と terminal resume は利用不可です。 |
 | Pi | Native | 本文、tool、thinking、usage、relationship、検索、archive は利用可能。live watch は利用不可で、terminal resume は実験的です。 |
+| Qoder | Native | 複合 JSONL 本文、tool、relationship、subagent、検索、archive は利用可能。thinking、存在時のみの usage、format provenance、terminal resume は first-party/local sampling まで実験的です。 |
 
 ### 互換フォーマット（1）
 
@@ -111,7 +112,7 @@ Swob は transcript 表示だけではありません。
 
 | 機能 | Swob 現在の `main` | [Claude Code History Viewer](https://github.com/jhlee0409/claude-code-history-viewer) | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | [SessionView](https://github.com/tyql688/sessionview) |
 |---|---|---|---|---|
-| ローカル multi-harness 履歴 | ✅ 6 ネイティブ + 1 互換 + 4 実験的検出 | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
+| ローカル multi-harness 履歴 | ✅ 7 ネイティブ + 1 互換 + 4 実験的検出 | ✅ 9 providers | ✅ 9+ agents | ✅ 9 tools |
 | 可視化 session lineage graph | ✅ 検証エッジ + grouping edge | ◐ Session Board、lineage ではない | — | ◐ child session 正規化、lineage graph の記載なし |
 | Compact 履歴復元 | ✅ Claude Code | — | — | — |
 | Execution tree / Agent call 分析 | ✅ | ◐ tool rendering | ◐ tool/output navigation | ◐ tool-call mix と child session |

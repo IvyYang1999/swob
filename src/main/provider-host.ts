@@ -37,6 +37,7 @@ import { createGrokProvider } from './providers/grok-provider'
 import { createAntigravityProvider } from './providers/antigravity-provider'
 import { createHermesProvider } from './providers/hermes-provider'
 import { createTraeProvider } from './providers/trae-provider'
+import { createQoderProvider } from './providers/qoder-provider'
 import {
   migrateProviderV1ManifestToV2,
   migrateProviderV1OutcomeToV2Chunks
@@ -249,6 +250,7 @@ function builtinRuntimesV2(homeDir: string): BuiltinProviderRuntimeV2[] {
     createGrokProvider({ homeDir }),
     createAntigravityProvider({ homeDir }),
     createHermesProvider({ homeDir }),
+    createQoderProvider({ homeDir }),
     createTraeProvider({ homeDir })
   ]
 }

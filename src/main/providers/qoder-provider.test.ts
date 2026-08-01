@@ -19,6 +19,7 @@ import {
 import { renderCanonicalEventPage } from '../canonical-v2-projection'
 import {
   createQoderProvider,
+  parseQoderSourceV2,
   QODER_FORMAT_VERSION,
   QODER_PROVIDER_ID,
   QODER_PROVIDER_MANIFEST
@@ -94,7 +95,7 @@ describe('Qoder native Provider Protocol v2', () => {
     fs.writeFileSync(sidecarPath, JSON.stringify({ title: 'Changed synthetic title' }))
     const second = await provider.fingerprint(source, signal)
     expect(second.value).not.toBe(first.value)
-    await expect(provider.parseV2(source, first, 'initial', signal))
+    await expect(provider.parse(source, first, signal))
       .rejects.toThrow('qoder-source-changed-during-parse')
   })
 
@@ -103,7 +104,7 @@ describe('Qoder native Provider Protocol v2', () => {
     const source = (await provider.discover(new AbortController().signal))[0]
     const signal = new AbortController().signal
     const fingerprint = await provider.fingerprint(source, signal)
-    const chunks = await provider.parseV2(source, fingerprint, 'initial', signal)
+    const chunks = await provider.parse(source, fingerprint, signal)
 
     expect(chunks).toHaveLength(1)
     expect(validateParseChunkV2(chunks[0])).toMatchObject({ ok: true, issues: [] })
@@ -151,11 +152,11 @@ describe('Qoder native Provider Protocol v2', () => {
     const discovered = await provider.discover(new AbortController().signal)
     const signal = new AbortController().signal
     const main = discovered[0]
-    const mainChunks = await provider.parseV2(
+    const mainChunks = await parseQoderSourceV2(
       main,
       await provider.fingerprint(main, signal),
-      'replace',
-      signal
+      signal,
+      'replace'
     )
     expect(mainChunks[0]).toMatchObject({
       mode: 'replace',
@@ -170,10 +171,9 @@ describe('Qoder native Provider Protocol v2', () => {
     })
 
     const subagent = discovered[1]
-    const subagentChunks = await provider.parseV2(
+    const subagentChunks = await provider.parse(
       subagent,
       await provider.fingerprint(subagent, signal),
-      'initial',
       signal
     )
     expect(subagentChunks[0].identity).toMatchObject({
@@ -209,7 +209,7 @@ describe('Qoder native Provider Protocol v2', () => {
     const provider = createQoderProvider({ homeDir })
     const source = (await provider.discover(new AbortController().signal))[0]
     const signal = new AbortController().signal
-    const chunks = await provider.parseV2(source, await provider.fingerprint(source, signal), 'initial', signal)
+    const chunks = await provider.parse(source, await provider.fingerprint(source, signal), signal)
     const sample: ProviderConformanceSample = {
       manifest: QODER_PROVIDER_MANIFEST,
       envelopes: [
@@ -245,7 +245,7 @@ describe('Qoder native Provider Protocol v2', () => {
     const source = (await provider.discover(new AbortController().signal))
       .find((candidate) => candidate.stableId === `qoder:${sessionId}`)!
     const signal = new AbortController().signal
-    const chunks = await provider.parseV2(source, await provider.fingerprint(source, signal), 'initial', signal)
+    const chunks = await provider.parse(source, await provider.fingerprint(source, signal), signal)
     expect(chunks.length).toBeGreaterThan(2)
     expect(events(chunks)).toHaveLength(2_050)
     const assembler = new ProviderChunkAssembler()
@@ -260,7 +260,7 @@ describe('Qoder native Provider Protocol v2', () => {
       '{malformed\n' +
       '{"type":"user","uuid":"after-malformed","message":{"role":"user","content":"survives malformed neighbor"}}\n')
     const signal = new AbortController().signal
-    const chunks = await provider.parseV2(source, await provider.fingerprint(source, signal), 'initial', signal)
+    const chunks = await provider.parse(source, await provider.fingerprint(source, signal), signal)
     expect(chunks[0].diagnostics).toContainEqual(expect.objectContaining({ code: 'qoder-jsonl-malformed' }))
     expect(events(chunks).some((event) =>
       event.kind === 'message.text' && (event.payload as any).text === 'survives malformed neighbor')).toBe(true)
@@ -268,11 +268,8 @@ describe('Qoder native Provider Protocol v2', () => {
 
   it('declares the parser as native v2 and never exposes a v1 parse method', () => {
     const provider = createQoderProvider({ homeDir })
-    expect(provider.protocolVersion).toBe('2.0')
-    expect(provider.manifest.schemaVersion).toBe(1)
-    expect(provider.manifestV2).toEqual(QODER_PROVIDER_MANIFEST)
-    expect(provider.parseV2).toBeTypeOf('function')
-    expect('parse' in provider).toBe(false)
-    expect(provider.manifestV2.formatVersions).toEqual([QODER_FORMAT_VERSION])
+    expect(provider.manifest).toEqual(QODER_PROVIDER_MANIFEST)
+    expect(provider.parse).toBeTypeOf('function')
+    expect(provider.manifest.formatVersions).toEqual([QODER_FORMAT_VERSION])
   })
 })

@@ -18,6 +18,7 @@ export const LEGACY_SESSION_SOURCES = [
   'pi',
   'kimi',
   'hermes',
+  'qoder',
   'trae'
 ] as const
 
@@ -35,7 +36,7 @@ export interface BuiltinProviderDefinition {
 
 const V2_ADAPTER_SOURCES = new Set<LegacySessionSource>([
   'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror',
-  'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'trae'
+  'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae'
 ])
 
 const implementation = (locator: string, note?: string): CapabilityEvidence => ({
@@ -343,6 +344,64 @@ function traeCanonicalCapabilities(): ProviderCapabilities {
   }
 }
 
+function qoderCanonicalCapabilities(): ProviderCapabilities {
+  const provider = implementation('src/main/providers/qoder-provider.ts')
+  const host = implementation('src/main/provider-host.ts')
+  const fixture = test(
+    'src/main/providers/qoder-provider.test.ts',
+    'Fully synthetic compound Qoder transcript, sidecar, and subagent fixture.'
+  )
+  const upstream = {
+    kind: 'upstream-source' as const,
+    locator: 'https://github.com/kenn-io/agentsview/tree/1cd581fe34e87e134160c6668deffb674b7eaa4e/internal/parser',
+    note: 'Pinned independent reference; no public first-party producer schema was available.'
+  }
+  return {
+    discover: available(provider, host, fixture),
+    summary: available(provider, fixture, upstream),
+    transcript: available(provider, fixture, upstream),
+    tools: available(provider, fixture, upstream),
+    thinking: experimental(
+      'Thinking blocks are decoded when persisted, but no public Qoder producer schema proves every surface writes them.',
+      provider,
+      fixture,
+      upstream
+    ),
+    usage: experimental(
+      'Persisted message.usage counters are decoded without estimation; availability and cache semantics are not proven across Qoder versions.',
+      provider,
+      fixture,
+      upstream
+    ),
+    relationships: available(provider, fixture, upstream),
+    subagents: available(provider, fixture, upstream),
+    'live-watch': unavailable(
+      'Qoder is refreshed by provider discovery; no dedicated live watcher is registered.',
+      watcher
+    ),
+    search: available(searchIndex, host, fixture),
+    archive: available(archive, host, fixture),
+    'terminal-resume': experimental(
+      'Official qodercli documents -r <session-id>, but no authenticated launch-after-anchor observation is recorded.',
+      resume,
+      {
+        kind: 'official-documentation',
+        locator: 'https://docs.qoder.com/zh/cli/using-cli'
+      }
+    ),
+    'native-resume': unavailable(
+      'Opening the Qoder IDE or a task view is not evidence that a specific transcript resumes correctly.',
+      resume
+    ),
+    'format-provenance': experimental(
+      'Compound layout is pinned to an independent reference; no public first-party producer schema or local authenticated sample was available.',
+      provider,
+      fixture,
+      upstream
+    )
+  }
+}
+
 function definition(
   sourceId: LegacySessionSource,
   displayName: string,
@@ -478,6 +537,9 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
   definition('hermes', 'Hermes', 'native', hermesCanonicalCapabilities(), [
     'hermes-state-db-v1-plus',
     'hermes-json-snapshot-v1'
+  ], 'provider-host'),
+  definition('qoder', 'Qoder', 'native', qoderCanonicalCapabilities(), [
+    'qoder-project-jsonl-compound-reference-v1'
   ], 'provider-host'),
   definition('trae', 'Trae', 'native', traeCanonicalCapabilities(), [
     'trae-state-vscdb-legacy-v1'

@@ -11,12 +11,12 @@ import {
 import { validateProviderManifest } from './provider-protocol'
 
 describe('current provider capability truth', () => {
-  it('locks 11 native + 1 compatible and no detection-only sources', () => {
-    expect(LEGACY_SESSION_SOURCES).toHaveLength(12)
-    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'native')).toHaveLength(11)
+  it('locks 12 native + 1 compatible and no detection-only sources', () => {
+    expect(LEGACY_SESSION_SOURCES).toHaveLength(13)
+    expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'native')).toHaveLength(12)
     expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'compatible')).toHaveLength(1)
     expect(BUILTIN_PROVIDER_DEFINITIONS.filter((entry) => entry.tier === 'detection-only')).toHaveLength(0)
-    expect(new Set(BUILTIN_PROVIDER_DEFINITIONS.map((entry) => entry.manifest.providerId)).size).toBe(12)
+    expect(new Set(BUILTIN_PROVIDER_DEFINITIONS.map((entry) => entry.manifest.providerId)).size).toBe(13)
   })
 
   it('every built-in manifest conforms to the language-neutral schema', () => {
@@ -44,10 +44,10 @@ describe('current provider capability truth', () => {
   })
 
   it('transcript-capable count comes from capabilities, not the source count', () => {
-    expect(LEGACY_SESSION_SOURCES).toHaveLength(12)
+    expect(LEGACY_SESSION_SOURCES).toHaveLength(13)
     expect(LEGACY_SESSION_SOURCES.filter(providerCanParseTranscript)).toEqual([
       'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror',
-      'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'trae'
+      'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae'
     ])
   })
 
@@ -55,12 +55,13 @@ describe('current provider capability truth', () => {
     expect(builtinProviderForSource('codex')?.manifest.providerId).toBe('swob/codex')
     expect(builtinProviderForId('swob/codex')?.sourceId).toBe('codex')
     expect(builtinProviderForId('example/sqlite-agent')).toBeUndefined()
-    expect(currentProviderCapabilitySnapshot()).toHaveLength(12)
+    expect(currentProviderCapabilitySnapshot()).toHaveLength(13)
     expect(providerUsesCanonicalRuntime('pi')).toBe(true)
     expect(providerUsesCanonicalRuntime('kimi')).toBe(true)
     expect(providerUsesCanonicalRuntime('grok')).toBe(true)
     expect(providerUsesCanonicalRuntime('antigravity')).toBe(true)
     expect(providerUsesCanonicalRuntime('hermes')).toBe(true)
+    expect(providerUsesCanonicalRuntime('qoder')).toBe(true)
     expect(providerUsesCanonicalRuntime('trae')).toBe(true)
     expect(providerUsesCanonicalRuntime('claude-code')).toBe(false)
   })

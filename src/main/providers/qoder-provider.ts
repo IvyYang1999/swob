@@ -4,7 +4,6 @@ import * as path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type {
   Fingerprint,
-  ProviderManifest as ProviderManifestV1,
   SourceRef
 } from '../../shared/provider-schema.generated'
 import {
@@ -20,6 +19,8 @@ import {
   type UsageRecord
 } from '../../shared/provider-schema-v2.generated'
 import { createBuiltinToolRegistryV2 } from '../../shared/tool-registry-v2'
+import { builtinProviderForSource } from '../../shared/provider-capabilities'
+import type { BuiltinProviderRuntimeV2 } from '../provider-host'
 import {
   buildCanonicalLogicalSessionIdentity,
   logicalSessionKey
@@ -49,21 +50,6 @@ export interface QoderProviderOptions {
  * itself emits v2 manifests and ParseChunk values directly; no v1 canonical
  * records or v1-to-v2 migration participate in Qoder parsing.
  */
-export interface QoderProviderRuntimeV2 {
-  readonly manifest: ProviderManifestV1
-  readonly protocolVersion: '2.0'
-  readonly manifestV2: ProviderManifest
-  discover(signal: AbortSignal): Promise<SourceRef[]>
-  fingerprint(source: SourceRef, signal: AbortSignal): Promise<Fingerprint>
-  inputBytes(source: SourceRef, signal: AbortSignal): Promise<number>
-  parseV2(
-    source: SourceRef,
-    fingerprint: Fingerprint,
-    mode: ParseChunk['mode'],
-    signal: AbortSignal
-  ): Promise<ParseChunk[]>
-}
-
 interface QoderSidecar {
   title?: string
   working_dir?: string
@@ -208,56 +194,6 @@ export const QODER_PROVIDER_MANIFEST: ProviderManifest = {
     commandTemplate: 'qodercli -r {sessionId}',
     expectedSideEffects: ['observe-source-after-launch', 'verify-content-anchor-after-resume'],
     postcondition: 'anchor-match'
-  }
-}
-
-function v1Capability(
-  status: 'available' | 'unavailable' | 'experimental',
-  reason: string | null,
-  locator = 'src/main/providers/qoder-provider.ts'
-) {
-  return {
-    status,
-    reason,
-    evidence: [{
-      kind: status === 'unavailable' ? 'missing' as const : 'implementation' as const,
-      locator
-    }]
-  }
-}
-
-/**
- * Registration/UI compatibility manifest only. The Qoder parser never emits
- * v1 canonical records; ProviderHost projects the native v2 truth stream for
- * legacy consumers after validating it.
- */
-export const QODER_PROVIDER_COMPAT_MANIFEST: ProviderManifestV1 = {
-  schemaVersion: 1,
-  providerId: QODER_PROVIDER_ID,
-  displayName: 'Qoder',
-  implementationVersion: 'builtin-v2-compat-registration',
-  parserDataVersion: QODER_PARSER_DATA_VERSION,
-  formatVersions: [QODER_FORMAT_VERSION],
-  legacySourceIds: ['qoder'],
-  capabilities: {
-    discover: v1Capability('available', null),
-    summary: v1Capability('available', null),
-    transcript: v1Capability('available', null),
-    tools: v1Capability('available', null),
-    thinking: v1Capability('experimental', QODER_PROVIDER_MANIFEST.capabilities.thinking.reason),
-    usage: v1Capability('experimental', QODER_PROVIDER_MANIFEST.capabilities.usage.reason),
-    relationships: v1Capability('available', null),
-    subagents: v1Capability('available', null),
-    'live-watch': v1Capability('unavailable', 'Qoder is refreshed by provider discovery; no dedicated live watcher is registered.'),
-    search: v1Capability('available', null, 'src/main/search-index.ts'),
-    archive: v1Capability('available', null, 'src/main/library-manager.ts'),
-    'terminal-resume': v1Capability(
-      'experimental',
-      QODER_PROVIDER_MANIFEST.capabilities['terminal-resume'].reason,
-      QODER_CLI_RESUME_DOC
-    ),
-    'native-resume': v1Capability('unavailable', QODER_PROVIDER_MANIFEST.capabilities['native-resume'].reason),
-    'format-provenance': v1Capability('experimental', QODER_PROVIDER_MANIFEST.capabilities['format-provenance'].reason, AGENTSVIEW_QODER_SOURCE)
   }
 }
 
@@ -963,15 +899,15 @@ export async function parseQoderSourceV2(
   })
 }
 
-export function createQoderProvider(options: QoderProviderOptions): QoderProviderRuntimeV2 {
+export function createQoderProvider(options: QoderProviderOptions): BuiltinProviderRuntimeV2 {
   const roots = options.roots || [
     path.join(options.homeDir, '.qoder', 'projects'),
     path.join(options.homeDir, '.qoderwork', 'projects')
   ]
+  const definition = builtinProviderForSource('qoder')
+  if (!definition) throw new Error('Qoder provider manifest is not registered.')
   return {
-    manifest: structuredClone(QODER_PROVIDER_COMPAT_MANIFEST),
-    protocolVersion: '2.0',
-    manifestV2: structuredClone(QODER_PROVIDER_MANIFEST),
+    manifest: structuredClone(QODER_PROVIDER_MANIFEST),
     async discover(signal) {
       const candidates = (await Promise.all(roots.map((root) => discoverRoot(root, signal)))).flat()
       const byStableId = new Map<string, { source: SourceRef; mtimeMs: number }>()
@@ -1000,8 +936,8 @@ export function createQoderProvider(options: QoderProviderOptions): QoderProvide
       const { transcript, sidecar } = await readMembers(source, signal)
       return transcript.length + (sidecar?.length || 0)
     },
-    parseV2(source, fingerprint, mode, signal) {
-      return parseQoderSourceV2(source, fingerprint, signal, mode)
+    parse(source, fingerprint, signal) {
+      return parseQoderSourceV2(source, fingerprint, signal, 'initial')
     }
   }
 }

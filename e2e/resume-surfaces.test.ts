@@ -122,7 +122,7 @@ test.describe.serial('多客户端 Resume surfaces', () => {
       'ZCode 当前不支持从外部跳转到指定历史会话'
     )
     await expect(menu.getByRole('menuitem', { name: /复制.*命令|Copy.*command/ })).toBeDisabled()
-    await expect(menu.getByRole('menuitem', { name: /Fork/ })).toBeDisabled()
+    await expect(menu.getByRole('menuitem', { name: /Fork/ })).toHaveCount(0)
     await assertMenuFitsViewport(page)
     await page.getByRole('menu').screenshot({ path: testInfo.outputPath('zcode-open-app-menu.png') })
   })

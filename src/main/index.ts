@@ -29,7 +29,7 @@ import {
   buildSessionSummaryFromBackup
 } from './session-loader'
 import { findCodexSessionFiles, loadCodexRawMessages } from './codex-loader'
-import { findCursorSessionFiles } from './cursor-loader'
+import { findCursorSessionFiles, loadCursorRawMessages } from './cursor-loader'
 import {
   initLibrary,
   applyLibraryTree,
@@ -1622,7 +1622,15 @@ function currentSearchSources(): Array<{
   isLibraryBackup?: boolean
   loadRaw?: () => Promise<import('./types').RawJsonlMessage[]>
 }> {
-  const files = findAllSessionFiles().filter((filePath) =>
+  // findAllSessionFiles is the historical Claude/new-provider scan and does
+  // not include the separately discovered Codex or Cursor files. Use the
+  // already filtered user-visible snapshot for those legacy loaders so the
+  // first search warmup cannot silently omit an entire supported source.
+  const loadedSpecialSourceFiles = cachedSessions.flatMap((session) =>
+    session.source === 'codex' || session.source === 'cursor'
+      ? (session.allFilePaths || [session.filePath])
+      : [])
+  const files = [...new Set([...findAllSessionFiles(), ...loadedSpecialSourceFiles])].filter((filePath) =>
     !filePath.includes('/subagents/') &&
     !providerUsesCanonicalRuntime(detectSessionSourceFromPath(filePath) || '')
   )
@@ -1631,7 +1639,11 @@ function currentSearchSources(): Array<{
     return {
       filePath,
       source,
-      ...(source === 'codex' ? { loadRaw: () => loadCodexRawMessages(filePath) } : {})
+      ...(source === 'codex'
+        ? { loadRaw: () => loadCodexRawMessages(filePath) }
+        : source === 'cursor'
+          ? { loadRaw: () => loadCursorRawMessages(filePath) }
+          : {})
     }
   }), cachedSessions)
   return [

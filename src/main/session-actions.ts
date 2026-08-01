@@ -8,6 +8,7 @@ import { shellQuote } from './resume-terminal'
 import type { RawJsonlMessage, SessionSource, SessionSummary } from './types'
 import { runtimeHome } from './runtime-home'
 import { alphaUnsupportedReason } from './platform-support'
+import { supportsVerifiedSessionFork } from '../shared/session-action-capabilities'
 
 export interface SessionActionContext {
   sessionId: string
@@ -130,6 +131,9 @@ export function buildForkLaunchSpec(
   claudeConfigDir?: string,
   platform: NodeJS.Platform = process.platform
 ): LaunchSpec {
+  if (!supportsVerifiedSessionFork(source)) {
+    throw new Error(`session-fork-unavailable:${source}`)
+  }
   const resume = buildResumeLaunchSpec(
     sessionId,
     permissionMode,
@@ -333,6 +337,10 @@ export function buildForkCommand(
   source?: SessionSource,
   claudeConfigDir?: string
 ): string {
+  const effectiveSource = source || 'claude-code'
+  if (!supportsVerifiedSessionFork(effectiveSource)) {
+    throw new Error(`session-fork-unavailable:${effectiveSource}`)
+  }
   let cmd: string
   const quotedSessionId = shellQuote(sessionId)
   if (source === 'codex') {
@@ -342,24 +350,6 @@ export function buildForkCommand(
     }
     return cmd
   }
-  if (source === 'cursor') {
-    cmd = `cursor agent --resume ${quotedSessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      return `cd ${shellQuote(cwd)} && ${cmd}`
-    }
-    return cmd
-  }
-  if (source === 'opencode') {
-    cmd = `opencode --session ${quotedSessionId}`
-    if (cwd && fs.existsSync(cwd)) {
-      return `cd ${shellQuote(cwd)} && ${cmd}`
-    }
-    return cmd
-  }
-  if (source === 'zcode') {
-    throw new Error('ZCode 没有公开 CLI，也没有公开的指定会话 Fork 入口')
-  }
-
   cmd = permissionMode === 'bypassPermissions'
     ? `claude --dangerously-skip-permissions --fork-session --resume ${quotedSessionId}`
     : `claude --fork-session --resume ${quotedSessionId}`
@@ -481,7 +471,7 @@ export async function resolveSessionActionContext(
     summary = findSessionForAction(currentSessions, requestedSessionId) || summary
   }
 
-  if (summary && summary.source !== 'codex' && summary.source !== 'cursor' && summary.source !== 'opencode' && summary.source !== 'zcode') {
+  if (summary && (summary.source === 'claude-code' || summary.source === 'cc-mirror')) {
     const fresh = await buildFreshClaudeSummary(summary, options.restoredSourcePath, home)
     if (fresh) summary = { ...summary, ...fresh }
   }

@@ -3,6 +3,8 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import {
+  buildForkCommand,
+  buildForkLaunchSpec,
   buildResumeAction,
   buildResumeCommand,
   buildResumeLaunchSpec,
@@ -61,6 +63,60 @@ function summary(overrides: Partial<SessionSummary>): SessionSummary {
 }
 
 describe('session action context', () => {
+  it('fails closed instead of relabelling Resume as Fork for unsupported sources', () => {
+    for (const source of ['cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity', 'grok', 'pi', 'kimi', 'hermes'] as const) {
+      expect(() => buildForkLaunchSpec('synthetic-session', undefined, undefined, source))
+        .toThrow(`session-fork-unavailable:${source}`)
+      expect(() => buildForkCommand('synthetic-session', undefined, undefined, source))
+        .toThrow(`session-fork-unavailable:${source}`)
+    }
+  })
+
+  it('keeps verified Claude and Codex Fork commands distinct from Resume', () => {
+    expect(buildForkLaunchSpec('claude-session')).toMatchObject({
+      executable: 'claude',
+      args: ['--fork-session', '--resume', 'claude-session']
+    })
+    expect(buildForkCommand('claude-session'))
+      .toBe(`claude --fork-session --resume ${shellQuote('claude-session')}`)
+    expect(buildForkLaunchSpec('codex-session', undefined, undefined, 'codex')).toMatchObject({
+      executable: 'codex',
+      args: ['fork', 'codex-session']
+    })
+    expect(buildForkCommand('codex-session', undefined, undefined, 'codex'))
+      .toBe(`codex fork ${shellQuote('codex-session')}`)
+  })
+
+  it('never rewrites non-Claude provider identity through the Claude fresh parser', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-provider-action-context-'))
+    const claudeShapedFile = writeJsonlAt(path.join(root, 'foreign-provider.jsonl'), [rawMsg({
+      uuid: 'foreign-user',
+      sessionId: 'must-not-replace-provider-id',
+      type: 'user',
+      cwd: '/must-not-replace-provider-cwd',
+      message: { role: 'user', content: 'synthetic foreign provider payload' }
+    })])
+    try {
+      for (const source of ['kimi', 'hermes'] as const) {
+        const context = await resolveSessionActionContext(`${source}-session`, [summary({
+          id: `${source}-session`,
+          sessionId: `${source}-session`,
+          source,
+          filePath: claudeShapedFile,
+          allFilePaths: [claudeShapedFile],
+          resumeCwd: `/synthetic/${source}`
+        })])
+        expect(context).toMatchObject({
+          sessionId: `${source}-session`,
+          source,
+          cwd: `/synthetic/${source}`
+        })
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('Windows Claude Resume 以 argv/cwd/env 建模，不拼 shell 字符串', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-win-launch-'))
     try {

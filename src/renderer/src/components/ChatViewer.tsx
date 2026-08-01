@@ -25,6 +25,7 @@ import {
 } from '../utils/markdown'
 import type { CompactSection, Turn, ToolCallInfo, TocEntry } from '../utils/markdown'
 import { defaultResumeMethodForSource } from '../../../shared/settings-capabilities'
+import { supportsVerifiedSessionFork } from '../../../shared/session-action-capabilities'
 import { SharePreview } from './share/SharePreview'
 import type { ShareMessage } from './share/ShareRenderer'
 
@@ -879,6 +880,7 @@ function SessionBar({
     ? (selectedSession.resumeUnavailableReason || t('renderer.chat.resume_unavailable'))
     : undefined
   const isZcode = selectedSession.source === 'zcode'
+  const canFork = supportsVerifiedSessionFork(selectedSession.source)
   const copyUnavailableReason = resumeUnavailableReason || (isZcode ? t('chat.zcode_no_cli') : undefined)
   const forkUnavailableReason = resumeUnavailableReason || (isZcode ? t('chat.zcode_no_fork') : undefined)
   const experimentalClaudeDesktopImport = config?.preferences?.experimentalClaudeDesktopImport === true
@@ -1148,8 +1150,8 @@ function SessionBar({
           )}
         </div>
 
-        {/* Fork */}
-        <button
+        {/* Resume-only providers must never be presented as Fork-capable. */}
+        {canFork && <button
           ref={forkButtonRef}
           onClick={async () => {
             if (forkUnavailableReason) {
@@ -1182,7 +1184,7 @@ function SessionBar({
         >
           <GitBranch size={10} />
           <span className="whitespace-nowrap">{isRemote ? 'SSH Fork' : t('chat.fork')}</span>
-        </button>
+        </button>}
 
         {/* iCloud 云端下载 */}
         {isCloud && (
@@ -1268,14 +1270,14 @@ function SessionBar({
                 {isRemote ? 'SSH Resume' : 'Resume'}
               </button>
             )}
-            <button
+            {canFork && <button
               role="menuitem"
               disabled={!!forkUnavailableReason}
               onClick={() => { forkButtonRef.current?.click(); setOverflowMenuOpen(false) }}
               className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
             >
               {isRemote ? 'SSH Fork' : t('chat.fork')}
-            </button>
+            </button>}
             {isCloud && (
               <button
                 role="menuitem"

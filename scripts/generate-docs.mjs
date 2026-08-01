@@ -500,7 +500,7 @@ const guidePages = {
   'guides/ssh.html': {
     title: 'SSH 远程 Resume', active: 'guides',
     lead: 'Swob 只编排你已经能安全登录的 SSH 主机；它不接管私钥，也不替你绕过远端权限。',
-    body: `<section><h2>准备</h2><ol class="steps"><li><strong>配置 SSH 密钥</strong><p>本机运行 <code>ssh-keygen</code>，用 <code>ssh-copy-id user@host</code> 安装公钥；私钥只留本机。</p></li><li><strong>先在终端验证</strong><p>确认 <code>ssh user@host</code> 无需交互密码，并且远端工作目录和 claude launcher 存在。</p></li><li><strong>填入设置</strong><p>设置 → SSH 填 host、user；只有 launcher 不在 PATH 时才填“远程路径”。</p></li></ol></section><section><h2>Swob 实际执行什么</h2><pre><code>ssh -t user@host 'zsh -li -c "cd &lt;remote-cwd&gt; &amp;&amp; claude --resume &lt;id&gt;"'</code></pre><p>交互登录 shell 同时加载远端 <code>~/.zprofile</code> 与 <code>~/.zshrc</code>。路径和 session ID 都经过 shell quote。</p><div class="callout warning"><strong>范围</strong><p>SSH Resume 当前面向远端 Claude Code 会话。Windows Native Alpha 不开放 SSH 设置入口。</p></div></section>`
+    body: `<section><h2>准备</h2><ol class="steps"><li><strong>配置 SSH 密钥</strong><p>本机运行 <code>ssh-keygen</code>，用 <code>ssh-copy-id user@host</code> 安装公钥；私钥只留本机。</p></li><li><strong>先在终端验证</strong><p>确认 <code>ssh user@host</code> 无需交互密码，并且远端工作目录和 claude launcher 存在。</p></li><li><strong>填入设置</strong><p>设置 → SSH 填 host、user；只有 launcher 不在 PATH 时才填“远程路径”。</p></li></ol></section><section><h2>Swob 实际执行什么</h2><pre><code>ssh -t user@host 'zsh -li -c "cd &lt;remote-cwd&gt; &amp;&amp; claude --resume &lt;id&gt;"'</code></pre><p>交互登录 shell 同时加载远端 <code>~/.zprofile</code> 与 <code>~/.zshrc</code>。路径和 session ID 都经过 shell quote。</p><div class="callout warning"><strong>范围</strong><p>SSH Resume 当前面向远端 Claude Code 会话。Windows Native Beta 不开放 SSH 设置入口。</p></div></section>`
   }
 }
 
@@ -526,11 +526,11 @@ function cliPage(truth) {
 function troubleshootingPage(truth) {
   const reasons = Object.entries(truth.recoveryMessages).map(([reason, message]) => `<tr id="recovery-${escapeHtml(reason)}"><td><code>${escapeHtml(reason)}</code></td><td>${escapeHtml(message)}</td></tr>`).join('\n')
   return page({
-    title: 'FAQ 与故障排查', description: '会话消失、复活失败原因与 Windows Native Alpha 能力边界。', active: 'troubleshooting',
+    title: 'FAQ 与故障排查', description: '会话消失、复活失败原因与 Windows Native Beta 能力边界。', active: 'troubleshooting',
     content: `<!-- generated recovery table: src/main/recovery-failure-message.ts -->${hero('05 · TROUBLESHOOTING', '先定位失败层，再决定下一步。', '会话“看不见”、备份“还在”和目标客户端“能 Resume”属于三层问题。不要用一次重试掩盖证据缺口。')}
       <section id="missing-session"><h2>为什么会话突然消失？</h2><p>先确认它是从 Swob 视图消失，还是原客户端源文件真的被清理。Claude Code 的本地保留策略可能删除旧源文件：一次真实审计中，1,621 个会话里有 253 个原路径已缺失，但 Vault 备份仍在。这个比例只描述该审计语料，不是每个人的预言。</p><ol class="steps"><li><strong>检查来源排除</strong><p>首启动或设置里排除的来源既不显示也不备份。</p></li><li><strong>搜索 Vault</strong><p>用标题、项目或 transcript 全文确认 Swob 副本是否存在。</p></li><li><strong>检查保留期</strong><p>对 Claude Code 延长本地会话保留期；它只能降低未来风险，不能凭空恢复已删除文件。</p></li><li><strong>需要续接时再复活</strong><p>只有点击 Resume 才进入受控写回；先核对目标实例和冲突。</p></li></ol></section>
       <section id="recovery-failures"><h2>复活失败原因（当前 ${Object.keys(truth.recoveryMessages).length} 类）</h2><p class="section-lead">本表直接从代码消息表生成。任务设计稿曾写“24 类”，当前主干真相源实际是 ${Object.keys(truth.recoveryMessages).length} 类；以后代码增删而文档未更新，生成检查会失败。</p><div class="table-scroll"><table><thead><tr><th>reason</th><th>用户可见说明</th></tr></thead><tbody>${reasons}</tbody></table></div></section>
-      <section id="windows-alpha"><h2>Windows Native Alpha 边界</h2><p>Alpha 只验证 Windows x64 上 Claude Code 与 Codex 的本地浏览、搜索、备份、Resume 和 Library 最小闭环，不是 macOS 功能对等版。</p><div class="card-grid"><article><h3>支持</h3><p>Windows Native x64；Claude Code、Codex；Windows Terminal / PowerShell / cmd Resume。</p></article><article><h3>不支持 / 不在本阶段</h3><p>其他九类 harness、WSL、OneDrive 占位文件、Windows CLI 安装、ARM64、自动更新、签名、SSH 和手机连接。</p></article></div><p>本站只保留用户能力边界；构建、CI 证据与真机验收清单见仓库的 <a href="https://github.com/IvyYang1999/swob/blob/master/docs/windows-alpha.md">Windows Alpha 工程文档</a>，不把 CI 证据包装成已经交付的功能承诺。</p></section>`
+      <section id="windows-alpha"><h2>Windows Native Beta 边界</h2><p>Beta 只验证 Windows x64 上 Claude Code 与 Codex 的本地浏览、搜索、备份、Resume 和 Library 最小闭环，不是 macOS 功能对等版。</p><div class="card-grid"><article><h3>支持</h3><p>Windows Native x64；Claude Code、Codex；Windows Terminal / PowerShell / cmd Resume。</p></article><article><h3>不支持 / 不在本阶段</h3><p>其他九类 harness、WSL、OneDrive 占位文件、Windows CLI 安装、ARM64、自动更新、签名、SSH 和手机连接。</p></article></div><p>本站只保留用户能力边界；构建、CI 证据与真机验收清单见仓库的 <a href="https://github.com/IvyYang1999/swob/blob/master/docs/windows-alpha.md">Windows Beta 工程文档</a>，不把 CI 证据包装成已经交付的功能承诺。</p></section>`
   })
 }
 

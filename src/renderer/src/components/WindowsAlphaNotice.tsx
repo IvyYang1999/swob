@@ -48,7 +48,7 @@ export function WindowsAlphaNotice({ capabilities }: { capabilities: PlatformCap
     >
       <div className="mb-2 flex items-center gap-2 text-xs font-medium text-soft-amber">
         <AlertCircle size={13} />
-        Windows Native Alpha
+        Windows Native Beta
       </div>
       <div className="space-y-1.5 text-[11px] leading-relaxed">
         <p className="flex items-start gap-1.5 text-secondary">

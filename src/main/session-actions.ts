@@ -288,7 +288,7 @@ export function buildResumeAction(
       effectiveSource === 'codex' && surface === 'codex-desktop'
     )
     if (!supportedSurface) {
-      throw new Error(`Windows Alpha 暂不支持 ${surface} Resume`)
+      throw new Error(`Windows Beta 暂不支持 ${surface} Resume`)
     }
   }
 

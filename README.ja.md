@@ -15,7 +15,7 @@ Swob は **12 個のネイティブ形式アダプター**と 1 個の Claude �
 [English](README.md) · [中文](README.zh.md) · [日本語](README.ja.md)
 
 ![最新安定版](https://img.shields.io/github/v/release/IvyYang1999/swob?label=stable)
-![プラットフォーム](https://img.shields.io/badge/platform-macOS-2d2d30)
+![プラットフォーム](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20Beta-2d2d30)
 ![ビルド](https://img.shields.io/github/actions/workflow/status/IvyYang1999/swob/release.yml?label=release)
 ![ダウンロード](https://img.shields.io/github/downloads/IvyYang1999/swob/total)
 ![ライセンス](https://img.shields.io/badge/license-Apache--2.0-5b4fc4)
@@ -126,7 +126,7 @@ Swob は transcript 表示だけではありません。
 
 > 2026-07-24 時点の公開 baseline は、Developer ID 署名・公証済みの v1.3.1 で、Apple Silicon / Intel Mac 向け asset があります。
 
-**動作環境：** Apple Silicon または Intel の macOS。
+**動作環境：** Apple Silicon または Intel の macOS。v1.4.0 以降の Releases では、`swob-<version>-windows-beta-x64.exe` という未署名の Windows x64 Beta も提供予定です。この Beta は Windows ARM64、自動更新、CLI/Skill の自動インストール、WSL、Claude Code/Codex 以外のソースに対応しません。導入前に [Windows Beta ガイド](docs/windows-alpha.md) を確認してください。現在の公開版 v1.3.1 は macOS のみです。
 
 > [!IMPORTANT]
 > **v1.2.0 ユーザーは一度だけ手動移行が必要です。** v1.2.0 は Developer ID trust root より前のため、署名済み release line へ安全に自動更新できません。本リポジトリから対応する v1.3.1 DMG をダウンロードして Swob を一度上書きしてください。既存の v1.3.0 は、隔離され E2E gate 済みの署名 update channel を利用できます。

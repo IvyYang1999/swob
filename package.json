@@ -16,7 +16,7 @@
     "build:unpack": "npm run build && electron-builder --dir && npm run check:package",
     "build:mac": "npm run build && electron-builder --mac",
     "build:mac:verify": "npm run build && electron-builder --mac dmg zip --arm64 --publish never --config.mac.identity=null --config.mac.notarize=false && npm run check:package",
-    "build:win": "npm run build && electron-builder --win nsis --x64 --publish never --config.npmRebuild=false",
+    "build:win": "npm run build && electron-builder --win nsis --x64 --publish never --config.npmRebuild=false && npm run check:package",
     "deploy": "bash scripts/deploy-local.sh",
     "dmg": "bash scripts/build-dmg-desktop.sh",
     "check:conflicts": "node scripts/check-conflict-markers.mjs",

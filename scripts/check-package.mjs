@@ -181,6 +181,10 @@ function checkOuterPayload(resourcesRoot, asarEntries, violations) {
     'app.asar',
     'app.asar.unpacked',
     'app-update.yml',
+    // electron-builder places this fixed NSIS helper next to app.asar in the
+    // installed Windows resources directory. Keep the exception exact: an
+    // arbitrary executable anywhere else must still fail the outer policy.
+    'elevate.exe',
     'icon.icns',
     'LICENSE.txt',
     'NOTICE',

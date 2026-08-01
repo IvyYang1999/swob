@@ -1314,7 +1314,7 @@ ipcMain.handle('icloud:isCloudOnly', (_event, sessionId: string) => {
 
 ipcMain.handle('icloud:download', (_event, sessionId: string) => {
   if (!getPlatformCapabilities().features.cloudPlaceholders) {
-    throw new Error('Windows Alpha 暂不支持 OneDrive/iCloud 占位文件下载')
+    throw new Error('Windows Beta 暂不支持 OneDrive/iCloud 占位文件下载')
   }
   return triggerICloudDownload(sessionId)
 })
@@ -1669,7 +1669,7 @@ function updateCurrentSettingsPreferences(patch: Record<string, unknown>): Recor
 
 function openInTerminal(command: string): void {
   if (process.platform === 'win32') {
-    throw new Error('Windows Alpha 只允许结构化 Resume，不执行原始 shell 命令')
+    throw new Error('Windows Beta 只允许结构化 Resume，不执行原始 shell 命令')
   }
   const preferences = currentSettingsPreferences()
   const settings = normalizeResumeTerminalSettings(preferences)
@@ -2899,7 +2899,7 @@ function installCli(options: {
       cliInstalled: false,
       skillInstalled: false,
       cliPath: null,
-      error: 'Windows Alpha 暂不支持 CLI 安装'
+      error: 'Windows Beta 暂不支持 CLI 安装'
     }
   }
   const home = runtimeHome()
@@ -2959,7 +2959,7 @@ ipcMain.handle('cli:install', () => {
 // --- Auto Update ---
 
 function setupAutoUpdater(): void {
-  // t107 Windows Native Alpha: unsigned internal builds do not auto-update.
+  // Windows Native Beta remains manually distributed while unsigned; no auto-update.
   if (!getPlatformCapabilities().features.autoUpdate) return
   const preferences = currentSettingsPreferences()
   autoUpdater.allowPrerelease = preferences.updateChannel === 'development'

@@ -57,7 +57,7 @@ export function alphaUnsupportedReason(
   platform: NodeJS.Platform = process.platform
 ): string | undefined {
   if (isSessionSourceDiscoverable(source, platform)) return undefined
-  return `Windows Alpha 暂不支持 ${SOURCE_LABELS.get(source) || source}`
+  return `Windows Beta 暂不支持 ${SOURCE_LABELS.get(source) || source}`
 }
 
 export function getPlatformProviderCapabilities(
@@ -111,7 +111,7 @@ export function getPlatformCapabilities(
     providers,
     supportedSources: [...discoverableSources],
     unsupportedSources: [...undiscoverableSources],
-    // t107 Alpha intentionally fails closed for every unimplemented surface.
+    // Windows Beta intentionally fails closed for every unimplemented surface.
     features: {
       wsl: false,
       cloudPlaceholders: false,

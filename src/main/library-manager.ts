@@ -4316,18 +4316,25 @@ function updateSymlinksRecursive(searchDir: string, oldTarget: string, newTarget
 export async function syncLibraryFromSessions(
   sessions: SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
-  onProgress?: (progress: { current: number; total: number; sessionId: string }) => void
+  onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
+  shouldCancel?: () => boolean
 ): Promise<void> {
   return withLibraryWriter('maintenance', () =>
-    syncLibraryFromSessionsUnderWriter(sessions, sessionMeta, onProgress))
+    syncLibraryFromSessionsUnderWriter(sessions, sessionMeta, onProgress, shouldCancel))
 }
 
 async function syncLibraryFromSessionsUnderWriter(
   sessions: SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
-  onProgress?: (progress: { current: number; total: number; sessionId: string }) => void
+  onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
+  shouldCancel?: () => boolean
 ): Promise<void> {
   for (let index = 0; index < sessions.length; index++) {
+    if (shouldCancel?.()) {
+      const error = new Error('Library synchronization cancelled')
+      error.name = 'AbortError'
+      throw error
+    }
     const session = sessions[index]
     const customTitle = sessionMeta[session.sessionId]?.customTitle
     const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
@@ -4399,6 +4406,11 @@ async function syncLibraryFromSessionsUnderWriter(
 
     if (backupNeedsUpdate) {
       await syncBackup(session.sessionId, dirPath)
+    }
+    if (shouldCancel?.()) {
+      const error = new Error('Library synchronization cancelled')
+      error.name = 'AbortError'
+      throw error
     }
     onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
   }

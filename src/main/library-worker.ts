@@ -16,12 +16,13 @@ import { parseSessionFile, buildSessionSummary, resolvePhysicalSessionId } from 
 import { buildCodexSessionSummary } from './codex-loader'
 import { buildCursorSessionSummary } from './cursor-loader'
 import { detectSessionSourceFromPath } from './session-source'
-import { indexParsedSearchSource, indexSearchSource } from './search-index'
-import { synchronizeUsageFacts } from './usage-fact-store'
+import { closeSearchIndex, indexParsedSearchSource, indexSearchSource } from './search-index'
+import { closeUsageFactStore, synchronizeUsageFacts } from './usage-fact-store'
 import type { Folder, SessionSummary } from './types'
 import type { UsageFactSyncResult } from './analysis-contract'
 
-export type LibraryWorkerRequest =
+export type LibraryWorkerRequest = (
+  | { type: 'shutdown' }
   | { type: 'scan'; root: string; ignoreDirs?: string[] }
   | {
       type: 'sync'
@@ -44,8 +45,8 @@ export type LibraryWorkerRequest =
       sessions: SessionSummary[]
       folders: Folder[]
       rebuild?: boolean
-      cancelBuffer?: SharedArrayBuffer
     }
+) & { cancelBuffer?: SharedArrayBuffer }
 
 export interface LibraryWorkerSessionSyncResult {
   summary: SessionSummary
@@ -53,6 +54,7 @@ export interface LibraryWorkerSessionSyncResult {
 }
 
 type LibraryWorkerResult =
+  | { kind: 'shutdown' }
   | { kind: 'tree'; tree: LibraryTree }
   | { kind: 'session-sync'; value: LibraryWorkerSessionSyncResult }
   | { kind: 'usage-facts-sync'; value: UsageFactSyncResult }
@@ -77,13 +79,20 @@ export async function runLibraryWorkerRequest(
   request: LibraryWorkerRequest,
   onProgress?: (progress: LibraryWorkerProgress) => void
 ): Promise<LibraryWorkerResult> {
+  const cancelFlag = request.cancelBuffer ? new Int32Array(request.cancelBuffer) : null
+  const shouldCancel = cancelFlag ? () => Atomics.load(cancelFlag, 0) === 1 : undefined
+  throwIfWorkerCancelled(shouldCancel)
+  if (request.type === 'shutdown') {
+    closeUsageFactStore()
+    closeSearchIndex()
+    return { kind: 'shutdown' }
+  }
   if (request.type === 'usage-facts-sync') {
-    const cancelFlag = request.cancelBuffer ? new Int32Array(request.cancelBuffer) : null
     return {
       kind: 'usage-facts-sync',
       value: synchronizeUsageFacts(request.sessions, request.folders, {
         rebuild: request.rebuild,
-        shouldCancel: cancelFlag ? () => Atomics.load(cancelFlag, 0) === 1 : undefined
+        shouldCancel
       })
     }
   }
@@ -94,7 +103,8 @@ export async function runLibraryWorkerRequest(
   if (request.type === 'scan') return { kind: 'tree', tree: scanLibrary() }
   if (request.type === 'sync') {
     scanLibrary()
-    await syncLibraryFromSessions(request.sessions, request.sessionMeta, onProgress)
+    await syncLibraryFromSessions(request.sessions, request.sessionMeta, onProgress, shouldCancel)
+    throwIfWorkerCancelled(shouldCancel)
     return { kind: 'tree', tree: scanLibrary() }
   }
   const detectedSource = request.source === 'transcript'
@@ -112,6 +122,7 @@ export async function runLibraryWorkerRequest(
     summary = buildSessionSummary(request.filePath, parsedRaw, true, physicalSessionId)
   }
   if (!summary) throw new Error(`Unable to build session summary: ${request.filePath}`)
+  throwIfWorkerCancelled(shouldCancel)
 
   let dirPath: string | undefined
   if (request.maintainLibrary !== false) {
@@ -129,6 +140,7 @@ export async function runLibraryWorkerRequest(
       return maintainedDir
     })
   }
+  throwIfWorkerCancelled(shouldCancel)
   if (parsedRaw) {
     await indexParsedSearchSource({
       filePath: request.filePath,
@@ -142,7 +154,15 @@ export async function runLibraryWorkerRequest(
       source: detectedSource || undefined
     })
   }
+  throwIfWorkerCancelled(shouldCancel)
   return { kind: 'session-sync', value: { summary, dirPath } }
+}
+
+function throwIfWorkerCancelled(shouldCancel?: () => boolean): void {
+  if (!shouldCancel?.()) return
+  const error = new Error('Library worker request cancelled')
+  error.name = 'AbortError'
+  throw error
 }
 
 if (!isMainThread && parentPort) {
@@ -261,8 +281,23 @@ export class LibraryWorkerClient {
       })
     }
 
+    await this.requestShutdown(worker)
     this.worker = null
     await worker.terminate()
+  }
+
+  private requestShutdown(worker: Worker): Promise<void> {
+    const requestId = this.nextRequestId++
+    return new Promise<void>((resolve, reject) => {
+      this.pending.set(requestId, {
+        resolve: (result) => {
+          if (result.kind === 'shutdown') resolve()
+          else reject(new Error('Library worker returned an invalid shutdown result'))
+        },
+        reject
+      })
+      worker.postMessage({ requestId, request: { type: 'shutdown' } } satisfies WorkerEnvelope)
+    })
   }
 
   private request(
@@ -272,12 +307,8 @@ export class LibraryWorkerClient {
     if (this.closing) return Promise.reject(new Error('Library worker is closing'))
     const worker = this.ensureWorker()
     const requestId = this.nextRequestId++
-    const cancelFlag = request.type === 'usage-facts-sync'
-      ? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
-      : undefined
-    const workerRequest = cancelFlag
-      ? { ...request, cancelBuffer: cancelFlag.buffer as SharedArrayBuffer }
-      : request
+    const cancelFlag = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+    const workerRequest = { ...request, cancelBuffer: cancelFlag.buffer as SharedArrayBuffer }
     return new Promise<LibraryWorkerResult>((resolve, reject) => {
       this.pending.set(requestId, { resolve, reject, onProgress, cancelFlag })
       worker.postMessage({ requestId, request: workerRequest } satisfies WorkerEnvelope)

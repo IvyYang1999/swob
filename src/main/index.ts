@@ -95,12 +95,13 @@ import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
 import { detectSessionSourceFromPath } from './session-source'
 import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
-import { synchronizeSearchSources } from './search-index'
+import { closeSearchIndex, synchronizeSearchSources } from './search-index'
 import { cancelCanonicalProviders } from './provider-runtime'
 import { closeCanonicalSessionStore } from './canonical-store'
 import { buildInsights } from './insights'
 import {
   drilldownInsights,
+  closeUsageFactStore,
   hasCompletedUsageFactSnapshot,
   initializeUsageFactStore,
   queryInsights,
@@ -241,6 +242,7 @@ function mainT(key: string, params?: Record<string, string | number>): string {
 let libraryWatcher: LibraryDirectoryWatcher | null = null
 let transcriptWatcher: TranscriptWatcher | null = null
 let libraryWorker: LibraryWorkerClient | null = null
+let usageFactWorker: LibraryWorkerClient | null = null
 let sessionSyncCoordinator: SessionSyncCoordinator | null = null
 let libraryRescanController: LibraryRescanController | null = null
 let pendingSpotlightNavigationSessionId: string | null = null
@@ -539,7 +541,7 @@ function currentAnalysisFolders(): Folder[] {
 }
 
 /**
- * Serialize fact writes in the Library worker. The query path only waits for
+ * Serialize fact writes in a dedicated worker. The query path only waits for
  * the current snapshot; it never parses source JSONL or performs a new scan.
  */
 function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
@@ -555,7 +557,10 @@ function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<Usa
         // before the worker starts its long write transaction. Subsequent
         // Insights reads can then use the last committed snapshot immediately.
         initializeUsageFactStore()
-        const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+        // Usage analytics has its own queue: a first-run Library maintenance
+        // pass can touch thousands of packages and must not head-of-line block
+        // the committed Insights snapshot for minutes.
+        const worker = usageFactWorker || (usageFactWorker = new LibraryWorkerClient())
         try {
           const result = await worker.syncUsageFacts(
             getLibraryRoot(),
@@ -661,6 +666,7 @@ function cleanupRuntimeResources(): Promise<void> {
   const currentTranscriptWatcher = transcriptWatcher
   transcriptWatcher = null
   const currentLibraryWorker = libraryWorker
+  const currentUsageFactWorker = usageFactWorker
   const currentUsageFactSyncRunner = usageFactSyncRunner
   usageFactSyncRunner = null
   const currentSessionSyncCoordinator = sessionSyncCoordinator
@@ -674,7 +680,10 @@ function cleanupRuntimeResources(): Promise<void> {
   // LibraryWorkerClient refuses new requests once close() begins. Unlike the
   // other resources this promise must not be deadline-cancelled because
   // terminating active better-sqlite3 work can abort the whole process.
-  const libraryWorkerClosePromise = currentLibraryWorker?.close() || Promise.resolve()
+  const libraryWorkerClosePromise = Promise.all([
+    currentLibraryWorker?.close() || Promise.resolve(),
+    currentUsageFactWorker?.close() || Promise.resolve()
+  ])
 
   runtimeCleanupPromise = runRuntimeCleanup([
     { name: 'agent-child', timeoutMs: 800, run: shutdownAgentRuntime },
@@ -724,6 +733,9 @@ function cleanupRuntimeResources(): Promise<void> {
     writeLifecycleLog('library-worker-drain-start')
     await libraryWorkerClosePromise
     if (libraryWorker === currentLibraryWorker) libraryWorker = null
+    if (usageFactWorker === currentUsageFactWorker) usageFactWorker = null
+    closeUsageFactStore()
+    closeSearchIndex()
     writeLifecycleLog('library-worker-drain-complete', { durationMs: Date.now() - startedAt })
   })
   return runtimeCleanupPromise

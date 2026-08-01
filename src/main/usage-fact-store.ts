@@ -532,8 +532,12 @@ function foldersBySession(folders: Folder[]): Map<string, string[]> {
   return result
 }
 
-function insertFact(db: Database.Database, fact: UsageFact): void {
-  db.prepare(`
+function prepareUsageFactWriter(db: Database.Database): {
+  insertFact: Database.Statement
+  insertHistory: Database.Statement
+} {
+  return {
+    insertFact: db.prepare(`
     INSERT INTO usage_facts(
       event_id, billing_fact_id, billing_included,
       occurred_at, occurred_day, occurred_hour, source_client,
@@ -557,7 +561,21 @@ function insertFact(db: Database.Database, fact: UsageFact): void {
       @subscriptionAllocatedUsd, @priceRevision, @priceSnapshotHash,
       @pricingTraceJson, @revisionNoticeJson, @revisionNoticeZh, @revisionNoticeEn
     )
-  `).run({
+  `),
+    insertHistory: db.prepare(`
+      INSERT OR IGNORE INTO usage_valuation_history(
+        event_id, session_id, price_revision, price_snapshot_hash,
+        valuation_hash, valuation_json, recorded_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+  }
+}
+
+function insertFact(
+  writer: ReturnType<typeof prepareUsageFactWriter>,
+  fact: UsageFact
+): void {
+  writer.insertFact.run({
     ...fact,
     occurredHour: fact.occurredHour ?? -1,
     model: fact.model || UNKNOWN_MODEL,
@@ -574,15 +592,9 @@ function insertFact(db: Database.Database, fact: UsageFact): void {
     revisionNoticeZh: fact.revisionNotice?.notice['zh-CN'] ?? null,
     revisionNoticeEn: fact.revisionNotice?.notice.en ?? null
   })
-  const insertHistory = db.prepare(`
-    INSERT OR IGNORE INTO usage_valuation_history(
-      event_id, session_id, price_revision, price_snapshot_hash,
-      valuation_hash, valuation_json, recorded_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-  `)
   const recordedAt = new Date().toISOString()
   for (const entry of fact.valuationHistory) {
-    insertHistory.run(
+    writer.insertHistory.run(
       fact.eventId,
       fact.sessionId,
       entry.priceRevision,
@@ -707,6 +719,7 @@ export function synchronizeUsageFacts(
 
   const sync = db.transaction(() => {
     throwIfUsageFactSyncCancelled(options.shouldCancel)
+    const factWriter = prepareUsageFactWriter(db)
     db.prepare('DELETE FROM usage_folders').run()
     const insertFolderName = db.prepare('INSERT INTO usage_folders(folder_id, name) VALUES (?, ?)')
     for (const folder of folders) {
@@ -790,7 +803,7 @@ export function synchronizeUsageFacts(
         db.prepare('DELETE FROM usage_session_activity WHERE session_id = ?').run(sessionId)
         for (const fact of facts) {
           throwIfUsageFactSyncCancelled(options.shouldCancel)
-          insertFact(db, fact)
+          insertFact(factWriter, fact)
         }
         const insertActivity = db.prepare(
           'INSERT INTO usage_session_activity(session_id, occurred_day) VALUES (?, ?)'

@@ -32,7 +32,7 @@ function stringEnvironment(): Record<string, string> {
 function createProductionHomeFixture(): { project: string } {
   sandboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-windows-beta-packaged-'))
   fixtureHome = path.join(sandboxRoot, '用户 Home')
-  libraryRoot = path.join(sandboxRoot, 'Local Library')
+  libraryRoot = path.join(fixtureHome, 'Local Library')
   const project = path.join(fixtureHome, '项目 with space')
   for (const dir of [fixtureHome, libraryRoot, project]) fs.mkdirSync(dir, { recursive: true })
 

@@ -36,10 +36,10 @@ producer schema 或本机真实会话验证。解析器直接生成 Provider Pro
 |---|---|---|
 | 发现 | exact（参考布局） | 严格发现主 JSONL 与嵌套 subagent；sidecar 纳入复合 fingerprint；真实 producer 尚待采样 |
 | 元数据 | exact-if-present | 保留 sidecar `title`、`working_dir`、`fork_from`、`parent_session_id`；不补造缺失字段 |
-| 消息 | exact-if-present | 按 JSONL 顺序保留 text/thinking/reasoning/unknown；未知事件走 v2 `unknown` |
+| 消息 | exact-if-present | 按 JSONL 顺序保留 text/thinking/reasoning/unknown；超长已知正文按 UTF-8 边界拆成连续事件，不截断正文；未知事件走 v2 `unknown` |
 | 工具 | exact-if-present | 保留 tool call/result 原顺序与 raw name；通过三层工具注册表映射 Read/Write/Edit/Bash |
 | 系统 + compact | unavailable | 未发现权威 compact 边界或模型当时上下文；归档时间线存在，但 context state 明确为 `unknown` |
-| Token | exact-if-present / unavailable-if-absent | 仅透传持久化整数 counter；不推导 cache 加总、不估成本、无字段则不生成 usage |
+| Token | exact-if-present / unavailable-if-absent | 仅在 v2 透传持久化整数 counter；`input_tokens` 记为 provider total，cache 与 input 的集合关系仍未知；不推导 uncached/cache 加总、不估成本，v1/UI 兼容视图因 provider-defined 关系 fail-closed 为 unavailable |
 | 关系 | exact-if-present | sidecar fork/parent 与路径 subagent 形成显式 branch/lifecycle；不猜未持久化关系 |
 | Resume | experimental（CLI）/ unavailable（IDE） | 官方文档有 `qodercli -r`，本机无 binary；契约要求 binary/help/source preflight 与恢复后 anchor 校验；IDE 打开任务不计 Resume |
 
@@ -54,6 +54,11 @@ producer schema 或本机真实会话验证。解析器直接生成 Provider Pro
 
 格式布局受 AgentsView MIT 实现启发，归属与固定提交记录在
 `testdata/qoder/NOTICE`。
+
+资源边界也由合成测试固定：每个会话的 transcript + sidecar 合计超过
+50 MiB 时在读文件前 fail-closed；每个分片同时满足 1,000 事件上限与
+Provider Protocol v2 envelope 字节上限。Opaque unknown/tool JSON 会按
+string/depth/array/object/node 预算有界投影并产生截断诊断；该降级不用于已知正文。
 
 ## 仍需 yyt 提供的最小脱敏采样
 

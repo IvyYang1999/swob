@@ -252,6 +252,36 @@ describe('session action context', () => {
     }
   })
 
+  it('Qoder Resume 使用官方 qodercli -r 并保留 cwd', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-qoder-resume-'))
+    const sessionId = '11111111-1111-4111-8111-111111111111'
+    try {
+      expect(buildResumeCommand(sessionId, undefined, dir, 'qoder'))
+        .toBe(`cd ${shellQuote(dir)} && qodercli -r ${shellQuote(sessionId)}`)
+      expect(buildResumeLaunchSpec(sessionId, undefined, dir, 'qoder')).toEqual({
+        executable: 'qodercli',
+        args: ['-r', sessionId],
+        cwd: dir,
+        target: 'native',
+        keepOpen: true
+      })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('Qoder 子代理与未验证 Fork 不伪造可执行入口', () => {
+    const subagentId = '11111111-1111-4111-8111-111111111111:subagent:agent-research'
+    expect(() => buildResumeCommand(subagentId, undefined, undefined, 'qoder'))
+      .toThrow('Qoder CLI 没有已验证的子代理 Resume 入口')
+    expect(() => buildResumeLaunchSpec(subagentId, undefined, undefined, 'qoder'))
+      .toThrow('Qoder CLI 没有已验证的子代理 Resume 入口')
+    expect(() => buildForkCommand('11111111-1111-4111-8111-111111111111', undefined, undefined, 'qoder'))
+      .toThrow('session-fork-unavailable:qoder')
+    expect(() => buildForkLaunchSpec('11111111-1111-4111-8111-111111111111', undefined, undefined, 'qoder'))
+      .toThrow('session-fork-unavailable:qoder')
+  })
+
   it('builds a Codex Desktop deep link only for a validated Codex session id', () => {
     expect(buildResumeAction(
       '019abcde-1234-7000-8000-0123456789ab',

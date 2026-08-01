@@ -31,6 +31,15 @@ export const QODER_FORMAT_VERSION = 'qoder-project-jsonl-compound-reference-v1'
 export const QODER_PARSER_DATA_VERSION = '1'
 export const QODER_CHUNK_EVENT_LIMIT = 1_000
 export const QODER_CHUNK_BYTE_LIMIT = PROVIDER_RESOURCE_LIMITS.maxEnvelopeBytes - 128 * 1024
+export const QODER_SESSION_INPUT_LIMIT_BYTES = 50 * 1024 * 1024
+const QODER_JSON_BYTE_LIMIT = 192 * 1024
+const QODER_JSON_MAX_DEPTH = 24
+const QODER_JSON_MAX_NODES = 4_096
+const QODER_JSON_MAX_ARRAY_ITEMS = 256
+const QODER_JSON_MAX_OBJECT_PROPERTIES = 128
+const QODER_JSON_MAX_STRING_BYTES = 64 * 1024
+const QODER_TEXT_FRAGMENT_MAX_BYTES = 192 * 1024
+const QODER_DIAGNOSTIC_LIMIT = 128
 
 const QODER_FIXTURE = 'testdata/qoder/-workspace-synthetic-qoder/11111111-1111-4111-8111-111111111111.jsonl'
 const QODER_CONFORMANCE_PREFIX = 'PPV2-QODER'
@@ -128,7 +137,7 @@ export const QODER_PROVIDER_MANIFEST: ProviderManifest = {
     ),
     usage: capability(
       'experimental',
-      'Persisted message.usage counters are decoded without estimation; no public producer schema proves their availability or semantics across Qoder versions.',
+      'Persisted message.usage counters are preserved in v2 without estimation; no producer schema proves cache relations, so the compatible product aggregate fails closed as unavailable.',
       'USAGE-IF-PRESENT',
       'upstream-source',
       AGENTSVIEW_QODER_SOURCE
@@ -201,12 +210,129 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function asJsonValue(value: unknown): JsonValue {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  if (Array.isArray(value)) return value.map(asJsonValue)
-  if (!isObject(value)) return String(value)
-  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, asJsonValue(child)]))
+function truncateUtf8(value: string, maxBytes: number): { value: string; truncated: boolean } {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return { value, truncated: false }
+  const marker = '…'
+  const contentBudget = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf8'))
+  let low = 0
+  let high = Math.min(value.length, contentBudget)
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (Buffer.byteLength(value.slice(0, middle), 'utf8') <= contentBudget) low = middle
+    else high = middle - 1
+  }
+  if (low > 0 && /[\uD800-\uDBFF]/.test(value[low - 1])) low--
+  return { value: `${value.slice(0, low)}${marker}`, truncated: true }
+}
+
+function splitUtf8(value: string, maxBytes: number): string[] {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return [value]
+  const fragments: string[] = []
+  let start = 0
+  while (start < value.length) {
+    let low = start + 1
+    let high = Math.min(value.length, start + maxBytes)
+    let end = start
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2)
+      if (Buffer.byteLength(value.slice(start, middle), 'utf8') <= maxBytes) {
+        end = middle
+        low = middle + 1
+      } else {
+        high = middle - 1
+      }
+    }
+    if (end < value.length && end > start &&
+      /[\uD800-\uDBFF]/.test(value[end - 1]) && /[\uDC00-\uDFFF]/.test(value[end])) {
+      end--
+    }
+    if (end <= start) end = start + 1
+    fragments.push(value.slice(start, end))
+    start = end
+  }
+  return fragments
+}
+
+function boundedText(value: string, maxBytes: number, onTruncated: () => void): string {
+  const result = truncateUtf8(value, maxBytes)
+  if (result.truncated) onTruncated()
+  return result.value
+}
+
+function boundedIdentifier(value: string, onTruncated: () => void): string {
+  if (Buffer.byteLength(value, 'utf8') <= 1_024) return value
+  onTruncated()
+  const prefix = truncateUtf8(value, 960).value
+  return `${prefix}:${sha256(value).slice(0, 32)}`
+}
+
+function asJsonValue(value: unknown, onTruncated: () => void = () => {}): JsonValue {
+  const state = { nodes: 0, stringBytes: 0, truncated: false }
+  const markTruncated = (): void => { state.truncated = true }
+
+  const visit = (input: unknown, depth: number): JsonValue => {
+    state.nodes++
+    if (state.nodes > QODER_JSON_MAX_NODES || depth > QODER_JSON_MAX_DEPTH) {
+      markTruncated()
+      return '[truncated:resource-limit]'
+    }
+    if (input === null || typeof input === 'boolean') return input
+    if (typeof input === 'number') return Number.isFinite(input) ? input : null
+    if (typeof input === 'string') {
+      const remaining = Math.max(0, QODER_JSON_BYTE_LIMIT - state.stringBytes)
+      const result = truncateUtf8(input, Math.min(QODER_JSON_MAX_STRING_BYTES, remaining))
+      state.stringBytes += Buffer.byteLength(result.value, 'utf8')
+      if (result.truncated) markTruncated()
+      return result.value
+    }
+    if (Array.isArray(input)) {
+      if (input.length > QODER_JSON_MAX_ARRAY_ITEMS) markTruncated()
+      return input.slice(0, QODER_JSON_MAX_ARRAY_ITEMS).map((child) => visit(child, depth + 1))
+    }
+    if (!isObject(input)) return visit(String(input), depth)
+
+    const entries = Object.entries(input)
+    if (entries.length > QODER_JSON_MAX_OBJECT_PROPERTIES) markTruncated()
+    const output = Object.create(null) as Record<string, JsonValue>
+    for (const [index, [rawKey, child]] of entries.slice(0, QODER_JSON_MAX_OBJECT_PROPERTIES).entries()) {
+      const keyResult = truncateUtf8(rawKey, 128)
+      if (keyResult.truncated) markTruncated()
+      let key = keyResult.value || `field-${index}`
+      if (Object.prototype.hasOwnProperty.call(output, key)) key = `field-${index}-${sha256(rawKey).slice(0, 12)}`
+      output[key] = visit(child, depth + 1)
+    }
+    return output
+  }
+
+  const normalized = visit(value, 0)
+  const encoded = JSON.stringify(normalized)
+  if (Buffer.byteLength(encoded, 'utf8') > QODER_JSON_BYTE_LIMIT) {
+    markTruncated()
+    const preview = truncateUtf8(encoded, 64 * 1024).value
+    if (state.truncated) onTruncated()
+    return {
+      _swobTruncated: true,
+      sha256: sha256(encoded),
+      preview
+    }
+  }
+  if (state.truncated) onTruncated()
+  return normalized
+}
+
+function addDiagnostic(diagnostics: Diagnostic[], diagnostic: Diagnostic): void {
+  if (diagnostics.length < QODER_DIAGNOSTIC_LIMIT - 1) {
+    diagnostics.push(diagnostic)
+    return
+  }
+  if (!diagnostics.some((entry) => entry.code === 'qoder-diagnostics-truncated')) {
+    diagnostics.push({
+      level: 'warning',
+      code: 'qoder-diagnostics-truncated',
+      message: 'Additional parser diagnostics were suppressed to stay within protocol resource limits.',
+      eventId: null
+    })
+  }
 }
 
 function sha256(value: string | Uint8Array): string {
@@ -336,17 +462,45 @@ async function sourceForTranscript(transcriptPath: string): Promise<SourceRef> {
   }
 }
 
+async function memberInputBytes(source: SourceRef, signal: AbortSignal): Promise<number> {
+  if (signal.aborted) throw new Error('cancelled')
+  const members = sourceMembers(source)
+  const sizes = await Promise.all([
+    fs.promises.stat(members.transcriptPath).then((stat) => stat.size),
+    members.sidecarPath
+      ? fs.promises.stat(members.sidecarPath).then((stat) => stat.size)
+      : Promise.resolve(0)
+  ])
+  const total = sizes[0] + sizes[1]
+  if (!Number.isSafeInteger(total) || total < 0) {
+    throw new Error(`qoder-session-input-size-invalid:${total}`)
+  }
+  return total
+}
+
+async function assertMemberInputLimit(source: SourceRef, signal: AbortSignal): Promise<void> {
+  const total = await memberInputBytes(source, signal)
+  if (total > QODER_SESSION_INPUT_LIMIT_BYTES) {
+    throw new Error(`qoder-session-input-limit-exceeded:${total}:${QODER_SESSION_INPUT_LIMIT_BYTES}`)
+  }
+}
+
 async function readMembers(source: SourceRef, signal: AbortSignal): Promise<{
   transcript: Buffer
   sidecar: Buffer | null
   members: SourceMembers
 }> {
   if (signal.aborted) throw new Error('cancelled')
+  await assertMemberInputLimit(source, signal)
   const members = sourceMembers(source)
   const transcript = await fs.promises.readFile(members.transcriptPath, { signal })
   const sidecar = members.sidecarPath
     ? await fs.promises.readFile(members.sidecarPath, { signal })
     : null
+  const actualBytes = transcript.length + (sidecar?.length || 0)
+  if (actualBytes > QODER_SESSION_INPUT_LIMIT_BYTES) {
+    throw new Error(`qoder-session-input-limit-exceeded:${actualBytes}:${QODER_SESSION_INPUT_LIMIT_BYTES}`)
+  }
   return { transcript, sidecar, members }
 }
 
@@ -380,14 +534,14 @@ function parseLines(bytes: Buffer, diagnostics: Diagnostic[]): ParsedLine[] {
       try {
         const parsed = JSON.parse(trimmed)
         if (isObject(parsed)) lines.push({ value: parsed, raw: trimmed, offset: start, length: end - start, lineNumber })
-        else diagnostics.push({
+        else addDiagnostic(diagnostics, {
           level: 'warning',
           code: 'qoder-jsonl-non-object',
           message: `Ignored non-object JSONL record at line ${lineNumber}.`,
           eventId: null
         })
       } catch {
-        diagnostics.push({
+        addDiagnostic(diagnostics, {
           level: 'warning',
           code: 'qoder-jsonl-malformed',
           message: `Ignored malformed JSONL record at line ${lineNumber}.`,
@@ -406,7 +560,7 @@ function readSidecar(bytes: Buffer | null, diagnostics: Diagnostic[]): QoderSide
     const value = JSON.parse(bytes.toString('utf8'))
     return isObject(value) ? value as QoderSidecar : null
   } catch {
-    diagnostics.push({
+    addDiagnostic(diagnostics, {
       level: 'warning',
       code: 'qoder-sidecar-malformed',
       message: 'Ignored malformed Qoder session sidecar metadata.',
@@ -487,10 +641,11 @@ function usageFrom(
     turnId: messageId,
     modelId,
     input: {
-      // Qoder has no public producer schema proving whether cache fields are
-      // subsets or additive, so no synthetic aggregate is manufactured.
-      total: null,
-      uncached: input,
+      // `input_tokens` is persisted as a provider total. No producer schema
+      // proves that cache fields are subsets or additive, so uncached input is
+      // not derived and compatibility projections must fail closed.
+      total: input,
+      uncached: null,
       cacheRead,
       cacheWrite5m: cacheWrite,
       cacheWrite1h: null
@@ -556,7 +711,14 @@ export async function parseQoderSourceV2(
     message: 'Parsed against a pinned independent reference layout; no public first-party producer schema was available.',
     eventId: null
   }]
+  let resourceLimited = false
+  const markResourceLimited = (): void => { resourceLimited = true }
+  const safeJson = (value: unknown): JsonValue => asJsonValue(value, markResourceLimited)
+  const safeText = (value: string, maxBytes: number): string =>
+    boundedText(value, maxBytes, markResourceLimited)
+  const safeIdentifier = (value: string): string => boundedIdentifier(value, markResourceLimited)
   const sidecar = readSidecar(sidecarBytes, diagnostics)
+  const parsedLines = parseLines(transcript, diagnostics)
   const parentSessionId = parentFrom(sidecar, ids.parentSessionId)
   const identity = identityFor(source, ids.logicalSessionId, parentSessionId)
   const transcriptLocatorHash = sha256(pathToFileURL(members.transcriptPath).href)
@@ -606,24 +768,45 @@ export async function parseQoderSourceV2(
     return event
   }
 
-  if (sidecar) {
-    const raw = sidecarBytes!.toString('utf8')
-    emit({
-      sourceRecordId: 'sidecar',
-      raw,
-      offset: 0,
-      length: sidecarBytes!.length,
-      messageId: null,
-      blockIndex: null,
-      timestamp: null,
-      actor: 'system',
-      kind: 'unknown',
-      payload: { rawType: 'qoder.session_metadata', rawPayload: asJsonValue(sidecar) },
-      visibility: 'collapsed',
-      classification: 'lifecycle',
-      rawRef: { locatorHash: sidecarLocatorHash!, offset: 0, length: sidecarBytes!.length }
-    })
-  }
+  const firstTranscriptCwd = parsedLines.find((line) =>
+    typeof line.value.cwd === 'string' && line.value.cwd)?.value.cwd
+  const workingDirectory = sidecar
+    ? typeof sidecar.working_dir === 'string' && sidecar.working_dir
+      ? sidecar.working_dir
+      : null
+    : typeof firstTranscriptCwd === 'string'
+      ? firstTranscriptCwd
+      : null
+  const metadataRaw = sidecar
+    ? sidecarBytes!.toString('utf8')
+    : parsedLines[0]?.raw || members.transcriptPath
+  emit({
+    sourceRecordId: 'metadata',
+    raw: metadataRaw,
+    offset: sidecar ? 0 : parsedLines[0]?.offset || 0,
+    length: sidecar ? sidecarBytes!.length : parsedLines[0]?.length || 0,
+    messageId: null,
+    blockIndex: null,
+    timestamp: null,
+    actor: 'system',
+    kind: 'session.metadata',
+    payload: {
+      title: typeof sidecar?.title === 'string' && sidecar.title ? safeText(sidecar.title, 16 * 1024) : null,
+      cwd: workingDirectory ? [safeText(workingDirectory, 16 * 1024)] : [],
+      projectPath: workingDirectory ? safeText(workingDirectory, 16 * 1024) : null
+    },
+    visibility: 'collapsed',
+    classification: 'lifecycle',
+    rawRef: sidecar && sidecarLocatorHash
+      ? { locatorHash: sidecarLocatorHash, offset: 0, length: sidecarBytes!.length }
+      : parsedLines[0]
+        ? {
+            locatorHash: transcriptLocatorHash,
+            offset: parsedLines[0].offset,
+            length: parsedLines[0].length
+          }
+        : null
+  })
 
   if (parentSessionId) {
     const relationshipType = ids.isSubagent
@@ -653,17 +836,18 @@ export async function parseQoderSourceV2(
     })
   }
 
-  for (const line of parseLines(transcript, diagnostics)) {
+  for (const line of parsedLines) {
     if (signal.aborted) throw new Error('cancelled')
     const row = line.value
-    const rowType = typeof row.type === 'string' ? row.type : 'unknown'
+    const rowType = typeof row.type === 'string' ? safeText(row.type, 1_024) : 'unknown'
     const message = isObject(row.message) ? row.message : null
     const role = typeof message?.role === 'string' ? message.role : rowType
-    const messageId = typeof row.uuid === 'string' && row.uuid
+    const rawMessageId = typeof row.uuid === 'string' && row.uuid
       ? row.uuid
       : typeof message?.id === 'string' && message.id
         ? message.id
         : `line:${line.lineNumber}`
+    const messageId = safeIdentifier(rawMessageId)
     const sourceRecordId = messageId
     const eventTimestamp = timestamp(row.timestamp)
     const content = message?.content
@@ -681,15 +865,20 @@ export async function parseQoderSourceV2(
         timestamp: eventTimestamp,
         actor: role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'unknown',
         kind: 'unknown',
-        payload: { rawType, rawPayload: asJsonValue(rawPayload) },
+        payload: { rawType: safeText(rawType, 1_024), rawPayload: safeJson(rawPayload) },
         visibility: 'collapsed',
         classification: 'unknown'
       })
     }
 
-    const parsePart = (part: unknown): void => {
-      if (typeof part === 'string') {
-        emittedKnownBlock = true
+    const emitKnownText = (
+      kind: 'message.text' | 'message.thinking' | 'message.reasoning',
+      actor: 'user' | 'assistant',
+      text: string,
+      visibility: CanonicalEvent['visibility'] = 'primary'
+    ): void => {
+      emittedKnownBlock = true
+      for (const fragment of splitUtf8(text, QODER_TEXT_FRAGMENT_MAX_BYTES)) {
         emit({
           sourceRecordId,
           raw: line.raw,
@@ -698,11 +887,18 @@ export async function parseQoderSourceV2(
           messageId,
           blockIndex: blockIndex++,
           timestamp: eventTimestamp,
-          actor: role === 'assistant' ? 'assistant' : 'user',
-          kind: 'message.text',
-          payload: { text: part },
+          actor,
+          kind,
+          payload: { text: fragment },
+          visibility,
           classification: 'user-content'
         })
+      }
+    }
+
+    const parsePart = (part: unknown): void => {
+      if (typeof part === 'string') {
+        emitKnownText('message.text', role === 'assistant' ? 'assistant' : 'user', part)
         return
       }
       if (!isObject(part)) {
@@ -711,52 +907,32 @@ export async function parseQoderSourceV2(
       }
       const partType = typeof part.type === 'string' ? part.type : 'unknown'
       if (partType === 'text' && typeof part.text === 'string') {
-        emittedKnownBlock = true
-        emit({
-          sourceRecordId,
-          raw: line.raw,
-          offset: line.offset,
-          length: line.length,
-          messageId,
-          blockIndex: blockIndex++,
-          timestamp: eventTimestamp,
-          actor: role === 'assistant' ? 'assistant' : 'user',
-          kind: 'message.text',
-          payload: { text: part.text },
-          classification: 'user-content'
-        })
+        emitKnownText('message.text', role === 'assistant' ? 'assistant' : 'user', part.text)
         return
       }
       if ((partType === 'thinking' || partType === 'reasoning') &&
         (typeof part.thinking === 'string' || typeof part.text === 'string')) {
-        emittedKnownBlock = true
-        emit({
-          sourceRecordId,
-          raw: line.raw,
-          offset: line.offset,
-          length: line.length,
-          messageId,
-          blockIndex: blockIndex++,
-          timestamp: eventTimestamp,
-          actor: 'assistant',
-          kind: partType === 'thinking' ? 'message.thinking' : 'message.reasoning',
-          payload: { text: String(part.thinking ?? part.text) },
-          visibility: 'collapsed',
-          classification: 'user-content'
-        })
+        emitKnownText(
+          partType === 'thinking' ? 'message.thinking' : 'message.reasoning',
+          'assistant',
+          String(part.thinking ?? part.text),
+          'collapsed'
+        )
         return
       }
       if (partType === 'tool_use' || partType === 'toolUse' || partType === 'tool_call') {
-        const rawName = typeof part.name === 'string' && part.name ? part.name : 'unknown'
+        const rawName = typeof part.name === 'string' && part.name
+          ? safeText(part.name, 1_024)
+          : 'unknown'
         const callId = typeof part.id === 'string' && part.id
-          ? part.id
+          ? safeIdentifier(part.id)
           : `qoder-call:${sourceRecordId}:${blockIndex}`
         const resolved = registry.resolve({
           providerId: QODER_PROVIDER_ID,
           formatVersion: QODER_FORMAT_VERSION,
           rawName,
           callId,
-          input: asJsonValue(part.input ?? part.arguments ?? {})
+          input: safeJson(part.input ?? part.arguments ?? {})
         })
         emittedKnownBlock = true
         emit({
@@ -773,7 +949,7 @@ export async function parseQoderSourceV2(
             callId,
             rawName,
             semanticToolId: resolved.semanticToolId,
-            input: resolved.normalizedInput
+            input: safeJson(resolved.normalizedInput)
           },
           classification: 'user-content'
         })
@@ -781,9 +957,9 @@ export async function parseQoderSourceV2(
       }
       if (partType === 'tool_result' || partType === 'toolResult') {
         const callId = typeof part.tool_use_id === 'string' && part.tool_use_id
-          ? part.tool_use_id
+          ? safeIdentifier(part.tool_use_id)
           : typeof part.toolCallId === 'string' && part.toolCallId
-            ? part.toolCallId
+            ? safeIdentifier(part.toolCallId)
             : `qoder-orphan:${sourceRecordId}:${blockIndex}`
         const errorFlag = typeof part.is_error === 'boolean' ? part.is_error : null
         emittedKnownBlock = true
@@ -799,7 +975,7 @@ export async function parseQoderSourceV2(
           kind: 'tool.result',
           payload: {
             callId,
-            output: asJsonValue(part.content ?? part.output ?? null),
+            output: safeJson(part.content ?? part.output ?? null),
             isError: errorFlag,
             state: errorFlag === true ? 'error' : 'complete'
           },
@@ -826,7 +1002,7 @@ export async function parseQoderSourceV2(
         timestamp: eventTimestamp,
         actor: rowType === 'agent-setting' ? 'system' : 'unknown',
         kind: 'unknown',
-        payload: { rawType: `qoder.${rowType}`, rawPayload: asJsonValue(row) },
+        payload: { rawType: safeText(`qoder.${rowType}`, 1_024), rawPayload: safeJson(row) },
         visibility: 'collapsed',
         classification: rowType === 'agent-setting' ? 'lifecycle' : 'unknown'
       })
@@ -838,7 +1014,7 @@ export async function parseQoderSourceV2(
       sourceRecordId,
       usageEventId,
       messageId,
-      typeof message?.model === 'string' ? message.model : null
+      typeof message?.model === 'string' ? safeText(message.model, 1_024) : null
     )
     if (usage) {
       emit({
@@ -870,13 +1046,24 @@ export async function parseQoderSourceV2(
         actor: 'system',
         kind: 'subagent.spawn',
         payload: {
-          agentId: `${ids.logicalSessionId}:subagent:agent-${toolUseResult.agentId}`,
+          agentId: safeIdentifier(`${ids.logicalSessionId}:subagent:agent-${toolUseResult.agentId}`),
           parentAgentId: ids.logicalSessionId
         },
         visibility: 'collapsed',
         classification: 'lifecycle'
       })
     }
+  }
+
+  if (resourceLimited && !diagnostics.some((entry) => entry.code === 'qoder-value-truncated')) {
+    const diagnostic: Diagnostic = {
+      level: 'warning',
+      code: 'qoder-value-truncated',
+      message: 'One or more persisted values were truncated to satisfy Provider Protocol v2 resource limits.',
+      eventId: null
+    }
+    if (diagnostics.length >= QODER_DIAGNOSTIC_LIMIT) diagnostics[QODER_DIAGNOSTIC_LIMIT - 2] = diagnostic
+    else diagnostics.push(diagnostic)
   }
 
   const pages = eventPages(events)
@@ -933,8 +1120,7 @@ export function createQoderProvider(options: QoderProviderOptions): BuiltinProvi
       return memberFingerprint(transcript, sidecar)
     },
     async inputBytes(source, signal) {
-      const { transcript, sidecar } = await readMembers(source, signal)
-      return transcript.length + (sidecar?.length || 0)
+      return memberInputBytes(source, signal)
     },
     parse(source, fingerprint, signal) {
       return parseQoderSourceV2(source, fingerprint, signal, 'initial')

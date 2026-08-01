@@ -49,7 +49,8 @@ const SOURCE_LABELS: Record<string, string> = {
   codex: 'CDX',
   cursor: 'CUR',
   opencode: 'OC',
-  zcode: 'ZC'
+  zcode: 'ZC',
+  qoder: 'QD'
 }
 
 /* ------------------------------------------------------------------ */

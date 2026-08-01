@@ -2,14 +2,16 @@ import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   CanonicalEvent,
   ParseChunk,
   ProviderConformanceSample,
   ProviderEnvelope
 } from '../../shared/provider-schema-v2.generated'
+import { PROVIDER_RESOURCE_LIMITS } from '../../shared/provider-schema-v2.generated'
 import {
+  decodeProviderEnvelopeV2,
   helloForProviderV2,
   ProviderChunkAssembler,
   runProviderConformanceV2,
@@ -17,12 +19,14 @@ import {
   validateProviderManifestV2
 } from '../../shared/provider-protocol-v2'
 import { renderCanonicalEventPage } from '../canonical-v2-projection'
+import { ProviderHost } from '../provider-host'
 import {
   createQoderProvider,
   parseQoderSourceV2,
   QODER_FORMAT_VERSION,
   QODER_PROVIDER_ID,
-  QODER_PROVIDER_MANIFEST
+  QODER_PROVIDER_MANIFEST,
+  QODER_SESSION_INPUT_LIMIT_BYTES
 } from './qoder-provider'
 
 const fixtureRoot = path.resolve(__dirname, '../../../testdata/qoder')
@@ -110,6 +114,14 @@ describe('Qoder native Provider Protocol v2', () => {
     expect(validateParseChunkV2(chunks[0])).toMatchObject({ ok: true, issues: [] })
     const stream = events(chunks)
     expect(stream.map((event) => event.sequence)).toEqual(stream.map((_event, index) => index))
+    expect(stream[0]).toMatchObject({
+      kind: 'session.metadata',
+      payload: {
+        title: 'Synthetic Qoder compound session',
+        cwd: ['/workspace/synthetic-qoder'],
+        projectPath: '/workspace/synthetic-qoder'
+      }
+    })
     const assistantBlocks = stream.filter((event) => event.messageId === 'qoder-assistant-1')
     expect(assistantBlocks.map((event) => event.kind)).toEqual([
       'message.thinking', 'message.text', 'tool.call', 'usage'
@@ -127,7 +139,7 @@ describe('Qoder native Provider Protocol v2', () => {
       state: 'complete'
     })
     expect(stream.find((event) => event.kind === 'usage')?.payload).toMatchObject({
-      input: { total: null, uncached: 100, cacheRead: 20, cacheWrite5m: 5 },
+      input: { total: 100, uncached: null, cacheRead: 20, cacheWrite5m: 5 },
       output: { total: 40, visible: 40, reasoning: null },
       providerTotal: null,
       measurement: { source: 'reported', confidence: 'exact', sourceField: 'message.usage' },
@@ -236,7 +248,7 @@ describe('Qoder native Provider Protocol v2', () => {
       type: 'user',
       uuid: `long-${index}`,
       timestamp: '2026-08-01T02:00:00.000Z',
-      message: { role: 'user', content: `synthetic long event ${index}` },
+      message: { role: 'user', content: `synthetic long event ${index} ${'x'.repeat(2_048)}` },
       sessionId
     }))
     fs.writeFileSync(transcriptPath, `${rows.join('\n')}\n`)
@@ -247,10 +259,105 @@ describe('Qoder native Provider Protocol v2', () => {
     const signal = new AbortController().signal
     const chunks = await provider.parse(source, await provider.fingerprint(source, signal), signal)
     expect(chunks.length).toBeGreaterThan(2)
-    expect(events(chunks)).toHaveLength(2_050)
+    expect(events(chunks)).toHaveLength(2_051)
     const assembler = new ProviderChunkAssembler()
-    for (const chunk of chunks) expect(assembler.accept(chunk).acceptedEvents).toBeGreaterThan(0)
+    for (const chunk of chunks) {
+      expect(chunk.events.length).toBeLessThanOrEqual(1_000)
+      const encodedEnvelope = JSON.stringify(envelope('parse-chunk', chunk))
+      expect(Buffer.byteLength(encodedEnvelope, 'utf8')).toBeLessThanOrEqual(
+        PROVIDER_RESOURCE_LIMITS.maxEnvelopeBytes
+      )
+      expect(decodeProviderEnvelopeV2(encodedEnvelope)).toMatchObject({ ok: true, issues: [] })
+      expect(assembler.accept(chunk).acceptedEvents).toBeGreaterThan(0)
+    }
     expect(assembler.completedSessions()).toBe(1)
+  })
+
+  it('bounds oversized and adversarial persisted values before envelope transport', async () => {
+    const projectDir = path.join(projectsRoot, '-workspace-adversarial-qoder')
+    const sessionId = '33333333-3333-4333-8333-333333333333'
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`)
+    fs.mkdirSync(projectDir, { recursive: true })
+    let deep: unknown = 'leaf'
+    for (let index = 0; index < 100; index++) deep = { child: deep }
+    const unknownRow = {
+      type: 'future-event',
+      huge: '界'.repeat(200_000),
+      wideArray: Array.from({ length: 5_000 }, (_entry, index) => index),
+      wideObject: Object.fromEntries(Array.from({ length: 300 }, (_entry, index) => [`key-${index}`, index])),
+      deep
+    }
+    const oversizedText = '💾'.repeat(150_000)
+    const rows = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'oversized-text',
+        message: { role: 'user', content: oversizedText },
+        sessionId
+      }),
+      JSON.stringify(unknownRow),
+      ...Array.from({ length: 200 }, () => '{malformed')
+    ]
+    fs.writeFileSync(transcriptPath, `${rows.join('\n')}\n`)
+
+    const provider = createQoderProvider({ homeDir })
+    const source = (await provider.discover(new AbortController().signal))
+      .find((candidate) => candidate.stableId === `qoder:${sessionId}`)!
+    const signal = new AbortController().signal
+    const chunks = await provider.parse(source, await provider.fingerprint(source, signal), signal)
+
+    expect(chunks[0].diagnostics).toContainEqual(expect.objectContaining({ code: 'qoder-value-truncated' }))
+    expect(chunks[0].diagnostics).toContainEqual(expect.objectContaining({ code: 'qoder-diagnostics-truncated' }))
+    expect(chunks[0].diagnostics.length).toBeLessThanOrEqual(128)
+    const textEvents = events(chunks).filter((event) => event.kind === 'message.text')
+    expect(textEvents.length).toBeGreaterThan(1)
+    expect(textEvents.map((event) => (event.payload as any).text).join('')).toBe(oversizedText)
+    expect(textEvents.every((event) =>
+      Buffer.byteLength((event.payload as any).text, 'utf8') <= 192 * 1024)).toBe(true)
+    expect(events(chunks).find((event) => event.kind === 'unknown')).toBeTruthy()
+    for (const chunk of chunks) {
+      const encodedEnvelope = JSON.stringify(envelope('parse-chunk', chunk))
+      expect(Buffer.byteLength(encodedEnvelope, 'utf8')).toBeLessThanOrEqual(
+        PROVIDER_RESOURCE_LIMITS.maxEnvelopeBytes
+      )
+      expect(decodeProviderEnvelopeV2(encodedEnvelope)).toMatchObject({ ok: true, issues: [] })
+    }
+  })
+
+  it('fails closed on a session larger than 50 MiB before fingerprint parsing', async () => {
+    const oversizedRoot = path.join(tempRoot, 'oversized-projects')
+    const projectDir = path.join(oversizedRoot, '-workspace-oversized-qoder')
+    const sessionId = '44444444-4444-4444-8444-444444444444'
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`)
+    fs.mkdirSync(projectDir, { recursive: true })
+    fs.writeFileSync(transcriptPath, '')
+    fs.truncateSync(transcriptPath, QODER_SESSION_INPUT_LIMIT_BYTES + 1)
+
+    const provider = createQoderProvider({ homeDir, roots: [oversizedRoot] })
+    const source = (await provider.discover(new AbortController().signal))
+      .find((candidate) => candidate.stableId === `qoder:${sessionId}`)!
+    const signal = new AbortController().signal
+    await expect(provider.inputBytes(source, signal)).resolves.toBe(QODER_SESSION_INPUT_LIMIT_BYTES + 1)
+    await expect(provider.fingerprint(source, signal)).rejects.toThrow('qoder-session-input-limit-exceeded')
+
+    let fingerprintCalls = 0
+    const guardedProvider = {
+      ...provider,
+      async fingerprint(...args: Parameters<typeof provider.fingerprint>) {
+        fingerprintCalls++
+        return provider.fingerprint(...args)
+      }
+    }
+    const readFile = vi.spyOn(fs.promises, 'readFile')
+    try {
+      const report = (await new ProviderHost({ runtimes: [], v2Runtimes: [guardedProvider] }).runAll())[0]
+      expect(report.errors).toMatchObject([{ code: 'resource-limit-exceeded' }])
+      expect(report.outcomes).toHaveLength(0)
+      expect(fingerprintCalls).toBe(0)
+      expect(readFile).not.toHaveBeenCalled()
+    } finally {
+      readFile.mockRestore()
+    }
   })
 
   it('reports malformed lines without dropping adjacent valid facts', async () => {

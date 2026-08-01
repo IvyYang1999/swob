@@ -368,7 +368,7 @@ function qoderCanonicalCapabilities(): ProviderCapabilities {
       upstream
     ),
     usage: experimental(
-      'Persisted message.usage counters are decoded without estimation; availability and cache semantics are not proven across Qoder versions.',
+      'Persisted message.usage counters are preserved in v2 without estimation; cache relations are unproven, so the compatible product aggregate remains unavailable.',
       provider,
       fixture,
       upstream

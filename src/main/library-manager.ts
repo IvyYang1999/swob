@@ -2197,11 +2197,16 @@ function inferDevice(sourcePath: string): string {
   return os.hostname()
 }
 
-function buildResumeCommand(source: SessionSource, sessionId: string): string {
+function buildResumeCommand(source: SessionSource, sessionId: string): string | undefined {
   if (source === 'codex') return `codex resume ${sessionId}`
   if (source === 'cursor') return `cursor-agent --resume=${sessionId}`
   if (source === 'opencode') return `opencode --session ${sessionId}`
   if (source === 'zcode') return `zcode --resume ${sessionId}`
+  if (source === 'qoder') {
+    if (sessionId.includes(':subagent:')) return undefined
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(sessionId)) return undefined
+    return `qodercli -r ${shellQuote(sessionId)}`
+  }
   return `claude --resume ${sessionId}`
 }
 

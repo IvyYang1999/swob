@@ -60,6 +60,24 @@ describe('设置偏好迁移与 Resume 能力', () => {
     expect(enabledResumeChoices(harnessForSource('trae'), false)).toEqual([])
   })
 
+  it('Qoder 设置仅投影 registry 声明的实验性 terminal Resume', () => {
+    const qoder = harnessForSource('qoder')
+    expect(qoder).toMatchObject({
+      id: 'qoder',
+      name: 'Qoder',
+      sourceIds: ['qoder'],
+      defaultMethod: 'terminal'
+    })
+    expect(qoder.choices).toEqual([expect.objectContaining({
+      id: 'terminal',
+      support: 'experimental',
+      reason: providerCapabilitiesForSource('qoder')?.['terminal-resume'].reason
+    })])
+    expect(defaultResumeMethodForSource({}, 'qoder')).toBe('terminal')
+    expect(migrateSettingsPreferences({}).resumeMethodByHarness.qoder).toBe('terminal')
+    expect(qoder.choices.some((choice) => choice.id === 'remote-control')).toBe(false)
+  })
+
   it('未审计来源的猜测命令不能标为 stable', () => {
     for (const source of ['antigravity', 'pi', 'kimi', 'hermes']) {
       const terminal = harnessForSource(source).choices.find((choice) => choice.id === 'terminal')

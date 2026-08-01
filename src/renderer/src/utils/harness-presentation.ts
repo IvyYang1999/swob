@@ -101,6 +101,13 @@ const REGISTRY: Record<string, HarnessPresentation> = {
     badgeClass: 'bg-soft-amber/15 text-soft-amber',
     chartColor: '#8b5cf6',
   },
+  qoder: {
+    displayName: 'Qoder',
+    shortLabel: 'QD',
+    iconImage: null,
+    badgeClass: 'bg-soft-cyan/15 text-soft-cyan',
+    chartColor: '#06b6d4',
+  },
 }
 
 const FALLBACK: HarnessPresentation = {

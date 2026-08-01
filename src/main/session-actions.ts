@@ -63,6 +63,15 @@ function existingDirectory(cwd?: string): string | undefined {
   }
 }
 
+function assertQoderResumeSessionId(sessionId: string): void {
+  if (sessionId.includes(':subagent:')) {
+    throw new Error('Qoder CLI 没有已验证的子代理 Resume 入口')
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(sessionId)) {
+    throw new Error('qoder session id 格式不合法')
+  }
+}
+
 export function buildResumeLaunchSpec(
   sessionId: string,
   permissionMode?: string,
@@ -101,6 +110,10 @@ export function buildResumeLaunchSpec(
     if (!isAntigravityConversationId(sessionId)) throw new Error('antigravity-conversation-id-invalid')
     executable = 'agy'
     args = ['--conversation', sessionId]
+  } else if (source === 'qoder') {
+    assertQoderResumeSessionId(sessionId)
+    executable = 'qodercli'
+    args = ['-r', sessionId]
   } else {
     const executableBySource: Partial<Record<SessionSource, string>> = {
       'claude-code': 'claude',
@@ -214,6 +227,14 @@ function buildTerminalResumeCommand(
     if (!isAntigravityConversationId(sessionId)) throw new Error('antigravity-conversation-id-invalid')
     cmd = `agy --conversation ${quotedSessionId}`
     if (cwd && fs.existsSync(cwd)) return `cd ${shellQuote(cwd)} && ${cmd}`
+    return cmd
+  }
+  if (source === 'qoder') {
+    assertQoderResumeSessionId(sessionId)
+    cmd = `qodercli -r ${quotedSessionId}`
+    if (cwd && fs.existsSync(cwd)) {
+      return `cd ${shellQuote(cwd)} && ${cmd}`
+    }
     return cmd
   }
   const newSourceCmds: Partial<Record<SessionSource, string>> = {

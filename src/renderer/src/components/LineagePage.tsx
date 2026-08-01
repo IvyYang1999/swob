@@ -19,7 +19,8 @@ const SOURCE_COLORS: Record<string, string> = {
   codex: '#3b82f6',
   cursor: '#22c55e',
   opencode: '#06b6d4',
-  zcode: '#ef4444'
+  zcode: '#ef4444',
+  qoder: '#06b6d4'
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -27,10 +28,11 @@ const SOURCE_LABELS: Record<string, string> = {
   codex: 'Codex',
   cursor: 'Cursor',
   opencode: 'OpenCode',
-  zcode: 'Zcode'
+  zcode: 'Zcode',
+  qoder: 'Qoder'
 }
 
-const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode']
+const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'qoder']
 
 interface Node {
   id: string

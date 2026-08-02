@@ -4,6 +4,7 @@ import {
   initLibrary,
   scanLibrary,
   syncLibraryFromSessions,
+  syncLibraryStartupChunk,
   ensureSessionInLibrary,
   updateTranscript,
   updateTranscriptFromRaw,
@@ -24,11 +25,18 @@ import type { UsageFactSyncResult } from './analysis-contract'
 
 export type LibraryWorkerRequest = (
   | { type: 'shutdown' }
+  | { type: 'writer-probe'; root: string }
   | { type: 'scan'; root: string; ignoreDirs?: string[] }
   | {
       type: 'sync'
       root: string
       ignoreDirs?: string[]
+      sessions: SessionSummary[]
+      sessionMeta: Record<string, { customTitle?: string; notes?: string }>
+    }
+  | {
+      type: 'sync-chunk'
+      root: string
       sessions: SessionSummary[]
       sessionMeta: Record<string, { customTitle?: string; notes?: string }>
     }
@@ -61,6 +69,8 @@ export interface LibraryWorkerSyncResult {
 
 type LibraryWorkerResult =
   | { kind: 'shutdown' }
+  | { kind: 'writer-probe' }
+  | { kind: 'sync-outcome'; outcome: LibrarySyncOutcome }
   | { kind: 'tree'; tree: LibraryTree; syncOutcome?: LibrarySyncOutcome }
   | { kind: 'session-sync'; value: LibraryWorkerSessionSyncResult }
   | { kind: 'usage-facts-sync'; value: UsageFactSyncResult }
@@ -113,7 +123,17 @@ export async function runLibraryWorkerRequest(
     readOnly: request.type === 'scan',
     ignoreDirs: request.type === 'scan' || request.type === 'sync' ? request.ignoreDirs : undefined
   })
+  if (request.type === 'writer-probe') {
+    await withLibraryMaintenanceWriter(async () => {})
+    return { kind: 'writer-probe' }
+  }
   if (request.type === 'scan') return { kind: 'tree', tree: scanLibrary() }
+  if (request.type === 'sync-chunk') {
+    return {
+      kind: 'sync-outcome',
+      outcome: await syncLibraryStartupChunk(request.sessions, request.sessionMeta, onProgress, shouldCancel)
+    }
+  }
   if (request.type === 'sync') {
     scanLibrary()
     const syncOutcome = await syncLibraryFromSessions(request.sessions, request.sessionMeta, onProgress, shouldCancel)
@@ -220,6 +240,29 @@ export class LibraryWorkerClient {
     return this.observe(this.request({ type: 'scan', root, ignoreDirs }).then((result) => {
       if (result.kind !== 'tree') throw new Error('Library worker returned an invalid scan result')
       return result.tree
+    }))
+  }
+
+  probeWriter(root: string): Promise<void> {
+    return this.observe(this.request({ type: 'writer-probe', root }).then((result) => {
+      if (result.kind !== 'writer-probe') throw new Error('Library worker returned an invalid writer probe result')
+    }))
+  }
+
+  syncChunk(
+    root: string,
+    sessions: SessionSummary[],
+    sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
+    onProgress?: (progress: LibraryWorkerProgress) => void
+  ): Promise<LibrarySyncOutcome> {
+    return this.observe(this.request({
+      type: 'sync-chunk',
+      root,
+      sessions,
+      sessionMeta
+    }, onProgress).then((result) => {
+      if (result.kind !== 'sync-outcome') throw new Error('Library worker returned an invalid sync chunk result')
+      return result.outcome
     }))
   }
 

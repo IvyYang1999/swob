@@ -4491,6 +4491,25 @@ export async function syncLibraryFromSessions(
     syncLibraryFromSessionsUnderWriter(sessions, sessionMeta, onProgress, shouldCancel))
 }
 
+/**
+ * Startup-only incremental boundary. The normal batch API intentionally keeps
+ * one writer lease across the whole collection so CLI organization cannot
+ * observe or interleave a half-applied batch. Startup calls this with one
+ * session at a time so live source maintenance gets a bounded chance to run.
+ */
+export async function syncLibraryStartupChunk(
+  sessions: SessionSummary[],
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
+  onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
+  shouldCancel?: () => boolean
+): Promise<LibrarySyncOutcome> {
+  if (sessions.length > 1) {
+    throw new Error('startup Library sync chunks must contain at most one session')
+  }
+  return withLibraryWriter('maintenance', () =>
+    syncLibraryFromSessionsUnderWriter(sessions, sessionMeta, onProgress, shouldCancel))
+}
+
 async function syncLibraryFromSessionsUnderWriter(
   sessions: SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,

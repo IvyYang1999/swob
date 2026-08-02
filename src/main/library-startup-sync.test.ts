@@ -3,6 +3,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { syncLibraryStartupIncrementally } from './library-startup-sync'
+import { SessionSyncCoordinator } from './session-sync-coordinator'
 import type { SessionSummary } from './types'
 
 const roots: string[] = []
@@ -47,6 +48,65 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('incremental Library startup synchronization', () => {
+  it('completes startup while multi-key live events continue below the quiet window', async () => {
+    vi.useFakeTimers()
+    let sourceGeneration = 1
+    let backupGeneration = 0
+    let transcriptGeneration = 0
+    let completedStartupChunks = 0
+    let active = 0
+    let peak = 0
+    const served: string[] = []
+    const coordinator = new SessionSyncCoordinator({
+      quietWindowMs: 2_000,
+      concurrency: 1,
+      sync: async (request) => {
+        active++
+        peak = Math.max(peak, active)
+        served.push(request.sessionId || '')
+        backupGeneration = sourceGeneration
+        transcriptGeneration = sourceGeneration
+        active--
+      }
+    })
+    const sessions = Array.from({ length: 6 }, (_, index) =>
+      summary(`startup-${index}`, `/fixture/startup-${index}.jsonl`, `2026-08-02T09:00:0${index}.000Z`))
+
+    try {
+      const outcome = await syncLibraryStartupIncrementally({
+        sessions,
+        probeWriter: async () => {},
+        onWriterProven: () => {
+          coordinator.schedule({ sessionId: 'b', filePath: '/tmp/b.jsonl' })
+          coordinator.schedule({ sessionId: 'c', filePath: '/tmp/c.jsonl' })
+          coordinator.schedule({ sessionId: 'a', filePath: '/tmp/a.jsonl' })
+        },
+        resolveLatest: (session) => session,
+        drainLive: () => coordinator.flushPendingSnapshot({ maxEntries: 2 }).then(() => undefined),
+        syncChunk: async () => {
+          completedStartupChunks++
+          sourceGeneration++
+          coordinator.schedule({ sessionId: 'a', filePath: '/tmp/a.jsonl' })
+          await vi.advanceTimersByTimeAsync(50)
+          return { total: 1, completed: 1, skipped: [] }
+        }
+      })
+
+      expect(outcome.completed).toBe(6)
+      expect(completedStartupChunks).toBe(6)
+      expect(backupGeneration).toBe(sourceGeneration)
+      expect(transcriptGeneration).toBe(sourceGeneration)
+      expect(served).toContain('a')
+      expect(served).toContain('b')
+      expect(served).toContain('c')
+      expect(peak).toBe(1)
+      expect(active).toBe(0)
+    } finally {
+      coordinator.stop()
+      vi.useRealTimers()
+    }
+  })
+
   it('does not publish writer proof or run live/chunk work when the probe fails', async () => {
     const onWriterProven = vi.fn()
     const drainLive = vi.fn(async () => {})

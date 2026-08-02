@@ -80,6 +80,101 @@ describe('SessionSyncCoordinator', () => {
     expect(peak).toBe(2)
   })
 
+  it('drains a cutoff generation without waiting for continuous sub-quiet-window events', async () => {
+    const first = deferred()
+    let sourceGeneration = 1
+    let backupGeneration = 0
+    let transcriptGeneration = 0
+    let active = 0
+    let peak = 0
+    let calls = 0
+    const sync = vi.fn(async () => {
+      const capturedGeneration = sourceGeneration
+      calls++
+      active++
+      peak = Math.max(peak, active)
+      if (calls === 1) await first.promise
+      backupGeneration = capturedGeneration
+      transcriptGeneration = capturedGeneration
+      active--
+    })
+    const coordinator = new SessionSyncCoordinator({ sync, quietWindowMs: 2_000, concurrency: 1 })
+
+    coordinator.schedule({ sessionId: 'continuous', filePath: '/tmp/continuous.jsonl' })
+    const firstBoundary = coordinator.flushPendingSnapshot({ maxEntries: 1 })
+    await Promise.resolve()
+    expect(sync).toHaveBeenCalledTimes(1)
+
+    // These events arrive every 50ms, so the historical waitForIdle boundary
+    // could rearm forever and prevent even one startup chunk from running.
+    for (let index = 0; index < 20; index++) {
+      sourceGeneration++
+      coordinator.schedule({ sessionId: 'continuous', filePath: '/tmp/continuous.jsonl' })
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    first.resolve()
+    await firstBoundary
+
+    expect(backupGeneration).toBe(1)
+    expect(transcriptGeneration).toBe(1)
+    expect(coordinator.getStats().pending).toBe(1)
+    let completedStartupChunks = 1
+
+    // Every boundary processes one newest generation and then advances one
+    // startup chunk, even while new events continue below the quiet window.
+    for (let boundary = 0; boundary < 3; boundary++) {
+      for (let index = 0; index < 5; index++) {
+        sourceGeneration++
+        coordinator.schedule({ sessionId: 'continuous', filePath: '/tmp/continuous.jsonl' })
+        await vi.advanceTimersByTimeAsync(50)
+      }
+      await coordinator.flushPendingSnapshot({ maxEntries: 1 })
+      completedStartupChunks++
+    }
+
+    expect(completedStartupChunks).toBe(4)
+    expect(backupGeneration).toBe(sourceGeneration)
+    expect(transcriptGeneration).toBe(sourceGeneration)
+    expect(peak).toBe(1)
+    expect(active).toBe(0)
+  })
+
+  it('round-robins continuously dirty keys while startup advances at every boundary', async () => {
+    const served: string[] = []
+    let active = 0
+    let peak = 0
+    const coordinator = new SessionSyncCoordinator({
+      quietWindowMs: 2_000,
+      concurrency: 1,
+      sync: async (request) => {
+        active++
+        peak = Math.max(peak, active)
+        served.push(request.sessionId || '')
+        await Promise.resolve()
+        active--
+      }
+    })
+    let completedStartupChunks = 0
+    coordinator.schedule({ sessionId: 'b', filePath: '/tmp/b.jsonl' })
+    coordinator.schedule({ sessionId: 'c', filePath: '/tmp/c.jsonl' })
+
+    for (let boundary = 0; boundary < 6; boundary++) {
+      // a is deliberately always newest. Generation-only priority would pick
+      // it forever and starve the quieter b/c pending keys.
+      coordinator.schedule({ sessionId: 'a', filePath: '/tmp/a.jsonl' })
+      await coordinator.flushPendingSnapshot({ maxEntries: 1 })
+      completedStartupChunks++
+    }
+
+    expect(completedStartupChunks).toBe(6)
+    expect(new Set(served.slice(0, 3))).toEqual(new Set(['a', 'b', 'c']))
+    expect(served.filter((sessionId) => sessionId === 'a')).toHaveLength(4)
+    expect(served.filter((sessionId) => sessionId === 'b')).toHaveLength(1)
+    expect(served.filter((sessionId) => sessionId === 'c')).toHaveLength(1)
+    expect(peak).toBe(1)
+    expect(active).toBe(0)
+  })
+
   it('does not report an expected AbortError after shutdown stops active work', async () => {
     let rejectSync!: (error: Error) => void
     const active = new Promise<void>((_resolve, reject) => { rejectSync = reject })

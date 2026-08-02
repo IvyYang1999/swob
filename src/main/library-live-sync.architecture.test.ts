@@ -26,4 +26,12 @@ describe('live Library synchronization architecture', () => {
       /classification\.state === 'writer-blocked'[\s\S]*?libraryStartupWriterProven = false[\s\S]*?deferLibrarySynchronization\(request\)[\s\S]*?scheduleLibraryWriterRecovery\(\)/
     )
   })
+
+  it('uses a bounded generation cutoff instead of waiting for global live idle', () => {
+    const drain = source.match(
+      /async function drainLiveSessionSynchronizations\(\)[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(drain).toContain('flushPendingSnapshot({ maxEntries: 2 })')
+    expect(drain).not.toContain('waitForIdle')
+  })
 })

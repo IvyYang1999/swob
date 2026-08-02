@@ -1496,6 +1496,12 @@ const STARTUP_HOT_SOURCE_WINDOW_MS = 5 * 60_000
 
 function scheduleHotStartupSessions(sessions: readonly SessionSummary[]): void {
   const cutoff = Date.now() - STARTUP_HOT_SOURCE_WINDOW_MS
+  const hotSessions: Array<{
+    sessionId: string
+    filePath: string
+    source: 'claude-code' | 'codex' | 'cursor'
+    mtimeMs: number
+  }> = []
   for (const session of sessions) {
     const candidates = (session.allFilePaths || [session.filePath]).flatMap((filePath) => {
       const source = detectSessionSourceFromPath(filePath)
@@ -1509,13 +1515,19 @@ function scheduleHotStartupSessions(sessions: readonly SessionSummary[]): void {
     }).sort((left, right) => right.mtimeMs - left.mtimeMs)
     const hottest = candidates[0]
     if (hottest) {
-      scheduleSessionSynchronization({
+      hotSessions.push({
         sessionId: session.sessionId,
         filePath: hottest.filePath,
         source: hottest.source,
-        reason: 'change'
+        mtimeMs: hottest.mtimeMs
       })
     }
+  }
+  // The coordinator assigns monotonically increasing generations. Schedule
+  // oldest-first so maxEntries=1 below always prioritizes the hottest source.
+  hotSessions.sort((left, right) => left.mtimeMs - right.mtimeMs)
+  for (const session of hotSessions) {
+    scheduleSessionSynchronization({ ...session, reason: 'change' })
   }
 }
 
@@ -1523,13 +1535,11 @@ async function drainLiveSessionSynchronizations(): Promise<void> {
   const coordinator = sessionSyncCoordinator
   if (!coordinator || runtimeShuttingDown || libraryRuntimePaused) return
   // A live request that arrived during an active startup chunk was deferred
-  // before parsing. Flush once the lease is free, then wait until that exact
-  // source snapshot has reached Library before the next startup chunk begins.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    flushDeferredLibrarySynchronizations()
-    if (coordinator.getStats().pending > 0) await coordinator.waitForIdle()
-    if (deferredLibrarySyncRequests.size === 0) return
-  }
+  // before parsing. At this boundary force at most two round-robin keys' newest
+  // generations through Library. Later arrivals remain queued for the next
+  // boundary, so one active source cannot starve startup or a quieter peer.
+  flushDeferredLibrarySynchronizations()
+  await coordinator.flushPendingSnapshot({ maxEntries: 2 })
 }
 
 async function syncStartupSessions(

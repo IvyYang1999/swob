@@ -15,13 +15,27 @@ import {
   type LibrarySyncOutcome
 } from './library-manager'
 import { parseSessionFile, buildSessionSummary, resolvePhysicalSessionId } from './session-loader'
-import { buildCodexSessionSummary } from './codex-loader'
-import { buildCursorSessionSummary } from './cursor-loader'
+import { buildCodexSessionSummary, loadCodexRawMessages } from './codex-loader'
+import { buildCursorSessionSummary, loadCursorRawMessages } from './cursor-loader'
 import { detectSessionSourceFromPath } from './session-source'
-import { closeSearchIndex, indexParsedSearchSource, indexSearchSource } from './search-index'
+import {
+  closeSearchIndex,
+  indexCanonicalSession,
+  synchronizeSearchSources,
+  tombstoneCanonicalSession
+} from './search-index'
 import { closeUsageFactStore, synchronizeUsageFacts } from './usage-fact-store'
 import type { Folder, SessionSummary } from './types'
 import type { UsageFactSyncResult } from './analysis-contract'
+import type { CanonicalRecord } from '../shared/provider-schema.generated'
+
+export interface SearchIndexSourceDescriptor {
+  filePath: string
+  sessionId?: string
+  source?: string
+  isLibraryBackup?: boolean
+  stateFilePath?: string
+}
 
 export type LibraryWorkerRequest = (
   | { type: 'shutdown' }
@@ -55,6 +69,9 @@ export type LibraryWorkerRequest = (
       folders: Folder[]
       rebuild?: boolean
     }
+  | { type: 'search-sources-sync'; sources: SearchIndexSourceDescriptor[]; prune: boolean }
+  | { type: 'search-canonical-index'; sessionId: string; records: CanonicalRecord[]; includeThinking?: boolean }
+  | { type: 'search-canonical-tombstone'; sessionRecordId: string }
 ) & { cancelBuffer?: SharedArrayBuffer }
 
 export interface LibraryWorkerSessionSyncResult {
@@ -74,6 +91,7 @@ type LibraryWorkerResult =
   | { kind: 'tree'; tree: LibraryTree; syncOutcome?: LibrarySyncOutcome }
   | { kind: 'session-sync'; value: LibraryWorkerSessionSyncResult }
   | { kind: 'usage-facts-sync'; value: UsageFactSyncResult }
+  | { kind: 'search-write' }
 
 export interface LibraryWorkerProgress {
   current: number
@@ -118,6 +136,27 @@ export async function runLibraryWorkerRequest(
         shouldCancel
       })
     }
+  }
+  if (request.type === 'search-sources-sync') {
+    await synchronizeSearchSources(request.sources.map((source) => ({
+      ...source,
+      ...(source.source === 'codex'
+        ? { loadRaw: () => loadCodexRawMessages(source.filePath, source.sessionId) }
+        : source.source === 'cursor'
+          ? { loadRaw: () => loadCursorRawMessages(source.filePath, source.sessionId) }
+          : {})
+    })), { prune: request.prune })
+    return { kind: 'search-write' }
+  }
+  if (request.type === 'search-canonical-index') {
+    await indexCanonicalSession(request.sessionId, request.records, {
+      includeThinking: request.includeThinking
+    })
+    return { kind: 'search-write' }
+  }
+  if (request.type === 'search-canonical-tombstone') {
+    await tombstoneCanonicalSession(request.sessionRecordId)
+    return { kind: 'search-write' }
   }
   initLibrary(request.root, {
     readOnly: request.type === 'scan',
@@ -174,20 +213,6 @@ export async function runLibraryWorkerRequest(
     })
   }
   throwIfWorkerCancelled(shouldCancel)
-  if (parsedRaw) {
-    await indexParsedSearchSource({
-      filePath: request.filePath,
-      sessionId: summary.sessionId,
-      source: 'claude-code'
-    }, parsedRaw)
-  } else {
-    await indexSearchSource({
-      filePath: request.filePath,
-      sessionId: summary.sessionId,
-      source: detectedSource || undefined
-    })
-  }
-  throwIfWorkerCancelled(shouldCancel)
   return { kind: 'session-sync', value: { summary, dirPath } }
 }
 
@@ -235,6 +260,8 @@ export class LibraryWorkerClient {
     cancelFlag?: Int32Array
     promise?: Promise<LibraryWorkerResult>
   }>()
+
+  constructor(private readonly workerPath = path.join(__dirname, 'library-worker.js')) {}
 
   scan(root: string, ignoreDirs?: string[]): Promise<LibraryTree> {
     return this.observe(this.request({ type: 'scan', root, ignoreDirs }).then((result) => {
@@ -307,6 +334,40 @@ export class LibraryWorkerClient {
     }).then((result) => {
       if (result.kind !== 'usage-facts-sync') throw new Error('Library worker returned an invalid usage fact result')
       return result.value
+    }))
+  }
+
+  syncSearchSources(sources: SearchIndexSourceDescriptor[], options: { prune: boolean }): Promise<void> {
+    return this.observe(this.request({
+      type: 'search-sources-sync',
+      sources,
+      prune: options.prune
+    }).then((result) => {
+      if (result.kind !== 'search-write') throw new Error('Library worker returned an invalid search result')
+    }))
+  }
+
+  indexCanonicalSearch(
+    sessionId: string,
+    records: CanonicalRecord[],
+    options: { includeThinking?: boolean } = {}
+  ): Promise<void> {
+    return this.observe(this.request({
+      type: 'search-canonical-index',
+      sessionId,
+      records,
+      includeThinking: options.includeThinking
+    }).then((result) => {
+      if (result.kind !== 'search-write') throw new Error('Library worker returned an invalid search result')
+    }))
+  }
+
+  tombstoneCanonicalSearch(sessionRecordId: string): Promise<void> {
+    return this.observe(this.request({
+      type: 'search-canonical-tombstone',
+      sessionRecordId
+    }).then((result) => {
+      if (result.kind !== 'search-write') throw new Error('Library worker returned an invalid search result')
     }))
   }
 
@@ -401,8 +462,7 @@ export class LibraryWorkerClient {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker
-    const workerPath = path.join(__dirname, 'library-worker.js')
-    const worker = new Worker(workerPath)
+    const worker = new Worker(this.workerPath)
     worker.on('message', (reply: WorkerReply) => {
       const pending = this.pending.get(reply.requestId)
       if (!pending) return

@@ -3,7 +3,7 @@ import {
   getCanonicalSessionStore,
   type CanonicalSessionStore
 } from './canonical-store'
-import { indexCanonicalSession, tombstoneCanonicalSession } from './search-index'
+import { getSearchIndexWriteCoordinator } from './search-index-writer'
 import { projectNativeV2ChunksForConsumers } from './provider-v2-consumer-projection'
 
 export interface CanonicalProviderRefreshOptions {
@@ -59,7 +59,10 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
         .find((state) => state.sourceRef.stableId === source.stableId)?.sessionRecordIds || []) {
         const stored = store.getSession(sessionRecordId)
         if (!stored || stored.tombstone) continue
-        await indexCanonicalSession(stored.sessionRecord.sourceSessionId, stored.records)
+        await getSearchIndexWriteCoordinator().scheduleCanonicalIndex(
+          stored.sessionRecord.sourceSessionId,
+          stored.records
+        )
         if (options.archive) {
           const { ensureCanonicalPackage } = await import('./library-manager')
           await ensureCanonicalPackage(report.providerId, stored.sessionRecord.sourceRef, stored.records)
@@ -83,7 +86,10 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
         const stored = store.getSession(result.sessionRecordId)
         if (!stored || stored.tombstone) continue
         changedSessionRecordIds.push(result.sessionRecordId)
-        await indexCanonicalSession(stored.sessionRecord.sourceSessionId, stored.records)
+        await getSearchIndexWriteCoordinator().scheduleCanonicalIndex(
+          stored.sessionRecord.sourceSessionId,
+          stored.records
+        )
         if (options.archive) {
           const { ensureCanonicalPackage } = await import('./library-manager')
           await ensureCanonicalPackage(
@@ -101,7 +107,7 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
           tombstone.deletedAt,
           tombstone.reason
         )
-        await tombstoneCanonicalSession(tombstone.sessionRecordId)
+        await getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(tombstone.sessionRecordId)
         const { markCanonicalPackageTombstone } = await import('./library-manager')
         await markCanonicalPackageTombstone(
           report.providerId,
@@ -124,7 +130,7 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
         }
         store.applyTombstone(tombstone)
         tombstonedSessionRecordIds.push(sessionRecordId)
-        await tombstoneCanonicalSession(sessionRecordId)
+        await getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(sessionRecordId)
         const { markCanonicalPackageTombstone } = await import('./library-manager')
         await markCanonicalPackageTombstone(
           report.providerId,

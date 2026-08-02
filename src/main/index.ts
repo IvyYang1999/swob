@@ -127,7 +127,12 @@ import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
 import { detectSessionSourceFromPath } from './session-source'
 import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
-import { closeSearchIndex, synchronizeSearchSources } from './search-index'
+import { closeSearchIndex } from './search-index'
+import {
+  closeSearchIndexWriteCoordinator,
+  getSearchIndexWriteCoordinator,
+  LARGE_SEARCH_WORKER_RECYCLE_BYTES
+} from './search-index-writer'
 import { cancelCanonicalProviders } from './provider-runtime'
 import { closeCanonicalSessionStore } from './canonical-store'
 import { buildInsights } from './insights'
@@ -147,6 +152,8 @@ import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worke
 import { syncLibraryStartupIncrementally } from './library-startup-sync'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
 import { LibraryRescanController } from './library-rescan-controller'
+import { scheduleEpochBoundTask } from './epoch-bound-task'
+import { WorkerRecycleGate } from './worker-recycle-gate'
 import {
   watchLibraryDirectory,
   type LibraryDirectoryWatcher
@@ -276,6 +283,7 @@ let libraryWatcher: LibraryDirectoryWatcher | null = null
 let transcriptWatcher: TranscriptWatcher | null = null
 let libraryWorker: LibraryWorkerClient | null = null
 let liveSessionSyncWorker: LibraryWorkerClient | null = null
+const liveSessionSyncWorkerRecycleGate = new WorkerRecycleGate()
 let usageFactWorker: LibraryWorkerClient | null = null
 let sessionSyncCoordinator: SessionSyncCoordinator | null = null
 let libraryRescanController: LibraryRescanController | null = null
@@ -285,7 +293,6 @@ let libraryInitialized = false
 let latestLibraryTree: LibraryTree | null = null
 let libraryInitializationPromise: Promise<void> | null = null
 let libraryHydrationGeneration = 0
-let searchIndexWarmupRunner: LatestSnapshotRunner<void, void> | null = null
 let usageFactSyncError: unknown = null
 interface UsageFactSyncSnapshot {
   sessions: SessionSummary[]
@@ -680,6 +687,14 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     return
   }
   const runtimeEpoch = libraryRuntimeEpoch
+  await liveSessionSyncWorkerRecycleGate.wait().catch((error) => {
+    recordLibraryDiagnostic('LIVE_WORKER_RECYCLE_FAILED', 'Live worker recycle failed; creating a replacement')
+    console.error('[session-sync] live worker recycle failed:', error)
+  })
+  if (runtimeEpoch !== libraryRuntimeEpoch || runtimeShuttingDown || libraryRuntimePaused) {
+    deferLibrarySynchronization(request)
+    return
+  }
   const maintainLibrary = libraryInitialized || libraryStartupWriterProven
   if (!maintainLibrary || libraryStartupChunkActive) {
     // Never freeze a source event as parse-only merely because startup has not
@@ -738,6 +753,38 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     return
   }
   const { summary, dirPath } = synchronized
+  let largeSource = false
+  try { largeSource = fs.statSync(filePath).size >= LARGE_SEARCH_WORKER_RECYCLE_BYTES } catch { /* source may vanish */ }
+  if (largeSource && liveSessionSyncWorker === worker) {
+    // The Library commit is durable. Terminate its parse isolate before the
+    // search worker rereads the source; allocator RSS may remain at high-water.
+    await liveSessionSyncWorkerRecycleGate.begin(async () => {
+      try {
+        await worker.close()
+      } finally {
+        if (liveSessionSyncWorker === worker) liveSessionSyncWorker = null
+      }
+    }).catch((error) => {
+      // Library is already durable. Worker teardown is lifecycle hygiene, not
+      // part of the commit, so it cannot reverse success or suppress search.
+      recordLibraryDiagnostic('LIVE_WORKER_RECYCLE_FAILED', 'Live worker recycle failed after a durable commit')
+      console.error('[session-sync] post-commit worker recycle failed:', error)
+    })
+    if (runtimeEpoch !== libraryRuntimeEpoch || runtimeShuttingDown || libraryRuntimePaused) {
+      deferLibrarySynchronization(request)
+      return
+    }
+  }
+  // Library/transcript/backup are already committed. Search is a rebuildable
+  // projection with its own single writer and must never turn that success
+  // into a failed session synchronization.
+  void getSearchIndexWriteCoordinator().scheduleLegacySource({
+    filePath,
+    sessionId: summary.sessionId,
+    source: summary.source || request.source
+  }).then(notifySearchIndexUpdated).catch((error) => {
+    if (!runtimeShuttingDown) console.error('[search-index] live projection delayed:', error)
+  })
   if (!maintainLibrary && getLibraryHealth().state === 'writer-blocked') {
     // A parse-only worker result proves nothing about Library writability. Retry
     // the full initialization; only that writer-backed path may clear the block.
@@ -812,27 +859,26 @@ function scheduleSessionSynchronization(request: SessionSyncRequest): void {
   })
 }
 
+function notifySearchIndexUpdated(): void {
+  mainWindow?.webContents.send('session:searchIndexUpdated')
+}
+
 function scheduleSearchIndexWarmup(): void {
   if (runtimeShuttingDown) return
-  if (!searchIndexWarmupRunner) {
-    searchIndexWarmupRunner = new LatestSnapshotRunner({
-      // Resolve the source list when the run starts. A Library scan or
-      // sessions:loadAll call that lands during an earlier warmup therefore
-      // queues one fresh snapshot instead of being dropped behind a boolean.
-      run: async () => synchronizeSearchSources(currentSearchSources()),
-      onError: (error) => {
-        if (!runtimeShuttingDown) console.error('[search-index] background warmup failed:', error)
-      }
-    })
-  }
-  const runner = searchIndexWarmupRunner
-  const timer = setTimeout(() => {
-    void runner.schedule(undefined).catch(() => {
-      // onError records operational failures; shutdown intentionally rejects
-      // queued work after the runner has been stopped.
-    })
-  }, 0)
-  timer.unref?.()
+  const scheduledEpoch = libraryRuntimeEpoch
+  scheduleEpochBoundTask({
+    epoch: scheduledEpoch,
+    currentEpoch: () => libraryRuntimeEpoch,
+    isPaused: () => libraryRuntimePaused,
+    isStopped: () => runtimeShuttingDown,
+    run: () => {
+      void getSearchIndexWriteCoordinator().scheduleLegacySnapshot(currentSearchSources())
+        .then(notifySearchIndexUpdated)
+        .catch((error) => {
+          if (!runtimeShuttingDown) console.error('[search-index] background warmup delayed:', error)
+        })
+    }
+  })
 }
 
 function currentAnalysisFolders(): Folder[] {
@@ -978,12 +1024,13 @@ function cleanupRuntimeResources(): Promise<void> {
   transcriptWatcher = null
   const currentLibraryWorker = libraryWorker
   const currentLiveSessionSyncWorker = liveSessionSyncWorker
+  const currentLiveSessionSyncWorkerRecycle = liveSessionSyncWorkerRecycleGate.wait().catch((error) => {
+    console.error('[session-sync] shutdown recycle drain failed:', error)
+  })
   liveSessionSyncWorker = null
   const currentUsageFactWorker = usageFactWorker
   const currentUsageFactSyncRunner = usageFactSyncRunner
   usageFactSyncRunner = null
-  const currentSearchIndexWarmupRunner = searchIndexWarmupRunner
-  searchIndexWarmupRunner = null
   const currentSessionSyncCoordinator = sessionSyncCoordinator
   sessionSyncCoordinator = null
   const currentActivePoller = activePoller
@@ -996,7 +1043,6 @@ function cleanupRuntimeResources(): Promise<void> {
   clearLibraryWriterRecoverySchedule()
   deferredLibrarySyncRequests.clear()
   currentUsageFactSyncRunner?.stop(new Error('Runtime is shutting down'))
-  currentSearchIndexWarmupRunner?.stop(new Error('Runtime is shutting down'))
   // Start draining immediately and overlap it with the bounded cleanup below.
   // LibraryWorkerClient refuses new requests once close() begins. Unlike the
   // other resources this promise must not be deadline-cancelled because
@@ -1004,7 +1050,9 @@ function cleanupRuntimeResources(): Promise<void> {
   const libraryWorkerClosePromise = Promise.all([
     currentLibraryWorker?.close() || Promise.resolve(),
     currentLiveSessionSyncWorker?.close() || Promise.resolve(),
-    currentUsageFactWorker?.close() || Promise.resolve()
+    currentLiveSessionSyncWorkerRecycle,
+    currentUsageFactWorker?.close() || Promise.resolve(),
+    closeSearchIndexWriteCoordinator(new Error('Runtime is shutting down'))
   ])
 
   runtimeCleanupPromise = runRuntimeCleanup([
@@ -2022,7 +2070,7 @@ function currentSearchSources(): Array<{
   sessionId?: string
   source?: string
   isLibraryBackup?: boolean
-  loadRaw?: () => Promise<import('./types').RawJsonlMessage[]>
+  stateFilePath?: string
 }> {
   // findAllSessionFiles is the historical Claude/new-provider scan and does
   // not include the separately discovered Codex or Cursor files. Use the
@@ -2040,12 +2088,7 @@ function currentSearchSources(): Array<{
     const source = detectSessionSourceFromPath(filePath) || undefined
     return {
       filePath,
-      source,
-      ...(source === 'codex'
-        ? { loadRaw: () => loadCodexRawMessages(filePath) }
-        : source === 'cursor'
-          ? { loadRaw: () => loadCursorRawMessages(filePath) }
-          : {})
+      source
     }
   }), cachedSessions)
   return [
@@ -2059,6 +2102,25 @@ function currentSearchSources(): Array<{
 }
 
 ipcMain.handle('sessions:search', async (_event, query: string) => {
+  // A previous bounded SQLITE_BUSY cycle keeps its latest intents. Searching
+  // is an explicit recovery trigger even when no filesystem event arrives.
+  // Never await an entire busy cycle: the UI can safely show the last
+  // committed snapshot while the projection catches up.
+  const recovery = getSearchIndexWriteCoordinator().retryPending()
+  let returnedSnapshot = false
+  void recovery.then(() => {
+    if (returnedSnapshot) notifySearchIndexUpdated()
+  }).catch((error) => {
+    if (!runtimeShuttingDown) console.error('[search-index] query-triggered retry delayed:', error)
+  })
+  // Most retained work succeeds immediately once the external writer is gone,
+  // so give it one animation-frame budget. A still-busy index never blocks
+  // search beyond that; completion emits an observable refresh signal.
+  await Promise.race([
+    recovery.catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, 16))
+  ])
+  returnedSnapshot = true
   return searchIndexedSessions(query)
 })
 
@@ -3117,6 +3179,10 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   try {
     await libraryWriterRecoveryPromise?.catch(() => undefined)
     await libraryInitializationPromise?.catch(() => undefined)
+    await liveSessionSyncWorkerRecycleGate.wait().catch((error) => {
+      recordLibraryDiagnostic('LIVE_WORKER_RECYCLE_FAILED', 'Live worker recycle failed during root change')
+      console.error('[session-sync] root-change recycle drain failed:', error)
+    })
     closeCompensation()
     await waitForCompensationIdle()
     const previousWorker = libraryWorker
@@ -3125,7 +3191,10 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     liveSessionSyncWorker = null
     await Promise.all([
       previousWorker?.close(),
-      previousLiveSessionSyncWorker?.close()
+      previousLiveSessionSyncWorker?.close(),
+      // The old vault's pending backup paths must not land after the root
+      // changes. The new root schedules a full prune snapshot after adoption.
+      closeSearchIndexWriteCoordinator(new Error('Library root is changing'))
     ])
     clearLibraryHealthPersistence()
     changeConfiguredLibraryPath(newPath)
@@ -3192,6 +3261,9 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     libraryStartupChunkActive = false
     libraryRuntimePaused = false
     flushDeferredLibrarySynchronizations()
+    // The adoption-time warmup may have fired while the root was deliberately
+    // paused. Schedule a fresh epoch-bound full prune after the switch commits.
+    scheduleSearchIndexWarmup()
     if (retryWriterAfterSwitch) scheduleLibraryWriterRecovery()
   }
 }

@@ -278,6 +278,7 @@ interface ElectronAPI {
   onSessionUpdated: (callback: (session: any) => void) => void
   onSessionSummaryUpdated: (callback: (session: any) => void) => void
   onSessionsRefresh: (callback: () => void) => void
+  onSearchIndexUpdated: (callback: () => void) => void
   onLibraryPatch: (callback: (patch: { sessions: any[]; config?: any }) => void) => void
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => void
   spotlightSearch: (query: string) => Promise<any[]>

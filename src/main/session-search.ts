@@ -1,9 +1,9 @@
 import {
   searchFTS,
-  synchronizeSearchSources,
   type SearchIndexResult,
   type SearchIndexSource
 } from './search-index'
+import { getSearchIndexWriteCoordinator } from './search-index-writer'
 import type { SessionSummary } from './types'
 
 export type SessionSearchResult = SearchIndexResult
@@ -36,7 +36,7 @@ export async function searchSessionFiles(
   sources: SessionSearchSource[]
 ): Promise<SessionSearchResult[]> {
   if (!query.trim()) return []
-  await synchronizeSearchSources(sources)
+  await getSearchIndexWriteCoordinator().scheduleLegacySnapshot(sources)
   return searchFTS(query, 50)
 }
 

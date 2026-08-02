@@ -11,6 +11,42 @@ import { closeUsageFactStore } from './usage-fact-store'
 const roots: string[] = []
 const largeLiveSyncIt = process.env.SWOB_LARGE_LIVE_SYNC_TEST === '1' ? it : it.skip
 
+function writeLargeJsonlFixture(filePath: string, sessionId: string): void {
+  const userLine = JSON.stringify({
+    uuid: 'user-large', parentUuid: null, sessionId, type: 'user',
+    timestamp: '2026-08-02T09:00:00.000Z', cwd: '/fixture/project',
+    message: { role: 'user', content: 'large baseline' }
+  })
+  const assistantTemplate = JSON.stringify({
+    uuid: 'assistant-large', parentUuid: 'user-large', sessionId, type: 'assistant',
+    timestamp: '2026-08-02T09:00:01.000Z', cwd: '/fixture/project',
+    message: { role: 'assistant', content: '__SWOB_LARGE_PAYLOAD__' }
+  })
+  const marker = '__SWOB_LARGE_PAYLOAD__'
+  const markerAt = assistantTemplate.indexOf(marker)
+  const fd = fs.openSync(filePath, 'w')
+  try {
+    fs.writeSync(fd, userLine + '\n')
+    fs.writeSync(fd, assistantTemplate.slice(0, markerAt))
+    const chunk = Buffer.alloc(1024 * 1024, 0x78)
+    for (let index = 0; index < 100; index++) fs.writeSync(fd, chunk)
+    fs.writeSync(fd, assistantTemplate.slice(markerAt + marker.length) + '\n')
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash('sha256')
+  await new Promise<void>((resolve, reject) => {
+    fs.createReadStream(filePath)
+      .on('data', (chunk) => hash.update(chunk))
+      .on('error', reject)
+      .on('end', resolve)
+  })
+  return hash.digest('hex')
+}
+
 afterEach(() => {
   closeSearchIndex()
   closeUsageFactStore()
@@ -29,19 +65,9 @@ describe('Library worker request', () => {
     const sessionId = 'worker-100mb-follow-up'
     const sourcePath = path.join(sourceRoot, '.claude', 'projects', 'fixture', `${sessionId}.jsonl`)
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
-    const largeAssistant = {
-      uuid: 'assistant-large', parentUuid: 'user-large', sessionId, type: 'assistant',
-      timestamp: '2026-08-02T09:00:01.000Z', cwd: '/fixture/project',
-      message: { role: 'assistant', content: 'x'.repeat(100 * 1024 * 1024) }
-    }
-    fs.writeFileSync(sourcePath, [
-      JSON.stringify({
-        uuid: 'user-large', parentUuid: null, sessionId, type: 'user',
-        timestamp: '2026-08-02T09:00:00.000Z', cwd: '/fixture/project',
-        message: { role: 'user', content: 'large baseline' }
-      }),
-      JSON.stringify(largeAssistant)
-    ].join('\n') + '\n')
+    // Keep the test harness itself bounded: never construct or retain the
+    // 100MB payload as one parent-process string.
+    writeLargeJsonlFixture(sourcePath, sessionId)
 
     const initial = await runLibraryWorkerRequest({
       type: 'session-sync', root, filePath: sourcePath, sessionId, source: 'claude-code'
@@ -67,8 +93,8 @@ describe('Library worker request', () => {
     const elapsedMs = Date.now() - startedAt
     if (followUp.kind !== 'session-sync' || !followUp.value.dirPath) throw new Error('large follow-up sync failed')
     expect(elapsedMs).toBeLessThan(60_000)
-    const digest = (filePath: string): string => createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
-    expect(digest(path.join(followUp.value.dirPath, 'backup.jsonl'))).toBe(digest(sourcePath))
+    expect(await sha256File(path.join(followUp.value.dirPath, 'backup.jsonl')))
+      .toBe(await sha256File(sourcePath))
     expect(fs.readFileSync(path.join(followUp.value.dirPath, 'transcript.md'), 'utf8'))
       .toContain('large source follow-up')
     console.info('[100mb-live-sync]', JSON.stringify({ elapsedMs, bytes: fs.statSync(sourcePath).size }))
@@ -223,7 +249,7 @@ describe('Library worker request', () => {
     expect(tree.folders[0].sessions.map((session) => session.sessionId)).toEqual([sessionId])
   })
 
-  it('parses, backs up and indexes a changed session off the main-process path', async () => {
+  it('commits Library before the independently queued search projection', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-sync-'))
     roots.push(root)
     process.env.SWOB_SEARCH_INDEX_DIR = path.join(root, 'search-index')
@@ -254,6 +280,14 @@ describe('Library worker request', () => {
     expect(result.value.summary.sessionId).toBe(sessionId)
     expect(result.value.dirPath).toBeTruthy()
     expect(fs.existsSync(path.join(result.value.dirPath!, 'backup.jsonl'))).toBe(true)
+    expect(fs.existsSync(path.join(root, 'search-index', 'search.db'))).toBe(false)
+
+    const indexed = await runLibraryWorkerRequest({
+      type: 'search-sources-sync',
+      sources: [{ filePath: sourcePath, sessionId, source: 'claude-code' }],
+      prune: false
+    })
+    expect(indexed.kind).toBe('search-write')
     expect(fs.existsSync(path.join(root, 'search-index', 'search.db'))).toBe(true)
   })
 })

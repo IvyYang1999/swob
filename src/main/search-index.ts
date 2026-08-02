@@ -19,7 +19,11 @@ import { builtinProviderForId } from '../shared/provider-capabilities'
 
 // v4 rebuilds unchanged files so ANSI/CSI/OSC text cannot survive in old FTS rows.
 const SEARCH_SCHEMA_VERSION = 5
-const SEARCH_DATABASE_BUSY_TIMEOUT_MS = 3_000
+
+function searchDatabaseBusyTimeoutMs(): number {
+  const configured = Number(process.env.SWOB_SEARCH_INDEX_BUSY_TIMEOUT_MS)
+  return Number.isFinite(configured) && configured >= 0 ? configured : 3_000
+}
 
 export interface SearchIndexSource {
   filePath: string
@@ -114,6 +118,9 @@ interface GrepRow {
 
 let database: Database.Database | null = null
 let databasePath = ''
+let readDatabase: Database.Database | null = null
+let readDatabasePath = ''
+let readDatabaseOpenCount = 0
 let synchronizationTail: Promise<void> = Promise.resolve()
 let indexRevision = 0
 const queryCache = new Map<string, {
@@ -150,7 +157,7 @@ function computeFileState(filePath: string): FileState | null {
 }
 
 function ensureSchema(db: Database.Database): void {
-  db.pragma(`busy_timeout = ${SEARCH_DATABASE_BUSY_TIMEOUT_MS}`)
+  db.pragma(`busy_timeout = ${searchDatabaseBusyTimeoutMs()}`)
   db.pragma('journal_mode = WAL')
   db.pragma('synchronous = NORMAL')
   db.pragma('temp_store = MEMORY')
@@ -207,7 +214,7 @@ function getDatabase(): Database.Database {
   queryCache.clear()
 
   fs.mkdirSync(path.dirname(requestedPath), { recursive: true, mode: 0o700 })
-  const nextDatabase = new Database(requestedPath, { timeout: SEARCH_DATABASE_BUSY_TIMEOUT_MS })
+  const nextDatabase = new Database(requestedPath, { timeout: searchDatabaseBusyTimeoutMs() })
   try {
     ensureSchema(nextDatabase)
     try { fs.chmodSync(requestedPath, 0o600) } catch { /* best effort */ }
@@ -224,14 +231,39 @@ function withReadOnlyDatabase<T>(query: (db: Database.Database) => T): T {
   const readOnlyDatabase = new Database(searchDatabasePath(), {
     readonly: true,
     fileMustExist: true,
-    timeout: SEARCH_DATABASE_BUSY_TIMEOUT_MS
+    timeout: searchDatabaseBusyTimeoutMs()
   })
   try {
-    readOnlyDatabase.pragma(`busy_timeout = ${SEARCH_DATABASE_BUSY_TIMEOUT_MS}`)
+    readOnlyDatabase.pragma(`busy_timeout = ${searchDatabaseBusyTimeoutMs()}`)
     return query(readOnlyDatabase)
   } finally {
     readOnlyDatabase.close()
   }
+}
+
+function getReadOnlyDatabase(): Database.Database | null {
+  const requestedPath = searchDatabasePath()
+  if (!fs.existsSync(requestedPath)) {
+    if (readDatabase && readDatabasePath === requestedPath) {
+      readDatabase.close()
+      readDatabase = null
+      readDatabasePath = ''
+      queryCache.clear()
+    }
+    return null
+  }
+  if (readDatabase && readDatabasePath === requestedPath) return readDatabase
+  if (readDatabase) readDatabase.close()
+  const nextDatabase = new Database(requestedPath, {
+    readonly: true,
+    fileMustExist: true,
+    timeout: searchDatabaseBusyTimeoutMs()
+  })
+  nextDatabase.pragma(`busy_timeout = ${searchDatabaseBusyTimeoutMs()}`)
+  readDatabase = nextDatabase
+  readDatabasePath = requestedPath
+  readDatabaseOpenCount++
+  return nextDatabase
 }
 
 function searchableValue(value: unknown): string {
@@ -565,7 +597,15 @@ function toFtsQuery(query: string): string | null {
 export function searchFTS(query: string, limit = 50): SearchIndexResult[] {
   const ftsQuery = toFtsQuery(query)
   if (!ftsQuery || limit <= 0) return []
-  const db = getDatabase()
+  const db = getReadOnlyDatabase()
+  return db ? searchFTSFromDatabase(db, ftsQuery, limit) : []
+}
+
+function searchFTSFromDatabase(
+  db: Database.Database,
+  ftsQuery: string,
+  limit: number
+): SearchIndexResult[] {
   const cacheKey = `${limit}:${ftsQuery}`
   const dataVersion = db.pragma('data_version', { simple: true }) as number
   const cached = queryCache.get(cacheKey)
@@ -736,10 +776,25 @@ export function searchIndexStats(): { sessions: number; messages: number; librar
   }
 }
 
+export function searchIndexConnectionStats(): {
+  readOpens: number
+  hasReadConnection: boolean
+  hasWriteConnection: boolean
+} {
+  return {
+    readOpens: readDatabaseOpenCount,
+    hasReadConnection: readDatabase !== null,
+    hasWriteConnection: database !== null
+  }
+}
+
 export function closeSearchIndex(): void {
   if (database) database.close()
+  if (readDatabase) readDatabase.close()
   database = null
   databasePath = ''
+  readDatabase = null
+  readDatabasePath = ''
   synchronizationTail = Promise.resolve()
   invalidateQueryCache()
 }

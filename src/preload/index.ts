@@ -343,6 +343,9 @@ const api = {
   onSessionsRefresh: (callback: () => void) => {
     ipcRenderer.on('sessions:refresh', () => callback())
   },
+  onSearchIndexUpdated: (callback: () => void) => {
+    ipcRenderer.on('session:searchIndexUpdated', () => callback())
+  },
   onLibraryPatch: (callback: (patch: unknown) => void) => {
     ipcRenderer.on('sessions:libraryPatch', (_event, patch) => callback(patch))
   },

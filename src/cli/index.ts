@@ -42,7 +42,11 @@ import {
 import { detectSessionSourceForJsonl } from '../main/session-source'
 import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
 import { refreshCanonicalProviders } from '../main/provider-runtime'
-import { grepTranscriptsReadOnly, synchronizeSearchSources, type SearchIndexSource } from '../main/search-index'
+import { grepTranscriptsReadOnly, type SearchIndexSource } from '../main/search-index'
+import {
+  closeSearchIndexWriteCoordinator,
+  getSearchIndexWriteCoordinator
+} from '../main/search-index-writer'
 import { filterVisibleSearchSources } from '../main/session-search'
 import { findCodexSessionFiles, loadCodexRawMessages } from '../main/codex-loader'
 import { findCursorSessionFiles, loadCursorRawMessages } from '../main/cursor-loader'
@@ -405,7 +409,7 @@ async function cmdGrep(query: string, flags: Record<string, string | true>): Pro
         `canonical-refresh:${message}`
       )
     }
-    await synchronizeSearchSources(visibleSources)
+    await getSearchIndexWriteCoordinator().scheduleLegacySnapshot(visibleSources)
     results = grepTranscriptsReadOnly(query, {
       source: typeof flags.source === 'string' ? flags.source : undefined,
       sessionIds: typeof flags.folder === 'string' ? folderSessionIds(flags.folder) : undefined,
@@ -427,6 +431,10 @@ async function cmdGrep(query: string, flags: Record<string, string | true>): Pro
       })
     }
     throw error
+  } finally {
+    // CLI uses the in-process form of the same single-writer coordinator. It
+    // must release the connection/queue before Node decides whether to exit.
+    await closeSearchIndexWriteCoordinator(new Error('CLI search completed'))
   }
   out({
     query,

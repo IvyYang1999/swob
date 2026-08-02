@@ -10,7 +10,8 @@ import {
   syncBackup,
   setSessionTurnCount,
   withLibraryMaintenanceWriter,
-  type LibraryTree
+  type LibraryTree,
+  type LibrarySyncOutcome
 } from './library-manager'
 import { parseSessionFile, buildSessionSummary, resolvePhysicalSessionId } from './session-loader'
 import { buildCodexSessionSummary } from './codex-loader'
@@ -53,9 +54,14 @@ export interface LibraryWorkerSessionSyncResult {
   dirPath?: string
 }
 
+export interface LibraryWorkerSyncResult {
+  tree: LibraryTree
+  outcome: LibrarySyncOutcome
+}
+
 type LibraryWorkerResult =
   | { kind: 'shutdown' }
-  | { kind: 'tree'; tree: LibraryTree }
+  | { kind: 'tree'; tree: LibraryTree; syncOutcome?: LibrarySyncOutcome }
   | { kind: 'session-sync'; value: LibraryWorkerSessionSyncResult }
   | { kind: 'usage-facts-sync'; value: UsageFactSyncResult }
 
@@ -110,9 +116,9 @@ export async function runLibraryWorkerRequest(
   if (request.type === 'scan') return { kind: 'tree', tree: scanLibrary() }
   if (request.type === 'sync') {
     scanLibrary()
-    await syncLibraryFromSessions(request.sessions, request.sessionMeta, onProgress, shouldCancel)
+    const syncOutcome = await syncLibraryFromSessions(request.sessions, request.sessionMeta, onProgress, shouldCancel)
     throwIfWorkerCancelled(shouldCancel)
-    return { kind: 'tree', tree: scanLibrary() }
+    return { kind: 'tree', tree: scanLibrary(), syncOutcome }
   }
   const detectedSource = request.source === 'transcript'
     ? detectSessionSourceFromPath(request.filePath)
@@ -222,7 +228,7 @@ export class LibraryWorkerClient {
     sessions: SessionSummary[],
     sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
     options: { ignoreDirs?: string[]; onProgress?: (progress: LibraryWorkerProgress) => void } = {}
-  ): Promise<LibraryTree> {
+  ): Promise<LibraryWorkerSyncResult> {
     return this.observe(this.request({
       type: 'sync',
       root,
@@ -231,7 +237,8 @@ export class LibraryWorkerClient {
       sessionMeta
     }, options.onProgress).then((result) => {
       if (result.kind !== 'tree') throw new Error('Library worker returned an invalid sync result')
-      return result.tree
+      if (!result.syncOutcome) throw new Error('Library worker omitted sync outcome')
+      return { tree: result.tree, outcome: result.syncOutcome }
     }))
   }
 

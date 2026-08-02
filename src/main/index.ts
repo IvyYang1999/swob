@@ -89,22 +89,32 @@ import {
   undoLastLibraryOrganization,
   recoverInterruptedLibraryOrganization,
   withLibraryMaintenanceWriter,
-  getLibraryHealth,
+  getLibrarySessionRegistryDiagnostics,
   getSessionFreshness,
   getStaleSessions,
+  type LibrarySession,
+  type LibraryTree
+} from './library-manager'
+import {
+  getLibraryHealth,
   transitionLibraryHealth,
   classifyLibraryError,
+  recordLibraryDiagnostic,
   onLibraryHealthChanged,
+  onLibraryDiagnostic,
   getCompensationProgress,
   onCompensationUpdate,
   runCompensation,
   cancelCompensation,
-  type LibrarySession,
-  type LibraryTree,
+  enqueueCompensation,
+  waitForCompensationIdle,
+  configureLibraryHealthPersistence,
+  clearLibraryHealthPersistence,
+  resetLibraryHealth,
   type LibraryHealthSnapshot,
   type SessionFreshness,
   type CompensationProgress
-} from './library-manager'
+} from './library-health'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
@@ -506,18 +516,60 @@ function markSessionActive(sessionId?: string): void {
   mainWindow?.webContents.send('sessions:activeChanged', previousActiveIds)
 }
 
+async function processLibraryCompensationEntry(sessionId: string, dirPath: string): Promise<void> {
+  await withLibraryMaintenanceWriter(async () => {
+    await updateTranscript(sessionId, undefined, dirPath)
+    await syncBackup(sessionId, dirPath)
+  })
+}
+
+async function runPendingLibraryCompensation(): Promise<void> {
+  try {
+    await runCompensation(processLibraryCompensationEntry)
+  } catch (error) {
+    if (!runtimeShuttingDown) console.error('[library-compensation] retry failed:', error)
+  }
+}
+
 async function performSessionSynchronization(request: SessionSyncRequest): Promise<void> {
   const cached = cachedSummaryForSource(request.filePath, request.sessionId)
   const filePath = request.filePath || cached?.filePath
   if (!filePath) return
   const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
-  const { summary, dirPath } = await worker.syncSession({
-    root: getLibraryRoot(),
-    filePath,
-    sessionId: request.sessionId,
-    source: request.source,
-    maintainLibrary: libraryInitialized
-  })
+  let synchronized: Awaited<ReturnType<LibraryWorkerClient['syncSession']>>
+  try {
+    synchronized = await worker.syncSession({
+      root: getLibraryRoot(),
+      filePath,
+      sessionId: request.sessionId,
+      source: request.source,
+      maintainLibrary: libraryInitialized
+    })
+  } catch (error) {
+    const classification = classifyLibraryError(error)
+    const typed = error as { name?: unknown; code?: unknown } | null
+    const libraryFailure = typed?.name === 'LibraryWriterBusyError' ||
+      typed?.name === 'SessionIdentityConflictError' ||
+      typed?.name === 'LibraryPathUnsafeError' ||
+      ['LIBRARY_WRITER_BUSY', 'SESSION_IDENTITY_CONFLICT', 'EACCES', 'EPERM', 'ENOSPC', 'EIO']
+        .includes(typeof typed?.code === 'string' ? typed.code : '')
+    if (libraryFailure) {
+      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+    } else {
+      recordLibraryDiagnostic('SESSION_SYNC_FAILED', 'A source session failed to synchronize')
+    }
+    if (libraryFailure && classification.state === 'writer-blocked') {
+      const sessionId = request.sessionId || cached?.sessionId
+      const dirPath = sessionId ? getSessionDirPath(sessionId) : null
+      if (sessionId && dirPath) enqueueCompensation([{ sessionId, dirPath }])
+    }
+    throw error
+  }
+  const { summary, dirPath } = synchronized
+  if (getLibraryHealth().state === 'writer-blocked') {
+    transitionLibraryHealth('ready', 'WRITER_RECOVERED', 'Library writer recovered; replaying queued sessions')
+    void runPendingLibraryCompensation()
+  }
   markSessionActive(summary.sessionId)
   annotateSessionForFrontend(summary, dirPath)
   if (dirPath) {
@@ -714,6 +766,8 @@ let runtimeCleanupPromise: Promise<void> | null = null
 function cleanupRuntimeResources(): Promise<void> {
   if (runtimeCleanupPromise) return runtimeCleanupPromise
   runtimeShuttingDown = true
+  cancelCompensation()
+  const compensationClosePromise = waitForCompensationIdle()
   const sourceWatchers = [watcher, codexWatcher, cursorWatcher].filter(
     (candidate): candidate is SourceDirectoryWatcher => candidate !== null
   )
@@ -795,6 +849,7 @@ function cleanupRuntimeResources(): Promise<void> {
   }).then(async () => {
     const startedAt = Date.now()
     writeLifecycleLog('library-worker-drain-start')
+    await compensationClosePromise
     await libraryWorkerClosePromise
     if (libraryWorker === currentLibraryWorker) libraryWorker = null
     if (usageFactWorker === currentUsageFactWorker) usageFactWorker = null
@@ -1197,6 +1252,8 @@ async function initializeLibraryScanInBackground(): Promise<void> {
     transcriptWatcher?.start()
     if (cachedSessions.length > 0) void hydrateLibrarySessions(tree)
   } catch (error) {
+    const classification = classifyLibraryError(error)
+    transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
     console.error('[library-worker] initial scan failed:', error)
   }
 }
@@ -1227,15 +1284,24 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
   if (libraryInitializationPromise) return libraryInitializationPromise
   const work = (async (): Promise<void> => {
     initLibrary()
+    configureLibraryHealthPersistence(
+      getLibraryRoot(),
+      path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
+    )
+    resetLibraryHealth()
+    recordLibraryDiagnostic('SYNC_START', 'Library synchronization started')
     const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
     const oldConfig = loadConfig()
     let tree = latestLibraryTree || await requestLibraryScan(false)
+    let skippedConflictCount = 0
     const needsMigration = oldConfig.folders.length > 0 &&
       tree.folders.length === 0 && tree.ungroupedSessions.length === 0
 
-    tree = await worker.sync(getLibraryRoot(), sessions, oldConfig.sessionMeta, {
+    const initialSync = await worker.sync(getLibraryRoot(), sessions, oldConfig.sessionMeta, {
       onProgress: reportLibrarySyncProgress
     })
+    tree = initialSync.tree
+    skippedConflictCount += initialSync.outcome.skipped.length
     if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
 
     if (needsMigration) {
@@ -1249,9 +1315,11 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
 
     // Include any session that arrived while the initial worker batch was running.
     if (cachedSessions.some((session) => !sessions.some((initial) => initial.id === session.id))) {
-      tree = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
+      const catchUpSync = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
         onProgress: reportLibrarySyncProgress
       })
+      tree = catchUpSync.tree
+      skippedConflictCount += catchUpSync.outcome.skipped.length
       if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
     }
 
@@ -1261,6 +1329,19 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
     libraryInitialized = true
     if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
     await hydrateLibrarySessions(tree)
+    const conflictCount = Math.max(
+      skippedConflictCount,
+      getLibrarySessionRegistryDiagnostics().filter((binding) => binding.state === 'conflict').length
+    )
+    if (conflictCount > 0) {
+      transitionLibraryHealth(
+        'identity-conflict',
+        'IDENTITY_CONFLICT',
+        `${conflictCount} logical session identities have multiple read-only packages`
+      )
+    } else {
+      transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library synchronization completed')
+    }
   })()
   libraryInitializationPromise = work
   try {
@@ -2702,12 +2783,7 @@ ipcMain.handle('library:compensationCancel', () => {
 })
 
 ipcMain.handle('library:compensationRetry', async () => {
-  return runCompensation(async (sessionId, dirPath) => {
-    await withLibraryMaintenanceWriter(async () => {
-      await updateTranscript(sessionId, dirPath)
-      await syncBackup(sessionId, dirPath)
-    })
-  })
+  return runCompensation(processLibraryCompensationEntry)
 })
 
 ipcMain.handle('library:selectDirectory', async () => {
@@ -2726,8 +2802,17 @@ ipcMain.handle('library:selectDirectory', async () => {
 })
 
 async function activateLibraryAt(newPath: string): Promise<string> {
+  cancelCompensation()
+  await waitForCompensationIdle()
+  clearLibraryHealthPersistence()
   changeConfiguredLibraryPath(newPath)
   initLibrary(newPath)
+  configureLibraryHealthPersistence(
+    getLibraryRoot(),
+    path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
+  )
+  resetLibraryHealth()
+  recordLibraryDiagnostic('SYNC_START', 'Library synchronization started after root change')
   latestLibraryTree = null
   libraryInitialized = false
   libraryInitializationPromise = null
@@ -2735,11 +2820,14 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   startLibraryWatcher() // 跟随新库根重启目录监听
   const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
   let tree: LibraryTree
+  let skippedConflictCount = 0
   if (cachedSessions.length > 0) {
     const oldConfig = loadConfig()
-    tree = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
+    const syncResult = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
       onProgress: reportLibrarySyncProgress
     })
+    tree = syncResult.tree
+    skippedConflictCount = syncResult.outcome.skipped.length
   } else {
     tree = await worker.scan(getLibraryRoot())
   }
@@ -2754,6 +2842,19 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     tree = await requestLibraryScan()
   }
   await hydrateLibrarySessions(tree)
+  const conflictCount = Math.max(
+    skippedConflictCount,
+    getLibrarySessionRegistryDiagnostics().filter((binding) => binding.state === 'conflict').length
+  )
+  if (conflictCount > 0) {
+    transitionLibraryHealth(
+      'identity-conflict',
+      'IDENTITY_CONFLICT',
+      `${conflictCount} logical session identities have multiple read-only packages`
+    )
+  } else {
+    transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library synchronization completed')
+  }
   return getLibraryRoot()
 }
 
@@ -3064,6 +3165,10 @@ app.whenReady().then(async () => {
   // Only resolve/create the root synchronously. Recursive scan and batch sync run in a Worker.
   initLibrary()
   approveLibraryRoot(getLibraryRoot())
+  configureLibraryHealthPersistence(
+    getLibraryRoot(),
+    path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
+  )
   try {
     recoverInterruptedLibraryOrganization()
   } catch (error) {
@@ -3101,8 +3206,12 @@ app.whenReady().then(async () => {
   onLibraryHealthChanged((event) => {
     try { mainWindow?.webContents.send('library:healthChanged', event) } catch { /* window closing */ }
   })
+  onLibraryDiagnostic(() => {
+    try { mainWindow?.webContents.send('library:healthChanged', getLibraryHealth()) } catch { /* window closing */ }
+  })
   onCompensationUpdate((progress) => {
     try { mainWindow?.webContents.send('library:compensationUpdate', progress) } catch { /* window closing */ }
+    try { mainWindow?.webContents.send('library:healthChanged', getLibraryHealth()) } catch { /* window closing */ }
   })
 
   createWindow()

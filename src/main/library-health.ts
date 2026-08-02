@@ -10,52 +10,125 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
+import {
+  computeSessionFreshness,
+  findStaleSessions,
+  ERROR_LAG_THRESHOLD_MS
+} from './library-freshness'
+
+export { computeSessionFreshness, findStaleSessions } from './library-freshness'
+import {
+  type CompensationProgress,
+  type LibraryDiagnosticEvent,
+  type LibraryHealthSnapshot,
+  type LibraryHealthState,
+  type SessionFreshness
+} from '../shared/library-health-contract'
+
+export type {
+  CompensationProgress,
+  LibraryDiagnosticEvent,
+  LibraryHealthSnapshot,
+  LibraryHealthState,
+  SessionFreshness
+} from '../shared/library-health-contract'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-export type LibraryHealthState =
-  | 'initializing'
-  | 'ready'
-  | 'read-only'
-  | 'writer-blocked'
-  | 'identity-conflict'
-  | 'corrupt'
-
-export interface LibraryDiagnosticEvent {
-  timestamp: string
-  state: LibraryHealthState
-  errorCode: string
-  message: string
-}
-
-export interface SessionFreshness {
-  sessionId: string
-  sourceUpdatedAt: string | null
-  transcriptUpdatedAt: string | null
-  backupUpdatedAt: string | null
-  lagMs: number
-}
-
-export interface CompensationProgress {
-  total: number
-  completed: number
-  failed: number
-}
-
-export interface LibraryHealthSnapshot {
-  state: LibraryHealthState
-  diagnostics: readonly LibraryDiagnosticEvent[]
-}
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const MAX_DIAGNOSTIC_EVENTS = 50
-const DEFAULT_STALE_THRESHOLD_MS = 60_000
-const ERROR_LAG_THRESHOLD_MS = 5 * 60_000
+const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 320
+const MAX_DIAGNOSTIC_READ_BYTES = 256 * 1024
+
+let diagnosticFilePath: string | null = null
+
+function sanitizeDiagnosticMessage(message: string): string {
+  return message
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, '[id]')
+    .replace(/(?:[A-Za-z]:\\|\/)[^\s"'`]+/g, '[path]')
+    .slice(0, MAX_DIAGNOSTIC_MESSAGE_LENGTH)
+}
+
+function appendDiagnostic(event: LibraryDiagnosticEvent): void {
+  if (!diagnosticFilePath) return
+  let descriptor: number | null = null
+  try {
+    const diagnosticDirectory = path.dirname(diagnosticFilePath)
+    if (!fs.existsSync(diagnosticDirectory)) fs.mkdirSync(diagnosticDirectory, { recursive: true, mode: 0o700 })
+    const directoryStat = fs.lstatSync(diagnosticDirectory)
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) return
+    if (fs.existsSync(diagnosticFilePath) && fs.lstatSync(diagnosticFilePath).isSymbolicLink()) return
+    const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0
+    descriptor = fs.openSync(
+      diagnosticFilePath,
+      fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_WRONLY | noFollow,
+      0o600
+    )
+    if (!fs.fstatSync(descriptor).isFile()) return
+    fs.writeSync(descriptor, `${JSON.stringify(event)}\n`, undefined, 'utf8')
+    fs.fsyncSync(descriptor)
+  } catch {
+    // Diagnostics must never turn a Library failure into an application crash.
+  } finally {
+    if (descriptor !== null) {
+      try { fs.closeSync(descriptor) } catch { /* already closed/unavailable */ }
+    }
+  }
+}
+
+function readPersistedDiagnostics(filePath: string): LibraryDiagnosticEvent[] {
+  let descriptor: number | null = null
+  try {
+    if (!fs.existsSync(filePath) || fs.lstatSync(filePath).isSymbolicLink()) return []
+    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY)
+    const size = fs.fstatSync(descriptor).size
+    const readSize = Math.min(size, MAX_DIAGNOSTIC_READ_BYTES)
+    const buffer = Buffer.alloc(readSize)
+    fs.readSync(descriptor, buffer, 0, readSize, size - readSize)
+    let lines = buffer.toString('utf8').split('\n')
+    if (size > readSize) lines = lines.slice(1)
+    const events: LibraryDiagnosticEvent[] = []
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const value = JSON.parse(line) as Partial<LibraryDiagnosticEvent>
+        if (value.schemaVersion === 1 && typeof value.timestamp === 'string' &&
+          typeof value.state === 'string' && typeof value.errorCode === 'string' &&
+          typeof value.message === 'string' && (value.severity === 'warning' || value.severity === 'error')) {
+          events.push(value as LibraryDiagnosticEvent)
+        }
+      } catch { /* tolerate a torn tail and retain earlier valid events */ }
+    }
+    return events.slice(-MAX_DIAGNOSTIC_EVENTS)
+  } catch {
+    return []
+  } finally {
+    if (descriptor !== null) {
+      try { fs.closeSync(descriptor) } catch { /* already closed/unavailable */ }
+    }
+  }
+}
+
+/** Configure append-only, redacted diagnostics outside the Library write boundary. */
+export function configureLibraryHealthPersistence(libraryRoot: string, diagnosticsRoot: string): void {
+  const resolvedDiagnosticsRoot = path.resolve(diagnosticsRoot)
+  const libraryHash = createHash('sha256').update(path.resolve(libraryRoot)).digest('hex').slice(0, 24)
+  const candidate = path.join(resolvedDiagnosticsRoot, `library-health.${libraryHash}.v1.jsonl`)
+  if (diagnosticFilePath === candidate) return
+  diagnosticFilePath = candidate
+  healthMachine.replaceDiagnostics(readPersistedDiagnostics(candidate))
+}
+
+/** Test/root-switch boundary: stop persisting to the previous Library. */
+export function clearLibraryHealthPersistence(): void {
+  diagnosticFilePath = null
+}
 
 // ---------------------------------------------------------------------------
 // State Machine
@@ -63,6 +136,7 @@ const ERROR_LAG_THRESHOLD_MS = 5 * 60_000
 
 class LibraryHealthStateMachine extends EventEmitter {
   private _state: LibraryHealthState = 'initializing'
+  private _stateSinceAt = new Date().toISOString()
   private readonly _diagnostics: LibraryDiagnosticEvent[] = []
 
   get state(): LibraryHealthState {
@@ -71,6 +145,10 @@ class LibraryHealthStateMachine extends EventEmitter {
 
   get diagnostics(): readonly LibraryDiagnosticEvent[] {
     return this._diagnostics
+  }
+
+  replaceDiagnostics(events: readonly LibraryDiagnosticEvent[]): void {
+    this._diagnostics.splice(0, this._diagnostics.length, ...events.slice(-MAX_DIAGNOSTIC_EVENTS))
   }
 
   /**
@@ -83,9 +161,15 @@ class LibraryHealthStateMachine extends EventEmitter {
     message?: string
   ): void {
     const prev = this._state
-    if (prev === next) return
+    if (prev === next) {
+      if (errorCode || message) {
+        this.recordDiagnostic(next, errorCode || 'STATE_EVENT', message || `Library remains ${next}`)
+      }
+      return
+    }
 
     this._state = next
+    this._stateSinceAt = new Date().toISOString()
 
     if (errorCode || message) {
       this.recordDiagnostic(next, errorCode || 'STATE_CHANGE', message || `${prev} -> ${next}`)
@@ -100,23 +184,44 @@ class LibraryHealthStateMachine extends EventEmitter {
     message: string
   ): void {
     const event: LibraryDiagnosticEvent = {
+      schemaVersion: 1,
       timestamp: new Date().toISOString(),
       state,
       errorCode,
-      message
+      message: sanitizeDiagnosticMessage(message),
+      severity: /(?:ERROR|FAILED|CONFLICT|BUSY|DENIED|FULL|UNSAFE|CORRUPT)/.test(errorCode) ||
+        (state !== 'ready' && state !== 'initializing')
+        ? 'error'
+        : 'warning'
     }
     this._diagnostics.push(event)
     // Keep bounded — drop oldest events beyond the cap
     while (this._diagnostics.length > MAX_DIAGNOSTIC_EVENTS) {
       this._diagnostics.shift()
     }
+    appendDiagnostic(event)
     this.emit('diagnostic', event)
   }
 
   snapshot(): LibraryHealthSnapshot {
+    const latest = this._diagnostics[this._diagnostics.length - 1]
     return {
+      schemaVersion: 1,
       state: this._state,
-      diagnostics: [...this._diagnostics]
+      stateSinceAt: this._stateSinceAt,
+      reasonCode: latest?.errorCode ?? null,
+      writeCapability: this._state === 'ready'
+        ? 'full'
+        : this._state === 'identity-conflict'
+          ? 'partial'
+          : 'none',
+      diagnostics: [...this._diagnostics],
+      compensation: compensationQueue.progress,
+      availableActions: compensationQueue.running
+        ? ['cancel-compensation']
+        : compensationQueue.progress.pending > 0
+          ? ['retry-compensation']
+          : []
     }
   }
 
@@ -125,6 +230,7 @@ class LibraryHealthStateMachine extends EventEmitter {
    */
   reset(): void {
     this._state = 'initializing'
+    this._stateSinceAt = new Date().toISOString()
   }
 }
 
@@ -141,9 +247,12 @@ type CompensationProcessor = (sessionId: string, dirPath: string) => Promise<voi
 
 class CompensationQueue extends EventEmitter {
   private _queue: CompensationEntry[] = []
-  private _progress: CompensationProgress = { total: 0, completed: 0, failed: 0 }
+  private readonly _activeSessionIds = new Set<string>()
+  private _progress = { total: 0, completed: 0, failed: 0 }
   private _running = false
   private _cancelled = false
+  private _runPromise: Promise<CompensationProgress> | null = null
+  private _generation = 0
   private _concurrency: number
 
   constructor(concurrency = 2) {
@@ -152,7 +261,12 @@ class CompensationQueue extends EventEmitter {
   }
 
   get progress(): CompensationProgress {
-    return { ...this._progress }
+    return {
+      ...this._progress,
+      pending: this._queue.length + this._activeSessionIds.size,
+      inProgress: this._running,
+      cancelled: this._cancelled
+    }
   }
 
   get running(): boolean {
@@ -165,18 +279,16 @@ class CompensationQueue extends EventEmitter {
    */
   enqueue(entries: CompensationEntry[]): void {
     // Deduplicate by sessionId
-    const existing = new Set(this._queue.map((e) => e.sessionId))
+    const beforeLength = this._queue.length
+    const existing = new Set([...this._queue.map((e) => e.sessionId), ...this._activeSessionIds])
     for (const entry of entries) {
       if (!existing.has(entry.sessionId)) {
         this._queue.push(entry)
         existing.add(entry.sessionId)
       }
     }
-    this._progress = {
-      total: this._queue.length + this._progress.completed + this._progress.failed,
-      completed: this._progress.completed,
-      failed: this._progress.failed
-    }
+    if (this._running) this._progress.total += this._queue.length - beforeLength
+    else this._progress = { total: this._queue.length, completed: 0, failed: 0 }
     this.emit('update', this.progress)
   }
 
@@ -187,52 +299,62 @@ class CompensationQueue extends EventEmitter {
   /**
    * Process the queue with bounded concurrency.
    */
-  async run(processor: CompensationProcessor): Promise<CompensationProgress> {
-    if (this._running) return this.progress
+  run(processor: CompensationProcessor): Promise<CompensationProgress> {
+    if (this._runPromise) return this._runPromise
+    this._runPromise = this.process(processor).finally(() => {
+      this._runPromise = null
+    })
+    return this._runPromise
+  }
+
+  private async process(processor: CompensationProcessor): Promise<CompensationProgress> {
+    const generation = this._generation
     this._running = true
     this._cancelled = false
     this._progress = { total: this._queue.length, completed: 0, failed: 0 }
     this.emit('update', this.progress)
+    const failedEntries: CompensationEntry[] = []
 
-    while (this._queue.length > 0 && !this._cancelled) {
+    while (this._queue.length > 0 && !this._cancelled && generation === this._generation) {
       const batch = this._queue.splice(0, this._concurrency)
+      batch.forEach((entry) => this._activeSessionIds.add(entry.sessionId))
       const results = await Promise.allSettled(
         batch.map((entry) => processor(entry.sessionId, entry.dirPath))
       )
-      for (const result of results) {
+      for (const [index, result] of results.entries()) {
+        this._activeSessionIds.delete(batch[index].sessionId)
+        if (generation !== this._generation) continue
         if (result.status === 'fulfilled') {
           this._progress.completed++
         } else {
           this._progress.failed++
+          failedEntries.push(batch[index])
         }
       }
-      this.emit('update', this.progress)
+      if (generation === this._generation) this.emit('update', this.progress)
     }
 
+    // A failed item remains explicit pending work for a later Retry. Requeue it
+    // only after this run ends so a persistent failure cannot create a hot loop.
+    if (generation === this._generation) this._queue.unshift(...failedEntries)
     this._running = false
+    this.emit('update', this.progress)
     return this.progress
+  }
+
+  waitForIdle(): Promise<void> {
+    return this._runPromise?.then(() => undefined, () => undefined) ?? Promise.resolve()
   }
 
   /**
    * Clear queue and reset progress. Used for retry.
    */
   reset(): void {
+    this._generation++
+    this._cancelled = true
     this._queue = []
     this._progress = { total: 0, completed: 0, failed: 0 }
-    this._cancelled = false
-    this._running = false
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Freshness
-// ---------------------------------------------------------------------------
-
-function statMtimeIso(filePath: string): string | null {
-  try {
-    return new Date(fs.statSync(filePath).mtimeMs).toISOString()
-  } catch {
-    return null
+    if (!this._running) this._cancelled = false
   }
 }
 
@@ -250,10 +372,9 @@ function redactPath(filePath: string): string {
 // ---------------------------------------------------------------------------
 
 const healthMachine = new LibraryHealthStateMachine()
-const compensationQueue = new CompensationQueue(2)
-
-// Track stale sessions observed during blocked/error periods
-let staleDuringBlockedPeriod: CompensationEntry[] = []
+// One writer at a time: parallel workers would only contend for the same lease
+// and can turn a healthy second item into a false timeout failure.
+const compensationQueue = new CompensationQueue(1)
 
 /**
  * Get the current health state.
@@ -272,28 +393,16 @@ export function getLibraryHealth(): LibraryHealthSnapshot {
 /**
  * Transition the Library to a new health state.
  *
- * When transitioning from an error/blocked state back to 'ready',
- * the compensation queue is populated with sessions that were stale
- * during the blocked period.
+ * Queue population is explicit at the failing write boundary. Keeping state
+ * transitions side-effect free prevents read-only health probes from creating
+ * background writes.
  */
 export function transitionLibraryHealth(
   next: LibraryHealthState,
   errorCode?: string,
   message?: string
 ): void {
-  const prev = healthMachine.state
   healthMachine.transition(next, errorCode, message)
-
-  // When recovering from blocked/error → ready, seed the compensation queue
-  if (
-    next === 'ready' &&
-    (prev === 'writer-blocked' || prev === 'identity-conflict' || prev === 'corrupt')
-  ) {
-    if (staleDuringBlockedPeriod.length > 0) {
-      compensationQueue.enqueue([...staleDuringBlockedPeriod])
-      staleDuringBlockedPeriod = []
-    }
-  }
 }
 
 /**
@@ -311,7 +420,6 @@ export function recordLibraryDiagnostic(
  */
 export function resetLibraryHealth(): void {
   healthMachine.reset()
-  staleDuringBlockedPeriod = []
   compensationQueue.reset()
 }
 
@@ -320,10 +428,11 @@ export function resetLibraryHealth(): void {
  * Returns an unsubscribe function.
  */
 export function onLibraryHealthChanged(
-  callback: (event: { previous: LibraryHealthState; current: LibraryHealthState }) => void
+  callback: (snapshot: LibraryHealthSnapshot) => void
 ): () => void {
-  healthMachine.on('stateChanged', callback)
-  return () => healthMachine.removeListener('stateChanged', callback)
+  const listener = (): void => callback(getLibraryHealth())
+  healthMachine.on('stateChanged', listener)
+  return () => healthMachine.removeListener('stateChanged', listener)
 }
 
 /**
@@ -342,83 +451,12 @@ export function onLibraryDiagnostic(
 // ---------------------------------------------------------------------------
 
 /**
- * Compute freshness data for a single Library session.
- * Lightweight: stat calls only, never parses transcripts.
- */
-export function computeSessionFreshness(
-  sessionId: string,
-  dirPath: string,
-  sourceFilePaths: string[]
-): SessionFreshness {
-  const now = Date.now()
-
-  // Source file mtime: use the most recent across all source paths
-  let sourceUpdatedAt: string | null = null
-  let sourceMs = 0
-  for (const srcPath of sourceFilePaths) {
-    try {
-      const stat = fs.statSync(srcPath)
-      if (stat.mtimeMs > sourceMs) {
-        sourceMs = stat.mtimeMs
-        sourceUpdatedAt = new Date(stat.mtimeMs).toISOString()
-      }
-    } catch {
-      // Source file may be missing (remote, iCloud placeholder, etc.)
-    }
-  }
-
-  // Transcript mtime
-  const transcriptPath = path.join(dirPath, 'transcript.md')
-  const transcriptUpdatedAt = statMtimeIso(transcriptPath)
-
-  // Backup mtime
-  const backupPath = path.join(dirPath, 'backup.jsonl')
-  const backupUpdatedAt = statMtimeIso(backupPath)
-
-  // Lag = now - min(sourceUpdatedAt, transcriptUpdatedAt) among available timestamps
-  const timestamps = [sourceMs, transcriptUpdatedAt ? new Date(transcriptUpdatedAt).getTime() : 0]
-    .filter((t) => t > 0)
-  const minTimestamp = timestamps.length > 0 ? Math.min(...timestamps) : 0
-  const lagMs = minTimestamp > 0 ? Math.max(0, now - minTimestamp) : 0
-
-  return {
-    sessionId,
-    sourceUpdatedAt,
-    transcriptUpdatedAt,
-    backupUpdatedAt,
-    lagMs
-  }
-}
-
-/**
- * Find sessions whose freshness lag exceeds a threshold.
- */
-export function findStaleSessions(
-  sessions: ReadonlyArray<{ sessionId: string; dirPath: string; sourceFilePaths: string[] }>,
-  thresholdMs = DEFAULT_STALE_THRESHOLD_MS
-): SessionFreshness[] {
-  const stale: SessionFreshness[] = []
-  for (const session of sessions) {
-    const freshness = computeSessionFreshness(
-      session.sessionId,
-      session.dirPath,
-      session.sourceFilePaths
-    )
-    if (freshness.lagMs > thresholdMs) {
-      stale.push(freshness)
-    }
-  }
-  return stale
-}
-
-/**
  * Check freshness and record diagnostics for sessions exceeding the error threshold.
  */
 export function checkFreshnessAndRecordDiagnostics(
   sessions: ReadonlyArray<{ sessionId: string; dirPath: string; sourceFilePaths: string[] }>
 ): void {
   const state = healthMachine.state
-  const isBlocked = state === 'writer-blocked' || state === 'identity-conflict' || state === 'corrupt'
 
   for (const session of sessions) {
     const freshness = computeSessionFreshness(
@@ -427,7 +465,7 @@ export function checkFreshnessAndRecordDiagnostics(
       session.sourceFilePaths
     )
 
-    if (freshness.lagMs > ERROR_LAG_THRESHOLD_MS) {
+    if (freshness.lagMs !== null && freshness.lagMs > ERROR_LAG_THRESHOLD_MS) {
       healthMachine.recordDiagnostic(
         state,
         'SESSION_STALE_ERROR',
@@ -435,16 +473,6 @@ export function checkFreshnessAndRecordDiagnostics(
       )
     }
 
-    // Track stale sessions during blocked periods for compensation
-    if (isBlocked && freshness.lagMs > DEFAULT_STALE_THRESHOLD_MS) {
-      const already = staleDuringBlockedPeriod.some((e) => e.sessionId === session.sessionId)
-      if (!already) {
-        staleDuringBlockedPeriod.push({
-          sessionId: session.sessionId,
-          dirPath: session.dirPath
-        })
-      }
-    }
   }
 }
 
@@ -462,6 +490,10 @@ export function isCompensationRunning(): boolean {
 
 export function cancelCompensation(): void {
   compensationQueue.cancel()
+}
+
+export function waitForCompensationIdle(): Promise<void> {
+  return compensationQueue.waitForIdle()
 }
 
 export function resetCompensation(): void {

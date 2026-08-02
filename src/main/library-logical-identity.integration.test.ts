@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { buildLogicalSessionIdentityFromSummary } from './library-session-identity'
 
 const savedHome = process.env.HOME
@@ -50,6 +50,24 @@ function packageDirs(): string[] {
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
     .map((entry) => path.join(root, entry.name))
     .filter((dirPath) => fs.existsSync(path.join(dirPath, '.swob-session.json')))
+}
+
+function directoryEvidence(dirPath: string): Record<string, { sha256: string; mtimeMs: number }> {
+  const result: Record<string, { sha256: string; mtimeMs: number }> = {}
+  const visit = (current: string): void => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name)
+      if (entry.isDirectory()) visit(fullPath)
+      else if (entry.isFile()) {
+        result[path.relative(dirPath, fullPath)] = {
+          sha256: createHash('sha256').update(fs.readFileSync(fullPath)).digest('hex'),
+          mtimeMs: fs.statSync(fullPath).mtimeMs
+        }
+      }
+    }
+  }
+  visit(dirPath)
+  return result
 }
 
 beforeEach(async () => {
@@ -110,6 +128,49 @@ describe('Library logical identity integration', () => {
     expect(fs.readFileSync(path.join(firstDir, '.swob-session.json'), 'utf-8')).toBe(firstBefore)
     expect(fs.readFileSync(path.join(secondDir, '.swob-session.json'), 'utf-8')).toBe(secondBefore)
     expect(lib.getLibrarySessionRegistryDiagnostics()[0].state).toBe('conflict')
+  })
+
+  it.each(['conflict-first', 'healthy-first'] as const)(
+    'keeps a conflict group read-only while batch sync continues for unrelated sessions (%s)',
+    async (order) => {
+    const conflictId = '21000000-0000-4000-8000-000000000002'
+    const healthyId = '22000000-0000-4000-8000-000000000002'
+    const conflictSource = path.join(testHome, '.claude', 'projects', '-fixture', `${conflictId}.jsonl`)
+    const healthySource = path.join(testHome, '.claude', 'projects', '-fixture', `${healthyId}.jsonl`)
+    writeJsonl(conflictSource, 'conflicting source')
+    writeJsonl(healthySource, 'healthy source')
+
+    const conflictSummary = summary(conflictId, conflictSource)
+    const firstConflictDir = await lib.ensureSessionInLibrary(conflictSummary)
+    const secondConflictDir = path.join(root, 'authorized historical duplicate')
+    fs.cpSync(firstConflictDir, secondConflictDir, { recursive: true })
+    lib.scanLibrary()
+    const firstBefore = directoryEvidence(firstConflictDir)
+    const secondBefore = directoryEvidence(secondConflictDir)
+    const progress: string[] = []
+    const healthySummary = summary(healthyId, healthySource)
+    const input = order === 'conflict-first'
+      ? [conflictSummary, healthySummary]
+      : [healthySummary, conflictSummary]
+
+    const outcome = await lib.syncLibraryFromSessions(
+      input,
+      {},
+      ({ sessionId }) => progress.push(sessionId)
+    )
+
+    const healthyDir = lib.getSessionDirPath(healthyId)
+    expect(healthyDir).toBeTruthy()
+    expect(fs.readFileSync(path.join(healthyDir!, 'transcript.md'), 'utf8')).toContain('healthy source')
+    expect(fs.readFileSync(path.join(healthyDir!, 'backup.jsonl'), 'utf8')).toContain('healthy source')
+    expect(directoryEvidence(firstConflictDir)).toEqual(firstBefore)
+    expect(directoryEvidence(secondConflictDir)).toEqual(secondBefore)
+    expect(progress).toEqual(input.map((session) => session.sessionId))
+    expect(outcome).toEqual({
+      total: 2,
+      completed: 1,
+      skipped: [{ sessionId: conflictId, code: 'SESSION_IDENTITY_CONFLICT' }]
+    })
   })
 
   it('allows the same source sessionId in distinct verified instances but makes legacy ID APIs ambiguous', async () => {

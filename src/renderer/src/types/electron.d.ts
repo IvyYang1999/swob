@@ -16,6 +16,11 @@ import type {
   UserIdentityInput
 } from '../../../shared/frontend-ipc-contract'
 import type { DashboardLayoutConfig } from '../../../shared/registry/builtin-widgets'
+import type {
+  CompensationProgress,
+  LibraryHealthSnapshot,
+  SessionFreshness
+} from '../../../shared/library-health-contract'
 import type { InsightsQueryBundleResult, UsageFact, UsageFactPage } from '../../../shared/analysis-scope-types'
 import type {
   ReportJobSnapshot,
@@ -234,6 +239,14 @@ interface ElectronAPI {
   libraryGetMdPath: (sessionId: string) => Promise<string | null>
   libraryGetDirPath: (sessionId: string) => Promise<string | null>
   libraryOpenInFinder: () => Promise<void>
+  libraryGetHealth: () => Promise<LibraryHealthSnapshot>
+  libraryGetSessionFreshness: (sessionId: string) => Promise<SessionFreshness | null>
+  libraryGetStaleSessions: (thresholdMs?: number) => Promise<SessionFreshness[]>
+  libraryGetCompensationProgress: () => Promise<CompensationProgress>
+  libraryCompensationCancel: () => Promise<void>
+  libraryCompensationRetry: () => Promise<CompensationProgress>
+  onLibraryHealthChanged: (callback: (snapshot: LibraryHealthSnapshot) => void) => () => void
+  onCompensationUpdate: (callback: (progress: CompensationProgress) => void) => () => void
   vaultMigrate: (targetPath: string) => Promise<{
     ok: boolean
     errorCode?: string

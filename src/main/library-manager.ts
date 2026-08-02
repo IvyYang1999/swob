@@ -3,16 +3,8 @@ import * as path from 'path'
 import * as os from 'os'
 import { createHash, randomUUID } from 'crypto'
 import { execFile } from 'node:child_process'
-import {
-  transitionLibraryHealth,
-  resetLibraryHealth,
-  classifyLibraryError,
-  recordLibraryDiagnostic,
-  computeSessionFreshness,
-  findStaleSessions,
-  checkFreshnessAndRecordDiagnostics,
-  type SessionFreshness
-} from './library-health'
+import { computeSessionFreshness, findStaleSessions } from './library-freshness'
+import type { SessionFreshness } from '../shared/library-health-contract'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
@@ -682,12 +674,6 @@ async function withLibraryWriter<T>(mode: LibraryWriterMode, operation: () => Pr
   _localWriterDepth++
   try {
     return await runWithLibraryWriter(writerRoot, getOrCreateLocalDeviceId(), mode, operation)
-  } catch (error) {
-    const classification = classifyLibraryError(error)
-    if (classification.state !== 'ready') {
-      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
-    }
-    throw error
   } finally {
     _localWriterDepth--
     _appliedWriteGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(writerRoot))
@@ -699,12 +685,6 @@ function withLibraryWriterSync<T>(mode: LibraryWriterMode, operation: () => T): 
   _localWriterDepth++
   try {
     return runWithLibraryWriterSync(writerRoot, getOrCreateLocalDeviceId(), mode, operation)
-  } catch (error) {
-    const classification = classifyLibraryError(error)
-    if (classification.state !== 'ready') {
-      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
-    }
-    throw error
   } finally {
     _localWriterDepth--
     _appliedWriteGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(writerRoot))
@@ -739,9 +719,7 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
     sessionMetaDiskReads = 0
     sessionRegistry.clear()
     lastIdentityScanIssues = []
-    resetLibraryHealth()
   }
-  transitionLibraryHealth('initializing', 'INIT_START', 'Library initialization started')
   _cachedLibraryConfig = null
   _cachedLibraryConfigRoot = ''
   _root = nextRoot
@@ -756,12 +734,6 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
   _ignoreDirs = new Set(
     options.ignoreDirs || (cfg.ignoreDirs && cfg.ignoreDirs.length ? cfg.ignoreDirs : DEFAULT_IGNORE_DIRS)
   )
-  // Transition to ready or read-only after successful initialization
-  if (options.readOnly) {
-    transitionLibraryHealth('read-only', 'INIT_READ_ONLY', 'Library initialized in read-only mode')
-  } else {
-    transitionLibraryHealth('ready', 'INIT_COMPLETE', 'Library initialized successfully')
-  }
 }
 
 // --- Config (cached to avoid thousands of readFileSync per load cycle) ---
@@ -4408,12 +4380,23 @@ function updateSymlinksRecursive(searchDir: string, oldTarget: string, newTarget
 
 // --- Batch Initialize Library from Sessions ---
 
+export interface LibrarySyncSkippedSession {
+  sessionId: string
+  code: 'SESSION_IDENTITY_CONFLICT'
+}
+
+export interface LibrarySyncOutcome {
+  total: number
+  completed: number
+  skipped: LibrarySyncSkippedSession[]
+}
+
 export async function syncLibraryFromSessions(
   sessions: SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
   onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
   shouldCancel?: () => boolean
-): Promise<void> {
+): Promise<LibrarySyncOutcome> {
   return withLibraryWriter('maintenance', () =>
     syncLibraryFromSessionsUnderWriter(sessions, sessionMeta, onProgress, shouldCancel))
 }
@@ -4423,7 +4406,8 @@ async function syncLibraryFromSessionsUnderWriter(
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
   onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
   shouldCancel?: () => boolean
-): Promise<void> {
+): Promise<LibrarySyncOutcome> {
+  const outcome: LibrarySyncOutcome = { total: sessions.length, completed: 0, skipped: [] }
   for (let index = 0; index < sessions.length; index++) {
     if (shouldCancel?.()) {
       const error = new Error('Library synchronization cancelled')
@@ -4431,84 +4415,97 @@ async function syncLibraryFromSessionsUnderWriter(
       throw error
     }
     const session = sessions[index]
-    const customTitle = sessionMeta[session.sessionId]?.customTitle
-    const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
-    if (canonicalDefinition?.ingestion === 'provider-host') {
-      const stored = getCanonicalSessionStore().getSession(session.id)
-      if (stored) {
-        await ensureCanonicalPackageUnderWriter(
-          canonicalDefinition.manifest.providerId,
-          stored.sessionRecord.sourceRef,
-          stored.records
-        )
-        onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
-        continue
-      }
-      throw new Error('canonical-provider-session-not-found')
-    }
-    const dirPath = await ensureSessionInLibrary(session, customTitle)
-
-    // 持久化 swob 权威 turnCount 进 meta（各会话类型统一），供外部整理脚本按真实轮数归档
-    const m = readSessionMeta(dirPath)
-    if (m && m.turnCount !== session.turnCount) {
-      requireWritableSessionDir(m.sessionId, dirPath)
-      m.turnCount = session.turnCount
-      writeSessionMeta(dirPath, m)
-    }
-
-    // Update transcript
-    const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
-    const metaPath = path.join(dirPath, SESSION_META_FILE)
-
-    // Only regenerate transcript if source is newer
-    let needsUpdate = !fs.existsSync(mdPath)
-    if (!needsUpdate) {
-      try {
-        const mdMtime = fs.statSync(mdPath).mtimeMs
-        for (const src of session.allFilePaths || [session.filePath]) {
-          const statPath = sourceStatPath(src)
-          if (fs.existsSync(statPath) && fs.statSync(statPath).mtimeMs > mdMtime) {
-            needsUpdate = true
-            break
-          }
+    try {
+      const customTitle = sessionMeta[session.sessionId]?.customTitle
+      const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
+      if (canonicalDefinition?.ingestion === 'provider-host') {
+        const stored = getCanonicalSessionStore().getSession(session.id)
+        if (stored) {
+          await ensureCanonicalPackageUnderWriter(
+            canonicalDefinition.manifest.providerId,
+            stored.sessionRecord.sourceRef,
+            stored.records
+          )
+          outcome.completed++
+          onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
+          continue
         }
-      } catch {
-        needsUpdate = true
+        throw new Error('canonical-provider-session-not-found')
       }
-    }
+      const dirPath = await ensureSessionInLibrary(session, customTitle)
 
-    if (needsUpdate) {
-      await updateTranscript(session.sessionId, customTitle, dirPath)
-    }
+      // 持久化 swob 权威 turnCount 进 meta（各会话类型统一），供外部整理脚本按真实轮数归档
+      const m = readSessionMeta(dirPath)
+      if (m && m.turnCount !== session.turnCount) {
+        requireWritableSessionDir(m.sessionId, dirPath)
+        m.turnCount = session.turnCount
+        writeSessionMeta(dirPath, m)
+      }
 
-    // Sync backup if needed
-    const backupPath = path.join(dirPath, BACKUP_FILE)
-    let backupNeedsUpdate = !fs.existsSync(backupPath)
-    if (!backupNeedsUpdate) {
-      try {
-        const bkMtime = fs.statSync(backupPath).mtimeMs
-        for (const src of session.allFilePaths || [session.filePath]) {
-          const statPath = sourceStatPath(src)
-          if (fs.existsSync(statPath) && fs.statSync(statPath).mtimeMs > bkMtime) {
-            backupNeedsUpdate = true
-            break
+      // Update transcript
+      const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
+
+      // Only regenerate transcript if source is newer
+      let needsUpdate = !fs.existsSync(mdPath)
+      if (!needsUpdate) {
+        try {
+          const mdMtime = fs.statSync(mdPath).mtimeMs
+          for (const src of session.allFilePaths || [session.filePath]) {
+            const statPath = sourceStatPath(src)
+            if (fs.existsSync(statPath) && fs.statSync(statPath).mtimeMs > mdMtime) {
+              needsUpdate = true
+              break
+            }
           }
+        } catch {
+          needsUpdate = true
         }
-      } catch {
-        backupNeedsUpdate = true
       }
-    }
 
-    if (backupNeedsUpdate) {
-      await syncBackup(session.sessionId, dirPath)
+      if (needsUpdate) {
+        await updateTranscript(session.sessionId, customTitle, dirPath)
+      }
+
+      // Sync backup if needed
+      const backupPath = path.join(dirPath, BACKUP_FILE)
+      let backupNeedsUpdate = !fs.existsSync(backupPath)
+      if (!backupNeedsUpdate) {
+        try {
+          const bkMtime = fs.statSync(backupPath).mtimeMs
+          for (const src of session.allFilePaths || [session.filePath]) {
+            const statPath = sourceStatPath(src)
+            if (fs.existsSync(statPath) && fs.statSync(statPath).mtimeMs > bkMtime) {
+              backupNeedsUpdate = true
+              break
+            }
+          }
+        } catch {
+          backupNeedsUpdate = true
+        }
+      }
+
+      if (backupNeedsUpdate) {
+        await syncBackup(session.sessionId, dirPath)
+      }
+      if (shouldCancel?.()) {
+        const error = new Error('Library synchronization cancelled')
+        error.name = 'AbortError'
+        throw error
+      }
+      onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
+      outcome.completed++
+    } catch (error) {
+      if (!(error instanceof SessionIdentityConflictError)) throw error
+      // A conflict group remains strictly read-only, but it must not prevent an
+      // unrelated logical session from receiving transcript/backup updates.
+      outcome.skipped.push({
+        sessionId: session.sessionId,
+        code: 'SESSION_IDENTITY_CONFLICT'
+      })
+      onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
     }
-    if (shouldCancel?.()) {
-      const error = new Error('Library synchronization cancelled')
-      error.name = 'AbortError'
-      throw error
-    }
-    onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
   }
+  return outcome
 }
 
 // --- Migrate from Old Config ---
@@ -5178,33 +5175,6 @@ export function buildSshResumeCommand(
   return `ssh -t ${shellQuote(`${sshConfig.user}@${sshConfig.host}`)} ${shellQuote(remoteCmd)}`
 }
 
-// ---------------------------------------------------------------------------
-// Library Health — public helpers that use Library internals
-// ---------------------------------------------------------------------------
-
-export {
-  getLibraryHealthState,
-  getLibraryHealth,
-  transitionLibraryHealth,
-  resetLibraryHealth,
-  recordLibraryDiagnostic,
-  classifyLibraryError,
-  onLibraryHealthChanged,
-  onLibraryDiagnostic,
-  getCompensationProgress,
-  isCompensationRunning,
-  cancelCompensation,
-  resetCompensation,
-  onCompensationUpdate,
-  runCompensation,
-  enqueueCompensation,
-  type LibraryHealthState,
-  type LibraryDiagnosticEvent,
-  type SessionFreshness,
-  type CompensationProgress,
-  type LibraryHealthSnapshot
-} from './library-health'
-
 /**
  * Get freshness data for a single session using Library registry bindings.
  * Lightweight: stat calls only, no transcript parsing.
@@ -5215,7 +5185,9 @@ export function getSessionFreshness(sessionId: string): SessionFreshness | null 
   const meta = readSessionMeta(dirPath)
   if (!meta) return null
   const sourceFilePaths = sourceFilePathsFromMeta(meta) || []
-  return computeSessionFreshness(sessionId, dirPath, sourceFilePaths)
+  return computeSessionFreshness(sessionId, dirPath, sourceFilePaths, {
+    canonicalRecordsFile: meta.canonicalProvider?.recordsFile
+  })
 }
 
 /**
@@ -5228,7 +5200,8 @@ export function getStaleSessions(thresholdMs?: number): SessionFreshness[] {
   const sessionData = allSessions.map((session) => ({
     sessionId: session.sessionId,
     dirPath: session.dirPath,
-    sourceFilePaths: sourceFilePathsFromMeta(session.meta) || []
+    sourceFilePaths: sourceFilePathsFromMeta(session.meta) || [],
+    canonicalRecordsFile: session.meta.canonicalProvider?.recordsFile
   }))
   return findStaleSessions(sessionData, thresholdMs)
 }

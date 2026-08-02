@@ -16,6 +16,9 @@ import {
   getCompensationProgress,
   isCompensationRunning,
   cancelCompensation,
+  waitForCompensationIdle,
+  configureLibraryHealthPersistence,
+  clearLibraryHealthPersistence,
   resetCompensation,
   onCompensationUpdate,
   runCompensation,
@@ -24,6 +27,7 @@ import {
 
 describe('LibraryHealthStateMachine', () => {
   beforeEach(() => {
+    clearLibraryHealthPersistence()
     resetLibraryHealth()
   })
 
@@ -44,21 +48,23 @@ describe('LibraryHealthStateMachine', () => {
     expect(last.timestamp).toBeTruthy()
   })
 
-  it('ignores noop transitions (same state)', () => {
+  it('persists a new diagnostic even when the state is unchanged', () => {
     transitionLibraryHealth('ready', 'INIT_COMPLETE', 'done')
     const diagnosticsBefore = getLibraryHealth().diagnostics.length
-    transitionLibraryHealth('ready', 'DUPLICATE', 'should not appear')
-    expect(getLibraryHealth().diagnostics.length).toBe(diagnosticsBefore)
+    transitionLibraryHealth('ready', 'FOLLOW_UP', 'same state, new evidence')
+    expect(getLibraryHealth().diagnostics.length).toBe(diagnosticsBefore + 1)
+    expect(getLibraryHealth().reasonCode).toBe('FOLLOW_UP')
   })
 
   it('emits stateChanged events', () => {
     const handler = vi.fn()
     const unsubscribe = onLibraryHealthChanged(handler)
     transitionLibraryHealth('ready', 'INIT_COMPLETE', 'done')
-    expect(handler).toHaveBeenCalledWith({
-      previous: 'initializing',
-      current: 'ready'
-    })
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      schemaVersion: 1,
+      state: 'ready',
+      writeCapability: 'full'
+    }))
     unsubscribe()
     transitionLibraryHealth('writer-blocked', 'WRITER_BUSY', 'busy')
     expect(handler).toHaveBeenCalledTimes(1) // no second call after unsubscribe
@@ -89,6 +95,51 @@ describe('LibraryHealthStateMachine', () => {
     expect(getLibraryHealthState()).toBe('ready')
     resetLibraryHealth()
     expect(getLibraryHealthState()).toBe('initializing')
+  })
+
+  it('persists append-only redacted diagnostics outside the Library and reloads valid lines', () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-health-library-'))
+    const diagnosticsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-health-diagnostics-'))
+    try {
+      configureLibraryHealthPersistence(libraryRoot, diagnosticsRoot)
+      recordLibraryDiagnostic(
+        'FIRST',
+        'Failed /Users/private/Documents/secret.jsonl for 11111111-1111-4111-8111-111111111111'
+      )
+      recordLibraryDiagnostic('SECOND', 'second event')
+      const filePath = path.join(diagnosticsRoot, fs.readdirSync(diagnosticsRoot)[0])
+      const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n')
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).not.toContain('/Users/private')
+      expect(lines[0]).not.toContain('11111111-1111-4111-8111-111111111111')
+
+      fs.appendFileSync(filePath, '{torn')
+      clearLibraryHealthPersistence()
+      configureLibraryHealthPersistence(libraryRoot, diagnosticsRoot)
+      expect(getLibraryHealth().diagnostics.map((event) => event.errorCode)).toEqual(['FIRST', 'SECOND'])
+    } finally {
+      clearLibraryHealthPersistence()
+      fs.rmSync(libraryRoot, { recursive: true, force: true })
+      fs.rmSync(diagnosticsRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to follow a symlink diagnostics directory', () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-health-library-'))
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-health-link-'))
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-health-outside-'))
+    const diagnosticsRoot = path.join(parent, 'diagnostics')
+    try {
+      fs.symlinkSync(outside, diagnosticsRoot)
+      configureLibraryHealthPersistence(libraryRoot, diagnosticsRoot)
+      recordLibraryDiagnostic('NO_ESCAPE', 'must not escape')
+      expect(fs.readdirSync(outside)).toEqual([])
+    } finally {
+      clearLibraryHealthPersistence()
+      fs.rmSync(libraryRoot, { recursive: true, force: true })
+      fs.rmSync(parent, { recursive: true, force: true })
+      fs.rmSync(outside, { recursive: true, force: true })
+    }
   })
 })
 
@@ -154,13 +205,15 @@ describe('computeSessionFreshness', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('returns zero lag when no source files exist', () => {
+  it('returns unverifiable rather than a false zero when no source files exist', () => {
     const freshness = computeSessionFreshness('test-session', tmpDir, [])
     expect(freshness.sessionId).toBe('test-session')
     expect(freshness.sourceUpdatedAt).toBeNull()
     expect(freshness.transcriptUpdatedAt).toBeNull()
     expect(freshness.backupUpdatedAt).toBeNull()
-    expect(freshness.lagMs).toBe(0)
+    expect(freshness.lagMs).toBeNull()
+    expect(freshness.status).toBe('unverifiable')
+    expect(freshness.stale).toBe(false)
   })
 
   it('detects transcript mtime', () => {
@@ -186,6 +239,91 @@ describe('computeSessionFreshness', () => {
     const freshness = computeSessionFreshness('test-session', tmpDir, [sourcePath])
     expect(freshness.sourceUpdatedAt).toBeTruthy()
     expect(freshness.lagMs).toBeGreaterThan(100_000)
+  })
+
+  it('reports zero lag for an old session whose source, transcript, and backup agree', () => {
+    const sourcePath = path.join(tmpDir, 'source.jsonl')
+    const transcriptPath = path.join(tmpDir, 'transcript.md')
+    const backupPath = path.join(tmpDir, 'backup.jsonl')
+    for (const filePath of [sourcePath, transcriptPath, backupPath]) fs.writeFileSync(filePath, '{}')
+    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60_000)
+    for (const filePath of [sourcePath, transcriptPath, backupPath]) {
+      fs.utimesSync(filePath, oneWeekAgo, oneWeekAgo)
+    }
+
+    expect(computeSessionFreshness('old-but-synced', tmpDir, [sourcePath]).lagMs).toBeLessThan(10)
+  })
+
+  it('uses the slower of transcript and backup replicas', () => {
+    const sourcePath = path.join(tmpDir, 'source.jsonl')
+    const transcriptPath = path.join(tmpDir, 'transcript.md')
+    const backupPath = path.join(tmpDir, 'backup.jsonl')
+    for (const filePath of [sourcePath, transcriptPath, backupPath]) fs.writeFileSync(filePath, '{}')
+    const twoMinutesAgo = new Date(Date.now() - 120_000)
+    fs.utimesSync(backupPath, twoMinutesAgo, twoMinutesAgo)
+
+    const freshness = computeSessionFreshness('backup-behind', tmpDir, [sourcePath])
+    expect(freshness.lagMs).toBeGreaterThan(100_000)
+  })
+
+  it('does not infer stale state when a remote source is unavailable', () => {
+    const transcriptPath = path.join(tmpDir, 'transcript.md')
+    const backupPath = path.join(tmpDir, 'backup.jsonl')
+    fs.writeFileSync(transcriptPath, '# remote')
+    fs.writeFileSync(backupPath, '{}')
+    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60_000)
+    fs.utimesSync(transcriptPath, oneWeekAgo, oneWeekAgo)
+    fs.utimesSync(backupPath, oneWeekAgo, oneWeekAgo)
+
+    const freshness = computeSessionFreshness('remote', tmpDir, ['/missing/remote/source.jsonl'])
+    expect(freshness.lagMs).toBeNull()
+    expect(freshness.status).toBe('unverifiable')
+    expect(freshness.stale).toBe(false)
+  })
+
+  it('treats canonical records plus transcript as complete without backup.jsonl', () => {
+    const recordsPath = path.join(tmpDir, 'canonical-records.json')
+    const transcriptPath = path.join(tmpDir, 'transcript.md')
+    fs.writeFileSync(recordsPath, '{}')
+    fs.writeFileSync(transcriptPath, '# canonical')
+    const freshness = computeSessionFreshness('canonical', tmpDir, [], {
+      canonicalRecordsFile: 'canonical-records.json'
+    })
+    expect(freshness.basis).toBe('canonical-records')
+    expect(freshness.requiredArtifacts).toEqual(['canonical-records', 'transcript'])
+    expect(freshness.backupUpdatedAt).toBeNull()
+    expect(freshness.stale).toBe(false)
+  })
+
+  it('uses strict 60 second stale and 5 minute error boundaries for a missing replica', () => {
+    const sourcePath = path.join(tmpDir, 'source.jsonl')
+    fs.writeFileSync(sourcePath, '{}')
+    const now = Date.now()
+
+    fs.utimesSync(sourcePath, new Date(now - 59_999), new Date(now - 59_999))
+    const syncing = computeSessionFreshness('boundary', tmpDir, [sourcePath], { now: () => now })
+    expect(syncing.status).toBe('syncing')
+    expect(syncing.stale).toBe(false)
+
+    fs.utimesSync(sourcePath, new Date(now - 60_001), new Date(now - 60_001))
+    const stale = computeSessionFreshness('boundary', tmpDir, [sourcePath], { now: () => now })
+    expect(stale.status).toBe('stale')
+    expect(stale.severity).toBe('warning')
+
+    fs.utimesSync(sourcePath, new Date(now - 300_001), new Date(now - 300_001))
+    expect(computeSessionFreshness('boundary', tmpDir, [sourcePath], { now: () => now }).severity)
+      .toBe('error')
+  })
+
+  it('marks future authoritative timestamps unverifiable instead of fresh', () => {
+    const sourcePath = path.join(tmpDir, 'future.jsonl')
+    fs.writeFileSync(sourcePath, '{}')
+    const now = Date.now()
+    fs.utimesSync(sourcePath, new Date(now + 60_000), new Date(now + 60_000))
+    const freshness = computeSessionFreshness('future', tmpDir, [sourcePath], { now: () => now })
+    expect(freshness.status).toBe('unverifiable')
+    expect(freshness.reasons).toContain('CLOCK_SKEW')
+    expect(freshness.lagMs).toBeNull()
   })
 
   it('picks the most recent source file mtime', () => {
@@ -245,7 +383,9 @@ describe('CompensationQueue', () => {
 
   it('starts with empty progress', () => {
     const progress = getCompensationProgress()
-    expect(progress).toEqual({ total: 0, completed: 0, failed: 0 })
+    expect(progress).toEqual({
+      total: 0, completed: 0, failed: 0, pending: 0, inProgress: false, cancelled: false
+    })
     expect(isCompensationRunning()).toBe(false)
   })
 
@@ -274,6 +414,15 @@ describe('CompensationQueue', () => {
     })
     expect(result.completed).toBe(1)
     expect(result.failed).toBe(1)
+
+    const retried: string[] = []
+    const retry = await runCompensation(async (sessionId) => {
+      retried.push(sessionId)
+    })
+    expect(retried).toEqual(['fail'])
+    expect(retry).toEqual({
+      total: 1, completed: 1, failed: 0, pending: 0, inProgress: false, cancelled: false
+    })
   })
 
   it('emits progress updates', async () => {
@@ -310,8 +459,13 @@ describe('CompensationQueue', () => {
       processed.push(sessionId)
       cancelCompensation()
     })
-    // Should have processed the first batch (concurrency=2) then stopped
-    expect(processed.length).toBeLessThanOrEqual(2)
+    // The queue intentionally serializes Library writers to avoid lease self-contention.
+    expect(processed).toHaveLength(1)
     expect(result.total).toBe(3)
+    await expect(waitForCompensationIdle()).resolves.toBeUndefined()
+
+    const remaining: string[] = []
+    await runCompensation(async (sessionId) => { remaining.push(sessionId) })
+    expect([...processed, ...remaining].sort()).toEqual(['a', 'b', 'c'])
   })
 })

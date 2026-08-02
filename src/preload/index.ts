@@ -19,6 +19,11 @@ import type {
 } from '../shared/frontend-ipc-contract'
 import type { DashboardLayoutConfig } from '../shared/registry/builtin-widgets'
 import type {
+  CompensationProgress,
+  LibraryHealthSnapshot,
+  SessionFreshness
+} from '../shared/library-health-contract'
+import type {
   ReportJobSnapshot,
   ReportJobStartRequest,
   ReportJobStatusRequest,
@@ -130,19 +135,22 @@ const api = {
   libraryChangePath: (newPath: string) => ipcRenderer.invoke('library:changePath', newPath),
 
   // Library Health / Freshness / Compensation
-  libraryGetHealth: () => ipcRenderer.invoke('library:getHealth'),
-  libraryGetSessionFreshness: (sessionId: string) => ipcRenderer.invoke('library:getSessionFreshness', sessionId),
-  libraryGetStaleSessions: (thresholdMs?: number) => ipcRenderer.invoke('library:getStaleSessions', thresholdMs),
-  libraryGetCompensationProgress: () => ipcRenderer.invoke('library:compensationProgress'),
+  libraryGetHealth: () => ipcRenderer.invoke('library:getHealth') as Promise<LibraryHealthSnapshot>,
+  libraryGetSessionFreshness: (sessionId: string) =>
+    ipcRenderer.invoke('library:getSessionFreshness', sessionId) as Promise<SessionFreshness | null>,
+  libraryGetStaleSessions: (thresholdMs?: number) =>
+    ipcRenderer.invoke('library:getStaleSessions', thresholdMs) as Promise<SessionFreshness[]>,
+  libraryGetCompensationProgress: () =>
+    ipcRenderer.invoke('library:compensationProgress') as Promise<CompensationProgress>,
   libraryCompensationCancel: () => ipcRenderer.invoke('library:compensationCancel'),
   libraryCompensationRetry: () => ipcRenderer.invoke('library:compensationRetry'),
-  onLibraryHealthChanged: (callback: (event: { previous: string; current: string }) => void) => {
-    const listener = (_event: unknown, data: { previous: string; current: string }) => callback(data)
+  onLibraryHealthChanged: (callback: (snapshot: LibraryHealthSnapshot) => void) => {
+    const listener = (_event: unknown, data: LibraryHealthSnapshot) => callback(data)
     ipcRenderer.on('library:healthChanged', listener)
     return () => ipcRenderer.removeListener('library:healthChanged', listener)
   },
-  onCompensationUpdate: (callback: (progress: { total: number; completed: number; failed: number }) => void) => {
-    const listener = (_event: unknown, progress: { total: number; completed: number; failed: number }) => callback(progress)
+  onCompensationUpdate: (callback: (progress: CompensationProgress) => void) => {
+    const listener = (_event: unknown, progress: CompensationProgress) => callback(progress)
     ipcRenderer.on('library:compensationUpdate', listener)
     return () => ipcRenderer.removeListener('library:compensationUpdate', listener)
   },

@@ -28,4 +28,6 @@ jobs:
           node scripts/check-dco.mjs
           --base '${{ github.event.pull_request.base.sha }}'
           --head '${{ github.event.pull_request.head.sha }}'
+      - name: Real Library isolation counterexamples
+        run: npm run test:library-isolation
       - run: npm test -- --maxWorkers=2

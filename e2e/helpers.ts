@@ -3,12 +3,49 @@ import Database from 'better-sqlite3'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { assertTestDefaultLibraryPath } from '../src/main/e2e-library-isolation'
+import {
+  assertExplicitTemporaryLaunchPaths,
+  assertTestLaunchContract,
+  runtimeSafetyState,
+  type IsolationEnvironment
+} from '../src/main/e2e-library-isolation'
+import {
+  assertProtectedRealStateUnchanged,
+  snapshotProtectedRealState,
+  type ProtectedStateSnapshot
+} from '../src/main/__test-support__/protected-state-audit'
 
 export const CLAUDE_FIXTURE_ID = '82000000-0000-4000-8000-000000000099'
 export const CODEX_FIXTURE_ID = '019abcde-1234-7000-8000-012345670099'
 export const CODEX_PRICING_FIXTURE_ID = '019abcde-1234-7000-8000-012345670171'
 export const ZCODE_FIXTURE_ID = 'sess_ZcodeUI099'
+
+interface AppIsolationAudit {
+  before: ProtectedStateSnapshot
+  verified: boolean
+}
+
+const appIsolationAudits = new WeakMap<ElectronApplication, AppIsolationAudit>()
+
+function attachProtectedStateAudit(app: ElectronApplication, before: ProtectedStateSnapshot): void {
+  const audit: AppIsolationAudit = { before, verified: false }
+  appIsolationAudits.set(app, audit)
+  const close = app.close.bind(app)
+  app.close = async () => {
+    try {
+      await close()
+    } finally {
+      verifyProtectedStateAudit(app)
+    }
+  }
+}
+
+function verifyProtectedStateAudit(app: ElectronApplication): void {
+  const audit = appIsolationAudits.get(app)
+  if (!audit || audit.verified) return
+  assertProtectedRealStateUnchanged(audit.before)
+  audit.verified = true
+}
 
 /**
  * Legacy launcher for specs that manage their own fixture HOME and inspect it
@@ -22,39 +59,38 @@ export async function launchAppWithEnv(options: {
   const testHome = options.env?.SWOB_TEST_HOME || options.env?.HOME
   if (!testHome) throw new Error('launchAppWithEnv requires an isolated HOME or SWOB_TEST_HOME')
   const sandboxRoot = options.sandboxRoot || testHome
-  // A wider sandbox is allowed only when it is itself below the operating
-  // system temp root. This supports sibling home/Library fixtures without
-  // letting a test weaken the guard to HOME, /Users, or the filesystem root.
-  assertTestDefaultLibraryPath(sandboxRoot, {
-    NODE_ENV: 'test',
-    SWOB_E2E_SANDBOX_ROOT: os.tmpdir()
-  })
   const userData = path.join(testHome, '.swob-e2e-user-data')
   const cache = path.join(testHome, '.swob-e2e-cache')
-  fs.mkdirSync(userData, { recursive: true })
-  fs.mkdirSync(cache, { recursive: true })
-  const environment = {
+  const libraryRoot = options.env?.SWOB_LIBRARY_ROOT || path.join(testHome, 'Documents', 'Swob')
+  const config = path.join(sandboxRoot, '.swob-e2e-config')
+  const temp = path.join(sandboxRoot, '.swob-e2e-tmp')
+  for (const directory of [userData, cache, config, temp]) fs.mkdirSync(directory, { recursive: true })
+  const environment: IsolationEnvironment & Record<string, string | undefined> = {
     ...process.env,
     ...options.env,
     HOME: testHome,
     NODE_ENV: 'test',
     SWOB_TEST_HOME: testHome,
     SWOB_TEST_LOCALE: 'zh-CN',
-    SWOB_E2E_SANDBOX_ROOT: sandboxRoot
+    SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
+    SWOB_TEST_SYSTEM_TEMP_ROOT: os.tmpdir(),
+    SWOB_LIBRARY_ROOT: libraryRoot,
+    SWOB_USER_DATA_ROOT: userData,
+    XDG_CACHE_HOME: cache,
+    XDG_CONFIG_HOME: config,
+    TMPDIR: temp
   }
-  assertTestDefaultLibraryPath(testHome, environment)
-  assertTestDefaultLibraryPath(
-    environment.SWOB_LIBRARY_ROOT || path.join(testHome, 'Documents', 'Swob'),
-    environment
-  )
+  assertTestLaunchContract(environment, userData, { systemTemporaryRoot: os.tmpdir() })
+  const protectedStateBefore = snapshotProtectedRealState()
   const app = await electron.launch({
     args: [
       path.join(__dirname, '..', 'out', 'main', 'index.js'),
       `--user-data-dir=${userData}`,
       `--disk-cache-dir=${cache}`
     ],
-    env: environment
+    env: environment as Record<string, string>
   })
+  attachProtectedStateAudit(app, protectedStateBefore)
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   return { app, page }
@@ -81,6 +117,72 @@ export interface LaunchedApp {
   home: string
   libraryRoot: string
   userData: string
+}
+
+export async function launchDangerousDevelopmentApp(): Promise<LaunchedApp> {
+  const sandboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-dev-real-library-e2e-'))
+  const home = path.join(sandboxRoot, 'home')
+  const libraryRoot = path.join(sandboxRoot, 'Real-Library-Fixture')
+  const userData = path.join(sandboxRoot, 'user-data')
+  const cache = path.join(sandboxRoot, 'cache')
+  const config = path.join(sandboxRoot, 'config')
+  const temp = path.join(sandboxRoot, 'tmp')
+  for (const directory of [home, libraryRoot, userData, cache, config, temp]) {
+    fs.mkdirSync(directory, { recursive: true })
+  }
+  fs.mkdirSync(path.join(home, '.claude-session-manager'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.claude-session-manager', 'app-config.json'), JSON.stringify({
+    libraryPath: libraryRoot,
+    onboardingCompleted: true
+  }))
+  fs.writeFileSync(path.join(libraryRoot, '.swob-config.json'), JSON.stringify({
+    libraryRoot,
+    preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' }
+  }))
+
+  const inherited: Record<string, string> = {}
+  for (const name of ['PATH', 'LANG', 'LC_ALL', 'SHELL', 'USER', 'LOGNAME']) {
+    const value = process.env[name]
+    if (value) inherited[name] = value
+  }
+  const environment: Record<string, string> = {
+    ...inherited,
+    HOME: home,
+    NODE_ENV: 'development',
+    SWOB_LIBRARY_ROOT: libraryRoot,
+    SWOB_USER_DATA_ROOT: userData,
+    SWOB_ISOLATION_PROTECTED_HOME: home,
+    SWOB_DEV_USE_REAL_LIBRARY: '1',
+    XDG_CACHE_HOME: cache,
+    XDG_CONFIG_HOME: config,
+    TMPDIR: temp
+  }
+  assertExplicitTemporaryLaunchPaths(environment, sandboxRoot, userData, os.tmpdir())
+  const safety = runtimeSafetyState(libraryRoot, environment)
+  if (!safety.dangerousRealLibrary) {
+    fs.rmSync(sandboxRoot, { recursive: true, force: true })
+    throw new Error('Development danger-marker fixture did not activate the real-Library guard')
+  }
+
+  const protectedStateBefore = snapshotProtectedRealState()
+  const app = await electron.launch({
+    args: [
+      path.join(__dirname, '..', 'out', 'main', 'index.js'),
+      `--user-data-dir=${userData}`,
+      `--disk-cache-dir=${cache}`
+    ],
+    env: environment
+  })
+  attachProtectedStateAudit(app, protectedStateBefore)
+  try {
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    return { app, page, sandboxRoot, home, libraryRoot, userData }
+  } catch (error) {
+    await app.close().catch(() => {})
+    fs.rmSync(sandboxRoot, { recursive: true, force: true })
+    throw error
+  }
 }
 
 export async function resizeAppWindow(
@@ -434,7 +536,12 @@ function createSyntheticCorpus(
   db.close()
 }
 
-function isolatedEnvironment(home: string, libraryRoot: string, sandboxRoot: string): Record<string, string> {
+function isolatedEnvironment(
+  home: string,
+  libraryRoot: string,
+  sandboxRoot: string,
+  userData: string
+): Record<string, string> {
   const inherited: Record<string, string> = {}
   for (const name of ['PATH', 'LANG', 'LC_ALL', 'SHELL', 'USER', 'LOGNAME']) {
     const value = process.env[name]
@@ -446,7 +553,10 @@ function isolatedEnvironment(home: string, libraryRoot: string, sandboxRoot: str
     NODE_ENV: 'test',
     SWOB_TEST_HOME: home,
     SWOB_TEST_LOCALE: 'zh-CN',
+    SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
+    SWOB_TEST_SYSTEM_TEMP_ROOT: os.tmpdir(),
     SWOB_LIBRARY_ROOT: libraryRoot,
+    SWOB_USER_DATA_ROOT: userData,
     XDG_CACHE_HOME: path.join(sandboxRoot, 'cache'),
     XDG_CONFIG_HOME: path.join(sandboxRoot, 'config'),
     TMPDIR: path.join(sandboxRoot, 'tmp')
@@ -479,15 +589,17 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
   )
 
   const environment = {
-    ...isolatedEnvironment(home, libraryRoot, sandboxRoot),
+    ...isolatedEnvironment(home, libraryRoot, sandboxRoot, userData),
     ...options.env,
     HOME: home,
     NODE_ENV: 'test',
     SWOB_TEST_HOME: home,
-    SWOB_E2E_SANDBOX_ROOT: sandboxRoot
+    SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
+    SWOB_USER_DATA_ROOT: userData
   }
+  const protectedStateBefore = snapshotProtectedRealState()
   try {
-    assertTestDefaultLibraryPath(environment.SWOB_LIBRARY_ROOT || libraryRoot, environment)
+    assertTestLaunchContract(environment, userData, { systemTemporaryRoot: os.tmpdir() })
   } catch (error) {
     fs.rmSync(sandboxRoot, { recursive: true, force: true })
     throw error
@@ -502,6 +614,7 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     ],
     env: environment
   })
+  attachProtectedStateAudit(app, protectedStateBefore)
   try {
     const page = await app.firstWindow()
     await page.waitForLoadState('domcontentloaded')
@@ -520,12 +633,30 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
 
 export async function closeApp(launched: LaunchedApp): Promise<void> {
   if (!launched) return
-  await Promise.race([
-    launched.app.close(),
-    new Promise((resolve) => setTimeout(resolve, 5000))
-  ])
+  let closeError: unknown
+  try {
+    await Promise.race([
+      launched.app.close(),
+      new Promise((resolve) => setTimeout(resolve, 5000))
+    ])
+  } catch (error) {
+    closeError = error
+  }
   try { launched.app.process().kill('SIGKILL') } catch { /* already closed */ }
-  fs.rmSync(launched.sandboxRoot, { recursive: true, force: true })
+  try {
+    verifyProtectedStateAudit(launched.app)
+  } catch (error) {
+    closeError ||= error
+  }
+  try {
+    fs.rmSync(launched.sandboxRoot, { recursive: true, force: true })
+    if (fs.existsSync(launched.sandboxRoot)) {
+      throw new Error('Test isolation violation: temporary E2E root was not removed')
+    }
+  } catch (error) {
+    closeError ||= error
+  }
+  if (closeError) throw closeError
 }
 
 export async function revealAllSessions(page: Page): Promise<void> {

@@ -1,13 +1,9 @@
 /** 补充验收：设置面板 AI 分析区（用 title 精确定位 settings 按钮） */
-import { _electron as electron } from '@playwright/test'
-import * as path from 'path'
+import { closeApp, launchApp } from './helpers'
 
 async function main() {
-  const app = await electron.launch({
-    args: [path.join(__dirname, '..', 'out', 'main', 'index.js')],
-    env: { ...process.env, NODE_ENV: 'test' }
-  })
-  const page = await app.firstWindow()
+  const launched = await launchApp()
+  const { app, page } = launched
   await page.waitForLoadState('domcontentloaded')
   await page.waitForTimeout(3000)
 
@@ -15,7 +11,7 @@ async function main() {
   const settingsBtn = page.locator('button[title*="设置"], button[title*="ettings"]').first()
   const found = await settingsBtn.isVisible({ timeout: 3000 }).catch(() => false)
   console.log(`${found ? '✅' : '❌'} 找到设置按钮`)
-  if (!found) { await app.close(); process.exit(1) }
+  if (!found) { await closeApp(launched); process.exit(1) }
   await settingsBtn.click()
   await page.waitForTimeout(1200)
 
@@ -50,7 +46,7 @@ async function main() {
     await page.screenshot({ path: 'e2e/screenshots/llm-settings.png' })
   }
 
-  await app.close()
+  await closeApp(launched)
   console.log('Done')
 }
 main().catch(e => { console.error(e); process.exit(1) })

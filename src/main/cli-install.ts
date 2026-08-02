@@ -54,9 +54,11 @@ export type CliInstallResult = {
   error?: string
 }
 
-/** Electron E2E homes are disposable and must never own a global CLI symlink. */
+/** Only production startup may own a global CLI symlink; test/dev homes are disposable. */
 export function shouldAutoInstallCli(environment: NodeJS.ProcessEnv = process.env): boolean {
-  return !environment.SWOB_TEST_HOME && environment.NODE_ENV !== 'test'
+  return !environment.SWOB_TEST_HOME &&
+    environment.NODE_ENV !== 'test' &&
+    environment.NODE_ENV !== 'development'
 }
 
 /**

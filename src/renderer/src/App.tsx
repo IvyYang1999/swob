@@ -10,6 +10,7 @@ import { BUILTIN_VIEW_IDS, builtinViewRegistry } from './registry/builtin-view-r
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 import { HARNESS_PRESENTATION_CHANGED_EVENT } from './utils/harness-presentation'
 import { useLensEnabled } from './hooks/useLens'
+import { RuntimeSafetyMarker } from './components/RuntimeSafetyMarker'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const t = useT()
@@ -191,6 +192,7 @@ export default function App() {
   if (onboarding?.needed) {
     return (
       <ErrorBoundary>
+        <RuntimeSafetyMarker floating />
         <Onboarding
           defaultPath={onboarding.defaultPath}
           onDone={() => setOnboarding({ needed: false, defaultPath: onboarding.defaultPath })}
@@ -202,12 +204,15 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-base text-secondary">
-        <div className="text-center">
-          <div className="animate-spin w-8 h-8 border-2 border-edge-strong border-t-body rounded-full mx-auto mb-3" />
-          <div className="text-sm">Loading sessions...</div>
+      <>
+        <RuntimeSafetyMarker floating />
+        <div className="h-screen flex items-center justify-center bg-base text-secondary">
+          <div className="text-center">
+            <div className="animate-spin w-8 h-8 border-2 border-edge-strong border-t-body rounded-full mx-auto mb-3" />
+            <div className="text-sm">Loading sessions...</div>
+          </div>
         </div>
-      </div>
+      </>
     )
   }
 

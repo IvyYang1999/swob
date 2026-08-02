@@ -47,6 +47,16 @@ async function parseJsonIpcResult<T>(result: Promise<string | T>): Promise<T> {
 }
 
 const api = {
+  // Static startup safety state; never exposes Library or HOME paths.
+  runtimeGetSafetyState: () => {
+    const dangerousRealLibrary = process.env.SWOB_RUNTIME_SAFETY_MODE === 'dangerous-real-library-development'
+    return {
+      mode: dangerousRealLibrary ? 'dangerous-real-library-development' as const : 'normal' as const,
+      dangerousRealLibrary,
+      marker: dangerousRealLibrary ? 'DEV · REAL LIBRARY' : null
+    }
+  },
+
   // Platform capabilities
   platformGetCapabilities: () => ipcRenderer.invoke('platform:getCapabilities'),
 

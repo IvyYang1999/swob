@@ -1,7 +1,7 @@
-import { _electron as electron } from '@playwright/test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { launchAppWithEnv } from './helpers'
 
 const fixtureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-theme-shot-'))
 const vaultRoot = path.join(fixtureHome, 'Documents', 'Swob')
@@ -15,35 +15,27 @@ fs.writeFileSync(path.join(vaultRoot, '.swob-config.json'), JSON.stringify({
   preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal', resumeTerminal: 'terminal-app', projectViewMode: 'folders' }
 }, null, 2))
 
-const app = await electron.launch({
-  args: ['.'],
-  cwd: '/private/tmp/swob-tf22v',
-  env: { ...process.env, HOME: fixtureHome, NODE_ENV: 'development' },
+const { app, page } = await launchAppWithEnv({
+  env: { HOME: fixtureHome, SWOB_LIBRARY_ROOT: vaultRoot }
 })
-
-const page = await app.firstWindow()
 await page.setViewportSize({ width: 800, height: 700 })
 await page.waitForTimeout(3000)
 
-// Open settings
 const settingsBtn = page.locator('[title*="设置"], [title*="Settings"]').first()
 await settingsBtn.click()
 await page.waitForTimeout(1000)
 
-// Click 通用
 const nav = page.getByRole('navigation', { name: /设置分类|Settings/ })
 const generalBtn = nav.getByRole('button', { name: /通用|General/ })
 await generalBtn.click()
 await page.waitForTimeout(500)
 
-// Scroll settings content to show theme area
 const content = page.locator('[data-settings-category]')
-await content.evaluate(el => el.scrollTop = 200)
+await content.evaluate((element) => { element.scrollTop = 200 })
 await page.waitForTimeout(300)
 
-const outDir = '/private/tmp/theme-screenshots'
+const outDir = path.join(os.tmpdir(), 'theme-screenshots')
 fs.mkdirSync(outDir, { recursive: true })
-
 await page.screenshot({ path: path.join(outDir, 'theme-picker-general.png') })
 console.log('Screenshot saved: theme-picker-general.png')
 

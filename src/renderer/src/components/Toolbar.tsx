@@ -10,6 +10,7 @@ import {
   type BuiltinCommandContext
 } from '../../../shared/registry/builtin-commands'
 import { useLensEnabled } from '../hooks/useLens'
+import { RuntimeSafetyMarker } from './RuntimeSafetyMarker'
 
 const toolbarCommandRegistry = createBuiltinCommandRegistry()
 
@@ -110,6 +111,7 @@ export function Toolbar() {
     >
       {/* Native Windows uses a regular title bar and has no macOS traffic lights. */}
       {!isWindowsAlpha && <div className="w-16 shrink-0" />}
+      <RuntimeSafetyMarker />
 
       {/* Search */}
       <div

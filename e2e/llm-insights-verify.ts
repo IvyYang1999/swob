@@ -2,10 +2,9 @@
  * E2E 验收：AI Insights 报告 + LLM 设置
  * 覆盖：设置面板 AI 配置区 → Insights 页面按钮 → 隐私提醒 → Quick Report 进度与产物
  */
-import { _electron as electron } from '@playwright/test'
-import * as path from 'path'
 import * as fs from 'fs'
-import * as os from 'os'
+import * as path from 'path'
+import { closeApp, launchApp } from './helpers'
 
 async function main() {
   const results: Array<{ step: string; ok: boolean; note?: string }> = []
@@ -15,11 +14,8 @@ async function main() {
   }
 
   console.log('启动 Electron…')
-  const app = await electron.launch({
-    args: [path.join(__dirname, '..', 'out', 'main', 'index.js')],
-    env: { ...process.env, NODE_ENV: 'test' }
-  })
-  const page = await app.firstWindow()
+  const launched = await launchApp()
+  const { app, page } = launched
   await page.waitForLoadState('domcontentloaded')
   await page.waitForTimeout(3000)
 
@@ -93,7 +89,7 @@ async function main() {
   }
 
   // ── 4. Quick Report：进度 + 产物 ──
-  const reportDir = path.join(os.homedir(), '.claude-session-manager', 'reports')
+  const reportDir = path.join(launched.home, '.claude-session-manager', 'reports')
   const before = fs.existsSync(reportDir) ? fs.readdirSync(reportDir).length : 0
 
   if (await quickBtn.isVisible().catch(() => false)) {
@@ -120,7 +116,7 @@ async function main() {
     await page.screenshot({ path: 'e2e/screenshots/llm-report-done.png' })
   }
 
-  await app.close()
+  await closeApp(launched)
 
   const failed = results.filter(r => !r.ok)
   console.log(`\n结果: ${results.length - failed.length}/${results.length} 通过`)

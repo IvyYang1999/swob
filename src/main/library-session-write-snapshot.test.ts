@@ -2,12 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { build } from 'vite'
-import { recoverIncompleteSessionWriteSnapshot } from './library-session-write-snapshot'
-import { runWithLibraryWriter } from './library-write-coordinator'
 
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-t190-snapshot-crash-'))
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-t190-production-crash-'))
 const bundleDir = path.join(tempRoot, 'bundle')
 const workerEntry = path.join(__dirname, '__fixtures__', 't190-session-snapshot-crash-worker.ts')
 const workerBundle = path.join(bundleDir, 'worker.mjs')
@@ -32,63 +31,121 @@ beforeAll(async () => {
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }))
 
-function crashWorker(libraryRoot: string, sessionDir: string, stage: string): Promise<NodeJS.Signals | null> {
+function sha256(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex')
+}
+
+function rows(sessionId: string, turns: number): unknown[] {
+  const result: unknown[] = []
+  for (let index = 1; index <= turns; index++) {
+    result.push({
+      uuid: `${sessionId}-u${index}`,
+      parentUuid: index === 1 ? null : `${sessionId}-a${index - 1}`,
+      sessionId,
+      type: 'user',
+      timestamp: `2026-08-02T00:0${index * 2 - 2}:00.000Z`,
+      cwd: tempRoot,
+      message: { role: 'user', content: index === 2 ? 'second user turn' : 'first user turn' }
+    })
+    result.push({
+      uuid: `${sessionId}-a${index}`,
+      parentUuid: `${sessionId}-u${index}`,
+      sessionId,
+      type: 'assistant',
+      timestamp: `2026-08-02T00:0${index * 2 - 1}:00.000Z`,
+      cwd: tempRoot,
+      message: { role: 'assistant', content: `assistant turn ${index}` }
+    })
+  }
+  return result
+}
+
+function jsonl(records: unknown[]): Buffer {
+  return Buffer.from(records.map((record) => JSON.stringify(record)).join('\n') + '\n')
+}
+
+function waitForExit(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [workerBundle, libraryRoot, sessionDir, stage], {
-      env: { ...process.env },
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-    let killed = false
     let stderr = ''
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk) => {
-      if (!killed && String(chunk).includes(stage)) {
-        killed = true
-        child.kill('SIGKILL')
-      }
-    })
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk) => { stderr += chunk })
     child.on('error', reject)
-    child.on('exit', (_code, signal) => {
-      if (!killed) reject(new Error(`crash worker did not reach ${stage}: ${stderr}`))
-      else resolve(signal)
-    })
+    child.on('exit', (code, signal) => resolve({ code, signal, stderr }))
+  })
+}
+
+function spawnWorker(
+  mode: 'crash' | 'recover-verify',
+  libraryRoot: string,
+  sessionDir: string,
+  evidencePath: string,
+  stage?: 'transcript' | 'backup' | 'manifest'
+): ChildProcess {
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: path.join(tempRoot, 'home'),
+    NODE_ENV: 'test',
+    SWOB_TEST_HOME: tempRoot,
+    SWOB_E2E_SANDBOX_ROOT: tempRoot,
+    SWOB_LIBRARY_ROOT: libraryRoot
+  }
+  if (stage) {
+    environment.SWOB_TEST_SESSION_WRITE_CRASH_STAGE = stage
+    environment.SWOB_TEST_SESSION_WRITE_CRASH_SIGNAL = path.join(tempRoot, `crash-${stage}.signal`)
+  } else {
+    delete environment.SWOB_TEST_SESSION_WRITE_CRASH_STAGE
+    delete environment.SWOB_TEST_SESSION_WRITE_CRASH_SIGNAL
+  }
+  return spawn(process.execPath, [workerBundle, mode, libraryRoot, sessionDir, evidencePath], {
+    env: environment,
+    stdio: ['ignore', 'ignore', 'pipe']
   })
 }
 
 describe('Library session durable write snapshot', () => {
-  it('矩阵 8：进程在 transcript、backup 或 manifest 任一步 SIGKILL 后都能恢复旧一致快照', async () => {
-    const stages = ['transcript.md', 'backup.jsonl', '.swob-session.json'] as const
-    for (const crashAfter of stages) {
-      const root = path.join(tempRoot, `library-${crashAfter}`)
-      const sessionDir = path.join(root, 'session')
+  it('矩阵 8：生产 updateTranscript→syncBackup→manifest 三个发布点 SIGKILL 后由新进程恢复一致包', async () => {
+    const stages = ['transcript', 'backup', 'manifest'] as const
+    for (const stage of stages) {
+      const libraryRoot = path.join(tempRoot, `library-${stage}`)
+      const sessionId = `t190-production-${stage}`
+      const sessionDir = path.join(libraryRoot, 'session')
+      const sourcePath = path.join(tempRoot, 'home', '.claude', 'projects', '-t190-production', `${sessionId}.jsonl`)
+      const evidencePath = path.join(tempRoot, `verified-${stage}.json`)
       fs.mkdirSync(sessionDir, { recursive: true })
-      const oldFiles = {
-        'transcript.md': '# old transcript\n',
-        'backup.jsonl': '{"snapshot":"old"}\n',
-        '.swob-session.json': JSON.stringify({
-          schemaVersion: 3,
-          sessionId: 'old',
-          updatedAt: '2026-08-01T00:00:00.000Z'
-        })
-      }
-      for (const [name, content] of Object.entries(oldFiles)) fs.writeFileSync(path.join(sessionDir, name), content)
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+      const oldBackup = jsonl(rows(sessionId, 1))
+      const newSource = jsonl(rows(sessionId, 2))
+      fs.writeFileSync(sourcePath, newSource)
+      fs.writeFileSync(path.join(sessionDir, 'transcript.md'), '# old transcript\n')
+      fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), oldBackup)
+      fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
+        sessionId,
+        sourceFilePaths: [sourcePath],
+        createdAt: '2026-08-02T00:00:00.000Z',
+        updatedAt: '2026-08-02T00:01:00.000Z',
+        projectPath: tempRoot,
+        turnCount: 1,
+        backupSha256: sha256(oldBackup),
+        backupSize: oldBackup.length
+      }))
 
-      expect(await crashWorker(root, sessionDir, crashAfter)).toBe('SIGKILL')
+      const crashed = await waitForExit(spawnWorker('crash', libraryRoot, sessionDir, evidencePath, stage))
+      expect(crashed, crashed.stderr).toMatchObject({ signal: 'SIGKILL' })
+      expect(fs.readFileSync(path.join(tempRoot, `crash-${stage}.signal`), 'utf8')).toBe(`${stage}\n`)
       expect(fs.existsSync(path.join(sessionDir, '.swob-write-transaction.json'))).toBe(true)
 
-      // Acquiring the next root writer first proves the dead child lease can be
-      // recovered; only then may the durable package snapshot be restored.
-      await runWithLibraryWriter(root, 'recovery-profile', 'maintenance', () => {
-        expect(recoverIncompleteSessionWriteSnapshot(root, sessionDir)).toBe(true)
-      }, { timeoutMs: 1_000, eventSink: () => {} })
-
-      for (const [name, content] of Object.entries(oldFiles)) {
-        expect(fs.readFileSync(path.join(sessionDir, name), 'utf8'), `${crashAfter} -> ${name}`).toBe(content)
-      }
-      expect(fs.existsSync(path.join(sessionDir, '.swob-write-transaction.json'))).toBe(false)
-      expect(fs.existsSync(path.join(sessionDir, '.swob-write-snapshots'))).toBe(false)
+      const recovered = await waitForExit(spawnWorker('recover-verify', libraryRoot, sessionDir, evidencePath))
+      expect(recovered, recovered.stderr).toMatchObject({ code: 0, signal: null })
+      const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'))
+      expect(evidence).toMatchObject({
+        backupSha256: sha256(newSource),
+        sourceSha256: sha256(newSource),
+        manifestBackupSha256: sha256(newSource),
+        turnCount: 2,
+        transcriptTurns: 2
+      })
+      expect(evidence.transcriptSha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(evidence.manifestSha256).toMatch(/^[0-9a-f]{64}$/)
     }
-  }, 20_000)
+  }, 30_000)
 })

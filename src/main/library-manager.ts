@@ -651,6 +651,43 @@ const SESSION_META_FILE = '.swob-session.json'
 const LIBRARY_CONFIG_FILE = '.swob-config.json'
 const TRANSCRIPT_FILE = 'transcript.md'
 const BACKUP_FILE = 'backup.jsonl'
+type SessionWriteCrashStage = 'transcript' | 'backup' | 'manifest'
+
+/**
+ * Deliberately unreachable in normal builds. The R2 crash-contract worker must
+ * opt in with all three test variables, and both the published file and signal
+ * must stay inside SWOB_TEST_HOME. A stray production environment variable can
+ * therefore never terminate the app or write outside the isolated harness.
+ */
+function crashAfterSessionPublishForTest(stage: SessionWriteCrashStage, publishedPath: string): void {
+  const requested = process.env['SWOB_TEST_SESSION_WRITE_CRASH_STAGE']
+  if (!requested || process.env['NODE_ENV'] !== 'test' || !process.env['SWOB_TEST_HOME']) return
+  if (requested !== stage) return
+  const boundary = path.resolve(process.env['SWOB_TEST_HOME'])
+  const signalPath = process.env['SWOB_TEST_SESSION_WRITE_CRASH_SIGNAL']
+  if (!signalPath) throw new Error('session-write-crash-signal-required')
+  const assertInsideBoundary = (candidatePath: string): string => {
+    const resolved = path.resolve(candidatePath)
+    const relative = path.relative(boundary, resolved)
+    if (!relative || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) {
+      throw new Error('session-write-crash-path-outside-test-boundary')
+    }
+    return resolved
+  }
+  assertInsideBoundary(publishedPath)
+  const resolvedSignal = assertInsideBoundary(signalPath)
+  fs.mkdirSync(path.dirname(resolvedSignal), { recursive: true })
+  const descriptor = fs.openSync(resolvedSignal, 'wx', 0o600)
+  try {
+    fs.writeFileSync(descriptor, `${stage}\n`, 'utf8')
+    fs.fsyncSync(descriptor)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  fsyncDirectorySync(path.dirname(resolvedSignal))
+  process.kill(process.pid, 'SIGKILL')
+  throw new Error('session-write-sigkill-returned')
+}
 export const LOCAL_RESUME_UNAVAILABLE_REASON = '此会话数据在备份中，本机无源文件，无法直接恢复'
 export const ICLOUD_BACKUP_WAITING_REASON = '会话备份正在等待 iCloud 下载'
 export const SSH_RESUME_UNAVAILABLE_REASON = '此会话没有可用的远程设备 SSH 配置'
@@ -3536,6 +3573,7 @@ async function syncBackupUnderWriter(sessionId: string, expectedDirPath?: string
     } else {
       await concatenateSources(sourcePaths, backupPath)
     }
+    crashAfterSessionPublishForTest('backup', backupPath)
 
     const backupStat = await fs.promises.stat(backupPath)
     meta.backupSha256 = await hashFileSha256(backupPath)
@@ -3543,6 +3581,7 @@ async function syncBackupUnderWriter(sessionId: string, expectedDirPath?: string
     meta.backupSourceState = nextSourceState
     preserveSchemaV3OrUpgradeToV2(meta)
     writeSessionMeta(dirPath, meta)
+    crashAfterSessionPublishForTest('manifest', path.join(dirPath, SESSION_META_FILE))
   })
 }
 
@@ -3723,6 +3762,7 @@ function writeTranscriptFromLoadedRaw(
 
   const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
   replaceSafeLibraryFileSync(_root, mdPath, md)
+  crashAfterSessionPublishForTest('transcript', mdPath)
 
   // Update meta timestamps + 权威轮数
   meta.updatedAt = summary.updatedAt

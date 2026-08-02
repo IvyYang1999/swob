@@ -13,6 +13,7 @@ import {
   canonicalLibraryRootForWrite,
   ensureSafeLibraryDirectory,
   fsyncDirectorySync,
+  replaceSafeLibraryFileSync,
   writeSafeLibraryFileSync
 } from './library-path-safety'
 
@@ -79,6 +80,12 @@ export interface LibraryWriterLeaseOptions {
   processStartFingerprint?: (pid: number) => string | 'missing' | null
   /** Test/embedding seam. The returned raw value is never persisted in the Library. */
   hostIdentity?: () => string
+  /** Test-only crash seam after a durable heartbeat temp exists but before atomic publish. */
+  heartbeatBeforePublish?: (tempPath: string) => void
+  /** Test-only concurrency seam after the recovery claim is durable. */
+  recoveryClaimCreated?: (claimPath: string) => void
+  /** Test-only proof that a competing process observed an existing claim. */
+  recoveryClaimObserved?: (claimPath: string) => void
   eventSink?: (event: LibraryWriterEvent) => void
 }
 
@@ -213,9 +220,20 @@ function writeOwner(
   libraryRoot: string,
   ownerPath: string,
   owner: LibraryWriterOwner,
-  exclusive = false
+  exclusive = false,
+  beforePublish?: (tempPath: string) => void
 ): void {
-  writeSafeLibraryFileSync(libraryRoot, ownerPath, JSON.stringify(owner), { exclusive, mode: 0o600 })
+  if (exclusive) {
+    writeSafeLibraryFileSync(libraryRoot, ownerPath, JSON.stringify(owner), { exclusive: true, mode: 0o600 })
+  } else {
+    // Heartbeats must never truncate the only valid owner record in place. A
+    // crash can leave a fully flushed, recognizable temp beside the old owner;
+    // readers ignore that temp and can still prove the old process dead.
+    replaceSafeLibraryFileSync(libraryRoot, ownerPath, JSON.stringify(owner), {
+      mode: 0o600,
+      beforePublish
+    })
+  }
   fsyncDirectorySync(path.dirname(ownerPath))
 }
 
@@ -231,7 +249,11 @@ interface CorruptDirectoryOwner {
   evidenceHash: string
 }
 
-type DirectoryOwnerEvidence = ExistingDirectoryOwner | CorruptDirectoryOwner
+interface MissingDirectoryOwner {
+  kind: 'missing'
+}
+
+type DirectoryOwnerEvidence = ExistingDirectoryOwner | CorruptDirectoryOwner | MissingDirectoryOwner
 
 function hashLockEvidence(lockDir: string): string {
   const hash = createHash('sha256')
@@ -254,13 +276,34 @@ function readDirectoryOwner(lockDir: string): DirectoryOwnerEvidence {
   let evidenceHash: string
   try {
     allEntries = fs.readdirSync(lockDir)
-    evidenceHash = hashLockEvidence(lockDir)
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
     return { kind: 'corrupt', evidenceHash: createHash('sha256').update('unreadable-lock').digest('hex') }
   }
-  const unexpected = allEntries.filter((name) => name !== RECOVERY_CLAIM && !name.endsWith(OWNER_SUFFIX))
+  try {
+    evidenceHash = hashLockEvidence(lockDir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
+    return { kind: 'corrupt', evidenceHash: createHash('sha256').update('unreadable-lock').digest('hex') }
+  }
   const ownerEntries = allEntries.filter((name) => name.endsWith(OWNER_SUFFIX))
+  const heartbeatTempPrefix = ownerEntries.length === 1 ? `.${ownerEntries[0]}.` : ''
+  const heartbeatTemps = heartbeatTempPrefix
+    ? allEntries.filter((name) => name.startsWith(heartbeatTempPrefix) &&
+      /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/i
+        .test(name.slice(heartbeatTempPrefix.length)))
+    : []
+  const unexpected = allEntries.filter((name) =>
+    name !== RECOVERY_CLAIM && !name.endsWith(OWNER_SUFFIX) && !heartbeatTemps.includes(name))
   if (unexpected.length > 0 || ownerEntries.length !== 1) return { kind: 'corrupt', evidenceHash }
+  try {
+    for (const name of heartbeatTemps) {
+      const stat = fs.lstatSync(path.join(lockDir, name))
+      if (stat.isSymbolicLink() || !stat.isFile()) return { kind: 'corrupt', evidenceHash }
+    }
+  } catch {
+    return { kind: 'corrupt', evidenceHash }
+  }
   const ownerPath = path.join(lockDir, ownerEntries[0])
   try {
     const stat = fs.lstatSync(ownerPath)
@@ -281,6 +324,8 @@ interface AcquisitionContext {
   pid: number
   processStartFingerprint: string
   readProcessStart: (pid: number) => string | 'missing' | null
+  recoveryClaimCreated?: (claimPath: string) => void
+  recoveryClaimObserved?: (claimPath: string) => void
   startedMonotonic: number
 }
 
@@ -302,6 +347,11 @@ function staleDecision(
   context: AcquisitionContext
 ): 'recover' | Exclude<LibraryWriterBusyReason, 'timeout' | 'corrupt-owner' | 'recovery-in-progress'> {
   if (sameBoot(owner, context)) {
+    // schemaVersion 1 is a deliberately time-bounded migration exception. It
+    // has no stable host proof, so raw same-boot evidence is accepted only to
+    // recover pre-v1.4 incident locks. Every successful/new acquisition below
+    // writes v2; remove this compatibility branch with the v1.5 lock-schema
+    // cleanup instead of extending it to any future owner schema.
     const currentStart = context.readProcessStart(owner.pid)
     if (currentStart === 'missing') return 'recover'
     if (!currentStart) return 'unverifiable-owner'
@@ -355,6 +405,8 @@ function prepareAcquisition(
     pid,
     processStartFingerprint,
     readProcessStart,
+    recoveryClaimCreated: options.recoveryClaimCreated,
+    recoveryClaimObserved: options.recoveryClaimObserved,
     startedMonotonic: (options.monotonicNow || (() => performance.now()))()
   }
 }
@@ -394,6 +446,7 @@ function existingClaimDecision(
   context: AcquisitionContext,
   rawClaim: { content: string; claim: RecoveryClaim | null }
 ): 'retry' | 'recovery-in-progress' | 'unverifiable-owner' {
+  context.recoveryClaimObserved?.(path.join(context.lockDir, RECOVERY_CLAIM))
   if (!rawClaim.claim) {
     // Pre-v2 claims contained only ownerNonce. They have no claimant liveness
     // evidence; once the owner is still proven stale, removing the exact
@@ -458,9 +511,14 @@ function createRecoveryClaim(
   try {
     writeSafeLibraryFileSync(context.libraryRoot, claimPath, content, { exclusive: true, mode: 0o600 })
     fsyncDirectorySync(context.lockDir)
+    context.recoveryClaimCreated?.(claimPath)
     return { path: claimPath, content }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null
+    const code = (error as NodeJS.ErrnoException).code
+    // Another claimant may atomically quarantine the whole lock directory
+    // between our stale read and exclusive claim create. That is a normal race,
+    // not corruption; retry against the winner's replacement owner.
+    if (code === 'EEXIST' || code === 'ENOENT') return null
     throw error
   }
 }
@@ -550,7 +608,10 @@ function tryAcquire(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     const existing = readDirectoryOwner(context.lockDir)
-    if (existing.kind === 'corrupt') return 'corrupt-owner'
+    if (existing.kind === 'missing') return 'retry'
+    if (existing.kind === 'corrupt') {
+      return 'corrupt-owner'
+    }
     const decision = staleDecision(existing.owner, context)
     if (decision !== 'recover') return decision
     const recovery = recoverProvenStaleLock(context, existing, now())
@@ -568,7 +629,9 @@ function tryAcquire(
     const heartbeatAtMs = now()
     owner.heartbeatAt = new Date(heartbeatAtMs).toISOString()
     owner.leaseExpiresAt = new Date(heartbeatAtMs + leaseMs).toISOString()
-    try { writeOwner(context.libraryRoot, ownerPath, owner) } catch { /* ownership loss remains fail-closed */ }
+    try {
+      writeOwner(context.libraryRoot, ownerPath, owner, false, options.heartbeatBeforePublish)
+    } catch { /* ownership loss remains fail-closed */ }
   }, heartbeatMs)
   heartbeat.unref?.()
   const monotonicNow = options.monotonicNow || (() => performance.now())
@@ -664,6 +727,9 @@ export function inspectLibraryWriterLease(
     return { state: 'unlocked', manualRecoveryAvailable: false, message: 'Library 写锁未占用' }
   }
   const existing = readDirectoryOwner(context.lockDir)
+  if (existing.kind === 'missing') {
+    return { state: 'unlocked', manualRecoveryAvailable: false, message: 'Library 写锁未占用' }
+  }
   if (existing.kind === 'corrupt') {
     return {
       state: 'blocked',
@@ -703,6 +769,7 @@ export function recoverLibraryWriterLeaseManually(
   const context = prepareAcquisition(libraryRoot, options)
   if (!fs.existsSync(context.lockDir)) return { recovered: false, reason: 'unlocked' }
   const first = readDirectoryOwner(context.lockDir)
+  if (first.kind === 'missing') return { recovered: false, reason: 'unlocked' }
   if (first.evidenceHash !== request.expectedEvidenceHash) return { recovered: false, reason: 'evidence-changed' }
   if (first.kind === 'valid') {
     const decision = staleDecision(first.owner, context)

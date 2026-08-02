@@ -231,13 +231,14 @@ export function replaceSafeLibraryFileSync(
   libraryRoot: string,
   filePath: string,
   content: string | NodeJS.ArrayBufferView,
-  options: { mode?: number } = {}
+  options: { mode?: number; beforePublish?: (tempPath: string) => void } = {}
 ): void {
   const target = assertSafeLibraryFileTarget(libraryRoot, filePath)
   const parent = path.dirname(target)
   const tempPath = path.join(parent, `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`)
   try {
     writeSafeLibraryFileSync(libraryRoot, tempPath, content, { exclusive: true, mode: options.mode })
+    options.beforePublish?.(tempPath)
     assertSafeLibraryFileTarget(libraryRoot, target)
     fs.renameSync(tempPath, target)
     try { fs.chmodSync(target, options.mode ?? 0o600) } catch { /* mode is best effort on Windows */ }

@@ -8,7 +8,6 @@ import {
   LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
   LibraryWriterBusyError,
   recoverLibraryWriterLeaseManually,
-  type LibraryWriterEvent,
   type LibraryWriterLeaseOptions
 } from './library-writer-lease'
 import { deriveHostBootIdentity, deriveLibraryHostProof } from './host-identity'
@@ -120,7 +119,16 @@ describe('Library 跨进程单写者 lease', () => {
     const recovered = await acquireLibraryWriterLease(root, 'profile-b', 'move',
       leaseOptions(202, (pid) => pid === 101 ? 'missing' : 'start-202', { timeoutMs: 50 }))
 
-    expect(recovered.owner.deviceId).toBe('profile-b')
+    expect(recovered.owner).toMatchObject({
+      schemaVersion: 2,
+      deviceId: 'profile-b',
+      hostProof: expect.stringMatching(/^[0-9a-f]{64}$/)
+    })
+    const migratedOwnerName = fs.readdirSync(lockDir).find((name) => name.endsWith('.owner.json'))!
+    expect(JSON.parse(fs.readFileSync(path.join(lockDir, migratedOwnerName), 'utf8'))).toMatchObject({
+      schemaVersion: 2,
+      ownerNonce: recovered.owner.ownerNonce
+    })
     recovered.release()
   })
 
@@ -230,28 +238,6 @@ describe('Library 跨进程单写者 lease', () => {
     }, leaseOptions(202, () => 'start-202'))
     expect(recovered).toMatchObject({ recovered: true, reason: 'recovered' })
     expect(fs.readFileSync(path.join(recovered.quarantinePath!, 'broken.owner.json'), 'utf8')).toBe('{broken')
-  })
-
-  it('矩阵 7：recovery claim 竞争只有一个恢复者能完成原子隔离', async () => {
-    let ownerAlive = true
-    const original = await acquireLibraryWriterLease(root, 'profile-a', 'maintenance',
-      leaseOptions(101, (pid) => pid === 101 && ownerAlive ? 'start-101' : `start-${pid}`, { heartbeatMs: 1_000 }))
-    ownerAlive = false
-    const events: LibraryWriterEvent[] = []
-    const contender = (pid: number) => acquireLibraryWriterLease(root, `profile-${pid}`, 'move',
-      leaseOptions(pid, (candidate) => candidate === 101 ? 'missing' : `start-${candidate}`, {
-        timeoutMs: 20,
-        pollMs: 1,
-        eventSink: (event) => events.push(event)
-      }))
-
-    const settled = await Promise.allSettled([contender(202), contender(303)])
-    const winners = settled.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof contender>>> =>
-      result.status === 'fulfilled')
-    expect(winners).toHaveLength(1)
-    expect(events.filter((event) => event.event === 'stale-recovered')).toHaveLength(1)
-    original.release()
-    winners[0].value.release()
   })
 
   it('recovery claimant 崩溃后，同机后继进程按 PID 启动指纹清理 claim 并完成恢复', async () => {

@@ -89,8 +89,21 @@ import {
   undoLastLibraryOrganization,
   recoverInterruptedLibraryOrganization,
   withLibraryMaintenanceWriter,
+  getLibraryHealth,
+  getSessionFreshness,
+  getStaleSessions,
+  transitionLibraryHealth,
+  classifyLibraryError,
+  onLibraryHealthChanged,
+  getCompensationProgress,
+  onCompensationUpdate,
+  runCompensation,
+  cancelCompensation,
   type LibrarySession,
-  type LibraryTree
+  type LibraryTree,
+  type LibraryHealthSnapshot,
+  type SessionFreshness,
+  type CompensationProgress
 } from './library-manager'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
@@ -1553,7 +1566,11 @@ ipcMain.handle('sessions:loadAll', async () => {
   // Sync library in background (non-blocking). During first-run onboarding the
   // library init waits until the user has chosen a vault location.
   if (!libraryInitialized && !isOnboardingNeeded()) {
-    initLibraryFromSessions(sessions).catch(() => { /* ignore */ })
+    initLibraryFromSessions(sessions).catch((error) => {
+      const classification = classifyLibraryError(error)
+      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+      console.error('[library-init] initialization failed:', classification.errorCode, classification.message)
+    })
   }
 
   return sessions
@@ -2662,6 +2679,37 @@ ipcMain.handle('library:isInitialized', (_event, rootPath: string) => {
   return isLibraryInitialized(assertApprovedLibraryRoot(rootPath))
 })
 
+// --- Library Health / Freshness / Compensation ---
+
+ipcMain.handle('library:getHealth', (): LibraryHealthSnapshot => {
+  return getLibraryHealth()
+})
+
+ipcMain.handle('library:getSessionFreshness', (_event, sessionId: string): SessionFreshness | null => {
+  return getSessionFreshness(sessionId)
+})
+
+ipcMain.handle('library:getStaleSessions', (_event, thresholdMs?: number): SessionFreshness[] => {
+  return getStaleSessions(thresholdMs)
+})
+
+ipcMain.handle('library:compensationProgress', (): CompensationProgress => {
+  return getCompensationProgress()
+})
+
+ipcMain.handle('library:compensationCancel', () => {
+  cancelCompensation()
+})
+
+ipcMain.handle('library:compensationRetry', async () => {
+  return runCompensation(async (sessionId, dirPath) => {
+    await withLibraryMaintenanceWriter(async () => {
+      await updateTranscript(sessionId, dirPath)
+      await syncBackup(sessionId, dirPath)
+    })
+  })
+})
+
 ipcMain.handle('library:selectDirectory', async () => {
   if (!mainWindow) return null
   const { dialog } = require('electron')
@@ -3049,6 +3097,14 @@ app.whenReady().then(async () => {
       })
     }
   })
+  // Forward Library health state changes and compensation progress to renderer
+  onLibraryHealthChanged((event) => {
+    try { mainWindow?.webContents.send('library:healthChanged', event) } catch { /* window closing */ }
+  })
+  onCompensationUpdate((progress) => {
+    try { mainWindow?.webContents.send('library:compensationUpdate', progress) } catch { /* window closing */ }
+  })
+
   createWindow()
   primeTerminalDetection()
   startFileWatcher()

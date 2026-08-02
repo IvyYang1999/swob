@@ -3,6 +3,16 @@ import * as path from 'path'
 import * as os from 'os'
 import { createHash, randomUUID } from 'crypto'
 import { execFile } from 'node:child_process'
+import {
+  transitionLibraryHealth,
+  resetLibraryHealth,
+  classifyLibraryError,
+  recordLibraryDiagnostic,
+  computeSessionFreshness,
+  findStaleSessions,
+  checkFreshnessAndRecordDiagnostics,
+  type SessionFreshness
+} from './library-health'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
@@ -672,6 +682,12 @@ async function withLibraryWriter<T>(mode: LibraryWriterMode, operation: () => Pr
   _localWriterDepth++
   try {
     return await runWithLibraryWriter(writerRoot, getOrCreateLocalDeviceId(), mode, operation)
+  } catch (error) {
+    const classification = classifyLibraryError(error)
+    if (classification.state !== 'ready') {
+      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+    }
+    throw error
   } finally {
     _localWriterDepth--
     _appliedWriteGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(writerRoot))
@@ -683,6 +699,12 @@ function withLibraryWriterSync<T>(mode: LibraryWriterMode, operation: () => T): 
   _localWriterDepth++
   try {
     return runWithLibraryWriterSync(writerRoot, getOrCreateLocalDeviceId(), mode, operation)
+  } catch (error) {
+    const classification = classifyLibraryError(error)
+    if (classification.state !== 'ready') {
+      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+    }
+    throw error
   } finally {
     _localWriterDepth--
     _appliedWriteGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(writerRoot))
@@ -717,7 +739,9 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
     sessionMetaDiskReads = 0
     sessionRegistry.clear()
     lastIdentityScanIssues = []
+    resetLibraryHealth()
   }
+  transitionLibraryHealth('initializing', 'INIT_START', 'Library initialization started')
   _cachedLibraryConfig = null
   _cachedLibraryConfigRoot = ''
   _root = nextRoot
@@ -732,6 +756,12 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
   _ignoreDirs = new Set(
     options.ignoreDirs || (cfg.ignoreDirs && cfg.ignoreDirs.length ? cfg.ignoreDirs : DEFAULT_IGNORE_DIRS)
   )
+  // Transition to ready or read-only after successful initialization
+  if (options.readOnly) {
+    transitionLibraryHealth('read-only', 'INIT_READ_ONLY', 'Library initialized in read-only mode')
+  } else {
+    transitionLibraryHealth('ready', 'INIT_COMPLETE', 'Library initialized successfully')
+  }
 }
 
 // --- Config (cached to avoid thousands of readFileSync per load cycle) ---
@@ -5146,4 +5176,59 @@ export function buildSshResumeCommand(
   // Use interactive login shell (-li) so both ~/.zprofile AND ~/.zshrc are loaded.
   const remoteCmd = `zsh -li -c ${shellQuote(fullCmd)}`
   return `ssh -t ${shellQuote(`${sshConfig.user}@${sshConfig.host}`)} ${shellQuote(remoteCmd)}`
+}
+
+// ---------------------------------------------------------------------------
+// Library Health — public helpers that use Library internals
+// ---------------------------------------------------------------------------
+
+export {
+  getLibraryHealthState,
+  getLibraryHealth,
+  transitionLibraryHealth,
+  resetLibraryHealth,
+  recordLibraryDiagnostic,
+  classifyLibraryError,
+  onLibraryHealthChanged,
+  onLibraryDiagnostic,
+  getCompensationProgress,
+  isCompensationRunning,
+  cancelCompensation,
+  resetCompensation,
+  onCompensationUpdate,
+  runCompensation,
+  enqueueCompensation,
+  type LibraryHealthState,
+  type LibraryDiagnosticEvent,
+  type SessionFreshness,
+  type CompensationProgress,
+  type LibraryHealthSnapshot
+} from './library-health'
+
+/**
+ * Get freshness data for a single session using Library registry bindings.
+ * Lightweight: stat calls only, no transcript parsing.
+ */
+export function getSessionFreshness(sessionId: string): SessionFreshness | null {
+  const dirPath = uniqueSessionDir(sessionId)
+  if (!dirPath) return null
+  const meta = readSessionMeta(dirPath)
+  if (!meta) return null
+  const sourceFilePaths = sourceFilePathsFromMeta(meta) || []
+  return computeSessionFreshness(sessionId, dirPath, sourceFilePaths)
+}
+
+/**
+ * Find sessions whose freshness lag exceeds a threshold.
+ * Uses the last Library tree scan for session inventory.
+ */
+export function getStaleSessions(thresholdMs?: number): SessionFreshness[] {
+  const tree = scanLibrary()
+  const allSessions = sessionsFromLibraryTree(tree)
+  const sessionData = allSessions.map((session) => ({
+    sessionId: session.sessionId,
+    dirPath: session.dirPath,
+    sourceFilePaths: sourceFilePathsFromMeta(session.meta) || []
+  }))
+  return findStaleSessions(sessionData, thresholdMs)
 }

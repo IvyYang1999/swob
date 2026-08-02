@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -10,6 +10,7 @@ const bundleDir = path.join(tempRoot, 'bundle')
 const workerEntry = path.join(__dirname, '__fixtures__', 't190-writer-recovery-process.ts')
 const workerBundle = path.join(bundleDir, 'worker.mjs')
 const exits = new WeakMap<ChildProcess, Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }>>()
+const activeWorkers = new Set<ChildProcess>()
 
 beforeAll(async () => {
   await build({
@@ -31,6 +32,12 @@ beforeAll(async () => {
 
 afterAll(() => fs.rmSync(tempRoot, { recursive: true, force: true }))
 
+afterEach(async () => {
+  const running = [...activeWorkers].filter((child) => child.exitCode === null && child.signalCode === null)
+  for (const child of running) child.kill('SIGKILL')
+  await Promise.all(running.map(waitForExit))
+})
+
 function startWorker(mode: string, libraryRoot: string, controlPrefix: string, id = 'worker'): ChildProcess {
   const child = spawn(process.execPath, [workerBundle, mode, libraryRoot, controlPrefix, id], {
     env: {
@@ -46,9 +53,13 @@ function startWorker(mode: string, libraryRoot: string, controlPrefix: string, i
   let stderr = ''
   child.stderr?.setEncoding('utf8')
   child.stderr?.on('data', (chunk) => { stderr += chunk })
+  activeWorkers.add(child)
   exits.set(child, new Promise((resolve, reject) => {
     child.on('error', reject)
-    child.on('exit', (code, signal) => resolve({ code, signal, stderr }))
+    child.on('exit', (code, signal) => {
+      activeWorkers.delete(child)
+      resolve({ code, signal, stderr })
+    })
   }))
   return child
 }
@@ -83,6 +94,25 @@ async function waitForAnyFile(filePaths: string[], children: ChildProcess[]): Pr
   }
 }
 
+async function waitForClaimant(filePath: string, children: ChildProcess[]): Promise<'a' | 'b'> {
+  const deadline = Date.now() + 10_000
+  while (true) {
+    try {
+      const claimant = fs.readFileSync(filePath, 'utf8')
+      if (claimant === 'a' || claimant === 'b') return claimant
+      throw new Error(`claim-ready published incomplete or invalid content: ${JSON.stringify(claimant)}`)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    if (children.every((child) => child.exitCode !== null || child.signalCode !== null)) {
+      const details = await Promise.all(children.map(waitForExit))
+      throw new Error(`all workers exited before a valid claimant: ${JSON.stringify(details)}`)
+    }
+    if (Date.now() >= deadline) throw new Error('timed out waiting for a valid recovery claimant')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 async function killAndWait(child: ChildProcess): Promise<void> {
   const exit = waitForExit(child)
   child.kill('SIGKILL')
@@ -111,52 +141,55 @@ describe('Library writer real-process recovery', () => {
     expect(fs.existsSync(lockDir)).toBe(false)
   }, 20_000)
 
-  it('矩阵 7：两个真实子进程同时竞争 claim，单赢家且败方不破坏新 owner，赢家崩溃后仍可恢复', async () => {
-    const libraryRoot = path.join(tempRoot, 'claim-library')
-    const control = path.join(tempRoot, 'claim')
-    fs.mkdirSync(libraryRoot, { recursive: true })
-    const seed = startWorker('seed', libraryRoot, control)
-    await waitForFile(`${control}.seed-ready`, seed)
-    const lockDir = path.join(libraryRoot, '.swob', 'locks', 'library-writer')
-    const oldOwnerName = fs.readdirSync(lockDir).find((name) => name.endsWith('.owner.json'))!
-    const oldOwnerBytes = fs.readFileSync(path.join(lockDir, oldOwnerName))
-    await killAndWait(seed)
+  it.each(Array.from({ length: 10 }, (_, index) => index + 1))(
+    '矩阵 7 真实进程竞争第 %i/10 轮：claim 信号原子发布，单赢家且败方不破坏新 owner，赢家崩溃后仍可恢复',
+    async (round) => {
+      const libraryRoot = path.join(tempRoot, `claim-library-${round}`)
+      const control = path.join(tempRoot, `claim-${round}`)
+      fs.mkdirSync(libraryRoot, { recursive: true })
+      const seed = startWorker('seed', libraryRoot, control)
+      await waitForFile(`${control}.seed-ready`, seed)
+      const lockDir = path.join(libraryRoot, '.swob', 'locks', 'library-writer')
+      const oldOwnerName = fs.readdirSync(lockDir).find((name) => name.endsWith('.owner.json'))!
+      const oldOwnerBytes = fs.readFileSync(path.join(lockDir, oldOwnerName))
+      await killAndWait(seed)
 
-    const contenders = {
-      a: startWorker('contend', libraryRoot, control, 'a'),
-      b: startWorker('contend', libraryRoot, control, 'b')
-    }
-    await Promise.all([waitForFile(`${control}.a.ready`), waitForFile(`${control}.b.ready`)])
-    fs.writeFileSync(`${control}.start`, 'start')
-    await waitForFile(`${control}.claim-ready`)
-    const claimant = fs.readFileSync(`${control}.claim-ready`, 'utf8') as 'a' | 'b'
-    const loser = claimant === 'a' ? 'b' : 'a'
-    await waitForFile(`${control}.${loser}.claim-observed`)
-    expect(fs.existsSync(path.join(lockDir, 'recovery.claim'))).toBe(true)
-    expect(fs.readFileSync(path.join(lockDir, oldOwnerName))).toEqual(oldOwnerBytes)
+      const contenders = {
+        a: startWorker('contend', libraryRoot, control, 'a'),
+        b: startWorker('contend', libraryRoot, control, 'b')
+      }
+      await Promise.all([waitForFile(`${control}.a.ready`), waitForFile(`${control}.b.ready`)])
+      fs.writeFileSync(`${control}.start`, 'start')
+      const claimant = await waitForClaimant(`${control}.claim-ready`, [contenders.a, contenders.b])
+      const loser = claimant === 'a' ? 'b' : 'a'
+      await waitForFile(`${control}.${loser}.claim-observed`)
+      expect(fs.existsSync(path.join(lockDir, 'recovery.claim'))).toBe(true)
+      expect(fs.readFileSync(path.join(lockDir, oldOwnerName))).toEqual(oldOwnerBytes)
 
-    fs.writeFileSync(`${control}.claim-release`, 'release')
-    const winnerPath = await waitForAnyFile(
-      [`${control}.a.won`, `${control}.b.won`],
-      [contenders.a, contenders.b]
-    )
-    const winner = winnerPath.endsWith('.a.won') ? 'a' : 'b'
-    const leaseLoser = winner === 'a' ? 'b' : 'a'
-    await waitForFile(`${control}.${leaseLoser}.lost`, contenders[leaseLoser])
-    const loserExit = await waitForExit(contenders[leaseLoser])
-    expect(loserExit, loserExit.stderr).toMatchObject({ code: 0, signal: null })
-    expect(fs.readFileSync(`${control}.${leaseLoser}.lost`, 'utf8')).toBe('active-owner')
-    expect(['a', 'b'].filter((id) => fs.existsSync(`${control}.${id}.stale-recovered`))).toEqual([claimant])
+      fs.writeFileSync(`${control}.claim-release`, 'release')
+      const winnerPath = await waitForAnyFile(
+        [`${control}.a.won`, `${control}.b.won`],
+        [contenders.a, contenders.b]
+      )
+      const winner = winnerPath.endsWith('.a.won') ? 'a' : 'b'
+      const leaseLoser = winner === 'a' ? 'b' : 'a'
+      await waitForFile(`${control}.${leaseLoser}.lost`, contenders[leaseLoser])
+      const loserExit = await waitForExit(contenders[leaseLoser])
+      expect(loserExit, loserExit.stderr).toMatchObject({ code: 0, signal: null })
+      expect(fs.readFileSync(`${control}.${leaseLoser}.lost`, 'utf8')).toBe('active-owner')
+      expect(['a', 'b'].filter((id) => fs.existsSync(`${control}.${id}.stale-recovered`))).toEqual([claimant])
 
-    const newEntries = fs.readdirSync(lockDir)
-    expect(newEntries.filter((name) => name.endsWith('.owner.json'))).toHaveLength(1)
-    expect(newEntries).not.toContain('recovery.claim')
-    const newOwner = JSON.parse(fs.readFileSync(path.join(lockDir, newEntries.find((name) => name.endsWith('.owner.json'))!), 'utf8'))
-    expect(newOwner).toMatchObject({ schemaVersion: 2, deviceId: `contender-${winner}` })
+      const newEntries = fs.readdirSync(lockDir)
+      expect(newEntries.filter((name) => name.endsWith('.owner.json'))).toHaveLength(1)
+      expect(newEntries).not.toContain('recovery.claim')
+      const newOwner = JSON.parse(fs.readFileSync(path.join(lockDir, newEntries.find((name) => name.endsWith('.owner.json'))!), 'utf8'))
+      expect(newOwner).toMatchObject({ schemaVersion: 2, deviceId: `contender-${winner}` })
 
-    await killAndWait(contenders[winner])
-    const recovered = await waitForExit(startWorker('recover-once', libraryRoot, control, 'after-winner-crash'))
-    expect(recovered, recovered.stderr).toMatchObject({ code: 0, signal: null })
-    expect(fs.existsSync(lockDir)).toBe(false)
-  }, 30_000)
+      await killAndWait(contenders[winner])
+      const recovered = await waitForExit(startWorker('recover-once', libraryRoot, control, 'after-winner-crash'))
+      expect(recovered, recovered.stderr).toMatchObject({ code: 0, signal: null })
+      expect(fs.existsSync(lockDir)).toBe(false)
+    },
+    30_000
+  )
 })

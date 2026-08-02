@@ -1,7 +1,9 @@
 import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { acquireLibraryWriterLease, LibraryWriterBusyError } from '../library-writer-lease'
 
 const [mode, libraryRoot, controlPrefix, contenderId = 'worker'] = process.argv.slice(2)
+let controlPublishSequence = 0
 
 function sleepSync(milliseconds: number): void {
   const signal = new Int32Array(new SharedArrayBuffer(4))
@@ -24,9 +26,42 @@ async function waitForFile(filePath: string): Promise<void> {
   }
 }
 
+function syncParentDirectory(filePath: string): void {
+  let directory: number | undefined
+  try {
+    directory = fs.openSync(path.dirname(filePath), 'r')
+    fs.fsyncSync(directory)
+  } catch {
+    // Directory fsync is unavailable on some platforms. The fully-written inode is
+    // still published atomically by linkSync; this sync only strengthens durability.
+  } finally {
+    if (directory !== undefined) fs.closeSync(directory)
+  }
+}
+
 function writeOnce(filePath: string, content: string): void {
-  try { fs.writeFileSync(filePath, content, { flag: 'wx', mode: 0o600 }) } catch (error) {
+  const tempPath = `${filePath}.publish-${process.pid}-${++controlPublishSequence}.tmp`
+  let descriptor: number | undefined
+  try {
+    descriptor = fs.openSync(tempPath, 'wx', 0o600)
+    fs.writeFileSync(descriptor, content, 'utf8')
+    fs.fsyncSync(descriptor)
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor)
+  }
+
+  try {
+    // linkSync is an atomic no-replace publish: unlike open('wx') + write, readers
+    // can never observe an empty destination; unlike rename, a later contender
+    // cannot overwrite the first claimant's signal.
+    fs.linkSync(tempPath, filePath)
+    syncParentDirectory(filePath)
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  } finally {
+    try { fs.unlinkSync(tempPath) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
   }
 }
 

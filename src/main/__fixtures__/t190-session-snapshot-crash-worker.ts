@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   await runProductionPipeline(initialMeta.sessionId)
 
   if (mode === 'crash') throw new Error('configured SIGKILL stage was not reached')
-  if (mode !== 'recover-verify') throw new Error(`unknown mode: ${mode}`)
+  if (mode !== 'baseline-verify' && mode !== 'recover-verify') throw new Error(`unknown mode: ${mode}`)
 
   const transcriptPath = path.join(sessionDir, 'transcript.md')
   const backupPath = path.join(sessionDir, 'backup.jsonl')

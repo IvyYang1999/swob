@@ -75,7 +75,7 @@ function waitForExit(child: ChildProcess): Promise<{ code: number | null; signal
 }
 
 function spawnWorker(
-  mode: 'crash' | 'recover-verify',
+  mode: 'baseline-verify' | 'crash' | 'recover-verify',
   libraryRoot: string,
   sessionDir: string,
   evidencePath: string,
@@ -102,32 +102,75 @@ function spawnWorker(
   })
 }
 
+function prepareSessionPackage(
+  sessionDir: string,
+  sessionId: string,
+  sourcePath: string,
+  oldBackup: Buffer
+): void {
+  fs.mkdirSync(sessionDir, { recursive: true })
+  fs.writeFileSync(path.join(sessionDir, 'transcript.md'), '# old transcript\n')
+  fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), oldBackup)
+  fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
+    sessionId,
+    sourceFilePaths: [sourcePath],
+    createdAt: '2026-08-02T00:00:00.000Z',
+    updatedAt: '2026-08-02T00:01:00.000Z',
+    projectPath: tempRoot,
+    turnCount: 1,
+    backupSha256: sha256(oldBackup),
+    backupSize: oldBackup.length
+  }))
+}
+
+interface SessionPackageEvidence {
+  transcriptSha256: string
+  backupSha256: string
+  manifestSha256: string
+  sourceSha256: string
+  manifestBackupSha256: string
+  turnCount: number
+  transcriptTurns: number
+}
+
+function readEvidence(evidencePath: string): SessionPackageEvidence {
+  return JSON.parse(fs.readFileSync(evidencePath, 'utf8')) as SessionPackageEvidence
+}
+
 describe('Library session durable write snapshot', () => {
-  it('矩阵 8：生产 updateTranscript→syncBackup→manifest 三个发布点 SIGKILL 后由新进程恢复一致包', async () => {
+  it('矩阵 8：三个生产发布点 SIGKILL 恢复后的 transcript/backup/manifest 与无崩溃基线逐字节一致', async () => {
     const stages = ['transcript', 'backup', 'manifest'] as const
+    const sessionId = 't190-production-exact'
+    const sourcePath = path.join(tempRoot, 'home', '.claude', 'projects', '-t190-production', `${sessionId}.jsonl`)
+    const oldBackup = jsonl(rows(sessionId, 1))
+    const newSource = jsonl(rows(sessionId, 2))
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    // All four production runs share the exact same source inode, timestamps,
+    // session id and initial package so manifest source-state bytes are comparable.
+    fs.writeFileSync(sourcePath, newSource)
+
+    const baselineRoot = path.join(tempRoot, 'library-baseline')
+    const baselineSessionDir = path.join(baselineRoot, 'session')
+    const baselineEvidencePath = path.join(tempRoot, 'verified-baseline.json')
+    prepareSessionPackage(baselineSessionDir, sessionId, sourcePath, oldBackup)
+    const baseline = await waitForExit(spawnWorker(
+      'baseline-verify', baselineRoot, baselineSessionDir, baselineEvidencePath
+    ))
+    expect(baseline, baseline.stderr).toMatchObject({ code: 0, signal: null })
+    const baselineEvidence = readEvidence(baselineEvidencePath)
+    expect(baselineEvidence).toMatchObject({
+      backupSha256: sha256(newSource),
+      sourceSha256: sha256(newSource),
+      manifestBackupSha256: sha256(newSource),
+      turnCount: 2,
+      transcriptTurns: 2
+    })
+
     for (const stage of stages) {
       const libraryRoot = path.join(tempRoot, `library-${stage}`)
-      const sessionId = `t190-production-${stage}`
       const sessionDir = path.join(libraryRoot, 'session')
-      const sourcePath = path.join(tempRoot, 'home', '.claude', 'projects', '-t190-production', `${sessionId}.jsonl`)
       const evidencePath = path.join(tempRoot, `verified-${stage}.json`)
-      fs.mkdirSync(sessionDir, { recursive: true })
-      fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
-      const oldBackup = jsonl(rows(sessionId, 1))
-      const newSource = jsonl(rows(sessionId, 2))
-      fs.writeFileSync(sourcePath, newSource)
-      fs.writeFileSync(path.join(sessionDir, 'transcript.md'), '# old transcript\n')
-      fs.writeFileSync(path.join(sessionDir, 'backup.jsonl'), oldBackup)
-      fs.writeFileSync(path.join(sessionDir, '.swob-session.json'), JSON.stringify({
-        sessionId,
-        sourceFilePaths: [sourcePath],
-        createdAt: '2026-08-02T00:00:00.000Z',
-        updatedAt: '2026-08-02T00:01:00.000Z',
-        projectPath: tempRoot,
-        turnCount: 1,
-        backupSha256: sha256(oldBackup),
-        backupSize: oldBackup.length
-      }))
+      prepareSessionPackage(sessionDir, sessionId, sourcePath, oldBackup)
 
       const crashed = await waitForExit(spawnWorker('crash', libraryRoot, sessionDir, evidencePath, stage))
       expect(crashed, crashed.stderr).toMatchObject({ signal: 'SIGKILL' })
@@ -136,7 +179,7 @@ describe('Library session durable write snapshot', () => {
 
       const recovered = await waitForExit(spawnWorker('recover-verify', libraryRoot, sessionDir, evidencePath))
       expect(recovered, recovered.stderr).toMatchObject({ code: 0, signal: null })
-      const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'))
+      const evidence = readEvidence(evidencePath)
       expect(evidence).toMatchObject({
         backupSha256: sha256(newSource),
         sourceSha256: sha256(newSource),
@@ -144,8 +187,15 @@ describe('Library session durable write snapshot', () => {
         turnCount: 2,
         transcriptTurns: 2
       })
-      expect(evidence.transcriptSha256).toMatch(/^[0-9a-f]{64}$/)
-      expect(evidence.manifestSha256).toMatch(/^[0-9a-f]{64}$/)
+      expect({
+        transcriptSha256: evidence.transcriptSha256,
+        backupSha256: evidence.backupSha256,
+        manifestSha256: evidence.manifestSha256
+      }, `${stage} recovery must equal the no-crash production baseline byte-for-byte`).toEqual({
+        transcriptSha256: baselineEvidence.transcriptSha256,
+        backupSha256: baselineEvidence.backupSha256,
+        manifestSha256: baselineEvidence.manifestSha256
+      })
     }
   }, 30_000)
 })

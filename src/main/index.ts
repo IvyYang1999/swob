@@ -1293,7 +1293,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
     const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
     const oldConfig = loadConfig()
     let tree = latestLibraryTree || await requestLibraryScan(false)
-    let skippedConflictCount = 0
+    const skippedConflictSessionIds = new Set<string>()
     const needsMigration = oldConfig.folders.length > 0 &&
       tree.folders.length === 0 && tree.ungroupedSessions.length === 0
 
@@ -1301,7 +1301,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
       onProgress: reportLibrarySyncProgress
     })
     tree = initialSync.tree
-    skippedConflictCount += initialSync.outcome.skipped.length
+    initialSync.outcome.skipped.forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
     if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
 
     if (needsMigration) {
@@ -1319,7 +1319,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
         onProgress: reportLibrarySyncProgress
       })
       tree = catchUpSync.tree
-      skippedConflictCount += catchUpSync.outcome.skipped.length
+      catchUpSync.outcome.skipped.forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
       if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
     }
 
@@ -1330,7 +1330,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
     if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
     await hydrateLibrarySessions(tree)
     const conflictCount = Math.max(
-      skippedConflictCount,
+      skippedConflictSessionIds.size,
       getLibrarySessionRegistryDiagnostics().filter((binding) => binding.state === 'conflict').length
     )
     if (conflictCount > 0) {

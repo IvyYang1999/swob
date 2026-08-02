@@ -1,0 +1,83 @@
+{
+  "workItemId": "t192-live-followup",
+  "baseSha": "aeedcb8c5c3df749069b5287413c2b3194b40d99",
+  "headSha": "f3b1697aa9c67d5d17939bd6d3cb70caca988c3e",
+  "changedFiles": [
+    "src/main/index.ts",
+    "src/main/library-live-sync.architecture.test.ts",
+    "src/main/library-manager.ts",
+    "src/main/library-startup-sync.test.ts",
+    "src/main/library-startup-sync.ts",
+    "src/main/library-worker.test.ts",
+    "src/main/library-worker.ts"
+  ],
+  "contractsProduced": [
+    "IncrementalLibraryStartupSync.v1",
+    "LibraryWriterProbe.v1",
+    "StartupLibrarySyncChunk.v1",
+    "DedicatedLiveSessionSyncWorker.v1"
+  ],
+  "tests": [
+    {
+      "command": "npm run check",
+      "status": "passed",
+      "numbers": "all conflict, schema, recovery read-only, Library write-boundary, i18n, pricing, asset, notice, package, DCO and typecheck gates passed"
+    },
+    {
+      "command": "npm exec vitest run -- --reporter=dot",
+      "status": "passed",
+      "numbers": "154 files passed, 4 skipped; 1261 tests passed, 14 skipped"
+    },
+    {
+      "command": "commit hook: vitest run --maxWorkers=2 plus compile",
+      "status": "passed",
+      "numbers": "154 files passed, 4 skipped; 1261 tests passed, 14 skipped; compile passed"
+    },
+    {
+      "command": "SWOB_NATIVE_FSEVENTS_TEST=1 directed live-sync matrix",
+      "status": "passed",
+      "numbers": "16 passed, 1 optional large test skipped; native macOS appended-event latency 51-65ms and fd count returned to baseline"
+    },
+    {
+      "command": "SWOB_LARGE_LIVE_SYNC_TEST=1 npm exec vitest run -- src/main/library-worker.test.ts",
+      "status": "passed",
+      "numbers": "104858487-byte source follow-up reached byte-exact backup and updated transcript in 2395ms, below the 60000ms gate"
+    },
+    {
+      "command": "real sandbox startup-completion gate",
+      "status": "passed",
+      "numbers": "actual Library worker advanced byte-exact backup and transcript before the deliberately blocked final startup chunk completed; latest summary replaced the startup snapshot"
+    },
+    {
+      "command": "npm run build",
+      "status": "passed",
+      "numbers": "main, Library worker, preload, renderer and CLI production bundles built"
+    }
+  ],
+  "visualEvidence": [],
+  "deviations": [
+    "The normal syncLibraryFromSessions batch keeps its original whole-batch writer lease so CLI organization and other atomic batch consumers cannot observe a half-applied collection; only the explicit startup chunk API permits one-session lease boundaries.",
+    "Sources modified within five minutes are scheduled through the dedicated live worker immediately after a successful writer probe; only the newest physical path per logical session is selected.",
+    "Root switching remains paused until the new root is initialized; its deferred source events are replayed after the root epoch transition instead of writing across roots."
+  ],
+  "knownRisks": [
+    "The final composed candidate still needs the parent integrator to rerun the real recovered Library 60-second gate; this worktree never touched the running app or real Library.",
+    "The 100MB performance acceptance used a synthetic isolated Claude JSONL with the same byte scale, not the user's private Codex transcript.",
+    "Native Windows event delivery and filesystem performance were not exercised on this macOS host."
+  ],
+  "rootCause": [
+    "Startup worker.sync serialized every later session-sync request behind one requestTail.",
+    "syncLibraryFromSessions held one maintenance lease across the entire approximately 1800-session startup batch.",
+    "A source event observed while libraryInitialized was false permanently captured maintainLibrary=false, so it parsed and indexed after startup but never updated Library."
+  ],
+  "provenance": {
+    "harness": "codex",
+    "model": "GPT-5",
+    "session": "6194f333"
+  },
+  "depends_on": [
+    "t190-writer-lease-recovery",
+    "t191-real-library-isolation",
+    "t192-library-health-freshness"
+  ]
+}

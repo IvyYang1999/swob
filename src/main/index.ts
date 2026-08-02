@@ -92,12 +92,15 @@ import {
   getLibrarySessionRegistryDiagnostics,
   getSessionFreshness,
   getStaleSessions,
+  getStaleSessionsFromTree,
   type LibrarySession,
   type LibraryTree
 } from './library-manager'
 import {
   getLibraryHealth,
   transitionLibraryHealth,
+  healthAfterSuccessfulLibraryWrite,
+  freshnessDiagnosticFingerprint,
   classifyLibraryError,
   recordLibraryDiagnostic,
   onLibraryHealthChanged,
@@ -105,7 +108,9 @@ import {
   getCompensationProgress,
   onCompensationUpdate,
   runCompensation,
+  retryCompensation,
   cancelCompensation,
+  closeCompensation,
   enqueueCompensation,
   waitForCompensationIdle,
   configureLibraryHealthPersistence,
@@ -285,6 +290,112 @@ interface UsageFactSyncSnapshot {
 }
 let usageFactSyncRunner: LatestSnapshotRunner<UsageFactSyncSnapshot, UsageFactSyncResult> | null = null
 let runtimeShuttingDown = false
+let libraryRuntimeEpoch = 0
+let libraryRuntimePaused = false
+let freshnessErrorSignature = ''
+let freshnessMonitor: NodeJS.Timeout | null = null
+const deferredLibrarySyncRequests = new Map<string, SessionSyncRequest>()
+const LIBRARY_WRITER_RECOVERY_DELAYS_MS = [1_000, 5_000, 15_000, 30_000] as const
+let libraryWriterRecoveryTimer: NodeJS.Timeout | null = null
+let libraryWriterRecoveryAttempts = 0
+let libraryWriterRecoveryPromise: Promise<void> | null = null
+
+function clearLibraryWriterRecoverySchedule(): void {
+  if (libraryWriterRecoveryTimer) clearTimeout(libraryWriterRecoveryTimer)
+  libraryWriterRecoveryTimer = null
+}
+
+function scheduleLibraryWriterRecovery(): void {
+  if (
+    runtimeShuttingDown ||
+    libraryRuntimePaused ||
+    libraryWriterRecoveryTimer ||
+    getLibraryHealth().state !== 'writer-blocked'
+  ) return
+  const delay = LIBRARY_WRITER_RECOVERY_DELAYS_MS[libraryWriterRecoveryAttempts]
+  if (delay === undefined) return
+  const scheduledEpoch = libraryRuntimeEpoch
+  libraryWriterRecoveryAttempts++
+  libraryWriterRecoveryTimer = setTimeout(() => {
+    libraryWriterRecoveryTimer = null
+    if (
+      runtimeShuttingDown ||
+      libraryRuntimePaused ||
+      scheduledEpoch !== libraryRuntimeEpoch ||
+      getLibraryHealth().state !== 'writer-blocked'
+    ) return
+    void retryLibraryAfterWriterBlocked(false).catch(() => { /* next bounded retry was scheduled */ })
+  }, delay)
+  libraryWriterRecoveryTimer.unref?.()
+}
+
+/**
+ * The only recovery path allowed to clear writer-blocked. It proves the writer
+ * by rerunning full Library initialization, then drains queued compensation.
+ */
+async function retryLibraryAfterWriterBlocked(manual: boolean): Promise<void> {
+  if (runtimeShuttingDown || libraryRuntimePaused) return
+  if (manual) {
+    clearLibraryWriterRecoverySchedule()
+    libraryWriterRecoveryAttempts = 0
+  }
+  if (libraryWriterRecoveryPromise) {
+    await libraryWriterRecoveryPromise
+    if (manual && getCompensationProgress().pending > 0) {
+      await retryCompensation(processLibraryCompensationEntry)
+    }
+    return
+  }
+  if (getLibraryHealth().state !== 'writer-blocked') {
+    if (manual) await retryCompensation(processLibraryCompensationEntry)
+    return
+  }
+  const recoveryEpoch = libraryRuntimeEpoch
+  const recovery = (async (): Promise<void> => {
+    try {
+      await initLibraryFromSessions(cachedSessions)
+      clearLibraryWriterRecoverySchedule()
+      libraryWriterRecoveryAttempts = 0
+      if (manual) await retryCompensation(processLibraryCompensationEntry)
+      else await runPendingLibraryCompensation()
+    } catch (error) {
+      if (
+        runtimeShuttingDown ||
+        libraryRuntimePaused ||
+        recoveryEpoch !== libraryRuntimeEpoch
+      ) return
+      const classification = classifyLibraryError(error)
+      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+      if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
+      throw error
+    }
+  })()
+  libraryWriterRecoveryPromise = recovery
+  void recovery.finally(() => {
+    if (libraryWriterRecoveryPromise === recovery) libraryWriterRecoveryPromise = null
+  }).catch(() => { /* the caller receives the original rejection */ })
+  await libraryWriterRecoveryPromise
+}
+
+function recordCurrentFreshnessErrors(): void {
+  // The periodic monitor must never rescan a large Library on Electron's main
+  // thread. Reuse the last worker-built tree and perform only lightweight stats.
+  if (!latestLibraryTree) return
+  const freshness = getStaleSessionsFromTree(latestLibraryTree)
+  const errors = freshness
+    .filter((freshness) => freshness.severity === 'error')
+  const signature = freshnessDiagnosticFingerprint(errors)
+  if (!signature) {
+    freshnessErrorSignature = ''
+    return
+  }
+  if (signature === freshnessErrorSignature) return
+  freshnessErrorSignature = signature
+  recordLibraryDiagnostic(
+    'SESSION_STALE_ERROR',
+    `${errors.length} Library session projections exceed the five minute freshness error threshold`
+  )
+}
 process.on('unhandledRejection', (reason) => {
   // Cooperative worker cancellation can reject a fire-and-forget chain after
   // its owner has already been stopped. That is an expected shutdown outcome,
@@ -517,6 +628,10 @@ function markSessionActive(sessionId?: string): void {
 }
 
 async function processLibraryCompensationEntry(sessionId: string, dirPath: string): Promise<void> {
+  // Canonical providers intentionally have no backup.jsonl. Their provider-host
+  // projection is repaired by the full initialization retry, not this legacy
+  // transcript+backup compensation path.
+  if (getSessionFreshness(sessionId)?.basis === 'canonical-records') return
   await withLibraryMaintenanceWriter(async () => {
     await updateTranscript(sessionId, undefined, dirPath)
     await syncBackup(sessionId, dirPath)
@@ -531,7 +646,35 @@ async function runPendingLibraryCompensation(): Promise<void> {
   }
 }
 
+function enqueueExistingLibrarySessionsForCompensation(sessions: readonly SessionSummary[]): void {
+  const entries = sessions.flatMap((session) => {
+    const dirPath = getSessionDirPath(session.sessionId)
+    return dirPath ? [{ sessionId: session.sessionId, dirPath }] : []
+  })
+  if (entries.length > 0) enqueueCompensation(entries)
+}
+
+function deferLibrarySynchronization(request: SessionSyncRequest): void {
+  if (runtimeShuttingDown) return
+  const key = request.filePath || request.sessionId || `${request.source}:${request.reason}`
+  deferredLibrarySyncRequests.set(key, request)
+}
+
+function flushDeferredLibrarySynchronizations(): void {
+  if (runtimeShuttingDown || libraryRuntimePaused) return
+  const requests = [...deferredLibrarySyncRequests.values()]
+  deferredLibrarySyncRequests.clear()
+  for (const request of requests) scheduleSessionSynchronization(request)
+}
+
 async function performSessionSynchronization(request: SessionSyncRequest): Promise<void> {
+  if (runtimeShuttingDown) return
+  if (libraryRuntimePaused) {
+    deferLibrarySynchronization(request)
+    return
+  }
+  const runtimeEpoch = libraryRuntimeEpoch
+  const maintainLibrary = libraryInitialized
   const cached = cachedSummaryForSource(request.filePath, request.sessionId)
   const filePath = request.filePath || cached?.filePath
   if (!filePath) return
@@ -543,9 +686,13 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
       filePath,
       sessionId: request.sessionId,
       source: request.source,
-      maintainLibrary: libraryInitialized
+      maintainLibrary
     })
   } catch (error) {
+    if (runtimeEpoch !== libraryRuntimeEpoch || runtimeShuttingDown || libraryRuntimePaused) {
+      deferLibrarySynchronization(request)
+      return
+    }
     const classification = classifyLibraryError(error)
     const typed = error as { name?: unknown; code?: unknown } | null
     const libraryFailure = typed?.name === 'LibraryWriterBusyError' ||
@@ -562,12 +709,37 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
       const sessionId = request.sessionId || cached?.sessionId
       const dirPath = sessionId ? getSessionDirPath(sessionId) : null
       if (sessionId && dirPath) enqueueCompensation([{ sessionId, dirPath }])
+      scheduleLibraryWriterRecovery()
     }
     throw error
   }
+  if (runtimeEpoch !== libraryRuntimeEpoch || runtimeShuttingDown || libraryRuntimePaused) {
+    deferLibrarySynchronization(request)
+    return
+  }
   const { summary, dirPath } = synchronized
-  if (getLibraryHealth().state === 'writer-blocked') {
-    transitionLibraryHealth('ready', 'WRITER_RECOVERED', 'Library writer recovered; replaying queued sessions')
+  if (!maintainLibrary && getLibraryHealth().state === 'writer-blocked') {
+    // A parse-only worker result proves nothing about Library writability. Retry
+    // the full initialization; only that writer-backed path may clear the block.
+    void retryLibraryAfterWriterBlocked(false).catch((error) => {
+      const classification = classifyLibraryError(error)
+      console.error('[library-init] writer recovery retry failed:', classification.errorCode)
+    })
+  } else if (maintainLibrary && dirPath && getLibraryHealth().state === 'writer-blocked') {
+    const conflictCount = getLibrarySessionRegistryDiagnostics()
+      .filter((binding) => binding.state === 'conflict').length
+    const recoveredState = healthAfterSuccessfulLibraryWrite('writer-blocked', true, conflictCount)
+    if (recoveredState === 'identity-conflict') {
+      transitionLibraryHealth(
+        'identity-conflict',
+        'IDENTITY_CONFLICT',
+        `${conflictCount} logical session identities remain read-only after writer recovery`
+      )
+    } else if (recoveredState === 'ready') {
+      transitionLibraryHealth('ready', 'WRITER_RECOVERED', 'Library writer recovered; replaying queued sessions')
+    }
+    clearLibraryWriterRecoverySchedule()
+    libraryWriterRecoveryAttempts = 0
     void runPendingLibraryCompensation()
   }
   markSessionActive(summary.sessionId)
@@ -766,7 +938,9 @@ let runtimeCleanupPromise: Promise<void> | null = null
 function cleanupRuntimeResources(): Promise<void> {
   if (runtimeCleanupPromise) return runtimeCleanupPromise
   runtimeShuttingDown = true
-  cancelCompensation()
+  libraryRuntimePaused = true
+  libraryRuntimeEpoch++
+  closeCompensation()
   const compensationClosePromise = waitForCompensationIdle()
   const sourceWatchers = [watcher, codexWatcher, cursorWatcher].filter(
     (candidate): candidate is SourceDirectoryWatcher => candidate !== null
@@ -792,6 +966,11 @@ function cleanupRuntimeResources(): Promise<void> {
   activePoller = null
   const currentActivePollProcess = activePollProcess
   activePollProcess = null
+  const currentFreshnessMonitor = freshnessMonitor
+  freshnessMonitor = null
+  if (currentFreshnessMonitor) clearInterval(currentFreshnessMonitor)
+  clearLibraryWriterRecoverySchedule()
+  deferredLibrarySyncRequests.clear()
   currentUsageFactSyncRunner?.stop(new Error('Runtime is shutting down'))
   currentSearchIndexWarmupRunner?.stop(new Error('Runtime is shutting down'))
   // Start draining immediately and overlap it with the bounded cleanup below.
@@ -1269,6 +1448,7 @@ function startLibraryWatcher(): void {
   libraryRescanController = new LibraryRescanController(async () => {
     const tree = await requestLibraryScan()
     await hydrateLibrarySessions(tree)
+    recordCurrentFreshnessErrors()
   }, 750)
   libraryWatcher = watchLibraryDirectory({
     root,
@@ -1288,7 +1468,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
       getLibraryRoot(),
       path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
     )
-    resetLibraryHealth()
+    transitionLibraryHealth('initializing')
     recordLibraryDiagnostic('SYNC_START', 'Library synchronization started')
     const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
     const oldConfig = loadConfig()
@@ -1329,6 +1509,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
     libraryInitialized = true
     if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
     await hydrateLibrarySessions(tree)
+    recordCurrentFreshnessErrors()
     const conflictCount = Math.max(
       skippedConflictSessionIds.size,
       getLibrarySessionRegistryDiagnostics().filter((binding) => binding.state === 'conflict').length
@@ -1342,10 +1523,18 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
     } else {
       transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library synchronization completed')
     }
+    clearLibraryWriterRecoverySchedule()
+    libraryWriterRecoveryAttempts = 0
   })()
   libraryInitializationPromise = work
   try {
     await work
+  } catch (error) {
+    const classification = classifyLibraryError(error)
+    if (classification.state === 'writer-blocked') {
+      enqueueExistingLibrarySessionsForCompensation(sessions)
+    }
+    throw error
   } finally {
     if (libraryInitializationPromise === work) libraryInitializationPromise = null
   }
@@ -1647,9 +1836,13 @@ ipcMain.handle('sessions:loadAll', async () => {
   // Sync library in background (non-blocking). During first-run onboarding the
   // library init waits until the user has chosen a vault location.
   if (!libraryInitialized && !isOnboardingNeeded()) {
-    initLibraryFromSessions(sessions).catch((error) => {
+    const initialization = getLibraryHealth().state === 'writer-blocked'
+      ? retryLibraryAfterWriterBlocked(false)
+      : initLibraryFromSessions(sessions)
+    initialization.catch((error) => {
       const classification = classifyLibraryError(error)
       transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+      if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
       console.error('[library-init] initialization failed:', classification.errorCode, classification.message)
     })
   }
@@ -2783,7 +2976,8 @@ ipcMain.handle('library:compensationCancel', () => {
 })
 
 ipcMain.handle('library:compensationRetry', async () => {
-  return runCompensation(processLibraryCompensationEntry)
+  await retryLibraryAfterWriterBlocked(true)
+  return getCompensationProgress()
 })
 
 ipcMain.handle('library:selectDirectory', async () => {
@@ -2802,60 +2996,86 @@ ipcMain.handle('library:selectDirectory', async () => {
 })
 
 async function activateLibraryAt(newPath: string): Promise<string> {
-  cancelCompensation()
-  await waitForCompensationIdle()
-  clearLibraryHealthPersistence()
-  changeConfiguredLibraryPath(newPath)
-  initLibrary(newPath)
-  configureLibraryHealthPersistence(
-    getLibraryRoot(),
-    path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
-  )
-  resetLibraryHealth()
-  recordLibraryDiagnostic('SYNC_START', 'Library synchronization started after root change')
-  latestLibraryTree = null
-  libraryInitialized = false
-  libraryInitializationPromise = null
-  libraryHydrationGeneration++
-  startLibraryWatcher() // 跟随新库根重启目录监听
-  const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
-  let tree: LibraryTree
-  let skippedConflictCount = 0
-  if (cachedSessions.length > 0) {
-    const oldConfig = loadConfig()
-    const syncResult = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
-      onProgress: reportLibrarySyncProgress
-    })
-    tree = syncResult.tree
-    skippedConflictCount = syncResult.outcome.skipped.length
-  } else {
-    tree = await worker.scan(getLibraryRoot())
-  }
-  libraryInitialized = true
-  // An empty vault writes no config on scan; persist the marker so the root
-  // counts as initialized on the next launch.
-  if (!isLibraryInitialized(getLibraryRoot())) {
-    saveLibraryConfig(loadLibraryConfig())
-  }
-  if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
-  if (await migrateLegacyDetailAvailability(tree) > 0) {
-    tree = await requestLibraryScan()
-  }
-  await hydrateLibrarySessions(tree)
-  const conflictCount = Math.max(
-    skippedConflictCount,
-    getLibrarySessionRegistryDiagnostics().filter((binding) => binding.state === 'conflict').length
-  )
-  if (conflictCount > 0) {
-    transitionLibraryHealth(
-      'identity-conflict',
-      'IDENTITY_CONFLICT',
-      `${conflictCount} logical session identities have multiple read-only packages`
+  libraryRuntimeEpoch++
+  libraryRuntimePaused = true
+  clearLibraryWriterRecoverySchedule()
+  libraryWriterRecoveryAttempts = 0
+  let retryWriterAfterSwitch = false
+  try {
+    await libraryWriterRecoveryPromise?.catch(() => undefined)
+    await libraryInitializationPromise?.catch(() => undefined)
+    closeCompensation()
+    await waitForCompensationIdle()
+    const previousWorker = libraryWorker
+    libraryWorker = null
+    await previousWorker?.close()
+    clearLibraryHealthPersistence()
+    changeConfiguredLibraryPath(newPath)
+    initLibrary(newPath)
+    configureLibraryHealthPersistence(
+      getLibraryRoot(),
+      path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
     )
-  } else {
-    transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library synchronization completed')
+    resetLibraryHealth()
+    recordLibraryDiagnostic('SYNC_START', 'Library synchronization started after root change')
+    latestLibraryTree = null
+    libraryInitialized = false
+    libraryInitializationPromise = null
+    libraryHydrationGeneration++
+    startLibraryWatcher() // 跟随新库根重启目录监听
+    const worker = libraryWorker = new LibraryWorkerClient()
+    let tree: LibraryTree
+    let skippedConflictCount = 0
+    if (cachedSessions.length > 0) {
+      const oldConfig = loadConfig()
+      const syncResult = await worker.sync(getLibraryRoot(), cachedSessions, oldConfig.sessionMeta, {
+        onProgress: reportLibrarySyncProgress
+      })
+      tree = syncResult.tree
+      skippedConflictCount = syncResult.outcome.skipped.length
+    } else {
+      tree = await worker.scan(getLibraryRoot())
+    }
+    libraryInitialized = true
+    // An empty vault writes no config on scan; persist the marker so the root
+    // counts as initialized on the next launch.
+    if (!isLibraryInitialized(getLibraryRoot())) {
+      saveLibraryConfig(loadLibraryConfig())
+    }
+    if (!adoptLibraryTree(tree)) tree = await requestLibraryScan()
+    if (await migrateLegacyDetailAvailability(tree) > 0) {
+      tree = await requestLibraryScan()
+    }
+    await hydrateLibrarySessions(tree)
+    freshnessErrorSignature = ''
+    recordCurrentFreshnessErrors()
+    const conflictCount = Math.max(
+      skippedConflictCount,
+      getLibrarySessionRegistryDiagnostics().filter((binding) => binding.state === 'conflict').length
+    )
+    if (conflictCount > 0) {
+      transitionLibraryHealth(
+        'identity-conflict',
+        'IDENTITY_CONFLICT',
+        `${conflictCount} logical session identities have multiple read-only packages`
+      )
+    } else {
+      transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library synchronization completed')
+    }
+    return getLibraryRoot()
+  } catch (error) {
+    const classification = classifyLibraryError(error)
+    transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+    if (classification.state === 'writer-blocked') {
+      enqueueExistingLibrarySessionsForCompensation(cachedSessions)
+      retryWriterAfterSwitch = true
+    }
+    throw error
+  } finally {
+    libraryRuntimePaused = false
+    flushDeferredLibrarySynchronizations()
+    if (retryWriterAfterSwitch) scheduleLibraryWriterRecovery()
   }
-  return getLibraryRoot()
 }
 
 ipcMain.handle('library:changePath', async (_event, newPath: string) => {
@@ -3221,6 +3441,16 @@ app.whenReady().then(async () => {
   startCodexWatcher()
   startCursorWatcher()
   startActiveSessionPoller()
+  freshnessMonitor = setInterval(() => {
+    if (runtimeShuttingDown || libraryRuntimePaused) return
+    try {
+      recordCurrentFreshnessErrors()
+    } catch (error) {
+      console.error('[library-freshness] periodic health check failed:',
+        error instanceof Error ? error.message : 'unknown error')
+    }
+  }, 60_000)
+  freshnessMonitor.unref?.()
   void initializeLibraryScanInBackground()
   setupAutoUpdater()
   autoInstallCliOnStartup()

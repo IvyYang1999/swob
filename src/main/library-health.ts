@@ -11,13 +11,13 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
-import {
+import { computeSessionFreshness, findStaleSessions } from './library-freshness'
+
+export {
   computeSessionFreshness,
   findStaleSessions,
-  ERROR_LAG_THRESHOLD_MS
+  freshnessDiagnosticFingerprint
 } from './library-freshness'
-
-export { computeSessionFreshness, findStaleSessions } from './library-freshness'
 import {
   type CompensationProgress,
   type LibraryDiagnosticEvent,
@@ -67,11 +67,18 @@ function appendDiagnostic(event: LibraryDiagnosticEvent): void {
     const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0
     descriptor = fs.openSync(
       diagnosticFilePath,
-      fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_WRONLY | noFollow,
+      fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_RDWR | noFollow,
       0o600
     )
-    if (!fs.fstatSync(descriptor).isFile()) return
-    fs.writeSync(descriptor, `${JSON.stringify(event)}\n`, undefined, 'utf8')
+    const fileStat = fs.fstatSync(descriptor)
+    if (!fileStat.isFile()) return
+    let prefix = ''
+    if (fileStat.size > 0) {
+      const lastByte = Buffer.alloc(1)
+      fs.readSync(descriptor, lastByte, 0, 1, fileStat.size - 1)
+      if (lastByte[0] !== 0x0a) prefix = '\n'
+    }
+    fs.writeSync(descriptor, `${prefix}${JSON.stringify(event)}\n`, undefined, 'utf8')
     fs.fsyncSync(descriptor)
   } catch {
     // Diagnostics must never turn a Library failure into an application crash.
@@ -219,7 +226,7 @@ class LibraryHealthStateMachine extends EventEmitter {
       compensation: compensationQueue.progress,
       availableActions: compensationQueue.running
         ? ['cancel-compensation']
-        : compensationQueue.progress.pending > 0
+        : this._state === 'writer-blocked' || compensationQueue.progress.pending > 0
           ? ['retry-compensation']
           : []
     }
@@ -251,6 +258,7 @@ class CompensationQueue extends EventEmitter {
   private _progress = { total: 0, completed: 0, failed: 0 }
   private _running = false
   private _cancelled = false
+  private _accepting = true
   private _runPromise: Promise<CompensationProgress> | null = null
   private _generation = 0
   private _concurrency: number
@@ -278,6 +286,7 @@ class CompensationQueue extends EventEmitter {
    * Does not start processing — call `run()` explicitly.
    */
   enqueue(entries: CompensationEntry[]): void {
+    if (!this._accepting) return
     // Deduplicate by sessionId
     const beforeLength = this._queue.length
     const existing = new Set([...this._queue.map((e) => e.sessionId), ...this._activeSessionIds])
@@ -294,12 +303,19 @@ class CompensationQueue extends EventEmitter {
 
   cancel(): void {
     this._cancelled = true
+    this.emit('update', this.progress)
+  }
+
+  close(): void {
+    this._accepting = false
+    this.cancel()
   }
 
   /**
    * Process the queue with bounded concurrency.
    */
   run(processor: CompensationProcessor): Promise<CompensationProgress> {
+    if (!this._accepting || this._cancelled) return Promise.resolve(this.progress)
     if (this._runPromise) return this._runPromise
     this._runPromise = this.process(processor).finally(() => {
       this._runPromise = null
@@ -310,7 +326,6 @@ class CompensationQueue extends EventEmitter {
   private async process(processor: CompensationProcessor): Promise<CompensationProgress> {
     const generation = this._generation
     this._running = true
-    this._cancelled = false
     this._progress = { total: this._queue.length, completed: 0, failed: 0 }
     this.emit('update', this.progress)
     const failedEntries: CompensationEntry[] = []
@@ -354,7 +369,15 @@ class CompensationQueue extends EventEmitter {
     this._cancelled = true
     this._queue = []
     this._progress = { total: 0, completed: 0, failed: 0 }
-    if (!this._running) this._cancelled = false
+    this._accepting = true
+    this._cancelled = false
+  }
+
+  retry(processor: CompensationProcessor): Promise<CompensationProgress> {
+    if (!this._accepting) return Promise.resolve(this.progress)
+    this._cancelled = false
+    this.emit('update', this.progress)
+    return this.run(processor)
   }
 }
 
@@ -405,6 +428,16 @@ export function transitionLibraryHealth(
   healthMachine.transition(next, errorCode, message)
 }
 
+/** A parse-only success can never prove the Library writer recovered. */
+export function healthAfterSuccessfulLibraryWrite(
+  current: LibraryHealthState,
+  maintainedLibrary: boolean,
+  identityConflictCount: number
+): LibraryHealthState | null {
+  if (current !== 'writer-blocked' || !maintainedLibrary) return null
+  return identityConflictCount > 0 ? 'identity-conflict' : 'ready'
+}
+
 /**
  * Record a diagnostic event without a state change.
  */
@@ -450,32 +483,6 @@ export function onLibraryDiagnostic(
 // Freshness
 // ---------------------------------------------------------------------------
 
-/**
- * Check freshness and record diagnostics for sessions exceeding the error threshold.
- */
-export function checkFreshnessAndRecordDiagnostics(
-  sessions: ReadonlyArray<{ sessionId: string; dirPath: string; sourceFilePaths: string[] }>
-): void {
-  const state = healthMachine.state
-
-  for (const session of sessions) {
-    const freshness = computeSessionFreshness(
-      session.sessionId,
-      session.dirPath,
-      session.sourceFilePaths
-    )
-
-    if (freshness.lagMs !== null && freshness.lagMs > ERROR_LAG_THRESHOLD_MS) {
-      healthMachine.recordDiagnostic(
-        state,
-        'SESSION_STALE_ERROR',
-        `Session ${session.sessionId.slice(0, 12)} lag ${Math.round(freshness.lagMs / 1000)}s exceeds 5min threshold`
-      )
-    }
-
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Compensation Queue public API
 // ---------------------------------------------------------------------------
@@ -490,6 +497,11 @@ export function isCompensationRunning(): boolean {
 
 export function cancelCompensation(): void {
   compensationQueue.cancel()
+}
+
+/** Stop accepting new work before shutdown/root switch, then drain safely. */
+export function closeCompensation(): void {
+  compensationQueue.close()
 }
 
 export function waitForCompensationIdle(): Promise<void> {
@@ -516,6 +528,13 @@ export function runCompensation(
   processor: CompensationProcessor
 ): Promise<CompensationProgress> {
   return compensationQueue.run(processor)
+}
+
+/** Explicit user retry is the only operation that resumes a cancelled queue. */
+export function retryCompensation(
+  processor: CompensationProcessor
+): Promise<CompensationProgress> {
+  return compensationQueue.retry(processor)
 }
 
 /**

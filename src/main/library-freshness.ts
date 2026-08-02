@@ -10,6 +10,34 @@ const CLOCK_SKEW_TOLERANCE_MS = 5_000
 export interface FreshnessOptions {
   canonicalRecordsFile?: string | null
   now?: () => number
+  thresholdMs?: number
+}
+
+/**
+ * Stable identity for a set of error-level freshness failures. Runtime lag is
+ * intentionally excluded: a missing replica keeps aging every poll, but that
+ * is still one incident until its source/artifact timestamps or reasons change.
+ */
+export function freshnessDiagnosticFingerprint(
+  freshnessEntries: readonly SessionFreshness[]
+): string {
+  return [...freshnessEntries]
+    .sort((left, right) => left.sessionId.localeCompare(right.sessionId))
+    .map((freshness) => [
+      freshness.sessionId,
+      freshness.sourceUpdatedAt,
+      freshness.canonicalUpdatedAt,
+      freshness.transcriptUpdatedAt,
+      freshness.backupUpdatedAt,
+      freshness.reasons.join(',')
+    ].join(':'))
+    .join('|')
+}
+
+function normalizeThreshold(thresholdMs: number | undefined): number {
+  return typeof thresholdMs === 'number' && Number.isFinite(thresholdMs) && thresholdMs >= 0
+    ? thresholdMs
+    : DEFAULT_STALE_THRESHOLD_MS
 }
 
 function statMtimeIso(filePath: string): string | null {
@@ -27,12 +55,17 @@ export function computeSessionFreshness(
   options: FreshnessOptions = {}
 ): SessionFreshness {
   const now = (options.now || Date.now)()
+  const thresholdMs = normalizeThreshold(options.thresholdMs)
 
   let sourceUpdatedAt: string | null = null
   let sourceMs = 0
   for (const srcPath of sourceFilePaths) {
     try {
-      const stat = fs.statSync(srcPath)
+      const virtualSeparator = srcPath.indexOf('#')
+      const statPath = fs.existsSync(srcPath) || virtualSeparator <= 0
+        ? srcPath
+        : srcPath.slice(0, virtualSeparator)
+      const stat = fs.statSync(statPath)
       if (stat.mtimeMs > sourceMs) {
         sourceMs = stat.mtimeMs
         sourceUpdatedAt = new Date(stat.mtimeMs).toISOString()
@@ -78,16 +111,16 @@ export function computeSessionFreshness(
   const lagMs = basis === 'unverifiable' || authoritativeMs <= 0 || clockSkew
     ? null
     : Math.max(0, ...requiredReplicaTimes.map(replicaLag))
-  const stale = lagMs !== null && lagMs > DEFAULT_STALE_THRESHOLD_MS
+  const stale = lagMs !== null && lagMs > thresholdMs
   const reasons: string[] = []
   if (basis === 'unverifiable') reasons.push('SOURCE_UNAVAILABLE')
   if (basis === 'canonical-records' && !canonicalUpdatedAt) reasons.push('CANONICAL_RECORDS_UNAVAILABLE')
   if (clockSkew) reasons.push('CLOCK_SKEW')
   if (stale && transcriptMs <= 0) reasons.push('TRANSCRIPT_MISSING')
-  else if (stale && replicaLag(transcriptMs) > DEFAULT_STALE_THRESHOLD_MS) reasons.push('TRANSCRIPT_STALE')
+  else if (stale && replicaLag(transcriptMs) > thresholdMs) reasons.push('TRANSCRIPT_STALE')
   if (basis === 'local-source') {
     if (stale && backupMs <= 0) reasons.push('BACKUP_MISSING')
-    else if (stale && replicaLag(backupMs) > DEFAULT_STALE_THRESHOLD_MS) reasons.push('BACKUP_STALE')
+    else if (stale && replicaLag(backupMs) > thresholdMs) reasons.push('BACKUP_STALE')
   }
   const status = lagMs === null
     ? 'unverifiable'
@@ -117,7 +150,7 @@ export function computeSessionFreshness(
     backupUpdatedAt,
     requiredArtifacts,
     lagMs,
-    thresholdMs: DEFAULT_STALE_THRESHOLD_MS,
+    thresholdMs,
     reasons
   }
 }
@@ -131,12 +164,13 @@ export function findStaleSessions(
   }>,
   thresholdMs = DEFAULT_STALE_THRESHOLD_MS
 ): SessionFreshness[] {
+  const effectiveThresholdMs = normalizeThreshold(thresholdMs)
   return sessions
     .map((session) => computeSessionFreshness(
       session.sessionId,
       session.dirPath,
       session.sourceFilePaths,
-      { canonicalRecordsFile: session.canonicalRecordsFile }
+      { canonicalRecordsFile: session.canonicalRecordsFile, thresholdMs: effectiveThresholdMs }
     ))
-    .filter((freshness) => freshness.lagMs !== null && freshness.lagMs > thresholdMs)
+    .filter((freshness) => freshness.lagMs !== null && freshness.lagMs > effectiveThresholdMs)
 }

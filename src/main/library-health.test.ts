@@ -6,6 +6,7 @@ import {
   getLibraryHealthState,
   getLibraryHealth,
   transitionLibraryHealth,
+  healthAfterSuccessfulLibraryWrite,
   resetLibraryHealth,
   recordLibraryDiagnostic,
   classifyLibraryError,
@@ -13,15 +14,18 @@ import {
   onLibraryDiagnostic,
   computeSessionFreshness,
   findStaleSessions,
+  freshnessDiagnosticFingerprint,
   getCompensationProgress,
   isCompensationRunning,
   cancelCompensation,
+  closeCompensation,
   waitForCompensationIdle,
   configureLibraryHealthPersistence,
   clearLibraryHealthPersistence,
   resetCompensation,
   onCompensationUpdate,
   runCompensation,
+  retryCompensation,
   enqueueCompensation
 } from './library-health'
 
@@ -54,6 +58,12 @@ describe('LibraryHealthStateMachine', () => {
     transitionLibraryHealth('ready', 'FOLLOW_UP', 'same state, new evidence')
     expect(getLibraryHealth().diagnostics.length).toBe(diagnosticsBefore + 1)
     expect(getLibraryHealth().reasonCode).toBe('FOLLOW_UP')
+  })
+
+  it('offers writer recovery even when an empty Library has no compensation entries', () => {
+    transitionLibraryHealth('writer-blocked', 'WRITER_BUSY', 'busy')
+    expect(getLibraryHealth().compensation.pending).toBe(0)
+    expect(getLibraryHealth().availableActions).toContain('retry-compensation')
   })
 
   it('emits stateChanged events', () => {
@@ -114,9 +124,11 @@ describe('LibraryHealthStateMachine', () => {
       expect(lines[0]).not.toContain('11111111-1111-4111-8111-111111111111')
 
       fs.appendFileSync(filePath, '{torn')
+      recordLibraryDiagnostic('AFTER_TORN', 'must remain parseable')
       clearLibraryHealthPersistence()
       configureLibraryHealthPersistence(libraryRoot, diagnosticsRoot)
-      expect(getLibraryHealth().diagnostics.map((event) => event.errorCode)).toEqual(['FIRST', 'SECOND'])
+      expect(getLibraryHealth().diagnostics.map((event) => event.errorCode))
+        .toEqual(['FIRST', 'SECOND', 'AFTER_TORN'])
     } finally {
       clearLibraryHealthPersistence()
       fs.rmSync(libraryRoot, { recursive: true, force: true })
@@ -191,6 +203,17 @@ describe('classifyLibraryError', () => {
   it('handles null/undefined errors', () => {
     expect(classifyLibraryError(null).state).toBe('corrupt')
     expect(classifyLibraryError(undefined).state).toBe('corrupt')
+  })
+})
+
+describe('writer recovery health decision', () => {
+  it('never clears writer-blocked after a parse-only success', () => {
+    expect(healthAfterSuccessfulLibraryWrite('writer-blocked', false, 0)).toBeNull()
+  })
+
+  it('preserves partial identity-conflict after a proven writer success', () => {
+    expect(healthAfterSuccessfulLibraryWrite('writer-blocked', true, 2)).toBe('identity-conflict')
+    expect(healthAfterSuccessfulLibraryWrite('writer-blocked', true, 0)).toBe('ready')
   })
 })
 
@@ -326,6 +349,19 @@ describe('computeSessionFreshness', () => {
     expect(freshness.lagMs).toBeNull()
   })
 
+  it('stats a physical database behind a provider virtual # locator', () => {
+    const databasePath = path.join(tmpDir, 'state.db')
+    const transcriptPath = path.join(tmpDir, 'transcript.md')
+    const backupPath = path.join(tmpDir, 'backup.jsonl')
+    fs.writeFileSync(databasePath, 'db')
+    fs.writeFileSync(transcriptPath, '# transcript')
+    fs.writeFileSync(backupPath, '{}')
+    const freshness = computeSessionFreshness('virtual', tmpDir, [`${databasePath}#row-1`])
+    expect(freshness.basis).toBe('local-source')
+    expect(freshness.status).toBe('fresh')
+    expect(freshness.lagMs).not.toBeNull()
+  })
+
   it('picks the most recent source file mtime', () => {
     const oldSource = path.join(tmpDir, 'old.jsonl')
     const newSource = path.join(tmpDir, 'new.jsonl')
@@ -336,6 +372,28 @@ describe('computeSessionFreshness', () => {
     const freshness = computeSessionFreshness('test-session', tmpDir, [oldSource, newSource])
     // The lag should be based on the newer source, not the older one
     expect(freshness.lagMs).toBeLessThan(60_000)
+  })
+})
+
+describe('freshnessDiagnosticFingerprint', () => {
+  it('does not create a new incident merely because lag keeps growing', () => {
+    const base = {
+      schemaVersion: 1 as const,
+      sessionId: 'session-a',
+      basis: 'local-source' as const,
+      status: 'stale' as const,
+      severity: 'error' as const,
+      stale: true,
+      sourceUpdatedAt: '2026-08-02T00:00:00.000Z',
+      canonicalUpdatedAt: null,
+      transcriptUpdatedAt: null,
+      backupUpdatedAt: null,
+      requiredArtifacts: ['transcript', 'backup'] as const,
+      thresholdMs: 60_000,
+      reasons: ['TRANSCRIPT_MISSING', 'BACKUP_MISSING']
+    }
+    expect(freshnessDiagnosticFingerprint([{ ...base, lagMs: 300_001 }]))
+      .toBe(freshnessDiagnosticFingerprint([{ ...base, lagMs: 330_001 }]))
   })
 })
 
@@ -373,6 +431,39 @@ describe('findStaleSessions', () => {
     }], 60_000)
     expect(result).toHaveLength(1)
     expect(result[0].sessionId).toBe('stale')
+  })
+
+  it('returns a DTO consistent with a caller-supplied threshold', () => {
+    const sourcePath = path.join(tmpDir, 'source-45s.jsonl')
+    fs.writeFileSync(sourcePath, '{}')
+    const sourceTime = new Date(Date.now() - 45_000)
+    fs.utimesSync(sourcePath, sourceTime, sourceTime)
+    const [freshness] = findStaleSessions([{
+      sessionId: 'custom-threshold',
+      dirPath: tmpDir,
+      sourceFilePaths: [sourcePath]
+    }], 30_000)
+    expect(freshness).toMatchObject({
+      status: 'stale',
+      stale: true,
+      thresholdMs: 30_000
+    })
+    expect(freshness.lagMs).toBeGreaterThan(40_000)
+  })
+
+  it('normalizes an invalid custom threshold before filtering and building the DTO', () => {
+    const sourcePath = path.join(tmpDir, 'source-invalid-threshold.jsonl')
+    const transcriptPath = path.join(tmpDir, 'transcript.md')
+    const backupPath = path.join(tmpDir, 'backup.jsonl')
+    for (const filePath of [sourcePath, transcriptPath, backupPath]) fs.writeFileSync(filePath, '{}')
+    const old = new Date(Date.now() - 45_000)
+    fs.utimesSync(transcriptPath, old, old)
+    fs.utimesSync(backupPath, old, old)
+    expect(findStaleSessions([{
+      sessionId: 'invalid-threshold',
+      dirPath: tmpDir,
+      sourceFilePaths: [sourcePath]
+    }], -1)).toEqual([])
   })
 })
 
@@ -466,6 +557,55 @@ describe('CompensationQueue', () => {
 
     const remaining: string[] = []
     await runCompensation(async (sessionId) => { remaining.push(sessionId) })
+    expect(remaining).toEqual([])
+    await retryCompensation(async (sessionId) => { remaining.push(sessionId) })
     expect([...processed, ...remaining].sort()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('cancel before run is terminal until an explicit retry', async () => {
+    enqueueCompensation([{ sessionId: 'a', dirPath: '/tmp/a' }])
+    cancelCompensation()
+    const processor = vi.fn(async () => {})
+    await runCompensation(processor)
+    expect(processor).not.toHaveBeenCalled()
+    expect(getCompensationProgress().cancelled).toBe(true)
+    await retryCompensation(processor)
+    expect(processor).toHaveBeenCalledTimes(1)
+  })
+
+  it('close rejects late enqueue and run during shutdown drain', async () => {
+    enqueueCompensation([{ sessionId: 'before', dirPath: '/tmp/before' }])
+    closeCompensation()
+    enqueueCompensation([{ sessionId: 'late', dirPath: '/tmp/late' }])
+    const processed: string[] = []
+    await runCompensation(async (sessionId) => { processed.push(sessionId) })
+    expect(processed).toEqual([])
+    expect(getCompensationProgress()).toMatchObject({ pending: 1, cancelled: true })
+  })
+
+  it('close drains the active item without starting queued or late work', async () => {
+    enqueueCompensation([
+      { sessionId: 'active', dirPath: '/tmp/active' },
+      { sessionId: 'queued', dirPath: '/tmp/queued' }
+    ])
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const processed: string[] = []
+    const running = runCompensation(async (sessionId) => {
+      processed.push(sessionId)
+      await blocked
+    })
+    await vi.waitFor(() => expect(processed).toEqual(['active']))
+    closeCompensation()
+    enqueueCompensation([{ sessionId: 'late', dirPath: '/tmp/late' }])
+    release()
+    await running
+    await waitForCompensationIdle()
+    expect(processed).toEqual(['active'])
+    expect(getCompensationProgress()).toMatchObject({
+      pending: 1,
+      inProgress: false,
+      cancelled: true
+    })
   })
 })

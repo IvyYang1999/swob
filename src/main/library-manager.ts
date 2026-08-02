@@ -1630,7 +1630,7 @@ async function updateBranchTranscriptUnderWriter(
 
   // Parse source files
   const allRaw: RawJsonlMessage[] = []
-  const sourceFilePaths = sourceFilePathsFromMeta(meta) || []
+  const sourceFilePaths = (sourceFilePathsFromMeta(meta) || []).map(sourceStatPath)
   for (const src of sourceFilePaths) {
     try {
       if (fs.existsSync(src)) {
@@ -5195,12 +5195,19 @@ export function getSessionFreshness(sessionId: string): SessionFreshness | null 
  * Uses the last Library tree scan for session inventory.
  */
 export function getStaleSessions(thresholdMs?: number): SessionFreshness[] {
-  const tree = scanLibrary()
+  return getStaleSessionsFromTree(scanLibrary(), thresholdMs)
+}
+
+/** Stat-only freshness calculation over an already scanned tree. */
+export function getStaleSessionsFromTree(
+  tree: LibraryTree,
+  thresholdMs?: number
+): SessionFreshness[] {
   const allSessions = sessionsFromLibraryTree(tree)
   const sessionData = allSessions.map((session) => ({
     sessionId: session.sessionId,
     dirPath: session.dirPath,
-    sourceFilePaths: sourceFilePathsFromMeta(session.meta) || [],
+    sourceFilePaths: (sourceFilePathsFromMeta(session.meta) || []).map(sourceStatPath),
     canonicalRecordsFile: session.meta.canonicalProvider?.recordsFile
   }))
   return findStaleSessions(sessionData, thresholdMs)

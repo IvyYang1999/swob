@@ -4,9 +4,14 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   acquireLibraryWriterLease,
+  inspectLibraryWriterLease,
+  LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
   LibraryWriterBusyError,
+  recoverLibraryWriterLeaseManually,
+  type LibraryWriterEvent,
   type LibraryWriterLeaseOptions
 } from './library-writer-lease'
+import { deriveHostBootIdentity, deriveLibraryHostProof } from './host-identity'
 import { LibraryPathUnsafeError } from './library-path-safety'
 import {
   readLibraryWriteGeneration,
@@ -25,6 +30,7 @@ function leaseOptions(
   return {
     pid,
     bootIdentity: () => 'boot-a',
+    hostIdentity: () => '10000000-0000-4000-8000-000000000001',
     processStartFingerprint: processState,
     eventSink: () => {},
     ...overrides
@@ -83,7 +89,7 @@ describe('Library 跨进程单写者 lease', () => {
     first.release()
   })
 
-  it('只回收已过期且能证明原进程死亡的本机 lease', async () => {
+  it('矩阵 1：同 profile、同 boot、PID 已死时自动恢复', async () => {
     const first = await acquireLibraryWriterLease(root, 'device-a', 'maintenance',
       leaseOptions(101, () => 'start-101', { leaseMs: 5, heartbeatMs: 1_000 }))
     await new Promise((resolve) => setTimeout(resolve, 15))
@@ -95,23 +101,184 @@ describe('Library 跨进程单写者 lease', () => {
     recovered.release()
   })
 
-  it('远端设备和不可解析 owner 都 fail closed，并返回 typed busy', async () => {
+  it('矩阵 2／本次事故：不同 profile、同 boot、PID 已死也安全恢复', async () => {
+    const lockDir = path.join(root, '.swob', 'locks', 'library-writer')
+    fs.mkdirSync(lockDir, { recursive: true })
+    fs.writeFileSync(path.join(lockDir, 'legacy.owner.json'), JSON.stringify({
+      schemaVersion: 1,
+      ownerNonce: 'legacy',
+      deviceId: 'profile-a',
+      pid: 101,
+      bootIdentity: 'boot-a',
+      processStartFingerprint: 'start-101',
+      mode: 'maintenance',
+      acquiredAt: '2026-08-01T00:00:00.000Z',
+      heartbeatAt: '2026-08-01T00:00:00.000Z',
+      leaseExpiresAt: '2026-08-01T00:00:15.000Z'
+    }))
+
+    const recovered = await acquireLibraryWriterLease(root, 'profile-b', 'move',
+      leaseOptions(202, (pid) => pid === 101 ? 'missing' : 'start-202', { timeoutMs: 50 }))
+
+    expect(recovered.owner.deviceId).toBe('profile-b')
+    recovered.release()
+  })
+
+  it('不同 boot 但稳定 host proof 相同时可恢复，不查询旧 boot 的 PID', async () => {
+    const first = await acquireLibraryWriterLease(root, 'profile-a', 'maintenance',
+      leaseOptions(101, () => 'start-101', { heartbeatMs: 1_000 }))
+    let inspectedOldPid = false
+    const recovered = await acquireLibraryWriterLease(root, 'profile-b', 'move',
+      leaseOptions(202, (pid) => {
+        if (pid === 101) inspectedOldPid = true
+        return 'start-202'
+      }, { bootIdentity: () => 'boot-b', timeoutMs: 50 }))
+
+    expect(inspectedOldPid).toBe(false)
+    first.release()
+    recovered.release()
+  })
+
+  it('锁 owner 只持久化每次随机 challenge 的 HMAC proof，不写入原始 host identity', async () => {
+    const rawHostIdentity = '30000000-0000-4000-8000-000000000003'
+    const lease = await acquireLibraryWriterLease(root, 'profile-a', 'maintenance',
+      leaseOptions(101, () => 'start-101', { hostIdentity: () => rawHostIdentity }))
+    const lockDir = path.join(root, '.swob', 'locks', 'library-writer')
+    const ownerName = fs.readdirSync(lockDir).find((name) => name.endsWith('.owner.json'))!
+    const persisted = fs.readFileSync(path.join(lockDir, ownerName), 'utf8')
+
+    expect(persisted).not.toContain(rawHostIdentity)
+    expect(JSON.parse(persisted)).toMatchObject({
+      schemaVersion: 2,
+      hostProof: expect.stringMatching(/^[0-9a-f]{64}$/),
+      hostProofSalt: expect.stringMatching(/^[0-9a-f-]{36}$/i)
+    })
+    lease.release()
+  })
+
+  it('矩阵 3：同 boot 的 PID 被复用但启动指纹不同时安全恢复', async () => {
+    const first = await acquireLibraryWriterLease(root, 'profile-a', 'maintenance',
+      leaseOptions(101, () => 'old-start-101', { heartbeatMs: 1_000 }))
+
+    const recovered = await acquireLibraryWriterLease(root, 'profile-b', 'move',
+      leaseOptions(202, (pid) => pid === 101 ? 'reused-start-101' : 'start-202', { timeoutMs: 50 }))
+
+    first.release()
+    recovered.release()
+  })
+
+  it('矩阵 4：不同 profile、同 boot、owner 仍存活时绝不抢锁', async () => {
+    const first = await acquireLibraryWriterLease(root, 'profile-a', 'maintenance',
+      leaseOptions(101, () => 'start-101', { heartbeatMs: 1_000 }))
+
+    await expect(acquireLibraryWriterLease(root, 'profile-b', 'move',
+      leaseOptions(202, (pid) => pid === 101 ? 'start-101' : 'start-202', { timeoutMs: 5, pollMs: 1 })))
+      .rejects.toMatchObject({ reason: 'active-owner' })
+    first.release()
+  })
+
+  it('矩阵 5：真正远端 owner 不会被本机 PID 状态误判或抢锁', async () => {
     const remote = await acquireLibraryWriterLease(root, 'device-a', 'maintenance',
-      leaseOptions(101, () => 'start-101', { leaseMs: 5, heartbeatMs: 1_000 }))
-    await new Promise((resolve) => setTimeout(resolve, 15))
+      leaseOptions(101, () => 'start-101', {
+        bootIdentity: () => 'remote-boot',
+        hostIdentity: () => '20000000-0000-4000-8000-000000000002',
+        heartbeatMs: 1_000
+      }))
+    let inspectedRemotePid = false
     const remoteError = await acquireLibraryWriterLease(root, 'device-b', 'move',
-      leaseOptions(202, () => 'start-202', { timeoutMs: 5, pollMs: 1 }))
+      leaseOptions(202, (pid) => {
+        if (pid === 101) inspectedRemotePid = true
+        return 'start-202'
+      }, { timeoutMs: 5, pollMs: 1 }))
       .then(() => null, (error) => error)
     expect(remoteError).toBeInstanceOf(LibraryWriterBusyError)
     expect(remoteError).toMatchObject({ reason: 'remote-owner' })
+    expect(inspectedRemotePid).toBe(false)
+    expect(inspectLibraryWriterLease(root, leaseOptions(202, () => 'start-202'))).toMatchObject({
+      state: 'blocked',
+      reason: 'remote-owner',
+      manualRecoveryAvailable: true,
+      evidenceHash: expect.stringMatching(/^[0-9a-f]{64}$/)
+    })
     remote.release()
+  })
 
+  it('矩阵 6：owner 损坏时 fail-closed、显示明确原因，并且只能显式人工隔离', async () => {
     const lockDir = path.join(root, '.swob', 'locks', 'library-writer')
     fs.mkdirSync(lockDir, { recursive: true })
     fs.writeFileSync(path.join(lockDir, 'broken.owner.json'), '{broken')
-    await expect(acquireLibraryWriterLease(root, 'device-a', 'move',
-      leaseOptions(202, () => 'start-202', { timeoutMs: 5, pollMs: 1 })))
-      .rejects.toMatchObject({ reason: 'unverifiable-owner' })
+    const error = await acquireLibraryWriterLease(root, 'device-a', 'move',
+      leaseOptions(202, () => 'start-202', { timeoutMs: 5, pollMs: 1 }))
+      .then(() => null, (caught) => caught as LibraryWriterBusyError)
+    expect(error).toMatchObject({ reason: 'corrupt-owner' })
+    expect(error?.message).toContain('owner 格式损坏')
+    expect(fs.existsSync(path.join(lockDir, 'broken.owner.json'))).toBe(true)
+
+    const inspection = inspectLibraryWriterLease(root, leaseOptions(202, () => 'start-202'))
+    expect(inspection).toMatchObject({
+      state: 'blocked', reason: 'corrupt-owner', manualRecoveryAvailable: true,
+      evidenceHash: expect.stringMatching(/^[0-9a-f]{64}$/)
+    })
+    expect(recoverLibraryWriterLeaseManually(root, {
+      expectedEvidenceHash: inspection.evidenceHash!,
+      confirmation: 'not-confirmed'
+    }, leaseOptions(202, () => 'start-202'))).toMatchObject({ recovered: false, reason: 'confirmation-required' })
+
+    const recovered = recoverLibraryWriterLeaseManually(root, {
+      expectedEvidenceHash: inspection.evidenceHash!,
+      confirmation: LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION
+    }, leaseOptions(202, () => 'start-202'))
+    expect(recovered).toMatchObject({ recovered: true, reason: 'recovered' })
+    expect(fs.readFileSync(path.join(recovered.quarantinePath!, 'broken.owner.json'), 'utf8')).toBe('{broken')
+  })
+
+  it('矩阵 7：recovery claim 竞争只有一个恢复者能完成原子隔离', async () => {
+    let ownerAlive = true
+    const original = await acquireLibraryWriterLease(root, 'profile-a', 'maintenance',
+      leaseOptions(101, (pid) => pid === 101 && ownerAlive ? 'start-101' : `start-${pid}`, { heartbeatMs: 1_000 }))
+    ownerAlive = false
+    const events: LibraryWriterEvent[] = []
+    const contender = (pid: number) => acquireLibraryWriterLease(root, `profile-${pid}`, 'move',
+      leaseOptions(pid, (candidate) => candidate === 101 ? 'missing' : `start-${candidate}`, {
+        timeoutMs: 20,
+        pollMs: 1,
+        eventSink: (event) => events.push(event)
+      }))
+
+    const settled = await Promise.allSettled([contender(202), contender(303)])
+    const winners = settled.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof contender>>> =>
+      result.status === 'fulfilled')
+    expect(winners).toHaveLength(1)
+    expect(events.filter((event) => event.event === 'stale-recovered')).toHaveLength(1)
+    original.release()
+    winners[0].value.release()
+  })
+
+  it('recovery claimant 崩溃后，同机后继进程按 PID 启动指纹清理 claim 并完成恢复', async () => {
+    const hostIdentity = '10000000-0000-4000-8000-000000000001'
+    const original = await acquireLibraryWriterLease(root, 'profile-a', 'maintenance',
+      leaseOptions(101, () => 'start-101', { heartbeatMs: 1_000 }))
+    const inspection = inspectLibraryWriterLease(root, leaseOptions(202, () => 'start-202'))
+    const claimSalt = '40000000-0000-4000-8000-000000000004'
+    const lockDir = path.join(root, '.swob', 'locks', 'library-writer')
+    fs.writeFileSync(path.join(lockDir, 'recovery.claim'), JSON.stringify({
+      schemaVersion: 1,
+      claimNonce: 'crashed-claimant',
+      ownerNonce: original.owner.ownerNonce,
+      ownerEvidenceHash: inspection.evidenceHash,
+      claimantPid: 404,
+      claimantBootIdentity: deriveHostBootIdentity(hostIdentity, 'boot-a', claimSalt),
+      claimantProcessStartFingerprint: 'start-404',
+      claimantHostProof: deriveLibraryHostProof(hostIdentity, claimSalt),
+      claimantHostProofSalt: claimSalt,
+      createdAt: '2026-08-02T00:00:00.000Z',
+      kind: 'automatic'
+    }))
+
+    const recovered = await acquireLibraryWriterLease(root, 'profile-b', 'move',
+      leaseOptions(202, (pid) => pid === 202 ? 'start-202' : 'missing', { timeoutMs: 50, pollMs: 1 }))
+    original.release()
+    recovered.release()
   })
 
   it('墙钟前跳或后退都不会偷走仍存活 owner，且等待由单调时钟限时', async () => {

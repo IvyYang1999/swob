@@ -1,5 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 export class LibraryPathUnsafeError extends Error {
   readonly code = 'LIBRARY_PATH_UNSAFE'
@@ -218,6 +219,31 @@ export function writeSafeLibraryFileSync(
   } finally {
     if (fd !== null) fs.closeSync(fd)
     if (!validated && createsNew && opened) cleanupUnvalidatedCreatedFile(target, opened)
+  }
+}
+
+/**
+ * Publish a complete new inode so a crash can leave either the old or new file,
+ * never a truncated mixture. The temporary file is inside the already-checked
+ * parent; rename replaces a symlink itself rather than following its target.
+ */
+export function replaceSafeLibraryFileSync(
+  libraryRoot: string,
+  filePath: string,
+  content: string | NodeJS.ArrayBufferView,
+  options: { mode?: number } = {}
+): void {
+  const target = assertSafeLibraryFileTarget(libraryRoot, filePath)
+  const parent = path.dirname(target)
+  const tempPath = path.join(parent, `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`)
+  try {
+    writeSafeLibraryFileSync(libraryRoot, tempPath, content, { exclusive: true, mode: options.mode })
+    assertSafeLibraryFileTarget(libraryRoot, target)
+    fs.renameSync(tempPath, target)
+    try { fs.chmodSync(target, options.mode ?? 0o600) } catch { /* mode is best effort on Windows */ }
+    fsyncDirectorySync(parent)
+  } finally {
+    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath) } catch { /* retain the published target */ }
   }
 }
 

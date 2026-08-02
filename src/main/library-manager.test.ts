@@ -545,7 +545,7 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
     })
   })
 
-  it('单一 JSONL 增长时只追加新尾部并保留 backup inode', async () => {
+  it('单一 JSONL 增长时只追加新尾部并原子发布 backup 新 inode', async () => {
     removeDefaultSession()
     const sessionId = 'incremental-backup-xx…0110'
     const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture-project-xx…0110', `${sessionId}.jsonl`)
@@ -571,7 +571,7 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
 
     const expected = fs.readFileSync(sourcePath)
     const writtenMeta = JSON.parse(fs.readFileSync(path.join(dirPath, '.swob-session.json'), 'utf-8'))
-    expect(fs.statSync(backupPath).ino).toBe(inodeBefore)
+    expect(fs.statSync(backupPath).ino).not.toBe(inodeBefore)
     expect(fs.readFileSync(backupPath)).toEqual(expected)
     expect(writtenMeta.backupSize).toBe(expected.length)
     expect(writtenMeta.backupSha256).toBe(createHash('sha256').update(expected).digest('hex'))

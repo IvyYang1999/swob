@@ -4,13 +4,14 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Folder, SessionSource, SessionSummary } from './types'
-import { mergeTokenAccountings } from './token-accounting'
+import { accountingFromMutuallyExclusiveUsage, mergeTokenAccountings } from './token-accounting'
 import type { NormalizedTokenComponents, TokenAccounting, UsageEvent, UsageScope } from './token-accounting'
 import type { AnalysisDimension, AnalysisScope } from './analysis-contract'
 import { activityDaysFromTimestamps } from './activity-time'
 import {
   closeUsageFactStore,
   drilldownInsights,
+  incrementalUsageFactCanonicalizationSql,
   queryInsights,
   queryInsightsBundle,
   sessionUsageEvents,
@@ -420,7 +421,229 @@ describe('UsageFact + AnalysisScope', () => {
     const changedA = makeSession('a', '/repo/alpha', [usageEvent('a1', localTimestamp(2026, 7, 20, 8), components(30, 2))])
     expect(synchronizeUsageFacts([changedA, b], [])).toMatchObject({ changedSessions: 1, unchangedSessions: 1, factCount: 2 })
     expect(synchronizeUsageFacts([changedA], [])).toMatchObject({ removedSessions: 1, factCount: 1 })
-    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 6, sessions: 1, facts: 1 })
+    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 7, sessions: 1, facts: 1 })
+  })
+
+  it('v6 账本原地升级为 v7，不重建现有表', () => {
+    const session = makeSession('migration-sentinel', '/repo/migration', [
+      usageEvent('sentinel-call', localTimestamp(2026, 7, 20, 8), components(7, 3))
+    ])
+    synchronizeUsageFacts([session], [])
+    expect(usageFactStoreStats().schemaVersion).toBe(7)
+    closeUsageFactStore()
+
+    const dbPath = process.env.SWOB_USAGE_INDEX_PATH!
+    const legacy = new Database(dbPath)
+    legacy.exec(`
+      DROP INDEX IF EXISTS usage_facts_billing_current_idx;
+      DROP INDEX IF EXISTS usage_facts_superseded_idx;
+      ALTER TABLE usage_facts DROP COLUMN superseded_by;
+      ALTER TABLE usage_facts DROP COLUMN superseded_at;
+      ALTER TABLE usage_facts DROP COLUMN superseded;
+      UPDATE usage_schema_meta SET schema_version = 6 WHERE singleton = 1;
+    `)
+    legacy.close()
+
+    expect(usageFactStoreStats().schemaVersion).toBe(7)
+    expect(synchronizeUsageFacts([session], [])).toMatchObject({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      factCount: 1
+    })
+    closeUsageFactStore()
+    const migrated = new Database(dbPath, { readonly: true })
+    const columns = (migrated.prepare('PRAGMA table_info(usage_facts)').all() as Array<{ name: string }>)
+      .map((column) => column.name)
+    const indexes = (migrated.prepare('PRAGMA index_list(usage_facts)').all() as Array<{ name: string }>)
+      .map((index) => index.name)
+    migrated.close()
+    expect(columns).toEqual(expect.arrayContaining(['superseded', 'superseded_at', 'superseded_by']))
+    expect(indexes).toContain('usage_facts_billing_current_idx')
+    expect(sessionUsageEvents('migration-sentinel', scope()).events).toEqual([
+      expect.objectContaining({ nonCachedInputTokens: 7, outputTokens: 3 })
+    ])
+  })
+
+  it('incremental canonicalization uses the billing-fact/current composite index', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE usage_facts (
+        event_id TEXT PRIMARY KEY,
+        billing_fact_id TEXT NOT NULL,
+        billing_included INTEGER NOT NULL,
+        superseded INTEGER NOT NULL,
+        agent_scope TEXT NOT NULL,
+        occurred_at TEXT
+      );
+      CREATE INDEX usage_facts_superseded_idx
+        ON usage_facts(superseded, event_id);
+      CREATE INDEX usage_facts_billing_current_idx
+        ON usage_facts(billing_fact_id, superseded);
+    `)
+    const plan = db.prepare(
+      `EXPLAIN QUERY PLAN ${incrementalUsageFactCanonicalizationSql(1)}`
+    ).all('billing-1') as Array<{ detail: string }>
+    db.close()
+
+    const candidateLookup = plan.find((row) => row.detail.includes('candidate'))?.detail || ''
+    expect(candidateLookup).toContain('usage_facts_billing_current_idx')
+    expect(candidateLookup).toContain('billing_fact_id=? AND superseded=?')
+  })
+
+  it('incrementally canonicalizes 100k facts within a bounded time', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE usage_facts (
+        event_id TEXT PRIMARY KEY,
+        billing_fact_id TEXT NOT NULL,
+        billing_included INTEGER NOT NULL DEFAULT 0,
+        superseded INTEGER NOT NULL DEFAULT 0,
+        agent_scope TEXT NOT NULL,
+        occurred_at TEXT
+      );
+      CREATE INDEX usage_facts_superseded_idx
+        ON usage_facts(superseded, event_id);
+      CREATE INDEX usage_facts_billing_current_idx
+        ON usage_facts(billing_fact_id, superseded);
+      WITH RECURSIVE sequence(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1 FROM sequence WHERE value < 100000
+      )
+      INSERT INTO usage_facts(event_id, billing_fact_id, agent_scope, occurred_at)
+      SELECT
+        printf('event-%06d', value),
+        printf('billing-%06d', CAST((value + 1) / 2 AS INTEGER)),
+        CASE WHEN value % 2 = 1 THEN 'main' ELSE 'subagent' END,
+        printf('2026-08-02T00:%02d:%02d.000Z', (value / 60) % 60, value % 60)
+      FROM sequence;
+    `)
+
+    const billingIds = Array.from(
+      { length: 50_000 },
+      (_, index) => `billing-${String(index + 1).padStart(6, '0')}`
+    )
+    const startedAt = performance.now()
+    const update = db.prepare(incrementalUsageFactCanonicalizationSql(400))
+    const canonicalize = db.transaction(() => {
+      for (let offset = 0; offset < billingIds.length; offset += 400) {
+        update.run(...billingIds.slice(offset, offset + 400))
+      }
+    })
+    canonicalize()
+    const elapsedMs = performance.now() - startedAt
+    const included = db.prepare(
+      'SELECT COUNT(*) AS count FROM usage_facts WHERE billing_included = 1'
+    ).get() as { count: number }
+    db.close()
+
+    expect(included.count).toBe(50_000)
+    expect(elapsedMs).toBeLessThan(10_000)
+  }, 20_000)
+
+  it('OpenCode/ZCode 历史 aggregate 重扫后保留为 superseded，只有逐调用事实进账', () => {
+    const sources = [
+      { source: 'opencode' as const, format: 'opencode-message-usage-v2', dedupKey: 'opencode:message:msg_1' },
+      { source: 'zcode' as const, format: 'zcode-model-usage-v1', dedupKey: 'zcode:model-usage:usage_1' }
+    ]
+    const legacySessions = sources.map(({ source }) => {
+      const session = makeSession(`legacy-${source}`, `/repo/${source}`, [], {
+        source, turns: 1, parse: 'parsed'
+      })
+      session.tokenUsage = {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0
+      }
+      session.tokenAccounting = accountingFromMutuallyExclusiveUsage(source, session.tokenUsage)
+      session.providerOutcome = { detected: 'detected', parse: 'parsed', usage: 'available' }
+      return session
+    })
+    expect(synchronizeUsageFacts(legacySessions, [])).toMatchObject({ factCount: 2 })
+
+    const perCallSessions = sources.map(({ source, format, dedupKey }) => {
+      const event = usageEvent(dedupKey, localTimestamp(2026, 7, 20, 12), components(40, 8), {
+        model: source === 'opencode' ? 'gpt-5.1' : 'glm-4.5'
+      })
+      event.provider = source
+      event.providerFormatVersion = format
+      event.billingFactKey = dedupKey
+      event.billingProvider = source === 'opencode' ? 'openai' : 'zhipu'
+      event.providerRaw = event.billingProvider
+      event.providerProvenance = 'explicit'
+      return makeSession(`legacy-${source}`, `/repo/${source}`, [event], { source })
+    })
+
+    expect(synchronizeUsageFacts(perCallSessions, [], { rebuild: true })).toMatchObject({
+      changedSessions: 2,
+      factCount: 2,
+      rebuilt: true
+    })
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(96)
+    for (const { source, dedupKey } of sources) {
+      expect(sessionUsageEvents(`legacy-${source}`, scope()).events).toEqual([
+        expect.objectContaining({
+          sourceClient: source,
+          billingIncluded: true,
+          nonCachedInputTokens: 40,
+          outputTokens: 8
+        })
+      ])
+      expect(sessionUsageEvents(`legacy-${source}`, scope()).events[0].billingFactId)
+        .not.toBe(dedupKey)
+    }
+
+    closeUsageFactStore()
+    const audit = new Database(process.env.SWOB_USAGE_INDEX_PATH!, { readonly: true })
+    const rows = audit.prepare(`
+      SELECT source_client, superseded, billing_included, superseded_by
+      FROM usage_facts
+      ORDER BY source_client, superseded DESC
+    `).all() as Array<{
+      source_client: string
+      superseded: number
+      billing_included: number
+      superseded_by: string | null
+    }>
+    const historyCount = (audit.prepare(
+      'SELECT COUNT(*) AS count FROM usage_valuation_history'
+    ).get() as { count: number }).count
+    audit.close()
+    expect(rows).toHaveLength(4)
+    for (const source of ['opencode', 'zcode']) {
+      expect(rows.filter((row) => row.source_client === source)).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          superseded: 1,
+          billing_included: 0,
+          superseded_by: 't183-per-call-usage-v1'
+        }),
+        expect.objectContaining({ superseded: 0, billing_included: 1 })
+      ]))
+    }
+    expect(historyCount).toBeGreaterThanOrEqual(4)
+
+    // A stale pre-t183 summary cache can attempt to downgrade the same
+    // sessions back to their legacy aggregate. The ledger must fail closed:
+    // never revive/replace the superseded aggregate and never discard the
+    // stronger per-call facts. CACHE_VERSION 27 prevents this input in the
+    // loader; this assertion preserves the storage boundary independently.
+    let downgradeError: unknown = null
+    try {
+      synchronizeUsageFacts(legacySessions, [])
+    } catch (error) {
+      downgradeError = error
+    }
+    expect(downgradeError).toMatchObject({ code: 'SQLITE_CONSTRAINT_PRIMARYKEY' })
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(96)
+
+    // When authoritative request rows are parsed again, the round trip is a
+    // no-op over the last committed per-call snapshot.
+    expect(synchronizeUsageFacts(perCallSessions, [])).toMatchObject({
+      changedSessions: 0,
+      unchangedSessions: 2,
+      factCount: 2
+    })
   })
 
   it('cancels a background rebuild at a transaction boundary and preserves the last committed snapshot', () => {
@@ -568,7 +791,7 @@ describe('UsageFact + AnalysisScope', () => {
     expect(model.total.usageCoverage).toEqual({ covered: 2, total: 3, percent: (2 / 3) * 100 })
 
     expect(usageFactStoreStats()).toMatchObject({
-      schemaVersion: 6,
+      schemaVersion: 7,
       sessions: 6,
       activityDays: 5,
       timedSessions: 4,
@@ -657,6 +880,43 @@ describe('UsageFact + AnalysisScope', () => {
     expect(queryInsights(scope(), 'global').total.processedTokens).toBe(120)
     expect(sessionUsageEvents('dedup-fork', scope()).events).toMatchObject([
       { billingIncluded: true }
+    ])
+  })
+
+  it('t184: active + replay copied prefix + archived 进真实账本后等于手工核算 215', () => {
+    const occurredAt = localTimestamp(2026, 8, 2, 12)
+    const shared = { model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:t184-shared' }
+    const parent = makeSession('t184-parent', '/repo/custom-codex-home', [
+      usageEvent('parent-shared', occurredAt, components(100, 20), shared)
+    ], { source: 'codex' })
+    parent.lifecycleState = 'active'
+    const replay = makeSession('t184-replay', '/repo/custom-codex-home', [
+      usageEvent('replay-shared', occurredAt, components(100, 20), shared),
+      usageEvent('replay-only', occurredAt, components(50, 10), {
+        model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:t184-replay'
+      })
+    ], { source: 'codex' })
+    replay.lifecycleState = 'replayed'
+    replay.branchParentId = parent.id
+    const archived = makeSession('t184-archived', '/repo/default-codex-home', [
+      usageEvent('archived-only', occurredAt, components(30, 5), {
+        model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:t184-archived'
+      })
+    ], { source: 'codex' })
+    archived.lifecycleState = 'archived'
+
+    synchronizeUsageFacts([parent, replay, archived], [])
+
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(215)
+    const parentFacts = sessionUsageEvents(parent.id, scope()).events
+    const replayFacts = sessionUsageEvents(replay.id, scope()).events
+    const sharedBillingFactId = parentFacts[0].billingFactId
+    const sharedCopies = [...parentFacts, ...replayFacts]
+      .filter((fact) => fact.billingFactId === sharedBillingFactId)
+    expect(sharedCopies).toHaveLength(2)
+    expect(sharedCopies.filter((fact) => fact.billingIncluded)).toHaveLength(1)
+    expect(sessionUsageEvents(archived.id, scope()).events).toMatchObject([
+      { billingIncluded: true, nonCachedInputTokens: 30, outputTokens: 5 }
     ])
   })
 

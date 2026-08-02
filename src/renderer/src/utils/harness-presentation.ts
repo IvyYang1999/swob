@@ -115,6 +115,13 @@ const REGISTRY: Record<string, HarnessPresentation> = {
     badgeClass: 'bg-soft-purple/15 text-soft-purple',
     chartColor: '#c084fc',
   },
+  gemini: {
+    displayName: 'Gemini CLI',
+    shortLabel: 'GM',
+    iconImage: null,
+    badgeClass: 'bg-soft-blue/15 text-soft-blue',
+    chartColor: '#4285f4',
+  },
 }
 
 const FALLBACK: HarnessPresentation = {

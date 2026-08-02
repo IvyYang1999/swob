@@ -1,10 +1,14 @@
 import {
   ACTIVE_PRICE_SNAPSHOT,
   PRICE_SNAPSHOT_REGISTRY,
+  assertPriceCandidateIntegrity,
   calculatePriceSnapshotHash,
   canonicalizeModel,
+  type PriceCandidateSnapshot,
   type PriceSnapshot,
-  type PricingRule
+  type PricingDimensions,
+  type PricingRule,
+  type UnitPricingRule
 } from './pricing-catalog'
 import {
   processedTotal,
@@ -31,6 +35,14 @@ export interface PricingCalculationLine {
   usd: number
 }
 
+export interface UnitPricingCalculationLine {
+  sku: string
+  unit: string
+  quantity: number
+  usdPerUnit: number
+  usd: number
+}
+
 export interface PricingTrace {
   eventDedupKey: string
   pricingRuleId: string
@@ -41,10 +53,14 @@ export interface PricingTrace {
   effectiveTo?: string
   source: PricingRule['source']
   sourceUrl: string
+  sourceRevision?: string
+  officialReviewUrl?: string
+  dimensions?: PricingDimensions
   catalogVersion: string
   priceSnapshotHash: string
   longContext: boolean
   calculation: PricingCalculationLine[]
+  unitCalculation?: UnitPricingCalculationLine[]
 }
 
 export interface CostLedgerBreakdown {
@@ -75,6 +91,11 @@ export interface Valuation {
   coveragePercent: number
   financialCoveredTokens: number
   financialCoveragePercent: number
+  unitCoverage: {
+    coveredItems: number
+    totalItems: number
+    coveragePercent: number
+  }
   missingReasons: string[]
   pricingRules: PricingTrace[]
   priceRevision: string
@@ -114,7 +135,10 @@ function snapshotForCatalog(catalog: readonly PricingRule[]): PriceSnapshot {
 
 function resolvedSnapshot(value?: PriceSnapshot | readonly PricingRule[]): PriceSnapshot {
   if (!value) return ACTIVE_PRICE_SNAPSHOT
-  return Array.isArray(value) ? snapshotForCatalog(value) : value as PriceSnapshot
+  if (Array.isArray(value)) return snapshotForCatalog(value)
+  const snapshot = value as PriceSnapshot
+  if (snapshot.status !== 'approved') throw new Error(`Price snapshot ${snapshot.revision} is not approved`)
+  return snapshot
 }
 
 function emptyValuation(
@@ -137,6 +161,11 @@ function emptyValuation(
     coveragePercent: 0,
     financialCoveredTokens,
     financialCoveragePercent: percent(financialCoveredTokens, total, ledgerBreakdown.providerBilledUsd !== undefined),
+    unitCoverage: {
+      coveredItems: 0,
+      totalItems: event.billingItems?.length || 0,
+      coveragePercent: percent(0, event.billingItems?.length || 0, false)
+    },
     missingReasons: [...new Set(missingReasons)],
     pricingRules: [],
     priceRevision: snapshot.revision,
@@ -153,24 +182,65 @@ function eventDate(timestamp?: string): number | undefined {
   return Number.isFinite(value) ? value : undefined
 }
 
+function normalizedDimensions(event: UsageEvent): Required<Omit<PricingDimensions, 'region'>> & { region?: string } {
+  const serviceTier = event.serviceTier?.toLowerCase()
+  return {
+    serviceTier: !serviceTier || serviceTier === 'default' ? 'standard' : serviceTier,
+    speed: event.speed?.toLowerCase() || 'standard',
+    batchMode: event.isBatch ? 'batch' : 'realtime',
+    ...(event.inferenceRegion ? { region: event.inferenceRegion.toLowerCase() } : {})
+  }
+}
+
+function dimensionsMatch(rule: PricingDimensions | undefined, event: UsageEvent): boolean {
+  const actual = normalizedDimensions(event)
+  return (rule?.serviceTier?.toLowerCase() || 'standard') === actual.serviceTier &&
+    (rule?.speed?.toLowerCase() || 'standard') === actual.speed &&
+    (rule?.batchMode || 'realtime') === actual.batchMode &&
+    (rule?.region?.toLowerCase() || undefined) === actual.region
+}
+
+function modifierReasons(event: UsageEvent): string[] {
+  const actual = normalizedDimensions(event)
+  return [
+    ...(actual.batchMode === 'batch' ? ['unpriced-modifier:batch-mode:batch'] : []),
+    ...(actual.serviceTier !== 'standard' ? [`unpriced-modifier:service-tier:${actual.serviceTier}`] : []),
+    ...(actual.speed !== 'standard' ? [`unpriced-modifier:speed:${actual.speed}`] : []),
+    ...(actual.region ? [`unpriced-modifier:region:${actual.region}`] : [])
+  ]
+}
+
+function appliesAt(effectiveFrom: string, effectiveTo: string | undefined, at: number): boolean {
+  const from = new Date(effectiveFrom).getTime()
+  const to = effectiveTo ? new Date(effectiveTo).getTime() : Number.POSITIVE_INFINITY
+  return at >= from && at < to
+}
+
 function matchRule(
   event: UsageEvent,
   snapshot: PriceSnapshot
-): { rule: PricingRule; match: 'exact' | 'alias' } | undefined {
-  if (!event.billingProvider || !event.modelCanonical) return undefined
+): { rule?: PricingRule; match?: 'exact' | 'alias'; unpricedModifiers: string[] } {
+  if (!event.billingProvider || !event.modelCanonical) return { unpricedModifiers: [] }
   const at = eventDate(event.timestamp)
-  if (at === undefined) return undefined
-  const rules = snapshot.rules
+  if (at === undefined) return { unpricedModifiers: [] }
+  const baseRules = snapshot.rules
     .filter((rule) => rule.provider === event.billingProvider && rule.modelCanonical === event.modelCanonical)
-    .filter((rule) => {
-      const from = new Date(rule.effectiveFrom).getTime()
-      const to = rule.effectiveTo ? new Date(rule.effectiveTo).getTime() : Number.POSITIVE_INFINITY
-      return at >= from && at < to
-    })
+    .filter((rule) => appliesAt(rule.effectiveFrom, rule.effectiveTo, at))
+  const rules = baseRules
+    .filter((rule) => dimensionsMatch(rule.dimensions, event))
     .sort((left, right) => new Date(right.effectiveFrom).getTime() - new Date(left.effectiveFrom).getTime())
   const rule = rules[0]
-  if (!rule) return undefined
-  return { rule, match: canonicalizeModel(event.modelRaw)?.match || 'exact' }
+  if (!rule) {
+    const reasons = baseRules.length > 0 ? modifierReasons(event) : []
+    return { unpricedModifiers: reasons }
+  }
+  return { rule, match: canonicalizeModel(event.modelRaw)?.match || 'exact', unpricedModifiers: [] }
+}
+
+function matchUnitRule(event: UsageEvent, rule: UnitPricingRule): boolean {
+  const at = eventDate(event.timestamp)
+  return at !== undefined && event.billingProvider === rule.provider &&
+    appliesAt(rule.effectiveFrom, rule.effectiveTo, at) && dimensionsMatch(rule.dimensions, event)
 }
 
 function addPricedComponent(
@@ -196,16 +266,6 @@ function addPricedComponent(
 function inputTokens(components: NormalizedTokenComponents): number {
   return components.nonCachedInputTokens + components.cacheReadTokens + components.cacheWriteTokens +
     components.cacheWrite5mTokens + components.cacheWrite1hTokens
-}
-
-function unsupportedModifier(event: UsageEvent): string | undefined {
-  if (event.isBatch) return 'batch-price-not-modeled'
-  if (event.serviceTier && !['standard', 'default'].includes(event.serviceTier.toLowerCase())) {
-    return 'service-tier-price-not-modeled'
-  }
-  if (event.speed && event.speed.toLowerCase() !== 'standard') return 'speed-price-not-modeled'
-  if (event.inferenceRegion) return 'regional-price-not-modeled'
-  return undefined
 }
 
 function reportedLedgers(event: UsageEvent): CostLedgerBreakdown {
@@ -255,67 +315,123 @@ function modeBreakdown(
 
 function valueUsageEventAtSnapshot(event: UsageEvent, snapshot: PriceSnapshot): Valuation {
   const totalBillableTokens = processedTotal(event.components)
+  const billingItems = event.billingItems || []
   const ledgers = reportedLedgers(event)
   const baseReasons: string[] = []
-  if (!event.modelRaw || event.modelRaw === '<synthetic>') baseReasons.push('model-unknown')
-  else if (!event.modelCanonical) baseReasons.push('model-not-in-catalog')
-  else if (event.modelProvenance === 'session-fallback' || event.modelProvenance === 'unknown') {
-    baseReasons.push('model-provenance-not-request-level')
-  } else if (!event.billingProvider || event.providerProvenance === 'unknown') baseReasons.push('provider-unknown')
-  else if (!event.timestamp || eventDate(event.timestamp) === undefined) baseReasons.push('event-time-unknown')
-  else {
-    const modifierReason = unsupportedModifier(event)
-    if (modifierReason) baseReasons.push(modifierReason)
+  if (totalBillableTokens > 0) {
+    if (!event.modelRaw || event.modelRaw === '<synthetic>') baseReasons.push('model-unknown')
+    else if (!event.modelCanonical) baseReasons.push('model-not-in-catalog')
+    else if (event.modelProvenance === 'session-fallback' || event.modelProvenance === 'unknown') {
+      baseReasons.push('model-provenance-not-request-level')
+    }
   }
+  if (!event.billingProvider || event.providerProvenance === 'unknown') baseReasons.push('provider-unknown')
+  else if (!event.timestamp || eventDate(event.timestamp) === undefined) baseReasons.push('event-time-unknown')
   if (baseReasons.length > 0) return emptyValuation(event, snapshot, baseReasons, ledgers)
 
-  const matched = matchRule(event, snapshot)
-  if (!matched) return emptyValuation(event, snapshot, ['no-exact-provider-model-date-rule'], ledgers)
-
-  const { rule } = matched
-  const isLongContext = Boolean(
-    rule.contextThresholdTokens && inputTokens(event.components) > rule.contextThresholdTokens
-  )
-  const inputMultiplier = isLongContext && rule.thresholdMode === 'whole-request'
-    ? rule.longContextMultiplier?.input || 1
-    : 1
-  const outputMultiplier = isLongContext && rule.thresholdMode === 'whole-request'
-    ? rule.longContextMultiplier?.output || 1
-    : 1
   const state = { usd: 0, covered: 0, missing: [] as string[], calculation: [] as PricingCalculationLine[] }
-  const componentUsd = {
-    input: addPricedComponent('input', event.components.nonCachedInputTokens, rule.usdPerMillion.input,
-      inputMultiplier, 'input-price-missing', state),
-    output: addPricedComponent('output', event.components.outputTokens, rule.usdPerMillion.output,
-      outputMultiplier, 'output-price-missing', state),
-    cacheRead: addPricedComponent('cache-read', event.components.cacheReadTokens, rule.usdPerMillion.cacheRead,
-      inputMultiplier, 'cache-read-price-missing', state),
-    cacheWrite: addPricedComponent('cache-write', event.components.cacheWriteTokens, rule.usdPerMillion.cacheWrite,
-      inputMultiplier, event.semantics === 'anthropic-disjoint' ? 'cache-write-ttl-unknown' : 'cache-write-price-missing', state),
-    cacheWrite5m: addPricedComponent('cache-write-5m', event.components.cacheWrite5mTokens,
-      rule.usdPerMillion.cacheWrite5m, inputMultiplier, 'cache-write-5m-price-missing', state),
-    cacheWrite1h: addPricedComponent('cache-write-1h', event.components.cacheWrite1hTokens,
-      rule.usdPerMillion.cacheWrite1h, inputMultiplier, 'cache-write-1h-price-missing', state)
+  const pricingRules: PricingTrace[] = []
+  let componentUsd: Valuation['componentUsd']
+  let matchedKind: 'exact' | 'alias' | undefined
+
+  if (totalBillableTokens > 0) {
+    const matched = matchRule(event, snapshot)
+    if (!matched.rule) {
+      if (matched.unpricedModifiers.length > 0) {
+        state.missing.push('unpriced-modifier', ...matched.unpricedModifiers)
+      } else {
+        state.missing.push('no-exact-provider-model-date-rule')
+      }
+    } else {
+      const rule = matched.rule
+      matchedKind = matched.match
+      const isLongContext = Boolean(
+        rule.contextThresholdTokens && inputTokens(event.components) > rule.contextThresholdTokens
+      )
+      const inputMultiplier = isLongContext && rule.thresholdMode === 'whole-request'
+        ? rule.longContextMultiplier?.input || 1
+        : 1
+      const outputMultiplier = isLongContext && rule.thresholdMode === 'whole-request'
+        ? rule.longContextMultiplier?.output || 1
+        : 1
+      componentUsd = {
+        input: addPricedComponent('input', event.components.nonCachedInputTokens, rule.usdPerMillion.input,
+          inputMultiplier, 'input-price-missing', state),
+        output: addPricedComponent('output', event.components.outputTokens, rule.usdPerMillion.output,
+          outputMultiplier, 'output-price-missing', state),
+        cacheRead: addPricedComponent('cache-read', event.components.cacheReadTokens, rule.usdPerMillion.cacheRead,
+          inputMultiplier, 'cache-read-price-missing', state),
+        cacheWrite: addPricedComponent('cache-write', event.components.cacheWriteTokens, rule.usdPerMillion.cacheWrite,
+          inputMultiplier, event.semantics === 'anthropic-disjoint' ? 'cache-write-ttl-unknown' : 'cache-write-price-missing', state),
+        cacheWrite5m: addPricedComponent('cache-write-5m', event.components.cacheWrite5mTokens,
+          rule.usdPerMillion.cacheWrite5m, inputMultiplier, 'cache-write-5m-price-missing', state),
+        cacheWrite1h: addPricedComponent('cache-write-1h', event.components.cacheWrite1hTokens,
+          rule.usdPerMillion.cacheWrite1h, inputMultiplier, 'cache-write-1h-price-missing', state)
+      }
+      pricingRules.push({
+        eventDedupKey: event.dedupKey,
+        pricingRuleId: rule.id,
+        provider: rule.provider,
+        modelCanonical: rule.modelCanonical,
+        eventTimestamp: event.timestamp!,
+        effectiveFrom: rule.effectiveFrom,
+        effectiveTo: rule.effectiveTo,
+        source: rule.source,
+        sourceUrl: rule.sourceUrl,
+        sourceRevision: rule.sourceRevision,
+        officialReviewUrl: rule.officialReviewUrl,
+        dimensions: rule.dimensions,
+        catalogVersion: snapshot.revision,
+        priceSnapshotHash: snapshot.contentHash,
+        longContext: isLongContext,
+        calculation: state.calculation
+      })
+    }
   }
-  const trace: PricingTrace = {
-    eventDedupKey: event.dedupKey,
-    pricingRuleId: rule.id,
-    provider: rule.provider,
-    modelCanonical: rule.modelCanonical,
-    eventTimestamp: event.timestamp!,
-    effectiveFrom: rule.effectiveFrom,
-    effectiveTo: rule.effectiveTo,
-    source: rule.source,
-    sourceUrl: rule.sourceUrl,
-    catalogVersion: snapshot.revision,
-    priceSnapshotHash: snapshot.contentHash,
-    longContext: isLongContext,
-    calculation: state.calculation
+
+  let coveredItems = 0
+  let unitUsd = 0
+  for (const item of billingItems) {
+    if (!Number.isFinite(item.quantity) || item.quantity < 0) {
+      state.missing.push(`invalid-billing-item:${item.unit}:${item.sku}`)
+      continue
+    }
+    const baseRules = (snapshot.unitRules || []).filter((rule) =>
+      rule.provider === event.billingProvider && rule.unit === item.unit && rule.sku === item.sku &&
+      appliesAt(rule.effectiveFrom, rule.effectiveTo, eventDate(event.timestamp)!)
+    )
+    const rule = baseRules.find((candidate) => matchUnitRule(event, candidate))
+    if (!rule) {
+      const reasons = baseRules.length > 0 ? modifierReasons(event) : []
+      if (reasons.length > 0) state.missing.push('unpriced-modifier', ...reasons)
+      else state.missing.push(`non-token-price-missing:${item.unit}:${item.sku}`)
+      continue
+    }
+    coveredItems += 1
+    const usd = item.quantity * rule.usdPerUnit
+    unitUsd += usd
+    pricingRules.push({
+      eventDedupKey: event.dedupKey,
+      pricingRuleId: rule.id,
+      provider: rule.provider,
+      modelCanonical: event.modelCanonical || '<non-token>',
+      eventTimestamp: event.timestamp!,
+      effectiveFrom: rule.effectiveFrom,
+      effectiveTo: rule.effectiveTo,
+      source: rule.source,
+      sourceUrl: rule.sourceUrl,
+      sourceRevision: rule.sourceRevision,
+      dimensions: rule.dimensions,
+      catalogVersion: snapshot.revision,
+      priceSnapshotHash: snapshot.contentHash,
+      longContext: false,
+      calculation: [],
+      unitCalculation: [{ sku: item.sku, unit: item.unit, quantity: item.quantity, usdPerUnit: rule.usdPerUnit, usd }]
+    })
   }
-  if (state.covered > 0 || totalBillableTokens === 0) ledgers.swobEstimateUsd = state.usd
-  if (state.covered === 0 && totalBillableTokens > 0) {
-    const result = emptyValuation(event, snapshot, state.missing, ledgers)
-    return { ...result, pricingRules: [trace] }
+
+  if (state.covered > 0 || coveredItems > 0 || (totalBillableTokens === 0 && billingItems.length === 0)) {
+    ledgers.swobEstimateUsd = state.usd + unitUsd
   }
 
   const swobDisplayMode = event.providerProvenance === 'inferred' ? 'api-equivalent' : 'swob-estimate'
@@ -327,21 +443,26 @@ function valueUsageEventAtSnapshot(event: UsageEvent, snapshot: PriceSnapshot): 
     ...(selected.mode
       ? { selectedLedger: selected.mode === 'swob-estimate' ? swobDisplayMode : selected.mode }
       : {}),
-    pricingMatch: matched.match,
+    pricingMatch: matchedKind || (coveredItems > 0 ? 'exact' : 'none'),
     ledgerBreakdown: ledgers,
     coveredTokens: state.covered,
     totalBillableTokens,
     coveragePercent: percent(state.covered, totalBillableTokens, true),
     financialCoveredTokens,
     financialCoveragePercent: percent(financialCoveredTokens, totalBillableTokens, ledgers.providerBilledUsd !== undefined),
+    unitCoverage: {
+      coveredItems,
+      totalItems: billingItems.length,
+      coveragePercent: percent(coveredItems, billingItems.length, coveredItems > 0)
+    },
     missingReasons: [...new Set(state.missing)],
-    pricingRules: [trace],
+    pricingRules,
     priceRevision: snapshot.revision,
     priceSnapshotHash: snapshot.contentHash,
     priceRevisions: [snapshot.revision],
     revisionNotices: [],
     modeBreakdown: modeBreakdown(ledgers, swobDisplayMode),
-    componentUsd
+    ...(componentUsd ? { componentUsd } : {})
   }
 }
 
@@ -385,6 +506,70 @@ export function previewUsageEventRepricing(event: UsageEvent, targetRevision: st
   return { ...valueUsageEventAtSnapshot(event, snapshot), whatIf: true }
 }
 
+/** Explicit audit-only path. Pending candidates are never added to PRICE_SNAPSHOT_REGISTRY. */
+function valueUsageEventAtCandidate(
+  event: UsageEvent,
+  candidate: PriceCandidateSnapshot
+): Valuation {
+  const raw = event.modelRaw?.trim().toLowerCase()
+  const unprefixed = raw?.split('/').at(-1)
+  const hasDirectCandidate = candidate.rules.some((rule) =>
+    rule.modelCanonical === event.modelCanonical && (!event.billingProvider || rule.provider === event.billingProvider)
+  )
+  const matcherApplies = (rule: PricingRule): boolean => Boolean(unprefixed && rule.modelMatchers?.some((matcher) => {
+    const value = matcher.value.toLowerCase()
+    if (matcher.kind === 'equals') return unprefixed === value
+    if (matcher.kind === 'starts-with') return unprefixed.startsWith(value)
+    return unprefixed.includes(value)
+  }))
+  const matchingModels = !hasDirectCandidate && unprefixed
+    ? candidate.rules.filter((rule) =>
+        (!event.billingProvider || rule.provider === event.billingProvider) &&
+        (rule.modelCanonical.toLowerCase() === unprefixed || matcherApplies(rule)))
+    : []
+  const inferred = matchingModels.length > 0
+    ? {
+        modelCanonical: matchingModels[0].modelCanonical,
+        ...(event.billingProvider
+          ? {}
+          : { billingProvider: matchingModels[0].provider, providerProvenance: 'inferred' as const })
+      }
+    : {}
+  const previewSnapshot: PriceSnapshot = {
+    revision: candidate.revision,
+    status: 'approved',
+    generatedAt: candidate.generatedAt,
+    reviewedAt: candidate.generatedAt,
+    contentHash: candidate.contentHash,
+    sourcePipeline: candidate.sourcePipeline,
+    rules: candidate.rules,
+    unitRules: candidate.unitRules
+  }
+  return { ...valueUsageEventAtSnapshot({ ...event, ...inferred }, previewSnapshot), whatIf: true }
+}
+
+export function previewUsageEventCandidateRepricing(
+  event: UsageEvent,
+  candidate: PriceCandidateSnapshot
+): Valuation {
+  assertPriceCandidateIntegrity(candidate)
+  return valueUsageEventAtCandidate(event, candidate)
+}
+
+export function previewUsageEventsCandidateRepricing(
+  events: UsageEvent[],
+  candidate: PriceCandidateSnapshot
+): Valuation {
+  assertPriceCandidateIntegrity(candidate)
+  const unique = new Map<string, UsageEvent>()
+  for (const event of events) unique.set(event.billingFactKey || event.dedupKey, event)
+  return {
+    ...aggregateValuations([...unique.values()].map((event) =>
+      valueUsageEventAtCandidate(event, candidate))),
+    whatIf: true
+  }
+}
+
 function addLedgerBreakdown(target: CostLedgerBreakdown, source: CostLedgerBreakdown): void {
   for (const key of Object.keys(source) as Array<keyof CostLedgerBreakdown>) {
     const amount = source[key]
@@ -404,6 +589,8 @@ export function aggregateValuations(valuations: Valuation[]): Valuation {
   const totalBillableTokens = valuations.reduce((sum, valuation) => sum + valuation.totalBillableTokens, 0)
   const coveredTokens = valuations.reduce((sum, valuation) => sum + valuation.coveredTokens, 0)
   const financialCoveredTokens = valuations.reduce((sum, valuation) => sum + valuation.financialCoveredTokens, 0)
+  const coveredItems = valuations.reduce((sum, valuation) => sum + valuation.unitCoverage.coveredItems, 0)
+  const totalItems = valuations.reduce((sum, valuation) => sum + valuation.unitCoverage.totalItems, 0)
   const usd = priced.length > 0 ? priced.reduce((sum, valuation) => sum + valuation.usd!, 0) : undefined
   const matchKinds = new Set(priced.map((valuation) => valuation.pricingMatch))
   const modeBreakdown: Valuation['modeBreakdown'] = {}
@@ -430,6 +617,11 @@ export function aggregateValuations(valuations: Valuation[]): Valuation {
     coveragePercent: percent(coveredTokens, totalBillableTokens, usd !== undefined),
     financialCoveredTokens,
     financialCoveragePercent: percent(financialCoveredTokens, totalBillableTokens, false),
+    unitCoverage: {
+      coveredItems,
+      totalItems,
+      coveragePercent: percent(coveredItems, totalItems, coveredItems > 0)
+    },
     missingReasons: [...new Set(valuations.flatMap((valuation) => valuation.missingReasons))],
     pricingRules: [...new Map(valuations.flatMap((valuation) => valuation.pricingRules)
       .map((trace) => [`${trace.eventDedupKey}\0${trace.pricingRuleId}`, trace] as const)).values()],

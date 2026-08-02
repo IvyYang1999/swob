@@ -18,6 +18,7 @@ export interface SearchIndexWritePort {
     options?: { includeThinking?: boolean }
   ): Promise<void>
   tombstoneCanonicalSearch(sessionRecordId: string): Promise<void>
+  cancelPending?(): void
   close(): Promise<void>
 }
 
@@ -200,6 +201,10 @@ export class SearchIndexWriteCoordinator {
       this.pending = null
       if (pending) for (const waiter of pending.waiters) waiter.reject(error)
     }
+    // Signal active worker work before awaiting the coordinator drain. Waiting
+    // first prevents LibraryWorkerClient.close() from ever setting its shared
+    // cancellation flag while a long full-index request is active.
+    this.writer.cancelPending?.()
     await this.waitForIdle()
     await this.writer.close()
   }
@@ -323,6 +328,11 @@ export class WorkerSearchIndexWritePort implements SearchIndexWritePort {
 
   tombstoneCanonicalSearch(sessionRecordId: string): Promise<void> {
     return this.worker().then((worker) => worker.tombstoneCanonicalSearch(sessionRecordId))
+  }
+
+  cancelPending(): void {
+    const current = this.workerPromise
+    if (current) void current.then((worker) => worker.cancelPending()).catch(() => {})
   }
 
   async close(): Promise<void> {

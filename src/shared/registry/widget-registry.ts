@@ -1,5 +1,7 @@
 import { DefinitionRegistry, type RegistryDefinition } from './registry'
 
+export type WidgetDataStatus = 'connected' | 'pending'
+
 export type WidgetDataScope =
   | { kind: 'none' }
   | { kind: 'insights'; dimensions: string[] }
@@ -16,6 +18,8 @@ export interface WidgetDefinition<TContext = unknown, TRender = unknown> extends
   page: string
   dataScope: WidgetDataScope
   size: WidgetSizeConstraints
+  /** Whether the backend data pipeline for this widget is fully connected. */
+  dataStatus: WidgetDataStatus
   render: (context: TContext) => TRender
 }
 

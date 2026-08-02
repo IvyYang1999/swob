@@ -1,0 +1,3 @@
+{"sessionId":"33333333-3333-4333-8333-333333333333","projectHash":"synthetic-project-hash","startTime":"2026-08-02T02:00:02.000Z","lastUpdated":"2026-08-02T02:00:03.000Z","kind":"subagent","directories":["/workspace/synthetic-gemini"]}
+{"id":"child-user","timestamp":"2026-08-02T02:00:02.100Z","type":"user","content":"Inspect one child task."}
+{"id":"child-assistant","timestamp":"2026-08-02T02:00:03.000Z","type":"gemini","content":"Child complete.","tokens":{"input":20,"output":4,"cached":0,"thoughts":0,"tool":0,"total":24},"model":"gemini-synthetic-flash"}

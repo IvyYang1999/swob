@@ -20,6 +20,7 @@ import type { ShareTheme } from './share-themes'
 import { DEFAULT_PRIVACY, detectSecrets } from './privacy-utils'
 import type { PrivacyOptions } from './privacy-utils'
 import { renderShareImage, dataUrlToBase64 } from './ShareRenderer'
+import { StaleDisclaimer } from '../LibraryHealthBanner'
 import type { ShareMessage, ShareRenderOptions } from './ShareRenderer'
 
 interface SharePreviewProps {
@@ -173,6 +174,7 @@ export function SharePreview({ messages, sessionSource, userDisplayName, onClose
           <div className="flex items-center gap-2">
             <Image size={16} className="text-soft-blue" />
             <span className="text-sm font-medium text-primary">{t('share.title')}</span>
+            <StaleDisclaimer variant="share" />
             {images.length > 1 && (
               <span className="text-[10px] text-muted px-1.5 py-0.5 rounded bg-surface">
                 {t('share.page_of', { current: currentPage + 1, total: images.length })}

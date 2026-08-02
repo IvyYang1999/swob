@@ -344,7 +344,9 @@ const api = {
     ipcRenderer.on('sessions:refresh', () => callback())
   },
   onSearchIndexUpdated: (callback: () => void) => {
-    ipcRenderer.on('session:searchIndexUpdated', () => callback())
+    const listener = (): void => callback()
+    ipcRenderer.on('session:searchIndexUpdated', listener)
+    return () => { ipcRenderer.removeListener('session:searchIndexUpdated', listener) }
   },
   onLibraryPatch: (callback: (patch: unknown) => void) => {
     ipcRenderer.on('sessions:libraryPatch', (_event, patch) => callback(patch))
@@ -352,7 +354,6 @@ const api = {
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => {
     ipcRenderer.on('sessions:activeChanged', (_event, ids) => callback(ids))
   },
-
   // CLI
   cliGetStatus: () => ipcRenderer.invoke('cli:getStatus'),
   cliInstall: () => ipcRenderer.invoke('cli:install'),
@@ -360,6 +361,9 @@ const api = {
   // Settings capability discovery
   getDetectedTerminals: (force = false) => ipcRenderer.invoke('settings:getDetectedTerminals', force),
   getAppInfo: () => ipcRenderer.invoke('settings:getAppInfo'),
+  getCodexHomes: () => ipcRenderer.invoke('settings:getCodexHomes') as Promise<string[]>,
+  selectCodexHomes: () => ipcRenderer.invoke('settings:selectCodexHomes') as Promise<string[]>,
+  setCodexHomes: (homes: string[]) => ipcRenderer.invoke('settings:setCodexHomes', homes) as Promise<string[]>,
 
   // Auto Update
   onUpdateAvailable: (callback: (version: string, notes: string) => void) => {

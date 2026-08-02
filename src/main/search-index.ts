@@ -302,21 +302,63 @@ function firstUserMessage(raw: RawJsonlMessage[]): string {
   return extractContentText(firstUser?.message?.content).slice(0, 200)
 }
 
-function removeIndexedFile(db: Database.Database, filePath: string): void {
+function removeIndexedFile(
+  db: Database.Database,
+  filePath: string,
+  shouldCancel?: () => boolean
+): void {
   const remove = db.transaction(() => {
+    throwIfSearchIndexSyncCancelled(shouldCancel)
     db.prepare('DELETE FROM messages_fts WHERE file_path = ?').run(filePath)
     db.prepare('DELETE FROM library_backup WHERE backup_path = ?').run(filePath)
     db.prepare('DELETE FROM sessions WHERE file_path = ?').run(filePath)
+    throwIfSearchIndexSyncCancelled(shouldCancel)
   })
   remove()
   invalidateQueryCache()
 }
 
-async function indexSourceNow(source: SearchIndexSource): Promise<boolean> {
+function throwIfSearchIndexSyncCancelled(shouldCancel?: () => boolean): void {
+  if (!shouldCancel?.()) return
+  const error = new Error('Search index synchronization cancelled')
+  error.name = 'AbortError'
+  throw error
+}
+
+function awaitSearchIndexInput<T>(input: Promise<T>, shouldCancel?: () => boolean): Promise<T> {
+  if (!shouldCancel) return input
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (action: () => void): void => {
+      if (settled) return
+      settled = true
+      clearInterval(poll)
+      action()
+    }
+    const poll = setInterval(() => {
+      try {
+        throwIfSearchIndexSyncCancelled(shouldCancel)
+      } catch (error) {
+        finish(() => reject(error))
+      }
+    }, 10)
+    poll.unref?.()
+    input.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error))
+    )
+  })
+}
+
+async function indexSourceNow(
+  source: SearchIndexSource,
+  shouldCancel?: () => boolean
+): Promise<boolean> {
+  throwIfSearchIndexSyncCancelled(shouldCancel)
   const db = getDatabase()
   const state = computeFileState(source.stateFilePath || source.filePath)
   if (!state) {
-    removeIndexedFile(db, source.filePath)
+    removeIndexedFile(db, source.filePath, shouldCancel)
     return false
   }
 
@@ -327,13 +369,24 @@ async function indexSourceNow(source: SearchIndexSource): Promise<boolean> {
 
   let raw: RawJsonlMessage[]
   try {
-    raw = source.loadRaw ? await source.loadRaw() : await parseSessionFile(source.filePath)
+    raw = await awaitSearchIndexInput(
+      source.loadRaw ? source.loadRaw() : parseSessionFile(source.filePath),
+      shouldCancel
+    )
   } catch {
-    removeIndexedFile(db, source.filePath)
+    // A parser may gain native/cooperative abort support independently. Never
+    // translate a shutdown abort into a destructive "source disappeared"
+    // tombstone of the last complete projection.
+    throwIfSearchIndexSyncCancelled(shouldCancel)
+    removeIndexedFile(db, source.filePath, shouldCancel)
     return false
   }
 
-  return writeIndexedRawSource(db, source, state, raw, existing)
+  // Parsing a large source is intentionally outside the SQLite transaction.
+  // If shutdown was requested while it was being read, do not begin a new
+  // projection commit after quit.
+  throwIfSearchIndexSyncCancelled(shouldCancel)
+  return writeIndexedRawSource(db, source, state, raw, existing, shouldCancel)
 }
 
 function writeIndexedRawSource(
@@ -341,12 +394,13 @@ function writeIndexedRawSource(
   source: SearchIndexSource,
   state: FileState,
   raw: RawJsonlMessage[],
-  existing?: IndexedSessionRow
+  existing?: IndexedSessionRow,
+  shouldCancel?: () => boolean
 ): boolean {
 
   const sessionId = source.sessionId || raw.find((message) => message.sessionId)?.sessionId
   if (!sessionId) {
-    removeIndexedFile(db, source.filePath)
+    removeIndexedFile(db, source.filePath, shouldCancel)
     return false
   }
 
@@ -356,15 +410,17 @@ function writeIndexedRawSource(
     state.size > existing.indexed_size && raw.length >= existing.indexed_raw_count
   )
   const rawToIndex = canAppend ? raw.slice(existing!.indexed_raw_count) : raw
-  const searchableMessages = rawToIndex.flatMap((message) => {
-    if (message.type !== 'user' && message.type !== 'assistant') return []
+  const searchableMessages: Array<{ role: string; text: string; timestamp: string }> = []
+  for (const message of rawToIndex) {
+    throwIfSearchIndexSyncCancelled(shouldCancel)
+    if (message.type !== 'user' && message.type !== 'assistant') continue
     const text = extractContentText(message.message?.content)
-    if (!text) return []
-    return [{ role: message.type, text, timestamp: message.timestamp || '' }]
-  })
+    if (text) searchableMessages.push({ role: message.type, text, timestamp: message.timestamp || '' })
+  }
 
   const isLibraryBackup = source.isLibraryBackup ?? path.basename(source.filePath) === 'backup.jsonl'
   const write = db.transaction(() => {
+    throwIfSearchIndexSyncCancelled(shouldCancel)
     if (!canAppend) db.prepare('DELETE FROM messages_fts WHERE file_path = ?').run(source.filePath)
     db.prepare(`
       INSERT INTO sessions(
@@ -404,6 +460,7 @@ function writeIndexedRawSource(
       VALUES (?, ?, ?, ?, ?)
     `)
     for (const message of searchableMessages) {
+      throwIfSearchIndexSyncCancelled(shouldCancel)
       insertMessage.run(sessionId, source.filePath, message.role, message.text, message.timestamp)
     }
 
@@ -418,6 +475,9 @@ function writeIndexedRawSource(
     } else {
       db.prepare('DELETE FROM library_backup WHERE backup_path = ?').run(source.filePath)
     }
+    // Throwing at the boundary rolls back all projection rows if quit raced
+    // the final insert.
+    throwIfSearchIndexSyncCancelled(shouldCancel)
   })
   write()
   invalidateQueryCache()
@@ -477,9 +537,10 @@ function canonicalSessionRecord(records: CanonicalRecord[]): SessionRecord {
 export async function indexCanonicalSession(
   sessionId: string,
   records: CanonicalRecord[],
-  options: { includeThinking?: boolean } = {}
+  options: { includeThinking?: boolean; shouldCancel?: () => boolean } = {}
 ): Promise<void> {
   return serializeSynchronization(async () => {
+    throwIfSearchIndexSyncCancelled(options.shouldCancel)
     const session = canonicalSessionRecord(records)
     if (session.sourceSessionId !== sessionId) throw new Error('canonical-search-session-id-mismatch')
     const includeThinking = options.includeThinking !== false
@@ -495,10 +556,12 @@ export async function indexCanonicalSession(
     const firstUserText = firstUser ? canonicalMessageText(firstUser, false).slice(0, 200) : ''
     const searchableRows: Array<{ role: string; text: string; timestamp: string }> = []
     for (const message of messages) {
+      throwIfSearchIndexSyncCancelled(options.shouldCancel)
       const text = canonicalMessageText(message, includeThinking)
       if (text) searchableRows.push({ role: message.role, text, timestamp: message.timestamp || '' })
     }
     for (const call of calls) {
+      throwIfSearchIndexSyncCancelled(options.shouldCancel)
       searchableRows.push({
         role: 'tool-call',
         text: [searchableValue(call.name), searchableValue(call.input)].filter(Boolean).join('\n'),
@@ -506,12 +569,15 @@ export async function indexCanonicalSession(
       })
     }
     for (const result of results) {
+      throwIfSearchIndexSyncCancelled(options.shouldCancel)
       const text = searchableValue(result.content)
       if (text) searchableRows.push({ role: 'tool-result', text, timestamp: result.timestamp || '' })
     }
     const encodedSize = Buffer.byteLength(JSON.stringify(records), 'utf8')
+    throwIfSearchIndexSyncCancelled(options.shouldCancel)
     const db = getDatabase()
     const write = db.transaction(() => {
+      throwIfSearchIndexSyncCancelled(options.shouldCancel)
       db.prepare('DELETE FROM messages_fts WHERE file_path = ?').run(indexKey)
       db.prepare(`
         INSERT INTO sessions(
@@ -547,42 +613,52 @@ export async function indexCanonicalSession(
         VALUES (?, ?, ?, ?, ?)
       `)
       for (const row of searchableRows) {
+        throwIfSearchIndexSyncCancelled(options.shouldCancel)
         insert.run(session.sourceSessionId, indexKey, row.role, row.text, row.timestamp)
       }
       db.prepare('DELETE FROM library_backup WHERE backup_path = ?').run(indexKey)
+      throwIfSearchIndexSyncCancelled(options.shouldCancel)
     })
     write()
     invalidateQueryCache()
   })
 }
 
-export async function tombstoneCanonicalSession(sessionRecordId: string): Promise<void> {
+export async function tombstoneCanonicalSession(
+  sessionRecordId: string,
+  options: { shouldCancel?: () => boolean } = {}
+): Promise<void> {
   return serializeSynchronization(async () => {
-    removeIndexedFile(getDatabase(), canonicalIndexKey(sessionRecordId))
+    throwIfSearchIndexSyncCancelled(options.shouldCancel)
+    removeIndexedFile(getDatabase(), canonicalIndexKey(sessionRecordId), options.shouldCancel)
   })
 }
 
 export async function synchronizeSearchSources(
   sources: SearchIndexSource[],
-  options: { prune?: boolean } = { prune: true }
+  options: { prune?: boolean; shouldCancel?: () => boolean } = { prune: true }
 ): Promise<void> {
   return serializeSynchronization(async () => {
+    throwIfSearchIndexSyncCancelled(options.shouldCancel)
     const uniqueSources = new Map(sources.map((source) => [source.filePath, source]))
     for (const source of uniqueSources.values()) {
-      const changed = await indexSourceNow(source)
+      throwIfSearchIndexSyncCancelled(options.shouldCancel)
+      const changed = await indexSourceNow(source, options.shouldCancel)
       // Yield only after real parse/write work. Unchanged hot-index validation is
       // intentionally one tight stat/query pass so every search stays sub-50ms.
       if (changed) await new Promise<void>((resolve) => setImmediate(resolve))
     }
 
     if (options.prune !== false) {
+      throwIfSearchIndexSyncCancelled(options.shouldCancel)
       const db = getDatabase()
       const livePaths = new Set(uniqueSources.keys())
       const indexed = db.prepare(
         "SELECT file_path, file_signature FROM sessions WHERE projection_kind = 'legacy'"
       ).all() as IndexedSessionRow[]
       for (const row of indexed) {
-        if (!livePaths.has(row.file_path)) removeIndexedFile(db, row.file_path)
+        throwIfSearchIndexSyncCancelled(options.shouldCancel)
+        if (!livePaths.has(row.file_path)) removeIndexedFile(db, row.file_path, options.shouldCancel)
       }
     }
   })

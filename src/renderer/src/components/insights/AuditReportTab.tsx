@@ -3,6 +3,7 @@ import { formatTokenCount, SOURCE_COLORS, type Valuation } from './shared'
 import { useT } from '../../i18n'
 import { useReportJob } from './useReportJob'
 import type { ReportJobParams } from '../../../../shared/report-jobs'
+import { getPricingLabel, pricingLabelColor, pricingLabelBgColor } from '../../utils/pricing-label'
 
 type TimeRange = 'today' | 'week' | 'month' | '30d' | '90d' | 'all'
 
@@ -18,6 +19,10 @@ interface InsightsReport {
   totalActiveHours: number
   bySource: Array<{
     source: string
+    valuationCapability: {
+      status: 'billable-exact' | 'estimate-only' | 'unavailable'
+      reason: string
+    }
     sessions: number
     turns: number
     tokens: number
@@ -45,10 +50,19 @@ const TIME_RANGES: Array<{ id: TimeRange; labelKey: string }> = [
   { id: 'all', labelKey: 'renderer.audit_report.range_all' },
 ]
 
-function StatCard({ value, label, color }: { value: string; label: string; color?: string }) {
+function StatCard({ value, label, color, badge, badgeColor }: {
+  value: string; label: string; color?: string; badge?: string; badgeColor?: string
+}) {
   return (
     <div className="bg-surface rounded-lg p-3 border border-edge text-center">
-      <div className={`text-xl font-bold ${color || 'text-primary'}`}>{value}</div>
+      <div className="flex items-center justify-center gap-1.5">
+        <span className={`text-xl font-bold ${color || 'text-primary'}`}>{value}</span>
+        {badge && (
+          <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${badgeColor || ''}`}>
+            {badge}
+          </span>
+        )}
+      </div>
       <div className="text-[10px] text-muted mt-0.5">{label}</div>
     </div>
   )
@@ -167,9 +181,15 @@ export function AuditReportTab() {
             <StatCard value={String(report.totalSessions)} label={t('renderer.audit_report.sessions')} />
             <StatCard value={formatTokenCount(report.totalTokens)} label={t('renderer.audit_report.processed_tokens')} />
             <StatCard
-              value={report.valuation.usd === undefined ? t('renderer.audit_report.unpriced') : `$${report.valuation.usd.toFixed(2)}`}
+              value={report.valuation.usd === undefined && report.totalTokens > 0
+                ? t('renderer.cost_card.measured_not_priced')
+                : report.valuation.usd === undefined
+                  ? t('renderer.audit_report.unpriced')
+                  : `$${report.valuation.usd.toFixed(2)}`}
               label={t('renderer.audit_report.api_equivalent_coverage', { value0: report.valuation.coveragePercent.toFixed(1) })}
-              color="text-soft-amber"
+              color={pricingLabelColor(getPricingLabel(report.valuation))}
+              badge={t(`renderer.pricing.${getPricingLabel(report.valuation)}`)}
+              badgeColor={`${pricingLabelBgColor(getPricingLabel(report.valuation))} ${pricingLabelColor(getPricingLabel(report.valuation))}`}
             />
           </div>
 
@@ -179,15 +199,20 @@ export function AuditReportTab() {
             <div className="space-y-1">
               <div className="text-xs font-medium text-primary">{t('renderer.audit_report.by_source')}</div>
               {report.bySource.map(s => (
-                <div key={s.source} className="flex items-center gap-2 text-[11px]">
+                <div key={s.source} className="flex items-center gap-2 text-[11px]" title={s.valuationCapability.reason}>
                   <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: SOURCE_COLORS[s.source] || '#6b7280' }} />
                   <span className="text-secondary w-20 truncate">{s.source}</span>
                   <span className="text-muted">
                     {t('renderer.audit_report.source_sessions_tokens', { value0: s.sessions, value1: formatTokenCount(s.tokens) })}
                     {s.unavailableSessions > 0 ? ` · ${t('renderer.audit_report.unavailable_count', { value0: s.unavailableSessions })}` : ''}
                   </span>
-                  <span className="text-muted ml-auto">
-                    {s.valuation.usd === undefined ? t('renderer.audit_report.unpriced') : `$${s.valuation.usd.toFixed(2)} · ${s.valuation.coveragePercent.toFixed(1)}%`}
+                  <span className="text-muted ml-auto flex items-center gap-1">
+                    {s.valuation.usd === undefined
+                      ? t('renderer.audit_report.unpriced')
+                      : `$${s.valuation.usd.toFixed(2)} · ${s.valuation.coveragePercent.toFixed(1)}%`}
+                    <span className={`inline-flex rounded-full border px-1 py-px text-[9px] font-medium ${pricingLabelBgColor(getPricingLabel(s.valuation))} ${pricingLabelColor(getPricingLabel(s.valuation))}`}>
+                      {t(`renderer.pricing.${getPricingLabel(s.valuation)}`)}
+                    </span>
                   </span>
                 </div>
               ))}

@@ -141,7 +141,7 @@ describe('token accounting', () => {
       status: 'verified', inputCacheRelation: 'cache-subset-of-input', reasoningRelation: 'subset-of-output'
     })
     expect(HARNESS_USAGE_CONTRACTS.gemini).toMatchObject({
-      status: 'reserved', reasoningRelation: 'disjoint-from-visible-output'
+      status: 'verified', inputCacheRelation: 'cache-subset-of-input', reasoningRelation: 'disjoint-from-visible-output'
     })
     expect(normalizeGeminiOutput(10, 6)).toEqual({
       visibleOutputTokens: 10, reasoningTokens: 6, billableOutputTokens: 16

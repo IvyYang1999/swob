@@ -1,0 +1,1499 @@
+{
+  "generatedAt": "2026-08-02T00:00:00.000Z",
+  "activation": "blocked-pending-review",
+  "onlyInLiteLlm": [
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-coder",
+      "entryKey": "dashscope/qwen-coder"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-max",
+      "entryKey": "dashscope/qwen-max"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-plus",
+      "entryKey": "dashscope/qwen-plus"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-plus-2025-01-25",
+      "entryKey": "dashscope/qwen-plus-2025-01-25"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-plus-2025-04-28",
+      "entryKey": "dashscope/qwen-plus-2025-04-28"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-plus-2025-07-14",
+      "entryKey": "dashscope/qwen-plus-2025-07-14"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-turbo",
+      "entryKey": "dashscope/qwen-turbo"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-turbo-2024-11-01",
+      "entryKey": "dashscope/qwen-turbo-2024-11-01"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-turbo-2025-04-28",
+      "entryKey": "dashscope/qwen-turbo-2025-04-28"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen-turbo-latest",
+      "entryKey": "dashscope/qwen-turbo-latest"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen3-next-80b-a3b-instruct",
+      "entryKey": "dashscope/qwen3-next-80b-a3b-instruct"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen3-next-80b-a3b-thinking",
+      "entryKey": "dashscope/qwen3-next-80b-a3b-thinking"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen3-vl-235b-a22b-instruct",
+      "entryKey": "dashscope/qwen3-vl-235b-a22b-instruct"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen3-vl-235b-a22b-thinking",
+      "entryKey": "dashscope/qwen3-vl-235b-a22b-thinking"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen3-vl-32b-instruct",
+      "entryKey": "dashscope/qwen3-vl-32b-instruct"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen3-vl-32b-thinking",
+      "entryKey": "dashscope/qwen3-vl-32b-thinking"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwen3.7-max",
+      "entryKey": "dashscope/qwen3.7-max"
+    },
+    {
+      "provider": "alibaba",
+      "modelCanonical": "qwq-plus",
+      "entryKey": "dashscope/qwq-plus"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-3-7-sonnet-20250219",
+      "entryKey": "claude-3-7-sonnet-20250219"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-3-haiku-20240307",
+      "entryKey": "claude-3-haiku-20240307"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-3-opus-20240229",
+      "entryKey": "claude-3-opus-20240229"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-4-opus-20250514",
+      "entryKey": "claude-4-opus-20250514"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-4-sonnet-20250514",
+      "entryKey": "claude-4-sonnet-20250514"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-haiku-4-5-20251001",
+      "entryKey": "claude-haiku-4-5-20251001"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-opus-4-1-20250805",
+      "entryKey": "claude-opus-4-1-20250805"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-opus-4-20250514",
+      "entryKey": "claude-opus-4-20250514"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-opus-4-5-20251101",
+      "entryKey": "claude-opus-4-5-20251101"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-opus-4-6-20260205",
+      "entryKey": "claude-opus-4-6-20260205"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-opus-4-7-20260416",
+      "entryKey": "claude-opus-4-7-20260416"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-sonnet-4-20250514",
+      "entryKey": "claude-sonnet-4-20250514"
+    },
+    {
+      "provider": "anthropic",
+      "modelCanonical": "claude-sonnet-4-5-20250929",
+      "entryKey": "claude-sonnet-4-5-20250929"
+    },
+    {
+      "provider": "deepseek",
+      "modelCanonical": "deepseek-coder",
+      "entryKey": "deepseek/deepseek-coder"
+    },
+    {
+      "provider": "deepseek",
+      "modelCanonical": "deepseek-r1",
+      "entryKey": "deepseek/deepseek-r1"
+    },
+    {
+      "provider": "deepseek",
+      "modelCanonical": "deepseek-v3",
+      "entryKey": "deepseek/deepseek-v3"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "deep-research-pro-preview-12-2025",
+      "entryKey": "gemini/deep-research-pro-preview-12-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.0-flash-001",
+      "entryKey": "gemini/gemini-2.0-flash-001"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.0-flash-exp-image-generation",
+      "entryKey": "gemini-2.0-flash-exp-image-generation"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.0-flash-exp-image-generation",
+      "entryKey": "gemini/gemini-2.0-flash-exp-image-generation"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.0-flash-lite-001",
+      "entryKey": "gemini/gemini-2.0-flash-lite-001"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-computer-use-preview-10-2025",
+      "entryKey": "gemini/gemini-2.5-computer-use-preview-10-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-lite-preview-06-17",
+      "entryKey": "gemini/gemini-2.5-flash-lite-preview-06-17"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-lite-preview-09-2025",
+      "entryKey": "gemini/gemini-2.5-flash-lite-preview-09-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-native-audio-latest",
+      "entryKey": "gemini-2.5-flash-native-audio-latest"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-native-audio-latest",
+      "entryKey": "gemini/gemini-2.5-flash-native-audio-latest"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-native-audio-preview-09-2025",
+      "entryKey": "gemini-2.5-flash-native-audio-preview-09-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-native-audio-preview-09-2025",
+      "entryKey": "gemini/gemini-2.5-flash-native-audio-preview-09-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "entryKey": "gemini-2.5-flash-native-audio-preview-12-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "entryKey": "gemini/gemini-2.5-flash-native-audio-preview-12-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-preview-09-2025",
+      "entryKey": "gemini/gemini-2.5-flash-preview-09-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-preview-tts",
+      "entryKey": "gemini/gemini-2.5-flash-preview-tts"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-flash-preview-tts",
+      "entryKey": "gemini-2.5-flash-preview-tts"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-2.5-pro-preview-tts",
+      "entryKey": "gemini/gemini-2.5-pro-preview-tts"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-3-pro-image",
+      "entryKey": "gemini/gemini-3-pro-image"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-3.1-flash-image",
+      "entryKey": "gemini/gemini-3.1-flash-image"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-3.1-flash-lite-preview",
+      "entryKey": "gemini/gemini-3.1-flash-lite-preview"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-3.1-pro-preview-customtools",
+      "entryKey": "vertex_ai/gemini-3.1-pro-preview-customtools"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-3.1-pro-preview-customtools",
+      "entryKey": "gemini/gemini-3.1-pro-preview-customtools"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-embedding-001",
+      "entryKey": "gemini/gemini-embedding-001"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-embedding-2",
+      "entryKey": "vertex_ai/gemini-embedding-2"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-embedding-2",
+      "entryKey": "gemini/gemini-embedding-2"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-embedding-2-preview",
+      "entryKey": "vertex_ai/gemini-embedding-2-preview"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-embedding-2-preview",
+      "entryKey": "gemini/gemini-embedding-2-preview"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-exp-1114",
+      "entryKey": "gemini/gemini-exp-1114"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-exp-1206",
+      "entryKey": "gemini/gemini-exp-1206"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-exp-1206",
+      "entryKey": "gemini-exp-1206"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-flash-latest",
+      "entryKey": "gemini/gemini-flash-latest"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-flash-latest",
+      "entryKey": "gemini-flash-latest"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-flash-lite-latest",
+      "entryKey": "gemini/gemini-flash-lite-latest"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-flash-lite-latest",
+      "entryKey": "gemini-flash-lite-latest"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-gemma-2-27b-it",
+      "entryKey": "gemini/gemini-gemma-2-27b-it"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-gemma-2-9b-it",
+      "entryKey": "gemini/gemini-gemma-2-9b-it"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-live-2.5-flash-preview-native-audio-09-2025",
+      "entryKey": "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-pro-latest",
+      "entryKey": "gemini-pro-latest"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-pro-latest",
+      "entryKey": "gemini/gemini-pro-latest"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-robotics-er-1.5-preview",
+      "entryKey": "gemini/gemini-robotics-er-1.5-preview"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemma-3-27b-it",
+      "entryKey": "gemini/gemma-3-27b-it"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "learnlm-1.5-pro-experimental",
+      "entryKey": "gemini/learnlm-1.5-pro-experimental"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "lyria-3-clip-preview",
+      "entryKey": "gemini/lyria-3-clip-preview"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "lyria-3-pro-preview",
+      "entryKey": "gemini/lyria-3-pro-preview"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "vertex_ai/deepseek-ai/deepseek-ocr-maas",
+      "entryKey": "vertex_ai/deepseek-ai/deepseek-ocr-maas"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "vertex_ai/xai/grok-4.1-fast-non-reasoning",
+      "entryKey": "vertex_ai/xai/grok-4.1-fast-non-reasoning"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "vertex_ai/xai/grok-4.1-fast-reasoning",
+      "entryKey": "vertex_ai/xai/grok-4.1-fast-reasoning"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "vertex_ai/xai/grok-4.20-non-reasoning",
+      "entryKey": "vertex_ai/xai/grok-4.20-non-reasoning"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "vertex_ai/xai/grok-4.20-reasoning",
+      "entryKey": "vertex_ai/xai/grok-4.20-reasoning"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "codestral-2405",
+      "entryKey": "mistral/codestral-2405"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "codestral-latest",
+      "entryKey": "mistral/codestral-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "codestral-mamba-latest",
+      "entryKey": "mistral/codestral-mamba-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "devstral-latest",
+      "entryKey": "mistral/devstral-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "devstral-medium-2507",
+      "entryKey": "mistral/devstral-medium-2507"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "devstral-medium-latest",
+      "entryKey": "mistral/devstral-medium-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "devstral-small-2505",
+      "entryKey": "mistral/devstral-small-2505"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "devstral-small-2507",
+      "entryKey": "mistral/devstral-small-2507"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "devstral-small-latest",
+      "entryKey": "mistral/devstral-small-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "labs-devstral-small-2512",
+      "entryKey": "mistral/labs-devstral-small-2512"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "magistral-medium-1-2-2509",
+      "entryKey": "mistral/magistral-medium-1-2-2509"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "magistral-medium-2506",
+      "entryKey": "mistral/magistral-medium-2506"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "magistral-medium-2509",
+      "entryKey": "mistral/magistral-medium-2509"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "magistral-medium-latest",
+      "entryKey": "mistral/magistral-medium-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "magistral-small-1-2-2509",
+      "entryKey": "mistral/magistral-small-1-2-2509"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "magistral-small-2506",
+      "entryKey": "mistral/magistral-small-2506"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "magistral-small-latest",
+      "entryKey": "mistral/magistral-small-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "ministral-3-14b-2512",
+      "entryKey": "mistral/ministral-3-14b-2512"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "ministral-3-3b-2512",
+      "entryKey": "mistral/ministral-3-3b-2512"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "ministral-3-8b-2512",
+      "entryKey": "mistral/ministral-3-8b-2512"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "ministral-8b-2512",
+      "entryKey": "mistral/ministral-8b-2512"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "ministral-8b-latest",
+      "entryKey": "mistral/ministral-8b-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-large-2402",
+      "entryKey": "mistral/mistral-large-2402"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-large-2407",
+      "entryKey": "mistral/mistral-large-2407"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-large-2411",
+      "entryKey": "mistral/mistral-large-2411"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-large-3",
+      "entryKey": "mistral/mistral-large-3"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-large-latest",
+      "entryKey": "mistral/mistral-large-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-medium",
+      "entryKey": "mistral/mistral-medium"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-medium-2312",
+      "entryKey": "mistral/mistral-medium-2312"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-medium-2505",
+      "entryKey": "mistral/mistral-medium-2505"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-medium-2508",
+      "entryKey": "mistral/mistral-medium-2508"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-medium-2604",
+      "entryKey": "mistral/mistral-medium-2604"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-medium-3-1-2508",
+      "entryKey": "mistral/mistral-medium-3-1-2508"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-medium-3-5",
+      "entryKey": "mistral/mistral-medium-3-5"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-medium-latest",
+      "entryKey": "mistral/mistral-medium-latest"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-small",
+      "entryKey": "mistral/mistral-small"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-small-3-2-2506",
+      "entryKey": "mistral/mistral-small-3-2-2506"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "open-codestral-mamba",
+      "entryKey": "mistral/open-codestral-mamba"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "open-mistral-7b",
+      "entryKey": "mistral/open-mistral-7b"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "open-mistral-nemo",
+      "entryKey": "mistral/open-mistral-nemo"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "open-mistral-nemo-2407",
+      "entryKey": "mistral/open-mistral-nemo-2407"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "open-mixtral-8x22b",
+      "entryKey": "mistral/open-mixtral-8x22b"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "open-mixtral-8x7b",
+      "entryKey": "mistral/open-mixtral-8x7b"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "pixtral-12b-2409",
+      "entryKey": "mistral/pixtral-12b-2409"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "pixtral-large-2411",
+      "entryKey": "mistral/pixtral-large-2411"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "pixtral-large-latest",
+      "entryKey": "mistral/pixtral-large-latest"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "kimi-latest",
+      "entryKey": "moonshot/kimi-latest"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "kimi-latest-128k",
+      "entryKey": "moonshot/kimi-latest-128k"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "kimi-latest-32k",
+      "entryKey": "moonshot/kimi-latest-32k"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "kimi-latest-8k",
+      "entryKey": "moonshot/kimi-latest-8k"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "kimi-thinking-preview",
+      "entryKey": "moonshot/kimi-thinking-preview"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "moonshot-v1-128k-0430",
+      "entryKey": "moonshot/moonshot-v1-128k-0430"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "moonshot-v1-128k-vision-preview",
+      "entryKey": "moonshot/moonshot-v1-128k-vision-preview"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "moonshot-v1-32k-0430",
+      "entryKey": "moonshot/moonshot-v1-32k-0430"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "moonshot-v1-32k-vision-preview",
+      "entryKey": "moonshot/moonshot-v1-32k-vision-preview"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "moonshot-v1-8k-0430",
+      "entryKey": "moonshot/moonshot-v1-8k-0430"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "moonshot-v1-8k-vision-preview",
+      "entryKey": "moonshot/moonshot-v1-8k-vision-preview"
+    },
+    {
+      "provider": "moonshot",
+      "modelCanonical": "moonshot-v1-auto",
+      "entryKey": "moonshot/moonshot-v1-auto"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "codex-mini-latest",
+      "entryKey": "codex-mini-latest"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-3.5-turbo",
+      "entryKey": "ft:gpt-3.5-turbo"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-3.5-turbo-0125",
+      "entryKey": "ft:gpt-3.5-turbo-0125"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-3.5-turbo-0613",
+      "entryKey": "ft:gpt-3.5-turbo-0613"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-3.5-turbo-1106",
+      "entryKey": "ft:gpt-3.5-turbo-1106"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-4-0613",
+      "entryKey": "ft:gpt-4-0613"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-4.1-2025-04-14",
+      "entryKey": "ft:gpt-4.1-2025-04-14"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-4.1-mini-2025-04-14",
+      "entryKey": "ft:gpt-4.1-mini-2025-04-14"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-4.1-nano-2025-04-14",
+      "entryKey": "ft:gpt-4.1-nano-2025-04-14"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-4o-2024-08-06",
+      "entryKey": "ft:gpt-4o-2024-08-06"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-4o-2024-11-20",
+      "entryKey": "ft:gpt-4o-2024-11-20"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:gpt-4o-mini-2024-07-18",
+      "entryKey": "ft:gpt-4o-mini-2024-07-18"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "ft:o4-mini-2025-04-16",
+      "entryKey": "ft:o4-mini-2025-04-16"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-3.5-turbo-0125",
+      "entryKey": "gpt-3.5-turbo-0125"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4-0125-preview",
+      "entryKey": "gpt-4-0125-preview"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4-0314",
+      "entryKey": "gpt-4-0314"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4-0613",
+      "entryKey": "gpt-4-0613"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4-1106-preview",
+      "entryKey": "gpt-4-1106-preview"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4-turbo-2024-04-09",
+      "entryKey": "gpt-4-turbo-2024-04-09"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4-turbo-preview",
+      "entryKey": "gpt-4-turbo-preview"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4.1-2025-04-14",
+      "entryKey": "gpt-4.1-2025-04-14"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4.1-mini-2025-04-14",
+      "entryKey": "gpt-4.1-mini-2025-04-14"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4.1-nano-2025-04-14",
+      "entryKey": "gpt-4.1-nano-2025-04-14"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-2024-05-13",
+      "entryKey": "gpt-4o-2024-05-13"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-2024-08-06",
+      "entryKey": "gpt-4o-2024-08-06"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-2024-11-20",
+      "entryKey": "gpt-4o-2024-11-20"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-audio-preview-2024-12-17",
+      "entryKey": "gpt-4o-audio-preview-2024-12-17"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-audio-preview-2025-06-03",
+      "entryKey": "gpt-4o-audio-preview-2025-06-03"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-2024-07-18",
+      "entryKey": "gpt-4o-mini-2024-07-18"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-audio-preview-2024-12-17",
+      "entryKey": "gpt-4o-mini-audio-preview-2024-12-17"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-realtime-preview-2024-12-17",
+      "entryKey": "gpt-4o-mini-realtime-preview-2024-12-17"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-search-preview",
+      "entryKey": "gpt-4o-mini-search-preview"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-search-preview-2025-03-11",
+      "entryKey": "gpt-4o-mini-search-preview-2025-03-11"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-transcribe-2025-03-20",
+      "entryKey": "gpt-4o-mini-transcribe-2025-03-20"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-transcribe-2025-12-15",
+      "entryKey": "gpt-4o-mini-transcribe-2025-12-15"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-tts-2025-03-20",
+      "entryKey": "gpt-4o-mini-tts-2025-03-20"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-tts-2025-12-15",
+      "entryKey": "gpt-4o-mini-tts-2025-12-15"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-realtime-preview-2024-12-17",
+      "entryKey": "gpt-4o-realtime-preview-2024-12-17"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-realtime-preview-2025-06-03",
+      "entryKey": "gpt-4o-realtime-preview-2025-06-03"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-search-preview-2025-03-11",
+      "entryKey": "gpt-4o-search-preview-2025-03-11"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-transcribe-diarize",
+      "entryKey": "gpt-4o-transcribe-diarize"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-2025-08-07",
+      "entryKey": "gpt-5-2025-08-07"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-chat",
+      "entryKey": "gpt-5-chat"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-chat-latest",
+      "entryKey": "gpt-5-chat-latest"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-codex",
+      "entryKey": "gpt-5-codex"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-mini-2025-08-07",
+      "entryKey": "gpt-5-mini-2025-08-07"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-nano-2025-08-07",
+      "entryKey": "gpt-5-nano-2025-08-07"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-pro-2025-10-06",
+      "entryKey": "gpt-5-pro-2025-10-06"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-search-api",
+      "entryKey": "gpt-5-search-api"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5-search-api-2025-10-14",
+      "entryKey": "gpt-5-search-api-2025-10-14"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.1-2025-11-13",
+      "entryKey": "gpt-5.1-2025-11-13"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.1-chat-latest",
+      "entryKey": "gpt-5.1-chat-latest"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.1-codex",
+      "entryKey": "gpt-5.1-codex"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.1-codex-max",
+      "entryKey": "gpt-5.1-codex-max"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.2-2025-12-11",
+      "entryKey": "gpt-5.2-2025-12-11"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.2-chat-latest",
+      "entryKey": "gpt-5.2-chat-latest"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.2-codex",
+      "entryKey": "gpt-5.2-codex"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.2-pro-2025-12-11",
+      "entryKey": "gpt-5.2-pro-2025-12-11"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.3-chat-latest",
+      "entryKey": "gpt-5.3-chat-latest"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.4-2026-03-05",
+      "entryKey": "gpt-5.4-2026-03-05"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.4-mini-2026-03-17",
+      "entryKey": "gpt-5.4-mini-2026-03-17"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.4-nano-2026-03-17",
+      "entryKey": "gpt-5.4-nano-2026-03-17"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.4-pro-2026-03-05",
+      "entryKey": "gpt-5.4-pro-2026-03-05"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.5-2026-04-23",
+      "entryKey": "gpt-5.5-2026-04-23"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.5-pro-2026-04-23",
+      "entryKey": "gpt-5.5-pro-2026-04-23"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-5.6",
+      "entryKey": "gpt-5.6"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-audio-1.5",
+      "entryKey": "gpt-audio-1.5"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-audio-2025-08-28",
+      "entryKey": "gpt-audio-2025-08-28"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-audio-mini-2025-10-06",
+      "entryKey": "gpt-audio-mini-2025-10-06"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-audio-mini-2025-12-15",
+      "entryKey": "gpt-audio-mini-2025-12-15"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-image-1.5-2025-12-16",
+      "entryKey": "gpt-image-1.5-2025-12-16"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-image-2-2026-04-21",
+      "entryKey": "gpt-image-2-2026-04-21"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-realtime-1.5",
+      "entryKey": "gpt-realtime-1.5"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-realtime-2.1",
+      "entryKey": "gpt-realtime-2.1"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-realtime-2.1-mini",
+      "entryKey": "gpt-realtime-2.1-mini"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-realtime-2025-08-28",
+      "entryKey": "gpt-realtime-2025-08-28"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-realtime-mini-2025-10-06",
+      "entryKey": "gpt-realtime-mini-2025-10-06"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-realtime-mini-2025-12-15",
+      "entryKey": "gpt-realtime-mini-2025-12-15"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "o1-2024-12-17",
+      "entryKey": "o1-2024-12-17"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "o1-pro-2025-03-19",
+      "entryKey": "o1-pro-2025-03-19"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "o3-2025-04-16",
+      "entryKey": "o3-2025-04-16"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "o3-deep-research-2025-06-26",
+      "entryKey": "o3-deep-research-2025-06-26"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "o3-mini-2025-01-31",
+      "entryKey": "o3-mini-2025-01-31"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "o3-pro-2025-06-10",
+      "entryKey": "o3-pro-2025-06-10"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "o4-mini-2025-04-16",
+      "entryKey": "o4-mini-2025-04-16"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "o4-mini-deep-research-2025-06-26",
+      "entryKey": "o4-mini-deep-research-2025-06-26"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "omni-moderation-2024-09-26",
+      "entryKey": "omni-moderation-2024-09-26"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "omni-moderation-latest",
+      "entryKey": "omni-moderation-latest"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "text-embedding-3-large",
+      "entryKey": "text-embedding-3-large"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "text-embedding-3-small",
+      "entryKey": "text-embedding-3-small"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "text-embedding-ada-002",
+      "entryKey": "text-embedding-ada-002"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "text-embedding-ada-002-v2",
+      "entryKey": "text-embedding-ada-002-v2"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "text-moderation-007",
+      "entryKey": "text-moderation-007"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "text-moderation-latest",
+      "entryKey": "text-moderation-latest"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "text-moderation-stable",
+      "entryKey": "text-moderation-stable"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-2",
+      "entryKey": "xai/grok-2"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-2-latest",
+      "entryKey": "xai/grok-2-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-2-vision",
+      "entryKey": "xai/grok-2-vision"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-2-vision-latest",
+      "entryKey": "xai/grok-2-vision-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-3-beta",
+      "entryKey": "xai/grok-3-beta"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-3-fast-beta",
+      "entryKey": "xai/grok-3-fast-beta"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-3-fast-latest",
+      "entryKey": "xai/grok-3-fast-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-3-latest",
+      "entryKey": "xai/grok-3-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-3-mini-beta",
+      "entryKey": "xai/grok-3-mini-beta"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-3-mini-fast-beta",
+      "entryKey": "xai/grok-3-mini-fast-beta"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-3-mini-fast-latest",
+      "entryKey": "xai/grok-3-mini-fast-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-3-mini-latest",
+      "entryKey": "xai/grok-3-mini-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4",
+      "entryKey": "xai/grok-4"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4-1-fast",
+      "entryKey": "xai/grok-4-1-fast"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4-1-fast-non-reasoning-latest",
+      "entryKey": "xai/grok-4-1-fast-non-reasoning-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4-1-fast-reasoning-latest",
+      "entryKey": "xai/grok-4-1-fast-reasoning-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4-latest",
+      "entryKey": "xai/grok-4-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4.20-0309-reasoning",
+      "entryKey": "xai/grok-4.20-0309-reasoning"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4.20-beta-0309-non-reasoning",
+      "entryKey": "xai/grok-4.20-beta-0309-non-reasoning"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4.20-beta-0309-reasoning",
+      "entryKey": "xai/grok-4.20-beta-0309-reasoning"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4.20-multi-agent-beta-0309",
+      "entryKey": "xai/grok-4.20-multi-agent-beta-0309"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4.3-latest",
+      "entryKey": "xai/grok-4.3-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-4.5-latest",
+      "entryKey": "xai/grok-4.5-latest"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-beta",
+      "entryKey": "xai/grok-beta"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-code-fast",
+      "entryKey": "xai/grok-code-fast"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-code-fast-1-0825",
+      "entryKey": "xai/grok-code-fast-1-0825"
+    },
+    {
+      "provider": "xai",
+      "modelCanonical": "grok-vision-beta",
+      "entryKey": "xai/grok-vision-beta"
+    }
+  ],
+  "priceDisagreements": [
+    {
+      "provider": "deepseek",
+      "modelCanonical": "deepseek-chat",
+      "genai": {
+        "input": 0.27,
+        "output": 1.1,
+        "cacheRead": 0.07
+      },
+      "litellm": {
+        "input": 0.28,
+        "output": 0.42
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "deepseek",
+      "modelCanonical": "deepseek-chat",
+      "genai": {
+        "input": 0.27,
+        "output": 1.1,
+        "cacheRead": 0.07
+      },
+      "litellm": {
+        "input": 0.28,
+        "output": 0.42
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "deepseek",
+      "modelCanonical": "deepseek-reasoner",
+      "genai": {
+        "input": 0.55,
+        "output": 2.19,
+        "cacheRead": 0.14
+      },
+      "litellm": {
+        "input": 0.28,
+        "output": 0.42
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "deepseek",
+      "modelCanonical": "deepseek-reasoner",
+      "genai": {
+        "input": 0.55,
+        "output": 2.19,
+        "cacheRead": 0.14
+      },
+      "litellm": {
+        "input": 0.28,
+        "output": 0.42
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "deepseek",
+      "modelCanonical": "deepseek-v3.2",
+      "genai": {
+        "input": 0.2288,
+        "output": 0.3432
+      },
+      "litellm": {
+        "input": 0.28,
+        "output": 0.39999999999999997
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-1.5-flash",
+      "genai": {
+        "input": 0.075,
+        "output": 0.3,
+        "cacheRead": 0.01875
+      },
+      "litellm": {
+        "input": 0.075,
+        "output": 0
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "google",
+      "modelCanonical": "gemini-3.1-flash-image-preview",
+      "genai": {
+        "input": 0.5,
+        "output": 3
+      },
+      "litellm": {
+        "input": 0.25,
+        "output": 1.5
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "mistral",
+      "modelCanonical": "mistral-small-latest",
+      "genai": {
+        "input": 0.1,
+        "output": 0.3
+      },
+      "litellm": {
+        "input": 0.06,
+        "output": 0.18
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-4o-mini-tts",
+      "genai": {
+        "input": 0.6,
+        "output": 12
+      },
+      "litellm": {
+        "input": 2.5,
+        "output": 10
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-image-2",
+      "genai": {
+        "input": 5,
+        "output": 30,
+        "cacheRead": 1.25
+      },
+      "litellm": {
+        "input": 5,
+        "output": 10
+      },
+      "disposition": "pending-official-review"
+    },
+    {
+      "provider": "openai",
+      "modelCanonical": "gpt-realtime-2",
+      "genai": {
+        "input": 4,
+        "output": 24,
+        "cacheRead": 0.4
+      },
+      "litellm": {
+        "input": 4,
+        "output": 16
+      },
+      "disposition": "pending-official-review"
+    }
+  ],
+  "sourceRevisions": {
+    "genaiPrices": "3a6b749c3da79d63eceb95572bd394828220304e",
+    "liteLlm": "ba480a619f4e7602fbe12c23d8b823a0b4810d07",
+    "modelsDev": "b6d3ce625ffcdc5e5b0e9916e26eaa13f95918fc"
+  },
+  "candidateRevision": "candidate-2026-08-02.v1",
+  "candidateHash": "f1211ec162754c1c542cc881324be266f4404d2b6ecc718ca12f59700a9efdb2",
+  "counts": {
+    "tokenRules": 518,
+    "unitRules": 4,
+    "providers": [
+      "alibaba",
+      "anthropic",
+      "deepseek",
+      "google",
+      "mistral",
+      "moonshot",
+      "openai",
+      "xai"
+    ]
+  }
+}

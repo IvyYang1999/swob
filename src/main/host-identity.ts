@@ -103,15 +103,29 @@ export function getOrCreateHostIdentity(options: HostIdentityOptions = {}): stri
       createdAt: new Date((options.now || Date.now)()).toISOString()
     }
     if (!parseRecord(JSON.stringify(record))) throw new HostIdentityError('corrupt')
+    // Never expose the final path while its JSON is only partially written.
+    // A same-directory hard link is an atomic no-clobber publish: exactly one
+    // process wins, every loser observes that winner's fully fsynced inode, and
+    // existing corrupt/unsafe evidence is never replaced.
+    const tempPath = path.join(
+      dirPath,
+      `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`
+    )
     let descriptor: number | null = null
     try {
-      descriptor = fs.openSync(filePath, 'wx', 0o600)
+      descriptor = fs.openSync(tempPath, 'wx', 0o600)
       fs.writeFileSync(descriptor, JSON.stringify(record), 'utf8')
       fs.fsyncSync(descriptor)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      fs.closeSync(descriptor)
+      descriptor = null
+      try {
+        fs.linkSync(tempPath, filePath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      }
     } finally {
       if (descriptor !== null) fs.closeSync(descriptor)
+      try { fs.unlinkSync(tempPath) } catch { /* best-effort private temp cleanup */ }
     }
     try {
       const dirDescriptor = fs.openSync(dirPath, fs.constants.O_RDONLY)
@@ -119,6 +133,24 @@ export function getOrCreateHostIdentity(options: HostIdentityOptions = {}): stri
     } catch { /* best effort on platforms that cannot fsync directories */ }
     return readExisting(filePath).identity
   } catch (error) {
+    if (error instanceof HostIdentityError) throw error
+    throw new HostIdentityError('unreadable', error)
+  }
+}
+
+/**
+ * Read the already-established host identity without creating directories or
+ * files. Read-only diagnostics must never mutate machine state merely to decide
+ * whether a synced Library lock belongs to this host.
+ */
+export function readHostIdentity(options: HostIdentityOptions = {}): string | null {
+  const filePath = storagePathForRuntime(options)
+  try {
+    return readExisting(filePath).identity
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' ||
+      (error instanceof HostIdentityError &&
+        (error.cause as NodeJS.ErrnoException | undefined)?.code === 'ENOENT')) return null
     if (error instanceof HostIdentityError) throw error
     throw new HostIdentityError('unreadable', error)
   }

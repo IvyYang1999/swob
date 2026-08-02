@@ -114,6 +114,10 @@ export function buildResumeLaunchSpec(
     assertQoderResumeSessionId(sessionId)
     executable = 'qodercli'
     args = ['-r', sessionId]
+  } else if (source === 'gemini') {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(sessionId)) throw new Error('gemini session id 格式不合法')
+    executable = 'gemini'
+    args = ['--resume', sessionId]
   } else {
     const executableBySource: Partial<Record<SessionSource, string>> = {
       'claude-code': 'claude',
@@ -235,6 +239,12 @@ function buildTerminalResumeCommand(
     if (cwd && fs.existsSync(cwd)) {
       return `cd ${shellQuote(cwd)} && ${cmd}`
     }
+    return cmd
+  }
+  if (source === 'gemini') {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(sessionId)) throw new Error('gemini session id 格式不合法')
+    cmd = `gemini --resume ${quotedSessionId}`
+    if (cwd && fs.existsSync(cwd)) return `cd ${shellQuote(cwd)} && ${cmd}`
     return cmd
   }
   const newSourceCmds: Partial<Record<SessionSource, string>> = {

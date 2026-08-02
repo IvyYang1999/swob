@@ -1,0 +1,42 @@
+name: Pricing upstream drift
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pending-review-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Fetch pinned upstream inputs
+        run: |
+          git clone --filter=blob:none https://github.com/pydantic/genai-prices.git "$RUNNER_TEMP/genai-prices"
+          git clone --depth 1 https://github.com/BerriAI/litellm.git "$RUNNER_TEMP/litellm"
+          git clone --depth 1 https://github.com/anomalyco/models.dev.git "$RUNNER_TEMP/models-dev"
+      - name: Generate blocked candidate and drift list
+        run: |
+          node scripts/pricing/update-catalog-candidate.mjs \
+            --genai "$RUNNER_TEMP/genai-prices" \
+            --litellm "$RUNNER_TEMP/litellm" \
+            --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --models-dev-revision "$(git -C "$RUNNER_TEMP/models-dev" rev-parse HEAD)"
+          test "$(jq -r .status pricing/candidates/pending-review.json)" = pending-review
+          test "$(jq -r .review.activationAllowed pricing/candidates/pending-review.json)" = false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pricing-pending-review
+          path: |
+            pricing/candidates/pending-review.json
+            pricing/candidates/drift-report.json
+          if-no-files-found: error
+          retention-days: 30

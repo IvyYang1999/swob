@@ -15,7 +15,7 @@ import {
   type LibrarySyncOutcome
 } from './library-manager'
 import { parseSessionFile, buildSessionSummary, resolvePhysicalSessionId } from './session-loader'
-import { buildCodexSessionSummary, loadCodexRawMessages } from './codex-loader'
+import { loadCodexRawMessages, loadCodexSessionRecordWithRaw } from './codex-loader'
 import { buildCursorSessionSummary, loadCursorRawMessages } from './cursor-loader'
 import { detectSessionSourceFromPath } from './session-source'
 import {
@@ -145,17 +145,18 @@ export async function runLibraryWorkerRequest(
         : source.source === 'cursor'
           ? { loadRaw: () => loadCursorRawMessages(source.filePath, source.sessionId) }
           : {})
-    })), { prune: request.prune })
+    })), { prune: request.prune, shouldCancel })
     return { kind: 'search-write' }
   }
   if (request.type === 'search-canonical-index') {
     await indexCanonicalSession(request.sessionId, request.records, {
-      includeThinking: request.includeThinking
+      includeThinking: request.includeThinking,
+      shouldCancel
     })
     return { kind: 'search-write' }
   }
   if (request.type === 'search-canonical-tombstone') {
-    await tombstoneCanonicalSession(request.sessionRecordId)
+    await tombstoneCanonicalSession(request.sessionRecordId, { shouldCancel })
     return { kind: 'search-write' }
   }
   initLibrary(request.root, {
@@ -185,7 +186,9 @@ export async function runLibraryWorkerRequest(
   let summary: SessionSummary | null = null
   let parsedRaw: Awaited<ReturnType<typeof parseSessionFile>> | null = null
   if (detectedSource === 'codex') {
-    summary = await buildCodexSessionSummary(request.filePath)
+    const record = await loadCodexSessionRecordWithRaw(request.filePath)
+    summary = record.summary
+    parsedRaw = record.rawMessages
   } else if (detectedSource === 'cursor') {
     summary = await buildCursorSessionSummary(request.filePath)
   } else {
@@ -204,7 +207,14 @@ export async function runLibraryWorkerRequest(
         setSessionTurnCount(maintainedDir, summary!.turnCount)
       }
       if (parsedRaw) {
-        updateTranscriptFromRaw(summary!.sessionId, parsedRaw, 'claude-code', request.filePath, undefined, maintainedDir)
+        updateTranscriptFromRaw(
+          summary!.sessionId,
+          parsedRaw,
+          detectedSource === 'codex' ? 'codex' : 'claude-code',
+          request.filePath,
+          undefined,
+          maintainedDir
+        )
       } else {
         await updateTranscript(summary!.sessionId, undefined, maintainedDir)
       }
@@ -380,23 +390,56 @@ export class LibraryWorkerClient {
   }
 
   async close(): Promise<void> {
-    if (this.closePromise) return this.closePromise
+    if (this.closePromise) {
+      // Application shutdown is stronger than an in-progress graceful
+      // retirement. Upgrade it by signalling every accepted request so quit
+      // is not held hostage by a large parse that no longer needs to finish.
+      this.cancelPending()
+      return this.closePromise
+    }
     this.closing = true
-    this.closePromise = this.finishClose()
+    this.closePromise = this.finishClose(true)
     return this.closePromise
   }
 
-  private async finishClose(): Promise<void> {
+  /**
+   * Stop accepting new work, let every request already handed to this worker
+   * reach its reply boundary, then shut the isolate down. This is the safe
+   * recycling path: close() intentionally cancels queued work for application
+   * shutdown, while retire() must never discard a sibling live sync merely
+   * because another large source finished first.
+   */
+  async retire(): Promise<void> {
+    if (this.closePromise) return this.closePromise
+    this.closing = true
+    this.closePromise = this.finishClose(false)
+    return this.closePromise
+  }
+
+  /**
+   * Cooperatively cancel active and queued requests without waiting for the
+   * worker to exit. Coordinators must signal this before waiting for their
+   * active drain, otherwise close() cannot reach the shared cancel flag.
+   */
+  cancelPending(): void {
+    for (const pending of this.pending.values()) {
+      if (pending.cancelFlag) Atomics.store(pending.cancelFlag, 0, 1)
+    }
+  }
+
+  private async finishClose(cancelPending: boolean): Promise<void> {
     const worker = this.worker
     if (!worker) return
 
-    for (const pending of this.pending.values()) {
-      if (pending.cancelFlag) {
-        // Some background callers intentionally do not await their work. Once
-        // shutdown initiates cancellation, mark that expected rejection as
-        // observed without changing the promise seen by an awaiting caller.
-        if (pending.promise) void pending.promise.catch(() => {})
-        Atomics.store(pending.cancelFlag, 0, 1)
+    if (cancelPending) {
+      for (const pending of this.pending.values()) {
+        if (pending.cancelFlag) {
+          // Some background callers intentionally do not await their work. Once
+          // shutdown initiates cancellation, mark that expected rejection as
+          // observed without changing the promise seen by an awaiting caller.
+          if (pending.promise) void pending.promise.catch(() => {})
+          Atomics.store(pending.cancelFlag, 0, 1)
+        }
       }
     }
 

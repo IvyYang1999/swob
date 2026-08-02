@@ -79,10 +79,10 @@ describe('buildInsights', () => {
       expect(result.totalOutputTokens).toBe(0)
       expect(result.totalSessions).toBe(0)
       expect(result.totalTurns).toBe(0)
-      expect(result.bySource).toHaveLength(13)
+      expect(result.bySource).toHaveLength(14)
       expect(result.bySource.map((s) => s.source)).toEqual([
         'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror',
-        'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae'
+        'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae', 'gemini'
       ])
       expect(result.bySource.every(s => s.totalTokens === 0)).toBe(true)
       expect(result.byProject).toHaveLength(0)

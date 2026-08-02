@@ -21,7 +21,8 @@ const SOURCE_COLORS: Record<string, string> = {
   opencode: '#06b6d4',
   zcode: '#ef4444',
   qoder: '#06b6d4',
-  trae: '#c084fc'
+  trae: '#c084fc',
+  gemini: '#4285f4'
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -31,10 +32,11 @@ const SOURCE_LABELS: Record<string, string> = {
   opencode: 'OpenCode',
   zcode: 'Zcode',
   qoder: 'Qoder',
-  trae: 'Trae'
+  trae: 'Trae',
+  gemini: 'Gemini CLI'
 }
 
-const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'qoder', 'trae']
+const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'qoder', 'trae', 'gemini']
 
 interface Node {
   id: string

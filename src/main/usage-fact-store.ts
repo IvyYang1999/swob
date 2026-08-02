@@ -9,6 +9,7 @@ import { PRICING_CATALOG_VERSION } from './pricing-catalog'
 import { searchDatabasePath } from './search-index'
 import { isActivityDay, localActivityDay } from './activity-time'
 import { providerOutcomeForSession } from './session-provider-outcome'
+import { isPerCallSqliteAgentAccounting } from './sqlite-agent-usage'
 import {
   USAGE_FACT_SCHEMA_VERSION,
   type AnalysisDimension,
@@ -119,6 +120,12 @@ interface UsageFactRow {
   revision_notice_json: string | null
 }
 
+// Storage migrations and fact-derivation changes are independent concerns.
+// Schema v7 only changes the derivation for per-call SQLite agents; retaining
+// v6 here keeps every other provider's already-verified fact signature valid.
+const BASE_USAGE_FACT_DERIVATION_VERSION = 6
+const PER_CALL_SQLITE_AGENT_DERIVATION_VERSION = 7
+
 function usageDatabasePath(): string {
   return process.env.SWOB_USAGE_INDEX_PATH || path.join(path.dirname(searchDatabasePath()), 'usage-facts.db')
 }
@@ -141,7 +148,31 @@ function ensureSchema(db: Database.Database): void {
     'SELECT schema_version FROM usage_schema_meta WHERE singleton = 1'
   ).get() as { schema_version: number } | undefined
   const metaColumns = db.prepare('PRAGMA table_info(usage_schema_meta)').all() as Array<{ name: string }>
-  const metaIsCurrent = version?.schema_version === USAGE_FACT_SCHEMA_VERSION &&
+  let effectiveVersion = version?.schema_version
+  const canMigrateV6InPlace = effectiveVersion === 6 &&
+    metaColumns.some((column) => column.name === 'revision') &&
+    Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_facts'").get())
+  if (canMigrateV6InPlace) {
+    const factColumns = new Set(
+      (db.prepare('PRAGMA table_info(usage_facts)').all() as Array<{ name: string }>)
+        .map((column) => column.name)
+    )
+    db.transaction(() => {
+      if (!factColumns.has('superseded')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0 CHECK(superseded IN (0, 1))')
+      }
+      if (!factColumns.has('superseded_at')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN superseded_at TEXT')
+      }
+      if (!factColumns.has('superseded_by')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN superseded_by TEXT')
+      }
+      db.prepare('UPDATE usage_schema_meta SET schema_version = ? WHERE singleton = 1')
+        .run(USAGE_FACT_SCHEMA_VERSION)
+    })()
+    effectiveVersion = USAGE_FACT_SCHEMA_VERSION
+  }
+  const metaIsCurrent = effectiveVersion === USAGE_FACT_SCHEMA_VERSION &&
     metaColumns.some((column) => column.name === 'revision')
   if (!metaIsCurrent) {
     db.exec(`
@@ -225,7 +256,10 @@ function ensureSchema(db: Database.Database): void {
       pricing_trace_json TEXT NOT NULL,
       revision_notice_json TEXT,
       revision_notice_zh TEXT,
-      revision_notice_en TEXT
+      revision_notice_en TEXT,
+      superseded INTEGER NOT NULL DEFAULT 0 CHECK(superseded IN (0, 1)),
+      superseded_at TEXT,
+      superseded_by TEXT
     );
     CREATE INDEX IF NOT EXISTS usage_facts_time_idx ON usage_facts(occurred_day, occurred_hour);
     CREATE INDEX IF NOT EXISTS usage_facts_source_idx ON usage_facts(source_client);
@@ -234,6 +268,10 @@ function ensureSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS usage_facts_session_idx ON usage_facts(session_id);
     CREATE INDEX IF NOT EXISTS usage_facts_billing_fact_idx
       ON usage_facts(billing_fact_id, billing_included);
+    CREATE INDEX IF NOT EXISTS usage_facts_billing_current_idx
+      ON usage_facts(billing_fact_id, superseded);
+    CREATE INDEX IF NOT EXISTS usage_facts_superseded_idx
+      ON usage_facts(superseded, session_id);
 
     -- Append-only valuation history deliberately has no usage_facts foreign key:
     -- re-indexing may replace current facts, but must never silently rewrite old dollars.
@@ -358,11 +396,16 @@ function usageFactInputSignature(
   outcome: ReturnType<typeof providerOutcomeForSession>,
   resolvedRoot: string
 ): string {
+  const source = session.source || 'claude-code'
+  const derivationVersion = (source === 'opencode' || source === 'zcode') &&
+    isPerCallSqliteAgentAccounting(accounting)
+    ? PER_CALL_SQLITE_AGENT_DERIVATION_VERSION
+    : BASE_USAGE_FACT_DERIVATION_VERSION
   const hash = createHash('sha256')
   hash.update(JSON.stringify({
-    schemaVersion: USAGE_FACT_SCHEMA_VERSION,
+    schemaVersion: derivationVersion,
     pricingCatalogVersion: PRICING_CATALOG_VERSION,
-    source: session.source || 'claude-code',
+    source,
     project: projectPath(session),
     root: resolvedRoot,
     turns: session.turnCount,
@@ -658,9 +701,32 @@ function rebuildSessionRollups(db: Database.Database, sessionId?: string): void 
       SUM(CASE WHEN agent_scope = 'main' AND model_key <> '${UNKNOWN_MODEL}' THEN call_count ELSE 0 END),
       MIN(occurred_at), MAX(occurred_at)
     FROM usage_facts
-    WHERE ${sessionId ? 'session_id = ? AND ' : ''}billing_included = 1
+    WHERE ${sessionId ? 'session_id = ? AND ' : ''}billing_included = 1 AND superseded = 0
     GROUP BY occurred_day, occurred_hour, source_client, model_key, project_path, session_id
   `).run(...(sessionId ? [sessionId] : []))
+}
+
+export function incrementalUsageFactCanonicalizationSql(billingFactCount: number): string {
+  if (!Number.isInteger(billingFactCount) || billingFactCount <= 0) {
+    throw new Error('billingFactCount must be a positive integer')
+  }
+  const placeholders = Array.from({ length: billingFactCount }, () => '?').join(', ')
+  return `
+    UPDATE usage_facts AS current
+    SET billing_included = CASE WHEN current.event_id = (
+      SELECT candidate.event_id
+      FROM usage_facts AS candidate INDEXED BY usage_facts_billing_current_idx
+      WHERE candidate.billing_fact_id = current.billing_fact_id
+        AND candidate.superseded = 0
+      ORDER BY
+        CASE candidate.agent_scope WHEN 'main' THEN 0 WHEN 'subagent' THEN 1 ELSE 2 END,
+        CASE WHEN candidate.occurred_at IS NULL THEN 1 ELSE 0 END,
+        candidate.occurred_at,
+        candidate.event_id
+      LIMIT 1
+    ) THEN 1 ELSE 0 END
+    WHERE current.billing_fact_id IN (${placeholders})
+  `
 }
 
 function canonicalizeBillingFacts(
@@ -686,6 +752,7 @@ function canonicalizeBillingFacts(
               event_id
           ) AS billing_rank
         FROM usage_facts
+        WHERE superseded = 0
       )
       UPDATE usage_facts
       SET billing_included = 1
@@ -704,21 +771,7 @@ function canonicalizeBillingFacts(
     throwIfUsageFactSyncCancelled(shouldCancel)
     const chunk = billingIds.slice(offset, offset + chunkSize)
     const placeholders = chunk.map(() => '?').join(', ')
-    db.prepare(`
-      UPDATE usage_facts AS current
-      SET billing_included = CASE WHEN current.event_id = (
-        SELECT candidate.event_id
-        FROM usage_facts AS candidate
-        WHERE candidate.billing_fact_id = current.billing_fact_id
-        ORDER BY
-          CASE candidate.agent_scope WHEN 'main' THEN 0 WHEN 'subagent' THEN 1 ELSE 2 END,
-          CASE WHEN candidate.occurred_at IS NULL THEN 1 ELSE 0 END,
-          candidate.occurred_at,
-          candidate.event_id
-        LIMIT 1
-      ) THEN 1 ELSE 0 END
-      WHERE current.billing_fact_id IN (${placeholders})
-    `).run(...chunk)
+    db.prepare(incrementalUsageFactCanonicalizationSql(chunk.length)).run(...chunk)
     const rows = db.prepare(`
       SELECT DISTINCT session_id FROM usage_facts
       WHERE billing_fact_id IN (${placeholders})
@@ -774,7 +827,15 @@ export function synchronizeUsageFacts(
     }
 
     if (options.rebuild) {
-      db.exec('DELETE FROM usage_rollups; DELETE FROM usage_session_folders; DELETE FROM usage_session_activity; DELETE FROM usage_facts; DELETE FROM usage_sessions;')
+      // Re-scan in place so historical facts and append-only valuation history
+      // remain available for audit. Empty signatures force every live session
+      // through the normal replacement/supersede path exactly once.
+      db.exec(`
+        DELETE FROM usage_rollups;
+        DELETE FROM usage_session_folders;
+        DELETE FROM usage_session_activity;
+        UPDATE usage_sessions SET fact_signature = '', folder_signature = '';
+      `)
     }
     const existingRows = db.prepare(
       'SELECT session_id, fact_signature, folder_signature, activity_time_status FROM usage_sessions'
@@ -848,7 +909,21 @@ export function synchronizeUsageFacts(
         changedSessionIds.add(sessionId)
         const oldBillingIds = selectSessionBillingIds.all(sessionId) as Array<{ billing_fact_id: string }>
         for (const row of oldBillingIds) affectedBillingFactIds.add(row.billing_fact_id)
-        db.prepare('DELETE FROM usage_facts WHERE session_id = ?').run(sessionId)
+        const isPerCallSqliteAgent = (session.source === 'opencode' || session.source === 'zcode') &&
+          isPerCallSqliteAgentAccounting(accounting)
+        if (isPerCallSqliteAgent) {
+          const source = session.source!
+          const aggregateEventId = stableHash([source, sessionId, sessionId, `${source}:aggregate`])
+          db.prepare(`
+            UPDATE usage_facts
+            SET superseded = 1,
+                superseded_at = COALESCE(superseded_at, ?),
+                superseded_by = COALESCE(superseded_by, ?),
+                billing_included = 0
+            WHERE session_id = ? AND event_id = ?
+          `).run(new Date().toISOString(), 't183-per-call-usage-v1', sessionId, aggregateEventId)
+        }
+        db.prepare('DELETE FROM usage_facts WHERE session_id = ? AND superseded = 0').run(sessionId)
         db.prepare('DELETE FROM usage_session_activity WHERE session_id = ?').run(sessionId)
         for (const fact of facts) {
           throwIfUsageFactSyncCancelled(options.shouldCancel)
@@ -897,7 +972,9 @@ export function synchronizeUsageFacts(
   })
   sync()
 
-  const factCount = (db.prepare('SELECT count(*) AS count FROM usage_facts').get() as { count: number }).count
+  const factCount = (db.prepare(
+    'SELECT count(*) AS count FROM usage_facts WHERE superseded = 0'
+  ).get() as { count: number }).count
   return { changedSessions, unchangedSessions, removedSessions, factCount, rebuilt: options.rebuild === true }
 }
 
@@ -1267,6 +1344,7 @@ function applyCoverageTimeScope(
   joins.push('JOIN usage_session_activity activity ON activity.session_id = sessions.session_id')
   joins.push(`LEFT JOIN usage_facts coverage_facts
     ON coverage_facts.session_id = sessions.session_id
+    AND coverage_facts.superseded = 0
     AND coverage_facts.occurred_day = activity.occurred_day${basis === 'conversation' ? "\n    AND coverage_facts.agent_scope = 'main'" : ''}`)
   if (range.fromDay) {
     where.push('activity.occurred_day >= ?')
@@ -1614,7 +1692,7 @@ export function drilldownInsights(
     last_occurred_at: string | null
   }>
   const provenance = db.prepare(
-    'SELECT DISTINCT usage_provenance FROM usage_facts WHERE session_id = ?'
+    'SELECT DISTINCT usage_provenance FROM usage_facts WHERE session_id = ? AND superseded = 0'
   )
   return rows.map((row) => ({
     sessionId: row.session_id,
@@ -1636,7 +1714,7 @@ export function drilldownInsights(
 
 function factFilter(scope: AnalysisScope, range: ResolvedAnalysisRange, sessionId: string): SqlFilter {
   const joins: string[] = []
-  const where = ['facts.session_id = ?']
+  const where = ['facts.session_id = ?', 'facts.superseded = 0']
   const params: Array<string | number> = [sessionId]
   if (scope.projectOrFolder?.kind === 'folder') {
     joins.push('JOIN usage_session_folders folders ON folders.session_id = facts.session_id')
@@ -1798,7 +1876,9 @@ export function usageFactStoreStats(): {
     activityDays: count('usage_session_activity'),
     timedSessions: activityStatus.timed || 0,
     unknownActivitySessions: activityStatus.unknown || 0,
-    facts: count('usage_facts'),
+    facts: (db.prepare(
+      'SELECT count(*) AS count FROM usage_facts WHERE superseded = 0'
+    ).get() as { count: number }).count,
     rollups: count('usage_rollups'),
     databasePath: usageDatabasePath(),
     lastIndexedAt: meta.last_indexed_at

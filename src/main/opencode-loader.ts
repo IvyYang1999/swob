@@ -13,7 +13,12 @@ import type {
   ContentPart,
   SessionSource
 } from './types'
-import { accountingFromMutuallyExclusiveUsage, tokenUsageFromAccounting } from './token-accounting'
+import {
+  accountingFromMutuallyExclusiveUsage,
+  tokenUsageFromAccounting,
+  type TokenAccounting
+} from './token-accounting'
+import { accountOpenCodeMessageUsage, accountZCodeModelUsage } from './sqlite-agent-usage'
 import { runtimeHome } from './runtime-home'
 import { activityDaysFromTimestamps } from './activity-time'
 
@@ -65,6 +70,24 @@ const PART_SELECT_COLUMNS = [
   'text',
   'content'
 ]
+const ZCODE_USAGE_SELECT_COLUMNS = [
+  'id',
+  'logical_request_id',
+  'attempt_index',
+  'session_id',
+  'provider_id',
+  'model_id',
+  'status',
+  'started_at',
+  'completed_at',
+  'input_tokens',
+  'output_tokens',
+  'reasoning_tokens',
+  'cache_creation_input_tokens',
+  'cache_read_input_tokens',
+  'provider_total_tokens',
+  'computed_total_tokens'
+]
 
 type SqliteRow = Record<string, unknown>
 
@@ -73,6 +96,7 @@ interface OpencodeSchema {
   message: Set<string>
   part: Set<string>
   sessionMessage: Set<string>
+  modelUsage: Set<string>
 }
 
 interface LoadedOpencodeSession {
@@ -81,6 +105,7 @@ interface LoadedOpencodeSession {
   sessionId: string
   sessionRow: SqliteRow
   rawMessages: RawJsonlMessage[]
+  tokenAccounting: TokenAccounting
 }
 
 const schemaCache = new Map<string, Promise<OpencodeSchema | null>>()
@@ -329,13 +354,17 @@ async function loadSqliteAgentSessionSnapshot(
 
   const partRows = await queryParts(dbPath, schema, sessionId, messageRows)
   const rawMessages = opencodeToRawMessages(sessionId, sessionRow, messageRows, partRows)
+  const tokenAccounting = source === 'opencode'
+    ? accountOpenCodeMessageUsage(messageRows)
+    : accountZCodeModelUsage(await queryZcodeModelUsage(dbPath, schema, sessionId))
 
   return {
     dbPath: sourceDbPath,
     sourceRef: makeSqliteAgentSessionRef(source, sessionId, sourceDbPath),
     sessionId,
     sessionRow,
-    rawMessages
+    rawMessages,
+    tokenAccounting
   }
 }
 
@@ -356,15 +385,16 @@ async function getSchema(dbPath: string): Promise<OpencodeSchema | null> {
 }
 
 async function loadSchema(dbPath: string): Promise<OpencodeSchema | null> {
-  const [session, message, part, sessionMessage] = await Promise.all([
+  const [session, message, part, sessionMessage, modelUsage] = await Promise.all([
     tableColumns(dbPath, 'session'),
     tableColumns(dbPath, 'message'),
     tableColumns(dbPath, 'part'),
-    tableColumns(dbPath, 'session_message')
+    tableColumns(dbPath, 'session_message'),
+    tableColumns(dbPath, 'model_usage')
   ])
 
-  if (!session || !message || !part || !sessionMessage) return null
-  return { session, message, part, sessionMessage }
+  if (!session || !message || !part || !sessionMessage || !modelUsage) return null
+  return { session, message, part, sessionMessage, modelUsage }
 }
 
 async function tableColumns(dbPath: string, tableName: string): Promise<Set<string> | null> {
@@ -430,9 +460,13 @@ async function queryMessages(
   const messageSelect = selectExistingColumns(schema.message, MESSAGE_SELECT_COLUMNS)
   const messageSessionCol = pickColumn(schema.message, ['sessionID', 'sessionId', 'session_id'])
   if (messageSessionCol) {
+    const timeColumn = pickColumn(schema.message, ['time_created', 'timeCreated'])
+    const orderBy = timeColumn
+      ? ` ORDER BY ${quotedIdent(timeColumn)}, "id"`
+      : ' ORDER BY "id"'
     return runSqliteJson<SqliteRow>(
       dbPath,
-      `SELECT ${messageSelect} FROM "message" WHERE ${quotedIdent(messageSessionCol)} = ${sqlString(sessionId)}`
+      `SELECT ${messageSelect} FROM "message" WHERE ${quotedIdent(messageSessionCol)} = ${sqlString(sessionId)}${orderBy}`
     )
   }
 
@@ -475,6 +509,21 @@ async function queryParts(
   return runSqliteJson<SqliteRow>(
     dbPath,
     `SELECT ${partSelect} FROM "part" WHERE ${quotedIdent(partMessageCol)} IN (${ids.join(',')})`
+  )
+}
+
+async function queryZcodeModelUsage(
+  dbPath: string,
+  schema: OpencodeSchema,
+  sessionId: string
+): Promise<SqliteRow[]> {
+  const sessionColumn = pickColumn(schema.modelUsage, ['session_id', 'sessionID', 'sessionId'])
+  if (!sessionColumn || !schema.modelUsage.has('id')) return []
+  const select = selectExistingColumns(schema.modelUsage, ZCODE_USAGE_SELECT_COLUMNS)
+  return runSqliteJson<SqliteRow>(
+    dbPath,
+    `SELECT ${select} FROM "model_usage" WHERE ${quotedIdent(sessionColumn)} = ${sqlString(sessionId)} ` +
+      `ORDER BY ${schema.modelUsage.has('started_at') ? '"started_at", ' : ''}"id"`
   )
 }
 
@@ -524,7 +573,12 @@ function opencodeToRawMessages(
     const cwd = asString(parseObject(data.path).cwd) ||
       asString(data.cwd) ||
       asString(sessionRow.directory)
-    const model = asString(data.model) || asString(sessionRow.model)
+    const modelObject = parseObject(data.model)
+    const model = asString(data.modelID) || asString(data.modelId) || asString(data.model_id) ||
+      asString(modelObject.modelID) || asString(modelObject.modelId) || asString(data.model) ||
+      asString(sessionRow.model)
+    const provider = asString(data.providerID) || asString(data.providerId) || asString(data.provider_id) ||
+      asString(modelObject.providerID) || asString(modelObject.providerId) || asString(modelObject.provider_id)
 
     messages.push({
       uuid,
@@ -535,9 +589,11 @@ function opencodeToRawMessages(
       cwd,
       slug: asString(sessionRow.slug) || undefined,
       version: model || undefined,
+      providerId: provider || undefined,
       message: {
         role,
         model: model || undefined,
+        providerId: provider || undefined,
         content,
         usage: extractUsage(data.tokens)
       }
@@ -687,28 +743,35 @@ function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: Lo
     }
   }
 
-  const tokenUsage = rawMessages.reduce<TokenUsage>((acc, msg) => {
-    if (msg.type !== 'assistant' || !msg.message?.usage) return acc
-    acc.inputTokens += msg.message.usage.input_tokens || 0
-    acc.outputTokens += msg.message.usage.output_tokens || 0
-    acc.cacheCreationTokens += msg.message.usage.cache_creation_input_tokens || 0
-    acc.cacheReadTokens += msg.message.usage.cache_read_input_tokens || 0
-    return acc
-  }, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 })
+  let tokenAccounting = loaded.tokenAccounting
+  if (tokenAccounting.billingTotal === null) {
+    const tokenUsage = rawMessages.reduce<TokenUsage>((acc, msg) => {
+      if (msg.type !== 'assistant' || !msg.message?.usage) return acc
+      acc.inputTokens += msg.message.usage.input_tokens || 0
+      acc.outputTokens += msg.message.usage.output_tokens || 0
+      acc.cacheCreationTokens += msg.message.usage.cache_creation_input_tokens || 0
+      acc.cacheReadTokens += msg.message.usage.cache_read_input_tokens || 0
+      return acc
+    }, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 })
 
-  const sessionTokenUsage = extractAggregateUsage(sessionRow.tokens)
-  if (tokenUsage.inputTokens === 0 && tokenUsage.outputTokens === 0 && sessionTokenUsage) {
-    Object.assign(tokenUsage, sessionTokenUsage)
+    const sessionTokenUsage = extractAggregateUsage(sessionRow.tokens)
+    if (tokenUsage.inputTokens === 0 && tokenUsage.outputTokens === 0 && sessionTokenUsage) {
+      Object.assign(tokenUsage, sessionTokenUsage)
+    }
+    tokenAccounting = accountingFromMutuallyExclusiveUsage(
+      source as SessionSource,
+      tokenUsage,
+      'reported',
+      `${source} legacy aggregate fallback; request-level model/provider evidence unavailable`
+    )
   }
-  const tokenAccounting = accountingFromMutuallyExclusiveUsage(
-    source as SessionSource,
-    tokenUsage,
-    'reported'
-  )
   const normalizedTokenUsage = tokenUsageFromAccounting(tokenAccounting)
 
   const stat = safeStat(dbPath)
-  const models = [...new Set(rawMessages.map((m) => m.message?.model).filter(Boolean) as string[])]
+  const models = [...new Set([
+    ...rawMessages.map((m) => m.message?.model),
+    ...tokenAccounting.usageEvents.map((event) => event.modelRaw || event.model)
+  ].filter(Boolean) as string[])]
   const sessionModel = asString(sessionRow.model)
   if (sessionModel && !models.includes(sessionModel)) models.push(sessionModel)
 

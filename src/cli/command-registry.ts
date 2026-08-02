@@ -22,7 +22,8 @@ export const CLI_COMMANDS: readonly CliCommandDefinition[] = [
   { usage: 'grep <query> [--source SOURCE] [--folder ID|NAME] [--after DATE] [--before DATE] [--project TEXT] [--limit N]', summary: '用 SQLite FTS 搜索完整 transcript，并返回命中消息上下文 ±1', output: 'JSON 搜索结果', examples: ['swob grep "permission denied" --project swob --after 2026-07-01'] },
   { usage: 'resume <sessionId> [--cwd PATH] [--skip-permissions]', summary: '生成恢复会话的命令', output: 'JSON { command }', examples: ['swob resume <id>'] },
   { usage: 'resume-audit [--json]', summary: '只读审计全部会话的恢复可信度', output: '文本报告；--json 时为 JSON', examples: ['swob resume-audit --json'] },
-  { usage: 'resolve <sessionId> [--json]', summary: '把旧 ID 或短 ID 解析为最新完整 ID', output: '默认一行 ID；--json 时为 JSON', examples: ['swob resolve <short-id> --json'] },
+  { usage: 'resolve <id-or-prefix> [--json]', summary: '用 manifest + lineage 把完整或短 ID 解析为最新完整 ID', output: '默认一行 ID；--json 时含稳定错误码与最小候选摘要', examples: ['swob resolve <short-id> --json'] },
+  { usage: 'where <id-or-prefix> [--json]', summary: '定位会话包、manifest、transcript、backup 与 source', output: 'JSON 路径、可用性与 freshness；不读取会话正文', examples: ['swob where <id> --json'] },
   { usage: 'lineage [--dry-run]', summary: '重建会话血统注册表', output: 'JSON 注册表', examples: ['swob lineage --dry-run'] },
   { usage: 'folders', summary: '列出 Vault 文件夹树', output: 'JSON 文件夹树', examples: ['swob folders'] },
   { usage: 'folder create <name> [--parent ID]', summary: '创建文件夹', output: 'JSON 结果', examples: ['swob folder create "swob"'] },
@@ -37,7 +38,11 @@ export const CLI_COMMANDS: readonly CliCommandDefinition[] = [
   { usage: 'config get [key]', summary: '读取设置', output: 'JSON', examples: ['swob config get terminalApp'] },
   { usage: 'config set <key> <value>', summary: '修改设置', output: 'JSON', examples: ['swob config set terminalApp iTerm2'] },
   { usage: 'active', summary: '列出活跃会话', output: 'JSON', examples: ['swob active'] },
-  { usage: 'transcript rebuild --all [--dry-run] [--missing-only]', summary: '重建 Library transcript', output: 'JSON', examples: ['swob transcript rebuild --all --missing-only'] },
+  { usage: 'transcript status <id-or-prefix> [--json]', summary: '查看 source/transcript/backup/manifest 四时间戳、lag 与阻塞原因', output: 'JSON freshness 状态', examples: ['swob transcript status <id> --json'] },
+  { usage: 'transcript rebuild <id-or-prefix> [--dry-run]', summary: '只重建一个会话包的 transcript', output: 'JSON 单会话重建结果', examples: ['swob transcript rebuild <id> --dry-run'] },
+  { usage: 'transcript rebuild --all [--dry-run] [--missing-only]', summary: '重建全部 Library transcript（高成本）', output: 'JSON', examples: ['swob transcript rebuild --all --missing-only'] },
+  { usage: 'doctor locks [--json]', summary: '只读检查 writer 锁、owner 存活性与显式恢复可用性', output: 'JSON 锁诊断与证据哈希；不输出设备标识', examples: ['swob doctor locks --json'] },
+  { usage: 'doctor library [--json]', summary: '只读检查 Library 写状态、identity issue 与 stale 数量', output: 'JSON Library 健康摘要', examples: ['swob doctor library --json'] },
   { usage: 'redact [--dry-run]', summary: '对派生 transcript 回填脱敏', output: 'JSON', examples: ['swob redact --dry-run'] },
   { usage: 'install', summary: '安装或更新 CLI wrapper 和本 Skill', output: 'JSON 安装结果', examples: ['swob install'] }
 ] as const

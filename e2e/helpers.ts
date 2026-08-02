@@ -18,6 +18,9 @@ import {
 export const CLAUDE_FIXTURE_ID = '82000000-0000-4000-8000-000000000099'
 export const CODEX_FIXTURE_ID = '019abcde-1234-7000-8000-012345670099'
 export const CODEX_PRICING_FIXTURE_ID = '019abcde-1234-7000-8000-012345670171'
+export const CODEX_LIFECYCLE_PARENT_ID = '18400000-0000-4000-8000-000000000011'
+export const CODEX_LIFECYCLE_REPLAY_ID = '18400000-0000-4000-8000-000000000012'
+export const CODEX_LIFECYCLE_ARCHIVED_ID = '18400000-0000-4000-8000-000000000013'
 export const ZCODE_FIXTURE_ID = 'sess_ZcodeUI099'
 
 interface AppIsolationAudit {
@@ -107,6 +110,8 @@ export interface LaunchAppOptions {
   includeTraeFixture?: boolean
   includeInspectorFixture?: boolean
   includePricingFixture?: boolean
+  includeUnpricedValuationFixture?: boolean
+  includeCodexLifecycleFixture?: boolean
   env?: Record<string, string>
 }
 
@@ -221,7 +226,9 @@ function createSyntheticCorpus(
   includeQoderFixture = false,
   includeTraeFixture = false,
   includeInspectorFixture = false,
-  includePricingFixture = false
+  includePricingFixture = false,
+  includeUnpricedValuationFixture = false,
+  includeCodexLifecycleFixture = false
 ): void {
   const project = path.join(home, 'project')
   fs.mkdirSync(project, { recursive: true })
@@ -317,6 +324,59 @@ function createSyntheticCorpus(
     path.join(home, '.claude', 'projects', '-synthetic-project', `${CLAUDE_FIXTURE_ID}.jsonl`),
     claudeRows
   )
+
+  if (includeCodexLifecycleFixture) {
+    const customCodexHome = path.join(home, 'codex-work')
+    const lifecycleRows = (
+      sessionId: string,
+      prompt: string,
+      extraMeta: Record<string, unknown> = {}
+    ) => [
+      {
+        timestamp: '2026-08-01T10:00:00Z', type: 'session_meta',
+        payload: {
+          id: sessionId, timestamp: '2026-08-01T10:00:00Z', cwd: project,
+          cli_version: 'test', model_provider: 'openai', ...extraMeta
+        }
+      },
+      {
+        timestamp: '2026-08-01T10:00:01Z', type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }
+      },
+      {
+        timestamp: '2026-08-01T10:00:02Z', type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Lifecycle fixture response' }] }
+      },
+      {
+        timestamp: '2026-08-01T10:00:03Z', type: 'event_msg',
+        payload: {
+          type: 'token_count', info: {
+            turn_id: `turn-${sessionId}`,
+            last_token_usage: { input_tokens: 40, output_tokens: 10, cached_input_tokens: 0 },
+            total_token_usage: { input_tokens: 40, output_tokens: 10, cached_input_tokens: 0 }
+          }
+        }
+      }
+    ]
+    writeJsonl(path.join(
+      customCodexHome, 'sessions', '2026', '08', '02',
+      `rollout-parent-${CODEX_LIFECYCLE_PARENT_ID}.jsonl`
+    ), lifecycleRows(CODEX_LIFECYCLE_PARENT_ID, 'T184 custom root parent'))
+    writeJsonl(path.join(
+      customCodexHome, 'sessions', '2026', '08', '02',
+      `rollout-replay-${CODEX_LIFECYCLE_REPLAY_ID}.jsonl`
+    ), lifecycleRows(CODEX_LIFECYCLE_REPLAY_ID, 'T184 replay child', {
+      forked_from_id: CODEX_LIFECYCLE_PARENT_ID
+    }))
+    writeJsonl(path.join(
+      home, '.codex', 'archived_sessions',
+      `rollout-archived-${CODEX_LIFECYCLE_ARCHIVED_ID}.jsonl`
+    ), lifecycleRows(CODEX_LIFECYCLE_ARCHIVED_ID, 'T184 archived lifecycle'))
+    fs.writeFileSync(path.join(home, '.claude-session-manager', 'codex-homes.json'), JSON.stringify({
+      version: 1,
+      homes: [customCodexHome]
+    }, null, 2))
+  }
 
   if (includePricingFixture) {
     writeJsonl(
@@ -520,7 +580,13 @@ function createSyntheticCorpus(
     db.prepare('INSERT INTO message VALUES (?, ?, ?, ?, ?)').run(
       id,
       ZCODE_FIXTURE_ID,
-      JSON.stringify({ role, time: { created } }),
+      JSON.stringify({
+        role,
+        time: { created },
+        ...(includeUnpricedValuationFixture && role === 'assistant'
+          ? { model: 'unknown-zcode-model', tokens: { input: 120, output: 30 } }
+          : {})
+      }),
       role,
       created
     )
@@ -585,7 +651,9 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     options.includeQoderFixture ?? false,
     options.includeTraeFixture ?? false,
     options.includeInspectorFixture ?? false,
-    options.includePricingFixture ?? false
+    options.includePricingFixture ?? false,
+    options.includeUnpricedValuationFixture ?? false,
+    options.includeCodexLifecycleFixture ?? false
   )
 
   const environment = {

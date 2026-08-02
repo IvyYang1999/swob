@@ -438,9 +438,10 @@ describe('canonical provider runtime full chain', () => {
     expect(detail?.messages.flatMap((message) => message.toolCalls)).toMatchObject([
       expect.objectContaining({ name: 'read_file', result: expect.stringContaining('hermes-db-tool-result') })
     ])
-    // The v1 detail read model keeps reasoning as a subset of output and does
-    // not double-count that subset in its billingTotal compatibility field.
-    expect(detail?.tokenAccounting?.billingTotal).toBe(145)
+    // The v1 detail read model keeps the billable output total (30) while
+    // retaining reasoning (10) as metadata inside it; reasoning is not added
+    // again. Input 125 + output 30 = 155.
+    expect(detail?.tokenAccounting?.billingTotal).toBe(155)
     const directDetail = await sessionLoader.loadSessionDetail(`${dbPath}#synthetic-hermes-db`)
     expect(directDetail?.messages.some((message) =>
       message.textContent.includes('hermes-db-search-needle'))).toBe(true)

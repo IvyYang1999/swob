@@ -253,4 +253,28 @@ describe('native v2 legacy-consumer projection', () => {
       usageProvenance: 'unavailable'
     })
   })
+
+  it('keeps separately reported reasoning inside the billable v1 output total', () => {
+    const chunk = structuredClone(
+      piGolden.envelopes.find((entry) => entry.kind === 'parse-chunk')!.payload
+    ) as unknown as ParseChunk
+    const usage = chunk.events.find((event) => event.kind === 'usage')!
+    const payload = usage.payload as unknown as UsageRecord
+    payload.output = { total: 30, visible: 25, reasoning: 5 }
+    payload.relations.reasoning = 'subset-of-output'
+    const sourceRoot = '/synthetic/reasoning-accounting'
+    const source: SourceRef = {
+      kind: 'composite-directory', stableId: chunk.identity.physicalSourceId, providerId: chunk.providerId,
+      rootUri: pathToFileURL(sourceRoot).href,
+      memberUris: [pathToFileURL(`${sourceRoot}/session.jsonl`).href],
+      displayLocator: sourceRoot, fingerprint: chunk.fingerprint
+    }
+
+    const records = projectNativeV2ChunksForConsumers(
+      chunk.providerId, chunk.parserDataVersion, [source], [chunk]
+    )[0].sessions[0].records
+    const projected = records.find((record) => record.recordType === 'usage')
+
+    expect(projected).toMatchObject({ outputTokens: 30, reasoningTokens: 5 })
+  })
 })

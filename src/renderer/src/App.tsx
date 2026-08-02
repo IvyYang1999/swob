@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { UpdateBanner } from './components/UpdateBanner'
 import { Onboarding } from './components/Onboarding'
+import { LibraryHealthBanner } from './components/LibraryHealthBanner'
 import { useFeedbackToast } from './hooks/useFeedbackToast'
 import { BUILTIN_VIEW_IDS, builtinViewRegistry } from './registry/builtin-view-registry'
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
@@ -220,6 +221,7 @@ export default function App() {
     <ErrorBoundary>
       <div className="h-screen flex flex-col bg-base text-primary">
         <Toolbar />
+        <LibraryHealthBanner />
         <div className="flex-1 flex overflow-hidden relative">
           <Sidebar width={sidebarWidth} />
           <ResizeHandle side="left" onResize={handleSidebarResize} />

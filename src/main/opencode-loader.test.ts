@@ -46,8 +46,9 @@ function createOpencodeDb(): { dir: string; dbPath: string; sourceRef: string } 
     role: 'assistant',
     parentID: 'msg_user',
     time: { created: '2026-07-08T10:00:05Z' },
-    tokens: { input: 11, output: 7, cache: { read: 3 } },
-    model: 'glm-4.5'
+    tokens: { input: 11, output: 7, reasoning: 2, cache: { read: 3, write: 4 } },
+    providerID: 'openai',
+    modelID: 'gpt-5.1'
   })
   const sessionTokens = JSON.stringify({ input: 100, output: 50 })
   const userText = JSON.stringify({ text: '请读取 src/index.ts' })
@@ -144,8 +145,26 @@ describe('opencode-loader', () => {
       expect(summary!.resumeCwd).toBe('/Users/test/projects/opencode-app')
       expect(summary!.toolUsage).toEqual({ Read: 1 })
       expect(summary!.tokenUsage.inputTokens).toBe(11)
-      expect(summary!.tokenUsage.outputTokens).toBe(7)
+      expect(summary!.tokenUsage.outputTokens).toBe(9)
       expect(summary!.tokenUsage.cacheReadTokens).toBe(3)
+      expect(summary!.tokenUsage.cacheCreationTokens).toBe(4)
+      expect(summary!.tokenAccounting?.usageEvents).toEqual([
+        expect.objectContaining({
+          dedupKey: 'opencode:message:msg_assistant',
+          billingFactKey: 'opencode:message:msg_assistant',
+          timestamp: '2026-07-08T10:00:05.000Z',
+          providerRaw: 'openai',
+          billingProvider: 'openai',
+          modelRaw: 'gpt-5.1',
+          rawOutputTokens: 7,
+          rawReasoningTokens: 2,
+          fieldRelations: {
+            cacheRead: 'disjoint',
+            cacheWrite: 'disjoint',
+            reasoning: 'disjoint-from-visible-output'
+          }
+        })
+      ])
 
       const detail = await buildOpencodeSessionDetail(fixture.sourceRef)
       expect(detail).not.toBeNull()

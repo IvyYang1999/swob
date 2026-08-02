@@ -154,16 +154,19 @@ function usageInput(payload: UsageRecordV2): {
 }
 
 function usageOutput(payload: UsageRecordV2): { output: number | null; reasoning: number | null } {
+  if (payload.relations.reasoning === 'subset-of-output') {
+    return {
+      // v1 outputTokens is the billable output total; reasoningTokens is
+      // descriptive metadata inside that total. Projecting `visible` here
+      // silently drops separately reported thinking tokens from accounting.
+      output: payload.output.total,
+      reasoning: payload.output.reasoning
+    }
+  }
   if (payload.output.visible !== null) {
     return { output: payload.output.visible, reasoning: payload.output.reasoning }
   }
   if (payload.output.total === null) return { output: null, reasoning: payload.output.reasoning }
-  if (payload.relations.reasoning === 'subset-of-output') {
-    return {
-      output: Math.max(0, payload.output.total - (payload.output.reasoning || 0)),
-      reasoning: payload.output.reasoning
-    }
-  }
   return { output: payload.output.total, reasoning: null }
 }
 

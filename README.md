@@ -151,6 +151,10 @@ npm run build:mac
 ```bash
 swob search "auth regression"    # local cross-session search
 swob list --source codex         # filter by source
+swob where <session-id>          # locate package/transcript/backup/source
+swob transcript status <id>      # inspect four mtimes, lag, and blockers
+swob transcript rebuild <id>     # rebuild exactly one session package
+swob doctor library              # inspect writer health and stale count
 swob resume <session-id>         # print the source-aware resume command
 swob insights                    # aggregate local usage
 swob active                      # inspect running sessions
@@ -158,6 +162,7 @@ swob install                     # install CLI + Agent Skill
 ```
 
 CLI commands return JSON so other agents can query Swob without scraping the UI.
+See the [CLI location and diagnostics contract](docs/cli-control-plane.md) for stable errors, privacy boundaries, and recovery behavior.
 
 ## Privacy and security
 

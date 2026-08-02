@@ -3,13 +3,14 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
-import { runLibraryWorkerRequest } from './library-worker'
+import { LibraryWorkerClient, runLibraryWorkerRequest } from './library-worker'
 import { syncLibraryStartupIncrementally } from './library-startup-sync'
 import { closeSearchIndex } from './search-index'
 import { closeUsageFactStore } from './usage-fact-store'
 
 const roots: string[] = []
 const largeLiveSyncIt = process.env.SWOB_LARGE_LIVE_SYNC_TEST === '1' ? it : it.skip
+const largeCodexShapeIt = process.env.SWOB_LARGE_CODEX_SHAPE_TEST === '1' ? it : it.skip
 
 function writeLargeJsonlFixture(filePath: string, sessionId: string): void {
   const userLine = JSON.stringify({
@@ -36,6 +37,67 @@ function writeLargeJsonlFixture(filePath: string, sessionId: string): void {
   }
 }
 
+function writeLargeCodexShapeFixture(filePath: string, sessionId: string): { bytes: number; lines: number } {
+  const targetBytes = 118_111_201
+  const pairCount = 18_055
+  const row = (value: unknown): string => `${JSON.stringify(value)}\n`
+  const meta = row({
+    timestamp: '2026-08-02T09:00:00.000Z',
+    type: 'session_meta',
+    payload: {
+      id: sessionId,
+      timestamp: '2026-08-02T09:00:00.000Z',
+      cwd: '/fixture/project',
+      cli_version: 'test'
+    }
+  })
+  const user = row({
+    timestamp: '2026-08-02T09:00:00.001Z',
+    type: 'response_item',
+    payload: {
+      type: 'message', role: 'user',
+      content: [{ type: 'input_text', text: 'large Codex shape baseline' }]
+    }
+  })
+  const call = row({
+    timestamp: '2026-08-02T09:00:00.002Z',
+    type: 'response_item',
+    payload: {
+      type: 'function_call', name: 'synthetic_tool', arguments: '{}', call_id: 'synthetic-call'
+    }
+  })
+  const outputEnvelopeBytes = Buffer.byteLength(row({
+    timestamp: '2026-08-02T09:00:00.003Z',
+    type: 'response_item',
+    payload: { type: 'function_call_output', call_id: 'synthetic-call', output: '' }
+  }))
+  const fixedBytes = Buffer.byteLength(meta) + Buffer.byteLength(user) +
+    pairCount * (Buffer.byteLength(call) + outputEnvelopeBytes)
+  const payloadBytes = targetBytes - fixedBytes
+  const basePayloadBytes = Math.floor(payloadBytes / pairCount)
+  const payloadRemainder = payloadBytes % pairCount
+  const descriptor = fs.openSync(filePath, 'w')
+  try {
+    fs.writeSync(descriptor, meta)
+    fs.writeSync(descriptor, user)
+    for (let index = 0; index < pairCount; index++) {
+      fs.writeSync(descriptor, call)
+      fs.writeSync(descriptor, row({
+        timestamp: '2026-08-02T09:00:00.003Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'synthetic-call',
+          output: 'x'.repeat(basePayloadBytes + (index < payloadRemainder ? 1 : 0))
+        }
+      }))
+    }
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  return { bytes: fs.statSync(filePath).size, lines: pairCount * 2 + 2 }
+}
+
 async function sha256File(filePath: string): Promise<string> {
   const hash = createHash('sha256')
   await new Promise<void>((resolve, reject) => {
@@ -47,6 +109,40 @@ async function sha256File(filePath: string): Promise<string> {
   return hash.digest('hex')
 }
 
+function writeLifecycleFixtureWorker(root: string, slowDelayMs = 80): string {
+  const workerPath = path.join(root, 'fixture-worker.cjs')
+  fs.writeFileSync(workerPath, `
+    const { parentPort } = require('node:worker_threads')
+    let tail = Promise.resolve()
+    parentPort.on('message', ({ requestId, request }) => {
+      tail = tail.then(async () => {
+        if (request.type === 'shutdown') {
+          parentPort.postMessage({ requestId, type: 'result', result: { kind: 'shutdown' } })
+          return
+        }
+        const delayMs = request.root === 'slow' ? ${slowDelayMs} : 5
+        for (let elapsed = 0; elapsed < delayMs; elapsed += 10) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(10, delayMs - elapsed)))
+          const cancelled = request.cancelBuffer &&
+            Atomics.load(new Int32Array(request.cancelBuffer), 0) === 1
+          if (cancelled) {
+            parentPort.postMessage({
+              requestId, type: 'error', error: 'cancelled', errorName: 'AbortError'
+            })
+            return
+          }
+        }
+        parentPort.postMessage({
+          requestId,
+          type: 'result',
+          result: { kind: 'sync-outcome', outcome: { total: 1, completed: 1, skipped: [] } }
+        })
+      })
+    })
+  `)
+  return workerPath
+}
+
 afterEach(() => {
   closeSearchIndex()
   closeUsageFactStore()
@@ -56,6 +152,115 @@ afterEach(() => {
 })
 
 describe('Library worker request', () => {
+  it('retires only after already accepted sibling requests have drained', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-retire-'))
+    roots.push(root)
+    const workerPath = writeLifecycleFixtureWorker(root)
+    const worker = new LibraryWorkerClient(workerPath)
+    const first = worker.syncChunk('fast', [], {})
+    const sibling = worker.syncChunk('slow', [], {})
+
+    await expect(first).resolves.toMatchObject({ completed: 1 })
+    const retirement = worker.retire()
+
+    await expect(sibling).resolves.toMatchObject({ completed: 1 })
+    await expect(retirement).resolves.toBeUndefined()
+    await expect(worker.syncChunk('late', [], {})).rejects.toThrow('closing')
+  })
+
+  it('upgrades an active retirement to cooperative cancellation on close', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-retire-close-'))
+    roots.push(root)
+    const worker = new LibraryWorkerClient(writeLifecycleFixtureWorker(root, 1_000))
+    const first = worker.syncChunk('fast', [], {})
+    const sibling = worker.syncChunk('slow', [], {})
+    await expect(first).resolves.toMatchObject({ completed: 1 })
+    const retirement = worker.retire()
+
+    const closeStartedAt = performance.now()
+    const shutdown = worker.close()
+    await expect(sibling).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(shutdown).resolves.toBeUndefined()
+    await expect(retirement).resolves.toBeUndefined()
+    expect(performance.now() - closeStartedAt).toBeLessThan(500)
+  })
+
+  largeCodexShapeIt('keeps a 36112-line 118MB Codex first sync and follow-up below the live gate', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-codex-shape-root-'))
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-codex-shape-source-'))
+    roots.push(root, sourceRoot)
+    for (const ignoredDir of [
+      path.join(root, '.git', 'objects', 'fixture'),
+      path.join(root, 'node_modules', 'fixture')
+    ]) {
+      fs.mkdirSync(ignoredDir, { recursive: true })
+      fs.writeFileSync(path.join(ignoredDir, '.swob-incomplete.json'), '{')
+    }
+    const sessionId = '19200000-0000-4000-8000-000000000192'
+    const sourcePath = path.join(
+      sourceRoot,
+      '.codex',
+      'sessions',
+      '2026',
+      '08',
+      '02',
+      `rollout-2026-08-02T09-00-00-${sessionId}.jsonl`
+    )
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    const fixture = writeLargeCodexShapeFixture(sourcePath, sessionId)
+    expect(fixture).toEqual({ bytes: 118_111_201, lines: 36_112 })
+
+    const builtWorkerPath = path.join(process.cwd(), 'out', 'main', 'library-worker.js')
+    expect(fs.existsSync(builtWorkerPath), 'run npm run build before the opt-in compiled-worker test').toBe(true)
+    const worker = new LibraryWorkerClient(builtWorkerPath)
+    try {
+      const firstStartedAt = performance.now()
+      const initial = await worker.syncSession({
+        root, filePath: sourcePath, sessionId, source: 'codex'
+      })
+      const firstElapsedMs = performance.now() - firstStartedAt
+      expect(initial.dirPath).toBeTruthy()
+      expect(firstElapsedMs).toBeLessThan(60_000)
+
+      fs.appendFileSync(sourcePath, [
+        {
+          timestamp: '2026-08-02T09:01:00.000Z', type: 'response_item',
+          payload: {
+            type: 'message', role: 'user',
+            content: [{ type: 'input_text', text: 'large Codex shape follow-up' }]
+          }
+        },
+        {
+          timestamp: '2026-08-02T09:01:01.000Z', type: 'response_item',
+          payload: {
+            type: 'message', role: 'assistant',
+            content: [{ type: 'output_text', text: 'follow-up complete' }]
+          }
+        }
+      ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+
+      const followUpStartedAt = performance.now()
+      const followUp = await worker.syncSession({
+        root, filePath: sourcePath, sessionId, source: 'codex'
+      })
+      const followUpElapsedMs = performance.now() - followUpStartedAt
+      expect(followUp.dirPath).toBe(initial.dirPath)
+      expect(followUpElapsedMs).toBeLessThan(60_000)
+      expect(await sha256File(path.join(followUp.dirPath!, 'backup.jsonl')))
+        .toBe(await sha256File(sourcePath))
+      expect(fs.readFileSync(path.join(followUp.dirPath!, 'transcript.md'), 'utf8'))
+        .toContain('large Codex shape follow-up')
+      console.info('[large-codex-shape]', JSON.stringify({
+        bytes: fs.statSync(sourcePath).size,
+        lines: fixture.lines + 2,
+        firstElapsedMs: Math.round(firstElapsedMs),
+        followUpElapsedMs: Math.round(followUpElapsedMs)
+      }))
+    } finally {
+      await worker.close()
+    }
+  }, 180_000)
+
   largeLiveSyncIt('keeps a 100MB active source follow-up below the 60 second live gate', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-100mb-root-'))
     roots.push(root)

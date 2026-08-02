@@ -1,8 +1,20 @@
 import { createHash } from 'node:crypto'
 import snapshotDocument from './pricing-snapshots.json'
 
-export type PricingSource = 'official' | 'litellm' | 'models.dev' | 'openrouter' | 'user-override'
+export type PricingSource = 'official' | 'genai-prices' | 'litellm' | 'models.dev' | 'openrouter' | 'user-override'
 export type PriceSourceRole = 'history-formula' | 'coverage-diff' | 'model-identity' | 'official-review-override'
+
+export interface PricingDimensions {
+  serviceTier?: string
+  speed?: string
+  batchMode?: 'realtime' | 'batch'
+  region?: string
+}
+
+export interface CandidateModelMatcher {
+  kind: 'equals' | 'starts-with' | 'contains'
+  value: string
+}
 
 export interface PricingRule {
   id: string
@@ -21,9 +33,42 @@ export interface PricingRule {
   contextThresholdTokens?: number
   thresholdMode?: 'whole-request' | 'marginal'
   longContextMultiplier?: { input: number; output: number }
+  dimensions?: PricingDimensions
+  pricingFormula?: string
+  /** Candidate-only identity evidence; runtime aliases remain separately reviewed. */
+  modelMatchers?: readonly CandidateModelMatcher[]
   source: PricingSource
   sourceUrl: string
+  sourceRevision?: string
+  officialReviewUrl?: string
+  reviewStatus?: 'approved' | 'pending-review'
   catalogVersion: string
+}
+
+export type BillingUnit =
+  | 'search'
+  | 'image'
+  | 'audio-minute'
+  | 'cache-storage-token-hour'
+  | 'credit'
+  | 'page'
+  | 'request'
+  | 'character'
+  | 'gigabyte-day'
+
+export interface UnitPricingRule {
+  id: string
+  provider: string
+  sku: string
+  unit: BillingUnit
+  usdPerUnit: number
+  effectiveFrom: string
+  effectiveTo?: string
+  dimensions?: PricingDimensions
+  source: PricingSource
+  sourceUrl: string
+  sourceRevision: string
+  reviewStatus: 'approved' | 'pending-review'
 }
 
 export interface PriceSnapshotSource {
@@ -44,6 +89,21 @@ export interface PriceSnapshot {
   contentHash: string
   sourcePipeline: readonly PriceSnapshotSource[]
   rules: readonly PricingRule[]
+  unitRules?: readonly UnitPricingRule[]
+}
+
+export interface PriceCandidateSnapshot {
+  revision: string
+  status: 'pending-review'
+  generatedAt: string
+  contentHash: string
+  sourcePipeline: readonly PriceSnapshotSource[]
+  rules: readonly PricingRule[]
+  unitRules: readonly UnitPricingRule[]
+  review: {
+    requiredApprover: string
+    activationAllowed: false
+  }
 }
 
 export interface CanonicalModelMatch {
@@ -55,6 +115,7 @@ export interface CanonicalModelMatch {
 type RawRule = Omit<PricingRule, 'catalogVersion'>
 type RawSnapshot = Omit<PriceSnapshot, 'rules' | 'sourcePipeline'> & {
   sourcePipeline: PriceSnapshotSource[]
+  unitRules?: UnitPricingRule[]
   patches: Array<
     | { op: 'add'; rule: RawRule }
     | { op: 'replace'; ruleId: string; rule: RawRule }
@@ -80,12 +141,66 @@ function snapshotHashInput(snapshot: PriceSnapshot): unknown {
     ...(snapshot.revisionReason ? { revisionReason: snapshot.revisionReason } : {}),
     ...(snapshot.revisionNotice ? { revisionNotice: snapshot.revisionNotice } : {}),
     sourcePipeline: snapshot.sourcePipeline,
-    rules: snapshot.rules.map(({ catalogVersion: _catalogVersion, ...rule }) => rule)
+    rules: snapshot.rules.map(({ catalogVersion: _catalogVersion, ...rule }) => rule),
+    ...(snapshot.unitRules ? { unitRules: snapshot.unitRules } : {})
   }
 }
 
 export function calculatePriceSnapshotHash(snapshot: PriceSnapshot): string {
   return createHash('sha256').update(JSON.stringify(stableJson(snapshotHashInput(snapshot)))).digest('hex')
+}
+
+function candidateHashInput(candidate: PriceCandidateSnapshot): unknown {
+  return {
+    schemaVersion: 2,
+    revision: candidate.revision,
+    status: candidate.status,
+    generatedAt: candidate.generatedAt,
+    sourcePipeline: candidate.sourcePipeline,
+    rules: candidate.rules.map(({ catalogVersion: _catalogVersion, ...rule }) => rule),
+    unitRules: candidate.unitRules,
+    review: candidate.review
+  }
+}
+
+export function calculatePriceCandidateHash(candidate: PriceCandidateSnapshot): string {
+  return createHash('sha256').update(JSON.stringify(stableJson(candidateHashInput(candidate)))).digest('hex')
+}
+
+export function assertPriceCandidateIntegrity(candidate: PriceCandidateSnapshot): void {
+  if (candidate.status !== 'pending-review' || candidate.review.activationAllowed !== false) {
+    throw new Error(`Price candidate ${candidate.revision} is not safely isolated`)
+  }
+  const actual = calculatePriceCandidateHash(candidate)
+  if (actual !== candidate.contentHash) {
+    throw new Error(`Price candidate ${candidate.revision} hash mismatch: expected ${candidate.contentHash}, got ${actual}`)
+  }
+  const expectedRoles: PriceSourceRole[] = [
+    'history-formula', 'coverage-diff', 'model-identity', 'official-review-override'
+  ]
+  if (candidate.sourcePipeline.map((source) => source.role).join('\0') !== expectedRoles.join('\0') ||
+    candidate.sourcePipeline.some((source) => !source.revision || !source.evidenceUrl)) {
+    throw new Error(`Price candidate ${candidate.revision} has an incomplete source pipeline`)
+  }
+  for (const rule of candidate.unitRules) {
+    if (rule.reviewStatus !== 'pending-review' || !rule.sourceRevision || !rule.sourceUrl) {
+      throw new Error(`Price candidate unit rule ${rule.id} is not pending review`)
+    }
+  }
+  for (const rule of candidate.rules) {
+    if (rule.reviewStatus !== 'pending-review' || !rule.sourceRevision || !rule.sourceUrl || !rule.officialReviewUrl) {
+      throw new Error(`Price candidate token rule ${rule.id} lacks pending review evidence`)
+    }
+  }
+}
+
+function dimensionsKey(dimensions?: PricingDimensions): string {
+  return JSON.stringify(stableJson({
+    serviceTier: dimensions?.serviceTier?.toLowerCase() || 'standard',
+    speed: dimensions?.speed?.toLowerCase() || 'standard',
+    batchMode: dimensions?.batchMode || 'realtime',
+    region: dimensions?.region?.toLowerCase() || null
+  }))
 }
 
 export function assertPriceSnapshotIntegrity(snapshot: PriceSnapshot): void {
@@ -102,7 +217,7 @@ export function assertPriceSnapshotIntegrity(snapshot: PriceSnapshot): void {
   }
   const byModel = new Map<string, PricingRule[]>()
   for (const rule of snapshot.rules) {
-    const key = `${rule.provider}\0${rule.modelCanonical}`
+    const key = `${rule.provider}\0${rule.modelCanonical}\0${dimensionsKey(rule.dimensions)}`
     const values = byModel.get(key) || []
     values.push(rule)
     byModel.set(key, values)
@@ -115,6 +230,25 @@ export function assertPriceSnapshotIntegrity(snapshot: PriceSnapshot): void {
         : Number.POSITIVE_INFINITY
       if (previousTo > Date.parse(rules[index].effectiveFrom)) {
         throw new Error(`Price snapshot ${snapshot.revision} has overlapping rules for ${key}`)
+      }
+    }
+  }
+  const unitHistories = new Map<string, UnitPricingRule[]>()
+  for (const rule of snapshot.unitRules || []) {
+    if (rule.reviewStatus !== 'approved') throw new Error(`Price snapshot ${snapshot.revision} has unapproved unit ${rule.id}`)
+    const key = `${rule.provider}\0${rule.sku}\0${rule.unit}\0${dimensionsKey(rule.dimensions)}`
+    const values = unitHistories.get(key) || []
+    values.push(rule)
+    unitHistories.set(key, values)
+  }
+  for (const [key, rules] of unitHistories) {
+    rules.sort((left, right) => Date.parse(left.effectiveFrom) - Date.parse(right.effectiveFrom))
+    for (let index = 1; index < rules.length; index++) {
+      const previousTo = rules[index - 1].effectiveTo
+        ? Date.parse(rules[index - 1].effectiveTo!)
+        : Number.POSITIVE_INFINITY
+      if (previousTo > Date.parse(rules[index].effectiveFrom)) {
+        throw new Error(`Price snapshot ${snapshot.revision} has overlapping unit rules for ${key}`)
       }
     }
   }
@@ -131,11 +265,13 @@ function deepFreeze<T>(value: T): T {
 function resolveSnapshots(): Map<string, PriceSnapshot> {
   const registry = new Map<string, PriceSnapshot>()
   let rules = new Map((snapshotDocument.baseRules as RawRule[]).map((rule) => [rule.id, rule]))
+  let unitRules: readonly UnitPricingRule[] | undefined
   for (const raw of snapshotDocument.snapshots as RawSnapshot[]) {
     if (raw.replaces) {
       const previous = registry.get(raw.replaces)
       if (!previous) throw new Error(`Price snapshot ${raw.revision} replaces unknown ${raw.replaces}`)
       rules = new Map(previous.rules.map(({ catalogVersion: _catalogVersion, ...rule }) => [rule.id, rule]))
+      unitRules = previous.unitRules
     }
     for (const patch of raw.patches) {
       if (patch.op === 'replace' && !rules.has(patch.ruleId)) {
@@ -155,8 +291,10 @@ function resolveSnapshots(): Map<string, PriceSnapshot> {
       ...(raw.revisionNotice ? { revisionNotice: raw.revisionNotice } : {}),
       contentHash: raw.contentHash,
       sourcePipeline: raw.sourcePipeline,
-      rules: [...rules.values()].map((rule) => ({ ...rule, catalogVersion: raw.revision }))
+      rules: [...rules.values()].map((rule) => ({ ...rule, catalogVersion: raw.revision })),
+      ...(raw.unitRules ? { unitRules: raw.unitRules } : unitRules ? { unitRules } : {})
     }
+    unitRules = snapshot.unitRules
     assertPriceSnapshotIntegrity(snapshot)
     registry.set(snapshot.revision, deepFreeze(snapshot))
   }

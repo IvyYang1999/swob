@@ -24,7 +24,8 @@ const SOURCE_LABELS: Record<string, string> = {
   kimi: 'Kimi',
   hermes: 'Hermes',
   qoder: 'Qoder',
-  trae: 'Trae'
+  trae: 'Trae',
+  gemini: 'Gemini CLI'
 }
 
 function StepDots({ step }: { step: Step }) {

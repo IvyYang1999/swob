@@ -98,6 +98,9 @@ describe('SettingsPanel 纵向导航设置', () => {
         { id: 'iterm2', name: 'iTerm2', path: '/Applications/iTerm.app', commandSupport: 'stable', canRunCommand: true, evidence: 'app-path' },
         { id: 'tabby', name: 'Tabby', path: '/Applications/Tabby.app', commandSupport: 'none', canRunCommand: false, limitation: '没有稳定入口', evidence: 'app-path' }
       ]),
+      getCodexHomes: vi.fn().mockResolvedValue(['/tmp/codex-work']),
+      selectCodexHomes: vi.fn().mockResolvedValue(['/tmp/codex-personal']),
+      setCodexHomes: vi.fn(async (homes: string[]) => homes),
       networkGetInfo: vi.fn().mockResolvedValue({
         localIps: [],
         tailscaleIp: null,
@@ -131,6 +134,18 @@ describe('SettingsPanel 纵向导航设置', () => {
     expect(within(nav).queryByRole('button', { name: '外观' })).toBeNull()
     expect(screen.queryAllByRole('tab')).toHaveLength(0)
     expect(within(nav).getByRole('button', { name: '通用' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('通用页可管理多个本机 CODEX_HOME 根目录', async () => {
+    render(<SettingsPanel />)
+
+    expect(await screen.findByText('/tmp/codex-work')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '添加根目录' }))
+
+    await waitFor(() => expect((window as any).api.setCodexHomes).toHaveBeenCalledWith([
+      '/tmp/codex-work', '/tmp/codex-personal'
+    ]))
+    expect(await screen.findByText('/tmp/codex-personal')).not.toBeNull()
   })
 
   it('终端分类展示检测结果，禁用无命令入口的 App', async () => {
@@ -276,7 +291,7 @@ describe('SettingsPanel 纵向导航设置', () => {
       platform: 'win32',
       windowsNativeAlpha: true,
       supportedSources: ['claude-code', 'codex'],
-      unsupportedSources: ['cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae'],
+      unsupportedSources: ['cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae', 'gemini'],
       features: { wsl: false, cloudPlaceholders: false, cliInstall: false, arm64: false, autoUpdate: false, codeSigning: false }
     })
 

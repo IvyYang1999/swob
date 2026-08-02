@@ -24,6 +24,7 @@ import {
   resolveFolderPath,
   getLibraryRoot,
   rebuildAllTranscripts,
+  rebuildSessionTranscript,
   redactLibraryTranscripts,
   findLibrarySessionsWithMissingSources
 } from '../main/library-manager'
@@ -33,7 +34,16 @@ import { cliInstallOptionsForEnvironment, installSwobCli } from '../main/cli-ins
 import { runtimeHome } from '../main/runtime-home'
 import { formatResumeAuditReport, runResumeAudit } from '../main/resume-audit'
 import { buildCliResumeResponse } from './resume-command'
-import { formatResolveCliOutput, resolveSessionId } from './resolve-command'
+import { formatResolveCliOutput } from './resolve-command'
+import {
+  buildSessionLocation,
+  ControlPlaneError,
+  inspectLibrary,
+  inspectWriterLock,
+  locateSession,
+  readLibraryControlSnapshot,
+  resolveFromSnapshot
+} from './library-control-plane'
 import {
   getSessionLineagePath,
   rebuildSessionLineageRegistry,
@@ -48,7 +58,7 @@ import {
   getSearchIndexWriteCoordinator
 } from '../main/search-index-writer'
 import { filterVisibleSearchSources } from '../main/session-search'
-import { findCodexSessionFiles, loadCodexRawMessages } from '../main/codex-loader'
+import { loadCodexRawMessages, scanCodexSessionFiles } from '../main/codex-loader'
 import { findCursorSessionFiles, loadCursorRawMessages } from '../main/cursor-loader'
 import {
   findOpencodeSessionFiles,
@@ -354,7 +364,7 @@ async function cmdGrep(query: string, flags: Record<string, string | true>): Pro
     filePath,
     source: detectSessionSourceForJsonl(filePath)
   }))
-  for (const filePath of findCodexSessionFiles()) {
+  for (const filePath of scanCodexSessionFiles()) {
     sources.push({ filePath, source: 'codex', loadRaw: () => loadCodexRawMessages(filePath) })
   }
   for (const filePath of findCursorSessionFiles()) {
@@ -469,13 +479,15 @@ async function cmdResumeAudit(flags: Record<string, string | true>): Promise<voi
 }
 
 function cmdResolve(sessionId: string, flags: Record<string, string | true>): number {
-  const result = resolveSessionId(sessionId, getLibraryRoot())
+  const result = resolveFromSnapshot(sessionId, readLibraryControlSnapshot())
   if (flags.json === true) {
     out({
       input: result.input,
       resolved: result.resolved,
       matched: result.matched,
-      ambiguous: result.ambiguous === true
+      ambiguous: result.ambiguous === true,
+      errorCode: result.ambiguous ? 'IDENTIFIER_AMBIGUOUS' : result.matched ? null : 'SESSION_NOT_FOUND',
+      candidates: result.candidates || []
     })
   } else {
     const output = formatResolveCliOutput(result, false)
@@ -485,6 +497,16 @@ function cmdResolve(sessionId: string, flags: Record<string, string | true>): nu
   if (result.ambiguous) return 2
   if (!result.matched) return 3
   return 0
+}
+
+function cmdWhere(sessionId: string): void {
+  const snapshot = readLibraryControlSnapshot()
+  const { result, session } = locateSession(sessionId, snapshot)
+  out({
+    input: sessionId,
+    resolved: result.resolved,
+    ...buildSessionLocation(session)
+  })
 }
 
 async function cmdLineage(flags: Record<string, string | true>): Promise<void> {
@@ -681,13 +703,75 @@ function cmdConfigSet(key: string, value: string): void {
 }
 
 async function cmdTranscript(args: string[], flags: Record<string, string | true>): Promise<void> {
-  if (args[0] !== 'rebuild' || flags.all !== true) {
-    fail('用法: swob transcript rebuild --all [--dry-run] [--missing-only]')
+  if (args[0] === 'status') {
+    if (!args[1]) fail('用法: swob transcript status <id-or-prefix> --json')
+    const snapshot = readLibraryControlSnapshot()
+    const { result, session } = locateSession(args[1], snapshot)
+    const location = buildSessionLocation(session)
+    out({
+      input: args[1],
+      resolved: result.resolved,
+      sessionId: location.sessionId,
+      sourceUpdatedAt: location.freshness.sourceUpdatedAt,
+      transcriptUpdatedAt: location.freshness.transcriptUpdatedAt,
+      backupUpdatedAt: location.freshness.backupUpdatedAt,
+      canonicalUpdatedAt: location.freshness.canonicalUpdatedAt,
+      manifestUpdatedAt: location.freshness.manifestUpdatedAt,
+      lagMs: location.freshness.lagMs,
+      basis: location.freshness.basis,
+      status: location.freshness.status,
+      severity: location.freshness.severity,
+      requiredArtifacts: location.freshness.requiredArtifacts,
+      stale: location.freshness.stale,
+      blockingReason: location.freshness.blockingReason,
+      blockingReasons: location.freshness.blockingReasons
+    })
+    return
   }
-  out(await rebuildAllTranscripts({
-    dryRun: flags['dry-run'] === true,
-    missingOnly: flags['missing-only'] === true
-  }))
+  if (args[0] !== 'rebuild') {
+    fail('用法: swob transcript status <id-or-prefix>，或 swob transcript rebuild <id-or-prefix> [--dry-run|--all]')
+  }
+  if (flags.all === true) {
+    out(await rebuildAllTranscripts({
+      dryRun: flags['dry-run'] === true,
+      missingOnly: flags['missing-only'] === true
+    }))
+    return
+  }
+  if (!args[1]) fail('用法: swob transcript rebuild <id-or-prefix> [--dry-run]')
+  const snapshot = readLibraryControlSnapshot()
+  const { session } = locateSession(args[1], snapshot)
+  const location = buildSessionLocation(session)
+  if (location.sources.some((source) => source.placeholder) || location.backup.placeholder) {
+    throw new ControlPlaneError(
+      'ICLOUD_PLACEHOLDER',
+      '目标会话数据正在等待 iCloud 下载，未执行重建',
+      1,
+      '等待占位文件下载完成后重试',
+      true
+    )
+  }
+  const result = await rebuildSessionTranscript(session.sessionId, { dryRun: flags['dry-run'] === true })
+  if (result.failureCode) {
+    throw new CliFailure('目标会话没有可解析的 source 或 backup，未执行重建', 1, {
+      code: result.failureCode,
+      hint: '先运行 swob where <id> --json 检查 source/backup 可用性',
+      retryable: true
+    })
+  }
+  out(result)
+}
+
+function cmdDoctor(args: string[]): void {
+  if (args[0] === 'locks') {
+    out(inspectWriterLock())
+    return
+  }
+  if (args[0] === 'library') {
+    out(inspectLibrary())
+    return
+  }
+  fail('用法: swob doctor locks --json，或 swob doctor library --json')
 }
 
 async function cmdInstall(): Promise<void> {
@@ -741,6 +825,10 @@ async function dispatch(cmd: string[], flags: Record<string, string | true>): Pr
     case 'resolve':
       if (!cmd[1]) fail('缺少 sessionId。用法: swob resolve <sessionId> [--json]')
       return cmdResolve(cmd[1], flags)
+    case 'where':
+      if (!cmd[1]) fail('缺少 sessionId。用法: swob where <id-or-prefix> [--json]')
+      cmdWhere(cmd[1])
+      return 0
     case 'lineage': await cmdLineage(flags); return 0
     case 'folders': cmdFolders(); return 0
     case 'folder':
@@ -768,6 +856,7 @@ async function dispatch(cmd: string[], flags: Record<string, string | true>): Pr
       return 0
     case 'active': out({ activeSessionIds: [...detectActiveSessionsFromProcesses()] }); return 0
     case 'transcript': await cmdTranscript(cmd.slice(1), flags); return 0
+    case 'doctor': cmdDoctor(cmd.slice(1)); return 0
     case 'redact': {
       const result = redactLibraryTranscripts({ dryRun: flags['dry-run'] === true })
       out({ files: result.files, hits: result.hits })
@@ -779,9 +868,28 @@ async function dispatch(cmd: string[], flags: Record<string, string | true>): Pr
 }
 
 function errorExitCode(error: unknown): number {
+  if (error instanceof ControlPlaneError) return error.exitCode
   if (error instanceof CliFailure) return error.exitCode
   const message = error instanceof Error ? error.message : String(error)
   return /不存在|not found|ENOENT/i.test(message) ? 3 : 1
+}
+
+function libraryFailureDetails(error: unknown): { code: string; hint: string; retryable: boolean } | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const code = typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : undefined
+  if (!code) return undefined
+  if (code === 'LIBRARY_WRITER_BUSY') {
+    return { code, hint: '运行 swob doctor locks --json 查看 owner 存活性后重试', retryable: true }
+  }
+  if (code.startsWith('SESSION_IDENTITY_') || code === 'SESSION_PACKAGE_ID_COLLISION') {
+    return { code, hint: '运行 swob doctor library --json，并先处理 Library 身份冲突', retryable: false }
+  }
+  if (code === 'LIBRARY_PATH_UNSAFE') {
+    return { code, hint: 'Library 路径未通过安全校验，未执行任何写入', retryable: false }
+  }
+  return { code, hint: '检查本地 Library 状态后重试', retryable: code === 'EACCES' || code === 'EBUSY' }
 }
 
 export async function runCli(
@@ -808,12 +916,26 @@ export async function runCli(
       else activeIo.stdout(renderCliHelp())
       return 0
     }
-    initLibrary(options.libraryRoot, { readOnly: cmd[0] === 'resume-audit' })
-    scanLibrary()
+    const controlPlaneRead = cmd[0] === 'resolve' || cmd[0] === 'where' || cmd[0] === 'doctor' ||
+      cmd[0] === 'resume-audit' ||
+      (cmd[0] === 'transcript' && (cmd[1] === 'status' || flags['dry-run'] === true))
+    const commandOwnsScan = cmd[0] === 'resolve' || cmd[0] === 'where' || cmd[0] === 'doctor' ||
+      cmd[0] === 'transcript'
+    initLibrary(options.libraryRoot, { readOnly: controlPlaneRead })
+    if (!commandOwnsScan) scanLibrary()
     return await dispatch(cmd, flags)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    const details = error instanceof CliFailure ? error.details : undefined
+    const details = error instanceof ControlPlaneError
+      ? {
+          code: error.code,
+          hint: error.hint,
+          retryable: error.retryable,
+          ...(error.candidates ? { candidates: error.candidates } : {})
+        }
+      : error instanceof CliFailure
+        ? error.details
+        : libraryFailureDetails(error)
     activeIo.stderr(JSON.stringify({
       error: details ? { message, ...details } : message
     }) + '\n')

@@ -156,4 +156,41 @@ describe('canonical search projection', () => {
     expect(searchFTS('canonical-new-marker')).toHaveLength(0)
     expect(searchFTS('legacy-only-marker')).toHaveLength(1)
   })
+
+  it('rolls back canonical replacement when cancellation reaches the commit boundary', async () => {
+    await indexCanonicalSession(
+      'canonical-search-session',
+      canonicalRecords('canonical-cancel-old-marker')
+    )
+
+    let checks = 0
+    await expect(indexCanonicalSession(
+      'canonical-search-session',
+      canonicalRecords('canonical-cancel-new-marker'),
+      {
+        // Two messages, one tool call, one result and four FTS rows place the
+        // twelfth check at the transaction's final pre-commit boundary.
+        shouldCancel: () => ++checks >= 12
+      }
+    )).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(searchFTS('canonical-cancel-old-marker')).toHaveLength(1)
+    expect(searchFTS('canonical-cancel-new-marker')).toHaveLength(0)
+  })
+
+  it('rolls back a canonical tombstone cancelled at its commit boundary', async () => {
+    await indexCanonicalSession(
+      'canonical-search-session',
+      canonicalRecords('canonical-cancel-tombstone-marker')
+    )
+
+    let checks = 0
+    await expect(tombstoneCanonicalSession('canonical-session-record', {
+      // Entry, transaction start, then final pre-commit check after all three
+      // deletes have run; the thrown AbortError must roll them all back.
+      shouldCancel: () => ++checks >= 3
+    })).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(searchFTS('canonical-cancel-tombstone-marker')).toHaveLength(1)
+  })
 })

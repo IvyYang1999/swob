@@ -70,6 +70,238 @@ afterEach(() => {
 })
 
 describe('SearchIndexWriteCoordinator', () => {
+  workerIntegrationIt('propagates cancellation through the real worker without a search commit', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-worker-cancel-'))
+    roots.push(root)
+    process.env.SWOB_SEARCH_INDEX_DIR = root
+    const sourcePath = path.join(root, 'worker-cancelled.jsonl')
+    const sessionId = 'worker-cancelled-session'
+    fs.writeFileSync(sourcePath, JSON.stringify({
+      uuid: 'worker-user', parentUuid: null, sessionId, type: 'user',
+      timestamp: '2026-08-02T12:59:00.000Z',
+      message: { role: 'user', content: 'forbidden real worker commit' }
+    }) + '\n')
+    const worker = new LibraryWorkerClient(path.join(process.cwd(), 'out', 'main', 'library-worker.js'))
+    const active = worker.syncSearchSources([{
+      filePath: sourcePath,
+      sessionId,
+      source: 'claude-code'
+    }], { prune: true })
+    const observedActive = active.catch((error: unknown) => error)
+
+    const startedAt = performance.now()
+    worker.cancelPending()
+    await worker.close()
+
+    expect(await observedActive).toMatchObject({ name: 'AbortError' })
+    expect(performance.now() - startedAt).toBeLessThan(2_000)
+    expect(searchFTS('forbidden real worker commit')).toEqual([])
+  })
+
+  it('signals an active writer cancellation before waiting for the drain', async () => {
+    let rejectActive!: (error: Error) => void
+    let cancelCalls = 0
+    let closeCalls = 0
+    const activeGate = new Promise<void>((_resolve, reject) => { rejectActive = reject })
+    const port: SearchIndexWritePort = {
+      syncSearchSources: async () => activeGate,
+      indexCanonicalSearch: async () => {},
+      tombstoneCanonicalSearch: async () => {},
+      cancelPending: () => {
+        cancelCalls++
+        const error = new Error('cancelled by shutdown')
+        error.name = 'AbortError'
+        rejectActive(error)
+      },
+      close: async () => { closeCalls++ }
+    }
+    const coordinator = new SearchIndexWriteCoordinator(port)
+    const active = coordinator.scheduleLegacySource({ filePath: '/active.jsonl' })
+    const observedActive = active.catch((error: unknown) => error)
+
+    const startedAt = performance.now()
+    await coordinator.close(new Error('runtime shutdown'))
+    const elapsedMs = performance.now() - startedAt
+
+    expect(await observedActive).toMatchObject({ name: 'AbortError' })
+    expect(cancelCalls).toBe(1)
+    expect(closeCalls).toBe(1)
+    expect(elapsedMs).toBeLessThan(250)
+    expect(coordinator.getStats().running).toBe(false)
+  })
+
+  it('does not commit a changed search projection after shutdown cancellation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-cancel-'))
+    roots.push(root)
+    process.env.SWOB_SEARCH_INDEX_DIR = root
+    const sourcePath = path.join(root, 'cancelled.jsonl')
+    const sessionId = 'cancelled-search-session'
+    fs.writeFileSync(sourcePath, JSON.stringify({
+      uuid: 'old-user', parentUuid: null, sessionId, type: 'user',
+      timestamp: '2026-08-02T13:00:00.000Z',
+      message: { role: 'user', content: 'durable old search value' }
+    }) + '\n')
+    await synchronizeSearchSources([{ filePath: sourcePath }], { prune: true })
+
+    fs.appendFileSync(sourcePath, ' ')
+    let cancelled = false
+    await expect(synchronizeSearchSources([{
+      filePath: sourcePath,
+      loadRaw: async () => {
+        cancelled = true
+        return [{
+          uuid: 'new-user', parentUuid: null, sessionId, type: 'user',
+          timestamp: '2026-08-02T13:01:00.000Z',
+          message: { role: 'user', content: 'forbidden post quit search value' }
+        }]
+      }
+    }], { prune: true, shouldCancel: () => cancelled })).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(searchFTS('durable old search value')).toMatchObject([{ sessionId }])
+    expect(searchFTS('forbidden post quit search value')).toEqual([])
+  })
+
+  it('rolls back an in-flight FTS replacement when cancellation reaches the commit boundary', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-cancel-transaction-'))
+    roots.push(root)
+    process.env.SWOB_SEARCH_INDEX_DIR = root
+    const sourcePath = path.join(root, 'transaction.jsonl')
+    const sessionId = 'cancelled-search-transaction'
+    fs.writeFileSync(sourcePath, JSON.stringify({
+      uuid: 'old-user', parentUuid: null, sessionId, type: 'user',
+      timestamp: '2026-08-02T13:01:30.000Z',
+      message: { role: 'user', content: 'transaction keeps old value' }
+    }) + '\n')
+    await synchronizeSearchSources([{ filePath: sourcePath }], { prune: true })
+    fs.appendFileSync(sourcePath, ' ')
+
+    let checks = 0
+    await expect(synchronizeSearchSources([{
+      filePath: sourcePath,
+      loadRaw: async () => [{
+        uuid: 'new-user', parentUuid: null, sessionId, type: 'user',
+        timestamp: '2026-08-02T13:01:31.000Z',
+        message: { role: 'user', content: 'transaction forbidden new value' }
+      }]
+    }], {
+      prune: true,
+      // Cancellation arrives at the transaction's final pre-commit check,
+      // after delete/upsert/FTS insert have all run inside the transaction.
+      shouldCancel: () => ++checks >= 8
+    })).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(searchFTS('transaction keeps old value')).toMatchObject([{ sessionId }])
+    expect(searchFTS('transaction forbidden new value')).toEqual([])
+  })
+
+  it('bounds cancellation while a source parser is still pending', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-pending-parser-'))
+    roots.push(root)
+    process.env.SWOB_SEARCH_INDEX_DIR = root
+    const sourcePath = path.join(root, 'pending.jsonl')
+    fs.writeFileSync(sourcePath, '{}\n')
+    let cancelled = false
+    const startedAt = performance.now()
+    const synchronizing = synchronizeSearchSources([{
+      filePath: sourcePath,
+      loadRaw: () => new Promise(() => { /* deliberately never resolves */ })
+    }], { prune: true, shouldCancel: () => cancelled })
+    setTimeout(() => { cancelled = true }, 10)
+
+    await expect(synchronizing).rejects.toMatchObject({ name: 'AbortError' })
+    expect(performance.now() - startedAt).toBeLessThan(250)
+    expect(searchFTS('post quit')).toEqual([])
+  })
+
+  it('ignores a parser resolution that arrives after bounded coordinator close', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-late-parser-'))
+    roots.push(root)
+    process.env.SWOB_SEARCH_INDEX_DIR = root
+    const sourcePath = path.join(root, 'late-parser.jsonl')
+    const sessionId = 'late-parser-session'
+    fs.writeFileSync(sourcePath, '{}\n')
+    let cancelled = false
+    let resolveParser!: (messages: Array<{
+      uuid: string
+      parentUuid: null
+      sessionId: string
+      type: 'user'
+      timestamp: string
+      message: { role: 'user'; content: string }
+    }>) => void
+    let announceParserStarted!: () => void
+    const parserStarted = new Promise<void>((resolve) => { announceParserStarted = resolve })
+    const parser = new Promise<Parameters<typeof resolveParser>[0]>((resolve) => { resolveParser = resolve })
+    const unhandled: unknown[] = []
+    const onUnhandled = (error: unknown): void => { unhandled.push(error) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const port: SearchIndexWritePort = {
+        syncSearchSources: async (sources, options) => synchronizeSearchSources(sources, {
+          ...options,
+          shouldCancel: () => cancelled
+        }),
+        indexCanonicalSearch: async () => {},
+        tombstoneCanonicalSearch: async () => {},
+        cancelPending: () => { cancelled = true },
+        close: async () => { closeSearchIndex() }
+      }
+      const coordinator = new SearchIndexWriteCoordinator(port)
+      const active = coordinator.scheduleLegacySource({
+        filePath: sourcePath,
+        loadRaw: () => {
+          announceParserStarted()
+          return parser
+        }
+      })
+      const observedActive = active.catch((error: unknown) => error)
+      await parserStarted
+
+      const startedAt = performance.now()
+      await coordinator.close(new Error('runtime shutdown'))
+      expect(performance.now() - startedAt).toBeLessThan(250)
+      expect(await observedActive).toMatchObject({ name: 'AbortError' })
+
+      resolveParser([{
+        uuid: 'late-user', parentUuid: null, sessionId, type: 'user',
+        timestamp: '2026-08-02T13:01:00.000Z',
+        message: { role: 'user', content: 'forbidden late parser commit' }
+      }])
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(searchFTS('forbidden late parser commit')).toEqual([])
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('does not tombstone the last projection when quit races a missing source', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-cancel-tombstone-'))
+    roots.push(root)
+    process.env.SWOB_SEARCH_INDEX_DIR = root
+    const sourcePath = path.join(root, 'missing-on-quit.jsonl')
+    const sessionId = 'missing-on-quit-session'
+    fs.writeFileSync(sourcePath, JSON.stringify({
+      uuid: 'user', parentUuid: null, sessionId, type: 'user',
+      timestamp: '2026-08-02T13:02:00.000Z',
+      message: { role: 'user', content: 'keep missing projection on quit' }
+    }) + '\n')
+    await synchronizeSearchSources([{ filePath: sourcePath }], { prune: true })
+    fs.unlinkSync(sourcePath)
+
+    let checks = 0
+    await expect(synchronizeSearchSources([{ filePath: sourcePath }], {
+      prune: true,
+      // Entry, source loop, and index entry remain live; cancellation arrives
+      // exactly at the destructive tombstone transaction boundary.
+      shouldCancel: () => ++checks >= 4
+    })).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(searchFTS('keep missing projection on quit')).toMatchObject([{ sessionId }])
+  })
+
   largeWorkerIntegrationIt('keeps a 100MB Library commit plus full search reread within the live gate', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-100mb-root-'))
     const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-search-100mb-source-'))

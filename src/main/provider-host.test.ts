@@ -154,6 +154,56 @@ describe('ProviderHost isolation and resource boundaries', () => {
     expect(report.errors).toEqual([])
   })
 
+  it('passes only the current discovery SourceRef to v2 input, fingerprint and parse calls', async () => {
+    const provider = directV2Runtime()
+    const providerId = provider.manifest.providerId
+    const stableId = (await provider.discover(new AbortController().signal))[0].stableId
+    const current = {
+      ...source(providerId, stableId),
+      uri: `file:///current/${stableId}.jsonl`,
+      displayLocator: `/current/${stableId}.jsonl`
+    } as SourceRef
+    const previous = {
+      ...current,
+      uri: `file:///previous/${stableId}.jsonl`,
+      displayLocator: `/previous/${stableId}.jsonl`,
+      fingerprint: { algorithm: 'sha256', value: 'previous' }
+    } as SourceRef
+    if (current.kind !== 'file') throw new Error('synthetic current source must be a file')
+    const seen: Array<{ operation: string; uri: string }> = []
+    const originalInputBytes = provider.inputBytes.bind(provider)
+    const originalFingerprint = provider.fingerprint.bind(provider)
+    const originalParse = provider.parse.bind(provider)
+    provider.discover = async () => [current]
+    provider.inputBytes = async (candidate, signal) => {
+      seen.push({ operation: 'inputBytes', uri: candidate.kind === 'file' ? candidate.uri : 'non-file' })
+      return originalInputBytes(candidate, signal)
+    }
+    provider.fingerprint = async (candidate, signal) => {
+      seen.push({ operation: 'fingerprint', uri: candidate.kind === 'file' ? candidate.uri : 'non-file' })
+      return originalFingerprint(candidate, signal)
+    }
+    provider.parse = async (candidate, expected, signal) => {
+      seen.push({ operation: 'parse', uri: candidate.kind === 'file' ? candidate.uri : 'non-file' })
+      return originalParse(candidate, expected, signal)
+    }
+
+    const report = (await new ProviderHost({ runtimes: [], v2Runtimes: [provider] }).runAll({
+      previousSources: new Map([[providerId, [{
+        sourceRef: previous,
+        fingerprint: previous.fingerprint,
+        sessionRecordIds: ['previous-session']
+      }]]])
+    }))[0]
+
+    expect(report.errors).toEqual([])
+    expect(seen).toEqual([
+      { operation: 'inputBytes', uri: current.uri },
+      { operation: 'fingerprint', uri: current.uri },
+      { operation: 'parse', uri: current.uri }
+    ])
+  })
+
   it('times out one provider without delaying or corrupting another provider report', async () => {
     const slowPi = runtime('pi', {
       parse: async () => {

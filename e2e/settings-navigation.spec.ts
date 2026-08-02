@@ -85,8 +85,8 @@ test('Resume 分类按 harness 动态过滤，实验开关在本分类', async (
   await page.getByRole('radio', { name: '深色' }).click()
   await navItem('继续').click()
   // CC-Mirror has its own Provider registry truth and no longer inherits the
-  // Claude Code Resume declaration, so all 13 discoverable sources are listed.
-  await expect(page.getByRole('combobox')).toHaveCount(13)
+  // Claude Code Resume declaration, so all 14 discoverable sources are listed.
+  await expect(page.getByRole('combobox')).toHaveCount(14)
   const zcode = page.getByRole('combobox', { name: /ZCode 默认方式/ })
   await expect(zcode).toHaveValue('zcode-desktop')
   expect(await zcode.locator('option[value="terminal"]').isDisabled()).toBe(true)
@@ -94,6 +94,13 @@ test('Resume 分类按 harness 动态过滤，实验开关在本分类', async (
 
   const trae = page.getByRole('combobox', { name: /Trae 默认方式/ })
   await expect(trae).toBeDisabled()
+
+  const gemini = page.getByRole('combobox', { name: /Gemini CLI 默认方式/ })
+  await gemini.scrollIntoViewIfNeeded()
+  await expect(gemini).toBeVisible()
+  await expect(gemini).toHaveValue('terminal')
+  await expect(gemini.locator('option[value="terminal"]')).toContainText('gemini 0.38.2')
+  await gemini.hover()
 
   const claudeExperiment = page.getByRole('checkbox', { name: '实验：导入到 Claude Desktop' })
   await expect(claudeExperiment).not.toBeChecked()

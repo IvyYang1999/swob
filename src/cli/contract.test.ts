@@ -83,6 +83,50 @@ function parsed(invocation: Invocation): unknown {
   return JSON.parse(invocation.stdout)
 }
 
+function parsedError(invocation: Invocation): any {
+  const lines = invocation.stderr.trim().split('\n').filter(Boolean)
+  return JSON.parse(lines[lines.length - 1])
+}
+
+function libraryFileEvidence(root: string): Array<{ name: string; size: number; mtimeMs: number; bytes: string }> {
+  const result: Array<{ name: string; size: number; mtimeMs: number; bytes: string }> = []
+  const visit = (dirPath: string): void => {
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const filePath = path.join(dirPath, entry.name)
+      if (entry.isDirectory()) visit(filePath)
+      else if (entry.isFile()) {
+        const stat = fs.statSync(filePath)
+        result.push({
+          name: path.relative(root, filePath),
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          bytes: fs.readFileSync(filePath).toString('base64')
+        })
+      }
+    }
+  }
+  visit(root)
+  return result
+}
+
+function createControlPackage(
+  title: string,
+  sessionId: string,
+  sourceFilePaths: string[] = [sourcePath]
+): string {
+  const dirPath = path.join(libraryRoot, title)
+  fs.mkdirSync(dirPath, { recursive: true })
+  fs.writeFileSync(path.join(dirPath, '.swob-session.json'), JSON.stringify({
+    sessionId,
+    sourceFilePaths,
+    customTitle: title,
+    createdAt: '2026-07-20T00:00:00.000Z',
+    updatedAt: '2026-07-20T00:02:00.000Z',
+    projectPath: '/repo/alpha'
+  }))
+  return dirPath
+}
+
 beforeAll(async () => {
   previousHome = process.env.HOME
   previousIndexDir = process.env.SWOB_SEARCH_INDEX_DIR
@@ -130,13 +174,185 @@ describe.sequential('Swob CLI machine contract', () => {
       { args: ['active', '--json'], assert: (value) => expect(value).toHaveProperty('activeSessionIds') },
       { args: ['lineage', '--dry-run', '--json'], assert: (value) => expect(value).toHaveProperty('aliases') },
       { args: ['resume-audit', '--json'], assert: (value) => expect(typeof value).toBe('object') },
+      { args: ['where', 'contract-session', '--json'], assert: (value) => expect(value).toHaveProperty('packagePath') },
+      { args: ['transcript', 'status', 'contract-session', '--json'], assert: (value) => expect(value).toHaveProperty('manifestUpdatedAt') },
+      { args: ['transcript', 'rebuild', 'contract-session', '--dry-run', '--json'], assert: (value) => expect(value).toMatchObject({ sessionId: 'contract-session', dryRun: true }) },
       { args: ['transcript', 'rebuild', '--all', '--dry-run', '--json'], assert: (value) => expect(typeof value).toBe('object') },
+      { args: ['doctor', 'locks', '--json'], assert: (value) => expect(value).toHaveProperty('state') },
+      { args: ['doctor', 'library', '--json'], assert: (value) => expect(value).toHaveProperty('staleCount') },
       { args: ['redact', '--dry-run', '--json'], assert: (value) => expect(value).toMatchObject({ files: expect.any(Number), hits: expect.any(Number) }) }
     ]
     for (const contract of cases) {
       const invocation = await invoke(contract.args)
       const value = parsed(invocation)
       contract.assert(value)
+    }
+  })
+
+  it('doctor locks/library 对 Library 与 machine identity 零写', async () => {
+    const machineDir = path.join(tempHome, '.swob-machine')
+    const before = libraryFileEvidence(libraryRoot)
+
+    expect((await invoke(['doctor', 'locks', '--json'])).code).toBe(0)
+    expect((await invoke(['doctor', 'library', '--json'])).code).toBe(0)
+
+    expect(libraryFileEvidence(libraryRoot)).toEqual(before)
+    expect(fs.existsSync(machineDir)).toBe(false)
+  })
+
+  it('事故验收 1/2: manifest-only 完整 UUID 与唯一前缀可解析，lineage 损坏不否决', async () => {
+    const sessionId = '94000000-0000-4000-8000-000000000193'
+    const dirPath = createControlPackage('Manifest Only', sessionId)
+    const lineagePath = path.join(libraryRoot, '.session-lineage.json')
+    fs.writeFileSync(lineagePath, '{broken-json')
+    try {
+      const startedAt = performance.now()
+      const exact = parsed(await invoke(['resolve', sessionId, '--json'])) as any
+      expect(performance.now() - startedAt).toBeLessThan(1_000)
+      expect(exact).toMatchObject({ matched: true, resolved: sessionId, errorCode: null })
+      expect(parsed(await invoke(['where', sessionId, '--json']))).toMatchObject({
+        input: sessionId,
+        resolved: exact.resolved,
+        sessionId: exact.resolved
+      })
+
+      const prefix = parsed(await invoke(['resolve', sessionId.slice(0, 12), '--json'])) as any
+      expect(prefix).toMatchObject({ matched: true, resolved: sessionId })
+
+      fs.writeFileSync(lineagePath, JSON.stringify({
+        version: 1,
+        generatedAt: '2026-08-02T00:00:00.000Z',
+        aliases: { 'legacy-manifest-only': sessionId }
+      }))
+      const alias = parsed(await invoke(['resolve', 'legacy-manifest-only', '--json'])) as any
+      const aliasWhere = parsed(await invoke(['where', 'legacy-manifest-only', '--json'])) as any
+      expect(alias).toMatchObject({ matched: true, resolved: sessionId })
+      expect(aliasWhere).toMatchObject({ resolved: alias.resolved, sessionId: alias.resolved })
+    } finally {
+      fs.rmSync(dirPath, { recursive: true, force: true })
+      fs.rmSync(lineagePath, { force: true })
+    }
+  })
+
+  it('事故验收 3: where/status 返回路径与四时间戳，并直接暴露 stale', async () => {
+    const packagePath = path.join(libraryRoot, '原始标题')
+    const manifestPath = path.join(packagePath, '.swob-session.json')
+    const transcriptPath = path.join(packagePath, 'transcript.md')
+    const backupPath = path.join(packagePath, 'backup.jsonl')
+    fs.writeFileSync(transcriptPath, '# stale transcript')
+    const old = new Date(Date.now() - 5 * 60_000)
+    const fresh = new Date()
+    fs.utimesSync(transcriptPath, old, old)
+    fs.utimesSync(backupPath, old, old)
+    fs.utimesSync(manifestPath, old, old)
+    fs.utimesSync(sourcePath, fresh, fresh)
+
+    const located = parsed(await invoke(['where', 'contract-sess', '--json'])) as any
+    expect(located).toMatchObject({
+      sessionId: 'contract-session',
+      packagePath,
+      manifest: { path: manifestPath, exists: true },
+      transcript: { path: transcriptPath, exists: true },
+      backup: { path: backupPath, exists: true },
+      sources: [{ path: sourcePath, exists: true }],
+      freshness: { stale: true }
+    })
+    const statusResult = parsed(await invoke(['transcript', 'status', 'contract-session', '--json'])) as any
+    for (const field of ['sourceUpdatedAt', 'transcriptUpdatedAt', 'backupUpdatedAt', 'manifestUpdatedAt']) {
+      expect(statusResult[field]).toEqual(expect.any(String))
+    }
+    expect(statusResult.lagMs).toBeGreaterThan(60_000)
+    expect(statusResult).toMatchObject({ basis: 'local-source', status: 'stale', stale: true })
+    expect(statusResult.blockingReasons).toEqual(expect.arrayContaining([
+      'TRANSCRIPT_STALE', 'BACKUP_STALE'
+    ]))
+    expect(statusResult.blockingReasons).not.toContain('MANIFEST_STALE')
+
+    const doctor = parsed(await invoke(['doctor', 'library', '--json'])) as any
+    expect(doctor).toMatchObject({
+      schemaVersion: 1,
+      observation: 'instantaneous-filesystem',
+      state: expect.any(String),
+      staleCount: 1,
+      unverifiableCount: 0
+    })
+  })
+
+  it('事故验收 4: where/status 不依赖搜索数据库且不受 GUI 写锁影响', async () => {
+    closeSearchIndex()
+    fs.mkdirSync(path.dirname(searchDatabasePath()), { recursive: true })
+    const blocker = new Database(searchDatabasePath())
+    blocker.pragma('journal_mode = DELETE')
+    blocker.exec('BEGIN EXCLUSIVE')
+    try {
+      const startedAt = performance.now()
+      expect((await invoke(['where', 'contract-session', '--json'])).code).toBe(0)
+      expect((await invoke(['transcript', 'status', 'contract-session', '--json'])).code).toBe(0)
+      expect(performance.now() - startedAt).toBeLessThan(1_000)
+    } finally {
+      blocker.exec('ROLLBACK')
+      blocker.close()
+    }
+  })
+
+  it('事故验收 5: transcript rebuild <id> 只改目标包', async () => {
+    const peerDir = createControlPackage('Untouched Peer', 'peer-session', [])
+    const peerManifest = path.join(peerDir, '.swob-session.json')
+    fs.writeFileSync(path.join(peerDir, 'transcript.md'), '# untouched')
+    const before = {
+      manifest: fs.readFileSync(peerManifest, 'utf8'),
+      transcript: fs.readFileSync(path.join(peerDir, 'transcript.md'), 'utf8'),
+      entries: fs.readdirSync(peerDir).sort()
+    }
+    try {
+      const rebuilt = parsed(await invoke(['transcript', 'rebuild', 'contract-session', '--json'])) as any
+      expect(rebuilt).toMatchObject({
+        sessionId: 'contract-session',
+        dryRun: false,
+        failed: 0,
+        coreSnapshotFiles: ['transcript.md', 'backup.jsonl', '.swob-session.json'],
+        coreWriteAtomic: true,
+        branchTranscriptsBestEffort: true,
+        branchFailed: expect.any(Number)
+      })
+      expect(rebuilt.written).toBeGreaterThan(0)
+      expect(fs.readFileSync(peerManifest, 'utf8')).toBe(before.manifest)
+      expect(fs.readFileSync(path.join(peerDir, 'transcript.md'), 'utf8')).toBe(before.transcript)
+      expect(fs.readdirSync(peerDir).sort()).toEqual(before.entries)
+    } finally {
+      fs.rmSync(peerDir, { recursive: true, force: true })
+    }
+  })
+
+  it('事故验收 6: 损坏 manifest、重复身份和 iCloud placeholder 有稳定机器码', async () => {
+    const corruptDir = path.join(libraryRoot, 'Corrupt Manifest')
+    fs.mkdirSync(corruptDir, { recursive: true })
+    fs.writeFileSync(path.join(corruptDir, '.swob-session.json'), '{broken')
+    const corrupt = await invoke(['where', 'not-provably-missing', '--json'])
+    expect(corrupt.code).toBe(1)
+    expect(parsedError(corrupt).error.code).toBe('LIBRARY_MANIFEST_CORRUPT')
+    fs.rmSync(corruptDir, { recursive: true, force: true })
+
+    const duplicateDir = createControlPackage('Duplicate Identity', 'contract-session')
+    const duplicateResolve = await invoke(['resolve', 'contract-session', '--json'])
+    expect(duplicateResolve.code).toBe(1)
+    expect(parsedError(duplicateResolve).error.code).toBe('SESSION_IDENTITY_CONFLICT')
+    const duplicate = await invoke(['where', 'contract-session', '--json'])
+    expect(duplicate.code).toBe(1)
+    expect(parsedError(duplicate).error.code).toBe('SESSION_IDENTITY_CONFLICT')
+    fs.rmSync(duplicateDir, { recursive: true, force: true })
+
+    const cloudId = '95000000-0000-4000-8000-000000000193'
+    const cloudDir = createControlPackage('Cloud Placeholder', cloudId, [path.join(tempHome, 'missing-source.jsonl')])
+    fs.writeFileSync(path.join(cloudDir, '.backup.jsonl.icloud'), '')
+    try {
+      const cloudStatus = parsed(await invoke(['transcript', 'status', cloudId, '--json'])) as any
+      expect(cloudStatus.blockingReasons).toContain('ICLOUD_PLACEHOLDER')
+      const rebuild = await invoke(['transcript', 'rebuild', cloudId, '--json'])
+      expect(rebuild.code).toBe(1)
+      expect(parsedError(rebuild).error.code).toBe('ICLOUD_PLACEHOLDER')
+    } finally {
+      fs.rmSync(cloudDir, { recursive: true, force: true })
     }
   })
 
@@ -265,18 +481,33 @@ describe.sequential('Swob CLI machine contract', () => {
   })
 
   it('resolve 用 2 表示歧义、3 表示不存在，JSON 仍可解析', async () => {
+    const latestOne = createControlPackage('Resolve latest one', 'latest-one', [])
+    const latestTwo = createControlPackage('Resolve latest two', 'latest-two', [])
     fs.writeFileSync(path.join(libraryRoot, '.session-lineage.json'), JSON.stringify({
       version: 1,
       generatedAt: '2026-07-22T00:00:00.000Z',
       aliases: { 'ambiguous-one': 'latest-one', 'ambiguous-two': 'latest-two' }
     }))
-    const ambiguous = await invoke(['resolve', 'ambiguous', '--json'])
-    expect(ambiguous.code).toBe(2)
-    expect(JSON.parse(ambiguous.stdout)).toMatchObject({ matched: false, ambiguous: true })
+    try {
+      const ambiguous = await invoke(['resolve', 'ambiguous', '--json'])
+      expect(ambiguous.code).toBe(2)
+      expect(JSON.parse(ambiguous.stdout)).toMatchObject({ matched: false, ambiguous: true })
 
-    const missing = await invoke(['resolve', 'definitely-missing', '--json'])
-    expect(missing.code).toBe(3)
-    expect(JSON.parse(missing.stdout)).toMatchObject({ matched: false, ambiguous: false })
+      const ambiguousWhere = await invoke(['where', 'ambiguous', '--json'])
+      expect(ambiguousWhere.code).toBe(2)
+      expect(parsedError(ambiguousWhere).error).toMatchObject({
+        code: 'IDENTIFIER_AMBIGUOUS',
+        candidates: ['ambiguous-one', 'ambiguous-two']
+      })
+
+      const missing = await invoke(['resolve', 'definitely-missing', '--json'])
+      expect(missing.code).toBe(3)
+      expect(JSON.parse(missing.stdout)).toMatchObject({ matched: false, ambiguous: false })
+    } finally {
+      fs.rmSync(latestOne, { recursive: true, force: true })
+      fs.rmSync(latestTwo, { recursive: true, force: true })
+      fs.rmSync(path.join(libraryRoot, '.session-lineage.json'), { force: true })
+    }
   })
 
   it('Skill 完全由命令注册表生成并覆盖每个命令定义', () => {

@@ -543,14 +543,29 @@ function canonicalEventsForMessages(
   return events
 }
 
+type EventFieldRelations = NonNullable<UsageEvent['fieldRelations']>
+
+function cacheRelationForV2(
+  relation: EventFieldRelations['cacheRead']
+): UsageRecord['relations']['cacheRead'] {
+  return relation === 'disjoint' ? 'independent' : relation
+}
+
+function reasoningRelationForV2(
+  relation: EventFieldRelations['reasoning']
+): UsageRecord['relations']['reasoning'] {
+  return relation === 'disjoint-from-visible-output' ? 'independent' : relation
+}
+
 function usagePayload(event: UsageEvent): UsageRecord {
   const components = event.components
   const writes = components.cacheWriteTokens + components.cacheWrite5mTokens + components.cacheWrite1hTokens
   const inputTotal = components.nonCachedInputTokens + components.cacheReadTokens + writes
   const reasoning = components.reasoningTokens ?? null
-  const visibleOutput = reasoning === null
+  const visibleOutput = components.visibleOutputTokens ?? (reasoning === null
     ? components.outputTokens
-    : Math.max(0, components.outputTokens - reasoning)
+    : Math.max(0, components.outputTokens - reasoning))
+  const legacySubset = event.semantics === 'openai-input-subset'
   return {
     eventId: event.sourceRowId || null,
     turnId: event.sourceRowId || null,
@@ -570,12 +585,12 @@ function usagePayload(event: UsageEvent): UsageRecord {
     providerTotal: inputTotal + components.outputTokens,
     aggregation: event.counterKind === 'cumulative-delta' ? 'delta' : 'per-message',
     relations: {
-      cacheRead: event.semantics === 'openai-input-subset' ? 'subset-of-input' : 'provider-defined',
-      cacheWrite: event.semantics === 'openai-input-subset' ? 'subset-of-input' : 'provider-defined',
-      reasoning: event.semantics === 'openai-input-subset' ? 'subset-of-output' : 'provider-defined'
+      cacheRead: cacheRelationForV2(event.fieldRelations?.cacheRead || (legacySubset ? 'subset-of-input' : 'provider-defined')),
+      cacheWrite: cacheRelationForV2(event.fieldRelations?.cacheWrite || (legacySubset ? 'subset-of-input' : 'provider-defined')),
+      reasoning: reasoningRelationForV2(event.fieldRelations?.reasoning || (legacySubset ? 'subset-of-output' : 'provider-defined'))
     },
     dedupKey: event.dedupKey,
-    billingFactKey: `${event.provider}:${event.dedupKey}`,
+    billingFactKey: event.billingFactKey || `${event.provider}:${event.dedupKey}`,
     measurement: {
       source: event.provenance,
       confidence: event.provenance === 'reported' ? 'exact' : event.provenance === 'derived' ? 'high' : 'low',

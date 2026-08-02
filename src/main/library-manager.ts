@@ -121,6 +121,7 @@ import type {
   SessionSource,
   SessionSummary,
   SessionDetailAvailability,
+  SessionLifecycleState,
   Folder,
   UserConfig,
   SshConfig,
@@ -152,6 +153,9 @@ export interface SessionMeta {
   /** Exact cwd captured from the source transcript; never reconstructed from projectPath. */
   resumeCwd?: string
   turnCount?: number  // swob 权威轮数（各类型统一），持久化供外部脚本按真实轮数归档
+  lifecycleState?: SessionLifecycleState
+  branchParentId?: string
+  branchChildIds?: string[]
   /** Multi-membership metadata used by the tag lens. */
   tags?: string[]
   /** Cached smart-organization classification. */
@@ -1032,6 +1036,20 @@ export function parseSessionMeta(
       warn('[library-manager] Ignoring invalid session metadata: malformed detailAvailability')
       return null
     }
+    if (meta.lifecycleState !== undefined &&
+      !['active', 'archived', 'replayed'].includes(meta.lifecycleState as string)) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed lifecycleState')
+      return null
+    }
+    if (meta.branchParentId !== undefined && !isNonEmptyString(meta.branchParentId)) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed branchParentId')
+      return null
+    }
+    if (meta.branchChildIds !== undefined &&
+      (!Array.isArray(meta.branchChildIds) || !meta.branchChildIds.every(isNonEmptyString))) {
+      warn('[library-manager] Ignoring invalid session metadata: malformed branchChildIds')
+      return null
+    }
     return parsed as SessionMeta
   } catch {
     warn('[library-manager] Ignoring invalid session metadata: malformed JSON')
@@ -1739,6 +1757,18 @@ export interface LibraryIdentityScanIssue {
   logicalKeyHash?: string
 }
 
+/**
+ * Keep every Library-wide traversal inside the same managed namespace.
+ * Session placement and scanLibrary never treat hidden or configured ignored
+ * directories as Library containers, so crash recovery must not descend into
+ * them either. `.swob-create-*` is checked by callers before this predicate:
+ * those visible recovery blockers remain fail-closed even though they are dot
+ * directories.
+ */
+function shouldSkipLibraryTraversalDirectory(name: string): boolean {
+  return name.startsWith('.') || _ignoreDirs.has(name)
+}
+
 function scanDir(
   dirPath: string,
   identityIssues: LibraryIdentityScanIssue[] = [],
@@ -1781,7 +1811,7 @@ function scanDir(
     // Skip iCloud placeholder files (e.g. .filename.icloud)
     if (entry.name.includes('.icloud')) continue
     // 库根设为整个 vault 时，跳过 wiki/clipii/日记 等非项目目录
-    if (_ignoreDirs.has(entry.name)) continue
+    if (shouldSkipLibraryTraversalDirectory(entry.name)) continue
     const fullPath = path.join(dirPath, entry.name)
 
     if (entry.isFile()) {
@@ -2089,6 +2119,9 @@ export function buildSessionSummaryFromManifest(session: LibrarySession): Sessio
     fileSizeBytes,
     allFilePaths: [session.jsonlPath],
     resumeCwd: meta.resumeCwd,
+    lifecycleState: meta.lifecycleState,
+    branchParentId: meta.branchParentId,
+    branchChildIds: meta.branchChildIds,
     userImages: [],
     pastedImageCount: 0,
     tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
@@ -2297,6 +2330,10 @@ function buildResumeCommand(source: SessionSource, sessionId: string): string | 
     if (sessionId.includes(':subagent:')) return undefined
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(sessionId)) return undefined
     return `qodercli -r ${shellQuote(sessionId)}`
+  }
+  if (source === 'gemini') {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(sessionId)) return undefined
+    return `gemini --resume ${shellQuote(sessionId)}`
   }
   return `claude --resume ${sessionId}`
 }
@@ -2763,11 +2800,15 @@ function recoverIncompleteSessionPublishes(localDeviceId: string): LibraryIdenti
     }
 
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name === '.swob') continue
+      if (!entry.isDirectory()) continue
+      // Preserve this check before the general dot-directory exclusion. An
+      // abandoned create reservation inside the managed namespace is evidence
+      // that must still block until ownership can be proven.
       if (entry.name.startsWith('.swob-create-')) {
         issues.push({ kind: 'incomplete-publish', dirPath: path.join(dirPath, entry.name) })
         continue
       }
+      if (entry.name === '.swob' || shouldSkipLibraryTraversalDirectory(entry.name)) continue
       const child = path.join(dirPath, entry.name)
       let stat: fs.Stats
       try { stat = fs.lstatSync(child) } catch {
@@ -2931,6 +2972,19 @@ function updateExistingLibrarySession(
     currentSourceFilePaths.some((sourcePath) => fs.existsSync(sourceStatPath(sourcePath)))) {
     meta.resumeCwd = session.resumeCwd
     preserveSchemaV3OrUpgradeToV2(meta)
+    changed = true
+  }
+  if (meta.lifecycleState !== session.lifecycleState) {
+    meta.lifecycleState = session.lifecycleState
+    changed = true
+  }
+  if (session.branchParentId !== undefined && meta.branchParentId !== session.branchParentId) {
+    meta.branchParentId = session.branchParentId
+    changed = true
+  }
+  if (session.branchChildIds !== undefined &&
+    JSON.stringify(meta.branchChildIds || []) !== JSON.stringify(session.branchChildIds)) {
+    meta.branchChildIds = session.branchChildIds
     changed = true
   }
   if (changed) writeSessionMeta(dirPath, meta)
@@ -3178,6 +3232,9 @@ async function ensureSessionInLibraryUnderWriter(
         projectPath: session.projectPath,
         resumeCwd: session.resumeCwd,
         turnCount: session.turnCount,
+        lifecycleState: session.lifecycleState,
+        branchParentId: session.branchParentId,
+        branchChildIds: session.branchChildIds,
         origin: captureLocalSessionOrigin(originOverride),
         sourceInstance: detectSessionSourceInstance(sourceFilePaths),
         ...(canonicalOptions ? { canonicalProvider: canonicalOptions.descriptor } : {})
@@ -3540,6 +3597,12 @@ async function syncBackupUnderWriter(sessionId: string, expectedDirPath?: string
   const meta = readSessionMeta(dirPath)
   if (!meta) return
 
+  await withSessionWriteSnapshot(_root, dirPath, () =>
+    syncBackupFilesInsideSnapshot(dirPath, meta))
+}
+
+/** Caller owns both the writer lease and the surrounding three-file snapshot. */
+async function syncBackupFilesInsideSnapshot(dirPath: string, meta: SessionMeta): Promise<void> {
   const backupPath = path.join(dirPath, BACKUP_FILE)
   assertSafeLibraryFileTarget(_root, backupPath)
 
@@ -3548,44 +3611,42 @@ async function syncBackupUnderWriter(sessionId: string, expectedDirPath?: string
   })
   if (sourcePaths.length === 0) return
 
-  await withSessionWriteSnapshot(_root, dirPath, async () => {
-    let nextSourceState: SessionMeta['backupSourceState'] | undefined
-    if (sourcePaths.length === 1) {
-      const sourcePath = sourcePaths[0]
-      const sourceStat = await fs.promises.stat(sourcePath)
-      const backupStat = await fs.promises.stat(backupPath).catch(() => null)
-      const previous = meta.backupSourceState
-      const canAppend = Boolean(
-        previous && backupStat &&
-        previous.path === sourcePath && previous.dev === sourceStat.dev && previous.ino === sourceStat.ino &&
-        previous.size === backupStat.size && sourceStat.size > previous.size
-      )
+  let nextSourceState: SessionMeta['backupSourceState'] | undefined
+  if (sourcePaths.length === 1) {
+    const sourcePath = sourcePaths[0]
+    const sourceStat = await fs.promises.stat(sourcePath)
+    const backupStat = await fs.promises.stat(backupPath).catch(() => null)
+    const previous = meta.backupSourceState
+    const canAppend = Boolean(
+      previous && backupStat &&
+      previous.path === sourcePath && previous.dev === sourceStat.dev && previous.ino === sourceStat.ino &&
+      previous.size === backupStat.size && sourceStat.size > previous.size
+    )
 
-      if (canAppend) await appendSourceTail(sourcePath, backupPath, previous!.size)
-      else if (!backupStat || sourceStat.size !== backupStat.size || sourceStat.mtimeMs !== previous?.mtimeMs) {
-        await replaceBackupFromSource(sourcePath, backupPath)
-      }
-
-      nextSourceState = {
-        path: sourcePath,
-        dev: sourceStat.dev,
-        ino: sourceStat.ino,
-        size: sourceStat.size,
-        mtimeMs: sourceStat.mtimeMs
-      }
-    } else {
-      await concatenateSources(sourcePaths, backupPath)
+    if (canAppend) await appendSourceTail(sourcePath, backupPath, previous!.size)
+    else if (!backupStat || sourceStat.size !== backupStat.size || sourceStat.mtimeMs !== previous?.mtimeMs) {
+      await replaceBackupFromSource(sourcePath, backupPath)
     }
-    crashAfterSessionPublishForTest('backup', backupPath)
 
-    const backupStat = await fs.promises.stat(backupPath)
-    meta.backupSha256 = await hashFileSha256(backupPath)
-    meta.backupSize = backupStat.size
-    meta.backupSourceState = nextSourceState
-    preserveSchemaV3OrUpgradeToV2(meta)
-    writeSessionMeta(dirPath, meta)
-    crashAfterSessionPublishForTest('manifest', path.join(dirPath, SESSION_META_FILE))
-  })
+    nextSourceState = {
+      path: sourcePath,
+      dev: sourceStat.dev,
+      ino: sourceStat.ino,
+      size: sourceStat.size,
+      mtimeMs: sourceStat.mtimeMs
+    }
+  } else {
+    await concatenateSources(sourcePaths, backupPath)
+  }
+  crashAfterSessionPublishForTest('backup', backupPath)
+
+  const backupStat = await fs.promises.stat(backupPath)
+  meta.backupSha256 = await hashFileSha256(backupPath)
+  meta.backupSize = backupStat.size
+  meta.backupSourceState = nextSourceState
+  preserveSchemaV3OrUpgradeToV2(meta)
+  writeSessionMeta(dirPath, meta)
+  crashAfterSessionPublishForTest('manifest', path.join(dirPath, SESSION_META_FILE))
 }
 
 // --- Update Transcript ---
@@ -3855,6 +3916,27 @@ export interface RebuildTranscriptsResult {
   wouldWrite: number
 }
 
+export interface RebuildSessionTranscriptResult {
+  libraryRoot: string
+  sessionId: string
+  transcriptPath: string | null
+  dryRun: boolean
+  branchCount: number
+  transcriptCount: number
+  written: number
+  failed: number
+  wouldWrite: number
+  /** The protected crash-consistency boundary inherited from t190. */
+  coreSnapshotFiles: readonly ['transcript.md', 'backup.jsonl', '.swob-session.json']
+  coreWriteAtomic: boolean
+  /** Branch markdown is derived and regenerable, outside the three-file snapshot. */
+  branchTranscriptsBestEffort: true
+  branchWritten: number
+  branchFailed: number
+  branchFailureIds: string[]
+  failureCode?: 'TRANSCRIPT_SOURCE_UNAVAILABLE'
+}
+
 export interface RedactLibraryTranscriptsResult {
   dryRun: boolean
   /** Number of files that contain at least one credential match. */
@@ -3944,6 +4026,134 @@ function redactLibraryTranscriptsUnderWriter(
 export async function rebuildAllTranscripts(options: { dryRun?: boolean; missingOnly?: boolean } = {}): Promise<RebuildTranscriptsResult> {
   if (options.dryRun === true) return rebuildAllTranscriptsUnderWriter(options)
   return withLibraryWriter('transcript', () => rebuildAllTranscriptsUnderWriter(options))
+}
+
+/**
+ * Rebuild exactly one Library package. Unlike rebuildAllTranscripts this
+ * resolves one registry binding before loading raw messages and never loops
+ * over unrelated session sources.
+ */
+export async function rebuildSessionTranscript(
+  sessionId: string,
+  options: { dryRun?: boolean } = {}
+): Promise<RebuildSessionTranscriptResult> {
+  if (options.dryRun === true) return rebuildSessionTranscriptUnderWriter(sessionId, options)
+  return withLibraryWriter('transcript', () => rebuildSessionTranscriptUnderWriter(sessionId, options))
+}
+
+async function rebuildSessionTranscriptUnderWriter(
+  sessionId: string,
+  options: { dryRun?: boolean }
+): Promise<RebuildSessionTranscriptResult> {
+  const dryRun = options.dryRun === true
+  const tree = scanLibrary()
+  if (!dryRun) throwIfIdentityScanUnresolved(lastIdentityScanIssues)
+
+  const resolution = resolveSessionBinding(sessionId)
+  if (resolution.state !== 'bound') throwForUnsafeResolution(resolution)
+  const session = collectLibrarySessions(tree).find((candidate) =>
+    path.resolve(candidate.dirPath) === path.resolve(resolution.candidate.dirPath)
+  )
+  if (!session) throw new Error(`Session "${sessionId}" 不存在`)
+  let currentMeta = session.meta
+  if (!dryRun) {
+    requireWritableSessionDir(sessionId, session.dirPath)
+    recoverIncompleteSessionWriteSnapshot(_root, session.dirPath)
+    const recoveredMeta = readSessionMeta(session.dirPath)
+    if (!recoveredMeta || recoveredMeta.sessionId !== sessionId) throw new Error('session-binding-mismatch')
+    currentMeta = recoveredMeta
+  }
+
+  const loaded = await loadRawFromMeta(currentMeta, session.dirPath)
+  const summary = buildTranscriptSummaryForWrite(currentMeta, loaded)
+  const transcriptPath = path.join(session.dirPath, TRANSCRIPT_FILE)
+  if (loaded.raw.length === 0 || !summary) {
+    return {
+      libraryRoot: _root,
+      sessionId,
+      transcriptPath,
+      dryRun,
+      branchCount: 0,
+      transcriptCount: 0,
+      written: 0,
+      failed: 1,
+      wouldWrite: 0,
+      coreSnapshotFiles: ['transcript.md', 'backup.jsonl', '.swob-session.json'],
+      coreWriteAtomic: false,
+      branchTranscriptsBestEffort: true,
+      branchWritten: 0,
+      branchFailed: 0,
+      branchFailureIds: [],
+      failureCode: 'TRANSCRIPT_SOURCE_UNAVAILABLE'
+    }
+  }
+
+  const branches = loaded.source === 'claude-code' ? detectIntraFileBranches(loaded.raw) : []
+  const transcriptCount = 1 + branches.length
+  if (dryRun) {
+    return {
+      libraryRoot: _root,
+      sessionId,
+      transcriptPath,
+      dryRun,
+      branchCount: branches.length,
+      transcriptCount,
+      written: 0,
+      failed: 0,
+      wouldWrite: transcriptCount,
+      coreSnapshotFiles: ['transcript.md', 'backup.jsonl', '.swob-session.json'],
+      coreWriteAtomic: false,
+      branchTranscriptsBestEffort: true,
+      branchWritten: 0,
+      branchFailed: 0,
+      branchFailureIds: []
+    }
+  }
+
+  await withSessionWriteSnapshot(_root, session.dirPath, async () => {
+    writeTranscriptFromLoadedRaw(sessionId, session.dirPath, currentMeta, loaded, summary, currentMeta.customTitle)
+    writeDerivedFilesFromLoadedRaw(sessionId, session.dirPath, loaded.raw)
+    await syncBackupFilesInsideSnapshot(session.dirPath, currentMeta)
+  })
+  let written = 1
+  let branchWritten = 0
+  const branchFailureIds: string[] = []
+  const config = loadLibraryConfig()
+  for (let index = 0; index < branches.length; index++) {
+    const branchId = `${sessionId}:intra-${index}`
+    const branchTitle = config.branchMeta?.[branchId]?.customTitle
+    try {
+      const branchPath = await updateBranchTranscript(branchId, branches[index].leafUuid, branchTitle)
+      if (branchPath) {
+        written++
+        branchWritten++
+      } else {
+        branchFailureIds.push(branchId)
+      }
+    } catch {
+      // Branch transcripts are regenerable projections and deliberately live
+      // outside the t190 three-file snapshot. Preserve the committed core and
+      // report every best-effort miss instead of claiming command-wide atomicity.
+      branchFailureIds.push(branchId)
+    }
+  }
+  return {
+    libraryRoot: _root,
+    sessionId,
+    transcriptPath,
+    dryRun,
+    branchCount: branches.length,
+    transcriptCount,
+    written,
+    failed: 0,
+    wouldWrite: written,
+    coreSnapshotFiles: ['transcript.md', 'backup.jsonl', '.swob-session.json'],
+    coreWriteAtomic: true,
+    branchTranscriptsBestEffort: true,
+    branchWritten,
+    branchFailed: branchFailureIds.length,
+    branchFailureIds
+  }
 }
 
 async function rebuildAllTranscriptsUnderWriter(

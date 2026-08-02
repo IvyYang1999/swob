@@ -49,7 +49,11 @@ export function StatsCards({ data, previousPeriod }: { data: InsightsData; previ
       showComparison: true,
     },
     {
-      value: primaryCost ? `$${primaryCost.amount.toFixed(2)}` : '—',
+      value: primaryCost
+        ? `$${primaryCost.amount.toFixed(2)}`
+        : data.totalTokens > 0
+          ? t('renderer.cost_card.measured_not_priced')
+          : '—',
       label: primaryCost?.label || t('renderer.stats_cards.cost_ledgers'),
       sub: primaryCost ? t('renderer.stats_cards.coverage_both', {
         value0: data.valuation.coveragePercent.toFixed(1),

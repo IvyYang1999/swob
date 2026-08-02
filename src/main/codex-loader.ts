@@ -23,6 +23,11 @@ import {
   stripTerminalControlSequencesDeep
 } from '../shared/chat-format'
 import { providerFingerprintV2 } from '../shared/provider-protocol-v2'
+import {
+  configuredCodexRoots,
+  matchConfiguredCodexSessionPath,
+  type CodexRootDefinition
+} from './codex-session-roots'
 
 // --- Codex JSONL envelope types ---
 
@@ -47,6 +52,7 @@ interface CodexSubagentSource {
 
 export interface CodexSessionMeta {
   id: string
+  session_id?: string
   timestamp: string
   cwd: string
   cli_version: string
@@ -55,6 +61,7 @@ export interface CodexSessionMeta {
   source?: string | { subagent?: CodexSubagentSource }
   thread_source?: string
   parent_thread_id?: string
+  forked_from_id?: string
   originator?: string
 }
 
@@ -76,6 +83,15 @@ export interface CodexSessionRecord {
   summary: SessionSummary | null
   subagent: CodexSubagentRecord | null
   classification: CodexSessionClassification
+}
+
+/**
+ * A Codex source parse projected into both consumers used by live sync.
+ * Keeping the raw projection beside the summary prevents the worker from
+ * reopening a growing rollout solely to render the transcript.
+ */
+export interface CodexSessionRecordWithRaw extends CodexSessionRecord {
+  rawMessages: RawJsonlMessage[]
 }
 
 /** Classify only from structured metadata; never infer a role from conversation text. */
@@ -233,13 +249,20 @@ export function extractCodexTokenAccounting(
 
 // --- File discovery ---
 
-export function findCodexSessionFiles(home = runtimeHome()): string[] {
+const codexFileInventory = new Map<string, Set<string>>()
+
+function scanCodexDirectory(directory: string): Set<string> {
   const files: string[] = []
-  const codexDir = path.join(home, '.codex', 'sessions')
-  if (!fs.existsSync(codexDir)) return files
+  if (!fs.existsSync(directory)) return new Set()
 
   function walk(dir: string): void {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
         walk(full)
@@ -248,8 +271,70 @@ export function findCodexSessionFiles(home = runtimeHome()): string[] {
       }
     }
   }
-  walk(codexDir)
-  return files
+  walk(directory)
+  return new Set(files)
+}
+
+function filesForDirectory(directory: string): string[] {
+  let inventory = codexFileInventory.get(directory)
+  if (!inventory) {
+    inventory = scanCodexDirectory(directory)
+    codexFileInventory.set(directory, inventory)
+  }
+  for (const filePath of inventory) {
+    if (!fs.existsSync(filePath)) inventory.delete(filePath)
+  }
+  return [...inventory]
+}
+
+function rootsForDiscovery(home?: string): CodexRootDefinition[] {
+  if (home !== undefined) {
+    const codexHome = path.join(home, '.codex')
+    return [{
+      home: codexHome,
+      sessionsDir: path.join(codexHome, 'sessions'),
+      archivedDir: path.join(codexHome, 'archived_sessions'),
+      origin: 'default'
+    }]
+  }
+  return configuredCodexRoots()
+}
+
+/** Cold-scan each root once; watcher events maintain the per-directory inventory afterwards. */
+export function findCodexSessionFiles(home?: string): string[] {
+  return [...new Set(rootsForDiscovery(home).flatMap((root) => [
+    ...filesForDirectory(root.sessionsDir),
+    ...filesForDirectory(root.archivedDir)
+  ]))].sort()
+}
+
+/** One-shot discovery for CLI processes, which have no watcher to maintain an inventory. */
+export function scanCodexSessionFiles(home?: string): string[] {
+  const directories = rootsForDiscovery(home).flatMap((root) => [root.sessionsDir, root.archivedDir])
+  for (const directory of directories) {
+    codexFileInventory.set(directory, scanCodexDirectory(directory))
+  }
+  return [...new Set(directories.flatMap(filesForDirectory))].sort()
+}
+
+export function rememberCodexSessionFile(filePath: string): boolean {
+  const match = matchConfiguredCodexSessionPath(filePath)
+  if (!match) return false
+  const directory = match.container === 'sessions' ? match.root.sessionsDir : match.root.archivedDir
+  let inventory = codexFileInventory.get(directory)
+  if (!inventory) {
+    inventory = new Set()
+    codexFileInventory.set(directory, inventory)
+  }
+  inventory.add(filePath)
+  return true
+}
+
+/** Recovery-only rescan for roots whose watcher reported dropped events. */
+export function refreshCodexSessionInventory(directories?: string[]): string[] {
+  const targets = directories || configuredCodexRoots().flatMap((root) => [root.sessionsDir, root.archivedDir])
+  for (const directory of targets) codexFileInventory.set(directory, scanCodexDirectory(directory))
+  return [...new Set(targets.flatMap(filesForDirectory))].sort()
 }
 
 // --- Parse raw lines ---
@@ -466,7 +551,7 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
         pushAssistantText((p.message as string) || '', ts, 'event_msg')
       } else if (etype.includes('compact')) {
         pushSystemFact('compact_boundary', ts, p)
-      } else if (etype.includes('rollback') || etype.includes('undo')) {
+      } else if (etype.includes('rollback') || etype.includes('rolled_back') || etype.includes('undo')) {
         pushSystemFact('rollback', ts, {
           toEventId: typeof p.to_event_id === 'string' ? p.to_event_id : undefined,
           reason: typeof p.reason === 'string' ? p.reason : etype
@@ -598,9 +683,9 @@ function buildCodexSessionSummaryFromLines(
   filePath: string,
   lines: CodexLine[],
   sessionId: string,
-  tokenAccounting: TokenAccounting
+  tokenAccounting: TokenAccounting,
+  rawMessages: RawJsonlMessage[] = codexToRawMessages(lines, sessionId)
 ): SessionSummary | null {
-  const rawMessages = codexToRawMessages(lines, sessionId)
   if (rawMessages.length === 0) return null
 
   const meta = lines.find((l) => l.type === 'session_meta')?.payload as unknown as CodexSessionMeta | undefined
@@ -645,6 +730,13 @@ function buildCodexSessionSummaryFromLines(
 
   const stat = fs.statSync(filePath)
   const model = extractCodexModel(lines)
+  const replayParentId = extractCodexReplayParentId(lines, sessionId)
+  const pathLifecycle = matchConfiguredCodexSessionPath(filePath)?.lifecycleState
+  const lifecycleState = pathLifecycle === 'archived'
+    ? 'archived'
+    : replayParentId
+      ? 'replayed'
+      : 'active'
 
   return {
     id: `codex:${sessionId}`,
@@ -666,6 +758,8 @@ function buildCodexSessionSummaryFromLines(
     fileSizeBytes: stat.size,
     permissionMode: undefined,
     resumeCwd: meta?.cwd,
+    lifecycleState,
+    ...(replayParentId ? { branchParentId: `codex:${replayParentId}` } : {}),
     userImages: [],
     pastedImageCount: 0,
     tokenUsage: totalTokenUsage,
@@ -683,15 +777,33 @@ function buildCodexSessionSummaryFromLines(
   }
 }
 
-export async function loadCodexSessionRecord(
+function extractCodexReplayParentId(lines: CodexLine[], sessionId: string): string | undefined {
+  const metas = lines
+    .filter((line) => line.type === 'session_meta')
+    .map((line) => line.payload as unknown as Partial<CodexSessionMeta>)
+  const explicit = metas[0]?.forked_from_id
+  if (typeof explicit === 'string' && explicit && explicit !== sessionId) return explicit
+
+  // Older fork/replay rollouts can lack forked_from_id while still copying the
+  // original SessionMeta into the new file. A distinct inherited id is direct
+  // structural evidence; conversation text is never used for lineage.
+  const inherited = metas.slice(1).find((candidate) =>
+    typeof candidate.id === 'string' && candidate.id && candidate.id !== sessionId
+  )?.id
+  return inherited
+}
+
+export async function loadCodexSessionRecordWithRaw(
   filePath: string,
   sessionIdOverride?: string
-): Promise<CodexSessionRecord> {
+): Promise<CodexSessionRecordWithRaw> {
   const lines = await parseCodexFile(filePath)
   const meta = lines.find((line) => line.type === 'session_meta')?.payload as unknown as CodexSessionMeta | undefined
   const classification = classifyCodexSession(meta)
   const sessionId = sessionIdOverride || extractSessionId(filePath, lines)
-  if (!sessionId) return { summary: null, subagent: null, classification }
+  if (!sessionId) return { summary: null, subagent: null, classification, rawMessages: [] }
+
+  const rawMessages = codexToRawMessages(lines, sessionId)
 
   const tokenAccounting = extractCodexTokenAccounting(
     lines,
@@ -699,9 +811,10 @@ export async function loadCodexSessionRecord(
   )
   if (classification.role === 'top-level') {
     return {
-      summary: buildCodexSessionSummaryFromLines(filePath, lines, sessionId, tokenAccounting),
+      summary: buildCodexSessionSummaryFromLines(filePath, lines, sessionId, tokenAccounting, rawMessages),
       subagent: null,
-      classification
+      classification,
+      rawMessages
     }
   }
 
@@ -713,6 +826,7 @@ export async function loadCodexSessionRecord(
   return {
     summary: null,
     classification,
+    rawMessages,
     subagent: {
       sessionId,
       ...(classification.parentThreadId ? { parentSessionId: classification.parentThreadId } : {}),
@@ -728,6 +842,17 @@ export async function loadCodexSessionRecord(
       tokenAccounting
     }
   }
+}
+
+export async function loadCodexSessionRecord(
+  filePath: string,
+  sessionIdOverride?: string
+): Promise<CodexSessionRecord> {
+  const { rawMessages: _rawMessages, ...record } = await loadCodexSessionRecordWithRaw(
+    filePath,
+    sessionIdOverride
+  )
+  return record
 }
 
 export async function buildCodexSessionSummary(

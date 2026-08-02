@@ -27,6 +27,7 @@ export const SOURCE_COLORS: Record<string, string> = {
   hermes: '#8b5cf6',
   qoder: '#06b6d4',
   trae: '#c084fc',
+  gemini: '#4285f4',
 }
 
 export const SOURCE_LABELS: Record<string, string> = {
@@ -43,6 +44,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   hermes: 'Hermes',
   qoder: 'Qoder',
   trae: 'Trae',
+  gemini: 'Gemini CLI',
 }
 
 export const PROJECT_COLORS = [
@@ -54,7 +56,52 @@ export interface ByModel {
   model: string
   totalTokens: number
   sessionCount: number
+  tokenBreakdown: TokenBreakdown
+  costUsd: number | null
+  coveragePercent: number | null
 }
+
+/**
+ * Token type breakdown available from UsageAggregate.
+ * Makes the five-token split visible to all chart components.
+ */
+export interface TokenBreakdown {
+  nonCachedInputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  outputTokens: number
+  reasoningTokens: number
+}
+
+/**
+ * Returns false for values that represent "no real data connected":
+ * 0, null, undefined, empty arrays, arrays where every element is 0.
+ */
+export function isDataConnected(value: unknown): boolean {
+  if (value === null || value === undefined) return false
+  if (typeof value === 'number') return value !== 0
+  if (Array.isArray(value)) {
+    if (value.length === 0) return false
+    return value.some((item) => typeof item === 'number' ? item !== 0 : item != null)
+  }
+  if (typeof value === 'object') {
+    const values = Object.values(value as Record<string, unknown>)
+    if (values.length === 0) return false
+    return values.some((v) => isDataConnected(v))
+  }
+  return true
+}
+
+/** Semantic colors for token type breakdown across all charts. */
+export const TOKEN_TYPE_COLORS = {
+  nonCachedInput: '#3b82f6',  // blue-500
+  cacheRead: '#22c55e',       // green-500
+  cacheWrite: '#14b8a6',      // teal-500
+  output: '#f59e0b',          // amber-500
+  reasoning: '#a78bfa',       // violet-400
+} as const
+
+export type TokenTypeKey = keyof typeof TOKEN_TYPE_COLORS
 
 export interface InsightsData {
   totalTokens: number
@@ -73,11 +120,24 @@ export interface InsightsData {
   byFolder: ByFolder[]
   byDate: ByDate[]
   heatmap: HeatmapCell[]
-  // New dimensions
+  // Full five-token breakdown from UsageAggregate
   totalCacheReadTokens: number
   totalCacheCreationTokens: number
+  /** Global token type breakdown (all five types) */
+  tokenBreakdown: TokenBreakdown
+  /** Cost and coverage from global aggregate */
+  costUsd: number | null
+  pricingCoverage: { covered: number; total: number; percent: number | null }
+  usageCoverage: { covered: number; total: number; percent: number | null }
+  modelCoverage: { covered: number; total: number; percent: number | null }
+  /** Total calls across all events */
+  totalCalls: number
+  /** Total event count */
+  totalEvents: number
   valuation: Valuation
   hourlyDistribution: number[]     // 24 items, index = hour
+  /** Events whose timestamp is unknown — hourly chart should show unavailable when all slots are 0 and this > 0. */
+  hourlyUnknownTimeEvents: number
   turnCountDistribution: number[]  // [1-5, 6-20, 21-50, 51-100, 101-500, 500+]
   topTools: Array<{ name: string; count: number }>
   codeChanges: { filesRead: number; filesWritten: number; filesEdited: number }
@@ -161,6 +221,8 @@ export interface Valuation {
 export interface BySource {
   source: string
   label: string
+  valuationCapability: import('../../../../shared/provider-capabilities').ValuationCapability
+  valuation: Valuation
   totalTokens: number
   inputTokens: number
   outputTokens: number
@@ -169,6 +231,9 @@ export interface BySource {
   tokenAvailableSessions: number
   tokenUnavailableSessions: number
   tokenDataStatus: 'available' | 'partial' | 'unavailable' | 'no-data'
+  tokenBreakdown: TokenBreakdown
+  costUsd: number | null
+  coveragePercent: number | null
 }
 
 export interface ByProject {
@@ -204,9 +269,13 @@ export interface ByDate {
   sessionCount: number
   turnCount: number
   bySource: Record<string, number>
+  byModel: Record<string, number>
   byProject: Record<string, number>
   totalTime: number
   byProjectTime: Record<string, number>
+  costUsd: number | null
+  tokenBreakdown: TokenBreakdown
+  coveragePercent: number | null
 }
 
 export interface HeatmapCell {
@@ -224,6 +293,7 @@ import type {
   UsageAggregate,
   PreviousPeriodComparison,
 } from '../../../../shared/analysis-scope-types'
+import { valuationCapabilityForSource } from '../../../../shared/provider-capabilities'
 
 export type { InsightsQueryResult, UsageAggregate, PreviousPeriodComparison }
 
@@ -271,7 +341,11 @@ function valuationFromAggregate(aggregate: UsageAggregate | undefined, fallbackT
     ...(aggregate?.costUsd !== null && aggregate?.costUsd !== undefined ? { usd: aggregate.costUsd } : {}),
     mode,
     ...(modes.length === 1 ? { selectedLedger: modes[0] } : {}),
-    pricingMatch: coveredTokens > 0 ? 'exact' : modes.length > 0 ? 'reported' : 'none',
+    pricingMatch: coveredTokens > 0
+      ? (modes.length === 1 && modes[0] === 'provider-billed' && coveredTokens >= totalBillableTokens
+        ? 'exact'
+        : 'alias')
+      : modes.length > 0 ? 'reported' : 'none',
     ledgerBreakdown: ledgers,
     coveredTokens,
     totalBillableTokens,
@@ -288,10 +362,36 @@ function valuationFromAggregate(aggregate: UsageAggregate | undefined, fallbackT
   }
 }
 
+function aggregateTokenBreakdown(a: UsageAggregate | undefined): TokenBreakdown {
+  return {
+    nonCachedInputTokens: a?.nonCachedInputTokens ?? 0,
+    cacheReadTokens: a?.cacheReadTokens ?? 0,
+    cacheWriteTokens: a?.cacheWriteTokens ?? 0,
+    outputTokens: a?.outputTokens ?? 0,
+    reasoningTokens: a?.reasoningTokens ?? 0,
+  }
+}
+
+/** Bucket session turns into the 6-bucket distribution: [1-5, 6-20, 21-50, 51-100, 101-500, 500+] */
+function bucketTurns(sessionItems: UsageAggregate[]): number[] {
+  const buckets = [0, 0, 0, 0, 0, 0]
+  for (const session of sessionItems) {
+    const turns = session.turns
+    if (turns <= 0) continue
+    if (turns <= 5) buckets[0]++
+    else if (turns <= 20) buckets[1]++
+    else if (turns <= 50) buckets[2]++
+    else if (turns <= 100) buckets[3]++
+    else if (turns <= 500) buckets[4]++
+    else buckets[5]++
+  }
+  return buckets
+}
+
 /**
  * Build an InsightsData-compatible object from multiple queryInsights results.
- * Fields that the new API does not surface (topTools, codeChanges, valuation, etc.)
- * get safe defaults so existing cards degrade gracefully.
+ * Preserves ALL fields from UsageAggregate so downstream charts can access
+ * the full five-token breakdown, cost, coverage, calls, and turns.
  */
 export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupItem[] = []): InsightsData {
   const g = bundle.global?.total
@@ -302,7 +402,7 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
   const scopedSessionCount = g?.usageCoverage.total ?? g?.sessionCount ?? 0
   const tokenUnavailableSessions = Math.max(0, scopedSessionCount - tokenAvailableSessions)
 
-  // By source
+  // By source — preserve full token breakdown + cost + coverage
   const bySource: BySource[] = (bundle.source?.items ?? []).map((a) => {
     const available = a.usageCoverage.covered
     const unavailable = Math.max(0, a.usageCoverage.total - available)
@@ -316,6 +416,8 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
     return {
       source: a.key,
       label: SOURCE_LABELS[a.key] || a.label,
+      valuationCapability: valuationCapabilityForSource(a.key),
+      valuation: valuationFromAggregate(a, a.billingTokens),
       totalTokens: a.processedTokens,
       inputTokens: a.nonCachedInputTokens + a.cacheReadTokens + a.cacheWriteTokens,
       outputTokens: a.outputTokens,
@@ -324,16 +426,22 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
       tokenAvailableSessions: available,
       tokenUnavailableSessions: unavailable,
       tokenDataStatus,
+      tokenBreakdown: aggregateTokenBreakdown(a),
+      costUsd: a.costUsd,
+      coveragePercent: a.pricingCoverage.percent,
     }
   })
 
-  // By model
+  // By model — preserve full token breakdown + cost + coverage
   const byModel: ByModel[] = (bundle.model?.items ?? [])
     .sort((a, b) => b.processedTokens - a.processedTokens)
     .map((a) => ({
       model: a.key,
       totalTokens: a.processedTokens,
       sessionCount: a.usageCoverage.total,
+      tokenBreakdown: aggregateTokenBreakdown(a),
+      costUsd: a.costUsd,
+      coveragePercent: a.pricingCoverage.percent,
     }))
 
   // By project
@@ -352,7 +460,13 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
       tokenUnavailableSessions: Math.max(0, a.usageCoverage.total - a.usageCoverage.covered),
     }))
 
-  // By date (from time dimension)
+  // Build source-keyed and model-keyed lookup maps for per-date cross-dimension
+  const sourceByDate = new Map<string, Map<string, number>>()
+  const modelByDate = new Map<string, Map<string, number>>()
+  // These will be populated if we had cross-dimension data; for now kept empty
+  // as the backend does not yet support time×source or time×model pivots.
+
+  // By date (from time dimension) — preserve full token breakdown + cost + coverage
   const byDate: ByDate[] = (bundle.time?.items ?? []).map((a) => ({
     date: a.key,
     totalTokens: a.processedTokens,
@@ -360,10 +474,14 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
     outputTokens: a.outputTokens,
     sessionCount: a.sessionCount,
     turnCount: a.turns,
-    bySource: {},
+    bySource: sourceByDate.get(a.key) ? Object.fromEntries(sourceByDate.get(a.key)!) : {},
+    byModel: modelByDate.get(a.key) ? Object.fromEntries(modelByDate.get(a.key)!) : {},
     byProject: {},
     totalTime: 0,
     byProjectTime: {},
+    costUsd: a.costUsd,
+    tokenBreakdown: aggregateTokenBreakdown(a),
+    coveragePercent: a.pricingCoverage.percent,
   }))
 
   // Hourly distribution from hour dimension
@@ -374,6 +492,12 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
       hourlyDistribution[h] = a.processedTokens
     }
   }
+  const hourlyUnknownTimeEvents = bundle.hour?.quality?.unknownTimeEvents
+    ?? g?.unknownTimeEvents
+    ?? 0
+
+  // Turn distribution: bucket from session dimension turns
+  const turnCountDistribution = bucketTurns(bundle.session?.items ?? [])
 
   // Heatmap: build from time items
   const maxTokensForHeatmap = Math.max(1, ...byDate.map((d) => d.totalTokens))
@@ -428,9 +552,17 @@ export function adaptQueryBundle(bundle: QueryBundle, sessions: SessionLookupIte
     heatmap,
     totalCacheReadTokens: g?.cacheReadTokens ?? 0,
     totalCacheCreationTokens: g?.cacheWriteTokens ?? 0,
+    tokenBreakdown: aggregateTokenBreakdown(g),
+    costUsd: g?.costUsd ?? null,
+    pricingCoverage: g?.pricingCoverage ?? { covered: 0, total: 0, percent: null },
+    usageCoverage: g?.usageCoverage ?? { covered: 0, total: 0, percent: null },
+    modelCoverage: g?.modelCoverage ?? { covered: 0, total: 0, percent: null },
+    totalCalls: g?.calls ?? 0,
+    totalEvents: g?.eventCount ?? 0,
     valuation,
     hourlyDistribution,
-    turnCountDistribution: [0, 0, 0, 0, 0, 0],
+    hourlyUnknownTimeEvents,
+    turnCountDistribution,
     topTools: [],
     codeChanges: { filesRead: 0, filesWritten: 0, filesEdited: 0 },
     bySession,

@@ -28,6 +28,11 @@ import type {
   ReportJobStatusRequest,
   ReportJobUpdateEvent
 } from '../../../shared/report-jobs'
+import type {
+  LibraryHealthSnapshot,
+  SessionFreshness,
+  CompensationProgress
+} from '../../../shared/library-health-contract'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeLaunchSpec = {
@@ -195,6 +200,9 @@ interface ElectronAPI {
   forkSession: (sessionId: string, terminalApp: string, permissionMode?: string, cwd?: string) => Promise<ResumeActionResult>
   buildResumeCommand: (sessionId: string, permissionMode?: string, cwd?: string) => Promise<string>
   getActiveSessions: () => Promise<string[]>
+  getCodexHomes: () => Promise<string[]>
+  selectCodexHomes: () => Promise<string[]>
+  setCodexHomes: (homes: string[]) => Promise<string[]>
   loadConfig: () => Promise<any>
   saveConfig: (config: any) => Promise<any>
   createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) => Promise<any>
@@ -238,6 +246,14 @@ interface ElectronAPI {
   organizerUndo: () => Promise<{ operationId: string | null; moves: unknown[]; config: any }>
   showSessionContextMenu: (data: { sessionId: string; canResume?: boolean; resumeUnavailableReason?: string; folders: Array<{ id: string; name: string; parentId: string | null; isIn: boolean }> }) =>
     Promise<{ action: string; folderId?: string } | null>
+  // Library Health (tF32 R2 — shared contract)
+  libraryGetHealth: () => Promise<LibraryHealthSnapshot>
+  libraryGetSessionFreshness: (sessionId: string) => Promise<SessionFreshness>
+  libraryCompensationRetry: () => Promise<void>
+  libraryCompensationCancel: () => Promise<void>
+  onLibraryHealthChanged: (callback: (snapshot: LibraryHealthSnapshot) => void) => () => void
+  onCompensationUpdate: (callback: (progress: CompensationProgress) => void) => () => void
+
   libraryGetRoot: () => Promise<string>
   dashboardLoadLayout: () => Promise<DashboardLayoutConfig>
   dashboardSaveLayout: (layout: DashboardLayoutConfig) => Promise<DashboardLayoutConfig>
@@ -278,7 +294,7 @@ interface ElectronAPI {
   onSessionUpdated: (callback: (session: any) => void) => void
   onSessionSummaryUpdated: (callback: (session: any) => void) => void
   onSessionsRefresh: (callback: () => void) => void
-  onSearchIndexUpdated: (callback: () => void) => void
+  onSearchIndexUpdated: (callback: () => void) => () => void
   onLibraryPatch: (callback: (patch: { sessions: any[]; config?: any }) => void) => void
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => void
   spotlightSearch: (query: string) => Promise<any[]>

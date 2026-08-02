@@ -48,6 +48,73 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('incremental Library startup synchronization', () => {
+  it('keeps projections gated through a no-op live drain until the first startup chunk completes', async () => {
+    const events: string[] = []
+    await syncLibraryStartupIncrementally({
+      sessions: [summary('cold', '/fixture/cold.jsonl', '2026-08-02T09:00:00.000Z')],
+      probeWriter: async () => { events.push('probe') },
+      onWriterProven: () => { events.push('writer-proven') },
+      drainLive: async () => {
+        events.push('no-live-commit')
+        return false
+      },
+      resolveLatest: (session) => session,
+      syncChunk: async () => {
+        events.push('startup-chunk')
+        return { total: 1, completed: 1, skipped: [] }
+      },
+      onFirstDurableBoundary: () => { events.push('projection-open') }
+    })
+
+    expect(events.indexOf('projection-open')).toBeGreaterThan(events.indexOf('startup-chunk'))
+    expect(events.slice(0, 3)).toEqual(['probe', 'writer-proven', 'no-live-commit'])
+  })
+
+  it('opens an empty Library after writer proof because no session commit can exist', async () => {
+    const boundary = vi.fn()
+    await syncLibraryStartupIncrementally({
+      sessions: [],
+      probeWriter: async () => {},
+      onWriterProven: () => {},
+      drainLive: async () => false,
+      resolveLatest: (session) => session,
+      syncChunk: async () => ({ total: 0, completed: 0, skipped: [] }),
+      onFirstDurableBoundary: boundary
+    })
+    expect(boundary).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat a read-only identity skip as the first durable startup boundary', async () => {
+    const events: string[] = []
+    await syncLibraryStartupIncrementally({
+      sessions: [
+        summary('conflict', '/fixture/conflict.jsonl', '2026-08-02T09:00:00.000Z'),
+        summary('writable', '/fixture/writable.jsonl', '2026-08-02T09:00:01.000Z')
+      ],
+      probeWriter: async () => {},
+      onWriterProven: () => {},
+      drainLive: async () => false,
+      resolveLatest: (session) => session,
+      syncChunk: async (session) => {
+        events.push(`chunk:${session.sessionId}`)
+        return session.sessionId === 'conflict'
+          ? {
+              total: 1,
+              completed: 0,
+              skipped: [{ sessionId: session.sessionId, code: 'SESSION_IDENTITY_CONFLICT' }]
+            }
+          : { total: 1, completed: 1, skipped: [] }
+      },
+      onFirstDurableBoundary: () => { events.push('projection-open') }
+    })
+
+    expect(events).toEqual([
+      'chunk:conflict',
+      'chunk:writable',
+      'projection-open'
+    ])
+  })
+
   it('completes startup while multi-key live events continue below the quiet window', async () => {
     vi.useFakeTimers()
     let sourceGeneration = 1

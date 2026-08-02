@@ -2,7 +2,8 @@ import { Fragment, type ReactNode } from 'react'
 import {
   BUILTIN_WIDGET_DECLARATIONS,
   type DashboardLayoutConfig,
-  type DashboardPageId
+  type DashboardPageId,
+  type WidgetDeclaration
 } from '../../../shared/registry/builtin-widgets'
 import { WidgetRegistry } from '../../../shared/registry/widget-registry'
 import type { AnalysisDimension, AnalysisScope } from '../../../shared/analysis-scope-types'
@@ -22,9 +23,12 @@ import { SessionRanking } from '../components/insights/SessionRanking'
 import { SourceDonut } from '../components/insights/SourceDonut'
 import { StatsCards } from '../components/insights/StatsCards'
 import { TokenHeatmap } from '../components/insights/TokenHeatmap'
+import { TokenMixChart } from '../components/insights/TokenMixChart'
 import { ToolUsageChart } from '../components/insights/ToolUsageChart'
 import { TurnDistribution } from '../components/insights/TurnDistribution'
+import { InsightsChartFrame } from '../components/insights/chart-kit'
 import type { InsightsData, PreviousPeriodComparison } from '../components/insights/shared'
+import { isDataConnected } from '../components/insights/shared'
 import { translate } from '../i18n'
 
 export interface InsightsWidgetContext {
@@ -119,9 +123,14 @@ const renderers: Record<string, WidgetRenderer> = {
       )}
     </CardShell>
   ),
-  'overview.daily-trend': ({ data, scope, zh }) => (
+  'overview.daily-trend': ({ data, scope, zh, previousPeriod, openDrilldown }) => (
     <CardShell title={widgetT(zh, 'renderer.insights_page.card_daily_trend')}>
-      <DailyTrend data={data.byDate} range={scope.range} />
+      <DailyTrend
+        data={data}
+        range={scope.range}
+        previousPeriod={previousPeriod}
+        onDayClick={(date) => openDrilldown('time', widgetT(zh, 'renderer.daily_trend.title'), date, date)}
+      />
     </CardShell>
   ),
   'overview.daily-timeline': ({ data, projectViewMode, zh }) => (
@@ -135,6 +144,7 @@ const renderers: Record<string, WidgetRenderer> = {
       cacheRead={data.totalCacheReadTokens || 0}
       cacheCreate={data.totalCacheCreationTokens || 0}
       totalInput={data.totalInputTokens || 0}
+      sources={data.bySource}
     />
   ),
   'cost.pricing-trace': ({ data, zh, openDrilldown }) => (
@@ -165,15 +175,52 @@ const renderers: Record<string, WidgetRenderer> = {
     <TurnDistribution buckets={data.turnCountDistribution || [0, 0, 0, 0, 0, 0]} />
   ),
   'sessions.hourly': ({ data }) => (
-    <HourlyChart hours={data.hourlyDistribution || new Array(24).fill(0)} />
+    <HourlyChart hours={data.hourlyDistribution || new Array(24).fill(0)} unknownTimeEvents={data.hourlyUnknownTimeEvents} />
   ),
-  'workflow.tool-usage': ({ data }) => <ToolUsageChart tools={data.topTools || []} />,
+  'workflow.tool-usage': ({ data }) => (
+    <ToolUsageChart tools={data.topTools} />
+  ),
   'workflow.code-changes': ({ data }) => (
-    <CodeChangesCard changes={data.codeChanges || { filesRead: 0, filesWritten: 0, filesEdited: 0 }} />
+    <CodeChangesCard changes={data.codeChanges} />
+  ),
+  'overview.token-mix': ({ data, zh }) => (
+    <InsightsChartFrame title={widgetT(zh, 'renderer.insights_page.card_token_mix')}>
+      <TokenMixChart breakdown={data.tokenBreakdown} />
+    </InsightsChartFrame>
   ),
   'quality.summary': ({ data }) => <QualityTab data={data} />,
   'audit.report-generator': () => <ReportGenerator />,
   'audit.report': () => <AuditReportTab />
+}
+
+/**
+ * Wrap a widget renderer to show a pending/quality overlay when the
+ * declaration's `dataStatus` is 'pending' and the data is not connected.
+ */
+function wrapWithDataStatusGuard(
+  declaration: WidgetDeclaration,
+  render: WidgetRenderer
+): WidgetRenderer {
+  if (declaration.dataStatus !== 'pending') return render
+  return (context) => {
+    // For pending widgets, check if data is actually connected at runtime
+    const { data, zh } = context
+    // Determine the relevant data field for this widget
+    const dataField = declaration.id === 'workflow.tool-usage' ? data.topTools
+      : declaration.id === 'workflow.code-changes' ? data.codeChanges
+      : null
+    if (dataField != null && !isDataConnected(dataField)) {
+      return (
+        <InsightsChartFrame
+          title={widgetT(zh, 'renderer.chart_kit.in_development')}
+          qualityState="pending"
+        >
+          {null}
+        </InsightsChartFrame>
+      )
+    }
+    return render(context)
+  }
 }
 
 export function createBuiltinWidgetRegistry(): WidgetRegistry<InsightsWidgetContext, ReactNode> {
@@ -181,7 +228,8 @@ export function createBuiltinWidgetRegistry(): WidgetRegistry<InsightsWidgetCont
   for (const declaration of BUILTIN_WIDGET_DECLARATIONS) {
     const render = renderers[declaration.id]
     if (!render) throw new Error(`Missing built-in widget renderer: ${declaration.id}`)
-    registry.register({ ...declaration, source: { kind: 'builtin' }, render })
+    const guarded = wrapWithDataStatusGuard(declaration, render)
+    registry.register({ ...declaration, source: { kind: 'builtin' }, render: guarded })
   }
   return registry
 }

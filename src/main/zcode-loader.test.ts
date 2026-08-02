@@ -75,6 +75,24 @@ function createZcodeDb(): { dir: string; dbPath: string; sourceRef: string } {
       session_id TEXT,
       message_id TEXT
     );
+    CREATE TABLE model_usage (
+      id TEXT PRIMARY KEY,
+      logical_request_id TEXT,
+      attempt_index INTEGER,
+      session_id TEXT,
+      provider_id TEXT,
+      model_id TEXT,
+      status TEXT,
+      started_at INTEGER,
+      completed_at INTEGER,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      cache_creation_input_tokens INTEGER,
+      cache_read_input_tokens INTEGER,
+      provider_total_tokens INTEGER,
+      computed_total_tokens INTEGER
+    );
     INSERT INTO session VALUES (
       ${sqlString(SESSION_ID)}, ${sqlString(PARENT_ID)}, 'zcode-slug',
       '/Users/test/projects/zcode-app', 'Zcode title', 1783504800, 1783504805
@@ -85,6 +103,10 @@ function createZcodeDb(): { dir: string; dbPath: string; sourceRef: string } {
     INSERT INTO part VALUES ('part_assistant_text', ${sqlString(SESSION_ID)}, 'msg_assistant', ${sqlString(JSON.stringify({ type: 'text', text: 'Zcode 会话已加载。' }))});
     INSERT INTO part VALUES ('part_assistant_reasoning', ${sqlString(SESSION_ID)}, 'msg_assistant', ${sqlString(JSON.stringify({ type: 'reasoning', text: 'Zcode independent reasoning' }))});
     INSERT INTO part VALUES ('part_assistant_tool', ${sqlString(SESSION_ID)}, 'msg_assistant', ${sqlString(JSON.stringify({ type: 'tool', id: 'zcode-tool-1', name: 'read', input: { file_path: '/Users/test/projects/zcode-app/README.md' } }))});
+    INSERT INTO model_usage VALUES (
+      'usage_1', 'request_1', 0, ${sqlString(SESSION_ID)}, 'zhipu', 'glm-4.5',
+      'completed', 1783504805, 1783504806, 13, 5, 0, 2, 3, 18, 18
+    );
   `
 
   execFileSync('sqlite3', [dbPath], { input: sql })
@@ -106,7 +128,28 @@ describe('zcode-loader', () => {
         branchParentId: PARENT_ID,
         resumeCwd: '/Users/test/projects/zcode-app'
       })
-      expect(summary?.tokenUsage).toMatchObject({ inputTokens: 13, outputTokens: 5 })
+      expect(summary?.tokenUsage).toMatchObject({
+        inputTokens: 8,
+        outputTokens: 5,
+        cacheCreationTokens: 2,
+        cacheReadTokens: 3
+      })
+      expect(summary?.tokenAccounting?.usageEvents).toEqual([
+        expect.objectContaining({
+          dedupKey: 'zcode:model-usage:usage_1',
+          billingFactKey: 'zcode:request:request_1:attempt:0',
+          timestamp: '2026-07-08T10:00:05.000Z',
+          providerRaw: 'zhipu',
+          billingProvider: 'zhipu',
+          modelRaw: 'glm-4.5',
+          rawInputTokens: 13,
+          fieldRelations: {
+            cacheRead: 'subset-of-input',
+            cacheWrite: 'subset-of-input',
+            reasoning: 'provider-defined'
+          }
+        })
+      ])
       expect(summary?.toolUsage).toEqual({ Read: 1 })
       expect(summary?.activityDays).toEqual(['2026-07-08'])
 

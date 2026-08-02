@@ -29,7 +29,18 @@ import {
   findClaudeSessionFiles,
   buildSessionSummaryFromBackup
 } from './session-loader'
-import { findCodexSessionFiles, loadCodexRawMessages } from './codex-loader'
+import {
+  findCodexSessionFiles,
+  loadCodexRawMessages,
+  refreshCodexSessionInventory,
+  rememberCodexSessionFile
+} from './codex-loader'
+import {
+  codexSessionDirectories,
+  configuredCodexRoots,
+  loadAdditionalCodexHomes,
+  saveAdditionalCodexHomes
+} from './codex-session-roots'
 import { findCursorSessionFiles, loadCursorRawMessages } from './cursor-loader'
 import {
   initLibrary,
@@ -154,6 +165,8 @@ import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-
 import { LibraryRescanController } from './library-rescan-controller'
 import { scheduleEpochBoundTask } from './epoch-bound-task'
 import { WorkerRecycleGate } from './worker-recycle-gate'
+import { mergeLiveSessionSummary } from './live-session-summary'
+import { StartupProjectionGate } from './startup-projection-gate'
 import {
   watchLibraryDirectory,
   type LibraryDirectoryWatcher
@@ -300,11 +313,13 @@ interface UsageFactSyncSnapshot {
   rebuild: boolean
 }
 let usageFactSyncRunner: LatestSnapshotRunner<UsageFactSyncSnapshot, UsageFactSyncResult> | null = null
+const startupProjectionGate = new StartupProjectionGate<UsageFactSyncResult>()
 let runtimeShuttingDown = false
 let libraryRuntimeEpoch = 0
 let libraryRuntimePaused = false
 let libraryStartupWriterProven = false
 let libraryStartupChunkActive = false
+let liveLibraryCommitGeneration = 0
 let freshnessErrorSignature = ''
 let freshnessMonitor: NodeJS.Timeout | null = null
 const deferredLibrarySyncRequests = new Map<string, SessionSyncRequest>()
@@ -496,7 +511,7 @@ function sessionSourceRoots(): string[] {
     getLibraryRoot(),
     join(home, '.claude', 'projects'),
     join(home, '.claude-window'),
-    join(home, '.codex', 'sessions')
+    ...codexSessionDirectories(home)
   ]
   if (isSessionSourceSupported('cursor')) roots.push(join(home, '.cursor', 'projects'))
   if (isSessionSourceSupported('opencode')) roots.push(join(home, '.local', 'share', 'opencode'))
@@ -514,6 +529,7 @@ function sessionSourceRoots(): string[] {
       join(home, '.gemini', 'antigravity-ide')
     )
   }
+  if (isSessionSourceSupported('gemini')) roots.push(join(home, '.gemini', 'tmp'))
   if (isSessionSourceSupported('hermes')) roots.push(join(home, '.hermes', 'sessions'))
   if (isSessionSourceSupported('qoder')) roots.push(join(home, '.qoder', 'projects'))
   if (isSessionSourceSupported('trae')) {
@@ -752,15 +768,19 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     deferLibrarySynchronization(request)
     return
   }
-  const { summary, dirPath } = synchronized
+  liveLibraryCommitGeneration++
+  const { summary: synchronizedSummary, dirPath } = synchronized
+  const summary = mergeLiveSessionSummary(synchronizedSummary, cachedSessions)
   let largeSource = false
   try { largeSource = fs.statSync(filePath).size >= LARGE_SEARCH_WORKER_RECYCLE_BYTES } catch { /* source may vanish */ }
   if (largeSource && liveSessionSyncWorker === worker) {
     // The Library commit is durable. Terminate its parse isolate before the
     // search worker rereads the source; allocator RSS may remain at high-water.
+    // A sibling live request may already be queued on this same worker, so the
+    // recycle path drains accepted work instead of cancelling it.
     await liveSessionSyncWorkerRecycleGate.begin(async () => {
       try {
-        await worker.close()
+        await worker.retire()
       } finally {
         if (liveSessionSyncWorker === worker) liveSessionSyncWorker = null
       }
@@ -863,7 +883,7 @@ function notifySearchIndexUpdated(): void {
   mainWindow?.webContents.send('session:searchIndexUpdated')
 }
 
-function scheduleSearchIndexWarmup(): void {
+function scheduleSearchIndexWarmupNow(): void {
   if (runtimeShuttingDown) return
   const scheduledEpoch = libraryRuntimeEpoch
   scheduleEpochBoundTask({
@@ -881,6 +901,10 @@ function scheduleSearchIndexWarmup(): void {
   })
 }
 
+function scheduleSearchIndexWarmup(): void {
+  startupProjectionGate.scheduleSearch(scheduleSearchIndexWarmupNow)
+}
+
 function currentAnalysisFolders(): Folder[] {
   try {
     return latestLibraryTree
@@ -895,7 +919,7 @@ function currentAnalysisFolders(): Folder[] {
  * Serialize fact writes in a dedicated worker. The query path only waits for
  * the current snapshot; it never parses source JSONL or performs a new scan.
  */
-function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
+function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
   if (runtimeShuttingDown) {
     const stopped = Promise.reject<UsageFactSyncResult>(new Error('Runtime is shutting down'))
     void stopped.catch(() => { /* shutdown intentionally refuses new background work */ })
@@ -944,6 +968,17 @@ function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<Usa
   })
   void run.catch(() => { /* error is retained for ensureUsageFactsReady */ })
   return run
+}
+
+function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
+  if (runtimeShuttingDown) return scheduleUsageFactSyncNow(options)
+  const run = startupProjectionGate.scheduleUsage(options, scheduleUsageFactSyncNow)
+  void run.catch(() => { /* error is retained by the runner or root-transition reset */ })
+  return run
+}
+
+function openStartupProjectionGate(): void {
+  startupProjectionGate.open(scheduleSearchIndexWarmupNow, scheduleUsageFactSyncNow)
 }
 
 async function ensureUsageFactsReady(): Promise<void> {
@@ -1004,6 +1039,7 @@ let runtimeCleanupPromise: Promise<void> | null = null
 function cleanupRuntimeResources(): Promise<void> {
   if (runtimeCleanupPromise) return runtimeCleanupPromise
   runtimeShuttingDown = true
+  startupProjectionGate.reset(new Error('Runtime is shutting down'))
   libraryRuntimePaused = true
   libraryRuntimeEpoch++
   libraryStartupWriterProven = false
@@ -1279,24 +1315,39 @@ function sourceWatcherErrorHandler(source: SourceWatcherId) {
 }
 
 function sourceWatcherReadyHandler(definition: SourceWatchDefinition) {
-  return (attempt: number, backend: SourceDirectoryWatcher['backend']): void => {
+  return (
+    attempt: number,
+    backend: SourceDirectoryWatcher['backend'],
+    recoveryRoots: string[] = []
+  ): void => {
     writeLifecycleLog('source-watcher-ready', {
       source: definition.id,
       backend,
       attempt
     })
     if (attempt === 0) return
+    const configuredRecoveryRoots = definition.id === 'codex' && recoveryRoots.length > 0
+      ? recoveryRoots.filter((root) => configuredCodexRoots().some((candidate) =>
+          path.resolve(candidate.home) === path.resolve(root)
+        ))
+      : []
     const files = definition.id === 'claude-code'
       ? findClaudeSessionFiles().filter(definition.matches)
       : definition.id === 'codex'
-        ? findCodexSessionFiles().filter(definition.matches)
+        ? refreshCodexSessionInventory(configuredRecoveryRoots.length > 0
+            ? configuredRecoveryRoots.flatMap((root) => [
+                path.join(root, 'sessions'),
+                path.join(root, 'archived_sessions')
+              ])
+            : undefined).filter(definition.matches)
         : findCursorSessionFiles().filter(definition.matches)
     for (const filePath of files) {
       scheduleSessionSynchronization({ filePath, source: definition.id, reason: 'change' })
     }
     writeLifecycleLog('source-watcher-recovery-scheduled', {
       source: definition.id,
-      fileCount: files.length
+      fileCount: files.length,
+      rootCount: configuredRecoveryRoots.length || definition.roots.length
     })
   }
 }
@@ -1315,12 +1366,12 @@ function startFileWatcher(): void {
 
 function startCodexWatcher(): void {
   const definition = createSourceWatchDefinition('codex', runtimeHome())
-  if (!fs.existsSync(definition.roots[0])) return
   codexWatcher = watchSourceDirectory({
     definition,
     onReady: sourceWatcherReadyHandler(definition),
     onError: sourceWatcherErrorHandler(definition.id),
     onFile: (filePath) => {
+      rememberCodexSessionFile(filePath)
       scheduleSessionSynchronization({ filePath, source: definition.id, reason: 'change' })
     }
   })
@@ -1579,15 +1630,17 @@ function scheduleHotStartupSessions(sessions: readonly SessionSummary[]): void {
   }
 }
 
-async function drainLiveSessionSynchronizations(): Promise<void> {
+async function drainLiveSessionSynchronizations(): Promise<boolean> {
   const coordinator = sessionSyncCoordinator
-  if (!coordinator || runtimeShuttingDown || libraryRuntimePaused) return
+  if (!coordinator || runtimeShuttingDown || libraryRuntimePaused) return false
   // A live request that arrived during an active startup chunk was deferred
   // before parsing. At this boundary force at most two round-robin keys' newest
   // generations through Library. Later arrivals remain queued for the next
   // boundary, so one active source cannot starve startup or a quieter peer.
   flushDeferredLibrarySynchronizations()
+  const generationBeforeDrain = liveLibraryCommitGeneration
   await coordinator.flushPendingSnapshot({ maxEntries: 2 })
+  return liveLibraryCommitGeneration > generationBeforeDrain
 }
 
 async function syncStartupSessions(
@@ -1612,6 +1665,12 @@ async function syncStartupSessions(
       }
     },
     drainLive: drainLiveSessionSynchronizations,
+    onFirstDurableBoundary: () => {
+      // Full search/usage projections can consume hundreds of MB and several
+      // CPU cores. Root switching stays paused until its whole sync commits;
+      // normal startup opens here after a live commit or first startup chunk.
+      if (!libraryRuntimePaused) openStartupProjectionGate()
+    },
     onProgress: reportLibrarySyncProgress
   })
 }
@@ -1689,6 +1748,12 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
   } catch (error) {
     libraryStartupWriterProven = false
     libraryStartupChunkActive = false
+    // A startup failure before the first durable boundary must not strand
+    // Insights callers behind a gate that can no longer open. This only drops
+    // deferred projections; work already handed to a worker remains untouched.
+    startupProjectionGate.reset(
+      error instanceof Error ? error : new Error('Library startup synchronization failed')
+    )
     const classification = classifyLibraryError(error)
     if (classification.state === 'writer-blocked') {
       enqueueExistingLibrarySessionsForCompensation(sessions)
@@ -1999,6 +2064,10 @@ ipcMain.handle('sessions:loadAll', async () => {
       ? retryLibraryAfterWriterBlocked(false)
       : initLibraryFromSessions(sessions)
     initialization.catch((error) => {
+      // Coordinated shutdown and root switching deliberately close workers.
+      // That cancellation is lifecycle success, not evidence that the Library
+      // on disk became corrupt.
+      if (runtimeShuttingDown || libraryRuntimePaused) return
       const classification = classifyLibraryError(error)
       transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
       if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
@@ -2681,6 +2750,37 @@ ipcMain.handle('config:save', async (_event, config: { preferences: Record<strin
 
 ipcMain.handle('settings:getDetectedTerminals', (_event, force = false) => getDetectedTerminals(force === true))
 ipcMain.handle('settings:getAppInfo', () => ({ version: app.getVersion(), platform: process.platform }))
+ipcMain.handle('settings:getCodexHomes', () => loadAdditionalCodexHomes())
+ipcMain.handle('settings:selectCodexHomes', async () => {
+  const options = {
+    title: translate(mainLocale(), 'renderer.general_settings.codex_homes_picker'),
+    properties: ['openDirectory', 'multiSelections'] as Array<'openDirectory' | 'multiSelections'>
+  }
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options)
+  return result.canceled ? [] : result.filePaths
+})
+ipcMain.handle('settings:setCodexHomes', async (_event, homes: unknown) => {
+  const previousHomes = loadAdditionalCodexHomes()
+  const saved = saveAdditionalCodexHomes(homes)
+  const previousSet = new Set(previousHomes.map((home) => path.resolve(home)))
+  const addedHomes = saved.filter((home) => !previousSet.has(path.resolve(home)))
+  if (addedHomes.length > 0) {
+    refreshCodexSessionInventory(addedHomes.flatMap((home) => [
+      path.join(home, 'sessions'),
+      path.join(home, 'archived_sessions')
+    ]))
+  }
+  const previous = codexWatcher
+  codexWatcher = null
+  if (previous) await previous.close()
+  if (!runtimeShuttingDown) startCodexWatcher()
+  // The renderer owns the visible snapshot; its existing debounced refresh
+  // path reloads source summaries and preserves normal Library annotations.
+  mainWindow?.webContents.send('sessions:refresh')
+  return saved
+})
 
 ipcMain.handle(
   'config:createFolder',
@@ -3171,11 +3271,13 @@ ipcMain.handle('library:selectDirectory', async () => {
 async function activateLibraryAt(newPath: string): Promise<string> {
   libraryRuntimeEpoch++
   libraryRuntimePaused = true
+  startupProjectionGate.reset(new Error('Library root is changing'))
   libraryStartupWriterProven = false
   libraryStartupChunkActive = false
   clearLibraryWriterRecoverySchedule()
   libraryWriterRecoveryAttempts = 0
   let retryWriterAfterSwitch = false
+  let librarySwitchCommitted = false
   try {
     await libraryWriterRecoveryPromise?.catch(() => undefined)
     await libraryInitializationPromise?.catch(() => undefined)
@@ -3247,8 +3349,15 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     } else {
       transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library synchronization completed')
     }
+    librarySwitchCommitted = true
     return getLibraryRoot()
   } catch (error) {
+    // Adoption may already have queued projections for the new root. If the
+    // switch does not commit, reject those waiters and discard its search
+    // warmup so a later root generation starts from a clean closed gate.
+    startupProjectionGate.reset(
+      error instanceof Error ? error : new Error('Library root change failed')
+    )
     const classification = classifyLibraryError(error)
     transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
     if (classification.state === 'writer-blocked') {
@@ -3261,9 +3370,10 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     libraryStartupChunkActive = false
     libraryRuntimePaused = false
     flushDeferredLibrarySynchronizations()
-    // The adoption-time warmup may have fired while the root was deliberately
-    // paused. Schedule a fresh epoch-bound full prune after the switch commits.
-    scheduleSearchIndexWarmup()
+    // Root switching deliberately pauses live work. The completed full Library
+    // synchronization is itself the durable boundary; only then release the
+    // adoption-time projections for the new root.
+    if (librarySwitchCommitted) openStartupProjectionGate()
     if (retryWriterAfterSwitch) scheduleLibraryWriterRecovery()
   }
 }

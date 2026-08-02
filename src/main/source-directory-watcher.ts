@@ -2,6 +2,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as chokidar from 'chokidar'
 import { hasPortablePathSegment } from './portable-path'
+import { configuredCodexRoots } from './codex-session-roots'
 
 export type SourceWatcherId = 'claude-code' | 'codex' | 'cursor'
 export type SourceWatcherFileEvent = 'add' | 'change'
@@ -26,6 +27,8 @@ export interface SourceWatchDefinition {
   id: SourceWatcherId
   roots: string[]
   depth: number
+  /** Observe the nearest existing ancestor until roots created after startup can be watched directly. */
+  watchMissingRoots?: boolean
   awaitWriteFinish?: chokidar.ChokidarOptions['awaitWriteFinish']
   matches: (filePath: string) => boolean
   ignores?: (candidatePath: string) => boolean
@@ -41,7 +44,7 @@ export interface SourceWatcherErrorContext {
 export interface WatchSourceDirectoryOptions {
   definition: SourceWatchDefinition
   onFile: (filePath: string, event: SourceWatcherFileEvent) => void
-  onReady?: (attempt: number, backend: SourceWatcherBackend) => void
+  onReady?: (attempt: number, backend: SourceWatcherBackend, recoveryRoots: string[]) => void
   onError: (error: unknown, context: SourceWatcherErrorContext) => void
   retryInitialMs?: number
   retryMaxMs?: number
@@ -71,6 +74,23 @@ function isJsonlFile(segments: string[]): boolean {
   return segments.at(-1)?.endsWith('.jsonl') === true
 }
 
+function nearestExistingWatchRoot(configuredRoot: string): {
+  watchRoot: string
+  missingDepth: number
+} {
+  let watchRoot = path.resolve(configuredRoot)
+  let missingDepth = 0
+  while (true) {
+    try {
+      if (fs.statSync(watchRoot).isDirectory()) return { watchRoot, missingDepth }
+    } catch { /* walk to an existing ancestor */ }
+    const parent = path.dirname(watchRoot)
+    if (parent === watchRoot) return { watchRoot, missingDepth }
+    watchRoot = parent
+    missingDepth++
+  }
+}
+
 export function createSourceWatchDefinition(
   id: SourceWatcherId,
   home: string
@@ -96,15 +116,33 @@ export function createSourceWatchDefinition(
   }
 
   if (id === 'codex') {
-    const root = path.join(home, '.codex', 'sessions')
+    const codexRoots = configuredCodexRoots(home)
+    const activeRoots = codexRoots.map((root) => root.sessionsDir)
+    const archivedRoots = codexRoots.map((root) => root.archivedDir)
+    const roots = codexRoots.map((root) => root.home)
     return {
       id,
-      roots: [root],
-      depth: 4,
+      roots,
+      depth: 5,
+      watchMissingRoots: true,
       matches: (filePath) => {
-        const segments = relativeSegments(root, filePath)
-        return segments !== null && segments.length >= 1 && segments.length <= 5 &&
-          isJsonlFile(segments) && path.basename(filePath).startsWith('rollout-')
+        try {
+          if (fs.existsSync(filePath) && fs.lstatSync(filePath).isSymbolicLink()) return false
+        } catch {
+          return false
+        }
+        if (!path.basename(filePath).startsWith('rollout-')) return false
+        for (const root of activeRoots) {
+          const segments = relativeSegments(root, filePath)
+          if (segments !== null && segments.length >= 1 && segments.length <= 5 && isJsonlFile(segments)) {
+            return true
+          }
+        }
+        for (const root of archivedRoots) {
+          const segments = relativeSegments(root, filePath)
+          if (segments?.length === 1 && isJsonlFile(segments)) return true
+        }
+        return false
       }
     }
   }
@@ -133,6 +171,7 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private retryResetTimer: ReturnType<typeof setTimeout> | null = null
   private retryAttempt = 0
+  private pendingRecoveryRoots: string[] = []
   private closed = false
 
   constructor(options: WatchSourceDirectoryOptions) {
@@ -191,8 +230,14 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
 
   private startFSEvents(): ActiveSourceBackend {
     const roots = this.options.definition.roots.flatMap((configuredRoot) => {
-      if (!fs.existsSync(configuredRoot)) return []
-      return [{ configuredRoot, watchedRoot: fs.realpathSync.native(configuredRoot) }]
+      if (!this.options.definition.watchMissingRoots && !fs.existsSync(configuredRoot)) return []
+      const resolved = nearestExistingWatchRoot(configuredRoot)
+      return [{
+        configuredRoot,
+        lexicalWatchRoot: resolved.watchRoot,
+        watchedRoot: fs.realpathSync.native(resolved.watchRoot),
+        missingAtStart: resolved.missingDepth > 0
+      }]
     })
     if (roots.length === 0) throw new Error('No source directory exists yet')
     const fsevents = this.options.loadFSEvents?.() || require('fsevents') as FSEventsBackend
@@ -203,7 +248,7 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
     let backend!: ActiveSourceBackend
 
     try {
-      for (const { configuredRoot, watchedRoot } of roots) {
+      for (const { configuredRoot, lexicalWatchRoot, watchedRoot, missingAtStart } of roots) {
         stops.push(fsevents.watch(watchedRoot, (changedPath, flags) => {
           if (this.closed || this.activeBackend !== backend) return
           if ((flags & droppedMask) !== 0) {
@@ -215,6 +260,13 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
           }
           try {
             const info = fsevents.getInfo(changedPath, flags)
+            if (missingAtStart && fs.existsSync(configuredRoot)) {
+              const error = Object.assign(new Error('Configured source root appeared; narrowing watcher'), {
+                code: 'SOURCE_ROOT_APPEARED'
+              })
+              this.handleRuntimeError(backend, error, [configuredRoot])
+              return
+            }
             if (info.event === 'root-changed') {
               const error = Object.assign(new Error('FSEvents source root changed; watcher rebuild required'), {
                 code: 'FSEVENTS_ROOT_CHANGED'
@@ -225,7 +277,7 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
             const changedRelative = path.relative(watchedRoot, changedPath)
             const configuredPath = !path.isAbsolute(changedRelative) &&
                 !changedRelative.split(path.sep).includes('..')
-              ? path.join(configuredRoot, changedRelative)
+              ? path.join(lexicalWatchRoot, changedRelative)
               : changedPath
             if (info.event === 'created') this.handleFile(backend, configuredPath, 'add')
             else if (info.event === 'modified') this.handleFile(backend, configuredPath, 'change')
@@ -247,10 +299,25 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
   }
 
   private startChokidar(): ActiveSourceBackend {
-    const watcher = this.watchFactory(this.options.definition.roots, {
+    const resolvedRoots = this.options.definition.roots.map((configuredRoot) => ({
+      configuredRoot,
+      ...(this.options.definition.watchMissingRoots
+        ? nearestExistingWatchRoot(configuredRoot)
+        : { watchRoot: configuredRoot, missingDepth: 0 })
+    }))
+    const missingRoots = resolvedRoots
+      .filter(({ missingDepth }) => missingDepth > 0)
+      .map(({ configuredRoot }) => configuredRoot)
+    const watchRoots = [...new Set(resolvedRoots.map(({ watchRoot }) => watchRoot))]
+    const depth = this.options.definition.depth + Math.max(
+      0,
+      ...resolvedRoots.map(({ missingDepth }) => missingDepth)
+    )
+    const watcher = this.watchFactory(watchRoots, {
       ignoreInitial: true,
       ignorePermissionErrors: true,
-      depth: this.options.definition.depth,
+      followSymlinks: false,
+      depth,
       awaitWriteFinish: this.options.definition.awaitWriteFinish,
       ignored: this.options.definition.ignores
     })
@@ -260,6 +327,16 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
     }
     watcher
       .on('ready', () => this.handleReady(backend))
+      .on('addDir', () => {
+        if (missingRoots.some((configuredRoot) => fs.existsSync(configuredRoot))) {
+          const error = Object.assign(new Error('Configured source root appeared; narrowing watcher'), {
+            code: 'SOURCE_ROOT_APPEARED'
+          })
+          this.handleRuntimeError(backend, error, missingRoots.filter((configuredRoot) =>
+            fs.existsSync(configuredRoot)
+          ))
+        }
+      })
       .on('add', (filePath) => this.handleFile(backend, filePath, 'add'))
       .on('change', (filePath) => this.handleFile(backend, filePath, 'change'))
       .on('error', (error) => this.handleRuntimeError(backend, error))
@@ -276,6 +353,8 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
   private handleReady(backend: ActiveSourceBackend): void {
     if (this.closed || this.activeBackend !== backend) return
     const attempt = this.retryAttempt
+    const recoveryRoots = this.pendingRecoveryRoots
+    this.pendingRecoveryRoots = []
     if (this.retryResetTimer) clearTimeout(this.retryResetTimer)
     if (attempt > 0) {
       this.retryResetTimer = setTimeout(() => {
@@ -285,7 +364,7 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
       this.retryResetTimer.unref?.()
     }
     try {
-      this.options.onReady?.(attempt, backend.backend)
+      this.options.onReady?.(attempt, backend.backend, recoveryRoots)
     } catch (error) {
       this.reportError(error, {
         phase: 'runtime',
@@ -314,7 +393,11 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
     }
   }
 
-  private handleRuntimeError(backend: ActiveSourceBackend, error: unknown): void {
+  private handleRuntimeError(
+    backend: ActiveSourceBackend,
+    error: unknown,
+    recoveryRoots: string[] = []
+  ): void {
     if (this.closed || this.activeBackend !== backend) return
     if (this.retryResetTimer) {
       clearTimeout(this.retryResetTimer)
@@ -322,18 +405,20 @@ class ResilientSourceDirectoryWatcher implements SourceDirectoryWatcher {
     }
     this.activeBackend = null
     void this.closeBackend(backend)
-    this.scheduleRetry(error, 'runtime', backend.backend)
+    this.scheduleRetry(error, 'runtime', backend.backend, recoveryRoots)
   }
 
   private scheduleRetry(
     error: unknown,
     phase: 'start' | 'runtime',
-    backend: SourceWatcherBackend
+    backend: SourceWatcherBackend,
+    recoveryRoots: string[] = []
   ): void {
     if (this.closed || this.retryTimer) return
     const attempt = this.retryAttempt
     const retryInMs = Math.min(this.retryInitialMs * (2 ** attempt), this.retryMaxMs)
     this.retryAttempt++
+    this.pendingRecoveryRoots = [...new Set(recoveryRoots.map((root) => path.resolve(root)))]
     this.reportError(error, { phase, retryInMs, attempt, backend })
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null

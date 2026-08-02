@@ -11,6 +11,8 @@ import { InspectorTabs, DisclosureSection } from './inspector'
 import type { InspectorTab } from './inspector'
 import { getHarnessPresentation } from '../utils/harness-presentation'
 import { useLensEnabled } from '../hooks/useLens'
+import { useSessionFreshness, formatLag } from '../hooks/useLibraryHealth'
+import { StaleDisclaimer } from './LibraryHealthBanner'
 
 // --- Shared types & utilities ---
 
@@ -644,6 +646,8 @@ function SessionInfoCard({ session }: { session: any }) {
   const t = useT()
   const locale = useStore((s) => s.locale)
   const s = session
+  const freshness = useSessionFreshness(s.sessionId)
+  const lag = formatLag(freshness.lagMs)
   const hp = getHarnessPresentation(s.source)
   const wallClockMs = new Date(s.updatedAt).getTime() - new Date(s.createdAt).getTime()
   const duration = formatDurationShort(s.estimatedTime ?? wallClockMs)
@@ -700,6 +704,18 @@ function SessionInfoCard({ session }: { session: any }) {
           onClick={() => { if (s.cwds?.[0]) window.api.openPath(s.cwds[0]) }}
         >
           {shortCwd}
+        </div>
+      )}
+
+      {/* tF32: freshness / lag indicator */}
+      {lag && (
+        <div className="flex items-center gap-1.5 text-[10px] text-soft-amber">
+          <Clock size={10} className="shrink-0" />
+          <span>
+            {t('health.session_stale')} ({lag.unit === 'minutes'
+              ? t('health.stale_minutes', { n: lag.value })
+              : t('health.stale_hours', { n: lag.value })})
+          </span>
         </div>
       )}
     </section>

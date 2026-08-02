@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Globe, Keyboard, Palette, Sun, UserCircle, Check, X, ImageIcon } from 'lucide-react'
+import {
+  Globe, Keyboard, Palette, Sun, UserCircle, Check, X, ImageIcon, HardDrive, FolderPlus, Trash2
+} from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 import { SettingField, Segmented, useSettingsPreferences } from './shared'
@@ -268,6 +270,96 @@ function HarnessIconSection() {
           )
         })}
       </div>
+    </SettingField>
+  )
+}
+
+function CodexHomesSection() {
+  const t = useT()
+  const codexApi = (window as any).api
+  const [homes, setHomes] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    if (!codexApi?.getCodexHomes) {
+      setLoading(false)
+      return () => { active = false }
+    }
+    void codexApi.getCodexHomes().then((configured: string[]) => {
+      if (active) setHomes(configured)
+    }).catch(() => {
+      if (active) setError(t('renderer.general_settings.codex_homes_load_error'))
+    }).finally(() => {
+      if (active) setLoading(false)
+    })
+    return () => { active = false }
+  }, [])
+
+  const persist = useCallback(async (next: string[]) => {
+    if (!codexApi?.setCodexHomes) return
+    setSaving(true)
+    setError(null)
+    try {
+      setHomes(await codexApi.setCodexHomes(next))
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : t('renderer.general_settings.codex_homes_save_error'))
+    } finally {
+      setSaving(false)
+    }
+  }, [t])
+
+  const addHomes = useCallback(async () => {
+    if (!codexApi?.selectCodexHomes) return
+    const selected = await codexApi.selectCodexHomes() as string[]
+    if (selected.length === 0) return
+    await persist([...new Set([...homes, ...selected])])
+  }, [homes, persist])
+
+  return (
+    <SettingField
+      label={t('renderer.general_settings.codex_homes')}
+      hint={t('renderer.general_settings.codex_homes_hint')}
+      icon={<HardDrive size={12} />}
+    >
+      <div className="max-w-[486px] rounded-md border border-edge bg-surface overflow-hidden">
+        {loading ? (
+          <div className="px-3 py-2 text-[11px] text-muted">
+            {t('renderer.general_settings.codex_homes_loading')}
+          </div>
+        ) : homes.length === 0 ? (
+          <div className="px-3 py-2 text-[11px] text-muted">
+            {t('renderer.general_settings.codex_homes_empty')}
+          </div>
+        ) : homes.map((home) => (
+          <div key={home} className="flex items-center gap-2 px-3 py-2 border-b border-edge last:border-b-0">
+            <code className="min-w-0 flex-1 truncate text-[11px] text-secondary" title={home}>{home}</code>
+            <button
+              type="button"
+              aria-label={t('renderer.general_settings.codex_home_remove', { value0: home })}
+              disabled={saving}
+              onClick={() => { void persist(homes.filter((candidate) => candidate !== home)) }}
+              className="shrink-0 p-1 rounded text-muted hover:text-soft-red hover:bg-soft-red/10 disabled:opacity-40"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        disabled={loading || saving}
+        onClick={() => { void addHomes() }}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-edge bg-surface text-xs text-secondary hover:text-primary hover:border-edge-focus disabled:opacity-40"
+      >
+        <FolderPlus size={12} />
+        {saving
+          ? t('renderer.general_settings.codex_homes_saving')
+          : t('renderer.general_settings.codex_homes_add')}
+      </button>
+      {error && <p role="alert" className="text-[11px] text-soft-red break-words">{error}</p>}
     </SettingField>
   )
 }
@@ -589,6 +681,7 @@ export function GeneralSettings() {
     <>
       <IdentitySection />
       <HarnessIconSection />
+      <CodexHomesSection />
 
       <SettingField label={t('settings.appearance_mode')} hint={t('settings.appearance_mode_hint')} icon={<Sun size={12} />}>
         <ThemeModePicker value={themeMode} onChange={setThemeMode} t={t} />

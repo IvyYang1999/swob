@@ -1,0 +1,37 @@
+batch: v15-t184
+workItems:
+  - id: t184-codex-lifecycle
+    owner: 019f84bd-f685-7b32-b88f-26a945a51dfb
+    depends_on: []
+    write_scope:
+      - .swob/workflows/v15-t184/graph.yaml
+      - src/main/codex-*
+      - src/main/session-loader*
+      - src/main/session-lineage*
+      - src/main/session-source*
+      - src/main/source-directory-watcher*
+      - src/main/usage-fact-store*
+      - src/main/types.ts
+      - src/main/index.ts
+      - src/cli/index.ts
+      - src/main/library-manager*
+      - src/main/library-session-identity*
+      - src/shared/settings-capabilities*
+      - src/shared/i18n.ts
+      - src/preload/index.ts
+      - src/renderer/src/store.ts
+      - src/renderer/src/types/electron.d.ts
+      - src/renderer/src/components/Sidebar.tsx
+      - src/renderer/src/components/Sidebar.test.tsx
+      - src/renderer/src/components/SettingsPanel.test.tsx
+      - src/renderer/src/components/LineagePage.tsx
+      - src/renderer/src/components/settings/**
+      - e2e/t184-codex-lifecycle.spec.ts
+      - e2e/helpers.ts
+      - result.json
+    evidence_required:
+      - npm run workflow:validate -- .swob/workflows/v15-t184/graph.yaml
+      - npm run check
+      - npx vitest run --maxWorkers=2
+      - npm run build
+      - npx playwright test e2e/t184-codex-lifecycle.spec.ts

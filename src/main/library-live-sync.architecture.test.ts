@@ -26,7 +26,7 @@ describe('live Library synchronization architecture', () => {
       /classification\.state === 'writer-blocked'[\s\S]*?libraryStartupWriterProven = false[\s\S]*?deferLibrarySynchronization\(request\)[\s\S]*?scheduleLibraryWriterRecovery\(\)/
     )
     expect(source).toMatch(
-      /liveSessionSyncWorkerRecycleGate\.begin[\s\S]*?try[\s\S]*?await worker\.close\(\)[\s\S]*?finally[\s\S]*?liveSessionSyncWorker === worker[\s\S]*?catch/
+      /liveSessionSyncWorkerRecycleGate\.begin[\s\S]*?try[\s\S]*?await worker\.retire\(\)[\s\S]*?finally[\s\S]*?liveSessionSyncWorker === worker[\s\S]*?catch/
     )
     expect(source).toContain("recordLibraryDiagnostic('LIVE_WORKER_RECYCLE_FAILED'")
   })
@@ -55,10 +55,32 @@ describe('live Library synchronization architecture', () => {
     )
     expect(searchHandler).not.toContain('await getSearchIndexWriteCoordinator().retryPending()')
     expect(source).toMatch(
-      /function scheduleSearchIndexWarmup[\s\S]*?scheduledEpoch = libraryRuntimeEpoch[\s\S]*?scheduleEpochBoundTask/
+      /function scheduleSearchIndexWarmupNow[\s\S]*?scheduledEpoch = libraryRuntimeEpoch[\s\S]*?scheduleEpochBoundTask/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?closeSearchIndexWriteCoordinator[\s\S]*?libraryRuntimePaused = false[\s\S]*?scheduleSearchIndexWarmup\(\)/
+      /async function activateLibraryAt[\s\S]*?closeSearchIndexWriteCoordinator[\s\S]*?libraryRuntimePaused = false[\s\S]*?openStartupProjectionGate\(\)/
+    )
+  })
+
+  it('defers full projections until the initial live durability boundary', () => {
+    expect(source).toContain('const startupProjectionGate = new StartupProjectionGate<UsageFactSyncResult>()')
+    expect(source).toMatch(
+      /function scheduleSearchIndexWarmup\(\): void \{[\s\S]*?startupProjectionGate\.scheduleSearch\(scheduleSearchIndexWarmupNow\)/
+    )
+    expect(source).toMatch(
+      /function scheduleUsageFactSync[\s\S]*?startupProjectionGate\.scheduleUsage\(options, scheduleUsageFactSyncNow\)/
+    )
+    expect(source).toMatch(
+      /drainLive: drainLiveSessionSynchronizations,[\s\S]*?onFirstDurableBoundary:[\s\S]*?openStartupProjectionGate\(\)/
+    )
+    expect(source).toMatch(
+      /async function initLibraryFromSessions[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
+    )
+    expect(source).toMatch(
+      /async function activateLibraryAt[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
+    )
+    expect(source).toMatch(
+      /initialization\.catch\(\(error\) => \{[\s\S]*?if \(runtimeShuttingDown \|\| libraryRuntimePaused\) return[\s\S]*?transitionLibraryHealth/
     )
   })
 })

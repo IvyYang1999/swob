@@ -68,7 +68,7 @@ describe('CLI resolve', () => {
   it('完整旧 id 解析到真身 latest 完整 id', () => {
     writeRegistry(tmpRoot)
 
-    const result = resolveSessionId(oldId, tmpRoot)
+    const result = resolveSessionId(oldId, tmpRoot, [latestId])
 
     expect(result).toMatchObject({ input: oldId, resolved: latestId, matched: true })
   })
@@ -76,7 +76,7 @@ describe('CLI resolve', () => {
   it('短 id 解析到真身 latest 完整 id', () => {
     writeRegistry(tmpRoot)
 
-    const result = resolveSessionId('932a47c4', tmpRoot)
+    const result = resolveSessionId('932a47c4', tmpRoot, [latestId])
 
     expect(result).toMatchObject({ input: '932a47c4', resolved: latestId, matched: true })
   })
@@ -84,7 +84,7 @@ describe('CLI resolve', () => {
   it('输入已是真身 id 时回显真身完整 id', () => {
     writeRegistry(tmpRoot)
 
-    const result = resolveSessionId(latestId, tmpRoot)
+    const result = resolveSessionId(latestId, tmpRoot, [latestId])
 
     expect(result).toMatchObject({ input: latestId, resolved: latestId, matched: true })
   })
@@ -111,13 +111,33 @@ describe('CLI resolve', () => {
     })
   })
 
+  it('lineage 不存在或损坏时仍以 manifest session id 为存在性事实', () => {
+    const manifestOnlyId = '94000000-0000-4000-8000-000000000193'
+    fs.writeFileSync(getSessionLineagePath(tmpRoot), '{broken-json')
+
+    expect(resolveSessionId(manifestOnlyId, tmpRoot, [manifestOnlyId])).toMatchObject({
+      input: manifestOnlyId,
+      resolved: manifestOnlyId,
+      matched: true,
+      exact: true
+    })
+    expect(resolveSessionId('94000000', tmpRoot, [manifestOnlyId])).toMatchObject({
+      resolved: manifestOnlyId,
+      matched: true,
+      exact: false
+    })
+  })
+
   it('短 id 前缀歧义时原样回显并把提示写到 stderr 输出', () => {
     const registry = makeRegistry(tmpRoot, {
       'abcd1230-0000-4000-8000-000000000000': '11111111-1111-4111-8111-111111111111',
       'abcd1231-0000-4000-8000-000000000000': '22222222-2222-4222-8222-222222222222'
     })
 
-    const result = resolveSessionIdFromRegistry('abcd123', registry)
+    const result = resolveSessionIdFromRegistry('abcd123', registry, [
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222'
+    ])
     const output = formatResolveCliOutput(result)
 
     expect(result).toMatchObject({
@@ -135,7 +155,7 @@ describe('CLI resolve', () => {
   it('--json 输出 input resolved matched 结构', () => {
     writeRegistry(tmpRoot)
 
-    const result = resolveSessionId(oldId, tmpRoot)
+    const result = resolveSessionId(oldId, tmpRoot, [latestId])
     const output = formatResolveCliOutput(result, true)
 
     expect(JSON.parse(output.stdout)).toEqual({
@@ -144,5 +164,39 @@ describe('CLI resolve', () => {
       matched: true
     })
     expect(output.stderr).toBe('')
+  })
+
+  it('stale alias 的最终 target 缺失时 fail closed', () => {
+    const registry = makeRegistry(tmpRoot, { [oldId]: latestId })
+
+    expect(resolveSessionIdFromRegistry(oldId, registry, [])).toMatchObject({
+      input: oldId,
+      resolved: oldId,
+      matched: false,
+      exact: true,
+      lineageInvalid: true
+    })
+  })
+
+  it('alias 链只在最终 target manifest 存在时成功', () => {
+    const middleId = 'aaaaaaaa-1111-4111-8111-111111111111'
+    const registry = makeRegistry(tmpRoot, { [oldId]: middleId, [middleId]: latestId })
+
+    expect(resolveSessionIdFromRegistry(oldId, registry, [latestId])).toMatchObject({
+      resolved: latestId,
+      matched: true,
+      exact: true
+    })
+  })
+
+  it('manifest ID 与 alias key 同名时，前缀也以物理 manifest 为准', () => {
+    const registry = makeRegistry(tmpRoot, { [oldId]: latestId })
+
+    const result = resolveSessionIdFromRegistry(oldId.slice(0, 12), registry, [oldId, latestId])
+    expect(result).toMatchObject({
+      resolved: oldId,
+      matched: true
+    })
+    expect(result.ambiguous).not.toBe(true)
   })
 })

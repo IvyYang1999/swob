@@ -381,6 +381,19 @@ describe('设置页的视图偏好会驱动侧边栏', () => {
     expect(ids).toEqual(['long', 'short'])
   })
 
+  it('Codex 归档会话在侧边栏明确标注已归档', () => {
+    mockStore.config.preferences.singleTurnBehavior = 'show'
+    mockStore.sessions = [makeSession({
+      source: 'codex',
+      lifecycleState: 'archived',
+      firstUserMessage: '归档的 Codex 会话'
+    })] as any
+
+    render(<Sidebar width={260} />)
+
+    expect(screen.getByText('已归档')).toBeTruthy()
+  })
+
   it('没有本地镜头偏好时采用默认分组', () => {
     mockStore.config.preferences.defaultGrouping = 'harness'
     mockStore.sessions = [makeSession({ source: 'codex' })] as any

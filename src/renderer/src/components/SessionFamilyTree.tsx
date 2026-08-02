@@ -51,7 +51,8 @@ const SOURCE_LABELS: Record<string, string> = {
   opencode: 'OC',
   zcode: 'ZC',
   qoder: 'QD',
-  trae: 'TR'
+  trae: 'TR',
+  gemini: 'GM'
 }
 
 /* ------------------------------------------------------------------ */

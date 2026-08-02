@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { ByDate } from './shared'
-import { formatTokenCount, formatDuration, PROJECT_COLORS } from './shared'
+import { formatTokenCount, formatDuration, PROJECT_COLORS, isDataConnected } from './shared'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
 
@@ -15,6 +15,12 @@ export function DailyTimeline({ data, projectKey }: DailyTimelineProps) {
   const t = useT()
   const [visibleDays, setVisibleDays] = useState(14)
   const [expandedDate, setExpandedDate] = useState<string | null>(null)
+
+  // Check if any day has project data connected
+  const hasProjectData = useMemo(
+    () => data.some((d) => isDataConnected(d.byProject)),
+    [data]
+  )
 
   const recentDays = useMemo(() => {
     return data
@@ -54,17 +60,23 @@ export function DailyTimeline({ data, projectKey }: DailyTimelineProps) {
         return (
           <div key={day.date} className="bg-surface rounded-lg border border-edge">
             <button
-              onClick={() => setExpandedDate(isExpanded ? null : day.date)}
-              className="w-full px-3 py-2 flex items-center gap-2 hover:bg-hover rounded-lg transition-colors"
+              onClick={() => hasProjectData ? setExpandedDate(isExpanded ? null : day.date) : undefined}
+              className={`w-full px-3 py-2 flex items-center gap-2 rounded-lg transition-colors ${hasProjectData ? 'hover:bg-hover cursor-pointer' : 'cursor-default'}`}
             >
-              {isExpanded ? <ChevronDown size={12} className="text-muted shrink-0" /> : <ChevronRight size={12} className="text-muted shrink-0" />}
+              {hasProjectData && (
+                isExpanded ? <ChevronDown size={12} className="text-muted shrink-0" /> : <ChevronRight size={12} className="text-muted shrink-0" />
+              )}
               <span className="text-xs text-primary font-medium">{formatDayHeader(day.date)}</span>
-              <span className="text-[11px] text-muted">{formatDuration(day.totalTime)}</span>
-              <span className="text-[11px] text-muted">·</span>
+              {day.totalTime > 0 && (
+                <>
+                  <span className="text-[11px] text-muted">{formatDuration(day.totalTime)}</span>
+                  <span className="text-[11px] text-muted">·</span>
+                </>
+              )}
               <span className="text-[11px] text-muted">{formatTokenCount(day.totalTokens)}</span>
             </button>
 
-            {projects.length > 0 && !isExpanded && (
+            {hasProjectData && projects.length > 0 && !isExpanded && (
               <div className="px-3 pb-2 pl-7">
                 <div className="flex h-3 rounded overflow-hidden gap-[1px]">
                   {projects.map(([name, tokens]) => {
@@ -90,9 +102,9 @@ export function DailyTimeline({ data, projectKey }: DailyTimelineProps) {
               </div>
             )}
 
-            {isExpanded && (
+            {hasProjectData && isExpanded && (
               <div className="px-3 pb-2 pl-7 space-y-1">
-                {projects.map(([name, tokens]) => {
+                {projects.length > 0 ? projects.map(([name, tokens]) => {
                   const pct = (tokens / maxTokens) * 100
                   const time = day.byProjectTime[name] || 0
                   return (
@@ -110,7 +122,9 @@ export function DailyTimeline({ data, projectKey }: DailyTimelineProps) {
                       </span>
                     </div>
                   )
-                })}
+                }) : (
+                  <div className="text-[10px] text-faint py-2">{t('renderer.chart_kit.in_development')}</div>
+                )}
               </div>
             )}
           </div>

@@ -532,6 +532,17 @@ describe('SessionMeta v2 来源持久化与旧格式兼容', () => {
     expect(() => lib.getSessionResumeAvailability(legacy.sessionId)).not.toThrow()
   })
 
+  it('拒绝非法 Codex 生命周期和分支元数据', () => {
+    const base = {
+      sessionId: 'invalid-codex-lifecycle-xx…0108',
+      sourceFilePaths: ['/fixture/rollout-invalid-codex-lifecycle-xx…0108.jsonl'],
+      projectPath: '/fixture/project-xx…0108'
+    }
+    expect(lib.parseSessionMeta(JSON.stringify({ ...base, lifecycleState: 'deleted' }))).toBeNull()
+    expect(lib.parseSessionMeta(JSON.stringify({ ...base, branchParentId: '' }))).toBeNull()
+    expect(lib.parseSessionMeta(JSON.stringify({ ...base, branchChildIds: ['codex:ok', 42] }))).toBeNull()
+  })
+
   it('backup 写入后把实际 SHA-256/size 顺路持久化到 SessionMeta v2', async () => {
     removeDefaultSession()
     const sessionId = 'metadata-backup-xx…0107'
@@ -841,6 +852,9 @@ describe('Library-only sessions（跨设备同步）', () => {
       updatedAt: '2026-07-22T00:01:00Z',
       projectPath: '/Users/remote/.claude/projects/-Users-remote-work',
       resumeCwd: '/Users/remote/work/swob-niw alpha',
+      lifecycleState: 'replayed',
+      branchParentId: 'codex:parent-thread-999',
+      branchChildIds: ['codex:child-thread-999'],
       origin: {
         deviceId: 'remote-manifest-device',
         hostname: 'remote-manifest.local',
@@ -857,6 +871,9 @@ describe('Library-only sessions（跨设备同步）', () => {
       sessionId,
       firstUserMessage: '云端正在下载的会话',
       resumeCwd: '/Users/remote/work/swob-niw alpha',
+      lifecycleState: 'replayed',
+      branchParentId: 'codex:parent-thread-999',
+      branchChildIds: ['codex:child-thread-999'],
       isManifestOnly: true,
       detailAvailability: 'unavailable',
       cloudBackupState: 'missing'
@@ -1524,6 +1541,63 @@ describe('库根 = vault：Inbox 放置 + 忽略名单 + 安全删除', () => {
     const ids = collectIds(lib.scanLibrary())
     expect(ids).toContain('proj-x')
     expect(ids).not.toContain('wiki-x')
+  })
+
+  it('更新现有会话时 recovery 不进入 dot 目录和 ignoreDirs', async () => {
+    fs.writeFileSync(path.join(tmpRoot, '.swob-config.json'), JSON.stringify({
+      libraryRoot: tmpRoot,
+      preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' },
+      ignoreDirs: ['node_modules', 'wiki']
+    }))
+    lib.initLibrary(tmpRoot)
+
+    const sessionId = 'recovery-namespace-existing'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+    writeJsonl(sourcePath, claudeRows(sessionId, 'recovery namespace baseline'))
+    const session = {
+      ...summary(sessionId, [tmpRoot]),
+      source: 'claude-code',
+      filePath: sourcePath,
+      allFilePaths: [sourcePath],
+      turnCount: 1
+    }
+    const existingDir = await lib.ensureSessionInLibrary(session)
+
+    const ignoredMarkerDirs = [
+      path.join(tmpRoot, '.git', 'objects', 'fixture'),
+      path.join(tmpRoot, 'node_modules', 'fixture'),
+      path.join(tmpRoot, 'wiki', 'fixture')
+    ]
+    for (const dirPath of ignoredMarkerDirs) {
+      fs.mkdirSync(dirPath, { recursive: true })
+      fs.writeFileSync(path.join(dirPath, '.swob-incomplete.json'), '{')
+    }
+
+    const updatedDir = await lib.ensureSessionInLibrary({
+      ...session,
+      updatedAt: '2026-06-01T02:00:00Z',
+      turnCount: 2
+    })
+
+    expect(updatedDir).toBe(existingDir)
+    for (const dirPath of ignoredMarkerDirs) {
+      expect(fs.readFileSync(path.join(dirPath, '.swob-incomplete.json'), 'utf8')).toBe('{')
+    }
+  })
+
+  it.each([
+    ['.swob-create-* blocker', (root: string) => {
+      fs.mkdirSync(path.join(root, '.swob-create-unproven'))
+    }],
+    ['visible incomplete marker', (root: string) => {
+      const dirPath = path.join(root, 'visible-incomplete')
+      fs.mkdirSync(dirPath)
+      fs.writeFileSync(path.join(dirPath, '.swob-incomplete.json'), '{')
+    }]
+  ] as const)('不可证明所有者的 %s 仍 fail-closed', async (_label, arrangeBlocker) => {
+    arrangeBlocker(tmpRoot)
+    await expect(lib.ensureSessionInLibrary(summary('blocked-recovery-target', ['/outside'])))
+      .rejects.toBeInstanceOf(lib.SessionIdentityUnresolvedError)
   })
 
   it('deleteLibraryFolder 拒绝删除含用户文件的目录，笔记保住', () => {

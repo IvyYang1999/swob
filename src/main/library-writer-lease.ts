@@ -6,7 +6,8 @@ import { getLocalBootIdentity, getProcessStartFingerprint } from './session-crea
 import {
   deriveHostBootIdentity,
   deriveLibraryHostProof,
-  getOrCreateHostIdentity
+  getOrCreateHostIdentity,
+  readHostIdentity
 } from './host-identity'
 import {
   assertSafeLibraryWritePath,
@@ -95,6 +96,13 @@ export interface LibraryWriterLeaseInspection {
   evidenceHash?: string
   manualRecoveryAvailable: boolean
   message: string
+  /** Redacted operational metadata only; never includes nonce or host proof. */
+  ownerPid?: number
+  ownerAlive?: boolean | null
+  mode?: LibraryWriterMode
+  heartbeatAt?: string
+  leaseExpiresAt?: string
+  leaseExpired?: boolean
 }
 
 export const LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION = 'RECOVER_LIBRARY_WRITER_LOCK'
@@ -722,11 +730,16 @@ export function inspectLibraryWriterLease(
   libraryRoot: string,
   options: LibraryWriterLeaseOptions = {}
 ): LibraryWriterLeaseInspection {
-  const context = prepareAcquisition(libraryRoot, options)
-  if (!fs.existsSync(context.lockDir)) {
+  // Inspection is a strict read path: unlike acquisition it does not create
+  // .swob/locks or bootstrap a host identity. Missing local identity evidence
+  // makes ownership unverifiable instead of changing the machine to answer.
+  const platform = options.platform || process.platform
+  const canonicalRoot = canonicalLibraryRootForWrite(libraryRoot)
+  const lockDir = path.join(canonicalRoot, '.swob', 'locks', 'library-writer')
+  if (!fs.existsSync(lockDir)) {
     return { state: 'unlocked', manualRecoveryAvailable: false, message: 'Library 写锁未占用' }
   }
-  const existing = readDirectoryOwner(context.lockDir)
+  const existing = readDirectoryOwner(lockDir)
   if (existing.kind === 'missing') {
     return { state: 'unlocked', manualRecoveryAvailable: false, message: 'Library 写锁未占用' }
   }
@@ -739,22 +752,59 @@ export function inspectLibraryWriterLease(
       message: BUSY_MESSAGES['corrupt-owner']
     }
   }
-  const activeClaim = readClaim(context.lockDir)
+  const activeClaim = readClaim(lockDir)
   let reason: Exclude<LibraryWriterBusyReason, 'timeout'>
+  let ownerAlive: boolean | null = null
   if (activeClaim) {
     // Inspection is deliberately read-only. Acquisition owns stale-claim
     // cleanup after claimant liveness is checked a second time.
     reason = activeClaim.claim ? 'recovery-in-progress' : 'unverifiable-owner'
   } else {
-    const decision = staleDecision(existing.owner, context)
-    reason = decision === 'recover' ? 'unverifiable-owner' : decision
+    const rawBootIdentity = (options.bootIdentity || (() => getLocalBootIdentity(platform)))()
+    let hostIdentity: string | null = null
+    try {
+      hostIdentity = options.hostIdentity ? options.hostIdentity() : readHostIdentity({ platform })
+    } catch { /* missing/corrupt local proof remains unverifiable */ }
+    const sameBootEvidence = existing.owner.schemaVersion === 1
+      ? Boolean(rawBootIdentity && existing.owner.bootIdentity === rawBootIdentity)
+      : Boolean(rawBootIdentity && hostIdentity && existing.owner.hostProofSalt &&
+          existing.owner.bootIdentity === deriveHostBootIdentity(
+            hostIdentity,
+            rawBootIdentity,
+            existing.owner.hostProofSalt
+          ))
+    if (sameBootEvidence) {
+      const processStart = (options.processStartFingerprint ||
+        ((ownerPid: number) => getProcessStartFingerprint(ownerPid, platform)))(existing.owner.pid)
+      ownerAlive = processStart === 'missing'
+        ? false
+        : typeof processStart === 'string'
+          ? processStart === existing.owner.processStartFingerprint
+          : null
+      reason = ownerAlive === true ? 'active-owner' : 'unverifiable-owner'
+    } else if (existing.owner.schemaVersion === 2 && hostIdentity && existing.owner.hostProofSalt &&
+      existing.owner.hostProof === deriveLibraryHostProof(hostIdentity, existing.owner.hostProofSalt)) {
+      // Same host, previous boot: the process is dead, but only explicit
+      // recovery may move retained evidence from a read-only doctor path.
+      ownerAlive = false
+      reason = 'unverifiable-owner'
+    } else {
+      reason = existing.owner.schemaVersion === 2 && hostIdentity ? 'remote-owner' : 'unverifiable-owner'
+    }
   }
+  const now = (options.now || Date.now)()
   return {
     state: 'blocked',
     reason,
     evidenceHash: existing.evidenceHash,
     manualRecoveryAvailable: reason !== 'active-owner',
-    message: BUSY_MESSAGES[reason]
+    message: BUSY_MESSAGES[reason],
+    ownerPid: existing.owner.pid,
+    ownerAlive,
+    mode: existing.owner.mode,
+    heartbeatAt: existing.owner.heartbeatAt,
+    leaseExpiresAt: existing.owner.leaseExpiresAt,
+    leaseExpired: Date.parse(existing.owner.leaseExpiresAt) < now
   }
 }
 

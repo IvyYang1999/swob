@@ -12,6 +12,9 @@ import { refreshHarnessIconOverrides } from './utils/harness-presentation'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
 
+// Module-level unsubscribe handle for idempotent searchIndexUpdated subscription
+let unsubscribeSearchIndex: (() => void) | undefined
+
 export type ViewMode = 'compact' | 'full' | 'markdown'
 export type ColorScheme = 'default' | 'paper' | 'nord'
 export type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
@@ -44,6 +47,7 @@ interface SessionSummary {
   allFilePaths?: string[]
   permissionMode?: string
   resumeCwd?: string
+  lifecycleState?: 'active' | 'archived' | 'replayed'
   branchParentFilePaths?: string[]
   branchPointUuid?: string
   branchLeafUuid?: string
@@ -594,6 +598,28 @@ export const useStore = create<AppState>((set, get) => ({
       set({ activeSessionIds: new Set(ids) })
     })
 
+    // Replay current search when t192 backend refreshes the search index.
+    // Guard against stale results: capture query at invocation time and only
+    // apply results if the query hasn't changed while the IPC was in flight.
+    // The optional-chaining + unsubscribe storage ensures idempotent re-entry.
+    if (unsubscribeSearchIndex) unsubscribeSearchIndex()
+    unsubscribeSearchIndex = window.api.onSearchIndexUpdated?.(() => {
+      const queryAtInvocation = get().searchQuery
+      if (!queryAtInvocation) return
+      window.api.searchSessions(queryAtInvocation).then((results) => {
+        if (get().searchQuery === queryAtInvocation) {
+          set({
+            searchResults: results,
+            searchState: (results as unknown[]).length > 0 ? 'success' : 'empty'
+          })
+        }
+      }).catch(() => {
+        if (get().searchQuery === queryAtInvocation) {
+          set({ searchResults: [], searchState: 'error' })
+        }
+      })
+    }) ?? undefined
+
     // System theme change listener
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
       if (get().themeMode === 'system') {
@@ -672,14 +698,18 @@ export const useStore = create<AppState>((set, get) => ({
       set({ searchResults: [], searchQuery: '', searchState: 'idle' })
       return
     }
+    const queryAtInvocation = query
     set({ searchQuery: query, searchState: 'searching' })
     try {
       const results = await window.api.searchSessions(query)
+      // Discard stale results if the query changed during the async call
+      if (get().searchQuery !== queryAtInvocation) return
       set({
         searchResults: results,
         searchState: results.length > 0 ? 'success' : 'empty'
       })
     } catch {
+      if (get().searchQuery !== queryAtInvocation) return
       set({ searchResults: [], searchState: 'error' })
     }
   },

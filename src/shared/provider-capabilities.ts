@@ -19,24 +19,35 @@ export const LEGACY_SESSION_SOURCES = [
   'kimi',
   'hermes',
   'qoder',
-  'trae'
+  'trae',
+  'gemini'
 ] as const
 
 export type LegacySessionSource = typeof LEGACY_SESSION_SOURCES[number]
 export type BuiltinProviderTier = 'native' | 'compatible' | 'detection-only'
 export type BuiltinProviderIngestion = 'legacy-loader' | 'provider-host' | 'detection-only'
+export type ValuationCapabilityStatus = 'billable-exact' | 'estimate-only' | 'unavailable'
+
+export interface ValuationCapability {
+  status: ValuationCapabilityStatus
+  /** Why this is the strongest honest status, including any exact-pricing preconditions. */
+  reason: string
+  evidence: CapabilityEvidence[]
+}
 
 export interface BuiltinProviderDefinition {
   sourceId: LegacySessionSource
   tier: BuiltinProviderTier
   ingestion: BuiltinProviderIngestion
   adapterContract: 'provider-protocol-v2' | 'legacy'
+  /** Registry-only product truth. This deliberately does not change Provider protocol wire schemas. */
+  valuation: ValuationCapability
   manifest: ProviderManifest
 }
 
 const V2_ADAPTER_SOURCES = new Set<LegacySessionSource>([
   'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror',
-  'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae'
+  'antigravity', 'grok', 'pi', 'kimi', 'hermes', 'qoder', 'trae', 'gemini'
 ])
 
 const implementation = (locator: string, note?: string): CapabilityEvidence => ({
@@ -77,6 +88,12 @@ const experimental = (reason: string, ...evidence: CapabilityEvidence[]): Capabi
 const notApplicable = (reason: string, ...evidence: CapabilityEvidence[]): CapabilityDeclaration =>
   capability('not-applicable', reason, evidence)
 
+const valuation = (
+  status: ValuationCapabilityStatus,
+  reason: string,
+  ...evidence: CapabilityEvidence[]
+): ValuationCapability => ({ status, reason, evidence })
+
 const loader = implementation('src/main/session-loader.ts')
 const sourceDetection = implementation('src/main/session-source.ts')
 const searchIndex = implementation('src/main/search-index.ts')
@@ -87,6 +104,112 @@ const unavailableSummary = implementation(
   'src/main/session-loader.ts#buildUnavailableSourceSummary',
   'Only creates a detected-file placeholder; detail returns no messages.'
 )
+
+const perCallPricingFixture = (sourceId: LegacySessionSource, note: string): CapabilityEvidence => test(
+  `testdata/valuation/per-call-pricing-evidence.json#${sourceId}`,
+  `Per-call pricing evidence fixture. ${note}`
+)
+
+/**
+ * Valuation is a separate product capability from usage measurement.
+ * A source is billable-exact only when one billable call retains its mutually
+ * exclusive counters plus price evidence (reported amount, or model + billing
+ * provider + event time against an approved catalog rule). Aggregate counters
+ * can be useful measurements without being exact pricing evidence.
+ */
+export const VALUATION_CAPABILITIES = {
+  'claude-code': valuation(
+    'billable-exact',
+    'Per-request usage retains model, billing-provider attribution, event time, and cache buckets; exact catalog matches or explicit harness estimates remain separately labelled.',
+    implementation('src/main/token-accounting.ts#usageEventsFromClaudeMessages'),
+    implementation('src/main/token-valuation.ts#valueUsageEvent'),
+    perCallPricingFixture('claude-code', 'One Claude request matches a dated approved Anthropic rule.')
+  ),
+  codex: valuation(
+    'billable-exact',
+    'Per-turn or cumulative-delta events retain model, billing-provider attribution, event time, and OpenAI cache/reasoning relations after deduplication.',
+    implementation('src/main/token-accounting.ts#usageEventsFromCodexSnapshots'),
+    implementation('src/main/token-valuation.ts#valueUsageEvent'),
+    perCallPricingFixture('codex', 'One normalized Codex delta matches a dated approved OpenAI rule.')
+  ),
+  cursor: valuation(
+    'unavailable',
+    'The evidenced Cursor format has no authoritative usage counters, so there is no honest amount to price.',
+    implementation('src/main/cursor-loader.ts'),
+    test('src/main/cursor-loader.test.ts')
+  ),
+  opencode: valuation(
+    'billable-exact',
+    'Conditional: each assistant message now retains explicit providerID, modelID, event time, disjoint cache buckets, and visible-output/reasoning evidence; exact pricing still requires a matching approved rule or explicit reported amount.',
+    implementation('src/main/opencode-loader.ts'),
+    implementation('src/main/sqlite-agent-usage.ts#accountOpenCodeMessageUsage'),
+    test('src/main/sqlite-agent-usage-golden.test.ts'),
+    perCallPricingFixture('opencode', 'One OpenCode message preserves the explicit OpenAI route, model, event time, and normalized request buckets.')
+  ),
+  zcode: valuation(
+    'billable-exact',
+    'Conditional: each model_usage attempt now retains explicit provider_id, model_id, started_at, cache-subset buckets, and authoritative computed_total_tokens; exact pricing still requires a matching approved rule.',
+    implementation('src/main/zcode-loader.ts'),
+    implementation('src/main/sqlite-agent-usage.ts#accountZCodeModelUsage'),
+    test('src/main/sqlite-agent-usage-golden.test.ts'),
+    perCallPricingFixture('zcode', 'One ZCode model_usage attempt preserves the explicit Anthropic route, model, event time, and authoritative total.')
+  ),
+  'cc-mirror': valuation(
+    'billable-exact',
+    'Conditional: exact pricing is allowed only when a per-request record proves the billing route plus model and event time, or carries an explicit amount. Claude JSON compatibility alone does not prove Anthropic pricing.',
+    implementation('src/main/token-accounting.ts#usageEventsFromClaudeMessages'),
+    compatibility('Claude JSONL usage buckets; billing route must be independently evidenced.'),
+    perCallPricingFixture('cc-mirror', 'The fixture includes an explicit verified Anthropic billing route; the condition is part of conformance.')
+  ),
+  antigravity: valuation(
+    'estimate-only',
+    'Only a pinned reverse-engineered SQLite mapping yields per-turn counters; no reviewed per-call price or trusted reported amount is preserved.',
+    implementation('src/main/providers/antigravity-provider.ts'),
+    test('src/main/providers/antigravity-provider.test.ts')
+  ),
+  grok: valuation(
+    'billable-exact',
+    'Conditional: exact pricing requires a complete per-turn model row whose provider-produced costUsdTicks passed the parser trust checks; incomplete or aggregate-only rows are not exact.',
+    implementation('src/main/providers/grok-provider.ts'),
+    perCallPricingFixture('grok', 'The pinned synthetic model row carries trusted provider cost ticks for one turn.')
+  ),
+  pi: valuation(
+    'billable-exact',
+    'Conditional: exact pricing requires explicit per-message usage.cost, or a per-message model, verified billing provider, and event time matching an approved rule; a model name alone is insufficient.',
+    implementation('src/main/providers/pi-provider.ts'),
+    perCallPricingFixture('pi', 'The Pi v3 fixture carries an explicit cost on one assistant message.')
+  ),
+  kimi: valuation(
+    'estimate-only',
+    'Per-turn counters are retained, but cache TTL, reasoning relation, and reviewed per-call price evidence are incomplete.',
+    implementation('src/main/providers/kimi-provider.ts'),
+    test('src/main/providers/kimi-provider.test.ts')
+  ),
+  hermes: valuation(
+    'estimate-only',
+    'Hermes preserves cumulative session or per-model counters and reported aggregate cost, but not a complete per-call price trace.',
+    implementation('src/main/providers/hermes-provider.ts'),
+    test('src/main/providers/hermes-provider.test.ts')
+  ),
+  qoder: valuation(
+    'estimate-only',
+    'Raw per-message usage is retained, but cache relations are provider-defined and the compatibility projection intentionally withholds the ambiguous product aggregate.',
+    implementation('src/main/providers/qoder-provider.ts'),
+    test('src/main/providers/qoder-provider.test.ts')
+  ),
+  trae: valuation(
+    'unavailable',
+    'No authoritative usage counters exist in the evidenced Trae layout, so valuation is unavailable rather than zero.',
+    implementation('src/main/providers/trae-provider.ts'),
+    test('src/main/providers/trae-provider.test.ts')
+  ),
+  gemini: valuation(
+    'estimate-only',
+    'Per-request prompt, cache, candidate and thoughts counters retain exact measurement semantics, but no reviewed dated Google pricing rule or provider-reported cost is attached to each call.',
+    implementation('src/main/providers/gemini-provider.ts'),
+    test('src/main/providers/gemini-provider.test.ts')
+  )
+} as const satisfies Record<LegacySessionSource, ValuationCapability>
 
 function nativeCapabilities(options: {
   loaderFile: string
@@ -402,6 +525,55 @@ function qoderCanonicalCapabilities(): ProviderCapabilities {
   }
 }
 
+function geminiCanonicalCapabilities(): ProviderCapabilities {
+  const provider = implementation('src/main/providers/gemini-provider.ts')
+  const host = implementation('src/main/provider-host.ts')
+  const projection = implementation('src/main/provider-v2-consumer-projection.ts')
+  const fixture = test(
+    'src/main/providers/gemini-provider.test.ts',
+    'Fully synthetic first-party-shaped JSONL, legacy JSON and nested subagent fixtures.'
+  )
+  const upstream = {
+    kind: 'upstream-source' as const,
+    locator: 'https://github.com/google-gemini/gemini-cli/tree/f47d6c6f7a1308d81f9f57acf7d279f0928c5249/packages/core/src/services',
+    note: 'Pinned first-party Apache-2.0 chat recording types and service.'
+  }
+  return {
+    discover: available(provider, host, fixture, upstream),
+    summary: available(provider, projection, fixture, upstream),
+    transcript: available(provider, projection, fixture, upstream),
+    tools: available(provider, projection, fixture, upstream),
+    thinking: available(provider, projection, fixture, upstream),
+    usage: available(provider, projection, fixture, upstream),
+    relationships: experimental(
+      'Subagent parent identity is derived from the official nested path because the child record has no explicit parentSessionId.',
+      provider,
+      fixture,
+      upstream
+    ),
+    subagents: experimental(
+      'Nested subagent sessions are supported, but parent identity is path-derived.',
+      provider,
+      fixture,
+      upstream
+    ),
+    'live-watch': unavailable('Gemini CLI is refreshed by provider discovery; no dedicated live watcher is registered.', watcher),
+    search: available(searchIndex, projection, fixture),
+    archive: available(archive, projection, fixture),
+    'terminal-resume': experimental(
+      'The local gemini 0.38.2 binary and --resume help capability were observed, but no authenticated post-launch content-anchor match is recorded.',
+      resume,
+      test('src/main/providers/gemini-provider.test.ts'),
+      {
+        kind: 'official-documentation',
+        locator: 'https://github.com/google-gemini/gemini-cli/blob/f47d6c6f7a1308d81f9f57acf7d279f0928c5249/docs/reference/configuration.md'
+      }
+    ),
+    'native-resume': notApplicable('Gemini CLI exposes a terminal resume surface, not a desktop deep link.', resume),
+    'format-provenance': available(provider, host, fixture, upstream)
+  }
+}
+
 function definition(
   sourceId: LegacySessionSource,
   displayName: string,
@@ -415,6 +587,7 @@ function definition(
     tier,
     ingestion,
     adapterContract: V2_ADAPTER_SOURCES.has(sourceId) ? 'provider-protocol-v2' : 'legacy',
+    valuation: VALUATION_CAPABILITIES[sourceId],
     manifest: {
       schemaVersion: 1,
       providerId: `swob/${sourceId}`,
@@ -543,6 +716,10 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
   ], 'provider-host'),
   definition('trae', 'Trae', 'native', traeCanonicalCapabilities(), [
     'trae-state-vscdb-legacy-v1'
+  ], 'provider-host'),
+  definition('gemini', 'Gemini CLI', 'native', geminiCanonicalCapabilities(), [
+    'gemini-cli-conversation-jsonl-v2',
+    'gemini-cli-conversation-json-v1'
   ], 'provider-host')
 ] as const
 
@@ -574,6 +751,13 @@ export function providerCapabilitiesForSource(source: string): ProviderCapabilit
   return builtinProviderForSource(source)?.manifest.capabilities
 }
 
+export function valuationCapabilityForSource(source: string): ValuationCapability {
+  return builtinProviderForSource(source)?.valuation ?? valuation(
+    'unavailable',
+    'This source is not registered, so Swob has no audited valuation contract for it.'
+  )
+}
+
 export function providerCanParseTranscript(source: string): boolean {
   const status = providerCapabilitiesForSource(source)?.transcript.status
   return status === 'available' || status === 'experimental'
@@ -584,6 +768,7 @@ export function currentProviderCapabilitySnapshot(): Array<{
   sourceId: LegacySessionSource
   displayName: string
   tier: BuiltinProviderTier
+  valuation: ValuationCapability
   capabilities: ProviderCapabilities
 }> {
   return BUILTIN_PROVIDER_DEFINITIONS.map((entry) => ({
@@ -591,6 +776,7 @@ export function currentProviderCapabilitySnapshot(): Array<{
     sourceId: entry.sourceId,
     displayName: entry.manifest.displayName,
     tier: entry.tier,
+    valuation: entry.valuation,
     capabilities: entry.manifest.capabilities
   }))
 }

@@ -89,6 +89,7 @@ describe('WidgetRegistry', () => {
       page: 'overview',
       source: builtin,
       dataScope: { kind: 'insights', dimensions: ['global'] },
+      dataStatus: 'connected',
       size: { minWidth: 3, defaultWidth: 6, maxWidth: 12 },
       render: ({ value }) => value
     }
@@ -112,6 +113,7 @@ describe('WidgetRegistry', () => {
       page: 'overview',
       source: builtin,
       dataScope: { kind: 'none' as const },
+      dataStatus: 'connected' as const,
       size: { minWidth: 1, defaultWidth: 1, maxWidth: 1 },
       render: () => null
     }

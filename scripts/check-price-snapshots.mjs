@@ -28,18 +28,29 @@ function finiteNonNegative(value, label) {
   }
 }
 
+function dimensionsKey(dimensions) {
+  return JSON.stringify(stableJson({
+    serviceTier: dimensions?.serviceTier?.toLowerCase() || 'standard',
+    speed: dimensions?.speed?.toLowerCase() || 'standard',
+    batchMode: dimensions?.batchMode || 'realtime',
+    region: dimensions?.region?.toLowerCase() || null
+  }))
+}
+
 if (document.schemaVersion !== 1 || !Array.isArray(document.baseRules) || !Array.isArray(document.snapshots)) {
   throw new Error('pricing-snapshots.json must use schemaVersion 1 with baseRules and snapshots')
 }
 
 let rules = new Map(document.baseRules.map((rule) => [rule.id, rule]))
+let unitRules
 const resolved = new Map()
 for (const snapshot of document.snapshots) {
   if (snapshot.status !== 'approved') throw new Error(`${snapshot.revision} is not approved`)
   if (snapshot.replaces) {
     const previous = resolved.get(snapshot.replaces)
     if (!previous) throw new Error(`${snapshot.revision} replaces unknown ${snapshot.replaces}`)
-    rules = new Map(previous.map((rule) => [rule.id, rule]))
+    rules = new Map(previous.rules.map((rule) => [rule.id, rule]))
+    unitRules = previous.unitRules
   }
   if (snapshot.sourcePipeline.map((source) => source.role).join('\0') !== requiredRoles.join('\0')) {
     throw new Error(`${snapshot.revision} source pipeline is incomplete or out of order`)
@@ -65,10 +76,22 @@ for (const snapshot of document.snapshots) {
   }
   const byModel = new Map()
   for (const rule of ruleList) {
-    const key = `${rule.provider}\0${rule.modelCanonical}`
+    const key = `${rule.provider}\0${rule.modelCanonical}\0${dimensionsKey(rule.dimensions)}`
     const values = byModel.get(key) || []
     values.push(rule)
     byModel.set(key, values)
+  }
+  if (snapshot.unitRules) unitRules = snapshot.unitRules
+  for (const rule of unitRules || []) {
+    finiteNonNegative(rule.usdPerUnit, `${rule.id}.usdPerUnit`)
+    if (rule.reviewStatus !== 'approved') throw new Error(`${rule.id} is not approved`)
+  }
+  const byUnit = new Map()
+  for (const rule of unitRules || []) {
+    const key = `${rule.provider}\0${rule.sku}\0${rule.unit}\0${dimensionsKey(rule.dimensions)}`
+    const values = byUnit.get(key) || []
+    values.push(rule)
+    byUnit.set(key, values)
   }
   for (const [key, modelRules] of byModel) {
     modelRules.sort((left, right) => Date.parse(left.effectiveFrom) - Date.parse(right.effectiveFrom))
@@ -78,6 +101,17 @@ for (const snapshot of document.snapshots) {
         : Number.POSITIVE_INFINITY
       if (previousTo > Date.parse(modelRules[index].effectiveFrom)) {
         throw new Error(`${snapshot.revision} has overlapping rules for ${key}`)
+      }
+    }
+  }
+  for (const [key, pricedUnits] of byUnit) {
+    pricedUnits.sort((left, right) => Date.parse(left.effectiveFrom) - Date.parse(right.effectiveFrom))
+    for (let index = 1; index < pricedUnits.length; index++) {
+      const previousTo = pricedUnits[index - 1].effectiveTo
+        ? Date.parse(pricedUnits[index - 1].effectiveTo)
+        : Number.POSITIVE_INFINITY
+      if (previousTo > Date.parse(pricedUnits[index].effectiveFrom)) {
+        throw new Error(`${snapshot.revision} has overlapping unit rules for ${key}`)
       }
     }
   }
@@ -91,13 +125,14 @@ for (const snapshot of document.snapshots) {
     ...(snapshot.revisionReason ? { revisionReason: snapshot.revisionReason } : {}),
     ...(snapshot.revisionNotice ? { revisionNotice: snapshot.revisionNotice } : {}),
     sourcePipeline: snapshot.sourcePipeline,
-    rules: ruleList
+    rules: ruleList,
+    ...(unitRules ? { unitRules } : {})
   }
   const observedHash = digest(payload)
   if (observedHash !== snapshot.contentHash) {
     throw new Error(`${snapshot.revision} hash mismatch: expected ${snapshot.contentHash}, got ${observedHash}`)
   }
-  resolved.set(snapshot.revision, ruleList)
+  resolved.set(snapshot.revision, { rules: ruleList, unitRules })
 }
 
 const active = document.snapshots.at(-1)

@@ -152,7 +152,11 @@ export function createBuiltinToolRegistryV2(): ToolRegistryV2 {
     { providerId: 'swob/qoder', rawName: 'Read', semanticToolId: 'filesystem.read' },
     { providerId: 'swob/qoder', rawName: 'Write', semanticToolId: 'filesystem.write' },
     { providerId: 'swob/qoder', rawName: 'Edit', semanticToolId: 'diff.apply' },
-    { providerId: 'swob/qoder', rawName: 'Bash', semanticToolId: 'shell.execute' }
+    { providerId: 'swob/qoder', rawName: 'Bash', semanticToolId: 'shell.execute' },
+    { providerId: 'swob/gemini', rawName: 'read_file', semanticToolId: 'filesystem.read' },
+    { providerId: 'swob/gemini', rawName: 'write_file', semanticToolId: 'filesystem.write' },
+    { providerId: 'swob/gemini', rawName: 'replace', semanticToolId: 'diff.apply' },
+    { providerId: 'swob/gemini', rawName: 'run_shell_command', semanticToolId: 'shell.execute' }
   ]
   for (const alias of aliases) registry.registerAlias(alias)
   return registry

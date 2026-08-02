@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "sourceId": "claude-code",
+      "evidence": "approved-catalog-rule",
+      "condition": "response model, Anthropic billing route, event time, and mutually exclusive request buckets are present",
+      "modelCanonical": "claude-sonnet-4-5",
+      "billingProvider": "anthropic",
+      "timestamp": "2026-07-20T08:00:02.000Z",
+      "components": { "nonCachedInputTokens": 100, "cacheReadTokens": 20, "cacheWriteTokens": 0, "cacheWrite5mTokens": 5, "cacheWrite1hTokens": 0, "outputTokens": 30 }
+    },
+    {
+      "sourceId": "codex",
+      "evidence": "approved-catalog-rule",
+      "condition": "one deduplicated delta retains the response model, OpenAI billing route, event time, cached-input subset, and output total",
+      "modelCanonical": "gpt-5.6-sol",
+      "billingProvider": "openai",
+      "timestamp": "2026-08-01T08:00:02.000Z",
+      "components": { "nonCachedInputTokens": 80, "cacheReadTokens": 20, "cacheWriteTokens": 0, "cacheWrite5mTokens": 0, "cacheWrite1hTokens": 0, "outputTokens": 30, "reasoningTokens": 10 }
+    },
+    {
+      "sourceId": "opencode",
+      "evidence": "approved-catalog-rule",
+      "condition": "one assistant message retains explicit OpenAI providerID, modelID, event time, disjoint cache buckets, visible output, and reasoning",
+      "modelCanonical": "gpt-5.6-sol",
+      "billingProvider": "openai",
+      "timestamp": "2026-08-01T08:00:02.000Z",
+      "components": { "nonCachedInputTokens": 80, "cacheReadTokens": 20, "cacheWriteTokens": 10, "cacheWrite5mTokens": 0, "cacheWrite1hTokens": 0, "outputTokens": 30, "reasoningTokens": 10, "visibleOutputTokens": 20 }
+    },
+    {
+      "sourceId": "zcode",
+      "evidence": "approved-catalog-rule",
+      "condition": "one model_usage attempt retains explicit Anthropic provider_id, model_id, started_at, cache subsets, and authoritative computed total",
+      "modelCanonical": "claude-sonnet-4-5",
+      "billingProvider": "anthropic",
+      "timestamp": "2026-07-20T08:00:02.000Z",
+      "components": { "nonCachedInputTokens": 80, "cacheReadTokens": 20, "cacheWriteTokens": 0, "cacheWrite5mTokens": 0, "cacheWrite1hTokens": 0, "outputTokens": 30 }
+    },
+    {
+      "sourceId": "cc-mirror",
+      "evidence": "approved-catalog-rule",
+      "condition": "the compatibility record independently proves Anthropic as billing route; schema resemblance alone is rejected",
+      "modelCanonical": "claude-sonnet-4-5",
+      "billingProvider": "anthropic",
+      "timestamp": "2026-07-20T08:00:02.000Z",
+      "components": { "nonCachedInputTokens": 100, "cacheReadTokens": 0, "cacheWriteTokens": 0, "cacheWrite5mTokens": 0, "cacheWrite1hTokens": 0, "outputTokens": 25 }
+    },
+    {
+      "sourceId": "grok",
+      "evidence": "provider-reported-per-turn-cost",
+      "condition": "the complete modelUsage row passes cost trust checks and carries provider cost ticks for exactly one turn",
+      "reportedCostUsd": 0.0005,
+      "reportedCostKind": "provider-billed",
+      "timestamp": "2026-07-20T08:00:02.000Z",
+      "components": { "nonCachedInputTokens": 60, "cacheReadTokens": 10, "cacheWriteTokens": 0, "cacheWrite5mTokens": 0, "cacheWrite1hTokens": 0, "outputTokens": 20, "reasoningTokens": 5 }
+    },
+    {
+      "sourceId": "pi",
+      "evidence": "provider-recorded-per-message-cost",
+      "condition": "usage.cost.total is attached to one assistant message rather than inferred from a model family",
+      "reportedCostUsd": 0.001,
+      "reportedCostKind": "harness-list-estimate",
+      "timestamp": "2026-07-20T08:00:02.000Z",
+      "components": { "nonCachedInputTokens": 90, "cacheReadTokens": 20, "cacheWriteTokens": 10, "cacheWrite5mTokens": 0, "cacheWrite1hTokens": 0, "outputTokens": 30 }
+    }
+  ]
+}

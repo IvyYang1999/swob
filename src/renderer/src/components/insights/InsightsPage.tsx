@@ -1,4 +1,5 @@
 import { translate } from '../../i18n'
+import { StaleDisclaimer } from '../LibraryHealthBanner'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useStore } from '../../store'
 import { FilterBar } from './FilterBar'
@@ -10,6 +11,7 @@ import { adaptQueryBundle, extractFilterOptions } from './shared'
 import type { AnalysisDimension, InsightsQueryBundleResult } from '../../../../shared/analysis-scope-types'
 import {
   createDefaultDashboardLayout,
+  migrateDashboardLayout,
   type DashboardLayoutConfig,
   type DashboardPageId
 } from '../../../../shared/registry/builtin-widgets'
@@ -66,7 +68,7 @@ export function InsightsPage() {
     let cancelled = false
     window.api.dashboardLoadLayout()
       .then((layout: DashboardLayoutConfig) => {
-        if (!cancelled) setDashboardLayout(layout)
+        if (!cancelled) setDashboardLayout(migrateDashboardLayout(layout))
       })
       .catch(() => {
         if (!cancelled) setDashboardLayout(createDefaultDashboardLayout())
@@ -186,6 +188,9 @@ export function InsightsPage() {
           </div>
         )}
         <FilterBar data={data} />
+
+        {/* tF32: stale data disclaimer */}
+        <StaleDisclaimer variant="insights" />
 
         {/* Tab bar */}
         <div className="flex items-center gap-1 overflow-x-auto border-b border-edge pb-2" role="tablist">

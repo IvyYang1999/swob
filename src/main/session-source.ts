@@ -1,20 +1,28 @@
 import * as fs from 'fs'
 import type { SessionSource } from './types'
 import { normalizePortablePath } from './portable-path'
+import { matchConfiguredCodexSessionPath } from './codex-session-roots'
 
 export function detectSessionSourceFromPath(filePath?: string): SessionSource | null {
   if (!filePath) return null
+  if (matchConfiguredCodexSessionPath(filePath)) return 'codex'
   const portable = normalizePortablePath(filePath).normalize('NFC')
   // Windows paths are case-insensitive for the supported local filesystems.
   // Do not fold POSIX paths: `.Claude` can be a genuinely different directory.
   const normalized = pathLooksWindowsNative(filePath) ? portable.toLocaleLowerCase('en-US') : portable
   const normalizedTraePath = portable.toLocaleLowerCase('en-US')
-  if (normalized.includes('/.codex/sessions/')) return 'codex'
+  if (
+    normalized.includes('/.codex/sessions/') ||
+    normalized.includes('/.codex/archived_sessions/') ||
+    ((normalized.includes('/sessions/') || normalized.includes('/archived_sessions/')) &&
+      /\/rollout-[^/]+\.jsonl$/i.test(normalized))
+  ) return 'codex'
   if (normalized.includes('/.cursor/projects/')) return 'cursor'
   if (normalized.includes('/.local/share/opencode/opencode.db')) return 'opencode'
   if (normalized.includes('/.zcode/')) return 'zcode'
   if (normalized.includes('/.cc-mirror/')) return 'cc-mirror'
   if (normalized.includes('/.gemini/antigravity')) return 'antigravity'
+  if (normalized.includes('/.gemini/tmp/') && normalized.includes('/chats/')) return 'gemini'
   if (normalized.includes('/.grok/sessions/') || normalized.includes('/.factory/sessions/')) return 'grok'
   if (normalized.includes('/.pi/agent/sessions/')) return 'pi'
   if (normalized.includes('/.kimi-code/sessions/') || normalized.includes('/.kimi/sessions/')) return 'kimi'

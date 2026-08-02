@@ -107,6 +107,27 @@ describe('LogicalSessionKey', () => {
     expect(JSON.stringify([work, personal])).not.toContain('alice')
   })
 
+  it('keeps active and archived files in one custom Codex root under the same identity', () => {
+    const active = buildLogicalSessionIdentityFromSummary(summary(
+      'same-codex-session',
+      '/Users/alice/codex-work/sessions/2026/07/22/rollout-same-codex-session.jsonl',
+      'codex'
+    ))
+    const archived = buildLogicalSessionIdentityFromSummary(summary(
+      'same-codex-session',
+      '/Users/alice/codex-work/archived_sessions/rollout-same-codex-session.jsonl',
+      'codex'
+    ))
+    const sameBasenameElsewhere = buildLogicalSessionIdentityFromSummary(summary(
+      'same-codex-session',
+      '/Volumes/team/codex-work/sessions/2026/07/22/rollout-same-codex-session.jsonl',
+      'codex'
+    ))
+
+    expect(logicalSessionKey(archived)).toBe(logicalSessionKey(active))
+    expect(logicalSessionKey(sameBasenameElsewhere)).not.toBe(logicalSessionKey(active))
+  })
+
   it('marks contradictory or insufficient legacy evidence ambiguous instead of guessing', () => {
     expect(buildLogicalSessionIdentityFromMeta({
       sessionId: 'legacy',

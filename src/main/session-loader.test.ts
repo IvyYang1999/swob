@@ -24,6 +24,7 @@ import {
 } from './session-loader'
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import { shellQuote } from './resume-terminal'
+import { accountingFromMutuallyExclusiveUsage } from './token-accounting'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -189,6 +190,138 @@ function cursorBackupRows(prompt = '从 Cursor backup 建 detail'): unknown[] {
     { role: 'user', message: { content: `<user_query>${prompt}</user_query>` } },
     { role: 'assistant', message: { content: [{ type: 'text', text: 'Cursor backup 已恢复。' }] } }
   ]
+}
+
+function createSqliteAgentCacheFixture(
+  home: string,
+  source: 'opencode' | 'zcode',
+  sessionId: string
+): string {
+  const dbPath = source === 'opencode'
+    ? path.join(home, '.local', 'share', 'opencode', 'opencode.db')
+    : path.join(home, '.zcode', 'cli', 'db', 'db.sqlite')
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+  const db = new Database(dbPath)
+  try {
+    db.exec(`
+      CREATE TABLE session (
+        id TEXT PRIMARY KEY,
+        slug TEXT,
+        directory TEXT,
+        title TEXT,
+        model TEXT
+      );
+      CREATE TABLE message (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        data TEXT,
+        time_created INTEGER
+      );
+      CREATE TABLE part (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        message_id TEXT,
+        type TEXT,
+        idx INTEGER,
+        data TEXT
+      );
+      CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, message_id TEXT);
+    `)
+    if (source === 'zcode') {
+      db.exec(`
+        CREATE TABLE model_usage (
+          id TEXT PRIMARY KEY,
+          logical_request_id TEXT,
+          attempt_index INTEGER,
+          session_id TEXT,
+          provider_id TEXT,
+          model_id TEXT,
+          status TEXT,
+          started_at INTEGER,
+          completed_at INTEGER,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          reasoning_tokens INTEGER,
+          cache_creation_input_tokens INTEGER,
+          cache_read_input_tokens INTEGER,
+          provider_total_tokens INTEGER,
+          computed_total_tokens INTEGER
+        );
+      `)
+    } else {
+      db.exec('CREATE TABLE model_usage (id TEXT PRIMARY KEY, session_id TEXT);')
+    }
+    db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?)').run(
+      sessionId,
+      `${source}-slug`,
+      `/fixture/${source}`,
+      `${source} title`,
+      `${source}-model`
+    )
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(
+      `${source}-user`,
+      sessionId,
+      JSON.stringify({ role: 'user', time: { created: '2026-08-02T00:00:00Z' } }),
+      1785628800
+    )
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(
+      `${source}-assistant`,
+      sessionId,
+      JSON.stringify({
+        role: 'assistant',
+        parentID: `${source}-user`,
+        time: { created: '2026-08-02T00:00:01Z' },
+        ...(source === 'opencode'
+          ? {
+              providerID: 'openai',
+              modelID: 'gpt-5.1',
+              tokens: { input: 11, output: 7, reasoning: 2, cache: { read: 3, write: 4 } }
+            }
+          : {})
+      }),
+      1785628801
+    )
+    if (source === 'zcode') {
+      db.prepare('INSERT INTO model_usage VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+        `${source}-usage`,
+        `${source}-request`,
+        0,
+        sessionId,
+        'zhipu',
+        'glm-4.5',
+        'completed',
+        1785628801,
+        1785628802,
+        13,
+        5,
+        0,
+        2,
+        3,
+        18,
+        18
+      )
+    }
+    const insertPart = db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)')
+    insertPart.run(
+      `${source}-part-user`,
+      sessionId,
+      `${source}-user`,
+      'text',
+      0,
+      JSON.stringify({ text: `${source} source value` })
+    )
+    insertPart.run(
+      `${source}-part-assistant`,
+      sessionId,
+      `${source}-assistant`,
+      'text',
+      0,
+      JSON.stringify({ text: `${source} response` })
+    )
+  } finally {
+    db.close()
+  }
+  return `${dbPath}#${sessionId}`
 }
 
 function sharedCrossSessionPrefix(sessionId: string): RawJsonlMessage[] {
@@ -407,6 +540,109 @@ describe('Claude session discovery', () => {
     expect(summary?.tokenAccounting?.billingTotal).toBe(180)
     expect(summary?.tokenAccounting?.conversationOnly).toBe(120)
     expect(summary?.tokenAccounting?.usageEvents.map((event) => event.scope).sort()).toEqual(['main', 'subagent'])
+  })
+
+  it('t184: archived + custom CODEX_HOME + replay 三重 fixture 的 lineage 与总账闭环', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-lifecycle-home-'))
+    const customHome = path.join(home, 'codex-work')
+    const parentId = '18400000-0000-4000-8000-000000000001'
+    const replayId = '18400000-0000-4000-8000-000000000002'
+    const archivedId = '18400000-0000-4000-8000-000000000003'
+    const project = path.join(home, 'project')
+    const meta = (id: string, extra: Record<string, unknown> = {}) => ({
+      timestamp: '2026-08-02T10:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id, timestamp: '2026-08-02T10:00:00.000Z', cwd: project,
+        cli_version: 'codex-test', model_provider: 'openai', ...extra
+      }
+    })
+    const conversation = (prompt: string, offset: number) => [
+      {
+        timestamp: `2026-08-02T10:00:0${offset}.000Z`, type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }
+      },
+      {
+        timestamp: `2026-08-02T10:00:0${offset + 1}.000Z`, type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '完成' }] }
+      }
+    ]
+    const usage = (
+      timestamp: string,
+      turnId: string,
+      inputTokens: number,
+      outputTokens: number,
+      totalInput: number,
+      totalOutput: number
+    ) => ({
+      timestamp, type: 'event_msg', payload: {
+        type: 'token_count', info: {
+          turn_id: turnId,
+          last_token_usage: { input_tokens: inputTokens, output_tokens: outputTokens, cached_input_tokens: 0 },
+          total_token_usage: { input_tokens: totalInput, output_tokens: totalOutput, cached_input_tokens: 0 }
+        }
+      }
+    })
+    const sharedUsage = usage('2026-08-02T10:00:03.000Z', 'shared-turn', 100, 20, 100, 20)
+
+    writeJsonlAt(path.join(
+      customHome, 'sessions', '2026', '08', '02', `rollout-parent-${parentId}.jsonl`
+    ), [
+      meta(parentId),
+      { timestamp: '2026-08-02T10:00:00.500Z', type: 'turn_context', payload: { model: 'gpt-5.6-terra' } },
+      ...conversation('原会话', 1),
+      sharedUsage
+    ] as unknown as RawJsonlMessage[])
+    writeJsonlAt(path.join(
+      customHome, 'sessions', '2026', '08', '02', `rollout-replay-${replayId}.jsonl`
+    ), [
+      meta(replayId, { forked_from_id: parentId }),
+      { timestamp: '2026-08-02T10:00:00.500Z', type: 'turn_context', payload: { model: 'gpt-5.6-terra' } },
+      ...conversation('原会话的复制前缀', 1),
+      sharedUsage,
+      { timestamp: '2026-08-02T10:00:04.000Z', type: 'event_msg', payload: { type: 'thread_rolled_back', num_turns: 1 } },
+      ...conversation('rollback 后的 replay 新问题', 5),
+      usage('2026-08-02T10:00:07.000Z', 'replay-only', 50, 10, 150, 30)
+    ] as unknown as RawJsonlMessage[])
+    writeJsonlAt(path.join(
+      home, '.codex', 'archived_sessions', `rollout-archived-${archivedId}.jsonl`
+    ), [
+      meta(archivedId),
+      { timestamp: '2026-08-02T10:00:00.500Z', type: 'turn_context', payload: { model: 'gpt-5.6-terra' } },
+      ...conversation('已归档会话', 1),
+      usage('2026-08-02T10:00:03.500Z', 'archived-only', 30, 5, 30, 5)
+    ] as unknown as RawJsonlMessage[])
+    fs.mkdirSync(path.join(home, '.claude-session-manager'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.claude-session-manager', 'codex-homes.json'), JSON.stringify({
+      version: 1,
+      homes: [customHome]
+    }))
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+      const parent = sessions.find((session) => session.sessionId === parentId)
+      const replay = sessions.find((session) => session.sessionId === replayId)
+      const archived = sessions.find((session) => session.sessionId === archivedId)
+
+      expect(parent).toMatchObject({ lifecycleState: 'active', branchChildIds: [`codex:${replayId}`] })
+      expect(replay).toMatchObject({ lifecycleState: 'replayed', branchParentId: `codex:${parentId}` })
+      expect(replay?.branchParentFilePaths).toEqual(parent?.allFilePaths || [parent?.filePath])
+      expect(archived).toMatchObject({ lifecycleState: 'archived' })
+
+      const uniqueBillingFacts = new Map<string, number>()
+      for (const session of [parent, replay, archived]) {
+        for (const event of session?.tokenAccounting?.usageEvents || []) {
+          const components = event.components
+          uniqueBillingFacts.set(event.billingFactKey || `${session?.id}:${event.dedupKey}`,
+            components.nonCachedInputTokens + components.cacheReadTokens + components.cacheWriteTokens +
+            components.cacheWrite5mTokens + components.cacheWrite1hTokens + components.outputTokens)
+        }
+      }
+      expect([...uniqueBillingFacts.values()].reduce((sum, value) => sum + value, 0)).toBe(215)
+      expect(uniqueBillingFacts.size).toBe(3)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
   })
 
   it('【回归】同一 provider/session id 的跨文件副本只保留最完整 token 快照', async () => {
@@ -956,6 +1192,55 @@ describe('buildSessionDetail', () => {
 // cross-session branch inference 测试
 // ========================================================
 describe('loadAllSessions per-file incremental cache', () => {
+  it('single-flight 跨 readOnly/写模式复用纯解析，但隔离写副作用与 quiet 日志', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-single-flight-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'single-flight.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'single-flight-session',
+        type: 'user',
+        message: { role: 'user', content: 'single flight fixture' }
+      })
+    ])
+    const previousHome = process.env.HOME
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      process.env.HOME = home
+      vi.resetModules()
+      const mod = await import('./session-loader')
+
+      const quiet = mod.loadAllSessions({ quiet: true })
+      const visible = mod.loadAllSessions()
+      const [quietSessions, visibleSessions] = await Promise.all([quiet, visible])
+
+      expect(quietSessions).toBe(visibleSessions)
+      expect(infoSpy).toHaveBeenCalledTimes(1)
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
+
+      writeJsonlAt(file, [
+        rawMsg({
+          sessionId: 'single-flight-session',
+          type: 'user',
+          message: { role: 'user', content: 'single flight fixture updated' }
+        })
+      ])
+      const [readOnlySessions, writableSessions] = await Promise.all([
+        mod.loadAllSessions({ readOnly: true, quiet: true }),
+        mod.loadAllSessions({ quiet: true })
+      ])
+      // The read-only caller joins the same pure parse snapshot, while only
+      // the writable continuation performs cache/provider side effects.
+      expect(readOnlySessions).toBe(writableSessions)
+    } finally {
+      infoSpy.mockRestore()
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      vi.resetModules()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('readOnly 模式读取会话但不创建 summary cache', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-readonly-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'readonly.jsonl')
@@ -1001,7 +1286,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
       const diskCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
-      expect(diskCache.version).toBe(25)
+      expect(diskCache.version).toBe(27)
       expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
       expect(diskCache.entries[firstFile]).toMatchObject({
         sig: expect.any(String),
@@ -1173,11 +1458,176 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
       expect(summary).toMatchObject({ firstUserMessage: 'old-cache-session', turnCount: 0 })
-      expect(refreshedCache.version).toBe(25)
+      expect(refreshedCache.version).toBe(27)
       expect(refreshedCache.entries[file].perFile.lineageMeta.leafUuidRefs[0]).toMatchObject({
         origin: { kind: 'task-notification' },
         promptSource: 'sdk'
       })
+    } finally {
+      infoSpy.mockRestore()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('v25 升 v27 重建 Codex 和 SQLite-agent 投影，其他来源热复用', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-v25-selective-cache-home-'))
+    const claudeFile = path.join(home, '.claude', 'projects', '-Users-test-vault', 'v25-claude.jsonl')
+    const cursorId = 'v25-cursor'
+    const cursorFile = path.join(
+      home,
+      '.cursor',
+      'projects',
+      'Users-test-vault',
+      'agent-transcripts',
+      cursorId,
+      `${cursorId}.jsonl`
+    )
+    const codexId = '18400000-0000-4000-8000-000000000025'
+    const codexFile = path.join(
+      home,
+      '.codex',
+      'sessions',
+      '2026',
+      '08',
+      '02',
+      `rollout-2026-08-02T00-00-00-${codexId}.jsonl`
+    )
+    const opencodeId = 'ses_v25opencode'
+    const zcodeId = 'sess_v25zcode'
+    writeJsonlAt(claudeFile, [
+      rawMsg({
+        sessionId: 'v25-claude',
+        type: 'user',
+        message: { role: 'user', content: 'Claude source value' }
+      })
+    ])
+    writeJsonlAt(cursorFile, cursorBackupRows('Cursor source value') as RawJsonlMessage[])
+    writeJsonlAt(codexFile, codexBackupRows(codexId) as RawJsonlMessage[])
+    const opencodeRef = createSqliteAgentCacheFixture(home, 'opencode', opencodeId)
+    const zcodeRef = createSqliteAgentCacheFixture(home, 'zcode', zcodeId)
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      await loadAllSessionsFromTempHome(home)
+      const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+      const oldCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+      expect(Object.keys(oldCache.entries)).toEqual(expect.arrayContaining([
+        claudeFile,
+        cursorFile,
+        codexFile,
+        opencodeRef,
+        zcodeRef
+      ]))
+      oldCache.version = 25
+      oldCache.entries[claudeFile].perFile.summary.firstUserMessage = 'v25 Claude cache reused'
+      oldCache.entries[cursorFile].perFile.summary.firstUserMessage = 'v25 Cursor cache reused'
+      oldCache.entries[opencodeRef].perFile.summary.firstUserMessage = 'v25 OpenCode cache reused'
+      oldCache.entries[zcodeRef].perFile.summary.firstUserMessage = 'v25 ZCode cache reused'
+      oldCache.entries[opencodeRef].perFile.summary.tokenAccounting = accountingFromMutuallyExclusiveUsage(
+        'opencode',
+        { inputTokens: 100, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0 }
+      )
+      oldCache.entries[zcodeRef].perFile.summary.tokenAccounting = accountingFromMutuallyExclusiveUsage(
+        'zcode',
+        { inputTokens: 100, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0 }
+      )
+      oldCache.entries[codexFile].perFile.summary.firstUserMessage = 'stale v25 Codex cache'
+      fs.writeFileSync(cachePath, JSON.stringify(oldCache))
+
+      infoSpy.mockClear()
+      const sessions = await loadAllSessionsFromTempHome(home)
+      const refreshed = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 3, reused 2, files 5')
+      expect(sessions.find((session) => session.sessionId === 'v25-claude')?.firstUserMessage)
+        .toBe('v25 Claude cache reused')
+      expect(sessions.find((session) => session.sessionId === cursorId)?.firstUserMessage)
+        .toBe('v25 Cursor cache reused')
+      expect(sessions.find((session) => session.sessionId === opencodeId)?.firstUserMessage)
+        .toBe('opencode source value')
+      expect(sessions.find((session) => session.sessionId === zcodeId)?.firstUserMessage)
+        .toBe('zcode source value')
+      expect(sessions.find((session) => session.sessionId === opencodeId)?.tokenAccounting?.usageEvents)
+        .toEqual([expect.objectContaining({ providerFormatVersion: 'opencode-message-usage-v2' })])
+      expect(sessions.find((session) => session.sessionId === zcodeId)?.tokenAccounting?.usageEvents)
+        .toEqual([expect.objectContaining({ providerFormatVersion: 'zcode-model-usage-v1' })])
+      expect(sessions.find((session) => session.sessionId === codexId)?.firstUserMessage)
+        .toBe('从 Codex backup 建 summary')
+      expect(refreshed.version).toBe(27)
+      expect(fs.readdirSync(path.dirname(cachePath)).filter((name) => name.includes('summary-cache.json.') && name.endsWith('.tmp')))
+        .toEqual([])
+
+      infoSpy.mockClear()
+      await loadAllSessionsFromTempHome(home)
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 0, reused 5, files 5')
+    } finally {
+      infoSpy.mockRestore()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('v26 升 v27 重建 SQLite-agent 投影并在下一次 v27 启动全量热复用', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-v26-sqlite-cache-home-'))
+    const claudeFile = path.join(home, '.claude', 'projects', '-Users-test-vault', 'v26-claude.jsonl')
+    const codexId = '18400000-0000-4000-8000-000000000026'
+    const codexFile = path.join(
+      home,
+      '.codex',
+      'sessions',
+      '2026',
+      '08',
+      '02',
+      `rollout-2026-08-02T00-00-00-${codexId}.jsonl`
+    )
+    const opencodeId = 'ses_v26opencode'
+    const zcodeId = 'sess_v26zcode'
+    writeJsonlAt(claudeFile, [
+      rawMsg({
+        sessionId: 'v26-claude',
+        type: 'user',
+        message: { role: 'user', content: 'Claude v26 source value' }
+      })
+    ])
+    writeJsonlAt(codexFile, codexBackupRows(codexId) as RawJsonlMessage[])
+    const opencodeRef = createSqliteAgentCacheFixture(home, 'opencode', opencodeId)
+    const zcodeRef = createSqliteAgentCacheFixture(home, 'zcode', zcodeId)
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      await loadAllSessionsFromTempHome(home)
+      const cachePath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+      const oldCache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'))
+      oldCache.version = 26
+      oldCache.entries[claudeFile].perFile.summary.firstUserMessage = 'v26 Claude cache reused'
+      oldCache.entries[codexFile].perFile.summary.firstUserMessage = 'v26 Codex cache reused'
+      for (const [source, ref] of [
+        ['opencode', opencodeRef],
+        ['zcode', zcodeRef]
+      ] as const) {
+        oldCache.entries[ref].perFile.summary.firstUserMessage = `stale v26 ${source}`
+        oldCache.entries[ref].perFile.summary.tokenAccounting = accountingFromMutuallyExclusiveUsage(
+          source,
+          { inputTokens: 100, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0 }
+        )
+      }
+      fs.writeFileSync(cachePath, JSON.stringify(oldCache))
+
+      infoSpy.mockClear()
+      const migrated = await loadAllSessionsFromTempHome(home)
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 2, reused 2, files 4')
+      expect(migrated.find((session) => session.sessionId === 'v26-claude')?.firstUserMessage)
+        .toBe('v26 Claude cache reused')
+      expect(migrated.find((session) => session.sessionId === codexId)?.firstUserMessage)
+        .toBe('v26 Codex cache reused')
+      expect(migrated.find((session) => session.sessionId === opencodeId)?.tokenAccounting?.usageEvents)
+        .toEqual([expect.objectContaining({ providerFormatVersion: 'opencode-message-usage-v2' })])
+      expect(migrated.find((session) => session.sessionId === zcodeId)?.tokenAccounting?.usageEvents)
+        .toEqual([expect.objectContaining({ providerFormatVersion: 'zcode-model-usage-v1' })])
+      expect(JSON.parse(fs.readFileSync(cachePath, 'utf-8')).version).toBe(27)
+
+      infoSpy.mockClear()
+      await loadAllSessionsFromTempHome(home)
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 0, reused 4, files 4')
     } finally {
       infoSpy.mockRestore()
       fs.rmSync(home, { recursive: true, force: true })
@@ -1259,7 +1709,7 @@ describe('loadAllSessions per-file incremental cache', () => {
         .filter((event) => event.billingFactKey && event.billingFactKey === parent.tokenAccounting?.usageEvents[0]?.billingFactKey)
       expect(copiedPrefix).toHaveLength(2)
       expect(new Set(copiedPrefix?.map((event) => event.auditSourceId))).toEqual(new Set([parentId, childId]))
-      expect(cache.version).toBe(25)
+      expect(cache.version).toBe(27)
       expect(cache.entries[guardianFile].perFile).toMatchObject({
         summary: null,
         codexSubagent: { role: 'guardian', parentSessionId: parentId }
@@ -1276,7 +1726,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const hot = await loadAllSessionsFromTempHome(home)
       expect(hot.map((session) => session.sessionId)).toEqual([parentId])
-      expect(JSON.parse(fs.readFileSync(cachePath, 'utf-8')).version).toBe(25)
+      expect(JSON.parse(fs.readFileSync(cachePath, 'utf-8')).version).toBe(27)
 
       fs.rmSync(childFile)
       fs.rmSync(guardianFile)

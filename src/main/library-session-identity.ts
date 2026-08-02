@@ -43,6 +43,7 @@ const SOURCE_FAMILIES = new Set<LogicalSourceFamily>([
   'kimi',
   'hermes',
   'trae',
+  'gemini',
   'legacy-ambiguous'
 ])
 
@@ -77,6 +78,17 @@ function configuredRootInstance(
   return stableNamedInstance(`${sourceFamily}-config`, rootName)
 }
 
+function codexRootInstance(segments: string[]): LogicalSourceInstance | null {
+  const sessionsIndex = Math.max(
+    segments.lastIndexOf('sessions'),
+    segments.lastIndexOf('archived_sessions')
+  )
+  if (sessionsIndex <= 0) return null
+  const rootSegments = segments.slice(0, sessionsIndex)
+  if (rootSegments.at(-1) === '.codex') return { kind: 'default', id: 'default' }
+  return stableNamedInstance('codex-config', rootSegments.join('/'))
+}
+
 function semanticInstanceFromPath(
   sourceFamily: SessionSource,
   filePath: string
@@ -102,7 +114,7 @@ function semanticInstanceFromPath(
   }
 
   if (sourceFamily === 'codex') {
-    return configuredRootInstance(sourceFamily, segments, 'sessions', ['.codex'])
+    return codexRootInstance(segments)
   }
   if (sourceFamily === 'cursor') {
     return configuredRootInstance(sourceFamily, segments, 'projects', ['.cursor'])
@@ -137,6 +149,11 @@ function semanticInstanceFromPath(
   }
   if (sourceFamily === 'trae') {
     return segments.some((segment) => ['trae', 'trae cn', 'trae solo cn'].includes(segment.toLocaleLowerCase('en-US')))
+      ? { kind: 'default', id: 'default' }
+      : null
+  }
+  if (sourceFamily === 'gemini') {
+    return segments.includes('.gemini') && segments.includes('tmp') && segments.includes('chats')
       ? { kind: 'default', id: 'default' }
       : null
   }

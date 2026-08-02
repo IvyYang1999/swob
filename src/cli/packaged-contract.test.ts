@@ -153,7 +153,8 @@ beforeAll(() => {
   projectRoot = path.join(sandboxRoot, 'project with space')
   const cliTargetDir = path.join(fixtureHome, 'bin')
   const tempDir = path.join(sandboxRoot, 'tmp')
-  for (const dirPath of [fixtureHome, libraryRoot, projectRoot, cliTargetDir, tempDir]) {
+  const userDataRoot = path.join(sandboxRoot, 'user-data')
+  for (const dirPath of [fixtureHome, libraryRoot, projectRoot, cliTargetDir, tempDir, userDataRoot]) {
     fs.mkdirSync(dirPath, { recursive: true })
   }
 
@@ -173,12 +174,16 @@ beforeAll(() => {
     NODE_ENV: 'production',
     NODE_PATH: unpackedNodeModules,
     SWOB_CLI_DISABLE_AUTO_RUN: '0',
+    SWOB_E2E_RUNNER: 'packaged-cli-contract',
+    SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
     SWOB_LIBRARY_ROOT: libraryRoot,
     SWOB_PACKAGED_APP: appPath,
     SWOB_SEARCH_INDEX_DIR: path.join(fixtureHome, 'search-index'),
     SWOB_TEST_APP_CLI_PATH: packagedCli,
     SWOB_TEST_CLI_TARGET_DIR: cliTargetDir,
     SWOB_TEST_HOME: fixtureHome,
+    SWOB_TEST_SYSTEM_TEMP_ROOT: os.tmpdir(),
+    SWOB_USER_DATA_ROOT: userDataRoot,
     TEMP: tempDir,
     TMP: tempDir,
     TMPDIR: tempDir,
@@ -252,13 +257,52 @@ describePackaged('packaged Swob CLI complete command contract', () => {
   })
 
   it('resolves lineage and exercises resume surfaces through the installed command', async () => {
+    const manifestOnly = parseSuccess(invokeInstalled(
+      'resolve <id-or-prefix> [--json]',
+      ['resolve', SESSION_A, '--json']
+    ))
+    expect(manifestOnly).toMatchObject({ matched: true, resolved: SESSION_A })
+
     const lineageDry = parseSuccess(invokeInstalled('lineage [--dry-run]', ['lineage', '--dry-run', '--json']))
     expect(lineageDry).toHaveProperty('aliases')
     parseSuccess(invokeInstalled('lineage [--dry-run]', ['lineage', '--json']))
     expect(fs.existsSync(path.join(libraryRoot, '.session-lineage.json'))).toBe(true)
 
-    const resolved = parseSuccess(invokeInstalled('resolve <sessionId> [--json]', ['resolve', SESSION_A, '--json']))
+    const exactManifest = parseSuccess(invokeInstalled('resolve <id-or-prefix> [--json]', ['resolve', SESSION_A, '--json']))
+    expect(exactManifest).toMatchObject({ matched: true, resolved: SESSION_A })
+
+    const lineagePath = path.join(libraryRoot, '.session-lineage.json')
+    const lineage = JSON.parse(fs.readFileSync(lineagePath, 'utf8'))
+    lineage.aliases['legacy-packaged-alias'] = SESSION_B
+    fs.writeFileSync(lineagePath, JSON.stringify(lineage))
+    const resolved = parseSuccess(invokeInstalled(
+      'resolve <id-or-prefix> [--json]',
+      ['resolve', 'legacy-packaged-alias', '--json']
+    ))
     expect(resolved).toMatchObject({ matched: true, resolved: SESSION_B })
+
+    const located = parseSuccess(invokeInstalled(
+      'where <id-or-prefix> [--json]',
+      ['where', SESSION_B.slice(0, 12), '--json']
+    ))
+    expect(located).toMatchObject({ sessionId: SESSION_B, packagePath: packageB })
+
+    const transcriptStatus = parseSuccess(invokeInstalled(
+      'transcript status <id-or-prefix> [--json]',
+      ['transcript', 'status', SESSION_B, '--json']
+    ))
+    expect(transcriptStatus).toMatchObject({
+      sessionId: SESSION_B,
+      sourceUpdatedAt: expect.any(String),
+      backupUpdatedAt: expect.any(String),
+      manifestUpdatedAt: expect.any(String)
+    })
+
+    expect(parseSuccess(invokeInstalled('doctor locks [--json]', ['doctor', 'locks', '--json']))).toMatchObject({ state: 'unlocked' })
+    expect(parseSuccess(invokeInstalled('doctor library [--json]', ['doctor', 'library', '--json']))).toMatchObject({
+      manifestCount: 2,
+      staleCount: expect.any(Number)
+    })
 
     const resumed = parseSuccess(invokeInstalled(
       'resume <sessionId> [--cwd PATH] [--skip-permissions]',
@@ -349,6 +393,12 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     ))
     expect(rebuilt).toMatchObject({ dryRun: false, missingOnly: true, sessionCount: 2, failed: 0 })
     expect(rebuilt.written).toBeGreaterThan(0)
+
+    const rebuiltOne = parseSuccess(invokeInstalled(
+      'transcript rebuild <id-or-prefix> [--dry-run]',
+      ['transcript', 'rebuild', SESSION_A, '--dry-run', '--json']
+    ))
+    expect(rebuiltOne).toMatchObject({ sessionId: SESSION_A, dryRun: true, failed: 0 })
 
     const redacted = parseSuccess(invokeInstalled('redact [--dry-run]', ['redact', '--json']))
     expect(redacted).toMatchObject({ files: expect.any(Number), hits: expect.any(Number) })

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-02T10:59:50+08:00",
+  "mode": "explicit-candidate-what-if",
+  "activation": "blocked-pending-review",
+  "libraryPackages": 1890,
+  "taskBaselinePackages": 1888,
+  "packageCountNote": "The live library gained two packages after the task was authored.",
+  "logicalSessions": 1422,
+  "usageEvents": 87779,
+  "candidateRevision": "candidate-2026-08-02.v1",
+  "candidateHash": "f1211ec162754c1c542cc881324be266f4404d2b6ecc718ca12f59700a9efdb2",
+  "before": {
+    "coveredTokens": 6101750848,
+    "totalBillableTokens": 12756273116,
+    "coveragePercent": 47.83333496008851,
+    "unpricedPercent": 52.16666503991149,
+    "missingReasons": [
+      "no-exact-provider-model-date-rule",
+      "model-not-in-catalog",
+      "model-unknown",
+      "provider-unknown"
+    ]
+  },
+  "after": {
+    "coveredTokens": 11926115003,
+    "totalBillableTokens": 12756273116,
+    "coveragePercent": 93.49215789399534,
+    "unpricedPercent": 6.507842106004659,
+    "missingReasons": [
+      "model-not-in-catalog",
+      "model-unknown",
+      "cache-write-1h-price-missing",
+      "provider-unknown",
+      "cache-write-5m-price-missing",
+      "no-exact-provider-model-date-rule"
+    ]
+  },
+  "improvementPercentagePoints": 45.65882293390683,
+  "privacy": "Aggregate counts only; no session IDs, paths, prompts, or transcript content."
+}

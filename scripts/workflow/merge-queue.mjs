@@ -378,6 +378,7 @@ export function runMergeQueue(options, repo = process.cwd()) {
   const temporaryParent = options.integrationDir ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'swob-merge-queue-'))
   const integrationDir = options.integrationDir ?? path.join(temporaryParent, 'worktree')
   let branch = options.branch ?? `integration/${runId}`
+  let resumedItemCount = 0
   if (options.useExistingIntegrationDir) {
     if (!fs.existsSync(integrationDir)) throw new Error(`已有集成 worktree 不存在: ${integrationDir}`)
     const topLevel = path.resolve(git(['rev-parse', '--show-toplevel'], integrationDir))
@@ -394,9 +395,30 @@ export function runMergeQueue(options, repo = process.cwd()) {
     const expectedBase = git(['rev-parse', options.baseRef], repo)
     const actualBase = git(['rev-parse', 'HEAD'], integrationDir)
     if (actualBase !== expectedBase) {
-      throw new Error(`已有集成 worktree HEAD 不等于 baseRef: expected=${expectedBase} actual=${actualBase}`)
+      if (gitResult(['merge-base', '--is-ancestor', expectedBase, actualBase], integrationDir).status !== 0) {
+        throw new Error(`已有集成 worktree HEAD 不是 baseRef 后代: expected=${expectedBase} actual=${actualBase}`)
+      }
+      const subjects = git(
+        ['log', '--first-parent', '--reverse', '--format=%s', `${expectedBase}..${actualBase}`],
+        integrationDir
+      ).split('\n').filter(Boolean)
+      const expectedSubjects = preflight.ordered.map(
+        (manifest) => `merge(queue): integrate ${manifest.workItemId}`
+      )
+      const validPrefix = subjects.length <= expectedSubjects.length &&
+        subjects.every((subject, index) => subject === expectedSubjects[index])
+      if (!validPrefix) {
+        throw new Error(`已有集成 worktree 包含非队列前缀提交: ${subjects.join(', ')}`)
+      }
+      resumedItemCount = subjects.length
     }
-    report.integration = { worktree: integrationDir, branch, retained: true, precreated: true }
+    report.integration = {
+      worktree: integrationDir,
+      branch,
+      retained: true,
+      precreated: true,
+      resumedItems: preflight.ordered.slice(0, resumedItemCount).map((manifest) => manifest.workItemId)
+    }
   } else {
     fs.mkdirSync(path.dirname(integrationDir), { recursive: true })
     if (fs.existsSync(integrationDir)) throw new Error(`集成 worktree 路径已存在: ${integrationDir}`)
@@ -408,6 +430,14 @@ export function runMergeQueue(options, repo = process.cwd()) {
 
   for (const [index, manifest] of preflight.ordered.entries()) {
     const item = report.items[index]
+    if (index < resumedItemCount) {
+      item.status = 'already-present'
+      item.integrationCommit = git(
+        ['log', '--first-parent', '--reverse', '--format=%H', `${options.baseRef}..HEAD`],
+        integrationDir
+      ).split('\n').filter(Boolean)[index]
+      continue
+    }
     const merge = gitResult(['merge', '--no-commit', '--no-ff', manifest.headSha], integrationDir)
     const unmerged = gitResult(['diff', '--name-only', '--diff-filter=U'], integrationDir).stdout.trim().split('\n').filter(Boolean)
     if (unmerged.length > 0) {

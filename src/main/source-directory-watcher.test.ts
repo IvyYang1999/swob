@@ -10,6 +10,7 @@ import {
   type SourceWatcherFileEvent,
   type SourceWatcherId
 } from './source-directory-watcher'
+import { saveAdditionalCodexHomes } from './codex-session-roots'
 
 const temporaryRoots: string[] = []
 
@@ -53,8 +54,10 @@ describe('source watcher path definitions', () => {
     expect(claude.matches(path.join(home, '.claude', 'projects', 'project', 'session.txt'))).toBe(false)
 
     expect(codex.matches(path.join(home, '.codex', 'sessions', '2026', '07', '22', 'rollout-session.jsonl'))).toBe(true)
+    expect(codex.matches(path.join(home, '.codex', 'archived_sessions', 'rollout-archived.jsonl'))).toBe(true)
     expect(codex.matches(path.join(home, '.codex', 'sessions', '2026', '07', '22', 'session.jsonl'))).toBe(false)
     expect(codex.matches(path.join(home, '.codex', 'sessions', '2026', '07', '22', 'rollout-session.txt'))).toBe(false)
+    expect(codex.matches(path.join(home, '.codex', 'archived_sessions', 'nested', 'rollout-archived.jsonl'))).toBe(false)
 
     expect(cursor.matches(path.join(
       home, '.cursor', 'projects', 'project', 'agent-transcripts', 'session', 'session.jsonl'
@@ -66,6 +69,23 @@ describe('source watcher path definitions', () => {
       home, '.cursor', 'projects', 'project', 'agent-transcripts', 'session', 'nested', 'session.jsonl'
     ))).toBe(false)
   })
+
+  it('watches every configured CODEX_HOME and accepts each root lifecycle layout', () => {
+    const home = makeTemporaryHome()
+    const customHome = path.join(home, 'codex-work')
+    fs.mkdirSync(customHome)
+    saveAdditionalCodexHomes([customHome], home)
+
+    const codex = createSourceWatchDefinition('codex', home)
+
+    expect(codex.roots).toEqual([path.join(home, '.codex'), customHome])
+    expect(codex.matches(path.join(
+      customHome, 'sessions', '2026', '08', '02', 'rollout-custom.jsonl'
+    ))).toBe(true)
+    expect(codex.matches(path.join(
+      customHome, 'archived_sessions', 'rollout-custom-archived.jsonl'
+    ))).toBe(true)
+  })
 })
 
 class FakeFsWatcher extends EventEmitter {
@@ -73,6 +93,47 @@ class FakeFsWatcher extends EventEmitter {
 }
 
 describe('resilient source watcher error handling', () => {
+  it('temporarily watches the nearest ancestor on macOS and narrows when a Codex root appears', async () => {
+    const home = makeTemporaryHome()
+    const customHome = path.join(home, 'codex-work')
+    fs.mkdirSync(customHome)
+    saveAdditionalCodexHomes([customHome], home)
+    const definition = createSourceWatchDefinition('codex', home)
+    const handlers: Array<(changedPath: string, flags: number) => void> = []
+    const watchedRoots: string[] = []
+    const loadFSEvents = vi.fn(() => ({
+      watch: vi.fn((root: string, handler: (changedPath: string, flags: number) => void) => {
+        watchedRoots.push(root)
+        handlers.push(handler)
+        return vi.fn(async () => undefined)
+      }),
+      getInfo: () => ({ event: 'created', type: 'directory' }),
+      constants: { MustScanSubDirs: 1, UserDropped: 2, KernelDropped: 4 }
+    }))
+    const onError = vi.fn()
+    const controller = watchSourceDirectory({
+      definition,
+      onFile: vi.fn(),
+      onError,
+      platform: 'darwin',
+      loadFSEvents,
+      retryInitialMs: 5,
+      retryMaxMs: 5
+    })
+
+    expect(watchedRoots).toEqual([
+      fs.realpathSync.native(home),
+      fs.realpathSync.native(customHome)
+    ])
+    fs.mkdirSync(definition.roots[0])
+    handlers[0](fs.realpathSync.native(definition.roots[0]), 0)
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'SOURCE_ROOT_APPEARED' }), {
+      phase: 'runtime', retryInMs: 5, attempt: 0, backend: 'fsevents'
+    })
+    await vi.waitFor(() => expect(loadFSEvents).toHaveBeenCalledTimes(2))
+    await controller.close()
+  })
+
   it('handles an injected EMFILE, closes the failed instance, and rebuilds after backoff', async () => {
     const home = makeTemporaryHome()
     const definition = createSourceWatchDefinition('codex', home)
@@ -107,7 +168,7 @@ describe('resilient source watcher error handling', () => {
     await vi.waitFor(() => expect(watchFactory).toHaveBeenCalledTimes(2))
 
     instances[1].emit('ready')
-    const watchedFile = path.join(definition.roots[0], '2026', '07', '22', 'rollout-session.jsonl')
+    const watchedFile = path.join(definition.roots[0], 'sessions', '2026', '07', '22', 'rollout-session.jsonl')
     instances[1].emit('change', watchedFile)
     expect(onFile).toHaveBeenCalledWith(watchedFile, 'change')
 
@@ -174,8 +235,8 @@ describe('resilient source watcher error handling', () => {
       retryMaxMs: 5
     })
 
-    await vi.waitFor(() => expect(onReady).toHaveBeenCalledWith(0, 'fsevents'))
-    const watchedFile = path.join(definition.roots[0], '2026', '07', '22', 'rollout-session.jsonl')
+    await vi.waitFor(() => expect(onReady).toHaveBeenCalledWith(0, 'fsevents', []))
+    const watchedFile = path.join(definition.roots[0], 'sessions', '2026', '07', '22', 'rollout-session.jsonl')
     handlers[0](watchedFile, 0)
     expect(onFile).toHaveBeenCalledWith(watchedFile, 'change')
 
@@ -261,6 +322,57 @@ describe.sequential('source directory watcher integration', () => {
       }
     }, 12_000)
   }
+
+  it('delivers a Codex rollout when its configured root appears after startup', async () => {
+    const home = makeTemporaryHome()
+    const definition = createSourceWatchDefinition('codex', home)
+    const filePath = path.join(
+      home, '.codex', 'sessions', '2026', '08', '02', 'rollout-created-later.jsonl'
+    )
+    let resolveReady!: () => void
+    const ready = new Promise<void>((resolve) => { resolveReady = resolve })
+    let resolveRecovery!: () => void
+    const recovered = new Promise<void>((resolve) => { resolveRecovery = resolve })
+    let resolveFile!: (event: { filePath: string; event: SourceWatcherFileEvent }) => void
+    const fileEvent = new Promise<{ filePath: string; event: SourceWatcherFileEvent }>((resolve) => {
+      resolveFile = resolve
+    })
+    const errors: unknown[] = []
+    const watchFactory = ((roots, options) => chokidar.watch(roots, {
+      ...options,
+      usePolling: true,
+      interval: 50
+    })) as typeof chokidar.watch
+    const controller = watchSourceDirectory({
+      definition,
+      onReady: (attempt) => { attempt === 0 ? resolveReady() : resolveRecovery() },
+      onError: (error) => errors.push(error),
+      onFile: (changedPath, event) => resolveFile({ filePath: changedPath, event }),
+      platform: 'linux',
+      watchFactory,
+      retryInitialMs: 5,
+      retryMaxMs: 5
+    })
+
+    try {
+      await withTimeout(ready, 'missing Codex root ready')
+      // `ready` can precede fs.watchFile's first stable sample under full-suite
+      // load. Ten polling intervals make both transitions unambiguous deltas.
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      fs.mkdirSync(path.join(home, '.codex'))
+      await withTimeout(recovered, 'Codex watcher narrowed to created root')
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(filePath, '{"type":"created"}\n')
+      expect(await withTimeout(fileEvent, 'rollout under newly created Codex root')).toEqual({
+        filePath,
+        event: 'add'
+      })
+      expect(errors).toEqual([expect.objectContaining({ code: 'SOURCE_ROOT_APPEARED' })])
+    } finally {
+      await controller.close()
+    }
+  }, 12_000)
 })
 
 const nativeFSEventsIt = process.platform === 'darwin' && process.env.SWOB_NATIVE_FSEVENTS_TEST === '1'

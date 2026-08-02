@@ -11,6 +11,8 @@ import {
   FileText, Focus, Tags, CalendarDays, Layers3, Gauge,
   HardDrive, Rows3, WandSparkles, FolderTree, Undo2
 } from 'lucide-react'
+// SessionStaleIndicator removed: lagMs is never projected onto session objects
+// by the main process. The global LibraryHealthBanner already covers stale state.
 import { SshConfigModal } from './SshConfigModal'
 import { resolveResumeCwd } from '../utils/chat-helpers'
 import { OrganizerPanel } from './OrganizerPanel'
@@ -148,6 +150,16 @@ function SessionItem({
             </span>
           )
         })()}
+        {session.lifecycleState === 'archived' && (
+          <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">
+            {t('renderer.sidebar.archived')}
+          </span>
+        )}
+        {session.lifecycleState === 'replayed' && (
+          <span className="px-1 bg-soft-purple/10 text-soft-purple rounded text-[10px] whitespace-nowrap shrink-0">
+            {t('renderer.sidebar.replayed')}
+          </span>
+        )}
         {session.compactCount > 0 && (
           <span className="px-1 bg-soft-amber/10 text-soft-amber rounded text-[10px] whitespace-nowrap shrink-0">compact</span>
         )}

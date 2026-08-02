@@ -13,7 +13,11 @@ import {
   type Valuation
 } from './token-valuation'
 import { usageFactsForSession } from './usage-fact-store'
-import { BUILTIN_PROVIDER_DEFINITIONS } from '../shared/provider-capabilities'
+import {
+  BUILTIN_PROVIDER_DEFINITIONS,
+  valuationCapabilityForSource,
+  type ValuationCapability
+} from '../shared/provider-capabilities'
 import {
   sessionHasAuthoritativeUsage,
   sessionHasParsedTranscript
@@ -24,6 +28,7 @@ export type TokenDataStatus = 'available' | 'partial' | 'unavailable' | 'no-data
 export interface SourceStats {
   source: string
   label: string
+  valuationCapability: ValuationCapability
   totalTokens: number
   inputTokens: number
   outputTokens: number
@@ -262,6 +267,7 @@ export function buildInsights(
     sourceMap.set(source, {
       source,
       label: SOURCE_LABELS[source],
+      valuationCapability: valuationCapabilityForSource(source),
       totalTokens: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -346,6 +352,7 @@ export function buildInsights(
       sourceStats = {
         source,
         label: SOURCE_LABELS[source] || source,
+        valuationCapability: valuationCapabilityForSource(source),
         totalTokens: 0,
         inputTokens: 0,
         outputTokens: 0,

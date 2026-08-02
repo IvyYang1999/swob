@@ -195,4 +195,142 @@ describe('renderer preference persistence', () => {
       messages: [{ uuid: 'message-1' }]
     })
   })
+
+  it('replays current search query when searchIndexUpdated fires', async () => {
+    let searchIndexUpdatedCb!: () => void
+    const searchSessions = vi.fn(async () => [{ id: 'refreshed' }])
+
+    ;(window as any).api = {
+      onLibraryPatch: vi.fn(),
+      loadAllSessions: vi.fn(async () => []),
+      loadConfig: vi.fn(async () => structuredClone(baseConfig)),
+      getSystemLocale: vi.fn(async () => 'en'),
+      saveConfig: vi.fn(async () => undefined),
+      onSessionAdded: vi.fn(),
+      onSessionUpdated: vi.fn(),
+      onSessionSummaryUpdated: vi.fn(),
+      onSessionsRefresh: vi.fn(),
+      getActiveSessions: vi.fn(async () => []),
+      onActiveSessionsChanged: vi.fn(),
+      onSpotlightNavigate: vi.fn(),
+      onSearchIndexUpdated: (cb: () => void) => { searchIndexUpdatedCb = cb },
+      searchSessions
+    }
+
+    const { useStore } = await import('./store')
+    await useStore.getState().initialize()
+
+    // Set a search query in state without triggering the full search flow
+    useStore.setState({ searchQuery: 'hello', searchState: 'success' })
+
+    // Fire the event — should replay the search
+    searchIndexUpdatedCb()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(searchSessions).toHaveBeenCalledWith('hello')
+  })
+
+  it('does not replay search when query is empty on searchIndexUpdated', async () => {
+    let searchIndexUpdatedCb!: () => void
+    const searchSessions = vi.fn(async () => [])
+
+    ;(window as any).api = {
+      onLibraryPatch: vi.fn(),
+      loadAllSessions: vi.fn(async () => []),
+      loadConfig: vi.fn(async () => structuredClone(baseConfig)),
+      getSystemLocale: vi.fn(async () => 'en'),
+      saveConfig: vi.fn(async () => undefined),
+      onSessionAdded: vi.fn(),
+      onSessionUpdated: vi.fn(),
+      onSessionSummaryUpdated: vi.fn(),
+      onSessionsRefresh: vi.fn(),
+      getActiveSessions: vi.fn(async () => []),
+      onActiveSessionsChanged: vi.fn(),
+      onSpotlightNavigate: vi.fn(),
+      onSearchIndexUpdated: (cb: () => void) => { searchIndexUpdatedCb = cb },
+      searchSessions
+    }
+
+    const { useStore } = await import('./store')
+    await useStore.getState().initialize()
+
+    // searchQuery is '' by default — event should not trigger a search
+    searchIndexUpdatedCb()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(searchSessions).not.toHaveBeenCalled()
+  })
+
+  it('drops stale searchIndexUpdated results when query changes mid-flight', async () => {
+    let searchIndexUpdatedCb!: () => void
+    let resolveSearch!: (value: unknown[]) => void
+    const searchSessions = vi.fn(() => new Promise<unknown[]>((resolve) => { resolveSearch = resolve }))
+
+    ;(window as any).api = {
+      onLibraryPatch: vi.fn(),
+      loadAllSessions: vi.fn(async () => []),
+      loadConfig: vi.fn(async () => structuredClone(baseConfig)),
+      getSystemLocale: vi.fn(async () => 'en'),
+      saveConfig: vi.fn(async () => undefined),
+      onSessionAdded: vi.fn(),
+      onSessionUpdated: vi.fn(),
+      onSessionSummaryUpdated: vi.fn(),
+      onSessionsRefresh: vi.fn(),
+      getActiveSessions: vi.fn(async () => []),
+      onActiveSessionsChanged: vi.fn(),
+      onSpotlightNavigate: vi.fn(),
+      onSearchIndexUpdated: (cb: () => void) => { searchIndexUpdatedCb = cb },
+      searchSessions
+    }
+
+    const { useStore } = await import('./store')
+    await useStore.getState().initialize()
+
+    useStore.setState({ searchQuery: 'original', searchState: 'success' })
+
+    // Fire the event — starts a search for 'original'
+    searchIndexUpdatedCb()
+
+    // User changes query while the IPC is in flight
+    useStore.setState({ searchQuery: 'changed', searchState: 'searching' })
+
+    // Original search resolves — results should be dropped (stale)
+    resolveSearch([{ id: 'stale-result' }])
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(useStore.getState().searchResults).not.toEqual([{ id: 'stale-result' }])
+    expect(useStore.getState().searchState).toBe('searching')
+  })
+
+  it('does not duplicate listeners when initialize is called twice', async () => {
+    const callbacks: Array<() => void> = []
+    const unsubscribe = vi.fn()
+    const searchSessions = vi.fn(async () => [{ id: 'r' }])
+
+    ;(window as any).api = {
+      onLibraryPatch: vi.fn(),
+      loadAllSessions: vi.fn(async () => []),
+      loadConfig: vi.fn(async () => structuredClone(baseConfig)),
+      getSystemLocale: vi.fn(async () => 'en'),
+      saveConfig: vi.fn(async () => undefined),
+      onSessionAdded: vi.fn(),
+      onSessionUpdated: vi.fn(),
+      onSessionSummaryUpdated: vi.fn(),
+      onSessionsRefresh: vi.fn(),
+      getActiveSessions: vi.fn(async () => []),
+      onActiveSessionsChanged: vi.fn(),
+      onSpotlightNavigate: vi.fn(),
+      onSearchIndexUpdated: (cb: () => void) => { callbacks.push(cb); return unsubscribe },
+      searchSessions
+    }
+
+    const { useStore } = await import('./store')
+    await useStore.getState().initialize()
+    await useStore.getState().initialize()
+
+    // Second initialize should have called unsubscribe from first
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    // Only the latest callback should be active
+    expect(callbacks).toHaveLength(2)
+  })
 })

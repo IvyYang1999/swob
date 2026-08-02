@@ -282,6 +282,25 @@ describe('session action context', () => {
       .toThrow('session-fork-unavailable:qoder')
   })
 
+  it('Gemini Resume 使用真机 help 已验证的 --resume 入口', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-gemini-resume-'))
+    try {
+      expect(buildResumeCommand('gemini-session-123', undefined, dir, 'gemini'))
+        .toBe(`cd ${shellQuote(dir)} && gemini --resume ${shellQuote('gemini-session-123')}`)
+      expect(buildResumeLaunchSpec('gemini-session-123', undefined, dir, 'gemini')).toEqual({
+        executable: 'gemini',
+        args: ['--resume', 'gemini-session-123'],
+        cwd: dir,
+        target: 'native',
+        keepOpen: true
+      })
+      expect(() => buildResumeLaunchSpec('../unsafe', undefined, dir, 'gemini'))
+        .toThrow('gemini session id 格式不合法')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('builds a Codex Desktop deep link only for a validated Codex session id', () => {
     expect(buildResumeAction(
       '019abcde-1234-7000-8000-0123456789ab',

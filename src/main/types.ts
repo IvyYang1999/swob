@@ -147,6 +147,8 @@ export type SessionDetailAvailability =
   | 'source-recoverable'
   | 'unavailable'
 
+export type SessionLifecycleState = 'active' | 'archived' | 'replayed'
+
 export interface SessionSummary {
   id: string
   sessionId: string
@@ -188,6 +190,8 @@ export interface SessionSummary {
   allFilePaths?: string[]
   permissionMode?: string
   resumeCwd?: string
+  /** Physical Codex lifecycle; replayed denotes a live fork/replay child. */
+  lifecycleState?: SessionLifecycleState
   branchParentFilePaths?: string[]
   branchPointUuid?: string
   branchLeafUuid?: string // for intra-file branches: trace this leaf's parentUuid chain

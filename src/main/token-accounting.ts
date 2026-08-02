@@ -7,6 +7,12 @@ export type ModelProvenance = 'response' | 'turn-context' | 'session-fallback' |
 export type ProviderProvenance = 'explicit' | 'model-prefix' | 'inferred' | 'unknown'
 export type ReportedCostKind = 'provider-billed' | 'harness-list-estimate' | 'swob-estimate'
 
+export interface UsageFieldRelations {
+  cacheRead: 'disjoint' | 'subset-of-input' | 'provider-defined'
+  cacheWrite: 'disjoint' | 'subset-of-input' | 'provider-defined'
+  reasoning: 'subset-of-output' | 'disjoint-from-visible-output' | 'provider-defined'
+}
+
 export interface HarnessUsageSemanticsContract {
   status: 'verified' | 'reserved' | 'unverified'
   inputCacheRelation: 'disjoint' | 'cache-subset-of-input' | 'provider-specific' | 'unknown'
@@ -28,15 +34,15 @@ export const HARNESS_USAGE_CONTRACTS: Readonly<Record<string, HarnessUsageSemant
     counterKinds: ['per-turn', 'cumulative-session']
   },
   gemini: {
-    status: 'reserved', inputCacheRelation: 'provider-specific', reasoningRelation: 'disjoint-from-visible-output',
+    status: 'verified', inputCacheRelation: 'cache-subset-of-input', reasoningRelation: 'disjoint-from-visible-output',
     counterKinds: ['per-request']
   },
   opencode: {
-    status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'unknown',
+    status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'disjoint-from-visible-output',
     counterKinds: ['per-request']
   },
   zcode: {
-    status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'unknown',
+    status: 'verified', inputCacheRelation: 'cache-subset-of-input', reasoningRelation: 'unknown',
     counterKinds: ['per-request']
   }
 }
@@ -67,6 +73,23 @@ export interface NormalizedTokenComponents {
   /** Gemini-style visible output when thinking is a separate billable bucket. */
   visibleOutputTokens?: number
   reasoningTokens?: number
+}
+
+export type BillingUnit =
+  | 'search'
+  | 'image'
+  | 'audio-minute'
+  | 'cache-storage-token-hour'
+  | 'credit'
+  | 'page'
+  | 'request'
+  | 'character'
+  | 'gigabyte-day'
+
+export interface BillingItem {
+  unit: BillingUnit
+  quantity: number
+  sku: string
 }
 
 export interface UsageEvent {
@@ -101,6 +124,8 @@ export interface UsageEvent {
   rawReasoningTokens?: number
   components: NormalizedTokenComponents
   semantics: 'anthropic-disjoint' | 'openai-input-subset' | 'provider-specific'
+  /** Per-event field relations override the legacy combined semantics label. */
+  fieldRelations?: UsageFieldRelations
   reportedCostUsd?: number
   reportedCostKind?: ReportedCostKind
   subscriptionAllocation?: { usd: number; policyId: string }
@@ -109,6 +134,8 @@ export interface UsageEvent {
   speed?: string
   isBatch?: boolean
   isLongContext?: boolean
+  /** Non-token provider billing facts. Kept outside token components to preserve unit semantics. */
+  billingItems?: BillingItem[]
   warnings: string[]
 }
 
@@ -178,7 +205,13 @@ const ORIGINAL_MODEL_PROVIDERS = new Set(['anthropic', 'openai', 'google'])
 export function resolveUsageAttribution(
   modelRaw: string | undefined,
   modelProvenance: ModelProvenance,
-  providerRaw?: string
+  providerRaw?: string,
+  options: {
+    /** The source row explicitly names the route/billing provider; never replace it from model identity. */
+    explicitProviderAuthoritative?: boolean
+    /** Multi-provider harnesses can forbid model-prefix/provider inference when the source omitted provider. */
+    inferProvider?: boolean
+  } = {}
 ): Pick<UsageEvent,
   'modelRaw' | 'modelCanonical' | 'modelProvenance' |
   'billingProvider' | 'providerRaw' | 'providerProvenance'> {
@@ -187,6 +220,17 @@ export function resolveUsageAttribution(
   const explicitProvider = normalizedProvider(providerRaw)
   const routeProvider = providerFromModelRoute(rawModel)
   const inferredProvider = modelMatch?.originalProvider || inferOriginalProvider(rawModel)
+
+  if (explicitProvider && options.explicitProviderAuthoritative) {
+    return {
+      modelRaw: rawModel,
+      modelCanonical: modelMatch?.modelCanonical,
+      modelProvenance: rawModel ? modelProvenance : 'unknown',
+      billingProvider: explicitProvider,
+      providerRaw,
+      providerProvenance: 'explicit'
+    }
+  }
 
   // The response model is stronger evidence than a harness/session default
   // provider hint. This is common when Claude Code runs GPT or Gemini models.
@@ -214,6 +258,14 @@ export function resolveUsageAttribution(
       billingProvider: explicitProvider,
       providerRaw,
       providerProvenance: 'explicit'
+    }
+  }
+  if (options.inferProvider === false) {
+    return {
+      modelRaw: rawModel,
+      modelCanonical: modelMatch?.modelCanonical,
+      modelProvenance: rawModel ? modelProvenance : 'unknown',
+      providerProvenance: 'unknown'
     }
   }
   if (routeProvider) {
@@ -331,6 +383,20 @@ function accountingFromEvents(
     usageEvents: events,
     warnings
   }
+}
+
+/** Build a v2 ledger from already-normalized, independently auditable calls. */
+export function accountingFromUsageEvents(
+  provider: SessionSource,
+  events: UsageEvent[],
+  warnings: string[] = []
+): TokenAccounting {
+  const provenance: TokenProvenance = events.some((event) => event.provenance === 'estimated')
+    ? 'estimated'
+    : events.some((event) => event.provenance === 'derived')
+      ? 'derived'
+      : 'reported'
+  return accountingFromEvents(provider, events, provenance, warnings)
 }
 
 export function unavailableTokenAccounting(

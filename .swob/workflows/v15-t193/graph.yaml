@@ -1,0 +1,36 @@
+batch: v15-t193-cli-control-plane
+workItems:
+  - id: t190-writer-lease-recovery
+    owner: codex-upstream-t190
+    depends_on: []
+    evidence_required:
+      - result.json accepted by an independent verifier
+  - id: t192-library-health-freshness
+    owner: codex-upstream-t192
+    depends_on: []
+    evidence_required:
+      - result.json accepted by an independent verifier
+  - id: t193-cli-control-plane
+    owner: codex-019f84bd-f685-7b32-b88f-26a945a51dfb
+    depends_on:
+      - t190-writer-lease-recovery
+      - t192-library-health-freshness
+    write_scope:
+      - .swob/workflows/v15-t193/**
+      - README.md
+      - docs/cli-control-plane.md
+      - scripts/generate-docs.mjs
+      - src/cli/**
+      - src/main/host-identity.ts
+      - src/main/host-identity.test.ts
+      - src/main/library-manager.ts
+      - src/main/library-manager.test.ts
+      - src/main/library-writer-lease.ts
+      - result.json
+    evidence_required:
+      - npm run workflow:validate
+      - npx vitest run src/cli/resolve-command.test.ts src/cli/contract.test.ts src/main/library-manager.test.ts
+      - npm run test:cli:packaged
+      - npm run check
+      - npx vitest run --maxWorkers=2
+      - npm run build

@@ -11,6 +11,10 @@ import { callLlm, resolveLlmModel, type LlmSettings } from './llm-client'
 import { accountingForSession } from './token-accounting'
 import { aggregateValuations, type Valuation } from './token-valuation'
 import type { SessionSummary } from './types'
+import {
+  valuationCapabilityForSource,
+  type ValuationCapability
+} from '../shared/provider-capabilities'
 
 export type InsightsProgress = (stage: string, current: number, total: number) => void
 
@@ -35,6 +39,7 @@ export interface InsightsReport {
 
   bySource: Array<{
     source: string
+    valuationCapability: ValuationCapability
     sessions: number
     turns: number
     tokens: number
@@ -218,6 +223,7 @@ export async function generateInsightsReport(
   if (reCount > 0 && reSum / reCount < 3) findings.push(`Average Read:Edit ratio ${(reSum / reCount).toFixed(1)} — tendency to edit before thoroughly reading`)
   const sourceRows = [...bySource.entries()].map(([source, data]) => ({
     source,
+    valuationCapability: valuationCapabilityForSource(source),
     sessions: data.sessions,
     turns: data.turns,
     tokens: data.tokens,
@@ -279,7 +285,7 @@ export async function generateInsightsReport(
 
 export function renderInsightsHtml(report: InsightsReport): string {
   const srcRows = report.bySource.map(s =>
-    `<tr><td>${s.source}</td><td>${s.sessions}</td><td>${s.turns.toLocaleString()}</td><td>${Math.round(s.tokens / 1000).toLocaleString()}k</td><td>${s.valuation.usd === undefined ? 'unpriced' : `$${s.valuation.usd.toFixed(2)} (${s.valuation.coveragePercent.toFixed(1)}%)`}</td></tr>`
+    `<tr><td>${s.source}</td><td>${s.sessions}</td><td>${s.turns.toLocaleString()}</td><td>${Math.round(s.tokens / 1000).toLocaleString()}k</td><td>${s.valuation.usd === undefined ? 'measured, not priced' : `$${s.valuation.usd.toFixed(2)} (${s.valuationCapability.status}, ${s.valuation.coveragePercent.toFixed(1)}%)`}</td></tr>`
   ).join('')
 
   const toolRows = report.topTools.slice(0, 10).map(t =>

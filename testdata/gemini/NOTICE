@@ -1,0 +1,20 @@
+Synthetic Gemini CLI fixtures
+
+All files below testdata/gemini/home are synthetic and contain no copied user
+conversation or credentials. Their field names and update semantics were authored
+from these pinned reference implementations:
+
+1. Google Gemini CLI, commit f47d6c6f7a1308d81f9f57acf7d279f0928c5249
+   packages/core/src/services/chatRecordingTypes.ts
+   packages/core/src/services/chatRecordingService.ts
+   License: Apache License 2.0
+   https://github.com/google-gemini/gemini-cli/tree/f47d6c6f7a1308d81f9f57acf7d279f0928c5249
+
+2. AgentsView, commit 1cd581fe34e87e134160c6668deffb674b7eaa4e
+   internal/parser/gemini.go and internal/parser/gemini_provider.go
+   License: MIT
+   Copyright (c) 2026 Kenn Software LLC
+   https://github.com/kenn-io/agentsview/tree/1cd581fe34e87e134160c6668deffb674b7eaa4e/internal/parser
+
+The fixtures are original synthetic test data. No upstream fixture payload was
+copied verbatim.

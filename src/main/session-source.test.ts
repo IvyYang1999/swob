@@ -38,6 +38,15 @@ describe('detectSessionSourceForJsonl', () => {
     )).toBe('kimi')
   })
 
+  it('Gemini CLI JSONL 和 legacy JSON 均按 chats 目录识别', () => {
+    expect(detectSessionSourceFromPath(
+      '/Users/test/.gemini/tmp/project-hash/chats/session-2026-08-02T00-00-abcd1234.jsonl'
+    )).toBe('gemini')
+    expect(detectSessionSourceFromPath(
+      '/Users/test/.gemini/tmp/project-hash/chats/session-2026-08-02T00-00-abcd1234.json'
+    )).toBe('gemini')
+  })
+
   it('Trae state.vscdb 虚拟会话定位符按产品目录识别来源', () => {
     expect(detectSessionSourceFromPath(
       '/Users/synthetic/Library/Application Support/Trae/User/workspaceStorage/hash/state.vscdb#session'

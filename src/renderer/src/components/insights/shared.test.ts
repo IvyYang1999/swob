@@ -131,6 +131,38 @@ describe('adaptQueryBundle', () => {
   })
 })
 
+describe('adaptQueryBundle hourly unknown unavailable', () => {
+  it('all-zero hourly distribution with unknownTimeEvents > 0 marks data unavailable', () => {
+    const global = aggregate('global', 100, { covered: 1, total: 1 })
+    const hourItems: UsageAggregate[] = []  // no hour items → all-zero distribution
+    const hourTotal = aggregate('hour-total', 0, { covered: 0, total: 0 })
+
+    const bundle: QueryBundle = {
+      global: query('global', [global], global),
+      time: null,
+      hour: {
+        schemaVersion: 5,
+        scope: { range: 'all', metricBasis: 'billing' },
+        dimension: 'hour',
+        range: { fromDay: null, toDay: null, label: 'All time' },
+        items: hourItems,
+        total: hourTotal,
+        previousPeriod: null,
+        quality: { unknownTimeEvents: 42, lastIndexedAt: null }
+      },
+      source: null, model: null, project: null, session: null
+    }
+
+    const adapted = adaptQueryBundle(bundle)
+
+    // All 24 slots should be zero
+    expect(adapted.hourlyDistribution.every((v) => v === 0)).toBe(true)
+    // unknownTimeEvents should propagate — UI uses this to show "unavailable"
+    expect(adapted.hourlyUnknownTimeEvents).toBe(42)
+    expect(adapted.hourlyUnknownTimeEvents).toBeGreaterThan(0)
+  })
+})
+
 describe('extractFilterOptions', () => {
   it('uses unfiltered bundle options even when current dimension rows are empty', () => {
     const total = aggregate('global', 0, { covered: 0, total: 0 })

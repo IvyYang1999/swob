@@ -176,29 +176,32 @@ const opencodeDescriptor = makeDescriptor({
     messages: exact('Text and reasoning parts remain distinct and ordered.'),
     tools: exact('Tool and file/patch parts retain source IDs and input.'),
     'system-compact': unavailable('No fixture proves an OpenCode context revision.'),
-    usage: exact('Reported message usage is preserved without subtracting reasoning twice.'),
+    usage: exact('Each assistant message becomes one UsageEvent with its row id, providerID, modelID and event time.'),
     relationships: exact('Verified parent fields become relationship facts.'),
     resume: exact('Session row, source DB and resumed anchors must match.')
   },
-  usageSemantics: 'Output remains the provider-reported total; reasoning text does not imply a numeric subset.',
+  usageSemantics: 'Current OpenCode stores non-cached input and cache as disjoint buckets; output is visible output, so reasoning is added exactly once to billable output.',
   resumeContract: makeResumeContract('opencode --session {sessionId}', ['terminal'])
 })
 
 const zcodeDescriptor = makeDescriptor({
   sourceId: 'zcode',
   displayName: 'ZCode',
-  formats: [{ id: 'zcode-sqlite-observed', support: 'exact', reason: 'ZCode owns an independent path/schema descriptor and fixture.' }],
+  formats: [
+    { id: 'zcode-sqlite-observed', support: 'exact', reason: 'ZCode owns an independent path/schema descriptor and fixture.' },
+    { id: 'zcode-model-usage-v1', support: 'exact', reason: 'model_usage rows provide one stable record per model attempt.' }
+  ],
   layers: {
     discovery: exact('ZCode DB discovery uses its own root and descriptor.'),
     metadata: exact('Only ZCode fixture-proven columns are normalized.'),
     messages: exact('ZCode parts do not inherit OpenCode semantics.'),
     tools: exact('Fixture-proven tool rows use the shared registry.'),
     'system-compact': unavailable('No ZCode fixture proves context compaction.'),
-    usage: exact('Only ZCode-reported counters are accepted.'),
+    usage: exact('Each model_usage row is preserved with explicit provider_id/model_id and computed_total_tokens.'),
     relationships: exact('ZCode parent fields remain source relationships.'),
     resume: derived('Workspace deep-link is not treated as session resume; CLI anchors remain authoritative.')
   },
-  usageSemantics: 'ZCode counters are independent evidence, not OpenCode-family inheritance.',
+  usageSemantics: 'ZCode uses an independent contract: input includes cache subsets and computed_total_tokens is authoritative; reasoning relation stays provider-defined.',
   resumeContract: makeResumeContract('zcode --resume {sessionId}', ['terminal', 'workspace-deep-link'])
 })
 

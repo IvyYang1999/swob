@@ -10,11 +10,20 @@ import {
 } from './token-accounting'
 import {
   aggregateValuations,
+  previewUsageEventCandidateRepricing,
   previewUsageEventRepricing,
   valuationForAccounting,
   valueUsageEvent,
   valueUsageEvents
 } from './token-valuation'
+import {
+  ACTIVE_PRICE_SNAPSHOT,
+  calculatePriceCandidateHash,
+  calculatePriceSnapshotHash,
+  type PriceCandidateSnapshot,
+  type PriceSnapshot,
+  type PricingRule
+} from './pricing-catalog'
 import type { RawJsonlMessage, SessionSummary } from './types'
 
 function claudeUsageRow(input: {
@@ -287,15 +296,123 @@ describe('t113 golden parser and priority fixtures', () => {
       id: 'modifier', model: 'claude-sonnet-4-5', provider: 'anthropic'
     })).usageEvents[0]
 
-    expect(valueUsageEvent({ ...base, isBatch: true })).toMatchObject({
-      mode: 'unpriced', missingReasons: ['batch-price-not-modeled']
-    })
-    expect(valueUsageEvent({ ...base, serviceTier: 'priority' })).toMatchObject({
-      mode: 'unpriced', missingReasons: ['service-tier-price-not-modeled']
-    })
-    expect(valueUsageEvent({ ...base, inferenceRegion: 'us' })).toMatchObject({
-      mode: 'unpriced', missingReasons: ['regional-price-not-modeled']
-    })
+    for (const modified of [
+      { ...base, isBatch: true },
+      { ...base, serviceTier: 'priority' },
+      { ...base, inferenceRegion: 'us' }
+    ]) {
+      const valuation = valueUsageEvent(modified)
+      expect(valuation.mode).toBe('unpriced')
+      expect(valuation.missingReasons[0]).toBe('unpriced-modifier')
+      expect(valuation.missingReasons[1]).toMatch(/^unpriced-modifier:/)
+    }
+  })
+
+  it('Fast/Priority/Batch/Flex/Region 都是可精确匹配的规则维度', () => {
+    const base = accounting(claudeUsageRow({
+      id: 'dimensions', model: 'claude-sonnet-4-5', provider: 'anthropic'
+    })).usageEvents[0]
+    const standard = {
+      ...ACTIVE_PRICE_SNAPSHOT.rules.find((rule) => rule.modelCanonical === 'claude-sonnet-4-5')!,
+      id: 'fixture:standard', catalogVersion: 'fixture', effectiveFrom: '2025-01-01T00:00:00Z'
+    } satisfies PricingRule
+    const rules: PricingRule[] = [
+      standard,
+      { ...standard, id: 'fixture:batch', dimensions: { batchMode: 'batch' }, usdPerMillion: { input: 1.5, output: 7.5 } },
+      { ...standard, id: 'fixture:priority', dimensions: { serviceTier: 'priority' }, usdPerMillion: { input: 6, output: 30 } },
+      { ...standard, id: 'fixture:flex', dimensions: { serviceTier: 'flex' }, usdPerMillion: { input: 1.5, output: 7.5 } },
+      { ...standard, id: 'fixture:fast', dimensions: { speed: 'fast' }, usdPerMillion: { input: 18, output: 90 } },
+      { ...standard, id: 'fixture:region', dimensions: { region: 'us' }, usdPerMillion: { input: 3.3, output: 16.5 } }
+    ]
+
+    expect(valueUsageEvent({ ...base, isBatch: true }, rules).usd).toBe(9)
+    expect(valueUsageEvent({ ...base, serviceTier: 'priority' }, rules).usd).toBe(36)
+    expect(valueUsageEvent({ ...base, serviceTier: 'flex' }, rules).usd).toBe(9)
+    expect(valueUsageEvent({ ...base, speed: 'fast' }, rules).usd).toBe(108)
+    expect(valueUsageEvent({ ...base, inferenceRegion: 'US' }, rules).usd).toBeCloseTo(19.8)
+  })
+
+  it('搜索/图片/音频/缓存存储/credits 独立计量，缺价不伪装成 0', () => {
+    const base = accounting(claudeUsageRow({
+      id: 'non-token', model: 'claude-sonnet-4-5', provider: 'anthropic',
+      usage: { input_tokens: 0, output_tokens: 0 }
+    })).usageEvents[0]
+    const snapshot: PriceSnapshot = {
+      revision: 'fixture-units', status: 'approved', generatedAt: '2026-08-02T00:00:00Z',
+      reviewedAt: '2026-08-02T00:00:00Z', contentHash: '', sourcePipeline: [], rules: [],
+      unitRules: [
+        {
+          id: 'anthropic:web-search', provider: 'anthropic', sku: 'web-search', unit: 'search',
+          usdPerUnit: 0.01, effectiveFrom: '2025-01-01T00:00:00Z', source: 'official',
+          sourceUrl: 'https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool',
+          sourceRevision: 'review-fixture', reviewStatus: 'approved'
+        },
+        {
+          id: 'anthropic:image', provider: 'anthropic', sku: 'image', unit: 'image',
+          usdPerUnit: 0.04, effectiveFrom: '2025-01-01T00:00:00Z', source: 'official',
+          sourceUrl: 'https://platform.claude.com/docs/en/about-claude/pricing',
+          sourceRevision: 'review-fixture', reviewStatus: 'approved'
+        },
+        {
+          id: 'anthropic:audio', provider: 'anthropic', sku: 'audio', unit: 'audio-minute',
+          usdPerUnit: 0.02, effectiveFrom: '2025-01-01T00:00:00Z', source: 'official',
+          sourceUrl: 'https://platform.claude.com/docs/en/about-claude/pricing',
+          sourceRevision: 'review-fixture', reviewStatus: 'approved'
+        },
+        {
+          id: 'anthropic:cache-storage', provider: 'anthropic', sku: 'cache-storage', unit: 'cache-storage-token-hour',
+          usdPerUnit: 0.000001, effectiveFrom: '2025-01-01T00:00:00Z', source: 'official',
+          sourceUrl: 'https://platform.claude.com/docs/en/about-claude/pricing',
+          sourceRevision: 'review-fixture', reviewStatus: 'approved'
+        },
+        {
+          id: 'anthropic:credit', provider: 'anthropic', sku: 'credit', unit: 'credit',
+          usdPerUnit: 1, effectiveFrom: '2025-01-01T00:00:00Z', source: 'official',
+          sourceUrl: 'https://platform.claude.com/docs/en/about-claude/pricing',
+          sourceRevision: 'review-fixture', reviewStatus: 'approved'
+        }
+      ]
+    }
+    snapshot.contentHash = calculatePriceSnapshotHash(snapshot)
+    const valuation = valueUsageEvent({
+      ...base,
+      billingItems: [
+        { sku: 'web-search', unit: 'search', quantity: 2 },
+        { sku: 'image', unit: 'image', quantity: 1 },
+        { sku: 'audio', unit: 'audio-minute', quantity: 3 },
+        { sku: 'cache-storage', unit: 'cache-storage-token-hour', quantity: 10_000 },
+        { sku: 'credit', unit: 'credit', quantity: 0.5 },
+        { sku: 'future-tool', unit: 'request', quantity: 1 }
+      ]
+    }, snapshot)
+
+    expect(valuation.usd).toBeCloseTo(0.63)
+    expect(valuation.unitCoverage).toMatchObject({ coveredItems: 5, totalItems: 6 })
+    expect(valuation.unitCoverage.coveragePercent).toBeCloseTo(100 * 5 / 6)
+    expect(valuation.missingReasons).toContain('non-token-price-missing:request:future-tool')
+    expect(valuation.pricingRules.flatMap((trace) => trace.unitCalculation || [])).toHaveLength(5)
+  })
+
+  it('待审核候选只能经显式 what-if 入口估值，不能进入运行时 registry', () => {
+    const event = accounting(claudeUsageRow({
+      id: 'candidate', model: 'claude-sonnet-4-5', provider: 'anthropic'
+    })).usageEvents[0]
+    const rule = {
+      ...ACTIVE_PRICE_SNAPSHOT.rules.find((item) => item.modelCanonical === 'claude-sonnet-4-5')!,
+      id: 'candidate:sonnet', catalogVersion: 'candidate-2026-08-02',
+      sourceRevision: 'fixture-source', reviewStatus: 'pending-review' as const,
+      officialReviewUrl: 'https://platform.claude.com/docs/en/about-claude/pricing',
+      usdPerMillion: { input: 2, output: 10 }
+    }
+    const candidate: PriceCandidateSnapshot = {
+      revision: 'candidate-2026-08-02', status: 'pending-review', generatedAt: '2026-08-02T00:00:00Z',
+      contentHash: '', sourcePipeline: ACTIVE_PRICE_SNAPSHOT.sourcePipeline, rules: [rule], unitRules: [],
+      review: { requiredApprover: 'yyt/负责人', activationAllowed: false }
+    }
+    candidate.contentHash = calculatePriceCandidateHash(candidate)
+
+    expect(previewUsageEventCandidateRepricing(event, candidate)).toMatchObject({ usd: 12, whatIf: true })
+    expect(() => valueUsageEvent(event, candidate as unknown as PriceSnapshot)).toThrow(/approved/)
   })
 
   it('只有未知 TTL cache write 时不输出假 $0，保留未计价分母', () => {

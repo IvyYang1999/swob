@@ -1,4 +1,4 @@
-import type { WidgetDataScope, WidgetSizeConstraints } from './widget-registry'
+import type { WidgetDataScope, WidgetSizeConstraints, WidgetDataStatus } from './widget-registry'
 
 export const DASHBOARD_PAGE_IDS = [
   'overview',
@@ -17,6 +17,8 @@ export interface WidgetDeclaration {
   page: DashboardPageId
   dataScope: WidgetDataScope
   size: WidgetSizeConstraints
+  /** Whether the backend data pipeline for this widget is fully connected. */
+  dataStatus: WidgetDataStatus
 }
 
 const full = { minWidth: 6, defaultWidth: 12, maxWidth: 12 }
@@ -25,24 +27,25 @@ const third = { minWidth: 3, defaultWidth: 4, maxWidth: 12 }
 const globalInsights = { kind: 'insights' as const, dimensions: ['global'] }
 
 export const BUILTIN_WIDGET_DECLARATIONS: readonly WidgetDeclaration[] = [
-  { id: 'overview.stats', title: 'insights.widgets.stats', page: 'overview', dataScope: globalInsights, size: full },
-  { id: 'overview.accounting-note', title: 'insights.widgets.accounting_note', page: 'overview', dataScope: { kind: 'none' }, size: full },
-  { id: 'overview.token-heatmap', title: 'insights.widgets.token_heatmap', page: 'overview', dataScope: { kind: 'insights', dimensions: ['time'] }, size: full },
-  { id: 'overview.by-source', title: 'insights.widgets.by_source', page: 'overview', dataScope: { kind: 'insights', dimensions: ['source'] }, size: third },
-  { id: 'overview.by-model', title: 'insights.widgets.by_model', page: 'overview', dataScope: { kind: 'insights', dimensions: ['model'] }, size: third },
-  { id: 'overview.top-projects', title: 'insights.widgets.top_projects', page: 'overview', dataScope: { kind: 'insights', dimensions: ['project'] }, size: third },
-  { id: 'overview.daily-trend', title: 'insights.widgets.daily_trend', page: 'overview', dataScope: { kind: 'insights', dimensions: ['time'] }, size: full },
-  { id: 'overview.daily-timeline', title: 'insights.widgets.daily_timeline', page: 'overview', dataScope: globalInsights, size: full },
-  { id: 'cost.summary', title: 'insights.widgets.cost', page: 'cost', dataScope: globalInsights, size: half },
-  { id: 'cost.pricing-trace', title: 'insights.widgets.pricing_trace', page: 'cost', dataScope: globalInsights, size: half },
-  { id: 'sessions.ranking', title: 'insights.widgets.session_ranking', page: 'sessions', dataScope: globalInsights, size: full },
-  { id: 'sessions.turn-distribution', title: 'insights.widgets.turn_distribution', page: 'sessions', dataScope: globalInsights, size: half },
-  { id: 'sessions.hourly', title: 'insights.widgets.hourly', page: 'sessions', dataScope: { kind: 'insights', dimensions: ['hour'] }, size: half },
-  { id: 'workflow.tool-usage', title: 'insights.widgets.tool_usage', page: 'workflow', dataScope: globalInsights, size: full },
-  { id: 'workflow.code-changes', title: 'insights.widgets.code_changes', page: 'workflow', dataScope: globalInsights, size: half },
-  { id: 'quality.summary', title: 'insights.widgets.quality', page: 'quality', dataScope: globalInsights, size: full },
-  { id: 'audit.report-generator', title: 'insights.widgets.report_generator', page: 'audit', dataScope: { kind: 'none' }, size: full },
-  { id: 'audit.report', title: 'insights.widgets.audit_report', page: 'audit', dataScope: { kind: 'service', service: 'audit' }, size: full }
+  { id: 'overview.stats', title: 'insights.widgets.stats', page: 'overview', dataScope: globalInsights, size: full, dataStatus: 'connected' },
+  { id: 'overview.accounting-note', title: 'insights.widgets.accounting_note', page: 'overview', dataScope: { kind: 'none' }, size: full, dataStatus: 'connected' },
+  { id: 'overview.token-heatmap', title: 'insights.widgets.token_heatmap', page: 'overview', dataScope: { kind: 'insights', dimensions: ['time'] }, size: full, dataStatus: 'connected' },
+  { id: 'overview.by-source', title: 'insights.widgets.by_source', page: 'overview', dataScope: { kind: 'insights', dimensions: ['source'] }, size: third, dataStatus: 'connected' },
+  { id: 'overview.by-model', title: 'insights.widgets.by_model', page: 'overview', dataScope: { kind: 'insights', dimensions: ['model'] }, size: third, dataStatus: 'connected' },
+  { id: 'overview.top-projects', title: 'insights.widgets.top_projects', page: 'overview', dataScope: { kind: 'insights', dimensions: ['project'] }, size: third, dataStatus: 'connected' },
+  { id: 'overview.token-mix', title: 'insights.widgets.token_mix', page: 'overview', dataScope: globalInsights, size: full, dataStatus: 'connected' },
+  { id: 'overview.daily-trend', title: 'insights.widgets.daily_trend', page: 'overview', dataScope: { kind: 'insights', dimensions: ['time'] }, size: full, dataStatus: 'connected' },
+  { id: 'overview.daily-timeline', title: 'insights.widgets.daily_timeline', page: 'overview', dataScope: globalInsights, size: full, dataStatus: 'connected' },
+  { id: 'cost.summary', title: 'insights.widgets.cost', page: 'cost', dataScope: globalInsights, size: half, dataStatus: 'connected' },
+  { id: 'cost.pricing-trace', title: 'insights.widgets.pricing_trace', page: 'cost', dataScope: globalInsights, size: half, dataStatus: 'connected' },
+  { id: 'sessions.ranking', title: 'insights.widgets.session_ranking', page: 'sessions', dataScope: globalInsights, size: full, dataStatus: 'connected' },
+  { id: 'sessions.turn-distribution', title: 'insights.widgets.turn_distribution', page: 'sessions', dataScope: globalInsights, size: half, dataStatus: 'connected' },
+  { id: 'sessions.hourly', title: 'insights.widgets.hourly', page: 'sessions', dataScope: { kind: 'insights', dimensions: ['hour'] }, size: half, dataStatus: 'connected' },
+  { id: 'workflow.tool-usage', title: 'insights.widgets.tool_usage', page: 'workflow', dataScope: globalInsights, size: full, dataStatus: 'pending' },
+  { id: 'workflow.code-changes', title: 'insights.widgets.code_changes', page: 'workflow', dataScope: globalInsights, size: half, dataStatus: 'pending' },
+  { id: 'quality.summary', title: 'insights.widgets.quality', page: 'quality', dataScope: globalInsights, size: full, dataStatus: 'connected' },
+  { id: 'audit.report-generator', title: 'insights.widgets.report_generator', page: 'audit', dataScope: { kind: 'none' }, size: full, dataStatus: 'connected' },
+  { id: 'audit.report', title: 'insights.widgets.audit_report', page: 'audit', dataScope: { kind: 'service', service: 'audit' }, size: full, dataStatus: 'connected' }
 ]
 
 export interface DashboardSectionConfig {
@@ -69,6 +72,7 @@ const defaultDashboardLayout: DashboardLayoutConfig = {
         { id: 'accounting-note', columns: 1, widgetIds: ['overview.accounting-note'] },
         { id: 'token-heatmap', columns: 1, widgetIds: ['overview.token-heatmap'] },
         { id: 'breakdowns', columns: 3, widgetIds: ['overview.by-source', 'overview.by-model', 'overview.top-projects'] },
+        { id: 'token-mix', columns: 1, widgetIds: ['overview.token-mix'] },
         { id: 'daily-trend', columns: 1, widgetIds: ['overview.daily-trend'] },
         { id: 'daily-timeline', columns: 1, widgetIds: ['overview.daily-timeline'] }
       ]
@@ -102,6 +106,30 @@ const defaultDashboardLayout: DashboardLayoutConfig = {
 
 export function createDefaultDashboardLayout(): DashboardLayoutConfig {
   return structuredClone(defaultDashboardLayout)
+}
+
+/**
+ * Migrate a schema-1 dashboard layout to include newly added widgets.
+ * Old layouts may not have 'overview.token-mix'. This adds it in the
+ * correct position so existing users see the chart without manual reset.
+ */
+export function migrateDashboardLayout(layout: DashboardLayoutConfig): DashboardLayoutConfig {
+  const overview = layout.pages.overview
+  if (!overview) return layout
+  const allWidgetIds = overview.sections.flatMap((s) => s.widgetIds)
+  if (allWidgetIds.includes('overview.token-mix')) return layout
+  // Insert token-mix section after breakdowns (by-source/by-model/top-projects)
+  // and before daily-trend, matching the default layout order.
+  const migrated = structuredClone(layout)
+  const overviewSections = migrated.pages.overview.sections
+  const breakdownIdx = overviewSections.findIndex((s) => s.id === 'breakdowns')
+  const insertIdx = breakdownIdx >= 0 ? breakdownIdx + 1 : overviewSections.length
+  overviewSections.splice(insertIdx, 0, {
+    id: 'token-mix',
+    columns: 1,
+    widgetIds: ['overview.token-mix']
+  })
+  return migrated
 }
 
 export function isDashboardLayoutConfig(value: unknown): value is DashboardLayoutConfig {

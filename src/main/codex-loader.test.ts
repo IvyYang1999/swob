@@ -8,7 +8,10 @@ import {
   classifyCodexSession,
   extractCodexTokenAccounting,
   findCodexSessionFiles,
-  loadCodexSessionRecord
+  loadCodexRawMessages,
+  loadCodexSessionRecord,
+  loadCodexSessionRecordWithRaw,
+  rememberCodexSessionFile
 } from './codex-loader'
 
 function writeTempJsonl(lines: object[]): string {
@@ -145,15 +148,63 @@ describe('codex-loader', () => {
       }
     })
 
-    it('扫描 ~/.codex/sessions/ 下的 rollout-*.jsonl 文件', () => {
-      const files = findCodexSessionFiles()
-      for (const f of files) {
-        expect(path.basename(f)).toMatch(/^rollout-.*\.jsonl$/)
+    it('同时扫描 sessions 与只读 archived_sessions，忽略非 rollout 文件', () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-archive-home-'))
+      const active = path.join(home, '.codex', 'sessions', '2026', '08', '02', 'rollout-active.jsonl')
+      const archived = path.join(home, '.codex', 'archived_sessions', 'rollout-archived.jsonl')
+      const ignored = path.join(home, '.codex', 'archived_sessions', 'notes.jsonl')
+      fs.mkdirSync(path.dirname(active), { recursive: true })
+      fs.mkdirSync(path.dirname(archived), { recursive: true })
+      fs.writeFileSync(active, '{}\n')
+      fs.writeFileSync(archived, '{}\n')
+      fs.writeFileSync(ignored, '{}\n')
+
+      try {
+        expect(findCodexSessionFiles(home)).toEqual([archived, active].sort())
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    })
+
+    it('冷扫后由 watcher 事件增量加入新文件，不重扫整根', () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-inventory-home-'))
+      const directory = path.join(home, '.codex', 'sessions', '2026', '08', '02')
+      const first = path.join(directory, 'rollout-first.jsonl')
+      const second = path.join(directory, 'rollout-second.jsonl')
+      fs.mkdirSync(directory, { recursive: true })
+      fs.writeFileSync(first, '{}\n')
+      const previousHome = process.env.HOME
+
+      try {
+        expect(findCodexSessionFiles(home)).toEqual([first])
+        fs.writeFileSync(second, '{}\n')
+        expect(findCodexSessionFiles(home)).toEqual([first])
+        process.env.HOME = home
+        expect(rememberCodexSessionFile(second)).toBe(true)
+        expect(findCodexSessionFiles(home)).toEqual([first, second])
+      } finally {
+        if (previousHome === undefined) delete process.env.HOME
+        else process.env.HOME = previousHome
+        fs.rmSync(home, { recursive: true, force: true })
       }
     })
   })
 
   describe('buildCodexSessionSummary', () => {
+    it('组合解析一次产出与独立 summary/raw API 等价的投影', async () => {
+      const filePath = writeTempJsonl(makeCodexLines())
+
+      const combined = await loadCodexSessionRecordWithRaw(filePath)
+      const [summary, rawMessages] = await Promise.all([
+        buildCodexSessionSummary(filePath),
+        loadCodexRawMessages(filePath)
+      ])
+
+      expect(combined.summary).toEqual(summary)
+      expect(combined.rawMessages).toEqual(rawMessages)
+      expect(combined.rawMessages.length).toBeGreaterThan(0)
+    })
+
     it('resume/fork 复制前缀在无 turn_id 的真实格式下生成相同计费事实指纹', () => {
       const lines = [
         {
@@ -202,6 +253,42 @@ describe('codex-loader', () => {
       expect(summary!.toolUsage['exec_command']).toBe(1)
       expect(summary!.tokenUsage.inputTokens).toBe(500)
       expect(summary!.tokenUsage.outputTokens).toBe(200)
+    })
+
+    it('旧 replay 文件用继承 SessionMeta 建 lineage，并保留官方 thread_rolled_back 事实', async () => {
+      const childId = '18400000-0000-4000-8000-000000000021'
+      const parentId = '18400000-0000-4000-8000-000000000020'
+      const lines = [
+        {
+          timestamp: '2026-08-02T00:00:00Z', type: 'session_meta',
+          payload: { id: childId, timestamp: '2026-08-02T00:00:00Z', cwd: '/repo', cli_version: 'test' }
+        },
+        {
+          timestamp: '2026-08-02T00:00:00Z', type: 'session_meta',
+          payload: { id: parentId, timestamp: '2026-08-01T00:00:00Z', cwd: '/repo', cli_version: 'test' }
+        },
+        {
+          timestamp: '2026-08-02T00:00:01Z', type: 'event_msg',
+          payload: { type: 'thread_rolled_back', num_turns: 1 }
+        },
+        {
+          timestamp: '2026-08-02T00:00:02Z', type: 'response_item',
+          payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'replay after rollback' }] }
+        },
+        {
+          timestamp: '2026-08-02T00:00:03Z', type: 'response_item',
+          payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }] }
+        }
+      ]
+      const filePath = writeTempJsonl(lines)
+      const summary = await buildCodexSessionSummary(filePath, childId)
+      const detail = await buildCodexSessionDetail(filePath, childId)
+
+      expect(summary).toMatchObject({
+        lifecycleState: 'replayed',
+        branchParentId: `codex:${parentId}`
+      })
+      expect(detail?.messages).toContainEqual(expect.objectContaining({ subtype: 'rollback' }))
     })
 
     it('【回归】cached_input/reasoning 是子集，重复 token_count 快照不应重复计费', async () => {

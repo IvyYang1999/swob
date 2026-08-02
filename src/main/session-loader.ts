@@ -83,7 +83,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 25 // parsed activity-day evidence for bounded Insights coverage
+const CACHE_VERSION = 27 // Reparse SQLite agents for authoritative per-call usage projection
 
 type CachedSessionSource = SessionSource
 
@@ -120,23 +120,53 @@ interface DiskCache {
   entries: Record<string, DiskCacheEntry>
 }
 
+const SELECTIVELY_COMPATIBLE_CACHE_VERSIONS = new Set([25, 26])
+let cacheWriteSequence = 0
+
+function isLegacyCacheEntryCompatible(version: number, entry: DiskCacheEntry): boolean {
+  const source = entry?.perFile?.source
+  // v26 introduced Codex lifecycle/lineage fields. v27 introduces the
+  // OpenCode/ZCode authoritative per-call accounting projection. Preserve the
+  // unaffected providers while forcing every source whose cached summary can
+  // carry a stale projection through the real parser exactly once.
+  if (source === 'opencode' || source === 'zcode') return false
+  if (version === 25 && source === 'codex') return false
+  return true
+}
+
 function loadDiskCache(): DiskCache | null {
   try {
     if (fs.existsSync(CACHE_FILE)) {
-      const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'))
-      if (data.version === CACHE_VERSION && data.entries && typeof data.entries === 'object') return data
+      const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8')) as Partial<DiskCache>
+      if (!data.entries || typeof data.entries !== 'object') return null
+      if (data.version === CACHE_VERSION) return data as DiskCache
+      if (typeof data.version === 'number' && SELECTIVELY_COMPATIBLE_CACHE_VERSIONS.has(data.version)) {
+        return {
+          version: CACHE_VERSION,
+          entries: Object.fromEntries(
+            Object.entries(data.entries).filter(([, entry]) =>
+              isLegacyCacheEntryCompatible(data.version!, entry)
+            )
+          )
+        }
+      }
     }
   } catch { /* corrupt cache */ }
   return null
 }
 
 function saveDiskCache(entries: Record<string, DiskCacheEntry>): void {
+  const tempFile = `${CACHE_FILE}.${process.pid}.${++cacheWriteSequence}.tmp`
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true })
-    const tempFile = `${CACHE_FILE}.tmp`
     fs.writeFileSync(tempFile, JSON.stringify({ version: CACHE_VERSION, entries }))
     fs.renameSync(tempFile, CACHE_FILE)
-  } catch { /* ignore */ }
+  } catch { /* ignore */
+  } finally {
+    try {
+      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile)
+    } catch { /* ignore cleanup failure */ }
+  }
 }
 
 function computeFileSig(filePath: string, source: CachedSessionSource): string | null {
@@ -1936,35 +1966,49 @@ export interface LoadAllSessionsOptions {
   quiet?: boolean
 }
 
-export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
-  const startedAt = Date.now()
-  // Audit/CLI callers rely on this entry point being physically read-only.
-  // Opening the canonical store can create/migrate SQLite even when no Pi
-  // source exists, so the provider runtime is intentionally excluded here.
+interface LegacySessionLoadResult {
+  summaries: SessionSummary[]
+  entries: Record<string, DiskCacheEntry>
+  parsedCount: number
+  reusedCount: number
+  fileCount: number
+  startedAt: number
+}
+
+interface LoadAllSessionsResult extends Omit<LegacySessionLoadResult, 'entries' | 'startedAt'> {
+  elapsedMs: number
+}
+
+let legacySessionLoadFlight: Promise<LegacySessionLoadResult> | null = null
+let writableSessionLoadFlight: Promise<LoadAllSessionsResult> | null = null
+
+async function loadCanonicalProviderSessions(): Promise<CanonicalStoredSession[]> {
   const canonicalSources = BUILTIN_PROVIDER_DEFINITIONS
     .filter((definition) => definition.ingestion === 'provider-host')
     .filter((definition) => isSessionSourceSupported(definition.sourceId))
-  const includeCanonicalProviders = canonicalSources.length > 0 && !options.readOnly
-  let canonicalSessions: CanonicalStoredSession[] = []
-  if (includeCanonicalProviders) {
-    try {
-      const refresh = await refreshCanonicalProviders()
-      for (const report of refresh.reports) {
-        for (const error of report.errors) {
-          console.warn(`[provider-host] ${report.providerId}: ${error.code}: ${error.message}`)
-        }
+  if (canonicalSources.length === 0) return []
+
+  try {
+    const refresh = await refreshCanonicalProviders()
+    for (const report of refresh.reports) {
+      for (const error of report.errors) {
+        console.warn(`[provider-host] ${report.providerId}: ${error.code}: ${error.message}`)
       }
-      canonicalSessions = getCanonicalSessionStore().listSessions()
-    } catch (error) {
-      // Canonical providers are an additive projection. Store/search
-      // corruption or a provider bug must never suppress healthy legacy
-      // loaders during app startup.
-      console.warn(
-        '[provider-host] canonical refresh unavailable; continuing with legacy loaders:',
-        error instanceof Error ? error.message : String(error)
-      )
     }
+    return getCanonicalSessionStore().listSessions()
+  } catch (error) {
+    // Canonical providers are an additive projection. Store/search corruption
+    // or a provider bug must never suppress healthy legacy loaders.
+    console.warn(
+      '[provider-host] canonical refresh unavailable; continuing with legacy loaders:',
+      error instanceof Error ? error.message : String(error)
+    )
+    return []
   }
+}
+
+async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
+  const startedAt = Date.now()
   const claudeFiles = isSessionSourceSupported('claude-code') ? findClaudeSessionFiles() : []
   const newSourceFiles = findNewSourceSessionFiles().filter((filePath) => {
     const source = detectSessionSourceFromPath(filePath)
@@ -2150,6 +2194,7 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
       (candidateTotal === currentTotal && summary.updatedAt > current.updatedAt)
       ? summary
       : current
+    const visibleCopy = [current, summary].find((candidate) => candidate.lifecycleState !== 'archived') || preferred
     const allFilePaths = [...new Set([
       ...(current.allFilePaths || [current.filePath]),
       ...(summary.allFilePaths || [summary.filePath])
@@ -2157,6 +2202,9 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
     const warning = `deduplicated ${allFilePaths.length} files for the same ${source} session id; retained the most complete snapshot`
     nonClaudeBySession.set(key, {
       ...preferred,
+      filePath: visibleCopy.filePath,
+      projectPath: visibleCopy.projectPath,
+      lifecycleState: visibleCopy.lifecycleState,
       allFilePaths,
       tokenAccounting: preferred.tokenAccounting
         ? {
@@ -2216,36 +2264,123 @@ export async function loadAllSessions(options: LoadAllSessionsOptions = {}): Pro
       tokenUsage: tokenUsageFromAccounting(mergedAccounting)
     })
   }
+
+  // Top-level Codex fork/replay files carry session_meta.forked_from_id (or an
+  // inherited SessionMeta in legacy files). Project that structural evidence
+  // into the same branch fields consumed by Sidebar, InfoPanel and Galaxy.
+  for (const [childKey, child] of [...nonClaudeBySession]) {
+    if (child.source !== 'codex' || !child.branchParentId) continue
+    const parent = nonClaudeBySession.get(child.branchParentId)
+    if (!parent || parent.source !== 'codex' || parent.id === child.id) continue
+    const linkedChild = {
+      ...child,
+      branchParentFilePaths: parent.allFilePaths || [parent.filePath]
+    }
+    const linkedParent = {
+      ...parent,
+      branchChildIds: [...new Set([...(parent.branchChildIds || []), child.id])]
+    }
+    nonClaudeBySession.set(childKey, linkedChild)
+    nonClaudeBySession.set(child.branchParentId, linkedParent)
+  }
   summaries.push(...nonClaudeBySession.values())
 
-  if (includeCanonicalProviders) {
-    for (const stored of canonicalSessions) {
-      try {
-        const definition = builtinProviderForId(stored.sessionRecord.provenance.providerId)
-        if (!definition || definition.ingestion !== 'provider-host' ||
-          !isSessionSourceSupported(definition.sourceId)) continue
-        summaries.push(canonicalRecordsToSessionSummary(stored.records, {
-          filePath: stored.sessionRecord.sourceRef.displayLocator,
-          source: definition.sourceId
-        }))
-      } catch (error) {
-        console.warn(
-          `[provider-host] skipped invalid canonical session ${stored.sessionRecord.id}:`,
-          error instanceof Error ? error.message : String(error)
-        )
-      }
-    }
-  }
-
   summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-  if (!options.readOnly) saveDiskCache(entries)
-  if (!options.quiet) {
-    console.info(
-      `[session-loader] incremental cache: parsed ${parsedCount}, reused ${reusedCount}, ` +
-      `files ${currentFiles.length}, ${Date.now() - startedAt}ms`
-    )
+  return {
+    summaries,
+    entries,
+    parsedCount,
+    reusedCount,
+    fileCount: currentFiles.length,
+    startedAt
   }
-  return summaries
+}
+
+function getLegacySessionLoadFlight(): Promise<LegacySessionLoadResult> {
+  if (legacySessionLoadFlight) return legacySessionLoadFlight
+
+  const started = loadLegacySessionSnapshot()
+  legacySessionLoadFlight = started
+  void started.then(
+    () => queueMicrotask(() => {
+      // A writable continuation keeps the pure snapshot alive until its cache
+      // save/canonical projection is complete. Read-only-only flights expire
+      // immediately after all same-turn callers have observed the result.
+      if (legacySessionLoadFlight === started && !writableSessionLoadFlight) {
+        legacySessionLoadFlight = null
+      }
+    }),
+    () => {
+      if (legacySessionLoadFlight === started) legacySessionLoadFlight = null
+    }
+  )
+  return started
+}
+
+function getWritableSessionLoadFlight(): Promise<LoadAllSessionsResult> {
+  if (writableSessionLoadFlight) return writableSessionLoadFlight
+
+  const legacyFlight = getLegacySessionLoadFlight()
+  const started = legacyFlight.then(async (legacy) => {
+    const canonicalSessions = await loadCanonicalProviderSessions()
+    let summaries = legacy.summaries
+    if (canonicalSessions.length > 0) {
+      summaries = [...summaries]
+      for (const stored of canonicalSessions) {
+        try {
+          const definition = builtinProviderForId(stored.sessionRecord.provenance.providerId)
+          if (!definition || definition.ingestion !== 'provider-host' ||
+            !isSessionSourceSupported(definition.sourceId)) continue
+          summaries.push(canonicalRecordsToSessionSummary(stored.records, {
+            filePath: stored.sessionRecord.sourceRef.displayLocator,
+            source: definition.sourceId
+          }))
+        } catch (error) {
+          console.warn(
+            `[provider-host] skipped invalid canonical session ${stored.sessionRecord.id}:`,
+            error instanceof Error ? error.message : String(error)
+          )
+        }
+      }
+      summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    }
+    saveDiskCache(legacy.entries)
+    return {
+      summaries,
+      parsedCount: legacy.parsedCount,
+      reusedCount: legacy.reusedCount,
+      fileCount: legacy.fileCount,
+      elapsedMs: Date.now() - legacy.startedAt
+    }
+  })
+  const tracked = started.finally(() => {
+    if (writableSessionLoadFlight === tracked) writableSessionLoadFlight = null
+    if (legacySessionLoadFlight === legacyFlight) legacySessionLoadFlight = null
+  })
+  writableSessionLoadFlight = tracked
+  return tracked
+}
+
+export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
+  const result = options.readOnly
+    ? getLegacySessionLoadFlight().then((legacy): LoadAllSessionsResult => ({
+        summaries: legacy.summaries,
+        parsedCount: legacy.parsedCount,
+        reusedCount: legacy.reusedCount,
+        fileCount: legacy.fileCount,
+        elapsedMs: Date.now() - legacy.startedAt
+      }))
+    : getWritableSessionLoadFlight()
+
+  return result.then((snapshot) => {
+    if (!options.quiet) {
+      console.info(
+        `[session-loader] incremental cache: parsed ${snapshot.parsedCount}, reused ${snapshot.reusedCount}, ` +
+        `files ${snapshot.fileCount}, ${snapshot.elapsedMs}ms`
+      )
+    }
+    return snapshot.summaries
+  })
 }
 
 function sanitizeSessionDetail(detail: SessionDetail | null): SessionDetail | null {

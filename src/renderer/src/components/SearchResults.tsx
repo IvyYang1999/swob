@@ -1,6 +1,7 @@
 import { useStore } from '../store'
 import { Search, RotateCcw, SearchX } from 'lucide-react'
 import { useT } from '../i18n'
+import { StaleDisclaimer } from './LibraryHealthBanner'
 
 function HighlightText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>
@@ -50,6 +51,9 @@ export function SearchResults() {
             {t('chat.close')}
           </button>
         </div>
+
+        {/* tF32: stale data disclaimer */}
+        <StaleDisclaimer variant="search" />
 
         {/* Searching spinner */}
         {searchState === 'searching' && (

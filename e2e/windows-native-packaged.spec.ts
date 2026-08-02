@@ -4,6 +4,12 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { revealAllSessions } from './helpers'
+import { assertTestLaunchContract } from '../src/main/e2e-library-isolation'
+import {
+  assertProtectedRealStateUnchanged,
+  snapshotProtectedRealState,
+  type ProtectedStateSnapshot
+} from '../src/main/__test-support__/protected-state-audit'
 
 const CLAUDE_ID = '82000000-0000-4000-8000-000000000178'
 const CODEX_ID = '019abcde-1234-7000-8000-012345670178'
@@ -14,6 +20,7 @@ let page: Page
 let sandboxRoot = ''
 let fixtureHome = ''
 let libraryRoot = ''
+let protectedStateBefore: ProtectedStateSnapshot
 
 test.skip(process.platform !== 'win32', 'Runs only on a native Windows runner')
 test.skip(!process.env.SWOB_PACKAGED_EXE, 'Requires the installed NSIS package path')
@@ -115,23 +122,29 @@ test.beforeAll(async () => {
   const localAppData = path.join(fixtureHome, 'AppData', 'Local')
   for (const dir of [userData, temp, appData, localAppData]) fs.mkdirSync(dir, { recursive: true })
 
+  const environment = {
+    ...stringEnvironment(),
+    NODE_ENV: 'production',
+    HOME: fixtureHome,
+    USERPROFILE: fixtureHome,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
+    TEMP: temp,
+    TMP: temp,
+    SWOB_TEST_HOME: fixtureHome,
+    SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
+    SWOB_TEST_SYSTEM_TEMP_ROOT: os.tmpdir(),
+    SWOB_LIBRARY_ROOT: libraryRoot,
+    SWOB_USER_DATA_ROOT: userData,
+    ELECTRON_ENABLE_LOGGING: '1'
+  }
+  assertTestLaunchContract(environment, userData, { systemTemporaryRoot: os.tmpdir() })
+  protectedStateBefore = snapshotProtectedRealState()
+
   app = await electron.launch({
     executablePath,
     args: [`--user-data-dir=${userData}`, `--disk-cache-dir=${path.join(sandboxRoot, 'cache')}`],
-    env: {
-      ...stringEnvironment(),
-      NODE_ENV: 'production',
-      HOME: path.join(sandboxRoot, 'wrong-git-bash-home'),
-      USERPROFILE: fixtureHome,
-      APPDATA: appData,
-      LOCALAPPDATA: localAppData,
-      TEMP: temp,
-      TMP: temp,
-      SWOB_TEST_HOME: fixtureHome,
-      SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
-      SWOB_LIBRARY_ROOT: libraryRoot,
-      ELECTRON_ENABLE_LOGGING: '1'
-    },
+    env: environment,
     timeout: 60_000
   })
   page = await app.firstWindow({ timeout: 60_000 })
@@ -141,8 +154,10 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   if (app) await app.close().catch(() => app.process().kill())
+  if (protectedStateBefore) assertProtectedRealStateUnchanged(protectedStateBefore)
   if (sandboxRoot) {
     fs.rmSync(sandboxRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    expect(fs.existsSync(sandboxRoot)).toBe(false)
   }
 })
 

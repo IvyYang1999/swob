@@ -1,14 +1,9 @@
-import { _electron as electron } from '@playwright/test'
-import * as path from 'path'
+import { closeApp, launchApp } from './helpers'
 
 async function main() {
   console.log('启动 Electron…')
-  const app = await electron.launch({
-    args: [path.join(__dirname, '..', 'out', 'main', 'index.js')],
-    env: { ...process.env, NODE_ENV: 'test' }
-  })
-
-  const page = await app.firstWindow()
+  const launched = await launchApp()
+  const { app, page } = launched
   await page.waitForLoadState('domcontentloaded')
   await page.waitForTimeout(3000)
 
@@ -28,7 +23,7 @@ async function main() {
     await page.screenshot({ path: 'e2e/screenshots/galaxy-debug.png' })
   }
 
-  await app.close()
+  await closeApp(launched)
   console.log('Done')
 }
 

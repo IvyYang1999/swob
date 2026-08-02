@@ -43,6 +43,7 @@
     "docs:export": "node scripts/generate-docs.mjs",
     "test": "npm run check && vitest run",
     "test:watch": "vitest",
+    "test:library-isolation": "vitest run src/main/e2e-library-isolation.test.ts src/main/runtime-isolation-bootstrap.test.ts --maxWorkers=1",
     "test:e2e": "npx electron-vite build && npx playwright test",
     "test:e2e:windows-native": "playwright test e2e/windows-native-packaged.spec.ts",
     "test:cli:packaged": "node scripts/run-cli-packaged-contract.mjs",

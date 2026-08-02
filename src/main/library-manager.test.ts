@@ -390,14 +390,31 @@ describe('App 配置：Library 路径管理', () => {
   })
 
   it('E2E sandbox 拒绝把配置切到隔离目录外的真实 Library', () => {
-    const previousSandbox = process.env.SWOB_E2E_SANDBOX_ROOT
+    const previous = {
+      sandbox: process.env.SWOB_E2E_SANDBOX_ROOT,
+      testHome: process.env.SWOB_TEST_HOME,
+      library: process.env.SWOB_LIBRARY_ROOT,
+      userData: process.env.SWOB_USER_DATA_ROOT,
+      tempRoot: process.env.SWOB_TEST_SYSTEM_TEMP_ROOT
+    }
     process.env.SWOB_E2E_SANDBOX_ROOT = testHome
+    process.env.SWOB_TEST_HOME = testHome
+    process.env.SWOB_LIBRARY_ROOT = path.join(testHome, 'Library')
+    process.env.SWOB_USER_DATA_ROOT = path.join(testHome, 'user-data')
+    process.env.SWOB_TEST_SYSTEM_TEMP_ROOT = os.tmpdir()
     try {
-      expect(() => lib.changeConfiguredLibraryPath(tmpRoot)).toThrow('E2E Library path is unsafe: outside-sandbox')
+      expect(() => lib.changeConfiguredLibraryPath(tmpRoot)).toThrow(/Library-outside-sandbox/)
       expect(lib.loadAppConfig().libraryPath).not.toBe(tmpRoot)
     } finally {
-      if (previousSandbox === undefined) delete process.env.SWOB_E2E_SANDBOX_ROOT
-      else process.env.SWOB_E2E_SANDBOX_ROOT = previousSandbox
+      const restore = (name: string, value: string | undefined) => {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+      restore('SWOB_E2E_SANDBOX_ROOT', previous.sandbox)
+      restore('SWOB_TEST_HOME', previous.testHome)
+      restore('SWOB_LIBRARY_ROOT', previous.library)
+      restore('SWOB_USER_DATA_ROOT', previous.userData)
+      restore('SWOB_TEST_SYSTEM_TEMP_ROOT', previous.tempRoot)
     }
   })
 

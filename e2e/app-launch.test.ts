@@ -8,7 +8,14 @@ import { test, expect } from '@playwright/test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { closeApp, launchApp, revealAllSessions, type LaunchedApp } from './helpers'
+import {
+  closeApp,
+  launchApp,
+  launchDangerousDevelopmentApp,
+  resizeAppWindow,
+  revealAllSessions,
+  type LaunchedApp
+} from './helpers'
 import type { ElectronApplication, Page } from '@playwright/test'
 
 let app: ElectronApplication
@@ -35,15 +42,46 @@ test('应用能正常启动，窗口标题存在', async () => {
   }))
   expect(paths.home).toBe(launched.home)
   expect(fs.realpathSync(paths.userData)).toBe(fs.realpathSync(launched.userData))
+  await expect(page.getByTestId('real-library-danger-marker')).toHaveCount(0)
 })
 
 test('E2E launcher 在启动 Electron 前拒绝 sandbox 外的 Library', async () => {
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-real-library-sentinel-'))
   try {
     await expect(launchApp({ env: { SWOB_LIBRARY_ROOT: outside } }))
-      .rejects.toThrow('E2E Library path is unsafe: outside-sandbox')
+      .rejects.toThrow(/SWOB_LIBRARY_ROOT-outside-sandbox/)
   } finally {
     fs.rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('开发态使用受保护 Library 时同时显示红色标识与原生标题', async ({}, testInfo) => {
+  const dangerous = await launchDangerousDevelopmentApp()
+  try {
+    const marker = dangerous.page.getByTestId('real-library-danger-marker')
+    await expect(marker).toBeVisible()
+    await expect(marker).toHaveText('DEV · REAL LIBRARY')
+    await marker.hover()
+    await expect(marker).toHaveAttribute('title', /SWOB_DEV_USE_REAL_LIBRARY=1/)
+    const colors = await marker.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return { backgroundColor: style.backgroundColor, color: style.color }
+    })
+    expect(colors.backgroundColor).not.toBe('rgba(0, 0, 0, 0)')
+    expect(colors.backgroundColor).not.toBe(colors.color)
+    await expect(marker).toHaveClass(/bg-red-600/)
+
+    const nativeTitle = await dangerous.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]?.getTitle()
+    )
+    expect(nativeTitle).toContain('DEV · REAL LIBRARY')
+
+    await resizeAppWindow(dangerous.app, dangerous.page, { width: 720, height: 520 })
+    await expect(marker).toBeInViewport()
+    expect(await dangerous.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await dangerous.page.screenshot({ path: testInfo.outputPath('dev-real-library-danger-marker.png') })
+  } finally {
+    await closeApp(dangerous)
   }
 })
 

@@ -1,6 +1,7 @@
 // MUST stay the first import: rebinds defunct stdio fds before anything
 // writes to console or spawns a child (see stdio-repair.ts).
 import { logSpawnSelfTest } from './stdio-repair'
+import { startupRuntimeSafety } from './runtime-isolation-bootstrap'
 import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen, dialog, clipboard, nativeImage } from 'electron'
 import path from 'path'
 const { join, dirname, relative } = path
@@ -8,7 +9,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdater as configureAutoUpdater } from './auto-updater'
 import { startPackagedUpdateE2E } from './update-e2e-driver'
-import { assertE2ELibraryPath } from './e2e-library-isolation'
+import { assertE2ELibraryPath, runtimeSafetyState } from './e2e-library-isolation'
 import { registerAgentIpc, registerAgentShortcut, shutdownAgentRuntime } from './agent-window'
 import { getAgentWorkspaceDir } from './agent-runner'
 import { buildAgentHistory, registerFrontendIpc } from './frontend-ipc'
@@ -793,7 +794,9 @@ function cleanupRuntimeResources(): Promise<void> {
 }
 
 function createWindow(): void {
+  const windowTitle = activeRuntimeSafety.dangerousRealLibrary ? 'Swob — DEV · REAL LIBRARY' : 'Swob'
   mainWindow = new BrowserWindow({
+    title: windowTitle,
     width: 1400,
     height: 900,
     minWidth: 1000,
@@ -814,6 +817,10 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow?.setTitle(windowTitle)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -2997,6 +3004,14 @@ function setupAutoUpdater(): void {
     // delayed, fire-and-forget request is scheduled.
     checkOnStartup: !is.dev && preferences.autoCheckUpdates !== false
   })
+}
+
+const activeRuntimeSafety = runtimeSafetyState(getConfiguredLibraryPath(), process.env, {
+  development: is.dev,
+  userDataPath: app.getPath('userData')
+})
+if (activeRuntimeSafety.mode !== startupRuntimeSafety.mode) {
+  process.env.SWOB_RUNTIME_SAFETY_MODE = activeRuntimeSafety.mode
 }
 
 const ownsGuiInstance = app.requestSingleInstanceLock()

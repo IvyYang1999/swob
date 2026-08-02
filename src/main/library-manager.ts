@@ -763,6 +763,7 @@ export interface InitLibraryOptions {
 
 export function initLibrary(root?: string, options: InitLibraryOptions = {}): void {
   const nextRoot = root || getConfiguredLibraryPath()
+  assertE2ELibraryPath(nextRoot)
   if (path.resolve(nextRoot) !== path.resolve(_root) && _localWriterDepth > 0) {
     throw new LibraryWriterBusyError('active-owner')
   }

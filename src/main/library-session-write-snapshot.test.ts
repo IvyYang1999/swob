@@ -81,13 +81,26 @@ function spawnWorker(
   evidencePath: string,
   stage?: 'transcript' | 'backup' | 'manifest'
 ): ChildProcess {
+  const workerHome = path.join(tempRoot, 'home')
+  const workerUserData = path.join(tempRoot, 'user-data')
+  const workerTmp = path.join(tempRoot, 'tmp')
+  const workerCache = path.join(tempRoot, 'cache')
+  const workerConfig = path.join(tempRoot, 'config')
+  for (const directory of [workerHome, workerUserData, workerTmp, workerCache, workerConfig]) {
+    fs.mkdirSync(directory, { recursive: true })
+  }
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
-    HOME: path.join(tempRoot, 'home'),
+    HOME: workerHome,
     NODE_ENV: 'test',
     SWOB_TEST_HOME: tempRoot,
     SWOB_E2E_SANDBOX_ROOT: tempRoot,
-    SWOB_LIBRARY_ROOT: libraryRoot
+    SWOB_TEST_SYSTEM_TEMP_ROOT: os.tmpdir(),
+    SWOB_LIBRARY_ROOT: libraryRoot,
+    SWOB_USER_DATA_ROOT: workerUserData,
+    TMPDIR: workerTmp,
+    XDG_CACHE_HOME: workerCache,
+    XDG_CONFIG_HOME: workerConfig
   }
   if (stage) {
     environment.SWOB_TEST_SESSION_WRITE_CRASH_STAGE = stage

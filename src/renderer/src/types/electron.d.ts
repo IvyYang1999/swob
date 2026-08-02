@@ -154,6 +154,11 @@ type RendererUsageFactSyncResult = {
 }
 
 interface ElectronAPI {
+  runtimeGetSafetyState: () => {
+    mode: 'normal' | 'dangerous-real-library-development'
+    dangerousRealLibrary: boolean
+    marker: string | null
+  }
   platformGetCapabilities: () => Promise<import('../components/WindowsAlphaNotice').PlatformCapabilities>
   getSystemLocale: () => Promise<import('../../../shared/i18n').Locale>
   loadAllSessions: () => Promise<any[]>

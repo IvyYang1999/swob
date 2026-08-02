@@ -36,6 +36,7 @@ describe('CLI install helper', () => {
     expect(shouldAutoInstallCli({})).toBe(true)
     expect(shouldAutoInstallCli({ SWOB_TEST_HOME: '/tmp/swob-test' })).toBe(false)
     expect(shouldAutoInstallCli({ NODE_ENV: 'test' })).toBe(false)
+    expect(shouldAutoInstallCli({ NODE_ENV: 'development' })).toBe(false)
   })
 
   it('contains packaged-test install targets inside SWOB_TEST_HOME', () => {

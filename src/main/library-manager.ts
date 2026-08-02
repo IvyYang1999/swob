@@ -91,6 +91,7 @@ import {
   ensureSafeLibraryDirectory,
   fsyncDirectorySync,
   LibraryPathUnsafeError,
+  replaceSafeLibraryFileSync,
   writeSafeLibraryFileSync
 } from './library-path-safety'
 import {
@@ -100,7 +101,18 @@ import {
   runWithLibraryWriterSync,
   staleScanEvent
 } from './library-write-coordinator'
-import { LibraryWriterBusyError, type LibraryWriterMode } from './library-writer-lease'
+import {
+  inspectLibraryWriterLease,
+  LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
+  LibraryWriterBusyError,
+  recoverLibraryWriterLeaseManually,
+  type LibraryWriterMode
+} from './library-writer-lease'
+import {
+  recoverIncompleteSessionWriteSnapshot,
+  withSessionWriteSnapshot,
+  withSessionWriteSnapshotSync
+} from './library-session-write-snapshot'
 import type {
   RawJsonlMessage,
   ContentPart,
@@ -178,7 +190,12 @@ export interface SessionSourceInstance {
 
 export { SessionCreateBusyError }
 export { LibraryPathUnsafeError }
-export { LibraryWriterBusyError }
+export {
+  inspectLibraryWriterLease,
+  LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
+  LibraryWriterBusyError,
+  recoverLibraryWriterLeaseManually
+}
 export type { LogicalSessionIdentity, LogicalSessionKey, LibrarySessionBinding, SessionIdResolution }
 
 export interface LibrarySession {
@@ -634,6 +651,43 @@ const SESSION_META_FILE = '.swob-session.json'
 const LIBRARY_CONFIG_FILE = '.swob-config.json'
 const TRANSCRIPT_FILE = 'transcript.md'
 const BACKUP_FILE = 'backup.jsonl'
+type SessionWriteCrashStage = 'transcript' | 'backup' | 'manifest'
+
+/**
+ * Deliberately unreachable in normal builds. The R2 crash-contract worker must
+ * opt in with all three test variables, and both the published file and signal
+ * must stay inside SWOB_TEST_HOME. A stray production environment variable can
+ * therefore never terminate the app or write outside the isolated harness.
+ */
+function crashAfterSessionPublishForTest(stage: SessionWriteCrashStage, publishedPath: string): void {
+  const requested = process.env['SWOB_TEST_SESSION_WRITE_CRASH_STAGE']
+  if (!requested || process.env['NODE_ENV'] !== 'test' || !process.env['SWOB_TEST_HOME']) return
+  if (requested !== stage) return
+  const boundary = path.resolve(process.env['SWOB_TEST_HOME'])
+  const signalPath = process.env['SWOB_TEST_SESSION_WRITE_CRASH_SIGNAL']
+  if (!signalPath) throw new Error('session-write-crash-signal-required')
+  const assertInsideBoundary = (candidatePath: string): string => {
+    const resolved = path.resolve(candidatePath)
+    const relative = path.relative(boundary, resolved)
+    if (!relative || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) {
+      throw new Error('session-write-crash-path-outside-test-boundary')
+    }
+    return resolved
+  }
+  assertInsideBoundary(publishedPath)
+  const resolvedSignal = assertInsideBoundary(signalPath)
+  fs.mkdirSync(path.dirname(resolvedSignal), { recursive: true })
+  const descriptor = fs.openSync(resolvedSignal, 'wx', 0o600)
+  try {
+    fs.writeFileSync(descriptor, `${stage}\n`, 'utf8')
+    fs.fsyncSync(descriptor)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  fsyncDirectorySync(path.dirname(resolvedSignal))
+  process.kill(process.pid, 'SIGKILL')
+  throw new Error('session-write-sigkill-returned')
+}
 export const LOCAL_RESUME_UNAVAILABLE_REASON = '此会话数据在备份中，本机无源文件，无法直接恢复'
 export const ICLOUD_BACKUP_WAITING_REASON = '会话备份正在等待 iCloud 下载'
 export const SSH_RESUME_UNAVAILABLE_REASON = '此会话没有可用的远程设备 SSH 配置'
@@ -1030,7 +1084,8 @@ function writeSessionMetaFile(dirPath: string, meta: SessionMeta, exclusive = fa
       throw new Error('immutable-logical-session-identity')
     }
   }
-  writeSafeLibraryFileSync(_root, metaPath, JSON.stringify(meta, null, 2), { exclusive })
+  if (exclusive) writeSafeLibraryFileSync(_root, metaPath, JSON.stringify(meta, null, 2), { exclusive: true })
+  else replaceSafeLibraryFileSync(_root, metaPath, JSON.stringify(meta, null, 2))
   try {
     const stat = fs.statSync(metaPath)
     sessionMetaCache.set(metaPath, { mtimeMs: stat.mtimeMs, size: stat.size, meta: structuredClone(meta) })
@@ -1667,7 +1722,7 @@ async function updateBranchTranscriptUnderWriter(
 
   const mdPath = path.join(dirPath, `transcript-${suffix}.md`)
   assertCurrentSessionWriteAuthorized(dirPath, meta)
-  writeSafeLibraryFileSync(_root, mdPath, md)
+  replaceSafeLibraryFileSync(_root, mdPath, md)
   return mdPath
 }
 
@@ -3395,9 +3450,16 @@ async function hashFileSha256(filePath: string): Promise<string> {
 
 async function appendSourceTail(sourcePath: string, backupPath: string, start: number): Promise<void> {
   assertSafeLibraryFileTarget(_root, backupPath)
+  const tempPath = `${backupPath}.tmp-${process.pid}-${randomUUID()}`
+  assertSafeLibraryFileTarget(_root, tempPath)
+  await fs.promises.copyFile(
+    backupPath,
+    tempPath,
+    fs.constants.COPYFILE_EXCL | fs.constants.COPYFILE_FICLONE
+  )
   const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0
-  const fd = fs.openSync(backupPath, fs.constants.O_WRONLY | fs.constants.O_APPEND | noFollow)
-  const output = fs.createWriteStream(backupPath, { fd, autoClose: true })
+  const fd = fs.openSync(tempPath, fs.constants.O_WRONLY | fs.constants.O_APPEND | noFollow)
+  const output = fs.createWriteStream(tempPath, { fd, autoClose: true })
   try {
     for await (const chunk of fs.createReadStream(sourcePath, { start })) {
       if (!output.write(chunk)) await new Promise<void>((resolve) => output.once('drain', resolve))
@@ -3406,9 +3468,16 @@ async function appendSourceTail(sourcePath: string, backupPath: string, start: n
       output.end(resolve)
       output.once('error', reject)
     })
+    const handle = await fs.promises.open(tempPath, 'r+')
+    try { await handle.sync() } finally { await handle.close() }
+    assertSafeLibraryFileTarget(_root, backupPath)
+    await fs.promises.rename(tempPath, backupPath)
+    fsyncDirectorySync(path.dirname(backupPath))
   } catch (error) {
     output.destroy()
     throw error
+  } finally {
+    await fs.promises.unlink(tempPath).catch(() => {})
   }
 }
 
@@ -3464,6 +3533,7 @@ async function syncBackupUnderWriter(sessionId: string, expectedDirPath?: string
   const dirPath = writableSessionDirOrNull(sessionId, expectedDirPath)
   if (!dirPath) return
 
+  recoverIncompleteSessionWriteSnapshot(_root, dirPath)
   const meta = readSessionMeta(dirPath)
   if (!meta) return
 
@@ -3475,40 +3545,44 @@ async function syncBackupUnderWriter(sessionId: string, expectedDirPath?: string
   })
   if (sourcePaths.length === 0) return
 
-  let nextSourceState: SessionMeta['backupSourceState'] | undefined
-  if (sourcePaths.length === 1) {
-    const sourcePath = sourcePaths[0]
-    const sourceStat = await fs.promises.stat(sourcePath)
-    const backupStat = await fs.promises.stat(backupPath).catch(() => null)
-    const previous = meta.backupSourceState
-    const canAppend = Boolean(
-      previous && backupStat &&
-      previous.path === sourcePath && previous.dev === sourceStat.dev && previous.ino === sourceStat.ino &&
-      previous.size === backupStat.size && sourceStat.size > previous.size
-    )
+  await withSessionWriteSnapshot(_root, dirPath, async () => {
+    let nextSourceState: SessionMeta['backupSourceState'] | undefined
+    if (sourcePaths.length === 1) {
+      const sourcePath = sourcePaths[0]
+      const sourceStat = await fs.promises.stat(sourcePath)
+      const backupStat = await fs.promises.stat(backupPath).catch(() => null)
+      const previous = meta.backupSourceState
+      const canAppend = Boolean(
+        previous && backupStat &&
+        previous.path === sourcePath && previous.dev === sourceStat.dev && previous.ino === sourceStat.ino &&
+        previous.size === backupStat.size && sourceStat.size > previous.size
+      )
 
-    if (canAppend) await appendSourceTail(sourcePath, backupPath, previous!.size)
-    else if (!backupStat || sourceStat.size !== backupStat.size || sourceStat.mtimeMs !== previous?.mtimeMs) {
-      await replaceBackupFromSource(sourcePath, backupPath)
+      if (canAppend) await appendSourceTail(sourcePath, backupPath, previous!.size)
+      else if (!backupStat || sourceStat.size !== backupStat.size || sourceStat.mtimeMs !== previous?.mtimeMs) {
+        await replaceBackupFromSource(sourcePath, backupPath)
+      }
+
+      nextSourceState = {
+        path: sourcePath,
+        dev: sourceStat.dev,
+        ino: sourceStat.ino,
+        size: sourceStat.size,
+        mtimeMs: sourceStat.mtimeMs
+      }
+    } else {
+      await concatenateSources(sourcePaths, backupPath)
     }
+    crashAfterSessionPublishForTest('backup', backupPath)
 
-    nextSourceState = {
-      path: sourcePath,
-      dev: sourceStat.dev,
-      ino: sourceStat.ino,
-      size: sourceStat.size,
-      mtimeMs: sourceStat.mtimeMs
-    }
-  } else {
-    await concatenateSources(sourcePaths, backupPath)
-  }
-
-  const backupStat = await fs.promises.stat(backupPath)
-  meta.backupSha256 = await hashFileSha256(backupPath)
-  meta.backupSize = backupStat.size
-  meta.backupSourceState = nextSourceState
-  preserveSchemaV3OrUpgradeToV2(meta)
-  writeSessionMeta(dirPath, meta)
+    const backupStat = await fs.promises.stat(backupPath)
+    meta.backupSha256 = await hashFileSha256(backupPath)
+    meta.backupSize = backupStat.size
+    meta.backupSourceState = nextSourceState
+    preserveSchemaV3OrUpgradeToV2(meta)
+    writeSessionMeta(dirPath, meta)
+    crashAfterSessionPublishForTest('manifest', path.join(dirPath, SESSION_META_FILE))
+  })
 }
 
 // --- Update Transcript ---
@@ -3687,7 +3761,8 @@ function writeTranscriptFromLoadedRaw(
   })
 
   const mdPath = path.join(dirPath, TRANSCRIPT_FILE)
-  writeSafeLibraryFileSync(_root, mdPath, md)
+  replaceSafeLibraryFileSync(_root, mdPath, md)
+  crashAfterSessionPublishForTest('transcript', mdPath)
 
   // Update meta timestamps + 权威轮数
   meta.updatedAt = summary.updatedAt
@@ -3712,6 +3787,7 @@ async function updateTranscriptUnderWriter(
   const dirPath = writableSessionDirOrNull(sessionId, expectedDirPath)
   if (!dirPath) return false
 
+  recoverIncompleteSessionWriteSnapshot(_root, dirPath)
   const meta = readSessionMeta(dirPath)
   if (!meta) return false
 
@@ -3719,8 +3795,10 @@ async function updateTranscriptUnderWriter(
   const summary = buildTranscriptSummaryForWrite(meta, loaded)
   if (!summary) return false
 
-  writeTranscriptFromLoadedRaw(sessionId, dirPath, meta, loaded, summary, customTitle)
-  writeDerivedFilesFromLoadedRaw(sessionId, dirPath, loaded.raw)
+  withSessionWriteSnapshotSync(_root, dirPath, () => {
+    writeTranscriptFromLoadedRaw(sessionId, dirPath, meta, loaded, summary, customTitle)
+    writeDerivedFilesFromLoadedRaw(sessionId, dirPath, loaded.raw)
+  })
   return true
 }
 
@@ -3747,13 +3825,16 @@ function updateTranscriptFromRawUnderWriter(
 ): boolean {
   const dirPath = writableSessionDirOrNull(sessionId, expectedDirPath)
   if (!dirPath) return false
+  recoverIncompleteSessionWriteSnapshot(_root, dirPath)
   const meta = readSessionMeta(dirPath)
   if (!meta) return false
   const loaded: LoadedTranscriptRaw = { raw, source, filePath }
   const summary = buildTranscriptSummaryForWrite(meta, loaded)
   if (!summary) return false
-  writeTranscriptFromLoadedRaw(sessionId, dirPath, meta, loaded, summary, customTitle)
-  writeDerivedFilesFromLoadedRaw(sessionId, dirPath, raw)
+  withSessionWriteSnapshotSync(_root, dirPath, () => {
+    writeTranscriptFromLoadedRaw(sessionId, dirPath, meta, loaded, summary, customTitle)
+    writeDerivedFilesFromLoadedRaw(sessionId, dirPath, raw)
+  })
   return true
 }
 
@@ -3892,8 +3973,14 @@ async function rebuildAllTranscriptsUnderWriter(
       continue
     }
 
-    const loaded = await loadRawFromMeta(session.meta, session.dirPath)
-    const summary = buildTranscriptSummaryForWrite(session.meta, loaded)
+    if (!dryRun) recoverIncompleteSessionWriteSnapshot(_root, session.dirPath)
+    const currentMeta = !dryRun ? readSessionMeta(session.dirPath) : session.meta
+    if (!currentMeta) {
+      failedSessionIds.push(session.sessionId)
+      continue
+    }
+    const loaded = await loadRawFromMeta(currentMeta, session.dirPath)
+    const summary = buildTranscriptSummaryForWrite(currentMeta, loaded)
     if (loaded.raw.length === 0 || !summary) {
       failedSessionIds.push(session.sessionId)
       continue
@@ -3907,8 +3994,10 @@ async function rebuildAllTranscriptsUnderWriter(
       continue
     }
 
-    writeTranscriptFromLoadedRaw(session.sessionId, session.dirPath, session.meta, loaded, summary, session.meta.customTitle)
-    writeDerivedFilesFromLoadedRaw(session.sessionId, session.dirPath, loaded.raw)
+    withSessionWriteSnapshotSync(_root, session.dirPath, () => {
+      writeTranscriptFromLoadedRaw(session.sessionId, session.dirPath, currentMeta, loaded, summary, currentMeta.customTitle)
+      writeDerivedFilesFromLoadedRaw(session.sessionId, session.dirPath, loaded.raw)
+    })
     written++
     for (let idx = 0; idx < branches.length; idx++) {
       const branchId = `${session.sessionId}:intra-${idx}`

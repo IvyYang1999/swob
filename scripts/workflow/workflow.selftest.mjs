@@ -120,23 +120,44 @@ try {
   const cleanPackage = createHead('clean-package', 'package.json', '{"private":true}\n')
   const conflictA = createHead('conflict-a', 'shared.txt', 'alpha\n')
   const conflictB = createHead('conflict-b', 'shared.txt', 'beta\n')
+  runGit(fixtureRepo, 'switch', '-c', 'stacked-on-clean-a', cleanA)
+  fs.writeFileSync(path.join(fixtureRepo, 'stacked.txt'), 'stacked\n')
+  runGit(fixtureRepo, 'add', 'stacked.txt')
+  runGit(fixtureRepo, 'commit', '-m', 'stacked-on-clean-a')
+  const stackedHead = runGit(fixtureRepo, 'rev-parse', 'HEAD')
+  runGit(fixtureRepo, 'switch', 'master')
+
+  const manifestValue = (id, manifestBaseSha, headSha, changedFiles, dependency = []) => ({
+    workItemId: id,
+    baseSha: manifestBaseSha,
+    headSha,
+    changedFiles,
+    contractsProduced: [],
+    tests: [{ command: 'fixture', status: 'passed' }],
+    visualEvidence: [],
+    deviations: [],
+    knownRisks: [],
+    provenance: { harness: 'fixture', model: 'n/a', session: 'selftest' },
+    depends_on: dependency
+  })
+  const stackedPreflight = preflightManifests([
+    manifestValue('clean-a', baseSha, cleanA, ['a.txt']),
+    manifestValue('stacked', cleanA, stackedHead, ['stacked.txt'], ['clean-a'])
+  ], fixtureRepo, { baseRef: 'master', staleThreshold: 20 })
+  assert.deepEqual(stackedPreflight.errors, [], '精确叠在已声明依赖 headSha 上的工作包应通过预检')
+  const undeclaredStackPreflight = preflightManifests([
+    manifestValue('clean-a', baseSha, cleanA, ['a.txt']),
+    manifestValue('stacked', cleanA, stackedHead, ['stacked.txt'])
+  ], fixtureRepo, { baseRef: 'master', staleThreshold: 20 })
+  assert.ok(
+    undeclaredStackPreflight.errors.some((error) => error.includes('禁止把旁支基线带入集成')),
+    '未声明依赖的堆叠基线仍必须 fail-closed'
+  )
   const manifestRoot = path.join(integrationFixture, 'manifests')
   fs.mkdirSync(manifestRoot)
   const writeManifest = (id, headSha, changedFiles, dependency = []) => {
     const file = path.join(manifestRoot, `${id}.json`)
-    fs.writeFileSync(file, `${JSON.stringify({
-      workItemId: id,
-      baseSha,
-      headSha,
-      changedFiles,
-      contractsProduced: [],
-      tests: [{ command: 'fixture', status: 'passed' }],
-      visualEvidence: [],
-      deviations: [],
-      knownRisks: [],
-      provenance: { harness: 'fixture', model: 'n/a', session: 'selftest' },
-      depends_on: dependency
-    })}\n`)
+    fs.writeFileSync(file, `${JSON.stringify(manifestValue(id, baseSha, headSha, changedFiles, dependency))}\n`)
     return file
   }
   const gates = [{ id: 'fixture-gate', command: 'node --version' }]

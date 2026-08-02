@@ -146,6 +146,7 @@ export function preflightManifests(manifests, repo, { baseRef = 'origin/master',
   const errors = []
   const warnings = []
   const ids = new Set()
+  const manifestsById = new Map(manifests.map((manifest) => [manifest.workItemId, manifest]))
   for (const manifest of manifests) {
     const source = manifest.__source ?? manifest.workItemId ?? '<manifest>'
     errors.push(...validateManifestShape(manifest, source))
@@ -173,7 +174,16 @@ export function preflightManifests(manifests, repo, { baseRef = 'origin/master',
         const distance = Number(git(['rev-list', '--count', `${manifest.baseSha}..${baseRef}`], repo))
         if (distance > staleThreshold) warnings.push(`${manifest.workItemId}: 基线落后 ${baseRef} ${distance} 个提交（阈值 ${staleThreshold}）`)
       } else {
-        errors.push(`${manifest.workItemId}: baseSha 不是 ${baseRef} 的祖先；禁止把旁支基线带入集成`)
+        // A stacked worker may legitimately branch from the exact implementation
+        // head of a declared dependency. Accept only that cryptographically exact
+        // edge: an undeclared sibling, an arbitrary descendant, or a dependency's
+        // manifest commit must still fail closed as side-branch contamination.
+        const stackedOn = dependenciesOf(manifest)
+          .map((id) => manifestsById.get(id))
+          .find((dependency) => dependency?.headSha === manifest.baseSha)
+        if (!stackedOn) {
+          errors.push(`${manifest.workItemId}: baseSha 不是 ${baseRef} 的祖先，也不等于已声明依赖的 headSha；禁止把旁支基线带入集成`)
+        }
       }
     } catch (error) {
       errors.push(error.message)

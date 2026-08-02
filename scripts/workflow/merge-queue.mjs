@@ -305,6 +305,10 @@ function parseArgs(argv) {
     else if (argument === '--base-ref') options.baseRef = argv[++index]
     else if (argument === '--stale-threshold') options.staleThreshold = Number(argv[++index])
     else if (argument === '--integration-dir') options.integrationDir = path.resolve(argv[++index])
+    else if (argument === '--existing-integration-dir') {
+      options.integrationDir = path.resolve(argv[++index])
+      options.useExistingIntegrationDir = true
+    }
     else if (argument === '--branch') options.branch = argv[++index]
     else if (argument === '--report') options.reportPath = path.resolve(argv[++index])
     else if (argument === '--dry-run') options.dryRun = true
@@ -373,11 +377,32 @@ export function runMergeQueue(options, repo = process.cwd()) {
 
   const temporaryParent = options.integrationDir ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'swob-merge-queue-'))
   const integrationDir = options.integrationDir ?? path.join(temporaryParent, 'worktree')
-  const branch = options.branch ?? `integration/${runId}`
-  fs.mkdirSync(path.dirname(integrationDir), { recursive: true })
-  if (fs.existsSync(integrationDir)) throw new Error(`集成 worktree 路径已存在: ${integrationDir}`)
-  git(['worktree', 'add', '-b', branch, integrationDir, options.baseRef], repo)
-  report.integration = { worktree: integrationDir, branch, retained: true }
+  let branch = options.branch ?? `integration/${runId}`
+  if (options.useExistingIntegrationDir) {
+    if (!fs.existsSync(integrationDir)) throw new Error(`已有集成 worktree 不存在: ${integrationDir}`)
+    const topLevel = path.resolve(git(['rev-parse', '--show-toplevel'], integrationDir))
+    if (topLevel !== path.resolve(integrationDir)) {
+      throw new Error(`已有集成路径不是 worktree 根: ${integrationDir}`)
+    }
+    if (git(['status', '--porcelain'], integrationDir)) {
+      throw new Error(`已有集成 worktree 不干净: ${integrationDir}`)
+    }
+    branch = git(['symbolic-ref', '--short', 'HEAD'], integrationDir)
+    if (!branch.startsWith('integration/') || (options.branch && options.branch !== branch)) {
+      throw new Error(`已有 worktree 必须使用匹配的 integration/* 分支: ${branch}`)
+    }
+    const expectedBase = git(['rev-parse', options.baseRef], repo)
+    const actualBase = git(['rev-parse', 'HEAD'], integrationDir)
+    if (actualBase !== expectedBase) {
+      throw new Error(`已有集成 worktree HEAD 不等于 baseRef: expected=${expectedBase} actual=${actualBase}`)
+    }
+    report.integration = { worktree: integrationDir, branch, retained: true, precreated: true }
+  } else {
+    fs.mkdirSync(path.dirname(integrationDir), { recursive: true })
+    if (fs.existsSync(integrationDir)) throw new Error(`集成 worktree 路径已存在: ${integrationDir}`)
+    git(['worktree', 'add', '-b', branch, integrationDir, options.baseRef], repo)
+    report.integration = { worktree: integrationDir, branch, retained: true, precreated: false }
+  }
 
   let dependenciesReady = false
 

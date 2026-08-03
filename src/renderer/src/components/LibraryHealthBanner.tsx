@@ -75,6 +75,20 @@ export function LibraryHealthBanner() {
   const [recovering, setRecovering] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const prevCompensation = useRef(health.compensation)
+  const dimensions = health.dimensions
+  const backlog = dimensions.backgroundBacklog
+  const bucketEntries = Object.entries(backlog.unverifiableBuckets).filter(([, count]) => count > 0)
+  const dimensionSummary = (
+    <div className="library-health-dimensions flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] opacity-80">
+      <span><code>writer-capability</code>: {dimensions.writerCapability.state}</span>
+      <span><code>active-source-freshness</code>: {dimensions.activeSourceFreshness.state}</span>
+      <span><code>background-backlog</code>: {backlog.state} ({backlog.remaining})</span>
+      <span>
+        <code>identity-exceptions</code>: {dimensions.identityExceptions.state}
+        {' '}({dimensions.identityExceptions.authorizedGroupCount}/{dimensions.identityExceptions.unknownGroupCount})
+      </span>
+    </div>
+  )
 
   // Track compensation completion and show toast with appropriate tone
   useEffect(() => {
@@ -114,26 +128,39 @@ export function LibraryHealthBanner() {
   }, [health.compensation, showToast, t])
 
   // Nothing to show when ready and no compensation in progress
-  if (health.state === 'ready' && !health.compensation.inProgress) {
+  if (
+    health.state === 'ready' &&
+    !health.compensation.inProgress &&
+    (backlog.state === 'idle' || backlog.state === 'completed') &&
+    bucketEntries.length === 0
+  ) {
     return null
   }
 
-  // Compensation progress mode overrides the state banner
-  if (health.compensation.inProgress) {
-    const fraction = health.compensation.total > 0
-      ? health.compensation.completed / health.compensation.total
+  // Background startup and compensation share one visible, cancellable control plane.
+  if (health.compensation.inProgress || backlog.state === 'running') {
+    const progress = backlog.state === 'running'
+      ? {
+          total: backlog.total,
+          completed: backlog.completed,
+          failed: backlog.failed
+        }
+      : health.compensation
+    const fraction = progress.total > 0
+      ? (progress.completed + progress.failed) / progress.total
       : 0
     return (
       <div
         data-testid="library-health-banner"
-        className="shrink-0 border-b border-edge bg-soft-blue/5 px-4 py-2 flex items-center gap-3 text-xs text-soft-blue"
+        className="library-health-banner shrink-0 border-b border-edge bg-soft-blue/5 px-4 py-2 flex flex-wrap items-center gap-3 text-xs text-soft-blue"
       >
         <Loader2 size={14} className="animate-spin shrink-0" />
-        <span className="flex-1">
+        <span className="flex-1 min-w-52">
           {t('health.compensation_progress', {
-            total: health.compensation.total,
-            done: health.compensation.completed
+            total: progress.total,
+            done: progress.completed
           })}
+          {' '}<code>remaining={backlog.remaining}</code>
         </span>
         <div className="w-24 h-1.5 rounded-full bg-surface overflow-hidden shrink-0">
           <div
@@ -154,6 +181,53 @@ export function LibraryHealthBanner() {
             <X size={10} />
           </button>
         )}
+        <div className="basis-full pl-6">{dimensionSummary}</div>
+        {backlog.failures.length > 0 && (
+          <div className="basis-full pl-6 text-[10px] text-soft-amber">
+            {backlog.failures.map((failure) => failure.reasonCode).filter((value, index, all) =>
+              all.indexOf(value) === index).join(' · ')}
+          </div>
+        )}
+        {bucketEntries.length > 0 && (
+          <div className="basis-full pl-6 text-[10px] opacity-80">
+            {bucketEntries.map(([reason, count]) => `${reason}=${count}`).join(' · ')}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (health.state === 'ready' && (backlog.state === 'paused' || backlog.state === 'completed-with-errors')) {
+    return (
+      <div
+        data-testid="library-health-banner"
+        className="library-health-banner shrink-0 border-b border-soft-amber/30 bg-soft-amber/10 px-4 py-2 flex flex-wrap items-center gap-3 text-xs text-soft-amber"
+      >
+        <AlertTriangle size={14} className="shrink-0" />
+        <span className="flex-1">
+          {backlog.state === 'paused'
+            ? t('health.compensation_cancelled')
+            : t('health.compensation_partial', { done: backlog.completed, failed: backlog.failed })}
+        </span>
+        {health.availableActions.includes('retry-compensation') && (
+          <button
+            onClick={async () => {
+              setRecovering(true)
+              await retryCompensation()
+              setTimeout(() => setRecovering(false), 1500)
+            }}
+            disabled={recovering}
+            className="px-2 py-0.5 rounded border border-current/20 hover:bg-base/30 text-[11px] disabled:opacity-40"
+          >
+            {t('health.try_recover')}
+          </button>
+        )}
+        <div className="basis-full pl-6">{dimensionSummary}</div>
+        {backlog.failures.length > 0 && (
+          <div className="basis-full pl-6 text-[10px]">
+            {backlog.failures.map((failure) => `${failure.sessionId}: ${failure.reasonCode}`).join(' · ')}
+          </div>
+        )}
       </div>
     )
   }
@@ -169,7 +243,7 @@ export function LibraryHealthBanner() {
     return (
       <div
         data-testid="library-health-banner"
-        className={`shrink-0 border-b border-edge ${config.colorClasses} px-4 py-1 flex items-center gap-2 text-[11px] cursor-pointer`}
+        className={`library-health-banner shrink-0 border-b border-edge ${config.colorClasses} px-4 py-1 flex items-center gap-2 text-[11px] cursor-pointer`}
         onClick={() => setCollapsed(false)}
         title={t('health.expand')}
       >
@@ -190,7 +264,7 @@ export function LibraryHealthBanner() {
   return (
     <div
       data-testid="library-health-banner"
-      className={`shrink-0 border-b ${config.colorClasses} px-4 py-2 flex items-center gap-3 text-xs`}
+      className={`library-health-banner shrink-0 border-b ${config.colorClasses} px-4 py-2 flex flex-wrap items-center gap-3 text-xs`}
     >
       <Icon size={14} className={config.icon === Loader2 ? 'animate-spin shrink-0' : 'shrink-0'} />
       <span className="flex-1 min-w-0">
@@ -225,6 +299,12 @@ export function LibraryHealthBanner() {
           <ChevronUp size={12} />
         </button>
       </div>
+      <div className="basis-full pl-6">{dimensionSummary}</div>
+      {bucketEntries.length > 0 && (
+        <div className="basis-full pl-6 text-[10px] opacity-80">
+          {bucketEntries.map(([reason, count]) => `${reason}=${count}`).join(' · ')}
+        </div>
+      )}
     </div>
   )
 }

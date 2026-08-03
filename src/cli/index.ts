@@ -73,6 +73,7 @@ import {
   generateSkillContent,
   renderCliHelp
 } from './command-registry'
+import { parseActiveClaudeSessionIds } from '../shared/active-session-processes'
 
 export interface CliIo {
   stdout: (value: string) => void
@@ -160,13 +161,7 @@ function positiveInteger(value: string | true | undefined, fallback: number): nu
 function detectActiveSessionsFromProcesses(): Set<string> {
   try {
     const stdout = execSync('ps -eo command', { encoding: 'utf-8', timeout: 3000 })
-    const active = new Set<string>()
-    for (const line of stdout.split('\n')) {
-      if (!line.includes('claude')) continue
-      const match = line.match(/--resume\s+(\S+)/)
-      if (match) active.add(match[1])
-    }
-    return active
+    return parseActiveClaudeSessionIds(stdout)
   } catch {
     return new Set()
   }

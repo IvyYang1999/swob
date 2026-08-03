@@ -31,7 +31,7 @@ let sourceA = ''
 let sourceB = ''
 let packageA = ''
 let packageB = ''
-let childProcess: ChildProcess | null = null
+const childProcesses: ChildProcess[] = []
 let commandEnvironment: NodeJS.ProcessEnv = {}
 const exercised = new Set<string>()
 const GLOBAL_CLI_PATHS = ['/usr/local/bin/swob', '/opt/homebrew/bin/swob']
@@ -201,7 +201,9 @@ beforeAll(() => {
 })
 
 afterAll(() => {
-  if (childProcess && childProcess.exitCode === null) childProcess.kill('SIGTERM')
+  for (const childProcess of childProcesses) {
+    if (childProcess.exitCode === null) childProcess.kill('SIGTERM')
+  }
   if (sandboxRoot) fs.rmSync(sandboxRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   if (packagedApp) {
     expect(GLOBAL_CLI_PATHS.map(inspectGlobalCliPath)).toEqual(globalCliStateBefore)
@@ -324,12 +326,17 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     const fakeClaude = path.join(sandboxRoot, 'claude')
     fs.writeFileSync(fakeClaude, '#!/bin/sh\nwhile :; do /bin/sleep 1; done\n', 'utf8')
     fs.chmodSync(fakeClaude, 0o755)
-    childProcess = spawn(fakeClaude, ['--resume', SESSION_A], { env: commandEnvironment, stdio: 'ignore' })
+    childProcesses.push(
+      spawn(fakeClaude, ['--resume', SESSION_A], { env: commandEnvironment, stdio: 'ignore' }),
+      spawn(fakeClaude, [`--resume=${SESSION_B}`], { env: commandEnvironment, stdio: 'ignore' }),
+      spawn(fakeClaude, [`--resume=${SESSION_B}`], { env: commandEnvironment, stdio: 'ignore' })
+    )
     await waitForProcessStart()
     const active = parseSuccess(invokeInstalled('active', ['active', '--json']))
-    expect(active.activeSessionIds).toContain(SESSION_A)
-    childProcess.kill('SIGTERM')
-    childProcess = null
+    expect(active.activeSessionIds).toEqual(expect.arrayContaining([SESSION_A, SESSION_B]))
+    expect(active.activeSessionIds.filter((sessionId: string) => sessionId === SESSION_A)).toHaveLength(1)
+    expect(active.activeSessionIds.filter((sessionId: string) => sessionId === SESSION_B)).toHaveLength(1)
+    for (const childProcess of childProcesses.splice(0)) childProcess.kill('SIGTERM')
   }, COMMAND_TEST_TIMEOUT_MS)
 
   it('creates, renames and deletes nested folders', () => {

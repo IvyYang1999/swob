@@ -18,6 +18,7 @@ import {
   BUILTIN_COMMAND_IDS,
   createBuiltinCommandRegistry
 } from '../shared/registry/builtin-commands'
+import { parseActiveClaudeSessionIds } from '../shared/active-session-processes'
 import { execFile, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import { getLocalNetworkInfo, queryPublicIp } from './network-info'
@@ -454,13 +455,7 @@ function detectActiveSessionsFromProcesses(): Promise<Set<string>> {
     }, (err, stdout) => {
       if (activePollProcess === child) activePollProcess = null
       if (err) { resolve(new Set()); return }
-      const active = new Set<string>()
-      for (const line of stdout.split('\n')) {
-        if (!line.includes('claude')) continue
-        const match = line.match(/--resume\s+(\S+)/)
-        if (match) active.add(match[1])
-      }
-      resolve(active)
+      resolve(parseActiveClaudeSessionIds(stdout))
     })
     activePollProcess = child
   })

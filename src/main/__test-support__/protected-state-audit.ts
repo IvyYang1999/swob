@@ -13,10 +13,20 @@ export interface ProtectedStateSnapshot {
     digest: string
     contentDigest: string
     concurrentCacheDigest: string
+    concurrentCacheDigests: string[]
   }>
 }
 
-const CONCURRENT_PRODUCTION_CACHE = /^summary-cache\.json(?:\..+\.tmp)?$/
+export type ProtectedStateSnapshotPhase =
+  | 'after-leading-cache-scan'
+  | 'after-stable-metadata-cache-scan'
+  | 'after-stable-content-cache-scan'
+
+export interface ProtectedStateSnapshotInstrumentation {
+  onPhase?: (event: { label: string; phase: ProtectedStateSnapshotPhase }) => void
+}
+
+const CONCURRENT_PRODUCTION_CACHE = /^summary-cache\.json(?:\.\d+\.\d+\.tmp)?$/
 
 function isConcurrentProductionCache(label: string, relativePath: string): boolean {
   return label.startsWith('user-config-') &&
@@ -98,16 +108,32 @@ function concurrentCacheDigest(root: string, label: string): string {
 
 export function snapshotProtectedRealState(
   environment: IsolationEnvironment = process.env,
-  options: RuntimeIsolationOptions = {}
+  options: RuntimeIsolationOptions = {},
+  instrumentation: ProtectedStateSnapshotInstrumentation = {}
 ): ProtectedStateSnapshot {
   return {
     entries: protectedRealStateTargets(environment, options).map((target, index) => {
       const label = `${target.label}-${index + 1}`
+      const concurrentCacheDigests: string[] = []
+      const sampleConcurrentCache = (phase: ProtectedStateSnapshotPhase): void => {
+        concurrentCacheDigests.push(concurrentCacheDigest(target.targetPath, label))
+        instrumentation.onPhase?.({ label, phase })
+      }
+      sampleConcurrentCache('after-leading-cache-scan')
+      const digest = metadataDigest(target.targetPath, label)
+      sampleConcurrentCache('after-stable-metadata-cache-scan')
+      const contentDigest = metadataDigest(
+        target.targetPath,
+        label,
+        { ignoreRootDirectoryMetadata: true }
+      )
+      sampleConcurrentCache('after-stable-content-cache-scan')
       return {
         label,
-        digest: metadataDigest(target.targetPath, label),
-        contentDigest: metadataDigest(target.targetPath, label, { ignoreRootDirectoryMetadata: true }),
-        concurrentCacheDigest: concurrentCacheDigest(target.targetPath, label)
+        digest,
+        contentDigest,
+        concurrentCacheDigest: concurrentCacheDigests[concurrentCacheDigests.length - 1],
+        concurrentCacheDigests
       }
     })
   }
@@ -128,8 +154,13 @@ export function assertProtectedRealStateUnchanged(
     }
     const stableChanged = before.entries[index].digest !== after.entries[index].digest
     const contentChanged = before.entries[index].contentDigest !== after.entries[index].contentDigest
-    const concurrentCacheChanged = before.entries[index].concurrentCacheDigest !==
-      after.entries[index].concurrentCacheDigest
+    const concurrentCacheDigests = [
+      ...before.entries[index].concurrentCacheDigests,
+      ...after.entries[index].concurrentCacheDigests
+    ]
+    const concurrentCacheChanged = concurrentCacheDigests.some(
+      (digest) => digest !== concurrentCacheDigests[0]
+    )
     if (contentChanged || (stableChanged && !concurrentCacheChanged)) {
       throw new Error(`Test isolation violation: protected ${before.entries[index].label} changed`)
     }

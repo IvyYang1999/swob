@@ -14,6 +14,10 @@ import {
   snapshotProtectedRealState,
   type ProtectedStateSnapshot
 } from '../src/main/__test-support__/protected-state-audit'
+import {
+  assertE2EProviderHomeEnvironmentIsolated,
+  isolateE2EProviderHomeEnvironment
+} from './provider-home-isolation'
 
 export const CLAUDE_FIXTURE_ID = '82000000-0000-4000-8000-000000000099'
 export const CODEX_FIXTURE_ID = '019abcde-1234-7000-8000-012345670099'
@@ -29,6 +33,15 @@ interface AppIsolationAudit {
 }
 
 const appIsolationAudits = new WeakMap<ElectronApplication, AppIsolationAudit>()
+
+function inheritedE2EEnvironment(): Record<string, string> {
+  const inherited: Record<string, string> = {}
+  for (const name of ['PATH', 'LANG', 'LC_ALL', 'SHELL', 'USER', 'LOGNAME']) {
+    const value = process.env[name]
+    if (value) inherited[name] = value
+  }
+  return inherited
+}
 
 function attachProtectedStateAudit(app: ElectronApplication, before: ProtectedStateSnapshot): void {
   const audit: AppIsolationAudit = { before, verified: false }
@@ -69,9 +82,10 @@ export async function launchAppWithEnv(options: {
   const temp = path.join(sandboxRoot, '.swob-e2e-tmp')
   for (const directory of [userData, cache, config, temp]) fs.mkdirSync(directory, { recursive: true })
   const environment: IsolationEnvironment & Record<string, string | undefined> = {
-    ...process.env,
+    ...inheritedE2EEnvironment(),
     ...options.env,
     HOME: testHome,
+    USERPROFILE: testHome,
     NODE_ENV: 'test',
     SWOB_TEST_HOME: testHome,
     SWOB_TEST_LOCALE: 'zh-CN',
@@ -83,7 +97,9 @@ export async function launchAppWithEnv(options: {
     XDG_CONFIG_HOME: config,
     TMPDIR: temp
   }
+  isolateE2EProviderHomeEnvironment(environment, sandboxRoot)
   assertTestLaunchContract(environment, userData, { systemTemporaryRoot: os.tmpdir() })
+  assertE2EProviderHomeEnvironmentIsolated(environment, sandboxRoot)
   const protectedStateBefore = snapshotProtectedRealState()
   const app = await electron.launch({
     args: [
@@ -145,14 +161,10 @@ export async function launchDangerousDevelopmentApp(): Promise<LaunchedApp> {
     preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' }
   }))
 
-  const inherited: Record<string, string> = {}
-  for (const name of ['PATH', 'LANG', 'LC_ALL', 'SHELL', 'USER', 'LOGNAME']) {
-    const value = process.env[name]
-    if (value) inherited[name] = value
-  }
   const environment: Record<string, string> = {
-    ...inherited,
+    ...inheritedE2EEnvironment(),
     HOME: home,
+    USERPROFILE: home,
     NODE_ENV: 'development',
     SWOB_LIBRARY_ROOT: libraryRoot,
     SWOB_USER_DATA_ROOT: userData,
@@ -162,6 +174,8 @@ export async function launchDangerousDevelopmentApp(): Promise<LaunchedApp> {
     XDG_CONFIG_HOME: config,
     TMPDIR: temp
   }
+  isolateE2EProviderHomeEnvironment(environment, sandboxRoot)
+  assertE2EProviderHomeEnvironmentIsolated(environment, sandboxRoot)
   assertExplicitTemporaryLaunchPaths(environment, sandboxRoot, userData, os.tmpdir())
   const safety = runtimeSafetyState(libraryRoot, environment)
   if (!safety.dangerousRealLibrary) {
@@ -608,14 +622,10 @@ function isolatedEnvironment(
   sandboxRoot: string,
   userData: string
 ): Record<string, string> {
-  const inherited: Record<string, string> = {}
-  for (const name of ['PATH', 'LANG', 'LC_ALL', 'SHELL', 'USER', 'LOGNAME']) {
-    const value = process.env[name]
-    if (value) inherited[name] = value
-  }
-  return {
-    ...inherited,
+  const environment = {
+    ...inheritedE2EEnvironment(),
     HOME: home,
+    USERPROFILE: home,
     NODE_ENV: 'test',
     SWOB_TEST_HOME: home,
     SWOB_TEST_LOCALE: 'zh-CN',
@@ -627,6 +637,9 @@ function isolatedEnvironment(
     XDG_CONFIG_HOME: path.join(sandboxRoot, 'config'),
     TMPDIR: path.join(sandboxRoot, 'tmp')
   }
+  isolateE2EProviderHomeEnvironment(environment, sandboxRoot)
+  assertE2EProviderHomeEnvironmentIsolated(environment, sandboxRoot)
+  return environment
 }
 
 export async function launchApp(options: LaunchAppOptions = {}): Promise<LaunchedApp> {
@@ -665,6 +678,8 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     SWOB_E2E_SANDBOX_ROOT: sandboxRoot,
     SWOB_USER_DATA_ROOT: userData
   }
+  isolateE2EProviderHomeEnvironment(environment, sandboxRoot)
+  assertE2EProviderHomeEnvironmentIsolated(environment, sandboxRoot)
   const protectedStateBefore = snapshotProtectedRealState()
   try {
     assertTestLaunchContract(environment, userData, { systemTemporaryRoot: os.tmpdir() })

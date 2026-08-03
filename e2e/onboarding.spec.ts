@@ -3,28 +3,82 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { launchAppWithEnv as launchApp } from './helpers'
+import { E2E_CLEARED_PROVIDER_HOME_OVERRIDES } from './provider-home-isolation'
 
 let app: ElectronApplication
 let page: Page
+let fixtureRoot: string
 let fixtureHome: string
+let pollutedCodexHome: string
+
+const POLLUTED_CODEX_SESSION_ID = '32300000-0000-4000-8000-000000000001'
+
+function writePollutedCodexTranscript(codexHome: string): void {
+  const transcript = path.join(
+    codexHome,
+    'sessions',
+    '2026',
+    '08',
+    '04',
+    `rollout-polluted-${POLLUTED_CODEX_SESSION_ID}.jsonl`
+  )
+  fs.mkdirSync(path.dirname(transcript), { recursive: true })
+  fs.writeFileSync(transcript, [
+    {
+      timestamp: '2026-08-04T00:00:00Z',
+      type: 'session_meta',
+      payload: {
+        id: POLLUTED_CODEX_SESSION_ID,
+        timestamp: '2026-08-04T00:00:00Z',
+        cwd: '/isolated/swob323',
+        cli_version: 'test',
+        model_provider: 'openai'
+      }
+    },
+    {
+      timestamp: '2026-08-04T00:00:01Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'SWOB-323 polluted CODEX_HOME sentinel' }]
+      }
+    }
+  ].map((row) => JSON.stringify(row)).join('\n') + '\n')
+}
 
 test.describe.configure({ mode: 'serial' })
 
 test.beforeAll(async () => {
   // 全新 HOME：无 app-config、无已初始化库 → 必须走首启动引导
-  fixtureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-onboarding-e2e-'))
-  const launched = await launchApp({ env: { HOME: fixtureHome } })
+  fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-onboarding-e2e-'))
+  fixtureHome = path.join(fixtureRoot, 'fresh-home')
+  pollutedCodexHome = path.join(fixtureRoot, 'external-codex-home')
+  fs.mkdirSync(fixtureHome, { recursive: true })
+  writePollutedCodexTranscript(pollutedCodexHome)
+  const launched = await launchApp({
+    sandboxRoot: fixtureRoot,
+    env: { HOME: fixtureHome, CODEX_HOME: pollutedCodexHome }
+  })
   app = launched.app
   page = launched.page
 })
 
 test.afterAll(async () => {
   await app.close()
-  if (!process.env.SWOB_E2E_KEEP_FIXTURE) fs.rmSync(fixtureHome, { recursive: true, force: true })
-  else console.log('[diag] fixture kept at:', fixtureHome)
+  if (!process.env.SWOB_E2E_KEEP_FIXTURE) fs.rmSync(fixtureRoot, { recursive: true, force: true })
+  else console.log('[diag] fixture kept at:', fixtureRoot)
 })
 
 test('全新安装完成场景选择与引导后进入主界面，配置落盘', async () => {
+  const expectedClearedProviderHome = process.env.SWOB_E2E_EXPECT_CLEARED_PROVIDER_HOME
+  if (expectedClearedProviderHome) {
+    expect((process.env[E2E_CLEARED_PROVIDER_HOME_OVERRIDES] || '').split(','))
+      .toContain(expectedClearedProviderHome)
+  }
+  expect(process.env.CODEX_HOME).toBeUndefined()
+  expect(await app.evaluate(() => process.env.CODEX_HOME ?? null)).toBeNull()
+
   const onboarding = page.locator('[data-testid="onboarding"]')
   await expect(onboarding).toBeVisible({ timeout: 20_000 })
 

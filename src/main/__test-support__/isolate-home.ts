@@ -7,6 +7,10 @@ import {
   assertProtectedRealStateUnchanged,
   snapshotProtectedRealState
 } from './protected-state-audit'
+import {
+  assertProviderHomeEnvironmentIsolated,
+  isolateProviderHomeEnvironment
+} from './provider-home-isolation'
 
 if (process.env.SWOB_REAL_LIBRARY_SMOKE === '1') {
   throw new Error(
@@ -25,20 +29,19 @@ for (const directory of [isolatedHome, isolatedLibrary, isolatedUserData]) {
 }
 
 process.env.HOME = isolatedHome
+process.env.USERPROFILE = isolatedHome
 process.env.NODE_ENV = 'test'
 process.env.SWOB_TEST_HOME = isolatedHome
 process.env.SWOB_E2E_SANDBOX_ROOT = sandboxRoot
 process.env.SWOB_TEST_SYSTEM_TEMP_ROOT = systemTemporaryRoot
 process.env.SWOB_LIBRARY_ROOT = isolatedLibrary
 process.env.SWOB_USER_DATA_ROOT = isolatedUserData
-process.env.XDG_CACHE_HOME = path.join(sandboxRoot, 'cache')
-process.env.XDG_CONFIG_HOME = path.join(sandboxRoot, 'config')
 process.env.TMPDIR = path.join(sandboxRoot, 'tmp')
-for (const directory of [process.env.XDG_CACHE_HOME, process.env.XDG_CONFIG_HOME, process.env.TMPDIR]) {
-  fs.mkdirSync(directory, { recursive: true })
-}
+fs.mkdirSync(process.env.TMPDIR, { recursive: true })
+isolateProviderHomeEnvironment(process.env, sandboxRoot)
 
 assertTestLaunchContract(process.env, isolatedUserData, { systemTemporaryRoot })
+assertProviderHomeEnvironmentIsolated(process.env, sandboxRoot)
 
 afterAll(() => {
   try {

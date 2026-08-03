@@ -1192,6 +1192,35 @@ describe('buildSessionDetail', () => {
 // cross-session branch inference 测试
 // ========================================================
 describe('loadAllSessions per-file incremental cache', () => {
+  it('模块在 sandbox 外初始化时拒绝写 summary cache', async () => {
+    const systemTemporaryRoot = process.env.SWOB_TEST_SYSTEM_TEMP_ROOT!
+    const home = fs.mkdtempSync(path.join(systemTemporaryRoot, 'swob-outside-sandbox-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'outside-cache.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'outside-cache-session',
+        type: 'user',
+        message: { role: 'user', content: 'outside sandbox cache fixture' }
+      })
+    ])
+    const previousHome = process.env.HOME
+
+    try {
+      process.env.HOME = home
+      vi.resetModules()
+      const mod = await import('./session-loader')
+
+      await expect(mod.loadAllSessions({ quiet: true }))
+        .rejects.toThrow('Test isolation violation: summary-cache write outside sandbox')
+      expect(fs.existsSync(path.join(home, '.claude-session-manager', 'summary-cache.json'))).toBe(false)
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      vi.resetModules()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('single-flight 跨 readOnly/写模式复用纯解析，但隔离写副作用与 quiet 日志', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-single-flight-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'single-flight.jsonl')

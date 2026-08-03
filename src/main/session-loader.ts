@@ -123,6 +123,18 @@ interface DiskCache {
 const SELECTIVELY_COMPATIBLE_CACHE_VERSIONS = new Set([25, 26])
 let cacheWriteSequence = 0
 
+function assertTestCacheWriteContained(): void {
+  if (process.env.NODE_ENV !== 'test') return
+  const sandboxRoot = process.env.SWOB_E2E_SANDBOX_ROOT
+  if (!sandboxRoot) {
+    throw new Error('Test isolation violation: missing-SWOB_E2E_SANDBOX_ROOT before summary-cache write')
+  }
+  const relative = path.relative(path.resolve(sandboxRoot), path.resolve(CACHE_FILE))
+  if (relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) {
+    throw new Error('Test isolation violation: summary-cache write outside sandbox')
+  }
+}
+
 function isLegacyCacheEntryCompatible(version: number, entry: DiskCacheEntry): boolean {
   const source = entry?.perFile?.source
   // v26 introduced Codex lifecycle/lineage fields. v27 introduces the
@@ -156,6 +168,10 @@ function loadDiskCache(): DiskCache | null {
 }
 
 function saveDiskCache(entries: Record<string, DiskCacheEntry>): void {
+  // This assertion is intentionally outside the best-effort cache catch. A
+  // test module initialized before the isolation bootstrap must fail red
+  // instead of silently writing the native account cache.
+  assertTestCacheWriteContained()
   const tempFile = `${CACHE_FILE}.${process.pid}.${++cacheWriteSequence}.tmp`
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true })

@@ -204,7 +204,7 @@ interface ElectronAPI {
   selectCodexHomes: () => Promise<string[]>
   setCodexHomes: (homes: string[]) => Promise<string[]>
   loadConfig: () => Promise<any>
-  saveConfig: (config: any) => Promise<any>
+  saveConfig: (config: any, preferencePatch?: Record<string, unknown>) => Promise<any>
   createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) => Promise<any>
   moveFolder: (folderId: string, newParentId: string | null, position?: string, targetId?: string) => Promise<any>
   deleteFolder: (folderId: string) => Promise<any>

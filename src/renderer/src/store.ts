@@ -497,7 +497,7 @@ export const useStore = create<AppState>((set, get) => ({
           ...hydratedConfig,
           preferences: { ...hydratedConfig.preferences, locale }
         }
-        await window.api.saveConfig(hydratedConfig)
+        await window.api.saveConfig(hydratedConfig, { locale })
       }
       document.documentElement.lang = locale
       try {
@@ -862,7 +862,7 @@ export const useStore = create<AppState>((set, get) => ({
     // second rapid preference change merges on top of the first one.
     set({ config: updated as UserConfig })
     try {
-      await window.api.saveConfig(updated)
+      await window.api.saveConfig(updated, prefs as Record<string, unknown>)
     } catch (error) {
       if (revision === preferenceWriteRevision) {
         localPreferenceOverlay = previousOverlay

@@ -235,6 +235,45 @@ describe('Library scan generation', () => {
       terminalApp: 'iTerm2'
     })
   })
+
+  it('并发 preference patch 在 writer 队列内基于最新磁盘状态合并', async () => {
+    const current = lib.loadLibraryConfig()
+    lib.saveLibraryConfig({
+      ...current,
+      preferences: {
+        ...current.preferences,
+        legacyFixtureField: 'must-survive'
+      } as typeof current.preferences
+    })
+
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const writing = lib.withLibraryMaintenanceWriter(async () => {
+      entered()
+      await gate
+    })
+    await started
+
+    const savingSort = lib.updateLibraryPreferencesAsync((preferences) => ({
+      ...preferences,
+      defaultSort: 'turns'
+    }))
+    const savingGrouping = lib.updateLibraryPreferencesAsync((preferences) => ({
+      ...preferences,
+      defaultGrouping: 'date'
+    }))
+
+    release()
+    await writing
+    await Promise.all([savingSort, savingGrouping])
+    expect(lib.loadLibraryConfig().preferences).toMatchObject({
+      defaultSort: 'turns',
+      defaultGrouping: 'date',
+      legacyFixtureField: 'must-survive'
+    })
+  })
 })
 
 describe('Library metadata cache', () => {

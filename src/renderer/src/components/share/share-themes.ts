@@ -4,9 +4,13 @@
  * No arbitrary CSS injection — only these named variables.
  */
 
+import type { InstalledSwobLensPackage, SwobLensShareTemplateDeclaration } from '../../../../shared/swoblens-manifest'
+
 export interface ShareTheme {
-  id: 'light' | 'dark' | 'minimal'
+  id: string
   label: string
+  layout?: SwobLensShareTemplateDeclaration['layout']
+  watermark?: string
   vars: {
     bg: string
     cardBg: string
@@ -21,7 +25,7 @@ export interface ShareTheme {
   }
 }
 
-export const SHARE_THEMES: readonly ShareTheme[] = [
+const BUILTIN_SHARE_THEMES: readonly ShareTheme[] = [
   {
     id: 'light',
     label: 'Light',
@@ -71,6 +75,40 @@ export const SHARE_THEMES: readonly ShareTheme[] = [
     },
   },
 ] as const
+
+export const SHARE_THEMES: ShareTheme[] = [...BUILTIN_SHARE_THEMES]
+
+function colorReference(value: string): string {
+  return `var(--color-${value})`
+}
+
+export function replaceDeclarativeShareThemes(
+  packages: readonly InstalledSwobLensPackage[],
+  locale: 'zh-CN' | 'en'
+): void {
+  const external = packages
+    .filter((item): item is InstalledSwobLensPackage & { declaration: SwobLensShareTemplateDeclaration } =>
+      item.enabled && item.manifest.type === 'share-template')
+    .map((item): ShareTheme => ({
+      id: `swoblens:${item.manifest.id}`,
+      label: item.declaration.label[locale],
+      layout: item.declaration.layout,
+      watermark: item.declaration.watermark,
+      vars: {
+        bg: colorReference(item.declaration.colors.bg),
+        cardBg: colorReference(item.declaration.colors.cardBg),
+        text: colorReference(item.declaration.colors.text),
+        textSecondary: colorReference(item.declaration.colors.textSecondary),
+        textMuted: colorReference(item.declaration.colors.textMuted),
+        userAccent: colorReference(item.declaration.colors.userAccent),
+        assistantAccent: colorReference(item.declaration.colors.assistantAccent),
+        border: colorReference(item.declaration.colors.border),
+        watermark: colorReference(item.declaration.colors.textMuted),
+        roleBg: colorReference(item.declaration.colors.cardBg)
+      }
+    }))
+  SHARE_THEMES.splice(0, SHARE_THEMES.length, ...BUILTIN_SHARE_THEMES, ...external)
+}
 
 export function getThemeById(id: string): ShareTheme {
   return SHARE_THEMES.find((t) => t.id === id) ?? SHARE_THEMES[0]

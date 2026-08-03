@@ -3,7 +3,8 @@ import {
   BUILTIN_LENSES,
   getEnabledLenses,
   isLensEnabled,
-  lensIdsForScene
+  lensIdsForScene,
+  preferencesForLensPreset
 } from './lens-registry'
 
 describe('lens-registry', () => {
@@ -113,6 +114,21 @@ describe('lens-registry', () => {
     it('returns all lenses for "both"', () => {
       const ids = lensIdsForScene('both')
       expect(ids).toHaveLength(7)
+    })
+  })
+
+  describe('preferencesForLensPreset', () => {
+    it('projects a validated preset into existing preference fields', () => {
+      expect(preferencesForLensPreset({
+        schemaVersion: 1,
+        label: { 'zh-CN': '研究', en: 'Research' },
+        enabledLenses: ['highlights', 'share-templates'],
+        order: ['share-templates', 'highlights', 'image-index', 'outputs', 'token-insights', 'galaxy', 'audit'],
+        sceneTags: ['knowledge']
+      })).toEqual({
+        enabledLenses: ['highlights', 'share-templates'],
+        lensOrder: ['share-templates', 'highlights', 'image-index', 'outputs', 'token-insights', 'galaxy', 'audit']
+      })
     })
   })
 })

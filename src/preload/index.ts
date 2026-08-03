@@ -18,6 +18,14 @@ import type {
   UserIdentityInput
 } from '../shared/frontend-ipc-contract'
 import type { DashboardLayoutConfig } from '../shared/registry/builtin-widgets'
+import {
+  SWOBLENS_THEME_TOKEN_KEYS,
+  type SwobLensThemeDeclaration,
+  type InstalledSwobLensPackage,
+  type SwobLensIpcResult,
+  type SwobLensPackageList,
+  type SwobLensPackagePreview
+} from '../shared/swoblens-manifest'
 import type {
   CompensationProgress,
   LibraryHealthSnapshot,
@@ -326,6 +334,13 @@ const api = {
   profileSetHarnessIconOverride: (input: HarnessIconOverrideInput) => ipcRenderer.invoke('profile:setHarnessIconOverride', input) as Promise<FrontendIpcResult<HarnessIconOverride>>,
   shareSavePng: (base64: string, suggestedName: string) => ipcRenderer.invoke('share:savePng', base64, suggestedName) as Promise<FrontendIpcResult<ShareSavePngResult>>,
   shareCopyPngToClipboard: (base64: string) => ipcRenderer.invoke('share:copyPngToClipboard', base64) as Promise<FrontendIpcResult<ShareCopyPngResult>>,
+  swobLensSelectAndPreview: () => ipcRenderer.invoke('swoblens:selectAndPreview') as Promise<SwobLensIpcResult<SwobLensPackagePreview | null>>,
+  swobLensList: () => ipcRenderer.invoke('swoblens:list') as Promise<SwobLensIpcResult<SwobLensPackageList>>,
+  swobLensInstall: (input: { sourcePath: string; digest: string }) =>
+    ipcRenderer.invoke('swoblens:install', input) as Promise<SwobLensIpcResult<InstalledSwobLensPackage>>,
+  swobLensSetEnabled: (input: { id: string; enabled: boolean }) =>
+    ipcRenderer.invoke('swoblens:setEnabled', input) as Promise<SwobLensIpcResult<InstalledSwobLensPackage>>,
+  swobLensUninstall: (id: string) => ipcRenderer.invoke('swoblens:uninstall', id) as Promise<SwobLensIpcResult<null>>,
   onSpotlightNavigate: (callback: (sessionId: string) => void) => {
     ipcRenderer.on('spotlight:navigate', (_event, sessionId) => callback(sessionId))
   },
@@ -397,3 +412,28 @@ export type ResumeActionResult = {
 }
 
 contextBridge.exposeInMainWorld('api', api)
+
+// Apply only main-process-validated theme tokens. No package bytes, CSS, or
+// executable content cross into the renderer.
+void ipcRenderer.invoke('swoblens:list').then((result: SwobLensIpcResult<SwobLensPackageList>) => {
+  if (!result.ok) return
+  const active = result.value.packages.find((item) => item.enabled && item.manifest.type === 'theme')
+  if (!active) return
+  const declaration = active.declaration as SwobLensThemeDeclaration
+  const apply = () => {
+    for (const token of SWOBLENS_THEME_TOKEN_KEYS) document.documentElement.style.removeProperty(`--color-${token}`)
+    const mode = document.documentElement.dataset.theme || 'dark'
+    if (declaration.mode !== 'both' && declaration.mode !== mode) return
+    for (const [token, value] of Object.entries(declaration.tokens)) {
+      document.documentElement.style.setProperty(`--color-${token}`, value)
+    }
+  }
+  const start = () => {
+    apply()
+    const observer = new MutationObserver(apply)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    window.addEventListener('unload', () => observer.disconnect(), { once: true })
+  }
+  if (document.documentElement) start()
+  else window.addEventListener('DOMContentLoaded', start, { once: true })
+}).catch(() => undefined)

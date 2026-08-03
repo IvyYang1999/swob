@@ -8,6 +8,8 @@
  * Theme preview is handled by tF22 (separate worktree).
  */
 
+import type { SwobLensPresetDeclaration } from './swoblens-manifest'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -177,4 +179,15 @@ export function lensIdsForScene(scene: 'knowledge' | 'developer' | 'both'): stri
   return BUILTIN_LENSES
     .filter((l) => l.sceneTags.some((t) => tags.includes(t)))
     .map((l) => l.id)
+}
+
+/** Convert a main-process-validated declarative preset into persisted Lens preferences. */
+export function preferencesForLensPreset(
+  preset: SwobLensPresetDeclaration
+): { enabledLenses: string[]; lensOrder: string[] } {
+  const known = new Set(BUILTIN_LENSES.map((lens) => lens.id))
+  return {
+    enabledLenses: preset.enabledLenses.filter((id) => known.has(id)),
+    lensOrder: preset.order.filter((id) => known.has(id))
+  }
 }

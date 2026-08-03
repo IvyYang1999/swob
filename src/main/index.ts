@@ -190,6 +190,8 @@ import { addSessionCoverage, collectSessionCoverage } from './session-coverage'
 import { toRendererSessionDetail, toRendererSessionDetailLoadResult } from './renderer-session-detail'
 import { assertPathWithinAllowedRoots, resolvePathWithinRoot } from './path-containment'
 import { onboardingBackupSizeEstimator } from './onboarding-backup-size'
+import { registerSwobLensIpc } from './swoblens-ipc'
+import { recoverSwobLensTransactions } from './swoblens-installer'
 import {
   getLlmSettingsForDisplay,
   getLlmSettingsWithSecret,
@@ -3740,6 +3742,21 @@ app.whenReady().then(async () => {
   onCompensationUpdate((progress) => {
     try { mainWindow?.webContents.send('library:compensationUpdate', progress) } catch { /* window closing */ }
     try { mainWindow?.webContents.send('library:healthChanged', getLibraryHealth()) } catch { /* window closing */ }
+  })
+
+  try {
+    await withLibraryMaintenanceWriter(() => recoverSwobLensTransactions(getLibraryRoot()))
+  } catch (error) {
+    console.error('[swoblens] Interrupted package transaction recovery failed:',
+      error instanceof Error ? error.message : 'unknown error')
+  }
+
+  registerSwobLensIpc({
+    ipcMain,
+    getLibraryRoot,
+    getAppVersion: () => app.getVersion(),
+    withLibraryWriter: withLibraryMaintenanceWriter,
+    showOpenDialog: (options) => dialog.showOpenDialog(options)
   })
 
   createWindow()

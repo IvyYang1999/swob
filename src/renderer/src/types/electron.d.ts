@@ -17,6 +17,12 @@ import type {
 } from '../../../shared/frontend-ipc-contract'
 import type { DashboardLayoutConfig } from '../../../shared/registry/builtin-widgets'
 import type {
+  InstalledSwobLensPackage,
+  SwobLensIpcResult,
+  SwobLensPackageList,
+  SwobLensPackagePreview
+} from '../../../shared/swoblens-manifest'
+import type {
   CompensationProgress,
   LibraryHealthSnapshot,
   SessionFreshness
@@ -311,6 +317,11 @@ interface ElectronAPI {
   profileSetHarnessIconOverride: (input: HarnessIconOverrideInput) => Promise<FrontendIpcResult<HarnessIconOverride>>
   shareSavePng: (base64: string, suggestedName: string) => Promise<FrontendIpcResult<ShareSavePngResult>>
   shareCopyPngToClipboard: (base64: string) => Promise<FrontendIpcResult<ShareCopyPngResult>>
+  swobLensSelectAndPreview: () => Promise<SwobLensIpcResult<SwobLensPackagePreview | null>>
+  swobLensList: () => Promise<SwobLensIpcResult<SwobLensPackageList>>
+  swobLensInstall: (input: { sourcePath: string; digest: string }) => Promise<SwobLensIpcResult<InstalledSwobLensPackage>>
+  swobLensSetEnabled: (input: { id: string; enabled: boolean }) => Promise<SwobLensIpcResult<InstalledSwobLensPackage>>
+  swobLensUninstall: (id: string) => Promise<SwobLensIpcResult<null>>
   onSpotlightNavigate: (callback: (sessionId: string) => void) => void
 
   // Auto Update

@@ -96,7 +96,8 @@ const api = {
   // Config
   getSystemLocale: () => ipcRenderer.invoke('app:getSystemLocale'),
   loadConfig: () => ipcRenderer.invoke('config:load'),
-  saveConfig: (config: unknown) => ipcRenderer.invoke('config:save', config),
+  saveConfig: (config: unknown, preferencePatch?: Record<string, unknown>) =>
+    ipcRenderer.invoke('config:save', config, preferencePatch),
   createFolder: (opts: { name: string; color?: string | null; parentId?: string | null }) =>
     ipcRenderer.invoke('config:createFolder', opts),
   moveFolder: (folderId: string, newParentId: string | null, position?: string, targetId?: string) =>

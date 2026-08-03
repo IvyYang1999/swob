@@ -63,7 +63,7 @@ describe('renderer preference persistence', () => {
     const schemeSave = useStore.getState().savePreferences({ colorScheme: 'nord' })
     expect(saveConfig).toHaveBeenNthCalledWith(2, expect.objectContaining({
       preferences: expect.objectContaining({ themeMode: 'dark', colorScheme: 'nord' })
-    }))
+    }), { colorScheme: 'nord' })
 
     resolveFirstSave(undefined)
     await Promise.all([themeSave, schemeSave])

@@ -3,17 +3,21 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { CLI_COMMANDS, CLI_VERSION } from './command-registry'
 
 const packagedApp = process.env.SWOB_PACKAGED_APP
 const describePackaged = packagedApp ? describe.sequential : describe.skip
 const SESSION_A = '92000000-0000-4000-8000-000000000117'
 const SESSION_B = '93000000-0000-4000-8000-000000000117'
+const CLI_INVOCATION_TIMEOUT_MS = 5_000
+const COMMAND_TEST_TIMEOUT_MS = 10_000
 
 interface Invocation {
   code: number
   stdout: string
   stderr: string
+  durationMs: number
 }
 
 let sandboxRoot = ''
@@ -107,16 +111,18 @@ function minimalInheritedEnvironment(): NodeJS.ProcessEnv {
   return inherited
 }
 
-function invokeRaw(executable: string, args: string[], stdin = ''): Invocation {
+function invokeRaw(executable: string, args: string[], stdin = '', timeout = CLI_INVOCATION_TIMEOUT_MS): Invocation {
+  const startedAt = performance.now()
   const result = spawnSync(executable, args, {
     encoding: 'utf8',
     env: commandEnvironment,
     input: stdin,
     maxBuffer: 16 * 1024 * 1024,
-    timeout: 60_000
+    timeout
   })
+  const durationMs = performance.now() - startedAt
   if (result.error) throw result.error
-  return { code: result.status ?? 1, stdout: result.stdout || '', stderr: result.stderr || '' }
+  return { code: result.status ?? 1, stdout: result.stdout || '', stderr: result.stderr || '', durationMs }
 }
 
 function invokeBootstrap(args: string[], stdin = ''): Invocation {
@@ -125,7 +131,9 @@ function invokeBootstrap(args: string[], stdin = ''): Invocation {
 
 function invokeInstalled(usage: string, args: string[], stdin = ''): Invocation {
   exercised.add(usage)
-  return invokeRaw(installedCommand, args, stdin)
+  const invocation = invokeRaw(installedCommand, args, stdin)
+  process.stderr.write(`[packaged-cli timing] ${usage}: ${invocation.durationMs.toFixed(1)}ms\n`)
+  return invocation
 }
 
 function parseSuccess(invocation: Invocation): any {
@@ -218,7 +226,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
 
     const reinstalled = parseSuccess(invokeInstalled('install', ['install', '--json']))
     expect(reinstalled.cliPath).toBe(installedCommand)
-  })
+  }, COMMAND_TEST_TIMEOUT_MS)
 
   it('honors the packaged machine interface and read/search/detail commands', () => {
     expect(parseSuccess(invokeRaw(installedCommand, ['--version', '--json']))).toMatchObject({ name: 'swob', version: CLI_VERSION })
@@ -254,7 +262,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     ))
     expect(grep).toMatchObject({ sessionCount: 1, matchCount: 1, sessions: [{ sessionId: SESSION_A }] })
     expect(grep.sessions[0].matches[0].context).toHaveLength(3)
-  })
+  }, COMMAND_TEST_TIMEOUT_MS)
 
   it('resolves lineage and exercises resume surfaces through the installed command', async () => {
     const manifestOnly = parseSuccess(invokeInstalled(
@@ -322,7 +330,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     expect(active.activeSessionIds).toContain(SESSION_A)
     childProcess.kill('SIGTERM')
     childProcess = null
-  })
+  }, COMMAND_TEST_TIMEOUT_MS)
 
   it('creates, renames and deletes nested folders', () => {
     const parent = parseSuccess(invokeInstalled('folder create <name> [--parent ID]', ['folder', 'create', 'Parent', '--json']))
@@ -341,7 +349,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     parseSuccess(invokeInstalled('folder delete <id>', ['folder', 'delete', renamed.folderId, '--json']))
     parseSuccess(invokeInstalled('folder delete <id>', ['folder', 'delete', parent.folder.id, '--json']))
     expect(fs.existsSync(path.join(libraryRoot, parent.folder.id))).toBe(false)
-  })
+  }, COMMAND_TEST_TIMEOUT_MS)
 
   it('runs single and batch organization transactions with complete undo', () => {
     const target = parseSuccess(invokeInstalled('folder create <name> [--parent ID]', ['folder', 'create', 'Target', '--json']))
@@ -378,7 +386,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
       ['grep', 'packaged', '--folder', targetId, '--json']
     ))
     expect(folderGrep.sessionCount).toBe(0)
-  })
+  }, COMMAND_TEST_TIMEOUT_MS)
 
   it('persists config and executes analytics/transcript/redaction maintenance', () => {
     expect(parseSuccess(invokeInstalled('config set <key> <value>', ['config', 'set', 'terminalApp', 'iTerm2', '--json']))).toMatchObject({ terminalApp: 'iTerm2' })
@@ -402,7 +410,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
 
     const redacted = parseSuccess(invokeInstalled('redact [--dry-run]', ['redact', '--json']))
     expect(redacted).toMatchObject({ files: expect.any(Number), hits: expect.any(Number) })
-  })
+  }, COMMAND_TEST_TIMEOUT_MS)
 
   it('covers every command definition through the real installed wrapper', () => {
     expect([...exercised].sort()).toEqual(CLI_COMMANDS.map((command) => command.usage).sort())

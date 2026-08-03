@@ -801,6 +801,16 @@ let _cachedLibraryConfig: LibraryConfig | null = null
 let _cachedLibraryConfigRoot: string = ''
 let _configSaveQueue: Promise<void> = Promise.resolve()
 
+async function enqueueLibraryConfigWrite<T>(operation: () => Promise<T>): Promise<T> {
+  // Keep root switching blocked from enqueue until completion. withLibraryWriter
+  // adds its own active depth while the queued operation owns the lease.
+  _localWriterDepth++
+  const pending = _configSaveQueue.then(operation)
+  const completed = pending.finally(() => { _localWriterDepth-- })
+  _configSaveQueue = completed.then(() => undefined, () => undefined)
+  return completed
+}
+
 export function loadLibraryConfig(): LibraryConfig {
   if (_cachedLibraryConfig && _cachedLibraryConfigRoot === _root) return _cachedLibraryConfig
   const configPath = path.join(_root, LIBRARY_CONFIG_FILE)
@@ -832,13 +842,31 @@ export async function saveLibraryConfigAsync(config: LibraryConfig): Promise<voi
   // The filesystem lease coordinates processes but does not promise FIFO to
   // several waiters in this process. Preserve IPC arrival order explicitly so
   // a slower, older preferences snapshot can never overwrite a newer one.
-  _localWriterDepth++
-  const pending = _configSaveQueue.then(() =>
+  await enqueueLibraryConfigWrite(() =>
     withLibraryWriter('config', () => saveLibraryConfigUnderWriter(config))
   )
-  const completed = pending.finally(() => { _localWriterDepth-- })
-  _configSaveQueue = completed.catch(() => undefined)
-  await completed
+}
+
+/**
+ * Update preferences from the latest durable config while holding the writer
+ * lease. The updater receives a fresh copy so a queued renderer save cannot
+ * replace fields committed by an earlier local or external writer.
+ */
+export async function updateLibraryPreferencesAsync(
+  update: (current: Record<string, unknown>) => Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  return enqueueLibraryConfigWrite(() => withLibraryWriter('config', () => {
+    // A different process may have committed while this request waited for the
+    // lease. Never base a merge on the pre-wait in-memory snapshot.
+    invalidateLibraryConfigCache()
+    const current = loadLibraryConfig()
+    const preferences = update({ ...(current.preferences as unknown as Record<string, unknown>) })
+    saveLibraryConfigUnderWriter({
+      ...current,
+      preferences: preferences as unknown as LibraryConfig['preferences']
+    })
+    return preferences
+  }))
 }
 
 function saveLibraryConfigUnderWriter(config: LibraryConfig): void {

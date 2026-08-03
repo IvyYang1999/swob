@@ -48,7 +48,7 @@ import {
   libraryTreeToConfig,
   loadLibraryConfig,
   saveLibraryConfig,
-  saveLibraryConfigAsync,
+  updateLibraryPreferencesAsync,
   ensureSessionInLibrary,
   updateTranscript,
   syncBackup,
@@ -109,6 +109,7 @@ import {
   type LibraryTree,
   type LibrarySyncOutcome
 } from './library-manager'
+import { mergeSettingsPreferencePatch, resolveRendererConfig } from './settings-config'
 import {
   getLibraryHealth,
   transitionLibraryHealth,
@@ -2711,13 +2712,15 @@ ipcMain.handle('session:getContextInspector', async (_event, filePath: string) =
 // These use the library manager but return the same shape the frontend expects
 
 ipcMain.handle('config:load', () => {
-  let config
-  if (!shouldReadLibraryConfig() || !latestLibraryTree) {
-    // Fallback to old config during initial load
-    config = loadConfig()
-  } else {
-    config = libraryTreeToConfig(latestLibraryTree)
-  }
+  const appConfig = loadConfig()
+  const readsLibrary = shouldReadLibraryConfig()
+  const libraryPreferences = readsLibrary
+    ? loadLibraryConfig().preferences as unknown as Record<string, unknown>
+    : undefined
+  const hydratedLibraryConfig = readsLibrary && latestLibraryTree
+    ? libraryTreeToConfig(latestLibraryTree)
+    : undefined
+  const config = resolveRendererConfig(appConfig, libraryPreferences, hydratedLibraryConfig)
   return { ...config, preferences: migrateSettingsPreferences(config.preferences as unknown as Record<string, unknown>) }
 })
 
@@ -2725,20 +2728,26 @@ ipcMain.handle('app:getSystemLocale', () => resolveSystemLocale(
   preferredSystemLanguagesForRuntime(app.getPreferredSystemLanguages())
 ))
 
-ipcMain.handle('config:save', async (_event, config: { preferences: Record<string, unknown> }) => {
-  const migratedPreferences = migrateSettingsPreferences(config.preferences)
-  const migratedConfig = { ...config, preferences: migratedPreferences }
+ipcMain.handle('config:save', async (
+  _event,
+  config: { preferences: Record<string, unknown> },
+  preferencePatch?: Record<string, unknown>
+) => {
+  const patch = preferencePatch || config.preferences
+  let migratedPreferences: Record<string, unknown>
   if (shouldReadLibraryConfig()) {
-    const libConfig = loadLibraryConfig()
-    // Do not mutate the cached config before the write lease is acquired: if
-    // acquisition fails, memory and disk must continue to describe one state.
-    await saveLibraryConfigAsync({
-      ...libConfig,
-      preferences: migratedPreferences as any
-    })
+    migratedPreferences = await updateLibraryPreferencesAsync((current) =>
+      mergeSettingsPreferencePatch(current, patch)
+    )
   } else {
+    migratedPreferences = mergeSettingsPreferencePatch(
+      loadConfig().preferences as unknown as Record<string, unknown>,
+      patch
+    )
+    const migratedConfig = { ...config, preferences: migratedPreferences }
     saveConfig(migratedConfig as any)
   }
+  const migratedConfig = { ...config, preferences: migratedPreferences }
   autoUpdater.allowPrerelease = migratedPreferences.updateChannel === 'development'
   // If spotlight shortcut changed, re-register it
   const shortcut = (migratedPreferences.spotlightShortcut as string) || DEFAULT_SPOTLIGHT_SHORTCUT

@@ -54,7 +54,7 @@ test('五页仪表盘可达且带范围标签与口径切换', async () => {
   await page.getByRole('tab', { name: /会话与效率|Sessions/ }).click()
   await expect(page.getByText(/会话排名|Session ranking/)).toBeVisible()
   await expect(page.getByText(/P95/)).toBeVisible()
-  await expect(page.getByText(/会话开始时刻分布/)).toBeVisible()
+  await expect(page.getByText(/每小时 Token 活动|Hourly Token Activity/)).toBeVisible()
   await page.screenshot({ path: path.join(screenshotDir, '3-sessions.png') })
 
   // Workflow

@@ -131,18 +131,22 @@ function buildCardHtml(options: ShareRenderOptions): string {
 
   const watermarkHtml = showWatermark
     ? `<div style="text-align:right;padding-top:16px;border-top:1px solid ${theme.vars.border};margin-top:8px;">
-         <span style="font-size:11px;color:${theme.vars.watermark};font-style:italic;">via Swob</span>
+         <span style="font-size:11px;color:${theme.vars.watermark};font-style:italic;">${escapeHtml(theme.watermark || 'via Swob')}</span>
        </div>`
     : ''
+
+  const layout = theme.layout || 'conversation'
+  const padding = layout === 'compact' ? 22 : layout === 'poster' ? 44 : CARD_PADDING
+  const radius = layout === 'poster' ? 20 : 12
 
   return `
     <div xmlns="http://www.w3.org/1999/xhtml" style="
       width:${CARD_WIDTH}px;
-      padding:${CARD_PADDING}px;
+      padding:${padding}px;
       background:${theme.vars.bg};
       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
       box-sizing:border-box;
-      border-radius:12px;
+      border-radius:${radius}px;
     ">
       ${messagesHtml}
       ${watermarkHtml}

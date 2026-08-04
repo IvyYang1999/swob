@@ -15,7 +15,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { X, Copy, Download, Check, AlertTriangle, Image } from 'lucide-react'
 import { useT } from '../../i18n'
-import { SHARE_THEMES, getThemeById } from './share-themes'
+import { SHARE_THEMES, getThemeById, replaceDeclarativeShareThemes } from './share-themes'
 import type { ShareTheme } from './share-themes'
 import { DEFAULT_PRIVACY, detectSecrets } from './privacy-utils'
 import type { PrivacyOptions } from './privacy-utils'
@@ -35,7 +35,22 @@ export function SharePreview({ messages, sessionSource, userDisplayName, onClose
 
   // Theme state
   const [themeId, setThemeId] = useState<ShareTheme['id']>('light')
-  const theme = useMemo(() => getThemeById(themeId), [themeId])
+  const [packageThemeRevision, setPackageThemeRevision] = useState(0)
+  const theme = useMemo(() => getThemeById(themeId), [themeId, packageThemeRevision])
+
+  useEffect(() => {
+    if (typeof window.api.swobLensList !== 'function') return
+    let active = true
+    void window.api.swobLensList().then((result) => {
+      if (!active || !result.ok) return
+      replaceDeclarativeShareThemes(
+        result.value.packages,
+        document.documentElement.lang === 'zh-CN' ? 'zh-CN' : 'en'
+      )
+      setPackageThemeRevision((current) => current + 1)
+    })
+    return () => { active = false }
+  }, [])
 
   // Watermark state (default ON)
   const [showWatermark, setShowWatermark] = useState(true)

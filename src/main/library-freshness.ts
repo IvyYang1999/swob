@@ -1,7 +1,7 @@
 /** Pure, stat-only Library freshness calculation shared by main and CLI. */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { SessionFreshness } from '../shared/library-health-contract'
+import type { SessionFreshness, UnverifiableReason } from '../shared/library-health-contract'
 
 export const DEFAULT_STALE_THRESHOLD_MS = 60_000
 export const ERROR_LAG_THRESHOLD_MS = 5 * 60_000
@@ -11,6 +11,32 @@ export interface FreshnessOptions {
   canonicalRecordsFile?: string | null
   now?: () => number
   thresholdMs?: number
+  unverifiableReason?: UnverifiableReason
+}
+
+function sourceStatPath(sourcePath: string): string {
+  if (fs.existsSync(sourcePath)) return sourcePath
+  const virtualSeparator = sourcePath.indexOf('#')
+  return virtualSeparator > 0 ? sourcePath.slice(0, virtualSeparator) : sourcePath
+}
+
+function hasICloudPlaceholder(sourcePath: string): boolean {
+  const physicalPath = sourceStatPath(sourcePath)
+  return fs.existsSync(`${physicalPath}.icloud`) ||
+    fs.existsSync(path.join(path.dirname(physicalPath), `.${path.basename(physicalPath)}.icloud`))
+}
+
+export function classifyUnverifiableReason(
+  sourceFilePaths: readonly string[],
+  options: { remote?: boolean; corruptManifest?: boolean } = {}
+): UnverifiableReason {
+  if (options.corruptManifest) return 'corrupt-manifest'
+  if (sourceFilePaths.some(hasICloudPlaceholder)) return 'icloud-placeholder'
+  if (options.remote) return 'remote-session'
+  if (sourceFilePaths.length === 0 || sourceFilePaths.every((sourcePath) => !fs.existsSync(sourceStatPath(sourcePath)))) {
+    return 'missing-source'
+  }
+  return 'other'
 }
 
 /**
@@ -61,10 +87,7 @@ export function computeSessionFreshness(
   let sourceMs = 0
   for (const srcPath of sourceFilePaths) {
     try {
-      const virtualSeparator = srcPath.indexOf('#')
-      const statPath = fs.existsSync(srcPath) || virtualSeparator <= 0
-        ? srcPath
-        : srcPath.slice(0, virtualSeparator)
+      const statPath = sourceStatPath(srcPath)
       const stat = fs.statSync(statPath)
       if (stat.mtimeMs > sourceMs) {
         sourceMs = stat.mtimeMs
@@ -135,7 +158,10 @@ export function computeSessionFreshness(
       ? 'error'
       : stale
         ? 'warning'
-        : 'ok'
+      : 'ok'
+  const unverifiableReason = status === 'unverifiable'
+    ? options.unverifiableReason || classifyUnverifiableReason(sourceFilePaths)
+    : null
 
   return {
     schemaVersion: 1,
@@ -151,7 +177,8 @@ export function computeSessionFreshness(
     requiredArtifacts,
     lagMs,
     thresholdMs,
-    reasons
+    reasons,
+    unverifiableReason
   }
 }
 

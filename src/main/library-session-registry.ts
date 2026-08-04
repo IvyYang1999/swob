@@ -1,9 +1,93 @@
+import * as path from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   buildLogicalSessionIdentityFromMeta,
   logicalSessionKey,
   type LogicalSessionIdentity,
   type LogicalSessionKey
 } from './library-session-identity'
+import type { IdentityExceptionEvidence, IdentityExceptionsState } from '../shared/library-health-contract'
+
+type AuthorizedIdentityException = IdentityExceptionEvidence
+
+export interface LibraryIdentityHealthSummary {
+  state: IdentityExceptionsState
+  authorizedGroupCount: number
+  authorizedPackageCount: number
+  unknownGroupCount: number
+  unknownPackageCount: number
+  evidenceMismatchGroupCount: number
+  records: IdentityExceptionEvidence[]
+}
+
+/**
+ * Immutable, privacy-preserving evidence for the three t189 recovery groups.
+ * Neither logical session IDs nor paths are stored. Matching requires the
+ * logical key, the exact physical package count, and a fingerprint of every
+ * read-only package observed in the authorized recovery state.
+ */
+const AUTHORIZED_IDENTITY_EXCEPTIONS: readonly AuthorizedIdentityException[] = [
+  {
+    schemaVersion: 1,
+    exceptionId: 't189-89fdb99eb0159be7',
+    logicalKeyHash: '89fdb99eb0159be7f1465e63f83e79f76101241f53757cbe256a72e72ba466de',
+    evidenceHash: '0ba576e611c2c4288aa77087a49f0323a32a71cbcda637cb4a6de658360f6773',
+    physicalPackageCount: 11,
+    access: 'read-only',
+    authorizationSource: 'docs/reports/t189-recovery/README.md',
+    authorizationDecision: 't189-user-authorized-historical-identity-preservation',
+    authorizedAt: '2026-08-02T00:00:00.000+08:00'
+  },
+  {
+    schemaVersion: 1,
+    exceptionId: 't189-1f227fe559cb3369',
+    logicalKeyHash: '1f227fe559cb3369e65590eebb1a946b600dc32a0085614bbbcd7a8c18928579',
+    evidenceHash: '801a705d6b224325095cd3953cb29e7c041e26a058839ab5bf67000ce0dd8add',
+    physicalPackageCount: 11,
+    access: 'read-only',
+    authorizationSource: 'docs/reports/t189-recovery/README.md',
+    authorizationDecision: 't189-user-authorized-historical-identity-preservation',
+    authorizedAt: '2026-08-02T00:00:00.000+08:00'
+  },
+  {
+    schemaVersion: 1,
+    exceptionId: 't189-df6e4ff3586fd5c7',
+    logicalKeyHash: 'df6e4ff3586fd5c72a8f7713cd7397ed61d143fe1b5c8118e7d60a4b9615613f',
+    evidenceHash: 'f71feff79e7df027eb163abbfdfd27063216bbd014147e80be5508a72c195247',
+    physicalPackageCount: 12,
+    access: 'read-only',
+    authorizationSource: 'docs/reports/t189-recovery/README.md',
+    authorizationDecision: 't189-user-authorized-historical-identity-preservation',
+    authorizedAt: '2026-08-02T00:00:00.000+08:00'
+  }
+] as const
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function physicalEvidenceHash(candidates: readonly LibrarySessionCandidate[]): string {
+  const tokens = candidates.map((candidate) => sha256(JSON.stringify({
+    directoryName: path.basename(candidate.dirPath).normalize('NFC'),
+    packageId: candidate.packageId ?? null,
+    schemaVersion: candidate.schemaVersion ?? null,
+    updatedAt: candidate.updatedAt
+  }))).sort()
+  return sha256(tokens.join('\0'))
+}
+
+function exceptionForConflict(
+  logicalKey: LogicalSessionKey,
+  candidates: readonly LibrarySessionCandidate[]
+): { status: 'authorized' | 'unknown' | 'evidence-mismatch'; record: IdentityExceptionEvidence | null } {
+  const logicalKeyHash = sha256(logicalKey)
+  const expected = AUTHORIZED_IDENTITY_EXCEPTIONS.find((record) => record.logicalKeyHash === logicalKeyHash)
+  if (!expected) return { status: 'unknown', record: null }
+  const evidenceMatches = candidates.length === expected.physicalPackageCount &&
+    physicalEvidenceHash(candidates) === expected.evidenceHash
+  if (!evidenceMatches) return { status: 'evidence-mismatch', record: null }
+  return { status: 'authorized', record: structuredClone(expected) }
+}
 
 export interface LibrarySessionCandidate {
   logicalKey: LogicalSessionKey
@@ -31,6 +115,8 @@ export type LibrarySessionBinding =
       logicalKey: LogicalSessionKey
       reason: 'duplicate-packages' | 'package-id-collision' | 'symlink-only'
       candidates: LibrarySessionCandidate[]
+      exceptionStatus: 'authorized' | 'unknown' | 'evidence-mismatch'
+      exception: IdentityExceptionEvidence | null
     }
 
 export type SessionIdResolution =
@@ -43,7 +129,14 @@ export type SessionIdResolution =
     }
   | { state: 'bound'; sessionId: string; logicalKey: LogicalSessionKey; candidate: LibrarySessionCandidate }
   | { state: 'ambiguous'; sessionId: string; logicalKeys: LogicalSessionKey[]; candidates: LibrarySessionCandidate[] }
-  | { state: 'conflict'; sessionId: string; logicalKey: LogicalSessionKey; candidates: LibrarySessionCandidate[] }
+  | {
+      state: 'conflict'
+      sessionId: string
+      logicalKey: LogicalSessionKey
+      candidates: LibrarySessionCandidate[]
+      exceptionStatus: 'authorized' | 'unknown' | 'evidence-mismatch'
+      exception: IdentityExceptionEvidence | null
+    }
 
 function candidateSort(a: LibrarySessionCandidate, b: LibrarySessionCandidate): number {
   return a.dirPath.localeCompare(b.dirPath)
@@ -129,18 +222,37 @@ export class LibrarySessionRegistry {
       let binding: LibrarySessionBinding
       const packageCollision = packageCollisions.get(key)
       if (packageCollision) {
+        const exception = exceptionForConflict(key, packageCollision)
         binding = {
           state: 'conflict',
           logicalKey: key,
           reason: 'package-id-collision',
-          candidates: packageCollision
+          candidates: packageCollision,
+          exceptionStatus: exception.status,
+          exception: exception.record
         }
       } else if (physical.length === 1) {
         binding = { state: 'bound', logicalKey: key, candidate: physical[0], candidates: [physical[0]] }
       } else if (physical.length > 1) {
-        binding = { state: 'conflict', logicalKey: key, reason: 'duplicate-packages', candidates: physical }
+        const exception = exceptionForConflict(key, physical)
+        binding = {
+          state: 'conflict',
+          logicalKey: key,
+          reason: 'duplicate-packages',
+          candidates: physical,
+          exceptionStatus: exception.status,
+          exception: exception.record
+        }
       } else {
-        binding = { state: 'conflict', logicalKey: key, reason: 'symlink-only', candidates: deduplicated }
+        const exception = exceptionForConflict(key, deduplicated)
+        binding = {
+          state: 'conflict',
+          logicalKey: key,
+          reason: 'symlink-only',
+          candidates: deduplicated,
+          exceptionStatus: exception.status,
+          exception: exception.record
+        }
       }
       nextBindings.set(key, binding)
     }
@@ -204,7 +316,14 @@ export class LibrarySessionRegistry {
       lastKnownCandidates: binding.lastKnownCandidates,
       reason: binding.reason
     }
-    return { state: 'conflict', sessionId, logicalKey: keys[0], candidates: binding.candidates }
+    return {
+      state: 'conflict',
+      sessionId,
+      logicalKey: keys[0],
+      candidates: binding.candidates,
+      exceptionStatus: binding.exceptionStatus,
+      exception: binding.exception
+    }
   }
 
   hasPackageId(packageId: string): boolean {
@@ -219,5 +338,31 @@ export class LibrarySessionRegistry {
     return [...this.bindings.values()]
       .filter((binding) => binding.state !== 'bound')
       .map((binding) => structuredClone(binding))
+  }
+}
+
+export function summarizeLibraryIdentityHealth(
+  bindings: readonly LibrarySessionBinding[]
+): LibraryIdentityHealthSummary {
+  const conflicts = bindings.filter(
+    (binding): binding is Extract<LibrarySessionBinding, { state: 'conflict' }> => binding.state === 'conflict'
+  )
+  const authorized = conflicts.filter((binding) => binding.exceptionStatus === 'authorized')
+  const mismatches = conflicts.filter((binding) => binding.exceptionStatus === 'evidence-mismatch')
+  const unknown = conflicts.filter((binding) => binding.exceptionStatus === 'unknown')
+  return {
+    state: mismatches.length > 0
+      ? 'evidence-mismatch'
+      : unknown.length > 0
+        ? 'unknown-conflicts'
+        : authorized.length > 0
+          ? 'authorized-read-only'
+          : 'none',
+    authorizedGroupCount: authorized.length,
+    authorizedPackageCount: authorized.reduce((total, binding) => total + binding.candidates.length, 0),
+    unknownGroupCount: unknown.length,
+    unknownPackageCount: unknown.reduce((total, binding) => total + binding.candidates.length, 0),
+    evidenceMismatchGroupCount: mismatches.length,
+    records: authorized.flatMap((binding) => binding.exception ? [structuredClone(binding.exception)] : [])
   }
 }

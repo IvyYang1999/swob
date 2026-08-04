@@ -1,20 +1,25 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { computeSessionFreshness } from '../main/library-freshness'
+import { createHash } from 'node:crypto'
+import { classifyUnverifiableReason, computeSessionFreshness } from '../main/library-freshness'
 import { inspectLibraryWriterLease } from '../main/library-writer-lease'
 import type {
   LibraryHealthSnapshot,
-  SessionFreshness
+  SessionFreshness,
+  UnverifiableReason
 } from '../shared/library-health-contract'
 import {
+  getLibrarySessionRegistryDiagnostics,
   getLibraryRoot,
   resolveSessionBinding,
+  resolveLibrarySessionRemoteState,
   scanLibrary,
   type LibraryFolder,
   type LibraryIdentityScanIssue,
   type LibrarySession,
   type LibraryTree
 } from '../main/library-manager'
+import { summarizeLibraryIdentityHealth } from '../main/library-session-registry'
 import { resolveSessionId, type ResolveSessionResult } from './resolve-command'
 
 const SESSION_MANIFEST = '.swob-session.json'
@@ -104,8 +109,32 @@ export interface LibraryDoctorSnapshot {
   staleCount: number
   unverifiableCount: number
   identityConflictCount: number
+  identityExceptionCount: number
+  identityExceptionPackageCount: number
+  unknownIdentityConflictCount: number
+  unknownIdentityConflictPackageCount: number
+  identityEvidenceMismatchCount: number
   scanComplete: boolean
   issueCounts: Record<string, number>
+  unverifiableBuckets: Record<UnverifiableReason, number>
+  unverifiableSessions: Array<{
+    sessionId: string
+    reason: UnverifiableReason
+    reasonCodes: readonly string[]
+  }>
+  identityConflicts: Array<{
+    logicalKeyHash: string
+    status: 'authorized' | 'unknown' | 'evidence-mismatch'
+    packageCount: number
+    reason: string
+    exceptionId: string | null
+  }>
+  dimensions: {
+    writerCapability: { state: 'available' | 'blocked' | 'read-only' | 'corrupt' }
+    activeSourceFreshness: { state: 'durable' | 'stale' | 'unverifiable' }
+    backgroundBacklog: { state: 'unobserved' }
+    identityExceptions: ReturnType<typeof summarizeLibraryIdentityHealth>
+  }
   writer: WriterLockStatus
 }
 
@@ -295,7 +324,10 @@ export function buildSessionLocation(
     path: sourcePath
   }))
   const base = computeSessionFreshness(session.sessionId, session.dirPath, session.meta.sourceFilePaths, {
-    canonicalRecordsFile: session.meta.canonicalProvider?.recordsFile
+    canonicalRecordsFile: session.meta.canonicalProvider?.recordsFile,
+    unverifiableReason: classifyUnverifiableReason(session.meta.sourceFilePaths, {
+      remote: resolveLibrarySessionRemoteState(session.meta).isRemote
+    })
   })
   const blockingReasons = freshnessReasons(base, transcript, backup, canonicalRecords, sources, writer)
   return {
@@ -321,16 +353,34 @@ function countIssueKinds(issues: readonly LibraryIdentityScanIssue[]): Record<st
   return counts
 }
 
+function emptyUnverifiableBuckets(): Record<UnverifiableReason, number> {
+  return {
+    'missing-source': 0,
+    'icloud-placeholder': 0,
+    'remote-session': 0,
+    'corrupt-manifest': 0,
+    other: 0
+  }
+}
+
 export function inspectLibrary(snapshot: LibraryControlSnapshot = readLibraryControlSnapshot()): LibraryDoctorSnapshot {
   const issues = snapshot.tree.identityIssues || []
-  const bindingsWithConflicts = snapshot.sessionIds.filter((sessionId) => {
-    const binding = resolveSessionBinding(sessionId)
-    return binding.state === 'conflict' || binding.state === 'ambiguous'
-  })
+  const conflictBindings = getLibrarySessionRegistryDiagnostics().filter(
+    (binding) => binding.state === 'conflict'
+  )
+  const identityHealth = summarizeLibraryIdentityHealth(conflictBindings)
   const writer = inspectWriterLock()
   const freshness = snapshot.sessions.map((session) => buildSessionLocation(session, writer).freshness)
   const staleCount = freshness.filter((entry) => entry.stale).length
   const unverifiableCount = freshness.filter((entry) => entry.status === 'unverifiable').length
+  const unverifiableBuckets = emptyUnverifiableBuckets()
+  const unverifiableSessions = freshness.flatMap((entry) => {
+    if (entry.status !== 'unverifiable') return []
+    const reason = entry.unverifiableReason || 'other'
+    unverifiableBuckets[reason]++
+    return [{ sessionId: entry.sessionId, reason, reasonCodes: entry.reasons }]
+  })
+  unverifiableBuckets['corrupt-manifest'] += issues.filter((issue) => issue.kind === 'corrupt-manifest').length
   let writable = true
   try {
     fs.accessSync(getLibraryRoot(), fs.constants.R_OK | fs.constants.W_OK)
@@ -341,7 +391,7 @@ export function inspectLibrary(snapshot: LibraryControlSnapshot = readLibraryCon
     ? 'corrupt'
     : issues.length > 0
       ? 'read-only'
-      : bindingsWithConflicts.length > 0
+      : conflictBindings.length > 0
         ? 'identity-conflict'
         : writer.state === 'blocked'
           ? 'writer-blocked'
@@ -353,6 +403,18 @@ export function inspectLibrary(snapshot: LibraryControlSnapshot = readLibraryCon
     : writeState === 'identity-conflict'
       ? 'partial'
       : 'none'
+  const writerDimension = writeState === 'corrupt'
+    ? 'corrupt'
+    : writeState === 'writer-blocked'
+      ? 'blocked'
+      : writeState === 'read-only'
+        ? 'read-only'
+        : 'available'
+  const freshnessDimension = staleCount > 0
+    ? 'stale'
+    : unverifiableCount > 0
+      ? 'unverifiable'
+      : 'durable'
   return {
     schemaVersion: 1,
     observation: 'instantaneous-filesystem',
@@ -363,9 +425,30 @@ export function inspectLibrary(snapshot: LibraryControlSnapshot = readLibraryCon
     manifestCount: snapshot.sessions.length,
     staleCount,
     unverifiableCount,
-    identityConflictCount: bindingsWithConflicts.length,
+    // Compatibility field: its established unit is logical conflict groups.
+    identityConflictCount: conflictBindings.length,
+    identityExceptionCount: identityHealth.authorizedGroupCount,
+    identityExceptionPackageCount: identityHealth.authorizedPackageCount,
+    unknownIdentityConflictCount: identityHealth.unknownGroupCount,
+    unknownIdentityConflictPackageCount: identityHealth.unknownPackageCount,
+    identityEvidenceMismatchCount: identityHealth.evidenceMismatchGroupCount,
     scanComplete: snapshot.tree.identityScanStatus === 'authoritative-complete',
     issueCounts: countIssueKinds(issues),
+    unverifiableBuckets,
+    unverifiableSessions,
+    identityConflicts: conflictBindings.map((binding) => ({
+      logicalKeyHash: createHash('sha256').update(binding.logicalKey).digest('hex'),
+      status: binding.exceptionStatus,
+      packageCount: binding.candidates.length,
+      reason: binding.reason,
+      exceptionId: binding.exception?.exceptionId || null
+    })),
+    dimensions: {
+      writerCapability: { state: writerDimension },
+      activeSourceFreshness: { state: freshnessDimension },
+      backgroundBacklog: { state: 'unobserved' },
+      identityExceptions: identityHealth
+    },
     writer
   }
 }

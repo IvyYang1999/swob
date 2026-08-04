@@ -113,7 +113,17 @@ import {
 import { mergeSettingsPreferencePatch, resolveRendererConfig } from './settings-config'
 import {
   getLibraryHealth,
+  beginLibraryBackgroundSync,
   transitionLibraryHealth,
+  transitionWriterCapability,
+  transitionActiveSourceFreshness,
+  updateLibraryBackgroundProgress,
+  finishLibraryBackgroundSync,
+  updateLibraryIdentityExceptions,
+  updateLibraryUnverifiableBuckets,
+  createEmptyUnverifiableBuckets,
+  classifyUnverifiableReason,
+  computeSessionFreshness,
   healthAfterSuccessfulLibraryWrite,
   freshnessDiagnosticFingerprint,
   classifyLibraryError,
@@ -161,8 +171,13 @@ import {
 import { LatestSnapshotRunner } from './latest-snapshot-runner'
 import { ReportJobManager, type ReportJobRunner } from './report-job-manager'
 import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transcript-watcher'
-import { LibraryWorkerClient, type LibraryWorkerProgress } from './library-worker'
-import { syncLibraryStartupIncrementally } from './library-startup-sync'
+import { LibraryWorkerClient } from './library-worker'
+import {
+  LibraryStartupSyncInterruptedError,
+  syncLibraryStartupIncrementally,
+  type LibraryStartupProgress
+} from './library-startup-sync'
+import { summarizeLibraryIdentityHealth } from './library-session-registry'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
 import { LibraryRescanController } from './library-rescan-controller'
 import { scheduleEpochBoundTask } from './epoch-bound-task'
@@ -321,6 +336,7 @@ let libraryRuntimeEpoch = 0
 let libraryRuntimePaused = false
 let libraryStartupWriterProven = false
 let libraryStartupChunkActive = false
+let libraryStartupSyncCancelled = false
 let liveLibraryCommitGeneration = 0
 let freshnessErrorSignature = ''
 let freshnessMonitor: NodeJS.Timeout | null = null
@@ -1432,11 +1448,35 @@ function emitLibraryPatch(sessions: SessionSummary[], tree?: LibraryTree): void 
   })
 }
 
+function refreshLibraryHealthInventory(tree: LibraryTree): void {
+  const identity = summarizeLibraryIdentityHealth(getLibrarySessionRegistryDiagnostics())
+  updateLibraryIdentityExceptions(identity)
+
+  const buckets = createEmptyUnverifiableBuckets()
+  for (const session of collectLibrarySessionsFromTree(tree)) {
+    const remote = resolveLibrarySessionRemoteState(session.meta).isRemote
+    const freshness = computeSessionFreshness(
+      session.sessionId,
+      session.dirPath,
+      session.meta.sourceFilePaths,
+      {
+        canonicalRecordsFile: session.meta.canonicalProvider?.recordsFile,
+        unverifiableReason: classifyUnverifiableReason(session.meta.sourceFilePaths, { remote })
+      }
+    )
+    if (freshness.status === 'unverifiable') buckets[freshness.unverifiableReason || 'other']++
+  }
+  buckets['corrupt-manifest'] += (tree.identityIssues || [])
+    .filter((issue) => issue.kind === 'corrupt-manifest').length
+  updateLibraryUnverifiableBuckets(buckets)
+}
+
 function adoptLibraryTree(tree: LibraryTree, notifyRenderer = true): boolean {
   // Ignore a queued response for a root that was replaced while the worker was scanning.
   if (path.resolve(tree.root) !== path.resolve(getLibraryRoot())) return false
   if (!applyLibraryTree(tree)) return false
   latestLibraryTree = tree
+  refreshLibraryHealthInventory(tree)
   refreshCachedMissingSources()
   scheduleSearchIndexWarmup()
   if (cachedSessions.length > 0) void scheduleUsageFactSync()
@@ -1454,7 +1494,16 @@ async function requestLibraryScan(notifyRenderer = true): Promise<LibraryTree> {
   throw new Error('Library 在持续写入，扫描结果已过期；请稍后重试')
 }
 
-function reportLibrarySyncProgress(progress: LibraryWorkerProgress): void {
+function reportLibrarySyncProgress(progress: LibraryStartupProgress): void {
+  updateLibraryBackgroundProgress({
+    total: progress.total,
+    completed: progress.completed,
+    failed: progress.failed,
+    remaining: progress.remaining,
+    ...(progress.failureReason
+      ? { failure: { sessionId: progress.sessionId, reasonCode: progress.failureReason } }
+      : {})
+  })
   mainWindow?.webContents.send('library:syncProgress', progress)
 }
 
@@ -1644,34 +1693,60 @@ async function syncStartupSessions(
   sessions: readonly SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>
 ): Promise<LibrarySyncOutcome> {
-  return syncLibraryStartupIncrementally({
-    sessions,
-    probeWriter: () => worker.probeWriter(getLibraryRoot()),
-    onWriterProven: () => {
-      libraryStartupWriterProven = true
-      scheduleHotStartupSessions(sessions)
-    },
-    resolveLatest: (initial) => cachedSummaryForSource(initial.filePath, initial.sessionId) || initial,
-    syncChunk: async (session) => {
-      libraryStartupChunkActive = true
-      try {
-        return await worker.syncChunk(getLibraryRoot(), [session], sessionMeta)
-      } finally {
-        libraryStartupChunkActive = false
-      }
-    },
-    drainLive: drainLiveSessionSynchronizations,
-    onFirstDurableBoundary: () => {
-      // Full search/usage projections can consume hundreds of MB and several
-      // CPU cores. Root switching stays paused until its whole sync commits;
-      // normal startup opens here after a live commit or first startup chunk.
-      if (!libraryRuntimePaused) openStartupProjectionGate()
-    },
-    onProgress: reportLibrarySyncProgress
-  })
+  const syncEpoch = libraryRuntimeEpoch
+  beginLibraryBackgroundSync(sessions.length)
+  try {
+    const outcome = await syncLibraryStartupIncrementally({
+      sessions,
+      probeWriter: () => worker.probeWriter(getLibraryRoot()),
+      onWriterProven: () => {
+        libraryStartupWriterProven = true
+        transitionWriterCapability('available', 'WRITER_PROVEN')
+        scheduleHotStartupSessions(sessions)
+      },
+      resolveLatest: (initial) => cachedSummaryForSource(initial.filePath, initial.sessionId) || initial,
+      syncChunk: async (session) => {
+        libraryStartupChunkActive = true
+        try {
+          return await worker.syncChunk(getLibraryRoot(), [session], sessionMeta)
+        } finally {
+          libraryStartupChunkActive = false
+        }
+      },
+      drainLive: drainLiveSessionSynchronizations,
+      onFirstDurableBoundary: (kind) => {
+        const readOnlyBoundary = kind === 'read-only-only'
+        const failedBoundary = kind === 'failed'
+        transitionActiveSourceFreshness(
+          readOnlyBoundary || failedBoundary ? 'unverifiable' : 'durable',
+          readOnlyBoundary
+            ? 'ACTIVE_SOURCE_READ_ONLY'
+            : failedBoundary
+              ? 'ACTIVE_SOURCE_SYNC_FAILED'
+              : 'ACTIVE_SOURCE_DURABLE'
+        )
+        // Full search/usage projections can consume hundreds of MB and several
+        // CPU cores. Root switching stays paused until its whole sync commits;
+        // normal startup opens here after a live commit or first startup chunk.
+        if (!libraryRuntimePaused) openStartupProjectionGate()
+      },
+      onProgress: reportLibrarySyncProgress,
+      shouldInterrupt: () => runtimeShuttingDown || libraryStartupSyncCancelled || syncEpoch !== libraryRuntimeEpoch,
+      yieldEvery: 8,
+      yieldToEventLoop: () => new Promise((resolve) => setImmediate(resolve))
+    })
+    finishLibraryBackgroundSync(false)
+    return outcome
+  } catch (error) {
+    finishLibraryBackgroundSync(true)
+    throw error
+  }
 }
 
-async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void> {
+async function initLibraryFromSessions(
+  sessions: SessionSummary[],
+  options: { preserveForeground?: boolean } = {}
+): Promise<void> {
   if (libraryInitializationPromise) return libraryInitializationPromise
   const work = (async (): Promise<void> => {
     initLibrary()
@@ -1679,7 +1754,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
       getLibraryRoot(),
       path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
     )
-    transitionLibraryHealth('initializing')
+    if (!options.preserveForeground) transitionLibraryHealth('initializing')
     recordLibraryDiagnostic('SYNC_START', 'Library synchronization started')
     const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
     const oldConfig = loadConfig()
@@ -1688,7 +1763,18 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
     const needsMigration = oldConfig.folders.length > 0 &&
       tree.folders.length === 0 && tree.ungroupedSessions.length === 0
 
-    const initialSync = await syncStartupSessions(worker, sessions, oldConfig.sessionMeta)
+    let startupInterrupted = false
+    let initialSync: LibrarySyncOutcome = { total: sessions.length, completed: 0, skipped: [] }
+    try {
+      initialSync = await syncStartupSessions(worker, sessions, oldConfig.sessionMeta)
+    } catch (error) {
+      if (!(error instanceof LibraryStartupSyncInterruptedError)) throw error
+      startupInterrupted = true
+      recordLibraryDiagnostic(
+        'BACKGROUND_SYNC_PAUSED',
+        'Library background synchronization paused at a safe session boundary'
+      )
+    }
     initialSync.skipped.forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
     tree = await requestLibraryScan(false)
     if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
@@ -1703,7 +1789,7 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
     }
 
     // Include any session that arrived while the initial worker batch was running.
-    if (cachedSessions.some((session) => !sessions.some((initial) => initial.id === session.id))) {
+    if (!startupInterrupted && cachedSessions.some((session) => !sessions.some((initial) => initial.id === session.id))) {
       const catchUpSessions = cachedSessions.filter(
         (session) => !sessions.some((initial) => initial.id === session.id)
       )
@@ -1726,7 +1812,11 @@ async function initLibraryFromSessions(sessions: SessionSummary[]): Promise<void
       skippedConflictSessionIds.size,
       getLibrarySessionRegistryDiagnostics().filter((binding) => binding.state === 'conflict').length
     )
-    if (conflictCount > 0) {
+    if (startupInterrupted) {
+      // The four dimensions already describe the safe partial state: writer
+      // proof and any durable foreground boundary remain usable while the
+      // background backlog is paused for an explicit retry.
+    } else if (conflictCount > 0) {
       transitionLibraryHealth(
         'identity-conflict',
         'IDENTITY_CONFLICT',
@@ -3249,10 +3339,17 @@ ipcMain.handle('library:compensationProgress', (): CompensationProgress => {
 })
 
 ipcMain.handle('library:compensationCancel', () => {
+  libraryStartupSyncCancelled = true
   cancelCompensation()
 })
 
 ipcMain.handle('library:compensationRetry', async () => {
+  const backlogState = getLibraryHealth().dimensions.backgroundBacklog.state
+  if (backlogState === 'paused' || backlogState === 'completed-with-errors') {
+    libraryStartupSyncCancelled = false
+    await initLibraryFromSessions(cachedSessions, { preserveForeground: true })
+    return getCompensationProgress()
+  }
   await retryLibraryAfterWriterBlocked(true)
   return getCompensationProgress()
 })
@@ -3275,6 +3372,7 @@ ipcMain.handle('library:selectDirectory', async () => {
 async function activateLibraryAt(newPath: string): Promise<string> {
   libraryRuntimeEpoch++
   libraryRuntimePaused = true
+  libraryStartupSyncCancelled = false
   startupProjectionGate.reset(new Error('Library root is changing'))
   libraryStartupWriterProven = false
   libraryStartupChunkActive = false

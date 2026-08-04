@@ -14,16 +14,25 @@ import { createHash } from 'node:crypto'
 import { computeSessionFreshness, findStaleSessions } from './library-freshness'
 
 export {
+  classifyUnverifiableReason,
   computeSessionFreshness,
   findStaleSessions,
   freshnessDiagnosticFingerprint
 } from './library-freshness'
 import {
+  LIBRARY_HEALTH_DIMENSION_TRANSITIONS,
+  type ActiveSourceFreshnessState,
+  type BackgroundBacklogState,
+  type BackgroundSyncFailure,
   type CompensationProgress,
+  type IdentityExceptionsState,
   type LibraryDiagnosticEvent,
+  type LibraryHealthDimensions,
   type LibraryHealthSnapshot,
   type LibraryHealthState,
-  type SessionFreshness
+  type SessionFreshness,
+  type UnverifiableReason,
+  type WriterCapabilityState
 } from '../shared/library-health-contract'
 
 export type {
@@ -141,10 +150,95 @@ export function clearLibraryHealthPersistence(): void {
 // State Machine
 // ---------------------------------------------------------------------------
 
+export function createEmptyUnverifiableBuckets(): Record<UnverifiableReason, number> {
+  return {
+    'missing-source': 0,
+    'icloud-placeholder': 0,
+    'remote-session': 0,
+    'corrupt-manifest': 0,
+    other: 0
+  }
+}
+
+const emptyUnverifiableBuckets = createEmptyUnverifiableBuckets
+
 class LibraryHealthStateMachine extends EventEmitter {
   private _state: LibraryHealthState = 'initializing'
   private _stateSinceAt = new Date().toISOString()
   private readonly _diagnostics: LibraryDiagnosticEvent[] = []
+  private _dimensions: LibraryHealthDimensions = this.initialDimensions()
+
+  private initialDimensions(now = new Date().toISOString()): LibraryHealthDimensions {
+    return {
+      writerCapability: {
+        state: 'unproven',
+        stateSinceAt: now,
+        reasonCode: null
+      },
+      activeSourceFreshness: {
+        state: 'unproven',
+        stateSinceAt: now,
+        reasonCode: null,
+        foregroundStartedAt: now,
+        foregroundReadyAt: null,
+        foregroundReadyLatencyMs: null,
+        foregroundReadySloMs: 60_000,
+        sloMet: null
+      },
+      backgroundBacklog: {
+        state: 'idle',
+        stateSinceAt: now,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        remaining: 0,
+        failures: [],
+        unverifiableBuckets: emptyUnverifiableBuckets()
+      },
+      identityExceptions: {
+        state: 'none',
+        stateSinceAt: now,
+        authorizedGroupCount: 0,
+        authorizedPackageCount: 0,
+        unknownGroupCount: 0,
+        unknownPackageCount: 0,
+        evidenceMismatchGroupCount: 0,
+        records: []
+      }
+    }
+  }
+
+  private deriveCompositeState(): LibraryHealthState {
+    const writer = this._dimensions.writerCapability.state
+    if (writer === 'unproven') return 'initializing'
+    if (writer === 'blocked') return 'writer-blocked'
+    if (writer === 'read-only') return 'read-only'
+    if (writer === 'corrupt') return 'corrupt'
+    if (this._dimensions.identityExceptions.state !== 'none') return 'identity-conflict'
+    return this._dimensions.activeSourceFreshness.state === 'unproven' ? 'initializing' : 'ready'
+  }
+
+  private commit(previousState: LibraryHealthState): void {
+    const next = this.deriveCompositeState()
+    if (next !== previousState) {
+      this._state = next
+      this._stateSinceAt = new Date().toISOString()
+      this.emit('stateChanged', { previous: previousState, current: next })
+    } else {
+      this._state = next
+    }
+    this.emit('changed')
+  }
+
+  private transitionAllowed(
+    dimension: keyof typeof LIBRARY_HEALTH_DIMENSION_TRANSITIONS,
+    current: string,
+    next: string
+  ): boolean {
+    if (current === next) return true
+    const transitions = LIBRARY_HEALTH_DIMENSION_TRANSITIONS[dimension] as Record<string, readonly string[]>
+    return transitions[current]?.includes(next) === true
+  }
 
   get state(): LibraryHealthState {
     return this._state
@@ -168,21 +262,189 @@ class LibraryHealthStateMachine extends EventEmitter {
     message?: string
   ): void {
     const prev = this._state
-    if (prev === next) {
-      if (errorCode || message) {
-        this.recordDiagnostic(next, errorCode || 'STATE_EVENT', message || `Library remains ${next}`)
+    const now = new Date().toISOString()
+    if (next === 'initializing') {
+      this._dimensions.writerCapability = { state: 'unproven', stateSinceAt: now, reasonCode: errorCode || null }
+      this._dimensions.activeSourceFreshness = {
+        state: 'unproven',
+        stateSinceAt: now,
+        reasonCode: errorCode || null,
+        foregroundStartedAt: now,
+        foregroundReadyAt: null,
+        foregroundReadyLatencyMs: null,
+        foregroundReadySloMs: 60_000,
+        sloMet: null
       }
-      return
+    } else if (next === 'ready') {
+      this._dimensions.writerCapability = { state: 'available', stateSinceAt: now, reasonCode: errorCode || null }
+      if (this._dimensions.activeSourceFreshness.state === 'unproven') {
+        this.markActiveSourceFreshness('durable', errorCode || null, false)
+      }
+      this._dimensions.identityExceptions = {
+        ...this._dimensions.identityExceptions,
+        state: 'none',
+        stateSinceAt: now,
+        authorizedGroupCount: 0,
+        authorizedPackageCount: 0,
+        unknownGroupCount: 0,
+        unknownPackageCount: 0,
+        evidenceMismatchGroupCount: 0,
+        records: []
+      }
+    } else if (next === 'identity-conflict') {
+      this._dimensions.writerCapability = { state: 'available', stateSinceAt: now, reasonCode: errorCode || null }
+      if (this._dimensions.activeSourceFreshness.state === 'unproven') {
+        this.markActiveSourceFreshness('durable', errorCode || null, false)
+      }
+      if (this._dimensions.identityExceptions.state === 'none') {
+        this._dimensions.identityExceptions = {
+          ...this._dimensions.identityExceptions,
+          state: 'unknown-conflicts',
+          stateSinceAt: now,
+          unknownGroupCount: 1,
+          unknownPackageCount: 1
+        }
+      }
+    } else {
+      const writerState: WriterCapabilityState = next === 'writer-blocked'
+        ? 'blocked'
+        : next === 'read-only'
+          ? 'read-only'
+          : 'corrupt'
+      this._dimensions.writerCapability = { state: writerState, stateSinceAt: now, reasonCode: errorCode || null }
     }
-
-    this._state = next
-    this._stateSinceAt = new Date().toISOString()
 
     if (errorCode || message) {
       this.recordDiagnostic(next, errorCode || 'STATE_CHANGE', message || `${prev} -> ${next}`)
     }
+    this.commit(prev)
+  }
 
-    this.emit('stateChanged', { previous: prev, current: next })
+  beginBackgroundSync(total: number): void {
+    const previous = this._state
+    const now = new Date().toISOString()
+    if (this._dimensions.writerCapability.state !== 'available') {
+      this._dimensions.writerCapability = { state: 'unproven', stateSinceAt: now, reasonCode: null }
+    }
+    if (this._dimensions.activeSourceFreshness.state === 'unproven') {
+      this._dimensions.activeSourceFreshness = {
+        ...this._dimensions.activeSourceFreshness,
+        stateSinceAt: now,
+        reasonCode: null
+      }
+    }
+    this._dimensions.backgroundBacklog = {
+      ...this._dimensions.backgroundBacklog,
+      state: total > 0 ? 'running' : 'completed',
+      stateSinceAt: now,
+      total,
+      completed: 0,
+      failed: 0,
+      remaining: total,
+      failures: []
+    }
+    this.commit(previous)
+  }
+
+  markWriterCapability(state: WriterCapabilityState, reasonCode: string | null = null): void {
+    const current = this._dimensions.writerCapability.state
+    if (!this.transitionAllowed('writerCapability', current, state)) return
+    const previous = this._state
+    this._dimensions.writerCapability = {
+      state,
+      stateSinceAt: current === state ? this._dimensions.writerCapability.stateSinceAt : new Date().toISOString(),
+      reasonCode
+    }
+    this.commit(previous)
+  }
+
+  markActiveSourceFreshness(
+    state: ActiveSourceFreshnessState,
+    reasonCode: string | null = null,
+    emit = true
+  ): void {
+    const current = this._dimensions.activeSourceFreshness
+    if (!this.transitionAllowed('activeSourceFreshness', current.state, state)) return
+    const previous = this._state
+    const readyAt = state === 'durable' && current.foregroundReadyAt === null
+      ? new Date().toISOString()
+      : current.foregroundReadyAt
+    const latency = readyAt
+      ? Math.max(0, Date.parse(readyAt) - Date.parse(current.foregroundStartedAt))
+      : current.foregroundReadyLatencyMs
+    this._dimensions.activeSourceFreshness = {
+      ...current,
+      state,
+      stateSinceAt: current.state === state ? current.stateSinceAt : new Date().toISOString(),
+      reasonCode,
+      foregroundReadyAt: readyAt,
+      foregroundReadyLatencyMs: latency,
+      sloMet: latency === null ? null : latency <= 60_000
+    }
+    if (emit) this.commit(previous)
+  }
+
+  updateBackgroundProgress(progress: {
+    total: number
+    completed: number
+    failed: number
+    remaining: number
+    failure?: BackgroundSyncFailure
+  }): void {
+    const previous = this._state
+    const failures = progress.failure && !this._dimensions.backgroundBacklog.failures.some((failure) =>
+      failure.sessionId === progress.failure!.sessionId && failure.reasonCode === progress.failure!.reasonCode)
+      ? [...this._dimensions.backgroundBacklog.failures, progress.failure]
+      : [...this._dimensions.backgroundBacklog.failures]
+    this._dimensions.backgroundBacklog = {
+      ...this._dimensions.backgroundBacklog,
+      state: 'running',
+      total: progress.total,
+      completed: progress.completed,
+      failed: progress.failed,
+      remaining: progress.remaining,
+      failures
+    }
+    this.commit(previous)
+  }
+
+  finishBackgroundSync(paused = false): void {
+    const current = this._dimensions.backgroundBacklog
+    const next: BackgroundBacklogState = paused
+      ? 'paused'
+      : current.failed > 0
+        ? 'completed-with-errors'
+        : 'completed'
+    if (!this.transitionAllowed('backgroundBacklog', current.state, next)) return
+    const previous = this._state
+    this._dimensions.backgroundBacklog = {
+      ...current,
+      state: next,
+      stateSinceAt: current.state === next ? current.stateSinceAt : new Date().toISOString(),
+      remaining: paused ? current.remaining : Math.max(0, current.total - current.completed - current.failed)
+    }
+    this.commit(previous)
+  }
+
+  setUnverifiableBuckets(buckets: Readonly<Record<UnverifiableReason, number>>): void {
+    const previous = this._state
+    this._dimensions.backgroundBacklog = {
+      ...this._dimensions.backgroundBacklog,
+      unverifiableBuckets: { ...buckets }
+    }
+    this.commit(previous)
+  }
+
+  setIdentityExceptions(summary: Omit<LibraryHealthDimensions['identityExceptions'], 'stateSinceAt'>): void {
+    const current = this._dimensions.identityExceptions
+    if (!this.transitionAllowed('identityExceptions', current.state, summary.state)) return
+    const previous = this._state
+    this._dimensions.identityExceptions = {
+      ...summary,
+      records: summary.records.map((record) => structuredClone(record)),
+      stateSinceAt: current.state === summary.state ? current.stateSinceAt : new Date().toISOString()
+    }
+    this.commit(previous)
   }
 
   recordDiagnostic(
@@ -212,23 +474,28 @@ class LibraryHealthStateMachine extends EventEmitter {
 
   snapshot(): LibraryHealthSnapshot {
     const latest = this._diagnostics[this._diagnostics.length - 1]
+    const identity = this._dimensions.identityExceptions
+    const hasIdentityRestrictions = identity.authorizedGroupCount + identity.unknownGroupCount +
+      identity.evidenceMismatchGroupCount > 0
+    const background = this._dimensions.backgroundBacklog
+    const compensation = compensationQueue.progress
     return {
       schemaVersion: 1,
       state: this._state,
       stateSinceAt: this._stateSinceAt,
       reasonCode: latest?.errorCode ?? null,
-      writeCapability: this._state === 'ready'
-        ? 'full'
-        : this._state === 'identity-conflict'
-          ? 'partial'
-          : 'none',
+      writeCapability: this._dimensions.writerCapability.state === 'available'
+        ? hasIdentityRestrictions ? 'partial' : 'full'
+        : 'none',
       diagnostics: [...this._diagnostics],
-      compensation: compensationQueue.progress,
-      availableActions: compensationQueue.running
+      compensation,
+      availableActions: compensationQueue.running || background.state === 'running'
         ? ['cancel-compensation']
-        : this._state === 'writer-blocked' || compensationQueue.progress.pending > 0
+        : this._state === 'writer-blocked' || compensation.pending > 0 ||
+            background.state === 'paused' || background.state === 'completed-with-errors'
           ? ['retry-compensation']
-          : []
+          : [],
+      dimensions: structuredClone(this._dimensions)
     }
   }
 
@@ -236,8 +503,11 @@ class LibraryHealthStateMachine extends EventEmitter {
    * Reset to initializing. Used only when the Library root changes.
    */
   reset(): void {
+    const now = new Date().toISOString()
     this._state = 'initializing'
-    this._stateSinceAt = new Date().toISOString()
+    this._stateSinceAt = now
+    this._dimensions = this.initialDimensions(now)
+    this.emit('changed')
   }
 }
 
@@ -428,6 +698,56 @@ export function transitionLibraryHealth(
   healthMachine.transition(next, errorCode, message)
 }
 
+export function beginLibraryBackgroundSync(total: number): void {
+  healthMachine.beginBackgroundSync(Math.max(0, Math.trunc(total)))
+}
+
+export function transitionWriterCapability(
+  state: WriterCapabilityState,
+  reasonCode: string | null = null
+): void {
+  healthMachine.markWriterCapability(state, reasonCode)
+}
+
+export function transitionActiveSourceFreshness(
+  state: ActiveSourceFreshnessState,
+  reasonCode: string | null = null
+): void {
+  healthMachine.markActiveSourceFreshness(state, reasonCode)
+}
+
+export function updateLibraryBackgroundProgress(progress: {
+  total: number
+  completed: number
+  failed: number
+  remaining: number
+  failure?: BackgroundSyncFailure
+}): void {
+  healthMachine.updateBackgroundProgress({
+    total: Math.max(0, Math.trunc(progress.total)),
+    completed: Math.max(0, Math.trunc(progress.completed)),
+    failed: Math.max(0, Math.trunc(progress.failed)),
+    remaining: Math.max(0, Math.trunc(progress.remaining)),
+    ...(progress.failure ? { failure: progress.failure } : {})
+  })
+}
+
+export function finishLibraryBackgroundSync(paused = false): void {
+  healthMachine.finishBackgroundSync(paused)
+}
+
+export function updateLibraryUnverifiableBuckets(
+  buckets: Readonly<Record<UnverifiableReason, number>>
+): void {
+  healthMachine.setUnverifiableBuckets(buckets)
+}
+
+export function updateLibraryIdentityExceptions(
+  summary: Omit<LibraryHealthDimensions['identityExceptions'], 'stateSinceAt'>
+): void {
+  healthMachine.setIdentityExceptions(summary)
+}
+
 /** A parse-only success can never prove the Library writer recovered. */
 export function healthAfterSuccessfulLibraryWrite(
   current: LibraryHealthState,
@@ -464,8 +784,8 @@ export function onLibraryHealthChanged(
   callback: (snapshot: LibraryHealthSnapshot) => void
 ): () => void {
   const listener = (): void => callback(getLibraryHealth())
-  healthMachine.on('stateChanged', listener)
-  return () => healthMachine.removeListener('stateChanged', listener)
+  healthMachine.on('changed', listener)
+  return () => healthMachine.removeListener('changed', listener)
 }
 
 /**

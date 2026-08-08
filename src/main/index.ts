@@ -141,10 +141,12 @@ import {
   configureLibraryHealthPersistence,
   clearLibraryHealthPersistence,
   resetLibraryHealth,
+  updateLibraryWriterRecovery,
   type LibraryHealthSnapshot,
   type SessionFreshness,
   type CompensationProgress
 } from './library-health'
+import { advanceLibraryWriterArbiterEpoch } from './library-writer-lease'
 import { loadConfig, saveConfig } from './config-store'
 import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
@@ -344,6 +346,8 @@ let freshnessErrorSignature = ''
 let freshnessMonitor: NodeJS.Timeout | null = null
 const deferredLibrarySyncRequests = new Map<string, SessionSyncRequest>()
 const LIBRARY_WRITER_RECOVERY_DELAYS_MS = [1_000, 5_000, 15_000, 30_000] as const
+const LIBRARY_WRITER_RECOVERY_STEADY_DELAY_MS = 30_000
+const LIBRARY_WRITER_RECOVERY_JITTER_MS = 5_000
 let libraryWriterRecoveryTimer: NodeJS.Timeout | null = null
 let libraryWriterRecoveryAttempts = 0
 let libraryWriterRecoveryPromise: Promise<void> | null = null
@@ -351,6 +355,27 @@ let libraryWriterRecoveryPromise: Promise<void> | null = null
 function clearLibraryWriterRecoverySchedule(): void {
   if (libraryWriterRecoveryTimer) clearTimeout(libraryWriterRecoveryTimer)
   libraryWriterRecoveryTimer = null
+  const recovery = getLibraryHealth().writerRecovery
+  if (recovery.nextRetryAt !== null) {
+    updateLibraryWriterRecovery({ ...recovery, nextRetryAt: null })
+  }
+}
+
+function resetLibraryWriterRecoveryState(preserveLastReason = true): void {
+  clearLibraryWriterRecoverySchedule()
+  libraryWriterRecoveryAttempts = 0
+  updateLibraryWriterRecovery({
+    attempt: 0,
+    nextRetryAt: null,
+    lastReason: preserveLastReason ? getLibraryHealth().writerRecovery.lastReason : null
+  })
+}
+
+function libraryWriterRecoveryDelay(attempt: number): number {
+  const staged = LIBRARY_WRITER_RECOVERY_DELAYS_MS[attempt - 1]
+  if (staged !== undefined) return staged
+  return LIBRARY_WRITER_RECOVERY_STEADY_DELAY_MS +
+    Math.floor(Math.random() * (LIBRARY_WRITER_RECOVERY_JITTER_MS + 1))
 }
 
 function scheduleLibraryWriterRecovery(): void {
@@ -360,12 +385,29 @@ function scheduleLibraryWriterRecovery(): void {
     libraryWriterRecoveryTimer ||
     getLibraryHealth().state !== 'writer-blocked'
   ) return
-  const delay = LIBRARY_WRITER_RECOVERY_DELAYS_MS[libraryWriterRecoveryAttempts]
-  if (delay === undefined) return
+  const attempt = libraryWriterRecoveryAttempts + 1
+  const delay = libraryWriterRecoveryDelay(attempt)
   const scheduledEpoch = libraryRuntimeEpoch
-  libraryWriterRecoveryAttempts++
+  libraryWriterRecoveryAttempts = attempt
+  const writerRecovery = {
+    attempt,
+    nextRetryAt: new Date(Date.now() + delay).toISOString(),
+    lastReason: getLibraryHealth().writerRecovery.lastReason
+  }
+  updateLibraryWriterRecovery(writerRecovery)
+  recordLibraryDiagnostic(
+    'WRITER_RECOVERY_SCHEDULED',
+    `Library writer recovery attempt ${attempt} scheduled`,
+    writerRecovery.lastReason || undefined,
+    writerRecovery
+  )
   libraryWriterRecoveryTimer = setTimeout(() => {
     libraryWriterRecoveryTimer = null
+    updateLibraryWriterRecovery({
+      attempt,
+      nextRetryAt: null,
+      lastReason: getLibraryHealth().writerRecovery.lastReason
+    })
     if (
       runtimeShuttingDown ||
       libraryRuntimePaused ||
@@ -384,8 +426,7 @@ function scheduleLibraryWriterRecovery(): void {
 async function retryLibraryAfterWriterBlocked(manual: boolean): Promise<void> {
   if (runtimeShuttingDown || libraryRuntimePaused) return
   if (manual) {
-    clearLibraryWriterRecoverySchedule()
-    libraryWriterRecoveryAttempts = 0
+    resetLibraryWriterRecoveryState()
   }
   if (libraryWriterRecoveryPromise) {
     await libraryWriterRecoveryPromise
@@ -399,11 +440,20 @@ async function retryLibraryAfterWriterBlocked(manual: boolean): Promise<void> {
     return
   }
   const recoveryEpoch = libraryRuntimeEpoch
+  const attempt = Math.max(1, libraryWriterRecoveryAttempts)
+  libraryWriterRecoveryAttempts = attempt
+  updateLibraryWriterRecovery({
+    attempt,
+    nextRetryAt: null,
+    lastReason: getLibraryHealth().writerRecovery.lastReason
+  })
   const recovery = (async (): Promise<void> => {
     try {
-      await initLibraryFromSessions(cachedSessions)
-      clearLibraryWriterRecoverySchedule()
-      libraryWriterRecoveryAttempts = 0
+      const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+      await worker.probeWriter(getLibraryRoot())
+      if (runtimeShuttingDown || libraryRuntimePaused || recoveryEpoch !== libraryRuntimeEpoch) return
+      await initLibraryFromSessions(cachedSessions, { writerRecovery: true })
+      resetLibraryWriterRecoveryState()
       if (manual) await retryCompensation(processLibraryCompensationEntry)
       else await runPendingLibraryCompensation()
     } catch (error) {
@@ -413,8 +463,14 @@ async function retryLibraryAfterWriterBlocked(manual: boolean): Promise<void> {
         recoveryEpoch !== libraryRuntimeEpoch
       ) return
       const classification = classifyLibraryError(error)
-      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+      transitionLibraryHealth(
+        classification.state,
+        classification.errorCode,
+        classification.message,
+        classification.writerReason
+      )
       if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
+      else resetLibraryWriterRecoveryState()
       throw error
     }
   })()
@@ -756,12 +812,19 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     const classification = classifyLibraryError(error)
     const typed = error as { name?: unknown; code?: unknown } | null
     const libraryFailure = typed?.name === 'LibraryWriterBusyError' ||
+      typed?.name === 'LibraryWriterIdentityUnavailableError' ||
       typed?.name === 'SessionIdentityConflictError' ||
       typed?.name === 'LibraryPathUnsafeError' ||
-      ['LIBRARY_WRITER_BUSY', 'SESSION_IDENTITY_CONFLICT', 'EACCES', 'EPERM', 'ENOSPC', 'EIO']
+      ['LIBRARY_WRITER_BUSY', 'WRITER_IDENTITY_UNAVAILABLE', 'SESSION_IDENTITY_CONFLICT',
+        'EACCES', 'EPERM', 'ENOSPC', 'EIO']
         .includes(typeof typed?.code === 'string' ? typed.code : '')
     if (libraryFailure) {
-      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+      transitionLibraryHealth(
+        classification.state,
+        classification.errorCode,
+        classification.message,
+        classification.writerReason
+      )
     } else {
       recordLibraryDiagnostic('SESSION_SYNC_FAILED', 'A source session failed to synchronize')
     }
@@ -831,16 +894,25 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
       .filter((binding) => binding.state === 'conflict').length
     const recoveredState = healthAfterSuccessfulLibraryWrite('writer-blocked', true, conflictCount)
     if (recoveredState === 'identity-conflict') {
+      recordLibraryDiagnostic(
+        'WRITER_RECOVERED',
+        'Library writer recovered; queued sessions can resume',
+        getLibraryHealth().writerRecovery.lastReason || undefined
+      )
       transitionLibraryHealth(
         'identity-conflict',
         'IDENTITY_CONFLICT',
         `${conflictCount} logical session identities remain read-only after writer recovery`
       )
     } else if (recoveredState === 'ready') {
-      transitionLibraryHealth('ready', 'WRITER_RECOVERED', 'Library writer recovered; replaying queued sessions')
+      transitionLibraryHealth(
+        'ready',
+        'WRITER_RECOVERED',
+        'Library writer recovered; replaying queued sessions',
+        getLibraryHealth().writerRecovery.lastReason || undefined
+      )
     }
-    clearLibraryWriterRecoverySchedule()
-    libraryWriterRecoveryAttempts = 0
+    resetLibraryWriterRecoveryState()
     void runPendingLibraryCompensation()
   }
   markSessionActive(summary.sessionId)
@@ -1067,6 +1139,7 @@ function cleanupRuntimeResources(): Promise<void> {
   startupProjectionGate.reset(new Error('Runtime is shutting down'))
   libraryRuntimePaused = true
   libraryRuntimeEpoch++
+  advanceLibraryWriterArbiterEpoch()
   libraryStartupWriterProven = false
   libraryStartupChunkActive = false
   closeCompensation()
@@ -1621,7 +1694,12 @@ async function initializeLibraryScanInBackground(): Promise<void> {
     if (cachedSessions.length > 0) void hydrateLibrarySessions(tree)
   } catch (error) {
     const classification = classifyLibraryError(error)
-    transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+    transitionLibraryHealth(
+      classification.state,
+      classification.errorCode,
+      classification.message,
+      classification.writerReason
+    )
     console.error('[library-worker] initial scan failed:', error)
   }
 }
@@ -1775,7 +1853,7 @@ async function syncStartupSessions(
 
 async function initLibraryFromSessions(
   sessions: SessionSummary[],
-  options: { preserveForeground?: boolean } = {}
+  options: { preserveForeground?: boolean; writerRecovery?: boolean } = {}
 ): Promise<void> {
   if (libraryInitializationPromise) return libraryInitializationPromise
   const work = (async (): Promise<void> => {
@@ -1784,6 +1862,9 @@ async function initLibraryFromSessions(
       getLibraryRoot(),
       path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
     )
+    const recoveryReasonAtStart = options.writerRecovery
+      ? getLibraryHealth().writerRecovery.lastReason || undefined
+      : undefined
     if (!options.preserveForeground) transitionLibraryHealth('initializing')
     recordLibraryDiagnostic('SYNC_START', 'Library synchronization started')
     const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
@@ -1843,21 +1924,45 @@ async function initLibraryFromSessions(
       skippedConflictSessionIds.size,
       getLibrarySessionRegistryDiagnostics().filter((binding) => binding.state === 'conflict').length
     )
+    const recoverySnapshot = getLibraryHealth()
+    const writerRecovered = options.writerRecovery === true ||
+      recoverySnapshot.state === 'writer-blocked' || recoverySnapshot.writerRecovery.attempt > 0
+    const recoveryReason = recoveryReasonAtStart || recoverySnapshot.writerRecovery.lastReason || undefined
     if (startupInterrupted) {
       // The four dimensions already describe the safe partial state: writer
       // proof and any durable foreground boundary remain usable while the
       // background backlog is paused for an explicit retry.
+      if (writerRecovered) {
+        recordLibraryDiagnostic(
+          'WRITER_RECOVERED',
+          'Library writer recovered; background synchronization remains paused',
+          recoveryReason
+        )
+      }
     } else if (conflictCount > 0) {
+      if (writerRecovered) {
+        recordLibraryDiagnostic(
+          'WRITER_RECOVERED',
+          'Library writer recovered; identity conflicts remain read-only',
+          recoveryReason
+        )
+      }
       transitionLibraryHealth(
         'identity-conflict',
         'IDENTITY_CONFLICT',
         `${conflictCount} logical session identities have multiple read-only packages`
       )
     } else {
-      transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library synchronization completed')
+      transitionLibraryHealth(
+        'ready',
+        writerRecovered ? 'WRITER_RECOVERED' : 'SYNC_COMPLETE',
+        writerRecovered
+          ? 'Library writer recovered; Library synchronization completed'
+          : 'Library synchronization completed',
+        recoveryReason
+      )
     }
-    clearLibraryWriterRecoverySchedule()
-    libraryWriterRecoveryAttempts = 0
+    resetLibraryWriterRecoveryState()
     startupProjectionGate.finishStartup()
   })()
   libraryInitializationPromise = work
@@ -2187,7 +2292,12 @@ ipcMain.handle('sessions:loadAll', async () => {
       // on disk became corrupt.
       if (runtimeShuttingDown || libraryRuntimePaused) return
       const classification = classifyLibraryError(error)
-      transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+      transitionLibraryHealth(
+        classification.state,
+        classification.errorCode,
+        classification.message,
+        classification.writerReason
+      )
       if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
       console.error('[library-init] initialization failed:', classification.errorCode, classification.message)
     })
@@ -3403,6 +3513,7 @@ ipcMain.handle('library:selectDirectory', async () => {
 
 async function activateLibraryAt(newPath: string): Promise<string> {
   libraryRuntimeEpoch++
+  advanceLibraryWriterArbiterEpoch()
   libraryRuntimePaused = true
   libraryStartupSyncCancelled = false
   startupProjectionGate.reset(new Error('Library root is changing'))
@@ -3411,8 +3522,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   startupProjectionGate.prepareStartup(true)
   libraryStartupWriterProven = false
   libraryStartupChunkActive = false
-  clearLibraryWriterRecoverySchedule()
-  libraryWriterRecoveryAttempts = 0
+  resetLibraryWriterRecoveryState(false)
   let retryWriterAfterSwitch = false
   let librarySwitchCommitted = false
   try {
@@ -3496,7 +3606,12 @@ async function activateLibraryAt(newPath: string): Promise<string> {
       error instanceof Error ? error : new Error('Library root change failed')
     )
     const classification = classifyLibraryError(error)
-    transitionLibraryHealth(classification.state, classification.errorCode, classification.message)
+    transitionLibraryHealth(
+      classification.state,
+      classification.errorCode,
+      classification.message,
+      classification.writerReason
+    )
     if (classification.state === 'writer-blocked') {
       enqueueExistingLibrarySessionsForCompensation(cachedSessions)
       retryWriterAfterSwitch = true

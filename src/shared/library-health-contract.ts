@@ -19,6 +19,14 @@ export type FreshnessStatus = 'fresh' | 'syncing' | 'stale' | 'unverifiable'
 export type FreshnessSeverity = 'ok' | 'warning' | 'error' | 'unknown'
 export type FreshnessArtifact = 'transcript' | 'backup' | 'canonical-records'
 export type WriterCapabilityState = 'unproven' | 'available' | 'blocked' | 'read-only' | 'corrupt'
+export type LibraryWriterBusyReason =
+  | 'active-owner'
+  | 'remote-owner'
+  | 'unverifiable-owner'
+  | 'corrupt-owner'
+  | 'recovery-in-progress'
+  | 'timeout'
+export type LibraryWriterFailureReason = LibraryWriterBusyReason | 'identity-unavailable'
 export type ActiveSourceFreshnessState = 'unproven' | 'durable' | 'stale' | 'unverifiable'
 export type BackgroundBacklogState =
   | 'unobserved'
@@ -134,7 +142,20 @@ export interface LibraryDiagnosticEvent {
   state: LibraryHealthState
   errorCode: string
   message: string
+  /** Machine-readable writer failure cause; paths and owner evidence never cross this boundary. */
+  reason?: LibraryWriterFailureReason
+  /** Present on writer-recovery scheduler events. */
+  attempt?: number
+  nextRetryAt?: string | null
+  lastReason?: LibraryWriterFailureReason | null
   severity: 'warning' | 'error'
+}
+
+export interface LibraryWriterRecoveryStatus {
+  /** One-based attempt currently scheduled or running; zero means no recovery is pending. */
+  attempt: number
+  nextRetryAt: string | null
+  lastReason: LibraryWriterFailureReason | null
 }
 
 export interface SessionFreshness {
@@ -174,6 +195,7 @@ export interface LibraryHealthSnapshot {
   diagnostics: readonly LibraryDiagnosticEvent[]
   compensation: CompensationProgress
   availableActions: readonly LibraryHealthAction[]
+  writerRecovery: LibraryWriterRecoveryStatus
   dimensions: LibraryHealthDimensions
 }
 
@@ -191,6 +213,15 @@ const IDENTITY_STATES = new Set<IdentityExceptionsState>([
 const UNVERIFIABLE_REASONS: readonly UnverifiableReason[] = [
   'missing-source', 'icloud-placeholder', 'remote-session', 'corrupt-manifest', 'other'
 ]
+const WRITER_FAILURE_REASONS = new Set<LibraryWriterFailureReason>([
+  'active-owner',
+  'remote-owner',
+  'unverifiable-owner',
+  'corrupt-owner',
+  'recovery-in-progress',
+  'timeout',
+  'identity-unavailable'
+])
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
@@ -205,6 +236,7 @@ export function isLibraryHealthSnapshot(value: unknown): value is LibraryHealthS
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<LibraryHealthSnapshot>
   const progress = candidate.compensation as Partial<CompensationProgress> | undefined
+  const writerRecovery = candidate.writerRecovery as Partial<LibraryWriterRecoveryStatus> | undefined
   const dimensions = candidate.dimensions as Partial<LibraryHealthDimensions> | undefined
   const writer = dimensions?.writerCapability
   const freshness = dimensions?.activeSourceFreshness
@@ -217,13 +249,21 @@ export function isLibraryHealthSnapshot(value: unknown): value is LibraryHealthS
     (candidate.writeCapability === 'full' || candidate.writeCapability === 'partial' || candidate.writeCapability === 'none') &&
     Array.isArray(candidate.diagnostics) && candidate.diagnostics.every((event) =>
       !!event && event.schemaVersion === 1 && typeof event.timestamp === 'string' &&
-      typeof event.errorCode === 'string' && typeof event.message === 'string') &&
+      typeof event.errorCode === 'string' && typeof event.message === 'string' &&
+      (event.reason === undefined || WRITER_FAILURE_REASONS.has(event.reason)) &&
+      (event.attempt === undefined || isNonNegativeInteger(event.attempt)) &&
+      (event.nextRetryAt === undefined || event.nextRetryAt === null || isIsoTimestamp(event.nextRetryAt)) &&
+      (event.lastReason === undefined || event.lastReason === null || WRITER_FAILURE_REASONS.has(event.lastReason))) &&
     !!progress &&
     [progress.total, progress.completed, progress.failed, progress.pending]
       .every((count) => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) &&
     typeof progress.inProgress === 'boolean' && typeof progress.cancelled === 'boolean' &&
     Array.isArray(candidate.availableActions) && candidate.availableActions.every((action) =>
       action === 'retry-compensation' || action === 'cancel-compensation') &&
+    !!writerRecovery && isNonNegativeInteger(writerRecovery.attempt) &&
+    (writerRecovery.nextRetryAt === null || isIsoTimestamp(writerRecovery.nextRetryAt)) &&
+    (writerRecovery.lastReason === null ||
+      (typeof writerRecovery.lastReason === 'string' && WRITER_FAILURE_REASONS.has(writerRecovery.lastReason))) &&
     !!writer && WRITER_STATES.has(writer.state) && isIsoTimestamp(writer.stateSinceAt) &&
     (writer.reasonCode === null || typeof writer.reasonCode === 'string') &&
     !!freshness && FRESHNESS_STATES.has(freshness.state) && isIsoTimestamp(freshness.stateSinceAt) &&
@@ -279,6 +319,11 @@ export function createInitializingLibraryHealthSnapshot(): LibraryHealthSnapshot
       cancelled: false
     },
     availableActions: [],
+    writerRecovery: {
+      attempt: 0,
+      nextRetryAt: null,
+      lastReason: null
+    },
     dimensions: {
       writerCapability: {
         state: 'unproven',

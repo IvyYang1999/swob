@@ -22,6 +22,7 @@ import {
   waitForCompensationIdle,
   configureLibraryHealthPersistence,
   clearLibraryHealthPersistence,
+  updateLibraryWriterRecovery,
   resetCompensation,
   onCompensationUpdate,
   runCompensation,
@@ -64,6 +65,16 @@ describe('LibraryHealthStateMachine', () => {
     transitionLibraryHealth('writer-blocked', 'WRITER_BUSY', 'busy')
     expect(getLibraryHealth().compensation.pending).toBe(0)
     expect(getLibraryHealth().availableActions).toContain('retry-compensation')
+  })
+
+  it('exposes writer recovery attempt, deadline, and last reason in the health snapshot', () => {
+    const nextRetryAt = new Date(Date.now() + 30_000).toISOString()
+    updateLibraryWriterRecovery({ attempt: 5, nextRetryAt, lastReason: 'timeout' })
+    expect(getLibraryHealth().writerRecovery).toEqual({
+      attempt: 5,
+      nextRetryAt,
+      lastReason: 'timeout'
+    })
   })
 
   it('emits stateChanged events', () => {
@@ -114,7 +125,13 @@ describe('LibraryHealthStateMachine', () => {
       configureLibraryHealthPersistence(libraryRoot, diagnosticsRoot)
       recordLibraryDiagnostic(
         'FIRST',
-        'Failed /Users/private/Documents/secret.jsonl for 11111111-1111-4111-8111-111111111111'
+        'Failed /Users/private/Documents/secret.jsonl for 11111111-1111-4111-8111-111111111111',
+        'timeout',
+        {
+          attempt: 5,
+          nextRetryAt: '2026-08-08T00:00:30.000Z',
+          lastReason: 'timeout'
+        }
       )
       recordLibraryDiagnostic('SECOND', 'second event')
       const filePath = path.join(diagnosticsRoot, fs.readdirSync(diagnosticsRoot)[0])
@@ -122,6 +139,12 @@ describe('LibraryHealthStateMachine', () => {
       expect(lines).toHaveLength(2)
       expect(lines[0]).not.toContain('/Users/private')
       expect(lines[0]).not.toContain('11111111-1111-4111-8111-111111111111')
+      expect(JSON.parse(lines[0])).toMatchObject({
+        reason: 'timeout',
+        attempt: 5,
+        nextRetryAt: '2026-08-08T00:00:30.000Z',
+        lastReason: 'timeout'
+      })
 
       fs.appendFileSync(filePath, '{torn')
       recordLibraryDiagnostic('AFTER_TORN', 'must remain parseable')
@@ -157,10 +180,52 @@ describe('LibraryHealthStateMachine', () => {
 
 describe('classifyLibraryError', () => {
   it('classifies LibraryWriterBusyError as writer-blocked', () => {
-    const error = Object.assign(new Error('busy'), { name: 'LibraryWriterBusyError' })
+    const error = Object.assign(new Error('busy'), {
+      name: 'LibraryWriterBusyError',
+      code: 'LIBRARY_WRITER_BUSY',
+      reason: 'active-owner'
+    })
     const result = classifyLibraryError(error)
     expect(result.state).toBe('writer-blocked')
-    expect(result.errorCode).toBe('WRITER_BUSY')
+    expect(result.errorCode).toBe('WRITER_BUSY_ACTIVE_OWNER')
+    expect(result.message).toContain('another process')
+  })
+
+  it('assigns every writer reason an independent honest error code and message', () => {
+    const expected = {
+      'active-owner': 'WRITER_BUSY_ACTIVE_OWNER',
+      'remote-owner': 'WRITER_BUSY_REMOTE_OWNER',
+      'unverifiable-owner': 'WRITER_BUSY_UNVERIFIABLE_OWNER',
+      'corrupt-owner': 'WRITER_BUSY_CORRUPT_OWNER',
+      'recovery-in-progress': 'WRITER_BUSY_RECOVERY_IN_PROGRESS',
+      timeout: 'WRITER_BUSY_TIMEOUT'
+    } as const
+    const codes = new Set<string>()
+    for (const [reason, errorCode] of Object.entries(expected)) {
+      const result = classifyLibraryError(Object.assign(new Error(reason), {
+        name: 'LibraryWriterBusyError',
+        code: 'LIBRARY_WRITER_BUSY',
+        reason
+      }))
+      expect(result).toMatchObject({ errorCode, writerReason: reason })
+      if (reason === 'active-owner') expect(result.message).toContain('another process')
+      else expect(result.message).not.toContain('another process')
+      codes.add(result.errorCode)
+    }
+    expect(codes.size).toBe(Object.keys(expected).length)
+  })
+
+  it('classifies writer identity failure without calling it busy', () => {
+    const result = classifyLibraryError(Object.assign(new Error('identity unavailable'), {
+      name: 'LibraryWriterIdentityUnavailableError',
+      code: 'WRITER_IDENTITY_UNAVAILABLE'
+    }))
+    expect(result).toMatchObject({
+      state: 'writer-blocked',
+      errorCode: 'WRITER_IDENTITY_UNAVAILABLE',
+      writerReason: 'identity-unavailable'
+    })
+    expect(result.message).not.toContain('another process')
   })
 
   it('classifies SessionIdentityConflictError as identity-conflict', () => {

@@ -48,6 +48,15 @@ export class SessionCreateBusyError extends Error {
   }
 }
 
+export class SessionCreateIdentityUnavailableError extends Error {
+  readonly code = 'WRITER_IDENTITY_UNAVAILABLE'
+
+  constructor(readonly reason: 'boot-identity' | 'process-start') {
+    super(`Session writer identity is unavailable (${reason}); no lock was created`)
+    this.name = 'SessionCreateIdentityUnavailableError'
+  }
+}
+
 function hashFingerprint(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -59,7 +68,15 @@ function commandOutput(command: string, args: string[]): string | null {
   return output || null
 }
 
+function isolatedTestIdentitySeed(): string | null {
+  return process.env.NODE_ENV === 'test' && process.env.SWOB_TEST_HOME
+    ? path.resolve(process.env.SWOB_TEST_HOME)
+    : null
+}
+
 export function getLocalBootIdentity(platform: NodeJS.Platform = process.platform): string | null {
+  const testSeed = isolatedTestIdentitySeed()
+  if (testSeed) return hashFingerprint(`test-boot:${testSeed}`)
   try {
     if (platform === 'linux') {
       return hashFingerprint(fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim())
@@ -87,6 +104,15 @@ export function getProcessStartFingerprint(
   pid: number,
   platform: NodeJS.Platform = process.platform
 ): string | 'missing' | null {
+  const testSeed = isolatedTestIdentitySeed()
+  if (testSeed) {
+    try {
+      process.kill(pid, 0)
+      return hashFingerprint(`test-process:${testSeed}:${pid}`)
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'missing' : null
+    }
+  }
   try {
     if (platform === 'linux') {
       const statPath = `/proc/${pid}/stat`
@@ -197,9 +223,10 @@ export async function acquireSessionCreateLock(
   const readBootIdentity = options.bootIdentity || (() => getLocalBootIdentity(platform))
   const readProcessStart = options.processStartFingerprint || ((ownerPid) => getProcessStartFingerprint(ownerPid, platform))
   const bootIdentity = readBootIdentity()
+  if (!bootIdentity) throw new SessionCreateIdentityUnavailableError('boot-identity')
   const processStartFingerprint = readProcessStart(pid)
-  if (!bootIdentity || !processStartFingerprint || processStartFingerprint === 'missing') {
-    throw new SessionCreateBusyError('', 'unverifiable-owner')
+  if (!processStartFingerprint || processStartFingerprint === 'missing') {
+    throw new SessionCreateIdentityUnavailableError('process-start')
   }
 
   const lockDir = path.join(libraryRoot, '.swob', 'locks', 'session-create')

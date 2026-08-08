@@ -2,8 +2,11 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { threadId } from 'node:worker_threads'
 import { getLocalBootIdentity, getProcessStartFingerprint } from './session-create-lock'
 import {
+  defaultHostIdentityPath,
   deriveHostBootIdentity,
   deriveLibraryHostProof,
   getOrCreateHostIdentity,
@@ -17,6 +20,144 @@ import {
   replaceSafeLibraryFileSync,
   writeSafeLibraryFileSync
 } from './library-path-safety'
+import type { LibraryWriterBusyReason } from '../shared/library-health-contract'
+
+export type { LibraryWriterBusyReason } from '../shared/library-health-contract'
+
+const writerArbiterContext = new AsyncLocalStorage<LibraryWriterArbiterContext>()
+const ARBITER_OWNER_INDEX = 0
+const ARBITER_EPOCH_INDEX = 1
+const ARBITER_WORDS = 2
+const mainWriterArbiterBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * ARBITER_WORDS)
+
+export interface LibraryWriterArbiterWire {
+  buffer: SharedArrayBuffer
+  epoch: number
+}
+
+interface LibraryWriterArbiterContext extends LibraryWriterArbiterWire {
+  shouldCancel?: () => boolean
+}
+
+export interface LibraryWriterArbiterHandle {
+  release(): void
+}
+
+function arbiterState(buffer: SharedArrayBuffer): Int32Array {
+  return new Int32Array(buffer)
+}
+
+function abortArbiterWait(): never {
+  const error = new Error('Library writer arbitration cancelled')
+  error.name = 'AbortError'
+  throw error
+}
+
+function activeArbiterContext(): LibraryWriterArbiterContext {
+  const active = writerArbiterContext.getStore()
+  if (active) return active
+  const state = arbiterState(mainWriterArbiterBuffer)
+  return { buffer: mainWriterArbiterBuffer, epoch: Atomics.load(state, ARBITER_EPOCH_INDEX) }
+}
+
+function assertArbiterWaitCurrent(context: LibraryWriterArbiterContext, state: Int32Array): void {
+  if (context.shouldCancel?.() || Atomics.load(state, ARBITER_EPOCH_INDEX) !== context.epoch) {
+    abortArbiterWait()
+  }
+}
+
+function arbiterOwnerToken(): number {
+  return threadId + 1
+}
+
+function acquiredArbiterHandle(state: Int32Array, ownerToken: number): LibraryWriterArbiterHandle {
+  let released = false
+  return {
+    release(): void {
+      if (released) return
+      released = true
+      if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerToken, 0) === ownerToken) {
+        Atomics.notify(state, ARBITER_OWNER_INDEX)
+      }
+    }
+  }
+}
+
+export async function acquireLibraryWriterArbiter(): Promise<LibraryWriterArbiterHandle> {
+  const context = activeArbiterContext()
+  const state = arbiterState(context.buffer)
+  const ownerToken = arbiterOwnerToken()
+  while (true) {
+    assertArbiterWaitCurrent(context, state)
+    if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, 0, ownerToken) === 0) {
+      try {
+        assertArbiterWaitCurrent(context, state)
+        return acquiredArbiterHandle(state, ownerToken)
+      } catch (error) {
+        if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerToken, 0) === ownerToken) {
+          Atomics.notify(state, ARBITER_OWNER_INDEX)
+        }
+        throw error
+      }
+    }
+    // The queue wait is outside the file-lease timeout: only a different PID
+    // may consume the bounded contender timeout below.
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+export function acquireLibraryWriterArbiterSync(): LibraryWriterArbiterHandle {
+  const context = activeArbiterContext()
+  const state = arbiterState(context.buffer)
+  const ownerToken = arbiterOwnerToken()
+  while (true) {
+    assertArbiterWaitCurrent(context, state)
+    const currentOwner = Atomics.load(state, ARBITER_OWNER_INDEX)
+    if (currentOwner === ownerToken) {
+      // A separate async context on this JavaScript thread cannot make
+      // progress while a synchronous caller blocks it. Ordinary nested writes
+      // were already accepted by the coordinator's reentrancy guard.
+      throw new Error('library-writer-sync-overlaps-async-context')
+    }
+    if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, 0, ownerToken) === 0) {
+      try {
+        assertArbiterWaitCurrent(context, state)
+        return acquiredArbiterHandle(state, ownerToken)
+      } catch (error) {
+        if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerToken, 0) === ownerToken) {
+          Atomics.notify(state, ARBITER_OWNER_INDEX)
+        }
+        throw error
+      }
+    }
+    // Worker owners can release and notify while the main thread waits.
+    Atomics.wait(state, ARBITER_OWNER_INDEX, currentOwner, 50)
+  }
+}
+
+export function currentLibraryWriterArbiterWire(): LibraryWriterArbiterWire {
+  const state = arbiterState(mainWriterArbiterBuffer)
+  return {
+    buffer: mainWriterArbiterBuffer,
+    epoch: Atomics.load(state, ARBITER_EPOCH_INDEX)
+  }
+}
+
+export function advanceLibraryWriterArbiterEpoch(): number {
+  const state = arbiterState(mainWriterArbiterBuffer)
+  const epoch = Atomics.add(state, ARBITER_EPOCH_INDEX, 1) + 1
+  Atomics.notify(state, ARBITER_OWNER_INDEX)
+  return epoch
+}
+
+export function runWithLibraryWriterArbiterContext<T>(
+  wire: LibraryWriterArbiterWire | undefined,
+  shouldCancel: (() => boolean) | undefined,
+  operation: () => Promise<T>
+): Promise<T> {
+  if (!wire) return operation()
+  return writerArbiterContext.run({ ...wire, shouldCancel }, operation)
+}
 
 export type LibraryWriterMode =
   | 'maintenance'
@@ -57,14 +198,6 @@ export interface LibraryWriterEvent {
   reason?: LibraryWriterBusyReason
   waitMs?: number
 }
-
-export type LibraryWriterBusyReason =
-  | 'active-owner'
-  | 'remote-owner'
-  | 'unverifiable-owner'
-  | 'corrupt-owner'
-  | 'recovery-in-progress'
-  | 'timeout'
 
 export interface LibraryWriterLeaseOptions {
   timeoutMs?: number
@@ -138,6 +271,16 @@ export class LibraryWriterBusyError extends Error {
   constructor(readonly reason: LibraryWriterBusyReason) {
     super(`${BUSY_MESSAGES[reason]}；请稍后重试或使用显式锁恢复入口`)
     this.name = 'LibraryWriterBusyError'
+  }
+}
+
+export class LibraryWriterIdentityUnavailableError extends Error {
+  readonly code = 'WRITER_IDENTITY_UNAVAILABLE'
+
+  constructor(readonly reason: 'boot-identity' | 'process-start' | 'host-identity', cause?: unknown) {
+    super(`Library writer identity is unavailable (${reason}); no lock was created`)
+    this.name = 'LibraryWriterIdentityUnavailableError'
+    if (cause !== undefined) this.cause = cause
   }
 }
 
@@ -384,6 +527,23 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
+export function resolveLibraryWriterHostIdentityStoragePath(
+  platform: NodeJS.Platform,
+  environment: NodeJS.ProcessEnv = process.env
+): string {
+  const testHome = environment.NODE_ENV === 'test' ? environment.SWOB_TEST_HOME : undefined
+  return testHome
+    ? path.join(path.resolve(testHome), '.swob-machine', 'host-identity-v1.json')
+    : defaultHostIdentityPath(platform)
+}
+
+function hostIdentityRuntimeOptions(platform: NodeJS.Platform): { platform: NodeJS.Platform; storagePath: string } {
+  return {
+    platform,
+    storagePath: resolveLibraryWriterHostIdentityStoragePath(platform)
+  }
+}
+
 function prepareAcquisition(
   libraryRoot: string,
   options: LibraryWriterLeaseOptions
@@ -393,13 +553,19 @@ function prepareAcquisition(
   const readProcessStart = options.processStartFingerprint ||
     ((ownerPid) => getProcessStartFingerprint(ownerPid, platform))
   const rawBootIdentity = (options.bootIdentity || (() => getLocalBootIdentity(platform)))()
+  if (!rawBootIdentity) throw new LibraryWriterIdentityUnavailableError('boot-identity')
   const processStartFingerprint = readProcessStart(pid)
-  if (!rawBootIdentity || !processStartFingerprint || processStartFingerprint === 'missing') {
-    throw new LibraryWriterBusyError('unverifiable-owner')
+  if (!processStartFingerprint || processStartFingerprint === 'missing') {
+    throw new LibraryWriterIdentityUnavailableError('process-start')
   }
   const canonicalRoot = canonicalLibraryRootForWrite(libraryRoot)
-  const hostIdentity = (options.hostIdentity || (() => getOrCreateHostIdentity({ platform })))()
-  if (!hostIdentity) throw new LibraryWriterBusyError('unverifiable-owner')
+  let hostIdentity: string
+  try {
+    hostIdentity = (options.hostIdentity || (() => getOrCreateHostIdentity(hostIdentityRuntimeOptions(platform))))()
+  } catch (error) {
+    throw new LibraryWriterIdentityUnavailableError('host-identity', error)
+  }
+  if (!hostIdentity) throw new LibraryWriterIdentityUnavailableError('host-identity')
   const lockParent = path.join(canonicalRoot, '.swob', 'locks')
   ensureSafeLibraryDirectory(canonicalRoot, lockParent)
   const lockDir = path.join(lockParent, 'library-writer')
@@ -696,6 +862,21 @@ export async function acquireLibraryWriterLease(
   throw new LibraryWriterBusyError(lastReason)
 }
 
+/** Lease-only proof used before an expensive recovery initialization. */
+export async function probeLibraryWriter(
+  root: string,
+  deviceId: string,
+  options: LibraryWriterLeaseOptions = {}
+): Promise<void> {
+  const arbiter = await acquireLibraryWriterArbiter()
+  try {
+    const lease = await acquireLibraryWriterLease(path.resolve(root), deviceId, 'maintenance', options)
+    lease.release()
+  } finally {
+    arbiter.release()
+  }
+}
+
 export function acquireLibraryWriterLeaseSync(
   libraryRoot: string,
   deviceId: string,
@@ -763,7 +944,9 @@ export function inspectLibraryWriterLease(
     const rawBootIdentity = (options.bootIdentity || (() => getLocalBootIdentity(platform)))()
     let hostIdentity: string | null = null
     try {
-      hostIdentity = options.hostIdentity ? options.hostIdentity() : readHostIdentity({ platform })
+      hostIdentity = options.hostIdentity
+        ? options.hostIdentity()
+        : readHostIdentity(hostIdentityRuntimeOptions(platform))
     } catch { /* missing/corrupt local proof remains unverifiable */ }
     const sameBootEvidence = existing.owner.schemaVersion === 1
       ? Boolean(rawBootIdentity && existing.owner.bootIdentity === rawBootIdentity)

@@ -2,6 +2,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
+  acquireLibraryWriterArbiter,
+  acquireLibraryWriterArbiterSync,
   acquireLibraryWriterLease,
   acquireLibraryWriterLeaseSync,
   emitLibraryWriterEvent,
@@ -92,14 +94,19 @@ export async function runWithLibraryWriter<T>(
 ): Promise<T> {
   if (isReentrant(root, deviceId)) return operation()
   const resolvedRoot = path.resolve(root)
-  const lease = await acquireLibraryWriterLease(resolvedRoot, deviceId, mode, options)
+  const arbiter = await acquireLibraryWriterArbiter()
   try {
-    // Reserve the generation durably before any mutation. A process killed in
-    // the operation still invalidates scans that started before this writer.
-    bumpLibraryWriteGeneration(resolvedRoot)
-    return await writeContext.run({ root: resolvedRoot, deviceId }, operation)
+    const lease = await acquireLibraryWriterLease(resolvedRoot, deviceId, mode, options)
+    try {
+      // Reserve the generation durably before any mutation. A process killed in
+      // the operation still invalidates scans that started before this writer.
+      bumpLibraryWriteGeneration(resolvedRoot)
+      return await writeContext.run({ root: resolvedRoot, deviceId }, operation)
+    } finally {
+      lease.release()
+    }
   } finally {
-    lease.release()
+    arbiter.release()
   }
 }
 
@@ -112,12 +119,17 @@ export function runWithLibraryWriterSync<T>(
 ): T {
   if (isReentrant(root, deviceId)) return operation()
   const resolvedRoot = path.resolve(root)
-  const lease = acquireLibraryWriterLeaseSync(resolvedRoot, deviceId, mode, options)
+  const arbiter = acquireLibraryWriterArbiterSync()
   try {
-    bumpLibraryWriteGeneration(resolvedRoot)
-    return writeContext.run({ root: resolvedRoot, deviceId }, operation)
+    const lease = acquireLibraryWriterLeaseSync(resolvedRoot, deviceId, mode, options)
+    try {
+      bumpLibraryWriteGeneration(resolvedRoot)
+      return writeContext.run({ root: resolvedRoot, deviceId }, operation)
+    } finally {
+      lease.release()
+    }
   } finally {
-    lease.release()
+    arbiter.release()
   }
 }
 

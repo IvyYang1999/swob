@@ -3,7 +3,18 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
-import { LibraryWorkerClient, runLibraryWorkerRequest } from './library-worker'
+import {
+  LibraryWorkerClient,
+  runLibraryWorkerRequest,
+  serializeLibraryWorkerError
+} from './library-worker'
+import { LibraryWriterBusyError } from './library-writer-lease'
+import {
+  classifyLibraryError,
+  getLibraryHealth,
+  resetLibraryHealth,
+  transitionLibraryHealth
+} from './library-health'
 import { syncLibraryStartupIncrementally } from './library-startup-sync'
 import { closeSearchIndex } from './search-index'
 import { closeUsageFactStore } from './usage-fact-store'
@@ -143,6 +154,124 @@ function writeLifecycleFixtureWorker(root: string, slowDelayMs = 80): string {
   return workerPath
 }
 
+function writeWriterArbiterFixtureWorker(root: string): string {
+  const workerPath = path.join(root, 'writer-arbiter-worker.cjs')
+  fs.writeFileSync(workerPath, `
+    const fs = require('node:fs')
+    const path = require('node:path')
+    const { parentPort } = require('node:worker_threads')
+
+    const wait = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
+    async function acquireProcessArbiter(request) {
+      const state = new Int32Array(request.writerArbiter.buffer)
+      while (true) {
+        if (Atomics.load(state, 1) !== request.writerArbiter.epoch ||
+          Atomics.load(new Int32Array(request.cancelBuffer), 0) === 1) {
+          const error = new Error('cancelled')
+          error.name = 'AbortError'
+          throw error
+        }
+        if (Atomics.compareExchange(state, 0, 0, 1) === 0) {
+          return () => {
+            Atomics.store(state, 0, 0)
+            Atomics.notify(state, 0)
+          }
+        }
+        await wait(2)
+      }
+    }
+
+    async function acquireSyntheticFileLease(root) {
+      const lockDir = path.join(root, '.swob', 'locks', 'library-writer')
+      fs.mkdirSync(path.dirname(lockDir), { recursive: true })
+      const deadline = Date.now() + 20
+      while (true) {
+        try {
+          fs.mkdirSync(lockDir)
+          return () => fs.rmSync(lockDir, { recursive: true, force: true })
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error
+          if (Date.now() >= deadline) {
+            const busy = new Error('Library writer acquisition timed out')
+            busy.name = 'LibraryWriterBusyError'
+            busy.code = 'LIBRARY_WRITER_BUSY'
+            busy.reason = 'timeout'
+            throw busy
+          }
+          await wait(2)
+        }
+      }
+    }
+
+    parentPort.on('message', async ({ requestId, request }) => {
+      if (request.type === 'shutdown') {
+        parentPort.postMessage({ requestId, type: 'result', result: { kind: 'shutdown' } })
+        return
+      }
+      let releaseArbiter
+      let releaseLease
+      try {
+        releaseArbiter = await acquireProcessArbiter(request)
+        releaseLease = await acquireSyntheticFileLease(request.root)
+        if (request.type === 'writer-probe') {
+          fs.writeFileSync(path.join(request.root, '.holder-entered'), 'yes')
+          await wait(100)
+          parentPort.postMessage({ requestId, type: 'result', result: { kind: 'writer-probe' } })
+        } else {
+          fs.writeFileSync(path.join(request.root, '.live-write'), 'committed')
+          parentPort.postMessage({
+            requestId,
+            type: 'result',
+            result: {
+              kind: 'session-sync',
+              value: { summary: { id: 'live', sessionId: 'live' }, dirPath: request.root }
+            }
+          })
+        }
+      } catch (error) {
+        parentPort.postMessage({
+          requestId,
+          type: 'error',
+          error: error.message,
+          errorName: error.name,
+          errorCode: error.code,
+          errorReason: error.reason
+        })
+      } finally {
+        if (releaseLease) releaseLease()
+        if (releaseArbiter) releaseArbiter()
+      }
+    })
+  `)
+  return workerPath
+}
+
+function writeWriterReasonFixtureWorker(root: string): string {
+  const workerPath = path.join(root, 'writer-reason-worker.cjs')
+  fs.writeFileSync(workerPath, `
+    const { parentPort } = require('node:worker_threads')
+    parentPort.on('message', ({ requestId, request }) => {
+      if (request.type === 'shutdown') {
+        parentPort.postMessage({ requestId, type: 'result', result: { kind: 'shutdown' } })
+        return
+      }
+      const error = new Error('Library writer acquisition timed out')
+      error.name = 'LibraryWriterBusyError'
+      error.code = 'LIBRARY_WRITER_BUSY'
+      error.reason = 'timeout'
+      parentPort.postMessage({
+        requestId,
+        type: 'error',
+        error: error.message,
+        errorName: error.name,
+        errorCode: error.code,
+        errorReason: error.reason
+      })
+    })
+  `)
+  return workerPath
+}
+
 afterEach(() => {
   closeSearchIndex()
   closeUsageFactStore()
@@ -152,6 +281,73 @@ afterEach(() => {
 })
 
 describe('Library worker request', () => {
+  it('queues two LibraryWorkerClient writers before the file lease timeout starts', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-arbiter-'))
+    roots.push(root)
+    const workerPath = writeWriterArbiterFixtureWorker(root)
+    const maintenanceWorker = new LibraryWorkerClient(workerPath)
+    const liveWorker = new LibraryWorkerClient(workerPath)
+    try {
+      const maintenance = maintenanceWorker.probeWriter(root)
+      const enteredDeadline = Date.now() + 1_000
+      while (!fs.existsSync(path.join(root, '.holder-entered'))) {
+        if (Date.now() >= enteredDeadline) throw new Error('maintenance writer did not enter')
+        await new Promise((resolve) => setTimeout(resolve, 2))
+      }
+      const startedAt = performance.now()
+      const live = liveWorker.syncSession({
+        root,
+        filePath: path.join(root, 'source.jsonl'),
+        sessionId: 'live',
+        source: 'claude-code'
+      })
+      await maintenance
+      await expect(live).resolves.toMatchObject({ dirPath: root })
+      expect(performance.now() - startedAt).toBeGreaterThan(20)
+      expect(fs.readFileSync(path.join(root, '.live-write'), 'utf8')).toBe('committed')
+    } finally {
+      await Promise.all([maintenanceWorker.close(), liveWorker.close()])
+    }
+  })
+
+  it('preserves a timeout reason through WorkerReply and health classification', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-reason-'))
+    roots.push(root)
+    const worker = new LibraryWorkerClient(writeWriterReasonFixtureWorker(root))
+    resetLibraryHealth()
+    try {
+      const serialized = serializeLibraryWorkerError(new LibraryWriterBusyError('timeout'))
+      expect(serialized).toMatchObject({
+        errorName: 'LibraryWriterBusyError',
+        errorCode: 'LIBRARY_WRITER_BUSY',
+        errorReason: 'timeout'
+      })
+      const error = await worker.probeWriter(root).catch((caught: unknown) => caught)
+      expect(error).toMatchObject({
+        name: 'LibraryWriterBusyError',
+        code: 'LIBRARY_WRITER_BUSY',
+        reason: 'timeout'
+      })
+      const classification = classifyLibraryError(error)
+      expect(classification).toMatchObject({
+        state: 'writer-blocked',
+        errorCode: 'WRITER_BUSY_TIMEOUT',
+        writerReason: 'timeout'
+      })
+      expect(classification.message).not.toContain('another process')
+      transitionLibraryHealth(
+        classification.state,
+        classification.errorCode,
+        classification.message,
+        classification.writerReason
+      )
+      expect(getLibraryHealth().diagnostics.at(-1)).toMatchObject({ reason: 'timeout' })
+    } finally {
+      await worker.close()
+      resetLibraryHealth()
+    }
+  })
+
   it('retires only after already accepted sibling requests have drained', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-retire-'))
     roots.push(root)

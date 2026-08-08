@@ -13,11 +13,18 @@ import {
   syncBackup,
   setSessionTurnCount,
   withLibraryMaintenanceWriter,
+  getOrCreateLocalDeviceId,
   type LibraryTree,
   type LibrarySyncOutcome,
   type LibraryStartupPlanResult,
   type LibraryStartupBatchResult
 } from './library-manager'
+import {
+  currentLibraryWriterArbiterWire,
+  probeLibraryWriter,
+  runWithLibraryWriterArbiterContext,
+  type LibraryWriterArbiterWire
+} from './library-writer-lease'
 import { parseSessionFile, buildSessionSummary, resolvePhysicalSessionId } from './session-loader'
 import { loadCodexRawMessages, loadCodexSessionRecordWithRaw } from './codex-loader'
 import { buildCursorSessionSummary, loadCursorRawMessages } from './cursor-loader'
@@ -91,7 +98,10 @@ export type LibraryWorkerRequest = (
   | { type: 'search-sources-sync'; sources: SearchIndexSourceDescriptor[]; prune: boolean }
   | { type: 'search-canonical-index'; sessionId: string; records: CanonicalRecord[]; includeThinking?: boolean }
   | { type: 'search-canonical-tombstone'; sessionRecordId: string }
-) & { cancelBuffer?: SharedArrayBuffer }
+) & {
+  cancelBuffer?: SharedArrayBuffer
+  writerArbiter?: LibraryWriterArbiterWire
+}
 
 export interface LibraryWorkerSessionSyncResult {
   summary: SessionSummary
@@ -134,8 +144,28 @@ type WorkerReply =
       error: string
       errorName?: string
       errorCode?: string
+      errorReason?: string
       errorStack?: string
     }
+
+export function serializeLibraryWorkerError(error: unknown, includeStack = false): {
+  error: string
+  errorName?: string
+  errorCode?: string
+  errorReason?: string
+  errorStack?: string
+} {
+  const typedError = error instanceof Error
+    ? error as Error & { code?: unknown; reason?: unknown }
+    : null
+  return {
+    error: typedError?.message || String(error),
+    errorName: typedError?.name,
+    errorCode: typeof typedError?.code === 'string' ? typedError.code : undefined,
+    errorReason: typeof typedError?.reason === 'string' ? typedError.reason : undefined,
+    errorStack: includeStack ? typedError?.stack : undefined
+  }
+}
 
 export async function runLibraryWorkerRequest(
   request: LibraryWorkerRequest,
@@ -143,7 +173,8 @@ export async function runLibraryWorkerRequest(
 ): Promise<LibraryWorkerResult> {
   const cancelFlag = request.cancelBuffer ? new Int32Array(request.cancelBuffer) : null
   const shouldCancel = cancelFlag ? () => Atomics.load(cancelFlag, 0) === 1 : undefined
-  throwIfWorkerCancelled(shouldCancel)
+  return runWithLibraryWriterArbiterContext(request.writerArbiter, shouldCancel, async () => {
+    throwIfWorkerCancelled(shouldCancel)
   if (request.type === 'shutdown') {
     closeUsageFactStore()
     closeSearchIndex()
@@ -180,14 +211,14 @@ export async function runLibraryWorkerRequest(
     await tombstoneCanonicalSession(request.sessionRecordId, { shouldCancel })
     return { kind: 'search-write' }
   }
+  if (request.type === 'writer-probe') {
+    await probeLibraryWriter(request.root, getOrCreateLocalDeviceId())
+    return { kind: 'writer-probe' }
+  }
   initLibrary(request.root, {
     readOnly: request.type === 'scan',
     ignoreDirs: request.type === 'scan' || request.type === 'sync' ? request.ignoreDirs : undefined
   })
-  if (request.type === 'writer-probe') {
-    await withLibraryMaintenanceWriter(async () => {})
-    return { kind: 'writer-probe' }
-  }
   if (request.type === 'startup-plan') {
     return {
       kind: 'startup-plan',
@@ -263,6 +294,7 @@ export async function runLibraryWorkerRequest(
   }
   throwIfWorkerCancelled(shouldCancel)
   return { kind: 'session-sync', value: { summary, dirPath } }
+  })
 }
 
 function throwIfWorkerCancelled(shouldCancel?: () => boolean): void {
@@ -282,14 +314,10 @@ if (!isMainThread && parentPort) {
         })
         parentPort!.postMessage({ requestId, type: 'result', result } satisfies WorkerReply)
       } catch (error) {
-        const typedError = error instanceof Error ? error as Error & { code?: unknown } : null
         parentPort!.postMessage({
           requestId,
           type: 'error',
-          error: typedError?.message || String(error),
-          errorName: typedError?.name,
-          errorCode: typeof typedError?.code === 'string' ? typedError.code : undefined,
-          errorStack: process.env.SWOB_E2E_SANDBOX_ROOT ? typedError?.stack : undefined
+          ...serializeLibraryWorkerError(error, Boolean(process.env.SWOB_E2E_SANDBOX_ROOT))
         } satisfies WorkerReply)
       }
     })
@@ -561,7 +589,11 @@ export class LibraryWorkerClient {
     const worker = this.ensureWorker()
     const requestId = this.nextRequestId++
     const cancelFlag = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
-    const workerRequest = { ...request, cancelBuffer: cancelFlag.buffer as SharedArrayBuffer }
+    const workerRequest = {
+      ...request,
+      cancelBuffer: cancelFlag.buffer as SharedArrayBuffer,
+      writerArbiter: currentLibraryWriterArbiterWire()
+    }
     let resolveRequest!: (result: LibraryWorkerResult) => void
     let rejectRequest!: (error: Error) => void
     const promise = new Promise<LibraryWorkerResult>((resolve, reject) => {
@@ -593,9 +625,10 @@ export class LibraryWorkerClient {
       this.notifyIfDrained()
       if (reply.type === 'result') pending.resolve(reply.result)
       else {
-        const error = new Error(reply.error) as Error & { code?: string }
+        const error = new Error(reply.error) as Error & { code?: string; reason?: string }
         if (reply.errorName) error.name = reply.errorName
         if (reply.errorCode) error.code = reply.errorCode
+        if (reply.errorReason) error.reason = reply.errorReason
         if (reply.errorStack) error.stack = reply.errorStack
         pending.reject(error)
       }

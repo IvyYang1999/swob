@@ -4,10 +4,15 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   acquireLibraryWriterLease,
+  advanceLibraryWriterArbiterEpoch,
+  currentLibraryWriterArbiterWire,
   inspectLibraryWriterLease,
   LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
   LibraryWriterBusyError,
+  LibraryWriterIdentityUnavailableError,
   recoverLibraryWriterLeaseManually,
+  resolveLibraryWriterHostIdentityStoragePath,
+  runWithLibraryWriterArbiterContext,
   type LibraryWriterLeaseOptions
 } from './library-writer-lease'
 import { deriveHostBootIdentity, deriveLibraryHostProof } from './host-identity'
@@ -16,7 +21,6 @@ import {
   readLibraryWriteGeneration,
   runWithLibraryWriter
 } from './library-write-coordinator'
-
 let root: string
 
 const quiet = { eventSink: () => {} }
@@ -62,7 +66,7 @@ describe('Library 跨进程单写者 lease', () => {
 
     const second = runWithLibraryWriter(root, 'same-install', 'move', async () => {
       order.push('cli-move')
-    }, { ...quiet, timeoutMs: 500, pollMs: 5 })
+    }, { ...quiet, timeoutMs: 5, pollMs: 1 })
 
     await new Promise((resolve) => setTimeout(resolve, 25))
     expect(order).toEqual(['gui-start'])
@@ -70,6 +74,33 @@ describe('Library 跨进程单写者 lease', () => {
     await Promise.all([first, second])
     expect(order).toEqual(['gui-start', 'gui-end', 'cli-move'])
     expect(readLibraryWriteGeneration(root)).toBe(2)
+  })
+
+  it.each(['epoch', 'cancel'] as const)('arbiter 等待在 %s 失效时退出且不触碰文件 lease', async (stopKind) => {
+    let releaseOwner!: () => void
+    let ownerEntered!: () => void
+    const entered = new Promise<void>((resolve) => { ownerEntered = resolve })
+    const ownerGate = new Promise<void>((resolve) => { releaseOwner = resolve })
+    const owner = runWithLibraryWriter(root, 'device-a', 'maintenance', async () => {
+      ownerEntered()
+      await ownerGate
+    }, { ...quiet, timeoutMs: 5 })
+    await entered
+
+    let cancelled = false
+    const wire = currentLibraryWriterArbiterWire()
+    const contender = runWithLibraryWriterArbiterContext(
+      wire,
+      () => cancelled,
+      () => runWithLibraryWriter(root, 'device-a', 'move', async () => {}, { ...quiet, timeoutMs: 5 })
+    )
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    if (stopKind === 'epoch') advanceLibraryWriterArbiterEpoch()
+    else cancelled = true
+    await expect(contender).rejects.toMatchObject({ name: 'AbortError' })
+    releaseOwner()
+    await owner
+    expect(readLibraryWriteGeneration(root)).toBe(1)
   })
 
   it('心跳延迟但原进程仍存活时绝不偷锁', async () => {
@@ -306,6 +337,40 @@ describe('Library 跨进程单写者 lease', () => {
     } finally {
       fs.rmSync(outside, { recursive: true, force: true })
     }
+  })
+
+  it.each([
+    {
+      label: 'boot identity',
+      overrides: { bootIdentity: () => null }
+    },
+    {
+      label: 'process start fingerprint',
+      overrides: { processStartFingerprint: () => null }
+    }
+  ])('$label 探测失败时不创建锁目录，并返回 identity unavailable', async ({ overrides }) => {
+    const error = await acquireLibraryWriterLease(root, 'device-a', 'maintenance', {
+      ...leaseOptions(101, () => 'start-101'),
+      ...overrides
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(LibraryWriterIdentityUnavailableError)
+    expect(error).toMatchObject({ code: 'WRITER_IDENTITY_UNAVAILABLE' })
+    expect(fs.existsSync(path.join(root, '.swob', 'locks'))).toBe(false)
+  })
+
+  it('生产环境解析 host identity 路径时忽略 SWOB_TEST_HOME', () => {
+    const productionPath = resolveLibraryWriterHostIdentityStoragePath('darwin', {
+      NODE_ENV: 'production',
+      SWOB_TEST_HOME: root
+    })
+    const testPath = resolveLibraryWriterHostIdentityStoragePath('darwin', {
+      NODE_ENV: 'test',
+      SWOB_TEST_HOME: root
+    })
+    expect(productionPath).toBe('/Users/Shared/Swob/host-identity-v1.json')
+    expect(productionPath).not.toContain(root)
+    expect(testPath).toBe(path.join(root, '.swob-machine', 'host-identity-v1.json'))
   })
 
   it('operation 抛错也先持久化 generation，拒绝复用旧扫描', async () => {

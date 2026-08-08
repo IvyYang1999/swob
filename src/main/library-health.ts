@@ -30,6 +30,9 @@ import {
   type LibraryHealthDimensions,
   type LibraryHealthSnapshot,
   type LibraryHealthState,
+  type LibraryWriterBusyReason,
+  type LibraryWriterFailureReason,
+  type LibraryWriterRecoveryStatus,
   type SessionFreshness,
   type UnverifiableReason,
   type WriterCapabilityState
@@ -56,6 +59,12 @@ const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 320
 const MAX_DIAGNOSTIC_READ_BYTES = 256 * 1024
 
 let diagnosticFilePath: string | null = null
+
+function isLibraryWriterFailureReason(value: unknown): value is LibraryWriterFailureReason {
+  return value === 'active-owner' || value === 'remote-owner' ||
+    value === 'unverifiable-owner' || value === 'corrupt-owner' ||
+    value === 'recovery-in-progress' || value === 'timeout' || value === 'identity-unavailable'
+}
 
 function sanitizeDiagnosticMessage(message: string): string {
   return message
@@ -116,7 +125,14 @@ function readPersistedDiagnostics(filePath: string): LibraryDiagnosticEvent[] {
         const value = JSON.parse(line) as Partial<LibraryDiagnosticEvent>
         if (value.schemaVersion === 1 && typeof value.timestamp === 'string' &&
           typeof value.state === 'string' && typeof value.errorCode === 'string' &&
-          typeof value.message === 'string' && (value.severity === 'warning' || value.severity === 'error')) {
+          typeof value.message === 'string' &&
+          (value.reason === undefined || isLibraryWriterFailureReason(value.reason)) &&
+          (value.attempt === undefined || (Number.isSafeInteger(value.attempt) && value.attempt! >= 0)) &&
+          (value.nextRetryAt === undefined || value.nextRetryAt === null ||
+            (typeof value.nextRetryAt === 'string' && Number.isFinite(Date.parse(value.nextRetryAt)))) &&
+          (value.lastReason === undefined || value.lastReason === null ||
+            isLibraryWriterFailureReason(value.lastReason)) &&
+          (value.severity === 'warning' || value.severity === 'error')) {
           events.push(value as LibraryDiagnosticEvent)
         }
       } catch { /* tolerate a torn tail and retain earlier valid events */ }
@@ -167,6 +183,11 @@ class LibraryHealthStateMachine extends EventEmitter {
   private _stateSinceAt = new Date().toISOString()
   private readonly _diagnostics: LibraryDiagnosticEvent[] = []
   private _dimensions: LibraryHealthDimensions = this.initialDimensions()
+  private _writerRecovery: LibraryWriterRecoveryStatus = {
+    attempt: 0,
+    nextRetryAt: null,
+    lastReason: null
+  }
 
   private initialDimensions(now = new Date().toISOString()): LibraryHealthDimensions {
     return {
@@ -259,7 +280,8 @@ class LibraryHealthStateMachine extends EventEmitter {
   transition(
     next: LibraryHealthState,
     errorCode?: string,
-    message?: string
+    message?: string,
+    reason?: LibraryWriterFailureReason
   ): void {
     const prev = this._state
     const now = new Date().toISOString()
@@ -315,8 +337,10 @@ class LibraryHealthStateMachine extends EventEmitter {
     }
 
     if (errorCode || message) {
-      this.recordDiagnostic(next, errorCode || 'STATE_CHANGE', message || `${prev} -> ${next}`)
+      this.recordDiagnostic(next, errorCode || 'STATE_CHANGE', message || `${prev} -> ${next}`, reason)
     }
+    if (next === 'writer-blocked') this._writerRecovery.lastReason = reason || null
+    if (next !== 'writer-blocked') this._writerRecovery.nextRetryAt = null
     this.commit(prev)
   }
 
@@ -450,7 +474,9 @@ class LibraryHealthStateMachine extends EventEmitter {
   recordDiagnostic(
     state: LibraryHealthState,
     errorCode: string,
-    message: string
+    message: string,
+    reason?: LibraryWriterFailureReason,
+    recovery?: LibraryWriterRecoveryStatus
   ): void {
     const event: LibraryDiagnosticEvent = {
       schemaVersion: 1,
@@ -458,6 +484,14 @@ class LibraryHealthStateMachine extends EventEmitter {
       state,
       errorCode,
       message: sanitizeDiagnosticMessage(message),
+      ...(reason ? { reason } : {}),
+      ...(recovery
+        ? {
+            attempt: recovery.attempt,
+            nextRetryAt: recovery.nextRetryAt,
+            lastReason: recovery.lastReason
+          }
+        : {}),
       severity: /(?:ERROR|FAILED|CONFLICT|BUSY|DENIED|FULL|UNSAFE|CORRUPT)/.test(errorCode) ||
         (state !== 'ready' && state !== 'initializing')
         ? 'error'
@@ -489,6 +523,7 @@ class LibraryHealthStateMachine extends EventEmitter {
         : 'none',
       diagnostics: [...this._diagnostics],
       compensation,
+      writerRecovery: { ...this._writerRecovery },
       availableActions: compensationQueue.running || background.state === 'running'
         ? ['cancel-compensation']
         : this._state === 'writer-blocked' || compensation.pending > 0 ||
@@ -507,6 +542,12 @@ class LibraryHealthStateMachine extends EventEmitter {
     this._state = 'initializing'
     this._stateSinceAt = now
     this._dimensions = this.initialDimensions(now)
+    this._writerRecovery = { attempt: 0, nextRetryAt: null, lastReason: null }
+    this.emit('changed')
+  }
+
+  updateWriterRecovery(status: LibraryWriterRecoveryStatus): void {
+    this._writerRecovery = { ...status }
     this.emit('changed')
   }
 }
@@ -693,9 +734,18 @@ export function getLibraryHealth(): LibraryHealthSnapshot {
 export function transitionLibraryHealth(
   next: LibraryHealthState,
   errorCode?: string,
-  message?: string
+  message?: string,
+  reason?: LibraryWriterFailureReason
 ): void {
-  healthMachine.transition(next, errorCode, message)
+  healthMachine.transition(next, errorCode, message, reason)
+}
+
+export function updateLibraryWriterRecovery(status: LibraryWriterRecoveryStatus): void {
+  healthMachine.updateWriterRecovery({
+    attempt: Math.max(0, Math.trunc(status.attempt)),
+    nextRetryAt: status.nextRetryAt,
+    lastReason: status.lastReason
+  })
 }
 
 export function beginLibraryBackgroundSync(total: number): void {
@@ -763,9 +813,11 @@ export function healthAfterSuccessfulLibraryWrite(
  */
 export function recordLibraryDiagnostic(
   errorCode: string,
-  message: string
+  message: string,
+  reason?: LibraryWriterFailureReason,
+  recovery?: LibraryWriterRecoveryStatus
 ): void {
-  healthMachine.recordDiagnostic(healthMachine.state, errorCode, message)
+  healthMachine.recordDiagnostic(healthMachine.state, errorCode, message, reason, recovery)
 }
 
 /**
@@ -876,7 +928,7 @@ export function enqueueCompensation(
  */
 export function classifyLibraryError(
   error: unknown
-): { state: LibraryHealthState; errorCode: string; message: string } {
+): { state: LibraryHealthState; errorCode: string; message: string; writerReason?: LibraryWriterFailureReason } {
   if (!error || typeof error !== 'object') {
     return {
       state: 'corrupt',
@@ -885,14 +937,25 @@ export function classifyLibraryError(
     }
   }
 
-  const err = error as { name?: string; code?: string; message?: string }
+  const err = error as { name?: string; code?: string; message?: string; reason?: unknown }
+
+  if (err.code === 'WRITER_IDENTITY_UNAVAILABLE') {
+    return {
+      state: 'writer-blocked',
+      errorCode: 'WRITER_IDENTITY_UNAVAILABLE',
+      message: 'Library writer identity is unavailable; no lock was created',
+      writerReason: 'identity-unavailable'
+    }
+  }
 
   // Writer busy / lease contention
   if (err.name === 'LibraryWriterBusyError' || err.code === 'LIBRARY_WRITER_BUSY') {
+    const reason = writerBusyReason(err.reason)
     return {
       state: 'writer-blocked',
-      errorCode: 'WRITER_BUSY',
-      message: 'Library writer is held by another process'
+      errorCode: WRITER_ERROR_CODES[reason],
+      message: WRITER_ERROR_MESSAGES[reason],
+      writerReason: reason
     }
   }
 
@@ -947,6 +1010,32 @@ export function classifyLibraryError(
     errorCode: 'INIT_FAILED',
     message: redactErrorMessage(err.message || 'Library initialization failed')
   }
+}
+
+const WRITER_ERROR_CODES: Record<LibraryWriterBusyReason, string> = {
+  'active-owner': 'WRITER_BUSY_ACTIVE_OWNER',
+  'remote-owner': 'WRITER_BUSY_REMOTE_OWNER',
+  'unverifiable-owner': 'WRITER_BUSY_UNVERIFIABLE_OWNER',
+  'corrupt-owner': 'WRITER_BUSY_CORRUPT_OWNER',
+  'recovery-in-progress': 'WRITER_BUSY_RECOVERY_IN_PROGRESS',
+  timeout: 'WRITER_BUSY_TIMEOUT'
+}
+
+const WRITER_ERROR_MESSAGES: Record<LibraryWriterBusyReason, string> = {
+  'active-owner': 'Library writer is held by another process',
+  'remote-owner': 'Library writer belongs to a different host',
+  'unverifiable-owner': 'Library writer ownership could not be verified',
+  'corrupt-owner': 'Library writer owner record is corrupt',
+  'recovery-in-progress': 'Library writer recovery is already in progress',
+  timeout: 'Library writer acquisition timed out'
+}
+
+function writerBusyReason(reason: unknown): LibraryWriterBusyReason {
+  return reason === 'active-owner' || reason === 'remote-owner' ||
+    reason === 'unverifiable-owner' || reason === 'corrupt-owner' ||
+    reason === 'recovery-in-progress' || reason === 'timeout'
+    ? reason
+    : 'unverifiable-owner'
 }
 
 /**

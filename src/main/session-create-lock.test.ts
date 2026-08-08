@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { acquireSessionCreateLock, SessionCreateBusyError } from './session-create-lock'
+import {
+  acquireSessionCreateLock,
+  SessionCreateBusyError,
+  SessionCreateIdentityUnavailableError
+} from './session-create-lock'
 import { LibraryPathUnsafeError } from './library-path-safety'
 import type { LogicalSessionKey } from './library-session-identity'
 
@@ -20,6 +24,18 @@ afterEach(() => {
 })
 
 describe('session create lock', () => {
+  it.each([
+    { bootIdentity: (): string | null => null, processStartFingerprint: (): string | null => 'start-a' },
+    { bootIdentity: (): string | null => 'boot-a', processStartFingerprint: (): string | null => null }
+  ])('fails identity probing before creating the lock tree', async (identity) => {
+    const root = tempRoot()
+    const error = await acquireSessionCreateLock(root, key, 'device-a', identity)
+      .catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(SessionCreateIdentityUnavailableError)
+    expect(error).toMatchObject({ code: 'WRITER_IDENTITY_UNAVAILABLE' })
+    expect(fs.existsSync(path.join(root, '.swob', 'locks'))).toBe(false)
+  })
+
   it('uses only a hash in the lock filename', async () => {
     const handle = await acquireSessionCreateLock(tempRoot(), key, 'device-a', {
       bootIdentity: () => 'boot-a',

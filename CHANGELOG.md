@@ -2,6 +2,31 @@
 
 [中文](CHANGELOG.zh.md)
 
+## v1.4.0 — 2026-08-08
+
+### New
+
+- **Thirteen native sources, one compatible** — Antigravity, Grok, Kimi, Hermes, Qoder, Trae, and Gemini join Claude Code, Codex, Cursor, OpenCode, ZCode, and Pi as natively parsed sources; CC-Mirror remains supported as a compatible format. Capability tiers stay evidence-based: encrypted or restricted formats degrade honestly instead of guessing.
+- **Windows x64 Beta (unsigned)** — a first Windows build with onboarding, discovery, reading, search, Insights, and settings. Beta means CI-verified only; see Known limitations.
+- **Startup performance overhaul** — warm starts now compute a real dirty set instead of re-syncing every session, cold syncs run in bounded batches with a resumable checkpoint, and Search/Usage projections queue behind a single idle-scheduled gate. On a real ~1,450-session library, the first post-upgrade launch completes its one-time full catch-up in about 10 minutes and later launches settle in about a minute; the old build was still at 22% after 20 minutes.
+- **Library health you can see** — a health state machine with freshness tracking, a visible health panel, recovery compensation queues, and a CLI control plane (`swob where`, `swob status`, `swob doctor`).
+- **Declarative lens packs** — extend Swob with `.swoblens` files instead of code.
+- **Auditable cost ledger** — cost and valuation dimensions with price snapshots, pagination for large ledgers, and value history queries; a Lens platform and theme selector round out the workspace.
+
+### Fixed
+
+- A crashed writer could leave the whole library silently read-only; the writer lease now recovers explicitly and health status reports it instead of hiding it.
+- Session indexes no longer drift hours behind live activity; resume sessions launched with `=`-style arguments are recognized.
+- Galaxy layout regressions and render flicker are fixed with source-partition clustering and canvas size guards.
+- Library preferences survive startup hydration races.
+- Shutdown no longer triggers native aborts or spurious warnings from the library worker.
+
+### Known limitations
+
+- `swob active` cannot detect Claude Code sessions embedded inside Claude Desktop (they spawn no native `claude` process), nor sessions started without `--resume` (no session id to associate). The capability matrix reflects this boundary.
+- The Windows build is Beta and unsigned: it is CI-verified only and has not passed hands-on Windows 11 validation. SmartScreen warnings are expected.
+- The first launch after upgrading performs a one-time full catch-up (about 10 minutes on large libraries) while the new checkpoint is established; subsequent launches are incremental.
+
 ## v1.3.1 — 2026-07-24
 
 ### New

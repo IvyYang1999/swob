@@ -2,6 +2,31 @@
 
 [English](CHANGELOG.md)
 
+## v1.4.0 — 2026-08-08
+
+### 新功能
+
+- **13 个原生来源 + 1 个兼容来源**：Antigravity、Grok、Kimi、Hermes、Qoder、Trae、Gemini 加入 Claude Code、Codex、Cursor、OpenCode、ZCode、Pi 的原生解析行列；CC-Mirror 继续以兼容格式支持。能力分级坚持以证据为准：加密或受限格式如实降级，不做猜测。
+- **Windows x64 Beta（未签名）**：首个 Windows 构建，覆盖引导、发现、阅读、搜索、Insights 与设置。Beta 指仅经 CI 验证，详见已知边界。
+- **启动性能重构**：热启动改为计算真实脏集而非全量重同步；冷同步走有界批处理并支持可恢复 checkpoint；Search／Usage 投影收进单队列按空闲调度。在约 1450 个会话的真实库上，升级后首次启动约 10 分钟完成一次性全量补齐，之后每次启动约 1 分钟内安静；旧版 20 分钟仅完成 22%。
+- **看得见的库健康**：健康状态机与新鲜度追踪、可见的健康面板、恢复补偿队列，以及 CLI 控制面（`swob where`、`swob status`、`swob doctor`）。
+- **声明式镜头包**：用 `.swoblens` 文件扩展 Swob，无需写代码。
+- **可审计成本账本**：成本与估值维度、价格快照、大账本分页与估值历史查询；镜头平台与主题选择器一并就位。
+
+### 修复
+
+- 写入进程崩溃后可能让整个库静默变成只读；现在 writer 租约会显式恢复，健康状态如实上报而非隐藏。
+- 会话索引不再落后实时活动数小时；识别以 `=` 形式传参启动的 resume 会话。
+- 修复 Galaxy 布局回归与渲染闪烁（来源分区聚类 + 画布尺寸守卫）。
+- 库偏好设置在启动 hydration 竞态下不再丢失。
+- 退出时库 worker 不再触发 native abort 或多余告警。
+
+### 已知边界
+
+- `swob active` 检测不到两类会话：① Claude Desktop 内嵌运行的 Claude Code（不产生原生 `claude` 进程）；② 未带 `--resume` 启动的新会话（无 session id 可关联）。能力矩阵已如实标注该边界。
+- Windows 构建为 Beta 且未签名：仅经 CI 验证，未经过 Windows 11 真机手工验收，出现 SmartScreen 提示属预期。
+- 升级后首次启动会做一次性全量补齐（大库约 10 分钟）以建立新 checkpoint；之后的启动均为增量。
+
 ## v1.3.1 — 2026-07-24
 
 ### 新功能

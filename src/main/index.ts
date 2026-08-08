@@ -897,26 +897,37 @@ function notifySearchIndexUpdated(): void {
   mainWindow?.webContents.send('session:searchIndexUpdated')
 }
 
-function scheduleSearchIndexWarmupNow(): void {
-  if (runtimeShuttingDown) return
+function scheduleSearchIndexWarmupNow(): Promise<void> {
+  if (runtimeShuttingDown) return Promise.resolve()
   const scheduledEpoch = libraryRuntimeEpoch
-  scheduleEpochBoundTask({
-    epoch: scheduledEpoch,
-    currentEpoch: () => libraryRuntimeEpoch,
-    isPaused: () => libraryRuntimePaused,
-    isStopped: () => runtimeShuttingDown,
-    run: () => {
-      void getSearchIndexWriteCoordinator().scheduleLegacySnapshot(currentSearchSources())
-        .then(notifySearchIndexUpdated)
-        .catch((error) => {
-          if (!runtimeShuttingDown) console.error('[search-index] background warmup delayed:', error)
-        })
-    }
+  return new Promise<void>((resolve) => {
+    let started = false
+    scheduleEpochBoundTask({
+      epoch: scheduledEpoch,
+      currentEpoch: () => libraryRuntimeEpoch,
+      isPaused: () => libraryRuntimePaused,
+      isStopped: () => runtimeShuttingDown,
+      run: () => {
+        started = true
+        void getSearchIndexWriteCoordinator().scheduleLegacySnapshot(currentSearchSources())
+          .then(notifySearchIndexUpdated)
+          .catch((error) => {
+            if (!runtimeShuttingDown) console.error('[search-index] background warmup delayed:', error)
+          })
+          .finally(resolve)
+      }
+    })
+    // scheduleEpochBoundTask intentionally does not call run for a replaced or
+    // paused root. Its sibling timer settles the queue item in that case.
+    const skipped = setImmediate(() => { if (!started) resolve() })
+    skipped.unref?.()
   })
 }
 
 function scheduleSearchIndexWarmup(): void {
-  startupProjectionGate.scheduleSearch(scheduleSearchIndexWarmupNow)
+  void startupProjectionGate.scheduleSearch(scheduleSearchIndexWarmupNow).catch((error) => {
+    if (!runtimeShuttingDown) console.error('[search-index] queued warmup dropped:', error)
+  })
 }
 
 function currentAnalysisFolders(): Folder[] {
@@ -984,7 +995,7 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
   return run
 }
 
-function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult> {
+function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult | undefined> {
   if (runtimeShuttingDown) return scheduleUsageFactSyncNow(options)
   const run = startupProjectionGate.scheduleUsage(options, scheduleUsageFactSyncNow)
   void run.catch(() => { /* error is retained by the runner or root-transition reset */ })
@@ -1705,6 +1716,7 @@ async function syncStartupSessions(
     sessionMeta,
     LIBRARY_STARTUP_SCHEMA_GENERATION
   )
+  startupProjectionGate.prepareStartup(plan.dirtyIndexes.length > 0)
   const dirtySessions = plan.dirtyIndexes.map((index) => sessions[index])
   beginLibraryBackgroundSync(dirtySessions.length)
   try {
@@ -1780,6 +1792,7 @@ async function initLibraryFromSessions(
     const skippedConflictSessionIds = new Set<string>()
     const needsMigration = oldConfig.folders.length > 0 &&
       tree.folders.length === 0 && tree.ungroupedSessions.length === 0
+    if (needsMigration) startupProjectionGate.prepareStartup(true)
 
     let startupInterrupted = false
     let initialSync: LibrarySyncOutcome = { total: sessions.length, completed: 0, skipped: [] }
@@ -1845,6 +1858,7 @@ async function initLibraryFromSessions(
     }
     clearLibraryWriterRecoverySchedule()
     libraryWriterRecoveryAttempts = 0
+    startupProjectionGate.finishStartup()
   })()
   libraryInitializationPromise = work
   try {
@@ -3392,6 +3406,9 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   libraryRuntimePaused = true
   libraryStartupSyncCancelled = false
   startupProjectionGate.reset(new Error('Library root is changing'))
+  // Search backup paths and Usage folder dimensions are root-scoped. A root
+  // switch is therefore a projection migration even when Library dirty=0.
+  startupProjectionGate.prepareStartup(true)
   libraryStartupWriterProven = false
   libraryStartupChunkActive = false
   clearLibraryWriterRecoverySchedule()
@@ -3494,6 +3511,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     // synchronization is itself the durable boundary; only then release the
     // adoption-time projections for the new root.
     if (librarySwitchCommitted) openStartupProjectionGate()
+    if (librarySwitchCommitted) startupProjectionGate.finishStartup()
     if (retryWriterAfterSwitch) scheduleLibraryWriterRecovery()
   }
 }

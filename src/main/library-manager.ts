@@ -80,6 +80,12 @@ import {
   type SessionIdResolution
 } from './library-session-registry'
 import {
+  buildLibraryStartupPlan,
+  completeLibraryStartupCheckpoint,
+  parseLibraryStartupCheckpoint,
+  type LibraryStartupCheckpoint
+} from './library-startup-sync'
+import {
   acquireSessionCreateLock,
   getLocalBootIdentity,
   getProcessStartFingerprint,
@@ -353,6 +359,7 @@ const DEFAULT_ROOT = assertTestDefaultLibraryPath(
 )
 const APP_CONFIG_DIR = path.join(runtimeHome(), '.claude-session-manager')
 const APP_CONFIG_FILE = path.join(APP_CONFIG_DIR, 'app-config.json')
+const LIBRARY_STARTUP_CHECKPOINT_FILE = path.join('.swob', 'library-startup-sync-checkpoint.json')
 
 export interface AppConfig {
   libraryPath?: string
@@ -777,6 +784,12 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
     sessionMetaCache.clear()
     sessionMetaDiskReads = 0
     sessionRegistry.clear()
+    startupIncrementalCandidates.clear()
+    startupIncrementalPackageIds.clear()
+    startupIncrementalCandidatesBySessionId.clear()
+    registrySnapshotPreparedRoot = null
+    startupPreparedRegistryDepth = 0
+    startupPlanRuntime = null
     lastIdentityScanIssues = []
   }
   _cachedLibraryConfig = null
@@ -1106,6 +1119,9 @@ function readSessionMeta(dirPath: string): SessionMeta | null {
 function assertCurrentSessionWriteAuthorized(dirPath: string, meta: SessionMeta): void {
   assertSafeLibraryWritePath(_root, dirPath, { allowRoot: false })
   const key = logicalSessionKey(buildLogicalSessionIdentityFromMeta(meta))
+  const incremental = startupIncrementalCandidates.get(key)
+  if (incremental && path.resolve(incremental.dirPath) === path.resolve(dirPath) &&
+    incremental.packageId === meta.packageId) return
   const binding = sessionRegistry.get(key)
   if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
   if (binding.state === 'missing') {
@@ -1248,6 +1264,19 @@ function folderHasUserFiles(dirPath: string): boolean {
 // --- Logical identity registry: identity is stable; dirPath is only a binding ---
 
 const sessionRegistry = new LibrarySessionRegistry()
+const startupIncrementalCandidates = new Map<LogicalSessionKey, LibrarySessionCandidate>()
+const startupIncrementalPackageIds = new Set<string>()
+const startupIncrementalCandidatesBySessionId = new Map<string, LibrarySessionCandidate[]>()
+let registrySnapshotPreparedRoot: string | null = null
+let startupPreparedRegistryDepth = 0
+let startupPlanRuntime: {
+  root: string
+  snapshotDigest: string
+  schemaGeneration: number
+  writerAcquires: number
+  registryFullScans: number
+  registryIncrementalUpdates: number
+} | null = null
 const sessionMetaCache = new Map<string, { mtimeMs: number; size: number; meta: SessionMeta }>()
 let sessionMetaDiskReads = 0
 let lastIdentityScanIssues: LibraryIdentityScanIssue[] = []
@@ -1329,12 +1358,22 @@ function throwForUnsafeResolution(resolution: SessionIdResolution): never {
 }
 
 function requireWritableSessionDir(sessionId: string, expectedDirPath?: string): string {
-  const issues = refreshSessionRegistryFromDisk()
-  throwIfIdentityScanUnresolved(issues)
+  if (startupPreparedRegistryDepth === 0) {
+    const issues = refreshSessionRegistryFromDisk()
+    throwIfIdentityScanUnresolved(issues)
+  } else {
+    throwIfIdentityScanUnresolved(lastIdentityScanIssues)
+  }
   if (expectedDirPath) {
     const meta = readSessionMeta(expectedDirPath)
     if (!meta || meta.sessionId !== sessionId) throw new Error('session-binding-mismatch')
     const key = logicalSessionKey(buildLogicalSessionIdentityFromMeta(meta))
+    const incremental = startupIncrementalCandidates.get(key)
+    if (incremental && path.resolve(incremental.dirPath) === path.resolve(expectedDirPath) &&
+      incremental.packageId === meta.packageId) {
+      assertSafeLibraryWritePath(_root, expectedDirPath, { allowRoot: false })
+      return expectedDirPath
+    }
     const binding = sessionRegistry.get(key)
     if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
     if (binding.state === 'missing' && binding.reason === 'previously-seen') {
@@ -2033,6 +2072,10 @@ export function applyLibraryTree(tree: LibraryTree): boolean {
   sessionRegistry.replace(registryCandidates, {
     authoritative: tree.identityScanStatus === 'authoritative-complete' && lastIdentityScanIssues.length === 0
   })
+  startupIncrementalCandidates.clear()
+  startupIncrementalPackageIds.clear()
+  startupIncrementalCandidatesBySessionId.clear()
+  registrySnapshotPreparedRoot = path.resolve(_root)
   for (const metaPath of sessionMetaCache.keys()) {
     if (!liveMetaPaths.has(metaPath)) sessionMetaCache.delete(metaPath)
   }
@@ -2041,6 +2084,7 @@ export function applyLibraryTree(tree: LibraryTree): boolean {
 
 /** Read-only disk recovery used after a stale/missing binding and before every create transaction. */
 function refreshSessionRegistryFromDisk(): LibraryIdentityScanIssue[] {
+  if (startupPreparedRegistryDepth > 0 && startupPlanRuntime) startupPlanRuntime.registryFullScans++
   const identityIssues: LibraryIdentityScanIssue[] = []
   const { sessions, folders } = scanDir(_root, identityIssues)
   const candidates: LibrarySessionCandidate[] = []
@@ -2065,9 +2109,31 @@ function refreshSessionRegistryFromDisk(): LibraryIdentityScanIssue[] {
     }
   }
   sessionRegistry.replace(candidates, { authoritative: identityIssues.length === 0 })
+  startupIncrementalCandidates.clear()
+  startupIncrementalPackageIds.clear()
+  startupIncrementalCandidatesBySessionId.clear()
+  registrySnapshotPreparedRoot = path.resolve(_root)
   _appliedWriteGeneration = Math.max(_appliedWriteGeneration, readLibraryWriteGeneration(_root))
   lastIdentityScanIssues = structuredClone(identityIssues)
   return identityIssues
+}
+
+function registerSessionCandidateIncrementally(dirPath: string, meta: SessionMeta): void {
+  const candidate = candidateFromManifest(dirPath, meta, false)
+  const previous = startupIncrementalCandidates.get(candidate.logicalKey)
+  if (previous) {
+    const remaining = (startupIncrementalCandidatesBySessionId.get(previous.sessionId) || [])
+      .filter((entry) => entry.logicalKey !== previous.logicalKey)
+    if (remaining.length > 0) startupIncrementalCandidatesBySessionId.set(previous.sessionId, remaining)
+    else startupIncrementalCandidatesBySessionId.delete(previous.sessionId)
+  }
+  startupIncrementalCandidates.set(candidate.logicalKey, candidate)
+  if (candidate.packageId) startupIncrementalPackageIds.add(candidate.packageId)
+  startupIncrementalCandidatesBySessionId.set(candidate.sessionId, [
+    ...(startupIncrementalCandidatesBySessionId.get(candidate.sessionId) || []),
+    candidate
+  ])
+  if (startupPlanRuntime) startupPlanRuntime.registryIncrementalUpdates++
 }
 
 /**
@@ -2925,7 +2991,7 @@ function reserveUniquePackageId(
 ): { packageId: string; reservationPath: string } {
   for (let attempt = 0; attempt < 32; attempt++) {
     const packageId = packageIdFactory()
-    if (!packageId || sessionRegistry.hasPackageId(packageId)) continue
+    if (!packageId || sessionRegistry.hasPackageId(packageId) || startupIncrementalPackageIds.has(packageId)) continue
     try {
       return { packageId, reservationPath: reservePackageIdRecord(packageId, key, owner) }
     } catch (error) {
@@ -2943,6 +3009,12 @@ function assertCreationIdentityIsUnambiguous(
   identity: LogicalSessionIdentity,
   key: LogicalSessionKey
 ): void {
+  const incremental = (startupIncrementalCandidatesBySessionId.get(identity.sessionId) || [])
+    .filter((candidate) => candidate.logicalKey !== key)
+  if (incremental.length > 0 && (identity.sourceFamily === 'legacy-ambiguous' ||
+    incremental.some((candidate) => candidate.identity.sourceFamily === 'legacy-ambiguous'))) {
+    throw new SessionIdentityAmbiguousError(identity.sessionId, incremental)
+  }
   const resolution = sessionRegistry.resolveSessionId(identity.sessionId)
   if (resolution.state === 'missing') return
   if (resolution.state === 'conflict' && resolution.logicalKey === key) {
@@ -3053,6 +3125,16 @@ function resolveExactBindingForEnsure(
   throwIfIdentityScanUnresolved(
     allowOwnedIncomplete ? unresolvedIssuesForEnsure(lastIdentityScanIssues, key) : lastIdentityScanIssues
   )
+  const incremental = startupIncrementalCandidates.get(key)
+  if (incremental && fs.existsSync(incremental.dirPath)) {
+    return updateExistingLibrarySession(
+      incremental.dirPath,
+      session,
+      key,
+      customTitle,
+      originOverride
+    )
+  }
   const binding = sessionRegistry.get(key)
   if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
   if (binding.state === 'missing') {
@@ -3192,10 +3274,14 @@ async function ensureSessionInLibraryUnderWriter(
 
   // Recover only cryptographically/owner-bound incomplete evidence before the
   // authoritative scan. Existing complete bindings can never be erased by 0.
-  const recoveryIssues = recoverIncompleteSessionPublishes(localDeviceId)
-  throwIfIdentityScanUnresolved(unresolvedIssuesForEnsure(recoveryIssues, key))
-  const initialIssues = refreshSessionRegistryFromDisk()
-  throwIfIdentityScanUnresolved(unresolvedIssuesForEnsure(initialIssues, key))
+  if (startupPreparedRegistryDepth === 0) {
+    const recoveryIssues = recoverIncompleteSessionPublishes(localDeviceId)
+    throwIfIdentityScanUnresolved(unresolvedIssuesForEnsure(recoveryIssues, key))
+    const initialIssues = refreshSessionRegistryFromDisk()
+    throwIfIdentityScanUnresolved(unresolvedIssuesForEnsure(initialIssues, key))
+  } else {
+    throwIfIdentityScanUnresolved(unresolvedIssuesForEnsure(lastIdentityScanIssues, key))
+  }
   const current = resolveExactBindingForEnsure(key, session, customTitle, originOverride, true)
   if (current) return current
   assertCreationIdentityIsUnambiguous(identity, key)
@@ -3210,10 +3296,14 @@ async function ensureSessionInLibraryUnderWriter(
   ensureSafeLibraryDirectory(_root, parentDir)
   const lock = await acquireSessionCreateLock(_root, key, localDeviceId)
   try {
-    const lockedRecoveryIssues = recoverIncompleteSessionPublishes(localDeviceId)
-    throwIfIdentityScanUnresolved(lockedRecoveryIssues)
-    const lockedIssues = refreshSessionRegistryFromDisk()
-    throwIfIdentityScanUnresolved(lockedIssues)
+    if (startupPreparedRegistryDepth === 0) {
+      const lockedRecoveryIssues = recoverIncompleteSessionPublishes(localDeviceId)
+      throwIfIdentityScanUnresolved(lockedRecoveryIssues)
+      const lockedIssues = refreshSessionRegistryFromDisk()
+      throwIfIdentityScanUnresolved(lockedIssues)
+    } else {
+      throwIfIdentityScanUnresolved(lastIdentityScanIssues)
+    }
     const concurrentlyCreated = resolveExactBindingForEnsure(key, session, customTitle, originOverride)
     if (concurrentlyCreated) return concurrentlyCreated
     assertCreationIdentityIsUnambiguous(identity, key)
@@ -3283,11 +3373,20 @@ async function ensureSessionInLibraryUnderWriter(
       }
       fsyncDirectorySync(dirPath)
       fsyncDirectorySync(parentDir)
-      refreshSessionRegistryFromDisk()
-      const binding = sessionRegistry.get(key)
-      if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
-      if (binding.state !== 'bound' || path.resolve(binding.candidate.dirPath) !== path.resolve(dirPath)) {
-        throw new Error('session-create-binding-verification-failed')
+      if (startupPreparedRegistryDepth > 0) {
+        registerSessionCandidateIncrementally(dirPath, meta)
+        const incremental = startupIncrementalCandidates.get(key)
+        if (!incremental || path.resolve(incremental.dirPath) !== path.resolve(dirPath) ||
+          incremental.packageId !== meta.packageId) {
+          throw new Error('session-create-binding-verification-failed')
+        }
+      } else {
+        refreshSessionRegistryFromDisk()
+        const binding = sessionRegistry.get(key)
+        if (binding.state === 'conflict') throw new SessionIdentityConflictError(key, binding.candidates)
+        if (binding.state !== 'bound' || path.resolve(binding.candidate.dirPath) !== path.resolve(dirPath)) {
+          throw new Error('session-create-binding-verification-failed')
+        }
       }
       return dirPath
     } catch (error) {
@@ -4719,6 +4818,194 @@ export interface LibrarySyncOutcome {
   skipped: LibrarySyncSkippedSession[]
 }
 
+export interface LibraryStartupSyncCounters {
+  writerAcquires: number
+  registryFullScans: number
+  registryIncrementalUpdates: number
+}
+
+export interface LibraryStartupPlanResult {
+  dirtyIndexes: number[]
+  snapshotDigest: string
+  schemaGeneration: number
+  invalidation: 'cold' | 'none' | 'snapshot-changed' | 'schema-changed' | 'projection-changed'
+  counters: LibraryStartupSyncCounters
+}
+
+export interface LibraryStartupBatchResult {
+  outcome: LibrarySyncOutcome
+  counters: LibraryStartupSyncCounters
+}
+
+function libraryStartupCheckpointPath(): string {
+  return path.join(_root, LIBRARY_STARTUP_CHECKPOINT_FILE)
+}
+
+function readLibraryStartupCheckpoint(): LibraryStartupCheckpoint | null {
+  try {
+    return parseLibraryStartupCheckpoint(JSON.parse(fs.readFileSync(libraryStartupCheckpointPath(), 'utf-8')))
+  } catch {
+    return null
+  }
+}
+
+function writeLibraryStartupCheckpoint(checkpoint: LibraryStartupCheckpoint): void {
+  ensureSafeLibraryDirectory(_root, path.dirname(libraryStartupCheckpointPath()))
+  replaceSafeLibraryFileSync(_root, libraryStartupCheckpointPath(), `${JSON.stringify(checkpoint, null, 2)}\n`)
+}
+
+function currentLibraryStartupCounters(): LibraryStartupSyncCounters {
+  if (!startupPlanRuntime) {
+    return { writerAcquires: 0, registryFullScans: 0, registryIncrementalUpdates: 0 }
+  }
+  return {
+    writerAcquires: startupPlanRuntime.writerAcquires,
+    registryFullScans: startupPlanRuntime.registryFullScans,
+    registryIncrementalUpdates: startupPlanRuntime.registryIncrementalUpdates
+  }
+}
+
+function libraryStartupProjectionIsCurrent(
+  session: SessionSummary,
+  customTitle?: string
+): boolean {
+  const key = logicalSessionKey(buildLogicalSessionIdentityFromSummary(session))
+  const binding = sessionRegistry.get(key)
+  // Identity conflicts are intentionally read-only. Their presence is already
+  // surfaced by Library health and must not become an infinite startup retry.
+  if (binding.state === 'conflict') return true
+  if (binding.state !== 'bound' || !fs.existsSync(binding.candidate.dirPath)) return false
+  const meta = readSessionMeta(binding.candidate.dirPath)
+  if (!meta || meta.sessionId !== session.sessionId || meta.updatedAt !== session.updatedAt ||
+    meta.turnCount !== session.turnCount) return false
+  if (customTitle !== undefined && meta.customTitle !== customTitle) return false
+
+  const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
+  if (canonicalDefinition?.ingestion === 'provider-host') {
+    const descriptor = meta.canonicalProvider
+    return Boolean(descriptor &&
+      fs.existsSync(path.join(binding.candidate.dirPath, descriptor.recordsFile)) &&
+      fs.existsSync(path.join(binding.candidate.dirPath, descriptor.provenanceFile)) &&
+      fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE)))
+  }
+
+  const expectedSourcePaths = sourceFilePathsForMeta(session)
+  if (expectedSourcePaths.length > 0 &&
+    JSON.stringify(meta.sourceFilePaths) !== JSON.stringify(expectedSourcePaths)) return false
+  if (session.messageCount > 0 && !fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE))) return false
+  if (sessionBackupSourcePaths(session).length > 0 &&
+    !fs.existsSync(path.join(binding.candidate.dirPath, BACKUP_FILE))) return false
+  return true
+}
+
+function includeMissingLibraryProjections(
+  plan: ReturnType<typeof buildLibraryStartupPlan>,
+  sessions: readonly SessionSummary[],
+  sessionMeta: Record<string, { customTitle?: string }>
+): void {
+  const forcedDirty = new Set<string>()
+  for (let index = 0; index < sessions.length; index++) {
+    const session = sessions[index]
+    if (!libraryStartupProjectionIsCurrent(session, sessionMeta[session.sessionId]?.customTitle)) {
+      forcedDirty.add(plan.descriptors[index].key)
+    }
+  }
+  if (forcedDirty.size === 0) return
+
+  const dirty = new Set([...plan.checkpoint.dirtyKeys, ...forcedDirty])
+  const completed = new Set(plan.checkpoint.completedKeys)
+  for (const key of forcedDirty) {
+    completed.delete(key)
+    delete plan.checkpoint.completedFingerprints[key]
+  }
+  plan.checkpoint.dirtyKeys = [...dirty].sort()
+  plan.checkpoint.completedKeys = [...completed].sort()
+  const seen = new Set<string>()
+  plan.dirtyIndexes = plan.descriptors.flatMap((descriptor, index) => {
+    if (seen.has(descriptor.key) || !dirty.has(descriptor.key) || completed.has(descriptor.key)) return []
+    seen.add(descriptor.key)
+    return [index]
+  })
+  if (plan.invalidation === 'none') plan.invalidation = 'projection-changed'
+}
+
+/**
+ * Proves the writer, recovers interrupted creates, and performs the sole full
+ * registry scan for this startup generation. Every later batch uses the
+ * resulting authoritative registry plus incremental bindings for new packages.
+ */
+export async function planLibraryStartupSync(
+  sessions: readonly SessionSummary[],
+  schemaGeneration: number,
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }> = {}
+): Promise<LibraryStartupPlanResult> {
+  return withLibraryWriter('maintenance', () => {
+    const hadPreparedScan = registrySnapshotPreparedRoot === path.resolve(_root)
+    // runWithLibraryWriter reserved exactly one new generation before entering
+    // this callback. Any larger gap proves an external writer committed after
+    // the candidate scan, so reusing it would be unsafe.
+    const canReuseAuthoritativeScan = hadPreparedScan && lastIdentityScanIssues.length === 0 &&
+      readLibraryWriteGeneration(_root) === _appliedWriteGeneration + 1
+    const recoveryIssues = recoverIncompleteSessionPublishes(getOrCreateLocalDeviceId())
+    throwIfIdentityScanUnresolved(recoveryIssues)
+    if (!canReuseAuthoritativeScan) scanLibrary()
+    const plan = buildLibraryStartupPlan(sessions, schemaGeneration, readLibraryStartupCheckpoint(), sessionMeta)
+    includeMissingLibraryProjections(plan, sessions, sessionMeta)
+    startupPlanRuntime = {
+      root: path.resolve(_root),
+      snapshotDigest: plan.checkpoint.snapshotDigest,
+      schemaGeneration,
+      writerAcquires: 1,
+      registryFullScans: hadPreparedScan && !canReuseAuthoritativeScan ? 2 : 1,
+      registryIncrementalUpdates: 0
+    }
+    writeLibraryStartupCheckpoint(plan.checkpoint)
+    return {
+      dirtyIndexes: plan.dirtyIndexes,
+      snapshotDigest: plan.checkpoint.snapshotDigest,
+      schemaGeneration,
+      invalidation: plan.invalidation,
+      counters: currentLibraryStartupCounters()
+    }
+  })
+}
+
+export async function syncLibraryStartupBatch(
+  sessions: SessionSummary[],
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
+  checkpointIdentity: { snapshotDigest: string; schemaGeneration: number },
+  onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
+  shouldCancel?: () => boolean
+): Promise<LibraryStartupBatchResult> {
+  const runtime = startupPlanRuntime
+  if (!runtime || runtime.root !== path.resolve(_root) ||
+    runtime.snapshotDigest !== checkpointIdentity.snapshotDigest ||
+    runtime.schemaGeneration !== checkpointIdentity.schemaGeneration) {
+    throw new Error('Library startup batch does not match the active plan')
+  }
+  return withLibraryWriter('maintenance', async () => {
+    runtime.writerAcquires++
+    const checkpoint = readLibraryStartupCheckpoint()
+    if (!checkpoint || checkpoint.snapshotDigest !== checkpointIdentity.snapshotDigest ||
+      checkpoint.schemaGeneration !== checkpointIdentity.schemaGeneration) {
+      throw new Error('Library startup checkpoint changed before batch commit')
+    }
+    startupPreparedRegistryDepth++
+    try {
+      const outcome = await syncLibraryFromSessionsUnderWriter(
+        sessions,
+        sessionMeta,
+        onProgress,
+        shouldCancel
+      )
+      writeLibraryStartupCheckpoint(completeLibraryStartupCheckpoint(checkpoint, sessions, sessionMeta))
+      return { outcome, counters: currentLibraryStartupCounters() }
+    } finally {
+      startupPreparedRegistryDepth--
+    }
+  })
+}
+
 export async function syncLibraryFromSessions(
   sessions: SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
@@ -4730,10 +5017,9 @@ export async function syncLibraryFromSessions(
 }
 
 /**
- * Startup-only incremental boundary. The normal batch API intentionally keeps
- * one writer lease across the whole collection so CLI organization cannot
- * observe or interleave a half-applied batch. Startup calls this with one
- * session at a time so live source maintenance gets a bounded chance to run.
+ * Compatibility boundary for focused tests and older callers. Production
+ * startup uses syncLibraryStartupBatch so checkpoint and registry preparation
+ * are part of the same bounded writer transaction.
  */
 export async function syncLibraryStartupChunk(
   sessions: SessionSummary[],
@@ -4779,7 +5065,7 @@ async function syncLibraryFromSessionsUnderWriter(
         }
         throw new Error('canonical-provider-session-not-found')
       }
-      const dirPath = await ensureSessionInLibrary(session, customTitle)
+      const dirPath = await ensureSessionInLibraryUnderWriter(session, customTitle)
 
       // 持久化 swob 权威 turnCount 进 meta（各会话类型统一），供外部整理脚本按真实轮数归档
       const m = readSessionMeta(dirPath)

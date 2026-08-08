@@ -2,7 +2,14 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { syncLibraryStartupIncrementally } from './library-startup-sync'
+import {
+  LIBRARY_STARTUP_BATCH_SIZE,
+  buildLibraryStartupPlan,
+  completeLibraryStartupCheckpoint,
+  syncLibraryStartupIncrementally,
+  type LibraryStartupCheckpoint,
+  type LibraryStartupPlan
+} from './library-startup-sync'
 import { SessionSyncCoordinator } from './session-sync-coordinator'
 import type { SessionSummary } from './types'
 
@@ -45,6 +52,21 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void
   const promise = new Promise<void>((done) => { resolve = done })
   return { promise, resolve }
+}
+
+function completePlan(
+  plan: LibraryStartupPlan,
+  sessions: readonly SessionSummary[]
+): LibraryStartupCheckpoint {
+  let checkpoint = plan.checkpoint
+  for (let offset = 0; offset < plan.dirtyIndexes.length; offset += LIBRARY_STARTUP_BATCH_SIZE) {
+    checkpoint = completeLibraryStartupCheckpoint(
+      checkpoint,
+      plan.dirtyIndexes.slice(offset, offset + LIBRARY_STARTUP_BATCH_SIZE)
+        .map((index) => sessions[index])
+    )
+  }
+  return checkpoint
 }
 
 describe('incremental Library startup synchronization', () => {
@@ -250,5 +272,92 @@ describe('incremental Library startup synchronization', () => {
     finishStartup.resolve()
     await startup
     expect(startupFinished).toBe(true)
+  })
+})
+
+describe('Library startup dirty-set checkpoint', () => {
+  it('invalidates and replans when the source collection or schema generation changes', () => {
+    const sessions = Array.from({ length: 8 }, (_, index) =>
+      summary(`session-${index}`, `/fixture/session-${index}.jsonl`, `2026-08-02T09:00:${String(index).padStart(2, '0')}.000Z`))
+    const cold = buildLibraryStartupPlan(sessions, 1, null)
+    const completed = completePlan(cold, sessions)
+
+    const replacement = summary('replacement', '/fixture/replacement.jsonl', '2026-08-02T10:00:00.000Z')
+    const changedSources = [...sessions.slice(0, -1), replacement]
+    const sourcePlan = buildLibraryStartupPlan(changedSources, 1, completed)
+    expect(sourcePlan.invalidation).toBe('snapshot-changed')
+    expect(sourcePlan.dirtyIndexes).toEqual([changedSources.length - 1])
+
+    const titlePlan = buildLibraryStartupPlan(sessions, 1, completed, {
+      [sessions[3].sessionId]: { customTitle: 'Changed title' }
+    })
+    expect(titlePlan.invalidation).toBe('snapshot-changed')
+    expect(titlePlan.dirtyIndexes).toEqual([3])
+
+    const schemaPlan = buildLibraryStartupPlan(changedSources, 2, sourcePlan.checkpoint)
+    expect(schemaPlan.invalidation).toBe('schema-changed')
+    expect(schemaPlan.dirtyIndexes).toHaveLength(changedSources.length)
+  })
+
+  it('resumes only unfinished dirty keys after an interrupted batch boundary', () => {
+    const sessions = Array.from({ length: 65 }, (_, index) =>
+      summary(`resume-${index}`, `/fixture/resume-${index}.jsonl`, '2026-08-02T09:00:00.000Z'))
+    const cold = buildLibraryStartupPlan(sessions, 1, null)
+    const firstBatch = cold.dirtyIndexes.slice(0, LIBRARY_STARTUP_BATCH_SIZE).map((index) => sessions[index])
+    const partial = completeLibraryStartupCheckpoint(cold.checkpoint, firstBatch)
+
+    const resumed = buildLibraryStartupPlan(sessions, 1, partial)
+    expect(resumed.invalidation).toBe('none')
+    expect(resumed.dirtyIndexes).toHaveLength(sessions.length - LIBRARY_STARTUP_BATCH_SIZE)
+    expect(resumed.dirtyIndexes[0]).toBe(LIBRARY_STARTUP_BATCH_SIZE)
+  })
+
+  it('keeps dirty=0/1/N linear at N=2000 with bounded writer and projection counters', async () => {
+    const count = 2_000
+    const sessions = Array.from({ length: count }, (_, index) =>
+      summary(`scale-${String(index).padStart(4, '0')}`, `/fixture/scale-${index}.jsonl`, '2026-08-02T09:00:00.000Z'))
+    const cold = buildLibraryStartupPlan(sessions, 1, null)
+    const baseline = completePlan(cold, sessions)
+
+    const changed = sessions.map((session, index) => index === 1_337
+      ? { ...session, updatedAt: '2026-08-02T10:00:00.000Z', fileSizeBytes: 1 }
+      : session)
+    const scenarios = [
+      { name: 'dirty0', plan: buildLibraryStartupPlan(sessions, 1, baseline), source: sessions, dirty: 0 },
+      { name: 'dirty1', plan: buildLibraryStartupPlan(changed, 1, baseline), source: changed, dirty: 1 },
+      { name: 'dirtyN', plan: buildLibraryStartupPlan(sessions, 2, baseline), source: sessions, dirty: count }
+    ] as const
+
+    for (const scenario of scenarios) {
+      expect(scenario.plan.dirtyIndexes).toHaveLength(scenario.dirty)
+      const dirtySessions = scenario.plan.dirtyIndexes.map((index) => scenario.source[index])
+      let checkpoint = scenario.plan.checkpoint
+      let batchRuns = 0
+      let projectionFullRuns = 0
+      const outcome = await syncLibraryStartupIncrementally({
+        sessions: dirtySessions,
+        probeWriter: async () => { throw new Error('planner already proved writer') },
+        writerAlreadyProven: true,
+        onWriterProven: () => {},
+        resolveLatest: (session) => session,
+        drainLive: async () => false,
+        syncBatch: async (batch) => {
+          batchRuns++
+          checkpoint = completeLibraryStartupCheckpoint(checkpoint, batch)
+          return { total: batch.length, completed: batch.length, skipped: [] }
+        },
+        onFirstDurableBoundary: () => { projectionFullRuns++ }
+      })
+
+      const writerAcquires = 1 + batchRuns // one planner transaction plus bounded batch transactions
+      const registryFullScans = 1 // the production planner's single authoritative scan
+      expect(outcome.total, scenario.name).toBe(scenario.dirty)
+      expect(batchRuns, scenario.name).toBe(Math.ceil(scenario.dirty / LIBRARY_STARTUP_BATCH_SIZE))
+      expect(writerAcquires, scenario.name).toBe(1 + Math.ceil(scenario.dirty / LIBRARY_STARTUP_BATCH_SIZE))
+      expect(registryFullScans, scenario.name).toBe(1)
+      expect(projectionFullRuns, scenario.name).toBeLessThanOrEqual(1)
+      const completed = new Set(checkpoint.completedKeys)
+      expect(checkpoint.dirtyKeys.filter((key) => !completed.has(key)), scenario.name).toHaveLength(0)
+    }
   })
 })

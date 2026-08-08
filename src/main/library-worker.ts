@@ -3,7 +3,9 @@ import * as path from 'node:path'
 import {
   initLibrary,
   scanLibrary,
+  planLibraryStartupSync,
   syncLibraryFromSessions,
+  syncLibraryStartupBatch,
   syncLibraryStartupChunk,
   ensureSessionInLibrary,
   updateTranscript,
@@ -12,7 +14,9 @@ import {
   setSessionTurnCount,
   withLibraryMaintenanceWriter,
   type LibraryTree,
-  type LibrarySyncOutcome
+  type LibrarySyncOutcome,
+  type LibraryStartupPlanResult,
+  type LibraryStartupBatchResult
 } from './library-manager'
 import { parseSessionFile, buildSessionSummary, resolvePhysicalSessionId } from './session-loader'
 import { loadCodexRawMessages, loadCodexSessionRecordWithRaw } from './codex-loader'
@@ -40,6 +44,13 @@ export interface SearchIndexSourceDescriptor {
 export type LibraryWorkerRequest = (
   | { type: 'shutdown' }
   | { type: 'writer-probe'; root: string }
+  | {
+      type: 'startup-plan'
+      root: string
+      sessions: SessionSummary[]
+      sessionMeta: Record<string, { customTitle?: string; notes?: string }>
+      schemaGeneration: number
+    }
   | { type: 'scan'; root: string; ignoreDirs?: string[] }
   | {
       type: 'sync'
@@ -47,6 +58,14 @@ export type LibraryWorkerRequest = (
       ignoreDirs?: string[]
       sessions: SessionSummary[]
       sessionMeta: Record<string, { customTitle?: string; notes?: string }>
+    }
+  | {
+      type: 'startup-batch'
+      root: string
+      sessions: SessionSummary[]
+      sessionMeta: Record<string, { customTitle?: string; notes?: string }>
+      snapshotDigest: string
+      schemaGeneration: number
     }
   | {
       type: 'sync-chunk'
@@ -87,6 +106,8 @@ export interface LibraryWorkerSyncResult {
 type LibraryWorkerResult =
   | { kind: 'shutdown' }
   | { kind: 'writer-probe' }
+  | { kind: 'startup-plan'; value: LibraryStartupPlanResult }
+  | { kind: 'startup-batch'; value: LibraryStartupBatchResult }
   | { kind: 'sync-outcome'; outcome: LibrarySyncOutcome }
   | { kind: 'tree'; tree: LibraryTree; syncOutcome?: LibrarySyncOutcome }
   | { kind: 'session-sync'; value: LibraryWorkerSessionSyncResult }
@@ -167,7 +188,25 @@ export async function runLibraryWorkerRequest(
     await withLibraryMaintenanceWriter(async () => {})
     return { kind: 'writer-probe' }
   }
+  if (request.type === 'startup-plan') {
+    return {
+      kind: 'startup-plan',
+      value: await planLibraryStartupSync(request.sessions, request.schemaGeneration, request.sessionMeta)
+    }
+  }
   if (request.type === 'scan') return { kind: 'tree', tree: scanLibrary() }
+  if (request.type === 'startup-batch') {
+    return {
+      kind: 'startup-batch',
+      value: await syncLibraryStartupBatch(
+        request.sessions,
+        request.sessionMeta,
+        { snapshotDigest: request.snapshotDigest, schemaGeneration: request.schemaGeneration },
+        onProgress,
+        shouldCancel
+      )
+    }
+  }
   if (request.type === 'sync-chunk') {
     return {
       kind: 'sync-outcome',
@@ -283,6 +322,43 @@ export class LibraryWorkerClient {
   probeWriter(root: string): Promise<void> {
     return this.observe(this.request({ type: 'writer-probe', root }).then((result) => {
       if (result.kind !== 'writer-probe') throw new Error('Library worker returned an invalid writer probe result')
+    }))
+  }
+
+  planStartup(
+    root: string,
+    sessions: SessionSummary[],
+    sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
+    schemaGeneration: number
+  ): Promise<LibraryStartupPlanResult> {
+    return this.observe(this.request({
+      type: 'startup-plan',
+      root,
+      sessions,
+      sessionMeta,
+      schemaGeneration
+    }).then((result) => {
+      if (result.kind !== 'startup-plan') throw new Error('Library worker returned an invalid startup plan')
+      return result.value
+    }))
+  }
+
+  syncStartupBatch(
+    root: string,
+    sessions: SessionSummary[],
+    sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
+    checkpointIdentity: { snapshotDigest: string; schemaGeneration: number }
+  ): Promise<LibraryStartupBatchResult> {
+    return this.observe(this.request({
+      type: 'startup-batch',
+      root,
+      sessions,
+      sessionMeta,
+      snapshotDigest: checkpointIdentity.snapshotDigest,
+      schemaGeneration: checkpointIdentity.schemaGeneration
+    }).then((result) => {
+      if (result.kind !== 'startup-batch') throw new Error('Library worker returned an invalid startup batch')
+      return result.value
     }))
   }
 

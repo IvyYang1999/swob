@@ -1639,6 +1639,9 @@ function startLibraryWatcher(): void {
 // --- Library Initialization ---
 
 const STARTUP_HOT_SOURCE_WINDOW_MS = 5 * 60_000
+// Bump only when Library startup projection semantics change. A bump makes the
+// persisted checkpoint explicitly dirty every current source exactly once.
+const LIBRARY_STARTUP_SCHEMA_GENERATION = 1
 
 function scheduleHotStartupSessions(sessions: readonly SessionSummary[]): void {
   const cutoff = Date.now() - STARTUP_HOT_SOURCE_WINDOW_MS
@@ -1696,21 +1699,35 @@ async function syncStartupSessions(
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>
 ): Promise<LibrarySyncOutcome> {
   const syncEpoch = libraryRuntimeEpoch
-  beginLibraryBackgroundSync(sessions.length)
+  const plan = await worker.planStartup(
+    getLibraryRoot(),
+    [...sessions],
+    sessionMeta,
+    LIBRARY_STARTUP_SCHEMA_GENERATION
+  )
+  const dirtySessions = plan.dirtyIndexes.map((index) => sessions[index])
+  beginLibraryBackgroundSync(dirtySessions.length)
   try {
     const outcome = await syncLibraryStartupIncrementally({
-      sessions,
-      probeWriter: () => worker.probeWriter(getLibraryRoot()),
+      sessions: dirtySessions,
+      probeWriter: async () => {},
+      writerAlreadyProven: true,
       onWriterProven: () => {
         libraryStartupWriterProven = true
         transitionWriterCapability('available', 'WRITER_PROVEN')
         scheduleHotStartupSessions(sessions)
       },
       resolveLatest: (initial) => cachedSummaryForSource(initial.filePath, initial.sessionId) || initial,
-      syncChunk: async (session) => {
+      syncBatch: async (batch) => {
         libraryStartupChunkActive = true
         try {
-          return await worker.syncChunk(getLibraryRoot(), [session], sessionMeta)
+          const result = await worker.syncStartupBatch(
+            getLibraryRoot(),
+            [...batch],
+            sessionMeta,
+            { snapshotDigest: plan.snapshotDigest, schemaGeneration: plan.schemaGeneration }
+          )
+          return result.outcome
         } finally {
           libraryStartupChunkActive = false
         }
@@ -1734,7 +1751,6 @@ async function syncStartupSessions(
       },
       onProgress: reportLibrarySyncProgress,
       shouldInterrupt: () => runtimeShuttingDown || libraryStartupSyncCancelled || syncEpoch !== libraryRuntimeEpoch,
-      yieldEvery: 8,
       yieldToEventLoop: () => new Promise((resolve) => setImmediate(resolve))
     })
     finishLibraryBackgroundSync(false)
@@ -1792,10 +1808,10 @@ async function initLibraryFromSessions(
 
     // Include any session that arrived while the initial worker batch was running.
     if (!startupInterrupted && cachedSessions.some((session) => !sessions.some((initial) => initial.id === session.id))) {
-      const catchUpSessions = cachedSessions.filter(
-        (session) => !sessions.some((initial) => initial.id === session.id)
-      )
-      const catchUpSync = await syncStartupSessions(worker, catchUpSessions, oldConfig.sessionMeta)
+      // Replan against the complete current collection. Passing only the new
+      // subset would replace the checkpoint universe and make every older
+      // source look dirty again on the next launch.
+      const catchUpSync = await syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta)
       catchUpSync.skipped.forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
       tree = await requestLibraryScan(false)
       if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)

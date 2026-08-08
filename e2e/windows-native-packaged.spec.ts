@@ -176,7 +176,10 @@ test('installed x64 Beta completes onboarding, discovery, reading, search, Insig
     platform: 'win32',
     arch: 'x64',
     userProfile: fixtureHome,
-    home: path.join(sandboxRoot, 'wrong-git-bash-home')
+    // 8dcb337 unified the launch env on the isolated fixtureHome to satisfy the
+    // fail-closed test-launch contract; the Git-Bash-HOME-is-ignored behavior
+    // stays covered at unit level in runtime-home.test.ts.
+    home: fixtureHome
   })
 
   const capabilities = await page.evaluate(() => window.api.platformGetCapabilities())

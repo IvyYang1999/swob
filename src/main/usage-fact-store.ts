@@ -97,6 +97,13 @@ interface UsageFactRow {
   model_key: string
   model_raw: string
   model_provenance: string
+  provider_raw: string | null
+  billing_provider: string | null
+  provider_provenance: string | null
+  source_row_id: string | null
+  provider_format_version: string | null
+  dedup_key: string | null
+  billing_fact_key: string | null
   non_cached_input: number
   cache_read: number
   cache_write: number
@@ -121,10 +128,11 @@ interface UsageFactRow {
 }
 
 // Storage migrations and fact-derivation changes are independent concerns.
-// Schema v7 only changes the derivation for per-call SQLite agents; retaining
+// Schema v8 persists request-level audit identity and provider provenance.
+// Retaining
 // v6 here keeps every other provider's already-verified fact signature valid.
 const BASE_USAGE_FACT_DERIVATION_VERSION = 6
-const PER_CALL_SQLITE_AGENT_DERIVATION_VERSION = 7
+const PER_CALL_SQLITE_AGENT_DERIVATION_VERSION = 8
 
 function usageDatabasePath(): string {
   return process.env.SWOB_USAGE_INDEX_PATH || path.join(path.dirname(searchDatabasePath()), 'usage-facts.db')
@@ -149,10 +157,10 @@ function ensureSchema(db: Database.Database): void {
   ).get() as { schema_version: number } | undefined
   const metaColumns = db.prepare('PRAGMA table_info(usage_schema_meta)').all() as Array<{ name: string }>
   let effectiveVersion = version?.schema_version
-  const canMigrateV6InPlace = effectiveVersion === 6 &&
+  const canMigrateLegacyInPlace = (effectiveVersion === 6 || effectiveVersion === 7) &&
     metaColumns.some((column) => column.name === 'revision') &&
     Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_facts'").get())
-  if (canMigrateV6InPlace) {
+  if (canMigrateLegacyInPlace) {
     const factColumns = new Set(
       (db.prepare('PRAGMA table_info(usage_facts)').all() as Array<{ name: string }>)
         .map((column) => column.name)
@@ -166,6 +174,29 @@ function ensureSchema(db: Database.Database): void {
       }
       if (!factColumns.has('superseded_by')) {
         db.exec('ALTER TABLE usage_facts ADD COLUMN superseded_by TEXT')
+      }
+      // These columns intentionally stay nullable: v6/v7 discarded the raw
+      // values, so migration must not fabricate historical provenance.
+      if (!factColumns.has('provider_raw')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN provider_raw TEXT')
+      }
+      if (!factColumns.has('billing_provider')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN billing_provider TEXT')
+      }
+      if (!factColumns.has('provider_provenance')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN provider_provenance TEXT')
+      }
+      if (!factColumns.has('source_row_id')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN source_row_id TEXT')
+      }
+      if (!factColumns.has('provider_format_version')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN provider_format_version TEXT')
+      }
+      if (!factColumns.has('dedup_key')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN dedup_key TEXT')
+      }
+      if (!factColumns.has('billing_fact_key')) {
+        db.exec('ALTER TABLE usage_facts ADD COLUMN billing_fact_key TEXT')
       }
       db.prepare('UPDATE usage_schema_meta SET schema_version = ? WHERE singleton = 1')
         .run(USAGE_FACT_SCHEMA_VERSION)
@@ -234,6 +265,13 @@ function ensureSchema(db: Database.Database): void {
       model_key TEXT NOT NULL,
       model_raw TEXT NOT NULL,
       model_provenance TEXT NOT NULL,
+      provider_raw TEXT,
+      billing_provider TEXT,
+      provider_provenance TEXT,
+      source_row_id TEXT,
+      provider_format_version TEXT,
+      dedup_key TEXT,
+      billing_fact_key TEXT,
       non_cached_input INTEGER NOT NULL,
       cache_read INTEGER NOT NULL,
       cache_write INTEGER NOT NULL,
@@ -524,6 +562,13 @@ export function usageFactsForSession(
       model: canonicalModel,
       modelRaw: rawModel,
       modelProvenance: event.modelProvenance || (event.model ? 'response' : 'unknown'),
+      providerRaw: event.providerRaw || null,
+      billingProvider: event.billingProvider || null,
+      providerProvenance: event.providerProvenance,
+      sourceRowId: event.sourceRowId || null,
+      providerFormatVersion: event.providerFormatVersion,
+      dedupKey: event.dedupKey,
+      billingFactKey: event.billingFactKey || null,
       nonCachedInputTokens: event.components.nonCachedInputTokens,
       cacheReadTokens: event.components.cacheReadTokens,
       cacheWriteTokens: totalCacheWriteTokens(event.components),
@@ -585,7 +630,9 @@ function prepareUsageFactWriter(db: Database.Database): {
       event_id, billing_fact_id, billing_included,
       occurred_at, occurred_day, occurred_hour, source_client,
       session_id, root_session_id, agent_scope, project_path, model_key,
-      model_raw, model_provenance, non_cached_input, cache_read, cache_write,
+      model_raw, model_provenance, provider_raw, billing_provider,
+      provider_provenance, source_row_id, provider_format_version, dedup_key,
+      billing_fact_key, non_cached_input, cache_read, cache_write,
       output_tokens, reasoning_tokens, usage_provenance, call_count, turn_count,
       cost_usd, pricing_provenance, priced_tokens, billable_tokens,
       financial_covered_tokens, provider_billed_usd, harness_list_estimate_usd,
@@ -596,7 +643,9 @@ function prepareUsageFactWriter(db: Database.Database): {
       @eventId, @billingFactId, @billingIncluded,
       @occurredAt, @occurredDay, @occurredHour, @sourceClient,
       @sessionId, @rootSessionId, @agentScope, @projectPath, @model,
-      @modelRaw, @modelProvenance, @nonCachedInputTokens, @cacheReadTokens,
+      @modelRaw, @modelProvenance, @providerRaw, @billingProvider,
+      @providerProvenance, @sourceRowId, @providerFormatVersion, @dedupKey,
+      @billingFactKey, @nonCachedInputTokens, @cacheReadTokens,
       @cacheWriteTokens, @outputTokens, @reasoningTokens, @usageProvenance,
       @callCount, @turnCount, @costUsd, @pricingProvenance,
       @pricedTokens, @billableTokens, @financialCoveredTokens,
@@ -1798,6 +1847,13 @@ export function sessionUsageEvents(
     model: row.model_key === UNKNOWN_MODEL ? null : row.model_key,
     modelRaw: row.model_raw || null,
     modelProvenance: row.model_provenance,
+    providerRaw: row.provider_raw,
+    billingProvider: row.billing_provider,
+    providerProvenance: row.provider_provenance,
+    sourceRowId: row.source_row_id,
+    providerFormatVersion: row.provider_format_version,
+    dedupKey: row.dedup_key,
+    billingFactKey: row.billing_fact_key,
     nonCachedInputTokens: row.non_cached_input,
     cacheReadTokens: row.cache_read,
     cacheWriteTokens: row.cache_write,

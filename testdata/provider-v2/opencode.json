@@ -1,1 +1,23 @@
-{"source":"opencode","storage":"sqlite-readonly-wal","outputIncludesReasoning":"unknown-provider-defined"}
+{
+  "source": "opencode",
+  "storage": "sqlite-readonly-wal",
+  "fixtureKind": "sanitized-real-installation-sample",
+  "fixture": "testdata/provider-v2/opencode-1.17.18-sanitized.db",
+  "sourceVersion": "1.17.18",
+  "sourceSchemaSha256": "4bbbe244d014725610a56b99ecf008da8f660ca7f15c358bb4763c0d0f01db43",
+  "fixtureSha256": "6ca82abca95c85b47e7c34bc2759965cfcbaee971ceee5b2f7c65aa779be46eb",
+  "sampledAt": "2026-08-08",
+  "sanitization": {
+    "ids": "deterministically replaced",
+    "paths": "replaced with /fixture paths",
+    "content": "replaced with explicit sanitized markers",
+    "timestamps": "shifted while preserving order and storage type",
+    "usageNumbers": "preserved from one real assistant usage row"
+  },
+  "evidence": {
+    "providerAndModel": "proven-by-real-fixture",
+    "totalComposition": "proven-by-real-fixture only when tokens.total equals input + cache.read + cache.write + output + reasoning on that row",
+    "reasoningRelation": "proven-by-real-fixture only for rows passing the total-composition equality; otherwise provider-defined",
+    "reportedCostMeaning": "provider-defined"
+  }
+}

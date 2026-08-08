@@ -46,7 +46,7 @@ function createOpencodeDb(): { dir: string; dbPath: string; sourceRef: string } 
     role: 'assistant',
     parentID: 'msg_user',
     time: { created: '2026-07-08T10:00:05Z' },
-    tokens: { input: 11, output: 7, reasoning: 2, cache: { read: 3, write: 4 } },
+    tokens: { input: 11, output: 7, reasoning: 2, cache: { read: 3, write: 4 }, total: 27 },
     providerID: 'openai',
     modelID: 'gpt-5.1'
   })

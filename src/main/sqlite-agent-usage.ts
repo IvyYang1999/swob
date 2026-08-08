@@ -18,15 +18,16 @@ export interface SqliteAgentUsageFieldContract {
   statusField?: string
   billableStatuses?: readonly string[]
   dedupField: string
-  inputCacheRelation: 'disjoint' | 'cache-subset-of-input'
+  inputCacheRelation: 'disjoint' | 'cache-subset-of-input' | 'provider-defined'
   reasoningRelation: 'disjoint-from-visible-output' | 'provider-defined'
   totalAuthority: string
 }
 
 /**
- * OpenCode current-schema contract, pinned to upstream message-v2/getUsage:
- * input has already had cache read/write removed; output is visible output and
- * reasoning is a separate billable output bucket.
+ * OpenCode 1.17.18 real-fixture contract. Field names alone do not prove
+ * whether cache/reasoning are already included in input/output. A row becomes
+ * billable-exact only when its own tokens.total proves the mutually-exclusive
+ * composition. Other rows retain raw counters but stay provider-defined.
  */
 export const OPENCODE_USAGE_FIELD_CONTRACT: SqliteAgentUsageFieldContract = Object.freeze({
   source: 'opencode',
@@ -35,16 +36,17 @@ export const OPENCODE_USAGE_FIELD_CONTRACT: SqliteAgentUsageFieldContract = Obje
   modelField: 'message.data.modelID',
   timestampField: 'message.data.time.created',
   dedupField: 'message.id',
-  inputCacheRelation: 'disjoint',
-  reasoningRelation: 'disjoint-from-visible-output',
-  totalAuthority: 'input + cache.read + cache.write + output + reasoning'
+  inputCacheRelation: 'provider-defined',
+  reasoningRelation: 'provider-defined',
+  totalAuthority: 'tokens.total is authoritative only after row-level composition equality'
 })
 
 /**
- * ZCode is deliberately independent from OpenCode. Its model_usage input is
- * inclusive of cache buckets and computed_total_tokens is the authoritative
- * request total. The persisted schema does not yet prove how a non-zero
- * reasoning bucket relates to raw output, so that relation remains explicit.
+ * ZCode deliberately shares only the readonly SQLite snapshot transport with
+ * OpenCode. Its schema and usage semantics are independent. A completed row is
+ * accepted only when computed_total_tokens and its cache subset reconcile on
+ * that row. The real fixture contains zero reasoning, so non-zero reasoning
+ * remains provider-defined rather than inheriting or guessing a relation.
  */
 export const ZCODE_USAGE_FIELD_CONTRACT: SqliteAgentUsageFieldContract = Object.freeze({
   source: 'zcode',
@@ -54,10 +56,10 @@ export const ZCODE_USAGE_FIELD_CONTRACT: SqliteAgentUsageFieldContract = Object.
   timestampField: 'model_usage.started_at',
   statusField: 'model_usage.status',
   billableStatuses: Object.freeze(['completed']),
-  dedupField: 'model_usage.logical_request_id + attempt_index (fallback id)',
+  dedupField: 'model_usage.id; billing identity uses logical_request_id + attempt_index only when both exist',
   inputCacheRelation: 'cache-subset-of-input',
   reasoningRelation: 'provider-defined',
-  totalAuthority: 'computed_total_tokens'
+  totalAuthority: 'computed_total_tokens; non-zero reasoning composition remains provider-defined'
 })
 
 function object(value: unknown): Record<string, unknown> {
@@ -92,6 +94,11 @@ function optionalNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  const parsed = optionalNumber(value)
+  return parsed !== undefined && Number.isInteger(parsed) ? parsed : undefined
+}
+
 function timestamp(value: unknown): string | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) {
     const milliseconds = value > 10_000_000_000 ? value : value * 1000
@@ -119,18 +126,31 @@ function openCodeMessageEvent(row: SqliteRow): UsageEvent | null {
   if (!id) return null
   const tokens = object(data.tokens)
   const cache = object(tokens.cache)
-  const input = number(tokens.input ?? tokens.inputTokens ?? tokens.input_tokens)
-  const cacheRead = number(tokens.cacheRead ?? tokens.cache_read_input_tokens ?? cache.read)
-  const cacheWrite = number(tokens.cacheWrite ?? tokens.cache_creation_input_tokens ?? cache.write ?? cache.creation)
-  const visibleOutput = number(tokens.output ?? tokens.outputTokens ?? tokens.output_tokens)
-  const reasoning = number(tokens.reasoning ?? tokens.reasoningTokens ?? tokens.reasoning_tokens)
+  const rawComponents = [
+    tokens.input ?? tokens.inputTokens ?? tokens.input_tokens,
+    tokens.cacheRead ?? tokens.cache_read_input_tokens ?? cache.read,
+    tokens.cacheWrite ?? tokens.cache_creation_input_tokens ?? cache.write ?? cache.creation,
+    tokens.output ?? tokens.outputTokens ?? tokens.output_tokens,
+    tokens.reasoning ?? tokens.reasoningTokens ?? tokens.reasoning_tokens
+  ]
+  const parsedComponents = rawComponents.map(optionalNumber)
+  const [parsedInput, parsedCacheRead, parsedCacheWrite, parsedVisibleOutput, parsedReasoning] = parsedComponents
+  const input = parsedInput ?? 0
+  const cacheRead = parsedCacheRead ?? 0
+  const cacheWrite = parsedCacheWrite ?? 0
+  const visibleOutput = parsedVisibleOutput ?? 0
+  const reasoning = parsedReasoning ?? 0
+  const providerTotal = optionalNumber(tokens.total ?? tokens.totalTokens ?? tokens.total_tokens)
+  const provenDisjointTotal = input + cacheRead + cacheWrite + visibleOutput + reasoning
+  const componentsExplicit = parsedComponents.every((value) => value !== undefined)
+  const relationsProven = componentsExplicit && providerTotal === provenDisjointTotal
   const components: NormalizedTokenComponents = {
     nonCachedInputTokens: input,
-    cacheReadTokens: cacheRead,
-    cacheWriteTokens: cacheWrite,
+    cacheReadTokens: relationsProven ? cacheRead : 0,
+    cacheWriteTokens: relationsProven ? cacheWrite : 0,
     cacheWrite5mTokens: 0,
     cacheWrite1hTokens: 0,
-    outputTokens: visibleOutput + reasoning,
+    outputTokens: relationsProven ? visibleOutput + reasoning : visibleOutput,
     visibleOutputTokens: visibleOutput,
     reasoningTokens: reasoning
   }
@@ -166,39 +186,92 @@ function openCodeMessageEvent(row: SqliteRow): UsageEvent | null {
     rawReasoningTokens: reasoning,
     components,
     semantics: 'provider-specific',
-    fieldRelations: {
-      cacheRead: 'disjoint',
-      cacheWrite: 'disjoint',
-      reasoning: 'disjoint-from-visible-output'
-    },
-    reportedCostUsd,
-    ...(reportedCostUsd !== undefined ? { reportedCostKind: 'harness-list-estimate' as const } : {}),
-    warnings: []
+    fieldRelations: relationsProven
+      ? {
+          cacheRead: 'disjoint',
+          cacheWrite: 'disjoint',
+          reasoning: 'disjoint-from-visible-output'
+        }
+      : {
+          cacheRead: 'provider-defined',
+          cacheWrite: 'provider-defined',
+          reasoning: 'provider-defined'
+        },
+    totalRelation: relationsProven ? 'components-sum' : 'provider-defined',
+    // OpenCode's `cost` label is not enough to prove provider-billed versus a
+    // harness estimate. Keep it out of financial ledgers until provenance is
+    // evidenced; the source token fields remain independently auditable.
+    warnings: [
+      ...(!relationsProven
+        ? [!componentsExplicit
+            ? 'opencode-token-relations-provider-defined:component-missing-or-invalid'
+            : providerTotal === undefined
+              ? 'opencode-token-relations-provider-defined:total-missing'
+              : 'opencode-token-relations-provider-defined:total-mismatch']
+        : []),
+      ...(reportedCostUsd !== undefined ? ['opencode-reported-cost-kind-provider-defined'] : [])
+    ]
   }
 }
 
 export function accountOpenCodeMessageUsage(messageRows: SqliteRow[]): TokenAccounting {
-  const events = messageRows.map(openCodeMessageEvent).filter((event): event is UsageEvent => event !== null)
+  const events = uniqueSourceRows(
+    messageRows.map(openCodeMessageEvent).filter((event): event is UsageEvent => event !== null)
+  )
+  const warnings = [...new Set(events.flatMap((event) => event.warnings))]
   return events.length > 0
-    ? accountingFromUsageEvents('opencode', events)
-    : unavailableTokenAccounting('opencode', 'No authoritative per-message OpenCode usage was found')
+    ? accountingFromUsageEvents('opencode', events, warnings)
+    : unavailableTokenAccounting('opencode', 'No authoritative per-message OpenCode usage was found', warnings)
 }
 
-function zcodeModelUsageEvent(row: SqliteRow): UsageEvent | null {
-  if (row.status !== 'completed') return null
+interface ParsedUsageRow {
+  event: UsageEvent | null
+  warnings: string[]
+}
+
+function zcodeModelUsageEvent(row: SqliteRow): ParsedUsageRow {
+  if (row.status !== 'completed') return { event: null, warnings: [] }
   const id = string(row.id)
-  if (!id) return null
-  const inputTotal = number(row.input_tokens)
-  const rawCacheRead = number(row.cache_read_input_tokens)
-  const rawCacheWrite = number(row.cache_creation_input_tokens)
+  if (!id) return { event: null, warnings: ['zcode-completed-row-rejected:source-row-id-missing'] }
+  const requiredCounters = [
+    row.input_tokens,
+    row.output_tokens,
+    row.reasoning_tokens,
+    row.cache_read_input_tokens,
+    row.cache_creation_input_tokens
+  ].map(optionalNumber)
+  if (requiredCounters.some((value) => value === undefined)) {
+    return { event: null, warnings: ['zcode-completed-row-rejected:required-counter-missing-or-invalid'] }
+  }
+  const [inputTotal, rawOutput, reasoning, rawCacheRead, rawCacheWrite] = requiredCounters as number[]
   const cacheRead = Math.min(inputTotal, rawCacheRead)
   const cacheWrite = Math.min(Math.max(0, inputTotal - cacheRead), rawCacheWrite)
-  const rawOutput = number(row.output_tokens)
-  const reasoning = number(row.reasoning_tokens)
   const computedTotal = optionalNumber(row.computed_total_tokens)
-  const billedOutput = computedTotal === undefined
-    ? rawOutput
-    : Math.max(0, computedTotal - inputTotal)
+  const providerTotal = optionalNumber(row.provider_total_tokens)
+  if (computedTotal === undefined) {
+    return { event: null, warnings: ['zcode-completed-row-rejected:computed-total-missing'] }
+  }
+  if (row.provider_total_tokens !== null && row.provider_total_tokens !== undefined &&
+      row.provider_total_tokens !== '' && providerTotal === undefined) {
+    return { event: null, warnings: ['zcode-completed-row-rejected:provider-total-invalid'] }
+  }
+  if (providerTotal !== undefined && providerTotal !== computedTotal) {
+    return { event: null, warnings: ['zcode-completed-row-rejected:provider-total-mismatch'] }
+  }
+  if (rawCacheRead + rawCacheWrite > inputTotal) {
+    return { event: null, warnings: ['zcode-completed-row-rejected:cache-input-exceeds-input'] }
+  }
+  const matchesVisibleComposition = computedTotal === inputTotal + rawOutput
+  const matchesDisjointComposition = computedTotal === inputTotal + rawOutput + reasoning
+  if (!matchesVisibleComposition && !matchesDisjointComposition) {
+    return { event: null, warnings: ['zcode-completed-row-rejected:total-composition-provider-defined'] }
+  }
+  // computed_total_tokens proves the aggregate input/output total, but the
+  // zero-reasoning fixture cannot prove whether a non-zero reasoning counter
+  // is already inside raw output. Preserve both raw counters and price neither
+  // interpretation until a real non-zero sample proves the relation.
+  const reasoningProviderDefined = reasoning > 0
+  const billedOutput = computedTotal - inputTotal
   const components: NormalizedTokenComponents = {
     nonCachedInputTokens: Math.max(0, inputTotal - cacheRead - cacheWrite),
     cacheReadTokens: cacheRead,
@@ -209,21 +282,24 @@ function zcodeModelUsageEvent(row: SqliteRow): UsageEvent | null {
     visibleOutputTokens: rawOutput,
     reasoningTokens: reasoning
   }
-  if (total(components) === 0) return null
+  if (total(components) === 0) {
+    return { event: null, warnings: ['zcode-completed-row-rejected:zero-total'] }
+  }
 
   const modelRaw = string(row.model_id)
   const providerRaw = string(row.provider_id)
   const logicalRequestId = string(row.logical_request_id)
-  const attemptIndex = Math.trunc(number(row.attempt_index))
-  const billingFactKey = logicalRequestId
+  const attemptIndex = optionalNonNegativeInteger(row.attempt_index)
+  const completeBillingIdentity = logicalRequestId !== undefined && attemptIndex !== undefined
+  const billingFactKey = completeBillingIdentity
     ? `zcode:request:${logicalRequestId}:attempt:${attemptIndex}`
     : `zcode:model-usage:${id}`
   const warnings = [
-    ...(rawCacheRead + rawCacheWrite > inputTotal ? ['cache-input-exceeds-input'] : []),
-    ...(computedTotal !== undefined && computedTotal < inputTotal ? ['computed-total-less-than-input'] : []),
-    ...(reasoning > 0 && computedTotal === undefined ? ['reasoning-relation-unverified-without-computed-total'] : [])
+    ...(!logicalRequestId ? ['zcode-billing-identity-fallback:logical-request-id-missing'] : []),
+    ...(attemptIndex === undefined ? ['zcode-billing-identity-fallback:attempt-index-missing-or-invalid'] : []),
+    ...(reasoningProviderDefined ? ['zcode-token-relations-provider-defined:nonzero-reasoning'] : [])
   ]
-  return {
+  return { event: {
     provider: 'zcode',
     providerFormatVersion: 'zcode-model-usage-v1',
     dedupKey: `zcode:model-usage:${id}`,
@@ -250,8 +326,17 @@ function zcodeModelUsageEvent(row: SqliteRow): UsageEvent | null {
       cacheWrite: 'subset-of-input',
       reasoning: 'provider-defined'
     },
+    totalRelation: reasoningProviderDefined ? 'provider-defined' : 'components-sum',
     warnings
+  }, warnings }
+}
+
+function uniqueSourceRows(events: UsageEvent[]): UsageEvent[] {
+  const unique = new Map<string, UsageEvent>()
+  for (const event of events) {
+    if (!unique.has(event.dedupKey)) unique.set(event.dedupKey, event)
   }
+  return [...unique.values()]
 }
 
 function zcodeExcludedStatusWarnings(rows: SqliteRow[]): string[] {
@@ -272,8 +357,14 @@ function zcodeExcludedStatusWarnings(rows: SqliteRow[]): string[] {
 }
 
 export function accountZCodeModelUsage(rows: SqliteRow[]): TokenAccounting {
-  const events = rows.map(zcodeModelUsageEvent).filter((event): event is UsageEvent => event !== null)
-  const warnings = zcodeExcludedStatusWarnings(rows)
+  const parsed = rows
+    .filter((row) => row.status === 'completed')
+    .map(zcodeModelUsageEvent)
+  const events = uniqueSourceRows(parsed.flatMap((result) => result.event ? [result.event] : []))
+  const warnings = [...new Set([
+    ...zcodeExcludedStatusWarnings(rows),
+    ...parsed.flatMap((result) => result.warnings)
+  ])]
   return events.length > 0
     ? accountingFromUsageEvents('zcode', events, warnings)
     : unavailableTokenAccounting(

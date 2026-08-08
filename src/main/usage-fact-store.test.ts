@@ -421,30 +421,41 @@ describe('UsageFact + AnalysisScope', () => {
     const changedA = makeSession('a', '/repo/alpha', [usageEvent('a1', localTimestamp(2026, 7, 20, 8), components(30, 2))])
     expect(synchronizeUsageFacts([changedA, b], [])).toMatchObject({ changedSessions: 1, unchangedSessions: 1, factCount: 2 })
     expect(synchronizeUsageFacts([changedA], [])).toMatchObject({ removedSessions: 1, factCount: 1 })
-    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 7, sessions: 1, facts: 1 })
+    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 8, sessions: 1, facts: 1 })
   })
 
-  it('v6 账本原地升级为 v7，不重建现有表', () => {
+  it.each([6, 7])('v%d 账本原地升级为 v8：旧事实保留且不伪造已丢失的审计 provenance', (legacyVersion) => {
     const session = makeSession('migration-sentinel', '/repo/migration', [
       usageEvent('sentinel-call', localTimestamp(2026, 7, 20, 8), components(7, 3))
     ])
     synchronizeUsageFacts([session], [])
-    expect(usageFactStoreStats().schemaVersion).toBe(7)
+    expect(usageFactStoreStats().schemaVersion).toBe(8)
     closeUsageFactStore()
 
     const dbPath = process.env.SWOB_USAGE_INDEX_PATH!
     const legacy = new Database(dbPath)
+    if (legacyVersion === 6) {
+      legacy.exec(`
+        DROP INDEX IF EXISTS usage_facts_billing_current_idx;
+        DROP INDEX IF EXISTS usage_facts_superseded_idx;
+        ALTER TABLE usage_facts DROP COLUMN superseded_by;
+        ALTER TABLE usage_facts DROP COLUMN superseded_at;
+        ALTER TABLE usage_facts DROP COLUMN superseded;
+      `)
+    }
     legacy.exec(`
-      DROP INDEX IF EXISTS usage_facts_billing_current_idx;
-      DROP INDEX IF EXISTS usage_facts_superseded_idx;
-      ALTER TABLE usage_facts DROP COLUMN superseded_by;
-      ALTER TABLE usage_facts DROP COLUMN superseded_at;
-      ALTER TABLE usage_facts DROP COLUMN superseded;
-      UPDATE usage_schema_meta SET schema_version = 6 WHERE singleton = 1;
+      ALTER TABLE usage_facts DROP COLUMN provider_raw;
+      ALTER TABLE usage_facts DROP COLUMN billing_provider;
+      ALTER TABLE usage_facts DROP COLUMN provider_provenance;
+      ALTER TABLE usage_facts DROP COLUMN source_row_id;
+      ALTER TABLE usage_facts DROP COLUMN provider_format_version;
+      ALTER TABLE usage_facts DROP COLUMN dedup_key;
+      ALTER TABLE usage_facts DROP COLUMN billing_fact_key;
+      UPDATE usage_schema_meta SET schema_version = ${legacyVersion} WHERE singleton = 1;
     `)
     legacy.close()
 
-    expect(usageFactStoreStats().schemaVersion).toBe(7)
+    expect(usageFactStoreStats().schemaVersion).toBe(8)
     expect(synchronizeUsageFacts([session], [])).toMatchObject({
       changedSessions: 0,
       unchangedSessions: 1,
@@ -457,10 +468,24 @@ describe('UsageFact + AnalysisScope', () => {
     const indexes = (migrated.prepare('PRAGMA index_list(usage_facts)').all() as Array<{ name: string }>)
       .map((index) => index.name)
     migrated.close()
-    expect(columns).toEqual(expect.arrayContaining(['superseded', 'superseded_at', 'superseded_by']))
+    expect(columns).toEqual(expect.arrayContaining([
+      'superseded', 'superseded_at', 'superseded_by',
+      'provider_raw', 'billing_provider', 'provider_provenance',
+      'source_row_id', 'provider_format_version', 'dedup_key', 'billing_fact_key'
+    ]))
     expect(indexes).toContain('usage_facts_billing_current_idx')
     expect(sessionUsageEvents('migration-sentinel', scope()).events).toEqual([
-      expect.objectContaining({ nonCachedInputTokens: 7, outputTokens: 3 })
+      expect.objectContaining({
+        nonCachedInputTokens: 7,
+        outputTokens: 3,
+        providerRaw: null,
+        billingProvider: null,
+        providerProvenance: null,
+        sourceRowId: null,
+        providerFormatVersion: null,
+        dedupKey: null,
+        billingFactKey: null
+      })
     ])
   })
 
@@ -791,7 +816,7 @@ describe('UsageFact + AnalysisScope', () => {
     expect(model.total.usageCoverage).toEqual({ covered: 2, total: 3, percent: (2 / 3) * 100 })
 
     expect(usageFactStoreStats()).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       sessions: 6,
       activityDays: 5,
       timedSessions: 4,

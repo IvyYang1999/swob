@@ -38,7 +38,7 @@ export const HARNESS_USAGE_CONTRACTS: Readonly<Record<string, HarnessUsageSemant
     counterKinds: ['per-request']
   },
   opencode: {
-    status: 'verified', inputCacheRelation: 'disjoint', reasoningRelation: 'disjoint-from-visible-output',
+    status: 'unverified', inputCacheRelation: 'unknown', reasoningRelation: 'unknown',
     counterKinds: ['per-request']
   },
   zcode: {
@@ -126,6 +126,8 @@ export interface UsageEvent {
   semantics: 'anthropic-disjoint' | 'openai-input-subset' | 'provider-specific'
   /** Per-event field relations override the legacy combined semantics label. */
   fieldRelations?: UsageFieldRelations
+  /** Whether normalized components reconcile to an authoritative provider total. */
+  totalRelation?: 'components-sum' | 'provider-defined'
   reportedCostUsd?: number
   reportedCostKind?: ReportedCostKind
   subscriptionAllocation?: { usd: number; policyId: string }

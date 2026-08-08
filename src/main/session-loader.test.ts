@@ -275,7 +275,7 @@ function createSqliteAgentCacheFixture(
           ? {
               providerID: 'openai',
               modelID: 'gpt-5.1',
-              tokens: { input: 11, output: 7, reasoning: 2, cache: { read: 3, write: 4 } }
+              tokens: { input: 11, output: 7, reasoning: 2, cache: { read: 3, write: 4 }, total: 27 }
             }
           : {})
       }),

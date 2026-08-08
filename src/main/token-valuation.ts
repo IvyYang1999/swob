@@ -318,6 +318,19 @@ function valueUsageEventAtSnapshot(event: UsageEvent, snapshot: PriceSnapshot): 
   const billingItems = event.billingItems || []
   const ledgers = reportedLedgers(event)
   const baseReasons: string[] = []
+  const relations = event.fieldRelations
+  if (event.totalRelation === 'provider-defined') {
+    baseReasons.push('provider-total-composition-provider-defined')
+  }
+  if ((event.rawCacheReadTokens || 0) > 0 && relations?.cacheRead === 'provider-defined') {
+    baseReasons.push('cache-read-relation-provider-defined')
+  }
+  if ((event.rawCacheWriteTokens || 0) > 0 && relations?.cacheWrite === 'provider-defined') {
+    baseReasons.push('cache-write-relation-provider-defined')
+  }
+  if ((event.rawReasoningTokens || 0) > 0 && relations?.reasoning === 'provider-defined') {
+    baseReasons.push('reasoning-relation-provider-defined')
+  }
   if (totalBillableTokens > 0) {
     if (!event.modelRaw || event.modelRaw === '<synthetic>') baseReasons.push('model-unknown')
     else if (!event.modelCanonical) baseReasons.push('model-not-in-catalog')

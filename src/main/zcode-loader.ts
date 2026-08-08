@@ -9,6 +9,10 @@ import {
   stripSqliteAgentSessionRef
 } from './opencode-loader'
 
+// Architectural boundary: ZCode shares the WAL-consistent readonly SQLite
+// snapshot transport with OpenCode, but owns its path, schema descriptor and
+// model_usage semantics. No OpenCode usage relation is inherited here.
+
 export function getZcodeDbPath(): string {
   return getSqliteAgentDbPath('zcode')
 }

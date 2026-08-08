@@ -1,1 +1,26 @@
-{"source":"zcode","descriptor":"independent","familySemanticsInherited":false}
+{
+  "source": "zcode",
+  "transport": "shared-readonly-sqlite-snapshot",
+  "schemaAndUsageSemantics": "independent-from-opencode",
+  "fixtureKind": "sanitized-real-installation-sample",
+  "fixture": "testdata/provider-v2/zcode-3.6.5-sanitized.db",
+  "sourceVersion": "3.6.5",
+  "sourceSchemaSha256": "96830902757296d0e0b798021258e59ee82a9da44ba54e86de925f4bb8c1b280",
+  "fixtureSha256": "bc24a6711e62e77ab7bc992001dd2315b6fcf822156ca21fde8a3190cf9db5f8",
+  "sampledAt": "2026-08-08",
+  "sanitization": {
+    "ids": "deterministically replaced",
+    "paths": "replaced with /fixture paths",
+    "content": "replaced with explicit sanitized markers",
+    "timestamps": "shifted while preserving order and storage type",
+    "usageNumbers": "preserved from one real completed model_usage row",
+    "opaqueProviderPayloads": "removed"
+  },
+  "evidence": {
+    "providerAndModel": "proven-by-real-fixture",
+    "requestAttemptIdentity": "proven-by-real-fixture",
+    "totalComposition": "proven-by-real-fixture only when computed_total_tokens equals input_tokens + output_tokens on that row",
+    "cacheRelation": "proven-by-real-fixture only when cache buckets fit inside input_tokens on that row",
+    "nonzeroReasoningRelation": "provider-defined because the real fixture has zero reasoning_tokens"
+  }
+}

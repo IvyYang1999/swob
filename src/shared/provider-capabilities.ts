@@ -140,19 +140,21 @@ export const VALUATION_CAPABILITIES = {
   ),
   opencode: valuation(
     'billable-exact',
-    'Conditional: each assistant message now retains explicit providerID, modelID, event time, disjoint cache buckets, and visible-output/reasoning evidence; exact pricing still requires a matching approved rule or explicit reported amount.',
+    'Conditional: each assistant message retains explicit providerID, modelID and event time; exact pricing additionally requires its tokens.total to prove a mutually-exclusive cache/output/reasoning composition and a matching approved rule.',
     implementation('src/main/opencode-loader.ts'),
     implementation('src/main/sqlite-agent-usage.ts#accountOpenCodeMessageUsage'),
     test('src/main/sqlite-agent-usage-golden.test.ts'),
-    perCallPricingFixture('opencode', 'One OpenCode message preserves the explicit OpenAI route, model, event time, and normalized request buckets.')
+    test('testdata/provider-v2/opencode.json', 'Sanitized immutable OpenCode 1.17.18 real-installation sample with schema provenance.'),
+    perCallPricingFixture('opencode', 'Synthetic pricing evidence is auxiliary; real-fixture row equality gates normalized buckets.')
   ),
   zcode: valuation(
     'billable-exact',
-    'Conditional: each model_usage attempt now retains explicit provider_id, model_id, started_at, cache-subset buckets, and authoritative computed_total_tokens; exact pricing still requires a matching approved rule.',
+    'Conditional: each completed model_usage attempt retains explicit provider_id, model_id and started_at; exact pricing requires a complete request-attempt identity or stable source-row fallback, row-proven total/cache relations, zero reasoning until a real non-zero fixture proves its relation, and a matching approved rule.',
     implementation('src/main/zcode-loader.ts'),
     implementation('src/main/sqlite-agent-usage.ts#accountZCodeModelUsage'),
     test('src/main/sqlite-agent-usage-golden.test.ts'),
-    perCallPricingFixture('zcode', 'One ZCode model_usage attempt preserves the explicit Anthropic route, model, event time, and authoritative total.')
+    test('testdata/provider-v2/zcode.json', 'Sanitized immutable ZCode 3.6.5 real-installation sample with schema provenance.'),
+    perCallPricingFixture('zcode', 'Synthetic pricing evidence is auxiliary; real-fixture row equality gates normalized buckets.')
   ),
   'cc-mirror': valuation(
     'billable-exact',
@@ -656,7 +658,7 @@ export const BUILTIN_PROVIDER_DEFINITIONS: readonly BuiltinProviderDefinition[] 
 
   definition('zcode', 'ZCode', 'native', nativeCapabilities({
     loaderFile: 'src/main/zcode-loader.ts',
-    thinking: available(implementation('src/main/opencode-loader.ts'), test('src/main/zcode-loader.test.ts')),
+    thinking: available(implementation('src/main/zcode-loader.ts', 'Shares only the readonly SQLite snapshot transport with OpenCode.'), test('src/main/zcode-loader.test.ts')),
     usage: available(implementation('src/main/zcode-loader.ts'), test('src/main/zcode-loader.test.ts')),
     relationships: available(implementation('src/main/zcode-loader.ts'), test('src/main/zcode-loader.test.ts')),
     subagents: unavailable('No ZCode subagent identity parser is implemented.', implementation('src/main/zcode-loader.ts')),

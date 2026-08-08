@@ -8,6 +8,7 @@ import {
   type TokenAccounting,
   type UsageEvent
 } from './token-accounting'
+import { accountOpenCodeMessageUsage, accountZCodeModelUsage } from './sqlite-agent-usage'
 import {
   aggregateValuations,
   previewUsageEventCandidateRepricing,
@@ -202,6 +203,57 @@ describe('t113 §11 valuation invariants', () => {
       expect(valuation.coveragePercent).toBe(0)
       expect(valuation.totalBillableTokens).toBeGreaterThan(0)
     }
+  })
+
+  it('provider-defined token relations fail closed before catalog valuation', () => {
+    const event = accountOpenCodeMessageUsage([{
+      id: 'ambiguous-opencode',
+      data: JSON.stringify({
+        role: 'assistant',
+        providerID: 'openai',
+        modelID: 'gpt-5.6-sol',
+        time: { created: '2026-08-01T08:00:02.000Z' },
+        tokens: { input: 80, output: 20, reasoning: 10, cache: { read: 20, write: 10 } }
+      })
+    }]).usageEvents[0]
+
+    expect(valueUsageEvent(event)).toMatchObject({
+      mode: 'unpriced',
+      coveredTokens: 0,
+      missingReasons: [
+        'provider-total-composition-provider-defined',
+        'cache-read-relation-provider-defined',
+        'cache-write-relation-provider-defined',
+        'reasoning-relation-provider-defined'
+      ]
+    })
+  })
+
+  it('ZCode non-zero reasoning stays unpriced until a real fixture proves its relation', () => {
+    const event = accountZCodeModelUsage([{
+      id: 'zcode-unproven-reasoning',
+      logical_request_id: 'request-unproven-reasoning',
+      attempt_index: 0,
+      provider_id: 'openai',
+      model_id: 'gpt-5.6-sol',
+      status: 'completed',
+      started_at: '2026-08-01T08:00:02.000Z',
+      input_tokens: 80,
+      output_tokens: 20,
+      reasoning_tokens: 10,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      computed_total_tokens: 100
+    }]).usageEvents[0]
+
+    expect(valueUsageEvent(event)).toMatchObject({
+      mode: 'unpriced',
+      coveredTokens: 0,
+      missingReasons: [
+        'provider-total-composition-provider-defined',
+        'reasoning-relation-provider-defined'
+      ]
+    })
   })
 
   it('7. price coverage 只认 Swob 可追溯规则，未知事件仍进入分母', () => {

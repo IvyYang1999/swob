@@ -1,6 +1,6 @@
 import type { SessionSource } from './types'
 
-export const USAGE_FACT_SCHEMA_VERSION = 7
+export const USAGE_FACT_SCHEMA_VERSION = 8
 
 export type AnalysisPreset = 'today' | '7d' | '30d' | '90d' | 'all'
 export type MetricBasis = 'billing' | 'conversation'
@@ -35,6 +35,16 @@ export interface UsageFact {
   model: string | null
   modelRaw: string | null
   modelProvenance: string
+  /** Raw request-level provider label retained for attribution audit. */
+  providerRaw: string | null
+  /** Normalized provider used by valuation; null when the source did not prove one. */
+  billingProvider: string | null
+  providerProvenance: string | null
+  /** Original source and billing identities; null only for pre-v8 historical facts. */
+  sourceRowId: string | null
+  providerFormatVersion: string | null
+  dedupKey: string | null
+  billingFactKey: string | null
   nonCachedInputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number

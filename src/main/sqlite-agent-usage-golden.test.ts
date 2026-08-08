@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -11,6 +11,7 @@ import {
 } from './opencode-loader'
 import { buildZcodeSessionDetail, buildZcodeSessionSummary, makeZcodeSessionRef } from './zcode-loader'
 import { mergeTokenAccountings } from './token-accounting'
+import { valueUsageEvent } from './token-valuation'
 import { adaptSessionDetailV2 } from './unified-session-adapter-v2'
 import {
   closeUsageFactStore,
@@ -20,22 +21,15 @@ import {
 } from './usage-fact-store'
 import type { AnalysisScope, UsageFact } from './analysis-contract'
 
-function sqlite3Available(): boolean {
-  try {
-    execFileSync('sqlite3', ['-version'], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
-}
-
-const fixtureIt = sqlite3Available() ? it : it.skip
 const scope: AnalysisScope = { range: 'all', metricBasis: 'billing' }
 
 function usageFactTokens(fact: UsageFact): number {
   return fact.nonCachedInputTokens + fact.cacheReadTokens + fact.cacheWriteTokens + fact.outputTokens
 }
 
+// Synthetic scenario builders below exercise multi-turn/fork reconciliation;
+// they are auxiliary tests, not evidence for provider field semantics. The
+// immutable real-installation fixtures are the authority for those relations.
 function createOpenCodeGoldenDb(root: string): { dbPath: string; sessionId: string } {
   const sessionId = 'ses_golden_opencode'
   const dbPath = path.join(root, 'opencode.db')
@@ -71,7 +65,7 @@ function createOpenCodeGoldenDb(root: string): { dbPath: string; sessionId: stri
     providerID: 'anthropic',
     modelID: 'claude-sonnet-4',
     time: { created: '2026-07-08T10:00:05Z' },
-    tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 30, write: 10 } }
+    tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 30, write: 10 }, total: 165 }
   }), 1783504805)
   insertMessage.run('oc_user_2', sessionId, JSON.stringify({
     role: 'user', parentID: 'oc_assistant_1', time: { created: '2026-07-08T10:01:00Z' }
@@ -82,7 +76,7 @@ function createOpenCodeGoldenDb(root: string): { dbPath: string; sessionId: stri
     providerID: 'openai',
     modelID: 'gpt-5.1',
     time: { created: '2026-07-08T10:01:05Z' },
-    tokens: { input: 40, output: 10, reasoning: 2, cache: { read: 0, write: 0 } }
+    tokens: { input: 40, output: 10, reasoning: 2, cache: { read: 0, write: 0 }, total: 52 }
   }), 1783504865)
   const insertPart = db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)')
   insertPart.run('oc_text_u1', sessionId, 'oc_user_1', 'text', 0, JSON.stringify({ text: 'read file' }))
@@ -194,7 +188,94 @@ function createZCodeGoldenDb(root: string): {
 }
 
 describe('t183 SQLite agent golden reconciliation', () => {
-  fixtureIt('multi-turn/tool/model switch/fork source DB = UsageEvent billing view = ledger', async () => {
+  it('immutable real-installation fixtures keep schema provenance and row-proven semantics', async () => {
+    const cases = [
+      {
+        source: 'opencode',
+        metadata: 'opencode.json',
+        fixture: 'opencode-1.17.18-sanitized.db',
+        sessionId: 'ses_fixture_opencode_real'
+      },
+      {
+        source: 'zcode',
+        metadata: 'zcode.json',
+        fixture: 'zcode-3.6.5-sanitized.db',
+        sessionId: 'sess_fixture_zcode_real'
+      }
+    ] as const
+    for (const fixtureCase of cases) {
+      const metadataPath = path.resolve('testdata/provider-v2', fixtureCase.metadata)
+      const fixturePath = path.resolve('testdata/provider-v2', fixtureCase.fixture)
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'))
+      const fixtureBytes = fs.readFileSync(fixturePath)
+      const before = createHash('sha256').update(fixtureBytes).digest('hex')
+      expect(before).toBe(metadata.fixtureSha256)
+      expect(metadata.fixtureKind).toBe('sanitized-real-installation-sample')
+      expect(fixtureBytes.includes(Buffer.from(os.homedir()))).toBe(false)
+      expect(fixtureBytes.includes(Buffer.from('yytyyf'))).toBe(false)
+      const fixtureDb = new Database(fixturePath, { readonly: true })
+      const schemaText = (fixtureDb.prepare(`
+        SELECT sql FROM sqlite_master WHERE type = 'table' ORDER BY name
+      `).all() as Array<{ sql: string }>).map((row) => row.sql).join('\n') + '\n'
+      fixtureDb.close()
+      expect(createHash('sha256').update(schemaText).digest('hex')).toBe(metadata.sourceSchemaSha256)
+
+      const summary = fixtureCase.source === 'opencode'
+        ? await buildOpencodeSessionSummary(makeOpencodeSessionRef(fixtureCase.sessionId, fixturePath))
+        : await buildZcodeSessionSummary(makeZcodeSessionRef(fixtureCase.sessionId, fixturePath))
+      expect(summary).not.toBeNull()
+      expect(summary!.tokenAccounting!.usageEvents).toHaveLength(1)
+      const event = summary!.tokenAccounting!.usageEvents[0]
+      expect(event.providerProvenance).toBe('explicit')
+      if (fixtureCase.source === 'opencode') {
+        expect(event).toMatchObject({
+          sourceRowId: 'msg_fixture_assistant',
+          dedupKey: 'opencode:message:msg_fixture_assistant',
+          billingFactKey: 'opencode:message:msg_fixture_assistant',
+          fieldRelations: {
+            cacheRead: 'disjoint',
+            cacheWrite: 'disjoint',
+            reasoning: 'disjoint-from-visible-output'
+          },
+          components: {
+            nonCachedInputTokens: 34985,
+            cacheReadTokens: 128,
+            cacheWriteTokens: 0,
+            cacheWrite5mTokens: 0,
+            cacheWrite1hTokens: 0,
+            outputTokens: 435,
+            visibleOutputTokens: 196,
+            reasoningTokens: 239
+          }
+        })
+      } else {
+        expect(event).toMatchObject({
+          sourceRowId: 'usage_fixture_zcode_real',
+          dedupKey: 'zcode:model-usage:usage_fixture_zcode_real',
+          billingFactKey: 'zcode:request:request_fixture_zcode_real:attempt:0',
+          fieldRelations: {
+            cacheRead: 'subset-of-input',
+            cacheWrite: 'subset-of-input',
+            reasoning: 'provider-defined'
+          },
+          components: {
+            nonCachedInputTokens: 58,
+            cacheReadTokens: 192,
+            cacheWriteTokens: 0,
+            cacheWrite5mTokens: 0,
+            cacheWrite1hTokens: 0,
+            outputTokens: 14,
+            visibleOutputTokens: 14,
+            reasoningTokens: 0
+          }
+        })
+      }
+      const after = createHash('sha256').update(fs.readFileSync(fixturePath)).digest('hex')
+      expect(after).toBe(before)
+    }
+  })
+
+  it('multi-turn/tool/model switch/fork reconciles every source bucket and audit field through the ledger', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-t183-golden-'))
     const previousUsageIndex = process.env.SWOB_USAGE_INDEX_PATH
     process.env.SWOB_USAGE_INDEX_PATH = path.join(root, 'usage-facts.db')
@@ -206,6 +287,25 @@ describe('t183 SQLite agent golden reconciliation', () => {
       )
       expect(openCodeSummary).not.toBeNull()
       const openCodeSource = new Database(openCode.dbPath, { readonly: true })
+      const openCodeSourceRows = openCodeSource.prepare(`
+        SELECT
+          id,
+          json_extract(data, '$.providerID') AS provider,
+          json_extract(data, '$.modelID') AS model,
+          json_extract(data, '$.time.created') AS timestamp,
+          json_extract(data, '$.tokens.input') AS non_cached_input,
+          json_extract(data, '$.tokens.cache.read') AS cache_read,
+          json_extract(data, '$.tokens.cache.write') AS cache_write,
+          json_extract(data, '$.tokens.output') + json_extract(data, '$.tokens.reasoning') AS output,
+          json_extract(data, '$.tokens.reasoning') AS reasoning
+        FROM message
+        WHERE json_extract(data, '$.role') = 'assistant'
+        ORDER BY id
+      `).all() as Array<{
+        id: string; provider: string; model: string; timestamp: string
+        non_cached_input: number; cache_read: number; cache_write: number
+        output: number; reasoning: number
+      }>
       const openCodeSourceTotal = (openCodeSource.prepare(`
         SELECT SUM(
           COALESCE(json_extract(data, '$.tokens.input'), 0) +
@@ -226,6 +326,26 @@ describe('t183 SQLite agent golden reconciliation', () => {
       ])
       expect(openCodeSummary!.models).toEqual(expect.arrayContaining(['claude-sonnet-4', 'gpt-5.1']))
       expect(openCodeSummary!.toolUsage).toEqual({ Read: 1 })
+      for (const sourceRow of openCodeSourceRows) {
+        const event = openCodeSummary!.tokenAccounting!.usageEvents.find(
+          (candidate) => candidate.sourceRowId === sourceRow.id
+        )!
+        expect(event).toMatchObject({
+          providerRaw: sourceRow.provider,
+          billingProvider: sourceRow.provider,
+          modelRaw: sourceRow.model,
+          timestamp: new Date(sourceRow.timestamp).toISOString(),
+          dedupKey: `opencode:message:${sourceRow.id}`,
+          billingFactKey: `opencode:message:${sourceRow.id}`,
+          components: expect.objectContaining({
+            nonCachedInputTokens: sourceRow.non_cached_input,
+            cacheReadTokens: sourceRow.cache_read,
+            cacheWriteTokens: sourceRow.cache_write,
+            outputTokens: sourceRow.output,
+            reasoningTokens: sourceRow.reasoning
+          })
+        })
+      }
       const openCodeDetail = await buildOpencodeSessionDetail(
         makeOpencodeSessionRef(openCode.sessionId, openCode.dbPath)
       )
@@ -244,6 +364,28 @@ describe('t183 SQLite agent golden reconciliation', () => {
       const openCodeLedger = sessionUsageEvents(openCode.sessionId, scope).events
       expect(openCodeLedger.reduce((sum, fact) => sum + usageFactTokens(fact), 0)).toBe(openCodeSourceTotal)
       expect(openCodeLedger).toHaveLength(2)
+      for (const event of openCodeSummary!.tokenAccounting!.usageEvents) {
+        const fact = openCodeLedger.find((candidate) => candidate.sourceRowId === event.sourceRowId)!
+        const valuation = valueUsageEvent(event)
+        expect(fact).toMatchObject({
+          providerRaw: event.providerRaw,
+          billingProvider: event.billingProvider,
+          providerProvenance: event.providerProvenance,
+          sourceRowId: event.sourceRowId,
+          providerFormatVersion: event.providerFormatVersion,
+          dedupKey: event.dedupKey,
+          billingFactKey: event.billingFactKey,
+          modelRaw: event.modelRaw,
+          occurredAt: event.timestamp,
+          nonCachedInputTokens: event.components.nonCachedInputTokens,
+          cacheReadTokens: event.components.cacheReadTokens,
+          cacheWriteTokens: event.components.cacheWriteTokens,
+          outputTokens: event.components.outputTokens,
+          reasoningTokens: event.components.reasoningTokens
+        })
+        expect(fact.pricingTrace).toEqual(JSON.parse(JSON.stringify(valuation.pricingRules)))
+      }
+      expect(openCodeLedger.some((fact) => fact.pricingTrace.length > 0)).toBe(true)
 
       const zcode = createZCodeGoldenDb(root)
       const parent = await buildZcodeSessionSummary(makeZcodeSessionRef(zcode.parentId, zcode.dbPath))
@@ -276,6 +418,14 @@ describe('t183 SQLite agent golden reconciliation', () => {
       ]))
 
       const zcodeSource = new Database(zcode.dbPath, { readonly: true })
+      const zcodeSourceRows = zcodeSource.prepare(`
+        SELECT * FROM model_usage WHERE status = 'completed' ORDER BY id
+      `).all() as Array<{
+        id: string; logical_request_id: string; attempt_index: number
+        provider_id: string; model_id: string; started_at: number
+        input_tokens: number; output_tokens: number; reasoning_tokens: number
+        cache_creation_input_tokens: number; cache_read_input_tokens: number
+      }>
       const zcodeSourceBillingTotal = (zcodeSource.prepare(`
         SELECT SUM(request_total) AS total
         FROM (
@@ -304,6 +454,47 @@ describe('t183 SQLite agent golden reconciliation', () => {
       ]
       expect(zcodeAuditFacts).toHaveLength(4)
       expect(zcodeAuditFacts.filter((fact) => fact.billingIncluded)).toHaveLength(3)
+      const zcodeEvents = [
+        ...parent!.tokenAccounting!.usageEvents,
+        ...child!.tokenAccounting!.usageEvents
+      ]
+      for (const sourceRow of zcodeSourceRows) {
+        const event = zcodeEvents.find((candidate) => candidate.sourceRowId === sourceRow.id)!
+        expect(event).toMatchObject({
+          providerRaw: sourceRow.provider_id,
+          billingProvider: sourceRow.provider_id,
+          modelRaw: sourceRow.model_id,
+          timestamp: new Date(sourceRow.started_at * 1000).toISOString(),
+          dedupKey: `zcode:model-usage:${sourceRow.id}`,
+          billingFactKey: `zcode:request:${sourceRow.logical_request_id}:attempt:${sourceRow.attempt_index}`,
+          components: expect.objectContaining({
+            nonCachedInputTokens: sourceRow.input_tokens - sourceRow.cache_read_input_tokens -
+              sourceRow.cache_creation_input_tokens,
+            cacheReadTokens: sourceRow.cache_read_input_tokens,
+            cacheWriteTokens: sourceRow.cache_creation_input_tokens,
+            outputTokens: sourceRow.output_tokens,
+            reasoningTokens: sourceRow.reasoning_tokens
+          })
+        })
+        const fact = zcodeAuditFacts.find((candidate) => candidate.sourceRowId === sourceRow.id)!
+        expect(fact).toMatchObject({
+          providerRaw: event.providerRaw,
+          billingProvider: event.billingProvider,
+          providerProvenance: event.providerProvenance,
+          sourceRowId: event.sourceRowId,
+          providerFormatVersion: event.providerFormatVersion,
+          dedupKey: event.dedupKey,
+          billingFactKey: event.billingFactKey,
+          modelRaw: event.modelRaw,
+          occurredAt: event.timestamp,
+          nonCachedInputTokens: event.components.nonCachedInputTokens,
+          cacheReadTokens: event.components.cacheReadTokens,
+          cacheWriteTokens: event.components.cacheWriteTokens,
+          outputTokens: event.components.outputTokens,
+          reasoningTokens: event.components.reasoningTokens
+        })
+        expect(fact.pricingTrace).toEqual(JSON.parse(JSON.stringify(valueUsageEvent(event).pricingRules)))
+      }
       expect(queryInsights({ ...scope, sources: ['zcode'] }, 'global').total.processedTokens)
         .toBe(zcodeSourceBillingTotal)
     } finally {

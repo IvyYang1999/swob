@@ -57,6 +57,7 @@ export type {
 const MAX_DIAGNOSTIC_EVENTS = 50
 const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 320
 const MAX_DIAGNOSTIC_READ_BYTES = 256 * 1024
+const MAX_BACKGROUND_FAILURE_SAMPLES = 20
 
 let diagnosticFilePath: string | null = null
 
@@ -214,6 +215,7 @@ class LibraryHealthStateMachine extends EventEmitter {
         failed: 0,
         remaining: 0,
         failures: [],
+        failureCounts: {},
         unverifiableBuckets: emptyUnverifiableBuckets()
       },
       identityExceptions: {
@@ -365,7 +367,8 @@ class LibraryHealthStateMachine extends EventEmitter {
       completed: 0,
       failed: 0,
       remaining: total,
-      failures: []
+      failures: [],
+      failureCounts: {}
     }
     this.commit(previous)
   }
@@ -416,10 +419,18 @@ class LibraryHealthStateMachine extends EventEmitter {
     failure?: BackgroundSyncFailure
   }): void {
     const previous = this._state
-    const failures = progress.failure && !this._dimensions.backgroundBacklog.failures.some((failure) =>
+    const isNewFailure = progress.failure && !this._dimensions.backgroundBacklog.failures.some((failure) =>
       failure.sessionId === progress.failure!.sessionId && failure.reasonCode === progress.failure!.reasonCode)
-      ? [...this._dimensions.backgroundBacklog.failures, progress.failure]
+    const failures = isNewFailure && this._dimensions.backgroundBacklog.failures.length < MAX_BACKGROUND_FAILURE_SAMPLES
+      ? [...this._dimensions.backgroundBacklog.failures, progress.failure!]
       : [...this._dimensions.backgroundBacklog.failures]
+    const failureCounts = progress.failure
+      ? {
+          ...this._dimensions.backgroundBacklog.failureCounts,
+          [progress.failure.reasonCode]:
+            (this._dimensions.backgroundBacklog.failureCounts[progress.failure.reasonCode] || 0) + 1
+        }
+      : { ...this._dimensions.backgroundBacklog.failureCounts }
     this._dimensions.backgroundBacklog = {
       ...this._dimensions.backgroundBacklog,
       state: 'running',
@@ -427,7 +438,8 @@ class LibraryHealthStateMachine extends EventEmitter {
       completed: progress.completed,
       failed: progress.failed,
       remaining: progress.remaining,
-      failures
+      failures,
+      failureCounts
     }
     this.commit(previous)
   }

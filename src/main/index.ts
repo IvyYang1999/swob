@@ -1887,7 +1887,9 @@ async function initLibraryFromSessions(
         'Library background synchronization paused at a safe session boundary'
       )
     }
-    initialSync.skipped.forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
+    initialSync.skipped
+      .filter((entry) => entry.code === 'SESSION_IDENTITY_CONFLICT')
+      .forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
     tree = await requestLibraryScan(false)
     if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
 
@@ -1906,7 +1908,9 @@ async function initLibraryFromSessions(
       // subset would replace the checkpoint universe and make every older
       // source look dirty again on the next launch.
       const catchUpSync = await syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta)
-      catchUpSync.skipped.forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
+      catchUpSync.skipped
+        .filter((entry) => entry.code === 'SESSION_IDENTITY_CONFLICT')
+        .forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
       tree = await requestLibraryScan(false)
       if (!adoptLibraryTree(tree, false)) tree = await requestLibraryScan(false)
     }

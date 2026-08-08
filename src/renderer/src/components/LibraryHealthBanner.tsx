@@ -78,6 +78,7 @@ export function LibraryHealthBanner() {
   const dimensions = health.dimensions
   const backlog = dimensions.backgroundBacklog
   const bucketEntries = Object.entries(backlog.unverifiableBuckets).filter(([, count]) => count > 0)
+  const failureEntries = Object.entries(backlog.failureCounts).filter(([, count]) => count > 0)
   const dimensionSummary = (
     <div className="library-health-dimensions flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] opacity-80">
       <span><code>writer-capability</code>: {dimensions.writerCapability.state}</span>
@@ -143,9 +144,16 @@ export function LibraryHealthBanner() {
       ? {
           total: backlog.total,
           completed: backlog.completed,
-          failed: backlog.failed
+          failed: backlog.failed,
+          remaining: backlog.remaining
         }
-      : health.compensation
+      : {
+          ...health.compensation,
+          remaining: Math.max(
+            0,
+            health.compensation.total - health.compensation.completed - health.compensation.failed
+          )
+        }
     const fraction = progress.total > 0
       ? (progress.completed + progress.failed) / progress.total
       : 0
@@ -158,9 +166,10 @@ export function LibraryHealthBanner() {
         <span className="flex-1 min-w-52">
           {t('health.compensation_progress', {
             total: progress.total,
-            done: progress.completed
+            done: progress.completed,
+            failed: progress.failed,
+            remaining: progress.remaining
           })}
-          {' '}<code>remaining={backlog.remaining}</code>
         </span>
         <div className="w-24 h-1.5 rounded-full bg-surface overflow-hidden shrink-0">
           <div
@@ -182,10 +191,9 @@ export function LibraryHealthBanner() {
           </button>
         )}
         <div className="basis-full pl-6">{dimensionSummary}</div>
-        {backlog.failures.length > 0 && (
+        {failureEntries.length > 0 && (
           <div className="basis-full pl-6 text-[10px] text-soft-amber">
-            {backlog.failures.map((failure) => failure.reasonCode).filter((value, index, all) =>
-              all.indexOf(value) === index).join(' · ')}
+            {failureEntries.map(([reason, count]) => `${reason}=${count}`).join(' · ')}
           </div>
         )}
         {bucketEntries.length > 0 && (
@@ -223,9 +231,9 @@ export function LibraryHealthBanner() {
           </button>
         )}
         <div className="basis-full pl-6">{dimensionSummary}</div>
-        {backlog.failures.length > 0 && (
+        {failureEntries.length > 0 && (
           <div className="basis-full pl-6 text-[10px]">
-            {backlog.failures.map((failure) => `${failure.sessionId}: ${failure.reasonCode}`).join(' · ')}
+            {failureEntries.map(([reason, count]) => `${reason}=${count}`).join(' · ')}
           </div>
         )}
       </div>

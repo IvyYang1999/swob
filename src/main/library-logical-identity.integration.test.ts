@@ -169,7 +169,12 @@ describe('Library logical identity integration', () => {
     expect(outcome).toEqual({
       total: 2,
       completed: 1,
-      skipped: [{ sessionId: conflictId, code: 'SESSION_IDENTITY_CONFLICT' }]
+      skipped: [{
+        sessionId: conflictId,
+        code: 'SESSION_IDENTITY_CONFLICT',
+        disposition: 'failed',
+        retryable: false
+      }]
     })
   })
 

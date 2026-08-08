@@ -251,12 +251,23 @@ function failureReason(error: unknown): string {
   return 'SESSION_SYNC_FAILED'
 }
 
+function failedStartupItem(sessionId: string, error: unknown): LibrarySyncOutcome['skipped'][number] {
+  const code = failureReason(error)
+  return {
+    sessionId,
+    code,
+    disposition: 'failed',
+    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED'
+  }
+}
+
 function mustAbortStartup(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
   const typed = error as { code?: unknown; name?: unknown }
   return typed.name === 'AbortError' || typed.name === 'LibraryWriterBusyError' ||
-    typed.name === 'LibraryPathUnsafeError' ||
-    ['LIBRARY_WRITER_BUSY', 'EACCES', 'EPERM', 'ENOSPC', 'EIO'].includes(String(typed.code || ''))
+    typed.name === 'LibraryPathUnsafeError' || typed.name === 'SessionCreateIdentityUnavailableError' ||
+    ['LIBRARY_WRITER_BUSY', 'WRITER_IDENTITY_UNAVAILABLE', 'EACCES', 'EPERM', 'ENOSPC', 'EIO']
+      .includes(String(typed.code || ''))
 }
 
 /**
@@ -303,10 +314,13 @@ export async function syncLibraryStartupIncrementally(
       } else {
         throw new Error('Library startup synchronization requires syncBatch or syncChunk')
       }
-      if (chunk.completed > 0) reportBoundary('durable')
+      const handled = chunk.skipped.filter((entry) => entry.disposition === 'handled').length
+      const chunkFailures = chunk.skipped.filter((entry) => entry.disposition === 'failed').length
+      if (chunk.completed > handled) reportBoundary('durable')
       outcome.completed += chunk.completed
       outcome.skipped.push(...chunk.skipped)
-      failed += chunk.skipped.length
+      failed += chunkFailures
+      if (chunkFailures > 0) unexpectedFailure = true
     } catch (error) {
       if (mustAbortStartup(error)) throw error
       unexpectedFailure = true
@@ -322,21 +336,32 @@ export async function syncLibraryStartupIncrementally(
             chunk.skipped.push(...retried.skipped)
           } catch (retryError) {
             if (mustAbortStartup(retryError)) throw retryError
-            failed++
-            failureBySessionId.set(session.sessionId, failureReason(retryError))
+            const skipped = failedStartupItem(session.sessionId, retryError)
+            chunk.skipped.push(skipped)
+            failureBySessionId.set(session.sessionId, skipped.code)
           }
         }
-        if (chunk.completed > 0) reportBoundary('durable')
+        const handled = chunk.skipped.filter((entry) => entry.disposition === 'handled').length
+        const chunkFailures = chunk.skipped.filter((entry) => entry.disposition === 'failed').length
+        if (chunk.completed > handled) reportBoundary('durable')
         outcome.completed += chunk.completed
         outcome.skipped.push(...chunk.skipped)
-        failed += chunk.skipped.length
+        failed += chunkFailures
       } else {
-        failed += batch.length
-        for (const session of batch) failureBySessionId.set(session.sessionId, failureReason(error))
+        chunk = {
+          total: batch.length,
+          completed: 0,
+          skipped: batch.map((session) => failedStartupItem(session.sessionId, error))
+        }
+        outcome.skipped.push(...chunk.skipped)
+        failed += chunk.skipped.length
+        for (const skipped of chunk.skipped) failureBySessionId.set(skipped.sessionId, skipped.code)
       }
     }
 
-    const skippedBySessionId = new Map((chunk?.skipped || []).map((entry) => [entry.sessionId, entry.code]))
+    const skippedBySessionId = new Map((chunk?.skipped || [])
+      .filter((entry) => entry.disposition === 'failed')
+      .map((entry) => [entry.sessionId, entry.code]))
     for (let batchIndex = 0; batchIndex < batch.length; batchIndex++) {
       const current = offset + batchIndex + 1
       const session = batch[batchIndex]
@@ -346,7 +371,7 @@ export async function syncLibraryStartupIncrementally(
         total: options.sessions.length,
         completed: outcome.completed,
         failed,
-        remaining: Math.max(0, options.sessions.length - current),
+        remaining: Math.max(0, options.sessions.length - outcome.completed - failed),
         sessionId: session.sessionId,
         ...(itemFailure ? { failureReason: itemFailure } : {})
       })

@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   acquireSessionCreateLock,
+  recoverStaleSessionCreateLocks,
   SessionCreateBusyError,
   SessionCreateIdentityUnavailableError
 } from './session-create-lock'
@@ -44,6 +46,78 @@ describe('session create lock', () => {
     expect(path.basename(handle.lockPath)).toMatch(/^[0-9a-f]{64}\.lock$/)
     expect(handle.lockPath).not.toContain('secret-session-id')
     handle.release()
+  })
+
+  it('atomically reclaims an empty lock directory after the protocol grace period', async () => {
+    const root = tempRoot()
+    const lockDir = path.join(root, '.swob', 'locks', 'session-create')
+    const emptyKey = 'v1\0claude-code\0default\0default\0empty' as LogicalSessionKey
+    const lockPath = path.join(lockDir, createHash('sha256').update(emptyKey).digest('hex') + '.lock')
+    fs.mkdirSync(lockPath, { recursive: true })
+    const staleAt = new Date(Date.now() - 60_000)
+    fs.utimesSync(lockPath, staleAt, staleAt)
+    const handle = await acquireSessionCreateLock(
+      root,
+      emptyKey,
+      'device-a',
+      {
+        timeoutMs: 5,
+        pollMs: 1,
+        bootIdentity: () => 'boot-a',
+        processStartFingerprint: () => 'start-a'
+      }
+    )
+    handle.release()
+    expect(fs.existsSync(lockPath)).toBe(false)
+  })
+
+  it('preserves a fresh empty directory during the mkdir-to-owner protocol window', () => {
+    const root = tempRoot()
+    const lockPath = path.join(root, '.swob', 'locks', 'session-create', 'c'.repeat(64) + '.lock')
+    fs.mkdirSync(lockPath, { recursive: true })
+
+    expect(recoverStaleSessionCreateLocks(root, 'device-a', {
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: () => 'missing'
+    })).toEqual({ examined: 1, recovered: 0, preserved: 1 })
+    expect(fs.existsSync(lockPath)).toBe(true)
+  })
+
+  it('sweeps empty and proven-dead local locks while preserving remote and malformed evidence', async () => {
+    const root = tempRoot()
+    const deadKey = 'v1\0claude-code\0default\0default\0dead' as LogicalSessionKey
+    const remoteKey = 'v1\0claude-code\0default\0default\0remote' as LogicalSessionKey
+    const dead = await acquireSessionCreateLock(root, deadKey, 'device-a', {
+      pid: 701,
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: () => 'dead-start'
+    })
+    const remote = await acquireSessionCreateLock(root, remoteKey, 'remote-device', {
+      pid: 702,
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: () => 'remote-start'
+    })
+    const lockDir = path.dirname(dead.lockPath)
+    const emptyPath = path.join(lockDir, 'e'.repeat(64) + '.lock')
+    const malformedPath = path.join(lockDir, 'd'.repeat(64) + '.lock')
+    fs.mkdirSync(emptyPath)
+    const staleAt = new Date(Date.now() - 60_000)
+    fs.utimesSync(emptyPath, staleAt, staleAt)
+    fs.mkdirSync(malformedPath)
+    fs.writeFileSync(path.join(malformedPath, 'broken.owner.json'), '{')
+
+    const result = recoverStaleSessionCreateLocks(root, 'device-a', {
+      bootIdentity: () => 'boot-a',
+      processStartFingerprint: (pid) => pid === 701 ? 'missing' : 'remote-start'
+    })
+
+    expect(result).toEqual({ examined: 4, recovered: 2, preserved: 2 })
+    expect(fs.existsSync(dead.lockPath)).toBe(false)
+    expect(fs.existsSync(emptyPath)).toBe(false)
+    expect(fs.existsSync(remote.lockPath)).toBe(true)
+    expect(fs.existsSync(malformedPath)).toBe(true)
+    dead.release()
+    remote.release()
   })
 
   it('recovers only an expired same-device owner proven dead', async () => {

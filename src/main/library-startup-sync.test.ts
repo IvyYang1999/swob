@@ -123,7 +123,12 @@ describe('incremental Library startup synchronization', () => {
           ? {
               total: 1,
               completed: 0,
-              skipped: [{ sessionId: session.sessionId, code: 'SESSION_IDENTITY_CONFLICT' }]
+              skipped: [{
+                sessionId: session.sessionId,
+                code: 'SESSION_IDENTITY_CONFLICT',
+                disposition: 'failed',
+                retryable: false
+              }]
             }
           : { total: 1, completed: 1, skipped: [] }
       },
@@ -135,6 +140,46 @@ describe('incremental Library startup synchronization', () => {
       'chunk:writable',
       'projection-open'
     ])
+  })
+
+  it('reports handled, failed, and remaining as disjoint progress states', async () => {
+    const sessions = [
+      summary('missing', '/fixture/missing.jsonl', '2026-08-02T09:00:00.000Z'),
+      summary('busy', '/fixture/busy.jsonl', '2026-08-02T09:00:01.000Z'),
+      summary('written', '/fixture/written.jsonl', '2026-08-02T09:00:02.000Z')
+    ]
+    const progress: Array<{ completed: number; failed: number; remaining: number }> = []
+    const outcome = await syncLibraryStartupIncrementally({
+      sessions,
+      batchSize: 3,
+      probeWriter: async () => {},
+      onWriterProven: () => {},
+      drainLive: async () => false,
+      resolveLatest: (session) => session,
+      syncBatch: async () => ({
+        total: 3,
+        completed: 2,
+        skipped: [
+          {
+            sessionId: 'missing',
+            code: 'SESSION_SOURCE_MISSING',
+            disposition: 'handled',
+            retryable: false
+          },
+          {
+            sessionId: 'busy',
+            code: 'SESSION_CREATE_BUSY',
+            disposition: 'failed',
+            retryable: true
+          }
+        ]
+      }),
+      onProgress: (value) => progress.push(value)
+    })
+
+    expect(outcome).toMatchObject({ total: 3, completed: 2 })
+    expect(progress).toHaveLength(3)
+    expect(progress.at(-1)).toMatchObject({ completed: 2, failed: 1, remaining: 0 })
   })
 
   it('completes startup while multi-key live events continue below the quiet window', async () => {
@@ -211,6 +256,27 @@ describe('incremental Library startup synchronization', () => {
     expect(onWriterProven).not.toHaveBeenCalled()
     expect(drainLive).not.toHaveBeenCalled()
     expect(syncChunk).not.toHaveBeenCalled()
+  })
+
+  it('aborts the backlog once when safe writer identity is unavailable', async () => {
+    const progress = vi.fn()
+    const error = Object.assign(new Error('writer identity unavailable'), {
+      code: 'WRITER_IDENTITY_UNAVAILABLE',
+      name: 'SessionCreateIdentityUnavailableError'
+    })
+    await expect(syncLibraryStartupIncrementally({
+      sessions: [
+        summary('first', '/fixture/first.jsonl', '2026-08-02T09:00:00.000Z'),
+        summary('second', '/fixture/second.jsonl', '2026-08-02T09:00:01.000Z')
+      ],
+      probeWriter: async () => {},
+      onWriterProven: () => {},
+      drainLive: async () => false,
+      resolveLatest: (session) => session,
+      syncBatch: async () => { throw error },
+      onProgress: progress
+    })).rejects.toBe(error)
+    expect(progress).not.toHaveBeenCalled()
   })
 
   it('publishes a follow-up source write before startup finishes and never replays the old summary', async () => {

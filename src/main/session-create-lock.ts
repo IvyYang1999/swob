@@ -31,6 +31,7 @@ export interface SessionCreateLockOptions {
   timeoutMs?: number
   pollMs?: number
   leaseMs?: number
+  emptyLockGraceMs?: number
   now?: () => number
   nonce?: () => string
   platform?: NodeJS.Platform
@@ -74,16 +75,26 @@ function isolatedTestIdentitySeed(): string | null {
     : null
 }
 
+const bootIdentityCache = new Map<string, string | null>()
+const currentProcessStartCache = new Map<string, string | null>()
+
 export function getLocalBootIdentity(platform: NodeJS.Platform = process.platform): string | null {
   const testSeed = isolatedTestIdentitySeed()
-  if (testSeed) return hashFingerprint(`test-boot:${testSeed}`)
+  const cacheKey = `${platform}:${testSeed || 'host'}`
+  if (bootIdentityCache.has(cacheKey)) return bootIdentityCache.get(cacheKey) || null
+  if (testSeed) {
+    const result = hashFingerprint(`test-boot:${testSeed}`)
+    bootIdentityCache.set(cacheKey, result)
+    return result
+  }
+  let result: string | null = null
   try {
     if (platform === 'linux') {
-      return hashFingerprint(fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim())
+      result = hashFingerprint(fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim())
     }
     if (platform === 'darwin') {
       const output = commandOutput('/usr/sbin/sysctl', ['-n', 'kern.boottime'])
-      return output ? hashFingerprint(output) : null
+      result = output ? hashFingerprint(output) : null
     }
     if (platform === 'win32') {
       const output = commandOutput('powershell.exe', [
@@ -92,12 +103,13 @@ export function getLocalBootIdentity(platform: NodeJS.Platform = process.platfor
         '-Command',
         '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks'
       ])
-      return output ? hashFingerprint(output) : null
+      result = output ? hashFingerprint(output) : null
     }
   } catch {
-    return null
+    result = null
   }
-  return null
+  bootIdentityCache.set(cacheKey, result)
+  return result
 }
 
 export function getProcessStartFingerprint(
@@ -105,13 +117,20 @@ export function getProcessStartFingerprint(
   platform: NodeJS.Platform = process.platform
 ): string | 'missing' | null {
   const testSeed = isolatedTestIdentitySeed()
+  const cacheKey = `${platform}:${testSeed || 'host'}:${pid}`
+  if (pid === process.pid && currentProcessStartCache.has(cacheKey)) {
+    return currentProcessStartCache.get(cacheKey) || null
+  }
+  let result: string | 'missing' | null = null
   if (testSeed) {
     try {
       process.kill(pid, 0)
-      return hashFingerprint(`test-process:${testSeed}:${pid}`)
+      result = hashFingerprint(`test-process:${testSeed}:${pid}`)
     } catch (error) {
-      return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'missing' : null
+      result = (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'missing' : null
     }
+    if (pid === process.pid && result !== 'missing') currentProcessStartCache.set(cacheKey, result)
+    return result
   }
   try {
     if (platform === 'linux') {
@@ -126,14 +145,16 @@ export function getProcessStartFingerprint(
       if (closeParen < 0) return null
       const fieldsAfterCommand = content.slice(closeParen + 2).trim().split(/\s+/)
       const startTicks = fieldsAfterCommand[19]
-      return startTicks ? hashFingerprint(startTicks) : null
+      result = startTicks ? hashFingerprint(startTicks) : null
     }
     if (platform === 'darwin') {
       const result = spawnSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf-8' })
       if (result.error) return null
       const output = result.stdout.trim()
       if (result.status !== 0 || !output) return 'missing'
-      return hashFingerprint(output)
+      const fingerprint = hashFingerprint(output)
+      if (pid === process.pid) currentProcessStartCache.set(cacheKey, fingerprint)
+      return fingerprint
     }
     if (platform === 'win32') {
       const output = commandOutput('powershell.exe', [
@@ -143,12 +164,13 @@ export function getProcessStartFingerprint(
         `$p=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($p){$p.StartTime.ToUniversalTime().Ticks}else{'MISSING'}`
       ])
       if (output === 'MISSING') return 'missing'
-      return output ? hashFingerprint(output) : null
+      result = output ? hashFingerprint(output) : null
     }
   } catch {
     return null
   }
-  return null
+  if (pid === process.pid && result !== 'missing') currentProcessStartCache.set(cacheKey, result)
+  return result
 }
 
 function parseOwner(content: string): SessionCreateLockOwner | null {
@@ -208,6 +230,141 @@ function readDirectoryOwner(lockPath: string): ExistingDirectoryOwner | null {
   return owner ? { ownerPath, owner } : null
 }
 
+function removeStaleEmptyLockDirectory(
+  lockPath: string,
+  lockDir: string,
+  nowMs: number,
+  graceMs: number
+): boolean {
+  try {
+    // A freshly-created empty directory may be between mkdir and owner-file
+    // publication. The grace period keeps recovery out of that protocol window;
+    // rmdir then atomically proves that no owner file appeared before cleanup.
+    const stat = fs.lstatSync(lockPath)
+    if (!stat.isDirectory() || stat.isSymbolicLink() || nowMs - stat.mtimeMs < graceMs) return false
+    fs.rmdirSync(lockPath)
+    fsyncDirectorySync(lockDir)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function recoverDeadOwner(
+  libraryRoot: string,
+  lockDir: string,
+  lockPath: string,
+  existingRecord: ExistingDirectoryOwner,
+  deviceId: string,
+  bootIdentity: string,
+  readProcessStart: (pid: number) => string | 'missing' | null,
+  nowMs: number
+): boolean {
+  const recoveryClaim = path.join(lockPath, 'recovery.claim')
+  try {
+    writeSafeLibraryFileSync(libraryRoot, recoveryClaim, existingRecord.owner.ownerNonce, { exclusive: true })
+    const current = readDirectoryOwner(lockPath)
+    if (current?.owner.ownerNonce !== existingRecord.owner.ownerNonce ||
+      current.ownerPath !== existingRecord.ownerPath ||
+      staleRecoveryDecision(current.owner, deviceId, bootIdentity, readProcessStart, nowMs) !== 'recover') {
+      fs.unlinkSync(recoveryClaim)
+      return false
+    }
+    fs.unlinkSync(current.ownerPath)
+    fs.unlinkSync(recoveryClaim)
+    fs.rmdirSync(lockPath)
+    fsyncDirectorySync(lockDir)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export interface SessionCreateLockRecoveryResult {
+  examined: number
+  recovered: number
+  preserved: number
+}
+
+/**
+ * Bounded, protocol-aware startup cleanup. Empty directories are removable by
+ * atomic rmdir; populated locks are reclaimed only with the same owner proof as
+ * normal acquisition. Remote, live, malformed, linked, and unreadable evidence
+ * is preserved fail-closed.
+ */
+export function recoverStaleSessionCreateLocks(
+  libraryRoot: string,
+  deviceId: string,
+  options: Pick<
+    SessionCreateLockOptions,
+    'now' | 'platform' | 'bootIdentity' | 'processStartFingerprint' | 'emptyLockGraceMs'
+  > = {}
+): SessionCreateLockRecoveryResult {
+  const result: SessionCreateLockRecoveryResult = { examined: 0, recovered: 0, preserved: 0 }
+  const platform = options.platform || process.platform
+  const bootIdentity = (options.bootIdentity || (() => getLocalBootIdentity(platform)))()
+  const now = options.now || Date.now
+  const emptyLockGraceMs = options.emptyLockGraceMs ?? 30_000
+  if (!bootIdentity) return result
+  const uncachedReadProcessStart = options.processStartFingerprint ||
+    ((ownerPid: number) => getProcessStartFingerprint(ownerPid, platform))
+  const processStarts = new Map<number, string | 'missing' | null>()
+  const readProcessStart = (ownerPid: number): string | 'missing' | null => {
+    if (!processStarts.has(ownerPid)) processStarts.set(ownerPid, uncachedReadProcessStart(ownerPid))
+    return processStarts.get(ownerPid) ?? null
+  }
+  const lockDir = path.join(libraryRoot, '.swob', 'locks', 'session-create')
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(lockDir, { withFileTypes: true })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') result.preserved++
+    return result
+  }
+  for (const entry of entries) {
+    if (!/^[0-9a-f]{64}\.lock$/.test(entry.name)) continue
+    result.examined++
+    const lockPath = path.join(lockDir, entry.name)
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      result.preserved++
+      continue
+    }
+    let names: string[]
+    try { names = fs.readdirSync(lockPath) } catch {
+      result.preserved++
+      continue
+    }
+    if (names.length === 0) {
+      if (removeStaleEmptyLockDirectory(lockPath, lockDir, now(), emptyLockGraceMs)) result.recovered++
+      else result.preserved++
+      continue
+    }
+    const existing = readDirectoryOwner(lockPath)
+    if (!existing || staleRecoveryDecision(
+      existing.owner,
+      deviceId,
+      bootIdentity,
+      readProcessStart,
+      now()
+    ) !== 'recover') {
+      result.preserved++
+      continue
+    }
+    if (recoverDeadOwner(
+      libraryRoot,
+      lockDir,
+      lockPath,
+      existing,
+      deviceId,
+      bootIdentity,
+      readProcessStart,
+      now()
+    )) result.recovered++
+    else result.preserved++
+  }
+  return result
+}
+
 export async function acquireSessionCreateLock(
   libraryRoot: string,
   logicalKey: LogicalSessionKey,
@@ -218,6 +375,7 @@ export async function acquireSessionCreateLock(
   const timeoutMs = options.timeoutMs ?? 2_000
   const pollMs = options.pollMs ?? 40
   const leaseMs = options.leaseMs ?? 30_000
+  const emptyLockGraceMs = options.emptyLockGraceMs ?? 30_000
   const platform = options.platform || process.platform
   const pid = options.pid ?? process.pid
   const readBootIdentity = options.bootIdentity || (() => getLocalBootIdentity(platform))
@@ -280,24 +438,21 @@ export async function acquireSessionCreateLock(
     const existingRecord = readDirectoryOwner(lockPath)
     const existing = existingRecord?.owner || null
     if (!existing) {
+      if (removeStaleEmptyLockDirectory(lockPath, lockDir, now(), emptyLockGraceMs)) continue
       lastReason = 'unverifiable-owner'
     } else {
       const decision = staleRecoveryDecision(existing, deviceId, bootIdentity, readProcessStart, now())
       if (decision === 'recover') {
-        const recoveryClaim = path.join(lockPath, 'recovery.claim')
-        try {
-          writeSafeLibraryFileSync(libraryRoot, recoveryClaim, existing.ownerNonce, { exclusive: true })
-          const current = readDirectoryOwner(lockPath)
-          if (current?.owner.ownerNonce === existing.ownerNonce && current.ownerPath === existingRecord?.ownerPath &&
-            staleRecoveryDecision(current.owner, deviceId, bootIdentity, readProcessStart, now()) === 'recover') {
-            fs.unlinkSync(current.ownerPath)
-            fs.unlinkSync(recoveryClaim)
-            fs.rmdirSync(lockPath)
-            fsyncDirectorySync(lockDir)
-          } else {
-            fs.unlinkSync(recoveryClaim)
-          }
-        } catch { /* another writer owns recovery, or evidence changed */ }
+        if (existingRecord) recoverDeadOwner(
+          libraryRoot,
+          lockDir,
+          lockPath,
+          existingRecord,
+          deviceId,
+          bootIdentity,
+          readProcessStart,
+          now()
+        )
         continue
       }
       lastReason = decision

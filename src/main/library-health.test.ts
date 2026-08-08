@@ -27,7 +27,10 @@ import {
   onCompensationUpdate,
   runCompensation,
   retryCompensation,
-  enqueueCompensation
+  enqueueCompensation,
+  beginLibraryBackgroundSync,
+  updateLibraryBackgroundProgress,
+  finishLibraryBackgroundSync
 } from './library-health'
 
 describe('LibraryHealthStateMachine', () => {
@@ -116,6 +119,29 @@ describe('LibraryHealthStateMachine', () => {
     expect(getLibraryHealthState()).toBe('ready')
     resetLibraryHealth()
     expect(getLibraryHealthState()).toBe('initializing')
+  })
+
+  it('keeps exact background failure counts while bounding renderer samples', () => {
+    beginLibraryBackgroundSync(25)
+    for (let index = 0; index < 25; index++) {
+      updateLibraryBackgroundProgress({
+        total: 25,
+        completed: 0,
+        failed: index + 1,
+        remaining: 24 - index,
+        failure: {
+          sessionId: `failed-${index}`,
+          reasonCode: index % 2 === 0 ? 'SESSION_CREATE_BUSY' : 'SESSION_SYNC_FAILED'
+        }
+      })
+    }
+    finishLibraryBackgroundSync()
+
+    const backlog = getLibraryHealth().dimensions.backgroundBacklog
+    expect(backlog.state).toBe('completed-with-errors')
+    expect(backlog).toMatchObject({ total: 25, completed: 0, failed: 25, remaining: 0 })
+    expect(backlog.failures).toHaveLength(20)
+    expect(backlog.failureCounts).toEqual({ SESSION_CREATE_BUSY: 13, SESSION_SYNC_FAILED: 12 })
   })
 
   it('persists append-only redacted diagnostics outside the Library and reloads valid lines', () => {

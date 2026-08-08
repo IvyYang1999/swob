@@ -122,6 +122,7 @@ export interface LibraryHealthDimensions {
     failed: number
     remaining: number
     failures: readonly BackgroundSyncFailure[]
+    failureCounts: Readonly<Record<string, number>>
     unverifiableBuckets: Readonly<Record<UnverifiableReason, number>>
   }
   identityExceptions: {
@@ -277,6 +278,8 @@ export function isLibraryHealthSnapshot(value: unknown): value is LibraryHealthS
     [backlog.total, backlog.completed, backlog.failed, backlog.remaining].every(isNonNegativeInteger) &&
     Array.isArray(backlog.failures) && backlog.failures.every((failure) =>
       !!failure && typeof failure.sessionId === 'string' && typeof failure.reasonCode === 'string') &&
+    !!backlog.failureCounts && Object.entries(backlog.failureCounts).every(([reason, count]) =>
+      reason.length > 0 && isNonNegativeInteger(count)) &&
     !!backlog.unverifiableBuckets && UNVERIFIABLE_REASONS.every((reason) =>
       isNonNegativeInteger(backlog.unverifiableBuckets[reason])) &&
     !!identity && IDENTITY_STATES.has(identity.state) && isIsoTimestamp(identity.stateSinceAt) &&
@@ -348,6 +351,7 @@ export function createInitializingLibraryHealthSnapshot(): LibraryHealthSnapshot
         failed: 0,
         remaining: 0,
         failures: [],
+        failureCounts: {},
         unverifiableBuckets: emptyUnverifiableBuckets()
       },
       identityExceptions: {

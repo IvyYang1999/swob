@@ -68,6 +68,8 @@ export type CoordinateCache = Map<string, CachedPosition>
 // Deterministic new-node placement
 // ---------------------------------------------------------------------------
 
+const SOURCE_ORDER = ['claude-code', 'codex', 'cursor', 'opencode', 'zcode']
+
 interface PlacementContext {
   /** Existing coordinate cache (already-placed nodes). */
   cache: CoordinateCache
@@ -75,119 +77,17 @@ interface PlacementContext {
   nodeInfo: Map<string, { source: string; project: string; parentKey?: string }>
 }
 
-// ---------------------------------------------------------------------------
-// Source / project statistics for two-level sector layout
-// ---------------------------------------------------------------------------
-
-interface SourceStats {
-  /** Total node count per source */
-  sourceCounts: Map<string, number>
-  /** Sorted list of unique sources (deterministic order) */
-  sources: string[]
-  /** Sorted list of unique projects per source */
-  projectsBySource: Map<string, string[]>
-  /** Total node count across all sources */
-  totalCount: number
-}
-
-function computeSourceStats(
-  nodeInfo: PlacementContext['nodeInfo']
-): SourceStats {
-  const sourceCounts = new Map<string, number>()
-  const projectSets = new Map<string, Set<string>>()
-
-  for (const [, info] of nodeInfo) {
-    const src = info.source
-    const proj = info.project
-    sourceCounts.set(src, (sourceCounts.get(src) || 0) + 1)
-    if (!projectSets.has(src)) projectSets.set(src, new Set())
-    projectSets.get(src)!.add(proj)
-  }
-
-  const sources = [...sourceCounts.keys()].sort()
-  const projectsBySource = new Map<string, string[]>()
-  for (const [src, projSet] of projectSets) {
-    projectsBySource.set(src, [...projSet].sort())
-  }
-
-  return {
-    sourceCounts,
-    sources,
-    projectsBySource,
-    totalCount: nodeInfo.size
-  }
-}
-
-interface SectorInfo {
-  /** Center angle of this source's sector */
-  sourceAngle: number
-  /** Angular width of source sector */
-  sourceSectorWidth: number
-  /** Offset angle within source sector for this project sub-cluster */
-  projectSubAngle: number
-}
-
-function computeSectorInfo(
-  stats: SourceStats,
-  source: string,
-  project: string
-): SectorInfo {
-  const { sources, sourceCounts, projectsBySource, totalCount } = stats
-
-  // Source sectors: angular width proportional to node count
-  let angleOffset = 0
-  let sourceAngle = 0
-  let sourceSectorWidth = Math.PI * 2 / Math.max(1, sources.length)
-
-  const total = Math.max(1, totalCount)
-  for (const src of sources) {
-    const count = sourceCounts.get(src) || 1
-    const sectorWidth = (count / total) * Math.PI * 2
-    if (src === source) {
-      sourceAngle = angleOffset + sectorWidth / 2
-      sourceSectorWidth = sectorWidth
-      break
-    }
-    angleOffset += sectorWidth
-  }
-
-  // Project sub-sectors within the source sector
-  const projects = projectsBySource.get(source) || [project]
-  const projIdx = projects.indexOf(project)
-  const projCount = projects.length
-  let projectSubAngle = 0
-  if (projCount > 1 && projIdx >= 0) {
-    const step = sourceSectorWidth / projCount
-    projectSubAngle = -sourceSectorWidth / 2 + step * projIdx + step / 2
-  }
-
-  return { sourceAngle, sourceSectorWidth, projectSubAngle }
-}
-
-/** Radius scales dynamically with source node count instead of fixed 15..50 */
-function dynamicRadius(h: number, sourceNodeCount: number): number {
-  const base = Math.max(8, Math.sqrt(sourceNodeCount) * 6)
-  const jitter = ((h >>> 16) / 0xffff) * base * 0.5
-  return base + jitter
-}
-
-/** Cluster center distance from origin, based on expected cluster size */
-function clusterRadius(sourceNodeCount: number): number {
-  return Math.max(30, Math.sqrt(sourceNodeCount) * 12)
-}
-
 /**
  * Compute a deterministic position for a new node.
  *
- * Two-level sector layout:
- *   Level 1 — sources get angular sectors proportional to their node count
- *   Level 2 — projects within a source get sub-sectors within the source range
- *
  * Priority:
  * 1. Has lineage parent in cache → near parent, angle from hash(newKey)
- * 2. Same source+project composite cluster has nodes in cache → near cluster centroid
- * 3. Same source has nodes in cache → near source centroid, offset toward project sub-sector
- * 4. Fallback → two-level sector coordinates from source + project stats
+ * 2. Same source+project cluster has nodes in cache → near cluster centroid
+ * 3. Same source has nodes in cache → near source centroid
+ * 4. Fallback → fixed sector angle from SOURCE_ORDER + hash jitter
+ *
+ * Tight fixed radius (15..50) ensures dense intra-cluster packing.
+ * Fixed SOURCE_ORDER sectors guarantee stable inter-cluster separation.
  */
 export function computeNewNodePosition(
   key: string,
@@ -198,14 +98,8 @@ export function computeNewNodePosition(
   const project = info?.project || ''
   const h = hashString(key)
 
-  // Deterministic angle from hash
   const hAngle = ((h & 0xffff) / 0xffff) * Math.PI * 2
-
-  // Source/project statistics for sector allocation
-  const stats = computeSourceStats(ctx.nodeInfo)
-  const sector = computeSectorInfo(stats, source, project)
-  const sourceCount = stats.sourceCounts.get(source) || 1
-  const hRadius = dynamicRadius(h, sourceCount)
+  const hRadius = 15 + ((h >>> 16) / 0xffff) * 35 // 15..50
 
   // 1. Near lineage parent
   if (info?.parentKey) {
@@ -218,7 +112,7 @@ export function computeNewNodePosition(
     }
   }
 
-  // 2. Near composite cluster centroid (source + project)
+  // 2. Near source+project cluster centroid (don't mix sources in same cluster)
   if (project) {
     const clusterPositions = collectGroupPositions(
       ctx,
@@ -226,34 +120,33 @@ export function computeNewNodePosition(
     )
     if (clusterPositions.length > 0) {
       const centroid = computeCentroid(clusterPositions)
-      // For large sub-clusters, spread using project sub-angle
-      const spread = clusterPositions.length > 100
-        ? hAngle + sector.projectSubAngle * 0.3
-        : hAngle
       return {
-        x: centroid.x + Math.cos(spread) * hRadius,
-        y: centroid.y + Math.sin(spread) * hRadius
+        x: centroid.x + Math.cos(hAngle) * hRadius,
+        y: centroid.y + Math.sin(hAngle) * hRadius
       }
     }
   }
 
-  // 3. Near source centroid, offset toward project sub-sector
+  // 3. Near source centroid
   const sourcePositions = collectGroupPositions(ctx, (_k, n) => n.source === source)
   if (sourcePositions.length > 0) {
     const centroid = computeCentroid(sourcePositions)
-    const subAngle = sector.projectSubAngle
     return {
-      x: centroid.x + Math.cos(subAngle + hAngle * 0.3) * hRadius,
-      y: centroid.y + Math.sin(subAngle + hAngle * 0.3) * hRadius
+      x: centroid.x + Math.cos(hAngle) * hRadius,
+      y: centroid.y + Math.sin(hAngle) * hRadius
     }
   }
 
-  // 4. Fallback — two-level sector placement
-  const totalAngle = sector.sourceAngle + sector.projectSubAngle
-  const r = clusterRadius(sourceCount) + hRadius * 0.5
+  // 4. Fallback — fixed sector from SOURCE_ORDER + hash jitter
+  const srcIdx = SOURCE_ORDER.indexOf(source)
+  const sectorAngle =
+    srcIdx >= 0
+      ? (srcIdx / SOURCE_ORDER.length) * Math.PI * 2
+      : ((h % 1000) / 1000) * Math.PI * 2
+  const r = 20 + ((h >>> 8) / 0xffffff) * 60
   return {
-    x: Math.cos(totalAngle + hAngle * 0.2) * r,
-    y: Math.sin(totalAngle + hAngle * 0.2) * r
+    x: Math.cos(sectorAngle + hAngle * 0.3) * r,
+    y: Math.sin(sectorAngle + hAngle * 0.3) * r
   }
 }
 

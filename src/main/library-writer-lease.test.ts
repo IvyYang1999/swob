@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+  acquireLibraryWriterArbiter,
   acquireLibraryWriterLease,
   advanceLibraryWriterArbiterEpoch,
   currentLibraryWriterArbiterWire,
@@ -10,6 +11,7 @@ import {
   LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
   LibraryWriterBusyError,
   LibraryWriterIdentityUnavailableError,
+  registerLibraryWriterArbiterParticipant,
   recoverLibraryWriterLeaseManually,
   resolveLibraryWriterHostIdentityStoragePath,
   runWithLibraryWriterArbiterContext,
@@ -101,6 +103,31 @@ describe('Library 跨进程单写者 lease', () => {
     releaseOwner()
     await owner
     expect(readLibraryWriteGeneration(root)).toBe(1)
+  })
+
+  it('epoch 推进清理已死亡 participant 的 owner，且旧 handle 不能释放新 owner', async () => {
+    const deadParticipant = registerLibraryWriterArbiterParticipant()
+    const deadWire = currentLibraryWriterArbiterWire(deadParticipant)
+    const orphanedHandle = await runWithLibraryWriterArbiterContext(
+      deadWire,
+      undefined,
+      acquireLibraryWriterArbiter
+    )
+
+    deadParticipant.release()
+    advanceLibraryWriterArbiterEpoch()
+    const replacement = await acquireLibraryWriterArbiter()
+    orphanedHandle.release()
+
+    let contenderAcquired = false
+    const contender = acquireLibraryWriterArbiter().then((handle) => {
+      contenderAcquired = true
+      handle.release()
+    })
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    expect(contenderAcquired).toBe(false)
+    replacement.release()
+    await contender
   })
 
   it('心跳延迟但原进程仍存活时绝不偷锁', async () => {

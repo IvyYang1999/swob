@@ -3,12 +3,14 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
+import { build as viteBuild } from 'vite'
 import {
   LibraryWorkerClient,
   runLibraryWorkerRequest,
   serializeLibraryWorkerError
 } from './library-worker'
 import { LibraryWriterBusyError } from './library-writer-lease'
+import { runWithLibraryWriterSync } from './library-write-coordinator'
 import {
   classifyLibraryError,
   getLibraryHealth,
@@ -154,122 +156,79 @@ function writeLifecycleFixtureWorker(root: string, slowDelayMs = 80): string {
   return workerPath
 }
 
-function writeWriterArbiterFixtureWorker(root: string): string {
-  const workerPath = path.join(root, 'writer-arbiter-worker.cjs')
+async function buildProductionWorker(root: string): Promise<string> {
+  const bundlePath = path.join(root, 'production-worker.cjs')
+  const workerPath = path.join(root, 'production-worker-loader.cjs')
+  const productionWorkerPath = path.join(__dirname, 'library-worker.ts')
+  await viteBuild({
+    configFile: false,
+    logLevel: 'error',
+    build: {
+      ssr: productionWorkerPath,
+      outDir: root,
+      emptyOutDir: false,
+      minify: false,
+      sourcemap: false,
+      target: 'node22',
+      rollupOptions: {
+        external: (id) => id.startsWith('node:') || (!id.startsWith('.') && !path.isAbsolute(id)),
+        output: {
+          format: 'cjs',
+          entryFileNames: path.basename(bundlePath),
+          inlineDynamicImports: true
+        }
+      }
+    }
+  })
   fs.writeFileSync(workerPath, `
-    const fs = require('node:fs')
     const path = require('node:path')
-    const { parentPort } = require('node:worker_threads')
-
-    const wait = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
-    async function acquireProcessArbiter(request) {
-      const state = new Int32Array(request.writerArbiter.buffer)
-      while (true) {
-        if (Atomics.load(state, 1) !== request.writerArbiter.epoch ||
-          Atomics.load(new Int32Array(request.cancelBuffer), 0) === 1) {
-          const error = new Error('cancelled')
-          error.name = 'AbortError'
-          throw error
-        }
-        if (Atomics.compareExchange(state, 0, 0, 1) === 0) {
-          return () => {
-            Atomics.store(state, 0, 0)
-            Atomics.notify(state, 0)
-          }
-        }
-        await wait(2)
-      }
-    }
-
-    async function acquireSyntheticFileLease(root) {
-      const lockDir = path.join(root, '.swob', 'locks', 'library-writer')
-      fs.mkdirSync(path.dirname(lockDir), { recursive: true })
-      const deadline = Date.now() + 20
-      while (true) {
-        try {
-          fs.mkdirSync(lockDir)
-          return () => fs.rmSync(lockDir, { recursive: true, force: true })
-        } catch (error) {
-          if (error.code !== 'EEXIST') throw error
-          if (Date.now() >= deadline) {
-            const busy = new Error('Library writer acquisition timed out')
-            busy.name = 'LibraryWriterBusyError'
-            busy.code = 'LIBRARY_WRITER_BUSY'
-            busy.reason = 'timeout'
-            throw busy
-          }
-          await wait(2)
-        }
-      }
-    }
-
-    parentPort.on('message', async ({ requestId, request }) => {
-      if (request.type === 'shutdown') {
-        parentPort.postMessage({ requestId, type: 'result', result: { kind: 'shutdown' } })
-        return
-      }
-      let releaseArbiter
-      let releaseLease
-      try {
-        releaseArbiter = await acquireProcessArbiter(request)
-        releaseLease = await acquireSyntheticFileLease(request.root)
-        if (request.type === 'writer-probe') {
-          fs.writeFileSync(path.join(request.root, '.holder-entered'), 'yes')
-          await wait(100)
-          parentPort.postMessage({ requestId, type: 'result', result: { kind: 'writer-probe' } })
-        } else {
-          fs.writeFileSync(path.join(request.root, '.live-write'), 'committed')
-          parentPort.postMessage({
-            requestId,
-            type: 'result',
-            result: {
-              kind: 'session-sync',
-              value: { summary: { id: 'live', sessionId: 'live' }, dirPath: request.root }
-            }
-          })
-        }
-      } catch (error) {
-        parentPort.postMessage({
-          requestId,
-          type: 'error',
-          error: error.message,
-          errorName: error.name,
-          errorCode: error.code,
-          errorReason: error.reason
-        })
-      } finally {
-        if (releaseLease) releaseLease()
-        if (releaseArbiter) releaseArbiter()
-      }
-    })
+    const Module = require('node:module')
+    process.env.NODE_PATH = [
+      ${JSON.stringify(path.join(process.cwd(), 'node_modules'))},
+      process.env.NODE_PATH
+    ].filter(Boolean).join(path.delimiter)
+    Module._initPaths()
+    require(${JSON.stringify(bundlePath)})
   `)
   return workerPath
 }
 
-function writeWriterReasonFixtureWorker(root: string): string {
-  const workerPath = path.join(root, 'writer-reason-worker.cjs')
-  fs.writeFileSync(workerPath, `
-    const { parentPort } = require('node:worker_threads')
-    parentPort.on('message', ({ requestId, request }) => {
-      if (request.type === 'shutdown') {
-        parentPort.postMessage({ requestId, type: 'result', result: { kind: 'shutdown' } })
-        return
-      }
-      const error = new Error('Library writer acquisition timed out')
-      error.name = 'LibraryWriterBusyError'
-      error.code = 'LIBRARY_WRITER_BUSY'
-      error.reason = 'timeout'
-      parentPort.postMessage({
-        requestId,
-        type: 'error',
-        error: error.message,
-        errorName: error.name,
-        errorCode: error.code,
-        errorReason: error.reason
-      })
-    })
-  `)
-  return workerPath
+function writerHoldControl(): {
+  acquired: Int32Array
+  release: Int32Array
+  wire: { acquiredBuffer: SharedArrayBuffer; releaseBuffer: SharedArrayBuffer }
+} {
+  const acquired = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+  const release = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+  return {
+    acquired,
+    release,
+    wire: {
+      acquiredBuffer: acquired.buffer as SharedArrayBuffer,
+      releaseBuffer: release.buffer as SharedArrayBuffer
+    }
+  }
+}
+
+async function waitForSignal(signal: Int32Array, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Atomics.load(signal, 0) === 0) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for production writer signal')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
+function writeClaudeSession(filePath: string, sessionId: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, JSON.stringify({
+    uuid: `${sessionId}-user`,
+    parentUuid: null,
+    sessionId,
+    type: 'user',
+    timestamp: '2026-08-08T00:00:00.000Z',
+    cwd: '/isolated-test',
+    message: { role: 'user', content: 'production worker arbiter regression' }
+  }) + '\n')
 }
 
 afterEach(() => {
@@ -283,37 +242,86 @@ afterEach(() => {
 describe('Library worker request', () => {
   it('queues two LibraryWorkerClient writers before the file lease timeout starts', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-arbiter-'))
-    roots.push(root)
-    const workerPath = writeWriterArbiterFixtureWorker(root)
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-arbiter-source-'))
+    roots.push(root, sourceRoot)
+    const workerPath = await buildProductionWorker(sourceRoot)
     const maintenanceWorker = new LibraryWorkerClient(workerPath)
     const liveWorker = new LibraryWorkerClient(workerPath)
+    const hold = writerHoldControl()
+    const sessionId = '20300000-0000-4000-8000-000000000001'
+    const sourcePath = path.join(sourceRoot, `${sessionId}.jsonl`)
+    writeClaudeSession(sourcePath, sessionId)
     try {
-      const maintenance = maintenanceWorker.probeWriter(root)
-      const enteredDeadline = Date.now() + 1_000
-      while (!fs.existsSync(path.join(root, '.holder-entered'))) {
-        if (Date.now() >= enteredDeadline) throw new Error('maintenance writer did not enter')
-        await new Promise((resolve) => setTimeout(resolve, 2))
-      }
+      const maintenance = maintenanceWorker.probeWriter(root, hold.wire)
+      await waitForSignal(hold.acquired)
+      expect(fs.existsSync(path.join(root, '.swob', 'locks', 'library-writer'))).toBe(true)
       const startedAt = performance.now()
       const live = liveWorker.syncSession({
         root,
-        filePath: path.join(root, 'source.jsonl'),
-        sessionId: 'live',
+        filePath: sourcePath,
+        sessionId,
         source: 'claude-code'
       })
+      await new Promise((resolve) => setTimeout(resolve, 5_100))
+      expect(fs.existsSync(path.join(root, '.swob', 'locks', 'library-writer'))).toBe(true)
+      Atomics.store(hold.release, 0, 1)
+      Atomics.notify(hold.release, 0)
       await maintenance
-      await expect(live).resolves.toMatchObject({ dirPath: root })
-      expect(performance.now() - startedAt).toBeGreaterThan(20)
-      expect(fs.readFileSync(path.join(root, '.live-write'), 'utf8')).toBe('committed')
+      const synchronized = await live
+      expect(performance.now() - startedAt).toBeGreaterThan(5_000)
+      expect(synchronized.summary.sessionId).toBe(sessionId)
+      expect(synchronized.dirPath).toBeTruthy()
+      expect(fs.existsSync(path.join(synchronized.dirPath!, 'transcript.md'))).toBe(true)
     } finally {
+      Atomics.store(hold.release, 0, 1)
+      Atomics.notify(hold.release, 0)
       await Promise.all([maintenanceWorker.close(), liveWorker.close()])
     }
-  })
+  }, 15_000)
+
+  it('recovers production arbiter and file lease after the owning worker is killed', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-dead-owner-'))
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-dead-owner-source-'))
+    roots.push(root, sourceRoot)
+    const workerPath = await buildProductionWorker(sourceRoot)
+    const owner = new LibraryWorkerClient(workerPath)
+    const contender = new LibraryWorkerClient(workerPath)
+    const hold = writerHoldControl()
+    const sessionId = '20300000-0000-4000-8000-000000000002'
+    const sourcePath = path.join(sourceRoot, `${sessionId}.jsonl`)
+    writeClaudeSession(sourcePath, sessionId)
+    try {
+      const owningRequest = owner.probeWriter(root, hold.wire)
+      await waitForSignal(hold.acquired)
+      const syncStartedAt = performance.now()
+      expect(() => runWithLibraryWriterSync(root, 'test-main', 'config', () => {}))
+        .toThrow('library-writer-sync-would-block-main-thread')
+      expect(performance.now() - syncStartedAt).toBeLessThan(100)
+      const waitingRequest = contender.syncSession({ root, filePath: sourcePath, sessionId, source: 'claude-code' })
+      const rawWorker = (owner as unknown as { worker: { terminate(): Promise<number> } | null }).worker
+      expect(rawWorker).not.toBeNull()
+      await rawWorker!.terminate()
+      await expect(owningRequest).rejects.toThrow('exited')
+      const synchronized = await Promise.race([
+        waitingRequest,
+        new Promise<never>((_, reject) => setTimeout(
+          () => reject(new Error('contender remained blocked by a dead arbiter owner')),
+          2_000
+        ))
+      ])
+      expect(synchronized.summary.sessionId).toBe(sessionId)
+      expect(synchronized.dirPath).toBeTruthy()
+    } finally {
+      Atomics.store(hold.release, 0, 1)
+      Atomics.notify(hold.release, 0)
+      await Promise.all([owner.close(), contender.close()])
+    }
+  }, 10_000)
 
   it('preserves a timeout reason through WorkerReply and health classification', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-reason-'))
     roots.push(root)
-    const worker = new LibraryWorkerClient(writeWriterReasonFixtureWorker(root))
+    const worker = new LibraryWorkerClient(await buildProductionWorker(root))
     resetLibraryHealth()
     try {
       const serialized = serializeLibraryWorkerError(new LibraryWriterBusyError('timeout'))
@@ -322,7 +330,7 @@ describe('Library worker request', () => {
         errorCode: 'LIBRARY_WRITER_BUSY',
         errorReason: 'timeout'
       })
-      const error = await worker.probeWriter(root).catch((caught: unknown) => caught)
+      const error = await worker.throwWriterBusyForTest('timeout').catch((caught: unknown) => caught)
       expect(error).toMatchObject({
         name: 'LibraryWriterBusyError',
         code: 'LIBRARY_WRITER_BUSY',

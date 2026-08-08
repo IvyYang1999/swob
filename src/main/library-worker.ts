@@ -21,8 +21,11 @@ import {
 } from './library-manager'
 import {
   currentLibraryWriterArbiterWire,
+  LibraryWriterBusyError,
   probeLibraryWriter,
+  registerLibraryWriterArbiterParticipant,
   runWithLibraryWriterArbiterContext,
+  type LibraryWriterArbiterParticipant,
   type LibraryWriterArbiterWire
 } from './library-writer-lease'
 import { parseSessionFile, buildSessionSummary, resolvePhysicalSessionId } from './session-loader'
@@ -50,7 +53,15 @@ export interface SearchIndexSourceDescriptor {
 
 export type LibraryWorkerRequest = (
   | { type: 'shutdown' }
-  | { type: 'writer-probe'; root: string }
+  | {
+      type: 'writer-probe'
+      root: string
+      testControl?: {
+        acquiredBuffer: SharedArrayBuffer
+        releaseBuffer: SharedArrayBuffer
+      }
+    }
+  | { type: 'test-writer-busy-error'; reason: 'timeout' }
   | {
       type: 'startup-plan'
       root: string
@@ -212,8 +223,25 @@ export async function runLibraryWorkerRequest(
     return { kind: 'search-write' }
   }
   if (request.type === 'writer-probe') {
-    await probeLibraryWriter(request.root, getOrCreateLocalDeviceId())
+    const testControl = request.testControl
+    if (testControl) assertWorkerTestSandbox(request.root)
+    await probeLibraryWriter(request.root, getOrCreateLocalDeviceId(), {}, testControl
+      ? async () => {
+          const acquired = new Int32Array(testControl.acquiredBuffer)
+          const release = new Int32Array(testControl.releaseBuffer)
+          Atomics.store(acquired, 0, 1)
+          Atomics.notify(acquired, 0)
+          while (Atomics.load(release, 0) === 0) {
+            throwIfWorkerCancelled(shouldCancel)
+            await new Promise((resolve) => setTimeout(resolve, 5))
+          }
+        }
+      : undefined)
     return { kind: 'writer-probe' }
+  }
+  if (request.type === 'test-writer-busy-error') {
+    assertWorkerTestSandbox()
+    throw new LibraryWriterBusyError(request.reason)
   }
   initLibrary(request.root, {
     readOnly: request.type === 'scan',
@@ -304,6 +332,16 @@ function throwIfWorkerCancelled(shouldCancel?: () => boolean): void {
   throw error
 }
 
+function assertWorkerTestSandbox(root?: string): void {
+  const sandbox = process.env.SWOB_E2E_SANDBOX_ROOT
+  if (process.env.NODE_ENV !== 'test' || !sandbox) throw new Error('Library worker control is test-only')
+  if (!root) return
+  const relative = path.relative(path.resolve(sandbox), path.resolve(root))
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('Library worker test control root is outside the sandbox')
+  }
+}
+
 if (!isMainThread && parentPort) {
   let requestTail: Promise<void> = Promise.resolve()
   parentPort.on('message', ({ requestId, request }: WorkerEnvelope) => {
@@ -326,6 +364,7 @@ if (!isMainThread && parentPort) {
 
 export class LibraryWorkerClient {
   private worker: Worker | null = null
+  private workerArbiterParticipant: LibraryWriterArbiterParticipant | null = null
   private closing = false
   private closePromise: Promise<void> | null = null
   private nextRequestId = 1
@@ -347,9 +386,18 @@ export class LibraryWorkerClient {
     }))
   }
 
-  probeWriter(root: string): Promise<void> {
-    return this.observe(this.request({ type: 'writer-probe', root }).then((result) => {
+  probeWriter(
+    root: string,
+    testControl?: { acquiredBuffer: SharedArrayBuffer; releaseBuffer: SharedArrayBuffer }
+  ): Promise<void> {
+    return this.observe(this.request({ type: 'writer-probe', root, testControl }).then((result) => {
       if (result.kind !== 'writer-probe') throw new Error('Library worker returned an invalid writer probe result')
+    }))
+  }
+
+  throwWriterBusyForTest(reason: 'timeout'): Promise<void> {
+    return this.observe(this.request({ type: 'test-writer-busy-error', reason }).then(() => {
+      throw new Error('Library worker error contract probe unexpectedly succeeded')
     }))
   }
 
@@ -562,6 +610,7 @@ export class LibraryWorkerClient {
       })
     }
 
+    if (this.worker !== worker) return
     await this.requestShutdown(worker)
     this.worker = null
     await worker.terminate()
@@ -592,7 +641,7 @@ export class LibraryWorkerClient {
     const workerRequest = {
       ...request,
       cancelBuffer: cancelFlag.buffer as SharedArrayBuffer,
-      writerArbiter: currentLibraryWriterArbiterWire()
+      writerArbiter: currentLibraryWriterArbiterWire(this.workerArbiterParticipant!)
     }
     let resolveRequest!: (result: LibraryWorkerResult) => void
     let rejectRequest!: (error: Error) => void
@@ -613,7 +662,15 @@ export class LibraryWorkerClient {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker
-    const worker = new Worker(this.workerPath)
+    const arbiterParticipant = registerLibraryWriterArbiterParticipant()
+    let worker: Worker
+    try {
+      worker = new Worker(this.workerPath)
+    } catch (error) {
+      arbiterParticipant.release()
+      throw error
+    }
+    this.workerArbiterParticipant = arbiterParticipant
     worker.on('message', (reply: WorkerReply) => {
       const pending = this.pending.get(reply.requestId)
       if (!pending) return
@@ -635,8 +692,11 @@ export class LibraryWorkerClient {
     })
     worker.on('error', (error) => this.failAll(error instanceof Error ? error : new Error(String(error))))
     worker.on('exit', (code) => {
-      if (this.worker === worker) this.worker = null
-      if (code !== 0) this.failAll(new Error(`Library worker exited with code ${code}`))
+      const unexpected = this.worker === worker
+      if (unexpected) this.worker = null
+      if (this.workerArbiterParticipant === arbiterParticipant) this.workerArbiterParticipant = null
+      arbiterParticipant.release()
+      if (unexpected) this.failAll(new Error(`Library worker exited unexpectedly with code ${code}`))
     })
     this.worker = worker
     return worker

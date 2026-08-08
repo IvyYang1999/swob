@@ -3,7 +3,7 @@ import * as path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { threadId } from 'node:worker_threads'
+import { spawnSync } from 'node:child_process'
 import { getLocalBootIdentity, getProcessStartFingerprint } from './session-create-lock'
 import {
   defaultHostIdentityPath,
@@ -27,12 +27,25 @@ export type { LibraryWriterBusyReason } from '../shared/library-health-contract'
 const writerArbiterContext = new AsyncLocalStorage<LibraryWriterArbiterContext>()
 const ARBITER_OWNER_INDEX = 0
 const ARBITER_EPOCH_INDEX = 1
-const ARBITER_WORDS = 2
+const ARBITER_PROCESS_PID_INDEX = 2
+const ARBITER_PROCESS_START_HIGH_INDEX = 3
+const ARBITER_PROCESS_START_LOW_INDEX = 4
+const ARBITER_PARTICIPANT_START_INDEX = 5
+const ARBITER_PARTICIPANT_SLOTS = 64
+const ARBITER_PARTICIPANT_SLOT_BITS = 7
+const ARBITER_PARTICIPANT_SLOT_MASK = (1 << ARBITER_PARTICIPANT_SLOT_BITS) - 1
+const ARBITER_MAX_PARTICIPANT_GENERATION = 0x00ff_ffff
+const ARBITER_WORDS = ARBITER_PARTICIPANT_START_INDEX + ARBITER_PARTICIPANT_SLOTS
 const mainWriterArbiterBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * ARBITER_WORDS)
+let cachedLocalArbiterProcessStart: string | null | undefined
+let nextArbiterParticipantGeneration = 1
 
 export interface LibraryWriterArbiterWire {
   buffer: SharedArrayBuffer
   epoch: number
+  processId: number
+  processStartFingerprint: string | null
+  participantId: number
 }
 
 interface LibraryWriterArbiterContext extends LibraryWriterArbiterWire {
@@ -40,11 +53,124 @@ interface LibraryWriterArbiterContext extends LibraryWriterArbiterWire {
 }
 
 export interface LibraryWriterArbiterHandle {
+  readonly ownerId: number
+  release(): void
+}
+
+export interface LibraryWriterArbiterParticipant {
+  readonly id: number
   release(): void
 }
 
 function arbiterState(buffer: SharedArrayBuffer): Int32Array {
   return new Int32Array(buffer)
+}
+
+function getLiveProcessStartFingerprint(
+  pid: number,
+  platform: NodeJS.Platform = process.platform
+): string | 'missing' | null {
+  // Test identity deliberately avoids host process inspection. Preserve that
+  // isolation contract instead of probing arbitrary fixture PIDs with ps.
+  if (process.env.NODE_ENV === 'test' && process.env.SWOB_TEST_HOME) {
+    return getProcessStartFingerprint(pid, platform)
+  }
+  try {
+    if (platform === 'linux') {
+      let content: string
+      try {
+        content = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : null
+      }
+      const closeParen = content.lastIndexOf(')')
+      if (closeParen < 0) return null
+      const fields = content.slice(closeParen + 2).trim().split(/\s+/)
+      if (fields[0] === 'Z' || fields[0] === 'X') return 'missing'
+      return fields[19] ? createHash('sha256').update(fields[19]).digest('hex') : null
+    }
+    if (platform === 'darwin') {
+      const result = spawnSync('/bin/ps', ['-o', 'state=', '-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf8',
+        windowsHide: true
+      })
+      if (result.error) return null
+      const output = result.stdout.trim()
+      if (result.status !== 0 || !output) return 'missing'
+      const separator = output.search(/\s/)
+      if (separator < 1) return null
+      const state = output.slice(0, separator)
+      if (state.startsWith('Z')) return 'missing'
+      const processStart = output.slice(separator).trim()
+      return processStart ? createHash('sha256').update(processStart).digest('hex') : null
+    }
+  } catch {
+    return null
+  }
+  return getProcessStartFingerprint(pid, platform)
+}
+
+function localArbiterProcessStart(): string | null {
+  if (cachedLocalArbiterProcessStart !== undefined) return cachedLocalArbiterProcessStart
+  const fingerprint = getLiveProcessStartFingerprint(process.pid)
+  cachedLocalArbiterProcessStart = fingerprint && fingerprint !== 'missing' ? fingerprint : null
+  return cachedLocalArbiterProcessStart
+}
+
+function arbiterFingerprintWords(fingerprint: string): [number, number] {
+  const digest = createHash('sha256').update(fingerprint).digest()
+  return [digest.readInt32BE(0), digest.readInt32BE(4)]
+}
+
+function initializeMainArbiterState(state: Int32Array): void {
+  Atomics.store(state, ARBITER_PROCESS_PID_INDEX, process.pid)
+  const processStart = localArbiterProcessStart()
+  if (!processStart) return
+  const [high, low] = arbiterFingerprintWords(processStart)
+  Atomics.store(state, ARBITER_PROCESS_START_HIGH_INDEX, high)
+  Atomics.store(state, ARBITER_PROCESS_START_LOW_INDEX, low)
+}
+
+function participantSlotIndex(participantId: number): number | null {
+  const encodedSlot = participantId & ARBITER_PARTICIPANT_SLOT_MASK
+  if (encodedSlot < 1 || encodedSlot > ARBITER_PARTICIPANT_SLOTS) return null
+  return ARBITER_PARTICIPANT_START_INDEX + encodedSlot - 1
+}
+
+function claimArbiterParticipant(state: Int32Array): LibraryWriterArbiterParticipant {
+  for (let offset = 0; offset < ARBITER_PARTICIPANT_SLOTS; offset++) {
+    const slotIndex = ARBITER_PARTICIPANT_START_INDEX + offset
+    if (Atomics.load(state, slotIndex) !== 0) continue
+    if (nextArbiterParticipantGeneration > ARBITER_MAX_PARTICIPANT_GENERATION) {
+      throw new Error('library-writer-arbiter-participant-generation-exhausted')
+    }
+    const generation = nextArbiterParticipantGeneration
+    nextArbiterParticipantGeneration++
+    const participantId = generation * (1 << ARBITER_PARTICIPANT_SLOT_BITS) + offset + 1
+    if (Atomics.compareExchange(state, slotIndex, 0, participantId) !== 0) continue
+    let released = false
+    return {
+      id: participantId,
+      release(): void {
+        if (released) return
+        released = true
+        Atomics.compareExchange(state, slotIndex, participantId, 0)
+        // The owner word is deliberately left intact. Acquire/epoch paths must
+        // prove this participant dead before clearing it; notify only shortens
+        // that proof's latency for synchronous waiters.
+        Atomics.notify(state, ARBITER_OWNER_INDEX)
+      }
+    }
+  }
+  throw new Error('library-writer-arbiter-participant-capacity-exhausted')
+}
+
+const mainWriterArbiterState = arbiterState(mainWriterArbiterBuffer)
+initializeMainArbiterState(mainWriterArbiterState)
+const mainWriterArbiterParticipant = claimArbiterParticipant(mainWriterArbiterState)
+
+export function registerLibraryWriterArbiterParticipant(): LibraryWriterArbiterParticipant {
+  return claimArbiterParticipant(mainWriterArbiterState)
 }
 
 function abortArbiterWait(): never {
@@ -56,27 +182,55 @@ function abortArbiterWait(): never {
 function activeArbiterContext(): LibraryWriterArbiterContext {
   const active = writerArbiterContext.getStore()
   if (active) return active
-  const state = arbiterState(mainWriterArbiterBuffer)
-  return { buffer: mainWriterArbiterBuffer, epoch: Atomics.load(state, ARBITER_EPOCH_INDEX) }
+  return currentLibraryWriterArbiterWire()
 }
 
 function assertArbiterWaitCurrent(context: LibraryWriterArbiterContext, state: Int32Array): void {
   if (context.shouldCancel?.() || Atomics.load(state, ARBITER_EPOCH_INDEX) !== context.epoch) {
     abortArbiterWait()
   }
+  const slotIndex = participantSlotIndex(context.participantId)
+  if (slotIndex === null || Atomics.load(state, slotIndex) !== context.participantId) abortArbiterWait()
 }
 
-function arbiterOwnerToken(): number {
-  return threadId + 1
+function arbiterProcessGenerationStatus(
+  context: LibraryWriterArbiterContext,
+  state: Int32Array
+): boolean | null {
+  if (Atomics.load(state, ARBITER_PROCESS_PID_INDEX) !== context.processId) return null
+  const expected = context.processStartFingerprint
+  if (!expected) return null
+  const [high, low] = arbiterFingerprintWords(expected)
+  if (Atomics.load(state, ARBITER_PROCESS_START_HIGH_INDEX) !== high ||
+    Atomics.load(state, ARBITER_PROCESS_START_LOW_INDEX) !== low) return null
+  const current = context.processId === process.pid
+    ? localArbiterProcessStart()
+    : getLiveProcessStartFingerprint(context.processId)
+  if (current === 'missing') return false
+  if (!current) return null
+  return current === expected
 }
 
-function acquiredArbiterHandle(state: Int32Array, ownerToken: number): LibraryWriterArbiterHandle {
+function reclaimDeadArbiterOwner(context: LibraryWriterArbiterContext, state: Int32Array): boolean {
+  const ownerId = Atomics.load(state, ARBITER_OWNER_INDEX)
+  if (ownerId === 0) return false
+  const processGenerationCurrent = arbiterProcessGenerationStatus(context, state)
+  const slotIndex = participantSlotIndex(ownerId)
+  const participantAlive = slotIndex !== null && Atomics.load(state, slotIndex) === ownerId
+  if (participantAlive && processGenerationCurrent !== false) return false
+  if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerId, 0) !== ownerId) return false
+  Atomics.notify(state, ARBITER_OWNER_INDEX)
+  return true
+}
+
+function acquiredArbiterHandle(state: Int32Array, ownerId: number): LibraryWriterArbiterHandle {
   let released = false
   return {
+    ownerId,
     release(): void {
       if (released) return
       released = true
-      if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerToken, 0) === ownerToken) {
+      if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerId, 0) === ownerId) {
         Atomics.notify(state, ARBITER_OWNER_INDEX)
       }
     }
@@ -86,15 +240,16 @@ function acquiredArbiterHandle(state: Int32Array, ownerToken: number): LibraryWr
 export async function acquireLibraryWriterArbiter(): Promise<LibraryWriterArbiterHandle> {
   const context = activeArbiterContext()
   const state = arbiterState(context.buffer)
-  const ownerToken = arbiterOwnerToken()
+  const ownerId = context.participantId
   while (true) {
     assertArbiterWaitCurrent(context, state)
-    if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, 0, ownerToken) === 0) {
+    reclaimDeadArbiterOwner(context, state)
+    if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, 0, ownerId) === 0) {
       try {
         assertArbiterWaitCurrent(context, state)
-        return acquiredArbiterHandle(state, ownerToken)
+        return acquiredArbiterHandle(state, ownerId)
       } catch (error) {
-        if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerToken, 0) === ownerToken) {
+        if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerId, 0) === ownerId) {
           Atomics.notify(state, ARBITER_OWNER_INDEX)
         }
         throw error
@@ -109,44 +264,54 @@ export async function acquireLibraryWriterArbiter(): Promise<LibraryWriterArbite
 export function acquireLibraryWriterArbiterSync(): LibraryWriterArbiterHandle {
   const context = activeArbiterContext()
   const state = arbiterState(context.buffer)
-  const ownerToken = arbiterOwnerToken()
+  const ownerId = context.participantId
   while (true) {
     assertArbiterWaitCurrent(context, state)
+    reclaimDeadArbiterOwner(context, state)
     const currentOwner = Atomics.load(state, ARBITER_OWNER_INDEX)
-    if (currentOwner === ownerToken) {
+    if (currentOwner === ownerId) {
       // A separate async context on this JavaScript thread cannot make
       // progress while a synchronous caller blocks it. Ordinary nested writes
       // were already accepted by the coordinator's reentrancy guard.
       throw new Error('library-writer-sync-overlaps-async-context')
     }
-    if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, 0, ownerToken) === 0) {
+    if (currentOwner !== 0) {
+      // A synchronous main-thread waiter cannot process Worker exit events.
+      // Blocking here would make a dead worker indistinguishable from a live
+      // one and recreate the startup deadlock. Async writers remain queued;
+      // sync callers must yield to the event loop and retry later.
+      throw new Error('library-writer-sync-would-block-main-thread')
+    }
+    if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, 0, ownerId) === 0) {
       try {
         assertArbiterWaitCurrent(context, state)
-        return acquiredArbiterHandle(state, ownerToken)
+        return acquiredArbiterHandle(state, ownerId)
       } catch (error) {
-        if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerToken, 0) === ownerToken) {
+        if (Atomics.compareExchange(state, ARBITER_OWNER_INDEX, ownerId, 0) === ownerId) {
           Atomics.notify(state, ARBITER_OWNER_INDEX)
         }
         throw error
       }
     }
-    // Worker owners can release and notify while the main thread waits.
-    Atomics.wait(state, ARBITER_OWNER_INDEX, currentOwner, 50)
   }
 }
 
-export function currentLibraryWriterArbiterWire(): LibraryWriterArbiterWire {
-  const state = arbiterState(mainWriterArbiterBuffer)
+export function currentLibraryWriterArbiterWire(
+  participant: LibraryWriterArbiterParticipant = mainWriterArbiterParticipant
+): LibraryWriterArbiterWire {
   return {
     buffer: mainWriterArbiterBuffer,
-    epoch: Atomics.load(state, ARBITER_EPOCH_INDEX)
+    epoch: Atomics.load(mainWriterArbiterState, ARBITER_EPOCH_INDEX),
+    processId: process.pid,
+    processStartFingerprint: localArbiterProcessStart(),
+    participantId: participant.id
   }
 }
 
 export function advanceLibraryWriterArbiterEpoch(): number {
-  const state = arbiterState(mainWriterArbiterBuffer)
-  const epoch = Atomics.add(state, ARBITER_EPOCH_INDEX, 1) + 1
-  Atomics.notify(state, ARBITER_OWNER_INDEX)
+  const epoch = Atomics.add(mainWriterArbiterState, ARBITER_EPOCH_INDEX, 1) + 1
+  reclaimDeadArbiterOwner(currentLibraryWriterArbiterWire(), mainWriterArbiterState)
+  Atomics.notify(mainWriterArbiterState, ARBITER_OWNER_INDEX)
   return epoch
 }
 
@@ -175,6 +340,8 @@ export interface LibraryWriterOwner {
   pid: number
   bootIdentity: string
   processStartFingerprint: string
+  /** Local process-arbiter participant; lets the owning process recover a dead worker thread. */
+  arbiterOwnerId?: number
   /** v2: challenge-scoped HMAC proof; the raw host identity never enters the Library. */
   hostProof?: string
   /** v2 random challenge makes hostProof unlinkable across leases/Libraries. */
@@ -212,6 +379,8 @@ export interface LibraryWriterLeaseOptions {
   pid?: number
   bootIdentity?: () => string | null
   processStartFingerprint?: (pid: number) => string | 'missing' | null
+  /** Internal proof tying the file lease to the currently held process-arbiter slot. */
+  arbiterOwnerId?: number
   /** Test/embedding seam. The returned raw value is never persisted in the Library. */
   hostIdentity?: () => string
   /** Test-only crash seam after a durable heartbeat temp exists but before atomic publish. */
@@ -336,6 +505,8 @@ function parseOwner(content: string): LibraryWriterOwner | null {
       !Number.isSafeInteger(value.pid) || value.pid! <= 0 ||
       typeof value.bootIdentity !== 'string' || !value.bootIdentity ||
       typeof value.processStartFingerprint !== 'string' || !value.processStartFingerprint ||
+      (value.arbiterOwnerId !== undefined &&
+        (!Number.isSafeInteger(value.arbiterOwnerId) || value.arbiterOwnerId! <= 0)) ||
       (value.schemaVersion === 2 && (typeof value.hostProof !== 'string' || !/^[0-9a-f]{64}$/.test(value.hostProof) ||
         typeof value.hostProofSalt !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.hostProofSalt))) ||
       typeof value.mode !== 'string' || !WRITER_MODES.has(value.mode as LibraryWriterMode) ||
@@ -506,7 +677,19 @@ function staleDecision(
     const currentStart = context.readProcessStart(owner.pid)
     if (currentStart === 'missing') return 'recover'
     if (!currentStart) return 'unverifiable-owner'
-    return currentStart === owner.processStartFingerprint ? 'active-owner' : 'recover'
+    if (currentStart !== owner.processStartFingerprint) return 'recover'
+    if (owner.arbiterOwnerId !== undefined) {
+      const arbiter = activeArbiterContext()
+      if (arbiter.processId === owner.pid && arbiter.processStartFingerprint === owner.processStartFingerprint) {
+        const arbiterStateView = arbiterState(arbiter.buffer)
+        const slotIndex = participantSlotIndex(owner.arbiterOwnerId)
+        const participantAlive = slotIndex !== null &&
+          Atomics.load(arbiterStateView, slotIndex) === owner.arbiterOwnerId
+        const stillOwnsArbiter = Atomics.load(arbiterStateView, ARBITER_OWNER_INDEX) === owner.arbiterOwnerId
+        if (!participantAlive || !stillOwnsArbiter) return 'recover'
+      }
+    }
+    return 'active-owner'
   }
   if (owner.schemaVersion === 2 &&
     owner.hostProof === deriveLibraryHostProof(context.hostIdentity, owner.hostProofSalt!)) return 'recover'
@@ -551,7 +734,7 @@ function prepareAcquisition(
   const platform = options.platform || process.platform
   const pid = options.pid ?? process.pid
   const readProcessStart = options.processStartFingerprint ||
-    ((ownerPid) => getProcessStartFingerprint(ownerPid, platform))
+    ((ownerPid) => getLiveProcessStartFingerprint(ownerPid, platform))
   const rawBootIdentity = (options.bootIdentity || (() => getLocalBootIdentity(platform)))()
   if (!rawBootIdentity) throw new LibraryWriterIdentityUnavailableError('boot-identity')
   const processStartFingerprint = readProcessStart(pid)
@@ -761,6 +944,7 @@ function tryAcquire(
     pid: context.pid,
     bootIdentity: deriveHostBootIdentity(context.hostIdentity, context.rawBootIdentity, hostProofSalt),
     processStartFingerprint: context.processStartFingerprint,
+    ...(options.arbiterOwnerId === undefined ? {} : { arbiterOwnerId: options.arbiterOwnerId }),
     hostProof: deriveLibraryHostProof(context.hostIdentity, hostProofSalt),
     hostProofSalt,
     mode,
@@ -866,12 +1050,20 @@ export async function acquireLibraryWriterLease(
 export async function probeLibraryWriter(
   root: string,
   deviceId: string,
-  options: LibraryWriterLeaseOptions = {}
+  options: LibraryWriterLeaseOptions = {},
+  whileHeld?: () => Promise<void>
 ): Promise<void> {
   const arbiter = await acquireLibraryWriterArbiter()
   try {
-    const lease = await acquireLibraryWriterLease(path.resolve(root), deviceId, 'maintenance', options)
-    lease.release()
+    const lease = await acquireLibraryWriterLease(path.resolve(root), deviceId, 'maintenance', {
+      ...options,
+      arbiterOwnerId: arbiter.ownerId
+    })
+    try {
+      await whileHeld?.()
+    } finally {
+      lease.release()
+    }
   } finally {
     arbiter.release()
   }
@@ -958,7 +1150,7 @@ export function inspectLibraryWriterLease(
           ))
     if (sameBootEvidence) {
       const processStart = (options.processStartFingerprint ||
-        ((ownerPid: number) => getProcessStartFingerprint(ownerPid, platform)))(existing.owner.pid)
+        ((ownerPid: number) => getLiveProcessStartFingerprint(ownerPid, platform)))(existing.owner.pid)
       ownerAlive = processStart === 'missing'
         ? false
         : typeof processStart === 'string'

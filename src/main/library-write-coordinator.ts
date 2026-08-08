@@ -96,7 +96,10 @@ export async function runWithLibraryWriter<T>(
   const resolvedRoot = path.resolve(root)
   const arbiter = await acquireLibraryWriterArbiter()
   try {
-    const lease = await acquireLibraryWriterLease(resolvedRoot, deviceId, mode, options)
+    const lease = await acquireLibraryWriterLease(resolvedRoot, deviceId, mode, {
+      ...options,
+      arbiterOwnerId: arbiter.ownerId
+    })
     try {
       // Reserve the generation durably before any mutation. A process killed in
       // the operation still invalidates scans that started before this writer.
@@ -121,7 +124,10 @@ export function runWithLibraryWriterSync<T>(
   const resolvedRoot = path.resolve(root)
   const arbiter = acquireLibraryWriterArbiterSync()
   try {
-    const lease = acquireLibraryWriterLeaseSync(resolvedRoot, deviceId, mode, options)
+    const lease = acquireLibraryWriterLeaseSync(resolvedRoot, deviceId, mode, {
+      ...options,
+      arbiterOwnerId: arbiter.ownerId
+    })
     try {
       bumpLibraryWriteGeneration(resolvedRoot)
       return writeContext.run({ root: resolvedRoot, deviceId }, operation)

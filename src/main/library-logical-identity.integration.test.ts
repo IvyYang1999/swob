@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { buildLogicalSessionIdentityFromSummary } from './library-session-identity'
+import { buildLogicalSessionIdentityFromSummary, logicalSessionKey } from './library-session-identity'
 
 const savedHome = process.env.HOME
 const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-logical-home-'))
@@ -249,7 +249,9 @@ describe('Library logical identity integration', () => {
     )))).rejects.toBeInstanceOf(lib.SessionIdentityUnresolvedError)
   })
 
-  it('keeps a previously bound identity conservatively missing after an authoritative zero scan', async () => {
+  it('keeps a committed identity conservatively missing after its package disappears', async () => {
+    // ensureSessionInLibrary commits a package-id reservation, so a vanished
+    // package with a committed reservation stays fail-closed (true MISSING).
     const sessionId = '60000000-0000-4000-8000-000000000006'
     const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
     const session = summary(sessionId, sourcePath)
@@ -265,6 +267,37 @@ describe('Library logical identity integration', () => {
       if (fs.existsSync(movedDir)) fs.renameSync(movedDir, originalDir)
       fs.rmSync(outside, { recursive: true, force: true })
     }
+  })
+
+  it('allows first-time recreation for a seen-only identity with no committed reservation', async () => {
+    // Simulates the migration-stranded case: a past scan recorded seen
+    // evidence, but no package-id reservation was ever committed and no
+    // package entity survives anywhere. Blocking recreation forever would
+    // make the session permanently un-archivable; recreation from the live
+    // source is lossless.
+    const sessionId = '61000000-0000-4000-8000-000000000061'
+    const sourcePath = path.join(testHome, '.claude', 'projects', '-fixture', `${sessionId}.jsonl`)
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    fs.writeFileSync(sourcePath, JSON.stringify({ type: 'user', sessionId }) + '\n')
+    const session = summary(sessionId, sourcePath)
+    const logicalIdentity = buildLogicalSessionIdentityFromSummary(session)
+    const planted = createHash('sha256').update(logicalSessionKey(logicalIdentity)).digest('hex')
+    // Plant seen-only evidence directly (no reservation, no package).
+    const evidenceDir = path.join(root, '.swob', 'logical-sessions')
+    fs.mkdirSync(evidenceDir, { recursive: true })
+    fs.writeFileSync(path.join(evidenceDir, `${planted}.seen.json`), JSON.stringify({
+      schemaVersion: 1,
+      logicalKeyHash: planted,
+      firstObservedAt: '2026-08-01T00:00:00.000Z'
+    }))
+    lib.scanLibrary()
+    const created = await lib.ensureSessionInLibrary(session)
+    expect(fs.existsSync(path.join(created, '.swob-session.json'))).toBe(true)
+    // Idempotent replay: a second ensure must bind to the recreated package
+    // instead of creating a duplicate.
+    const replayed = await lib.ensureSessionInLibrary(session)
+    expect(replayed).toBe(created)
+    expect(packageDirs()).toEqual([created])
   })
 
   it('treats unreadable directories as typed scan blockers rather than empty collections', async () => {

@@ -78,11 +78,17 @@ describe('durable logical seen evidence', () => {
       expect(fs.readFileSync(path.join(packageDir, '.swob-session.json'), 'utf-8')).not.toContain('packageId')
 
       fs.renameSync(packageDir, path.join(movedRoot, 'legacy-package'))
+      // Semantic change (t206): a legacy package never commits a package-id
+      // reservation, so after it disappears the identity is seen-only.
+      // Blocking recreation forever would strand migration-lost sessions;
+      // first-time recreation from the live source is allowed and lossless.
+      // A committed-reservation package that disappears still stays MISSING
+      // (covered by library-logical-identity.integration.test.ts).
       const retried = await runWorker(['ensure', libraryRoot, sourcePath, sessionId])
-      expect(retried.code).toBe(1)
-      expect(retried.stderr).toContain('SessionIdentityMissingError')
-      expect(fs.readdirSync(libraryRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && entry.name !== '.swob')).toEqual([])
+      expect(retried.code, retried.stderr).toBe(0)
+      const recreated = fs.readdirSync(libraryRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && entry.name !== '.swob')
+      expect(recreated).toHaveLength(1)
       const evidence = fs.readFileSync(path.join(evidenceDir, fs.readdirSync(evidenceDir)[0]), 'utf-8')
       expect(evidence).not.toContain(sessionId)
       expect(evidence).not.toContain(sourcePath)

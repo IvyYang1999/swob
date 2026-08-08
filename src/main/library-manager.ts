@@ -3000,8 +3000,20 @@ function ensureExistingPackageIdReservation(packageId: string | undefined, key: 
 function throwIfDurableIdentityWasPreviouslySeen(key: LogicalSessionKey, localDeviceId: string): void {
   const wanted = logicalKeyHash(key)
   if (startupPreparedRegistryDepth > 0 && startupReservationLogicalHashes && startupSeenLogicalHashes) {
-    if (startupReservationLogicalHashes.has(wanted) || startupSeenLogicalHashes.has(wanted)) {
+    if (startupReservationLogicalHashes.has(wanted)) {
+      // A committed (or live-owner) package-id reservation is authoritative
+      // evidence that a package was durably created: never recreate over it.
       throw new SessionIdentityMissingError(key, [])
+    }
+    if (startupSeenLogicalHashes.has(wanted)) {
+      // seen-only: the identity was observed by a past scan but no package-id
+      // reservation was ever committed. Vault migrations and root moves can
+      // strand such packages with no recoverable copy anywhere, so blocking
+      // first-time recreation forever turns a lost archive shell into a
+      // permanently un-archivable session. Recreating from the live source is
+      // lossless; should a stray original ever resurface, the identity
+      // conflict scanner reports the duplicate for explicit reconciliation.
+      console.warn(`[library] seen-only identity ${wanted.slice(0, 12)}… has no committed package; allowing first-time recreation`)
     }
     return
   }
@@ -3025,7 +3037,11 @@ function throwIfDurableIdentityWasPreviouslySeen(key: LogicalSessionKey, localDe
   }
   const seen = readLogicalSeenEvidence(wanted)
   if (seen === false) throw new SessionIdentityUnresolvedError(['identity-evidence-unavailable'])
-  if (seen === true) throw new SessionIdentityMissingError(key, [])
+  if (seen === true) {
+    // seen-only (no package-id reservation matched above): allow first-time
+    // recreation — see the prepared-registry branch for the full rationale.
+    console.warn(`[library] seen-only identity ${wanted.slice(0, 12)}… has no committed package; allowing first-time recreation`)
+  }
 }
 
 function prepareStartupIdentityEvidenceIndex(localDeviceId: string): void {

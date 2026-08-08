@@ -61,8 +61,12 @@ describe('session create lock', () => {
       emptyKey,
       'device-a',
       {
-        timeoutMs: 5,
-        pollMs: 1,
+        // Generous bound: under parallel vitest workers the reclaim sequence
+        // (readdir+stat+rmdir+mkdir+link) can exceed a few milliseconds, which
+        // made a 5ms budget flake under load. The assertion is about reclaim
+        // behavior, not latency.
+        timeoutMs: 2_000,
+        pollMs: 10,
         bootIdentity: () => 'boot-a',
         processStartFingerprint: () => 'start-a'
       }

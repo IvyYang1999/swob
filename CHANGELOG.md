@@ -9,7 +9,7 @@
 - **Thirteen native sources, one compatible** — Antigravity, Grok, Kimi, Hermes, Qoder, Trae, and Gemini join Claude Code, Codex, Cursor, OpenCode, ZCode, and Pi as natively parsed sources; CC-Mirror remains supported as a compatible format. Capability tiers stay evidence-based: encrypted or restricted formats degrade honestly instead of guessing.
 - **Windows x64 Beta (unsigned)** — a first Windows build with onboarding, discovery, reading, search, Insights, and settings. Beta means CI-verified only; see Known limitations.
 - **Startup performance overhaul** — warm starts now compute a real dirty set instead of re-syncing every session, cold syncs run in bounded batches with a resumable checkpoint, and Search/Usage projections queue behind a single idle-scheduled gate. On a real ~1,450-session library, the first post-upgrade launch completes its one-time full catch-up in about 10 minutes and later launches settle in about a minute; the old build was still at 22% after 20 minutes.
-- **Library health you can see** — a health state machine with freshness tracking, a visible health panel, recovery compensation queues, and a CLI control plane (`swob where`, `swob status`, `swob doctor`).
+- **Library health you can see** — a health state machine with freshness tracking, a visible health panel with a guided recovery action, and recovery compensation queues.
 - **Declarative lens packs** — extend Swob with `.swoblens` files instead of code.
 - **Auditable cost ledger** — cost and valuation dimensions with price snapshots, pagination for large ledgers, and value history queries; a Lens platform and theme selector round out the workspace.
 

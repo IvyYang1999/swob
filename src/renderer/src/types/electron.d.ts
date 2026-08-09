@@ -39,6 +39,11 @@ import type {
   SessionFreshness,
   CompensationProgress
 } from '../../../shared/library-health-contract'
+import type {
+  DuplicateRecoveryApplyResult,
+  DuplicateRecoveryProgress,
+  DuplicateRecoverySummary
+} from '../../../shared/duplicate-recovery-contract'
 
 type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 type ResumeLaunchSpec = {
@@ -272,6 +277,10 @@ interface ElectronAPI {
   libraryGetCompensationProgress: () => Promise<CompensationProgress>
   libraryCompensationCancel: () => Promise<void>
   libraryCompensationRetry: () => Promise<CompensationProgress>
+  libraryAnalyzeDuplicateRecovery: () => Promise<DuplicateRecoverySummary>
+  libraryCancelDuplicateRecoveryAnalysis: () => Promise<boolean>
+  libraryApplyDuplicateRecovery: (planId: string) => Promise<DuplicateRecoveryApplyResult>
+  onDuplicateRecoveryProgress: (callback: (progress: DuplicateRecoveryProgress) => void) => () => void
   onLibraryHealthChanged: (callback: (snapshot: LibraryHealthSnapshot) => void) => () => void
   onCompensationUpdate: (callback: (progress: CompensationProgress) => void) => () => void
   vaultMigrate: (targetPath: string) => Promise<{

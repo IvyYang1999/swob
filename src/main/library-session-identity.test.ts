@@ -5,7 +5,11 @@ import {
   buildLogicalSessionIdentityFromSummary,
   logicalSessionKey
 } from './library-session-identity'
-import { candidateFromManifest, LibrarySessionRegistry } from './library-session-registry'
+import {
+  candidateFromManifest,
+  LibrarySessionRegistry,
+  physicalIdentityEvidenceHash
+} from './library-session-registry'
 
 function summary(sessionId: string, filePath: string, source?: any): any {
   return { sessionId, filePath, allFilePaths: [filePath], source }
@@ -223,5 +227,29 @@ describe('LibrarySessionRegistry', () => {
       reason: 'previously-seen',
       creationAllowed: false
     })
+  })
+
+  it('authorization evidence follows immutable package identity, not updatedAt churn', () => {
+    const first = candidateFromManifest('/library/a', {
+      ...baseMeta,
+      packageId: '11111111-1111-4111-8111-111111111111',
+      schemaVersion: 3
+    })
+    const second = candidateFromManifest('/library/b', {
+      ...baseMeta,
+      packageId: '22222222-2222-4222-8222-222222222222',
+      schemaVersion: 3
+    })
+
+    expect(physicalIdentityEvidenceHash([
+      { ...first, updatedAt: '2026-08-01T00:00:00.000Z' },
+      { ...second, updatedAt: '2026-08-01T00:00:00.000Z' }
+    ])).toBe(physicalIdentityEvidenceHash([
+      { ...first, updatedAt: '2026-08-09T12:34:56.000Z' },
+      { ...second, updatedAt: '2026-08-09T12:35:00.000Z' }
+    ]))
+    expect(physicalIdentityEvidenceHash([first, second])).not.toBe(
+      physicalIdentityEvidenceHash([{ ...first, packageId: '33333333-3333-4333-8333-333333333333' }, second])
+    )
   })
 })

@@ -1,7 +1,7 @@
 import { useStore } from '../store'
 import { Search, RotateCcw, SearchX } from 'lucide-react'
 import { useT } from '../i18n'
-import { StaleDisclaimer } from './LibraryHealthBanner'
+import { StaleDisclaimer } from './LibraryFreshnessIndicators'
 
 function HighlightText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>

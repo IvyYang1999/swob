@@ -8,7 +8,10 @@ import {
 } from './library-session-identity'
 import type { IdentityExceptionEvidence, IdentityExceptionsState } from '../shared/library-health-contract'
 
-type AuthorizedIdentityException = IdentityExceptionEvidence
+type AuthorizedIdentityException = IdentityExceptionEvidence & {
+  /** v2 excludes mutable timestamps; the original evidenceHash remains the signed audit artifact. */
+  matchingEvidenceHashV2?: string
+}
 
 export interface LibraryIdentityHealthSummary {
   state: IdentityExceptionsState
@@ -32,6 +35,7 @@ const AUTHORIZED_IDENTITY_EXCEPTIONS: readonly AuthorizedIdentityException[] = [
     exceptionId: 't189-89fdb99eb0159be7',
     logicalKeyHash: '89fdb99eb0159be7f1465e63f83e79f76101241f53757cbe256a72e72ba466de',
     evidenceHash: '0ba576e611c2c4288aa77087a49f0323a32a71cbcda637cb4a6de658360f6773',
+    matchingEvidenceHashV2: 'f5a839c50546527d34759883ee8e06a903759d4f53a03c9a5db258e05aff8f56',
     physicalPackageCount: 11,
     access: 'read-only',
     authorizationSource: 'docs/reports/t189-recovery/README.md',
@@ -43,6 +47,7 @@ const AUTHORIZED_IDENTITY_EXCEPTIONS: readonly AuthorizedIdentityException[] = [
     exceptionId: 't189-1f227fe559cb3369',
     logicalKeyHash: '1f227fe559cb3369e65590eebb1a946b600dc32a0085614bbbcd7a8c18928579',
     evidenceHash: '801a705d6b224325095cd3953cb29e7c041e26a058839ab5bf67000ce0dd8add',
+    matchingEvidenceHashV2: '21b0ff0c9231cf2bcb0815b6e85ff4ea7882a854e6fec2b3a80aefe02ae2715b',
     physicalPackageCount: 11,
     access: 'read-only',
     authorizationSource: 'docs/reports/t189-recovery/README.md',
@@ -66,12 +71,22 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-function physicalEvidenceHash(candidates: readonly LibrarySessionCandidate[]): string {
+function legacyPhysicalEvidenceHash(candidates: readonly LibrarySessionCandidate[]): string {
   const tokens = candidates.map((candidate) => sha256(JSON.stringify({
     directoryName: path.basename(candidate.dirPath).normalize('NFC'),
     packageId: candidate.packageId ?? null,
     schemaVersion: candidate.schemaVersion ?? null,
     updatedAt: candidate.updatedAt
+  }))).sort()
+  return sha256(tokens.join('\0'))
+}
+
+/** Fingerprint immutable package identity, not mutable synchronization metadata. */
+export function physicalIdentityEvidenceHash(candidates: readonly LibrarySessionCandidate[]): string {
+  const tokens = candidates.map((candidate) => sha256(JSON.stringify({
+    directoryName: path.basename(candidate.dirPath).normalize('NFC'),
+    packageId: candidate.packageId ?? null,
+    schemaVersion: candidate.schemaVersion ?? null
   }))).sort()
   return sha256(tokens.join('\0'))
 }
@@ -83,10 +98,14 @@ function exceptionForConflict(
   const logicalKeyHash = sha256(logicalKey)
   const expected = AUTHORIZED_IDENTITY_EXCEPTIONS.find((record) => record.logicalKeyHash === logicalKeyHash)
   if (!expected) return { status: 'unknown', record: null }
-  const evidenceMatches = candidates.length === expected.physicalPackageCount &&
-    physicalEvidenceHash(candidates) === expected.evidenceHash
+  const evidenceMatches = candidates.length === expected.physicalPackageCount && (
+    expected.matchingEvidenceHashV2
+      ? physicalIdentityEvidenceHash(candidates) === expected.matchingEvidenceHashV2
+      : legacyPhysicalEvidenceHash(candidates) === expected.evidenceHash
+  )
   if (!evidenceMatches) return { status: 'evidence-mismatch', record: null }
-  return { status: 'authorized', record: structuredClone(expected) }
+  const { matchingEvidenceHashV2: _matchingEvidenceHashV2, ...publicRecord } = expected
+  return { status: 'authorized', record: structuredClone(publicRecord) }
 }
 
 export interface LibrarySessionCandidate {

@@ -11,6 +11,7 @@
     "planId",
     "contentPolicy",
     "sourceHashing",
+    "inventoryScope",
     "validity",
     "quarantine",
     "summary",
@@ -33,6 +34,7 @@
       }
     },
     "sourceHashing": { "enum": ["enabled", "disabled"] },
+    "inventoryScope": { "enum": ["all-conflicts", "repair-candidates"] },
     "validity": {
       "type": "object",
       "additionalProperties": false,
@@ -212,7 +214,7 @@
         "isSymlink": { "type": "boolean" },
         "symlinkTargetHash": { "type": "string" },
         "cloudState": { "enum": ["local", "icloud-placeholder"] },
-        "inventoryState": { "enum": ["complete", "unreadable"] },
+        "inventoryState": { "enum": ["complete", "manifest-only", "unreadable"] },
         "manifest": { "$ref": "#/$defs/manifest" },
         "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
         "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },

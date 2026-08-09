@@ -12,7 +12,8 @@ import {
   HardDrive, Rows3, WandSparkles, FolderTree, Undo2
 } from 'lucide-react'
 // SessionStaleIndicator removed: lagMs is never projected onto session objects
-// by the main process. The global LibraryHealthBanner already covers stale state.
+// by the main process. Actionable Library problems live in Settings → Diagnostics;
+// transient state never takes over the main workspace.
 import { SshConfigModal } from './SshConfigModal'
 import { resolveResumeCwd } from '../utils/chat-helpers'
 import { OrganizerPanel } from './OrganizerPanel'

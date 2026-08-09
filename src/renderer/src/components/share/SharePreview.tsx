@@ -20,7 +20,7 @@ import type { ShareTheme } from './share-themes'
 import { DEFAULT_PRIVACY, detectSecrets } from './privacy-utils'
 import type { PrivacyOptions } from './privacy-utils'
 import { renderShareImage, dataUrlToBase64 } from './ShareRenderer'
-import { StaleDisclaimer } from '../LibraryHealthBanner'
+import { StaleDisclaimer } from '../LibraryFreshnessIndicators'
 import type { ShareMessage, ShareRenderOptions } from './ShareRenderer'
 
 interface SharePreviewProps {

@@ -12,6 +12,7 @@ import {
   LibrarySessionRegistry,
   type LibrarySessionCandidate
 } from './library-session-registry'
+import type { DuplicateRecoveryProgress } from '../shared/duplicate-recovery-contract'
 
 const MARKER_FILE = '.swob-session.json'
 const BACKUP_FILE = 'backup.jsonl'
@@ -85,7 +86,7 @@ export interface PackageInventory {
   isSymlink: boolean
   symlinkTargetHash?: string
   cloudState: 'local' | 'icloud-placeholder'
-  inventoryState: 'complete' | 'unreadable'
+  inventoryState: 'complete' | 'manifest-only' | 'unreadable'
   manifest: SafeManifestInventory
   files: InventoryFile[]
   sources: SourceEvidence[]
@@ -151,6 +152,7 @@ export interface DuplicateRecoveryReport {
     filesystemPathsIncluded: false
   }
   sourceHashing: 'enabled' | 'disabled'
+  inventoryScope: 'all-conflicts' | 'repair-candidates'
   validity: {
     rule: 'rebuild-and-match-snapshot-fingerprint'
     snapshotFingerprint: string
@@ -174,6 +176,9 @@ export interface DuplicateRecoveryReport {
 export interface DuplicateRecoveryPlannerOptions {
   quarantineRoot?: string
   hashSources?: boolean
+  inventoryScope?: 'all-conflicts' | 'repair-candidates'
+  signal?: AbortSignal
+  onProgress?: (progress: DuplicateRecoveryProgress) => void
 }
 
 interface RawManifest extends Record<string, unknown> {
@@ -206,7 +211,7 @@ interface ScannedPackage {
   isSymlink: boolean
   symlinkTargetHash?: string
   cloudState: 'local' | 'icloud-placeholder'
-  inventoryState: 'complete' | 'unreadable'
+  inventoryState: 'complete' | 'manifest-only' | 'unreadable'
   manifestState: 'valid' | 'corrupt' | 'icloud-placeholder'
   manifestRawHash?: string
   manifest?: RawManifest
@@ -217,6 +222,7 @@ interface ScannedPackage {
   sources: SourceEvidence[]
   backupSourceRelationship: PackageInventory['backupSourceRelationship']
   packageTreeHash: string
+  deepScanned: boolean
 }
 
 function sha256(value: string | Buffer): string {
@@ -231,17 +237,26 @@ function stableJson(value: unknown): unknown {
     .map(([key, child]) => [key, stableJson(child)]))
 }
 
-/** Package identity may differ; every other known or future manifest field is evidence. */
+/** Package identity and sync time may differ; every other known or future manifest field is evidence. */
 function comparableManifestHash(scanned: ScannedPackage): string {
   if (!scanned.manifest) return 'missing'
-  const { packageId: _packageId, ...semanticManifest } = scanned.manifest
+  const { packageId: _packageId, updatedAt: _updatedAt, ...semanticManifest } = scanned.manifest
   return sha256(JSON.stringify(stableJson(semanticManifest)))
 }
 
-async function hashFile(filePath: string): Promise<string> {
+function assertNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('duplicate-recovery-analysis-cancelled')
+}
+
+async function hashFile(filePath: string, signal?: AbortSignal): Promise<string> {
+  assertNotAborted(signal)
   const before = fs.statSync(filePath)
   const hash = createHash('sha256')
-  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk as Buffer)
+  const stream = fs.createReadStream(filePath, signal ? { signal } : undefined)
+  for await (const chunk of stream) {
+    assertNotAborted(signal)
+    hash.update(chunk as Buffer)
+  }
   const after = fs.statSync(filePath)
   if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
     before.mtimeMs !== after.mtimeMs) throw new Error('inventory-file-changed-during-read')
@@ -295,11 +310,13 @@ function fileRole(relativePath: string, kind: 'file' | 'symlink' | 'other'): Inv
   return 'user-file'
 }
 
-async function listPackageFiles(packagePath: string): Promise<InventoryFile[]> {
+async function listPackageFiles(packagePath: string, signal?: AbortSignal): Promise<InventoryFile[]> {
   const files: InventoryFile[] = []
   async function walk(dirPath: string): Promise<void> {
+    assertNotAborted(signal)
     const entries = fs.readdirSync(dirPath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
+      assertNotAborted(signal)
       const fullPath = path.join(dirPath, entry.name)
       const relativePath = normalizedRelative(packagePath, fullPath)
       const stat = fs.lstatSync(fullPath)
@@ -323,7 +340,7 @@ async function listPackageFiles(packagePath: string): Promise<InventoryFile[]> {
           kind: 'file',
           size: stat.size,
           mtime: safeIso(stat.mtimeMs),
-          sha256: await hashFile(fullPath)
+          sha256: await hashFile(fullPath, signal)
         })
       } else {
         files.push({
@@ -429,7 +446,7 @@ function safeManifestInventory(scanned: ScannedPackage): SafeManifestInventory {
   }
 }
 
-async function sourceEvidence(sourcePath: string, hashSources: boolean): Promise<SourceEvidence> {
+async function sourceEvidence(sourcePath: string, hashSources: boolean, signal?: AbortSignal): Promise<SourceEvidence> {
   const physicalPath = sourcePath.split('#')[0]
   const result: SourceEvidence = { sourcePathId: `source:${sha256(sourcePath).slice(0, 24)}`, state: 'not-requested' }
   if (!hashSources) return result
@@ -442,7 +459,7 @@ async function sourceEvidence(sourcePath: string, hashSources: boolean): Promise
       state: physicalPath.endsWith('.icloud') ? 'icloud-placeholder' : 'file',
       size: stat.size,
       mtime: safeIso(stat.mtimeMs),
-      sha256: await hashFile(physicalPath)
+      sha256: await hashFile(physicalPath, signal)
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -469,12 +486,11 @@ function backupRelationship(
   return 'unverifiable'
 }
 
-async function scanPackage(
+function scanPackageManifest(
   libraryRoot: string,
   discoveredPath: string,
-  isSymlink: boolean,
-  hashSources: boolean
-): Promise<ScannedPackage> {
+  isSymlink: boolean
+): ScannedPackage {
   let realPath = discoveredPath
   let symlinkTargetHash: string | undefined
   if (isSymlink) {
@@ -512,13 +528,7 @@ async function scanPackage(
     logicalKey = logicalSessionKey(identity)
     candidate = candidateFromManifest(realPath, manifest, isSymlink)
   }
-  let files: InventoryFile[] = []
-  let inventoryState: ScannedPackage['inventoryState'] = 'complete'
-  try { files = await listPackageFiles(realPath) } catch { inventoryState = 'unreadable' }
-  const sources = manifest
-    ? await Promise.all((manifest.sourceFilePaths || []).map((sourcePath) => sourceEvidence(sourcePath, hashSources)))
-    : []
-  const cloudState = manifestState === 'icloud-placeholder' || files.some((file) => file.role === 'icloud-placeholder')
+  const cloudState = manifestState === 'icloud-placeholder'
     ? 'icloud-placeholder'
     : 'local'
   const packageTreeHash = sha256(JSON.stringify({
@@ -526,9 +536,7 @@ async function scanPackage(
     isSymlink,
     symlinkTargetHash,
     manifestState,
-    inventoryState,
-    manifestRawHash,
-    files
+    manifestRawHash
   }))
   return {
     absolutePath: discoveredPath,
@@ -538,25 +546,79 @@ async function scanPackage(
     isSymlink,
     symlinkTargetHash,
     cloudState,
-    inventoryState,
+    inventoryState: 'manifest-only',
     manifestState,
     manifestRawHash,
     manifest,
     identity,
     logicalKey,
     candidate,
-    files,
-    sources,
-    backupSourceRelationship: backupRelationship(files, sources, hashSources),
-    packageTreeHash
+    files: [],
+    sources: [],
+    backupSourceRelationship: 'not-requested',
+    packageTreeHash,
+    deepScanned: false
   }
 }
 
-async function discoverPackages(libraryRoot: string, hashSources: boolean): Promise<ScannedPackage[]> {
+async function scanPackageDeep(
+  shallow: ScannedPackage,
+  hashSources: boolean,
+  signal?: AbortSignal,
+  sourceCache?: Map<string, Promise<SourceEvidence>>
+): Promise<ScannedPackage> {
+  assertNotAborted(signal)
+  let files: InventoryFile[] = []
+  let inventoryState: ScannedPackage['inventoryState'] = 'complete'
+  try { files = await listPackageFiles(shallow.realPath, signal) } catch (error) {
+    if (signal?.aborted) throw error
+    inventoryState = 'unreadable'
+  }
+  const sources = shallow.manifest
+    ? await Promise.all((shallow.manifest.sourceFilePaths || []).map((sourcePath) => {
+      const cacheKey = `${hashSources ? 'hash' : 'metadata'}\0${sourcePath}`
+      const cached = sourceCache?.get(cacheKey)
+      if (cached) return cached
+      const pending = sourceEvidence(sourcePath, hashSources, signal)
+      sourceCache?.set(cacheKey, pending)
+      return pending
+    }))
+    : []
+  const cloudState = shallow.manifestState === 'icloud-placeholder' ||
+    files.some((file) => file.role === 'icloud-placeholder')
+    ? 'icloud-placeholder'
+    : 'local'
+  return {
+    ...shallow,
+    cloudState,
+    inventoryState,
+    files,
+    sources,
+    backupSourceRelationship: backupRelationship(files, sources, hashSources),
+    packageTreeHash: sha256(JSON.stringify({
+      path: shallow.relativePath,
+      isSymlink: shallow.isSymlink,
+      symlinkTargetHash: shallow.symlinkTargetHash,
+      manifestState: shallow.manifestState,
+      inventoryState,
+      manifestRawHash: shallow.manifestRawHash,
+      files
+    })),
+    deepScanned: true
+  }
+}
+
+async function discoverPackages(
+  libraryRoot: string,
+  signal?: AbortSignal,
+  onDiscovered?: (count: number) => void
+): Promise<ScannedPackage[]> {
   const packages: ScannedPackage[] = []
   async function walk(dirPath: string): Promise<void> {
+    assertNotAborted(signal)
     const entries = fs.readdirSync(dirPath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
+      assertNotAborted(signal)
       if (entry.name === '.swob') continue
       const fullPath = path.join(dirPath, entry.name)
       const stat = fs.lstatSync(fullPath)
@@ -575,7 +637,8 @@ async function discoverPackages(libraryRoot: string, hashSources: boolean): Prom
       const hasMarker = fs.existsSync(path.join(packagePath, MARKER_FILE))
       const hasCloudMarker = fs.existsSync(path.join(packagePath, `.${MARKER_FILE}.icloud`))
       if (hasMarker || hasCloudMarker) {
-        packages.push(await scanPackage(libraryRoot, fullPath, isSymlink, hashSources))
+        packages.push(scanPackageManifest(libraryRoot, fullPath, isSymlink))
+        onDiscovered?.(packages.length)
       } else if (!isSymlink) {
         await walk(fullPath)
       }
@@ -620,15 +683,18 @@ function hasUniqueEvidence(signatures: Map<string, Set<string>>, packageId: stri
 function classificationFor(
   registryReason: ConflictInventory['registryReason'],
   packages: ScannedPackage[],
-  hashSources: boolean
+  hashSources: boolean,
+  exceptionStatus?: 'authorized' | 'unknown' | 'evidence-mismatch'
 ): { classification: RecoveryClassification; reasons: string[] } {
   const reasons: string[] = []
+  if (exceptionStatus === 'authorized') {
+    return { classification: 'manual-review', reasons: ['authorized-read-only-history'] }
+  }
+  if (exceptionStatus === 'evidence-mismatch') {
+    return { classification: 'manual-review', reasons: ['authorized-evidence-mismatch'] }
+  }
   if (packages.some((candidate) => candidate.manifestState === 'corrupt')) {
     return { classification: 'corrupt', reasons: ['manifest-corrupt-or-unreadable'] }
-  }
-  if (packages.some((candidate) => candidate.inventoryState === 'unreadable' ||
-    candidate.files.some((file) => file.kind === 'other'))) {
-    return { classification: 'manual-review', reasons: ['file-inventory-incomplete-or-special-file'] }
   }
   if (packages.some((candidate) => candidate.manifestState === 'icloud-placeholder' || candidate.cloudState === 'icloud-placeholder')) {
     return { classification: 'manual-review', reasons: ['icloud-placeholder-not-materialized'] }
@@ -643,8 +709,15 @@ function classificationFor(
     candidate.files.some((file) => file.kind === 'symlink'))) {
     return { classification: 'manual-review', reasons: ['symlink-evidence-requires-manual-review'] }
   }
-  if (packages.some((candidate) => safeManifestInventory(candidate).packageState !== 'package-id')) {
-    return { classification: 'manual-review', reasons: ['legacy-package-identity'] }
+  if (packages.some((candidate) => !candidate.deepScanned)) {
+    if (new Set(packages.map(comparableManifestHash)).size > 1) {
+      return { classification: 'merge-required', reasons: ['manifest-fields-diverge'] }
+    }
+    return { classification: 'manual-review', reasons: ['manifest-only-triage'] }
+  }
+  if (packages.some((candidate) => candidate.inventoryState === 'unreadable' ||
+    candidate.files.some((file) => file.kind === 'other'))) {
+    return { classification: 'manual-review', reasons: ['file-inventory-incomplete-or-special-file'] }
   }
   if (packages.some((candidate) => {
     const declared = candidate.manifest?.backupSha256
@@ -704,7 +777,8 @@ function buildConflict(
   packages: ScannedPackage[],
   quarantineRoot: string,
   snapshotFingerprint: string,
-  hashSources: boolean
+  hashSources: boolean,
+  exceptionStatus?: 'authorized' | 'unknown' | 'evidence-mismatch'
 ): ConflictInventory {
   const sorted = [...packages].sort(candidateOrder)
   const logicalSessionKeyHashes = [...new Set(sorted.flatMap((candidate) =>
@@ -714,7 +788,7 @@ function buildConflict(
     logicalSessionKeyHashes,
     pathIds: sorted.map((candidate) => candidate.pathId)
   })).slice(0, 24)}`
-  const { classification, reasons } = classificationFor(registryReason, sorted, hashSources)
+  const { classification, reasons } = classificationFor(registryReason, sorted, hashSources, exceptionStatus)
   const canonical = classification === 'canonical-candidate' ? sorted[0] : undefined
   const userSignatures = uniquePaths(sorted, 'user-file')
   const branchSignatures = uniquePaths(sorted, 'branch-transcript')
@@ -785,6 +859,21 @@ function buildConflict(
   }
 }
 
+function conflictNeedsDeepInventory(input: {
+  reason: ConflictInventory['registryReason']
+  packages: ScannedPackage[]
+  exceptionStatus?: 'authorized' | 'unknown' | 'evidence-mismatch'
+}): boolean {
+  if (input.exceptionStatus === 'authorized' || input.exceptionStatus === 'evidence-mismatch') return false
+  if (input.reason === 'package-id-collision' || input.reason === 'symlink-only') return false
+  if (input.packages.some((candidate) =>
+    !candidate.manifest ||
+    candidate.manifestState !== 'valid' ||
+    candidate.isSymlink)) return false
+  if (new Set(input.packages.map(comparableManifestHash)).size > 1) return false
+  return true
+}
+
 function defaultQuarantineRoot(libraryRoot: string): string {
   return path.join(path.dirname(libraryRoot), `${path.basename(libraryRoot)}.swob-quarantine`)
 }
@@ -802,13 +891,20 @@ export async function buildDuplicateRecoveryReport(
   )
   if (isInside(libraryRoot, quarantineRoot)) throw new Error('quarantine-root-must-be-outside-library')
   const hashSources = options.hashSources === true
-  const scanned = await discoverPackages(libraryRoot, hashSources)
-  const snapshotFingerprint = sha256(JSON.stringify(scanned.map((candidate) => ({
-    pathId: candidate.pathId,
-    packageTreeHash: candidate.packageTreeHash,
-    sourceEvidence: candidate.sources
-  }))))
-  const planId = `plan:${snapshotFingerprint.slice(0, 24)}`
+  const inventoryScope = options.inventoryScope === 'repair-candidates'
+    ? 'repair-candidates'
+    : 'all-conflicts'
+  const { signal, onProgress } = options
+  let discoveredPackages = 0
+  const scanned = await discoverPackages(libraryRoot, signal, (count) => {
+    discoveredPackages = count
+    onProgress?.({
+      phase: 'discovering',
+      discoveredPackages: count,
+      conflictPackages: 0,
+      analyzedConflictPackages: 0
+    })
+  })
 
   const registry = new LibrarySessionRegistry()
   registry.replace(scanned.flatMap((candidate) => candidate.candidate ? [candidate.candidate] : []))
@@ -822,6 +918,7 @@ export async function buildDuplicateRecoveryReport(
   const conflictInputs: Array<{
     reason: ConflictInventory['registryReason']
     packages: ScannedPackage[]
+    exceptionStatus?: 'authorized' | 'unknown' | 'evidence-mismatch'
   }> = []
   for (const diagnostic of registry.diagnostics()) {
     if (diagnostic.state !== 'conflict') continue
@@ -831,13 +928,66 @@ export async function buildDuplicateRecoveryReport(
     const signature = `${diagnostic.reason}\0${deduplicated.map((candidate) => candidate.pathId).sort().join('\0')}`
     if (seenGroups.has(signature)) continue
     seenGroups.add(signature)
-    conflictInputs.push({ reason: diagnostic.reason, packages: deduplicated })
+    conflictInputs.push({
+      reason: diagnostic.reason,
+      packages: deduplicated,
+      exceptionStatus: diagnostic.exceptionStatus
+    })
   }
   for (const candidate of scanned.filter((item) => !item.manifest)) {
     conflictInputs.push({ reason: 'unresolved-manifest', packages: [candidate] })
   }
+  const inputsForDeepInventory = inventoryScope === 'all-conflicts'
+    ? conflictInputs
+    : conflictInputs.filter(conflictNeedsDeepInventory)
+  const conflictPathIds = [...new Set(inputsForDeepInventory
+    .flatMap((input) => input.packages.map((item) => item.pathId)))]
+  const deepByPathId = new Map<string, ScannedPackage>()
+  const sourceCache = new Map<string, Promise<SourceEvidence>>()
+  let analyzedConflictPackages = 0
+  onProgress?.({
+    phase: 'analyzing-conflicts',
+    discoveredPackages,
+    conflictPackages: conflictPathIds.length,
+    analyzedConflictPackages
+  })
+  for (const id of conflictPathIds) {
+    assertNotAborted(signal)
+    const shallow = scanned.find((candidate) => candidate.pathId === id)
+    if (!shallow) throw new Error('conflict-package-disappeared')
+    deepByPathId.set(id, await scanPackageDeep(shallow, hashSources, signal, sourceCache))
+    analyzedConflictPackages++
+    onProgress?.({
+      phase: 'analyzing-conflicts',
+      discoveredPackages,
+      conflictPackages: conflictPathIds.length,
+      analyzedConflictPackages
+    })
+  }
+  const snapshotFingerprint = sha256(JSON.stringify({
+    manifests: scanned.map((candidate) => ({
+      pathId: candidate.pathId,
+      isSymlink: candidate.isSymlink,
+      symlinkTargetHash: candidate.symlinkTargetHash,
+      manifestState: candidate.manifestState,
+      manifestRawHash: candidate.manifestRawHash
+    })),
+    conflicts: [...deepByPathId.values()].map((candidate) => ({
+      pathId: candidate.pathId,
+      packageTreeHash: candidate.packageTreeHash,
+      sourceEvidence: candidate.sources
+    }))
+  }))
+  const planId = `plan:${snapshotFingerprint.slice(0, 24)}`
   const conflicts = conflictInputs
-    .map((input) => buildConflict(input.reason, input.packages, quarantineRoot, snapshotFingerprint, hashSources))
+    .map((input) => buildConflict(
+      input.reason,
+      input.packages.map((candidate) => deepByPathId.get(candidate.pathId) || candidate),
+      quarantineRoot,
+      snapshotFingerprint,
+      hashSources,
+      input.exceptionStatus
+    ))
     .sort((a, b) => a.conflictId.localeCompare(b.conflictId))
   const classificationCounts: Record<RecoveryClassification, number> = {
     'canonical-candidate': 0,
@@ -847,6 +997,12 @@ export async function buildDuplicateRecoveryReport(
     corrupt: 0
   }
   for (const conflict of conflicts) classificationCounts[conflict.classification]++
+  onProgress?.({
+    phase: 'complete',
+    discoveredPackages,
+    conflictPackages: conflictPathIds.length,
+    analyzedConflictPackages
+  })
   return {
     schemaVersion: REPORT_SCHEMA_VERSION,
     mode: 'dry-run',
@@ -859,6 +1015,7 @@ export async function buildDuplicateRecoveryReport(
       filesystemPathsIncluded: false
     },
     sourceHashing: hashSources ? 'enabled' : 'disabled',
+    inventoryScope,
     validity: { rule: 'rebuild-and-match-snapshot-fingerprint', snapshotFingerprint },
     quarantine: {
       outsideLibraryRequired: true,
@@ -879,7 +1036,7 @@ export async function buildDuplicateRecoveryReport(
 
 export async function verifyDuplicateRecoveryPlan(
   libraryRoot: string,
-  previous: Pick<DuplicateRecoveryReport, 'snapshotFingerprint' | 'sourceHashing'>,
+  previous: Pick<DuplicateRecoveryReport, 'snapshotFingerprint' | 'sourceHashing' | 'inventoryScope'>,
   options: DuplicateRecoveryPlannerOptions = {}
 ): Promise<{
   status: 'current' | 'expired'
@@ -888,13 +1045,86 @@ export async function verifyDuplicateRecoveryPlan(
 }> {
   const current = await buildDuplicateRecoveryReport(libraryRoot, {
     ...options,
-    hashSources: previous.sourceHashing === 'enabled'
+    hashSources: previous.sourceHashing === 'enabled',
+    inventoryScope: previous.inventoryScope
   })
   return {
     status: current.snapshotFingerprint === previous.snapshotFingerprint ? 'current' : 'expired',
     previousSnapshotFingerprint: previous.snapshotFingerprint,
     currentSnapshotFingerprint: current.snapshotFingerprint
   }
+}
+
+export interface PrepareDuplicateRecoveryOptions {
+  quarantineRoot?: string
+  signal?: AbortSignal
+}
+
+export interface PreparedDuplicateRecovery {
+  planId: string
+  libraryRoot: string
+  quarantineRoot: string
+  moves: Array<{
+    pathId: string
+    fromPath: string
+    quarantinePath: string
+    expectedPackageTreeHash: string
+  }>
+}
+
+/** Rebuild and resolve an accepted redacted plan into verified local paths. Read-only. */
+export async function prepareDuplicateRecoveryExecution(
+  libraryRootInput: string,
+  accepted: DuplicateRecoveryReport,
+  options: PrepareDuplicateRecoveryOptions = {}
+): Promise<PreparedDuplicateRecovery> {
+  if (accepted.sourceHashing !== 'enabled') throw new Error('source-hashing-required-for-apply')
+  assertNotAborted(options.signal)
+  const libraryRoot = fs.realpathSync(path.resolve(libraryRootInput))
+  const quarantineRoot = resolveThroughExistingAncestor(
+    options.quarantineRoot || defaultQuarantineRoot(libraryRoot)
+  )
+  if (isInside(libraryRoot, quarantineRoot)) throw new Error('quarantine-root-must-be-outside-library')
+  const current = await buildDuplicateRecoveryReport(libraryRoot, {
+    quarantineRoot,
+    hashSources: true,
+    inventoryScope: accepted.inventoryScope,
+    signal: options.signal
+  })
+  if (current.planId !== accepted.planId || current.snapshotFingerprint !== accepted.snapshotFingerprint) {
+    throw new Error('duplicate-recovery-plan-expired')
+  }
+  const moves = current.conflicts
+    .filter((conflict) => conflict.classification === 'canonical-candidate' &&
+      conflict.recovery.action === 'quarantine-equivalent-duplicates')
+    .flatMap((conflict) => conflict.recovery.moves)
+  const shallowPackages = await discoverPackages(libraryRoot, options.signal)
+  const byPathId = new Map(shallowPackages.map((candidate) => [candidate.pathId, candidate]))
+  const sourceCache = new Map<string, Promise<SourceEvidence>>()
+  const planToken = current.planId.replace(/^plan:/, '')
+  const planDirectory = path.join(quarantineRoot, planToken)
+  const moveRecords: PreparedDuplicateRecovery['moves'] = []
+  for (const move of moves) {
+    assertNotAborted(options.signal)
+    const source = byPathId.get(move.fromPathId)
+    if (!source || source.isSymlink || !fs.lstatSync(source.absolutePath).isDirectory()) {
+      throw new Error('duplicate-recovery-source-not-physical-directory')
+    }
+    const verified = await scanPackageDeep(source, true, options.signal, sourceCache)
+    if (verified.packageTreeHash !== move.expectedPackageTreeHash) {
+      throw new Error('duplicate-recovery-package-changed-before-apply')
+    }
+    const packageToken = move.fromPathId.replace(/^path:/, '')
+    const quarantinePath = path.join(planDirectory, packageToken)
+    if (fs.existsSync(quarantinePath)) throw new Error('duplicate-recovery-target-already-exists')
+    moveRecords.push({
+      pathId: move.fromPathId,
+      fromPath: source.absolutePath,
+      quarantinePath,
+      expectedPackageTreeHash: move.expectedPackageTreeHash
+    })
+  }
+  return { planId: current.planId, libraryRoot, quarantineRoot, moves: moveRecords }
 }
 
 function markdownCell(value: string): string {
@@ -909,6 +1139,7 @@ export function renderDuplicateRecoveryMarkdown(report: DuplicateRecoveryReport)
     `- Plan: \`${report.planId}\``,
     `- Snapshot: \`${report.snapshotFingerprint}\``,
     `- Source hashing: \`${report.sourceHashing}\``,
+    `- Inventory scope: \`${report.inventoryScope}\``,
     `- Conflicts: ${report.summary.conflictCount}; unresolved: ${report.summary.unresolvedCount}`,
     '- Privacy: no transcript bodies, titles, full source paths, or filesystem paths.',
     '- Validity: rebuild and require the same snapshot fingerprint before any future action.',

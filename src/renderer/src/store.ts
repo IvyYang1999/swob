@@ -930,9 +930,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   savePreferences: async (prefs) => {
     const config = get().config
-    if (!config) return
     const previousOverlay = localPreferenceOverlay
     localPreferenceOverlay = { ...localPreferenceOverlay, ...prefs } as Partial<UserConfig['preferences']>
+    // Diagnostics remains useful during a degraded bootstrap, even before the
+    // configuration snapshot arrives. Preserve the choice in the local overlay
+    // so a later snapshot adopts it while the controlled UI updates immediately.
+    if (!config) return
     const revision = ++preferenceWriteRevision
     const updated = { ...config, preferences: { ...config.preferences, ...prefs } }
     // Update controlled settings immediately. Besides avoiding a visible

@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { assertNoAncestorNodeModules } from './packaged-cli-isolation.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -19,24 +20,12 @@ function run(command, args, options = {}) {
   }
 }
 
-function assertNoAncestorNodeModules(filePath) {
-  let current = path.dirname(path.resolve(filePath))
-  for (;;) {
-    const candidate = path.join(current, 'node_modules')
-    if (fs.existsSync(candidate)) {
-      throw new Error(`Detached CLI probe has an ambient node_modules ancestor: ${candidate}`)
-    }
-    const parent = path.dirname(current)
-    if (parent === current) return
-    current = parent
-  }
-}
-
 if (process.platform !== 'darwin') {
   process.stderr.write('Packaged CLI contract currently requires a native macOS runner.\n')
   process.exit(1)
 }
 
+run(process.execPath, ['--test', 'scripts/packaged-cli-isolation.selftest.mjs'])
 run('npm', ['run', 'build'])
 run(path.join(root, 'node_modules', '.bin', 'electron-builder'), [
   '--dir', '--mac', `--${process.arch}`, '--publish', 'never',

@@ -3,9 +3,12 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assertNoAncestorNodeModules } from './packaged-cli-isolation.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+if (process.env.NODE_OPTIONS) {
+  throw new Error('NODE_OPTIONS must be empty before building and verifying the packaged CLI')
+}
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -54,11 +57,23 @@ try {
     path.join(detachedResources, 'app.asar.unpacked'),
     { recursive: true }
   )
-  assertNoAncestorNodeModules(path.join(detachedResources, 'cli', 'cli.js'))
+  const detachedCli = path.join(detachedResources, 'cli', 'cli.js')
+  const detachedNodeModules = path.join(detachedResources, 'app.asar.unpacked', 'node_modules')
+  const detachedHome = path.join(detachedRoot, 'home')
+  fs.mkdirSync(detachedHome)
+  run(process.execPath, [
+    'scripts/packaged-cli-isolation.mjs', detachedCli, detachedNodeModules
+  ], {
+    env: {
+      HOME: detachedHome,
+      NODE_OPTIONS: '',
+      NODE_PATH: detachedNodeModules
+    }
+  })
   run(path.join(root, 'node_modules', '.bin', 'vitest'), [
     'run', 'src/cli/packaged-contract.test.ts', '--maxWorkers=1'
   ], {
-    env: { SWOB_PACKAGED_APP: detachedApp }
+    env: { NODE_OPTIONS: '', SWOB_PACKAGED_APP: detachedApp }
   })
 } finally {
   fs.rmSync(detachedRoot, { recursive: true, force: true })

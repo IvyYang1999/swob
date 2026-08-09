@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+if [ -n "${NODE_OPTIONS:-}" ]; then
+  echo "错误：本地部署要求 NODE_OPTIONS 为空，避免构建或探针被预加载代码污染"
+  exit 1
+fi
+
 APP_NAME="Swob"
 DIST_APP="dist/mac-arm64/${APP_NAME}.app"
 INSTALL_DIR="/Applications"
@@ -69,8 +74,9 @@ CLI_PROBE_ENTRY="$CLI_PROBE_RESOURCES/cli/cli.js"
 CLI_PROBE_NODE_MODULES="$CLI_PROBE_RESOURCES/app.asar.unpacked/node_modules"
 CLI_PROBE_HOME="$CLI_PROBE_ROOT/home"
 mkdir -p "$CLI_PROBE_HOME"
-node scripts/packaged-cli-isolation.mjs "$CLI_PROBE_ENTRY"
-HOME="$CLI_PROBE_HOME" NODE_ENV=production NODE_PATH="$CLI_PROBE_NODE_MODULES" \
+HOME="$CLI_PROBE_HOME" NODE_OPTIONS= NODE_PATH="$CLI_PROBE_NODE_MODULES" \
+  node scripts/packaged-cli-isolation.mjs "$CLI_PROBE_ENTRY" "$CLI_PROBE_NODE_MODULES"
+HOME="$CLI_PROBE_HOME" NODE_ENV=production NODE_OPTIONS= NODE_PATH="$CLI_PROBE_NODE_MODULES" \
   node "$CLI_PROBE_ENTRY" --version --json >/dev/null
 cleanup_cli_probe
 CLI_PROBE_ROOT=""

@@ -105,6 +105,7 @@ import {
 } from './library-path-safety'
 import {
   assertLibraryWriterHeld,
+  closeLibraryWriterCoordinator,
   readLibraryWriteGeneration,
   runWithLibraryWriter,
   runWithLibraryWriterSync,
@@ -760,6 +761,11 @@ function withLibraryWriterSync<T>(mode: LibraryWriterMode, operation: () => T): 
 /** Batch boundary used by the worker so ensure/transcript/backup cannot be interleaved with a CLI move. */
 export function withLibraryMaintenanceWriter<T>(operation: () => Promise<T> | T): Promise<T> {
   return withLibraryWriter('maintenance', operation)
+}
+
+/** Process-fatal boundary: permanently reject every subsequent Library writer. */
+export function closeLibraryWriterRuntime(): void {
+  closeLibraryWriterCoordinator()
 }
 
 export function getLibraryRoot(): string {

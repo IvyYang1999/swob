@@ -20,8 +20,12 @@ import {
 import { deriveHostBootIdentity, deriveLibraryHostProof } from './host-identity'
 import { LibraryPathUnsafeError } from './library-path-safety'
 import {
+  closeLibraryWriterCoordinator,
+  LibraryWriterCoordinatorClosedError,
   readLibraryWriteGeneration,
-  runWithLibraryWriter
+  resetLibraryWriterCoordinatorForTests,
+  runWithLibraryWriter,
+  runWithLibraryWriterSync
 } from './library-write-coordinator'
 let root: string
 
@@ -47,6 +51,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetLibraryWriterCoordinatorForTests()
   fs.rmSync(root, { recursive: true, force: true })
 })
 
@@ -404,6 +409,28 @@ describe('Library 跨进程单写者 lease', () => {
     await expect(runWithLibraryWriter(root, 'device-a', 'metadata', () => {
       throw new Error('synthetic-crash-before-result')
     }, quiet)).rejects.toThrow('synthetic-crash-before-result')
+    await runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet)
+    expect(readLibraryWriteGeneration(root)).toBe(2)
+  })
+
+  it('进程级 closed latch 永久拒绝后续同步、异步与 reentrant writer', async () => {
+    let rejectNested: (() => Promise<void>) | undefined
+    const workerParticipant = registerLibraryWriterArbiterParticipant()
+    const workerWire = currentLibraryWriterArbiterWire(workerParticipant)
+    await runWithLibraryWriter(root, 'device-a', 'maintenance', () => {
+      closeLibraryWriterCoordinator()
+      rejectNested = () => runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet)
+    }, quiet)
+    workerParticipant.release()
+
+    await expect(rejectNested!()).rejects.toBeInstanceOf(LibraryWriterCoordinatorClosedError)
+    await expect(runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet))
+      .rejects.toBeInstanceOf(LibraryWriterCoordinatorClosedError)
+    await expect(runWithLibraryWriterArbiterContext(workerWire, undefined,
+      () => runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet)))
+      .rejects.toBeInstanceOf(LibraryWriterCoordinatorClosedError)
+    expect(() => runWithLibraryWriterSync(root, 'device-a', 'metadata', () => {}, quiet))
+      .toThrow(LibraryWriterCoordinatorClosedError)
     expect(readLibraryWriteGeneration(root)).toBe(1)
   })
 })

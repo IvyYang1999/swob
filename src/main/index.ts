@@ -107,6 +107,7 @@ import {
   applyLibraryOrganization,
   undoLastLibraryOrganization,
   recoverInterruptedLibraryOrganization,
+  closeLibraryWriterRuntime,
   withLibraryMaintenanceWriter,
   getLibrarySessionRegistryDiagnostics,
   getSessionFreshness,
@@ -1166,6 +1167,7 @@ let runtimeCleanupPromise: Promise<void> | null = null
 
 function cleanupRuntimeResources(): Promise<void> {
   if (runtimeCleanupPromise) return runtimeCleanupPromise
+  closeLibraryWriterRuntime()
   runtimeShuttingDown = true
   startupProjectionGate.reset(new Error('Runtime is shutting down'))
   libraryRuntimePaused = true

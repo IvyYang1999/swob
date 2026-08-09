@@ -6,12 +6,18 @@ import {
   acquireLibraryWriterArbiterSync,
   acquireLibraryWriterLease,
   acquireLibraryWriterLeaseSync,
+  assertLibraryWriterArbiterOpen,
+  closeLibraryWriterArbiter,
   emitLibraryWriterEvent,
   hashLibraryRoot,
+  LibraryWriterCoordinatorClosedError,
+  resetLibraryWriterArbiterForTests,
   type LibraryWriterEvent,
   type LibraryWriterLeaseOptions,
   type LibraryWriterMode
 } from './library-writer-lease'
+
+export { LibraryWriterCoordinatorClosedError }
 import {
   ensureSafeLibraryDirectory,
   fsyncDirectorySync,
@@ -92,6 +98,7 @@ export async function runWithLibraryWriter<T>(
   operation: () => Promise<T> | T,
   options: LibraryWriterLeaseOptions = {}
 ): Promise<T> {
+  assertLibraryWriterArbiterOpen()
   if (isReentrant(root, deviceId)) return operation()
   const resolvedRoot = path.resolve(root)
   const arbiter = await acquireLibraryWriterArbiter()
@@ -101,6 +108,7 @@ export async function runWithLibraryWriter<T>(
       arbiterOwnerId: arbiter.ownerId
     })
     try {
+      assertLibraryWriterArbiterOpen()
       // Reserve the generation durably before any mutation. A process killed in
       // the operation still invalidates scans that started before this writer.
       bumpLibraryWriteGeneration(resolvedRoot)
@@ -120,6 +128,7 @@ export function runWithLibraryWriterSync<T>(
   operation: () => T,
   options: LibraryWriterLeaseOptions = {}
 ): T {
+  assertLibraryWriterArbiterOpen()
   if (isReentrant(root, deviceId)) return operation()
   const resolvedRoot = path.resolve(root)
   const arbiter = acquireLibraryWriterArbiterSync()
@@ -137,6 +146,14 @@ export function runWithLibraryWriterSync<T>(
   } finally {
     arbiter.release()
   }
+}
+
+export function closeLibraryWriterCoordinator(): void {
+  closeLibraryWriterArbiter()
+}
+
+export function resetLibraryWriterCoordinatorForTests(): void {
+  resetLibraryWriterArbiterForTests()
 }
 
 export function staleScanEvent(

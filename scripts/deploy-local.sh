@@ -49,13 +49,40 @@ for expected_line in \
 done
 
 DIST_CLI="${DIST_APP}/Contents/Resources/cli/cli.js"
-DIST_NODE_MODULES="${DIST_APP}/Contents/Resources/app.asar.unpacked/node_modules"
 if [ ! -f "$DIST_CLI" ]; then
   echo "错误：找不到打包后的 CLI 入口 $DIST_CLI"
   exit 1
 fi
 echo "==> 验证打包后的 CLI..."
-NODE_PATH="${DIST_NODE_MODULES}${NODE_PATH:+:$NODE_PATH}" node "$DIST_CLI" --version --json >/dev/null
+CLI_PROBE_ROOT="$(mktemp -d /tmp/swob-cli-probe.XXXXXX)"
+cleanup_cli_probe() {
+  case "${CLI_PROBE_ROOT:-}" in
+    /tmp/swob-cli-probe.*) rm -rf -- "$CLI_PROBE_ROOT" ;;
+  esac
+}
+trap cleanup_cli_probe EXIT
+CLI_PROBE_RESOURCES="$CLI_PROBE_ROOT/Swob.app/Contents/Resources"
+mkdir -p "$CLI_PROBE_RESOURCES"
+cp -R "$DIST_APP/Contents/Resources/cli" "$CLI_PROBE_RESOURCES/cli"
+cp -R "$DIST_APP/Contents/Resources/app.asar.unpacked" "$CLI_PROBE_RESOURCES/app.asar.unpacked"
+CLI_PROBE_ENTRY="$CLI_PROBE_RESOURCES/cli/cli.js"
+CLI_PROBE_NODE_MODULES="$CLI_PROBE_RESOURCES/app.asar.unpacked/node_modules"
+node -e '
+  const fs = require("fs");
+  const path = require("path");
+  let current = path.dirname(path.resolve(process.argv[1]));
+  for (;;) {
+    const candidate = path.join(current, "node_modules");
+    if (fs.existsSync(candidate)) throw new Error(`ambient node_modules ancestor: ${candidate}`);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+' "$CLI_PROBE_ENTRY"
+NODE_PATH="$CLI_PROBE_NODE_MODULES" node "$CLI_PROBE_ENTRY" --version --json >/dev/null
+cleanup_cli_probe
+CLI_PROBE_ROOT=""
+trap - EXIT
 
 echo "==> 退出 ${APP_NAME}..."
 osascript -e "tell application \"${APP_NAME}\" to quit" 2>/dev/null || true

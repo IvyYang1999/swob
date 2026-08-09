@@ -148,6 +148,43 @@ describe('duplicate recovery executor', () => {
     expect(packageCount(quarantineRoot)).toBe(0)
   })
 
+  it('最终 rename 前父目录被替换为库外 symlink 时 fail closed', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+    const outside = path.join(workRoot, 'outside')
+    fs.mkdirSync(outside)
+
+    await expect(executeDuplicateRecoveryPlan(libraryRoot, report, {
+      quarantineRoot,
+      beforeMove: (move, index) => {
+        if (index !== 0) return
+        const parent = path.dirname(move.fromPath)
+        fs.renameSync(parent, `${parent}.physical`)
+        fs.symlinkSync(outside, parent, 'dir')
+      }
+    })).rejects.toThrow('duplicate-recovery-original-parent-not-physical-directory')
+
+    expect(packageCount(quarantineRoot)).toBe(0)
+  })
+
+  it('最终 rename 前 quarantine 事务目录被替换时不跟随写入', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+    const outside = path.join(workRoot, 'outside-quarantine')
+    fs.mkdirSync(outside)
+
+    await expect(executeDuplicateRecoveryPlan(libraryRoot, report, {
+      quarantineRoot,
+      beforeMove: (move, index) => {
+        if (index !== 0) return
+        const planDirectory = path.dirname(move.quarantinePath)
+        fs.renameSync(planDirectory, `${planDirectory}.physical`)
+        fs.symlinkSync(outside, planDirectory, 'dir')
+      }
+    })).rejects.toThrow('duplicate-recovery-rollback-incomplete')
+
+    expect(fs.readdirSync(outside)).toEqual([])
+    expect(packageCount(libraryRoot)).toBe(4)
+  })
+
   it('启动时自动回滚未到达 complete journal 的中断事务', async () => {
     const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
     const prepared = await prepareDuplicateRecoveryExecution(libraryRoot, report, { quarantineRoot })
@@ -204,5 +241,62 @@ describe('duplicate recovery executor', () => {
       .rejects.toThrow('duplicate-recovery-rollback-package-changed')
     expect(fs.existsSync(move.fromPath)).toBe(false)
     expect(fs.existsSync(move.quarantinePath)).toBe(true)
+  })
+
+  it('complete journal 不依赖已经消失的 original parent', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+    await executeDuplicateRecoveryPlan(libraryRoot, report, { quarantineRoot })
+    const planDirectory = path.join(quarantineRoot, report.planId.replace(/^plan:/, ''))
+    const journalPath = path.join(planDirectory, 'recovery-journal.json')
+    const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'))
+    journal.moves[0].originalPath = path.join(fs.realpathSync(libraryRoot), 'removed-parent', 'package')
+    fs.writeFileSync(journalPath, JSON.stringify(journal))
+
+    await expect(recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot))
+      .resolves.toEqual({ recoveredPlanCount: 0, recoveredPackageCount: 0 })
+  })
+
+  it('恢复 rename 紧前父目录被换成库外 symlink 时拒绝回灌', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+    const prepared = await prepareDuplicateRecoveryExecution(libraryRoot, report, { quarantineRoot })
+    const move = prepared.moves[0]
+    const planDirectory = path.dirname(move.quarantinePath)
+    fs.mkdirSync(planDirectory, { recursive: true })
+    fs.writeFileSync(path.join(planDirectory, 'recovery-journal.json'), JSON.stringify({
+      schemaVersion: 1,
+      planId: prepared.planId,
+      state: 'applying',
+      createdAt: '2026-08-09T00:00:00.000Z',
+      moves: [{
+        pathId: move.pathId,
+        originalPath: move.fromPath,
+        quarantinePath: move.quarantinePath,
+        expectedPackageTreeHash: move.expectedPackageTreeHash,
+        state: 'quarantined'
+      }]
+    }))
+    fs.renameSync(move.fromPath, move.quarantinePath)
+    const outside = path.join(workRoot, 'outside')
+    fs.mkdirSync(outside)
+
+    await expect(recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot, {
+      beforeRestore: () => {
+        const parent = path.dirname(move.fromPath)
+        fs.renameSync(parent, `${parent}.physical`)
+        fs.symlinkSync(outside, parent, 'dir')
+      }
+    })).rejects.toThrow('duplicate-recovery-original-parent-not-physical-directory')
+    expect(fs.existsSync(move.quarantinePath)).toBe(true)
+  })
+
+  it('symlink journal 被拒绝且不会读取目标文件', async () => {
+    const planDirectory = path.join(quarantineRoot, 'a'.repeat(24))
+    fs.mkdirSync(planDirectory, { recursive: true })
+    const target = path.join(workRoot, 'outside-journal.json')
+    fs.writeFileSync(target, '{}')
+    fs.symlinkSync(target, path.join(planDirectory, 'recovery-journal.json'))
+
+    await expect(recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot))
+      .rejects.toThrow('duplicate-recovery-journal-not-physical-file')
   })
 })

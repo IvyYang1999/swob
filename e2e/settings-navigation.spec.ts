@@ -51,18 +51,18 @@ test.afterAll(async () => {
   if (fixtureHome) fs.rmSync(fixtureHome, { recursive: true, force: true })
 })
 
-test('纵向左栏十项同时可见，无横向 Tab，旧配置迁移生效', async () => {
+test('纵向左栏十一项同时可见，无横向 Tab，旧配置迁移生效', async () => {
   const dialog = page.getByRole('dialog', { name: '设置' })
   const nav = dialog.getByRole('navigation', { name: '设置分类' })
   const items = nav.getByRole('button')
-  await expect(items).toHaveCount(10)
-  await expect(items).toHaveText(['通用', 'AI 智能', 'Lens', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI'])
+  await expect(items).toHaveCount(11)
+  await expect(items).toHaveText(['通用', 'AI 智能', 'Lens', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI', '诊断与修复'])
   await expect(dialog.getByRole('tab')).toHaveCount(0)
   await expect(nav.getByRole('button', { name: '外观' })).toHaveCount(0)
   await expect(nav.getByRole('button', { name: '通用' })).toHaveAttribute('aria-current', 'page')
 
-  // 十项都在可视区(左栏不滚动即可见)
-  for (const name of ['通用', 'AI 智能', 'Lens', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI']) {
+  // 十一项都在可视区(左栏不滚动即可见)
+  for (const name of ['通用', 'AI 智能', 'Lens', '助手', '终端', '继续', 'SSH', '视图', '更新', 'CLI', '诊断与修复']) {
     await expect(nav.getByRole('button', { name })).toBeInViewport()
   }
 
@@ -249,6 +249,31 @@ test('更新与 CLI 完全分离', async () => {
   await navItem('CLI').click()
   await expect(page.getByText('CLI & Agent')).toBeVisible()
   await expect(page.getByRole('button', { name: '检查更新' })).toHaveCount(0)
+})
+
+test('诊断默认收敛，Debug Mode 才展开原始状态且窄窗无横向溢出', async () => {
+  await navItem('诊断与修复').click()
+  const content = page.locator('[data-settings-category="diagnostics"]')
+  await expect(content.getByTestId('diagnostics-summary')).toBeVisible()
+  await expect(content.getByTestId('diagnostics-raw')).toHaveCount(0)
+  await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'diagnostics-default.png') })
+
+  await content.getByRole('checkbox', { name: 'Debug Mode' }).check()
+  await expect(content.getByTestId('diagnostics-raw')).toContainText('"dimensions"')
+  await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'diagnostics-debug.png') })
+
+  await page.setViewportSize({ width: 480, height: 520 })
+  const metrics = await content.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight
+  }))
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1)
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
+  await page.getByRole('dialog').screenshot({ path: path.join(screenshotDir, 'diagnostics-narrow.png') })
+  await page.setViewportSize({ width: 760, height: 660 })
+  await content.getByRole('checkbox', { name: 'Debug Mode' }).uncheck()
 })
 
 test('窄窗口仍是纵向导航,左栏固定,右侧内容独立滚动', async () => {

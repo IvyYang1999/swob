@@ -11,6 +11,7 @@
     "planId",
     "contentPolicy",
     "sourceHashing",
+    "inventoryScope",
     "validity",
     "quarantine",
     "summary",
@@ -33,6 +34,7 @@
       }
     },
     "sourceHashing": { "enum": ["enabled", "disabled"] },
+    "inventoryScope": { "enum": ["all-conflicts", "repair-candidates"] },
     "validity": {
       "type": "object",
       "additionalProperties": false,
@@ -105,9 +107,9 @@
     "file": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["relativePath", "role", "kind", "size", "mtime"],
+      "required": ["filePathId", "role", "kind", "size", "mtime"],
       "properties": {
-        "relativePath": { "type": "string", "minLength": 1 },
+        "filePathId": { "type": "string", "pattern": "^file:[0-9a-f]{24}$" },
         "role": { "enum": ["manifest", "backup", "transcript", "branch-transcript", "derived", "user-file", "icloud-placeholder", "symlink"] },
         "kind": { "enum": ["file", "symlink", "other"] },
         "size": { "type": "integer", "minimum": 0 },
@@ -212,7 +214,7 @@
         "isSymlink": { "type": "boolean" },
         "symlinkTargetHash": { "type": "string" },
         "cloudState": { "enum": ["local", "icloud-placeholder"] },
-        "inventoryState": { "enum": ["complete", "unreadable"] },
+        "inventoryState": { "enum": ["complete", "manifest-only", "unreadable"] },
         "manifest": { "$ref": "#/$defs/manifest" },
         "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
         "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
@@ -222,8 +224,8 @@
           "additionalProperties": false,
           "required": ["userFiles", "branchTranscripts", "notes", "highlights", "backup"],
           "properties": {
-            "userFiles": { "type": "array", "items": { "type": "string" } },
-            "branchTranscripts": { "type": "array", "items": { "type": "string" } },
+            "userFiles": { "type": "array", "items": { "type": "string", "pattern": "^file:[0-9a-f]{24}$" } },
+            "branchTranscripts": { "type": "array", "items": { "type": "string", "pattern": "^file:[0-9a-f]{24}$" } },
             "notes": { "type": "boolean" },
             "highlights": { "type": "boolean" },
             "backup": { "type": "boolean" }

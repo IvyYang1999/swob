@@ -30,7 +30,8 @@ const ARBITER_EPOCH_INDEX = 1
 const ARBITER_PROCESS_PID_INDEX = 2
 const ARBITER_PROCESS_START_HIGH_INDEX = 3
 const ARBITER_PROCESS_START_LOW_INDEX = 4
-const ARBITER_PARTICIPANT_START_INDEX = 5
+const ARBITER_CLOSED_INDEX = 5
+const ARBITER_PARTICIPANT_START_INDEX = 6
 const ARBITER_PARTICIPANT_SLOTS = 64
 const ARBITER_PARTICIPANT_SLOT_BITS = 7
 const ARBITER_PARTICIPANT_SLOT_MASK = (1 << ARBITER_PARTICIPANT_SLOT_BITS) - 1
@@ -179,6 +180,15 @@ function abortArbiterWait(): never {
   throw error
 }
 
+export class LibraryWriterCoordinatorClosedError extends Error {
+  readonly code = 'LIBRARY_WRITER_COORDINATOR_CLOSED'
+
+  constructor() {
+    super('Library writer coordinator is permanently closed for this process')
+    this.name = 'LibraryWriterCoordinatorClosedError'
+  }
+}
+
 function activeArbiterContext(): LibraryWriterArbiterContext {
   const active = writerArbiterContext.getStore()
   if (active) return active
@@ -186,11 +196,22 @@ function activeArbiterContext(): LibraryWriterArbiterContext {
 }
 
 function assertArbiterWaitCurrent(context: LibraryWriterArbiterContext, state: Int32Array): void {
+  if (Atomics.load(state, ARBITER_CLOSED_INDEX) !== 0) {
+    throw new LibraryWriterCoordinatorClosedError()
+  }
   if (context.shouldCancel?.() || Atomics.load(state, ARBITER_EPOCH_INDEX) !== context.epoch) {
     abortArbiterWait()
   }
   const slotIndex = participantSlotIndex(context.participantId)
   if (slotIndex === null || Atomics.load(state, slotIndex) !== context.participantId) abortArbiterWait()
+}
+
+export function assertLibraryWriterArbiterOpen(): void {
+  const context = activeArbiterContext()
+  const state = arbiterState(context.buffer)
+  if (Atomics.load(state, ARBITER_CLOSED_INDEX) !== 0) {
+    throw new LibraryWriterCoordinatorClosedError()
+  }
 }
 
 function arbiterProcessGenerationStatus(
@@ -313,6 +334,21 @@ export function advanceLibraryWriterArbiterEpoch(): number {
   reclaimDeadArbiterOwner(currentLibraryWriterArbiterWire(), mainWriterArbiterState)
   Atomics.notify(mainWriterArbiterState, ARBITER_OWNER_INDEX)
   return epoch
+}
+
+/** Permanently reject every new writer in this process and its writer Workers. */
+export function closeLibraryWriterArbiter(): void {
+  Atomics.store(mainWriterArbiterState, ARBITER_CLOSED_INDEX, 1)
+  advanceLibraryWriterArbiterEpoch()
+}
+
+/** Test isolation only; production must never reopen a closed writer runtime. */
+export function resetLibraryWriterArbiterForTests(): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('library-writer-arbiter-reset-is-test-only')
+  }
+  Atomics.store(mainWriterArbiterState, ARBITER_CLOSED_INDEX, 0)
+  advanceLibraryWriterArbiterEpoch()
 }
 
 export function runWithLibraryWriterArbiterContext<T>(

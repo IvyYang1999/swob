@@ -1,5 +1,5 @@
 import { translate } from '../../i18n'
-import { StaleDisclaimer } from '../LibraryHealthBanner'
+import { StaleDisclaimer } from '../LibraryFreshnessIndicators'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useStore } from '../../store'
 import { FilterBar } from './FilterBar'

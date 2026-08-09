@@ -123,14 +123,15 @@ describe('SettingsPanel 纵向导航设置', () => {
 
   afterEach(() => cleanup())
 
-  it('左侧纵向导航显示 10 个分类(含 AI 智能、Lens 和助手),通用不再叫外观,无横向 Tab', () => {
+  it('左侧纵向导航显示 11 个分类(含诊断与修复),通用不再叫外观,无横向 Tab', () => {
     render(<SettingsPanel />)
 
     const nav = screen.getByRole('navigation')
-    expect(within(nav).getAllByRole('button')).toHaveLength(10)
+    expect(within(nav).getAllByRole('button')).toHaveLength(11)
     expect(within(nav).getByRole('button', { name: 'AI 智能' })).not.toBeNull()
     expect(within(nav).getByRole('button', { name: 'Lens' })).not.toBeNull()
     expect(within(nav).getByRole('button', { name: '通用' })).not.toBeNull()
+    expect(within(nav).getByRole('button', { name: '诊断与修复' })).not.toBeNull()
     expect(within(nav).queryByRole('button', { name: '外观' })).toBeNull()
     expect(screen.queryAllByRole('tab')).toHaveLength(0)
     expect(within(nav).getByRole('button', { name: '通用' }).getAttribute('aria-current')).toBe('page')

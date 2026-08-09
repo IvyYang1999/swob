@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, Sparkles, Bot, Puzzle, X
+  Monitor, Terminal, Play, Server, PanelsTopLeft, RefreshCw, SquareTerminal, Sparkles, Bot, Puzzle, X, Stethoscope
 } from 'lucide-react'
 import { useStore } from '../../store'
 import { useT } from '../../i18n'
@@ -14,9 +14,10 @@ import { UpdateSettings } from './UpdateSettings'
 import { CliSettings } from './CliSettings'
 import { AssistantSettings } from './AssistantSettings'
 import { LensSettings } from './LensSettings'
+import { DiagnosticsSettings } from './DiagnosticsSettings'
 import { WindowsAlphaNotice, usePlatformCapabilities } from '../WindowsAlphaNotice'
 
-export type SettingsCategory = 'general' | 'ai' | 'lens' | 'assistant' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli'
+export type SettingsCategory = 'general' | 'ai' | 'lens' | 'assistant' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli' | 'diagnostics'
 
 const CATEGORIES: Array<{
   id: SettingsCategory
@@ -32,7 +33,8 @@ const CATEGORIES: Array<{
   { id: 'ssh', icon: Server, labelKey: 'renderer.settings_panel.category_ssh' },
   { id: 'view', icon: PanelsTopLeft, labelKey: 'renderer.settings_panel.category_view' },
   { id: 'updates', icon: RefreshCw, labelKey: 'renderer.settings_panel.category_updates' },
-  { id: 'cli', icon: SquareTerminal, labelKey: 'renderer.settings_panel.category_cli' }
+  { id: 'cli', icon: SquareTerminal, labelKey: 'renderer.settings_panel.category_cli' },
+  { id: 'diagnostics', icon: Stethoscope, labelKey: 'renderer.settings_panel.category_diagnostics' }
 ]
 
 function SettingsNav({ active, onSelect, hidden }: {
@@ -147,6 +149,7 @@ export function SettingsPanel() {
               {category === 'view' && <ViewSettings />}
               {category === 'updates' && <UpdateSettings />}
               {category === 'cli' && <CliSettings />}
+              {category === 'diagnostics' && <DiagnosticsSettings />}
             </div>
           </div>
         </div>

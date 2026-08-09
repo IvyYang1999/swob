@@ -32,6 +32,11 @@ import type {
   SessionFreshness
 } from '../shared/library-health-contract'
 import type {
+  DuplicateRecoveryApplyResult,
+  DuplicateRecoveryProgress,
+  DuplicateRecoverySummary
+} from '../shared/duplicate-recovery-contract'
+import type {
   ReportJobSnapshot,
   ReportJobStartRequest,
   ReportJobStatusRequest,
@@ -163,6 +168,17 @@ const api = {
     ipcRenderer.invoke('library:compensationProgress') as Promise<CompensationProgress>,
   libraryCompensationCancel: () => ipcRenderer.invoke('library:compensationCancel'),
   libraryCompensationRetry: () => ipcRenderer.invoke('library:compensationRetry'),
+  libraryAnalyzeDuplicateRecovery: () =>
+    ipcRenderer.invoke('library:analyzeDuplicateRecovery') as Promise<DuplicateRecoverySummary>,
+  libraryCancelDuplicateRecoveryAnalysis: () =>
+    ipcRenderer.invoke('library:cancelDuplicateRecoveryAnalysis') as Promise<boolean>,
+  libraryApplyDuplicateRecovery: (planId: string) =>
+    ipcRenderer.invoke('library:applyDuplicateRecovery', planId) as Promise<DuplicateRecoveryApplyResult>,
+  onDuplicateRecoveryProgress: (callback: (progress: DuplicateRecoveryProgress) => void) => {
+    const listener = (_event: unknown, progress: DuplicateRecoveryProgress) => callback(progress)
+    ipcRenderer.on('library:duplicateRecoveryProgress', listener)
+    return () => ipcRenderer.removeListener('library:duplicateRecoveryProgress', listener)
+  },
   onLibraryHealthChanged: (callback: (snapshot: LibraryHealthSnapshot) => void) => {
     const listener = (_event: unknown, data: LibraryHealthSnapshot) => callback(data)
     ipcRenderer.on('library:healthChanged', listener)

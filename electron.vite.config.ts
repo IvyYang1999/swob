@@ -18,7 +18,8 @@ export default defineConfig({
           'summary-cache-migration-worker': resolve(
             __dirname,
             'src/main/summary-cache-migration-worker.cjs'
-          )
+          ),
+          'duplicate-recovery-worker': resolve(__dirname, 'src/main/duplicate-recovery-worker.ts')
         },
         output: {
           entryFileNames: '[name].js'

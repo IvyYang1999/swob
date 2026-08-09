@@ -202,9 +202,9 @@ describe('duplicate recovery planner', () => {
       conflictCount: 8,
       unresolvedCount: 2,
       classificationCounts: {
-        'canonical-candidate': 1,
+        'canonical-candidate': 2,
         'merge-required': 1,
-        'manual-review': 4,
+        'manual-review': 3,
         'missing-source': 1,
         corrupt: 1
       }
@@ -251,7 +251,9 @@ describe('duplicate recovery planner', () => {
       'unique-user-files'
     ]))
     expect(merge?.packages.some((item) => item.uniqueEvidence.branchTranscripts.length > 0)).toBe(true)
-    expect(merge?.packages.some((item) => item.uniqueEvidence.userFiles.includes('attachments/private-name.bin'))).toBe(true)
+    expect(merge?.packages.some((item) => item.uniqueEvidence.userFiles.some((id) => /^file:[0-9a-f]{24}$/.test(id)))).toBe(true)
+    expect(JSON.stringify(report)).not.toContain('attachments/private-name.bin')
+    expect(renderDuplicateRecoveryMarkdown(report)).not.toContain('attachments/private-name.bin')
     expect(merge?.recovery).toMatchObject({ action: 'manual-merge', moves: [], reverse: [] })
     expect(merge?.packages.every((item) => item.role === 'preserve')).toBe(true)
   })
@@ -268,13 +270,18 @@ describe('duplicate recovery planner', () => {
       item.classification === 'manual-review' && item.packages[0].isSymlink)).toBe(true)
   })
 
-  it('legacy 重复包和跨逻辑会话 packageId 碰撞都不会被选为 canonical', async () => {
+  it('legacy 重复包只有在内容与源均等价时可安全收敛；packageId 碰撞仍 fail closed', async () => {
     const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
-    const legacy = report.conflicts.find((item) => item.reasons.includes('legacy-package-identity'))
+    const legacy = report.conflicts.find((item) =>
+      item.packages.every((candidate) => candidate.manifest.packageState === 'legacy'))
     expect(legacy).toMatchObject({
       registryReason: 'duplicate-packages',
-      classification: 'manual-review',
-      recovery: { action: 'preserve-all', moves: [], reverse: [] }
+      classification: 'canonical-candidate',
+      recovery: {
+        action: 'quarantine-equivalent-duplicates',
+        moves: [{ action: 'future-quarantine' }],
+        reverse: [{ action: 'restore-from-quarantine' }]
+      }
     })
     expect(legacy?.packages.every((item) => item.manifest.packageState === 'legacy')).toBe(true)
 
@@ -373,5 +380,26 @@ describe('duplicate recovery planner', () => {
       'missing-source',
       'corrupt'
     ])
+  })
+
+  it('两阶段扫描只深读冲突包，并提供可取消 worker 所需的有界进度', async () => {
+    createPackage('unique-package', 'unique-session', 'unique-package-id', {
+      'backup.jsonl': 'unique\n',
+      'large-derived.bin': 'this non-conflict payload must not enter the conflict phase'
+    })
+    const progress: Array<{ phase: string; discoveredPackages: number; conflictPackages: number; analyzedConflictPackages: number }> = []
+
+    const report = await buildDuplicateRecoveryReport(libraryRoot, {
+      quarantineRoot,
+      hashSources: true,
+      onProgress: (update) => progress.push(update)
+    })
+
+    const final = progress.at(-1)
+    expect(final).toMatchObject({ phase: 'complete', discoveredPackages: report.summary.packageCount })
+    expect(final!.conflictPackages).toBeLessThan(report.summary.packageCount)
+    expect(final!.analyzedConflictPackages).toBe(final!.conflictPackages)
+    expect(progress.some((update) => update.phase === 'discovering')).toBe(true)
+    expect(progress.some((update) => update.phase === 'analyzing-conflicts')).toBe(true)
   })
 })

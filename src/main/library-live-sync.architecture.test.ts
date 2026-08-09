@@ -83,4 +83,21 @@ describe('live Library synchronization architecture', () => {
       /initialization\.catch\(\(error\) => \{[\s\S]*?if \(runtimeShuttingDown \|\| libraryRuntimePaused\) return[\s\S]*?transitionLibraryHealth/
     )
   })
+
+  it('closes the shared writer coordinator before a mutation-incomplete fatal dialog', () => {
+    const cleanup = source.match(/function cleanupRuntimeResources[\s\S]*?\n}\n/)?.[0] || ''
+    expect(cleanup).not.toContain('closeLibraryWriterRuntime()')
+    const applyHandler = source.match(
+      /ipcMain\.handle\('library:applyDuplicateRecovery',[\s\S]*?\n}\)\n\nipcMain\.handle\('library:selectDirectory'/
+    )?.[0] || ''
+    expect(applyHandler).toContain('error instanceof DuplicateRecoveryMutationIncompleteError')
+    expect(applyHandler.indexOf('closeLibraryWriterRuntime()')).toBeGreaterThan(-1)
+    expect(applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(
+      applyHandler.indexOf('closeLibraryWriterRuntime()')
+    )
+    expect(applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(-1)
+    expect(applyHandler.indexOf('dialog.showErrorBox(')).toBeGreaterThan(
+      applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')
+    )
+  })
 })

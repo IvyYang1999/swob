@@ -12,7 +12,7 @@ import type { InspectorTab } from './inspector'
 import { getHarnessPresentation } from '../utils/harness-presentation'
 import { useLensEnabled } from '../hooks/useLens'
 import { useSessionFreshness, formatLag } from '../hooks/useLibraryHealth'
-import { StaleDisclaimer } from './LibraryHealthBanner'
+import { StaleDisclaimer } from './LibraryFreshnessIndicators'
 
 // --- Shared types & utilities ---
 

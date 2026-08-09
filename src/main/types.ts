@@ -356,5 +356,7 @@ export interface UserConfig {
     providerAdapterMode?: 'unified-v2' | 'legacy'
     /** Per-source fail-closed fallback while other v2 adapters stay active. */
     legacyProviderSources?: import('../shared/seven-source-contract-v2').UnifiedProviderSource[]
+    /** Raw health state is opt-in and never shown in the normal workspace. */
+    debugMode?: boolean
   }
 }

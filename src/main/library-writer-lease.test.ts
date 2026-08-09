@@ -20,8 +20,12 @@ import {
 import { deriveHostBootIdentity, deriveLibraryHostProof } from './host-identity'
 import { LibraryPathUnsafeError } from './library-path-safety'
 import {
+  closeLibraryWriterCoordinator,
+  LibraryWriterCoordinatorClosedError,
   readLibraryWriteGeneration,
-  runWithLibraryWriter
+  resetLibraryWriterCoordinatorForTests,
+  runWithLibraryWriter,
+  runWithLibraryWriterSync
 } from './library-write-coordinator'
 let root: string
 
@@ -47,6 +51,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetLibraryWriterCoordinatorForTests()
   fs.rmSync(root, { recursive: true, force: true })
 })
 
@@ -404,6 +409,36 @@ describe('Library 跨进程单写者 lease', () => {
     await expect(runWithLibraryWriter(root, 'device-a', 'metadata', () => {
       throw new Error('synthetic-crash-before-result')
     }, quiet)).rejects.toThrow('synthetic-crash-before-result')
+    await runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet)
+    expect(readLibraryWriteGeneration(root)).toBe(2)
+  })
+
+  it('未触发 fatal close 时已进入的 writer 可在排空阶段完成 nested 写入', async () => {
+    let nestedCompleted = false
+    await runWithLibraryWriter(root, 'device-a', 'maintenance', async () => {
+      await Promise.resolve()
+      await runWithLibraryWriter(root, 'device-a', 'metadata', () => {
+        nestedCompleted = true
+      }, quiet)
+    }, quiet)
+    expect(nestedCompleted).toBe(true)
+    expect(readLibraryWriteGeneration(root)).toBe(1)
+  })
+
+  it('fatal closed latch 在既有 writer 释放后永久拒绝后续同步、异步与 Worker writer', async () => {
+    const workerParticipant = registerLibraryWriterArbiterParticipant()
+    const workerWire = currentLibraryWriterArbiterWire(workerParticipant)
+    await runWithLibraryWriter(root, 'device-a', 'maintenance', () => {}, quiet)
+    closeLibraryWriterCoordinator()
+    workerParticipant.release()
+
+    await expect(runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet))
+      .rejects.toBeInstanceOf(LibraryWriterCoordinatorClosedError)
+    await expect(runWithLibraryWriterArbiterContext(workerWire, undefined,
+      () => runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet)))
+      .rejects.toBeInstanceOf(LibraryWriterCoordinatorClosedError)
+    expect(() => runWithLibraryWriterSync(root, 'device-a', 'metadata', () => {}, quiet))
+      .toThrow(LibraryWriterCoordinatorClosedError)
     expect(readLibraryWriteGeneration(root)).toBe(1)
   })
 })

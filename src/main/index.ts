@@ -20,6 +20,7 @@ import {
 } from '../shared/registry/builtin-commands'
 import { parseActiveClaudeSessionIds } from '../shared/active-session-processes'
 import { execFile, type ChildProcess } from 'child_process'
+import { Worker } from 'node:worker_threads'
 import * as fs from 'fs'
 import { getLocalNetworkInfo, queryPublicIp } from './network-info'
 import {
@@ -106,6 +107,7 @@ import {
   applyLibraryOrganization,
   undoLastLibraryOrganization,
   recoverInterruptedLibraryOrganization,
+  closeLibraryWriterRuntime,
   withLibraryMaintenanceWriter,
   getLibrarySessionRegistryDiagnostics,
   getSessionFreshness,
@@ -153,6 +155,16 @@ import {
 } from './library-health'
 import { advanceLibraryWriterArbiterEpoch } from './library-writer-lease'
 import { loadConfig, saveConfig } from './config-store'
+import type { DuplicateRecoveryReport } from './duplicate-recovery-planner'
+import {
+  DuplicateRecoveryMutationIncompleteError,
+  executeDuplicateRecoveryPlan,
+  recoverInterruptedDuplicateRecoveryTransactions
+} from './duplicate-recovery-executor'
+import type {
+  DuplicateRecoveryProgress,
+  DuplicateRecoverySummary
+} from '../shared/duplicate-recovery-contract'
 import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
 import { detectSessionSourceFromPath } from './session-source'
@@ -362,6 +374,15 @@ const LIBRARY_WRITER_RECOVERY_JITTER_MS = 5_000
 let libraryWriterRecoveryTimer: NodeJS.Timeout | null = null
 let libraryWriterRecoveryAttempts = 0
 let libraryWriterRecoveryPromise: Promise<void> | null = null
+let activeDuplicateRecoveryAnalysis: {
+  worker: Worker
+  reject: (error: Error) => void
+} | null = null
+let preparedDuplicateRecovery: {
+  libraryRoot: string
+  quarantineRoot: string
+  report: DuplicateRecoveryReport
+} | null = null
 
 function clearLibraryWriterRecoverySchedule(): void {
   if (libraryWriterRecoveryTimer) clearTimeout(libraryWriterRecoveryTimer)
@@ -1184,6 +1205,9 @@ function cleanupRuntimeResources(): Promise<void> {
   activePollProcess = null
   const currentFreshnessMonitor = freshnessMonitor
   freshnessMonitor = null
+  const currentDuplicateRecoveryAnalysis = activeDuplicateRecoveryAnalysis
+  activeDuplicateRecoveryAnalysis = null
+  preparedDuplicateRecovery = null
   if (currentFreshnessMonitor) clearInterval(currentFreshnessMonitor)
   clearLibraryWriterRecoverySchedule()
   deferredLibrarySyncRequests.clear()
@@ -1230,6 +1254,15 @@ function cleanupRuntimeResources(): Promise<void> {
         currentLibraryRescanController?.dispose()
         currentTranscriptWatcher?.stop()
         currentSessionSyncCoordinator?.stop()
+      }
+    },
+    {
+      name: 'duplicate-recovery-analysis',
+      timeoutMs: 250,
+      run: async () => {
+        if (!currentDuplicateRecoveryAnalysis) return
+        currentDuplicateRecoveryAnalysis.reject(new Error('Runtime is shutting down'))
+        await currentDuplicateRecoveryAnalysis.worker.terminate()
       }
     },
     {
@@ -3633,6 +3666,72 @@ ipcMain.handle('library:isInitialized', (_event, rootPath: string) => {
 
 // --- Library Health / Freshness / Compensation ---
 
+function duplicateRecoverySummary(report: DuplicateRecoveryReport): DuplicateRecoverySummary {
+  const autoRepairable = report.conflicts.filter((conflict) =>
+    conflict.classification === 'canonical-candidate' &&
+    conflict.recovery.action === 'quarantine-equivalent-duplicates')
+  const manualMergeGroupCount = report.conflicts
+    .filter((conflict) => conflict.classification === 'merge-required').length
+  return {
+    schemaVersion: 1,
+    planId: report.planId,
+    packageCount: report.summary.packageCount,
+    conflictCount: report.summary.conflictCount,
+    autoRepairableGroupCount: autoRepairable.length,
+    autoRepairablePackageCount: autoRepairable
+      .reduce((count, conflict) => count + conflict.recovery.moves.length, 0),
+    manualMergeGroupCount,
+    preservedGroupCount: report.summary.conflictCount - autoRepairable.length - manualMergeGroupCount
+  }
+}
+
+function duplicateRecoveryQuarantineRoot(): string {
+  return path.join(app.getPath('userData'), 'Recovery Quarantine')
+}
+
+function runDuplicateRecoveryAnalysis(
+  libraryRoot: string,
+  quarantineRoot: string
+): Promise<DuplicateRecoveryReport> {
+  if (activeDuplicateRecoveryAnalysis) throw new Error('duplicate-recovery-analysis-already-running')
+  const workerPath = path.join(__dirname, 'duplicate-recovery-worker.js')
+  return new Promise<DuplicateRecoveryReport>((resolve, reject) => {
+    let settled = false
+    const worker = new Worker(workerPath, { workerData: { libraryRoot, quarantineRoot } })
+    const finish = (error?: Error, report?: DuplicateRecoveryReport) => {
+      if (settled) return
+      settled = true
+      if (activeDuplicateRecoveryAnalysis?.worker === worker) activeDuplicateRecoveryAnalysis = null
+      if (error) reject(error)
+      else if (report) resolve(report)
+      else reject(new Error('duplicate-recovery-analysis-ended-without-report'))
+    }
+    activeDuplicateRecoveryAnalysis = { worker, reject: (error) => finish(error) }
+    worker.on('message', (message: {
+      kind?: unknown
+      progress?: DuplicateRecoveryProgress
+      report?: DuplicateRecoveryReport
+      error?: unknown
+    }) => {
+      if (message.kind === 'progress' && message.progress) {
+        mainWindow?.webContents.send('library:duplicateRecoveryProgress', message.progress)
+      } else if (message.kind === 'complete' && message.report) {
+        finish(undefined, message.report)
+      } else if (message.kind === 'error') {
+        finish(new Error(typeof message.error === 'string' ? message.error : 'duplicate-recovery-analysis-failed'))
+      }
+    })
+    worker.once('error', (error: unknown) => finish(
+      error instanceof Error ? error : new Error(String(error))
+    ))
+    worker.once('exit', (code) => {
+      if (!settled) finish(new Error(code === 0
+        ? 'duplicate-recovery-analysis-ended-without-report'
+        : 'duplicate-recovery-analysis-worker-failed'))
+    })
+  })
+}
+
 ipcMain.handle('library:getHealth', (): LibraryHealthSnapshot => {
   return getLibraryHealth()
 })
@@ -3663,6 +3762,86 @@ ipcMain.handle('library:compensationRetry', async () => {
   }
   await retryLibraryAfterWriterBlocked(true)
   return getCompensationProgress()
+})
+
+ipcMain.handle('library:analyzeDuplicateRecovery', async (): Promise<DuplicateRecoverySummary> => {
+  const libraryRoot = getLibraryRoot()
+  const quarantineRoot = duplicateRecoveryQuarantineRoot()
+  const report = await runDuplicateRecoveryAnalysis(libraryRoot, quarantineRoot)
+  if (path.resolve(getLibraryRoot()) !== path.resolve(libraryRoot)) {
+    throw new Error('duplicate-recovery-library-changed-during-analysis')
+  }
+  preparedDuplicateRecovery = { libraryRoot, quarantineRoot, report }
+  return duplicateRecoverySummary(report)
+})
+
+ipcMain.handle('library:cancelDuplicateRecoveryAnalysis', async (): Promise<boolean> => {
+  const active = activeDuplicateRecoveryAnalysis
+  if (!active) return false
+  active.reject(new Error('duplicate-recovery-analysis-cancelled'))
+  await active.worker.terminate()
+  return true
+})
+
+ipcMain.handle('library:applyDuplicateRecovery', async (_event, planId: unknown) => {
+  if (typeof planId !== 'string' || !/^plan:[0-9a-f]{24}$/.test(planId)) {
+    throw new Error('invalid-duplicate-recovery-plan-id')
+  }
+  const prepared = preparedDuplicateRecovery
+  if (!prepared || prepared.report.planId !== planId ||
+    path.resolve(prepared.libraryRoot) !== path.resolve(getLibraryRoot())) {
+    throw new Error('duplicate-recovery-plan-not-prepared')
+  }
+  let result
+  try {
+    result = await withLibraryMaintenanceWriter(() => executeDuplicateRecoveryPlan(
+      prepared.libraryRoot,
+      prepared.report,
+      { quarantineRoot: prepared.quarantineRoot }
+    ))
+  } catch (error) {
+    preparedDuplicateRecovery = null
+    if (error instanceof DuplicateRecoveryMutationIncompleteError) {
+      transitionLibraryHealth(
+        'read-only',
+        'DUPLICATE_RECOVERY_MUTATION_INCOMPLETE',
+        'Duplicate recovery could not prove a complete rollback; all Library runtime work is stopping'
+      )
+      console.error('[duplicate-recovery] Mutation may be incomplete; stopping Library runtime')
+      closeLibraryWriterRuntime()
+      const shutdown = cleanupRuntimeResources()
+      dialog.showErrorBox(
+        mainT('native.duplicate_recovery.apply_fatal_title'),
+        mainT('native.duplicate_recovery.apply_fatal_body')
+      )
+      void shutdown.finally(() => app.quit())
+    }
+    throw error
+  }
+  preparedDuplicateRecovery = null
+  try {
+    const tree = await requestLibraryScan()
+    adoptLibraryTree(tree)
+    const remainingConflictCount = getLibrarySessionRegistryDiagnostics()
+      .filter((binding) => binding.state === 'conflict').length
+    transitionLibraryHealth(
+      remainingConflictCount > 0 ? 'identity-conflict' : 'ready',
+      remainingConflictCount > 0 ? 'IDENTITY_CONFLICT' : 'DUPLICATE_RECOVERY_COMPLETE',
+      remainingConflictCount > 0
+        ? `${remainingConflictCount} logical session identities remain read-only after duplicate recovery`
+        : 'Equivalent duplicate packages moved to recoverable quarantine'
+    )
+    return { ...result, restartRequired: false }
+  } catch (error) {
+    transitionLibraryHealth(
+      'identity-conflict',
+      'DUPLICATE_RECOVERY_REFRESH_FAILED',
+      'Equivalent duplicate packages were quarantined, but the Library view must be refreshed after restart'
+    )
+    console.error('[duplicate-recovery] post-apply Library refresh failed:',
+      error instanceof Error ? error.message : 'unknown error')
+    return { ...result, restartRequired: true }
+  }
 })
 
 ipcMain.handle('library:selectDirectory', async () => {
@@ -4121,6 +4300,21 @@ app.whenReady().then(async () => {
     getLibraryRoot(),
     path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
   )
+  try {
+    await withLibraryMaintenanceWriter(() => recoverInterruptedDuplicateRecoveryTransactions(
+      getLibraryRoot(),
+      duplicateRecoveryQuarantineRoot()
+    ))
+  } catch (error) {
+    console.error('[duplicate-recovery] Interrupted transaction rollback failed:',
+      error instanceof Error ? error.message : 'unknown error')
+    dialog.showErrorBox(
+      mainT('native.duplicate_recovery.fatal_title'),
+      mainT('native.duplicate_recovery.fatal_body')
+    )
+    app.quit()
+    return
+  }
   try {
     recoverInterruptedLibraryOrganization()
   } catch (error) {

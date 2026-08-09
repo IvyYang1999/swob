@@ -14,7 +14,11 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           cli: resolve(__dirname, 'src/cli/index.ts'),
-          'library-worker': resolve(__dirname, 'src/main/library-worker.ts')
+          'library-worker': resolve(__dirname, 'src/main/library-worker.ts'),
+          'summary-cache-migration-worker': resolve(
+            __dirname,
+            'src/main/summary-cache-migration-worker.cjs'
+          )
         },
         output: {
           entryFileNames: '[name].js'

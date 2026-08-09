@@ -68,6 +68,7 @@
     "react-markdown": "^10.1.0",
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
+    "stream-json": "1.9.1",
     "zustand": "^5.0.11"
   },
   "optionalDependencies": {
@@ -85,12 +86,13 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/stream-json": "1.7.8",
     "@vitejs/plugin-react": "^5.1.4",
     "electron": "^40.10.6",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
-    "jsdom": "^29.0.1",
     "js-yaml": "4.3.0",
+    "jsdom": "^29.0.1",
     "sharp": "^0.34.5",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.9.3",

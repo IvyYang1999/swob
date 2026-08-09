@@ -32,7 +32,6 @@ import {
   buildSessionSummaryFromBackup
 } from './session-loader'
 import {
-  additiveSessionPatch,
   beginSessionBootstrap,
   sessionSummaryForRenderer
 } from './session-bootstrap'
@@ -164,8 +163,11 @@ import {
   getSearchIndexWriteCoordinator,
   LARGE_SEARCH_WORKER_RECYCLE_BYTES
 } from './search-index-writer'
-import { cancelCanonicalProviders } from './provider-runtime'
-import { closeCanonicalSessionStore } from './canonical-store'
+import {
+  cancelCanonicalProviders,
+  withCanonicalProviderRefreshBarrier
+} from './provider-runtime'
+import { closeCanonicalSessionStore, getLoadedCanonicalSession } from './canonical-store'
 import { buildInsights } from './insights'
 import {
   drilldownInsights,
@@ -332,6 +334,9 @@ const knownSessionIds = new Set<string>()
 let libraryInitialized = false
 let latestLibraryTree: LibraryTree | null = null
 let libraryInitializationPromise: Promise<void> | null = null
+const pendingProviderLibrarySessions = new Map<string, SessionSummary>()
+let providerLibrarySyncPromise: Promise<void> | null = null
+let providerLibraryQueueGeneration = 0
 let libraryHydrationGeneration = 0
 let usageFactSyncError: unknown = null
 interface UsageFactSyncSnapshot {
@@ -1183,17 +1188,18 @@ function cleanupRuntimeResources(): Promise<void> {
   clearLibraryWriterRecoverySchedule()
   deferredLibrarySyncRequests.clear()
   currentUsageFactSyncRunner?.stop(new Error('Runtime is shutting down'))
+  const providerLibrarySyncClosePromise = providerLibrarySyncPromise?.catch(() => undefined) || Promise.resolve()
   // Start draining immediately and overlap it with the bounded cleanup below.
   // LibraryWorkerClient refuses new requests once close() begins. Unlike the
   // other resources this promise must not be deadline-cancelled because
   // terminating active better-sqlite3 work can abort the whole process.
-  const libraryWorkerClosePromise = Promise.all([
+  const libraryWorkerClosePromise = providerLibrarySyncClosePromise.then(() => Promise.all([
     currentLibraryWorker?.close() || Promise.resolve(),
     currentLiveSessionSyncWorker?.close() || Promise.resolve(),
     currentLiveSessionSyncWorkerRecycle,
     currentUsageFactWorker?.close() || Promise.resolve(),
     closeSearchIndexWriteCoordinator(new Error('Runtime is shutting down'))
-  ])
+  ]))
 
   runtimeCleanupPromise = runRuntimeCleanup([
     { name: 'agent-child', timeoutMs: 800, run: shutdownAgentRuntime },
@@ -1552,6 +1558,115 @@ function emitProviderPatch(
     status,
     ...(errorCode ? { errorCode } : {})
   })
+}
+
+function isProviderSession(session: SessionSummary): boolean {
+  return providerUsesCanonicalRuntime(session.source || '')
+}
+
+function replaceCachedProviderSnapshot(snapshot: readonly SessionSummary[]): void {
+  const byId = new Map(
+    cachedSessions
+      .filter((session) => !isProviderSession(session))
+      .map((session) => [session.id, session])
+  )
+  for (const session of snapshot) byId.set(session.id, session)
+  cachedSessions = [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
+function scheduleProviderLibrarySynchronization(): void {
+  if (
+    providerLibrarySyncPromise ||
+    pendingProviderLibrarySessions.size === 0 ||
+    runtimeShuttingDown ||
+    libraryRuntimePaused ||
+    isOnboardingNeeded()
+  ) return
+
+  if (libraryInitializationPromise) {
+    const initialization = libraryInitializationPromise
+    void initialization.finally(() => {
+      queueMicrotask(scheduleProviderLibrarySynchronization)
+    }).catch(() => { /* Library recovery schedules the next durable attempt */ })
+    return
+  }
+  if (!libraryInitialized) return
+
+  const syncEpoch = libraryRuntimeEpoch
+  const syncGeneration = providerLibraryQueueGeneration
+  let failed = false
+  const work = (async (): Promise<void> => {
+    let archived = false
+    try {
+      await withCanonicalProviderRefreshBarrier(async () => {
+        const snapshot = [...pendingProviderLibrarySessions.entries()]
+        for (const [sessionId, session] of snapshot) {
+          if (
+            runtimeShuttingDown ||
+            libraryRuntimePaused ||
+            syncEpoch !== libraryRuntimeEpoch
+          ) return
+          // A newer complete snapshot may have removed this queued session
+          // while this drain was waiting behind a provider refresh.
+          if (pendingProviderLibrarySessions.get(sessionId) !== session) continue
+          if (!getLoadedCanonicalSession(session.id)) {
+            pendingProviderLibrarySessions.delete(sessionId)
+            continue
+          }
+          await ensureSessionInLibrary(session)
+          if (pendingProviderLibrarySessions.get(sessionId) === session) {
+            pendingProviderLibrarySessions.delete(sessionId)
+          }
+          archived = true
+        }
+      })
+      if (
+        archived &&
+        !runtimeShuttingDown &&
+        !libraryRuntimePaused &&
+        syncEpoch === libraryRuntimeEpoch
+      ) {
+        const tree = await requestLibraryScan(false)
+        await hydrateLibrarySessions(tree)
+      }
+    } catch (error) {
+      failed = true
+      if (runtimeShuttingDown || libraryRuntimePaused || syncEpoch !== libraryRuntimeEpoch) return
+      const classification = classifyLibraryError(error)
+      transitionLibraryHealth(
+        classification.state,
+        classification.errorCode,
+        classification.message,
+        classification.writerReason
+      )
+      if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
+      console.error(
+        '[provider-library-sync] canonical archive delayed:',
+        classification.errorCode,
+        classification.message
+      )
+    }
+  })()
+  providerLibrarySyncPromise = work
+  void work.finally(() => {
+    if (providerLibrarySyncPromise === work) providerLibrarySyncPromise = null
+    // Retry remaining work after progress, but do not spin on a persistent
+    // writer/path failure. Recovery, a new snapshot, or root activation will
+    // schedule the next attempt.
+    if (!failed || providerLibraryQueueGeneration !== syncGeneration) {
+      queueMicrotask(scheduleProviderLibrarySynchronization)
+    }
+  })
+}
+
+function queueProviderLibrarySnapshot(
+  snapshot: readonly SessionSummary[],
+  status: 'complete' | 'degraded'
+): void {
+  providerLibraryQueueGeneration++
+  if (status === 'complete') pendingProviderLibrarySessions.clear()
+  for (const session of snapshot) pendingProviderLibrarySessions.set(session.id, session)
+  scheduleProviderLibrarySynchronization()
 }
 
 function refreshLibraryHealthInventory(tree: LibraryTree): void {
@@ -2008,6 +2123,7 @@ async function initLibraryFromSessions(
     throw error
   } finally {
     if (libraryInitializationPromise === work) libraryInitializationPromise = null
+    queueMicrotask(scheduleProviderLibrarySynchronization)
   }
 }
 
@@ -2226,17 +2342,17 @@ function prepareImmediateSession(summary: SessionSummary): void {
 }
 
 function settleProviderBootstrap(
-  initialSessions: SessionSummary[],
   completion: ReturnType<typeof loadAllSessionsWithProviderStatus>,
   target: WebContents
 ): void {
   void completion.then(({ sessions: loaded, providerStatus }) => {
     const completeSessions = filterExcludedSources(loaded)
-    const patch = additiveSessionPatch(initialSessions, completeSessions)
-      .filter((session) => providerUsesCanonicalRuntime(session.source || ''))
+    const patch = completeSessions.filter(isProviderSession)
     for (const session of patch) prepareImmediateSession(session)
-    mergeSessionPatch(patch)
+    if (providerStatus === 'complete') replaceCachedProviderSnapshot(patch)
+    else mergeSessionPatch(patch)
     emitProviderPatch(target, patch, providerStatus)
+    queueProviderLibrarySnapshot(patch, providerStatus)
     if (patch.length > 0) {
       scheduleSearchIndexWarmup()
       void scheduleUsageFactSync()
@@ -2302,11 +2418,13 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   // background so lineage cannot delay the first session-list paint.
   const diskLineage = readSessionLineageRegistry()
   const bootstrap = await beginSessionBootstrap(
-    () => loadAllSessions({ readOnly: true, quiet: true }),
+    () => loadAllSessions({ readOnly: true, migrateLegacyCache: true, quiet: true }),
     () => loadAllSessionsWithProviderStatus()
   )
   const sessions = filterExcludedSources(bootstrap.initial)
-  cachedSessions = sessions
+  const lastKnownProviderSessions = cachedSessions.filter(isProviderSession)
+  cachedSessions = [...sessions, ...lastKnownProviderSessions]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   scheduleSearchIndexWarmup()
   void scheduleUsageFactSync()
   knownSessionIds.clear()
@@ -2314,9 +2432,7 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   // Phase 1: physical source summaries are authoritative and immediately
   // visible. Provider Host and canonical storage are additive phase 2 only.
   for (const session of sessions) prepareImmediateSession(session)
-  settleProviderBootstrap(sessions, bootstrap.completion, event.sender)
-
-  cachedSessions = sessions
+  settleProviderBootstrap(bootstrap.completion, event.sender)
 
   if (latestLibraryTree) void hydrateLibrarySessions(latestLibraryTree)
   if (!diskLineage) {
@@ -2358,7 +2474,8 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   return sessions.map(sessionSummaryForRenderer)
   } catch (err) {
     console.error('sessions:loadAll failed:', err)
-    return cachedSessions.map(sessionSummaryForRenderer) // return whatever we have
+    emitProviderPatch(event.sender, [], 'degraded', 'SOURCE_REFRESH_FAILED')
+    throw err
   }
 })
 
@@ -3580,6 +3697,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   try {
     await libraryWriterRecoveryPromise?.catch(() => undefined)
     await libraryInitializationPromise?.catch(() => undefined)
+    await providerLibrarySyncPromise?.catch(() => undefined)
     await liveSessionSyncWorkerRecycleGate.wait().catch((error) => {
       recordLibraryDiagnostic('LIVE_WORKER_RECYCLE_FAILED', 'Live worker recycle failed during root change')
       console.error('[session-sync] root-change recycle drain failed:', error)
@@ -3679,6 +3797,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     // adoption-time projections for the new root.
     if (librarySwitchCommitted) openStartupProjectionGate()
     if (librarySwitchCommitted) startupProjectionGate.finishStartup()
+    if (librarySwitchCommitted) scheduleProviderLibrarySynchronization()
     if (retryWriterAfterSwitch) scheduleLibraryWriterRecovery()
   }
 }

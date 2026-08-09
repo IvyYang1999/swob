@@ -4,9 +4,9 @@ This file is generated. Do not edit it by hand.
 Sources: package-lock.json production dependency graph and
 compliance/third-party-static-notices.json.
 Generator: scripts/generate-third-party-notices.mjs
-package-lock.json SHA-256: ed1a97c1db03c1c1188d021baa0dc0070f0542c5d0da40e83c1f6f978e5a5532
+package-lock.json SHA-256: c10f60275b479e7b3435a518fee9ea582dfec7e8730d89e5d1482ebdd0195724
 Static notices SHA-256: 9e9aa834f58398bc859c9491fe48a8a1df465e32bcac4874a0a75511801563d2
-Unique production packages: 201
+Unique production packages: 203
 Non-npm notices: 5
 
 Electron and Chromium notices are distributed separately as
@@ -102,6 +102,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 - d3-ease@3.0.1  https://www.npmjs.com/package/d3-ease/v/3.0.1
 - fast-uri@3.1.4  https://www.npmjs.com/package/fast-uri/v/3.1.4
+- stream-chain@2.2.5  https://www.npmjs.com/package/stream-chain/v/2.2.5
+- stream-json@1.9.1  https://www.npmjs.com/package/stream-json/v/1.9.1
 
 === ISC ===
 

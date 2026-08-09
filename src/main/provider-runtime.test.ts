@@ -16,7 +16,10 @@ import {
   CANONICAL_RECORDS_FILE
 } from './canonical-package'
 import { ProviderHost, type BuiltinProviderRuntime, type BuiltinProviderRuntimeV2 } from './provider-host'
-import { refreshCanonicalProviders } from './provider-runtime'
+import {
+  refreshCanonicalProviders,
+  withCanonicalProviderRefreshBarrier
+} from './provider-runtime'
 import { createPiProvider } from './providers/pi-provider'
 import { createKimiProvider } from './providers/kimi-provider'
 import { createHermesProvider } from './providers/hermes-provider'
@@ -589,5 +592,26 @@ describe('canonical provider runtime full chain', () => {
     expect(transient.tombstonedSessionRecordIds).toHaveLength(0)
     expect(store.listSessions('swob/pi')).toHaveLength(1)
     expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
+  })
+
+  it('serializes dependent Library writes with canonical refresh work', async () => {
+    const order: string[] = []
+    let releaseFirst!: () => void
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const first = withCanonicalProviderRefreshBarrier(async () => {
+      order.push('first:start')
+      await firstGate
+      order.push('first:end')
+    })
+    await Promise.resolve()
+    const second = withCanonicalProviderRefreshBarrier(async () => {
+      order.push('second')
+    })
+    await Promise.resolve()
+
+    expect(order).toEqual(['first:start'])
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(order).toEqual(['first:start', 'first:end', 'second'])
   })
 })

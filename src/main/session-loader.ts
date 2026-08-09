@@ -1,7 +1,11 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
+import { Worker } from 'node:worker_threads'
 import Database from 'better-sqlite3'
+import { parser as createJsonParser } from 'stream-json'
+import { pick } from 'stream-json/filters/Pick'
+import { streamObject } from 'stream-json/streamers/StreamObject'
 import type {
   RawJsonlMessage,
   ParsedMessage,
@@ -136,8 +140,10 @@ function assertTestCacheWriteContained(): void {
   }
 }
 
-function isLegacyCacheEntryCompatible(version: number, entry: DiskCacheEntry): boolean {
-  const source = entry?.perFile?.source
+function isLegacyCacheSourceCompatible(
+  version: number,
+  source: CachedSessionSource | undefined
+): boolean {
   // v26 introduced Codex lifecycle/lineage fields. v27 introduces the
   // OpenCode/ZCode authoritative per-call accounting projection. Preserve the
   // unaffected providers while forcing every source whose cached summary can
@@ -145,6 +151,10 @@ function isLegacyCacheEntryCompatible(version: number, entry: DiskCacheEntry): b
   if (version <= 26 && (source === 'opencode' || source === 'zcode')) return false
   if (version === 25 && source === 'codex') return false
   return true
+}
+
+function isLegacyCacheEntryCompatible(version: number, entry: DiskCacheEntry): boolean {
+  return isLegacyCacheSourceCompatible(version, entry?.perFile?.source)
 }
 
 function loadSqliteDiskCache(): DiskCache | null {
@@ -172,26 +182,140 @@ function loadSqliteDiskCache(): DiskCache | null {
   return null
 }
 
-function loadLegacyDiskCache(): DiskCache | null {
+/**
+ * Read the v25-v27 monolithic JSON cache one entry at a time. The live summary
+ * algorithm still needs the expanded entries, but this avoids simultaneously
+ * retaining a 245 MB UTF-16 source string, the whole parsed object graph, and
+ * Object.entries/filter reconstruction during the one-time upgrade.
+ */
+async function visitLegacyDiskCacheEntries(
+  visit: (filePath: string, entry: DiskCacheEntry, version: number) => void
+): Promise<number> {
+  const descriptor = fs.openSync(LEGACY_CACHE_FILE, 'r')
+  let version = 0
   try {
-    if (!fs.existsSync(LEGACY_CACHE_FILE)) return null
-    const data = JSON.parse(fs.readFileSync(LEGACY_CACHE_FILE, 'utf-8')) as Partial<DiskCache>
-    if (!data.entries || typeof data.entries !== 'object' || typeof data.version !== 'number') return null
-    if (!SELECTIVELY_COMPATIBLE_CACHE_VERSIONS.has(data.version)) return null
-    return {
-      version: CACHE_VERSION,
-      entries: Object.fromEntries(
-        Object.entries(data.entries).filter(([, entry]) =>
-          isLegacyCacheEntryCompatible(data.version!, entry)
-        )
-      )
-    }
-  } catch { /* corrupt cache */ }
+    const headerBytes = Buffer.allocUnsafe(1024 * 1024)
+    const headerLength = fs.readSync(descriptor, headerBytes, 0, headerBytes.length, 0)
+    const header = headerBytes.subarray(0, headerLength).toString('utf8')
+    version = Number(/"version"\s*:\s*(\d+)/.exec(header)?.[1] || 0)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  if (!SELECTIVELY_COMPATIBLE_CACHE_VERSIONS.has(version)) {
+    throw new Error('legacy-cache-version-incompatible')
+  }
+
+  const sourceStream = fs.createReadStream(LEGACY_CACHE_FILE)
+  const jsonParser = createJsonParser()
+  const entryPicker = pick({ filter: 'entries' })
+  const entryStream = streamObject()
+  // pipe() does not forward upstream failures. Propagate corruption to the
+  // async iterator so read-only fallback terminates as a cache miss.
+  sourceStream.on('error', (error) => entryStream.destroy(error))
+  jsonParser.on('error', (error) => entryStream.destroy(error))
+  entryPicker.on('error', (error) => entryStream.destroy(error))
+  const pipeline = sourceStream
+    .pipe(jsonParser)
+    .pipe(entryPicker)
+    .pipe(entryStream) as AsyncIterable<{ key: unknown; value: unknown }>
+  for await (const item of pipeline) {
+    if (typeof item.key !== 'string') continue
+    const entry = item.value as DiskCacheEntry
+    if (typeof entry?.sig !== 'string' || !entry.perFile) continue
+    visit(item.key, entry, version)
+  }
+  return version
+}
+
+async function loadLegacyDiskCache(): Promise<DiskCache | null> {
+  if (!fs.existsSync(LEGACY_CACHE_FILE)) return null
+  const entries: Record<string, DiskCacheEntry> = {}
+  try {
+    await visitLegacyDiskCacheEntries((filePath, entry, version) => {
+      if (isLegacyCacheEntryCompatible(version, entry)) entries[filePath] = entry
+    })
+    return { version: CACHE_VERSION, entries }
+  } catch { /* corrupt or incompatible cache */ }
   return null
 }
 
-function loadDiskCache(): DiskCache | null {
-  return loadSqliteDiskCache() || loadLegacyDiskCache()
+let legacyCacheMigrationFlight: Promise<boolean> | null = null
+
+function migrateLegacyDiskCacheToSqlite(): Promise<boolean> {
+  if (!fs.existsSync(LEGACY_CACHE_FILE) || fs.existsSync(CACHE_DB_FILE)) {
+    return Promise.resolve(false)
+  }
+  if (legacyCacheMigrationFlight) return legacyCacheMigrationFlight
+  const migration = migrateLegacyDiskCacheToSqliteOnce()
+  legacyCacheMigrationFlight = migration
+  void migration.finally(() => {
+    if (legacyCacheMigrationFlight === migration) legacyCacheMigrationFlight = null
+  }).catch(() => { /* the original promise is observed by its caller */ })
+  return migration
+}
+
+async function migrateLegacyDiskCacheToSqliteOnce(): Promise<boolean> {
+  assertTestCacheWriteContained()
+  if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true })
+  const sourceWorker = path.join(__dirname, 'summary-cache-migration-worker.cjs')
+  const builtWorker = path.join(__dirname, 'summary-cache-migration-worker.js')
+  const workerPath = fs.existsSync(sourceWorker) ? sourceWorker : builtWorker
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    const finish = (migrated: boolean, error?: string): void => {
+      if (settled) return
+      settled = true
+      if (
+        error &&
+        process.env.NODE_ENV === 'test' &&
+        process.env.SWOB_TEST_CACHE_MIGRATION_TRACE === '1'
+      ) {
+        console.warn('[summary-cache-migration]', error)
+      }
+      resolve(migrated)
+    }
+    let worker: Worker
+    try {
+      worker = new Worker(workerPath, {
+        workerData: {
+          legacyPath: LEGACY_CACHE_FILE,
+          databasePath: CACHE_DB_FILE,
+          cacheVersion: CACHE_VERSION
+        },
+        // A single legacy entry can be large, but the migration is strictly
+        // one-entry-at-a-time. Bound the disposable isolate so V8 collects
+        // between entries instead of growing toward the desktop process's
+        // multi-gigabyte default heap ceiling.
+        resourceLimits: {
+          maxOldGenerationSizeMb: 512,
+          maxYoungGenerationSizeMb: 64
+        }
+      })
+    } catch (error) {
+      finish(false, error instanceof Error ? error.message : String(error))
+      return
+    }
+    let reported: { migrated: boolean; error?: string } | null = null
+    worker.once('message', (message: { migrated?: unknown; error?: unknown }) => {
+      reported = {
+        migrated: message?.migrated === true,
+        ...(typeof message?.error === 'string' ? { error: message.error } : {})
+      }
+    })
+    worker.once('error', (error) => finish(
+      false,
+      error instanceof Error ? error.message : String(error)
+    ))
+    worker.once('exit', (code) => {
+      if (settled) return
+      if (code !== 0 || !reported) finish(false, reported?.error || `migration-worker-exited-${code}`)
+      else finish(reported.migrated, reported.error)
+    })
+  })
+}
+
+async function loadDiskCache(): Promise<DiskCache | null> {
+  return loadSqliteDiskCache() || await loadLegacyDiskCache()
 }
 
 function writeSqliteDiskCache(entries: Record<string, DiskCacheEntry>): unknown | null {
@@ -1996,7 +2120,8 @@ export interface CachedClaudeLineageLoadResult {
 export async function loadCachedClaudeLineageMetadata(
   filePaths: string[] = findClaudeSessionFiles()
 ): Promise<CachedClaudeLineageLoadResult> {
-  const cache = loadDiskCache()
+  await migrateLegacyDiskCacheToSqlite()
+  const cache = await loadDiskCache()
   const currentFiles = filePaths.flatMap((filePath) => {
     const sig = computeFileSig(filePath, 'claude-code')
     return sig ? [{ filePath, sig }] : []
@@ -2049,6 +2174,8 @@ export async function loadCachedClaudeLineageMetadata(
 export interface LoadAllSessionsOptions {
   /** Do not update the summary cache. Used by commands that promise read-only auditing. */
   readOnly?: boolean
+  /** Allow the desktop startup phase to perform the one-time v25-v27 cache migration. */
+  migrateLegacyCache?: boolean
   /** Suppress progress output so structured CLI output remains valid JSON. */
   quiet?: boolean
 }
@@ -2110,6 +2237,9 @@ async function loadCanonicalProviderSessions(): Promise<{
 }
 
 async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
+  if (process.env.NODE_ENV === 'test' && process.env.SWOB_TEST_SESSION_LOAD_FAILURE === '1') {
+    throw new Error('synthetic-session-load-failure')
+  }
   const startedAt = Date.now()
   const claudeFiles = isSessionSourceSupported('claude-code') ? findClaudeSessionFiles() : []
   const newSourceFiles = findNewSourceSessionFiles().filter((filePath) => {
@@ -2120,7 +2250,7 @@ async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
   const cursorFiles = isSessionSourceSupported('cursor') ? findCursorSessionFiles() : []
   const opencodeFiles = isSessionSourceSupported('opencode') ? await findOpencodeSessionFiles() : []
   const zcodeFiles = isSessionSourceSupported('zcode') ? await findZcodeSessionFiles() : []
-  const cache = loadDiskCache()
+  const cache = await loadDiskCache()
   const descriptors: Array<{ filePath: string; source: CachedSessionSource }> = [
     ...claudeFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),
     ...newSourceFiles.flatMap((filePath) => {
@@ -2419,52 +2549,74 @@ function getLegacySessionLoadFlight(): Promise<LegacySessionLoadResult> {
   return started
 }
 
+export function projectCanonicalProviderSessions(
+  legacySummaries: SessionSummary[],
+  canonical: {
+    sessions: CanonicalStoredSession[]
+    status: 'complete' | 'degraded'
+  }
+): { summaries: SessionSummary[]; providerStatus: 'complete' | 'degraded' } {
+  let summaries = legacySummaries
+  let providerStatus = canonical.status
+  if (canonical.sessions.length === 0) return { summaries, providerStatus }
+
+  summaries = [...summaries]
+  for (const stored of canonical.sessions) {
+    try {
+      const definition = builtinProviderForId(stored.sessionRecord.provenance.providerId)
+      if (!definition || definition.ingestion !== 'provider-host' ||
+        !isSessionSourceSupported(definition.sourceId)) continue
+      summaries.push(canonicalRecordsToSessionSummary(stored.records, {
+        filePath: stored.sessionRecord.sourceRef.displayLocator,
+        source: definition.sourceId
+      }))
+    } catch (error) {
+      providerStatus = 'degraded'
+      console.warn(
+        `[provider-host] skipped invalid canonical session ${stored.sessionRecord.id}:`,
+        error instanceof Error ? error.message : String(error)
+      )
+    }
+  }
+  summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  return { summaries, providerStatus }
+}
+
 function getWritableSessionLoadFlight(): Promise<LoadAllSessionsResult> {
   if (writableSessionLoadFlight) return writableSessionLoadFlight
 
-  const legacyFlight = getLegacySessionLoadFlight()
-  const started = legacyFlight.then(async (legacy) => {
+  let legacyFlight: Promise<LegacySessionLoadResult> | null = null
+  const started = (async (): Promise<LoadAllSessionsResult> => {
+    await migrateLegacyDiskCacheToSqlite()
+    legacyFlight = getLegacySessionLoadFlight()
+    const legacy = await legacyFlight
     const canonical = await loadCanonicalProviderSessions()
-    let summaries = legacy.summaries
-    if (canonical.sessions.length > 0) {
-      summaries = [...summaries]
-      for (const stored of canonical.sessions) {
-        try {
-          const definition = builtinProviderForId(stored.sessionRecord.provenance.providerId)
-          if (!definition || definition.ingestion !== 'provider-host' ||
-            !isSessionSourceSupported(definition.sourceId)) continue
-          summaries.push(canonicalRecordsToSessionSummary(stored.records, {
-            filePath: stored.sessionRecord.sourceRef.displayLocator,
-            source: definition.sourceId
-          }))
-        } catch (error) {
-          console.warn(
-            `[provider-host] skipped invalid canonical session ${stored.sessionRecord.id}:`,
-            error instanceof Error ? error.message : String(error)
-          )
-        }
-      }
-      summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    }
+    const projection = projectCanonicalProviderSessions(legacy.summaries, canonical)
     saveDiskCache(legacy.entries)
     return {
-      summaries,
+      summaries: projection.summaries,
       parsedCount: legacy.parsedCount,
       reusedCount: legacy.reusedCount,
       fileCount: legacy.fileCount,
       elapsedMs: Date.now() - legacy.startedAt,
-      providerStatus: canonical.status
+      providerStatus: projection.providerStatus
     }
-  })
+  })()
   const tracked = started.finally(() => {
     if (writableSessionLoadFlight === tracked) writableSessionLoadFlight = null
-    if (legacySessionLoadFlight === legacyFlight) legacySessionLoadFlight = null
+    if (legacyFlight && legacySessionLoadFlight === legacyFlight) legacySessionLoadFlight = null
   })
   writableSessionLoadFlight = tracked
   return tracked
 }
 
 export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
+  if (options.migrateLegacyCache) {
+    return migrateLegacyDiskCacheToSqlite().then(() => loadAllSessions({
+      ...options,
+      migrateLegacyCache: false
+    }))
+  }
   const result = options.readOnly
     ? getLegacySessionLoadFlight().then((legacy): LoadAllSessionsResult => ({
         summaries: legacy.summaries,

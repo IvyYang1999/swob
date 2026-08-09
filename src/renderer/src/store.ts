@@ -8,6 +8,7 @@ import {
 import { resolveConfiguredLocale, resolveSystemLocale, translate, type LegacyLocale, type Locale } from './i18n'
 import { defaultResumeMethodForSource } from '../../shared/settings-capabilities'
 import { BUILTIN_LENSES, isLensEnabled } from '../../shared/lens-registry'
+import { providerUsesCanonicalRuntime } from '../../shared/provider-capabilities'
 import { refreshHarnessIconOverrides } from './utils/harness-presentation'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
@@ -75,6 +76,10 @@ interface SessionSummary {
   claudeConfigDir?: string
   estimatedTime?: number
   models?: string[]
+}
+
+function isCanonicalProviderSession(session: SessionSummary): boolean {
+  return providerUsesCanonicalRuntime(session.source || '')
 }
 
 interface ParsedMessage {
@@ -482,7 +487,25 @@ export const useStore = create<AppState>((set, get) => ({
     let providerCompletion: Extract<SessionBootstrapState, 'ready' | 'degraded'> | null = null
     let queuedLibraryConfig: UserConfig | undefined
     const queuedLibrarySessions = new Map<string, SessionSummary>()
-    const latestProviderSessions = new Map<string, SessionSummary>()
+    const latestProviderSessions = new Map(
+      get().sessions
+        .filter(isCanonicalProviderSession)
+        .map((session) => [session.id, session])
+    )
+    const mergeWithLatestProviderSnapshot = (base: SessionSummary[]): SessionSummary[] => {
+      const byId = new Map(
+        base
+          .filter((session) => !isCanonicalProviderSession(session))
+          .map((session) => [session.id, session])
+      )
+      for (const session of latestProviderSessions.values()) byId.set(session.id, session)
+      return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    }
+    const persistVisibleSessions = (): void => {
+      try {
+        localStorage.setItem('csm:sessions', JSON.stringify(get().sessions))
+      } catch { /* quota exceeded */ }
+    }
     const applyLibraryPatch = (patch: SessionSummary[], config?: UserConfig): void => {
       if (!initialLoadComplete) {
         for (const session of patch) queuedLibrarySessions.set(session.id, session)
@@ -497,12 +520,19 @@ export const useStore = create<AppState>((set, get) => ({
           config: config ? mergeLocalPreferences(config) : state.config
         }
       })
-      try {
-        localStorage.setItem('csm:sessions', JSON.stringify(get().sessions))
-      } catch { /* quota exceeded */ }
+      persistVisibleSessions()
     }
     window.api.onLibraryPatch(({ sessions, config }) => {
-      applyLibraryPatch(sessions as SessionSummary[], config as UserConfig | undefined)
+      const librarySessions = (sessions as SessionSummary[]).filter((session) => {
+        if (!isCanonicalProviderSession(session)) return true
+        // Once a complete Provider snapshot exists, Library hydration may only
+        // enrich IDs in that snapshot. It must never resurrect an older
+        // canonical package that the authoritative refresh removed.
+        if (providerCompletion === 'ready' && !latestProviderSessions.has(session.id)) return false
+        latestProviderSessions.set(session.id, session)
+        return true
+      })
+      applyLibraryPatch(librarySessions, config as UserConfig | undefined)
     })
     window.api.onProviderPatch?.(({ sessions, status }) => {
       providerCompletion = status === 'complete' ? 'ready' : 'degraded'
@@ -511,8 +541,12 @@ export const useStore = create<AppState>((set, get) => ({
       // may be partial or empty, so retain the last known-good additive data.
       if (status === 'complete') latestProviderSessions.clear()
       for (const session of providerSessions) latestProviderSessions.set(session.id, session)
-      applyLibraryPatch(providerSessions)
-      if (initialLoadComplete) set({ sessionBootstrapState: providerCompletion })
+      if (!initialLoadComplete) return
+      set((state) => ({
+        sessions: mergeWithLatestProviderSnapshot(state.sessions),
+        sessionBootstrapState: providerCompletion!
+      }))
+      persistVisibleSessions()
     })
 
     try {
@@ -525,7 +559,7 @@ export const useStore = create<AppState>((set, get) => ({
       const mergedSessions = new Map((sessions as SessionSummary[]).map((session) => [session.id, session]))
       for (const session of queuedLibrarySessions.values()) mergedSessions.set(session.id, session)
       initialLoadComplete = true
-      const hydratedSessions = [...mergedSessions.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      const hydratedSessions = mergeWithLatestProviderSnapshot([...mergedSessions.values()])
       let hydratedConfig = (queuedLibraryConfig || config) as UserConfig
       const locale = resolveConfiguredLocale(hydratedConfig.preferences?.locale, systemLocale)
       if (hydratedConfig.preferences?.locale === 'ja') {
@@ -579,12 +613,7 @@ export const useStore = create<AppState>((set, get) => ({
             window.api.loadConfig()
           ])
           const mergedConfig = mergeLocalPreferences(freshConfig)
-          const mergedSessions = new Map(
-            (freshSessions as SessionSummary[]).map((session) => [session.id, session])
-          )
-          for (const session of latestProviderSessions.values()) mergedSessions.set(session.id, session)
-          const visibleSessions = [...mergedSessions.values()]
-            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          const visibleSessions = mergeWithLatestProviderSnapshot(freshSessions as SessionSummary[])
           set({ sessions: visibleSessions, config: mergedConfig })
           try {
             localStorage.setItem('csm:sessions', JSON.stringify(visibleSessions))

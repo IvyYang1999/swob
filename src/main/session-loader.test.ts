@@ -20,7 +20,8 @@ import {
   findSessionFilesInProjectRoots,
   decodeClaudeProjectDirectoryName,
   getClaudeConfigDirForSessionFile,
-  isRealUserMessage
+  isRealUserMessage,
+  projectCanonicalProviderSessions
 } from './session-loader'
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import { shellQuote } from './resume-terminal'
@@ -376,7 +377,7 @@ function sharedCrossSessionPrefix(sessionId: string): RawJsonlMessage[] {
 
 async function loadAllSessionsFromTempHome(
   home: string,
-  options: { readOnly?: boolean; quiet?: boolean } = {}
+  options: { readOnly?: boolean; migrateLegacyCache?: boolean; quiet?: boolean } = {}
 ) {
   const oldHome = process.env.HOME
   process.env.HOME = home
@@ -547,6 +548,43 @@ describe('Claude session discovery', () => {
         firstUserMessage: 'legacy source remains visible'
       }))
     } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('Canonical 单会话投影失败时保留健康结果并将 Provider 标为 degraded', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const projection = projectCanonicalProviderSessions([], {
+        status: 'complete',
+        sessions: [{
+          sessionRecord: {
+            id: 'invalid-canonical-session',
+            provenance: { providerId: 'swob/pi' },
+            sourceRef: { displayLocator: '/synthetic/invalid.jsonl' }
+          },
+          records: []
+        } as any]
+      })
+
+      expect(projection.summaries).toEqual([])
+      expect(projection.providerStatus).toBe('degraded')
+      expect(warnSpy).toHaveBeenCalledOnce()
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('初始物理源扫描失败会拒绝 IPC 上游，而不是伪造空的成功快照', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-source-failure-home-'))
+    const previous = process.env.SWOB_TEST_SESSION_LOAD_FAILURE
+    process.env.SWOB_TEST_SESSION_LOAD_FAILURE = '1'
+    try {
+      await expect(loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true }))
+        .rejects.toThrow('synthetic-session-load-failure')
+    } finally {
+      if (previous === undefined) delete process.env.SWOB_TEST_SESSION_LOAD_FAILURE
+      else process.env.SWOB_TEST_SESSION_LOAD_FAILURE = previous
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
@@ -1333,6 +1371,97 @@ describe('loadAllSessions per-file incremental cache', () => {
     }
   })
 
+  it('普通 readOnly 读取既有 v27 缓存时不迁移也不删除', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-readonly-legacy-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'readonly-legacy.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'readonly-legacy-session',
+        type: 'user',
+        message: { role: 'user', content: 'source value' }
+      })
+    ])
+
+    try {
+      await loadAllSessionsFromTempHome(home, { quiet: true })
+      const legacy = readSummaryCache(home)
+      legacy.version = 27
+      legacy.entries[file].perFile.summary.firstUserMessage = 'read-only cached value'
+      const legacyPath = writeLegacySummaryCache(home, legacy)
+
+      const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+
+      expect(sessions.find((session) => session.sessionId === 'readonly-legacy-session')?.firstUserMessage)
+        .toBe('read-only cached value')
+      expect(fs.existsSync(legacyPath)).toBe(true)
+      expect(fs.existsSync(summaryCacheDbPath(home))).toBe(false)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('桌面显式迁移可在 readOnly 会话扫描前原子升级 v27 缓存', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-explicit-migration-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'explicit-migration.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'explicit-migration-session',
+        type: 'user',
+        message: { role: 'user', content: 'source value' }
+      })
+    ])
+
+    try {
+      await loadAllSessionsFromTempHome(home, { quiet: true })
+      const legacy = readSummaryCache(home)
+      legacy.version = 27
+      legacy.entries[file].perFile.summary.firstUserMessage = 'worker migrated value'
+      const legacyPath = writeLegacySummaryCache(home, legacy)
+
+      const sessions = await loadAllSessionsFromTempHome(home, {
+        readOnly: true,
+        migrateLegacyCache: true,
+        quiet: true
+      })
+
+      expect(sessions.find((session) => session.sessionId === 'explicit-migration-session')?.firstUserMessage)
+        .toBe('worker migrated value')
+      expect(readSummaryCache(home).version).toBe(28)
+      expect(fs.existsSync(legacyPath)).toBe(false)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('显式迁移遇到损坏 v27 时保留原文件且 readOnly 不生成替代缓存', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-corrupt-legacy-migration-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'corrupt-migration.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'corrupt-migration-session',
+        type: 'user',
+        message: { role: 'user', content: 'source survives corrupt cache' }
+      })
+    ])
+    const legacyPath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true })
+    fs.writeFileSync(legacyPath, '{"version":27,"entries":{"unterminated":')
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, {
+        readOnly: true,
+        migrateLegacyCache: true,
+        quiet: true
+      })
+
+      expect(sessions.some((session) => session.sessionId === 'corrupt-migration-session')).toBe(true)
+      expect(fs.readFileSync(legacyPath, 'utf8')).toBe('{"version":27,"entries":{"unterminated":')
+      expect(fs.existsSync(summaryCacheDbPath(home))).toBe(false)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('损坏的 SQLite summary cache 只作为缓存失效，并在本轮安全重建', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-corrupt-cache-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'repair.jsonl')
@@ -1355,6 +1484,36 @@ describe('loadAllSessions per-file incremental cache', () => {
       ]))
       expect(rebuilt.version).toBe(28)
       expect(rebuilt.entries[file]).toBeDefined()
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('v27 大型 JSON 缓存跨读取块逐条迁移，不误判转义引号或容器字符', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-streaming-cache-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'stream-"quoted".jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'streaming-cache-session',
+        type: 'user',
+        message: { role: 'user', content: 'streaming source value' }
+      })
+    ])
+
+    try {
+      await loadAllSessionsFromTempHome(home, { quiet: true })
+      const legacy = readSummaryCache(home)
+      legacy.version = 27
+      const marker = `cached-{[\\"boundary\\"]}-${'x'.repeat(96 * 1024)}-tail`
+      legacy.entries[file].perFile.summary.firstUserMessage = marker
+      const legacyPath = writeLegacySummaryCache(home, legacy)
+
+      const sessions = await loadAllSessionsFromTempHome(home, { quiet: true })
+
+      expect(sessions.find((session) => session.sessionId === 'streaming-cache-session')?.firstUserMessage)
+        .toBe(marker)
+      expect(readSummaryCache(home).version).toBe(28)
+      expect(fs.existsSync(legacyPath)).toBe(false)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }

@@ -5,10 +5,19 @@ workItems:
     depends_on: []
     write_scope:
       - .swob/workflows/v15-t207/**
+      - electron.vite.config.ts
+      - package.json
+      - package-lock.json
+      - THIRD_PARTY_NOTICES
+      - compliance/t131/sbom-development.cdx.json
+      - compliance/t131/sbom-production.cdx.json
       - src/main/session-loader.ts
       - src/main/session-loader.test.ts
+      - src/main/summary-cache-migration-worker.cjs
       - src/main/session-bootstrap.ts
       - src/main/session-bootstrap.test.ts
+      - src/main/provider-runtime.ts
+      - src/main/provider-runtime.test.ts
       - src/main/__test-support__/protected-state-audit.ts
       - src/main/index.ts
       - src/preload/index.ts

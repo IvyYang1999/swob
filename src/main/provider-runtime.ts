@@ -19,11 +19,15 @@ export interface CanonicalProviderRefreshResult {
 }
 
 let defaultHost: ProviderHost | null = null
-let refreshTail: Promise<CanonicalProviderRefreshResult> = Promise.resolve({
-  reports: [],
-  changedSessionRecordIds: [],
-  tombstonedSessionRecordIds: []
-})
+let runtimeTail: Promise<void> = Promise.resolve()
+
+function serializeCanonicalProviderRuntime<T>(
+  operation: () => Promise<T>
+): Promise<T> {
+  const next = runtimeTail.then(operation, operation)
+  runtimeTail = next.then(() => undefined, () => undefined)
+  return next
+}
 
 function getDefaultHost(): ProviderHost {
   return defaultHost || (defaultHost = new ProviderHost())
@@ -152,9 +156,19 @@ export function refreshCanonicalProviders(
   options: CanonicalProviderRefreshOptions = {}
 ): Promise<CanonicalProviderRefreshResult> {
   if (options.host || options.store) return runRefresh(options)
-  const next = refreshTail.then(() => runRefresh(options), () => runRefresh(options))
-  refreshTail = next
-  return next
+  return serializeCanonicalProviderRuntime(() => runRefresh(options))
+}
+
+/**
+ * Serialize a dependent canonical-store consumer with provider refreshes.
+ * This closes the tombstone/archive race: a later refresh cannot tombstone a
+ * session between the consumer's authoritative store read and its durable
+ * Library write, and an earlier tombstone is visible before the consumer runs.
+ */
+export function withCanonicalProviderRefreshBarrier<T>(
+  operation: () => Promise<T>
+): Promise<T> {
+  return serializeCanonicalProviderRuntime(operation)
 }
 
 export function cancelCanonicalProviders(): void {

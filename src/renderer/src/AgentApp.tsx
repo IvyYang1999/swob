@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, History, Plus, Square, X, Terminal, MessageSquare, Clock, ChevronLeft } from 'lucide-react'
 import { CliMarkdown } from './components/MarkdownContent'
 import { translate, useStandaloneLocale, type Locale } from './i18n'
+import { providerUsesCanonicalRuntime } from '../../shared/provider-capabilities'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,6 +68,7 @@ interface SessionSummary {
   cwds: string[]
   projectPath: string
   filePath: string
+  source?: string
 }
 
 /** Parsed message shape from loadSessionDetail. */
@@ -121,8 +123,15 @@ function HistoryList({ onSelect, onBack, locale }: {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    const unsubscribe = window.api.onProviderPatch(({ sessions: patch }) => {
-      if (!cancelled) setSessions((current) => mergeAgentSessionSummaries(current, patch as SessionSummary[]))
+    const unsubscribe = window.api.onProviderPatch(({ sessions: patch, status }) => {
+      if (!cancelled) {
+        setSessions((current) => mergeAgentSessionSummaries(
+          status === 'complete'
+            ? current.filter((session) => !providerUsesCanonicalRuntime(session.source || ''))
+            : current,
+          patch as SessionSummary[]
+        ))
+      }
     })
     void window.api.loadAllSessions().then((all: unknown) => {
       if (cancelled) return

@@ -150,13 +150,13 @@ function SessionBootstrapBanner() {
       data-bootstrap-state={bootstrapState}
       className={`shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs border-b ${
         degraded
-          ? 'bg-soft-amber/10 text-soft-amber border-soft-amber/20'
-          : 'bg-soft-blue/10 text-soft-blue border-soft-blue/20'
+          ? 'bg-soft-amber/10 text-primary border-soft-amber/30'
+          : 'bg-soft-blue/10 text-primary border-soft-blue/30'
       }`}
     >
       {degraded
-        ? <AlertCircle size={12} className="shrink-0" />
-        : <RefreshCw size={12} className="shrink-0 animate-spin" />}
+        ? <AlertCircle size={12} className="shrink-0 text-soft-amber" />
+        : <RefreshCw size={12} className="shrink-0 motion-safe:animate-spin text-soft-blue" />}
       <span className="min-w-0 truncate">{t(textKey)}</span>
     </div>
   )

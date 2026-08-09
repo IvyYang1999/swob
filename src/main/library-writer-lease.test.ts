@@ -413,17 +413,25 @@ describe('Library 跨进程单写者 lease', () => {
     expect(readLibraryWriteGeneration(root)).toBe(2)
   })
 
-  it('进程级 closed latch 永久拒绝后续同步、异步与 reentrant writer', async () => {
-    let rejectNested: (() => Promise<void>) | undefined
+  it('未触发 fatal close 时已进入的 writer 可在排空阶段完成 nested 写入', async () => {
+    let nestedCompleted = false
+    await runWithLibraryWriter(root, 'device-a', 'maintenance', async () => {
+      await Promise.resolve()
+      await runWithLibraryWriter(root, 'device-a', 'metadata', () => {
+        nestedCompleted = true
+      }, quiet)
+    }, quiet)
+    expect(nestedCompleted).toBe(true)
+    expect(readLibraryWriteGeneration(root)).toBe(1)
+  })
+
+  it('fatal closed latch 在既有 writer 释放后永久拒绝后续同步、异步与 Worker writer', async () => {
     const workerParticipant = registerLibraryWriterArbiterParticipant()
     const workerWire = currentLibraryWriterArbiterWire(workerParticipant)
-    await runWithLibraryWriter(root, 'device-a', 'maintenance', () => {
-      closeLibraryWriterCoordinator()
-      rejectNested = () => runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet)
-    }, quiet)
+    await runWithLibraryWriter(root, 'device-a', 'maintenance', () => {}, quiet)
+    closeLibraryWriterCoordinator()
     workerParticipant.release()
 
-    await expect(rejectNested!()).rejects.toBeInstanceOf(LibraryWriterCoordinatorClosedError)
     await expect(runWithLibraryWriter(root, 'device-a', 'metadata', () => {}, quiet))
       .rejects.toBeInstanceOf(LibraryWriterCoordinatorClosedError)
     await expect(runWithLibraryWriterArbiterContext(workerWire, undefined,

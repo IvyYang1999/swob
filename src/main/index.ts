@@ -1167,7 +1167,6 @@ let runtimeCleanupPromise: Promise<void> | null = null
 
 function cleanupRuntimeResources(): Promise<void> {
   if (runtimeCleanupPromise) return runtimeCleanupPromise
-  closeLibraryWriterRuntime()
   runtimeShuttingDown = true
   startupProjectionGate.reset(new Error('Runtime is shutting down'))
   libraryRuntimePaused = true
@@ -3809,6 +3808,7 @@ ipcMain.handle('library:applyDuplicateRecovery', async (_event, planId: unknown)
         'Duplicate recovery could not prove a complete rollback; all Library runtime work is stopping'
       )
       console.error('[duplicate-recovery] Mutation may be incomplete; stopping Library runtime')
+      closeLibraryWriterRuntime()
       const shutdown = cleanupRuntimeResources()
       dialog.showErrorBox(
         mainT('native.duplicate_recovery.apply_fatal_title'),

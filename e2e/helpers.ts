@@ -117,6 +117,7 @@ export async function launchAppWithEnv(options: {
 
 export interface LaunchAppOptions {
   claudeTurns?: number
+  additionalClaudeSessions?: number
   viewport?: { width: number; height: number }
   includeCursorFixture?: boolean
   includePiFixture?: boolean
@@ -242,7 +243,8 @@ function createSyntheticCorpus(
   includeInspectorFixture = false,
   includePricingFixture = false,
   includeUnpricedValuationFixture = false,
-  includeCodexLifecycleFixture = false
+  includeCodexLifecycleFixture = false,
+  additionalClaudeSessions = 0
 ): void {
   const project = path.join(home, 'project')
   fs.mkdirSync(project, { recursive: true })
@@ -278,7 +280,7 @@ function createSyntheticCorpus(
       terminalApp: 'Terminal',
       // Session-focused specs must not depend on the transient expansion state
       // of the single-turn disclosure while background Library patches arrive.
-      singleTurnBehavior: 'show'
+      singleTurnBehavior: additionalClaudeSessions > 0 ? 'collapse' : 'show'
     }
   }))
 
@@ -338,6 +340,32 @@ function createSyntheticCorpus(
     path.join(home, '.claude', 'projects', '-synthetic-project', `${CLAUDE_FIXTURE_ID}.jsonl`),
     claudeRows
   )
+  for (let index = 0; index < additionalClaudeSessions; index++) {
+    const sessionId = `bulk-claude-${index}`
+    writeJsonl(
+      path.join(home, '.claude', 'projects', '-synthetic-bulk', `${sessionId}.jsonl`),
+      [
+        {
+          uuid: `${sessionId}-user`,
+          parentUuid: null,
+          sessionId,
+          type: 'user',
+          timestamp: '2026-08-08T10:00:00.000Z',
+          cwd: project,
+          message: { role: 'user', content: `Bulk startup session ${index}` }
+        },
+        {
+          uuid: `${sessionId}-assistant`,
+          parentUuid: `${sessionId}-user`,
+          sessionId,
+          type: 'assistant',
+          timestamp: '2026-08-08T10:00:01.000Z',
+          cwd: project,
+          message: { role: 'assistant', content: 'Bulk startup response' }
+        }
+      ]
+    )
+  }
 
   if (includeCodexLifecycleFixture) {
     const customCodexHome = path.join(home, 'codex-work')
@@ -666,7 +694,8 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     options.includeInspectorFixture ?? false,
     options.includePricingFixture ?? false,
     options.includeUnpricedValuationFixture ?? false,
-    options.includeCodexLifecycleFixture ?? false
+    options.includeCodexLifecycleFixture ?? false,
+    options.additionalClaudeSessions ?? 0
   )
 
   const environment = {

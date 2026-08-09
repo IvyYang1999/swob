@@ -77,6 +77,20 @@ interface ParsedMessage {
 
 type View = 'chat' | 'history'
 
+function mergeAgentSessionSummaries(
+  current: SessionSummary[],
+  incoming: SessionSummary[]
+): SessionSummary[] {
+  const byId = new Map(current.map((session) => [session.id, session]))
+  for (const session of incoming) byId.set(session.id, session)
+  return [...byId.values()]
+    .filter((session) =>
+      session.projectPath?.includes(AGENT_PATH_MARKER) ||
+      session.cwds?.some((cwd) => cwd.includes(AGENT_PATH_MARKER))
+    )
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+}
+
 // ---------------------------------------------------------------------------
 // Animated thinking dots
 // ---------------------------------------------------------------------------
@@ -107,22 +121,22 @@ function HistoryList({ onSelect, onBack, locale }: {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+    const unsubscribe = window.api.onProviderPatch(({ sessions: patch }) => {
+      if (!cancelled) setSessions((current) => mergeAgentSessionSummaries(current, patch as SessionSummary[]))
+    })
     void window.api.loadAllSessions().then((all: unknown) => {
       if (cancelled) return
-      const allSessions = all as SessionSummary[]
-      // Filter to only agent sessions (those whose projectPath or cwds contain the agent workspace marker)
-      const agentSessions = allSessions.filter((s) =>
-        s.projectPath?.includes(AGENT_PATH_MARKER) ||
-        s.cwds?.some((c) => c.includes(AGENT_PATH_MARKER))
-      )
-      // Sort most recent first
-      agentSessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      setSessions(agentSessions)
+      // Merge instead of replacing because the provider patch can arrive before
+      // the invoke promise resolves when its background work finishes quickly.
+      setSessions((current) => mergeAgentSessionSummaries(current, all as SessionSummary[]))
       setLoading(false)
     }).catch(() => {
       if (!cancelled) setLoading(false)
     })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
   }, [])
 
   if (loading) {

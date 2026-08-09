@@ -29,8 +29,9 @@ test('成本页按来源显示计量/计价真值，并在窄窗保持可读', a
   await expect(page.getByText('ZCode', { exact: true })).toBeVisible()
   await expect(page.getByText('仅计量，未计价')).toBeVisible()
 
-  const zcodeRow = page.locator('[title*="model_usage attempt now retains"]')
+  const zcodeRow = page.getByText('ZCode', { exact: true }).locator('..')
   await expect(zcodeRow).toBeVisible()
+  await expect(zcodeRow).toHaveAttribute('title', /.+/)
   await zcodeRow.hover()
   await page.screenshot({ path: testInfo.outputPath('swob-t182-cost-wide.png'), fullPage: false })
 

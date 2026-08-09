@@ -1,0 +1,31 @@
+batch: v15-t207-startup-bootstrap-integrity
+workItems:
+  - id: t207-startup-bootstrap-integrity
+    owner: codex-desktop-current
+    depends_on: []
+    write_scope:
+      - .swob/workflows/v15-t207/**
+      - src/main/session-loader.ts
+      - src/main/session-loader.test.ts
+      - src/main/session-bootstrap.ts
+      - src/main/session-bootstrap.test.ts
+      - src/main/__test-support__/protected-state-audit.ts
+      - src/main/index.ts
+      - src/preload/index.ts
+      - src/renderer/src/store.ts
+      - src/renderer/src/store.test.ts
+      - src/renderer/src/App.tsx
+      - src/renderer/src/AgentApp.tsx
+      - src/renderer/src/types/electron.d.ts
+      - src/shared/i18n.ts
+      - e2e/helpers.ts
+      - e2e/t171-cost-ledger.spec.ts
+      - e2e/t182-valuation-capability.spec.ts
+      - e2e/t207-startup-bootstrap-integrity.spec.ts
+      - result.json
+    evidence_required:
+      - npm run workflow:validate -- .swob/workflows/v15-t207/graph.yaml
+      - npm run check
+      - npx vitest run --maxWorkers=2
+      - npm run build
+      - npx playwright test e2e/t171-cost-ledger.spec.ts e2e/t182-valuation-capability.spec.ts e2e/t207-startup-bootstrap-integrity.spec.ts

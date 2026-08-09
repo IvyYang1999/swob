@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
+import Database from 'better-sqlite3'
 import type {
   RawJsonlMessage,
   ParsedMessage,
@@ -82,8 +83,9 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 
 // --- Disk Cache for Session Summaries ---
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
-const CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
-const CACHE_VERSION = 27 // Reparse SQLite agents for authoritative per-call usage projection
+const LEGACY_CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
+const CACHE_DB_FILE = path.join(CACHE_DIR, 'summary-cache.sqlite')
+const CACHE_VERSION = 28 // Store entries row-by-row so startup never holds one 245 MB JSON string
 
 type CachedSessionSource = SessionSource
 
@@ -120,8 +122,7 @@ interface DiskCache {
   entries: Record<string, DiskCacheEntry>
 }
 
-const SELECTIVELY_COMPATIBLE_CACHE_VERSIONS = new Set([25, 26])
-let cacheWriteSequence = 0
+const SELECTIVELY_COMPATIBLE_CACHE_VERSIONS = new Set([25, 26, 27])
 
 function assertTestCacheWriteContained(): void {
   if (process.env.NODE_ENV !== 'test') return
@@ -129,7 +130,7 @@ function assertTestCacheWriteContained(): void {
   if (!sandboxRoot) {
     throw new Error('Test isolation violation: missing-SWOB_E2E_SANDBOX_ROOT before summary-cache write')
   }
-  const relative = path.relative(path.resolve(sandboxRoot), path.resolve(CACHE_FILE))
+  const relative = path.relative(path.resolve(sandboxRoot), path.resolve(CACHE_DB_FILE))
   if (relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) {
     throw new Error('Test isolation violation: summary-cache write outside sandbox')
   }
@@ -141,30 +142,89 @@ function isLegacyCacheEntryCompatible(version: number, entry: DiskCacheEntry): b
   // OpenCode/ZCode authoritative per-call accounting projection. Preserve the
   // unaffected providers while forcing every source whose cached summary can
   // carry a stale projection through the real parser exactly once.
-  if (source === 'opencode' || source === 'zcode') return false
+  if (version <= 26 && (source === 'opencode' || source === 'zcode')) return false
   if (version === 25 && source === 'codex') return false
   return true
 }
 
-function loadDiskCache(): DiskCache | null {
+function loadSqliteDiskCache(): DiskCache | null {
+  if (!fs.existsSync(CACHE_DB_FILE)) return null
+  let database: Database.Database | null = null
   try {
-    if (fs.existsSync(CACHE_FILE)) {
-      const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8')) as Partial<DiskCache>
-      if (!data.entries || typeof data.entries !== 'object') return null
-      if (data.version === CACHE_VERSION) return data as DiskCache
-      if (typeof data.version === 'number' && SELECTIVELY_COMPATIBLE_CACHE_VERSIONS.has(data.version)) {
-        return {
-          version: CACHE_VERSION,
-          entries: Object.fromEntries(
-            Object.entries(data.entries).filter(([, entry]) =>
-              isLegacyCacheEntryCompatible(data.version!, entry)
-            )
-          )
-        }
+    database = new Database(CACHE_DB_FILE, { readonly: true, fileMustExist: true })
+    const version = Number(database.pragma('user_version', { simple: true }))
+    if (version !== CACHE_VERSION) return null
+    const entries: Record<string, DiskCacheEntry> = {}
+    const rows = database.prepare(`
+      SELECT file_path, sig, per_file_json
+      FROM summary_cache_entries
+      ORDER BY file_path
+    `).iterate() as Iterable<{ file_path: string; sig: string; per_file_json: string }>
+    for (const row of rows) {
+      entries[row.file_path] = {
+        sig: row.sig,
+        perFile: JSON.parse(row.per_file_json) as PerFileCache
       }
+    }
+    return { version: CACHE_VERSION, entries }
+  } catch { /* corrupt cache */ }
+  finally { database?.close() }
+  return null
+}
+
+function loadLegacyDiskCache(): DiskCache | null {
+  try {
+    if (!fs.existsSync(LEGACY_CACHE_FILE)) return null
+    const data = JSON.parse(fs.readFileSync(LEGACY_CACHE_FILE, 'utf-8')) as Partial<DiskCache>
+    if (!data.entries || typeof data.entries !== 'object' || typeof data.version !== 'number') return null
+    if (!SELECTIVELY_COMPATIBLE_CACHE_VERSIONS.has(data.version)) return null
+    return {
+      version: CACHE_VERSION,
+      entries: Object.fromEntries(
+        Object.entries(data.entries).filter(([, entry]) =>
+          isLegacyCacheEntryCompatible(data.version!, entry)
+        )
+      )
     }
   } catch { /* corrupt cache */ }
   return null
+}
+
+function loadDiskCache(): DiskCache | null {
+  return loadSqliteDiskCache() || loadLegacyDiskCache()
+}
+
+function writeSqliteDiskCache(entries: Record<string, DiskCacheEntry>): unknown | null {
+  let database: Database.Database | null = null
+  try {
+    database = new Database(CACHE_DB_FILE)
+    database.pragma('synchronous = NORMAL')
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS summary_cache_entries (
+        file_path TEXT PRIMARY KEY,
+        sig TEXT NOT NULL,
+        per_file_json TEXT NOT NULL
+      )
+    `)
+    const insert = database.prepare(`
+      INSERT INTO summary_cache_entries(file_path, sig, per_file_json)
+      VALUES (?, ?, ?)
+    `)
+    database.transaction(() => {
+      database!.prepare('DELETE FROM summary_cache_entries').run()
+      for (const [filePath, entry] of Object.entries(entries)) {
+        insert.run(filePath, entry.sig, JSON.stringify(entry.perFile))
+      }
+      database!.pragma(`user_version = ${CACHE_VERSION}`)
+    })()
+    database.close()
+    database = null
+    return null
+  } catch (error) {
+    return error
+  } finally {
+    try { database?.close() } catch { /* ignore cleanup failure */ }
+  }
 }
 
 function saveDiskCache(entries: Record<string, DiskCacheEntry>): void {
@@ -172,17 +232,28 @@ function saveDiskCache(entries: Record<string, DiskCacheEntry>): void {
   // test module initialized before the isolation bootstrap must fail red
   // instead of silently writing the native account cache.
   assertTestCacheWriteContained()
-  const tempFile = `${CACHE_FILE}.${process.pid}.${++cacheWriteSequence}.tmp`
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true })
-    fs.writeFileSync(tempFile, JSON.stringify({ version: CACHE_VERSION, entries }))
-    fs.renameSync(tempFile, CACHE_FILE)
-  } catch { /* ignore */
-  } finally {
-    try {
-      if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile)
-    } catch { /* ignore cleanup failure */ }
-  }
+    let error = writeSqliteDiskCache(entries)
+    const code = typeof (error as { code?: unknown } | null)?.code === 'string'
+      ? (error as { code: string }).code
+      : ''
+    if (error && ['SQLITE_CORRUPT', 'SQLITE_NOTADB'].includes(code)) {
+      // This file is only a regenerable summary cache. Repair a corrupt DB once;
+      // never delete on BUSY/LOCKED because another Swob process may own it.
+      for (const suffix of ['', '-journal', '-wal', '-shm']) {
+        try {
+          const candidate = `${CACHE_DB_FILE}${suffix}`
+          if (fs.existsSync(candidate)) fs.unlinkSync(candidate)
+        } catch { /* a failed repair remains a cache miss next launch */ }
+      }
+      error = writeSqliteDiskCache(entries)
+    }
+    if (error) return
+    // A successful v28 transaction is the durable migration boundary. The
+    // legacy monolithic JSON is a regenerable cache and is no longer needed.
+    if (fs.existsSync(LEGACY_CACHE_FILE)) fs.unlinkSync(LEGACY_CACHE_FILE)
+  } catch { /* best-effort cache only */ }
 }
 
 function computeFileSig(filePath: string, source: CachedSessionSource): string | null {
@@ -1993,25 +2064,40 @@ interface LegacySessionLoadResult {
 
 interface LoadAllSessionsResult extends Omit<LegacySessionLoadResult, 'entries' | 'startedAt'> {
   elapsedMs: number
+  providerStatus: 'complete' | 'degraded'
 }
 
 let legacySessionLoadFlight: Promise<LegacySessionLoadResult> | null = null
 let writableSessionLoadFlight: Promise<LoadAllSessionsResult> | null = null
 
-async function loadCanonicalProviderSessions(): Promise<CanonicalStoredSession[]> {
+async function loadCanonicalProviderSessions(): Promise<{
+  sessions: CanonicalStoredSession[]
+  status: 'complete' | 'degraded'
+}> {
   const canonicalSources = BUILTIN_PROVIDER_DEFINITIONS
     .filter((definition) => definition.ingestion === 'provider-host')
     .filter((definition) => isSessionSourceSupported(definition.sourceId))
-  if (canonicalSources.length === 0) return []
+  if (canonicalSources.length === 0) return { sessions: [], status: 'complete' }
 
   try {
+    if (process.env.NODE_ENV === 'test') {
+      const delayMs = Number(process.env.SWOB_TEST_CANONICAL_REFRESH_DELAY_MS || 0)
+      if (Number.isFinite(delayMs) && delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(delayMs, 10_000)))
+      }
+    }
     const refresh = await refreshCanonicalProviders()
+    let degraded = false
     for (const report of refresh.reports) {
       for (const error of report.errors) {
+        degraded = true
         console.warn(`[provider-host] ${report.providerId}: ${error.code}: ${error.message}`)
       }
     }
-    return getCanonicalSessionStore().listSessions()
+    return {
+      sessions: getCanonicalSessionStore().listSessions(),
+      status: degraded ? 'degraded' : 'complete'
+    }
   } catch (error) {
     // Canonical providers are an additive projection. Store/search corruption
     // or a provider bug must never suppress healthy legacy loaders.
@@ -2019,7 +2105,7 @@ async function loadCanonicalProviderSessions(): Promise<CanonicalStoredSession[]
       '[provider-host] canonical refresh unavailable; continuing with legacy loaders:',
       error instanceof Error ? error.message : String(error)
     )
-    return []
+    return { sessions: [], status: 'degraded' }
   }
 }
 
@@ -2338,11 +2424,11 @@ function getWritableSessionLoadFlight(): Promise<LoadAllSessionsResult> {
 
   const legacyFlight = getLegacySessionLoadFlight()
   const started = legacyFlight.then(async (legacy) => {
-    const canonicalSessions = await loadCanonicalProviderSessions()
+    const canonical = await loadCanonicalProviderSessions()
     let summaries = legacy.summaries
-    if (canonicalSessions.length > 0) {
+    if (canonical.sessions.length > 0) {
       summaries = [...summaries]
-      for (const stored of canonicalSessions) {
+      for (const stored of canonical.sessions) {
         try {
           const definition = builtinProviderForId(stored.sessionRecord.provenance.providerId)
           if (!definition || definition.ingestion !== 'provider-host' ||
@@ -2366,7 +2452,8 @@ function getWritableSessionLoadFlight(): Promise<LoadAllSessionsResult> {
       parsedCount: legacy.parsedCount,
       reusedCount: legacy.reusedCount,
       fileCount: legacy.fileCount,
-      elapsedMs: Date.now() - legacy.startedAt
+      elapsedMs: Date.now() - legacy.startedAt,
+      providerStatus: canonical.status
     }
   })
   const tracked = started.finally(() => {
@@ -2384,7 +2471,8 @@ export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<S
         parsedCount: legacy.parsedCount,
         reusedCount: legacy.reusedCount,
         fileCount: legacy.fileCount,
-        elapsedMs: Date.now() - legacy.startedAt
+        elapsedMs: Date.now() - legacy.startedAt,
+        providerStatus: 'complete'
       }))
     : getWritableSessionLoadFlight()
 
@@ -2397,6 +2485,19 @@ export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<S
     }
     return snapshot.summaries
   })
+}
+
+export interface SessionLoadCompletion {
+  sessions: SessionSummary[]
+  providerStatus: 'complete' | 'degraded'
+}
+
+/** Full session inventory plus explicit additive-provider health for phased UI bootstrap. */
+export function loadAllSessionsWithProviderStatus(): Promise<SessionLoadCompletion> {
+  return getWritableSessionLoadFlight().then((snapshot) => ({
+    sessions: snapshot.summaries,
+    providerStatus: snapshot.providerStatus
+  }))
 }
 
 function sanitizeSessionDetail(detail: SessionDetail | null): SessionDetail | null {

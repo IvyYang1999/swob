@@ -2,7 +2,7 @@
 // writes to console or spawns a child (see stdio-repair.ts).
 import { logSpawnSelfTest } from './stdio-repair'
 import { startupRuntimeSafety } from './runtime-isolation-bootstrap'
-import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen, dialog, clipboard, nativeImage } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen, dialog, clipboard, nativeImage, type WebContents } from 'electron'
 import path from 'path'
 const { join, dirname, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -24,12 +24,18 @@ import * as fs from 'fs'
 import { getLocalNetworkInfo, queryPublicIp } from './network-info'
 import {
   loadAllSessions,
+  loadAllSessionsWithProviderStatus,
   loadSessionDetail,
   loadSessionDetailWithFallback,
   findAllSessionFiles,
   findClaudeSessionFiles,
   buildSessionSummaryFromBackup
 } from './session-loader'
+import {
+  additiveSessionPatch,
+  beginSessionBootstrap,
+  sessionSummaryForRenderer
+} from './session-bootstrap'
 import {
   findCodexSessionFiles,
   loadCodexRawMessages,
@@ -936,7 +942,7 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     }
     const parentIndex = cachedSessions.findIndex((session) => session.id === continuationParent.id)
     if (parentIndex >= 0) cachedSessions[parentIndex] = updatedParent
-    mainWindow?.webContents.send('session:summaryUpdated', updatedParent)
+    mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(updatedParent))
     void scheduleUsageFactSync()
     return
   }
@@ -946,12 +952,12 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     cachedSessions[existingIndex] = summary
     knownSessionIds.add(summary.id)
     knownSessionIds.add(summary.sessionId)
-    mainWindow?.webContents.send('session:summaryUpdated', summary)
+    mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(summary))
   } else {
     cachedSessions = [summary, ...cachedSessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     knownSessionIds.add(summary.id)
     knownSessionIds.add(summary.sessionId)
-    mainWindow?.webContents.send('session:added', summary)
+    mainWindow?.webContents.send('session:added', sessionSummaryForRenderer(summary))
   }
   void scheduleUsageFactSync()
 }
@@ -1529,8 +1535,22 @@ function mergeSessionPatch(patch: SessionSummary[]): void {
 
 function emitLibraryPatch(sessions: SessionSummary[], tree?: LibraryTree): void {
   mainWindow?.webContents.send('sessions:libraryPatch', {
-    sessions,
+    sessions: sessions.map(sessionSummaryForRenderer),
     config: tree ? libraryTreeToConfig(tree) : undefined
+  })
+}
+
+function emitProviderPatch(
+  target: WebContents,
+  sessions: SessionSummary[],
+  status: 'complete' | 'degraded',
+  errorCode?: string
+): void {
+  if (target.isDestroyed()) return
+  target.send('sessions:providerPatch', {
+    sessions: sessions.map(sessionSummaryForRenderer),
+    status,
+    ...(errorCode ? { errorCode } : {})
   })
 }
 
@@ -2182,6 +2202,51 @@ function filterExcludedSources(sessions: SessionSummary[]): SessionSummary[] {
   return sessions.filter((s) => !excludedSet.has(s.source || 'claude-code'))
 }
 
+function prepareImmediateSession(summary: SessionSummary): void {
+  summary.detailAvailability = 'ready'
+  annotateSessionSuccessor(summary)
+  const immediateResume = getImmediateSessionResumeAvailability(summary)
+  summary.canResume = immediateResume.canResume
+  summary.canResumeLocal = immediateResume.canResume
+  if (immediateResume.canResume) delete summary.resumeUnavailableReason
+  else summary.resumeUnavailableReason = immediateResume.reason
+  knownSessionIds.add(summary.sessionId)
+  knownSessionIds.add(summary.id)
+  for (const continuationId of summary.continuationSessionIds || []) {
+    knownSessionIds.add(continuationId)
+  }
+
+  if (summary.source === 'codex' || summary.source === 'cursor' ||
+      summary.source === 'opencode' || summary.source === 'zcode') return
+  if (summary.projectPath && isRemoteProjectPath(summary.projectPath)) {
+    summary.isRemote = true
+    const remoteUser = extractRemoteUser(summary.projectPath)
+    if (remoteUser) summary.remoteHost = `${remoteUser}@remote`
+  }
+}
+
+function settleProviderBootstrap(
+  initialSessions: SessionSummary[],
+  completion: ReturnType<typeof loadAllSessionsWithProviderStatus>,
+  target: WebContents
+): void {
+  void completion.then(({ sessions: loaded, providerStatus }) => {
+    const completeSessions = filterExcludedSources(loaded)
+    const patch = additiveSessionPatch(initialSessions, completeSessions)
+      .filter((session) => providerUsesCanonicalRuntime(session.source || ''))
+    for (const session of patch) prepareImmediateSession(session)
+    mergeSessionPatch(patch)
+    emitProviderPatch(target, patch, providerStatus)
+    if (patch.length > 0) {
+      scheduleSearchIndexWarmup()
+      void scheduleUsageFactSync()
+    }
+  }).catch((error) => {
+    console.error('[session-bootstrap] additive provider refresh failed:', error)
+    emitProviderPatch(target, [], 'degraded', 'PROVIDER_REFRESH_FAILED')
+  })
+}
+
 function readSessionLineageRegistry(): SessionLineageRegistry | null {
   const libraryRoot = getLibraryRoot()
   const registryPath = getSessionLineagePath(libraryRoot)
@@ -2231,42 +2296,25 @@ ipcMain.handle('platform:getCapabilities', () => {
   return getPlatformCapabilities(platform)
 })
 
-ipcMain.handle('sessions:loadAll', async () => {
+ipcMain.handle('sessions:loadAll', async (event) => {
   try {
   // Reading an existing registry is cheap. A first-run rebuild stays in the
   // background so lineage cannot delay the first session-list paint.
   const diskLineage = readSessionLineageRegistry()
-  const loadedSessions = await loadAllSessions()
-  const sessions = filterExcludedSources(loadedSessions)
+  const bootstrap = await beginSessionBootstrap(
+    () => loadAllSessions({ readOnly: true, quiet: true }),
+    () => loadAllSessionsWithProviderStatus()
+  )
+  const sessions = filterExcludedSources(bootstrap.initial)
   cachedSessions = sessions
   scheduleSearchIndexWarmup()
   void scheduleUsageFactSync()
   knownSessionIds.clear()
 
-  // Phase 1 only: return source summaries immediately. Library annotation and
-  // cross-device backups arrive through sessions:libraryPatch after worker scan.
-  for (const s of sessions) {
-    s.detailAvailability = 'ready'
-    annotateSessionSuccessor(s)
-    const immediateResume = getImmediateSessionResumeAvailability(s)
-    s.canResume = immediateResume.canResume
-    s.canResumeLocal = immediateResume.canResume
-    if (immediateResume.canResume) delete s.resumeUnavailableReason
-    else s.resumeUnavailableReason = immediateResume.reason
-    knownSessionIds.add(s.sessionId)
-    knownSessionIds.add(s.id)
-    for (const continuationId of s.continuationSessionIds || []) {
-      knownSessionIds.add(continuationId)
-    }
-    // Skip library/remote processing for non-Claude-Code sessions
-    if (s.source === 'codex' || s.source === 'cursor' || s.source === 'opencode' || s.source === 'zcode') continue
-
-    if (s.projectPath && isRemoteProjectPath(s.projectPath)) {
-      s.isRemote = true
-      const remoteUser = extractRemoteUser(s.projectPath)
-      if (remoteUser) s.remoteHost = `${remoteUser}@remote`
-    }
-  }
+  // Phase 1: physical source summaries are authoritative and immediately
+  // visible. Provider Host and canonical storage are additive phase 2 only.
+  for (const session of sessions) prepareImmediateSession(session)
+  settleProviderBootstrap(sessions, bootstrap.completion, event.sender)
 
   cachedSessions = sessions
 
@@ -2307,10 +2355,10 @@ ipcMain.handle('sessions:loadAll', async () => {
     })
   }
 
-  return sessions
+  return sessions.map(sessionSummaryForRenderer)
   } catch (err) {
     console.error('sessions:loadAll failed:', err)
-    return cachedSessions // return whatever we have
+    return cachedSessions.map(sessionSummaryForRenderer) // return whatever we have
   }
 })
 
@@ -3733,7 +3781,7 @@ ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, exclud
   completeOnboarding(targetPath, excluded)
   cachedSessions = filterExcludedSources(cachedSessions)
   const root = await activateLibraryAt(targetPath)
-  mainWindow?.webContents.send('sessions:updated', cachedSessions)
+  mainWindow?.webContents.send('sessions:updated', cachedSessions.map(sessionSummaryForRenderer))
   return root
 })
 

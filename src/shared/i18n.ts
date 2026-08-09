@@ -208,6 +208,11 @@ const translations: Record<Locale, Record<string, string>> = {
     'a11y.select_message': '选中此消息',
     'a11y.overflow_menu': '更多操作',
 
+    // Session bootstrap
+    'session_bootstrap.cached': '正在刷新会话；当前显示的是上次缓存',
+    'session_bootstrap.providers': '基础会话已就绪；正在加载其他来源',
+    'session_bootstrap.degraded': '基础会话已就绪；部分来源刷新失败',
+
     // Spotlight
     'spotlight.loading': '正在加载…',
 
@@ -1322,6 +1327,11 @@ const translations: Record<Locale, Record<string, string>> = {
     // Accessibility
     'a11y.select_message': 'Select this message',
     'a11y.overflow_menu': 'More actions',
+
+    // Session bootstrap
+    'session_bootstrap.cached': 'Refreshing sessions; showing the last cached snapshot',
+    'session_bootstrap.providers': 'Core sessions are ready; loading additional sources',
+    'session_bootstrap.degraded': 'Core sessions are ready; some sources failed to refresh',
 
     // Spotlight
     'spotlight.loading': 'Loading...',

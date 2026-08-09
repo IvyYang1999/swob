@@ -26,7 +26,7 @@ export interface ProtectedStateSnapshotInstrumentation {
   onPhase?: (event: { label: string; phase: ProtectedStateSnapshotPhase }) => void
 }
 
-const CONCURRENT_PRODUCTION_CACHE = /^summary-cache\.json(?:\.\d+\.\d+\.tmp)?$/
+const CONCURRENT_PRODUCTION_CACHE = /^summary-cache\.(?:json(?:\.\d+\.\d+\.tmp)?|sqlite(?:-journal|-wal|-shm)?)$/
 
 function isConcurrentProductionCache(label: string, relativePath: string): boolean {
   return label.startsWith('user-config-') &&

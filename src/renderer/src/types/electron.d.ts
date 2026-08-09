@@ -302,6 +302,11 @@ interface ElectronAPI {
   onSessionsRefresh: (callback: () => void) => void
   onSearchIndexUpdated: (callback: () => void) => () => void
   onLibraryPatch: (callback: (patch: { sessions: any[]; config?: any }) => void) => void
+  onProviderPatch: (callback: (patch: {
+    sessions: any[]
+    status: 'complete' | 'degraded'
+    errorCode?: string
+  }) => void) => () => void
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => void
   spotlightSearch: (query: string) => Promise<any[]>
   spotlightResume: (sessionId: string, cwd?: string) => Promise<ResumeActionResult>

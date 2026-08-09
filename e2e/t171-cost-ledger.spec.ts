@@ -21,6 +21,7 @@ test('可审计成本账本展示并下钻到调用、价格版本与逐桶计�
   const { app, page } = launched
   await page.getByTitle(/Token 洞察|Token Insights/).click()
   await expect(page.getByText('Processed Tokens', { exact: true }).first()).toBeVisible({ timeout: 20_000 })
+  await page.getByRole('button', { name: '全部', exact: true }).click()
   await page.getByRole('tab', { name: /成本与缓存|Cost & Cache/ }).click()
 
   await expect(page.getByText(/成本账本与缓存|Cost Ledger & Cache/)).toBeVisible()

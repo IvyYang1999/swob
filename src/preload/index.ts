@@ -367,6 +367,11 @@ const api = {
   onLibraryPatch: (callback: (patch: unknown) => void) => {
     ipcRenderer.on('sessions:libraryPatch', (_event, patch) => callback(patch))
   },
+  onProviderPatch: (callback: (patch: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, patch: unknown): void => callback(patch)
+    ipcRenderer.on('sessions:providerPatch', listener)
+    return () => { ipcRenderer.removeListener('sessions:providerPatch', listener) }
+  },
   onActiveSessionsChanged: (callback: (ids: string[]) => void) => {
     ipcRenderer.on('sessions:activeChanged', (_event, ids) => callback(ids))
   },

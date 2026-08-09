@@ -1,19 +1,29 @@
 {
   "workItemId": "t207-startup-bootstrap-integrity",
   "baseSha": "ba8d53d5673de20c6527b36e2a53b7048f2a3303",
-  "headSha": "6835c5aa446feb25dc8edcf6f1c5bb0d4fbdbe33",
+  "headSha": "6a3f485e97b5eb06daa922c0524d8719597d0861",
   "changedFiles": [
     ".swob/workflows/v15-t207/graph.yaml",
+    "THIRD_PARTY_NOTICES",
+    "compliance/t131/sbom-development.cdx.json",
+    "compliance/t131/sbom-production.cdx.json",
     "e2e/helpers.ts",
     "e2e/t171-cost-ledger.spec.ts",
     "e2e/t182-valuation-capability.spec.ts",
     "e2e/t207-startup-bootstrap-integrity.spec.ts",
+    "electron.vite.config.ts",
+    "package-lock.json",
+    "package.json",
+    "result.json",
     "src/main/__test-support__/protected-state-audit.ts",
     "src/main/index.ts",
+    "src/main/provider-runtime.test.ts",
+    "src/main/provider-runtime.ts",
     "src/main/session-bootstrap.test.ts",
     "src/main/session-bootstrap.ts",
     "src/main/session-loader.test.ts",
     "src/main/session-loader.ts",
+    "src/main/summary-cache-migration-worker.cjs",
     "src/preload/index.ts",
     "src/renderer/src/AgentApp.tsx",
     "src/renderer/src/App.tsx",
@@ -25,6 +35,8 @@
   "contractsProduced": [
     "SessionBootstrap.v1",
     "SummaryCache.v28",
+    "CanonicalProviderSnapshot.v2",
+    "ProviderLibraryCatchup.v1",
     "RendererSessionSummary.v1"
   ],
   "tests": [
@@ -36,34 +48,44 @@
     {
       "command": "npm run check",
       "status": "passed",
-      "numbers": "all static and policy gates passed"
+      "numbers": "all static, policy, notice, SBOM asset, DCO, and type gates passed"
     },
     {
       "command": "npx vitest run --maxWorkers=2",
       "status": "passed",
-      "numbers": "1542 passed, 19 skipped"
+      "numbers": "1549 passed, 19 platform-conditional skipped"
     },
     {
       "command": "npm run build",
       "status": "passed",
-      "numbers": "main, preload, and renderer production bundles built"
+      "numbers": "main, migration worker, preload, and renderer production bundles built"
     },
     {
-      "command": "npm run test:e2e",
+      "command": "npx playwright test",
       "status": "passed",
-      "numbers": "54 passed, 1 Windows-native conditional skip"
+      "numbers": "56 passed, 1 Windows-native conditional skip"
+    },
+    {
+      "command": "npm run build:win",
+      "status": "passed",
+      "numbers": "x64 NSIS built; package policy passed with 10158 app.asar paths"
+    },
+    {
+      "command": "isolated real-corpus startup replay",
+      "status": "passed",
+      "numbers": "1541 physical / 1551 complete; original 245312251-byte cache and canonical DB hashes/mtimes unchanged"
     }
   ],
   "visualEvidence": [
-    "Synthetic 1500-session Electron run reviewed at wide and narrow widths: source-ready banner, 1500 first-paint count, 1501 additive completion, and no horizontal overflow",
-    "Existing cost/valuation Electron flows reviewed after explicit navigation fixes, including hover state and sidebar resize behavior"
+    "Real Electron 1500-session run personally reviewed at wide and narrow widths: source-ready text and progress remain readable with no horizontal overflow, clipping, or edge collision",
+    "Provider-complete state personally reviewed after additive Pi arrival; sidebar count becomes 1501 and bootstrap banner exits without stale Provider resurrection",
+    "Independent R2 contrast calculation across six themes: banner text minimum 7.33:1, status icon minimum 3.28:1; motion-safe reduced-motion rule present"
   ],
   "deviations": [],
   "knownRisks": [
-    "Builder evidence only: an independent Verifier has not reviewed this diff",
-    "The real Library was intentionally neither launched nor modified; isolated real-corpus startup and memory replay remains required",
-    "Main-process summaries still retain audit usage events; v28 removes the monolithic JSON parse peak and startup IPC clone, but the real-corpus resident-memory ceiling is not yet independently measured",
-    "The Windows native packaged E2E is conditionally skipped on macOS and still requires its Windows gate"
+    "The one-time real v27-to-v28 cold migration reached source-ready in 31.577s and complete in 33.159s with 2240928 KiB process max RSS; the isolated migration worker itself stayed at 347586560 bytes max RSS, while the subsequent warm replay reached source-ready in 1.428s with 807056 KiB max RSS",
+    "Windows x64 cross-build and package policy pass locally, but the installed Windows-native six-path E2E remains a required pre-integration platform gate",
+    "Public release remains blocked on local merged macOS installation, yyt trial feedback, and a new explicit yyt release approval"
   ],
   "provenance": {
     "harness": "codex",

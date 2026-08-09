@@ -115,10 +115,10 @@ function readRecoveryJournal(filePath: string, planDirectory: string, libraryRoo
 }
 
 /** Roll back transactions that never reached a durable `complete` journal. */
-export function recoverInterruptedDuplicateRecoveryTransactions(
+export async function recoverInterruptedDuplicateRecoveryTransactions(
   libraryRootInput: string,
   quarantineRootInput: string
-): { recoveredPlanCount: number; recoveredPackageCount: number } {
+): Promise<{ recoveredPlanCount: number; recoveredPackageCount: number }> {
   const libraryRoot = fs.realpathSync(path.resolve(libraryRootInput))
   const requestedQuarantineRoot = path.resolve(quarantineRootInput)
   if (!fs.existsSync(requestedQuarantineRoot)) return { recoveredPlanCount: 0, recoveredPackageCount: 0 }
@@ -151,6 +151,14 @@ export function recoverInterruptedDuplicateRecoveryTransactions(
         throw new Error('duplicate-recovery-rollback-artifact-missing')
       }
       if (quarantineExists) {
+        const movedTreeHash = await calculateRecoveryPackageTreeHash(
+          libraryRoot,
+          move.originalPath,
+          move.quarantinePath
+        )
+        if (movedTreeHash !== move.expectedPackageTreeHash) {
+          throw new Error('duplicate-recovery-rollback-package-changed')
+        }
         if (fs.statSync(move.quarantinePath).dev !== fs.statSync(path.dirname(move.originalPath)).dev) {
           throw new Error('duplicate-recovery-rollback-must-share-filesystem')
         }

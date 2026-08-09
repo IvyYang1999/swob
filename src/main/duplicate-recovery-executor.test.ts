@@ -169,12 +169,40 @@ describe('duplicate recovery executor', () => {
     }))
     fs.renameSync(move.fromPath, move.quarantinePath)
 
-    const recovered = recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot)
+    const recovered = await recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot)
 
     expect(recovered).toEqual({ recoveredPlanCount: 1, recoveredPackageCount: 1 })
     expect(packageCount(libraryRoot)).toBe(4)
     expect(packageCount(quarantineRoot)).toBe(0)
     expect(JSON.parse(fs.readFileSync(path.join(planDirectory, 'recovery-journal.json'), 'utf8')).state)
       .toBe('rolled-back')
+  })
+
+  it('中断后的隔离对象被改动时拒绝回灌 Library', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+    const prepared = await prepareDuplicateRecoveryExecution(libraryRoot, report, { quarantineRoot })
+    const move = prepared.moves[0]
+    const planDirectory = path.dirname(move.quarantinePath)
+    fs.mkdirSync(planDirectory, { recursive: true })
+    fs.writeFileSync(path.join(planDirectory, 'recovery-journal.json'), JSON.stringify({
+      schemaVersion: 1,
+      planId: prepared.planId,
+      state: 'applying',
+      createdAt: '2026-08-09T00:00:00.000Z',
+      moves: [{
+        pathId: move.pathId,
+        originalPath: move.fromPath,
+        quarantinePath: move.quarantinePath,
+        expectedPackageTreeHash: move.expectedPackageTreeHash,
+        state: 'quarantined'
+      }]
+    }))
+    fs.renameSync(move.fromPath, move.quarantinePath)
+    fs.appendFileSync(path.join(move.quarantinePath, 'transcript.md'), 'tampered after crash\n')
+
+    await expect(recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot))
+      .rejects.toThrow('duplicate-recovery-rollback-package-changed')
+    expect(fs.existsSync(move.fromPath)).toBe(false)
+    expect(fs.existsSync(move.quarantinePath)).toBe(true)
   })
 })

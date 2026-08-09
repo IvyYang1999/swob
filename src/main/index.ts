@@ -4283,13 +4283,14 @@ app.whenReady().then(async () => {
       duplicateRecoveryQuarantineRoot()
     ))
   } catch (error) {
-    transitionLibraryHealth(
-      'read-only',
-      'DUPLICATE_RECOVERY_ROLLBACK_FAILED',
-      'An interrupted duplicate recovery could not be rolled back safely'
-    )
     console.error('[duplicate-recovery] Interrupted transaction rollback failed:',
       error instanceof Error ? error.message : 'unknown error')
+    dialog.showErrorBox(
+      mainT('native.duplicate_recovery.fatal_title'),
+      mainT('native.duplicate_recovery.fatal_body')
+    )
+    app.quit()
+    return
   }
   try {
     recoverInterruptedLibraryOrganization()

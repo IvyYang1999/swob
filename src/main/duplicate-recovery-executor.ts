@@ -82,6 +82,10 @@ function isInside(parent: string, candidate: string): boolean {
 }
 
 function readRecoveryJournal(filePath: string, planDirectory: string, libraryRoot: string): RecoveryJournal {
+  const journalStat = fs.lstatSync(filePath)
+  if (!journalStat.isFile() || journalStat.isSymbolicLink()) {
+    throw new Error('duplicate-recovery-journal-not-physical-file')
+  }
   const value: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'))
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('duplicate-recovery-journal-invalid')
@@ -103,6 +107,10 @@ function readRecoveryJournal(filePath: string, planDirectory: string, libraryRoo
     const quarantinePath = path.resolve(move.quarantinePath)
     if (!isInside(libraryRoot, originalPath) || originalPath === path.resolve(libraryRoot)) {
       throw new Error('duplicate-recovery-journal-original-path-invalid')
+    }
+    const originalParent = fs.realpathSync(path.dirname(originalPath))
+    if (!isInside(libraryRoot, originalParent)) {
+      throw new Error('duplicate-recovery-journal-original-parent-invalid')
     }
     if (path.dirname(quarantinePath) !== path.resolve(planDirectory)) {
       throw new Error('duplicate-recovery-journal-quarantine-parent-invalid')
@@ -223,6 +231,10 @@ export async function executeDuplicateRecoveryPlan(
     for (const [index, move] of prepared.moves.entries()) {
       if (options.signal?.aborted) throw new Error('duplicate-recovery-apply-cancelled')
       if (fs.existsSync(move.quarantinePath)) throw new Error('duplicate-recovery-target-already-exists')
+      const sourceParent = fs.realpathSync(path.dirname(move.fromPath))
+      if (!isInside(prepared.libraryRoot, sourceParent)) {
+        throw new Error('duplicate-recovery-source-parent-outside-library')
+      }
       options.beforeMove?.(move, index)
       fs.renameSync(move.fromPath, move.quarantinePath)
       completed.push(move)

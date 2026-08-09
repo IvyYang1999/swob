@@ -7,7 +7,10 @@ import {
   buildDuplicateRecoveryReport,
   prepareDuplicateRecoveryExecution
 } from './duplicate-recovery-planner'
-import { executeDuplicateRecoveryPlan } from './duplicate-recovery-executor'
+import {
+  executeDuplicateRecoveryPlan,
+  recoverInterruptedDuplicateRecoveryTransactions
+} from './duplicate-recovery-executor'
 
 let workRoot: string
 let libraryRoot: string
@@ -129,5 +132,49 @@ describe('duplicate recovery executor', () => {
     expect(packageCount(quarantineRoot)).toBe(0)
     const journalPath = path.join(quarantineRoot, report.planId.replace(/^plan:/, ''), 'recovery-journal.json')
     expect(JSON.parse(fs.readFileSync(journalPath, 'utf8')).state).toBe('rolled-back')
+  })
+
+  it('prepare 后路径内容被替换时，先原子认领再复核实际移动对象并回滚', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+
+    await expect(executeDuplicateRecoveryPlan(libraryRoot, report, {
+      quarantineRoot,
+      beforeMove: (move, index) => {
+        if (index === 0) fs.appendFileSync(path.join(move.fromPath, 'transcript.md'), 'replaced after prepare\n')
+      }
+    })).rejects.toThrow('duplicate-recovery-package-changed-at-rename')
+
+    expect(packageCount(libraryRoot)).toBe(4)
+    expect(packageCount(quarantineRoot)).toBe(0)
+  })
+
+  it('启动时自动回滚未到达 complete journal 的中断事务', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+    const prepared = await prepareDuplicateRecoveryExecution(libraryRoot, report, { quarantineRoot })
+    const move = prepared.moves[0]
+    const planDirectory = path.dirname(move.quarantinePath)
+    fs.mkdirSync(planDirectory, { recursive: true })
+    fs.writeFileSync(path.join(planDirectory, 'recovery-journal.json'), JSON.stringify({
+      schemaVersion: 1,
+      planId: prepared.planId,
+      state: 'applying',
+      createdAt: '2026-08-09T00:00:00.000Z',
+      moves: prepared.moves.map((candidate) => ({
+        pathId: candidate.pathId,
+        originalPath: candidate.fromPath,
+        quarantinePath: candidate.quarantinePath,
+        expectedPackageTreeHash: candidate.expectedPackageTreeHash,
+        state: candidate.pathId === move.pathId ? 'quarantined' : 'pending'
+      }))
+    }))
+    fs.renameSync(move.fromPath, move.quarantinePath)
+
+    const recovered = recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot)
+
+    expect(recovered).toEqual({ recoveredPlanCount: 1, recoveredPackageCount: 1 })
+    expect(packageCount(libraryRoot)).toBe(4)
+    expect(packageCount(quarantineRoot)).toBe(0)
+    expect(JSON.parse(fs.readFileSync(path.join(planDirectory, 'recovery-journal.json'), 'utf8')).state)
+      .toBe('rolled-back')
   })
 })

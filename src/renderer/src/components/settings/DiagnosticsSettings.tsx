@@ -35,8 +35,10 @@ export function DiagnosticsSettings() {
   const backlog = health.dimensions.backgroundBacklog
   const actionableIdentityGroups = identity.unknownGroupCount + identity.evidenceMismatchGroupCount
   const backgroundFailures = backlog.failed
+  const pausedBackgroundItems = backlog.state === 'paused' ? backlog.remaining : 0
+  const backgroundProblemCount = backgroundFailures + pausedBackgroundItems
   const writerProblem = health.state === 'writer-blocked' || health.state === 'read-only' || health.state === 'corrupt'
-  const actionableCount = actionableIdentityGroups + backgroundFailures + (writerProblem ? 1 : 0)
+  const actionableCount = actionableIdentityGroups + backgroundProblemCount + (writerProblem ? 1 : 0)
   const summary = report ? recoverySummary(report) : null
   const rawSnapshot = useMemo(() => JSON.stringify({
     state: health.state,
@@ -82,7 +84,9 @@ export function DiagnosticsSettings() {
     setApplying(true)
     try {
       const result = await window.api.libraryApplyDuplicateRecovery(report.planId)
-      showToast(t('diagnostics.apply_done', { n: result.appliedPackageCount }), 'success')
+      showToast(t(result.restartRequired ? 'diagnostics.apply_done_restart' : 'diagnostics.apply_done', {
+        n: result.appliedPackageCount
+      }), 'success')
       setReport(null)
     } catch {
       showToast(t('diagnostics.apply_failed'), 'error')
@@ -203,11 +207,13 @@ export function DiagnosticsSettings() {
         </SettingField>
       )}
 
-      {backgroundFailures > 0 && (
+      {backgroundProblemCount > 0 && (
         <SettingField label={t('diagnostics.background_title')} icon={<RefreshCw size={12} />}>
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-surface px-3 py-2.5">
             <span className="text-[11px] text-muted">
-              {t('diagnostics.background_failed', { n: backgroundFailures })}
+              {pausedBackgroundItems > 0
+                ? t('diagnostics.background_paused', { n: pausedBackgroundItems })
+                : t('diagnostics.background_failed', { n: backgroundFailures })}
             </span>
             {health.availableActions.includes('retry-compensation') && (
               <button

@@ -1,23 +1,23 @@
 import { AlertTriangle, Database } from 'lucide-react'
 import { useT } from '../i18n'
-import { staleMinutes, useLibraryHealth } from '../hooks/useLibraryHealth'
+import { useLibraryHealth } from '../hooks/useLibraryHealth'
 
 /** Contextual stale evidence stays next to the search/insight/share result it qualifies. */
 export function StaleDisclaimer({ variant }: { variant: 'search' | 'insights' | 'share' }) {
   const t = useT()
   const health = useLibraryHealth()
-  if (health.state === 'ready' && health.diagnostics.length === 0) return null
+  const freshness = health.dimensions.activeSourceFreshness
+  if (freshness.state === 'durable') return null
 
   if (variant === 'share') {
     return <span className="text-[10px] text-soft-amber">{t('health.share_stale')}</span>
   }
 
-  const minutes = staleMinutes(null)
   const key = variant === 'search' ? 'health.search_disclaimer' : 'health.insights_disclaimer'
   return (
     <div className="flex items-center gap-1.5 text-[11px] text-soft-amber px-1 py-0.5 rounded bg-soft-amber/5">
       <Database size={10} className="shrink-0" />
-      <span>{minutes > 0 ? t(key, { n: minutes }) : t(`${key}_unknown`)}</span>
+      <span>{t(`${key}_unknown`)}</span>
     </div>
   )
 }

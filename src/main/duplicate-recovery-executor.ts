@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import {
+  calculateRecoveryPackageTreeHash,
   prepareDuplicateRecoveryExecution,
   type DuplicateRecoveryReport
 } from './duplicate-recovery-planner'
@@ -9,6 +10,27 @@ import type { DuplicateRecoveryApplyResult } from '../shared/duplicate-recovery-
 export interface ExecuteDuplicateRecoveryOptions {
   quarantineRoot?: string
   signal?: AbortSignal
+  /** Deterministic test seam for prepare-to-rename replacement races. */
+  beforeMove?: (move: { fromPath: string; quarantinePath: string }, index: number) => void
+}
+
+interface RecoveryJournalMove {
+  pathId: string
+  originalPath: string
+  quarantinePath: string
+  expectedPackageTreeHash: string
+  state: 'pending' | 'quarantined' | 'rolled-back'
+}
+
+interface RecoveryJournal {
+  schemaVersion: 1
+  planId: string
+  state: 'prepared' | 'applying' | 'complete' | 'rolled-back' | 'rollback-incomplete'
+  createdAt: string
+  completedAt?: string
+  failedAt?: string
+  recoveredAt?: string
+  moves: RecoveryJournalMove[]
 }
 
 function nearestExistingAncestor(candidatePath: string): string {
@@ -54,6 +76,101 @@ function replaceJsonFile(filePath: string, value: unknown): void {
   fsyncDirectory(path.dirname(filePath))
 }
 
+function isInside(parent: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate))
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+}
+
+function readRecoveryJournal(filePath: string, planDirectory: string, libraryRoot: string): RecoveryJournal {
+  const value: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('duplicate-recovery-journal-invalid')
+  }
+  const journal = value as Partial<RecoveryJournal>
+  const planToken = path.basename(planDirectory)
+  if (journal.schemaVersion !== 1 || journal.planId !== `plan:${planToken}` ||
+    !['prepared', 'applying', 'complete', 'rolled-back', 'rollback-incomplete'].includes(String(journal.state)) ||
+    !Array.isArray(journal.moves)) {
+    throw new Error('duplicate-recovery-journal-invalid')
+  }
+  for (const move of journal.moves) {
+    if (!move || !/^path:[0-9a-f]{24}$/.test(move.pathId) ||
+      !/^[0-9a-f]{64}$/.test(move.expectedPackageTreeHash) ||
+      !['pending', 'quarantined', 'rolled-back'].includes(move.state)) {
+      throw new Error('duplicate-recovery-journal-move-invalid')
+    }
+    const originalPath = path.resolve(move.originalPath)
+    const quarantinePath = path.resolve(move.quarantinePath)
+    if (!isInside(libraryRoot, originalPath) || originalPath === path.resolve(libraryRoot)) {
+      throw new Error('duplicate-recovery-journal-original-path-invalid')
+    }
+    if (path.dirname(quarantinePath) !== path.resolve(planDirectory)) {
+      throw new Error('duplicate-recovery-journal-quarantine-parent-invalid')
+    }
+    if (path.basename(quarantinePath) !== move.pathId.replace(/^path:/, '')) {
+      throw new Error('duplicate-recovery-journal-quarantine-name-invalid')
+    }
+  }
+  return journal as RecoveryJournal
+}
+
+/** Roll back transactions that never reached a durable `complete` journal. */
+export function recoverInterruptedDuplicateRecoveryTransactions(
+  libraryRootInput: string,
+  quarantineRootInput: string
+): { recoveredPlanCount: number; recoveredPackageCount: number } {
+  const libraryRoot = fs.realpathSync(path.resolve(libraryRootInput))
+  const requestedQuarantineRoot = path.resolve(quarantineRootInput)
+  if (!fs.existsSync(requestedQuarantineRoot)) return { recoveredPlanCount: 0, recoveredPackageCount: 0 }
+  const quarantineRoot = fs.realpathSync(requestedQuarantineRoot)
+  if (isInside(libraryRoot, quarantineRoot)) throw new Error('quarantine-root-must-be-outside-library')
+  let recoveredPlanCount = 0
+  let recoveredPackageCount = 0
+  const entries = fs.readdirSync(quarantineRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^[0-9a-f]{24}$/.test(entry.name))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  for (const entry of entries) {
+    const planDirectory = path.join(quarantineRoot, entry.name)
+    const journalPath = path.join(planDirectory, 'recovery-journal.json')
+    const nextJournalPath = `${journalPath}.next`
+    if (fs.existsSync(nextJournalPath)) {
+      readRecoveryJournal(nextJournalPath, planDirectory, libraryRoot)
+      fs.renameSync(nextJournalPath, journalPath)
+      fsyncDirectory(planDirectory)
+    }
+    if (!fs.existsSync(journalPath)) continue
+    const journal = readRecoveryJournal(journalPath, planDirectory, libraryRoot)
+    if (journal.state === 'complete' || journal.state === 'rolled-back') continue
+    for (const move of [...journal.moves].reverse()) {
+      const originalExists = fs.existsSync(move.originalPath)
+      const quarantineExists = fs.existsSync(move.quarantinePath)
+      if (originalExists && quarantineExists) {
+        throw new Error('duplicate-recovery-rollback-target-collision')
+      }
+      if (!originalExists && !quarantineExists) {
+        throw new Error('duplicate-recovery-rollback-artifact-missing')
+      }
+      if (quarantineExists) {
+        if (fs.statSync(move.quarantinePath).dev !== fs.statSync(path.dirname(move.originalPath)).dev) {
+          throw new Error('duplicate-recovery-rollback-must-share-filesystem')
+        }
+        fs.renameSync(move.quarantinePath, move.originalPath)
+        fsyncDirectory(path.dirname(move.originalPath))
+        fsyncDirectory(planDirectory)
+        recoveredPackageCount++
+      }
+      move.state = 'rolled-back'
+    }
+    replaceJsonFile(journalPath, {
+      ...journal,
+      state: 'rolled-back',
+      recoveredAt: new Date().toISOString()
+    })
+    recoveredPlanCount++
+  }
+  return { recoveredPlanCount, recoveredPackageCount }
+}
+
 /**
  * Move only byte-equivalent duplicates into a recoverable local quarantine.
  * The caller must hold the Library maintenance writer lease.
@@ -77,7 +194,7 @@ export async function executeDuplicateRecoveryPlan(
   const planDirectory = path.dirname(prepared.moves[0].quarantinePath)
   fs.mkdirSync(planDirectory, { recursive: true, mode: 0o700 })
   const journalPath = path.join(planDirectory, 'recovery-journal.json')
-  const journal = {
+  const journal: RecoveryJournal = {
     schemaVersion: 1,
     planId: prepared.planId,
     state: 'prepared',
@@ -95,11 +212,21 @@ export async function executeDuplicateRecoveryPlan(
 
   const completed: typeof prepared.moves = []
   try {
-    for (const move of prepared.moves) {
+    for (const [index, move] of prepared.moves.entries()) {
       if (options.signal?.aborted) throw new Error('duplicate-recovery-apply-cancelled')
       if (fs.existsSync(move.quarantinePath)) throw new Error('duplicate-recovery-target-already-exists')
+      options.beforeMove?.(move, index)
       fs.renameSync(move.fromPath, move.quarantinePath)
       completed.push(move)
+      const movedTreeHash = await calculateRecoveryPackageTreeHash(
+        prepared.libraryRoot,
+        move.fromPath,
+        move.quarantinePath,
+        options.signal
+      )
+      if (movedTreeHash !== move.expectedPackageTreeHash) {
+        throw new Error('duplicate-recovery-package-changed-at-rename')
+      }
       const journalMove = journal.moves.find((item) => item.pathId === move.pathId)
       if (journalMove) journalMove.state = 'quarantined'
       replaceJsonFile(journalPath, { ...journal, state: 'applying' })

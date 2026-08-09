@@ -36,13 +36,18 @@ export type InventoryFileRole =
   | 'symlink'
 
 export interface InventoryFile {
-  relativePath: string
+  filePathId: string
   role: InventoryFileRole
   kind: 'file' | 'symlink' | 'other'
   size: number
   mtime: string
   sha256?: string
   symlinkTargetHash?: string
+}
+
+interface ScannedInventoryFile extends Omit<InventoryFile, 'filePathId'> {
+  /** Internal-only package-relative path; never emitted in DuplicateRecoveryReport. */
+  relativePath: string
 }
 
 export interface SourceEvidence {
@@ -218,7 +223,7 @@ interface ScannedPackage {
   identity?: LogicalSessionIdentity
   logicalKey?: string
   candidate?: LibrarySessionCandidate
-  files: InventoryFile[]
+  files: ScannedInventoryFile[]
   sources: SourceEvidence[]
   backupSourceRelationship: PackageInventory['backupSourceRelationship']
   packageTreeHash: string
@@ -271,6 +276,10 @@ function pathId(relativePath: string): string {
   return `path:${sha256(relativePath.normalize('NFC')).slice(0, 24)}`
 }
 
+function filePathId(relativePath: string): string {
+  return `file:${sha256(relativePath.normalize('NFC')).slice(0, 24)}`
+}
+
 function isInside(parent: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(parent), path.resolve(candidate))
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
@@ -310,8 +319,8 @@ function fileRole(relativePath: string, kind: 'file' | 'symlink' | 'other'): Inv
   return 'user-file'
 }
 
-async function listPackageFiles(packagePath: string, signal?: AbortSignal): Promise<InventoryFile[]> {
-  const files: InventoryFile[] = []
+async function listPackageFiles(packagePath: string, signal?: AbortSignal): Promise<ScannedInventoryFile[]> {
+  const files: ScannedInventoryFile[] = []
   async function walk(dirPath: string): Promise<void> {
     assertNotAborted(signal)
     const entries = fs.readdirSync(dirPath, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
@@ -472,7 +481,7 @@ async function sourceEvidence(sourcePath: string, hashSources: boolean, signal?:
 }
 
 function backupRelationship(
-  files: InventoryFile[],
+  files: ScannedInventoryFile[],
   sources: SourceEvidence[],
   hashSources: boolean
 ): PackageInventory['backupSourceRelationship'] {
@@ -568,7 +577,7 @@ async function scanPackageDeep(
   sourceCache?: Map<string, Promise<SourceEvidence>>
 ): Promise<ScannedPackage> {
   assertNotAborted(signal)
-  let files: InventoryFile[] = []
+  let files: ScannedInventoryFile[] = []
   let inventoryState: ScannedPackage['inventoryState'] = 'complete'
   try { files = await listPackageFiles(shallow.realPath, signal) } catch (error) {
     if (signal?.aborted) throw error
@@ -606,6 +615,57 @@ async function scanPackageDeep(
     })),
     deepScanned: true
   }
+}
+
+/**
+ * Re-hash the exact directory claimed by an atomic quarantine rename while
+ * retaining its original Library-relative identity in the tree fingerprint.
+ * This closes the prepare-to-rename path replacement window: the object that
+ * actually moved must still match the accepted plan before the transaction is
+ * committed.
+ */
+export async function calculateRecoveryPackageTreeHash(
+  libraryRootInput: string,
+  originalPackagePathInput: string,
+  physicalPackagePathInput: string,
+  signal?: AbortSignal
+): Promise<string> {
+  assertNotAborted(signal)
+  const libraryRoot = fs.realpathSync(path.resolve(libraryRootInput))
+  const originalPackagePath = path.resolve(originalPackagePathInput)
+  const physicalPackagePath = path.resolve(physicalPackagePathInput)
+  if (!isInside(libraryRoot, originalPackagePath) || originalPackagePath === libraryRoot) {
+    throw new Error('duplicate-recovery-original-path-outside-library')
+  }
+  const beforeDirectory = fs.lstatSync(physicalPackagePath)
+  if (!beforeDirectory.isDirectory() || beforeDirectory.isSymbolicLink()) {
+    throw new Error('duplicate-recovery-moved-package-not-physical-directory')
+  }
+  const markerPath = path.join(physicalPackagePath, MARKER_FILE)
+  const beforeMarker = fs.lstatSync(markerPath)
+  if (!beforeMarker.isFile() || beforeMarker.isSymbolicLink()) {
+    throw new Error('duplicate-recovery-moved-manifest-not-physical-file')
+  }
+  const manifestText = fs.readFileSync(markerPath, 'utf8')
+  const afterMarker = fs.lstatSync(markerPath)
+  if (beforeMarker.dev !== afterMarker.dev || beforeMarker.ino !== afterMarker.ino ||
+    beforeMarker.size !== afterMarker.size || beforeMarker.mtimeMs !== afterMarker.mtimeMs) {
+    throw new Error('duplicate-recovery-moved-manifest-changed-during-read')
+  }
+  const files = await listPackageFiles(physicalPackagePath, signal)
+  const afterDirectory = fs.lstatSync(physicalPackagePath)
+  if (beforeDirectory.dev !== afterDirectory.dev || beforeDirectory.ino !== afterDirectory.ino ||
+    beforeDirectory.mtimeMs !== afterDirectory.mtimeMs) {
+    throw new Error('duplicate-recovery-moved-package-changed-during-read')
+  }
+  return sha256(JSON.stringify({
+    path: normalizedRelative(libraryRoot, originalPackagePath),
+    isSymlink: false,
+    manifestState: parseManifest(manifestText) ? 'valid' : 'corrupt',
+    inventoryState: 'complete',
+    manifestRawHash: sha256(manifestText),
+    files
+  }))
 }
 
 async function discoverPackages(
@@ -677,7 +737,7 @@ function hasUniqueEvidence(signatures: Map<string, Set<string>>, packageId: stri
     .filter(([candidate]) => candidate !== packageId)
     .flatMap(([, values]) => [...values]))
   return [...own].filter((signature) => !others.has(signature))
-    .map((signature) => signature.split('\0')[0]).sort()
+    .map((signature) => filePathId(signature.split('\0')[0])).sort()
 }
 
 function classificationFor(
@@ -807,7 +867,10 @@ function buildConflict(
     cloudState: candidate.cloudState,
     inventoryState: candidate.inventoryState,
     manifest: safeManifestInventory(candidate),
-    files: candidate.files,
+    files: candidate.files.map(({ relativePath, ...file }) => ({
+      ...file,
+      filePathId: filePathId(relativePath)
+    })),
     sources: candidate.sources,
     backupSourceRelationship: candidate.backupSourceRelationship,
     uniqueEvidence: {

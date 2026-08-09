@@ -135,4 +135,21 @@ describe('DiagnosticsSettings', () => {
     expect(screen.getByRole('button', { name: '隔离 2 个等价副本' })).not.toBeNull()
     expect(screen.getByText(/有独有内容的包绝不会自动移动/)).not.toBeNull()
   })
+
+  it('后台补齐暂停但尚未失败时仍提供恢复入口', () => {
+    const previous = health.dimensions.backgroundBacklog
+    health.dimensions.backgroundBacklog = {
+      ...previous,
+      state: 'paused',
+      failed: 0,
+      remaining: 7
+    }
+    try {
+      render(<DiagnosticsSettings />)
+      expect(screen.getByText('后台补齐已暂停，还有 7 个会话未处理。')).not.toBeNull()
+      expect(screen.getByRole('button', { name: '重新补齐' })).not.toBeNull()
+    } finally {
+      health.dimensions.backgroundBacklog = previous
+    }
+  })
 })

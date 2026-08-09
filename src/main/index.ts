@@ -155,7 +155,10 @@ import {
 import { advanceLibraryWriterArbiterEpoch } from './library-writer-lease'
 import { loadConfig, saveConfig } from './config-store'
 import type { DuplicateRecoveryReport } from './duplicate-recovery-planner'
-import { executeDuplicateRecoveryPlan } from './duplicate-recovery-executor'
+import {
+  executeDuplicateRecoveryPlan,
+  recoverInterruptedDuplicateRecoveryTransactions
+} from './duplicate-recovery-executor'
 import type {
   DuplicateRecoveryProgress,
   DuplicateRecoverySummary
@@ -3680,6 +3683,10 @@ function duplicateRecoverySummary(report: DuplicateRecoveryReport): DuplicateRec
   }
 }
 
+function duplicateRecoveryQuarantineRoot(): string {
+  return path.join(app.getPath('userData'), 'Recovery Quarantine')
+}
+
 function runDuplicateRecoveryAnalysis(
   libraryRoot: string,
   quarantineRoot: string
@@ -3757,7 +3764,7 @@ ipcMain.handle('library:compensationRetry', async () => {
 
 ipcMain.handle('library:analyzeDuplicateRecovery', async (): Promise<DuplicateRecoverySummary> => {
   const libraryRoot = getLibraryRoot()
-  const quarantineRoot = path.join(app.getPath('userData'), 'Recovery Quarantine')
+  const quarantineRoot = duplicateRecoveryQuarantineRoot()
   const report = await runDuplicateRecoveryAnalysis(libraryRoot, quarantineRoot)
   if (path.resolve(getLibraryRoot()) !== path.resolve(libraryRoot)) {
     throw new Error('duplicate-recovery-library-changed-during-analysis')
@@ -3789,18 +3796,29 @@ ipcMain.handle('library:applyDuplicateRecovery', async (_event, planId: unknown)
     { quarantineRoot: prepared.quarantineRoot }
   ))
   preparedDuplicateRecovery = null
-  const tree = await requestLibraryScan()
-  adoptLibraryTree(tree)
-  const remainingConflictCount = getLibrarySessionRegistryDiagnostics()
-    .filter((binding) => binding.state === 'conflict').length
-  transitionLibraryHealth(
-    remainingConflictCount > 0 ? 'identity-conflict' : 'ready',
-    remainingConflictCount > 0 ? 'IDENTITY_CONFLICT' : 'DUPLICATE_RECOVERY_COMPLETE',
-    remainingConflictCount > 0
-      ? `${remainingConflictCount} logical session identities remain read-only after duplicate recovery`
-      : 'Equivalent duplicate packages moved to recoverable quarantine'
-  )
-  return { ...result, restartRequired: false }
+  try {
+    const tree = await requestLibraryScan()
+    adoptLibraryTree(tree)
+    const remainingConflictCount = getLibrarySessionRegistryDiagnostics()
+      .filter((binding) => binding.state === 'conflict').length
+    transitionLibraryHealth(
+      remainingConflictCount > 0 ? 'identity-conflict' : 'ready',
+      remainingConflictCount > 0 ? 'IDENTITY_CONFLICT' : 'DUPLICATE_RECOVERY_COMPLETE',
+      remainingConflictCount > 0
+        ? `${remainingConflictCount} logical session identities remain read-only after duplicate recovery`
+        : 'Equivalent duplicate packages moved to recoverable quarantine'
+    )
+    return { ...result, restartRequired: false }
+  } catch (error) {
+    transitionLibraryHealth(
+      'identity-conflict',
+      'DUPLICATE_RECOVERY_REFRESH_FAILED',
+      'Equivalent duplicate packages were quarantined, but the Library view must be refreshed after restart'
+    )
+    console.error('[duplicate-recovery] post-apply Library refresh failed:',
+      error instanceof Error ? error.message : 'unknown error')
+    return { ...result, restartRequired: true }
+  }
 })
 
 ipcMain.handle('library:selectDirectory', async () => {
@@ -4259,6 +4277,20 @@ app.whenReady().then(async () => {
     getLibraryRoot(),
     path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
   )
+  try {
+    await withLibraryMaintenanceWriter(() => recoverInterruptedDuplicateRecoveryTransactions(
+      getLibraryRoot(),
+      duplicateRecoveryQuarantineRoot()
+    ))
+  } catch (error) {
+    transitionLibraryHealth(
+      'read-only',
+      'DUPLICATE_RECOVERY_ROLLBACK_FAILED',
+      'An interrupted duplicate recovery could not be rolled back safely'
+    )
+    console.error('[duplicate-recovery] Interrupted transaction rollback failed:',
+      error instanceof Error ? error.message : 'unknown error')
+  }
   try {
     recoverInterruptedLibraryOrganization()
   } catch (error) {

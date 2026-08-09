@@ -251,7 +251,9 @@ describe('duplicate recovery planner', () => {
       'unique-user-files'
     ]))
     expect(merge?.packages.some((item) => item.uniqueEvidence.branchTranscripts.length > 0)).toBe(true)
-    expect(merge?.packages.some((item) => item.uniqueEvidence.userFiles.includes('attachments/private-name.bin'))).toBe(true)
+    expect(merge?.packages.some((item) => item.uniqueEvidence.userFiles.some((id) => /^file:[0-9a-f]{24}$/.test(id)))).toBe(true)
+    expect(JSON.stringify(report)).not.toContain('attachments/private-name.bin')
+    expect(renderDuplicateRecoveryMarkdown(report)).not.toContain('attachments/private-name.bin')
     expect(merge?.recovery).toMatchObject({ action: 'manual-merge', moves: [], reverse: [] })
     expect(merge?.packages.every((item) => item.role === 'preserve')).toBe(true)
   })

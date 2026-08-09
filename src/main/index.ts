@@ -2,7 +2,7 @@
 // writes to console or spawns a child (see stdio-repair.ts).
 import { logSpawnSelfTest } from './stdio-repair'
 import { startupRuntimeSafety } from './runtime-isolation-bootstrap'
-import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen, dialog, clipboard, nativeImage } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, Menu, globalShortcut, screen, dialog, clipboard, nativeImage, type WebContents } from 'electron'
 import path from 'path'
 const { join, dirname, relative } = path
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -24,12 +24,17 @@ import * as fs from 'fs'
 import { getLocalNetworkInfo, queryPublicIp } from './network-info'
 import {
   loadAllSessions,
+  loadAllSessionsWithProviderStatus,
   loadSessionDetail,
   loadSessionDetailWithFallback,
   findAllSessionFiles,
   findClaudeSessionFiles,
   buildSessionSummaryFromBackup
 } from './session-loader'
+import {
+  beginSessionBootstrap,
+  sessionSummaryForRenderer
+} from './session-bootstrap'
 import {
   findCodexSessionFiles,
   loadCodexRawMessages,
@@ -158,8 +163,11 @@ import {
   getSearchIndexWriteCoordinator,
   LARGE_SEARCH_WORKER_RECYCLE_BYTES
 } from './search-index-writer'
-import { cancelCanonicalProviders } from './provider-runtime'
-import { closeCanonicalSessionStore } from './canonical-store'
+import {
+  cancelCanonicalProviders,
+  withCanonicalProviderRefreshBarrier
+} from './provider-runtime'
+import { closeCanonicalSessionStore, getLoadedCanonicalSession } from './canonical-store'
 import { buildInsights } from './insights'
 import {
   drilldownInsights,
@@ -326,6 +334,9 @@ const knownSessionIds = new Set<string>()
 let libraryInitialized = false
 let latestLibraryTree: LibraryTree | null = null
 let libraryInitializationPromise: Promise<void> | null = null
+const pendingProviderLibrarySessions = new Map<string, SessionSummary>()
+let providerLibrarySyncPromise: Promise<void> | null = null
+let providerLibraryQueueGeneration = 0
 let libraryHydrationGeneration = 0
 let usageFactSyncError: unknown = null
 interface UsageFactSyncSnapshot {
@@ -936,7 +947,7 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     }
     const parentIndex = cachedSessions.findIndex((session) => session.id === continuationParent.id)
     if (parentIndex >= 0) cachedSessions[parentIndex] = updatedParent
-    mainWindow?.webContents.send('session:summaryUpdated', updatedParent)
+    mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(updatedParent))
     void scheduleUsageFactSync()
     return
   }
@@ -946,12 +957,12 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     cachedSessions[existingIndex] = summary
     knownSessionIds.add(summary.id)
     knownSessionIds.add(summary.sessionId)
-    mainWindow?.webContents.send('session:summaryUpdated', summary)
+    mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(summary))
   } else {
     cachedSessions = [summary, ...cachedSessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     knownSessionIds.add(summary.id)
     knownSessionIds.add(summary.sessionId)
-    mainWindow?.webContents.send('session:added', summary)
+    mainWindow?.webContents.send('session:added', sessionSummaryForRenderer(summary))
   }
   void scheduleUsageFactSync()
 }
@@ -1177,17 +1188,18 @@ function cleanupRuntimeResources(): Promise<void> {
   clearLibraryWriterRecoverySchedule()
   deferredLibrarySyncRequests.clear()
   currentUsageFactSyncRunner?.stop(new Error('Runtime is shutting down'))
+  const providerLibrarySyncClosePromise = providerLibrarySyncPromise?.catch(() => undefined) || Promise.resolve()
   // Start draining immediately and overlap it with the bounded cleanup below.
   // LibraryWorkerClient refuses new requests once close() begins. Unlike the
   // other resources this promise must not be deadline-cancelled because
   // terminating active better-sqlite3 work can abort the whole process.
-  const libraryWorkerClosePromise = Promise.all([
+  const libraryWorkerClosePromise = providerLibrarySyncClosePromise.then(() => Promise.all([
     currentLibraryWorker?.close() || Promise.resolve(),
     currentLiveSessionSyncWorker?.close() || Promise.resolve(),
     currentLiveSessionSyncWorkerRecycle,
     currentUsageFactWorker?.close() || Promise.resolve(),
     closeSearchIndexWriteCoordinator(new Error('Runtime is shutting down'))
-  ])
+  ]))
 
   runtimeCleanupPromise = runRuntimeCleanup([
     { name: 'agent-child', timeoutMs: 800, run: shutdownAgentRuntime },
@@ -1529,9 +1541,132 @@ function mergeSessionPatch(patch: SessionSummary[]): void {
 
 function emitLibraryPatch(sessions: SessionSummary[], tree?: LibraryTree): void {
   mainWindow?.webContents.send('sessions:libraryPatch', {
-    sessions,
+    sessions: sessions.map(sessionSummaryForRenderer),
     config: tree ? libraryTreeToConfig(tree) : undefined
   })
+}
+
+function emitProviderPatch(
+  target: WebContents,
+  sessions: SessionSummary[],
+  status: 'complete' | 'degraded',
+  errorCode?: string
+): void {
+  if (target.isDestroyed()) return
+  target.send('sessions:providerPatch', {
+    sessions: sessions.map(sessionSummaryForRenderer),
+    status,
+    ...(errorCode ? { errorCode } : {})
+  })
+}
+
+function isProviderSession(session: SessionSummary): boolean {
+  return providerUsesCanonicalRuntime(session.source || '')
+}
+
+function replaceCachedProviderSnapshot(snapshot: readonly SessionSummary[]): void {
+  const byId = new Map(
+    cachedSessions
+      .filter((session) => !isProviderSession(session))
+      .map((session) => [session.id, session])
+  )
+  for (const session of snapshot) byId.set(session.id, session)
+  cachedSessions = [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
+function scheduleProviderLibrarySynchronization(): void {
+  if (
+    providerLibrarySyncPromise ||
+    pendingProviderLibrarySessions.size === 0 ||
+    runtimeShuttingDown ||
+    libraryRuntimePaused ||
+    isOnboardingNeeded()
+  ) return
+
+  if (libraryInitializationPromise) {
+    const initialization = libraryInitializationPromise
+    void initialization.finally(() => {
+      queueMicrotask(scheduleProviderLibrarySynchronization)
+    }).catch(() => { /* Library recovery schedules the next durable attempt */ })
+    return
+  }
+  if (!libraryInitialized) return
+
+  const syncEpoch = libraryRuntimeEpoch
+  const syncGeneration = providerLibraryQueueGeneration
+  let failed = false
+  const work = (async (): Promise<void> => {
+    let archived = false
+    try {
+      await withCanonicalProviderRefreshBarrier(async () => {
+        const snapshot = [...pendingProviderLibrarySessions.entries()]
+        for (const [sessionId, session] of snapshot) {
+          if (
+            runtimeShuttingDown ||
+            libraryRuntimePaused ||
+            syncEpoch !== libraryRuntimeEpoch
+          ) return
+          // A newer complete snapshot may have removed this queued session
+          // while this drain was waiting behind a provider refresh.
+          if (pendingProviderLibrarySessions.get(sessionId) !== session) continue
+          if (!getLoadedCanonicalSession(session.id)) {
+            pendingProviderLibrarySessions.delete(sessionId)
+            continue
+          }
+          await ensureSessionInLibrary(session)
+          if (pendingProviderLibrarySessions.get(sessionId) === session) {
+            pendingProviderLibrarySessions.delete(sessionId)
+          }
+          archived = true
+        }
+      })
+      if (
+        archived &&
+        !runtimeShuttingDown &&
+        !libraryRuntimePaused &&
+        syncEpoch === libraryRuntimeEpoch
+      ) {
+        const tree = await requestLibraryScan(false)
+        await hydrateLibrarySessions(tree)
+      }
+    } catch (error) {
+      failed = true
+      if (runtimeShuttingDown || libraryRuntimePaused || syncEpoch !== libraryRuntimeEpoch) return
+      const classification = classifyLibraryError(error)
+      transitionLibraryHealth(
+        classification.state,
+        classification.errorCode,
+        classification.message,
+        classification.writerReason
+      )
+      if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
+      console.error(
+        '[provider-library-sync] canonical archive delayed:',
+        classification.errorCode,
+        classification.message
+      )
+    }
+  })()
+  providerLibrarySyncPromise = work
+  void work.finally(() => {
+    if (providerLibrarySyncPromise === work) providerLibrarySyncPromise = null
+    // Retry remaining work after progress, but do not spin on a persistent
+    // writer/path failure. Recovery, a new snapshot, or root activation will
+    // schedule the next attempt.
+    if (!failed || providerLibraryQueueGeneration !== syncGeneration) {
+      queueMicrotask(scheduleProviderLibrarySynchronization)
+    }
+  })
+}
+
+function queueProviderLibrarySnapshot(
+  snapshot: readonly SessionSummary[],
+  status: 'complete' | 'degraded'
+): void {
+  providerLibraryQueueGeneration++
+  if (status === 'complete') pendingProviderLibrarySessions.clear()
+  for (const session of snapshot) pendingProviderLibrarySessions.set(session.id, session)
+  scheduleProviderLibrarySynchronization()
 }
 
 function refreshLibraryHealthInventory(tree: LibraryTree): void {
@@ -1988,6 +2123,7 @@ async function initLibraryFromSessions(
     throw error
   } finally {
     if (libraryInitializationPromise === work) libraryInitializationPromise = null
+    queueMicrotask(scheduleProviderLibrarySynchronization)
   }
 }
 
@@ -2182,6 +2318,51 @@ function filterExcludedSources(sessions: SessionSummary[]): SessionSummary[] {
   return sessions.filter((s) => !excludedSet.has(s.source || 'claude-code'))
 }
 
+function prepareImmediateSession(summary: SessionSummary): void {
+  summary.detailAvailability = 'ready'
+  annotateSessionSuccessor(summary)
+  const immediateResume = getImmediateSessionResumeAvailability(summary)
+  summary.canResume = immediateResume.canResume
+  summary.canResumeLocal = immediateResume.canResume
+  if (immediateResume.canResume) delete summary.resumeUnavailableReason
+  else summary.resumeUnavailableReason = immediateResume.reason
+  knownSessionIds.add(summary.sessionId)
+  knownSessionIds.add(summary.id)
+  for (const continuationId of summary.continuationSessionIds || []) {
+    knownSessionIds.add(continuationId)
+  }
+
+  if (summary.source === 'codex' || summary.source === 'cursor' ||
+      summary.source === 'opencode' || summary.source === 'zcode') return
+  if (summary.projectPath && isRemoteProjectPath(summary.projectPath)) {
+    summary.isRemote = true
+    const remoteUser = extractRemoteUser(summary.projectPath)
+    if (remoteUser) summary.remoteHost = `${remoteUser}@remote`
+  }
+}
+
+function settleProviderBootstrap(
+  completion: ReturnType<typeof loadAllSessionsWithProviderStatus>,
+  target: WebContents
+): void {
+  void completion.then(({ sessions: loaded, providerStatus }) => {
+    const completeSessions = filterExcludedSources(loaded)
+    const patch = completeSessions.filter(isProviderSession)
+    for (const session of patch) prepareImmediateSession(session)
+    if (providerStatus === 'complete') replaceCachedProviderSnapshot(patch)
+    else mergeSessionPatch(patch)
+    emitProviderPatch(target, patch, providerStatus)
+    queueProviderLibrarySnapshot(patch, providerStatus)
+    if (patch.length > 0) {
+      scheduleSearchIndexWarmup()
+      void scheduleUsageFactSync()
+    }
+  }).catch((error) => {
+    console.error('[session-bootstrap] additive provider refresh failed:', error)
+    emitProviderPatch(target, [], 'degraded', 'PROVIDER_REFRESH_FAILED')
+  })
+}
+
 function readSessionLineageRegistry(): SessionLineageRegistry | null {
   const libraryRoot = getLibraryRoot()
   const registryPath = getSessionLineagePath(libraryRoot)
@@ -2231,44 +2412,27 @@ ipcMain.handle('platform:getCapabilities', () => {
   return getPlatformCapabilities(platform)
 })
 
-ipcMain.handle('sessions:loadAll', async () => {
+ipcMain.handle('sessions:loadAll', async (event) => {
   try {
   // Reading an existing registry is cheap. A first-run rebuild stays in the
   // background so lineage cannot delay the first session-list paint.
   const diskLineage = readSessionLineageRegistry()
-  const loadedSessions = await loadAllSessions()
-  const sessions = filterExcludedSources(loadedSessions)
-  cachedSessions = sessions
+  const bootstrap = await beginSessionBootstrap(
+    () => loadAllSessions({ readOnly: true, migrateLegacyCache: true, quiet: true }),
+    () => loadAllSessionsWithProviderStatus()
+  )
+  const sessions = filterExcludedSources(bootstrap.initial)
+  const lastKnownProviderSessions = cachedSessions.filter(isProviderSession)
+  cachedSessions = [...sessions, ...lastKnownProviderSessions]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   scheduleSearchIndexWarmup()
   void scheduleUsageFactSync()
   knownSessionIds.clear()
 
-  // Phase 1 only: return source summaries immediately. Library annotation and
-  // cross-device backups arrive through sessions:libraryPatch after worker scan.
-  for (const s of sessions) {
-    s.detailAvailability = 'ready'
-    annotateSessionSuccessor(s)
-    const immediateResume = getImmediateSessionResumeAvailability(s)
-    s.canResume = immediateResume.canResume
-    s.canResumeLocal = immediateResume.canResume
-    if (immediateResume.canResume) delete s.resumeUnavailableReason
-    else s.resumeUnavailableReason = immediateResume.reason
-    knownSessionIds.add(s.sessionId)
-    knownSessionIds.add(s.id)
-    for (const continuationId of s.continuationSessionIds || []) {
-      knownSessionIds.add(continuationId)
-    }
-    // Skip library/remote processing for non-Claude-Code sessions
-    if (s.source === 'codex' || s.source === 'cursor' || s.source === 'opencode' || s.source === 'zcode') continue
-
-    if (s.projectPath && isRemoteProjectPath(s.projectPath)) {
-      s.isRemote = true
-      const remoteUser = extractRemoteUser(s.projectPath)
-      if (remoteUser) s.remoteHost = `${remoteUser}@remote`
-    }
-  }
-
-  cachedSessions = sessions
+  // Phase 1: physical source summaries are authoritative and immediately
+  // visible. Provider Host and canonical storage are additive phase 2 only.
+  for (const session of sessions) prepareImmediateSession(session)
+  settleProviderBootstrap(bootstrap.completion, event.sender)
 
   if (latestLibraryTree) void hydrateLibrarySessions(latestLibraryTree)
   if (!diskLineage) {
@@ -2307,10 +2471,11 @@ ipcMain.handle('sessions:loadAll', async () => {
     })
   }
 
-  return sessions
+  return sessions.map(sessionSummaryForRenderer)
   } catch (err) {
     console.error('sessions:loadAll failed:', err)
-    return cachedSessions // return whatever we have
+    emitProviderPatch(event.sender, [], 'degraded', 'SOURCE_REFRESH_FAILED')
+    throw err
   }
 })
 
@@ -3532,6 +3697,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   try {
     await libraryWriterRecoveryPromise?.catch(() => undefined)
     await libraryInitializationPromise?.catch(() => undefined)
+    await providerLibrarySyncPromise?.catch(() => undefined)
     await liveSessionSyncWorkerRecycleGate.wait().catch((error) => {
       recordLibraryDiagnostic('LIVE_WORKER_RECYCLE_FAILED', 'Live worker recycle failed during root change')
       console.error('[session-sync] root-change recycle drain failed:', error)
@@ -3631,6 +3797,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     // adoption-time projections for the new root.
     if (librarySwitchCommitted) openStartupProjectionGate()
     if (librarySwitchCommitted) startupProjectionGate.finishStartup()
+    if (librarySwitchCommitted) scheduleProviderLibrarySynchronization()
     if (retryWriterAfterSwitch) scheduleLibraryWriterRecovery()
   }
 }
@@ -3733,7 +3900,7 @@ ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, exclud
   completeOnboarding(targetPath, excluded)
   cachedSessions = filterExcludedSources(cachedSessions)
   const root = await activateLibraryAt(targetPath)
-  mainWindow?.webContents.send('sessions:updated', cachedSessions)
+  mainWindow?.webContents.send('sessions:updated', cachedSessions.map(sessionSummaryForRenderer))
   return root
 })
 

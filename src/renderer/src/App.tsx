@@ -8,7 +8,7 @@ import { Onboarding } from './components/Onboarding'
 import { LibraryHealthBanner } from './components/LibraryHealthBanner'
 import { useFeedbackToast } from './hooks/useFeedbackToast'
 import { BUILTIN_VIEW_IDS, builtinViewRegistry } from './registry/builtin-view-registry'
-import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
+import { X, CheckCircle, AlertCircle, Info, RefreshCw } from 'lucide-react'
 import { HARNESS_PRESENTATION_CHANGED_EVENT } from './utils/harness-presentation'
 import { useLensEnabled } from './hooks/useLens'
 import { RuntimeSafetyMarker } from './components/RuntimeSafetyMarker'
@@ -130,6 +130,38 @@ function ToastContainer() {
   )
 }
 
+function SessionBootstrapBanner() {
+  const bootstrapState = useStore((state) => state.sessionBootstrapState)
+  const t = useT()
+  if (bootstrapState === 'loading' || bootstrapState === 'ready') return null
+
+  const degraded = bootstrapState === 'degraded'
+  const textKey = degraded
+    ? 'session_bootstrap.degraded'
+    : bootstrapState === 'cached'
+      ? 'session_bootstrap.cached'
+      : 'session_bootstrap.providers'
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="session-bootstrap-banner"
+      data-bootstrap-state={bootstrapState}
+      className={`shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs border-b ${
+        degraded
+          ? 'bg-soft-amber/10 text-primary border-soft-amber/30'
+          : 'bg-soft-blue/10 text-primary border-soft-blue/30'
+      }`}
+    >
+      {degraded
+        ? <AlertCircle size={12} className="shrink-0 text-soft-amber" />
+        : <RefreshCw size={12} className="shrink-0 motion-safe:animate-spin text-soft-blue" />}
+      <span className="min-w-0 truncate">{t(textKey)}</span>
+    </div>
+  )
+}
+
 export default function App() {
   const [, setHarnessPresentationRevision] = useState(0)
   const { initialize, loading, searchQuery, infoPanelOpen, settingsOpen, workspaceView } = useStore()
@@ -221,6 +253,7 @@ export default function App() {
     <ErrorBoundary>
       <div className="h-screen flex flex-col bg-base text-primary">
         <Toolbar />
+        <SessionBootstrapBanner />
         <LibraryHealthBanner />
         <div className="flex-1 flex overflow-hidden relative">
           <Sidebar width={sidebarWidth} />

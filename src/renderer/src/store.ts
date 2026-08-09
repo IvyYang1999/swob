@@ -8,6 +8,7 @@ import {
 import { resolveConfiguredLocale, resolveSystemLocale, translate, type LegacyLocale, type Locale } from './i18n'
 import { defaultResumeMethodForSource } from '../../shared/settings-capabilities'
 import { BUILTIN_LENSES, isLensEnabled } from '../../shared/lens-registry'
+import { providerUsesCanonicalRuntime } from '../../shared/provider-capabilities'
 import { refreshHarnessIconOverrides } from './utils/harness-presentation'
 
 // Note: computeSections, sessionToMarkdown, generateFilename still used by downloadSessionMarkdown
@@ -17,6 +18,7 @@ let unsubscribeSearchIndex: (() => void) | undefined
 
 export type ViewMode = 'compact' | 'full' | 'markdown'
 export type ColorScheme = 'default' | 'paper' | 'nord'
+export type SessionBootstrapState = 'loading' | 'cached' | 'source-ready' | 'ready' | 'degraded'
 export type ResumeSurface = 'terminal' | 'codex-desktop' | 'claude-desktop' | 'zcode-desktop' | 'remote-control'
 
 interface SessionSummary {
@@ -74,6 +76,10 @@ interface SessionSummary {
   claudeConfigDir?: string
   estimatedTime?: number
   models?: string[]
+}
+
+function isCanonicalProviderSession(session: SessionSummary): boolean {
+  return providerUsesCanonicalRuntime(session.source || '')
 }
 
 interface ParsedMessage {
@@ -266,6 +272,7 @@ interface AppState {
   searchQuery: string
   searchState: 'idle' | 'searching' | 'success' | 'empty' | 'error'
   loading: boolean
+  sessionBootstrapState: SessionBootstrapState
   viewMode: ViewMode
   locale: Locale
   theme: 'dark' | 'light'
@@ -354,7 +361,14 @@ function rendererSystemLocale(): Locale {
   }
 }
 
-function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | null; loading: boolean; viewMode: ViewMode; locale: Locale } {
+function hydrateFromCache(): {
+  sessions: SessionSummary[]
+  config: UserConfig | null
+  loading: boolean
+  sessionBootstrapState: SessionBootstrapState
+  viewMode: ViewMode
+  locale: Locale
+} {
   const systemLocale = rendererSystemLocale()
   try {
     const ver = localStorage.getItem('csm:cacheVersion')
@@ -371,12 +385,20 @@ function hydrateFromCache(): { sessions: SessionSummary[]; config: UserConfig | 
         sessions,
         config,
         loading: false,
+        sessionBootstrapState: 'cached',
         viewMode: config.preferences?.defaultViewMode || 'compact',
         locale: resolveConfiguredLocale(config.preferences?.locale, systemLocale)
       }
     }
   } catch { /* ignore */ }
-  return { sessions: [], config: null, loading: true, viewMode: 'compact', locale: systemLocale }
+  return {
+    sessions: [],
+    config: null,
+    loading: true,
+    sessionBootstrapState: 'loading',
+    viewMode: 'compact',
+    locale: systemLocale
+  }
 }
 
 const hydrated = hydrateFromCache()
@@ -439,6 +461,7 @@ export const useStore = create<AppState>((set, get) => ({
   searchQuery: '',
   searchState: 'idle' as const,
   loading: hydrated.loading,
+  sessionBootstrapState: hydrated.sessionBootstrapState,
   viewMode: hydrated.viewMode,
   locale: hydrated.locale,
   colorScheme: initialColorScheme,
@@ -447,7 +470,10 @@ export const useStore = create<AppState>((set, get) => ({
   selectedFolderId: null,
   settingsOpen: false,
   pendingSettingsCategory: null,
-  workspaceView: isLensEnabled('galaxy', hydrated.config?.preferences || {}) ? 'galaxy' : 'chat',
+  // Lens availability is not a navigation preference. Starting every launch
+  // in Galaxy synchronously lays out the entire corpus (often 1000+ nodes)
+  // before the user has asked for that expensive view.
+  workspaceView: 'chat',
   infoPanelOpen: true,
   selectedSessionMdPath: null,
   activeSessionIds: new Set<string>(),
@@ -458,8 +484,28 @@ export const useStore = create<AppState>((set, get) => ({
 
   initialize: async () => {
     let initialLoadComplete = false
+    let providerCompletion: Extract<SessionBootstrapState, 'ready' | 'degraded'> | null = null
     let queuedLibraryConfig: UserConfig | undefined
     const queuedLibrarySessions = new Map<string, SessionSummary>()
+    const latestProviderSessions = new Map(
+      get().sessions
+        .filter(isCanonicalProviderSession)
+        .map((session) => [session.id, session])
+    )
+    const mergeWithLatestProviderSnapshot = (base: SessionSummary[]): SessionSummary[] => {
+      const byId = new Map(
+        base
+          .filter((session) => !isCanonicalProviderSession(session))
+          .map((session) => [session.id, session])
+      )
+      for (const session of latestProviderSessions.values()) byId.set(session.id, session)
+      return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    }
+    const persistVisibleSessions = (): void => {
+      try {
+        localStorage.setItem('csm:sessions', JSON.stringify(get().sessions))
+      } catch { /* quota exceeded */ }
+    }
     const applyLibraryPatch = (patch: SessionSummary[], config?: UserConfig): void => {
       if (!initialLoadComplete) {
         for (const session of patch) queuedLibrarySessions.set(session.id, session)
@@ -474,9 +520,33 @@ export const useStore = create<AppState>((set, get) => ({
           config: config ? mergeLocalPreferences(config) : state.config
         }
       })
+      persistVisibleSessions()
     }
     window.api.onLibraryPatch(({ sessions, config }) => {
-      applyLibraryPatch(sessions as SessionSummary[], config as UserConfig | undefined)
+      const librarySessions = (sessions as SessionSummary[]).filter((session) => {
+        if (!isCanonicalProviderSession(session)) return true
+        // Once a complete Provider snapshot exists, Library hydration may only
+        // enrich IDs in that snapshot. It must never resurrect an older
+        // canonical package that the authoritative refresh removed.
+        if (providerCompletion === 'ready' && !latestProviderSessions.has(session.id)) return false
+        latestProviderSessions.set(session.id, session)
+        return true
+      })
+      applyLibraryPatch(librarySessions, config as UserConfig | undefined)
+    })
+    window.api.onProviderPatch?.(({ sessions, status }) => {
+      providerCompletion = status === 'complete' ? 'ready' : 'degraded'
+      const providerSessions = sessions as SessionSummary[]
+      // A successful refresh is a complete canonical snapshot. A degraded one
+      // may be partial or empty, so retain the last known-good additive data.
+      if (status === 'complete') latestProviderSessions.clear()
+      for (const session of providerSessions) latestProviderSessions.set(session.id, session)
+      if (!initialLoadComplete) return
+      set((state) => ({
+        sessions: mergeWithLatestProviderSnapshot(state.sessions),
+        sessionBootstrapState: providerCompletion!
+      }))
+      persistVisibleSessions()
     })
 
     try {
@@ -489,7 +559,7 @@ export const useStore = create<AppState>((set, get) => ({
       const mergedSessions = new Map((sessions as SessionSummary[]).map((session) => [session.id, session]))
       for (const session of queuedLibrarySessions.values()) mergedSessions.set(session.id, session)
       initialLoadComplete = true
-      const hydratedSessions = [...mergedSessions.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      const hydratedSessions = mergeWithLatestProviderSnapshot([...mergedSessions.values()])
       let hydratedConfig = (queuedLibraryConfig || config) as UserConfig
       const locale = resolveConfiguredLocale(hydratedConfig.preferences?.locale, systemLocale)
       if (hydratedConfig.preferences?.locale === 'ja') {
@@ -509,7 +579,8 @@ export const useStore = create<AppState>((set, get) => ({
         viewMode: hydratedConfig.preferences?.defaultViewMode || 'compact',
         locale,
         sshConfig: sshConfig ?? null,
-        loading: false
+        loading: false,
+        sessionBootstrapState: providerCompletion || 'source-ready'
       })
       const prefThemeMode = hydratedConfig.preferences?.themeMode
       const nextThemeMode = prefThemeMode === 'light' || prefThemeMode === 'dark' || prefThemeMode === 'system'
@@ -528,23 +599,30 @@ export const useStore = create<AppState>((set, get) => ({
       } catch { /* quota exceeded */ }
     } catch (err) {
       console.error('Failed to initialize:', err)
-      set({ loading: false })
+      set({ loading: false, sessionBootstrapState: 'degraded' })
     }
 
     let refreshTimer: ReturnType<typeof setTimeout> | null = null
     const debouncedRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer)
       refreshTimer = setTimeout(async () => {
-        const [freshSessions, freshConfig] = await Promise.all([
-          window.api.loadAllSessions(),
-          window.api.loadConfig()
-        ])
-        const mergedConfig = mergeLocalPreferences(freshConfig)
-        set({ sessions: freshSessions, config: mergedConfig })
         try {
-          localStorage.setItem('csm:sessions', JSON.stringify(freshSessions))
-          localStorage.setItem('csm:config', JSON.stringify(mergedConfig))
-        } catch { /* quota exceeded */ }
+          set({ sessionBootstrapState: 'source-ready' })
+          const [freshSessions, freshConfig] = await Promise.all([
+            window.api.loadAllSessions(),
+            window.api.loadConfig()
+          ])
+          const mergedConfig = mergeLocalPreferences(freshConfig)
+          const visibleSessions = mergeWithLatestProviderSnapshot(freshSessions as SessionSummary[])
+          set({ sessions: visibleSessions, config: mergedConfig })
+          try {
+            localStorage.setItem('csm:sessions', JSON.stringify(visibleSessions))
+            localStorage.setItem('csm:config', JSON.stringify(mergedConfig))
+          } catch { /* quota exceeded */ }
+        } catch (error) {
+          console.error('Failed to refresh sessions:', error)
+          set({ sessionBootstrapState: 'degraded' })
+        }
       }, 500)
     }
 

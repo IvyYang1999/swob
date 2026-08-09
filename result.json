@@ -1,0 +1,74 @@
+{
+  "workItemId": "t207-startup-bootstrap-integrity",
+  "baseSha": "ba8d53d5673de20c6527b36e2a53b7048f2a3303",
+  "headSha": "6835c5aa446feb25dc8edcf6f1c5bb0d4fbdbe33",
+  "changedFiles": [
+    ".swob/workflows/v15-t207/graph.yaml",
+    "e2e/helpers.ts",
+    "e2e/t171-cost-ledger.spec.ts",
+    "e2e/t182-valuation-capability.spec.ts",
+    "e2e/t207-startup-bootstrap-integrity.spec.ts",
+    "src/main/__test-support__/protected-state-audit.ts",
+    "src/main/index.ts",
+    "src/main/session-bootstrap.test.ts",
+    "src/main/session-bootstrap.ts",
+    "src/main/session-loader.test.ts",
+    "src/main/session-loader.ts",
+    "src/preload/index.ts",
+    "src/renderer/src/AgentApp.tsx",
+    "src/renderer/src/App.tsx",
+    "src/renderer/src/store.test.ts",
+    "src/renderer/src/store.ts",
+    "src/renderer/src/types/electron.d.ts",
+    "src/shared/i18n.ts"
+  ],
+  "contractsProduced": [
+    "SessionBootstrap.v1",
+    "SummaryCache.v28",
+    "RendererSessionSummary.v1"
+  ],
+  "tests": [
+    {
+      "command": "npm run workflow:validate -- .swob/workflows/v15-t207/graph.yaml",
+      "status": "passed",
+      "numbers": "1 graph validated"
+    },
+    {
+      "command": "npm run check",
+      "status": "passed",
+      "numbers": "all static and policy gates passed"
+    },
+    {
+      "command": "npx vitest run --maxWorkers=2",
+      "status": "passed",
+      "numbers": "1542 passed, 19 skipped"
+    },
+    {
+      "command": "npm run build",
+      "status": "passed",
+      "numbers": "main, preload, and renderer production bundles built"
+    },
+    {
+      "command": "npm run test:e2e",
+      "status": "passed",
+      "numbers": "54 passed, 1 Windows-native conditional skip"
+    }
+  ],
+  "visualEvidence": [
+    "Synthetic 1500-session Electron run reviewed at wide and narrow widths: source-ready banner, 1500 first-paint count, 1501 additive completion, and no horizontal overflow",
+    "Existing cost/valuation Electron flows reviewed after explicit navigation fixes, including hover state and sidebar resize behavior"
+  ],
+  "deviations": [],
+  "knownRisks": [
+    "Builder evidence only: an independent Verifier has not reviewed this diff",
+    "The real Library was intentionally neither launched nor modified; isolated real-corpus startup and memory replay remains required",
+    "Main-process summaries still retain audit usage events; v28 removes the monolithic JSON parse peak and startup IPC clone, but the real-corpus resident-memory ceiling is not yet independently measured",
+    "The Windows native packaged E2E is conditionally skipped on macOS and still requires its Windows gate"
+  ],
+  "provenance": {
+    "harness": "codex",
+    "model": "gpt-5",
+    "session": "n/a"
+  },
+  "depends_on": []
+}

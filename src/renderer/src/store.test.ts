@@ -25,6 +25,101 @@ describe('renderer preference persistence', () => {
     })
   })
 
+  it('keeps cached sessions visible until the source snapshot arrives, then merges provider additions', async () => {
+    const cachedProviderSession = {
+      id: 'cached-provider',
+      sessionId: 'cached-provider',
+      source: 'pi',
+      updatedAt: '2026-08-08T00:00:00Z'
+    }
+    const cachedPhysicalSession = {
+      id: 'cached-physical',
+      sessionId: 'cached-physical',
+      source: 'claude-code',
+      updatedAt: '2026-08-08T00:00:00Z'
+    }
+    const sourceSessions = Array.from({ length: 1_500 }, (_, index) => ({
+      id: `legacy-${index}`,
+      sessionId: `legacy-${index}`,
+      updatedAt: '2026-08-09T00:00:00Z'
+    }))
+    const providerSessions = Array.from({ length: 10 }, (_, index) => ({
+      id: `provider-${index}`,
+      sessionId: `provider-${index}`,
+      source: 'pi',
+      updatedAt: '2026-08-09T00:01:00Z'
+    }))
+    let resolveSource!: (sessions: unknown[]) => void
+    const sourceFlight = new Promise<unknown[]>((resolve) => { resolveSource = resolve })
+    let resolveRefresh!: (sessions: unknown[]) => void
+    const refreshFlight = new Promise<unknown[]>((resolve) => { resolveRefresh = resolve })
+    let providerPatch!: (patch: { sessions: unknown[]; status: 'complete' | 'degraded' }) => void
+    let libraryPatch!: (patch: { sessions: unknown[]; config?: typeof baseConfig }) => void
+    let sessionsRefresh!: () => void
+
+    localStorage.setItem('csm:cacheVersion', '12')
+    localStorage.setItem('csm:sessions', JSON.stringify([cachedProviderSession, cachedPhysicalSession]))
+    localStorage.setItem('csm:config', JSON.stringify(baseConfig))
+    ;(window as any).api = {
+      onLibraryPatch: (callback: typeof libraryPatch) => { libraryPatch = callback },
+      onProviderPatch: (callback: typeof providerPatch) => { providerPatch = callback },
+      loadAllSessions: vi.fn()
+        .mockImplementationOnce(() => sourceFlight)
+        .mockImplementationOnce(() => refreshFlight),
+      loadConfig: vi.fn(async () => structuredClone(baseConfig)),
+      getSystemLocale: vi.fn(async () => 'en'),
+      saveConfig: vi.fn(async () => undefined),
+      onSessionAdded: vi.fn(),
+      onSessionUpdated: vi.fn(),
+      onSessionSummaryUpdated: vi.fn(),
+      onSessionsRefresh: (callback: () => void) => { sessionsRefresh = callback },
+      getActiveSessions: vi.fn(async () => []),
+      onActiveSessionsChanged: vi.fn(),
+      onSpotlightNavigate: vi.fn()
+    }
+
+    const { useStore } = await import('./store')
+    expect(useStore.getState()).toMatchObject({
+      loading: false,
+      sessionBootstrapState: 'cached',
+      workspaceView: 'chat'
+    })
+    expect(useStore.getState().sessions).toEqual([cachedProviderSession, cachedPhysicalSession])
+
+    const initialization = useStore.getState().initialize()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useStore.getState().sessions).toEqual([cachedProviderSession, cachedPhysicalSession])
+
+    providerPatch({ sessions: [], status: 'degraded' })
+    resolveSource(sourceSessions)
+    await initialization
+    expect(useStore.getState().sessions).toHaveLength(1_501)
+    expect(useStore.getState().sessions).toContainEqual(cachedProviderSession)
+    expect(useStore.getState().sessions).not.toContainEqual(cachedPhysicalSession)
+    expect(useStore.getState().sessionBootstrapState).toBe('degraded')
+
+    providerPatch({ sessions: providerSessions, status: 'complete' })
+    expect(useStore.getState().sessions).toHaveLength(1_510)
+    expect(useStore.getState().sessions).not.toContainEqual(cachedProviderSession)
+    expect(useStore.getState().sessionBootstrapState).toBe('ready')
+
+    sessionsRefresh()
+    await vi.advanceTimersByTimeAsync(500)
+    providerPatch({ sessions: [], status: 'degraded' })
+    resolveRefresh(sourceSessions)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useStore.getState().sessions).toHaveLength(1_510)
+    expect(useStore.getState().sessionBootstrapState).toBe('degraded')
+
+    providerPatch({ sessions: [], status: 'complete' })
+    expect(useStore.getState().sessions).toHaveLength(1_500)
+    expect(useStore.getState().sessionBootstrapState).toBe('ready')
+
+    libraryPatch({ sessions: [cachedProviderSession] })
+    expect(useStore.getState().sessions).toHaveLength(1_500)
+    expect(useStore.getState().sessions).not.toContainEqual(cachedProviderSession)
+  })
+
   it('keeps local preference fields across stale Library patches and refreshes', async () => {
     let libraryPatch!: (patch: { sessions: unknown[]; config?: typeof baseConfig }) => void
     let sessionsRefresh!: () => void

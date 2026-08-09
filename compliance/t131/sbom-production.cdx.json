@@ -9,7 +9,7 @@
         {
           "type": "application",
           "name": "npm",
-          "version": "11.3.0"
+          "version": "11.18.0"
         },
         {
           "type": "library",
@@ -80,8 +80,8 @@
     "component": {
       "type": "application",
       "name": "claude-session-manager",
-      "version": "1.3.0",
-      "bom-ref": "claude-session-manager@1.3.0",
+      "version": "1.4.0",
+      "bom-ref": "claude-session-manager@1.4.0",
       "author": "IvyYang1999",
       "description": "Visual session manager for Claude Code",
       "licenses": [
@@ -92,7 +92,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/claude-session-manager@1.3.0",
+      "purl": "pkg:npm/claude-session-manager@1.4.0",
       "properties": [
         {
           "name": "cdx:npm:package:path",
@@ -113,7 +113,7 @@
       "name": "extract-zip",
       "group": "@electron-internal",
       "version": "1.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|@electron-internal/extract-zip@1.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|@electron-internal/extract-zip@1.0.4",
       "licenses": [
         {
           "license": {
@@ -148,7 +148,7 @@
       "name": "preload",
       "group": "@electron-toolkit",
       "version": "3.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|@electron-toolkit/preload@3.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|@electron-toolkit/preload@3.0.2",
       "licenses": [
         {
           "license": {
@@ -183,7 +183,7 @@
       "name": "utils",
       "group": "@electron-toolkit",
       "version": "4.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|@electron-toolkit/utils@4.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|@electron-toolkit/utils@4.0.0",
       "licenses": [
         {
           "license": {
@@ -218,7 +218,7 @@
       "name": "get",
       "group": "@electron",
       "version": "5.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|@electron/get@5.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|@electron/get@5.0.0",
       "licenses": [
         {
           "license": {
@@ -252,7 +252,7 @@
           "type": "library",
           "name": "env-paths",
           "version": "3.0.0",
-          "bom-ref": "claude-session-manager@1.3.0|@electron/get@5.0.0|env-paths@3.0.0",
+          "bom-ref": "claude-session-manager@1.4.0|@electron/get@5.0.0|env-paths@3.0.0",
           "licenses": [
             {
               "license": {
@@ -286,7 +286,7 @@
           "type": "library",
           "name": "semver",
           "version": "7.8.5",
-          "bom-ref": "claude-session-manager@1.3.0|@electron/get@5.0.0|semver@7.8.5",
+          "bom-ref": "claude-session-manager@1.4.0|@electron/get@5.0.0|semver@7.8.5",
           "licenses": [
             {
               "license": {
@@ -323,7 +323,7 @@
       "name": "toolkit",
       "group": "@reduxjs",
       "version": "2.11.2",
-      "bom-ref": "claude-session-manager@1.3.0|@reduxjs/toolkit@2.11.2",
+      "bom-ref": "claude-session-manager@1.4.0|@reduxjs/toolkit@2.11.2",
       "licenses": [
         {
           "license": {
@@ -357,7 +357,7 @@
           "type": "library",
           "name": "immer",
           "version": "11.1.4",
-          "bom-ref": "claude-session-manager@1.3.0|@reduxjs/toolkit@2.11.2|immer@11.1.4",
+          "bom-ref": "claude-session-manager@1.4.0|@reduxjs/toolkit@2.11.2|immer@11.1.4",
           "licenses": [
             {
               "license": {
@@ -394,7 +394,7 @@
       "name": "spec",
       "group": "@standard-schema",
       "version": "1.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|@standard-schema/spec@1.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|@standard-schema/spec@1.1.0",
       "licenses": [
         {
           "license": {
@@ -429,7 +429,7 @@
       "name": "utils",
       "group": "@standard-schema",
       "version": "0.3.0",
-      "bom-ref": "claude-session-manager@1.3.0|@standard-schema/utils@0.3.0",
+      "bom-ref": "claude-session-manager@1.4.0|@standard-schema/utils@0.3.0",
       "licenses": [
         {
           "license": {
@@ -464,7 +464,7 @@
       "name": "react-virtual",
       "group": "@tanstack",
       "version": "3.14.7",
-      "bom-ref": "claude-session-manager@1.3.0|@tanstack/react-virtual@3.14.7",
+      "bom-ref": "claude-session-manager@1.4.0|@tanstack/react-virtual@3.14.7",
       "licenses": [
         {
           "license": {
@@ -499,7 +499,7 @@
       "name": "virtual-core",
       "group": "@tanstack",
       "version": "3.17.5",
-      "bom-ref": "claude-session-manager@1.3.0|@tanstack/virtual-core@3.17.5",
+      "bom-ref": "claude-session-manager@1.4.0|@tanstack/virtual-core@3.17.5",
       "licenses": [
         {
           "license": {
@@ -534,7 +534,7 @@
       "name": "d3-array",
       "group": "@types",
       "version": "3.2.2",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-array@3.2.2",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-array@3.2.2",
       "licenses": [
         {
           "license": {
@@ -569,7 +569,7 @@
       "name": "d3-color",
       "group": "@types",
       "version": "3.1.3",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-color@3.1.3",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-color@3.1.3",
       "licenses": [
         {
           "license": {
@@ -604,7 +604,7 @@
       "name": "d3-ease",
       "group": "@types",
       "version": "3.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-ease@3.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-ease@3.0.2",
       "licenses": [
         {
           "license": {
@@ -639,7 +639,7 @@
       "name": "d3-interpolate",
       "group": "@types",
       "version": "3.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-interpolate@3.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-interpolate@3.0.4",
       "licenses": [
         {
           "license": {
@@ -674,7 +674,7 @@
       "name": "d3-path",
       "group": "@types",
       "version": "3.1.1",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-path@3.1.1",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-path@3.1.1",
       "licenses": [
         {
           "license": {
@@ -709,7 +709,7 @@
       "name": "d3-scale",
       "group": "@types",
       "version": "4.0.9",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-scale@4.0.9",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-scale@4.0.9",
       "licenses": [
         {
           "license": {
@@ -744,7 +744,7 @@
       "name": "d3-shape",
       "group": "@types",
       "version": "3.1.8",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-shape@3.1.8",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-shape@3.1.8",
       "licenses": [
         {
           "license": {
@@ -779,7 +779,7 @@
       "name": "d3-time",
       "group": "@types",
       "version": "3.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-time@3.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-time@3.0.4",
       "licenses": [
         {
           "license": {
@@ -814,7 +814,7 @@
       "name": "d3-timer",
       "group": "@types",
       "version": "3.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|@types/d3-timer@3.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|@types/d3-timer@3.0.2",
       "licenses": [
         {
           "license": {
@@ -849,7 +849,7 @@
       "name": "debug",
       "group": "@types",
       "version": "4.1.12",
-      "bom-ref": "claude-session-manager@1.3.0|@types/debug@4.1.12",
+      "bom-ref": "claude-session-manager@1.4.0|@types/debug@4.1.12",
       "licenses": [
         {
           "license": {
@@ -884,7 +884,7 @@
       "name": "estree-jsx",
       "group": "@types",
       "version": "1.0.5",
-      "bom-ref": "claude-session-manager@1.3.0|@types/estree-jsx@1.0.5",
+      "bom-ref": "claude-session-manager@1.4.0|@types/estree-jsx@1.0.5",
       "licenses": [
         {
           "license": {
@@ -919,7 +919,7 @@
       "name": "estree",
       "group": "@types",
       "version": "1.0.8",
-      "bom-ref": "claude-session-manager@1.3.0|@types/estree@1.0.8",
+      "bom-ref": "claude-session-manager@1.4.0|@types/estree@1.0.8",
       "licenses": [
         {
           "license": {
@@ -954,7 +954,7 @@
       "name": "hast",
       "group": "@types",
       "version": "3.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|@types/hast@3.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|@types/hast@3.0.4",
       "licenses": [
         {
           "license": {
@@ -989,7 +989,7 @@
       "name": "mdast",
       "group": "@types",
       "version": "4.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|@types/mdast@4.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|@types/mdast@4.0.4",
       "licenses": [
         {
           "license": {
@@ -1024,7 +1024,7 @@
       "name": "ms",
       "group": "@types",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|@types/ms@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|@types/ms@2.1.0",
       "licenses": [
         {
           "license": {
@@ -1059,7 +1059,7 @@
       "name": "react",
       "group": "@types",
       "version": "19.2.14",
-      "bom-ref": "claude-session-manager@1.3.0|@types/react@19.2.14",
+      "bom-ref": "claude-session-manager@1.4.0|@types/react@19.2.14",
       "licenses": [
         {
           "license": {
@@ -1094,7 +1094,7 @@
       "name": "unist",
       "group": "@types",
       "version": "3.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|@types/unist@3.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|@types/unist@3.0.3",
       "licenses": [
         {
           "license": {
@@ -1129,7 +1129,7 @@
       "name": "use-sync-external-store",
       "group": "@types",
       "version": "0.0.6",
-      "bom-ref": "claude-session-manager@1.3.0|@types/use-sync-external-store@0.0.6",
+      "bom-ref": "claude-session-manager@1.4.0|@types/use-sync-external-store@0.0.6",
       "licenses": [
         {
           "license": {
@@ -1164,7 +1164,7 @@
       "name": "structured-clone",
       "group": "@ungap",
       "version": "1.3.0",
-      "bom-ref": "claude-session-manager@1.3.0|@ungap/structured-clone@1.3.0",
+      "bom-ref": "claude-session-manager@1.4.0|@ungap/structured-clone@1.3.0",
       "licenses": [
         {
           "license": {
@@ -1198,7 +1198,7 @@
       "type": "library",
       "name": "ajv",
       "version": "8.17.1",
-      "bom-ref": "claude-session-manager@1.3.0|ajv@8.17.1",
+      "bom-ref": "claude-session-manager@1.4.0|ajv@8.17.1",
       "licenses": [
         {
           "license": {
@@ -1232,7 +1232,7 @@
       "type": "library",
       "name": "ansi-regex",
       "version": "5.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|ansi-regex@5.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|ansi-regex@5.0.1",
       "licenses": [
         {
           "license": {
@@ -1266,7 +1266,7 @@
       "type": "library",
       "name": "ansi-styles",
       "version": "4.3.0",
-      "bom-ref": "claude-session-manager@1.3.0|ansi-styles@4.3.0",
+      "bom-ref": "claude-session-manager@1.4.0|ansi-styles@4.3.0",
       "licenses": [
         {
           "license": {
@@ -1300,7 +1300,7 @@
       "type": "library",
       "name": "argparse",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|argparse@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|argparse@2.0.1",
       "licenses": [
         {
           "license": {
@@ -1334,7 +1334,7 @@
       "type": "library",
       "name": "bail",
       "version": "2.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|bail@2.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|bail@2.0.2",
       "licenses": [
         {
           "license": {
@@ -1368,7 +1368,7 @@
       "type": "library",
       "name": "better-sqlite3",
       "version": "13.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|better-sqlite3@13.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|better-sqlite3@13.0.1",
       "licenses": [
         {
           "license": {
@@ -1402,7 +1402,7 @@
           "type": "library",
           "name": "node-addon-api",
           "version": "8.9.0",
-          "bom-ref": "claude-session-manager@1.3.0|better-sqlite3@13.0.1|node-addon-api@8.9.0",
+          "bom-ref": "claude-session-manager@1.4.0|better-sqlite3@13.0.1|node-addon-api@8.9.0",
           "licenses": [
             {
               "license": {
@@ -1438,7 +1438,7 @@
       "type": "library",
       "name": "camelcase",
       "version": "5.3.1",
-      "bom-ref": "claude-session-manager@1.3.0|camelcase@5.3.1",
+      "bom-ref": "claude-session-manager@1.4.0|camelcase@5.3.1",
       "licenses": [
         {
           "license": {
@@ -1472,7 +1472,7 @@
       "type": "library",
       "name": "ccount",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|ccount@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|ccount@2.0.1",
       "licenses": [
         {
           "license": {
@@ -1506,7 +1506,7 @@
       "type": "library",
       "name": "character-entities-html4",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|character-entities-html4@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|character-entities-html4@2.1.0",
       "licenses": [
         {
           "license": {
@@ -1540,7 +1540,7 @@
       "type": "library",
       "name": "character-entities-legacy",
       "version": "3.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|character-entities-legacy@3.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|character-entities-legacy@3.0.0",
       "licenses": [
         {
           "license": {
@@ -1574,7 +1574,7 @@
       "type": "library",
       "name": "character-entities",
       "version": "2.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|character-entities@2.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|character-entities@2.0.2",
       "licenses": [
         {
           "license": {
@@ -1608,7 +1608,7 @@
       "type": "library",
       "name": "character-reference-invalid",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|character-reference-invalid@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|character-reference-invalid@2.0.1",
       "licenses": [
         {
           "license": {
@@ -1642,7 +1642,7 @@
       "type": "library",
       "name": "chokidar",
       "version": "5.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|chokidar@5.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|chokidar@5.0.0",
       "licenses": [
         {
           "license": {
@@ -1676,7 +1676,7 @@
       "type": "library",
       "name": "clsx",
       "version": "2.1.1",
-      "bom-ref": "claude-session-manager@1.3.0|clsx@2.1.1",
+      "bom-ref": "claude-session-manager@1.4.0|clsx@2.1.1",
       "licenses": [
         {
           "license": {
@@ -1710,7 +1710,7 @@
       "type": "library",
       "name": "color-convert",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|color-convert@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|color-convert@2.0.1",
       "licenses": [
         {
           "license": {
@@ -1744,7 +1744,7 @@
       "type": "library",
       "name": "color-name",
       "version": "1.1.4",
-      "bom-ref": "claude-session-manager@1.3.0|color-name@1.1.4",
+      "bom-ref": "claude-session-manager@1.4.0|color-name@1.1.4",
       "licenses": [
         {
           "license": {
@@ -1778,7 +1778,7 @@
       "type": "library",
       "name": "comma-separated-tokens",
       "version": "2.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|comma-separated-tokens@2.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|comma-separated-tokens@2.0.3",
       "licenses": [
         {
           "license": {
@@ -1812,7 +1812,7 @@
       "type": "library",
       "name": "csstype",
       "version": "3.2.3",
-      "bom-ref": "claude-session-manager@1.3.0|csstype@3.2.3",
+      "bom-ref": "claude-session-manager@1.4.0|csstype@3.2.3",
       "licenses": [
         {
           "license": {
@@ -1846,7 +1846,7 @@
       "type": "library",
       "name": "d3-array",
       "version": "3.2.4",
-      "bom-ref": "claude-session-manager@1.3.0|d3-array@3.2.4",
+      "bom-ref": "claude-session-manager@1.4.0|d3-array@3.2.4",
       "licenses": [
         {
           "license": {
@@ -1880,7 +1880,7 @@
       "type": "library",
       "name": "d3-color",
       "version": "3.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|d3-color@3.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|d3-color@3.1.0",
       "licenses": [
         {
           "license": {
@@ -1914,7 +1914,7 @@
       "type": "library",
       "name": "d3-ease",
       "version": "3.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|d3-ease@3.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|d3-ease@3.0.1",
       "licenses": [
         {
           "license": {
@@ -1948,7 +1948,7 @@
       "type": "library",
       "name": "d3-format",
       "version": "3.1.2",
-      "bom-ref": "claude-session-manager@1.3.0|d3-format@3.1.2",
+      "bom-ref": "claude-session-manager@1.4.0|d3-format@3.1.2",
       "licenses": [
         {
           "license": {
@@ -1982,7 +1982,7 @@
       "type": "library",
       "name": "d3-interpolate",
       "version": "3.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|d3-interpolate@3.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|d3-interpolate@3.0.1",
       "licenses": [
         {
           "license": {
@@ -2016,7 +2016,7 @@
       "type": "library",
       "name": "d3-path",
       "version": "3.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|d3-path@3.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|d3-path@3.1.0",
       "licenses": [
         {
           "license": {
@@ -2050,7 +2050,7 @@
       "type": "library",
       "name": "d3-scale",
       "version": "4.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|d3-scale@4.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|d3-scale@4.0.2",
       "licenses": [
         {
           "license": {
@@ -2084,7 +2084,7 @@
       "type": "library",
       "name": "d3-shape",
       "version": "3.2.0",
-      "bom-ref": "claude-session-manager@1.3.0|d3-shape@3.2.0",
+      "bom-ref": "claude-session-manager@1.4.0|d3-shape@3.2.0",
       "licenses": [
         {
           "license": {
@@ -2118,7 +2118,7 @@
       "type": "library",
       "name": "d3-time-format",
       "version": "4.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|d3-time-format@4.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|d3-time-format@4.1.0",
       "licenses": [
         {
           "license": {
@@ -2152,7 +2152,7 @@
       "type": "library",
       "name": "d3-time",
       "version": "3.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|d3-time@3.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|d3-time@3.1.0",
       "licenses": [
         {
           "license": {
@@ -2186,7 +2186,7 @@
       "type": "library",
       "name": "d3-timer",
       "version": "3.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|d3-timer@3.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|d3-timer@3.0.1",
       "licenses": [
         {
           "license": {
@@ -2220,7 +2220,7 @@
       "type": "library",
       "name": "debug",
       "version": "4.4.3",
-      "bom-ref": "claude-session-manager@1.3.0|debug@4.4.3",
+      "bom-ref": "claude-session-manager@1.4.0|debug@4.4.3",
       "licenses": [
         {
           "license": {
@@ -2254,7 +2254,7 @@
       "type": "library",
       "name": "decamelize",
       "version": "1.2.0",
-      "bom-ref": "claude-session-manager@1.3.0|decamelize@1.2.0",
+      "bom-ref": "claude-session-manager@1.4.0|decamelize@1.2.0",
       "licenses": [
         {
           "license": {
@@ -2288,7 +2288,7 @@
       "type": "library",
       "name": "decimal.js-light",
       "version": "2.5.1",
-      "bom-ref": "claude-session-manager@1.3.0|decimal.js-light@2.5.1",
+      "bom-ref": "claude-session-manager@1.4.0|decimal.js-light@2.5.1",
       "licenses": [
         {
           "license": {
@@ -2322,7 +2322,7 @@
       "type": "library",
       "name": "decode-named-character-reference",
       "version": "1.3.0",
-      "bom-ref": "claude-session-manager@1.3.0|decode-named-character-reference@1.3.0",
+      "bom-ref": "claude-session-manager@1.4.0|decode-named-character-reference@1.3.0",
       "licenses": [
         {
           "license": {
@@ -2356,7 +2356,7 @@
       "type": "library",
       "name": "dequal",
       "version": "2.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|dequal@2.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|dequal@2.0.3",
       "licenses": [
         {
           "license": {
@@ -2390,7 +2390,7 @@
       "type": "library",
       "name": "devlop",
       "version": "1.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|devlop@1.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|devlop@1.1.0",
       "licenses": [
         {
           "license": {
@@ -2424,7 +2424,7 @@
       "type": "library",
       "name": "dijkstrajs",
       "version": "1.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|dijkstrajs@1.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|dijkstrajs@1.0.3",
       "licenses": [
         {
           "license": {
@@ -2458,7 +2458,7 @@
       "type": "library",
       "name": "electron-updater",
       "version": "6.8.9",
-      "bom-ref": "claude-session-manager@1.3.0|electron-updater@6.8.9",
+      "bom-ref": "claude-session-manager@1.4.0|electron-updater@6.8.9",
       "licenses": [
         {
           "license": {
@@ -2492,7 +2492,7 @@
           "type": "library",
           "name": "builder-util-runtime",
           "version": "9.7.0",
-          "bom-ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|builder-util-runtime@9.7.0",
+          "bom-ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|builder-util-runtime@9.7.0",
           "licenses": [
             {
               "license": {
@@ -2526,7 +2526,7 @@
           "type": "library",
           "name": "fs-extra",
           "version": "10.1.0",
-          "bom-ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|fs-extra@10.1.0",
+          "bom-ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|fs-extra@10.1.0",
           "licenses": [
             {
               "license": {
@@ -2560,7 +2560,7 @@
           "type": "library",
           "name": "jsonfile",
           "version": "6.2.0",
-          "bom-ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|jsonfile@6.2.0",
+          "bom-ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|jsonfile@6.2.0",
           "licenses": [
             {
               "license": {
@@ -2594,7 +2594,7 @@
           "type": "library",
           "name": "semver",
           "version": "7.7.4",
-          "bom-ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|semver@7.7.4",
+          "bom-ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|semver@7.7.4",
           "licenses": [
             {
               "license": {
@@ -2628,7 +2628,7 @@
           "type": "library",
           "name": "universalify",
           "version": "2.0.1",
-          "bom-ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|universalify@2.0.1",
+          "bom-ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|universalify@2.0.1",
           "licenses": [
             {
               "license": {
@@ -2664,7 +2664,7 @@
       "type": "library",
       "name": "electron",
       "version": "40.10.6",
-      "bom-ref": "claude-session-manager@1.3.0|electron@40.10.6",
+      "bom-ref": "claude-session-manager@1.4.0|electron@40.10.6",
       "licenses": [
         {
           "license": {
@@ -2699,7 +2699,7 @@
           "name": "node",
           "group": "@types",
           "version": "24.11.0",
-          "bom-ref": "claude-session-manager@1.3.0|electron@40.10.6|@types/node@24.11.0",
+          "bom-ref": "claude-session-manager@1.4.0|electron@40.10.6|@types/node@24.11.0",
           "licenses": [
             {
               "license": {
@@ -2733,7 +2733,7 @@
           "type": "library",
           "name": "undici-types",
           "version": "7.16.0",
-          "bom-ref": "claude-session-manager@1.3.0|electron@40.10.6|undici-types@7.16.0",
+          "bom-ref": "claude-session-manager@1.4.0|electron@40.10.6|undici-types@7.16.0",
           "licenses": [
             {
               "license": {
@@ -2769,7 +2769,7 @@
       "type": "library",
       "name": "emoji-regex",
       "version": "8.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|emoji-regex@8.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|emoji-regex@8.0.0",
       "licenses": [
         {
           "license": {
@@ -2803,7 +2803,7 @@
       "type": "library",
       "name": "es-toolkit",
       "version": "1.46.0",
-      "bom-ref": "claude-session-manager@1.3.0|es-toolkit@1.46.0",
+      "bom-ref": "claude-session-manager@1.4.0|es-toolkit@1.46.0",
       "licenses": [
         {
           "license": {
@@ -2837,7 +2837,7 @@
       "type": "library",
       "name": "estree-util-is-identifier-name",
       "version": "3.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|estree-util-is-identifier-name@3.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|estree-util-is-identifier-name@3.0.0",
       "licenses": [
         {
           "license": {
@@ -2871,7 +2871,7 @@
       "type": "library",
       "name": "eventemitter3",
       "version": "5.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|eventemitter3@5.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|eventemitter3@5.0.4",
       "licenses": [
         {
           "license": {
@@ -2905,7 +2905,7 @@
       "type": "library",
       "name": "extend",
       "version": "3.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|extend@3.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|extend@3.0.2",
       "licenses": [
         {
           "license": {
@@ -2939,7 +2939,7 @@
       "type": "library",
       "name": "fast-deep-equal",
       "version": "3.1.3",
-      "bom-ref": "claude-session-manager@1.3.0|fast-deep-equal@3.1.3",
+      "bom-ref": "claude-session-manager@1.4.0|fast-deep-equal@3.1.3",
       "licenses": [
         {
           "license": {
@@ -2973,7 +2973,7 @@
       "type": "library",
       "name": "fast-uri",
       "version": "3.1.4",
-      "bom-ref": "claude-session-manager@1.3.0|fast-uri@3.1.4",
+      "bom-ref": "claude-session-manager@1.4.0|fast-uri@3.1.4",
       "licenses": [
         {
           "license": {
@@ -3007,7 +3007,7 @@
       "type": "library",
       "name": "fsevents",
       "version": "2.3.3",
-      "bom-ref": "claude-session-manager@1.3.0|fsevents@2.3.3",
+      "bom-ref": "claude-session-manager@1.4.0|fsevents@2.3.3",
       "scope": "optional",
       "licenses": [
         {
@@ -3042,7 +3042,7 @@
       "type": "library",
       "name": "get-caller-file",
       "version": "2.0.5",
-      "bom-ref": "claude-session-manager@1.3.0|get-caller-file@2.0.5",
+      "bom-ref": "claude-session-manager@1.4.0|get-caller-file@2.0.5",
       "licenses": [
         {
           "license": {
@@ -3076,7 +3076,7 @@
       "type": "library",
       "name": "graceful-fs",
       "version": "4.2.11",
-      "bom-ref": "claude-session-manager@1.3.0|graceful-fs@4.2.11",
+      "bom-ref": "claude-session-manager@1.4.0|graceful-fs@4.2.11",
       "licenses": [
         {
           "license": {
@@ -3110,7 +3110,7 @@
       "type": "library",
       "name": "hast-util-to-jsx-runtime",
       "version": "2.3.6",
-      "bom-ref": "claude-session-manager@1.3.0|hast-util-to-jsx-runtime@2.3.6",
+      "bom-ref": "claude-session-manager@1.4.0|hast-util-to-jsx-runtime@2.3.6",
       "licenses": [
         {
           "license": {
@@ -3144,7 +3144,7 @@
       "type": "library",
       "name": "hast-util-whitespace",
       "version": "3.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|hast-util-whitespace@3.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|hast-util-whitespace@3.0.0",
       "licenses": [
         {
           "license": {
@@ -3178,7 +3178,7 @@
       "type": "library",
       "name": "html-url-attributes",
       "version": "3.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|html-url-attributes@3.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|html-url-attributes@3.0.1",
       "licenses": [
         {
           "license": {
@@ -3212,7 +3212,7 @@
       "type": "library",
       "name": "immer",
       "version": "10.2.0",
-      "bom-ref": "claude-session-manager@1.3.0|immer@10.2.0",
+      "bom-ref": "claude-session-manager@1.4.0|immer@10.2.0",
       "licenses": [
         {
           "license": {
@@ -3246,7 +3246,7 @@
       "type": "library",
       "name": "inline-style-parser",
       "version": "0.2.7",
-      "bom-ref": "claude-session-manager@1.3.0|inline-style-parser@0.2.7",
+      "bom-ref": "claude-session-manager@1.4.0|inline-style-parser@0.2.7",
       "licenses": [
         {
           "license": {
@@ -3280,7 +3280,7 @@
       "type": "library",
       "name": "internmap",
       "version": "2.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|internmap@2.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|internmap@2.0.3",
       "licenses": [
         {
           "license": {
@@ -3314,7 +3314,7 @@
       "type": "library",
       "name": "is-alphabetical",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|is-alphabetical@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|is-alphabetical@2.0.1",
       "licenses": [
         {
           "license": {
@@ -3348,7 +3348,7 @@
       "type": "library",
       "name": "is-alphanumerical",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|is-alphanumerical@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|is-alphanumerical@2.0.1",
       "licenses": [
         {
           "license": {
@@ -3382,7 +3382,7 @@
       "type": "library",
       "name": "is-decimal",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|is-decimal@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|is-decimal@2.0.1",
       "licenses": [
         {
           "license": {
@@ -3416,7 +3416,7 @@
       "type": "library",
       "name": "is-fullwidth-code-point",
       "version": "3.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|is-fullwidth-code-point@3.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|is-fullwidth-code-point@3.0.0",
       "licenses": [
         {
           "license": {
@@ -3450,7 +3450,7 @@
       "type": "library",
       "name": "is-hexadecimal",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|is-hexadecimal@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|is-hexadecimal@2.0.1",
       "licenses": [
         {
           "license": {
@@ -3484,7 +3484,7 @@
       "type": "library",
       "name": "is-plain-obj",
       "version": "4.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|is-plain-obj@4.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|is-plain-obj@4.1.0",
       "licenses": [
         {
           "license": {
@@ -3518,7 +3518,7 @@
       "type": "library",
       "name": "js-yaml",
       "version": "4.3.0",
-      "bom-ref": "claude-session-manager@1.3.0|js-yaml@4.3.0",
+      "bom-ref": "claude-session-manager@1.4.0|js-yaml@4.3.0",
       "licenses": [
         {
           "license": {
@@ -3552,7 +3552,7 @@
       "type": "library",
       "name": "json-schema-traverse",
       "version": "1.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|json-schema-traverse@1.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|json-schema-traverse@1.0.0",
       "licenses": [
         {
           "license": {
@@ -3586,7 +3586,7 @@
       "type": "library",
       "name": "lazy-val",
       "version": "1.0.5",
-      "bom-ref": "claude-session-manager@1.3.0|lazy-val@1.0.5",
+      "bom-ref": "claude-session-manager@1.4.0|lazy-val@1.0.5",
       "licenses": [
         {
           "license": {
@@ -3620,7 +3620,7 @@
       "type": "library",
       "name": "lodash.escaperegexp",
       "version": "4.1.2",
-      "bom-ref": "claude-session-manager@1.3.0|lodash.escaperegexp@4.1.2",
+      "bom-ref": "claude-session-manager@1.4.0|lodash.escaperegexp@4.1.2",
       "licenses": [
         {
           "license": {
@@ -3654,7 +3654,7 @@
       "type": "library",
       "name": "lodash.isequal",
       "version": "4.5.0",
-      "bom-ref": "claude-session-manager@1.3.0|lodash.isequal@4.5.0",
+      "bom-ref": "claude-session-manager@1.4.0|lodash.isequal@4.5.0",
       "licenses": [
         {
           "license": {
@@ -3688,7 +3688,7 @@
       "type": "library",
       "name": "longest-streak",
       "version": "3.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|longest-streak@3.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|longest-streak@3.1.0",
       "licenses": [
         {
           "license": {
@@ -3722,7 +3722,7 @@
       "type": "library",
       "name": "lucide-react",
       "version": "0.577.0",
-      "bom-ref": "claude-session-manager@1.3.0|lucide-react@0.577.0",
+      "bom-ref": "claude-session-manager@1.4.0|lucide-react@0.577.0",
       "licenses": [
         {
           "license": {
@@ -3756,7 +3756,7 @@
       "type": "library",
       "name": "markdown-table",
       "version": "3.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|markdown-table@3.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|markdown-table@3.0.4",
       "licenses": [
         {
           "license": {
@@ -3790,7 +3790,7 @@
       "type": "library",
       "name": "mdast-util-find-and-replace",
       "version": "3.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-find-and-replace@3.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-find-and-replace@3.0.2",
       "licenses": [
         {
           "license": {
@@ -3824,7 +3824,7 @@
           "type": "library",
           "name": "escape-string-regexp",
           "version": "5.0.0",
-          "bom-ref": "claude-session-manager@1.3.0|mdast-util-find-and-replace@3.0.2|escape-string-regexp@5.0.0",
+          "bom-ref": "claude-session-manager@1.4.0|mdast-util-find-and-replace@3.0.2|escape-string-regexp@5.0.0",
           "licenses": [
             {
               "license": {
@@ -3860,7 +3860,7 @@
       "type": "library",
       "name": "mdast-util-from-markdown",
       "version": "2.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
       "licenses": [
         {
           "license": {
@@ -3894,7 +3894,7 @@
       "type": "library",
       "name": "mdast-util-gfm-autolink-literal",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-gfm-autolink-literal@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-gfm-autolink-literal@2.0.1",
       "licenses": [
         {
           "license": {
@@ -3928,7 +3928,7 @@
       "type": "library",
       "name": "mdast-util-gfm-footnote",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-gfm-footnote@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-gfm-footnote@2.1.0",
       "licenses": [
         {
           "license": {
@@ -3962,7 +3962,7 @@
       "type": "library",
       "name": "mdast-util-gfm-strikethrough",
       "version": "2.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-gfm-strikethrough@2.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-gfm-strikethrough@2.0.0",
       "licenses": [
         {
           "license": {
@@ -3996,7 +3996,7 @@
       "type": "library",
       "name": "mdast-util-gfm-table",
       "version": "2.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-gfm-table@2.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-gfm-table@2.0.0",
       "licenses": [
         {
           "license": {
@@ -4030,7 +4030,7 @@
       "type": "library",
       "name": "mdast-util-gfm-task-list-item",
       "version": "2.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-gfm-task-list-item@2.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-gfm-task-list-item@2.0.0",
       "licenses": [
         {
           "license": {
@@ -4064,7 +4064,7 @@
       "type": "library",
       "name": "mdast-util-gfm",
       "version": "3.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-gfm@3.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-gfm@3.1.0",
       "licenses": [
         {
           "license": {
@@ -4098,7 +4098,7 @@
       "type": "library",
       "name": "mdast-util-mdx-expression",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-mdx-expression@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-mdx-expression@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4132,7 +4132,7 @@
       "type": "library",
       "name": "mdast-util-mdx-jsx",
       "version": "3.2.0",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-mdx-jsx@3.2.0",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-mdx-jsx@3.2.0",
       "licenses": [
         {
           "license": {
@@ -4166,7 +4166,7 @@
       "type": "library",
       "name": "mdast-util-mdxjs-esm",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-mdxjs-esm@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-mdxjs-esm@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4200,7 +4200,7 @@
       "type": "library",
       "name": "mdast-util-phrasing",
       "version": "4.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-phrasing@4.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-phrasing@4.1.0",
       "licenses": [
         {
           "license": {
@@ -4234,7 +4234,7 @@
       "type": "library",
       "name": "mdast-util-to-hast",
       "version": "13.2.1",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-to-hast@13.2.1",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-to-hast@13.2.1",
       "licenses": [
         {
           "license": {
@@ -4268,7 +4268,7 @@
       "type": "library",
       "name": "mdast-util-to-markdown",
       "version": "2.1.2",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2",
       "licenses": [
         {
           "license": {
@@ -4302,7 +4302,7 @@
       "type": "library",
       "name": "mdast-util-to-string",
       "version": "4.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|mdast-util-to-string@4.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|mdast-util-to-string@4.0.0",
       "licenses": [
         {
           "license": {
@@ -4336,7 +4336,7 @@
       "type": "library",
       "name": "micromark-core-commonmark",
       "version": "2.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-core-commonmark@2.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-core-commonmark@2.0.3",
       "licenses": [
         {
           "license": {
@@ -4370,7 +4370,7 @@
       "type": "library",
       "name": "micromark-extension-gfm-autolink-literal",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-extension-gfm-autolink-literal@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-extension-gfm-autolink-literal@2.1.0",
       "licenses": [
         {
           "license": {
@@ -4404,7 +4404,7 @@
       "type": "library",
       "name": "micromark-extension-gfm-footnote",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-extension-gfm-footnote@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-extension-gfm-footnote@2.1.0",
       "licenses": [
         {
           "license": {
@@ -4438,7 +4438,7 @@
       "type": "library",
       "name": "micromark-extension-gfm-strikethrough",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-extension-gfm-strikethrough@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-extension-gfm-strikethrough@2.1.0",
       "licenses": [
         {
           "license": {
@@ -4472,7 +4472,7 @@
       "type": "library",
       "name": "micromark-extension-gfm-table",
       "version": "2.1.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-extension-gfm-table@2.1.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-extension-gfm-table@2.1.1",
       "licenses": [
         {
           "license": {
@@ -4506,7 +4506,7 @@
       "type": "library",
       "name": "micromark-extension-gfm-tagfilter",
       "version": "2.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-extension-gfm-tagfilter@2.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-extension-gfm-tagfilter@2.0.0",
       "licenses": [
         {
           "license": {
@@ -4540,7 +4540,7 @@
       "type": "library",
       "name": "micromark-extension-gfm-task-list-item",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-extension-gfm-task-list-item@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-extension-gfm-task-list-item@2.1.0",
       "licenses": [
         {
           "license": {
@@ -4574,7 +4574,7 @@
       "type": "library",
       "name": "micromark-extension-gfm",
       "version": "3.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-extension-gfm@3.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-extension-gfm@3.0.0",
       "licenses": [
         {
           "license": {
@@ -4608,7 +4608,7 @@
       "type": "library",
       "name": "micromark-factory-destination",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-factory-destination@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-factory-destination@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4642,7 +4642,7 @@
       "type": "library",
       "name": "micromark-factory-label",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-factory-label@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-factory-label@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4676,7 +4676,7 @@
       "type": "library",
       "name": "micromark-factory-space",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4710,7 +4710,7 @@
       "type": "library",
       "name": "micromark-factory-title",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-factory-title@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-factory-title@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4744,7 +4744,7 @@
       "type": "library",
       "name": "micromark-factory-whitespace",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-factory-whitespace@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-factory-whitespace@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4778,7 +4778,7 @@
       "type": "library",
       "name": "micromark-util-character",
       "version": "2.1.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
       "licenses": [
         {
           "license": {
@@ -4812,7 +4812,7 @@
       "type": "library",
       "name": "micromark-util-chunked",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-chunked@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-chunked@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4846,7 +4846,7 @@
       "type": "library",
       "name": "micromark-util-classify-character",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-classify-character@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-classify-character@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4880,7 +4880,7 @@
       "type": "library",
       "name": "micromark-util-combine-extensions",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-combine-extensions@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-combine-extensions@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4914,7 +4914,7 @@
       "type": "library",
       "name": "micromark-util-decode-numeric-character-reference",
       "version": "2.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-decode-numeric-character-reference@2.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-decode-numeric-character-reference@2.0.2",
       "licenses": [
         {
           "license": {
@@ -4948,7 +4948,7 @@
       "type": "library",
       "name": "micromark-util-decode-string",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-decode-string@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-decode-string@2.0.1",
       "licenses": [
         {
           "license": {
@@ -4982,7 +4982,7 @@
       "type": "library",
       "name": "micromark-util-encode",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-encode@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-encode@2.0.1",
       "licenses": [
         {
           "license": {
@@ -5016,7 +5016,7 @@
       "type": "library",
       "name": "micromark-util-html-tag-name",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-html-tag-name@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-html-tag-name@2.0.1",
       "licenses": [
         {
           "license": {
@@ -5050,7 +5050,7 @@
       "type": "library",
       "name": "micromark-util-normalize-identifier",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-normalize-identifier@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-normalize-identifier@2.0.1",
       "licenses": [
         {
           "license": {
@@ -5084,7 +5084,7 @@
       "type": "library",
       "name": "micromark-util-resolve-all",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-resolve-all@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-resolve-all@2.0.1",
       "licenses": [
         {
           "license": {
@@ -5118,7 +5118,7 @@
       "type": "library",
       "name": "micromark-util-sanitize-uri",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-sanitize-uri@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-sanitize-uri@2.0.1",
       "licenses": [
         {
           "license": {
@@ -5152,7 +5152,7 @@
       "type": "library",
       "name": "micromark-util-subtokenize",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-subtokenize@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-subtokenize@2.1.0",
       "licenses": [
         {
           "license": {
@@ -5186,7 +5186,7 @@
       "type": "library",
       "name": "micromark-util-symbol",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
       "licenses": [
         {
           "license": {
@@ -5220,7 +5220,7 @@
       "type": "library",
       "name": "micromark-util-types",
       "version": "2.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|micromark-util-types@2.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|micromark-util-types@2.0.2",
       "licenses": [
         {
           "license": {
@@ -5254,7 +5254,7 @@
       "type": "library",
       "name": "micromark",
       "version": "4.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|micromark@4.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|micromark@4.0.2",
       "licenses": [
         {
           "license": {
@@ -5288,7 +5288,7 @@
       "type": "library",
       "name": "ms",
       "version": "2.1.3",
-      "bom-ref": "claude-session-manager@1.3.0|ms@2.1.3",
+      "bom-ref": "claude-session-manager@1.4.0|ms@2.1.3",
       "licenses": [
         {
           "license": {
@@ -5322,7 +5322,7 @@
       "type": "library",
       "name": "p-try",
       "version": "2.2.0",
-      "bom-ref": "claude-session-manager@1.3.0|p-try@2.2.0",
+      "bom-ref": "claude-session-manager@1.4.0|p-try@2.2.0",
       "licenses": [
         {
           "license": {
@@ -5356,7 +5356,7 @@
       "type": "library",
       "name": "parse-entities",
       "version": "4.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|parse-entities@4.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|parse-entities@4.0.2",
       "licenses": [
         {
           "license": {
@@ -5391,7 +5391,7 @@
           "name": "unist",
           "group": "@types",
           "version": "2.0.11",
-          "bom-ref": "claude-session-manager@1.3.0|parse-entities@4.0.2|@types/unist@2.0.11",
+          "bom-ref": "claude-session-manager@1.4.0|parse-entities@4.0.2|@types/unist@2.0.11",
           "licenses": [
             {
               "license": {
@@ -5427,7 +5427,7 @@
       "type": "library",
       "name": "path-exists",
       "version": "4.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|path-exists@4.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|path-exists@4.0.0",
       "licenses": [
         {
           "license": {
@@ -5461,7 +5461,7 @@
       "type": "library",
       "name": "pngjs",
       "version": "5.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|pngjs@5.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|pngjs@5.0.0",
       "licenses": [
         {
           "license": {
@@ -5495,7 +5495,7 @@
       "type": "library",
       "name": "progress",
       "version": "2.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|progress@2.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|progress@2.0.3",
       "licenses": [
         {
           "license": {
@@ -5529,7 +5529,7 @@
       "type": "library",
       "name": "property-information",
       "version": "7.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|property-information@7.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|property-information@7.1.0",
       "licenses": [
         {
           "license": {
@@ -5563,7 +5563,7 @@
       "type": "library",
       "name": "qrcode",
       "version": "1.5.4",
-      "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4",
+      "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4",
       "licenses": [
         {
           "license": {
@@ -5597,7 +5597,7 @@
           "type": "library",
           "name": "cliui",
           "version": "6.0.0",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|cliui@6.0.0",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|cliui@6.0.0",
           "licenses": [
             {
               "license": {
@@ -5631,7 +5631,7 @@
           "type": "library",
           "name": "find-up",
           "version": "4.1.0",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|find-up@4.1.0",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|find-up@4.1.0",
           "licenses": [
             {
               "license": {
@@ -5665,7 +5665,7 @@
           "type": "library",
           "name": "locate-path",
           "version": "5.0.0",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|locate-path@5.0.0",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|locate-path@5.0.0",
           "licenses": [
             {
               "license": {
@@ -5699,7 +5699,7 @@
           "type": "library",
           "name": "p-limit",
           "version": "2.3.0",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|p-limit@2.3.0",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|p-limit@2.3.0",
           "licenses": [
             {
               "license": {
@@ -5733,7 +5733,7 @@
           "type": "library",
           "name": "p-locate",
           "version": "4.1.0",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|p-locate@4.1.0",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|p-locate@4.1.0",
           "licenses": [
             {
               "license": {
@@ -5767,7 +5767,7 @@
           "type": "library",
           "name": "wrap-ansi",
           "version": "6.2.0",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|wrap-ansi@6.2.0",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|wrap-ansi@6.2.0",
           "licenses": [
             {
               "license": {
@@ -5801,7 +5801,7 @@
           "type": "library",
           "name": "y18n",
           "version": "4.0.3",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|y18n@4.0.3",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|y18n@4.0.3",
           "licenses": [
             {
               "license": {
@@ -5835,7 +5835,7 @@
           "type": "library",
           "name": "yargs-parser",
           "version": "18.1.3",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|yargs-parser@18.1.3",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|yargs-parser@18.1.3",
           "licenses": [
             {
               "license": {
@@ -5869,7 +5869,7 @@
           "type": "library",
           "name": "yargs",
           "version": "15.4.1",
-          "bom-ref": "claude-session-manager@1.3.0|qrcode@1.5.4|yargs@15.4.1",
+          "bom-ref": "claude-session-manager@1.4.0|qrcode@1.5.4|yargs@15.4.1",
           "licenses": [
             {
               "license": {
@@ -5905,7 +5905,7 @@
       "type": "library",
       "name": "react-dom",
       "version": "19.2.4",
-      "bom-ref": "claude-session-manager@1.3.0|react-dom@19.2.4",
+      "bom-ref": "claude-session-manager@1.4.0|react-dom@19.2.4",
       "licenses": [
         {
           "license": {
@@ -5939,7 +5939,7 @@
       "type": "library",
       "name": "react-is",
       "version": "17.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|react-is@17.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|react-is@17.0.2",
       "licenses": [
         {
           "license": {
@@ -5973,7 +5973,7 @@
       "type": "library",
       "name": "react-markdown",
       "version": "10.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|react-markdown@10.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|react-markdown@10.1.0",
       "licenses": [
         {
           "license": {
@@ -6007,7 +6007,7 @@
       "type": "library",
       "name": "react-redux",
       "version": "9.2.0",
-      "bom-ref": "claude-session-manager@1.3.0|react-redux@9.2.0",
+      "bom-ref": "claude-session-manager@1.4.0|react-redux@9.2.0",
       "licenses": [
         {
           "license": {
@@ -6041,7 +6041,7 @@
       "type": "library",
       "name": "react",
       "version": "19.2.4",
-      "bom-ref": "claude-session-manager@1.3.0|react@19.2.4",
+      "bom-ref": "claude-session-manager@1.4.0|react@19.2.4",
       "licenses": [
         {
           "license": {
@@ -6075,7 +6075,7 @@
       "type": "library",
       "name": "readdirp",
       "version": "5.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|readdirp@5.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|readdirp@5.0.0",
       "licenses": [
         {
           "license": {
@@ -6109,7 +6109,7 @@
       "type": "library",
       "name": "recharts",
       "version": "3.8.1",
-      "bom-ref": "claude-session-manager@1.3.0|recharts@3.8.1",
+      "bom-ref": "claude-session-manager@1.4.0|recharts@3.8.1",
       "licenses": [
         {
           "license": {
@@ -6143,7 +6143,7 @@
       "type": "library",
       "name": "redux-thunk",
       "version": "3.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|redux-thunk@3.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|redux-thunk@3.1.0",
       "licenses": [
         {
           "license": {
@@ -6177,7 +6177,7 @@
       "type": "library",
       "name": "redux",
       "version": "5.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|redux@5.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|redux@5.0.1",
       "licenses": [
         {
           "license": {
@@ -6211,7 +6211,7 @@
       "type": "library",
       "name": "remark-gfm",
       "version": "4.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|remark-gfm@4.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|remark-gfm@4.0.1",
       "licenses": [
         {
           "license": {
@@ -6245,7 +6245,7 @@
       "type": "library",
       "name": "remark-parse",
       "version": "11.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|remark-parse@11.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|remark-parse@11.0.0",
       "licenses": [
         {
           "license": {
@@ -6279,7 +6279,7 @@
       "type": "library",
       "name": "remark-rehype",
       "version": "11.1.2",
-      "bom-ref": "claude-session-manager@1.3.0|remark-rehype@11.1.2",
+      "bom-ref": "claude-session-manager@1.4.0|remark-rehype@11.1.2",
       "licenses": [
         {
           "license": {
@@ -6313,7 +6313,7 @@
       "type": "library",
       "name": "remark-stringify",
       "version": "11.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|remark-stringify@11.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|remark-stringify@11.0.0",
       "licenses": [
         {
           "license": {
@@ -6347,7 +6347,7 @@
       "type": "library",
       "name": "require-directory",
       "version": "2.1.1",
-      "bom-ref": "claude-session-manager@1.3.0|require-directory@2.1.1",
+      "bom-ref": "claude-session-manager@1.4.0|require-directory@2.1.1",
       "licenses": [
         {
           "license": {
@@ -6381,7 +6381,7 @@
       "type": "library",
       "name": "require-from-string",
       "version": "2.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|require-from-string@2.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|require-from-string@2.0.2",
       "licenses": [
         {
           "license": {
@@ -6415,7 +6415,7 @@
       "type": "library",
       "name": "require-main-filename",
       "version": "2.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|require-main-filename@2.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|require-main-filename@2.0.0",
       "licenses": [
         {
           "license": {
@@ -6449,7 +6449,7 @@
       "type": "library",
       "name": "reselect",
       "version": "5.1.1",
-      "bom-ref": "claude-session-manager@1.3.0|reselect@5.1.1",
+      "bom-ref": "claude-session-manager@1.4.0|reselect@5.1.1",
       "licenses": [
         {
           "license": {
@@ -6483,7 +6483,7 @@
       "type": "library",
       "name": "sax",
       "version": "1.5.0",
-      "bom-ref": "claude-session-manager@1.3.0|sax@1.5.0",
+      "bom-ref": "claude-session-manager@1.4.0|sax@1.5.0",
       "licenses": [
         {
           "license": {
@@ -6517,7 +6517,7 @@
       "type": "library",
       "name": "scheduler",
       "version": "0.27.0",
-      "bom-ref": "claude-session-manager@1.3.0|scheduler@0.27.0",
+      "bom-ref": "claude-session-manager@1.4.0|scheduler@0.27.0",
       "licenses": [
         {
           "license": {
@@ -6551,7 +6551,7 @@
       "type": "library",
       "name": "set-blocking",
       "version": "2.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|set-blocking@2.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|set-blocking@2.0.0",
       "licenses": [
         {
           "license": {
@@ -6585,7 +6585,7 @@
       "type": "library",
       "name": "space-separated-tokens",
       "version": "2.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|space-separated-tokens@2.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|space-separated-tokens@2.0.2",
       "licenses": [
         {
           "license": {
@@ -6617,9 +6617,77 @@
     },
     {
       "type": "library",
+      "name": "stream-chain",
+      "version": "2.2.5",
+      "bom-ref": "claude-session-manager@1.4.0|stream-chain@2.2.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/stream-chain@2.2.5?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fstream-chain%2F-%2Fstream-chain-2.2.5.tgz",
+      "externalReferences": [
+        {
+          "url": "https://registry.npmmirror.com/stream-chain/-/stream-chain-2.2.5.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "d53266071e9a496a99e2dc7b693a410d72b4fdeda185c3524d5f3e09b149b438db6fe235999f251e2b741abc3d1914fee896c8aeb0ddf1eb27720062f1a05718"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/stream-chain"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "stream-json",
+      "version": "1.9.1",
+      "bom-ref": "claude-session-manager@1.4.0|stream-json@1.9.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/stream-json@1.9.1?download_url=https%3A%2F%2Fregistry.npmmirror.com%2Fstream-json%2F-%2Fstream-json-1.9.1.tgz",
+      "externalReferences": [
+        {
+          "url": "https://registry.npmmirror.com/stream-json/-/stream-json-1.9.1.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "b9692327ed8db7f2cef59fc9c8a65b32eb0bf03921f7bb94053bf700943be32d3b9556a12d8e1e105b0fb04f7ba71601c2bf279e330021c8797aa23480f4a1cb"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/stream-json"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "string-width",
       "version": "4.2.3",
-      "bom-ref": "claude-session-manager@1.3.0|string-width@4.2.3",
+      "bom-ref": "claude-session-manager@1.4.0|string-width@4.2.3",
       "licenses": [
         {
           "license": {
@@ -6653,7 +6721,7 @@
       "type": "library",
       "name": "stringify-entities",
       "version": "4.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|stringify-entities@4.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|stringify-entities@4.0.4",
       "licenses": [
         {
           "license": {
@@ -6687,7 +6755,7 @@
       "type": "library",
       "name": "strip-ansi",
       "version": "6.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|strip-ansi@6.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|strip-ansi@6.0.1",
       "licenses": [
         {
           "license": {
@@ -6721,7 +6789,7 @@
       "type": "library",
       "name": "style-to-js",
       "version": "1.1.21",
-      "bom-ref": "claude-session-manager@1.3.0|style-to-js@1.1.21",
+      "bom-ref": "claude-session-manager@1.4.0|style-to-js@1.1.21",
       "licenses": [
         {
           "license": {
@@ -6755,7 +6823,7 @@
       "type": "library",
       "name": "style-to-object",
       "version": "1.0.14",
-      "bom-ref": "claude-session-manager@1.3.0|style-to-object@1.0.14",
+      "bom-ref": "claude-session-manager@1.4.0|style-to-object@1.0.14",
       "licenses": [
         {
           "license": {
@@ -6789,7 +6857,7 @@
       "type": "library",
       "name": "sumchecker",
       "version": "3.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|sumchecker@3.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|sumchecker@3.0.1",
       "licenses": [
         {
           "license": {
@@ -6823,7 +6891,7 @@
       "type": "library",
       "name": "tiny-invariant",
       "version": "1.3.3",
-      "bom-ref": "claude-session-manager@1.3.0|tiny-invariant@1.3.3",
+      "bom-ref": "claude-session-manager@1.4.0|tiny-invariant@1.3.3",
       "licenses": [
         {
           "license": {
@@ -6857,7 +6925,7 @@
       "type": "library",
       "name": "tiny-typed-emitter",
       "version": "2.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|tiny-typed-emitter@2.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|tiny-typed-emitter@2.1.0",
       "licenses": [
         {
           "license": {
@@ -6891,7 +6959,7 @@
       "type": "library",
       "name": "trim-lines",
       "version": "3.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|trim-lines@3.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|trim-lines@3.0.1",
       "licenses": [
         {
           "license": {
@@ -6925,7 +6993,7 @@
       "type": "library",
       "name": "trough",
       "version": "2.2.0",
-      "bom-ref": "claude-session-manager@1.3.0|trough@2.2.0",
+      "bom-ref": "claude-session-manager@1.4.0|trough@2.2.0",
       "licenses": [
         {
           "license": {
@@ -6959,7 +7027,7 @@
       "type": "library",
       "name": "undici",
       "version": "7.28.0",
-      "bom-ref": "claude-session-manager@1.3.0|undici@7.28.0",
+      "bom-ref": "claude-session-manager@1.4.0|undici@7.28.0",
       "licenses": [
         {
           "license": {
@@ -6997,7 +7065,7 @@
       "type": "library",
       "name": "unified",
       "version": "11.0.5",
-      "bom-ref": "claude-session-manager@1.3.0|unified@11.0.5",
+      "bom-ref": "claude-session-manager@1.4.0|unified@11.0.5",
       "licenses": [
         {
           "license": {
@@ -7031,7 +7099,7 @@
       "type": "library",
       "name": "unist-util-is",
       "version": "6.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|unist-util-is@6.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|unist-util-is@6.0.1",
       "licenses": [
         {
           "license": {
@@ -7065,7 +7133,7 @@
       "type": "library",
       "name": "unist-util-position",
       "version": "5.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|unist-util-position@5.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|unist-util-position@5.0.0",
       "licenses": [
         {
           "license": {
@@ -7099,7 +7167,7 @@
       "type": "library",
       "name": "unist-util-stringify-position",
       "version": "4.0.0",
-      "bom-ref": "claude-session-manager@1.3.0|unist-util-stringify-position@4.0.0",
+      "bom-ref": "claude-session-manager@1.4.0|unist-util-stringify-position@4.0.0",
       "licenses": [
         {
           "license": {
@@ -7133,7 +7201,7 @@
       "type": "library",
       "name": "unist-util-visit-parents",
       "version": "6.0.2",
-      "bom-ref": "claude-session-manager@1.3.0|unist-util-visit-parents@6.0.2",
+      "bom-ref": "claude-session-manager@1.4.0|unist-util-visit-parents@6.0.2",
       "licenses": [
         {
           "license": {
@@ -7167,7 +7235,7 @@
       "type": "library",
       "name": "unist-util-visit",
       "version": "5.1.0",
-      "bom-ref": "claude-session-manager@1.3.0|unist-util-visit@5.1.0",
+      "bom-ref": "claude-session-manager@1.4.0|unist-util-visit@5.1.0",
       "licenses": [
         {
           "license": {
@@ -7201,7 +7269,7 @@
       "type": "library",
       "name": "use-sync-external-store",
       "version": "1.6.0",
-      "bom-ref": "claude-session-manager@1.3.0|use-sync-external-store@1.6.0",
+      "bom-ref": "claude-session-manager@1.4.0|use-sync-external-store@1.6.0",
       "licenses": [
         {
           "license": {
@@ -7235,7 +7303,7 @@
       "type": "library",
       "name": "vfile-message",
       "version": "4.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|vfile-message@4.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|vfile-message@4.0.3",
       "licenses": [
         {
           "license": {
@@ -7269,7 +7337,7 @@
       "type": "library",
       "name": "vfile",
       "version": "6.0.3",
-      "bom-ref": "claude-session-manager@1.3.0|vfile@6.0.3",
+      "bom-ref": "claude-session-manager@1.4.0|vfile@6.0.3",
       "licenses": [
         {
           "license": {
@@ -7303,7 +7371,7 @@
       "type": "library",
       "name": "victory-vendor",
       "version": "37.3.6",
-      "bom-ref": "claude-session-manager@1.3.0|victory-vendor@37.3.6",
+      "bom-ref": "claude-session-manager@1.4.0|victory-vendor@37.3.6",
       "licenses": [
         {
           "expression": "MIT AND ISC",
@@ -7335,7 +7403,7 @@
       "type": "library",
       "name": "which-module",
       "version": "2.0.1",
-      "bom-ref": "claude-session-manager@1.3.0|which-module@2.0.1",
+      "bom-ref": "claude-session-manager@1.4.0|which-module@2.0.1",
       "licenses": [
         {
           "license": {
@@ -7369,7 +7437,7 @@
       "type": "library",
       "name": "zustand",
       "version": "5.0.11",
-      "bom-ref": "claude-session-manager@1.3.0|zustand@5.0.11",
+      "bom-ref": "claude-session-manager@1.4.0|zustand@5.0.11",
       "licenses": [
         {
           "license": {
@@ -7403,7 +7471,7 @@
       "type": "library",
       "name": "zwitch",
       "version": "2.0.4",
-      "bom-ref": "claude-session-manager@1.3.0|zwitch@2.0.4",
+      "bom-ref": "claude-session-manager@1.4.0|zwitch@2.0.4",
       "licenses": [
         {
           "license": {
@@ -7436,1314 +7504,1324 @@
   ],
   "dependencies": [
     {
-      "ref": "claude-session-manager@1.3.0",
+      "ref": "claude-session-manager@1.4.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@electron-toolkit/preload@3.0.2",
-        "claude-session-manager@1.3.0|@electron-toolkit/utils@4.0.0",
-        "claude-session-manager@1.3.0|@tanstack/react-virtual@3.14.7",
-        "claude-session-manager@1.3.0|ajv@8.17.1",
-        "claude-session-manager@1.3.0|better-sqlite3@13.0.1",
-        "claude-session-manager@1.3.0|chokidar@5.0.0",
-        "claude-session-manager@1.3.0|electron-updater@6.8.9",
-        "claude-session-manager@1.3.0|fsevents@2.3.3",
-        "claude-session-manager@1.3.0|lucide-react@0.577.0",
-        "claude-session-manager@1.3.0|qrcode@1.5.4",
-        "claude-session-manager@1.3.0|react-dom@19.2.4",
-        "claude-session-manager@1.3.0|react-markdown@10.1.0",
-        "claude-session-manager@1.3.0|react@19.2.4",
-        "claude-session-manager@1.3.0|recharts@3.8.1",
-        "claude-session-manager@1.3.0|remark-gfm@4.0.1",
-        "claude-session-manager@1.3.0|zustand@5.0.11"
+        "claude-session-manager@1.4.0|@electron-toolkit/preload@3.0.2",
+        "claude-session-manager@1.4.0|@electron-toolkit/utils@4.0.0",
+        "claude-session-manager@1.4.0|@tanstack/react-virtual@3.14.7",
+        "claude-session-manager@1.4.0|ajv@8.17.1",
+        "claude-session-manager@1.4.0|better-sqlite3@13.0.1",
+        "claude-session-manager@1.4.0|chokidar@5.0.0",
+        "claude-session-manager@1.4.0|electron-updater@6.8.9",
+        "claude-session-manager@1.4.0|fsevents@2.3.3",
+        "claude-session-manager@1.4.0|lucide-react@0.577.0",
+        "claude-session-manager@1.4.0|qrcode@1.5.4",
+        "claude-session-manager@1.4.0|react-dom@19.2.4",
+        "claude-session-manager@1.4.0|react-markdown@10.1.0",
+        "claude-session-manager@1.4.0|react@19.2.4",
+        "claude-session-manager@1.4.0|recharts@3.8.1",
+        "claude-session-manager@1.4.0|remark-gfm@4.0.1",
+        "claude-session-manager@1.4.0|stream-json@1.9.1",
+        "claude-session-manager@1.4.0|zustand@5.0.11"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@electron-internal/extract-zip@1.0.4"
+      "ref": "claude-session-manager@1.4.0|@electron-internal/extract-zip@1.0.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@electron-toolkit/preload@3.0.2",
+      "ref": "claude-session-manager@1.4.0|@electron-toolkit/preload@3.0.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|electron@40.10.6"
+        "claude-session-manager@1.4.0|electron@40.10.6"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@electron-toolkit/utils@4.0.0",
+      "ref": "claude-session-manager@1.4.0|@electron-toolkit/utils@4.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|electron@40.10.6"
+        "claude-session-manager@1.4.0|electron@40.10.6"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@electron/get@5.0.0",
+      "ref": "claude-session-manager@1.4.0|@electron/get@5.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@electron/get@5.0.0|env-paths@3.0.0",
-        "claude-session-manager@1.3.0|@electron/get@5.0.0|semver@7.8.5",
-        "claude-session-manager@1.3.0|debug@4.4.3",
-        "claude-session-manager@1.3.0|graceful-fs@4.2.11",
-        "claude-session-manager@1.3.0|progress@2.0.3",
-        "claude-session-manager@1.3.0|sumchecker@3.0.1",
-        "claude-session-manager@1.3.0|undici@7.28.0"
+        "claude-session-manager@1.4.0|@electron/get@5.0.0|env-paths@3.0.0",
+        "claude-session-manager@1.4.0|@electron/get@5.0.0|semver@7.8.5",
+        "claude-session-manager@1.4.0|debug@4.4.3",
+        "claude-session-manager@1.4.0|graceful-fs@4.2.11",
+        "claude-session-manager@1.4.0|progress@2.0.3",
+        "claude-session-manager@1.4.0|sumchecker@3.0.1",
+        "claude-session-manager@1.4.0|undici@7.28.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@electron/get@5.0.0|env-paths@3.0.0"
+      "ref": "claude-session-manager@1.4.0|@electron/get@5.0.0|env-paths@3.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@electron/get@5.0.0|semver@7.8.5"
+      "ref": "claude-session-manager@1.4.0|@electron/get@5.0.0|semver@7.8.5"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@reduxjs/toolkit@2.11.2",
+      "ref": "claude-session-manager@1.4.0|@reduxjs/toolkit@2.11.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@reduxjs/toolkit@2.11.2|immer@11.1.4",
-        "claude-session-manager@1.3.0|@standard-schema/spec@1.1.0",
-        "claude-session-manager@1.3.0|@standard-schema/utils@0.3.0",
-        "claude-session-manager@1.3.0|react-redux@9.2.0",
-        "claude-session-manager@1.3.0|react@19.2.4",
-        "claude-session-manager@1.3.0|redux-thunk@3.1.0",
-        "claude-session-manager@1.3.0|redux@5.0.1",
-        "claude-session-manager@1.3.0|reselect@5.1.1"
+        "claude-session-manager@1.4.0|@reduxjs/toolkit@2.11.2|immer@11.1.4",
+        "claude-session-manager@1.4.0|@standard-schema/spec@1.1.0",
+        "claude-session-manager@1.4.0|@standard-schema/utils@0.3.0",
+        "claude-session-manager@1.4.0|react-redux@9.2.0",
+        "claude-session-manager@1.4.0|react@19.2.4",
+        "claude-session-manager@1.4.0|redux-thunk@3.1.0",
+        "claude-session-manager@1.4.0|redux@5.0.1",
+        "claude-session-manager@1.4.0|reselect@5.1.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@reduxjs/toolkit@2.11.2|immer@11.1.4"
+      "ref": "claude-session-manager@1.4.0|@reduxjs/toolkit@2.11.2|immer@11.1.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@standard-schema/spec@1.1.0"
+      "ref": "claude-session-manager@1.4.0|@standard-schema/spec@1.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@standard-schema/utils@0.3.0"
+      "ref": "claude-session-manager@1.4.0|@standard-schema/utils@0.3.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@tanstack/react-virtual@3.14.7",
+      "ref": "claude-session-manager@1.4.0|@tanstack/react-virtual@3.14.7",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@tanstack/virtual-core@3.17.5",
-        "claude-session-manager@1.3.0|react-dom@19.2.4",
-        "claude-session-manager@1.3.0|react@19.2.4"
+        "claude-session-manager@1.4.0|@tanstack/virtual-core@3.17.5",
+        "claude-session-manager@1.4.0|react-dom@19.2.4",
+        "claude-session-manager@1.4.0|react@19.2.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@tanstack/virtual-core@3.17.5"
+      "ref": "claude-session-manager@1.4.0|@tanstack/virtual-core@3.17.5"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-array@3.2.2"
+      "ref": "claude-session-manager@1.4.0|@types/d3-array@3.2.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-color@3.1.3"
+      "ref": "claude-session-manager@1.4.0|@types/d3-color@3.1.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-ease@3.0.2"
+      "ref": "claude-session-manager@1.4.0|@types/d3-ease@3.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-interpolate@3.0.4",
+      "ref": "claude-session-manager@1.4.0|@types/d3-interpolate@3.0.4",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/d3-color@3.1.3"
+        "claude-session-manager@1.4.0|@types/d3-color@3.1.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-path@3.1.1"
+      "ref": "claude-session-manager@1.4.0|@types/d3-path@3.1.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-scale@4.0.9",
+      "ref": "claude-session-manager@1.4.0|@types/d3-scale@4.0.9",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/d3-time@3.0.4"
+        "claude-session-manager@1.4.0|@types/d3-time@3.0.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-shape@3.1.8",
+      "ref": "claude-session-manager@1.4.0|@types/d3-shape@3.1.8",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/d3-path@3.1.1"
+        "claude-session-manager@1.4.0|@types/d3-path@3.1.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-time@3.0.4"
+      "ref": "claude-session-manager@1.4.0|@types/d3-time@3.0.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/d3-timer@3.0.2"
+      "ref": "claude-session-manager@1.4.0|@types/d3-timer@3.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/debug@4.1.12",
+      "ref": "claude-session-manager@1.4.0|@types/debug@4.1.12",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/ms@2.1.0"
+        "claude-session-manager@1.4.0|@types/ms@2.1.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/estree-jsx@1.0.5",
+      "ref": "claude-session-manager@1.4.0|@types/estree-jsx@1.0.5",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/estree@1.0.8"
+        "claude-session-manager@1.4.0|@types/estree@1.0.8"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/estree@1.0.8"
+      "ref": "claude-session-manager@1.4.0|@types/estree@1.0.8"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/hast@3.0.4",
+      "ref": "claude-session-manager@1.4.0|@types/hast@3.0.4",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/mdast@4.0.4",
+      "ref": "claude-session-manager@1.4.0|@types/mdast@4.0.4",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/ms@2.1.0"
+      "ref": "claude-session-manager@1.4.0|@types/ms@2.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/react@19.2.14",
+      "ref": "claude-session-manager@1.4.0|@types/react@19.2.14",
       "dependsOn": [
-        "claude-session-manager@1.3.0|csstype@3.2.3"
+        "claude-session-manager@1.4.0|csstype@3.2.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/unist@3.0.3"
+      "ref": "claude-session-manager@1.4.0|@types/unist@3.0.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@types/use-sync-external-store@0.0.6"
+      "ref": "claude-session-manager@1.4.0|@types/use-sync-external-store@0.0.6"
     },
     {
-      "ref": "claude-session-manager@1.3.0|@ungap/structured-clone@1.3.0"
+      "ref": "claude-session-manager@1.4.0|@ungap/structured-clone@1.3.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|ajv@8.17.1",
+      "ref": "claude-session-manager@1.4.0|ajv@8.17.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|fast-deep-equal@3.1.3",
-        "claude-session-manager@1.3.0|fast-uri@3.1.4",
-        "claude-session-manager@1.3.0|json-schema-traverse@1.0.0",
-        "claude-session-manager@1.3.0|require-from-string@2.0.2"
+        "claude-session-manager@1.4.0|fast-deep-equal@3.1.3",
+        "claude-session-manager@1.4.0|fast-uri@3.1.4",
+        "claude-session-manager@1.4.0|json-schema-traverse@1.0.0",
+        "claude-session-manager@1.4.0|require-from-string@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|ansi-regex@5.0.1"
+      "ref": "claude-session-manager@1.4.0|ansi-regex@5.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|ansi-styles@4.3.0",
+      "ref": "claude-session-manager@1.4.0|ansi-styles@4.3.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|color-convert@2.0.1"
+        "claude-session-manager@1.4.0|color-convert@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|argparse@2.0.1"
+      "ref": "claude-session-manager@1.4.0|argparse@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|bail@2.0.2"
+      "ref": "claude-session-manager@1.4.0|bail@2.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|better-sqlite3@13.0.1",
+      "ref": "claude-session-manager@1.4.0|better-sqlite3@13.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|better-sqlite3@13.0.1|node-addon-api@8.9.0"
+        "claude-session-manager@1.4.0|better-sqlite3@13.0.1|node-addon-api@8.9.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|better-sqlite3@13.0.1|node-addon-api@8.9.0"
+      "ref": "claude-session-manager@1.4.0|better-sqlite3@13.0.1|node-addon-api@8.9.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|camelcase@5.3.1"
+      "ref": "claude-session-manager@1.4.0|camelcase@5.3.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|ccount@2.0.1"
+      "ref": "claude-session-manager@1.4.0|ccount@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|character-entities-html4@2.1.0"
+      "ref": "claude-session-manager@1.4.0|character-entities-html4@2.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|character-entities-legacy@3.0.0"
+      "ref": "claude-session-manager@1.4.0|character-entities-legacy@3.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|character-entities@2.0.2"
+      "ref": "claude-session-manager@1.4.0|character-entities@2.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|character-reference-invalid@2.0.1"
+      "ref": "claude-session-manager@1.4.0|character-reference-invalid@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|chokidar@5.0.0",
+      "ref": "claude-session-manager@1.4.0|chokidar@5.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|readdirp@5.0.0"
+        "claude-session-manager@1.4.0|readdirp@5.0.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|clsx@2.1.1"
+      "ref": "claude-session-manager@1.4.0|clsx@2.1.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|color-convert@2.0.1",
+      "ref": "claude-session-manager@1.4.0|color-convert@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|color-name@1.1.4"
+        "claude-session-manager@1.4.0|color-name@1.1.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|color-name@1.1.4"
+      "ref": "claude-session-manager@1.4.0|color-name@1.1.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|comma-separated-tokens@2.0.3"
+      "ref": "claude-session-manager@1.4.0|comma-separated-tokens@2.0.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|csstype@3.2.3"
+      "ref": "claude-session-manager@1.4.0|csstype@3.2.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-array@3.2.4",
+      "ref": "claude-session-manager@1.4.0|d3-array@3.2.4",
       "dependsOn": [
-        "claude-session-manager@1.3.0|internmap@2.0.3"
+        "claude-session-manager@1.4.0|internmap@2.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-color@3.1.0"
+      "ref": "claude-session-manager@1.4.0|d3-color@3.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-ease@3.0.1"
+      "ref": "claude-session-manager@1.4.0|d3-ease@3.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-format@3.1.2"
+      "ref": "claude-session-manager@1.4.0|d3-format@3.1.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-interpolate@3.0.1",
+      "ref": "claude-session-manager@1.4.0|d3-interpolate@3.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|d3-color@3.1.0"
+        "claude-session-manager@1.4.0|d3-color@3.1.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-path@3.1.0"
+      "ref": "claude-session-manager@1.4.0|d3-path@3.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-scale@4.0.2",
+      "ref": "claude-session-manager@1.4.0|d3-scale@4.0.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|d3-array@3.2.4",
-        "claude-session-manager@1.3.0|d3-format@3.1.2",
-        "claude-session-manager@1.3.0|d3-interpolate@3.0.1",
-        "claude-session-manager@1.3.0|d3-time-format@4.1.0",
-        "claude-session-manager@1.3.0|d3-time@3.1.0"
+        "claude-session-manager@1.4.0|d3-array@3.2.4",
+        "claude-session-manager@1.4.0|d3-format@3.1.2",
+        "claude-session-manager@1.4.0|d3-interpolate@3.0.1",
+        "claude-session-manager@1.4.0|d3-time-format@4.1.0",
+        "claude-session-manager@1.4.0|d3-time@3.1.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-shape@3.2.0",
+      "ref": "claude-session-manager@1.4.0|d3-shape@3.2.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|d3-path@3.1.0"
+        "claude-session-manager@1.4.0|d3-path@3.1.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-time-format@4.1.0",
+      "ref": "claude-session-manager@1.4.0|d3-time-format@4.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|d3-time@3.1.0"
+        "claude-session-manager@1.4.0|d3-time@3.1.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-time@3.1.0",
+      "ref": "claude-session-manager@1.4.0|d3-time@3.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|d3-array@3.2.4"
+        "claude-session-manager@1.4.0|d3-array@3.2.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|d3-timer@3.0.1"
+      "ref": "claude-session-manager@1.4.0|d3-timer@3.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|debug@4.4.3",
+      "ref": "claude-session-manager@1.4.0|debug@4.4.3",
       "dependsOn": [
-        "claude-session-manager@1.3.0|ms@2.1.3"
+        "claude-session-manager@1.4.0|ms@2.1.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|decamelize@1.2.0"
+      "ref": "claude-session-manager@1.4.0|decamelize@1.2.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|decimal.js-light@2.5.1"
+      "ref": "claude-session-manager@1.4.0|decimal.js-light@2.5.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|decode-named-character-reference@1.3.0",
+      "ref": "claude-session-manager@1.4.0|decode-named-character-reference@1.3.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|character-entities@2.0.2"
+        "claude-session-manager@1.4.0|character-entities@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|dequal@2.0.3"
+      "ref": "claude-session-manager@1.4.0|dequal@2.0.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|devlop@1.1.0",
+      "ref": "claude-session-manager@1.4.0|devlop@1.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|dequal@2.0.3"
+        "claude-session-manager@1.4.0|dequal@2.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|dijkstrajs@1.0.3"
+      "ref": "claude-session-manager@1.4.0|dijkstrajs@1.0.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron-updater@6.8.9",
+      "ref": "claude-session-manager@1.4.0|electron-updater@6.8.9",
       "dependsOn": [
-        "claude-session-manager@1.3.0|electron-updater@6.8.9|builder-util-runtime@9.7.0",
-        "claude-session-manager@1.3.0|electron-updater@6.8.9|fs-extra@10.1.0",
-        "claude-session-manager@1.3.0|electron-updater@6.8.9|semver@7.7.4",
-        "claude-session-manager@1.3.0|js-yaml@4.3.0",
-        "claude-session-manager@1.3.0|lazy-val@1.0.5",
-        "claude-session-manager@1.3.0|lodash.escaperegexp@4.1.2",
-        "claude-session-manager@1.3.0|lodash.isequal@4.5.0",
-        "claude-session-manager@1.3.0|tiny-typed-emitter@2.1.0"
+        "claude-session-manager@1.4.0|electron-updater@6.8.9|builder-util-runtime@9.7.0",
+        "claude-session-manager@1.4.0|electron-updater@6.8.9|fs-extra@10.1.0",
+        "claude-session-manager@1.4.0|electron-updater@6.8.9|semver@7.7.4",
+        "claude-session-manager@1.4.0|js-yaml@4.3.0",
+        "claude-session-manager@1.4.0|lazy-val@1.0.5",
+        "claude-session-manager@1.4.0|lodash.escaperegexp@4.1.2",
+        "claude-session-manager@1.4.0|lodash.isequal@4.5.0",
+        "claude-session-manager@1.4.0|tiny-typed-emitter@2.1.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|builder-util-runtime@9.7.0",
+      "ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|builder-util-runtime@9.7.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|debug@4.4.3",
-        "claude-session-manager@1.3.0|sax@1.5.0"
+        "claude-session-manager@1.4.0|debug@4.4.3",
+        "claude-session-manager@1.4.0|sax@1.5.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|fs-extra@10.1.0",
+      "ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|fs-extra@10.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|electron-updater@6.8.9|jsonfile@6.2.0",
-        "claude-session-manager@1.3.0|electron-updater@6.8.9|universalify@2.0.1",
-        "claude-session-manager@1.3.0|graceful-fs@4.2.11"
+        "claude-session-manager@1.4.0|electron-updater@6.8.9|jsonfile@6.2.0",
+        "claude-session-manager@1.4.0|electron-updater@6.8.9|universalify@2.0.1",
+        "claude-session-manager@1.4.0|graceful-fs@4.2.11"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|jsonfile@6.2.0",
+      "ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|jsonfile@6.2.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|electron-updater@6.8.9|universalify@2.0.1",
-        "claude-session-manager@1.3.0|graceful-fs@4.2.11"
+        "claude-session-manager@1.4.0|electron-updater@6.8.9|universalify@2.0.1",
+        "claude-session-manager@1.4.0|graceful-fs@4.2.11"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|semver@7.7.4"
+      "ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|semver@7.7.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron-updater@6.8.9|universalify@2.0.1"
+      "ref": "claude-session-manager@1.4.0|electron-updater@6.8.9|universalify@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron@40.10.6",
+      "ref": "claude-session-manager@1.4.0|electron@40.10.6",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@electron-internal/extract-zip@1.0.4",
-        "claude-session-manager@1.3.0|@electron/get@5.0.0",
-        "claude-session-manager@1.3.0|electron@40.10.6|@types/node@24.11.0"
+        "claude-session-manager@1.4.0|@electron-internal/extract-zip@1.0.4",
+        "claude-session-manager@1.4.0|@electron/get@5.0.0",
+        "claude-session-manager@1.4.0|electron@40.10.6|@types/node@24.11.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron@40.10.6|@types/node@24.11.0",
+      "ref": "claude-session-manager@1.4.0|electron@40.10.6|@types/node@24.11.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|electron@40.10.6|undici-types@7.16.0"
+        "claude-session-manager@1.4.0|electron@40.10.6|undici-types@7.16.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|electron@40.10.6|undici-types@7.16.0"
+      "ref": "claude-session-manager@1.4.0|electron@40.10.6|undici-types@7.16.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|emoji-regex@8.0.0"
+      "ref": "claude-session-manager@1.4.0|emoji-regex@8.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|es-toolkit@1.46.0"
+      "ref": "claude-session-manager@1.4.0|es-toolkit@1.46.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|estree-util-is-identifier-name@3.0.0"
+      "ref": "claude-session-manager@1.4.0|estree-util-is-identifier-name@3.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|eventemitter3@5.0.4"
+      "ref": "claude-session-manager@1.4.0|eventemitter3@5.0.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|extend@3.0.2"
+      "ref": "claude-session-manager@1.4.0|extend@3.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|fast-deep-equal@3.1.3"
+      "ref": "claude-session-manager@1.4.0|fast-deep-equal@3.1.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|fast-uri@3.1.4"
+      "ref": "claude-session-manager@1.4.0|fast-uri@3.1.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|fsevents@2.3.3"
+      "ref": "claude-session-manager@1.4.0|fsevents@2.3.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|get-caller-file@2.0.5"
+      "ref": "claude-session-manager@1.4.0|get-caller-file@2.0.5"
     },
     {
-      "ref": "claude-session-manager@1.3.0|graceful-fs@4.2.11"
+      "ref": "claude-session-manager@1.4.0|graceful-fs@4.2.11"
     },
     {
-      "ref": "claude-session-manager@1.3.0|hast-util-to-jsx-runtime@2.3.6",
+      "ref": "claude-session-manager@1.4.0|hast-util-to-jsx-runtime@2.3.6",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/estree@1.0.8",
-        "claude-session-manager@1.3.0|@types/hast@3.0.4",
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|comma-separated-tokens@2.0.3",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|estree-util-is-identifier-name@3.0.0",
-        "claude-session-manager@1.3.0|hast-util-whitespace@3.0.0",
-        "claude-session-manager@1.3.0|mdast-util-mdx-expression@2.0.1",
-        "claude-session-manager@1.3.0|mdast-util-mdx-jsx@3.2.0",
-        "claude-session-manager@1.3.0|mdast-util-mdxjs-esm@2.0.1",
-        "claude-session-manager@1.3.0|property-information@7.1.0",
-        "claude-session-manager@1.3.0|space-separated-tokens@2.0.2",
-        "claude-session-manager@1.3.0|style-to-js@1.1.21",
-        "claude-session-manager@1.3.0|unist-util-position@5.0.0",
-        "claude-session-manager@1.3.0|vfile-message@4.0.3"
+        "claude-session-manager@1.4.0|@types/estree@1.0.8",
+        "claude-session-manager@1.4.0|@types/hast@3.0.4",
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|comma-separated-tokens@2.0.3",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|estree-util-is-identifier-name@3.0.0",
+        "claude-session-manager@1.4.0|hast-util-whitespace@3.0.0",
+        "claude-session-manager@1.4.0|mdast-util-mdx-expression@2.0.1",
+        "claude-session-manager@1.4.0|mdast-util-mdx-jsx@3.2.0",
+        "claude-session-manager@1.4.0|mdast-util-mdxjs-esm@2.0.1",
+        "claude-session-manager@1.4.0|property-information@7.1.0",
+        "claude-session-manager@1.4.0|space-separated-tokens@2.0.2",
+        "claude-session-manager@1.4.0|style-to-js@1.1.21",
+        "claude-session-manager@1.4.0|unist-util-position@5.0.0",
+        "claude-session-manager@1.4.0|vfile-message@4.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|hast-util-whitespace@3.0.0",
+      "ref": "claude-session-manager@1.4.0|hast-util-whitespace@3.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/hast@3.0.4"
+        "claude-session-manager@1.4.0|@types/hast@3.0.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|html-url-attributes@3.0.1"
+      "ref": "claude-session-manager@1.4.0|html-url-attributes@3.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|immer@10.2.0"
+      "ref": "claude-session-manager@1.4.0|immer@10.2.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|inline-style-parser@0.2.7"
+      "ref": "claude-session-manager@1.4.0|inline-style-parser@0.2.7"
     },
     {
-      "ref": "claude-session-manager@1.3.0|internmap@2.0.3"
+      "ref": "claude-session-manager@1.4.0|internmap@2.0.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|is-alphabetical@2.0.1"
+      "ref": "claude-session-manager@1.4.0|is-alphabetical@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|is-alphanumerical@2.0.1",
+      "ref": "claude-session-manager@1.4.0|is-alphanumerical@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|is-alphabetical@2.0.1",
-        "claude-session-manager@1.3.0|is-decimal@2.0.1"
+        "claude-session-manager@1.4.0|is-alphabetical@2.0.1",
+        "claude-session-manager@1.4.0|is-decimal@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|is-decimal@2.0.1"
+      "ref": "claude-session-manager@1.4.0|is-decimal@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|is-fullwidth-code-point@3.0.0"
+      "ref": "claude-session-manager@1.4.0|is-fullwidth-code-point@3.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|is-hexadecimal@2.0.1"
+      "ref": "claude-session-manager@1.4.0|is-hexadecimal@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|is-plain-obj@4.1.0"
+      "ref": "claude-session-manager@1.4.0|is-plain-obj@4.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|js-yaml@4.3.0",
+      "ref": "claude-session-manager@1.4.0|js-yaml@4.3.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|argparse@2.0.1"
+        "claude-session-manager@1.4.0|argparse@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|json-schema-traverse@1.0.0"
+      "ref": "claude-session-manager@1.4.0|json-schema-traverse@1.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|lazy-val@1.0.5"
+      "ref": "claude-session-manager@1.4.0|lazy-val@1.0.5"
     },
     {
-      "ref": "claude-session-manager@1.3.0|lodash.escaperegexp@4.1.2"
+      "ref": "claude-session-manager@1.4.0|lodash.escaperegexp@4.1.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|lodash.isequal@4.5.0"
+      "ref": "claude-session-manager@1.4.0|lodash.isequal@4.5.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|longest-streak@3.1.0"
+      "ref": "claude-session-manager@1.4.0|longest-streak@3.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|lucide-react@0.577.0",
+      "ref": "claude-session-manager@1.4.0|lucide-react@0.577.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|react@19.2.4"
+        "claude-session-manager@1.4.0|react@19.2.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|markdown-table@3.0.4"
+      "ref": "claude-session-manager@1.4.0|markdown-table@3.0.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-find-and-replace@3.0.2",
+      "ref": "claude-session-manager@1.4.0|mdast-util-find-and-replace@3.0.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|mdast-util-find-and-replace@3.0.2|escape-string-regexp@5.0.0",
-        "claude-session-manager@1.3.0|unist-util-is@6.0.1",
-        "claude-session-manager@1.3.0|unist-util-visit-parents@6.0.2"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|mdast-util-find-and-replace@3.0.2|escape-string-regexp@5.0.0",
+        "claude-session-manager@1.4.0|unist-util-is@6.0.1",
+        "claude-session-manager@1.4.0|unist-util-visit-parents@6.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-find-and-replace@3.0.2|escape-string-regexp@5.0.0"
+      "ref": "claude-session-manager@1.4.0|mdast-util-find-and-replace@3.0.2|escape-string-regexp@5.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
+      "ref": "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|decode-named-character-reference@1.3.0",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|mdast-util-to-string@4.0.0",
-        "claude-session-manager@1.3.0|micromark-util-decode-numeric-character-reference@2.0.2",
-        "claude-session-manager@1.3.0|micromark-util-decode-string@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-normalize-identifier@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2",
-        "claude-session-manager@1.3.0|micromark@4.0.2",
-        "claude-session-manager@1.3.0|unist-util-stringify-position@4.0.0"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|decode-named-character-reference@1.3.0",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|mdast-util-to-string@4.0.0",
+        "claude-session-manager@1.4.0|micromark-util-decode-numeric-character-reference@2.0.2",
+        "claude-session-manager@1.4.0|micromark-util-decode-string@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-normalize-identifier@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2",
+        "claude-session-manager@1.4.0|micromark@4.0.2",
+        "claude-session-manager@1.4.0|unist-util-stringify-position@4.0.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-gfm-autolink-literal@2.0.1",
+      "ref": "claude-session-manager@1.4.0|mdast-util-gfm-autolink-literal@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|ccount@2.0.1",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|mdast-util-find-and-replace@3.0.2",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|ccount@2.0.1",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|mdast-util-find-and-replace@3.0.2",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-gfm-footnote@2.1.0",
+      "ref": "claude-session-manager@1.4.0|mdast-util-gfm-footnote@2.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2",
-        "claude-session-manager@1.3.0|micromark-util-normalize-identifier@2.0.1"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2",
+        "claude-session-manager@1.4.0|micromark-util-normalize-identifier@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-gfm-strikethrough@2.0.0",
+      "ref": "claude-session-manager@1.4.0|mdast-util-gfm-strikethrough@2.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-gfm-table@2.0.0",
+      "ref": "claude-session-manager@1.4.0|mdast-util-gfm-table@2.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|markdown-table@3.0.4",
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|markdown-table@3.0.4",
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-gfm-task-list-item@2.0.0",
+      "ref": "claude-session-manager@1.4.0|mdast-util-gfm-task-list-item@2.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-gfm@3.1.0",
+      "ref": "claude-session-manager@1.4.0|mdast-util-gfm@3.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|mdast-util-gfm-autolink-literal@2.0.1",
-        "claude-session-manager@1.3.0|mdast-util-gfm-footnote@2.1.0",
-        "claude-session-manager@1.3.0|mdast-util-gfm-strikethrough@2.0.0",
-        "claude-session-manager@1.3.0|mdast-util-gfm-table@2.0.0",
-        "claude-session-manager@1.3.0|mdast-util-gfm-task-list-item@2.0.0",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2"
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|mdast-util-gfm-autolink-literal@2.0.1",
+        "claude-session-manager@1.4.0|mdast-util-gfm-footnote@2.1.0",
+        "claude-session-manager@1.4.0|mdast-util-gfm-strikethrough@2.0.0",
+        "claude-session-manager@1.4.0|mdast-util-gfm-table@2.0.0",
+        "claude-session-manager@1.4.0|mdast-util-gfm-task-list-item@2.0.0",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-mdx-expression@2.0.1",
+      "ref": "claude-session-manager@1.4.0|mdast-util-mdx-expression@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/estree-jsx@1.0.5",
-        "claude-session-manager@1.3.0|@types/hast@3.0.4",
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2"
+        "claude-session-manager@1.4.0|@types/estree-jsx@1.0.5",
+        "claude-session-manager@1.4.0|@types/hast@3.0.4",
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-mdx-jsx@3.2.0",
+      "ref": "claude-session-manager@1.4.0|mdast-util-mdx-jsx@3.2.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/estree-jsx@1.0.5",
-        "claude-session-manager@1.3.0|@types/hast@3.0.4",
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|ccount@2.0.1",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2",
-        "claude-session-manager@1.3.0|parse-entities@4.0.2",
-        "claude-session-manager@1.3.0|stringify-entities@4.0.4",
-        "claude-session-manager@1.3.0|unist-util-stringify-position@4.0.0",
-        "claude-session-manager@1.3.0|vfile-message@4.0.3"
+        "claude-session-manager@1.4.0|@types/estree-jsx@1.0.5",
+        "claude-session-manager@1.4.0|@types/hast@3.0.4",
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|ccount@2.0.1",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2",
+        "claude-session-manager@1.4.0|parse-entities@4.0.2",
+        "claude-session-manager@1.4.0|stringify-entities@4.0.4",
+        "claude-session-manager@1.4.0|unist-util-stringify-position@4.0.0",
+        "claude-session-manager@1.4.0|vfile-message@4.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-mdxjs-esm@2.0.1",
+      "ref": "claude-session-manager@1.4.0|mdast-util-mdxjs-esm@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/estree-jsx@1.0.5",
-        "claude-session-manager@1.3.0|@types/hast@3.0.4",
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2"
+        "claude-session-manager@1.4.0|@types/estree-jsx@1.0.5",
+        "claude-session-manager@1.4.0|@types/hast@3.0.4",
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-phrasing@4.1.0",
+      "ref": "claude-session-manager@1.4.0|mdast-util-phrasing@4.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|unist-util-is@6.0.1"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|unist-util-is@6.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-to-hast@13.2.1",
+      "ref": "claude-session-manager@1.4.0|mdast-util-to-hast@13.2.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/hast@3.0.4",
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|@ungap/structured-clone@1.3.0",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-util-sanitize-uri@2.0.1",
-        "claude-session-manager@1.3.0|trim-lines@3.0.1",
-        "claude-session-manager@1.3.0|unist-util-position@5.0.0",
-        "claude-session-manager@1.3.0|unist-util-visit@5.1.0",
-        "claude-session-manager@1.3.0|vfile@6.0.3"
+        "claude-session-manager@1.4.0|@types/hast@3.0.4",
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|@ungap/structured-clone@1.3.0",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-util-sanitize-uri@2.0.1",
+        "claude-session-manager@1.4.0|trim-lines@3.0.1",
+        "claude-session-manager@1.4.0|unist-util-position@5.0.0",
+        "claude-session-manager@1.4.0|unist-util-visit@5.1.0",
+        "claude-session-manager@1.4.0|vfile@6.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2",
+      "ref": "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|longest-streak@3.1.0",
-        "claude-session-manager@1.3.0|mdast-util-phrasing@4.1.0",
-        "claude-session-manager@1.3.0|mdast-util-to-string@4.0.0",
-        "claude-session-manager@1.3.0|micromark-util-classify-character@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-decode-string@2.0.1",
-        "claude-session-manager@1.3.0|unist-util-visit@5.1.0",
-        "claude-session-manager@1.3.0|zwitch@2.0.4"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|longest-streak@3.1.0",
+        "claude-session-manager@1.4.0|mdast-util-phrasing@4.1.0",
+        "claude-session-manager@1.4.0|mdast-util-to-string@4.0.0",
+        "claude-session-manager@1.4.0|micromark-util-classify-character@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-decode-string@2.0.1",
+        "claude-session-manager@1.4.0|unist-util-visit@5.1.0",
+        "claude-session-manager@1.4.0|zwitch@2.0.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|mdast-util-to-string@4.0.0",
+      "ref": "claude-session-manager@1.4.0|mdast-util-to-string@4.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-core-commonmark@2.0.3",
+      "ref": "claude-session-manager@1.4.0|micromark-core-commonmark@2.0.3",
       "dependsOn": [
-        "claude-session-manager@1.3.0|decode-named-character-reference@1.3.0",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-factory-destination@2.0.1",
-        "claude-session-manager@1.3.0|micromark-factory-label@2.0.1",
-        "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
-        "claude-session-manager@1.3.0|micromark-factory-title@2.0.1",
-        "claude-session-manager@1.3.0|micromark-factory-whitespace@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-chunked@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-classify-character@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-html-tag-name@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-normalize-identifier@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-resolve-all@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-subtokenize@2.1.0",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|decode-named-character-reference@1.3.0",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-factory-destination@2.0.1",
+        "claude-session-manager@1.4.0|micromark-factory-label@2.0.1",
+        "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
+        "claude-session-manager@1.4.0|micromark-factory-title@2.0.1",
+        "claude-session-manager@1.4.0|micromark-factory-whitespace@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-chunked@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-classify-character@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-html-tag-name@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-normalize-identifier@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-resolve-all@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-subtokenize@2.1.0",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-extension-gfm-autolink-literal@2.1.0",
+      "ref": "claude-session-manager@1.4.0|micromark-extension-gfm-autolink-literal@2.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-sanitize-uri@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-sanitize-uri@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-extension-gfm-footnote@2.1.0",
+      "ref": "claude-session-manager@1.4.0|micromark-extension-gfm-footnote@2.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-core-commonmark@2.0.3",
-        "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-normalize-identifier@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-sanitize-uri@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-core-commonmark@2.0.3",
+        "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-normalize-identifier@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-sanitize-uri@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-extension-gfm-strikethrough@2.1.0",
+      "ref": "claude-session-manager@1.4.0|micromark-extension-gfm-strikethrough@2.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-util-chunked@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-classify-character@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-resolve-all@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-util-chunked@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-classify-character@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-resolve-all@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-extension-gfm-table@2.1.1",
+      "ref": "claude-session-manager@1.4.0|micromark-extension-gfm-table@2.1.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-extension-gfm-tagfilter@2.0.0",
+      "ref": "claude-session-manager@1.4.0|micromark-extension-gfm-tagfilter@2.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-extension-gfm-task-list-item@2.1.0",
+      "ref": "claude-session-manager@1.4.0|micromark-extension-gfm-task-list-item@2.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-extension-gfm@3.0.0",
+      "ref": "claude-session-manager@1.4.0|micromark-extension-gfm@3.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-extension-gfm-autolink-literal@2.1.0",
-        "claude-session-manager@1.3.0|micromark-extension-gfm-footnote@2.1.0",
-        "claude-session-manager@1.3.0|micromark-extension-gfm-strikethrough@2.1.0",
-        "claude-session-manager@1.3.0|micromark-extension-gfm-table@2.1.1",
-        "claude-session-manager@1.3.0|micromark-extension-gfm-tagfilter@2.0.0",
-        "claude-session-manager@1.3.0|micromark-extension-gfm-task-list-item@2.1.0",
-        "claude-session-manager@1.3.0|micromark-util-combine-extensions@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-extension-gfm-autolink-literal@2.1.0",
+        "claude-session-manager@1.4.0|micromark-extension-gfm-footnote@2.1.0",
+        "claude-session-manager@1.4.0|micromark-extension-gfm-strikethrough@2.1.0",
+        "claude-session-manager@1.4.0|micromark-extension-gfm-table@2.1.1",
+        "claude-session-manager@1.4.0|micromark-extension-gfm-tagfilter@2.0.0",
+        "claude-session-manager@1.4.0|micromark-extension-gfm-task-list-item@2.1.0",
+        "claude-session-manager@1.4.0|micromark-util-combine-extensions@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-factory-destination@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-factory-destination@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-factory-label@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-factory-label@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-factory-title@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-factory-title@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-factory-whitespace@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-factory-whitespace@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
+      "ref": "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-chunked@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-util-chunked@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1"
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-classify-character@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-util-classify-character@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-combine-extensions@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-util-combine-extensions@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-chunked@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-util-chunked@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-decode-numeric-character-reference@2.0.2",
+      "ref": "claude-session-manager@1.4.0|micromark-util-decode-numeric-character-reference@2.0.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1"
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-decode-string@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-util-decode-string@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|decode-named-character-reference@1.3.0",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-decode-numeric-character-reference@2.0.2",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1"
+        "claude-session-manager@1.4.0|decode-named-character-reference@1.3.0",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-decode-numeric-character-reference@2.0.2",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-encode@2.0.1"
+      "ref": "claude-session-manager@1.4.0|micromark-util-encode@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-html-tag-name@2.0.1"
+      "ref": "claude-session-manager@1.4.0|micromark-util-html-tag-name@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-normalize-identifier@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-util-normalize-identifier@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1"
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-resolve-all@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-util-resolve-all@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-sanitize-uri@2.0.1",
+      "ref": "claude-session-manager@1.4.0|micromark-util-sanitize-uri@2.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-encode@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1"
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-encode@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-subtokenize@2.1.0",
+      "ref": "claude-session-manager@1.4.0|micromark-util-subtokenize@2.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-util-chunked@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-util-chunked@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1"
+      "ref": "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+      "ref": "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|micromark@4.0.2",
+      "ref": "claude-session-manager@1.4.0|micromark@4.0.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/debug@4.1.12",
-        "claude-session-manager@1.3.0|debug@4.4.3",
-        "claude-session-manager@1.3.0|decode-named-character-reference@1.3.0",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|micromark-core-commonmark@2.0.3",
-        "claude-session-manager@1.3.0|micromark-factory-space@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-character@2.1.1",
-        "claude-session-manager@1.3.0|micromark-util-chunked@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-combine-extensions@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-decode-numeric-character-reference@2.0.2",
-        "claude-session-manager@1.3.0|micromark-util-encode@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-normalize-identifier@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-resolve-all@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-sanitize-uri@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-subtokenize@2.1.0",
-        "claude-session-manager@1.3.0|micromark-util-symbol@2.0.1",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2"
+        "claude-session-manager@1.4.0|@types/debug@4.1.12",
+        "claude-session-manager@1.4.0|debug@4.4.3",
+        "claude-session-manager@1.4.0|decode-named-character-reference@1.3.0",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|micromark-core-commonmark@2.0.3",
+        "claude-session-manager@1.4.0|micromark-factory-space@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-character@2.1.1",
+        "claude-session-manager@1.4.0|micromark-util-chunked@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-combine-extensions@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-decode-numeric-character-reference@2.0.2",
+        "claude-session-manager@1.4.0|micromark-util-encode@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-normalize-identifier@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-resolve-all@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-sanitize-uri@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-subtokenize@2.1.0",
+        "claude-session-manager@1.4.0|micromark-util-symbol@2.0.1",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|ms@2.1.3"
+      "ref": "claude-session-manager@1.4.0|ms@2.1.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|p-try@2.2.0"
+      "ref": "claude-session-manager@1.4.0|p-try@2.2.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|parse-entities@4.0.2",
+      "ref": "claude-session-manager@1.4.0|parse-entities@4.0.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|character-entities-legacy@3.0.0",
-        "claude-session-manager@1.3.0|character-reference-invalid@2.0.1",
-        "claude-session-manager@1.3.0|decode-named-character-reference@1.3.0",
-        "claude-session-manager@1.3.0|is-alphanumerical@2.0.1",
-        "claude-session-manager@1.3.0|is-decimal@2.0.1",
-        "claude-session-manager@1.3.0|is-hexadecimal@2.0.1",
-        "claude-session-manager@1.3.0|parse-entities@4.0.2|@types/unist@2.0.11"
+        "claude-session-manager@1.4.0|character-entities-legacy@3.0.0",
+        "claude-session-manager@1.4.0|character-reference-invalid@2.0.1",
+        "claude-session-manager@1.4.0|decode-named-character-reference@1.3.0",
+        "claude-session-manager@1.4.0|is-alphanumerical@2.0.1",
+        "claude-session-manager@1.4.0|is-decimal@2.0.1",
+        "claude-session-manager@1.4.0|is-hexadecimal@2.0.1",
+        "claude-session-manager@1.4.0|parse-entities@4.0.2|@types/unist@2.0.11"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|parse-entities@4.0.2|@types/unist@2.0.11"
+      "ref": "claude-session-manager@1.4.0|parse-entities@4.0.2|@types/unist@2.0.11"
     },
     {
-      "ref": "claude-session-manager@1.3.0|path-exists@4.0.0"
+      "ref": "claude-session-manager@1.4.0|path-exists@4.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|pngjs@5.0.0"
+      "ref": "claude-session-manager@1.4.0|pngjs@5.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|progress@2.0.3"
+      "ref": "claude-session-manager@1.4.0|progress@2.0.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|property-information@7.1.0"
+      "ref": "claude-session-manager@1.4.0|property-information@7.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4",
       "dependsOn": [
-        "claude-session-manager@1.3.0|dijkstrajs@1.0.3",
-        "claude-session-manager@1.3.0|pngjs@5.0.0",
-        "claude-session-manager@1.3.0|qrcode@1.5.4|yargs@15.4.1"
+        "claude-session-manager@1.4.0|dijkstrajs@1.0.3",
+        "claude-session-manager@1.4.0|pngjs@5.0.0",
+        "claude-session-manager@1.4.0|qrcode@1.5.4|yargs@15.4.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|cliui@6.0.0",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|cliui@6.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|qrcode@1.5.4|wrap-ansi@6.2.0",
-        "claude-session-manager@1.3.0|string-width@4.2.3",
-        "claude-session-manager@1.3.0|strip-ansi@6.0.1"
+        "claude-session-manager@1.4.0|qrcode@1.5.4|wrap-ansi@6.2.0",
+        "claude-session-manager@1.4.0|string-width@4.2.3",
+        "claude-session-manager@1.4.0|strip-ansi@6.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|find-up@4.1.0",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|find-up@4.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|path-exists@4.0.0",
-        "claude-session-manager@1.3.0|qrcode@1.5.4|locate-path@5.0.0"
+        "claude-session-manager@1.4.0|path-exists@4.0.0",
+        "claude-session-manager@1.4.0|qrcode@1.5.4|locate-path@5.0.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|locate-path@5.0.0",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|locate-path@5.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|qrcode@1.5.4|p-locate@4.1.0"
+        "claude-session-manager@1.4.0|qrcode@1.5.4|p-locate@4.1.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|p-limit@2.3.0",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|p-limit@2.3.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|p-try@2.2.0"
+        "claude-session-manager@1.4.0|p-try@2.2.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|p-locate@4.1.0",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|p-locate@4.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|qrcode@1.5.4|p-limit@2.3.0"
+        "claude-session-manager@1.4.0|qrcode@1.5.4|p-limit@2.3.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|wrap-ansi@6.2.0",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|wrap-ansi@6.2.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|ansi-styles@4.3.0",
-        "claude-session-manager@1.3.0|string-width@4.2.3",
-        "claude-session-manager@1.3.0|strip-ansi@6.0.1"
+        "claude-session-manager@1.4.0|ansi-styles@4.3.0",
+        "claude-session-manager@1.4.0|string-width@4.2.3",
+        "claude-session-manager@1.4.0|strip-ansi@6.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|y18n@4.0.3"
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|y18n@4.0.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|yargs-parser@18.1.3",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|yargs-parser@18.1.3",
       "dependsOn": [
-        "claude-session-manager@1.3.0|camelcase@5.3.1",
-        "claude-session-manager@1.3.0|decamelize@1.2.0"
+        "claude-session-manager@1.4.0|camelcase@5.3.1",
+        "claude-session-manager@1.4.0|decamelize@1.2.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|qrcode@1.5.4|yargs@15.4.1",
+      "ref": "claude-session-manager@1.4.0|qrcode@1.5.4|yargs@15.4.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|decamelize@1.2.0",
-        "claude-session-manager@1.3.0|get-caller-file@2.0.5",
-        "claude-session-manager@1.3.0|qrcode@1.5.4|cliui@6.0.0",
-        "claude-session-manager@1.3.0|qrcode@1.5.4|find-up@4.1.0",
-        "claude-session-manager@1.3.0|qrcode@1.5.4|y18n@4.0.3",
-        "claude-session-manager@1.3.0|qrcode@1.5.4|yargs-parser@18.1.3",
-        "claude-session-manager@1.3.0|require-directory@2.1.1",
-        "claude-session-manager@1.3.0|require-main-filename@2.0.0",
-        "claude-session-manager@1.3.0|set-blocking@2.0.0",
-        "claude-session-manager@1.3.0|string-width@4.2.3",
-        "claude-session-manager@1.3.0|which-module@2.0.1"
+        "claude-session-manager@1.4.0|decamelize@1.2.0",
+        "claude-session-manager@1.4.0|get-caller-file@2.0.5",
+        "claude-session-manager@1.4.0|qrcode@1.5.4|cliui@6.0.0",
+        "claude-session-manager@1.4.0|qrcode@1.5.4|find-up@4.1.0",
+        "claude-session-manager@1.4.0|qrcode@1.5.4|y18n@4.0.3",
+        "claude-session-manager@1.4.0|qrcode@1.5.4|yargs-parser@18.1.3",
+        "claude-session-manager@1.4.0|require-directory@2.1.1",
+        "claude-session-manager@1.4.0|require-main-filename@2.0.0",
+        "claude-session-manager@1.4.0|set-blocking@2.0.0",
+        "claude-session-manager@1.4.0|string-width@4.2.3",
+        "claude-session-manager@1.4.0|which-module@2.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|react-dom@19.2.4",
+      "ref": "claude-session-manager@1.4.0|react-dom@19.2.4",
       "dependsOn": [
-        "claude-session-manager@1.3.0|react@19.2.4",
-        "claude-session-manager@1.3.0|scheduler@0.27.0"
+        "claude-session-manager@1.4.0|react@19.2.4",
+        "claude-session-manager@1.4.0|scheduler@0.27.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|react-is@17.0.2"
+      "ref": "claude-session-manager@1.4.0|react-is@17.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|react-markdown@10.1.0",
+      "ref": "claude-session-manager@1.4.0|react-markdown@10.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/hast@3.0.4",
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|@types/react@19.2.14",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|hast-util-to-jsx-runtime@2.3.6",
-        "claude-session-manager@1.3.0|html-url-attributes@3.0.1",
-        "claude-session-manager@1.3.0|mdast-util-to-hast@13.2.1",
-        "claude-session-manager@1.3.0|react@19.2.4",
-        "claude-session-manager@1.3.0|remark-parse@11.0.0",
-        "claude-session-manager@1.3.0|remark-rehype@11.1.2",
-        "claude-session-manager@1.3.0|unified@11.0.5",
-        "claude-session-manager@1.3.0|unist-util-visit@5.1.0",
-        "claude-session-manager@1.3.0|vfile@6.0.3"
+        "claude-session-manager@1.4.0|@types/hast@3.0.4",
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|@types/react@19.2.14",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|hast-util-to-jsx-runtime@2.3.6",
+        "claude-session-manager@1.4.0|html-url-attributes@3.0.1",
+        "claude-session-manager@1.4.0|mdast-util-to-hast@13.2.1",
+        "claude-session-manager@1.4.0|react@19.2.4",
+        "claude-session-manager@1.4.0|remark-parse@11.0.0",
+        "claude-session-manager@1.4.0|remark-rehype@11.1.2",
+        "claude-session-manager@1.4.0|unified@11.0.5",
+        "claude-session-manager@1.4.0|unist-util-visit@5.1.0",
+        "claude-session-manager@1.4.0|vfile@6.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|react-redux@9.2.0",
+      "ref": "claude-session-manager@1.4.0|react-redux@9.2.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/react@19.2.14",
-        "claude-session-manager@1.3.0|@types/use-sync-external-store@0.0.6",
-        "claude-session-manager@1.3.0|react@19.2.4",
-        "claude-session-manager@1.3.0|redux@5.0.1",
-        "claude-session-manager@1.3.0|use-sync-external-store@1.6.0"
+        "claude-session-manager@1.4.0|@types/react@19.2.14",
+        "claude-session-manager@1.4.0|@types/use-sync-external-store@0.0.6",
+        "claude-session-manager@1.4.0|react@19.2.4",
+        "claude-session-manager@1.4.0|redux@5.0.1",
+        "claude-session-manager@1.4.0|use-sync-external-store@1.6.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|react@19.2.4"
+      "ref": "claude-session-manager@1.4.0|react@19.2.4"
     },
     {
-      "ref": "claude-session-manager@1.3.0|readdirp@5.0.0"
+      "ref": "claude-session-manager@1.4.0|readdirp@5.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|recharts@3.8.1",
+      "ref": "claude-session-manager@1.4.0|recharts@3.8.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@reduxjs/toolkit@2.11.2",
-        "claude-session-manager@1.3.0|clsx@2.1.1",
-        "claude-session-manager@1.3.0|decimal.js-light@2.5.1",
-        "claude-session-manager@1.3.0|es-toolkit@1.46.0",
-        "claude-session-manager@1.3.0|eventemitter3@5.0.4",
-        "claude-session-manager@1.3.0|immer@10.2.0",
-        "claude-session-manager@1.3.0|react-dom@19.2.4",
-        "claude-session-manager@1.3.0|react-is@17.0.2",
-        "claude-session-manager@1.3.0|react-redux@9.2.0",
-        "claude-session-manager@1.3.0|react@19.2.4",
-        "claude-session-manager@1.3.0|reselect@5.1.1",
-        "claude-session-manager@1.3.0|tiny-invariant@1.3.3",
-        "claude-session-manager@1.3.0|use-sync-external-store@1.6.0",
-        "claude-session-manager@1.3.0|victory-vendor@37.3.6"
+        "claude-session-manager@1.4.0|@reduxjs/toolkit@2.11.2",
+        "claude-session-manager@1.4.0|clsx@2.1.1",
+        "claude-session-manager@1.4.0|decimal.js-light@2.5.1",
+        "claude-session-manager@1.4.0|es-toolkit@1.46.0",
+        "claude-session-manager@1.4.0|eventemitter3@5.0.4",
+        "claude-session-manager@1.4.0|immer@10.2.0",
+        "claude-session-manager@1.4.0|react-dom@19.2.4",
+        "claude-session-manager@1.4.0|react-is@17.0.2",
+        "claude-session-manager@1.4.0|react-redux@9.2.0",
+        "claude-session-manager@1.4.0|react@19.2.4",
+        "claude-session-manager@1.4.0|reselect@5.1.1",
+        "claude-session-manager@1.4.0|tiny-invariant@1.3.3",
+        "claude-session-manager@1.4.0|use-sync-external-store@1.6.0",
+        "claude-session-manager@1.4.0|victory-vendor@37.3.6"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|redux-thunk@3.1.0",
+      "ref": "claude-session-manager@1.4.0|redux-thunk@3.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|redux@5.0.1"
+        "claude-session-manager@1.4.0|redux@5.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|redux@5.0.1"
+      "ref": "claude-session-manager@1.4.0|redux@5.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|remark-gfm@4.0.1",
+      "ref": "claude-session-manager@1.4.0|remark-gfm@4.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|mdast-util-gfm@3.1.0",
-        "claude-session-manager@1.3.0|micromark-extension-gfm@3.0.0",
-        "claude-session-manager@1.3.0|remark-parse@11.0.0",
-        "claude-session-manager@1.3.0|remark-stringify@11.0.0",
-        "claude-session-manager@1.3.0|unified@11.0.5"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|mdast-util-gfm@3.1.0",
+        "claude-session-manager@1.4.0|micromark-extension-gfm@3.0.0",
+        "claude-session-manager@1.4.0|remark-parse@11.0.0",
+        "claude-session-manager@1.4.0|remark-stringify@11.0.0",
+        "claude-session-manager@1.4.0|unified@11.0.5"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|remark-parse@11.0.0",
+      "ref": "claude-session-manager@1.4.0|remark-parse@11.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|mdast-util-from-markdown@2.0.3",
-        "claude-session-manager@1.3.0|micromark-util-types@2.0.2",
-        "claude-session-manager@1.3.0|unified@11.0.5"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|mdast-util-from-markdown@2.0.3",
+        "claude-session-manager@1.4.0|micromark-util-types@2.0.2",
+        "claude-session-manager@1.4.0|unified@11.0.5"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|remark-rehype@11.1.2",
+      "ref": "claude-session-manager@1.4.0|remark-rehype@11.1.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/hast@3.0.4",
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|mdast-util-to-hast@13.2.1",
-        "claude-session-manager@1.3.0|unified@11.0.5",
-        "claude-session-manager@1.3.0|vfile@6.0.3"
+        "claude-session-manager@1.4.0|@types/hast@3.0.4",
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|mdast-util-to-hast@13.2.1",
+        "claude-session-manager@1.4.0|unified@11.0.5",
+        "claude-session-manager@1.4.0|vfile@6.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|remark-stringify@11.0.0",
+      "ref": "claude-session-manager@1.4.0|remark-stringify@11.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/mdast@4.0.4",
-        "claude-session-manager@1.3.0|mdast-util-to-markdown@2.1.2",
-        "claude-session-manager@1.3.0|unified@11.0.5"
+        "claude-session-manager@1.4.0|@types/mdast@4.0.4",
+        "claude-session-manager@1.4.0|mdast-util-to-markdown@2.1.2",
+        "claude-session-manager@1.4.0|unified@11.0.5"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|require-directory@2.1.1"
+      "ref": "claude-session-manager@1.4.0|require-directory@2.1.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|require-from-string@2.0.2"
+      "ref": "claude-session-manager@1.4.0|require-from-string@2.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|require-main-filename@2.0.0"
+      "ref": "claude-session-manager@1.4.0|require-main-filename@2.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|reselect@5.1.1"
+      "ref": "claude-session-manager@1.4.0|reselect@5.1.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|sax@1.5.0"
+      "ref": "claude-session-manager@1.4.0|sax@1.5.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|scheduler@0.27.0"
+      "ref": "claude-session-manager@1.4.0|scheduler@0.27.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|set-blocking@2.0.0"
+      "ref": "claude-session-manager@1.4.0|set-blocking@2.0.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|space-separated-tokens@2.0.2"
+      "ref": "claude-session-manager@1.4.0|space-separated-tokens@2.0.2"
     },
     {
-      "ref": "claude-session-manager@1.3.0|string-width@4.2.3",
+      "ref": "claude-session-manager@1.4.0|stream-chain@2.2.5"
+    },
+    {
+      "ref": "claude-session-manager@1.4.0|stream-json@1.9.1",
+      "dependsOn": [
+        "claude-session-manager@1.4.0|stream-chain@2.2.5"
+      ]
+    },
+    {
+      "ref": "claude-session-manager@1.4.0|string-width@4.2.3",
       "dependsOn": [
-        "claude-session-manager@1.3.0|emoji-regex@8.0.0",
-        "claude-session-manager@1.3.0|is-fullwidth-code-point@3.0.0",
-        "claude-session-manager@1.3.0|strip-ansi@6.0.1"
+        "claude-session-manager@1.4.0|emoji-regex@8.0.0",
+        "claude-session-manager@1.4.0|is-fullwidth-code-point@3.0.0",
+        "claude-session-manager@1.4.0|strip-ansi@6.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|stringify-entities@4.0.4",
+      "ref": "claude-session-manager@1.4.0|stringify-entities@4.0.4",
       "dependsOn": [
-        "claude-session-manager@1.3.0|character-entities-html4@2.1.0",
-        "claude-session-manager@1.3.0|character-entities-legacy@3.0.0"
+        "claude-session-manager@1.4.0|character-entities-html4@2.1.0",
+        "claude-session-manager@1.4.0|character-entities-legacy@3.0.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|strip-ansi@6.0.1",
+      "ref": "claude-session-manager@1.4.0|strip-ansi@6.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|ansi-regex@5.0.1"
+        "claude-session-manager@1.4.0|ansi-regex@5.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|style-to-js@1.1.21",
+      "ref": "claude-session-manager@1.4.0|style-to-js@1.1.21",
       "dependsOn": [
-        "claude-session-manager@1.3.0|style-to-object@1.0.14"
+        "claude-session-manager@1.4.0|style-to-object@1.0.14"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|style-to-object@1.0.14",
+      "ref": "claude-session-manager@1.4.0|style-to-object@1.0.14",
       "dependsOn": [
-        "claude-session-manager@1.3.0|inline-style-parser@0.2.7"
+        "claude-session-manager@1.4.0|inline-style-parser@0.2.7"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|sumchecker@3.0.1",
+      "ref": "claude-session-manager@1.4.0|sumchecker@3.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|debug@4.4.3"
+        "claude-session-manager@1.4.0|debug@4.4.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|tiny-invariant@1.3.3"
+      "ref": "claude-session-manager@1.4.0|tiny-invariant@1.3.3"
     },
     {
-      "ref": "claude-session-manager@1.3.0|tiny-typed-emitter@2.1.0"
+      "ref": "claude-session-manager@1.4.0|tiny-typed-emitter@2.1.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|trim-lines@3.0.1"
+      "ref": "claude-session-manager@1.4.0|trim-lines@3.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|trough@2.2.0"
+      "ref": "claude-session-manager@1.4.0|trough@2.2.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|undici@7.28.0"
+      "ref": "claude-session-manager@1.4.0|undici@7.28.0"
     },
     {
-      "ref": "claude-session-manager@1.3.0|unified@11.0.5",
+      "ref": "claude-session-manager@1.4.0|unified@11.0.5",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|bail@2.0.2",
-        "claude-session-manager@1.3.0|devlop@1.1.0",
-        "claude-session-manager@1.3.0|extend@3.0.2",
-        "claude-session-manager@1.3.0|is-plain-obj@4.1.0",
-        "claude-session-manager@1.3.0|trough@2.2.0",
-        "claude-session-manager@1.3.0|vfile@6.0.3"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|bail@2.0.2",
+        "claude-session-manager@1.4.0|devlop@1.1.0",
+        "claude-session-manager@1.4.0|extend@3.0.2",
+        "claude-session-manager@1.4.0|is-plain-obj@4.1.0",
+        "claude-session-manager@1.4.0|trough@2.2.0",
+        "claude-session-manager@1.4.0|vfile@6.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|unist-util-is@6.0.1",
+      "ref": "claude-session-manager@1.4.0|unist-util-is@6.0.1",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|unist-util-position@5.0.0",
+      "ref": "claude-session-manager@1.4.0|unist-util-position@5.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|unist-util-stringify-position@4.0.0",
+      "ref": "claude-session-manager@1.4.0|unist-util-stringify-position@4.0.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|unist-util-visit-parents@6.0.2",
+      "ref": "claude-session-manager@1.4.0|unist-util-visit-parents@6.0.2",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|unist-util-is@6.0.1"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|unist-util-is@6.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|unist-util-visit@5.1.0",
+      "ref": "claude-session-manager@1.4.0|unist-util-visit@5.1.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|unist-util-is@6.0.1",
-        "claude-session-manager@1.3.0|unist-util-visit-parents@6.0.2"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|unist-util-is@6.0.1",
+        "claude-session-manager@1.4.0|unist-util-visit-parents@6.0.2"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|use-sync-external-store@1.6.0",
+      "ref": "claude-session-manager@1.4.0|use-sync-external-store@1.6.0",
       "dependsOn": [
-        "claude-session-manager@1.3.0|react@19.2.4"
+        "claude-session-manager@1.4.0|react@19.2.4"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|vfile-message@4.0.3",
+      "ref": "claude-session-manager@1.4.0|vfile-message@4.0.3",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|unist-util-stringify-position@4.0.0"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|unist-util-stringify-position@4.0.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|vfile@6.0.3",
+      "ref": "claude-session-manager@1.4.0|vfile@6.0.3",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/unist@3.0.3",
-        "claude-session-manager@1.3.0|vfile-message@4.0.3"
+        "claude-session-manager@1.4.0|@types/unist@3.0.3",
+        "claude-session-manager@1.4.0|vfile-message@4.0.3"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|victory-vendor@37.3.6",
+      "ref": "claude-session-manager@1.4.0|victory-vendor@37.3.6",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/d3-array@3.2.2",
-        "claude-session-manager@1.3.0|@types/d3-ease@3.0.2",
-        "claude-session-manager@1.3.0|@types/d3-interpolate@3.0.4",
-        "claude-session-manager@1.3.0|@types/d3-scale@4.0.9",
-        "claude-session-manager@1.3.0|@types/d3-shape@3.1.8",
-        "claude-session-manager@1.3.0|@types/d3-time@3.0.4",
-        "claude-session-manager@1.3.0|@types/d3-timer@3.0.2",
-        "claude-session-manager@1.3.0|d3-array@3.2.4",
-        "claude-session-manager@1.3.0|d3-ease@3.0.1",
-        "claude-session-manager@1.3.0|d3-interpolate@3.0.1",
-        "claude-session-manager@1.3.0|d3-scale@4.0.2",
-        "claude-session-manager@1.3.0|d3-shape@3.2.0",
-        "claude-session-manager@1.3.0|d3-time@3.1.0",
-        "claude-session-manager@1.3.0|d3-timer@3.0.1"
+        "claude-session-manager@1.4.0|@types/d3-array@3.2.2",
+        "claude-session-manager@1.4.0|@types/d3-ease@3.0.2",
+        "claude-session-manager@1.4.0|@types/d3-interpolate@3.0.4",
+        "claude-session-manager@1.4.0|@types/d3-scale@4.0.9",
+        "claude-session-manager@1.4.0|@types/d3-shape@3.1.8",
+        "claude-session-manager@1.4.0|@types/d3-time@3.0.4",
+        "claude-session-manager@1.4.0|@types/d3-timer@3.0.2",
+        "claude-session-manager@1.4.0|d3-array@3.2.4",
+        "claude-session-manager@1.4.0|d3-ease@3.0.1",
+        "claude-session-manager@1.4.0|d3-interpolate@3.0.1",
+        "claude-session-manager@1.4.0|d3-scale@4.0.2",
+        "claude-session-manager@1.4.0|d3-shape@3.2.0",
+        "claude-session-manager@1.4.0|d3-time@3.1.0",
+        "claude-session-manager@1.4.0|d3-timer@3.0.1"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|which-module@2.0.1"
+      "ref": "claude-session-manager@1.4.0|which-module@2.0.1"
     },
     {
-      "ref": "claude-session-manager@1.3.0|zustand@5.0.11",
+      "ref": "claude-session-manager@1.4.0|zustand@5.0.11",
       "dependsOn": [
-        "claude-session-manager@1.3.0|@types/react@19.2.14",
-        "claude-session-manager@1.3.0|immer@10.2.0",
-        "claude-session-manager@1.3.0|react@19.2.4",
-        "claude-session-manager@1.3.0|use-sync-external-store@1.6.0"
+        "claude-session-manager@1.4.0|@types/react@19.2.14",
+        "claude-session-manager@1.4.0|immer@10.2.0",
+        "claude-session-manager@1.4.0|react@19.2.4",
+        "claude-session-manager@1.4.0|use-sync-external-store@1.6.0"
       ]
     },
     {
-      "ref": "claude-session-manager@1.3.0|zwitch@2.0.4"
+      "ref": "claude-session-manager@1.4.0|zwitch@2.0.4"
     }
   ]
 }

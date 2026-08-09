@@ -12,11 +12,24 @@ export interface ExecuteDuplicateRecoveryOptions {
   signal?: AbortSignal
   /** Deterministic test seam for prepare-to-rename replacement races. */
   beforeMove?: (move: { fromPath: string; quarantinePath: string }, index: number) => void
+  /** Deterministic test seam for post-rename rollback failures. */
+  afterMove?: (move: { fromPath: string; quarantinePath: string }, index: number) => void
 }
 
 export interface RecoverInterruptedDuplicateRecoveryOptions {
   /** Deterministic test seam for hash-to-restore replacement races. */
   beforeRestore?: (move: RecoveryJournalMove, index: number) => void
+  /** Deterministic test seam for the final journal write boundary. */
+  beforeJournalCommit?: (journal: RecoveryJournal) => void
+}
+
+export class DuplicateRecoveryMutationIncompleteError extends Error {
+  readonly mutationMayBeIncomplete = true
+
+  constructor() {
+    super('duplicate-recovery-mutation-may-be-incomplete')
+    this.name = 'DuplicateRecoveryMutationIncompleteError'
+  }
 }
 
 interface RecoveryJournalMove {
@@ -207,12 +220,17 @@ export async function recoverInterruptedDuplicateRecoveryTransactions(
     )
     const journalPath = path.join(planDirectory, 'recovery-journal.json')
     const nextJournalPath = `${journalPath}.next`
-    if (fs.existsSync(nextJournalPath)) {
+    if (pathEntryExists(nextJournalPath)) {
       readRecoveryJournal(nextJournalPath, planDirectory, libraryRoot)
+      resolvePhysicalDirectoryWithin(
+        quarantineRoot,
+        planDirectory,
+        'duplicate-recovery-plan-directory-not-physical'
+      )
       fs.renameSync(nextJournalPath, journalPath)
       fsyncDirectory(planDirectory)
     }
-    if (!fs.existsSync(journalPath)) continue
+    if (!pathEntryExists(journalPath)) continue
     const journal = readRecoveryJournal(journalPath, planDirectory, libraryRoot)
     if (journal.state === 'complete' || journal.state === 'rolled-back') continue
     for (const [index, move] of [...journal.moves].reverse().entries()) {
@@ -250,6 +268,12 @@ export async function recoverInterruptedDuplicateRecoveryTransactions(
       }
       move.state = 'rolled-back'
     }
+    options.beforeJournalCommit?.(journal)
+    resolvePhysicalDirectoryWithin(
+      quarantineRoot,
+      planDirectory,
+      'duplicate-recovery-plan-directory-not-physical'
+    )
     replaceJsonFile(journalPath, {
       ...journal,
       state: 'rolled-back',
@@ -318,6 +342,7 @@ export async function executeDuplicateRecoveryPlan(
       )
       fs.renameSync(move.fromPath, move.quarantinePath)
       completed.push(move)
+      options.afterMove?.(move, index)
       const movedTreeHash = await calculateRecoveryPackageTreeHash(
         prepared.libraryRoot,
         move.fromPath,
@@ -361,6 +386,7 @@ export async function executeDuplicateRecoveryPlan(
         rollbackFailed = true
       }
     }
+    let journalWritable = true
     try {
       resolvePhysicalDirectoryWithin(
         prepared.quarantineRoot,
@@ -368,27 +394,42 @@ export async function executeDuplicateRecoveryPlan(
         'duplicate-recovery-plan-directory-not-physical'
       )
     } catch {
-      throw new Error('duplicate-recovery-rollback-incomplete')
+      journalWritable = false
     }
-    replaceJsonFile(journalPath, {
-      ...journal,
-      state: rollbackFailed ? 'rollback-incomplete' : 'rolled-back',
-      failedAt: new Date().toISOString()
-    })
-    if (rollbackFailed) throw new Error('duplicate-recovery-rollback-incomplete')
+    if (journalWritable) {
+      try {
+        replaceJsonFile(journalPath, {
+          ...journal,
+          state: rollbackFailed ? 'rollback-incomplete' : 'rolled-back',
+          failedAt: new Date().toISOString()
+        })
+      } catch {
+        journalWritable = false
+      }
+    }
+    if (rollbackFailed) throw new DuplicateRecoveryMutationIncompleteError()
+    if (!journalWritable && completed.length > 0) {
+      // The Library is restored, but the durable journal may still claim an
+      // interrupted transaction. Startup recovery can reconcile that safely.
+      throw new Error('duplicate-recovery-rollback-journal-update-failed')
+    }
     throw error
   }
 
-  resolvePhysicalDirectoryWithin(
-    prepared.quarantineRoot,
-    planDirectory,
-    'duplicate-recovery-plan-directory-not-physical'
-  )
-  replaceJsonFile(journalPath, {
-    ...journal,
-    state: 'complete',
-    completedAt: new Date().toISOString()
-  })
+  try {
+    resolvePhysicalDirectoryWithin(
+      prepared.quarantineRoot,
+      planDirectory,
+      'duplicate-recovery-plan-directory-not-physical'
+    )
+    replaceJsonFile(journalPath, {
+      ...journal,
+      state: 'complete',
+      completedAt: new Date().toISOString()
+    })
+  } catch {
+    throw new DuplicateRecoveryMutationIncompleteError()
+  }
   return {
     schemaVersion: 1,
     planId: prepared.planId,

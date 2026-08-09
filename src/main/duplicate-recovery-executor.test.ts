@@ -8,6 +8,7 @@ import {
   prepareDuplicateRecoveryExecution
 } from './duplicate-recovery-planner'
 import {
+  DuplicateRecoveryMutationIncompleteError,
   executeDuplicateRecoveryPlan,
   recoverInterruptedDuplicateRecoveryTransactions
 } from './duplicate-recovery-executor'
@@ -179,10 +180,29 @@ describe('duplicate recovery executor', () => {
         fs.renameSync(planDirectory, `${planDirectory}.physical`)
         fs.symlinkSync(outside, planDirectory, 'dir')
       }
-    })).rejects.toThrow('duplicate-recovery-rollback-incomplete')
+    })).rejects.toThrow('duplicate-recovery-plan-directory-not-physical')
 
     expect(fs.readdirSync(outside)).toEqual([])
     expect(packageCount(libraryRoot)).toBe(4)
+  })
+
+  it('移动后无法回滚时返回可区分的 mutation-incomplete 错误', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+    const outside = path.join(workRoot, 'outside-library-parent')
+    fs.mkdirSync(outside)
+
+    const failure = executeDuplicateRecoveryPlan(libraryRoot, report, {
+      quarantineRoot,
+      afterMove: (move, index) => {
+        if (index !== 0) return
+        const parent = path.dirname(move.fromPath)
+        fs.renameSync(parent, `${parent}.physical`)
+        fs.symlinkSync(outside, parent, 'dir')
+        throw new Error('forced-post-move-failure')
+      }
+    })
+
+    await expect(failure).rejects.toBeInstanceOf(DuplicateRecoveryMutationIncompleteError)
   })
 
   it('启动时自动回滚未到达 complete journal 的中断事务', async () => {
@@ -298,5 +318,35 @@ describe('duplicate recovery executor', () => {
 
     await expect(recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot))
       .rejects.toThrow('duplicate-recovery-journal-not-physical-file')
+  })
+
+  it('recovery 最终 journal 写入前事务目录被替换时不向外写', async () => {
+    const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
+    const prepared = await prepareDuplicateRecoveryExecution(libraryRoot, report, { quarantineRoot })
+    const planDirectory = path.dirname(prepared.moves[0].quarantinePath)
+    fs.mkdirSync(planDirectory, { recursive: true })
+    fs.writeFileSync(path.join(planDirectory, 'recovery-journal.json'), JSON.stringify({
+      schemaVersion: 1,
+      planId: prepared.planId,
+      state: 'applying',
+      createdAt: '2026-08-09T00:00:00.000Z',
+      moves: prepared.moves.map((move) => ({
+        pathId: move.pathId,
+        originalPath: move.fromPath,
+        quarantinePath: move.quarantinePath,
+        expectedPackageTreeHash: move.expectedPackageTreeHash,
+        state: 'pending'
+      }))
+    }))
+    const outside = path.join(workRoot, 'outside-recovery-journal')
+    fs.mkdirSync(outside)
+
+    await expect(recoverInterruptedDuplicateRecoveryTransactions(libraryRoot, quarantineRoot, {
+      beforeJournalCommit: () => {
+        fs.renameSync(planDirectory, `${planDirectory}.physical`)
+        fs.symlinkSync(outside, planDirectory, 'dir')
+      }
+    })).rejects.toThrow('duplicate-recovery-plan-directory-not-physical')
+    expect(fs.readdirSync(outside)).toEqual([])
   })
 })

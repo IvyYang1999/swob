@@ -156,6 +156,7 @@ import { advanceLibraryWriterArbiterEpoch } from './library-writer-lease'
 import { loadConfig, saveConfig } from './config-store'
 import type { DuplicateRecoveryReport } from './duplicate-recovery-planner'
 import {
+  DuplicateRecoveryMutationIncompleteError,
   executeDuplicateRecoveryPlan,
   recoverInterruptedDuplicateRecoveryTransactions
 } from './duplicate-recovery-executor'
@@ -3790,11 +3791,31 @@ ipcMain.handle('library:applyDuplicateRecovery', async (_event, planId: unknown)
     path.resolve(prepared.libraryRoot) !== path.resolve(getLibraryRoot())) {
     throw new Error('duplicate-recovery-plan-not-prepared')
   }
-  const result = await withLibraryMaintenanceWriter(() => executeDuplicateRecoveryPlan(
-    prepared.libraryRoot,
-    prepared.report,
-    { quarantineRoot: prepared.quarantineRoot }
-  ))
+  let result
+  try {
+    result = await withLibraryMaintenanceWriter(() => executeDuplicateRecoveryPlan(
+      prepared.libraryRoot,
+      prepared.report,
+      { quarantineRoot: prepared.quarantineRoot }
+    ))
+  } catch (error) {
+    preparedDuplicateRecovery = null
+    if (error instanceof DuplicateRecoveryMutationIncompleteError) {
+      transitionLibraryHealth(
+        'read-only',
+        'DUPLICATE_RECOVERY_MUTATION_INCOMPLETE',
+        'Duplicate recovery could not prove a complete rollback; all Library runtime work is stopping'
+      )
+      console.error('[duplicate-recovery] Mutation may be incomplete; stopping Library runtime')
+      const shutdown = cleanupRuntimeResources()
+      dialog.showErrorBox(
+        mainT('native.duplicate_recovery.apply_fatal_title'),
+        mainT('native.duplicate_recovery.apply_fatal_body')
+      )
+      void shutdown.finally(() => app.quit())
+    }
+    throw error
+  }
   preparedDuplicateRecovery = null
   try {
     const tree = await requestLibraryScan()

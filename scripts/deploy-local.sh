@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+if [ -n "${NODE_OPTIONS:-}" ]; then
+  echo "错误：本地部署要求 NODE_OPTIONS 为空，避免构建或探针被预加载代码污染"
+  exit 1
+fi
+
 APP_NAME="Swob"
 DIST_APP="dist/mac-arm64/${APP_NAME}.app"
 INSTALL_DIR="/Applications"
@@ -49,13 +54,33 @@ for expected_line in \
 done
 
 DIST_CLI="${DIST_APP}/Contents/Resources/cli/cli.js"
-DIST_NODE_MODULES="${DIST_APP}/Contents/Resources/app.asar.unpacked/node_modules"
 if [ ! -f "$DIST_CLI" ]; then
   echo "错误：找不到打包后的 CLI 入口 $DIST_CLI"
   exit 1
 fi
 echo "==> 验证打包后的 CLI..."
-NODE_PATH="${DIST_NODE_MODULES}${NODE_PATH:+:$NODE_PATH}" node "$DIST_CLI" --version --json >/dev/null
+CLI_PROBE_ROOT="$(mktemp -d /tmp/swob-cli-probe.XXXXXX)"
+cleanup_cli_probe() {
+  case "${CLI_PROBE_ROOT:-}" in
+    /tmp/swob-cli-probe.*) rm -rf -- "$CLI_PROBE_ROOT" ;;
+  esac
+}
+trap cleanup_cli_probe EXIT
+CLI_PROBE_RESOURCES="$CLI_PROBE_ROOT/Swob.app/Contents/Resources"
+mkdir -p "$CLI_PROBE_RESOURCES"
+cp -R "$DIST_APP/Contents/Resources/cli" "$CLI_PROBE_RESOURCES/cli"
+cp -R "$DIST_APP/Contents/Resources/app.asar.unpacked" "$CLI_PROBE_RESOURCES/app.asar.unpacked"
+CLI_PROBE_ENTRY="$CLI_PROBE_RESOURCES/cli/cli.js"
+CLI_PROBE_NODE_MODULES="$CLI_PROBE_RESOURCES/app.asar.unpacked/node_modules"
+CLI_PROBE_HOME="$CLI_PROBE_ROOT/home"
+mkdir -p "$CLI_PROBE_HOME"
+HOME="$CLI_PROBE_HOME" NODE_OPTIONS= NODE_PATH="$CLI_PROBE_NODE_MODULES" \
+  node scripts/packaged-cli-isolation.mjs "$CLI_PROBE_ENTRY" "$CLI_PROBE_NODE_MODULES"
+HOME="$CLI_PROBE_HOME" NODE_ENV=production NODE_OPTIONS= NODE_PATH="$CLI_PROBE_NODE_MODULES" \
+  node "$CLI_PROBE_ENTRY" --version --json >/dev/null
+cleanup_cli_probe
+CLI_PROBE_ROOT=""
+trap - EXIT
 
 echo "==> 退出 ${APP_NAME}..."
 osascript -e "tell application \"${APP_NAME}\" to quit" 2>/dev/null || true

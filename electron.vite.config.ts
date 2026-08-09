@@ -6,9 +6,9 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   main: {
     // The CLI is copied outside app.asar and runs under the system Node.
-    // Bundle pure-JS Ajv into the shared output so that only native
-    // better-sqlite3 needs NODE_PATH from app.asar.unpacked.
-    plugins: [externalizeDepsPlugin({ exclude: ['ajv'] })],
+    // Every pure-JS runtime dependency reached by the standalone CLI must stay
+    // bundled. Only native better-sqlite3 may rely on app.asar.unpacked.
+    plugins: [externalizeDepsPlugin({ exclude: ['ajv', 'stream-json', 'stream-chain'] })],
     build: {
       rollupOptions: {
         input: {

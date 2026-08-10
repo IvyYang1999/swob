@@ -23,6 +23,11 @@ export default defineConfig({
   timeout: 30000,
   retries: 0,
   workers: 1,
+  webServer: {
+    command: 'npx vite --config e2e/t211e-visual.vite.config.ts --host 127.0.0.1 --port 4179',
+    url: 'http://127.0.0.1:4179/catalog-visual.html',
+    reuseExistingServer: false
+  },
   use: {
     trace: 'on-first-retry'
   }

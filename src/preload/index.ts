@@ -15,8 +15,16 @@ import type {
   ShareSavePngResult,
   SpotlightNativeShadowState,
   UserIdentity,
-  UserIdentityInput
+  UserIdentityInput,
+  TruthKernelSessionIpcReadModel,
+  TruthKernelCatalogIpcState,
+  TruthKernelExternalEvidenceAttachResult,
+  TruthKernelPricingIpcState,
+  TruthKernelPricingMutation,
+  TruthKernelPricingMutationResult,
+  TruthKernelProviderDoctorIpcInput
 } from '../shared/frontend-ipc-contract'
+import type { WorkspaceTab } from '../shared/contracts/truth-kernel'
 import type { DashboardLayoutConfig } from '../shared/registry/builtin-widgets'
 import {
   SWOBLENS_THEME_TOKEN_KEYS,
@@ -90,6 +98,32 @@ const api = {
       branchLeafUuid,
       canonicalSessionRecordId
     )),
+  loadTruthKernelSession: (sessionId: string, filePath: string) =>
+    ipcRenderer.invoke('truth-kernel:session-read-model', sessionId, filePath) as Promise<TruthKernelSessionIpcReadModel>,
+  loadTruthKernelCatalog: () =>
+    ipcRenderer.invoke('truth-kernel:catalog-state') as Promise<TruthKernelCatalogIpcState>,
+  addTruthKernelCatalogRoot: () =>
+    ipcRenderer.invoke('truth-kernel:catalog-add-root') as Promise<TruthKernelCatalogIpcState>,
+  removeTruthKernelCatalogRoot: (rootId: string) =>
+    ipcRenderer.invoke('truth-kernel:catalog-remove-root', rootId) as Promise<TruthKernelCatalogIpcState>,
+  rescanTruthKernelCatalogRoot: (rootId: string) =>
+    ipcRenderer.invoke('truth-kernel:catalog-rescan-root', rootId) as Promise<TruthKernelCatalogIpcState>,
+  saveTruthKernelCatalogTab: (tab: WorkspaceTab) =>
+    ipcRenderer.invoke('truth-kernel:catalog-save-tab', tab) as Promise<TruthKernelCatalogIpcState>,
+  setActiveTruthKernelCatalogTab: (tabId: string) =>
+    ipcRenderer.invoke('truth-kernel:catalog-active-tab', tabId) as Promise<TruthKernelCatalogIpcState>,
+  removeTruthKernelCatalogTab: (tabId: string) =>
+    ipcRenderer.invoke('truth-kernel:catalog-remove-tab', tabId) as Promise<TruthKernelCatalogIpcState>,
+  decideTruthKernelCatalogOnboarding: (choice: 'default-library' | 'index-only' | 'skip') =>
+    ipcRenderer.invoke('truth-kernel:catalog-onboarding', choice) as Promise<TruthKernelCatalogIpcState>,
+  loadTruthKernelProviderDoctor: () =>
+    ipcRenderer.invoke('truth-kernel:provider-doctor') as Promise<TruthKernelProviderDoctorIpcInput[]>,
+  attachTruthKernelExternalEvidence: (sessionId: string, filePath: string) =>
+    ipcRenderer.invoke('truth-kernel:external-evidence-attach', sessionId, filePath) as Promise<TruthKernelExternalEvidenceAttachResult>,
+  listTruthKernelPricing: () =>
+    ipcRenderer.invoke('truth-kernel:pricing-list') as Promise<TruthKernelPricingIpcState>,
+  applyTruthKernelPricing: (command: TruthKernelPricingMutation) =>
+    ipcRenderer.invoke('truth-kernel:pricing-apply', command) as Promise<TruthKernelPricingMutationResult>,
   rebuildSessionDetail: (sessionId: string) =>
     ipcRenderer.invoke('sessions:rebuildDetail', sessionId) as Promise<{ ok: boolean; error?: string }>,
   searchSessions: (query: string) =>

@@ -16,6 +16,7 @@ import { AssistantSettings } from './AssistantSettings'
 import { LensSettings } from './LensSettings'
 import { DiagnosticsSettings } from './DiagnosticsSettings'
 import { WindowsAlphaNotice, usePlatformCapabilities } from '../WindowsAlphaNotice'
+import { ProviderDoctorSlot } from '../../integration/TruthKernelSlots'
 
 export type SettingsCategory = 'general' | 'ai' | 'lens' | 'assistant' | 'terminal' | 'resume' | 'ssh' | 'view' | 'updates' | 'cli' | 'diagnostics'
 
@@ -149,7 +150,7 @@ export function SettingsPanel() {
               {category === 'view' && <ViewSettings />}
               {category === 'updates' && <UpdateSettings />}
               {category === 'cli' && <CliSettings />}
-              {category === 'diagnostics' && <DiagnosticsSettings />}
+              {category === 'diagnostics' && <><DiagnosticsSettings /><ProviderDoctorSlot /></>}
             </div>
           </div>
         </div>

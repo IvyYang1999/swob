@@ -13,6 +13,7 @@ import { getHarnessPresentation } from '../utils/harness-presentation'
 import { useLensEnabled } from '../hooks/useLens'
 import { useSessionFreshness, formatLag } from '../hooks/useLibraryHealth'
 import { StaleDisclaimer } from './LibraryFreshnessIndicators'
+import { TruthKernelInspectorSlots } from '../integration/TruthKernelSlots'
 
 // --- Shared types & utilities ---
 
@@ -1110,11 +1111,14 @@ export function InfoPanel({ width, onNavigate }: { width: number; onNavigate?: (
         )}
 
         {activeTab === 'activity' && (
-          <ActivityTab
-            session={s}
-            onNavigate={onNavigate}
-            analysisReady={analysisReadySessionId === s.id}
-          />
+          <>
+            <TruthKernelInspectorSlots />
+            <ActivityTab
+              session={s}
+              onNavigate={onNavigate}
+              analysisReady={analysisReadySessionId === s.id}
+            />
+          </>
         )}
 
         {activeTab === 'details' && (

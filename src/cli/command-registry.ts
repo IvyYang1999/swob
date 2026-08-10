@@ -43,6 +43,7 @@ export const CLI_COMMANDS: readonly CliCommandDefinition[] = [
   { usage: 'transcript rebuild --all [--dry-run] [--missing-only]', summary: '重建全部 Library transcript（高成本）', output: 'JSON', examples: ['swob transcript rebuild --all --missing-only'] },
   { usage: 'doctor locks [--json]', summary: '只读检查 writer 锁、owner 存活性与显式恢复可用性', output: 'JSON 锁诊断与证据哈希；不输出设备标识', examples: ['swob doctor locks --json'] },
   { usage: 'doctor library [--json]', summary: '只读检查 Library 写状态、identity issue 与 stale 数量', output: 'JSON Library 健康摘要', examples: ['swob doctor library --json'] },
+  { usage: 'verify <bundle-dir|manifest.json> [--json]', summary: '离线验证 Truth Kernel evidence bundle 的内容寻址完整性', output: 'JSON 验证结果；不会读取或修改 Library', examples: ['swob verify ./evidence-bundle --json'] },
   { usage: 'redact [--dry-run]', summary: '对派生 transcript 回填脱敏', output: 'JSON', examples: ['swob redact --dry-run'] },
   { usage: 'install', summary: '安装或更新 CLI wrapper 和本 Skill', output: 'JSON 安装结果', examples: ['swob install'] }
 ] as const

@@ -1,0 +1,41 @@
+.fixture-shell section[aria-label="Catalog navigator"]>div:last-child>div:last-child { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }
+.fixture-shell article section[aria-label="Storage roots"]>div>div:first-child { display:flex; align-items:center; gap:8px; }
+.fixture-shell article section[aria-label="Storage roots"]>div>div:first-child>span:nth-child(2) { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fixture-shell article section[aria-label="Storage roots"]>div>div:first-child>span:last-child { flex:0 0 auto; border-radius:4px; background:#111827; padding:2px 5px; }
+.sidebar-resizer { cursor:col-resize; background:#334155; }
+main>nav [data-testid="workspace-tab-strip"]>div { max-width:270px; }
+main>nav .max-w-24 { max-width:6rem; }
+:root[data-theme="light"] body { background:#f8fafc; color:#0f172a; }
+:root[data-theme="light"] .fixture-shell article { background:#f1f5f9; }
+:root[data-theme="light"] .bg-base { background:#f8fafc; }
+:root[data-theme="light"] .bg-surface,
+:root[data-theme="light"] .fixture-shell article section[aria-label="Storage roots"]>div { background:#fff; }
+:root[data-theme="light"] .text-primary { color:#0f172a; }
+:root[data-theme="light"] .text-secondary { color:#334155; }
+:root[data-theme="light"] .text-muted { color:#64748b; }
+:root[data-theme="light"] .fixture-shell article section[aria-label="Catalog onboarding"] button { color:#0f172a; background:#fff; }
+:root[data-theme="light"] .fixture-shell article section[aria-label="Catalog onboarding"] button[aria-pressed="true"] { background:#e2e8f0; border-color:#4f46e5; }
+:root[data-theme="dim"] body { filter:saturate(.72); }
+:root[data-theme="contrast"] body { background:#000; color:#fff; }
+:root[data-theme="contrast"] .fixture-shell article,
+:root[data-theme="contrast"] .bg-base { background:#000; }
+:root[data-theme="contrast"] .bg-surface,
+:root[data-theme="contrast"] .fixture-shell article section[aria-label="Storage roots"]>div { background:#151515; }
+:root[data-theme="contrast"] .text-primary,
+:root[data-theme="contrast"] .text-secondary { color:#fff; }
+main>nav { display:flex; align-items:center; gap:4px; border-bottom:1px solid #334155; padding:5px 8px; min-width:0; }
+main>nav [data-testid="workspace-tab-strip"] { display:flex; gap:4px; min-width:0; flex:1; overflow-x:auto; white-space:nowrap; padding-bottom:2px; }
+main>nav [data-testid="workspace-tab-strip"]>div { display:flex; align-items:center; flex:0 0 auto; max-width:190px; border:1px solid transparent; border-radius:6px; padding:4px 7px; color:#cbd5e1; }
+main>nav [data-testid="workspace-tab-strip"]>div:first-child { border-color:#64748b; background:#1e293b; color:#f8fafc; }
+.fixture-shell>section { display:flex; flex-direction:column; border-right:1px solid #334155; min-height:0; }
+.fixture-shell>section>[role="tablist"] { display:flex; padding:5px; gap:2px; border-bottom:1px solid #334155; }
+.fixture-shell>section>[role="tablist"]>[role="tab"] { flex:1; border-radius:5px; padding:6px 3px; color:#94a3b8; }
+.fixture-shell>section>[role="tablist"]>[role="tab"][aria-selected="true"] { background:#1e293b; color:#f8fafc; }
+.fixture-shell>section>div:nth-child(2) { overflow-y:auto; padding:8px; }
+.fixture-shell>section>div:nth-child(2) button { display:flex; width:100%; align-items:center; gap:8px; padding:7px; border-radius:5px; text-align:left; }
+.fixture-shell>section>div:last-child { border-top:1px solid #334155; padding:8px; }
+.fixture-shell>section>div:last-child>div:last-child { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }
+.fixture-shell article>section>div { margin:8px 0; border:1px solid #334155; border-radius:8px; padding:12px; background:#1e293b; }
+.fixture-shell article>section>div>div:first-child { display:flex; align-items:center; gap:8px; }
+.fixture-shell article>section>div>div:first-child>span:nth-child(2) { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fixture-shell article>section>div>div:first-child>span:last-child { flex:0 0 auto; border-radius:4px; background:#111827; padding:2px 5px; }

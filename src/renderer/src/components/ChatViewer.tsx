@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useT } from '../i18n'
 import { useLensEnabled } from '../hooks/useLens'
+import { TruthKernelTimelineSlot } from '../integration/TruthKernelSlots'
 import { CliMarkdown, DocMarkdown } from './MarkdownContent'
 import {
   computeSections,
@@ -2203,6 +2204,7 @@ export function ChatViewer() {
         searchOpen={searchOpen}
         onToggleSearch={() => setSearchOpen(prev => !prev)}
       />
+      <TruthKernelTimelineSlot />
 
       <div className="flex-1 flex min-h-0">
         {tocOpen && visibleTocEntries.length > 0 && (

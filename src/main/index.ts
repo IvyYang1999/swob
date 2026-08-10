@@ -13,6 +13,7 @@ import { assertE2ELibraryPath, runtimeSafetyState } from './e2e-library-isolatio
 import { registerAgentIpc, registerAgentShortcut, shutdownAgentRuntime } from './agent-window'
 import { getAgentWorkspaceDir } from './agent-runner'
 import { buildAgentHistory, registerFrontendIpc } from './frontend-ipc'
+import { registerTruthKernelIpc } from './truth-kernel-integration'
 import { readDashboardLayout, writeDashboardLayout } from './dashboard-layout'
 import {
   BUILTIN_COMMAND_IDS,
@@ -5374,6 +5375,25 @@ app.whenReady().then(async () => {
       createImage: (data) => nativeImage.createFromBuffer(data),
       writeImage: (image) => clipboard.writeImage(image as Electron.NativeImage)
     }
+  })
+  registerTruthKernelIpc(ipcMain, assertSessionSourcePath, {
+    userDataPath: app.getPath('userData'),
+    homeDir: app.getPath('home'),
+    platform: process.platform,
+    getLibraryRoot: () => {
+      try { return getLibraryRoot() } catch { return null }
+    },
+    selectCatalogRoot: async () => {
+      const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+      return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    selectEvidenceFile: async () => {
+      const result = await dialog.showOpenDialog({
+        properties: ['openFile'], filters: [{ name: 'JSON evidence', extensions: ['json'] }]
+      })
+      return result.canceled ? null : result.filePaths[0] ?? null
+    },
+    environment: { MULTICA_WORKSPACES_ROOT: process.env.MULTICA_WORKSPACES_ROOT }
   })
   registerAgentIpc({
     getLibraryRoot: () => {

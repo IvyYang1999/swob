@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "11111111-1111-1111-1111-111111111111",
+  "sources": [
+    {"topology":"git-worktree","locator":"/worktrees/task/rollout.jsonl","realPath":"/objects/rollout.jsonl","device":"volume-a","fileId":"file-9","content":"same"},
+    {"topology":"hard-link","locator":"/worktrees/task/hardlink.jsonl","realPath":"/worktrees/task/hardlink.jsonl","device":"volume-a","fileId":"file-9","content":"same"},
+    {"topology":"windows-junction","locator":"C:\\task\\codex-home\\sessions\\rollout.jsonl","realPath":"C:\\session-store\\rollout.jsonl","device":"windows-volume-guid","fileId":"windows-file-9","content":"same"},
+    {"topology":"unix-symlink","locator":"/task/codex-home/sessions/rollout.jsonl","realPath":"/session-store/rollout.jsonl","device":"volume-b","fileId":"file-9","content":"same"},
+    {"topology":"bare-common-object-store-copy","locator":"/bare-common-store/copy.jsonl","realPath":"/bare-common-store/copy.jsonl","device":"volume-c","fileId":"file-3","content":"same"},
+    {"topology":"cross-volume-copy","locator":"/external-volume/copy.jsonl","realPath":"/external-volume/copy.jsonl","device":"volume-d","fileId":"file-4","content":"same"},
+    {"topology":"same-session-divergent-copy","locator":"/external-volume/divergent.jsonl","realPath":"/external-volume/divergent.jsonl","device":"volume-d","fileId":"file-5","content":"changed"}
+  ],
+  "expectedLogicalSources": 2,
+  "expectedAliasesForSameBytes": 6
+}

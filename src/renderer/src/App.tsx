@@ -11,6 +11,7 @@ import { X, CheckCircle, AlertCircle, Info } from 'lucide-react'
 import { HARNESS_PRESENTATION_CHANGED_EVENT } from './utils/harness-presentation'
 import { useLensEnabled } from './hooks/useLens'
 import { RuntimeSafetyMarker } from './components/RuntimeSafetyMarker'
+import { CatalogSurfaceSlot, TruthKernelCatalogProvider, TruthKernelSessionProvider, WorkspaceTabsSlot } from './integration/TruthKernelSlots'
 
 function ErrorDisplay({ error, onRetry }: { error: Error; onRetry: () => void }) {
   const t = useT()
@@ -218,24 +219,30 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="h-screen flex flex-col bg-base text-primary">
-        <Toolbar />
-        <div className="flex-1 flex overflow-hidden relative">
-          <Sidebar width={sidebarWidth} />
-          <ResizeHandle side="left" onResize={handleSidebarResize} />
-          {builtinViewRegistry.require(activeViewId).render(viewContext)}
-          {infoPanelOpen && !narrowWindow && !settingsOpen && workspaceView === 'chat' && (
-            <>
-              <ResizeHandle side="right" onResize={handleInfoPanelResize} />
-              {builtinViewRegistry.require(BUILTIN_VIEW_IDS.info).render(viewContext)}
-            </>
-          )}
-          {settingsOpen && builtinViewRegistry.require(BUILTIN_VIEW_IDS.settings).render(viewContext)}
-          {searchQuery && builtinViewRegistry.require(BUILTIN_VIEW_IDS.searchResults).render(viewContext)}
+      <TruthKernelCatalogProvider>
+      <TruthKernelSessionProvider>
+        <div className="h-screen flex flex-col bg-base text-primary">
+          <Toolbar />
+          <WorkspaceTabsSlot />
+          <CatalogSurfaceSlot />
+          <div className="flex-1 flex overflow-hidden relative">
+            <Sidebar width={sidebarWidth} />
+            <ResizeHandle side="left" onResize={handleSidebarResize} />
+            {builtinViewRegistry.require(activeViewId).render(viewContext)}
+            {infoPanelOpen && !narrowWindow && !settingsOpen && workspaceView === 'chat' && (
+              <>
+                <ResizeHandle side="right" onResize={handleInfoPanelResize} />
+                {builtinViewRegistry.require(BUILTIN_VIEW_IDS.info).render(viewContext)}
+              </>
+            )}
+            {settingsOpen && builtinViewRegistry.require(BUILTIN_VIEW_IDS.settings).render(viewContext)}
+            {searchQuery && builtinViewRegistry.require(BUILTIN_VIEW_IDS.searchResults).render(viewContext)}
+          </div>
+          <UpdateBanner />
+          <ToastContainer />
         </div>
-        <UpdateBanner />
-        <ToastContainer />
-      </div>
+      </TruthKernelSessionProvider>
+      </TruthKernelCatalogProvider>
     </ErrorBoundary>
   )
 }

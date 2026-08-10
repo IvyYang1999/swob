@@ -54,6 +54,7 @@ interface SourceRow {
 }
 
 interface V2SessionRow {
+  provider_id?: string
   identity_json: string
   fingerprint_json: string
   complete: number
@@ -533,7 +534,7 @@ export class CanonicalSessionStore {
 
   getV2Session(logicalSessionKey: string, branchViewId: string): CanonicalStoredEventSession | null {
     const row = this.database.prepare(`
-      SELECT identity_json, fingerprint_json, complete, last_chunk_index, last_cursor, event_count,
+      SELECT provider_id, identity_json, fingerprint_json, complete, last_chunk_index, last_cursor, event_count,
              tombstoned_at, tombstone_reason
       FROM canonical_v2_sessions
       WHERE logical_session_key = ? AND branch_view_id = ?
@@ -548,6 +549,55 @@ export class CanonicalSessionStore {
       tombstonedAt: row.tombstoned_at,
       tombstoneReason: row.tombstone_reason
     } : null
+  }
+
+  /** Read-only lookup from the renderer's stable logical session id. */
+  findV2SessionsByLogicalSessionId(logicalSessionId: string): CanonicalStoredEventSession[] {
+    const rows = this.database.prepare(`
+      SELECT identity_json, fingerprint_json, complete, last_chunk_index, last_cursor, event_count,
+             tombstoned_at, tombstone_reason
+      FROM canonical_v2_sessions
+      ORDER BY logical_session_key, branch_view_id
+    `).all() as V2SessionRow[]
+    return rows.flatMap((row) => {
+      const identity = parseJson<SessionIdentity>(row.identity_json)
+      if (identity.logicalSessionId !== logicalSessionId) return []
+      return [{
+        identity,
+        fingerprint: parseJson<Fingerprint>(row.fingerprint_json),
+        complete: row.complete === 1,
+        lastChunkIndex: row.last_chunk_index,
+        lastCursor: row.last_cursor,
+        eventCount: row.event_count,
+        tombstonedAt: row.tombstoned_at,
+        tombstoneReason: row.tombstone_reason
+      }]
+    })
+  }
+
+  /** Bounded product diagnostics need the durable registry, not renderer session counts. */
+  listV2Sessions(providerId?: string, options: { includeTombstoned?: boolean } = {}): CanonicalStoredEventSession[] {
+    const rows = this.database.prepare(`
+      SELECT provider_id, identity_json, fingerprint_json, complete, last_chunk_index, last_cursor, event_count,
+             tombstoned_at, tombstone_reason
+      FROM canonical_v2_sessions
+      ORDER BY logical_session_key, branch_view_id
+    `).all() as V2SessionRow[]
+    return rows.flatMap((row) => {
+      const identity = parseJson<SessionIdentity>(row.identity_json)
+      if (providerId && row.provider_id !== providerId) return []
+      if (!options.includeTombstoned && row.tombstoned_at) return []
+      return [{
+        identity,
+        fingerprint: parseJson<Fingerprint>(row.fingerprint_json),
+        complete: row.complete === 1,
+        lastChunkIndex: row.last_chunk_index,
+        lastCursor: row.last_cursor,
+        eventCount: row.event_count,
+        tombstonedAt: row.tombstoned_at,
+        tombstoneReason: row.tombstone_reason
+      }]
+    })
   }
 
   tombstoneV2Source(

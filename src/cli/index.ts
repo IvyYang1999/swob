@@ -67,6 +67,7 @@ import {
 } from '../main/opencode-loader'
 import { findZcodeSessionFiles, loadZcodeRawMessages, stripZcodeSessionRef } from '../main/zcode-loader'
 import type { ParsedMessage, SessionDetail } from '../main/types'
+import { verifyBundleDirectory } from './verify-command'
 import {
   CLI_VERSION,
   cliHelpData,
@@ -852,6 +853,10 @@ async function dispatch(cmd: string[], flags: Record<string, string | true>): Pr
     case 'active': out({ activeSessionIds: [...detectActiveSessionsFromProcesses()] }); return 0
     case 'transcript': await cmdTranscript(cmd.slice(1), flags); return 0
     case 'doctor': cmdDoctor(cmd.slice(1)); return 0
+    case 'verify':
+      if (!cmd[1]) fail('缺少 evidence bundle 路径。用法: swob verify <bundle-dir|manifest.json> --json')
+      out(verifyBundleDirectory(cmd[1]))
+      return 0
     case 'redact': {
       const result = redactLibraryTranscripts({ dryRun: flags['dry-run'] === true })
       out({ files: result.files, hits: result.hits })
@@ -911,6 +916,7 @@ export async function runCli(
       else activeIo.stdout(renderCliHelp())
       return 0
     }
+    if (cmd[0] === 'verify') return await dispatch(cmd, flags)
     const controlPlaneRead = cmd[0] === 'resolve' || cmd[0] === 'where' || cmd[0] === 'doctor' ||
       cmd[0] === 'resume-audit' ||
       (cmd[0] === 'transcript' && (cmd[1] === 'status' || flags['dry-run'] === true))

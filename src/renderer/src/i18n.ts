@@ -7,6 +7,9 @@ import {
   translate,
   translations
 } from '../../shared/i18n'
+import { installMerge1Translations } from './integration/merge1-translations'
+
+installMerge1Translations()
 
 export type { LegacyLocale, Locale } from '../../shared/i18n'
 export {

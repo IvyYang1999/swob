@@ -195,6 +195,22 @@ interface ElectronAPI {
     | { fallback: 'transcript'; transcriptMarkdown: string }
     | { fallback: null; error: 'DETAIL_UNAVAILABLE' | 'DETAIL_LOAD_FAILED' }
   >
+  loadTruthKernelSession: (
+    sessionId: string,
+    filePath: string
+  ) => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelSessionIpcReadModel>
+  loadTruthKernelCatalog: () => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelCatalogIpcState>
+  addTruthKernelCatalogRoot: () => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelCatalogIpcState>
+  removeTruthKernelCatalogRoot: (rootId: string) => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelCatalogIpcState>
+  rescanTruthKernelCatalogRoot: (rootId: string) => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelCatalogIpcState>
+  saveTruthKernelCatalogTab: (tab: import('../../../shared/contracts/truth-kernel').WorkspaceTab) => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelCatalogIpcState>
+  setActiveTruthKernelCatalogTab: (tabId: string) => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelCatalogIpcState>
+  removeTruthKernelCatalogTab: (tabId: string) => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelCatalogIpcState>
+  decideTruthKernelCatalogOnboarding: (choice: 'default-library' | 'index-only' | 'skip') => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelCatalogIpcState>
+  loadTruthKernelProviderDoctor: () => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelProviderDoctorIpcInput[]>
+  attachTruthKernelExternalEvidence: (sessionId: string, filePath: string) => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelExternalEvidenceAttachResult>
+  listTruthKernelPricing: () => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelPricingIpcState>
+  applyTruthKernelPricing: (command: import('../../../shared/frontend-ipc-contract').TruthKernelPricingMutation) => Promise<import('../../../shared/frontend-ipc-contract').TruthKernelPricingMutationResult>
   rebuildSessionDetail: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
   searchSessions: (
     query: string

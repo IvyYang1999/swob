@@ -5,6 +5,7 @@ import type {
   ProviderCapabilities,
   ProviderManifest
 } from './provider-schema.generated'
+import type { ProviderRegistrationDescriptor } from './contracts/truth-kernel'
 
 export const LEGACY_SESSION_SOURCES = [
   'claude-code',
@@ -782,3 +783,13 @@ export function currentProviderCapabilitySnapshot(): Array<{
     capabilities: entry.manifest.capabilities
   }))
 }
+
+/** t211I-owned host registration; parsing remains in the dynamic Provider registry. */
+export const TRUTH_KERNEL_PROVIDER_REGISTRATIONS: readonly ProviderRegistrationDescriptor[] = [{
+  schemaVersion: 1,
+  featureId: 't211B-agent-timeline',
+  providerId: 'swob/agent-timeline-renderer',
+  descriptorVersion: '1.0.0',
+  capabilityContractVersion: '2.0',
+  registrationExport: 'T211B_TIMELINE_RENDERER_REGISTRY'
+}]

@@ -2922,6 +2922,38 @@ export async function loadSessionDetail(
 }
 
 /**
+ * t211I read boundary for sessions that do not yet have persisted canonical
+ * events. It adapts the retained source detail exactly once and never writes
+ * the source, Library, or canonical store.
+ */
+export async function loadSessionEventsV2ReadOnly(
+  filePath: string,
+  allFilePaths?: string[],
+  branchParentFilePaths?: string[],
+  branchPointUuid?: string,
+  branchLeafUuid?: string,
+  canonicalSessionRecordId?: string
+): Promise<import('../shared/provider-schema-v2.generated').CanonicalEvent[]> {
+  const detail = await loadLegacySessionDetail(
+    filePath,
+    allFilePaths,
+    branchParentFilePaths,
+    branchPointUuid,
+    branchLeafUuid,
+    canonicalSessionRecordId
+  )
+  if (!detail?.source) return []
+  try {
+    const adapterDetail = detail.source === 'pi'
+      ? await enrichPiSessionDetailV2(detail)
+      : detail
+    return adaptSessionDetailV2(adapterDetail).events
+  } catch {
+    return []
+  }
+}
+
+/**
  * IPC-facing detail loader. Transcript candidates must already have passed the
  * main-process path capability check before entering this function.
  */

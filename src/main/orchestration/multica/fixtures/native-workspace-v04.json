@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "0.4",
+  "workspaces": [{"id":"W1","name":"fixture-workspace"}],
+  "projects": [{"id":"P1","workspaceId":"W1"}],
+  "issues": [{"id":"I1","projectId":"P1"}],
+  "tasks": [
+    {"id":"T1","issueId":"I1","agentId":"AG1","attemptIds":["A-running","A-queued","A-cancelled"]},
+    {"id":"T2","issueId":"I1","attemptIds":["A-complete"]}
+  ],
+  "attempts": [
+    {"id":"A-running","taskId":"T1","status":"running","sessionIds":["codex-session-1","claude-session-1"]},
+    {"id":"A-queued","taskId":"T1","status":"queued"},
+    {"id":"A-cancelled","taskId":"T1","status":"cancelled"},
+    {"id":"A-complete","taskId":"T2","status":"completed","sessionIds":["codex-session-2"]}
+  ],
+  "stages": [
+    {"id":"S-closed","taskIds":["T1"],"verifierIds":["V-accepted"]},
+    {"id":"S-open","taskIds":["T2"],"verifierIds":["V-accepted"]}
+  ],
+  "agents": [{"id":"AG1"}],
+  "verifiers": [
+    {"id":"V-accepted","subjectId":"T2","outcome":"accepted","evidenceIds":["E1"]},
+    {"id":"V-rejected","subjectId":"T1","outcome":"rejected"},
+    {"id":"V-cancelled","subjectId":"T1","outcome":"cancelled"}
+  ],
+  "evidences": [{"id":"E1","kind":"verifier-artifact","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}],
+  "artifacts": [{"id":"AR1","producerAttemptId":"A-complete"}],
+  "comments": [{"id":"C1","taskId":"T1","route":"agent"}],
+  "usages": [
+    {
+      "id":"U-native-complete","scopeKind":"task","scopeId":"T1","metric":"input-token","unit":"token","total":100,
+      "providerId":"openai","modelId":"gpt-fixture","nativeCoverage":"complete",
+      "nativeUsageFacts":[{"factId":"NF1","metric":"input-token","unit":"token","total":90,"providerId":"openai","modelId":"gpt-fixture","authoritative":true}]
+    },
+    {"id":"U-task-only","scopeKind":"task","scopeId":"T2","metric":"output-token","unit":"token","total":20},
+    {"id":"U-issue","scopeKind":"issue","scopeId":"I1","metric":"cost","unit":"usd","total":3}
+  ]
+}

@@ -24,6 +24,52 @@ let defaultHost: ProviderHost | null = null
 let runtimeTail: Promise<void> = Promise.resolve()
 let configuredSourceProjection: (sourceId: string) => boolean = () => true
 
+export interface CanonicalProviderRuntimeDiagnostic {
+  providerId: string
+  discovery: 'found' | 'not-found' | 'skipped' | 'error'
+  discoveryReason: string | null
+  lastSuccessfulParseAt: string | null
+  partialEvents: number
+  sourceCount: number
+  executionDomain: 'native' | 'wsl' | 'unknown'
+}
+
+let latestRuntimeDiagnostics = new Map<string, CanonicalProviderRuntimeDiagnostic>()
+
+function executionDomain(report: ProviderRunReport): CanonicalProviderRuntimeDiagnostic['executionDomain'] {
+  const locators = [...report.discoveredSources, ...report.unchangedSources].map((source) => source.displayLocator)
+  if (locators.some((locator) => locator.startsWith('wsl://') || locator.startsWith('\\\\wsl$\\') || /^\/mnt\/[a-z]\//i.test(locator))) return 'wsl'
+  if (locators.some((locator) => locator.startsWith('file:') || locator.startsWith('/') || /^[A-Za-z]:[\\/]/.test(locator))) return 'native'
+  return 'unknown'
+}
+
+function rememberRuntimeDiagnostics(reports: ProviderRunReport[], completedAt: string): void {
+  latestRuntimeDiagnostics = new Map(reports.map((report) => {
+    const sourceCount = new Set([...report.discoveredSources, ...report.unchangedSources].map((source) => source.stableId)).size
+    const partialEvents = report.outcomes.filter((outcome) => outcome.status === 'partial')
+      .reduce((sum, outcome) => sum + outcome.sessions.reduce((sessionSum, session) => sessionSum + session.records.length, 0), 0) +
+      report.v2Chunks.reduce((sum, chunk) => sum + chunk.diagnostics.length + (chunk.done ? 0 : chunk.events.length), 0)
+    const successful = report.errors.length === 0 && (
+      sourceCount > 0 || report.outcomes.some((outcome) => ['complete', 'replace', 'no-data'].includes(outcome.status)) ||
+      report.v2Chunks.some((chunk) => chunk.done)
+    )
+    const skipped = report.outcomes.length > 0 && report.outcomes.every((outcome) => outcome.status === 'skipped' || outcome.status === 'no-data')
+    const discovery = report.errors.length > 0 && sourceCount === 0 ? 'error'
+      : sourceCount > 0 ? 'found'
+        : skipped ? 'skipped' : 'not-found'
+    return [report.providerId, {
+      providerId: report.providerId, discovery,
+      discoveryReason: report.errors[0]?.code ?? (discovery === 'not-found' ? 'no-source-discovered' : discovery === 'skipped' ? 'provider-skipped' : null),
+      lastSuccessfulParseAt: successful ? completedAt : null,
+      partialEvents, sourceCount, executionDomain: executionDomain(report)
+    }]
+  }))
+}
+
+export function getCanonicalProviderRuntimeDiagnostics(): ReadonlyMap<string, CanonicalProviderRuntimeDiagnostic> {
+  return new Map(latestRuntimeDiagnostics)
+}
+
 export function configureCanonicalProviderProjection(
   predicate: ((sourceId: string) => boolean) | null
 ): void {
@@ -91,6 +137,7 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
     })
   ]))
   const reports = await host.runAll({ previousSources })
+  rememberRuntimeDiagnostics(reports, new Date().toISOString())
   const changedSessionRecordIds: string[] = []
   const tombstonedSessionRecordIds: string[] = []
 

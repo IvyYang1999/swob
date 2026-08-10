@@ -17,5 +17,5 @@
       "@renderer/*": ["./src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/renderer/src/**/*.d.ts", "src/shared/**/*", "schema/**/*.json"]
+  "include": ["src/renderer/src/**/*", "src/renderer/src/**/*.d.ts", "src/shared/**/*", "src/main/context-ledger/translation-contribution.ts", "schema/**/*.json"]
 }

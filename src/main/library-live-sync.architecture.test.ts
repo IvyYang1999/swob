@@ -144,8 +144,23 @@ describe('live Library synchronization architecture', () => {
       /function adoptLibraryTree[\s\S]*?activeDuplicateRecoveryAnalysis\.writeGeneration[\s\S]*?cancelActiveDuplicateRecoveryAnalysis\('duplicate-recovery-inventory-changed-during-analysis'\)/
     )
     expect(source).toContain("cancelActiveDuplicateRecoveryAnalysis('duplicate-recovery-no-longer-actionable')")
-    expect(source).toMatch(
-      /function scheduleAutomaticDuplicateRecoveryAnalysis[\s\S]*?libraryRuntimePaused \|\| !libraryInitialized[\s\S]*?drainAutomaticDuplicateRecoveryAnalysis/
+    const analysisGate = source.match(
+      /function automaticDuplicateRecoveryAnalysisGateClosed[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(analysisGate).toContain('libraryHydrationActive > 0')
+    expect(analysisGate).toContain('Boolean(libraryInitializationPromise)')
+    expect(analysisGate).toContain('Boolean(libraryBacklogRecoveryPromise)')
+    expect(analysisGate).toContain('Boolean(providerLibrarySyncPromise)')
+    expect(analysisGate).toContain('libraryStartupChunkActive')
+    const scheduledDrain = source.match(
+      /function scheduleAutomaticDuplicateRecoveryAnalysis[\s\S]*?\n}\n\nasync function drainAutomaticDuplicateRecoveryAnalysis[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(scheduledDrain.match(/automaticDuplicateRecoveryAnalysisGateClosed\(\)/g)).toHaveLength(2)
+    expect(scheduledDrain.indexOf('automaticDuplicateRecoveryAnalysisGateClosed()')).toBeLessThan(
+      scheduledDrain.indexOf('queueMicrotask')
+    )
+    expect(scheduledDrain.lastIndexOf('automaticDuplicateRecoveryAnalysisGateClosed()')).toBeGreaterThan(
+      scheduledDrain.indexOf('async function drainAutomaticDuplicateRecoveryAnalysis')
     )
     expect(source).toMatch(
       /async function activateLibraryAt[\s\S]*?libraryRuntimePaused = false[\s\S]*?scheduleAutomaticDuplicateRecoveryAnalysis\(\)/

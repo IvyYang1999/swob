@@ -3986,12 +3986,16 @@ function requestAutomaticDuplicateRecoveryAnalysis(tree: LibraryTree): void {
   scheduleAutomaticDuplicateRecoveryAnalysis()
 }
 
+function automaticDuplicateRecoveryAnalysisGateClosed(): boolean {
+  return runtimeShuttingDown || libraryRuntimePaused || !libraryInitialized ||
+    libraryHydrationActive > 0 || Boolean(libraryInitializationPromise) ||
+    Boolean(libraryBacklogRecoveryPromise) || Boolean(providerLibrarySyncPromise) ||
+    libraryStartupChunkActive
+}
+
 function scheduleAutomaticDuplicateRecoveryAnalysis(): void {
   if (automaticDuplicateRecoveryAnalysisScheduled || automaticDuplicateRecoveryAnalysisTimer ||
-    !pendingAutomaticDuplicateRecoveryAnalysis || runtimeShuttingDown ||
-    libraryRuntimePaused || !libraryInitialized || libraryHydrationActive > 0 ||
-    libraryInitializationPromise || libraryBacklogRecoveryPromise || providerLibrarySyncPromise ||
-    libraryStartupChunkActive) return
+    !pendingAutomaticDuplicateRecoveryAnalysis || automaticDuplicateRecoveryAnalysisGateClosed()) return
   const now = Date.now()
   const delay = boundedQuietWindowDelay(
     pendingAutomaticDuplicateRecoveryAnalysis.firstRequestedAt,
@@ -4017,7 +4021,10 @@ function scheduleAutomaticDuplicateRecoveryAnalysis(): void {
 
 async function drainAutomaticDuplicateRecoveryAnalysis(): Promise<void> {
   const pending = pendingAutomaticDuplicateRecoveryAnalysis
-  if (!pending || runtimeShuttingDown || libraryRuntimePaused || !libraryInitialized) return
+  // Ownership can change after schedule() queues this microtask. Recheck every
+  // I/O gate at the actual worker-start boundary so a newer Provider/backlog
+  // drain cannot overlap the full-Library hashing pass.
+  if (!pending || automaticDuplicateRecoveryAnalysisGateClosed()) return
   if (pending.epoch !== libraryRuntimeEpoch ||
     path.resolve(pending.libraryRoot) !== path.resolve(getLibraryRoot()) ||
     pending.writeGeneration !== (latestLibraryTree?.writeGeneration ?? -1)) {

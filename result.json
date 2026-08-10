@@ -1,74 +1,153 @@
 {
-  "workItemId": "t207-startup-bootstrap-integrity",
-  "baseSha": "ba8d53d5673de20c6527b36e2a53b7048f2a3303",
-  "headSha": "6835c5aa446feb25dc8edcf6f1c5bb0d4fbdbe33",
+  "workItemId": "t211A",
+  "baseSha": "06a6048eab8dae0d15a71aff6638f32a33e3dc32",
+  "headSha": "8fb625bd23c6dd476d01ace722dd35d2688d6f3e",
   "changedFiles": [
-    ".swob/workflows/v15-t207/graph.yaml",
-    "e2e/helpers.ts",
-    "e2e/t171-cost-ledger.spec.ts",
-    "e2e/t182-valuation-capability.spec.ts",
-    "e2e/t207-startup-bootstrap-integrity.spec.ts",
-    "src/main/__test-support__/protected-state-audit.ts",
-    "src/main/index.ts",
-    "src/main/session-bootstrap.test.ts",
-    "src/main/session-bootstrap.ts",
-    "src/main/session-loader.test.ts",
-    "src/main/session-loader.ts",
-    "src/preload/index.ts",
-    "src/renderer/src/AgentApp.tsx",
-    "src/renderer/src/App.tsx",
-    "src/renderer/src/store.test.ts",
-    "src/renderer/src/store.ts",
-    "src/renderer/src/types/electron.d.ts",
-    "src/shared/i18n.ts"
+    "src/shared/contracts/truth-kernel/canonical-json.ts",
+    "src/shared/contracts/truth-kernel/fixtures/golden-v1.ts",
+    "src/shared/contracts/truth-kernel/index.ts",
+    "src/shared/contracts/truth-kernel/manifest.ts",
+    "src/shared/contracts/truth-kernel/migrations.test.ts",
+    "src/shared/contracts/truth-kernel/migrations.ts",
+    "src/shared/contracts/truth-kernel/truth-kernel-fixture.schema.json",
+    "src/shared/contracts/truth-kernel/types.ts",
+    "src/shared/contracts/truth-kernel/validator.test.ts",
+    "src/shared/contracts/truth-kernel/validator.ts"
   ],
   "contractsProduced": [
-    "SessionBootstrap.v1",
-    "SummaryCache.v28",
-    "RendererSessionSummary.v1"
+    "AgentTimelineEvent.v1",
+    "EvidenceRef.v1",
+    "ContextLedgerAndBinaryAttachment.v1",
+    "McpContextExposure.v1",
+    "InteractionTimingFileUsageAndFork.v1",
+    "BranchUsageRollup.v1",
+    "CatalogRootObservationWorkspaceAndCoverage.v1",
+    "WritablePackageBinding.v1",
+    "ExternalEvidenceAttachmentRevisionAndAssurance.v1",
+    "RollingIngestChainAndVerifyBundle.v1",
+    "ProviderAndOrchestrationDescriptors.v1",
+    "TypedOrchestrationEdgesAndObservedAggregate.v1",
+    "TranslationContribution.v1",
+    "VersionedUserPricingAliasAndValuation.v1",
+    "InteractionTrajectoryReadModel.v1",
+    "TruthKernelTypedQueryDTO.v1"
   ],
   "tests": [
     {
-      "command": "npm run workflow:validate -- .swob/workflows/v15-t207/graph.yaml",
+      "command": "npm exec vitest run -- src/shared/contracts/truth-kernel/validator.test.ts",
       "status": "passed",
-      "numbers": "1 graph validated"
+      "numbers": "33/33 tests passed in 1/1 file"
     },
     {
       "command": "npm run check",
       "status": "passed",
-      "numbers": "all static and policy gates passed"
+      "numbers": "all configured static, schema, read-only, package-policy, DCO, pricing, asset and node/web typecheck gates passed"
     },
     {
-      "command": "npx vitest run --maxWorkers=2",
+      "command": "npm run typecheck",
       "status": "passed",
-      "numbers": "1542 passed, 19 skipped"
+      "numbers": "2/2 TypeScript projects passed"
     },
     {
-      "command": "npm run build",
+      "command": "repository pre-commit hook test and compile gate",
       "status": "passed",
-      "numbers": "main, preload, and renderer production bundles built"
+      "numbers": "1693 tests passed, 19 skipped; 196 test files passed, 5 skipped; compile passed"
     },
     {
-      "command": "npm run test:e2e",
+      "command": "./node_modules/.bin/vitest run src/shared/contracts/truth-kernel/validator.test.ts --maxWorkers=2",
       "status": "passed",
-      "numbers": "54 passed, 1 Windows-native conditional skip"
+      "numbers": "33/33 tests passed in 1/1 file"
+    },
+    {
+      "command": "npm run check",
+      "status": "passed",
+      "numbers": "all configured check gates passed"
+    },
+    {
+      "command": "direct JSON.parse own-__proto__ canonical/round-trip/hash probe with node --experimental-strip-types",
+      "status": "passed",
+      "numbers": "canonical output retained __proto__; round-trip retained own property; JSON equality true; canonical SHA-256 produced"
     }
   ],
-  "visualEvidence": [
-    "Synthetic 1500-session Electron run reviewed at wide and narrow widths: source-ready banner, 1500 first-paint count, 1501 additive completion, and no horizontal overflow",
-    "Existing cost/valuation Electron flows reviewed after explicit navigation fixes, including hover state and sidebar resize behavior"
-  ],
+  "visualEvidence": [],
   "deviations": [],
   "knownRisks": [
-    "Builder evidence only: an independent Verifier has not reviewed this diff",
-    "The real Library was intentionally neither launched nor modified; isolated real-corpus startup and memory replay remains required",
-    "Main-process summaries still retain audit usage events; v28 removes the monolithic JSON parse peak and startup IPC clone, but the real-corpus resident-memory ceiling is not yet independently measured",
-    "The Windows native packaged E2E is conditionally skipped on macOS and still requires its Windows gate"
+    "No Provider parser, Context detector, Catalog scanner, repository, IPC handler, UI, runtime wiring or new dependency is implemented.",
+    "The migration deliverable remains a rebuild-only feature-local planning skeleton; t211I owns physical DDL and migration aggregation.",
+    "Integrity guarantees begin at recorded ingest. Pre-ingest tampering, capture completeness, user intent and a compromised host remain outside the v1 proof boundary.",
+    "Bundle contracts freeze content addressing and offline verification inputs; streaming file IO and actual verifier execution belong to t211G implementation.",
+    "StorageRootObservation is device-local and preserves last-known rows; cross-device root mapping and package relocation remain t213 scope.",
+    "Pricing mutation DTOs freeze optimistic revision semantics, but repository persistence and IPC handlers belong to t211D.",
+    "Namespaced assurance dimensions and verification failure codes are the explicit extension point; core v1 meanings cannot be redefined.",
+    "Independent acceptance re-verified the sole prior blocker and its exact two-file fix delta; the previous rejected verdict remains immutable audit history."
   ],
   "provenance": {
     "harness": "codex",
-    "model": "gpt-5",
+    "model": "gpt-5.6-sol",
     "session": "n/a"
   },
-  "depends_on": []
+  "depends_on": [],
+  "implementationTreeSha": "8fd58a92d1f9ed9ec7580dad43c02ece1e5a832f",
+  "contractCandidate": {
+    "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211A/contract_candidate.unknown-key-fix.json",
+    "sha256": "8055b8ffcf48e928c01d3525326f763e483236b7fefd477e7159a13782ae5e62",
+    "contractHash": "0d74fecd91bdcad2cfd3fc342a8c43ed739c3bbe4094f347a71725669227a1f7"
+  },
+  "independentVerifier": {
+    "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211A/verifier-verdict.unknown-key-fix.json",
+    "sha256": "09c0481f88d2eae6021291d097b1df30fec624fb78d5a125c220f73b877b09ac",
+    "verdict": "accepted"
+  },
+  "phase0FinalReceipts": [
+    {
+      "task_id": "t211B",
+      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211B/phase0_consumer_verdict.unknown-key-fix.json",
+      "sha256": "cfdc78a3ee1921c2a5d0e9267c50ea84156a90f4250cdfdb198a1cd6a4e76510",
+      "verdict": "compatible"
+    },
+    {
+      "task_id": "t211C",
+      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211C/phase0_consumer_verdict.unknown-key-fix.json",
+      "sha256": "1248c0eb3f8aa481d0137ca3229d6c0f51244dfbac9587170e746708a2b8b64c",
+      "verdict": "compatible"
+    },
+    {
+      "task_id": "t211D",
+      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211D/phase0_consumer_verdict.unknown-key-fix.json",
+      "sha256": "c3c3ecbcea978a7ed02b820537435ed2b5e7104dd44d00eb337dc7ce8e22e276",
+      "verdict": "compatible"
+    },
+    {
+      "task_id": "t211E",
+      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211E/phase0_consumer_verdict.unknown-key-fix.json",
+      "sha256": "830afdfb3975c68712528fb0d218a8bb3b8644ae47853159bba003c324e02040",
+      "verdict": "compatible"
+    },
+    {
+      "task_id": "t211F",
+      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211F/phase0_consumer_verdict.unknown-key-fix.json",
+      "sha256": "6d012ab7c80aa55fe711b6723d9a70d00b452c416b62b476941bd115e50d3475",
+      "verdict": "compatible"
+    },
+    {
+      "task_id": "t211G",
+      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211G/phase0_consumer_verdict.unknown-key-fix.json",
+      "sha256": "eb4afcf04b4152102409221186a3e52752c670daacb4e6409c554d2cd01c8270",
+      "verdict": "compatible"
+    }
+  ],
+  "contractVersions": {
+    "truth_kernel_contract": "1.0.0",
+    "truth_kernel_schema": 1,
+    "truth_kernel_serialization": "truth-kernel-canonical-json/1",
+    "truth_kernel_ipc": "truth-kernel-ipc/1.0.0",
+    "truth_kernel_fixture": "1.0.0",
+    "truth_kernel_migration_target": 1,
+    "pricing_policy_command": "1.0.0",
+    "provider_protocol_compatibility": "2.0",
+    "session_meta_compatibility": 3,
+    "canonical_store_compatibility": 2
+  },
+  "dependencyManifestUnchanged": true,
+  "verdict": "accepted"
 }

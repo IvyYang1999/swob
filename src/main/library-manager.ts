@@ -5287,6 +5287,8 @@ function libraryStartupProjectionIsCurrent(
   const expectedSourcePaths = sourceFilePathsForMeta(session)
   if (expectedSourcePaths.length > 0 &&
     JSON.stringify(meta.sourceFilePaths) !== JSON.stringify(expectedSourcePaths)) return false
+  const refresh = projectionNeedsRefresh(session, binding.candidate.dirPath)
+  if (refresh.transcript || refresh.backup) return false
   if (session.messageCount > 0 && !fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE))) return false
   if (sessionBackupSourcePaths(session).length > 0 &&
     !fs.existsSync(path.join(binding.candidate.dirPath, BACKUP_FILE))) return false

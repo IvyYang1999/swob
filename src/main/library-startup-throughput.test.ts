@@ -277,6 +277,12 @@ describe('Library startup production throughput', () => {
     }, {}, Date.parse('2026-08-08T00:00:03.000Z')).checkpoint
     fs.writeFileSync(checkpointPath, `${JSON.stringify(failed, null, 2)}\n`)
 
+    const stillStale = await lib.planLibraryStartupSync([changed], 1, {})
+    expect(stillStale).toMatchObject({
+      dirtyIndexes: [0],
+      recoverySummary: { retryScheduled: 1 }
+    })
+
     await lib.syncLibraryFromSessions([changed], {})
     const sessionDir = lib.getSessionDirPath(changed.sessionId)!
     const packageEvidence = ['.swob-session.json', 'transcript.md', 'backup.jsonl']

@@ -11,6 +11,7 @@ import type {
   ProviderManifest as ProviderManifestV2
 } from '../shared/provider-schema-v2.generated'
 import { closeCanonicalSessionStore, getCanonicalSessionStore } from './canonical-store'
+import { canonicalRecordsToSessionSummary } from './canonical-projection'
 import {
   CANONICAL_PROVENANCE_FILE,
   CANONICAL_RECORDS_FILE
@@ -569,6 +570,99 @@ describe('canonical provider runtime full chain', () => {
     expect(metas.every((meta) => meta.logicalIdentity.sourceFamily === 'swob/pi')).toBe(true)
     expect(metas.every((meta) => meta.sourceFilePaths[0].startsWith('ssh://'))).toBe(true)
     expect(packageDirs().some((dirPath) => fs.existsSync(path.join(dirPath, 'backup.jsonl')))).toBe(false)
+  })
+
+  it('reconciles one Provider workKey once when direct archive wins before backlog execution', async () => {
+    const sourceRef: SourceRef = {
+      kind: 'virtual-member',
+      providerId: 'swob/pi',
+      stableId: 'pi:startup-owner',
+      containerRefId: 'startup-owner-container',
+      memberKey: 'startup-owner-row',
+      displayLocator: 'ssh://example.invalid/var/lib/pi/startup.db#row',
+      fingerprint: { algorithm: 'composite-sha256', value: 'startup-owner-f1' }
+    }
+    const firstRecords = remoteRecords('startup-owner', sourceRef)
+    const firstSummary = canonicalRecordsToSessionSummary(firstRecords, {
+      filePath: sourceRef.displayLocator,
+      source: 'pi'
+    })
+    const cold = await library.planLibraryStartupSync([firstSummary], 1, {})
+    const waiting = await library.syncLibraryStartupBatch(
+      [firstSummary],
+      {},
+      { snapshotDigest: cold.snapshotDigest, schemaGeneration: cold.schemaGeneration }
+    )
+    expect(waiting.outcome.skipped[0]).toMatchObject({
+      code: 'PROVIDER_SESSION_PENDING',
+      recovery: { state: 'waiting-provider' }
+    })
+
+    // The direct Provider owner archives exactly once. Replanning must only
+    // complete the checkpoint and must expose no second executor item.
+    const store = getCanonicalSessionStore()
+    store.applyParseOutcome({
+      providerId: 'swob/pi',
+      parserDataVersion: '1',
+      formatVersion: 'pi-jsonl-v3',
+      fingerprint: sourceRef.fingerprint,
+      status: 'complete',
+      sessions: [{
+        sourceRefId: sourceRef.stableId,
+        sessionRecordId: firstRecords[0].id,
+        status: 'complete',
+        records: firstRecords,
+        errors: [],
+        replaceSessionRecordId: null,
+        noDataReason: null
+      }],
+      errors: [],
+      tombstones: []
+    })
+    await library.ensureCanonicalPackage('swob/pi', sourceRef, firstRecords)
+    const reconciled = await library.planLibraryStartupSync([firstSummary], 1, {})
+    expect(reconciled.dirtyIndexes).toEqual([])
+    expect(reconciled.recoverySummary.waitingProvider).toBe(0)
+    expect(packageDirs()).toHaveLength(1)
+
+    // A newer Provider fingerprint may invalidate F1 while direct archive has
+    // already committed F2. The latest current projection still closes cleanly.
+    const secondSourceRef: SourceRef = {
+      ...sourceRef,
+      fingerprint: { algorithm: 'composite-sha256', value: 'startup-owner-f2' }
+    }
+    const secondRecords = remoteRecords('startup-owner', secondSourceRef).map((record) =>
+      record.recordType === 'session'
+        ? { ...record, updatedAt: '2026-07-23T00:02:00.000Z' }
+        : record)
+    const secondSummary = canonicalRecordsToSessionSummary(secondRecords, {
+      filePath: secondSourceRef.displayLocator,
+      source: 'pi'
+    })
+    store.applyParseOutcome({
+      providerId: 'swob/pi',
+      parserDataVersion: '1',
+      formatVersion: 'pi-jsonl-v3',
+      fingerprint: secondSourceRef.fingerprint,
+      status: 'complete',
+      sessions: [{
+        sourceRefId: secondSourceRef.stableId,
+        sessionRecordId: secondRecords[0].id,
+        status: 'complete',
+        records: secondRecords,
+        errors: [],
+        replaceSessionRecordId: null,
+        noDataReason: null
+      }],
+      errors: [],
+      tombstones: []
+    })
+    const beforeSecondDirectArchive = await library.planLibraryStartupSync([secondSummary], 1, {})
+    expect(beforeSecondDirectArchive.dirtyIndexes).toEqual([0])
+    await library.ensureCanonicalPackage('swob/pi', secondSourceRef, secondRecords)
+    const fingerprintChanged = await library.planLibraryStartupSync([secondSummary], 1, {})
+    expect(fingerprintChanged.dirtyIndexes).toEqual([])
+    expect(packageDirs()).toHaveLength(1)
   })
 
   it('preserves the last valid Pi snapshot when a live header is temporarily malformed', async () => {

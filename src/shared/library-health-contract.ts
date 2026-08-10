@@ -144,6 +144,8 @@ export interface LibraryHealthDimensions {
   identityExceptions: {
     state: IdentityExceptionsState
     stateSinceAt: string
+    /** Opaque root+inventory generation; never contains a filesystem path. */
+    analysisGeneration: string
     authorizedGroupCount: number
     authorizedPackageCount: number
     unknownGroupCount: number
@@ -307,6 +309,7 @@ export function isLibraryHealthSnapshot(value: unknown): value is LibraryHealthS
       recovery.exhausted, recovery.maxAttempts].every(isNonNegativeInteger) &&
     (recovery.nextRetryAt === null || isIsoTimestamp(recovery.nextRetryAt)) &&
     !!identity && IDENTITY_STATES.has(identity.state) && isIsoTimestamp(identity.stateSinceAt) &&
+    typeof identity.analysisGeneration === 'string' &&
     [identity.authorizedGroupCount, identity.authorizedPackageCount, identity.unknownGroupCount,
       identity.unknownPackageCount, identity.evidenceMismatchGroupCount].every(isNonNegativeInteger) &&
     Array.isArray(identity.records) && identity.records.every((record) =>
@@ -390,6 +393,7 @@ export function createInitializingLibraryHealthSnapshot(): LibraryHealthSnapshot
       identityExceptions: {
         state: 'none',
         stateSinceAt: epoch,
+        analysisGeneration: 'unavailable',
         authorizedGroupCount: 0,
         authorizedPackageCount: 0,
         unknownGroupCount: 0,

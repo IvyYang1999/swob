@@ -192,7 +192,7 @@ describe('Library startup production throughput', () => {
       {},
       { snapshotDigest: cold.snapshotDigest, schemaGeneration: cold.schemaGeneration }
     )
-    expect(handled.outcome).toEqual({
+    expect(handled.outcome).toMatchObject({
       total: 1,
       completed: 1,
       skipped: [{
@@ -247,7 +247,7 @@ describe('Library startup production throughput', () => {
         {},
         { snapshotDigest: cold.snapshotDigest, schemaGeneration: cold.schemaGeneration }
       )
-      expect(handled.outcome.skipped).toEqual([{
+      expect(handled.outcome.skipped).toMatchObject([{
         sessionId: session.sessionId,
         code: 'SESSION_SOURCE_MISSING',
         disposition: 'handled',

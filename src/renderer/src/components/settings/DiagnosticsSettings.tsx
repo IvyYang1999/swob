@@ -27,10 +27,12 @@ export function DiagnosticsSettings() {
   const debugModeTouched = useRef(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [applying, setApplying] = useState(false)
+  const applyingRef = useRef(false)
   const [analysisFailed, setAnalysisFailed] = useState(false)
   const [progress, setProgress] = useState<DuplicateRecoveryProgress | null>(null)
   const [report, setReport] = useState<DuplicateRecoverySummary | null>(null)
   const cancelRequested = useRef(false)
+  const analysisRequestId = useRef(0)
   const identity = health.dimensions.identityExceptions
   const backlog = health.dimensions.backgroundBacklog
   const backgroundRecovery = backlog.recovery
@@ -39,7 +41,7 @@ export function DiagnosticsSettings() {
   const automaticRecoveryActive = backgroundRecovery.state === 'running' ||
     backgroundRecovery.state === 'scheduled' || backgroundRecovery.state === 'waiting-provider'
   const backgroundNeedsAttention = backgroundRecovery.attentionRequired + backgroundRecovery.exhausted
-  const analysisKey = `${identity.unknownGroupCount}:${identity.evidenceMismatchGroupCount}`
+  const analysisKey = `${identity.analysisGeneration}:${identity.unknownGroupCount}:${identity.evidenceMismatchGroupCount}`
   const lastAutomaticAnalysis = useRef<string | null>(null)
   const summary = report ? recoverySummary(report) : null
   const rawSnapshot = useMemo(() => JSON.stringify({
@@ -58,20 +60,23 @@ export function DiagnosticsSettings() {
   }, [preferences.debugMode])
 
   const analyze = useCallback(async () => {
+    const requestId = ++analysisRequestId.current
     cancelRequested.current = false
     setAnalyzing(true)
     setAnalysisFailed(false)
     setReport(null)
     setProgress({ phase: 'discovering', discoveredPackages: 0, conflictPackages: 0, analyzedConflictPackages: 0 })
-    const unsubscribe = window.api.onDuplicateRecoveryProgress?.((next) => setProgress(next))
+    const unsubscribe = window.api.onDuplicateRecoveryProgress?.((next) => {
+      if (analysisRequestId.current === requestId) setProgress(next)
+    })
     try {
       const next = await window.api.libraryAnalyzeDuplicateRecovery()
-      setReport(next)
+      if (analysisRequestId.current === requestId) setReport(next)
     } catch {
-      if (!cancelRequested.current) setAnalysisFailed(true)
+      if (analysisRequestId.current === requestId && !cancelRequested.current) setAnalysisFailed(true)
     } finally {
       unsubscribe?.()
-      setAnalyzing(false)
+      if (analysisRequestId.current === requestId) setAnalyzing(false)
     }
   }, [showToast, t])
 
@@ -87,9 +92,10 @@ export function DiagnosticsSettings() {
   }
 
   const apply = async () => {
-    if (!report || report.autoRepairablePackageCount === 0) return
+    if (applyingRef.current || !report || report.autoRepairablePackageCount === 0) return
     const confirmed = window.confirm(t('diagnostics.apply_confirm', { n: report.autoRepairablePackageCount }))
     if (!confirmed) return
+    applyingRef.current = true
     setApplying(true)
     try {
       const result = await window.api.libraryApplyDuplicateRecovery(report.planId)
@@ -100,6 +106,7 @@ export function DiagnosticsSettings() {
     } catch {
       showToast(t('diagnostics.apply_failed'), 'error')
     } finally {
+      applyingRef.current = false
       setApplying(false)
     }
   }

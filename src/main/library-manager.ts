@@ -69,7 +69,8 @@ import { getCanonicalSessionStore, getLoadedCanonicalSession } from './canonical
 import {
   builtinProviderForId,
   builtinProviderForSource,
-  isLegacySessionSource
+  isLegacySessionSource,
+  providerUsesCanonicalRuntime
 } from '../shared/provider-capabilities'
 import type { CanonicalRecord, SourceRef, Tombstone } from '../shared/provider-schema.generated'
 import {
@@ -81,6 +82,8 @@ import {
 } from './library-session-registry'
 import {
   buildLibraryStartupPlan,
+  completeLibraryStartupCheckpoint,
+  describeLibraryStartupSession,
   parseLibraryStartupCheckpoint,
   summarizeLibraryStartupRecovery,
   updateLibraryStartupCheckpointAfterBatch,
@@ -4945,6 +4948,8 @@ function updateSymlinksRecursive(searchDir: string, oldTarget: string, newTarget
 
 export interface LibrarySyncSkippedSession {
   sessionId: string
+  /** Exact startup descriptor key; required when a batch repeats sessionId across logical sources. */
+  workKey?: string
   code: string
   disposition: 'handled' | 'failed'
   retryable: boolean
@@ -5240,7 +5245,18 @@ function libraryStartupProjectionIsCurrent(
   session: SessionSummary,
   customTitle?: string
 ): boolean {
-  const key = logicalSessionKey(startupIdentityForSession(session))
+  const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
+  const storedCanonical = canonicalDefinition?.ingestion === 'provider-host'
+    ? getCanonicalSessionStore().getSession(session.id)
+    : null
+  const identity = storedCanonical && canonicalDefinition
+    ? buildCanonicalLogicalSessionIdentity(
+        canonicalDefinition.manifest.providerId,
+        storedCanonical.sessionRecord.sourceRef.stableId,
+        storedCanonical.sessionRecord.sourceSessionId
+      )
+    : startupIdentityForSession(session)
+  const key = logicalSessionKey(identity)
   const binding = sessionRegistry.get(key)
   // Identity conflicts are intentionally read-only. Their presence is already
   // surfaced by Library health and must not become an infinite startup retry.
@@ -5251,10 +5267,16 @@ function libraryStartupProjectionIsCurrent(
     meta.turnCount !== session.turnCount) return false
   if (customTitle !== undefined && meta.customTitle !== customTitle) return false
 
-  const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
   if (canonicalDefinition?.ingestion === 'provider-host') {
     const descriptor = meta.canonicalProvider
-    return Boolean(descriptor &&
+    return Boolean(storedCanonical && descriptor &&
+      descriptor.providerId === canonicalDefinition.manifest.providerId &&
+      descriptor.sourceRefStableId === storedCanonical.sessionRecord.sourceRef.stableId &&
+      descriptor.sessionRecordId === storedCanonical.sessionRecord.id &&
+      JSON.stringify(descriptor.fingerprint) ===
+        JSON.stringify(storedCanonical.sessionRecord.sourceRef.fingerprint) &&
+      descriptor.parserDataVersion === storedCanonical.sessionRecord.provenance.parserDataVersion &&
+      descriptor.formatVersion === storedCanonical.sessionRecord.provenance.formatVersion &&
       fs.existsSync(path.join(binding.candidate.dirPath, descriptor.recordsFile)) &&
       fs.existsSync(path.join(binding.candidate.dirPath, descriptor.provenanceFile)) &&
       fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE)))
@@ -5304,6 +5326,25 @@ function includeMissingLibraryProjections(
   if (plan.invalidation === 'none') plan.invalidation = 'projection-changed'
 }
 
+function completeCurrentProviderProjections(
+  plan: ReturnType<typeof buildLibraryStartupPlan>,
+  sessions: readonly SessionSummary[],
+  sessionMeta: Record<string, { customTitle?: string }>
+): void {
+  const completedIndexes = plan.dirtyIndexes
+    .filter((index) => providerUsesCanonicalRuntime(sessions[index].source || '') &&
+      libraryStartupProjectionIsCurrent(sessions[index], sessionMeta[sessions[index].sessionId]?.customTitle))
+  if (completedIndexes.length === 0) return
+  const completedKeys = new Set(completedIndexes.map((index) => plan.descriptors[index].key))
+  plan.checkpoint = completeLibraryStartupCheckpoint(
+    plan.checkpoint,
+    completedIndexes.map((index) => sessions[index]),
+    sessionMeta
+  )
+  plan.dirtyIndexes = plan.dirtyIndexes.filter((index) => !completedKeys.has(plan.descriptors[index].key))
+  plan.recoveryItems = plan.recoveryItems.filter(({ index }) => !completedKeys.has(plan.descriptors[index].key))
+}
+
 /**
  * Proves the writer, recovers interrupted creates, and performs the sole full
  * registry scan for this startup generation. Every later batch uses the
@@ -5334,6 +5375,10 @@ export async function planLibraryStartupSync(
       startupInputLogicalKeysBySessionId.set(session.sessionId, keys)
     }
     const plan = buildLibraryStartupPlan(sessions, schemaGeneration, readLibraryStartupCheckpoint(), sessionMeta)
+    // Provider catch-up and startup share one workKey owner. If the direct
+    // archive path already made a waiting projection current, this writer
+    // transaction only completes its checkpoint; it never executes it twice.
+    completeCurrentProviderProjections(plan, sessions, sessionMeta)
     includeMissingLibraryProjections(plan, sessions, sessionMeta)
     startupPlanRuntime = {
       root: path.resolve(_root),
@@ -5363,7 +5408,8 @@ export async function syncLibraryStartupBatch(
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
   checkpointIdentity: { snapshotDigest: string; schemaGeneration: number },
   onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
-  shouldCancel?: () => boolean
+  shouldCancel?: () => boolean,
+  providerSettlement: 'complete' | 'degraded' | null = null
 ): Promise<LibraryStartupBatchResult> {
   const runtime = startupPlanRuntime
   if (!runtime || runtime.root !== path.resolve(_root) ||
@@ -5394,15 +5440,57 @@ export async function syncLibraryStartupBatch(
     }
     startupPreparedRegistryDepth++
     try {
+      const descriptors = sessions.map((session) => describeLibraryStartupSession(
+        session,
+        checkpoint.schemaGeneration,
+        sessionMeta[session.sessionId]?.customTitle
+      ))
+      const alreadyArchivedIndexes = sessions.flatMap((session, index) => {
+        return providerUsesCanonicalRuntime(session.source || '') &&
+          libraryStartupProjectionIsCurrent(session, sessionMeta[session.sessionId]?.customTitle)
+          ? [index]
+          : []
+      })
+      const alreadyArchived = new Set(alreadyArchivedIndexes)
+      const sessionsToExecute = sessions.filter((_session, index) => !alreadyArchived.has(index))
       const outcome = await syncLibraryFromSessionsUnderWriter(
-        sessions,
+        sessionsToExecute,
         sessionMeta,
         onProgress,
-        shouldCancel
+        shouldCancel,
+        checkpoint.schemaGeneration
       )
+      outcome.total = sessions.length
+      outcome.completed += alreadyArchivedIndexes.length
+      for (const index of alreadyArchivedIndexes) {
+        outcome.skipped.push({
+          sessionId: sessions[index].sessionId,
+          workKey: descriptors[index].key,
+          code: 'PROVIDER_SESSION_ALREADY_ARCHIVED',
+          disposition: 'handled',
+          retryable: false
+        })
+      }
+      if (providerSettlement) {
+        for (const skipped of outcome.skipped) {
+          if (skipped.code !== 'PROVIDER_SESSION_PENDING') continue
+          if (providerSettlement === 'degraded') {
+            skipped.code = 'PROVIDER_SESSION_DEGRADED'
+            skipped.retryable = true
+          } else {
+            // A complete Provider snapshot is authoritative. A stale summary
+            // with no canonical record has no future wake; preserve any
+            // existing Library package and terminally retire this work item.
+            skipped.code = 'PROVIDER_SESSION_UNAVAILABLE'
+            skipped.disposition = 'handled'
+            skipped.retryable = false
+            outcome.completed++
+          }
+        }
+      }
       const updated = updateLibraryStartupCheckpointAfterBatch(checkpoint, sessions, outcome, sessionMeta)
       for (const skipped of outcome.skipped) {
-        const recovery = updated.recoveryBySessionId[skipped.sessionId]
+        const recovery = skipped.workKey ? updated.recoveryByWorkKey[skipped.workKey] : undefined
         if (recovery) skipped.recovery = recovery
       }
       writeLibraryStartupCheckpoint(updated.checkpoint)
@@ -5449,7 +5537,8 @@ async function syncLibraryFromSessionsUnderWriter(
   sessions: SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
   onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
-  shouldCancel?: () => boolean
+  shouldCancel?: () => boolean,
+  startupSchemaGeneration?: number
 ): Promise<LibrarySyncOutcome> {
   const outcome: LibrarySyncOutcome = { total: sessions.length, completed: 0, skipped: [] }
   for (let index = 0; index < sessions.length; index++) {
@@ -5459,10 +5548,15 @@ async function syncLibraryFromSessionsUnderWriter(
       throw error
     }
     const session = sessions[index]
+    const workKey = startupSchemaGeneration === undefined ? undefined : describeLibraryStartupSession(
+      session,
+      startupSchemaGeneration,
+      sessionMeta[session.sessionId]?.customTitle
+    ).key
     try {
       const customTitle = sessionMeta[session.sessionId]?.customTitle
       const skipped = await synchronizeStartupSession(session, customTitle)
-      if (skipped) outcome.skipped.push(skipped)
+      if (skipped) outcome.skipped.push({ ...skipped, ...(workKey ? { workKey } : {}) })
       if (!skipped || skipped.disposition === 'handled') outcome.completed++
       if (shouldCancel?.()) {
         const error = new Error('Library synchronization cancelled')
@@ -5472,7 +5566,10 @@ async function syncLibraryFromSessionsUnderWriter(
       onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
     } catch (error) {
       if (mustAbortLibraryStartupBatch(error)) throw error
-      const skipped = classifyStartupSessionFailure(session.sessionId, error)
+      const skipped = {
+        ...classifyStartupSessionFailure(session.sessionId, error),
+        ...(workKey ? { workKey } : {})
+      }
       outcome.skipped.push(skipped)
       if (skipped.disposition === 'handled') outcome.completed++
       onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })

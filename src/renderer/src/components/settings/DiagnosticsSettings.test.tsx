@@ -136,6 +136,73 @@ describe('DiagnosticsSettings', () => {
     expect(screen.getByText(/有独有内容的包绝不会自动移动/)).not.toBeNull()
   })
 
+  it('Library inventory generation 改变时清掉旧结论并重新读取主进程分析', async () => {
+    const previousGeneration = health.dimensions.identityExceptions.analysisGeneration
+    const view = render(<DiagnosticsSettings />)
+    try {
+      await waitFor(() => expect((window as any).api.libraryAnalyzeDuplicateRecovery).toHaveBeenCalledTimes(1))
+      health.dimensions.identityExceptions.analysisGeneration = 'next-root:42'
+      view.rerender(<DiagnosticsSettings />)
+      await waitFor(() => expect((window as any).api.libraryAnalyzeDuplicateRecovery).toHaveBeenCalledTimes(2))
+    } finally {
+      health.dimensions.identityExceptions.analysisGeneration = previousGeneration
+    }
+  })
+
+  it('只允许最新 generation 的异步分析更新界面', async () => {
+    let rejectOld!: (error: Error) => void
+    let resolveNew!: (value: any) => void
+    const oldPromise = new Promise((_resolve, reject) => { rejectOld = reject })
+    const newPromise = new Promise((resolve) => { resolveNew = resolve })
+    const analyze = (window as any).api.libraryAnalyzeDuplicateRecovery
+    analyze.mockReset().mockReturnValueOnce(oldPromise).mockReturnValueOnce(newPromise)
+    const previousGeneration = health.dimensions.identityExceptions.analysisGeneration
+    const view = render(<DiagnosticsSettings />)
+    try {
+      await waitFor(() => expect(analyze).toHaveBeenCalledTimes(1))
+      health.dimensions.identityExceptions.analysisGeneration = 'new-generation:43'
+      view.rerender(<DiagnosticsSettings />)
+      await waitFor(() => expect(analyze).toHaveBeenCalledTimes(2))
+      resolveNew({
+        schemaVersion: 1,
+        planId: 'plan:0123456789abcdef01234567',
+        packageCount: 20,
+        conflictCount: 1,
+        autoRepairableGroupCount: 1,
+        autoRepairablePackageCount: 2,
+        manualMergeGroupCount: 0,
+        preservedGroupCount: 0
+      })
+      expect(await screen.findByRole('button', { name: '隔离 2 个等价副本' })).not.toBeNull()
+      rejectOld(new Error('superseded'))
+      await waitFor(() => expect(screen.queryByText('分析未完成，Library 没有被修改')).toBeNull())
+      expect(screen.queryByRole('button', { name: '隔离 9 个等价副本' })).toBeNull()
+    } finally {
+      health.dimensions.identityExceptions.analysisGeneration = previousGeneration
+    }
+  })
+
+  it('一次确认在重渲染前连续点击也只提交一次应用', async () => {
+    let finishApply!: (value: { appliedPackageCount: number; restartRequired: boolean }) => void
+    const applyPromise = new Promise<{ appliedPackageCount: number; restartRequired: boolean }>((resolve) => {
+      finishApply = resolve
+    })
+    ;(window as any).api.libraryApplyDuplicateRecovery.mockReturnValue(applyPromise)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      render(<DiagnosticsSettings />)
+      const button = await screen.findByRole('button', { name: '隔离 2 个等价副本' })
+      fireEvent.click(button)
+      fireEvent.click(button)
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect((window as any).api.libraryApplyDuplicateRecovery).toHaveBeenCalledTimes(1)
+      finishApply({ appliedPackageCount: 2, restartRequired: false })
+      await waitFor(() => expect(showToast).toHaveBeenCalledTimes(1))
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
   it('临时失败由系统自动排期，普通模式不提供无意义的手动重跑', () => {
     const previous = health.dimensions.backgroundBacklog
     health.dimensions.backgroundBacklog = {

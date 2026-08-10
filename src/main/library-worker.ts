@@ -84,6 +84,7 @@ export type LibraryWorkerRequest = (
       sessionMeta: Record<string, { customTitle?: string; notes?: string }>
       snapshotDigest: string
       schemaGeneration: number
+      providerSettlement: 'complete' | 'degraded' | null
     }
   | {
       type: 'sync-chunk'
@@ -262,7 +263,8 @@ export async function runLibraryWorkerRequest(
         request.sessionMeta,
         { snapshotDigest: request.snapshotDigest, schemaGeneration: request.schemaGeneration },
         onProgress,
-        shouldCancel
+        shouldCancel,
+        request.providerSettlement
       )
     }
   }
@@ -423,7 +425,8 @@ export class LibraryWorkerClient {
     root: string,
     sessions: SessionSummary[],
     sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
-    checkpointIdentity: { snapshotDigest: string; schemaGeneration: number }
+    checkpointIdentity: { snapshotDigest: string; schemaGeneration: number },
+    providerSettlement: 'complete' | 'degraded' | null
   ): Promise<LibraryStartupBatchResult> {
     return this.observe(this.request({
       type: 'startup-batch',
@@ -431,7 +434,8 @@ export class LibraryWorkerClient {
       sessions,
       sessionMeta,
       snapshotDigest: checkpointIdentity.snapshotDigest,
-      schemaGeneration: checkpointIdentity.schemaGeneration
+      schemaGeneration: checkpointIdentity.schemaGeneration,
+      providerSettlement
     }).then((result) => {
       if (result.kind !== 'startup-batch') throw new Error('Library worker returned an invalid startup batch')
       return result.value

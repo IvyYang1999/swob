@@ -315,7 +315,8 @@ function stableRecoveryDelayMs(key: string, attempt: number): number {
 
 function recoveryStateForCode(code: string): 'transient' | 'provider' | 'attention' {
   if (code === 'PROVIDER_SESSION_PENDING') return 'provider'
-  if (code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED') return 'transient'
+  if (code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED' ||
+    code === 'PROVIDER_SESSION_DEGRADED') return 'transient'
   return 'attention'
 }
 
@@ -325,25 +326,68 @@ export function updateLibraryStartupCheckpointAfterBatch(
   outcome: LibrarySyncOutcome,
   sessionMeta: Record<string, { customTitle?: string }> = {},
   nowMs = Date.now()
-): { checkpoint: LibraryStartupCheckpoint; recoveryBySessionId: Record<string, LibraryStartupRecoveryEntry> } {
-  const failedBySessionId = new Map(outcome.skipped
-    .filter((entry) => entry.disposition === 'failed')
-    .map((entry) => [entry.sessionId, entry.code]))
-  const terminalSessions = sessions.filter((session) => !failedBySessionId.has(session.sessionId))
+): { checkpoint: LibraryStartupCheckpoint; recoveryByWorkKey: Record<string, LibraryStartupRecoveryEntry> } {
+  const descriptors = sessions.map((session) => describeLibraryStartupSession(
+    session,
+    checkpoint.schemaGeneration,
+    sessionMeta[session.sessionId]?.customTitle
+  ))
+  const sessionIdCounts = new Map<string, number>()
+  const descriptorIndexByKey = new Map<string, number>()
+  for (let index = 0; index < descriptors.length; index++) {
+    if (descriptorIndexByKey.has(descriptors[index].key)) {
+      throw new Error('Library startup batch contains a duplicate workKey')
+    }
+    descriptorIndexByKey.set(descriptors[index].key, index)
+  }
+  for (const session of sessions) {
+    sessionIdCounts.set(session.sessionId, (sessionIdCounts.get(session.sessionId) || 0) + 1)
+  }
+  const failedCount = outcome.skipped.filter((entry) => entry.disposition === 'failed').length
+  if (outcome.total !== sessions.length || outcome.completed + failedCount !== sessions.length) {
+    throw new Error('Library startup outcome does not account for the complete batch')
+  }
+  const resolvedSkippedWorkKeys = new Map<LibrarySyncOutcome['skipped'][number], string>()
+  const seenSkippedWorkKeys = new Set<string>()
+  for (const skipped of outcome.skipped) {
+    let workKey = skipped.workKey
+    if (workKey) {
+      const descriptorIndex = descriptorIndexByKey.get(workKey)
+      if (descriptorIndex === undefined || sessions[descriptorIndex].sessionId !== skipped.sessionId) {
+        throw new Error('Library startup outcome workKey does not match its session')
+      }
+    } else {
+      if (sessionIdCounts.get(skipped.sessionId) !== 1) {
+        throw new Error('Library startup outcome omitted workKey for an ambiguous sessionId')
+      }
+      const index = sessions.findIndex((session) => session.sessionId === skipped.sessionId)
+      if (index < 0) throw new Error('Library startup outcome references an unknown session')
+      workKey = descriptors[index].key
+    }
+    if (seenSkippedWorkKeys.has(workKey)) {
+      throw new Error('Library startup outcome repeats a workKey')
+    }
+    seenSkippedWorkKeys.add(workKey)
+    resolvedSkippedWorkKeys.set(skipped, workKey)
+  }
+  const failedByWorkKey = new Map<string, string>()
+  for (const skipped of outcome.skipped.filter((entry) => entry.disposition === 'failed')) {
+    const workKey = resolvedSkippedWorkKeys.get(skipped)
+    if (!workKey) throw new Error('Library startup outcome could not resolve a failed workKey')
+    failedByWorkKey.set(workKey, skipped.code)
+  }
+  const terminalSessions = sessions.filter((_session, index) => !failedByWorkKey.has(descriptors[index].key))
   let next = completeLibraryStartupCheckpoint(checkpoint, terminalSessions, sessionMeta)
   const completed = new Set(next.completedKeys)
   const completedFingerprints = { ...next.completedFingerprints }
   const recovery = { ...next.recovery }
-  const recoveryBySessionId: Record<string, LibraryStartupRecoveryEntry> = {}
+  const recoveryByWorkKey: Record<string, LibraryStartupRecoveryEntry> = {}
   const now = new Date(nowMs).toISOString()
-  for (const session of sessions) {
-    const code = failedBySessionId.get(session.sessionId)
+  for (let index = 0; index < sessions.length; index++) {
+    const session = sessions[index]
+    const descriptor = descriptors[index]
+    const code = failedByWorkKey.get(descriptor.key)
     if (!code) continue
-    const descriptor = describeLibraryStartupSession(
-      session,
-      checkpoint.schemaGeneration,
-      sessionMeta[session.sessionId]?.customTitle
-    )
     const previous = recovery[descriptor.key]?.fingerprint === descriptor.fingerprint
       ? recovery[descriptor.key]
       : null
@@ -368,7 +412,7 @@ export function updateLibraryStartupCheckpointAfterBatch(
         : null
     }
     recovery[descriptor.key] = entry
-    recoveryBySessionId[session.sessionId] = entry
+    recoveryByWorkKey[descriptor.key] = entry
     completed.delete(descriptor.key)
     delete completedFingerprints[descriptor.key]
   }
@@ -378,7 +422,7 @@ export function updateLibraryStartupCheckpointAfterBatch(
     completedFingerprints,
     recovery
   }
-  return { checkpoint: next, recoveryBySessionId }
+  return { checkpoint: next, recoveryByWorkKey }
 }
 
 export function summarizeLibraryStartupRecovery(

@@ -40,17 +40,32 @@ describe('live Library synchronization architecture', () => {
   })
 
   it('keeps targeted startup recovery separate from writer compensation and full initialization', () => {
+    const compensationCancelHandler = source.match(
+      /ipcMain\.handle\('library:compensationCancel',[\s\S]*?\n}\)/
+    )?.[0] || ''
     const compensationHandler = source.match(
       /ipcMain\.handle\('library:compensationRetry',[\s\S]*?\n}\)/
     )?.[0] || ''
     expect(compensationHandler).toContain('retryLibraryAfterWriterBlocked(true)')
     expect(compensationHandler).not.toContain('initLibraryFromSessions')
+    expect(compensationCancelHandler).toContain('cancelCompensation()')
+    expect(compensationCancelHandler).not.toContain('libraryStartup')
     expect(source).toMatch(
-      /async function runLibraryBacklogRecovery[\s\S]*?syncStartupSessions\(worker, cachedSessions, oldConfig\.sessionMeta, mode\)/
+      /async function runLibraryBacklogRecovery[\s\S]*?libraryBacklogRecoveryQueue\.request\(mode\)[\s\S]*?while \([\s\S]*?libraryBacklogRecoveryQueue\.takeNext\(\)[\s\S]*?syncStartupSessions\(worker, cachedSessions, oldConfig\.sessionMeta, nextMode\)/
     )
     expect(source).toMatch(
       /mode === 'provider'[\s\S]*?waiting-provider[\s\S]*?retry-scheduled[\s\S]*?nextAttemptAt/
     )
+  })
+
+  it('publishes new loader facts before waking attention recovery', () => {
+    const synchronization = source.match(
+      /async function performSessionSynchronization[\s\S]*?\n}\n\nfunction scheduleSessionSynchronization/
+    )?.[0] || ''
+    const cacheCommit = synchronization.indexOf('cachedSessions[existingIndex] = summary')
+    const recoveryWake = synchronization.lastIndexOf("runLibraryBacklogRecovery('automatic')")
+    expect(cacheCommit).toBeGreaterThan(-1)
+    expect(recoveryWake).toBeGreaterThan(cacheCommit)
   })
 
   it('keeps search projection behind one non-blocking writer boundary', () => {
@@ -101,17 +116,17 @@ describe('live Library synchronization architecture', () => {
   it('closes the shared writer coordinator before a mutation-incomplete fatal dialog', () => {
     const cleanup = source.match(/function cleanupRuntimeResources[\s\S]*?\n}\n/)?.[0] || ''
     expect(cleanup).not.toContain('closeLibraryWriterRuntime()')
-    const applyHandler = source.match(
-      /ipcMain\.handle\('library:applyDuplicateRecovery',[\s\S]*?\n}\)\n\nipcMain\.handle\('library:selectDirectory'/
+    const applyWork = source.match(
+      /async function applyPreparedDuplicateRecovery[\s\S]*?\n}\n\nipcMain\.handle\('library:applyDuplicateRecovery'/
     )?.[0] || ''
-    expect(applyHandler).toContain('error instanceof DuplicateRecoveryMutationIncompleteError')
-    expect(applyHandler.indexOf('closeLibraryWriterRuntime()')).toBeGreaterThan(-1)
-    expect(applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(
-      applyHandler.indexOf('closeLibraryWriterRuntime()')
+    expect(applyWork).toContain('error instanceof DuplicateRecoveryMutationIncompleteError')
+    expect(applyWork.indexOf('closeLibraryWriterRuntime()')).toBeGreaterThan(-1)
+    expect(applyWork.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(
+      applyWork.indexOf('closeLibraryWriterRuntime()')
     )
-    expect(applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(-1)
-    expect(applyHandler.indexOf('dialog.showErrorBox(')).toBeGreaterThan(
-      applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')
+    expect(applyWork.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(-1)
+    expect(applyWork.indexOf('dialog.showErrorBox(')).toBeGreaterThan(
+      applyWork.indexOf('const shutdown = cleanupRuntimeResources()')
     )
   })
 
@@ -120,11 +135,44 @@ describe('live Library synchronization architecture', () => {
       /function runDuplicateRecoveryAnalysis[\s\S]*?\n}\n\nipcMain\.handle\('library:getHealth'/
     )?.[0] || ''
     expect(analysis).toContain('cachedDuplicateRecoveryAnalysis.writeGeneration === writeGeneration')
-    expect(analysis).toContain('if (activeDuplicateRecoveryAnalysis) return activeDuplicateRecoveryAnalysis.promise')
+    expect(analysis).toContain('activeDuplicateRecoveryAnalysis.writeGeneration === writeGeneration')
+    expect(analysis).toContain("stale.reject(new Error('duplicate-recovery-analysis-superseded'))")
+    expect(source).toMatch(
+      /function adoptLibraryTree[\s\S]*?requestAutomaticDuplicateRecoveryAnalysis\(tree\)/
+    )
+    expect(source).toMatch(
+      /function adoptLibraryTree[\s\S]*?activeDuplicateRecoveryAnalysis\.writeGeneration[\s\S]*?cancelActiveDuplicateRecoveryAnalysis\('duplicate-recovery-inventory-changed-during-analysis'\)/
+    )
+    expect(source).toContain("cancelActiveDuplicateRecoveryAnalysis('duplicate-recovery-no-longer-actionable')")
+    expect(source).toMatch(
+      /function scheduleAutomaticDuplicateRecoveryAnalysis[\s\S]*?libraryRuntimePaused \|\| !libraryInitialized[\s\S]*?drainAutomaticDuplicateRecoveryAnalysis/
+    )
+    expect(source).toMatch(
+      /async function activateLibraryAt[\s\S]*?libraryRuntimePaused = false[\s\S]*?scheduleAutomaticDuplicateRecoveryAnalysis\(\)/
+    )
+    expect(source).toMatch(
+      /async function activateLibraryAt[\s\S]*?cancelActiveDuplicateRecoveryAnalysis[\s\S]*?await duplicateRecoveryAnalysisCancellation[\s\S]*?changeConfiguredLibraryPath/
+    )
     const applyHandler = source.match(
       /ipcMain\.handle\('library:applyDuplicateRecovery',[\s\S]*?\n}\)\n\nipcMain\.handle\('library:selectDirectory'/
     )?.[0] || ''
-    expect(applyHandler).toContain('prepared.writeGeneration !== (latestLibraryTree?.writeGeneration ?? -1)')
-    expect(applyHandler).toContain('executeDuplicateRecoveryPlan(')
+    const applyWork = source.match(
+      /async function applyPreparedDuplicateRecovery[\s\S]*?\n}\n\nipcMain\.handle\('library:applyDuplicateRecovery'/
+    )?.[0] || ''
+    expect(applyWork).toContain('prepared.writeGeneration !== (latestLibraryTree?.writeGeneration ?? -1)')
+    expect(applyWork).toContain('executeDuplicateRecoveryPlan(')
+    expect(applyHandler).toContain('if (duplicateRecoveryApplyInFlight)')
+    expect(applyHandler).toContain('return duplicateRecoveryApplyInFlight.promise')
+  })
+
+  it('gives checkpoint recovery ownership before direct Provider archive', () => {
+    const queue = source.match(
+      /function queueProviderLibrarySnapshot[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(queue).not.toContain('scheduleProviderLibrarySynchronization()')
+    expect(source).toContain("runLibraryBacklogRecovery('provider').finally(scheduleProviderLibrarySynchronization)")
+    expect(source).toContain('pendingProviderLibrarySessions.delete(session.id)')
+    expect(manager).toContain('completeCurrentProviderProjections(plan, sessions, sessionMeta)')
+    expect(manager).toContain("code: 'PROVIDER_SESSION_ALREADY_ARCHIVED'")
   })
 })

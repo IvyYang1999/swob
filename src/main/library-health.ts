@@ -230,6 +230,7 @@ class LibraryHealthStateMachine extends EventEmitter {
       identityExceptions: {
         state: 'none',
         stateSinceAt: now,
+        analysisGeneration: 'unobserved',
         authorizedGroupCount: 0,
         authorizedPackageCount: 0,
         unknownGroupCount: 0,

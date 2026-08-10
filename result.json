@@ -1,61 +1,69 @@
 {
-  "workItemId": "t210-self-healing-diagnostics",
-  "baseSha": "266f16fe5f938c8011d5f9ee92e4bc499b2ba29b",
-  "headSha": "3190d4919c9c3bdf4e3e9114c468da17bbe1f88a",
+  "workItemId": "t207-startup-bootstrap-integrity",
+  "baseSha": "ba8d53d5673de20c6527b36e2a53b7048f2a3303",
+  "headSha": "6835c5aa446feb25dc8edcf6f1c5bb0d4fbdbe33",
   "changedFiles": [
-    "e2e/self-healing-diagnostics.spec.ts",
-    "e2e/t175-new-providers.spec.ts",
+    ".swob/workflows/v15-t207/graph.yaml",
+    "e2e/helpers.ts",
+    "e2e/t171-cost-ledger.spec.ts",
+    "e2e/t182-valuation-capability.spec.ts",
+    "e2e/t207-startup-bootstrap-integrity.spec.ts",
+    "src/main/__test-support__/protected-state-audit.ts",
     "src/main/index.ts",
-    "src/main/library-health.test.ts",
-    "src/main/library-health.ts",
-    "src/main/library-live-sync.architecture.test.ts",
-    "src/main/library-manager.ts",
-    "src/main/library-startup-sync.test.ts",
-    "src/main/library-startup-sync.ts",
-    "src/main/library-startup-throughput.test.ts",
-    "src/renderer/src/components/settings/DiagnosticsSettings.test.tsx",
-    "src/renderer/src/components/settings/DiagnosticsSettings.tsx",
-    "src/shared/i18n.ts",
-    "src/shared/library-health-contract.ts"
+    "src/main/session-bootstrap.test.ts",
+    "src/main/session-bootstrap.ts",
+    "src/main/session-loader.test.ts",
+    "src/main/session-loader.ts",
+    "src/preload/index.ts",
+    "src/renderer/src/AgentApp.tsx",
+    "src/renderer/src/App.tsx",
+    "src/renderer/src/store.test.ts",
+    "src/renderer/src/store.ts",
+    "src/renderer/src/types/electron.d.ts",
+    "src/shared/i18n.ts"
   ],
   "contractsProduced": [
-    "LibraryStartupRecoveryCheckpoint.v2",
-    "LibraryHealthBackgroundRecovery.v1",
-    "DuplicateRecoveryAnalysisGenerationCache.v1"
+    "SessionBootstrap.v1",
+    "SummaryCache.v28",
+    "RendererSessionSummary.v1"
   ],
   "tests": [
     {
-      "command": "npm test",
+      "command": "npm run workflow:validate -- .swob/workflows/v15-t207/graph.yaml",
       "status": "passed",
-      "numbers": "186 files passed, 5 skipped; 1578 tests passed, 19 skipped"
+      "numbers": "1 graph validated"
     },
     {
-      "command": "npx playwright test",
+      "command": "npm run check",
       "status": "passed",
-      "numbers": "58 passed, 1 Windows-native conditional skip"
+      "numbers": "all static and policy gates passed"
     },
     {
-      "command": "npm run build:mac:verify",
+      "command": "npx vitest run --maxWorkers=2",
       "status": "passed",
-      "numbers": "arm64 DMG and ZIP built; package policy passed with 10161 app.asar paths"
+      "numbers": "1542 passed, 19 skipped"
     },
     {
-      "command": "git diff --check",
+      "command": "npm run build",
       "status": "passed",
-      "numbers": "no whitespace errors"
+      "numbers": "main, preload, and renderer production bundles built"
+    },
+    {
+      "command": "npm run test:e2e",
+      "status": "passed",
+      "numbers": "54 passed, 1 Windows-native conditional skip"
     }
   ],
   "visualEvidence": [
-    "Synthetic duplicate conflict reviewed in real Electron at 820x680: automatic read-only analysis, Debug Mode hidden, quarantine confirmation visible and not invoked, hover state inspected",
-    "Same diagnostics flow reviewed at 480x520 after vertical scroll: no horizontal overflow, independent vertical scrolling, quarantine button fully in viewport and not clipped"
+    "Synthetic 1500-session Electron run reviewed at wide and narrow widths: source-ready banner, 1500 first-paint count, 1501 additive completion, and no horizontal overflow",
+    "Existing cost/valuation Electron flows reviewed after explicit navigation fixes, including hover state and sidebar resize behavior"
   ],
-  "deviations": [
-    "Raised only the outer t175 composite E2E timeout from 30s to 60s because its unchanged per-assertion bounded waits can validly sum beyond 30s; all semantic assertion deadlines remain unchanged"
-  ],
+  "deviations": [],
   "knownRisks": [
-    "Real user Library was intentionally neither mutated nor launched with this candidate; the predicted reduction of the historical identity backlog must be measured after approved local installation",
-    "Packages with unique content remain read-only; a future guided file-diff merge and previewed source-rebuild flow is required because automatic selection would be destructive guessing",
-    "The installed Windows-native packaged E2E remains a Windows-machine gate and is conditionally skipped on macOS"
+    "Builder evidence only: an independent Verifier has not reviewed this diff",
+    "The real Library was intentionally neither launched nor modified; isolated real-corpus startup and memory replay remains required",
+    "Main-process summaries still retain audit usage events; v28 removes the monolithic JSON parse peak and startup IPC clone, but the real-corpus resident-memory ceiling is not yet independently measured",
+    "The Windows native packaged E2E is conditionally skipped on macOS and still requires its Windows gate"
   ],
   "provenance": {
     "harness": "codex",

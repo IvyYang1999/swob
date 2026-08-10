@@ -6,6 +6,7 @@ import {
   LIBRARY_STARTUP_BATCH_SIZE,
   buildLibraryStartupPlan,
   completeLibraryStartupCheckpoint,
+  describeLibraryStartupSession,
   parseLibraryStartupCheckpoint,
   summarizeLibraryStartupRecovery,
   syncLibraryStartupIncrementally,
@@ -406,6 +407,123 @@ describe('Library startup dirty-set checkpoint', () => {
     })
     expect(Object.values(checkpoint.recovery).map((entry) => [entry.state, entry.attempt]).sort())
       .toEqual([['attention-required', 0], ['waiting-provider', 0]])
+  })
+
+  it('attributes a failure to its exact logical work key when sessionIds collide', () => {
+    const codex = summary('shared', '/fixture/codex/shared.jsonl', '2026-08-02T09:00:00.000Z')
+    const provider: SessionSummary = {
+      ...summary('shared', '/fixture/claude/shared.jsonl', '2026-08-02T09:00:00.000Z'),
+      source: 'claude-code'
+    }
+    const sessions = [codex, provider]
+    const checkpoint = buildLibraryStartupPlan(sessions, 1, null).checkpoint
+    const codexKey = describeLibraryStartupSession(codex, 1).key
+    const providerKey = describeLibraryStartupSession(provider, 1).key
+
+    const updated = updateLibraryStartupCheckpointAfterBatch(checkpoint, sessions, {
+      total: 2,
+      completed: 1,
+      skipped: [{
+        sessionId: provider.sessionId,
+        workKey: providerKey,
+        code: 'PROVIDER_SESSION_PENDING',
+        disposition: 'failed',
+        retryable: false
+      }]
+    }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
+
+    expect(updated.completedKeys).toContain(codexKey)
+    expect(updated.completedKeys).not.toContain(providerKey)
+    expect(Object.keys(updated.recovery)).toEqual([providerKey])
+    expect(updated.recovery[providerKey].state).toBe('waiting-provider')
+  })
+
+  it('bounds degraded Provider retries and terminally preserves complete-snapshot absences', () => {
+    const provider: SessionSummary = {
+      ...summary('provider', '/fixture/provider.jsonl', '2026-08-02T09:00:00.000Z'),
+      source: 'claude-code'
+    }
+    const workKey = describeLibraryStartupSession(provider, 1).key
+    const checkpoint = buildLibraryStartupPlan([provider], 1, null).checkpoint
+    const degraded = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider], {
+      total: 1,
+      completed: 0,
+      skipped: [{
+        sessionId: provider.sessionId,
+        workKey,
+        code: 'PROVIDER_SESSION_DEGRADED',
+        disposition: 'failed',
+        retryable: true
+      }]
+    }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
+    expect(degraded.recovery[workKey]).toMatchObject({ state: 'retry-scheduled', attempt: 1 })
+
+    const complete = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider], {
+      total: 1,
+      completed: 1,
+      skipped: [{
+        sessionId: provider.sessionId,
+        workKey,
+        code: 'PROVIDER_SESSION_UNAVAILABLE',
+        disposition: 'handled',
+        retryable: false
+      }]
+    }).checkpoint
+    expect(complete.recovery).toEqual({})
+    expect(complete.completedKeys).toContain(workKey)
+  })
+
+  it('fails closed when an ambiguous legacy outcome omits its work key', () => {
+    const first = summary('shared', '/fixture/one/shared.jsonl', '2026-08-02T09:00:00.000Z')
+    const second: SessionSummary = {
+      ...summary('shared', '/fixture/two/shared.jsonl', '2026-08-02T09:00:00.000Z'),
+      source: 'claude-code'
+    }
+    const checkpoint = buildLibraryStartupPlan([first, second], 1, null).checkpoint
+    expect(() => updateLibraryStartupCheckpointAfterBatch(checkpoint, [first, second], {
+      total: 2,
+      completed: 1,
+      skipped: [{
+        sessionId: 'shared',
+        code: 'SESSION_SYNC_FAILED',
+        disposition: 'failed',
+        retryable: true
+      }]
+    })).toThrow('omitted workKey')
+  })
+
+  it('fails closed when an outcome supplies an unknown or mismatched work key', () => {
+    const session = summary('known', '/fixture/known.jsonl', '2026-08-02T09:00:00.000Z')
+    const checkpoint = buildLibraryStartupPlan([session], 1, null).checkpoint
+    const failure = {
+      total: 1,
+      completed: 0,
+      skipped: [{
+        sessionId: session.sessionId,
+        workKey: 'bogus',
+        code: 'SESSION_SYNC_FAILED',
+        disposition: 'failed' as const,
+        retryable: true
+      }]
+    }
+    expect(() => updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], failure))
+      .toThrow('workKey does not match')
+
+    const realKey = describeLibraryStartupSession(session, 1).key
+    expect(() => updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], {
+      ...failure,
+      skipped: [{ ...failure.skipped[0], sessionId: 'different', workKey: realKey }]
+    })).toThrow('workKey does not match')
+  })
+
+  it('fails closed when outcome accounting cannot cover the batch', () => {
+    const session = summary('known', '/fixture/known.jsonl', '2026-08-02T09:00:00.000Z')
+    const checkpoint = buildLibraryStartupPlan([session], 1, null).checkpoint
+    expect(() => updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], {
+      total: 1,
+      completed: 0,
+      skipped: []
+    })).toThrow('does not account')
   })
 
   it('invalidates and replans when the source collection or schema generation changes', () => {

@@ -116,6 +116,21 @@ describe('DiagnosticsSettings', () => {
     expect(screen.getByTestId('diagnostics-raw').textContent).toContain('"sessionBootstrapState": "degraded"')
   })
 
+  it('安全停止或恢复耗尽时只说无法写入，不谎称仍在自动恢复', () => {
+    const previousState = health.state
+    const previousWriterRecovery = health.writerRecovery
+    health.state = 'read-only'
+    health.writerRecovery = { attempt: 0, nextRetryAt: null, lastReason: null }
+    try {
+      render(<DiagnosticsSettings />)
+      expect(screen.getByText('Library 暂时无法写入')).not.toBeNull()
+      expect(screen.queryByText('Library 暂时受保护，Swob 正在自动恢复')).toBeNull()
+    } finally {
+      health.state = previousState
+      health.writerRecovery = previousWriterRecovery
+    }
+  })
+
   it('显式 Debug Mode 才展示原始状态、错误码和历史桶', () => {
     mockStore.config.preferences.debugMode = true
     render(<DiagnosticsSettings />)
@@ -201,6 +216,7 @@ describe('DiagnosticsSettings', () => {
 
     expect(await screen.findByText(/当前复核已暂停/)).not.toBeNull()
     expect(screen.getByText('只读分析已暂停；Library 没有被修改。')).not.toBeNull()
+    expect(screen.getByText('12 组会话身份冲突的只读核验已暂停')).not.toBeNull()
     expect(screen.queryByText(/Swob 正在按当前 Library 重新核验/)).toBeNull()
     expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
     finishAnalysis(null)
@@ -224,6 +240,7 @@ describe('DiagnosticsSettings', () => {
     render(<DiagnosticsSettings />)
     expect(await screen.findByText(/当前复核未完成/)).not.toBeNull()
     expect(screen.getByText('分析未完成，Library 没有被修改')).not.toBeNull()
+    expect(screen.getByText('12 组会话身份冲突的只读核验未完成')).not.toBeNull()
     expect(screen.queryByText(/Swob 正在按当前 Library 重新核验/)).toBeNull()
     expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
   })
@@ -248,6 +265,7 @@ describe('DiagnosticsSettings', () => {
 
     await waitFor(() => expect((window as any).api.libraryCancelDuplicateRecoveryAnalysis).toHaveBeenCalledTimes(1))
     expect(screen.getByText('只读分析已暂停；Library 没有被修改。')).not.toBeNull()
+    expect(screen.getByText('12 组会话身份冲突的只读核验已暂停')).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '重新分析' }))
     await waitFor(() => expect(analyze).toHaveBeenCalledTimes(2))
 

@@ -208,6 +208,16 @@ describe('live Library synchronization architecture', () => {
     expect(manager).toContain("code: 'PROVIDER_SESSION_ALREADY_ARCHIVED'")
   })
 
+  it('gates whole-transaction retries across startup, safety stops, and global backoff', () => {
+    expect(source).toContain('return runLibraryStartupTransaction(')
+    expect(source).toContain("scheduleLibraryBacklogGlobalRecovery(\n        { kind: 'initial' }")
+    expect(source).toContain("if (wakeDisposition === 'drop') return")
+    expect(source).toContain("if (wakeDisposition === 'coalesce') return")
+    expect(source).toContain('enterLibraryBacklogSafetyStop()')
+    expect(source).toContain('handleInitialLibraryGlobalFailure(error)')
+    expect(source).toContain('getLibraryHealthRevision()')
+  })
+
   it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {
     expect(duplicateWorker).toContain('errorCode: duplicateRecoveryErrorCode(error)')
     expect(duplicateWorker).not.toContain('error instanceof Error ? error.message')

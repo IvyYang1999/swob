@@ -735,6 +735,7 @@ function redactPath(filePath: string): string {
 // ---------------------------------------------------------------------------
 
 const healthMachine = new LibraryHealthStateMachine()
+let healthRevision = 0
 // One writer at a time: parallel workers would only contend for the same lease
 // and can turn a healthy second item into a false timeout failure.
 const compensationQueue = new CompensationQueue(1)
@@ -753,6 +754,10 @@ export function getLibraryHealth(): LibraryHealthSnapshot {
   return healthMachine.snapshot()
 }
 
+export function getLibraryHealthRevision(): number {
+  return healthRevision
+}
+
 /**
  * Transition the Library to a new health state.
  *
@@ -765,8 +770,10 @@ export function transitionLibraryHealth(
   errorCode?: string,
   message?: string,
   reason?: LibraryWriterFailureReason
-): void {
+): number {
   healthMachine.transition(next, errorCode, message, reason)
+  healthRevision++
+  return healthRevision
 }
 
 export function updateLibraryWriterRecovery(status: LibraryWriterRecoveryStatus): void {
@@ -867,6 +874,7 @@ export function recordLibraryDiagnostic(
  */
 export function resetLibraryHealth(): void {
   healthMachine.reset()
+  healthRevision++
   compensationQueue.reset()
 }
 
@@ -1023,6 +1031,14 @@ export function classifyLibraryError(
       state: 'corrupt',
       errorCode: 'PATH_UNSAFE',
       message: 'Library path failed safety validation'
+    }
+  }
+  if (err.name === 'LibraryStartupCheckpointCorruptError' ||
+    err.code === 'LIBRARY_STARTUP_CHECKPOINT_CORRUPT') {
+    return {
+      state: 'corrupt',
+      errorCode: 'LIBRARY_STARTUP_CHECKPOINT_CORRUPT',
+      message: 'Library startup recovery checkpoint failed integrity validation'
     }
   }
 

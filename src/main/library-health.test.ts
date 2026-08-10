@@ -5,6 +5,7 @@ import * as os from 'node:os'
 import {
   getLibraryHealthState,
   getLibraryHealth,
+  getLibraryHealthRevision,
   transitionLibraryHealth,
   healthAfterSuccessfulLibraryWrite,
   resetLibraryHealth,
@@ -45,7 +46,9 @@ describe('LibraryHealthStateMachine', () => {
   })
 
   it('transitions to ready and records diagnostic', () => {
+    const beforeRevision = getLibraryHealthRevision()
     transitionLibraryHealth('ready', 'INIT_COMPLETE', 'Library ready')
+    expect(getLibraryHealthRevision()).toBe(beforeRevision + 1)
     expect(getLibraryHealthState()).toBe('ready')
     const snapshot = getLibraryHealth()
     expect(snapshot.state).toBe('ready')

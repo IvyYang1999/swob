@@ -529,10 +529,19 @@ function mustAbortStartup(error: unknown): boolean {
       .includes(String(typed.code || ''))
 }
 
-function isStartupLifecycleAbort(error: unknown): boolean {
+export function isStartupLifecycleAbort(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
   const typed = error as { name?: unknown }
   return error instanceof LibraryStartupSyncInterruptedError || typed.name === 'AbortError'
+}
+
+export async function runLibraryStartupTransaction<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (isStartupLifecycleAbort(error) || error instanceof LibraryStartupBatchTransportError) throw error
+    throw new LibraryStartupBatchTransportError(error)
+  }
 }
 
 /**

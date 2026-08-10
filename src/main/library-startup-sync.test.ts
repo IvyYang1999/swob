@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LIBRARY_STARTUP_BATCH_SIZE,
   LibraryStartupBatchTransportError,
+  runLibraryStartupTransaction,
   buildLibraryStartupPlan,
   completeLibraryStartupCheckpoint,
   describeLibraryStartupSession,
@@ -308,6 +309,17 @@ describe('incremental Library startup synchronization', () => {
     expect((failure as Error).cause).toBe(error)
     expect(syncBatch).toHaveBeenCalledTimes(1)
     expect(progress).not.toHaveBeenCalled()
+  })
+
+  it('wraps plan and barrier rejection at the whole startup transaction boundary', async () => {
+    const planFailure = new Error('worker-plan-invalid-reply')
+    const failure = await runLibraryStartupTransaction(async () => { throw planFailure })
+      .catch((caught: unknown) => caught)
+    expect(failure).toBeInstanceOf(LibraryStartupBatchTransportError)
+    expect((failure as Error).cause).toBe(planFailure)
+
+    const lifecycle = Object.assign(new Error('root changed'), { name: 'AbortError' })
+    await expect(runLibraryStartupTransaction(async () => { throw lifecycle })).rejects.toBe(lifecycle)
   })
 
   it('publishes a follow-up source write before startup finishes and never replays the old summary', async () => {

@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import {
   isUnsupportedDirectoryFsyncError,
   LibraryPathUnsafeError,
+  readSafeLibraryFileSync,
   writeSafeLibraryFileSync
 } from './library-path-safety'
 
@@ -53,5 +54,24 @@ describe('Library path safety', () => {
 
     expect(fs.existsSync(path.join(outside, 'transcript.md'))).toBe(false)
     expect(fs.existsSync(path.join(parked, 'transcript.md'))).toBe(false)
+  })
+
+  it('detects an ancestor swap after validation before reading any outside bytes', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-path-read-root-'))
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-path-read-outside-'))
+    cleanup.push(root, outside)
+    const parent = path.join(root, 'state')
+    const parked = path.join(root, 'state-parked')
+    const target = path.join(parent, 'checkpoint.json')
+    fs.mkdirSync(parent)
+    fs.writeFileSync(target, '{"inside":true}')
+    fs.writeFileSync(path.join(outside, 'checkpoint.json'), '{"private":"outside"}')
+
+    expect(() => readSafeLibraryFileSync(root, target, {
+      beforeOpen: () => {
+        fs.renameSync(parent, parked)
+        fs.symlinkSync(outside, parent, process.platform === 'win32' ? 'junction' : 'dir')
+      }
+    })).toThrow(LibraryPathUnsafeError)
   })
 })

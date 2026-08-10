@@ -4,6 +4,7 @@ import {
   libraryBacklogBatchFailurePolicy,
   libraryBacklogGlobalRetryDelay,
   libraryBacklogRecoveredHealthState,
+  libraryBacklogWakeDisposition,
   shouldSelectLibraryBacklogItem
 } from './library-backlog-recovery-queue'
 
@@ -15,13 +16,26 @@ describe('LibraryBacklogRecoveryQueue', () => {
       name: 'LibraryWriterBusyError',
       code: 'LIBRARY_WRITER_BUSY'
     }))).toBe('writer-recovery')
+    expect(libraryBacklogBatchFailurePolicy(Object.assign(new Error('link'), { code: 'LIBRARY_PATH_UNSAFE' })))
+      .toBe('safety-stop')
+    expect(libraryBacklogBatchFailurePolicy(Object.assign(new Error('loop'), { code: 'ELOOP' })))
+      .toBe('safety-stop')
+    expect(libraryBacklogBatchFailurePolicy(Object.assign(new Error('parent'), { code: 'ENOTDIR' })))
+      .toBe('safety-stop')
     expect(libraryBacklogBatchFailurePolicy(new Error('worker exited'))).toBe('global-retry')
   })
 
+  it('drops wakes behind a safety latch and only coalesces during global backoff', () => {
+    expect(libraryBacklogWakeDisposition(7, 7, false)).toBe('drop')
+    expect(libraryBacklogWakeDisposition(7, null, false, 7)).toBe('drop')
+    expect(libraryBacklogWakeDisposition(7, 6, true)).toBe('coalesce')
+    expect(libraryBacklogWakeDisposition(7, null, false)).toBe('run')
+  })
+
   it('restores health after an owned global retry succeeds without overwriting a newer fault', () => {
-    expect(libraryBacklogRecoveredHealthState('INIT_FAILED', 'INIT_FAILED', 0)).toBe('ready')
-    expect(libraryBacklogRecoveredHealthState('INIT_FAILED', 'INIT_FAILED', 2)).toBe('identity-conflict')
-    expect(libraryBacklogRecoveredHealthState('IO_ERROR', 'INIT_FAILED', 0)).toBeNull()
+    expect(libraryBacklogRecoveredHealthState(42, 42, 0)).toBe('ready')
+    expect(libraryBacklogRecoveredHealthState(42, 42, 2)).toBe('identity-conflict')
+    expect(libraryBacklogRecoveredHealthState(43, 42, 0)).toBeNull()
   })
 
   it('retains a Provider wake that arrives while automatic recovery is active', () => {

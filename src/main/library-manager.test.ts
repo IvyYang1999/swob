@@ -276,6 +276,61 @@ describe('Library scan generation', () => {
   })
 })
 
+describe('Library startup checkpoint integrity', () => {
+  function checkpointPath(): string {
+    const parent = path.join(tmpRoot, '.swob')
+    fs.mkdirSync(parent, { recursive: true })
+    return path.join(parent, 'library-startup-sync-checkpoint.json')
+  }
+
+  it.each([
+    ['truncated JSON', '{"version":2'],
+    ['wrong schema', JSON.stringify({ version: 99, snapshotDigest: 'bad' })]
+  ])('fails closed for an existing %s checkpoint without replacing it', async (_label, raw) => {
+    const filePath = checkpointPath()
+    fs.writeFileSync(filePath, raw)
+
+    await expect(lib.planLibraryStartupSync([], 1, {})).rejects.toMatchObject({
+      name: 'LibraryStartupCheckpointCorruptError',
+      code: 'LIBRARY_STARTUP_CHECKPOINT_CORRUPT'
+    })
+    expect(fs.readFileSync(filePath, 'utf8')).toBe(raw)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a checkpoint symlink without reading or replacing its target', async () => {
+    const filePath = checkpointPath()
+    const target = path.join(tmpRoot, 'outside-checkpoint.json')
+    const raw = '{"private":"do-not-read-or-replace"}'
+    fs.writeFileSync(target, raw)
+    fs.symlinkSync(target, filePath)
+
+    await expect(lib.planLibraryStartupSync([], 1, {})).rejects.toMatchObject({
+      name: 'LibraryPathUnsafeError',
+      code: 'LIBRARY_PATH_UNSAFE'
+    })
+    expect(fs.readFileSync(target, 'utf8')).toBe(raw)
+    expect(fs.lstatSync(filePath).isSymbolicLink()).toBe(true)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a symlinked checkpoint parent without touching the outside file', async () => {
+    const checkpointParent = path.join(tmpRoot, '.swob')
+    const outsideParent = path.join(tmpRoot, 'outside-checkpoint-parent')
+    const outsideCheckpoint = path.join(outsideParent, 'library-startup-sync-checkpoint.json')
+    const raw = '{"private":"outside-library"}'
+    fs.mkdirSync(outsideParent)
+    fs.writeFileSync(outsideCheckpoint, raw)
+    fs.rmSync(checkpointParent, { recursive: true })
+    fs.symlinkSync(outsideParent, checkpointParent)
+
+    await expect(lib.planLibraryStartupSync([], 1, {})).rejects.toMatchObject({
+      name: 'LibraryPathUnsafeError',
+      code: 'LIBRARY_PATH_UNSAFE'
+    })
+    expect(fs.readFileSync(outsideCheckpoint, 'utf8')).toBe(raw)
+    expect(fs.lstatSync(checkpointParent).isSymbolicLink()).toBe(true)
+  })
+})
+
 describe('Library metadata cache', () => {
   it('unchanged metadata is read once across repeated scans', () => {
     const sessionId = 'meta-cache-session'

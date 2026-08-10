@@ -107,6 +107,7 @@ import {
   ensureSafeLibraryDirectory,
   fsyncDirectorySync,
   LibraryPathUnsafeError,
+  readSafeLibraryFileSync,
   replaceSafeLibraryFileSync,
   writeSafeLibraryFileSync
 } from './library-path-safety'
@@ -5246,12 +5247,27 @@ function libraryStartupCheckpointPath(): string {
   return path.join(_root, LIBRARY_STARTUP_CHECKPOINT_FILE)
 }
 
-function readLibraryStartupCheckpoint(): LibraryStartupCheckpoint | null {
-  try {
-    return parseLibraryStartupCheckpoint(JSON.parse(fs.readFileSync(libraryStartupCheckpointPath(), 'utf-8')))
-  } catch {
-    return null
+export class LibraryStartupCheckpointCorruptError extends Error {
+  readonly code = 'LIBRARY_STARTUP_CHECKPOINT_CORRUPT'
+
+  constructor() {
+    super('Library startup recovery checkpoint failed integrity validation')
+    this.name = 'LibraryStartupCheckpointCorruptError'
   }
+}
+
+function readLibraryStartupCheckpoint(): LibraryStartupCheckpoint | null {
+  const checkpointPath = libraryStartupCheckpointPath()
+  const raw = readSafeLibraryFileSync(_root, checkpointPath, { maxBytes: 4 * 1024 * 1024 })
+  if (raw === null) return null
+  let parsed: LibraryStartupCheckpoint | null
+  try {
+    parsed = parseLibraryStartupCheckpoint(JSON.parse(raw.toString('utf-8')))
+  } catch {
+    throw new LibraryStartupCheckpointCorruptError()
+  }
+  if (!parsed) throw new LibraryStartupCheckpointCorruptError()
+  return parsed
 }
 
 function writeLibraryStartupCheckpoint(checkpoint: LibraryStartupCheckpoint): void {

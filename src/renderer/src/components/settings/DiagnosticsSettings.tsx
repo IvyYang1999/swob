@@ -41,6 +41,8 @@ export function DiagnosticsSettings() {
   const backgroundRecovery = backlog.recovery
   const actionableIdentityGroups = identity.unknownGroupCount + identity.evidenceMismatchGroupCount
   const writerProblem = health.state === 'writer-blocked' || health.state === 'read-only' || health.state === 'corrupt'
+  const writerRecoveryActive = health.state === 'writer-blocked' &&
+    (health.writerRecovery.nextRetryAt !== null || health.writerRecovery.attempt > 0)
   const automaticRecoveryActive = backgroundRecovery.state === 'running' ||
     backgroundRecovery.state === 'scheduled' || backgroundRecovery.state === 'waiting-provider'
   const backgroundNeedsAttention = backgroundRecovery.attentionRequired + backgroundRecovery.exhausted
@@ -180,11 +182,19 @@ export function DiagnosticsSettings() {
                 {health.state === 'initializing'
                   ? t('diagnostics.checking')
                   : writerProblem
-                    ? t('diagnostics.writer_recovering')
+                    ? t(writerRecoveryActive ? 'diagnostics.writer_recovering' : 'diagnostics.writer_unavailable')
                     : automaticRecoveryActive
                       ? t('diagnostics.automatic_recovery')
                       : actionableIdentityGroups > 0
-                        ? t(liveReport && liveReport.canApply !== false ? 'diagnostics.identity_reviewed' : 'diagnostics.identity_review', {
+                        ? t(liveReport && liveReport.canApply !== false
+                          ? 'diagnostics.identity_reviewed'
+                          : analysisCancelled
+                            ? 'diagnostics.identity_paused'
+                            : analysisFailed
+                              ? 'diagnostics.identity_failed'
+                              : analyzing
+                                ? 'diagnostics.identity_review'
+                                : 'diagnostics.identity_needs_review', {
                             n: actionableIdentityGroups
                           })
                         : backgroundNeedsAttention > 0

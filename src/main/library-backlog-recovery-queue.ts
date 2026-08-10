@@ -4,6 +4,17 @@ export type LibraryBacklogRecoverySelectionMode = 'initial' | LibraryBacklogReco
 const GLOBAL_RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000, 600_000] as const
 
 export type LibraryBacklogBatchFailurePolicy = 'global-retry' | 'writer-recovery' | 'safety-stop'
+export type LibraryBacklogWakeDisposition = 'run' | 'coalesce' | 'drop'
+
+export function libraryBacklogWakeDisposition(
+  runtimeEpoch: number,
+  safetyStopEpoch: number | null,
+  globalBackoffActive: boolean,
+  exhaustedEpoch: number | null = null
+): LibraryBacklogWakeDisposition {
+  if (safetyStopEpoch === runtimeEpoch || exhaustedEpoch === runtimeEpoch) return 'drop'
+  return globalBackoffActive ? 'coalesce' : 'run'
+}
 
 export function libraryBacklogBatchFailurePolicy(error: unknown): LibraryBacklogBatchFailurePolicy {
   if (!error || typeof error !== 'object') return 'global-retry'
@@ -16,16 +27,19 @@ export function libraryBacklogBatchFailurePolicy(error: unknown): LibraryBacklog
     return 'writer-recovery'
   }
   if (name === 'LibraryPathUnsafeError' ||
-    code === 'EACCES' || code === 'EPERM' || code === 'EIO') return 'safety-stop'
+    name === 'LibraryStartupCheckpointCorruptError' ||
+    code === 'LIBRARY_PATH_UNSAFE' || code === 'EACCES' || code === 'EPERM' ||
+    code === 'EIO' || code === 'ELOOP' || code === 'ENOTDIR' ||
+    code === 'LIBRARY_STARTUP_CHECKPOINT_CORRUPT') return 'safety-stop'
   return 'global-retry'
 }
 
 export function libraryBacklogRecoveredHealthState(
-  currentReasonCode: string | null | undefined,
-  ownedFailureReasonCode: string | null | undefined,
+  currentHealthRevision: number,
+  ownedFailureHealthRevision: number | null | undefined,
   identityConflictCount: number
 ): 'ready' | 'identity-conflict' | null {
-  if (!ownedFailureReasonCode || currentReasonCode !== ownedFailureReasonCode) return null
+  if (!ownedFailureHealthRevision || currentHealthRevision !== ownedFailureHealthRevision) return null
   return identityConflictCount > 0 ? 'identity-conflict' : 'ready'
 }
 

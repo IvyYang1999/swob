@@ -249,13 +249,20 @@ describe('live Library synchronization architecture', () => {
     const onboarding = source.match(
       /ipcMain\.handle\('onboarding:complete',[\s\S]*?\n}\)/
     )?.[0] || ''
+    expect(onboarding).toContain('const sourceSessions = sourceSessionInventory.snapshot()')
+    expect(onboarding).toContain('sessions: sourceSessions')
+    expect(onboarding).toContain('const activationSessions = filterSessionSources(sourceSessions, excluded)')
+    expect(onboarding).toContain('activateLibraryAt(targetPath, activationSessions)')
+    expect(source).toContain('libraryRootActivationSnapshotSequence')
+    expect(source).toContain('`${requestedRoot}\\0snapshot:${++libraryRootActivationSnapshotSequence}`')
     expect(onboarding.indexOf('setExcludedSources(excluded)')).toBeGreaterThan(-1)
-    expect(onboarding.indexOf('const root = await activateLibraryAt(targetPath)')).toBeGreaterThan(
+    expect(onboarding.indexOf('const root = await activateLibraryAt(targetPath, activationSessions)')).toBeGreaterThan(
       onboarding.indexOf('setExcludedSources(excluded)')
     )
     expect(onboarding.indexOf('completeOnboarding(targetPath, excluded)')).toBeGreaterThan(
-      onboarding.indexOf('const root = await activateLibraryAt(targetPath)')
+      onboarding.indexOf('const root = await activateLibraryAt(targetPath, activationSessions)')
     )
+    expect(source).toContain("if (onboardingCompletionRunning) throw new Error('onboarding-completion-already-running')")
   })
 
   it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {

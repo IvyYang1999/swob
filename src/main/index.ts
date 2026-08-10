@@ -36,6 +36,7 @@ import {
   beginSessionBootstrap,
   sessionSummaryForRenderer
 } from './session-bootstrap'
+import { filterSessionSources, SessionSourceInventory } from './session-source-inventory'
 import {
   findCodexSessionFiles,
   loadCodexRawMessages,
@@ -453,6 +454,7 @@ let duplicateRecoveryApplyInFlight: {
 } | null = null
 const libraryRootSwitchQueue = new KeyedSerialTaskQueue<string, string>()
 let libraryRootActivationRequestsPending = 0
+let libraryRootActivationSnapshotSequence = 0
 
 function clearLibraryWriterRecoverySchedule(): void {
   if (libraryWriterRecoveryTimer) clearTimeout(libraryWriterRecoveryTimer)
@@ -663,6 +665,7 @@ function startActiveSessionPoller(): void {
   activePoller = setInterval(() => { void pushActiveSessionIds() }, 1000)
 }
 let cachedSessions: SessionSummary[] = []
+const sourceSessionInventory = new SessionSourceInventory(isProviderSession)
 let currentLineageRegistry: SessionLineageRegistry | null = null
 let currentLineageRegistryRoot: string | null = null
 let lineageRegistryLoadPromise: Promise<SessionLineageRegistry | null> | null = null
@@ -1033,7 +1036,6 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     summary.libraryDirPath = dirPath
     summary.libraryMdPath = path.join(dirPath, 'transcript.md')
   }
-
   const continuationParent = cachedSessions.find((session) =>
     session.continuationSessionIds?.includes(summary!.sessionId)
   )
@@ -1048,6 +1050,8 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     }
     const parentIndex = cachedSessions.findIndex((session) => session.id === continuationParent.id)
     if (parentIndex >= 0) cachedSessions[parentIndex] = updatedParent
+    sourceSessionInventory.remove([summary.id])
+    sourceSessionInventory.merge([updatedParent])
     mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(updatedParent))
     const backlogRecovery = getLibraryHealth().dimensions.backgroundBacklog.recovery
     if (hasSourceRecoveryWork(backlogRecovery)) {
@@ -1057,6 +1061,7 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     return
   }
 
+  sourceSessionInventory.merge([summary])
   const existingIndex = cachedSessions.findIndex((session) => session.id === summary!.id)
   if (existingIndex >= 0) {
     cachedSessions[existingIndex] = summary
@@ -1219,7 +1224,10 @@ async function ensureUsageFactsReady(): Promise<void> {
 }
 
 async function reloadSessionsForAction(): Promise<SessionSummary[]> {
-  cachedSessions = await loadAllSessions()
+  const loaded = await loadAllSessions()
+  sourceSessionInventory.replacePhysical(loaded)
+  sourceSessionInventory.merge(loaded.filter(isProviderSession))
+  cachedSessions = sourceSessionInventory.filtered(getExcludedSources())
   for (const s of cachedSessions) {
     knownSessionIds.add(s.sessionId)
     knownSessionIds.add(s.id)
@@ -2846,10 +2854,7 @@ ipcMain.handle('image:contextMenu', (_event, options: { path: string }) => {
 })
 
 function filterExcludedSources(sessions: SessionSummary[]): SessionSummary[] {
-  const excluded = getExcludedSources()
-  if (excluded.length === 0) return sessions
-  const excludedSet = new Set(excluded)
-  return sessions.filter((s) => !excludedSet.has(s.source || 'claude-code'))
+  return filterSessionSources(sessions, getExcludedSources())
 }
 
 function prepareImmediateSession(summary: SessionSummary): void {
@@ -2880,8 +2885,10 @@ function settleProviderBootstrap(
   target: WebContents
 ): void {
   void completion.then(({ sessions: loaded, providerStatus }) => {
-    const completeSessions = filterExcludedSources(loaded)
-    const patch = completeSessions.filter(isProviderSession)
+    const providerSessions = loaded.filter(isProviderSession)
+    if (providerStatus === 'complete') sourceSessionInventory.replaceProviders(providerSessions)
+    else sourceSessionInventory.merge(providerSessions)
+    const patch = filterExcludedSources(providerSessions)
     for (const session of patch) prepareImmediateSession(session)
     if (providerStatus === 'complete') replaceCachedProviderSnapshot(patch)
     else mergeSessionPatch(patch)
@@ -2961,8 +2968,11 @@ ipcMain.handle('sessions:loadAll', async (event) => {
     () => loadAllSessions({ readOnly: true, migrateLegacyCache: true, quiet: true }),
     () => loadAllSessionsWithProviderStatus()
   )
+  sourceSessionInventory.replacePhysical(bootstrap.initial)
   const sessions = filterExcludedSources(bootstrap.initial)
-  const lastKnownProviderSessions = cachedSessions.filter(isProviderSession)
+  const lastKnownProviderSessions = filterExcludedSources(
+    sourceSessionInventory.snapshot().filter(isProviderSession)
+  )
   cachedSessions = [...sessions, ...lastKnownProviderSessions]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   librarySessionInventoryReady = true
@@ -4659,7 +4669,10 @@ ipcMain.handle('library:selectDirectory', async () => {
   return approved
 })
 
-async function performLibraryActivation(newPath: string): Promise<string> {
+async function performLibraryActivation(
+  newPath: string,
+  requestedSessions?: readonly SessionSummary[]
+): Promise<string> {
   const duplicateRecoveryAnalysisCancellation = cancelActiveDuplicateRecoveryAnalysis(
     'duplicate-recovery-library-changed-during-analysis'
   )
@@ -4738,9 +4751,10 @@ async function performLibraryActivation(newPath: string): Promise<string> {
     const worker = libraryWorker = new LibraryWorkerClient()
     let tree: LibraryTree
     let skippedConflictCount = 0
-    if (cachedSessions.length > 0) {
+    const activationSessions = requestedSessions ? [...requestedSessions] : cachedSessions
+    if (activationSessions.length > 0) {
       const oldConfig = loadConfig()
-      const syncResult = await syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta)
+      const syncResult = await syncStartupSessions(worker, activationSessions, oldConfig.sessionMeta)
       tree = await worker.scan(getLibraryRoot())
       skippedConflictCount = syncResult.skipped.length
     } else {
@@ -4796,7 +4810,9 @@ async function performLibraryActivation(newPath: string): Promise<string> {
         'library-switch'
       )
       if (policy === 'writer-recovery') {
-        enqueueExistingLibrarySessionsForCompensation(cachedSessions)
+        enqueueExistingLibrarySessionsForCompensation(
+          requestedSessions ? [...requestedSessions] : cachedSessions
+        )
       }
       if (policy !== 'safety-stop') {
         try { startLibraryWatcher() } catch (watchError) {
@@ -4821,12 +4837,18 @@ async function performLibraryActivation(newPath: string): Promise<string> {
   }
 }
 
-function activateLibraryAt(newPath: string): Promise<string> {
+function activateLibraryAt(
+  newPath: string,
+  requestedSessions?: readonly SessionSummary[]
+): Promise<string> {
   const requestedRoot = path.resolve(newPath)
+  const queueKey = requestedSessions
+    ? `${requestedRoot}\0snapshot:${++libraryRootActivationSnapshotSequence}`
+    : requestedRoot
   libraryRootActivationRequestsPending++
   const activation = libraryRootSwitchQueue.run(
-    requestedRoot,
-    () => performLibraryActivation(requestedRoot)
+    queueKey,
+    () => performLibraryActivation(requestedRoot, requestedSessions)
   )
   return activation.finally(() => {
     libraryRootActivationRequestsPending = Math.max(0, libraryRootActivationRequestsPending - 1)
@@ -4903,48 +4925,63 @@ ipcMain.handle('onboarding:estimateBackupSize', (_event, excludedSources: string
     ? excludedSources.filter((item) => typeof item === 'string')
     : []
   return onboardingBackupSizeEstimator.estimate({
-    sessions: cachedSessions,
+    sessions: sourceSessionInventory.snapshot(),
     excludedSources: excluded,
     targetPath: onboardingEstimateTargetPath || getDefaultLibraryRoot()
   })
 })
 
+let onboardingCompletionRunning = false
+
 ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, excludedSources: string[]) => {
-  const requested = typeof libraryPath === 'string' && libraryPath.trim() ? libraryPath : getDefaultLibraryRoot()
-  // The main-process default root is trusted by construction; any other path
-  // must have come through the directory picker (which registers approval).
-  let targetPath: string
-  if (path.resolve(requested) === path.resolve(getDefaultLibraryRoot())) {
-    fs.mkdirSync(requested, { recursive: true })
-    targetPath = approveLibraryRoot(requested)
-  } else {
-    targetPath = assertApprovedLibraryRoot(requested)
+  if (onboardingCompletionRunning) throw new Error('onboarding-completion-already-running')
+  onboardingCompletionRunning = true
+  try {
+    const requested = typeof libraryPath === 'string' && libraryPath.trim()
+      ? libraryPath
+      : getDefaultLibraryRoot()
+    // The main-process default root is trusted by construction; any other path
+    // must have come through the directory picker (which registers approval).
+    let targetPath: string
+    if (path.resolve(requested) === path.resolve(getDefaultLibraryRoot())) {
+      fs.mkdirSync(requested, { recursive: true })
+      targetPath = approveLibraryRoot(requested)
+    } else {
+      targetPath = assertApprovedLibraryRoot(requested)
+    }
+    const excluded = Array.isArray(excludedSources)
+      ? excludedSources.filter((item) => typeof item === 'string')
+      : []
+    const sourceSessions = sourceSessionInventory.snapshot()
+    // Active transcripts may have grown while the user was reading onboarding.
+    // Force the same estimator used by the preview to refresh at the commit boundary.
+    onboardingBackupSizeEstimator.estimate({
+      sessions: sourceSessions,
+      excludedSources: excluded,
+      targetPath,
+      forceRefresh: true
+    })
+    // Persist the non-destructive source choice first, but do not claim that
+    // onboarding or the root switch completed until activation has crossed its
+    // own durable boundary. A pre-change teardown failure must leave the old
+    // default root unauthorized for background writes.
+    setExcludedSources(excluded)
+    const activationSessions = filterSessionSources(sourceSessions, excluded)
+    cachedSessions = [...activationSessions]
+    const root = await activateLibraryAt(targetPath, activationSessions)
+    completeOnboarding(targetPath, excluded)
+    mainWindow?.webContents.send('sessions:updated', cachedSessions.map(sessionSummaryForRenderer))
+    return root
+  } finally {
+    onboardingCompletionRunning = false
   }
-  const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
-  // Active transcripts may have grown while the user was reading onboarding.
-  // Force the same estimator used by the preview to refresh at the commit boundary.
-  onboardingBackupSizeEstimator.estimate({
-    sessions: cachedSessions,
-    excludedSources: excluded,
-    targetPath,
-    forceRefresh: true
-  })
-  // Persist the non-destructive source choice first, but do not claim that
-  // onboarding or the root switch completed until activation has crossed its
-  // own durable boundary. A pre-change teardown failure must leave the old
-  // default root unauthorized for background writes.
-  setExcludedSources(excluded)
-  cachedSessions = filterExcludedSources(cachedSessions)
-  const root = await activateLibraryAt(targetPath)
-  completeOnboarding(targetPath, excluded)
-  mainWindow?.webContents.send('sessions:updated', cachedSessions.map(sessionSummaryForRenderer))
-  return root
 })
 
 ipcMain.handle('onboarding:setExcludedSources', (_event, excludedSources: string[]) => {
+  if (onboardingCompletionRunning) throw new Error('onboarding-completion-already-running')
   const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
   setExcludedSources(excluded)
-  cachedSessions = filterExcludedSources(cachedSessions)
+  cachedSessions = sourceSessionInventory.filtered(excluded)
   return excluded
 })
 

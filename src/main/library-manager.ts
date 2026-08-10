@@ -5328,13 +5328,13 @@ function includeMissingLibraryProjections(
   if (plan.invalidation === 'none') plan.invalidation = 'projection-changed'
 }
 
-function completeCurrentProviderProjections(
+function completeCurrentLibraryProjections(
   plan: ReturnType<typeof buildLibraryStartupPlan>,
   sessions: readonly SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string }>
 ): void {
   const completedIndexes = plan.dirtyIndexes
-    .filter((index) => providerUsesCanonicalRuntime(sessions[index].source || '') &&
+    .filter((index) =>
       libraryStartupProjectionIsCurrent(sessions[index], sessionMeta[sessions[index].sessionId]?.customTitle))
   if (completedIndexes.length === 0) return
   const completedKeys = new Set(completedIndexes.map((index) => plan.descriptors[index].key))
@@ -5377,10 +5377,10 @@ export async function planLibraryStartupSync(
       startupInputLogicalKeysBySessionId.set(session.sessionId, keys)
     }
     const plan = buildLibraryStartupPlan(sessions, schemaGeneration, readLibraryStartupCheckpoint(), sessionMeta)
-    // Provider catch-up and startup share one workKey owner. If the direct
-    // archive path already made a waiting projection current, this writer
-    // transaction only completes its checkpoint; it never executes it twice.
-    completeCurrentProviderProjections(plan, sessions, sessionMeta)
+    // Live sync and Provider catch-up can make a dirty projection current
+    // before this planner owns the writer. Complete those exact work keys from
+    // physical evidence so recovery converges without rewriting package data.
+    completeCurrentLibraryProjections(plan, sessions, sessionMeta)
     includeMissingLibraryProjections(plan, sessions, sessionMeta)
     startupPlanRuntime = {
       root: path.resolve(_root),

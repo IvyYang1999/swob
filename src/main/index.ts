@@ -1009,7 +1009,7 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     if (parentIndex >= 0) cachedSessions[parentIndex] = updatedParent
     mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(updatedParent))
     const backlogRecovery = getLibraryHealth().dimensions.backgroundBacklog.recovery
-    if (backlogRecovery.attentionRequired + backlogRecovery.exhausted > 0) {
+    if (hasSourceRecoveryWork(backlogRecovery)) {
       void runLibraryBacklogRecovery('automatic')
     }
     void scheduleUsageFactSync()
@@ -1032,7 +1032,7 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
   // new summary first so a source-evidence wake cannot re-plan stale facts and
   // then go dormant until an unrelated event arrives.
   const backlogRecovery = getLibraryHealth().dimensions.backgroundBacklog.recovery
-  if (backlogRecovery.attentionRequired + backlogRecovery.exhausted > 0) {
+  if (hasSourceRecoveryWork(backlogRecovery)) {
     void runLibraryBacklogRecovery('automatic')
   }
   void scheduleUsageFactSync()
@@ -2064,6 +2064,12 @@ function backgroundRecoveryState(
               : 'idle',
     ...summary
   }
+}
+
+function hasSourceRecoveryWork(
+  recovery: LibraryHealthSnapshot['dimensions']['backgroundBacklog']['recovery']
+): boolean {
+  return recovery.retryScheduled + recovery.attentionRequired + recovery.exhausted > 0
 }
 
 function clearLibraryBacklogRecoverySchedule(): void {

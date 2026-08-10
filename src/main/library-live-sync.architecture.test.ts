@@ -58,7 +58,7 @@ describe('live Library synchronization architecture', () => {
     )
   })
 
-  it('publishes new loader facts before waking attention recovery', () => {
+  it('publishes new loader facts before waking every source-backed recovery state', () => {
     const synchronization = source.match(
       /async function performSessionSynchronization[\s\S]*?\n}\n\nfunction scheduleSessionSynchronization/
     )?.[0] || ''
@@ -66,6 +66,11 @@ describe('live Library synchronization architecture', () => {
     const recoveryWake = synchronization.lastIndexOf("runLibraryBacklogRecovery('automatic')")
     expect(cacheCommit).toBeGreaterThan(-1)
     expect(recoveryWake).toBeGreaterThan(cacheCommit)
+    expect(synchronization).toContain('hasSourceRecoveryWork(backlogRecovery)')
+    const sourceRecoveryPredicate = source.match(/function hasSourceRecoveryWork[\s\S]*?\n}\n/)?.[0] || ''
+    expect(sourceRecoveryPredicate).toContain('recovery.retryScheduled')
+    expect(sourceRecoveryPredicate).toContain('recovery.attentionRequired')
+    expect(sourceRecoveryPredicate).toContain('recovery.exhausted')
   })
 
   it('keeps search projection behind one non-blocking writer boundary', () => {
@@ -189,7 +194,7 @@ describe('live Library synchronization architecture', () => {
     expect(queue).not.toContain('scheduleProviderLibrarySynchronization()')
     expect(source).toContain("runLibraryBacklogRecovery('provider').finally(scheduleProviderLibrarySynchronization)")
     expect(source).toContain('pendingProviderLibrarySessions.delete(session.id)')
-    expect(manager).toContain('completeCurrentProviderProjections(plan, sessions, sessionMeta)')
+    expect(manager).toContain('completeCurrentLibraryProjections(plan, sessions, sessionMeta)')
     expect(manager).toContain("code: 'PROVIDER_SESSION_ALREADY_ARCHIVED'")
   })
 

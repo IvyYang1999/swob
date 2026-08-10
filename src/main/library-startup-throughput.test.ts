@@ -3,7 +3,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { LIBRARY_STARTUP_BATCH_SIZE } from './library-startup-sync'
+import {
+  describeLibraryStartupSession,
+  LIBRARY_STARTUP_BATCH_SIZE,
+  updateLibraryStartupCheckpointAfterBatch
+} from './library-startup-sync'
 import type { SessionSummary } from './types'
 
 const savedHome = process.env.HOME
@@ -223,6 +227,73 @@ describe('Library startup production throughput', () => {
     expect(fs.existsSync(path.join(sessionDir, 'transcript.md'))).toBe(true)
     expect(fs.readFileSync(path.join(sessionDir, 'backup.jsonl'))).toEqual(fs.readFileSync(sourcePath))
     expect(fs.existsSync(path.join(sessionDir, '.swob-incomplete.json'))).toBe(false)
+  })
+
+  it('clears a stale retry immediately when live sync already made the exact projection current', async () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-live-reconcile-library-'))
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-live-reconcile-source-'))
+    roots.push(libraryRoot, sourceRoot)
+    const sourcePath = writeSource(sourceRoot, 0)
+    const initial = summary(0, sourcePath)
+    lib.initLibrary(libraryRoot)
+
+    const cold = await lib.planLibraryStartupSync([initial], 1, {})
+    await lib.syncLibraryStartupBatch(
+      [initial],
+      {},
+      { snapshotDigest: cold.snapshotDigest, schemaGeneration: cold.schemaGeneration }
+    )
+
+    fs.appendFileSync(sourcePath, `${JSON.stringify({
+      uuid: 'throughput-0000-user-2',
+      parentUuid: 'throughput-0000-assistant',
+      sessionId: initial.sessionId,
+      type: 'user',
+      timestamp: '2026-08-08T00:00:02.000Z',
+      cwd: '/fixture/project',
+      message: { role: 'user', content: 'live update' }
+    })}\n`)
+    const changed: SessionSummary = {
+      ...initial,
+      updatedAt: '2026-08-08T00:00:02.000Z',
+      fileSizeBytes: fs.statSync(sourcePath).size,
+      messageCount: 3,
+      turnCount: 2
+    }
+    const dirty = await lib.planLibraryStartupSync([changed], 1, {})
+    const checkpointPath = path.join(libraryRoot, '.swob', 'library-startup-sync-checkpoint.json')
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf-8'))
+    const workKey = describeLibraryStartupSession(changed, 1).key
+    const failed = updateLibraryStartupCheckpointAfterBatch(checkpoint, [changed], {
+      total: 1,
+      completed: 0,
+      skipped: [{
+        sessionId: changed.sessionId,
+        workKey,
+        code: 'EAGAIN',
+        disposition: 'failed',
+        retryable: true
+      }]
+    }, {}, Date.parse('2026-08-08T00:00:03.000Z')).checkpoint
+    fs.writeFileSync(checkpointPath, `${JSON.stringify(failed, null, 2)}\n`)
+
+    await lib.syncLibraryFromSessions([changed], {})
+    const sessionDir = lib.getSessionDirPath(changed.sessionId)!
+    const packageEvidence = ['.swob-session.json', 'transcript.md', 'backup.jsonl']
+      .map((name) => [name, fs.readFileSync(path.join(sessionDir, name), 'utf-8')] as const)
+
+    // Simulate restart: the durable package is authoritative and the stale
+    // retry checkpoint must converge without executing the package writer.
+    lib.initLibrary(libraryRoot)
+    const reconciled = await lib.planLibraryStartupSync([changed], 1, {})
+    expect(dirty.dirtyIndexes).toEqual([0])
+    expect(reconciled).toMatchObject({
+      dirtyIndexes: [],
+      recoverySummary: { retryScheduled: 0, attentionRequired: 0, exhausted: 0 }
+    })
+    expect(packageEvidence).toEqual(
+      packageEvidence.map(([name]) => [name, fs.readFileSync(path.join(sessionDir, name), 'utf-8')])
+    )
   })
 
   it.each(['missing', 'icloud-placeholder'] as const)(

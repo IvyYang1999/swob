@@ -33,8 +33,17 @@ export function truthKernelCanonicalJson(value: unknown): string {
   return JSON.stringify(canonicalize(value, new Set()))
 }
 
+/** Exact exported JSON bytes: UTF-8 canonical JSON with no BOM, newline, or trailing byte. */
+export function truthKernelCanonicalUtf8Bytes(value: unknown): Uint8Array {
+  return new TextEncoder().encode(truthKernelCanonicalJson(value))
+}
+
+export function truthKernelRawSha256(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
 export function truthKernelCanonicalSha256(value: unknown): string {
-  return createHash('sha256').update(truthKernelCanonicalJson(value), 'utf8').digest('hex')
+  return truthKernelRawSha256(truthKernelCanonicalUtf8Bytes(value))
 }
 
 export function truthKernelRoundTrip<T>(value: T): T {

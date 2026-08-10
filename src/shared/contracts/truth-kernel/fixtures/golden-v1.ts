@@ -1,6 +1,7 @@
 import type { CanonicalEvent, CanonicalEventKind, JsonValue } from '../../../provider-schema-v2.generated'
 import type {
   Availability,
+  CanonicalEventChain,
   ContextArtifact,
   EpistemicBoolean,
   EvidenceGrade,
@@ -8,11 +9,14 @@ import type {
   FileEntityRef,
   FileRevisionRef,
   McpContextExposure,
+  SourceIngestReceipt,
   TruthKernelGoldenFixture
 } from '../types'
 import {
   truthKernelBundleManifestDigest,
   truthKernelCanonicalSha256,
+  truthKernelCanonicalUtf8Bytes,
+  truthKernelRawSha256,
   truthKernelRollingChainHash
 } from '../canonical-json'
 
@@ -237,6 +241,21 @@ const catalogScope = {
   emptyFilterSemantics: 'all-catalog' as const
 }
 
+const sourceIngestReceiptRecord = {
+  schemaVersion: 1,
+  receiptId: 'ingest-1',
+  sourceId: 'source-main',
+  sourceLocatorHash: shaA,
+  sourceSha256: shaA,
+  sourceSizeBytes: 100,
+  sourceMtime: available(at),
+  parserId: 'swob/test',
+  parserVersion: '1.0.0',
+  capturedAt: at,
+  captureMethod: 'passive-file',
+  assuranceLevel: 'integrity-after-ingest'
+} satisfies SourceIngestReceipt
+
 const chainEntry0Digest = truthKernelCanonicalSha256(providerEvents[0])
 const chainEntry0Hash = truthKernelRollingChainHash({
   sourceIngestReceiptId: 'ingest-1', parserId: 'swob/test', parserVersion: '1.0.0',
@@ -250,6 +269,27 @@ const chainEntry1Hash = truthKernelRollingChainHash({
   previousChainHash: chainEntry0Hash, eventDigest: chainEntry1Digest
 })
 
+const canonicalEventChainRecord = {
+  schemaVersion: 1,
+  chainId: 'chain-1',
+  sourceIngestReceiptId: 'ingest-1',
+  parserId: 'swob/test',
+  parserVersion: '1.0.0',
+  serializationVersion: 'truth-kernel-canonical-json/1',
+  expectedEventCount: 2,
+  entries: [
+    { eventId: 'provider-event-0', sequence: 0, eventDigest: chainEntry0Digest, previousChainHash: unavailable('genesis'), chainHash: chainEntry0Hash },
+    { eventId: 'provider-event-1', sequence: 1, eventDigest: chainEntry1Digest, previousChainHash: available(chainEntry0Hash), chainHash: chainEntry1Hash }
+  ],
+  headHash: available(chainEntry1Hash)
+} satisfies CanonicalEventChain
+
+const receiptExportBytes = truthKernelCanonicalUtf8Bytes(sourceIngestReceiptRecord)
+const chainExportBytes = truthKernelCanonicalUtf8Bytes(canonicalEventChainRecord)
+const event0ExportBytes = truthKernelCanonicalUtf8Bytes(providerEvents[0])
+const event1ExportBytes = truthKernelCanonicalUtf8Bytes(providerEvents[1])
+const verifierExportBytes = new TextEncoder().encode('truth-kernel-fixture-offline-verifier-v1')
+
 const bundleWithoutDigest = {
   schemaVersion: 1 as const,
   bundleId: 'bundle-1',
@@ -259,13 +299,13 @@ const bundleWithoutDigest = {
   parserVersions: [{ parserId: 'swob/test', parserVersion: '1.0.0' }],
   serializationVersion: 'truth-kernel-canonical-json/1' as const,
   artifacts: [
-    { kind: 'source-receipt' as const, objectId: 'ingest-1', relativePath: 'receipts/ingest-1.json', sha256: shaA, sizeBytes: 100 },
-    { kind: 'event-chain' as const, objectId: 'chain-1', relativePath: 'chains/chain-1.json', sha256: chainEntry1Hash, sizeBytes: 200 },
-    { kind: 'canonical-event' as const, objectId: 'provider-event-0', relativePath: 'events/provider-event-0.json', sha256: chainEntry0Digest, sizeBytes: 300 },
-    { kind: 'canonical-event' as const, objectId: 'provider-event-1', relativePath: 'events/provider-event-1.json', sha256: chainEntry1Digest, sizeBytes: 300 },
-    { kind: 'offline-verifier' as const, objectId: 'swob/offline-verifier', relativePath: 'verify/index.js', sha256: shaB, sizeBytes: 400 }
+    { kind: 'source-receipt' as const, objectId: 'ingest-1', relativePath: 'receipts/ingest-1.json', contentEncoding: 'utf8-canonical-json-no-extra-bytes' as const, sha256: truthKernelRawSha256(receiptExportBytes), sizeBytes: receiptExportBytes.byteLength },
+    { kind: 'event-chain' as const, objectId: 'chain-1', relativePath: 'chains/chain-1.json', contentEncoding: 'utf8-canonical-json-no-extra-bytes' as const, sha256: truthKernelRawSha256(chainExportBytes), sizeBytes: chainExportBytes.byteLength },
+    { kind: 'canonical-event' as const, objectId: 'provider-event-0', relativePath: 'events/provider-event-0.json', contentEncoding: 'utf8-canonical-json-no-extra-bytes' as const, sha256: truthKernelRawSha256(event0ExportBytes), sizeBytes: event0ExportBytes.byteLength },
+    { kind: 'canonical-event' as const, objectId: 'provider-event-1', relativePath: 'events/provider-event-1.json', contentEncoding: 'utf8-canonical-json-no-extra-bytes' as const, sha256: truthKernelRawSha256(event1ExportBytes), sizeBytes: event1ExportBytes.byteLength },
+    { kind: 'offline-verifier' as const, objectId: 'swob/offline-verifier', relativePath: 'verify/index.js', contentEncoding: 'raw-bytes' as const, sha256: truthKernelRawSha256(verifierExportBytes), sizeBytes: verifierExportBytes.byteLength }
   ].sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
-  verifier: { verifierId: 'swob/offline-verifier', version: '1.0.0', sha256: shaB },
+  verifier: { verifierId: 'swob/offline-verifier', version: '1.0.0', sha256: truthKernelRawSha256(verifierExportBytes) },
   digestAlgorithm: 'sha256-canonical-json-excluding-bundleDigest' as const,
   claimBoundary: 'integrity-after-ingest' as const
 }
@@ -745,21 +785,8 @@ export const TRUTH_KERNEL_GOLDEN_FIXTURE = {
       ]
     }
   ],
-  sourceIngestReceipts: [{ schemaVersion: 1, receiptId: 'ingest-1', sourceId: 'source-main', sourceLocatorHash: shaA, sourceSha256: shaA, sourceSizeBytes: 100, sourceMtime: available(at), parserId: 'swob/test', parserVersion: '1.0.0', capturedAt: at, captureMethod: 'passive-file', assuranceLevel: 'integrity-after-ingest' }],
-  canonicalEventChains: [{
-    schemaVersion: 1,
-    chainId: 'chain-1',
-    sourceIngestReceiptId: 'ingest-1',
-    parserId: 'swob/test',
-    parserVersion: '1.0.0',
-    serializationVersion: 'truth-kernel-canonical-json/1',
-    expectedEventCount: 2,
-    entries: [
-      { eventId: 'provider-event-0', sequence: 0, eventDigest: chainEntry0Digest, previousChainHash: unavailable('genesis'), chainHash: chainEntry0Hash },
-      { eventId: 'provider-event-1', sequence: 1, eventDigest: chainEntry1Digest, previousChainHash: available(chainEntry0Hash), chainHash: chainEntry1Hash }
-    ],
-    headHash: available(chainEntry1Hash)
-  }],
+  sourceIngestReceipts: [sourceIngestReceiptRecord],
+  canonicalEventChains: [canonicalEventChainRecord],
   verifyBundles: [{ ...bundleWithoutDigest, bundleDigest: truthKernelBundleManifestDigest(bundleWithoutDigest) }],
   verificationResults: [{ schemaVersion: 1, verificationId: 'verify-1', target: { kind: 'bundle', id: 'bundle-1' }, checkedAt: at, verifierId: 'swob/offline-verifier', verifierKind: 'built-in-offline', verifierVersion: '1.0.0', status: 'valid', failures: [] }],
   providerRegistrationDescriptors: [{ schemaVersion: 1, featureId: 'test-provider', providerId: 'swob/test', descriptorVersion: '1.0.0', capabilityContractVersion: '2.0', registrationExport: 'TEST_PROVIDER_DESCRIPTOR' }],

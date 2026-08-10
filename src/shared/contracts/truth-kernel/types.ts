@@ -689,7 +689,10 @@ export interface VerifyBundleArtifact {
   kind: 'canonical-event' | 'source-receipt' | 'event-chain' | 'offline-verifier' | 'other'
   objectId: string
   relativePath: string
+  contentEncoding: 'utf8-canonical-json-no-extra-bytes' | 'raw-bytes'
+  /** SHA-256 of the exact raw bytes written to relativePath. */
   sha256: Sha256
+  /** Exact raw byte length of the exported file at relativePath. */
   sizeBytes: number
 }
 

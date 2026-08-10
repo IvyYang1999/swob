@@ -190,6 +190,42 @@ describe('Truth Kernel v1 contract', () => {
     }))
   })
 
+  it('requires verified assurance to cite a valid attachment-scoped verification', () => {
+    for (const status of ['invalid', 'not-requested'] as const) {
+      const fixture = cloneFixture()
+      fixture.verificationResults[0].status = status
+      if (status === 'invalid') {
+        fixture.verificationResults[0].failures = [{
+          code: 'event-digest-mismatch',
+          artifactPath: { status: 'available', value: 'events/provider-event-0.json' },
+          message: 'fixture mismatch',
+          expectedDigest: { status: 'available', value: 'a'.repeat(64) },
+          actualDigest: { status: 'available', value: 'b'.repeat(64) }
+        }]
+      }
+      expect(validateTruthKernelGoldenFixture(fixture).issues, status).toContainEqual(expect.objectContaining({
+        code: 'assurance-valid-verification-required'
+      }))
+    }
+  })
+
+  it('requires observed and claimed assurance to cite attachment evidence while unknown may remain empty', () => {
+    for (const assessment of ['observed', 'claimed'] as const) {
+      const fixture = cloneFixture()
+      const dimension = fixture.externalEvidenceAttachments[1].assurance[0]
+      dimension.assessment = assessment
+      dimension.evidenceRefs = []
+      expect(validateTruthKernelGoldenFixture(fixture).issues, assessment).toContainEqual(expect.objectContaining({
+        code: 'assurance-evidence-required'
+      }))
+    }
+    const fixture = cloneFixture()
+    expect(fixture.externalEvidenceAttachments[0].assurance[0]).toEqual(expect.objectContaining({
+      assessment: 'unknown', evidenceRefs: []
+    }))
+    expect(validateTruthKernelGoldenFixture(fixture).ok).toBe(true)
+  })
+
   it('detects event mutation, deletion, reorder and parser substitution in rolling chains', () => {
     const mutations: Array<[string, (fixture: TruthKernelGoldenFixture) => void]> = [
       ['chain-event-digest-mismatch', (fixture) => { (fixture.timelineEvents[0].providerEvent.payload as { text: string }).text = 'tampered' }],
@@ -212,6 +248,37 @@ describe('Truth Kernel v1 contract', () => {
       expect.objectContaining({ code: 'bundle-artifact-path-unsafe' }),
       expect.objectContaining({ code: 'bundle-manifest-digest-mismatch' })
     ]))
+  })
+
+  it('rejects Windows-drive, dot-segment and empty-segment bundle paths', () => {
+    for (const relativePath of ['C:/escape', 'events/./event.json', 'events//event.json']) {
+      const fixture = cloneFixture()
+      fixture.verifyBundles[0].artifacts[0].relativePath = relativePath
+      expect(validateTruthKernelGoldenFixture(fixture).issues, relativePath).toContainEqual(expect.objectContaining({
+        code: 'bundle-artifact-path-unsafe'
+      }))
+    }
+  })
+
+  it('requires the sole frozen bundle digest algorithm at runtime', () => {
+    const fixture = cloneFixture()
+    ;(fixture.verifyBundles[0] as unknown as { digestAlgorithm: string }).digestAlgorithm = 'sha256-other'
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
+      code: 'bundle-digest-algorithm-unsupported'
+    }))
+  })
+
+  it('hashes exported receipt and chain JSON bytes instead of source digest or chain head', () => {
+    const fixture = cloneFixture()
+    const receiptArtifact = fixture.verifyBundles[0].artifacts.find((artifact) => artifact.kind === 'source-receipt')!
+    const chainArtifact = fixture.verifyBundles[0].artifacts.find((artifact) => artifact.kind === 'event-chain')!
+    receiptArtifact.sha256 = fixture.sourceIngestReceipts[0].sourceSha256
+    chainArtifact.sha256 = fixture.canonicalEventChains[0].headHash.status === 'available'
+      ? fixture.canonicalEventChains[0].headHash.value
+      : '0'.repeat(64)
+    expect(validateTruthKernelGoldenFixture(fixture).issues.filter(
+      (entry) => entry.code === 'bundle-artifact-raw-bytes-mismatch'
+    )).toHaveLength(2)
   })
 
   it('rejects truncated bundle inventories even when referenced IDs remain', () => {

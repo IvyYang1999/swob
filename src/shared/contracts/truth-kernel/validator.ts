@@ -9,6 +9,8 @@ import type {
 import {
   truthKernelBundleManifestDigest,
   truthKernelCanonicalSha256,
+  truthKernelCanonicalUtf8Bytes,
+  truthKernelRawSha256,
   truthKernelRollingChainHash
 } from './canonical-json'
 
@@ -131,6 +133,13 @@ function walkAvailability(value: unknown, path: string, issues: TruthKernelValid
 
 function scopeKey(scope: FileScope): string {
   return JSON.stringify(scope)
+}
+
+function isSafeBundleRelativePath(value: string): boolean {
+  if (value.length === 0 || value.startsWith('/') || value.includes('\\')) return false
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) || /[\u0000-\u001f\u007f]/.test(value)) return false
+  const segments = value.split('/')
+  return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
 }
 
 function timestampsOverlap(left: UserModelAlias, right: UserModelAlias): boolean {
@@ -420,6 +429,29 @@ function validateSemantics(fixture: TruthKernelGoldenFixture): TruthKernelValida
   }
 
   const sourceReceipts = new Map(fixture.sourceIngestReceipts.map((receipt) => [receipt.receiptId, receipt]))
+  const chains = new Map(fixture.canonicalEventChains.map((chain) => [chain.chainId, chain]))
+  const bundles = new Map(fixture.verifyBundles.map((bundle) => [bundle.bundleId, bundle]))
+  const verificationById = new Map(fixture.verificationResults.map((result) => [result.verificationId, result]))
+  const verificationTargetsAttachment = (
+    verification: TruthKernelGoldenFixture['verificationResults'][number],
+    attachment: TruthKernelGoldenFixture['externalEvidenceAttachments'][number]
+  ): boolean => {
+    if (verification.target.kind === 'source-receipt') {
+      return verification.target.id === attachment.sourceIngestReceiptId
+    }
+    if (verification.target.kind === 'event-chain') {
+      return chains.get(verification.target.id)?.sourceIngestReceiptId === attachment.sourceIngestReceiptId
+    }
+    if (verification.target.kind === 'bundle') {
+      return bundles.get(verification.target.id)?.sourceReceipts.some(
+        (receipt) => receipt.receiptId === attachment.sourceIngestReceiptId
+      ) === true
+    }
+    return fixture.verifyBundles.some((bundle) =>
+      bundle.sourceReceipts.some((receipt) => receipt.receiptId === attachment.sourceIngestReceiptId) &&
+      bundle.artifacts.some((artifact) => artifact.objectId === verification.target.id)
+    )
+  }
   const attachmentRevisions = new Map<string, typeof fixture.externalEvidenceAttachments>()
   fixture.externalEvidenceAttachments.forEach((attachment, index) => {
     const revisions = attachmentRevisions.get(attachment.logicalAttachmentId) || []
@@ -434,7 +466,6 @@ function validateSemantics(fixture: TruthKernelGoldenFixture): TruthKernelValida
       issue(issues, `$/externalEvidenceAttachments/${index}`, 'active-attachment-not-user-confirmed', 'active attachments always require explicit user confirmation and a target session')
     }
     const attachmentEvidenceIds = new Set(attachment.evidence.map((entry) => entry.evidenceId))
-    const verificationIds = new Set(fixture.verificationResults.map((result) => result.verificationId))
     attachment.assurance.forEach((dimension, dimensionIndex) => {
       const core = new Set([
         'attachment-identity', 'runtime-platform', 'profile-policy', 'network',
@@ -447,8 +478,20 @@ function validateSemantics(fixture: TruthKernelGoldenFixture): TruthKernelValida
       if (dimension.evidenceRefs.some((evidenceId) => !attachmentEvidenceIds.has(evidenceId))) {
         issue(issues, `$/externalEvidenceAttachments/${index}/assurance/${dimensionIndex}/evidenceRefs`, 'assurance-evidence-ref-missing', 'assurance evidence references must resolve inside the attachment revision')
       }
-      if (dimension.verificationResultIds.some((verificationId) => !verificationIds.has(verificationId))) {
+      if (dimension.verificationResultIds.some((verificationId) => !verificationById.has(verificationId))) {
         issue(issues, `$/externalEvidenceAttachments/${index}/assurance/${dimensionIndex}/verificationResultIds`, 'assurance-verification-ref-missing', 'assurance verification references must resolve')
+      }
+      if ((dimension.assessment === 'observed' || dimension.assessment === 'claimed') && dimension.evidenceRefs.length === 0) {
+        issue(issues, `$/externalEvidenceAttachments/${index}/assurance/${dimensionIndex}/evidenceRefs`, 'assurance-evidence-required', 'observed and claimed assurance require at least one resolvable attachment evidence reference')
+      }
+      if (dimension.assessment === 'verified') {
+        const validScopedVerification = dimension.verificationResultIds.some((verificationId) => {
+          const verification = verificationById.get(verificationId)
+          return verification?.status === 'valid' && verificationTargetsAttachment(verification, attachment)
+        })
+        if (!validScopedVerification) {
+          issue(issues, `$/externalEvidenceAttachments/${index}/assurance/${dimensionIndex}/verificationResultIds`, 'assurance-valid-verification-required', 'verified assurance requires a status=valid verification scoped through this attachment revision')
+        }
       }
     })
   })
@@ -538,7 +581,6 @@ function validateSemantics(fixture: TruthKernelGoldenFixture): TruthKernelValida
     }
   })
 
-  const chains = new Map(fixture.canonicalEventChains.map((chain) => [chain.chainId, chain]))
   fixture.verifyBundles.forEach((bundle, bundleIndex) => {
     const sortedPaths = [...bundle.artifacts].map((artifact) => artifact.relativePath).sort()
     if (JSON.stringify(sortedPaths) !== JSON.stringify(bundle.artifacts.map((artifact) => artifact.relativePath))) {
@@ -546,8 +588,8 @@ function validateSemantics(fixture: TruthKernelGoldenFixture): TruthKernelValida
     }
     const artifactPaths = new Set<string>()
     bundle.artifacts.forEach((artifact, artifactIndex) => {
-      if (artifact.relativePath.startsWith('/') || artifact.relativePath.split('/').includes('..') || artifact.relativePath.includes('\\')) {
-        issue(issues, `$/verifyBundles/${bundleIndex}/artifacts/${artifactIndex}/relativePath`, 'bundle-artifact-path-unsafe', 'bundle paths must be relative and traversal safe')
+      if (!isSafeBundleRelativePath(artifact.relativePath)) {
+        issue(issues, `$/verifyBundles/${bundleIndex}/artifacts/${artifactIndex}/relativePath`, 'bundle-artifact-path-unsafe', 'bundle paths must be normalized POSIX-relative paths without absolute, drive, URI, UNC, control, empty, dot or traversal segments')
       }
       if (artifactPaths.has(artifact.relativePath)) {
         issue(issues, `$/verifyBundles/${bundleIndex}/artifacts/${artifactIndex}/relativePath`, 'bundle-artifact-path-duplicate', 'bundle artifact paths must be unique')
@@ -555,6 +597,24 @@ function validateSemantics(fixture: TruthKernelGoldenFixture): TruthKernelValida
       artifactPaths.add(artifact.relativePath)
       if (!/^[a-f0-9]{64}$/.test(artifact.sha256) || !Number.isSafeInteger(artifact.sizeBytes) || artifact.sizeBytes < 0) {
         issue(issues, `$/verifyBundles/${bundleIndex}/artifacts/${artifactIndex}`, 'bundle-artifact-metadata-invalid', 'bundle artifact digest and size must be valid')
+      }
+      const canonicalValue = artifact.kind === 'source-receipt'
+        ? sourceReceipts.get(artifact.objectId)
+        : artifact.kind === 'event-chain'
+          ? chains.get(artifact.objectId)
+          : artifact.kind === 'canonical-event'
+            ? timelineEvents.get(artifact.objectId)
+            : undefined
+      if (canonicalValue) {
+        const rawBytes = truthKernelCanonicalUtf8Bytes(canonicalValue)
+        if (artifact.contentEncoding !== 'utf8-canonical-json-no-extra-bytes') {
+          issue(issues, `$/verifyBundles/${bundleIndex}/artifacts/${artifactIndex}/contentEncoding`, 'bundle-canonical-artifact-encoding-invalid', 'canonical JSON exports must be exact UTF-8 with no BOM, newline or trailing byte')
+        }
+        if (artifact.sha256 !== truthKernelRawSha256(rawBytes) || artifact.sizeBytes !== rawBytes.byteLength) {
+          issue(issues, `$/verifyBundles/${bundleIndex}/artifacts/${artifactIndex}`, 'bundle-artifact-raw-bytes-mismatch', 'artifact digest and size must match the exact raw exported file bytes')
+        }
+      } else if (artifact.kind === 'offline-verifier' && artifact.contentEncoding !== 'raw-bytes') {
+        issue(issues, `$/verifyBundles/${bundleIndex}/artifacts/${artifactIndex}/contentEncoding`, 'bundle-binary-artifact-encoding-invalid', 'offline verifier artifacts use exact raw bytes')
       }
     })
     bundle.sourceReceipts.forEach((bundledReceipt) => {
@@ -593,6 +653,9 @@ function validateSemantics(fixture: TruthKernelGoldenFixture): TruthKernelValida
     }
     if (bundle.serializationVersion !== 'truth-kernel-canonical-json/1') {
       issue(issues, `$/verifyBundles/${bundleIndex}/serializationVersion`, 'bundle-serialization-version-unsupported', 'unknown serialization versions fail closed')
+    }
+    if (bundle.digestAlgorithm !== 'sha256-canonical-json-excluding-bundleDigest') {
+      issue(issues, `$/verifyBundles/${bundleIndex}/digestAlgorithm`, 'bundle-digest-algorithm-unsupported', 'bundle manifest digest algorithm must match the sole frozen v1 algorithm')
     }
     if (bundle.bundleDigest !== truthKernelBundleManifestDigest(bundle)) {
       issue(issues, `$/verifyBundles/${bundleIndex}/bundleDigest`, 'bundle-manifest-digest-mismatch', 'bundle digest must bind the canonical manifest excluding only its own digest field')

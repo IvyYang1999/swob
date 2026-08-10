@@ -19,7 +19,7 @@ describe('Truth Kernel v1 contract', () => {
   it('validates every frozen golden scenario', () => {
     const result = validateTruthKernelGoldenFixture(TRUTH_KERNEL_GOLDEN_FIXTURE)
     expect(result).toEqual({ ok: true, value: TRUTH_KERNEL_GOLDEN_FIXTURE, issues: [] })
-    expect(TRUTH_KERNEL_GOLDEN_FIXTURE.scenarioIds).toHaveLength(11)
+    expect(TRUTH_KERNEL_GOLDEN_FIXTURE.scenarioIds).toHaveLength(14)
   })
 
   it('ships a standalone JSON Schema that accepts the typed golden fixture', () => {
@@ -42,6 +42,12 @@ describe('Truth Kernel v1 contract', () => {
     })
   })
 
+  it('uses locale-independent key order and rejects values outside the frozen JSON domain', () => {
+    expect(truthKernelCanonicalJson({ '\uE000': 2, '😀': 1 })).toBe('{"😀":1,"":2}')
+    expect(() => truthKernelCanonicalJson({ invalid: Number.NaN })).toThrow('non-finite-number')
+    expect(() => truthKernelCanonicalJson({ invalid: undefined })).toThrow('unsupported-undefined')
+  })
+
   it('rejects timeline projections that detach from the carried Provider v2 event', () => {
     const fixture = cloneFixture()
     fixture.timelineEvents[0].sourceEventId = 'fabricated-event-id'
@@ -55,6 +61,25 @@ describe('Truth Kernel v1 contract', () => {
     fixture.contextTransitions[0].deltas[1].disposition = 'dropped'
     expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
       code: 'dropped-without-direct-evidence'
+    }))
+  })
+
+  it('requires binary-safe attachment references and forbids attachment bytes as context text', () => {
+    const fixture = cloneFixture()
+    const attachment = fixture.contextArtifacts.find((entry) => entry.kind === 'attached-file')!
+    attachment.attachmentRef = { status: 'unavailable', reason: 'missing reference' }
+    attachment.content = { status: 'available', value: 'raw bytes' }
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'attachment-reference-required' })
+    ]))
+  })
+
+  it('keeps wall, active and wait measurement state explicit', () => {
+    const fixture = cloneFixture()
+    fixture.interactions[0].timing.agentActive.measurement = 'exact'
+    fixture.interactions[0].timing.agentActive.milliseconds = { status: 'unknown', reason: 'not measured' }
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
+      code: 'duration-value-missing'
     }))
   })
 
@@ -102,6 +127,102 @@ describe('Truth Kernel v1 contract', () => {
     expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
       code: 'artifact-consumption-version-unresolved'
     }))
+  })
+
+  it('requires execute-produced actions to name immutable outputs', () => {
+    const fixture = cloneFixture()
+    fixture.fileActions[0].operation = 'execute-produced'
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
+      code: 'execute-produced-artifact-missing'
+    }))
+  })
+
+  it('enforces branch usage conservation across the three frozen bases', () => {
+    const fixture = cloneFixture()
+    fixture.branchUsageRollups[0].attributedTotal = { status: 'available', value: 99 }
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
+      code: 'usage-rollup-conservation-failed'
+    }))
+  })
+
+  it('does not accept content hash inference as an exact interaction fork boundary', () => {
+    const fixture = cloneFixture()
+    fixture.forkBoundaries[0].detection = 'content-hash-inference'
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
+      code: 'content-hash-fork-cannot-be-exact'
+    }))
+  })
+
+  it('preserves last-known package locations while a root is offline', () => {
+    const fixture = cloneFixture()
+    fixture.packageLocations[2].state = 'missing'
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
+      code: 'offline-root-location-must-remain-last-known'
+    }))
+  })
+
+  it('binds archive coverage to scope and deduplicated package identities', () => {
+    const fixture = cloneFixture()
+    fixture.archiveCoverage.packageIds.push('package-1')
+    fixture.archiveCoverage.scope.projectIds.push('project-1')
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'archive-coverage-package-double-count' }),
+      expect.objectContaining({ code: 'archive-coverage-scope-mismatch' })
+    ]))
+  })
+
+  it('requires orchestration edge endpoints and aggregate conservation', () => {
+    const fixture = cloneFixture()
+    fixture.orchestrationEntityLinks[0].toEntityId = 'missing-entity'
+    fixture.usageAggregates[0].residual = { status: 'available', value: 49 }
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'orchestration-edge-endpoint-missing' }),
+      expect.objectContaining({ code: 'aggregate-conservation-failed' })
+    ]))
+  })
+
+  it('never activates external evidence without explicit user confirmation', () => {
+    const fixture = cloneFixture()
+    fixture.externalEvidenceAttachments[0].state = 'active'
+    fixture.externalEvidenceAttachments[0].mappedLogicalSessionId = { status: 'available', value: 'session-main' }
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toContainEqual(expect.objectContaining({
+      code: 'active-attachment-not-user-confirmed'
+    }))
+  })
+
+  it('detects event mutation, deletion, reorder and parser substitution in rolling chains', () => {
+    const mutations: Array<[string, (fixture: TruthKernelGoldenFixture) => void]> = [
+      ['chain-event-digest-mismatch', (fixture) => { (fixture.timelineEvents[0].providerEvent.payload as { text: string }).text = 'tampered' }],
+      ['chain-event-count-mismatch', (fixture) => { fixture.canonicalEventChains[0].entries.pop() }],
+      ['chain-event-reordered', (fixture) => { fixture.canonicalEventChains[0].entries.reverse(); fixture.canonicalEventChains[0].entries.forEach((entry, index) => { entry.sequence = index }) }],
+      ['chain-parser-receipt-mismatch', (fixture) => { fixture.canonicalEventChains[0].parserVersion = '2.0.0' }],
+      ['chain-serialization-version-unsupported', (fixture) => { (fixture.canonicalEventChains[0] as unknown as { serializationVersion: string }).serializationVersion = 'unknown/2' }]
+    ]
+    for (const [code, mutate] of mutations) {
+      const fixture = cloneFixture()
+      mutate(fixture)
+      expect(validateTruthKernelGoldenFixture(fixture).issues, code).toContainEqual(expect.objectContaining({ code }))
+    }
+  })
+
+  it('binds safe path-sorted bundle inventory with a self-excluding manifest digest', () => {
+    const fixture = cloneFixture()
+    fixture.verifyBundles[0].artifacts[0].relativePath = '../escape'
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'bundle-artifact-path-unsafe' }),
+      expect.objectContaining({ code: 'bundle-manifest-digest-mismatch' })
+    ]))
+  })
+
+  it('rejects truncated bundle inventories even when referenced IDs remain', () => {
+    const fixture = cloneFixture()
+    fixture.verifyBundles[0].artifacts = fixture.verifyBundles[0].artifacts.filter(
+      (artifact) => artifact.objectId !== 'provider-event-1'
+    )
+    expect(validateTruthKernelGoldenFixture(fixture).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'bundle-event-artifact-missing' }),
+      expect.objectContaining({ code: 'bundle-manifest-digest-mismatch' })
+    ]))
   })
 
   it('rejects translation descriptors with missing locale and unused ownership keys', () => {

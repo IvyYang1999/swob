@@ -27,7 +27,12 @@ export const TRUTH_KERNEL_CONTRACT_MANIFEST = {
     'package-identity-location-separated',
     'usage-valuation-attribution-separated',
     'user-correction-is-new-revision',
-    'integrity-after-ingest-claim-boundary'
+    'integrity-after-ingest-claim-boundary',
+    'manual-confirmation-required-for-active-external-attachment',
+    'rolling-chain-binds-receipt-parser-serialization-and-event-bytes',
+    'verify-bundle-manifest-is-content-addressed',
+    'offline-root-preserves-last-known-catalog-location',
+    'orchestration-usage-aggregates-are-observation-only'
   ]
 } as const
 

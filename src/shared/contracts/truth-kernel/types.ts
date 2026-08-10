@@ -84,6 +84,11 @@ export interface PersistedOutputRef extends ArtifactRef {
   activeContentAllowed: false
 }
 
+export interface ContextAttachmentRef extends ArtifactRef {
+  attachmentKind: 'file' | 'image'
+  activeContentAllowed: false
+}
+
 /** Lossless read contract. Consumers render providerEvent directly and must preserve unknown payloads. */
 export interface AgentTimelineEvent {
   schemaVersion: TruthKernelSchemaVersion
@@ -118,6 +123,8 @@ export type ContextArtifactKind =
   | 'environment'
   | 'subagent-result'
   | 'conversation-history'
+  | 'attached-file'
+  | 'attached-image'
   | 'unknown'
 
 export interface ContextArtifact {
@@ -131,6 +138,7 @@ export interface ContextArtifact {
   effectiveAt: Availability<IsoTimestamp>
   contentDigest: Availability<Sha256>
   content: Availability<string>
+  attachmentRef: Availability<ContextAttachmentRef>
   redaction: 'none' | 'automatic' | 'manual' | 'content-withheld'
   tokenCount: Availability<number>
   tokenMeasurement: 'reported' | 'derived' | 'estimated' | 'unavailable'
@@ -253,13 +261,24 @@ export interface ToolSearchReceipt {
   evidence: EvidenceRef[]
 }
 
+export interface MeasuredDuration {
+  milliseconds: Availability<number>
+  measurement: 'exact' | 'derived' | 'estimated' | 'unavailable'
+  evidence: EvidenceRef[]
+}
+
 export interface TimingFacts {
-  observedElapsedMs: Availability<number>
-  modelLatencyMs: Availability<number>
-  toolElapsedMs: Availability<number>
-  agentActiveEstimateMs: Availability<number>
-  userGapMs: Availability<number>
-  approvalWaitMs: Availability<number>
+  wall: MeasuredDuration
+  agentActive: MeasuredDuration
+  wait: MeasuredDuration
+}
+
+export interface InteractionModelCallFact {
+  providerId: string
+  observedModelId: string
+  canonicalModelId: Availability<string>
+  mode: Availability<string>
+  evidence: EvidenceRef[]
 }
 
 export interface FileScope {
@@ -267,10 +286,13 @@ export interface FileScope {
   repositoryId: Availability<string>
   worktreeId: Availability<string>
   logicalPath: string
+  originalPath: Availability<string>
+  displayPath: string
 }
 
 export interface FileEntityRef {
   fileEntityId: string
+  entityKind: 'file' | 'directory' | 'unknown'
   scope: FileScope
 }
 
@@ -286,6 +308,8 @@ export interface ArtifactVersionRef {
   artifactVersionId: string
   artifactId: string
   contentDigest: Availability<Sha256>
+  sourceVersion: Availability<string>
+  evidence: EvidenceRef[]
 }
 
 export interface RenameStep {
@@ -299,11 +323,13 @@ export interface FileAction {
   fileActionId: string
   interactionId: string
   sourceEventId: string
-  operation: 'read' | 'create' | 'edit' | 'delete' | 'rename' | 'execute' | 'reference' | 'unknown'
+  operation: 'read' | 'create' | 'update' | 'delete' | 'rename' | 'search' | 'execute-produced' | 'unknown'
+  result: 'succeeded' | 'failed' | 'partial' | 'unknown'
   target: FileEntityRef
   beforeRevision: Availability<FileRevisionRef>
   afterRevision: Availability<FileRevisionRef>
   renameChain: RenameStep[]
+  producedArtifactVersions: ArtifactVersionRef[]
   derivation: Exclude<DerivationKind, 'reported' | 'user-corrected'>
   evidence: EvidenceRef[]
 }
@@ -313,10 +339,45 @@ export interface UsageAttribution {
   usageAttributionId: string
   interactionId: string
   usageFactIds: string[]
+  billingFactIds: string[]
+  quantityKind:
+    | 'input-token'
+    | 'output-token'
+    | 'cache-read-token'
+    | 'cache-write-token'
+    | 'reasoning-token'
+    | 'tool-token'
+    | 'non-token'
   quantityUnit: 'token' | 'request' | 'image' | 'second' | 'byte' | 'provider-unit' | 'unknown'
   quantity: Availability<number>
   measurement: 'exact' | 'derived' | 'estimated' | 'unavailable'
   residual: Availability<number>
+  sourceGranularity: 'per-call' | 'cumulative-snapshot' | 'session-total'
+  lineageScope: 'physical-session' | 'current-branch-incremental' | 'lineage-unique'
+  evidence: EvidenceRef[]
+}
+
+export interface UsageRollupBasis {
+  basis: 'physical-session-usage' | 'current-branch-incremental-usage' | 'lineage-unique-usage'
+  total: Availability<number>
+  residual: Availability<number>
+  billingFactIds: string[]
+}
+
+export interface BranchUsageRollup {
+  schemaVersion: TruthKernelSchemaVersion
+  rollupId: string
+  logicalSessionId: string
+  quantityKind: UsageAttribution['quantityKind']
+  quantityUnit: UsageAttribution['quantityUnit']
+  bases: [UsageRollupBasis, UsageRollupBasis, UsageRollupBasis]
+  sourceTotal: Availability<number>
+  attributedTotal: Availability<number>
+  anomalyRefs: Array<{
+    code: 'counter-reset' | 'negative-delta' | 'overlap' | 'unknown'
+    usageFactIds: string[]
+    evidence: EvidenceRef[]
+  }>
   evidence: EvidenceRef[]
 }
 
@@ -327,6 +388,8 @@ export interface ForkBoundary {
   childLogicalSessionId: string
   forkEventId: Availability<string>
   firstIndependentEventId: Availability<string>
+  sharedAncestorInteractionId: Availability<string>
+  firstIndependentInteractionId: Availability<string>
   sharedEventKeys: string[]
   detection: 'harness-metadata' | 'message-dag' | 'shared-event-key' | 'content-hash-inference' | 'unknown'
   evidence: EvidenceRef[]
@@ -343,6 +406,9 @@ export interface Interaction {
   sourceEventIds: string[]
   startedAt: Availability<IsoTimestamp>
   endedAt: Availability<IsoTimestamp>
+  modelCalls: InteractionModelCallFact[]
+  toolEventIds: string[]
+  toolCount: number
   timing: TimingFacts
   usageAttributionIds: string[]
   fileActionIds: string[]
@@ -365,6 +431,20 @@ export interface StorageRoot {
   isDefaultArchiveTarget: boolean
 }
 
+export interface StorageRootObservation {
+  schemaVersion: TruthKernelSchemaVersion
+  observationId: string
+  rootId: string
+  deviceId: string
+  permissionState: 'granted' | 'denied' | 'unknown'
+  availabilityState: 'online' | 'offline' | 'unavailable' | 'unknown'
+  scanState: 'never-scanned' | 'scanning' | 'fresh' | 'stale' | 'partial' | 'failed'
+  lastSeenAt: Availability<IsoTimestamp>
+  lastSuccessfulScanAt: Availability<IsoTimestamp>
+  failureCode: Availability<string>
+  observedAt: IsoTimestamp
+}
+
 export interface PackageLocation {
   schemaVersion: TruthKernelSchemaVersion
   locationId: string
@@ -376,6 +456,8 @@ export interface PackageLocation {
   state: 'online' | 'placeholder' | 'pending-move' | 'missing' | 'replica' | 'conflict'
   lastSeenAt: Availability<IsoTimestamp>
   manifestDigest: Availability<Sha256>
+  observationState: 'current' | 'last-known'
+  absenceMeansDeletion: false
 }
 
 export interface CatalogScope {
@@ -383,9 +465,11 @@ export interface CatalogScope {
   rootIds: string[]
   collectionIds: string[]
   providerIds: string[]
+  projectIds: string[]
   pathPrefixes: string[]
   timeRange: Availability<{ from?: IsoTimestamp; to?: IsoTimestamp }>
   textQuery: Availability<string>
+  emptyFilterSemantics: 'all-catalog'
 }
 
 export interface Collection {
@@ -394,6 +478,26 @@ export interface Collection {
   name: string
   kind: 'manual' | 'project' | 'smart-query' | 'favorite'
   scope: Availability<CatalogScope>
+}
+
+export interface CollectionMembership {
+  schemaVersion: TruthKernelSchemaVersion
+  membershipId: string
+  collectionId: string
+  logicalSessionId: string
+  provenance: 'user' | 'rule'
+  evidence: EvidenceRef[]
+}
+
+export interface WorkspaceTabScrollState {
+  anchorObjectId: Availability<string>
+  offsetPx: number
+}
+
+export interface WorkspaceTabLayoutState {
+  density: 'comfortable' | 'compact'
+  inspectorOpen: boolean
+  splitRatio: Availability<number>
 }
 
 export interface WorkspaceTab {
@@ -407,6 +511,8 @@ export interface WorkspaceTab {
   filters: Record<string, JsonValue>
   sort: Availability<string>
   navigationHistory: string[]
+  scrollState: WorkspaceTabScrollState
+  layoutState: WorkspaceTabLayoutState
   pinned: boolean
   persisted: boolean
 }
@@ -418,6 +524,14 @@ export interface ArchiveCoverage {
   sourceOnlyLogicalSessions: number
   offlineLogicalSessions: number
   conflictedLogicalSessions: number
+  unavailableLogicalSessions: number
+  logicalSessionIds: string[]
+  packageIds: string[]
+  offlineRootIds: string[]
+  unavailableRootIds: string[]
+  scope: CatalogScope
+  scopeFingerprint: Sha256
+  responseGeneration: string
   computedAt: IsoTimestamp
 }
 
@@ -457,33 +571,83 @@ export interface ExternalEvidenceProvider {
   descriptorVersion: string
 }
 
+export type CoreAssuranceDimension =
+  | 'attachment-identity'
+  | 'runtime-platform'
+  | 'profile-policy'
+  | 'network'
+  | 'event-source-integrity'
+  | 'attestation-external-commitment'
+  | 'filesystem-outcome'
+  | 'rollback'
+  | 'completeness'
+
 export interface AssuranceDimension {
-  dimension: 'identity' | 'integrity-after-ingest' | 'external-commitment' | 'trusted-capture' | 'completeness'
-  status: 'supported' | 'unsupported' | 'unknown'
-  evidence: EvidenceRef[]
-  note: string
+  dimension: CoreAssuranceDimension | `x-${string}/${string}`
+  assessment: 'observed' | 'verified' | 'claimed' | 'unknown' | 'unsupported'
+  evidenceRefs: string[]
+  verificationResultIds: string[]
+  canProve: string[]
+  cannotProve: string[]
 }
 
 export interface ExternalEvidenceAttachment {
   schemaVersion: TruthKernelSchemaVersion
-  attachmentId: string
+  logicalAttachmentId: string
+  revisionId: string
+  revision: number
+  supersedesRevisionId: Availability<string>
   externalProviderId: string
   sourceDigest: Sha256
+  sourceIngestReceiptId: string
   schemaId: string
+  sourceVersion: string
   mappedLogicalSessionId: Availability<string>
-  mapping: 'manual-confirmed' | 'exact-id' | 'unconfirmed-candidate'
+  matchMethod: 'exact-id' | 'heuristic-time' | 'heuristic-cwd' | 'user-selected' | 'other'
+  confirmation: 'user-confirmed' | 'unconfirmed'
+  state: 'candidate' | 'active' | 'detached' | 'target-unavailable' | 'target-merged' | 'superseded'
+  reason: Availability<string>
+  privacyState: 'private-local' | 'user-approved-local' | 'redacted'
+  contentRetention: 'local-copy' | 'reference-only' | 'redacted-metadata-only'
+  sourceDeletionAuthorized: false
   attachedAt: IsoTimestamp
+  evidence: EvidenceRef[]
   assurance: AssuranceDimension[]
+}
+
+export type VerificationFailureCode =
+  | 'source-digest-mismatch'
+  | 'event-digest-mismatch'
+  | 'chain-link-invalid'
+  | 'event-missing'
+  | 'event-duplicate'
+  | 'event-reordered'
+  | 'parser-version-mismatch'
+  | 'serialization-version-unsupported'
+  | 'bundle-artifact-missing'
+  | 'bundle-artifact-digest-mismatch'
+  | 'bundle-truncated'
+  | 'bundle-path-unsafe'
+  | `x-${string}/${string}`
+
+export interface VerificationFailure {
+  code: VerificationFailureCode
+  artifactPath: Availability<string>
+  message: string
+  expectedDigest: Availability<Sha256>
+  actualDigest: Availability<Sha256>
 }
 
 export interface VerificationResult {
   schemaVersion: TruthKernelSchemaVersion
   verificationId: string
-  targetId: string
+  target: { kind: 'source-receipt' | 'event-chain' | 'bundle' | 'artifact'; id: string }
   checkedAt: IsoTimestamp
+  verifierId: string
+  verifierKind: 'built-in-offline' | 'provider-official' | 'external'
   verifierVersion: string
-  result: 'valid' | 'invalid' | 'unavailable'
-  failures: string[]
+  status: 'not-requested' | 'valid' | 'invalid' | 'unavailable' | 'error'
+  failures: VerificationFailure[]
 }
 
 export interface SourceIngestReceipt {
@@ -504,26 +668,42 @@ export interface SourceIngestReceipt {
 export interface CanonicalEventChainEntry {
   eventId: string
   sequence: number
-  eventHash: Sha256
-  previousHash: Availability<Sha256>
+  eventDigest: Sha256
+  previousChainHash: Availability<Sha256>
+  chainHash: Sha256
 }
 
 export interface CanonicalEventChain {
   schemaVersion: TruthKernelSchemaVersion
   chainId: string
   sourceIngestReceiptId: string
+  parserId: string
+  parserVersion: string
   serializationVersion: typeof TRUTH_KERNEL_SERIALIZATION_VERSION
+  expectedEventCount: number
   entries: CanonicalEventChainEntry[]
   headHash: Availability<Sha256>
+}
+
+export interface VerifyBundleArtifact {
+  kind: 'canonical-event' | 'source-receipt' | 'event-chain' | 'offline-verifier' | 'other'
+  objectId: string
+  relativePath: string
+  sha256: Sha256
+  sizeBytes: number
 }
 
 export interface VerifyBundleManifest {
   schemaVersion: TruthKernelSchemaVersion
   bundleId: string
   generatedAt: IsoTimestamp
-  sourceReceiptIds: string[]
-  chainIds: string[]
+  sourceReceipts: Array<{ receiptId: string; sourceSha256: Sha256 }>
+  chainHeads: Array<{ chainId: string; headHash: Sha256 }>
+  parserVersions: Array<{ parserId: string; parserVersion: string }>
   serializationVersion: typeof TRUTH_KERNEL_SERIALIZATION_VERSION
+  artifacts: VerifyBundleArtifact[]
+  verifier: { verifierId: string; version: string; sha256: Sha256 }
+  digestAlgorithm: 'sha256-canonical-json-excluding-bundleDigest'
   bundleDigest: Sha256
   claimBoundary: 'integrity-after-ingest'
 }
@@ -552,6 +732,25 @@ export interface OrchestrationEntity {
   nativeKind: string
   nativeId: string
   rawPayload: JsonValue
+  evidence: EvidenceRef[]
+}
+
+export interface OrchestrationEntityLink {
+  schemaVersion: TruthKernelSchemaVersion
+  edgeId: string
+  orchestratorId: string
+  fromEntityId: string
+  toEntityId: string
+  relation:
+    | 'contains'
+    | 'executes'
+    | 'verifies'
+    | 'uses-evidence'
+    | 'produced-by'
+    | 'parent-of'
+    | 'depends-on'
+    | 'unknown'
+  nativeRelation: Availability<string>
   evidence: EvidenceRef[]
 }
 
@@ -585,13 +784,19 @@ export interface CoverageState {
 export interface ObservedUsageAggregate {
   schemaVersion: TruthKernelSchemaVersion
   aggregateId: string
-  orchestrationRunId: string
+  scope:
+    | { kind: 'run'; orchestrationRunId: string }
+    | { kind: 'entity'; orchestrationEntityId: string }
   usageFactIds: string[]
+  providerId: Availability<string>
+  modelId: Availability<string>
+  metric: 'input-token' | 'output-token' | 'cache-read-token' | 'cache-write-token' | 'cost' | 'other'
   quantityUnit: string
   reportedTotal: Availability<number>
   coveredTotal: Availability<number>
   residual: Availability<number>
-  authoritative: boolean
+  authoritative: Availability<boolean>
+  billingDisposition: 'observation-only'
   coverage: CoverageState
   evidence: EvidenceRef[]
 }
@@ -611,13 +816,42 @@ export interface TranslationContributionDescriptor {
 export interface UserPricingPolicy {
   schemaVersion: TruthKernelSchemaVersion
   policyId: string
+  revisionId: string
+  revision: number
+  policyVersion: string
   purpose: 'public-price-correction' | 'contract-price'
   providerId: string
   modelId: string
+  modelPattern: string
   currency: string
+  rates: Array<{
+    quantityKind: UsageAttribution['quantityKind']
+    unit: UsageAttribution['quantityUnit']
+    unitSize: number
+    price: number
+  }>
+  sourceNote: string
+  lifecycle: 'active' | 'superseded' | 'undone' | 'deleted'
+  supersedesRevisionId: Availability<string>
   effectiveFrom: IsoTimestamp
   effectiveUntil: Availability<IsoTimestamp>
+  createdAt: IsoTimestamp
+  updatedAt: IsoTimestamp
   provenance: EvidenceRef[]
+}
+
+export type PricingPolicyMutationCommand =
+  | { contractVersion: '1.0.0'; commandId: string; kind: 'create'; expectedHeadRevision: null; policy: UserPricingPolicy }
+  | { contractVersion: '1.0.0'; commandId: string; kind: 'supersede'; policyId: string; expectedHeadRevision: number; policy: UserPricingPolicy }
+  | { contractVersion: '1.0.0'; commandId: string; kind: 'undo' | 'delete'; policyId: string; expectedHeadRevision: number; reason: string; occurredAt: IsoTimestamp }
+
+export interface PricingPolicyMutationResponse {
+  contractVersion: '1.0.0'
+  commandId: string
+  status: 'applied' | 'conflict' | 'invalid' | 'unavailable'
+  appendedRevisionId: Availability<string>
+  headRevision: Availability<number>
+  errorCode: Availability<string>
 }
 
 export interface UserModelAlias {
@@ -636,9 +870,14 @@ export interface ValuationView {
   schemaVersion: TruthKernelSchemaVersion
   usageFactId: string
   rawModelId: string
-  officialPriceSnapshotId: Availability<string>
-  publicEquivalent: Availability<{ amount: number; currency: string; policyId?: string }>
-  actualContract: Availability<{ amount: number; currency: string; policyId: string }>
+  officialPriceSnapshot: Availability<{ snapshotId: string; revision: string; digest: Sha256 }>
+  publicEquivalent: Availability<{
+    amount: number
+    currency: string
+    source: 'official-snapshot' | 'user-policy'
+    policyRevisionId: Availability<string>
+  }>
+  actualContract: Availability<{ amount: number; currency: string; policyRevisionId: string }>
   resolution: 'exact' | 'ambiguous' | 'unavailable'
   evidence: EvidenceRef[]
 }
@@ -646,16 +885,19 @@ export interface ValuationView {
 export interface InteractionTrajectoryReadModel {
   schemaVersion: TruthKernelSchemaVersion
   interactionId: string
+  logicalSessionId: string
   ordinal: number
+  modelCalls: InteractionModelCallFact[]
+  toolCount: number
   timing: TimingFacts
-  usage: Availability<{ quantity: number; unit: string; measurement: 'exact' | 'derived' | 'estimated' }>
-  publicEquivalentValue: Availability<{ amount: number; currency: string }>
-  actualContractValue: Availability<{ amount: number; currency: string }>
-  fileActionIds: string[]
+  usageAttributions: UsageAttribution[]
+  branchUsageRollups: BranchUsageRollup[]
+  valuations: ValuationView[]
+  fileActions: FileAction[]
   toolEventIds: string[]
   contextPhase: 'introduced' | 'preserved' | 'summarized' | 'dropped' | 'unknown'
   lineagePhase: 'inherited' | 'independent' | 'unknown'
-  evidenceJumpIds: string[]
+  forkBoundary: Availability<ForkBoundary>
 }
 
 export interface InteractionTrajectoryMockProvider {
@@ -665,14 +907,46 @@ export interface InteractionTrajectoryMockProvider {
   interactions: InteractionTrajectoryReadModel[]
 }
 
-export interface TruthKernelQueryRequest {
-  contractVersion: '1.0.0'
-  query:
-    | { kind: 'timeline'; logicalSessionId: string; afterSequence?: number; limit?: number }
+export interface ExternalEvidenceListItem {
+  logicalAttachmentId: string
+  latestRevisionId: string
+  state: ExternalEvidenceAttachment['state']
+  mappedLogicalSessionId: Availability<string>
+  confirmation: ExternalEvidenceAttachment['confirmation']
+}
+
+export interface ExternalEvidenceDetailReadModel {
+  logicalAttachmentId: string
+  revisions: ExternalEvidenceAttachment[]
+  activeRevision: Availability<ExternalEvidenceAttachment>
+}
+
+export interface AssuranceExplainReadModel {
+  logicalAttachmentId: string
+  dimensions: AssuranceDimension[]
+  verificationResults: VerificationResult[]
+  claimBoundary: 'integrity-after-ingest'
+}
+
+export type TruthKernelQuery =
+  | { kind: 'timeline'; logicalSessionId: string; afterSequence?: number; limit?: number }
     | { kind: 'context-snapshot'; contextSnapshotId: string }
     | { kind: 'trajectory'; logicalSessionId: string }
     | { kind: 'catalog'; scope: CatalogScope }
     | { kind: 'verify-bundle'; bundleId: string }
+    | { kind: 'interaction'; interactionId: string }
+    | { kind: 'file-action'; fileActionId: string }
+    | { kind: 'usage-attribution'; usageAttributionId: string }
+    | { kind: 'valuation'; usageFactId: string }
+    | { kind: 'fork-boundary'; forkBoundaryId: string }
+    | { kind: 'evidence'; evidenceId: string }
+    | { kind: 'external-evidence-list'; logicalSessionId?: string }
+    | { kind: 'external-evidence-detail'; logicalAttachmentId: string; revisionId?: string }
+    | { kind: 'assurance-explain'; logicalAttachmentId: string; dimension?: string }
+
+export interface TruthKernelQueryRequest {
+  contractVersion: '1.0.0'
+  query: TruthKernelQuery
 }
 
 export interface TruthKernelQueryResponse<T = JsonValue> {
@@ -683,6 +957,26 @@ export interface TruthKernelQueryResponse<T = JsonValue> {
   errorCode?: string
   coverage?: CoverageState
 }
+
+export interface TruthKernelQueryResultByKind {
+  timeline: AgentTimelineEvent[]
+  'context-snapshot': ContextSnapshot
+  trajectory: InteractionTrajectoryReadModel[]
+  catalog: CatalogSessionRecord[]
+  'verify-bundle': { manifest: VerifyBundleManifest; verification: VerificationResult }
+  interaction: Interaction
+  'file-action': FileAction
+  'usage-attribution': UsageAttribution
+  valuation: ValuationView
+  'fork-boundary': ForkBoundary
+  evidence: EvidenceRef
+  'external-evidence-list': ExternalEvidenceListItem[]
+  'external-evidence-detail': ExternalEvidenceDetailReadModel
+  'assurance-explain': AssuranceExplainReadModel
+}
+
+export type TruthKernelTypedQueryResponse<Q extends TruthKernelQuery> =
+  TruthKernelQueryResponse<TruthKernelQueryResultByKind[Q['kind']]>
 
 export interface TruthKernelGoldenFixture {
   fixtureVersion: '1.0.0'
@@ -699,10 +993,13 @@ export interface TruthKernelGoldenFixture {
   fileActions: FileAction[]
   artifactVersions: ArtifactVersionRef[]
   usageAttributions: UsageAttribution[]
+  branchUsageRollups: BranchUsageRollup[]
   forkBoundaries: ForkBoundary[]
   storageRoots: StorageRoot[]
+  storageRootObservations: StorageRootObservation[]
   packageLocations: PackageLocation[]
   collections: Collection[]
+  collectionMemberships: CollectionMembership[]
   workspaceTabs: WorkspaceTab[]
   archiveCoverage: ArchiveCoverage
   catalogConfiguration: CatalogConfiguration
@@ -717,11 +1014,14 @@ export interface TruthKernelGoldenFixture {
   providerRegistrationDescriptors: ProviderRegistrationDescriptor[]
   orchestrationRegistrationDescriptors: OrchestrationRegistrationDescriptor[]
   orchestrationEntities: OrchestrationEntity[]
+  orchestrationEntityLinks: OrchestrationEntityLink[]
   orchestrationRuns: OrchestrationRun[]
   orchestrationLinks: SessionOrchestrationLink[]
   usageAggregates: ObservedUsageAggregate[]
   translationDescriptors: TranslationContributionDescriptor[]
   pricingPolicies: UserPricingPolicy[]
+  pricingPolicyCommands: PricingPolicyMutationCommand[]
+  pricingPolicyResponses: PricingPolicyMutationResponse[]
   modelAliases: UserModelAlias[]
   valuations: ValuationView[]
   derivedRecords: Array<DerivedRecord<JsonValue>>

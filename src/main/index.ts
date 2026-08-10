@@ -180,6 +180,11 @@ import { duplicateRecoveryErrorCode } from './duplicate-recovery-failure-code'
 import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
 import { detectSessionSourceFromPath, resolveSessionSyncSource } from './session-source'
+import {
+  filterProjectedPhysicalSourcePaths,
+  isSessionSourceProjected,
+  resolveSessionProjectionSource
+} from './session-projection-policy'
 import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
 import { closeSearchIndex } from './search-index'
 import {
@@ -189,6 +194,8 @@ import {
 } from './search-index-writer'
 import {
   cancelCanonicalProviders,
+  configureCanonicalProviderProjection,
+  reconcileCanonicalProviderProjection,
   withCanonicalProviderRefreshBarrier
 } from './provider-runtime'
 import { closeCanonicalSessionStore } from './canonical-store'
@@ -333,7 +340,7 @@ import {
   resolveSessionSuccessor,
   writeSessionLineageRegistry
 } from './session-lineage'
-import type { Folder, Highlight, SessionSummary } from './types'
+import type { Folder, Highlight, SessionSource, SessionSummary } from './types'
 import type { SshTargetConfig } from './types'
 import type { AnalysisDimension, AnalysisScope, UsageFactSyncResult } from './analysis-contract'
 import { generateSkillContent } from '../cli/command-registry'
@@ -845,6 +852,16 @@ function sourceIsExcluded(source?: string | null): boolean {
   return getExcludedSources().includes(source || 'claude-code')
 }
 
+configureCanonicalProviderProjection((source) => !sourceIsExcluded(source))
+
+function librarySessionProjectionSource(session: LibrarySession): SessionSource | null {
+  return resolveSessionProjectionSource({
+    canonicalProviderId: session.meta.canonicalProvider?.providerId,
+    logicalSourceFamily: session.meta.logicalIdentity?.sourceFamily,
+    sourceFilePaths: session.meta.sourceFilePaths
+  })
+}
+
 async function processLibraryCompensationEntry(sessionId: string, dirPath: string): Promise<void> {
   // Canonical providers intentionally have no backup.jsonl. Their provider-host
   // projection is repaired by the full initialization retry, not this legacy
@@ -1112,7 +1129,7 @@ function notifySearchIndexUpdated(): void {
 function scheduleSearchIndexWarmupNow(): Promise<void> {
   if (runtimeShuttingDown) return Promise.resolve()
   const scheduledEpoch = libraryRuntimeEpoch
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     let started = false
     scheduleEpochBoundTask({
       epoch: scheduledEpoch,
@@ -1121,12 +1138,15 @@ function scheduleSearchIndexWarmupNow(): Promise<void> {
       isStopped: () => runtimeShuttingDown,
       run: () => {
         started = true
-        void getSearchIndexWriteCoordinator().scheduleLegacySnapshot(currentSearchSources())
-          .then(notifySearchIndexUpdated)
-          .catch((error) => {
-            if (!runtimeShuttingDown) console.error('[search-index] background warmup delayed:', error)
-          })
-          .finally(resolve)
+        try {
+          void getSearchIndexWriteCoordinator().scheduleLegacySnapshot(currentSearchSources())
+            .then(() => {
+              notifySearchIndexUpdated()
+              resolve()
+            }, reject)
+        } catch (error) {
+          reject(error)
+        }
       }
     })
     // scheduleEpochBoundTask intentionally does not call run for a replaced or
@@ -1136,8 +1156,12 @@ function scheduleSearchIndexWarmupNow(): Promise<void> {
   })
 }
 
+function reconcileSearchIndexProjection(): Promise<void> {
+  return startupProjectionGate.scheduleSearch(scheduleSearchIndexWarmupNow)
+}
+
 function scheduleSearchIndexWarmup(): void {
-  void startupProjectionGate.scheduleSearch(scheduleSearchIndexWarmupNow).catch((error) => {
+  void reconcileSearchIndexProjection().catch((error) => {
     if (!runtimeShuttingDown) console.error('[search-index] queued warmup dropped:', error)
   })
 }
@@ -1874,11 +1898,15 @@ async function hydrateLibrarySessionsUnderGate(tree: LibraryTree): Promise<void>
     if (generation !== libraryHydrationGeneration) return
     const { sessionId, jsonlPath: backupPath, meta } = librarySession
     if (coveredIds.has(sessionId)) continue
+    const evidencedSource = librarySessionProjectionSource(librarySession)
     try {
-      const summary = fs.existsSync(backupPath)
-        ? await buildSessionSummaryFromBackup(backupPath, sessionId, meta) || buildSessionSummaryFromManifest(librarySession)
-        : buildSessionSummaryFromManifest(librarySession)
+      const backupSummary = fs.existsSync(backupPath)
+        ? await buildSessionSummaryFromBackup(backupPath, sessionId, meta)
+        : null
+      const summary = backupSummary || buildSessionSummaryFromManifest(librarySession)
       if (!summary || coveredIds.has(summary.id) || coveredIds.has(summary.sessionId)) continue
+      const projectionSource = backupSummary?.source || evidencedSource
+      if (!isSessionSourceProjected(projectionSource, getExcludedSources())) continue
       summary.allFilePaths = [backupPath]
       annotateDuplicatePackageEvidence(summary, librarySession)
       annotateSessionSuccessor(summary)
@@ -1893,6 +1921,7 @@ async function hydrateLibrarySessionsUnderGate(tree: LibraryTree): Promise<void>
     } catch {
       const summary = buildSessionSummaryFromManifest(librarySession)
       if (coveredIds.has(summary.id) || coveredIds.has(summary.sessionId)) continue
+      if (!isSessionSourceProjected(evidencedSource, getExcludedSources())) continue
       annotateDuplicatePackageEvidence(summary, librarySession)
       annotateSessionSuccessor(summary)
       annotateSessionForFrontend(summary, librarySession.dirPath)
@@ -3079,6 +3108,10 @@ function refreshCachedMissingSources(): void {
     return
   }
   cachedMissingSources = collectLibrarySessionsFromTree(latestLibraryTree)
+    .filter((session) => isSessionSourceProjected(
+      librarySessionProjectionSource(session),
+      getExcludedSources()
+    ))
     .filter((session) => {
       const sources = Array.isArray(session.meta.sourceFilePaths) ? session.meta.sourceFilePaths : []
       return sources.length === 0 || !sources.some((sourcePath) => {
@@ -3106,7 +3139,10 @@ function currentSearchSources(): Array<{
     session.source === 'codex' || session.source === 'cursor'
       ? (session.allFilePaths || [session.filePath])
       : [])
-  const files = [...new Set([...findAllSessionFiles(), ...loadedSpecialSourceFiles])].filter((filePath) =>
+  const files = filterProjectedPhysicalSourcePaths(
+    [...new Set([...findAllSessionFiles(), ...loadedSpecialSourceFiles])],
+    getExcludedSources()
+  ).filter((filePath) =>
     !filePath.includes('/subagents/') &&
     !providerUsesCanonicalRuntime(detectSessionSourceFromPath(filePath) || '')
   )
@@ -4978,9 +5014,11 @@ ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, exclud
     // own durable boundary. A pre-change teardown failure must leave the old
     // default root unauthorized for background writes.
     setExcludedSources(excluded)
+    await reconcileCanonicalProviderProjection()
     const activationSessions = filterSessionSources(sourceSessions, excluded)
     cachedSessions = [...activationSessions]
     const root = await activateLibraryAt(targetPath, activationSessions)
+    await reconcileSearchIndexProjection()
     completeOnboarding(targetPath, excluded)
     mainWindow?.webContents.send('sessions:updated', cachedSessions.map(sessionSummaryForRenderer))
     return root
@@ -4989,11 +5027,15 @@ ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, exclud
   }
 })
 
-ipcMain.handle('onboarding:setExcludedSources', (_event, excludedSources: string[]) => {
+ipcMain.handle('onboarding:setExcludedSources', async (_event, excludedSources: string[]) => {
   if (onboardingCompletionRunning) throw new Error('onboarding-completion-already-running')
   const excluded = Array.isArray(excludedSources) ? excludedSources.filter((item) => typeof item === 'string') : []
   setExcludedSources(excluded)
+  await reconcileCanonicalProviderProjection()
   cachedSessions = sourceSessionInventory.filtered(excluded)
+  refreshCachedMissingSources()
+  await reconcileSearchIndexProjection()
+  void scheduleUsageFactSync()
   return excluded
 })
 

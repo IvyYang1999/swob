@@ -18,6 +18,8 @@ import {
 } from './canonical-package'
 import { ProviderHost, type BuiltinProviderRuntime, type BuiltinProviderRuntimeV2 } from './provider-host'
 import {
+  configureCanonicalProviderProjection,
+  reconcileCanonicalProviderProjection,
   refreshCanonicalProviders,
   withCanonicalProviderRefreshBarrier
 } from './provider-runtime'
@@ -107,6 +109,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  configureCanonicalProviderProjection(null)
   closeSearchIndex()
   closeCanonicalSessionStore()
   if (previousHome === undefined) delete process.env.HOME
@@ -685,6 +688,76 @@ describe('canonical provider runtime full chain', () => {
     expect(transient.reports[0].errors).toMatchObject([{ code: 'provider-failed' }])
     expect(transient.tombstonedSessionRecordIds).toHaveLength(0)
     expect(store.listSessions('swob/pi')).toHaveLength(1)
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
+  })
+
+  it('prunes excluded canonical search and skips archival without deleting stored evidence', async () => {
+    const piRoot = path.join(home, '.pi', 'agent', 'sessions')
+    const sourcePath = path.join(piRoot, 'project', 'session.jsonl')
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    fs.copyFileSync(fixturePath(), sourcePath)
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({
+      runtimes: [createPiProvider({ homeDir: home, roots: [piRoot] })]
+    })
+
+    await refreshCanonicalProviders({ host, store, shouldProjectSource: () => true })
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
+    expect(packageDirs()).toHaveLength(0)
+
+    await refreshCanonicalProviders({
+      host,
+      store,
+      archive: true,
+      shouldProjectSource: (source) => source !== 'pi'
+    })
+
+    expect(store.listSessions('swob/pi')).toHaveLength(1)
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(0)
+    expect(packageDirs()).toHaveLength(0)
+
+    await refreshCanonicalProviders({
+      host,
+      store,
+      archive: true,
+      shouldProjectSource: () => true
+    })
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
+    expect(packageDirs()).toHaveLength(1)
+
+    await reconcileCanonicalProviderProjection({
+      store,
+      shouldProjectSource: (source) => source !== 'pi'
+    })
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(0)
+    expect(store.listSessions('swob/pi')).toHaveLength(1)
+    expect(packageDirs()).toHaveLength(1)
+  })
+
+  it('immediately reconciles existing canonical search when source projection changes', async () => {
+    const piRoot = path.join(home, '.pi', 'agent', 'sessions')
+    const sourcePath = path.join(piRoot, 'project', 'session.jsonl')
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true })
+    fs.copyFileSync(fixturePath(), sourcePath)
+    const store = getCanonicalSessionStore()
+    const host = new ProviderHost({
+      runtimes: [createPiProvider({ homeDir: home, roots: [piRoot] })]
+    })
+
+    await refreshCanonicalProviders({ host, store })
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
+
+    await reconcileCanonicalProviderProjection({
+      store,
+      shouldProjectSource: (source) => source !== 'pi'
+    })
+    expect(store.listSessions('swob/pi')).toHaveLength(1)
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(0)
+
+    await reconcileCanonicalProviderProjection({
+      store,
+      shouldProjectSource: () => true
+    })
     expect(searchFTS('synthetic-search-needle')).toHaveLength(1)
   })
 

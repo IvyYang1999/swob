@@ -112,7 +112,7 @@ describe('live Library synchronization architecture', () => {
     expect(source).toContain('getSearchIndexWriteCoordinator().scheduleLegacySource')
     expect(source).toContain('getSearchIndexWriteCoordinator().scheduleLegacySnapshot')
     expect(source).toMatch(/scheduleLegacySource\([\s\S]*?\.then\(notifySearchIndexUpdated\)/)
-    expect(source).toMatch(/scheduleLegacySnapshot\([\s\S]*?\.then\(notifySearchIndexUpdated\)/)
+    expect(source).toMatch(/scheduleLegacySnapshot\([\s\S]*?\.then\([\s\S]*?notifySearchIndexUpdated\(\)/)
     const searchHandler = source.match(
       /ipcMain\.handle\('sessions:search',[\s\S]*?\n}\)/
     )?.[0] || ''
@@ -134,7 +134,10 @@ describe('live Library synchronization architecture', () => {
   it('defers full projections until the initial live durability boundary', () => {
     expect(source).toContain('const startupProjectionGate = new StartupProjectionGate<UsageFactSyncResult>()')
     expect(source).toMatch(
-      /function scheduleSearchIndexWarmup\(\): void \{[\s\S]*?startupProjectionGate\.scheduleSearch\(scheduleSearchIndexWarmupNow\)/
+      /function reconcileSearchIndexProjection\(\): Promise<void> \{[\s\S]*?startupProjectionGate\.scheduleSearch\(scheduleSearchIndexWarmupNow\)/
+    )
+    expect(source).toMatch(
+      /function scheduleSearchIndexWarmup\(\): void \{[\s\S]*?reconcileSearchIndexProjection\(\)/
     )
     expect(source).toMatch(
       /function scheduleUsageFactSync[\s\S]*?startupProjectionGate\.scheduleUsage\(options, scheduleUsageFactSyncNow\)/
@@ -284,13 +287,27 @@ describe('live Library synchronization architecture', () => {
     expect(source).toContain('libraryRootActivationSnapshotSequence')
     expect(source).toContain('`${requestedRoot}\\0snapshot:${++libraryRootActivationSnapshotSequence}`')
     expect(onboarding.indexOf('setExcludedSources(excluded)')).toBeGreaterThan(-1)
+    expect(onboarding).toContain('await reconcileCanonicalProviderProjection()')
     expect(onboarding.indexOf('const root = await activateLibraryAt(targetPath, activationSessions)')).toBeGreaterThan(
       onboarding.indexOf('setExcludedSources(excluded)')
+    )
+    expect(onboarding.indexOf('await reconcileSearchIndexProjection()')).toBeGreaterThan(
+      onboarding.indexOf('const root = await activateLibraryAt(targetPath, activationSessions)')
     )
     expect(onboarding.indexOf('completeOnboarding(targetPath, excluded)')).toBeGreaterThan(
       onboarding.indexOf('const root = await activateLibraryAt(targetPath, activationSessions)')
     )
     expect(source).toContain("if (onboardingCompletionRunning) throw new Error('onboarding-completion-already-running')")
+    expect(source).toContain('configureCanonicalProviderProjection((source) => !sourceIsExcluded(source))')
+    expect(source).toMatch(
+      /async function hydrateLibrarySessionsUnderGate[\s\S]*?librarySessionProjectionSource\(librarySession\)[\s\S]*?isSessionSourceProjected\(projectionSource, getExcludedSources\(\)\)[\s\S]*?isSessionSourceProjected\(evidencedSource, getExcludedSources\(\)\)/
+    )
+    expect(source).toMatch(
+      /function refreshCachedMissingSources[\s\S]*?isSessionSourceProjected\([\s\S]*?librarySessionProjectionSource\(session\)/
+    )
+    expect(source).toMatch(
+      /function currentSearchSources[\s\S]*?filterProjectedPhysicalSourcePaths\([\s\S]*?getExcludedSources\(\)/
+    )
   })
 
   it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {

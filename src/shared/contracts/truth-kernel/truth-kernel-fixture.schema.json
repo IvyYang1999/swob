@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swob.dev/schema/truth-kernel/fixture/v1",
+  "title": "Swob Truth Kernel v1 golden fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fixtureVersion",
+    "scenarioIds",
+    "timelineEvents",
+    "contextArtifacts",
+    "contextInjections",
+    "contextSnapshots",
+    "contextTransitions",
+    "mcpExposures",
+    "deferredToolsDeltas",
+    "toolSearchReceipts",
+    "interactions",
+    "fileActions",
+    "artifactVersions",
+    "usageAttributions",
+    "forkBoundaries",
+    "storageRoots",
+    "packageLocations",
+    "collections",
+    "workspaceTabs",
+    "archiveCoverage",
+    "catalogConfiguration",
+    "catalogSessions",
+    "writableBindings",
+    "externalEvidenceProviders",
+    "externalEvidenceAttachments",
+    "sourceIngestReceipts",
+    "canonicalEventChains",
+    "verifyBundles",
+    "verificationResults",
+    "providerRegistrationDescriptors",
+    "orchestrationRegistrationDescriptors",
+    "orchestrationEntities",
+    "orchestrationRuns",
+    "orchestrationLinks",
+    "usageAggregates",
+    "translationDescriptors",
+    "pricingPolicies",
+    "modelAliases",
+    "valuations",
+    "derivedRecords",
+    "trajectoryProvider"
+  ],
+  "properties": {
+    "fixtureVersion": { "const": "1.0.0" },
+    "scenarioIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "timelineEvents": { "$ref": "#/$defs/versionedArray" },
+    "contextArtifacts": { "$ref": "#/$defs/versionedArray" },
+    "contextInjections": { "$ref": "#/$defs/versionedArray" },
+    "contextSnapshots": { "$ref": "#/$defs/versionedArray" },
+    "contextTransitions": { "$ref": "#/$defs/versionedArray" },
+    "mcpExposures": { "$ref": "#/$defs/versionedArray" },
+    "deferredToolsDeltas": { "$ref": "#/$defs/versionedArray" },
+    "toolSearchReceipts": { "$ref": "#/$defs/versionedArray" },
+    "interactions": { "$ref": "#/$defs/versionedArray" },
+    "fileActions": { "$ref": "#/$defs/versionedArray" },
+    "artifactVersions": { "$ref": "#/$defs/versionedArray" },
+    "usageAttributions": { "$ref": "#/$defs/versionedArray" },
+    "forkBoundaries": { "$ref": "#/$defs/versionedArray" },
+    "storageRoots": { "$ref": "#/$defs/versionedArray" },
+    "packageLocations": { "$ref": "#/$defs/versionedArray" },
+    "collections": { "$ref": "#/$defs/versionedArray" },
+    "workspaceTabs": { "$ref": "#/$defs/versionedArray" },
+    "archiveCoverage": { "$ref": "#/$defs/versionedObject" },
+    "catalogConfiguration": { "$ref": "#/$defs/versionedObject" },
+    "catalogSessions": { "$ref": "#/$defs/versionedArray" },
+    "writableBindings": { "$ref": "#/$defs/versionedArray" },
+    "externalEvidenceProviders": { "$ref": "#/$defs/versionedArray" },
+    "externalEvidenceAttachments": { "$ref": "#/$defs/versionedArray" },
+    "sourceIngestReceipts": { "$ref": "#/$defs/versionedArray" },
+    "canonicalEventChains": { "$ref": "#/$defs/versionedArray" },
+    "verifyBundles": { "$ref": "#/$defs/versionedArray" },
+    "verificationResults": { "$ref": "#/$defs/versionedArray" },
+    "providerRegistrationDescriptors": { "$ref": "#/$defs/versionedArray" },
+    "orchestrationRegistrationDescriptors": { "$ref": "#/$defs/versionedArray" },
+    "orchestrationEntities": { "$ref": "#/$defs/versionedArray" },
+    "orchestrationRuns": { "$ref": "#/$defs/versionedArray" },
+    "orchestrationLinks": { "$ref": "#/$defs/versionedArray" },
+    "usageAggregates": { "$ref": "#/$defs/versionedArray" },
+    "translationDescriptors": { "$ref": "#/$defs/versionedArray" },
+    "pricingPolicies": { "$ref": "#/$defs/versionedArray" },
+    "modelAliases": { "$ref": "#/$defs/versionedArray" },
+    "valuations": { "$ref": "#/$defs/versionedArray" },
+    "derivedRecords": { "$ref": "#/$defs/versionedArray" },
+    "trajectoryProvider": {
+      "allOf": [
+        { "$ref": "#/$defs/versionedObject" },
+        {
+          "type": "object",
+          "required": ["providerId", "contractVersion", "interactions"],
+          "properties": {
+            "providerId": { "const": "truth-kernel/mock-trajectory-v1" },
+            "contractVersion": { "const": "1.0.0" },
+            "interactions": { "$ref": "#/$defs/versionedArray" }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "versionedObject": {
+      "type": "object",
+      "required": ["schemaVersion"],
+      "properties": { "schemaVersion": { "const": 1 } }
+    },
+    "versionedArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/versionedObject" }
+    }
+  }
+}

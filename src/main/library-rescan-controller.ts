@@ -3,6 +3,8 @@ export class LibraryRescanController {
   private running = false
   private timer: ReturnType<typeof setTimeout> | null = null
   private disposed = false
+  private idlePromise: Promise<void> | null = null
+  private resolveIdle: (() => void) | null = null
 
   constructor(
     private readonly scan: () => Promise<void>,
@@ -22,6 +24,15 @@ export class LibraryRescanController {
     this.timer = null
   }
 
+  async waitForIdle(): Promise<void> {
+    await this.idlePromise
+  }
+
+  async disposeAndWait(): Promise<void> {
+    this.dispose()
+    await this.waitForIdle()
+  }
+
   private schedule(): void {
     if (this.running || this.timer || this.disposed) return
     this.timer = setTimeout(() => {
@@ -34,10 +45,14 @@ export class LibraryRescanController {
     if (this.running || !this.dirty || this.disposed) return
     this.dirty = false
     this.running = true
+    this.idlePromise = new Promise<void>((resolve) => { this.resolveIdle = resolve })
     try {
       await this.scan()
     } finally {
       this.running = false
+      this.resolveIdle?.()
+      this.resolveIdle = null
+      this.idlePromise = null
       if (this.dirty) this.schedule()
     }
   }

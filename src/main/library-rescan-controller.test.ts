@@ -37,4 +37,27 @@ describe('LibraryRescanController', () => {
     controller.dispose()
     vi.useRealTimers()
   })
+
+  it('disposes queued work and waits for an already-running scan to settle', async () => {
+    vi.useFakeTimers()
+    let release!: () => void
+    const active = new Promise<void>((resolve) => { release = resolve })
+    const scan = vi.fn(() => active)
+    const controller = new LibraryRescanController(scan, 50)
+
+    controller.markDirty()
+    await vi.advanceTimersByTimeAsync(50)
+    let drained = false
+    const draining = controller.disposeAndWait().then(() => { drained = true })
+    controller.markDirty()
+    await Promise.resolve()
+    expect(drained).toBe(false)
+    expect(scan).toHaveBeenCalledTimes(1)
+
+    release()
+    await draining
+    await vi.advanceTimersByTimeAsync(100)
+    expect(scan).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
 })

@@ -179,7 +179,7 @@ describe('live Library synchronization architecture', () => {
       /async function activateLibraryAt[\s\S]*?libraryRuntimePaused = false[\s\S]*?scheduleAutomaticDuplicateRecoveryAnalysis\(\)/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?cancelActiveDuplicateRecoveryAnalysis[\s\S]*?await duplicateRecoveryAnalysisCancellation[\s\S]*?changeConfiguredLibraryPath/
+      /async function activateLibraryAt[\s\S]*?cancelActiveDuplicateRecoveryAnalysis[\s\S]*?duplicateRecoveryAnalysisCancellation,[\s\S]*?switchingLibraryWatcher\?\.close\(\)[\s\S]*?changeConfiguredLibraryPath/
     )
     const applyHandler = source.match(
       /ipcMain\.handle\('library:applyDuplicateRecovery',[\s\S]*?\n}\)\n\nipcMain\.handle\('library:selectDirectory'/
@@ -229,6 +229,12 @@ describe('live Library synchronization architecture', () => {
     )
     expect(source).toMatch(
       /const recoveringWriter = getLibraryHealth\(\)\.state === 'writer-blocked'[\s\S]*?if \(recoveringWriter\) return[\s\S]*?handleInitialLibraryGlobalFailure\(error\)/
+    )
+    expect(source).toMatch(
+      /async function activateLibraryAt[\s\S]*?const switchingLibraryWatcher = libraryWatcher[\s\S]*?libraryWatcher = null[\s\S]*?switchingLibraryRescanController\?\.dispose\(\)[\s\S]*?switchingLibraryWatcher\?\.close\(\)[\s\S]*?switchingLibraryRescanController\?\.waitForIdle\(\)/
+    )
+    expect(source).toMatch(
+      /function startLibraryWatcher[\s\S]*?const controller = new LibraryRescanController[\s\S]*?watcherEpoch !== libraryRuntimeEpoch[\s\S]*?onDirty: \(\) => controller\.markDirty\(\)/
     )
   })
 

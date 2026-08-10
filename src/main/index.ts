@@ -1761,8 +1761,9 @@ function adoptLibraryTree(tree: LibraryTree, notifyRenderer = true): boolean {
 
 async function requestLibraryScan(notifyRenderer = true): Promise<LibraryTree> {
   const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+  const requestedRoot = getLibraryRoot()
   for (let attempt = 0; attempt < 5; attempt++) {
-    const tree = await worker.scan(getLibraryRoot())
+    const tree = await worker.scan(requestedRoot)
     if (adoptLibraryTree(tree, notifyRenderer)) return tree
   }
   throw new Error('Library 在持续写入，扫描结果已过期；请稍后重试')
@@ -1883,14 +1884,22 @@ async function hydrateLibrarySessionsUnderGate(tree: LibraryTree): Promise<void>
 }
 
 async function initializeLibraryScanInBackground(): Promise<void> {
+  const scanEpoch = libraryRuntimeEpoch
+  const scanRoot = getLibraryRoot()
   try {
     let tree = await requestLibraryScan()
+    if (runtimeShuttingDown || libraryRuntimePaused || scanEpoch !== libraryRuntimeEpoch ||
+      path.resolve(scanRoot) !== path.resolve(getLibraryRoot())) return
     if (await migrateLegacyDetailAvailability(tree) > 0) {
       tree = await requestLibraryScan()
     }
+    if (runtimeShuttingDown || libraryRuntimePaused || scanEpoch !== libraryRuntimeEpoch ||
+      path.resolve(scanRoot) !== path.resolve(getLibraryRoot())) return
     transcriptWatcher?.start()
     if (cachedSessions.length > 0) void hydrateLibrarySessions(tree)
   } catch (error) {
+    if (runtimeShuttingDown || libraryRuntimePaused || scanEpoch !== libraryRuntimeEpoch ||
+      path.resolve(scanRoot) !== path.resolve(getLibraryRoot())) return
     const classification = classifyLibraryError(error)
     transitionLibraryHealth(
       classification.state,
@@ -1910,14 +1919,26 @@ function startLibraryWatcher(): void {
   libraryRescanController = null
   const root = getLibraryRoot()
   if (!root || !fs.existsSync(root)) return
-  libraryRescanController = new LibraryRescanController(async () => {
-    const tree = await requestLibraryScan()
-    await hydrateLibrarySessions(tree)
-    recordCurrentFreshnessErrors()
+  const watcherEpoch = libraryRuntimeEpoch
+  const controller = new LibraryRescanController(async () => {
+    if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogSafetyStopped() ||
+      watcherEpoch !== libraryRuntimeEpoch || path.resolve(root) !== path.resolve(getLibraryRoot())) return
+    try {
+      const tree = await requestLibraryScan()
+      if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogSafetyStopped() ||
+        watcherEpoch !== libraryRuntimeEpoch || path.resolve(root) !== path.resolve(getLibraryRoot())) return
+      await hydrateLibrarySessions(tree)
+      recordCurrentFreshnessErrors()
+    } catch (error) {
+      if (runtimeShuttingDown || libraryRuntimePaused || watcherEpoch !== libraryRuntimeEpoch ||
+        path.resolve(root) !== path.resolve(getLibraryRoot())) return
+      handleLibraryGlobalFailure(error, { kind: 'refresh' }, libraryWorker, 'library-recovery')
+    }
   }, 750)
+  libraryRescanController = controller
   libraryWatcher = watchLibraryDirectory({
     root,
-    onDirty: () => libraryRescanController?.markDirty(),
+    onDirty: () => controller.markDirty(),
     onError: (error) => console.error('[library-watcher] failed:', error)
   })
   writeLifecycleLog('library-watcher-started', { backend: libraryWatcher.backend })
@@ -4532,6 +4553,14 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   preparedDuplicateRecovery = null
   advanceLibraryWriterArbiterEpoch()
   libraryRuntimePaused = true
+  // Detach the old root's event sources synchronously before the first await.
+  // A queued dirty event then targets only its disposed controller, never a
+  // controller installed later for the new root.
+  const switchingLibraryWatcher = libraryWatcher
+  libraryWatcher = null
+  const switchingLibraryRescanController = libraryRescanController
+  libraryRescanController = null
+  switchingLibraryRescanController?.dispose()
   startupProjectionGate.reset(new Error('Library root is changing'))
   // Search backup paths and Usage folder dimensions are root-scoped. A root
   // switch is therefore a projection migration even when Library dirty=0.
@@ -4542,7 +4571,11 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   let librarySwitchCommitted = false
   let librarySwitchFailure: unknown = null
   try {
-    await duplicateRecoveryAnalysisCancellation
+    await Promise.all([
+      duplicateRecoveryAnalysisCancellation,
+      switchingLibraryWatcher?.close(),
+      switchingLibraryRescanController?.waitForIdle()
+    ])
     await libraryWriterRecoveryPromise?.catch(() => undefined)
     await libraryBacklogRecoveryPromise?.catch(() => undefined)
     await libraryInitializationPromise?.catch(() => undefined)

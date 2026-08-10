@@ -216,11 +216,21 @@ class LibraryHealthStateMachine extends EventEmitter {
         remaining: 0,
         failures: [],
         failureCounts: {},
-        unverifiableBuckets: emptyUnverifiableBuckets()
+        unverifiableBuckets: emptyUnverifiableBuckets(),
+        recovery: {
+          state: 'idle',
+          retryScheduled: 0,
+          waitingProvider: 0,
+          attentionRequired: 0,
+          exhausted: 0,
+          maxAttempts: 5,
+          nextRetryAt: null
+        }
       },
       identityExceptions: {
         state: 'none',
         stateSinceAt: now,
+        analysisGeneration: 'unobserved',
         authorizedGroupCount: 0,
         authorizedPackageCount: 0,
         unknownGroupCount: 0,
@@ -471,6 +481,15 @@ class LibraryHealthStateMachine extends EventEmitter {
     this.commit(previous)
   }
 
+  setBackgroundRecovery(recovery: LibraryHealthDimensions['backgroundBacklog']['recovery']): void {
+    const previous = this._state
+    this._dimensions.backgroundBacklog = {
+      ...this._dimensions.backgroundBacklog,
+      recovery: { ...recovery }
+    }
+    this.commit(previous)
+  }
+
   setIdentityExceptions(summary: Omit<LibraryHealthDimensions['identityExceptions'], 'stateSinceAt'>): void {
     const current = this._dimensions.identityExceptions
     if (!this.transitionAllowed('identityExceptions', current.state, summary.state)) return
@@ -523,7 +542,6 @@ class LibraryHealthStateMachine extends EventEmitter {
     const identity = this._dimensions.identityExceptions
     const hasIdentityRestrictions = identity.authorizedGroupCount + identity.unknownGroupCount +
       identity.evidenceMismatchGroupCount > 0
-    const background = this._dimensions.backgroundBacklog
     const compensation = compensationQueue.progress
     return {
       schemaVersion: 1,
@@ -536,10 +554,9 @@ class LibraryHealthStateMachine extends EventEmitter {
       diagnostics: [...this._diagnostics],
       compensation,
       writerRecovery: { ...this._writerRecovery },
-      availableActions: compensationQueue.running || background.state === 'running'
+      availableActions: compensationQueue.running
         ? ['cancel-compensation']
-        : this._state === 'writer-blocked' || compensation.pending > 0 ||
-            background.state === 'paused' || background.state === 'completed-with-errors'
+        : this._state === 'writer-blocked' || compensation.pending > 0
           ? ['retry-compensation']
           : [],
       dimensions: structuredClone(this._dimensions)
@@ -718,6 +735,7 @@ function redactPath(filePath: string): string {
 // ---------------------------------------------------------------------------
 
 const healthMachine = new LibraryHealthStateMachine()
+let healthRevision = 0
 // One writer at a time: parallel workers would only contend for the same lease
 // and can turn a healthy second item into a false timeout failure.
 const compensationQueue = new CompensationQueue(1)
@@ -736,6 +754,10 @@ export function getLibraryHealth(): LibraryHealthSnapshot {
   return healthMachine.snapshot()
 }
 
+export function getLibraryHealthRevision(): number {
+  return healthRevision
+}
+
 /**
  * Transition the Library to a new health state.
  *
@@ -748,8 +770,10 @@ export function transitionLibraryHealth(
   errorCode?: string,
   message?: string,
   reason?: LibraryWriterFailureReason
-): void {
+): number {
   healthMachine.transition(next, errorCode, message, reason)
+  healthRevision++
+  return healthRevision
 }
 
 export function updateLibraryWriterRecovery(status: LibraryWriterRecoveryStatus): void {
@@ -798,6 +822,19 @@ export function finishLibraryBackgroundSync(paused = false): void {
   healthMachine.finishBackgroundSync(paused)
 }
 
+export function updateLibraryBackgroundRecovery(
+  recovery: LibraryHealthDimensions['backgroundBacklog']['recovery']
+): void {
+  healthMachine.setBackgroundRecovery({
+    ...recovery,
+    retryScheduled: Math.max(0, Math.trunc(recovery.retryScheduled)),
+    waitingProvider: Math.max(0, Math.trunc(recovery.waitingProvider)),
+    attentionRequired: Math.max(0, Math.trunc(recovery.attentionRequired)),
+    exhausted: Math.max(0, Math.trunc(recovery.exhausted)),
+    maxAttempts: Math.max(0, Math.trunc(recovery.maxAttempts))
+  })
+}
+
 export function updateLibraryUnverifiableBuckets(
   buckets: Readonly<Record<UnverifiableReason, number>>
 ): void {
@@ -837,6 +874,7 @@ export function recordLibraryDiagnostic(
  */
 export function resetLibraryHealth(): void {
   healthMachine.reset()
+  healthRevision++
   compensationQueue.reset()
 }
 
@@ -949,7 +987,11 @@ export function classifyLibraryError(
     }
   }
 
-  const err = error as { name?: string; code?: string; message?: string; reason?: unknown }
+  const err = error as { name?: string; code?: string; message?: string; reason?: unknown; cause?: unknown }
+
+  if (err.name === 'LibraryStartupBatchTransportError' && err.cause && err.cause !== error) {
+    return classifyLibraryError(err.cause)
+  }
 
   if (err.code === 'WRITER_IDENTITY_UNAVAILABLE') {
     return {
@@ -989,6 +1031,14 @@ export function classifyLibraryError(
       state: 'corrupt',
       errorCode: 'PATH_UNSAFE',
       message: 'Library path failed safety validation'
+    }
+  }
+  if (err.name === 'LibraryStartupCheckpointCorruptError' ||
+    err.code === 'LIBRARY_STARTUP_CHECKPOINT_CORRUPT') {
+    return {
+      state: 'corrupt',
+      errorCode: 'LIBRARY_STARTUP_CHECKPOINT_CORRUPT',
+      message: 'Library startup recovery checkpoint failed integrity validation'
     }
   }
 

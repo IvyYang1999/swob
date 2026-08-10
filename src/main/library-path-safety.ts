@@ -170,6 +170,71 @@ function cleanupUnvalidatedCreatedFile(target: string, opened: fs.Stats): void {
   } catch { /* the unsafe path stays fail-closed */ }
 }
 
+/**
+ * Read an existing regular file without trusting a lexical path after it has
+ * been validated. Parent identities and the target inode are rechecked after
+ * open, before any bytes are consumed, closing the ancestor-swap window that
+ * O_NOFOLLOW alone cannot cover.
+ */
+export function readSafeLibraryFileSync(
+  libraryRoot: string,
+  filePath: string,
+  options: { maxBytes?: number; beforeOpen?: () => void } = {}
+): Buffer | null {
+  const target = assertSafeLibraryWritePath(libraryRoot, filePath, { allowRoot: false })
+  assertSafeLibraryWritePath(libraryRoot, path.dirname(target))
+  let expectedTarget: PathIdentity
+  try {
+    const stat = fs.lstatSync(target)
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new LibraryPathUnsafeError(target, 'read-target-not-regular-file')
+    }
+    expectedTarget = {
+      path: target,
+      dev: stat.dev,
+      ino: stat.ino,
+      birthtimeMs: stat.birthtimeMs
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+  const parentIdentities = captureParentIdentities(libraryRoot, target)
+  options.beforeOpen?.()
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0
+  let fd: number
+  try {
+    fd = fs.openSync(target, fs.constants.O_RDONLY | noFollow)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ELOOP' || code === 'ENOTDIR') {
+      throw new LibraryPathUnsafeError(target, `read-target-changed:${code}`)
+    }
+    throw error
+  }
+  try {
+    const opened = fs.fstatSync(fd)
+    revalidateParentIdentities(libraryRoot, parentIdentities)
+    assertSafeLibraryFileTarget(libraryRoot, target)
+    const current = fs.lstatSync(target)
+    if (!opened.isFile() || !sameIdentity(opened, expectedTarget) ||
+      !sameIdentity(opened, {
+        path: target,
+        dev: current.dev,
+        ino: current.ino,
+        birthtimeMs: current.birthtimeMs
+      })) {
+      throw new LibraryPathUnsafeError(target, 'read-target-identity-changed')
+    }
+    if (options.maxBytes !== undefined && opened.size > options.maxBytes) {
+      throw new LibraryPathUnsafeError(target, 'read-target-too-large')
+    }
+    return fs.readFileSync(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 export function writeSafeLibraryFileSync(
   libraryRoot: string,
   filePath: string,

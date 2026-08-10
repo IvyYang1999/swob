@@ -5,11 +5,13 @@ import {
 } from './canonical-store'
 import { getSearchIndexWriteCoordinator } from './search-index-writer'
 import { projectNativeV2ChunksForConsumers } from './provider-v2-consumer-projection'
+import { builtinProviderForId } from '../shared/provider-capabilities'
 
 export interface CanonicalProviderRefreshOptions {
   host?: ProviderHost
   store?: CanonicalSessionStore
   archive?: boolean
+  shouldProjectSource?: (sourceId: string) => boolean
 }
 
 export interface CanonicalProviderRefreshResult {
@@ -20,6 +22,42 @@ export interface CanonicalProviderRefreshResult {
 
 let defaultHost: ProviderHost | null = null
 let runtimeTail: Promise<void> = Promise.resolve()
+let configuredSourceProjection: (sourceId: string) => boolean = () => true
+
+export function configureCanonicalProviderProjection(
+  predicate: ((sourceId: string) => boolean) | null
+): void {
+  configuredSourceProjection = predicate || (() => true)
+}
+
+/**
+ * Reconcile the durable canonical store with the current presentation policy.
+ * Exclusion never deletes Provider evidence or Library packages: it only
+ * removes the source from the searchable projection until it is included again.
+ */
+export function reconcileCanonicalProviderProjection(
+  options: Pick<CanonicalProviderRefreshOptions, 'store' | 'shouldProjectSource'> = {}
+): Promise<void> {
+  return serializeCanonicalProviderRuntime(async () => {
+    const store = options.store || getCanonicalSessionStore()
+    const shouldProjectSource = options.shouldProjectSource || configuredSourceProjection
+    const operations = store.listSessions().map((stored) => {
+      const sourceId = builtinProviderForId(
+        stored.sessionRecord.provenance.providerId
+      )?.sourceId
+      if (sourceId == null || shouldProjectSource(sourceId)) {
+        return getSearchIndexWriteCoordinator().scheduleCanonicalIndex(
+          stored.sessionRecord.sourceSessionId,
+          stored.records
+        )
+      }
+      return getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(
+        stored.sessionRecord.id
+      )
+    })
+    await Promise.all(operations)
+  })
+}
 
 function serializeCanonicalProviderRuntime<T>(
   operation: () => Promise<T>
@@ -57,17 +95,24 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
   const tombstonedSessionRecordIds: string[] = []
 
   for (const report of reports) {
+    const sourceId = builtinProviderForId(report.providerId)?.sourceId
+    const shouldProject = sourceId == null ||
+      (options.shouldProjectSource || configuredSourceProjection)(sourceId)
     for (const source of report.unchangedSources) {
       store.rebindSource(source)
       for (const sessionRecordId of store.sourceStates(report.providerId)
         .find((state) => state.sourceRef.stableId === source.stableId)?.sessionRecordIds || []) {
         const stored = store.getSession(sessionRecordId)
         if (!stored || stored.tombstone) continue
-        await getSearchIndexWriteCoordinator().scheduleCanonicalIndex(
-          stored.sessionRecord.sourceSessionId,
-          stored.records
-        )
-        if (options.archive) {
+        if (shouldProject) {
+          await getSearchIndexWriteCoordinator().scheduleCanonicalIndex(
+            stored.sessionRecord.sourceSessionId,
+            stored.records
+          )
+        } else {
+          await getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(sessionRecordId)
+        }
+        if (options.archive && shouldProject) {
           const { ensureCanonicalPackage } = await import('./library-manager')
           await ensureCanonicalPackage(report.providerId, stored.sessionRecord.sourceRef, stored.records)
         }
@@ -90,11 +135,15 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
         const stored = store.getSession(result.sessionRecordId)
         if (!stored || stored.tombstone) continue
         changedSessionRecordIds.push(result.sessionRecordId)
-        await getSearchIndexWriteCoordinator().scheduleCanonicalIndex(
-          stored.sessionRecord.sourceSessionId,
-          stored.records
-        )
-        if (options.archive) {
+        if (shouldProject) {
+          await getSearchIndexWriteCoordinator().scheduleCanonicalIndex(
+            stored.sessionRecord.sourceSessionId,
+            stored.records
+          )
+        } else {
+          await getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(result.sessionRecordId)
+        }
+        if (options.archive && shouldProject) {
           const { ensureCanonicalPackage } = await import('./library-manager')
           await ensureCanonicalPackage(
             report.providerId,
@@ -112,13 +161,15 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
           tombstone.reason
         )
         await getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(tombstone.sessionRecordId)
-        const { markCanonicalPackageTombstone } = await import('./library-manager')
-        await markCanonicalPackageTombstone(
-          report.providerId,
-          tombstone.sourceRefId,
-          tombstone.sessionRecordId,
-          tombstone
-        ).catch(() => null)
+        if (shouldProject) {
+          const { markCanonicalPackageTombstone } = await import('./library-manager')
+          await markCanonicalPackageTombstone(
+            report.providerId,
+            tombstone.sourceRefId,
+            tombstone.sessionRecordId,
+            tombstone
+          ).catch(() => null)
+        }
       }
     }
     for (const chunk of report.v2Chunks) store.applyParseChunkV2(chunk)
@@ -135,13 +186,15 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
         store.applyTombstone(tombstone)
         tombstonedSessionRecordIds.push(sessionRecordId)
         await getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(sessionRecordId)
-        const { markCanonicalPackageTombstone } = await import('./library-manager')
-        await markCanonicalPackageTombstone(
-          report.providerId,
-          removal.sourceRefId,
-          sessionRecordId,
-          tombstone
-        ).catch(() => null)
+        if (shouldProject) {
+          const { markCanonicalPackageTombstone } = await import('./library-manager')
+          await markCanonicalPackageTombstone(
+            report.providerId,
+            removal.sourceRefId,
+            sessionRecordId,
+            tombstone
+          ).catch(() => null)
+        }
       }
     }
   }

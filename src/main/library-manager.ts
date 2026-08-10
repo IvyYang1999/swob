@@ -69,7 +69,8 @@ import { getCanonicalSessionStore, getLoadedCanonicalSession } from './canonical
 import {
   builtinProviderForId,
   builtinProviderForSource,
-  isLegacySessionSource
+  isLegacySessionSource,
+  providerUsesCanonicalRuntime
 } from '../shared/provider-capabilities'
 import type { CanonicalRecord, SourceRef, Tombstone } from '../shared/provider-schema.generated'
 import {
@@ -82,8 +83,14 @@ import {
 import {
   buildLibraryStartupPlan,
   completeLibraryStartupCheckpoint,
+  describeLibraryStartupSession,
   parseLibraryStartupCheckpoint,
-  type LibraryStartupCheckpoint
+  selectCurrentProjectionReconciliationIndexes,
+  summarizeLibraryStartupRecovery,
+  updateLibraryStartupCheckpointAfterBatch,
+  type LibraryStartupCheckpoint,
+  type LibraryStartupRecoveryEntry,
+  type LibraryStartupRecoverySummary
 } from './library-startup-sync'
 import {
   acquireSessionCreateLock,
@@ -100,6 +107,7 @@ import {
   ensureSafeLibraryDirectory,
   fsyncDirectorySync,
   LibraryPathUnsafeError,
+  readSafeLibraryFileSync,
   replaceSafeLibraryFileSync,
   writeSafeLibraryFileSync
 } from './library-path-safety'
@@ -794,6 +802,7 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
     startupIncrementalCandidates.clear()
     startupIncrementalPackageIds.clear()
     startupIncrementalCandidatesBySessionId.clear()
+    startupInputLogicalKeysBySessionId.clear()
     startupReservationLogicalHashes = null
     startupSeenLogicalHashes = null
     registrySnapshotPreparedRoot = null
@@ -1276,6 +1285,7 @@ const sessionRegistry = new LibrarySessionRegistry()
 const startupIncrementalCandidates = new Map<LogicalSessionKey, LibrarySessionCandidate>()
 const startupIncrementalPackageIds = new Set<string>()
 const startupIncrementalCandidatesBySessionId = new Map<string, LibrarySessionCandidate[]>()
+const startupInputLogicalKeysBySessionId = new Map<string, Set<LogicalSessionKey>>()
 let startupReservationLogicalHashes: Set<string> | null = null
 let startupSeenLogicalHashes: Set<string> | null = null
 let registrySnapshotPreparedRoot: string | null = null
@@ -1289,6 +1299,7 @@ let startupPlanRuntime: {
   registryFullScans: number
   packageIdentityFullScans: number
   registryIncrementalUpdates: number
+  visibleWorkKeys: string[]
 } | null = null
 const sessionMetaCache = new Map<string, { mtimeMs: number; size: number; meta: SessionMeta }>()
 let sessionMetaDiskReads = 0
@@ -1309,6 +1320,15 @@ export class SessionIdentityAmbiguousError extends Error {
   constructor(readonly sessionId: string, readonly candidates: LibrarySessionCandidate[]) {
     super('The legacy sessionId resolves to more than one logical session')
     this.name = 'SessionIdentityAmbiguousError'
+  }
+}
+
+export class CanonicalProviderSessionPendingError extends Error {
+  readonly code = 'PROVIDER_SESSION_PENDING'
+
+  constructor() {
+    super('Canonical provider session is not ready yet')
+    this.name = 'CanonicalProviderSessionPendingError'
   }
 }
 
@@ -3692,50 +3712,62 @@ function librarySessions(tree: LibraryTree): LibrarySession[] {
   return sessions
 }
 
+function markCanonicalPackageTombstoneUnderWriter(
+  providerId: string,
+  sourceRefStableId: string,
+  sessionRecordId: string,
+  tombstone: Tombstone
+): string | null {
+  if (!fs.existsSync(_root)) return null
+  const tree = scanLibrary()
+  const candidate = librarySessions(tree).find((session) => {
+    const descriptor = session.meta.canonicalProvider
+    return descriptor?.providerId === providerId &&
+      descriptor.sourceRefStableId === sourceRefStableId &&
+      descriptor.sessionRecordId === sessionRecordId
+  })
+  if (!candidate?.meta.canonicalProvider) return null
+  const recordsPath = path.join(candidate.dirPath, candidate.meta.canonicalProvider.recordsFile)
+  const recordsPackage = readCanonicalPackageRecords(recordsPath)
+  if (!recordsPackage || recordsPackage.providerId !== providerId ||
+    recordsPackage.sourceRef.stableId !== sourceRefStableId ||
+    recordsPackage.sessionRecordId !== sessionRecordId) return null
+  const descriptor = { ...candidate.meta.canonicalProvider, tombstone }
+  const provenance: CanonicalPackageProvenance = {
+    schemaVersion: 1,
+    providerId,
+    parserDataVersion: descriptor.parserDataVersion,
+    formatVersion: descriptor.formatVersion,
+    fingerprint: descriptor.fingerprint,
+    sourceRef: recordsPackage.sourceRef,
+    sessionRecordId,
+    archivedAt: new Date().toISOString(),
+    tombstone
+  }
+  writeCanonicalFileIfChanged(
+    path.join(candidate.dirPath, descriptor.provenanceFile),
+    encodeCanonicalPackageProvenance(provenance)
+  )
+  const meta = readSessionMeta(candidate.dirPath)
+  if (!meta) return null
+  meta.canonicalProvider = descriptor
+  meta.updatedAt = tombstone.deletedAt || meta.updatedAt
+  writeSessionMeta(candidate.dirPath, meta)
+  return candidate.dirPath
+}
+
 export async function markCanonicalPackageTombstone(
   providerId: string,
   sourceRefStableId: string,
   sessionRecordId: string,
   tombstone: Tombstone
 ): Promise<string | null> {
-  if (!fs.existsSync(_root)) return null
-  return withLibraryWriter('maintenance', () => {
-    const tree = scanLibrary()
-    const candidate = librarySessions(tree).find((session) => {
-      const descriptor = session.meta.canonicalProvider
-      return descriptor?.providerId === providerId &&
-        descriptor.sourceRefStableId === sourceRefStableId &&
-        descriptor.sessionRecordId === sessionRecordId
-    })
-    if (!candidate?.meta.canonicalProvider) return null
-    const recordsPath = path.join(candidate.dirPath, candidate.meta.canonicalProvider.recordsFile)
-    const recordsPackage = readCanonicalPackageRecords(recordsPath)
-    if (!recordsPackage || recordsPackage.providerId !== providerId ||
-      recordsPackage.sourceRef.stableId !== sourceRefStableId ||
-      recordsPackage.sessionRecordId !== sessionRecordId) return null
-    const descriptor = { ...candidate.meta.canonicalProvider, tombstone }
-    const provenance: CanonicalPackageProvenance = {
-      schemaVersion: 1,
-      providerId,
-      parserDataVersion: descriptor.parserDataVersion,
-      formatVersion: descriptor.formatVersion,
-      fingerprint: descriptor.fingerprint,
-      sourceRef: recordsPackage.sourceRef,
-      sessionRecordId,
-      archivedAt: new Date().toISOString(),
-      tombstone
-    }
-    writeCanonicalFileIfChanged(
-      path.join(candidate.dirPath, descriptor.provenanceFile),
-      encodeCanonicalPackageProvenance(provenance)
-    )
-    const meta = readSessionMeta(candidate.dirPath)
-    if (!meta) return null
-    meta.canonicalProvider = descriptor
-    meta.updatedAt = tombstone.deletedAt || meta.updatedAt
-    writeSessionMeta(candidate.dirPath, meta)
-    return candidate.dirPath
-  })
+  return withLibraryWriter('maintenance', () => markCanonicalPackageTombstoneUnderWriter(
+    providerId,
+    sourceRefStableId,
+    sessionRecordId,
+    tombstone
+  ))
 }
 
 // --- Sync JSONL Backup ---
@@ -4931,9 +4963,12 @@ function updateSymlinksRecursive(searchDir: string, oldTarget: string, newTarget
 
 export interface LibrarySyncSkippedSession {
   sessionId: string
+  /** Exact startup descriptor key; required when a batch repeats sessionId across logical sources. */
+  workKey?: string
   code: string
   disposition: 'handled' | 'failed'
   retryable: boolean
+  recovery?: LibraryStartupRecoveryEntry
 }
 
 export interface LibrarySyncOutcome {
@@ -4951,6 +4986,8 @@ export interface LibraryStartupSyncCounters {
 
 export interface LibraryStartupPlanResult {
   dirtyIndexes: number[]
+  recoveryItems: Array<{ index: number; entry: LibraryStartupRecoveryEntry }>
+  recoverySummary: LibraryStartupRecoverySummary
   snapshotDigest: string
   schemaGeneration: number
   invalidation: 'cold' | 'none' | 'snapshot-changed' | 'schema-changed' | 'projection-changed'
@@ -4960,10 +4997,38 @@ export interface LibraryStartupPlanResult {
 export interface LibraryStartupBatchResult {
   outcome: LibrarySyncOutcome
   counters: LibraryStartupSyncCounters
+  recoverySummary: LibraryStartupRecoverySummary
+}
+
+function normalizedStartupSourcePath(sourcePath: string): string {
+  const normalized = path.normalize(sourcePath).normalize('NFC')
+  return process.platform === 'win32'
+    ? normalized.toLocaleLowerCase('en-US')
+    : normalized
+}
+
+function safeLegacyAliasCandidate(session: SessionSummary): LibrarySessionCandidate | null {
+  const currentIdentity = buildLogicalSessionIdentityFromSummary(session)
+  if (currentIdentity.sourceFamily === 'legacy-ambiguous') return null
+  const inputKeys = startupInputLogicalKeysBySessionId.get(session.sessionId)
+  if (!inputKeys || inputKeys.size !== 1 || !inputKeys.has(logicalSessionKey(currentIdentity))) return null
+  const resolution = sessionRegistry.resolveSessionId(session.sessionId)
+  if (resolution.state !== 'bound' || resolution.candidate.isSymlink ||
+    resolution.candidate.identity.sourceFamily !== 'legacy-ambiguous') return null
+  const meta = readSessionMeta(resolution.candidate.dirPath)
+  if (!meta || meta.sessionId !== session.sessionId) return null
+  const expected = new Set(sourceFilePathsForMeta(session).map(normalizedStartupSourcePath))
+  if (expected.size === 0 || !(meta.sourceFilePaths || [])
+    .some((sourcePath) => expected.has(normalizedStartupSourcePath(sourcePath)))) return null
+  return resolution.candidate
+}
+
+function startupIdentityForSession(session: SessionSummary): LogicalSessionIdentity {
+  return safeLegacyAliasCandidate(session)?.identity || buildLogicalSessionIdentityFromSummary(session)
 }
 
 function startupBindingForSession(session: SessionSummary): LibrarySessionBinding {
-  const key = logicalSessionKey(buildLogicalSessionIdentityFromSummary(session))
+  const key = logicalSessionKey(startupIdentityForSession(session))
   const incremental = startupIncrementalCandidates.get(key)
   if (incremental && fs.existsSync(incremental.dirPath)) {
     return { state: 'bound', logicalKey: key, candidate: incremental, candidates: [incremental] }
@@ -5082,7 +5147,21 @@ async function synchronizeStartupSession(
   const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
   if (canonicalDefinition?.ingestion === 'provider-host') {
     const stored = getCanonicalSessionStore().getSession(session.id)
-    if (!stored) throw new Error('canonical-provider-session-not-found')
+    if (!stored) throw new CanonicalProviderSessionPendingError()
+    if (stored.tombstone) {
+      markCanonicalPackageTombstoneUnderWriter(
+        canonicalDefinition.manifest.providerId,
+        stored.sessionRecord.sourceRef.stableId,
+        stored.sessionRecord.id,
+        stored.tombstone
+      )
+      return {
+        sessionId: session.sessionId,
+        code: 'PROVIDER_SESSION_UNAVAILABLE',
+        disposition: 'handled',
+        retryable: false
+      }
+    }
     await ensureCanonicalPackageUnderWriter(
       canonicalDefinition.manifest.providerId,
       stored.sessionRecord.sourceRef,
@@ -5109,6 +5188,7 @@ async function synchronizeStartupSession(
     undefined,
     {},
     {
+      identity: startupIdentityForSession(session),
       beforeManifest: existingDir
         ? undefined
         : async (createdDir, meta) => {
@@ -5153,11 +5233,13 @@ function classifyStartupSessionFailure(sessionId: string, error: unknown): Libra
   const code = typeof typed?.code === 'string' && /^[A-Z0-9_:-]+$/.test(typed.code)
     ? typed.code
     : 'SESSION_SYNC_FAILED'
+  const handled = code === 'SESSION_SOURCE_MISSING' || code === 'SESSION_IDENTITY_CONFLICT'
   return {
     sessionId,
     code,
-    disposition: code === 'SESSION_SOURCE_MISSING' ? 'handled' : 'failed',
-    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED'
+    disposition: handled ? 'handled' : 'failed',
+    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED' ||
+      code === 'EAGAIN' || code === 'EBUSY'
   }
 }
 
@@ -5165,12 +5247,27 @@ function libraryStartupCheckpointPath(): string {
   return path.join(_root, LIBRARY_STARTUP_CHECKPOINT_FILE)
 }
 
-function readLibraryStartupCheckpoint(): LibraryStartupCheckpoint | null {
-  try {
-    return parseLibraryStartupCheckpoint(JSON.parse(fs.readFileSync(libraryStartupCheckpointPath(), 'utf-8')))
-  } catch {
-    return null
+export class LibraryStartupCheckpointCorruptError extends Error {
+  readonly code = 'LIBRARY_STARTUP_CHECKPOINT_CORRUPT'
+
+  constructor() {
+    super('Library startup recovery checkpoint failed integrity validation')
+    this.name = 'LibraryStartupCheckpointCorruptError'
   }
+}
+
+function readLibraryStartupCheckpoint(): LibraryStartupCheckpoint | null {
+  const checkpointPath = libraryStartupCheckpointPath()
+  const raw = readSafeLibraryFileSync(_root, checkpointPath, { maxBytes: 4 * 1024 * 1024 })
+  if (raw === null) return null
+  let parsed: LibraryStartupCheckpoint | null
+  try {
+    parsed = parseLibraryStartupCheckpoint(JSON.parse(raw.toString('utf-8')))
+  } catch {
+    throw new LibraryStartupCheckpointCorruptError()
+  }
+  if (!parsed) throw new LibraryStartupCheckpointCorruptError()
+  return parsed
 }
 
 function writeLibraryStartupCheckpoint(checkpoint: LibraryStartupCheckpoint): void {
@@ -5192,31 +5289,61 @@ function currentLibraryStartupCounters(): LibraryStartupSyncCounters {
 
 function libraryStartupProjectionIsCurrent(
   session: SessionSummary,
-  customTitle?: string
+  customTitle?: string,
+  verifySourceFreshness = false
 ): boolean {
-  const key = logicalSessionKey(buildLogicalSessionIdentityFromSummary(session))
+  const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
+  const storedCanonical = canonicalDefinition?.ingestion === 'provider-host'
+    ? getCanonicalSessionStore().getSession(session.id)
+    : null
+  const identity = storedCanonical && canonicalDefinition
+    ? buildCanonicalLogicalSessionIdentity(
+        canonicalDefinition.manifest.providerId,
+        storedCanonical.sessionRecord.sourceRef.stableId,
+        storedCanonical.sessionRecord.sourceSessionId
+      )
+    : startupIdentityForSession(session)
+  const key = logicalSessionKey(identity)
   const binding = sessionRegistry.get(key)
   // Identity conflicts are intentionally read-only. Their presence is already
   // surfaced by Library health and must not become an infinite startup retry.
   if (binding.state === 'conflict') return true
   if (binding.state !== 'bound' || !fs.existsSync(binding.candidate.dirPath)) return false
   const meta = readSessionMeta(binding.candidate.dirPath)
-  if (!meta || meta.sessionId !== session.sessionId || meta.updatedAt !== session.updatedAt ||
-    meta.turnCount !== session.turnCount) return false
-  if (customTitle !== undefined && meta.customTitle !== customTitle) return false
+  if (!meta || meta.sessionId !== session.sessionId) return false
 
-  const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
   if (canonicalDefinition?.ingestion === 'provider-host') {
     const descriptor = meta.canonicalProvider
-    return Boolean(descriptor &&
+    const descriptorMatches = Boolean(storedCanonical && descriptor &&
+      descriptor.providerId === canonicalDefinition.manifest.providerId &&
+      descriptor.sourceRefStableId === storedCanonical.sessionRecord.sourceRef.stableId &&
+      descriptor.sessionRecordId === storedCanonical.sessionRecord.id &&
+      JSON.stringify(descriptor.fingerprint) ===
+        JSON.stringify(storedCanonical.sessionRecord.sourceRef.fingerprint) &&
+      descriptor.parserDataVersion === storedCanonical.sessionRecord.provenance.parserDataVersion &&
+      descriptor.formatVersion === storedCanonical.sessionRecord.provenance.formatVersion &&
+      JSON.stringify(descriptor.tombstone || null) === JSON.stringify(storedCanonical.tombstone) &&
       fs.existsSync(path.join(binding.candidate.dirPath, descriptor.recordsFile)) &&
-      fs.existsSync(path.join(binding.candidate.dirPath, descriptor.provenanceFile)) &&
-      fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE)))
+      fs.existsSync(path.join(binding.candidate.dirPath, descriptor.provenanceFile)))
+    if (!descriptorMatches) return false
+    // A matching tombstone is the authoritative terminal projection; stale
+    // pre-removal summary timestamps must not keep re-dirtying it.
+    if (storedCanonical?.tombstone) return true
+    if (meta.updatedAt !== session.updatedAt || meta.turnCount !== session.turnCount) return false
+    if (customTitle !== undefined && meta.customTitle !== customTitle) return false
+    return fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE))
   }
+
+  if (meta.updatedAt !== session.updatedAt || meta.turnCount !== session.turnCount) return false
+  if (customTitle !== undefined && meta.customTitle !== customTitle) return false
 
   const expectedSourcePaths = sourceFilePathsForMeta(session)
   if (expectedSourcePaths.length > 0 &&
     JSON.stringify(meta.sourceFilePaths) !== JSON.stringify(expectedSourcePaths)) return false
+  if (verifySourceFreshness) {
+    const refresh = projectionNeedsRefresh(session, binding.candidate.dirPath)
+    if (refresh.transcript || refresh.backup) return false
+  }
   if (session.messageCount > 0 && !fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE))) return false
   if (sessionBackupSourcePaths(session).length > 0 &&
     !fs.existsSync(path.join(binding.candidate.dirPath, BACKUP_FILE))) return false
@@ -5258,6 +5385,33 @@ function includeMissingLibraryProjections(
   if (plan.invalidation === 'none') plan.invalidation = 'projection-changed'
 }
 
+function completeCurrentLibraryProjections(
+  plan: ReturnType<typeof buildLibraryStartupPlan>,
+  sessions: readonly SessionSummary[],
+  sessionMeta: Record<string, { customTitle?: string }>
+): void {
+  const reconciliationIndexes = new Set(selectCurrentProjectionReconciliationIndexes(plan))
+  for (const index of plan.dirtyIndexes) {
+    if (providerUsesCanonicalRuntime(sessions[index].source || '')) reconciliationIndexes.add(index)
+  }
+  const completedIndexes = [...reconciliationIndexes]
+    .filter((index) =>
+      libraryStartupProjectionIsCurrent(
+        sessions[index],
+        sessionMeta[sessions[index].sessionId]?.customTitle,
+        true
+      ))
+  if (completedIndexes.length === 0) return
+  const completedKeys = new Set(completedIndexes.map((index) => plan.descriptors[index].key))
+  plan.checkpoint = completeLibraryStartupCheckpoint(
+    plan.checkpoint,
+    completedIndexes.map((index) => sessions[index]),
+    sessionMeta
+  )
+  plan.dirtyIndexes = plan.dirtyIndexes.filter((index) => !completedKeys.has(plan.descriptors[index].key))
+  plan.recoveryItems = plan.recoveryItems.filter(({ index }) => !completedKeys.has(plan.descriptors[index].key))
+}
+
 /**
  * Proves the writer, recovers interrupted creates, and performs the sole full
  * registry scan for this startup generation. Every later batch uses the
@@ -5266,7 +5420,8 @@ function includeMissingLibraryProjections(
 export async function planLibraryStartupSync(
   sessions: readonly SessionSummary[],
   schemaGeneration: number,
-  sessionMeta: Record<string, { customTitle?: string; notes?: string }> = {}
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }> = {},
+  options: { preserveUnseen?: boolean } = {}
 ): Promise<LibraryStartupPlanResult> {
   return withLibraryWriter('maintenance', () => {
     const hadPreparedScan = registrySnapshotPreparedRoot === path.resolve(_root)
@@ -5281,7 +5436,23 @@ export async function planLibraryStartupSync(
     throwIfIdentityScanUnresolved(recoveryIssues)
     if (!canReuseAuthoritativeScan) scanLibrary()
     prepareStartupIdentityEvidenceIndex(localDeviceId)
-    const plan = buildLibraryStartupPlan(sessions, schemaGeneration, readLibraryStartupCheckpoint(), sessionMeta)
+    startupInputLogicalKeysBySessionId.clear()
+    for (const session of sessions) {
+      const keys = startupInputLogicalKeysBySessionId.get(session.sessionId) || new Set<LogicalSessionKey>()
+      keys.add(logicalSessionKey(buildLogicalSessionIdentityFromSummary(session)))
+      startupInputLogicalKeysBySessionId.set(session.sessionId, keys)
+    }
+    const plan = buildLibraryStartupPlan(
+      sessions,
+      schemaGeneration,
+      readLibraryStartupCheckpoint(),
+      sessionMeta,
+      options
+    )
+    // Live sync and Provider catch-up can make a dirty projection current
+    // before this planner owns the writer. Complete those exact work keys from
+    // physical evidence so recovery converges without rewriting package data.
+    completeCurrentLibraryProjections(plan, sessions, sessionMeta)
     includeMissingLibraryProjections(plan, sessions, sessionMeta)
     startupPlanRuntime = {
       root: path.resolve(_root),
@@ -5291,11 +5462,17 @@ export async function planLibraryStartupSync(
       writerAcquires: 1,
       registryFullScans: hadPreparedScan && !canReuseAuthoritativeScan ? 2 : 1,
       packageIdentityFullScans: 1,
-      registryIncrementalUpdates: 0
+      registryIncrementalUpdates: 0,
+      visibleWorkKeys: plan.descriptors.map((descriptor) => descriptor.key)
     }
     writeLibraryStartupCheckpoint(plan.checkpoint)
     return {
       dirtyIndexes: plan.dirtyIndexes,
+      recoveryItems: plan.recoveryItems,
+      recoverySummary: summarizeLibraryStartupRecovery(Object.fromEntries(
+        Object.entries(plan.checkpoint.recovery)
+          .filter(([key]) => startupPlanRuntime!.visibleWorkKeys.includes(key))
+      )),
       snapshotDigest: plan.checkpoint.snapshotDigest,
       schemaGeneration,
       invalidation: plan.invalidation,
@@ -5309,7 +5486,8 @@ export async function syncLibraryStartupBatch(
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
   checkpointIdentity: { snapshotDigest: string; schemaGeneration: number },
   onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
-  shouldCancel?: () => boolean
+  shouldCancel?: () => boolean,
+  providerSettlement: 'complete' | 'degraded' | null = null
 ): Promise<LibraryStartupBatchResult> {
   const runtime = startupPlanRuntime
   if (!runtime || runtime.root !== path.resolve(_root) ||
@@ -5340,18 +5518,68 @@ export async function syncLibraryStartupBatch(
     }
     startupPreparedRegistryDepth++
     try {
+      const descriptors = sessions.map((session) => describeLibraryStartupSession(
+        session,
+        checkpoint.schemaGeneration,
+        sessionMeta[session.sessionId]?.customTitle
+      ))
+      const alreadyArchivedIndexes = sessions.flatMap((session, index) => {
+        return providerUsesCanonicalRuntime(session.source || '') &&
+          libraryStartupProjectionIsCurrent(session, sessionMeta[session.sessionId]?.customTitle)
+          ? [index]
+          : []
+      })
+      const alreadyArchived = new Set(alreadyArchivedIndexes)
+      const sessionsToExecute = sessions.filter((_session, index) => !alreadyArchived.has(index))
       const outcome = await syncLibraryFromSessionsUnderWriter(
-        sessions,
+        sessionsToExecute,
         sessionMeta,
         onProgress,
-        shouldCancel
+        shouldCancel,
+        checkpoint.schemaGeneration
       )
-      const retryableSessionIds = new Set(outcome.skipped
-        .filter((entry) => entry.retryable)
-        .map((entry) => entry.sessionId))
-      const terminalSessions = sessions.filter((session) => !retryableSessionIds.has(session.sessionId))
-      writeLibraryStartupCheckpoint(completeLibraryStartupCheckpoint(checkpoint, terminalSessions, sessionMeta))
-      return { outcome, counters: currentLibraryStartupCounters() }
+      outcome.total = sessions.length
+      outcome.completed += alreadyArchivedIndexes.length
+      for (const index of alreadyArchivedIndexes) {
+        outcome.skipped.push({
+          sessionId: sessions[index].sessionId,
+          workKey: descriptors[index].key,
+          code: 'PROVIDER_SESSION_ALREADY_ARCHIVED',
+          disposition: 'handled',
+          retryable: false
+        })
+      }
+      if (providerSettlement) {
+        for (const skipped of outcome.skipped) {
+          if (skipped.code !== 'PROVIDER_SESSION_PENDING') continue
+          if (providerSettlement === 'degraded') {
+            skipped.code = 'PROVIDER_SESSION_DEGRADED'
+            skipped.retryable = true
+          } else {
+            // A complete Provider snapshot is authoritative. A stale summary
+            // with no canonical record has no future wake; preserve any
+            // existing Library package and terminally retire this work item.
+            skipped.code = 'PROVIDER_SESSION_UNAVAILABLE'
+            skipped.disposition = 'handled'
+            skipped.retryable = false
+            outcome.completed++
+          }
+        }
+      }
+      const updated = updateLibraryStartupCheckpointAfterBatch(checkpoint, sessions, outcome, sessionMeta)
+      for (const skipped of outcome.skipped) {
+        const recovery = skipped.workKey ? updated.recoveryByWorkKey[skipped.workKey] : undefined
+        if (recovery) skipped.recovery = recovery
+      }
+      writeLibraryStartupCheckpoint(updated.checkpoint)
+      return {
+        outcome,
+        counters: currentLibraryStartupCounters(),
+        recoverySummary: summarizeLibraryStartupRecovery(Object.fromEntries(
+          Object.entries(updated.checkpoint.recovery)
+            .filter(([key]) => runtime.visibleWorkKeys.includes(key))
+        ))
+      }
     } finally {
       startupPreparedRegistryDepth--
     }
@@ -5390,7 +5618,8 @@ async function syncLibraryFromSessionsUnderWriter(
   sessions: SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
   onProgress?: (progress: { current: number; total: number; sessionId: string }) => void,
-  shouldCancel?: () => boolean
+  shouldCancel?: () => boolean,
+  startupSchemaGeneration?: number
 ): Promise<LibrarySyncOutcome> {
   const outcome: LibrarySyncOutcome = { total: sessions.length, completed: 0, skipped: [] }
   for (let index = 0; index < sessions.length; index++) {
@@ -5400,10 +5629,15 @@ async function syncLibraryFromSessionsUnderWriter(
       throw error
     }
     const session = sessions[index]
+    const workKey = startupSchemaGeneration === undefined ? undefined : describeLibraryStartupSession(
+      session,
+      startupSchemaGeneration,
+      sessionMeta[session.sessionId]?.customTitle
+    ).key
     try {
       const customTitle = sessionMeta[session.sessionId]?.customTitle
       const skipped = await synchronizeStartupSession(session, customTitle)
-      if (skipped) outcome.skipped.push(skipped)
+      if (skipped) outcome.skipped.push({ ...skipped, ...(workKey ? { workKey } : {}) })
       if (!skipped || skipped.disposition === 'handled') outcome.completed++
       if (shouldCancel?.()) {
         const error = new Error('Library synchronization cancelled')
@@ -5413,7 +5647,10 @@ async function syncLibraryFromSessionsUnderWriter(
       onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })
     } catch (error) {
       if (mustAbortLibraryStartupBatch(error)) throw error
-      const skipped = classifyStartupSessionFailure(session.sessionId, error)
+      const skipped = {
+        ...classifyStartupSessionFailure(session.sessionId, error),
+        ...(workKey ? { workKey } : {})
+      }
       outcome.skipped.push(skipped)
       if (skipped.disposition === 'handled') outcome.completed++
       onProgress?.({ current: index + 1, total: sessions.length, sessionId: session.sessionId })

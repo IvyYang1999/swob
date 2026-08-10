@@ -1135,6 +1135,15 @@ export interface PreparedDuplicateRecovery {
   }>
 }
 
+export class DuplicateRecoveryPlanExpiredError extends Error {
+  readonly code = 'duplicate-recovery-plan-expired'
+
+  constructor() {
+    super('duplicate-recovery-plan-expired')
+    this.name = 'DuplicateRecoveryPlanExpiredError'
+  }
+}
+
 /** Rebuild and resolve an accepted redacted plan into verified local paths. Read-only. */
 export async function prepareDuplicateRecoveryExecution(
   libraryRootInput: string,
@@ -1155,7 +1164,7 @@ export async function prepareDuplicateRecoveryExecution(
     signal: options.signal
   })
   if (current.planId !== accepted.planId || current.snapshotFingerprint !== accepted.snapshotFingerprint) {
-    throw new Error('duplicate-recovery-plan-expired')
+    throw new DuplicateRecoveryPlanExpiredError()
   }
   const moves = current.conflicts
     .filter((conflict) => conflict.classification === 'canonical-candidate' &&

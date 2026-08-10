@@ -35,6 +35,13 @@ export type BackgroundBacklogState =
   | 'paused'
   | 'completed'
   | 'completed-with-errors'
+export type BackgroundRecoveryState =
+  | 'idle'
+  | 'scheduled'
+  | 'running'
+  | 'waiting-provider'
+  | 'attention-required'
+  | 'exhausted'
 export type IdentityExceptionsState =
   | 'none'
   | 'authorized-read-only'
@@ -124,10 +131,21 @@ export interface LibraryHealthDimensions {
     failures: readonly BackgroundSyncFailure[]
     failureCounts: Readonly<Record<string, number>>
     unverifiableBuckets: Readonly<Record<UnverifiableReason, number>>
+    recovery: {
+      state: BackgroundRecoveryState
+      retryScheduled: number
+      waitingProvider: number
+      attentionRequired: number
+      exhausted: number
+      maxAttempts: number
+      nextRetryAt: string | null
+    }
   }
   identityExceptions: {
     state: IdentityExceptionsState
     stateSinceAt: string
+    /** Opaque root+inventory generation; never contains a filesystem path. */
+    analysisGeneration: string
     authorizedGroupCount: number
     authorizedPackageCount: number
     unknownGroupCount: number
@@ -208,6 +226,9 @@ const FRESHNESS_STATES = new Set<ActiveSourceFreshnessState>(['unproven', 'durab
 const BACKLOG_STATES = new Set<BackgroundBacklogState>([
   'unobserved', 'idle', 'running', 'paused', 'completed', 'completed-with-errors'
 ])
+const BACKGROUND_RECOVERY_STATES = new Set<BackgroundRecoveryState>([
+  'idle', 'scheduled', 'running', 'waiting-provider', 'attention-required', 'exhausted'
+])
 const IDENTITY_STATES = new Set<IdentityExceptionsState>([
   'none', 'authorized-read-only', 'unknown-conflicts', 'evidence-mismatch'
 ])
@@ -242,6 +263,7 @@ export function isLibraryHealthSnapshot(value: unknown): value is LibraryHealthS
   const writer = dimensions?.writerCapability
   const freshness = dimensions?.activeSourceFreshness
   const backlog = dimensions?.backgroundBacklog
+  const recovery = backlog?.recovery
   const identity = dimensions?.identityExceptions
   return candidate.schemaVersion === 1 &&
     typeof candidate.state === 'string' && HEALTH_STATES.has(candidate.state as LibraryHealthState) &&
@@ -282,7 +304,12 @@ export function isLibraryHealthSnapshot(value: unknown): value is LibraryHealthS
       reason.length > 0 && isNonNegativeInteger(count)) &&
     !!backlog.unverifiableBuckets && UNVERIFIABLE_REASONS.every((reason) =>
       isNonNegativeInteger(backlog.unverifiableBuckets[reason])) &&
+    !!recovery && BACKGROUND_RECOVERY_STATES.has(recovery.state) &&
+    [recovery.retryScheduled, recovery.waitingProvider, recovery.attentionRequired,
+      recovery.exhausted, recovery.maxAttempts].every(isNonNegativeInteger) &&
+    (recovery.nextRetryAt === null || isIsoTimestamp(recovery.nextRetryAt)) &&
     !!identity && IDENTITY_STATES.has(identity.state) && isIsoTimestamp(identity.stateSinceAt) &&
+    typeof identity.analysisGeneration === 'string' &&
     [identity.authorizedGroupCount, identity.authorizedPackageCount, identity.unknownGroupCount,
       identity.unknownPackageCount, identity.evidenceMismatchGroupCount].every(isNonNegativeInteger) &&
     Array.isArray(identity.records) && identity.records.every((record) =>
@@ -352,11 +379,21 @@ export function createInitializingLibraryHealthSnapshot(): LibraryHealthSnapshot
         remaining: 0,
         failures: [],
         failureCounts: {},
-        unverifiableBuckets: emptyUnverifiableBuckets()
+        unverifiableBuckets: emptyUnverifiableBuckets(),
+        recovery: {
+          state: 'idle',
+          retryScheduled: 0,
+          waitingProvider: 0,
+          attentionRequired: 0,
+          exhausted: 0,
+          maxAttempts: 5,
+          nextRetryAt: null
+        }
       },
       identityExceptions: {
         state: 'none',
         stateSinceAt: epoch,
+        analysisGeneration: 'unavailable',
         authorizedGroupCount: 0,
         authorizedPackageCount: 0,
         unknownGroupCount: 0,

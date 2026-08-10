@@ -20,6 +20,9 @@ import {
 import { syncLibraryStartupIncrementally } from './library-startup-sync'
 import { closeSearchIndex } from './search-index'
 import { closeUsageFactStore } from './usage-fact-store'
+import { closeCanonicalSessionStore, getCanonicalSessionStore } from './canonical-store'
+import { canonicalRecordsToSessionSummary } from './canonical-projection'
+import type { CanonicalRecord, SourceRef } from '../shared/provider-schema.generated'
 
 const roots: string[] = []
 const largeLiveSyncIt = process.env.SWOB_LARGE_LIVE_SYNC_TEST === '1' ? it : it.skip
@@ -231,15 +234,163 @@ function writeClaudeSession(filePath: string, sessionId: string): void {
   }) + '\n')
 }
 
+function canonicalWorkerFixture(text: string, fingerprintValue: string): {
+  sourceRef: SourceRef
+  records: CanonicalRecord[]
+} {
+  const sourceRef: SourceRef = {
+    kind: 'virtual-member',
+    providerId: 'swob/pi',
+    stableId: 'pi:worker-refresh-source',
+    containerRefId: 'worker-refresh-container',
+    memberKey: 'worker-refresh-row',
+    displayLocator: 'ssh://example.invalid/provider.db#worker-refresh-row',
+    fingerprint: { algorithm: 'composite-sha256', value: fingerprintValue }
+  }
+  const provenance = {
+    providerId: 'swob/pi',
+    sourceRefId: sourceRef.stableId,
+    parserDataVersion: '1',
+    formatVersion: 'pi-jsonl-v3',
+    observedAt: '2026-08-10T00:00:00.000Z'
+  }
+  const sessionRecordId = 'remote-session-record:worker-refresh'
+  return {
+    sourceRef,
+    records: [{
+      id: sessionRecordId,
+      recordType: 'session',
+      sourceRef,
+      sourceSessionId: 'worker-refresh',
+      createdAt: '2026-08-10T00:00:00.000Z',
+      updatedAt: '2026-08-10T00:01:00.000Z',
+      cwd: ['/remote/project'],
+      projectPath: '/remote/project',
+      providerTitle: 'Worker refresh',
+      provenance
+    }, {
+      id: 'remote-message-record:worker-refresh',
+      recordType: 'message',
+      sessionRecordId,
+      ordinal: 0,
+      role: 'user',
+      timestamp: '2026-08-10T00:00:01.000Z',
+      content: [{ kind: 'text', text }],
+      provenance
+    }]
+  }
+}
+
 afterEach(() => {
   closeSearchIndex()
   closeUsageFactStore()
+  closeCanonicalSessionStore()
   delete process.env.SWOB_SEARCH_INDEX_DIR
   delete process.env.SWOB_USAGE_INDEX_PATH
+  delete process.env.SWOB_CANONICAL_STORE_DIR
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
 describe('Library worker request', () => {
+  it('reloads canonical SQLite for Provider updates and never revives a tombstone', async () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-provider-root-'))
+    const buildRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-provider-build-'))
+    const canonicalRoot = path.join(buildRoot, 'canonical-store')
+    roots.push(libraryRoot, buildRoot)
+    process.env.SWOB_CANONICAL_STORE_DIR = canonicalRoot
+    closeCanonicalSessionStore()
+    const library = await import('./library-manager')
+    library.initLibrary(libraryRoot)
+    library.scanLibrary()
+    const worker = new LibraryWorkerClient(await buildProductionWorker(buildRoot))
+    const store = getCanonicalSessionStore()
+    const apply = (fixture: ReturnType<typeof canonicalWorkerFixture>): void => {
+      store.applyParseOutcome({
+        providerId: 'swob/pi',
+        parserDataVersion: '1',
+        formatVersion: 'pi-jsonl-v3',
+        fingerprint: fixture.sourceRef.fingerprint,
+        status: 'complete',
+        sessions: [{
+          sourceRefId: fixture.sourceRef.stableId,
+          sessionRecordId: fixture.records[0].id,
+          status: 'complete',
+          records: fixture.records,
+          errors: [],
+          replaceSessionRecordId: null,
+          noDataReason: null
+        }],
+        errors: [],
+        tombstones: []
+      })
+    }
+    try {
+      const first = canonicalWorkerFixture('provider worker v1', 'worker-f1')
+      apply(first)
+      const firstSummary = canonicalRecordsToSessionSummary(first.records, {
+        filePath: first.sourceRef.displayLocator,
+        source: 'pi'
+      })
+      const firstPlan = await worker.planStartup(libraryRoot, [firstSummary], {}, 1)
+      await worker.syncStartupBatch(
+        libraryRoot,
+        [firstSummary],
+        {},
+        { snapshotDigest: firstPlan.snapshotDigest, schemaGeneration: firstPlan.schemaGeneration },
+        'complete'
+      )
+
+      const second = canonicalWorkerFixture('provider worker v2', 'worker-f2')
+      apply(second)
+      const secondSummary = canonicalRecordsToSessionSummary(second.records, {
+        filePath: second.sourceRef.displayLocator,
+        source: 'pi'
+      })
+      const secondPlan = await worker.planStartup(libraryRoot, [secondSummary], {}, 1)
+      expect(secondPlan.dirtyIndexes).toEqual([0])
+      await worker.syncStartupBatch(
+        libraryRoot,
+        [secondSummary],
+        {},
+        { snapshotDigest: secondPlan.snapshotDigest, schemaGeneration: secondPlan.schemaGeneration },
+        'complete'
+      )
+      const packageRoot = fs.readdirSync(libraryRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .map((entry) => path.join(libraryRoot, entry.name))
+        .find((candidate) => fs.existsSync(path.join(candidate, 'canonical-records.json')))
+      expect(packageRoot).toBeTruthy()
+      expect(fs.readFileSync(path.join(packageRoot!, 'canonical-records.json'), 'utf8'))
+        .toContain('provider worker v2')
+
+      const tombstone = {
+        sourceRefId: second.sourceRef.stableId,
+        sessionRecordId: second.records[0].id,
+        deletedAt: '2026-08-10T00:02:00.000Z',
+        reason: 'source-missing' as const,
+        previousFingerprint: second.sourceRef.fingerprint
+      }
+      store.applyTombstone(tombstone)
+      const stalePlan = await worker.planStartup(libraryRoot, [secondSummary], {}, 1)
+      expect(stalePlan.dirtyIndexes).toEqual([0])
+      const staleOutcome = await worker.syncStartupBatch(
+        libraryRoot,
+        [secondSummary],
+        {},
+        { snapshotDigest: stalePlan.snapshotDigest, schemaGeneration: stalePlan.schemaGeneration },
+        'complete'
+      )
+      expect(staleOutcome.outcome.skipped).toMatchObject([{
+        code: 'PROVIDER_SESSION_UNAVAILABLE',
+        disposition: 'handled'
+      }])
+      const meta = JSON.parse(fs.readFileSync(path.join(packageRoot!, '.swob-session.json'), 'utf8'))
+      expect(meta.canonicalProvider.tombstone).toMatchObject({ reason: 'source-missing' })
+    } finally {
+      await worker.close()
+    }
+  }, 20_000)
+
   it('queues two LibraryWorkerClient writers before the file lease timeout starts', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-arbiter-'))
     const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-arbiter-source-'))
@@ -541,6 +692,8 @@ describe('Library worker request', () => {
       maintainLibrary: false
     })
     if (parsed.kind !== 'session-sync') throw new Error('expected parsed session')
+    expect(parsed.value.dirPath).toBeUndefined()
+    expect(fs.readdirSync(root)).toEqual([])
     let latest = parsed.value.summary
     let livePending = false
     let liveDir = ''

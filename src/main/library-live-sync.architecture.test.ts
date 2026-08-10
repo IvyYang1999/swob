@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest'
 
 const source = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8')
 const manager = fs.readFileSync(path.join(__dirname, 'library-manager.ts'), 'utf8')
+const backlogQueue = fs.readFileSync(path.join(__dirname, 'library-backlog-recovery-queue.ts'), 'utf8')
+const libraryWorker = fs.readFileSync(path.join(__dirname, 'library-worker.ts'), 'utf8')
+const duplicateWorker = fs.readFileSync(path.join(__dirname, 'duplicate-recovery-worker.ts'), 'utf8')
 
 describe('live Library synchronization architecture', () => {
   it('keeps the normal batch lease intact and exposes a separately bounded startup chunk', () => {
@@ -20,7 +23,7 @@ describe('live Library synchronization architecture', () => {
       /function cleanupRuntimeResources[\s\S]*?libraryStartupWriterProven = false[\s\S]*?currentLiveSessionSyncWorker\?\.close\(\)/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?libraryStartupWriterProven = false[\s\S]*?previousLiveSessionSyncWorker\?\.close\(\)/
+      /async function performLibraryActivation[\s\S]*?libraryStartupWriterProven = false[\s\S]*?previousLiveSessionSyncWorker\?\.close\(\)/
     )
     expect(source).toMatch(
       /classification\.state === 'writer-blocked'[\s\S]*?libraryStartupWriterProven = false[\s\S]*?deferLibrarySynchronization\(request\)[\s\S]*?scheduleLibraryWriterRecovery\(\)/
@@ -39,11 +42,77 @@ describe('live Library synchronization architecture', () => {
     expect(drain).not.toContain('waitForIdle')
   })
 
+  it('keeps targeted startup recovery separate from writer compensation and full initialization', () => {
+    const compensationCancelHandler = source.match(
+      /ipcMain\.handle\('library:compensationCancel',[\s\S]*?\n}\)/
+    )?.[0] || ''
+    const compensationHandler = source.match(
+      /ipcMain\.handle\('library:compensationRetry',[\s\S]*?\n}\)/
+    )?.[0] || ''
+    expect(compensationHandler).toContain('retryLibraryAfterWriterBlocked(true)')
+    expect(compensationHandler).not.toContain('initLibraryFromSessions')
+    expect(compensationCancelHandler).toContain('cancelCompensation()')
+    expect(compensationCancelHandler).not.toContain('libraryStartup')
+    const recoveryRunner = source.match(/async function runLibraryBacklogRecovery[\s\S]*?\n}\n/)?.[0] || ''
+    expect(recoveryRunner).toContain('libraryBacklogRecoveryQueue.request(mode)')
+    expect(recoveryRunner).toContain("ownedLease?.operation.kind === 'backlog'")
+    expect(recoveryRunner).toContain('libraryBacklogRecoveryQueue.takeNext()')
+    expect(recoveryRunner).toContain('syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta, nextMode)')
+    expect(recoveryRunner).toContain('libraryRuntimePaused || !libraryInitialized || libraryInitializationPromise')
+    expect(source).toMatch(
+      /shouldSelectLibraryBacklogItem\([\s\S]*?mode,[\s\S]*?recoveryByIndex\.get\(index\),[\s\S]*?now,[\s\S]*?isProviderSession\(sessions\[index\]\)[\s\S]*?\)/
+    )
+    expect(backlogQueue).toContain("providerSession && (!recovery || recovery.state === 'waiting-provider')")
+  })
+
+  it('publishes new loader facts before waking every source-backed recovery state', () => {
+    const synchronization = source.match(
+      /async function performSessionSynchronization[\s\S]*?\n}\n\nfunction scheduleSessionSynchronization/
+    )?.[0] || ''
+    const cacheCommit = synchronization.indexOf('cachedSessions[existingIndex] = projectedSummary')
+    const recoveryWake = synchronization.lastIndexOf("runLibraryBacklogRecovery('automatic')")
+    expect(cacheCommit).toBeGreaterThan(-1)
+    expect(recoveryWake).toBeGreaterThan(cacheCommit)
+    expect(synchronization).toContain('hasSourceRecoveryWork(backlogRecovery)')
+    const sourceRecoveryPredicate = source.match(/function hasSourceRecoveryWork[\s\S]*?\n}\n/)?.[0] || ''
+    expect(sourceRecoveryPredicate).toContain('recovery.retryScheduled')
+    expect(sourceRecoveryPredicate).toContain('recovery.attentionRequired')
+    expect(sourceRecoveryPredicate).toContain('recovery.exhausted')
+  })
+
+  it('keeps excluded live sources in raw inventory without projecting them', () => {
+    const synchronization = source.match(
+      /async function performSessionSynchronization[\s\S]*?\n}\n\nfunction scheduleSessionSynchronization/
+    )?.[0] || ''
+    expect(synchronization).toContain(
+      'const source = resolveSessionSyncSource(request.source, cached?.source, filePath)'
+    )
+    expect(synchronization).toContain('const sourceExcluded = sourceIsExcluded(source)')
+    expect(synchronization).toContain('const maintainLibrary = !sourceExcluded')
+    expect(synchronization).toContain("const workerSource = request.source === 'transcript'")
+    expect(synchronization).toContain('source: workerSource')
+    expect(synchronization).toContain('maintainLibrary\n    })')
+    expect(synchronization).toContain(
+      'mergeLiveSessionSummary(synchronizedSummary, sourceSessionInventory.snapshot())'
+    )
+    expect(synchronization).toContain('sourceSessionInventory.applyLiveSummary(summary)')
+    expect(synchronization).toContain('if (sourceIsExcluded(inventoryUpdate.summary.source)) return')
+    expect(synchronization.indexOf('if (maintainLibrary) {')).toBeLessThan(
+      synchronization.indexOf('scheduleLegacySource({')
+    )
+    expect(synchronization).not.toMatch(
+      /cachedSessions\.find\(\(session\) =>\s*session\.continuationSessionIds\?\.includes/
+    )
+    expect(source).toMatch(
+      /function scheduleSessionSynchronization[\s\S]*?resolveSessionSyncSource\(request\.source, cached\?\.source, request\.filePath\)[\s\S]*?if \(!sourceIsExcluded\(source\)\) markSessionActive/
+    )
+  })
+
   it('keeps search projection behind one non-blocking writer boundary', () => {
     expect(source).toContain('getSearchIndexWriteCoordinator().scheduleLegacySource')
     expect(source).toContain('getSearchIndexWriteCoordinator().scheduleLegacySnapshot')
     expect(source).toMatch(/scheduleLegacySource\([\s\S]*?\.then\(notifySearchIndexUpdated\)/)
-    expect(source).toMatch(/scheduleLegacySnapshot\([\s\S]*?\.then\(notifySearchIndexUpdated\)/)
+    expect(source).toMatch(/scheduleLegacySnapshot\([\s\S]*?\.then\([\s\S]*?notifySearchIndexUpdated\(\)/)
     const searchHandler = source.match(
       /ipcMain\.handle\('sessions:search',[\s\S]*?\n}\)/
     )?.[0] || ''
@@ -58,14 +127,17 @@ describe('live Library synchronization architecture', () => {
       /function scheduleSearchIndexWarmupNow[\s\S]*?scheduledEpoch = libraryRuntimeEpoch[\s\S]*?scheduleEpochBoundTask/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?closeSearchIndexWriteCoordinator[\s\S]*?libraryRuntimePaused = false[\s\S]*?openStartupProjectionGate\(\)/
+      /async function performLibraryActivation[\s\S]*?closeSearchIndexWriteCoordinator[\s\S]*?libraryRuntimePaused = false[\s\S]*?openStartupProjectionGate\(\)/
     )
   })
 
   it('defers full projections until the initial live durability boundary', () => {
     expect(source).toContain('const startupProjectionGate = new StartupProjectionGate<UsageFactSyncResult>()')
     expect(source).toMatch(
-      /function scheduleSearchIndexWarmup\(\): void \{[\s\S]*?startupProjectionGate\.scheduleSearch\(scheduleSearchIndexWarmupNow\)/
+      /function reconcileSearchIndexProjection\(\): Promise<void> \{[\s\S]*?startupProjectionGate\.scheduleSearch\(scheduleSearchIndexWarmupNow\)/
+    )
+    expect(source).toMatch(
+      /function scheduleSearchIndexWarmup\(\): void \{[\s\S]*?reconcileSearchIndexProjection\(\)/
     )
     expect(source).toMatch(
       /function scheduleUsageFactSync[\s\S]*?startupProjectionGate\.scheduleUsage\(options, scheduleUsageFactSyncNow\)/
@@ -77,27 +149,180 @@ describe('live Library synchronization architecture', () => {
       /async function initLibraryFromSessions[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
+      /async function performLibraryActivation[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
     )
     expect(source).toMatch(
-      /initialization\.catch\(\(error\) => \{[\s\S]*?if \(runtimeShuttingDown \|\| libraryRuntimePaused\) return[\s\S]*?transitionLibraryHealth/
+      /initialization\.catch\(\(error\) => \{[\s\S]*?if \(runtimeShuttingDown \|\| libraryRuntimePaused\) return[\s\S]*?handleInitialLibraryGlobalFailure\(error\)/
     )
   })
 
   it('closes the shared writer coordinator before a mutation-incomplete fatal dialog', () => {
     const cleanup = source.match(/function cleanupRuntimeResources[\s\S]*?\n}\n/)?.[0] || ''
     expect(cleanup).not.toContain('closeLibraryWriterRuntime()')
+    const applyWork = source.match(
+      /async function applyPreparedDuplicateRecovery[\s\S]*?\n}\n\nipcMain\.handle\('library:applyDuplicateRecovery'/
+    )?.[0] || ''
+    expect(applyWork).toContain('error instanceof DuplicateRecoveryMutationIncompleteError')
+    expect(applyWork.indexOf('closeLibraryWriterRuntime()')).toBeGreaterThan(-1)
+    expect(applyWork.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(
+      applyWork.indexOf('closeLibraryWriterRuntime()')
+    )
+    expect(applyWork.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(-1)
+    expect(applyWork.indexOf('dialog.showErrorBox(')).toBeGreaterThan(
+      applyWork.indexOf('const shutdown = cleanupRuntimeResources()')
+    )
+  })
+
+  it('single-flights and generation-binds duplicate analysis while keeping apply revalidation', () => {
+    const analysis = source.match(
+      /function runDuplicateRecoveryAnalysis[\s\S]*?\n}\n\nipcMain\.handle\('library:getHealth'/
+    )?.[0] || ''
+    expect(analysis).toContain('cachedDuplicateRecoveryAnalysis.writeGeneration === writeGeneration')
+    expect(analysis).toContain('activeDuplicateRecoveryAnalysis.writeGeneration === writeGeneration')
+    expect(analysis).toContain("stale.reject(new Error('duplicate-recovery-analysis-superseded'))")
+    expect(source).toMatch(
+      /function adoptLibraryTree[\s\S]*?requestAutomaticDuplicateRecoveryAnalysis\(tree\)/
+    )
+    const adoptTree = source.match(/function adoptLibraryTree[\s\S]*?\n}\n/)?.[0] || ''
+    expect(adoptTree).not.toContain("runLibraryBacklogRecovery('automatic')")
+    expect(source).toMatch(
+      /function adoptLibraryTree[\s\S]*?activeDuplicateRecoveryAnalysis\.writeGeneration[\s\S]*?cancelActiveDuplicateRecoveryAnalysis\('duplicate-recovery-inventory-changed-during-analysis'\)/
+    )
+    expect(source).toContain("cancelActiveDuplicateRecoveryAnalysis('duplicate-recovery-no-longer-actionable')")
+    const analysisGate = source.match(
+      /function automaticDuplicateRecoveryAnalysisGateClosed[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(analysisGate).toContain('libraryHydrationActive > 0')
+    expect(analysisGate).toContain('Boolean(libraryInitializationPromise)')
+    expect(analysisGate).toContain('Boolean(libraryBacklogRecoveryPromise)')
+    expect(analysisGate).not.toContain('providerLibrarySyncPromise')
+    expect(analysisGate).toContain('libraryStartupChunkActive')
+    const scheduledDrain = source.match(
+      /function scheduleAutomaticDuplicateRecoveryAnalysis[\s\S]*?\n}\n\nasync function drainAutomaticDuplicateRecoveryAnalysis[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(scheduledDrain.match(/automaticDuplicateRecoveryAnalysisGateClosed\(\)/g)).toHaveLength(2)
+    expect(scheduledDrain.indexOf('automaticDuplicateRecoveryAnalysisGateClosed()')).toBeLessThan(
+      scheduledDrain.indexOf('queueMicrotask')
+    )
+    expect(scheduledDrain.lastIndexOf('automaticDuplicateRecoveryAnalysisGateClosed()')).toBeGreaterThan(
+      scheduledDrain.indexOf('async function drainAutomaticDuplicateRecoveryAnalysis')
+    )
+    expect(source).toMatch(
+      /async function performLibraryActivation[\s\S]*?libraryRuntimePaused = false[\s\S]*?scheduleAutomaticDuplicateRecoveryAnalysis\(\)/
+    )
+    expect(source).toMatch(
+      /async function performLibraryActivation[\s\S]*?cancelActiveDuplicateRecoveryAnalysis[\s\S]*?duplicateRecoveryAnalysisCancellation,[\s\S]*?switchingLibraryWatcher\?\.close\(\)[\s\S]*?changeConfiguredLibraryPath/
+    )
     const applyHandler = source.match(
       /ipcMain\.handle\('library:applyDuplicateRecovery',[\s\S]*?\n}\)\n\nipcMain\.handle\('library:selectDirectory'/
     )?.[0] || ''
-    expect(applyHandler).toContain('error instanceof DuplicateRecoveryMutationIncompleteError')
-    expect(applyHandler.indexOf('closeLibraryWriterRuntime()')).toBeGreaterThan(-1)
-    expect(applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(
-      applyHandler.indexOf('closeLibraryWriterRuntime()')
+    const applyWork = source.match(
+      /async function applyPreparedDuplicateRecovery[\s\S]*?\n}\n\nipcMain\.handle\('library:applyDuplicateRecovery'/
+    )?.[0] || ''
+    expect(applyWork).toContain('prepared.writeGeneration !== (latestLibraryTree?.writeGeneration ?? -1)')
+    expect(applyWork).toContain('executeDuplicateRecoveryPlan(')
+    expect(applyWork).toContain('error instanceof DuplicateRecoveryPlanExpiredError')
+    expect(applyWork).toContain('requestAutomaticDuplicateRecoveryAnalysis(tree)')
+    expect(applyWork).toContain("status: 'stale'")
+    expect(applyHandler).toContain('if (duplicateRecoveryApplyInFlight)')
+    expect(applyHandler).toContain('return duplicateRecoveryApplyInFlight.promise')
+  })
+
+  it('gives every Provider package exactly one durable checkpoint owner', () => {
+    expect(source).not.toContain('scheduleProviderLibrarySynchronization')
+    expect(source).not.toContain('pendingProviderLibrarySessions')
+    expect(source).toContain("void runLibraryBacklogRecovery('provider')")
+    expect(source).toContain('withCanonicalProviderRefreshBarrier(synchronize)')
+    expect(source).toContain("preserveUnseen: latestProviderSettlementStatus !== 'complete'")
+    expect(libraryWorker).toContain('closeCanonicalSessionStore()')
+    expect(manager).toContain('if (stored.tombstone)')
+    expect(manager).toContain('completeCurrentLibraryProjections(plan, sessions, sessionMeta)')
+    expect(manager).toContain("code: 'PROVIDER_SESSION_ALREADY_ARCHIVED'")
+  })
+
+  it('gates whole-transaction retries across startup, safety stops, and global backoff', () => {
+    expect(source).toContain('return runLibraryStartupTransaction(')
+    expect(source).toContain("return handleLibraryGlobalFailure(error, { kind: 'initial' }")
+    expect(source).toContain("if (wakeDisposition === 'drop') return")
+    expect(source).toContain("if (wakeDisposition === 'coalesce') return")
+    expect(source).toContain('enterLibraryBacklogSafetyStop()')
+    expect(source).toContain('handleInitialLibraryGlobalFailure(error)')
+    expect(source).toContain('getLibraryHealthRevision()')
+    expect(source).toContain("checkpointCommitted\n          ? { kind: 'refresh' }")
+    expect(source).toMatch(
+      /async function performLibraryActivation[\s\S]*?librarySwitchFailure = error[\s\S]*?handleLibraryGlobalFailure\([\s\S]*?\{ kind: 'initial' \}/
     )
-    expect(applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')).toBeGreaterThan(-1)
-    expect(applyHandler.indexOf('dialog.showErrorBox(')).toBeGreaterThan(
-      applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')
+    expect(source).toContain("getLibraryHealth().state === 'writer-blocked' || libraryWriterRecoveryTimer !== null")
+    expect(source).toMatch(
+      /recovery\.finally\(\(\) => \{[\s\S]*?libraryBacklogRecoveryQueue\.takeNext\(\)[\s\S]*?runLibraryBacklogRecovery\(pendingMode\)/
     )
+    expect(source).toMatch(
+      /async function retryLibraryAfterWriterBlocked[\s\S]*?await initLibraryFromSessions[\s\S]*?handleLibraryGlobalFailure\([\s\S]*?\{ kind: 'initial' \}/
+    )
+    expect(source).toMatch(
+      /const recoveringWriter = getLibraryHealth\(\)\.state === 'writer-blocked'[\s\S]*?if \(recoveringWriter\) return[\s\S]*?handleInitialLibraryGlobalFailure\(error\)/
+    )
+    expect(source).toMatch(
+      /async function performLibraryActivation[\s\S]*?const switchingLibraryWatcher = libraryWatcher[\s\S]*?libraryWatcher = null[\s\S]*?switchingLibraryRescanController\?\.dispose\(\)[\s\S]*?switchingLibraryWatcher\?\.close\(\)[\s\S]*?switchingLibraryRescanController\?\.waitForIdle\(\)/
+    )
+    expect(source).toMatch(
+      /function startLibraryWatcher[\s\S]*?const controller = new LibraryRescanController[\s\S]*?watcherEpoch !== libraryRuntimeEpoch[\s\S]*?onDirty: \(\) => controller\.markDirty\(\)/
+    )
+    expect(source).toContain('libraryGlobalRecoveryCoordinator.enqueue({')
+    expect(source).toContain('normalizeLibraryGlobalRecoveryOperation(operation, libraryInitialized)')
+    expect(source).toContain('canBeginLibraryGlobalRecovery(operation, {')
+    expect(source).toContain('onboardingNeeded: isOnboardingNeeded()')
+    expect(source).toContain('rootActivationPending: libraryRootActivationRequestsPending > 0')
+    expect(source).toContain('if (recoveryLease) completeOwnedLibraryGlobalRecovery(recoveryLease)')
+    expect(source).toContain('if (libraryRescanRecoveryBlocked()) controller.pause()')
+    expect(source).toContain('resumeLibraryRescanIfSafe()')
+    expect(source).toContain('libraryRootSwitchQueue.run(')
+    const onboarding = source.match(
+      /ipcMain\.handle\('onboarding:complete',[\s\S]*?\n}\)/
+    )?.[0] || ''
+    expect(onboarding).toContain('const sourceSessions = sourceSessionInventory.snapshot()')
+    expect(onboarding).toContain('sessions: sourceSessions')
+    expect(onboarding).toContain('const activationSessions = filterSessionSources(sourceSessions, excluded)')
+    expect(onboarding).toContain('activateLibraryAt(targetPath, activationSessions)')
+    expect(source).toContain('libraryRootActivationSnapshotSequence')
+    expect(source).toContain('`${requestedRoot}\\0snapshot:${++libraryRootActivationSnapshotSequence}`')
+    expect(onboarding.indexOf('setExcludedSources(excluded)')).toBeGreaterThan(-1)
+    expect(onboarding).toContain('await reconcileCanonicalProviderProjection()')
+    expect(onboarding.indexOf('const root = await activateLibraryAt(targetPath, activationSessions)')).toBeGreaterThan(
+      onboarding.indexOf('setExcludedSources(excluded)')
+    )
+    expect(onboarding.indexOf('await reconcileSearchIndexProjection()')).toBeGreaterThan(
+      onboarding.indexOf('const root = await activateLibraryAt(targetPath, activationSessions)')
+    )
+    expect(onboarding.indexOf('completeOnboarding(targetPath, excluded)')).toBeGreaterThan(
+      onboarding.indexOf('const root = await activateLibraryAt(targetPath, activationSessions)')
+    )
+    expect(source).toContain("if (onboardingCompletionRunning) throw new Error('onboarding-completion-already-running')")
+    expect(source).toContain('configureCanonicalProviderProjection((source) => !sourceIsExcluded(source))')
+    expect(source).toMatch(
+      /async function hydrateLibrarySessionsUnderGate[\s\S]*?librarySessionProjectionSource\(librarySession\)[\s\S]*?isSessionSourceProjected\(projectionSource, getExcludedSources\(\)\)[\s\S]*?isSessionSourceProjected\(evidencedSource, getExcludedSources\(\)\)/
+    )
+    expect(source).toMatch(
+      /function refreshCachedMissingSources[\s\S]*?isSessionSourceProjected\([\s\S]*?librarySessionProjectionSource\(session\)/
+    )
+    expect(source).toMatch(
+      /function currentSearchSources[\s\S]*?filterProjectedPhysicalSourcePaths\([\s\S]*?getExcludedSources\(\)/
+    )
+  })
+
+  it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {
+    expect(duplicateWorker).toContain('errorCode: duplicateRecoveryErrorCode(error)')
+    expect(duplicateWorker).not.toContain('error instanceof Error ? error.message')
+    expect(source).toContain('duplicateRecoveryErrorCode(error)')
+  })
+
+  it('keeps identity conflicts out of retry and treats busy filesystem codes as transient', () => {
+    const classifier = manager.match(
+      /function classifyStartupSessionFailure[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(classifier).toContain("code === 'SESSION_IDENTITY_CONFLICT'")
+    expect(classifier).toContain("code === 'EAGAIN'")
+    expect(classifier).toContain("code === 'EBUSY'")
+    expect(classifier).toContain("disposition: handled ? 'handled' : 'failed'")
   })
 })

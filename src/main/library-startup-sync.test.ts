@@ -4,9 +4,16 @@ import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LIBRARY_STARTUP_BATCH_SIZE,
+  LibraryStartupBatchTransportError,
+  runLibraryStartupTransaction,
   buildLibraryStartupPlan,
   completeLibraryStartupCheckpoint,
+  describeLibraryStartupSession,
+  parseLibraryStartupCheckpoint,
+  summarizeLibraryStartupRecovery,
+  selectCurrentProjectionReconciliationIndexes,
   syncLibraryStartupIncrementally,
+  updateLibraryStartupCheckpointAfterBatch,
   type LibraryStartupCheckpoint,
   type LibraryStartupPlan
 } from './library-startup-sync'
@@ -122,11 +129,11 @@ describe('incremental Library startup synchronization', () => {
         return session.sessionId === 'conflict'
           ? {
               total: 1,
-              completed: 0,
+              completed: 1,
               skipped: [{
                 sessionId: session.sessionId,
                 code: 'SESSION_IDENTITY_CONFLICT',
-                disposition: 'failed',
+                disposition: 'handled',
                 retryable: false
               }]
             }
@@ -258,13 +265,13 @@ describe('incremental Library startup synchronization', () => {
     expect(syncChunk).not.toHaveBeenCalled()
   })
 
-  it('aborts the backlog once when safe writer identity is unavailable', async () => {
+  it('wraps a whole production batch writer failure without fabricating item outcomes', async () => {
     const progress = vi.fn()
     const error = Object.assign(new Error('writer identity unavailable'), {
       code: 'WRITER_IDENTITY_UNAVAILABLE',
       name: 'SessionCreateIdentityUnavailableError'
     })
-    await expect(syncLibraryStartupIncrementally({
+    const failure = await syncLibraryStartupIncrementally({
       sessions: [
         summary('first', '/fixture/first.jsonl', '2026-08-02T09:00:00.000Z'),
         summary('second', '/fixture/second.jsonl', '2026-08-02T09:00:01.000Z')
@@ -275,8 +282,44 @@ describe('incremental Library startup synchronization', () => {
       resolveLatest: (session) => session,
       syncBatch: async () => { throw error },
       onProgress: progress
-    })).rejects.toBe(error)
+    }).catch((caught: unknown) => caught)
+    expect(failure).toBeInstanceOf(LibraryStartupBatchTransportError)
+    expect((failure as Error).cause).toBe(error)
     expect(progress).not.toHaveBeenCalled()
+  })
+
+  it('propagates a production batch transport failure without fabricating unpersisted skips', async () => {
+    const error = new Error('library-worker-invalid-reply')
+    const syncBatch = vi.fn(async () => { throw error })
+    const progress = vi.fn()
+    const failure = await syncLibraryStartupIncrementally({
+      sessions: [
+        summary('first', '/fixture/first.jsonl', '2026-08-02T09:00:00.000Z'),
+        summary('second', '/fixture/second.jsonl', '2026-08-02T09:00:01.000Z')
+      ],
+      batchSize: 2,
+      probeWriter: async () => {},
+      onWriterProven: () => {},
+      drainLive: async () => false,
+      resolveLatest: (session) => session,
+      syncBatch,
+      onProgress: progress
+    }).catch((caught: unknown) => caught)
+    expect(failure).toBeInstanceOf(LibraryStartupBatchTransportError)
+    expect((failure as Error).cause).toBe(error)
+    expect(syncBatch).toHaveBeenCalledTimes(1)
+    expect(progress).not.toHaveBeenCalled()
+  })
+
+  it('wraps plan and barrier rejection at the whole startup transaction boundary', async () => {
+    const planFailure = new Error('worker-plan-invalid-reply')
+    const failure = await runLibraryStartupTransaction(async () => { throw planFailure })
+      .catch((caught: unknown) => caught)
+    expect(failure).toBeInstanceOf(LibraryStartupBatchTransportError)
+    expect((failure as Error).cause).toBe(planFailure)
+
+    const lifecycle = Object.assign(new Error('root changed'), { name: 'AbortError' })
+    await expect(runLibraryStartupTransaction(async () => { throw lifecycle })).rejects.toBe(lifecycle)
   })
 
   it('publishes a follow-up source write before startup finishes and never replays the old summary', async () => {
@@ -342,6 +385,333 @@ describe('incremental Library startup synchronization', () => {
 })
 
 describe('Library startup dirty-set checkpoint', () => {
+  it('migrates v1 checkpoints without inventing recovery work', () => {
+    const parsed = parseLibraryStartupCheckpoint({
+      version: 1,
+      snapshotDigest: 'digest',
+      schemaGeneration: 1,
+      completedKeys: ['done'],
+      dirtyKeys: ['dirty'],
+      completedFingerprints: { done: 'fingerprint' }
+    })
+    expect(parsed).toMatchObject({ version: 2, recovery: {} })
+  })
+
+  it('persists bounded transient retries and resets them only when source evidence changes', () => {
+    const session = summary('retry', '/fixture/retry.jsonl', '2026-08-02T09:00:00.000Z')
+    let checkpoint = buildLibraryStartupPlan([session], 1, null).checkpoint
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], {
+        total: 1,
+        completed: 0,
+        skipped: [{
+          sessionId: session.sessionId,
+          code: 'SESSION_SYNC_FAILED',
+          disposition: 'failed',
+          retryable: true
+        }]
+      }, {}, Date.parse(`2026-08-02T09:00:0${attempt}.000Z`)).checkpoint
+    }
+    expect(summarizeLibraryStartupRecovery(checkpoint.recovery)).toMatchObject({
+      retryScheduled: 0,
+      exhausted: 1,
+      maxAttempts: 5,
+      nextRetryAt: null
+    })
+    expect(Object.values(checkpoint.recovery)[0]).toMatchObject({ state: 'exhausted', attempt: 5 })
+
+    const changed = { ...session, updatedAt: '2026-08-02T10:00:00.000Z', fileSizeBytes: 12 }
+    const replanned = buildLibraryStartupPlan([changed], 1, checkpoint)
+    expect(replanned.recoveryItems).toEqual([])
+    expect(replanned.dirtyIndexes).toEqual([0])
+  })
+
+  it('waits for Provider completion without consuming attempts and isolates identity guards from retry', () => {
+    const provider = summary('provider', '/fixture/provider.jsonl', '2026-08-02T09:00:00.000Z')
+    const identity = summary('identity', '/fixture/identity.jsonl', '2026-08-02T09:00:00.000Z')
+    let checkpoint = buildLibraryStartupPlan([provider, identity], 1, null).checkpoint
+    checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider, identity], {
+      total: 2,
+      completed: 0,
+      skipped: [
+        { sessionId: provider.sessionId, code: 'PROVIDER_SESSION_PENDING', disposition: 'failed', retryable: false },
+        { sessionId: identity.sessionId, code: 'SESSION_IDENTITY_MISSING', disposition: 'failed', retryable: false }
+      ]
+    }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
+
+    expect(summarizeLibraryStartupRecovery(checkpoint.recovery)).toMatchObject({
+      waitingProvider: 1,
+      attentionRequired: 1,
+      retryScheduled: 0
+    })
+    expect(Object.values(checkpoint.recovery).map((entry) => [entry.state, entry.attempt]).sort())
+      .toEqual([['attention-required', 0], ['waiting-provider', 0]])
+  })
+
+  it('invalidates a Provider checkpoint when only its authoritative canonical fingerprint changes', () => {
+    const first = {
+      ...summary('provider-fingerprint', 'ssh://fixture/provider#row', '2026-08-02T09:00:00.000Z'),
+      source: 'pi' as const,
+      canonicalProjectionFingerprint: 'canonical-f1'
+    }
+    const completed = completeLibraryStartupCheckpoint(
+      buildLibraryStartupPlan([first], 1, null).checkpoint,
+      [first]
+    )
+    const updated = { ...first, canonicalProjectionFingerprint: 'canonical-f2' }
+    const replanned = buildLibraryStartupPlan([updated], 1, completed)
+
+    expect(describeLibraryStartupSession(updated, 1).key)
+      .toBe(describeLibraryStartupSession(first, 1).key)
+    expect(describeLibraryStartupSession(updated, 1).fingerprint)
+      .not.toBe(describeLibraryStartupSession(first, 1).fingerprint)
+    expect(replanned.dirtyIndexes).toEqual([0])
+  })
+
+  it('preserves Provider retry attempts across a cold phase-one inventory without Provider rows', () => {
+    const provider = {
+      ...summary('provider-restart', 'ssh://fixture/provider#restart', '2026-08-02T09:00:00.000Z'),
+      source: 'pi' as const,
+      canonicalProjectionFingerprint: 'canonical-restart-f1'
+    }
+    let checkpoint = buildLibraryStartupPlan([provider], 1, null).checkpoint
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider], {
+        total: 1,
+        completed: 0,
+        skipped: [{
+          sessionId: provider.sessionId,
+          code: 'EBUSY',
+          disposition: 'failed',
+          retryable: true
+        }]
+      }, {}, Date.parse(`2026-08-02T09:00:0${attempt}.000Z`)).checkpoint
+    }
+    const providerKey = describeLibraryStartupSession(provider, 1).key
+    expect(checkpoint.recovery[providerKey]).toMatchObject({ attempt: 4, state: 'retry-scheduled' })
+
+    const physical = summary('physical-phase-one', '/fixture/physical.jsonl', '2026-08-02T09:00:00.000Z')
+    const phaseOne = buildLibraryStartupPlan(
+      [physical],
+      1,
+      checkpoint,
+      {},
+      { preserveUnseen: true }
+    )
+    expect(phaseOne.checkpoint.recovery[providerKey]).toMatchObject({ attempt: 4 })
+    expect(phaseOne.recoveryItems).toEqual([])
+
+    // A degraded Provider snapshot is partial and therefore cannot prune an
+    // unseen key. Only a later complete inventory is authoritative.
+    const degraded = buildLibraryStartupPlan(
+      [physical],
+      1,
+      phaseOne.checkpoint,
+      {},
+      { preserveUnseen: true }
+    )
+    expect(degraded.checkpoint.recovery[providerKey]).toMatchObject({ attempt: 4 })
+
+    const authoritative = buildLibraryStartupPlan([physical, provider], 1, degraded.checkpoint)
+    expect(authoritative.recoveryItems).toMatchObject([{
+      index: 1,
+      entry: { attempt: 4, state: 'retry-scheduled' }
+    }])
+  })
+
+  it('terminally handles proven identity conflicts outside the background recovery queue', () => {
+    const identity = summary('identity', '/fixture/identity.jsonl', '2026-08-02T09:00:00.000Z')
+    const plan = buildLibraryStartupPlan([identity], 1, null)
+    const workKey = describeLibraryStartupSession(identity, 1).key
+    const updated = updateLibraryStartupCheckpointAfterBatch(plan.checkpoint, [identity], {
+      total: 1,
+      completed: 1,
+      skipped: [{
+        sessionId: identity.sessionId,
+        workKey,
+        code: 'SESSION_IDENTITY_CONFLICT',
+        disposition: 'handled',
+        retryable: false
+      }]
+    }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
+
+    expect(updated.recovery).toEqual({})
+    expect(updated.completedKeys).toContain(workKey)
+    expect(buildLibraryStartupPlan([identity], 1, updated)).toMatchObject({
+      dirtyIndexes: [],
+      recoveryItems: []
+    })
+  })
+
+  it.each(['EAGAIN', 'EBUSY'])(
+    'retries transient filesystem code %s with bounded backoff before exhaustion',
+    (code) => {
+      const session = summary(code.toLowerCase(), `/fixture/${code.toLowerCase()}.jsonl`, '2026-08-02T09:00:00.000Z')
+      const workKey = describeLibraryStartupSession(session, 1).key
+      let checkpoint = buildLibraryStartupPlan([session], 1, null).checkpoint
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], {
+          total: 1,
+          completed: 0,
+          skipped: [{
+            sessionId: session.sessionId,
+            workKey,
+            code,
+            disposition: 'failed',
+            retryable: true
+          }]
+        }, {}, Date.parse(`2026-08-02T09:00:0${attempt}.000Z`)).checkpoint
+        expect(checkpoint.recovery[workKey].attempt).toBe(attempt)
+        expect(checkpoint.recovery[workKey].state).toBe(attempt < 5 ? 'retry-scheduled' : 'exhausted')
+      }
+      expect(summarizeLibraryStartupRecovery(checkpoint.recovery)).toMatchObject({
+        retryScheduled: 0,
+        exhausted: 1,
+        nextRetryAt: null
+      })
+    }
+  )
+
+  it('admits no cold local projection probes and only the exact recovery key after failure', () => {
+    const cold = {
+      dirtyIndexes: Array.from({ length: 440 }, (_, index) => index),
+      recoveryItems: []
+    }
+    expect(selectCurrentProjectionReconciliationIndexes(cold)).toEqual([])
+    expect(selectCurrentProjectionReconciliationIndexes({
+      ...cold,
+      recoveryItems: [{
+        index: 217,
+        entry: {
+          fingerprint: 'retry-fingerprint',
+          state: 'retry-scheduled',
+          reasonCode: 'EAGAIN',
+          attempt: 1,
+          firstFailedAt: '2026-08-10T00:00:00.000Z',
+          lastAttemptAt: '2026-08-10T00:00:00.000Z',
+          nextAttemptAt: '2026-08-10T00:00:01.000Z'
+        }
+      }]
+    })).toEqual([217])
+  })
+
+  it('attributes a failure to its exact logical work key when sessionIds collide', () => {
+    const codex = summary('shared', '/fixture/codex/shared.jsonl', '2026-08-02T09:00:00.000Z')
+    const provider: SessionSummary = {
+      ...summary('shared', '/fixture/claude/shared.jsonl', '2026-08-02T09:00:00.000Z'),
+      source: 'claude-code'
+    }
+    const sessions = [codex, provider]
+    const checkpoint = buildLibraryStartupPlan(sessions, 1, null).checkpoint
+    const codexKey = describeLibraryStartupSession(codex, 1).key
+    const providerKey = describeLibraryStartupSession(provider, 1).key
+
+    const updated = updateLibraryStartupCheckpointAfterBatch(checkpoint, sessions, {
+      total: 2,
+      completed: 1,
+      skipped: [{
+        sessionId: provider.sessionId,
+        workKey: providerKey,
+        code: 'PROVIDER_SESSION_PENDING',
+        disposition: 'failed',
+        retryable: false
+      }]
+    }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
+
+    expect(updated.completedKeys).toContain(codexKey)
+    expect(updated.completedKeys).not.toContain(providerKey)
+    expect(Object.keys(updated.recovery)).toEqual([providerKey])
+    expect(updated.recovery[providerKey].state).toBe('waiting-provider')
+  })
+
+  it('bounds degraded Provider retries and terminally preserves complete-snapshot absences', () => {
+    const provider: SessionSummary = {
+      ...summary('provider', '/fixture/provider.jsonl', '2026-08-02T09:00:00.000Z'),
+      source: 'claude-code'
+    }
+    const workKey = describeLibraryStartupSession(provider, 1).key
+    const checkpoint = buildLibraryStartupPlan([provider], 1, null).checkpoint
+    const degraded = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider], {
+      total: 1,
+      completed: 0,
+      skipped: [{
+        sessionId: provider.sessionId,
+        workKey,
+        code: 'PROVIDER_SESSION_DEGRADED',
+        disposition: 'failed',
+        retryable: true
+      }]
+    }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
+    expect(degraded.recovery[workKey]).toMatchObject({ state: 'retry-scheduled', attempt: 1 })
+
+    const complete = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider], {
+      total: 1,
+      completed: 1,
+      skipped: [{
+        sessionId: provider.sessionId,
+        workKey,
+        code: 'PROVIDER_SESSION_UNAVAILABLE',
+        disposition: 'handled',
+        retryable: false
+      }]
+    }).checkpoint
+    expect(complete.recovery).toEqual({})
+    expect(complete.completedKeys).toContain(workKey)
+  })
+
+  it('fails closed when an ambiguous legacy outcome omits its work key', () => {
+    const first = summary('shared', '/fixture/one/shared.jsonl', '2026-08-02T09:00:00.000Z')
+    const second: SessionSummary = {
+      ...summary('shared', '/fixture/two/shared.jsonl', '2026-08-02T09:00:00.000Z'),
+      source: 'claude-code'
+    }
+    const checkpoint = buildLibraryStartupPlan([first, second], 1, null).checkpoint
+    expect(() => updateLibraryStartupCheckpointAfterBatch(checkpoint, [first, second], {
+      total: 2,
+      completed: 1,
+      skipped: [{
+        sessionId: 'shared',
+        code: 'SESSION_SYNC_FAILED',
+        disposition: 'failed',
+        retryable: true
+      }]
+    })).toThrow('omitted workKey')
+  })
+
+  it('fails closed when an outcome supplies an unknown or mismatched work key', () => {
+    const session = summary('known', '/fixture/known.jsonl', '2026-08-02T09:00:00.000Z')
+    const checkpoint = buildLibraryStartupPlan([session], 1, null).checkpoint
+    const failure = {
+      total: 1,
+      completed: 0,
+      skipped: [{
+        sessionId: session.sessionId,
+        workKey: 'bogus',
+        code: 'SESSION_SYNC_FAILED',
+        disposition: 'failed' as const,
+        retryable: true
+      }]
+    }
+    expect(() => updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], failure))
+      .toThrow('workKey does not match')
+
+    const realKey = describeLibraryStartupSession(session, 1).key
+    expect(() => updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], {
+      ...failure,
+      skipped: [{ ...failure.skipped[0], sessionId: 'different', workKey: realKey }]
+    })).toThrow('workKey does not match')
+  })
+
+  it('fails closed when outcome accounting cannot cover the batch', () => {
+    const session = summary('known', '/fixture/known.jsonl', '2026-08-02T09:00:00.000Z')
+    const checkpoint = buildLibraryStartupPlan([session], 1, null).checkpoint
+    expect(() => updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], {
+      total: 1,
+      completed: 0,
+      skipped: []
+    })).toThrow('does not account')
+  })
+
   it('invalidates and replans when the source collection or schema generation changes', () => {
     const sessions = Array.from({ length: 8 }, (_, index) =>
       summary(`session-${index}`, `/fixture/session-${index}.jsonl`, `2026-08-02T09:00:${String(index).padStart(2, '0')}.000Z`))

@@ -4,6 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
 import {
+  DuplicateRecoveryPlanExpiredError,
   buildDuplicateRecoveryReport,
   prepareDuplicateRecoveryExecution
 } from './duplicate-recovery-planner'
@@ -111,8 +112,9 @@ describe('duplicate recovery executor', () => {
     const report = await buildDuplicateRecoveryReport(libraryRoot, { quarantineRoot, hashSources: true })
     fs.appendFileSync(path.join(libraryRoot, 'group-a', 'one', 'transcript.md'), 'changed\n')
 
-    await expect(executeDuplicateRecoveryPlan(libraryRoot, report, { quarantineRoot }))
-      .rejects.toThrow('duplicate-recovery-plan-expired')
+    const failure = executeDuplicateRecoveryPlan(libraryRoot, report, { quarantineRoot })
+    await expect(failure).rejects.toBeInstanceOf(DuplicateRecoveryPlanExpiredError)
+    await expect(failure).rejects.toMatchObject({ code: 'duplicate-recovery-plan-expired' })
     expect(packageCount(libraryRoot)).toBe(4)
     expect(fs.existsSync(quarantineRoot)).toBe(false)
   })

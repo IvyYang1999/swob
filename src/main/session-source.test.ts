@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { detectSessionSourceForJsonl, detectSessionSourceFromPath } from './session-source'
+import {
+  detectSessionSourceForJsonl,
+  detectSessionSourceFromPath,
+  resolveSessionSyncSource
+} from './session-source'
 
 function writeBackupJsonl(rows: unknown[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-source-test-'))
@@ -80,5 +84,28 @@ describe('detectSessionSourceForJsonl', () => {
     )
 
     expect(source).toBe('codex')
+  })
+
+  it('transcript 路由标记不会覆盖真实来源或绕过来源排除', () => {
+    expect(resolveSessionSyncSource(
+      'transcript',
+      undefined,
+      '/Users/test/.claude/projects/demo/session.jsonl'
+    )).toBe('claude-code')
+    expect(resolveSessionSyncSource(
+      'transcript',
+      'cursor',
+      '/Users/test/.claude/projects/demo/session.jsonl'
+    )).toBe('claude-code')
+    expect(resolveSessionSyncSource(
+      'transcript',
+      'cursor',
+      '/Users/test/opaque/session.jsonl'
+    )).toBe('cursor')
+    expect(resolveSessionSyncSource(
+      'codex',
+      'claude-code',
+      '/Users/test/.claude/projects/demo/session.jsonl'
+    )).toBe('codex')
   })
 })

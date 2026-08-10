@@ -6,8 +6,36 @@ import {
 import type { LibrarySyncOutcome } from './library-manager'
 import type { SessionSummary } from './types'
 
-export const LIBRARY_STARTUP_CHECKPOINT_VERSION = 1
+export const LIBRARY_STARTUP_CHECKPOINT_VERSION = 2
 export const LIBRARY_STARTUP_BATCH_SIZE = 32
+export const LIBRARY_STARTUP_RECOVERY_MAX_ATTEMPTS = 5
+
+const LIBRARY_STARTUP_RECOVERY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000, 600_000] as const
+
+export type LibraryStartupRecoveryState =
+  | 'retry-scheduled'
+  | 'waiting-provider'
+  | 'attention-required'
+  | 'exhausted'
+
+export interface LibraryStartupRecoveryEntry {
+  fingerprint: string
+  state: LibraryStartupRecoveryState
+  reasonCode: string
+  attempt: number
+  firstFailedAt: string
+  lastAttemptAt: string
+  nextAttemptAt: string | null
+}
+
+export interface LibraryStartupRecoverySummary {
+  retryScheduled: number
+  waitingProvider: number
+  attentionRequired: number
+  exhausted: number
+  maxAttempts: typeof LIBRARY_STARTUP_RECOVERY_MAX_ATTEMPTS
+  nextRetryAt: string | null
+}
 
 export interface LibraryStartupProgress {
   current: number
@@ -26,6 +54,7 @@ export interface LibraryStartupCheckpoint {
   completedKeys: string[]
   dirtyKeys: string[]
   completedFingerprints: Record<string, string>
+  recovery: Record<string, LibraryStartupRecoveryEntry>
 }
 
 export interface LibraryStartupDescriptor {
@@ -37,6 +66,7 @@ export interface LibraryStartupPlan {
   checkpoint: LibraryStartupCheckpoint
   descriptors: LibraryStartupDescriptor[]
   dirtyIndexes: number[]
+  recoveryItems: Array<{ index: number; entry: LibraryStartupRecoveryEntry }>
   invalidation: 'cold' | 'none' | 'snapshot-changed' | 'schema-changed' | 'projection-changed'
 }
 
@@ -44,6 +74,15 @@ export class LibraryStartupSyncInterruptedError extends Error {
   constructor() {
     super('Library background synchronization interrupted')
     this.name = 'LibraryStartupSyncInterruptedError'
+  }
+}
+
+export class LibraryStartupBatchTransportError extends Error {
+  readonly code = 'LIBRARY_STARTUP_BATCH_TRANSPORT_FAILED'
+
+  constructor(cause: unknown) {
+    super('Library startup batch failed before a durable item outcome', { cause })
+    this.name = 'LibraryStartupBatchTransportError'
   }
 }
 
@@ -103,6 +142,7 @@ export function describeLibraryStartupSession(
     fileSizeBytes: session.fileSizeBytes,
     messageCount: session.messageCount,
     turnCount: session.turnCount,
+    canonicalProjectionFingerprint: session.canonicalProjectionFingerprint || null,
     lifecycleState: session.lifecycleState || null,
     branchParentId: session.branchParentId || null,
     branchChildIds: [...(session.branchChildIds || [])].sort(),
@@ -118,7 +158,8 @@ function isStringArray(value: unknown): value is string[] {
 export function parseLibraryStartupCheckpoint(value: unknown): LibraryStartupCheckpoint | null {
   if (!value || typeof value !== 'object') return null
   const candidate = value as Partial<LibraryStartupCheckpoint>
-  if (candidate.version !== LIBRARY_STARTUP_CHECKPOINT_VERSION ||
+  const version = (candidate as { version?: unknown }).version
+  if ((version !== 1 && version !== LIBRARY_STARTUP_CHECKPOINT_VERSION) ||
     typeof candidate.snapshotDigest !== 'string' ||
     !Number.isSafeInteger(candidate.schemaGeneration) ||
     !isStringArray(candidate.completedKeys) ||
@@ -127,13 +168,31 @@ export function parseLibraryStartupCheckpoint(value: unknown): LibraryStartupChe
     !Object.values(candidate.completedFingerprints).every((entry) => typeof entry === 'string')) {
     return null
   }
+  const rawRecovery = version === LIBRARY_STARTUP_CHECKPOINT_VERSION
+    ? (candidate as Partial<LibraryStartupCheckpoint>).recovery
+    : {}
+  if (!rawRecovery || typeof rawRecovery !== 'object') return null
+  const recovery: Record<string, LibraryStartupRecoveryEntry> = {}
+  for (const [key, raw] of Object.entries(rawRecovery)) {
+    if (!raw || typeof raw !== 'object') return null
+    const entry = raw as Partial<LibraryStartupRecoveryEntry>
+    if (typeof entry.fingerprint !== 'string' ||
+      !['retry-scheduled', 'waiting-provider', 'attention-required', 'exhausted'].includes(String(entry.state)) ||
+      typeof entry.reasonCode !== 'string' || !Number.isSafeInteger(entry.attempt) || entry.attempt! < 0 ||
+      typeof entry.firstFailedAt !== 'string' || !Number.isFinite(Date.parse(entry.firstFailedAt)) ||
+      typeof entry.lastAttemptAt !== 'string' || !Number.isFinite(Date.parse(entry.lastAttemptAt)) ||
+      (entry.nextAttemptAt !== null &&
+        (typeof entry.nextAttemptAt !== 'string' || !Number.isFinite(Date.parse(entry.nextAttemptAt))))) return null
+    recovery[key] = entry as LibraryStartupRecoveryEntry
+  }
   return {
     version: LIBRARY_STARTUP_CHECKPOINT_VERSION,
     snapshotDigest: candidate.snapshotDigest,
     schemaGeneration: candidate.schemaGeneration!,
     completedKeys: [...new Set(candidate.completedKeys)].sort(),
     dirtyKeys: [...new Set(candidate.dirtyKeys)].sort(),
-    completedFingerprints: { ...candidate.completedFingerprints }
+    completedFingerprints: { ...candidate.completedFingerprints },
+    recovery
   }
 }
 
@@ -153,7 +212,8 @@ export function buildLibraryStartupPlan(
   sessions: readonly SessionSummary[],
   schemaGeneration: number,
   previous: LibraryStartupCheckpoint | null,
-  sessionMeta: Record<string, { customTitle?: string }> = {}
+  sessionMeta: Record<string, { customTitle?: string }> = {},
+  options: { preserveUnseen?: boolean } = {}
 ): LibraryStartupPlan {
   if (!Number.isSafeInteger(schemaGeneration) || schemaGeneration < 1) {
     throw new Error('Library startup schema generation must be a positive integer')
@@ -163,8 +223,19 @@ export function buildLibraryStartupPlan(
     schemaGeneration,
     sessionMeta[session.sessionId]?.customTitle
   ))
-  const snapshotDigest = sha256(descriptors
-    .map((descriptor) => `${descriptor.key}:${descriptor.fingerprint}`)
+  const preserveUnseen = options.preserveUnseen === true && previous?.schemaGeneration === schemaGeneration
+  const currentKeys = new Set(descriptors.map((descriptor) => descriptor.key))
+  const previousKnownFingerprints = new Map<string, string>([
+    ...Object.entries(previous?.completedFingerprints || {}),
+    ...Object.entries(previous?.recovery || {}).map(([key, entry]) => [key, entry.fingerprint] as const)
+  ])
+  const unseenFingerprintEntries = preserveUnseen
+    ? [...previousKnownFingerprints].filter(([key]) => !currentKeys.has(key))
+    : []
+  const snapshotDigest = sha256([
+    ...descriptors.map((descriptor) => `${descriptor.key}:${descriptor.fingerprint}`),
+    ...unseenFingerprintEntries.map(([key, fingerprint]) => `${key}:${fingerprint}`)
+  ]
     .sort()
     .join('\n'))
   const descriptorByKey = new Map(descriptors.map((descriptor) => [descriptor.key, descriptor]))
@@ -175,16 +246,27 @@ export function buildLibraryStartupPlan(
   if (previous?.schemaGeneration === schemaGeneration && previous.snapshotDigest === snapshotDigest) {
     const completed = new Set(previous.completedKeys)
     const dirty = new Set(previous.dirtyKeys)
+    const recovery = Object.fromEntries(Object.entries(previous.recovery)
+      .filter(([key, entry]) => {
+        const descriptor = descriptorByKey.get(key)
+        return descriptor
+          ? descriptor.fingerprint === entry.fingerprint
+          : preserveUnseen && previousKnownFingerprints.get(key) === entry.fingerprint
+      }))
     return {
       checkpoint: {
         ...previous,
-        completedKeys: [...completed].filter((key) => descriptorByKey.has(key)).sort(),
-        dirtyKeys: [...dirty].filter((key) => descriptorByKey.has(key)).sort(),
+        completedKeys: [...completed].filter((key) => descriptorByKey.has(key) || preserveUnseen).sort(),
+        dirtyKeys: [...dirty].filter((key) => descriptorByKey.has(key) || preserveUnseen).sort(),
         completedFingerprints: Object.fromEntries(Object.entries(previous.completedFingerprints)
-          .filter(([key]) => descriptorByKey.has(key)))
+          .filter(([key]) => descriptorByKey.has(key) || preserveUnseen)),
+        recovery
       },
       descriptors,
       dirtyIndexes: indexesForDirtyKeys(descriptors, (key) => dirty.has(key) && !completed.has(key)),
+      recoveryItems: descriptors.flatMap((descriptor, index) => recovery[descriptor.key]
+        ? [{ index, entry: recovery[descriptor.key] }]
+        : []),
       invalidation: 'none'
     }
   }
@@ -196,18 +278,38 @@ export function buildLibraryStartupPlan(
   const cleanFingerprints = Object.fromEntries(descriptors
     .filter((descriptor) => !dirtyKeySet.has(descriptor.key))
     .map((descriptor) => [descriptor.key, descriptor.fingerprint]))
+  const unseenKeys = new Set(unseenFingerprintEntries.map(([key]) => key))
+  const unseenCompletedKeys = preserveUnseen
+    ? (previous?.completedKeys || []).filter((key) => unseenKeys.has(key))
+    : []
+  const unseenDirtyKeys = preserveUnseen
+    ? (previous?.dirtyKeys || []).filter((key) => unseenKeys.has(key))
+    : []
+  const unseenCompletedFingerprints = preserveUnseen
+    ? Object.fromEntries(Object.entries(previous?.completedFingerprints || {})
+        .filter(([key]) => unseenKeys.has(key)))
+    : {}
   const checkpoint: LibraryStartupCheckpoint = {
     version: LIBRARY_STARTUP_CHECKPOINT_VERSION,
     snapshotDigest,
     schemaGeneration,
-    completedKeys: [],
-    dirtyKeys,
-    completedFingerprints: cleanFingerprints
+    completedKeys: [...new Set(unseenCompletedKeys)].sort(),
+    dirtyKeys: [...new Set([...dirtyKeys, ...unseenDirtyKeys])].sort(),
+    completedFingerprints: { ...cleanFingerprints, ...unseenCompletedFingerprints },
+    recovery: Object.fromEntries(Object.entries(previous?.recovery || {})
+      .filter(([key, entry]) => {
+        const descriptor = descriptorByKey.get(key)
+        if (descriptor) return descriptor.fingerprint === entry.fingerprint && dirtyKeySet.has(key)
+        return preserveUnseen && unseenKeys.has(key)
+      }))
   }
   return {
     checkpoint,
     descriptors,
     dirtyIndexes: indexesForDirtyKeys(descriptors, (key) => dirtyKeySet.has(key)),
+    recoveryItems: descriptors.flatMap((descriptor, index) => checkpoint.recovery[descriptor.key]
+      ? [{ index, entry: checkpoint.recovery[descriptor.key] }]
+      : []),
     invalidation: !previous
       ? 'cold'
       : previous.schemaGeneration !== schemaGeneration
@@ -229,16 +331,171 @@ export function completeLibraryStartupCheckpoint(
   const dirty = new Set(checkpoint.dirtyKeys)
   const completed = new Set(checkpoint.completedKeys)
   const completedFingerprints = { ...checkpoint.completedFingerprints }
+  const recovery = { ...checkpoint.recovery }
   for (const descriptor of descriptors) {
     if (!dirty.has(descriptor.key)) throw new Error('Library startup batch is not part of the active checkpoint')
     completed.add(descriptor.key)
     completedFingerprints[descriptor.key] = descriptor.fingerprint
+    delete recovery[descriptor.key]
   }
   return {
     ...checkpoint,
     completedKeys: [...completed].sort(),
-    completedFingerprints
+    completedFingerprints,
+    recovery
   }
+}
+
+function stableRecoveryDelayMs(key: string, attempt: number): number {
+  const base = LIBRARY_STARTUP_RECOVERY_DELAYS_MS[Math.min(
+    Math.max(0, attempt - 1),
+    LIBRARY_STARTUP_RECOVERY_DELAYS_MS.length - 1
+  )]
+  const bucket = Number.parseInt(sha256(key).slice(0, 4), 16) % 21
+  return Math.max(250, Math.round(base * (0.9 + bucket / 100)))
+}
+
+function recoveryStateForCode(code: string): 'transient' | 'provider' | 'attention' {
+  if (code === 'PROVIDER_SESSION_PENDING') return 'provider'
+  if (code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED' ||
+    code === 'PROVIDER_SESSION_DEGRADED' || code === 'EAGAIN' || code === 'EBUSY') return 'transient'
+  return 'attention'
+}
+
+export function updateLibraryStartupCheckpointAfterBatch(
+  checkpoint: LibraryStartupCheckpoint,
+  sessions: readonly SessionSummary[],
+  outcome: LibrarySyncOutcome,
+  sessionMeta: Record<string, { customTitle?: string }> = {},
+  nowMs = Date.now()
+): { checkpoint: LibraryStartupCheckpoint; recoveryByWorkKey: Record<string, LibraryStartupRecoveryEntry> } {
+  const descriptors = sessions.map((session) => describeLibraryStartupSession(
+    session,
+    checkpoint.schemaGeneration,
+    sessionMeta[session.sessionId]?.customTitle
+  ))
+  const sessionIdCounts = new Map<string, number>()
+  const descriptorIndexByKey = new Map<string, number>()
+  for (let index = 0; index < descriptors.length; index++) {
+    if (descriptorIndexByKey.has(descriptors[index].key)) {
+      throw new Error('Library startup batch contains a duplicate workKey')
+    }
+    descriptorIndexByKey.set(descriptors[index].key, index)
+  }
+  for (const session of sessions) {
+    sessionIdCounts.set(session.sessionId, (sessionIdCounts.get(session.sessionId) || 0) + 1)
+  }
+  const failedCount = outcome.skipped.filter((entry) => entry.disposition === 'failed').length
+  if (outcome.total !== sessions.length || outcome.completed + failedCount !== sessions.length) {
+    throw new Error('Library startup outcome does not account for the complete batch')
+  }
+  const resolvedSkippedWorkKeys = new Map<LibrarySyncOutcome['skipped'][number], string>()
+  const seenSkippedWorkKeys = new Set<string>()
+  for (const skipped of outcome.skipped) {
+    let workKey = skipped.workKey
+    if (workKey) {
+      const descriptorIndex = descriptorIndexByKey.get(workKey)
+      if (descriptorIndex === undefined || sessions[descriptorIndex].sessionId !== skipped.sessionId) {
+        throw new Error('Library startup outcome workKey does not match its session')
+      }
+    } else {
+      if (sessionIdCounts.get(skipped.sessionId) !== 1) {
+        throw new Error('Library startup outcome omitted workKey for an ambiguous sessionId')
+      }
+      const index = sessions.findIndex((session) => session.sessionId === skipped.sessionId)
+      if (index < 0) throw new Error('Library startup outcome references an unknown session')
+      workKey = descriptors[index].key
+    }
+    if (seenSkippedWorkKeys.has(workKey)) {
+      throw new Error('Library startup outcome repeats a workKey')
+    }
+    seenSkippedWorkKeys.add(workKey)
+    resolvedSkippedWorkKeys.set(skipped, workKey)
+  }
+  const failedByWorkKey = new Map<string, string>()
+  for (const skipped of outcome.skipped.filter((entry) => entry.disposition === 'failed')) {
+    const workKey = resolvedSkippedWorkKeys.get(skipped)
+    if (!workKey) throw new Error('Library startup outcome could not resolve a failed workKey')
+    failedByWorkKey.set(workKey, skipped.code)
+  }
+  const terminalSessions = sessions.filter((_session, index) => !failedByWorkKey.has(descriptors[index].key))
+  let next = completeLibraryStartupCheckpoint(checkpoint, terminalSessions, sessionMeta)
+  const completed = new Set(next.completedKeys)
+  const completedFingerprints = { ...next.completedFingerprints }
+  const recovery = { ...next.recovery }
+  const recoveryByWorkKey: Record<string, LibraryStartupRecoveryEntry> = {}
+  const now = new Date(nowMs).toISOString()
+  for (let index = 0; index < sessions.length; index++) {
+    const session = sessions[index]
+    const descriptor = descriptors[index]
+    const code = failedByWorkKey.get(descriptor.key)
+    if (!code) continue
+    const previous = recovery[descriptor.key]?.fingerprint === descriptor.fingerprint
+      ? recovery[descriptor.key]
+      : null
+    const failureClass = recoveryStateForCode(code)
+    const attempt = failureClass === 'transient' ? (previous?.attempt || 0) + 1 : (previous?.attempt || 0)
+    const state: LibraryStartupRecoveryState = failureClass === 'provider'
+      ? 'waiting-provider'
+      : failureClass === 'attention'
+        ? 'attention-required'
+        : attempt >= LIBRARY_STARTUP_RECOVERY_MAX_ATTEMPTS
+          ? 'exhausted'
+          : 'retry-scheduled'
+    const entry: LibraryStartupRecoveryEntry = {
+      fingerprint: descriptor.fingerprint,
+      state,
+      reasonCode: code,
+      attempt,
+      firstFailedAt: previous?.firstFailedAt || now,
+      lastAttemptAt: now,
+      nextAttemptAt: state === 'retry-scheduled'
+        ? new Date(nowMs + stableRecoveryDelayMs(descriptor.key, attempt)).toISOString()
+        : null
+    }
+    recovery[descriptor.key] = entry
+    recoveryByWorkKey[descriptor.key] = entry
+    completed.delete(descriptor.key)
+    delete completedFingerprints[descriptor.key]
+  }
+  next = {
+    ...next,
+    completedKeys: [...completed].sort(),
+    completedFingerprints,
+    recovery
+  }
+  return { checkpoint: next, recoveryByWorkKey }
+}
+
+export function summarizeLibraryStartupRecovery(
+  recovery: Readonly<Record<string, LibraryStartupRecoveryEntry>>
+): LibraryStartupRecoverySummary {
+  const summary: LibraryStartupRecoverySummary = {
+    retryScheduled: 0,
+    waitingProvider: 0,
+    attentionRequired: 0,
+    exhausted: 0,
+    maxAttempts: LIBRARY_STARTUP_RECOVERY_MAX_ATTEMPTS,
+    nextRetryAt: null
+  }
+  for (const entry of Object.values(recovery)) {
+    if (entry.state === 'retry-scheduled') {
+      summary.retryScheduled++
+      if (entry.nextAttemptAt && (!summary.nextRetryAt || entry.nextAttemptAt < summary.nextRetryAt)) {
+        summary.nextRetryAt = entry.nextAttemptAt
+      }
+    } else if (entry.state === 'waiting-provider') summary.waitingProvider++
+    else if (entry.state === 'attention-required') summary.attentionRequired++
+    else summary.exhausted++
+  }
+  return summary
+}
+
+export function selectCurrentProjectionReconciliationIndexes(
+  plan: Pick<LibraryStartupPlan, 'dirtyIndexes' | 'recoveryItems'>
+): number[] {
+  const recoveryIndexes = new Set(plan.recoveryItems.map((item) => item.index))
+  return plan.dirtyIndexes.filter((index) => recoveryIndexes.has(index))
 }
 
 function failureReason(error: unknown): string {
@@ -253,11 +510,13 @@ function failureReason(error: unknown): string {
 
 function failedStartupItem(sessionId: string, error: unknown): LibrarySyncOutcome['skipped'][number] {
   const code = failureReason(error)
+  const handled = code === 'SESSION_SOURCE_MISSING' || code === 'SESSION_IDENTITY_CONFLICT'
   return {
     sessionId,
     code,
-    disposition: 'failed',
-    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED'
+    disposition: handled ? 'handled' : 'failed',
+    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED' ||
+      code === 'EAGAIN' || code === 'EBUSY'
   }
 }
 
@@ -268,6 +527,21 @@ function mustAbortStartup(error: unknown): boolean {
     typed.name === 'LibraryPathUnsafeError' || typed.name === 'SessionCreateIdentityUnavailableError' ||
     ['LIBRARY_WRITER_BUSY', 'WRITER_IDENTITY_UNAVAILABLE', 'EACCES', 'EPERM', 'ENOSPC', 'EIO']
       .includes(String(typed.code || ''))
+}
+
+export function isStartupLifecycleAbort(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const typed = error as { name?: unknown }
+  return error instanceof LibraryStartupSyncInterruptedError || typed.name === 'AbortError'
+}
+
+export async function runLibraryStartupTransaction<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (isStartupLifecycleAbort(error) || error instanceof LibraryStartupBatchTransportError) throw error
+    throw new LibraryStartupBatchTransportError(error)
+  }
 }
 
 /**
@@ -322,39 +596,28 @@ export async function syncLibraryStartupIncrementally(
       failed += chunkFailures
       if (chunkFailures > 0) unexpectedFailure = true
     } catch (error) {
+      // Production syncBatch already classifies every item and commits its
+      // exact checkpoint outcome in the Library worker transaction. A reject
+      // here is therefore a worker/transport/global failure; fabricating local
+      // skipped items would lose durable recovery ownership.
+      if (options.syncBatch) {
+        if (isStartupLifecycleAbort(error)) throw error
+        throw new LibraryStartupBatchTransportError(error)
+      }
       if (mustAbortStartup(error)) throw error
-      unexpectedFailure = true
-      if (options.syncBatch && batch.length > 1) {
-        // A content-specific failure must not strand the rest of a bounded
-        // batch. Retry one-by-one only on this exceptional path; successful
-        // items advance their own checkpoint while the bad key remains dirty.
-        chunk = { total: batch.length, completed: 0, skipped: [] }
-        for (const session of batch) {
-          try {
-            const retried = await options.syncBatch([session])
-            chunk.completed += retried.completed
-            chunk.skipped.push(...retried.skipped)
-          } catch (retryError) {
-            if (mustAbortStartup(retryError)) throw retryError
-            const skipped = failedStartupItem(session.sessionId, retryError)
-            chunk.skipped.push(skipped)
-            failureBySessionId.set(session.sessionId, skipped.code)
-          }
-        }
-        const handled = chunk.skipped.filter((entry) => entry.disposition === 'handled').length
-        const chunkFailures = chunk.skipped.filter((entry) => entry.disposition === 'failed').length
-        if (chunk.completed > handled) reportBoundary('durable')
-        outcome.completed += chunk.completed
-        outcome.skipped.push(...chunk.skipped)
-        failed += chunkFailures
-      } else {
+      {
+        const skipped = batch.map((session) => failedStartupItem(session.sessionId, error))
+        const handled = skipped.filter((entry) => entry.disposition === 'handled').length
+        const chunkFailures = skipped.length - handled
         chunk = {
           total: batch.length,
-          completed: 0,
-          skipped: batch.map((session) => failedStartupItem(session.sessionId, error))
+          completed: handled,
+          skipped
         }
+        outcome.completed += handled
         outcome.skipped.push(...chunk.skipped)
-        failed += chunk.skipped.length
+        failed += chunkFailures
+        if (chunkFailures > 0) unexpectedFailure = true
         for (const skipped of chunk.skipped) failureBySessionId.set(skipped.sessionId, skipped.code)
       }
     }

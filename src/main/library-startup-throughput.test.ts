@@ -3,7 +3,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { LIBRARY_STARTUP_BATCH_SIZE } from './library-startup-sync'
+import {
+  describeLibraryStartupSession,
+  LIBRARY_STARTUP_BATCH_SIZE,
+  updateLibraryStartupCheckpointAfterBatch
+} from './library-startup-sync'
 import type { SessionSummary } from './types'
 
 const savedHome = process.env.HOME
@@ -76,6 +80,88 @@ afterAll(() => {
 })
 
 describe('Library startup production throughput', () => {
+  it('reuses one exact legacy package when its persisted source path proves the binding', async () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-legacy-library-'))
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-legacy-source-'))
+    roots.push(libraryRoot, sourceRoot)
+    const sourcePath = writeSource(sourceRoot, 0)
+    const session = summary(0, sourcePath)
+    const legacyDir = path.join(libraryRoot, 'legacy-package')
+    fs.mkdirSync(legacyDir)
+    fs.writeFileSync(path.join(legacyDir, '.swob-session.json'), JSON.stringify({
+      schemaVersion: 2,
+      logicalIdentity: {
+        schemaVersion: 1,
+        sourceFamily: 'legacy-ambiguous',
+        sourceInstance: { kind: 'legacy-ambiguous', id: 'legacy-ambiguous' },
+        sessionId: session.sessionId
+      },
+      sessionId: session.sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: session.createdAt,
+      updatedAt: '2026-08-07T00:00:00.000Z',
+      projectPath: session.projectPath,
+      turnCount: 0
+    }))
+    fs.writeFileSync(path.join(legacyDir, 'backup.jsonl'), fs.readFileSync(sourcePath))
+    fs.writeFileSync(path.join(legacyDir, 'transcript.md'), 'legacy transcript\n')
+    lib.initLibrary(libraryRoot)
+
+    const plan = await lib.planLibraryStartupSync([session], 1, {})
+    const result = await lib.syncLibraryStartupBatch(
+      [session],
+      {},
+      { snapshotDigest: plan.snapshotDigest, schemaGeneration: plan.schemaGeneration }
+    )
+
+    expect(result.outcome).toMatchObject({ completed: 1, skipped: [] })
+    expect(fs.readdirSync(libraryRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)).toEqual(['legacy-package'])
+    const persisted = JSON.parse(fs.readFileSync(path.join(legacyDir, '.swob-session.json'), 'utf-8'))
+    expect(persisted.logicalIdentity.sourceFamily).toBe('legacy-ambiguous')
+    expect(persisted.turnCount).toBe(session.turnCount)
+  })
+
+  it('does not alias a legacy package when the source evidence differs', async () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-legacy-mismatch-library-'))
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-legacy-mismatch-source-'))
+    roots.push(libraryRoot, sourceRoot)
+    const sourcePath = writeSource(sourceRoot, 0)
+    const session = summary(0, sourcePath)
+    const legacyDir = path.join(libraryRoot, 'legacy-package')
+    fs.mkdirSync(legacyDir)
+    fs.writeFileSync(path.join(legacyDir, '.swob-session.json'), JSON.stringify({
+      schemaVersion: 2,
+      logicalIdentity: {
+        schemaVersion: 1,
+        sourceFamily: 'legacy-ambiguous',
+        sourceInstance: { kind: 'legacy-ambiguous', id: 'legacy-ambiguous' },
+        sessionId: session.sessionId
+      },
+      sessionId: session.sessionId,
+      sourceFilePaths: ['/different/source.jsonl'],
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      projectPath: session.projectPath,
+      turnCount: session.turnCount
+    }))
+    lib.initLibrary(libraryRoot)
+
+    const plan = await lib.planLibraryStartupSync([session], 1, {})
+    const result = await lib.syncLibraryStartupBatch(
+      [session],
+      {},
+      { snapshotDigest: plan.snapshotDigest, schemaGeneration: plan.schemaGeneration }
+    )
+    expect(result.outcome.skipped[0]).toMatchObject({
+      code: 'SESSION_IDENTITY_AMBIGUOUS',
+      recovery: { state: 'attention-required', attempt: 0 }
+    })
+    expect(fs.readdirSync(libraryRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))).toHaveLength(1)
+  })
+
   it('refreshes both identity indexes after an intervening writer commit', async () => {
     const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-generation-library-'))
     const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-generation-source-'))
@@ -110,7 +196,7 @@ describe('Library startup production throughput', () => {
       {},
       { snapshotDigest: cold.snapshotDigest, schemaGeneration: cold.schemaGeneration }
     )
-    expect(handled.outcome).toEqual({
+    expect(handled.outcome).toMatchObject({
       total: 1,
       completed: 1,
       skipped: [{
@@ -143,6 +229,79 @@ describe('Library startup production throughput', () => {
     expect(fs.existsSync(path.join(sessionDir, '.swob-incomplete.json'))).toBe(false)
   })
 
+  it('clears a stale retry immediately when live sync already made the exact projection current', async () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-live-reconcile-library-'))
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-live-reconcile-source-'))
+    roots.push(libraryRoot, sourceRoot)
+    const sourcePath = writeSource(sourceRoot, 0)
+    const initial = summary(0, sourcePath)
+    lib.initLibrary(libraryRoot)
+
+    const cold = await lib.planLibraryStartupSync([initial], 1, {})
+    await lib.syncLibraryStartupBatch(
+      [initial],
+      {},
+      { snapshotDigest: cold.snapshotDigest, schemaGeneration: cold.schemaGeneration }
+    )
+
+    fs.appendFileSync(sourcePath, `${JSON.stringify({
+      uuid: 'throughput-0000-user-2',
+      parentUuid: 'throughput-0000-assistant',
+      sessionId: initial.sessionId,
+      type: 'user',
+      timestamp: '2026-08-08T00:00:02.000Z',
+      cwd: '/fixture/project',
+      message: { role: 'user', content: 'live update' }
+    })}\n`)
+    const changed: SessionSummary = {
+      ...initial,
+      updatedAt: '2026-08-08T00:00:02.000Z',
+      fileSizeBytes: fs.statSync(sourcePath).size,
+      messageCount: 3,
+      turnCount: 2
+    }
+    const dirty = await lib.planLibraryStartupSync([changed], 1, {})
+    const checkpointPath = path.join(libraryRoot, '.swob', 'library-startup-sync-checkpoint.json')
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf-8'))
+    const workKey = describeLibraryStartupSession(changed, 1).key
+    const failed = updateLibraryStartupCheckpointAfterBatch(checkpoint, [changed], {
+      total: 1,
+      completed: 0,
+      skipped: [{
+        sessionId: changed.sessionId,
+        workKey,
+        code: 'EAGAIN',
+        disposition: 'failed',
+        retryable: true
+      }]
+    }, {}, Date.parse('2026-08-08T00:00:03.000Z')).checkpoint
+    fs.writeFileSync(checkpointPath, `${JSON.stringify(failed, null, 2)}\n`)
+
+    const stillStale = await lib.planLibraryStartupSync([changed], 1, {})
+    expect(stillStale).toMatchObject({
+      dirtyIndexes: [0],
+      recoverySummary: { retryScheduled: 1 }
+    })
+
+    await lib.syncLibraryFromSessions([changed], {})
+    const sessionDir = lib.getSessionDirPath(changed.sessionId)!
+    const packageEvidence = ['.swob-session.json', 'transcript.md', 'backup.jsonl']
+      .map((name) => [name, fs.readFileSync(path.join(sessionDir, name), 'utf-8')] as const)
+
+    // Simulate restart: the durable package is authoritative and the stale
+    // retry checkpoint must converge without executing the package writer.
+    lib.initLibrary(libraryRoot)
+    const reconciled = await lib.planLibraryStartupSync([changed], 1, {})
+    expect(dirty.dirtyIndexes).toEqual([0])
+    expect(reconciled).toMatchObject({
+      dirtyIndexes: [],
+      recoverySummary: { retryScheduled: 0, attentionRequired: 0, exhausted: 0 }
+    })
+    expect(packageEvidence).toEqual(
+      packageEvidence.map(([name]) => [name, fs.readFileSync(path.join(sessionDir, name), 'utf-8')])
+    )
+  })
+
   it.each(['missing', 'icloud-placeholder'] as const)(
     'does not requeue an existing package whose source and backup are %s',
     async (backupState) => {
@@ -165,7 +324,7 @@ describe('Library startup production throughput', () => {
         {},
         { snapshotDigest: cold.snapshotDigest, schemaGeneration: cold.schemaGeneration }
       )
-      expect(handled.outcome.skipped).toEqual([{
+      expect(handled.outcome.skipped).toMatchObject([{
         sessionId: session.sessionId,
         code: 'SESSION_SOURCE_MISSING',
         disposition: 'handled',

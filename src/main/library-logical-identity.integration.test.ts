@@ -168,11 +168,11 @@ describe('Library logical identity integration', () => {
     expect(progress).toEqual(input.map((session) => session.sessionId))
     expect(outcome).toEqual({
       total: 2,
-      completed: 1,
+      completed: 2,
       skipped: [{
         sessionId: conflictId,
         code: 'SESSION_IDENTITY_CONFLICT',
-        disposition: 'failed',
+        disposition: 'handled',
         retryable: false
       }]
     })

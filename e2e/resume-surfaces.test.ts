@@ -116,10 +116,22 @@ test.describe.serial('多客户端 Resume surfaces', () => {
     // chat-scroll remains mounted across session switches; wait for the new
     // detail instead of racing its async load with the overflow-menu click.
     await expect(page.getByText('Synthetic response', { exact: true })).toBeVisible()
+    await expect(page.getByText('当前只能显示 Swob 保存的 Markdown 转录')).toHaveCount(0)
+
+    await resizeAppWindow(launched.app, page, { width: 1100, height: 720 })
+    const openApp = page.getByRole('button', { name: '打开 ZCode' })
+    await expect(openApp).toBeEnabled()
+    await expect(openApp).toHaveAttribute('title', '只会打开 ZCode App，不会定位到这条历史会话')
+    await expect(openApp).toHaveClass(/border-edge/)
+    await expect(openApp).not.toHaveClass(/bg-soft-green/)
+    await openApp.hover()
+    await page.screenshot({ path: testInfo.outputPath('zcode-source-detail-wide.png') })
+
+    await resizeAppWindow(launched.app, page, { width: 760, height: 520 })
     await openNarrowResumeMenu(page)
     const menu = page.getByRole('menu')
     await expect(menu.getByRole('menuitem', { name: /打开 ZCode App/ })).toContainText(
-      'ZCode 当前不支持从外部跳转到指定历史会话'
+      '只会打开 ZCode App，不会定位到这条历史会话'
     )
     await expect(menu.getByRole('menuitem', { name: /复制.*命令|Copy.*command/ })).toBeDisabled()
     await expect(menu.getByRole('menuitem', { name: /Fork/ })).toHaveCount(0)

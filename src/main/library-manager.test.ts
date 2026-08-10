@@ -9,6 +9,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { createHash } from 'node:crypto'
+import Database from 'better-sqlite3'
 import { shellQuote } from './resume-terminal'
 import { buildSessionSummaryFromBackup } from './session-loader'
 import { readRecoveryAttempts } from './recovery-metrics'
@@ -978,6 +979,56 @@ describe('Library-only sessions（跨设备同步）', () => {
       sourcePath
     })
     expect(lib.isSessionCloudOnly(sessionId)).toBe(true)
+  })
+
+  it('ZCode manifest-only 会话复用数据库 source ref，且不伪装成精确 Resume', () => {
+    const sessionId = 'sess_manifest_zcode_999'
+    const dbPath = path.join(testHome, '.zcode', 'cli', 'db', 'db.sqlite')
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+    const database = new Database(dbPath)
+    database.exec('CREATE TABLE IF NOT EXISTS session (id TEXT PRIMARY KEY)')
+    database.prepare('INSERT OR REPLACE INTO session (id) VALUES (?)').run(sessionId)
+    database.close()
+    const sourceRef = `${dbPath}#${sessionId}`
+    const sessionDir = path.join(tmpRoot, 'zcode-manifest-only')
+    writeSessionMeta(sessionDir, {
+      schemaVersion: 2,
+      sessionId,
+      sourceFilePaths: [sourceRef],
+      createdAt: '2026-08-04T15:56:23Z',
+      updatedAt: '2026-08-04T16:01:50Z',
+      projectPath: '/Users/test/ZCodeProject',
+      turnCount: 4
+    })
+    fs.writeFileSync(path.join(sessionDir, 'transcript.md'), '# retained transcript\n', 'utf-8')
+
+    const manifestSession = lib.scanLibrary().ungroupedSessions
+      .find((session) => session.sessionId === sessionId)
+    expect(manifestSession).toBeDefined()
+    const summary = lib.buildSessionSummaryFromManifest(manifestSession!)
+    expect(summary).toMatchObject({
+      firstUserMessage: `ZCode 会话 ${sessionId.slice(0, 12)}`,
+      filePath: sourceRef,
+      allFilePaths: [sourceRef, path.join(sessionDir, 'backup.jsonl')],
+      source: 'zcode',
+      isManifestOnly: true,
+      manifestTitleIsFallback: true,
+      detailAvailability: 'source-recoverable'
+    })
+    expect(lib.getSessionResumeAvailability(sessionId, summary)).toMatchObject({
+      canResume: false,
+      reason: lib.ZCODE_EXACT_RESUME_UNAVAILABLE_REASON,
+      sourcePath: sourceRef
+    })
+
+    const writable = new Database(dbPath)
+    writable.prepare('DELETE FROM session WHERE id = ?').run(sessionId)
+    writable.close()
+    expect(lib.getSessionResumeAvailability(sessionId, summary)).toMatchObject({
+      canResume: false,
+      reason: lib.ZCODE_SOURCE_RECORD_MISSING_REASON,
+      sourcePath: sourceRef
+    })
   })
 
   it('schema v2 旧包只有 transcript 时标记并迁移为 transcript-only', async () => {

@@ -1,0 +1,36 @@
+batch: t211-self-heal-source-truth
+workItems:
+  - id: t211-self-heal-source-truth
+    owner: codex-desktop-current
+    depends_on: []
+    write_scope:
+      - .swob/workflows/t211-self-heal/**
+      - src/main/library-manager.ts
+      - src/main/library-manager.test.ts
+      - src/main/opencode-loader.ts
+      - src/main/opencode-loader.test.ts
+      - src/main/zcode-loader.test.ts
+      - src/main/session-loader.ts
+      - src/main/session-loader.test.ts
+      - src/main/types.ts
+      - src/main/index.ts
+      - src/main/resume-audit.ts
+      - src/main/resume-audit.test.ts
+      - src/main/library-startup-sync.ts
+      - src/main/library-startup-sync.test.ts
+      - src/main/library-startup-throughput.test.ts
+      - src/renderer/src/components/ChatViewer.tsx
+      - src/renderer/src/components/settings/DiagnosticsSettings.tsx
+      - src/renderer/src/components/settings/DiagnosticsSettings.test.tsx
+      - src/renderer/src/store.ts
+      - src/renderer/src/store.test.ts
+      - src/shared/i18n.ts
+      - e2e/self-healing-diagnostics.spec.ts
+      - e2e/resume-surfaces.test.ts
+      - result.json
+    evidence_required:
+      - npm run workflow:validate -- .swob/workflows/t211-self-heal/graph.yaml
+      - npm run check
+      - npx vitest run --maxWorkers=2
+      - npm run build
+      - npx playwright test e2e/self-healing-diagnostics.spec.ts e2e/resume-surfaces.test.ts

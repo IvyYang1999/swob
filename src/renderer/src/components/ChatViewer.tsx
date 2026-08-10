@@ -961,11 +961,10 @@ function SessionBar({
         : [{ surface: 'terminal', label: t('chat.resume_terminal') }]
 
   const canChooseResumeSurface = !isRemote &&
-    (selectedSession.source === 'codex' || selectedSession.source === 'zcode' ||
-      selectedSession.source === 'claude-code' || !selectedSession.source)
+    (selectedSession.source === 'codex' || selectedSession.source === 'claude-code' || !selectedSession.source)
 
   const handleResume = async (surface: ResumeSurface): Promise<void> => {
-    if (resumeUnavailableReason) {
+    if (surface !== 'zcode-desktop' && resumeUnavailableReason) {
       showToast(resumeUnavailableReason, 'error')
       return
     }
@@ -1121,7 +1120,7 @@ function SessionBar({
               }
               await handleResume(configuredResumeSurface)
             }}
-            disabled={sshResuming || !!resumeUnavailableReason}
+            disabled={sshResuming || (!isZcode && !!resumeUnavailableReason)}
             className={`px-2.5 py-0.5 text-[11px] flex items-center gap-1 ${
               canChooseResumeSurface ? 'rounded-l' : 'rounded'
             } ${
@@ -1129,10 +1128,12 @@ function SessionBar({
                 ? 'bg-hover hover:bg-pressed text-body'
                 : isRemote
                   ? 'bg-teal-600/90 hover:bg-teal-500 text-white'
+                  : isZcode
+                    ? 'border border-edge bg-surface hover:bg-hover text-body'
                   : 'bg-soft-green/90 hover:bg-soft-green text-white'
             } disabled:opacity-45 disabled:cursor-not-allowed`}
             title={
-              resumeUnavailableReason || (selectedSession.id?.includes(':intra-') ? t('chat.intra_branch_not_resumable')
+              (isZcode ? t('chat.zcode_no_specific_resume') : resumeUnavailableReason) || (selectedSession.id?.includes(':intra-') ? t('chat.intra_branch_not_resumable')
               : isRemote && sshConfig ? `SSH Resume (${sshConfig.user}@${sshConfig.host})`
               : isRemote ? t('renderer.chat.remote_configure_ssh')
               : isZcode ? t('chat.zcode_no_specific_resume')
@@ -1277,11 +1278,11 @@ function SessionBar({
             >
               {t('chat.copy_resume_cmd')}
             </button>
-            {canChooseResumeSurface ? resumeSurfaceOptions.map((option) => (
+            {(canChooseResumeSurface || isZcode) ? resumeSurfaceOptions.map((option) => (
               <button
                 key={option.surface}
                 role="menuitem"
-                disabled={!!resumeUnavailableReason || sshResuming}
+                disabled={(!isZcode && !!resumeUnavailableReason) || sshResuming}
                 onClick={async () => {
                   setOverflowMenuOpen(false)
                   await handleResume(option.surface)
@@ -1304,7 +1305,7 @@ function SessionBar({
                 onClick={() => { resumeButtonRef.current?.click(); setOverflowMenuOpen(false) }}
                 className="w-full px-2.5 py-1.5 rounded text-left text-xs text-body hover:bg-hover disabled:opacity-40"
               >
-                {isRemote ? 'SSH Resume' : 'Resume'}
+                {isRemote ? 'SSH Resume' : isZcode ? t('chat.open_zcode_app') : 'Resume'}
               </button>
             )}
             {canFork && <button
@@ -2252,8 +2253,15 @@ export function ChatViewer() {
 
           {selectedSession.detailFallback === 'transcript' && selectedSession.transcriptMarkdown ? (
             <div className="flex-1 overflow-y-auto">
-              <div className="sticky top-0 z-10 px-4 py-2 text-xs text-soft-amber bg-base/95 border-b border-soft-amber/20">
-                {t('renderer.detail.transcript_only_banner')}
+              <div className="sticky top-0 z-10 px-4 py-2 bg-base/95 border-b border-soft-amber/20">
+                <div className="text-xs text-soft-amber">
+                  {t('renderer.detail.transcript_only_banner')}
+                </div>
+                {selectedSession.source === 'zcode' && selectedSession.resumeUnavailableReason && (
+                  <div className="mt-0.5 text-[10px] leading-relaxed text-muted">
+                    {selectedSession.resumeUnavailableReason}
+                  </div>
+                )}
               </div>
               <div className="max-w-3xl mx-auto px-8 py-6 select-text">
                 <DocMarkdown content={selectedSession.transcriptMarkdown} tocEntries={[]} />

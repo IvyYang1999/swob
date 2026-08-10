@@ -70,6 +70,8 @@ interface SessionSummary {
   libraryMdPath?: string
   canResume?: boolean
   resumeUnavailableReason?: string
+  isManifestOnly?: boolean
+  manifestTitleIsFallback?: boolean
   isRemote?: boolean
   remoteHost?: string
   source?: string
@@ -115,6 +117,11 @@ export function mergeSessionSummaryIntoDetail(
   return {
     ...detail,
     ...summary,
+    // A manifest-only summary uses a source-labelled fallback title. Once the
+    // live source loads, prefer its real title instead of keeping that shell.
+    firstUserMessage: summary.manifestTitleIsFallback && detail.firstUserMessage
+      ? detail.firstUserMessage
+      : summary.firstUserMessage,
     // Summary owns the visible/logical identity, while the freshly parsed
     // detail owns fields intentionally omitted from lightweight projections.
     cwds: detail.cwds,
@@ -155,7 +162,7 @@ export function materializeSessionDetail(
   const { fallback: _fallback, ...detail } = result
   return {
     ...mergeSessionSummaryIntoDetail(detail, summary),
-    detailAvailability: summary.detailAvailability || 'ready'
+    detailAvailability: 'ready'
   }
 }
 

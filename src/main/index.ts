@@ -1907,7 +1907,7 @@ async function hydrateLibrarySessionsUnderGate(tree: LibraryTree): Promise<void>
       if (!summary || coveredIds.has(summary.id) || coveredIds.has(summary.sessionId)) continue
       const projectionSource = backupSummary?.source || evidencedSource
       if (!isSessionSourceProjected(projectionSource, getExcludedSources())) continue
-      summary.allFilePaths = [backupPath]
+      if (backupSummary) summary.allFilePaths = [backupPath]
       annotateDuplicatePackageEvidence(summary, librarySession)
       annotateSessionSuccessor(summary)
       annotateSessionForFrontend(summary, librarySession.dirPath)

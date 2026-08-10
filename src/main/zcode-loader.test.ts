@@ -3,7 +3,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { execFileSync } from 'child_process'
-import { isValidOpencodeSessionId } from './opencode-loader'
+import { hasSqliteAgentSessionRecordSync, isValidOpencodeSessionId } from './opencode-loader'
 import {
   buildZcodeSessionDetail,
   buildZcodeSessionSummary,
@@ -165,6 +165,11 @@ describe('zcode-loader', () => {
       expect(dispatched?.source).toBe('zcode')
       expect(dispatched?.messages.some((message) =>
         message.textContent.includes('[Reasoning]'))).toBe(true)
+      expect(hasSqliteAgentSessionRecordSync('zcode', fixture.sourceRef)).toBe(true)
+      expect(hasSqliteAgentSessionRecordSync(
+        'zcode',
+        makeZcodeSessionRef('sess_missing_row', fixture.dbPath)
+      )).toBe(false)
     } finally {
       fs.rmSync(fixture.dir, { recursive: true, force: true })
     }

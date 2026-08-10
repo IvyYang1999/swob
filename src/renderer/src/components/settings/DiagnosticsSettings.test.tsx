@@ -95,9 +95,9 @@ describe('DiagnosticsSettings', () => {
   it('普通模式不混加不同单位，并自动启动只读身份分析', async () => {
     render(<DiagnosticsSettings />)
 
-    expect(screen.getByText('正在核验 12 组会话身份冲突')).not.toBeNull()
-    expect(screen.getByText('发现 12 组会话身份冲突。分析不会修改 Library。')).not.toBeNull()
-    expect(screen.getByText('另有 2 组已确认的历史重复包，以只读方式保留。')).not.toBeNull()
+    expect(screen.getByText('正在比对 12 组重复会话')).not.toBeNull()
+    expect(screen.getByText(/这不代表原始会话文件丢失/)).not.toBeNull()
+    expect(screen.getByText('另有 2 组历史重复包已确认保留，不需要处理。')).not.toBeNull()
     expect(screen.queryByTestId('diagnostics-raw')).toBeNull()
     expect(screen.queryByText(/missing-source/)).toBeNull()
     expect(screen.queryByText(/remote-session/)).toBeNull()
@@ -149,7 +149,7 @@ describe('DiagnosticsSettings', () => {
     expect(await screen.findByTestId('duplicate-recovery-result')).not.toBeNull()
     expect(screen.getByText('2')).not.toBeNull()
     expect(screen.getByRole('button', { name: '隔离 2 个等价副本' })).not.toBeNull()
-    expect(screen.getByText(/有独有内容的包绝不会自动移动/)).not.toBeNull()
+    expect(screen.getByText(/任何含不同内容的包都会原样保留/)).not.toBeNull()
   })
 
   it('重启后先展示脱敏缓存但禁止应用，当前复核完成后才开放隔离', async () => {
@@ -216,7 +216,7 @@ describe('DiagnosticsSettings', () => {
 
     expect(await screen.findByText(/当前复核已暂停/)).not.toBeNull()
     expect(screen.getByText('只读分析已暂停；Library 没有被修改。')).not.toBeNull()
-    expect(screen.getByText('12 组会话身份冲突的只读核验已暂停')).not.toBeNull()
+    expect(screen.getByText('12 组重复会话的只读比对已暂停')).not.toBeNull()
     expect(screen.queryByText(/Swob 正在按当前 Library 重新核验/)).toBeNull()
     expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
     finishAnalysis(null)
@@ -240,7 +240,7 @@ describe('DiagnosticsSettings', () => {
     render(<DiagnosticsSettings />)
     expect(await screen.findByText(/当前复核未完成/)).not.toBeNull()
     expect(screen.getByText('分析未完成，Library 没有被修改')).not.toBeNull()
-    expect(screen.getByText('12 组会话身份冲突的只读核验未完成')).not.toBeNull()
+    expect(screen.getByText('12 组重复会话尚未比对完成')).not.toBeNull()
     expect(screen.queryByText(/Swob 正在按当前 Library 重新核验/)).toBeNull()
     expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
   })
@@ -265,7 +265,7 @@ describe('DiagnosticsSettings', () => {
 
     await waitFor(() => expect((window as any).api.libraryCancelDuplicateRecoveryAnalysis).toHaveBeenCalledTimes(1))
     expect(screen.getByText('只读分析已暂停；Library 没有被修改。')).not.toBeNull()
-    expect(screen.getByText('12 组会话身份冲突的只读核验已暂停')).not.toBeNull()
+    expect(screen.getByText('12 组重复会话的只读比对已暂停')).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '重新分析' }))
     await waitFor(() => expect(analyze).toHaveBeenCalledTimes(2))
 

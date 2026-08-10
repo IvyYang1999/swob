@@ -223,6 +223,8 @@ export interface SessionSummary {
   sshResumeWarning?: string
   /** True when the summary was built from .swob-session.json without parsing backup.jsonl. */
   isManifestOnly?: boolean
+  /** The manifest had no user/library title, so a source-labelled shell is being shown. */
+  manifestTitleIsFallback?: boolean
   /** Live detail capability. A non-zero turn count alone never promises readable detail. */
   detailAvailability?: SessionDetailAvailability
   cloudBackupState?: 'ready' | 'icloud-placeholder' | 'missing'

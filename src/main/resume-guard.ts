@@ -79,6 +79,11 @@ async function buildGuardedAction(
   kind: 'resume' | 'fork'
 ): Promise<ResumeActionResult> {
   const summary = findSessionForGuard(options.sessions, options.sessionId)
+  const surface = kind === 'fork' ? 'terminal' : (options.surface || 'terminal')
+  // ZCode exposes a generic workspace/app deep link, not exact historical
+  // resume. Opening that app remains useful even when the exact session row is
+  // unavailable; every exact resume/copy/fork surface still fails closed.
+  const genericZcodeOpen = kind === 'resume' && surface === 'zcode-desktop' && summary?.source === 'zcode'
   if (kind === 'fork' && summary?.source === 'hermes') {
     return {
       ok: false,
@@ -97,11 +102,13 @@ async function buildGuardedAction(
   const explicitlyAuthorizedRemoteImport = options.allowRecovery === true &&
     !!options.preferredTargetInstanceId &&
     !!indexedSessionId
-  if (!availability.canResume && !explicitlyAuthorizedRemoteImport) {
+  if (!availability.canResume && !explicitlyAuthorizedRemoteImport && !genericZcodeOpen) {
     return unavailableResult(options.sessionId, availability)
   }
 
-  const prepared: SessionResumePreparationResult = !options.prepareResumeTarget && !indexedSessionId
+  const prepared: SessionResumePreparationResult = genericZcodeOpen
+    ? { ok: true, sourcePath: availability.sourcePath || null }
+    : !options.prepareResumeTarget && !indexedSessionId
     ? { ok: true, sourcePath: availability.sourcePath || null }
     : await (options.prepareResumeTarget || ensureSessionResumeTarget)(indexedSessionId || options.sessionId, {
         allowRecovery: options.allowRecovery === true,
@@ -121,7 +128,6 @@ async function buildGuardedAction(
     cwdFallback: options.cwd,
     restoredSourcePath: prepared.sourcePath
   })
-  const surface = kind === 'fork' ? 'terminal' : (options.surface || 'terminal')
   if (surface === 'claude-desktop' && options.allowExperimentalClaudeDesktop !== true) {
     return {
       ok: false,

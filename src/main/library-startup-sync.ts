@@ -114,6 +114,16 @@ function stableStringifyRecord(record: Record<string, unknown>): string {
   return JSON.stringify(Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right))))
 }
 
+const IDENTITY_DIAGNOSTIC_REASON_CODES = new Set([
+  'SESSION_IDENTITY_CONFLICT',
+  'SESSION_IDENTITY_AMBIGUOUS',
+  'SESSION_IDENTITY_MISSING'
+])
+
+function isIdentityDiagnosticReason(code: string): boolean {
+  return IDENTITY_DIAGNOSTIC_REASON_CODES.has(code)
+}
+
 /**
  * The descriptor uses loader-produced source facts and semantic identity only.
  * It deliberately does not stat source files: discovery already paid that cost,
@@ -240,14 +250,27 @@ export function buildLibraryStartupPlan(
     .join('\n'))
   const descriptorByKey = new Map(descriptors.map((descriptor) => [descriptor.key, descriptor]))
   const previousCompleted = previous?.schemaGeneration === schemaGeneration
-    ? previous.completedFingerprints
+    ? {
+        ...previous.completedFingerprints,
+        ...Object.fromEntries(Object.entries(previous.recovery)
+          .filter(([, entry]) => isIdentityDiagnosticReason(entry.reasonCode))
+          .map(([key, entry]) => [key, entry.fingerprint]))
+      }
     : {}
 
   if (previous?.schemaGeneration === schemaGeneration && previous.snapshotDigest === snapshotDigest) {
     const completed = new Set(previous.completedKeys)
     const dirty = new Set(previous.dirtyKeys)
+    const completedFingerprints = { ...previous.completedFingerprints }
+    for (const [key, entry] of Object.entries(previous.recovery)) {
+      if (!isIdentityDiagnosticReason(entry.reasonCode)) continue
+      completed.add(key)
+      dirty.delete(key)
+      completedFingerprints[key] = entry.fingerprint
+    }
     const recovery = Object.fromEntries(Object.entries(previous.recovery)
       .filter(([key, entry]) => {
+        if (isIdentityDiagnosticReason(entry.reasonCode)) return false
         const descriptor = descriptorByKey.get(key)
         return descriptor
           ? descriptor.fingerprint === entry.fingerprint
@@ -258,7 +281,7 @@ export function buildLibraryStartupPlan(
         ...previous,
         completedKeys: [...completed].filter((key) => descriptorByKey.has(key) || preserveUnseen).sort(),
         dirtyKeys: [...dirty].filter((key) => descriptorByKey.has(key) || preserveUnseen).sort(),
-        completedFingerprints: Object.fromEntries(Object.entries(previous.completedFingerprints)
+        completedFingerprints: Object.fromEntries(Object.entries(completedFingerprints)
           .filter(([key]) => descriptorByKey.has(key) || preserveUnseen)),
         recovery
       },
@@ -298,6 +321,7 @@ export function buildLibraryStartupPlan(
     completedFingerprints: { ...cleanFingerprints, ...unseenCompletedFingerprints },
     recovery: Object.fromEntries(Object.entries(previous?.recovery || {})
       .filter(([key, entry]) => {
+        if (isIdentityDiagnosticReason(entry.reasonCode)) return false
         const descriptor = descriptorByKey.get(key)
         if (descriptor) return descriptor.fingerprint === entry.fingerprint && dirtyKeySet.has(key)
         return preserveUnseen && unseenKeys.has(key)
@@ -510,7 +534,7 @@ function failureReason(error: unknown): string {
 
 function failedStartupItem(sessionId: string, error: unknown): LibrarySyncOutcome['skipped'][number] {
   const code = failureReason(error)
-  const handled = code === 'SESSION_SOURCE_MISSING' || code === 'SESSION_IDENTITY_CONFLICT'
+  const handled = code === 'SESSION_SOURCE_MISSING' || isIdentityDiagnosticReason(code)
   return {
     sessionId,
     code,

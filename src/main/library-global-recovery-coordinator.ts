@@ -28,6 +28,22 @@ export function normalizeLibraryGlobalRecoveryOperation(
   return libraryInitialized || operation.kind === 'initial' ? operation : { kind: 'initial' }
 }
 
+export function canBeginLibraryGlobalRecovery(
+  operation: LibraryGlobalRecoveryOperation,
+  state: {
+    libraryInitialized: boolean
+    sessionInventoryReady: boolean
+    onboardingNeeded: boolean
+    rootActivationPending: boolean
+  }
+): boolean {
+  if (state.rootActivationPending) return false
+  if (operation.kind === 'initial') {
+    return state.sessionInventoryReady && !state.onboardingNeeded
+  }
+  return state.libraryInitialized
+}
+
 /**
  * Lossless ownership for whole-transaction recovery. A failure that arrives
  * while another recovery is active is retained as a distinct pending fact,

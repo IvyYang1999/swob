@@ -218,6 +218,7 @@ import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-
 import { LibraryRescanController } from './library-rescan-controller'
 import {
   LibraryGlobalRecoveryCoordinator,
+  canBeginLibraryGlobalRecovery,
   normalizeLibraryGlobalRecoveryOperation,
   type LibraryGlobalRecoveryLease,
   type LibraryGlobalRecoveryOperation
@@ -451,6 +452,7 @@ let duplicateRecoveryApplyInFlight: {
   promise: Promise<DuplicateRecoveryApplyResult>
 } | null = null
 const libraryRootSwitchQueue = new KeyedSerialTaskQueue<string, string>()
+let libraryRootActivationRequestsPending = 0
 
 function clearLibraryWriterRecoverySchedule(): void {
   if (libraryWriterRecoveryTimer) clearTimeout(libraryWriterRecoveryTimer)
@@ -2119,7 +2121,12 @@ function armLibraryBacklogGlobalRecoveryTimer(): void {
       return
     }
     const lease = libraryGlobalRecoveryCoordinator.beginIf((operation) =>
-      operation.kind === 'initial' ? librarySessionInventoryReady : libraryInitialized)
+      canBeginLibraryGlobalRecovery(operation, {
+        libraryInitialized,
+        sessionInventoryReady: librarySessionInventoryReady,
+        onboardingNeeded: isOnboardingNeeded(),
+        rootActivationPending: libraryRootActivationRequestsPending > 0
+      }))
     if (!lease) {
       if (libraryGlobalRecoveryCoordinator.hasWork) {
         libraryBacklogGlobalRecoveryTimer = setTimeout(dispatch, 1_000)
@@ -4816,10 +4823,15 @@ async function performLibraryActivation(newPath: string): Promise<string> {
 
 function activateLibraryAt(newPath: string): Promise<string> {
   const requestedRoot = path.resolve(newPath)
-  return libraryRootSwitchQueue.run(
+  libraryRootActivationRequestsPending++
+  const activation = libraryRootSwitchQueue.run(
     requestedRoot,
     () => performLibraryActivation(requestedRoot)
   )
+  return activation.finally(() => {
+    libraryRootActivationRequestsPending = Math.max(0, libraryRootActivationRequestsPending - 1)
+    armLibraryBacklogGlobalRecoveryTimer()
+  })
 }
 
 ipcMain.handle('library:changePath', async (_event, newPath: string) => {

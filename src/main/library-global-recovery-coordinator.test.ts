@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   LibraryGlobalRecoveryCoordinator,
+  canBeginLibraryGlobalRecovery,
   normalizeLibraryGlobalRecoveryOperation,
   type LibraryGlobalRecoveryFault
 } from './library-global-recovery-coordinator'
@@ -70,24 +71,54 @@ describe('LibraryGlobalRecoveryCoordinator', () => {
     expect(coordinator.hasWork).toBe(false)
   })
 
-  it('does not activate promoted startup recovery before the session inventory is ready', () => {
+  it('does not activate promoted startup recovery before inventory and onboarding authorization', () => {
     const coordinator = new LibraryGlobalRecoveryCoordinator()
     coordinator.enqueue(fault(
       normalizeLibraryGlobalRecoveryOperation({ kind: 'refresh' }, false),
       30
     ))
-    let inventoryReady = false
+    const runtime = {
+      libraryInitialized: false,
+      sessionInventoryReady: false,
+      onboardingNeeded: true,
+      rootActivationPending: false
+    }
 
-    expect(coordinator.beginIf((operation) => operation.kind !== 'initial' || inventoryReady)).toBeNull()
+    expect(coordinator.beginIf((operation) => canBeginLibraryGlobalRecovery(operation, runtime)))
+      .toBeNull()
     expect(coordinator.hasWork).toBe(true)
     expect(coordinator.isActive).toBe(false)
 
-    inventoryReady = true
-    const initialization = coordinator.beginIf(
-      (operation) => operation.kind !== 'initial' || inventoryReady
-    )!
+    runtime.sessionInventoryReady = true
+    expect(coordinator.beginIf((operation) => canBeginLibraryGlobalRecovery(operation, runtime)))
+      .toBeNull()
+
+    runtime.onboardingNeeded = false
+    runtime.rootActivationPending = true
+    expect(coordinator.beginIf((operation) => canBeginLibraryGlobalRecovery(operation, runtime)))
+      .toBeNull()
+
+    runtime.rootActivationPending = false
+    const initialization = coordinator.beginIf((operation) =>
+      canBeginLibraryGlobalRecovery(operation, runtime))!
     expect(initialization.operation).toEqual({ kind: 'initial' })
     coordinator.succeed(initialization)
     expect(coordinator.hasWork).toBe(false)
+  })
+
+  it('requires an initialized stable root for refresh recovery', () => {
+    const operation = { kind: 'refresh' } as const
+    expect(canBeginLibraryGlobalRecovery(operation, {
+      libraryInitialized: false,
+      sessionInventoryReady: true,
+      onboardingNeeded: false,
+      rootActivationPending: false
+    })).toBe(false)
+    expect(canBeginLibraryGlobalRecovery(operation, {
+      libraryInitialized: true,
+      sessionInventoryReady: true,
+      onboardingNeeded: false,
+      rootActivationPending: true
+    })).toBe(false)
   })
 })

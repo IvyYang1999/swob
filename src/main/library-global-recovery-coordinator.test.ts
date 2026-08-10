@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   LibraryGlobalRecoveryCoordinator,
+  normalizeLibraryGlobalRecoveryOperation,
   type LibraryGlobalRecoveryFault
 } from './library-global-recovery-coordinator'
 
@@ -12,6 +13,15 @@ function fault(
 }
 
 describe('LibraryGlobalRecoveryCoordinator', () => {
+  it('promotes pre-initialization refresh and backlog failures to full initialization', () => {
+    expect(normalizeLibraryGlobalRecoveryOperation({ kind: 'refresh' }, false))
+      .toEqual({ kind: 'initial' })
+    expect(normalizeLibraryGlobalRecoveryOperation({ kind: 'backlog', mode: 'provider' }, false))
+      .toEqual({ kind: 'initial' })
+    expect(normalizeLibraryGlobalRecoveryOperation({ kind: 'refresh' }, true))
+      .toEqual({ kind: 'refresh' })
+  })
+
   it('retains a refresh failure that arrives during backlog recovery', () => {
     const coordinator = new LibraryGlobalRecoveryCoordinator()
     coordinator.enqueue(fault({ kind: 'backlog', mode: 'automatic' }, 1))
@@ -57,6 +67,27 @@ describe('LibraryGlobalRecoveryCoordinator', () => {
     const initial = coordinator.begin()!
     expect(initial).toMatchObject({ operation: { kind: 'initial' } })
     coordinator.succeed(initial)
+    expect(coordinator.hasWork).toBe(false)
+  })
+
+  it('does not activate promoted startup recovery before the session inventory is ready', () => {
+    const coordinator = new LibraryGlobalRecoveryCoordinator()
+    coordinator.enqueue(fault(
+      normalizeLibraryGlobalRecoveryOperation({ kind: 'refresh' }, false),
+      30
+    ))
+    let inventoryReady = false
+
+    expect(coordinator.beginIf((operation) => operation.kind !== 'initial' || inventoryReady)).toBeNull()
+    expect(coordinator.hasWork).toBe(true)
+    expect(coordinator.isActive).toBe(false)
+
+    inventoryReady = true
+    const initialization = coordinator.beginIf(
+      (operation) => operation.kind !== 'initial' || inventoryReady
+    )!
+    expect(initialization.operation).toEqual({ kind: 'initial' })
+    coordinator.succeed(initialization)
     expect(coordinator.hasWork).toBe(false)
   })
 })

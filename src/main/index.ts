@@ -218,6 +218,7 @@ import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-
 import { LibraryRescanController } from './library-rescan-controller'
 import {
   LibraryGlobalRecoveryCoordinator,
+  normalizeLibraryGlobalRecoveryOperation,
   type LibraryGlobalRecoveryLease,
   type LibraryGlobalRecoveryOperation
 } from './library-global-recovery-coordinator'
@@ -373,6 +374,7 @@ let libraryRescanController: LibraryRescanController | null = null
 let pendingSpotlightNavigationSessionId: string | null = null
 const knownSessionIds = new Set<string>()
 let libraryInitialized = false
+let librarySessionInventoryReady = false
 let latestLibraryTree: LibraryTree | null = null
 let libraryInitializationPromise: Promise<void> | null = null
 let latestProviderSettlementStatus: 'complete' | 'degraded' | null = null
@@ -2116,8 +2118,15 @@ function armLibraryBacklogGlobalRecoveryTimer(): void {
       libraryBacklogGlobalRecoveryTimer.unref?.()
       return
     }
-    const lease = libraryGlobalRecoveryCoordinator.begin()
-    if (!lease) return
+    const lease = libraryGlobalRecoveryCoordinator.beginIf((operation) =>
+      operation.kind === 'initial' ? librarySessionInventoryReady : libraryInitialized)
+    if (!lease) {
+      if (libraryGlobalRecoveryCoordinator.hasWork) {
+        libraryBacklogGlobalRecoveryTimer = setTimeout(dispatch, 1_000)
+        libraryBacklogGlobalRecoveryTimer.unref?.()
+      }
+      return
+    }
     if (lease.operation.kind === 'initial') void runInitialLibraryGlobalRecovery(lease)
     else if (lease.operation.kind === 'refresh') void runLibraryBacklogRefreshRecovery(lease)
     else void runLibraryBacklogRecovery(lease.operation.mode, lease)
@@ -2132,7 +2141,10 @@ function scheduleLibraryBacklogGlobalRecovery(
 ): void {
   if (runtimeShuttingDown || libraryBacklogRecoveryStopped()) return
   libraryRescanController?.pause()
-  libraryGlobalRecoveryCoordinator.enqueue({ ...failure, operation })
+  libraryGlobalRecoveryCoordinator.enqueue({
+    ...failure,
+    operation: normalizeLibraryGlobalRecoveryOperation(operation, libraryInitialized)
+  })
   armLibraryBacklogGlobalRecoveryTimer()
 }
 
@@ -2946,6 +2958,7 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   const lastKnownProviderSessions = cachedSessions.filter(isProviderSession)
   cachedSessions = [...sessions, ...lastKnownProviderSessions]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  librarySessionInventoryReady = true
   scheduleSearchIndexWarmup()
   void scheduleUsageFactSync()
   knownSessionIds.clear()

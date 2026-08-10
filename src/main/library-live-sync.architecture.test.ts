@@ -237,7 +237,9 @@ describe('live Library synchronization architecture', () => {
     expect(source).toMatch(
       /function startLibraryWatcher[\s\S]*?const controller = new LibraryRescanController[\s\S]*?watcherEpoch !== libraryRuntimeEpoch[\s\S]*?onDirty: \(\) => controller\.markDirty\(\)/
     )
-    expect(source).toContain('libraryGlobalRecoveryCoordinator.enqueue({ ...failure, operation })')
+    expect(source).toContain('libraryGlobalRecoveryCoordinator.enqueue({')
+    expect(source).toContain('normalizeLibraryGlobalRecoveryOperation(operation, libraryInitialized)')
+    expect(source).toContain("operation.kind === 'initial' ? librarySessionInventoryReady : libraryInitialized")
     expect(source).toContain('if (recoveryLease) completeOwnedLibraryGlobalRecovery(recoveryLease)')
     expect(source).toContain('if (libraryRescanRecoveryBlocked()) controller.pause()')
     expect(source).toContain('resumeLibraryRescanIfSafe()')

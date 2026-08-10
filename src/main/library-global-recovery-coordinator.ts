@@ -17,6 +17,17 @@ export function libraryGlobalRecoveryOperationKey(operation: LibraryGlobalRecove
   return operation.kind === 'backlog' ? `backlog:${operation.mode}` : operation.kind
 }
 
+export function normalizeLibraryGlobalRecoveryOperation(
+  operation: LibraryGlobalRecoveryOperation,
+  libraryInitialized: boolean
+): LibraryGlobalRecoveryOperation {
+  // Refresh and targeted backlog work both require an initialized runtime. If
+  // that prerequisite is absent, the only operation that can make progress is
+  // a full initialization; retaining the narrower label would deadlock behind
+  // the very global timer that suppresses normal startup.
+  return libraryInitialized || operation.kind === 'initial' ? operation : { kind: 'initial' }
+}
+
 /**
  * Lossless ownership for whole-transaction recovery. A failure that arrives
  * while another recovery is active is retained as a distinct pending fact,
@@ -33,9 +44,15 @@ export class LibraryGlobalRecoveryCoordinator {
   }
 
   begin(): LibraryGlobalRecoveryLease | null {
+    return this.beginIf(() => true)
+  }
+
+  beginIf(
+    canRun: (operation: LibraryGlobalRecoveryOperation) => boolean
+  ): LibraryGlobalRecoveryLease | null {
     if (this.active) return null
     const first = this.nextPendingFault()
-    if (!first) return null
+    if (!first || !canRun(first.operation)) return null
     if (first.operation.kind === 'initial') this.pending.clear()
     else this.pending.delete(libraryGlobalRecoveryOperationKey(first.operation))
     const lease = { ...first, leaseId: this.nextLeaseId++ }

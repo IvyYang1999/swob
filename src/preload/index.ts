@@ -170,6 +170,8 @@ const api = {
   libraryCompensationRetry: () => ipcRenderer.invoke('library:compensationRetry'),
   libraryAnalyzeDuplicateRecovery: () =>
     ipcRenderer.invoke('library:analyzeDuplicateRecovery') as Promise<DuplicateRecoverySummary>,
+  libraryGetCachedDuplicateRecoverySummary: () =>
+    ipcRenderer.invoke('library:getCachedDuplicateRecoverySummary') as Promise<DuplicateRecoverySummary | null>,
   libraryCancelDuplicateRecoveryAnalysis: () =>
     ipcRenderer.invoke('library:cancelDuplicateRecoveryAnalysis') as Promise<boolean>,
   libraryApplyDuplicateRecovery: (planId: string) =>

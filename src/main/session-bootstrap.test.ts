@@ -98,12 +98,15 @@ describe('session bootstrap contract', () => {
 
   it('removes audit-heavy fields from renderer IPC without mutating main-process truth', () => {
     const source = summary('large-ledger')
+    source.canonicalProjectionFingerprint = 'main-process-only-fingerprint'
     const projected = sessionSummaryForRenderer(source)
 
     expect(projected).not.toHaveProperty('allUserMessages')
+    expect(projected).not.toHaveProperty('canonicalProjectionFingerprint')
     expect(projected.tokenAccounting).not.toHaveProperty('usageEvents')
     expect(projected.tokenAccounting).toMatchObject({ billingTotal: 3, conversationOnly: 3 })
     expect(source.allUserMessages).toBe('private-large-ledger')
+    expect(source.canonicalProjectionFingerprint).toBe('main-process-only-fingerprint')
     expect(source.tokenAccounting?.usageEvents).toHaveLength(1)
   })
 })

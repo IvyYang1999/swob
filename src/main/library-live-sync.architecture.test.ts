@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 const source = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8')
 const manager = fs.readFileSync(path.join(__dirname, 'library-manager.ts'), 'utf8')
 const backlogQueue = fs.readFileSync(path.join(__dirname, 'library-backlog-recovery-queue.ts'), 'utf8')
+const libraryWorker = fs.readFileSync(path.join(__dirname, 'library-worker.ts'), 'utf8')
+const duplicateWorker = fs.readFileSync(path.join(__dirname, 'duplicate-recovery-worker.ts'), 'utf8')
 
 describe('live Library synchronization architecture', () => {
   it('keeps the normal batch lease intact and exposes a separately bounded startup chunk', () => {
@@ -198,8 +200,17 @@ describe('live Library synchronization architecture', () => {
     expect(source).not.toContain('scheduleProviderLibrarySynchronization')
     expect(source).not.toContain('pendingProviderLibrarySessions')
     expect(source).toContain("void runLibraryBacklogRecovery('provider')")
+    expect(source).toContain('withCanonicalProviderRefreshBarrier(synchronize)')
+    expect(libraryWorker).toContain('closeCanonicalSessionStore()')
+    expect(manager).toContain('if (stored.tombstone)')
     expect(manager).toContain('completeCurrentLibraryProjections(plan, sessions, sessionMeta)')
     expect(manager).toContain("code: 'PROVIDER_SESSION_ALREADY_ARCHIVED'")
+  })
+
+  it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {
+    expect(duplicateWorker).toContain('errorCode: duplicateRecoveryErrorCode(error)')
+    expect(duplicateWorker).not.toContain('error instanceof Error ? error.message')
+    expect(source).toContain('duplicateRecoveryErrorCode(error)')
   })
 
   it('keeps identity conflicts out of retry and treats busy filesystem codes as transient', () => {

@@ -1,5 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { createHash } from 'node:crypto'
 import type {
   CanonicalRecord,
   MessageRecord,
@@ -173,6 +174,14 @@ function sourceFileSize(filePath: string, explicit?: number): number {
   try { return fs.statSync(filePath).size } catch { return 0 }
 }
 
+function canonicalProjectionFingerprint(session: SessionRecord): string {
+  return createHash('sha256').update(JSON.stringify({
+    sourceFingerprint: session.sourceRef.fingerprint,
+    parserDataVersion: session.provenance.parserDataVersion,
+    formatVersion: session.provenance.formatVersion
+  })).digest('hex')
+}
+
 function rawForMessage(message: MessageRecord): RawJsonlMessage {
   const role = message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user'
   return {
@@ -261,6 +270,7 @@ export function canonicalRecordsToSessionSummary(
       parse: 'parsed',
       usage: tokenAccounting.billingTotal === null ? 'unavailable' : 'available'
     },
+    canonicalProjectionFingerprint: canonicalProjectionFingerprint(session),
     referencedFiles: [],
     configFiles: [],
     source,

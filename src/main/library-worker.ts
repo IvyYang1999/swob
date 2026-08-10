@@ -42,6 +42,7 @@ import { closeUsageFactStore, synchronizeUsageFacts } from './usage-fact-store'
 import type { Folder, SessionSummary } from './types'
 import type { UsageFactSyncResult } from './analysis-contract'
 import type { CanonicalRecord } from '../shared/provider-schema.generated'
+import { closeCanonicalSessionStore } from './canonical-store'
 
 export interface SearchIndexSourceDescriptor {
   filePath: string
@@ -68,6 +69,7 @@ export type LibraryWorkerRequest = (
       sessions: SessionSummary[]
       sessionMeta: Record<string, { customTitle?: string; notes?: string }>
       schemaGeneration: number
+      preserveUnseen?: boolean
     }
   | { type: 'scan'; root: string; ignoreDirs?: string[] }
   | {
@@ -248,10 +250,21 @@ export async function runLibraryWorkerRequest(
     readOnly: request.type === 'scan',
     ignoreDirs: request.type === 'scan' || request.type === 'sync' ? request.ignoreDirs : undefined
   })
+  if (request.type === 'startup-plan' || request.type === 'startup-batch') {
+    // The Provider host writes canonical SQLite in the main thread. This
+    // persistent worker must reopen its process-local memory snapshot at each
+    // checkpoint boundary while the main thread holds the refresh barrier.
+    closeCanonicalSessionStore()
+  }
   if (request.type === 'startup-plan') {
     return {
       kind: 'startup-plan',
-      value: await planLibraryStartupSync(request.sessions, request.schemaGeneration, request.sessionMeta)
+      value: await planLibraryStartupSync(
+        request.sessions,
+        request.schemaGeneration,
+        request.sessionMeta,
+        { preserveUnseen: request.preserveUnseen === true }
+      )
     }
   }
   if (request.type === 'scan') return { kind: 'tree', tree: scanLibrary() }
@@ -407,14 +420,16 @@ export class LibraryWorkerClient {
     root: string,
     sessions: SessionSummary[],
     sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
-    schemaGeneration: number
+    schemaGeneration: number,
+    options: { preserveUnseen?: boolean } = {}
   ): Promise<LibraryStartupPlanResult> {
     return this.observe(this.request({
       type: 'startup-plan',
       root,
       sessions,
       sessionMeta,
-      schemaGeneration
+      schemaGeneration,
+      preserveUnseen: options.preserveUnseen === true
     }).then((result) => {
       if (result.kind !== 'startup-plan') throw new Error('Library worker returned an invalid startup plan')
       return result.value

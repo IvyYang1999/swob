@@ -205,6 +205,8 @@ export interface SessionSummary {
   tokenAccounting?: TokenAccounting
   /** Actual per-session loader outcome; capability declarations never substitute for this fact. */
   providerOutcome?: SessionProviderOutcome
+  /** Main-process only: authoritative Provider projection version for Library checkpointing. */
+  canonicalProjectionFingerprint?: string
   referencedFiles: FileRef[]
   configFiles: string[]
   libraryDirPath?: string

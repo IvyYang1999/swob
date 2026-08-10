@@ -63,7 +63,10 @@ test.beforeAll(async () => {
     fs.writeFileSync(path.join(packageRoot, 'transcript.md'), '# Synthetic transcript\n')
   }
 
-  const launched = await launchAppWithEnv({ env: { HOME: fixtureHome } })
+  const launched = await launchAppWithEnv({ env: {
+    HOME: fixtureHome,
+    SWOB_TEST_DUPLICATE_RECOVERY_FIRST_DELAY_MS: '60000'
+  } })
   app = launched.app
   page = launched.page
 })
@@ -81,8 +84,25 @@ test('conflicts are analyzed automatically while mutation remains an explicit co
     .getByRole('button', { name: '诊断与修复' }).click()
   const content = dialog.locator('[data-settings-category="diagnostics"]')
 
-  await expect(content.getByText(/正在本机自动核验|已核验 1 组/)).toBeVisible()
+  await expect(content.getByText('正在本机自动核验冲突包；分析只读，不会修改 Library。')).toBeVisible()
   await expect(content.getByRole('button', { name: '安全分析' })).toHaveCount(0)
+  await content.getByRole('button', { name: '取消分析' }).click()
+  const resume = content.getByRole('button', { name: '重新分析' })
+  await expect(content.getByText('只读分析已暂停；Library 没有被修改。')).toBeVisible()
+
+  await page.setViewportSize({ width: 480, height: 520 })
+  await resume.scrollIntoViewIfNeeded()
+  await resume.hover()
+  const pausedMetrics = await content.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth
+  }))
+  expect(pausedMetrics.scrollWidth).toBeLessThanOrEqual(pausedMetrics.clientWidth + 1)
+  await expect(resume).toBeInViewport()
+  await dialog.screenshot({ path: testInfo.outputPath('self-healing-paused-narrow.png') })
+
+  await resume.click()
+  await page.setViewportSize({ width: 820, height: 680 })
   const apply = content.getByRole('button', { name: '隔离 1 个等价副本' })
   await expect(apply).toBeVisible({ timeout: 30_000 })
   await apply.hover()

@@ -170,6 +170,11 @@ import type {
   DuplicateRecoveryProgress,
   DuplicateRecoverySummary
 } from '../shared/duplicate-recovery-contract'
+import {
+  readDuplicateRecoverySummaryCache,
+  writeDuplicateRecoverySummaryCache
+} from './duplicate-recovery-summary-cache'
+import { duplicateRecoveryErrorCode } from './duplicate-recovery-failure-code'
 import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
 import { detectSessionSourceFromPath } from './session-source'
@@ -180,7 +185,10 @@ import {
   getSearchIndexWriteCoordinator,
   LARGE_SEARCH_WORKER_RECYCLE_BYTES
 } from './search-index-writer'
-import { cancelCanonicalProviders } from './provider-runtime'
+import {
+  cancelCanonicalProviders,
+  withCanonicalProviderRefreshBarrier
+} from './provider-runtime'
 import { closeCanonicalSessionStore } from './canonical-store'
 import { buildInsights } from './insights'
 import {
@@ -198,6 +206,7 @@ import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transc
 import { LibraryWorkerClient } from './library-worker'
 import {
   LibraryStartupSyncInterruptedError,
+  LibraryStartupBatchTransportError,
   syncLibraryStartupIncrementally,
   type LibraryStartupProgress,
   type LibraryStartupRecoverySummary
@@ -211,6 +220,7 @@ import { mergeLiveSessionSummary } from './live-session-summary'
 import { StartupProjectionGate } from './startup-projection-gate'
 import {
   LibraryBacklogRecoveryQueue,
+  libraryBacklogGlobalRetryDelay,
   shouldSelectLibraryBacklogItem
 } from './library-backlog-recovery-queue'
 import { boundedQuietWindowDelay } from './bounded-quiet-window'
@@ -371,6 +381,8 @@ let libraryRuntimePaused = false
 let libraryStartupWriterProven = false
 let libraryStartupChunkActive = false
 let libraryBacklogRecoveryTimer: NodeJS.Timeout | null = null
+let libraryBacklogGlobalRecoveryTimer: NodeJS.Timeout | null = null
+let libraryBacklogGlobalRecoveryAttempts = 0
 let libraryBacklogRecoveryPromise: Promise<void> | null = null
 const libraryBacklogRecoveryQueue = new LibraryBacklogRecoveryQueue()
 let liveLibraryCommitGeneration = 0
@@ -401,6 +413,7 @@ let cachedDuplicateRecoveryAnalysis: {
   libraryRoot: string
   writeGeneration: number
   report: DuplicateRecoveryReport
+  completedAt: string
 } | null = null
 let pendingAutomaticDuplicateRecoveryAnalysis: {
   epoch: number
@@ -1221,6 +1234,7 @@ function cleanupRuntimeResources(): Promise<void> {
   libraryRuntimePaused = true
   libraryRuntimeEpoch++
   clearLibraryBacklogRecoverySchedule()
+  clearLibraryBacklogGlobalRecoverySchedule()
   advanceLibraryWriterArbiterEpoch()
   libraryStartupWriterProven = false
   libraryStartupChunkActive = false
@@ -1975,6 +1989,27 @@ function clearLibraryBacklogRecoverySchedule(): void {
   libraryBacklogRecoveryTimer = null
 }
 
+function clearLibraryBacklogGlobalRecoverySchedule(resetAttempts = true): void {
+  if (libraryBacklogGlobalRecoveryTimer) clearTimeout(libraryBacklogGlobalRecoveryTimer)
+  libraryBacklogGlobalRecoveryTimer = null
+  if (resetAttempts) libraryBacklogGlobalRecoveryAttempts = 0
+}
+
+function scheduleLibraryBacklogGlobalRecovery(mode: Exclude<LibraryBacklogRecoveryMode, 'initial'>): void {
+  if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogGlobalRecoveryTimer) return
+  const attempt = libraryBacklogGlobalRecoveryAttempts + 1
+  const delay = libraryBacklogGlobalRetryDelay(attempt)
+  if (delay === null) return
+  libraryBacklogGlobalRecoveryAttempts = attempt
+  clearLibraryBacklogRecoverySchedule()
+  const epoch = libraryRuntimeEpoch
+  libraryBacklogGlobalRecoveryTimer = setTimeout(() => {
+    libraryBacklogGlobalRecoveryTimer = null
+    if (runtimeShuttingDown || libraryRuntimePaused || epoch !== libraryRuntimeEpoch) return
+    void runLibraryBacklogRecovery(mode)
+  }, delay)
+}
+
 function scheduleLibraryBacklogRecovery(summary: LibraryStartupRecoverySummary): void {
   clearLibraryBacklogRecoverySchedule()
   if (!summary.nextRetryAt || runtimeShuttingDown || libraryRuntimePaused) return
@@ -1998,20 +2033,30 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
   if (libraryRuntimePaused || !libraryInitialized || libraryInitializationPromise) return
   if (libraryBacklogRecoveryPromise) return libraryBacklogRecoveryPromise
   const epoch = libraryRuntimeEpoch
+  let transportFailure = false
   const work = (async () => {
     while (epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused) {
       const nextMode = libraryBacklogRecoveryQueue.takeNext()
       if (!nextMode) break
+      let attemptedWorker: LibraryWorkerClient | null = null
       try {
         const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+        attemptedWorker = worker
         const oldConfig = loadConfig()
         const outcome = await syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta, nextMode)
+        clearLibraryBacklogGlobalRecoverySchedule()
         if (outcome.completed > 0 && epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused) {
           const tree = await requestLibraryScan(false)
           if (adoptLibraryTree(tree, false)) await hydrateLibrarySessions(tree)
         }
       } catch (error) {
         if (runtimeShuttingDown || libraryRuntimePaused || epoch !== libraryRuntimeEpoch) return
+        if (error instanceof LibraryStartupBatchTransportError) {
+          transportFailure = true
+          if (attemptedWorker && libraryWorker === attemptedWorker) libraryWorker = null
+          if (attemptedWorker) void attemptedWorker.retire().catch(() => undefined)
+          scheduleLibraryBacklogGlobalRecovery(nextMode)
+        }
         const classification = classifyLibraryError(error)
         transitionLibraryHealth(
           classification.state,
@@ -2021,6 +2066,7 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
         )
         if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
         console.error('[library-recovery] targeted backlog recovery delayed:', classification.errorCode)
+        if (transportFailure) break
       }
     }
   })()
@@ -2029,7 +2075,7 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
     await work
   } finally {
     if (libraryBacklogRecoveryPromise === work) libraryBacklogRecoveryPromise = null
-    if (libraryBacklogRecoveryQueue.size > 0 &&
+    if (!transportFailure && libraryBacklogRecoveryQueue.size > 0 &&
       epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused) {
       const pendingMode = libraryBacklogRecoveryQueue.takeNext()
       if (pendingMode) queueMicrotask(() => { void runLibraryBacklogRecovery(pendingMode) })
@@ -2044,12 +2090,25 @@ async function syncStartupSessions(
   sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
   mode: LibraryBacklogRecoveryMode = 'initial'
 ): Promise<LibrarySyncOutcome> {
+  const synchronize = () => syncStartupSessionsUnderProviderBarrier(worker, sessions, sessionMeta, mode)
+  return sessions.some(isProviderSession)
+    ? withCanonicalProviderRefreshBarrier(synchronize)
+    : synchronize()
+}
+
+async function syncStartupSessionsUnderProviderBarrier(
+  worker: LibraryWorkerClient,
+  sessions: readonly SessionSummary[],
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }>,
+  mode: LibraryBacklogRecoveryMode
+): Promise<LibrarySyncOutcome> {
   const syncEpoch = libraryRuntimeEpoch
   const plan = await worker.planStartup(
     getLibraryRoot(),
     [...sessions],
     sessionMeta,
-    LIBRARY_STARTUP_SCHEMA_GENERATION
+    LIBRARY_STARTUP_SCHEMA_GENERATION,
+    { preserveUnseen: latestProviderSettlementStatus === null }
   )
   const recoveryByIndex = new Map(plan.recoveryItems.map((item) => [item.index, item.entry]))
   const now = Date.now()
@@ -2120,7 +2179,9 @@ async function syncStartupSessions(
   } catch (error) {
     finishLibraryBackgroundSync(true)
     updateLibraryBackgroundRecovery(backgroundRecoveryState(latestRecoverySummary))
-    scheduleLibraryBacklogRecovery(latestRecoverySummary)
+    if (!(error instanceof LibraryStartupBatchTransportError)) {
+      scheduleLibraryBacklogRecovery(latestRecoverySummary)
+    }
     throw error
   }
 }
@@ -3780,7 +3841,11 @@ ipcMain.handle('library:isInitialized', (_event, rootPath: string) => {
 
 // --- Library Health / Freshness / Compensation ---
 
-function duplicateRecoverySummary(report: DuplicateRecoveryReport): DuplicateRecoverySummary {
+function duplicateRecoverySummary(
+  report: DuplicateRecoveryReport,
+  canApply = true,
+  completedAt = new Date().toISOString()
+): DuplicateRecoverySummary {
   const autoRepairable = report.conflicts.filter((conflict) =>
     conflict.classification === 'canonical-candidate' &&
     conflict.recovery.action === 'quarantine-equivalent-duplicates')
@@ -3789,6 +3854,8 @@ function duplicateRecoverySummary(report: DuplicateRecoveryReport): DuplicateRec
   return {
     schemaVersion: 1,
     planId: report.planId,
+    completedAt,
+    canApply,
     packageCount: report.summary.packageCount,
     conflictCount: report.summary.conflictCount,
     autoRepairableGroupCount: autoRepairable.length,
@@ -3799,6 +3866,14 @@ function duplicateRecoverySummary(report: DuplicateRecoveryReport): DuplicateRec
   }
 }
 
+function duplicateRecoverySummaryCachePath(): string {
+  return path.join(
+    app.getPath('userData'),
+    'diagnostics',
+    'duplicate-recovery-summary-v1.json'
+  )
+}
+
 function duplicateRecoveryQuarantineRoot(): string {
   return path.join(app.getPath('userData'), 'Recovery Quarantine')
 }
@@ -3806,6 +3881,12 @@ function duplicateRecoveryQuarantineRoot(): string {
 const AUTOMATIC_DUPLICATE_RECOVERY_RETRY_MS = [1_000, 5_000, 30_000, 120_000, 600_000] as const
 const AUTOMATIC_DUPLICATE_RECOVERY_QUIET_MS = 750
 const AUTOMATIC_DUPLICATE_RECOVERY_MAX_WAIT_MS = 30_000
+const configuredDuplicateRecoveryE2EDelay = process.env.SWOB_E2E_SANDBOX_ROOT
+  ? Number.parseInt(process.env.SWOB_TEST_DUPLICATE_RECOVERY_FIRST_DELAY_MS || '0', 10)
+  : 0
+let duplicateRecoveryAnalysisE2EDelayMs = Number.isFinite(configuredDuplicateRecoveryE2EDelay)
+  ? Math.max(0, Math.min(60_000, configuredDuplicateRecoveryE2EDelay))
+  : 0
 
 function duplicateRecoveryAnalysisGeneration(epoch: number, writeGeneration: number): string {
   return `${epoch}:${writeGeneration}`
@@ -3942,7 +4023,7 @@ async function drainAutomaticDuplicateRecoveryAnalysis(): Promise<void> {
     }, AUTOMATIC_DUPLICATE_RECOVERY_RETRY_MS[attempt - 1])
     automaticDuplicateRecoveryAnalysisTimer.unref?.()
     console.error('[duplicate-recovery] automatic read-only analysis delayed:',
-      error instanceof Error ? error.message : 'unknown error')
+      duplicateRecoveryErrorCode(error))
   }
 }
 
@@ -3969,7 +4050,14 @@ function runDuplicateRecoveryAnalysis(
     void stale.worker.terminate()
   }
   const workerPath = path.join(__dirname, 'duplicate-recovery-worker.js')
-  const worker = new Worker(workerPath, { workerData: { libraryRoot, quarantineRoot } })
+  // A one-shot delay exists only inside the already-isolated E2E sandbox so
+  // Playwright can deterministically inspect cancellation without racing a
+  // fast fixture. Production never receives a delay from this path.
+  const testDelayMs = duplicateRecoveryAnalysisE2EDelayMs
+  duplicateRecoveryAnalysisE2EDelayMs = 0
+  const worker = new Worker(workerPath, {
+    workerData: { libraryRoot, quarantineRoot, testDelayMs }
+  })
   let finish: (error?: Error, report?: DuplicateRecoveryReport) => void = () => {}
   const promise = new Promise<DuplicateRecoveryReport>((resolve, reject) => {
     let settled = false
@@ -3979,7 +4067,19 @@ function runDuplicateRecoveryAnalysis(
       if (activeDuplicateRecoveryAnalysis?.worker === worker) activeDuplicateRecoveryAnalysis = null
       if (error) reject(error)
       else if (report) {
-        cachedDuplicateRecoveryAnalysis = { libraryRoot, writeGeneration, report }
+        const completedAt = new Date().toISOString()
+        cachedDuplicateRecoveryAnalysis = { libraryRoot, writeGeneration, report, completedAt }
+        try {
+          writeDuplicateRecoverySummaryCache(
+            duplicateRecoverySummaryCachePath(),
+            libraryRoot,
+            writeGeneration,
+            duplicateRecoverySummary(report, false, completedAt)
+          )
+        } catch (cacheError) {
+          console.error('[duplicate-recovery] summary cache write skipped:',
+            duplicateRecoveryErrorCode(cacheError))
+        }
         resolve(report)
       }
       else reject(new Error('duplicate-recovery-analysis-ended-without-report'))
@@ -3988,19 +4088,19 @@ function runDuplicateRecoveryAnalysis(
       kind?: unknown
       progress?: DuplicateRecoveryProgress
       report?: DuplicateRecoveryReport
-      error?: unknown
+      errorCode?: unknown
     }) => {
       if (message.kind === 'progress' && message.progress) {
         mainWindow?.webContents.send('library:duplicateRecoveryProgress', message.progress)
       } else if (message.kind === 'complete' && message.report) {
         finish(undefined, message.report)
       } else if (message.kind === 'error') {
-        finish(new Error(typeof message.error === 'string' ? message.error : 'duplicate-recovery-analysis-failed'))
+        finish(new Error(typeof message.errorCode === 'string'
+          ? message.errorCode
+          : 'DUPLICATE_RECOVERY_ANALYSIS_FAILED'))
       }
     })
-    worker.once('error', (error: unknown) => finish(
-      error instanceof Error ? error : new Error(String(error))
-    ))
+    worker.once('error', (error: unknown) => finish(new Error(duplicateRecoveryErrorCode(error))))
     worker.once('exit', (code) => {
       if (!settled) finish(new Error(code === 0
         ? 'duplicate-recovery-analysis-ended-without-report'
@@ -4037,7 +4137,11 @@ async function analyzeDuplicateRecoveryForCurrentLibrary(): Promise<DuplicateRec
     throw new Error('duplicate-recovery-library-changed-during-analysis')
   }
   preparedDuplicateRecovery = { libraryRoot, quarantineRoot, writeGeneration, report }
-  return duplicateRecoverySummary(report)
+  return duplicateRecoverySummary(
+    report,
+    true,
+    cachedDuplicateRecoveryAnalysis?.completedAt
+  )
 }
 
 function waitForAutomaticDuplicateRecoveryAnalysis(): Promise<DuplicateRecoverySummary> {
@@ -4054,7 +4158,11 @@ function waitForAutomaticDuplicateRecoveryAnalysis(): Promise<DuplicateRecoveryS
       writeGeneration,
       report: cachedDuplicateRecoveryAnalysis.report
     }
-    return Promise.resolve(duplicateRecoverySummary(cachedDuplicateRecoveryAnalysis.report))
+    return Promise.resolve(duplicateRecoverySummary(
+      cachedDuplicateRecoveryAnalysis.report,
+      true,
+      cachedDuplicateRecoveryAnalysis.completedAt
+    ))
   }
   automaticDuplicateRecoveryAnalysisSuppressedGeneration = null
   requestAutomaticDuplicateRecoveryAnalysis(tree)
@@ -4094,6 +4202,10 @@ ipcMain.handle('library:analyzeDuplicateRecovery', async (): Promise<DuplicateRe
   return waitForAutomaticDuplicateRecoveryAnalysis()
 })
 
+ipcMain.handle('library:getCachedDuplicateRecoverySummary', (): DuplicateRecoverySummary | null => {
+  return readDuplicateRecoverySummaryCache(duplicateRecoverySummaryCachePath(), getLibraryRoot())
+})
+
 ipcMain.handle('library:cancelDuplicateRecoveryAnalysis', async (): Promise<boolean> => {
   automaticDuplicateRecoveryAnalysisSuppressedGeneration = duplicateRecoveryAnalysisGeneration(
     libraryRuntimeEpoch,
@@ -4129,7 +4241,7 @@ async function applyPreparedDuplicateRecovery(planId: string): Promise<Duplicate
         const tree = latestLibraryTree
         if (tree) requestAutomaticDuplicateRecoveryAnalysis(tree)
         console.error('[duplicate-recovery] stale-plan refresh delayed:',
-          refreshError instanceof Error ? refreshError.message : 'unknown error')
+          duplicateRecoveryErrorCode(refreshError))
       }
       return {
         schemaVersion: 1,
@@ -4178,7 +4290,7 @@ async function applyPreparedDuplicateRecovery(planId: string): Promise<Duplicate
       'Equivalent duplicate packages were quarantined, but the Library view must be refreshed after restart'
     )
     console.error('[duplicate-recovery] post-apply Library refresh failed:',
-      error instanceof Error ? error.message : 'unknown error')
+      duplicateRecoveryErrorCode(error))
     return { ...result, restartRequired: true }
   }
 }
@@ -4223,6 +4335,7 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   )
   libraryRuntimeEpoch++
   clearLibraryBacklogRecoverySchedule()
+  clearLibraryBacklogGlobalRecoverySchedule()
   libraryBacklogRecoveryQueue.clear()
   clearAutomaticDuplicateRecoveryAnalysisSchedule()
   rejectAutomaticDuplicateRecoveryAnalysisWaiters('duplicate-recovery-library-changed-during-analysis')
@@ -4680,7 +4793,7 @@ app.whenReady().then(async () => {
     ))
   } catch (error) {
     console.error('[duplicate-recovery] Interrupted transaction rollback failed:',
-      error instanceof Error ? error.message : 'unknown error')
+      duplicateRecoveryErrorCode(error))
     dialog.showErrorBox(
       mainT('native.duplicate_recovery.fatal_title'),
       mainT('native.duplicate_recovery.fatal_body')

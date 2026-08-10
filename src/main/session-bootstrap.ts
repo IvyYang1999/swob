@@ -1,6 +1,9 @@
 import type { SessionSummary } from './types'
 
-export type RendererSessionSummary = Omit<SessionSummary, 'allUserMessages' | 'tokenAccounting'> & {
+export type RendererSessionSummary = Omit<
+  SessionSummary,
+  'allUserMessages' | 'tokenAccounting' | 'canonicalProjectionFingerprint'
+> & {
   tokenAccounting?: Omit<NonNullable<SessionSummary['tokenAccounting']>, 'usageEvents'>
 }
 
@@ -38,7 +41,12 @@ export function additiveSessionPatch<T extends { id: string }>(initial: T[], com
  * IPC, which otherwise duplicates tens or hundreds of megabytes at startup.
  */
 export function sessionSummaryForRenderer(summary: SessionSummary): RendererSessionSummary {
-  const { allUserMessages: _allUserMessages, tokenAccounting, ...visible } = summary
+  const {
+    allUserMessages: _allUserMessages,
+    tokenAccounting,
+    canonicalProjectionFingerprint: _canonicalProjectionFingerprint,
+    ...visible
+  } = summary
   if (!tokenAccounting) return visible
   const { usageEvents: _usageEvents, ...compactAccounting } = tokenAccounting
   return { ...visible, tokenAccounting: compactAccounting }

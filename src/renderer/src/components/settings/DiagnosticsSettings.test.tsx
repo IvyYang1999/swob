@@ -83,6 +83,7 @@ describe('DiagnosticsSettings', () => {
         manualMergeGroupCount: 3,
         preservedGroupCount: 10
       }),
+      libraryGetCachedDuplicateRecoverySummary: vi.fn().mockResolvedValue(null),
       libraryCancelDuplicateRecoveryAnalysis: vi.fn().mockResolvedValue(true),
       libraryApplyDuplicateRecovery: vi.fn(),
       onDuplicateRecoveryProgress: vi.fn(() => vi.fn())
@@ -134,6 +135,42 @@ describe('DiagnosticsSettings', () => {
     expect(screen.getByText('2')).not.toBeNull()
     expect(screen.getByRole('button', { name: '隔离 2 个等价副本' })).not.toBeNull()
     expect(screen.getByText(/有独有内容的包绝不会自动移动/)).not.toBeNull()
+  })
+
+  it('重启后先展示脱敏缓存但禁止应用，当前复核完成后才开放隔离', async () => {
+    let finishAnalysis!: (value: any) => void
+    const live = new Promise((resolve) => { finishAnalysis = resolve })
+    ;(window as any).api.libraryAnalyzeDuplicateRecovery.mockReturnValue(live)
+    ;(window as any).api.libraryGetCachedDuplicateRecoverySummary.mockResolvedValue({
+      schemaVersion: 1,
+      planId: 'plan:fedcba9876543210fedcba98',
+      completedAt: '2026-08-09T00:00:00.000Z',
+      canApply: false,
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 2,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    })
+
+    render(<DiagnosticsSettings />)
+    expect(await screen.findByText(/这是上次只读分析的脱敏汇总/)).not.toBeNull()
+    expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
+
+    finishAnalysis({
+      schemaVersion: 1,
+      planId: 'plan:0123456789abcdef01234567',
+      completedAt: '2026-08-10T00:00:00.000Z',
+      canApply: true,
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 2,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    })
+    expect(await screen.findByRole('button', { name: '隔离 2 个等价副本' })).not.toBeNull()
   })
 
   it('用户暂停只读分析后给出明确恢复入口，不会停在无按钮状态', async () => {

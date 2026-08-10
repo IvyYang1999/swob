@@ -77,6 +77,15 @@ export class LibraryStartupSyncInterruptedError extends Error {
   }
 }
 
+export class LibraryStartupBatchTransportError extends Error {
+  readonly code = 'LIBRARY_STARTUP_BATCH_TRANSPORT_FAILED'
+
+  constructor(cause: unknown) {
+    super('Library startup batch failed before a durable item outcome', { cause })
+    this.name = 'LibraryStartupBatchTransportError'
+  }
+}
+
 export interface IncrementalLibraryStartupOptions {
   sessions: readonly SessionSummary[]
   probeWriter: () => Promise<void>
@@ -133,6 +142,7 @@ export function describeLibraryStartupSession(
     fileSizeBytes: session.fileSizeBytes,
     messageCount: session.messageCount,
     turnCount: session.turnCount,
+    canonicalProjectionFingerprint: session.canonicalProjectionFingerprint || null,
     lifecycleState: session.lifecycleState || null,
     branchParentId: session.branchParentId || null,
     branchChildIds: [...(session.branchChildIds || [])].sort(),
@@ -202,7 +212,8 @@ export function buildLibraryStartupPlan(
   sessions: readonly SessionSummary[],
   schemaGeneration: number,
   previous: LibraryStartupCheckpoint | null,
-  sessionMeta: Record<string, { customTitle?: string }> = {}
+  sessionMeta: Record<string, { customTitle?: string }> = {},
+  options: { preserveUnseen?: boolean } = {}
 ): LibraryStartupPlan {
   if (!Number.isSafeInteger(schemaGeneration) || schemaGeneration < 1) {
     throw new Error('Library startup schema generation must be a positive integer')
@@ -212,8 +223,19 @@ export function buildLibraryStartupPlan(
     schemaGeneration,
     sessionMeta[session.sessionId]?.customTitle
   ))
-  const snapshotDigest = sha256(descriptors
-    .map((descriptor) => `${descriptor.key}:${descriptor.fingerprint}`)
+  const preserveUnseen = options.preserveUnseen === true && previous?.schemaGeneration === schemaGeneration
+  const currentKeys = new Set(descriptors.map((descriptor) => descriptor.key))
+  const previousKnownFingerprints = new Map<string, string>([
+    ...Object.entries(previous?.completedFingerprints || {}),
+    ...Object.entries(previous?.recovery || {}).map(([key, entry]) => [key, entry.fingerprint] as const)
+  ])
+  const unseenFingerprintEntries = preserveUnseen
+    ? [...previousKnownFingerprints].filter(([key]) => !currentKeys.has(key))
+    : []
+  const snapshotDigest = sha256([
+    ...descriptors.map((descriptor) => `${descriptor.key}:${descriptor.fingerprint}`),
+    ...unseenFingerprintEntries.map(([key, fingerprint]) => `${key}:${fingerprint}`)
+  ]
     .sort()
     .join('\n'))
   const descriptorByKey = new Map(descriptors.map((descriptor) => [descriptor.key, descriptor]))
@@ -225,14 +247,19 @@ export function buildLibraryStartupPlan(
     const completed = new Set(previous.completedKeys)
     const dirty = new Set(previous.dirtyKeys)
     const recovery = Object.fromEntries(Object.entries(previous.recovery)
-      .filter(([key, entry]) => descriptorByKey.get(key)?.fingerprint === entry.fingerprint))
+      .filter(([key, entry]) => {
+        const descriptor = descriptorByKey.get(key)
+        return descriptor
+          ? descriptor.fingerprint === entry.fingerprint
+          : preserveUnseen && previousKnownFingerprints.get(key) === entry.fingerprint
+      }))
     return {
       checkpoint: {
         ...previous,
-        completedKeys: [...completed].filter((key) => descriptorByKey.has(key)).sort(),
-        dirtyKeys: [...dirty].filter((key) => descriptorByKey.has(key)).sort(),
+        completedKeys: [...completed].filter((key) => descriptorByKey.has(key) || preserveUnseen).sort(),
+        dirtyKeys: [...dirty].filter((key) => descriptorByKey.has(key) || preserveUnseen).sort(),
         completedFingerprints: Object.fromEntries(Object.entries(previous.completedFingerprints)
-          .filter(([key]) => descriptorByKey.has(key))),
+          .filter(([key]) => descriptorByKey.has(key) || preserveUnseen)),
         recovery
       },
       descriptors,
@@ -251,15 +278,30 @@ export function buildLibraryStartupPlan(
   const cleanFingerprints = Object.fromEntries(descriptors
     .filter((descriptor) => !dirtyKeySet.has(descriptor.key))
     .map((descriptor) => [descriptor.key, descriptor.fingerprint]))
+  const unseenKeys = new Set(unseenFingerprintEntries.map(([key]) => key))
+  const unseenCompletedKeys = preserveUnseen
+    ? (previous?.completedKeys || []).filter((key) => unseenKeys.has(key))
+    : []
+  const unseenDirtyKeys = preserveUnseen
+    ? (previous?.dirtyKeys || []).filter((key) => unseenKeys.has(key))
+    : []
+  const unseenCompletedFingerprints = preserveUnseen
+    ? Object.fromEntries(Object.entries(previous?.completedFingerprints || {})
+        .filter(([key]) => unseenKeys.has(key)))
+    : {}
   const checkpoint: LibraryStartupCheckpoint = {
     version: LIBRARY_STARTUP_CHECKPOINT_VERSION,
     snapshotDigest,
     schemaGeneration,
-    completedKeys: [],
-    dirtyKeys,
-    completedFingerprints: cleanFingerprints,
+    completedKeys: [...new Set(unseenCompletedKeys)].sort(),
+    dirtyKeys: [...new Set([...dirtyKeys, ...unseenDirtyKeys])].sort(),
+    completedFingerprints: { ...cleanFingerprints, ...unseenCompletedFingerprints },
     recovery: Object.fromEntries(Object.entries(previous?.recovery || {})
-      .filter(([key, entry]) => descriptorByKey.get(key)?.fingerprint === entry.fingerprint && dirtyKeySet.has(key)))
+      .filter(([key, entry]) => {
+        const descriptor = descriptorByKey.get(key)
+        if (descriptor) return descriptor.fingerprint === entry.fingerprint && dirtyKeySet.has(key)
+        return preserveUnseen && unseenKeys.has(key)
+      }))
   }
   return {
     checkpoint,
@@ -543,7 +585,8 @@ export async function syncLibraryStartupIncrementally(
       // exact checkpoint outcome in the Library worker transaction. A reject
       // here is therefore a worker/transport/global failure; fabricating local
       // skipped items would lose durable recovery ownership.
-      if (mustAbortStartup(error) || options.syncBatch) throw error
+      if (mustAbortStartup(error)) throw error
+      if (options.syncBatch) throw new LibraryStartupBatchTransportError(error)
       {
         const skipped = batch.map((session) => failedStartupItem(session.sessionId, error))
         const handled = skipped.filter((entry) => entry.disposition === 'handled').length

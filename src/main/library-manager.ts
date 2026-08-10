@@ -1298,6 +1298,7 @@ let startupPlanRuntime: {
   registryFullScans: number
   packageIdentityFullScans: number
   registryIncrementalUpdates: number
+  visibleWorkKeys: string[]
 } | null = null
 const sessionMetaCache = new Map<string, { mtimeMs: number; size: number; meta: SessionMeta }>()
 let sessionMetaDiskReads = 0
@@ -3710,50 +3711,62 @@ function librarySessions(tree: LibraryTree): LibrarySession[] {
   return sessions
 }
 
+function markCanonicalPackageTombstoneUnderWriter(
+  providerId: string,
+  sourceRefStableId: string,
+  sessionRecordId: string,
+  tombstone: Tombstone
+): string | null {
+  if (!fs.existsSync(_root)) return null
+  const tree = scanLibrary()
+  const candidate = librarySessions(tree).find((session) => {
+    const descriptor = session.meta.canonicalProvider
+    return descriptor?.providerId === providerId &&
+      descriptor.sourceRefStableId === sourceRefStableId &&
+      descriptor.sessionRecordId === sessionRecordId
+  })
+  if (!candidate?.meta.canonicalProvider) return null
+  const recordsPath = path.join(candidate.dirPath, candidate.meta.canonicalProvider.recordsFile)
+  const recordsPackage = readCanonicalPackageRecords(recordsPath)
+  if (!recordsPackage || recordsPackage.providerId !== providerId ||
+    recordsPackage.sourceRef.stableId !== sourceRefStableId ||
+    recordsPackage.sessionRecordId !== sessionRecordId) return null
+  const descriptor = { ...candidate.meta.canonicalProvider, tombstone }
+  const provenance: CanonicalPackageProvenance = {
+    schemaVersion: 1,
+    providerId,
+    parserDataVersion: descriptor.parserDataVersion,
+    formatVersion: descriptor.formatVersion,
+    fingerprint: descriptor.fingerprint,
+    sourceRef: recordsPackage.sourceRef,
+    sessionRecordId,
+    archivedAt: new Date().toISOString(),
+    tombstone
+  }
+  writeCanonicalFileIfChanged(
+    path.join(candidate.dirPath, descriptor.provenanceFile),
+    encodeCanonicalPackageProvenance(provenance)
+  )
+  const meta = readSessionMeta(candidate.dirPath)
+  if (!meta) return null
+  meta.canonicalProvider = descriptor
+  meta.updatedAt = tombstone.deletedAt || meta.updatedAt
+  writeSessionMeta(candidate.dirPath, meta)
+  return candidate.dirPath
+}
+
 export async function markCanonicalPackageTombstone(
   providerId: string,
   sourceRefStableId: string,
   sessionRecordId: string,
   tombstone: Tombstone
 ): Promise<string | null> {
-  if (!fs.existsSync(_root)) return null
-  return withLibraryWriter('maintenance', () => {
-    const tree = scanLibrary()
-    const candidate = librarySessions(tree).find((session) => {
-      const descriptor = session.meta.canonicalProvider
-      return descriptor?.providerId === providerId &&
-        descriptor.sourceRefStableId === sourceRefStableId &&
-        descriptor.sessionRecordId === sessionRecordId
-    })
-    if (!candidate?.meta.canonicalProvider) return null
-    const recordsPath = path.join(candidate.dirPath, candidate.meta.canonicalProvider.recordsFile)
-    const recordsPackage = readCanonicalPackageRecords(recordsPath)
-    if (!recordsPackage || recordsPackage.providerId !== providerId ||
-      recordsPackage.sourceRef.stableId !== sourceRefStableId ||
-      recordsPackage.sessionRecordId !== sessionRecordId) return null
-    const descriptor = { ...candidate.meta.canonicalProvider, tombstone }
-    const provenance: CanonicalPackageProvenance = {
-      schemaVersion: 1,
-      providerId,
-      parserDataVersion: descriptor.parserDataVersion,
-      formatVersion: descriptor.formatVersion,
-      fingerprint: descriptor.fingerprint,
-      sourceRef: recordsPackage.sourceRef,
-      sessionRecordId,
-      archivedAt: new Date().toISOString(),
-      tombstone
-    }
-    writeCanonicalFileIfChanged(
-      path.join(candidate.dirPath, descriptor.provenanceFile),
-      encodeCanonicalPackageProvenance(provenance)
-    )
-    const meta = readSessionMeta(candidate.dirPath)
-    if (!meta) return null
-    meta.canonicalProvider = descriptor
-    meta.updatedAt = tombstone.deletedAt || meta.updatedAt
-    writeSessionMeta(candidate.dirPath, meta)
-    return candidate.dirPath
-  })
+  return withLibraryWriter('maintenance', () => markCanonicalPackageTombstoneUnderWriter(
+    providerId,
+    sourceRefStableId,
+    sessionRecordId,
+    tombstone
+  ))
 }
 
 // --- Sync JSONL Backup ---
@@ -5134,6 +5147,20 @@ async function synchronizeStartupSession(
   if (canonicalDefinition?.ingestion === 'provider-host') {
     const stored = getCanonicalSessionStore().getSession(session.id)
     if (!stored) throw new CanonicalProviderSessionPendingError()
+    if (stored.tombstone) {
+      markCanonicalPackageTombstoneUnderWriter(
+        canonicalDefinition.manifest.providerId,
+        stored.sessionRecord.sourceRef.stableId,
+        stored.sessionRecord.id,
+        stored.tombstone
+      )
+      return {
+        sessionId: session.sessionId,
+        code: 'PROVIDER_SESSION_UNAVAILABLE',
+        disposition: 'handled',
+        retryable: false
+      }
+    }
     await ensureCanonicalPackageUnderWriter(
       canonicalDefinition.manifest.providerId,
       stored.sessionRecord.sourceRef,
@@ -5267,13 +5294,11 @@ function libraryStartupProjectionIsCurrent(
   if (binding.state === 'conflict') return true
   if (binding.state !== 'bound' || !fs.existsSync(binding.candidate.dirPath)) return false
   const meta = readSessionMeta(binding.candidate.dirPath)
-  if (!meta || meta.sessionId !== session.sessionId || meta.updatedAt !== session.updatedAt ||
-    meta.turnCount !== session.turnCount) return false
-  if (customTitle !== undefined && meta.customTitle !== customTitle) return false
+  if (!meta || meta.sessionId !== session.sessionId) return false
 
   if (canonicalDefinition?.ingestion === 'provider-host') {
     const descriptor = meta.canonicalProvider
-    return Boolean(storedCanonical && descriptor &&
+    const descriptorMatches = Boolean(storedCanonical && descriptor &&
       descriptor.providerId === canonicalDefinition.manifest.providerId &&
       descriptor.sourceRefStableId === storedCanonical.sessionRecord.sourceRef.stableId &&
       descriptor.sessionRecordId === storedCanonical.sessionRecord.id &&
@@ -5281,10 +5306,20 @@ function libraryStartupProjectionIsCurrent(
         JSON.stringify(storedCanonical.sessionRecord.sourceRef.fingerprint) &&
       descriptor.parserDataVersion === storedCanonical.sessionRecord.provenance.parserDataVersion &&
       descriptor.formatVersion === storedCanonical.sessionRecord.provenance.formatVersion &&
+      JSON.stringify(descriptor.tombstone || null) === JSON.stringify(storedCanonical.tombstone) &&
       fs.existsSync(path.join(binding.candidate.dirPath, descriptor.recordsFile)) &&
-      fs.existsSync(path.join(binding.candidate.dirPath, descriptor.provenanceFile)) &&
-      fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE)))
+      fs.existsSync(path.join(binding.candidate.dirPath, descriptor.provenanceFile)))
+    if (!descriptorMatches) return false
+    // A matching tombstone is the authoritative terminal projection; stale
+    // pre-removal summary timestamps must not keep re-dirtying it.
+    if (storedCanonical?.tombstone) return true
+    if (meta.updatedAt !== session.updatedAt || meta.turnCount !== session.turnCount) return false
+    if (customTitle !== undefined && meta.customTitle !== customTitle) return false
+    return fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE))
   }
+
+  if (meta.updatedAt !== session.updatedAt || meta.turnCount !== session.turnCount) return false
+  if (customTitle !== undefined && meta.customTitle !== customTitle) return false
 
   const expectedSourcePaths = sourceFilePathsForMeta(session)
   if (expectedSourcePaths.length > 0 &&
@@ -5369,7 +5404,8 @@ function completeCurrentLibraryProjections(
 export async function planLibraryStartupSync(
   sessions: readonly SessionSummary[],
   schemaGeneration: number,
-  sessionMeta: Record<string, { customTitle?: string; notes?: string }> = {}
+  sessionMeta: Record<string, { customTitle?: string; notes?: string }> = {},
+  options: { preserveUnseen?: boolean } = {}
 ): Promise<LibraryStartupPlanResult> {
   return withLibraryWriter('maintenance', () => {
     const hadPreparedScan = registrySnapshotPreparedRoot === path.resolve(_root)
@@ -5390,7 +5426,13 @@ export async function planLibraryStartupSync(
       keys.add(logicalSessionKey(buildLogicalSessionIdentityFromSummary(session)))
       startupInputLogicalKeysBySessionId.set(session.sessionId, keys)
     }
-    const plan = buildLibraryStartupPlan(sessions, schemaGeneration, readLibraryStartupCheckpoint(), sessionMeta)
+    const plan = buildLibraryStartupPlan(
+      sessions,
+      schemaGeneration,
+      readLibraryStartupCheckpoint(),
+      sessionMeta,
+      options
+    )
     // Live sync and Provider catch-up can make a dirty projection current
     // before this planner owns the writer. Complete those exact work keys from
     // physical evidence so recovery converges without rewriting package data.
@@ -5404,13 +5446,17 @@ export async function planLibraryStartupSync(
       writerAcquires: 1,
       registryFullScans: hadPreparedScan && !canReuseAuthoritativeScan ? 2 : 1,
       packageIdentityFullScans: 1,
-      registryIncrementalUpdates: 0
+      registryIncrementalUpdates: 0,
+      visibleWorkKeys: plan.descriptors.map((descriptor) => descriptor.key)
     }
     writeLibraryStartupCheckpoint(plan.checkpoint)
     return {
       dirtyIndexes: plan.dirtyIndexes,
       recoveryItems: plan.recoveryItems,
-      recoverySummary: summarizeLibraryStartupRecovery(plan.checkpoint.recovery),
+      recoverySummary: summarizeLibraryStartupRecovery(Object.fromEntries(
+        Object.entries(plan.checkpoint.recovery)
+          .filter(([key]) => startupPlanRuntime!.visibleWorkKeys.includes(key))
+      )),
       snapshotDigest: plan.checkpoint.snapshotDigest,
       schemaGeneration,
       invalidation: plan.invalidation,
@@ -5513,7 +5559,10 @@ export async function syncLibraryStartupBatch(
       return {
         outcome,
         counters: currentLibraryStartupCounters(),
-        recoverySummary: summarizeLibraryStartupRecovery(updated.checkpoint.recovery)
+        recoverySummary: summarizeLibraryStartupRecovery(Object.fromEntries(
+          Object.entries(updated.checkpoint.recovery)
+            .filter(([key]) => runtime.visibleWorkKeys.includes(key))
+        ))
       }
     } finally {
       startupPreparedRegistryDepth--

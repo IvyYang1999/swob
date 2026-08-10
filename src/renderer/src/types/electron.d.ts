@@ -278,6 +278,7 @@ interface ElectronAPI {
   libraryCompensationCancel: () => Promise<void>
   libraryCompensationRetry: () => Promise<CompensationProgress>
   libraryAnalyzeDuplicateRecovery: () => Promise<DuplicateRecoverySummary>
+  libraryGetCachedDuplicateRecoverySummary: () => Promise<DuplicateRecoverySummary | null>
   libraryCancelDuplicateRecoveryAnalysis: () => Promise<boolean>
   libraryApplyDuplicateRecovery: (planId: string) => Promise<DuplicateRecoveryApplyResult>
   onDuplicateRecoveryProgress: (callback: (progress: DuplicateRecoveryProgress) => void) => () => void

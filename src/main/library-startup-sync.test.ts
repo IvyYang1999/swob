@@ -4,6 +4,7 @@ import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LIBRARY_STARTUP_BATCH_SIZE,
+  LibraryStartupBatchTransportError,
   buildLibraryStartupPlan,
   completeLibraryStartupCheckpoint,
   describeLibraryStartupSession,
@@ -288,7 +289,7 @@ describe('incremental Library startup synchronization', () => {
     const error = new Error('library-worker-invalid-reply')
     const syncBatch = vi.fn(async () => { throw error })
     const progress = vi.fn()
-    await expect(syncLibraryStartupIncrementally({
+    const failure = await syncLibraryStartupIncrementally({
       sessions: [
         summary('first', '/fixture/first.jsonl', '2026-08-02T09:00:00.000Z'),
         summary('second', '/fixture/second.jsonl', '2026-08-02T09:00:01.000Z')
@@ -300,7 +301,9 @@ describe('incremental Library startup synchronization', () => {
       resolveLatest: (session) => session,
       syncBatch,
       onProgress: progress
-    })).rejects.toBe(error)
+    }).catch((caught: unknown) => caught)
+    expect(failure).toBeInstanceOf(LibraryStartupBatchTransportError)
+    expect((failure as Error).cause).toBe(error)
     expect(syncBatch).toHaveBeenCalledTimes(1)
     expect(progress).not.toHaveBeenCalled()
   })
@@ -429,6 +432,66 @@ describe('Library startup dirty-set checkpoint', () => {
     })
     expect(Object.values(checkpoint.recovery).map((entry) => [entry.state, entry.attempt]).sort())
       .toEqual([['attention-required', 0], ['waiting-provider', 0]])
+  })
+
+  it('invalidates a Provider checkpoint when only its authoritative canonical fingerprint changes', () => {
+    const first = {
+      ...summary('provider-fingerprint', 'ssh://fixture/provider#row', '2026-08-02T09:00:00.000Z'),
+      source: 'pi' as const,
+      canonicalProjectionFingerprint: 'canonical-f1'
+    }
+    const completed = completeLibraryStartupCheckpoint(
+      buildLibraryStartupPlan([first], 1, null).checkpoint,
+      [first]
+    )
+    const updated = { ...first, canonicalProjectionFingerprint: 'canonical-f2' }
+    const replanned = buildLibraryStartupPlan([updated], 1, completed)
+
+    expect(describeLibraryStartupSession(updated, 1).key)
+      .toBe(describeLibraryStartupSession(first, 1).key)
+    expect(describeLibraryStartupSession(updated, 1).fingerprint)
+      .not.toBe(describeLibraryStartupSession(first, 1).fingerprint)
+    expect(replanned.dirtyIndexes).toEqual([0])
+  })
+
+  it('preserves Provider retry attempts across a cold phase-one inventory without Provider rows', () => {
+    const provider = {
+      ...summary('provider-restart', 'ssh://fixture/provider#restart', '2026-08-02T09:00:00.000Z'),
+      source: 'pi' as const,
+      canonicalProjectionFingerprint: 'canonical-restart-f1'
+    }
+    let checkpoint = buildLibraryStartupPlan([provider], 1, null).checkpoint
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider], {
+        total: 1,
+        completed: 0,
+        skipped: [{
+          sessionId: provider.sessionId,
+          code: 'EBUSY',
+          disposition: 'failed',
+          retryable: true
+        }]
+      }, {}, Date.parse(`2026-08-02T09:00:0${attempt}.000Z`)).checkpoint
+    }
+    const providerKey = describeLibraryStartupSession(provider, 1).key
+    expect(checkpoint.recovery[providerKey]).toMatchObject({ attempt: 4, state: 'retry-scheduled' })
+
+    const physical = summary('physical-phase-one', '/fixture/physical.jsonl', '2026-08-02T09:00:00.000Z')
+    const phaseOne = buildLibraryStartupPlan(
+      [physical],
+      1,
+      checkpoint,
+      {},
+      { preserveUnseen: true }
+    )
+    expect(phaseOne.checkpoint.recovery[providerKey]).toMatchObject({ attempt: 4 })
+    expect(phaseOne.recoveryItems).toEqual([])
+
+    const authoritative = buildLibraryStartupPlan([physical, provider], 1, phaseOne.checkpoint)
+    expect(authoritative.recoveryItems).toMatchObject([{
+      index: 1,
+      entry: { attempt: 4, state: 'retry-scheduled' }
+    }])
   })
 
   it('terminally handles proven identity conflicts outside the background recovery queue', () => {

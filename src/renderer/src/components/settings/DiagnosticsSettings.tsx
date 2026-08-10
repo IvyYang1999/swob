@@ -93,6 +93,16 @@ export function DiagnosticsSettings() {
     }
   }, [showToast, t])
 
+  useEffect(() => {
+    let active = true
+    if (actionableIdentityGroups > 0) {
+      void window.api.libraryGetCachedDuplicateRecoverySummary().then((cached) => {
+        if (active && cached) setReport((current) => current || cached)
+      }).catch(() => { /* a cache miss never blocks live analysis */ })
+    }
+    return () => { active = false }
+  }, [actionableIdentityGroups, analysisKey])
+
   useEffect(() => () => {
     analysisRequestId.current++
     progressUnsubscribe.current?.()
@@ -117,7 +127,7 @@ export function DiagnosticsSettings() {
   }
 
   const apply = async () => {
-    if (applyingRef.current || !report || report.autoRepairablePackageCount === 0) return
+    if (applyingRef.current || !report || report.canApply === false || report.autoRepairablePackageCount === 0) return
     const confirmed = window.confirm(t('diagnostics.apply_confirm', { n: report.autoRepairablePackageCount }))
     if (!confirmed) return
     applyingRef.current = true
@@ -167,7 +177,7 @@ export function DiagnosticsSettings() {
                     : automaticRecoveryActive
                       ? t('diagnostics.automatic_recovery')
                       : actionableIdentityGroups > 0
-                        ? t(report ? 'diagnostics.identity_reviewed' : 'diagnostics.identity_review', {
+                        ? t(report && report.canApply !== false ? 'diagnostics.identity_reviewed' : 'diagnostics.identity_review', {
                             n: actionableIdentityGroups
                           })
                         : backgroundNeedsAttention > 0
@@ -263,10 +273,12 @@ export function DiagnosticsSettings() {
                   </div>
                 </div>
                 <p className="text-[10px] leading-relaxed text-faint">
-                  {t('diagnostics.result_boundary')}
+                  {report.canApply === false
+                    ? t('diagnostics.cached_rechecking')
+                    : t('diagnostics.result_boundary')}
                 </p>
                 <div className="flex flex-wrap justify-end gap-2">
-                  {summary.autoPackages > 0 && (
+                  {report.canApply !== false && summary.autoPackages > 0 && (
                     <button
                       type="button"
                       onClick={apply}

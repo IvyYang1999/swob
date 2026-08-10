@@ -1,6 +1,13 @@
 export type LibraryBacklogRecoveryRequestMode = 'automatic' | 'provider'
 export type LibraryBacklogRecoverySelectionMode = 'initial' | LibraryBacklogRecoveryRequestMode
 
+const GLOBAL_RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000, 600_000] as const
+
+export function libraryBacklogGlobalRetryDelay(attempt: number): number | null {
+  if (!Number.isSafeInteger(attempt) || attempt < 1) return null
+  return GLOBAL_RETRY_DELAYS_MS[attempt - 1] ?? null
+}
+
 export function shouldSelectLibraryBacklogItem(
   mode: LibraryBacklogRecoverySelectionMode,
   recovery: { state: string; nextAttemptAt: string | null } | undefined,

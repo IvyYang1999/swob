@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   LibraryBacklogRecoveryQueue,
+  libraryBacklogGlobalRetryDelay,
   shouldSelectLibraryBacklogItem
 } from './library-backlog-recovery-queue'
 
@@ -48,5 +49,11 @@ describe('LibraryBacklogRecoveryQueue', () => {
       state: 'retry-scheduled',
       nextAttemptAt: new Date(now - 1).toISOString()
     }, now, true)).toBe(false)
+  })
+
+  it('bounds global worker transport recovery without consuming item attempts', () => {
+    expect(Array.from({ length: 6 }, (_, index) => libraryBacklogGlobalRetryDelay(index + 1)))
+      .toEqual([1_000, 5_000, 30_000, 120_000, 600_000, null])
+    expect(libraryBacklogGlobalRetryDelay(0)).toBeNull()
   })
 })

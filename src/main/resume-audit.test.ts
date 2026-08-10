@@ -708,8 +708,14 @@ describe('resume audit', () => {
     expect(JSON.stringify(report)).not.toContain(longCredentialLike)
   })
 
-  it('DB source ref 以数据库本体判断存在，不把 #sessionId 当文件名', () => {
-    const dbPath = writeFile(path.join(tempRoot, '.local', 'share', 'opencode', 'opencode.db'))
+  fixtureIt('DB source ref 以数据库本体和精确 session 行判断存在', () => {
+    const dbPath = createAgentDb(
+      path.join(tempRoot, '.local', 'share', 'opencode', 'opencode.db'),
+      'ses_Record1',
+      'fixture user',
+      'fixture assistant',
+      false
+    )
     initLibrary(path.join(tempRoot, 'library'))
     scanLibrary()
 

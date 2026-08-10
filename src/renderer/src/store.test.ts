@@ -289,6 +289,23 @@ describe('renderer preference persistence', () => {
       pastedImageCount: 1,
       messages: [{ uuid: 'message-1' }]
     })
+
+    expect(materializeSessionDetail({
+      ...summary,
+      fallback: null,
+      firstUserMessage: 'ZCode 数据库中的真实标题',
+      messages: [{ uuid: 'message-zcode' }]
+    } as any, {
+      ...summary,
+      firstUserMessage: 'ZCode 会话 sess_abcd',
+      isManifestOnly: true,
+      manifestTitleIsFallback: true,
+      detailAvailability: 'source-recoverable'
+    })).toMatchObject({
+      firstUserMessage: 'ZCode 数据库中的真实标题',
+      detailAvailability: 'ready',
+      messages: [{ uuid: 'message-zcode' }]
+    })
   })
 
   it('replays current search query when searchIndexUpdated fires', async () => {

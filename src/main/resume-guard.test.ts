@@ -367,9 +367,7 @@ describe('resume guard', () => {
     })
     expect(terminal).toMatchObject({
       ok: false,
-      surface: 'terminal',
-      reasonCode: 'resume.error.build_action_failed',
-      reasonParams: { details: expect.stringContaining('没有公开 CLI') }
+      reasonCode: 'resume.error.unavailable'
     })
   })
 

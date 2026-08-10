@@ -426,26 +426,56 @@ describe('Library startup dirty-set checkpoint', () => {
     expect(replanned.dirtyIndexes).toEqual([0])
   })
 
-  it('waits for Provider completion without consuming attempts and isolates identity guards from retry', () => {
+  it('waits for Provider completion while terminal identity diagnostics stay out of recovery', () => {
     const provider = summary('provider', '/fixture/provider.jsonl', '2026-08-02T09:00:00.000Z')
     const identity = summary('identity', '/fixture/identity.jsonl', '2026-08-02T09:00:00.000Z')
     let checkpoint = buildLibraryStartupPlan([provider, identity], 1, null).checkpoint
     checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider, identity], {
       total: 2,
-      completed: 0,
+      completed: 1,
       skipped: [
         { sessionId: provider.sessionId, code: 'PROVIDER_SESSION_PENDING', disposition: 'failed', retryable: false },
-        { sessionId: identity.sessionId, code: 'SESSION_IDENTITY_MISSING', disposition: 'failed', retryable: false }
+        { sessionId: identity.sessionId, code: 'SESSION_IDENTITY_MISSING', disposition: 'handled', retryable: false }
       ]
     }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
 
     expect(summarizeLibraryStartupRecovery(checkpoint.recovery)).toMatchObject({
       waitingProvider: 1,
-      attentionRequired: 1,
+      attentionRequired: 0,
       retryScheduled: 0
     })
     expect(Object.values(checkpoint.recovery).map((entry) => [entry.state, entry.attempt]).sort())
-      .toEqual([['attention-required', 0], ['waiting-provider', 0]])
+      .toEqual([['waiting-provider', 0]])
+  })
+
+  it.each([
+    'SESSION_IDENTITY_CONFLICT',
+    'SESSION_IDENTITY_AMBIGUOUS',
+    'SESSION_IDENTITY_MISSING'
+  ])('retires legacy %s attention entries into identity diagnostics on replan', (reasonCode) => {
+    const session = summary('identity-terminal', '/fixture/identity-terminal.jsonl', '2026-08-02T09:00:00.000Z')
+    const cold = buildLibraryStartupPlan([session], 1, null)
+    const descriptor = cold.descriptors[0]
+    const legacy: LibraryStartupCheckpoint = {
+      ...cold.checkpoint,
+      recovery: {
+        [descriptor.key]: {
+          fingerprint: descriptor.fingerprint,
+          state: 'attention-required',
+          reasonCode,
+          attempt: 0,
+          firstFailedAt: '2026-08-02T09:00:00.000Z',
+          lastAttemptAt: '2026-08-02T09:00:00.000Z',
+          nextAttemptAt: null
+        }
+      }
+    }
+
+    const replanned = buildLibraryStartupPlan([session], 1, legacy)
+    expect(replanned.recoveryItems).toEqual([])
+    expect(replanned.dirtyIndexes).toEqual([])
+    expect(replanned.checkpoint.completedKeys).toContain(descriptor.key)
+    expect(replanned.checkpoint.completedFingerprints[descriptor.key]).toBe(descriptor.fingerprint)
   })
 
   it('invalidates a Provider checkpoint when only its authoritative canonical fingerprint changes', () => {

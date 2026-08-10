@@ -109,6 +109,7 @@ interface LoadedOpencodeSession {
 }
 
 const schemaCache = new Map<string, Promise<OpencodeSchema | null>>()
+const sqliteSessionIdCache = new Map<string, { signature: string; ids: Set<string> }>()
 
 export function getOpencodeDbPath(): string {
   return getSqliteAgentDbPath('opencode')
@@ -217,6 +218,65 @@ export async function hasSqliteAgentSessionRecord(
     `SELECT "id" FROM "session" WHERE "id" = ${sqlString(sessionId)} LIMIT 1`
   )
   return rows.length === 1
+}
+
+function sqliteSourceSignature(dbPath: string): string | null {
+  const parts: string[] = []
+  for (const candidate of [dbPath, `${dbPath}-wal`]) {
+    try {
+      const stat = fs.statSync(candidate)
+      parts.push(`${candidate}:${stat.size}:${stat.mtimeMs}`)
+    } catch (error) {
+      if (candidate === dbPath || (error as NodeJS.ErrnoException).code !== 'ENOENT') return null
+      parts.push(`${candidate}:missing`)
+    }
+  }
+  return parts.join('|')
+}
+
+/**
+ * Main-process capability check for SQLite-backed sessions. One DB snapshot is
+ * indexed per physical signature so annotating many rows never opens the same
+ * database hundreds of times. The WAL signature keeps the cache honest while
+ * the provider is actively writing.
+ */
+export function hasSqliteAgentSessionRecordSync(
+  source: SqliteAgentSource,
+  sourceRef: string,
+  sessionIdOverride?: string
+): boolean {
+  const { dbPath, sessionId } = parseSqliteAgentSessionRef(source, sourceRef, sessionIdOverride)
+  if (!sessionId) return false
+  const signature = sqliteSourceSignature(dbPath)
+  if (!signature) return false
+  const cacheKey = `${source}:${dbPath}`
+  let cached = sqliteSessionIdCache.get(cacheKey)
+  if (cached?.signature !== signature) {
+    try {
+      const database = new Database(dbPath, {
+        readonly: true,
+        fileMustExist: true,
+        timeout: SQLITE_TIMEOUT_MS
+      })
+      try {
+        database.pragma('query_only = ON')
+        const columns = new Set((database.prepare('PRAGMA table_info("session")').all() as SqliteRow[])
+          .map((row) => asString(row.name)))
+        if (!columns.has('id')) return false
+        const ids = new Set((database.prepare('SELECT "id" FROM "session"').all() as SqliteRow[])
+          .map((row) => asString(row.id))
+          .filter(isValidOpencodeSessionId))
+        cached = { signature, ids }
+        sqliteSessionIdCache.set(cacheKey, cached)
+      } finally {
+        database.close()
+      }
+    } catch {
+      sqliteSessionIdCache.delete(cacheKey)
+      return false
+    }
+  }
+  return cached.ids.has(sessionId)
 }
 
 export async function loadOpencodeRawMessages(

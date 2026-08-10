@@ -8,7 +8,11 @@ import type { SessionFreshness } from '../shared/library-health-contract'
 import { parseSessionFile, buildSessionSummary, filterMessagesByBranch, detectIntraFileBranches } from './session-loader'
 import { loadCodexRawMessages } from './codex-loader'
 import { loadCursorRawMessages } from './cursor-loader'
-import { loadOpencodeRawMessages, stripOpencodeSessionRef } from './opencode-loader'
+import {
+  hasSqliteAgentSessionRecordSync,
+  loadOpencodeRawMessages,
+  stripOpencodeSessionRef
+} from './opencode-loader'
 import { loadZcodeRawMessages, stripZcodeSessionRef } from './zcode-loader'
 import { DEFAULT_IGNORE_DIRS } from './session-placement'
 import {
@@ -713,6 +717,8 @@ function crashAfterSessionPublishForTest(stage: SessionWriteCrashStage, publishe
 }
 export const LOCAL_RESUME_UNAVAILABLE_REASON = '此会话数据在备份中，本机无源文件，无法直接恢复'
 export const ICLOUD_BACKUP_WAITING_REASON = '会话备份正在等待 iCloud 下载'
+export const ZCODE_EXACT_RESUME_UNAVAILABLE_REASON = 'ZCode 目前只能打开 App，不能从 Swob 定位到这条历史会话'
+export const ZCODE_SOURCE_RECORD_MISSING_REASON = 'ZCode 本地数据库中已没有这条会话；Swob 只保留了可读转录'
 export const SSH_RESUME_UNAVAILABLE_REASON = '此会话没有可用的远程设备 SSH 配置'
 export const SSH_RESUME_CWD_WARNING = '存量会话缺少精确工作目录；SSH Resume 将在远程默认目录启动，路径可能不准'
 
@@ -1513,6 +1519,28 @@ function evaluateSourceResumeAvailability(
   dirPath?: string | null,
   remoteManifestOnly = false
 ): SessionResumeAvailability {
+  if (source === 'opencode' || source === 'zcode') {
+    const matchingRefs = sourceFilePaths.filter((sourcePath) =>
+      detectSessionSourceFromPath(sourcePath) === source)
+    const hasRecord = matchingRefs.some((sourceRef) =>
+      hasSqliteAgentSessionRecordSync(source, sourceRef))
+    if (!hasRecord) {
+      return {
+        canResume: false,
+        reason: source === 'zcode'
+          ? ZCODE_SOURCE_RECORD_MISSING_REASON
+          : LOCAL_RESUME_UNAVAILABLE_REASON,
+        sourcePath: matchingRefs[0] || sourceFilePaths[0] || null
+      }
+    }
+    if (source === 'zcode') {
+      return {
+        canResume: false,
+        reason: ZCODE_EXACT_RESUME_UNAVAILABLE_REASON,
+        sourcePath: matchingRefs[0] || null
+      }
+    }
+  }
   const provider = builtinProviderForSource(source)
   if (provider) {
     const terminal = provider.manifest.capabilities['terminal-resume']
@@ -2175,9 +2203,6 @@ function registerSessionCandidateIncrementally(dirPath: string, meta: SessionMet
  */
 export function resolveLibraryDetailAvailability(session: LibrarySession): SessionDetailAvailability {
   if (backupStateForDir(session.dirPath) === 'ready') return 'ready'
-  try {
-    if (fs.statSync(session.mdPath).isFile()) return 'transcript-only'
-  } catch { /* no readable transcript */ }
   if ((sourceFilePathsFromMeta(session.meta) || []).some((sourcePath) => {
     try {
       return fs.statSync(sourceStatPath(sourcePath)).isFile()
@@ -2185,6 +2210,9 @@ export function resolveLibraryDetailAvailability(session: LibrarySession): Sessi
       return false
     }
   })) return 'source-recoverable'
+  try {
+    if (fs.statSync(session.mdPath).isFile()) return 'transcript-only'
+  } catch { /* no readable transcript */ }
   return 'unavailable'
 }
 
@@ -2218,14 +2246,25 @@ export function buildSessionSummaryFromManifest(session: LibrarySession): Sessio
   const persistedSource = logicalSource && isLegacySessionSource(logicalSource)
     ? logicalSource
     : undefined
-  const source = detectSourceFromSourcePaths(sourceFilePathsFromMeta(meta) || [], persistedSource)
+  const metaSourcePaths = sourceFilePathsFromMeta(meta) || []
+  const source = detectSourceFromSourcePaths(metaSourcePaths, persistedSource)
   const backupState = backupStateForDir(session.dirPath)
   let fileSizeBytes = meta.backupSize || 0
   if (backupState === 'ready') {
     try { fileSizeBytes = fs.statSync(session.jsonlPath).size } catch { /* keep manifest size */ }
   }
   const id = source === 'claude-code' ? meta.sessionId : `${source}:${meta.sessionId}`
-  const firstUserMessage = meta.customTitle || `云端会话 ${meta.sessionId.slice(0, 12)}`
+  const sourceName = builtinProviderForSource(source)?.manifest.displayName || 'AI'
+  const firstUserMessage = meta.customTitle || `${sourceName} 会话 ${meta.sessionId.slice(0, 12)}`
+  const availableSourcePaths = metaSourcePaths.filter((sourcePath) => {
+    try { return fs.statSync(sourceStatPath(sourcePath)).isFile() } catch { return false }
+  })
+  // Keep the package-local backup path as the final fallback candidate even
+  // when the physical SQLite database exists. A DB may outlive an individual
+  // session row; in that case detail loading must still reach transcript.md.
+  const detailSourcePaths = availableSourcePaths.length > 0
+    ? [...availableSourcePaths, session.jsonlPath]
+    : [session.jsonlPath]
   return {
     id,
     sessionId: meta.sessionId,
@@ -2242,9 +2281,9 @@ export function buildSessionSummaryFromManifest(session: LibrarySession): Sessio
     toolUsage: {},
     skillInvocations: [],
     projectPath: meta.projectPath,
-    filePath: session.jsonlPath,
+    filePath: detailSourcePaths[0],
     fileSizeBytes,
-    allFilePaths: [session.jsonlPath],
+    allFilePaths: detailSourcePaths,
     resumeCwd: meta.resumeCwd,
     lifecycleState: meta.lifecycleState,
     branchParentId: meta.branchParentId,
@@ -2259,6 +2298,7 @@ export function buildSessionSummaryFromManifest(session: LibrarySession): Sessio
     source,
     models: [],
     isManifestOnly: true,
+    manifestTitleIsFallback: !meta.customTitle,
     detailAvailability: resolveLibraryDetailAvailability(session),
     cloudBackupState: backupState
   }
@@ -5224,7 +5264,9 @@ function mustAbortLibraryStartupBatch(error: unknown): boolean {
   const typed = error as { code?: unknown; name?: unknown }
   return typed.name === 'AbortError' || typed.name === 'LibraryWriterBusyError' ||
     typed.name === 'LibraryPathUnsafeError' || typed.name === 'SessionCreateIdentityUnavailableError' ||
-    ['LIBRARY_WRITER_BUSY', 'WRITER_IDENTITY_UNAVAILABLE', 'EACCES', 'EPERM', 'ENOSPC', 'EIO']
+    typed.name === 'SessionWriteSnapshotUnrecoverableError' ||
+    ['LIBRARY_WRITER_BUSY', 'WRITER_IDENTITY_UNAVAILABLE', 'SESSION_WRITE_SNAPSHOT_UNRECOVERABLE',
+      'EACCES', 'EPERM', 'ENOSPC', 'EIO']
       .includes(String(typed.code || ''))
 }
 
@@ -5233,7 +5275,10 @@ function classifyStartupSessionFailure(sessionId: string, error: unknown): Libra
   const code = typeof typed?.code === 'string' && /^[A-Z0-9_:-]+$/.test(typed.code)
     ? typed.code
     : 'SESSION_SYNC_FAILED'
-  const handled = code === 'SESSION_SOURCE_MISSING' || code === 'SESSION_IDENTITY_CONFLICT'
+  const handled = code === 'SESSION_SOURCE_MISSING' ||
+    code === 'SESSION_IDENTITY_CONFLICT' ||
+    code === 'SESSION_IDENTITY_AMBIGUOUS' ||
+    code === 'SESSION_IDENTITY_MISSING'
   return {
     sessionId,
     code,

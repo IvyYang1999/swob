@@ -117,7 +117,7 @@ test('conflicts are analyzed automatically while mutation remains an explicit co
   await page.setViewportSize({ width: 480, height: 520 })
   const resume = content.getByRole('button', { name: '重新分析' })
   await expect(content.getByText('只读分析已暂停；Library 没有被修改。')).toBeVisible()
-  await expect(content.getByText('1 组会话身份冲突的只读核验已暂停')).toBeVisible()
+  await expect(content.getByText('1 组重复会话的只读比对已暂停')).toBeVisible()
   await expect(content.getByText(/当前复核已暂停/)).toBeVisible()
 
   await resume.scrollIntoViewIfNeeded()

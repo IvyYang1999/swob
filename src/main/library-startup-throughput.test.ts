@@ -156,8 +156,9 @@ describe('Library startup production throughput', () => {
     )
     expect(result.outcome.skipped[0]).toMatchObject({
       code: 'SESSION_IDENTITY_AMBIGUOUS',
-      recovery: { state: 'attention-required', attempt: 0 }
+      disposition: 'handled'
     })
+    expect(result.outcome.skipped[0]?.recovery).toBeUndefined()
     expect(fs.readdirSync(libraryRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))).toHaveLength(1)
   })

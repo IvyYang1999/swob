@@ -126,11 +126,11 @@ describe('incremental Library startup synchronization', () => {
         return session.sessionId === 'conflict'
           ? {
               total: 1,
-              completed: 0,
+              completed: 1,
               skipped: [{
                 sessionId: session.sessionId,
                 code: 'SESSION_IDENTITY_CONFLICT',
-                disposition: 'failed',
+                disposition: 'handled',
                 retryable: false
               }]
             }
@@ -408,6 +408,59 @@ describe('Library startup dirty-set checkpoint', () => {
     expect(Object.values(checkpoint.recovery).map((entry) => [entry.state, entry.attempt]).sort())
       .toEqual([['attention-required', 0], ['waiting-provider', 0]])
   })
+
+  it('terminally handles proven identity conflicts outside the background recovery queue', () => {
+    const identity = summary('identity', '/fixture/identity.jsonl', '2026-08-02T09:00:00.000Z')
+    const plan = buildLibraryStartupPlan([identity], 1, null)
+    const workKey = describeLibraryStartupSession(identity, 1).key
+    const updated = updateLibraryStartupCheckpointAfterBatch(plan.checkpoint, [identity], {
+      total: 1,
+      completed: 1,
+      skipped: [{
+        sessionId: identity.sessionId,
+        workKey,
+        code: 'SESSION_IDENTITY_CONFLICT',
+        disposition: 'handled',
+        retryable: false
+      }]
+    }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
+
+    expect(updated.recovery).toEqual({})
+    expect(updated.completedKeys).toContain(workKey)
+    expect(buildLibraryStartupPlan([identity], 1, updated)).toMatchObject({
+      dirtyIndexes: [],
+      recoveryItems: []
+    })
+  })
+
+  it.each(['EAGAIN', 'EBUSY'])(
+    'retries transient filesystem code %s with bounded backoff before exhaustion',
+    (code) => {
+      const session = summary(code.toLowerCase(), `/fixture/${code.toLowerCase()}.jsonl`, '2026-08-02T09:00:00.000Z')
+      const workKey = describeLibraryStartupSession(session, 1).key
+      let checkpoint = buildLibraryStartupPlan([session], 1, null).checkpoint
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], {
+          total: 1,
+          completed: 0,
+          skipped: [{
+            sessionId: session.sessionId,
+            workKey,
+            code,
+            disposition: 'failed',
+            retryable: true
+          }]
+        }, {}, Date.parse(`2026-08-02T09:00:0${attempt}.000Z`)).checkpoint
+        expect(checkpoint.recovery[workKey].attempt).toBe(attempt)
+        expect(checkpoint.recovery[workKey].state).toBe(attempt < 5 ? 'retry-scheduled' : 'exhausted')
+      }
+      expect(summarizeLibraryStartupRecovery(checkpoint.recovery)).toMatchObject({
+        retryScheduled: 0,
+        exhausted: 1,
+        nextRetryAt: null
+      })
+    }
+  )
 
   it('attributes a failure to its exact logical work key when sessionIds collide', () => {
     const codex = summary('shared', '/fixture/codex/shared.jsonl', '2026-08-02T09:00:00.000Z')

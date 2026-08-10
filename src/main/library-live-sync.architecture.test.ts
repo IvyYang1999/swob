@@ -192,4 +192,14 @@ describe('live Library synchronization architecture', () => {
     expect(manager).toContain('completeCurrentProviderProjections(plan, sessions, sessionMeta)')
     expect(manager).toContain("code: 'PROVIDER_SESSION_ALREADY_ARCHIVED'")
   })
+
+  it('keeps identity conflicts out of retry and treats busy filesystem codes as transient', () => {
+    const classifier = manager.match(
+      /function classifyStartupSessionFailure[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(classifier).toContain("code === 'SESSION_IDENTITY_CONFLICT'")
+    expect(classifier).toContain("code === 'EAGAIN'")
+    expect(classifier).toContain("code === 'EBUSY'")
+    expect(classifier).toContain("disposition: handled ? 'handled' : 'failed'")
+  })
 })

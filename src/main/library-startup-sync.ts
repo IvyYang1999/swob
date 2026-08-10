@@ -316,7 +316,7 @@ function stableRecoveryDelayMs(key: string, attempt: number): number {
 function recoveryStateForCode(code: string): 'transient' | 'provider' | 'attention' {
   if (code === 'PROVIDER_SESSION_PENDING') return 'provider'
   if (code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED' ||
-    code === 'PROVIDER_SESSION_DEGRADED') return 'transient'
+    code === 'PROVIDER_SESSION_DEGRADED' || code === 'EAGAIN' || code === 'EBUSY') return 'transient'
   return 'attention'
 }
 
@@ -461,11 +461,13 @@ function failureReason(error: unknown): string {
 
 function failedStartupItem(sessionId: string, error: unknown): LibrarySyncOutcome['skipped'][number] {
   const code = failureReason(error)
+  const handled = code === 'SESSION_SOURCE_MISSING' || code === 'SESSION_IDENTITY_CONFLICT'
   return {
     sessionId,
     code,
-    disposition: 'failed',
-    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED'
+    disposition: handled ? 'handled' : 'failed',
+    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED' ||
+      code === 'EAGAIN' || code === 'EBUSY'
   }
 }
 
@@ -531,7 +533,6 @@ export async function syncLibraryStartupIncrementally(
       if (chunkFailures > 0) unexpectedFailure = true
     } catch (error) {
       if (mustAbortStartup(error)) throw error
-      unexpectedFailure = true
       if (options.syncBatch && batch.length > 1) {
         // A content-specific failure must not strand the rest of a bounded
         // batch. Retry one-by-one only on this exceptional path; successful
@@ -555,14 +556,20 @@ export async function syncLibraryStartupIncrementally(
         outcome.completed += chunk.completed
         outcome.skipped.push(...chunk.skipped)
         failed += chunkFailures
+        if (chunkFailures > 0) unexpectedFailure = true
       } else {
+        const skipped = batch.map((session) => failedStartupItem(session.sessionId, error))
+        const handled = skipped.filter((entry) => entry.disposition === 'handled').length
+        const chunkFailures = skipped.length - handled
         chunk = {
           total: batch.length,
-          completed: 0,
-          skipped: batch.map((session) => failedStartupItem(session.sessionId, error))
+          completed: handled,
+          skipped
         }
+        outcome.completed += handled
         outcome.skipped.push(...chunk.skipped)
-        failed += chunk.skipped.length
+        failed += chunkFailures
+        if (chunkFailures > 0) unexpectedFailure = true
         for (const skipped of chunk.skipped) failureBySessionId.set(skipped.sessionId, skipped.code)
       }
     }

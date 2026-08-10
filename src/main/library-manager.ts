@@ -5204,11 +5204,13 @@ function classifyStartupSessionFailure(sessionId: string, error: unknown): Libra
   const code = typeof typed?.code === 'string' && /^[A-Z0-9_:-]+$/.test(typed.code)
     ? typed.code
     : 'SESSION_SYNC_FAILED'
+  const handled = code === 'SESSION_SOURCE_MISSING' || code === 'SESSION_IDENTITY_CONFLICT'
   return {
     sessionId,
     code,
-    disposition: code === 'SESSION_SOURCE_MISSING' ? 'handled' : 'failed',
-    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED'
+    disposition: handled ? 'handled' : 'failed',
+    retryable: code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED' ||
+      code === 'EAGAIN' || code === 'EBUSY'
   }
 }
 

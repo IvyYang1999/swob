@@ -120,7 +120,7 @@ describe('live Library synchronization architecture', () => {
       /async function activateLibraryAt[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
     )
     expect(source).toMatch(
-      /initialization\.catch\(\(error\) => \{[\s\S]*?if \(runtimeShuttingDown \|\| libraryRuntimePaused\) return[\s\S]*?transitionLibraryHealth/
+      /initialization\.catch\(\(error\) => \{[\s\S]*?if \(runtimeShuttingDown \|\| libraryRuntimePaused\) return[\s\S]*?handleInitialLibraryGlobalFailure\(error\)/
     )
   })
 
@@ -210,12 +210,20 @@ describe('live Library synchronization architecture', () => {
 
   it('gates whole-transaction retries across startup, safety stops, and global backoff', () => {
     expect(source).toContain('return runLibraryStartupTransaction(')
-    expect(source).toContain("scheduleLibraryBacklogGlobalRecovery(\n        { kind: 'initial' }")
+    expect(source).toContain("return handleLibraryGlobalFailure(error, { kind: 'initial' }")
     expect(source).toContain("if (wakeDisposition === 'drop') return")
     expect(source).toContain("if (wakeDisposition === 'coalesce') return")
     expect(source).toContain('enterLibraryBacklogSafetyStop()')
     expect(source).toContain('handleInitialLibraryGlobalFailure(error)')
     expect(source).toContain('getLibraryHealthRevision()')
+    expect(source).toContain("checkpointCommitted\n          ? { kind: 'refresh' }")
+    expect(source).toMatch(
+      /async function activateLibraryAt[\s\S]*?librarySwitchFailure = error[\s\S]*?handleLibraryGlobalFailure\([\s\S]*?\{ kind: 'initial' \}/
+    )
+    expect(source).toContain("getLibraryHealth().state === 'writer-blocked' || libraryWriterRecoveryTimer !== null")
+    expect(source).toMatch(
+      /recovery\.finally\(\(\) => \{[\s\S]*?libraryBacklogRecoveryQueue\.takeNext\(\)[\s\S]*?runLibraryBacklogRecovery\(pendingMode\)/
+    )
   })
 
   it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {

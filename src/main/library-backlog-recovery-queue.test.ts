@@ -29,6 +29,7 @@ describe('LibraryBacklogRecoveryQueue', () => {
     expect(libraryBacklogWakeDisposition(7, 7, false)).toBe('drop')
     expect(libraryBacklogWakeDisposition(7, null, false, 7)).toBe('drop')
     expect(libraryBacklogWakeDisposition(7, 6, true)).toBe('coalesce')
+    expect(libraryBacklogWakeDisposition(7, null, false, null, true)).toBe('coalesce')
     expect(libraryBacklogWakeDisposition(7, null, false)).toBe('run')
   })
 

@@ -10,10 +10,11 @@ export function libraryBacklogWakeDisposition(
   runtimeEpoch: number,
   safetyStopEpoch: number | null,
   globalBackoffActive: boolean,
-  exhaustedEpoch: number | null = null
+  exhaustedEpoch: number | null = null,
+  writerRecoveryActive = false
 ): LibraryBacklogWakeDisposition {
   if (safetyStopEpoch === runtimeEpoch || exhaustedEpoch === runtimeEpoch) return 'drop'
-  return globalBackoffActive ? 'coalesce' : 'run'
+  return globalBackoffActive || writerRecoveryActive ? 'coalesce' : 'run'
 }
 
 export function libraryBacklogBatchFailurePolicy(error: unknown): LibraryBacklogBatchFailurePolicy {

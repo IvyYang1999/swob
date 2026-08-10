@@ -391,6 +391,7 @@ let libraryBacklogGlobalRecoveryAttempts = 0
 type LibraryGlobalRecoveryOperation =
   | { kind: 'initial' }
   | { kind: 'backlog'; mode: Exclude<LibraryBacklogRecoveryMode, 'initial'> }
+  | { kind: 'refresh' }
 let libraryBacklogGlobalRecoveryFault: {
   errorCode: string
   healthRevision: number
@@ -575,6 +576,11 @@ async function retryLibraryAfterWriterBlocked(manual: boolean): Promise<void> {
   libraryWriterRecoveryPromise = recovery
   void recovery.finally(() => {
     if (libraryWriterRecoveryPromise === recovery) libraryWriterRecoveryPromise = null
+    if (!runtimeShuttingDown && !libraryRuntimePaused &&
+      getLibraryHealth().state !== 'writer-blocked' && libraryBacklogRecoveryQueue.size > 0) {
+      const pendingMode = libraryBacklogRecoveryQueue.takeNext()
+      if (pendingMode) queueMicrotask(() => { void runLibraryBacklogRecovery(pendingMode) })
+    }
   }).catch(() => { /* the caller receives the original rejection */ })
   await libraryWriterRecoveryPromise
 }
@@ -2057,6 +2063,7 @@ function scheduleLibraryBacklogGlobalRecovery(
     if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogRecoveryStopped() ||
       epoch !== libraryRuntimeEpoch) return
     if (operation.kind === 'initial') void runInitialLibraryGlobalRecovery()
+    else if (operation.kind === 'refresh') void runLibraryBacklogRefreshRecovery()
     else void runLibraryBacklogRecovery(operation.mode)
   }, delay)
 }
@@ -2078,7 +2085,18 @@ function scheduleLibraryBacklogRecovery(summary: LibraryStartupRecoverySummary):
   libraryBacklogRecoveryTimer = setTimeout(runWhenInitializationSettles, delay)
 }
 
-function handleInitialLibraryGlobalFailure(error: unknown): void {
+function retireFailedLibraryWorker(attemptedWorker: LibraryWorkerClient | null): void {
+  if (!attemptedWorker) return
+  if (libraryWorker === attemptedWorker) libraryWorker = null
+  void attemptedWorker.retire().catch(() => undefined)
+}
+
+function handleLibraryGlobalFailure(
+  error: unknown,
+  operation: LibraryGlobalRecoveryOperation,
+  attemptedWorker: LibraryWorkerClient | null,
+  logScope: 'library-init' | 'library-recovery' | 'library-switch'
+): ReturnType<typeof libraryBacklogBatchFailurePolicy> {
   const cause = error instanceof LibraryStartupBatchTransportError ? error.cause : error
   const classification = classifyLibraryError(cause)
   const policy = libraryBacklogBatchFailurePolicy(cause)
@@ -2088,20 +2106,27 @@ function handleInitialLibraryGlobalFailure(error: unknown): void {
     classification.message,
     classification.writerReason
   )
-  if (error instanceof LibraryStartupBatchTransportError) {
-    const attemptedWorker = libraryWorker
-    libraryWorker = null
-    if (attemptedWorker) void attemptedWorker.retire().catch(() => undefined)
-    if (policy === 'global-retry') {
-      scheduleLibraryBacklogGlobalRecovery(
-        { kind: 'initial' },
-        { errorCode: classification.errorCode, healthRevision }
-      )
-    }
+  // Any error escaping the transaction boundary is global to that transaction,
+  // even when it arose after the checkpoint commit during scan/hydration.
+  // Retiring the worker prevents an invalid reply/exit from being reused.
+  if (error instanceof LibraryStartupBatchTransportError || policy === 'global-retry') {
+    retireFailedLibraryWorker(attemptedWorker)
+  }
+  if (policy === 'global-retry') {
+    scheduleLibraryBacklogGlobalRecovery(
+      operation,
+      { errorCode: classification.errorCode, healthRevision }
+    )
   }
   if (policy === 'safety-stop') enterLibraryBacklogSafetyStop()
   if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
-  console.error('[library-init] initialization failed:', classification.errorCode, classification.message)
+  console.error(`[${logScope}] global Library transaction delayed:`,
+    classification.errorCode, classification.message)
+  return policy
+}
+
+function handleInitialLibraryGlobalFailure(error: unknown): ReturnType<typeof libraryBacklogBatchFailurePolicy> {
+  return handleLibraryGlobalFailure(error, { kind: 'initial' }, libraryWorker, 'library-init')
 }
 
 async function runInitialLibraryGlobalRecovery(): Promise<void> {
@@ -2120,13 +2145,71 @@ async function runInitialLibraryGlobalRecovery(): Promise<void> {
   }
 }
 
+function restoreOwnedLibraryGlobalHealth(): void {
+  const recoveredFault = libraryBacklogGlobalRecoveryFault
+  clearLibraryBacklogGlobalRecoverySchedule()
+  const identityConflictCount = getLibrarySessionRegistryDiagnostics()
+    .filter((binding) => binding.state === 'conflict').length
+  const recoveredHealthState = libraryBacklogRecoveredHealthState(
+    getLibraryHealthRevision(),
+    recoveredFault?.healthRevision,
+    identityConflictCount
+  )
+  if (recoveredHealthState === 'identity-conflict') {
+    transitionLibraryHealth(
+      'identity-conflict',
+      'IDENTITY_CONFLICT',
+      `${identityConflictCount} logical session identities have multiple read-only packages`
+    )
+  } else if (recoveredHealthState === 'ready') {
+    transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library background recovery completed')
+  }
+}
+
+async function refreshLibraryAfterRecovery(): Promise<void> {
+  const tree = await requestLibraryScan(false)
+  await hydrateLibrarySessions(tree)
+}
+
+async function runLibraryBacklogRefreshRecovery(): Promise<void> {
+  if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogRecoveryStopped() ||
+    !libraryInitialized) return
+  if (libraryBacklogRecoveryPromise) return libraryBacklogRecoveryPromise
+  let recoveryBlocked = false
+  const work = (async (): Promise<void> => {
+    const attemptedWorker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+    try {
+      await refreshLibraryAfterRecovery()
+      restoreOwnedLibraryGlobalHealth()
+    } catch (error) {
+      if (runtimeShuttingDown || libraryRuntimePaused) return
+      recoveryBlocked = true
+      handleLibraryGlobalFailure(error, { kind: 'refresh' }, attemptedWorker, 'library-recovery')
+    }
+  })()
+  libraryBacklogRecoveryPromise = work
+  try {
+    await work
+  } finally {
+    if (libraryBacklogRecoveryPromise === work) libraryBacklogRecoveryPromise = null
+    if (!recoveryBlocked && libraryBacklogRecoveryQueue.size > 0 &&
+      !runtimeShuttingDown && !libraryRuntimePaused) {
+      const pendingMode = libraryBacklogRecoveryQueue.takeNext()
+      if (pendingMode) queueMicrotask(() => { void runLibraryBacklogRecovery(pendingMode) })
+    }
+    scheduleAutomaticDuplicateRecoveryAnalysis()
+  }
+}
+
 async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMode, 'initial'>): Promise<void> {
   if (runtimeShuttingDown) return
   const wakeDisposition = libraryBacklogWakeDisposition(
     libraryRuntimeEpoch,
     libraryBacklogSafetyStopEpoch,
     libraryBacklogGlobalRecoveryTimer !== null,
-    libraryBacklogGlobalRecoveryExhaustedEpoch
+    libraryBacklogGlobalRecoveryExhaustedEpoch,
+    getLibraryHealth().state === 'writer-blocked' || libraryWriterRecoveryTimer !== null ||
+      libraryWriterRecoveryPromise !== null
   )
   if (wakeDisposition === 'drop') return
   libraryBacklogRecoveryQueue.request(mode)
@@ -2136,71 +2219,38 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
   if (libraryRuntimePaused || !libraryInitialized || libraryInitializationPromise) return
   if (libraryBacklogRecoveryPromise) return libraryBacklogRecoveryPromise
   const epoch = libraryRuntimeEpoch
-  let transportFailure = false
+  let recoveryBlocked = false
   const work = (async () => {
     while (epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused &&
       !libraryBacklogSafetyStopped()) {
       const nextMode = libraryBacklogRecoveryQueue.takeNext()
       if (!nextMode) break
       let attemptedWorker: LibraryWorkerClient | null = null
+      let checkpointCommitted = false
       try {
         const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
         attemptedWorker = worker
         const oldConfig = loadConfig()
         const outcome = await syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta, nextMode)
-        const recoveredFault = libraryBacklogGlobalRecoveryFault
-        clearLibraryBacklogGlobalRecoverySchedule()
-        const identityConflictCount = getLibrarySessionRegistryDiagnostics()
-          .filter((binding) => binding.state === 'conflict').length
-        const recoveredHealthState = libraryBacklogRecoveredHealthState(
-          getLibraryHealthRevision(),
-          recoveredFault?.healthRevision,
-          identityConflictCount
-        )
-        if (recoveredHealthState === 'identity-conflict') {
-          transitionLibraryHealth(
-            'identity-conflict',
-            'IDENTITY_CONFLICT',
-            `${identityConflictCount} logical session identities have multiple read-only packages`
-          )
-        } else if (recoveredHealthState === 'ready') {
-          transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library background recovery completed')
-        }
+        checkpointCommitted = outcome.completed > 0
         if (outcome.completed > 0 && epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused) {
-          const tree = await requestLibraryScan(false)
-          if (adoptLibraryTree(tree, false)) await hydrateLibrarySessions(tree)
+          await refreshLibraryAfterRecovery()
         }
+        restoreOwnedLibraryGlobalHealth()
       } catch (error) {
         if (runtimeShuttingDown || libraryRuntimePaused || epoch !== libraryRuntimeEpoch) return
-        const batchFailureCause = error instanceof LibraryStartupBatchTransportError
-          ? error.cause
-          : error
-        const classification = classifyLibraryError(batchFailureCause)
-        const policy = libraryBacklogBatchFailurePolicy(batchFailureCause)
-        const healthRevision = transitionLibraryHealth(
-          classification.state,
-          classification.errorCode,
-          classification.message,
-          classification.writerReason
+        recoveryBlocked = true
+        const operation: LibraryGlobalRecoveryOperation = checkpointCommitted
+          ? { kind: 'refresh' }
+          : { kind: 'backlog', mode: nextMode }
+        const policy = handleLibraryGlobalFailure(
+          error,
+          operation,
+          attemptedWorker,
+          'library-recovery'
         )
-        if (error instanceof LibraryStartupBatchTransportError) {
-          transportFailure = true
-          if (attemptedWorker && libraryWorker === attemptedWorker) libraryWorker = null
-          if (attemptedWorker) void attemptedWorker.retire().catch(() => undefined)
-          if (policy === 'global-retry') {
-            scheduleLibraryBacklogGlobalRecovery(
-              { kind: 'backlog', mode: nextMode },
-              { errorCode: classification.errorCode, healthRevision }
-            )
-          }
-        }
-        if (policy === 'safety-stop') {
-          transportFailure = true
-          enterLibraryBacklogSafetyStop()
-        }
-        if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
-        console.error('[library-recovery] targeted backlog recovery delayed:', classification.errorCode)
-        if (transportFailure) break
+        if (policy === 'writer-recovery') libraryBacklogRecoveryQueue.request(nextMode)
+        break
       }
     }
   })()
@@ -2209,7 +2259,7 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
     await work
   } finally {
     if (libraryBacklogRecoveryPromise === work) libraryBacklogRecoveryPromise = null
-    if (!transportFailure && libraryBacklogRecoveryQueue.size > 0 &&
+    if (!recoveryBlocked && libraryBacklogRecoveryQueue.size > 0 &&
       epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused) {
       const pendingMode = libraryBacklogRecoveryQueue.takeNext()
       if (pendingMode) queueMicrotask(() => { void runLibraryBacklogRecovery(pendingMode) })
@@ -2442,6 +2492,10 @@ async function initLibraryFromSessions(
   try {
     await work
   } catch (error) {
+    // A failure after the first scan may occur after the optimistic assignment
+    // above. Never let the global retry mistake a partially hydrated runtime
+    // for a completed initialization.
+    libraryInitialized = false
     libraryStartupWriterProven = false
     libraryStartupChunkActive = false
     // A startup failure before the first durable boundary must not strand
@@ -4479,8 +4533,8 @@ async function activateLibraryAt(newPath: string): Promise<string> {
   libraryStartupWriterProven = false
   libraryStartupChunkActive = false
   resetLibraryWriterRecoveryState(false)
-  let retryWriterAfterSwitch = false
   let librarySwitchCommitted = false
+  let librarySwitchFailure: unknown = null
   try {
     await duplicateRecoveryAnalysisCancellation
     await libraryWriterRecoveryPromise?.catch(() => undefined)
@@ -4496,6 +4550,13 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     libraryWorker = null
     const previousLiveSessionSyncWorker = liveSessionSyncWorker
     liveSessionSyncWorker = null
+    // The old runtime is no longer serviceable once its workers start closing.
+    // Mark initialization incomplete before the first fallible teardown step so
+    // any root-switch failure has one deterministic recovery owner.
+    libraryInitialized = false
+    libraryInitializationPromise = null
+    latestLibraryTree = null
+    libraryHydrationGeneration++
     await Promise.all([
       previousWorker?.close(),
       previousLiveSessionSyncWorker?.close(),
@@ -4512,10 +4573,6 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     )
     resetLibraryHealth()
     recordLibraryDiagnostic('SYNC_START', 'Library synchronization started after root change')
-    latestLibraryTree = null
-    libraryInitialized = false
-    libraryInitializationPromise = null
-    libraryHydrationGeneration++
     startLibraryWatcher() // 跟随新库根重启目录监听
     const worker = libraryWorker = new LibraryWorkerClient()
     let tree: LibraryTree
@@ -4563,22 +4620,30 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     startupProjectionGate.reset(
       error instanceof Error ? error : new Error('Library root change failed')
     )
-    const classification = classifyLibraryError(error)
-    transitionLibraryHealth(
-      classification.state,
-      classification.errorCode,
-      classification.message,
-      classification.writerReason
-    )
-    if (classification.state === 'writer-blocked') {
-      enqueueExistingLibrarySessionsForCompensation(cachedSessions)
-      retryWriterAfterSwitch = true
-    }
+    libraryInitialized = false
+    librarySwitchFailure = error
     throw error
   } finally {
     libraryStartupWriterProven = false
     libraryStartupChunkActive = false
     libraryRuntimePaused = false
+    if (librarySwitchFailure) {
+      const policy = handleLibraryGlobalFailure(
+        librarySwitchFailure,
+        { kind: 'initial' },
+        libraryWorker,
+        'library-switch'
+      )
+      if (policy === 'writer-recovery') {
+        enqueueExistingLibrarySessionsForCompensation(cachedSessions)
+      }
+      if (policy !== 'safety-stop') {
+        try { startLibraryWatcher() } catch (watchError) {
+          console.error('[library-switch] watcher restart delayed:',
+            classifyLibraryError(watchError).errorCode)
+        }
+      }
+    }
     flushDeferredLibrarySynchronizations()
     // Root switching deliberately pauses live work. The completed full Library
     // synchronization is itself the durable boundary; only then release the
@@ -4591,7 +4656,6 @@ async function activateLibraryAt(newPath: string): Promise<string> {
       void runLibraryBacklogRecovery(pendingBacklogMode)
     }
     scheduleAutomaticDuplicateRecoveryAnalysis()
-    if (retryWriterAfterSwitch) scheduleLibraryWriterRecovery()
   }
 }
 

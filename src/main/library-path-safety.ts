@@ -181,10 +181,14 @@ export function readSafeLibraryFileSync(
   filePath: string,
   options: { maxBytes?: number; beforeOpen?: () => void } = {}
 ): Buffer | null {
-  const target = assertSafeLibraryFileTarget(libraryRoot, filePath)
+  const target = assertSafeLibraryWritePath(libraryRoot, filePath, { allowRoot: false })
+  assertSafeLibraryWritePath(libraryRoot, path.dirname(target))
   let expectedTarget: PathIdentity
   try {
     const stat = fs.lstatSync(target)
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new LibraryPathUnsafeError(target, 'read-target-not-regular-file')
+    }
     expectedTarget = {
       path: target,
       dev: stat.dev,

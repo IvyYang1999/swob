@@ -42,6 +42,19 @@ describe('Truth Kernel v1 contract', () => {
     })
   })
 
+  it('preserves an own __proto__ key parsed from future JSON payloads', () => {
+    const payload = JSON.parse('{"future":{"__proto__":{"preserved":true},"z":1}}') as {
+      future: Record<string, unknown>
+    }
+    const canonical = truthKernelCanonicalJson(payload)
+    const roundTripped = truthKernelRoundTrip(payload)
+
+    expect(canonical).toBe('{"future":{"__proto__":{"preserved":true},"z":1}}')
+    expect(Object.prototype.hasOwnProperty.call(roundTripped.future, '__proto__')).toBe(true)
+    expect(roundTripped).toEqual(payload)
+    expect(truthKernelCanonicalJson(roundTripped)).toBe(canonical)
+  })
+
   it('uses locale-independent key order and rejects values outside the frozen JSON domain', () => {
     expect(truthKernelCanonicalJson({ '\uE000': 2, '😀': 1 })).toBe('{"😀":1,"":2}')
     expect(() => truthKernelCanonicalJson({ invalid: Number.NaN })).toThrow('non-finite-number')

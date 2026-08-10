@@ -18,7 +18,10 @@ function canonicalize(value: unknown, ancestors: Set<object>): unknown {
     if (prototype !== Object.prototype && prototype !== null) {
       throw new TypeError('truth-kernel-canonical-json:non-plain-object')
     }
-    const result: Record<string, unknown> = {}
+    // A null prototype keeps every legal JSON key as data. In particular,
+    // assigning `__proto__` to a normal object would invoke its legacy setter
+    // and silently drop that own property from the canonical output.
+    const result = Object.create(null) as Record<string, unknown>
     // Default string comparison is a locale-independent UTF-16 code-unit order.
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
       result[key] = canonicalize((value as Record<string, unknown>)[key], ancestors)

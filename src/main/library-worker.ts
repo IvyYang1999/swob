@@ -247,7 +247,8 @@ export async function runLibraryWorkerRequest(
     throw new LibraryWriterBusyError(request.reason)
   }
   initLibrary(request.root, {
-    readOnly: request.type === 'scan',
+    readOnly: request.type === 'scan' ||
+      (request.type === 'session-sync' && request.maintainLibrary === false),
     ignoreDirs: request.type === 'scan' || request.type === 'sync' ? request.ignoreDirs : undefined
   })
   if (request.type === 'startup-plan' || request.type === 'startup-batch') {

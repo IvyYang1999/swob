@@ -74,16 +74,36 @@ describe('SessionSourceInventory', () => {
     ])
   })
 
-  it('removes a live continuation child after it is folded into its parent', () => {
+  it('folds an excluded live continuation into its raw parent without creating a top-level child', () => {
     const inventory = new SessionSourceInventory(isProvider)
-    const parent = session('parent', 'claude-code', '2026-08-10T09:00:00.000Z')
+    const parent = {
+      ...session('parent', 'claude-code', '2026-08-10T09:00:00.000Z'),
+      continuationSessionIds: ['continuation']
+    }
     const continuation = session('continuation', 'claude-code', '2026-08-10T10:00:00.000Z')
     inventory.replacePhysical([parent])
-    inventory.merge([continuation])
 
-    inventory.remove([continuation.id])
-    inventory.merge([{ ...parent, updatedAt: continuation.updatedAt }])
+    const update = inventory.applyLiveSummary(continuation)
 
+    expect(update).toMatchObject({ kind: 'continuation', summary: { id: 'parent' } })
     expect(inventory.snapshot().map((item) => item.id)).toEqual(['parent'])
+    expect(inventory.filtered(['claude-code'])).toEqual([])
+  })
+
+  it('does not fold a continuation identifier across different sources', () => {
+    const inventory = new SessionSourceInventory(isProvider)
+    inventory.replacePhysical([{
+      ...session('codex-parent', 'codex', '2026-08-10T09:00:00.000Z'),
+      continuationSessionIds: ['shared-child-id']
+    }])
+    const claudeChild = {
+      ...session('claude-child', 'claude-code', '2026-08-10T10:00:00.000Z'),
+      sessionId: 'shared-child-id'
+    }
+
+    const update = inventory.applyLiveSummary(claudeChild)
+
+    expect(update.kind).toBe('session')
+    expect(inventory.snapshot().map((item) => item.id)).toEqual(['claude-child', 'codex-parent'])
   })
 })

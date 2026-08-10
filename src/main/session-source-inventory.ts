@@ -2,6 +2,11 @@ import type { SessionSummary } from './types'
 
 type ProviderSessionPredicate = (session: SessionSummary) => boolean
 
+export type LiveSessionInventoryUpdate = {
+  kind: 'session' | 'continuation'
+  summary: SessionSummary
+}
+
 /**
  * Authoritative in-memory view of sessions discovered from source runtimes.
  *
@@ -33,6 +38,30 @@ export class SessionSourceInventory {
     if (ids.length === 0) return
     const removed = new Set(ids)
     this.sessions = this.sessions.filter((session) => !removed.has(session.id))
+  }
+
+  applyLiveSummary(summary: SessionSummary): LiveSessionInventoryUpdate {
+    const source = summary.source || 'claude-code'
+    const continuationParent = this.sessions.find((session) =>
+      (session.source || 'claude-code') === source &&
+      session.continuationSessionIds?.includes(summary.sessionId)
+    )
+    if (!continuationParent) {
+      this.merge([summary])
+      return { kind: 'session', summary }
+    }
+
+    const updatedParent: SessionSummary = {
+      ...continuationParent,
+      updatedAt: summary.updatedAt > continuationParent.updatedAt
+        ? summary.updatedAt
+        : continuationParent.updatedAt,
+      permissionMode: summary.permissionMode || continuationParent.permissionMode,
+      resumeCwd: summary.resumeCwd || continuationParent.resumeCwd
+    }
+    this.remove([summary.id])
+    this.merge([updatedParent])
+    return { kind: 'continuation', summary: updatedParent }
   }
 
   replacePhysical(snapshot: readonly SessionSummary[]): void {

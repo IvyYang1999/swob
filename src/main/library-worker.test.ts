@@ -692,6 +692,8 @@ describe('Library worker request', () => {
       maintainLibrary: false
     })
     if (parsed.kind !== 'session-sync') throw new Error('expected parsed session')
+    expect(parsed.value.dirPath).toBeUndefined()
+    expect(fs.readdirSync(root)).toEqual([])
     let latest = parsed.value.summary
     let livePending = false
     let liveDir = ''

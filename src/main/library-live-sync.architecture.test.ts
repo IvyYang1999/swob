@@ -69,7 +69,7 @@ describe('live Library synchronization architecture', () => {
     const synchronization = source.match(
       /async function performSessionSynchronization[\s\S]*?\n}\n\nfunction scheduleSessionSynchronization/
     )?.[0] || ''
-    const cacheCommit = synchronization.indexOf('cachedSessions[existingIndex] = summary')
+    const cacheCommit = synchronization.indexOf('cachedSessions[existingIndex] = projectedSummary')
     const recoveryWake = synchronization.lastIndexOf("runLibraryBacklogRecovery('automatic')")
     expect(cacheCommit).toBeGreaterThan(-1)
     expect(recoveryWake).toBeGreaterThan(cacheCommit)
@@ -78,6 +78,29 @@ describe('live Library synchronization architecture', () => {
     expect(sourceRecoveryPredicate).toContain('recovery.retryScheduled')
     expect(sourceRecoveryPredicate).toContain('recovery.attentionRequired')
     expect(sourceRecoveryPredicate).toContain('recovery.exhausted')
+  })
+
+  it('keeps excluded live sources in raw inventory without projecting them', () => {
+    const synchronization = source.match(
+      /async function performSessionSynchronization[\s\S]*?\n}\n\nfunction scheduleSessionSynchronization/
+    )?.[0] || ''
+    expect(synchronization).toContain('const sourceExcluded = sourceIsExcluded(')
+    expect(synchronization).toContain('const maintainLibrary = !sourceExcluded')
+    expect(synchronization).toContain('maintainLibrary\n    })')
+    expect(synchronization).toContain(
+      'mergeLiveSessionSummary(synchronizedSummary, sourceSessionInventory.snapshot())'
+    )
+    expect(synchronization).toContain('sourceSessionInventory.applyLiveSummary(summary)')
+    expect(synchronization).toContain('if (sourceIsExcluded(inventoryUpdate.summary.source)) return')
+    expect(synchronization.indexOf('if (maintainLibrary) {')).toBeLessThan(
+      synchronization.indexOf('scheduleLegacySource({')
+    )
+    expect(synchronization).not.toMatch(
+      /cachedSessions\.find\(\(session\) =>\s*session\.continuationSessionIds\?\.includes/
+    )
+    expect(source).toMatch(
+      /function scheduleSessionSynchronization[\s\S]*?if \(!sourceIsExcluded\(source \|\| undefined\)\) markSessionActive/
+    )
   })
 
   it('keeps search projection behind one non-blocking writer boundary', () => {

@@ -841,6 +841,10 @@ function markSessionActive(sessionId?: string): void {
   mainWindow?.webContents.send('sessions:activeChanged', previousActiveIds)
 }
 
+function sourceIsExcluded(source?: string): boolean {
+  return getExcludedSources().includes(source || 'claude-code')
+}
+
 async function processLibraryCompensationEntry(sessionId: string, dirPath: string): Promise<void> {
   // Canonical providers intentionally have no backup.jsonl. Their provider-host
   // projection is repaired by the full initialization retry, not this legacy
@@ -896,8 +900,8 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     deferLibrarySynchronization(request)
     return
   }
-  const maintainLibrary = libraryInitialized || libraryStartupWriterProven
-  if (!maintainLibrary || libraryStartupChunkActive) {
+  const libraryWriterReady = libraryInitialized || libraryStartupWriterProven
+  if (!libraryWriterReady || libraryStartupChunkActive) {
     // Never freeze a source event as parse-only merely because startup has not
     // finished. Startup proves and releases the writer first, and an active
     // startup chunk defers live work so the source is parsed only once after
@@ -909,6 +913,9 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
   const cached = cachedSummaryForSource(request.filePath, request.sessionId)
   const filePath = request.filePath || cached?.filePath
   if (!filePath) return
+  const detectedSource = request.source || cached?.source || detectSessionSourceFromPath(filePath)
+  const sourceExcluded = sourceIsExcluded(detectedSource || undefined)
+  const maintainLibrary = !sourceExcluded
   const worker = liveSessionSyncWorker || (liveSessionSyncWorker = new LibraryWorkerClient())
   let synchronized: Awaited<ReturnType<LibraryWorkerClient['syncSession']>>
   try {
@@ -926,13 +933,13 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     }
     const classification = classifyLibraryError(error)
     const typed = error as { name?: unknown; code?: unknown } | null
-    const libraryFailure = typed?.name === 'LibraryWriterBusyError' ||
+    const libraryFailure = maintainLibrary && (typed?.name === 'LibraryWriterBusyError' ||
       typed?.name === 'LibraryWriterIdentityUnavailableError' ||
       typed?.name === 'SessionIdentityConflictError' ||
       typed?.name === 'LibraryPathUnsafeError' ||
       ['LIBRARY_WRITER_BUSY', 'WRITER_IDENTITY_UNAVAILABLE', 'SESSION_IDENTITY_CONFLICT',
         'EACCES', 'EPERM', 'ENOSPC', 'EIO']
-        .includes(typeof typed?.code === 'string' ? typed.code : '')
+        .includes(typeof typed?.code === 'string' ? typed.code : ''))
     if (libraryFailure) {
       transitionLibraryHealth(
         classification.state,
@@ -960,14 +967,15 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     deferLibrarySynchronization(request)
     return
   }
-  liveLibraryCommitGeneration++
+  if (maintainLibrary) liveLibraryCommitGeneration++
   const { summary: synchronizedSummary, dirPath } = synchronized
-  const summary = mergeLiveSessionSummary(synchronizedSummary, cachedSessions)
+  const summary = mergeLiveSessionSummary(synchronizedSummary, sourceSessionInventory.snapshot())
   let largeSource = false
   try { largeSource = fs.statSync(filePath).size >= LARGE_SEARCH_WORKER_RECYCLE_BYTES } catch { /* source may vanish */ }
   if (largeSource && liveSessionSyncWorker === worker) {
-    // The Library commit is durable. Terminate its parse isolate before the
-    // search worker rereads the source; allocator RSS may remain at high-water.
+    // The parse is complete (and the Library commit, when requested, is
+    // durable). Terminate its isolate before another projection rereads the
+    // source; allocator RSS may remain at high-water.
     // A sibling live request may already be queued on this same worker, so the
     // recycle path drains accepted work instead of cancelling it.
     await liveSessionSyncWorkerRecycleGate.begin(async () => {
@@ -977,8 +985,8 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
         if (liveSessionSyncWorker === worker) liveSessionSyncWorker = null
       }
     }).catch((error) => {
-      // Library is already durable. Worker teardown is lifecycle hygiene, not
-      // part of the commit, so it cannot reverse success or suppress search.
+      // Worker teardown is lifecycle hygiene, not part of either the parse or
+      // the optional Library commit, so it cannot reverse success.
       recordLibraryDiagnostic('LIVE_WORKER_RECYCLE_FAILED', 'Live worker recycle failed after a durable commit')
       console.error('[session-sync] post-commit worker recycle failed:', error)
     })
@@ -987,24 +995,18 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
       return
     }
   }
-  // Library/transcript/backup are already committed. Search is a rebuildable
-  // projection with its own single writer and must never turn that success
-  // into a failed session synchronization.
-  void getSearchIndexWriteCoordinator().scheduleLegacySource({
-    filePath,
-    sessionId: summary.sessionId,
-    source: summary.source || request.source
-  }).then(notifySearchIndexUpdated).catch((error) => {
-    if (!runtimeShuttingDown) console.error('[search-index] live projection delayed:', error)
-  })
-  if (!maintainLibrary && getLibraryHealth().state === 'writer-blocked') {
-    // A parse-only worker result proves nothing about Library writability. Retry
-    // the full initialization; only that writer-backed path may clear the block.
-    void retryLibraryAfterWriterBlocked(false).catch((error) => {
-      const classification = classifyLibraryError(error)
-      console.error('[library-init] writer recovery retry failed:', classification.errorCode)
+  // Search is a rebuildable projection with its own single writer and must
+  // never turn a successful Library commit into a failed synchronization.
+  if (maintainLibrary) {
+    void getSearchIndexWriteCoordinator().scheduleLegacySource({
+      filePath,
+      sessionId: summary.sessionId,
+      source: summary.source || request.source
+    }).then(notifySearchIndexUpdated).catch((error) => {
+      if (!runtimeShuttingDown) console.error('[search-index] live projection delayed:', error)
     })
-  } else if (maintainLibrary && dirPath && getLibraryHealth().state === 'writer-blocked') {
+  }
+  if (maintainLibrary && dirPath && getLibraryHealth().state === 'writer-blocked') {
     const conflictCount = getLibrarySessionRegistryDiagnostics()
       .filter((binding) => binding.state === 'conflict').length
     const recoveredState = healthAfterSuccessfulLibraryWrite('writer-blocked', true, conflictCount)
@@ -1030,29 +1032,33 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     resetLibraryWriterRecoveryState()
     void runPendingLibraryCompensation()
   }
-  markSessionActive(summary.sessionId)
   annotateSessionForFrontend(summary, dirPath)
   if (dirPath) {
     summary.libraryDirPath = dirPath
     summary.libraryMdPath = path.join(dirPath, 'transcript.md')
   }
-  const continuationParent = cachedSessions.find((session) =>
-    session.continuationSessionIds?.includes(summary!.sessionId)
-  )
-  if (continuationParent) {
-    const updatedParent: SessionSummary = {
-      ...continuationParent,
-      updatedAt: summary.updatedAt > continuationParent.updatedAt
-        ? summary.updatedAt
-        : continuationParent.updatedAt,
-      permissionMode: summary.permissionMode || continuationParent.permissionMode,
-      resumeCwd: summary.resumeCwd || continuationParent.resumeCwd
+  const inventoryUpdate = sourceSessionInventory.applyLiveSummary(summary)
+  if (sourceIsExcluded(inventoryUpdate.summary.source)) return
+
+  markSessionActive(summary.sessionId)
+  if (inventoryUpdate.kind === 'continuation') {
+    knownSessionIds.add(inventoryUpdate.summary.id)
+    knownSessionIds.add(inventoryUpdate.summary.sessionId)
+    for (const continuationId of inventoryUpdate.summary.continuationSessionIds || []) {
+      knownSessionIds.add(continuationId)
     }
-    const parentIndex = cachedSessions.findIndex((session) => session.id === continuationParent.id)
-    if (parentIndex >= 0) cachedSessions[parentIndex] = updatedParent
-    sourceSessionInventory.remove([summary.id])
-    sourceSessionInventory.merge([updatedParent])
-    mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(updatedParent))
+    const parentIndex = cachedSessions.findIndex((session) => session.id === inventoryUpdate.summary.id)
+    if (parentIndex >= 0) {
+      cachedSessions[parentIndex] = inventoryUpdate.summary
+      mainWindow?.webContents.send(
+        'session:summaryUpdated',
+        sessionSummaryForRenderer(inventoryUpdate.summary)
+      )
+    } else {
+      cachedSessions = [inventoryUpdate.summary, ...cachedSessions]
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      mainWindow?.webContents.send('session:added', sessionSummaryForRenderer(inventoryUpdate.summary))
+    }
     const backlogRecovery = getLibraryHealth().dimensions.backgroundBacklog.recovery
     if (hasSourceRecoveryWork(backlogRecovery)) {
       void runLibraryBacklogRecovery('automatic')
@@ -1061,18 +1067,19 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
     return
   }
 
-  sourceSessionInventory.merge([summary])
-  const existingIndex = cachedSessions.findIndex((session) => session.id === summary!.id)
+  const projectedSummary = inventoryUpdate.summary
+  const existingIndex = cachedSessions.findIndex((session) => session.id === projectedSummary.id)
   if (existingIndex >= 0) {
-    cachedSessions[existingIndex] = summary
-    knownSessionIds.add(summary.id)
-    knownSessionIds.add(summary.sessionId)
-    mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(summary))
+    cachedSessions[existingIndex] = projectedSummary
+    knownSessionIds.add(projectedSummary.id)
+    knownSessionIds.add(projectedSummary.sessionId)
+    mainWindow?.webContents.send('session:summaryUpdated', sessionSummaryForRenderer(projectedSummary))
   } else {
-    cachedSessions = [summary, ...cachedSessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    knownSessionIds.add(summary.id)
-    knownSessionIds.add(summary.sessionId)
-    mainWindow?.webContents.send('session:added', sessionSummaryForRenderer(summary))
+    cachedSessions = [projectedSummary, ...cachedSessions]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    knownSessionIds.add(projectedSummary.id)
+    knownSessionIds.add(projectedSummary.sessionId)
+    mainWindow?.webContents.send('session:added', sessionSummaryForRenderer(projectedSummary))
   }
   // Recovery fingerprints are derived from the loader summary. Publish the
   // new summary first so a source-evidence wake cannot re-plan stale facts and
@@ -1086,7 +1093,9 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
 
 function scheduleSessionSynchronization(request: SessionSyncRequest): void {
   const cached = cachedSummaryForSource(request.filePath, request.sessionId)
-  markSessionActive(request.sessionId || cached?.sessionId)
+  const source = request.source || cached?.source ||
+    (request.filePath ? detectSessionSourceFromPath(request.filePath) : undefined)
+  if (!sourceIsExcluded(source || undefined)) markSessionActive(request.sessionId || cached?.sessionId)
   sessionSyncCoordinator?.schedule({
     ...request,
     sessionId: request.sessionId || cached?.sessionId

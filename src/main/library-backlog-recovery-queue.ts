@@ -1,4 +1,19 @@
 export type LibraryBacklogRecoveryRequestMode = 'automatic' | 'provider'
+export type LibraryBacklogRecoverySelectionMode = 'initial' | LibraryBacklogRecoveryRequestMode
+
+export function shouldSelectLibraryBacklogItem(
+  mode: LibraryBacklogRecoverySelectionMode,
+  recovery: { state: string; nextAttemptAt: string | null } | undefined,
+  nowMs: number,
+  providerSession = false
+): boolean {
+  if (mode === 'initial') return !recovery
+  if (mode === 'provider') {
+    return providerSession && (!recovery || recovery.state === 'waiting-provider')
+  }
+  return !recovery || (recovery.state === 'retry-scheduled' && recovery.nextAttemptAt !== null &&
+    Date.parse(recovery.nextAttemptAt) <= nowMs)
+}
 
 /**
  * Lossless coalescing gate for targeted recovery wakes. Provider availability

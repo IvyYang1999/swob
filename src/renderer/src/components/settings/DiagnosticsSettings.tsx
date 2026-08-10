@@ -29,6 +29,7 @@ export function DiagnosticsSettings() {
   const [applying, setApplying] = useState(false)
   const applyingRef = useRef(false)
   const [analysisFailed, setAnalysisFailed] = useState(false)
+  const [analysisCancelled, setAnalysisCancelled] = useState(false)
   const [progress, setProgress] = useState<DuplicateRecoveryProgress | null>(null)
   const [report, setReport] = useState<DuplicateRecoverySummary | null>(null)
   const cancelRequested = useRef(false)
@@ -67,6 +68,7 @@ export function DiagnosticsSettings() {
     cancelRequested.current = false
     setAnalyzing(true)
     setAnalysisFailed(false)
+    setAnalysisCancelled(false)
     setReport(null)
     setProgress({ phase: 'discovering', discoveredPackages: 0, conflictPackages: 0, analyzedConflictPackages: 0 })
     const unsubscribe = window.api.onDuplicateRecoveryProgress?.((next) => {
@@ -105,6 +107,12 @@ export function DiagnosticsSettings() {
 
   const cancelAnalysis = async () => {
     cancelRequested.current = true
+    analysisRequestId.current++
+    progressUnsubscribe.current?.()
+    progressUnsubscribe.current = null
+    setAnalyzing(false)
+    setProgress(null)
+    setAnalysisCancelled(true)
     await window.api.libraryCancelDuplicateRecoveryAnalysis()
   }
 
@@ -188,7 +196,7 @@ export function DiagnosticsSettings() {
           icon={<ShieldCheck size={12} />}
         >
           <div className="rounded-lg border border-edge bg-base px-3.5 py-3 space-y-3">
-            {!report && !analysisFailed && (
+            {!report && !analysisFailed && !analysisCancelled && (
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="min-w-48 flex-1 text-[11px] leading-relaxed text-muted">
                   {analyzing ? t('diagnostics.analysis_automatic') : t('diagnostics.analysis_privacy')}
@@ -216,6 +224,20 @@ export function DiagnosticsSettings() {
                   className="rounded-md px-3 py-1.5 text-xs text-accent hover:bg-accent/10"
                 >
                   {t('diagnostics.analysis_retry')}
+                </button>
+              </div>
+            )}
+            {analysisCancelled && (
+              <div role="status" className="flex flex-wrap items-center justify-between gap-3">
+                <p className="min-w-48 flex-1 text-[11px] leading-relaxed text-muted">
+                  {t('diagnostics.analysis_cancelled')}
+                </p>
+                <button
+                  type="button"
+                  onClick={analyze}
+                  className="rounded-md px-3 py-1.5 text-xs text-accent hover:bg-accent/10"
+                >
+                  {t('diagnostics.analyze_again')}
                 </button>
               </div>
             )}

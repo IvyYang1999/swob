@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { LibraryBacklogRecoveryQueue } from './library-backlog-recovery-queue'
+import {
+  LibraryBacklogRecoveryQueue,
+  shouldSelectLibraryBacklogItem
+} from './library-backlog-recovery-queue'
 
 describe('LibraryBacklogRecoveryQueue', () => {
   it('retains a Provider wake that arrives while automatic recovery is active', () => {
@@ -31,5 +34,19 @@ describe('LibraryBacklogRecoveryQueue', () => {
     queue.clear()
     expect(queue.size).toBe(0)
     expect(queue.takeNext()).toBeNull()
+  })
+
+  it('gives every new Provider key one checkpoint owner without bypassing retry backoff', () => {
+    const now = Date.parse('2026-08-10T00:00:00.000Z')
+    expect(shouldSelectLibraryBacklogItem('provider', undefined, now, true)).toBe(true)
+    expect(shouldSelectLibraryBacklogItem('provider', undefined, now, false)).toBe(false)
+    expect(shouldSelectLibraryBacklogItem('provider', {
+      state: 'waiting-provider',
+      nextAttemptAt: null
+    }, now, true)).toBe(true)
+    expect(shouldSelectLibraryBacklogItem('provider', {
+      state: 'retry-scheduled',
+      nextAttemptAt: new Date(now - 1).toISOString()
+    }, now, true)).toBe(false)
   })
 })

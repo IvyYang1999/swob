@@ -85,6 +85,7 @@ import {
   completeLibraryStartupCheckpoint,
   describeLibraryStartupSession,
   parseLibraryStartupCheckpoint,
+  selectCurrentProjectionReconciliationIndexes,
   summarizeLibraryStartupRecovery,
   updateLibraryStartupCheckpointAfterBatch,
   type LibraryStartupCheckpoint,
@@ -5245,7 +5246,8 @@ function currentLibraryStartupCounters(): LibraryStartupSyncCounters {
 
 function libraryStartupProjectionIsCurrent(
   session: SessionSummary,
-  customTitle?: string
+  customTitle?: string,
+  verifySourceFreshness = false
 ): boolean {
   const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
   const storedCanonical = canonicalDefinition?.ingestion === 'provider-host'
@@ -5287,8 +5289,10 @@ function libraryStartupProjectionIsCurrent(
   const expectedSourcePaths = sourceFilePathsForMeta(session)
   if (expectedSourcePaths.length > 0 &&
     JSON.stringify(meta.sourceFilePaths) !== JSON.stringify(expectedSourcePaths)) return false
-  const refresh = projectionNeedsRefresh(session, binding.candidate.dirPath)
-  if (refresh.transcript || refresh.backup) return false
+  if (verifySourceFreshness) {
+    const refresh = projectionNeedsRefresh(session, binding.candidate.dirPath)
+    if (refresh.transcript || refresh.backup) return false
+  }
   if (session.messageCount > 0 && !fs.existsSync(path.join(binding.candidate.dirPath, TRANSCRIPT_FILE))) return false
   if (sessionBackupSourcePaths(session).length > 0 &&
     !fs.existsSync(path.join(binding.candidate.dirPath, BACKUP_FILE))) return false
@@ -5335,9 +5339,17 @@ function completeCurrentLibraryProjections(
   sessions: readonly SessionSummary[],
   sessionMeta: Record<string, { customTitle?: string }>
 ): void {
-  const completedIndexes = plan.dirtyIndexes
+  const reconciliationIndexes = new Set(selectCurrentProjectionReconciliationIndexes(plan))
+  for (const index of plan.dirtyIndexes) {
+    if (providerUsesCanonicalRuntime(sessions[index].source || '')) reconciliationIndexes.add(index)
+  }
+  const completedIndexes = [...reconciliationIndexes]
     .filter((index) =>
-      libraryStartupProjectionIsCurrent(sessions[index], sessionMeta[sessions[index].sessionId]?.customTitle))
+      libraryStartupProjectionIsCurrent(
+        sessions[index],
+        sessionMeta[sessions[index].sessionId]?.customTitle,
+        true
+      ))
   if (completedIndexes.length === 0) return
   const completedKeys = new Set(completedIndexes.map((index) => plan.descriptors[index].key))
   plan.checkpoint = completeLibraryStartupCheckpoint(

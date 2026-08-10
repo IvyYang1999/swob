@@ -9,6 +9,7 @@ import {
   describeLibraryStartupSession,
   parseLibraryStartupCheckpoint,
   summarizeLibraryStartupRecovery,
+  selectCurrentProjectionReconciliationIndexes,
   syncLibraryStartupIncrementally,
   updateLibraryStartupCheckpointAfterBatch,
   type LibraryStartupCheckpoint,
@@ -283,6 +284,27 @@ describe('incremental Library startup synchronization', () => {
     expect(progress).not.toHaveBeenCalled()
   })
 
+  it('propagates a production batch transport failure without fabricating unpersisted skips', async () => {
+    const error = new Error('library-worker-invalid-reply')
+    const syncBatch = vi.fn(async () => { throw error })
+    const progress = vi.fn()
+    await expect(syncLibraryStartupIncrementally({
+      sessions: [
+        summary('first', '/fixture/first.jsonl', '2026-08-02T09:00:00.000Z'),
+        summary('second', '/fixture/second.jsonl', '2026-08-02T09:00:01.000Z')
+      ],
+      batchSize: 2,
+      probeWriter: async () => {},
+      onWriterProven: () => {},
+      drainLive: async () => false,
+      resolveLatest: (session) => session,
+      syncBatch,
+      onProgress: progress
+    })).rejects.toBe(error)
+    expect(syncBatch).toHaveBeenCalledTimes(1)
+    expect(progress).not.toHaveBeenCalled()
+  })
+
   it('publishes a follow-up source write before startup finishes and never replays the old summary', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-live-'))
     roots.push(root)
@@ -461,6 +483,29 @@ describe('Library startup dirty-set checkpoint', () => {
       })
     }
   )
+
+  it('admits no cold local projection probes and only the exact recovery key after failure', () => {
+    const cold = {
+      dirtyIndexes: Array.from({ length: 440 }, (_, index) => index),
+      recoveryItems: []
+    }
+    expect(selectCurrentProjectionReconciliationIndexes(cold)).toEqual([])
+    expect(selectCurrentProjectionReconciliationIndexes({
+      ...cold,
+      recoveryItems: [{
+        index: 217,
+        entry: {
+          fingerprint: 'retry-fingerprint',
+          state: 'retry-scheduled',
+          reasonCode: 'EAGAIN',
+          attempt: 1,
+          firstFailedAt: '2026-08-10T00:00:00.000Z',
+          lastAttemptAt: '2026-08-10T00:00:00.000Z',
+          nextAttemptAt: '2026-08-10T00:00:01.000Z'
+        }
+      }]
+    })).toEqual([217])
+  })
 
   it('attributes a failure to its exact logical work key when sessionIds collide', () => {
     const codex = summary('shared', '/fixture/codex/shared.jsonl', '2026-08-02T09:00:00.000Z')

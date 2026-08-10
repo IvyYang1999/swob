@@ -449,6 +449,13 @@ export function summarizeLibraryStartupRecovery(
   return summary
 }
 
+export function selectCurrentProjectionReconciliationIndexes(
+  plan: Pick<LibraryStartupPlan, 'dirtyIndexes' | 'recoveryItems'>
+): number[] {
+  const recoveryIndexes = new Set(plan.recoveryItems.map((item) => item.index))
+  return plan.dirtyIndexes.filter((index) => recoveryIndexes.has(index))
+}
+
 function failureReason(error: unknown): string {
   if (!error || typeof error !== 'object') return 'SESSION_SYNC_FAILED'
   const typed = error as { code?: unknown; name?: unknown }
@@ -532,32 +539,12 @@ export async function syncLibraryStartupIncrementally(
       failed += chunkFailures
       if (chunkFailures > 0) unexpectedFailure = true
     } catch (error) {
-      if (mustAbortStartup(error)) throw error
-      if (options.syncBatch && batch.length > 1) {
-        // A content-specific failure must not strand the rest of a bounded
-        // batch. Retry one-by-one only on this exceptional path; successful
-        // items advance their own checkpoint while the bad key remains dirty.
-        chunk = { total: batch.length, completed: 0, skipped: [] }
-        for (const session of batch) {
-          try {
-            const retried = await options.syncBatch([session])
-            chunk.completed += retried.completed
-            chunk.skipped.push(...retried.skipped)
-          } catch (retryError) {
-            if (mustAbortStartup(retryError)) throw retryError
-            const skipped = failedStartupItem(session.sessionId, retryError)
-            chunk.skipped.push(skipped)
-            failureBySessionId.set(session.sessionId, skipped.code)
-          }
-        }
-        const handled = chunk.skipped.filter((entry) => entry.disposition === 'handled').length
-        const chunkFailures = chunk.skipped.filter((entry) => entry.disposition === 'failed').length
-        if (chunk.completed > handled) reportBoundary('durable')
-        outcome.completed += chunk.completed
-        outcome.skipped.push(...chunk.skipped)
-        failed += chunkFailures
-        if (chunkFailures > 0) unexpectedFailure = true
-      } else {
+      // Production syncBatch already classifies every item and commits its
+      // exact checkpoint outcome in the Library worker transaction. A reject
+      // here is therefore a worker/transport/global failure; fabricating local
+      // skipped items would lose durable recovery ownership.
+      if (mustAbortStartup(error) || options.syncBatch) throw error
+      {
         const skipped = batch.map((session) => failedStartupItem(session.sessionId, error))
         const handled = skipped.filter((entry) => entry.disposition === 'handled').length
         const chunkFailures = skipped.length - handled

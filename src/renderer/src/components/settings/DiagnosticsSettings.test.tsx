@@ -136,6 +136,41 @@ describe('DiagnosticsSettings', () => {
     expect(screen.getByText(/有独有内容的包绝不会自动移动/)).not.toBeNull()
   })
 
+  it('用户暂停只读分析后给出明确恢复入口，不会停在无按钮状态', async () => {
+    let finishAnalysis!: (value: any) => void
+    const pendingAnalysis = new Promise((resolve) => { finishAnalysis = resolve })
+    const analyze = (window as any).api.libraryAnalyzeDuplicateRecovery
+    analyze.mockReset().mockReturnValueOnce(pendingAnalysis).mockResolvedValueOnce({
+      schemaVersion: 1,
+      planId: 'plan:0123456789abcdef01234567',
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 0,
+      autoRepairablePackageCount: 0,
+      manualMergeGroupCount: 1,
+      preservedGroupCount: 0
+    })
+
+    render(<DiagnosticsSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: '取消分析' }))
+
+    await waitFor(() => expect((window as any).api.libraryCancelDuplicateRecoveryAnalysis).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('只读分析已暂停；Library 没有被修改。')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '重新分析' }))
+    await waitFor(() => expect(analyze).toHaveBeenCalledTimes(2))
+
+    finishAnalysis({
+      schemaVersion: 1,
+      planId: 'plan:fedcba9876543210fedcba98',
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 9,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    })
+  })
+
   it('Library inventory generation 改变时清掉旧结论并重新读取主进程分析', async () => {
     const previousGeneration = health.dimensions.identityExceptions.analysisGeneration
     const view = render(<DiagnosticsSettings />)

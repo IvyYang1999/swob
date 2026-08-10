@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const source = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8')
 const manager = fs.readFileSync(path.join(__dirname, 'library-manager.ts'), 'utf8')
+const backlogQueue = fs.readFileSync(path.join(__dirname, 'library-backlog-recovery-queue.ts'), 'utf8')
 
 describe('live Library synchronization architecture', () => {
   it('keeps the normal batch lease intact and exposes a separately bounded startup chunk', () => {
@@ -53,9 +54,12 @@ describe('live Library synchronization architecture', () => {
     expect(source).toMatch(
       /async function runLibraryBacklogRecovery[\s\S]*?libraryBacklogRecoveryQueue\.request\(mode\)[\s\S]*?while \([\s\S]*?libraryBacklogRecoveryQueue\.takeNext\(\)[\s\S]*?syncStartupSessions\(worker, cachedSessions, oldConfig\.sessionMeta, nextMode\)/
     )
+    const recoveryRunner = source.match(/async function runLibraryBacklogRecovery[\s\S]*?\n}\n/)?.[0] || ''
+    expect(recoveryRunner).toContain('libraryRuntimePaused || !libraryInitialized || libraryInitializationPromise')
     expect(source).toMatch(
-      /mode === 'provider'[\s\S]*?waiting-provider[\s\S]*?retry-scheduled[\s\S]*?nextAttemptAt/
+      /shouldSelectLibraryBacklogItem\([\s\S]*?mode,[\s\S]*?recoveryByIndex\.get\(index\),[\s\S]*?now,[\s\S]*?isProviderSession\(sessions\[index\]\)[\s\S]*?\)/
     )
+    expect(backlogQueue).toContain("providerSession && (!recovery || recovery.state === 'waiting-provider')")
   })
 
   it('publishes new loader facts before waking every source-backed recovery state', () => {
@@ -157,7 +161,7 @@ describe('live Library synchronization architecture', () => {
     expect(analysisGate).toContain('libraryHydrationActive > 0')
     expect(analysisGate).toContain('Boolean(libraryInitializationPromise)')
     expect(analysisGate).toContain('Boolean(libraryBacklogRecoveryPromise)')
-    expect(analysisGate).toContain('Boolean(providerLibrarySyncPromise)')
+    expect(analysisGate).not.toContain('providerLibrarySyncPromise')
     expect(analysisGate).toContain('libraryStartupChunkActive')
     const scheduledDrain = source.match(
       /function scheduleAutomaticDuplicateRecoveryAnalysis[\s\S]*?\n}\n\nasync function drainAutomaticDuplicateRecoveryAnalysis[\s\S]*?\n}\n/
@@ -190,13 +194,10 @@ describe('live Library synchronization architecture', () => {
     expect(applyHandler).toContain('return duplicateRecoveryApplyInFlight.promise')
   })
 
-  it('gives checkpoint recovery ownership before direct Provider archive', () => {
-    const queue = source.match(
-      /function queueProviderLibrarySnapshot[\s\S]*?\n}\n/
-    )?.[0] || ''
-    expect(queue).not.toContain('scheduleProviderLibrarySynchronization()')
-    expect(source).toContain("runLibraryBacklogRecovery('provider').finally(scheduleProviderLibrarySynchronization)")
-    expect(source).toContain('pendingProviderLibrarySessions.delete(session.id)')
+  it('gives every Provider package exactly one durable checkpoint owner', () => {
+    expect(source).not.toContain('scheduleProviderLibrarySynchronization')
+    expect(source).not.toContain('pendingProviderLibrarySessions')
+    expect(source).toContain("void runLibraryBacklogRecovery('provider')")
     expect(manager).toContain('completeCurrentLibraryProjections(plan, sessions, sessionMeta)')
     expect(manager).toContain("code: 'PROVIDER_SESSION_ALREADY_ARCHIVED'")
   })

@@ -161,13 +161,15 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
           tombstone.reason
         )
         await getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(tombstone.sessionRecordId)
-        const { markCanonicalPackageTombstone } = await import('./library-manager')
-        await markCanonicalPackageTombstone(
-          report.providerId,
-          tombstone.sourceRefId,
-          tombstone.sessionRecordId,
-          tombstone
-        ).catch(() => null)
+        if (shouldProject) {
+          const { markCanonicalPackageTombstone } = await import('./library-manager')
+          await markCanonicalPackageTombstone(
+            report.providerId,
+            tombstone.sourceRefId,
+            tombstone.sessionRecordId,
+            tombstone
+          ).catch(() => null)
+        }
       }
     }
     for (const chunk of report.v2Chunks) store.applyParseChunkV2(chunk)
@@ -184,13 +186,15 @@ async function runRefresh(options: CanonicalProviderRefreshOptions): Promise<Can
         store.applyTombstone(tombstone)
         tombstonedSessionRecordIds.push(sessionRecordId)
         await getSearchIndexWriteCoordinator().scheduleCanonicalTombstone(sessionRecordId)
-        const { markCanonicalPackageTombstone } = await import('./library-manager')
-        await markCanonicalPackageTombstone(
-          report.providerId,
-          removal.sourceRefId,
-          sessionRecordId,
-          tombstone
-        ).catch(() => null)
+        if (shouldProject) {
+          const { markCanonicalPackageTombstone } = await import('./library-manager')
+          await markCanonicalPackageTombstone(
+            report.providerId,
+            removal.sourceRefId,
+            sessionRecordId,
+            tombstone
+          ).catch(() => null)
+        }
       }
     }
   }

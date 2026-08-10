@@ -732,6 +732,28 @@ describe('canonical provider runtime full chain', () => {
     expect(searchFTS('synthetic-search-needle')).toHaveLength(0)
     expect(store.listSessions('swob/pi')).toHaveLength(1)
     expect(packageDirs()).toHaveLength(1)
+
+    const packageDir = packageDirs()[0]
+    const metaPath = path.join(packageDir, '.swob-session.json')
+    const provenancePath = path.join(packageDir, CANONICAL_PROVENANCE_FILE)
+    const packageBeforeRemoval = {
+      meta: fs.readFileSync(metaPath, 'utf8'),
+      provenance: fs.readFileSync(provenancePath, 'utf8')
+    }
+    fs.rmSync(sourcePath)
+    const removedWhileExcluded = await refreshCanonicalProviders({
+      host,
+      store,
+      archive: true,
+      shouldProjectSource: (source) => source !== 'pi'
+    })
+
+    expect(removedWhileExcluded.tombstonedSessionRecordIds).toHaveLength(1)
+    expect(store.listSessions('swob/pi', { includeTombstoned: true })[0].tombstone)
+      .toMatchObject({ reason: 'source-missing' })
+    expect(searchFTS('synthetic-search-needle')).toHaveLength(0)
+    expect(fs.readFileSync(metaPath, 'utf8')).toBe(packageBeforeRemoval.meta)
+    expect(fs.readFileSync(provenancePath, 'utf8')).toBe(packageBeforeRemoval.provenance)
   })
 
   it('immediately reconciles existing canonical search when source projection changes', async () => {

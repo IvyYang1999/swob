@@ -216,6 +216,12 @@ import {
 import { summarizeLibraryIdentityHealth } from './library-session-registry'
 import { SessionSyncCoordinator, type SessionSyncRequest } from './session-sync-coordinator'
 import { LibraryRescanController } from './library-rescan-controller'
+import {
+  LibraryGlobalRecoveryCoordinator,
+  type LibraryGlobalRecoveryLease,
+  type LibraryGlobalRecoveryOperation
+} from './library-global-recovery-coordinator'
+import { KeyedSerialTaskQueue } from './keyed-serial-task-queue'
 import { scheduleEpochBoundTask } from './epoch-bound-task'
 import { WorkerRecycleGate } from './worker-recycle-gate'
 import { mergeLiveSessionSummary } from './live-session-summary'
@@ -388,15 +394,7 @@ let libraryStartupChunkActive = false
 let libraryBacklogRecoveryTimer: NodeJS.Timeout | null = null
 let libraryBacklogGlobalRecoveryTimer: NodeJS.Timeout | null = null
 let libraryBacklogGlobalRecoveryAttempts = 0
-type LibraryGlobalRecoveryOperation =
-  | { kind: 'initial' }
-  | { kind: 'backlog'; mode: Exclude<LibraryBacklogRecoveryMode, 'initial'> }
-  | { kind: 'refresh' }
-let libraryBacklogGlobalRecoveryFault: {
-  errorCode: string
-  healthRevision: number
-  operation: LibraryGlobalRecoveryOperation
-} | null = null
+const libraryGlobalRecoveryCoordinator = new LibraryGlobalRecoveryCoordinator()
 let libraryBacklogSafetyStopEpoch: number | null = null
 let libraryBacklogGlobalRecoveryExhaustedEpoch: number | null = null
 let libraryBacklogRecoveryPromise: Promise<void> | null = null
@@ -450,6 +448,7 @@ let duplicateRecoveryApplyInFlight: {
   planId: string
   promise: Promise<DuplicateRecoveryApplyResult>
 } | null = null
+const libraryRootSwitchQueue = new KeyedSerialTaskQueue<string, string>()
 
 function clearLibraryWriterRecoverySchedule(): void {
   if (libraryWriterRecoveryTimer) clearTimeout(libraryWriterRecoveryTimer)
@@ -478,6 +477,7 @@ function libraryWriterRecoveryDelay(attempt: number): number {
 }
 
 function scheduleLibraryWriterRecovery(): void {
+  if (getLibraryHealth().state === 'writer-blocked') libraryRescanController?.pause()
   if (
     runtimeShuttingDown ||
     libraryRuntimePaused ||
@@ -571,6 +571,7 @@ async function retryLibraryAfterWriterBlocked(manual: boolean): Promise<void> {
     }
     // Compensation has its own durable queue and diagnostics. It is not part
     // of initialization and must never relabel a ready Library as corrupt.
+    clearLibraryBacklogGlobalRecoverySchedule()
     resetLibraryWriterRecoveryState()
     if (manual) await retryCompensation(processLibraryCompensationEntry)
     else await runPendingLibraryCompensation()
@@ -578,6 +579,7 @@ async function retryLibraryAfterWriterBlocked(manual: boolean): Promise<void> {
   libraryWriterRecoveryPromise = recovery
   void recovery.finally(() => {
     if (libraryWriterRecoveryPromise === recovery) libraryWriterRecoveryPromise = null
+    resumeLibraryRescanIfSafe()
     if (!runtimeShuttingDown && !libraryRuntimePaused &&
       getLibraryHealth().state !== 'writer-blocked' && libraryBacklogRecoveryQueue.size > 0) {
       const pendingMode = libraryBacklogRecoveryQueue.takeNext()
@@ -1921,21 +1923,32 @@ function startLibraryWatcher(): void {
   if (!root || !fs.existsSync(root)) return
   const watcherEpoch = libraryRuntimeEpoch
   const controller = new LibraryRescanController(async () => {
-    if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogSafetyStopped() ||
-      watcherEpoch !== libraryRuntimeEpoch || path.resolve(root) !== path.resolve(getLibraryRoot())) return
+    if (runtimeShuttingDown || watcherEpoch !== libraryRuntimeEpoch ||
+      path.resolve(root) !== path.resolve(getLibraryRoot())) return
+    if (libraryRescanRecoveryBlocked()) {
+      controller.markDirty()
+      controller.pause()
+      return
+    }
     try {
       const tree = await requestLibraryScan()
-      if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogSafetyStopped() ||
-        watcherEpoch !== libraryRuntimeEpoch || path.resolve(root) !== path.resolve(getLibraryRoot())) return
+      if (runtimeShuttingDown || watcherEpoch !== libraryRuntimeEpoch ||
+        path.resolve(root) !== path.resolve(getLibraryRoot())) return
+      if (libraryRescanRecoveryBlocked()) {
+        controller.markDirty()
+        controller.pause()
+        return
+      }
       await hydrateLibrarySessions(tree)
       recordCurrentFreshnessErrors()
     } catch (error) {
-      if (runtimeShuttingDown || libraryRuntimePaused || watcherEpoch !== libraryRuntimeEpoch ||
+      if (runtimeShuttingDown || watcherEpoch !== libraryRuntimeEpoch ||
         path.resolve(root) !== path.resolve(getLibraryRoot())) return
       handleLibraryGlobalFailure(error, { kind: 'refresh' }, libraryWorker, 'library-recovery')
     }
   }, 750)
   libraryRescanController = controller
+  if (libraryRescanRecoveryBlocked()) controller.pause()
   libraryWatcher = watchLibraryDirectory({
     root,
     onDirty: () => controller.markDirty(),
@@ -2039,7 +2052,7 @@ function clearLibraryBacklogGlobalRecoverySchedule(resetAttempts = true): void {
   libraryBacklogGlobalRecoveryTimer = null
   if (resetAttempts) {
     libraryBacklogGlobalRecoveryAttempts = 0
-    libraryBacklogGlobalRecoveryFault = null
+    libraryGlobalRecoveryCoordinator.clear()
     libraryBacklogGlobalRecoveryExhaustedEpoch = null
   }
 }
@@ -2059,36 +2072,68 @@ function libraryBacklogRecoveryStopped(): boolean {
 
 function enterLibraryBacklogSafetyStop(): void {
   libraryBacklogSafetyStopEpoch = libraryRuntimeEpoch
+  libraryRescanController?.pause()
   clearLibraryBacklogRecoverySchedule()
   clearLibraryBacklogGlobalRecoverySchedule()
   libraryBacklogRecoveryQueue.clear()
+}
+
+function libraryRescanRecoveryBlocked(): boolean {
+  return runtimeShuttingDown || libraryRuntimePaused || libraryBacklogRecoveryStopped() ||
+    libraryBacklogGlobalRecoveryTimer !== null || libraryGlobalRecoveryCoordinator.hasWork ||
+    libraryInitializationPromise !== null || libraryBacklogRecoveryPromise !== null ||
+    getLibraryHealth().state === 'writer-blocked' || libraryWriterRecoveryTimer !== null ||
+    libraryWriterRecoveryPromise !== null
+}
+
+function resumeLibraryRescanIfSafe(): void {
+  if (!libraryRescanRecoveryBlocked()) libraryRescanController?.resume()
+}
+
+function armLibraryBacklogGlobalRecoveryTimer(): void {
+  if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogRecoveryStopped() ||
+    libraryBacklogGlobalRecoveryTimer || libraryGlobalRecoveryCoordinator.isActive ||
+    !libraryGlobalRecoveryCoordinator.hasWork) return
+  const attempt = libraryBacklogGlobalRecoveryAttempts + 1
+  const delay = libraryBacklogGlobalRetryDelay(attempt)
+  if (delay === null) {
+    libraryBacklogGlobalRecoveryExhaustedEpoch = libraryRuntimeEpoch
+    libraryGlobalRecoveryCoordinator.clear()
+    libraryBacklogRecoveryQueue.clear()
+    libraryRescanController?.pause()
+    return
+  }
+  libraryBacklogGlobalRecoveryAttempts = attempt
+  clearLibraryBacklogRecoverySchedule()
+  const epoch = libraryRuntimeEpoch
+  const dispatch = (): void => {
+    libraryBacklogGlobalRecoveryTimer = null
+    if (runtimeShuttingDown || libraryBacklogRecoveryStopped() || epoch !== libraryRuntimeEpoch) return
+    if (libraryRuntimePaused || libraryInitializationPromise || libraryBacklogRecoveryPromise ||
+      libraryWriterRecoveryTimer || libraryWriterRecoveryPromise ||
+      getLibraryHealth().state === 'writer-blocked') {
+      libraryBacklogGlobalRecoveryTimer = setTimeout(dispatch, 1_000)
+      libraryBacklogGlobalRecoveryTimer.unref?.()
+      return
+    }
+    const lease = libraryGlobalRecoveryCoordinator.begin()
+    if (!lease) return
+    if (lease.operation.kind === 'initial') void runInitialLibraryGlobalRecovery(lease)
+    else if (lease.operation.kind === 'refresh') void runLibraryBacklogRefreshRecovery(lease)
+    else void runLibraryBacklogRecovery(lease.operation.mode, lease)
+  }
+  libraryBacklogGlobalRecoveryTimer = setTimeout(dispatch, delay)
+  libraryBacklogGlobalRecoveryTimer.unref?.()
 }
 
 function scheduleLibraryBacklogGlobalRecovery(
   operation: LibraryGlobalRecoveryOperation,
   failure: { errorCode: string; healthRevision: number }
 ): void {
-  if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogRecoveryStopped() ||
-    libraryBacklogGlobalRecoveryTimer) return
-  const attempt = libraryBacklogGlobalRecoveryAttempts + 1
-  const delay = libraryBacklogGlobalRetryDelay(attempt)
-  if (delay === null) {
-    libraryBacklogGlobalRecoveryExhaustedEpoch = libraryRuntimeEpoch
-    libraryBacklogRecoveryQueue.clear()
-    return
-  }
-  libraryBacklogGlobalRecoveryAttempts = attempt
-  libraryBacklogGlobalRecoveryFault = { ...failure, operation }
-  clearLibraryBacklogRecoverySchedule()
-  const epoch = libraryRuntimeEpoch
-  libraryBacklogGlobalRecoveryTimer = setTimeout(() => {
-    libraryBacklogGlobalRecoveryTimer = null
-    if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogRecoveryStopped() ||
-      epoch !== libraryRuntimeEpoch) return
-    if (operation.kind === 'initial') void runInitialLibraryGlobalRecovery()
-    else if (operation.kind === 'refresh') void runLibraryBacklogRefreshRecovery()
-    else void runLibraryBacklogRecovery(operation.mode)
-  }, delay)
+  if (runtimeShuttingDown || libraryBacklogRecoveryStopped()) return
+  libraryRescanController?.pause()
+  libraryGlobalRecoveryCoordinator.enqueue({ ...failure, operation })
+  armLibraryBacklogGlobalRecoveryTimer()
 }
 
 function scheduleLibraryBacklogRecovery(summary: LibraryStartupRecoverySummary): void {
@@ -2120,6 +2165,7 @@ function handleLibraryGlobalFailure(
   attemptedWorker: LibraryWorkerClient | null,
   logScope: 'library-init' | 'library-recovery' | 'library-switch'
 ): ReturnType<typeof libraryBacklogBatchFailurePolicy> {
+  libraryRescanController?.pause()
   const cause = error instanceof LibraryStartupBatchTransportError ? error.cause : error
   const classification = classifyLibraryError(cause)
   const policy = libraryBacklogBatchFailurePolicy(cause)
@@ -2152,30 +2198,39 @@ function handleInitialLibraryGlobalFailure(error: unknown): ReturnType<typeof li
   return handleLibraryGlobalFailure(error, { kind: 'initial' }, libraryWorker, 'library-init')
 }
 
-async function runInitialLibraryGlobalRecovery(): Promise<void> {
+async function runInitialLibraryGlobalRecovery(
+  recoveryLease?: LibraryGlobalRecoveryLease
+): Promise<void> {
   if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogRecoveryStopped()) return
   if (libraryInitialized) {
-    clearLibraryBacklogGlobalRecoverySchedule()
+    if (recoveryLease) completeOwnedLibraryGlobalRecovery(recoveryLease)
     return
   }
   if (libraryInitializationPromise) return
   try {
     await initLibraryFromSessions(cachedSessions)
-    clearLibraryBacklogGlobalRecoverySchedule()
+    if (recoveryLease) completeOwnedLibraryGlobalRecovery(recoveryLease)
   } catch (error) {
     if (runtimeShuttingDown || libraryRuntimePaused) return
-    handleInitialLibraryGlobalFailure(error)
+    const policy = handleInitialLibraryGlobalFailure(error)
+    if (recoveryLease) releaseOwnedLibraryGlobalRecovery(recoveryLease, policy)
   }
 }
 
-function restoreOwnedLibraryGlobalHealth(): void {
-  const recoveredFault = libraryBacklogGlobalRecoveryFault
-  clearLibraryBacklogGlobalRecoverySchedule()
+function completeOwnedLibraryGlobalRecovery(lease: LibraryGlobalRecoveryLease): void {
+  const recoveredFault = libraryGlobalRecoveryCoordinator.succeed(lease)
+  if (!recoveredFault) return
+  libraryBacklogGlobalRecoveryAttempts = 0
+  if (libraryGlobalRecoveryCoordinator.hasWork) {
+    armLibraryBacklogGlobalRecoveryTimer()
+    return
+  }
+  libraryBacklogGlobalRecoveryExhaustedEpoch = null
   const identityConflictCount = getLibrarySessionRegistryDiagnostics()
     .filter((binding) => binding.state === 'conflict').length
   const recoveredHealthState = libraryBacklogRecoveredHealthState(
     getLibraryHealthRevision(),
-    recoveredFault?.healthRevision,
+    recoveredFault.healthRevision,
     identityConflictCount
   )
   if (recoveredHealthState === 'identity-conflict') {
@@ -2187,6 +2242,23 @@ function restoreOwnedLibraryGlobalHealth(): void {
   } else if (recoveredHealthState === 'ready') {
     transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library background recovery completed')
   }
+  resumeLibraryRescanIfSafe()
+}
+
+function releaseOwnedLibraryGlobalRecovery(
+  lease: LibraryGlobalRecoveryLease,
+  policy: ReturnType<typeof libraryBacklogBatchFailurePolicy>
+): void {
+  if (policy === 'safety-stop') return
+  if (!libraryGlobalRecoveryCoordinator.release(lease)) return
+  if (policy === 'global-retry') {
+    armLibraryBacklogGlobalRecoveryTimer()
+    return
+  }
+  // Full writer recovery reinitializes and refreshes the entire current root,
+  // so it subsumes every queued whole-transaction recovery operation.
+  libraryGlobalRecoveryCoordinator.clear()
+  libraryBacklogGlobalRecoveryAttempts = 0
 }
 
 async function refreshLibraryAfterRecovery(): Promise<void> {
@@ -2194,7 +2266,9 @@ async function refreshLibraryAfterRecovery(): Promise<void> {
   await hydrateLibrarySessions(tree)
 }
 
-async function runLibraryBacklogRefreshRecovery(): Promise<void> {
+async function runLibraryBacklogRefreshRecovery(
+  recoveryLease?: LibraryGlobalRecoveryLease
+): Promise<void> {
   if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogRecoveryStopped() ||
     !libraryInitialized) return
   if (libraryBacklogRecoveryPromise) return libraryBacklogRecoveryPromise
@@ -2203,11 +2277,17 @@ async function runLibraryBacklogRefreshRecovery(): Promise<void> {
     const attemptedWorker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
     try {
       await refreshLibraryAfterRecovery()
-      restoreOwnedLibraryGlobalHealth()
+      if (recoveryLease) completeOwnedLibraryGlobalRecovery(recoveryLease)
     } catch (error) {
       if (runtimeShuttingDown || libraryRuntimePaused) return
       recoveryBlocked = true
-      handleLibraryGlobalFailure(error, { kind: 'refresh' }, attemptedWorker, 'library-recovery')
+      const policy = handleLibraryGlobalFailure(
+        error,
+        { kind: 'refresh' },
+        attemptedWorker,
+        'library-recovery'
+      )
+      if (recoveryLease) releaseOwnedLibraryGlobalRecovery(recoveryLease, policy)
     }
   })()
   libraryBacklogRecoveryPromise = work
@@ -2215,6 +2295,7 @@ async function runLibraryBacklogRefreshRecovery(): Promise<void> {
     await work
   } finally {
     if (libraryBacklogRecoveryPromise === work) libraryBacklogRecoveryPromise = null
+    resumeLibraryRescanIfSafe()
     if (!recoveryBlocked && libraryBacklogRecoveryQueue.size > 0 &&
       !runtimeShuttingDown && !libraryRuntimePaused) {
       const pendingMode = libraryBacklogRecoveryQueue.takeNext()
@@ -2224,29 +2305,38 @@ async function runLibraryBacklogRefreshRecovery(): Promise<void> {
   }
 }
 
-async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMode, 'initial'>): Promise<void> {
+async function runLibraryBacklogRecovery(
+  mode: Exclude<LibraryBacklogRecoveryMode, 'initial'>,
+  recoveryLease?: LibraryGlobalRecoveryLease
+): Promise<void> {
   if (runtimeShuttingDown) return
-  const wakeDisposition = libraryBacklogWakeDisposition(
-    libraryRuntimeEpoch,
-    libraryBacklogSafetyStopEpoch,
-    libraryBacklogGlobalRecoveryTimer !== null,
-    libraryBacklogGlobalRecoveryExhaustedEpoch,
-    getLibraryHealth().state === 'writer-blocked' || libraryWriterRecoveryTimer !== null ||
-      libraryWriterRecoveryPromise !== null
-  )
-  if (wakeDisposition === 'drop') return
-  libraryBacklogRecoveryQueue.request(mode)
-  // A whole-batch retry owns this delay. Other Provider/automatic wakes only
-  // coalesce while the timer is active; they may not bypass global backoff.
-  if (wakeDisposition === 'coalesce') return
+  if (!recoveryLease) {
+    const wakeDisposition = libraryBacklogWakeDisposition(
+      libraryRuntimeEpoch,
+      libraryBacklogSafetyStopEpoch,
+      libraryBacklogGlobalRecoveryTimer !== null || libraryGlobalRecoveryCoordinator.hasWork,
+      libraryBacklogGlobalRecoveryExhaustedEpoch,
+      getLibraryHealth().state === 'writer-blocked' || libraryWriterRecoveryTimer !== null ||
+        libraryWriterRecoveryPromise !== null
+    )
+    if (wakeDisposition === 'drop') return
+    libraryBacklogRecoveryQueue.request(mode)
+    // A whole-batch retry owns this delay. Other Provider/automatic wakes only
+    // coalesce while the timer is active; they may not bypass global backoff.
+    if (wakeDisposition === 'coalesce') return
+  }
   if (libraryRuntimePaused || !libraryInitialized || libraryInitializationPromise) return
   if (libraryBacklogRecoveryPromise) return libraryBacklogRecoveryPromise
+  libraryRescanController?.pause()
   const epoch = libraryRuntimeEpoch
   let recoveryBlocked = false
+  let ownedLease = recoveryLease
   const work = (async () => {
     while (epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused &&
       !libraryBacklogSafetyStopped()) {
-      const nextMode = libraryBacklogRecoveryQueue.takeNext()
+      const nextMode = ownedLease?.operation.kind === 'backlog'
+        ? ownedLease.operation.mode
+        : libraryBacklogRecoveryQueue.takeNext()
       if (!nextMode) break
       let attemptedWorker: LibraryWorkerClient | null = null
       let checkpointCommitted = false
@@ -2259,7 +2349,12 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
         if (outcome.completed > 0 && epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused) {
           await refreshLibraryAfterRecovery()
         }
-        restoreOwnedLibraryGlobalHealth()
+        if (ownedLease) {
+          completeOwnedLibraryGlobalRecovery(ownedLease)
+          ownedLease = undefined
+          break
+        }
+        if (libraryGlobalRecoveryCoordinator.hasWork) break
       } catch (error) {
         if (runtimeShuttingDown || libraryRuntimePaused || epoch !== libraryRuntimeEpoch) return
         recoveryBlocked = true
@@ -2273,6 +2368,10 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
           'library-recovery'
         )
         if (policy === 'writer-recovery') libraryBacklogRecoveryQueue.request(nextMode)
+        if (ownedLease) {
+          releaseOwnedLibraryGlobalRecovery(ownedLease, policy)
+          ownedLease = undefined
+        }
         break
       }
     }
@@ -2282,6 +2381,7 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
     await work
   } finally {
     if (libraryBacklogRecoveryPromise === work) libraryBacklogRecoveryPromise = null
+    resumeLibraryRescanIfSafe()
     if (!recoveryBlocked && libraryBacklogRecoveryQueue.size > 0 &&
       epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused) {
       const pendingMode = libraryBacklogRecoveryQueue.takeNext()
@@ -2398,6 +2498,7 @@ async function initLibraryFromSessions(
   options: { preserveForeground?: boolean; writerRecovery?: boolean } = {}
 ): Promise<void> {
   if (libraryInitializationPromise) return libraryInitializationPromise
+  libraryRescanController?.pause()
   const work = (async (): Promise<void> => {
     initLibrary()
     configureLibraryHealthPersistence(
@@ -2534,6 +2635,7 @@ async function initLibraryFromSessions(
     throw error
   } finally {
     if (libraryInitializationPromise === work) libraryInitializationPromise = null
+    resumeLibraryRescanIfSafe()
     queueMicrotask(() => {
       void runLibraryBacklogRecovery('provider').finally(scheduleAutomaticDuplicateRecoveryAnalysis)
     })
@@ -4537,7 +4639,7 @@ ipcMain.handle('library:selectDirectory', async () => {
   return approved
 })
 
-async function activateLibraryAt(newPath: string): Promise<string> {
+async function performLibraryActivation(newPath: string): Promise<string> {
   const duplicateRecoveryAnalysisCancellation = cancelActiveDuplicateRecoveryAnalysis(
     'duplicate-recovery-library-changed-during-analysis'
   )
@@ -4694,8 +4796,17 @@ async function activateLibraryAt(newPath: string): Promise<string> {
     if (pendingBacklogMode) {
       void runLibraryBacklogRecovery(pendingBacklogMode)
     }
+    resumeLibraryRescanIfSafe()
     scheduleAutomaticDuplicateRecoveryAnalysis()
   }
+}
+
+function activateLibraryAt(newPath: string): Promise<string> {
+  const requestedRoot = path.resolve(newPath)
+  return libraryRootSwitchQueue.run(
+    requestedRoot,
+    () => performLibraryActivation(requestedRoot)
+  )
 }
 
 ipcMain.handle('library:changePath', async (_event, newPath: string) => {

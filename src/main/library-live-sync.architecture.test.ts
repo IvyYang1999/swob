@@ -23,7 +23,7 @@ describe('live Library synchronization architecture', () => {
       /function cleanupRuntimeResources[\s\S]*?libraryStartupWriterProven = false[\s\S]*?currentLiveSessionSyncWorker\?\.close\(\)/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?libraryStartupWriterProven = false[\s\S]*?previousLiveSessionSyncWorker\?\.close\(\)/
+      /async function performLibraryActivation[\s\S]*?libraryStartupWriterProven = false[\s\S]*?previousLiveSessionSyncWorker\?\.close\(\)/
     )
     expect(source).toMatch(
       /classification\.state === 'writer-blocked'[\s\S]*?libraryStartupWriterProven = false[\s\S]*?deferLibrarySynchronization\(request\)[\s\S]*?scheduleLibraryWriterRecovery\(\)/
@@ -53,10 +53,11 @@ describe('live Library synchronization architecture', () => {
     expect(compensationHandler).not.toContain('initLibraryFromSessions')
     expect(compensationCancelHandler).toContain('cancelCompensation()')
     expect(compensationCancelHandler).not.toContain('libraryStartup')
-    expect(source).toMatch(
-      /async function runLibraryBacklogRecovery[\s\S]*?libraryBacklogRecoveryQueue\.request\(mode\)[\s\S]*?while \([\s\S]*?libraryBacklogRecoveryQueue\.takeNext\(\)[\s\S]*?syncStartupSessions\(worker, cachedSessions, oldConfig\.sessionMeta, nextMode\)/
-    )
     const recoveryRunner = source.match(/async function runLibraryBacklogRecovery[\s\S]*?\n}\n/)?.[0] || ''
+    expect(recoveryRunner).toContain('libraryBacklogRecoveryQueue.request(mode)')
+    expect(recoveryRunner).toContain("ownedLease?.operation.kind === 'backlog'")
+    expect(recoveryRunner).toContain('libraryBacklogRecoveryQueue.takeNext()')
+    expect(recoveryRunner).toContain('syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta, nextMode)')
     expect(recoveryRunner).toContain('libraryRuntimePaused || !libraryInitialized || libraryInitializationPromise')
     expect(source).toMatch(
       /shouldSelectLibraryBacklogItem\([\s\S]*?mode,[\s\S]*?recoveryByIndex\.get\(index\),[\s\S]*?now,[\s\S]*?isProviderSession\(sessions\[index\]\)[\s\S]*?\)/
@@ -98,7 +99,7 @@ describe('live Library synchronization architecture', () => {
       /function scheduleSearchIndexWarmupNow[\s\S]*?scheduledEpoch = libraryRuntimeEpoch[\s\S]*?scheduleEpochBoundTask/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?closeSearchIndexWriteCoordinator[\s\S]*?libraryRuntimePaused = false[\s\S]*?openStartupProjectionGate\(\)/
+      /async function performLibraryActivation[\s\S]*?closeSearchIndexWriteCoordinator[\s\S]*?libraryRuntimePaused = false[\s\S]*?openStartupProjectionGate\(\)/
     )
   })
 
@@ -117,7 +118,7 @@ describe('live Library synchronization architecture', () => {
       /async function initLibraryFromSessions[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
+      /async function performLibraryActivation[\s\S]*?catch \(error\)[\s\S]*?startupProjectionGate\.reset\([\s\S]*?throw error/
     )
     expect(source).toMatch(
       /initialization\.catch\(\(error\) => \{[\s\S]*?if \(runtimeShuttingDown \|\| libraryRuntimePaused\) return[\s\S]*?handleInitialLibraryGlobalFailure\(error\)/
@@ -176,10 +177,10 @@ describe('live Library synchronization architecture', () => {
       scheduledDrain.indexOf('async function drainAutomaticDuplicateRecoveryAnalysis')
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?libraryRuntimePaused = false[\s\S]*?scheduleAutomaticDuplicateRecoveryAnalysis\(\)/
+      /async function performLibraryActivation[\s\S]*?libraryRuntimePaused = false[\s\S]*?scheduleAutomaticDuplicateRecoveryAnalysis\(\)/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?cancelActiveDuplicateRecoveryAnalysis[\s\S]*?duplicateRecoveryAnalysisCancellation,[\s\S]*?switchingLibraryWatcher\?\.close\(\)[\s\S]*?changeConfiguredLibraryPath/
+      /async function performLibraryActivation[\s\S]*?cancelActiveDuplicateRecoveryAnalysis[\s\S]*?duplicateRecoveryAnalysisCancellation,[\s\S]*?switchingLibraryWatcher\?\.close\(\)[\s\S]*?changeConfiguredLibraryPath/
     )
     const applyHandler = source.match(
       /ipcMain\.handle\('library:applyDuplicateRecovery',[\s\S]*?\n}\)\n\nipcMain\.handle\('library:selectDirectory'/
@@ -218,7 +219,7 @@ describe('live Library synchronization architecture', () => {
     expect(source).toContain('getLibraryHealthRevision()')
     expect(source).toContain("checkpointCommitted\n          ? { kind: 'refresh' }")
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?librarySwitchFailure = error[\s\S]*?handleLibraryGlobalFailure\([\s\S]*?\{ kind: 'initial' \}/
+      /async function performLibraryActivation[\s\S]*?librarySwitchFailure = error[\s\S]*?handleLibraryGlobalFailure\([\s\S]*?\{ kind: 'initial' \}/
     )
     expect(source).toContain("getLibraryHealth().state === 'writer-blocked' || libraryWriterRecoveryTimer !== null")
     expect(source).toMatch(
@@ -231,11 +232,16 @@ describe('live Library synchronization architecture', () => {
       /const recoveringWriter = getLibraryHealth\(\)\.state === 'writer-blocked'[\s\S]*?if \(recoveringWriter\) return[\s\S]*?handleInitialLibraryGlobalFailure\(error\)/
     )
     expect(source).toMatch(
-      /async function activateLibraryAt[\s\S]*?const switchingLibraryWatcher = libraryWatcher[\s\S]*?libraryWatcher = null[\s\S]*?switchingLibraryRescanController\?\.dispose\(\)[\s\S]*?switchingLibraryWatcher\?\.close\(\)[\s\S]*?switchingLibraryRescanController\?\.waitForIdle\(\)/
+      /async function performLibraryActivation[\s\S]*?const switchingLibraryWatcher = libraryWatcher[\s\S]*?libraryWatcher = null[\s\S]*?switchingLibraryRescanController\?\.dispose\(\)[\s\S]*?switchingLibraryWatcher\?\.close\(\)[\s\S]*?switchingLibraryRescanController\?\.waitForIdle\(\)/
     )
     expect(source).toMatch(
       /function startLibraryWatcher[\s\S]*?const controller = new LibraryRescanController[\s\S]*?watcherEpoch !== libraryRuntimeEpoch[\s\S]*?onDirty: \(\) => controller\.markDirty\(\)/
     )
+    expect(source).toContain('libraryGlobalRecoveryCoordinator.enqueue({ ...failure, operation })')
+    expect(source).toContain('if (recoveryLease) completeOwnedLibraryGlobalRecovery(recoveryLease)')
+    expect(source).toContain('if (libraryRescanRecoveryBlocked()) controller.pause()')
+    expect(source).toContain('resumeLibraryRescanIfSafe()')
+    expect(source).toContain('libraryRootSwitchQueue.run(')
   })
 
   it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {

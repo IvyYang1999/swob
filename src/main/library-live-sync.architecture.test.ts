@@ -84,8 +84,13 @@ describe('live Library synchronization architecture', () => {
     const synchronization = source.match(
       /async function performSessionSynchronization[\s\S]*?\n}\n\nfunction scheduleSessionSynchronization/
     )?.[0] || ''
-    expect(synchronization).toContain('const sourceExcluded = sourceIsExcluded(')
+    expect(synchronization).toContain(
+      'const source = resolveSessionSyncSource(request.source, cached?.source, filePath)'
+    )
+    expect(synchronization).toContain('const sourceExcluded = sourceIsExcluded(source)')
     expect(synchronization).toContain('const maintainLibrary = !sourceExcluded')
+    expect(synchronization).toContain("const workerSource = request.source === 'transcript'")
+    expect(synchronization).toContain('source: workerSource')
     expect(synchronization).toContain('maintainLibrary\n    })')
     expect(synchronization).toContain(
       'mergeLiveSessionSummary(synchronizedSummary, sourceSessionInventory.snapshot())'
@@ -99,7 +104,7 @@ describe('live Library synchronization architecture', () => {
       /cachedSessions\.find\(\(session\) =>\s*session\.continuationSessionIds\?\.includes/
     )
     expect(source).toMatch(
-      /function scheduleSessionSynchronization[\s\S]*?if \(!sourceIsExcluded\(source \|\| undefined\)\) markSessionActive/
+      /function scheduleSessionSynchronization[\s\S]*?resolveSessionSyncSource\(request\.source, cached\?\.source, request\.filePath\)[\s\S]*?if \(!sourceIsExcluded\(source\)\) markSessionActive/
     )
   })
 

@@ -179,7 +179,7 @@ import {
 import { duplicateRecoveryErrorCode } from './duplicate-recovery-failure-code'
 import { spotlightSearch } from './spotlight-search'
 import { filterVisibleSearchSources, searchIndexedSessions } from './session-search'
-import { detectSessionSourceFromPath } from './session-source'
+import { detectSessionSourceFromPath, resolveSessionSyncSource } from './session-source'
 import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
 import { closeSearchIndex } from './search-index'
 import {
@@ -841,7 +841,7 @@ function markSessionActive(sessionId?: string): void {
   mainWindow?.webContents.send('sessions:activeChanged', previousActiveIds)
 }
 
-function sourceIsExcluded(source?: string): boolean {
+function sourceIsExcluded(source?: string | null): boolean {
   return getExcludedSources().includes(source || 'claude-code')
 }
 
@@ -913,9 +913,13 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
   const cached = cachedSummaryForSource(request.filePath, request.sessionId)
   const filePath = request.filePath || cached?.filePath
   if (!filePath) return
-  const detectedSource = request.source || cached?.source || detectSessionSourceFromPath(filePath)
-  const sourceExcluded = sourceIsExcluded(detectedSource || undefined)
+  const source = resolveSessionSyncSource(request.source, cached?.source, filePath)
+  const sourceExcluded = sourceIsExcluded(source)
   const maintainLibrary = !sourceExcluded
+  const workerSource = request.source === 'transcript' &&
+    (source === 'claude-code' || source === 'codex' || source === 'cursor')
+    ? source
+    : request.source
   const worker = liveSessionSyncWorker || (liveSessionSyncWorker = new LibraryWorkerClient())
   let synchronized: Awaited<ReturnType<LibraryWorkerClient['syncSession']>>
   try {
@@ -923,7 +927,7 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
       root: getLibraryRoot(),
       filePath,
       sessionId: request.sessionId,
-      source: request.source,
+      source: workerSource,
       maintainLibrary
     })
   } catch (error) {
@@ -1093,9 +1097,8 @@ async function performSessionSynchronization(request: SessionSyncRequest): Promi
 
 function scheduleSessionSynchronization(request: SessionSyncRequest): void {
   const cached = cachedSummaryForSource(request.filePath, request.sessionId)
-  const source = request.source || cached?.source ||
-    (request.filePath ? detectSessionSourceFromPath(request.filePath) : undefined)
-  if (!sourceIsExcluded(source || undefined)) markSessionActive(request.sessionId || cached?.sessionId)
+  const source = resolveSessionSyncSource(request.source, cached?.source, request.filePath)
+  if (!sourceIsExcluded(source)) markSessionActive(request.sessionId || cached?.sessionId)
   sessionSyncCoordinator?.schedule({
     ...request,
     sessionId: request.sessionId || cached?.sessionId

@@ -39,6 +39,16 @@ export function detectSessionSourceFromPath(filePath?: string): SessionSource | 
   return null
 }
 
+export function resolveSessionSyncSource(
+  routeSource: 'claude-code' | 'codex' | 'cursor' | 'transcript' | undefined,
+  cachedSource: SessionSource | undefined,
+  filePath?: string
+): SessionSource | null {
+  // `transcript` is an event route, not a product/source identity.
+  if (routeSource && routeSource !== 'transcript') return routeSource
+  return detectSessionSourceFromPath(filePath) || cachedSource || null
+}
+
 function pathLooksWindowsNative(filePath: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(filePath) || /^[\\/]{2}[^\\/]/.test(filePath) || filePath.includes('\\')
 }

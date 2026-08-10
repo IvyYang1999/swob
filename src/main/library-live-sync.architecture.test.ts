@@ -224,6 +224,12 @@ describe('live Library synchronization architecture', () => {
     expect(source).toMatch(
       /recovery\.finally\(\(\) => \{[\s\S]*?libraryBacklogRecoveryQueue\.takeNext\(\)[\s\S]*?runLibraryBacklogRecovery\(pendingMode\)/
     )
+    expect(source).toMatch(
+      /async function retryLibraryAfterWriterBlocked[\s\S]*?await initLibraryFromSessions[\s\S]*?handleLibraryGlobalFailure\([\s\S]*?\{ kind: 'initial' \}/
+    )
+    expect(source).toMatch(
+      /const recoveringWriter = getLibraryHealth\(\)\.state === 'writer-blocked'[\s\S]*?if \(recoveringWriter\) return[\s\S]*?handleInitialLibraryGlobalFailure\(error\)/
+    )
   })
 
   it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {

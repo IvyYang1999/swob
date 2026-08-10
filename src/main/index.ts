@@ -547,31 +547,33 @@ async function retryLibraryAfterWriterBlocked(manual: boolean): Promise<void> {
     lastReason: getLibraryHealth().writerRecovery.lastReason
   })
   const recovery = (async (): Promise<void> => {
+    let attemptedWorker: LibraryWorkerClient | null = null
     try {
       const worker = libraryWorker || (libraryWorker = new LibraryWorkerClient())
+      attemptedWorker = worker
       await worker.probeWriter(getLibraryRoot())
       if (runtimeShuttingDown || libraryRuntimePaused || recoveryEpoch !== libraryRuntimeEpoch) return
       await initLibraryFromSessions(cachedSessions, { writerRecovery: true })
-      resetLibraryWriterRecoveryState()
-      if (manual) await retryCompensation(processLibraryCompensationEntry)
-      else await runPendingLibraryCompensation()
     } catch (error) {
       if (
         runtimeShuttingDown ||
         libraryRuntimePaused ||
         recoveryEpoch !== libraryRuntimeEpoch
       ) return
-      const classification = classifyLibraryError(error)
-      transitionLibraryHealth(
-        classification.state,
-        classification.errorCode,
-        classification.message,
-        classification.writerReason
+      const policy = handleLibraryGlobalFailure(
+        error,
+        { kind: 'initial' },
+        attemptedWorker,
+        'library-init'
       )
-      if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
-      else resetLibraryWriterRecoveryState()
+      if (policy !== 'writer-recovery') resetLibraryWriterRecoveryState()
       throw error
     }
+    // Compensation has its own durable queue and diagnostics. It is not part
+    // of initialization and must never relabel a ready Library as corrupt.
+    resetLibraryWriterRecoveryState()
+    if (manual) await retryCompensation(processLibraryCompensationEntry)
+    else await runPendingLibraryCompensation()
   })()
   libraryWriterRecoveryPromise = recovery
   void recovery.finally(() => {
@@ -2848,7 +2850,8 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   // library init waits until the user has chosen a vault location.
   if (!libraryInitialized && !isOnboardingNeeded() && !libraryBacklogRecoveryStopped() &&
     !libraryBacklogGlobalRecoveryTimer) {
-    const initialization = getLibraryHealth().state === 'writer-blocked'
+    const recoveringWriter = getLibraryHealth().state === 'writer-blocked'
+    const initialization = recoveringWriter
       ? retryLibraryAfterWriterBlocked(false)
       : initLibraryFromSessions(sessions)
     initialization.catch((error) => {
@@ -2856,6 +2859,9 @@ ipcMain.handle('sessions:loadAll', async (event) => {
       // That cancellation is lifecycle success, not evidence that the Library
       // on disk became corrupt.
       if (runtimeShuttingDown || libraryRuntimePaused) return
+      // retryLibraryAfterWriterBlocked owns classification/backoff for both its
+      // probe and the full initialization it performs. Do not double-record it.
+      if (recoveringWriter) return
       handleInitialLibraryGlobalFailure(error)
     })
   }

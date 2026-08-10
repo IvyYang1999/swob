@@ -156,6 +156,7 @@ describe('DiagnosticsSettings', () => {
 
     render(<DiagnosticsSettings />)
     expect(await screen.findByText(/这是上次只读分析的脱敏汇总/)).not.toBeNull()
+    expect(screen.getByRole('button', { name: '取消分析' })).not.toBeNull()
     expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
 
     finishAnalysis({
@@ -171,6 +172,60 @@ describe('DiagnosticsSettings', () => {
       preservedGroupCount: 0
     })
     expect(await screen.findByRole('button', { name: '隔离 2 个等价副本' })).not.toBeNull()
+  })
+
+  it('取消发生在缓存晚到之前时，历史汇总仍明确显示为已暂停', async () => {
+    let finishAnalysis!: (value: any) => void
+    let finishCache!: (value: any) => void
+    ;(window as any).api.libraryAnalyzeDuplicateRecovery.mockReturnValue(
+      new Promise((resolve) => { finishAnalysis = resolve })
+    )
+    ;(window as any).api.libraryGetCachedDuplicateRecoverySummary.mockReturnValue(
+      new Promise((resolve) => { finishCache = resolve })
+    )
+
+    render(<DiagnosticsSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: '取消分析' }))
+    finishCache({
+      schemaVersion: 1,
+      planId: 'plan:fedcba9876543210fedcba98',
+      completedAt: '2026-08-09T00:00:00.000Z',
+      canApply: false,
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 2,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    })
+
+    expect(await screen.findByText(/当前复核已暂停/)).not.toBeNull()
+    expect(screen.getByText('只读分析已暂停；Library 没有被修改。')).not.toBeNull()
+    expect(screen.queryByText(/Swob 正在按当前 Library 重新核验/)).toBeNull()
+    expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
+    finishAnalysis(null)
+  })
+
+  it('当前复核失败时，缓存只作历史展示且不谎称仍在核验', async () => {
+    ;(window as any).api.libraryAnalyzeDuplicateRecovery.mockRejectedValue(new Error('failed'))
+    ;(window as any).api.libraryGetCachedDuplicateRecoverySummary.mockResolvedValue({
+      schemaVersion: 1,
+      planId: 'plan:fedcba9876543210fedcba98',
+      completedAt: '2026-08-09T00:00:00.000Z',
+      canApply: false,
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 2,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    })
+
+    render(<DiagnosticsSettings />)
+    expect(await screen.findByText(/当前复核未完成/)).not.toBeNull()
+    expect(screen.getByText('分析未完成，Library 没有被修改')).not.toBeNull()
+    expect(screen.queryByText(/Swob 正在按当前 Library 重新核验/)).toBeNull()
+    expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
   })
 
   it('用户暂停只读分析后给出明确恢复入口，不会停在无按钮状态', async () => {

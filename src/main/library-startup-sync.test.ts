@@ -264,13 +264,13 @@ describe('incremental Library startup synchronization', () => {
     expect(syncChunk).not.toHaveBeenCalled()
   })
 
-  it('aborts the backlog once when safe writer identity is unavailable', async () => {
+  it('wraps a whole production batch writer failure without fabricating item outcomes', async () => {
     const progress = vi.fn()
     const error = Object.assign(new Error('writer identity unavailable'), {
       code: 'WRITER_IDENTITY_UNAVAILABLE',
       name: 'SessionCreateIdentityUnavailableError'
     })
-    await expect(syncLibraryStartupIncrementally({
+    const failure = await syncLibraryStartupIncrementally({
       sessions: [
         summary('first', '/fixture/first.jsonl', '2026-08-02T09:00:00.000Z'),
         summary('second', '/fixture/second.jsonl', '2026-08-02T09:00:01.000Z')
@@ -281,7 +281,9 @@ describe('incremental Library startup synchronization', () => {
       resolveLatest: (session) => session,
       syncBatch: async () => { throw error },
       onProgress: progress
-    })).rejects.toBe(error)
+    }).catch((caught: unknown) => caught)
+    expect(failure).toBeInstanceOf(LibraryStartupBatchTransportError)
+    expect((failure as Error).cause).toBe(error)
     expect(progress).not.toHaveBeenCalled()
   })
 
@@ -487,7 +489,18 @@ describe('Library startup dirty-set checkpoint', () => {
     expect(phaseOne.checkpoint.recovery[providerKey]).toMatchObject({ attempt: 4 })
     expect(phaseOne.recoveryItems).toEqual([])
 
-    const authoritative = buildLibraryStartupPlan([physical, provider], 1, phaseOne.checkpoint)
+    // A degraded Provider snapshot is partial and therefore cannot prune an
+    // unseen key. Only a later complete inventory is authoritative.
+    const degraded = buildLibraryStartupPlan(
+      [physical],
+      1,
+      phaseOne.checkpoint,
+      {},
+      { preserveUnseen: true }
+    )
+    expect(degraded.checkpoint.recovery[providerKey]).toMatchObject({ attempt: 4 })
+
+    const authoritative = buildLibraryStartupPlan([physical, provider], 1, degraded.checkpoint)
     expect(authoritative.recoveryItems).toMatchObject([{
       index: 1,
       entry: { attempt: 4, state: 'retry-scheduled' }

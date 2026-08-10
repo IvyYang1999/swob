@@ -37,6 +37,25 @@ test.beforeAll(async () => {
     libraryRoot,
     preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal' }
   }))
+  const diagnosticsRoot = path.join(fixtureHome, '.swob-e2e-user-data', 'diagnostics')
+  fs.mkdirSync(diagnosticsRoot, { recursive: true })
+  fs.writeFileSync(path.join(diagnosticsRoot, 'duplicate-recovery-summary-v1.json'), JSON.stringify({
+    schemaVersion: 1,
+    plannerRevision: 1,
+    libraryRootHash: sha256(path.resolve(libraryRoot)),
+    writeGeneration: 1,
+    completedAt: '2026-08-09T00:00:00.000Z',
+    summary: {
+      schemaVersion: 1,
+      planId: 'plan:fedcba9876543210fedcba98',
+      packageCount: 2,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 1,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    }
+  }))
 
   for (const suffix of ['a', 'b']) {
     const packageRoot = path.join(libraryRoot, `synthetic-duplicate-${suffix}`)
@@ -65,7 +84,7 @@ test.beforeAll(async () => {
 
   const launched = await launchAppWithEnv({ env: {
     HOME: fixtureHome,
-    SWOB_TEST_DUPLICATE_RECOVERY_FIRST_DELAY_MS: '60000'
+    SWOB_TEST_DUPLICATE_RECOVERY_FIRST_DELAY_MS: '5000'
   } })
   app = launched.app
   page = launched.page
@@ -86,11 +105,20 @@ test('conflicts are analyzed automatically while mutation remains an explicit co
 
   await expect(content.getByText('正在本机自动核验冲突包；分析只读，不会修改 Library。')).toBeVisible()
   await expect(content.getByRole('button', { name: '安全分析' })).toHaveCount(0)
-  await content.getByRole('button', { name: '取消分析' }).click()
+  await expect(content.getByText(/这是上次只读分析的脱敏汇总/)).toBeVisible()
+  const cancel = content.getByRole('button', { name: '取消分析' })
+  await page.setViewportSize({ width: 480, height: 680 })
+  await cancel.scrollIntoViewIfNeeded()
+  await expect(cancel).toBeInViewport()
+  await expect(content.getByText(/复核完成前不会提供隔离操作/)).toBeVisible()
+  await dialog.screenshot({ path: testInfo.outputPath('self-healing-cache-rechecking-narrow.png') })
+
+  await cancel.click()
+  await page.setViewportSize({ width: 480, height: 520 })
   const resume = content.getByRole('button', { name: '重新分析' })
   await expect(content.getByText('只读分析已暂停；Library 没有被修改。')).toBeVisible()
+  await expect(content.getByText(/当前复核已暂停/)).toBeVisible()
 
-  await page.setViewportSize({ width: 480, height: 520 })
   await resume.scrollIntoViewIfNeeded()
   await resume.hover()
   const pausedMetrics = await content.evaluate((element) => ({

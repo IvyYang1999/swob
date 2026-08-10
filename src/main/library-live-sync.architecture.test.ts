@@ -201,6 +201,7 @@ describe('live Library synchronization architecture', () => {
     expect(source).not.toContain('pendingProviderLibrarySessions')
     expect(source).toContain("void runLibraryBacklogRecovery('provider')")
     expect(source).toContain('withCanonicalProviderRefreshBarrier(synchronize)')
+    expect(source).toContain("preserveUnseen: latestProviderSettlementStatus !== 'complete'")
     expect(libraryWorker).toContain('closeCanonicalSessionStore()')
     expect(manager).toContain('if (stored.tombstone)')
     expect(manager).toContain('completeCurrentLibraryProjections(plan, sessions, sessionMeta)')

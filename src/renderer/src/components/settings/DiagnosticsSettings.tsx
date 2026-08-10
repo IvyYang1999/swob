@@ -31,7 +31,8 @@ export function DiagnosticsSettings() {
   const [analysisFailed, setAnalysisFailed] = useState(false)
   const [analysisCancelled, setAnalysisCancelled] = useState(false)
   const [progress, setProgress] = useState<DuplicateRecoveryProgress | null>(null)
-  const [report, setReport] = useState<DuplicateRecoverySummary | null>(null)
+  const [liveReport, setLiveReport] = useState<DuplicateRecoverySummary | null>(null)
+  const [cachedReport, setCachedReport] = useState<DuplicateRecoverySummary | null>(null)
   const cancelRequested = useRef(false)
   const analysisRequestId = useRef(0)
   const progressUnsubscribe = useRef<(() => void) | null>(null)
@@ -45,7 +46,8 @@ export function DiagnosticsSettings() {
   const backgroundNeedsAttention = backgroundRecovery.attentionRequired + backgroundRecovery.exhausted
   const analysisKey = `${identity.analysisGeneration}:${identity.unknownGroupCount}:${identity.evidenceMismatchGroupCount}`
   const lastAutomaticAnalysis = useRef<string | null>(null)
-  const summary = report ? recoverySummary(report) : null
+  const displayedReport = liveReport || cachedReport
+  const summary = displayedReport ? recoverySummary(displayedReport) : null
   const rawSnapshot = useMemo(() => JSON.stringify({
     state: health.state,
     reasonCode: health.reasonCode,
@@ -69,7 +71,7 @@ export function DiagnosticsSettings() {
     setAnalyzing(true)
     setAnalysisFailed(false)
     setAnalysisCancelled(false)
-    setReport(null)
+    setLiveReport(null)
     setProgress({ phase: 'discovering', discoveredPackages: 0, conflictPackages: 0, analyzedConflictPackages: 0 })
     const unsubscribe = window.api.onDuplicateRecoveryProgress?.((next) => {
       if (analysisRequestId.current === requestId) setProgress(next)
@@ -83,7 +85,10 @@ export function DiagnosticsSettings() {
     progressUnsubscribe.current = releaseProgress
     try {
       const next = await window.api.libraryAnalyzeDuplicateRecovery()
-      if (analysisRequestId.current === requestId) setReport(next)
+      if (analysisRequestId.current === requestId) {
+        setLiveReport(next)
+        setCachedReport(null)
+      }
     } catch {
       if (analysisRequestId.current === requestId && !cancelRequested.current) setAnalysisFailed(true)
     } finally {
@@ -95,9 +100,10 @@ export function DiagnosticsSettings() {
 
   useEffect(() => {
     let active = true
+    setCachedReport(null)
     if (actionableIdentityGroups > 0) {
       void window.api.libraryGetCachedDuplicateRecoverySummary().then((cached) => {
-        if (active && cached) setReport((current) => current || cached)
+        if (active && cached) setCachedReport(cached)
       }).catch(() => { /* a cache miss never blocks live analysis */ })
     }
     return () => { active = false }
@@ -127,15 +133,16 @@ export function DiagnosticsSettings() {
   }
 
   const apply = async () => {
-    if (applyingRef.current || !report || report.canApply === false || report.autoRepairablePackageCount === 0) return
-    const confirmed = window.confirm(t('diagnostics.apply_confirm', { n: report.autoRepairablePackageCount }))
+    if (applyingRef.current || !liveReport || liveReport.canApply === false ||
+      liveReport.autoRepairablePackageCount === 0) return
+    const confirmed = window.confirm(t('diagnostics.apply_confirm', { n: liveReport.autoRepairablePackageCount }))
     if (!confirmed) return
     applyingRef.current = true
     setApplying(true)
     try {
-      const result = await window.api.libraryApplyDuplicateRecovery(report.planId)
+      const result = await window.api.libraryApplyDuplicateRecovery(liveReport.planId)
       if (result.status === 'stale') {
-        setReport(null)
+        setLiveReport(null)
         setProgress({ phase: 'discovering', discoveredPackages: 0, conflictPackages: 0, analyzedConflictPackages: 0 })
         showToast(t('diagnostics.plan_changed_rechecking'), 'info')
         void analyze()
@@ -144,7 +151,7 @@ export function DiagnosticsSettings() {
       showToast(t(result.restartRequired ? 'diagnostics.apply_done_restart' : 'diagnostics.apply_done', {
         n: result.appliedPackageCount
       }), 'success')
-      setReport(null)
+      setLiveReport(null)
     } catch {
       showToast(t('diagnostics.apply_failed'), 'error')
     } finally {
@@ -177,7 +184,7 @@ export function DiagnosticsSettings() {
                     : automaticRecoveryActive
                       ? t('diagnostics.automatic_recovery')
                       : actionableIdentityGroups > 0
-                        ? t(report && report.canApply !== false ? 'diagnostics.identity_reviewed' : 'diagnostics.identity_review', {
+                        ? t(liveReport && liveReport.canApply !== false ? 'diagnostics.identity_reviewed' : 'diagnostics.identity_review', {
                             n: actionableIdentityGroups
                           })
                         : backgroundNeedsAttention > 0
@@ -206,7 +213,7 @@ export function DiagnosticsSettings() {
           icon={<ShieldCheck size={12} />}
         >
           <div className="rounded-lg border border-edge bg-base px-3.5 py-3 space-y-3">
-            {!report && !analysisFailed && !analysisCancelled && (
+            {!analysisFailed && !analysisCancelled && (
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="min-w-48 flex-1 text-[11px] leading-relaxed text-muted">
                   {analyzing ? t('diagnostics.analysis_automatic') : t('diagnostics.analysis_privacy')}
@@ -260,7 +267,7 @@ export function DiagnosticsSettings() {
                 })}
               </div>
             )}
-            {report && summary && (
+            {displayedReport && summary && (
               <div data-testid="duplicate-recovery-result" className="space-y-3">
                 <div className="grid grid-cols-2 gap-2 text-[11px]">
                   <div className="rounded-md bg-surface px-2.5 py-2">
@@ -273,12 +280,16 @@ export function DiagnosticsSettings() {
                   </div>
                 </div>
                 <p className="text-[10px] leading-relaxed text-faint">
-                  {report.canApply === false
-                    ? t('diagnostics.cached_rechecking')
+                  {displayedReport.canApply === false
+                    ? t(analysisCancelled
+                        ? 'diagnostics.cached_paused'
+                        : analysisFailed
+                          ? 'diagnostics.cached_failed'
+                          : 'diagnostics.cached_rechecking')
                     : t('diagnostics.result_boundary')}
                 </p>
                 <div className="flex flex-wrap justify-end gap-2">
-                  {report.canApply !== false && summary.autoPackages > 0 && (
+                  {liveReport && liveReport.canApply !== false && summary.autoPackages > 0 && (
                     <button
                       type="button"
                       onClick={apply}

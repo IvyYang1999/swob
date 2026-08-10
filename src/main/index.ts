@@ -220,7 +220,9 @@ import { mergeLiveSessionSummary } from './live-session-summary'
 import { StartupProjectionGate } from './startup-projection-gate'
 import {
   LibraryBacklogRecoveryQueue,
+  libraryBacklogBatchFailurePolicy,
   libraryBacklogGlobalRetryDelay,
+  libraryBacklogRecoveredHealthState,
   shouldSelectLibraryBacklogItem
 } from './library-backlog-recovery-queue'
 import { boundedQuietWindowDelay } from './bounded-quiet-window'
@@ -383,6 +385,7 @@ let libraryStartupChunkActive = false
 let libraryBacklogRecoveryTimer: NodeJS.Timeout | null = null
 let libraryBacklogGlobalRecoveryTimer: NodeJS.Timeout | null = null
 let libraryBacklogGlobalRecoveryAttempts = 0
+let libraryBacklogGlobalRecoveryFailureCode: string | null = null
 let libraryBacklogRecoveryPromise: Promise<void> | null = null
 const libraryBacklogRecoveryQueue = new LibraryBacklogRecoveryQueue()
 let liveLibraryCommitGeneration = 0
@@ -1992,15 +1995,22 @@ function clearLibraryBacklogRecoverySchedule(): void {
 function clearLibraryBacklogGlobalRecoverySchedule(resetAttempts = true): void {
   if (libraryBacklogGlobalRecoveryTimer) clearTimeout(libraryBacklogGlobalRecoveryTimer)
   libraryBacklogGlobalRecoveryTimer = null
-  if (resetAttempts) libraryBacklogGlobalRecoveryAttempts = 0
+  if (resetAttempts) {
+    libraryBacklogGlobalRecoveryAttempts = 0
+    libraryBacklogGlobalRecoveryFailureCode = null
+  }
 }
 
-function scheduleLibraryBacklogGlobalRecovery(mode: Exclude<LibraryBacklogRecoveryMode, 'initial'>): void {
+function scheduleLibraryBacklogGlobalRecovery(
+  mode: Exclude<LibraryBacklogRecoveryMode, 'initial'>,
+  failureCode: string
+): void {
   if (runtimeShuttingDown || libraryRuntimePaused || libraryBacklogGlobalRecoveryTimer) return
   const attempt = libraryBacklogGlobalRecoveryAttempts + 1
   const delay = libraryBacklogGlobalRetryDelay(attempt)
   if (delay === null) return
   libraryBacklogGlobalRecoveryAttempts = attempt
+  libraryBacklogGlobalRecoveryFailureCode = failureCode
   clearLibraryBacklogRecoverySchedule()
   const epoch = libraryRuntimeEpoch
   libraryBacklogGlobalRecoveryTimer = setTimeout(() => {
@@ -2044,20 +2054,44 @@ async function runLibraryBacklogRecovery(mode: Exclude<LibraryBacklogRecoveryMod
         attemptedWorker = worker
         const oldConfig = loadConfig()
         const outcome = await syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta, nextMode)
+        const recoveredFailureCode = libraryBacklogGlobalRecoveryFailureCode
         clearLibraryBacklogGlobalRecoverySchedule()
+        const identityConflictCount = getLibrarySessionRegistryDiagnostics()
+          .filter((binding) => binding.state === 'conflict').length
+        const recoveredHealthState = libraryBacklogRecoveredHealthState(
+          getLibraryHealth().reasonCode,
+          recoveredFailureCode,
+          identityConflictCount
+        )
+        if (recoveredHealthState === 'identity-conflict') {
+          transitionLibraryHealth(
+            'identity-conflict',
+            'IDENTITY_CONFLICT',
+            `${identityConflictCount} logical session identities have multiple read-only packages`
+          )
+        } else if (recoveredHealthState === 'ready') {
+          transitionLibraryHealth('ready', 'SYNC_COMPLETE', 'Library background recovery completed')
+        }
         if (outcome.completed > 0 && epoch === libraryRuntimeEpoch && !runtimeShuttingDown && !libraryRuntimePaused) {
           const tree = await requestLibraryScan(false)
           if (adoptLibraryTree(tree, false)) await hydrateLibrarySessions(tree)
         }
       } catch (error) {
         if (runtimeShuttingDown || libraryRuntimePaused || epoch !== libraryRuntimeEpoch) return
+        const batchFailureCause = error instanceof LibraryStartupBatchTransportError
+          ? error.cause
+          : error
         if (error instanceof LibraryStartupBatchTransportError) {
           transportFailure = true
           if (attemptedWorker && libraryWorker === attemptedWorker) libraryWorker = null
           if (attemptedWorker) void attemptedWorker.retire().catch(() => undefined)
-          scheduleLibraryBacklogGlobalRecovery(nextMode)
+          const policy = libraryBacklogBatchFailurePolicy(batchFailureCause)
+          if (policy === 'global-retry') {
+            const classification = classifyLibraryError(batchFailureCause)
+            scheduleLibraryBacklogGlobalRecovery(nextMode, classification.errorCode)
+          }
         }
-        const classification = classifyLibraryError(error)
+        const classification = classifyLibraryError(batchFailureCause)
         transitionLibraryHealth(
           classification.state,
           classification.errorCode,
@@ -2108,7 +2142,7 @@ async function syncStartupSessionsUnderProviderBarrier(
     [...sessions],
     sessionMeta,
     LIBRARY_STARTUP_SCHEMA_GENERATION,
-    { preserveUnseen: latestProviderSettlementStatus === null }
+    { preserveUnseen: latestProviderSettlementStatus !== 'complete' }
   )
   const recoveryByIndex = new Map(plan.recoveryItems.map((item) => [item.index, item.entry]))
   const now = Date.now()

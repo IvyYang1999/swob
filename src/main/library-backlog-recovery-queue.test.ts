@@ -1,11 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import {
   LibraryBacklogRecoveryQueue,
+  libraryBacklogBatchFailurePolicy,
   libraryBacklogGlobalRetryDelay,
+  libraryBacklogRecoveredHealthState,
   shouldSelectLibraryBacklogItem
 } from './library-backlog-recovery-queue'
 
 describe('LibraryBacklogRecoveryQueue', () => {
+  it('keeps whole-batch safety failures out of the item retry timer', () => {
+    expect(libraryBacklogBatchFailurePolicy(Object.assign(new Error('private path'), { code: 'EACCES' })))
+      .toBe('safety-stop')
+    expect(libraryBacklogBatchFailurePolicy(Object.assign(new Error('busy'), {
+      name: 'LibraryWriterBusyError',
+      code: 'LIBRARY_WRITER_BUSY'
+    }))).toBe('writer-recovery')
+    expect(libraryBacklogBatchFailurePolicy(new Error('worker exited'))).toBe('global-retry')
+  })
+
+  it('restores health after an owned global retry succeeds without overwriting a newer fault', () => {
+    expect(libraryBacklogRecoveredHealthState('INIT_FAILED', 'INIT_FAILED', 0)).toBe('ready')
+    expect(libraryBacklogRecoveredHealthState('INIT_FAILED', 'INIT_FAILED', 2)).toBe('identity-conflict')
+    expect(libraryBacklogRecoveredHealthState('IO_ERROR', 'INIT_FAILED', 0)).toBeNull()
+  })
+
   it('retains a Provider wake that arrives while automatic recovery is active', () => {
     const queue = new LibraryBacklogRecoveryQueue()
     queue.request('automatic')

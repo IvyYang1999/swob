@@ -529,6 +529,12 @@ function mustAbortStartup(error: unknown): boolean {
       .includes(String(typed.code || ''))
 }
 
+function isStartupLifecycleAbort(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const typed = error as { name?: unknown }
+  return error instanceof LibraryStartupSyncInterruptedError || typed.name === 'AbortError'
+}
+
 /**
  * Gives live source work priority at every bounded startup transaction boundary.
  * Production supplies syncBatch; syncChunk remains solely for focused adapters.
@@ -585,8 +591,11 @@ export async function syncLibraryStartupIncrementally(
       // exact checkpoint outcome in the Library worker transaction. A reject
       // here is therefore a worker/transport/global failure; fabricating local
       // skipped items would lose durable recovery ownership.
+      if (options.syncBatch) {
+        if (isStartupLifecycleAbort(error)) throw error
+        throw new LibraryStartupBatchTransportError(error)
+      }
       if (mustAbortStartup(error)) throw error
-      if (options.syncBatch) throw new LibraryStartupBatchTransportError(error)
       {
         const skipped = batch.map((session) => failedStartupItem(session.sessionId, error))
         const handled = skipped.filter((entry) => entry.disposition === 'handled').length

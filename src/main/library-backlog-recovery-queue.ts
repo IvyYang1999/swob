@@ -3,6 +3,32 @@ export type LibraryBacklogRecoverySelectionMode = 'initial' | LibraryBacklogReco
 
 const GLOBAL_RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000, 600_000] as const
 
+export type LibraryBacklogBatchFailurePolicy = 'global-retry' | 'writer-recovery' | 'safety-stop'
+
+export function libraryBacklogBatchFailurePolicy(error: unknown): LibraryBacklogBatchFailurePolicy {
+  if (!error || typeof error !== 'object') return 'global-retry'
+  const typed = error as { name?: unknown; code?: unknown }
+  const name = typeof typed.name === 'string' ? typed.name : ''
+  const code = typeof typed.code === 'string' ? typed.code : ''
+  if (name === 'LibraryWriterBusyError' || name === 'LibraryWriterIdentityUnavailableError' ||
+    name === 'SessionCreateIdentityUnavailableError' ||
+    code === 'LIBRARY_WRITER_BUSY' || code === 'WRITER_IDENTITY_UNAVAILABLE' || code === 'ENOSPC') {
+    return 'writer-recovery'
+  }
+  if (name === 'LibraryPathUnsafeError' ||
+    code === 'EACCES' || code === 'EPERM' || code === 'EIO') return 'safety-stop'
+  return 'global-retry'
+}
+
+export function libraryBacklogRecoveredHealthState(
+  currentReasonCode: string | null | undefined,
+  ownedFailureReasonCode: string | null | undefined,
+  identityConflictCount: number
+): 'ready' | 'identity-conflict' | null {
+  if (!ownedFailureReasonCode || currentReasonCode !== ownedFailureReasonCode) return null
+  return identityConflictCount > 0 ? 'identity-conflict' : 'ready'
+}
+
 export function libraryBacklogGlobalRetryDelay(attempt: number): number | null {
   if (!Number.isSafeInteger(attempt) || attempt < 1) return null
   return GLOBAL_RETRY_DELAYS_MS[attempt - 1] ?? null

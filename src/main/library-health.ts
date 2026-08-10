@@ -979,7 +979,11 @@ export function classifyLibraryError(
     }
   }
 
-  const err = error as { name?: string; code?: string; message?: string; reason?: unknown }
+  const err = error as { name?: string; code?: string; message?: string; reason?: unknown; cause?: unknown }
+
+  if (err.name === 'LibraryStartupBatchTransportError' && err.cause && err.cause !== error) {
+    return classifyLibraryError(err.cause)
+  }
 
   if (err.code === 'WRITER_IDENTITY_UNAVAILABLE') {
     return {

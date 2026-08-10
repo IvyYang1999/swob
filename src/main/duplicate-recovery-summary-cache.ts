@@ -23,6 +23,19 @@ function validCount(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0
 }
 
+function redactedSummary(summary: PersistedDuplicateRecoverySummary['summary']): PersistedDuplicateRecoverySummary['summary'] {
+  return {
+    schemaVersion: 1,
+    planId: summary.planId,
+    packageCount: summary.packageCount,
+    conflictCount: summary.conflictCount,
+    autoRepairableGroupCount: summary.autoRepairableGroupCount,
+    autoRepairablePackageCount: summary.autoRepairablePackageCount,
+    manualMergeGroupCount: summary.manualMergeGroupCount,
+    preservedGroupCount: summary.preservedGroupCount
+  }
+}
+
 function parsePersisted(value: unknown): PersistedDuplicateRecoverySummary | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Partial<PersistedDuplicateRecoverySummary>
@@ -50,7 +63,7 @@ export function readDuplicateRecoverySummaryCache(
     const persisted = parsePersisted(JSON.parse(fs.readFileSync(filePath, 'utf8')))
     if (!persisted || persisted.libraryRootHash !== libraryRootHash(libraryRoot)) return null
     return {
-      ...persisted.summary,
+      ...redactedSummary(persisted.summary),
       completedAt: persisted.completedAt,
       canApply: false
     }
@@ -65,14 +78,14 @@ export function writeDuplicateRecoverySummaryCache(
   writeGeneration: number,
   summary: DuplicateRecoverySummary
 ): void {
-  const { completedAt, canApply: _canApply, ...redactedSummary } = summary
+  const { completedAt } = summary
   const persisted: PersistedDuplicateRecoverySummary = {
     schemaVersion: 1,
     plannerRevision: DUPLICATE_RECOVERY_PLANNER_REVISION,
     libraryRootHash: libraryRootHash(libraryRoot),
     writeGeneration,
     completedAt,
-    summary: redactedSummary
+    summary: redactedSummary(summary)
   }
   const parent = path.dirname(filePath)
   fs.mkdirSync(parent, { recursive: true, mode: 0o700 })

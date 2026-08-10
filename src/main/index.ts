@@ -4929,9 +4929,14 @@ ipcMain.handle('onboarding:complete', async (_event, libraryPath: string, exclud
     targetPath,
     forceRefresh: true
   })
-  completeOnboarding(targetPath, excluded)
+  // Persist the non-destructive source choice first, but do not claim that
+  // onboarding or the root switch completed until activation has crossed its
+  // own durable boundary. A pre-change teardown failure must leave the old
+  // default root unauthorized for background writes.
+  setExcludedSources(excluded)
   cachedSessions = filterExcludedSources(cachedSessions)
   const root = await activateLibraryAt(targetPath)
+  completeOnboarding(targetPath, excluded)
   mainWindow?.webContents.send('sessions:updated', cachedSessions.map(sessionSummaryForRenderer))
   return root
 })

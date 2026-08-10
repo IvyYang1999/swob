@@ -246,6 +246,16 @@ describe('live Library synchronization architecture', () => {
     expect(source).toContain('if (libraryRescanRecoveryBlocked()) controller.pause()')
     expect(source).toContain('resumeLibraryRescanIfSafe()')
     expect(source).toContain('libraryRootSwitchQueue.run(')
+    const onboarding = source.match(
+      /ipcMain\.handle\('onboarding:complete',[\s\S]*?\n}\)/
+    )?.[0] || ''
+    expect(onboarding.indexOf('setExcludedSources(excluded)')).toBeGreaterThan(-1)
+    expect(onboarding.indexOf('const root = await activateLibraryAt(targetPath)')).toBeGreaterThan(
+      onboarding.indexOf('setExcludedSources(excluded)')
+    )
+    expect(onboarding.indexOf('completeOnboarding(targetPath, excluded)')).toBeGreaterThan(
+      onboarding.indexOf('const root = await activateLibraryAt(targetPath)')
+    )
   })
 
   it('keeps duplicate analysis filesystem paths behind a stable error-code boundary', () => {

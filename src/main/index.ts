@@ -1815,10 +1815,6 @@ function adoptLibraryTree(tree: LibraryTree, notifyRenderer = true): boolean {
     rejectAutomaticDuplicateRecoveryAnalysisWaiters('duplicate-recovery-no-longer-actionable')
     void cancelActiveDuplicateRecoveryAnalysis('duplicate-recovery-no-longer-actionable')
   }
-  const recovery = getLibraryHealth().dimensions.backgroundBacklog.recovery
-  if (libraryInitialized && recovery.attentionRequired + recovery.exhausted > 0) {
-    queueMicrotask(() => { void runLibraryBacklogRecovery('automatic') })
-  }
   refreshCachedMissingSources()
   scheduleSearchIndexWarmup()
   if (cachedSessions.length > 0) void scheduleUsageFactSync()

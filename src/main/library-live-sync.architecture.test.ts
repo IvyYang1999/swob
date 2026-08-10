@@ -140,6 +140,8 @@ describe('live Library synchronization architecture', () => {
     expect(source).toMatch(
       /function adoptLibraryTree[\s\S]*?requestAutomaticDuplicateRecoveryAnalysis\(tree\)/
     )
+    const adoptTree = source.match(/function adoptLibraryTree[\s\S]*?\n}\n/)?.[0] || ''
+    expect(adoptTree).not.toContain("runLibraryBacklogRecovery('automatic')")
     expect(source).toMatch(
       /function adoptLibraryTree[\s\S]*?activeDuplicateRecoveryAnalysis\.writeGeneration[\s\S]*?cancelActiveDuplicateRecoveryAnalysis\('duplicate-recovery-inventory-changed-during-analysis'\)/
     )

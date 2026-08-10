@@ -183,8 +183,14 @@ describe('DiagnosticsSettings', () => {
   })
 
   it('一次确认在重渲染前连续点击也只提交一次应用', async () => {
-    let finishApply!: (value: { appliedPackageCount: number; restartRequired: boolean }) => void
-    const applyPromise = new Promise<{ appliedPackageCount: number; restartRequired: boolean }>((resolve) => {
+    let finishApply!: (value: {
+      schemaVersion: 1
+      status: 'applied'
+      planId: string
+      appliedPackageCount: number
+      restartRequired: boolean
+    }) => void
+    const applyPromise = new Promise<Parameters<typeof finishApply>[0]>((resolve) => {
       finishApply = resolve
     })
     ;(window as any).api.libraryApplyDuplicateRecovery.mockReturnValue(applyPromise)
@@ -196,11 +202,111 @@ describe('DiagnosticsSettings', () => {
       fireEvent.click(button)
       expect(confirm).toHaveBeenCalledTimes(1)
       expect((window as any).api.libraryApplyDuplicateRecovery).toHaveBeenCalledTimes(1)
-      finishApply({ appliedPackageCount: 2, restartRequired: false })
+      finishApply({
+        schemaVersion: 1,
+        status: 'applied',
+        planId: 'plan:0123456789abcdef01234567',
+        appliedPackageCount: 2,
+        restartRequired: false
+      })
       await waitFor(() => expect(showToast).toHaveBeenCalledTimes(1))
     } finally {
       confirm.mockRestore()
     }
+  })
+
+  it('计划过期时立即移除旧按钮并加入主进程的重新分析', async () => {
+    const analyze = (window as any).api.libraryAnalyzeDuplicateRecovery
+    let finishReanalysis!: (value: any) => void
+    const pendingReanalysis = new Promise((resolve) => { finishReanalysis = resolve })
+    analyze.mockResolvedValueOnce({
+      schemaVersion: 1,
+      planId: 'plan:0123456789abcdef01234567',
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 2,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    }).mockReturnValueOnce(pendingReanalysis)
+    ;(window as any).api.libraryApplyDuplicateRecovery.mockResolvedValue({
+      schemaVersion: 1,
+      status: 'stale',
+      planId: 'plan:0123456789abcdef01234567',
+      appliedPackageCount: 0,
+      restartRequired: false
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      render(<DiagnosticsSettings />)
+      fireEvent.click(await screen.findByRole('button', { name: '隔离 2 个等价副本' }))
+      await waitFor(() => expect(analyze).toHaveBeenCalledTimes(2))
+      expect(screen.queryByRole('button', { name: '隔离 2 个等价副本' })).toBeNull()
+      expect(showToast).toHaveBeenCalledWith(
+        'Library 已发生变化，旧操作已取消；Swob 正在重新检查。',
+        'info'
+      )
+    } finally {
+      finishReanalysis({
+        schemaVersion: 1,
+        planId: 'plan:fedcba9876543210fedcba98',
+        packageCount: 20,
+        conflictCount: 1,
+        autoRepairableGroupCount: 0,
+        autoRepairablePackageCount: 0,
+        manualMergeGroupCount: 1,
+        preservedGroupCount: 0
+      })
+      confirm.mockRestore()
+    }
+  })
+
+  it('卸载设置页只解除进度订阅，不取消主进程分析或接受晚到结果', async () => {
+    let finishOld!: (value: any) => void
+    let finishNew!: (value: any) => void
+    const oldPromise = new Promise((resolve) => { finishOld = resolve })
+    const newPromise = new Promise((resolve) => { finishNew = resolve })
+    const analyze = (window as any).api.libraryAnalyzeDuplicateRecovery
+    analyze.mockReset().mockReturnValueOnce(oldPromise).mockReturnValueOnce(newPromise)
+    const unsubscribeOld = vi.fn()
+    const unsubscribeNew = vi.fn()
+    ;(window as any).api.onDuplicateRecoveryProgress
+      .mockReturnValueOnce(unsubscribeOld)
+      .mockReturnValueOnce(unsubscribeNew)
+
+    const first = render(<DiagnosticsSettings />)
+    await waitFor(() => expect(analyze).toHaveBeenCalledTimes(1))
+    first.unmount()
+    expect(unsubscribeOld).toHaveBeenCalledTimes(1)
+    expect((window as any).api.libraryCancelDuplicateRecoveryAnalysis).not.toHaveBeenCalled()
+
+    const second = render(<DiagnosticsSettings />)
+    await waitFor(() => expect(analyze).toHaveBeenCalledTimes(2))
+    finishNew({
+      schemaVersion: 1,
+      planId: 'plan:0123456789abcdef01234567',
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 2,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    })
+    expect(await screen.findByRole('button', { name: '隔离 2 个等价副本' })).not.toBeNull()
+    finishOld({
+      schemaVersion: 1,
+      planId: 'plan:fedcba9876543210fedcba98',
+      packageCount: 20,
+      conflictCount: 1,
+      autoRepairableGroupCount: 1,
+      autoRepairablePackageCount: 9,
+      manualMergeGroupCount: 0,
+      preservedGroupCount: 0
+    })
+    await waitFor(() => expect(screen.queryByRole('button', { name: '隔离 9 个等价副本' })).toBeNull())
+    expect(unsubscribeOld).toHaveBeenCalledTimes(1)
+    expect((window as any).api.libraryCancelDuplicateRecoveryAnalysis).not.toHaveBeenCalled()
+    second.unmount()
   })
 
   it('临时失败由系统自动排期，普通模式不提供无意义的手动重跑', () => {

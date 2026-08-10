@@ -183,6 +183,9 @@ describe('live Library synchronization architecture', () => {
     )?.[0] || ''
     expect(applyWork).toContain('prepared.writeGeneration !== (latestLibraryTree?.writeGeneration ?? -1)')
     expect(applyWork).toContain('executeDuplicateRecoveryPlan(')
+    expect(applyWork).toContain('error instanceof DuplicateRecoveryPlanExpiredError')
+    expect(applyWork).toContain('requestAutomaticDuplicateRecoveryAnalysis(tree)')
+    expect(applyWork).toContain("status: 'stale'")
     expect(applyHandler).toContain('if (duplicateRecoveryApplyInFlight)')
     expect(applyHandler).toContain('return duplicateRecoveryApplyInFlight.promise')
   })

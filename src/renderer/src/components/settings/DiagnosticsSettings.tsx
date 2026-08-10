@@ -33,6 +33,7 @@ export function DiagnosticsSettings() {
   const [report, setReport] = useState<DuplicateRecoverySummary | null>(null)
   const cancelRequested = useRef(false)
   const analysisRequestId = useRef(0)
+  const progressUnsubscribe = useRef<(() => void) | null>(null)
   const identity = health.dimensions.identityExceptions
   const backlog = health.dimensions.backgroundBacklog
   const backgroundRecovery = backlog.recovery
@@ -61,6 +62,8 @@ export function DiagnosticsSettings() {
 
   const analyze = useCallback(async () => {
     const requestId = ++analysisRequestId.current
+    progressUnsubscribe.current?.()
+    progressUnsubscribe.current = null
     cancelRequested.current = false
     setAnalyzing(true)
     setAnalysisFailed(false)
@@ -69,16 +72,30 @@ export function DiagnosticsSettings() {
     const unsubscribe = window.api.onDuplicateRecoveryProgress?.((next) => {
       if (analysisRequestId.current === requestId) setProgress(next)
     })
+    let progressReleased = false
+    const releaseProgress = () => {
+      if (progressReleased) return
+      progressReleased = true
+      unsubscribe?.()
+    }
+    progressUnsubscribe.current = releaseProgress
     try {
       const next = await window.api.libraryAnalyzeDuplicateRecovery()
       if (analysisRequestId.current === requestId) setReport(next)
     } catch {
       if (analysisRequestId.current === requestId && !cancelRequested.current) setAnalysisFailed(true)
     } finally {
-      unsubscribe?.()
+      releaseProgress()
+      if (progressUnsubscribe.current === releaseProgress) progressUnsubscribe.current = null
       if (analysisRequestId.current === requestId) setAnalyzing(false)
     }
   }, [showToast, t])
+
+  useEffect(() => () => {
+    analysisRequestId.current++
+    progressUnsubscribe.current?.()
+    progressUnsubscribe.current = null
+  }, [])
 
   useEffect(() => {
     if (actionableIdentityGroups === 0 || lastAutomaticAnalysis.current === analysisKey) return
@@ -99,6 +116,13 @@ export function DiagnosticsSettings() {
     setApplying(true)
     try {
       const result = await window.api.libraryApplyDuplicateRecovery(report.planId)
+      if (result.status === 'stale') {
+        setReport(null)
+        setProgress({ phase: 'discovering', discoveredPackages: 0, conflictPackages: 0, analyzedConflictPackages: 0 })
+        showToast(t('diagnostics.plan_changed_rechecking'), 'info')
+        void analyze()
+        return
+      }
       showToast(t(result.restartRequired ? 'diagnostics.apply_done_restart' : 'diagnostics.apply_done', {
         n: result.appliedPackageCount
       }), 'success')

@@ -156,7 +156,10 @@ import {
 } from './library-health'
 import { advanceLibraryWriterArbiterEpoch } from './library-writer-lease'
 import { loadConfig, saveConfig } from './config-store'
-import type { DuplicateRecoveryReport } from './duplicate-recovery-planner'
+import {
+  DuplicateRecoveryPlanExpiredError,
+  type DuplicateRecoveryReport
+} from './duplicate-recovery-planner'
 import {
   DuplicateRecoveryMutationIncompleteError,
   executeDuplicateRecoveryPlan,
@@ -4243,6 +4246,24 @@ async function applyPreparedDuplicateRecovery(planId: string): Promise<Duplicate
   } catch (error) {
     preparedDuplicateRecovery = null
     cachedDuplicateRecoveryAnalysis = null
+    if (error instanceof DuplicateRecoveryPlanExpiredError) {
+      try {
+        const tree = await requestLibraryScan()
+        requestAutomaticDuplicateRecoveryAnalysis(tree)
+      } catch (refreshError) {
+        const tree = latestLibraryTree
+        if (tree) requestAutomaticDuplicateRecoveryAnalysis(tree)
+        console.error('[duplicate-recovery] stale-plan refresh delayed:',
+          refreshError instanceof Error ? refreshError.message : 'unknown error')
+      }
+      return {
+        schemaVersion: 1,
+        status: 'stale',
+        planId,
+        appliedPackageCount: 0,
+        restartRequired: false
+      }
+    }
     if (error instanceof DuplicateRecoveryMutationIncompleteError) {
       transitionLibraryHealth(
         'read-only',

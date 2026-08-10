@@ -5,7 +5,7 @@ import {
   prepareDuplicateRecoveryExecution,
   type DuplicateRecoveryReport
 } from './duplicate-recovery-planner'
-import type { DuplicateRecoveryApplyResult } from '../shared/duplicate-recovery-contract'
+import type { DuplicateRecoveryAppliedResult } from '../shared/duplicate-recovery-contract'
 
 export interface ExecuteDuplicateRecoveryOptions {
   quarantineRoot?: string
@@ -292,10 +292,16 @@ export async function executeDuplicateRecoveryPlan(
   libraryRoot: string,
   accepted: DuplicateRecoveryReport,
   options: ExecuteDuplicateRecoveryOptions = {}
-): Promise<DuplicateRecoveryApplyResult> {
+): Promise<DuplicateRecoveryAppliedResult> {
   const prepared = await prepareDuplicateRecoveryExecution(libraryRoot, accepted, options)
   if (prepared.moves.length === 0) {
-    return { schemaVersion: 1, planId: prepared.planId, appliedPackageCount: 0, restartRequired: false }
+    return {
+      schemaVersion: 1,
+      status: 'applied',
+      planId: prepared.planId,
+      appliedPackageCount: 0,
+      restartRequired: false
+    }
   }
   const quarantineDevice = fs.statSync(nearestExistingAncestor(prepared.quarantineRoot)).dev
   for (const move of prepared.moves) {
@@ -432,6 +438,7 @@ export async function executeDuplicateRecoveryPlan(
   }
   return {
     schemaVersion: 1,
+    status: 'applied',
     planId: prepared.planId,
     appliedPackageCount: completed.length,
     restartRequired: true

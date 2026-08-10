@@ -18,9 +18,22 @@ export interface DuplicateRecoverySummary {
   preservedGroupCount: number
 }
 
-export interface DuplicateRecoveryApplyResult {
+export interface DuplicateRecoveryAppliedResult {
   schemaVersion: 1
+  status: 'applied'
   planId: string
   appliedPackageCount: number
   restartRequired: boolean
 }
+
+export interface DuplicateRecoveryStaleResult {
+  schemaVersion: 1
+  status: 'stale'
+  planId: string
+  appliedPackageCount: 0
+  restartRequired: false
+}
+
+export type DuplicateRecoveryApplyResult =
+  | DuplicateRecoveryAppliedResult
+  | DuplicateRecoveryStaleResult

@@ -18,7 +18,7 @@ const mockStore: any = {
 const health = createInitializingLibraryHealthSnapshot()
 health.state = 'identity-conflict'
 health.writeCapability = 'partial'
-health.availableActions = ['retry-compensation']
+health.availableActions = []
 health.dimensions.writerCapability.state = 'available'
 health.dimensions.activeSourceFreshness.state = 'durable'
 health.dimensions.backgroundBacklog = {
@@ -91,15 +91,16 @@ describe('DiagnosticsSettings', () => {
 
   afterEach(() => cleanup())
 
-  it('普通模式只统计可操作问题，不把历史来源桶和已授权只读组冒充故障', () => {
+  it('普通模式不混加不同单位，并自动启动只读身份分析', async () => {
     render(<DiagnosticsSettings />)
 
-    expect(screen.getByText('有 14 项需要处理')).not.toBeNull()
+    expect(screen.getByText('正在核验 12 组会话身份冲突')).not.toBeNull()
     expect(screen.getByText('发现 12 组会话身份冲突。分析不会修改 Library。')).not.toBeNull()
     expect(screen.getByText('另有 2 组已确认的历史重复包，以只读方式保留。')).not.toBeNull()
     expect(screen.queryByTestId('diagnostics-raw')).toBeNull()
     expect(screen.queryByText(/missing-source/)).toBeNull()
     expect(screen.queryByText(/remote-session/)).toBeNull()
+    await waitFor(() => expect((window as any).api.libraryAnalyzeDuplicateRecovery).toHaveBeenCalledTimes(1))
   })
 
   it('Debug Mode 默认关闭并通过偏好显式启用，即使外部 store 尚未回写也立即可用', () => {
@@ -125,9 +126,8 @@ describe('DiagnosticsSettings', () => {
     expect(raw.textContent).toContain('remote-session')
   })
 
-  it('安全分析只返回脱敏汇总，并把自动隔离与人工合并边界分开', async () => {
+  it('自动只读分析返回脱敏汇总，并把自动隔离与人工合并边界分开', async () => {
     render(<DiagnosticsSettings />)
-    fireEvent.click(screen.getByRole('button', { name: '安全分析' }))
 
     await waitFor(() => expect((window as any).api.libraryAnalyzeDuplicateRecovery).toHaveBeenCalledTimes(1))
     expect(await screen.findByTestId('duplicate-recovery-result')).not.toBeNull()
@@ -136,18 +136,24 @@ describe('DiagnosticsSettings', () => {
     expect(screen.getByText(/有独有内容的包绝不会自动移动/)).not.toBeNull()
   })
 
-  it('后台补齐暂停但尚未失败时仍提供恢复入口', () => {
+  it('临时失败由系统自动排期，普通模式不提供无意义的手动重跑', () => {
     const previous = health.dimensions.backgroundBacklog
     health.dimensions.backgroundBacklog = {
       ...previous,
-      state: 'paused',
-      failed: 0,
-      remaining: 7
+      recovery: {
+        state: 'scheduled',
+        retryScheduled: 7,
+        waitingProvider: 0,
+        attentionRequired: 0,
+        exhausted: 0,
+        maxAttempts: 5,
+        nextRetryAt: '2026-08-10T00:00:00.000Z'
+      }
     }
     try {
       render(<DiagnosticsSettings />)
-      expect(screen.getByText('后台补齐已暂停，还有 7 个会话未处理。')).not.toBeNull()
-      expect(screen.getByRole('button', { name: '重新补齐' })).not.toBeNull()
+      expect(screen.getByText('7 个临时失败已排入自动重试；无需手动操作。')).not.toBeNull()
+      expect(screen.queryByRole('button', { name: '重新补齐' })).toBeNull()
     } finally {
       health.dimensions.backgroundBacklog = previous
     }

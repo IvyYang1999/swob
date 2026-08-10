@@ -76,6 +76,88 @@ afterAll(() => {
 })
 
 describe('Library startup production throughput', () => {
+  it('reuses one exact legacy package when its persisted source path proves the binding', async () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-legacy-library-'))
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-legacy-source-'))
+    roots.push(libraryRoot, sourceRoot)
+    const sourcePath = writeSource(sourceRoot, 0)
+    const session = summary(0, sourcePath)
+    const legacyDir = path.join(libraryRoot, 'legacy-package')
+    fs.mkdirSync(legacyDir)
+    fs.writeFileSync(path.join(legacyDir, '.swob-session.json'), JSON.stringify({
+      schemaVersion: 2,
+      logicalIdentity: {
+        schemaVersion: 1,
+        sourceFamily: 'legacy-ambiguous',
+        sourceInstance: { kind: 'legacy-ambiguous', id: 'legacy-ambiguous' },
+        sessionId: session.sessionId
+      },
+      sessionId: session.sessionId,
+      sourceFilePaths: [sourcePath],
+      createdAt: session.createdAt,
+      updatedAt: '2026-08-07T00:00:00.000Z',
+      projectPath: session.projectPath,
+      turnCount: 0
+    }))
+    fs.writeFileSync(path.join(legacyDir, 'backup.jsonl'), fs.readFileSync(sourcePath))
+    fs.writeFileSync(path.join(legacyDir, 'transcript.md'), 'legacy transcript\n')
+    lib.initLibrary(libraryRoot)
+
+    const plan = await lib.planLibraryStartupSync([session], 1, {})
+    const result = await lib.syncLibraryStartupBatch(
+      [session],
+      {},
+      { snapshotDigest: plan.snapshotDigest, schemaGeneration: plan.schemaGeneration }
+    )
+
+    expect(result.outcome).toMatchObject({ completed: 1, skipped: [] })
+    expect(fs.readdirSync(libraryRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)).toEqual(['legacy-package'])
+    const persisted = JSON.parse(fs.readFileSync(path.join(legacyDir, '.swob-session.json'), 'utf-8'))
+    expect(persisted.logicalIdentity.sourceFamily).toBe('legacy-ambiguous')
+    expect(persisted.turnCount).toBe(session.turnCount)
+  })
+
+  it('does not alias a legacy package when the source evidence differs', async () => {
+    const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-legacy-mismatch-library-'))
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-legacy-mismatch-source-'))
+    roots.push(libraryRoot, sourceRoot)
+    const sourcePath = writeSource(sourceRoot, 0)
+    const session = summary(0, sourcePath)
+    const legacyDir = path.join(libraryRoot, 'legacy-package')
+    fs.mkdirSync(legacyDir)
+    fs.writeFileSync(path.join(legacyDir, '.swob-session.json'), JSON.stringify({
+      schemaVersion: 2,
+      logicalIdentity: {
+        schemaVersion: 1,
+        sourceFamily: 'legacy-ambiguous',
+        sourceInstance: { kind: 'legacy-ambiguous', id: 'legacy-ambiguous' },
+        sessionId: session.sessionId
+      },
+      sessionId: session.sessionId,
+      sourceFilePaths: ['/different/source.jsonl'],
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      projectPath: session.projectPath,
+      turnCount: session.turnCount
+    }))
+    lib.initLibrary(libraryRoot)
+
+    const plan = await lib.planLibraryStartupSync([session], 1, {})
+    const result = await lib.syncLibraryStartupBatch(
+      [session],
+      {},
+      { snapshotDigest: plan.snapshotDigest, schemaGeneration: plan.schemaGeneration }
+    )
+    expect(result.outcome.skipped[0]).toMatchObject({
+      code: 'SESSION_IDENTITY_AMBIGUOUS',
+      recovery: { state: 'attention-required', attempt: 0 }
+    })
+    expect(fs.readdirSync(libraryRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))).toHaveLength(1)
+  })
+
   it('refreshes both identity indexes after an intervening writer commit', async () => {
     const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-generation-library-'))
     const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-startup-generation-source-'))

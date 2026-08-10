@@ -39,6 +39,20 @@ describe('live Library synchronization architecture', () => {
     expect(drain).not.toContain('waitForIdle')
   })
 
+  it('keeps targeted startup recovery separate from writer compensation and full initialization', () => {
+    const compensationHandler = source.match(
+      /ipcMain\.handle\('library:compensationRetry',[\s\S]*?\n}\)/
+    )?.[0] || ''
+    expect(compensationHandler).toContain('retryLibraryAfterWriterBlocked(true)')
+    expect(compensationHandler).not.toContain('initLibraryFromSessions')
+    expect(source).toMatch(
+      /async function runLibraryBacklogRecovery[\s\S]*?syncStartupSessions\(worker, cachedSessions, oldConfig\.sessionMeta, mode\)/
+    )
+    expect(source).toMatch(
+      /mode === 'provider'[\s\S]*?waiting-provider[\s\S]*?retry-scheduled[\s\S]*?nextAttemptAt/
+    )
+  })
+
   it('keeps search projection behind one non-blocking writer boundary', () => {
     expect(source).toContain('getSearchIndexWriteCoordinator().scheduleLegacySource')
     expect(source).toContain('getSearchIndexWriteCoordinator().scheduleLegacySnapshot')
@@ -99,5 +113,18 @@ describe('live Library synchronization architecture', () => {
     expect(applyHandler.indexOf('dialog.showErrorBox(')).toBeGreaterThan(
       applyHandler.indexOf('const shutdown = cleanupRuntimeResources()')
     )
+  })
+
+  it('single-flights and generation-binds duplicate analysis while keeping apply revalidation', () => {
+    const analysis = source.match(
+      /function runDuplicateRecoveryAnalysis[\s\S]*?\n}\n\nipcMain\.handle\('library:getHealth'/
+    )?.[0] || ''
+    expect(analysis).toContain('cachedDuplicateRecoveryAnalysis.writeGeneration === writeGeneration')
+    expect(analysis).toContain('if (activeDuplicateRecoveryAnalysis) return activeDuplicateRecoveryAnalysis.promise')
+    const applyHandler = source.match(
+      /ipcMain\.handle\('library:applyDuplicateRecovery',[\s\S]*?\n}\)\n\nipcMain\.handle\('library:selectDirectory'/
+    )?.[0] || ''
+    expect(applyHandler).toContain('prepared.writeGeneration !== (latestLibraryTree?.writeGeneration ?? -1)')
+    expect(applyHandler).toContain('executeDuplicateRecoveryPlan(')
   })
 })

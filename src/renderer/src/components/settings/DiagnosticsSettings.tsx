@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Bug, CheckCircle2, Database, Loader2, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useStore } from '../../store'
-import { retryCompensation, useLibraryHealth } from '../../hooks/useLibraryHealth'
+import { useLibraryHealth } from '../../hooks/useLibraryHealth'
 import type {
   DuplicateRecoveryProgress,
   DuplicateRecoverySummary
@@ -27,18 +27,20 @@ export function DiagnosticsSettings() {
   const debugModeTouched = useRef(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [applying, setApplying] = useState(false)
-  const [retrying, setRetrying] = useState(false)
+  const [analysisFailed, setAnalysisFailed] = useState(false)
   const [progress, setProgress] = useState<DuplicateRecoveryProgress | null>(null)
   const [report, setReport] = useState<DuplicateRecoverySummary | null>(null)
   const cancelRequested = useRef(false)
   const identity = health.dimensions.identityExceptions
   const backlog = health.dimensions.backgroundBacklog
+  const backgroundRecovery = backlog.recovery
   const actionableIdentityGroups = identity.unknownGroupCount + identity.evidenceMismatchGroupCount
-  const backgroundFailures = backlog.failed
-  const pausedBackgroundItems = backlog.state === 'paused' ? backlog.remaining : 0
-  const backgroundProblemCount = backgroundFailures + pausedBackgroundItems
   const writerProblem = health.state === 'writer-blocked' || health.state === 'read-only' || health.state === 'corrupt'
-  const actionableCount = actionableIdentityGroups + backgroundProblemCount + (writerProblem ? 1 : 0)
+  const automaticRecoveryActive = backgroundRecovery.state === 'running' ||
+    backgroundRecovery.state === 'scheduled' || backgroundRecovery.state === 'waiting-provider'
+  const backgroundNeedsAttention = backgroundRecovery.attentionRequired + backgroundRecovery.exhausted
+  const analysisKey = `${identity.unknownGroupCount}:${identity.evidenceMismatchGroupCount}`
+  const lastAutomaticAnalysis = useRef<string | null>(null)
   const summary = report ? recoverySummary(report) : null
   const rawSnapshot = useMemo(() => JSON.stringify({
     state: health.state,
@@ -55,9 +57,10 @@ export function DiagnosticsSettings() {
     if (!debugModeTouched.current) setDebugMode(preferences.debugMode === true)
   }, [preferences.debugMode])
 
-  const analyze = async () => {
+  const analyze = useCallback(async () => {
     cancelRequested.current = false
     setAnalyzing(true)
+    setAnalysisFailed(false)
     setReport(null)
     setProgress({ phase: 'discovering', discoveredPackages: 0, conflictPackages: 0, analyzedConflictPackages: 0 })
     const unsubscribe = window.api.onDuplicateRecoveryProgress?.((next) => setProgress(next))
@@ -65,12 +68,18 @@ export function DiagnosticsSettings() {
       const next = await window.api.libraryAnalyzeDuplicateRecovery()
       setReport(next)
     } catch {
-      if (!cancelRequested.current) showToast(t('diagnostics.analysis_failed'), 'error')
+      if (!cancelRequested.current) setAnalysisFailed(true)
     } finally {
       unsubscribe?.()
       setAnalyzing(false)
     }
-  }
+  }, [showToast, t])
+
+  useEffect(() => {
+    if (actionableIdentityGroups === 0 || lastAutomaticAnalysis.current === analysisKey) return
+    lastAutomaticAnalysis.current = analysisKey
+    void analyze()
+  }, [actionableIdentityGroups, analysisKey, analyze])
 
   const cancelAnalysis = async () => {
     cancelRequested.current = true
@@ -107,16 +116,24 @@ export function DiagnosticsSettings() {
           className="rounded-lg border border-edge bg-surface px-3.5 py-3"
         >
           <div className="flex items-start gap-2.5">
-            {actionableCount === 0
+            {!writerProblem && !automaticRecoveryActive && actionableIdentityGroups === 0 && backgroundNeedsAttention === 0
               ? <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-soft-green" />
               : <AlertTriangle size={16} className="mt-0.5 shrink-0 text-soft-amber" />}
             <div className="min-w-0 flex-1">
               <div className="text-xs font-medium text-primary">
                 {health.state === 'initializing'
                   ? t('diagnostics.checking')
-                  : actionableCount === 0
-                  ? t('diagnostics.no_action_needed')
-                  : t('diagnostics.action_needed', { n: actionableCount })}
+                  : writerProblem
+                    ? t('diagnostics.writer_recovering')
+                    : automaticRecoveryActive
+                      ? t('diagnostics.automatic_recovery')
+                      : actionableIdentityGroups > 0
+                        ? t(report ? 'diagnostics.identity_reviewed' : 'diagnostics.identity_review', {
+                            n: actionableIdentityGroups
+                          })
+                        : backgroundNeedsAttention > 0
+                          ? t('diagnostics.background_attention', { n: backgroundNeedsAttention })
+                          : t('diagnostics.no_action_needed')}
               </div>
               <p className="mt-1 text-[11px] leading-relaxed text-muted">
                 {actionableIdentityGroups > 0
@@ -140,18 +157,34 @@ export function DiagnosticsSettings() {
           icon={<ShieldCheck size={12} />}
         >
           <div className="rounded-lg border border-edge bg-base px-3.5 py-3 space-y-3">
-            {!report && (
+            {!report && !analysisFailed && (
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="min-w-48 flex-1 text-[11px] leading-relaxed text-muted">
-                  {t('diagnostics.analysis_privacy')}
+                  {analyzing ? t('diagnostics.analysis_automatic') : t('diagnostics.analysis_privacy')}
+                </p>
+                {analyzing && (
+                  <button
+                    type="button"
+                    onClick={cancelAnalysis}
+                    className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs text-secondary hover:bg-hover"
+                  >
+                    <Loader2 size={12} className="motion-safe:animate-spin" />
+                    {t('diagnostics.cancel_analysis')}
+                  </button>
+                )}
+              </div>
+            )}
+            {analysisFailed && (
+              <div role="alert" className="flex flex-wrap items-center justify-between gap-3">
+                <p className="min-w-48 flex-1 text-[11px] leading-relaxed text-muted">
+                  {t('diagnostics.analysis_failed')}
                 </p>
                 <button
                   type="button"
-                  onClick={analyzing ? cancelAnalysis : analyze}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/25 disabled:opacity-40"
+                  onClick={analyze}
+                  className="rounded-md px-3 py-1.5 text-xs text-accent hover:bg-accent/10"
                 >
-                  {analyzing && <Loader2 size={12} className="motion-safe:animate-spin" />}
-                  {analyzing ? t('diagnostics.cancel_analysis') : t('diagnostics.analyze')}
+                  {t('diagnostics.analysis_retry')}
                 </button>
               </div>
             )}
@@ -180,14 +213,6 @@ export function DiagnosticsSettings() {
                   {t('diagnostics.result_boundary')}
                 </p>
                 <div className="flex flex-wrap justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={analyze}
-                    disabled={analyzing || applying}
-                    className="rounded-md px-3 py-1.5 text-xs text-secondary hover:bg-hover disabled:opacity-40"
-                  >
-                    {t('diagnostics.analyze_again')}
-                  </button>
                   {summary.autoPackages > 0 && (
                     <button
                       type="button"
@@ -207,28 +232,31 @@ export function DiagnosticsSettings() {
         </SettingField>
       )}
 
-      {backgroundProblemCount > 0 && (
+      {(automaticRecoveryActive || backgroundNeedsAttention > 0) && (
         <SettingField label={t('diagnostics.background_title')} icon={<RefreshCw size={12} />}>
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-surface px-3 py-2.5">
-            <span className="text-[11px] text-muted">
-              {pausedBackgroundItems > 0
-                ? t('diagnostics.background_paused', { n: pausedBackgroundItems })
-                : t('diagnostics.background_failed', { n: backgroundFailures })}
-            </span>
-            {health.availableActions.includes('retry-compensation') && (
-              <button
-                type="button"
-                disabled={retrying}
-                onClick={async () => {
-                  setRetrying(true)
-                  const ok = await retryCompensation()
-                  if (!ok) showToast(t('diagnostics.retry_failed'), 'error')
-                  setRetrying(false)
-                }}
-                className="rounded-md px-3 py-1.5 text-xs text-accent hover:bg-accent/10 disabled:opacity-40"
-              >
-                {t('diagnostics.retry')}
-              </button>
+          <div className="space-y-1.5 rounded-md bg-surface px-3 py-2.5">
+            {backgroundRecovery.retryScheduled > 0 && (
+              <p className="text-[11px] text-muted">
+                {t('diagnostics.background_scheduled', { n: backgroundRecovery.retryScheduled })}
+              </p>
+            )}
+            {backgroundRecovery.waitingProvider > 0 && (
+              <p className="text-[11px] text-muted">
+                {t('diagnostics.background_waiting_provider', { n: backgroundRecovery.waitingProvider })}
+              </p>
+            )}
+            {backgroundRecovery.attentionRequired > 0 && (
+              <p className="text-[11px] leading-relaxed text-muted">
+                {t('diagnostics.background_identity_guard', { n: backgroundRecovery.attentionRequired })}
+              </p>
+            )}
+            {backgroundRecovery.exhausted > 0 && (
+              <p className="text-[11px] leading-relaxed text-muted">
+                {t('diagnostics.background_exhausted', {
+                  n: backgroundRecovery.exhausted,
+                  attempts: backgroundRecovery.maxAttempts
+                })}
+              </p>
             )}
           </div>
         </SettingField>

@@ -6,8 +6,36 @@ import {
 import type { LibrarySyncOutcome } from './library-manager'
 import type { SessionSummary } from './types'
 
-export const LIBRARY_STARTUP_CHECKPOINT_VERSION = 1
+export const LIBRARY_STARTUP_CHECKPOINT_VERSION = 2
 export const LIBRARY_STARTUP_BATCH_SIZE = 32
+export const LIBRARY_STARTUP_RECOVERY_MAX_ATTEMPTS = 5
+
+const LIBRARY_STARTUP_RECOVERY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000, 600_000] as const
+
+export type LibraryStartupRecoveryState =
+  | 'retry-scheduled'
+  | 'waiting-provider'
+  | 'attention-required'
+  | 'exhausted'
+
+export interface LibraryStartupRecoveryEntry {
+  fingerprint: string
+  state: LibraryStartupRecoveryState
+  reasonCode: string
+  attempt: number
+  firstFailedAt: string
+  lastAttemptAt: string
+  nextAttemptAt: string | null
+}
+
+export interface LibraryStartupRecoverySummary {
+  retryScheduled: number
+  waitingProvider: number
+  attentionRequired: number
+  exhausted: number
+  maxAttempts: typeof LIBRARY_STARTUP_RECOVERY_MAX_ATTEMPTS
+  nextRetryAt: string | null
+}
 
 export interface LibraryStartupProgress {
   current: number
@@ -26,6 +54,7 @@ export interface LibraryStartupCheckpoint {
   completedKeys: string[]
   dirtyKeys: string[]
   completedFingerprints: Record<string, string>
+  recovery: Record<string, LibraryStartupRecoveryEntry>
 }
 
 export interface LibraryStartupDescriptor {
@@ -37,6 +66,7 @@ export interface LibraryStartupPlan {
   checkpoint: LibraryStartupCheckpoint
   descriptors: LibraryStartupDescriptor[]
   dirtyIndexes: number[]
+  recoveryItems: Array<{ index: number; entry: LibraryStartupRecoveryEntry }>
   invalidation: 'cold' | 'none' | 'snapshot-changed' | 'schema-changed' | 'projection-changed'
 }
 
@@ -118,7 +148,8 @@ function isStringArray(value: unknown): value is string[] {
 export function parseLibraryStartupCheckpoint(value: unknown): LibraryStartupCheckpoint | null {
   if (!value || typeof value !== 'object') return null
   const candidate = value as Partial<LibraryStartupCheckpoint>
-  if (candidate.version !== LIBRARY_STARTUP_CHECKPOINT_VERSION ||
+  const version = (candidate as { version?: unknown }).version
+  if ((version !== 1 && version !== LIBRARY_STARTUP_CHECKPOINT_VERSION) ||
     typeof candidate.snapshotDigest !== 'string' ||
     !Number.isSafeInteger(candidate.schemaGeneration) ||
     !isStringArray(candidate.completedKeys) ||
@@ -127,13 +158,31 @@ export function parseLibraryStartupCheckpoint(value: unknown): LibraryStartupChe
     !Object.values(candidate.completedFingerprints).every((entry) => typeof entry === 'string')) {
     return null
   }
+  const rawRecovery = version === LIBRARY_STARTUP_CHECKPOINT_VERSION
+    ? (candidate as Partial<LibraryStartupCheckpoint>).recovery
+    : {}
+  if (!rawRecovery || typeof rawRecovery !== 'object') return null
+  const recovery: Record<string, LibraryStartupRecoveryEntry> = {}
+  for (const [key, raw] of Object.entries(rawRecovery)) {
+    if (!raw || typeof raw !== 'object') return null
+    const entry = raw as Partial<LibraryStartupRecoveryEntry>
+    if (typeof entry.fingerprint !== 'string' ||
+      !['retry-scheduled', 'waiting-provider', 'attention-required', 'exhausted'].includes(String(entry.state)) ||
+      typeof entry.reasonCode !== 'string' || !Number.isSafeInteger(entry.attempt) || entry.attempt! < 0 ||
+      typeof entry.firstFailedAt !== 'string' || !Number.isFinite(Date.parse(entry.firstFailedAt)) ||
+      typeof entry.lastAttemptAt !== 'string' || !Number.isFinite(Date.parse(entry.lastAttemptAt)) ||
+      (entry.nextAttemptAt !== null &&
+        (typeof entry.nextAttemptAt !== 'string' || !Number.isFinite(Date.parse(entry.nextAttemptAt))))) return null
+    recovery[key] = entry as LibraryStartupRecoveryEntry
+  }
   return {
     version: LIBRARY_STARTUP_CHECKPOINT_VERSION,
     snapshotDigest: candidate.snapshotDigest,
     schemaGeneration: candidate.schemaGeneration!,
     completedKeys: [...new Set(candidate.completedKeys)].sort(),
     dirtyKeys: [...new Set(candidate.dirtyKeys)].sort(),
-    completedFingerprints: { ...candidate.completedFingerprints }
+    completedFingerprints: { ...candidate.completedFingerprints },
+    recovery
   }
 }
 
@@ -175,16 +224,22 @@ export function buildLibraryStartupPlan(
   if (previous?.schemaGeneration === schemaGeneration && previous.snapshotDigest === snapshotDigest) {
     const completed = new Set(previous.completedKeys)
     const dirty = new Set(previous.dirtyKeys)
+    const recovery = Object.fromEntries(Object.entries(previous.recovery)
+      .filter(([key, entry]) => descriptorByKey.get(key)?.fingerprint === entry.fingerprint))
     return {
       checkpoint: {
         ...previous,
         completedKeys: [...completed].filter((key) => descriptorByKey.has(key)).sort(),
         dirtyKeys: [...dirty].filter((key) => descriptorByKey.has(key)).sort(),
         completedFingerprints: Object.fromEntries(Object.entries(previous.completedFingerprints)
-          .filter(([key]) => descriptorByKey.has(key)))
+          .filter(([key]) => descriptorByKey.has(key))),
+        recovery
       },
       descriptors,
       dirtyIndexes: indexesForDirtyKeys(descriptors, (key) => dirty.has(key) && !completed.has(key)),
+      recoveryItems: descriptors.flatMap((descriptor, index) => recovery[descriptor.key]
+        ? [{ index, entry: recovery[descriptor.key] }]
+        : []),
       invalidation: 'none'
     }
   }
@@ -202,12 +257,17 @@ export function buildLibraryStartupPlan(
     schemaGeneration,
     completedKeys: [],
     dirtyKeys,
-    completedFingerprints: cleanFingerprints
+    completedFingerprints: cleanFingerprints,
+    recovery: Object.fromEntries(Object.entries(previous?.recovery || {})
+      .filter(([key, entry]) => descriptorByKey.get(key)?.fingerprint === entry.fingerprint && dirtyKeySet.has(key)))
   }
   return {
     checkpoint,
     descriptors,
     dirtyIndexes: indexesForDirtyKeys(descriptors, (key) => dirtyKeySet.has(key)),
+    recoveryItems: descriptors.flatMap((descriptor, index) => checkpoint.recovery[descriptor.key]
+      ? [{ index, entry: checkpoint.recovery[descriptor.key] }]
+      : []),
     invalidation: !previous
       ? 'cold'
       : previous.schemaGeneration !== schemaGeneration
@@ -229,16 +289,120 @@ export function completeLibraryStartupCheckpoint(
   const dirty = new Set(checkpoint.dirtyKeys)
   const completed = new Set(checkpoint.completedKeys)
   const completedFingerprints = { ...checkpoint.completedFingerprints }
+  const recovery = { ...checkpoint.recovery }
   for (const descriptor of descriptors) {
     if (!dirty.has(descriptor.key)) throw new Error('Library startup batch is not part of the active checkpoint')
     completed.add(descriptor.key)
     completedFingerprints[descriptor.key] = descriptor.fingerprint
+    delete recovery[descriptor.key]
   }
   return {
     ...checkpoint,
     completedKeys: [...completed].sort(),
-    completedFingerprints
+    completedFingerprints,
+    recovery
   }
+}
+
+function stableRecoveryDelayMs(key: string, attempt: number): number {
+  const base = LIBRARY_STARTUP_RECOVERY_DELAYS_MS[Math.min(
+    Math.max(0, attempt - 1),
+    LIBRARY_STARTUP_RECOVERY_DELAYS_MS.length - 1
+  )]
+  const bucket = Number.parseInt(sha256(key).slice(0, 4), 16) % 21
+  return Math.max(250, Math.round(base * (0.9 + bucket / 100)))
+}
+
+function recoveryStateForCode(code: string): 'transient' | 'provider' | 'attention' {
+  if (code === 'PROVIDER_SESSION_PENDING') return 'provider'
+  if (code === 'SESSION_CREATE_BUSY' || code === 'SESSION_SYNC_FAILED') return 'transient'
+  return 'attention'
+}
+
+export function updateLibraryStartupCheckpointAfterBatch(
+  checkpoint: LibraryStartupCheckpoint,
+  sessions: readonly SessionSummary[],
+  outcome: LibrarySyncOutcome,
+  sessionMeta: Record<string, { customTitle?: string }> = {},
+  nowMs = Date.now()
+): { checkpoint: LibraryStartupCheckpoint; recoveryBySessionId: Record<string, LibraryStartupRecoveryEntry> } {
+  const failedBySessionId = new Map(outcome.skipped
+    .filter((entry) => entry.disposition === 'failed')
+    .map((entry) => [entry.sessionId, entry.code]))
+  const terminalSessions = sessions.filter((session) => !failedBySessionId.has(session.sessionId))
+  let next = completeLibraryStartupCheckpoint(checkpoint, terminalSessions, sessionMeta)
+  const completed = new Set(next.completedKeys)
+  const completedFingerprints = { ...next.completedFingerprints }
+  const recovery = { ...next.recovery }
+  const recoveryBySessionId: Record<string, LibraryStartupRecoveryEntry> = {}
+  const now = new Date(nowMs).toISOString()
+  for (const session of sessions) {
+    const code = failedBySessionId.get(session.sessionId)
+    if (!code) continue
+    const descriptor = describeLibraryStartupSession(
+      session,
+      checkpoint.schemaGeneration,
+      sessionMeta[session.sessionId]?.customTitle
+    )
+    const previous = recovery[descriptor.key]?.fingerprint === descriptor.fingerprint
+      ? recovery[descriptor.key]
+      : null
+    const failureClass = recoveryStateForCode(code)
+    const attempt = failureClass === 'transient' ? (previous?.attempt || 0) + 1 : (previous?.attempt || 0)
+    const state: LibraryStartupRecoveryState = failureClass === 'provider'
+      ? 'waiting-provider'
+      : failureClass === 'attention'
+        ? 'attention-required'
+        : attempt >= LIBRARY_STARTUP_RECOVERY_MAX_ATTEMPTS
+          ? 'exhausted'
+          : 'retry-scheduled'
+    const entry: LibraryStartupRecoveryEntry = {
+      fingerprint: descriptor.fingerprint,
+      state,
+      reasonCode: code,
+      attempt,
+      firstFailedAt: previous?.firstFailedAt || now,
+      lastAttemptAt: now,
+      nextAttemptAt: state === 'retry-scheduled'
+        ? new Date(nowMs + stableRecoveryDelayMs(descriptor.key, attempt)).toISOString()
+        : null
+    }
+    recovery[descriptor.key] = entry
+    recoveryBySessionId[session.sessionId] = entry
+    completed.delete(descriptor.key)
+    delete completedFingerprints[descriptor.key]
+  }
+  next = {
+    ...next,
+    completedKeys: [...completed].sort(),
+    completedFingerprints,
+    recovery
+  }
+  return { checkpoint: next, recoveryBySessionId }
+}
+
+export function summarizeLibraryStartupRecovery(
+  recovery: Readonly<Record<string, LibraryStartupRecoveryEntry>>
+): LibraryStartupRecoverySummary {
+  const summary: LibraryStartupRecoverySummary = {
+    retryScheduled: 0,
+    waitingProvider: 0,
+    attentionRequired: 0,
+    exhausted: 0,
+    maxAttempts: LIBRARY_STARTUP_RECOVERY_MAX_ATTEMPTS,
+    nextRetryAt: null
+  }
+  for (const entry of Object.values(recovery)) {
+    if (entry.state === 'retry-scheduled') {
+      summary.retryScheduled++
+      if (entry.nextAttemptAt && (!summary.nextRetryAt || entry.nextAttemptAt < summary.nextRetryAt)) {
+        summary.nextRetryAt = entry.nextAttemptAt
+      }
+    } else if (entry.state === 'waiting-provider') summary.waitingProvider++
+    else if (entry.state === 'attention-required') summary.attentionRequired++
+    else summary.exhausted++
+  }
+  return summary
 }
 
 function failureReason(error: unknown): string {

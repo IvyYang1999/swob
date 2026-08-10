@@ -6,7 +6,10 @@ import {
   LIBRARY_STARTUP_BATCH_SIZE,
   buildLibraryStartupPlan,
   completeLibraryStartupCheckpoint,
+  parseLibraryStartupCheckpoint,
+  summarizeLibraryStartupRecovery,
   syncLibraryStartupIncrementally,
+  updateLibraryStartupCheckpointAfterBatch,
   type LibraryStartupCheckpoint,
   type LibraryStartupPlan
 } from './library-startup-sync'
@@ -342,6 +345,69 @@ describe('incremental Library startup synchronization', () => {
 })
 
 describe('Library startup dirty-set checkpoint', () => {
+  it('migrates v1 checkpoints without inventing recovery work', () => {
+    const parsed = parseLibraryStartupCheckpoint({
+      version: 1,
+      snapshotDigest: 'digest',
+      schemaGeneration: 1,
+      completedKeys: ['done'],
+      dirtyKeys: ['dirty'],
+      completedFingerprints: { done: 'fingerprint' }
+    })
+    expect(parsed).toMatchObject({ version: 2, recovery: {} })
+  })
+
+  it('persists bounded transient retries and resets them only when source evidence changes', () => {
+    const session = summary('retry', '/fixture/retry.jsonl', '2026-08-02T09:00:00.000Z')
+    let checkpoint = buildLibraryStartupPlan([session], 1, null).checkpoint
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [session], {
+        total: 1,
+        completed: 0,
+        skipped: [{
+          sessionId: session.sessionId,
+          code: 'SESSION_SYNC_FAILED',
+          disposition: 'failed',
+          retryable: true
+        }]
+      }, {}, Date.parse(`2026-08-02T09:00:0${attempt}.000Z`)).checkpoint
+    }
+    expect(summarizeLibraryStartupRecovery(checkpoint.recovery)).toMatchObject({
+      retryScheduled: 0,
+      exhausted: 1,
+      maxAttempts: 5,
+      nextRetryAt: null
+    })
+    expect(Object.values(checkpoint.recovery)[0]).toMatchObject({ state: 'exhausted', attempt: 5 })
+
+    const changed = { ...session, updatedAt: '2026-08-02T10:00:00.000Z', fileSizeBytes: 12 }
+    const replanned = buildLibraryStartupPlan([changed], 1, checkpoint)
+    expect(replanned.recoveryItems).toEqual([])
+    expect(replanned.dirtyIndexes).toEqual([0])
+  })
+
+  it('waits for Provider completion without consuming attempts and isolates identity guards from retry', () => {
+    const provider = summary('provider', '/fixture/provider.jsonl', '2026-08-02T09:00:00.000Z')
+    const identity = summary('identity', '/fixture/identity.jsonl', '2026-08-02T09:00:00.000Z')
+    let checkpoint = buildLibraryStartupPlan([provider, identity], 1, null).checkpoint
+    checkpoint = updateLibraryStartupCheckpointAfterBatch(checkpoint, [provider, identity], {
+      total: 2,
+      completed: 0,
+      skipped: [
+        { sessionId: provider.sessionId, code: 'PROVIDER_SESSION_PENDING', disposition: 'failed', retryable: false },
+        { sessionId: identity.sessionId, code: 'SESSION_IDENTITY_MISSING', disposition: 'failed', retryable: false }
+      ]
+    }, {}, Date.parse('2026-08-02T09:00:00.000Z')).checkpoint
+
+    expect(summarizeLibraryStartupRecovery(checkpoint.recovery)).toMatchObject({
+      waitingProvider: 1,
+      attentionRequired: 1,
+      retryScheduled: 0
+    })
+    expect(Object.values(checkpoint.recovery).map((entry) => [entry.state, entry.attempt]).sort())
+      .toEqual([['attention-required', 0], ['waiting-provider', 0]])
+  })
+
   it('invalidates and replans when the source collection or schema generation changes', () => {
     const sessions = Array.from({ length: 8 }, (_, index) =>
       summary(`session-${index}`, `/fixture/session-${index}.jsonl`, `2026-08-02T09:00:${String(index).padStart(2, '0')}.000Z`))

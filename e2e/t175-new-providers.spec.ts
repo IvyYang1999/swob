@@ -26,6 +26,9 @@ function canonicalProviderIds(libraryRoot: string): string[] {
 }
 
 test('Qoder and Trae run through discovery, Library, search, and responsive UI', async ({}, testInfo) => {
+  // This serial composite keeps its stricter per-assertion deadlines below;
+  // the outer budget only prevents their valid sum from being pre-empted at 30s.
+  test.setTimeout(60_000)
   const launched = await launchApp({
     includeQoderFixture: true,
     includeTraeFixture: true,

@@ -30,6 +30,7 @@ import {
   enqueueCompensation,
   beginLibraryBackgroundSync,
   updateLibraryBackgroundProgress,
+  updateLibraryBackgroundRecovery,
   finishLibraryBackgroundSync
 } from './library-health'
 
@@ -142,6 +143,25 @@ describe('LibraryHealthStateMachine', () => {
     expect(backlog).toMatchObject({ total: 25, completed: 0, failed: 25, remaining: 0 })
     expect(backlog.failures).toHaveLength(20)
     expect(backlog.failureCounts).toEqual({ SESSION_CREATE_BUSY: 13, SESSION_SYNC_FAILED: 12 })
+  })
+
+  it('reports automatic backlog recovery without exposing writer-compensation controls', () => {
+    transitionLibraryHealth('ready', 'READY', 'ready')
+    updateLibraryBackgroundRecovery({
+      state: 'scheduled',
+      retryScheduled: 3,
+      waitingProvider: 2,
+      attentionRequired: 1,
+      exhausted: 0,
+      maxAttempts: 5,
+      nextRetryAt: '2026-08-10T00:00:00.000Z'
+    })
+    expect(getLibraryHealth().dimensions.backgroundBacklog.recovery).toMatchObject({
+      state: 'scheduled',
+      retryScheduled: 3,
+      waitingProvider: 2
+    })
+    expect(getLibraryHealth().availableActions).not.toContain('retry-compensation')
   })
 
   it('persists append-only redacted diagnostics outside the Library and reloads valid lines', () => {

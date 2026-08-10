@@ -216,7 +216,16 @@ class LibraryHealthStateMachine extends EventEmitter {
         remaining: 0,
         failures: [],
         failureCounts: {},
-        unverifiableBuckets: emptyUnverifiableBuckets()
+        unverifiableBuckets: emptyUnverifiableBuckets(),
+        recovery: {
+          state: 'idle',
+          retryScheduled: 0,
+          waitingProvider: 0,
+          attentionRequired: 0,
+          exhausted: 0,
+          maxAttempts: 5,
+          nextRetryAt: null
+        }
       },
       identityExceptions: {
         state: 'none',
@@ -471,6 +480,15 @@ class LibraryHealthStateMachine extends EventEmitter {
     this.commit(previous)
   }
 
+  setBackgroundRecovery(recovery: LibraryHealthDimensions['backgroundBacklog']['recovery']): void {
+    const previous = this._state
+    this._dimensions.backgroundBacklog = {
+      ...this._dimensions.backgroundBacklog,
+      recovery: { ...recovery }
+    }
+    this.commit(previous)
+  }
+
   setIdentityExceptions(summary: Omit<LibraryHealthDimensions['identityExceptions'], 'stateSinceAt'>): void {
     const current = this._dimensions.identityExceptions
     if (!this.transitionAllowed('identityExceptions', current.state, summary.state)) return
@@ -523,7 +541,6 @@ class LibraryHealthStateMachine extends EventEmitter {
     const identity = this._dimensions.identityExceptions
     const hasIdentityRestrictions = identity.authorizedGroupCount + identity.unknownGroupCount +
       identity.evidenceMismatchGroupCount > 0
-    const background = this._dimensions.backgroundBacklog
     const compensation = compensationQueue.progress
     return {
       schemaVersion: 1,
@@ -536,10 +553,9 @@ class LibraryHealthStateMachine extends EventEmitter {
       diagnostics: [...this._diagnostics],
       compensation,
       writerRecovery: { ...this._writerRecovery },
-      availableActions: compensationQueue.running || background.state === 'running'
+      availableActions: compensationQueue.running
         ? ['cancel-compensation']
-        : this._state === 'writer-blocked' || compensation.pending > 0 ||
-            background.state === 'paused' || background.state === 'completed-with-errors'
+        : this._state === 'writer-blocked' || compensation.pending > 0
           ? ['retry-compensation']
           : [],
       dimensions: structuredClone(this._dimensions)
@@ -796,6 +812,19 @@ export function updateLibraryBackgroundProgress(progress: {
 
 export function finishLibraryBackgroundSync(paused = false): void {
   healthMachine.finishBackgroundSync(paused)
+}
+
+export function updateLibraryBackgroundRecovery(
+  recovery: LibraryHealthDimensions['backgroundBacklog']['recovery']
+): void {
+  healthMachine.setBackgroundRecovery({
+    ...recovery,
+    retryScheduled: Math.max(0, Math.trunc(recovery.retryScheduled)),
+    waitingProvider: Math.max(0, Math.trunc(recovery.waitingProvider)),
+    attentionRequired: Math.max(0, Math.trunc(recovery.attentionRequired)),
+    exhausted: Math.max(0, Math.trunc(recovery.exhausted)),
+    maxAttempts: Math.max(0, Math.trunc(recovery.maxAttempts))
+  })
 }
 
 export function updateLibraryUnverifiableBuckets(

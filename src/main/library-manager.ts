@@ -81,9 +81,12 @@ import {
 } from './library-session-registry'
 import {
   buildLibraryStartupPlan,
-  completeLibraryStartupCheckpoint,
   parseLibraryStartupCheckpoint,
-  type LibraryStartupCheckpoint
+  summarizeLibraryStartupRecovery,
+  updateLibraryStartupCheckpointAfterBatch,
+  type LibraryStartupCheckpoint,
+  type LibraryStartupRecoveryEntry,
+  type LibraryStartupRecoverySummary
 } from './library-startup-sync'
 import {
   acquireSessionCreateLock,
@@ -794,6 +797,7 @@ export function initLibrary(root?: string, options: InitLibraryOptions = {}): vo
     startupIncrementalCandidates.clear()
     startupIncrementalPackageIds.clear()
     startupIncrementalCandidatesBySessionId.clear()
+    startupInputLogicalKeysBySessionId.clear()
     startupReservationLogicalHashes = null
     startupSeenLogicalHashes = null
     registrySnapshotPreparedRoot = null
@@ -1276,6 +1280,7 @@ const sessionRegistry = new LibrarySessionRegistry()
 const startupIncrementalCandidates = new Map<LogicalSessionKey, LibrarySessionCandidate>()
 const startupIncrementalPackageIds = new Set<string>()
 const startupIncrementalCandidatesBySessionId = new Map<string, LibrarySessionCandidate[]>()
+const startupInputLogicalKeysBySessionId = new Map<string, Set<LogicalSessionKey>>()
 let startupReservationLogicalHashes: Set<string> | null = null
 let startupSeenLogicalHashes: Set<string> | null = null
 let registrySnapshotPreparedRoot: string | null = null
@@ -1309,6 +1314,15 @@ export class SessionIdentityAmbiguousError extends Error {
   constructor(readonly sessionId: string, readonly candidates: LibrarySessionCandidate[]) {
     super('The legacy sessionId resolves to more than one logical session')
     this.name = 'SessionIdentityAmbiguousError'
+  }
+}
+
+export class CanonicalProviderSessionPendingError extends Error {
+  readonly code = 'PROVIDER_SESSION_PENDING'
+
+  constructor() {
+    super('Canonical provider session is not ready yet')
+    this.name = 'CanonicalProviderSessionPendingError'
   }
 }
 
@@ -4934,6 +4948,7 @@ export interface LibrarySyncSkippedSession {
   code: string
   disposition: 'handled' | 'failed'
   retryable: boolean
+  recovery?: LibraryStartupRecoveryEntry
 }
 
 export interface LibrarySyncOutcome {
@@ -4951,6 +4966,8 @@ export interface LibraryStartupSyncCounters {
 
 export interface LibraryStartupPlanResult {
   dirtyIndexes: number[]
+  recoveryItems: Array<{ index: number; entry: LibraryStartupRecoveryEntry }>
+  recoverySummary: LibraryStartupRecoverySummary
   snapshotDigest: string
   schemaGeneration: number
   invalidation: 'cold' | 'none' | 'snapshot-changed' | 'schema-changed' | 'projection-changed'
@@ -4960,10 +4977,38 @@ export interface LibraryStartupPlanResult {
 export interface LibraryStartupBatchResult {
   outcome: LibrarySyncOutcome
   counters: LibraryStartupSyncCounters
+  recoverySummary: LibraryStartupRecoverySummary
+}
+
+function normalizedStartupSourcePath(sourcePath: string): string {
+  const normalized = path.normalize(sourcePath).normalize('NFC')
+  return process.platform === 'win32'
+    ? normalized.toLocaleLowerCase('en-US')
+    : normalized
+}
+
+function safeLegacyAliasCandidate(session: SessionSummary): LibrarySessionCandidate | null {
+  const currentIdentity = buildLogicalSessionIdentityFromSummary(session)
+  if (currentIdentity.sourceFamily === 'legacy-ambiguous') return null
+  const inputKeys = startupInputLogicalKeysBySessionId.get(session.sessionId)
+  if (!inputKeys || inputKeys.size !== 1 || !inputKeys.has(logicalSessionKey(currentIdentity))) return null
+  const resolution = sessionRegistry.resolveSessionId(session.sessionId)
+  if (resolution.state !== 'bound' || resolution.candidate.isSymlink ||
+    resolution.candidate.identity.sourceFamily !== 'legacy-ambiguous') return null
+  const meta = readSessionMeta(resolution.candidate.dirPath)
+  if (!meta || meta.sessionId !== session.sessionId) return null
+  const expected = new Set(sourceFilePathsForMeta(session).map(normalizedStartupSourcePath))
+  if (expected.size === 0 || !(meta.sourceFilePaths || [])
+    .some((sourcePath) => expected.has(normalizedStartupSourcePath(sourcePath)))) return null
+  return resolution.candidate
+}
+
+function startupIdentityForSession(session: SessionSummary): LogicalSessionIdentity {
+  return safeLegacyAliasCandidate(session)?.identity || buildLogicalSessionIdentityFromSummary(session)
 }
 
 function startupBindingForSession(session: SessionSummary): LibrarySessionBinding {
-  const key = logicalSessionKey(buildLogicalSessionIdentityFromSummary(session))
+  const key = logicalSessionKey(startupIdentityForSession(session))
   const incremental = startupIncrementalCandidates.get(key)
   if (incremental && fs.existsSync(incremental.dirPath)) {
     return { state: 'bound', logicalKey: key, candidate: incremental, candidates: [incremental] }
@@ -5082,7 +5127,7 @@ async function synchronizeStartupSession(
   const canonicalDefinition = session.source ? builtinProviderForSource(session.source) : undefined
   if (canonicalDefinition?.ingestion === 'provider-host') {
     const stored = getCanonicalSessionStore().getSession(session.id)
-    if (!stored) throw new Error('canonical-provider-session-not-found')
+    if (!stored) throw new CanonicalProviderSessionPendingError()
     await ensureCanonicalPackageUnderWriter(
       canonicalDefinition.manifest.providerId,
       stored.sessionRecord.sourceRef,
@@ -5109,6 +5154,7 @@ async function synchronizeStartupSession(
     undefined,
     {},
     {
+      identity: startupIdentityForSession(session),
       beforeManifest: existingDir
         ? undefined
         : async (createdDir, meta) => {
@@ -5194,7 +5240,7 @@ function libraryStartupProjectionIsCurrent(
   session: SessionSummary,
   customTitle?: string
 ): boolean {
-  const key = logicalSessionKey(buildLogicalSessionIdentityFromSummary(session))
+  const key = logicalSessionKey(startupIdentityForSession(session))
   const binding = sessionRegistry.get(key)
   // Identity conflicts are intentionally read-only. Their presence is already
   // surfaced by Library health and must not become an infinite startup retry.
@@ -5281,6 +5327,12 @@ export async function planLibraryStartupSync(
     throwIfIdentityScanUnresolved(recoveryIssues)
     if (!canReuseAuthoritativeScan) scanLibrary()
     prepareStartupIdentityEvidenceIndex(localDeviceId)
+    startupInputLogicalKeysBySessionId.clear()
+    for (const session of sessions) {
+      const keys = startupInputLogicalKeysBySessionId.get(session.sessionId) || new Set<LogicalSessionKey>()
+      keys.add(logicalSessionKey(buildLogicalSessionIdentityFromSummary(session)))
+      startupInputLogicalKeysBySessionId.set(session.sessionId, keys)
+    }
     const plan = buildLibraryStartupPlan(sessions, schemaGeneration, readLibraryStartupCheckpoint(), sessionMeta)
     includeMissingLibraryProjections(plan, sessions, sessionMeta)
     startupPlanRuntime = {
@@ -5296,6 +5348,8 @@ export async function planLibraryStartupSync(
     writeLibraryStartupCheckpoint(plan.checkpoint)
     return {
       dirtyIndexes: plan.dirtyIndexes,
+      recoveryItems: plan.recoveryItems,
+      recoverySummary: summarizeLibraryStartupRecovery(plan.checkpoint.recovery),
       snapshotDigest: plan.checkpoint.snapshotDigest,
       schemaGeneration,
       invalidation: plan.invalidation,
@@ -5346,12 +5400,17 @@ export async function syncLibraryStartupBatch(
         onProgress,
         shouldCancel
       )
-      const retryableSessionIds = new Set(outcome.skipped
-        .filter((entry) => entry.retryable)
-        .map((entry) => entry.sessionId))
-      const terminalSessions = sessions.filter((session) => !retryableSessionIds.has(session.sessionId))
-      writeLibraryStartupCheckpoint(completeLibraryStartupCheckpoint(checkpoint, terminalSessions, sessionMeta))
-      return { outcome, counters: currentLibraryStartupCounters() }
+      const updated = updateLibraryStartupCheckpointAfterBatch(checkpoint, sessions, outcome, sessionMeta)
+      for (const skipped of outcome.skipped) {
+        const recovery = updated.recoveryBySessionId[skipped.sessionId]
+        if (recovery) skipped.recovery = recovery
+      }
+      writeLibraryStartupCheckpoint(updated.checkpoint)
+      return {
+        outcome,
+        counters: currentLibraryStartupCounters(),
+        recoverySummary: summarizeLibraryStartupRecovery(updated.checkpoint.recovery)
+      }
     } finally {
       startupPreparedRegistryDepth--
     }

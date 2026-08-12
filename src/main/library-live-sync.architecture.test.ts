@@ -134,13 +134,13 @@ describe('live Library synchronization architecture', () => {
   it('defers full projections until the initial live durability boundary', () => {
     expect(source).toContain('const startupProjectionGate = new StartupProjectionGate<UsageFactSyncResult>()')
     expect(source).toMatch(
-      /function reconcileSearchIndexProjection\(\): Promise<void> \{[\s\S]*?startupProjectionGate\.scheduleSearch\(scheduleSearchIndexWarmupNow\)/
+      /function reconcileSearchIndexProjection\(\): Promise<void> \{[\s\S]*?startupProjectionGate\.scheduleSearch\([\s\S]*?scheduleSearchIndexWarmupNow,[\s\S]*?currentProjectionRevision\('search'\)/
     )
     expect(source).toMatch(
       /function scheduleSearchIndexWarmup\(\): void \{[\s\S]*?reconcileSearchIndexProjection\(\)/
     )
     expect(source).toMatch(
-      /function scheduleUsageFactSync[\s\S]*?startupProjectionGate\.scheduleUsage\(options, scheduleUsageFactSyncNow\)/
+      /function scheduleUsageFactSync[\s\S]*?startupProjectionGate\.scheduleUsage\(\{[\s\S]*?currentProjectionRevision\('usage'\)[\s\S]*?scheduleUsageFactSyncNow\)/
     )
     expect(source).toMatch(
       /drainLive: drainLiveSessionSynchronizations,[\s\S]*?onFirstDurableBoundary:[\s\S]*?openStartupProjectionGate\(\)/

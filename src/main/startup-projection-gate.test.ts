@@ -21,6 +21,33 @@ function manualIdleScheduler(): {
 }
 
 describe('StartupProjectionGate', () => {
+  it('coalesces and remembers successful projection revisions without overlapping full work', async () => {
+    const idle = manualIdleScheduler()
+    const gate = new StartupProjectionGate<void>({ scheduleIdle: idle.scheduleIdle })
+    gate.open(async () => {}, async () => undefined)
+    gate.finishStartup()
+    const search = vi.fn(async () => {})
+    const usage = vi.fn(async () => undefined)
+
+    const searchRuns = Array.from({ length: 100 }, () => gate.scheduleSearch(search, 'search:r1'))
+    const usageRuns = Array.from({ length: 100 }, () => gate.scheduleUsage({ revision: 'usage:r1' }, usage))
+    await idle.runNext()
+    await idle.runNext()
+    await Promise.all([...searchRuns, ...usageRuns])
+
+    gate.finishStartup()
+    for (let index = 0; index < 100; index++) {
+      await gate.scheduleSearch(search, 'search:r1')
+      await gate.scheduleUsage({ revision: 'usage:r1' }, usage)
+    }
+    expect(search).toHaveBeenCalledTimes(1)
+    expect(usage).toHaveBeenCalledTimes(1)
+    expect(gate.getStats()).toMatchObject({
+      searchFullRuns: 1,
+      usageFullRuns: 1,
+      maxConcurrentFullRuns: 1
+    })
+  })
   it('runs zero full projections for a warm dirty=0 startup', async () => {
     const idle = manualIdleScheduler()
     const gate = new StartupProjectionGate<string>({ scheduleIdle: idle.scheduleIdle })

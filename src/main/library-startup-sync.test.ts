@@ -382,6 +382,37 @@ describe('incremental Library startup synchronization', () => {
     await startup
     expect(startupFinished).toBe(true)
   })
+
+  it('defers a planned item when its live fingerprint changes instead of committing it to the old checkpoint', async () => {
+    const initial = summary('active', '/fixture/active.jsonl', '2026-08-02T09:00:00.000Z')
+    const latest = summary('active', '/fixture/active.jsonl', '2026-08-02T09:01:00.000Z')
+    const synced: SessionSummary[] = []
+
+    const outcome = await syncLibraryStartupIncrementally({
+      sessions: [initial],
+      probeWriter: async () => {},
+      onWriterProven: () => {},
+      resolveLatest: () => latest,
+      shouldDeferLatest: (planned, current) => planned.updatedAt !== current.updatedAt,
+      syncBatch: async (batch) => {
+        synced.push(...batch)
+        return { total: batch.length, completed: batch.length, skipped: [] }
+      },
+      drainLive: async () => false
+    })
+
+    expect(synced).toEqual([])
+    expect(outcome).toMatchObject({
+      total: 1,
+      completed: 1,
+      skipped: [{
+        sessionId: 'active',
+        code: 'LIBRARY_STARTUP_PLAN_CHANGED',
+        disposition: 'handled',
+        retryable: false
+      }]
+    })
+  })
 })
 
 describe('Library startup dirty-set checkpoint', () => {

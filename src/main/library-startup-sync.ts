@@ -96,6 +96,8 @@ export interface IncrementalLibraryStartupOptions {
   /** Compatibility/test adapter. Production startup must use syncBatch. */
   syncChunk?: (session: SessionSummary) => Promise<LibrarySyncOutcome>
   resolveLatest: (initial: SessionSummary) => SessionSummary
+  /** True when the live summary no longer belongs to the immutable plan snapshot. */
+  shouldDeferLatest?: (initial: SessionSummary, latest: SessionSummary) => boolean
   /** True only when this drain completed at least one durable live commit. */
   drainLive: () => Promise<boolean | void>
   onWriterProven: () => void
@@ -601,11 +603,32 @@ export async function syncLibraryStartupIncrementally(
   for (let offset = 0; offset < options.sessions.length; offset += batchSize) {
     if (options.shouldInterrupt?.()) throw new LibraryStartupSyncInterruptedError()
     if (offset > 0 && await options.drainLive()) reportBoundary('durable')
-    const batch = options.sessions.slice(offset, offset + batchSize).map(options.resolveLatest)
+    const plannedBatch = options.sessions.slice(offset, offset + batchSize)
+    const resolvedBatch = plannedBatch.map((initial) => ({
+      initial,
+      latest: options.resolveLatest(initial),
+      defer: false
+    }))
+    for (const resolved of resolvedBatch) {
+      resolved.defer = options.shouldDeferLatest?.(resolved.initial, resolved.latest) === true
+    }
+    const deferred = resolvedBatch.filter(({ defer }) => defer)
+    const batch = resolvedBatch.flatMap(({ latest, defer }) => defer ? [] : [latest])
+    for (const { initial } of deferred) {
+      outcome.completed++
+      outcome.skipped.push({
+        sessionId: initial.sessionId,
+        code: 'LIBRARY_STARTUP_PLAN_CHANGED',
+        disposition: 'handled',
+        retryable: false
+      })
+    }
     let chunk: LibrarySyncOutcome | null = null
     const failureBySessionId = new Map<string, string>()
     try {
-      if (options.syncBatch) {
+      if (batch.length === 0) {
+        chunk = { total: 0, completed: 0, skipped: [] }
+      } else if (options.syncBatch) {
         chunk = await options.syncBatch(batch)
       } else if (options.syncChunk) {
         chunk = await options.syncChunk(batch[0])
@@ -649,9 +672,9 @@ export async function syncLibraryStartupIncrementally(
     const skippedBySessionId = new Map((chunk?.skipped || [])
       .filter((entry) => entry.disposition === 'failed')
       .map((entry) => [entry.sessionId, entry.code]))
-    for (let batchIndex = 0; batchIndex < batch.length; batchIndex++) {
+    for (let batchIndex = 0; batchIndex < plannedBatch.length; batchIndex++) {
       const current = offset + batchIndex + 1
-      const session = batch[batchIndex]
+      const session = plannedBatch[batchIndex]
       const itemFailure = failureBySessionId.get(session.sessionId) || skippedBySessionId.get(session.sessionId)
       options.onProgress?.({
         current,
@@ -664,7 +687,7 @@ export async function syncLibraryStartupIncrementally(
       })
     }
     if (await options.drainLive()) reportBoundary('durable')
-    if (offset + batch.length < options.sessions.length) await options.yieldToEventLoop?.()
+    if (offset + plannedBatch.length < options.sessions.length) await options.yieldToEventLoop?.()
   }
 
   reportBoundary(unexpectedFailure ? 'failed' : 'read-only-only')

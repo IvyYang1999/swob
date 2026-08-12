@@ -25,6 +25,19 @@ describe('LibraryBacklogRecoveryQueue', () => {
     expect(libraryBacklogBatchFailurePolicy(new Error('worker exited'))).toBe('global-retry')
   })
 
+  it('treats immutable identity diagnostics as terminal instead of global retry work', () => {
+    for (const code of [
+      'SESSION_IDENTITY_CONFLICT',
+      'SESSION_IDENTITY_AMBIGUOUS',
+      'SESSION_IDENTITY_MISSING'
+    ]) {
+      expect(libraryBacklogBatchFailurePolicy(Object.assign(new Error(code), {
+        name: 'SessionIdentityConflictError',
+        code
+      }))).toBe('identity-terminal')
+    }
+  })
+
   it('drops wakes behind a safety latch and only coalesces during global backoff', () => {
     expect(libraryBacklogWakeDisposition(7, 7, false)).toBe('drop')
     expect(libraryBacklogWakeDisposition(7, null, false, 7)).toBe('drop')

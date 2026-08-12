@@ -1271,6 +1271,46 @@ describe('buildSessionDetail', () => {
 // cross-session branch inference 测试
 // ========================================================
 describe('loadAllSessions per-file incremental cache', () => {
+  it('v28 只读取当前 key，并且不重写未变化行', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-bounded-cache-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'active.jsonl')
+    writeJsonlAt(file, [rawMsg({
+      sessionId: 'bounded-cache-session',
+      type: 'user',
+      message: { role: 'user', content: 'bounded cache fixture' }
+    })])
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    try {
+      await loadAllSessionsFromTempHome(home)
+      const database = new Database(summaryCacheDbPath(home))
+      database.exec(`
+        CREATE TABLE cache_write_audit(kind TEXT NOT NULL);
+        CREATE TRIGGER audit_cache_update AFTER UPDATE ON summary_cache_entries
+        BEGIN INSERT INTO cache_write_audit(kind) VALUES ('update'); END;
+      `)
+      database.prepare(`
+        INSERT INTO summary_cache_entries(file_path, sig, per_file_json)
+        VALUES (?, ?, ?)
+      `).run('/stale/huge.jsonl', 'stale', '{not-valid-json')
+      database.close()
+
+      infoSpy.mockClear()
+      const sessions = await loadAllSessionsFromTempHome(home)
+      expect(sessions.some((session) => session.sessionId === 'bounded-cache-session')).toBe(true)
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 0, reused 1, files 1')
+
+      const verified = new Database(summaryCacheDbPath(home), { readonly: true })
+      expect(verified.prepare('SELECT COUNT(*) AS count FROM cache_write_audit').get())
+        .toEqual({ count: 0 })
+      expect(verified.prepare('SELECT COUNT(*) AS count FROM summary_cache_entries WHERE file_path = ?')
+        .get('/stale/huge.jsonl')).toEqual({ count: 0 })
+      verified.close()
+    } finally {
+      infoSpy.mockRestore()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
   it('模块在 sandbox 外初始化时拒绝写 summary cache', async () => {
     const systemTemporaryRoot = process.env.SWOB_TEST_SYSTEM_TEMP_ROOT!
     const home = fs.mkdtempSync(path.join(systemTemporaryRoot, 'swob-outside-sandbox-home-'))

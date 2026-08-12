@@ -1,5 +1,6 @@
 interface UsageProjectionOptions {
   rebuild?: boolean
+  revision?: string
 }
 
 interface ProjectionWaiter<T> {
@@ -9,11 +10,13 @@ interface ProjectionWaiter<T> {
 
 interface DeferredSearchProjection {
   run: () => void | Promise<void>
+  revision?: string
   waiters: Array<ProjectionWaiter<void>>
 }
 
 interface DeferredUsageProjection<T> {
   rebuild: boolean
+  revision?: string
   run: (options: { rebuild: boolean }) => Promise<T>
   waiters: Array<ProjectionWaiter<T | undefined>>
 }
@@ -21,12 +24,14 @@ interface DeferredUsageProjection<T> {
 interface SearchProjectionJob {
   kind: 'search'
   run: () => void | Promise<void>
+  revision?: string
   waiters: Array<ProjectionWaiter<void>>
 }
 
 interface UsageProjectionJob<T> {
   kind: 'usage'
   rebuild: boolean
+  revision?: string
   run: (options: { rebuild: boolean }) => Promise<T>
   waiters: Array<ProjectionWaiter<T | undefined>>
 }
@@ -69,6 +74,8 @@ export class StartupProjectionGate<T> {
   private usageFullRuns = 0
   private activeFullRuns = 0
   private maxConcurrentFullRuns = 0
+  private completedSearchRevision: string | null = null
+  private completedUsageRevision: string | null = null
 
   constructor(options: StartupProjectionGateOptions = {}) {
     this.scheduleIdle = options.scheduleIdle || ((run) => {
@@ -84,11 +91,17 @@ export class StartupProjectionGate<T> {
     if (this.opened && this.startupActive) this.enqueueMissingStartupProjections()
   }
 
-  scheduleSearch(run: () => void | Promise<void>): Promise<void> {
+  scheduleSearch(run: () => void | Promise<void>, revision?: string): Promise<void> {
+    if (revision && this.completedSearchRevision === revision) return Promise.resolve()
+    const activeSearch = this.activeJob?.kind === 'search' ? this.activeJob : null
+    if (revision && activeSearch?.revision === revision) {
+      return new Promise<void>((resolve, reject) => activeSearch.waiters.push({ resolve, reject }))
+    }
     if (!this.opened) {
       return new Promise<void>((resolve, reject) => {
-        const pending = this.deferredSearch || { run, waiters: [] }
+        const pending = this.deferredSearch || { run, revision, waiters: [] }
         pending.run = run
+        pending.revision = revision
         pending.waiters.push({ resolve, reject })
         this.deferredSearch = pending
       })
@@ -99,17 +112,31 @@ export class StartupProjectionGate<T> {
       }
       this.startupKindsRun.add('search')
     }
-    return this.enqueueSearch(run)
+    return this.enqueueSearch(run, revision)
   }
 
   scheduleUsage(
     options: UsageProjectionOptions,
     run: (options: { rebuild: boolean }) => Promise<T>
   ): Promise<T | undefined> {
+    if (options.rebuild !== true && options.revision &&
+      this.completedUsageRevision === options.revision) return Promise.resolve(undefined)
+    const activeUsage = this.activeJob?.kind === 'usage' ? this.activeJob : null
+    if (options.rebuild !== true && options.revision &&
+      activeUsage?.revision === options.revision) {
+      return new Promise<T | undefined>((resolve, reject) =>
+        activeUsage.waiters.push({ resolve, reject }))
+    }
     if (!this.opened) {
       return new Promise<T | undefined>((resolve, reject) => {
-        const pending = this.deferredUsage || { rebuild: false, run, waiters: [] }
+        const pending = this.deferredUsage || {
+          rebuild: false,
+          revision: options.revision,
+          run,
+          waiters: []
+        }
         pending.rebuild ||= options.rebuild === true
+        pending.revision = options.revision
         pending.run = run
         pending.waiters.push({ resolve, reject })
         this.deferredUsage = pending
@@ -121,7 +148,7 @@ export class StartupProjectionGate<T> {
       }
       this.startupKindsRun.add('usage')
     }
-    return this.enqueueUsage(options.rebuild === true, run)
+    return this.enqueueUsage(options.rebuild === true, run, options.revision)
   }
 
   open(
@@ -145,15 +172,19 @@ export class StartupProjectionGate<T> {
         // A user-forced rebuild also satisfies any later startup upgrade; do
         // not enqueue a second Usage full run for the same generation.
         this.startupKindsRun.add('usage')
-        this.enqueueUsageJob(true, deferredUsage.run, deferredUsage.waiters)
+        this.enqueueUsageJob(true, deferredUsage.run, deferredUsage.waiters, deferredUsage.revision)
       } else {
         deferredUsage?.waiters.forEach((waiter) => waiter.resolve(undefined))
       }
       return
     }
 
-    this.enqueueStartupSearch(deferredSearch?.waiters || [])
-    this.enqueueStartupUsage(deferredUsage?.rebuild === true, deferredUsage?.waiters || [])
+    this.enqueueStartupSearch(deferredSearch?.waiters || [], deferredSearch?.revision)
+    this.enqueueStartupUsage(
+      deferredUsage?.rebuild === true,
+      deferredUsage?.waiters || [],
+      deferredUsage?.revision
+    )
   }
 
   /** End startup coalescing only after the final adopted tree has queued its projections. */
@@ -172,6 +203,8 @@ export class StartupProjectionGate<T> {
     this.startupSearchRun = null
     this.startupUsageRun = null
     this.startupKindsRun.clear()
+    this.completedSearchRevision = null
+    this.completedUsageRevision = null
 
     const deferredSearch = this.deferredSearch
     const deferredUsage = this.deferredUsage
@@ -205,19 +238,23 @@ export class StartupProjectionGate<T> {
     this.enqueueStartupUsage(false, [])
   }
 
-  private enqueueStartupSearch(waiters: Array<ProjectionWaiter<void>>): void {
+  private enqueueStartupSearch(
+    waiters: Array<ProjectionWaiter<void>>,
+    revision?: string
+  ): void {
     const run = this.startupSearchRun
     if (!run || this.startupKindsRun.has('search')) {
       waiters.forEach((waiter) => waiter.resolve())
       return
     }
     this.startupKindsRun.add('search')
-    this.enqueueSearchJob(run, waiters)
+    this.enqueueSearchJob(run, waiters, revision)
   }
 
   private enqueueStartupUsage(
     rebuild: boolean,
-    waiters: Array<ProjectionWaiter<T | undefined>>
+    waiters: Array<ProjectionWaiter<T | undefined>>,
+    revision?: string
   ): void {
     const run = this.startupUsageRun
     if (!run || this.startupKindsRun.has('usage')) {
@@ -225,50 +262,55 @@ export class StartupProjectionGate<T> {
       return
     }
     this.startupKindsRun.add('usage')
-    this.enqueueUsageJob(rebuild, run, waiters)
+    this.enqueueUsageJob(rebuild, run, waiters, revision)
   }
 
-  private enqueueSearch(run: () => void | Promise<void>): Promise<void> {
+  private enqueueSearch(run: () => void | Promise<void>, revision?: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this.enqueueSearchJob(run, [{ resolve, reject }])
+      this.enqueueSearchJob(run, [{ resolve, reject }], revision)
     })
   }
 
   private enqueueSearchJob(
     run: () => void | Promise<void>,
-    waiters: Array<ProjectionWaiter<void>>
+    waiters: Array<ProjectionWaiter<void>>,
+    revision?: string
   ): void {
     const queued = this.queue.find((job): job is SearchProjectionJob => job.kind === 'search')
     if (queued) {
       queued.run = run
+      queued.revision = revision
       queued.waiters.push(...waiters)
     } else {
-      this.queue.push({ kind: 'search', run, waiters })
+      this.queue.push({ kind: 'search', run, revision, waiters })
     }
     this.requestDrain()
   }
 
   private enqueueUsage(
     rebuild: boolean,
-    run: (options: { rebuild: boolean }) => Promise<T>
+    run: (options: { rebuild: boolean }) => Promise<T>,
+    revision?: string
   ): Promise<T | undefined> {
     return new Promise<T | undefined>((resolve, reject) => {
-      this.enqueueUsageJob(rebuild, run, [{ resolve, reject }])
+      this.enqueueUsageJob(rebuild, run, [{ resolve, reject }], revision)
     })
   }
 
   private enqueueUsageJob(
     rebuild: boolean,
     run: (options: { rebuild: boolean }) => Promise<T>,
-    waiters: Array<ProjectionWaiter<T | undefined>>
+    waiters: Array<ProjectionWaiter<T | undefined>>,
+    revision?: string
   ): void {
     const queued = this.queue.find((job): job is UsageProjectionJob<T> => job.kind === 'usage')
     if (queued) {
       queued.rebuild ||= rebuild
       queued.run = run
+      queued.revision = revision
       queued.waiters.push(...waiters)
     } else {
-      this.queue.push({ kind: 'usage', rebuild, run, waiters })
+      this.queue.push({ kind: 'usage', rebuild, run, revision, waiters })
     }
     this.requestDrain()
   }
@@ -302,9 +344,11 @@ export class StartupProjectionGate<T> {
     try {
       if (job.kind === 'search') {
         await job.run()
+        if (job.revision) this.completedSearchRevision = job.revision
         job.waiters.forEach((waiter) => waiter.resolve())
       } else {
         const result = await job.run({ rebuild: job.rebuild })
+        if (job.revision) this.completedUsageRevision = job.revision
         job.waiters.forEach((waiter) => waiter.resolve(result))
       }
     } catch (error) {

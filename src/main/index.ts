@@ -22,6 +22,7 @@ import {
 import { parseActiveClaudeSessionIds } from '../shared/active-session-processes'
 import { execFile, type ChildProcess } from 'child_process'
 import { Worker } from 'node:worker_threads'
+import { createHash } from 'node:crypto'
 import * as fs from 'fs'
 import { getLocalNetworkInfo, queryPublicIp } from './network-info'
 import {
@@ -217,6 +218,7 @@ import { LibraryWorkerClient } from './library-worker'
 import {
   LibraryStartupSyncInterruptedError,
   LibraryStartupBatchTransportError,
+  describeLibraryStartupSession,
   runLibraryStartupTransaction,
   syncLibraryStartupIncrementally,
   type LibraryStartupProgress,
@@ -1157,8 +1159,52 @@ function scheduleSearchIndexWarmupNow(): Promise<void> {
   })
 }
 
+function currentProjectionRevision(kind: 'search' | 'usage'): string {
+  const sessions = cachedSessions.map((session) => kind === 'search'
+    ? [
+        session.id,
+        session.sessionId,
+        session.source,
+        session.filePath,
+        session.allFilePaths,
+        session.updatedAt,
+        session.fileSizeBytes,
+        session.lifecycleState
+      ]
+    : [
+        session.id,
+        session.sessionId,
+        session.source,
+        session.updatedAt,
+        session.tokenAccounting,
+        session.tokenUsage,
+        session.lifecycleState
+      ])
+    .sort((left, right) => String(left[0]).localeCompare(String(right[0])))
+  const supplemental = kind === 'search'
+    ? {
+        missingSources: [...(cachedMissingSources || [])]
+          .sort((left, right) => left.sessionId.localeCompare(right.sessionId)),
+        excludedSources: [...getExcludedSources()].sort()
+      }
+    : {
+        folders: currentAnalysisFolders().map((folder) => ({
+          id: folder.id,
+          name: folder.name,
+          sessionIds: [...folder.sessionIds].sort()
+        })).sort((left, right) => left.id.localeCompare(right.id))
+      }
+  const digest = createHash('sha256')
+    .update(JSON.stringify({ sessions, supplemental }))
+    .digest('hex')
+  return `${libraryRuntimeEpoch}:${kind}:1:${digest}`
+}
+
 function reconcileSearchIndexProjection(): Promise<void> {
-  return startupProjectionGate.scheduleSearch(scheduleSearchIndexWarmupNow)
+  return startupProjectionGate.scheduleSearch(
+    scheduleSearchIndexWarmupNow,
+    currentProjectionRevision('search')
+  )
 }
 
 function scheduleSearchIndexWarmup(): void {
@@ -1234,7 +1280,10 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
 
 function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult | undefined> {
   if (runtimeShuttingDown) return scheduleUsageFactSyncNow(options)
-  const run = startupProjectionGate.scheduleUsage(options, scheduleUsageFactSyncNow)
+  const run = startupProjectionGate.scheduleUsage({
+    ...options,
+    revision: currentProjectionRevision('usage')
+  }, scheduleUsageFactSyncNow)
   void run.catch(() => { /* error is retained by the runner or root-transition reset */ })
   return run
 }
@@ -2247,7 +2296,8 @@ function handleLibraryGlobalFailure(
   // Any error escaping the transaction boundary is global to that transaction,
   // even when it arose after the checkpoint commit during scan/hydration.
   // Retiring the worker prevents an invalid reply/exit from being reused.
-  if (error instanceof LibraryStartupBatchTransportError || policy === 'global-retry') {
+  if ((error instanceof LibraryStartupBatchTransportError && policy !== 'identity-terminal') ||
+    policy === 'global-retry') {
     retireFailedLibraryWorker(attemptedWorker)
   }
   if (policy === 'global-retry') {
@@ -2258,7 +2308,7 @@ function handleLibraryGlobalFailure(
   }
   if (policy === 'safety-stop') enterLibraryBacklogSafetyStop()
   if (classification.state === 'writer-blocked') scheduleLibraryWriterRecovery()
-  console.error(`[${logScope}] global Library transaction delayed:`,
+  console.error(`[${logScope}] global Library transaction ${policy === 'identity-terminal' ? 'stopped' : 'delayed'}:`,
     classification.errorCode, classification.message)
   return policy
 }
@@ -2511,6 +2561,12 @@ async function syncStartupSessionsUnderProviderBarrier(
         scheduleHotStartupSessions(sessions)
       },
       resolveLatest: (initial) => cachedSummaryForSource(initial.filePath, initial.sessionId) || initial,
+      shouldDeferLatest: (initial, latest) => {
+        const title = sessionMeta[initial.sessionId]?.customTitle
+        const planned = describeLibraryStartupSession(initial, plan.schemaGeneration, title)
+        const current = describeLibraryStartupSession(latest, plan.schemaGeneration, title)
+        return planned.key !== current.key || planned.fingerprint !== current.fingerprint
+      },
       syncBatch: async (batch) => {
         libraryStartupChunkActive = true
         try {
@@ -2568,6 +2624,7 @@ async function initLibraryFromSessions(
 ): Promise<void> {
   if (libraryInitializationPromise) return libraryInitializationPromise
   libraryRescanController?.pause()
+  let startupPlanChanged = false
   const work = (async (): Promise<void> => {
     initLibrary()
     configureLibraryHealthPersistence(
@@ -2591,6 +2648,8 @@ async function initLibraryFromSessions(
     let initialSync: LibrarySyncOutcome = { total: sessions.length, completed: 0, skipped: [] }
     try {
       initialSync = await syncStartupSessions(worker, sessions, oldConfig.sessionMeta)
+      startupPlanChanged ||= initialSync.skipped.some((entry) =>
+        entry.code === 'LIBRARY_STARTUP_PLAN_CHANGED')
     } catch (error) {
       if (!(error instanceof LibraryStartupSyncInterruptedError)) throw error
       startupInterrupted = true
@@ -2620,6 +2679,8 @@ async function initLibraryFromSessions(
       // subset would replace the checkpoint universe and make every older
       // source look dirty again on the next launch.
       const catchUpSync = await syncStartupSessions(worker, cachedSessions, oldConfig.sessionMeta)
+      startupPlanChanged ||= catchUpSync.skipped.some((entry) =>
+        entry.code === 'LIBRARY_STARTUP_PLAN_CHANGED')
       catchUpSync.skipped
         .filter((entry) => entry.code === 'SESSION_IDENTITY_CONFLICT')
         .forEach((entry) => skippedConflictSessionIds.add(entry.sessionId))
@@ -2706,7 +2767,11 @@ async function initLibraryFromSessions(
     if (libraryInitializationPromise === work) libraryInitializationPromise = null
     resumeLibraryRescanIfSafe()
     queueMicrotask(() => {
-      void runLibraryBacklogRecovery('provider').finally(scheduleAutomaticDuplicateRecoveryAnalysis)
+      // A source that changed between plan and batch gets exactly one bounded
+      // replan after initialization; continued edits rely on their next source
+      // event instead of creating an internal retry loop.
+      void runLibraryBacklogRecovery(startupPlanChanged ? 'automatic' : 'provider')
+        .finally(scheduleAutomaticDuplicateRecoveryAnalysis)
     })
   }
 }

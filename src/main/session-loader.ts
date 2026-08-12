@@ -124,6 +124,8 @@ interface DiskCacheEntry {
 interface DiskCache {
   version: number
   entries: Record<string, DiskCacheEntry>
+  /** Legacy JSON has no durable v28 rows, so every retained current entry must be persisted once. */
+  requiresFullPersist?: boolean
 }
 
 const SELECTIVELY_COMPATIBLE_CACHE_VERSIONS = new Set([25, 26, 27])
@@ -157,7 +159,7 @@ function isLegacyCacheEntryCompatible(version: number, entry: DiskCacheEntry): b
   return isLegacyCacheSourceCompatible(version, entry?.perFile?.source)
 }
 
-function loadSqliteDiskCache(): DiskCache | null {
+function loadSqliteDiskCache(filePaths: readonly string[]): DiskCache | null {
   if (!fs.existsSync(CACHE_DB_FILE)) return null
   let database: Database.Database | null = null
   try {
@@ -165,15 +167,19 @@ function loadSqliteDiskCache(): DiskCache | null {
     const version = Number(database.pragma('user_version', { simple: true }))
     if (version !== CACHE_VERSION) return null
     const entries: Record<string, DiskCacheEntry> = {}
-    const rows = database.prepare(`
-      SELECT file_path, sig, per_file_json
-      FROM summary_cache_entries
-      ORDER BY file_path
-    `).iterate() as Iterable<{ file_path: string; sig: string; per_file_json: string }>
-    for (const row of rows) {
-      entries[row.file_path] = {
-        sig: row.sig,
-        perFile: JSON.parse(row.per_file_json) as PerFileCache
+    for (let offset = 0; offset < filePaths.length; offset += 200) {
+      const batch = filePaths.slice(offset, offset + 200)
+      const placeholders = batch.map(() => '?').join(', ')
+      const rows = database.prepare(`
+        SELECT file_path, sig, per_file_json
+        FROM summary_cache_entries
+        WHERE file_path IN (${placeholders})
+      `).iterate(...batch) as Iterable<{ file_path: string; sig: string; per_file_json: string }>
+      for (const row of rows) {
+        entries[row.file_path] = {
+          sig: row.sig,
+          perFile: JSON.parse(row.per_file_json) as PerFileCache
+        }
       }
     }
     return { version: CACHE_VERSION, entries }
@@ -227,14 +233,17 @@ async function visitLegacyDiskCacheEntries(
   return version
 }
 
-async function loadLegacyDiskCache(): Promise<DiskCache | null> {
+async function loadLegacyDiskCache(filePaths: readonly string[]): Promise<DiskCache | null> {
   if (!fs.existsSync(LEGACY_CACHE_FILE)) return null
   const entries: Record<string, DiskCacheEntry> = {}
+  const currentPaths = new Set(filePaths)
   try {
     await visitLegacyDiskCacheEntries((filePath, entry, version) => {
-      if (isLegacyCacheEntryCompatible(version, entry)) entries[filePath] = entry
+      if (currentPaths.has(filePath) && isLegacyCacheEntryCompatible(version, entry)) {
+        entries[filePath] = entry
+      }
     })
-    return { version: CACHE_VERSION, entries }
+    return { version: CACHE_VERSION, entries, requiresFullPersist: true }
   } catch { /* corrupt or incompatible cache */ }
   return null
 }
@@ -314,11 +323,15 @@ async function migrateLegacyDiskCacheToSqliteOnce(): Promise<boolean> {
   })
 }
 
-async function loadDiskCache(): Promise<DiskCache | null> {
-  return loadSqliteDiskCache() || await loadLegacyDiskCache()
+async function loadDiskCache(filePaths: readonly string[]): Promise<DiskCache | null> {
+  return loadSqliteDiskCache(filePaths) || await loadLegacyDiskCache(filePaths)
 }
 
-function writeSqliteDiskCache(entries: Record<string, DiskCacheEntry>): unknown | null {
+function writeSqliteDiskCache(
+  entries: Record<string, DiskCacheEntry>,
+  changedPaths: readonly string[],
+  activePaths?: readonly string[]
+): unknown | null {
   let database: Database.Database | null = null
   try {
     database = new Database(CACHE_DB_FILE)
@@ -333,11 +346,26 @@ function writeSqliteDiskCache(entries: Record<string, DiskCacheEntry>): unknown 
     const insert = database.prepare(`
       INSERT INTO summary_cache_entries(file_path, sig, per_file_json)
       VALUES (?, ?, ?)
+      ON CONFLICT(file_path) DO UPDATE SET
+        sig = excluded.sig,
+        per_file_json = excluded.per_file_json
     `)
     database.transaction(() => {
-      database!.prepare('DELETE FROM summary_cache_entries').run()
-      for (const [filePath, entry] of Object.entries(entries)) {
+      for (const filePath of changedPaths) {
+        const entry = entries[filePath]
+        if (!entry) continue
         insert.run(filePath, entry.sig, JSON.stringify(entry.perFile))
+      }
+      if (activePaths) {
+        const active = new Set(activePaths)
+        // Materialize compact primary keys before deleting. Mutating the table
+        // while a better-sqlite3 iterator is active aborts the transaction.
+        const staleRows = database!.prepare('SELECT file_path FROM summary_cache_entries').all() as
+          Array<{ file_path: string }>
+        const remove = database!.prepare('DELETE FROM summary_cache_entries WHERE file_path = ?')
+        for (const row of staleRows) {
+          if (!active.has(row.file_path)) remove.run(row.file_path)
+        }
       }
       database!.pragma(`user_version = ${CACHE_VERSION}`)
     })()
@@ -351,14 +379,18 @@ function writeSqliteDiskCache(entries: Record<string, DiskCacheEntry>): unknown 
   }
 }
 
-function saveDiskCache(entries: Record<string, DiskCacheEntry>): void {
+function saveDiskCache(
+  entries: Record<string, DiskCacheEntry>,
+  changedPaths: readonly string[],
+  activePaths?: readonly string[]
+): void {
   // This assertion is intentionally outside the best-effort cache catch. A
   // test module initialized before the isolation bootstrap must fail red
   // instead of silently writing the native account cache.
   assertTestCacheWriteContained()
   try {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true })
-    let error = writeSqliteDiskCache(entries)
+    let error = writeSqliteDiskCache(entries, changedPaths, activePaths)
     const code = typeof (error as { code?: unknown } | null)?.code === 'string'
       ? (error as { code: string }).code
       : ''
@@ -371,7 +403,7 @@ function saveDiskCache(entries: Record<string, DiskCacheEntry>): void {
           if (fs.existsSync(candidate)) fs.unlinkSync(candidate)
         } catch { /* a failed repair remains a cache miss next launch */ }
       }
-      error = writeSqliteDiskCache(entries)
+      error = writeSqliteDiskCache(entries, changedPaths, activePaths)
     }
     if (error) return
     // A successful v28 transaction is the durable migration boundary. The
@@ -2121,21 +2153,14 @@ export async function loadCachedClaudeLineageMetadata(
   filePaths: string[] = findClaudeSessionFiles()
 ): Promise<CachedClaudeLineageLoadResult> {
   await migrateLegacyDiskCacheToSqlite()
-  const cache = await loadDiskCache()
   const currentFiles = filePaths.flatMap((filePath) => {
     const sig = computeFileSig(filePath, 'claude-code')
     return sig ? [{ filePath, sig }] : []
   })
-  const currentPaths = new Set(currentFiles.map(({ filePath }) => filePath))
+  const currentPaths = currentFiles.map(({ filePath }) => filePath)
+  const cache = await loadDiskCache(currentPaths)
   const entries: Record<string, DiskCacheEntry> = { ...(cache?.entries || {}) }
-
-  // This entry point only owns Claude files. Keep cached summaries from other
-  // sources intact while pruning Claude files that were removed from disk.
-  for (const [filePath, entry] of Object.entries(entries)) {
-    if (entry.perFile?.source === 'claude-code' && !currentPaths.has(filePath)) {
-      delete entries[filePath]
-    }
-  }
+  const changedPaths = new Set(cache?.requiresFullPersist ? currentPaths : [])
 
   let parsedFileCount = 0
   let reusedFileCount = 0
@@ -2150,6 +2175,7 @@ export async function loadCachedClaudeLineageMetadata(
     }
 
     parsedFileCount++
+    changedPaths.add(filePath)
     try {
       entries[filePath] = { sig, perFile: await buildPerFileCache(filePath, 'claude-code') }
     } catch {
@@ -2160,7 +2186,9 @@ export async function loadCachedClaudeLineageMetadata(
     }
   })
 
-  saveDiskCache(entries)
+  // This focused entry point does not own other providers' rows. Global stale
+  // pruning remains the responsibility of loadAllSessions.
+  saveDiskCache(entries, [...changedPaths])
   return {
     files: currentFiles.flatMap(({ filePath }) => {
       const meta = entries[filePath]?.perFile.lineageMeta
@@ -2183,13 +2211,18 @@ export interface LoadAllSessionsOptions {
 interface LegacySessionLoadResult {
   summaries: SessionSummary[]
   entries: Record<string, DiskCacheEntry>
+  changedPaths: string[]
+  activePaths: string[]
   parsedCount: number
   reusedCount: number
   fileCount: number
   startedAt: number
 }
 
-interface LoadAllSessionsResult extends Omit<LegacySessionLoadResult, 'entries' | 'startedAt'> {
+interface LoadAllSessionsResult extends Omit<
+  LegacySessionLoadResult,
+  'entries' | 'changedPaths' | 'activePaths' | 'startedAt'
+> {
   elapsedMs: number
   providerStatus: 'complete' | 'degraded'
 }
@@ -2250,7 +2283,6 @@ async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
   const cursorFiles = isSessionSourceSupported('cursor') ? findCursorSessionFiles() : []
   const opencodeFiles = isSessionSourceSupported('opencode') ? await findOpencodeSessionFiles() : []
   const zcodeFiles = isSessionSourceSupported('zcode') ? await findZcodeSessionFiles() : []
-  const cache = await loadDiskCache()
   const descriptors: Array<{ filePath: string; source: CachedSessionSource }> = [
     ...claudeFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),
     ...newSourceFiles.flatMap((filePath) => {
@@ -2269,7 +2301,10 @@ async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
     const sig = computeFileSig(descriptor.filePath, descriptor.source)
     return sig ? [{ ...descriptor, sig }] : []
   })
+  const activePaths = currentFiles.map(({ filePath }) => filePath)
+  const cache = await loadDiskCache(activePaths)
   const entries: Record<string, DiskCacheEntry> = {}
+  const changedPaths = new Set(cache?.requiresFullPersist ? activePaths : [])
   let parsedCount = 0
   let reusedCount = 0
 
@@ -2284,6 +2319,7 @@ async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
     }
 
     parsedCount++
+    changedPaths.add(filePath)
     try {
       entries[filePath] = { sig, perFile: await buildPerFileCache(filePath, source) }
     } catch {
@@ -2521,6 +2557,8 @@ async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
   return {
     summaries,
     entries,
+    changedPaths: [...changedPaths],
+    activePaths,
     parsedCount,
     reusedCount,
     fileCount: currentFiles.length,
@@ -2592,7 +2630,7 @@ function getWritableSessionLoadFlight(): Promise<LoadAllSessionsResult> {
     const legacy = await legacyFlight
     const canonical = await loadCanonicalProviderSessions()
     const projection = projectCanonicalProviderSessions(legacy.summaries, canonical)
-    saveDiskCache(legacy.entries)
+    saveDiskCache(legacy.entries, legacy.changedPaths, legacy.activePaths)
     return {
       summaries: projection.summaries,
       parsedCount: legacy.parsedCount,

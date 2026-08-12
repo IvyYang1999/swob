@@ -3,7 +3,11 @@ export type LibraryBacklogRecoverySelectionMode = 'initial' | LibraryBacklogReco
 
 const GLOBAL_RETRY_DELAYS_MS = [1_000, 5_000, 30_000, 120_000, 600_000] as const
 
-export type LibraryBacklogBatchFailurePolicy = 'global-retry' | 'writer-recovery' | 'safety-stop'
+export type LibraryBacklogBatchFailurePolicy =
+  | 'global-retry'
+  | 'writer-recovery'
+  | 'safety-stop'
+  | 'identity-terminal'
 export type LibraryBacklogWakeDisposition = 'run' | 'coalesce' | 'drop'
 
 export function libraryBacklogWakeDisposition(
@@ -22,6 +26,11 @@ export function libraryBacklogBatchFailurePolicy(error: unknown): LibraryBacklog
   const typed = error as { name?: unknown; code?: unknown }
   const name = typeof typed.name === 'string' ? typed.name : ''
   const code = typeof typed.code === 'string' ? typed.code : ''
+  if (name === 'SessionIdentityConflictError' || [
+    'SESSION_IDENTITY_CONFLICT',
+    'SESSION_IDENTITY_AMBIGUOUS',
+    'SESSION_IDENTITY_MISSING'
+  ].includes(code)) return 'identity-terminal'
   if (name === 'LibraryWriterBusyError' || name === 'LibraryWriterIdentityUnavailableError' ||
     name === 'SessionCreateIdentityUnavailableError' ||
     code === 'LIBRARY_WRITER_BUSY' || code === 'WRITER_IDENTITY_UNAVAILABLE' || code === 'ENOSPC') {

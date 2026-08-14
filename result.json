@@ -1,42 +1,27 @@
 {
-  "workItemId": "t211A",
-  "baseSha": "06a6048eab8dae0d15a71aff6638f32a33e3dc32",
-  "headSha": "8fb625bd23c6dd476d01ace722dd35d2688d6f3e",
+  "workItemId": "t213-performance-p1",
+  "baseSha": "61cfd5efc8782c95f02539b59b9db6a89cf46330",
+  "headSha": "bb03aae6566665c7f81399ed30721151917ae580",
   "changedFiles": [
-    "src/shared/contracts/truth-kernel/canonical-json.ts",
-    "src/shared/contracts/truth-kernel/fixtures/golden-v1.ts",
-    "src/shared/contracts/truth-kernel/index.ts",
-    "src/shared/contracts/truth-kernel/manifest.ts",
-    "src/shared/contracts/truth-kernel/migrations.test.ts",
-    "src/shared/contracts/truth-kernel/migrations.ts",
-    "src/shared/contracts/truth-kernel/truth-kernel-fixture.schema.json",
-    "src/shared/contracts/truth-kernel/types.ts",
-    "src/shared/contracts/truth-kernel/validator.test.ts",
-    "src/shared/contracts/truth-kernel/validator.ts"
+    "e2e/virtualized-search.test.ts",
+    "src/main/session-loader.test.ts",
+    "src/main/session-loader.ts",
+    "src/renderer/src/components/ChatViewer.tsx"
   ],
   "contractsProduced": [
-    "AgentTimelineEvent.v1",
-    "EvidenceRef.v1",
-    "ContextLedgerAndBinaryAttachment.v1",
-    "McpContextExposure.v1",
-    "InteractionTimingFileUsageAndFork.v1",
-    "BranchUsageRollup.v1",
-    "CatalogRootObservationWorkspaceAndCoverage.v1",
-    "WritablePackageBinding.v1",
-    "ExternalEvidenceAttachmentRevisionAndAssurance.v1",
-    "RollingIngestChainAndVerifyBundle.v1",
-    "ProviderAndOrchestrationDescriptors.v1",
-    "TypedOrchestrationEdgesAndObservedAggregate.v1",
-    "TranslationContribution.v1",
-    "VersionedUserPricingAliasAndValuation.v1",
-    "InteractionTrajectoryReadModel.v1",
-    "TruthKernelTypedQueryDTO.v1"
+    "ChatViewer.VirtualSearch.v2",
+    "SessionCacheHeap.v1"
   ],
   "tests": [
     {
-      "command": "npm exec vitest run -- src/shared/contracts/truth-kernel/validator.test.ts",
+      "command": "npx vitest run src/main/session-loader.test.ts --maxWorkers=1",
       "status": "passed",
-      "numbers": "33/33 tests passed in 1/1 file"
+      "numbers": "72/72 tests passed in 1/1 file (independent verifier)"
+    },
+    {
+      "command": "npx vitest run src/main/token-accounting.test.ts src/main/usage-fact-store.test.ts --maxWorkers=1",
+      "status": "passed",
+      "numbers": "37/37 tests passed in 2/2 files (independent verifier)"
     },
     {
       "command": "npm run check",
@@ -44,110 +29,46 @@
       "numbers": "all configured static, schema, read-only, package-policy, DCO, pricing, asset and node/web typecheck gates passed"
     },
     {
-      "command": "npm run typecheck",
+      "command": "npm run build",
       "status": "passed",
-      "numbers": "2/2 TypeScript projects passed"
+      "numbers": "main, preload and renderer production bundles built"
     },
     {
-      "command": "repository pre-commit hook test and compile gate",
+      "command": "npx playwright test e2e/virtualized-search.test.ts e2e/long-session-performance.test.ts --workers=1",
       "status": "passed",
-      "numbers": "1693 tests passed, 19 skipped; 196 test files passed, 5 skipped; compile passed"
+      "numbers": "2/2 passed; 1500 turns, mounted transcript DOM <=30, search long tasks <100ms, user count/export-label/Enter navigation regressions covered"
     },
     {
-      "command": "./node_modules/.bin/vitest run src/shared/contracts/truth-kernel/validator.test.ts --maxWorkers=2",
+      "command": "repository pre-commit hook: vitest run --maxWorkers=2 and compile",
       "status": "passed",
-      "numbers": "33/33 tests passed in 1/1 file"
+      "numbers": "224 files / 1792 tests passed; 5 files / 19 tests skipped; compile passed"
     },
     {
-      "command": "npm run check",
+      "command": "independent read-only cache benchmark on the same 1649-row, 257.06 MiB cache",
       "status": "passed",
-      "numbers": "all configured check gates passed"
+      "numbers": "heap delta 207.0 -> 154.3 MiB; RSS delta 837.9 -> 530.0 MiB"
     },
     {
-      "command": "direct JSON.parse own-__proto__ canonical/round-trip/hash probe with node --experimental-strip-types",
+      "command": "git diff --check",
       "status": "passed",
-      "numbers": "canonical output retained __proto__; round-trip retained own property; JSON equality true; canonical SHA-256 produced"
+      "numbers": "clean"
     }
   ],
-  "visualEvidence": [],
+  "visualEvidence": [
+    "Playwright synthetic 1500-turn screenshot reviewed: exact user match at turn 1490 highlighted as 1/1 while the transcript remains virtualized."
+  ],
   "deviations": [],
   "knownRisks": [
-    "No Provider parser, Context detector, Catalog scanner, repository, IPC handler, UI, runtime wiring or new dependency is implemented.",
-    "The migration deliverable remains a rebuild-only feature-local planning skeleton; t211I owns physical DDL and migration aggregation.",
-    "Integrity guarantees begin at recorded ingest. Pre-ingest tampering, capture completeness, user intent and a compromised host remain outside the v1 proof boundary.",
-    "Bundle contracts freeze content addressing and offline verification inputs; streaming file IO and actual verifier execution belong to t211G implementation.",
-    "StorageRootObservation is device-local and preserves last-known rows; cross-device root mapping and package relocation remain t213 scope.",
-    "Pricing mutation DTOs freeze optimistic revision semantics, but repository persistence and IPC handlers belong to t211D.",
-    "Namespaced assurance dimensions and verification failure codes are the explicit extension point; core v1 meanings cannot be redefined.",
-    "Independent acceptance re-verified the sole prior blocker and its exact two-file fix delta; the previous rejected verdict remains immutable audit history."
+    "The read-only memory benchmark is not yet checked in as a reproducible repository script; single-run RSS varies with the allocator.",
+    "No post-integration measurement has been run against the installed app and the user's real Library.",
+    "Extremely large tool results in Full view can still increase per-search index construction cost.",
+    "Expanded details inside compact tool pills remain outside the default collapsed search projection.",
+    "Live-sync full rewrites and database cleanup remain follow-up work outside this batch."
   ],
   "provenance": {
     "harness": "codex",
-    "model": "gpt-5.6-sol",
+    "model": "gpt-5",
     "session": "n/a"
   },
-  "depends_on": [],
-  "implementationTreeSha": "8fd58a92d1f9ed9ec7580dad43c02ece1e5a832f",
-  "contractCandidate": {
-    "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211A/contract_candidate.unknown-key-fix.json",
-    "sha256": "8055b8ffcf48e928c01d3525326f763e483236b7fefd477e7159a13782ae5e62",
-    "contractHash": "0d74fecd91bdcad2cfd3fc342a8c43ed739c3bbe4094f347a71725669227a1f7"
-  },
-  "independentVerifier": {
-    "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211A/verifier-verdict.unknown-key-fix.json",
-    "sha256": "09c0481f88d2eae6021291d097b1df30fec624fb78d5a125c220f73b877b09ac",
-    "verdict": "accepted"
-  },
-  "phase0FinalReceipts": [
-    {
-      "task_id": "t211B",
-      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211B/phase0_consumer_verdict.unknown-key-fix.json",
-      "sha256": "cfdc78a3ee1921c2a5d0e9267c50ea84156a90f4250cdfdb198a1cd6a4e76510",
-      "verdict": "compatible"
-    },
-    {
-      "task_id": "t211C",
-      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211C/phase0_consumer_verdict.unknown-key-fix.json",
-      "sha256": "1248c0eb3f8aa481d0137ca3229d6c0f51244dfbac9587170e746708a2b8b64c",
-      "verdict": "compatible"
-    },
-    {
-      "task_id": "t211D",
-      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211D/phase0_consumer_verdict.unknown-key-fix.json",
-      "sha256": "c3c3ecbcea978a7ed02b820537435ed2b5e7104dd44d00eb337dc7ce8e22e276",
-      "verdict": "compatible"
-    },
-    {
-      "task_id": "t211E",
-      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211E/phase0_consumer_verdict.unknown-key-fix.json",
-      "sha256": "830afdfb3975c68712528fb0d218a8bb3b8644ae47853159bba003c324e02040",
-      "verdict": "compatible"
-    },
-    {
-      "task_id": "t211F",
-      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211F/phase0_consumer_verdict.unknown-key-fix.json",
-      "sha256": "6d012ab7c80aa55fe711b6723d9a70d00b452c416b62b476941bd115e50d3475",
-      "verdict": "compatible"
-    },
-    {
-      "task_id": "t211G",
-      "path": "/Users/yytyyf/Developer/swobniw-local/program-evidence/swob-three-merge-20260810/t211/t211G/phase0_consumer_verdict.unknown-key-fix.json",
-      "sha256": "eb4afcf04b4152102409221186a3e52752c670daacb4e6409c554d2cd01c8270",
-      "verdict": "compatible"
-    }
-  ],
-  "contractVersions": {
-    "truth_kernel_contract": "1.0.0",
-    "truth_kernel_schema": 1,
-    "truth_kernel_serialization": "truth-kernel-canonical-json/1",
-    "truth_kernel_ipc": "truth-kernel-ipc/1.0.0",
-    "truth_kernel_fixture": "1.0.0",
-    "truth_kernel_migration_target": 1,
-    "pricing_policy_command": "1.0.0",
-    "provider_protocol_compatibility": "2.0",
-    "session_meta_compatibility": 3,
-    "canonical_store_compatibility": 2
-  },
-  "dependencyManifestUnchanged": true,
-  "verdict": "accepted"
+  "depends_on": []
 }

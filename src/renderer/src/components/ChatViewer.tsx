@@ -419,7 +419,8 @@ const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userD
   const locale = useStore((s) => s.locale)
   const segments = useMemo(() => buildSegments(turn.assistantMsgs), [turn.assistantMsgs])
   const hasSidechain = turn.assistantMsgs.some((m) => m.isSidechain)
-  const turnId = turn.userMsg ? `turn-${turn.userMsg.uuid}` : undefined
+  const anchorUuid = turn.userMsg?.uuid || turn.assistantMsgs[0]?.uuid
+  const turnId = anchorUuid ? `turn-${anchorUuid}` : undefined
   const [copiedQ, setCopiedQ] = useState(false)
   const [copiedA, setCopiedA] = useState(false)
 
@@ -442,7 +443,7 @@ const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userD
   if (turn.userMsg?.subtype === 'provider-preamble') {
     if (viewMode !== 'full') return null
     return (
-      <div id={turnId} data-turn-uuid={turn.userMsg.uuid} className="scroll-mt-0">
+      <div id={turnId} data-turn-uuid={anchorUuid} className="scroll-mt-0">
         <ProviderPreamblePill text={turn.userMsg.textContent} />
       </div>
     )
@@ -451,14 +452,14 @@ const TurnBlock = memo(function TurnBlock({ turn, viewMode, sessionSource, userD
   // Command output: render as collapsible system notice pill
   if (turn.userMsg?.subtype === 'command-output') {
     return (
-      <div id={turnId} data-turn-uuid={turn.userMsg?.uuid} className="scroll-mt-0">
+      <div id={turnId} data-turn-uuid={anchorUuid} className="scroll-mt-0">
         <SystemNoticePill text={turn.userMsg.textContent} />
       </div>
     )
   }
 
   return (
-    <div id={turnId} data-turn-uuid={turn.userMsg?.uuid} className="space-y-3 scroll-mt-0 relative">
+    <div id={turnId} data-turn-uuid={anchorUuid} className="space-y-3 scroll-mt-0 relative">
       {/* User message */}
       {turn.userMsg && (
         <div className={`group/user rounded-lg transition-colors ${qSelected ? 'bg-soft-blue/6' : ''} ${turn.userMsg.isSidechain ? 'opacity-40 border-l-2 border-edge-strong pl-2' : ''}`}>
@@ -1436,6 +1437,26 @@ type ChatVirtualRow =
   | { kind: 'section'; section: CompactSection; sectionIndex: number }
   | { kind: 'turn'; section: CompactSection; sectionIndex: number; turn: Turn }
 
+interface ChatSearchMatch {
+  sectionIndex: number
+  turnUuid: string
+  occurrenceInTurn: number
+}
+
+function turnAnchorUuid(turn: Turn): string | undefined {
+  return turn.userMsg?.uuid || turn.assistantMsgs[0]?.uuid
+}
+
+function countOccurrences(text: string, query: string): number {
+  let count = 0
+  let offset = text.indexOf(query)
+  while (offset !== -1) {
+    count++
+    offset = text.indexOf(query, offset + Math.max(1, query.length))
+  }
+  return count
+}
+
 export function ChatViewer() {
   const selectedSessionSnapshot = useStore((state) => state.selectedSession)
   const viewMode = useStore((state) => state.viewMode)
@@ -1606,10 +1627,28 @@ export function ChatViewer() {
   // --- In-session search ---
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchMatchCount, setSearchMatchCount] = useState(0)
   const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
-  const searchRangesRef = useRef<Range[]>([])
   const autoExpandedRef = useRef<Set<number>>(new Set()) // sections auto-expanded by search
+  const normalizedSearchQuery = (searchOpen ? searchQuery : '').trim().toLowerCase()
+  const searchMatches = useMemo<ChatSearchMatch[]>(() => {
+    if (!normalizedSearchQuery) return []
+    const matches: ChatSearchMatch[] = []
+    sectionTurns.forEach((turns, sectionIndex) => {
+      for (const turn of turns) {
+        const turnUuid = turnAnchorUuid(turn)
+        if (!turnUuid) continue
+        // Search the same conversation projection used by copy/export. This
+        // includes prose and tool content without requiring any offscreen DOM.
+        const searchable = turnToMarkdown(turn, locale).toLowerCase()
+        const occurrences = countOccurrences(searchable, normalizedSearchQuery)
+        for (let occurrenceInTurn = 0; occurrenceInTurn < occurrences; occurrenceInTurn++) {
+          matches.push({ sectionIndex, turnUuid, occurrenceInTurn })
+        }
+      }
+    })
+    return matches
+  }, [normalizedSearchQuery, sectionTurns, locale])
+  const searchMatchCount = searchMatches.length
 
   // Cmd+F to toggle search
   useEffect(() => {
@@ -1623,21 +1662,13 @@ export function ChatViewer() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // Compute highlight ranges + match count when query or content changes
-  const highlightContentKey = `${viewMode}-${expandedSections.size}-${sections.length}-${virtualRenderVersion}`
-  useEffect(() => {
-    const highlights = CSS.highlights as Map<string, unknown> | undefined
-    if (!highlights) return
-    highlights.delete('swob-search')
-    highlights.delete('swob-search-current')
-    searchRangesRef.current = []
+  useEffect(() => setCurrentMatchIdx(0), [normalizedSearchQuery, sessionId])
 
-    const el = contentRef.current
-    const q = (searchOpen ? searchQuery : '').trim().toLowerCase()
-    if (!el || !q) {
-      setSearchMatchCount(0)
+  // Search expands only the matching historical sections. The virtualizer
+  // remains bounded; expansion changes the row model, not the mounted DOM.
+  useEffect(() => {
+    if (!normalizedSearchQuery) {
       setCurrentMatchIdx(0)
-      // Re-collapse auto-expanded sections when query is cleared
       if (autoExpandedRef.current.size > 0) {
         const toCollapse = autoExpandedRef.current
         setExpandedSections(prev => {
@@ -1650,23 +1681,13 @@ export function ChatViewer() {
       return
     }
 
-    // Phase 1: Auto-expand collapsed sections that contain matches (data-level scan)
-    // Also re-collapse previously auto-expanded sections that no longer match
-    const nowNeeded = new Set<number>()
+    const nowNeeded = new Set(searchMatches.map((match) => match.sectionIndex))
     const sectionsToExpand: number[] = []
-    for (let sIdx = 0; sIdx < sections.length; sIdx++) {
-      const section = sections[sIdx]
-      if (section.isCurrent) continue
-      const hasMatch = section.messages.some(m => {
-        if (m.type !== 'user' && m.type !== 'assistant') return false
-        return m.textContent.toLowerCase().includes(q)
-      })
-      if (hasMatch) {
-        nowNeeded.add(sIdx)
-        if (!expandedSections.has(sIdx)) sectionsToExpand.push(sIdx)
+    for (const sectionIndex of nowNeeded) {
+      if (!sections[sectionIndex]?.isCurrent && !expandedSections.has(sectionIndex)) {
+        sectionsToExpand.push(sectionIndex)
       }
     }
-    // Re-collapse auto-expanded sections that no longer match
     const toCollapse: number[] = []
     for (const idx of autoExpandedRef.current) {
       if (!nowNeeded.has(idx)) toCollapse.push(idx)
@@ -1678,65 +1699,20 @@ export function ChatViewer() {
         for (const idx of toCollapse) next.delete(idx)
         return next
       })
-      // Update auto-expanded tracking: only sections we auto-expanded that are still needed
       const newAutoExpanded = new Set<number>()
       for (const idx of autoExpandedRef.current) {
         if (nowNeeded.has(idx)) newAutoExpanded.add(idx)
       }
       for (const idx of sectionsToExpand) newAutoExpanded.add(idx)
       autoExpandedRef.current = newAutoExpanded
-      if (sectionsToExpand.length > 0) return // wait for re-render with newly expanded DOM
     }
+  }, [normalizedSearchQuery, searchMatches, sections, expandedSections])
 
-    ensureHighlightStyles()
-
-    // Phase 2: DOM-level TreeWalker to find all text matches
-    const ranges: Range[] = []
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-    let textNode: Text | null
-    while ((textNode = walker.nextNode() as Text | null)) {
-      const text = textNode.textContent?.toLowerCase() || ''
-      let idx = text.indexOf(q)
-      while (idx !== -1) {
-        const range = new Range()
-        range.setStart(textNode, idx)
-        range.setEnd(textNode, idx + q.length)
-        ranges.push(range)
-        idx = text.indexOf(q, idx + 1)
-      }
-    }
-
-    searchRangesRef.current = ranges
-    setSearchMatchCount(ranges.length)
-
-    if (ranges.length > 0) {
-      highlights.set('swob-search', new Highlight(...ranges))
-      highlights.set('swob-search-current', new Highlight(ranges[0]))
-      setCurrentMatchIdx(0)
-      scrollRangeToCenter(ranges[0], el)
-    } else {
-      setCurrentMatchIdx(0)
-    }
-  }, [searchQuery, searchOpen, highlightContentKey, sections])
-
-  // Navigate to Nth keyword match — scrolls the exact text range into center
   const navigateToMatch = useCallback((idx: number) => {
-    const ranges = searchRangesRef.current
-    if (ranges.length === 0) return
-    const safeIdx = ((idx % ranges.length) + ranges.length) % ranges.length
+    if (searchMatchCount === 0) return
+    const safeIdx = ((idx % searchMatchCount) + searchMatchCount) % searchMatchCount
     setCurrentMatchIdx(safeIdx)
-
-    // Update the "current match" highlight
-    const highlights = CSS.highlights as Map<string, unknown> | undefined
-    if (highlights) {
-      highlights.set('swob-search-current', new Highlight(ranges[safeIdx]))
-    }
-
-    // Scroll so the matched text is centered — handles nested scrollable blocks too
-    const el = contentRef.current
-    if (!el) return
-    scrollRangeToCenter(ranges[safeIdx], el)
-  }, [])
+  }, [searchMatchCount])
 
   const searchNext = useCallback(() => navigateToMatch(currentMatchIdx + 1), [navigateToMatch, currentMatchIdx])
   const searchPrev = useCallback(() => navigateToMatch(currentMatchIdx - 1), [navigateToMatch, currentMatchIdx])
@@ -1948,11 +1924,9 @@ export function ChatViewer() {
       const row = chatRows[index]
       if (!row) return index
       if (row.kind === 'section') return `section-${row.sectionIndex}`
-      return row.turn.userMsg?.uuid || row.turn.assistantMsgs[0]?.uuid || `turn-${index}`
+      return turnAnchorUuid(row.turn) || `turn-${index}`
     },
-    // Search relies on DOM text ranges. Temporarily mount the complete row set
-    // only while a query is active, then return to the bounded virtual window.
-    overscan: searchOpen && searchQuery.trim() ? chatRows.length : tocReadySessionId === sessionId ? 1 : 0
+    overscan: tocReadySessionId === sessionId ? 1 : 0
   })
   const virtualItems = chatVirtualizer.getVirtualItems()
   const [turnRenderBudget, setTurnRenderBudget] = useState<{ sessionId: string | null; turns: number }>({
@@ -1993,12 +1967,87 @@ export function ChatViewer() {
     chatRows.forEach((row, index) => {
       if (row.kind === 'section') {
         result.set(`section-${row.sectionIndex}`, index)
-      } else if (row.turn.userMsg) {
-        result.set(`turn-${row.turn.userMsg.uuid}`, index)
+      } else {
+        const uuid = turnAnchorUuid(row.turn)
+        if (uuid) result.set(`turn-${uuid}`, index)
       }
     })
     return result
   }, [chatRows])
+
+  const activeSearchMatch = searchMatches[currentMatchIdx]
+  useEffect(() => {
+    if (!normalizedSearchQuery || !activeSearchMatch) return
+    if (!sections[activeSearchMatch.sectionIndex]?.isCurrent &&
+        !expandedSections.has(activeSearchMatch.sectionIndex)) return
+    const id = `turn-${activeSearchMatch.turnUuid}`
+    if (mdMode) {
+      contentRef.current?.querySelector(`#${CSS.escape(id)}`)?.scrollIntoView({ block: 'center' })
+      return
+    }
+    const rowIndex = rowIndexById.get(id)
+    if (rowIndex !== undefined) chatVirtualizer.scrollToIndex(rowIndex, { align: 'center' })
+  }, [
+    normalizedSearchQuery,
+    activeSearchMatch,
+    sections,
+    expandedSections,
+    mdMode,
+    rowIndexById,
+    chatVirtualizer
+  ])
+
+  // Paint matches only inside the bounded virtual window. Global match count
+  // and navigation come from the data model above, so offscreen turns never
+  // need to be mounted merely to create DOM Ranges.
+  useEffect(() => {
+    const highlights = CSS.highlights as Map<string, unknown> | undefined
+    if (!highlights) return
+    highlights.delete('swob-search')
+    highlights.delete('swob-search-current')
+    const root = contentRef.current
+    if (!root || !normalizedSearchQuery || !activeSearchMatch) return
+    ensureHighlightStyles()
+
+    const visibleRanges: Range[] = []
+    const activeRanges: Range[] = []
+    const activeElement = root.querySelector(
+      `[data-turn-uuid="${CSS.escape(activeSearchMatch.turnUuid)}"]`
+    )
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    let textNode: Text | null
+    while ((textNode = walker.nextNode() as Text | null)) {
+      const text = textNode.textContent?.toLowerCase() || ''
+      let offset = text.indexOf(normalizedSearchQuery)
+      while (offset !== -1) {
+        const range = new Range()
+        range.setStart(textNode, offset)
+        range.setEnd(textNode, offset + normalizedSearchQuery.length)
+        visibleRanges.push(range)
+        if (activeElement?.contains(textNode)) activeRanges.push(range)
+        offset = text.indexOf(normalizedSearchQuery, offset + normalizedSearchQuery.length)
+      }
+    }
+
+    if (visibleRanges.length > 0) {
+      highlights.set('swob-search', new Highlight(...visibleRanges))
+    }
+    const activeRange = activeRanges[Math.min(
+      activeSearchMatch.occurrenceInTurn,
+      Math.max(0, activeRanges.length - 1)
+    )]
+    if (activeRange) {
+      highlights.set('swob-search-current', new Highlight(activeRange))
+      scrollRangeToCenter(activeRange, root)
+    }
+  }, [
+    normalizedSearchQuery,
+    activeSearchMatch,
+    renderedVirtualKey,
+    viewMode,
+    sourceView,
+    virtualRenderVersion
+  ])
 
   // Track visible turns from the bounded rendered window. No scroll handler and
   // no query loop over the complete transcript are involved.

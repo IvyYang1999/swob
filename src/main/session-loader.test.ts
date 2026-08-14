@@ -1998,6 +1998,10 @@ describe('loadAllSessions per-file incremental cache', () => {
       expect(copiedPrefix).toHaveLength(2)
       expect(new Set(copiedPrefix?.map((event) => event.auditSourceId))).toEqual(new Set([parentId, childId]))
       expect(cache.version).toBe(28)
+      expect(cache.entries[parentFile].perFile.summary.tokenAccounting.usageEvents
+        .every((event: { auditSourceId?: string }) => event.auditSourceId === parentId)).toBe(true)
+      expect(cache.entries[childFile].perFile.codexSubagent.tokenAccounting.usageEvents
+        .every((event: { auditSourceId?: string }) => event.auditSourceId === childId)).toBe(true)
       expect(cache.entries[guardianFile].perFile).toMatchObject({
         summary: null,
         codexSubagent: { role: 'guardian', parentSessionId: parentId }

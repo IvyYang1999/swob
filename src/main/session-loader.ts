@@ -39,7 +39,8 @@ import {
   mergeTokenAccountings,
   totalCacheWriteTokens,
   tokenUsageFromAccounting,
-  unavailableTokenAccounting
+  unavailableTokenAccounting,
+  type TokenAccounting
 } from './token-accounting'
 import { runtimeHome } from './runtime-home'
 import { hasPortablePathSegment, isPortableAbsolutePath } from './portable-path'
@@ -128,6 +129,38 @@ interface DiskCache {
   requiresFullPersist?: boolean
 }
 
+const INTERNED_CACHE_STRING_FIELDS = new Set([
+  'provider', 'providerFormatVersion', 'model', 'modelRaw', 'modelCanonical',
+  'modelProvenance', 'billingProvider', 'providerRaw', 'providerProvenance',
+  'scope', 'counterKind', 'provenance', 'semantics', 'reportedCostKind',
+  'serviceTier', 'inferenceRegion', 'speed', 'source', 'type', 'subtype',
+  'role', 'status', 'agentRole', 'permissionMode', 'origin', 'promptSource',
+  'stop_reason'
+])
+
+function cachedStringReviver(pool: Map<string, string>): (key: string, value: unknown) => unknown {
+  return (key, value) => {
+    if (typeof value !== 'string' || !INTERNED_CACHE_STRING_FIELDS.has(key)) return value
+    const poolKey = `${key}\0${value}`
+    const existing = pool.get(poolKey)
+    if (existing !== undefined) return existing
+    pool.set(poolKey, value)
+    return value
+  }
+}
+
+function attributeUsageEventsInPlace(
+  accounting: TokenAccounting | null | undefined,
+  auditSourceId: string
+): TokenAccounting | null | undefined {
+  if (!accounting) return accounting
+  // These events already belong to this immutable physical rollout. Tagging
+  // that provenance on the cached objects lets the merged parent reuse them
+  // by reference instead of cloning hundreds of thousands of event objects.
+  for (const event of accounting.usageEvents) event.auditSourceId = auditSourceId
+  return accounting
+}
+
 const SELECTIVELY_COMPATIBLE_CACHE_VERSIONS = new Set([25, 26, 27])
 
 function assertTestCacheWriteContained(): void {
@@ -167,6 +200,11 @@ function loadSqliteDiskCache(filePaths: readonly string[]): DiskCache | null {
     const version = Number(database.pragma('user_version', { simple: true }))
     if (version !== CACHE_VERSION) return null
     const entries: Record<string, DiskCacheEntry> = {}
+    // JSON.parse otherwise allocates a fresh copy of the same provider/model/
+    // provenance labels for every usage event. A cache with hundreds of
+    // thousands of facts spends more heap on repeated labels than values.
+    const stringPool = new Map<string, string>()
+    const reviveCachedString = cachedStringReviver(stringPool)
     for (let offset = 0; offset < filePaths.length; offset += 200) {
       const batch = filePaths.slice(offset, offset + 200)
       const placeholders = batch.map(() => '?').join(', ')
@@ -178,7 +216,7 @@ function loadSqliteDiskCache(filePaths: readonly string[]): DiskCache | null {
       for (const row of rows) {
         entries[row.file_path] = {
           sig: row.sig,
-          perFile: JSON.parse(row.per_file_json) as PerFileCache
+          perFile: JSON.parse(row.per_file_json, reviveCachedString) as PerFileCache
         }
       }
     }
@@ -2517,14 +2555,16 @@ async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
     const subagents = children
       .filter((child) => child.role === 'thread-spawn')
       .map(({ tokenAccounting: _tokenAccounting, ...subagent }) => subagent)
+    const parentAccounting = attributeUsageEventsInPlace(parent.tokenAccounting, parentSessionId)
+    const childAccountings = children.map((child) =>
+      attributeUsageEventsInPlace(child.tokenAccounting, child.sessionId))
     const mergedAccounting = mergeTokenAccountings([
-      parent.tokenAccounting,
-      ...children.map((child) => child.tokenAccounting)
-    ], {
-      auditSourceIds: [parentSessionId, ...children.map((child) => child.sessionId)]
-    })
-    // Do not mutate the per-file cache object: child attribution is a derived
-    // view and must disappear if the child rollout is later removed.
+      parentAccounting,
+      ...childAccountings
+    ])
+    // The parent view remains derived: no child event is copied into the
+    // parent's per-file cache, so removing a child removes its attribution on
+    // the next load. Only each event's own physical audit source is persisted.
     nonClaudeBySession.set(parentKey, {
       ...parent,
       subagents,

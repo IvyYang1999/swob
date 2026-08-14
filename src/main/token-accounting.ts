@@ -141,6 +141,24 @@ export interface UsageEvent {
   warnings: string[]
 }
 
+/**
+ * Internal summary-cache tuple. The positional form avoids repeating object
+ * keys for every audit row while retaining exactly what cross-session merge
+ * needs: billing identity, scope, provenance, and additive components.
+ */
+export type CompactUsageEventRollup = readonly [
+  ledgerKey: string,
+  scope: UsageScope,
+  provenance: Exclude<TokenProvenance, 'unavailable'>,
+  nonCachedInputTokens: number,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+  cacheWrite5mTokens: number,
+  cacheWrite1hTokens: number,
+  outputTokens: number,
+  reasoningTokens: number
+]
+
 export interface TokenAccounting {
   provider: SessionSource
   metricVersion: 2
@@ -151,6 +169,8 @@ export interface TokenAccounting {
   conversationOnly: number | null
   components: NormalizedTokenComponents | null
   usageEvents: UsageEvent[]
+  /** Minimal billing identities retained only in the compact summary-cache column. */
+  usageEventRollups?: CompactUsageEventRollup[]
   /**
    * Transient cache-read marker: aggregate fields are present, but the
    * per-call audit rows live only in the committed UsageFact snapshot.
@@ -343,7 +363,7 @@ function addComponents(
   }
 }
 
-function sumComponents(events: UsageEvent[]): NormalizedTokenComponents {
+function sumComponents(events: Array<Pick<UsageEvent, 'components'>>): NormalizedTokenComponents {
   return events.reduce<NormalizedTokenComponents>((total, event) => addComponents(total, event.components), {
     nonCachedInputTokens: 0,
     cacheReadTokens: 0,
@@ -353,6 +373,41 @@ function sumComponents(events: UsageEvent[]): NormalizedTokenComponents {
     outputTokens: 0,
     reasoningTokens: 0
   })
+}
+
+function sumRollupComponents(rollups: CompactUsageEventRollup[]): NormalizedTokenComponents {
+  return rollups.reduce<NormalizedTokenComponents>((total, rollup) => addComponents(total, {
+    nonCachedInputTokens: rollup[3],
+    cacheReadTokens: rollup[4],
+    cacheWriteTokens: rollup[5],
+    cacheWrite5mTokens: rollup[6],
+    cacheWrite1hTokens: rollup[7],
+    outputTokens: rollup[8],
+    reasoningTokens: rollup[9]
+  }), {
+    nonCachedInputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cacheWrite5mTokens: 0,
+    cacheWrite1hTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0
+  })
+}
+
+function compactUsageEventRollup(event: UsageEvent): CompactUsageEventRollup {
+  return [
+    event.billingFactKey || event.dedupKey,
+    event.scope,
+    event.provenance,
+    event.components.nonCachedInputTokens,
+    event.components.cacheReadTokens,
+    event.components.cacheWriteTokens,
+    event.components.cacheWrite5mTokens,
+    event.components.cacheWrite1hTokens,
+    event.components.outputTokens,
+    event.components.reasoningTokens || 0
+  ]
 }
 
 function uniqueBillingEvents(events: UsageEvent[]): UsageEvent[] {
@@ -772,9 +827,48 @@ export function mergeTokenAccountings(
     }
   }
 
-  if (events.length === 0) return usageEventsOmitted && !first.usageEventsOmitted
-    ? { ...first, usageEventsOmitted: true }
-    : first
+  if (usageEventsOmitted) {
+    const rollups = available.flatMap(({ accounting }) =>
+      accounting.usageEventRollups || accounting.usageEvents.map(compactUsageEventRollup)
+    )
+    if (rollups.length === 0) return first.usageEventsOmitted
+      ? first
+      : { ...first, usageEventsOmitted: true }
+    const selected = new Map<string, typeof rollups[number]>()
+    for (const rollup of rollups) {
+      const key = rollup[0]
+      const current = selected.get(key)
+      if (!current || (current[1] !== 'main' && rollup[1] === 'main')) selected.set(key, rollup)
+    }
+    const billable = [...selected.values()]
+    const components = sumRollupComponents(billable)
+    const mainComponents = sumRollupComponents(
+      billable.filter((rollup) => rollup[1] === 'main')
+    )
+    const provenance: TokenProvenance = billable.some((rollup) => rollup[2] === 'estimated')
+      ? 'estimated'
+      : billable.some((rollup) => rollup[2] === 'derived') ? 'derived' : 'reported'
+    const warnings = [...new Set(available.flatMap(({ accounting }) => accounting.warnings))]
+    const duplicateCount = rollups.length - selected.size
+    if (duplicateCount > 0) {
+      warnings.push(
+        `deduplicated ${duplicateCount} cross-session usage event${duplicateCount === 1 ? '' : 's'}`
+      )
+    }
+    return {
+      provider: first.provider,
+      metricVersion: 2,
+      provenance,
+      billingTotal: processedTotal(components),
+      conversationOnly: processedTotal(mainComponents),
+      components,
+      usageEvents: events,
+      usageEventRollups: rollups,
+      usageEventsOmitted: true,
+      warnings
+    }
+  }
+  if (events.length === 0) return first
   const billableEvents = uniqueBillingEvents(events)
   const provenance: TokenProvenance = billableEvents.some((event) => event.provenance === 'estimated')
     ? 'estimated'
@@ -787,9 +881,7 @@ export function mergeTokenAccountings(
       `deduplicated ${duplicateCount} cross-session usage event${duplicateCount === 1 ? '' : 's'}`
     )
   }
-  const merged = accountingFromEvents(first.provider, events, provenance, warnings)
-  if (usageEventsOmitted) merged.usageEventsOmitted = true
-  return merged
+  return accountingFromEvents(first.provider, events, provenance, warnings)
 }
 
 export function accountingFromMutuallyExclusiveUsage(

@@ -3,6 +3,7 @@ const { parentPort, workerData } = require('node:worker_threads')
 const Database = require('better-sqlite3')
 const { parser } = require('stream-json')
 const { pick } = require('stream-json/filters/Pick')
+const { compactPerFileJson } = require('./summary-cache-compact.cjs')
 
 const COMPATIBLE_VERSIONS = new Set([25, 26, 27])
 
@@ -119,14 +120,22 @@ async function migrate() {
         if (!columns.has('compact_json')) {
           database.exec('ALTER TABLE summary_cache_entries ADD COLUMN compact_json TEXT')
         }
-        database.exec(`
-          UPDATE summary_cache_entries
-          SET compact_json = json_remove(
-            per_file_json,
-            '$.summary.tokenAccounting.usageEvents',
-            '$.codexSubagent.tokenAccounting.usageEvents'
-          )
+        const update = database.prepare(
+          'UPDATE summary_cache_entries SET compact_json = ? WHERE file_path = ?'
+        )
+        const selectBatch = database.prepare(`
+          SELECT file_path, per_file_json FROM summary_cache_entries
+          WHERE file_path > ? ORDER BY file_path LIMIT 25
         `)
+        let after = ''
+        while (true) {
+          const rows = selectBatch.all(after)
+          if (rows.length === 0) break
+          for (const row of rows) {
+            update.run(compactPerFileJson(JSON.parse(row.per_file_json)), row.file_path)
+          }
+          after = rows[rows.length - 1].file_path
+        }
         database.pragma(`user_version = ${cacheVersion}`)
       })()
       return true
@@ -158,11 +167,7 @@ async function migrate() {
     `)
     const insert = database.prepare(`
       INSERT INTO summary_cache_entries(file_path, sig, per_file_json, compact_json)
-      VALUES (?, ?, ?, json_remove(
-        ?,
-        '$.summary.tokenAccounting.usageEvents',
-        '$.codexSubagent.tokenAccounting.usageEvents'
-      ))
+      VALUES (?, ?, ?, ?)
     `)
     const sourceStream = fs.createReadStream(legacyPath)
     const jsonParser = parser({
@@ -225,7 +230,12 @@ async function migrate() {
       if (writer && writer.complete()) {
         if (filePath && sig && sourceCompatible(version, source)) {
           const perFileJson = writer.value()
-          insert.run(filePath, sig, perFileJson, perFileJson)
+          insert.run(
+            filePath,
+            sig,
+            perFileJson,
+            compactPerFileJson(JSON.parse(perFileJson))
+          )
         }
         writer = null
       }

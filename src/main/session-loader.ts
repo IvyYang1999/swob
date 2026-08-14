@@ -67,6 +67,7 @@ import { loadConfig } from './config-store'
 import { providerAdapterMode } from './provider-adapter-mode'
 import { adaptSessionDetailV2 } from './unified-session-adapter-v2'
 import { enrichPiSessionDetailV2 } from './pi-detail-adapter'
+import { compactPerFileJson } from './summary-cache-compact.cjs'
 
 const HOME = runtimeHome()
 
@@ -201,15 +202,6 @@ function omitCachedUsageEvents(perFile: PerFileCache): void {
     accounting.usageEvents = []
     accounting.usageEventsOmitted = true
   }
-}
-
-function compactPerFileJson(perFile: PerFileCache): string {
-  return JSON.stringify(perFile, function (key, value) {
-    if (key === 'usageEvents' && this && typeof this === 'object' &&
-      (this as { metricVersion?: unknown }).metricVersion === 2) return undefined
-    if (key === 'usageEventsOmitted') return undefined
-    return value
-  })
 }
 
 function loadSqliteDiskCache(

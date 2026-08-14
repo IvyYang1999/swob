@@ -1321,6 +1321,8 @@ describe('loadAllSessions per-file incremental cache', () => {
         usageEvents: [],
         usageEventsOmitted: true
       })
+      expect(compact[0].tokenAccounting?.usageEventRollups?.[0]?.[0])
+        .toBe('claude:message:usage-1')
       expect(readSummaryCache(home).entries[file].perFile.summary.tokenAccounting.usageEvents)
         .toHaveLength(1)
       const restored = restoreOmittedUsageEvents(compact, cold)
@@ -1384,10 +1386,17 @@ describe('loadAllSessions per-file incremental cache', () => {
         usageEvents: [],
         usageEventsOmitted: true
       })
+      expect(sessions[0].tokenAccounting?.usageEventRollups?.[0]?.[0])
+        .toBe('claude:message:v28-usage')
       const migrated = new Database(summaryCacheDbPath(home), { readonly: true })
       expect(Number(migrated.pragma('user_version', { simple: true }))).toBe(29)
       expect((migrated.prepare('PRAGMA table_info(summary_cache_entries)').all() as Array<{ name: string }>)
         .map((column) => column.name)).toContain('compact_json')
+      expect(migrated.prepare(`
+        SELECT json_array_length(compact_json, '$.summary.tokenAccounting.usageEventRollups') AS count,
+          json_extract(compact_json, '$.summary.tokenAccounting.usageEventRollups[0][0]') AS ledger_key
+        FROM summary_cache_entries WHERE file_path = ?
+      `).get(file)).toEqual({ count: 1, ledger_key: 'claude:message:v28-usage' })
       migrated.close()
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
@@ -2171,6 +2180,19 @@ describe('loadAllSessions per-file incremental cache', () => {
         summary: null,
         codexSubagent: { role: 'guardian', parentSessionId: parentId }
       })
+
+      const compactHot = await loadAllSessionsFromTempHome(home, {
+        readOnly: true,
+        quiet: true,
+        omitCachedUsageEvents: true
+      })
+      expect(compactHot[0].tokenAccounting).toMatchObject({
+        billingTotal: 208,
+        conversationOnly: 120,
+        usageEvents: [],
+        usageEventsOmitted: true
+      })
+      expect(compactHot[0].tokenAccounting?.usageEventRollups).toHaveLength(4)
 
       cache.version = 23
       cache.entries[guardianFile].perFile.summary = {

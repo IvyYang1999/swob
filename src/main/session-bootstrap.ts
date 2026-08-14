@@ -6,7 +6,7 @@ export type RendererSessionSummary = Omit<
 > & {
   tokenAccounting?: Omit<
     NonNullable<SessionSummary['tokenAccounting']>,
-    'usageEvents' | 'usageEventsOmitted'
+    'usageEvents' | 'usageEventRollups' | 'usageEventsOmitted'
   >
 }
 
@@ -53,6 +53,7 @@ export function sessionSummaryForRenderer(summary: SessionSummary): RendererSess
   if (!tokenAccounting) return visible
   const {
     usageEvents: _usageEvents,
+    usageEventRollups: _usageEventRollups,
     usageEventsOmitted: _usageEventsOmitted,
     ...compactAccounting
   } = tokenAccounting

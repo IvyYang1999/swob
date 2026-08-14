@@ -35,8 +35,9 @@ test('1500-turn in-session search finds offscreen matches without devirtualizing
     const searchStart = await page.evaluate(() => performance.now())
     await page.keyboard.press('Meta+f')
     const input = page.locator('input[placeholder]').last()
-    await input.fill('Synthetic response 1490')
-    await expect(page.getByText('1/1', { exact: true })).toBeVisible()
+    await input.fill('Synthetic Claude turn 1490')
+    const matchCounter = page.locator('span.tabular-nums')
+    await expect(matchCounter).toHaveText('1/1')
     await page.evaluate(() => new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
     }))
@@ -58,10 +59,16 @@ test('1500-turn in-session search finds offscreen matches without devirtualizing
     expect(Math.max(0, ...searchLongTasks.map((entry) => entry.duration))).toBeLessThan(100)
     await scroller.screenshot({ path: testInfo.outputPath('virtualized-search-1500-turns.png') })
 
-    await input.fill('Synthetic response 149')
-    await expect(page.getByText('1/11', { exact: true })).toBeVisible()
+    await input.fill('**User**')
+    await expect(matchCounter).toHaveText('0/0')
+
+    await input.fill('Synthetic Claude turn 149')
+    await expect(matchCounter).toHaveText('1/11')
+    const firstMatchScrollTop = await scroller.evaluate((element) => element.scrollTop)
     await input.press('Enter')
-    await expect(page.getByText('2/11', { exact: true })).toBeVisible()
+    await expect(matchCounter).toHaveText('2/11')
+    await expect.poll(() => scroller.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(firstMatchScrollTop + 1000)
     expect(await scroller.locator('[data-turn-uuid]').count()).toBeLessThanOrEqual(30)
 
     await input.fill('')

@@ -1443,6 +1443,12 @@ interface ChatSearchMatch {
   occurrenceInTurn: number
 }
 
+interface ChatSearchEntry {
+  sectionIndex: number
+  turnUuid: string
+  searchable: string
+}
+
 function turnAnchorUuid(turn: Turn): string | undefined {
   return turn.userMsg?.uuid || turn.assistantMsgs[0]?.uuid
 }
@@ -1455,6 +1461,52 @@ function countOccurrences(text: string, query: string): number {
     offset = text.indexOf(query, offset + Math.max(1, query.length))
   }
   return count
+}
+
+function fullToolSearchText(tc: ToolCallInfo): string {
+  const preview = getToolPreview(tc.name, tc.input)
+  const isEdit = tc.name === 'Edit' && tc.input.old_string
+  let inputDisplay = ''
+  if (tc.name === 'Bash' && tc.input.command) inputDisplay = String(tc.input.command)
+  else if (tc.name === 'Read' && tc.input.file_path) inputDisplay = String(tc.input.file_path)
+  else if (isEdit) inputDisplay = `${String(tc.input.old_string)}\n${String(tc.input.new_string || '')}`
+  else if (tc.name === 'Write' && tc.input.content) {
+    inputDisplay = `File: ${tc.input.file_path || ''}\n${String(tc.input.content).slice(0, 2000)}`
+  } else inputDisplay = JSON.stringify(tc.input, null, 2)
+  return [tc.name, preview, inputDisplay, tc.result || ''].filter(Boolean).join('\n')
+}
+
+/** Search only content represented by the chat view, never export-only markup. */
+function turnToSearchText(turn: Turn, viewMode: ViewMode): string {
+  if (turn.userMsg?.subtype === 'provider-preamble') return ''
+  if (turn.userMsg?.subtype === 'command-output') {
+    const { label, output } = parseCommandOutput(turn.userMsg.textContent)
+    return `${label}\n${output.slice(0, 80)}`
+  }
+
+  const parts: string[] = []
+  if (turn.userMsg) {
+    if (turn.userMsg.textContent.startsWith(COMPACT_SUMMARY_PREFIX)) {
+      parts.push(turn.userMsg.textContent.slice(COMPACT_SUMMARY_PREFIX.length).trim())
+    } else {
+      const { displayText } = splitImagePaths(stripUserText(turn.userMsg.textContent))
+      if (displayText) parts.push(displayText)
+    }
+  }
+
+  for (const segment of buildSegments(turn.assistantMsgs)) {
+    if (segment.type === 'text') {
+      if (segment.text) parts.push(segment.text)
+      continue
+    }
+    if (viewMode === 'compact') {
+      // A collapsed compact pill renders each tool name once per segment.
+      parts.push([...new Set(segment.toolCalls?.map((tc) => tc.name) || [])].join('\n'))
+    } else {
+      for (const tc of segment.toolCalls || []) parts.push(fullToolSearchText(tc))
+    }
+  }
+  return parts.join('\n')
 }
 
 export function ChatViewer() {
@@ -1630,24 +1682,37 @@ export function ChatViewer() {
   const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
   const autoExpandedRef = useRef<Set<number>>(new Set()) // sections auto-expanded by search
   const normalizedSearchQuery = (searchOpen ? searchQuery : '').trim().toLowerCase()
-  const searchMatches = useMemo<ChatSearchMatch[]>(() => {
-    if (!normalizedSearchQuery) return []
-    const matches: ChatSearchMatch[] = []
+  const searchIndex = useMemo<ChatSearchEntry[]>(() => {
+    if (!searchOpen) return []
+    const entries: ChatSearchEntry[] = []
     sectionTurns.forEach((turns, sectionIndex) => {
       for (const turn of turns) {
         const turnUuid = turnAnchorUuid(turn)
         if (!turnUuid) continue
-        // Search the same conversation projection used by copy/export. This
-        // includes prose and tool content without requiring any offscreen DOM.
-        const searchable = turnToMarkdown(turn, locale).toLowerCase()
-        const occurrences = countOccurrences(searchable, normalizedSearchQuery)
-        for (let occurrenceInTurn = 0; occurrenceInTurn < occurrences; occurrenceInTurn++) {
-          matches.push({ sectionIndex, turnUuid, occurrenceInTurn })
-        }
+        entries.push({
+          sectionIndex,
+          turnUuid,
+          searchable: turnToSearchText(turn, viewMode).toLowerCase()
+        })
       }
     })
+    return entries
+  }, [searchOpen, sectionTurns, viewMode])
+  const searchMatches = useMemo<ChatSearchMatch[]>(() => {
+    if (!normalizedSearchQuery) return []
+    const matches: ChatSearchMatch[] = []
+    for (const entry of searchIndex) {
+      const occurrences = countOccurrences(entry.searchable, normalizedSearchQuery)
+      for (let occurrenceInTurn = 0; occurrenceInTurn < occurrences; occurrenceInTurn++) {
+        matches.push({
+          sectionIndex: entry.sectionIndex,
+          turnUuid: entry.turnUuid,
+          occurrenceInTurn
+        })
+      }
+    }
     return matches
-  }, [normalizedSearchQuery, sectionTurns, locale])
+  }, [normalizedSearchQuery, searchIndex])
   const searchMatchCount = searchMatches.length
 
   // Cmd+F to toggle search

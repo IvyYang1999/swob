@@ -90,7 +90,7 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const LEGACY_CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
 const CACHE_DB_FILE = path.join(CACHE_DIR, 'summary-cache.sqlite')
-const CACHE_VERSION = 28 // Store entries row-by-row so startup never holds one 245 MB JSON string
+const CACHE_VERSION = 29 // Keep audit events in a cold column; hot startup reads compact rows only
 
 type CachedSessionSource = SessionSource
 
@@ -192,7 +192,30 @@ function isLegacyCacheEntryCompatible(version: number, entry: DiskCacheEntry): b
   return isLegacyCacheSourceCompatible(version, entry?.perFile?.source)
 }
 
-function loadSqliteDiskCache(filePaths: readonly string[]): DiskCache | null {
+function omitCachedUsageEvents(perFile: PerFileCache): void {
+  for (const accounting of [
+    perFile.summary?.tokenAccounting,
+    perFile.codexSubagent?.tokenAccounting
+  ]) {
+    if (!accounting) continue
+    accounting.usageEvents = []
+    accounting.usageEventsOmitted = true
+  }
+}
+
+function compactPerFileJson(perFile: PerFileCache): string {
+  return JSON.stringify(perFile, function (key, value) {
+    if (key === 'usageEvents' && this && typeof this === 'object' &&
+      (this as { metricVersion?: unknown }).metricVersion === 2) return undefined
+    if (key === 'usageEventsOmitted') return undefined
+    return value
+  })
+}
+
+function loadSqliteDiskCache(
+  filePaths: readonly string[],
+  omitUsageEvents = false
+): DiskCache | null {
   if (!fs.existsSync(CACHE_DB_FILE)) return null
   let database: Database.Database | null = null
   try {
@@ -209,14 +232,16 @@ function loadSqliteDiskCache(filePaths: readonly string[]): DiskCache | null {
       const batch = filePaths.slice(offset, offset + 200)
       const placeholders = batch.map(() => '?').join(', ')
       const rows = database.prepare(`
-        SELECT file_path, sig, per_file_json
+        SELECT file_path, sig, ${omitUsageEvents ? 'compact_json' : 'per_file_json'} AS per_file_json
         FROM summary_cache_entries
         WHERE file_path IN (${placeholders})
       `).iterate(...batch) as Iterable<{ file_path: string; sig: string; per_file_json: string }>
       for (const row of rows) {
+        const perFile = JSON.parse(row.per_file_json, reviveCachedString) as PerFileCache
+        if (omitUsageEvents) omitCachedUsageEvents(perFile)
         entries[row.file_path] = {
           sig: row.sig,
-          perFile: JSON.parse(row.per_file_json, reviveCachedString) as PerFileCache
+          perFile
         }
       }
     }
@@ -288,10 +313,22 @@ async function loadLegacyDiskCache(filePaths: readonly string[]): Promise<DiskCa
 
 let legacyCacheMigrationFlight: Promise<boolean> | null = null
 
-function migrateLegacyDiskCacheToSqlite(): Promise<boolean> {
-  if (!fs.existsSync(LEGACY_CACHE_FILE) || fs.existsSync(CACHE_DB_FILE)) {
-    return Promise.resolve(false)
+function summaryCacheNeedsMigration(): boolean {
+  if (!fs.existsSync(CACHE_DB_FILE)) return fs.existsSync(LEGACY_CACHE_FILE)
+  try {
+    const database = new Database(CACHE_DB_FILE, { readonly: true, fileMustExist: true })
+    try {
+      return Number(database.pragma('user_version', { simple: true })) === 28
+    } finally {
+      database.close()
+    }
+  } catch {
+    return false
   }
+}
+
+function migrateLegacyDiskCacheToSqlite(): Promise<boolean> {
+  if (!summaryCacheNeedsMigration()) return Promise.resolve(false)
   if (legacyCacheMigrationFlight) return legacyCacheMigrationFlight
   const migration = migrateLegacyDiskCacheToSqliteOnce()
   legacyCacheMigrationFlight = migration
@@ -361,8 +398,11 @@ async function migrateLegacyDiskCacheToSqliteOnce(): Promise<boolean> {
   })
 }
 
-async function loadDiskCache(filePaths: readonly string[]): Promise<DiskCache | null> {
-  return loadSqliteDiskCache(filePaths) || await loadLegacyDiskCache(filePaths)
+async function loadDiskCache(
+  filePaths: readonly string[],
+  omitUsageEvents = false
+): Promise<DiskCache | null> {
+  return loadSqliteDiskCache(filePaths, omitUsageEvents) || await loadLegacyDiskCache(filePaths)
 }
 
 function writeSqliteDiskCache(
@@ -378,21 +418,35 @@ function writeSqliteDiskCache(
       CREATE TABLE IF NOT EXISTS summary_cache_entries (
         file_path TEXT PRIMARY KEY,
         sig TEXT NOT NULL,
-        per_file_json TEXT NOT NULL
+        per_file_json TEXT NOT NULL,
+        compact_json TEXT
       )
     `)
+    const columns = new Set(
+      (database.prepare('PRAGMA table_info(summary_cache_entries)').all() as Array<{ name: string }>)
+        .map((column) => column.name)
+    )
+    if (!columns.has('compact_json')) {
+      database.exec('ALTER TABLE summary_cache_entries ADD COLUMN compact_json TEXT')
+    }
     const insert = database.prepare(`
-      INSERT INTO summary_cache_entries(file_path, sig, per_file_json)
-      VALUES (?, ?, ?)
+      INSERT INTO summary_cache_entries(file_path, sig, per_file_json, compact_json)
+      VALUES (?, ?, ?, ?)
       ON CONFLICT(file_path) DO UPDATE SET
         sig = excluded.sig,
-        per_file_json = excluded.per_file_json
+        per_file_json = excluded.per_file_json,
+        compact_json = excluded.compact_json
     `)
     database.transaction(() => {
       for (const filePath of changedPaths) {
         const entry = entries[filePath]
         if (!entry) continue
-        insert.run(filePath, entry.sig, JSON.stringify(entry.perFile))
+        insert.run(
+          filePath,
+          entry.sig,
+          JSON.stringify(entry.perFile),
+          compactPerFileJson(entry.perFile)
+        )
       }
       if (activePaths) {
         const active = new Set(activePaths)
@@ -2244,6 +2298,8 @@ export interface LoadAllSessionsOptions {
   migrateLegacyCache?: boolean
   /** Suppress progress output so structured CLI output remains valid JSON. */
   quiet?: boolean
+  /** Reuse committed UsageFacts instead of materializing cached per-call audit rows. */
+  omitCachedUsageEvents?: boolean
 }
 
 interface LegacySessionLoadResult {
@@ -2265,8 +2321,8 @@ interface LoadAllSessionsResult extends Omit<
   providerStatus: 'complete' | 'degraded'
 }
 
-let legacySessionLoadFlight: Promise<LegacySessionLoadResult> | null = null
-let writableSessionLoadFlight: Promise<LoadAllSessionsResult> | null = null
+const legacySessionLoadFlights = new Map<boolean, Promise<LegacySessionLoadResult>>()
+const writableSessionLoadFlights = new Map<boolean, Promise<LoadAllSessionsResult>>()
 
 async function loadCanonicalProviderSessions(): Promise<{
   sessions: CanonicalStoredSession[]
@@ -2307,7 +2363,7 @@ async function loadCanonicalProviderSessions(): Promise<{
   }
 }
 
-async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
+async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise<LegacySessionLoadResult> {
   if (process.env.NODE_ENV === 'test' && process.env.SWOB_TEST_SESSION_LOAD_FAILURE === '1') {
     throw new Error('synthetic-session-load-failure')
   }
@@ -2340,7 +2396,7 @@ async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
     return sig ? [{ ...descriptor, sig }] : []
   })
   const activePaths = currentFiles.map(({ filePath }) => filePath)
-  const cache = await loadDiskCache(activePaths)
+  const cache = await loadDiskCache(activePaths, omitCachedUsageEvents)
   const entries: Record<string, DiskCacheEntry> = {}
   const changedPaths = new Set(cache?.requiresFullPersist ? activePaths : [])
   let parsedCount = 0
@@ -2606,22 +2662,26 @@ async function loadLegacySessionSnapshot(): Promise<LegacySessionLoadResult> {
   }
 }
 
-function getLegacySessionLoadFlight(): Promise<LegacySessionLoadResult> {
-  if (legacySessionLoadFlight) return legacySessionLoadFlight
+function getLegacySessionLoadFlight(omitCachedUsageEvents = false): Promise<LegacySessionLoadResult> {
+  const current = legacySessionLoadFlights.get(omitCachedUsageEvents)
+  if (current) return current
 
-  const started = loadLegacySessionSnapshot()
-  legacySessionLoadFlight = started
+  const started = loadLegacySessionSnapshot(omitCachedUsageEvents)
+  legacySessionLoadFlights.set(omitCachedUsageEvents, started)
   void started.then(
     () => queueMicrotask(() => {
       // A writable continuation keeps the pure snapshot alive until its cache
       // save/canonical projection is complete. Read-only-only flights expire
       // immediately after all same-turn callers have observed the result.
-      if (legacySessionLoadFlight === started && !writableSessionLoadFlight) {
-        legacySessionLoadFlight = null
+      if (legacySessionLoadFlights.get(omitCachedUsageEvents) === started &&
+        !writableSessionLoadFlights.has(omitCachedUsageEvents)) {
+        legacySessionLoadFlights.delete(omitCachedUsageEvents)
       }
     }),
     () => {
-      if (legacySessionLoadFlight === started) legacySessionLoadFlight = null
+      if (legacySessionLoadFlights.get(omitCachedUsageEvents) === started) {
+        legacySessionLoadFlights.delete(omitCachedUsageEvents)
+      }
     }
   )
   return started
@@ -2660,13 +2720,14 @@ export function projectCanonicalProviderSessions(
   return { summaries, providerStatus }
 }
 
-function getWritableSessionLoadFlight(): Promise<LoadAllSessionsResult> {
-  if (writableSessionLoadFlight) return writableSessionLoadFlight
+function getWritableSessionLoadFlight(omitCachedUsageEvents = false): Promise<LoadAllSessionsResult> {
+  const current = writableSessionLoadFlights.get(omitCachedUsageEvents)
+  if (current) return current
 
   let legacyFlight: Promise<LegacySessionLoadResult> | null = null
   const started = (async (): Promise<LoadAllSessionsResult> => {
     await migrateLegacyDiskCacheToSqlite()
-    legacyFlight = getLegacySessionLoadFlight()
+    legacyFlight = getLegacySessionLoadFlight(omitCachedUsageEvents)
     const legacy = await legacyFlight
     const canonical = await loadCanonicalProviderSessions()
     const projection = projectCanonicalProviderSessions(legacy.summaries, canonical)
@@ -2681,10 +2742,14 @@ function getWritableSessionLoadFlight(): Promise<LoadAllSessionsResult> {
     }
   })()
   const tracked = started.finally(() => {
-    if (writableSessionLoadFlight === tracked) writableSessionLoadFlight = null
-    if (legacyFlight && legacySessionLoadFlight === legacyFlight) legacySessionLoadFlight = null
+    if (writableSessionLoadFlights.get(omitCachedUsageEvents) === tracked) {
+      writableSessionLoadFlights.delete(omitCachedUsageEvents)
+    }
+    if (legacyFlight && legacySessionLoadFlights.get(omitCachedUsageEvents) === legacyFlight) {
+      legacySessionLoadFlights.delete(omitCachedUsageEvents)
+    }
   })
-  writableSessionLoadFlight = tracked
+  writableSessionLoadFlights.set(omitCachedUsageEvents, tracked)
   return tracked
 }
 
@@ -2696,7 +2761,8 @@ export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<S
     }))
   }
   const result = options.readOnly
-    ? getLegacySessionLoadFlight().then((legacy): LoadAllSessionsResult => ({
+    ? getLegacySessionLoadFlight(options.omitCachedUsageEvents === true)
+      .then((legacy): LoadAllSessionsResult => ({
         summaries: legacy.summaries,
         parsedCount: legacy.parsedCount,
         reusedCount: legacy.reusedCount,
@@ -2704,7 +2770,7 @@ export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<S
         elapsedMs: Date.now() - legacy.startedAt,
         providerStatus: 'complete'
       }))
-    : getWritableSessionLoadFlight()
+    : getWritableSessionLoadFlight(options.omitCachedUsageEvents === true)
 
   return result.then((snapshot) => {
     if (!options.quiet) {
@@ -2722,9 +2788,34 @@ export interface SessionLoadCompletion {
   providerStatus: 'complete' | 'degraded'
 }
 
+export function restoreOmittedUsageEvents(
+  sessions: SessionSummary[],
+  hydrated: SessionSummary[]
+): SessionSummary[] {
+  const byIdentity = new Map<string, SessionSummary>()
+  for (const session of hydrated) {
+    byIdentity.set(session.id, session)
+    byIdentity.set(session.sessionId, session)
+  }
+  return sessions.map((session) => {
+    if (!session.tokenAccounting?.usageEventsOmitted) return session
+    const replacement = byIdentity.get(session.id) || byIdentity.get(session.sessionId)
+    if (!replacement?.tokenAccounting || replacement.tokenAccounting.usageEventsOmitted) {
+      const error = new Error(`Unable to materialize usage events for ${session.sessionId}`) as Error & {
+        code: string
+      }
+      error.code = 'USAGE_EVENTS_HYDRATION_REQUIRED'
+      throw error
+    }
+    return { ...session, tokenAccounting: replacement.tokenAccounting }
+  })
+}
+
 /** Full session inventory plus explicit additive-provider health for phased UI bootstrap. */
-export function loadAllSessionsWithProviderStatus(): Promise<SessionLoadCompletion> {
-  return getWritableSessionLoadFlight().then((snapshot) => ({
+export function loadAllSessionsWithProviderStatus(
+  options: Pick<LoadAllSessionsOptions, 'omitCachedUsageEvents'> = {}
+): Promise<SessionLoadCompletion> {
+  return getWritableSessionLoadFlight(options.omitCachedUsageEvents === true).then((snapshot) => ({
     sessions: snapshot.summaries,
     providerStatus: snapshot.providerStatus
   }))

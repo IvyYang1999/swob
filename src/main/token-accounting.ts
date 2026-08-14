@@ -151,6 +151,12 @@ export interface TokenAccounting {
   conversationOnly: number | null
   components: NormalizedTokenComponents | null
   usageEvents: UsageEvent[]
+  /**
+   * Transient cache-read marker: aggregate fields are present, but the
+   * per-call audit rows live only in the committed UsageFact snapshot.
+   * Never set this on freshly parsed ledgers.
+   */
+  usageEventsOmitted?: true
   unavailableReason?: string
   warnings: string[]
   /** Synthetic branch views expose a value but must not be added to global rollups. */
@@ -752,6 +758,7 @@ export function mergeTokenAccountings(
     )
   const first = available[0]?.accounting
   if (!first) return unavailableTokenAccounting('codex', 'No token accounting ledgers were provided')
+  const usageEventsOmitted = available.some(({ accounting }) => accounting.usageEventsOmitted === true)
 
   const seenBillingFacts = new Set<string>()
   const events: UsageEvent[] = []
@@ -765,7 +772,9 @@ export function mergeTokenAccountings(
     }
   }
 
-  if (events.length === 0) return first
+  if (events.length === 0) return usageEventsOmitted && !first.usageEventsOmitted
+    ? { ...first, usageEventsOmitted: true }
+    : first
   const billableEvents = uniqueBillingEvents(events)
   const provenance: TokenProvenance = billableEvents.some((event) => event.provenance === 'estimated')
     ? 'estimated'
@@ -778,7 +787,9 @@ export function mergeTokenAccountings(
       `deduplicated ${duplicateCount} cross-session usage event${duplicateCount === 1 ? '' : 's'}`
     )
   }
-  return accountingFromEvents(first.provider, events, provenance, warnings)
+  const merged = accountingFromEvents(first.provider, events, provenance, warnings)
+  if (usageEventsOmitted) merged.usageEventsOmitted = true
+  return merged
 }
 
 export function accountingFromMutuallyExclusiveUsage(

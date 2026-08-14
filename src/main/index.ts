@@ -28,6 +28,7 @@ import { getLocalNetworkInfo, queryPublicIp } from './network-info'
 import {
   loadAllSessions,
   loadAllSessionsWithProviderStatus,
+  restoreOmittedUsageEvents,
   loadSessionDetail,
   loadSessionDetailWithFallback,
   findAllSessionFiles,
@@ -1245,12 +1246,24 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
         // the committed Insights snapshot for minutes.
         const worker = usageFactWorker || (usageFactWorker = new LibraryWorkerClient())
         try {
-          const result = await worker.syncUsageFacts(
-            getLibraryRoot(),
-            snapshot.sessions,
-            snapshot.folders,
-            { rebuild: snapshot.rebuild }
-          )
+          let sessions = snapshot.sessions
+          if (snapshot.rebuild && sessions.some((session) =>
+            session.tokenAccounting?.usageEventsOmitted === true)) {
+            sessions = await materializeUsageEventsForSnapshot(sessions)
+          }
+          let result: UsageFactSyncResult
+          try {
+            result = await worker.syncUsageFacts(
+              getLibraryRoot(), sessions, snapshot.folders, { rebuild: snapshot.rebuild }
+            )
+          } catch (error) {
+            const code = (error as { code?: unknown })?.code
+            if (code !== 'USAGE_EVENTS_HYDRATION_REQUIRED' || sessions !== snapshot.sessions) throw error
+            sessions = await materializeUsageEventsForSnapshot(snapshot.sessions)
+            result = await worker.syncUsageFacts(
+              getLibraryRoot(), sessions, snapshot.folders, { rebuild: snapshot.rebuild }
+            )
+          }
           usageFactSyncError = null
           mainWindow?.webContents.send('insights:factsUpdated', result)
           return result
@@ -1276,6 +1289,13 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
   })
   void run.catch(() => { /* error is retained for ensureUsageFactsReady */ })
   return run
+}
+
+async function materializeUsageEventsForSnapshot(
+  sessions: SessionSummary[]
+): Promise<SessionSummary[]> {
+  const hydrated = await loadAllSessions({ readOnly: true, quiet: true })
+  return restoreOmittedUsageEvents(sessions, hydrated)
 }
 
 function scheduleUsageFactSync(options: { rebuild?: boolean } = {}): Promise<UsageFactSyncResult | undefined> {
@@ -3071,9 +3091,21 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   // background so lineage cannot delay the first session-list paint.
   const diskLineage = readSessionLineageRegistry()
   latestProviderSettlementStatus = null
+  let omitCachedUsageEvents = false
+  try {
+    omitCachedUsageEvents = hasCompletedUsageFactSnapshot()
+  } catch {
+    // A missing, stale, or migrating fact snapshot must take the fully
+    // materialized path so the next synchronization can repair it.
+  }
   const bootstrap = await beginSessionBootstrap(
-    () => loadAllSessions({ readOnly: true, migrateLegacyCache: true, quiet: true }),
-    () => loadAllSessionsWithProviderStatus()
+    () => loadAllSessions({
+      readOnly: true,
+      migrateLegacyCache: true,
+      quiet: true,
+      omitCachedUsageEvents
+    }),
+    () => loadAllSessionsWithProviderStatus({ omitCachedUsageEvents })
   )
   sourceSessionInventory.replacePhysical(bootstrap.initial)
   const sessions = filterExcludedSources(bootstrap.initial)

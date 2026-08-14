@@ -106,7 +106,35 @@ function createJsonTokenWriter() {
 
 async function migrate() {
   const { legacyPath, databasePath, cacheVersion } = workerData
-  if (!fs.existsSync(legacyPath) || fs.existsSync(databasePath)) return false
+  if (fs.existsSync(databasePath)) {
+    const database = new Database(databasePath)
+    try {
+      const version = Number(database.pragma('user_version', { simple: true }))
+      if (version !== 28 || cacheVersion !== 29) return false
+      database.pragma('journal_mode = WAL')
+      database.pragma('synchronous = NORMAL')
+      database.transaction(() => {
+        const columns = new Set(database.prepare('PRAGMA table_info(summary_cache_entries)').all()
+          .map((column) => column.name))
+        if (!columns.has('compact_json')) {
+          database.exec('ALTER TABLE summary_cache_entries ADD COLUMN compact_json TEXT')
+        }
+        database.exec(`
+          UPDATE summary_cache_entries
+          SET compact_json = json_remove(
+            per_file_json,
+            '$.summary.tokenAccounting.usageEvents',
+            '$.codexSubagent.tokenAccounting.usageEvents'
+          )
+        `)
+        database.pragma(`user_version = ${cacheVersion}`)
+      })()
+      return true
+    } finally {
+      database.close()
+    }
+  }
+  if (!fs.existsSync(legacyPath)) return false
   const version = legacyVersion(legacyPath)
   if (!COMPATIBLE_VERSIONS.has(version)) return false
   const directory = require('node:path').dirname(databasePath)
@@ -123,13 +151,18 @@ async function migrate() {
       CREATE TABLE summary_cache_entries (
         file_path TEXT PRIMARY KEY,
         sig TEXT NOT NULL,
-        per_file_json TEXT NOT NULL
+        per_file_json TEXT NOT NULL,
+        compact_json TEXT NOT NULL
       );
       BEGIN IMMEDIATE;
     `)
     const insert = database.prepare(`
-      INSERT INTO summary_cache_entries(file_path, sig, per_file_json)
-      VALUES (?, ?, ?)
+      INSERT INTO summary_cache_entries(file_path, sig, per_file_json, compact_json)
+      VALUES (?, ?, ?, json_remove(
+        ?,
+        '$.summary.tokenAccounting.usageEvents',
+        '$.codexSubagent.tokenAccounting.usageEvents'
+      ))
     `)
     const sourceStream = fs.createReadStream(legacyPath)
     const jsonParser = parser({
@@ -191,7 +224,8 @@ async function migrate() {
 
       if (writer && writer.complete()) {
         if (filePath && sig && sourceCompatible(version, source)) {
-          insert.run(filePath, sig, writer.value())
+          const perFileJson = writer.value()
+          insert.run(filePath, sig, perFileJson, perFileJson)
         }
         writer = null
       }

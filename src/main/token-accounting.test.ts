@@ -121,6 +121,19 @@ describe('token accounting', () => {
     expect(merged.warnings.join(' ')).toContain('deduplicated 1 cross-session usage event')
   })
 
+  it('合并账本会传播任一子账本的事件省略标记', () => {
+    const full = accountCodexUsage([
+      { kind: 'incremental', inputTokens: 100, outputTokens: 20, dedupHint: 'full' }
+    ])
+    const compact = structuredClone(full)
+    compact.usageEvents = []
+    compact.usageEventsOmitted = true
+
+    expect(mergeTokenAccountings([full, compact])).toMatchObject({
+      usageEventsOmitted: true
+    })
+  })
+
   it('Cursor 与未验证 harness 明确 unavailable，不把未知值伪装成零', () => {
     const usage = { inputTokens: 1, outputTokens: 2, cacheCreationTokens: 3, cacheReadTokens: 4 }
     const unavailableSources: SessionSource[] = ['cursor', 'antigravity', 'grok', 'pi', 'kimi', 'hermes']

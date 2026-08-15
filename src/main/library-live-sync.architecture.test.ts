@@ -156,6 +156,20 @@ describe('live Library synchronization architecture', () => {
     )
   })
 
+  it('uses committed usage facts for hot startup and bounds hydration fallback to one retry', () => {
+    const usageSync = source.match(
+      /function scheduleUsageFactSyncNow[\s\S]*?\n}\n\nasync function materializeUsageEventsForSnapshot/
+    )?.[0] || ''
+    expect(usageSync).toContain("code !== 'USAGE_EVENTS_HYDRATION_REQUIRED'")
+    expect(usageSync.match(/worker\.syncUsageFacts/g)).toHaveLength(2)
+    expect(usageSync).toContain('materializeUsageEventsForSnapshot(snapshot.sessions)')
+    const loadHandler = source.match(
+      /ipcMain\.handle\('sessions:loadAll'[\s\S]*?sourceSessionInventory\.replacePhysical/
+    )?.[0] || ''
+    expect(loadHandler).toContain('omitCachedUsageEvents = hasCompletedUsageFactSnapshot()')
+    expect(loadHandler).toContain('loadAllSessionsWithProviderStatus({ omitCachedUsageEvents })')
+  })
+
   it('closes the shared writer coordinator before a mutation-incomplete fatal dialog', () => {
     const cleanup = source.match(/function cleanupRuntimeResources[\s\S]*?\n}\n/)?.[0] || ''
     expect(cleanup).not.toContain('closeLibraryWriterRuntime()')

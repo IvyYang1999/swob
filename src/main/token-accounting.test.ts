@@ -9,6 +9,7 @@ import {
   normalizeGeminiOutput,
   processedTotal
 } from './token-accounting'
+import type { CompactUsageEventRollup } from './token-accounting'
 
 function claudeRow(overrides: Partial<RawJsonlMessage>): RawJsonlMessage {
   return {
@@ -119,6 +120,58 @@ describe('token accounting', () => {
     expect(merged.usageEvents.find((event) => event.dedupKey === 'shared-turn')?.scope).toBe('main')
     expect(merged.usageEvents.filter((event) => event.dedupKey === 'shared-turn')).toHaveLength(2)
     expect(merged.warnings.join(' ')).toContain('deduplicated 1 cross-session usage event')
+  })
+
+  it('合并账本会传播任一子账本的事件省略标记', () => {
+    const full = accountCodexUsage([
+      { kind: 'incremental', inputTokens: 100, outputTokens: 20, dedupHint: 'full' }
+    ])
+    const compact = structuredClone(full)
+    compact.usageEvents = []
+    compact.usageEventsOmitted = true
+
+    expect(mergeTokenAccountings([full, compact])).toMatchObject({
+      usageEventsOmitted: true
+    })
+  })
+
+  it('compact parent + thread-spawn child 仍保持完整去重汇总', () => {
+    const parent = accountCodexUsage([
+      { kind: 'incremental', inputTokens: 100, outputTokens: 20, dedupHint: 'shared' }
+    ])
+    const child = accountCodexUsage([
+      { kind: 'incremental', inputTokens: 100, outputTokens: 20, dedupHint: 'shared' },
+      { kind: 'incremental', inputTokens: 50, outputTokens: 5, dedupHint: 'child-only' }
+    ], 'subagent')
+    const compact = (accounting: typeof parent): typeof parent => ({
+      ...accounting,
+      usageEvents: [],
+      usageEventRollups: accounting.usageEvents.map((event): CompactUsageEventRollup => [
+        event.billingFactKey || event.dedupKey,
+        event.scope,
+        event.provenance,
+        event.components.nonCachedInputTokens,
+        event.components.cacheReadTokens,
+        event.components.cacheWriteTokens,
+        event.components.cacheWrite5mTokens,
+        event.components.cacheWrite1hTokens,
+        event.components.outputTokens,
+        event.components.reasoningTokens || 0
+      ]),
+      usageEventsOmitted: true
+    })
+
+    const expected = mergeTokenAccountings([parent, child])
+    const actual = mergeTokenAccountings([compact(parent), compact(child)])
+    expect(actual).toMatchObject({
+      billingTotal: expected.billingTotal,
+      conversationOnly: expected.conversationOnly,
+      components: expected.components,
+      warnings: expected.warnings,
+      usageEvents: [],
+      usageEventsOmitted: true
+    })
+    expect(actual.usageEventRollups).toHaveLength(3)
   })
 
   it('Cursor 与未验证 harness 明确 unavailable，不把未知值伪装成零', () => {

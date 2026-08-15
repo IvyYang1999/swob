@@ -4,7 +4,10 @@ export type RendererSessionSummary = Omit<
   SessionSummary,
   'allUserMessages' | 'tokenAccounting' | 'canonicalProjectionFingerprint'
 > & {
-  tokenAccounting?: Omit<NonNullable<SessionSummary['tokenAccounting']>, 'usageEvents'>
+  tokenAccounting?: Omit<
+    NonNullable<SessionSummary['tokenAccounting']>,
+    'usageEvents' | 'usageEventRollups' | 'usageEventsOmitted'
+  >
 }
 
 export interface SessionBootstrap<TInitial, TCompletion = TInitial[]> {
@@ -48,6 +51,11 @@ export function sessionSummaryForRenderer(summary: SessionSummary): RendererSess
     ...visible
   } = summary
   if (!tokenAccounting) return visible
-  const { usageEvents: _usageEvents, ...compactAccounting } = tokenAccounting
+  const {
+    usageEvents: _usageEvents,
+    usageEventRollups: _usageEventRollups,
+    usageEventsOmitted: _usageEventsOmitted,
+    ...compactAccounting
+  } = tokenAccounting
   return { ...visible, tokenAccounting: compactAccounting }
 }

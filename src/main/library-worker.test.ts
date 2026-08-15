@@ -787,6 +787,29 @@ describe('Library worker request', () => {
     expect(fs.existsSync(process.env.SWOB_USAGE_INDEX_PATH)).toBe(true)
   })
 
+  it('preserves the usage hydration error code across the production worker boundary', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-usage-hydration-worker-'))
+    roots.push(root)
+    process.env.SWOB_USAGE_INDEX_PATH = path.join(root, 'usage.db')
+    const worker = new LibraryWorkerClient(await buildProductionWorker(root))
+    const fixture = canonicalWorkerFixture('compact usage', 'compact-usage-worker')
+    const compact = canonicalRecordsToSessionSummary(fixture.records, {
+      filePath: fixture.sourceRef.displayLocator,
+      source: 'pi'
+    })
+    compact.tokenAccounting!.usageEventsOmitted = true
+
+    try {
+      await expect(worker.syncUsageFacts(root, [compact], [], { rebuild: true }))
+        .rejects.toMatchObject({
+          name: 'UsageEventsHydrationRequiredError',
+          code: 'USAGE_EVENTS_HYDRATION_REQUIRED'
+        })
+    } finally {
+      await worker.close()
+    }
+  })
+
   it('scans Library metadata without relying on the main-process index', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-library-worker-'))
     roots.push(root)

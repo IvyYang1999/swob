@@ -21,7 +21,8 @@ import {
   decodeClaudeProjectDirectoryName,
   getClaudeConfigDirForSessionFile,
   isRealUserMessage,
-  projectCanonicalProviderSessions
+  projectCanonicalProviderSessions,
+  restoreOmittedUsageEvents
 } from './session-loader'
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import { shellQuote } from './resume-terminal'
@@ -377,7 +378,12 @@ function sharedCrossSessionPrefix(sessionId: string): RawJsonlMessage[] {
 
 async function loadAllSessionsFromTempHome(
   home: string,
-  options: { readOnly?: boolean; migrateLegacyCache?: boolean; quiet?: boolean } = {}
+  options: {
+    readOnly?: boolean
+    migrateLegacyCache?: boolean
+    quiet?: boolean
+    omitCachedUsageEvents?: boolean
+  } = {}
 ) {
   const oldHome = process.env.HOME
   process.env.HOME = home
@@ -1271,6 +1277,132 @@ describe('buildSessionDetail', () => {
 // cross-session branch inference 测试
 // ========================================================
 describe('loadAllSessions per-file incremental cache', () => {
+  it('热缓存可只物化汇总，源文件变化后仍返回完整用量事件', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-compact-usage-cache-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'usage.jsonl')
+    const rows = [
+      rawMsg({
+        sessionId: 'compact-usage-session',
+        type: 'user',
+        message: { role: 'user', content: 'cache usage fixture' }
+      }),
+      rawMsg({
+        sessionId: 'compact-usage-session',
+        type: 'assistant',
+        message: {
+          id: 'usage-1', role: 'assistant', content: 'done', stop_reason: 'end_turn',
+          usage: { input_tokens: 100, output_tokens: 20 }
+        }
+      })
+    ]
+    writeJsonlAt(file, rows)
+
+    try {
+      const cold = await loadAllSessionsFromTempHome(home, { quiet: true })
+      expect(cold[0].tokenAccounting?.usageEvents).toHaveLength(1)
+      const persisted = new Database(summaryCacheDbPath(home), { readonly: true })
+      const cacheRow = persisted.prepare(`
+        SELECT length(per_file_json) AS full_bytes,
+          length(compact_json) AS compact_bytes,
+          json_type(compact_json, '$.summary.tokenAccounting.usageEvents') AS compact_events
+        FROM summary_cache_entries WHERE file_path = ?
+      `).get(file) as { full_bytes: number; compact_bytes: number; compact_events: string | null }
+      persisted.close()
+      expect(cacheRow.compact_bytes).toBeLessThan(cacheRow.full_bytes)
+      expect(cacheRow.compact_events).toBeNull()
+
+      const compact = await loadAllSessionsFromTempHome(home, {
+        readOnly: true,
+        quiet: true,
+        omitCachedUsageEvents: true
+      })
+      expect(compact[0].tokenAccounting).toMatchObject({
+        billingTotal: 120,
+        usageEvents: [],
+        usageEventsOmitted: true
+      })
+      expect(compact[0].tokenAccounting?.usageEventRollups?.[0]?.[0])
+        .toBe('claude:message:usage-1')
+      expect(readSummaryCache(home).entries[file].perFile.summary.tokenAccounting.usageEvents)
+        .toHaveLength(1)
+      const restored = restoreOmittedUsageEvents(compact, cold)
+      expect(restored[0].tokenAccounting?.usageEvents).toHaveLength(1)
+      expect(restored[0].tokenAccounting).not.toHaveProperty('usageEventsOmitted')
+
+      writeJsonlAt(file, [...rows, rawMsg({
+        sessionId: 'compact-usage-session',
+        type: 'assistant',
+        message: {
+          id: 'usage-2', role: 'assistant', content: 'updated', stop_reason: 'end_turn',
+          usage: { input_tokens: 50, output_tokens: 10 }
+        }
+      })])
+      const changed = await loadAllSessionsFromTempHome(home, {
+        readOnly: true,
+        quiet: true,
+        omitCachedUsageEvents: true
+      })
+      expect(changed[0].tokenAccounting?.usageEvents).toHaveLength(2)
+      expect(changed[0].tokenAccounting).not.toHaveProperty('usageEventsOmitted')
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('v28 SQLite 缓存在隔离 worker 中原地补齐 compact_json 后才进入轻量读取', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-v28-compact-migration-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'v28.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'v28-compact-session',
+        type: 'user',
+        message: { role: 'user', content: 'v28 migration' }
+      }),
+      rawMsg({
+        sessionId: 'v28-compact-session',
+        type: 'assistant',
+        message: {
+          id: 'v28-usage', role: 'assistant', content: 'done', stop_reason: 'end_turn',
+          usage: { input_tokens: 80, output_tokens: 20 }
+        }
+      })
+    ])
+
+    try {
+      await loadAllSessionsFromTempHome(home, { quiet: true })
+      const legacy = new Database(summaryCacheDbPath(home))
+      legacy.exec('ALTER TABLE summary_cache_entries DROP COLUMN compact_json')
+      legacy.pragma('user_version = 28')
+      legacy.close()
+
+      const sessions = await loadAllSessionsFromTempHome(home, {
+        readOnly: true,
+        migrateLegacyCache: true,
+        quiet: true,
+        omitCachedUsageEvents: true
+      })
+      expect(sessions[0].tokenAccounting).toMatchObject({
+        billingTotal: 100,
+        usageEvents: [],
+        usageEventsOmitted: true
+      })
+      expect(sessions[0].tokenAccounting?.usageEventRollups?.[0]?.[0])
+        .toBe('claude:message:v28-usage')
+      const migrated = new Database(summaryCacheDbPath(home), { readonly: true })
+      expect(Number(migrated.pragma('user_version', { simple: true }))).toBe(29)
+      expect((migrated.prepare('PRAGMA table_info(summary_cache_entries)').all() as Array<{ name: string }>)
+        .map((column) => column.name)).toContain('compact_json')
+      expect(migrated.prepare(`
+        SELECT json_array_length(compact_json, '$.summary.tokenAccounting.usageEventRollups') AS count,
+          json_extract(compact_json, '$.summary.tokenAccounting.usageEventRollups[0][0]') AS ledger_key
+        FROM summary_cache_entries WHERE file_path = ?
+      `).get(file)).toEqual({ count: 1, ledger_key: 'claude:message:v28-usage' })
+      migrated.close()
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('v28 只读取当前 key，并且不重写未变化行', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-bounded-cache-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'active.jsonl')
@@ -1389,6 +1521,48 @@ describe('loadAllSessions per-file incremental cache', () => {
     }
   })
 
+  it('轻量与完整物化使用不同 single-flight，回退不会误接轻量快照', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-materialization-flight-home-'))
+    const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'flight.jsonl')
+    writeJsonlAt(file, [
+      rawMsg({
+        sessionId: 'materialization-flight', type: 'user',
+        message: { role: 'user', content: 'flight fixture' }
+      }),
+      rawMsg({
+        sessionId: 'materialization-flight', type: 'assistant',
+        message: {
+          id: 'flight-usage', role: 'assistant', content: 'done', stop_reason: 'end_turn',
+          usage: { input_tokens: 10, output_tokens: 2 }
+        }
+      })
+    ])
+    const previousHome = process.env.HOME
+
+    try {
+      process.env.HOME = home
+      vi.resetModules()
+      const mod = await import('./session-loader')
+      await mod.loadAllSessions({ quiet: true })
+      const [compact, full] = await Promise.all([
+        mod.loadAllSessions({ readOnly: true, quiet: true, omitCachedUsageEvents: true }),
+        mod.loadAllSessions({ readOnly: true, quiet: true })
+      ])
+
+      expect(compact).not.toBe(full)
+      expect(compact[0].tokenAccounting).toMatchObject({
+        usageEvents: [],
+        usageEventsOmitted: true
+      })
+      expect(full[0].tokenAccounting?.usageEvents).toHaveLength(1)
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      vi.resetModules()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('readOnly 模式读取会话但不创建 summary cache', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-readonly-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'readonly.jsonl')
@@ -1466,7 +1640,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(sessions.find((session) => session.sessionId === 'explicit-migration-session')?.firstUserMessage)
         .toBe('worker migrated value')
-      expect(readSummaryCache(home).version).toBe(28)
+      expect(readSummaryCache(home).version).toBe(29)
       expect(fs.existsSync(legacyPath)).toBe(false)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
@@ -1522,7 +1696,7 @@ describe('loadAllSessions per-file incremental cache', () => {
       expect(sessions).toEqual(expect.arrayContaining([
         expect.objectContaining({ sessionId: 'repair-session' })
       ]))
-      expect(rebuilt.version).toBe(28)
+      expect(rebuilt.version).toBe(29)
       expect(rebuilt.entries[file]).toBeDefined()
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
@@ -1552,7 +1726,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(sessions.find((session) => session.sessionId === 'streaming-cache-session')?.firstUserMessage)
         .toBe(marker)
-      expect(readSummaryCache(home).version).toBe(28)
+      expect(readSummaryCache(home).version).toBe(29)
       expect(fs.existsSync(legacyPath)).toBe(false)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
@@ -1581,7 +1755,7 @@ describe('loadAllSessions per-file incremental cache', () => {
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 2, reused 0, files 2')
 
       const diskCache = readSummaryCache(home)
-      expect(diskCache.version).toBe(28)
+      expect(diskCache.version).toBe(29)
       expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
       expect(diskCache.entries[firstFile]).toMatchObject({
         sig: expect.any(String),
@@ -1751,7 +1925,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
       expect(summary).toMatchObject({ firstUserMessage: 'old-cache-session', turnCount: 0 })
-      expect(refreshedCache.version).toBe(28)
+      expect(refreshedCache.version).toBe(29)
       expect(refreshedCache.entries[file].perFile.lineageMeta.leafUuidRefs[0]).toMatchObject({
         origin: { kind: 'task-notification' },
         promptSource: 'sdk'
@@ -1845,7 +2019,7 @@ describe('loadAllSessions per-file incremental cache', () => {
         .toEqual([expect.objectContaining({ providerFormatVersion: 'zcode-model-usage-v1' })])
       expect(sessions.find((session) => session.sessionId === codexId)?.firstUserMessage)
         .toBe('从 Codex backup 建 summary')
-      expect(refreshed.version).toBe(28)
+      expect(refreshed.version).toBe(29)
 
       infoSpy.mockClear()
       await loadAllSessionsFromTempHome(home)
@@ -1912,7 +2086,7 @@ describe('loadAllSessions per-file incremental cache', () => {
         .toEqual([expect.objectContaining({ providerFormatVersion: 'opencode-message-usage-v2' })])
       expect(migrated.find((session) => session.sessionId === zcodeId)?.tokenAccounting?.usageEvents)
         .toEqual([expect.objectContaining({ providerFormatVersion: 'zcode-model-usage-v1' })])
-      expect(readSummaryCache(home).version).toBe(28)
+      expect(readSummaryCache(home).version).toBe(29)
 
       infoSpy.mockClear()
       await loadAllSessionsFromTempHome(home)
@@ -1997,7 +2171,7 @@ describe('loadAllSessions per-file incremental cache', () => {
         .filter((event) => event.billingFactKey && event.billingFactKey === parent.tokenAccounting?.usageEvents[0]?.billingFactKey)
       expect(copiedPrefix).toHaveLength(2)
       expect(new Set(copiedPrefix?.map((event) => event.auditSourceId))).toEqual(new Set([parentId, childId]))
-      expect(cache.version).toBe(28)
+      expect(cache.version).toBe(29)
       expect(cache.entries[parentFile].perFile.summary.tokenAccounting.usageEvents
         .every((event: { auditSourceId?: string }) => event.auditSourceId === parentId)).toBe(true)
       expect(cache.entries[childFile].perFile.codexSubagent.tokenAccounting.usageEvents
@@ -2006,6 +2180,19 @@ describe('loadAllSessions per-file incremental cache', () => {
         summary: null,
         codexSubagent: { role: 'guardian', parentSessionId: parentId }
       })
+
+      const compactHot = await loadAllSessionsFromTempHome(home, {
+        readOnly: true,
+        quiet: true,
+        omitCachedUsageEvents: true
+      })
+      expect(compactHot[0].tokenAccounting).toMatchObject({
+        billingTotal: 208,
+        conversationOnly: 120,
+        usageEvents: [],
+        usageEventsOmitted: true
+      })
+      expect(compactHot[0].tokenAccounting?.usageEventRollups).toHaveLength(4)
 
       cache.version = 23
       cache.entries[guardianFile].perFile.summary = {
@@ -2018,7 +2205,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const hot = await loadAllSessionsFromTempHome(home)
       expect(hot.map((session) => session.sessionId)).toEqual([parentId])
-      expect(readSummaryCache(home).version).toBe(28)
+      expect(readSummaryCache(home).version).toBe(29)
 
       fs.rmSync(childFile)
       fs.rmSync(guardianFile)

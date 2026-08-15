@@ -3,6 +3,7 @@ const { parentPort, workerData } = require('node:worker_threads')
 const Database = require('better-sqlite3')
 const { parser } = require('stream-json')
 const { pick } = require('stream-json/filters/Pick')
+const { compactPerFileJson } = require('./summary-cache-compact.cjs')
 
 const COMPATIBLE_VERSIONS = new Set([25, 26, 27])
 
@@ -106,7 +107,43 @@ function createJsonTokenWriter() {
 
 async function migrate() {
   const { legacyPath, databasePath, cacheVersion } = workerData
-  if (!fs.existsSync(legacyPath) || fs.existsSync(databasePath)) return false
+  if (fs.existsSync(databasePath)) {
+    const database = new Database(databasePath)
+    try {
+      const version = Number(database.pragma('user_version', { simple: true }))
+      if (version !== 28 || cacheVersion !== 29) return false
+      database.pragma('journal_mode = WAL')
+      database.pragma('synchronous = NORMAL')
+      database.transaction(() => {
+        const columns = new Set(database.prepare('PRAGMA table_info(summary_cache_entries)').all()
+          .map((column) => column.name))
+        if (!columns.has('compact_json')) {
+          database.exec('ALTER TABLE summary_cache_entries ADD COLUMN compact_json TEXT')
+        }
+        const update = database.prepare(
+          'UPDATE summary_cache_entries SET compact_json = ? WHERE file_path = ?'
+        )
+        const selectBatch = database.prepare(`
+          SELECT file_path, per_file_json FROM summary_cache_entries
+          WHERE file_path > ? ORDER BY file_path LIMIT 25
+        `)
+        let after = ''
+        while (true) {
+          const rows = selectBatch.all(after)
+          if (rows.length === 0) break
+          for (const row of rows) {
+            update.run(compactPerFileJson(JSON.parse(row.per_file_json)), row.file_path)
+          }
+          after = rows[rows.length - 1].file_path
+        }
+        database.pragma(`user_version = ${cacheVersion}`)
+      })()
+      return true
+    } finally {
+      database.close()
+    }
+  }
+  if (!fs.existsSync(legacyPath)) return false
   const version = legacyVersion(legacyPath)
   if (!COMPATIBLE_VERSIONS.has(version)) return false
   const directory = require('node:path').dirname(databasePath)
@@ -123,13 +160,14 @@ async function migrate() {
       CREATE TABLE summary_cache_entries (
         file_path TEXT PRIMARY KEY,
         sig TEXT NOT NULL,
-        per_file_json TEXT NOT NULL
+        per_file_json TEXT NOT NULL,
+        compact_json TEXT NOT NULL
       );
       BEGIN IMMEDIATE;
     `)
     const insert = database.prepare(`
-      INSERT INTO summary_cache_entries(file_path, sig, per_file_json)
-      VALUES (?, ?, ?)
+      INSERT INTO summary_cache_entries(file_path, sig, per_file_json, compact_json)
+      VALUES (?, ?, ?, ?)
     `)
     const sourceStream = fs.createReadStream(legacyPath)
     const jsonParser = parser({
@@ -191,7 +229,13 @@ async function migrate() {
 
       if (writer && writer.complete()) {
         if (filePath && sig && sourceCompatible(version, source)) {
-          insert.run(filePath, sig, writer.value())
+          const perFileJson = writer.value()
+          insert.run(
+            filePath,
+            sig,
+            perFileJson,
+            compactPerFileJson(JSON.parse(perFileJson))
+          )
         }
         writer = null
       }

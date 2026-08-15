@@ -128,7 +128,8 @@ interface UsageFactRow {
 }
 
 // Storage migrations and fact-derivation changes are independent concerns.
-// Schema v8 persists request-level audit identity and provider provenance.
+// Schema v9 adds a compact projection signature so committed per-call facts can
+// be reused without materializing their audit events in the desktop process.
 // Retaining
 // v6 here keeps every other provider's already-verified fact signature valid.
 const BASE_USAGE_FACT_DERIVATION_VERSION = 6
@@ -157,12 +158,16 @@ function ensureSchema(db: Database.Database): void {
   ).get() as { schema_version: number } | undefined
   const metaColumns = db.prepare('PRAGMA table_info(usage_schema_meta)').all() as Array<{ name: string }>
   let effectiveVersion = version?.schema_version
-  const canMigrateLegacyInPlace = (effectiveVersion === 6 || effectiveVersion === 7) &&
+  const canMigrateLegacyInPlace = (effectiveVersion === 6 || effectiveVersion === 7 || effectiveVersion === 8) &&
     metaColumns.some((column) => column.name === 'revision') &&
     Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_facts'").get())
   if (canMigrateLegacyInPlace) {
     const factColumns = new Set(
       (db.prepare('PRAGMA table_info(usage_facts)').all() as Array<{ name: string }>)
+        .map((column) => column.name)
+    )
+    const sessionColumns = new Set(
+      (db.prepare('PRAGMA table_info(usage_sessions)').all() as Array<{ name: string }>)
         .map((column) => column.name)
     )
     db.transaction(() => {
@@ -197,6 +202,9 @@ function ensureSchema(db: Database.Database): void {
       }
       if (!factColumns.has('billing_fact_key')) {
         db.exec('ALTER TABLE usage_facts ADD COLUMN billing_fact_key TEXT')
+      }
+      if (!sessionColumns.has('projection_signature')) {
+        db.exec('ALTER TABLE usage_sessions ADD COLUMN projection_signature TEXT')
       }
       db.prepare('UPDATE usage_schema_meta SET schema_version = ? WHERE singleton = 1')
         .run(USAGE_FACT_SCHEMA_VERSION)
@@ -235,6 +243,7 @@ function ensureSchema(db: Database.Database): void {
       usage_status TEXT NOT NULL CHECK(usage_status IN ('available', 'unavailable')),
       usage_available INTEGER NOT NULL,
       fact_signature TEXT NOT NULL,
+      projection_signature TEXT,
       folder_signature TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       activity_time_status TEXT NOT NULL
@@ -418,29 +427,34 @@ export function initializeUsageFactStore(): void {
 }
 
 export function hasCompletedUsageFactSnapshot(): boolean {
-  const row = getDatabase().prepare(
-    'SELECT last_indexed_at FROM usage_schema_meta WHERE singleton = 1'
-  ).get() as { last_indexed_at: string | null } | undefined
-  return Boolean(row?.last_indexed_at)
+  const row = getDatabase().prepare(`
+    SELECT
+      last_indexed_at,
+      NOT EXISTS(
+        SELECT 1 FROM usage_sessions WHERE projection_signature IS NULL
+      ) AS reusable
+    FROM usage_schema_meta WHERE singleton = 1
+  `).get() as { last_indexed_at: string | null; reusable: number } | undefined
+  return Boolean(row?.last_indexed_at && row.reusable)
 }
 
 function stableHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
-function usageFactInputSignature(
+function usageFactProjectionInput(
   session: SessionSummary,
   accounting: ReturnType<typeof accountingForSession>,
   outcome: ReturnType<typeof providerOutcomeForSession>,
   resolvedRoot: string
-): string {
+): unknown {
   const source = session.source || 'claude-code'
   const derivationVersion = (source === 'opencode' || source === 'zcode') &&
-    isPerCallSqliteAgentAccounting(accounting)
+    (isPerCallSqliteAgentAccounting(accounting) ||
+      (accounting.usageEventsOmitted === true && accounting.billingTotal !== null))
     ? PER_CALL_SQLITE_AGENT_DERIVATION_VERSION
     : BASE_USAGE_FACT_DERIVATION_VERSION
-  const hash = createHash('sha256')
-  hash.update(JSON.stringify({
+  return {
     schemaVersion: derivationVersion,
     pricingCatalogVersion: PRICING_CATALOG_VERSION,
     source,
@@ -460,12 +474,40 @@ function usageFactInputSignature(
       warnings: accounting.warnings,
       excludedFromRollups: accounting.excludedFromRollups === true
     }
-  }))
+  }
+}
+
+function usageFactProjectionSignature(
+  session: SessionSummary,
+  accounting: ReturnType<typeof accountingForSession>,
+  outcome: ReturnType<typeof providerOutcomeForSession>,
+  resolvedRoot: string
+): string {
+  return stableHash(usageFactProjectionInput(session, accounting, outcome, resolvedRoot))
+}
+
+function usageFactInputSignature(
+  session: SessionSummary,
+  accounting: ReturnType<typeof accountingForSession>,
+  outcome: ReturnType<typeof providerOutcomeForSession>,
+  resolvedRoot: string
+): string {
+  const hash = createHash('sha256')
+  hash.update(JSON.stringify(usageFactProjectionInput(session, accounting, outcome, resolvedRoot)))
   for (const event of accounting.usageEvents) {
     hash.update('\0')
     hash.update(JSON.stringify(event))
   }
   return hash.digest('hex')
+}
+
+function usageEventsHydrationRequired(sessionId: string): Error & { code: string } {
+  const error = new Error(`Usage events must be materialized for session ${sessionId}`) as Error & {
+    code: string
+  }
+  error.name = 'UsageEventsHydrationRequiredError'
+  error.code = 'USAGE_EVENTS_HYDRATION_REQUIRED'
+  return error
 }
 
 function parseJson<T>(value: string | null, fallback: T): T {
@@ -850,6 +892,10 @@ export function synchronizeUsageFacts(
     !session.branchLeafUuid && session.tokenAccounting?.excludedFromRollups !== true
   )
   const uniqueSessions = new Map(rollupSessions.map((session) => [session.sessionId, session]))
+  if (options.rebuild) {
+    const compact = rollupSessions.find((session) => session.tokenAccounting?.usageEventsOmitted)
+    if (compact) throw usageEventsHydrationRequired(compact.sessionId)
+  }
   const sessionsByIdentity = new Map<string, SessionSummary>()
   for (const session of rollupSessions) {
     sessionsByIdentity.set(session.id, session)
@@ -886,11 +932,14 @@ export function synchronizeUsageFacts(
         UPDATE usage_sessions SET fact_signature = '', folder_signature = '';
       `)
     }
-    const existingRows = db.prepare(
-      'SELECT session_id, fact_signature, folder_signature, activity_time_status FROM usage_sessions'
-    ).all() as Array<{
+    const existingRows = db.prepare(`
+      SELECT session_id, fact_signature, projection_signature,
+        folder_signature, activity_time_status
+      FROM usage_sessions
+    `).all() as Array<{
       session_id: string
       fact_signature: string
+      projection_signature: string | null
       folder_signature: string
       activity_time_status: 'known' | 'unknown'
     }>
@@ -904,10 +953,20 @@ export function synchronizeUsageFacts(
       const usageAvailable = parsed && outcome.usage === 'available' && accounting.billingTotal !== null
       const resolvedRoot = resolveRootSessionId(session, sessionsByIdentity)
       const folderIds = folderMap.get(sessionId) || []
-      const factSignature = usageFactInputSignature(session, accounting, outcome, resolvedRoot)
+      const projectionSignature = usageFactProjectionSignature(session, accounting, outcome, resolvedRoot)
       const folderSignature = stableHash(folderIds)
       const prior = existing.get(sessionId)
-      const factChanged = !prior || prior.fact_signature !== factSignature
+      const eventsOmitted = accounting.usageEventsOmitted === true
+      if (eventsOmitted && (
+        accounting.usageEvents.length > 0 ||
+        !prior || prior.projection_signature !== projectionSignature
+      )) {
+        throw usageEventsHydrationRequired(sessionId)
+      }
+      const factSignature = eventsOmitted
+        ? prior!.fact_signature
+        : usageFactInputSignature(session, accounting, outcome, resolvedRoot)
+      const factChanged = !eventsOmitted && (!prior || prior.fact_signature !== factSignature)
       const folderChanged = !prior || prior.folder_signature !== folderSignature
       const facts = factChanged && parsed
         ? usageFactsForSession(session, { rootSessionId: resolvedRoot })
@@ -923,8 +982,8 @@ export function synchronizeUsageFacts(
         INSERT INTO usage_sessions(
           session_id, root_session_id, source_client, project_path, turn_count,
           detection_status, parse_status, usage_status, usage_available,
-          fact_signature, folder_signature, updated_at, activity_time_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          fact_signature, projection_signature, folder_signature, updated_at, activity_time_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           root_session_id = excluded.root_session_id,
           source_client = excluded.source_client,
@@ -935,6 +994,7 @@ export function synchronizeUsageFacts(
           usage_status = excluded.usage_status,
           usage_available = excluded.usage_available,
           fact_signature = excluded.fact_signature,
+          projection_signature = excluded.projection_signature,
           folder_signature = excluded.folder_signature,
           updated_at = excluded.updated_at,
           activity_time_status = excluded.activity_time_status
@@ -949,6 +1009,7 @@ export function synchronizeUsageFacts(
         outcome.usage,
         usageAvailable ? 1 : 0,
         factSignature,
+        projectionSignature,
         folderSignature,
         session.updatedAt || '',
         activityTimeStatus

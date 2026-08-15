@@ -11,6 +11,7 @@ import { activityDaysFromTimestamps } from './activity-time'
 import {
   closeUsageFactStore,
   drilldownInsights,
+  hasCompletedUsageFactSnapshot,
   incrementalUsageFactCanonicalizationSql,
   queryInsights,
   queryInsightsBundle,
@@ -421,15 +422,15 @@ describe('UsageFact + AnalysisScope', () => {
     const changedA = makeSession('a', '/repo/alpha', [usageEvent('a1', localTimestamp(2026, 7, 20, 8), components(30, 2))])
     expect(synchronizeUsageFacts([changedA, b], [])).toMatchObject({ changedSessions: 1, unchangedSessions: 1, factCount: 2 })
     expect(synchronizeUsageFacts([changedA], [])).toMatchObject({ removedSessions: 1, factCount: 1 })
-    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 8, sessions: 1, facts: 1 })
+    expect(usageFactStoreStats()).toMatchObject({ schemaVersion: 9, sessions: 1, facts: 1 })
   })
 
-  it.each([6, 7])('v%d 账本原地升级为 v8：旧事实保留且不伪造已丢失的审计 provenance', (legacyVersion) => {
+  it.each([6, 7])('v%d 账本原地升级为 v9：旧事实保留且不伪造已丢失的审计 provenance', (legacyVersion) => {
     const session = makeSession('migration-sentinel', '/repo/migration', [
       usageEvent('sentinel-call', localTimestamp(2026, 7, 20, 8), components(7, 3))
     ])
     synchronizeUsageFacts([session], [])
-    expect(usageFactStoreStats().schemaVersion).toBe(8)
+    expect(usageFactStoreStats().schemaVersion).toBe(9)
     closeUsageFactStore()
 
     const dbPath = process.env.SWOB_USAGE_INDEX_PATH!
@@ -444,6 +445,7 @@ describe('UsageFact + AnalysisScope', () => {
       `)
     }
     legacy.exec(`
+      ALTER TABLE usage_sessions DROP COLUMN projection_signature;
       ALTER TABLE usage_facts DROP COLUMN provider_raw;
       ALTER TABLE usage_facts DROP COLUMN billing_provider;
       ALTER TABLE usage_facts DROP COLUMN provider_provenance;
@@ -455,7 +457,7 @@ describe('UsageFact + AnalysisScope', () => {
     `)
     legacy.close()
 
-    expect(usageFactStoreStats().schemaVersion).toBe(8)
+    expect(usageFactStoreStats().schemaVersion).toBe(9)
     expect(synchronizeUsageFacts([session], [])).toMatchObject({
       changedSessions: 0,
       unchangedSessions: 1,
@@ -487,6 +489,31 @@ describe('UsageFact + AnalysisScope', () => {
         billingFactKey: null
       })
     ])
+  })
+
+  it('v8 账本原地升级后先完整补齐投影签名，再允许轻量热启动', () => {
+    const session = makeSession('v8-projection-sentinel', '/repo/migration', [
+      usageEvent('v8-call', localTimestamp(2026, 7, 20, 8), components(11, 4))
+    ])
+    synchronizeUsageFacts([session], [])
+    closeUsageFactStore()
+
+    const dbPath = process.env.SWOB_USAGE_INDEX_PATH!
+    const legacy = new Database(dbPath)
+    legacy.exec(`
+      ALTER TABLE usage_sessions DROP COLUMN projection_signature;
+      UPDATE usage_schema_meta SET schema_version = 8 WHERE singleton = 1;
+    `)
+    legacy.close()
+
+    expect(hasCompletedUsageFactSnapshot()).toBe(false)
+    expect(synchronizeUsageFacts([session], [])).toMatchObject({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      factCount: 1
+    })
+    expect(hasCompletedUsageFactSnapshot()).toBe(true)
+    expect(sessionUsageEvents(session.sessionId, scope()).events).toHaveLength(1)
   })
 
   it('incremental canonicalization uses the billing-fact/current composite index', () => {
@@ -816,7 +843,7 @@ describe('UsageFact + AnalysisScope', () => {
     expect(model.total.usageCoverage).toEqual({ covered: 2, total: 3, percent: (2 / 3) * 100 })
 
     expect(usageFactStoreStats()).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 9,
       sessions: 6,
       activityDays: 5,
       timedSessions: 4,
@@ -906,6 +933,58 @@ describe('UsageFact + AnalysisScope', () => {
     expect(sessionUsageEvents('dedup-fork', scope()).events).toMatchObject([
       { billingIncluded: true }
     ])
+  })
+
+  it('热启动省略事件时保留已提交事实，但投影变化或重建必须要求完整物化', () => {
+    const occurredAt = localTimestamp(2026, 7, 20, 12)
+    const full = makeSession('compact-facts', '/repo/alpha', [
+      usageEvent('kept', occurredAt, components(100, 20), { model: 'gpt-5.6-terra' })
+    ])
+    expect(synchronizeUsageFacts([full], [])).toMatchObject({ changedSessions: 1, factCount: 1 })
+
+    const compact = structuredClone(full)
+    compact.tokenAccounting!.usageEvents = []
+    compact.tokenAccounting!.usageEventsOmitted = true
+    expect(synchronizeUsageFacts([compact], [folder('folder-a', [compact.sessionId])]))
+      .toMatchObject({ changedSessions: 0, unchangedSessions: 1, factCount: 1 })
+    expect(sessionUsageEvents(compact.sessionId, scope()).events).toMatchObject([
+      { dedupKey: 'kept', nonCachedInputTokens: 100, outputTokens: 20 }
+    ])
+
+    compact.turnCount++
+    expect(() => synchronizeUsageFacts([compact], []))
+      .toThrowError(expect.objectContaining({ code: 'USAGE_EVENTS_HYDRATION_REQUIRED' }))
+    expect(sessionUsageEvents(compact.sessionId, scope()).events).toHaveLength(1)
+
+    compact.turnCount--
+    expect(() => synchronizeUsageFacts([compact], [], { rebuild: true }))
+      .toThrowError(expect.objectContaining({ code: 'USAGE_EVENTS_HYDRATION_REQUIRED' }))
+    expect(sessionUsageEvents(compact.sessionId, scope()).events).toHaveLength(1)
+  })
+
+  it.each([
+    ['opencode', 'opencode-message-usage-v2'],
+    ['zcode', 'zcode-model-usage-v1']
+  ] as const)('%s 轻量账本保持逐调用 derivation identity', (source, format) => {
+    const event = usageEvent(
+      `${source}:call`,
+      localTimestamp(2026, 7, 20, 12),
+      components(40, 8),
+      { model: 'provider-model' }
+    )
+    event.provider = source
+    event.providerFormatVersion = format
+    const full = makeSession(`${source}-compact`, `/repo/${source}`, [event], { source })
+    synchronizeUsageFacts([full], [])
+
+    const compact = structuredClone(full)
+    compact.tokenAccounting!.usageEvents = []
+    compact.tokenAccounting!.usageEventsOmitted = true
+    expect(synchronizeUsageFacts([compact], [])).toMatchObject({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      factCount: 1
+    })
   })
 
   it('t184: active + replay copied prefix + archived 进真实账本后等于手工核算 215', () => {

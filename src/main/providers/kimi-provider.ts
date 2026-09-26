@@ -13,7 +13,7 @@ import type {
   UsageRecord
 } from '../../shared/provider-schema-v2.generated'
 import type { Fingerprint, SourceRef } from '../../shared/provider-schema.generated'
-import type { BuiltinProviderRuntimeV2 } from '../provider-host'
+import type { BuiltinProviderRuntimeV2 } from '../provider-runtime-contract'
 
 const KIMI_PROVIDER_ID = 'swob/kimi'
 const KIMI_PARSER_DATA_VERSION = '2'

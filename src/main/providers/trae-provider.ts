@@ -22,7 +22,7 @@ import {
   type ProviderManifest,
   type SessionIdentity
 } from '../../shared/provider-schema-v2.generated'
-import type { BuiltinProviderRuntimeV2 } from '../provider-host'
+import type { BuiltinProviderRuntimeV2 } from '../provider-runtime-contract'
 
 const TRAE_PROVIDER_ID = 'swob/trae'
 const TRAE_STORAGE_KEY = 'memento/icube-ai-agent-storage'

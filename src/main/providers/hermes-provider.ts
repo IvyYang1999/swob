@@ -21,7 +21,7 @@ import {
   buildCanonicalLogicalSessionIdentity,
   logicalSessionKey
 } from '../library-session-identity'
-import type { BuiltinProviderRuntimeV2 } from '../provider-host'
+import type { BuiltinProviderRuntimeV2 } from '../provider-runtime-contract'
 
 export const HERMES_PROVIDER_ID = 'swob/hermes'
 export const HERMES_JSON_FORMAT = 'hermes-json-snapshot-v1'

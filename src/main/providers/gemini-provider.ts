@@ -17,7 +17,7 @@ import {
 } from '../../shared/provider-schema-v2.generated'
 import { builtinProviderForSource } from '../../shared/provider-capabilities'
 import { createBuiltinToolRegistryV2 } from '../../shared/tool-registry-v2'
-import type { BuiltinProviderRuntimeV2 } from '../provider-host'
+import type { BuiltinProviderRuntimeV2 } from '../provider-runtime-contract'
 import {
   buildCanonicalLogicalSessionIdentity,
   logicalSessionKey

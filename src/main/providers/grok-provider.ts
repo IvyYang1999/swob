@@ -15,7 +15,7 @@ import type {
   SessionIdentity,
   UsageRecord
 } from '../../shared/provider-schema-v2.generated'
-import type { BuiltinProviderRuntimeV2 } from '../provider-host'
+import type { BuiltinProviderRuntimeV2 } from '../provider-runtime-contract'
 
 const PROVIDER_ID = 'swob/grok'
 const PARSER_DATA_VERSION = '2'

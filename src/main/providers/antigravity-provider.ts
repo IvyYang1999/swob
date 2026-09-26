@@ -18,7 +18,7 @@ import type {
 import {
   providerFingerprint,
 } from '../../shared/provider-protocol'
-import type { BuiltinProviderRuntimeV2 } from '../provider-host'
+import type { BuiltinProviderRuntimeV2 } from '../provider-runtime-contract'
 export {
   antigravityCliSupportsConversation,
   buildAntigravityResumeArgs

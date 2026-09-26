@@ -44,6 +44,7 @@ import {
   migrateProviderV1OutcomeToV2Chunks
 } from './provider-v1-migration'
 import { runtimeHome } from './runtime-home'
+import type { BuiltinProviderRuntime, BuiltinProviderRuntimeV2 } from './provider-runtime-contract'
 
 export const PROVIDER_RUNTIME_TIMEOUT_MS = 30_000
 export const PROVIDER_SESSION_INPUT_LIMIT_BYTES = 50 * 1024 * 1024
@@ -67,23 +68,7 @@ export class ProviderRuntimeError extends Error {
   }
 }
 
-export interface BuiltinProviderRuntime {
-  readonly manifest: ProviderManifest
-  discover(signal: AbortSignal): Promise<SourceRef[]>
-  fingerprint(source: SourceRef, signal: AbortSignal): Promise<Fingerprint>
-  inputBytes(source: SourceRef, signal: AbortSignal): Promise<number>
-  parse(source: SourceRef, fingerprint: Fingerprint, signal: AbortSignal): Promise<ParseOutcome>
-}
-
-/** Native Provider Protocol v2 runtime. It shares the hardened discovery and
- * source fingerprint boundary with v1, but never creates a v1 ParseOutcome. */
-export interface BuiltinProviderRuntimeV2 {
-  readonly manifest: ProviderManifestV2
-  discover(signal: AbortSignal): Promise<SourceRef[]>
-  fingerprint(source: SourceRef, signal: AbortSignal): Promise<Fingerprint>
-  inputBytes(source: SourceRef, signal: AbortSignal): Promise<number>
-  parse(source: SourceRef, fingerprint: Fingerprint, signal: AbortSignal): Promise<ParseChunkV2[]>
-}
+export type { BuiltinProviderRuntime, BuiltinProviderRuntimeV2 } from './provider-runtime-contract'
 
 export interface PreviousProviderSourceState {
   sourceRef: SourceRef

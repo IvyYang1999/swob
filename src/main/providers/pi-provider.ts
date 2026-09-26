@@ -17,7 +17,7 @@ import {
   providerFingerprint,
   stableCanonicalRecordId
 } from '../../shared/provider-protocol'
-import type { BuiltinProviderRuntime } from '../provider-host'
+import type { BuiltinProviderRuntime } from '../provider-runtime-contract'
 
 const PI_PROVIDER_ID = 'swob/pi'
 const PI_FORMAT_V1 = 'pi-jsonl-v1'

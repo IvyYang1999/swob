@@ -2,12 +2,16 @@
  * checkupDigest(report, { linkTarget }): the AI-diary one-liner (task C1b
  * deliverable 2, design §五 "AI 日记每日摘要"):
  *
- *   体检 · 全部 584 场会话（Codex 525 · Claude Code 59） · 2 个来源 · 丢 ≈120 条（不通过）
- *     · 压缩：原始 ≈1,036 处，Swob 认出 68 处（不通过） → [[Swob内核体检-…]]（≈ 为 [D]，其余为 [R]）
+ *   体检 · 全部 763 场会话（Codex 525 · ZCode 73 · OpenCode 63 · Claude Code 59 · Cursor 43） · 5 个来源
+ *     · 丢 ≈120 条（不通过） · 压缩：原始 ≈1,036 处，Swob 认出 68 处（不通过）
+ *     → [[Swob内核体检-…]]（≈ 为 [D]，其余为 [R]）
  *
- * Sources of each part: sessions and their split = ① bySource[source].swob.sessions [R]; ① gaps =
- * ① swob.notIncluded [D]; ② = the counts of the content.line-separator-split / content.unexplained-loss
- * findings; ③ = oracle.perSessionUniqueSum [D] and swob.compactCountSum [R] of the graded sources.
+ * Sources of each part: sessions and their split = the [R] sessions per source of readoutBySource
+ * (the per-source overview's numbers) for a full-scope report, ① bySource[source].swob.sessions [R]
+ * for older reports without it and for day/range scopes; a source listed by readout.source-empty is
+ * always named (even when ① passes); ① gaps = ① swob.notIncluded [D]; ② = the counts of the
+ * content.line-separator-split / content.unexplained-loss findings; ③ = oracle.perSessionUniqueSum [D]
+ * and swob.compactCountSum [R] of the graded sources.
  * ④⑤⑥ are undetermined in C1a and omitted. Numbers are [R] unless prefixed with 「≈」 ([D]); the
  * line ends with a note saying which. Scope all → 「全部」, day → 「今天」. An undetermined overall
  * verdict gives 「无法判定（原因）」. Every part is registered text and the line must pass
@@ -60,8 +64,11 @@ export function checkupDigest(report: CheckupReport, options: DigestOptions = {}
   } else {
     hasNumbers = true
     const inclusion = findCheck(report, 'inclusion')
+    const sessionsOf = report.scope.kind === 'all' && report.readoutBySource
+      ? (source: string): Measure | undefined => report.readoutBySource?.[source]?.sessions
+      : (source: string): Measure | undefined => inclusion?.bySource[source]?.swob.sessions
     const counts = SOURCE_IDS
-      .map((source) => ({ source, measure: inclusion?.bySource[source]?.swob.sessions }))
+      .map((source) => ({ source, measure: sessionsOf(source) }))
       .filter((entry): entry is { source: typeof entry.source; measure: Measure } =>
         !!entry.measure && entry.measure.value !== null && entry.measure.value > 0 && entry.measure.label === 'reported')
       .sort((left, right) => (right.measure.value ?? 0) - (left.measure.value ?? 0))
@@ -75,6 +82,13 @@ export function checkupDigest(report: CheckupReport, options: DigestOptions = {}
       sourceCounts: counts.map((entry) => `${SOURCE_LABELS[entry.source]} ${formatNumber(entry.measure.value ?? 0)}`).join(' · ')
     }))
     parts.push(fillText(DIGEST_TEXT.sources, { n: formatNumber(counts.length) }))
+    const empty = (inclusion?.findings ?? []).filter((finding) => finding.code === 'readout.source-empty' && SOURCE_LABELS[finding.source])
+    if (empty.length > 0) {
+      parts.push(fillText(DIGEST_TEXT.sourceEmpty, {
+        sources: [...new Set(empty.map((finding) => SOURCE_LABELS[finding.source]))].join('、'),
+        verdict: VERDICT_LABELS[empty[0].verdict]
+      }))
+    }
 
     if (report.verdict === 'pass') {
       const graded = report.checks.filter((check) => GRADED.has(check.verdict)).length

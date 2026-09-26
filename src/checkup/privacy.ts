@@ -355,6 +355,7 @@ export function markdownSlots(options: { engineer?: boolean } = {}): Record<stri
     verdict: alternation(Object.values(VERDICT_LABELS)),
     reason: alternation(reasonTextValues()),
     oracles: `(?:${oracle})(?:、(?:${oracle}))*`,
+    sources: `(?:${source})(?:、(?:${source}))*`,
     sourceCounts: `(?:${source}) ${SLOT_NUMBER}(?: · (?:${source}) ${SLOT_NUMBER})*`,
     kinds: `(?:${kind}) ${SLOT_NUMBER}(?:、(?:${kind}) ${SLOT_NUMBER})*`,
     measure: alternation(Object.values(MEASURE_LABELS)),

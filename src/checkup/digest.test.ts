@@ -1,32 +1,87 @@
-import { describe, expect, it } from 'vitest'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// Pass-through spy on the Markdown scanner: every behaviour stays real, but the tests can see that the
+// digest scans the exact line it returns (the reverse test below fails when that step is removed).
+vi.mock('./privacy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./privacy')>()
+  return { ...actual, assertMarkdownPrivacyClean: vi.fn(actual.assertMarkdownPrivacyClean) }
+})
+
+import type { CheckupReport } from './contract'
 import { checkupDigest } from './digest'
-import { scanMarkdownForPrivacy } from './privacy'
-import { allUndeterminedReport, d, dayReport, mixedReport, passReport, r } from './__fixtures__/checkup-reports'
+import { PrivacyViolationError, assertMarkdownPrivacyClean, scanMarkdownForPrivacy } from './privacy'
+import type { ReadoutSession, SwobReadout } from './readout'
+import { runKernelCheckup } from './run'
+import { claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from './self-test/samples'
+import { allUndeterminedReport, d, dayReport, mixedReport, passReport, r, u } from './__fixtures__/checkup-reports'
 
 const LINK = 'Swob内核体检-2026-09-27-a1b2c3'
+
+const dirs: string[] = []
+function tempDir(prefix: string): string {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)))
+  dirs.push(dir)
+  return dir
+}
+afterEach(() => {
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+})
+
+/** The per-source readout of the real run on the owner's machine (numbers only). */
+function realShapeReport(): CheckupReport {
+  const report = mixedReport()
+  report.checks[0].findings = report.checks[0].findings.filter((finding) => finding.code !== 'readout.source-empty')
+  const counts: Record<string, number> = { 'claude-code': 59, codex: 525, cursor: 43, opencode: 63, zcode: 73, 'cc-mirror': 0 }
+  for (const source of Object.keys(report.readoutBySource!)) {
+    report.readoutBySource![source] = source in counts
+      ? { sessions: r(counts[source], 'sessions') }
+      : { sessions: u('sessions', 'readout.provider-host-not-parsed-readonly') }
+  }
+  return report
+}
 
 describe('checkupDigest (AI-diary one-liner, design §五)', () => {
   it('lists sessions per source, then only the problems; [D] numbers carry 「≈」 and the line says so', () => {
     const line = checkupDigest(mixedReport(), { linkTarget: LINK })
-    expect(line).toBe('体检 · 全部 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 纳入：≈2 个单元没挂上（注意） · 丢 ≈3 条（不通过） · 压缩：原始 ≈14 处，Swob 认出 5 处（不通过） → [[Swob内核体检-2026-09-27-a1b2c3]]（≈ 为 [D]，其余为 [R]）')
+    expect(line).toBe('体检 · 全部 59 场会话（Codex 40 · Claude Code 12 · Cursor 7） · 3 个来源 · OpenCode：一场会话都没读到（注意） · 纳入：≈2 个单元没挂上（注意） · 丢 ≈3 条（不通过） · 压缩：原始 ≈14 处，Swob 认出 5 处（不通过） → [[Swob内核体检-2026-09-27-a1b2c3]]（≈ 为 [D]，其余为 [R]）')
     expect(scanMarkdownForPrivacy(line)).toEqual({ ok: true, hits: [] })
+  })
+
+  it('counts sessions and sources from readoutBySource: 763 sessions in 5 sources on the real shape', () => {
+    const line = checkupDigest(realShapeReport(), { linkTarget: LINK })
+    expect(line).toMatch(/^体检 · 全部 763 场会话（Codex 525 · ZCode 73 · OpenCode 63 · Claude Code 59 · Cursor 43） · 5 个来源 · 纳入：/)
+    expect(line).not.toContain('一场会话都没读到')
+    expect(scanMarkdownForPrivacy(line).ok).toBe(true)
+  })
+
+  it('falls back to ① swob.sessions for reports without readoutBySource, and takes [R] counts only', () => {
+    const legacy = mixedReport()
+    delete legacy.readoutBySource
+    expect(checkupDigest(legacy)).toMatch(/^体检 · 全部 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · OpenCode：一场会话都没读到（注意） · /)
+    const report = mixedReport()
+    report.readoutBySource!.codex = { sessions: d(40, 'sessions') }
+    report.readoutBySource!['claude-code'] = { sessions: r(0, 'sessions') }
+    expect(checkupDigest(report)).toMatch(/^体检 · 全部 7 场会话（Cursor 7） · 1 个来源 · /)
   })
 
   it('without a link the label note is its own part', () => {
     expect(checkupDigest(mixedReport())).toMatch(/ · ≈ 为 \[D\]，其余为 \[R\]$/)
   })
 
-  it('says 「今天」 for a one-day report and 「数字均为 [R]」 when every number is reported', () => {
+  it('says 「今天」 for a one-day report (① counts) and 「数字均为 [R]」 when every number is reported', () => {
     const line = checkupDigest(dayReport(), { linkTarget: 'Swob内核体检-2026-09-26-a1b2c3' })
     expect(line).toBe('体检 · 今天 7 场会话（Codex 6 · Claude Code 1） · 2 个来源 · 记录读全 · 压缩：原始 4 处，Swob 认出 0 处（不通过） → [[Swob内核体检-2026-09-26-a1b2c3]]（数字均为 [R]）')
     expect(scanMarkdownForPrivacy(line).ok).toBe(true)
   })
 
   it('collapses to one sentence when everything graded passed', () => {
-    expect(checkupDigest(passReport(), { linkTarget: LINK })).toBe('体检 · 全部 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
+    expect(checkupDigest(passReport(), { linkTarget: LINK })).toBe('体检 · 全部 59 场会话（Codex 40 · Claude Code 12 · Cursor 7） · 3 个来源 · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
     const all = passReport()
     for (const check of all.checks) check.verdict = 'pass'
-    expect(checkupDigest(all)).toBe('体检 · 全部 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 各项通过 · 数字均为 [R]')
+    expect(checkupDigest(all)).toBe('体检 · 全部 59 场会话（Codex 40 · Claude Code 12 · Cursor 7） · 3 个来源 · 各项通过 · 数字均为 [R]')
   })
 
   it('gives 「无法判定（原因）」 for an undetermined report', () => {
@@ -36,21 +91,59 @@ describe('checkupDigest (AI-diary one-liner, design §五)', () => {
     expect(checkupDigest(noVerdict)).toBe('体检 · 无法判定（没有能给出结论的检查项）')
   })
 
-  it('only takes [R] session counts and skips sources with none', () => {
-    const report = mixedReport()
-    report.checks[0].bySource.codex.swob.sessions = d(40, 'sessions')
-    report.checks[0].bySource['claude-code'].swob.sessions = r(0, 'sessions')
-    expect(checkupDigest(report)).toMatch(/^体检 · 全部 0 场会话 · 0 个来源 · /)
-  })
-
-  it('refuses a link that is not a report note name, and unregistered text in the report', () => {
+  it('refuses a link that is not a report note name; an unknown reason code reads 「原因未登记」', () => {
     expect(() => checkupDigest(mixedReport(), { linkTarget: '../secret-project/notes' })).toThrow(/link target/)
     expect(() => checkupDigest(mixedReport(), { linkTarget: 'Swob内核体检-2026-09-27-a1b2c3.json' })).toThrow(/link target/)
     const report = mixedReport()
     report.checks[1].verdict = 'undetermined'
     report.verdict = 'undetermined'
     report.verdictReason = 'not-a-registered-reason'
-    // An unknown reason code falls back to the registered 「原因未登记」.
     expect(checkupDigest(report)).toBe('体检 · 无法判定（原因未登记）')
+  })
+
+  it('always scans its own line and throws when a part is not whitelisted (reverse test of the scan step)', () => {
+    const scan = vi.mocked(assertMarkdownPrivacyClean)
+    scan.mockClear()
+    const line = checkupDigest(mixedReport(), { linkTarget: LINK })
+    expect(scan).toHaveBeenCalledTimes(1)
+    expect(scan).toHaveBeenCalledWith(line)
+    // A count that cannot be written as a number leaves a segment no template accepts: without the scan
+    // step the digest would hand this line out.
+    const broken = mixedReport()
+    broken.readoutBySource!.codex = { sessions: r(Number.POSITIVE_INFINITY, 'sessions') }
+    expect(() => checkupDigest(broken)).toThrow(PrivacyViolationError)
+  })
+})
+
+describe('checkupDigest on a synthetic HOME (runKernelCheckup)', () => {
+  it('names the sources whose data is present but read as empty, even when every graded check passes', async () => {
+    const root = tempDir('digest-home-')
+    const sid = syntheticUuid(80)
+    const main = fs.realpathSync(writeSample(root, path.join('.claude', 'projects', '-p', `${sid}.jsonl`), jsonl([
+      claude.user({ uuid: syntheticUuid(800), parentUuid: null, sessionId: sid, timestamp: syntheticTime(1), cwd: '/p', text: 'q' }),
+      claude.assistant({ uuid: syntheticUuid(801), parentUuid: syntheticUuid(800), sessionId: sid, timestamp: syntheticTime(2), cwd: '/p', text: 'a', messageId: 'm80', requestId: 'r80' })
+    ])))
+    const codexId = syntheticUuid(81, 'c0de')
+    const rollout = fs.realpathSync(writeSample(root, codexRolloutPath(codexId, 0), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id: codexId, cwd: '/p' }),
+      codex.userMessage({ timestamp: syntheticTime(1), ordinal: 1, text: 'q' }),
+      codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'a' })
+    ])))
+    // OpenCode and ZCode keep their stores here, but the Swob readout returns no session of theirs.
+    writeSample(root, path.join('.local', 'share', 'opencode', 'opencode.db'), '')
+    writeSample(root, path.join('.zcode', 'cli', 'db', 'db.sqlite'), '')
+    const sessions: ReadoutSession[] = [
+      { source: 'claude-code', sessionId: sid, primaryPath: main, paths: [main], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false },
+      { source: 'codex', sessionId: codexId, primaryPath: rollout, paths: [rollout], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false }
+    ]
+    const readout: SwobReadout = {
+      status: 'ok', sessions, claudeParsed: new Map([[main, { records: 2, elapsedMs: 1, partial: false }]]),
+      discovered: { claudeMain: new Set([main]), codex: new Set([rollout]) }, attributedChildIds: new Set(), consoleLines: 0, timingsMs: {}
+    }
+    const report = await runKernelCheckup({ homeDir: root, stateDir: tempDir('digest-state-'), privacySalt: 'digest-home' }, { readout: async () => readout })
+    expect(report.verdict).toBe('pass')
+    const line = checkupDigest(report, { linkTarget: LINK })
+    expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · OpenCode、ZCode：一场会话都没读到（注意） · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
+    expect(scanMarkdownForPrivacy(line).ok).toBe(true)
   })
 })

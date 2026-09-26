@@ -557,7 +557,8 @@ function compareSection(comparison: CheckupComparison, options: RenderOptions, a
     [COMPARE_TEXT.groupNotChecked, inGroup('notChecked')],
     [COMPARE_TEXT.unitsNewOrChanged, formatNumber(units.newOrChanged)],
     [COMPARE_TEXT.unitsGone, formatNumber(units.gone)],
-    [COMPARE_TEXT.unitsChangedDuringRun, formatNumber(units.changedDuringRun)]
+    [COMPARE_TEXT.unitsChangedDuringRun, formatNumber(units.changedDuringRun)],
+    ...(units.sourceNotInBoth > 0 ? [[COMPARE_TEXT.unitsSourceNotInBoth, formatNumber(units.sourceNotInBoth)]] : [])
   ]))
   const groups = units.groups.filter((group) => sourceLabel(group.source) !== null)
   if (groups.length > 0) {

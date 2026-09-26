@@ -207,7 +207,7 @@ export function fillTemplate(template: string, numbers: number[] = [], source?: 
 // Every fixed piece of text the Markdown renderer, the digest and the comparison
 // output. Besides `{n}` and `{source}` they use typed placeholders, filled only
 // with values of one fixed shape (privacy.ts markdownSlots() checks them):
-// {check}/{checks} check names · {verdict} verdict word · {reason} reason text ·
+// {check}/{checks} check names · {sources} source names · {verdict} verdict word · {reason} reason text ·
 // {oracles} oracle names · {sourceCounts} "source n" pairs · {kinds} loss kinds
 // with counts · {measure} measure name · {unit} unit name · {date} local date ·
 // {time} local date and time · {offset} UTC offset · {version} version ·
@@ -587,6 +587,7 @@ export const DIGEST_TEXT = {
   sessionsDayBare: '今天 {n} 场会话',
   sessionsRangeBare: '所选时段 {n} 场会话',
   sources: '{n} 个来源',
+  sourceEmpty: '{sources}：一场会话都没读到（{verdict}）',
   allPass: '各项通过',
   checkedPass: '已检查的 {n} 项都通过',
   inclusionGaps: '纳入：{n} 个单元没挂上（{verdict}）',
@@ -617,11 +618,12 @@ export const COMPARE_TEXT = {
   groupFixed: '已修复',
   groupUnchanged: '未变',
   groupFirstCheck: '首次检查',
-  groupNotChecked: '这次没能检查',
+  groupNotChecked: '本次未检查',
   unitsCompared: '参与比对的单元',
   unitsNewOrChanged: '本次新增或内容有变化的单元',
   unitsGone: '已不在的单元',
   unitsChangedDuringRun: '体检期间在变化、没有比对的单元',
+  unitsSourceNotInBoth: '只有一次检查过的来源里的单元',
   problemInclusion: '未纳入或格式不支持',
   problemContent: '读入数和原始记录对不上',
   colGroup: '分组',

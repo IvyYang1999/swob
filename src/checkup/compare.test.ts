@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { CheckupReport } from './contract'
 import { compareCheckupReports, compareIssues, compareUnits, comparisonRefusal } from './compare'
-import { OTHER_FINGERPRINT, clone, d, finding, mixedReport, r, unit } from './__fixtures__/checkup-reports'
+import { renderCheckupMarkdown } from './render-markdown'
+import { OTHER_FINGERPRINT, clone, d, finding, mixedReport, r, u, unit } from './__fixtures__/checkup-reports'
 
 function pair(): { previous: CheckupReport; current: CheckupReport } {
   const previous = mixedReport()
@@ -148,5 +149,40 @@ describe('unit level (① ②, same id and unitSig only)', () => {
     const result = compareCheckupReports(previous, current)
     expect(result.checks[0]).toEqual({ id: 'inclusion', previous: 'pass', current: 'warn' })
     expect(result.checks).toHaveLength(6)
+  })
+})
+
+describe('sources checked in only one of the two runs (e.g. a later --sources choice)', () => {
+  /** What a report looks like when `source` was not selected: C1a marks it source.not-selected everywhere. */
+  function deselect(report: CheckupReport, source: string): void {
+    for (const check of report.checks) {
+      check.bySource[source] = { verdict: 'not-applicable', swob: { status: u('checks', 'source.not-selected') }, oracle: {}, oracleIds: [] }
+      check.findings = check.findings.filter((entry) => entry.source !== source)
+    }
+    report.units = report.units!.filter((entry) => entry.source !== source)
+  }
+
+  it('issues of a source not checked this time are 本次未检查, not fixed, and its units are not gone', () => {
+    const { previous, current } = pair()
+    deselect(current, 'codex')
+    const issues = compareIssues(previous, current)
+    expect(issues.fixed).toEqual([])
+    expect(issues.notChecked.map((issue) => [issue.check, issue.code])).toEqual([
+      ['inclusion', 'codex.nested-subagent-orphan'],
+      ['compaction', 'codex.legacy-compacted-unrecognized']
+    ])
+    expect(compareUnits(previous, current)).toMatchObject({ gone: 0, sourceNotInBoth: 3 })
+    const markdown = renderCheckupMarkdown(current, { previous, utcOffsetMinutes: 480 })
+    expect(markdown).toContain('| 本次未检查 | ① 会话纳入 | Codex | 子 agent 又派出的子 agent 挂不上 | 2[D] | — | — |')
+    expect(markdown).toContain('| 只有一次检查过的来源里的单元 | 3 |')
+  })
+
+  it('issues of a source not checked last time are first checks, not new, and its units are not new', () => {
+    const { previous, current } = pair()
+    deselect(previous, 'codex')
+    const issues = compareIssues(previous, current)
+    expect(issues.added).toEqual([])
+    expect(issues.firstCheck.map((issue) => issue.code)).toEqual(['codex.nested-subagent-orphan', 'codex.legacy-compacted-unrecognized'])
+    expect(compareUnits(previous, current)).toMatchObject({ newOrChanged: 0, sourceNotInBoth: 3 })
   })
 })

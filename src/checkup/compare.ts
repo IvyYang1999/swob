@@ -21,6 +21,9 @@
  *   swobRead differs from its spec-parseable records (unknown when swobRead is
  *   null). Units only in the current report or with a different unitSig are
  *   "new or changed"; units only in the previous one are "gone".
+ * Sources not checked in both runs (marked source.not-selected in either report) are
+ * never new or fixed: their issues are first checks (not checked last time) or not
+ * checked (not checked this time), and their units are counted apart.
  * Sample ids (sorted, at most five) are for display only.
  */
 import {
@@ -84,6 +87,8 @@ export interface UnitComparison {
   gone: number
   /** Same id and unitSig but changed during a run or without a bucket in either report. */
   changedDuringRun: number
+  /** Units of sources that only one of the two runs checked (neither compared, new nor gone). */
+  sourceNotInBoth: number
 }
 
 export interface ReportSummary { generatedAt: string; verdict: Verdict; checkupVersion: string | null }
@@ -157,6 +162,19 @@ function problemIssues(report: CheckupReport): Map<string, IssueEntry> {
   return issues
 }
 
+/** Sources a report looked at: every listed source except those marked source.not-selected. */
+function checkedSources(report: CheckupReport): Set<string> {
+  const skipped = new Set<string>()
+  const listed = new Set<string>()
+  for (const check of report.checks ?? []) {
+    for (const [source, entry] of Object.entries(check.bySource ?? {})) {
+      listed.add(source)
+      if (entry?.swob?.status?.reason === 'source.not-selected') skipped.add(source)
+    }
+  }
+  return new Set([...listed].filter((source) => !skipped.has(source)))
+}
+
 function checkLooked(report: CheckupReport, id: CheckId): boolean {
   const check = report.checks?.find((entry) => entry.id === id)
   return !!check && check.verdict !== 'undetermined' && check.reason !== 'check.not-implemented'
@@ -192,12 +210,15 @@ function byCheckSourceCode(left: IssueDelta, right: IssueDelta): number {
 export function compareIssues(previous: CheckupReport, current: CheckupReport): IssueComparison {
   const before = problemIssues(previous)
   const after = problemIssues(current)
+  const lookedBefore = checkedSources(previous)
+  const lookedNow = checkedSources(current)
   const result: IssueComparison = { added: [], fixed: [], unchanged: [], firstCheck: [], notChecked: [] }
   for (const [key, entry] of after) {
     const earlier = before.get(key)
     if (earlier) {
       result.unchanged.push(issueDelta(entry, earlier.finding.count, entry.finding.count))
-    } else if (!checkLooked(previous, entry.check) || !(FINDING_NEEDS[entry.finding.code]?.(previous) ?? true)) {
+    } else if (!lookedBefore.has(entry.finding.source) || !checkLooked(previous, entry.check) ||
+        !(FINDING_NEEDS[entry.finding.code]?.(previous) ?? true)) {
       result.firstCheck.push(issueDelta(entry, null, entry.finding.count))
     } else {
       result.added.push(issueDelta(entry, null, entry.finding.count))
@@ -205,7 +226,7 @@ export function compareIssues(previous: CheckupReport, current: CheckupReport): 
   }
   for (const [key, entry] of before) {
     if (after.has(key)) continue
-    if (checkLooked(current, entry.check)) result.fixed.push(issueDelta(entry, entry.finding.count, null))
+    if (lookedNow.has(entry.finding.source) && checkLooked(current, entry.check)) result.fixed.push(issueDelta(entry, entry.finding.count, null))
     else result.notChecked.push(issueDelta(entry, entry.finding.count, null))
   }
   for (const list of Object.values(result)) list.sort(byCheckSourceCode)
@@ -239,6 +260,9 @@ export function compareUnits(previous: CheckupReport, current: CheckupReport): U
   if (!Array.isArray(previous.units) || !Array.isArray(current.units)) return null
   const before = new Map(previous.units.map((unit) => [unit.id, unit]))
   const after = new Set(current.units.map((unit) => unit.id))
+  const lookedBefore = checkedSources(previous)
+  const both = new Set([...checkedSources(current)].filter((source) => lookedBefore.has(source)))
+  const outside = new Set<string>()
   const groups = new Map<string, { group: UnitGroup; ids: string[] }>()
   const add = (kind: UnitOutcome, unit: CheckupUnit, problem: UnitProblem, reason: string | null): void => {
     const key = `${kind}\u0000${unit.source}\u0000${problem}\u0000${reason ?? ''}`
@@ -251,6 +275,10 @@ export function compareUnits(previous: CheckupReport, current: CheckupReport): U
   let newOrChanged = 0
   let changedDuringRun = 0
   for (const unit of current.units) {
+    if (!both.has(unit.source)) {
+      outside.add(unit.id)
+      continue
+    }
     const earlier = before.get(unit.id)
     if (!earlier || earlier.unitSig !== unit.unitSig) {
       newOrChanged++
@@ -268,13 +296,14 @@ export function compareUnits(previous: CheckupReport, current: CheckupReport): U
     const contentOutcome = outcome(contentState(earlier), contentState(unit))
     if (contentOutcome) add(contentOutcome, unit, 'content', null)
   }
-  const gone = previous.units.filter((unit) => !after.has(unit.id)).length
+  for (const unit of previous.units) if (!both.has(unit.source)) outside.add(unit.id)
+  const gone = previous.units.filter((unit) => both.has(unit.source) && !after.has(unit.id)).length
   const sorted = [...groups.values()].map(({ group, ids }) => ({ ...group, samples: [...new Set(ids)].sort().slice(0, SAMPLE_LIMIT) }))
   sorted.sort((left, right) =>
     OUTCOME_ORDER.indexOf(left.outcome) - OUTCOME_ORDER.indexOf(right.outcome) ||
     (SOURCE_RANK.get(left.source) ?? 99) - (SOURCE_RANK.get(right.source) ?? 99) ||
     left.problem.localeCompare(right.problem) || (left.reason ?? '').localeCompare(right.reason ?? ''))
-  return { compared, groups: sorted, newOrChanged, gone, changedDuringRun }
+  return { compared, groups: sorted, newOrChanged, gone, changedDuringRun, sourceNotInBoth: outside.size }
 }
 
 export function compareCheckupReports(previous: CheckupReport, current: CheckupReport): CheckupComparison {

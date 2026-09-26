@@ -17,6 +17,7 @@
  * before the kernel, so it must never import a kernel module. It only reads
  * metadata (lstat / realpath / existence) and writes nothing.
  */
+import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { SOURCE_LINKS, SOURCE_LINK_PREFIXES } from './isolated-home'
@@ -155,4 +156,32 @@ export function reportTargetVerdict(target: string, context: ReportTargetContext
     return { ok: false, reason: 'report-target-in-session-package' }
   }
   return { ok: true, target: resolved, directory }
+}
+
+// —— machine model for the report header (dispatcher decision 3) ——
+
+/** Hardware model identifier as printed by `sysctl -n hw.model` (e.g. Mac16,10); same shape as privacy.ts MACHINE_MODEL. */
+const MACHINE_MODEL_TEXT = /^[A-Za-z]{2,24}\d{1,3},\d{1,3}$/
+
+function sysctlModel(): string | null {
+  try {
+    return execFileSync('/usr/sbin/sysctl', ['-n', 'hw.model'], {
+      encoding: 'utf8',
+      timeout: 2000,
+      maxBuffer: 64 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The Mac model (`sysctl -n hw.model`) shown in the report header so the owner can tell machines apart;
+ * null on other platforms, on failure, or when the output is not a plain model id. Reads only.
+ */
+export function readMachineModel(platform: NodeJS.Platform = process.platform, read: () => string | null = sysctlModel): string | null {
+  if (platform !== 'darwin') return null
+  const model = read()?.trim() ?? ''
+  return MACHINE_MODEL_TEXT.test(model) ? model : null
 }

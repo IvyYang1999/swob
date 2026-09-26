@@ -8,7 +8,9 @@ import { censusCodex } from '../census/codex-census'
 import type { SourcePresence } from '../census/source-roots'
 import type { ReadoutSession, SwobReadout } from '../readout'
 import { LS, claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from '../self-test/samples'
-import { overallVerdict } from '../run'
+import { overallVerdict, runKernelCheckup } from '../run'
+import Ajv2020 from 'ajv/dist/2020.js'
+import schema from '../contract/kernel-checkup-report-v1.schema.json'
 import { applicability, worstVerdict, type CheckContext } from './common'
 import { compactionThresholdVerdict } from './compaction'
 import { contentCheck, contentThresholdVerdict } from './content'
@@ -334,5 +336,60 @@ describe('② Claude subagent files are measured per file (C1b deliverable 0)', 
     expect(entry.swob.subagentLost).toEqual({ value: 1, label: 'derived', unit: 'records', reason: 'content.line-separator-split' })
     expect(entry.swob.subagentReadRate).toEqual({ value: null, label: 'unavailable', unit: 'percent', reason: 'content.swob-per-file-unavailable' })
     expect(result.findings.map((finding) => [finding.code, finding.count.value])).toEqual([['content.line-separator-split', 1]])
+  })
+})
+
+describe('Swob readout per source (C1b)', () => {
+  async function fixtureHome(): Promise<{ root: string; sessions: ReadoutSession[] }> {
+    const root = home()
+    const sid = syntheticUuid(70)
+    const main = fs.realpathSync(writeSample(root, path.join('.claude', 'projects', '-p', `${sid}.jsonl`), jsonl([
+      claude.user({ uuid: syntheticUuid(700), parentUuid: null, sessionId: sid, timestamp: syntheticTime(1), cwd: CWD, text: 'q' }),
+      claude.assistant({ uuid: syntheticUuid(701), parentUuid: syntheticUuid(700), sessionId: sid, timestamp: syntheticTime(2), cwd: CWD, text: 'a', messageId: 'm70', requestId: 'r70' })
+    ])))
+    const codexId = syntheticUuid(71, 'c0de')
+    const rollout = fs.realpathSync(writeSample(root, codexRolloutPath(codexId, 0), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id: codexId, cwd: CWD }),
+      codex.userMessage({ timestamp: syntheticTime(1), ordinal: 1, text: 'q' }),
+      codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'a' })
+    ])))
+    // OpenCode's store exists (the census does not count it yet); Gemini is a provider-host source.
+    writeSample(root, path.join('.local', 'share', 'opencode', 'opencode.db'), '')
+    fs.mkdirSync(path.join(root, '.gemini', 'tmp'), { recursive: true })
+    return {
+      root,
+      sessions: [
+        { source: 'claude-code', sessionId: sid, primaryPath: main, paths: [main], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false },
+        { source: 'claude-code', sessionId: `${sid}:intra-1`, primaryPath: main, paths: [main], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: true },
+        codexSession(codexId, rollout)
+      ]
+    }
+  }
+
+  it('counts sessions per source and lists a present source that read nothing (without grading ①)', async () => {
+    const { root, sessions } = await fixtureHome()
+    const report = await runKernelCheckup({ homeDir: root, stateDir: home(), privacySalt: 'per-source' }, { readout: async () => readout(sessions) })
+    const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema)
+    expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
+    const sessionsOf = (source: string): unknown => report.readoutBySource?.[source]?.sessions
+    expect(sessionsOf('claude-code')).toEqual({ value: 1, label: 'reported', unit: 'sessions' })
+    expect(sessionsOf('codex')).toEqual({ value: 1, label: 'reported', unit: 'sessions' })
+    expect(sessionsOf('opencode')).toEqual({ value: 0, label: 'reported', unit: 'sessions' })
+    expect(sessionsOf('gemini')).toEqual({ value: null, label: 'unavailable', unit: 'sessions', reason: 'readout.provider-host-not-parsed-readonly' })
+    const inclusion = report.checks[0]
+    expect(inclusion.findings.filter((finding) => finding.code === 'readout.source-empty').map((finding) => [finding.source, finding.verdict, finding.count]))
+      .toEqual([['opencode', 'warn', { value: null, label: 'unavailable', unit: 'units', reason: 'census.not-implemented' }]])
+    expect(inclusion.findings.find((finding) => finding.code === 'readout.source-empty')?.ownerLine).toBe('OpenCode：本机有这个来源的数据，但 Swob 这次一场会话都没读到')
+    // ① is still graded by C1a's rules only: the new finding does not move any verdict.
+    expect(inclusion.bySource.opencode.verdict).toBe('undetermined')
+    expect(inclusion.verdict).toBe('pass')
+  })
+
+  it('reads nothing per source when the readout did not run, and raises no finding then', async () => {
+    const { root } = await fixtureHome()
+    const blocked = { ...readout([]), status: 'undetermined' as const, reason: 'readout.not-isolated' as const }
+    const report = await runKernelCheckup({ homeDir: root, stateDir: home(), privacySalt: 'per-source' }, { readout: async () => blocked })
+    expect(Object.values(report.readoutBySource ?? {}).every((entry) => entry.sessions.value === null && entry.sessions.reason === 'readout.not-isolated')).toBe(true)
+    expect(report.checks[0].findings.some((finding) => finding.code === 'readout.source-empty')).toBe(false)
   })
 })

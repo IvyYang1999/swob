@@ -60,6 +60,12 @@ export interface CheckupReport {
   sideEffects?: Array<{ code: string; source: string; count: Measure }>
   /** Numeric run diagnostics only. */
   diagnostics?: Record<string, number>
+  // —— C1b additions (all optional) ——
+  /**
+   * Sessions the Swob readout returned per source (intra-file branch views not counted). [R] when read;
+   * unavailable when the readout did not run, or for a provider-host source that read-only mode does not parse.
+   */
+  readoutBySource?: Record<string, { sessions: Measure }>
 }
 
 export interface CheckupUnit {
@@ -253,7 +259,16 @@ export const REASON_CODES = [
   'checkup.no-verdict-checks',
   // side effects
   'sqlite.readonly-sidecar-touch',
-  'sqlite.main-db-changed'
+  'sqlite.main-db-changed',
+  // —— C1b additions ——
+  // readout: a selected source has raw data but the readout returned no session (listed under ①, never grades it)
+  'readout.source-empty',
+  // run-to-run comparison refusals (never written into a report; shown in the rendered comparison)
+  'compare.schema-mismatch',
+  'compare.previous-no-fingerprint',
+  'compare.current-no-fingerprint',
+  'compare.fingerprint-mismatch',
+  'compare.scope-mismatch'
 ] as const
 export type ReasonCode = typeof REASON_CODES[number]
 

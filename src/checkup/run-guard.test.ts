@@ -4,7 +4,8 @@ import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { typescriptRuntimeDependencyClosure } from '../main/__test-support__/typescript-runtime-closure'
 import { protectedLocations, validateStateDir } from './isolated-home'
-import { SESSION_PACKAGE_MARKER, reportTargetVerdict, type ReportTargetContext } from './run-guard'
+import { SESSION_PACKAGE_MARKER, readMachineModel, reportTargetVerdict, type ReportTargetContext } from './run-guard'
+import { MACHINE_MODEL } from './privacy'
 
 const dirs: string[] = []
 function tempDir(prefix: string): string {
@@ -112,5 +113,23 @@ describe('run-guard.ts architecture', () => {
       .map((fileName) => path.relative(process.cwd(), fileName).split(path.sep).join('/'))
       .sort()
     expect(closure).toEqual(['src/checkup/isolated-home.ts', 'src/checkup/run-guard.ts'])
+  })
+})
+
+describe('readMachineModel (report header, dispatcher decision 3)', () => {
+  it('returns a plain Mac model id and nothing else', () => {
+    expect(readMachineModel('darwin', () => 'Mac16,10\n')).toBe('Mac16,10')
+    expect(readMachineModel('darwin', () => 'MacBookPro18,3')).toBe('MacBookPro18,3')
+    expect(readMachineModel('darwin', () => null)).toBeNull()
+    expect(readMachineModel('darwin', () => "yyt's Mac mini")).toBeNull()
+    expect(readMachineModel('darwin', () => 'Mac16,10\nextra')).toBeNull()
+    expect(readMachineModel('linux', () => 'Mac16,10')).toBeNull()
+    expect(readMachineModel('win32', () => 'Mac16,10')).toBeNull()
+  })
+
+  it('agrees with the Markdown scanner shape, and reads this Mac when there is one', () => {
+    for (const model of ['Mac16,10', 'MacBookPro18,3', 'iMac21,1']) expect(MACHINE_MODEL.test(model), model).toBe(true)
+    const local = readMachineModel()
+    if (local !== null) expect(local).toMatch(MACHINE_MODEL)
   })
 })

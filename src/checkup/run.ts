@@ -17,6 +17,7 @@ import {
   type CheckupOptions,
   type CheckupReport,
   type CheckupUnit,
+  type Finding,
   type ReasonCode,
   type SourceId,
   type Verdict
@@ -35,11 +36,13 @@ import { pendingCheck } from './checks/pending'
 import {
   applicabilityEntry,
   assembleCheck,
+  makeFinding,
   reported,
   unavailable,
   worstVerdict,
   type CheckContext
 } from './checks/common'
+import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
 import { runSelfTest, type SelfTestResult } from './self-test/run-self-test'
 import { assertPrivacyClean, derivePrivacySalt, hostHash, saltFingerprint, saltedId, unitSignature } from './privacy'
 
@@ -246,6 +249,58 @@ function buildInventory(
   return rows
 }
 
+/**
+ * Sessions the readout returned per source (C1b, dispatcher addition after the C1a review): intra-file
+ * branch views are not sessions. A provider-host source that returns none in read-only mode is
+ * unavailable, not 0 (read-only mode does not parse it).
+ */
+function readoutBySource(readout: SwobReadout): NonNullable<CheckupReport['readoutBySource']> {
+  const counts = new Map<string, number>()
+  for (const session of readout.sessions) {
+    if (!session.virtual) counts.set(session.source, (counts.get(session.source) ?? 0) + 1)
+  }
+  const result: NonNullable<CheckupReport['readoutBySource']> = {}
+  for (const source of SOURCE_IDS) {
+    const count = counts.get(source) ?? 0
+    if (readout.status !== 'ok') {
+      result[source] = { sessions: unavailable('sessions', readout.reason ?? 'readout.not-isolated') }
+    } else if (count === 0 && providerUsesCanonicalRuntime(source)) {
+      result[source] = { sessions: unavailable('sessions', 'readout.provider-host-not-parsed-readonly') }
+    } else {
+      result[source] = { sessions: reported(count, 'sessions') }
+    }
+  }
+  return result
+}
+
+/**
+ * A selected source whose raw data is present (inventory: a counted unit, or a root that exists but is
+ * not counted yet) while the readout returned no session: listed as a warn finding under ①. It never
+ * grades ① (C1a's verdict rules are unchanged); it only makes a silently dropped source visible.
+ */
+function sourceEmptyFindings(
+  counts: NonNullable<CheckupReport['readoutBySource']>,
+  inventory: CheckupReport['inventory'],
+  selected: ReadonlySet<string>
+): Finding[] {
+  const findings: Finding[] = []
+  for (const source of SOURCE_IDS) {
+    if (!selected.has(source) || counts[source]?.sessions.value !== 0) continue
+    const rows = inventory.filter((row) => row.source === source && row.scannedBySwob)
+    if (!rows.some((row) => row.units.value === null || row.units.value > 0)) continue
+    const counted = rows.every((row) => row.units.value !== null)
+    findings.push(makeFinding({
+      code: 'readout.source-empty',
+      verdict: 'warn',
+      source,
+      count: counted
+        ? reported(rows.reduce((sum, row) => sum + (row.units.value ?? 0), 0), 'units')
+        : unavailable('units', 'census.not-implemented')
+    }))
+  }
+  return findings
+}
+
 function scopeNotImplementedChecks(): CheckResult[] {
   return CHECK_ORDER.map((id) => {
     const bySource = Object.fromEntries(SOURCE_IDS.map((source) => [source, applicabilityEntry('undetermined', 'checkup.scope-not-implemented')]))
@@ -396,6 +451,9 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
     additionalCodexHomes: codex?.additionalHomes ?? 0,
     codexStateDbCandidates: codexDb?.candidates ?? 0
   }
+  const inventory = buildInventory(claude, codex, presence, unscanned)
+  const sessionsBySource = readoutBySource(readout)
+  inclusion.result.findings.push(...sourceEmptyFindings(sessionsBySource, inventory, selected))
   const codexDbOracle: CheckupReport['oracles'][number] = codexDb?.available
     ? { id: 'codex.state-db', available: true, version: String(codexDb.version ?? 0) }
     : { id: 'codex.state-db', available: false, reason: codexDb?.reason ?? 'codex.state-db-missing' }
@@ -404,7 +462,7 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
     verdict: overall.verdict,
     ...(overall.reason ? { verdictReason: overall.reason } : {}),
     checks,
-    inventory: buildInventory(claude, codex, presence, unscanned),
+    inventory,
     oracles: [
       { id: 'census.claude-jsonl', available: !!claude },
       { id: 'census.codex-jsonl', available: !!codex },
@@ -415,6 +473,7 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
     timingsMs: { ...timingsMs, total: elapsed(startedAt) },
     selfTestCases: selfTest.cases,
     readout: readout.reason ? { status: readout.status, reason: readout.reason } : { status: readout.status },
+    readoutBySource: sessionsBySource,
     units: buildUnits(salt, claude, codex, inclusion.dispositions, changed, readout),
     sideEffects: sideEffects(sqliteBefore, sqliteAfter, codexDb),
     diagnostics

@@ -319,7 +319,9 @@ export const REASON_SHORT_TEXT: Readonly<Partial<Record<ReasonCode, string>>> = 
   'readout.provider-host-not-parsed-readonly': '只读不解析',
   'readout.not-isolated': '未隔离',
   'readout.kernel-error': '内核出错',
-  'checkup.scope-not-implemented': '范围未实现'
+  'checkup.scope-not-implemented': '范围未实现',
+  // C1b-2: a graded cell whose only problem is the legacy Kimi directory (explained by MARKDOWN_TEXT.sourcesLegendLegacy)
+  'unsupported.kimi-legacy-sessions': '旧版目录'
 }
 
 /** Measure units (contract MEASURE_UNITS). */
@@ -574,7 +576,11 @@ export const MARKDOWN_TEXT = {
   colPhase: '阶段',
   colMilliseconds: '毫秒',
   samplesLine: '样本：{samples}',
-  measureWithKey: '{measure}（{key}）'
+  measureWithKey: '{measure}（{key}）',
+  // —— C1b-2 (acceptance P2-1, P2-8) ——
+  overallSourceEmpty: '注意：{sources} 在本机有数据，但 Swob 这次一场会话都没读到。这不影响上面的结论，详见 ① 会话纳入。',
+  readoutCellFlagged: '{n}（{verdict}）',
+  sourcesLegendLegacy: '旧版目录＝问题只出在这个工具的旧版目录里（Kimi 是 ~/.kimi/sessions），与新版本身无关。'
 } as const
 
 /** The AI-diary one-liner (design §五 "AI 日记每日摘要"); a [D] number is written with a leading 「≈」. */
@@ -599,7 +605,9 @@ export const DIGEST_TEXT = {
   noteDerived: '≈ 为 [D]，其余为 [R]',
   link: '[[{link}]]',
   linkNoteReported: '[[{link}]]（数字均为 [R]）',
-  linkNoteDerived: '[[{link}]]（≈ 为 [D]，其余为 [R]）'
+  linkNoteDerived: '[[{link}]]（≈ 为 [D]，其余为 [R]）',
+  // C1b-2 (acceptance P2-3): one part per compaction source that is not passing
+  compactionSource: '压缩：{source} 原始 {n} 处，Swob 认出 {n} 处（{verdict}）'
 } as const
 
 /** The 「和上次比」 line and section. */
@@ -634,7 +642,9 @@ export const COMPARE_TEXT = {
   colPrevious: '上次',
   colCurrent: '这次',
   colDelta: '变化',
-  colSamples: '样本'
+  colSamples: '样本',
+  // C1b-2 (acceptance P2-13): the summary line when previous issues were not checked this time
+  summaryWithNotChecked: '和上次比（上次 {date}）：新增问题 {n} 项，已修复 {n} 项，未变 {n} 项，首次检查 {n} 项，本次未检查 {n} 项。'
 } as const
 
 let cachedTemplateSet: Set<string> | null = null

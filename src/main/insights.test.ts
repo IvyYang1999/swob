@@ -1,13 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import { buildInsights, estimateActiveTime } from './insights'
+import { extractCodexTokenAccounting, type CodexLine } from './codex-loader'
 import {
   accountCodexUsage,
   accountingFromMutuallyExclusiveUsage,
   markExcludedFromRollups,
+  mergeTokenAccountings,
   tokenUsageFromAccounting,
   unavailableTokenAccounting
 } from './token-accounting'
 import type { SessionSummary, Folder } from './types'
+import {
+  codexClock,
+  codexRow,
+  codexTime,
+  copiedPrefix,
+  type CodexFixtureRow
+} from './__fixtures__/codex-rollout-synthetic'
 
 function makeSession(overrides: Partial<SessionSummary> = {}): SessionSummary {
   return {
@@ -478,6 +487,70 @@ describe('buildInsights', () => {
       })
       expect(result.bySession.find((session) => session.sessionId === 'cursor')?.totalTokens).toBeNull()
       expect(result.bySession.some((session) => session.sessionId === 'synthetic')).toBe(false)
+    })
+
+    // 键序照《附录-Codex键序普查》（__fixtures__/codex-rollout-synthetic.ts）；值全部是合成的。
+    it('【回归】分叉子 agent 的副本没有 model：父 + 子合并账本的估价对账仍闭合（F1h）', () => {
+      const parentId = '7f1b0000-0000-4000-8000-0000000000f3'
+      const childId = '7f1b0000-0000-4000-8000-0000000000f4'
+      const at = codexClock('2026-07-31T12:00:00.000Z')
+      // 父会话两轮（gpt-5）：252,500 token，$0.27。
+      const parentRows: CodexFixtureRow[] = [
+        codexRow.topLevelMeta({ ...at(), id: parentId, cwd: '/repo' }),
+        codexRow.turnContext({ ...at(), turnId: 'turn-1', cwd: '/repo', model: 'gpt-5' }),
+        codexRow.tokenCount({
+          ...at(),
+          total: { input: 100_000, cached: 20_000, output: 1_000 },
+          last: { input: 100_000, cached: 20_000, output: 1_000 }
+        }),
+        codexRow.turnContext({ ...at(), turnId: 'turn-2', cwd: '/repo', model: 'gpt-5' }),
+        codexRow.tokenCount({
+          ...at(),
+          total: { input: 250_000, cached: 60_000, output: 2_500 },
+          last: { input: 150_000, cached: 40_000, output: 1_500 }
+        })
+      ]
+      // 分叉子：抄写前缀不含 turn_context（时间戳改写），副本因此没有 model；再是子自己的一轮（60,500 token，$0.0575）。
+      const forkedAt = '2026-07-31T13:00:00.000Z'
+      const inherited = copiedPrefix(
+        parentRows.slice(1).filter((row) => row.type !== 'turn_context'),
+        { startIso: codexTime(forkedAt, 10_000), firstOrdinal: 1 }
+      )
+      const own = codexClock(codexTime(forkedAt, 60_000), 1 + inherited.length)
+      const childRows: CodexFixtureRow[] = [
+        codexRow.threadSpawnMeta({
+          timestamp: forkedAt, ordinal: 0, id: childId, parentId, cwd: '/repo', depth: 1,
+          historyStartOrdinal: 1 + inherited.length
+        }),
+        ...inherited,
+        codexRow.turnContext({ ...own(), turnId: 'child-own-turn', cwd: '/repo', model: 'gpt-5' }),
+        codexRow.tokenCount({
+          ...own(),
+          total: { input: 310_000, cached: 80_000, output: 3_000 },
+          last: { input: 60_000, cached: 20_000, output: 500 }
+        })
+      ]
+      const parent = extractCodexTokenAccounting(parentRows as unknown as CodexLine[])
+      const child = extractCodexTokenAccounting(childRows as unknown as CodexLine[], 'subagent')
+      // 与 session-loader 一样，父会话的账本是父 + 子的合并账本，子文件排在父之后。
+      const merged = mergeTokenAccountings([parent, child], { auditSourceIds: [parentId, childId] })
+      const copies = child.usageEvents.slice(0, 2)
+
+      expect(copies.map((event) => event.model)).toEqual([undefined, undefined])
+      // 副本与父不只 billingFactKey 相同，dedupKey 也相同。
+      expect(copies.map((event) => event.dedupKey)).toEqual(parent.usageEvents.map((event) => event.dedupKey))
+
+      const result = buildInsights([makeSession({
+        sessionId: parentId, source: 'codex', cwds: ['/repo'],
+        tokenAccounting: merged, tokenUsage: tokenUsageFromAccounting(merged)
+      })], [])
+
+      expect(result.totalTokens).toBe(313_000)
+      expect(result.valuation.usd).toBeCloseTo(0.3275, 12)
+      expect(result.reconciliation.valuation.uniqueEventsUsd).toBeCloseTo(0.3275, 12)
+      expect(result.reconciliation.valuation.difference).toBeLessThan(1e-12)
+      expect(result.reconciliation.valuation.coverageDifference).toBeLessThan(1e-12)
+      expect(result.reconciliation.valuation.ok).toBe(true)
     })
   })
 })

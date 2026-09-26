@@ -16,6 +16,7 @@ import {
   aggregateValuations,
   previewUsageEventCandidateRepricing,
   previewUsageEventRepricing,
+  previewUsageEventsCandidateRepricing,
   valuationForAccounting,
   valueUsageEvent,
   valueUsageEvents
@@ -825,5 +826,40 @@ describe('估价与计费合计同一条同键归属规则（F1h）', () => {
     // 每条入选事件都定价，pricingRules 的 eventDedupKey 就是估价选中的那一批。
     expect(valuation.coveredTokens).toBe(valuation.totalBillableTokens)
     expect(new Set(valuation.pricingRules.map((trace) => trace.eventDedupKey))).toEqual(new Set(owners))
+  })
+
+  it('候选价 what-if：副本没有 model 时，仍按父会话那两条计价，不丢父', () => {
+    const { parent, copies, childOwn, merged } = forkLedgers(() => [])
+    const active = ACTIVE_PRICE_SNAPSHOT.rules.find((rule) =>
+      rule.provider === 'openai' && rule.modelCanonical === MODEL && !rule.dimensions)!
+    // 候选把 gpt-5 的三档单价都翻倍：父 $0.54、子自己那条 $0.115。
+    const candidate: PriceCandidateSnapshot = {
+      revision: 'candidate-f1h-fixture', status: 'pending-review', generatedAt: '2026-08-02T00:00:00Z',
+      contentHash: '', sourcePipeline: ACTIVE_PRICE_SNAPSHOT.sourcePipeline,
+      rules: [{
+        ...active, id: 'candidate:gpt-5', catalogVersion: 'candidate-f1h-fixture',
+        sourceRevision: 'fixture-source', reviewStatus: 'pending-review' as const,
+        officialReviewUrl: 'https://developers.openai.com/api/docs/models/gpt-5',
+        usdPerMillion: { input: 2.5, output: 20, cacheRead: 0.25 }
+      }],
+      unitRules: [],
+      review: { requiredApprover: 'yyt/负责人', activationAllowed: false }
+    }
+    candidate.contentHash = calculatePriceCandidateHash(candidate)
+
+    expect(copies.map((event) => event.model)).toEqual([undefined, undefined])
+    expect(childOwn).toHaveLength(1)
+
+    const parentWhatIf = previewUsageEventsCandidateRepricing(parent.usageEvents, candidate)
+    const ownWhatIf = previewUsageEventCandidateRepricing(childOwn[0], candidate)
+    const whatIf = previewUsageEventsCandidateRepricing(merged.usageEvents, candidate)
+
+    expect(parentWhatIf.usd).toBeCloseTo(0.54, 12)
+    expect(ownWhatIf.usd).toBeCloseTo(0.115, 12)
+    expect(whatIf.usd).toBeCloseTo(parentWhatIf.usd! + ownWhatIf.usd!, 12)
+    expect(whatIf).toMatchObject({
+      whatIf: true, coveredTokens: 313_000, totalBillableTokens: 313_000, missingReasons: []
+    })
+    expect([...new Set(whatIf.pricingRules.map((trace) => trace.pricingRuleId))]).toEqual(['candidate:gpt-5'])
   })
 })

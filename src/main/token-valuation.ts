@@ -575,10 +575,9 @@ export function previewUsageEventsCandidateRepricing(
   candidate: PriceCandidateSnapshot
 ): Valuation {
   assertPriceCandidateIntegrity(candidate)
-  const unique = new Map<string, UsageEvent>()
-  for (const event of events) unique.set(event.billingFactKey || event.dedupKey, event)
+  // Value the same billing owners as valueUsageEvents (uniqueBillingEvents).
   return {
-    ...aggregateValuations([...unique.values()].map((event) =>
+    ...aggregateValuations(uniqueBillingEvents(events).map((event) =>
       valueUsageEventAtCandidate(event, candidate))),
     whatIf: true
   }

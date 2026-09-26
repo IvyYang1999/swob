@@ -11,6 +11,7 @@
 ### 修复
 
 - **`swob insights` 的 token 标签改为名副其实（对 JSON 消费方不兼容，数值不变）**：insights 的 token 汇总原来标为 `input_plus_output`，但数值一直是计费口径：非缓存输入 + 缓存读 + 缓存写 + 输出。现在标签改为 `billing_total`，涉及 `totalTokensMetric`（`--summary` 与完整 `--json` 输出都有），以及 summary 里 `bySource`、`byModel`、`topProjects` 各行的 `tokenMetric`。所有数值与之前完全相同，只是标签字符串变了；按 `input_plus_output` 匹配 insights 输出的消费方需改认 `billing_total`。`swob list` 与 `swob search` 的 `tokenMetric` 仍是 `input_plus_output`（非缓存输入 + 输出，不含缓存），它们本来就标对了。已安装的 /swob Skill 要重新运行 `swob install` 才会换成新说明。
+- **分叉的 Codex 子 agent 不再顶掉父会话的估价**：分叉子 agent 会抄写父会话的 token 用量，`swob insights` 与会话审计原来估的是这份副本（常常没有 model，于是未定价；或按子 agent 的 model 计价），而不是父会话自己的那次调用。现在估价与 token 合计用同一种方式为每个计费事实选定调用，主线程的调用胜过副本（Insights 页本来就是主线程优先）。token 合计不变。
 
 ## v1.4.0 — 2026-08-08
 

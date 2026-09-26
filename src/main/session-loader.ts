@@ -27,7 +27,7 @@ import {
   type CodexSubagentRecord
 } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup } from './cursor-loader'
-import { buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, discoverSqliteAgentSessions, recordSqliteAgentLoad, sqliteAgentFailureCode, stripOpencodeSessionRef, type SqliteAgentFailureCode } from './opencode-loader'
+import { buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, discoverSqliteAgentSessions, recordSqliteAgentLoad, sqliteAgentFailureCode, stripOpencodeSessionRef, type SqliteAgentDiscovery, type SqliteAgentFailureCode } from './opencode-loader'
 import { buildZcodeSessionSummary, buildZcodeSessionDetail, buildZcodeSessionSummaryFromBackup, stripZcodeSessionRef } from './zcode-loader'
 import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
@@ -241,6 +241,28 @@ function loadSqliteDiskCache(
   } catch { /* corrupt cache */ }
   finally { database?.close() }
   return null
+}
+
+/**
+ * Read-only: summary-cache keys that start with `prefix` (a SQLite-agent
+ * `<dbPath>#`). On a cold start this is the last good session list of a
+ * source whose discovery failed. Never writes or migrates the cache.
+ */
+function listSqliteDiskCachePaths(prefix: string): string[] {
+  if (!fs.existsSync(CACHE_DB_FILE)) return []
+  let database: Database.Database | null = null
+  try {
+    database = new Database(CACHE_DB_FILE, { readonly: true, fileMustExist: true })
+    if (Number(database.pragma('user_version', { simple: true })) !== CACHE_VERSION) return []
+    const rows = database.prepare(
+      'SELECT file_path FROM summary_cache_entries WHERE instr(file_path, ?) = 1 ORDER BY file_path'
+    ).all(prefix) as Array<{ file_path: string }>
+    return rows.map((row) => row.file_path)
+  } catch {
+    return []
+  } finally {
+    database?.close()
+  }
 }
 
 /**
@@ -2368,13 +2390,25 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
   const codexFiles = isSessionSourceSupported('codex') ? findCodexSessionFiles() : []
   const cursorFiles = isSessionSourceSupported('cursor') ? findCursorSessionFiles() : []
   // SQLite-backed sources report failures explicitly (source status) instead
-  // of resolving an unreadable DB as zero sessions.
+  // of resolving an unreadable DB as zero sessions. A failed discovery keeps
+  // the source's last good refs active - this process's last successful
+  // discovery, else (cold start) the rows already in the summary cache - so
+  // their cached summaries are reused as they are: not dropped from the list
+  // the usage sync reconciles against, not pruned, not rewritten.
   const sqliteAgentDiscoveries = {
     opencode: isSessionSourceSupported('opencode') ? await discoverSqliteAgentSessions('opencode') : null,
     zcode: isSessionSourceSupported('zcode') ? await discoverSqliteAgentSessions('zcode') : null
   }
-  const opencodeFiles = sqliteAgentDiscoveries.opencode?.refs ?? []
-  const zcodeFiles = sqliteAgentDiscoveries.zcode?.refs ?? []
+  const carriedOverSqliteAgentPaths = new Set<string>()
+  const sqliteAgentFiles = (discovery: SqliteAgentDiscovery | null): string[] => {
+    if (!discovery) return []
+    if (discovery.state !== 'unavailable') return discovery.refs
+    const known = discovery.lastKnownRefs ?? listSqliteDiskCachePaths(`${discovery.dbPath}#`)
+    for (const ref of known) carriedOverSqliteAgentPaths.add(ref)
+    return known
+  }
+  const opencodeFiles = sqliteAgentFiles(sqliteAgentDiscoveries.opencode)
+  const zcodeFiles = sqliteAgentFiles(sqliteAgentDiscoveries.zcode)
   const descriptors: Array<{ filePath: string; source: CachedSessionSource }> = [
     ...claudeFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),
     ...newSourceFiles.flatMap((filePath) => {
@@ -2407,26 +2441,44 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
   await parallelForEach(currentFiles, 4, async ({ filePath, source, sig }) => {
     const cached = cache?.entries[filePath]
     const sqliteLoad = source === 'opencode' || source === 'zcode' ? sqliteAgentLoad[source] : null
-    if (cached?.sig === sig && cached.perFile?.source === source &&
+    const cachedUsable = !!cached && cached.perFile?.source === source &&
       (source !== 'claude-code' || cached.perFile.lineageMeta?.lineageFormatVersion === 2) &&
-      Array.isArray(cached.perFile.lineageMeta?.leafUuidRefs)) {
+      Array.isArray(cached.perFile.lineageMeta?.leafUuidRefs)
+    // An unavailable SQLite-agent source reuses its last good rows whatever
+    // their signature and is not parsed; a ref without a row sits this load
+    // out but stays active, so nothing of it is pruned.
+    const carriedOver = carriedOverSqliteAgentPaths.has(filePath)
+    if (cached && cachedUsable && (cached.sig === sig || carriedOver)) {
       entries[filePath] = cached
       reusedCount++
-      if (sqliteLoad && cached.perFile.summary) sqliteLoad.sessionsRead++
+      if (sqliteLoad && cached.perFile.summary) {
+        if (carriedOver) sqliteLoad.sessionsCarriedOver++
+        else sqliteLoad.sessionsRead++
+      }
       return
     }
+    if (carriedOver) return
 
     parsedCount++
-    changedPaths.add(filePath)
     try {
       const perFile = await buildPerFileCache(filePath, source)
       entries[filePath] = { sig, perFile }
+      changedPaths.add(filePath)
       if (sqliteLoad && perFile.summary) sqliteLoad.sessionsRead++
     } catch (error) {
       if (sqliteLoad) {
+        // A failed SQLite-agent session read is not an empty session: keep the
+        // last good row even under a newer signature, never persist
+        // `summary: null`, and without a row leave the session out this load.
         sqliteLoad.sessionsFailed++
         sqliteLoad.reason ??= sqliteAgentFailureCode(error)
+        if (cached && cachedUsable) {
+          entries[filePath] = cached
+          if (cached.perFile.summary) sqliteLoad.sessionsCarriedOver++
+        }
+        return
       }
+      changedPaths.add(filePath)
       entries[filePath] = { sig, perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source } }
     }
   })

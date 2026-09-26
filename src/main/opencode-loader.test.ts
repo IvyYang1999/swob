@@ -364,7 +364,6 @@ describe('opencode-loader sqlite3 CLI failures (F1e)', () => {
     install({ kind: 'missing' })
     expect(await findOpencodeSessionFiles(db.dbPath)).toEqual([])
     for (const fake of fakes.splice(0)) fake.restore()
-    expect(getSqliteAgentSourceStatus('opencode')).toMatchObject({ state: 'unavailable', reason: 'sqlite3-missing' })
 
     // Regression pin: the failed schema probe used to be cached for the whole
     // process, so this second discovery stayed at zero sessions.

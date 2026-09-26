@@ -109,6 +109,8 @@ interface LoadedOpencodeSession {
 }
 
 const schemaCache = new Map<string, Promise<OpencodeSchema>>()
+/** Refs of the last successful discovery per `<source>\0<dbPath>`, for carry-over after a failure. */
+const lastDiscoveredRefs = new Map<string, string[]>()
 const sqliteSessionIdCache = new Map<string, { signature: string; ids: Set<string> }>()
 
 export function getOpencodeDbPath(): string {
@@ -201,6 +203,11 @@ export interface SqliteAgentDiscovery {
   attempts: number
   /** Session refs found; always empty unless `state` is 'ok'. */
   refs: string[]
+  /**
+   * Refs of this process's last successful discovery of the same DB, so an
+   * unavailable source can keep showing what it had; null when there was none.
+   */
+  lastKnownRefs: string[] | null
   dbPath: string
 }
 
@@ -215,6 +222,15 @@ export async function discoverSqliteAgentSessions(
   dbPath = getSqliteAgentDbPath(source)
 ): Promise<SqliteAgentDiscovery> {
   const discovery = await probeSqliteAgentSessions(source, dbPath)
+  const memoryKey = `${source}\0${dbPath}`
+  if (discovery.state === 'ok') {
+    lastDiscoveredRefs.set(memoryKey, [...discovery.refs])
+  } else if (discovery.state === 'absent') {
+    lastDiscoveredRefs.delete(memoryKey)
+  } else {
+    const lastKnown = lastDiscoveredRefs.get(memoryKey)
+    discovery.lastKnownRefs = lastKnown ? [...lastKnown] : null
+  }
   recordSqliteAgentDiscovery(source, discovery)
   return discovery
 }
@@ -223,7 +239,9 @@ async function probeSqliteAgentSessions(
   source: SqliteAgentSource,
   dbPath: string
 ): Promise<SqliteAgentDiscovery> {
-  if (!fs.existsSync(dbPath)) return { state: 'absent', reason: null, attempts: 0, refs: [], dbPath }
+  if (!fs.existsSync(dbPath)) {
+    return { state: 'absent', reason: null, attempts: 0, refs: [], lastKnownRefs: null, dbPath }
+  }
   const trace: SqliteCliTrace = { attempts: 0 }
   try {
     const schema = await getSchema(dbPath, trace)
@@ -239,13 +257,14 @@ async function probeSqliteAgentSessions(
       .map((row) => asString(row.id))
       .filter(isValidOpencodeSessionId)
       .map((sessionId) => makeSqliteAgentSessionRef(source, sessionId, dbPath))
-    return { state: 'ok', reason: null, attempts: Math.max(1, trace.attempts), refs, dbPath }
+    return { state: 'ok', reason: null, attempts: Math.max(1, trace.attempts), refs, lastKnownRefs: refs, dbPath }
   } catch (error) {
     return {
       state: 'unavailable',
       reason: sqliteAgentFailureCode(error),
       attempts: Math.max(1, trace.attempts, isSqliteAgentReadError(error) ? error.attempts : 1),
       refs: [],
+      lastKnownRefs: null,
       dbPath
     }
   }

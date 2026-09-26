@@ -11,7 +11,7 @@ import { LATEST_FILE_PATTERN, MARKDOWN_MARKER, REPORT_FILE_PATTERN, reportFileNa
 import { SESSION_PACKAGE_MARKER } from '../checkup/run-guard'
 import { CANARY, assertInsideTestSandbox, buildSampleHome } from '../checkup/__test-support__/sample-home'
 import { bundleCheckupWorker, repositoryNodeModules } from '../checkup/__fixtures__/worker-bundle'
-import { clone, mixedReport, passReport } from '../checkup/__fixtures__/checkup-reports'
+import { clone, mixedReport, partialReport, passReport } from '../checkup/__fixtures__/checkup-reports'
 import { resolveTypeScriptImport, runtimeRelativeImports } from '../main/__test-support__/typescript-runtime-closure'
 import type { CliIo } from './index'
 import { runDoctorCheckup, type CheckupWorkerLaunch } from './checkup-command'
@@ -211,6 +211,8 @@ describe.sequential('swob doctor checkup (in process, isolated worker)', () => {
     const summary = JSON.parse(invocation.stdout)
     expect(summary).toMatchObject({
       verdict: expect.stringMatching(/^(pass|warn|fail|not-applicable|undetermined)$/),
+      // C1c: every source was checked (the value agrees with the report's own source.not-selected marks).
+      sourcesSelected: 'all',
       compare: { status: 'compared', issues: { added: 0, fixed: 0, firstCheck: 0, notChecked: 0 } },
       readonlyAudit: { protectedEntries: expect.any(Number), sidecarsTouched: 0 },
       worker: { stdoutLines: 0, stderrLines: 0 }
@@ -291,11 +293,37 @@ describe.sequential('swob doctor checkup (in process, isolated worker)', () => {
     // Checked before the target: even a directory that does not exist gets this answer.
     const missingDir = await invoke(['doctor', 'checkup', '--report', path.join(vault, 'missing'), '--sources', 'claude-code'], fake('report', passReport()))
     expect(errorOf(missingDir)).toMatchObject({ code: 'checkup-sources-with-report-directory' })
-    const file = await invoke(['doctor', 'checkup', '--report', path.join(reportDir, '部分来源.md'), '--sources', 'claude-code'], fake('report', passReport()))
+    const file = await invoke(['doctor', 'checkup', '--report', path.join(reportDir, '部分来源.md'), '--sources', 'claude-code'], fake('report', partialReport(['claude-code'])))
     expect(file.code, file.stderr).toBe(0)
     expect(reportFiles()).toEqual(['部分来源.json', '部分来源.md'])
+    // C1c (C1b-2 knownRisk): the report head and the digest say that only some sources were checked.
+    expect(fs.readFileSync(path.join(reportDir, '部分来源.md'), 'utf8')).toContain('\n> 范围：本次只体检 Claude Code（其余 13 个来源未选） · 用时：约 61 秒\n')
+    expect(file.stdout).toBe('体检（部分来源） · 全部 12 场会话（Claude Code 12） · 1 个来源 · 已检查的 3 项都通过 · 数字均为 [R]\n')
+    const summary = await invoke(['doctor', 'checkup', '--report', path.join(reportDir, '部分来源.md'), '--json', '--sources', 'claude-code'], fake('report', partialReport(['claude-code'])))
+    expect(summary.code, summary.stderr).toBe(0)
+    expect(JSON.parse(summary.stdout)).toMatchObject({ verdict: 'pass', sourcesSelected: ['claude-code'], written: ['部分来源.json', '部分来源.md'] })
     const json = await invoke(['doctor', 'checkup', '--json', '--sources', 'claude-code,codex'], fake('report', passReport()))
     expect(json.code, json.stderr).toBe(0)
+    clearReports()
+  })
+
+  it('exit 1: --sources with a canonical report name in file mode, any date, machine tag or case (acceptance P2-11)', async () => {
+    clearReports()
+    const names = [`Swob内核体检-2026-09-27-${MACHINE_TAG}.md`, 'swob内核体检-2020-01-01-ABCDEF.MD', `最新-${MACHINE_TAG}.md`, '最新-ABCDEF.Md']
+    for (const name of names) {
+      const refused = await invoke(['doctor', 'checkup', '--report', path.join(reportDir, name), '--sources', 'claude-code'], fake('report', partialReport(['claude-code'])))
+      expect(refused.code, name).toBe(1)
+      expect(errorOf(refused), name).toMatchObject({ code: 'checkup-sources-with-canonical-report-name' })
+      expect(refused.stdout, name).toBe('')
+    }
+    // Checked right after the arguments, before the target: a missing directory gets the same answer.
+    const missing = await invoke(['doctor', 'checkup', '--report', path.join(vault, 'missing', `最新-${MACHINE_TAG}.md`), '--sources', 'codex'], fake('report', partialReport(['codex'])))
+    expect(errorOf(missing)).toMatchObject({ code: 'checkup-sources-with-canonical-report-name' })
+    expect(reportFiles()).toEqual([])
+    expect(stateDirsLeft()).toEqual([])
+    // Only the canonical shapes are refused.
+    const similar = await invoke(['doctor', 'checkup', '--report', path.join(reportDir, `Swob内核体检-2026-09-27-${MACHINE_TAG}-部分.md`), '--sources', 'claude-code'], fake('report', partialReport(['claude-code'])))
+    expect(similar.code, similar.stderr).toBe(0)
     clearReports()
   })
 

@@ -31,11 +31,12 @@ import * as path from 'node:path'
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js'
 import reportSchema from '../checkup/contract/kernel-checkup-report-v1.schema.json'
 import { SOURCE_IDS, type CheckupReport, type Verdict } from '../checkup/contract'
-import { compareCheckupReports, type CheckupComparison } from '../checkup/compare'
+import { compareCheckupReports, sourcesSelected, type CheckupComparison } from '../checkup/compare'
 import { checkupDigest } from '../checkup/digest'
 import { buildIsolatedHome, cleanupIsolatedHome, protectedLocations, validateStateDir, type IsolatedHome } from '../checkup/isolated-home'
 import { PrivacyViolationError, derivePrivacySalt, saltFingerprint, scanForPrivacy } from '../checkup/privacy'
 import {
+  LATEST_FILE_PATTERN,
   MARKDOWN_MARKER,
   REPORT_BASENAME_PATTERN,
   REPORT_FILE_PATTERN,
@@ -98,6 +99,7 @@ const FAILURE_TEXT: Readonly<Record<string, string>> = {
   'checkup-unknown-option': `不认识的选项。${USAGE}`,
   'checkup-sources-invalid': '--sources 里有不认识的来源',
   'checkup-sources-with-report-directory': '--sources 只体检部分来源，不能和 --report <目录> 合用：目录里写的是当天的全量报告和 最新-<机器标签>.md，不能被部分来源的结果覆盖；请改用 --report <文件.md> 或 --json',
+  'checkup-sources-with-canonical-report-name': '--sources 只体检部分来源，--report 的文件名不能用体检报告的规范名（Swob内核体检-<日期>-<机器标签>.md 或 最新-<机器标签>.md，不分大小写）：同名文件是当天的全量报告或 最新 报告，不能被部分来源的结果覆盖；请换一个文件名或改用 --json',
   'checkup-fail-on-invalid': '--fail-on 只能是 fail、warn 或 never',
   'checkup-home-invalid': 'HOME 不是一个存在的目录',
   'checkup-worker-missing': '找不到体检子进程的入口文件，安装可能不完整',
@@ -529,6 +531,17 @@ function createStateDir(realHome: string, libraryRoot: string | null): string {
   return verdict.stateDir
 }
 
+/**
+ * A file name the directory mode writes (C1b-2 acceptance P2-11): Swob内核体检-<date>-<tag>.md or
+ * 最新-<tag>.md, any date and machine tag, ignoring case like the .md check and APFS (the .json twin
+ * shares the base name).
+ */
+const CANONICAL_REPORT_BASE = new RegExp(REPORT_BASENAME_PATTERN.source, 'i')
+const CANONICAL_LATEST_NAME = new RegExp(LATEST_FILE_PATTERN.source, 'i')
+function isCanonicalReportName(name: string): boolean {
+  return CANONICAL_REPORT_BASE.test(name.replace(/\.md$/i, '')) || CANONICAL_LATEST_NAME.test(name)
+}
+
 function failOnTriggered(failOn: FailOn, verdict: Verdict): boolean {
   if (failOn === 'fail') return verdict === 'fail'
   if (failOn === 'warn') return verdict === 'warn' || verdict === 'fail'
@@ -546,6 +559,8 @@ async function doctorCheckup(args: readonly string[], flags: Record<string, stri
   // A directory holds the day's full report and 最新-<tag>.md (and feeds the next automatic comparison):
   // a checkup of some sources only must never replace them.
   if (options.sources && options.report !== null && !/\.md$/i.test(options.report)) fail(CHECKUP_EXIT.error, 'checkup-sources-with-report-directory')
+  // Nor through a file target that takes one of those names (acceptance P2-11).
+  if (options.sources && options.report !== null && isCanonicalReportName(path.basename(options.report))) fail(CHECKUP_EXIT.error, 'checkup-sources-with-canonical-report-name')
   const realHome = realDirectory(ctx.realHome) ?? fail(CHECKUP_EXIT.error, 'checkup-home-invalid')
   const targetContext: TargetContext = { realHome, libraryRoot: ctx.libraryRoot }
   const target = options.report !== null ? resolveReportTarget(options.report, targetContext) : null
@@ -653,6 +668,8 @@ async function doctorCheckup(args: readonly string[], flags: Record<string, stri
     if (options.json) {
       ctx.io.stdout(`${JSON.stringify({
         verdict: report.verdict,
+        // C1c: the checked sources as the report itself records them ('all' when none was left out).
+        sourcesSelected: sourcesSelected(report),
         written: entries.map((entry) => entry.name),
         compare: compareSummary(compareMode, comparison),
         readonlyAudit: { protectedEntries: audit.protectedEntries, sidecarsTouched: audit.sidecarsTouched.length },

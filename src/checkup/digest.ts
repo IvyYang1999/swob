@@ -14,7 +14,9 @@
  * and swob.compactCountSum [R], one part per source that did not pass (C1b-2, acceptance P2-3: a sum
  * hid that one source was fully right and another fully wrong), the graded sum only as a fallback.
  * Sources listed by readout.source-empty are named even when the overall verdict is undetermined
- * (acceptance P2-14).
+ * (acceptance P2-14). A --sources report (some source marked source.not-selected) leads with
+ * 「体检（部分来源）」 and counts the selected sources only, also for reports written before C1c that
+ * still carried counts of unselected sources (C1c; C1b-2 knownRisk).
  * ④⑤⑥ are undetermined in C1a and omitted. Numbers are [R] unless prefixed with 「≈」 ([D]); the
  * line ends with a note saying which. Scope all → 「全部」, day → 「今天」. An undetermined overall
  * verdict gives 「无法判定（原因）」. Every part is registered text and the line must pass
@@ -24,6 +26,7 @@ import type { CheckId, CheckResult, CheckupReport, Label, Measure } from './cont
 import { SOURCE_IDS } from './contract'
 import { DIGEST_TEXT, SOURCE_LABELS, VERDICT_LABELS } from './templates'
 import { assertMarkdownPrivacyClean } from './privacy'
+import { notSelectedSources } from './compare'
 import { REPORT_BASENAME_PATTERN, fillText, formatNumber, reasonText } from './render-markdown'
 
 export interface DigestOptions {
@@ -53,7 +56,8 @@ function sum(measures: Array<Measure | undefined>): Sum | null {
 
 export function checkupDigest(report: CheckupReport, options: DigestOptions = {}): string {
   if (options.linkTarget !== undefined && !REPORT_BASENAME_PATTERN.test(options.linkTarget)) throw new Error('digest link target must be a report note name')
-  const parts: string[] = [DIGEST_TEXT.lead]
+  const skipped = notSelectedSources(report)
+  const parts: string[] = [skipped.size > 0 ? DIGEST_TEXT.leadPartial : DIGEST_TEXT.lead]
   let approximate = false
   const number = (value: number, labels: Label[]): string => {
     const derived = labels.some((label) => label !== 'reported')
@@ -80,6 +84,7 @@ export function checkupDigest(report: CheckupReport, options: DigestOptions = {}
       ? (source: string): Measure | undefined => report.readoutBySource?.[source]?.sessions
       : (source: string): Measure | undefined => inclusion?.bySource[source]?.swob.sessions
     const counts = SOURCE_IDS
+      .filter((source) => !skipped.has(source))
       .map((source) => ({ source, measure: sessionsOf(source) }))
       .filter((entry): entry is { source: typeof entry.source; measure: Measure } =>
         !!entry.measure && entry.measure.value !== null && entry.measure.value > 0 && entry.measure.label === 'reported')

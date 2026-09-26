@@ -29,7 +29,7 @@ import {
   reportFileNames
 } from './render-markdown'
 import { checkupDigest } from './digest'
-import { OTHER_FINGERPRINT, allUndeterminedReport, clone, finding, mixedReport, passReport, r, u } from './__fixtures__/checkup-reports'
+import { OTHER_FINGERPRINT, allUndeterminedReport, clone, finding, mixedReport, partialReport, passReport, r, u } from './__fixtures__/checkup-reports'
 import { CANARY, assertInsideTestSandbox, buildSampleHome } from './__test-support__/sample-home'
 
 // The sample-HOME report runs the kernel, which captured HOME at import time: the Vitest sandbox home.
@@ -137,7 +137,20 @@ describe('scanMarkdownForPrivacy', () => {
 
 describe('renderCheckupMarkdown (hand-written reports)', () => {
   it('fixtures are schema-valid reports', () => {
-    for (const report of [mixedReport(), allUndeterminedReport(), passReport()]) expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
+    for (const report of [mixedReport(), allUndeterminedReport(), passReport(), partialReport()]) expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
+  })
+
+  it('names the selected sources in the head of a --sources report (C1c; C1b-2 knownRisk)', () => {
+    const partial = renderCheckupMarkdown(partialReport(), RENDER)
+    expect(partial).toContain('\n> 范围：本次只体检 Claude Code、Codex（其余 12 个来源未选） · 用时：约 61 秒\n')
+    expect(partial).not.toContain('本机现存的全部原始数据')
+    expect(renderCheckupMarkdown(partialReport(['codex']), RENDER)).toContain('> 范围：本次只体检 Codex（其余 13 个来源未选） · ')
+    // The inventory rows of unselected sources with data read 「本次未选」 (not 「还没有清点」).
+    expect(partial).toContain('| OpenCode | ~/.local/share/opencode | —（这次没有选这个来源） | —（这次没有选这个来源） | — | 读 |')
+    expect(partial).toContain('| Kimi 旧版目录 | ~/.kimi/sessions | —（这次没有选这个来源） | —（这次没有选这个来源） | — | 不读 |')
+    expect(scanMarkdownForPrivacy(partial)).toEqual({ ok: true, hits: [] })
+    // A full report keeps its head.
+    expect(renderCheckupMarkdown(passReport(), RENDER)).toContain('\n> 范围：本机现存的全部原始数据 · 用时：约 61 秒\n')
   })
 
   it('renders the owner layout of design §五 (headings two levels up)', async () => {

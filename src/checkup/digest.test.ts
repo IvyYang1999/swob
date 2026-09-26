@@ -16,7 +16,7 @@ import { PrivacyViolationError, assertMarkdownPrivacyClean, scanMarkdownForPriva
 import type { ReadoutSession, SwobReadout } from './readout'
 import { runKernelCheckup } from './run'
 import { claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from './self-test/samples'
-import { allUndeterminedReport, d, dayReport, finding, mixedReport, passReport, r, u } from './__fixtures__/checkup-reports'
+import { allUndeterminedReport, d, dayReport, finding, mixedReport, partialReport, passReport, r, u } from './__fixtures__/checkup-reports'
 
 const LINK = 'Swob内核体检-2026-09-27-a1b2c3'
 
@@ -123,6 +123,23 @@ describe('checkupDigest (AI-diary one-liner, design §五)', () => {
     const unsplit = mixedReport()
     unsplit.checks[2].bySource.codex.verdict = 'pass'
     expect(checkupDigest(unsplit)).toContain(' · 压缩：原始 ≈14 处，Swob 认出 5 处（不通过） · ')
+  })
+
+  it('says 「（部分来源）」 for a --sources report and counts only the selected sources (C1c; C1b-2 knownRisk)', () => {
+    const line = checkupDigest(partialReport(), { linkTarget: LINK })
+    expect(line).toBe('体检（部分来源） · 全部 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
+    expect(scanMarkdownForPrivacy(line).ok).toBe(true)
+    // A report written before C1c still carried counts for unselected sources: they are not counted.
+    const older = partialReport()
+    older.readoutBySource!.cursor = { sessions: r(7, 'sessions') }
+    expect(checkupDigest(older)).toBe('体检（部分来源） · 全部 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 已检查的 3 项都通过 · 数字均为 [R]')
+    // Also when nothing could be judged.
+    const blocked = partialReport(['claude-code'])
+    blocked.verdict = 'undetermined'
+    blocked.verdictReason = 'checkup.self-test-failed'
+    expect(checkupDigest(blocked)).toBe('体检（部分来源） · 无法判定（自检没有全部通过，这次不给结论）')
+    // A full report keeps its lead.
+    expect(checkupDigest(passReport())).toMatch(/^体检 · 全部 59 场会话/)
   })
 
   it('always scans its own line and throws when a part is not whitelisted (reverse test of the scan step)', () => {

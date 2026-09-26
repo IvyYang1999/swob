@@ -204,13 +204,19 @@ function censusInventory(
   return rows
 }
 
+/**
+ * Inventory rows. A root with data of a source this run did not select (--sources) reads 「本次未选」
+ * (source.not-selected, C1c) instead of 「还没有清点」; roots without data stay 0 for every source.
+ */
 function buildInventory(
   claude: ClaudeCensus | null,
   codex: CodexCensus | null,
   presence: ReturnType<typeof probeSourcePresence>,
-  unscanned: ReturnType<typeof censusUnscannedRoots>
+  unscanned: ReturnType<typeof censusUnscannedRoots>,
+  selected: ReadonlySet<string>
 ): CheckupReport['inventory'] {
   const rows: CheckupReport['inventory'] = []
+  const notCounted = (source: SourceId): ReasonCode => selected.has(source) ? 'census.not-implemented' : 'source.not-selected'
   for (const source of SOURCE_IDS) {
     if (source === 'claude-code' && claude) {
       rows.push(...censusInventory(source, claude.roots, claude.units))
@@ -225,26 +231,27 @@ function buildInventory(
       rows.push({
         source,
         root: root.fixedRoot,
-        units: root.present ? unavailable('units', 'census.not-implemented') : reported(0, 'units'),
-        bytes: root.present ? unavailable('bytes', 'census.not-implemented') : reported(0, 'bytes'),
+        units: root.present ? unavailable('units', notCounted(source)) : reported(0, 'units'),
+        bytes: root.present ? unavailable('bytes', notCounted(source)) : reported(0, 'bytes'),
         timeRange: [null, null],
         scannedBySwob: true
       })
     }
   }
+  const kimiLegacy = unscanned.kimiLegacy.units
   rows.push({
     source: 'kimi',
     root: '~/.kimi/sessions',
-    units: reported(unscanned.kimiLegacy.units, 'units'),
-    bytes: unscanned.kimiLegacy.units > 0 ? unavailable('bytes', 'census.not-implemented') : reported(0, 'bytes'),
+    units: selected.has('kimi') || kimiLegacy === 0 ? reported(kimiLegacy, 'units') : unavailable('units', 'source.not-selected'),
+    bytes: kimiLegacy > 0 ? unavailable('bytes', notCounted('kimi')) : reported(0, 'bytes'),
     timeRange: [null, null],
     scannedBySwob: false
   })
   rows.push({
     source: 'zcode',
     root: '~/.zcode/v2',
-    units: unscanned.zcodeV2.present ? unavailable('units', 'census.not-implemented') : reported(0, 'units'),
-    bytes: unscanned.zcodeV2.present ? unavailable('bytes', 'census.not-implemented') : reported(0, 'bytes'),
+    units: unscanned.zcodeV2.present ? unavailable('units', notCounted('zcode')) : reported(0, 'units'),
+    bytes: unscanned.zcodeV2.present ? unavailable('bytes', notCounted('zcode')) : reported(0, 'bytes'),
     timeRange: [null, null],
     scannedBySwob: false
   })
@@ -254,9 +261,10 @@ function buildInventory(
 /**
  * Sessions the readout returned per source (C1b, dispatcher addition after the C1a review): intra-file
  * branch views are not sessions. A provider-host source that returns none in read-only mode is
- * unavailable, not 0 (read-only mode does not parse it).
+ * unavailable, not 0 (read-only mode does not parse it). A source this run did not select is
+ * unavailable (source.not-selected, C1c): the readout loads every source, but the run checks none of it.
  */
-function readoutBySource(readout: SwobReadout): NonNullable<CheckupReport['readoutBySource']> {
+function readoutBySource(readout: SwobReadout, selected: ReadonlySet<string>): NonNullable<CheckupReport['readoutBySource']> {
   const counts = new Map<string, number>()
   for (const session of readout.sessions) {
     if (!session.virtual) counts.set(session.source, (counts.get(session.source) ?? 0) + 1)
@@ -264,7 +272,9 @@ function readoutBySource(readout: SwobReadout): NonNullable<CheckupReport['reado
   const result: NonNullable<CheckupReport['readoutBySource']> = {}
   for (const source of SOURCE_IDS) {
     const count = counts.get(source) ?? 0
-    if (readout.status !== 'ok') {
+    if (!selected.has(source)) {
+      result[source] = { sessions: unavailable('sessions', 'source.not-selected') }
+    } else if (readout.status !== 'ok') {
       result[source] = { sessions: unavailable('sessions', readout.reason ?? 'readout.not-isolated') }
     } else if (count === 0 && providerUsesCanonicalRuntime(source)) {
       result[source] = { sessions: unavailable('sessions', 'readout.provider-host-not-parsed-readonly') }
@@ -458,8 +468,8 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
     additionalCodexHomes: codex?.additionalHomes ?? 0,
     codexStateDbCandidates: codexDb?.candidates ?? 0
   }
-  const inventory = buildInventory(claude, codex, presence, unscanned)
-  const sessionsBySource = readoutBySource(readout)
+  const inventory = buildInventory(claude, codex, presence, unscanned, selected)
+  const sessionsBySource = readoutBySource(readout, selected)
   inclusion.result.findings.push(...sourceEmptyFindings(sessionsBySource, inventory, selected))
   const codexDbOracle: CheckupReport['oracles'][number] = codexDb?.available
     ? { id: 'codex.state-db', available: true, version: String(codexDb.version ?? 0) }

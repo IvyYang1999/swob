@@ -41,7 +41,7 @@ import {
   VERDICT_LABELS
 } from './templates'
 import { MACHINE_MODEL, MARKDOWN_VERSION, assertMarkdownPrivacyClean } from './privacy'
-import { compareCheckupReports, type CheckupComparison, type IssueDelta, type UnitGroup } from './compare'
+import { checkedSources, compareCheckupReports, notSelectedSources, type CheckupComparison, type IssueDelta, type UnitGroup } from './compare'
 
 export { MARKDOWN_MARKER } from './templates'
 
@@ -202,9 +202,26 @@ function findCheck(report: CheckupReport, id: CheckId): CheckResult | undefined 
   return report.checks.find((check) => check.id === id)
 }
 
-function scopeLine(scope: CheckupReport['scope']): string | null {
+/**
+ * The scope line. A --sources report (some source marked source.not-selected, C1c) names the sources it
+ * checked instead of claiming all raw data.
+ */
+function scopeLine(report: CheckupReport): string | null {
+  const scope = report.scope
   const isDate = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
-  if (scope.kind === 'all') return MARKDOWN_TEXT.headScopeAll
+  if (scope.kind === 'all') {
+    const skipped = notSelectedSources(report)
+    const checked = [...checkedSources(report)].filter((source) => sourceLabel(source) !== null)
+    if (skipped.size === 0 || checked.length === 0) return MARKDOWN_TEXT.headScopeAll
+    const order = (source: string): number => {
+      const index = (SOURCE_IDS as readonly string[]).indexOf(source)
+      return index < 0 ? SOURCE_IDS.length : index
+    }
+    return fillText(MARKDOWN_TEXT.headScopeSources, {
+      sources: checked.sort((left, right) => order(left) - order(right)).map((source) => sourceLabel(source)!).join('、'),
+      n: formatNumber(skipped.size)
+    })
+  }
   if (scope.kind === 'day' && isDate(scope.day)) return fillText(MARKDOWN_TEXT.headScopeDay, { date: scope.day })
   if (scope.kind === 'range' && isDate(scope.since) && isDate(scope.until)) return fillText(MARKDOWN_TEXT.headScopeRange, { date: [scope.since, scope.until] })
   return null
@@ -226,7 +243,7 @@ function headerLines(report: CheckupReport, options: RenderOptions): string[] {
     fillText(MARKDOWN_TEXT.headSelfTest, { n: [formatNumber(report.kernel.selfTest.passed), formatNumber(report.kernel.selfTest.total)] })
   ]
   const run: string[] = []
-  const scope = scopeLine(report.scope)
+  const scope = scopeLine(report)
   if (scope) run.push(scope)
   const total = report.timingsMs?.total
   if (typeof total === 'number' && Number.isFinite(total)) run.push(fillText(MARKDOWN_TEXT.headDuration, { n: formatNumber(Math.max(1, Math.round(total / 1000))) }))

@@ -292,6 +292,33 @@ export function passReport(): CheckupReport {
   return report
 }
 
+/**
+ * What a `--sources` run looks like (C1c): every source outside `selected` is source.not-selected in
+ * every check, its findings and units are gone, its readout count is unavailable and its inventory
+ * rows with data read 「本次未选」. Built on passReport().
+ */
+export function partialReport(selected: readonly string[] = ['claude-code', 'codex']): CheckupReport {
+  const report = passReport()
+  const chosen = new Set(selected)
+  for (const check of report.checks) {
+    for (const source of SOURCE_IDS) if (!chosen.has(source)) check.bySource[source] = status('not-applicable', 'source.not-selected')
+    check.findings = check.findings.filter((entry) => chosen.has(entry.source))
+    const graded = Object.values(check.bySource).map((entry) => entry.verdict).filter((verdict) => WORST[verdict] > 0)
+    check.verdict = graded.length > 0
+      ? graded.reduce((worst, next) => WORST[next] > WORST[worst] ? next : worst)
+      : Object.values(check.bySource).every((entry) => entry.verdict === 'not-applicable') ? 'not-applicable' : 'undetermined'
+    check.ownerAction = OWNER_ACTIONS[check.verdict]
+  }
+  for (const source of SOURCE_IDS) {
+    if (!chosen.has(source)) report.readoutBySource![source] = { sessions: u('sessions', 'source.not-selected') }
+  }
+  report.inventory = report.inventory.map((row) => chosen.has(row.source) || (row.units.value !== null && row.units.value === 0)
+    ? row
+    : { ...row, units: u('units', 'source.not-selected'), bytes: u('bytes', 'source.not-selected') })
+  report.units = report.units!.filter((entry) => chosen.has(entry.source))
+  return report
+}
+
 /** A hand-made one-day report (C1a does not implement day scope yet): the digest's 「今天」 branch. */
 export function dayReport(): CheckupReport {
   const report = mixedReport()

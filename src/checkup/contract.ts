@@ -120,7 +120,8 @@ export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compact
  * read count is left out and listed (content.swob-read-error), never inferred. ③ Codex: a multi-copy
  * session whose count equals one copy is explained (compaction.multi-copy-explained, warn), the
  * per-session count follows the kernel's per-file rule (known differences listed as
- * codex.compaction-rule-difference) and legacy-unrecognized needs a Swob count of 0.
+ * codex.compaction-rule-difference) and legacy-unrecognized needs a Swob count of 0. A --sources run
+ * marks unselected sources in readoutBySource and in the inventory rows with data (source.not-selected).
  */
 export const CHECKUP_VERSION = '1.2.0'
 export const SELF_TEST_TOTAL = 6

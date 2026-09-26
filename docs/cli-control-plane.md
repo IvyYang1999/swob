@@ -61,7 +61,7 @@ swob doctor checkup [--report <目录|文件.md>] [--json] [--sources a,b] [--co
 
 **输出。**
 
-- `--report <目录>`：写三个文件：`Swob内核体检-YYYY-MM-DD-<机器标签>.md`、同名 `.json`、`最新-<机器标签>.md`（当日 .md 的副本）。日期按本机时区；机器标签是报告 `saltFingerprint` 的前 6 位，两台机器写同一个同步目录也不会互相覆盖。stdout 是一行摘要（与 AI 日记同一行）；加 `--json` 时 stdout 是 `{ verdict, written, compare, readonlyAudit, worker }`，只含文件名、计数和原因码。
+- `--report <目录>`：写三个文件：`Swob内核体检-YYYY-MM-DD-<机器标签>.md`、同名 `.json`、`最新-<机器标签>.md`（当日 .md 的副本）。日期按本机时区；机器标签是报告 `saltFingerprint` 的前 6 位，两台机器写同一个同步目录也不会互相覆盖。stdout 是一行摘要（与 AI 日记同一行）；加 `--json` 时 stdout 是 `{ verdict, sourcesSelected, written, compare, readonlyAudit, worker }`，只含文件名、来源 id、计数和原因码；`sourcesSelected` 是这次体检的来源 id 列表，全选时为 `"all"`（与报告里的 `source.not-selected` 标记一致）。
 - `--report <文件.md>`：只写这个文件和同名 `.json`。
 - 只给 `--json`：stdout 是完整的 CheckupReport JSON，不写文件。两个都不给：stdout 是 Markdown 报告。
 
@@ -73,7 +73,7 @@ swob doctor checkup [--report <目录|文件.md>] [--json] [--sources a,b] [--co
 
 **和上次比。** 缺省时在 `--report` 目录里找同一机器标签的 `Swob内核体检-*.json`，只取 v1、`saltFingerprint` 与本次相同、范围相同的报告，按报告里的 `generatedAt` 取最新一份（不看 mtime），在写新文件之前选定。`--compare <文件>` 显式指定：文件不存在退出 `3`，不是 v1 报告退出 `1`，没有机器指纹或来自另一台机器也退出 `1`（开跑前就核对）。`--compare none` 关闭比对。比对结果只写进 Markdown，不写回 JSON。
 
-**`--sources a,b`** 只体检这些来源，出现不认识的来源 id 退出 `1`。它只能和 `--report <文件.md>` 或 `--json`（或不带 `--report`）合用：`--report <目录>` 写的是当天的全量报告和 `最新-<机器标签>.md`，也是下次自动比对的依据，不能被部分来源的结果覆盖，所以两者合用直接退出 `1`（`checkup-sources-with-report-directory`）。**`--fail-on`**：`fail` 在总评为不通过时退出 `4`，`warn` 在总评为注意或不通过时退出 `4`，`never`（默认）不影响退出码；报告照常写出，「无法判定」「不适用」不触发。
+**`--sources a,b`** 只体检这些来源，出现不认识的来源 id 退出 `1`。它只能和 `--report <文件.md>` 或 `--json`（或不带 `--report`）合用：`--report <目录>` 写的是当天的全量报告和 `最新-<机器标签>.md`，也是下次自动比对的依据，不能被部分来源的结果覆盖，所以两者合用直接退出 `1`（`checkup-sources-with-report-directory`）；文件模式下文件名也不能是规范名（`Swob内核体检-<日期>-<机器标签>.md` 或 `最新-<机器标签>.md`，任意日期与机器标签、不分大小写），否则同样退出 `1`（`checkup-sources-with-canonical-report-name`）。部分来源的报告头写「本次只体检 <来源>（其余 N 个来源未选）」，摘要行以「体检（部分来源）」开头、只数选中的来源，盘点里未选来源的位置写「这次没有选这个来源」。**`--fail-on`**：`fail` 在总评为不通过时退出 `4`，`warn` 在总评为注意或不通过时退出 `4`，`never`（默认）不影响退出码；报告照常写出，「无法判定」「不适用」不触发。
 
 **隐私。** 报告与摘要只含隐私白名单接受的内容：数字、登记过的枚举/原因码/来源名/单位/模板句、`~` 开头的固定来源根、8 位加盐编号、ISO 时间、版本号、短 commit。渲染后的 JSON 与 Markdown 都要过扫描，任一命中退出 `7`，一个文件都不写。子进程的 stdout/stderr 只计行数，不转发；报错只给原因码（`error.code`），不带路径。
 

@@ -194,17 +194,34 @@ function problemIssues(report: CheckupReport): Map<string, IssueEntry> {
   return issues
 }
 
-/** Sources a report looked at: every listed source except those marked source.not-selected. */
-function checkedSources(report: CheckupReport): Set<string> {
+/**
+ * Sources a report did not select (`--sources`): marked source.not-selected in a check (run.ts marks every
+ * unselected source in all six; a selected source never carries that reason). Empty for a full report.
+ * Shared with the Markdown head, the digest and the CLI summary (C1c).
+ */
+export function notSelectedSources(report: CheckupReport): Set<string> {
   const skipped = new Set<string>()
-  const listed = new Set<string>()
   for (const check of report.checks ?? []) {
     for (const [source, entry] of Object.entries(check.bySource ?? {})) {
-      listed.add(source)
       if (entry?.swob?.status?.reason === 'source.not-selected') skipped.add(source)
     }
   }
+  return skipped
+}
+
+/** Sources a report looked at: every listed source except those marked source.not-selected. */
+export function checkedSources(report: CheckupReport): Set<string> {
+  const skipped = notSelectedSources(report)
+  const listed = new Set<string>()
+  for (const check of report.checks ?? []) for (const source of Object.keys(check.bySource ?? {})) listed.add(source)
   return new Set([...listed].filter((source) => !skipped.has(source)))
+}
+
+/** The sources a report checked, in source order, or 'all' when none was left out (the CLI --json summary). */
+export function sourcesSelected(report: CheckupReport): string[] | 'all' {
+  if (notSelectedSources(report).size === 0) return 'all'
+  const checked = checkedSources(report)
+  return [...checked].sort((left, right) => (SOURCE_RANK.get(left) ?? 99) - (SOURCE_RANK.get(right) ?? 99) || left.localeCompare(right))
 }
 
 function checkLooked(report: CheckupReport, id: CheckId): boolean {

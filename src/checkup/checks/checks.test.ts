@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { CheckResult } from '../contract'
+import type { CheckResult, CheckupReport } from '../contract'
 import { censusClaude } from '../census/claude-census'
 import { censusCodex } from '../census/codex-census'
 import type { SourcePresence } from '../census/source-roots'
@@ -11,6 +11,7 @@ import { LS, claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUui
 import { overallVerdict, runKernelCheckup, type CheckupInternals } from '../run'
 import Ajv2020 from 'ajv/dist/2020.js'
 import schema from '../contract/kernel-checkup-report-v1.schema.json'
+import { renderCheckupMarkdown } from '../render-markdown'
 import { applicability, worstVerdict, type CheckContext } from './common'
 import { compactionCheck, compactionThresholdVerdict } from './compaction'
 import { buildCodexSessionSummary } from '../../main/codex-loader'
@@ -688,6 +689,33 @@ describe('Swob readout per source (C1b)', () => {
     expect(report.checks[1].bySource.codex.swob.read).toEqual({ value: 3, label: 'reported', unit: 'records' })
     expect(report.checks[1].bySource.codex.verdict).toBe('pass')
     expect(report.diagnostics).toMatchObject({ codexParsedFiles: 1, codexReadErrors: 0 })
+  })
+
+  it('marks what a --sources run did not select: readout counts and inventory rows read 「本次未选」 (C1c)', async () => {
+    const { root, sessions } = await fixtureHome()
+    writeSample(root, path.join('.kimi', 'sessions', 'ws', 'old-session', 'context.jsonl'), jsonl([{ role: 'user', content: 'x' }]))
+    fs.mkdirSync(path.join(root, '.zcode', 'v2'), { recursive: true })
+    const report = await runKernelCheckup({ homeDir: root, stateDir: home(), privacySalt: 'per-source', sources: ['claude-code'] }, {
+      readout: async () => readout(sessions.filter((session) => session.source === 'claude-code'), {
+        claudeParsed: new Map([[sessions[0].primaryPath!, { records: 2, elapsedMs: 1, partial: false }]])
+      })
+    })
+    const notSelected = (unit: string): unknown => ({ value: null, label: 'unavailable', unit, reason: 'source.not-selected' })
+    expect(report.readoutBySource?.['claude-code']?.sessions).toEqual({ value: 1, label: 'reported', unit: 'sessions' })
+    for (const source of ['codex', 'opencode', 'gemini', 'cursor']) expect(report.readoutBySource?.[source]?.sessions, source).toEqual(notSelected('sessions'))
+    const row = (source: string, fixedRoot: string): CheckupReport['inventory'][number] | undefined =>
+      report.inventory.find((entry) => entry.source === source && entry.root === fixedRoot)
+    expect(row('claude-code', '~/.claude/projects')).toMatchObject({ units: { value: 1, label: 'reported' } })
+    expect(row('codex', '~/.codex/sessions')).toMatchObject({ units: notSelected('units'), bytes: notSelected('bytes') })
+    expect(row('opencode', '~/.local/share/opencode')).toMatchObject({ units: notSelected('units'), bytes: notSelected('bytes') })
+    expect(row('kimi', '~/.kimi/sessions')).toMatchObject({ units: notSelected('units'), bytes: notSelected('bytes'), scannedBySwob: false })
+    expect(row('zcode', '~/.zcode/v2')).toMatchObject({ units: notSelected('units'), scannedBySwob: false })
+    // Roots without data stay 0 (listed as 「没有数据」 as before).
+    expect(row('codex', '~/.codex/archived_sessions')).toMatchObject({ units: { value: 0, label: 'reported' } })
+    expect(report.checks[0].findings.some((finding) => finding.source !== 'claude-code' && finding.code === 'readout.source-empty')).toBe(false)
+    const markdown = renderCheckupMarkdown(report, { utcOffsetMinutes: 480 })
+    expect(markdown).toContain('范围：本次只体检 Claude Code（其余 13 个来源未选）')
+    expect(markdown).toContain('| Codex | ~/.codex/sessions | —（这次没有选这个来源） | —（这次没有选这个来源） | — | 读 |')
   })
 
   it('reads nothing per source when the readout did not run, and raises no finding then', async () => {

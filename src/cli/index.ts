@@ -68,6 +68,7 @@ import {
 import { findZcodeSessionFiles, loadZcodeRawMessages, stripZcodeSessionRef } from '../main/zcode-loader'
 import type { ParsedMessage, SessionDetail } from '../main/types'
 import { verifyBundleDirectory } from './verify-command'
+import { runDoctorCheckup, type CheckupWorkerLaunch } from './checkup-command'
 import {
   CLI_VERSION,
   cliHelpData,
@@ -94,6 +95,8 @@ const processIo: CliIo = {
 }
 
 let activeIo = processIo
+/** Test seam for `doctor checkup` (runCli options.checkupWorker); production leaves it undefined. */
+let activeCheckupWorker: CheckupWorkerLaunch | undefined
 
 class CliFailure extends Error {
   constructor(
@@ -758,16 +761,26 @@ async function cmdTranscript(args: string[], flags: Record<string, string | true
   out(result)
 }
 
-function cmdDoctor(args: string[]): void {
+async function cmdDoctor(args: string[], flags: Record<string, string | true>): Promise<number> {
   if (args[0] === 'locks') {
     out(inspectWriterLock())
-    return
+    return 0
   }
   if (args[0] === 'library') {
     out(inspectLibrary())
-    return
+    return 0
   }
-  fail('用法: swob doctor locks --json，或 swob doctor library --json')
+  if (args[0] === 'checkup') {
+    // The checkup runs in an isolated child process; this process only prepares, audits and writes.
+    return await runDoctorCheckup(args.slice(1), flags, {
+      io: activeIo,
+      realHome: runtimeHome(),
+      libraryRoot: getLibraryRoot(),
+      kernelVersion: CLI_VERSION,
+      worker: activeCheckupWorker
+    })
+  }
+  fail('用法: swob doctor locks --json、swob doctor library --json，或 swob doctor checkup [--report <目录|文件.md>] [--json]')
 }
 
 async function cmdInstall(): Promise<void> {
@@ -852,7 +865,7 @@ async function dispatch(cmd: string[], flags: Record<string, string | true>): Pr
       return 0
     case 'active': out({ activeSessionIds: [...detectActiveSessionsFromProcesses()] }); return 0
     case 'transcript': await cmdTranscript(cmd.slice(1), flags); return 0
-    case 'doctor': cmdDoctor(cmd.slice(1)); return 0
+    case 'doctor': return await cmdDoctor(cmd.slice(1), flags)
     case 'verify':
       if (!cmd[1]) fail('缺少 evidence bundle 路径。用法: swob verify <bundle-dir|manifest.json> --json')
       out(verifyBundleDirectory(cmd[1]))
@@ -895,9 +908,10 @@ function libraryFailureDetails(error: unknown): { code: string; hint: string; re
 export async function runCli(
   argv: string[],
   io: CliIo = processIo,
-  options: { libraryRoot?: string } = {}
+  options: { libraryRoot?: string; checkupWorker?: CheckupWorkerLaunch } = {}
 ): Promise<number> {
   activeIo = io
+  activeCheckupWorker = options.checkupWorker
   const originalConsole = { log: console.log, info: console.info, warn: console.warn, error: console.error }
   const diagnostic = (...values: unknown[]) => activeIo.stderr(formatLog(...values) + '\n')
   console.log = diagnostic
@@ -947,6 +961,7 @@ export async function runCli(
     console.warn = originalConsole.warn
     console.error = originalConsole.error
     activeIo = processIo
+    activeCheckupWorker = undefined
   }
 }
 

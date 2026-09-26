@@ -4,6 +4,8 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { performance } from 'node:perf_hooks'
+import Ajv2020 from 'ajv/dist/2020.js'
+import checkupReportSchema from '../checkup/contract/kernel-checkup-report-v1.schema.json'
 import { createEvidenceBundle } from '../main/integrity/evidence-bundle'
 import { TRUTH_KERNEL_GOLDEN_FIXTURE, truthKernelCanonicalUtf8Bytes } from '../shared/contracts/truth-kernel'
 import { CLI_COMMANDS, CLI_VERSION } from './command-registry'
@@ -14,6 +16,10 @@ const SESSION_A = '92000000-0000-4000-8000-000000000117'
 const SESSION_B = '93000000-0000-4000-8000-000000000117'
 const CLI_INVOCATION_TIMEOUT_MS = 5_000
 const COMMAND_TEST_TIMEOUT_MS = 10_000
+// doctor checkup spawns the isolated worker, runs the self-test, the census and the read-only kernel load.
+const CHECKUP_INVOCATION_TIMEOUT_MS = 180_000
+const CHECKUP_TEST_TIMEOUT_MS = 240_000
+const CHECKUP_USAGE = 'doctor checkup [--report <目录|文件.md>] [--json] [--sources a,b] [--compare <上次.json>|none] [--fail-on fail|warn|never]'
 
 interface Invocation {
   code: number
@@ -154,9 +160,9 @@ function invokeBootstrap(args: string[], stdin = ''): Invocation {
   return invokeRaw(process.execPath, [packagedCli, ...args], stdin)
 }
 
-function invokeInstalled(usage: string, args: string[], stdin = ''): Invocation {
+function invokeInstalled(usage: string, args: string[], stdin = '', timeout = CLI_INVOCATION_TIMEOUT_MS): Invocation {
   exercised.add(usage)
-  const invocation = invokeRaw(installedCommand, args, stdin)
+  const invocation = invokeRaw(installedCommand, args, stdin, timeout)
   process.stderr.write(`[packaged-cli timing] ${usage}: ${invocation.durationMs.toFixed(1)}ms\n`)
   return invocation
 }
@@ -457,6 +463,31 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     expect(tampered.status).toBe('invalid')
     expect(tampered.failures.length).toBeGreaterThan(0)
   }, COMMAND_TEST_TIMEOUT_MS)
+
+  it('runs doctor checkup in the isolated worker shipped next to cli.js and writes the three report files', () => {
+    expect(fs.existsSync(path.join(path.dirname(packagedCli), 'checkup-worker.js'))).toBe(true)
+    const reportDir = path.join(sandboxRoot, 'checkup-reports')
+    fs.mkdirSync(reportDir)
+    const invocation = invokeInstalled(CHECKUP_USAGE, ['doctor', 'checkup', '--report', reportDir, '--json'], '', CHECKUP_INVOCATION_TIMEOUT_MS)
+    const summary = parseSuccess(invocation)
+    expect(summary).toMatchObject({ verdict: expect.any(String), compare: { status: 'none' }, worker: { stdoutLines: 0, stderrLines: 0 } })
+    expect(summary.written).toHaveLength(3)
+    expect(fs.readdirSync(reportDir).sort()).toEqual([...summary.written].sort())
+    const jsonName = summary.written.find((name: string) => name.endsWith('.json'))
+    const report = JSON.parse(fs.readFileSync(path.join(reportDir, jsonName), 'utf8'))
+    const validate = new Ajv2020({ allErrors: true, strict: true }).compile(checkupReportSchema)
+    expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
+    expect(report.readout).toEqual({ status: 'ok' })
+    expect(report.kernel).toMatchObject({ version: CLI_VERSION, readOnly: true, selfTest: { passed: 6, total: 6 } })
+    expect(report.readoutBySource['claude-code'].sessions.label).toBe('reported')
+    expect(report.readoutBySource['claude-code'].sessions.value).toBeGreaterThan(0)
+    const canaries = [SESSION_A, SESSION_B, 'packaged contract alpha', 'packaged-thinking-needle', 'packaged-tool-needle', 'packaged-tool-result', 'Alpha Original', sandboxRoot]
+    for (const text of [invocation.stdout, invocation.stderr, ...summary.written.map((name: string) => fs.readFileSync(path.join(reportDir, name), 'utf8'))]) {
+      for (const canary of canaries) expect(text.includes(canary), canary).toBe(false)
+    }
+    // The one-shot stateDir (under this sandbox's TMPDIR) is gone.
+    expect(fs.readdirSync(path.join(sandboxRoot, 'tmp')).filter((name) => name.startsWith('swob-checkup-'))).toEqual([])
+  }, CHECKUP_TEST_TIMEOUT_MS)
 
   it('covers every command definition through the real installed wrapper', () => {
     expect([...exercised].sort()).toEqual(CLI_COMMANDS.map((command) => command.usage).sort())

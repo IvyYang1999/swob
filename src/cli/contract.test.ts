@@ -5,6 +5,8 @@ import * as path from 'node:path'
 import Database from 'better-sqlite3'
 import { CLI_COMMANDS, CLI_VERSION, generateSkillContent } from './command-registry'
 import type { CliIo } from './index'
+import type { CheckupWorkerLaunch } from './checkup-command'
+import { bundleCheckupWorker, repositoryNodeModules } from '../checkup/__fixtures__/worker-bundle'
 
 let tempHome = ''
 let libraryRoot = ''
@@ -66,7 +68,7 @@ interface Invocation {
   stderr: string
 }
 
-async function invoke(args: string[], stdin = ''): Promise<Invocation> {
+async function invoke(args: string[], stdin = '', checkupWorker?: CheckupWorkerLaunch): Promise<Invocation> {
   let stdout = ''
   let stderr = ''
   const io: CliIo = {
@@ -74,7 +76,7 @@ async function invoke(args: string[], stdin = ''): Promise<Invocation> {
     stderr: (value) => { stderr += value },
     readStdin: async () => stdin
   }
-  const code = await runCli(args, io, { libraryRoot })
+  const code = await runCli(args, io, { libraryRoot, ...(checkupWorker ? { checkupWorker } : {}) })
   return { code, stdout, stderr }
 }
 
@@ -160,7 +162,7 @@ describe.sequential('Swob CLI machine contract', () => {
     expect(CLI_VERSION).toBe(JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8')).version)
 
     const help = await invoke(['--help', '--json'])
-    expect(parsed(help)).toMatchObject({ name: 'swob', version: CLI_VERSION, exitCodes: [{ code: 0 }, { code: 1 }, { code: 2 }, { code: 3 }] })
+    expect(parsed(help)).toMatchObject({ name: 'swob', version: CLI_VERSION, exitCodes: [{ code: 0 }, { code: 1 }, { code: 2 }, { code: 3 }, { code: 4 }, { code: 5 }, { code: 6 }, { code: 7 }] })
     expect(help.stderr).toBe('')
   })
 
@@ -531,6 +533,33 @@ describe.sequential('Swob CLI machine contract', () => {
       fs.rmSync(path.join(libraryRoot, '.session-lineage.json'), { force: true })
     }
   })
+
+  it('doctor checkup 在隔离子进程里体检，只写 --report 的三个文件，缺失的 --compare 退出 3', async () => {
+    // The gate runs Vitest before the build: bundle the worker entry the way the dev runner bundles the kernel.
+    const workerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cli-contract-worker-'))
+    try {
+      const checkupWorker: CheckupWorkerLaunch = { workerPath: await bundleCheckupWorker(workerDir), env: { NODE_PATH: repositoryNodeModules() } }
+      const reportDir = path.join(tempHome, 'checkup-reports')
+      fs.mkdirSync(reportDir)
+      const libraryBefore = libraryFileEvidence(libraryRoot)
+      const invocation = await invoke(['doctor', 'checkup', '--report', reportDir, '--json'], '', checkupWorker)
+      const summary = parsed(invocation) as any
+      expect(summary).toMatchObject({ verdict: expect.any(String), compare: { status: 'none' }, worker: { stdoutLines: 0, stderrLines: 0 } })
+      expect(summary.written).toHaveLength(3)
+      expect(fs.readdirSync(reportDir).sort()).toEqual([...summary.written].sort())
+      const needles = ['contract-thinking-needle', 'contract-tool-input-needle', 'contract-tool-result-needle', '请检查 CLI 契约', 'contract-session.jsonl', tempHome]
+      for (const text of [invocation.stdout, invocation.stderr, ...summary.written.map((name: string) => fs.readFileSync(path.join(reportDir, name), 'utf8'))]) {
+        for (const needle of needles) expect(text.includes(needle), needle).toBe(false)
+      }
+      expect(libraryFileEvidence(libraryRoot)).toEqual(libraryBefore)
+      const missing = await invoke(['doctor', 'checkup', '--compare', path.join(reportDir, 'missing.json'), '--json'], '', checkupWorker)
+      expect(missing.code).toBe(3)
+      expect(missing.stdout).toBe('')
+      expect(parsedError(missing).error.code).toBe('compare-file-missing')
+    } finally {
+      fs.rmSync(workerDir, { recursive: true, force: true })
+    }
+  }, 120_000)
 
   it('Skill 完全由命令注册表生成并覆盖每个命令定义', () => {
     const skill = generateSkillContent()

@@ -28,7 +28,7 @@ import { SOURCE_IDS, type CheckupReport } from './contract'
 import { PrivacyViolationError } from './privacy'
 import { currentKernelIsolation } from './readout'
 import { runKernelCheckup } from './run'
-import { CHECKUP_WORKER_EXIT } from './run-guard'
+import { CHECKUP_KERNEL_VERSION, CHECKUP_WORKER_EXIT } from './run-guard'
 
 export interface CheckupWorkerArgs {
   home: string
@@ -39,7 +39,6 @@ export interface CheckupWorkerArgs {
 }
 
 const FLAGS = new Set(['--home', '--state', '--out', '--sources', '--kernel-version'])
-const KERNEL_VERSION = /^\d{1,6}(?:\.\d{1,6}){1,3}(?:[-+][0-9A-Za-z.]{1,32})?$/
 const OUT_NAME = /^[A-Za-z0-9._-]{1,64}$/
 
 function realDirectory(target: string): string | null {
@@ -80,7 +79,7 @@ export function parseCheckupWorkerArgs(argv: readonly string[]): CheckupWorkerAr
   }
   const kernelVersion = values.get('--kernel-version')
   if (kernelVersion !== undefined) {
-    if (!KERNEL_VERSION.test(kernelVersion)) return null
+    if (!CHECKUP_KERNEL_VERSION.test(kernelVersion)) return null
     args.kernelVersion = kernelVersion
   }
   return args

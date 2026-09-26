@@ -4,7 +4,7 @@ import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { typescriptRuntimeDependencyClosure } from '../main/__test-support__/typescript-runtime-closure'
 import { protectedLocations, validateStateDir } from './isolated-home'
-import { SESSION_PACKAGE_MARKER, readMachineModel, reportTargetVerdict, type ReportTargetContext } from './run-guard'
+import { CHECKUP_WORKER_EXIT, SESSION_PACKAGE_MARKER, isolatedWorkerEnv, readMachineModel, reportTargetVerdict, type ReportTargetContext } from './run-guard'
 import { MACHINE_MODEL } from './privacy'
 
 const dirs: string[] = []
@@ -131,5 +131,29 @@ describe('readMachineModel (report header, dispatcher decision 3)', () => {
     for (const model of ['Mac16,10', 'MacBookPro18,3', 'iMac21,1']) expect(MACHINE_MODEL.test(model), model).toBe(true)
     const local = readMachineModel()
     if (local !== null) expect(local).toMatch(MACHINE_MODEL)
+  })
+})
+
+describe('isolatedWorkerEnv (environment of the doctor checkup worker)', () => {
+  const parent: NodeJS.ProcessEnv = {
+    PATH: '/usr/bin:/bin', NODE_PATH: '/app/node_modules', CODEX_HOME: '/codex', LANG: 'zh_CN.UTF-8',
+    HOME: '/real/home', TMPDIR: '/real/tmp', NODE_ENV: 'test', VITEST: 'true', SWOB_E2E_RUNNER: '1',
+    SWOB_E2E_SANDBOX_ROOT: '/sandbox', SWOB_TEST_HOME: '/sandbox/home', SWOB_TEST_SYSTEM_TEMP_ROOT: '/tmp',
+    SWOB_LIBRARY_ROOT: '/real/vault', SWOB_USER_DATA_ROOT: '/real/user-data', SWOB_SEARCH_INDEX_DIR: '/real/search'
+  }
+  const isolated = {
+    HOME: '/state/home', TMPDIR: '/state/tmp', SWOB_CANONICAL_STORE_DIR: '/state/canonical',
+    SWOB_SEARCH_INDEX_DIR: '/state/search', SWOB_USAGE_INDEX_PATH: '/state/usage/usage-facts.db'
+  }
+
+  it('keeps PATH, NODE_PATH and CODEX_HOME, drops test markers and library overrides, and lets the isolated home win', () => {
+    const env = isolatedWorkerEnv(parent, isolated, { NODE_PATH: '/repo/node_modules', HOME: '/not/allowed' })
+    expect(env).toEqual({
+      PATH: '/usr/bin:/bin', NODE_PATH: '/repo/node_modules', CODEX_HOME: '/codex', LANG: 'zh_CN.UTF-8', ...isolated
+    })
+  })
+
+  it('maps worker exits the CLI understands', () => {
+    expect(CHECKUP_WORKER_EXIT).toEqual({ ok: 0, failure: 1, usage: 2, notIsolated: 5, privacy: 7 })
   })
 })

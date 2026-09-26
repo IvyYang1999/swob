@@ -185,3 +185,44 @@ export function readMachineModel(platform: NodeJS.Platform = process.platform, r
   const model = read()?.trim() ?? ''
   return MACHINE_MODEL_TEXT.test(model) ? model : null
 }
+
+// —— the isolated checkup worker (C1b-2) ——
+
+/**
+ * Exit codes of the checkup worker (src/checkup/cli-worker.ts). The CLI maps
+ * notIsolated to 5 (the isolation guarantee does not hold), privacy to 7 and
+ * everything else to 1.
+ */
+export const CHECKUP_WORKER_EXIT = { ok: 0, failure: 1, usage: 2, notIsolated: 5, privacy: 7 } as const
+
+/**
+ * Variables the worker must not inherit: the test-runtime markers (they would switch the kernel's
+ * library guard, e2e-library-isolation.ts, into its test contract) and the library / user-data
+ * overrides (the worker must never reach a real library through them). Same idea as the dev runner's
+ * env cleaning (scripts/checkup-dev.mjs), which drops NODE_ENV, VITEST, SWOB_E2E_SANDBOX_ROOT and
+ * SWOB_TEST_HOME.
+ */
+const WORKER_ENV_DROPPED: readonly string[] = [
+  'NODE_ENV', 'VITEST', 'SWOB_E2E_RUNNER', 'SWOB_E2E_SANDBOX_ROOT', 'SWOB_LIBRARY_ROOT', 'SWOB_USER_DATA_ROOT'
+]
+const WORKER_ENV_DROPPED_PREFIXES: readonly string[] = ['SWOB_TEST_']
+
+/**
+ * Environment of the isolated worker: the parent's own (PATH, NODE_PATH for better-sqlite3, CODEX_HOME …
+ * are kept) minus the variables above, then `extra` (a test launcher's additions), then the isolated
+ * home's HOME, TMPDIR and store paths from buildIsolatedHome(), which always win. The privacy salt is
+ * never passed: the worker derives the same one from the machine identifier.
+ */
+export function isolatedWorkerEnv(
+  parent: NodeJS.ProcessEnv,
+  isolated: Readonly<Record<string, string>>,
+  extra: Readonly<Record<string, string>> = {}
+): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(parent)) {
+    if (value === undefined || WORKER_ENV_DROPPED.includes(key)) continue
+    if (WORKER_ENV_DROPPED_PREFIXES.some((prefix) => key.startsWith(prefix))) continue
+    env[key] = value
+  }
+  return { ...env, ...extra, ...isolated }
+}

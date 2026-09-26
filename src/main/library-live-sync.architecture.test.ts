@@ -170,6 +170,40 @@ describe('live Library synchronization architecture', () => {
     expect(loadHandler).toContain('loadAllSessionsWithProviderStatus({ omitCachedUsageEvents })')
   })
 
+  it('13 hands the usage sync the evidence of the physical load behind its sessions (F1f)', () => {
+    const usageSync = source.match(
+      /function scheduleUsageFactSyncNow[\s\S]*?\n}\n\nasync function materializeUsageEventsForSnapshot/
+    )?.[0] || ''
+    const workerCalls = usageSync.match(/worker\.syncUsageFacts\([\s\S]*?\n\s*\)/g) || []
+    expect(workerCalls).toHaveLength(2)
+    for (const call of workerCalls) expect(call).toContain('absence: snapshot.absence')
+    expect(usageSync).toMatch(
+      /merge: \(current: UsageFactSyncSnapshot, incoming: UsageFactSyncSnapshot\) => \(\{[\s\S]*?absence: incoming\.absence,/
+    )
+    // Captured with the sessions, never left out: before the first physical
+    // load the evidence says so (physicalLoad null) instead of falling back
+    // to the legacy delete-every-missing-row semantics.
+    expect(usageSync).toMatch(
+      /usageFactSyncRunner\.schedule\(\{\s*sessions: \[\.\.\.cachedSessions\],[\s\S]*?absence: \{\s*physicalLoad: latestPhysicalLoadEvidence,\s*providerSettlement: latestProviderSettlementStatus,\s*excludedSources: \[\.\.\.getExcludedSources\(\)\]\s*\}/
+    )
+
+    // Each physical replacement takes the evidence of the load it installs.
+    expect(source.match(/sourceSessionInventory\.replacePhysical\(/g)).toHaveLength(2)
+    expect(source.match(/latestPhysicalLoadEvidence = /g)).toHaveLength(2)
+    expect(source.match(/sourceSessionInventory\.replacePhysical\([^)]*\)\n\s*latestPhysicalLoadEvidence = [^\n]+/g))
+      .toHaveLength(2)
+    const loadHandler = source.match(
+      /ipcMain\.handle\('sessions:loadAll'[\s\S]*?latestPhysicalLoadEvidence = initialLoad\.evidence/
+    )?.[0] || ''
+    expect(loadHandler).toMatch(
+      /beginSessionBootstrap\(\s*\(\) => loadAllSessionsWithEvidence\(\{\s*readOnly: true,[\s\S]*?initialLoad\.evidence = evidence/
+    )
+    expect(loadHandler).toContain('loadAllSessionsWithProviderStatus({ omitCachedUsageEvents })')
+    const reload = source.match(/async function reloadSessionsForAction[\s\S]*?\n}\n/)?.[0] || ''
+    expect(reload).toContain('await loadAllSessionsWithEvidence()')
+    expect(reload).toMatch(/replacePhysical\(loaded\)\n\s*latestPhysicalLoadEvidence = evidence/)
+  })
+
   it('closes the shared writer coordinator before a mutation-incomplete fatal dialog', () => {
     const cleanup = source.match(/function cleanupRuntimeResources[\s\S]*?\n}\n/)?.[0] || ''
     expect(cleanup).not.toContain('closeLibraryWriterRuntime()')

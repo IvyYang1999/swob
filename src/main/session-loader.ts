@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { readJsonlRecords } from './jsonl-lines'
+import { readJsonlRecords, type JsonlReadStats } from './jsonl-lines'
 import { Worker } from 'node:worker_threads'
 import Database from 'better-sqlite3'
 import { parser as createJsonParser } from 'stream-json'
@@ -909,13 +909,23 @@ function extractSkillInvocations(toolCalls: ToolCallInfo[], timestamp: string): 
 }
 
 export async function parseSessionFile(filePath: string): Promise<RawJsonlMessage[]> {
-  // Lines split at LF only (jsonl-lines.ts). A timeout or stream error still
-  // resolves the records read so far.
-  const { records } = await readJsonlRecords<RawJsonlMessage>(filePath, {
+  return (await parseSessionFileWithStats(filePath)).messages
+}
+
+/**
+ * parseSessionFile plus per-file read counts (see JsonlReadStats). Lines are
+ * split at LF only (jsonl-lines.ts). A timeout or stream error still resolves
+ * the records read so far; truncated = true now says so instead of staying
+ * silent.
+ */
+export async function parseSessionFileWithStats(
+  filePath: string
+): Promise<{ messages: RawJsonlMessage[] } & JsonlReadStats> {
+  const { records, ...stats } = await readJsonlRecords<RawJsonlMessage>(filePath, {
     timeoutMs: 30_000, // 30s timeout for large files or iCloud downloads
     onStreamError: 'truncate'
   })
-  return records
+  return { messages: records, ...stats }
 }
 
 export function buildSessionSummary(

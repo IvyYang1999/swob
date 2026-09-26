@@ -11,7 +11,8 @@ import {
   loadCodexRawMessages,
   loadCodexSessionRecord,
   loadCodexSessionRecordWithRaw,
-  rememberCodexSessionFile
+  rememberCodexSessionFile,
+  parseCodexFileWithStats
 } from './codex-loader'
 
 function writeTempJsonl(lines: object[]): string {
@@ -870,5 +871,29 @@ describe('parseCodexFile 只按 \\n 分行（F1a）', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-codex-missing-'))
     await expect(loadCodexRawMessages(path.join(dir, `rollout-2026-09-26T10-00-00-${SESSION_ID}.jsonl`)))
       .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('parseCodexFileWithStats 按记录计数：5 条记录读全，坏行与截断尾行各计一条丢失', async () => {
+    const fp = writeLineSeparatorRollout()
+    const { lines, ...stats } = await parseCodexFileWithStats(fp)
+    expect(lines.map((line) => line.type)).toEqual([
+      'session_meta', 'response_item', 'response_item', 'response_item', 'response_item'
+    ])
+    expect(Object.keys(lines[1])).toEqual(['timestamp', 'ordinal', 'type', 'payload'])
+    expect(JSON.stringify(lines[1].payload)).toContain('第一行 第二行')
+    expect(JSON.stringify(lines[4].payload)).toContain('段一 段二')
+    expect(stats).toEqual({
+      nonBlankLines: 7,
+      recordsRead: 5,
+      badLines: 2,
+      recordsLost: 2,
+      partialTail: true,
+      truncated: false
+    })
+  })
+
+  it('parseCodexFileWithStats：读流出错时照旧抛出', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-codex-missing-'))
+    await expect(parseCodexFileWithStats(path.join(dir, 'missing.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

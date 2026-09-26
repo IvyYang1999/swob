@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { readJsonlRecords } from './jsonl-lines'
+import { readJsonlRecords, type JsonlReadStats } from './jsonl-lines'
 import type {
   RawJsonlMessage,
   ParsedMessage,
@@ -96,10 +96,19 @@ interface CursorContentPart {
 // --- Parse raw lines ---
 
 async function parseCursorFile(filePath: string): Promise<CursorLine[]> {
-  // Lines split at LF only (jsonl-lines.ts). A stream error still throws;
-  // callers catch it.
-  const { records } = await readJsonlRecords<CursorLine>(filePath, { onStreamError: 'throw' })
-  return records
+  return (await parseCursorFileWithStats(filePath)).lines
+}
+
+/**
+ * parseCursorFile plus per-file read counts (see JsonlReadStats). Lines are
+ * split at LF only (jsonl-lines.ts). A stream error still rejects (callers
+ * catch it), so a returned result always has truncated = false.
+ */
+export async function parseCursorFileWithStats(
+  filePath: string
+): Promise<{ lines: CursorLine[] } & JsonlReadStats> {
+  const { records, ...stats } = await readJsonlRecords<CursorLine>(filePath, { onStreamError: 'throw' })
+  return { lines: records, ...stats }
 }
 
 export async function loadCursorRawMessages(filePath: string, sessionIdOverride?: string): Promise<RawJsonlMessage[]> {

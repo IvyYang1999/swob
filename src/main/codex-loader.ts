@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { readJsonlRecords } from './jsonl-lines'
+import { readJsonlRecords, type JsonlReadStats } from './jsonl-lines'
 import type {
   RawJsonlMessage,
   ParsedMessage,
@@ -340,10 +340,19 @@ export function refreshCodexSessionInventory(directories?: string[]): string[] {
 // --- Parse raw lines ---
 
 async function parseCodexFile(filePath: string): Promise<CodexLine[]> {
-  // Lines split at LF only (jsonl-lines.ts). A stream error still throws;
-  // callers catch it.
-  const { records } = await readJsonlRecords<CodexLine>(filePath, { onStreamError: 'throw' })
-  return records
+  return (await parseCodexFileWithStats(filePath)).lines
+}
+
+/**
+ * parseCodexFile plus per-file read counts (see JsonlReadStats). Lines are
+ * split at LF only (jsonl-lines.ts). A stream error still rejects (callers
+ * catch it), so a returned result always has truncated = false.
+ */
+export async function parseCodexFileWithStats(
+  filePath: string
+): Promise<{ lines: CodexLine[] } & JsonlReadStats> {
+  const { records, ...stats } = await readJsonlRecords<CodexLine>(filePath, { onStreamError: 'throw' })
+  return { lines: records, ...stats }
 }
 
 export async function loadCodexRawMessages(filePath: string, sessionIdOverride?: string): Promise<RawJsonlMessage[]> {

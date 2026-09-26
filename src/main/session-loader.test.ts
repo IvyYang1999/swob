@@ -23,7 +23,8 @@ import {
   isRealUserMessage,
   projectCanonicalProviderSessions,
   restoreOmittedUsageEvents,
-  parseSessionFile
+  parseSessionFile,
+  parseSessionFileWithStats
 } from './session-loader'
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import { shellQuote } from './resume-terminal'
@@ -2693,5 +2694,61 @@ describe('parseSessionFile 只按 \\n 分行（F1a）', () => {
   it('读流出错（文件不存在）时照旧 resolve 已读部分，不抛', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-claude-missing-'))
     await expect(parseSessionFile(path.join(dir, 'missing.jsonl'))).resolves.toEqual([])
+  })
+
+  it('parseSessionFileWithStats 按记录计数：两条记录读全，坏行与截断尾行各计一条丢失', async () => {
+    const { fp, user, assistant } = writeLineSeparatorFixture()
+    const result = await parseSessionFileWithStats(fp)
+    expect(result).toEqual({
+      messages: [user, assistant],
+      nonBlankLines: 4,
+      recordsRead: 2,
+      badLines: 2,
+      recordsLost: 2,
+      partialTail: true,
+      truncated: false
+    })
+    expect(await parseSessionFile(fp)).toEqual(result.messages)
+  })
+
+  it('parseSessionFileWithStats：30 s 超时照旧返回已读部分，并标 truncated（fake timer，不真等）', async () => {
+    const { fp } = writeLineSeparatorFixture()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let settled = false
+      const pending = parseSessionFileWithStats(fp)
+      void pending.then(() => { settled = true })
+      // 没有让出事件循环，文件一个字节都还没读到；29.999 s 时不应截断。
+      vi.advanceTimersByTime(29_999)
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+      expect(settled).toBe(false)
+      vi.advanceTimersByTime(1)
+      expect(await pending).toEqual({
+        messages: [],
+        nonBlankLines: 0,
+        recordsRead: 0,
+        badLines: 0,
+        recordsLost: 0,
+        partialTail: false,
+        truncated: true
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+    // 让被 destroy 的读流收尾、关掉文件句柄。
+    for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve))
+  })
+
+  it('parseSessionFileWithStats：读流出错照旧 resolve，但标 truncated，不再静默', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-claude-missing-'))
+    expect(await parseSessionFileWithStats(path.join(dir, 'missing.jsonl'))).toEqual({
+      messages: [],
+      nonBlankLines: 0,
+      recordsRead: 0,
+      badLines: 0,
+      recordsLost: 0,
+      partialTail: false,
+      truncated: true
+    })
   })
 })

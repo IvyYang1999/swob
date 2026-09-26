@@ -7,7 +7,8 @@ import {
   buildCursorSessionDetail,
   buildCursorSessionSummaryFromBackup,
   findCursorSessionFiles,
-  findCursorSourceGenerations
+  findCursorSourceGenerations,
+  parseCursorFileWithStats
 } from './cursor-loader'
 
 function writeTempJsonl(lines: object[], sessionId = 'abc-def-123'): string {
@@ -261,5 +262,26 @@ describe('parseCursorFile 只按 \\n 分行（F1a）', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-cursor-missing-'))
     await expect(buildCursorSessionSummary(path.join(dir, 'missing', 'missing.jsonl')))
       .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('parseCursorFileWithStats 按记录计数：2 条记录读全，坏行与截断尾行各计一条丢失', async () => {
+    const fp = writeLineSeparatorTranscript()
+    const { lines, ...stats } = await parseCursorFileWithStats(fp)
+    expect(lines.map((line) => line.role)).toEqual(['user', 'assistant'])
+    expect(JSON.stringify(lines[0].message)).toContain('第一行 第二行')
+    expect(JSON.stringify(lines[1].message)).toContain('段一 段二')
+    expect(stats).toEqual({
+      nonBlankLines: 4,
+      recordsRead: 2,
+      badLines: 2,
+      recordsLost: 2,
+      partialTail: true,
+      truncated: false
+    })
+  })
+
+  it('parseCursorFileWithStats：读流出错时照旧抛出', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-cursor-missing-'))
+    await expect(parseCursorFileWithStats(path.join(dir, 'missing.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

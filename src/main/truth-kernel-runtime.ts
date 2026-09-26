@@ -36,6 +36,7 @@ import { readMulticaWorkspace } from './orchestration/multica/reader'
 import { projectMulticaOverlay } from './orchestration/multica/overlay'
 import type { CanonicalSessionStore } from './canonical-store'
 import { getCanonicalProviderRuntimeDiagnostics } from './provider-runtime'
+import { getSqliteAgentSourceStatus } from './opencode-loader'
 
 const unavailable = <T,>(reason: string) => ({ status: 'unavailable' as const, reason })
 
@@ -341,13 +342,24 @@ export class TruthKernelRuntime {
         } while (afterSequence !== null)
       }
       const latest = runtimeDiagnostics.get(providerId)
+      // OpenCode/ZCode are legacy loaders without canonical runtime
+      // diagnostics; their process-local source status (fixed codes and
+      // counts only) fills the discovery row instead.
+      const sqliteAgent = !latest && (definition.sourceId === 'opencode' || definition.sourceId === 'zcode')
+        ? getSqliteAgentSourceStatus(definition.sourceId)
+        : null
       const durableSourceCount = new Set([...v1Sources.map((source) => source.sourceRef.stableId), ...v2Sessions.map((session) => session.identity.physicalSourceId)]).size
-      const sourceCount = latest?.sourceCount ?? durableSourceCount
+      const sourceCount = latest?.sourceCount ??
+        (sqliteAgent ? sqliteAgent.sessionsRead + sqliteAgent.sessionsCarriedOver : durableSourceCount)
       return {
         manifest: definition.manifest as unknown as TruthKernelProviderDoctorIpcInput['manifest'],
-        discovery: latest?.discovery ?? (sourceCount > 0 ? 'found' : 'not-found'),
-        discoveryReason: latest?.discoveryReason ?? (sourceCount > 0 ? 'runtime-diagnostics-unavailable; durable source retained' : 'No durable canonical source is registered.'),
-        lastSuccessfulParseAt: latest?.lastSuccessfulParseAt ?? null, unknownEvents,
+        discovery: latest?.discovery ?? (sqliteAgent
+          ? (sqliteAgent.state === 'unavailable' ? 'error' : sqliteAgent.state === 'absent' ? 'not-found' : 'found')
+          : (sourceCount > 0 ? 'found' : 'not-found')),
+        discoveryReason: latest?.discoveryReason ?? (sqliteAgent
+          ? (sqliteAgent.state === 'partial' ? `partial:${sqliteAgent.reason}` : sqliteAgent.reason)
+          : (sourceCount > 0 ? 'runtime-diagnostics-unavailable; durable source retained' : 'No durable canonical source is registered.')),
+        lastSuccessfulParseAt: latest?.lastSuccessfulParseAt ?? sqliteAgent?.lastSuccessAt ?? null, unknownEvents,
         partialEvents: latest?.partialEvents ?? v2Sessions.filter((session) => !session.complete).reduce((sum, session) => sum + session.eventCount, 0),
         sourceLabel: `${definition.sourceId} · ${sourceCount}`,
         executionDomain: latest?.executionDomain ?? 'unknown'

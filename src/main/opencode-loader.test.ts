@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -10,8 +10,10 @@ import {
   buildOpencodeSessionSummary,
   discoverSqliteAgentSessions,
   findOpencodeSessionFiles,
+  getSqliteAgentSourceStatus,
   loadOpencodeRawMessages,
-  makeOpencodeSessionRef
+  makeOpencodeSessionRef,
+  recordSqliteAgentLoad
 } from './opencode-loader'
 import { loadSessionDetail } from './session-loader'
 import {
@@ -251,6 +253,11 @@ const BUSY_STDERR = 'Parse error near line 2: database is locked (5)'
 describe('opencode-loader sqlite3 CLI failures (F1e)', () => {
   const fakes: FakeSqlite3[] = []
   const fixtureDirs: string[] = []
+  let warn: MockInstance<typeof console.warn>
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
 
   function fixture(options?: { sessionMessageTable?: boolean }) {
     const created = createOpencodeDb(options)
@@ -265,6 +272,7 @@ describe('opencode-loader sqlite3 CLI failures (F1e)', () => {
   }
 
   afterEach(() => {
+    warn.mockRestore()
     for (const fake of fakes.splice(0)) fake.restore()
     for (const dir of fixtureDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
     delete process.env.SWOB_SQLITE_CLI_TIMEOUT_MS
@@ -279,6 +287,8 @@ describe('opencode-loader sqlite3 CLI failures (F1e)', () => {
     const discovery = await discoverSqliteAgentSessions('opencode', db.dbPath)
 
     expect(discovery).toMatchObject({ state: 'unavailable', reason: 'timeout', attempts: 1, refs: [] })
+    expect(getSqliteAgentSourceStatus('opencode'))
+      .toMatchObject({ state: 'unavailable', reason: 'timeout', attempts: 1 })
     expect(fake.invocations()).toBeLessThanOrEqual(5)
     expect(Date.now() - started).toBeLessThan(5_000)
   }, 20_000)
@@ -290,6 +300,7 @@ describe('opencode-loader sqlite3 CLI failures (F1e)', () => {
     const discovery = await discoverSqliteAgentSessions('opencode', db.dbPath)
 
     expect(discovery).toMatchObject({ state: 'ok', reason: null, attempts: 2, refs: [db.sourceRef] })
+    expect(getSqliteAgentSourceStatus('opencode')).toMatchObject({ state: 'ok', reason: null, attempts: 2 })
     // Five schema probes, one retry of the probe that hit the lock, one SELECT.
     expect(fake.invocations()).toBe(7)
   }, 20_000)
@@ -333,6 +344,9 @@ describe('opencode-loader sqlite3 CLI failures (F1e)', () => {
     expect(await discoverSqliteAgentSessions('opencode', db.dbPath))
       .toMatchObject({ state: 'unavailable', reason: 'sqlite3-missing', attempts: 1, refs: [] })
     expect(await findOpencodeSessionFiles(db.dbPath)).toEqual([])
+    // The never-throw public discovery still records the failure.
+    expect(getSqliteAgentSourceStatus('opencode'))
+      .toMatchObject({ state: 'unavailable', reason: 'sqlite3-missing', attempts: 1 })
   })
 
   cliIt('6 absent optional tables are a legitimate empty result, not a failure', async () => {
@@ -350,12 +364,15 @@ describe('opencode-loader sqlite3 CLI failures (F1e)', () => {
     install({ kind: 'missing' })
     expect(await findOpencodeSessionFiles(db.dbPath)).toEqual([])
     for (const fake of fakes.splice(0)) fake.restore()
+    expect(getSqliteAgentSourceStatus('opencode')).toMatchObject({ state: 'unavailable', reason: 'sqlite3-missing' })
 
     // Regression pin: the failed schema probe used to be cached for the whole
     // process, so this second discovery stayed at zero sessions.
     expect(await findOpencodeSessionFiles(db.dbPath)).toEqual([db.sourceRef])
     expect(await discoverSqliteAgentSessions('opencode', db.dbPath))
       .toMatchObject({ state: 'ok', reason: null, refs: [db.sourceRef] })
+    expect(getSqliteAgentSourceStatus('opencode'))
+      .toMatchObject({ state: 'ok', reason: null, lastSuccessAt: expect.any(String) })
   })
 
   cliIt('8 a writer lock is waited out, not reported as an empty source', async () => {
@@ -372,10 +389,50 @@ describe('opencode-loader sqlite3 CLI failures (F1e)', () => {
     try {
       // Regression pin: without a busy timeout this returned [] at once.
       expect(await findOpencodeSessionFiles(db.dbPath)).toEqual([db.sourceRef])
+      // The CLI busy timeout absorbed the wait: no statement needed a retry.
+      expect(getSqliteAgentSourceStatus('opencode')).toMatchObject({ state: 'ok', reason: null, attempts: 1 })
     } finally {
       await released
     }
   }, 20_000)
+
+  cliIt('source status moves through absent / unavailable / partial / ok and warns once per change without paths or stderr', async () => {
+    const db = fixture()
+    await discoverSqliteAgentSessions('opencode', path.join(db.dir, 'not-installed.db'))
+    expect(getSqliteAgentSourceStatus('opencode'))
+      .toMatchObject({ state: 'absent', reason: null, attempts: 0, sessionsRead: 0 })
+
+    install({ kind: 'fail', stderr: 'Parse error near line 2: file is not a database (26)' })
+    await discoverSqliteAgentSessions('opencode', db.dbPath)
+    await discoverSqliteAgentSessions('opencode', db.dbPath)
+    recordSqliteAgentLoad('opencode', { sessionsRead: 0, sessionsFailed: 0, sessionsCarriedOver: 3, reason: null })
+    expect(getSqliteAgentSourceStatus('opencode'))
+      .toMatchObject({ state: 'unavailable', reason: 'corrupt', sessionsCarriedOver: 3 })
+    for (const fake of fakes.splice(0)) fake.restore()
+
+    await discoverSqliteAgentSessions('opencode', db.dbPath)
+    recordSqliteAgentLoad('opencode', { sessionsRead: 4, sessionsFailed: 1, sessionsCarriedOver: 1, reason: 'busy' })
+    const partial = getSqliteAgentSourceStatus('opencode')
+    expect(partial).toMatchObject({
+      state: 'partial', reason: 'busy', attempts: 1, sessionsRead: 4, sessionsFailed: 1, sessionsCarriedOver: 1
+    })
+    expect(partial?.lastSuccessAt).toEqual(expect.any(String))
+
+    await discoverSqliteAgentSessions('opencode', db.dbPath)
+    recordSqliteAgentLoad('opencode', { sessionsRead: 5, sessionsFailed: 0, sessionsCarriedOver: 0, reason: null })
+    expect(getSqliteAgentSourceStatus('opencode'))
+      .toMatchObject({ state: 'ok', reason: null, sessionsRead: 5, sessionsFailed: 0 })
+
+    const warnings = warn.mock.calls.map((args) => args.join(' '))
+    expect(warnings).toEqual([
+      '[sqlite-agent] opencode: discovery unavailable (corrupt, attempts 1)',
+      '[sqlite-agent] opencode: 1 session read(s) failed (busy); 1 carried over'
+    ])
+    const surfaced = JSON.stringify([warnings, partial, getSqliteAgentSourceStatus('opencode')])
+    for (const secret of [db.dir, db.dbPath, SESSION_ID, 'file is not a database', 'Parse error']) {
+      expect(surfaced).not.toContain(secret)
+    }
+  })
 
   cliIt('a timer made late by a blocked event loop gets one grace window instead of a false timeout', async () => {
     const db = fixture()

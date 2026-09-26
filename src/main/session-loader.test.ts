@@ -7,7 +7,7 @@
  * - 工具统计数字不对
  * - 分支检测误判
  */
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
   buildSessionSummary,
   buildSessionSummaryFromBackup,
@@ -27,6 +27,7 @@ import {
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import { shellQuote } from './resume-terminal'
 import { accountingFromMutuallyExclusiveUsage } from './token-accounting'
+import { installFakeSqlite3, realSqlite3Path, type FakeSqlite3 } from './__test-support__/fake-sqlite3'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -396,6 +397,53 @@ async function loadAllSessionsFromTempHome(
     else process.env.HOME = oldHome
     vi.resetModules()
   }
+}
+
+/**
+ * Import session-loader and the opencode-loader instance it uses, once, under
+ * `home`. Several loads inside `run` share one module instance (a long-lived
+ * desktop process); a later call starts cold.
+ */
+async function withSessionLoaderModules<T>(
+  home: string,
+  run: (modules: {
+    sessionLoader: typeof import('./session-loader')
+    sqliteAgent: typeof import('./opencode-loader')
+  }) => Promise<T>
+): Promise<T> {
+  const oldHome = process.env.HOME
+  process.env.HOME = home
+  vi.resetModules()
+  try {
+    const sessionLoader = await import('./session-loader')
+    const sqliteAgent = await import('./opencode-loader')
+    return await run({ sessionLoader, sqliteAgent })
+  } finally {
+    if (oldHome === undefined) delete process.env.HOME
+    else process.env.HOME = oldHome
+    vi.resetModules()
+  }
+}
+
+/** Add one more session (same layout as createSqliteAgentCacheFixture) to an existing DB. */
+function addSqliteAgentSession(dbPath: string, sessionId: string, prompt: string): string {
+  const db = new Database(dbPath)
+  try {
+    db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?)').run(
+      sessionId, `${sessionId}-slug`, '/fixture/opencode', `${sessionId} title`, 'opencode-model'
+    )
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(`${sessionId}-user`, sessionId,
+      JSON.stringify({ role: 'user', time: { created: '2026-08-03T00:00:00Z' } }), 1785715200)
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(`${sessionId}-assistant`, sessionId,
+      JSON.stringify({ role: 'assistant', parentID: `${sessionId}-user`, time: { created: '2026-08-03T00:00:01Z' } }), 1785715201)
+    const insertPart = db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)')
+    insertPart.run(`${sessionId}-part-user`, sessionId, `${sessionId}-user`, 'text', 0, JSON.stringify({ text: prompt }))
+    insertPart.run(`${sessionId}-part-assistant`, sessionId, `${sessionId}-assistant`, 'text', 0,
+      JSON.stringify({ text: `${prompt} answer` }))
+  } finally {
+    db.close()
+  }
+  return `${dbPath}#${sessionId}`
 }
 
 function incrementalCacheLog(spy: ReturnType<typeof vi.spyOn>): string {
@@ -2644,4 +2692,58 @@ describe('【曾经的 bug】turnCount 不能把工具结果算成用户轮次',
     // 只有 1 个真实用户消息，turnCount 应该是 1
     expect(summary!.turnCount).toBe(1)
   })
+})
+
+// ========================================================
+// F1e: SQLite-backed sources (OpenCode/ZCode) under sqlite3 failures
+// ========================================================
+const sqliteCliIt = process.platform !== 'win32' && realSqlite3Path() ? it : it.skip
+const CORRUPT_STDERR = 'Runtime error near line 2: database disk image is malformed (11)'
+
+describe('SQLite-agent sources under sqlite3 failures (F1e)', () => {
+  const fakes: FakeSqlite3[] = []
+  const homes: string[] = []
+
+  function tempHome(label: string): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `swob-f1e-${label}-home-`))
+    homes.push(home)
+    return home
+  }
+
+  function install(behavior: Parameters<typeof installFakeSqlite3>[0]): FakeSqlite3 {
+    const fake = installFakeSqlite3(behavior)
+    fakes.push(fake)
+    return fake
+  }
+
+  function restoreFakes(): void {
+    for (const fake of fakes.splice(0)) fake.restore()
+  }
+
+  afterEach(() => {
+    restoreFakes()
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  sqliteCliIt('a failed session read marks the source partial with fixed codes and counts', async () => {
+    const home = tempHome('partial')
+    const goodRef = createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1eGood')
+    const dbPath = goodRef.slice(0, goodRef.lastIndexOf('#'))
+    addSqliteAgentSession(dbPath, 'ses_F1eBad', 'bad session prompt')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    install({ kind: 'fail-matching', match: ['FROM "message"', 'ses_F1eBad'], stderr: CORRUPT_STDERR })
+
+    await withSessionLoaderModules(home, async ({ sessionLoader, sqliteAgent }) => {
+      const sessions = await sessionLoader.loadAllSessions({ readOnly: true, quiet: true })
+      expect(sessions.map((session) => session.sessionId)).toContain('ses_F1eGood')
+      expect(sessions.map((session) => session.sessionId)).not.toContain('ses_F1eBad')
+      expect(sqliteAgent.getSqliteAgentSourceStatus('opencode')).toMatchObject({
+        state: 'partial', reason: 'corrupt', sessionsRead: 1, sessionsFailed: 1, sessionsCarriedOver: 0
+      })
+      expect(sqliteAgent.getSqliteAgentSourceStatus('zcode')).toMatchObject({ state: 'absent', reason: null })
+    })
+    const logged = JSON.stringify(warn.mock.calls)
+    for (const secret of [home, 'ses_F1eBad', 'malformed']) expect(logged).not.toContain(secret)
+  }, 30_000)
 })

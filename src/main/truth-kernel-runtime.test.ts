@@ -1,8 +1,14 @@
+import { mkdirSync, rmSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TruthKernelRuntime } from './truth-kernel-runtime'
+import type { CanonicalSessionStore } from './canonical-store'
+import { getSqliteAgentSourceStatus } from './opencode-loader'
+import { loadAllSessions } from './session-loader'
+import { installFakeSqlite3, realSqlite3Path } from './__test-support__/fake-sqlite3'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))) })
@@ -97,4 +103,98 @@ describe('TruthKernelRuntime production owners', () => {
     expect(JSON.stringify(projection)).not.toContain('rawPayload')
     instance.close()
   })
+})
+
+// F1e: OpenCode/ZCode are legacy loaders without canonical diagnostics, so the
+// Doctor row comes from their process-local source status.
+const cliIt = process.platform !== 'win32' && realSqlite3Path() ? it : it.skip
+const emptyCanonicalStore = { sourceStates: () => [], listV2Sessions: () => [] } as unknown as CanonicalSessionStore
+
+function createOpencodeHomeDb(sessionIds: readonly string[]): string {
+  const dbPath = path.join(process.env.HOME!, '.local', 'share', 'opencode', 'opencode.db')
+  mkdirSync(path.dirname(dbPath), { recursive: true })
+  const db = new Database(dbPath)
+  try {
+    db.exec(`
+      CREATE TABLE session (id TEXT PRIMARY KEY, slug TEXT, directory TEXT, title TEXT, model TEXT);
+      CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT, time_created INTEGER);
+      CREATE TABLE part (id TEXT PRIMARY KEY, session_id TEXT, message_id TEXT, type TEXT, idx INTEGER, data TEXT);
+    `)
+    for (const id of sessionIds) {
+      db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?)').run(id, 'doctor-slug', '/fixture/doctor', 'Doctor', 'gpt-5.1')
+      db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(`${id}-user`, id,
+        JSON.stringify({ role: 'user', time: { created: '2026-08-02T00:00:00Z' } }), 1785628800)
+      db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(`${id}-assistant`, id,
+        JSON.stringify({ role: 'assistant', time: { created: '2026-08-02T00:00:01Z' } }), 1785628801)
+      db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)').run(`${id}-part-user`, id, `${id}-user`, 'text', 0,
+        JSON.stringify({ text: 'doctor prompt' }))
+      db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)').run(`${id}-part-assistant`, id, `${id}-assistant`, 'text', 0,
+        JSON.stringify({ text: 'doctor answer' }))
+    }
+  } finally {
+    db.close()
+  }
+  return dbPath
+}
+
+describe('Provider Doctor SQLite-agent rows (F1e)', () => {
+  cliIt('opencode reports found with its session count, then partial and error codes, never paths or stderr', async () => {
+    const input = await fixture()
+    const dbPath = createOpencodeHomeDb(['ses_DoctorGood', 'ses_DoctorBad'])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const instance = runtime(input, async () => null)
+    const row = (providerId: string) =>
+      instance.providerDoctor(emptyCanonicalStore).find((entry) => entry.manifest.providerId === providerId)!
+    try {
+      await loadAllSessions({ readOnly: true, quiet: true })
+      const found = row('swob/opencode')
+      expect(found).toMatchObject({
+        discovery: 'found', discoveryReason: null, sourceLabel: 'opencode · 2', partialEvents: 0
+      })
+      expect(found.lastSuccessfulParseAt).toEqual(expect.any(String))
+      expect(row('swob/zcode')).toMatchObject({ discovery: 'not-found', discoveryReason: null, sourceLabel: 'zcode · 0' })
+
+      const oneSessionFails = installFakeSqlite3({
+        kind: 'fail-matching',
+        match: ['FROM "message"', 'ses_DoctorBad'],
+        stderr: 'Runtime error near line 2: database disk image is malformed (11)'
+      })
+      try {
+        await loadAllSessions({ readOnly: true, quiet: true })
+      } finally {
+        oneSessionFails.restore()
+      }
+      expect(row('swob/opencode')).toMatchObject({
+        discovery: 'found', discoveryReason: 'partial:corrupt', sourceLabel: 'opencode · 1', partialEvents: 0
+      })
+
+      const busy = installFakeSqlite3({ kind: 'fail', stderr: 'Parse error near line 2: database is locked (5)' })
+      try {
+        await loadAllSessions({ readOnly: true, quiet: true })
+      } finally {
+        busy.restore()
+      }
+      const failed = row('swob/opencode')
+      expect(failed).toMatchObject({ discovery: 'error', discoveryReason: 'busy', sourceLabel: 'opencode · 0', partialEvents: 0 })
+      expect(failed.lastSuccessfulParseAt).toEqual(expect.any(String))
+
+      const surfaced = JSON.stringify([
+        instance.providerDoctor(emptyCanonicalStore),
+        getSqliteAgentSourceStatus('opencode'),
+        getSqliteAgentSourceStatus('zcode'),
+        warn.mock.calls
+      ])
+      for (const secret of [dbPath, path.dirname(dbPath), 'ses_DoctorGood', 'ses_DoctorBad', 'database is locked', 'malformed', 'Parse error']) {
+        expect(surfaced).not.toContain(secret)
+      }
+      expect(warn.mock.calls.map((args) => args.join(' '))).toEqual([
+        '[sqlite-agent] opencode: 1 session read(s) failed (corrupt); 0 carried over',
+        '[sqlite-agent] opencode: discovery unavailable (busy, attempts 2)'
+      ])
+    } finally {
+      warn.mockRestore()
+      instance.close()
+      rmSync(path.join(process.env.HOME!, '.local'), { recursive: true, force: true })
+    }
+  }, 30_000)
 })

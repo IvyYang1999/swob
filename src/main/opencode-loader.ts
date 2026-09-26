@@ -205,13 +205,23 @@ export interface SqliteAgentDiscovery {
 }
 
 /**
- * Discover the sessions of one SQLite-backed source. Never throws: a read
- * failure is 'unavailable' with a fixed reason code, never an empty success,
- * so no caller can mistake it for "every session is gone".
+ * Discover the sessions of one SQLite-backed source and record the outcome in
+ * its source status. Never throws: a read failure is 'unavailable' with a
+ * fixed reason code, never an empty success, so no caller can mistake it for
+ * "every session is gone".
  */
 export async function discoverSqliteAgentSessions(
   source: SqliteAgentSource,
   dbPath = getSqliteAgentDbPath(source)
+): Promise<SqliteAgentDiscovery> {
+  const discovery = await probeSqliteAgentSessions(source, dbPath)
+  recordSqliteAgentDiscovery(source, discovery)
+  return discovery
+}
+
+async function probeSqliteAgentSessions(
+  source: SqliteAgentSource,
+  dbPath: string
 ): Promise<SqliteAgentDiscovery> {
   if (!fs.existsSync(dbPath)) return { state: 'absent', reason: null, attempts: 0, refs: [], dbPath }
   const trace: SqliteCliTrace = { attempts: 0 }
@@ -239,6 +249,112 @@ export async function discoverSqliteAgentSessions(
       dbPath
     }
   }
+}
+
+// --- Source status ---
+
+export type SqliteAgentSourceState = 'ok' | 'partial' | 'unavailable' | 'absent'
+
+/**
+ * Latest outcome of one SQLite-backed source in this process. Fixed codes and
+ * counts only: never a path, a session id or sqlite3 stderr.
+ */
+export interface SqliteAgentSourceStatus {
+  /** 'partial': discovery succeeded but some session reads failed. */
+  state: SqliteAgentSourceState
+  reason: SqliteAgentFailureCode | null
+  /** When this status was last updated (ISO-8601). */
+  at: string
+  /** Last successful discovery in this process (ISO-8601), or null. */
+  lastSuccessAt: string | null
+  /** Most sqlite3 invocations one statement of the latest discovery needed (1 = no retry). */
+  attempts: number
+  /** Sessions the latest load showed from a successful read or a signature-valid cache hit. */
+  sessionsRead: number
+  /** Sessions whose read failed in the latest load. */
+  sessionsFailed: number
+  /** Sessions the latest load showed from their last good summary because a read failed. */
+  sessionsCarriedOver: number
+}
+
+/** Session-phase tallies the session loader reports after each load. */
+export interface SqliteAgentLoadOutcome {
+  sessionsRead: number
+  sessionsFailed: number
+  sessionsCarriedOver: number
+  /** First failure code among the session reads, if any. */
+  reason: SqliteAgentFailureCode | null
+}
+
+const sourceStatuses = new Map<SqliteAgentSource, SqliteAgentSourceStatus>()
+const warnedSourceStates = new Map<SqliteAgentSource, string>()
+
+/** Process-local status of a SQLite-backed source; null until it is first discovered. */
+export function getSqliteAgentSourceStatus(source: SqliteAgentSource): SqliteAgentSourceStatus | null {
+  const status = sourceStatuses.get(source)
+  return status ? { ...status } : null
+}
+
+function recordSqliteAgentDiscovery(source: SqliteAgentSource, discovery: SqliteAgentDiscovery): void {
+  const previous = sourceStatuses.get(source)
+  const at = new Date().toISOString()
+  sourceStatuses.set(source, {
+    state: discovery.state,
+    reason: discovery.reason,
+    at,
+    lastSuccessAt: discovery.state === 'ok' ? at : previous?.lastSuccessAt ?? null,
+    attempts: discovery.attempts,
+    sessionsRead: 0,
+    sessionsFailed: 0,
+    sessionsCarriedOver: 0
+  })
+  if (discovery.state === 'unavailable') {
+    warnSqliteAgentStatus(
+      source,
+      `unavailable:${discovery.reason}`,
+      `discovery unavailable (${discovery.reason}, attempts ${discovery.attempts})`
+    )
+  } else if (discovery.state === 'absent') {
+    warnedSourceStates.delete(source)
+  }
+}
+
+/**
+ * Record the session phase of the load that followed a discovery. Failed
+ * session reads turn a successful discovery into 'partial'; an unavailable or
+ * absent source keeps its discovery state and only gains the counts.
+ */
+export function recordSqliteAgentLoad(source: SqliteAgentSource, outcome: SqliteAgentLoadOutcome): void {
+  const previous = sourceStatuses.get(source)
+  if (!previous) return
+  const discovered = previous.state === 'ok' || previous.state === 'partial'
+  const partial = discovered && outcome.sessionsFailed > 0
+  const reason = partial ? outcome.reason ?? 'sqlite-error' : discovered ? null : previous.reason
+  sourceStatuses.set(source, {
+    ...previous,
+    state: discovered ? (partial ? 'partial' : 'ok') : previous.state,
+    reason,
+    at: new Date().toISOString(),
+    sessionsRead: outcome.sessionsRead,
+    sessionsFailed: outcome.sessionsFailed,
+    sessionsCarriedOver: outcome.sessionsCarriedOver
+  })
+  if (partial) {
+    warnSqliteAgentStatus(
+      source,
+      `partial:${reason}`,
+      `${outcome.sessionsFailed} session read(s) failed (${reason}); ${outcome.sessionsCarriedOver} carried over`
+    )
+  } else if (discovered) {
+    warnedSourceStates.delete(source)
+  }
+}
+
+/** Log a failure state once per change, with fixed codes and counts only. */
+function warnSqliteAgentStatus(source: SqliteAgentSource, key: string, detail: string): void {
+  if (warnedSourceStates.get(source) === key) return
+  warnedSourceStates.set(source, key)
+  console.warn(`[sqlite-agent] ${source}: ${detail}`)
 }
 
 /**

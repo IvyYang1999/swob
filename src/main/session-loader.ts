@@ -27,8 +27,8 @@ import {
   type CodexSubagentRecord
 } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup } from './cursor-loader'
-import { findOpencodeSessionFiles, buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, stripOpencodeSessionRef } from './opencode-loader'
-import { findZcodeSessionFiles, buildZcodeSessionSummary, buildZcodeSessionDetail, buildZcodeSessionSummaryFromBackup, stripZcodeSessionRef } from './zcode-loader'
+import { buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, discoverSqliteAgentSessions, recordSqliteAgentLoad, sqliteAgentFailureCode, stripOpencodeSessionRef, type SqliteAgentFailureCode } from './opencode-loader'
+import { buildZcodeSessionSummary, buildZcodeSessionDetail, buildZcodeSessionSummaryFromBackup, stripZcodeSessionRef } from './zcode-loader'
 import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
 import { detectTranscriptOrigin } from './transcript-origin'
@@ -2367,8 +2367,14 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
   })
   const codexFiles = isSessionSourceSupported('codex') ? findCodexSessionFiles() : []
   const cursorFiles = isSessionSourceSupported('cursor') ? findCursorSessionFiles() : []
-  const opencodeFiles = isSessionSourceSupported('opencode') ? await findOpencodeSessionFiles() : []
-  const zcodeFiles = isSessionSourceSupported('zcode') ? await findZcodeSessionFiles() : []
+  // SQLite-backed sources report failures explicitly (source status) instead
+  // of resolving an unreadable DB as zero sessions.
+  const sqliteAgentDiscoveries = {
+    opencode: isSessionSourceSupported('opencode') ? await discoverSqliteAgentSessions('opencode') : null,
+    zcode: isSessionSourceSupported('zcode') ? await discoverSqliteAgentSessions('zcode') : null
+  }
+  const opencodeFiles = sqliteAgentDiscoveries.opencode?.refs ?? []
+  const zcodeFiles = sqliteAgentDiscoveries.zcode?.refs ?? []
   const descriptors: Array<{ filePath: string; source: CachedSessionSource }> = [
     ...claudeFiles.map((filePath) => ({ filePath, source: 'claude-code' as const })),
     ...newSourceFiles.flatMap((filePath) => {
@@ -2393,25 +2399,40 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
   const changedPaths = new Set(cache?.requiresFullPersist ? activePaths : [])
   let parsedCount = 0
   let reusedCount = 0
+  const sqliteAgentLoad = {
+    opencode: { sessionsRead: 0, sessionsFailed: 0, sessionsCarriedOver: 0, reason: null as SqliteAgentFailureCode | null },
+    zcode: { sessionsRead: 0, sessionsFailed: 0, sessionsCarriedOver: 0, reason: null as SqliteAgentFailureCode | null }
+  }
 
   await parallelForEach(currentFiles, 4, async ({ filePath, source, sig }) => {
     const cached = cache?.entries[filePath]
+    const sqliteLoad = source === 'opencode' || source === 'zcode' ? sqliteAgentLoad[source] : null
     if (cached?.sig === sig && cached.perFile?.source === source &&
       (source !== 'claude-code' || cached.perFile.lineageMeta?.lineageFormatVersion === 2) &&
       Array.isArray(cached.perFile.lineageMeta?.leafUuidRefs)) {
       entries[filePath] = cached
       reusedCount++
+      if (sqliteLoad && cached.perFile.summary) sqliteLoad.sessionsRead++
       return
     }
 
     parsedCount++
     changedPaths.add(filePath)
     try {
-      entries[filePath] = { sig, perFile: await buildPerFileCache(filePath, source) }
-    } catch {
+      const perFile = await buildPerFileCache(filePath, source)
+      entries[filePath] = { sig, perFile }
+      if (sqliteLoad && perFile.summary) sqliteLoad.sessionsRead++
+    } catch (error) {
+      if (sqliteLoad) {
+        sqliteLoad.sessionsFailed++
+        sqliteLoad.reason ??= sqliteAgentFailureCode(error)
+      }
       entries[filePath] = { sig, perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source } }
     }
   })
+  for (const source of ['opencode', 'zcode'] as const) {
+    if (sqliteAgentDiscoveries[source]) recordSqliteAgentLoad(source, sqliteAgentLoad[source])
+  }
 
   // Rebuild lineage from every file's cached metadata. Only changed/new files were parsed above.
   const filesBySession = new Map<string, FileEntry[]>()

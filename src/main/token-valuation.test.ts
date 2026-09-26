@@ -4,9 +4,12 @@ import { extractCodexTokenAccounting, type CodexLine } from './codex-loader'
 import {
   accountClaudeUsage,
   accountCodexUsage,
+  mergeTokenAccountings,
   tokenUsageFromAccounting,
+  uniqueBillingEvents,
   type TokenAccounting,
-  type UsageEvent
+  type UsageEvent,
+  type UsageScope
 } from './token-accounting'
 import { accountOpenCodeMessageUsage, accountZCodeModelUsage } from './sqlite-agent-usage'
 import {
@@ -26,6 +29,14 @@ import {
   type PricingRule
 } from './pricing-catalog'
 import type { RawJsonlMessage, SessionSummary } from './types'
+import {
+  codexClock,
+  codexRow,
+  codexTime,
+  copiedPrefix,
+  type CodexFixtureRow,
+  type CodexRowBase
+} from './__fixtures__/codex-rollout-synthetic'
 
 function claudeUsageRow(input: {
   id: string
@@ -668,5 +679,151 @@ describe('t113 golden parser and priority fixtures', () => {
       whatIf: true
     })
     expect(valueUsageEvent(event)).toEqual(current)
+  })
+})
+
+// 估价与计费合计（uniqueBillingEvents）按同一条规则选每个计费事实的归属：同键取第一条，
+// 之后只有 main 能替换非 main（usage-facts 同样 main 优先）。分叉子 agent 抄写的 token_count
+// 与父会话同键（F1b ④），合并账本里子文件排在父之后，估价不能落到副本上（F1h）。
+// 键序照《附录-Codex键序普查》（__fixtures__/codex-rollout-synthetic.ts）；值全部是合成的。
+describe('估价与计费合计同一条同键归属规则（F1h）', () => {
+  const PARENT_ID = '7f1b0000-0000-4000-8000-0000000000f1'
+  const CHILD_ID = '7f1b0000-0000-4000-8000-0000000000f2'
+  const MODEL = 'gpt-5'
+
+  /** 父会话两轮（gpt-5）：101,000 + 151,500 = 252,500 token，$0.1125 + $0.1575 = $0.27。 */
+  const parentRows = (): CodexFixtureRow[] => {
+    const at = codexClock('2026-07-31T12:00:00.000Z')
+    return [
+      codexRow.topLevelMeta({ ...at(), id: PARENT_ID, cwd: '/repo' }),
+      codexRow.turnContext({ ...at(), turnId: 'turn-1', cwd: '/repo', model: MODEL }),
+      codexRow.tokenCount({
+        ...at(),
+        total: { input: 100_000, cached: 20_000, output: 1_000 },
+        last: { input: 100_000, cached: 20_000, output: 1_000 }
+      }),
+      codexRow.turnContext({ ...at(), turnId: 'turn-2', cwd: '/repo', model: MODEL }),
+      codexRow.tokenCount({
+        ...at(),
+        total: { input: 250_000, cached: 60_000, output: 2_500 },
+        last: { input: 150_000, cached: 40_000, output: 1_500 }
+      })
+    ]
+  }
+
+  /**
+   * 分叉子：session_meta、`lead` 行、不含 turn_context 的抄写前缀（时间戳改写），
+   * 再是子自己的一轮（gpt-5）：60,500 token，$0.0575。
+   */
+  const childRows = (
+    parent: CodexFixtureRow[],
+    lead: (at: () => CodexRowBase) => CodexFixtureRow[]
+  ): CodexFixtureRow[] => {
+    const forkedAt = '2026-07-31T13:00:00.000Z'
+    const at = codexClock(forkedAt)
+    const metaBase = at()
+    const leading = lead(at)
+    const inherited = copiedPrefix(
+      parent.slice(1).filter((row) => row.type !== 'turn_context'),
+      { startIso: codexTime(forkedAt, 10_000), firstOrdinal: 1 + leading.length }
+    )
+    const ownStart = 1 + leading.length + inherited.length
+    const own = codexClock(codexTime(forkedAt, 60_000), ownStart)
+    return [
+      codexRow.threadSpawnMeta({
+        ...metaBase, id: CHILD_ID, parentId: PARENT_ID, cwd: '/repo', depth: 1, historyStartOrdinal: ownStart
+      }),
+      ...leading,
+      ...inherited,
+      codexRow.turnContext({ ...own(), turnId: 'child-own-turn', cwd: '/repo', model: MODEL }),
+      codexRow.tokenCount({
+        ...own(),
+        total: { input: 310_000, cached: 80_000, output: 3_000 },
+        last: { input: 60_000, cached: 20_000, output: 500 }
+      })
+    ]
+  }
+
+  const forkLedgers = (lead: (at: () => CodexRowBase) => CodexFixtureRow[]) => {
+    const rows = parentRows()
+    const parent = extractCodexTokenAccounting(rows as unknown as CodexLine[])
+    const child = extractCodexTokenAccounting(childRows(rows, lead) as unknown as CodexLine[], 'subagent')
+    const parentKeys = new Set(parent.usageEvents.map((event) => event.billingFactKey))
+    return {
+      parent,
+      copies: child.usageEvents.filter((event) => parentKeys.has(event.billingFactKey)),
+      childOwn: child.usageEvents.filter((event) => !parentKeys.has(event.billingFactKey)),
+      // 子文件排在父之后，与 session-loader 合并父子账本的顺序一致。
+      merged: mergeTokenAccountings([parent, child], { auditSourceIds: [PARENT_ID, CHILD_ID] })
+    }
+  }
+
+  it('副本在任何 turn_context 之前抄写（没有 model）：合并估价 = 父单独估价 + 子自己那条', () => {
+    const { parent, copies, childOwn, merged } = forkLedgers(() => [])
+
+    expect(copies.map((event) => event.model)).toEqual([undefined, undefined])
+    expect(childOwn).toHaveLength(1)
+    expect(merged.billingTotal).toBe(313_000)
+
+    const parentValuation = valuationForAccounting(parent)
+    const ownValuation = valueUsageEvent(childOwn[0])
+    const valuation = valuationForAccounting(merged)
+
+    expect(parentValuation.usd).toBeCloseTo(0.27, 12)
+    expect(ownValuation.usd).toBeCloseTo(0.0575, 12)
+    expect(valuation.usd).toBeCloseTo(parentValuation.usd! + ownValuation.usd!, 12)
+    expect(valuation.usd).toBeCloseTo(0.3275, 12)
+    expect(valuation).toMatchObject({ coveredTokens: 313_000, totalBillableTokens: 313_000, missingReasons: [] })
+  })
+
+  it('副本带子 agent 自己的另一个已定价 model：估价仍取父，不按副本的 model 计价', () => {
+    const { parent, copies, childOwn, merged } = forkLedgers((at) => [
+      codexRow.turnContext({ ...at(), turnId: 'child-first-turn', cwd: '/repo', model: 'gpt-5.4' })
+    ])
+
+    expect(copies.map((event) => event.model)).toEqual(['gpt-5.4', 'gpt-5.4'])
+    // 副本本身能定价：取错了也不会显示为未定价，只会静默按 gpt-5.4 计价。
+    expect(copies.every((event) => valueUsageEvent(event).coveragePercent === 100)).toBe(true)
+    expect(childOwn).toHaveLength(1)
+    expect(merged.billingTotal).toBe(313_000)
+
+    const valuation = valuationForAccounting(merged)
+
+    expect(valuation.usd).toBeCloseTo(valuationForAccounting(parent).usd! + valueUsageEvent(childOwn[0]).usd!, 12)
+    expect(valuation.usd).toBeCloseTo(0.3275, 12)
+    expect(valuation).toMatchObject({ coveredTokens: 313_000, totalBillableTokens: 313_000, missingReasons: [] })
+    expect([...new Set(valuation.pricingRules.map((trace) => trace.modelCanonical))]).toEqual([MODEL])
+  })
+
+  it('守卫：valueUsageEvents 与 uniqueBillingEvents 对同一组事件选出同一批 dedupKey', () => {
+    const event = (dedupKey: string, scope: UsageScope, billingFactKey?: string): UsageEvent =>
+      accountCodexUsage([{
+        kind: 'incremental', timestamp: '2026-07-31T12:00:00Z', model: MODEL, providerRaw: 'openai',
+        inputTokens: 1_000, outputTokens: 100, dedupHint: dedupKey, ...(billingFactKey ? { billingFactKey } : {})
+      }], scope).usageEvents[0]
+    const events = [
+      // 后到的 main 替换非 main
+      event('a-subagent', 'subagent', 'fact-a'), event('a-main', 'main', 'fact-a'),
+      // 先到的 main 不被副本替换
+      event('b-main', 'main', 'fact-b'), event('b-subagent', 'subagent', 'fact-b'),
+      // 都不是 main：取第一条
+      event('c-sidechain', 'sidechain', 'fact-c'), event('c-subagent', 'subagent', 'fact-c'),
+      // 两条 main：取第一条
+      event('d-main', 'main', 'fact-d'), event('d-main-again', 'main', 'fact-d'),
+      event('e-inherited', 'inherited', 'fact-e'), event('e-main', 'main', 'fact-e'),
+      event('e-subagent', 'subagent', 'fact-e'),
+      // 没有 billingFactKey：按 dedupKey
+      event('f-only', 'main')
+    ]
+    const owners = uniqueBillingEvents(events).map((owner) => owner.dedupKey)
+    const lastPerKey = [...new Map(events.map((item) => [item.billingFactKey || item.dedupKey, item.dedupKey])).values()]
+    const valuation = valueUsageEvents(events)
+
+    expect(owners).toEqual(['a-main', 'b-main', 'c-sidechain', 'd-main', 'e-main', 'f-only'])
+    // 夹具有区分力：同键取最后一条会选出另一批。
+    expect(new Set(lastPerKey)).not.toEqual(new Set(owners))
+    // 每条入选事件都定价，pricingRules 的 eventDedupKey 就是估价选中的那一批。
+    expect(valuation.coveredTokens).toBe(valuation.totalBillableTokens)
+    expect(new Set(valuation.pricingRules.map((trace) => trace.eventDedupKey))).toEqual(new Set(owners))
   })
 })

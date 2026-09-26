@@ -410,7 +410,7 @@ function compactUsageEventRollup(event: UsageEvent): CompactUsageEventRollup {
   ]
 }
 
-function uniqueBillingEvents(events: UsageEvent[]): UsageEvent[] {
+export function uniqueBillingEvents(events: UsageEvent[]): UsageEvent[] {
   const selected = new Map<string, UsageEvent>()
   for (const event of events) {
     const key = event.billingFactKey || event.dedupKey

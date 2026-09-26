@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { readJsonlRecords, type JsonlReadStats } from './jsonl-lines'
 import { Worker } from 'node:worker_threads'
+import { randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { parser as createJsonParser } from 'stream-json'
 import { pick } from 'stream-json/filters/Pick'
@@ -2341,6 +2342,7 @@ interface LegacySessionLoadResult {
   reusedCount: number
   fileCount: number
   startedAt: number
+  evidence: SessionLoadEvidence
 }
 
 interface LoadAllSessionsResult extends Omit<
@@ -2398,6 +2400,7 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
     throw new Error('synthetic-session-load-failure')
   }
   const startedAt = Date.now()
+  const loadId = randomUUID()
   const claudeFiles = isSessionSourceSupported('claude-code') ? findClaudeSessionFiles() : []
   const newSourceFiles = findNewSourceSessionFiles().filter((filePath) => {
     const source = detectSessionSourceFromPath(filePath)
@@ -2500,6 +2503,26 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
   })
   for (const source of ['opencode', 'zcode'] as const) {
     if (sqliteAgentDiscoveries[source]) recordSqliteAgentLoad(source, sqliteAgentLoad[source])
+  }
+  // Evidence of this load for the usage ledger, taken from this load's own
+  // locals (never the process-wide source status): whether the summary cache
+  // was usable, and what each SQLite source's discovery found.
+  const sqliteSourceEvidence: Partial<Record<SqliteAgentSource, SqliteSourceLoadEvidence>> = {}
+  for (const source of ['opencode', 'zcode'] as const) {
+    const discovery = sqliteAgentDiscoveries[source]
+    if (!discovery) continue
+    sqliteSourceEvidence[source] = {
+      discovery: discovery.state,
+      // `<dbPath>#<session id>` -> the session id; the path never leaves.
+      presentSessionIds: discovery.state === 'ok'
+        ? discovery.refs.map((ref) => ref.slice(ref.lastIndexOf('#') + 1))
+        : []
+    }
+  }
+  const evidence: SessionLoadEvidence = {
+    loadId,
+    summaryCache: !cache || cache.requiresFullPersist ? 'cold' : 'warm',
+    sqliteSources: sqliteSourceEvidence
   }
 
   // Rebuild lineage from every file's cached metadata. Only changed/new files were parsed above.
@@ -2760,7 +2783,8 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
     parsedCount,
     reusedCount,
     fileCount: currentFiles.length,
-    startedAt
+    startedAt,
+    evidence
   }
 }
 
@@ -2840,7 +2864,8 @@ function getWritableSessionLoadFlight(omitCachedUsageEvents = false): Promise<Lo
       reusedCount: legacy.reusedCount,
       fileCount: legacy.fileCount,
       elapsedMs: Date.now() - legacy.startedAt,
-      providerStatus: projection.providerStatus
+      providerStatus: projection.providerStatus,
+      evidence: legacy.evidence
     }
   })()
   const tracked = started.finally(() => {
@@ -2855,9 +2880,9 @@ function getWritableSessionLoadFlight(omitCachedUsageEvents = false): Promise<Lo
   return tracked
 }
 
-export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
+function loadAllSessionsSnapshot(options: LoadAllSessionsOptions): Promise<LoadAllSessionsResult> {
   if (options.migrateLegacyCache) {
-    return migrateLegacyDiskCacheToSqlite().then(() => loadAllSessions({
+    return migrateLegacyDiskCacheToSqlite().then(() => loadAllSessionsSnapshot({
       ...options,
       migrateLegacyCache: false
     }))
@@ -2870,7 +2895,8 @@ export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<S
         reusedCount: legacy.reusedCount,
         fileCount: legacy.fileCount,
         elapsedMs: Date.now() - legacy.startedAt,
-        providerStatus: 'complete'
+        providerStatus: 'complete',
+        evidence: legacy.evidence
       }))
     : getWritableSessionLoadFlight(options.omitCachedUsageEvents === true)
 
@@ -2881,13 +2907,39 @@ export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<S
         `files ${snapshot.fileCount}, ${snapshot.elapsedMs}ms`
       )
     }
-    return snapshot.summaries
+    return snapshot
   })
+}
+
+export function loadAllSessions(options: LoadAllSessionsOptions = {}): Promise<SessionSummary[]> {
+  return loadAllSessionsSnapshot(options).then((snapshot) => snapshot.summaries)
+}
+
+export interface SessionLoadWithEvidence {
+  sessions: SessionSummary[]
+  /** Evidence of the physical load these sessions came from, shared by every reader of that load. */
+  evidence: SessionLoadEvidence
+}
+
+/**
+ * loadAllSessions(options), plus the evidence of the physical load it read,
+ * which the usage ledger needs to tell an absent session from a deleted one.
+ * The evidence travels with this result, never through process-wide state.
+ */
+export function loadAllSessionsWithEvidence(
+  options: LoadAllSessionsOptions = {}
+): Promise<SessionLoadWithEvidence> {
+  return loadAllSessionsSnapshot(options).then((snapshot) => ({
+    sessions: snapshot.summaries,
+    evidence: snapshot.evidence
+  }))
 }
 
 export interface SessionLoadCompletion {
   sessions: SessionSummary[]
   providerStatus: 'complete' | 'degraded'
+  /** Evidence of the physical load behind `sessions`. */
+  evidence?: SessionLoadEvidence
 }
 
 export function restoreOmittedUsageEvents(
@@ -2919,7 +2971,8 @@ export function loadAllSessionsWithProviderStatus(
 ): Promise<SessionLoadCompletion> {
   return getWritableSessionLoadFlight(options.omitCachedUsageEvents === true).then((snapshot) => ({
     sessions: snapshot.summaries,
-    providerStatus: snapshot.providerStatus
+    providerStatus: snapshot.providerStatus,
+    evidence: snapshot.evidence
   }))
 }
 

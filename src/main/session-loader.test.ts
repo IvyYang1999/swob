@@ -40,6 +40,7 @@ import {
   type CodexFixtureRow,
   type CodexRowBase
 } from './__fixtures__/codex-rollout-synthetic'
+import { isSessionSourceSupported } from './platform-support'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -3318,4 +3319,122 @@ describe('Codex 子 agent：压缩、分叉用量与孙级挂接（F1b）', () =
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
+})
+
+// F1f: evidence of each physical load, for the usage ledger
+// ========================================================
+describe('physical-load evidence for the usage ledger (F1f)', () => {
+  const fakes: FakeSqlite3[] = []
+  const homes: string[] = []
+
+  function tempHome(label: string): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `swob-f1f-${label}-home-`))
+    homes.push(home)
+    return home
+  }
+
+  function install(behavior: Parameters<typeof installFakeSqlite3>[0]): FakeSqlite3 {
+    const fake = installFakeSqlite3(behavior)
+    fakes.push(fake)
+    return fake
+  }
+
+  afterEach(() => {
+    for (const fake of fakes.splice(0)) fake.restore()
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  function setSummaryCacheVersion(home: string, version: number): void {
+    const database = new Database(summaryCacheDbPath(home))
+    try {
+      database.pragma(`user_version = ${version}`)
+    } finally {
+      database.close()
+    }
+  }
+
+  const absentSqliteSources = () => Object.fromEntries((['opencode', 'zcode'] as const)
+    .filter((source) => isSessionSourceSupported(source))
+    .map((source) => [source, { discovery: 'absent', presentSessionIds: [] }]))
+
+  it('one evidence per physical load, shared by every reader of its flight; cold until the summary cache is usable', async () => {
+    const home = tempHome('evidence')
+    writeJsonlAt(path.join(home, '.claude', 'projects', '-Users-test-evidence', 'evidence-session.jsonl'), [
+      rawMsg({ sessionId: 'evidence-session', type: 'user', message: { role: 'user', content: 'evidence fixture' } })
+    ])
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      // The desktop's first paint (read-only), its writable completion and an
+      // action reload that overlap all read one physical load.
+      const [readOnly, writable, completion] = await Promise.all([
+        sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true }),
+        sessionLoader.loadAllSessionsWithEvidence({ quiet: true }),
+        sessionLoader.loadAllSessionsWithProviderStatus()
+      ])
+      expect(readOnly.sessions.map((session) => session.sessionId)).toEqual(['evidence-session'])
+      expect(writable.evidence).toBe(readOnly.evidence)
+      expect(completion.evidence).toBe(readOnly.evidence)
+      expect(readOnly.evidence).toEqual({
+        loadId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+        summaryCache: 'cold',
+        sqliteSources: absentSqliteSources()
+      })
+
+      // The next load is independent, and the writable load above saved the cache.
+      const warm = await sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true })
+      expect(warm.evidence.loadId).not.toBe(readOnly.evidence.loadId)
+      expect(warm.evidence.summaryCache).toBe('warm')
+      expect(warm.sessions).toEqual(await sessionLoader.loadAllSessions({ readOnly: true, quiet: true }))
+
+      // Another CACHE_VERSION (as after F1d) or no cache at all is cold again.
+      setSummaryCacheVersion(home, 1)
+      expect((await sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true })).evidence.summaryCache)
+        .toBe('cold')
+      removeSummaryCache(home)
+      expect((await sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true })).evidence.summaryCache)
+        .toBe('cold')
+    })
+  }, 30_000)
+
+  sqliteCliIt('reports each SQLite source discovery and the session ids it lists, never a path', async () => {
+    const home = tempHome('sqlite-evidence')
+    const firstRef = createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1fListedA')
+    const dbPath = firstRef.slice(0, firstRef.lastIndexOf('#'))
+    addSqliteAgentSession(dbPath, 'ses_F1fListedB', 'second evidence session')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const evidences: unknown[] = []
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const ok = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      evidences.push(ok.evidence)
+      expect(ok.evidence.sqliteSources.opencode).toEqual({ discovery: 'ok', presentSessionIds: expect.any(Array) })
+      expect([...ok.evidence.sqliteSources.opencode!.presentSessionIds].sort())
+        .toEqual(['ses_F1fListedA', 'ses_F1fListedB'])
+      expect(ok.evidence.sqliteSources.zcode).toEqual({ discovery: 'absent', presentSessionIds: [] })
+
+      // A failed session read leaves the discovery 'ok': the DB still lists it.
+      install({ kind: 'fail-matching', match: ['FROM "message"', 'ses_F1fListedB'], stderr: CORRUPT_STDERR })
+      touchSqliteAgentDb(dbPath)
+      const partial = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      evidences.push(partial.evidence)
+      expect([...partial.evidence.sqliteSources.opencode!.presentSessionIds].sort())
+        .toEqual(['ses_F1fListedA', 'ses_F1fListedB'])
+      for (const fake of fakes.splice(0)) fake.restore()
+
+      // A failed discovery lists nothing, even while the sessions are carried over.
+      install({ kind: 'fail', stderr: BUSY_STDERR })
+      touchSqliteAgentDb(dbPath)
+      const unavailable = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      evidences.push(unavailable.evidence)
+      expect(unavailable.sessions.map((session) => session.sessionId))
+        .toEqual(expect.arrayContaining(['ses_F1fListedA', 'ses_F1fListedB']))
+      expect(unavailable.evidence.sqliteSources.opencode).toEqual({ discovery: 'unavailable', presentSessionIds: [] })
+    })
+
+    const serialized = JSON.stringify(evidences)
+    for (const secret of [home, dbPath, 'opencode.db', 'database is locked', 'malformed']) {
+      expect(serialized).not.toContain(secret)
+    }
+  }, 60_000)
 })

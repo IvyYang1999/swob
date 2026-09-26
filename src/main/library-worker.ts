@@ -38,7 +38,7 @@ import {
   synchronizeSearchSources,
   tombstoneCanonicalSession
 } from './search-index'
-import { closeUsageFactStore, synchronizeUsageFacts } from './usage-fact-store'
+import { closeUsageFactStore, synchronizeUsageFacts, type UsageFactAbsenceEvidence } from './usage-fact-store'
 import type { Folder, SessionSummary } from './types'
 import type { UsageFactSyncResult } from './analysis-contract'
 import type { CanonicalRecord } from '../shared/provider-schema.generated'
@@ -108,6 +108,8 @@ export type LibraryWorkerRequest = (
       sessions: SessionSummary[]
       folders: Folder[]
       rebuild?: boolean
+      /** Why sessions may be missing from `sessions`; plain data, safe to structured-clone. */
+      absence?: UsageFactAbsenceEvidence
     }
   | { type: 'search-sources-sync'; sources: SearchIndexSourceDescriptor[]; prune: boolean }
   | { type: 'search-canonical-index'; sessionId: string; records: CanonicalRecord[]; includeThinking?: boolean }
@@ -199,7 +201,8 @@ export async function runLibraryWorkerRequest(
       kind: 'usage-facts-sync',
       value: synchronizeUsageFacts(request.sessions, request.folders, {
         rebuild: request.rebuild,
-        shouldCancel
+        shouldCancel,
+        absence: request.absence
       })
     }
   }
@@ -505,14 +508,15 @@ export class LibraryWorkerClient {
     root: string,
     sessions: SessionSummary[],
     folders: Folder[],
-    options: { rebuild?: boolean } = {}
+    options: { rebuild?: boolean; absence?: UsageFactAbsenceEvidence } = {}
   ): Promise<UsageFactSyncResult> {
     return this.observe(this.request({
       type: 'usage-facts-sync',
       root,
       sessions,
       folders,
-      rebuild: options.rebuild
+      rebuild: options.rebuild,
+      absence: options.absence
     }).then((result) => {
       if (result.kind !== 'usage-facts-sync') throw new Error('Library worker returned an invalid usage fact result')
       return result.value

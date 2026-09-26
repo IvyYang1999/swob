@@ -33,7 +33,7 @@ import {
 
 export interface CodexLine {
   timestamp: string
-  type: 'session_meta' | 'event_msg' | 'response_item' | 'turn_context'
+  type: 'session_meta' | 'event_msg' | 'response_item' | 'turn_context' | 'compacted'
   payload: Record<string, unknown>
 }
 
@@ -503,6 +503,42 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
   const visibleAssistantTextByTurn = new Map<number, Set<string>>()
   const reasoningTurnByMessageId = new Map<string, number>()
 
+  // One compaction can surface as a top-level `compacted` row, a
+  // `response_item.compaction` item and `*compact*` events. Each file counts
+  // its primary format only: `compacted`, else `compaction`, else the events
+  // (unchanged rule). `item_completed(ContextCompaction)` never counts.
+  const compactionFormat: 'compacted' | 'compaction' | 'event' =
+    lines.some((line) => line.type === 'compacted')
+      ? 'compacted'
+      : lines.some((line) => line.type === 'response_item' && line.payload?.type === 'compaction')
+        ? 'compaction'
+        : 'event'
+  // A marker counts once per distinct payload in this file (the checkup
+  // oracle's unit). A cheap shape probe buckets the payloads, so only a probe
+  // collision pays for a full JSON comparison.
+  const countedCompactionMarkers = new Map<string, unknown[]>()
+  const isNewCompactionMarker = (payload: unknown): boolean => {
+    const probe = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? Object.entries(payload).map(([key, value]) => {
+          const shape = typeof value === 'string'
+            ? `s${value.length}`
+            : Array.isArray(value)
+              ? `a${value.length}`
+              : value && typeof value === 'object' ? 'o' : String(value)
+          return `${key}=${shape}`
+        }).join('\u0000')
+      : String(payload)
+    const earlier = countedCompactionMarkers.get(probe)
+    if (!earlier) {
+      countedCompactionMarkers.set(probe, [payload])
+      return true
+    }
+    const serialized = JSON.stringify(payload)
+    if (earlier.some((candidate) => JSON.stringify(candidate) === serialized)) return false
+    earlier.push(payload)
+    return true
+  }
+
   const pushAssistantText = (text: string, timestamp: string, source: 'event_msg' | 'response_item'): void => {
     const normalizedText = stripTerminalControlSequences(text)
     const dedupeKey = normalizedText.trim()
@@ -556,7 +592,7 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
       if (etype === 'agent_message') {
         pushAssistantText((p.message as string) || '', ts, 'event_msg')
       } else if (etype.includes('compact')) {
-        pushSystemFact('compact_boundary', ts, p)
+        if (compactionFormat === 'event') pushSystemFact('compact_boundary', ts, p)
       } else if (etype.includes('rollback') || etype.includes('rolled_back') || etype.includes('undo')) {
         pushSystemFact('rollback', ts, {
           toEventId: typeof p.to_event_id === 'string' ? p.to_event_id : undefined,
@@ -594,7 +630,9 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
           reasoningTurnByMessageId.set(uuid, turnOrdinal)
         }
       } else if (rtype === 'compaction') {
-        pushSystemFact('compact_boundary', ts, p)
+        if (compactionFormat === 'compaction' && isNewCompactionMarker(p)) {
+          pushSystemFact('compact_boundary', ts, p)
+        }
       } else if (rtype === 'message') {
         const role = p.role as string
         if (role === 'developer') continue
@@ -669,6 +707,13 @@ function codexToRawMessages(lines: CodexLine[], sessionId: string): RawJsonlMess
             }] as unknown as ContentPart[]
           }
         })
+      }
+    } else if (line.type === 'compacted') {
+      // A small marker only: replacement_history can hold the whole replaced
+      // history and message is the summary text; neither belongs in the
+      // message stream (memory, detail IPC, search index).
+      if (isNewCompactionMarker(line.payload)) {
+        pushSystemFact('compact_boundary', ts, { format: 'compacted' })
       }
     }
   }

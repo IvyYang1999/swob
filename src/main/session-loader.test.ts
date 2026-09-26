@@ -3079,6 +3079,46 @@ describe('Codex 子 agent：压缩、分叉用量与孙级挂接（F1b）', () =
     ]
   }
 
+  it('子 agent 文件里的 compacted（含抄自父会话的）不计入父会话 compactCount', async () => {
+    const { home, write } = codexHome()
+    const at = codexClock('2026-09-20T08:00:00.000Z')
+    const parentRows = [
+      codexRow.topLevelMeta({ ...at(), id: TOP_ID, cwd: CWD }),
+      codexRow.turnContext({ ...at(), turnId: 'parent-turn-1', cwd: CWD, model: MODEL }),
+      codexRow.userMessage({ ...at(), text: '父会话的问题' }),
+      codexRow.assistantMessage({ ...at(), text: '父会话的回答' }),
+      codexRow.compacted({ ...at(), message: '父会话的压缩', window: 1 }),
+      codexRow.userMessage({ ...at(), text: '压缩后继续' }),
+      codexRow.assistantMessage({ ...at(), text: '继续回答' })
+    ]
+    write(TOP_ID, parentRows)
+    write(CHILD_ID, forkedChildRows({
+      id: CHILD_ID,
+      parentId: TOP_ID,
+      depth: 1,
+      parentRows,
+      forkedAt: '2026-09-20T08:10:00.000Z',
+      own: (next) => [
+        codexRow.turnContext({ ...next(), turnId: 'child-turn-1', cwd: CWD, model: MODEL }),
+        codexRow.userMessage({ ...next(), text: '子任务' }),
+        codexRow.compacted({ ...next(), message: '子 agent 自己的压缩', window: 2 }),
+        codexRow.assistantMessage({ ...next(), text: '子任务完成' })
+      ]
+    }))
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+
+      expect(sessions.map((session) => session.sessionId)).toEqual([TOP_ID])
+      expect(sessions[0].compactCount).toBe(1)
+      expect(sessions[0].subagents).toEqual([
+        expect.objectContaining({ sessionId: CHILD_ID, parentSessionId: TOP_ID, role: 'thread-spawn' })
+      ])
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('分叉子 agent 抄写父会话用量快照（时间戳改写）：父会话 billingTotal 只计一次，审计行两份都在', async () => {
     const { home, write } = codexHome()
     const prefix = parentPrefixRows()

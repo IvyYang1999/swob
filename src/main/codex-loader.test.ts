@@ -15,7 +15,15 @@ import {
   parseCodexFileWithStats,
   type CodexLine
 } from './codex-loader'
-import { codexClock, codexRow, codexTime, copiedPrefix } from './__fixtures__/codex-rollout-synthetic'
+import {
+  codexClock,
+  codexJsonl,
+  codexRow,
+  codexTime,
+  copiedPrefix,
+  type CodexFixtureRow,
+  type CodexRowBase
+} from './__fixtures__/codex-rollout-synthetic'
 
 function writeTempJsonl(lines: object[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-test-'))
@@ -804,6 +812,166 @@ describe('codex-loader', () => {
       expect(userTexts).toContain('npm test')
       expect(userTexts.some((t) => t.includes('<user_shell_command>'))).toBe(false)
     })
+  })
+})
+
+// 键序照《附录-Codex键序普查》，见 __fixtures__/codex-rollout-synthetic.ts；值全部是合成的。
+describe('Codex 压缩识别（F1b）', () => {
+  const TOP_ID = '7f1b0000-0000-4000-8000-000000000001'
+  const REPLAYED_FROM_ID = '7f1b0000-0000-4000-8000-000000000002'
+  const CHILD_ID = '7f1b0000-0000-4000-8000-000000000003'
+  const START = '2026-09-20T08:00:00.000Z'
+  const CWD = '/synthetic/project'
+
+  function writeRollout(rows: CodexFixtureRow[], id = TOP_ID): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-f1b-'))
+    const filePath = path.join(dir, `rollout-2026-09-20T08-00-00-${id}.jsonl`)
+    fs.writeFileSync(filePath, codexJsonl(rows))
+    return filePath
+  }
+
+  /** A top-level rollout: one question/answer, then `middle`, then another question/answer. */
+  function topLevelRows(middle: (at: () => CodexRowBase) => CodexFixtureRow[]): CodexFixtureRow[] {
+    const at = codexClock(START)
+    return [
+      codexRow.topLevelMeta({ ...at(), id: TOP_ID, cwd: CWD }),
+      codexRow.turnContext({ ...at(), turnId: 'turn-1', cwd: CWD, model: 'gpt-5.5-codex' }),
+      codexRow.userMessage({ ...at(), text: '第一个问题' }),
+      codexRow.assistantMessage({ ...at(), text: '第一个回答' }),
+      ...middle(at),
+      codexRow.turnContext({ ...at(), turnId: 'turn-2', cwd: CWD, model: 'gpt-5.5-codex' }),
+      codexRow.userMessage({ ...at(), text: '第二个问题' }),
+      codexRow.assistantMessage({ ...at(), text: '第二个回答' })
+    ]
+  }
+
+  async function compactCountOf(rows: CodexFixtureRow[]): Promise<number | undefined> {
+    return (await buildCodexSessionSummary(writeRollout(rows)))?.compactCount
+  }
+
+  it('顶层文件两条 compacted 计 2；消息只带小标记，不带替换历史和摘要正文', async () => {
+    const filePath = writeRollout(topLevelRows((at) => [
+      codexRow.compacted({ ...at(), message: '第一次压缩的摘要正文', window: 1 }),
+      codexRow.userMessage({ ...at(), text: '压缩后继续' }),
+      codexRow.assistantMessage({ ...at(), text: '继续回答' }),
+      codexRow.compacted({ ...at(), message: '第二次压缩的摘要正文', window: 2 })
+    ]))
+
+    const summary = await buildCodexSessionSummary(filePath)
+    const raw = await loadCodexRawMessages(filePath)
+    const detail = await buildCodexSessionDetail(filePath)
+
+    expect(summary?.compactCount).toBe(2)
+    const boundaries = raw.filter((message) => message.type === 'system' && message.subtype === 'compact_boundary')
+    expect(boundaries.map((message) => message.data)).toEqual([{ format: 'compacted' }, { format: 'compacted' }])
+    expect(boundaries.every((message) => message.message === undefined)).toBe(true)
+    const serialized = JSON.stringify(raw)
+    expect(serialized).not.toContain('carried-over')
+    expect(serialized).not.toContain('摘要正文')
+    expect(detail?.compactCount).toBe(2)
+    expect(detail?.messages.filter((message) => message.subtype === 'compact_boundary')).toHaveLength(2)
+    expect(detail?.messages.every((message) => message.isPreCompact === false)).toBe(true)
+  })
+
+  it('compacted、ContextCompaction 与 context_compacted 描述同一次压缩：计 1', async () => {
+    const filePath = writeRollout(topLevelRows((at) => [
+      codexRow.contextCompactedEvent(at()),
+      codexRow.compacted({ ...at(), message: '同一次压缩', window: 1 }),
+      codexRow.contextCompactionEvent({ ...at(), threadId: TOP_ID, turnId: 'turn-1', itemId: 'item-compaction-1' })
+    ]))
+
+    const summary = await buildCodexSessionSummary(filePath)
+    const raw = await loadCodexRawMessages(filePath)
+
+    expect(summary?.compactCount).toBe(1)
+    expect(raw.filter((message) => message.subtype === 'compact_boundary').map((message) => message.data))
+      .toEqual([{ format: 'compacted' }])
+  })
+
+  it('只有新版 response_item.compaction：照数，同文件的 compact 事件不另计', async () => {
+    const count = await compactCountOf(topLevelRows((at) => [
+      codexRow.compactionItem({ ...at(), id: 'compaction-item-1' }),
+      codexRow.contextCompactedEvent(at()),
+      codexRow.compactionItem({ ...at(), id: 'compaction-item-2' }),
+      codexRow.contextCompactedEvent(at())
+    ]))
+
+    expect(count).toBe(2)
+  })
+
+  it('compacted 与新版 compaction 同文件：只数 compacted', async () => {
+    const count = await compactCountOf(topLevelRows((at) => [
+      codexRow.compacted({ ...at(), message: '第一次', window: 1 }),
+      codexRow.compactionItem({ ...at(), id: 'compaction-item-1' }),
+      codexRow.compacted({ ...at(), message: '第二次', window: 2 })
+    ]))
+
+    expect(count).toBe(2)
+  })
+
+  it('同一文件里载荷逐字相同的压缩标记只计一次（与体检 oracle 同口径）', async () => {
+    const count = await compactCountOf(topLevelRows((at) => {
+      const first = codexRow.compacted({ ...at(), message: '重复写入的同一次压缩', window: 1 })
+      const repeated = { ...structuredClone(first), ...at() }
+      return [first, repeated, codexRow.compacted({ ...at(), message: '另一次压缩', window: 2 })]
+    }))
+    const itemCount = await compactCountOf(topLevelRows((at) => {
+      const item = codexRow.compactionItem({ ...at(), id: 'compaction-item-1' })
+      return [item, { ...structuredClone(item), ...at() }]
+    }))
+
+    expect(count).toBe(2)
+    expect(itemCount).toBe(1)
+  })
+
+  it('两种标记都没有时保持原 event_msg 规则；ContextCompaction 一律不计', async () => {
+    const eventOnly = await compactCountOf(topLevelRows((at) => [codexRow.contextCompactedEvent(at())]))
+    const crossCheckOnly = await compactCountOf(topLevelRows((at) => [
+      codexRow.contextCompactionEvent({ ...at(), threadId: TOP_ID, turnId: 'turn-1', itemId: 'item-compaction-1' })
+    ]))
+
+    expect(eventOnly).toBe(1)
+    expect(crossCheckOnly).toBe(0)
+  })
+
+  it('顶层回放文件（两条 session_meta）按文件内标记计，抄来的旧标记也算', async () => {
+    const original = codexClock('2026-09-19T08:00:00.000Z')
+    const rows = [codexRow.topLevelMeta({ ...codexClock(START)(), id: TOP_ID, cwd: CWD })]
+    rows.push(...copiedPrefix([
+      codexRow.topLevelMeta({ ...original(), id: REPLAYED_FROM_ID, cwd: CWD }),
+      codexRow.userMessage({ ...original(), text: '原会话的问题' }),
+      codexRow.assistantMessage({ ...original(), text: '原会话的回答' }),
+      codexRow.compacted({ ...original(), message: '原会话的压缩', window: 1 })
+    ], { startIso: codexTime(START, 500), firstOrdinal: rows.length }))
+    const own = codexClock(codexTime(START, 10_000), rows.length)
+    rows.push(
+      codexRow.turnContext({ ...own(), turnId: 'turn-replay', cwd: CWD, model: 'gpt-5.5-codex' }),
+      codexRow.userMessage({ ...own(), text: '回放后的问题' }),
+      codexRow.assistantMessage({ ...own(), text: '回放后的回答' }),
+      codexRow.compacted({ ...own(), message: '回放后的压缩', window: 2 })
+    )
+
+    const summary = await buildCodexSessionSummary(writeRollout(rows))
+
+    expect(summary).toMatchObject({ lifecycleState: 'replayed', branchParentId: `codex:${REPLAYED_FROM_ID}` })
+    expect(summary?.compactCount).toBe(2)
+  })
+
+  it('子 agent 文件里的 compacted 不生成顶层 summary，也就不进任何 compactCount', async () => {
+    const at = codexClock(START)
+    const filePath = writeRollout([
+      codexRow.threadSpawnMeta({ ...at(), id: CHILD_ID, parentId: TOP_ID, cwd: CWD, depth: 1, historyStartOrdinal: 1 }),
+      codexRow.turnContext({ ...at(), turnId: 'child-turn-1', cwd: CWD, model: 'gpt-5.5-codex' }),
+      codexRow.userMessage({ ...at(), text: '子任务' }),
+      codexRow.compacted({ ...at(), message: '子 agent 的压缩', window: 1 }),
+      codexRow.assistantMessage({ ...at(), text: '子任务完成' })
+    ], CHILD_ID)
+
+    const record = await loadCodexSessionRecord(filePath)
+
+    expect(record.summary).toBeNull()
+    expect(record.subagent).toMatchObject({ sessionId: CHILD_ID, parentSessionId: TOP_ID, role: 'thread-spawn' })
+    expect(await buildCodexSessionDetail(filePath)).toBeNull()
   })
 })
 

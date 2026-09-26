@@ -12,6 +12,7 @@
 
 - **`swob insights` 的 token 标签改为名副其实（对 JSON 消费方不兼容，数值不变）**：insights 的 token 汇总原来标为 `input_plus_output`，但数值一直是计费口径：非缓存输入 + 缓存读 + 缓存写 + 输出。现在标签改为 `billing_total`，涉及 `totalTokensMetric`（`--summary` 与完整 `--json` 输出都有），以及 summary 里 `bySource`、`byModel`、`topProjects` 各行的 `tokenMetric`。所有数值与之前完全相同，只是标签字符串变了；按 `input_plus_output` 匹配 insights 输出的消费方需改认 `billing_total`。`swob list` 与 `swob search` 的 `tokenMetric` 仍是 `input_plus_output`（非缓存输入 + 输出，不含缓存），它们本来就标对了。已安装的 /swob Skill 要重新运行 `swob install` 才会换成新说明。
 - **分叉的 Codex 子 agent 不再顶掉父会话的估价**：分叉子 agent 会抄写父会话的 token 用量，`swob insights` 与会话审计原来估的是这份副本（常常没有 model，于是未定价；或按子 agent 的 model 计价），而不是父会话自己的那次调用。现在估价与 token 合计用同一种方式为每个计费事实选定调用，主线程的调用胜过副本（Insights 页本来就是主线程优先）。token 合计不变。
+- **`swob doctor checkup` 不再把体检自己的推断错误报成内核问题**：② 对 Codex 改用内核逐文件实测的读入数比对（原先把含 U+2028/U+2029 的记录推断为丢失，而读行器修好后内核早已不丢），拿不到读数的文件不再推算、单独列出；③ 同一场 Codex 会话有多份副本、Swob 计数等于其中一份时归为「已解释」（注意，不再判不通过），逐场计数按内核的逐文件规则；`--sources` 只体检部分来源时，报告头、摘要行和盘点都会写明，`--report … --json` 的概要多一个 `sourcesSelected`，文件名是规范报告名（`Swob内核体检-日期-机器标签.md`、`最新-机器标签.md`）的 `--report` 目标会被拒绝。体检程序版本升到 1.2.0。
 
 ## v1.4.0 — 2026-08-08
 

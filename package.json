@@ -44,7 +44,7 @@
     "test:dco": "node scripts/check-dco.mjs --self-test",
     "workflow:validate": "node scripts/workflow/swob-workflow.mjs validate",
     "workflow:selftest": "node scripts/workflow/workflow.selftest.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p packages/core/tsconfig.build.json",
     "check": "npm run check:conflicts && npm run schema:check && npm run check:recovery-readonly && npm run check:library-writes && npm run check:i18n && npm run check:pricing && npm run icons:check && npm run swoblens:check && npm run check:asset-evidence && npm run notices:check && npm run test:package-policy && npm run test:dco && npm run typecheck",
     "recovery:inventory": "node scripts/recovery/inventory.mjs",
     "docs:export": "node scripts/generate-docs.mjs",

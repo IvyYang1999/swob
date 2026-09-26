@@ -12,6 +12,7 @@ import {
 } from './pricing-catalog'
 import {
   processedTotal,
+  uniqueBillingEvents,
   type NormalizedTokenComponents,
   type TokenAccounting,
   type UsageEvent
@@ -574,10 +575,9 @@ export function previewUsageEventsCandidateRepricing(
   candidate: PriceCandidateSnapshot
 ): Valuation {
   assertPriceCandidateIntegrity(candidate)
-  const unique = new Map<string, UsageEvent>()
-  for (const event of events) unique.set(event.billingFactKey || event.dedupKey, event)
+  // Value the same billing owners as valueUsageEvents (uniqueBillingEvents).
   return {
-    ...aggregateValuations([...unique.values()].map((event) =>
+    ...aggregateValuations(uniqueBillingEvents(events).map((event) =>
       valueUsageEventAtCandidate(event, candidate))),
     whatIf: true
   }
@@ -652,9 +652,11 @@ export function valueUsageEvents(
   events: UsageEvent[],
   catalogOrSnapshot?: PriceSnapshot | readonly PricingRule[]
 ): Valuation {
-  const unique = new Map<string, UsageEvent>()
-  for (const event of events) unique.set(event.billingFactKey || event.dedupKey, event)
-  return aggregateValuations([...unique.values()].map((event) => valueUsageEvent(event, catalogOrSnapshot)))
+  // Value the same owner per billing fact that the billing totals count
+  // (uniqueBillingEvents: first seen, and a main-scope event replaces a
+  // non-main one). A forked child's copied token_count shares its parent's
+  // key and is merged after it, so it must not replace the parent's event.
+  return aggregateValuations(uniqueBillingEvents(events).map((event) => valueUsageEvent(event, catalogOrSnapshot)))
 }
 
 export function valuationForAccounting(

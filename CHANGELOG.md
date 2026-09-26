@@ -11,6 +11,7 @@
 ### Fixed
 
 - **`swob insights` token label now names what it counts (breaking for JSON consumers; numbers unchanged)** — the insights token totals were labelled `input_plus_output`, but they have always been the billing total: non-cached input + cache read + cache write + output. The label is now `billing_total`: `totalTokensMetric` (in both the `--summary` and the full `--json` output) and `tokenMetric` on the summary's `bySource`, `byModel` and `topProjects` rows. Every number is exactly as before; only the label string changed, so consumers that match `input_plus_output` on insights output must switch to `billing_total`. `swob list` and `swob search` keep `tokenMetric: "input_plus_output"` (non-cached input + output, no cache), which was already correct. An installed /swob Skill picks up the new wording after `swob install`.
+- **Forked Codex subagents no longer take over their parent's valuation** — a forked subagent copies its parent's token usage, and `swob insights` and the session audit valued that copy (often without a model, so unpriced, or at the subagent's model) instead of the parent's own call. Valuation now picks the call for each billing fact the same way the token totals do, so the main-thread call wins over a copy, as it already did on the Insights page. Token totals are unchanged.
 
 ## v1.4.0 — 2026-08-08
 

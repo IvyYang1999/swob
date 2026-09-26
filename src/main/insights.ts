@@ -3,6 +3,7 @@ import {
   accountingForSession,
   processedTotal,
   totalCacheWriteTokens,
+  uniqueBillingEvents,
   type TokenAccounting,
   type UsageEvent
 } from './token-accounting'
@@ -333,8 +334,10 @@ export function buildInsights(
     if (parsed) {
       parsedSessionCount++
       sessionValuations.push(sessionValuation)
-      for (const event of accounting.usageEvents) {
-        uniqueValuationEvents.set(`${session.sessionId}:${event.dedupKey}`, event)
+      // The billing owners valuationForAccounting values: a forked child's copy
+      // shares its parent's keys and must not replace the parent's event here.
+      for (const event of uniqueBillingEvents(accounting.usageEvents)) {
+        uniqueValuationEvents.set(`${session.sessionId}:${event.billingFactKey || event.dedupKey}`, event)
       }
       bySession.push({
         sessionId: session.sessionId,

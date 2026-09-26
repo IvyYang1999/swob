@@ -202,7 +202,7 @@ export function mixedReport(): CheckupReport {
     schemaVersion: 1,
     generatedAt: '2026-09-27T01:02:03.000Z',
     scope: { kind: 'all' },
-    kernel: { version: '1.4.0', commit: 'e51a952ac9d7580c67fafdc24c99f6d38355860a', readOnly: true, checkupVersion: '1.0.0', selfTest: { passed: 6, total: 6 } },
+    kernel: { version: '1.4.0', commit: 'e51a952ac9d7580c67fafdc24c99f6d38355860a', readOnly: true, checkupVersion: '1.1.0', selfTest: { passed: 6, total: 6 } },
     machine: { platform: 'darwin', hostHash: '0123abcd', nodeVersion: 'v24.21.0' },
     saltFingerprint: FIXTURE_FINGERPRINT,
     verdict: 'fail',

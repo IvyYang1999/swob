@@ -111,7 +111,12 @@ export interface ResumeProbe {
 
 // —— frozen registries (privacy whitelist sources) ——
 export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compaction', 'lineage', 'tokens', 'resume']
-export const CHECKUP_VERSION = '1.0.0'
+/**
+ * Version of the report semantics (kernel.checkupVersion); compared reports with different versions are
+ * flagged. 1.0.0: C1a. 1.1.0: C1b-1 — Claude subagent read counts measured with parseSessionFile [R]
+ * instead of inferred, readoutBySource, readout.source-empty findings under ①.
+ */
+export const CHECKUP_VERSION = '1.1.0'
 export const SELF_TEST_TOTAL = 6
 
 export const SOURCE_IDS = [

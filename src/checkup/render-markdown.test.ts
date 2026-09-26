@@ -190,7 +190,7 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     await expect(markdown).toMatchFileSnapshot('./__fixtures__/snapshots/all-undetermined-owner.md')
     expect(markdown).toContain('## 总评：无法判定')
     expect(markdown).toContain('无法判定（自检没有全部通过，这次不给结论）')
-    expect(markdown).toContain('> 内核：swob 1.4.0 @e51a952 · 只读运行 · 体检程序：checkup 1.0.0 · 自检：5/6')
+    expect(markdown).toContain('> 内核：swob 1.4.0 @e51a952 · 只读运行 · 体检程序：checkup 1.1.0 · 自检：5/6')
     expect(markdown).toContain('## ① 会话纳入 — 无法判定（Swob 侧读数没有在隔离环境里运行，为了安全没有读）')
     expect(markdown).toContain('—（Swob 侧读数没有在隔离环境里运行，为了安全没有读）')
     expect(markdown).not.toContain('建议先处理')
@@ -223,6 +223,11 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     const refused = renderCheckupMarkdown(mixedReport(), { ...RENDER, previous: foreign })
     expect(refused).toContain('和上次比：上次报告来自另一台机器（机器指纹不同），这次不比。')
     expect(refused).not.toContain('## 和上次比')
+    const olderCheckup = clone(previous)
+    olderCheckup.kernel.checkupVersion = '1.0.0'
+    expect(renderCheckupMarkdown(mixedReport(), { ...RENDER, previous: olderCheckup }))
+      .toContain('\n两次的体检程序版本不同（上次 1.0.0，这次 1.1.0），部分差异可能来自体检本身的改动。\n')
+    expect(withPrevious).not.toContain('两次的体检程序版本不同')
     const legacy = clone(previous)
     delete legacy.saltFingerprint
     expect(renderCheckupMarkdown(mixedReport(), { ...RENDER, previous: legacy })).toContain('和上次比：上次报告没有机器指纹（旧版体检生成的），这次不比。')
@@ -247,6 +252,7 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
 describe('renderCheckupMarkdown on the sample HOME report (runKernelCheckup)', () => {
   it('renders owner and engineer versions without any canary', async () => {
     expect(validate(sampleReport), JSON.stringify(validate.errors)).toBe(true)
+    expect(sampleReport.kernel.checkupVersion).toBe('1.1.0')
     const owner = renderCheckupMarkdown(sampleReport, RENDER)
     const engineer = renderCheckupMarkdown(sampleReport, { ...RENDER, audience: 'engineer' })
     for (const canary of Object.values(CANARY)) {

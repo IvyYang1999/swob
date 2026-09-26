@@ -6,7 +6,7 @@ import type {
   ProviderManifest,
   SourceRef
 } from '../shared/provider-schema.generated'
-import piGolden from '../../schema/fixtures/v2/pi-golden.json'
+import piGolden from '../../packages/core/schema/fixtures/v2/pi-golden.json'
 import type {
   ParseChunk as ParseChunkV2,
   ProviderManifest as ProviderManifestV2

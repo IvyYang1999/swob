@@ -4,7 +4,7 @@ This file is generated. Do not edit it by hand.
 Sources: package-lock.json production dependency graph and
 compliance/third-party-static-notices.json.
 Generator: scripts/generate-third-party-notices.mjs
-package-lock.json SHA-256: c10f60275b479e7b3435a518fee9ea582dfec7e8730d89e5d1482ebdd0195724
+package-lock.json SHA-256: 59ab10b42315ef05a81669454524618be48c991f87e385c149e99bec7114a4a9
 Static notices SHA-256: 9e9aa834f58398bc859c9491fe48a8a1df465e32bcac4874a0a75511801563d2
 Unique production packages: 203
 Non-npm notices: 5

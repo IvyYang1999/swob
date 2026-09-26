@@ -17,7 +17,7 @@ if (!destination) {
   throw new Error('Output path required: node scripts/generate-source-matrix.mjs <source-matrix.json>')
 }
 
-const registryFile = resolve(repositoryRoot, 'src/shared/provider-capabilities.ts')
+const registryFile = resolve(repositoryRoot, 'packages/core/src/shared/provider-capabilities.ts')
 const outputFile = resolve(process.cwd(), destination)
 if (outputFile === repositoryRoot || outputFile.startsWith(`${repositoryRoot}${sep}`)) {
   throw new Error('Output must be outside the desktop repository; publish into the standalone website repository')
@@ -83,7 +83,7 @@ if (sources.length !== 14) {
 
 const output = {
   schemaVersion: 2,
-  generatedFrom: 'src/shared/provider-capabilities.ts',
+  generatedFrom: 'packages/core/src/shared/provider-capabilities.ts',
   columns: [
     { id: 'measurement', label: { 'zh-CN': '计量', en: 'Measurement' } },
     { id: 'valuation', label: { 'zh-CN': '计价', en: 'Valuation' } }

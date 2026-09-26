@@ -1,0 +1,35 @@
+{
+  "name": "@swob/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Swob kernel: provider protocol, capability registry and wire schema shared by the desktop app, CLI and external shells.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/entries/index.d.ts",
+      "import": "./dist/entries/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/entries/protocol.d.ts",
+      "import": "./dist/entries/protocol.js"
+    },
+    "./capabilities": {
+      "types": "./dist/entries/capabilities.d.ts",
+      "import": "./dist/entries/capabilities.js"
+    },
+    "./schema/*": "./schema/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1"
+  }
+}

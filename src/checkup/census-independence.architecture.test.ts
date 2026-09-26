@@ -66,7 +66,7 @@ describe('checkup architecture: independent oracle', () => {
   it('census runtime closure stays inside src/checkup (+ the pure capability table)', () => {
     expect(censusEntries.length).toBeGreaterThanOrEqual(7)
     for (const fileName of closure.map(relative)) {
-      expect(fileName.startsWith('src/checkup/') || fileName === 'src/shared/provider-capabilities.ts', fileName).toBe(true)
+      expect(fileName.startsWith('src/checkup/') || fileName === 'src/shared/provider-capabilities.ts' || fileName === 'packages/core/src/shared/provider-capabilities.ts', fileName).toBe(true)
       expect(READING_PATH_MODULES.test(fileName), fileName).toBe(false)
     }
     expect(closure.map(relative).some((fileName) => fileName.startsWith('src/main/'))).toBe(false)
@@ -74,7 +74,7 @@ describe('checkup architecture: independent oracle', () => {
 
   it('the allowed shared table is itself a closed, import-free declaration module', () => {
     const table = path.join(ROOT, 'src', 'shared', 'provider-capabilities.ts')
-    expect(typescriptRuntimeDependencyClosure(table).map(relative)).toEqual(['src/shared/provider-capabilities.ts'])
+    expect(typescriptRuntimeDependencyClosure(table).map(relative)).toEqual(['src/shared/provider-capabilities.ts', 'packages/core/src/shared/provider-capabilities.ts'])
   })
 
   it('census closure has no fs write API, no child_process and no dynamic require', () => {

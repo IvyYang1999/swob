@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { pathToFileURL } from 'node:url'
-import piGolden from '../../schema/fixtures/v2/pi-golden.json'
+import piGolden from '../../packages/core/schema/fixtures/v2/pi-golden.json'
 import type { SourceRef } from '../shared/provider-schema.generated'
 import type { ParseChunk, UsageRecord } from '../shared/provider-schema-v2.generated'
 import { validateParseChunkV2 } from '../shared/provider-protocol-v2'

@@ -13,5 +13,5 @@
     "types": ["node"],
     "resolveJsonModule": true
   },
-  "include": ["src/main/**/*", "src/main/**/*.json", "src/preload/**/*", "src/cli/**/*", "src/shared/**/*", "schema/**/*.json", "electron.vite.config.ts", "src/checkup/**/*", "src/checkup/contract/*.json"]
+  "include": ["src/main/**/*", "src/main/**/*.json", "src/preload/**/*", "src/cli/**/*", "src/shared/**/*", "packages/core/src/**/*", "packages/core/schema/**/*.json", "electron.vite.config.ts", "src/checkup/**/*", "src/checkup/contract/*.json"]
 }

@@ -9,6 +9,9 @@
     "swob": "./out/main/cli.js",
     "swob-workflow": "./scripts/workflow/swob-workflow.mjs"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

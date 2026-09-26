@@ -140,7 +140,16 @@
         "properties": { "code": { "type": "string" }, "source": { "type": "string" }, "count": { "$ref": "#/$defs/Measure" } }
       }
     },
-    "diagnostics": { "type": "object", "additionalProperties": { "type": "number" } }
+    "diagnostics": { "type": "object", "additionalProperties": { "type": "number" } },
+    "readoutBySource": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sessions"],
+        "properties": { "sessions": { "$ref": "#/$defs/Measure" } }
+      }
+    }
   },
   "$defs": {
     "Verdict": { "enum": ["pass", "warn", "fail", "not-applicable", "undetermined"] },

@@ -11,7 +11,13 @@
     "skipLibCheck": true,
     "target": "ESNext",
     "types": ["node"],
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      "@swob/core": ["./packages/core/src/entries/index.ts"],
+      "@swob/core/package.json": ["./packages/core/package.json"],
+      "@swob/core/schema/*": ["./packages/core/schema/*"],
+      "@swob/core/*": ["./packages/core/src/entries/*"]
+    }
   },
-  "include": ["src/main/**/*", "src/main/**/*.json", "src/preload/**/*", "src/cli/**/*", "src/shared/**/*", "schema/**/*.json", "electron.vite.config.ts", "src/checkup/**/*", "src/checkup/contract/*.json"]
+  "include": ["src/main/**/*", "src/main/**/*.json", "src/preload/**/*", "src/cli/**/*", "src/shared/**/*", "packages/core/src/**/*", "packages/core/schema/**/*.json", "packages/core/*.ts", "electron.vite.config.ts", "src/checkup/**/*", "src/checkup/contract/*.json"]
 }

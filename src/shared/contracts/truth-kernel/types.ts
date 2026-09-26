@@ -1,4 +1,5 @@
 import type { CanonicalEvent, JsonValue } from '../../provider-schema-v2.generated'
+import type { ProviderRegistrationDescriptor } from '../../provider-capabilities'
 
 export const TRUTH_KERNEL_SCHEMA_VERSION = 1 as const
 export const TRUTH_KERNEL_SERIALIZATION_VERSION = 'truth-kernel-canonical-json/1' as const
@@ -711,14 +712,7 @@ export interface VerifyBundleManifest {
   claimBoundary: 'integrity-after-ingest'
 }
 
-export interface ProviderRegistrationDescriptor {
-  schemaVersion: TruthKernelSchemaVersion
-  featureId: string
-  providerId: string
-  descriptorVersion: string
-  capabilityContractVersion: string
-  registrationExport: string
-}
+export type { ProviderRegistrationDescriptor }
 
 export interface OrchestrationRegistrationDescriptor {
   schemaVersion: TruthKernelSchemaVersion

@@ -7,7 +7,7 @@
  * - 工具统计数字不对
  * - 分支检测误判
  */
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
   buildSessionSummary,
   buildSessionSummaryFromBackup,
@@ -29,6 +29,7 @@ import {
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import { shellQuote } from './resume-terminal'
 import { accountingFromMutuallyExclusiveUsage } from './token-accounting'
+import { installFakeSqlite3, realSqlite3Path, type FakeSqlite3 } from './__test-support__/fake-sqlite3'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -397,6 +398,77 @@ async function loadAllSessionsFromTempHome(
     if (oldHome === undefined) delete process.env.HOME
     else process.env.HOME = oldHome
     vi.resetModules()
+  }
+}
+
+/**
+ * Import session-loader and the opencode-loader instance it uses, once, under
+ * `home`. Several loads inside `run` share one module instance (a long-lived
+ * desktop process); a later call starts cold.
+ */
+async function withSessionLoaderModules<T>(
+  home: string,
+  run: (modules: {
+    sessionLoader: typeof import('./session-loader')
+    sqliteAgent: typeof import('./opencode-loader')
+  }) => Promise<T>
+): Promise<T> {
+  const oldHome = process.env.HOME
+  process.env.HOME = home
+  vi.resetModules()
+  try {
+    const sessionLoader = await import('./session-loader')
+    const sqliteAgent = await import('./opencode-loader')
+    return await run({ sessionLoader, sqliteAgent })
+  } finally {
+    if (oldHome === undefined) delete process.env.HOME
+    else process.env.HOME = oldHome
+    vi.resetModules()
+  }
+}
+
+/** Add one more session (same layout as createSqliteAgentCacheFixture) to an existing DB. */
+function addSqliteAgentSession(dbPath: string, sessionId: string, prompt: string): string {
+  const db = new Database(dbPath)
+  try {
+    db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?)').run(
+      sessionId, `${sessionId}-slug`, '/fixture/opencode', `${sessionId} title`, 'opencode-model'
+    )
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(`${sessionId}-user`, sessionId,
+      JSON.stringify({ role: 'user', time: { created: '2026-08-03T00:00:00Z' } }), 1785715200)
+    db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(`${sessionId}-assistant`, sessionId,
+      JSON.stringify({ role: 'assistant', parentID: `${sessionId}-user`, time: { created: '2026-08-03T00:00:01Z' } }), 1785715201)
+    const insertPart = db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)')
+    insertPart.run(`${sessionId}-part-user`, sessionId, `${sessionId}-user`, 'text', 0, JSON.stringify({ text: prompt }))
+    insertPart.run(`${sessionId}-part-assistant`, sessionId, `${sessionId}-assistant`, 'text', 0,
+      JSON.stringify({ text: `${prompt} answer` }))
+  } finally {
+    db.close()
+  }
+  return `${dbPath}#${sessionId}`
+}
+
+/** Change a SQLite-agent DB file (and so its cache signature) without touching any session. */
+function touchSqliteAgentDb(dbPath: string): void {
+  const db = new Database(dbPath)
+  try {
+    db.exec('CREATE TABLE IF NOT EXISTS f1e_touch (id INTEGER PRIMARY KEY); INSERT INTO f1e_touch DEFAULT VALUES;')
+  } finally {
+    db.close()
+  }
+}
+
+function readSummaryCacheRow(
+  home: string,
+  filePath: string
+): { sig: string; per_file_json: string; compact_json: string | null } | undefined {
+  const database = new Database(summaryCacheDbPath(home), { readonly: true, fileMustExist: true })
+  try {
+    return database.prepare(
+      'SELECT sig, per_file_json, compact_json FROM summary_cache_entries WHERE file_path = ?'
+    ).get(filePath) as { sig: string; per_file_json: string; compact_json: string | null } | undefined
+  } finally {
+    database.close()
   }
 }
 
@@ -2751,4 +2823,176 @@ describe('parseSessionFile 只按 \\n 分行（F1a）', () => {
       truncated: true
     })
   })
+})
+
+// F1e: SQLite-backed sources (OpenCode/ZCode) under sqlite3 failures
+// ========================================================
+const sqliteCliIt = process.platform !== 'win32' && realSqlite3Path() ? it : it.skip
+const CORRUPT_STDERR = 'Runtime error near line 2: database disk image is malformed (11)'
+const BUSY_STDERR = 'Parse error near line 2: database is locked (5)'
+
+
+describe('SQLite-agent sources under sqlite3 failures (F1e)', () => {
+  const fakes: FakeSqlite3[] = []
+  const homes: string[] = []
+
+  function tempHome(label: string): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `swob-f1e-${label}-home-`))
+    homes.push(home)
+    return home
+  }
+
+  function install(behavior: Parameters<typeof installFakeSqlite3>[0]): FakeSqlite3 {
+    const fake = installFakeSqlite3(behavior)
+    fakes.push(fake)
+    return fake
+  }
+
+  function restoreFakes(): void {
+    for (const fake of fakes.splice(0)) fake.restore()
+  }
+
+  afterEach(() => {
+    restoreFakes()
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  sqliteCliIt('a failed session read marks the source partial with fixed codes and counts', async () => {
+    const home = tempHome('partial')
+    const goodRef = createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1eGood')
+    const dbPath = goodRef.slice(0, goodRef.lastIndexOf('#'))
+    addSqliteAgentSession(dbPath, 'ses_F1eBad', 'bad session prompt')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    install({ kind: 'fail-matching', match: ['FROM "message"', 'ses_F1eBad'], stderr: CORRUPT_STDERR })
+
+    await withSessionLoaderModules(home, async ({ sessionLoader, sqliteAgent }) => {
+      const sessions = await sessionLoader.loadAllSessions({ readOnly: true, quiet: true })
+      expect(sessions.map((session) => session.sessionId)).toContain('ses_F1eGood')
+      expect(sessions.map((session) => session.sessionId)).not.toContain('ses_F1eBad')
+      expect(sqliteAgent.getSqliteAgentSourceStatus('opencode')).toMatchObject({
+        state: 'partial', reason: 'corrupt', sessionsRead: 1, sessionsFailed: 1, sessionsCarriedOver: 0
+      })
+      expect(sqliteAgent.getSqliteAgentSourceStatus('zcode')).toMatchObject({ state: 'absent', reason: null })
+    })
+    const logged = JSON.stringify(warn.mock.calls)
+    for (const secret of [home, 'ses_F1eBad', 'malformed']) expect(logged).not.toContain(secret)
+  }, 30_000)
+
+  sqliteCliIt('9 a failed discovery keeps the last good sessions in the list, the summary cache and the usage ledger (hot and cold)', async () => {
+    const home = tempHome('carry')
+    const sessionId = 'ses_F1eCarry'
+    const ref = createSqliteAgentCacheFixture(home, 'opencode', sessionId)
+    const dbPath = ref.slice(0, ref.lastIndexOf('#'))
+    const previousUsageIndex = process.env.SWOB_USAGE_INDEX_PATH
+    process.env.SWOB_USAGE_INDEX_PATH = path.join(home, 'usage-facts.db')
+    const usage = await import('./usage-fact-store')
+    usage.closeUsageFactStore()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const ledgerEvents = () => usage.sessionUsageEvents(sessionId, { range: 'all', metricBasis: 'billing' }).events.length
+    const snapshot = (value: unknown) => JSON.parse(JSON.stringify(value ?? null))
+    try {
+      let baseline: any
+      let row: ReturnType<typeof readSummaryCacheRow>
+      await withSessionLoaderModules(home, async ({ sessionLoader, sqliteAgent }) => {
+        const first = await sessionLoader.loadAllSessions({ quiet: true })
+        baseline = snapshot(first.find((session) => session.sessionId === sessionId))
+        expect(baseline.providerOutcome).toEqual({ detected: 'detected', parse: 'parsed', usage: 'available' })
+        usage.synchronizeUsageFacts(first, [])
+        expect(ledgerEvents()).toBeGreaterThan(0)
+        row = readSummaryCacheRow(home, ref)
+        expect(JSON.parse(row!.per_file_json).summary).not.toBeNull()
+
+        // The DB gets a new signature, then stops being readable.
+        touchSqliteAgentDb(dbPath)
+        install({ kind: 'fail', stderr: BUSY_STDERR })
+
+        // Hot: this process's last successful discovery supplies the refs.
+        const hot = await sessionLoader.loadAllSessions({ quiet: true })
+        const carried = snapshot(hot.find((session) => session.sessionId === sessionId))
+        expect(carried).toEqual(baseline)
+        expect(carried.providerOutcome).toEqual(baseline.providerOutcome)
+        expect(carried.tokenAccounting).toEqual(baseline.tokenAccounting)
+        expect(sqliteAgent.getSqliteAgentSourceStatus('opencode')).toMatchObject({
+          state: 'unavailable', reason: 'busy', sessionsRead: 0, sessionsFailed: 0, sessionsCarriedOver: 1
+        })
+        // Chain 1: the usage sync deletes every session missing from its input.
+        usage.synchronizeUsageFacts(hot, [])
+        expect(ledgerEvents()).toBeGreaterThan(0)
+      })
+      // Chains 2 and 3: the row is neither pruned nor rewritten.
+      expect(readSummaryCacheRow(home, ref)).toEqual(row)
+
+      // Cold: a fresh module instance takes the refs from the summary cache.
+      await withSessionLoaderModules(home, async ({ sessionLoader, sqliteAgent }) => {
+        const cold = await sessionLoader.loadAllSessions({ quiet: true })
+        expect(snapshot(cold.find((session) => session.sessionId === sessionId))).toEqual(baseline)
+        expect(sqliteAgent.getSqliteAgentSourceStatus('opencode')).toMatchObject({
+          state: 'unavailable', reason: 'busy', sessionsRead: 0, sessionsCarriedOver: 1
+        })
+        usage.synchronizeUsageFacts(cold, [])
+        expect(ledgerEvents()).toBeGreaterThan(0)
+      })
+      expect(readSummaryCacheRow(home, ref)).toEqual(row)
+
+      const logged = JSON.stringify(warn.mock.calls)
+      for (const secret of [home, sessionId, 'database is locked']) expect(logged).not.toContain(secret)
+    } finally {
+      usage.closeUsageFactStore()
+      if (previousUsageIndex === undefined) delete process.env.SWOB_USAGE_INDEX_PATH
+      else process.env.SWOB_USAGE_INDEX_PATH = previousUsageIndex
+    }
+  }, 60_000)
+
+  sqliteCliIt('10 a failed session read is never cached as empty: skipped without a row, carried over with one', async () => {
+    const home = tempHome('session-failure')
+    const keepRef = createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1eKeep')
+    const dbPath = keepRef.slice(0, keepRef.lastIndexOf('#'))
+    const flakyRef = addSqliteAgentSession(dbPath, 'ses_F1eFlaky', 'flaky session prompt')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failFlakyMessages = () => install({
+      kind: 'fail-matching', match: ['FROM "message"', 'ses_F1eFlaky'], stderr: CORRUPT_STDERR
+    })
+    const ids = (sessions: Array<{ sessionId: string }>) => sessions.map((session) => session.sessionId)
+
+    // No cached row yet: the session sits this load out and nothing is written for it.
+    failFlakyMessages()
+    await withSessionLoaderModules(home, async ({ sessionLoader, sqliteAgent }) => {
+      const sessions = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(ids(sessions)).toContain('ses_F1eKeep')
+      expect(ids(sessions)).not.toContain('ses_F1eFlaky')
+      // Regression pin (chain 3): the failure used to be persisted as `summary: null`.
+      expect(readSummaryCacheRow(home, flakyRef)).toBeUndefined()
+      expect(sqliteAgent.getSqliteAgentSourceStatus('opencode')).toMatchObject({
+        state: 'partial', reason: 'corrupt', sessionsRead: 1, sessionsFailed: 1, sessionsCarriedOver: 0
+      })
+    })
+    restoreFakes()
+
+    // That null row used to be reused under the unchanged DB signature, hiding
+    // the session until the DB file changed; now it simply reads again.
+    let recovered: unknown
+    await withSessionLoaderModules(home, async ({ sessionLoader, sqliteAgent }) => {
+      const sessions = await sessionLoader.loadAllSessions({ quiet: true })
+      recovered = JSON.parse(JSON.stringify(sessions.find((session) => session.sessionId === 'ses_F1eFlaky') ?? null))
+      expect(recovered).toMatchObject({ sessionId: 'ses_F1eFlaky', firstUserMessage: 'flaky session prompt' })
+      expect(sqliteAgent.getSqliteAgentSourceStatus('opencode'))
+        .toMatchObject({ state: 'ok', reason: null, sessionsRead: 2, sessionsFailed: 0 })
+    })
+    const row = readSummaryCacheRow(home, flakyRef)
+    expect(JSON.parse(row!.per_file_json).summary).not.toBeNull()
+
+    // With a good row cached, a later failure under a new signature keeps it as is.
+    touchSqliteAgentDb(dbPath)
+    failFlakyMessages()
+    await withSessionLoaderModules(home, async ({ sessionLoader, sqliteAgent }) => {
+      const sessions = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(JSON.parse(JSON.stringify(sessions.find((session) => session.sessionId === 'ses_F1eFlaky') ?? null)))
+        .toEqual(recovered)
+      expect(sqliteAgent.getSqliteAgentSourceStatus('opencode')).toMatchObject({
+        state: 'partial', reason: 'corrupt', sessionsRead: 1, sessionsFailed: 1, sessionsCarriedOver: 1
+      })
+    })
+    expect(readSummaryCacheRow(home, flakyRef)).toEqual(row)
+  }, 60_000)
 })

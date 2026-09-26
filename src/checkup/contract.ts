@@ -60,6 +60,12 @@ export interface CheckupReport {
   sideEffects?: Array<{ code: string; source: string; count: Measure }>
   /** Numeric run diagnostics only. */
   diagnostics?: Record<string, number>
+  // —— C1b additions (all optional) ——
+  /**
+   * Sessions the Swob readout returned per source (intra-file branch views not counted). [R] when read;
+   * unavailable when the readout did not run, or for a provider-host source that read-only mode does not parse.
+   */
+  readoutBySource?: Record<string, { sessions: Measure }>
 }
 
 export interface CheckupUnit {
@@ -105,7 +111,12 @@ export interface ResumeProbe {
 
 // —— frozen registries (privacy whitelist sources) ——
 export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compaction', 'lineage', 'tokens', 'resume']
-export const CHECKUP_VERSION = '1.0.0'
+/**
+ * Version of the report semantics (kernel.checkupVersion); compared reports with different versions are
+ * flagged. 1.0.0: C1a. 1.1.0: C1b-1 — Claude subagent read counts measured with parseSessionFile [R]
+ * instead of inferred, readoutBySource, readout.source-empty findings under ①.
+ */
+export const CHECKUP_VERSION = '1.1.0'
 export const SELF_TEST_TOTAL = 6
 
 export const SOURCE_IDS = [
@@ -253,7 +264,16 @@ export const REASON_CODES = [
   'checkup.no-verdict-checks',
   // side effects
   'sqlite.readonly-sidecar-touch',
-  'sqlite.main-db-changed'
+  'sqlite.main-db-changed',
+  // —— C1b additions ——
+  // readout: a selected source has raw data but the readout returned no session (listed under ①, never grades it)
+  'readout.source-empty',
+  // run-to-run comparison refusals (never written into a report; shown in the rendered comparison)
+  'compare.schema-mismatch',
+  'compare.previous-no-fingerprint',
+  'compare.current-no-fingerprint',
+  'compare.fingerprint-mismatch',
+  'compare.scope-mismatch'
 ] as const
 export type ReasonCode = typeof REASON_CODES[number]
 

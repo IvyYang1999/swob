@@ -58,4 +58,51 @@ describe('scripts/checkup-dev.mjs', () => {
     expect(busy.stderr).toContain('state-dir-not-empty')
     expect(fs.readdirSync(stateDir)).toEqual(['occupied'])
   }, 120_000)
+
+  /** The owner's layout: the configured library root is a whole vault with Swob state and packages inside. */
+  function configureVault(): { vault: string; pkg: string } {
+    const vault = tempDir('checkup-dev-vault-')
+    fs.mkdirSync(path.join(vault, '.swob'), { recursive: true })
+    fs.mkdirSync(path.join(vault, '项目', '体检'), { recursive: true })
+    const pkg = path.join(vault, 'Swob', 'sessions', 'pkg-1')
+    fs.mkdirSync(pkg, { recursive: true })
+    fs.writeFileSync(path.join(pkg, '.swob-session.json'), '{}')
+    fs.mkdirSync(path.join(sampleHome, '.claude-session-manager'), { recursive: true })
+    fs.writeFileSync(path.join(sampleHome, '.claude-session-manager', 'app-config.json'), JSON.stringify({ libraryPath: vault }))
+    return { vault, pkg }
+  }
+
+  it('writes --json into an ordinary directory of the configured library root (the vault)', () => {
+    const { vault } = configureVault()
+    const stateDir = tempDir('checkup-dev-state-')
+    const json = path.join(vault, '项目', '体检', 'baseline.json')
+    const result = run(['--home', sampleHome, '--state', stateDir, '--json', json])
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+    expect(JSON.parse(fs.readFileSync(json, 'utf8')).schemaVersion).toBe(1)
+    expect(fs.readdirSync(stateDir)).toEqual([])
+    const audit = JSON.parse(result.stdout.trim().split('\n').at(-1)!).readonlyAudit
+    expect(audit).toMatchObject({ stateDirUnchanged: true, libraryDotSwobUnchanged: true, sourceMainDbUnchanged: true })
+  }, 120_000)
+
+  it('refuses --json in <library>/.swob, a session package, a source root, Swob state, App Support/Swob and --state (exit 2)', () => {
+    const { vault, pkg } = configureVault()
+    const stateDir = tempDir('checkup-dev-state-')
+    fs.mkdirSync(path.join(sampleHome, 'Library', 'Application Support', 'Swob'), { recursive: true })
+    const cases: Array<[string, string]> = [
+      [path.join(vault, '.swob', 'x.json'), 'report-target-in-library-state'],
+      [path.join(pkg, 'x.json'), 'report-target-in-session-package'],
+      [path.join(sampleHome, '.codex', 'x.json'), 'report-target-in-source-root'],
+      [path.join(sampleHome, '.claude-session-manager', 'x.json'), 'report-target-in-swob-state'],
+      [path.join(sampleHome, 'Library', 'Application Support', 'Swob', 'x.json'), 'report-target-in-app-support'],
+      [path.join(stateDir, 'x.json'), 'report-target-in-state-dir']
+    ]
+    for (const [json, reason] of cases) {
+      const refused = run(['--home', sampleHome, '--state', stateDir, '--json', json])
+      expect(refused.status, reason).toBe(2)
+      expect(refused.stderr, reason).toContain(reason)
+      expect(fs.existsSync(json), reason).toBe(false)
+    }
+    expect(fs.readdirSync(stateDir)).toEqual([])
+  }, 120_000)
 })

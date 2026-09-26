@@ -17,7 +17,8 @@ describe('provider capability static truth gate', () => {
   it('main/shared production code never derives parser/search/usage/resume support from a source count', () => {
     const files = [
       ...productionTypeScriptFiles(path.join(root, 'src/main')),
-      ...productionTypeScriptFiles(path.join(root, 'src/shared'))
+      ...productionTypeScriptFiles(path.join(root, 'src/shared')),
+      ...productionTypeScriptFiles(path.join(root, 'packages/core/src'))
     ]
     const forbidden = [
       /supportedSources\.length/,
@@ -51,7 +52,7 @@ describe('provider capability static truth gate', () => {
   })
 
   it('canonical schema excludes Library/Vault identity and user state', () => {
-    const schema = fs.readFileSync(path.join(root, 'schema/provider-protocol-v1.schema.json'), 'utf8')
+    const schema = fs.readFileSync(path.join(root, 'packages/core/schema/provider-protocol-v1.schema.json'), 'utf8')
     for (const forbidden of [
       'LogicalSessionKey', 'logicalSessionKey', 'packageId', 'customTitle',
       'userFolder', 'userTags', 'resumeCommand'

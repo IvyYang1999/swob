@@ -3,12 +3,12 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const schemaPath = path.join(root, 'schema/provider-protocol-v1.schema.json')
-const conformancePath = path.join(root, 'schema/provider-protocol-v1.conformance.json')
-const outputPath = path.join(root, 'src/shared/provider-schema.generated.ts')
-const schemaV2Path = path.join(root, 'schema/provider-protocol-v2.schema.json')
-const conformanceV2Path = path.join(root, 'schema/provider-protocol-v2.conformance.json')
-const outputV2Path = path.join(root, 'src/shared/provider-schema-v2.generated.ts')
+const schemaPath = path.join(root, 'packages/core/schema/provider-protocol-v1.schema.json')
+const conformancePath = path.join(root, 'packages/core/schema/provider-protocol-v1.conformance.json')
+const outputPath = path.join(root, 'packages/core/src/shared/provider-schema.generated.ts')
+const schemaV2Path = path.join(root, 'packages/core/schema/provider-protocol-v2.schema.json')
+const conformanceV2Path = path.join(root, 'packages/core/schema/provider-protocol-v2.conformance.json')
+const outputV2Path = path.join(root, 'packages/core/src/shared/provider-schema-v2.generated.ts')
 const checkOnly = process.argv.includes('--check')
 const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'))
 const conformance = JSON.parse(fs.readFileSync(conformancePath, 'utf8'))

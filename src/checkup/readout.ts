@@ -48,7 +48,7 @@ export interface SwobReadout {
   status: 'ok' | 'undetermined'
   reason?: ReasonCode
   sessions: ReadoutSession[]
-  /** parseSessionFile record counts by real path. */
+  /** parseSessionFile record counts by real path (Claude main and subagent files). */
   claudeParsed: Map<string, ClaudeParseResult>
   discovered: { claudeMain: Set<string>; codex: Set<string> }
   /** Codex child session ids whose usage events carry their own auditSourceId inside a merged parent. */
@@ -199,6 +199,12 @@ async function timedParse(filePath: string): Promise<ClaudeParseResult> {
 export async function readSwobReadout(options: {
   stateDir: string
   claudeMainFiles: readonly string[]
+  /**
+   * Claude subagent files. The kernel reads them with the same parseSessionFile
+   * (session-loader.ts loadRelatedClaudeSubagentMessages), so their per-file
+   * read count is measured the same way as a main file's.
+   */
+  claudeSubagentFiles?: readonly string[]
   signal?: AbortSignal
   concurrency?: number
 }): Promise<SwobReadout> {
@@ -220,7 +226,7 @@ export async function readSwobReadout(options: {
 
       started = performance.now()
       const claudeParsed = new Map<string, ClaudeParseResult>()
-      const queue = [...options.claudeMainFiles]
+      const queue = [...options.claudeMainFiles, ...(options.claudeSubagentFiles ?? [])]
       const workers = Array.from({ length: Math.max(1, options.concurrency ?? 1) }, async () => {
         for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
           if (options.signal?.aborted) return

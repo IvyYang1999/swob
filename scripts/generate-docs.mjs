@@ -198,11 +198,11 @@ const componentDocs = {
 const accountingDocs = [
   {
     anchor: 'input-plus-output', title: 'input_plus_output', status: 'CLI 契约',
-    definition: '面向 CLI Insights 的窄口径：输入与输出之和，不含 cache creation/read。',
+    definition: '面向 CLI list / search 的窄口径：输入与输出之和，不含 cache creation/read。',
     source: 'CLI command registry 与生成的 /swob skill 共同声明该机器接口契约。',
     formula: 'inputTokens + outputTokens。',
-    limits: '不能当作账单 token，也不能和 billing total 直接比较；两者是否包含缓存桶不同。',
-    surfaces: 'swob insights 的 JSON/summary 输出。'
+    limits: '不能当作账单 token，也不能和 billing total 直接比较；两者是否包含缓存桶不同。swob insights 的 token 汇总含缓存读写，标为 billing_total，不是本口径。',
+    surfaces: 'swob list / search 的 JSON 输出（tokenMetric）。'
   },
   {
     anchor: 'billing-total', title: 'Processed / billing total', status: '已实现',
@@ -210,7 +210,7 @@ const accountingDocs = [
     source: 'NormalizedTokenComponents 与每个 provider 的 usage event。',
     formula: '非缓存输入 + cache read + cache write(TTL 未知 + 5m + 1h) + output；reasoning 不重复相加。',
     limits: '“billing”描述处理范围，不代表已付账单；价格、折扣和合同不在这个数里。',
-    surfaces: 'Insights 总览与全局 token 汇总。'
+    surfaces: 'Insights 总览与全局 token 汇总；swob insights 的 JSON/summary 输出（机器标签 billing_total）。'
   },
   {
     anchor: 'conversation-only', title: 'Conversation only', status: '已实现',

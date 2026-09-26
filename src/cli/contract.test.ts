@@ -34,7 +34,7 @@ function writeSource(): void {
         { type: 'thinking', thinking: 'contract-thinking-needle' },
         { type: 'text', text: longText },
         { type: 'tool_use', id: 'tool-1', name: 'Write', input: { file_path: '/repo/alpha/a.ts', content: 'contract-tool-input-needle' } }
-      ], usage: { input_tokens: 10, output_tokens: 20 } }
+      ], usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 4000 } }
     },
     {
       uuid: 'u2', parentUuid: 'a1', sessionId: 'contract-session', type: 'user',
@@ -169,7 +169,7 @@ describe.sequential('Swob CLI machine contract', () => {
       { args: ['search', 'CLI', '--json'], assert: (value) => expect(Array.isArray(value)).toBe(true) },
       { args: ['list', '--json'], assert: (value) => expect(value[0]).toMatchObject({ sessionId: 'contract-session', tokenMetric: 'input_plus_output' }) },
       { args: ['folders', '--json'], assert: (value) => expect(Array.isArray(value)).toBe(true) },
-      { args: ['insights', '--json'], assert: (value) => expect(value.totalTokensMetric).toBe('input_plus_output') },
+      { args: ['insights', '--json'], assert: (value) => expect(value.totalTokensMetric).toBe('billing_total') },
       { args: ['config', 'get', '--json'], assert: (value) => expect(value).toHaveProperty('libraryRoot', libraryRoot) },
       { args: ['active', '--json'], assert: (value) => expect(value).toHaveProperty('activeSessionIds') },
       { args: ['lineage', '--dry-run', '--json'], assert: (value) => expect(value).toHaveProperty('aliases') },
@@ -187,6 +187,28 @@ describe.sequential('Swob CLI machine contract', () => {
       const value = parsed(invocation)
       contract.assert(value)
     }
+  })
+
+  it('insights 的 token 总数标为 billing_total 且等于计费口径；list/search 仍是不含缓存的 input_plus_output', async () => {
+    // Fixture usage: 10 non-cached input + 300 cache read + 4000 cache write + 20 output.
+    const billingTotal = 10 + 300 + 4000 + 20
+    const inputPlusOutput = 10 + 20
+    const shown = parsed(await invoke(['show', 'contract-session', '--json'])) as any
+    expect(shown.tokenAccounting.billingTotal).toBe(billingTotal)
+
+    const summary = parsed(await invoke(['insights', '--summary', '--json'])) as any
+    expect(summary).toMatchObject({ totalSessions: 1, totalTokens: billingTotal, totalTokensMetric: 'billing_total' })
+    const rows = [...summary.bySource, ...summary.byModel, ...summary.topProjects]
+    expect(rows).toHaveLength(3)
+    for (const row of rows) expect(row).toMatchObject({ tokens: billingTotal, tokenMetric: 'billing_total' })
+    const full = parsed(await invoke(['insights', '--json'])) as any
+    expect(full).toMatchObject({ totalTokens: billingTotal, totalTokensMetric: 'billing_total' })
+    for (const output of [summary, full]) expect(JSON.stringify(output)).not.toContain('input_plus_output')
+
+    const listed = parsed(await invoke(['list', '--json'])) as any
+    expect(listed[0]).toMatchObject({ sessionId: 'contract-session', tokens: inputPlusOutput, tokenMetric: 'input_plus_output' })
+    const searched = parsed(await invoke(['search', 'CLI', '--json'])) as any
+    expect(searched[0]).toMatchObject({ sessionId: 'contract-session', tokens: inputPlusOutput, tokenMetric: 'input_plus_output' })
   })
 
   it('doctor locks/library 对 Library 与 machine identity 零写', async () => {
@@ -514,6 +536,7 @@ describe.sequential('Swob CLI machine contract', () => {
     const skill = generateSkillContent()
     for (const command of CLI_COMMANDS) expect(skill).toContain(`swob ${command.usage}`)
     expect(skill).toContain('input_plus_output')
+    expect(skill).toContain('billing_total')
     expect(skill).toContain('退出码')
   })
 })

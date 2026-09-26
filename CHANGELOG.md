@@ -2,6 +2,12 @@
 
 [中文](CHANGELOG.zh.md)
 
+## Unreleased
+
+### Fixed
+
+- **`swob insights` token label now names what it counts (breaking for JSON consumers; numbers unchanged)** — the insights token totals were labelled `input_plus_output`, but they have always been the billing total: non-cached input + cache read + cache write + output. The label is now `billing_total`: `totalTokensMetric` (in both the `--summary` and the full `--json` output) and `tokenMetric` on the summary's `bySource`, `byModel` and `topProjects` rows. Every number is exactly as before; only the label string changed, so consumers that match `input_plus_output` on insights output must switch to `billing_total`. `swob list` and `swob search` keep `tokenMetric: "input_plus_output"` (non-cached input + output, no cache), which was already correct. An installed /swob Skill picks up the new wording after `swob install`.
+
 ## v1.4.0 — 2026-08-08
 
 ### New

@@ -425,7 +425,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     expect(parseSuccess(invokeInstalled('config get [key]', ['config', 'get', 'terminalApp', '--json']))).toEqual({ terminalApp: 'iTerm2' })
 
     const insights = parseSuccess(invokeInstalled('insights [--json] [--summary]', ['insights', '--summary', '--json']))
-    expect(insights).toMatchObject({ totalSessions: 2, totalTokensMetric: 'input_plus_output' })
+    expect(insights).toMatchObject({ totalSessions: 2, totalTokensMetric: 'billing_total' })
 
     const rebuilt = parseSuccess(invokeInstalled(
       'transcript rebuild --all [--dry-run] [--missing-only]',

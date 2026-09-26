@@ -34,7 +34,7 @@ export const CLI_COMMANDS: readonly CliCommandDefinition[] = [
   { usage: 'rename <sessionId> <title>', summary: '事务式重命名一个会话', output: 'JSON 结果', examples: ['swob rename <id> "CLI 设计"'] },
   { usage: 'rename --stdin', summary: '从 stdin 读取 JSONL 或 JSON 数组，原子提交批量重命名', output: 'JSON 事务结果', examples: ['printf \'{"sessionId":"<id>","title":"CLI 设计"}\\n\' | swob rename --stdin'] },
   { usage: 'undo', summary: '撤销最近一次 move/rename 组织事务', output: 'JSON 事务结果', examples: ['swob undo'] },
-  { usage: 'insights [--json] [--summary]', summary: '查看会话统计；token 汇总明确标注 input_plus_output', output: 'JSON 统计', examples: ['swob insights --summary'] },
+  { usage: 'insights [--json] [--summary]', summary: '查看会话统计；token 汇总标注 billing_total（计费口径，含 cache creation/read）', output: 'JSON 统计', examples: ['swob insights --summary'] },
   { usage: 'config get [key]', summary: '读取设置', output: 'JSON', examples: ['swob config get terminalApp'] },
   { usage: 'config set <key> <value>', summary: '修改设置', output: 'JSON', examples: ['swob config set terminalApp iTerm2'] },
   { usage: 'active', summary: '列出活跃会话', output: 'JSON', examples: ['swob active'] },
@@ -105,7 +105,8 @@ Swob 管理 Claude Code、Codex、Cursor 等 AI 编程助手的会话。Agent �
 
 - 带 \`--json\` 的命令，stdout 只包含一个合法 JSON 值；日志与警告只写 stderr。
 - \`show --format=jsonl\` 的 stdout 每行是一个独立 JSON 事件。
-- token 汇总指标名为 \`input_plus_output\`，不包含 cache creation/read。
+- \`insights\` 的 token 汇总指标名为 \`billing_total\`：非缓存输入 + cache creation/read + 输出（计费口径）。
+- \`list\`、\`search\` 的 \`tokens\` 指标名为 \`input_plus_output\`：非缓存输入 + 输出，不包含 cache creation/read。
 - 批量 move/rename 接受 JSONL，也兼容一个 JSON 数组；整批先校验再提交。
 
 退出码：

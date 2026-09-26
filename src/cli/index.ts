@@ -642,7 +642,7 @@ async function cmdInsights(flags: Record<string, string | true>): Promise<void> 
       totalSessions: insights.totalSessions,
       totalTurns: insights.totalTurns,
       totalTokens: insights.totalTokens,
-      totalTokensMetric: 'input_plus_output',
+      totalTokensMetric: 'billing_total',
       valuation: insights.valuation,
       totalTime: insights.totalTime,
       totalTimeFormatted: formatTime(insights.totalTime),
@@ -652,13 +652,13 @@ async function cmdInsights(flags: Record<string, string | true>): Promise<void> 
         label: source.label,
         sessions: source.sessionCount,
         tokens: source.totalTokens,
-        tokenMetric: 'input_plus_output',
+        tokenMetric: 'billing_total',
         tokensFormatted: formatTokens(source.totalTokens)
       })),
       byModel: insights.byModel.slice(0, 10).map((model) => ({
         model: model.model,
         tokens: model.totalTokens,
-        tokenMetric: 'input_plus_output',
+        tokenMetric: 'billing_total',
         tokensFormatted: formatTokens(model.totalTokens),
         sessions: model.sessionCount
       })),
@@ -667,13 +667,13 @@ async function cmdInsights(flags: Record<string, string | true>): Promise<void> 
         path: project.fullPath,
         sessions: project.sessionCount,
         tokens: project.totalTokens,
-        tokenMetric: 'input_plus_output',
+        tokenMetric: 'billing_total',
         tokensFormatted: formatTokens(project.totalTokens)
       }))
     })
     return
   }
-  out({ ...insights, totalTokensMetric: 'input_plus_output' })
+  out({ ...insights, totalTokensMetric: 'billing_total' })
 }
 
 function cmdConfigGet(key?: string): void {

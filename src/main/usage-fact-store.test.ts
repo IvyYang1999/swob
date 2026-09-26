@@ -190,21 +190,29 @@ afterEach(() => {
 
 describe('UsageFact + AnalysisScope', () => {
   it('returns all dashboard dimensions from one cached usage revision', () => {
-    const session = makeSession('bundle', '/repo/bundle', [
-      usageEvent('bundle-event', localTimestamp(2026, 7, 20, 12), components(10, 5), { model: 'model-a' })
-    ])
-    synchronizeUsageFacts([session], [])
+    // Pin the clock: the fixture event is dated 2026-07-20 and the query uses a relative '30d'
+    // range, so this test expired once the real date moved past 2026-08-19.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-23T00:00:00.000Z'))
+    try {
+      const session = makeSession('bundle', '/repo/bundle', [
+        usageEvent('bundle-event', localTimestamp(2026, 7, 20, 12), components(10, 5), { model: 'model-a' })
+      ])
+      synchronizeUsageFacts([session], [])
 
-    const first = queryInsightsBundle(scope({ range: '30d' }))
-    const second = queryInsightsBundle(scope({ range: '30d' }))
+      const first = queryInsightsBundle(scope({ range: '30d' }))
+      const second = queryInsightsBundle(scope({ range: '30d' }))
 
-    expect(second).toBe(first)
-    expect(Object.keys(first.results).sort()).toEqual([
-      'global', 'hour', 'model', 'project', 'session', 'source', 'time'
-    ])
-    expect(first.results.global.total.processedTokens).toBe(15)
-    expect(first.results.session.items[0]).toMatchObject({ key: 'bundle', processedTokens: 15 })
-    expect(first.results.model.items[0]).toMatchObject({ key: 'model-a', processedTokens: 15 })
+      expect(second).toBe(first)
+      expect(Object.keys(first.results).sort()).toEqual([
+        'global', 'hour', 'model', 'project', 'session', 'source', 'time'
+      ])
+      expect(first.results.global.total.processedTokens).toBe(15)
+      expect(first.results.session.items[0]).toMatchObject({ key: 'bundle', processedTokens: 15 })
+      expect(first.results.model.items[0]).toMatchObject({ key: 'model-a', processedTokens: 15 })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps filter choices from the unfiltered range when the selected filter returns no rows', () => {

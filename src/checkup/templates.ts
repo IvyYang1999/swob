@@ -57,8 +57,8 @@ interface FindingText { ownerLine: string; engineerHint: string }
 /** Owner sentence + engineer locator per reason code used in findings. */
 export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = {
   'content.line-separator-split': {
-    ownerLine: '{source}：有 {n} 条记录没读进来，其中 {n} 条是你本人发的消息。原因是记录里有特殊的「行分隔符」，Swob 把一条记录切成两半后悄悄丢掉了',
-    engineerHint: 'src/main/session-loader.ts#parseSessionFile / src/main/codex-loader.ts#parseCodexFile：readline 把 U+2028/U+2029 当换行'
+    ownerLine: '{source}：有 {n} 条记录没读进来，其中 {n} 条是你本人发的消息。这些记录里带有特殊的行分隔符，Swob 本轮实测读入数少于规范读法；F1a 之前的版本会丢掉它们',
+    engineerHint: 'src/main/jsonl-lines.ts#readJsonlRecords：F1a 起只按 LF 分行，U+2028/U+2029 与单独的 CR 不再断行；此码只在某文件内核实测读入数少于普查可解析数、且差额能归到含这类字符的记录时出现（src/checkup/checks/content.ts#allocateLoss），先查读行器是否又按它们断行'
   },
   'content.unexplained-loss': {
     ownerLine: '{source}：有 {n} 条记录没读进来，原因还没查明',
@@ -216,6 +216,27 @@ export interface RetiredTemplate {
  */
 export const RETIRED_TEMPLATES: readonly RetiredTemplate[] = [
   {
+    code: 'content.line-separator-split',
+    field: 'ownerLine',
+    text: '{source}：有 {n} 条记录没读进来，其中 {n} 条是你本人发的消息。原因是记录里有特殊的「行分隔符」，Swob 把一条记录切成两半后悄悄丢掉了',
+    replacedBy: '{source}：有 {n} 条记录没读进来，其中 {n} 条是你本人发的消息。这些记录里带有特殊的行分隔符，Swob 本轮实测读入数少于规范读法；F1a 之前的版本会丢掉它们',
+    retiredIn: 'C1d (checkup 1.2.0)'
+  },
+  {
+    code: 'content.line-separator-split',
+    field: 'engineerHint',
+    text: 'src/main/session-loader.ts#parseSessionFile / src/main/codex-loader.ts#parseCodexFile：readline 把 U+2028/U+2029 当换行',
+    replacedBy: 'src/main/jsonl-lines.ts#readJsonlRecords：F1a 起只按 LF 分行，U+2028/U+2029 与单独的 CR 不再断行；此码只在某文件内核实测读入数少于普查可解析数、且差额能归到含这类字符的记录时出现（src/checkup/checks/content.ts#allocateLoss），先查读行器是否又按它们断行',
+    retiredIn: 'C1d (checkup 1.2.0)'
+  },
+  {
+    code: 'content.line-separator-split',
+    field: 'reasonText',
+    text: '记录里的特殊行分隔符让 Swob 把记录切断后丢掉',
+    replacedBy: '带特殊行分隔符的记录，Swob 实测读入数少于规范读法',
+    retiredIn: 'C1d (checkup 1.2.0)'
+  },
+  {
     code: 'content.swob-extra-records',
     field: 'engineerHint',
     text: 'src/main/session-loader.ts#parseSessionFile：读入数多于规范读法',
@@ -331,7 +352,7 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   'readout.kernel-error': 'Swob 内核读数出错',
   'readout.parse-timeout': '读取超时或没读成',
   'readout.provider-host-not-parsed-readonly': '这类来源在只读模式下不解析',
-  'content.line-separator-split': '记录里的特殊行分隔符让 Swob 把记录切断后丢掉',
+  'content.line-separator-split': '带特殊行分隔符的记录，Swob 实测读入数少于规范读法',
   'content.tool-bad-line': '工具自己写坏的行',
   'content.truncated-tail': '文件最后一行没写完整',
   'content.unexplained-loss': '记录没读进来，原因还没查明',
@@ -700,7 +721,9 @@ export const DIGEST_TEXT = {
   leadPartial: '体检（部分来源）',
   // C1d (C1c acceptance P2-2): the sessions of a --sources report of scope all never read 「全部」
   sessionsPartial: '所选来源 {n} 场会话（{sourceCounts}）',
-  sessionsPartialBare: '所选来源 {n} 场会话'
+  sessionsPartialBare: '所选来源 {n} 场会话',
+  // C1d: ② passed while a measured source got no read count at all (its ② one-liner says the same)
+  contentUnread: '{sources}：本轮未取得读数'
 } as const
 
 /** The 「和上次比」 line and section. */

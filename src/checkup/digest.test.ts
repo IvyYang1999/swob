@@ -193,4 +193,36 @@ describe('checkupDigest on a synthetic HOME (runKernelCheckup)', () => {
     expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · OpenCode、ZCode：一场会话都没读到（注意） · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
     expect(scanMarkdownForPrivacy(line).ok).toBe(true)
   })
+
+  it('names a source that got no read count at all instead of 「记录读全」, like ②\'s one-liner (C1d)', async () => {
+    const root = tempDir('digest-unread-')
+    const sid = syntheticUuid(82)
+    const main = fs.realpathSync(writeSample(root, path.join('.claude', 'projects', '-p', `${sid}.jsonl`), jsonl([
+      claude.user({ uuid: syntheticUuid(820), parentUuid: null, sessionId: sid, timestamp: syntheticTime(1), cwd: '/p', text: 'q' }),
+      claude.assistant({ uuid: syntheticUuid(821), parentUuid: syntheticUuid(820), sessionId: sid, timestamp: syntheticTime(2), cwd: '/p', text: 'a', messageId: 'm82', requestId: 'r82' })
+    ])))
+    const codexId = syntheticUuid(83, 'c0de')
+    // One legacy compaction Swob did not count: ③ fails, so the digest goes through the checks one by one.
+    const rollout = fs.realpathSync(writeSample(root, codexRolloutPath(codexId, 0), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id: codexId, cwd: '/p' }),
+      codex.userMessage({ timestamp: syntheticTime(1), ordinal: 1, text: 'q' }),
+      codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'a' }),
+      codex.compacted({ timestamp: syntheticTime(3), ordinal: 3, message: 'summary', window: 1 })
+    ])))
+    const sessions: ReadoutSession[] = [
+      { source: 'claude-code', sessionId: sid, primaryPath: main, paths: [main], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false },
+      { source: 'codex', sessionId: codexId, primaryPath: rollout, paths: [rollout], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false }
+    ]
+    // No Codex read count at all (as when every Codex read threw): Codex ② is undetermined, Claude Code ② passes.
+    const readout: SwobReadout = {
+      status: 'ok', sessions, claudeParsed: new Map([[main, { records: 2, elapsedMs: 1, partial: false }]]),
+      discovered: { claudeMain: new Set([main]), codex: new Set([rollout]) }, attributedChildIds: new Set(), consoleLines: 0, timingsMs: {}
+    }
+    const report = await runKernelCheckup({ homeDir: root, stateDir: tempDir('digest-state-'), privacySalt: 'digest-unread' }, { readout: async () => readout })
+    expect([report.verdict, report.checks[1].verdict, report.checks[1].bySource.codex.verdict]).toEqual(['fail', 'pass', 'undetermined'])
+    const line = checkupDigest(report, { linkTarget: LINK })
+    expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · Codex：本轮未取得读数 · 压缩：Codex 原始 ≈1 处，Swob 认出 0 处（不通过） → [[Swob内核体检-2026-09-27-a1b2c3]]（≈ 为 [D]，其余为 [R]）')
+    expect(line).not.toContain('记录读全')
+    expect(scanMarkdownForPrivacy(line).ok).toBe(true)
+  })
 })

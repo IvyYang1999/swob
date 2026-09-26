@@ -495,7 +495,7 @@ describe('② Claude subagent files are measured per file (C1b deliverable 0)', 
     expect(entry.oracle.subagentParseableCompared).toEqual({ value: 7, label: 'reported', unit: 'records' })
     const byCode = new Map(result.findings.map((finding) => [finding.code, finding]))
     expect(byCode.get('content.line-separator-split')?.count).toEqual({ value: 1, label: 'derived', unit: 'records' })
-    expect(byCode.get('content.line-separator-split')?.ownerLine).toBe('Claude Code：有 1 条记录没读进来，其中 1 条是你本人发的消息。原因是记录里有特殊的「行分隔符」，Swob 把一条记录切成两半后悄悄丢掉了')
+    expect(byCode.get('content.line-separator-split')?.ownerLine).toBe('Claude Code：有 1 条记录没读进来，其中 1 条是你本人发的消息。这些记录里带有特殊的行分隔符，Swob 本轮实测读入数少于规范读法；F1a 之前的版本会丢掉它们')
     expect(byCode.get('content.unexplained-loss')?.count.value).toBe(1)
     expect(byCode.get('content.unexplained-loss')?.samples).toHaveLength(1)
     expect(entry.verdict).toBe('fail')
@@ -609,7 +609,7 @@ describe('② Codex files are measured per file (C1c deliverable ①)', () => {
     })
     const separator = explained.findings.find((finding) => finding.code === 'content.line-separator-split')
     expect(separator).toMatchObject({ verdict: 'fail', source: 'codex', count: { value: 1, label: 'derived', unit: 'records' } })
-    expect(separator?.ownerLine).toBe('Codex：有 1 条记录没读进来，其中 1 条是你本人发的消息。原因是记录里有特殊的「行分隔符」，Swob 把一条记录切成两半后悄悄丢掉了')
+    expect(separator?.ownerLine).toBe('Codex：有 1 条记录没读进来，其中 1 条是你本人发的消息。这些记录里带有特殊的行分隔符，Swob 本轮实测读入数少于规范读法；F1a 之前的版本会丢掉它们')
     expect(separator?.samples).toHaveLength(1)
     expect(explained.bySource.codex.verdict).toBe('fail')
     // One record short in a file without separators: measured, and unexplained.

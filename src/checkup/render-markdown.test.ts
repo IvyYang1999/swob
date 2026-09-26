@@ -89,7 +89,7 @@ describe('text registries (templates.ts)', () => {
   })
 
   it('renders and scans an older report whose findings carry retired sentences, owner and engineer (C1d)', () => {
-    // A report keeps the sentences of the checkup that wrote it: here the engineer locators C1d reworded.
+    // A report keeps the sentences of the checkup that wrote it: here the engineer locators and the owner line C1d reworded.
     const older = mixedReport()
     older.checks[1].findings.push(
       finding('readout.parse-timeout', 'undetermined', 'claude-code', r(1, 'files')),
@@ -102,14 +102,20 @@ describe('text registries (templates.ts)', () => {
         if (retired) entry.engineerHint = fillTemplate(retired.text, [], entry.source)
       }
     }
+    // The retired owner line, with the numbers mixedReport() gives that finding (3 records lost, 2 of them yours).
+    const retiredOwner = RETIRED_TEMPLATES.find((entry) => entry.code === 'content.line-separator-split' && entry.field === 'ownerLine')!
+    const separator = older.checks[1].findings.find((entry) => entry.code === 'content.line-separator-split')!
+    separator.ownerLine = fillTemplate(retiredOwner.text, [3, 2], separator.source)
     expect(validate(older), JSON.stringify(validate.errors)).toBe(true)
     expect(scanForPrivacy(older)).toEqual({ ok: true, hits: [] })
     const engineer = renderCheckupMarkdown(older, { ...RENDER, audience: 'engineer' })
     expect(retiredHints.length).toBeGreaterThan(0)
     for (const item of retiredHints) expect(engineer, item.code).toContain(`\n  - ${item.text}\n`)
+    expect(engineer).toContain(`\n- 不通过 · ${separator.ownerLine}[D]\n`)
     expect(scanMarkdownForPrivacy(engineer, { engineer: true })).toEqual({ ok: true, hits: [] })
     const owner = renderCheckupMarkdown(older, RENDER)
     expect(owner).toContain('- 无法判定 · Claude Code：有 1 个文件读取超时或没读成，这次没有参与比对')
+    expect(owner).toContain(`\n- 不通过 · ${separator.ownerLine}[D]\n`)
     expect(scanMarkdownForPrivacy(owner)).toEqual({ ok: true, hits: [] })
   })
 })
@@ -302,7 +308,7 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     await expect(withPrevious).toMatchFileSnapshot('./__fixtures__/snapshots/mixed-with-previous-owner.md')
     expect(withPrevious).toContain('和上次比（上次 2026-09-26）：新增问题 1 项，已修复 0 项，未变 4 项，首次检查 0 项。')
     expect(withPrevious).toContain('## 和上次比')
-    expect(withPrevious).toContain('| 未变 | ② 内容完整 | Claude Code | 记录里的特殊行分隔符让 Swob 把记录切断后丢掉 | 5[D] | 3[D] | -2 |')
+    expect(withPrevious).toContain('| 未变 | ② 内容完整 | Claude Code | 带特殊行分隔符的记录，Swob 实测读入数少于规范读法 | 5[D] | 3[D] | -2 |')
     expect(withPrevious).toContain('| 新增问题 | ③ 压缩识别 | Codex | 含旧格式压缩记录的会话，Swob 一次都没认出来 | — | 4[D] | — |')
     expect(withPrevious).not.toMatch(/\.json|a1b2c3d4/)
 

@@ -10,7 +10,9 @@
  * (the per-source overview's numbers) for a full-scope report, ① bySource[source].swob.sessions [R]
  * for older reports without it and for day/range scopes; a source listed by readout.source-empty is
  * always named (even when ① passes); ① gaps = ① swob.notIncluded [D]; ② = the counts of the
- * content.line-separator-split / content.unexplained-loss findings; ③ = oracle.perSessionUniqueSum [D]
+ * content.line-separator-split / content.unexplained-loss findings, and a passing ② names a measured
+ * source that got no read count at all (「<来源>：本轮未取得读数」, C1d) instead of 「记录读全」;
+ * ③ = oracle.perSessionUniqueSum [D]
  * and swob.compactCountSum [R], one part per source that did not pass (C1b-2, acceptance P2-3: a sum
  * hid that one source was fully right and another fully wrong), the graded sum only as a fallback.
  * Sources listed by readout.source-empty are named even when the overall verdict is undetermined
@@ -40,6 +42,18 @@ const LOSS_CODES = new Set(['content.line-separator-split', 'content.unexplained
 
 function findCheck(report: CheckupReport, id: CheckId): CheckResult | undefined {
   return report.checks.find((check) => check.id === id)
+}
+
+/**
+ * Sources ② measured but compared nothing of (C1d): undetermined with numbers of their own (C1c D6: no read
+ * count at all). A source ② does not measure carries only its `status`.
+ */
+function unreadSources(content: CheckResult): string[] {
+  return SOURCE_IDS.filter((source) => {
+    const entry = content.bySource[source]
+    return !!entry && entry.verdict === 'undetermined' && !!SOURCE_LABELS[source] &&
+      [...Object.keys(entry.swob), ...Object.keys(entry.oracle)].some((key) => key !== 'status')
+  })
 }
 
 function gradedEntries(check: CheckResult | undefined): Array<[string, CheckResult['bySource'][string]]> {
@@ -116,7 +130,11 @@ export function checkupDigest(report: CheckupReport, options: DigestOptions = {}
       }
       const content = findCheck(report, 'content')
       if (content?.verdict === 'pass') {
-        parts.push(DIGEST_TEXT.contentComplete)
+        // C1d: a source ② could not compare at all is named (as ②'s own one-liner does), never 「记录读全」.
+        const unread = unreadSources(content)
+        parts.push(unread.length > 0
+          ? fillText(DIGEST_TEXT.contentUnread, { sources: unread.map((source) => SOURCE_LABELS[source]).join('、') })
+          : DIGEST_TEXT.contentComplete)
       } else if (content && PROBLEM.has(content.verdict)) {
         const lost = sum(content.findings.filter((finding) => LOSS_CODES.has(finding.code)).map((finding) => finding.count))
         if (lost && lost.value > 0) {

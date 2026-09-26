@@ -93,8 +93,8 @@
 | Claude Code 子 agent | 500[R] | 0[R] | 500[R] | 500[R] | 0[D] | — | 100%[D] |
 | Codex | 9,000[R] | 0[R] | 9,000[R] | —（Swob 没有按文件给出读入数） | 0[D] | — | 100%[D] |
 
-- 不通过 · Claude Code：有 3 条记录没读进来，其中 2 条是你本人发的消息。原因是记录里有特殊的「行分隔符」，Swob 把一条记录切成两半后悄悄丢掉了[D]
-  - src/main/session-loader.ts#parseSessionFile / src/main/codex-loader.ts#parseCodexFile：readline 把 U+2028/U+2029 当换行
+- 不通过 · Claude Code：有 3 条记录没读进来，其中 2 条是你本人发的消息。这些记录里带有特殊的行分隔符，Swob 本轮实测读入数少于规范读法；F1a 之前的版本会丢掉它们[D]
+  - src/main/jsonl-lines.ts#readJsonlRecords：F1a 起只按 LF 分行，U+2028/U+2029 与单独的 CR 不再断行；此码只在某文件内核实测读入数少于普查可解析数、且差额能归到含这类字符的记录时出现（src/checkup/checks/content.ts#allocateLoss），先查读行器是否又按它们断行
   - 样本：0d0d0d0d
 - 不适用 · Claude Code：工具写坏的行 1。这是工具自己写坏的，不是 Swob 丢的，单独列出，不计入本项结论[R]
   - census/jsonl-census.ts：只按换行符分行后 JSON.parse 失败的非空行；单列，不参与 ② 的结论

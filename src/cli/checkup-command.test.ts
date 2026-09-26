@@ -298,7 +298,7 @@ describe.sequential('swob doctor checkup (in process, isolated worker)', () => {
     expect(reportFiles()).toEqual(['部分来源.json', '部分来源.md'])
     // C1c (C1b-2 knownRisk): the report head and the digest say that only some sources were checked.
     expect(fs.readFileSync(path.join(reportDir, '部分来源.md'), 'utf8')).toContain('\n> 范围：本次只体检 Claude Code（其余 13 个来源未选） · 用时：约 61 秒\n')
-    expect(file.stdout).toBe('体检（部分来源） · 全部 12 场会话（Claude Code 12） · 1 个来源 · 已检查的 3 项都通过 · 数字均为 [R]\n')
+    expect(file.stdout).toBe('体检（部分来源） · 所选来源 12 场会话（Claude Code 12） · 1 个来源 · 已检查的 3 项都通过 · 数字均为 [R]\n')
     const summary = await invoke(['doctor', 'checkup', '--report', path.join(reportDir, '部分来源.md'), '--json', '--sources', 'claude-code'], fake('report', partialReport(['claude-code'])))
     expect(summary.code, summary.stderr).toBe(0)
     expect(JSON.parse(summary.stdout)).toMatchObject({ verdict: 'pass', sourcesSelected: ['claude-code'], written: ['部分来源.json', '部分来源.md'] })

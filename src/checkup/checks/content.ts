@@ -13,6 +13,7 @@
 import type { Finding, Measure, Verdict } from '../contract'
 import { LOSS_KINDS, emptyLossKinds, type LossKind } from '../census/claude-census'
 import type { JsonlFileStats } from '../census/jsonl-census'
+import { HEADLINES, fillTemplate } from '../templates'
 import {
   assembleCheck,
   hasClaudeData,
@@ -432,14 +433,25 @@ export function contentCheck(ctx: CheckContext): ReturnType<typeof assembleCheck
   // Tool-written broken lines (bad lines + truncated tails) are named in the pass headline, never graded.
   const toolLines = Object.values(bySource).reduce((sum, entry) =>
     sum + (entry.oracle.toolBadLines?.value ?? 0) + (entry.oracle.toolTruncatedTails?.value ?? 0), 0)
-  const passHeadline = toolLines > 0 ? 'content.pass-tool-lines' : 'content.pass'
+  // C1d (C1c acceptance P2-3): a measured source without any read count is undetermined (D6) and was not
+  // compared, so the pass line names it instead of saying every file was read. Only Claude Code and Codex
+  // are measured: while ② is graded, at most one of them can be in that state.
+  const unread = [...evaluated].filter((source) => bySource[source].verdict === 'undetermined')
+  const passHeadline = unread.length > 0
+    ? toolLines > 0 ? 'content.pass-unread-tool-lines' : 'content.pass-unread'
+    : toolLines > 0 ? 'content.pass-tool-lines' : 'content.pass'
+  const passNumbers = toolLines > 0 ? [toolLines] : []
   const result = assembleCheck({
     id: 'content',
     bySource,
     findings,
     headline: lost === 0 ? passHeadline : conversationLost > 0 ? 'content.loss' : 'content.meta-only',
-    headlineNumbers: lost === 0 ? (toolLines > 0 ? [toolLines] : []) : conversationLost > 0 ? [lost, conversationLost] : [lost]
+    headlineNumbers: lost === 0 ? passNumbers : conversationLost > 0 ? [lost, conversationLost] : [lost]
   })
+  // assembleCheck keeps the given line only for a graded check and fills no {source}: name the source here.
+  if (lost === 0 && unread.length === 1 && (result.verdict === 'pass' || result.verdict === 'warn' || result.verdict === 'fail')) {
+    result.headline = fillTemplate(HEADLINES[passHeadline], passNumbers, unread[0])
+  }
   if (ctx.readout.status !== 'ok') result.reason = ctx.readout.reason ?? 'readout.not-isolated'
   return result
 }

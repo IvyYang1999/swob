@@ -53,7 +53,7 @@
 | Codex | 52[R] | 40[D] | 9[D] | 1[D] | 2[D] | 0[D] | 0[D] | 96.078%[D] |
 
 - 注意 · Codex：有 2 个「子 agent 又派出的子 agent」没挂到任何会话上，它们的用量也一起丢了[D]
-  - src/main/session-loader.ts#loadLegacySessionSnapshot：子 agent 只挂顶层父会话，没按 thread_spawn 逐级上溯
+  - src/main/session-loader.ts#loadLegacySessionSnapshot：F1b 起子 agent 沿 parentSessionId 逐级上溯（最多 16 层）挂到顶层会话；走不到 Swob 的顶层会话才挂不上：链在中间断了（某层 rollout 已不在、没写父会话编号，或顶层祖先不是 Swob 的会话）、父子成环、超过 16 层
   - 样本：0a0a0a0a 0b0b0b0b
 - 注意 · Kimi 旧版目录里有 3 场会话，Swob 不支持这种格式[R]
   - src/main/providers/kimi-provider.ts：只认 ~/.kimi-code/sessions 下的 wire 记录，不扫 ~/.kimi/sessions
@@ -125,7 +125,7 @@
 | Codex | 4[D] | 9[D] | 9[D] | 0[R] | 36/40 场[D] |
 
 - 不通过 · Codex：4 场会话里一共发生过 9 次上下文压缩，Swob 一次都没认出来[D]
-  - src/main/codex-loader.ts#codexToRawMessages：行类型联合里没有 compacted，只认 compaction 与 *compact* 事件
+  - src/main/codex-loader.ts#codexToRawMessages：F1b 起按文件的主格式识别压缩，文件里有 compacted 行就只数 compacted（同一载荷只算一次）；仍出现此码表示这场会话含旧格式压缩记录而 Swob 计数为 0（C1c 收紧的判据），旧格式一条都没认出来
   - 样本：0f0f0f0f
 
 ### 其他数字

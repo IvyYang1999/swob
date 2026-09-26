@@ -18,9 +18,9 @@
  * 「体检（部分来源）」 and counts the selected sources only, also for reports written before C1c that
  * still carried counts of unselected sources (C1c; C1b-2 knownRisk).
  * ④⑤⑥ are undetermined in C1a and omitted. Numbers are [R] unless prefixed with 「≈」 ([D]); the
- * line ends with a note saying which. Scope all → 「全部」, day → 「今天」. An undetermined overall
- * verdict gives 「无法判定（原因）」. Every part is registered text and the line must pass
- * scanMarkdownForPrivacy (else PrivacyViolationError).
+ * line ends with a note saying which. Scope all → 「全部」 (a --sources report: 「所选来源」, C1d),
+ * day → 「今天」. An undetermined overall verdict gives 「无法判定（原因）」. Every part is registered
+ * text and the line must pass scanMarkdownForPrivacy (else PrivacyViolationError).
  */
 import type { CheckId, CheckResult, CheckupReport, Label, Measure } from './contract'
 import { SOURCE_IDS } from './contract'
@@ -91,9 +91,12 @@ export function checkupDigest(report: CheckupReport, options: DigestOptions = {}
       .sort((left, right) => (right.measure.value ?? 0) - (left.measure.value ?? 0))
     const total = counts.reduce((value, entry) => value + (entry.measure.value ?? 0), 0)
     const kind = report.scope.kind
+    // C1d (C1c acceptance P2-2): the counts of a --sources report cover its selected sources only, so they
+    // are never called 「全部」.
+    const partial = skipped.size > 0
     const sessionsTemplate = counts.length > 0
-      ? kind === 'day' ? DIGEST_TEXT.sessionsDay : kind === 'range' ? DIGEST_TEXT.sessionsRange : DIGEST_TEXT.sessionsAll
-      : kind === 'day' ? DIGEST_TEXT.sessionsDayBare : kind === 'range' ? DIGEST_TEXT.sessionsRangeBare : DIGEST_TEXT.sessionsAllBare
+      ? kind === 'day' ? DIGEST_TEXT.sessionsDay : kind === 'range' ? DIGEST_TEXT.sessionsRange : partial ? DIGEST_TEXT.sessionsPartial : DIGEST_TEXT.sessionsAll
+      : kind === 'day' ? DIGEST_TEXT.sessionsDayBare : kind === 'range' ? DIGEST_TEXT.sessionsRangeBare : partial ? DIGEST_TEXT.sessionsPartialBare : DIGEST_TEXT.sessionsAllBare
     parts.push(fillText(sessionsTemplate, {
       n: formatNumber(total),
       sourceCounts: counts.map((entry) => `${SOURCE_LABELS[entry.source]} ${formatNumber(entry.measure.value ?? 0)}`).join(' · ')

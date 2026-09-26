@@ -127,12 +127,18 @@ describe('checkupDigest (AI-diary one-liner, design §五)', () => {
 
   it('says 「（部分来源）」 for a --sources report and counts only the selected sources (C1c; C1b-2 knownRisk)', () => {
     const line = checkupDigest(partialReport(), { linkTarget: LINK })
-    expect(line).toBe('体检（部分来源） · 全部 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
+    expect(line).toBe('体检（部分来源） · 所选来源 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
     expect(scanMarkdownForPrivacy(line).ok).toBe(true)
+    // C1d (C1c acceptance P2-2): the counts cover the selected sources only, so the line never says 「全部」.
+    expect(line).not.toContain('全部')
     // A report written before C1c still carried counts for unselected sources: they are not counted.
     const older = partialReport()
     older.readoutBySource!.cursor = { sessions: r(7, 'sessions') }
-    expect(checkupDigest(older)).toBe('体检（部分来源） · 全部 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 已检查的 3 项都通过 · 数字均为 [R]')
+    expect(checkupDigest(older)).toBe('体检（部分来源） · 所选来源 52 场会话（Codex 40 · Claude Code 12） · 2 个来源 · 已检查的 3 项都通过 · 数字均为 [R]')
+    // No selected source with a session count: the bare form, still without 「全部」.
+    const bare = partialReport(['claude-code'])
+    bare.readoutBySource!['claude-code'] = { sessions: r(0, 'sessions') }
+    expect(checkupDigest(bare)).toBe('体检（部分来源） · 所选来源 0 场会话 · 0 个来源 · 已检查的 3 项都通过 · 数字均为 [R]')
     // Also when nothing could be judged.
     const blocked = partialReport(['claude-code'])
     blocked.verdict = 'undetermined'

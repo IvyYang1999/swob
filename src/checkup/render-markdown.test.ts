@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import schema from './contract/kernel-checkup-report-v1.schema.json'
 import { CHECK_ORDER, MEASURE_UNITS, ORACLE_IDS, REASON_CODES, type CheckupReport } from './contract'
 import { runKernelCheckup } from './run'
-import { PrivacyViolationError, scanMarkdownForPrivacy } from './privacy'
+import { PrivacyViolationError, scanForPrivacy, scanMarkdownForPrivacy } from './privacy'
 import {
   CHECK_LABELS,
   COMPARE_TEXT,
@@ -15,8 +15,10 @@ import {
   MEASURE_LABELS,
   ORACLE_LABELS,
   REASON_TEXT,
+  RETIRED_TEMPLATES,
   UNIT_LABELS,
   VERDICT_LABELS,
+  fillTemplate,
   registeredTemplateSet
 } from './templates'
 import {
@@ -29,7 +31,7 @@ import {
   reportFileNames
 } from './render-markdown'
 import { checkupDigest } from './digest'
-import { OTHER_FINGERPRINT, allUndeterminedReport, clone, finding, mixedReport, partialReport, passReport, r, u } from './__fixtures__/checkup-reports'
+import { OTHER_FINGERPRINT, allUndeterminedReport, clone, d, finding, mixedReport, partialReport, passReport, r, u } from './__fixtures__/checkup-reports'
 import { CANARY, assertInsideTestSandbox, buildSampleHome } from './__test-support__/sample-home'
 
 // The sample-HOME report runs the kernel, which captured HOME at import time: the Vitest sandbox home.
@@ -83,6 +85,31 @@ describe('text registries (templates.ts)', () => {
     for (const text of [VERDICT_LABELS.fail, CHECK_LABELS.content, REASON_TEXT['readout.source-empty'], COMPARE_TEXT.none, MARKDOWN_TEXT.headReadOnly]) {
       expect(set.has(text), text).toBe(true)
     }
+  })
+
+  it('renders and scans an older report whose findings carry retired sentences, owner and engineer (C1d)', () => {
+    // A report keeps the sentences of the checkup that wrote it: here the engineer locators C1d reworded.
+    const older = mixedReport()
+    older.checks[1].findings.push(
+      finding('readout.parse-timeout', 'undetermined', 'claude-code', r(1, 'files')),
+      finding('content.swob-extra-records', 'warn', 'codex', d(1, 'files'))
+    )
+    const retiredHints = RETIRED_TEMPLATES.filter((entry) => entry.field === 'engineerHint')
+    for (const check of older.checks) {
+      for (const entry of check.findings) {
+        const retired = retiredHints.find((item) => item.code === entry.code)
+        if (retired) entry.engineerHint = fillTemplate(retired.text, [], entry.source)
+      }
+    }
+    expect(validate(older), JSON.stringify(validate.errors)).toBe(true)
+    expect(scanForPrivacy(older)).toEqual({ ok: true, hits: [] })
+    const engineer = renderCheckupMarkdown(older, { ...RENDER, audience: 'engineer' })
+    expect(retiredHints.length).toBeGreaterThan(0)
+    for (const item of retiredHints) expect(engineer, item.code).toContain(`\n  - ${item.text}\n`)
+    expect(scanMarkdownForPrivacy(engineer, { engineer: true })).toEqual({ ok: true, hits: [] })
+    const owner = renderCheckupMarkdown(older, RENDER)
+    expect(owner).toContain('- 无法判定 · Claude Code：有 1 个文件读取超时或没读成，这次没有参与比对')
+    expect(scanMarkdownForPrivacy(owner)).toEqual({ ok: true, hits: [] })
   })
 })
 
@@ -275,7 +302,7 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     expect(withPrevious).toContain('和上次比（上次 2026-09-26）：新增问题 1 项，已修复 0 项，未变 4 项，首次检查 0 项。')
     expect(withPrevious).toContain('## 和上次比')
     expect(withPrevious).toContain('| 未变 | ② 内容完整 | Claude Code | 记录里的特殊行分隔符让 Swob 把记录切断后丢掉 | 5[D] | 3[D] | -2 |')
-    expect(withPrevious).toContain('| 新增问题 | ③ 压缩识别 | Codex | Swob 不认旧格式的压缩记录 | — | 4[D] | — |')
+    expect(withPrevious).toContain('| 新增问题 | ③ 压缩识别 | Codex | 含旧格式压缩记录的会话，Swob 一次都没认出来 | — | 4[D] | — |')
     expect(withPrevious).not.toMatch(/\.json|a1b2c3d4/)
 
     const foreign = clone(previous)

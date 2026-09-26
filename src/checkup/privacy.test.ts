@@ -8,7 +8,7 @@ import {
   scanTextForPrivacy,
   unitSignature
 } from './privacy'
-import { FINDING_TEXT, HEADLINES, OWNER_ACTIONS, SOURCE_LABELS, fillTemplate, registeredTemplateSet } from './templates'
+import { FINDING_TEXT, HEADLINES, OWNER_ACTIONS, REASON_TEXT, RETIRED_TEMPLATES, SOURCE_LABELS, fillTemplate, registeredTemplateSet } from './templates'
 import { FIXED_ROOTS, REASON_CODES } from './contract'
 
 const CANARIES = {
@@ -81,9 +81,34 @@ describe('privacy scanner', () => {
       }
       expect(code).toMatch(/^[a-z0-9-]+\.[a-z0-9.-]+$/)
     }
+    // C1d: a sentence an older report may still carry stays accepted after it was reworded.
+    for (const entry of RETIRED_TEMPLATES) {
+      for (const source of Object.keys(SOURCE_LABELS)) values.push(fillTemplate(entry.text, [1234, 56.789], source))
+    }
     const result = scanForPrivacy({ values })
     expect(result.hits).toEqual([])
     expect(registeredTemplateSet().size).toBeGreaterThan(50)
+  })
+
+  it('keeps retired sentences apart from the current ones, each naming what replaced it (C1d)', () => {
+    const current = new Set<string>([
+      ...Object.values(FINDING_TEXT).flatMap((text) => text ? [text.ownerLine, text.engineerHint] : []),
+      ...Object.values(REASON_TEXT)
+    ])
+    expect(RETIRED_TEMPLATES.length).toBeGreaterThan(0)
+    for (const entry of RETIRED_TEMPLATES) {
+      expect(REASON_CODES).toContain(entry.code)
+      // No overlap: a retired sentence is kept for older reports only, never written any more.
+      expect(current.has(entry.text), entry.text).toBe(false)
+      expect(entry.replacedBy, entry.text).not.toBe(entry.text)
+      // What replaced it is today's sentence for that code and field, or one retired later.
+      const field = entry.field
+      const today = field === 'reasonText' ? REASON_TEXT[entry.code] : FINDING_TEXT[entry.code]?.[field]
+      const retiredLater = RETIRED_TEMPLATES
+        .filter((other) => other !== entry && other.code === entry.code && other.field === field)
+        .map((other) => other.text)
+      expect([today, ...retiredLater], entry.text).toContain(entry.replacedBy)
+    }
   })
 
   for (const [name, canary] of Object.entries(CANARIES)) {

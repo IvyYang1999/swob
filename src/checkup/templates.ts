@@ -38,7 +38,10 @@ export const HEADLINES = {
   'compaction.mismatch': '{n} 场会话里有 {n} 场压缩次数对不上：原始 {n} 处，Swob 认出 {n} 处',
   'check.not-implemented': '本版体检还没有实现这一项',
   'check.undetermined': '本项这次无法判定',
-  'check.not-applicable': '本项对本机数据不适用'
+  'check.not-applicable': '本项对本机数据不适用',
+  // C1d (C1c acceptance P2-3): ② passes on the compared source while the other got no read count at all
+  'content.pass-unread': '{source}：本轮未取得读数，没有参与比对；其余来源没有记录丢失',
+  'content.pass-unread-tool-lines': '{source}：本轮未取得读数，没有参与比对；其余来源没有记录丢失；另有 {n} 行是工具自己写坏的，不计入结论'
 } as const
 
 export const OWNER_ACTIONS: Readonly<Record<Verdict, string>> = {
@@ -63,7 +66,7 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   },
   'content.swob-extra-records': {
     ownerLine: '{source}：有 {n} 个文件 Swob 读出的记录比原始记录还多，原因还没查明',
-    engineerHint: 'src/main/session-loader.ts#parseSessionFile：读入数多于规范读法'
+    engineerHint: 'src/main/jsonl-lines.ts#readJsonlRecords：内核规范读法（经 session-loader 与 codex-loader 的 WithStats 入口读取，含 Claude 子 agent 文件）的读入数多于普查数出的可解析记录'
   },
   'content.tool-bad-line': {
     ownerLine: '{source}：工具写坏的行 {n}。这是工具自己写坏的，不是 Swob 丢的，单独列出，不计入本项结论',
@@ -75,7 +78,7 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   },
   'readout.parse-timeout': {
     ownerLine: '{source}：有 {n} 个文件读取超时或没读成，这次没有参与比对',
-    engineerHint: 'src/main/session-loader.ts#parseSessionFile：30 秒超时后静默截断，或读取抛错'
+    engineerHint: 'src/main/session-loader.ts#parseSessionFileWithStats：30 秒超时或读流出错时返回已读部分并置 truncated（jsonl-lines.ts#readJsonlRecords）；体检据此标 partial（耗时到超时或调用抛错也算），该文件不参与 ② 的比对'
   },
   'census.file-changed-during-run': {
     ownerLine: '{source}：有 {n} 个文件在体检期间还在被写入，这次没有参与比对',
@@ -91,7 +94,7 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   },
   'codex.legacy-compacted-unrecognized': {
     ownerLine: 'Codex：{n} 场会话里一共发生过 {n} 次上下文压缩，Swob 一次都没认出来',
-    engineerHint: 'src/main/codex-loader.ts#codexToRawMessages：行类型联合里没有 compacted，只认 compaction 与 *compact* 事件'
+    engineerHint: 'src/main/codex-loader.ts#codexToRawMessages：F1b 起按文件的主格式识别压缩，文件里有 compacted 行就只数 compacted（同一载荷只算一次）；仍出现此码表示这场会话含旧格式压缩记录而 Swob 计数为 0（C1c 收紧的判据），旧格式一条都没认出来'
   },
   'compaction.count-mismatch': {
     ownerLine: '{source}：有 {n} 场会话的压缩次数和原始记录对不上',
@@ -119,7 +122,7 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   },
   'codex.nested-subagent-orphan': {
     ownerLine: 'Codex：有 {n} 个「子 agent 又派出的子 agent」没挂到任何会话上，它们的用量也一起丢了',
-    engineerHint: 'src/main/session-loader.ts#loadLegacySessionSnapshot：子 agent 只挂顶层父会话，没按 thread_spawn 逐级上溯'
+    engineerHint: 'src/main/session-loader.ts#loadLegacySessionSnapshot：F1b 起子 agent 沿 parentSessionId 逐级上溯（最多 16 层）挂到顶层会话；走不到 Swob 的顶层会话才挂不上：链在中间断了（某层 rollout 已不在、没写父会话编号，或顶层祖先不是 Swob 的会话）、父子成环、超过 16 层'
   },
   'codex.subagent-parent-missing': {
     ownerLine: 'Codex：有 {n} 个子 agent 的父会话不在 Swob 的会话里（不在本机或被排除），挂不上',
@@ -188,6 +191,66 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
     engineerHint: 'src/checkup/readout.ts#readSwobReadout：没有这个文件的逐文件读数（parseCodexFileWithStats 读取抛错，或文件不在这次读数的清单里）；不推算，不参与 ② 的比对'
   }
 }
+
+/** A registered sentence the checkup no longer writes (see RETIRED_TEMPLATES). */
+export interface RetiredTemplate {
+  code: ReasonCode
+  /** Where it was registered: a FINDING_TEXT field, or REASON_TEXT. */
+  field: 'ownerLine' | 'engineerHint' | 'reasonText'
+  /** The sentence exactly as it was registered (placeholders unfilled). */
+  text: string
+  /** The sentence that replaced it (today's text, or one retired later for the same code and field). */
+  replacedBy: string
+  /** The package that retired it, and the checkup version at that time. */
+  retiredIn: string
+}
+
+/**
+ * Retired sentences (C1d). A report stores the ownerLine / engineerHint of its findings as they were
+ * written, and both privacy scanners accept registered text only; a reworded sentence therefore moves
+ * here instead of being deleted, and registeredTemplateSet() keeps accepting it, so an older report can
+ * still be rendered or scanned. REASON_TEXT is looked up by code when rendering (an older report shows
+ * today's wording); its retired wording is listed too, so that every sentence ever registered stays
+ * registered. Rewording keeps CHECKUP_VERSION: reports of one checkup version may carry either sentence.
+ * A sentence that is still current never belongs here (privacy.test.ts).
+ */
+export const RETIRED_TEMPLATES: readonly RetiredTemplate[] = [
+  {
+    code: 'content.swob-extra-records',
+    field: 'engineerHint',
+    text: 'src/main/session-loader.ts#parseSessionFile：读入数多于规范读法',
+    replacedBy: 'src/main/jsonl-lines.ts#readJsonlRecords：内核规范读法（经 session-loader 与 codex-loader 的 WithStats 入口读取，含 Claude 子 agent 文件）的读入数多于普查数出的可解析记录',
+    retiredIn: 'C1d (checkup 1.2.0)'
+  },
+  {
+    code: 'readout.parse-timeout',
+    field: 'engineerHint',
+    text: 'src/main/session-loader.ts#parseSessionFile：30 秒超时后静默截断，或读取抛错',
+    replacedBy: 'src/main/session-loader.ts#parseSessionFileWithStats：30 秒超时或读流出错时返回已读部分并置 truncated（jsonl-lines.ts#readJsonlRecords）；体检据此标 partial（耗时到超时或调用抛错也算），该文件不参与 ② 的比对',
+    retiredIn: 'C1d (checkup 1.2.0)'
+  },
+  {
+    code: 'codex.legacy-compacted-unrecognized',
+    field: 'engineerHint',
+    text: 'src/main/codex-loader.ts#codexToRawMessages：行类型联合里没有 compacted，只认 compaction 与 *compact* 事件',
+    replacedBy: 'src/main/codex-loader.ts#codexToRawMessages：F1b 起按文件的主格式识别压缩，文件里有 compacted 行就只数 compacted（同一载荷只算一次）；仍出现此码表示这场会话含旧格式压缩记录而 Swob 计数为 0（C1c 收紧的判据），旧格式一条都没认出来',
+    retiredIn: 'C1d (checkup 1.2.0)'
+  },
+  {
+    code: 'codex.legacy-compacted-unrecognized',
+    field: 'reasonText',
+    text: 'Swob 不认旧格式的压缩记录',
+    replacedBy: '含旧格式压缩记录的会话，Swob 一次都没认出来',
+    retiredIn: 'C1d (checkup 1.2.0)'
+  },
+  {
+    code: 'codex.nested-subagent-orphan',
+    field: 'engineerHint',
+    text: 'src/main/session-loader.ts#loadLegacySessionSnapshot：子 agent 只挂顶层父会话，没按 thread_spawn 逐级上溯',
+    replacedBy: 'src/main/session-loader.ts#loadLegacySessionSnapshot：F1b 起子 agent 沿 parentSessionId 逐级上溯（最多 16 层）挂到顶层会话；走不到 Swob 的顶层会话才挂不上：链在中间断了（某层 rollout 已不在、没写父会话编号，或顶层祖先不是 Swob 的会话）、父子成环、超过 16 层',
+    retiredIn: 'C1d (checkup 1.2.0)'
+  }
+]
 
 /** Generic sentences that are not tied to one finding code. */
 export const GENERIC_TEMPLATES = [
@@ -275,7 +338,7 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   'content.swob-extra-records': 'Swob 读出的记录比原始记录还多',
   'content.swob-per-file-unavailable': 'Swob 没有按文件给出读入数',
   'content.swob-read-error': '读取出错或这次没有读，拿不到 Swob 的逐文件读入数',
-  'codex.legacy-compacted-unrecognized': 'Swob 不认旧格式的压缩记录',
+  'codex.legacy-compacted-unrecognized': '含旧格式压缩记录的会话，Swob 一次都没认出来',
   'compaction.count-mismatch': '压缩次数和原始记录对不上',
   'compaction.fork-inherited-marker': '恢复或分叉时从父会话抄来的压缩标记',
   'compaction.multi-copy-explained': '会话有多份副本，Swob 按其中一份计数（差异已解释）',
@@ -634,7 +697,10 @@ export const DIGEST_TEXT = {
   // C1b-2 (acceptance P2-3): one part per compaction source that is not passing
   compactionSource: '压缩：{source} 原始 {n} 处，Swob 认出 {n} 处（{verdict}）',
   // C1c: the lead of a --sources report (its counts cover the selected sources only)
-  leadPartial: '体检（部分来源）'
+  leadPartial: '体检（部分来源）',
+  // C1d (C1c acceptance P2-2): the sessions of a --sources report of scope all never read 「全部」
+  sessionsPartial: '所选来源 {n} 场会话（{sourceCounts}）',
+  sessionsPartialBare: '所选来源 {n} 场会话'
 } as const
 
 /** The 「和上次比」 line and section. */
@@ -684,6 +750,8 @@ export function registeredTemplateSet(): Set<string> {
     ...Object.values(OWNER_ACTIONS),
     ...GENERIC_TEMPLATES,
     ...Object.values(FINDING_TEXT).flatMap((entry) => entry ? [entry.ownerLine, entry.engineerHint] : []),
+    // C1d: sentences older reports may still carry
+    ...RETIRED_TEMPLATES.map((entry) => entry.text),
     // C1b registries
     ...Object.values(VERDICT_LABELS),
     ...Object.values(CHECK_LABELS),

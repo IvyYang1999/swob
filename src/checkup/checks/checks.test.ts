@@ -217,6 +217,41 @@ describe('③ Codex multi-copy sessions and the kernel counting rule (C1c delive
     expect(Object.keys(entry.oracle).filter((key) => key === 'bothFormatFiles' || key === 'eventOnlyFiles')).toEqual([])
   })
 
+  it('keeps explained sessions under the ≤ 1 % threshold: 2 explained of 101 is a failure (C1d; C1c acceptance P2-1)', async () => {
+    // 99 plain sessions plus two sessions with two copies each (35 + 2 legacy rows, nothing shared, Swob 35).
+    const copied = [syntheticUuid(1450, 'c0de'), syntheticUuid(1451, 'c0de')]
+    const files: Array<[string, string, string]> = []
+    const { root, sessions } = await codexFixture(99, (dir) => {
+      copied.forEach((id, index) => {
+        const minute = 600 + index * 2
+        const head = (at: number): Array<Record<string, unknown>> => [
+          codex.topLevelMeta({ timestamp: syntheticTime(at), ordinal: 0, id, cwd: CWD }),
+          codex.userMessage({ timestamp: syntheticTime(at), ordinal: 1, text: 'long task' }),
+          codex.assistantMessage({ timestamp: syntheticTime(at), ordinal: 2, text: 'working' })
+        ]
+        const copyA = writeSample(dir, codexRolloutPath(id, minute), jsonl([
+          ...head(minute), ...Array.from({ length: 35 }, (_, marker) => compacted(minute, marker + 3, `copy A${index}`))
+        ]))
+        const copyB = writeSample(dir, codexRolloutPath(id, minute + 1, 'archived_sessions'), jsonl([
+          ...head(minute + 1), ...Array.from({ length: 2 }, (_, marker) => compacted(minute + 1, marker + 3, `copy B${index}`))
+        ]))
+        files.push([id, copyA, copyB])
+      })
+    })
+    const census = await censusCodex(root, { env: {} })
+    const multi = files.map(([id, copyA, copyB]) => {
+      const realA = fs.realpathSync(copyA)
+      return codexSession(id, realA, { paths: [realA, fs.realpathSync(copyB)], compactCount: 35 })
+    })
+    const result = compactionCheck(ctx({ codex: census, readout: readout([...sessions, ...multi]) }))
+    const entry = result.bySource.codex
+    expect(codexFindings(result)).toEqual([['compaction.multi-copy-explained', 'warn', 2]])
+    expect(entry.swob).toMatchObject({ sessionsCompared: { value: 101 }, sessionsMismatched: { value: 2 } })
+    // Explained, yet still counted as mismatches: 2 of 101 is over 1 %, so the source fails.
+    expect(entry.verdict).toBe('fail')
+    expect(result.verdict).toBe('fail')
+  })
+
   it('keeps a count that equals no copy a failure: count-mismatch once Swob recognised some markers (D7), legacy-unrecognized only when none', async () => {
     const { context } = await multiCopyFixture(35, 2)
     const twenty = compactionCheck(context(20))
@@ -608,6 +643,65 @@ describe('② Codex files are measured per file (C1c deliverable ①)', () => {
       expect(entry.swob.readRate).toMatchObject({ value: null, label: 'unavailable', unit: 'percent' })
       expect(none.findings.map((finding) => [finding.code, finding.count.value])).toEqual([['content.swob-read-error', 2]])
     }
+  })
+
+  it('names a source that got no read count at all instead of saying every file was read (C1d; C1c acceptance P2-3)', async () => {
+    /** A Claude main file (2 records) and a Codex rollout (3 records, plus a tool-written broken line when asked). */
+    const twoSources = async (codexBrokenLine: boolean): Promise<{
+      check: (claudeParsed: SwobReadout['claudeParsed'], codexParsed: Map<string, CodexParseResult>) => ReturnType<typeof contentCheck>
+      claudeRead: SwobReadout['claudeParsed']; codexRead: Map<string, CodexParseResult>; codexThrew: Map<string, CodexParseResult>
+      root: string; sessions: ReadoutSession[]
+    }> => {
+      const root = home()
+      const sid = syntheticUuid(97)
+      const claudeFile = fs.realpathSync(writeSample(root, path.join('.claude', 'projects', '-p', `${sid}.jsonl`), jsonl([
+        claude.user({ uuid: syntheticUuid(970), parentUuid: null, sessionId: sid, timestamp: syntheticTime(1), cwd: CWD, text: 'q' }),
+        claude.assistant({ uuid: syntheticUuid(971), parentUuid: syntheticUuid(970), sessionId: sid, timestamp: syntheticTime(2), cwd: CWD, text: 'a', messageId: 'm97', requestId: 'r97' })
+      ])))
+      const codexId = syntheticUuid(98, 'c0de')
+      const codexFile = fs.realpathSync(writeSample(root, codexRolloutPath(codexId, 0), jsonl([
+        codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id: codexId, cwd: CWD }),
+        codex.userMessage({ timestamp: syntheticTime(1), ordinal: 1, text: 'q' }),
+        ...(codexBrokenLine ? ['{"timestamp":"2026-09-20T09:00:02.000Z","ordinal":2,"type":"response_item","payload":'] : []),
+        codex.assistantMessage({ timestamp: syntheticTime(3), ordinal: 3, text: 'a' })
+      ])))
+      const claudeCensus = await censusClaude(root)
+      const codexCensus = await censusCodex(root, { env: {} })
+      return {
+        check: (claudeParsed, codexParsed) => contentCheck(ctx({ claude: claudeCensus, codex: codexCensus, readout: readout([], { claudeParsed, codexParsed }) })),
+        claudeRead: new Map([[claudeFile, { records: 2, elapsedMs: 1, partial: false }]]),
+        codexRead: new Map([[codexFile, read(3)]]),
+        codexThrew: new Map([[codexFile, read(null)]]),
+        root,
+        sessions: [
+          { source: 'claude-code', sessionId: sid, primaryPath: claudeFile, paths: [claudeFile], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false },
+          codexSession(codexId, codexFile)
+        ]
+      }
+    }
+    const clean = await twoSources(false)
+    // Codex: its only file's read threw, so none of it was compared (D6: undetermined); Claude Code passed.
+    const codexUnread = clean.check(clean.claudeRead, clean.codexThrew)
+    expect(codexUnread.bySource.codex.verdict).toBe('undetermined')
+    expect(codexUnread.bySource['claude-code'].verdict).toBe('pass')
+    expect(codexUnread.verdict).toBe('pass')
+    expect(codexUnread.headline).toBe('Codex：本轮未取得读数，没有参与比对；其余来源没有记录丢失')
+    // Claude Code without any parse result, Codex measured.
+    expect(clean.check(new Map(), clean.codexRead).headline).toBe('Claude Code：本轮未取得读数，没有参与比对；其余来源没有记录丢失')
+    // Both measured: every file was read. Neither: ② cannot be judged.
+    expect(clean.check(clean.claudeRead, clean.codexRead).headline).toBe('逐文件读全，没有记录丢失')
+    expect(clean.check(new Map(), clean.codexThrew).headline).toBe('本项这次无法判定')
+    // Tool-written broken lines keep their note.
+    const broken = await twoSources(true)
+    const brokenUnread = broken.check(broken.claudeRead, broken.codexThrew)
+    expect(brokenUnread.headline).toBe('Codex：本轮未取得读数，没有参与比对；其余来源没有记录丢失；另有 1 行是工具自己写坏的，不计入结论')
+    for (const result of [codexUnread, brokenUnread]) expect(result.headline).not.toContain('逐文件读全')
+    // End to end (a readout without Codex read counts): the six-check table names Codex and passes the Markdown scanner.
+    const report = await runKernelCheckup({ homeDir: clean.root, stateDir: home(), privacySalt: 'unread-source' }, {
+      readout: async () => readout(clean.sessions, { claudeParsed: clean.claudeRead })
+    })
+    expect(renderCheckupMarkdown(report, { utcOffsetMinutes: 480 }))
+      .toContain('| ② 内容完整 | 通过 | Codex：本轮未取得读数，没有参与比对；其余来源没有记录丢失 | 不用管 |')
   })
 })
 

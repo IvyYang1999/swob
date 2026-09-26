@@ -94,7 +94,7 @@
 | Codex | ~/.codex/sessions | 51[R] | 1,024 MB[R] | 2026-03-10 ~ 2026-09-26 | 读 |
 | Codex | ~/.codex/archived_sessions | 1[R] | 19.2 KB[R] | 2026-09-17 ~ 2026-09-17 | 读 |
 | OpenCode | ~/.local/share/opencode | —（本版体检还没有清点这个来源） | —（本版体检还没有清点这个来源） | — | 读 |
-| Kimi Code | ~/.kimi/sessions | 3[R] | —（本版体检还没有清点这个来源） | — | 不读 |
+| Kimi 旧版目录 | ~/.kimi/sessions | 3[R] | —（本版体检还没有清点这个来源） | — | 不读 |
 
 其余 1 个来源位置本机没有数据。
 

@@ -121,7 +121,14 @@ export interface ResumeAuditStats extends ResumeAuditLevelStats {
   verifiedRate: number | null
   failureReasons: ResumeAuditReasonStat[]
   environmentMissing: ResumeAuditEnvironmentStat[]
+  /**
+   * How the audited sessions' resume cwd was obtained, for harnesses that do not
+   * write it down (Cursor). Absent when no audited session carries a label.
+   */
+  cwdProvenance?: Record<ResumeCwdProvenance, number>
 }
+
+type ResumeCwdProvenance = NonNullable<SessionSummary['cwdProvenance']>
 
 export interface ResumeAuditReport extends ResumeAuditStats {
   generatedAt: string
@@ -155,6 +162,7 @@ interface AuditOutcome {
   l3SkipReason?: 'expected-anchor-empty'
   mismatchKind?: ResumeAuditMismatchKind
   expectedAnchors?: ResumeAuditAnchors
+  cwdProvenance?: ResumeCwdProvenance
 }
 
 type ResumeAuditAnchors = ResumeAnchors
@@ -928,6 +936,9 @@ function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
       mismatchExamples.push(exampleFor(outcome))
     }
   }
+  const cwdLabelled = outcomes.filter((outcome) => outcome.cwdProvenance)
+  const cwdCount = (provenance: ResumeCwdProvenance): number =>
+    cwdLabelled.filter((outcome) => outcome.cwdProvenance === provenance).length
 
   return {
     total,
@@ -955,7 +966,10 @@ function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
       would404Examples: would404Outcomes.slice(0, 3).map(exampleFor)
     },
     failureReasons,
-    environmentMissing
+    environmentMissing,
+    ...(cwdLabelled.length > 0
+      ? { cwdProvenance: { reported: cwdCount('reported'), derived: cwdCount('derived'), estimated: cwdCount('estimated') } }
+      : {})
   }
 }
 
@@ -970,7 +984,11 @@ export async function runResumeAudit(options: ResumeAuditOptions = {}): Promise<
   }
   const outcomes: AuditOutcome[] = []
   try {
-    for (const session of sessions) outcomes.push(await auditSession(session, options, runtime))
+    for (const session of sessions) {
+      const outcome = await auditSession(session, options, runtime)
+      if (session.cwdProvenance) outcome.cwdProvenance = session.cwdProvenance
+      outcomes.push(outcome)
+    }
 
     const perSource = Object.fromEntries(
       RESUME_AUDIT_SOURCES.map((source) => [
@@ -1097,10 +1115,18 @@ export function formatResumeAuditReport(report: ResumeAuditReport): string {
   lines.push('', 'Per-source diagnostics:')
   for (const source of RESUME_AUDIT_SOURCES) {
     const stats = report.perSource[source]
+    const cwd = stats.cwdProvenance
+    const cwdUnconfirmed = cwd ? cwd.derived + cwd.estimated : 0
     if (stats.failureReasons.length === 0 && stats.environmentMissing.length === 0 &&
       stats.l3.mismatch.total === 0 && stats.l3.would404 === 0 &&
-      stats.l3.skippedReasons.expectedAnchorEmpty === 0) continue
+      stats.l3.skippedReasons.expectedAnchorEmpty === 0 && cwdUnconfirmed === 0) continue
     lines.push(`  ${source}:`)
+    if (cwd && cwdUnconfirmed > 0) {
+      lines.push(
+        `    resume cwd not confirmed by the harness: derived=${cwd.derived}, estimated=${cwd.estimated} ` +
+        `(reported=${cwd.reported}); estimated = read from the transcript folder name and may be wrong`
+      )
+    }
     for (const reason of stats.failureReasons) {
       lines.push(
         `    [${reason.level}] ${reason.code}: ${reason.count}; ` +

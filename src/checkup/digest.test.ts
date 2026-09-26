@@ -16,7 +16,7 @@ import { PrivacyViolationError, assertMarkdownPrivacyClean, scanMarkdownForPriva
 import type { ReadoutSession, SwobReadout } from './readout'
 import { runKernelCheckup } from './run'
 import { claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from './self-test/samples'
-import { allUndeterminedReport, d, dayReport, mixedReport, passReport, r, u } from './__fixtures__/checkup-reports'
+import { allUndeterminedReport, d, dayReport, finding, mixedReport, passReport, r, u } from './__fixtures__/checkup-reports'
 
 const LINK = 'Swob内核体检-2026-09-27-a1b2c3'
 
@@ -46,7 +46,7 @@ function realShapeReport(): CheckupReport {
 describe('checkupDigest (AI-diary one-liner, design §五)', () => {
   it('lists sessions per source, then only the problems; [D] numbers carry 「≈」 and the line says so', () => {
     const line = checkupDigest(mixedReport(), { linkTarget: LINK })
-    expect(line).toBe('体检 · 全部 59 场会话（Codex 40 · Claude Code 12 · Cursor 7） · 3 个来源 · OpenCode：一场会话都没读到（注意） · 纳入：≈2 个单元没挂上（注意） · 丢 ≈3 条（不通过） · 压缩：原始 ≈14 处，Swob 认出 5 处（不通过） → [[Swob内核体检-2026-09-27-a1b2c3]]（≈ 为 [D]，其余为 [R]）')
+    expect(line).toBe('体检 · 全部 59 场会话（Codex 40 · Claude Code 12 · Cursor 7） · 3 个来源 · OpenCode：一场会话都没读到（注意） · 纳入：≈2 个单元没挂上（注意） · 丢 ≈3 条（不通过） · 压缩：Codex 原始 ≈9 处，Swob 认出 0 处（不通过） → [[Swob内核体检-2026-09-27-a1b2c3]]（≈ 为 [D]，其余为 [R]）')
     expect(scanMarkdownForPrivacy(line)).toEqual({ ok: true, hits: [] })
   })
 
@@ -73,7 +73,7 @@ describe('checkupDigest (AI-diary one-liner, design §五)', () => {
 
   it('says 「今天」 for a one-day report (① counts) and 「数字均为 [R]」 when every number is reported', () => {
     const line = checkupDigest(dayReport(), { linkTarget: 'Swob内核体检-2026-09-26-a1b2c3' })
-    expect(line).toBe('体检 · 今天 7 场会话（Codex 6 · Claude Code 1） · 2 个来源 · 记录读全 · 压缩：原始 4 处，Swob 认出 0 处（不通过） → [[Swob内核体检-2026-09-26-a1b2c3]]（数字均为 [R]）')
+    expect(line).toBe('体检 · 今天 7 场会话（Codex 6 · Claude Code 1） · 2 个来源 · 记录读全 · 压缩：Codex 原始 4 处，Swob 认出 0 处（不通过） → [[Swob内核体检-2026-09-26-a1b2c3]]（数字均为 [R]）')
     expect(scanMarkdownForPrivacy(line).ok).toBe(true)
   })
 
@@ -98,7 +98,31 @@ describe('checkupDigest (AI-diary one-liner, design §五)', () => {
     report.checks[1].verdict = 'undetermined'
     report.verdict = 'undetermined'
     report.verdictReason = 'not-a-registered-reason'
-    expect(checkupDigest(report)).toBe('体检 · 无法判定（原因未登记）')
+    expect(checkupDigest(report)).toBe('体检 · 无法判定（原因未登记） · OpenCode：一场会话都没读到（注意）')
+  })
+
+  it('names sources read as empty also when the overall verdict is undetermined (acceptance P2-14)', () => {
+    const report = allUndeterminedReport()
+    expect(checkupDigest(report)).toBe('体检 · 无法判定（自检没有全部通过，这次不给结论）')
+    report.checks[0].findings.push(finding('readout.source-empty', 'warn', 'opencode', u('units', 'census.not-implemented')))
+    const line = checkupDigest(report, { linkTarget: LINK })
+    expect(line).toBe('体检 · 无法判定（自检没有全部通过，这次不给结论） · OpenCode：一场会话都没读到（注意） → [[Swob内核体检-2026-09-27-a1b2c3]]')
+    expect(scanMarkdownForPrivacy(line).ok).toBe(true)
+  })
+
+  it('lists compaction per source that did not pass, and sums only when no source can be split (acceptance P2-3)', () => {
+    const both = mixedReport()
+    const claude = both.checks[2].bySource['claude-code']
+    claude.verdict = 'warn'
+    claude.oracle.perSessionUniqueSum = d(6, 'markers')
+    const line = checkupDigest(both)
+    expect(line).toContain(' · 压缩：Claude Code 原始 ≈6 处，Swob 认出 5 处（注意） · 压缩：Codex 原始 ≈9 处，Swob 认出 0 处（不通过） · ')
+    expect(line).not.toContain('原始 ≈15 处')
+    expect(scanMarkdownForPrivacy(line).ok).toBe(true)
+    // A failing check whose sources all passed individually (not produced by C1a) still gets the sum.
+    const unsplit = mixedReport()
+    unsplit.checks[2].bySource.codex.verdict = 'pass'
+    expect(checkupDigest(unsplit)).toContain(' · 压缩：原始 ≈14 处，Swob 认出 5 处（不通过） · ')
   })
 
   it('always scans its own line and throws when a part is not whitelisted (reverse test of the scan step)', () => {

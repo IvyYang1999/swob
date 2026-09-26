@@ -175,6 +175,8 @@ describe('sources checked in only one of the two runs (e.g. a later --sources ch
     const markdown = renderCheckupMarkdown(current, { previous, utcOffsetMinutes: 480 })
     expect(markdown).toContain('| 本次未检查 | ① 会话纳入 | Codex | 子 agent 又派出的子 agent 挂不上 | 2[D] | — | — |')
     expect(markdown).toContain('| 只有一次检查过的来源里的单元 | 3 |')
+    // The summary line under the overall verdict names them too (acceptance P2-13).
+    expect(markdown).toContain('和上次比（上次 2026-09-26）：新增问题 0 项，已修复 0 项，未变 3 项，首次检查 0 项，本次未检查 2 项。')
   })
 
   it('issues of a source not checked last time are first checks, not new, and its units are not new', () => {

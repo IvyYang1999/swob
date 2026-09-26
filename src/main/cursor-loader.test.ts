@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -6,10 +7,14 @@ import {
   buildCursorSessionSummary,
   buildCursorSessionDetail,
   buildCursorSessionSummaryFromBackup,
+  cursorProjectSlug,
   findCursorSessionFiles,
   findCursorSourceGenerations,
+  loadCursorRawMessages,
   parseCursorFileWithStats
 } from './cursor-loader'
+import { buildResumeCommand } from './session-actions'
+import { shellQuote } from './resume-terminal'
 
 function writeTempJsonl(lines: object[], sessionId = 'abc-def-123'): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-cursor-test-'))
@@ -283,5 +288,262 @@ describe('parseCursorFile 只按 \\n 分行（F1a）', () => {
   it('parseCursorFileWithStats：读流出错时照旧抛出', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-cursor-missing-'))
     await expect(parseCursorFileWithStats(path.join(dir, 'missing.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})
+
+describe('Cursor 工作目录：转录线索 + chats/<md5(工作区)> 目录名确认（F1c-2）', () => {
+  // 合成 HOME：.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl，以及
+  // .cursor/chats/<md5(工作区)>/<id>/store.db（空文件，产品代码只看目录在不在）。
+  // 键序照真实转录（只看键名核对过）：{role, message: {content: [{type, text} | {type, name, input}]}}；
+  // 真实的 tool_use 没有 id。值全部是合成的。
+  let root: string
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1c2-cursor-'))
+  })
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  const md5 = (value: string): string => crypto.createHash('md5').update(value).digest('hex')
+  const legacyGuess = (slug: string): string => '/' + slug.replace(/-/g, '/')
+
+  function makeDir(...segments: string[]): string {
+    const dir = path.join(root, ...segments)
+    fs.mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  function writeTranscript(home: string, slug: string, sessionId: string, lines: object[]): string {
+    const fp = path.join(home, '.cursor', 'projects', slug, 'agent-transcripts', sessionId, `${sessionId}.jsonl`)
+    fs.mkdirSync(path.dirname(fp), { recursive: true })
+    fs.writeFileSync(fp, lines.map((line) => JSON.stringify(line)).join('\n') + '\n')
+    return fp
+  }
+
+  function writeChatStore(home: string, workspace: string, sessionId: string): string {
+    const store = path.join(home, '.cursor', 'chats', md5(workspace), sessionId, 'store.db')
+    fs.mkdirSync(path.dirname(store), { recursive: true })
+    fs.writeFileSync(store, '')
+    return store
+  }
+
+  /** user_query 点名工作区里的文件；assistant 读文件、在子目录里跑命令。 */
+  function linesMentioning(workspace: string): object[] {
+    return [
+      { role: 'user', message: { content: [{ type: 'text', text: `<user_query>\n先看 ${workspace}/docs/说明.md，再改\n</user_query>` }] } },
+      { role: 'assistant', message: { content: [
+        { type: 'text', text: '先读入口文件。' },
+        { type: 'tool_use', name: 'Read', input: { path: path.join(workspace, 'src', 'app.ts') } }
+      ] } },
+      { role: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Shell', input: { command: 'npm test', description: '跑测试', working_directory: path.join(workspace, 'src') } }
+      ] } }
+    ]
+  }
+
+  /** 只有相对路径，没有任何绝对路径线索。 */
+  function linesWithoutClues(): object[] {
+    return [
+      { role: 'user', message: { content: [{ type: 'text', text: '<user_query>\n加个按钮\n</user_query>' }] } },
+      { role: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { path: 'src/App.tsx' } }] } }
+    ]
+  }
+
+  it('cursorProjectSlug：连续的非字母数字合成一个 -，首尾去掉（纯中文目录名不占位）', () => {
+    expect(cursorProjectSlug('/Users/me/my-app')).toBe('Users-me-my-app')
+    expect(cursorProjectSlug('/Users/me/.cursor/a b/c_d')).toBe('Users-me-cursor-a-b-c-d')
+    expect(cursorProjectSlug('/Users/me/笔记/notes-app/草稿')).toBe('Users-me-notes-app')
+  })
+
+  it('reported：正文里的绝对路径逐级取祖先，md5 命中本会话的 chats 目录；带连字符的项目名不再被拆开', async () => {
+    const home = makeDir('home')
+    const workspace = makeDir('work', 'my-app-v2')
+    const sessionId = 'f1c2-reported'
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, linesMentioning(workspace))
+    const store = writeChatStore(home, workspace, sessionId)
+
+    const summary = await buildCursorSessionSummary(fp)
+    expect(summary).toMatchObject({ cwds: [workspace], resumeCwd: workspace, cwdProvenance: 'reported' })
+    expect(summary!.resumeCwd).not.toBe(legacyGuess(cursorProjectSlug(workspace)))
+
+    // 每条消息的 cwd、detail、恢复命令都用同一个路径
+    const raw = await loadCursorRawMessages(fp)
+    expect(new Set(raw.map((message) => message.cwd))).toEqual(new Set([workspace]))
+    const detail = await buildCursorSessionDetail(fp)
+    expect(detail!.messages.every((message) => message.raw.cwd === workspace)).toBe(true)
+    expect(buildResumeCommand(sessionId, undefined, summary!.resumeCwd, 'cursor'))
+      .toBe(`cd ${shellQuote(workspace)} && cursor agent --resume ${shellQuote(sessionId)}`)
+
+    // store.db 只看存在性：旁边没有多出 -wal / -shm
+    expect(fs.readdirSync(path.dirname(store))).toEqual(['store.db'])
+  })
+
+  it('reported：正文还提到别的项目、那个项目也有 chats 目录时，只认装着本会话的那个', async () => {
+    const home = makeDir('home')
+    const workspace = makeDir('work', 'site-builder')
+    const other = makeDir('work', 'other-tool')
+    const sessionId = 'f1c2-decoy'
+    const lines = [
+      { role: 'user', message: { content: [{ type: 'text', text: `<user_query>\n照 ${other}/README.md 的写法来\n</user_query>` }] } },
+      ...linesMentioning(workspace).slice(1)
+    ]
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, lines)
+    writeChatStore(home, workspace, sessionId)
+    writeChatStore(home, other, 'f1c2-another-session')
+
+    expect(await buildCursorSessionSummary(fp)).toMatchObject({ resumeCwd: workspace, cwdProvenance: 'reported' })
+  })
+
+  it('别的项目的 md5 虽在 chats 目录名里，但那个目录下没有本会话：不能拿它当本会话的工作区', async () => {
+    const home = makeDir('home')
+    const workspace = path.join(root, 'work', 'gone-app')
+    const other = makeDir('work', 'other-tool')
+    const sessionId = 'f1c2-foreign-hash'
+    const lines = [
+      { role: 'user', message: { content: [{ type: 'text', text: `<user_query>\n照 ${other}/README.md 的写法来\n</user_query>` }] } },
+      ...linesWithoutClues().slice(1)
+    ]
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, lines)
+    writeChatStore(home, workspace, sessionId)
+    writeChatStore(home, other, 'f1c2-another-session')
+
+    const legacy = legacyGuess(cursorProjectSlug(workspace))
+    expect(await buildCursorSessionSummary(fp)).toMatchObject({ resumeCwd: legacy, cwdProvenance: 'estimated' })
+  })
+
+  it('reported：正文只提到别的项目时，按 slug 逐级走真实目录（可穿过纯中文目录）找候选，再用 md5 确认', async () => {
+    const home = makeDir('home')
+    const workspace = makeDir('work', '项目', 'data-pipeline', 'svc-a')
+    const sameSlug = makeDir('work', 'data', 'pipeline-svc-a')
+    const other = makeDir('work', 'other-tool')
+    expect(cursorProjectSlug(sameSlug)).toBe(cursorProjectSlug(workspace))
+    const sessionId = 'f1c2-walk'
+    const lines = [
+      { role: 'user', message: { content: [{ type: 'text', text: `<user_query>\n参考 ${other}/README.md\n</user_query>` }] } },
+      ...linesWithoutClues().slice(1)
+    ]
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, lines)
+    writeChatStore(home, workspace, sessionId)
+    writeChatStore(home, other, 'f1c2-another-session')
+
+    expect(await buildCursorSessionSummary(fp)).toMatchObject({ cwds: [workspace], resumeCwd: workspace, cwdProvenance: 'reported' })
+  })
+
+  it('reported：工作区末级是纯中文目录（slug 里被去掉）也能按 slug 走到并确认', async () => {
+    const home = makeDir('home')
+    const workspace = makeDir('work', 'notes-app', '草稿')
+    makeDir('work', 'notes-app', 'src')
+    const sessionId = 'f1c2-trailing-cjk'
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, linesWithoutClues())
+    writeChatStore(home, workspace, sessionId)
+
+    expect(await buildCursorSessionSummary(fp)).toMatchObject({ resumeCwd: workspace, cwdProvenance: 'reported' })
+  })
+
+  it('同一会话挂在两个工作区的 chats 下：优先仍存在、且与转录目录名相符的那个', async () => {
+    const home = makeDir('home')
+    const workspace = makeDir('work', 'main-app')
+    const alsoOpened = makeDir('work', 'side-app')
+    const sessionId = 'f1c2-two-workspaces'
+    const lines = [...linesMentioning(alsoOpened), ...linesMentioning(workspace).slice(1)]
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, lines)
+    writeChatStore(home, workspace, sessionId)
+    writeChatStore(home, alsoOpened, sessionId)
+
+    expect(await buildCursorSessionSummary(fp)).toMatchObject({ resumeCwd: workspace, cwdProvenance: 'reported' })
+  })
+
+  it('reported：chats 确认的工作区后来被删了，仍给出原路径；目录不在，恢复命令不 cd', async () => {
+    const home = makeDir('home')
+    const workspace = path.join(root, 'work', 'deleted-app')
+    const sessionId = 'f1c2-deleted'
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, linesMentioning(workspace))
+    writeChatStore(home, workspace, sessionId)
+
+    const summary = await buildCursorSessionSummary(fp)
+    expect(summary).toMatchObject({ resumeCwd: workspace, cwdProvenance: 'reported' })
+    expect(fs.existsSync(workspace)).toBe(false)
+    expect(buildResumeCommand(sessionId, undefined, summary!.resumeCwd, 'cursor'))
+      .toBe(`cursor agent --resume ${shellQuote(sessionId)}`)
+  })
+
+  it('derived：chats 里没有本会话（别的会话有），正文线索里恰好一个真实目录与 slug 相符', async () => {
+    const home = makeDir('home')
+    const workspace = makeDir('work', 'no-chats-app')
+    const sessionId = 'f1c2-derived'
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, linesMentioning(workspace))
+    writeChatStore(home, workspace, 'f1c2-another-session')
+
+    expect(await buildCursorSessionSummary(fp)).toMatchObject({ cwds: [workspace], resumeCwd: workspace, cwdProvenance: 'derived' })
+  })
+
+  it('候选不唯一：两个真实目录 slug 相同、正文都提到、又没有 chats 可确认 → estimated', async () => {
+    const home = makeDir('home')
+    const first = makeDir('work', 'twin-pkg', 'core')
+    const second = makeDir('work', 'twin', 'pkg-core')
+    expect(cursorProjectSlug(second)).toBe(cursorProjectSlug(first))
+    const sessionId = 'f1c2-ambiguous'
+    const lines = [...linesMentioning(first), ...linesMentioning(second).slice(1)]
+    const fp = writeTranscript(home, cursorProjectSlug(first), sessionId, lines)
+
+    const legacy = legacyGuess(cursorProjectSlug(first))
+    expect(await buildCursorSessionSummary(fp)).toMatchObject({ cwds: [legacy], resumeCwd: legacy, cwdProvenance: 'estimated' })
+  })
+
+  it('estimated：chats 里有本会话，但所有候选的 md5 都对不上 → 候选被否定，退回旧启发式', async () => {
+    const home = makeDir('home')
+    const workspace = makeDir('work', 'renamed-app')
+    const sessionId = 'f1c2-contradicted'
+    const fp = writeTranscript(home, cursorProjectSlug(workspace), sessionId, linesMentioning(workspace))
+    writeChatStore(home, '/Users/someone/old-name-app', sessionId)
+
+    const legacy = legacyGuess(cursorProjectSlug(workspace))
+    expect(await buildCursorSessionSummary(fp)).toMatchObject({ cwds: [legacy], resumeCwd: legacy, cwdProvenance: 'estimated' })
+  })
+
+  it('estimated：没有线索也没有 chats → 旧启发式原样保留，并如实标 estimated', async () => {
+    const home = makeDir('home')
+    const sessionId = 'f1c2-estimated'
+    const fp = writeTranscript(home, 'Users-someone-code-web-app', sessionId, linesWithoutClues())
+
+    const summary = await buildCursorSessionSummary(fp)
+    expect(summary).toMatchObject({
+      cwds: ['/Users/someone/code/web/app'],
+      resumeCwd: '/Users/someone/code/web/app',
+      cwdProvenance: 'estimated'
+    })
+    const raw = await loadCursorRawMessages(fp)
+    expect(new Set(raw.map((message) => message.cwd))).toEqual(new Set(['/Users/someone/code/web/app']))
+  })
+
+  it('HOME 路径里本身有 projects 段：slug 取 .cursor/projects 下那一级，chats 也从转录路径推出', async () => {
+    const home = makeDir('projects', 'someone')
+    const workspace = makeDir('work', 'home-in-projects')
+    const confirmedId = 'f1c2-projects-home'
+    const confirmed = writeTranscript(home, cursorProjectSlug(workspace), confirmedId, linesMentioning(workspace))
+    writeChatStore(home, workspace, confirmedId)
+    expect(await buildCursorSessionSummary(confirmed)).toMatchObject({ resumeCwd: workspace, cwdProvenance: 'reported' })
+
+    // 旧实现取第一个 projects 段，会把 slug 读成 someone，推出 /someone
+    const guessedId = 'f1c2-projects-home-guess'
+    const guessed = writeTranscript(home, 'Users-someone-code-web-app', guessedId, linesWithoutClues())
+    expect(await buildCursorSessionSummary(guessed)).toMatchObject({
+      resumeCwd: '/Users/someone/code/web/app',
+      cwdProvenance: 'estimated'
+    })
+  })
+
+  it('Library 备份（路径里没有 .cursor/projects/…/agent-transcripts 结构）不猜工作目录', async () => {
+    const workspace = makeDir('work', 'backup-app')
+    const backup = path.join(root, 'projects', 'Library', 'backup.jsonl')
+    fs.mkdirSync(path.dirname(backup), { recursive: true })
+    fs.writeFileSync(backup, linesMentioning(workspace).map((line) => JSON.stringify(line)).join('\n'))
+
+    const summary = await buildCursorSessionSummaryFromBackup(backup, 'f1c2-backup')
+    expect(summary!.cwds).toEqual([])
+    expect(summary!.resumeCwd).toBeUndefined()
+    expect(summary!.cwdProvenance).toBeUndefined()
   })
 })

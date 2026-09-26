@@ -3,7 +3,7 @@
  * deliverable 2, design §五 "AI 日记每日摘要"):
  *
  *   体检 · 全部 763 场会话（Codex 525 · ZCode 73 · OpenCode 63 · Claude Code 59 · Cursor 43） · 5 个来源
- *     · 丢 ≈120 条（不通过） · 压缩：原始 ≈1,036 处，Swob 认出 68 处（不通过）
+ *     · 丢 ≈120 条（不通过） · 压缩：Codex 原始 ≈968 处，Swob 认出 0 处（不通过）
  *     → [[Swob内核体检-…]]（≈ 为 [D]，其余为 [R]）
  *
  * Sources of each part: sessions and their split = the [R] sessions per source of readoutBySource
@@ -11,7 +11,10 @@
  * for older reports without it and for day/range scopes; a source listed by readout.source-empty is
  * always named (even when ① passes); ① gaps = ① swob.notIncluded [D]; ② = the counts of the
  * content.line-separator-split / content.unexplained-loss findings; ③ = oracle.perSessionUniqueSum [D]
- * and swob.compactCountSum [R] of the graded sources.
+ * and swob.compactCountSum [R], one part per source that did not pass (C1b-2, acceptance P2-3: a sum
+ * hid that one source was fully right and another fully wrong), the graded sum only as a fallback.
+ * Sources listed by readout.source-empty are named even when the overall verdict is undetermined
+ * (acceptance P2-14).
  * ④⑤⑥ are undetermined in C1a and omitted. Numbers are [R] unless prefixed with 「≈」 ([D]); the
  * line ends with a note saying which. Scope all → 「全部」, day → 「今天」. An undetermined overall
  * verdict gives 「无法判定（原因）」. Every part is registered text and the line must pass
@@ -58,12 +61,21 @@ export function checkupDigest(report: CheckupReport, options: DigestOptions = {}
     return `${derived ? '≈' : ''}${formatNumber(value)}`
   }
   let hasNumbers = false
+  const inclusionCheck = findCheck(report, 'inclusion')
+  const empty = (inclusionCheck?.findings ?? []).filter((finding) => finding.code === 'readout.source-empty' && SOURCE_LABELS[finding.source])
+  const emptyPart = empty.length > 0
+    ? fillText(DIGEST_TEXT.sourceEmpty, {
+        sources: [...new Set(empty.map((finding) => SOURCE_LABELS[finding.source]))].join('、'),
+        verdict: VERDICT_LABELS[empty[0].verdict]
+      })
+    : null
 
   if (report.verdict === 'undetermined') {
     parts.push(fillText(DIGEST_TEXT.undetermined, { reason: reasonText(report.verdictReason ?? 'checkup.no-verdict-checks') }))
+    if (emptyPart) parts.push(emptyPart)
   } else {
     hasNumbers = true
-    const inclusion = findCheck(report, 'inclusion')
+    const inclusion = inclusionCheck
     const sessionsOf = report.scope.kind === 'all' && report.readoutBySource
       ? (source: string): Measure | undefined => report.readoutBySource?.[source]?.sessions
       : (source: string): Measure | undefined => inclusion?.bySource[source]?.swob.sessions
@@ -82,13 +94,7 @@ export function checkupDigest(report: CheckupReport, options: DigestOptions = {}
       sourceCounts: counts.map((entry) => `${SOURCE_LABELS[entry.source]} ${formatNumber(entry.measure.value ?? 0)}`).join(' · ')
     }))
     parts.push(fillText(DIGEST_TEXT.sources, { n: formatNumber(counts.length) }))
-    const empty = (inclusion?.findings ?? []).filter((finding) => finding.code === 'readout.source-empty' && SOURCE_LABELS[finding.source])
-    if (empty.length > 0) {
-      parts.push(fillText(DIGEST_TEXT.sourceEmpty, {
-        sources: [...new Set(empty.map((finding) => SOURCE_LABELS[finding.source]))].join('、'),
-        verdict: VERDICT_LABELS[empty[0].verdict]
-      }))
-    }
+    if (emptyPart) parts.push(emptyPart)
 
     if (report.verdict === 'pass') {
       const graded = report.checks.filter((check) => GRADED.has(check.verdict)).length
@@ -112,13 +118,27 @@ export function checkupDigest(report: CheckupReport, options: DigestOptions = {}
       const compaction = findCheck(report, 'compaction')
       if (compaction && PROBLEM.has(compaction.verdict)) {
         const entries = gradedEntries(compaction)
-        const oracle = sum(entries.map(([, entry]) => entry.oracle.perSessionUniqueSum))
-        const swob = sum(entries.map(([, entry]) => entry.swob.compactCountSum))
-        if (oracle && swob) {
-          parts.push(fillText(DIGEST_TEXT.compaction, {
-            n: [number(oracle.value, oracle.labels), number(swob.value, swob.labels)],
-            verdict: VERDICT_LABELS[compaction.verdict]
-          }))
+        const failing = entries
+          .filter(([source, entry]) => PROBLEM.has(entry.verdict) && SOURCE_LABELS[source])
+          .map(([source, entry]) => ({ source, verdict: entry.verdict, oracle: sum([entry.oracle.perSessionUniqueSum]), swob: sum([entry.swob.compactCountSum]) }))
+          .filter((part) => part.oracle && part.swob)
+        if (failing.length > 0) {
+          for (const part of failing) {
+            parts.push(fillText(DIGEST_TEXT.compactionSource, {
+              source: SOURCE_LABELS[part.source],
+              n: [number(part.oracle!.value, part.oracle!.labels), number(part.swob!.value, part.swob!.labels)],
+              verdict: VERDICT_LABELS[part.verdict]
+            }))
+          }
+        } else {
+          const oracle = sum(entries.map(([, entry]) => entry.oracle.perSessionUniqueSum))
+          const swob = sum(entries.map(([, entry]) => entry.swob.compactCountSum))
+          if (oracle && swob) {
+            parts.push(fillText(DIGEST_TEXT.compaction, {
+              n: [number(oracle.value, oracle.labels), number(swob.value, swob.labels)],
+              verdict: VERDICT_LABELS[compaction.verdict]
+            }))
+          }
         }
       }
     }

@@ -72,6 +72,20 @@ try {
   assert.match(unexpectedExecutable.stderr, /unexpected\.exe: outside outer payload allowlist/)
   fs.rmSync(path.join(resourcesRoot, 'unexpected.exe'))
 
+  // Outer CLI payload: cli.js, the `swob doctor checkup` worker and shared chunks are allowed; any
+  // other file directly under cli/ is not.
+  fs.mkdirSync(path.join(resourcesRoot, 'cli', 'chunks'), { recursive: true })
+  fs.writeFileSync(path.join(resourcesRoot, 'cli', 'cli.js'), 'cli fixture\n')
+  fs.writeFileSync(path.join(resourcesRoot, 'cli', 'checkup-worker.js'), 'checkup worker fixture\n')
+  fs.writeFileSync(path.join(resourcesRoot, 'cli', 'chunks', 'shared.js'), 'chunk fixture\n')
+  const cliPayload = runCheck()
+  assert.equal(cliPayload.status, 0, cliPayload.stderr || cliPayload.stdout)
+  fs.writeFileSync(path.join(resourcesRoot, 'cli', 'other-worker.js'), 'must not be accepted\n')
+  const unexpectedCliFile = runCheck()
+  assert.notEqual(unexpectedCliFile.status, 0, 'unexpected CLI payload file passed')
+  assert.match(unexpectedCliFile.stderr, /cli\/other-worker\.js: outside outer payload allowlist/)
+  fs.rmSync(path.join(resourcesRoot, 'cli'), { recursive: true })
+
   write('.claude/settings.local.json', '{"private":true}\n')
   await createPackage(sourceRoot, asarPath)
   const dirty = runCheck()
@@ -85,7 +99,7 @@ try {
   const dirtyOuter = runCheck()
   assert.notEqual(dirtyOuter.status, 0, 'dirty outer payload unexpectedly passed')
   assert.match(dirtyOuter.stderr, /outer payload contains private segment \.claude/)
-  console.log('Package policy self-test passed: Windows NSIS helper accepted; unexpected executable and private settings rejected.')
+  console.log('Package policy self-test passed: Windows NSIS helper and CLI payload (incl. checkup worker) accepted; unexpected executable, unexpected CLI file and private settings rejected.')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }

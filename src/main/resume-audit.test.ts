@@ -656,6 +656,31 @@ describe('resume audit', () => {
     ])
   })
 
+  it('Cursor 恢复目录的来源如实计数：未经 harness 确认的在逐来源诊断里标出，只给计数不给路径', async () => {
+    const labelled = (['reported', 'derived', 'estimated'] as const).map((provenance, index) => {
+      const id = `66666666-6666-4666-8666-66666666666${index}`
+      const cursorFile = writeFile(path.join(tempRoot, '.cursor', 'projects', 'p', 'agent-transcripts', id, `${id}.jsonl`))
+      const session = summary('cursor', id, cursorFile)
+      session.resumeCwd = path.join(tempRoot, `private-workspace-${provenance}`)
+      session.cwds = [session.resumeCwd]
+      session.cwdProvenance = provenance
+      return session
+    })
+    const claudeFile = writeFile(path.join(tempRoot, '.claude', 'projects', 'p', `${IDS.claude}.jsonl`))
+
+    const report = await runResumeAudit({
+      sessions: [...labelled, summary('claude-code', IDS.claude, claudeFile)],
+      pathEnv: binDir
+    })
+
+    expect(report.perSource.cursor.cwdProvenance).toEqual({ reported: 1, derived: 1, estimated: 1 })
+    expect(report.cwdProvenance).toEqual({ reported: 1, derived: 1, estimated: 1 })
+    expect(report.perSource['claude-code'].cwdProvenance).toBeUndefined()
+    const output = formatResumeAuditReport(report)
+    expect(output).toContain('resume cwd not confirmed by the harness: derived=1, estimated=1 (reported=1)')
+    expect(output).not.toContain('private-workspace')
+  })
+
   it('人类可读输出包含表格、TOP3 和公式说明且不泄漏源路径', async () => {
     const sourcePath = writeFile(path.join(tempRoot, 'private-project-name', `${IDS.claude}.jsonl`))
     const report = await runResumeAudit({

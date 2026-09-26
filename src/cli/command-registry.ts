@@ -5,7 +5,11 @@ export const CLI_EXIT_CODES = [
   { code: 0, meaning: '成功' },
   { code: 1, meaning: '参数、输入或执行错误' },
   { code: 2, meaning: '标识符歧义' },
-  { code: 3, meaning: '目标不存在' }
+  { code: 3, meaning: '目标不存在' },
+  { code: 4, meaning: 'doctor checkup：满足 --fail-on 条件（报告照常写出）' },
+  { code: 5, meaning: 'doctor checkup：只读或隔离保证不成立，未写报告' },
+  { code: 6, meaning: 'doctor checkup：Swob app 正在运行，拒绝体检' },
+  { code: 7, meaning: 'doctor checkup：隐私扫描拒绝，未写任何文件' }
 ] as const
 
 export interface CliCommandDefinition {
@@ -43,6 +47,7 @@ export const CLI_COMMANDS: readonly CliCommandDefinition[] = [
   { usage: 'transcript rebuild --all [--dry-run] [--missing-only]', summary: '重建全部 Library transcript（高成本）', output: 'JSON', examples: ['swob transcript rebuild --all --missing-only'] },
   { usage: 'doctor locks [--json]', summary: '只读检查 writer 锁、owner 存活性与显式恢复可用性', output: 'JSON 锁诊断与证据哈希；不输出设备标识', examples: ['swob doctor locks --json'] },
   { usage: 'doctor library [--json]', summary: '只读检查 Library 写状态、identity issue 与 stale 数量', output: 'JSON Library 健康摘要', examples: ['swob doctor library --json'] },
+  { usage: 'doctor checkup [--report <目录|文件.md>] [--json] [--sources a,b] [--compare <上次.json>|none] [--fail-on fail|warn|never]', summary: '只读内核体检：在隔离子进程里把 Swob 读到的会话与原始数据逐项对拍，生成老板看得懂的报告；不写库、不改任何会话数据', output: '--report 目录：写 Swob内核体检-日期-机器标签.md/.json 与 最新-机器标签.md，stdout 为一行摘要（加 --json 为结果摘要 JSON）；--report 文件.md：写该文件与同名 .json；只给 --json：stdout 为完整报告 JSON；都不给：stdout 为 Markdown 报告', examples: ['swob doctor checkup --report ./体检', 'swob doctor checkup --report ./体检 --json --fail-on fail', 'swob doctor checkup --json --sources claude-code,codex'] },
   { usage: 'verify <bundle-dir|manifest.json> [--json]', summary: '离线验证 Truth Kernel evidence bundle 的内容寻址完整性', output: 'JSON 验证结果；不会读取或修改 Library', examples: ['swob verify ./evidence-bundle --json'] },
   { usage: 'redact [--dry-run]', summary: '对派生 transcript 回填脱敏', output: 'JSON', examples: ['swob redact --dry-run'] },
   { usage: 'install', summary: '安装或更新 CLI wrapper 和本 Skill', output: 'JSON 安装结果', examples: ['swob install'] }
@@ -78,7 +83,7 @@ export function renderCliHelp(): string {
     '  --version                  显示版本（可加 --json）',
     '  --json                     stdout 仅输出 JSON；诊断信息写入 stderr',
     '',
-    '退出码: 0 成功；1 错误；2 歧义；3 不存在',
+    '退出码: 0 成功；1 错误；2 歧义；3 不存在；doctor checkup 另有 4 满足 --fail-on、5 只读或隔离保证不成立、6 Swob app 在运行、7 隐私扫描拒绝',
     ''
   ].join('\n')
 }

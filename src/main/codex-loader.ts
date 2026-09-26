@@ -219,9 +219,12 @@ export function extractCodexTokenAccounting(
         currentProvider,
         costNumber(last) ?? costNumber(info) ?? costNumber(line.payload)
       )
+      // No timestamp: a forked child copies its parent's snapshots with
+      // rewritten timestamps, and the copy must share the parent's key so the
+      // fact counts once across files (same identity as dedupHint in a file).
       snapshot.billingFactKey = totalKey || turnId
         ? [
-            'codex:event', line.timestamp, currentModel || 'unknown-model',
+            'codex:event', currentModel || 'unknown-model',
             currentProvider || 'unknown-provider', turnId || 'no-turn-id',
             usageSignature(last), totalKey || 'no-total'
           ].join(':')

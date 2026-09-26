@@ -12,8 +12,10 @@ import {
   loadCodexSessionRecord,
   loadCodexSessionRecordWithRaw,
   rememberCodexSessionFile,
-  parseCodexFileWithStats
+  parseCodexFileWithStats,
+  type CodexLine
 } from './codex-loader'
+import { codexClock, codexRow, codexTime, copiedPrefix } from './__fixtures__/codex-rollout-synthetic'
 
 function writeTempJsonl(lines: object[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-test-'))
@@ -206,37 +208,56 @@ describe('codex-loader', () => {
       expect(combined.rawMessages.length).toBeGreaterThan(0)
     })
 
-    it('resume/fork 复制前缀在无 turn_id 的真实格式下生成相同计费事实指纹', () => {
-      const lines = [
-        {
-          timestamp: '2026-07-31T12:00:00.000Z',
-          type: 'session_meta',
-          payload: { id: 'one', timestamp: '2026-07-31T12:00:00.000Z', cwd: '/repo', cli_version: '1', model_provider: 'openai' }
-        },
-        {
-          timestamp: '2026-07-31T12:00:01.000Z',
-          type: 'turn_context',
-          payload: { turn_id: 'context-only', model: 'gpt-5.6-luna' }
-        },
-        {
-          timestamp: '2026-07-31T12:00:02.000Z',
-          type: 'event_msg',
-          payload: {
-            type: 'token_count',
-            info: {
-              last_token_usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 10 },
-              total_token_usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 10 }
-            }
-          }
-        }
-      ] as any[]
+    // 键序照《附录-Codex键序普查》（__fixtures__/codex-rollout-synthetic.ts）；token_count 无 turn_id，与真实格式一致。
+    it('分叉副本改写时间戳后，billingFactKey 仍与父会话相同（F1b）', () => {
+      const parentId = '7f1b0000-0000-4000-8000-000000000021'
+      const at = codexClock('2026-07-31T12:00:00.000Z')
+      const parentRows = [
+        codexRow.topLevelMeta({ ...at(), id: parentId, cwd: '/repo' }),
+        codexRow.turnContext({ ...at(), turnId: 'turn-1', cwd: '/repo', model: 'gpt-5.6-luna' }),
+        codexRow.userMessage({ ...at(), text: '第一个问题' }),
+        codexRow.tokenCount({ ...at(), total: { input: 100, cached: 20, output: 10 }, last: { input: 100, cached: 20, output: 10 } }),
+        codexRow.turnContext({ ...at(), turnId: 'turn-2', cwd: '/repo', model: 'gpt-5.6-luna' }),
+        codexRow.userMessage({ ...at(), text: '第二个问题' }),
+        codexRow.tokenCount({ ...at(), total: { input: 250, cached: 60, output: 25 }, last: { input: 150, cached: 40, output: 15 } })
+      ]
+      const forkedAt = '2026-07-31T13:00:00.000Z'
+      const childRows = [
+        codexRow.threadSpawnMeta({
+          timestamp: forkedAt, ordinal: 0, id: '7f1b0000-0000-4000-8000-000000000022', parentId,
+          cwd: '/repo', depth: 1, historyStartOrdinal: parentRows.length
+        }),
+        ...copiedPrefix(parentRows.slice(1), { startIso: codexTime(forkedAt, 1), firstOrdinal: 1 })
+      ]
 
-      const original = extractCodexTokenAccounting(lines)
-      const copied = extractCodexTokenAccounting(structuredClone(lines))
+      const original = extractCodexTokenAccounting(parentRows as unknown as CodexLine[])
+      const copied = extractCodexTokenAccounting(childRows as unknown as CodexLine[], 'subagent')
 
-      expect(original.usageEvents).toHaveLength(1)
-      expect(original.usageEvents[0].billingFactKey).toMatch(/^codex:event:/)
-      expect(copied.usageEvents[0].billingFactKey).toBe(original.usageEvents[0].billingFactKey)
+      expect(original.usageEvents).toHaveLength(2)
+      expect(original.usageEvents.every((event) => event.billingFactKey?.startsWith('codex:event:'))).toBe(true)
+      const copiedTimestamps = new Set(copied.usageEvents.map((event) => event.timestamp))
+      expect(original.usageEvents.some((event) => copiedTimestamps.has(event.timestamp))).toBe(false)
+      expect(copied.usageEvents.map((event) => event.billingFactKey))
+        .toEqual(original.usageEvents.map((event) => event.billingFactKey))
+    })
+
+    it('反例：累计值不同就是不同的计费事实，单轮用量相同也不共用键（F1b）', () => {
+      const at = codexClock('2026-07-31T12:00:00.000Z')
+      const sameTurn = { input: 100, cached: 20, output: 10 }
+      const rows = [
+        codexRow.topLevelMeta({ ...at(), id: '7f1b0000-0000-4000-8000-000000000023', cwd: '/repo' }),
+        codexRow.turnContext({ ...at(), turnId: 'turn-1', cwd: '/repo', model: 'gpt-5.6-luna' }),
+        codexRow.tokenCount({ ...at(), total: sameTurn, last: sameTurn }),
+        codexRow.turnContext({ ...at(), turnId: 'turn-2', cwd: '/repo', model: 'gpt-5.6-luna' }),
+        codexRow.tokenCount({ ...at(), total: { input: 200, cached: 40, output: 20 }, last: sameTurn })
+      ]
+
+      const accounting = extractCodexTokenAccounting(rows as unknown as CodexLine[])
+      const keys = accounting.usageEvents.map((event) => event.billingFactKey)
+
+      expect(keys).toHaveLength(2)
+      expect(new Set(keys).size).toBe(2)
+      expect(accounting.billingTotal).toBe(2 * (80 + 20 + 10))
     })
 
     it('正确解析 Codex session 为 SessionSummary', async () => {

@@ -30,6 +30,15 @@ import { buildResumeCommand, resolveSessionActionContext } from './session-actio
 import { shellQuote } from './resume-terminal'
 import { accountingFromMutuallyExclusiveUsage } from './token-accounting'
 import { installFakeSqlite3, realSqlite3Path, type FakeSqlite3 } from './__test-support__/fake-sqlite3'
+import {
+  codexClock,
+  codexJsonl,
+  codexRow,
+  codexTime,
+  copiedPrefix,
+  type CodexFixtureRow,
+  type CodexRowBase
+} from './__fixtures__/codex-rollout-synthetic'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -2995,4 +3004,137 @@ describe('SQLite-agent sources under sqlite3 failures (F1e)', () => {
     })
     expect(readSummaryCacheRow(home, flakyRef)).toEqual(row)
   }, 60_000)
+})
+
+// 键序照《附录-Codex键序普查》，见 __fixtures__/codex-rollout-synthetic.ts；值全部是合成的。
+describe('Codex 子 agent：压缩、分叉用量与孙级挂接（F1b）', () => {
+  const CWD = '/synthetic/project'
+  const MODEL = 'gpt-5.5-codex'
+  const TOP_ID = '7f1b0000-0000-4000-8000-000000000011'
+  const CHILD_ID = '7f1b0000-0000-4000-8000-000000000012'
+
+  function codexHome(): { home: string; write: (id: string, rows: CodexFixtureRow[]) => string } {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-codex-f1b-home-'))
+    const directory = path.join(home, '.codex', 'sessions', '2026', '09', '20')
+    fs.mkdirSync(directory, { recursive: true })
+    return {
+      home,
+      write: (id, rows) => {
+        const filePath = path.join(directory, `rollout-2026-09-20T08-00-00-${id}.jsonl`)
+        fs.writeFileSync(filePath, codexJsonl(rows))
+        return filePath
+      }
+    }
+  }
+
+  /**
+   * A forked thread-spawn child: its session_meta, the parent's rows after the
+   * parent's session_meta copied with rewritten timestamps, then `own` rows.
+   */
+  function forkedChildRows(params: {
+    id: string
+    parentId: string
+    depth: number
+    parentRows: CodexFixtureRow[]
+    forkedAt: string
+    own: (at: () => CodexRowBase) => CodexFixtureRow[]
+  }): CodexFixtureRow[] {
+    const inherited = copiedPrefix(params.parentRows.slice(1), {
+      startIso: codexTime(params.forkedAt, 1),
+      firstOrdinal: 1
+    })
+    const meta = codexRow.threadSpawnMeta({
+      timestamp: params.forkedAt,
+      ordinal: 0,
+      id: params.id,
+      parentId: params.parentId,
+      cwd: CWD,
+      depth: params.depth,
+      historyStartOrdinal: 1 + inherited.length
+    })
+    const own = params.own(codexClock(codexTime(params.forkedAt, 60_000), 1 + inherited.length))
+    return [meta, ...inherited, ...own]
+  }
+
+  /** Two parent turns before the fork: 1,100 + 1,650 billable tokens. */
+  function parentPrefixRows(): CodexFixtureRow[] {
+    const at = codexClock('2026-09-20T08:00:00.000Z')
+    return [
+      codexRow.topLevelMeta({ ...at(), id: TOP_ID, cwd: CWD }),
+      codexRow.turnContext({ ...at(), turnId: 'parent-turn-1', cwd: CWD, model: MODEL }),
+      codexRow.userMessage({ ...at(), text: '父会话的问题' }),
+      codexRow.assistantMessage({ ...at(), text: '父会话的回答' }),
+      codexRow.tokenCount({
+        ...at(),
+        total: { input: 1000, cached: 200, output: 100 },
+        last: { input: 1000, cached: 200, output: 100 }
+      }),
+      codexRow.turnContext({ ...at(), turnId: 'parent-turn-2', cwd: CWD, model: MODEL }),
+      codexRow.userMessage({ ...at(), text: '父会话的第二个问题' }),
+      codexRow.tokenCount({
+        ...at(),
+        total: { input: 2500, cached: 700, output: 250 },
+        last: { input: 1500, cached: 500, output: 150 }
+      })
+    ]
+  }
+
+  it('分叉子 agent 抄写父会话用量快照（时间戳改写）：父会话 billingTotal 只计一次，审计行两份都在', async () => {
+    const { home, write } = codexHome()
+    const prefix = parentPrefixRows()
+    const after = codexClock('2026-09-20T08:20:00.000Z', prefix.length)
+    write(TOP_ID, [
+      ...prefix,
+      codexRow.turnContext({ ...after(), turnId: 'parent-turn-3', cwd: CWD, model: MODEL }),
+      codexRow.userMessage({ ...after(), text: '分叉之后父会话继续' }),
+      codexRow.tokenCount({
+        ...after(),
+        total: { input: 3700, cached: 1000, output: 370 },
+        last: { input: 1200, cached: 300, output: 120 }
+      })
+    ])
+    write(CHILD_ID, forkedChildRows({
+      id: CHILD_ID,
+      parentId: TOP_ID,
+      depth: 1,
+      parentRows: prefix,
+      forkedAt: '2026-09-20T08:10:00.000Z',
+      own: (next) => [
+        codexRow.turnContext({ ...next(), turnId: 'child-turn-1', cwd: CWD, model: MODEL }),
+        codexRow.userMessage({ ...next(), text: '子任务' }),
+        codexRow.assistantMessage({ ...next(), text: '子任务完成' }),
+        codexRow.tokenCount({
+          ...next(),
+          total: { input: 3100, cached: 900, output: 300 },
+          last: { input: 600, cached: 200, output: 50 }
+        })
+      ]
+    }))
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+      const parent = sessions.find((session) => session.sessionId === TOP_ID)
+      const events = parent?.tokenAccounting?.usageEvents ?? []
+
+      expect(sessions.map((session) => session.sessionId)).toEqual([TOP_ID])
+      // Parent 1,100 + 1,650 + 1,320 once; the child adds only its own 650.
+      expect(parent?.tokenAccounting?.billingTotal).toBe(4_720)
+      expect(parent?.tokenAccounting?.conversationOnly).toBe(4_070)
+      expect(events).toHaveLength(6)
+      const copiedFacts = new Map<string, typeof events>()
+      for (const event of events) {
+        const key = event.billingFactKey ?? event.dedupKey
+        copiedFacts.set(key, [...(copiedFacts.get(key) ?? []), event])
+      }
+      const shared = [...copiedFacts.values()].filter((group) => group.length > 1)
+      expect(shared).toHaveLength(2)
+      for (const group of shared) {
+        expect(new Set(group.map((event) => event.auditSourceId))).toEqual(new Set([TOP_ID, CHILD_ID]))
+        expect(new Set(group.map((event) => event.timestamp)).size).toBe(2)
+      }
+      expect(parent?.tokenAccounting?.warnings).toContain('deduplicated 2 cross-session usage events')
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
 })

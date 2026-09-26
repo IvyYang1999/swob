@@ -4,7 +4,20 @@ import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { typescriptRuntimeDependencyClosure } from '../main/__test-support__/typescript-runtime-closure'
 import { protectedLocations, validateStateDir } from './isolated-home'
-import { SESSION_PACKAGE_MARKER, readMachineModel, reportTargetVerdict, type ReportTargetContext } from './run-guard'
+import {
+  CHECKUP_KERNEL_VERSION,
+  CHECKUP_WORKER_EXIT,
+  SESSION_PACKAGE_MARKER,
+  auditHeld,
+  auditTargets,
+  compareAudit,
+  isolatedWorkerEnv,
+  readMachineModel,
+  reportTargetVerdict,
+  swobAppRunning,
+  takeAudit,
+  type ReportTargetContext
+} from './run-guard'
 import { MACHINE_MODEL } from './privacy'
 
 const dirs: string[] = []
@@ -131,5 +144,83 @@ describe('readMachineModel (report header, dispatcher decision 3)', () => {
     for (const model of ['Mac16,10', 'MacBookPro18,3', 'iMac21,1']) expect(MACHINE_MODEL.test(model), model).toBe(true)
     const local = readMachineModel()
     if (local !== null) expect(local).toMatch(MACHINE_MODEL)
+  })
+})
+
+describe('isolatedWorkerEnv (environment of the doctor checkup worker)', () => {
+  const parent: NodeJS.ProcessEnv = {
+    PATH: '/usr/bin:/bin', NODE_PATH: '/app/node_modules', CODEX_HOME: '/codex', LANG: 'zh_CN.UTF-8',
+    HOME: '/real/home', TMPDIR: '/real/tmp', NODE_ENV: 'test', VITEST: 'true', SWOB_E2E_RUNNER: '1',
+    SWOB_E2E_SANDBOX_ROOT: '/sandbox', SWOB_TEST_HOME: '/sandbox/home', SWOB_TEST_SYSTEM_TEMP_ROOT: '/tmp',
+    SWOB_LIBRARY_ROOT: '/real/vault', SWOB_USER_DATA_ROOT: '/real/user-data', SWOB_SEARCH_INDEX_DIR: '/real/search'
+  }
+  const isolated = {
+    HOME: '/state/home', TMPDIR: '/state/tmp', SWOB_CANONICAL_STORE_DIR: '/state/canonical',
+    SWOB_SEARCH_INDEX_DIR: '/state/search', SWOB_USAGE_INDEX_PATH: '/state/usage/usage-facts.db'
+  }
+
+  it('keeps PATH, NODE_PATH and CODEX_HOME, drops test markers and library overrides, and lets the isolated home win', () => {
+    const env = isolatedWorkerEnv(parent, isolated, { NODE_PATH: '/repo/node_modules', HOME: '/not/allowed' })
+    expect(env).toEqual({
+      PATH: '/usr/bin:/bin', NODE_PATH: '/repo/node_modules', CODEX_HOME: '/codex', LANG: 'zh_CN.UTF-8', ...isolated
+    })
+  })
+
+  it('maps worker exits the CLI understands', () => {
+    expect(CHECKUP_WORKER_EXIT).toEqual({ ok: 0, failure: 1, usage: 2, notIsolated: 5, privacy: 7 })
+  })
+})
+
+describe('run guards shared with the dev runner (Swob app probe, read-only audit)', () => {
+  it('treats only a pgrep exit 0 as a running Swob app', () => {
+    expect(swobAppRunning(() => 0)).toBe(true)
+    expect(swobAppRunning(() => 1)).toBe(false)
+    expect(swobAppRunning(() => null)).toBe(false)
+  })
+
+  it('records SQLite sidecars without counting them, and catches any change to Swob state, App Support/Swob, <library>/.swob or a main database', () => {
+    const home = tempDir('run-guard-audit-home-')
+    const vault = tempDir('run-guard-audit-vault-')
+    mkdir(home, '.claude-session-manager')
+    fs.writeFileSync(path.join(home, '.claude-session-manager', 'app-config.json'), '{}')
+    mkdir(home, 'Library', 'Application Support', 'Swob')
+    mkdir(vault, '.swob')
+    mkdir(home, '.codex')
+    fs.writeFileSync(path.join(home, '.codex', 'state_5.sqlite'), 'db')
+    fs.writeFileSync(path.join(home, '.codex', 'logs_2.sqlite'), 'not a thread db')
+    const targets = auditTargets(home, vault)
+    expect(targets.sqlite).toEqual([
+      path.join(home, '.codex', 'state_5.sqlite'),
+      path.join(home, '.local', 'share', 'opencode', 'opencode.db'),
+      path.join(home, '.zcode', 'cli', 'db', 'db.sqlite')
+    ])
+    const before = takeAudit(targets)
+    const compare = (): ReturnType<typeof compareAudit> => compareAudit(before, takeAudit(targets), targets, home)
+
+    fs.writeFileSync(path.join(home, '.codex', 'state_5.sqlite-wal'), 'wal')
+    const sidecar = compare()
+    expect(auditHeld(sidecar)).toBe(true)
+    expect(sidecar).toMatchObject({ sidecarsTouched: ['~/.codex/state_5.sqlite-wal'], protectedEntries: expect.any(Number) })
+    expect(sidecar.protectedEntries).toBeGreaterThanOrEqual(4)
+
+    fs.writeFileSync(path.join(vault, '.swob', 'lock'), 'x')
+    expect(compare()).toMatchObject({ libraryDotSwobUnchanged: false, stateDirUnchanged: true })
+    expect(auditHeld(compare())).toBe(false)
+    fs.rmSync(path.join(vault, '.swob', 'lock'))
+
+    fs.writeFileSync(path.join(home, 'Library', 'Application Support', 'Swob', 'x'), 'x')
+    expect(compare().appSupportUnchanged).toBe(false)
+    fs.rmSync(path.join(home, 'Library', 'Application Support', 'Swob', 'x'))
+
+    fs.appendFileSync(path.join(home, '.codex', 'state_5.sqlite'), 'changed')
+    expect(compare().sourceMainDbUnchanged).toBe(false)
+
+    fs.writeFileSync(path.join(home, '.claude-session-manager', 'intruder'), 'x')
+    expect(compare().stateDirUnchanged).toBe(false)
+  })
+
+  it('accepts only plain kernel versions for the report header', () => {
+    for (const version of ['1.4.0', '1.4', '1.4.0-beta.1', '2.0.0+build.7']) expect(CHECKUP_KERNEL_VERSION.test(version), version).toBe(true)
+    for (const version of ['v1.4.0', '1', 'secret build', '1.4.0 (home/user)', '']) expect(CHECKUP_KERNEL_VERSION.test(version), version).toBe(false)
   })
 })

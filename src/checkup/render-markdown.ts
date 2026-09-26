@@ -245,10 +245,26 @@ function compareLine(comparison: CheckupComparison | null, options: RenderOption
   if (!comparison) return COMPARE_TEXT.none
   if (!comparison.comparable || !comparison.issues) return fillText(COMPARE_TEXT.refused, { reason: reasonText(comparison.refusal) })
   const issues = comparison.issues
-  return fillText(COMPARE_TEXT.summary, {
+  const counts = [issues.added.length, issues.fixed.length, issues.unchanged.length, issues.firstCheck.length]
+  // Previous issues this run could not look at are named here too, not only in the section below.
+  return fillText(issues.notChecked.length > 0 ? COMPARE_TEXT.summaryWithNotChecked : COMPARE_TEXT.summary, {
     date: localTime(comparison.previous.generatedAt, options.utcOffsetMinutes).date,
-    n: [issues.added.length, issues.fixed.length, issues.unchanged.length, issues.firstCheck.length].map(formatNumber)
+    n: (issues.notChecked.length > 0 ? [...counts, issues.notChecked.length] : counts).map(formatNumber)
   })
+}
+
+/**
+ * Sources whose raw data is present while the readout returned no session (readout.source-empty, listed
+ * under ①), in source order. The finding never grades ①, so it is surfaced at the top as well.
+ */
+function emptySourceFindings(report: CheckupReport): Finding[] {
+  const findings = (findCheck(report, 'inclusion')?.findings ?? [])
+    .filter((finding) => finding.code === 'readout.source-empty' && sourceLabel(finding.source) !== null)
+  const order = (source: string): number => {
+    const index = (SOURCE_IDS as readonly string[]).indexOf(source)
+    return index < 0 ? SOURCE_IDS.length : index
+  }
+  return findings.sort((left, right) => order(left.source) - order(right.source))
 }
 
 function overallLines(report: CheckupReport, comparison: CheckupComparison | null, options: RenderOptions): string[] {
@@ -259,6 +275,10 @@ function overallLines(report: CheckupReport, comparison: CheckupComparison | nul
     n: [formatNumber(checks.length), count('fail'), count('warn'), count('pass'), count('not-applicable'), count('undetermined')]
   }))
   if (report.verdict === 'undetermined') lines.push('', fillText(MARKDOWN_TEXT.overallReason, { reason: reasonText(report.verdictReason) }))
+  const empty = emptySourceFindings(report)
+  if (empty.length > 0) {
+    lines.push('', fillText(MARKDOWN_TEXT.overallSourceEmpty, { sources: [...new Set(empty.map((finding) => sourceLabel(finding.source)!))].join('、') }))
+  }
   const failing = checks.filter((check) => check.verdict === 'fail').map((check) => CHECK_LABELS[check.id])
   const warning = checks.filter((check) => check.verdict === 'warn').map((check) => CHECK_LABELS[check.id])
   if (failing.length > 0) lines.push('', fillText(MARKDOWN_TEXT.adviceFail, { checks: failing.join('、') }))
@@ -282,23 +302,53 @@ function orderedSources(report: CheckupReport): string[] {
   return [...seen].filter((source) => sourceLabel(source) !== null)
 }
 
+/** Findings that explain a graded per-source cell by themselves (short reason in brackets, own legend line). */
+const ANNOTATED_FINDING_CODES: ReadonlySet<string> = new Set(['unsupported.kimi-legacy-sessions'])
+
+/** The one annotated finding code behind a source's warn/fail in `check`, if that is its only problem. */
+function annotatedFindingCode(check: CheckResult | undefined, source: string): string | null {
+  const codes = new Set((check?.findings ?? [])
+    .filter((finding) => finding.source === source && (finding.verdict === 'warn' || finding.verdict === 'fail'))
+    .map((finding) => finding.code))
+  const [code] = codes
+  return codes.size === 1 && ANNOTATED_FINDING_CODES.has(code) && (REASON_SHORT_TEXT as Readonly<Record<string, string>>)[code] ? code : null
+}
+
 function sourcesLines(report: CheckupReport): string[] {
   const withReadout = !!report.readoutBySource
   const header = [MARKDOWN_TEXT.colSource, ...CHECK_ORDER.map((id) => CHECK_SHORT_LABELS[id]), ...(withReadout ? [MARKDOWN_TEXT.colReadoutSessions] : [])]
   const groups = new Map<string, { sources: string[]; cells: string[] }>()
+  const empty = new Map(emptySourceFindings(report).map((finding) => [finding.source, finding]))
+  let annotated = false
   for (const source of orderedSources(report)) {
     const cells = CHECK_ORDER.map((id) => {
-      const entry = findCheck(report, id)?.bySource[source]
-      return entry ? verdictCell(entry.verdict, entry.swob.status?.reason, true) : '—'
+      const check = findCheck(report, id)
+      const entry = check?.bySource[source]
+      if (!entry) return '—'
+      // e.g. 「注意（旧版目录）」: Kimi Code's ① warning comes only from the legacy Kimi directory.
+      const code = GRADED.has(entry.verdict) ? annotatedFindingCode(check, source) : null
+      if (code) {
+        annotated = true
+        return fillText(MARKDOWN_TEXT.verdictWithReason, { verdict: VERDICT_LABELS[entry.verdict], reason: (REASON_SHORT_TEXT as Readonly<Record<string, string>>)[code] })
+      }
+      return verdictCell(entry.verdict, entry.swob.status?.reason, true)
     })
-    if (withReadout) cells.push(measureCell(report.readoutBySource?.[source]?.sessions) || '—')
+    if (withReadout) {
+      const cell = measureCell(report.readoutBySource?.[source]?.sessions) || '—'
+      const flagged = empty.get(source)
+      // 「0[R]（注意）」: raw data present, nothing read (readout.source-empty).
+      cells.push(flagged ? fillText(MARKDOWN_TEXT.readoutCellFlagged, { n: cell, verdict: VERDICT_LABELS[flagged.verdict] }) : cell)
+    }
     const key = cells.join('\u0000')
     const group = groups.get(key) ?? { sources: [], cells }
     group.sources.push(source)
     groups.set(key, group)
   }
   const rows = [...groups.values()].map((group) => [group.sources.map((source) => sourceLabel(source)!).join(' · '), ...group.cells])
-  return [`## ${MARKDOWN_TEXT.sourcesHeading}`, '', ...table(header, rows), '', MARKDOWN_TEXT.sourcesLegend]
+  return [
+    `## ${MARKDOWN_TEXT.sourcesHeading}`, '', ...table(header, rows), '', MARKDOWN_TEXT.sourcesLegend,
+    ...(annotated ? ['', MARKDOWN_TEXT.sourcesLegendLegacy] : [])
+  ]
 }
 
 type Entry = CheckResult['bySource'][string]
@@ -582,6 +632,18 @@ function sizeText(bytes: number): string {
   return fillText(MARKDOWN_TEXT.kilobytes, { n: formatNumber(bytes === 0 ? 0 : Math.max(0.1, Math.round((bytes / 1024) * 10) / 10)) })
 }
 
+/**
+ * Roots Swob does not scan that belong to an older or auxiliary layout get their own registered names
+ * (SOURCE_LABELS 'kimi-legacy' / 'zcode-v2'), so the legacy Kimi directory is not read as Kimi Code
+ * (acceptance P2-8).
+ */
+const UNSCANNED_ROOT_LABELS: Readonly<Record<string, string>> = { '~/.kimi/sessions': 'kimi-legacy', '~/.zcode/v2': 'zcode-v2' }
+
+function inventorySourceLabel(row: CheckupReport['inventory'][number]): string {
+  const own = !row.scannedBySwob ? UNSCANNED_ROOT_LABELS[row.root] : undefined
+  return (own ? sourceLabel(own) : null) ?? sourceLabel(row.source)!
+}
+
 function inventoryLines(report: CheckupReport, options: RenderOptions): string[] {
   const shown = report.inventory.filter((row) => sourceLabel(row.source) !== null && (row.units.value === null || row.units.value > 0))
   if (report.inventory.length === 0) return []
@@ -591,7 +653,7 @@ function inventoryLines(report: CheckupReport, options: RenderOptions): string[]
     const span = min && max
       ? fillText(MARKDOWN_TEXT.timeSpan, { date: [localTime(min, options.utcOffsetMinutes).date, localTime(max, options.utcOffsetMinutes).date] })
       : '—'
-    return [sourceLabel(row.source)!, row.root, measureCell(row.units), bytes, span, row.scannedBySwob ? MARKDOWN_TEXT.scannedYes : MARKDOWN_TEXT.scannedNo]
+    return [inventorySourceLabel(row), row.root, measureCell(row.units), bytes, span, row.scannedBySwob ? MARKDOWN_TEXT.scannedYes : MARKDOWN_TEXT.scannedNo]
   })
   const lines = [`## ${MARKDOWN_TEXT.inventoryHeading}`, '']
   if (rows.length > 0) {

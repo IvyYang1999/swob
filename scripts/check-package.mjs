@@ -195,6 +195,8 @@ function checkOuterPayload(resourcesRoot, asarEntries, violations) {
     'cli',
     'cli/chunks',
     'cli/cli.js',
+    // Child process of `swob doctor checkup` (isolated HOME); runs from cli/ like cli.js.
+    'cli/checkup-worker.js',
   ])
 
   for (const relative of listOuterPaths(resourcesRoot)) {

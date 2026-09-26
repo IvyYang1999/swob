@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### 新功能
+
+- **`swob doctor checkup`：只读内核体检报告**：把 Swob 内核读到的会话与原始数据的独立清点逐项对拍，写出老板看得懂的 Markdown 报告和同名 JSON（`--report <目录>` 写 `Swob内核体检-日期-机器标签.md/.json` 与 `最新-机器标签.md`，stdout 为一行摘要）。内核在隔离的子进程里、以一次性的 HOME 运行；运行前后对 Swob 状态目录、库的 `.swob` 与各来源数据库做元数据审计，必须零变化；报告要过隐私白名单扫描；同一台机器的上一份报告会自动拿来比对。本命令新增退出码：4 满足 `--fail-on`、5 只读或隔离保证不成立、6 Swob app 正在运行、7 隐私扫描拒绝。暂不支持 Windows。
+
 ### 修复
 
 - **`swob insights` 的 token 标签改为名副其实（对 JSON 消费方不兼容，数值不变）**：insights 的 token 汇总原来标为 `input_plus_output`，但数值一直是计费口径：非缓存输入 + 缓存读 + 缓存写 + 输出。现在标签改为 `billing_total`，涉及 `totalTokensMetric`（`--summary` 与完整 `--json` 输出都有），以及 summary 里 `bySource`、`byModel`、`topProjects` 各行的 `tokenMetric`。所有数值与之前完全相同，只是标签字符串变了；按 `input_plus_output` 匹配 insights 输出的消费方需改认 `billing_total`。`swob list` 与 `swob search` 的 `tokenMetric` 仍是 `input_plus_output`（非缓存输入 + 输出，不含缓存），它们本来就标对了。已安装的 /swob Skill 要重新运行 `swob install` 才会换成新说明。

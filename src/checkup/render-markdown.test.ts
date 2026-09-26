@@ -29,7 +29,7 @@ import {
   reportFileNames
 } from './render-markdown'
 import { checkupDigest } from './digest'
-import { OTHER_FINGERPRINT, allUndeterminedReport, clone, mixedReport, passReport, u } from './__fixtures__/checkup-reports'
+import { OTHER_FINGERPRINT, allUndeterminedReport, clone, finding, mixedReport, passReport, r, u } from './__fixtures__/checkup-reports'
 import { CANARY, assertInsideTestSandbox, buildSampleHome } from './__test-support__/sample-home'
 
 // The sample-HOME report runs the kernel, which captured HOME at import time: the Vitest sandbox home.
@@ -156,7 +156,8 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     expect(markdown).toContain('内核：swob 1.4.0 @e51a952')
     // Every number carries a label; unavailable values are 「—（原因）」, never 0.
     expect(markdown).toContain('| Codex | 9,000[R] | 0[R] | 9,000[R] | —（Swob 没有按文件给出读入数） | 0[D] | — | 100%[D] |')
-    expect(markdown).toContain('| OpenCode · ZCode | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未实现） | 无法判定（未实现） | 无法判定（未实现） | 0[R] |')
+    expect(markdown).toContain('| OpenCode | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未实现） | 无法判定（未实现） | 无法判定（未实现） | 0[R]（注意） |')
+    expect(markdown).toContain('| ZCode | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未实现） | 无法判定（未实现） | 无法判定（未实现） | 0[R] |')
     expect(markdown).toContain('- 注意 · OpenCode：本机有这个来源的数据，但 Swob 这次一场会话都没读到\n')
     expect(markdown).toContain('| ② 内容完整 | 不通过 | 有 3 条记录没读进来，其中 2 条是对话内容[D] | 转给开发；修好之前别信这一项的数字 |')
     expect(markdown).toContain('| ④ 血统与分支 | 无法判定（本版未实现） | 本版体检还没有实现这一项 | 暂时无需处理，等体检补齐 |')
@@ -201,7 +202,53 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     expect(markdown).toContain('| Cursor | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未实现） | 不适用（来源不提供） | 无法判定（未实现） | 7[R] |')
     expect(markdown).toContain('| CC-Mirror | 不适用（无数据） |')
     expect(markdown).toContain('| Antigravity · Grok Build · Pi · Hermes · Qoder · Trae | 不适用（无数据） |')
-    expect(markdown).toContain('| Kimi Code | 注意 | 无法判定（未检查） |')
+    expect(markdown).toContain('| Kimi Code | 注意（旧版目录） | 无法判定（未检查） |')
+  })
+
+  it('surfaces a source read as empty at the top: a line under the overall verdict and a flagged cell (acceptance P2-1)', () => {
+    const markdown = renderCheckupMarkdown(mixedReport(), RENDER)
+    const lines = markdown.split('\n')
+    const counts = lines.findIndex((line) => line.startsWith('6 项检查里：'))
+    expect(lines.slice(counts + 1, counts + 3)).toEqual(['', '注意：OpenCode 在本机有数据，但 Swob 这次一场会话都没读到。这不影响上面的结论，详见 ① 会话纳入。'])
+    expect(markdown).toContain('| 0[R]（注意） |')
+    // Also when nothing could be judged, and with several sources in source order.
+    const report = allUndeterminedReport()
+    report.checks[0].findings.push(
+      finding('readout.source-empty', 'warn', 'zcode', u('units', 'census.not-implemented')),
+      finding('readout.source-empty', 'warn', 'opencode', u('units', 'census.not-implemented'))
+    )
+    report.readoutBySource!.opencode = { sessions: r(0, 'sessions') }
+    report.readoutBySource!.zcode = { sessions: r(0, 'sessions') }
+    const undetermined = renderCheckupMarkdown(report, RENDER)
+    expect(undetermined).toContain('\n注意：OpenCode、ZCode 在本机有数据，但 Swob 这次一场会话都没读到。这不影响上面的结论，详见 ① 会话纳入。\n')
+    expect(undetermined).toContain('| OpenCode · ZCode | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未检查） | 无法判定（未实现） | 无法判定（未实现） | 无法判定（未实现） | 0[R]（注意） |')
+    // Even when every graded check passes (the finding never grades ①).
+    const passing = passReport()
+    passing.checks[0].findings.push(finding('readout.source-empty', 'warn', 'opencode', u('units', 'census.not-implemented')))
+    const passingMarkdown = renderCheckupMarkdown(passing, RENDER)
+    expect(passingMarkdown).toContain('## 总评：通过')
+    expect(passingMarkdown).toContain('注意：OpenCode 在本机有数据')
+    const clean = mixedReport()
+    clean.checks[0].findings = clean.checks[0].findings.filter((entry) => entry.code !== 'readout.source-empty')
+    const cleanMarkdown = renderCheckupMarkdown(clean, RENDER)
+    expect(cleanMarkdown).not.toContain('一场会话都没读到')
+    expect(cleanMarkdown).not.toContain('（注意） |')
+  })
+
+  it('marks a legacy-directory-only warning as 「注意（旧版目录）」 with its own legend line (acceptance P2-8)', () => {
+    const legend = '旧版目录＝问题只出在这个工具的旧版目录里（Kimi 是 ~/.kimi/sessions），与新版本身无关。'
+    const markdown = renderCheckupMarkdown(mixedReport(), RENDER)
+    expect(markdown).toContain(`\n${legend}\n`)
+    // The inventory appendix names the unscanned legacy directory by its own registered label.
+    expect(markdown).toContain('| Kimi 旧版目录 | ~/.kimi/sessions | 3[R] |')
+    expect(markdown).not.toContain('| Kimi Code | ~/.kimi/sessions |')
+    // A second, different problem on the same source keeps the plain verdict (and no legend).
+    const mixedProblems = mixedReport()
+    mixedProblems.checks[0].findings.push(finding('inclusion.unexplained', 'warn', 'kimi', r(1, 'units')))
+    const plain = renderCheckupMarkdown(mixedProblems, RENDER)
+    expect(plain).toContain('| Kimi Code | 注意 | 无法判定（未检查） |')
+    expect(plain).not.toContain(legend)
+    expect(renderCheckupMarkdown(allUndeterminedReport(), RENDER)).not.toContain(legend)
   })
 
   it('renders 「和上次比」 only with a previous report, and refuses other machines', async () => {

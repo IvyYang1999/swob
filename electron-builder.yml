@@ -35,6 +35,10 @@ files:
 extraResources:
   - from: out/main/cli.js
     to: cli/cli.js
+  # `swob doctor checkup` runs the kernel in this isolated child process; the
+  # system Node cannot read app.asar, so it ships next to cli.js.
+  - from: out/main/checkup-worker.js
+    to: cli/checkup-worker.js
   - from: out/main/chunks/
     to: cli/chunks/
   # Keep the same outer notices contract on macOS, Windows, and Linux.

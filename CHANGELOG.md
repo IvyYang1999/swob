@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### New
+
+- **`swob doctor checkup` — a read-only kernel checkup report** — compares what the Swob kernel reads with an independent count of the raw session data and writes an owner-readable Markdown report plus its JSON (`--report <dir>` writes `Swob内核体检-<date>-<machine tag>.md/.json` and `最新-<machine tag>.md`; stdout gets a one-line digest). The kernel runs in an isolated child process against a throw-away HOME; a before/after metadata audit of Swob's state, the library's `.swob` and the source databases must come back unchanged, reports must pass a privacy whitelist scan, and a same-machine previous report is compared automatically. New exit codes for this command: 4 (`--fail-on` met), 5 (read-only or isolation guarantee did not hold), 6 (the Swob app is running), 7 (privacy scan refused). Not available on Windows yet.
+
 ### Fixed
 
 - **`swob insights` token label now names what it counts (breaking for JSON consumers; numbers unchanged)** — the insights token totals were labelled `input_plus_output`, but they have always been the billing total: non-cached input + cache read + cache write + output. The label is now `billing_total`: `totalTokensMetric` (in both the `--summary` and the full `--json` output) and `tokenMetric` on the summary's `bySource`, `byModel` and `topProjects` rows. Every number is exactly as before; only the label string changed, so consumers that match `input_plus_output` on insights output must switch to `billing_total`. `swob list` and `swob search` keep `tokenMetric: "input_plus_output"` (non-cached input + output, no cache), which was already correct. An installed /swob Skill picks up the new wording after `swob install`.

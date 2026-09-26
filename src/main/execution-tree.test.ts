@@ -36,4 +36,34 @@ describe('buildExecutionTree linked Codex subagents', () => {
       expect.objectContaining({ id: 'child-agent', subagentType: 'Reviewer', status: 'completed' })
     ])
   })
+
+  it('孙级 thread_spawn 挂在顶层的 subagents 里，但执行树只显示直接子 agent（F1b）', () => {
+    const linked: SessionSubagentSummary[] = [
+      {
+        sessionId: 'child-agent',
+        parentSessionId: 'parent',
+        role: 'thread-spawn',
+        filePath: '/tmp/child.jsonl',
+        createdAt: '2026-07-22T00:00:00Z',
+        updatedAt: '2026-07-22T00:01:00Z',
+        agentNickname: 'Reviewer',
+        status: 'completed'
+      },
+      {
+        sessionId: 'grandchild-agent',
+        parentSessionId: 'child-agent',
+        role: 'thread-spawn',
+        filePath: '/tmp/grandchild.jsonl',
+        createdAt: '2026-07-22T00:00:30Z',
+        updatedAt: '2026-07-22T00:00:50Z',
+        agentNickname: 'Helper',
+        status: 'completed'
+      }
+    ]
+
+    const tree = buildExecutionTree([], 'parent', linked)
+
+    expect(tree.totalAgentSpawns).toBe(1)
+    expect(tree.turns.flatMap((turn) => turn.agentSpawns).map((spawn) => spawn.id)).toEqual(['child-agent'])
+  })
 })

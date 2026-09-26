@@ -2631,35 +2631,56 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
 
   // Codex persists guardian and thread-spawn workers as independent rollout
   // files. They are not user-facing sessions. Attach their identity and
-  // child-only usage to the structured parent without double counting a copied
-  // event; main evidence wins any dedup collision.
-  const codexSubagentsByParent = new Map<string, Map<string, CodexSubagentRecord>>()
+  // child-only usage to the top-level session they descend from (a worker can
+  // spawn workers of its own) without double counting a copied event; main
+  // evidence wins any dedup collision.
+  const codexSubagentsById = new Map<string, CodexSubagentRecord>()
   for (const { filePath, source } of descriptors) {
     if (source !== 'codex') continue
     const subagent = entries[filePath]?.perFile.codexSubagent
-    if (!subagent?.parentSessionId) continue
-    let children = codexSubagentsByParent.get(subagent.parentSessionId)
-    if (!children) {
-      children = new Map()
-      codexSubagentsByParent.set(subagent.parentSessionId, children)
-    }
-    const current = children.get(subagent.sessionId)
+    if (!subagent) continue
+    const current = codexSubagentsById.get(subagent.sessionId)
     const currentTotal = current?.tokenAccounting.billingTotal ?? -1
     const candidateTotal = subagent.tokenAccounting.billingTotal ?? -1
     if (!current || candidateTotal > currentTotal ||
         (candidateTotal === currentTotal && subagent.updatedAt > current.updatedAt)) {
-      children.set(subagent.sessionId, subagent)
+      codexSubagentsById.set(subagent.sessionId, subagent)
     }
   }
+  // Follow parentSessionId up to the first ancestor that is a top-level
+  // session. A worker whose chain breaks (an intermediate rollout is gone),
+  // loops or runs deeper than the cap stays unattached, as before.
+  const maxCodexSubagentDepth = 16
+  const topLevelCodexAncestor = (subagent: CodexSubagentRecord): string | undefined => {
+    const visited = new Set([subagent.sessionId])
+    let ancestorId = subagent.parentSessionId
+    for (let hops = 0; ancestorId && hops < maxCodexSubagentDepth; hops++) {
+      if (visited.has(ancestorId)) return undefined
+      if (nonClaudeBySession.has(`codex:${ancestorId}`)) return ancestorId
+      visited.add(ancestorId)
+      ancestorId = codexSubagentsById.get(ancestorId)?.parentSessionId
+    }
+    return undefined
+  }
+  const codexSubagentsByTopLevel = new Map<string, CodexSubagentRecord[]>()
+  for (const subagent of codexSubagentsById.values()) {
+    const topLevelId = topLevelCodexAncestor(subagent)
+    if (!topLevelId) continue
+    const descendants = codexSubagentsByTopLevel.get(topLevelId)
+    if (descendants) descendants.push(subagent)
+    else codexSubagentsByTopLevel.set(topLevelId, [subagent])
+  }
 
-  for (const [parentSessionId, childrenById] of codexSubagentsByParent) {
+  for (const [parentSessionId, descendants] of codexSubagentsByTopLevel) {
     const parentKey = `codex:${parentSessionId}`
     const parent = nonClaudeBySession.get(parentKey)
     if (!parent) continue
-    const children = [...childrenById.values()].sort((left, right) =>
+    const children = descendants.sort((left, right) =>
       left.role.localeCompare(right.role) || left.createdAt.localeCompare(right.createdAt) ||
       left.sessionId.localeCompare(right.sessionId)
     )
+    // Every thread-spawn descendant, each keeping its direct parent in
+    // parentSessionId; the execution tree still shows direct children only.
     const subagents = children
       .filter((child) => child.role === 'thread-spawn')
       .map(({ tokenAccounting: _tokenAccounting, ...subagent }) => subagent)

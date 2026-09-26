@@ -27,6 +27,7 @@ import {
   parseSessionFileWithStats
 } from './session-loader'
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
+import { buildExecutionTree } from './execution-tree'
 import { shellQuote } from './resume-terminal'
 import { accountingFromMutuallyExclusiveUsage } from './token-accounting'
 import { installFakeSqlite3, realSqlite3Path, type FakeSqlite3 } from './__test-support__/fake-sqlite3'
@@ -3173,6 +3174,146 @@ describe('Codex 子 agent：压缩、分叉用量与孙级挂接（F1b）', () =
         expect(new Set(group.map((event) => event.timestamp)).size).toBe(2)
       }
       expect(parent?.tokenAccounting?.warnings).toContain('deduplicated 2 cross-session usage events')
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('顶层 → 子 → 孙（子下另挂 guardian）：全部挂到顶层，subagents 含子和孙且各自保留直接父，抄写前缀只计一次', async () => {
+    const { home, write } = codexHome()
+    const grandchildId = '7f1b0000-0000-4000-8000-000000000013'
+    const guardianId = '7f1b0000-0000-4000-8000-000000000014'
+    const prefix = parentPrefixRows()
+    write(TOP_ID, prefix)
+    const childRows = forkedChildRows({
+      id: CHILD_ID,
+      parentId: TOP_ID,
+      depth: 1,
+      parentRows: prefix,
+      forkedAt: '2026-09-20T08:10:00.000Z',
+      own: (next) => [
+        codexRow.turnContext({ ...next(), turnId: 'child-turn-1', cwd: CWD, model: MODEL }),
+        codexRow.userMessage({ ...next(), text: '子任务' }),
+        codexRow.tokenCount({
+          ...next(),
+          total: { input: 3100, cached: 900, output: 300 },
+          last: { input: 600, cached: 200, output: 50 }
+        }),
+        codexRow.assistantMessage({ ...next(), text: '子任务完成' })
+      ]
+    })
+    write(CHILD_ID, childRows)
+    write(grandchildId, forkedChildRows({
+      id: grandchildId,
+      parentId: CHILD_ID,
+      depth: 2,
+      parentRows: childRows,
+      forkedAt: '2026-09-20T08:30:00.000Z',
+      own: (next) => [
+        codexRow.turnContext({ ...next(), turnId: 'grandchild-turn-1', cwd: CWD, model: MODEL }),
+        codexRow.userMessage({ ...next(), text: '孙任务' }),
+        codexRow.tokenCount({
+          ...next(),
+          total: { input: 3500, cached: 1000, output: 340 },
+          last: { input: 400, cached: 100, output: 40 }
+        }),
+        codexRow.assistantMessage({ ...next(), text: '孙任务完成' })
+      ]
+    }))
+    const guardian = codexClock('2026-09-20T08:40:00.000Z')
+    write(guardianId, [
+      codexRow.guardianMeta({ ...guardian(), id: guardianId, parentId: CHILD_ID, cwd: CWD }),
+      codexRow.turnContext({ ...guardian(), turnId: 'guardian-turn-1', cwd: CWD, model: MODEL }),
+      codexRow.userMessage({ ...guardian(), text: '审批请求' }),
+      codexRow.tokenCount({
+        ...guardian(),
+        total: { input: 300, cached: 0, output: 30 },
+        last: { input: 300, cached: 0, output: 30 }
+      }),
+      codexRow.assistantMessage({ ...guardian(), text: '批准' })
+    ])
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+      const parent = sessions.find((session) => session.sessionId === TOP_ID)
+      const events = parent?.tokenAccounting?.usageEvents ?? []
+
+      expect(sessions.map((session) => session.sessionId)).toEqual([TOP_ID])
+      expect(parent?.subagents?.map(({ sessionId, parentSessionId, role }) => ({ sessionId, parentSessionId, role }))).toEqual([
+        { sessionId: CHILD_ID, parentSessionId: TOP_ID, role: 'thread-spawn' },
+        { sessionId: grandchildId, parentSessionId: CHILD_ID, role: 'thread-spawn' }
+      ])
+      // Parent 1,100 + 1,650, child 650, grandchild 440, guardian 330: each fact once.
+      expect(parent?.tokenAccounting?.billingTotal).toBe(4_170)
+      expect(parent?.tokenAccounting?.conversationOnly).toBe(2_750)
+      expect(new Set(events.map((event) => event.auditSourceId)))
+        .toEqual(new Set([TOP_ID, CHILD_ID, grandchildId, guardianId]))
+      expect(events).toHaveLength(10)
+      expect(buildExecutionTree([], TOP_ID, parent?.subagents ?? []).turns.flatMap((turn) => turn.agentSpawns)
+        .map((spawn) => spawn.id)).toEqual([CHILD_ID])
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('中间父文件缺失：孙级挂不上就照旧丢弃，不报错，顶层不受影响', async () => {
+    const { home, write } = codexHome()
+    const prefix = parentPrefixRows()
+    write(TOP_ID, prefix)
+    write('7f1b0000-0000-4000-8000-000000000015', forkedChildRows({
+      id: '7f1b0000-0000-4000-8000-000000000015',
+      parentId: CHILD_ID,
+      depth: 2,
+      parentRows: prefix,
+      forkedAt: '2026-09-20T08:30:00.000Z',
+      own: (next) => [
+        codexRow.turnContext({ ...next(), turnId: 'orphan-turn-1', cwd: CWD, model: MODEL }),
+        codexRow.tokenCount({
+          ...next(),
+          total: { input: 2900, cached: 800, output: 290 },
+          last: { input: 400, cached: 100, output: 40 }
+        })
+      ]
+    }))
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+
+      expect(sessions.map((session) => session.sessionId)).toEqual([TOP_ID])
+      expect(sessions[0].subagents).toBeUndefined()
+      expect(sessions[0].tokenAccounting?.billingTotal).toBe(2_750)
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it('环与超深链：互为父或自为父的记录不挂接，链超过 16 层的部分不挂接，都不会死循环', async () => {
+    const { home, write } = codexHome()
+    write(TOP_ID, parentPrefixRows())
+    const worker = (id: string, parentId: string, depth: number, minute: number): CodexFixtureRow[] => {
+      const at = codexClock(codexTime('2026-09-20T09:00:00.000Z', minute * 60_000))
+      return [
+        codexRow.threadSpawnMeta({ ...at(), id, parentId, cwd: CWD, depth, historyStartOrdinal: 1 }),
+        codexRow.turnContext({ ...at(), turnId: `${id}-turn`, cwd: CWD, model: MODEL }),
+        codexRow.userMessage({ ...at(), text: '子任务' })
+      ]
+    }
+    const loopA = '7f1b0000-0000-4000-8000-0000000000a1'
+    const loopB = '7f1b0000-0000-4000-8000-0000000000a2'
+    const selfParent = '7f1b0000-0000-4000-8000-0000000000a3'
+    write(loopA, worker(loopA, loopB, 1, 1))
+    write(loopB, worker(loopB, loopA, 1, 2))
+    write(selfParent, worker(selfParent, selfParent, 1, 3))
+    const chain = Array.from({ length: 17 }, (_, index) =>
+      `7f1b0000-0000-4000-8000-0000000001${String(index + 1).padStart(2, '0')}`)
+    chain.forEach((id, index) => write(id, worker(id, index === 0 ? TOP_ID : chain[index - 1], index + 1, 10 + index)))
+
+    try {
+      const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
+      const attached = sessions[0].subagents?.map((subagent) => subagent.sessionId) ?? []
+
+      expect(sessions.map((session) => session.sessionId)).toEqual([TOP_ID])
+      expect(attached).toEqual(chain.slice(0, 16))
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }

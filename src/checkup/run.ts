@@ -37,6 +37,7 @@ import {
   applicabilityEntry,
   assembleCheck,
   makeFinding,
+  remainingSources,
   reported,
   unavailable,
   worstVerdict,
@@ -313,9 +314,15 @@ function sourceEmptyFindings(
   return findings
 }
 
-function scopeNotImplementedChecks(): CheckResult[] {
+/**
+ * Day and range scopes are not implemented yet: each selected source is undetermined. A source the run did
+ * not select reads source.not-selected exactly as on the full path (C1d; common.ts applicability), so a
+ * later comparison never counts its earlier problems as fixed (compare.ts checkedSources).
+ */
+function scopeNotImplementedChecks(selected: ReadonlySet<string>): CheckResult[] {
   return CHECK_ORDER.map((id) => {
-    const bySource = Object.fromEntries(SOURCE_IDS.map((source) => [source, applicabilityEntry('undetermined', 'checkup.scope-not-implemented')]))
+    const bySource = remainingSources(id, { presence: [], selected }, selected)
+    for (const source of selected) bySource[source] = applicabilityEntry('undetermined', 'checkup.scope-not-implemented')
     return assembleCheck({ id, bySource, findings: [], headline: 'check.not-implemented', reason: 'checkup.scope-not-implemented' })
   })
 }
@@ -384,7 +391,7 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
   }
 
   if (scope.kind !== 'all') {
-    const checks = scopeNotImplementedChecks()
+    const checks = scopeNotImplementedChecks(selected)
     const overall = overallVerdict(checks, selfTest)
     const report: CheckupReport = {
       ...base,

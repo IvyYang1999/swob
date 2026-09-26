@@ -31,6 +31,7 @@ import {
   reportFileNames
 } from './render-markdown'
 import { checkupDigest } from './digest'
+import { compareIssues, sourcesSelected } from './compare'
 import { OTHER_FINGERPRINT, allUndeterminedReport, clone, d, finding, mixedReport, partialReport, passReport, r, u } from './__fixtures__/checkup-reports'
 import { CANARY, assertInsideTestSandbox, buildSampleHome } from './__test-support__/sample-home'
 
@@ -369,6 +370,45 @@ describe('renderCheckupMarkdown on the sample HOME report (runKernelCheckup)', (
     expect(markdown).not.toContain('## 附：原始数据盘点')
     expect(markdown).toContain('没有记录到副作用。')
     expect(checkupDigest(day)).toBe('体检 · 无法判定（没有能给出结论的检查项）')
+  })
+
+  it('marks the sources a one-day --sources run did not select, as a full run does (C1d)', async () => {
+    const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'checkup-render-day-')))
+    assertInsideTestSandbox(stateDir)
+    const dayScope = { kind: 'day', day: '2026-09-26' } as const
+    let everything: CheckupReport
+    let day: CheckupReport
+    try {
+      everything = await runKernelCheckup({ homeDir: HOME, stateDir, privacySalt: 'render-test-salt', scope: dayScope })
+      day = await runKernelCheckup({ homeDir: HOME, stateDir, privacySalt: 'render-test-salt', scope: dayScope, sources: ['claude-code', 'codex'] })
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true })
+    }
+    expect(validate(day), JSON.stringify(validate.errors)).toBe(true)
+    for (const check of day.checks) {
+      expect([check.verdict, check.reason], check.id).toEqual(['undetermined', 'checkup.scope-not-implemented'])
+      for (const [source, entry] of Object.entries(check.bySource)) {
+        expect([entry.verdict, entry.swob.status?.reason], `${check.id} ${source}`).toEqual(source === 'claude-code' || source === 'codex'
+          ? ['undetermined', 'checkup.scope-not-implemented']
+          : ['not-applicable', 'source.not-selected'])
+      }
+    }
+    expect(sourcesSelected(day)).toEqual(['claude-code', 'codex'])
+    expect(sourcesSelected(everything)).toBe('all')
+    // Why (compare.ts compareIssues): once a day check can conclude, an earlier problem of a source this
+    // run did not select is 「本次未检查」, never 「已修复」.
+    const previous = clone(everything)
+    previous.checks[0].findings.push(finding('unsupported.kimi-legacy-sessions', 'warn', 'kimi', r(3, 'sessions')))
+    const concluded = clone(day)
+    concluded.checks[0].verdict = 'pass'
+    delete concluded.checks[0].reason
+    const issues = compareIssues(previous, concluded)
+    expect(issues.fixed).toEqual([])
+    expect(issues.notChecked.map((issue) => [issue.code, issue.source])).toEqual([['unsupported.kimi-legacy-sessions', 'kimi']])
+    const markdown = renderCheckupMarkdown(day, RENDER)
+    expect(markdown).toContain('不适用（未选）')
+    expect(scanMarkdownForPrivacy(markdown)).toEqual({ ok: true, hits: [] })
+    expect(checkupDigest(day)).toBe('体检（部分来源） · 无法判定（没有能给出结论的检查项）')
   })
 
   it('shows the per-source readout sessions', () => {

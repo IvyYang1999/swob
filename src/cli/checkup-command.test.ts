@@ -280,6 +280,25 @@ describe.sequential('swob doctor checkup (in process, isolated worker)', () => {
     expect(stateDirsLeft()).toEqual([])
   })
 
+  it('exit 1: --sources with a --report directory (it would replace the full report of the day); allowed with a .md file or --json', async () => {
+    clearReports()
+    const refused = await invoke(['doctor', 'checkup', '--report', reportDir, '--sources', 'claude-code'], fake('report', passReport()))
+    expect(refused.code).toBe(1)
+    expect(errorOf(refused)).toMatchObject({ code: 'checkup-sources-with-report-directory' })
+    expect(refused.stdout).toBe('')
+    expect(reportFiles()).toEqual([])
+    expect(stateDirsLeft()).toEqual([])
+    // Checked before the target: even a directory that does not exist gets this answer.
+    const missingDir = await invoke(['doctor', 'checkup', '--report', path.join(vault, 'missing'), '--sources', 'claude-code'], fake('report', passReport()))
+    expect(errorOf(missingDir)).toMatchObject({ code: 'checkup-sources-with-report-directory' })
+    const file = await invoke(['doctor', 'checkup', '--report', path.join(reportDir, '部分来源.md'), '--sources', 'claude-code'], fake('report', passReport()))
+    expect(file.code, file.stderr).toBe(0)
+    expect(reportFiles()).toEqual(['部分来源.json', '部分来源.md'])
+    const json = await invoke(['doctor', 'checkup', '--json', '--sources', 'claude-code,codex'], fake('report', passReport()))
+    expect(json.code, json.stderr).toBe(0)
+    clearReports()
+  })
+
   it('exit 1: a --compare report from another machine, without fingerprint, or not a v1 report', async () => {
     const dir = tempDir('checkup-compare-')
     // The fixture's fingerprint (a1b2c3d4) is not this machine's.

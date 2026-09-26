@@ -97,6 +97,7 @@ const FAILURE_TEXT: Readonly<Record<string, string>> = {
   'checkup-usage': USAGE,
   'checkup-unknown-option': `不认识的选项。${USAGE}`,
   'checkup-sources-invalid': '--sources 里有不认识的来源',
+  'checkup-sources-with-report-directory': '--sources 只体检部分来源，不能和 --report <目录> 合用：目录里写的是当天的全量报告和 最新-<机器标签>.md，不能被部分来源的结果覆盖；请改用 --report <文件.md> 或 --json',
   'checkup-fail-on-invalid': '--fail-on 只能是 fail、warn 或 never',
   'checkup-home-invalid': 'HOME 不是一个存在的目录',
   'checkup-worker-missing': '找不到体检子进程的入口文件，安装可能不完整',
@@ -542,6 +543,9 @@ async function doctorCheckup(args: readonly string[], flags: Record<string, stri
 
   // 2. Arguments, the --compare file and the --report target (nothing is created yet).
   const options = parseCheckupOptions(args, flags)
+  // A directory holds the day's full report and 最新-<tag>.md (and feeds the next automatic comparison):
+  // a checkup of some sources only must never replace them.
+  if (options.sources && options.report !== null && !/\.md$/i.test(options.report)) fail(CHECKUP_EXIT.error, 'checkup-sources-with-report-directory')
   const realHome = realDirectory(ctx.realHome) ?? fail(CHECKUP_EXIT.error, 'checkup-home-invalid')
   const targetContext: TargetContext = { realHome, libraryRoot: ctx.libraryRoot }
   const target = options.report !== null ? resolveReportTarget(options.report, targetContext) : null

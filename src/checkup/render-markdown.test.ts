@@ -93,7 +93,8 @@ describe('text registries (templates.ts)', () => {
     const older = mixedReport()
     older.checks[1].findings.push(
       finding('readout.parse-timeout', 'undetermined', 'claude-code', r(1, 'files')),
-      finding('content.swob-extra-records', 'warn', 'codex', d(1, 'files'))
+      finding('content.swob-extra-records', 'warn', 'codex', d(1, 'files')),
+      finding('content.unexplained-loss', 'fail', 'codex', d(1, 'records'))
     )
     const retiredHints = RETIRED_TEMPLATES.filter((entry) => entry.field === 'engineerHint')
     for (const check of older.checks) {
@@ -308,7 +309,7 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     await expect(withPrevious).toMatchFileSnapshot('./__fixtures__/snapshots/mixed-with-previous-owner.md')
     expect(withPrevious).toContain('和上次比（上次 2026-09-26）：新增问题 1 项，已修复 0 项，未变 4 项，首次检查 0 项。')
     expect(withPrevious).toContain('## 和上次比')
-    expect(withPrevious).toContain('| 未变 | ② 内容完整 | Claude Code | 带特殊行分隔符的记录，Swob 实测读入数少于规范读法 | 5[D] | 3[D] | -2 |')
+    expect(withPrevious).toContain('| 未变 | ② 内容完整 | Claude Code | 带特殊行分隔符的记录没读全 | 5[D] | 3[D] | -2 |')
     expect(withPrevious).toContain('| 新增问题 | ③ 压缩识别 | Codex | 含旧格式压缩记录的会话，Swob 一次都没认出来 | — | 4[D] | — |')
     expect(withPrevious).not.toMatch(/\.json|a1b2c3d4/)
 

@@ -95,7 +95,18 @@ describe('privacy scanner', () => {
       ...Object.values(FINDING_TEXT).flatMap((text) => text ? [text.ownerLine, text.engineerHint] : []),
       ...Object.values(REASON_TEXT)
     ])
-    expect(RETIRED_TEMPLATES.length).toBeGreaterThan(0)
+    // The sentences of checkup 1.2.0 (efc0bb7) that C1d reworded; a registered sentence never leaves the table.
+    expect(RETIRED_TEMPLATES.map((entry) => `${entry.code}:${entry.field}`).sort()).toEqual([
+      'codex.legacy-compacted-unrecognized:engineerHint',
+      'codex.legacy-compacted-unrecognized:reasonText',
+      'codex.nested-subagent-orphan:engineerHint',
+      'content.line-separator-split:engineerHint',
+      'content.line-separator-split:ownerLine',
+      'content.line-separator-split:reasonText',
+      'content.swob-extra-records:engineerHint',
+      'content.unexplained-loss:engineerHint',
+      'readout.parse-timeout:engineerHint'
+    ])
     for (const entry of RETIRED_TEMPLATES) {
       expect(REASON_CODES).toContain(entry.code)
       // No overlap: a retired sentence is kept for older reports only, never written any more.

@@ -190,6 +190,8 @@ export interface SessionSummary {
   allFilePaths?: string[]
   permissionMode?: string
   resumeCwd?: string
+  /** How cwds/resumeCwd were obtained when the harness does not write them down (Cursor); absent otherwise. */
+  cwdProvenance?: 'reported' | 'derived' | 'estimated'
   /** Physical Codex lifecycle; replayed denotes a live fork/replay child. */
   lifecycleState?: SessionLifecycleState
   branchParentFilePaths?: string[]

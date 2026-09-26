@@ -1,3 +1,4 @@
+import * as crypto from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
 import { readJsonlRecords, type JsonlReadStats } from './jsonl-lines'
@@ -115,19 +116,235 @@ export async function loadCursorRawMessages(filePath: string, sessionIdOverride?
   const lines = await parseCursorFile(filePath)
   if (lines.length === 0) return []
   const sessionId = sessionIdOverride || extractSessionId(filePath)
-  return cursorToRawMessages(lines, sessionId, filePath)
+  return cursorToRawMessages(lines, sessionId, filePath, resolveCursorWorkspace(filePath, lines).cwd)
 }
 
-// --- Derive project path from the transcript location ---
+// --- Resolve the workspace (cwd) a transcript belongs to ---
+//
+// Cursor names the transcript folder after the workspace path, turning every run
+// of non-alphanumeric characters into `-` (`<cursorRoot>/projects/<slug>/…`). The
+// name alone cannot tell which `-` was a `/` and which belonged to a folder name.
+// What Cursor records exactly is the md5 of the workspace path: a session's resume
+// store sits at `<cursorRoot>/chats/<md5(workspace)>/<sessionId>/`. That directory
+// name cannot be reversed, but it confirms a guessed path.
+//
+// Guesses come from the transcript itself (every absolute path in its text and
+// tool inputs, e.g. <user_query>, `path`, `working_directory`, plus all their
+// ancestor directories) and the old reading of the folder name; when those miss,
+// from a walk of the real filesystem that only enters directories whose names
+// fit the slug. Only directory names under chats/ are read; store.db is never
+// opened.
+//
+//   reported  - md5(guess) names the chats directory that holds this session, so
+//               the guess is the exact workspace Cursor recorded (the directory
+//               may have been deleted since).
+//   derived   - Cursor keeps no chats record of this session, and exactly one
+//               existing directory taken from the transcript fits the slug.
+//   estimated - nothing confirmed: the old reading of the folder name, every `-`
+//               taken as `/`, kept exactly as before so nothing regresses.
 
-function deriveProjectPath(filePath: string): string {
-  const parts = filePath.split(path.sep)
-  const projectsIdx = parts.indexOf('projects')
-  if (projectsIdx >= 0 && projectsIdx + 1 < parts.length) {
-    const slug = parts[projectsIdx + 1]
-    return '/' + slug.replace(/-/g, '/')
+type CwdProvenance = NonNullable<SessionSummary['cwdProvenance']>
+
+export interface CursorWorkspaceResolution {
+  /** '' when the transcript location gives nothing to go on (e.g. a Library backup). */
+  cwd: string
+  provenance?: CwdProvenance
+}
+
+interface CursorTranscriptLocation {
+  /** The `.cursor` directory the transcript lives in; never the module-level HOME. */
+  cursorRoot: string
+  /** `projects/<slug>`: the workspace path as Cursor slugged it. */
+  projectSlug: string
+  /** The session folder under agent-transcripts; chats/ uses the same id. */
+  transcriptSessionId: string
+}
+
+const MAX_WORKSPACE_CANDIDATES = 20_000
+const MAX_PATH_VALUE_LENGTH = 4096
+const MAX_CLUE_SCAN_DEPTH = 8
+const SLUG_WALK_MAX_DIRS = 2_000
+const SLUG_WALK_MAX_DEPTH = 32
+const SLUG_WALK_MAX_MATCHES = 64
+
+// An absolute POSIX path inside free text. It starts at a `/` that does not
+// continue a URL (`://`), a relative path (`a/b`, `./b`, `../b`), `~/…` or a
+// word, and runs until whitespace, a quote, `<>|\` or CJK punctuation.
+const ABSOLUTE_PATH_IN_TEXT = /(?<![\w.:/~-])\/[^\s"'`<>|\\，。；：！？、（）「」『』【】《》“”‘’]+/gu
+const FILE_URL_PREFIX = /file:\/\/(?=\/)/g
+
+/** Cursor's folder name for a workspace path: runs of non-alphanumerics become `-`, trimmed. */
+export function cursorProjectSlug(workspacePath: string): string {
+  return workspacePath.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+/** `<cursorRoot>/projects/<slug>/agent-transcripts/<sessionId>/…/<file>.jsonl`, else null. */
+function cursorTranscriptLocation(filePath: string): CursorTranscriptLocation | null {
+  const parts = path.resolve(filePath).split(path.sep)
+  const transcriptsIdx = parts.lastIndexOf('agent-transcripts')
+  if (transcriptsIdx < 3 || parts[transcriptsIdx - 2] !== 'projects') return null
+  if (transcriptsIdx + 2 >= parts.length) return null
+  const projectSlug = parts[transcriptsIdx - 1]
+  const transcriptSessionId = parts[transcriptsIdx + 1]
+  if (!projectSlug || !transcriptSessionId || transcriptSessionId === '.' || transcriptSessionId === '..') return null
+  return {
+    cursorRoot: parts.slice(0, transcriptsIdx - 2).join(path.sep) || path.sep,
+    projectSlug,
+    transcriptSessionId
   }
-  return ''
+}
+
+/** The pre-F1c reading of the folder name: every `-` taken as `/`. */
+function legacyWorkspaceGuess(projectSlug: string): string {
+  return '/' + projectSlug.replace(/-/g, '/')
+}
+
+function isDirectory(target: string): boolean {
+  try {
+    return fs.statSync(target).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function workspaceHash(workspacePath: string): string {
+  return crypto.createHash('md5').update(workspacePath).digest('hex')
+}
+
+function forEachString(value: unknown, visit: (text: string) => void, depth = 0): void {
+  if (depth > MAX_CLUE_SCAN_DEPTH || value === null || value === undefined) return
+  if (typeof value === 'string') {
+    visit(value)
+  } else if (Array.isArray(value)) {
+    for (const item of value) forEachString(item, visit, depth + 1)
+  } else if (typeof value === 'object') {
+    for (const item of Object.values(value as Record<string, unknown>)) forEachString(item, visit, depth + 1)
+  }
+}
+
+/** Absolute paths the transcript mentions, each with all its ancestor directories. */
+function workspaceCandidatesFromTranscript(lines: readonly unknown[]): Set<string> {
+  const candidates = new Set<string>()
+  const addWithAncestors = (clue: string): void => {
+    if (clue.includes('\0')) return
+    let dir = path.posix.resolve(clue)
+    while (dir !== '/' && !candidates.has(dir) && candidates.size < MAX_WORKSPACE_CANDIDATES) {
+      candidates.add(dir)
+      dir = path.posix.dirname(dir)
+    }
+  }
+  for (const line of lines) {
+    forEachString(line, (text) => {
+      if (candidates.size >= MAX_WORKSPACE_CANDIDATES) return
+      // A whole value that is one absolute path (tool inputs such as `path` or
+      // `working_directory`) is taken as is, so spaces inside it survive.
+      const value = text.trim()
+      if (value.startsWith('/') && value.length <= MAX_PATH_VALUE_LENGTH && !value.includes('\n')) {
+        addWithAncestors(value)
+      }
+      for (const match of text.replace(FILE_URL_PREFIX, ' ').matchAll(ABSOLUTE_PATH_IN_TEXT)) {
+        addWithAncestors(match[0])
+      }
+    })
+  }
+  return candidates
+}
+
+/** Workspace hashes under `<cursorRoot>/chats/` that hold a folder for this session. */
+function chatWorkspaceHashes(location: CursorTranscriptLocation): Set<string> {
+  const hashes = new Set<string>()
+  const chatsRoot = path.join(location.cursorRoot, 'chats')
+  let workspaces: fs.Dirent[]
+  try {
+    workspaces = fs.readdirSync(chatsRoot, { withFileTypes: true })
+  } catch {
+    return hashes
+  }
+  for (const workspace of workspaces) {
+    if (!workspace.isDirectory() && !workspace.isSymbolicLink()) continue
+    if (isDirectory(path.join(chatsRoot, workspace.name, location.transcriptSessionId))) {
+      hashes.add(workspace.name)
+    }
+  }
+  return hashes
+}
+
+/**
+ * Existing directories whose Cursor slug equals `projectSlug`, found by walking
+ * down from `/` and entering only entries whose slug fits the rest of the slug.
+ * A name without alphanumerics (a CJK folder, say) adds nothing to the slug.
+ */
+function directoriesMatchingSlug(projectSlug: string): string[] {
+  const found: string[] = []
+  const pending: Array<{ dir: string; rest: string; depth: number }> = [{ dir: '/', rest: projectSlug, depth: 0 }]
+  let visited = 0
+  while (pending.length > 0 && found.length < SLUG_WALK_MAX_MATCHES && visited < SLUG_WALK_MAX_DIRS) {
+    const { dir, rest, depth } = pending.pop()!
+    visited++
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const segment = cursorProjectSlug(entry.name)
+      const complete = segment === rest
+      const consumes = segment !== '' && rest.startsWith(`${segment}-`)
+      if (segment !== '' && !complete && !consumes) continue
+      const child = path.posix.join(dir, entry.name)
+      if (!entry.isDirectory() && !(entry.isSymbolicLink() && isDirectory(child))) continue
+      if (complete) found.push(child)
+      if (depth + 1 >= SLUG_WALK_MAX_DEPTH) continue
+      const nextRest = segment === '' ? rest : complete ? '' : rest.slice(segment.length + 1)
+      pending.push({ dir: child, rest: nextRest, depth: depth + 1 })
+    }
+  }
+  return found
+}
+
+/** Prefer a workspace that still exists, then the one the transcript folder is named after. */
+function preferredWorkspace(verified: readonly string[], projectSlug: string): string {
+  const rank = (candidate: string): number =>
+    (isDirectory(candidate) ? 0 : 2) + (cursorProjectSlug(candidate) === projectSlug ? 0 : 1)
+  return [...verified].sort((left, right) =>
+    rank(left) - rank(right) || (left < right ? -1 : left > right ? 1 : 0)
+  )[0]
+}
+
+export function resolveCursorWorkspace(filePath: string, lines: readonly unknown[]): CursorWorkspaceResolution {
+  const location = cursorTranscriptLocation(filePath)
+  if (!location) return { cwd: '' }
+  const estimated: CursorWorkspaceResolution = {
+    cwd: legacyWorkspaceGuess(location.projectSlug),
+    provenance: 'estimated'
+  }
+  // Windows keeps the old reading: Cursor hashes a drive path there, and the
+  // transcript scan below only understands POSIX paths.
+  if (process.platform === 'win32') return estimated
+
+  const candidates = workspaceCandidatesFromTranscript(lines)
+  const hashes = chatWorkspaceHashes(location)
+  if (hashes.size === 0) {
+    const derived = [...candidates].filter((candidate) =>
+      cursorProjectSlug(candidate) === location.projectSlug && isDirectory(candidate)
+    )
+    return derived.length === 1 ? { cwd: derived[0], provenance: 'derived' } : estimated
+  }
+
+  const confirmed = (paths: Iterable<string>): string[] =>
+    [...new Set(paths)].filter((candidate) => hashes.has(workspaceHash(candidate)))
+  let verified = confirmed([...candidates, path.posix.resolve(estimated.cwd)])
+  const namesTranscriptFolder = verified.some((candidate) => cursorProjectSlug(candidate) === location.projectSlug)
+  if (!namesTranscriptFolder && new Set(verified.map(workspaceHash)).size < hashes.size) {
+    verified = [...new Set([...verified, ...confirmed(directoriesMatchingSlug(location.projectSlug))])]
+  }
+  if (verified.length > 0) {
+    return { cwd: preferredWorkspace(verified, location.projectSlug), provenance: 'reported' }
+  }
+  // Cursor filed this session under a workspace none of the guesses is, so no
+  // guess can be called derived.
+  return estimated
 }
 
 // --- Extract session ID from directory name ---
@@ -138,12 +355,16 @@ function extractSessionId(filePath: string): string {
 
 // --- Convert to unified RawJsonlMessage[] ---
 
-function cursorToRawMessages(lines: CursorLine[], sessionId: string, filePath: string): RawJsonlMessage[] {
+function cursorToRawMessages(
+  lines: CursorLine[],
+  sessionId: string,
+  filePath: string,
+  workspaceCwd: string
+): RawJsonlMessage[] {
   const messages: RawJsonlMessage[] = []
   const stat = fs.statSync(filePath)
   const fileTime = stat.mtime.toISOString()
-  const projectPath = deriveProjectPath(filePath)
-  const cwd = projectPath || undefined
+  const cwd = workspaceCwd || undefined
   let msgIndex = 0
 
   for (const line of lines) {
@@ -311,12 +532,12 @@ export async function buildCursorSessionSummary(filePath: string, sessionIdOverr
   if (lines.length === 0) return null
 
   const sessionId = sessionIdOverride || extractSessionId(filePath)
-  const rawMessages = cursorToRawMessages(lines, sessionId, filePath)
+  const workspace = resolveCursorWorkspace(filePath, lines)
+  const rawMessages = cursorToRawMessages(lines, sessionId, filePath, workspace.cwd)
   if (rawMessages.length === 0) return null
 
   const stat = fs.statSync(filePath)
-  const projectPath = deriveProjectPath(filePath)
-  const cwds = projectPath ? [projectPath] : []
+  const cwds = workspace.cwd ? [workspace.cwd] : []
 
   const userMessages = rawMessages.filter((m) =>
     m.type === 'user' && m.message &&
@@ -384,7 +605,8 @@ export async function buildCursorSessionSummary(filePath: string, sessionIdOverr
     filePath,
     fileSizeBytes: stat.size,
     permissionMode: undefined,
-    resumeCwd: projectPath || undefined,
+    resumeCwd: workspace.cwd || undefined,
+    ...(workspace.cwd && workspace.provenance ? { cwdProvenance: workspace.provenance } : {}),
     userImages: [],
     pastedImageCount: 0,
     tokenUsage: totalTokenUsage,
@@ -412,7 +634,7 @@ export async function buildCursorSessionDetail(filePath: string, sessionIdOverri
 
   const lines = await parseCursorFile(filePath)
   const sessionId = sessionIdOverride || extractSessionId(filePath)
-  const rawMessages = cursorToRawMessages(lines, sessionId, filePath)
+  const rawMessages = cursorToRawMessages(lines, sessionId, filePath, summary.resumeCwd || '')
 
   const messages: ParsedMessage[] = rawMessages
     .filter((m) => m.type === 'user' || m.type === 'assistant')

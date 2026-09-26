@@ -164,22 +164,16 @@ async function main() {
 
   // Pre-kernel helpers (no kernel module is evaluated by this bundle).
   const esbuild = requireFromRoot('esbuild')
-  const isolation = evaluate(await bundle(esbuild, "export * from './src/checkup/isolated-home'\n"), ROOT)
+  const isolation = evaluate(await bundle(esbuild, "export * from './src/checkup/isolated-home'\nexport { reportTargetVerdict } from './src/checkup/run-guard'\n"), ROOT)
   const verdict = isolation.validateStateDir({ stateDir: args.state, realHome })
   if (!verdict.ok) fail(EXIT.usage, `refused: --state ${verdict.reason}`)
   const stateDir = verdict.stateDir
-  const jsonPath = path.resolve(args.json)
-  const jsonDir = fs.realpathSync.native(path.dirname(jsonPath))
-  const jsonReal = path.join(jsonDir, path.basename(jsonPath))
-  // --json may live under --home (e.g. a worktree's .working/), but never inside a source root,
-  // Swob's own state, the library root or --state.
-  for (const location of [...isolation.protectedLocations(realHome).filter((entry) => entry !== realHome), stateDir]) {
-    const relative = path.relative(location, jsonReal)
-    if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) fail(EXIT.usage, 'refused: --json must be outside --home sources, protected locations and --state')
-  }
-  try {
-    if (fs.lstatSync(jsonReal).isSymbolicLink()) fail(EXIT.usage, 'refused: --json is a symlink')
-  } catch { /* new file */ }
+  // --json may live under --home (e.g. a worktree's .working/) or in a normal directory of the library
+  // root (the owner's vault), but never inside a source root, Swob's own state, App Support/Swob,
+  // <library>/.swob, a session package or --state (shared rule: src/checkup/run-guard.ts).
+  const target = isolation.reportTargetVerdict(args.json, { realHome, libraryRoot: isolation.configuredLibraryRoot(realHome), stateDir })
+  if (!target.ok) fail(EXIT.usage, `refused: --json ${target.reason}`)
+  const jsonReal = target.target
 
   // 2. Record the real home and take the metadata audit snapshot.
   const libraryRoot = isolation.configuredLibraryRoot(realHome)

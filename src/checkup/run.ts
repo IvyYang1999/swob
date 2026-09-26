@@ -145,7 +145,8 @@ function buildUnits(
   const dispositionOf = (filePath: string): UnitDisposition => dispositions.get(filePath) ?? { bucket: null }
   for (const unit of claude?.units ?? []) {
     const disposition = dispositionOf(unit.path)
-    const parsed = unit.kind === 'claude-main' ? readout.claudeParsed.get(unit.path) : undefined
+    // Main and subagent files are both read by parseSessionFile in the kernel; a timed-out read stays null.
+    const parsed = unit.kind === 'claude-main' || unit.kind === 'claude-subagent' ? readout.claudeParsed.get(unit.path) : undefined
     units.push({
       id: saltedId(salt, `unit:${unit.path}`),
       unitSig: sig(unit.path, unit.before),
@@ -266,7 +267,12 @@ export function overallVerdict(checks: CheckResult[], selfTest: Pick<SelfTestRes
  * the guarded kernel readout.
  */
 export interface CheckupInternals {
-  readout?: (input: { stateDir: string; claudeMainFiles: readonly string[]; signal?: AbortSignal }) => Promise<SwobReadout>
+  readout?: (input: {
+    stateDir: string
+    claudeMainFiles: readonly string[]
+    claudeSubagentFiles: readonly string[]
+    signal?: AbortSignal
+  }) => Promise<SwobReadout>
 }
 
 export async function runKernelCheckup(options: CheckupOptions, internals: CheckupInternals = {}): Promise<CheckupReport> {
@@ -342,9 +348,12 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
 
   // 3. Swob readout (guarded).
   phase = performance.now()
+  const claudeFiles = (kind: ClaudeCensus['units'][number]['kind']): string[] =>
+    (claude?.units ?? []).filter((unit) => unit.kind === kind && !unit.unreadable).map((unit) => unit.path)
   const readout = await (internals.readout ?? readSwobReadout)({
     stateDir,
-    claudeMainFiles: (claude?.units ?? []).filter((unit) => unit.kind === 'claude-main' && !unit.unreadable).map((unit) => unit.path),
+    claudeMainFiles: claudeFiles('claude-main'),
+    claudeSubagentFiles: claudeFiles('claude-subagent'),
     signal: options.signal
   })
   timingsMs.readout = elapsed(phase)

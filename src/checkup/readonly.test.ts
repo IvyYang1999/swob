@@ -123,7 +123,15 @@ describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
     const claudeSwob = content.bySource['claude-code'].swob
     expect((claudeSwob.mainRead.value ?? 0) + (claudeSwob.mainLost.value ?? 0))
       .toBe(content.bySource['claude-code'].oracle.mainParseableCompared.value)
-    expect(content.bySource['claude-code'].swob.subagentRead).toEqual({ value: null, label: 'unavailable', unit: 'records', reason: 'content.swob-per-file-unavailable' })
+    // C1b deliverable 0: the kernel reads subagent files with parseSessionFile, so their read count is measured [R].
+    const subagentRead = claudeSwob.subagentRead
+    expect(subagentRead.label).toBe('reported')
+    expect(subagentRead.value).toBe(content.bySource['claude-code'].oracle.subagentParseable.value)
+    expect((subagentRead.value ?? 0) + (claudeSwob.subagentLost.value ?? 0))
+      .toBe(content.bySource['claude-code'].oracle.subagentParseableCompared.value)
+    const subagentUnits = (report.units ?? []).filter((unit) => unit.kind === 'claude-subagent')
+    expect(subagentUnits.length).toBeGreaterThan(0)
+    for (const unit of subagentUnits) expect(unit.swobRead).toBe(unit.records.parseable)
     expect(report.oracles.find((oracle) => oracle.id === 'codex.state-db')).toEqual({ id: 'codex.state-db', available: true, version: '5' })
     for (const unit of report.units ?? []) {
       expect(unit.id).toMatch(/^[0-9a-f]{8}$/)

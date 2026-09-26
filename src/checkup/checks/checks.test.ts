@@ -7,7 +7,7 @@ import { censusClaude } from '../census/claude-census'
 import { censusCodex } from '../census/codex-census'
 import type { SourcePresence } from '../census/source-roots'
 import type { ReadoutSession, SwobReadout } from '../readout'
-import { claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from '../self-test/samples'
+import { LS, claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from '../self-test/samples'
 import { overallVerdict } from '../run'
 import { applicability, worstVerdict, type CheckContext } from './common'
 import { compactionThresholdVerdict } from './compaction'
@@ -257,5 +257,82 @@ describe('① inclusion buckets (Claude) and ② content per file', () => {
     expect(content.bySource['claude-code'].swob.mainParseTimeouts?.value).toBe(1)
     expect(content.findings.map((finding) => finding.code)).toContain('readout.parse-timeout')
     expect(content.bySource['claude-code'].verdict).toBe('pass')
+  })
+})
+
+describe('② Claude subagent files are measured per file (C1b deliverable 0)', () => {
+  const project = path.join('.claude', 'projects', '-synthetic-project')
+
+  /** One main session with three subagent files: clean, one U+2028 record, and a plain one. */
+  async function subagentFixture(): Promise<{ context: (claudeParsed: Map<string, { records: number; elapsedMs: number; partial: boolean }>) => CheckContext; main: string; clean: string; split: string; plain: string }> {
+    const root = home()
+    const sid = syntheticUuid(60)
+    const record = (seed: number, text: string, agentId = 'a'): Record<string, unknown> =>
+      claude.subagentUser({ uuid: syntheticUuid(seed), parentUuid: null, sessionId: sid, timestamp: syntheticTime(seed), cwd: CWD, agentId, text })
+    const main = fs.realpathSync(writeSample(root, path.join(project, `${sid}.jsonl`), jsonl([
+      claude.user({ uuid: syntheticUuid(600), parentUuid: null, sessionId: sid, timestamp: syntheticTime(1), cwd: CWD, text: 'q' }),
+      claude.assistant({ uuid: syntheticUuid(601), parentUuid: syntheticUuid(600), sessionId: sid, timestamp: syntheticTime(2), cwd: CWD, text: 'a', messageId: 'm60', requestId: 'r60' })
+    ])))
+    const clean = fs.realpathSync(writeSample(root, path.join(project, sid, 'subagents', 'agent-clean.jsonl'), jsonl([record(610, 'one'), record(611, 'two')])))
+    const split = fs.realpathSync(writeSample(root, path.join(project, sid, 'subagents', 'agent-split.jsonl'), jsonl([record(620, 'one'), record(621, `two${LS}halves`), record(622, 'three')])))
+    const plain = fs.realpathSync(writeSample(root, path.join(project, sid, 'subagents', 'agent-plain.jsonl'), jsonl([record(630, 'one'), record(631, 'two')])))
+    const census = await censusClaude(root)
+    const session: ReadoutSession = { source: 'claude-code', sessionId: sid, primaryPath: main, paths: [main], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false }
+    return {
+      context: (claudeParsed) => ctx({ claude: census, readout: readout([session], { claudeParsed }) }),
+      main, clean, split, plain
+    }
+  }
+  const read = (records: number, partial = false): { records: number; elapsedMs: number; partial: boolean } => ({ records, elapsedMs: partial ? 40_000 : 1, partial })
+
+  it('attributes a measured subagent loss to the line separator, and the rest to an unexplained loss', async () => {
+    const { context, main, clean, split, plain } = await subagentFixture()
+    const result = contentCheck(context(new Map([[main, read(2)], [clean, read(2)], [split, read(2)], [plain, read(1)]])))
+    const entry = result.bySource['claude-code']
+    expect(entry.swob).toMatchObject({
+      subagentRead: { value: 5, label: 'reported', unit: 'records' },
+      subagentLost: { value: 2, label: 'derived' },
+      subagentLostUser: { value: 1 },
+      subagentUnexplainedLost: { value: 1 },
+      subagentParseTimeouts: { value: 0 },
+      subagentReadRate: { value: 71.429, label: 'derived', unit: 'percent' }
+    })
+    expect(entry.swob.subagentLost.reason).toBeUndefined()
+    expect(entry.oracle.subagentParseableCompared).toEqual({ value: 7, label: 'reported', unit: 'records' })
+    const byCode = new Map(result.findings.map((finding) => [finding.code, finding]))
+    expect(byCode.get('content.line-separator-split')?.count).toEqual({ value: 1, label: 'derived', unit: 'records' })
+    expect(byCode.get('content.line-separator-split')?.ownerLine).toBe('Claude Code：有 1 条记录没读进来，其中 1 条是你本人发的消息。原因是记录里有特殊的「行分隔符」，Swob 把一条记录切成两半后悄悄丢掉了')
+    expect(byCode.get('content.unexplained-loss')?.count.value).toBe(1)
+    expect(byCode.get('content.unexplained-loss')?.samples).toHaveLength(1)
+    expect(entry.verdict).toBe('fail')
+    expect(result.headline).toBe('有 2 条记录没读进来，其中 2 条是对话内容')
+  })
+
+  it('passes when every subagent record is read', async () => {
+    const { context, main, clean, split, plain } = await subagentFixture()
+    const result = contentCheck(context(new Map([[main, read(2)], [clean, read(2)], [split, read(3)], [plain, read(2)]])))
+    const entry = result.bySource['claude-code']
+    expect(entry.swob).toMatchObject({ subagentRead: { value: 7, label: 'reported' }, subagentLost: { value: 0 }, subagentReadRate: { value: 100 } })
+    expect(result.findings.map((finding) => finding.code)).toEqual([])
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('leaves a timed-out subagent read out of the comparison and reports it', async () => {
+    const { context, main, clean, split, plain } = await subagentFixture()
+    const result = contentCheck(context(new Map([[main, read(2)], [clean, read(2)], [split, read(1, true)], [plain, read(2)]])))
+    const entry = result.bySource['claude-code']
+    expect(entry.swob).toMatchObject({ subagentRead: { value: 4 }, subagentLost: { value: 0 }, subagentParseTimeouts: { value: 1, label: 'reported', unit: 'files' }, mainParseTimeouts: { value: 0 } })
+    expect(result.findings.map((finding) => [finding.code, finding.count.value])).toEqual([['readout.parse-timeout', 1]])
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('keeps the C1a inference for subagent files without a parse result (the self-test path)', async () => {
+    const { context, main } = await subagentFixture()
+    const result = contentCheck(context(new Map([[main, read(2)]])))
+    const entry = result.bySource['claude-code']
+    expect(entry.swob.subagentRead).toEqual({ value: null, label: 'unavailable', unit: 'records', reason: 'content.swob-per-file-unavailable' })
+    expect(entry.swob.subagentLost).toEqual({ value: 1, label: 'derived', unit: 'records', reason: 'content.line-separator-split' })
+    expect(entry.swob.subagentReadRate).toEqual({ value: null, label: 'unavailable', unit: 'percent', reason: 'content.swob-per-file-unavailable' })
+    expect(result.findings.map((finding) => [finding.code, finding.count.value])).toEqual([['content.line-separator-split', 1]])
   })
 })

@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { execFileSync } from 'child_process'
-import { hasSqliteAgentSessionRecordSync, isValidOpencodeSessionId } from './opencode-loader'
+import {
+  discoverSqliteAgentSessions,
+  hasSqliteAgentSessionRecordSync,
+  isValidOpencodeSessionId
+} from './opencode-loader'
 import {
   buildZcodeSessionDetail,
   buildZcodeSessionSummary,
@@ -12,6 +16,7 @@ import {
   makeZcodeSessionRef
 } from './zcode-loader'
 import { loadSessionDetail } from './session-loader'
+import { installFakeSqlite3, realSqlite3Path, type FakeSqlite3 } from './__test-support__/fake-sqlite3'
 
 const SESSION_ID = 'sess_subagent_agent_b3c1-42'
 const PARENT_ID = 'sess_parent_b3c1-00'
@@ -187,5 +192,55 @@ describe('zcode-loader', () => {
     expect(isValidOpencodeSessionId('sess_subagent_agent_xxx')).toBe(true)
     expect(isValidOpencodeSessionId('session_bad')).toBe(false)
     expect(isValidOpencodeSessionId('sess_bad;drop')).toBe(false)
+  })
+})
+
+// F1e: ZCode delegates to the same sqlite3 CLI executor, so its failures are
+// explicit too, and a failed model_usage read fails the session instead of
+// silently turning its usage into "unavailable".
+const cliIt = process.platform !== 'win32' && realSqlite3Path() ? it : it.skip
+
+describe('zcode-loader sqlite3 CLI failures (F1e)', () => {
+  const fakes: FakeSqlite3[] = []
+  const fixtureDirs: string[] = []
+
+  function fixture() {
+    const created = createZcodeDb()
+    fixtureDirs.push(created.dir)
+    return created
+  }
+
+  afterEach(() => {
+    for (const fake of fakes.splice(0)) fake.restore()
+    for (const dir of fixtureDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  cliIt('a busy ZCode DB is unavailable/busy after one retry, then reads in full once free', async () => {
+    const db = fixture()
+    fakes.push(installFakeSqlite3({ kind: 'fail', stderr: 'Parse error near line 2: database is locked (5)' }))
+
+    expect(await discoverSqliteAgentSessions('zcode', db.dbPath))
+      .toMatchObject({ state: 'unavailable', reason: 'busy', attempts: 2, refs: [] })
+    for (const fake of fakes.splice(0)) fake.restore()
+
+    expect(await findZcodeSessionFiles(db.dbPath)).toEqual([db.sourceRef])
+  }, 20_000)
+
+  cliIt('a failed model_usage query fails the session instead of dropping its usage', async () => {
+    const db = fixture()
+    fakes.push(installFakeSqlite3({
+      kind: 'fail-matching',
+      match: ['FROM "model_usage"'],
+      stderr: 'Runtime error near line 2: database disk image is malformed (11)'
+    }))
+
+    await expect(buildZcodeSessionSummary(db.sourceRef))
+      .rejects.toMatchObject({ name: 'SqliteAgentReadError', code: 'corrupt', attempts: 1 })
+    await expect(buildZcodeSessionDetail(db.sourceRef)).resolves.toBeNull()
+    for (const fake of fakes.splice(0)) fake.restore()
+
+    const summary = await buildZcodeSessionSummary(db.sourceRef)
+    expect(summary?.providerOutcome?.usage).toBe('available')
+    expect(summary?.tokenAccounting?.usageEvents).toHaveLength(1)
   })
 })

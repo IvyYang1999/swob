@@ -1,7 +1,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { spawn } from 'child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import Database from 'better-sqlite3'
 import type {
   RawJsonlMessage,
@@ -23,7 +23,7 @@ import { runtimeHome } from './runtime-home'
 import { activityDaysFromTimestamps } from './activity-time'
 
 const SESSION_ID_RE = /^sess?_[A-Za-z0-9_-]+$/
-const SQLITE_TIMEOUT_MS = 5000
+const SQLITE_NATIVE_BUSY_TIMEOUT_MS = 5000 // better-sqlite3 busy_timeout on the live provider DB
 const AGENT_DB_SOURCES = {
   opencode: {
     relativePath: ['.local', 'share', 'opencode', 'opencode.db'],
@@ -108,7 +108,7 @@ interface LoadedOpencodeSession {
   tokenAccounting: TokenAccounting
 }
 
-const schemaCache = new Map<string, Promise<OpencodeSchema | null>>()
+const schemaCache = new Map<string, Promise<OpencodeSchema>>()
 const sqliteSessionIdCache = new Map<string, { signature: string; ids: Set<string> }>()
 
 export function getOpencodeDbPath(): string {
@@ -187,22 +187,65 @@ export async function findSqliteAgentSessionFiles(
   source: SqliteAgentSource,
   dbPath = getSqliteAgentDbPath(source)
 ): Promise<string[]> {
-  if (!fs.existsSync(dbPath)) return []
-  const schema = await getSchema(dbPath)
-  if (!schema || !schema.session.has('id')) return []
-
-  const rows = await runSqliteJson<SqliteRow>(
-    dbPath,
-    'SELECT "id" FROM "session"'
-  )
-
-  return rows
-    .map((row) => asString(row.id))
-    .filter(isValidOpencodeSessionId)
-    .map((sessionId) => makeSqliteAgentSessionRef(source, sessionId, dbPath))
+  // `swob grep` calls this directly, so it keeps its contract and never
+  // throws. A failed discovery still yields no refs here; the session loader
+  // uses discoverSqliteAgentSessions, which reports the failure explicitly.
+  return (await discoverSqliteAgentSessions(source, dbPath)).refs
 }
 
-/** Verify that a DB-backed resume reference still points at a real session row. */
+export interface SqliteAgentDiscovery {
+  /** 'absent': no DB file (tool not installed). 'unavailable': the DB exists but could not be read. */
+  state: 'ok' | 'unavailable' | 'absent'
+  reason: SqliteAgentFailureCode | null
+  /** Most sqlite3 invocations one statement needed (1 = no retry; 0 = nothing ran). */
+  attempts: number
+  /** Session refs found; always empty unless `state` is 'ok'. */
+  refs: string[]
+  dbPath: string
+}
+
+/**
+ * Discover the sessions of one SQLite-backed source. Never throws: a read
+ * failure is 'unavailable' with a fixed reason code, never an empty success,
+ * so no caller can mistake it for "every session is gone".
+ */
+export async function discoverSqliteAgentSessions(
+  source: SqliteAgentSource,
+  dbPath = getSqliteAgentDbPath(source)
+): Promise<SqliteAgentDiscovery> {
+  if (!fs.existsSync(dbPath)) return { state: 'absent', reason: null, attempts: 0, refs: [], dbPath }
+  const trace: SqliteCliTrace = { attempts: 0 }
+  try {
+    const schema = await getSchema(dbPath, trace)
+    // The DB exists, so a missing session table or id column is an
+    // unsupported schema, not an empty source.
+    if (!schema.session.has('id')) throw new SqliteAgentReadError('schema-unsupported')
+    const rows = await runSqliteJson<SqliteRow>(
+      dbPath,
+      'SELECT "id" FROM "session"',
+      trace
+    )
+    const refs = rows
+      .map((row) => asString(row.id))
+      .filter(isValidOpencodeSessionId)
+      .map((sessionId) => makeSqliteAgentSessionRef(source, sessionId, dbPath))
+    return { state: 'ok', reason: null, attempts: Math.max(1, trace.attempts), refs, dbPath }
+  } catch (error) {
+    return {
+      state: 'unavailable',
+      reason: sqliteAgentFailureCode(error),
+      attempts: Math.max(1, trace.attempts, isSqliteAgentReadError(error) ? error.attempts : 1),
+      refs: [],
+      dbPath
+    }
+  }
+}
+
+/**
+ * Verify that a DB-backed resume reference still points at a real session row.
+ * A failed read throws SqliteAgentReadError instead of reporting the row as
+ * missing.
+ */
 export async function hasSqliteAgentSessionRecord(
   source: SqliteAgentSource,
   sourceRef: string,
@@ -212,7 +255,7 @@ export async function hasSqliteAgentSessionRecord(
   if (!sessionId || !fs.existsSync(dbPath)) return false
 
   const schema = await getSchema(dbPath)
-  if (!schema?.session.has('id')) return false
+  if (!schema.session.has('id')) throw new SqliteAgentReadError('schema-unsupported')
   const rows = await runSqliteJson<SqliteRow>(
     dbPath,
     `SELECT "id" FROM "session" WHERE "id" = ${sqlString(sessionId)} LIMIT 1`
@@ -256,7 +299,7 @@ export function hasSqliteAgentSessionRecordSync(
       const database = new Database(dbPath, {
         readonly: true,
         fileMustExist: true,
-        timeout: SQLITE_TIMEOUT_MS
+        timeout: SQLITE_NATIVE_BUSY_TIMEOUT_MS
       })
       try {
         database.pragma('query_only = ON')
@@ -305,6 +348,8 @@ export async function loadSqliteAgentRawMessages(
   sourceRef: string,
   sessionIdOverride?: string
 ): Promise<RawJsonlMessage[]> {
+  // A failed read throws SqliteAgentReadError (every caller catches it); a
+  // transcript with silently missing parts is never returned.
   const loaded = await loadSqliteAgentSession(source, sourceRef, sessionIdOverride)
   return loaded?.rawMessages || []
 }
@@ -314,6 +359,8 @@ export async function buildSqliteAgentSessionSummary(
   sourceRef: string,
   sessionIdOverride?: string
 ): Promise<SessionSummary | null> {
+  // A failed read throws SqliteAgentReadError; null means only that the
+  // session is gone or truly empty.
   const loaded = await loadSqliteAgentSession(source, sourceRef, sessionIdOverride)
   if (!loaded || loaded.rawMessages.length === 0) return null
   return summarizeLoadedSqliteAgentSession(source, loaded)
@@ -324,7 +371,16 @@ export async function buildSqliteAgentSessionDetail(
   sourceRef: string,
   sessionIdOverride?: string
 ): Promise<SessionDetail | null> {
-  const loaded = await loadSqliteAgentSession(source, sourceRef, sessionIdOverride)
+  let loaded: LoadedOpencodeSession | null
+  try {
+    loaded = await loadSqliteAgentSession(source, sourceRef, sessionIdOverride)
+  } catch (error) {
+    // Detail readers (`swob show`, the truth-kernel IPC) have no catch of
+    // their own, so a failed CLI read stays null here: for the whole session,
+    // never a transcript with missing parts.
+    if (isSqliteAgentReadError(error)) return null
+    throw error
+  }
   if (!loaded || loaded.rawMessages.length === 0) return null
 
   const summary = summarizeLoadedSqliteAgentSession(source, loaded)
@@ -365,7 +421,7 @@ async function withReadOnlySqliteSnapshot<T>(
   const source = new Database(dbPath, {
     readonly: true,
     fileMustExist: true,
-    timeout: SQLITE_TIMEOUT_MS
+    timeout: SQLITE_NATIVE_BUSY_TIMEOUT_MS
   })
   try {
     source.pragma('query_only = ON')
@@ -399,7 +455,10 @@ async function loadSqliteAgentSessionSnapshot(
   const dbPath = snapshotPath
 
   const schema = await getSchema(dbPath)
-  if (!schema || !hasMinimumSchema(schema)) return null
+  // Missing or renamed core tables are an unsupported schema, not an empty
+  // session. Every query below throws on failure as well: a session without
+  // its parts or its ZCode usage rows is a failed read, not a smaller session.
+  if (!hasMinimumSchema(schema)) throw new SqliteAgentReadError('schema-unsupported')
 
   const sessionSelect = selectExistingColumns(schema.session, SESSION_SELECT_COLUMNS)
   const sessionRows = await runSqliteJson<SqliteRow>(
@@ -435,76 +494,273 @@ function hasMinimumSchema(schema: OpencodeSchema): boolean {
     schema.part.has('data')
 }
 
-async function getSchema(dbPath: string): Promise<OpencodeSchema | null> {
+async function getSchema(dbPath: string, trace?: SqliteCliTrace): Promise<OpencodeSchema> {
   let cached = schemaCache.get(dbPath)
   if (!cached) {
-    cached = loadSchema(dbPath)
-    schemaCache.set(dbPath, cached)
+    const loading = loadSchema(dbPath, trace)
+    cached = loading
+    schemaCache.set(dbPath, loading)
+    // Cache successes only. A failed probe used to be cached as "no columns",
+    // pinning the whole source at zero sessions until the process exited.
+    loading.catch(() => {
+      if (schemaCache.get(dbPath) === loading) schemaCache.delete(dbPath)
+    })
   }
   return cached
 }
 
-async function loadSchema(dbPath: string): Promise<OpencodeSchema | null> {
-  const [session, message, part, sessionMessage, modelUsage] = await Promise.all([
-    tableColumns(dbPath, 'session'),
-    tableColumns(dbPath, 'message'),
-    tableColumns(dbPath, 'part'),
-    tableColumns(dbPath, 'session_message'),
-    tableColumns(dbPath, 'model_usage')
-  ])
+const SCHEMA_TABLES = ['session', 'message', 'part', 'session_message', 'model_usage'] as const
 
-  if (!session || !message || !part || !sessionMessage || !modelUsage) return null
+async function loadSchema(dbPath: string, trace?: SqliteCliTrace): Promise<OpencodeSchema> {
+  const probes = await Promise.allSettled(
+    SCHEMA_TABLES.map((tableName) => tableColumns(dbPath, tableName, trace))
+  )
+  // Any failed probe fails the schema (first failure in table order): an
+  // empty column set would otherwise read as "this table does not exist".
+  for (const probe of probes) {
+    if (probe.status === 'rejected') throw probe.reason
+  }
+  const [session, message, part, sessionMessage, modelUsage] = probes.map((probe) =>
+    (probe as PromiseFulfilledResult<Set<string>>).value)
   return { session, message, part, sessionMessage, modelUsage }
 }
 
-async function tableColumns(dbPath: string, tableName: string): Promise<Set<string> | null> {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) return null
+async function tableColumns(
+  dbPath: string,
+  tableName: string,
+  trace?: SqliteCliTrace
+): Promise<Set<string>> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) throw new Error('invalid-sqlite-table-name')
   const rows = await runSqliteJson<SqliteRow>(
     dbPath,
-    `PRAGMA table_info("${tableName}")`
+    `PRAGMA table_info("${tableName}")`,
+    trace
   )
   return new Set(rows.map((row) => asString(row.name)).filter(Boolean))
 }
 
-async function runSqliteJson<T extends SqliteRow>(dbPath: string, sql: string): Promise<T[]> {
+// --- sqlite3 CLI executor ---
+
+/**
+ * `.timeout` given to every sqlite3 CLI process. Without it the CLI fails at
+ * once with SQLITE_BUSY while another short-lived reader (our own parallel
+ * schema probes included) rebuilds the WAL index.
+ */
+const SQLITE_CLI_BUSY_TIMEOUT_MS = 3000
+/** Wall clock per sqlite3 CLI process; SWOB_SQLITE_CLI_TIMEOUT_MS overrides it within the bounds below. */
+const SQLITE_CLI_DEFAULT_WALL_TIMEOUT_MS = 15_000
+const SQLITE_CLI_MIN_WALL_TIMEOUT_MS = 1_000
+const SQLITE_CLI_MAX_WALL_TIMEOUT_MS = 120_000
+/** Under NODE_ENV=test the floor is lower so timeout paths can be exercised quickly. */
+const SQLITE_CLI_TEST_MIN_WALL_TIMEOUT_MS = 50
+/** A timer at least this late means the event loop was blocked after spawn. */
+const SQLITE_CLI_LATE_TIMER_MS = 100
+/** One extra window for an already-exited child to deliver 'close' before a late timeout counts. */
+const SQLITE_CLI_LATE_TIMER_GRACE_MS = 250
+/** Jittered backoff before the single retry of a busy / cannot-open statement. */
+const SQLITE_CLI_RETRY_MIN_BACKOFF_MS = 250
+const SQLITE_CLI_RETRY_MAX_BACKOFF_MS = 1_000
+const SQLITE_CLI_STDERR_LIMIT = 4_096
+
+export const SQLITE_AGENT_FAILURE_CODES = [
+  'sqlite3-missing',
+  'busy',
+  'cannot-open',
+  'corrupt',
+  'sqlite-error',
+  'timeout',
+  'unparseable-output',
+  'schema-unsupported'
+] as const
+export type SqliteAgentFailureCode = typeof SQLITE_AGENT_FAILURE_CODES[number]
+
+const RETRIED_SQLITE_CLI_FAILURES: ReadonlySet<SqliteAgentFailureCode> = new Set(['busy', 'cannot-open'])
+
+/**
+ * A SQLite-agent read that failed. The message is the fixed code only: never a
+ * path, a session id or sqlite3's stderr.
+ */
+export class SqliteAgentReadError extends Error {
+  readonly code: SqliteAgentFailureCode
+  readonly attempts: number
+
+  constructor(code: SqliteAgentFailureCode, attempts = 1) {
+    super(`sqlite-agent-read-failed:${code}`)
+    this.name = 'SqliteAgentReadError'
+    this.code = code
+    this.attempts = attempts
+  }
+}
+
+export function isSqliteAgentReadError(error: unknown): error is SqliteAgentReadError {
+  return error instanceof Error && error.name === 'SqliteAgentReadError' &&
+    (SQLITE_AGENT_FAILURE_CODES as readonly unknown[]).includes((error as { code?: unknown }).code)
+}
+
+/** Fixed reason code for any failed SQLite-agent read (sqlite3 CLI or better-sqlite3). */
+export function sqliteAgentFailureCode(error: unknown): SqliteAgentFailureCode {
+  if (isSqliteAgentReadError(error)) return error.code
+  const code = typeof (error as { code?: unknown } | null)?.code === 'string'
+    ? (error as { code: string }).code
+    : ''
+  if (code.startsWith('SQLITE_BUSY')) return 'busy'
+  if (code.startsWith('SQLITE_CANTOPEN')) return 'cannot-open'
+  if (code.startsWith('SQLITE_CORRUPT') || code === 'SQLITE_NOTADB') return 'corrupt'
+  return 'sqlite-error'
+}
+
+interface SqliteCliTrace {
+  /** Most sqlite3 invocations any single statement needed. */
+  attempts: number
+}
+
+type SqliteCliOutcome<T> = { ok: true; rows: T[] } | { ok: false; code: SqliteAgentFailureCode }
+
+function sqliteCliWallTimeoutMs(): number {
+  const raw = process.env.SWOB_SQLITE_CLI_TIMEOUT_MS?.trim()
+  const requested = raw ? Number(raw) : Number.NaN
+  if (!Number.isFinite(requested)) return SQLITE_CLI_DEFAULT_WALL_TIMEOUT_MS
+  const floor = process.env.NODE_ENV === 'test'
+    ? SQLITE_CLI_TEST_MIN_WALL_TIMEOUT_MS
+    : SQLITE_CLI_MIN_WALL_TIMEOUT_MS
+  return Math.min(SQLITE_CLI_MAX_WALL_TIMEOUT_MS, Math.max(floor, Math.round(requested)))
+}
+
+/** Map sqlite3's stderr to a fixed code; the text itself is never kept or surfaced. */
+function classifySqliteCliFailure(stderr: string): SqliteAgentFailureCode {
+  const text = stderr.toLowerCase()
+  if (text.includes('database is locked')) return 'busy'
+  if (text.includes('unable to open database')) return 'cannot-open'
+  if (text.includes('file is not a database') || text.includes('malformed')) return 'corrupt'
+  // Otherwise use the trailing "(N)" result code; extended codes such as
+  // 261/517 (busy) keep their primary code in the low byte.
+  for (const match of stderr.matchAll(/\((\d+)\)\s*$/gm)) {
+    const primary = Number(match[1]) & 0xff
+    if (primary === 5) return 'busy'
+    if (primary === 14) return 'cannot-open'
+    if (primary === 11 || primary === 26) return 'corrupt'
+  }
+  return 'sqlite-error'
+}
+
+/**
+ * Run one read-only statement through the sqlite3 CLI. Every failure throws a
+ * SqliteAgentReadError; exit 0 with empty output is a legitimate empty result
+ * (no rows, or a table that does not exist). busy / cannot-open get one
+ * jittered retry. A timeout is not retried in-statement, so one stuck sqlite3
+ * cannot hold the first session list for twice the wall clock; the next load
+ * probes again instead.
+ */
+async function runSqliteJson<T extends SqliteRow>(
+  dbPath: string,
+  sql: string,
+  trace?: SqliteCliTrace
+): Promise<T[]> {
   if (!fs.existsSync(dbPath)) return []
 
+  const wallTimeoutMs = sqliteCliWallTimeoutMs()
+  let attempts = 1
+  let outcome = await runSqliteCliOnce<T>(dbPath, sql, wallTimeoutMs)
+  if (!outcome.ok && RETRIED_SQLITE_CLI_FAILURES.has(outcome.code)) {
+    const backoffMs = SQLITE_CLI_RETRY_MIN_BACKOFF_MS + Math.floor(
+      Math.random() * (SQLITE_CLI_RETRY_MAX_BACKOFF_MS - SQLITE_CLI_RETRY_MIN_BACKOFF_MS + 1)
+    )
+    await new Promise((resolve) => setTimeout(resolve, backoffMs))
+    attempts = 2
+    outcome = await runSqliteCliOnce<T>(dbPath, sql, wallTimeoutMs)
+  }
+  if (trace) trace.attempts = Math.max(trace.attempts, attempts)
+  if (!outcome.ok) throw new SqliteAgentReadError(outcome.code, attempts)
+  return outcome.rows
+}
+
+function spawnSqlite3(dbPath: string): ChildProcessWithoutNullStreams | null {
+  try {
+    return spawn('sqlite3', ['-cmd', `.timeout ${SQLITE_CLI_BUSY_TIMEOUT_MS}`, '-readonly', '-json', dbPath], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+  } catch {
+    return null
+  }
+}
+
+function runSqliteCliOnce<T extends SqliteRow>(
+  dbPath: string,
+  sql: string,
+  wallTimeoutMs: number
+): Promise<SqliteCliOutcome<T>> {
   return new Promise((resolve) => {
     let settled = false
     let stdout = ''
+    let stderr = ''
+    let timer: ReturnType<typeof setTimeout> | undefined
 
-    function finish(rows: T[]): void {
+    function finish(outcome: SqliteCliOutcome<T>): void {
       if (settled) return
       settled = true
-      clearTimeout(timer)
-      resolve(rows)
+      if (timer) clearTimeout(timer)
+      resolve(outcome)
     }
 
-    const child = spawn('sqlite3', ['-readonly', '-json', dbPath], {
-      stdio: ['pipe', 'pipe', 'ignore']
-    })
+    const child = spawnSqlite3(dbPath)
+    if (!child || !child.stdin || !child.stdout || !child.stderr) {
+      child?.kill()
+      finish({ ok: false, code: 'sqlite-error' })
+      return
+    }
 
-    const timer = setTimeout(() => {
+    const armedAt = Date.now()
+    let graceGiven = false
+    const onTimeout = (): void => {
+      // A late timer means the event loop was blocked after spawn, and the
+      // child may already have exited with a valid result: let its 'close'
+      // arrive once before calling it a timeout.
+      if (!graceGiven && Date.now() - armedAt - wallTimeoutMs >= SQLITE_CLI_LATE_TIMER_MS) {
+        graceGiven = true
+        timer = setTimeout(onTimeout, SQLITE_CLI_LATE_TIMER_GRACE_MS)
+        return
+      }
       child.kill()
-      finish([])
-    }, SQLITE_TIMEOUT_MS)
+      finish({ ok: false, code: 'timeout' })
+    }
+    timer = setTimeout(onTimeout, wallTimeoutMs)
 
     child.stdout.setEncoding('utf-8')
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: string) => {
       stdout += chunk
     })
+    // stderr is read only to classify a failure.
+    child.stderr.setEncoding('utf-8')
+    child.stderr.on('data', (chunk: string) => {
+      if (stderr.length < SQLITE_CLI_STDERR_LIMIT) stderr += chunk
+    })
+    // A child that exits before reading its script must not surface EPIPE as
+    // an unhandled error; 'close' reports the outcome.
+    child.stdin.on('error', () => {})
 
-    child.on('error', () => finish([]))
+    child.on('error', (error) => {
+      finish({
+        ok: false,
+        code: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'sqlite3-missing' : 'sqlite-error'
+      })
+    })
     child.on('close', (code) => {
       if (code !== 0) {
-        finish([])
+        finish({ ok: false, code: classifySqliteCliFailure(stderr) })
+        return
+      }
+      const trimmed = stdout.trim()
+      if (!trimmed) {
+        finish({ ok: true, rows: [] })
         return
       }
       try {
-        const trimmed = stdout.trim()
-        finish(trimmed ? JSON.parse(trimmed) as T[] : [])
+        const parsed: unknown = JSON.parse(trimmed)
+        finish(Array.isArray(parsed)
+          ? { ok: true, rows: parsed as T[] }
+          : { ok: false, code: 'unparseable-output' })
       } catch {
-        finish([])
+        finish({ ok: false, code: 'unparseable-output' })
       }
     })
 

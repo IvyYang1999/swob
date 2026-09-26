@@ -4,6 +4,8 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { createEvidenceBundle } from '../main/integrity/evidence-bundle'
+import { TRUTH_KERNEL_GOLDEN_FIXTURE, truthKernelCanonicalUtf8Bytes } from '../shared/contracts/truth-kernel'
 import { CLI_COMMANDS, CLI_VERSION } from './command-registry'
 
 const packagedApp = process.env.SWOB_PACKAGED_APP
@@ -100,6 +102,29 @@ function createLibraryPackage(title: string, sessionId: string, sourcePath: stri
   }), 'utf8')
   fs.writeFileSync(path.join(dirPath, 'backup.jsonl'), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8')
   return dirPath
+}
+
+/** Writes a content-addressed Truth Kernel evidence bundle built from the golden fixture. */
+function writeEvidenceBundle(root: string): { manifestPath: string; artifactPath: string } {
+  const receipt = TRUTH_KERNEL_GOLDEN_FIXTURE.sourceIngestReceipts[0]
+  const chain = TRUTH_KERNEL_GOLDEN_FIXTURE.canonicalEventChains[0]
+  const events = chain.entries.map((entry) => ({
+    eventId: entry.eventId,
+    bytes: truthKernelCanonicalUtf8Bytes(TRUTH_KERNEL_GOLDEN_FIXTURE.timelineEvents
+      .find((event) => event.sourceEventId === entry.eventId)!.providerEvent)
+  }))
+  const bundle = createEvidenceBundle({
+    bundleId: 'packaged-cli-bundle', generatedAt: '2026-07-20T00:03:00.000Z', receipts: [receipt], chains: [chain], events
+  })
+  for (const [relativePath, bytes] of bundle.files) {
+    const output = path.join(root, relativePath)
+    fs.mkdirSync(path.dirname(output), { recursive: true })
+    fs.writeFileSync(output, bytes)
+  }
+  return {
+    manifestPath: path.join(root, 'manifest.json'),
+    artifactPath: path.join(root, bundle.manifest.artifacts[0].relativePath)
+  }
 }
 
 function minimalInheritedEnvironment(): NodeJS.ProcessEnv {
@@ -395,7 +420,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     expect(folderGrep.sessionCount).toBe(0)
   }, COMMAND_TEST_TIMEOUT_MS)
 
-  it('persists config and executes analytics/transcript/redaction maintenance', () => {
+  it('persists config, executes analytics/transcript/redaction maintenance and verifies evidence bundles', () => {
     expect(parseSuccess(invokeInstalled('config set <key> <value>', ['config', 'set', 'terminalApp', 'iTerm2', '--json']))).toMatchObject({ terminalApp: 'iTerm2' })
     expect(parseSuccess(invokeInstalled('config get [key]', ['config', 'get', 'terminalApp', '--json']))).toEqual({ terminalApp: 'iTerm2' })
 
@@ -417,6 +442,20 @@ describePackaged('packaged Swob CLI complete command contract', () => {
 
     const redacted = parseSuccess(invokeInstalled('redact [--dry-run]', ['redact', '--json']))
     expect(redacted).toMatchObject({ files: expect.any(Number), hits: expect.any(Number) })
+
+    const bundleRoot = path.join(sandboxRoot, 'evidence bundle')
+    const bundle = writeEvidenceBundle(bundleRoot)
+    expect(parseSuccess(invokeInstalled(
+      'verify <bundle-dir|manifest.json> [--json]',
+      ['verify', bundleRoot, '--json']
+    ))).toMatchObject({ target: { kind: 'bundle', id: 'packaged-cli-bundle' }, status: 'valid', failures: [] })
+    fs.appendFileSync(bundle.artifactPath, 'x')
+    const tampered = parseSuccess(invokeInstalled(
+      'verify <bundle-dir|manifest.json> [--json]',
+      ['verify', bundle.manifestPath, '--json']
+    ))
+    expect(tampered.status).toBe('invalid')
+    expect(tampered.failures.length).toBeGreaterThan(0)
   }, COMMAND_TEST_TIMEOUT_MS)
 
   it('covers every command definition through the real installed wrapper', () => {

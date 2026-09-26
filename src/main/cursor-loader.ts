@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import * as readline from 'readline'
+import { readJsonlRecords } from './jsonl-lines'
 import type {
   RawJsonlMessage,
   ParsedMessage,
@@ -96,16 +96,10 @@ interface CursorContentPart {
 // --- Parse raw lines ---
 
 async function parseCursorFile(filePath: string): Promise<CursorLine[]> {
-  const lines: CursorLine[] = []
-  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' })
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-  for await (const line of rl) {
-    if (!line.trim()) continue
-    try {
-      lines.push(JSON.parse(line))
-    } catch { /* skip */ }
-  }
-  return lines
+  // Lines split at LF only (jsonl-lines.ts). A stream error still throws;
+  // callers catch it.
+  const { records } = await readJsonlRecords<CursorLine>(filePath, { onStreamError: 'throw' })
+  return records
 }
 
 export async function loadCursorRawMessages(filePath: string, sessionIdOverride?: string): Promise<RawJsonlMessage[]> {

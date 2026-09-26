@@ -784,3 +784,91 @@ describe('codex-loader', () => {
     })
   })
 })
+
+describe('parseCodexFile 只按 \\n 分行（F1a）', () => {
+  const RAW_LS = Buffer.from([0xe2, 0x80, 0xa8]) // U+2028
+  const RAW_PS = Buffer.from([0xe2, 0x80, 0xa9]) // U+2029
+
+  // 外层键序照《附录-Codex键序普查》：{timestamp, ordinal, type, payload}；session_meta 的 payload
+  // 用普查里的真实签名（{session_id,id,timestamp,cwd,originator,cli_version,source,thread_source,
+  // model_provider,base_instructions,history_mode,context_window}）。response_item / event_msg 的
+  // payload 键序附录没有列，照本文件 makeCodexLines。值全部是合成的。
+  // 依次是：session_meta、user（含 U+2028）、function_call、function_call_output（含 U+2028）、
+  // assistant（含 U+2029）、一条真坏行、一条没写完的尾行（无结尾 \n）。
+  function writeLineSeparatorRollout(): string {
+    const lines = [
+      {
+        timestamp: '2026-09-26T02:00:00.000Z',
+        ordinal: 0,
+        type: 'session_meta',
+        payload: {
+          session_id: SESSION_ID,
+          id: SESSION_ID,
+          timestamp: '2026-09-26T01:59:59.000Z',
+          cwd: '/Users/test/projects/myapp',
+          originator: 'codex_cli_rs',
+          cli_version: '0.130.0',
+          source: 'cli',
+          thread_source: 'user',
+          model_provider: 'openai',
+          base_instructions: { text: 'synthetic base instructions' },
+          history_mode: 'full',
+          context_window: 258400
+        }
+      },
+      {
+        timestamp: '2026-09-26T02:00:01.000Z',
+        ordinal: 1,
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '第一行 第二行' }] }
+      },
+      {
+        timestamp: '2026-09-26T02:00:02.000Z',
+        ordinal: 2,
+        type: 'response_item',
+        payload: { type: 'function_call', name: 'exec_command', arguments: '{"cmd":"cat notes.txt"}', call_id: 'call_f1a' }
+      },
+      {
+        timestamp: '2026-09-26T02:00:03.000Z',
+        ordinal: 3,
+        type: 'response_item',
+        payload: { type: 'function_call_output', call_id: 'call_f1a', output: '工具输出 第二段' }
+      },
+      {
+        timestamp: '2026-09-26T02:00:04.000Z',
+        ordinal: 4,
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '段一 段二' }] }
+      }
+    ]
+    const broken = '{"timestamp":"2026-09-26T02:00:05.000Z","ordinal":5,"type":"event_msg","payload":'
+    const tail = JSON.stringify({
+      timestamp: '2026-09-26T02:00:06.000Z',
+      ordinal: 6,
+      type: 'event_msg',
+      payload: { type: 'agent_message', message: '写到一半', phase: 'commentary' }
+    }).slice(0, 80)
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-codex-'))
+    const fp = path.join(dir, `rollout-2026-09-26T10-00-00-${SESSION_ID}.jsonl`)
+    fs.writeFileSync(fp, [...lines.map((line) => JSON.stringify(line)), broken, tail].join('\n'))
+    return fp
+  }
+
+  it('含原样 U+2028 / U+2029 的 user、工具输出、assistant 记录不再丢', async () => {
+    const fp = writeLineSeparatorRollout()
+    const bytes = fs.readFileSync(fp)
+    expect(bytes.includes(RAW_LS)).toBe(true)
+    expect(bytes.includes(RAW_PS)).toBe(true)
+
+    const raw = await loadCodexRawMessages(fp)
+    expect(raw.filter((m) => m.type === 'user' && m.message?.content === '第一行 第二行')).toHaveLength(1)
+    expect(raw.filter((m) => m.type === 'assistant' && m.message?.content === '段一 段二')).toHaveLength(1)
+    expect(JSON.stringify(raw)).toContain('工具输出 第二段')
+  })
+
+  it('读流出错（文件不存在）时照旧抛出，由调用方兜底', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-codex-missing-'))
+    await expect(loadCodexRawMessages(path.join(dir, `rollout-2026-09-26T10-00-00-${SESSION_ID}.jsonl`)))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})

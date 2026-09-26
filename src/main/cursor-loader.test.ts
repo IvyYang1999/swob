@@ -224,3 +224,42 @@ describe('cursor-loader', () => {
     })
   })
 })
+
+describe('parseCursorFile 只按 \\n 分行（F1a）', () => {
+  const RAW_LS = Buffer.from([0xe2, 0x80, 0xa8]) // U+2028
+  const RAW_PS = Buffer.from([0xe2, 0x80, 0xa9]) // U+2029
+
+  // 键序照本文件 makeCursorLines：{role, message: {content}}。值全部是合成的。
+  // 依次是：user（含 U+2028）、assistant（含 U+2029）、一条真坏行、一条没写完的尾行（无结尾 \n）。
+  function writeLineSeparatorTranscript(sessionId = 'f1a-cursor-session'): string {
+    const lines = [
+      { role: 'user', message: { content: [{ type: 'text', text: '<user_query>\n第一行 第二行\n</user_query>' }] } },
+      { role: 'assistant', message: { content: [{ type: 'text', text: '段一 段二' }] } }
+    ]
+    const broken = '{"role":"user","message":{"content":'
+    const tail = JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: '写到一半的回复' }] } }).slice(0, 50)
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-cursor-'))
+    const sessionDir = path.join(dir, sessionId)
+    fs.mkdirSync(sessionDir, { recursive: true })
+    const fp = path.join(sessionDir, `${sessionId}.jsonl`)
+    fs.writeFileSync(fp, [...lines.map((line) => JSON.stringify(line)), broken, tail].join('\n'))
+    return fp
+  }
+
+  it('含原样 U+2028 / U+2029 的 user、assistant 记录不再丢', async () => {
+    const fp = writeLineSeparatorTranscript()
+    const bytes = fs.readFileSync(fp)
+    expect(bytes.includes(RAW_LS)).toBe(true)
+    expect(bytes.includes(RAW_PS)).toBe(true)
+
+    const detail = await buildCursorSessionDetail(fp)
+    expect(detail!.messages.filter((m) => m.type === 'user').map((m) => m.textContent)).toEqual(['第一行 第二行'])
+    expect(detail!.messages.filter((m) => m.type === 'assistant').map((m) => m.textContent)).toEqual(['段一 段二'])
+  })
+
+  it('读流出错（文件不存在）时照旧抛出，由调用方兜底', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-cursor-missing-'))
+    await expect(buildCursorSessionSummary(path.join(dir, 'missing', 'missing.jsonl')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})

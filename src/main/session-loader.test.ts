@@ -22,7 +22,8 @@ import {
   getClaudeConfigDirForSessionFile,
   isRealUserMessage,
   projectCanonicalProviderSessions,
-  restoreOmittedUsageEvents
+  restoreOmittedUsageEvents,
+  parseSessionFile
 } from './session-loader'
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import { shellQuote } from './resume-terminal'
@@ -2643,5 +2644,54 @@ describe('【曾经的 bug】turnCount 不能把工具结果算成用户轮次',
     expect(summary).not.toBeNull()
     // 只有 1 个真实用户消息，turnCount 应该是 1
     expect(summary!.turnCount).toBe(1)
+  })
+})
+
+// ========================================================
+// F1a：parseSessionFile 只按 \n 分行
+// ========================================================
+describe('parseSessionFile 只按 \\n 分行（F1a）', () => {
+  const RAW_LS = Buffer.from([0xe2, 0x80, 0xa8]) // U+2028
+  const RAW_PS = Buffer.from([0xe2, 0x80, 0xa9]) // U+2029
+
+  // 键序照本文件的 rawMsg。JSON.stringify 不转义 U+2028 / U+2029，文件里是原字节。
+  // 依次是：user（含 U+2028）、assistant（含 U+2029）、一条真坏行、一条没写完的尾行（无结尾 \n）。
+  function writeLineSeparatorFixture(): { fp: string; user: RawJsonlMessage; assistant: RawJsonlMessage } {
+    const user = rawMsg({
+      uuid: 'f1a-user', type: 'user', timestamp: '2026-09-26T10:00:00Z',
+      message: { role: 'user', content: '第一行 第二行' }
+    })
+    const assistant = rawMsg({
+      uuid: 'f1a-assistant', parentUuid: 'f1a-user', type: 'assistant', timestamp: '2026-09-26T10:00:05Z',
+      requestId: 'req_f1a',
+      message: { role: 'assistant', content: [{ type: 'text', text: '段一 段二' }] as any }
+    })
+    const broken = '{"uuid":"f1a-broken","parentUuid":"f1a-assistant","sessionId":"test-session-id","type":"user","message":'
+    const tail = JSON.stringify(rawMsg({
+      uuid: 'f1a-tail', parentUuid: 'f1a-assistant', type: 'assistant', timestamp: '2026-09-26T10:00:09Z',
+      message: { role: 'assistant', content: '写到一半' }
+    })).slice(0, 80)
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-claude-'))
+    const fp = path.join(dir, 'test-session-id.jsonl')
+    fs.writeFileSync(fp, [JSON.stringify(user), JSON.stringify(assistant), broken, tail].join('\n'))
+    return { fp, user, assistant }
+  }
+
+  it('含原样 U+2028 / U+2029 的 user、assistant 记录不再丢；坏行与截断尾行照旧跳过', async () => {
+    const { fp, user, assistant } = writeLineSeparatorFixture()
+    const bytes = fs.readFileSync(fp)
+    expect(bytes.includes(RAW_LS)).toBe(true)
+    expect(bytes.includes(RAW_PS)).toBe(true)
+
+    expect(await parseSessionFile(fp)).toEqual([user, assistant])
+
+    const detail = await loadSessionDetail(fp)
+    expect(detail!.messages.find((m) => m.uuid === 'f1a-user')?.textContent).toBe('第一行 第二行')
+    expect(detail!.messages.find((m) => m.uuid === 'f1a-assistant')?.textContent).toContain('段一 段二')
+  })
+
+  it('读流出错（文件不存在）时照旧 resolve 已读部分，不抛', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1a-claude-missing-'))
+    await expect(parseSessionFile(path.join(dir, 'missing.jsonl'))).resolves.toEqual([])
   })
 })

@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import * as readline from 'readline'
+import { readJsonlRecords } from './jsonl-lines'
 import { Worker } from 'node:worker_threads'
 import Database from 'better-sqlite3'
 import { parser as createJsonParser } from 'stream-json'
@@ -909,36 +909,13 @@ function extractSkillInvocations(toolCalls: ToolCallInfo[], timestamp: string): 
 }
 
 export async function parseSessionFile(filePath: string): Promise<RawJsonlMessage[]> {
-  const messages: RawJsonlMessage[] = []
-  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' })
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
-
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      rl.close()
-      stream.destroy()
-      resolve(messages)
-    }, 30_000) // 30s timeout for large files or iCloud downloads
-
-    rl.on('line', (line) => {
-      if (!line.trim()) return
-      try {
-        messages.push(JSON.parse(line))
-      } catch {
-        // skip malformed lines
-      }
-    })
-
-    rl.on('close', () => {
-      clearTimeout(timeout)
-      resolve(messages)
-    })
-
-    rl.on('error', () => {
-      clearTimeout(timeout)
-      resolve(messages)
-    })
+  // Lines split at LF only (jsonl-lines.ts). A timeout or stream error still
+  // resolves the records read so far.
+  const { records } = await readJsonlRecords<RawJsonlMessage>(filePath, {
+    timeoutMs: 30_000, // 30s timeout for large files or iCloud downloads
+    onStreamError: 'truncate'
   })
+  return records
 }
 
 export function buildSessionSummary(

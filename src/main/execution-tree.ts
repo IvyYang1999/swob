@@ -8,7 +8,7 @@
  * - 错误/失败
  */
 
-import type { RawJsonlMessage, SessionSubagentSummary } from './types'
+import type { RawJsonlMessage, SessionSubagentSummary } from './session-types'
 
 export interface ToolCall {
   id: string

@@ -1,4 +1,4 @@
-import type { SessionSummary, Folder, SessionSource } from './types'
+import type { SessionSummary, SessionGroup, SessionSource } from './session-types'
 import {
   accountingForSession,
   processedTotal,
@@ -255,7 +255,7 @@ export function estimateActiveTime(messages: { timestamp: string }[]): number {
 
 export function buildInsights(
   sessions: SessionSummary[],
-  folders: Folder[],
+  folders: SessionGroup[],
   sessionTimes?: Map<string, number>
 ): InsightsData {
   // Intra-file branches are views over physical calls and must not inflate rollups.

@@ -23,7 +23,7 @@ import type {
   SessionDetail,
   TokenUsage,
   ToolCallInfo
-} from './types'
+} from './session-types'
 import type { UsageEvent } from './token-accounting'
 import { renderCanonicalEventPage } from './canonical-v2-projection'
 

@@ -7,7 +7,7 @@ import {
   resolvePhysicalSessionId,
   type CachedClaudeLineageFile
 } from './session-loader'
-import type { RawJsonlMessage } from './types'
+import type { RawJsonlMessage } from './session-types'
 
 export const SESSION_LINEAGE_FILE = '.session-lineage.json'
 

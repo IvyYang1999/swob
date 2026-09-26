@@ -1,4 +1,4 @@
-import type { SessionSource } from './types'
+import type { SessionSource } from './session-types'
 
 export const USAGE_FACT_SCHEMA_VERSION = 9
 

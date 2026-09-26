@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import * as fs from 'fs'
 import * as path from 'path'
 import { parseSessionFile } from './session-loader'
-import type { RawJsonlMessage } from './types'
+import type { RawJsonlMessage } from './session-types'
 import type {
   CanonicalRecord,
   MessageRecord,

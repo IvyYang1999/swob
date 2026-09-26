@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { detectSessionSourceFromPath } from './session-source'
-import type { SessionSource, SessionSummary } from './types'
+import type { SessionSource, SessionSummary } from './session-types'
 
 export const LOGICAL_SESSION_IDENTITY_SCHEMA_VERSION = 1 as const
 

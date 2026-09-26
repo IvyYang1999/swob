@@ -18,7 +18,7 @@ import type {
   FileAction,
   TokenUsage,
   SessionSource
-} from './types'
+} from './session-types'
 import {
   findCodexSessionFiles,
   buildCodexSessionDetail,

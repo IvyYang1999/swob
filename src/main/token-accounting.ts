@@ -1,4 +1,4 @@
-import type { RawJsonlMessage, SessionSource, TokenUsage } from './types'
+import type { RawJsonlMessage, SessionSource, TokenUsage } from './session-types'
 import { canonicalizeModel, inferOriginalProvider, providerFromModelRoute } from './pricing-catalog'
 
 export type TokenProvenance = 'reported' | 'derived' | 'estimated' | 'unavailable'

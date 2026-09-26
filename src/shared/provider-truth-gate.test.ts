@@ -35,7 +35,7 @@ describe('provider capability static truth gate', () => {
   })
 
   it('the closed SessionSource compatibility type is derived from the provider registry', () => {
-    const source = fs.readFileSync(path.join(root, 'src/main/types.ts'), 'utf8')
+    const source = fs.readFileSync(path.join(root, 'src/main/session-types.ts'), 'utf8')
     expect(source).toContain('export type SessionSource = LegacySessionSource')
     expect(source).not.toMatch(/export type SessionSource\s*=\s*'claude-code'/)
   })

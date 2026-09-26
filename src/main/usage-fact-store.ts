@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import type { Folder, SessionSummary } from './types'
+import type { SessionGroup, SessionSummary } from './session-types'
 import { accountingForSession, totalCacheWriteTokens, type UsageEvent } from './token-accounting'
 import { previewUsageEventRepricing, valueUsageEvent, type Valuation } from './token-valuation'
 import { PRICING_CATALOG_VERSION } from './pricing-catalog'
@@ -649,7 +649,7 @@ function activityDaysForSession(session: SessionSummary, facts: UsageFact[]): st
   return [...days].sort()
 }
 
-function foldersBySession(folders: Folder[]): Map<string, string[]> {
+function foldersBySession(folders: SessionGroup[]): Map<string, string[]> {
   const result = new Map<string, string[]>()
   for (const folder of folders) {
     for (const sessionId of folder.sessionIds) {
@@ -884,7 +884,7 @@ function throwIfUsageFactSyncCancelled(shouldCancel?: () => boolean): void {
 
 export function synchronizeUsageFacts(
   sessions: SessionSummary[],
-  folders: Folder[],
+  folders: SessionGroup[],
   options: { rebuild?: boolean; shouldCancel?: () => boolean } = {}
 ): UsageFactSyncResult {
   const db = getDatabase()

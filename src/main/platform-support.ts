@@ -1,4 +1,4 @@
-import type { SessionSource } from './types'
+import type { SessionSource } from './session-types'
 import {
   BUILTIN_PROVIDER_DEFINITIONS,
   type BuiltinProviderTier

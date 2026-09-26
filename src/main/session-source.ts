@@ -1,5 +1,5 @@
 import * as fs from 'fs'
-import type { SessionSource } from './types'
+import type { SessionSource } from './session-types'
 import { normalizePortablePath } from './portable-path'
 import { matchConfiguredCodexSessionPath } from './codex-session-roots'
 

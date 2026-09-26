@@ -1,4 +1,4 @@
-import type { SessionProviderOutcome, SessionSummary } from './types'
+import type { SessionProviderOutcome, SessionSummary } from './session-types'
 import { accountingForSession } from './token-accounting'
 
 /**

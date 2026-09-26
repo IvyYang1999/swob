@@ -8,7 +8,7 @@
  * - 上下文增长预警点
  */
 
-import type { RawJsonlMessage } from './types'
+import type { RawJsonlMessage } from './session-types'
 
 export type ContextCategory =
   | 'user-text'

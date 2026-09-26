@@ -7,7 +7,7 @@
  * Framework marker sizing measures visible marker text in user messages only —
  * it is not API context overhead (t106 semantics).
  */
-import type { RawJsonlMessage } from './types'
+import type { RawJsonlMessage } from './session-types'
 import { accountClaudeUsage, type TokenAccounting } from './token-accounting'
 import {
   aggregateValuations,

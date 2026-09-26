@@ -8,7 +8,7 @@ import type {
   SessionDetail,
   ToolCallInfo,
   ContentPart
-} from './types'
+} from './session-types'
 import { tokenUsageFromAccounting, unavailableTokenAccounting } from './token-accounting'
 import { runtimeHome } from './runtime-home'
 import { activityDaysFromTimestamps, localActivityDay } from './activity-time'

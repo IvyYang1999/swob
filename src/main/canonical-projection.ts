@@ -31,7 +31,7 @@ import type {
   SessionSummary,
   TokenUsage,
   ToolCallInfo
-} from './types'
+} from './session-types'
 
 export interface CanonicalProjectionOptions {
   filePath?: string

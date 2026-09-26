@@ -1,4 +1,4 @@
-import type { RawJsonlMessage } from './types'
+import type { RawJsonlMessage } from './session-types'
 
 const SYSTEM_USER_MESSAGES = [
   'Continue from where you left off.',

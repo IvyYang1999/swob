@@ -7,7 +7,7 @@ import type {
   SessionDetail,
   TokenUsage,
   ToolCallInfo
-} from './types'
+} from './session-types'
 
 interface PiEntry {
   type?: string

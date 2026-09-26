@@ -1,4 +1,4 @@
-import type { RawJsonlMessage, SessionDetail, SessionSummary } from './types'
+import type { RawJsonlMessage, SessionDetail, SessionSummary } from './session-types'
 import {
   buildSqliteAgentSessionDetail,
   buildSqliteAgentSessionSummary,

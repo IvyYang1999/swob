@@ -374,7 +374,7 @@ describe('t173 七来源统一 Provider Protocol v2', () => {
     expect(providerAdapterMode('codex', undefined, { SWOB_PROVIDER_ADAPTER_MODE: 'legacy' }))
       .toEqual({ mode: 'legacy', reason: 'environment' })
     expect(providerAdapterMode('cursor', {
-      preferences: { defaultViewMode: 'compact', terminalApp: 'Terminal', legacyProviderSources: ['cursor'] }
+      preferences: { legacyProviderSources: ['cursor'] }
     }, {})).toEqual({ mode: 'legacy', reason: 'source-config' })
   })
 

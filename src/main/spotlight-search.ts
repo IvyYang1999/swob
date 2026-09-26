@@ -1,4 +1,4 @@
-import type { SessionSummary } from './types'
+import type { SessionSummary } from './session-types'
 
 export interface SpotlightResult {
   session: SessionSummary

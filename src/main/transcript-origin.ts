@@ -1,4 +1,4 @@
-import type { RawJsonlMessage, SessionSource, TranscriptOrigin } from './types'
+import type { RawJsonlMessage, SessionSource, TranscriptOrigin } from './session-types'
 
 const SUPPORTED_ORIGINS = new Set<TranscriptOrigin>([
   'human',

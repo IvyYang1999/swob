@@ -15,6 +15,7 @@ import {
   parseCodexFileWithStats,
   type CodexLine
 } from './codex-loader'
+import { mergeTokenAccountings } from './token-accounting'
 import {
   codexClock,
   codexJsonl,
@@ -22,6 +23,7 @@ import {
   codexTime,
   copiedPrefix,
   type CodexFixtureRow,
+  type CodexFixtureUsage,
   type CodexRowBase
 } from './__fixtures__/codex-rollout-synthetic'
 
@@ -266,6 +268,135 @@ describe('codex-loader', () => {
       expect(keys).toHaveLength(2)
       expect(new Set(keys).size).toBe(2)
       expect(accounting.billingTotal).toBe(2 * (80 + 20 + 10))
+    })
+
+    // 真实分叉子文件里，抄写的 token_count 前面不一定有抄写的 turn_context：162 个里有 56 个，
+    // 第一条抄写快照出现在任何 turn_context 之前（F1b 验收 P1-1）。副本因此可能没有 model，
+    // 也可能带着子 agent 自己的 model。下面两例的抄写前缀都不含 turn_context。
+    const forkParentRows = (parentId: string): CodexFixtureRow[] => {
+      const at = codexClock('2026-07-31T12:00:00.000Z')
+      return [
+        codexRow.topLevelMeta({ ...at(), id: parentId, cwd: '/repo' }),
+        codexRow.turnContext({ ...at(), turnId: 'turn-1', cwd: '/repo', model: 'gpt-5.6-luna' }),
+        codexRow.userMessage({ ...at(), text: '第一个问题' }),
+        codexRow.tokenCount({ ...at(), total: { input: 100, cached: 20, output: 10 }, last: { input: 100, cached: 20, output: 10 } }),
+        codexRow.turnContext({ ...at(), turnId: 'turn-2', cwd: '/repo', model: 'gpt-5.6-luna' }),
+        codexRow.userMessage({ ...at(), text: '第二个问题' }),
+        codexRow.tokenCount({ ...at(), total: { input: 250, cached: 60, output: 25 }, last: { input: 150, cached: 40, output: 15 } })
+      ]
+    }
+
+    /** 子 session_meta、`lead` 行、不含 turn_context 的抄写前缀（时间戳改写）、子自己的一轮（计 65）。 */
+    const forkChildRowsWithoutCopiedTurnContext = (params: {
+      id: string
+      parentId: string
+      parentRows: CodexFixtureRow[]
+      lead: (at: () => CodexRowBase) => CodexFixtureRow[]
+      ownModel: string
+    }): CodexFixtureRow[] => {
+      const forkedAt = '2026-07-31T13:00:00.000Z'
+      const at = codexClock(forkedAt)
+      const metaBase = at()
+      const lead = params.lead(at)
+      const inherited = copiedPrefix(
+        params.parentRows.slice(1).filter((row) => row.type !== 'turn_context'),
+        { startIso: codexTime(forkedAt, 10_000), firstOrdinal: 1 + lead.length }
+      )
+      const ownStart = 1 + lead.length + inherited.length
+      const own = codexClock(codexTime(forkedAt, 60_000), ownStart)
+      return [
+        codexRow.threadSpawnMeta({
+          ...metaBase, id: params.id, parentId: params.parentId, cwd: '/repo', depth: 1, historyStartOrdinal: ownStart
+        }),
+        ...lead,
+        ...inherited,
+        codexRow.turnContext({ ...own(), turnId: 'child-own-turn', cwd: '/repo', model: params.ownModel }),
+        codexRow.userMessage({ ...own(), text: '子任务' }),
+        codexRow.tokenCount({ ...own(), total: { input: 310, cached: 80, output: 30 }, last: { input: 60, cached: 20, output: 5 } })
+      ]
+    }
+
+    const isTokenCount = (row: CodexFixtureRow): boolean =>
+      row.type === 'event_msg' && (row.payload as { type?: unknown }).type === 'token_count'
+
+    it('分叉副本在任何 turn_context 之前抄写 token_count（副本没有 model）：billingFactKey 仍与父会话相同，合并只计一次（F1b）', () => {
+      const parentId = '7f1b0000-0000-4000-8000-000000000024'
+      const childId = '7f1b0000-0000-4000-8000-000000000025'
+      const parentRows = forkParentRows(parentId)
+      const childRows = forkChildRowsWithoutCopiedTurnContext({
+        id: childId, parentId, parentRows, lead: () => [], ownModel: 'gpt-5.6-luna'
+      })
+
+      const parent = extractCodexTokenAccounting(parentRows as unknown as CodexLine[])
+      const child = extractCodexTokenAccounting(childRows as unknown as CodexLine[], 'subagent')
+      const copies = child.usageEvents.slice(0, 2)
+
+      expect(childRows.findIndex(isTokenCount))
+        .toBeLessThan(childRows.findIndex((row) => row.type === 'turn_context'))
+      expect(child.usageEvents).toHaveLength(3)
+      expect(copies.map((event) => event.model)).toEqual([undefined, undefined])
+      expect(copies.map((event) => event.billingFactKey))
+        .toEqual(parent.usageEvents.map((event) => event.billingFactKey))
+      const merged = mergeTokenAccountings([parent, child], { auditSourceIds: [parentId, childId] })
+      expect(merged.usageEvents).toHaveLength(5)
+      // Parent 110 + 165 once; the child adds only its own 65.
+      expect(merged.billingTotal).toBe(340)
+      expect(merged.conversationOnly).toBe(275)
+    })
+
+    it('子 agent 自己的 turn_context 换了 model 之后才出现抄写行：billingFactKey 仍与父会话相同，合并只计一次（F1b）', () => {
+      const parentId = '7f1b0000-0000-4000-8000-000000000026'
+      const childId = '7f1b0000-0000-4000-8000-000000000027'
+      const parentRows = forkParentRows(parentId)
+      const childRows = forkChildRowsWithoutCopiedTurnContext({
+        id: childId,
+        parentId,
+        parentRows,
+        lead: (at) => [codexRow.turnContext({ ...at(), turnId: 'child-first-turn', cwd: '/repo', model: 'gpt-5.6-sol' })],
+        ownModel: 'gpt-5.6-sol'
+      })
+
+      const parent = extractCodexTokenAccounting(parentRows as unknown as CodexLine[])
+      const child = extractCodexTokenAccounting(childRows as unknown as CodexLine[], 'subagent')
+      const copies = child.usageEvents.slice(0, 2)
+
+      expect(childRows.findIndex((row) => row.type === 'turn_context'))
+        .toBeLessThan(childRows.findIndex(isTokenCount))
+      expect(child.usageEvents).toHaveLength(3)
+      expect(parent.usageEvents.map((event) => event.model)).toEqual(['gpt-5.6-luna', 'gpt-5.6-luna'])
+      expect(copies.map((event) => event.model)).toEqual(['gpt-5.6-sol', 'gpt-5.6-sol'])
+      expect(copies.map((event) => event.billingFactKey))
+        .toEqual(parent.usageEvents.map((event) => event.billingFactKey))
+      const merged = mergeTokenAccountings([parent, child], { auditSourceIds: [parentId, childId] })
+      expect(merged.usageEvents).toHaveLength(5)
+      expect(merged.billingTotal).toBe(340)
+      expect(merged.conversationOnly).toBe(275)
+    })
+
+    it('反向：键不含 model 也不能过宽——turnId 相同而单轮或累计签名不同，就是不同的计费事实（F1b）', () => {
+      // 真实 token_count 不带 turn_id；这里在 payload 上补一个，专测带 turnId 时的键。
+      const oneSnapshot = (params: { id: string; turnId: string; total: CodexFixtureUsage; last: CodexFixtureUsage }) => {
+        const at = codexClock('2026-07-31T12:00:00.000Z')
+        const meta = codexRow.topLevelMeta({ ...at(), id: params.id, cwd: '/repo' })
+        const turn = codexRow.turnContext({ ...at(), turnId: params.turnId, cwd: '/repo', model: 'gpt-5.6-luna' })
+        const count = codexRow.tokenCount({ ...at(), total: params.total, last: params.last })
+        const withTurnId = { ...count, payload: { ...(count.payload as CodexFixtureRow), turn_id: params.turnId } }
+        return extractCodexTokenAccounting([meta, turn, withTurnId] as unknown as CodexLine[])
+      }
+      const usage = { input: 100, cached: 20, output: 10 }
+      const base = oneSnapshot({ id: '7f1b0000-0000-4000-8000-000000000028', turnId: 'turn-7', total: usage, last: usage })
+      const otherLast = oneSnapshot({
+        id: '7f1b0000-0000-4000-8000-000000000029', turnId: 'turn-7', total: usage, last: { input: 90, cached: 20, output: 10 }
+      })
+      const otherTotal = oneSnapshot({
+        id: '7f1b0000-0000-4000-8000-00000000002a', turnId: 'turn-7', total: { input: 200, cached: 40, output: 20 }, last: usage
+      })
+      const otherTurn = oneSnapshot({ id: '7f1b0000-0000-4000-8000-00000000002b', turnId: 'turn-8', total: usage, last: usage })
+      const keys = [base, otherLast, otherTotal, otherTurn].map((accounting) => accounting.usageEvents[0]?.billingFactKey)
+
+      expect(keys.every((key) => typeof key === 'string')).toBe(true)
+      expect(new Set(keys).size).toBe(4)
+      expect(mergeTokenAccountings([base, otherLast, otherTotal, otherTurn]).billingTotal).toBe(110 + 100 + 110 + 110)
     })
 
     it('正确解析 Codex session 为 SessionSummary', async () => {

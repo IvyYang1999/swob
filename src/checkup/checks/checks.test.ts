@@ -12,7 +12,8 @@ import { overallVerdict, runKernelCheckup, type CheckupInternals } from '../run'
 import Ajv2020 from 'ajv/dist/2020.js'
 import schema from '../contract/kernel-checkup-report-v1.schema.json'
 import { applicability, worstVerdict, type CheckContext } from './common'
-import { compactionThresholdVerdict } from './compaction'
+import { compactionCheck, compactionThresholdVerdict } from './compaction'
+import { buildCodexSessionSummary } from '../../main/codex-loader'
 import { contentCheck, contentThresholdVerdict } from './content'
 import { inclusionCheck } from './inclusion'
 
@@ -155,6 +156,159 @@ describe('② tool-written broken lines are listed but never grade the check', (
     expect(result.bySource['claude-code'].verdict).toBe('fail')
     expect(result.findings.find((finding) => finding.code === 'content.line-separator-split')?.verdict).toBe('fail')
     expect(result.findings.find((finding) => finding.code === 'content.tool-bad-line')?.verdict).toBe('not-applicable')
+  })
+})
+
+describe('③ Codex multi-copy sessions and the kernel counting rule (C1c deliverable ②)', () => {
+  const compacted = (minute: number, ordinal: number, label: string): Record<string, unknown> =>
+    codex.compacted({ timestamp: syntheticTime(minute), ordinal, message: `${label} summary ${ordinal}`, window: ordinal })
+
+  /**
+   * 100 plain sessions (0 markers each) plus one session whose id has two copies that share no marker:
+   * copy A in sessions/ with `markersA` legacy rows, copy B in archived_sessions/ with `markersB`.
+   */
+  async function multiCopyFixture(markersA: number, markersB: number): Promise<{
+    context: (swob: number, changed?: string[]) => CheckContext; copyA: string; copyB: string
+  }> {
+    const id = syntheticUuid(1400, 'c0de')
+    let copyA = ''
+    let copyB = ''
+    const { root, sessions } = await codexFixture(100, (dir) => {
+      const head = (minute: number): Array<Record<string, unknown>> => [
+        codex.topLevelMeta({ timestamp: syntheticTime(minute), ordinal: 0, id, cwd: CWD }),
+        codex.userMessage({ timestamp: syntheticTime(minute), ordinal: 1, text: 'long task' }),
+        codex.assistantMessage({ timestamp: syntheticTime(minute), ordinal: 2, text: 'working' })
+      ]
+      copyA = writeSample(dir, codexRolloutPath(id, 500), jsonl([...head(500), ...Array.from({ length: markersA }, (_, index) => compacted(500, index + 3, 'copy A'))]))
+      copyB = writeSample(dir, codexRolloutPath(id, 501, 'archived_sessions'), jsonl([...head(501), ...Array.from({ length: markersB }, (_, index) => compacted(501, index + 3, 'copy B'))]))
+    })
+    const census = await censusCodex(root, { env: {} })
+    const realA = fs.realpathSync(copyA)
+    const realB = fs.realpathSync(copyB)
+    return {
+      context: (swob, changed = []) => ctx({
+        codex: census,
+        changed: new Set(changed),
+        readout: readout([...sessions, codexSession(id, realA, { paths: [realA, realB], compactCount: swob })])
+      }),
+      copyA: realA,
+      copyB: realB
+    }
+  }
+  const codexFindings = (result: ReturnType<typeof compactionCheck>): Array<[string, string, number | null]> =>
+    result.findings.filter((finding) => finding.source === 'codex').map((finding) => [finding.code, finding.verdict, finding.count.value])
+
+  it('explains a two-copy session whose count equals one copy (35 + 2, nothing shared, Swob 35): warn, not a failure', async () => {
+    const { context } = await multiCopyFixture(35, 2)
+    const result = compactionCheck(context(35))
+    const entry = result.bySource.codex
+    expect(codexFindings(result)).toEqual([['compaction.multi-copy-explained', 'warn', 1]])
+    const explained = result.findings.find((finding) => finding.code === 'compaction.multi-copy-explained')!
+    expect(explained.count).toEqual({ value: 1, label: 'derived', unit: 'sessions' })
+    expect(explained.samples).toHaveLength(1)
+    expect(explained.ownerLine).toBe('Codex：有 1 场会话在磁盘上有多份副本，Swob 按其中一份计数，标准答案取各份的并集；差异已解释，不是识别错误')
+    // Still counted as a mismatch: the ≤ 1 % threshold keeps guarding it (1 of 101 sessions).
+    expect(entry.swob).toMatchObject({ sessionsCompared: { value: 101 }, sessionsMismatched: { value: 1 }, compactCountSum: { value: 35 } })
+    expect(entry.oracle).toMatchObject({ perSessionUniqueSum: { value: 37 }, legacyCompactedRows: { value: 37 } })
+    expect(entry.verdict).toBe('warn')
+    expect(result.verdict).toBe('warn')
+    // No file in two formats and none with events only: no rule-difference measure, no finding.
+    expect(Object.keys(entry.oracle).filter((key) => key === 'bothFormatFiles' || key === 'eventOnlyFiles')).toEqual([])
+  })
+
+  it('keeps a count that equals no copy a failure: count-mismatch once Swob recognised some markers (D7), legacy-unrecognized only when none', async () => {
+    const { context } = await multiCopyFixture(35, 2)
+    const twenty = compactionCheck(context(20))
+    expect(codexFindings(twenty)).toEqual([['compaction.count-mismatch', 'fail', 1]])
+    expect(twenty.bySource.codex.verdict).toBe('fail')
+    const none = compactionCheck(context(0))
+    expect(codexFindings(none)).toEqual([['codex.legacy-compacted-unrecognized', 'fail', 1]])
+    expect(none.findings[0].ownerLine).toBe('Codex：1 场会话里一共发生过 37 次上下文压缩，Swob 一次都没认出来')
+  })
+
+  it('never explains a Swob count of 0 by a copy without markers (guard: recognition fell back to 0)', async () => {
+    const { context } = await multiCopyFixture(2, 0)
+    const result = compactionCheck(context(0))
+    expect(codexFindings(result)).toEqual([['codex.legacy-compacted-unrecognized', 'fail', 1]])
+    expect(result.bySource.codex.verdict).toBe('fail')
+  })
+
+  it('leaves the whole session out when one copy changed during the run', async () => {
+    const { context, copyB } = await multiCopyFixture(35, 2)
+    const result = compactionCheck(context(35, [copyB]))
+    expect(codexFindings(result)).toEqual([['census.file-changed-during-run', 'undetermined', 1]])
+    expect(result.bySource.codex.swob).toMatchObject({ sessionsCompared: { value: 100 }, sessionsMismatched: { value: 0 }, sessionsExcludedChanged: { value: 1 } })
+    expect(result.bySource.codex.verdict).toBe('pass')
+  })
+
+  /** One top-level session in one file, with the given rows after its session_meta. */
+  async function singleFile(seed: number, rows: Array<Record<string, unknown>>, swob: number): Promise<{ result: ReturnType<typeof compactionCheck>; file: string }> {
+    const root = home()
+    const id = syntheticUuid(seed, 'c0de')
+    const file = fs.realpathSync(writeSample(root, codexRolloutPath(id, 0), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id, cwd: CWD }),
+      ...rows
+    ])))
+    const census = await censusCodex(root, { env: {} })
+    return { result: compactionCheck(ctx({ codex: census, readout: readout([codexSession(id, file, { compactCount: swob })]) })), file }
+  }
+  const both = (): Array<Record<string, unknown>> => [
+    codex.compacted({ timestamp: syntheticTime(1), ordinal: 1, message: 'first', window: 1 }),
+    codex.compactionItem({ timestamp: syntheticTime(2), ordinal: 2, id: 'item-1' }),
+    codex.compacted({ timestamp: syntheticTime(3), ordinal: 3, message: 'second', window: 2 })
+  ]
+  const eventsOnly = (): Array<Record<string, unknown>> => [
+    codex.contextCompactedEvent({ timestamp: syntheticTime(1), ordinal: 1 }),
+    codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'go on' }),
+    codex.contextCompactedEvent({ timestamp: syntheticTime(3), ordinal: 3 })
+  ]
+
+  it('(a) a file with legacy rows and compaction items counts its legacy rows only, like the kernel; listed as a known rule difference', async () => {
+    const { result } = await singleFile(1410, both(), 2)
+    const entry = result.bySource.codex
+    expect(entry.swob).toMatchObject({ sessionsMismatched: { value: 0 }, sessionsEqual: { value: 1 } })
+    expect(entry.oracle).toMatchObject({
+      perSessionUniqueSum: { value: 2 }, globalUnique: { value: 2 },
+      // The census rows keep counting every row.
+      legacyCompactedRows: { value: 2 }, compactionItemRows: { value: 1 },
+      bothFormatFiles: { value: 1, label: 'reported', unit: 'files' }
+    })
+    expect(entry.oracle.eventOnlyFiles).toBeUndefined()
+    expect(codexFindings(result)).toEqual([['codex.compaction-rule-difference', 'not-applicable', 1]])
+    expect(result.findings[0].ownerLine).toBe('Codex：有 1 个会话文件的压缩记录写法特殊（新旧两种并存 1 个、只有压缩事件 0 个），逐场比对按 Swob 的计法数；这是已知的口径差，单独列出，不计入本项结论')
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('(b) a file with neither format counts every *compact* event row, like the kernel; listed as a known rule difference', async () => {
+    const { result } = await singleFile(1411, eventsOnly(), 2)
+    const entry = result.bySource.codex
+    expect(entry.swob).toMatchObject({ sessionsMismatched: { value: 0 }, sessionsEqual: { value: 1 } })
+    expect(entry.oracle).toMatchObject({
+      perSessionUniqueSum: { value: 2 }, globalUnique: { value: 2 }, contextCompactedEvents: { value: 2 },
+      eventOnlyFiles: { value: 1, label: 'reported', unit: 'files' }
+    })
+    expect(codexFindings(result)).toEqual([['codex.compaction-rule-difference', 'not-applicable', 1]])
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('the aligned per-session count equals the kernel\'s own compactCount (codex-loader, F1b rule)', async () => {
+    const cases: Array<[number, Array<Record<string, unknown>>]> = [
+      [1420, both()],
+      [1421, eventsOnly()],
+      // Items and events: the items count, the events do not.
+      [1422, [codex.compactionItem({ timestamp: syntheticTime(1), ordinal: 1, id: 'item-1' }), codex.contextCompactedEvent({ timestamp: syntheticTime(2), ordinal: 2 })]],
+      // A repeated legacy payload counts once; ContextCompaction never counts.
+      [1423, [
+        codex.compacted({ timestamp: syntheticTime(1), ordinal: 1, message: 'same', window: 1 }),
+        codex.compacted({ timestamp: syntheticTime(1), ordinal: 1, message: 'same', window: 1 }),
+        codex.contextCompactionEvent({ timestamp: syntheticTime(2), ordinal: 2, threadId: 't', turnId: 'u', itemId: 'i' })
+      ]]
+    ]
+    for (const [seed, rows] of cases) {
+      const probe = await singleFile(seed, rows, 0)
+      const kernel = (await buildCodexSessionSummary(probe.file))?.compactCount
+      expect(probe.result.bySource.codex.oracle.perSessionUniqueSum.value, String(seed)).toBe(kernel)
+    }
   })
 })
 

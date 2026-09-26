@@ -60,6 +60,16 @@ export interface CodexUnit {
     /** Unique primary-marker signatures (type + payload hash; timestamps excluded). */
     markerSigs: string[]
     legacySigs: string[]
+    /**
+     * Unique `response_item.compaction` signatures (= markerSigs minus legacySigs). With compactEvents
+     * it lets the per-session comparison apply the kernel's rule — C1c, aligned with the kernel per
+     * F1b (codex-loader.ts codexToRawMessages): per file the kernel counts `compacted` rows, else
+     * `compaction` items (each once per payload), else every `*compact*` event row. markerSigs and
+     * legacySigs keep their C1a meaning; no census count changes.
+     */
+    itemSigs: string[]
+    /** `event_msg` rows whose payload type contains "compact" (every row counts, no payload dedup). */
+    compactEvents: number
   }
   hazardKinds: Record<LossKind, number>
   lineSeparatorKinds: Record<LossKind, number>
@@ -221,9 +231,10 @@ export async function censusCodexFile(
   let assistantSide = 0
   let usageSnapshots = 0
   let usageRecords = 0
-  const compaction = { legacy: 0, items: 0, contextCompactionEvents: 0, contextCompactedEvents: 0 }
+  const compaction = { legacy: 0, items: 0, contextCompactionEvents: 0, contextCompactedEvents: 0, compactEvents: 0 }
   const markerSigs = new Set<string>()
   const legacySigs = new Set<string>()
+  const itemSigs = new Set<string>()
   const hazardKinds = emptyLossKinds()
   const lineSeparatorKinds = emptyLossKinds()
   const hazardTypes: Record<string, number> = {}
@@ -253,9 +264,13 @@ export async function censusCodexFile(
             assistantSide++
           } else if (payloadType === 'compaction') {
             compaction.items++
-            markerSigs.add(stableDigest(`compaction\0${JSON.stringify(payload)}`))
+            const sig = stableDigest(`compaction\0${JSON.stringify(payload)}`)
+            markerSigs.add(sig)
+            itemSigs.add(sig)
           }
         } else if (type === 'event_msg') {
+          // Aligned with the kernel's event rule (F1b): the type name contains "compact".
+          if (typeof payloadType === 'string' && payloadType.includes('compact')) compaction.compactEvents++
           if (payloadType === 'agent_message') assistantSide++
           else if (payloadType === 'token_count') {
             const info = asRecord(payload?.info)
@@ -320,7 +335,7 @@ export async function censusCodexFile(
     fileNameId: ROLLOUT_ID.exec(baseName)?.[1]?.toLowerCase() ?? null,
     userMessages,
     assistantSide,
-    compaction: { ...compaction, markerSigs: [...markerSigs], legacySigs: [...legacySigs] },
+    compaction: { ...compaction, markerSigs: [...markerSigs], legacySigs: [...legacySigs], itemSigs: [...itemSigs] },
     hazardKinds,
     lineSeparatorKinds,
     hazardTypes,

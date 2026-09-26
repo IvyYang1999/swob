@@ -175,6 +175,14 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
     engineerHint: 'src/main/session-loader.ts#loadAllSessions：只读加载时这个来源返回 0 场会话，而来源根存在；先查对应 loader 是否把读取失败静默成了空结果'
   },
   // —— C1c additions ——
+  'compaction.multi-copy-explained': {
+    ownerLine: 'Codex：有 {n} 场会话在磁盘上有多份副本，Swob 按其中一份计数，标准答案取各份的并集；差异已解释，不是识别错误',
+    engineerHint: 'src/main/session-loader.ts#loadLegacySessionSnapshot：同一 id 的多份副本只保留账单最大的那份，compactCount 取那一份；该场的 Swob 计数等于其中一份副本按内核规则数出的标记数'
+  },
+  'codex.compaction-rule-difference': {
+    ownerLine: 'Codex：有 {n} 个会话文件的压缩记录写法特殊（新旧两种并存 {n} 个、只有压缩事件 {n} 个），逐场比对按 Swob 的计法数；这是已知的口径差，单独列出，不计入本项结论',
+    engineerHint: 'checks/compaction.ts#kernelRuleMarkers：同一文件既有 compacted 又有 compaction item 时只数 compacted；两种都没有时逐行数 *compact* 事件（与 src/main/codex-loader.ts#codexToRawMessages 的 F1b 规则对齐）'
+  },
   'content.swob-read-error': {
     ownerLine: '{source}：有 {n} 个文件没拿到 Swob 的逐文件读入数（读取出错，或这次没有读），没有参与比对，也不做推算',
     engineerHint: 'src/checkup/readout.ts#readSwobReadout：没有这个文件的逐文件读数（parseCodexFileWithStats 读取抛错，或文件不在这次读数的清单里）；不推算，不参与 ② 的比对'
@@ -270,6 +278,8 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   'codex.legacy-compacted-unrecognized': 'Swob 不认旧格式的压缩记录',
   'compaction.count-mismatch': '压缩次数和原始记录对不上',
   'compaction.fork-inherited-marker': '恢复或分叉时从父会话抄来的压缩标记',
+  'compaction.multi-copy-explained': '会话有多份副本，Swob 按其中一份计数（差异已解释）',
+  'codex.compaction-rule-difference': '压缩记录写法特殊，Swob 与标准答案的计法本来就不同（已知口径差）',
   'inclusion.unexplained': '没被纳入，原因还没查明',
   'claude.no-conversation-records': '文件里没有对话记录',
   'claude.subagent-no-conversation': '子 agent 文件里没有对话',
@@ -477,6 +487,9 @@ export const MEASURE_LABELS: Readonly<Record<string, string>> = {
   subagentLegacyCompactedRows: '子 agent 里的旧格式压缩记录',
   subagentCompactionItemRows: '子 agent 里的新格式压缩记录',
   subagentInheritedMarkers: '子 agent 从父会话抄来的压缩标记',
+  // C1c: files counted under the kernel's per-file rule (shown only when there are any)
+  bothFormatFiles: '新旧两种压缩记录并存的文件',
+  eventOnlyFiles: '只有压缩事件的文件',
   // ⑤ tokens (census-level evidence)
   forkUsageCopies: '子 agent 抄写父会话的用量快照',
   forkUsageCopiesSameTimestamp: '时间戳也相同的抄写快照',

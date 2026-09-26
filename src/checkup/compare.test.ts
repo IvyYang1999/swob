@@ -101,6 +101,19 @@ describe('issue level (all six checks, keyed by check + code + source)', () => {
     }
   })
 
+  it('a multi-copy session explained by checkup 1.2.0 is a first check against an older report, not a new issue (D4)', () => {
+    const { previous, current } = pair()
+    current.kernel.checkupVersion = '1.2.0'
+    // The older checkup filed the same session under the legacy code; the new one explains it.
+    current.checks[2].findings = [finding('compaction.multi-copy-explained', 'warn', 'codex', d(1, 'sessions'))]
+    const older = compareIssues(previous, current)
+    expect(older.firstCheck.map((issue) => [issue.check, issue.code])).toEqual([['compaction', 'compaction.multi-copy-explained']])
+    expect(older.fixed.map((issue) => issue.code)).toEqual(['codex.legacy-compacted-unrecognized'])
+    expect(older.added).toEqual([])
+    previous.kernel.checkupVersion = '1.2.0'
+    expect(compareIssues(previous, current).added.map((issue) => issue.code)).toEqual(['compaction.multi-copy-explained'])
+  })
+
   it('an issue whose check is undetermined now was not checked, not fixed', () => {
     const { previous, current } = pair()
     current.checks[2].verdict = 'undetermined'

@@ -117,7 +117,10 @@ export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compact
  * instead of inferred, readoutBySource, readout.source-empty findings under ①.
  * 1.2.0: C1c — Codex read counts measured per file with parseCodexFileWithStats [R] (units carry
  * swobRead) and Claude reads through parseSessionFileWithStats (truncated → partial); a file without a
- * read count is left out and listed (content.swob-read-error), never inferred.
+ * read count is left out and listed (content.swob-read-error), never inferred. ③ Codex: a multi-copy
+ * session whose count equals one copy is explained (compaction.multi-copy-explained, warn), the
+ * per-session count follows the kernel's per-file rule (known differences listed as
+ * codex.compaction-rule-difference) and legacy-unrecognized needs a Swob count of 0.
  */
 export const CHECKUP_VERSION = '1.2.0'
 export const SELF_TEST_TOTAL = 6
@@ -228,6 +231,10 @@ export const REASON_CODES = [
   'codex.legacy-compacted-unrecognized',
   'compaction.count-mismatch',
   'compaction.fork-inherited-marker',
+  // C1c: a multi-copy Codex session whose count equals one copy (warn); files where the kernel's
+  // per-file counting rule differs from the census rows (known rule difference, not-applicable)
+  'compaction.multi-copy-explained',
+  'codex.compaction-rule-difference',
   // inclusion ①
   'inclusion.unexplained',
   'claude.no-conversation-records',

@@ -117,9 +117,15 @@ function checkupVersionAtLeast(report: CheckupReport, minimum: readonly [number,
   return true
 }
 
-/** Findings that need a report field older reports do not have: absent → the previous report could not find them. */
+/**
+ * Findings that need a report field (or checkup version) older reports do not have: absent → the previous
+ * report could not find them.
+ */
 const FINDING_NEEDS: Readonly<Record<string, (report: CheckupReport) => boolean>> = {
-  'readout.source-empty': (report) => !!report.readoutBySource
+  'readout.source-empty': (report) => !!report.readoutBySource,
+  // C1c (1.2.0, D4): older checkups filed such a session under codex.legacy-compacted-unrecognized or
+  // compaction.count-mismatch; against them the explanation is a first check, not a new issue.
+  'compaction.multi-copy-explained': (report) => checkupVersionAtLeast(report, [1, 2, 0])
 }
 
 /**

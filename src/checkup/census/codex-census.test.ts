@@ -69,6 +69,36 @@ describe('Codex census', () => {
     expect(countForkUsageCopies(census.units)).toEqual({ rewritten: 1, sameTimestamp: 0, childUnits: 1 })
   })
 
+  it('keeps per file what the kernel counts under its own rule (C1c, aligned with F1b): item signatures and *compact* event rows', async () => {
+    const root = home()
+    const both = syntheticUuid(4, 'c0de')
+    const events = syntheticUuid(5, 'c0de')
+    writeSample(root, codexRolloutPath(both, 30), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(30), ordinal: 0, id: both, cwd: CWD }),
+      codex.compacted({ timestamp: syntheticTime(31), ordinal: 1, message: 'legacy summary' }),
+      codex.compactionItem({ timestamp: syntheticTime(32), ordinal: 2, id: 'item-1' }),
+      codex.compactionItem({ timestamp: syntheticTime(33), ordinal: 3, id: 'item-2' }),
+      codex.contextCompactedEvent({ timestamp: syntheticTime(34), ordinal: 4 })
+    ]))
+    writeSample(root, codexRolloutPath(events, 40), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(40), ordinal: 0, id: events, cwd: CWD }),
+      codex.contextCompactedEvent({ timestamp: syntheticTime(41), ordinal: 1 }),
+      codex.contextCompactedEvent({ timestamp: syntheticTime(42), ordinal: 2 }),
+      codex.contextCompactionEvent({ timestamp: syntheticTime(43), ordinal: 3, threadId: events, turnId: 't1', itemId: 'i1' })
+    ]))
+    const census = await censusCodex(root, { env: {} })
+    const byId = new Map(census.units.map((unit) => [unit.meta?.id, unit]))
+    const bothUnit = byId.get(both)!
+    expect(bothUnit.compaction).toMatchObject({ legacy: 1, items: 2, contextCompactedEvents: 1, compactEvents: 1 })
+    expect(bothUnit.compaction.itemSigs).toHaveLength(2)
+    // markerSigs and legacySigs keep their C1a meaning: every primary marker, and the legacy ones.
+    expect(bothUnit.compaction.markerSigs).toHaveLength(3)
+    expect(bothUnit.compaction.legacySigs).toHaveLength(1)
+    expect(bothUnit.compaction.itemSigs.every((sig) => bothUnit.compaction.markerSigs.includes(sig) && !bothUnit.compaction.legacySigs.includes(sig))).toBe(true)
+    // Every *compact* event row counts (no payload dedup); ContextCompaction (item_completed) is not one.
+    expect(byId.get(events)!.compaction).toMatchObject({ legacy: 0, items: 0, itemSigs: [], markerSigs: [], contextCompactionEvents: 1, contextCompactedEvents: 2, compactEvents: 2 })
+  })
+
   it('classifies roles like Codex metadata does', () => {
     expect(codexRoleFromMeta({ id: 'a', source: 'cli' }).role).toBe('top-level')
     expect(codexRoleFromMeta({ id: 'a', source: 'vscode', thread_source: 'subagent', parent_thread_id: 'p' })).toMatchObject({ role: 'subagent', parentThreadId: 'p' })

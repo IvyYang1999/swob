@@ -4,10 +4,21 @@
  *   session's physical files (isCompactSummary rows as cross-check).
  * - Codex: primary markers = legacy `compacted` rows + `response_item.compaction`
  *   rows, deduplicated by payload signature across the session's files;
- *   `context_compacted` / `ContextCompaction` events are cross-checks.
+ *   `context_compacted` / `ContextCompaction` events are cross-checks. The
+ *   per-session comparison counts each file under the kernel's rule (C1c,
+ *   aligned with F1b): its primary format only — `compacted`, else `compaction`
+ *   items, else every `*compact*` event row. A file where that rule differs from
+ *   the census rows (both formats, or events only) is listed as a known rule
+ *   difference (not-applicable); the census rows themselves are unchanged.
  * Per session: Swob's compactCount must equal the oracle. Markers copied from a
  * parent (resume/fork) count per session but are removed from the global
  * count and reported with `compaction.fork-inherited-marker`.
+ * Codex keeps one copy of a session id that has several files (the one with the
+ * largest bill): a mismatch whose Swob count equals one copy's count is explained
+ * (C1c, dispatcher decision D1) — never when Swob counted 0 — and still counts as
+ * a mismatch for the ≤ 1 % threshold. legacy-unrecognized means the session has
+ * legacy rows and Swob recognised none of them (D7); other mismatches are
+ * count-mismatch.
  */
 import type { Finding, Verdict } from '../contract'
 import { countInheritedCodexMarkers } from '../census/codex-census'
@@ -34,6 +45,19 @@ interface SessionComparison {
   oracle: number
   swob: number
   legacy: number
+  /** Codex sessions with several files (copies of one id): each copy's markers under the kernel's rule. */
+  copies: number[]
+}
+
+/**
+ * A Codex file's markers under the kernel's counting rule (C1c, aligned with F1b; codex-loader.ts
+ * codexToRawMessages): the file counts its primary format only — legacy `compacted` rows, else
+ * `response_item.compaction` items (each once per payload), else every `*compact*` event row.
+ */
+function kernelRuleMarkers(unit: CodexUnit): { sigs: readonly string[]; events: number } {
+  if (unit.compaction.legacy > 0) return { sigs: unit.compaction.legacySigs, events: 0 }
+  if (unit.compaction.items > 0) return { sigs: unit.compaction.itemSigs, events: 0 }
+  return { sigs: [], events: unit.compaction.compactEvents }
 }
 
 /** Threshold (design §4.3): pass = all equal; warn = ≤ 1 % differ and every difference is explained. */
@@ -91,7 +115,7 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
     }
     for (const uuid of uuids) globalUuids.add(uuid)
     globalWithoutUuid += withoutUuid
-    comparisons.push({ session, oracle: uuids.size + withoutUuid, swob: session.compactCount, legacy: 0 })
+    comparisons.push({ session, oracle: uuids.size + withoutUuid, swob: session.compactCount, legacy: 0, copies: [] })
   }
   const mismatched = comparisons.filter((comparison) => comparison.oracle !== comparison.swob)
   const sourceFindings: Finding[] = []
@@ -151,6 +175,9 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   const comparisons: SessionComparison[] = []
   let excluded = 0
   const globalMarkers = new Set<string>()
+  let globalEvents = 0
+  const bothFormatPaths: string[] = []
+  const eventOnlyPaths: string[] = []
   for (const session of ctx.readout.sessions) {
     if (session.source !== 'codex' || session.virtual) continue
     const units = unitsForSession(ctx, session, byPath)
@@ -160,24 +187,37 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
     }
     const markers = new Set<string>()
     const legacy = new Set<string>()
+    let events = 0
+    const copies: number[] = []
     for (const unit of units) {
-      for (const sig of unit.compaction.markerSigs) markers.add(sig)
+      const counted = kernelRuleMarkers(unit)
+      for (const sig of counted.sigs) markers.add(sig)
+      events += counted.events
+      copies.push(counted.sigs.length + counted.events)
       for (const sig of unit.compaction.legacySigs) legacy.add(sig)
+      if (unit.compaction.legacy > 0 && unit.compaction.items > 0) bothFormatPaths.push(unit.path)
+      else if (unit.compaction.legacy === 0 && unit.compaction.items === 0 && unit.compaction.compactEvents > 0) eventOnlyPaths.push(unit.path)
     }
     for (const sig of markers) globalMarkers.add(sig)
-    comparisons.push({ session, oracle: markers.size, swob: session.compactCount, legacy: legacy.size })
+    globalEvents += events
+    comparisons.push({ session, oracle: markers.size + events, swob: session.compactCount, legacy: legacy.size, copies: units.length > 1 ? copies : [] })
   }
   const mismatched = comparisons.filter((comparison) => comparison.oracle !== comparison.swob)
-  const legacyUnrecognized = mismatched.filter((comparison) => comparison.legacy > 0 && comparison.swob < comparison.oracle)
-  const other = mismatched.filter((comparison) => !legacyUnrecognized.includes(comparison))
+  // D1: the kernel keeps one copy of a multi-copy session, so a count equal to one copy's is explained —
+  // decided before the legacy class, and never for a Swob count of 0 (recognition falling back to 0 must
+  // not hide behind a copy without markers).
+  const explained = new Set(mismatched.filter((comparison) => comparison.swob > 0 && comparison.copies.includes(comparison.swob)))
+  // D7: legacy-unrecognized = the session has legacy rows and Swob recognised none of them.
+  const legacyUnrecognized = new Set(mismatched.filter((comparison) => !explained.has(comparison) && comparison.legacy > 0 && comparison.swob === 0))
+  const other = mismatched.filter((comparison) => !explained.has(comparison) && !legacyUnrecognized.has(comparison))
   const sourceFindings: Finding[] = []
   const pathOf = (comparison: SessionComparison): string => comparison.session.primaryPath ?? comparison.session.paths[0] ?? ''
-  if (legacyUnrecognized.length > 0) {
+  if (legacyUnrecognized.size > 0) {
     sourceFindings.push(makeFinding({
       code: 'codex.legacy-compacted-unrecognized', verdict: 'fail', source: 'codex',
-      count: derived(legacyUnrecognized.length, 'sessions'),
-      numbers: [legacyUnrecognized.length, legacyUnrecognized.reduce((total, comparison) => total + comparison.legacy, 0)],
-      samples: sampleIds(ctx.salt, legacyUnrecognized.map(pathOf))
+      count: derived(legacyUnrecognized.size, 'sessions'),
+      numbers: [legacyUnrecognized.size, [...legacyUnrecognized].reduce((total, comparison) => total + comparison.legacy, 0)],
+      samples: sampleIds(ctx.salt, [...legacyUnrecognized].map(pathOf))
     }))
   }
   if (other.length > 0) {
@@ -186,12 +226,29 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
       samples: sampleIds(ctx.salt, other.map(pathOf))
     }))
   }
+  if (explained.size > 0) {
+    sourceFindings.push(makeFinding({
+      code: 'compaction.multi-copy-explained', verdict: 'warn', source: 'codex', count: derived(explained.size, 'sessions'),
+      samples: sampleIds(ctx.salt, [...explained].map(pathOf))
+    }))
+  }
   if (excluded > 0) {
     sourceFindings.push(makeFinding({ code: 'census.file-changed-during-run', verdict: 'undetermined', source: 'codex', count: derived(excluded, 'sessions') }))
+  }
+  // D2: files where the kernel's rule differs from the census rows, listed as a known rule difference
+  // (never grades ③; absent — and the report unchanged — when there is none).
+  const ruleDifferences = bothFormatPaths.length + eventOnlyPaths.length
+  if (ruleDifferences > 0) {
+    sourceFindings.push(makeFinding({
+      code: 'codex.compaction-rule-difference', verdict: 'not-applicable', source: 'codex', count: reported(ruleDifferences, 'files'),
+      numbers: [ruleDifferences, bothFormatPaths.length, eventOnlyPaths.length],
+      samples: sampleIds(ctx.salt, [...bothFormatPaths, ...eventOnlyPaths])
+    }))
   }
   findings.push(...sourceFindings)
   const threshold = compactionThresholdVerdict({ compared: comparisons.length, mismatched: mismatched.length, unexplained: other.length })
   const perSessionSum = comparisons.reduce((total, comparison) => total + comparison.oracle, 0)
+  const globalUnique = globalMarkers.size + globalEvents
   return {
     verdict: sourceVerdict(threshold, sourceFindings, 'codex'),
     swob: {
@@ -205,8 +262,10 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
       ...oracle,
       sessionsWithMarkers: derived(comparisons.filter((comparison) => comparison.oracle > 0).length, 'sessions'),
       perSessionUniqueSum: derived(perSessionSum, 'markers'),
-      globalUnique: derived(globalMarkers.size, 'markers'),
-      inheritedMarkers: derived(Math.max(0, perSessionSum - globalMarkers.size), 'markers', 'compaction.fork-inherited-marker')
+      globalUnique: derived(globalUnique, 'markers'),
+      inheritedMarkers: derived(Math.max(0, perSessionSum - globalUnique), 'markers', 'compaction.fork-inherited-marker'),
+      ...(bothFormatPaths.length > 0 ? { bothFormatFiles: reported(bothFormatPaths.length, 'files') } : {}),
+      ...(eventOnlyPaths.length > 0 ? { eventOnlyFiles: reported(eventOnlyPaths.length, 'files') } : {})
     },
     oracleIds: ['census.codex-jsonl']
   }

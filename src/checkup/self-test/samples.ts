@@ -310,6 +310,23 @@ export const codex = {
       item: { type: 'ContextCompaction', id: base.itemId },
       completed_at_ms: Date.parse(base.timestamp)
     })
+  },
+  /**
+   * New-format `response_item.compaction` row in the observed real key order (7 rows):
+   * { timestamp, ordinal, type, payload: { type, id, encrypted_content,
+   *   internal_chat_message_metadata_passthrough } }. Values are synthetic.
+   */
+  compactionItem(base: CodexRowBase & { id: string }): Record<string, unknown> {
+    return codexRow(base, 'response_item', {
+      type: 'compaction',
+      id: base.id,
+      encrypted_content: `synthetic-encrypted-${base.id}`,
+      internal_chat_message_metadata_passthrough: null
+    })
+  },
+  /** `event_msg` of type `context_compacted` (no payload besides its type; 0 rows observed locally). */
+  contextCompactedEvent(base: CodexRowBase): Record<string, unknown> {
+    return codexRow(base, 'event_msg', { type: 'context_compacted' })
   }
 }
 

@@ -171,7 +171,9 @@ async function main() {
   const jsonPath = path.resolve(args.json)
   const jsonDir = fs.realpathSync.native(path.dirname(jsonPath))
   const jsonReal = path.join(jsonDir, path.basename(jsonPath))
-  for (const location of [...isolation.protectedLocations(realHome), stateDir]) {
+  // --json may live under --home (e.g. a worktree's .working/), but never inside a source root,
+  // Swob's own state, the library root or --state.
+  for (const location of [...isolation.protectedLocations(realHome).filter((entry) => entry !== realHome), stateDir]) {
     const relative = path.relative(location, jsonReal)
     if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) fail(EXIT.usage, 'refused: --json must be outside --home sources, protected locations and --state')
   }

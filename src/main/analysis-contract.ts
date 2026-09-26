@@ -222,4 +222,32 @@ export interface UsageFactSyncResult {
   removedSessions: number
   factCount: number
   rebuilt: boolean
+  /**
+   * Present only when the caller passed absence evidence: sessions missing
+   * from the input whose rows were kept, because nothing proved them deleted.
+   */
+  retainedSessions?: number
+  /**
+   * Present only with absence evidence: removals the safety gate holds until
+   * an independent physical load confirms them.
+   */
+  heldRemovals?: number
+  /**
+   * Present only with absence evidence: the kept and held rows per source and
+   * fixed reason code. Source names, codes and counts only.
+   */
+  absences?: Array<{
+    source: string
+    reason:
+      | 'awaiting-first-load'
+      | 'cold-summary-cache'
+      | 'discovery-unavailable'
+      | 'listed-by-source'
+      | 'provider-unsettled'
+      | 'provider-degraded'
+      | 'source-vanished'
+      | 'over-max-count'
+      | 'over-max-ratio'
+    sessions: number
+  }>
 }

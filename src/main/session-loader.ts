@@ -27,7 +27,7 @@ import {
   type CodexSubagentRecord
 } from './codex-loader'
 import { findCursorSessionFiles, buildCursorSessionSummary, buildCursorSessionDetail, buildCursorSessionSummaryFromBackup } from './cursor-loader'
-import { buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, discoverSqliteAgentSessions, recordSqliteAgentLoad, sqliteAgentFailureCode, stripOpencodeSessionRef, type SqliteAgentDiscovery, type SqliteAgentFailureCode } from './opencode-loader'
+import { buildOpencodeSessionSummary, buildOpencodeSessionDetail, buildOpencodeSessionSummaryFromBackup, discoverSqliteAgentSessions, recordSqliteAgentLoad, sqliteAgentFailureCode, stripOpencodeSessionRef, type SqliteAgentDiscovery, type SqliteAgentFailureCode, type SqliteAgentSource } from './opencode-loader'
 import { buildZcodeSessionSummary, buildZcodeSessionDetail, buildZcodeSessionSummaryFromBackup, stripZcodeSessionRef } from './zcode-loader'
 import { estimateActiveTime } from './insights'
 import { detectSessionSourceFromPath, detectSessionSourceForJsonl, sniffSessionSourceFromJsonl } from './session-source'
@@ -2301,6 +2301,35 @@ export interface LoadAllSessionsOptions {
   quiet?: boolean
   /** Reuse committed UsageFacts instead of materializing cached per-call audit rows. */
   omitCachedUsageEvents?: boolean
+}
+
+/**
+ * What one physical-source load observed, so that a session merely absent
+ * from this load is not taken for a deleted one: the usage ledger removes a
+ * row only on such evidence. Session ids, fixed codes and counts only, never a
+ * path.
+ */
+export interface SessionLoadEvidence {
+  /** This physical load. Every reader of the same load flight shares it. */
+  readonly loadId: string
+  /**
+   * 'cold': the load could not use the summary cache (missing, another
+   * CACHE_VERSION, unreadable, or the one-time JSON migration), so every
+   * session had to be read again and a failed read left it out.
+   */
+  readonly summaryCache: 'warm' | 'cold'
+  /** SQLite-backed sources this load discovered; a source unsupported here has no entry. */
+  readonly sqliteSources: Readonly<Partial<Record<SqliteAgentSource, SqliteSourceLoadEvidence>>>
+}
+
+export interface SqliteSourceLoadEvidence {
+  /** 'unavailable': the DB exists but could not be read. 'absent': there is no DB file. */
+  readonly discovery: 'ok' | 'unavailable' | 'absent'
+  /**
+   * Session ids the DB still lists ('ok' only; empty otherwise), in the form
+   * of `usage_sessions.session_id`: the ref without its `<dbPath>#` prefix.
+   */
+  readonly presentSessionIds: readonly string[]
 }
 
 interface LegacySessionLoadResult {

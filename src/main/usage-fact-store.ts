@@ -10,6 +10,8 @@ import { searchDatabasePath } from './search-index'
 import { isActivityDay, localActivityDay } from './activity-time'
 import { providerOutcomeForSession } from './session-provider-outcome'
 import { isPerCallSqliteAgentAccounting } from './sqlite-agent-usage'
+import type { SessionLoadEvidence, SqliteSourceLoadEvidence } from './session-loader'
+import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
 import {
   USAGE_FACT_SCHEMA_VERSION,
   type AnalysisDimension,
@@ -420,6 +422,8 @@ export function closeUsageFactStore(): void {
   database = null
   databasePath = ''
   insightsBundleCache.clear()
+  pendingUsageRemovals.clear()
+  reportedUsageRemovalHolds.clear()
 }
 
 export function initializeUsageFactStore(): void {
@@ -882,12 +886,265 @@ function throwIfUsageFactSyncCancelled(shouldCancel?: () => boolean): void {
   throw error
 }
 
+/**
+ * Why sessions may be missing from one usage sync's input. With it, a row
+ * whose session is missing leaves the ledger only on evidence that the
+ * session is gone, and a large or whole-source removal waits for a second,
+ * independent physical load. Without it (legacy callers) every missing row is
+ * removed at once, as before. Either way the append-only valuation history of
+ * a removed session stays.
+ */
+export interface UsageFactAbsenceEvidence {
+  /**
+   * The physical-source load behind the input. null: this process has no
+   * physical load yet, so every missing row is kept.
+   */
+  physicalLoad: SessionLoadEvidence | null
+  /** Provider-host settlement in this process; null until it settles. */
+  providerSettlement: 'complete' | 'degraded' | null
+  /** Sources the user excluded: their rows leave at once, ungated. */
+  excludedSources: readonly string[]
+}
+
+type UsageFactAbsenceReason = NonNullable<UsageFactSyncResult['absences']>[number]['reason']
+type UsageFactRemovalHoldReason = Extract<
+  UsageFactAbsenceReason,
+  'source-vanished' | 'over-max-count' | 'over-max-ratio'
+>
+
+interface PendingUsageRemoval {
+  source: string
+  /** The physical load under which the gate first held this removal. */
+  loadId: string
+}
+
+// Removals the safety gate holds, per ledger path and session id. Worker
+// memory only (no table, no schema change): a restart forgets them, so a held
+// removal then needs two more independent loads. Kept data is the safe side.
+const pendingUsageRemovals = new Map<string, Map<string, PendingUsageRemoval>>()
+// Last hold reported per ledger path and source, so a steady hold is logged once.
+const reportedUsageRemovalHolds = new Map<string, string>()
+
+const USAGE_REMOVAL_MAX_RATIO = 0.2
+const USAGE_REMOVAL_MAX_COUNT = 100
+const USAGE_REMOVAL_MIN_COUNT = 5
+
+function clampedEnvNumber(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw.trim() === '') return fallback
+  const value = Number(raw)
+  return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback
+}
+
+/**
+ * The per-source removal gate: a source whose candidates exceed `maxCount`,
+ * or exceed `maxRatio` of its ledger rows while numbering at least
+ * `minCount`, or which vanished from the input altogether, keeps its
+ * candidates until an independent load agrees.
+ */
+export function usageRemovalGateThresholds(): { maxRatio: number; maxCount: number; minCount: number } {
+  return {
+    maxRatio: clampedEnvNumber('SWOB_USAGE_REMOVAL_MAX_RATIO', USAGE_REMOVAL_MAX_RATIO, 0, 1),
+    maxCount: Math.floor(clampedEnvNumber('SWOB_USAGE_REMOVAL_MAX_COUNT', USAGE_REMOVAL_MAX_COUNT, 0, 1_000_000)),
+    minCount: Math.floor(clampedEnvNumber('SWOB_USAGE_REMOVAL_MIN_COUNT', USAGE_REMOVAL_MIN_COUNT, 1, 1_000_000))
+  }
+}
+
+function usageRemovalHoldReason(
+  candidates: number,
+  ledgerRows: number,
+  inputSessions: number,
+  gate: ReturnType<typeof usageRemovalGateThresholds>
+): UsageFactRemovalHoldReason | null {
+  if (inputSessions === 0) return 'source-vanished'
+  if (candidates > gate.maxCount) return 'over-max-count'
+  if (candidates >= gate.minCount && candidates / Math.max(1, ledgerRows) > gate.maxRatio) {
+    return 'over-max-ratio'
+  }
+  return null
+}
+
+interface UsageRemovalPlan {
+  /** Rows to delete now: explicit evidence, an ungated candidate, or a confirmed hold. */
+  remove: string[]
+  retainedSessions: number
+  heldRemovals: number
+  absences: NonNullable<UsageFactSyncResult['absences']>
+  /** Pending holds after this sync; applied only once the transaction commits. */
+  pending: Map<string, PendingUsageRemoval>
+  /** Held and confirmed counts per source, for the diagnostic lines. */
+  holds: Map<string, { reason: UsageFactRemovalHoldReason; held: number; confirmed: number }>
+}
+
+/**
+ * Decide, for every ledger row whose session is missing from the input, whether
+ * the absence is evidence of deletion. Evaluated per row, first match wins:
+ *   1. no physical load yet in this process            -> keep
+ *   2. in the input but filtered out (branch, excluded
+ *      from rollups)                                   -> remove (explicit)
+ *   3. the user excluded its source                     -> remove (explicit)
+ *   4. provider-host source not settled 'complete'      -> keep
+ *   5. cold summary cache (every legacy source)         -> keep
+ *   6. SQLite source discovery 'unavailable'            -> keep
+ *   7. SQLite source 'ok' that still lists the session  -> keep
+ *   8. otherwise (SQLite 'ok' without it, SQLite
+ *      'absent', provider 'complete', file sources)     -> candidate
+ * Candidates then pass the per-source gate: when it trips, a candidate is
+ * removed only if a different physical load already held it.
+ */
+function planUsageRemovals(
+  absentRows: ReadonlyArray<{ session_id: string; source_client: string }>,
+  context: {
+    absence: UsageFactAbsenceEvidence
+    inputSessionIds: ReadonlySet<string>
+    inputSessionsBySource: ReadonlyMap<string, number>
+    ledgerRowsBySource: ReadonlyMap<string, number>
+    pending: ReadonlyMap<string, PendingUsageRemoval>
+  }
+): UsageRemovalPlan {
+  const { absence, pending } = context
+  const physicalLoad = absence.physicalLoad
+  const excludedSources = new Set(absence.excludedSources)
+  const listedBySource = new Map<string, ReadonlySet<string>>()
+  const remove: string[] = []
+  const nextPending = new Map<string, PendingUsageRemoval>()
+  const candidatesBySource = new Map<string, string[]>()
+  const counts = new Map<string, { source: string; reason: UsageFactAbsenceReason; sessions: number }>()
+  let retainedSessions = 0
+  const count = (source: string, reason: UsageFactAbsenceReason): void => {
+    const key = `${source}\0${reason}`
+    const entry = counts.get(key)
+    if (entry) entry.sessions++
+    else counts.set(key, { source, reason, sessions: 1 })
+  }
+  const keep = (row: { session_id: string; source_client: string }, reason: UsageFactAbsenceReason): void => {
+    count(row.source_client, reason)
+    retainedSessions++
+    // Still missing, and nothing this load says otherwise: an earlier hold stands.
+    const prior = pending.get(row.session_id)
+    if (prior) nextPending.set(row.session_id, prior)
+  }
+
+  const holds: UsageRemovalPlan['holds'] = new Map()
+  let heldRemovals = 0
+  const plan = (): UsageRemovalPlan => ({
+    remove,
+    retainedSessions,
+    heldRemovals,
+    absences: [...counts.values()].sort((left, right) =>
+      left.source.localeCompare(right.source) || left.reason.localeCompare(right.reason)),
+    pending: nextPending,
+    holds
+  })
+
+  if (!physicalLoad) {
+    for (const row of absentRows) keep(row, 'awaiting-first-load')
+    return plan()
+  }
+
+  for (const row of absentRows) {
+    const source = row.source_client
+    if (context.inputSessionIds.has(row.session_id) || excludedSources.has(source)) {
+      remove.push(row.session_id)
+      continue
+    }
+    if (providerUsesCanonicalRuntime(source)) {
+      if (absence.providerSettlement !== 'complete') {
+        keep(row, absence.providerSettlement === 'degraded' ? 'provider-degraded' : 'provider-unsettled')
+        continue
+      }
+    } else if (physicalLoad.summaryCache === 'cold') {
+      keep(row, 'cold-summary-cache')
+      continue
+    } else {
+      const sqlite = (physicalLoad.sqliteSources as Partial<Record<string, SqliteSourceLoadEvidence>>)[source]
+      if (sqlite?.discovery === 'unavailable') {
+        keep(row, 'discovery-unavailable')
+        continue
+      }
+      if (sqlite?.discovery === 'ok') {
+        let listed = listedBySource.get(source)
+        if (!listed) {
+          listed = new Set(sqlite.presentSessionIds)
+          listedBySource.set(source, listed)
+        }
+        if (listed.has(row.session_id)) {
+          keep(row, 'listed-by-source')
+          continue
+        }
+      }
+    }
+    const candidates = candidatesBySource.get(source)
+    if (candidates) candidates.push(row.session_id)
+    else candidatesBySource.set(source, [row.session_id])
+  }
+
+  const gate = usageRemovalGateThresholds()
+  for (const [source, candidates] of candidatesBySource) {
+    const reason = usageRemovalHoldReason(
+      candidates.length,
+      context.ledgerRowsBySource.get(source) || 0,
+      context.inputSessionsBySource.get(source) || 0,
+      gate
+    )
+    if (!reason) {
+      remove.push(...candidates)
+      continue
+    }
+    let held = 0
+    let confirmed = 0
+    for (const sessionId of candidates) {
+      const prior = pending.get(sessionId)
+      if (prior && prior.loadId !== physicalLoad.loadId) {
+        // Two independent physical loads agree that the session is gone.
+        remove.push(sessionId)
+        confirmed++
+        continue
+      }
+      nextPending.set(sessionId, prior || { source, loadId: physicalLoad.loadId })
+      count(source, reason)
+      held++
+    }
+    heldRemovals += held
+    holds.set(source, { reason, held, confirmed })
+  }
+  return plan()
+}
+
+/** One line per change of a source's hold: source name, fixed code and counts only. */
+function reportUsageRemovalHolds(ledgerPath: string, holds: UsageRemovalPlan['holds']): void {
+  const prefix = `${ledgerPath}\0`
+  for (const key of [...reportedUsageRemovalHolds.keys()]) {
+    if (key.startsWith(prefix) && !holds.get(key.slice(prefix.length))?.held) {
+      reportedUsageRemovalHolds.delete(key)
+    }
+  }
+  for (const [source, { reason, held, confirmed }] of [...holds].sort(([left], [right]) =>
+    left.localeCompare(right))) {
+    if (confirmed > 0) {
+      console.warn(`[usage-facts] ${source}: removed ${confirmed} held session(s) that an independent load confirmed gone`)
+    }
+    if (held === 0) continue
+    const key = `${prefix}${source}`
+    const signature = `${reason}:${held}`
+    if (reportedUsageRemovalHolds.get(key) === signature) continue
+    reportedUsageRemovalHolds.set(key, signature)
+    console.warn(`[usage-facts] ${source}: holding ${held} removal(s) until an independent load confirms them (${reason})`)
+  }
+}
+
 export function synchronizeUsageFacts(
   sessions: SessionSummary[],
   folders: SessionGroup[],
-  options: { rebuild?: boolean; shouldCancel?: () => boolean } = {}
+  options: {
+    rebuild?: boolean
+    shouldCancel?: () => boolean
+    /** Why sessions may be missing from `sessions`; see UsageFactAbsenceEvidence. */
+    absence?: UsageFactAbsenceEvidence
+  } = {}
 ): UsageFactSyncResult {
   const db = getDatabase()
+  const ledgerPath = databasePath
   const rollupSessions = sessions.filter((session) =>
     !session.branchLeafUuid && session.tokenAccounting?.excludedFromRollups !== true
   )
@@ -907,6 +1164,7 @@ export function synchronizeUsageFacts(
   let removedSessions = 0
   const affectedBillingFactIds = new Set<string>()
   const changedSessionIds = new Set<string>()
+  let removalPlan: UsageRemovalPlan | null = null
 
   const sync = db.transaction(() => {
     throwIfUsageFactSyncCancelled(options.shouldCancel)
@@ -927,17 +1185,25 @@ export function synchronizeUsageFacts(
       // through the normal replacement/supersede path exactly once.
       db.exec(`
         DELETE FROM usage_rollups;
-        DELETE FROM usage_session_folders;
-        DELETE FROM usage_session_activity;
         UPDATE usage_sessions SET fact_signature = '', folder_signature = '';
       `)
+      // That path clears and rewrites each live session's own activity days and
+      // folders. With absence evidence a row can be kept while its session is
+      // missing: it keeps them too, instead of losing them until it returns.
+      if (!options.absence) {
+        db.exec(`
+          DELETE FROM usage_session_folders;
+          DELETE FROM usage_session_activity;
+        `)
+      }
     }
     const existingRows = db.prepare(`
-      SELECT session_id, fact_signature, projection_signature,
+      SELECT session_id, source_client, fact_signature, projection_signature,
         folder_signature, activity_time_status
       FROM usage_sessions
     `).all() as Array<{
       session_id: string
+      source_client: string
       fact_signature: string
       projection_signature: string | null
       folder_signature: string
@@ -1054,14 +1320,36 @@ export function synchronizeUsageFacts(
       }
     }
 
-    for (const row of existingRows) {
+    const absentRows = existingRows.filter((row) => !uniqueSessions.has(row.session_id))
+    if (options.absence) {
+      const inputSessionsBySource = new Map<string, number>()
+      for (const session of uniqueSessions.values()) {
+        const source = session.source || 'claude-code'
+        inputSessionsBySource.set(source, (inputSessionsBySource.get(source) || 0) + 1)
+      }
+      const ledgerRowsBySource = new Map<string, number>()
+      for (const row of existingRows) {
+        ledgerRowsBySource.set(row.source_client, (ledgerRowsBySource.get(row.source_client) || 0) + 1)
+      }
+      removalPlan = planUsageRemovals(absentRows, {
+        absence: options.absence,
+        inputSessionIds: new Set(sessions.map((session) => session.sessionId)),
+        inputSessionsBySource,
+        ledgerRowsBySource,
+        pending: pendingUsageRemovals.get(ledgerPath) || new Map()
+      })
+    }
+    const removals = removalPlan ? removalPlan.remove : absentRows.map((row) => row.session_id)
+    const deleteSession = db.prepare('DELETE FROM usage_sessions WHERE session_id = ?')
+    for (const sessionId of removals) {
       throwIfUsageFactSyncCancelled(options.shouldCancel)
-      if (uniqueSessions.has(row.session_id)) continue
-      changedSessionIds.add(row.session_id)
-      const oldBillingIds = selectSessionBillingIds.all(row.session_id) as Array<{ billing_fact_id: string }>
+      changedSessionIds.add(sessionId)
+      const oldBillingIds = selectSessionBillingIds.all(sessionId) as Array<{ billing_fact_id: string }>
       for (const fact of oldBillingIds) affectedBillingFactIds.add(fact.billing_fact_id)
-      db.prepare('DELETE FROM usage_valuation_history WHERE session_id = ?').run(row.session_id)
-      db.prepare('DELETE FROM usage_sessions WHERE session_id = ?').run(row.session_id)
+      // The foreign keys take the session's facts (superseded audit rows
+      // included), activity, folders and rollups. Its append-only valuation
+      // history has no foreign key and stays: no path deletes it.
+      deleteSession.run(sessionId)
       removedSessions++
     }
     if (changedSessions > 0 || removedSessions > 0 || options.rebuild) {
@@ -1082,10 +1370,31 @@ export function synchronizeUsageFacts(
   })
   sync()
 
+  // Only a committed sync moves the gate's pending holds.
+  const plan = removalPlan as UsageRemovalPlan | null
+  if (plan) {
+    if (plan.pending.size > 0) pendingUsageRemovals.set(ledgerPath, plan.pending)
+    else pendingUsageRemovals.delete(ledgerPath)
+    reportUsageRemovalHolds(ledgerPath, plan.holds)
+  }
+
   const factCount = (db.prepare(
     'SELECT count(*) AS count FROM usage_facts WHERE superseded = 0'
   ).get() as { count: number }).count
-  return { changedSessions, unchangedSessions, removedSessions, factCount, rebuilt: options.rebuild === true }
+  return {
+    changedSessions,
+    unchangedSessions,
+    removedSessions,
+    factCount,
+    rebuilt: options.rebuild === true,
+    ...(plan
+      ? {
+          retainedSessions: plan.retainedSessions,
+          heldRemovals: plan.heldRemovals,
+          absences: plan.absences
+        }
+      : {})
+  }
 }
 
 function isAnalysisPreset(value: unknown): value is AnalysisScope['range'] {

@@ -80,6 +80,27 @@ describe('issue level (all six checks, keyed by check + code + source)', () => {
     expect(issues.added).toEqual([])
   })
 
+  it('a Codex content problem is a first check against a report older than checkup 1.2.0 (Codex read counts were inferred then)', () => {
+    const { previous, current } = pair()
+    current.kernel.checkupVersion = '1.2.0'
+    current.checks[1].findings.push(
+      finding('content.unexplained-loss', 'fail', 'codex', d(1, 'records')),
+      finding('content.swob-extra-records', 'warn', 'codex', d(1, 'files')),
+      finding('content.unexplained-loss', 'fail', 'claude-code', d(2, 'records'))
+    )
+    const codes = (issues: ReturnType<typeof compareIssues>['added']): string[][] => issues.map((issue) => [issue.code, issue.source])
+    const older = compareIssues(previous, current)
+    expect(codes(older.firstCheck)).toEqual([['content.swob-extra-records', 'codex'], ['content.unexplained-loss', 'codex']])
+    // Claude read counts were measured before as well: a new Claude loss is new.
+    expect(codes(older.added)).toEqual([['content.unexplained-loss', 'claude-code']])
+    for (const version of ['1.2.0', '1.10.0']) {
+      previous.kernel.checkupVersion = version
+      const same = compareIssues(previous, current)
+      expect(codes(same.added), version).toEqual([['content.unexplained-loss', 'claude-code'], ['content.swob-extra-records', 'codex'], ['content.unexplained-loss', 'codex']])
+      expect(same.firstCheck, version).toEqual([])
+    }
+  })
+
   it('an issue whose check is undetermined now was not checked, not fixed', () => {
     const { previous, current } = pair()
     current.checks[2].verdict = 'undetermined'
@@ -125,6 +146,25 @@ describe('unit level (① ②, same id and unitSig only)', () => {
       ['firstCheck', 'claude-code', 'content', null, 1]
     ])
     expect(units.groups[0].samples).toEqual(['10000001'])
+  })
+
+  it('compares Codex units by their measured read count too (C1c: read per file)', () => {
+    const { previous, current } = pair()
+    const set = (report: CheckupReport, id: string, patch: Parameters<typeof unit>[1]): void => {
+      report.units = report.units!.map((entry) => entry.id === id ? { ...entry, ...patch } : entry)
+    }
+    const codexContent = (): Array<[string, number]> => compareUnits(previous, current)!.groups
+      .filter((group) => group.source === 'codex' && group.problem === 'content')
+      .map((group) => [group.outcome, group.units])
+    // Measured for the first time (null before) and one record short: a first check.
+    set(current, '20000001', { swobRead: 9 })
+    expect(codexContent()).toEqual([['firstCheck', 1]])
+    // Read completely last time: a new problem; and back to complete: fixed.
+    set(previous, '20000001', { swobRead: 10 })
+    expect(codexContent()).toEqual([['added', 1]])
+    set(previous, '20000001', { swobRead: 9 })
+    set(current, '20000001', { swobRead: 10 })
+    expect(codexContent()).toEqual([['fixed', 1]])
   })
 
   it('bad or truncated tool lines are not Swob problems (read equals the parseable records)', () => {

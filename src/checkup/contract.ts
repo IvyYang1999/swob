@@ -115,8 +115,11 @@ export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compact
  * Version of the report semantics (kernel.checkupVersion); compared reports with different versions are
  * flagged. 1.0.0: C1a. 1.1.0: C1b-1 — Claude subagent read counts measured with parseSessionFile [R]
  * instead of inferred, readoutBySource, readout.source-empty findings under ①.
+ * 1.2.0: C1c — Codex read counts measured per file with parseCodexFileWithStats [R] (units carry
+ * swobRead) and Claude reads through parseSessionFileWithStats (truncated → partial); a file without a
+ * read count is left out and listed (content.swob-read-error), never inferred.
  */
-export const CHECKUP_VERSION = '1.1.0'
+export const CHECKUP_VERSION = '1.2.0'
 export const SELF_TEST_TOTAL = 6
 
 export const SOURCE_IDS = [
@@ -219,6 +222,8 @@ export const REASON_CODES = [
   'content.unexplained-loss',
   'content.swob-extra-records',
   'content.swob-per-file-unavailable',
+  // C1c: a file without a kernel read count (the read threw, or it was not read): left out of ②, never inferred
+  'content.swob-read-error',
   // compaction ③
   'codex.legacy-compacted-unrecognized',
   'compaction.count-mismatch',

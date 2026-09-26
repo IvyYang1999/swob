@@ -1,11 +1,12 @@
 /**
  * Swob-side readout: the only module of the checkup that calls the kernel.
  *
- * Allowed kernel entries (task C1a, red line): `loadAllSessions({ readOnly:
- * true, quiet: true })`, `parseSessionFile(filePath)` and pure discovery
- * functions. Everything else — writable loads, lineage, details, resume audit,
- * library/canonical/search/usage writers — is forbidden and guarded by an
- * architecture test.
+ * Allowed kernel entries (task C1a, red line; C1c adds the two per-file reads
+ * with stats): `loadAllSessions({ readOnly: true, quiet: true })`,
+ * `parseSessionFileWithStats(filePath)`, `parseCodexFileWithStats(filePath)`
+ * and pure discovery functions. Everything else — writable loads, lineage,
+ * details, resume audit, library/canonical/search/usage writers — is forbidden
+ * and guarded by an architecture test.
  *
  * The kernel captures HOME when its modules load and then reuses any summary
  * cache under `$HOME/.claude-session-manager`. Therefore the readout runs only
@@ -17,8 +18,9 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { findClaudeSessionFiles, loadAllSessions, parseSessionFile } from '../main/session-loader'
-import { findCodexSessionFiles } from '../main/codex-loader'
+import { findClaudeSessionFiles, loadAllSessions, parseSessionFileWithStats } from '../main/session-loader'
+import { findCodexSessionFiles, parseCodexFileWithStats } from '../main/codex-loader'
+import type { JsonlReadStats } from '../main/jsonl-lines'
 import { runtimeHome } from '../main/runtime-home'
 import type { SessionSummary } from '../main/types'
 import type { ReasonCode } from './contract'
@@ -44,12 +46,23 @@ export interface ReadoutSession {
 
 export interface ClaudeParseResult { records: number; elapsedMs: number; partial: boolean }
 
+/**
+ * Per-file Codex read (C1c). `records` is the kernel's recordsRead; null when the read threw (the
+ * kernel reads a Codex file completely or throws, so there is no partial result).
+ */
+export interface CodexParseResult { records: number | null; elapsedMs: number }
+
 export interface SwobReadout {
   status: 'ok' | 'undetermined'
   reason?: ReasonCode
   sessions: ReadoutSession[]
-  /** parseSessionFile record counts by real path (Claude main and subagent files). */
+  /** parseSessionFileWithStats record counts by real path (Claude main and subagent files). */
   claudeParsed: Map<string, ClaudeParseResult>
+  /**
+   * C1c: parseCodexFileWithStats record counts by real path, for the census Codex files the kernel's own
+   * discovery lists (the rollouts it reads). Absent when the readout carries no Codex read counts.
+   */
+  codexParsed?: Map<string, CodexParseResult>
   discovered: { claudeMain: Set<string>; codex: Set<string> }
   /** Codex child session ids whose usage events carry their own auditSourceId inside a merged parent. */
   attributedChildIds: Set<string>
@@ -167,6 +180,7 @@ function emptyReadout(reason: ReasonCode, consoleLines = 0): SwobReadout {
     reason,
     sessions: [],
     claudeParsed: new Map(),
+    codexParsed: new Map(),
     discovered: { claudeMain: new Set(), codex: new Set() },
     attributedChildIds: new Set(),
     consoleLines,
@@ -189,11 +203,36 @@ async function loadAndProject(): Promise<{ sessions: ReadoutSession[]; attribute
   return { sessions, attributedChildIds }
 }
 
+const elapsedSince = (started: number): number => Math.round(performance.now() - started)
+
+/**
+ * Claude per-file result from the kernel's read stats (C1c): partial when the kernel says the read was
+ * cut short (truncated: its 30 s timeout fired or the stream failed, and only what was read came back),
+ * or when it took the kernel's timeout. Exported for tests.
+ */
+export function claudeParseResult(stats: Pick<JsonlReadStats, 'recordsRead' | 'truncated'>, elapsedMs: number): ClaudeParseResult {
+  return { records: stats.recordsRead, elapsedMs, partial: stats.truncated || elapsedMs >= CLAUDE_PARSE_TIMEOUT_MS - PARSE_TIMEOUT_MARGIN_MS }
+}
+
 async function timedParse(filePath: string): Promise<ClaudeParseResult> {
   const started = performance.now()
-  const records = (await parseSessionFile(filePath)).length
-  const elapsedMs = Math.round(performance.now() - started)
-  return { records, elapsedMs, partial: elapsedMs >= CLAUDE_PARSE_TIMEOUT_MS - PARSE_TIMEOUT_MARGIN_MS }
+  const stats = await parseSessionFileWithStats(filePath)
+  return claudeParseResult(stats, elapsedSince(started))
+}
+
+/**
+ * Codex per-file result (C1c): parseCodexFileWithStats sets no timeout and throws on a stream error, so
+ * a returned read is complete (never partial by time) and a throw leaves the file without a read count.
+ * Only the counts are kept: the records the kernel returns are dropped right here. Exported for tests.
+ */
+export async function codexParseResult(read: () => Promise<Pick<JsonlReadStats, 'recordsRead'>>): Promise<CodexParseResult> {
+  const started = performance.now()
+  try {
+    const { recordsRead } = await read()
+    return { records: recordsRead, elapsedMs: elapsedSince(started) }
+  } catch {
+    return { records: null, elapsedMs: elapsedSince(started) }
+  }
 }
 
 export async function readSwobReadout(options: {
@@ -205,6 +244,12 @@ export async function readSwobReadout(options: {
    * read count is measured the same way as a main file's.
    */
   claudeSubagentFiles?: readonly string[]
+  /**
+   * C1c: census Codex files (readable ones). Only those the kernel's own discovery lists are read — the
+   * rollouts it parses; a non-rollout .jsonl is never read by the kernel. Read one at a time after
+   * loadAllSessions, which has already parsed each of them once.
+   */
+  codexFiles?: readonly string[]
   signal?: AbortSignal
   concurrency?: number
 }): Promise<SwobReadout> {
@@ -239,6 +284,15 @@ export async function readSwobReadout(options: {
       })
       await Promise.all(workers)
       timingsMs.parseSessionFile = Math.round(performance.now() - started)
+
+      started = performance.now()
+      const codexParsed = new Map<string, CodexParseResult>()
+      for (const filePath of options.codexFiles ?? []) {
+        if (options.signal?.aborted) break
+        if (!codex.has(filePath) || codexParsed.has(filePath)) continue
+        codexParsed.set(filePath, await codexParseResult(() => parseCodexFileWithStats(filePath)))
+      }
+      timingsMs.parseCodexFile = Math.round(performance.now() - started)
       if (options.signal?.aborted) {
         const error = new Error('checkup aborted')
         error.name = 'AbortError'
@@ -248,6 +302,7 @@ export async function readSwobReadout(options: {
         status: 'ok' as const,
         sessions,
         claudeParsed,
+        codexParsed,
         discovered: { claudeMain, codex },
         attributedChildIds,
         consoleLines: counter.lines,

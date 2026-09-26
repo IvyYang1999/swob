@@ -1,10 +1,14 @@
 /**
  * ② Content completeness. Oracle: spec reread of every unit (split on `\n`
- * only). Swob column: `parseSessionFile` per Claude main and subagent file [R]
- * (the kernel reads subagent files with the same function; C1b deliverable 0).
- * A Claude subagent file without a parse result, and every Codex file, expose
- * no per-file read count: their Swob column is [U] and the loss is derived [D]
- * from records a CR/U+2028/U+2029-splitting reader cannot keep (design §4.2, §五).
+ * only). Swob column: the kernel's own per-file read count [R] — parseSessionFile
+ * (WithStats) per Claude main and subagent file (C1b deliverable 0) and
+ * parseCodexFileWithStats per Codex rollout the kernel reads (C1c deliverable ①).
+ * Per file, lost = parseable − read [D]; the file's split hazards (records a
+ * CR/U+2028/U+2029-splitting reader cannot keep, design §4.2, §五) explain it,
+ * most severe kind first, and the rest is unexplained. A file without a read
+ * count (timed out, read error, not read) takes no part in the comparison and is
+ * listed: nothing is inferred for it any more (C1c, dispatcher decision D6 — since
+ * F1a the kernel reader keeps separator records, so "hazard = lost" no longer holds).
  */
 import type { Finding, Measure, Verdict } from '../contract'
 import { LOSS_KINDS, emptyLossKinds, type LossKind } from '../census/claude-census'
@@ -86,6 +90,46 @@ function allocateLoss(lost: number, hazards: Record<LossKind, number>): { kinds:
 function conversationLoss(kinds: Record<LossKind, number>, unexplained: number): number {
   return kinds.user + kinds.assistant + kinds.tool_result + unexplained
 }
+
+interface PerFileComparison {
+  compared: ContentUnit[]
+  read: number
+  lost: number
+  unexplained: number
+  kinds: Record<LossKind, number>
+  /** Files with any loss (explained or not). */
+  lossPaths: string[]
+  unexplainedPaths: string[]
+  /** Files the kernel read more records from than the census found (listed, never a loss). */
+  extraPaths: string[]
+}
+
+/**
+ * Compare files that have a kernel read count, one by one: lost = parseable − read (never below 0),
+ * allocated to the file's hazard kinds; what the hazards cannot explain is unexplained.
+ */
+function comparePerFile(measured: ReadonlyArray<{ unit: ContentUnit; read: number }>): PerFileComparison {
+  const result: PerFileComparison = { compared: [], read: 0, lost: 0, unexplained: 0, kinds: emptyLossKinds(), lossPaths: [], unexplainedPaths: [], extraPaths: [] }
+  for (const { unit, read } of measured) {
+    result.compared.push(unit)
+    result.read += read
+    const lost = Math.max(0, unit.stats.parseable - read)
+    if (read > unit.stats.parseable) result.extraPaths.push(unit.path)
+    if (lost === 0) continue
+    result.lossPaths.push(unit.path)
+    result.lost += lost
+    const allocation = allocateLoss(lost, unit.hazardKinds)
+    addKinds(result.kinds, allocation.kinds)
+    if (allocation.unexplained > 0) {
+      result.unexplained += allocation.unexplained
+      result.unexplainedPaths.push(unit.path)
+    }
+  }
+  return result
+}
+
+/** Reason of a Swob-side measure when no file of the source has a kernel read count (nothing compared). */
+const PER_FILE_UNAVAILABLE = 'content.swob-per-file-unavailable' as const
 
 /** Threshold verdict (design §4.2): pass = nothing lost; warn = meta only and < 0.01 %; else fail. */
 export function contentThresholdVerdict(input: { parseable: number; lost: number; conversationLost: number }): Verdict {
@@ -179,92 +223,44 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
       oracleIds: ['census.claude-jsonl']
     }
   }
-  const compared: ContentUnit[] = []
+  // Main files: the kernel's read count per file [R]; a timed-out or cut-short read is left out.
+  const mainMeasured: Array<{ unit: ContentUnit; read: number }> = []
   const timedOut: string[] = []
-  let swobRead = 0
-  let mainLost = 0
-  let mainUnexplained = 0
-  const extraPaths: string[] = []
-  const unexplainedPaths: string[] = []
-  const lossPaths: string[] = []
-  const mainKinds = emptyLossKinds()
   for (const unit of mains) {
     const parsed = ctx.readout.claudeParsed.get(unit.path)
-    if (!parsed || parsed.partial) {
-      timedOut.push(unit.path)
-      continue
-    }
-    compared.push(unit)
-    swobRead += parsed.records
-    const lost = Math.max(0, unit.stats.parseable - parsed.records)
-    if (parsed.records > unit.stats.parseable) extraPaths.push(unit.path)
-    if (lost === 0) continue
-    lossPaths.push(unit.path)
-    mainLost += lost
-    const allocation = allocateLoss(lost, unit.hazardKinds)
-    addKinds(mainKinds, allocation.kinds)
-    if (allocation.unexplained > 0) {
-      mainUnexplained += allocation.unexplained
-      unexplainedPaths.push(unit.path)
-    }
+    if (!parsed || parsed.partial) timedOut.push(unit.path)
+    else mainMeasured.push({ unit, read: parsed.records })
   }
-  const comparedTally = tally(compared)
-  // Subagent files: measured per file like a main file (parseable − read, the loss the
-  // split hazards explain → line-separator, the rest → unexplained). A file without a
-  // parse result keeps the C1a inference (loss = its split-hazard records, [D]); the
-  // self-test's injected readout carries no subagent entry, so it still takes that path.
-  const subMeasured: ContentUnit[] = []
-  const subInferred: ContentUnit[] = []
+  const main = comparePerFile(mainMeasured)
+  const comparedTally = tally(main.compared)
+  // Subagent files: measured per file like a main file. A file without a parse result is left out
+  // and listed (content.swob-read-error); nothing is inferred for it (C1c, D6).
+  const subMeasured: Array<{ unit: ContentUnit; read: number }> = []
   const subTimedOut: string[] = []
-  let subRead = 0
-  let subMeasuredLost = 0
-  let subUnexplained = 0
-  const subKinds = emptyLossKinds()
-  const subLossPaths: string[] = []
+  const subUnavailable: string[] = []
   for (const unit of subagents) {
     const parsed = ctx.readout.claudeParsed.get(unit.path)
-    if (!parsed) {
-      subInferred.push(unit)
-      addKinds(subKinds, unit.hazardKinds)
-      if (sumKinds(unit.hazardKinds) > 0) subLossPaths.push(unit.path)
-      continue
-    }
-    if (parsed.partial) {
-      subTimedOut.push(unit.path)
-      continue
-    }
-    subMeasured.push(unit)
-    subRead += parsed.records
-    const lost = Math.max(0, unit.stats.parseable - parsed.records)
-    if (parsed.records > unit.stats.parseable) extraPaths.push(unit.path)
-    if (lost === 0) continue
-    subLossPaths.push(unit.path)
-    subMeasuredLost += lost
-    const allocation = allocateLoss(lost, unit.hazardKinds)
-    addKinds(subKinds, allocation.kinds)
-    if (allocation.unexplained > 0) {
-      subUnexplained += allocation.unexplained
-      unexplainedPaths.push(unit.path)
-    }
+    if (!parsed) subUnavailable.push(unit.path)
+    else if (parsed.partial) subTimedOut.push(unit.path)
+    else subMeasured.push({ unit, read: parsed.records })
   }
-  const subMeasuredTally = tally(subMeasured)
-  const subComparedTally = tally([...subMeasured, ...subInferred])
-  const subLost = subMeasuredLost + subInferred.reduce((sum, unit) => sum + sumKinds(unit.hazardKinds), 0)
+  const sub = comparePerFile(subMeasured)
+  const subMeasuredTally = tally(sub.compared)
   const timedOutAll = [...timedOut, ...subTimedOut]
+  const extraPaths = [...main.extraPaths, ...sub.extraPaths]
 
   const sourceFindings: Finding[] = [...toolSide]
-  const explainedMainLost = mainLost - mainUnexplained
-  const lineSeparatorLost = explainedMainLost + subLost - subUnexplained
+  const lineSeparatorLost = main.lost - main.unexplained + sub.lost - sub.unexplained
   if (lineSeparatorLost > 0) {
     sourceFindings.push(makeFinding({
       code: 'content.line-separator-split', verdict: 'fail', source: 'claude-code',
       count: derived(lineSeparatorLost, 'records'),
-      numbers: [lineSeparatorLost, mainKinds.user + subKinds.user],
-      samples: sampleIds(ctx.salt, [...lossPaths, ...subLossPaths])
+      numbers: [lineSeparatorLost, main.kinds.user + sub.kinds.user],
+      samples: sampleIds(ctx.salt, [...main.lossPaths, ...sub.lossPaths])
     }))
   }
-  if (mainUnexplained + subUnexplained > 0) {
-    sourceFindings.push(makeFinding({ code: 'content.unexplained-loss', verdict: 'fail', source: 'claude-code', count: derived(mainUnexplained + subUnexplained, 'records'), samples: sampleIds(ctx.salt, unexplainedPaths) }))
+  if (main.unexplained + sub.unexplained > 0) {
+    sourceFindings.push(makeFinding({ code: 'content.unexplained-loss', verdict: 'fail', source: 'claude-code', count: derived(main.unexplained + sub.unexplained, 'records'), samples: sampleIds(ctx.salt, [...main.unexplainedPaths, ...sub.unexplainedPaths]) }))
   }
   if (extraPaths.length > 0) {
     sourceFindings.push(makeFinding({ code: 'content.swob-extra-records', verdict: 'warn', source: 'claude-code', count: derived(extraPaths.length, 'files'), samples: sampleIds(ctx.salt, extraPaths) }))
@@ -272,33 +268,37 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   if (timedOutAll.length > 0) {
     sourceFindings.push(makeFinding({ code: 'readout.parse-timeout', verdict: 'undetermined', source: 'claude-code', count: reported(timedOutAll.length, 'files'), samples: sampleIds(ctx.salt, timedOutAll) }))
   }
+  if (subUnavailable.length > 0) {
+    sourceFindings.push(makeFinding({ code: 'content.swob-read-error', verdict: 'undetermined', source: 'claude-code', count: reported(subUnavailable.length, 'files'), samples: sampleIds(ctx.salt, subUnavailable) }))
+  }
   if (changedFiles > 0) {
     sourceFindings.push(makeFinding({ code: 'census.file-changed-during-run', verdict: 'undetermined', source: 'claude-code', count: reported(changedFiles, 'files') }))
   }
   findings.push(...sourceFindings)
 
-  const totalParseable = comparedTally.parseable + subComparedTally.parseable
-  const totalLost = mainLost + subLost
-  const conversationLost = conversationLoss(mainKinds, mainUnexplained) + conversationLoss(subKinds, subUnexplained)
-  const subInference = subMeasured.length === 0 || subInferred.length > 0
+  const totalParseable = comparedTally.parseable + subMeasuredTally.parseable
+  const totalLost = main.lost + sub.lost
+  const conversationLost = conversationLoss(main.kinds, main.unexplained) + conversationLoss(sub.kinds, sub.unexplained)
   const threshold = contentThresholdVerdict({ parseable: totalParseable, lost: totalLost, conversationLost })
+  const noReadCount = main.compared.length + sub.compared.length === 0 && timedOutAll.length + subUnavailable.length > 0
+  const subMeasuredAny = sub.compared.length > 0
   return {
-    verdict: sourceVerdict(threshold, swobSide(sourceFindings), 'claude-code'),
+    verdict: noReadCount ? 'undetermined' : sourceVerdict(threshold, swobSide(sourceFindings), 'claude-code'),
     swob: {
-      mainRead: reported(swobRead, 'records'),
-      mainLost: derived(mainLost, 'records'),
-      ...lossMeasures('main', mainKinds),
-      mainUnexplainedLost: derived(mainUnexplained, 'records'),
+      mainRead: reported(main.read, 'records'),
+      mainLost: derived(main.lost, 'records'),
+      ...lossMeasures('main', main.kinds),
+      mainUnexplainedLost: derived(main.unexplained, 'records'),
       mainParseTimeouts: reported(timedOut.length, 'files'),
-      subagentRead: subMeasured.length > 0 ? reported(subRead, 'records') : unavailable('records', 'content.swob-per-file-unavailable'),
-      subagentLost: subInference ? derived(subLost, 'records', 'content.line-separator-split') : derived(subLost, 'records'),
-      ...lossMeasures('subagent', subKinds),
-      subagentUnexplainedLost: derived(subUnexplained, 'records'),
+      subagentRead: subMeasuredAny ? reported(sub.read, 'records') : unavailable('records', PER_FILE_UNAVAILABLE),
+      subagentLost: subMeasuredAny || subUnavailable.length === 0 ? derived(sub.lost, 'records') : unavailable('records', PER_FILE_UNAVAILABLE),
+      ...lossMeasures('subagent', sub.kinds),
+      subagentUnexplainedLost: derived(sub.unexplained, 'records'),
       subagentParseTimeouts: reported(subTimedOut.length, 'files'),
-      mainReadRate: percentMeasure(comparedTally.parseable - mainLost, comparedTally.parseable),
-      subagentReadRate: subMeasured.length > 0
-        ? percentMeasure(subMeasuredTally.parseable - subMeasuredLost, subMeasuredTally.parseable)
-        : unavailable('percent', 'content.swob-per-file-unavailable')
+      mainReadRate: percentMeasure(comparedTally.parseable - main.lost, comparedTally.parseable),
+      subagentReadRate: subMeasuredAny
+        ? percentMeasure(subMeasuredTally.parseable - sub.lost, subMeasuredTally.parseable)
+        : unavailable('percent', PER_FILE_UNAVAILABLE)
     },
     oracle: {
       mainFiles: reported(mainTally.files, 'files'),
@@ -344,42 +344,61 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
       oracleIds: ['census.codex-jsonl']
     }
   }
-  const kinds = emptyLossKinds()
-  for (const unit of eligible) addKinds(kinds, unit.hazardKinds)
-  const lost = sumKinds(kinds)
-  const lossPaths = eligible.filter((unit) => sumKinds(unit.hazardKinds) > 0).map((unit) => unit.path)
-  const byType: Record<string, number> = {}
+  // C1c: the kernel's read count per rollout it reads (parseCodexFileWithStats) [R], compared per file
+  // like a Claude main file. A non-rollout .jsonl is never read by the kernel (① counts it as
+  // codex.non-rollout-file) and takes no part here; a rollout without a read count is left out and
+  // listed (content.swob-read-error), nothing is inferred for it (D6).
+  const measured: Array<{ unit: ContentUnit; read: number }> = []
+  const unavailablePaths: string[] = []
   for (const unit of eligible) {
-    for (const [type, count] of Object.entries(unit.hazardTypes)) byType[type] = (byType[type] || 0) + count
+    if (!unit.isRollout) continue
+    const parsed = ctx.readout.codexParsed?.get(unit.path)
+    if (parsed && parsed.records !== null) measured.push({ unit, read: parsed.records })
+    else unavailablePaths.push(unit.path)
   }
-  const typeMeasures: Record<string, Measure> = {}
-  for (const type of Object.keys(byType).sort()) typeMeasures[`lostByType:${type}`] = derived(byType[type], 'records')
+  const perFile = comparePerFile(measured)
+  const comparedTally = tally(perFile.compared)
   const sourceFindings: Finding[] = [...toolSide]
-  if (lost > 0) {
+  const lineSeparatorLost = perFile.lost - perFile.unexplained
+  if (lineSeparatorLost > 0) {
     sourceFindings.push(makeFinding({
-      code: 'content.line-separator-split', verdict: 'fail', source: 'codex', count: derived(lost, 'records'),
-      numbers: [lost, kinds.user], samples: sampleIds(ctx.salt, lossPaths)
+      code: 'content.line-separator-split', verdict: 'fail', source: 'codex', count: derived(lineSeparatorLost, 'records'),
+      numbers: [lineSeparatorLost, perFile.kinds.user], samples: sampleIds(ctx.salt, perFile.lossPaths)
     }))
+  }
+  if (perFile.unexplained > 0) {
+    sourceFindings.push(makeFinding({ code: 'content.unexplained-loss', verdict: 'fail', source: 'codex', count: derived(perFile.unexplained, 'records'), samples: sampleIds(ctx.salt, perFile.unexplainedPaths) }))
+  }
+  if (perFile.extraPaths.length > 0) {
+    sourceFindings.push(makeFinding({ code: 'content.swob-extra-records', verdict: 'warn', source: 'codex', count: derived(perFile.extraPaths.length, 'files'), samples: sampleIds(ctx.salt, perFile.extraPaths) }))
+  }
+  if (unavailablePaths.length > 0) {
+    sourceFindings.push(makeFinding({ code: 'content.swob-read-error', verdict: 'undetermined', source: 'codex', count: reported(unavailablePaths.length, 'files'), samples: sampleIds(ctx.salt, unavailablePaths) }))
   }
   if (changedFiles > 0) {
     sourceFindings.push(makeFinding({ code: 'census.file-changed-during-run', verdict: 'undetermined', source: 'codex', count: reported(changedFiles, 'files') }))
   }
   findings.push(...sourceFindings)
-  const threshold = contentThresholdVerdict({ parseable: codexTally.parseable, lost, conversationLost: conversationLoss(kinds, 0) })
+  const threshold = contentThresholdVerdict({ parseable: comparedTally.parseable, lost: perFile.lost, conversationLost: conversationLoss(perFile.kinds, perFile.unexplained) })
+  const noReadCount = measured.length === 0 && unavailablePaths.length > 0
   return {
-    verdict: sourceVerdict(threshold, swobSide(sourceFindings), 'codex'),
+    verdict: noReadCount ? 'undetermined' : sourceVerdict(threshold, swobSide(sourceFindings), 'codex'),
     swob: {
-      read: unavailable('records', 'content.swob-per-file-unavailable'),
-      lost: derived(lost, 'records', 'content.line-separator-split'),
-      ...lossMeasures('', kinds),
-      ...typeMeasures,
-      readRate: percentMeasure(codexTally.parseable - lost, codexTally.parseable)
+      read: noReadCount ? unavailable('records', PER_FILE_UNAVAILABLE) : reported(perFile.read, 'records'),
+      lost: noReadCount ? unavailable('records', PER_FILE_UNAVAILABLE) : derived(perFile.lost, 'records'),
+      ...lossMeasures('', perFile.kinds),
+      unexplainedLost: derived(perFile.unexplained, 'records'),
+      readUnavailableFiles: reported(unavailablePaths.length, 'files'),
+      readRate: noReadCount
+        ? unavailable('percent', PER_FILE_UNAVAILABLE)
+        : percentMeasure(comparedTally.parseable - perFile.lost, comparedTally.parseable)
     },
     oracle: {
       files: reported(codexTally.files, 'files'),
       nonBlankLines: reported(codexTally.nonBlank, 'lines'),
       badLines: reported(codexTally.badLines, 'lines'),
       parseable: reported(codexTally.parseable, 'records'),
+      parseableCompared: reported(comparedTally.parseable, 'records'),
       lineSeparatorRecords: reported(codexTally.lineSeparatorRecords, 'records'),
       truncatedTails: reported(codexTally.truncatedTails, 'files'),
       ...toolOracle,
@@ -408,7 +427,7 @@ export function contentCheck(ctx: CheckContext): ReturnType<typeof assembleCheck
     const pick = (key: string): number => entry.swob[key]?.value ?? 0
     return sum + pick('mainLostUser') + pick('mainLostAssistant') + pick('mainLostToolResult') + pick('mainUnexplainedLost') +
       pick('subagentLostUser') + pick('subagentLostAssistant') + pick('subagentLostToolResult') + pick('subagentUnexplainedLost') +
-      pick('lostUser') + pick('lostAssistant') + pick('lostToolResult')
+      pick('lostUser') + pick('lostAssistant') + pick('lostToolResult') + pick('unexplainedLost')
   }, 0)
   // Tool-written broken lines (bad lines + truncated tails) are named in the pass headline, never graded.
   const toolLines = Object.values(bySource).reduce((sum, entry) =>

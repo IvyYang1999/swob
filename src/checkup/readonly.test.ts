@@ -132,6 +132,15 @@ describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
     const subagentUnits = (report.units ?? []).filter((unit) => unit.kind === 'claude-subagent')
     expect(subagentUnits.length).toBeGreaterThan(0)
     for (const unit of subagentUnits) expect(unit.swobRead).toBe(unit.records.parseable)
+    // C1c: every Codex file is read by the kernel per file (parseCodexFileWithStats) [R]; the U+2028 record is kept.
+    const codexContent = content.bySource.codex
+    expect(codexContent.oracle.lineSeparatorRecords.value).toBeGreaterThan(0)
+    expect(codexContent.swob.read).toEqual({ value: codexContent.oracle.parseable.value, label: 'reported', unit: 'records' })
+    expect((codexContent.swob.read.value ?? 0) + (codexContent.swob.lost.value ?? 0)).toBe(codexContent.oracle.parseableCompared.value)
+    const codexUnits = (report.units ?? []).filter((unit) => unit.source === 'codex')
+    expect(codexUnits).toHaveLength(sample.expected.codexUnits)
+    for (const unit of codexUnits) expect(unit.swobRead).toBe(unit.records.parseable)
+    expect(report.diagnostics).toMatchObject({ codexParsedFiles: sample.expected.codexUnits, codexReadErrors: 0 })
     expect(report.oracles.find((oracle) => oracle.id === 'codex.state-db')).toEqual({ id: 'codex.state-db', available: true, version: '5' })
     for (const unit of report.units ?? []) {
       expect(unit.id).toMatch(/^[0-9a-f]{8}$/)

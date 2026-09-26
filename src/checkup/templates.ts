@@ -173,6 +173,11 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   'readout.source-empty': {
     ownerLine: '{source}：本机有这个来源的数据，但 Swob 这次一场会话都没读到',
     engineerHint: 'src/main/session-loader.ts#loadAllSessions：只读加载时这个来源返回 0 场会话，而来源根存在；先查对应 loader 是否把读取失败静默成了空结果'
+  },
+  // —— C1c additions ——
+  'content.swob-read-error': {
+    ownerLine: '{source}：有 {n} 个文件没拿到 Swob 的逐文件读入数（读取出错，或这次没有读），没有参与比对，也不做推算',
+    engineerHint: 'src/checkup/readout.ts#readSwobReadout：没有这个文件的逐文件读数（parseCodexFileWithStats 读取抛错，或文件不在这次读数的清单里）；不推算，不参与 ② 的比对'
   }
 }
 
@@ -261,6 +266,7 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   'content.unexplained-loss': '记录没读进来，原因还没查明',
   'content.swob-extra-records': 'Swob 读出的记录比原始记录还多',
   'content.swob-per-file-unavailable': 'Swob 没有按文件给出读入数',
+  'content.swob-read-error': '读取出错或这次没有读，拿不到 Swob 的逐文件读入数',
   'codex.legacy-compacted-unrecognized': 'Swob 不认旧格式的压缩记录',
   'compaction.count-mismatch': '压缩次数和原始记录对不上',
   'compaction.fork-inherited-marker': '恢复或分叉时从父会话抄来的压缩标记',
@@ -425,6 +431,10 @@ export const MEASURE_LABELS: Readonly<Record<string, string>> = {
   lostToolResult: '丢失：工具结果',
   lostMeta: '丢失：其他元数据',
   readRate: '读全率',
+  // C1c: Codex read per file
+  unexplainedLost: '丢失：原因未查明',
+  readUnavailableFiles: '没拿到 Swob 读入数的文件',
+  parseableCompared: '参与比对的记录',
   mainNonBlankLines: '主会话非空行',
   mainBadLines: '主会话里工具写坏的行',
   mainParseable: '主会话可解析记录',

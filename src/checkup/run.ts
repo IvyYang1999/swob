@@ -148,7 +148,7 @@ function buildUnits(
   const dispositionOf = (filePath: string): UnitDisposition => dispositions.get(filePath) ?? { bucket: null }
   for (const unit of claude?.units ?? []) {
     const disposition = dispositionOf(unit.path)
-    // Main and subagent files are both read by parseSessionFile in the kernel; a timed-out read stays null.
+    // Main and subagent files are both read by parseSessionFile in the kernel; a timed-out or cut-short read stays null.
     const parsed = unit.kind === 'claude-main' || unit.kind === 'claude-subagent' ? readout.claudeParsed.get(unit.path) : undefined
     units.push({
       id: saltedId(salt, `unit:${unit.path}`),
@@ -164,6 +164,8 @@ function buildUnits(
   }
   for (const unit of codex?.units ?? []) {
     const disposition = dispositionOf(unit.path)
+    // C1c: the rollouts the kernel reads carry its per-file read count; a read that threw stays null.
+    const parsed = readout.codexParsed?.get(unit.path)
     units.push({
       id: saltedId(salt, `unit:${unit.path}`),
       unitSig: sig(unit.path, unit.before),
@@ -173,7 +175,7 @@ function buildUnits(
       ...(disposition.reason ? { reason: disposition.reason } : {}),
       changed: changed.has(unit.path),
       records: unitRecords(unit.stats),
-      swobRead: null
+      swobRead: parsed?.records ?? null
     })
   }
   return units
@@ -326,6 +328,8 @@ export interface CheckupInternals {
     stateDir: string
     claudeMainFiles: readonly string[]
     claudeSubagentFiles: readonly string[]
+    /** C1c: readable census Codex files (the readout reads those the kernel's discovery lists). */
+    codexFiles: readonly string[]
     signal?: AbortSignal
   }) => Promise<SwobReadout>
 }
@@ -409,6 +413,7 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
     stateDir,
     claudeMainFiles: claudeFiles('claude-main'),
     claudeSubagentFiles: claudeFiles('claude-subagent'),
+    codexFiles: (codex?.units ?? []).filter((unit) => !unit.unreadable).map((unit) => unit.path),
     signal: options.signal
   })
   timingsMs.readout = elapsed(phase)
@@ -446,6 +451,8 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
     lowerSymlinks: (claude?.lowerSymlinks ?? 0) + (codex?.lowerSymlinks ?? 0),
     claudeParsedFiles: readout.claudeParsed.size,
     claudeParseTimeouts: [...readout.claudeParsed.values()].filter((entry) => entry.partial).length,
+    codexParsedFiles: readout.codexParsed?.size ?? 0,
+    codexReadErrors: [...(readout.codexParsed?.values() ?? [])].filter((entry) => entry.records === null).length,
     readoutSessions: readout.sessions.length,
     codexHomeEnvSet: codex?.codexHomeEnvSet ? 1 : 0,
     additionalCodexHomes: codex?.additionalHomes ?? 0,

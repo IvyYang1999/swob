@@ -6,9 +6,9 @@ import type { CheckResult } from '../contract'
 import { censusClaude } from '../census/claude-census'
 import { censusCodex } from '../census/codex-census'
 import type { SourcePresence } from '../census/source-roots'
-import type { ReadoutSession, SwobReadout } from '../readout'
+import { CLAUDE_PARSE_TIMEOUT_MS, claudeParseResult, codexParseResult, type CodexParseResult, type ReadoutSession, type SwobReadout } from '../readout'
 import { LS, claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from '../self-test/samples'
-import { overallVerdict, runKernelCheckup } from '../run'
+import { overallVerdict, runKernelCheckup, type CheckupInternals } from '../run'
 import Ajv2020 from 'ajv/dist/2020.js'
 import schema from '../contract/kernel-checkup-report-v1.schema.json'
 import { applicability, worstVerdict, type CheckContext } from './common'
@@ -118,15 +118,17 @@ describe('② tool-written broken lines are listed but never grade the check', (
       '{"parentUuid":"tail","isSidechain":false,"type":"assis'
     ], { trailingNewline: false })))
     const codexId = syntheticUuid(91, 'c0de')
-    writeSample(root, codexRolloutPath(codexId, 0), jsonl([
+    const codexFile = fs.realpathSync(writeSample(root, codexRolloutPath(codexId, 0), jsonl([
       codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id: codexId, cwd: CWD }),
       '{"timestamp":"2026-09-20T09:00:01.000Z","ordinal":1,"type":"response_item","payload":',
       codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'ok' })
-    ]))
+    ])))
     const claudeCensus = await censusClaude(root)
     const codexCensus = await censusCodex(root, { env: {} })
     const parsed = new Map([[claudeFile, { records: 2, elapsedMs: 1, partial: false }]])
-    const result = contentCheck(ctx({ claude: claudeCensus, codex: codexCensus, readout: readout([], { claudeParsed: parsed }) }))
+    // C1c: the kernel's per-file read count of the Codex file (the bad line is not a record).
+    const codexParsed = new Map([[codexFile, { records: 2, elapsedMs: 1 }]])
+    const result = contentCheck(ctx({ claude: claudeCensus, codex: codexCensus, readout: readout([], { claudeParsed: parsed, codexParsed }) }))
     expect(result.bySource['claude-code'].verdict).toBe('pass')
     expect(result.bySource.codex.verdict).toBe('pass')
     expect(result.verdict).toBe('pass')
@@ -328,14 +330,143 @@ describe('② Claude subagent files are measured per file (C1b deliverable 0)', 
     expect(entry.verdict).toBe('pass')
   })
 
-  it('keeps the C1a inference for subagent files without a parse result (the self-test path)', async () => {
+  it('leaves subagent files without a parse result out of the comparison: no inference (C1c, dispatcher decision D6)', async () => {
     const { context, main } = await subagentFixture()
     const result = contentCheck(context(new Map([[main, read(2)]])))
     const entry = result.bySource['claude-code']
     expect(entry.swob.subagentRead).toEqual({ value: null, label: 'unavailable', unit: 'records', reason: 'content.swob-per-file-unavailable' })
-    expect(entry.swob.subagentLost).toEqual({ value: 1, label: 'derived', unit: 'records', reason: 'content.line-separator-split' })
+    expect(entry.swob.subagentLost).toEqual({ value: null, label: 'unavailable', unit: 'records', reason: 'content.swob-per-file-unavailable' })
     expect(entry.swob.subagentReadRate).toEqual({ value: null, label: 'unavailable', unit: 'percent', reason: 'content.swob-per-file-unavailable' })
-    expect(result.findings.map((finding) => [finding.code, finding.count.value])).toEqual([['content.line-separator-split', 1]])
+    expect(entry.oracle.subagentParseableCompared).toEqual({ value: 0, label: 'reported', unit: 'records' })
+    expect(result.findings.map((finding) => [finding.code, finding.verdict, finding.count.value, finding.count.unit]))
+      .toEqual([['content.swob-read-error', 'undetermined', 3, 'files']])
+    expect(result.findings[0].samples).toHaveLength(3)
+    // The main file was measured, so the source is still graded.
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('is undetermined, not a vacuous pass, when no Claude file has a read count', async () => {
+    const { context } = await subagentFixture()
+    const result = contentCheck(context(new Map()))
+    expect(result.bySource['claude-code'].verdict).toBe('undetermined')
+    expect(result.findings.map((finding) => [finding.code, finding.count.value])).toEqual([['readout.parse-timeout', 1], ['content.swob-read-error', 3]])
+  })
+})
+
+describe('② Codex files are measured per file (C1c deliverable ①)', () => {
+  /**
+   * Two top-level rollouts — one with a U+2028 user message and a U+2028 tool output (5 records), one
+   * plain (3 records) — and a non-rollout .jsonl next to them (1 record with U+2028) that the kernel never reads.
+   */
+  async function codexContentFixture(): Promise<{ context: (codexParsed?: Map<string, CodexParseResult>) => CheckContext; split: string; plain: string }> {
+    const root = home()
+    const splitId = syntheticUuid(1300, 'c0de')
+    const plainId = syntheticUuid(1301, 'c0de')
+    const split = fs.realpathSync(writeSample(root, codexRolloutPath(splitId, 0), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id: splitId, cwd: CWD }),
+      codex.userMessage({ timestamp: syntheticTime(1), ordinal: 1, text: `first${LS}line` }),
+      codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'ok' }),
+      codex.functionCallOutput({ timestamp: syntheticTime(3), ordinal: 3, callId: 'call_1', output: `out${LS}put` }),
+      codex.agentMessage({ timestamp: syntheticTime(4), ordinal: 4, text: 'done' })
+    ])))
+    const plain = fs.realpathSync(writeSample(root, codexRolloutPath(plainId, 5), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(5), ordinal: 0, id: plainId, cwd: CWD }),
+      codex.userMessage({ timestamp: syntheticTime(6), ordinal: 1, text: 'q' }),
+      codex.assistantMessage({ timestamp: syntheticTime(7), ordinal: 2, text: 'a' })
+    ])))
+    writeSample(root, path.join('.codex', 'sessions', '2026', '09', '20', 'notes.jsonl'), jsonl([
+      codex.userMessage({ timestamp: syntheticTime(8), ordinal: 0, text: `note${LS}text` })
+    ]))
+    const census = await censusCodex(root, { env: {} })
+    const sessions = [codexSession(splitId, split), codexSession(plainId, plain)]
+    return {
+      context: (codexParsed) => ctx({ codex: census, readout: readout(sessions, codexParsed ? { codexParsed } : {}) }),
+      split, plain
+    }
+  }
+  const read = (records: number | null): CodexParseResult => ({ records, elapsedMs: 1 })
+
+  it('reads U+2028 records completely: read = parseable gives no loss and a pass (nothing inferred)', async () => {
+    const { context, split, plain } = await codexContentFixture()
+    const result = contentCheck(context(new Map([[split, read(5)], [plain, read(3)]])))
+    const entry = result.bySource.codex
+    expect(entry.swob).toMatchObject({
+      read: { value: 8, label: 'reported', unit: 'records' },
+      lost: { value: 0, label: 'derived', unit: 'records' },
+      unexplainedLost: { value: 0 },
+      readUnavailableFiles: { value: 0, label: 'reported', unit: 'files' },
+      readRate: { value: 100, label: 'derived', unit: 'percent' }
+    })
+    expect(entry.swob.lost.reason).toBeUndefined()
+    expect(Object.keys(entry.swob).filter((key) => key.startsWith('lostByType:'))).toEqual([])
+    // The non-rollout file stays in the census columns but takes no part in the comparison (① counts it).
+    expect(entry.oracle).toMatchObject({
+      files: { value: 3 }, parseable: { value: 9 }, lineSeparatorRecords: { value: 3 },
+      parseableCompared: { value: 8, label: 'reported', unit: 'records' }
+    })
+    expect(result.findings).toEqual([])
+    expect(entry.verdict).toBe('pass')
+    expect(result.headline).toBe('逐文件读全，没有记录丢失')
+  })
+
+  it('measures a loss per file: read [R], lost [D] split by the file\'s hazards, the rest unexplained', async () => {
+    const { context, split, plain } = await codexContentFixture()
+    // One record short in the file with separators: explained by them, the most severe kind first.
+    const explained = contentCheck(context(new Map([[split, read(4)], [plain, read(3)]])))
+    expect(explained.bySource.codex.swob).toMatchObject({
+      read: { value: 7, label: 'reported' }, lost: { value: 1, label: 'derived' },
+      lostUser: { value: 1 }, lostToolResult: { value: 0 }, unexplainedLost: { value: 0 }, readRate: { value: 87.5 }
+    })
+    const separator = explained.findings.find((finding) => finding.code === 'content.line-separator-split')
+    expect(separator).toMatchObject({ verdict: 'fail', source: 'codex', count: { value: 1, label: 'derived', unit: 'records' } })
+    expect(separator?.ownerLine).toBe('Codex：有 1 条记录没读进来，其中 1 条是你本人发的消息。原因是记录里有特殊的「行分隔符」，Swob 把一条记录切成两半后悄悄丢掉了')
+    expect(separator?.samples).toHaveLength(1)
+    expect(explained.bySource.codex.verdict).toBe('fail')
+    // One record short in a file without separators: measured, and unexplained.
+    const unexplained = contentCheck(context(new Map([[split, read(5)], [plain, read(2)]])))
+    expect(unexplained.bySource.codex.swob).toMatchObject({ read: { value: 7, label: 'reported' }, lost: { value: 1 }, unexplainedLost: { value: 1 } })
+    expect(unexplained.findings.map((finding) => [finding.code, finding.verdict, finding.count.value])).toEqual([['content.unexplained-loss', 'fail', 1]])
+    expect(unexplained.headline).toBe('有 1 条记录没读进来，其中 1 条是对话内容')
+    expect(unexplained.bySource.codex.verdict).toBe('fail')
+    // More records than the census: listed per file (the Claude code), never a loss.
+    const extra = contentCheck(context(new Map([[split, read(6)], [plain, read(3)]])))
+    expect(extra.findings.map((finding) => [finding.code, finding.verdict, finding.count.value])).toEqual([['content.swob-extra-records', 'warn', 1]])
+    expect(extra.bySource.codex.swob.lost.value).toBe(0)
+    expect(extra.bySource.codex.verdict).toBe('warn')
+  })
+
+  it('leaves a file without a read count out (no inference) and lists it as undetermined', async () => {
+    const { context, split, plain } = await codexContentFixture()
+    const partly = contentCheck(context(new Map([[split, read(null)], [plain, read(3)]])))
+    expect(partly.bySource.codex.swob).toMatchObject({ read: { value: 3, label: 'reported' }, lost: { value: 0 }, readUnavailableFiles: { value: 1 } })
+    expect(partly.bySource.codex.oracle.parseableCompared).toEqual({ value: 3, label: 'reported', unit: 'records' })
+    expect(partly.findings.map((finding) => [finding.code, finding.verdict, finding.count.value, finding.count.unit]))
+      .toEqual([['content.swob-read-error', 'undetermined', 1, 'files']])
+    expect(partly.bySource.codex.verdict).toBe('pass')
+    // No file has a read count (the read threw, or the readout carries no Codex counts): undetermined, nothing inferred.
+    for (const codexParsed of [new Map([[split, read(null)]]), undefined]) {
+      const none = contentCheck(context(codexParsed))
+      const entry = none.bySource.codex
+      expect(entry.verdict).toBe('undetermined')
+      expect(entry.swob.read).toEqual({ value: null, label: 'unavailable', unit: 'records', reason: 'content.swob-per-file-unavailable' })
+      expect(entry.swob.lost).toEqual({ value: null, label: 'unavailable', unit: 'records', reason: 'content.swob-per-file-unavailable' })
+      expect(entry.swob.readRate).toMatchObject({ value: null, label: 'unavailable', unit: 'percent' })
+      expect(none.findings.map((finding) => [finding.code, finding.count.value])).toEqual([['content.swob-read-error', 2]])
+    }
+  })
+})
+
+describe('readout: per-file results from the kernel read stats (C1c)', () => {
+  it('Claude: partial when the kernel says the read was cut short (truncated) or it took the kernel timeout', () => {
+    expect(claudeParseResult({ recordsRead: 7, truncated: false }, 12)).toEqual({ records: 7, elapsedMs: 12, partial: false })
+    expect(claudeParseResult({ recordsRead: 3, truncated: true }, 12)).toEqual({ records: 3, elapsedMs: 12, partial: true })
+    expect(claudeParseResult({ recordsRead: 7, truncated: false }, CLAUDE_PARSE_TIMEOUT_MS)).toMatchObject({ partial: true })
+    expect(claudeParseResult({ recordsRead: 7, truncated: false }, CLAUDE_PARSE_TIMEOUT_MS - 1_000)).toMatchObject({ partial: false })
+  })
+
+  it('Codex: the read count of a completed read; no count when the kernel read throws (never partial by time)', async () => {
+    await expect(codexParseResult(async () => ({ recordsRead: 5 }))).resolves.toMatchObject({ records: 5 })
+    await expect(codexParseResult(async () => { throw new Error('stream failed') })).resolves.toMatchObject({ records: null })
   })
 })
 
@@ -383,6 +514,26 @@ describe('Swob readout per source (C1b)', () => {
     // ① is still graded by C1a's rules only: the new finding does not move any verdict.
     expect(inclusion.bySource.opencode.verdict).toBe('undetermined')
     expect(inclusion.verdict).toBe('pass')
+  })
+
+  it('hands the census Codex files to the readout and reports their measured read counts per unit (C1c)', async () => {
+    const { root, sessions } = await fixtureHome()
+    const [main, , rollout] = sessions.map((session) => session.primaryPath!)
+    let given = null as Parameters<NonNullable<CheckupInternals['readout']>>[0] | null
+    const report = await runKernelCheckup({ homeDir: root, stateDir: home(), privacySalt: 'per-source' }, {
+      readout: async (input) => {
+        given = input
+        return readout(sessions, {
+          claudeParsed: new Map([[main, { records: 2, elapsedMs: 1, partial: false }]]),
+          codexParsed: new Map([[rollout, { records: 3, elapsedMs: 1 }]])
+        })
+      }
+    })
+    expect(given!.codexFiles).toEqual([rollout])
+    expect((report.units ?? []).filter((unit) => unit.source === 'codex').map((unit) => [unit.swobRead, unit.records.parseable])).toEqual([[3, 3]])
+    expect(report.checks[1].bySource.codex.swob.read).toEqual({ value: 3, label: 'reported', unit: 'records' })
+    expect(report.checks[1].bySource.codex.verdict).toBe('pass')
+    expect(report.diagnostics).toMatchObject({ codexParsedFiles: 1, codexReadErrors: 0 })
   })
 
   it('reads nothing per source when the readout did not run, and raises no finding then', async () => {

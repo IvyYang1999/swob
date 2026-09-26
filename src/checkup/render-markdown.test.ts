@@ -299,7 +299,7 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
 describe('renderCheckupMarkdown on the sample HOME report (runKernelCheckup)', () => {
   it('renders owner and engineer versions without any canary', async () => {
     expect(validate(sampleReport), JSON.stringify(validate.errors)).toBe(true)
-    expect(sampleReport.kernel.checkupVersion).toBe('1.1.0')
+    expect(sampleReport.kernel.checkupVersion).toBe('1.2.0')
     const owner = renderCheckupMarkdown(sampleReport, RENDER)
     const engineer = renderCheckupMarkdown(sampleReport, { ...RENDER, audience: 'engineer' })
     for (const canary of Object.values(CANARY)) {
@@ -335,6 +335,12 @@ describe('renderCheckupMarkdown on the sample HOME report (runKernelCheckup)', (
     const owner = renderCheckupMarkdown(sampleReport, RENDER)
     expect(sampleReport.readoutBySource?.['claude-code']?.sessions).toMatchObject({ label: 'reported' })
     expect(owner).toContain('| Swob 读到的会话 |')
+  })
+
+  it('shows the Codex read count measured per file (C1c): the U+2028 record is read, nothing is lost', () => {
+    const owner = renderCheckupMarkdown(sampleReport, RENDER)
+    expect(owner).toContain('| Codex | 19[R] | 0[R] | 19[R] | 19[R] | 0[D] | — | 100%[D] |')
+    expect(owner).not.toContain('Swob 没有按文件给出读入数')
   })
 })
 

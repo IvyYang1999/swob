@@ -23,10 +23,14 @@ const FORBIDDEN_ENTRIES = [
 ]
 const FORBIDDEN_MODULES = /(?:session-lineage|canonical-store|canonical-package|search-index|usage-fact-store|library-manager|resume-audit|provider-runtime|config-store)$/
 
-/** The only runtime kernel imports allowed, all in readout.ts. */
+/**
+ * The only runtime kernel imports allowed, all in readout.ts. C1c (task book, explicit exception to the
+ * C1a red line): the per-file reads with stats, parseSessionFileWithStats (replaces parseSessionFile)
+ * and parseCodexFileWithStats.
+ */
 const ALLOWED_KERNEL_IMPORTS: Record<string, string[]> = {
-  'src/main/session-loader.ts': ['findClaudeSessionFiles', 'loadAllSessions', 'parseSessionFile'],
-  'src/main/codex-loader.ts': ['findCodexSessionFiles'],
+  'src/main/session-loader.ts': ['findClaudeSessionFiles', 'loadAllSessions', 'parseSessionFileWithStats'],
+  'src/main/codex-loader.ts': ['findCodexSessionFiles', 'parseCodexFileWithStats'],
   'src/main/runtime-home.ts': ['runtimeHome']
 }
 

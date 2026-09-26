@@ -17,9 +17,10 @@
  * - Unit level (① ②, units[]): only units present in both with the same id and
  *   unitSig, unchanged during both runs and with a bucket. A unit has an
  *   inclusion problem when its bucket is not-included/unsupported, and a
- *   content problem when it is a Claude main/subagent file whose measured
- *   swobRead differs from its spec-parseable records (unknown when swobRead is
- *   null). Units only in the current report or with a different unitSig are
+ *   content problem when its measured swobRead (Claude main/subagent files
+ *   since C1b, Codex rollouts since C1c) differs from its spec-parseable
+ *   records (unknown when swobRead is null, e.g. a Codex unit of an older
+ *   report). Units only in the current report or with a different unitSig are
  *   "new or changed"; units only in the previous one are "gone".
  * Sources not checked in both runs (marked source.not-selected in either report) are
  * never new or fixed: their issues are first checks (not checked last time) or not
@@ -107,9 +108,34 @@ const PROBLEM_VERDICTS: ReadonlySet<string> = new Set(['warn', 'fail'])
 const FINGERPRINT = /^[0-9a-f]{8}$/
 const SAMPLE_LIMIT = 5
 
+/** kernel.checkupVersion is at least `minimum` (numeric x.y.z comparison); false when absent or malformed. */
+function checkupVersionAtLeast(report: CheckupReport, minimum: readonly [number, number, number]): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(typeof report?.kernel?.checkupVersion === 'string' ? report.kernel.checkupVersion : '')
+  if (!match) return false
+  const version = [Number(match[1]), Number(match[2]), Number(match[3])]
+  for (let index = 0; index < 3; index++) if (version[index] !== minimum[index]) return version[index] > minimum[index]
+  return true
+}
+
 /** Findings that need a report field older reports do not have: absent → the previous report could not find them. */
 const FINDING_NEEDS: Readonly<Record<string, (report: CheckupReport) => boolean>> = {
   'readout.source-empty': (report) => !!report.readoutBySource
+}
+
+/**
+ * Findings of one source that only a newer checkup can produce (key: code + NUL + source). C1c
+ * (checkup 1.2.0): Codex read counts are measured per file; older checkups inferred the Codex loss
+ * and could not see an unexplained loss or extra records there.
+ */
+const SOURCE_FINDING_NEEDS: Readonly<Record<string, (report: CheckupReport) => boolean>> = {
+  'content.unexplained-loss\u0000codex': (report) => checkupVersionAtLeast(report, [1, 2, 0]),
+  'content.swob-extra-records\u0000codex': (report) => checkupVersionAtLeast(report, [1, 2, 0])
+}
+
+/** The previous report could have found this finding (it has the fields and the checkup version it needs). */
+function previousCouldFind(finding: Finding, previous: CheckupReport): boolean {
+  return (FINDING_NEEDS[finding.code]?.(previous) ?? true) &&
+    (SOURCE_FINDING_NEEDS[`${finding.code}\u0000${finding.source}`]?.(previous) ?? true)
 }
 
 function summary(report: CheckupReport): ReportSummary {
@@ -218,7 +244,7 @@ export function compareIssues(previous: CheckupReport, current: CheckupReport): 
     if (earlier) {
       result.unchanged.push(issueDelta(entry, earlier.finding.count, entry.finding.count))
     } else if (!lookedBefore.has(entry.finding.source) || !checkLooked(previous, entry.check) ||
-        !(FINDING_NEEDS[entry.finding.code]?.(previous) ?? true)) {
+        !previousCouldFind(entry.finding, previous)) {
       result.firstCheck.push(issueDelta(entry, null, entry.finding.count))
     } else {
       result.added.push(issueDelta(entry, null, entry.finding.count))
@@ -243,7 +269,6 @@ function inclusionProblem(unit: CheckupUnit): string | null {
 }
 
 function contentState(unit: CheckupUnit): ProblemState {
-  if (unit.kind !== 'claude-main' && unit.kind !== 'claude-subagent') return 'unknown'
   if (unit.swobRead === null || unit.swobRead === undefined) return 'unknown'
   return unit.swobRead !== unit.records?.parseable ? 'problem' : 'ok'
 }

@@ -31,6 +31,7 @@ export const HEADLINES = {
   'inclusion.pass': '{n} 个原始单元全部纳入',
   'inclusion.gaps': '{n} 个原始单元里有 {n} 个没挂上会话，{n} 个是 Swob 不支持的格式',
   'content.pass': '逐文件读全，没有记录丢失',
+  'content.pass-tool-lines': '逐文件读全，没有记录丢失；另有 {n} 行是工具自己写坏的，不计入结论',
   'content.loss': '有 {n} 条记录没读进来，其中 {n} 条是对话内容',
   'content.meta-only': '只丢了 {n} 条元数据记录，没有丢对话内容',
   'compaction.pass': '{n} 场会话的压缩次数逐场一致',
@@ -65,12 +66,12 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
     engineerHint: 'src/main/session-loader.ts#parseSessionFile：读入数多于规范读法'
   },
   'content.tool-bad-line': {
-    ownerLine: '{source}：原始文件里有 {n} 行被工具自己写坏了，这不是 Swob 的问题，照样列出',
-    engineerHint: 'census/jsonl-census.ts：JSON.parse 失败的非空行（只按换行符分行）'
+    ownerLine: '{source}：工具写坏的行 {n}。这是工具自己写坏的，不是 Swob 丢的，单独列出，不计入本项结论',
+    engineerHint: 'census/jsonl-census.ts：只按换行符分行后 JSON.parse 失败的非空行；单列，不参与 ② 的结论'
   },
   'content.truncated-tail': {
-    ownerLine: '{source}：有 {n} 个文件的最后一行没写完整，多半是工具写到一半被打断',
-    engineerHint: 'census/jsonl-census.ts：末行无换行符且无法解析'
+    ownerLine: '{source}：有 {n} 个文件的最后一行没写完整，多半是工具写到一半被打断；不是 Swob 丢的，不计入本项结论',
+    engineerHint: 'census/jsonl-census.ts：末行无换行符且无法解析；单列，不参与 ② 的结论'
   },
   'readout.parse-timeout': {
     ownerLine: '{source}：有 {n} 个文件读取超时或没读成，这次没有参与比对',

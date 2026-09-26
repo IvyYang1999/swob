@@ -43,6 +43,11 @@ export interface CheckupReport {
   library?: { root: string; packages: Measure; lastWriteAt: string | null; missingLive: Measure; staleLive: Measure }
   timingsMs: Record<string, number>
   // —— C1a additions (all optional) ——
+  /**
+   * First 8 hex of sha256(salt). The salt comes from the machine identifier (never the hostname) and is
+   * never reported; comparisons (C1b --compare) check this first, since ids/unitSig only match under one salt.
+   */
+  saltFingerprint?: string
   /** Reason code when `verdict` is undetermined (e.g. checkup.self-test-failed). */
   verdictReason?: string
   /** Per self-test fault class outcome; ids are SELF_TEST_CASES. */
@@ -88,7 +93,7 @@ export interface CheckupOptions {
   // —— C1a additions (optional) ——
   kernelVersion?: string                  // e.g. package.json version of the kernel checkout
   kernelCommit?: string | null            // git commit of the kernel checkout
-  /** Salt for sample ids; derived from stable machine values when omitted. Never persisted or reported. */
+  /** Salt for sample ids; derived from the machine identifier when omitted. Never persisted or reported. */
   privacySalt?: string
   /** Parent directory for self-test samples; must be inside stateDir. Default: a fresh directory in stateDir. */
   selfTestDir?: string

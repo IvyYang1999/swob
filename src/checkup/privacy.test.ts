@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertPrivacyClean,
-  derivePrivacySalt,
   hostHash,
   redactPath,
   saltedId,
@@ -60,14 +59,6 @@ describe('privacy primitives', () => {
     expect(saltedId('a', 'x')).not.toBe(saltedId('b', 'x'))
     expect(unitSignature('a', '/p', 1, 2)).not.toBe(unitSignature('a', '/p', 1, 3))
     expect(hostHash('a', 'host')).toMatch(/^[0-9a-f]{8}$/)
-  })
-
-  it('derives a stable in-memory salt from machine values', () => {
-    const salt = derivePrivacySalt({ uid: 501, hostname: 'h', homeDir: '/home/u' })
-    expect(salt).toMatch(/^[0-9a-f]{64}$/)
-    expect(derivePrivacySalt({ uid: 501, hostname: 'h', homeDir: '/home/u' })).toBe(salt)
-    expect(derivePrivacySalt({ uid: 502, hostname: 'h', homeDir: '/home/u' })).not.toBe(salt)
-    expect(derivePrivacySalt()).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('redacts paths to fixed roots or salted placeholders', () => {

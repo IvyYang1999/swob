@@ -39,4 +39,32 @@ describe('checkup self-test (referee fault classes 1-6)', () => {
     await runSelfTest({ workDir: dir, salt: 'unit-salt' })
     expect(fs.readdirSync(dir).sort()).toEqual([...SELF_TEST_CASES].sort())
   })
+
+  it('writes Codex compacted rows in the dominant real signature, every Codex row carrying an ordinal', async () => {
+    const dir = workDir()
+    await runSelfTest({ workDir: dir, salt: 'unit-salt' })
+    const codexFiles: string[] = []
+    const walk = (current: string): void => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) codexFiles.push(full)
+      }
+    }
+    walk(dir)
+    const rows = codexFiles.flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)))
+    const compacted = rows.filter((row) => row.type === 'compacted')
+    expect(compacted.length).toBeGreaterThanOrEqual(4)
+    for (const row of compacted) {
+      expect(Object.keys(row)).toEqual(['timestamp', 'ordinal', 'type', 'payload'])
+      expect(Object.keys(row.payload)).toEqual([
+        'message', 'replacement_history', 'window_number', 'first_window_id',
+        'previous_window_id', 'window_id', 'compaction_response_id', 'latest_token_usage_record'
+      ])
+      expect(Array.isArray(row.payload.replacement_history) && row.payload.replacement_history.length > 0).toBe(true)
+    }
+    for (const row of rows) expect(typeof row.ordinal).toBe('number')
+    const legacyCase = codexFiles.filter((file) => file.includes(`${path.sep}codex-legacy-compacted${path.sep}`))
+    expect(legacyCase).toHaveLength(1)
+  })
 })

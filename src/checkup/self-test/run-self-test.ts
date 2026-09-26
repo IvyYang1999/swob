@@ -142,7 +142,11 @@ async function caseToolBadLine(home: string, options: SelfTestOptions): Promise<
   const result = contentCheck(baseContext(options.salt, readout, { claude: census }))
   const codes = result.findings.map((entry) => entry.code)
   const bad = result.findings.find((entry) => entry.code === 'content.tool-bad-line')
-  return !!bad && bad.count.value === 1 && !codes.includes('content.line-separator-split') && !codes.includes('content.unexplained-loss')
+  const entry = result.bySource['claude-code']
+  // Tool-written lines are listed but never grade ② (only Swob's own losses do).
+  return !!bad && bad.count.value === 1 && bad.verdict === 'not-applicable' && entry?.verdict === 'pass' &&
+    entry.oracle.toolBadLines?.value === 1 &&
+    !codes.includes('content.line-separator-split') && !codes.includes('content.unexplained-loss')
 }
 
 async function caseTruncatedTail(home: string, options: SelfTestOptions): Promise<boolean> {
@@ -157,19 +161,21 @@ async function caseTruncatedTail(home: string, options: SelfTestOptions): Promis
   const result = contentCheck(baseContext(options.salt, readout, { claude: census }))
   const codes = result.findings.map((entry) => entry.code)
   const tail = result.findings.find((entry) => entry.code === 'content.truncated-tail')
-  return !!tail && tail.count.value === 1 && !codes.includes('content.unexplained-loss')
+  const entry = result.bySource['claude-code']
+  return !!tail && tail.count.value === 1 && tail.verdict === 'not-applicable' && entry?.verdict === 'pass' &&
+    entry.oracle.toolTruncatedTails?.value === 1 && !codes.includes('content.unexplained-loss')
 }
 
 async function caseCodexLegacyCompacted(home: string, options: SelfTestOptions): Promise<boolean> {
   const id = syntheticUuid(41, 'c0de')
   const rows = [
-    codex.legacyTopLevelMeta({ timestamp: syntheticTime(0), id, cwd: CWD }),
-    codex.userMessage({ timestamp: syntheticTime(1), text: 'long task' }),
-    codex.assistantMessage({ timestamp: syntheticTime(2), text: 'working' }),
-    codex.compacted({ timestamp: syntheticTime(3), message: 'summary one' }),
-    codex.assistantMessage({ timestamp: syntheticTime(4), text: 'still working' }),
-    codex.compacted({ timestamp: syntheticTime(5), message: 'summary two' }),
-    codex.agentMessage({ timestamp: syntheticTime(6), text: 'done' })
+    codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id, cwd: CWD }),
+    codex.userMessage({ timestamp: syntheticTime(1), ordinal: 1, text: 'long task' }),
+    codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'working' }),
+    codex.compacted({ timestamp: syntheticTime(3), ordinal: 3, message: 'summary one', window: 1 }),
+    codex.assistantMessage({ timestamp: syntheticTime(4), ordinal: 4, text: 'still working' }),
+    codex.compacted({ timestamp: syntheticTime(5), ordinal: 5, message: 'summary two', window: 2 }),
+    codex.agentMessage({ timestamp: syntheticTime(6), ordinal: 6, text: 'done' })
   ]
   const filePath = await realpath(writeSample(home, codexRolloutPath(id, 0), jsonl(rows)))
   const census = await censusCodex(home, { env: {} })

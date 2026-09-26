@@ -105,6 +105,55 @@ async function codexFixture(topLevel: number, extras: (root: string) => void): P
   return { root, sessions }
 }
 
+describe('② tool-written broken lines are listed but never grade the check', () => {
+  it('keeps ② at pass when the only problems are tool-written (Claude + Codex)', async () => {
+    const root = home()
+    const sid = syntheticUuid(90)
+    const claudeFile = fs.realpathSync(writeSample(root, path.join('.claude', 'projects', '-p', `${sid}.jsonl`), jsonl([
+      claude.user({ uuid: syntheticUuid(900), parentUuid: null, sessionId: sid, timestamp: syntheticTime(1), cwd: CWD, text: 'q' }),
+      '{"parentUuid":"broken","isSidechain":false,"type":"user","message":',
+      claude.assistant({ uuid: syntheticUuid(901), parentUuid: syntheticUuid(900), sessionId: sid, timestamp: syntheticTime(2), cwd: CWD, text: 'a', messageId: 'm90', requestId: 'r90' }),
+      '{"parentUuid":"tail","isSidechain":false,"type":"assis'
+    ], { trailingNewline: false })))
+    const codexId = syntheticUuid(91, 'c0de')
+    writeSample(root, codexRolloutPath(codexId, 0), jsonl([
+      codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id: codexId, cwd: CWD }),
+      '{"timestamp":"2026-09-20T09:00:01.000Z","ordinal":1,"type":"response_item","payload":',
+      codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'ok' })
+    ]))
+    const claudeCensus = await censusClaude(root)
+    const codexCensus = await censusCodex(root, { env: {} })
+    const parsed = new Map([[claudeFile, { records: 2, elapsedMs: 1, partial: false }]])
+    const result = contentCheck(ctx({ claude: claudeCensus, codex: codexCensus, readout: readout([], { claudeParsed: parsed }) }))
+    expect(result.bySource['claude-code'].verdict).toBe('pass')
+    expect(result.bySource.codex.verdict).toBe('pass')
+    expect(result.verdict).toBe('pass')
+    expect(result.bySource['claude-code'].oracle).toMatchObject({ toolBadLines: { value: 1, label: 'reported' }, toolTruncatedTails: { value: 1 } })
+    expect(result.bySource.codex.oracle).toMatchObject({ toolBadLines: { value: 1 }, toolTruncatedTails: { value: 0 } })
+    expect(result.findings.map((finding) => [finding.code, finding.source, finding.verdict, finding.count.value])).toEqual([
+      ['content.tool-bad-line', 'claude-code', 'not-applicable', 1],
+      ['content.truncated-tail', 'claude-code', 'not-applicable', 1],
+      ['content.tool-bad-line', 'codex', 'not-applicable', 1]
+    ])
+    expect(result.headline).toBe('逐文件读全，没有记录丢失；另有 3 行是工具自己写坏的，不计入结论')
+  })
+
+  it('still fails ② on a Swob loss next to a tool-written line', async () => {
+    const root = home()
+    const sid = syntheticUuid(92)
+    const file = fs.realpathSync(writeSample(root, path.join('.claude', 'projects', '-p', `${sid}.jsonl`), jsonl([
+      claude.user({ uuid: syntheticUuid(920), parentUuid: null, sessionId: sid, timestamp: syntheticTime(1), cwd: CWD, text: `q${String.fromCharCode(0x2028)}` }),
+      '{"broken":',
+      claude.assistant({ uuid: syntheticUuid(921), parentUuid: syntheticUuid(920), sessionId: sid, timestamp: syntheticTime(2), cwd: CWD, text: 'a', messageId: 'm92', requestId: 'r92' })
+    ])))
+    const census = await censusClaude(root)
+    const result = contentCheck(ctx({ claude: census, readout: readout([], { claudeParsed: new Map([[file, { records: 1, elapsedMs: 1, partial: false }]]) }) }))
+    expect(result.bySource['claude-code'].verdict).toBe('fail')
+    expect(result.findings.find((finding) => finding.code === 'content.line-separator-split')?.verdict).toBe('fail')
+    expect(result.findings.find((finding) => finding.code === 'content.tool-bad-line')?.verdict).toBe('not-applicable')
+  })
+})
+
 describe('① inclusion buckets and thresholds (Codex)', () => {
   it('attaches children, reports a nested orphan (≤ 1 % → warn) and excludes empty sessions', async () => {
     const parent = syntheticUuid(1000, 'c0de')

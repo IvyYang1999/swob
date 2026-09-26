@@ -11,7 +11,7 @@ import * as fs from 'node:fs'
 export interface JsonlRecordMeta {
   /** 0-based physical line index (split on `\n` only). */
   lineIndex: number
-  /** The raw line contains U+2028 or U+2029 as a literal character (escaped ` ` does not count). */
+  /** The raw line contains U+2028 or U+2029 as a literal character (the six-character JSON escape of U+2028 does not count). */
   lineSeparator: boolean
   /** The raw line contains a CR that is not the CR of a trailing CRLF. */
   bareCr: boolean

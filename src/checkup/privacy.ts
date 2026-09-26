@@ -1,8 +1,9 @@
 /**
  * Privacy primitives for the kernel checkup.
  *
- * - Salted 8-hex sample ids (the salt is derived in memory; it is never written
- *   to disk and never placed in a report).
+ * - Salted 8-hex sample ids. The salt is derived in memory from the machine
+ *   identifier (never the hostname, which changes with the network), is never
+ *   written to disk and never placed in a report; only its 8-hex fingerprint is.
  * - Path redaction for diagnostics.
  * - A two-layer scanner that must pass before any report is written:
  *   ① whitelist: every string is a registered enum/code/source/unit/root, an
@@ -10,7 +11,9 @@
  *   ② heuristics: absolute paths, data-file names, UUIDs, Codex rollout names,
  *      long hex runs and non-template text fragments of 20+ characters.
  */
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
@@ -30,17 +33,103 @@ export function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-/** Stable per-machine salt: uid + hostname + real home, hashed. Kept in memory only. */
-export function derivePrivacySalt(input: { uid?: number; hostname?: string; homeDir?: string } = {}): string {
-  let uid = input.uid
-  let homeDir = input.homeDir
-  if (uid === undefined || homeDir === undefined) {
-    const info = os.userInfo()
-    uid ??= info.uid
-    homeDir ??= info.homedir
+// —— salt ——
+
+/** Fixed domain-separation constant mixed into the salt. */
+const SALT_DOMAIN = 'swob-kernel-checkup-salt/v2'
+
+export type MachineIdentitySource = 'io-platform-uuid' | 'machine-id' | 'machine-guid' | 'user-home'
+export interface MachineIdentity { source: MachineIdentitySource; value: string }
+
+const UUID_TEXT = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/
+const MACHINE_ID_TEXT = /^[0-9a-f]{32}$/
+
+/** `ioreg -rd1 -c IOPlatformExpertDevice` output → IOPlatformUUID (upper case), or null. */
+export function parseIoregPlatformUuid(output: string): string | null {
+  const match = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(output)
+  return match && UUID_TEXT.test(match[1]) ? match[1].toUpperCase() : null
+}
+
+/** Windows `reg query` of the Cryptography key's MachineGuid value → MachineGuid (lower case), or null. */
+export function parseWindowsMachineGuid(output: string): string | null {
+  const match = /MachineGuid\s+REG_SZ\s+(\S+)/i.exec(output)
+  return match && UUID_TEXT.test(match[1]) ? match[1].toLowerCase() : null
+}
+
+/** `/etc/machine-id` content → 32 lower-case hex, or null. */
+export function parseLinuxMachineId(content: string): string | null {
+  const value = content.trim().toLowerCase()
+  return MACHINE_ID_TEXT.test(value) ? value : null
+}
+
+function commandOutput(command: string, args: string[]): string | null {
+  try {
+    return execFileSync(command, args, {
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true
+    })
+  } catch {
+    return null
   }
-  const hostname = input.hostname ?? os.hostname()
-  return sha256Hex(`swob-checkup-salt\0${uid}\0${hostname}\0${homeDir}`)
+}
+
+/** Read the platform machine identifier without writing anything; null when unavailable. */
+export function readMachineIdentifier(platform: NodeJS.Platform = process.platform): MachineIdentity | null {
+  if (platform === 'darwin') {
+    const output = commandOutput('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'])
+    const value = output === null ? null : parseIoregPlatformUuid(output)
+    return value ? { source: 'io-platform-uuid', value } : null
+  }
+  if (platform === 'linux') {
+    for (const file of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
+      try {
+        const value = parseLinuxMachineId(fs.readFileSync(file, 'utf8'))
+        if (value) return { source: 'machine-id', value }
+      } catch { /* try the next location */ }
+    }
+    return null
+  }
+  if (platform === 'win32') {
+    const output = commandOutput('reg', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid'])
+    const value = output === null ? null : parseWindowsMachineGuid(output)
+    return value ? { source: 'machine-guid', value } : null
+  }
+  return null
+}
+
+export interface MachineIdentityOptions {
+  platform?: NodeJS.Platform
+  readMachineId?: (platform: NodeJS.Platform) => MachineIdentity | null
+}
+
+/** Machine identifier, falling back to `os.userInfo()` username + home directory. No hostname. */
+export function machineIdentity(options: MachineIdentityOptions = {}): MachineIdentity {
+  const identity = (options.readMachineId ?? readMachineIdentifier)(options.platform ?? process.platform)
+  if (identity) return identity
+  const info = os.userInfo()
+  return { source: 'user-home', value: `${info.username}\0${info.homedir}` }
+}
+
+/** Salt = sha256(fixed constant + machine identity). */
+export function saltFromMachineIdentity(identity: MachineIdentity): string {
+  return sha256Hex(`${SALT_DOMAIN}\0${identity.value}`)
+}
+
+let defaultSalt: string | null = null
+
+/** Stable per-machine salt, kept in memory only (never written, never reported). */
+export function derivePrivacySalt(options?: MachineIdentityOptions): string {
+  if (options) return saltFromMachineIdentity(machineIdentity(options))
+  defaultSalt ??= saltFromMachineIdentity(machineIdentity())
+  return defaultSalt
+}
+
+/** First 8 hex of sha256(salt): lets a later comparison check that two reports used the same salt. */
+export function saltFingerprint(salt: string): string {
+  return sha256Hex(salt).slice(0, 8)
 }
 
 /** Salted 8-hex identifier (the only sample id format reports may carry). */

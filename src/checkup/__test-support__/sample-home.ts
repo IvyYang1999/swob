@@ -24,6 +24,42 @@ export const CANARY = {
   codexSessionUuid: '0196c1a0-7e57-7c1a-8a00-00000000ca11'
 } as const
 
+const SANDBOX_REFUSAL = 'refusing to write sample data outside the Vitest sandbox'
+
+function nearestRealpath(target: string): string {
+  const tail: string[] = []
+  let current = path.resolve(target)
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...tail.reverse())
+    } catch {
+      const parent = path.dirname(current)
+      if (parent === current) throw new Error(SANDBOX_REFUSAL)
+      tail.push(path.basename(current))
+      current = parent
+    }
+  }
+}
+
+/**
+ * Fail closed unless `target` resolves strictly inside the per-file Vitest
+ * sandbox created by src/main/__test-support__/isolate-home.ts.
+ */
+export function assertInsideTestSandbox(target: string): void {
+  const root = process.env.SWOB_E2E_SANDBOX_ROOT
+  if (process.env.NODE_ENV !== 'test' || !root) throw new Error(SANDBOX_REFUSAL)
+  let realRoot: string
+  try {
+    realRoot = fs.realpathSync.native(root)
+  } catch {
+    throw new Error(SANDBOX_REFUSAL)
+  }
+  const relative = path.relative(realRoot, nearestRealpath(target))
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(SANDBOX_REFUSAL)
+  }
+}
+
 export interface SampleHome {
   home: string
   claudeProject: string
@@ -38,6 +74,7 @@ export interface SampleHome {
 }
 
 export function buildSampleHome(home: string): SampleHome {
+  assertInsideTestSandbox(home)
   const cwd = CANARY.absolutePath
   const project = path.join('.claude', 'projects', cwd.replace(/[/.]/g, '-'))
   const sidA = CANARY.sessionUuid
@@ -101,7 +138,10 @@ export function buildSampleHome(home: string): SampleHome {
     codex.topLevelMeta({ timestamp: at(37), ordinal: 0, id: empty, cwd }),
     codex.userMessage({ timestamp: at(38), ordinal: 1, text: 'anyone?' })
   ]))
-  const db = new Database(path.join(home, '.codex', 'state_5.sqlite'))
+  const stateDbPath = path.join(home, '.codex', 'state_5.sqlite')
+  // Read-write open (journal_mode change): only ever inside the sandbox.
+  assertInsideTestSandbox(stateDbPath)
+  const db = new Database(stateDbPath)
   try {
     db.pragma('journal_mode = DELETE')
     db.exec(`CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, source TEXT NOT NULL, thread_source TEXT, archived INTEGER NOT NULL DEFAULT 0, tokens_used INTEGER NOT NULL DEFAULT 0);

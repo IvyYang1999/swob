@@ -95,23 +95,44 @@ export function contentThresholdVerdict(input: { parseable: number; lost: number
   return 'warn'
 }
 
+/**
+ * Lines the tool itself wrote broken (bad lines, truncated tails) are not Swob
+ * losses: they are listed on their own (findings + `toolBadLines` /
+ * `toolTruncatedTails`) and never grade check ② (dispatcher decision after the
+ * C1a review). Their findings carry `not-applicable`, which takes no part in
+ * any verdict, and they are also filtered out explicitly below.
+ */
+export const TOOL_SIDE_CODES: ReadonlySet<string> = new Set(['content.tool-bad-line', 'content.truncated-tail'])
+
 function toolFindings(ctx: CheckContext, source: string, groups: Tally[]): Finding[] {
   const findings: Finding[] = []
   const badLines = groups.reduce((sum, group) => sum + group.badLines, 0)
   const truncated = groups.reduce((sum, group) => sum + group.truncatedTails, 0)
   if (badLines > 0) {
     findings.push(makeFinding({
-      code: 'content.tool-bad-line', verdict: 'warn', source, count: reported(badLines, 'lines'),
+      code: 'content.tool-bad-line', verdict: 'not-applicable', source, count: reported(badLines, 'lines'),
       samples: sampleIds(ctx.salt, groups.flatMap((group) => group.badLinePaths))
     }))
   }
   if (truncated > 0) {
     findings.push(makeFinding({
-      code: 'content.truncated-tail', verdict: 'warn', source, count: reported(truncated, 'files'),
+      code: 'content.truncated-tail', verdict: 'not-applicable', source, count: reported(truncated, 'files'),
       samples: sampleIds(ctx.salt, groups.flatMap((group) => group.truncatedPaths))
     }))
   }
   return findings
+}
+
+function toolMeasures(groups: Tally[]): Record<string, Measure> {
+  return {
+    toolBadLines: reported(groups.reduce((sum, group) => sum + group.badLines, 0), 'lines'),
+    toolTruncatedTails: reported(groups.reduce((sum, group) => sum + group.truncatedTails, 0), 'files')
+  }
+}
+
+/** Swob-side findings only: tool-side findings never change a source verdict. */
+function swobSide(findings: readonly Finding[]): Finding[] {
+  return findings.filter((finding) => !TOOL_SIDE_CODES.has(finding.code))
 }
 
 function lossKey(prefix: string, suffix: string): string {
@@ -133,11 +154,14 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   const mains = census.units.filter((unit) => unit.kind === 'claude-main' && eligible(unit))
   const subagents = census.units.filter((unit) => unit.kind === 'claude-subagent' && eligible(unit))
   const changedFiles = census.units.filter((unit) => !eligible(unit)).length
+  const mainTally = tally(mains)
+  const subTally = tally(subagents)
+  const toolSide = toolFindings(ctx, 'claude-code', [mainTally, subTally])
+  const toolOracle = toolMeasures([mainTally, subTally])
 
   // Main files: Swob read count per file [R].
   if (ctx.readout.status !== 'ok') {
-    const mainTally = tally(mains)
-    const subTally = tally(subagents)
+    findings.push(...toolSide)
     return {
       verdict: 'undetermined',
       swob: { mainRead: unavailable('records', ctx.readout.reason ?? 'readout.not-isolated') },
@@ -148,6 +172,7 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
         subagentFiles: reported(subTally.files, 'files'),
         subagentParseable: reported(subTally.parseable, 'records'),
         subagentBadLines: reported(subTally.badLines, 'lines'),
+        ...toolOracle,
         excludedChangedFiles: reported(changedFiles, 'files')
       },
       oracleIds: ['census.claude-jsonl']
@@ -182,15 +207,13 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
       unexplainedPaths.push(unit.path)
     }
   }
-  const mainTally = tally(mains)
   const comparedTally = tally(compared)
-  const subTally = tally(subagents)
   const subKinds = emptyLossKinds()
   for (const unit of subagents) addKinds(subKinds, unit.hazardKinds)
   const subLost = sumKinds(subKinds)
   const subLossPaths = subagents.filter((unit) => sumKinds(unit.hazardKinds) > 0).map((unit) => unit.path)
 
-  const sourceFindings: Finding[] = [...toolFindings(ctx, 'claude-code', [mainTally, subTally])]
+  const sourceFindings: Finding[] = [...toolSide]
   const explainedMainLost = mainLost - mainUnexplained
   const lineSeparatorLost = explainedMainLost + subLost
   if (lineSeparatorLost > 0) {
@@ -220,7 +243,7 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   const conversationLost = conversationLoss(mainKinds, mainUnexplained) + conversationLoss(subKinds, 0)
   const threshold = contentThresholdVerdict({ parseable: totalParseable, lost: totalLost, conversationLost })
   return {
-    verdict: sourceVerdict(threshold, sourceFindings, 'claude-code'),
+    verdict: sourceVerdict(threshold, swobSide(sourceFindings), 'claude-code'),
     swob: {
       mainRead: reported(swobRead, 'records'),
       mainLost: derived(mainLost, 'records'),
@@ -246,6 +269,7 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
       subagentParseable: reported(subTally.parseable, 'records'),
       subagentLineSeparatorRecords: reported(subTally.lineSeparatorRecords, 'records'),
       subagentTruncatedTails: reported(subTally.truncatedTails, 'files'),
+      ...toolOracle,
       excludedChangedFiles: reported(changedFiles, 'files')
     },
     oracleIds: ['census.claude-jsonl']
@@ -257,7 +281,10 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   const eligible = census.units.filter((unit) => !unit.unreadable && !ctx.changed.has(unit.path))
   const changedFiles = census.units.length - eligible.length
   const codexTally = tally(eligible)
+  const toolSide = toolFindings(ctx, 'codex', [codexTally])
+  const toolOracle = toolMeasures([codexTally])
   if (ctx.readout.status !== 'ok') {
+    findings.push(...toolSide)
     return {
       verdict: 'undetermined',
       swob: { read: unavailable('records', ctx.readout.reason ?? 'readout.not-isolated') },
@@ -265,6 +292,7 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
         files: reported(codexTally.files, 'files'),
         parseable: reported(codexTally.parseable, 'records'),
         badLines: reported(codexTally.badLines, 'lines'),
+        ...toolOracle,
         excludedChangedFiles: reported(changedFiles, 'files')
       },
       oracleIds: ['census.codex-jsonl']
@@ -280,7 +308,7 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   }
   const typeMeasures: Record<string, Measure> = {}
   for (const type of Object.keys(byType).sort()) typeMeasures[`lostByType:${type}`] = derived(byType[type], 'records')
-  const sourceFindings: Finding[] = [...toolFindings(ctx, 'codex', [codexTally])]
+  const sourceFindings: Finding[] = [...toolSide]
   if (lost > 0) {
     sourceFindings.push(makeFinding({
       code: 'content.line-separator-split', verdict: 'fail', source: 'codex', count: derived(lost, 'records'),
@@ -293,7 +321,7 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   findings.push(...sourceFindings)
   const threshold = contentThresholdVerdict({ parseable: codexTally.parseable, lost, conversationLost: conversationLoss(kinds, 0) })
   return {
-    verdict: sourceVerdict(threshold, sourceFindings, 'codex'),
+    verdict: sourceVerdict(threshold, swobSide(sourceFindings), 'codex'),
     swob: {
       read: unavailable('records', 'content.swob-per-file-unavailable'),
       lost: derived(lost, 'records', 'content.line-separator-split'),
@@ -308,6 +336,7 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
       parseable: reported(codexTally.parseable, 'records'),
       lineSeparatorRecords: reported(codexTally.lineSeparatorRecords, 'records'),
       truncatedTails: reported(codexTally.truncatedTails, 'files'),
+      ...toolOracle,
       excludedChangedFiles: reported(changedFiles, 'files')
     },
     oracleIds: ['census.codex-jsonl']
@@ -335,12 +364,16 @@ export function contentCheck(ctx: CheckContext): ReturnType<typeof assembleCheck
       pick('subagentLostUser') + pick('subagentLostAssistant') + pick('subagentLostToolResult') +
       pick('lostUser') + pick('lostAssistant') + pick('lostToolResult')
   }, 0)
+  // Tool-written broken lines (bad lines + truncated tails) are named in the pass headline, never graded.
+  const toolLines = Object.values(bySource).reduce((sum, entry) =>
+    sum + (entry.oracle.toolBadLines?.value ?? 0) + (entry.oracle.toolTruncatedTails?.value ?? 0), 0)
+  const passHeadline = toolLines > 0 ? 'content.pass-tool-lines' : 'content.pass'
   const result = assembleCheck({
     id: 'content',
     bySource,
     findings,
-    headline: lost === 0 ? 'content.pass' : conversationLost > 0 ? 'content.loss' : 'content.meta-only',
-    headlineNumbers: lost === 0 ? [] : conversationLost > 0 ? [lost, conversationLost] : [lost]
+    headline: lost === 0 ? passHeadline : conversationLost > 0 ? 'content.loss' : 'content.meta-only',
+    headlineNumbers: lost === 0 ? (toolLines > 0 ? [toolLines] : []) : conversationLost > 0 ? [lost, conversationLost] : [lost]
   })
   if (ctx.readout.status !== 'ok') result.reason = ctx.readout.reason ?? 'readout.not-isolated'
   return result

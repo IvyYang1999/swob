@@ -41,7 +41,7 @@ import {
   type CheckContext
 } from './checks/common'
 import { runSelfTest, type SelfTestResult } from './self-test/run-self-test'
-import { assertPrivacyClean, derivePrivacySalt, hostHash, saltedId, unitSignature } from './privacy'
+import { assertPrivacyClean, derivePrivacySalt, hostHash, saltFingerprint, saltedId, unitSignature } from './privacy'
 
 function abortIfNeeded(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -304,7 +304,8 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
       checkupVersion: CHECKUP_VERSION,
       selfTest: { passed: selfTest.passed, total: selfTest.total }
     },
-    machine: { platform: process.platform, hostHash: hostHash(salt), nodeVersion: process.version }
+    machine: { platform: process.platform, hostHash: hostHash(salt), nodeVersion: process.version },
+    saltFingerprint: saltFingerprint(salt)
   }
 
   if (scope.kind !== 'all') {

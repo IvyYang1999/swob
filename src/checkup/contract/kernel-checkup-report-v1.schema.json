@@ -113,6 +113,7 @@
       }
     },
     "timingsMs": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0 } },
+    "saltFingerprint": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
     "verdictReason": { "type": "string" },
     "selfTestCases": {
       "type": "array",

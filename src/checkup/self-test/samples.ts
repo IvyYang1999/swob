@@ -226,18 +226,6 @@ export const codex = {
       base_instructions: { text: 'synthetic base instructions' }
     })
   },
-  legacyTopLevelMeta(base: CodexRowBase & { id: string; cwd: string }): Record<string, unknown> {
-    return codexRow({ timestamp: base.timestamp }, 'session_meta', {
-      id: base.id,
-      timestamp: base.timestamp,
-      cwd: base.cwd,
-      originator: 'codex_cli_rs',
-      cli_version: '0.46.0',
-      source: 'cli',
-      model_provider: 'openai',
-      base_instructions: { text: 'synthetic base instructions' }
-    })
-  },
   threadSpawnMeta(base: CodexRowBase & { id: string; parentId: string; cwd: string; depth?: number; historyStartOrdinal?: number; forked?: boolean }): Record<string, unknown> {
     return codexRow(base, 'session_meta', {
       session_id: base.id,
@@ -292,10 +280,27 @@ export const codex = {
       rate_limits: null
     })
   },
-  compacted(base: CodexRowBase & { message: string }): Record<string, unknown> {
-    return codexRow(base, 'compacted', base.ordinal === undefined
-      ? { message: base.message }
-      : { message: base.message, replacement_history: [], compaction_response_id: null, latest_token_usage_record: null })
+  /**
+   * Top-level `compacted` row in the dominant real signature (724 of 1,137
+   * observed rows; every observed row carries `ordinal`):
+   * { timestamp, ordinal, type, payload: { message, replacement_history,
+   *   window_number, first_window_id, previous_window_id, window_id,
+   *   compaction_response_id, latest_token_usage_record } }. Values are synthetic.
+   */
+  compacted(base: CodexRowBase & { ordinal: number; message: string; window?: number }): Record<string, unknown> {
+    const window = base.window ?? 1
+    return codexRow(base, 'compacted', {
+      message: base.message,
+      replacement_history: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'synthetic carried-over request' }] }
+      ],
+      window_number: window,
+      first_window_id: 'synthetic-window-0',
+      previous_window_id: `synthetic-window-${window - 1}`,
+      window_id: `synthetic-window-${window}`,
+      compaction_response_id: null,
+      latest_token_usage_record: null
+    })
   },
   contextCompactionEvent(base: CodexRowBase & { threadId: string; turnId: string; itemId: string }): Record<string, unknown> {
     return codexRow(base, 'event_msg', {

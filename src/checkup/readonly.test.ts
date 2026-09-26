@@ -3,16 +3,19 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import schema from './contract/kernel-checkup-report-v1.schema.json'
 import { CHECK_ORDER, type CheckupReport } from './contract'
 import { runKernelCheckup } from './run'
-import { scanForPrivacy } from './privacy'
-import { CANARY, buildSampleHome, type SampleHome } from './__test-support__/sample-home'
+import { saltFingerprint, scanForPrivacy } from './privacy'
+import { CANARY, assertInsideTestSandbox, buildSampleHome, type SampleHome } from './__test-support__/sample-home'
 
 // One sample HOME per test file: kernel modules captured this HOME at import
 // time and keep module-level caches (codexFileInventory, configuredRootsCache).
+// Fail before anything else unless HOME is the Vitest sandbox home; the
+// sandbox (and with it the sample HOME) is removed by isolate-home.ts.
 const HOME = process.env.HOME!
+assertInsideTestSandbox(HOME)
 const SANDBOX = fs.realpathSync(process.env.SWOB_E2E_SANDBOX_ROOT!)
 
 function strictSnapshot(root: string, exclude: string[]): Map<string, string> {
@@ -45,6 +48,7 @@ const runs: Array<{ report: CheckupReport; consoleText: string; changes: string[
 
 async function capturedRun(): Promise<(typeof runs)[number]> {
   const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'checkup-readonly-state-')))
+  assertInsideTestSandbox(stateDir)
   const before = strictSnapshot(SANDBOX, [stateDir])
   const lines: string[] = []
   const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
@@ -67,9 +71,6 @@ beforeAll(async () => {
   runs.push(await capturedRun())
 }, 60_000)
 
-afterAll(() => {
-  fs.rmSync(path.join(HOME, '.claude'), { recursive: true, force: true })
-})
 
 describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
   it('writes nothing outside stateDir and leaves stateDir as it found it', () => {
@@ -109,6 +110,8 @@ describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
     const [inclusion, content, compaction] = report.checks
     expect(report.units).toHaveLength(sample.expected.claudeUnits + sample.expected.codexUnits)
     expect(content.bySource['claude-code'].oracle.mainBadLines.value).toBe(sample.expected.claudeMainBadLines)
+    expect(content.bySource['claude-code'].oracle.toolBadLines.value).toBe(sample.expected.claudeMainBadLines)
+    expect(content.findings.find((finding) => finding.code === 'content.tool-bad-line')?.verdict).toBe('not-applicable')
     expect(content.bySource['claude-code'].oracle.mainLineSeparatorRecords.value).toBe(sample.expected.claudeMainLineSeparatorRecords)
     expect(compaction.bySource.codex.oracle.legacyCompactedRows.value).toBe(sample.expected.codexTopLevelLegacyCompacted)
     expect(inclusion.bySource.kimi.oracle.legacyUnits.value).toBe(sample.expected.kimiLegacyUnits)
@@ -129,9 +132,25 @@ describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
   })
 
   it('is reproducible: unchanged data gives identical units and check results', () => {
+    expect(runs[0].report.saltFingerprint).toBe(saltFingerprint('readonly-test-salt'))
+    expect(runs[1].report.saltFingerprint).toBe(runs[0].report.saltFingerprint)
     expect(runs[1].report.units).toEqual(runs[0].report.units)
     expect(runs[1].report.checks).toEqual(runs[0].report.checks)
     expect(runs[1].report.verdict).toBe(runs[0].report.verdict)
+  })
+
+  it('refuses sample writes outside the Vitest sandbox (fail closed)', () => {
+    expect(() => assertInsideTestSandbox(path.join(HOME, 'not-yet', 'created.db'))).not.toThrow()
+    for (const outside of [os.userInfo().homedir, SANDBOX, path.join(SANDBOX, '..', 'escape'), '/']) {
+      expect(() => assertInsideTestSandbox(outside)).toThrow(/outside the Vitest sandbox/)
+    }
+    const previous = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      expect(() => assertInsideTestSandbox(HOME)).toThrow(/outside the Vitest sandbox/)
+    } finally {
+      process.env.NODE_ENV = previous
+    }
   })
 
   it('records the SQLite read side effects instead of hiding them', () => {

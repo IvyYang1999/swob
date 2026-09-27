@@ -215,6 +215,7 @@ import {
   sessionUsageEvents,
   type UsageFactAbsenceEvidence
 } from './usage-fact-store'
+import { UsageFactSyncFailureTracker } from './usage-fact-sync-status'
 import { LatestSnapshotRunner } from './latest-snapshot-runner'
 import { ReportJobManager, type ReportJobRunner } from './report-job-manager'
 import { TranscriptWatcher, scanActiveTranscriptSourcesFromTree } from './transcript-watcher'
@@ -401,6 +402,9 @@ let latestPhysicalLoadEvidence: SessionLoadEvidence | null = null
 let libraryHydrationGeneration = 0
 let libraryHydrationActive = 0
 let usageFactSyncError: unknown = null
+// The failure streak behind usageFactSyncError, shown on the Insights page:
+// counted once per failed run (onError), cleared by a committed sync.
+const usageFactSyncFailures = new UsageFactSyncFailureTracker()
 interface UsageFactSyncSnapshot {
   sessions: SessionSummary[]
   folders: Folder[]
@@ -1274,6 +1278,8 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
             )
           }
           usageFactSyncError = null
+          const recovered = usageFactSyncFailures.recordSuccess()
+          if (recovered) writeLifecycleLog(recovered.event, recovered.fields)
           mainWindow?.webContents.send('insights:factsUpdated', result)
           return result
         } catch (error) {
@@ -1289,7 +1295,15 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
       }),
       onError: (error) => {
         usageFactSyncError = error
-        if (!runtimeShuttingDown) console.error('[usage-facts] background synchronization failed:', error)
+        if (runtimeShuttingDown) return
+        // The runner calls this once per failed run: count here only. The
+        // first failure of a streak and a changed error are logged (the
+        // lifecycle line with name, code and count, never the message); a
+        // steady failure is not repeated, the Insights page shows its count.
+        const entry = usageFactSyncFailures.recordFailure(error)
+        if (!entry) return
+        console.error('[usage-facts] background synchronization failed:', error)
+        writeLifecycleLog(entry.event, entry.fields)
       }
     })
   }
@@ -3539,7 +3553,9 @@ ipcMain.handle(
 
 ipcMain.handle('insights:queryBundle', async (_event, scope: AnalysisScope) => {
   await ensureUsageFactsReady()
-  return queryInsightsBundle(scope)
+  // The sync status rides along per call, outside the revision-keyed bundle
+  // cache: a failed sync does not move the revision.
+  return { ...queryInsightsBundle(scope), lastSyncError: usageFactSyncFailures.current() }
 })
 
 ipcMain.handle(

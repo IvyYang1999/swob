@@ -181,6 +181,22 @@ export interface InsightsQueryBundleResult {
     projects: Array<{ kind: 'project' | 'folder'; key: string; label: string }>
   }
   results: Record<DashboardAnalysisDimension, InsightsQueryResult>
+  /**
+   * Attached per call by the desktop IPC, outside the revision-keyed bundle
+   * cache: the background usage sync's current failure streak, null when the
+   * last sync committed.
+   */
+  lastSyncError?: UsageFactSyncFailure | null
+}
+
+/** The background usage sync's current failure streak. Error name, code and counts only. */
+export interface UsageFactSyncFailure {
+  /** When the latest failed sync ended (ISO 8601). */
+  at: string
+  errorName: string
+  errorCode: string | null
+  /** Failed syncs since the last committed one. */
+  consecutiveFailures: number
 }
 
 export interface InsightsDrilldownSession {

@@ -429,7 +429,10 @@ export function buildInsights(
       projectStats.inputTokens += input
       projectStats.outputTokens += output
 
-      const eventsWithModels = accounting.usageEvents.filter((event) => event.modelCanonical || event.modelRaw)
+      // Billing owners only, the calls totalTokens counts: a forked child's
+      // copy of its parent's call would add that call again under a model.
+      const eventsWithModels = uniqueBillingEvents(accounting.usageEvents)
+        .filter((event) => event.modelCanonical || event.modelRaw)
       if (eventsWithModels.length > 0) {
         for (const event of eventsWithModels) {
           const model = event.modelCanonical || normalizeModelName(event.modelRaw!)
@@ -468,7 +471,13 @@ export function buildInsights(
     totalTime += estimatedTime
 
     const factDays = new Map<string, number>()
-    for (const fact of facts) {
+    // facts map accounting.usageEvents one to one, copies included. Keep the
+    // billing owners' facts only, so byDate, heatmap, hourly and unknown-time
+    // usage add up to totalTokens. Align by index, not by object: a legacy
+    // session's accounting is rebuilt on every accountingForSession call.
+    const eventIndex = new Map(accounting.usageEvents.map((event, index) => [event, index] as const))
+    const ownerFacts = uniqueBillingEvents(accounting.usageEvents).map((event) => facts[eventIndex.get(event)!])
+    for (const fact of ownerFacts) {
       const factInput = fact.nonCachedInputTokens + fact.cacheReadTokens + fact.cacheWriteTokens
       const factTokens = factInput + fact.outputTokens
       if (fact.occurredDay === 'unknown-time' || fact.occurredHour === null) {

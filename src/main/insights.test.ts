@@ -7,6 +7,7 @@ import {
   accountingFromUsageEvents,
   markExcludedFromRollups,
   mergeTokenAccountings,
+  processedTotal,
   tokenUsageFromAccounting,
   unavailableTokenAccounting,
   type UsageEvent
@@ -677,5 +678,114 @@ describe('buildInsights 时间字段', () => {
     const result = buildInsights([], [])
     expect(result.totalTime).toBe(0)
     expect(result.activeDays).toBe(0)
+  })
+})
+
+// 分叉子 agent 抄写的 token_count 与父会话同一计费事实（F1b ④）。usageFactsForSession 与审计行
+// 一一对应、含副本；byModel 和按日、热力图、小时分布、未知时间这几项都只能算 token 合计所算的
+// 那一条，合计才对得上 totalTokens（F1i）。
+// 键序照《附录-Codex键序普查》（__fixtures__/codex-rollout-synthetic.ts）；值全部是合成的。
+describe('buildInsights 按模型与按日聚合只算计费归属（F1i）', () => {
+  const PARENT_ID = '7f1b0000-0000-4000-8000-0000000000f5'
+  const CHILD_ID = '7f1b0000-0000-4000-8000-0000000000f6'
+  // byDate 与 heatmap 只覆盖最近 365 天：取两天前，用例不随日期过期。
+  const START = new Date(Date.now() - 2 * 86_400_000).toISOString()
+  const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0)
+
+  /**
+   * 父两轮 gpt-5（252,500 token）+ 分叉子：两条抄写的副本（252,500 token）与子自己一轮 gpt-5
+   * （60,500 token）。copyModel 是子在抄写前写下的 turn_context 的 model，没有这一行时副本没有
+   * model。父会话的账本是父 + 子的合并账本，子文件排在父之后，与 session-loader 一致。
+   */
+  function forkedSession(copyModel?: string): SessionSummary {
+    const at = codexClock(START)
+    const parentRows: CodexFixtureRow[] = [
+      codexRow.topLevelMeta({ ...at(), id: PARENT_ID, cwd: '/repo' }),
+      codexRow.turnContext({ ...at(), turnId: 'turn-1', cwd: '/repo', model: 'gpt-5' }),
+      codexRow.tokenCount({
+        ...at(),
+        total: { input: 100_000, cached: 20_000, output: 1_000 },
+        last: { input: 100_000, cached: 20_000, output: 1_000 }
+      }),
+      codexRow.turnContext({ ...at(), turnId: 'turn-2', cwd: '/repo', model: 'gpt-5' }),
+      codexRow.tokenCount({
+        ...at(),
+        total: { input: 250_000, cached: 60_000, output: 2_500 },
+        last: { input: 150_000, cached: 40_000, output: 1_500 }
+      })
+    ]
+    const forkedAt = codexTime(START, 3_600_000)
+    const child = codexClock(forkedAt)
+    const meta = child()
+    const leading = copyModel
+      ? [codexRow.turnContext({ ...child(), turnId: 'child-first-turn', cwd: '/repo', model: copyModel })]
+      : []
+    const inherited = copiedPrefix(
+      parentRows.slice(1).filter((row) => row.type !== 'turn_context'),
+      { startIso: codexTime(forkedAt, 10_000), firstOrdinal: 1 + leading.length }
+    )
+    const ownStart = 1 + leading.length + inherited.length
+    const own = codexClock(codexTime(forkedAt, 60_000), ownStart)
+    const childRows: CodexFixtureRow[] = [
+      codexRow.threadSpawnMeta({
+        ...meta, id: CHILD_ID, parentId: PARENT_ID, cwd: '/repo', depth: 1, historyStartOrdinal: ownStart
+      }),
+      ...leading,
+      ...inherited,
+      codexRow.turnContext({ ...own(), turnId: 'child-own-turn', cwd: '/repo', model: 'gpt-5' }),
+      codexRow.tokenCount({
+        ...own(),
+        total: { input: 310_000, cached: 80_000, output: 3_000 },
+        last: { input: 60_000, cached: 20_000, output: 500 }
+      })
+    ]
+    const merged = mergeTokenAccountings([
+      extractCodexTokenAccounting(parentRows as unknown as CodexLine[]),
+      extractCodexTokenAccounting(childRows as unknown as CodexLine[], 'subagent')
+    ], { auditSourceIds: [PARENT_ID, CHILD_ID] })
+    return makeSession({
+      sessionId: PARENT_ID, source: 'codex', cwds: ['/repo'],
+      tokenAccounting: merged, tokenUsage: tokenUsageFromAccounting(merged)
+    })
+  }
+
+  it.each([
+    ['副本没有 model（改前 byModel 就相等，byDate 多算）', undefined],
+    ['副本带同一个 model', 'gpt-5'],
+    ['副本带子 agent 的另一个 model', 'gpt-5.4']
+  ])('%s：byModel、byDate、热力图与小时分布的合计都等于 totalTokens', (_case, copyModel) => {
+    const session = forkedSession(copyModel)
+    const events = session.tokenAccounting!.usageEvents
+    // 前置：审计行 5 条共 565,500 token（副本 252,500），副本带着 copyModel。
+    expect(events.map((event) => event.model)).toEqual(['gpt-5', 'gpt-5', copyModel, copyModel, 'gpt-5'])
+    expect(sum(events.map((event) => processedTotal(event.components)))).toBe(565_500)
+
+    const result = buildInsights([session], [])
+
+    expect(result.totalTokens).toBe(313_000)
+    expect(result.byModel).toEqual([{ model: 'gpt-5', totalTokens: 313_000, sessionCount: 1 }])
+    expect(sum(result.byModel.map((model) => model.totalTokens))).toBe(result.totalTokens)
+    expect(sum(result.byDate.map((date) => date.totalTokens))).toBe(result.totalTokens)
+    expect(sum(result.heatmap.map((day) => day.value))).toBe(result.totalTokens)
+    expect(result.unknownTimeUsage).toEqual({ eventCount: 0, totalTokens: 0 })
+    // 三次调用：父两轮与子自己一轮。
+    expect(sum(result.hourlyDistribution)).toBe(3)
+  })
+
+  it('副本没有时间戳：未知时间用量也只算归属', () => {
+    const call = (scope: 'main' | 'subagent') => accountCodexUsage([{
+      kind: 'incremental', model: 'gpt-5', providerRaw: 'openai', inputTokens: 1_000, outputTokens: 100,
+      dedupHint: `untimed-${scope}`, billingFactKey: 'untimed-fact'
+    }], scope)
+    const merged = mergeTokenAccountings([call('main'), call('subagent')])
+    expect(merged.usageEvents).toHaveLength(2)
+
+    const result = buildInsights([makeSession({
+      sessionId: 'untimed', source: 'codex', tokenAccounting: merged, tokenUsage: tokenUsageFromAccounting(merged)
+    })], [])
+
+    expect(result.totalTokens).toBe(1_100)
+    expect(result.unknownTimeUsage).toEqual({ eventCount: 1, totalTokens: 1_100 })
+    expect(result.byModel).toEqual([{ model: 'gpt-5', totalTokens: 1_100, sessionCount: 1 }])
   })
 })

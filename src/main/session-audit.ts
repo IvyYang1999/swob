@@ -8,7 +8,7 @@
  * it is not API context overhead (t106 semantics).
  */
 import type { RawJsonlMessage } from './session-types'
-import { accountClaudeUsage, type TokenAccounting } from './token-accounting'
+import { accountClaudeUsage, uniqueBillingEvents, type TokenAccounting } from './token-accounting'
 import {
   aggregateValuations,
   valuationForAccounting,
@@ -534,9 +534,13 @@ export function auditSession(
     : readTools > totalTools * 0.5 ? 'research'
     : 'mixed'
 
+  // One row per billing fact: the owner the valuation above counts
+  // (uniqueBillingEvents). A forked child's copy of its parent's call stays an
+  // audit row but is not a second call, so it adds no tokens, value or turns
+  // under any model (Codex turns fall back to this call count).
   const modelEvents = new Map<string, typeof accounting.usageEvents>()
   const attributedRawModels = new Set<string>()
-  for (const event of accounting.usageEvents) {
+  for (const event of uniqueBillingEvents(accounting.usageEvents)) {
     const model = event.modelCanonical || event.modelRaw
     if (!model) continue
     if (event.modelRaw) attributedRawModels.add(event.modelRaw)

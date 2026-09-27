@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { extractCodexTokenAccounting, type CodexLine } from './codex-loader'
 import { auditSession } from './session-audit'
+import { mergeTokenAccountings, type TokenAccounting } from './token-accounting'
+import {
+  codexClock,
+  codexRow,
+  codexTime,
+  copiedPrefix,
+  type CodexFixtureRow
+} from './__fixtures__/codex-rollout-synthetic'
 
 function assistant(
   uuid: string,
@@ -148,5 +157,87 @@ describe('session audit token semantics', () => {
     expect(audit.findings.some((finding) => finding.toLowerCase().includes('framework overhead'))).toBe(false)
     expect(audit.healthScore).toBe(80)
     expect('frameworkOverhead' in audit).toBe(false)
+  })
+})
+
+// 分叉子 agent 抄写的 token_count 与父会话同一计费事实（F1b ④）。审计行保留副本，按模型拆分
+// 只能算 token 合计与总估价所算的那一条，各行之和才等于总额（F1i）。
+// 键序照《附录-Codex键序普查》（__fixtures__/codex-rollout-synthetic.ts）；值全部是合成的。
+describe('按模型拆分只算计费归属（F1i）', () => {
+  const PARENT_ID = '7f1b0000-0000-4000-8000-0000000000f7'
+  const CHILD_ID = '7f1b0000-0000-4000-8000-0000000000f8'
+
+  /**
+   * 父两轮 gpt-5（252,500 token，$0.27）+ 分叉子：两条抄写的副本（252,500 token）与子自己一轮
+   * gpt-5（60,500 token，$0.0575）。copyModel 是子在抄写前写下的 turn_context 的 model，
+   * 没有这一行时副本没有 model。子文件排在父之后合并，与 session-loader 一致。
+   */
+  function forkedLedger(copyModel?: string): TokenAccounting {
+    const at = codexClock('2026-07-31T12:00:00.000Z')
+    const parentRows: CodexFixtureRow[] = [
+      codexRow.topLevelMeta({ ...at(), id: PARENT_ID, cwd: '/repo' }),
+      codexRow.turnContext({ ...at(), turnId: 'turn-1', cwd: '/repo', model: 'gpt-5' }),
+      codexRow.tokenCount({
+        ...at(),
+        total: { input: 100_000, cached: 20_000, output: 1_000 },
+        last: { input: 100_000, cached: 20_000, output: 1_000 }
+      }),
+      codexRow.turnContext({ ...at(), turnId: 'turn-2', cwd: '/repo', model: 'gpt-5' }),
+      codexRow.tokenCount({
+        ...at(),
+        total: { input: 250_000, cached: 60_000, output: 2_500 },
+        last: { input: 150_000, cached: 40_000, output: 1_500 }
+      })
+    ]
+    const forkedAt = '2026-07-31T13:00:00.000Z'
+    const child = codexClock(forkedAt)
+    const meta = child()
+    const leading = copyModel
+      ? [codexRow.turnContext({ ...child(), turnId: 'child-first-turn', cwd: '/repo', model: copyModel })]
+      : []
+    const inherited = copiedPrefix(
+      parentRows.slice(1).filter((row) => row.type !== 'turn_context'),
+      { startIso: codexTime(forkedAt, 10_000), firstOrdinal: 1 + leading.length }
+    )
+    const ownStart = 1 + leading.length + inherited.length
+    const own = codexClock(codexTime(forkedAt, 60_000), ownStart)
+    const childRows: CodexFixtureRow[] = [
+      codexRow.threadSpawnMeta({
+        ...meta, id: CHILD_ID, parentId: PARENT_ID, cwd: '/repo', depth: 1, historyStartOrdinal: ownStart
+      }),
+      ...leading,
+      ...inherited,
+      codexRow.turnContext({ ...own(), turnId: 'child-own-turn', cwd: '/repo', model: 'gpt-5' }),
+      codexRow.tokenCount({
+        ...own(),
+        total: { input: 310_000, cached: 80_000, output: 3_000 },
+        last: { input: 60_000, cached: 20_000, output: 500 }
+      })
+    ]
+    return mergeTokenAccountings([
+      extractCodexTokenAccounting(parentRows as unknown as CodexLine[]),
+      extractCodexTokenAccounting(childRows as unknown as CodexLine[], 'subagent')
+    ], { auditSourceIds: [PARENT_ID, CHILD_ID] })
+  }
+
+  it.each([
+    ['副本没有 model（守卫：改前就相等）', undefined],
+    ['副本带同一个 model', 'gpt-5'],
+    ['副本带子 agent 的另一个已定价 model', 'gpt-5.4']
+  ])('%s：按模型各行之和 = 总额，turns 是计费归属的条数', (_case, copyModel) => {
+    const ledger = forkedLedger(copyModel)
+    // 前置：审计行 5 条（父 2、副本 2、子自己 1），副本带着 copyModel；合计只算归属 313,000。
+    expect(ledger.usageEvents.map((event) => event.model)).toEqual(['gpt-5', 'gpt-5', copyModel, copyModel, 'gpt-5'])
+    expect(ledger.billingTotal).toBe(313_000)
+
+    const audit = auditSession([], PARENT_ID, ledger)
+    const total = audit.valuation.value.usd!
+    const rowsUsd = audit.modelUsage.reduce((sum, row) => sum + (row.valuation.usd ?? 0), 0)
+
+    expect(total).toBeCloseTo(0.3275, 12)
+    expect(rowsUsd).toBeCloseTo(total, 12)
+    expect(audit.modelUsage.map((row) => ({
+      model: row.model, turns: row.turns, tokens: row.inputTokens + row.outputTokens
+    }))).toEqual([{ model: 'gpt-5', turns: 3, tokens: 313_000 }])
   })
 })

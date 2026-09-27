@@ -7,6 +7,7 @@ import { CLI_COMMANDS, CLI_VERSION, generateSkillContent } from './command-regis
 import type { CliIo } from './index'
 import type { CheckupWorkerLaunch } from './checkup-command'
 import { bundleCheckupWorker, repositoryNodeModules } from '../checkup/__fixtures__/worker-bundle'
+import { deriveHostBootIdentity, deriveLibraryHostProof } from '../main/host-identity'
 
 let tempHome = ''
 let libraryRoot = ''
@@ -215,6 +216,14 @@ describe.sequential('Swob CLI machine contract', () => {
 
   it('doctor locks/library 对 Library 与 machine identity 零写', async () => {
     const machineDir = path.join(tempHome, '.swob-machine')
+    // The identity paths the lease module really uses under this harness, including the backup copy.
+    const lease = await import('../main/library-writer-lease')
+    const { getOrCreateHostIdentity } = await import('../main/host-identity')
+    const identityPath = lease.resolveLibraryWriterHostIdentityStoragePath(process.platform)
+    const backupPath = lease.resolveLibraryWriterHostIdentityBackupPath(process.platform)
+    getOrCreateHostIdentity({ storagePath: identityPath })
+    fs.rmSync(backupPath, { force: true })
+    const identityBefore = fs.readFileSync(identityPath, 'utf8')
     const before = libraryFileEvidence(libraryRoot)
 
     expect((await invoke(['doctor', 'locks', '--json'])).code).toBe(0)
@@ -222,6 +231,153 @@ describe.sequential('Swob CLI machine contract', () => {
 
     expect(libraryFileEvidence(libraryRoot)).toEqual(before)
     expect(fs.existsSync(machineDir)).toBe(false)
+    // Read-only diagnostics never write the backup copy, even when it is missing.
+    expect(fs.existsSync(backupPath)).toBe(false)
+    expect(fs.readFileSync(identityPath, 'utf8')).toBe(identityBefore)
+  })
+
+  it('doctor locks/library 读到被占用的锁（会读本机身份）时也不写身份备用副本', async () => {
+    const lease = await import('../main/library-writer-lease')
+    const { getOrCreateHostIdentity } = await import('../main/host-identity')
+    const identityPath = lease.resolveLibraryWriterHostIdentityStoragePath(process.platform)
+    const backupPath = lease.resolveLibraryWriterHostIdentityBackupPath(process.platform)
+    getOrCreateHostIdentity({ storagePath: identityPath })
+    fs.rmSync(backupPath, { force: true })
+    const identityBefore = fs.readFileSync(identityPath, 'utf8')
+    const locks = path.join(libraryRoot, '.swob', 'locks')
+    const foreignHost = '20000000-0000-4000-8000-000000000905'
+    const salt = '30000000-0000-4000-8000-000000000905'
+    fs.mkdirSync(path.join(locks, 'library-writer'), { recursive: true })
+    fs.writeFileSync(path.join(locks, 'library-writer', 'foreign.owner.json'), JSON.stringify({
+      schemaVersion: 2,
+      ownerNonce: 'foreign',
+      deviceId: 'foreign-device',
+      pid: 76437,
+      bootIdentity: deriveHostBootIdentity(foreignHost, 'boot-0904', salt),
+      processStartFingerprint: 'start-76437',
+      hostProof: deriveLibraryHostProof(foreignHost, salt),
+      hostProofSalt: salt,
+      mode: 'maintenance',
+      acquiredAt: '2026-09-04T01:00:00.000Z',
+      heartbeatAt: '2026-09-04T01:00:00.000Z',
+      leaseExpiresAt: '2026-09-04T01:00:15.000Z'
+    }))
+    const before = libraryFileEvidence(libraryRoot)
+    try {
+      // remote-owner (not unverifiable-owner) proves the inspection read this machine's identity.
+      expect(parsed(await invoke(['doctor', 'locks', '--json']))).toMatchObject({ state: 'blocked', reason: 'remote-owner' })
+      expect((await invoke(['doctor', 'library', '--json'])).code).toBe(0)
+
+      expect(libraryFileEvidence(libraryRoot)).toEqual(before)
+      expect(fs.existsSync(backupPath)).toBe(false)
+      expect(fs.readFileSync(identityPath, 'utf8')).toBe(identityBefore)
+    } finally {
+      fs.rmSync(locks, { recursive: true, force: true })
+    }
+  })
+
+  describe.sequential('doctor locks --recover（显式、证据绑定的写锁恢复）', () => {
+    const lockParent = () => path.join(libraryRoot, '.swob', 'locks')
+    const lockDir = () => path.join(lockParent(), 'library-writer')
+    const confirm = 'RECOVER_LIBRARY_WRITER_LOCK'
+
+    /** The 09-04 incident shape: v2 owner, another boot, a host proof this machine cannot reproduce. */
+    function writeIncidentLock(): void {
+      const foreignHost = '20000000-0000-4000-8000-000000000904'
+      const salt = '30000000-0000-4000-8000-000000000904'
+      fs.mkdirSync(lockDir(), { recursive: true })
+      fs.writeFileSync(path.join(lockDir(), 'incident.owner.json'), JSON.stringify({
+        schemaVersion: 2,
+        ownerNonce: 'incident',
+        deviceId: 'incident-device',
+        pid: 76437,
+        bootIdentity: deriveHostBootIdentity(foreignHost, 'boot-0904', salt),
+        processStartFingerprint: 'start-76437',
+        hostProof: deriveLibraryHostProof(foreignHost, salt),
+        hostProofSalt: salt,
+        mode: 'maintenance',
+        acquiredAt: '2026-09-04T01:00:00.000Z',
+        heartbeatAt: '2026-09-04T01:00:00.000Z',
+        leaseExpiresAt: '2026-09-04T01:00:15.000Z'
+      }))
+    }
+
+    async function inspectedEvidence(): Promise<string> {
+      const status = parsed(await invoke(['doctor', 'locks', '--json'])) as any
+      expect(status).toMatchObject({ state: 'blocked', manualRecoveryAvailable: true })
+      expect(status.evidenceHash).toMatch(/^[0-9a-f]{64}$/)
+      return status.evidenceHash
+    }
+
+    function refused(invocation: Invocation, reason: string): void {
+      expect(invocation.code).toBe(1)
+      expect(JSON.parse(invocation.stdout)).toEqual({ recovered: false, reason })
+      expect(parsedError(invocation).error).toMatchObject({ code: 'LIBRARY_WRITER_RECOVERY_REFUSED', reason })
+    }
+
+    afterAll(() => {
+      fs.rmSync(lockParent(), { recursive: true, force: true })
+    })
+
+    it('缺 --recover / --evidence / --confirm 任一即退出 1 + 原因码，且对 Library 零写', async () => {
+      writeIncidentLock()
+      const evidence = await inspectedEvidence()
+      const before = libraryFileEvidence(libraryRoot)
+
+      refused(await invoke(['doctor', 'locks', '--evidence', evidence, '--confirm', confirm, '--json']), 'recover-flag-required')
+      refused(await invoke(['doctor', 'locks', '--recover', '--confirm', confirm, '--json']), 'evidence-required')
+      refused(await invoke(['doctor', 'locks', '--recover', '--evidence', '--confirm', confirm, '--json']), 'evidence-required')
+      refused(await invoke(['doctor', 'locks', '--recover', '--evidence', 'not-a-hash', '--confirm', confirm, '--json']), 'evidence-required')
+      refused(await invoke(['doctor', 'locks', '--recover', '--evidence', evidence, '--json']), 'confirmation-required')
+      refused(await invoke(['doctor', 'locks', '--recover', '--evidence', evidence, '--confirm', 'yes', '--json']), 'confirmation-required')
+
+      expect(libraryFileEvidence(libraryRoot)).toEqual(before)
+      fs.rmSync(lockParent(), { recursive: true, force: true })
+    })
+
+    it('错哈希拒绝（evidence-changed，退出 1），锁原样保留', async () => {
+      writeIncidentLock()
+      const evidence = await inspectedEvidence()
+      const wrong = evidence.replace(/^./, evidence[0] === '0' ? '1' : '0')
+      const before = libraryFileEvidence(libraryRoot)
+
+      refused(await invoke(['doctor', 'locks', '--recover', '--evidence', wrong, '--confirm', confirm, '--json']), 'evidence-changed')
+
+      expect(libraryFileEvidence(libraryRoot)).toEqual(before)
+      expect(fs.readdirSync(lockDir())).toEqual(['incident.owner.json'])
+      fs.rmSync(lockParent(), { recursive: true, force: true })
+    })
+
+    it('三者齐全且证据一致：成功恢复，旧锁整体移入 writer-recovery-evidence（零写契约的反面）', async () => {
+      writeIncidentLock()
+      const evidence = await inspectedEvidence()
+      const ownerBytes = fs.readFileSync(path.join(lockDir(), 'incident.owner.json'), 'utf8')
+
+      const invocation = await invoke(['doctor', 'locks', '--recover', '--evidence', evidence, '--confirm', confirm, '--json'])
+
+      expect(invocation.code, invocation.stderr).toBe(0)
+      const result = JSON.parse(invocation.stdout)
+      expect(result).toMatchObject({ recovered: true, reason: 'recovered', quarantinePath: expect.any(String) })
+      expect(Object.keys(result).sort()).toEqual(['quarantinePath', 'reason', 'recovered'])
+      expect(path.dirname(result.quarantinePath)).toBe(path.join(fs.realpathSync(lockParent()), 'writer-recovery-evidence'))
+      expect(fs.readFileSync(path.join(result.quarantinePath, 'incident.owner.json'), 'utf8')).toBe(ownerBytes)
+      expect(fs.existsSync(lockDir())).toBe(false)
+      expect(parsed(await invoke(['doctor', 'locks', '--json']))).toMatchObject({ state: 'unlocked' })
+
+      // Once recovered, the same request finds nothing to recover.
+      refused(await invoke(['doctor', 'locks', '--recover', '--evidence', evidence, '--confirm', confirm, '--json']), 'unlocked')
+    })
+
+    it('不带恢复参数的 doctor locks 输出形状不变', async () => {
+      writeIncidentLock()
+      const status = parsed(await invoke(['doctor', 'locks', '--json'])) as Record<string, unknown>
+      expect(Object.keys(status).sort()).toEqual([
+        'evidenceHash', 'heartbeatAt', 'leaseExpired', 'leaseExpiresAt', 'manualRecoveryAvailable',
+        'mode', 'ownerAlive', 'ownerPid', 'reason', 'state', 'whyNotRecoverable'
+      ])
+      expect(JSON.stringify(status)).not.toContain('incident-device')
+      fs.rmSync(lockParent(), { recursive: true, force: true })
+    })
   })
 
   it('事故验收 1/2: manifest-only 完整 UUID 与唯一前缀可解析，lineage 损坏不否决', async () => {

@@ -5,11 +5,15 @@ import * as path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { build } from 'vite'
 import {
+  defaultHostIdentityBackupPath,
   defaultHostIdentityPath,
   deriveLibraryHostProof,
   getOrCreateHostIdentity,
   HostIdentityError,
-  readHostIdentity
+  readHostIdentity,
+  readHostMachineBinding,
+  type HostIdentityEvent,
+  type HostIdentityOptions
 } from './host-identity'
 
 const roots: string[] = []
@@ -219,3 +223,208 @@ describe('stable host identity', () => {
     expect(fs.existsSync(path.dirname(storagePath))).toBe(false)
   })
 })
+
+describe('machine-local host identity backup', () => {
+  const identityA = '10000000-0000-4000-8000-00000000000a'
+  const identityB = '20000000-0000-4000-8000-00000000000b'
+
+  function layout(label: string): { root: string; storagePath: string; backupPath: string } {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `swob-host-identity-backup-${label}-`))
+    roots.push(root)
+    return {
+      root,
+      // The incident removed the primary's whole directory, so the backup lives elsewhere.
+      storagePath: path.join(root, 'Shared', 'Swob', 'host-identity-v1.json'),
+      backupPath: path.join(root, 'home', '.claude-session-manager', 'host-identity-v1.json')
+    }
+  }
+
+  function options(
+    paths: { storagePath: string; backupPath: string },
+    overrides: Partial<HostIdentityOptions> = {}
+  ): HostIdentityOptions & { events: HostIdentityEvent[] } {
+    const events: HostIdentityEvent[] = []
+    return {
+      storagePath: paths.storagePath,
+      backupPath: paths.backupPath,
+      machineBinding: () => 'machine-a',
+      randomId: () => identityA,
+      now: () => 1_700_000_000_000,
+      eventSink: (event) => { events.push(event) },
+      ...overrides,
+      events
+    }
+  }
+
+  it('writes a machine-bound backup after the primary; the backup never carries the machine identifier', () => {
+    const paths = layout('write')
+    const first = options(paths)
+    expect(getOrCreateHostIdentity(first)).toBe(identityA)
+
+    const primary = JSON.parse(fs.readFileSync(paths.storagePath, 'utf8'))
+    const backup = JSON.parse(fs.readFileSync(paths.backupPath, 'utf8'))
+    expect(backup).toEqual({ ...primary, mac: expect.stringMatching(/^[0-9a-f]{64}$/) })
+    expect(fs.readFileSync(paths.backupPath, 'utf8')).not.toContain('machine-a')
+    expect(fs.statSync(paths.backupPath).mode & 0o777).toBe(0o600)
+    expect(first.events).toEqual([
+      { component: 'host-identity', event: 'host-identity-regenerated', backup: 'missing' },
+      { component: 'host-identity', event: 'host-identity-backup-written', previous: 'missing' }
+    ])
+
+    // A backup deleted later is written again from the existing primary.
+    fs.rmSync(paths.backupPath)
+    const again = options(paths, { machineBinding: () => 'machine-a', randomId: () => identityB })
+    expect(getOrCreateHostIdentity(again)).toBe(identityA)
+    expect(JSON.parse(fs.readFileSync(paths.backupPath, 'utf8'))).toEqual(backup)
+  })
+
+  it('primary directory removed: restores the same record from a verified backup instead of generating one', () => {
+    const paths = layout('restore')
+    getOrCreateHostIdentity(options(paths))
+    const primaryBytes = fs.readFileSync(paths.storagePath, 'utf8')
+    fs.rmSync(path.dirname(paths.storagePath), { recursive: true, force: true })
+
+    let generated = 0
+    const restore = options(paths, { randomId: () => { generated++; return identityB } })
+    expect(getOrCreateHostIdentity(restore)).toBe(identityA)
+
+    expect(generated).toBe(0)
+    expect(fs.readFileSync(paths.storagePath, 'utf8')).toBe(primaryBytes)
+    expect(restore.events).toEqual([{ component: 'host-identity', event: 'host-identity-restored', source: 'backup' }])
+  })
+
+  it.each([
+    {
+      label: 'another machine (HMAC key differs)',
+      damage: () => {},
+      binding: 'machine-b',
+      state: 'mismatch'
+    },
+    {
+      label: 'identity edited without its HMAC',
+      damage: (backupPath: string) => {
+        const record = JSON.parse(fs.readFileSync(backupPath, 'utf8'))
+        fs.writeFileSync(backupPath, JSON.stringify({ ...record, identity: '30000000-0000-4000-8000-00000000000c' }))
+      },
+      binding: 'machine-a',
+      state: 'mismatch'
+    },
+    {
+      label: 'corrupt JSON',
+      damage: (backupPath: string) => { fs.writeFileSync(backupPath, '{broken') },
+      binding: 'machine-a',
+      state: 'corrupt'
+    }
+  ])('an unverifiable backup ($label) is never restored: a new identity is generated and logged', ({ damage, binding, state }) => {
+    const paths = layout('reject')
+    getOrCreateHostIdentity(options(paths))
+    damage(paths.backupPath)
+    fs.rmSync(path.dirname(paths.storagePath), { recursive: true, force: true })
+
+    const regenerate = options(paths, { machineBinding: () => binding, randomId: () => identityB })
+    expect(getOrCreateHostIdentity(regenerate)).toBe(identityB)
+
+    expect(regenerate.events[0]).toEqual({ component: 'host-identity', event: 'host-identity-regenerated', backup: state })
+    // The backup follows the primary that now exists, under this machine's key.
+    expect(JSON.parse(fs.readFileSync(paths.backupPath, 'utf8'))).toMatchObject({ identity: identityB })
+  })
+
+  it('without a readable machine identifier the backup is neither trusted nor overwritten', () => {
+    const paths = layout('unbound')
+    getOrCreateHostIdentity(options(paths))
+    const backupBytes = fs.readFileSync(paths.backupPath, 'utf8')
+    fs.rmSync(path.dirname(paths.storagePath), { recursive: true, force: true })
+
+    const unbound = options(paths, { machineBinding: () => null, randomId: () => identityB })
+    expect(getOrCreateHostIdentity(unbound)).toBe(identityB)
+    expect(unbound.events).toEqual([
+      { component: 'host-identity', event: 'host-identity-regenerated', backup: 'unverified' }
+    ])
+    expect(fs.readFileSync(paths.backupPath, 'utf8')).toBe(backupBytes)
+  })
+
+  it('a corrupt primary is never replaced from the backup (no silent rotation of existing evidence)', () => {
+    const paths = layout('corrupt-primary')
+    getOrCreateHostIdentity(options(paths))
+    fs.writeFileSync(paths.storagePath, '{broken')
+
+    expect(() => getOrCreateHostIdentity(options(paths)))
+      .toThrowError(expect.objectContaining<Partial<HostIdentityError>>({ reason: 'corrupt' }))
+    expect(fs.readFileSync(paths.storagePath, 'utf8')).toBe('{broken')
+  })
+
+  it('never writes through a symlink at the backup path', () => {
+    const paths = layout('symlink')
+    const outside = path.join(paths.root, 'outside.json')
+    fs.writeFileSync(outside, 'outside')
+    fs.mkdirSync(path.dirname(paths.backupPath), { recursive: true })
+    fs.symlinkSync(outside, paths.backupPath)
+
+    expect(getOrCreateHostIdentity(options(paths))).toBe(identityA)
+    expect(fs.readFileSync(outside, 'utf8')).toBe('outside')
+    expect(fs.lstatSync(paths.backupPath).isSymbolicLink()).toBe(true)
+  })
+
+  it('read-only inspection neither reads nor writes the backup', () => {
+    const paths = layout('readonly')
+    getOrCreateHostIdentity(options(paths))
+    fs.rmSync(paths.backupPath)
+    expect(readHostIdentity(options(paths))).toBe(identityA)
+    expect(fs.existsSync(paths.backupPath)).toBe(false)
+
+    fs.rmSync(path.dirname(paths.storagePath), { recursive: true, force: true })
+    getOrCreateHostIdentity(options(paths))
+    fs.rmSync(path.dirname(paths.storagePath), { recursive: true, force: true })
+    // The backup exists, but the read-only path must not restore from it.
+    expect(readHostIdentity(options(paths))).toBeNull()
+    expect(fs.existsSync(paths.storagePath)).toBe(false)
+  })
+
+  it('an explicit storagePath without backupPath keeps the backup disabled', () => {
+    const paths = layout('disabled')
+    const events: HostIdentityEvent[] = []
+    getOrCreateHostIdentity({ storagePath: paths.storagePath, randomId: () => identityA, eventSink: (event) => { events.push(event) } })
+    expect(fs.existsSync(paths.backupPath)).toBe(false)
+    expect(events).toEqual([{ component: 'host-identity', event: 'host-identity-regenerated', backup: 'disabled' }])
+  })
+
+  it('the production backup sits in the state directory next to app-config.json, never Electron userData', () => {
+    expect(defaultHostIdentityBackupPath('darwin', { NODE_ENV: 'production', HOME: '/tmp/profile-a' }))
+      .toBe('/tmp/profile-a/.claude-session-manager/host-identity-v1.json')
+    expect(defaultHostIdentityBackupPath('darwin', { NODE_ENV: 'production', HOME: '/tmp/profile-a' }))
+      .not.toContain('Application Support')
+    // The primary still ignores HOME.
+    expect(defaultHostIdentityPath('darwin')).toBe('/Users/Shared/Swob/host-identity-v1.json')
+  })
+
+  it('without an eventSink the events reach process listeners, which the desktop app writes to lifecycle.log', () => {
+    const paths = layout('process-event')
+    const received: HostIdentityEvent[] = []
+    const listener = (event: HostIdentityEvent): void => { received.push(event) }
+    process.on('swob:host-identity-event', listener)
+    try {
+      getOrCreateHostIdentity({
+        storagePath: paths.storagePath,
+        backupPath: paths.backupPath,
+        machineBinding: () => 'machine-a',
+        randomId: () => identityA
+      })
+    } finally {
+      process.off('swob:host-identity-event', listener)
+    }
+    expect(received.map(({ event }) => event)).toEqual(['host-identity-regenerated', 'host-identity-backup-written'])
+
+    const index = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8')
+    expect(index).toMatch(
+      /process\.on\('swob:host-identity-event', \(event: HostIdentityEvent\) => \{[\s\S]*?writeLifecycleLog\(name, fields\)/
+    )
+    expect(index).toMatch(
+      /process\.on\('swob:library-writer-event'[\s\S]*?writeLifecycleLog\('library-writer-stale-recovered', \{ basis: event\.recoveryBasis/
+    )
+  })
+
+  it('under the test harness the machine binding is a seed, never the host identifier', () => {
+    expect(readHostMachineBinding('darwin')).toBe(`test-machine:${path.resolve(process.env.SWOB_TEST_HOME!)}`)
+  })
+})
+

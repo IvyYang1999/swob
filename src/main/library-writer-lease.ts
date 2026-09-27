@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawnSync } from 'node:child_process'
 import { getLocalBootIdentity, getProcessStartFingerprint } from './session-create-lock'
 import {
+  defaultHostIdentityBackupPath,
   defaultHostIdentityPath,
   deriveHostBootIdentity,
   deriveLibraryHostProof,
@@ -371,7 +372,11 @@ export type LibraryWriterMode =
 export interface LibraryWriterOwner {
   schemaVersion: 1 | 2
   ownerNonce: string
-  /** Profile/install identity is diagnostic metadata, never liveness evidence. */
+  /**
+   * Profile/install identity: diagnostic metadata, never liveness evidence on
+   * its own. Only the v2 second evidence uses it, and only together with a
+   * lease expired for 24 h and a missing PID (staleByDeviceAndLease).
+   */
   deviceId: string
   pid: number
   bootIdentity: string
@@ -400,7 +405,19 @@ export interface LibraryWriterEvent {
   mode: LibraryWriterMode
   reason?: LibraryWriterBusyReason
   waitMs?: number
+  /** Set on 'stale-recovered' when the takeover rested on the second evidence. */
+  recoveryBasis?: LibraryWriterRecoveryBasis
 }
+
+/**
+ * Reason code of an automatic takeover that rested on the second evidence
+ * (installation deviceId + a long-expired lease + a missing PID) instead of
+ * the host proof. It is written into the recovery claim, which moves into
+ * writer-recovery-evidence together with the lock, and into the event.
+ */
+export const LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE = 'stale-by-device-and-lease'
+export type LibraryWriterRecoveryBasis = typeof LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE
+export const DEFAULT_STALE_BY_DEVICE_AND_LEASE_MS = 24 * 60 * 60 * 1_000
 
 export interface LibraryWriterLeaseOptions {
   timeoutMs?: number
@@ -426,6 +443,14 @@ export interface LibraryWriterLeaseOptions {
   /** Test-only proof that a competing process observed an existing claim. */
   recoveryClaimObserved?: (claimPath: string) => void
   eventSink?: (event: LibraryWriterEvent) => void
+  /**
+   * Second evidence for a v2 owner from another boot whose host proof no longer
+   * matches (this machine's host identity was regenerated): take it over only
+   * when the owner names this installation's deviceId, its lease expired at
+   * least minimumLeaseExpiredMs ago (default 24 h) and its PID is missing here.
+   * On by default; `{ enabled: false }` keeps the strict remote-owner verdict.
+   */
+  staleByDeviceAndLease?: { enabled?: boolean; minimumLeaseExpiredMs?: number }
 }
 
 export interface LibraryWriterLeaseInspection {
@@ -441,6 +466,17 @@ export interface LibraryWriterLeaseInspection {
   heartbeatAt?: string
   leaseExpiresAt?: string
   leaseExpired?: boolean
+  /**
+   * Present only when the caller passed its own deviceId: whether the owner
+   * record names the same installation. The deviceId itself is never returned,
+   * and it stays diagnostic metadata, not liveness evidence.
+   */
+  ownerDeviceIsLocal?: boolean
+}
+
+export interface LibraryWriterInspectionOptions extends LibraryWriterLeaseOptions {
+  /** The caller's installation deviceId, compared with the owner's; never echoed back. */
+  localDeviceId?: string
 }
 
 export const LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION = 'RECOVER_LIBRARY_WRITER_LOCK'
@@ -468,6 +504,11 @@ const BUSY_MESSAGES: Record<LibraryWriterBusyReason, string> = {
   'corrupt-owner': 'Library 写锁 owner 格式损坏；证据已保留，不会自动删除',
   'recovery-in-progress': 'Library 写锁正由另一个本机进程恢复；不会并发抢占',
   timeout: 'Library 写入锁等待超时'
+}
+
+/** The fixed diagnostic sentence for a busy reason (the desktop dialog's zh-CN text must match it). */
+export function libraryWriterBusyMessage(reason: LibraryWriterBusyReason): string {
+  return BUSY_MESSAGES[reason]
 }
 
 export class LibraryWriterBusyError extends Error {
@@ -508,6 +549,8 @@ interface RecoveryClaim {
   claimantHostProofSalt: string
   createdAt: string
   kind: 'automatic' | 'manual'
+  /** Only for an automatic takeover on the second evidence; retained with the evidence. */
+  basis?: LibraryWriterRecoveryBasis
 }
 
 export function hashLibraryRoot(libraryRoot: string): string {
@@ -519,7 +562,7 @@ function emit(
   mode: LibraryWriterMode,
   event: LibraryWriterEvent['event'],
   options: LibraryWriterLeaseOptions,
-  details: Pick<LibraryWriterEvent, 'reason' | 'waitMs'> = {}
+  details: Pick<LibraryWriterEvent, 'reason' | 'waitMs' | 'recoveryBasis'> = {}
 ): void {
   const value: LibraryWriterEvent = {
     component: 'library-writer',
@@ -685,6 +728,19 @@ interface AcquisitionContext {
   recoveryClaimCreated?: (claimPath: string) => void
   recoveryClaimObserved?: (claimPath: string) => void
   startedMonotonic: number
+  /** The acquiring installation's deviceId; absent for manual recovery. */
+  localDeviceId?: string
+  now: () => number
+  staleByDeviceAndLease: { enabled: boolean; minimumLeaseExpiredMs: number }
+}
+
+type StaleVerdict =
+  | 'recover'
+  | LibraryWriterRecoveryBasis
+  | Exclude<LibraryWriterBusyReason, 'timeout' | 'corrupt-owner' | 'recovery-in-progress'>
+
+function isRecoverVerdict(verdict: StaleVerdict): verdict is 'recover' | LibraryWriterRecoveryBasis {
+  return verdict === 'recover' || verdict === LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE
 }
 
 function sameBoot(owner: LibraryWriterOwner, context: AcquisitionContext): boolean {
@@ -700,10 +756,39 @@ function sameBoot(owner: LibraryWriterOwner, context: AcquisitionContext): boole
     )
 }
 
+/**
+ * Second evidence for a v2 owner from another boot whose host proof cannot
+ * match any more because this machine's host identity was regenerated (on
+ * 2026-09-26 every lock of one machine turned "remote" that way and blocked
+ * startup). All three must hold:
+ *
+ * - the owner names this installation's deviceId;
+ * - its lease expired at least minimumLeaseExpiredMs ago (24 h by default);
+ * - its PID is missing here (auxiliary only: in another boot or on another
+ *   machine that PID says little, so an unknown or present PID refuses).
+ *
+ * The safety margin is the lease: a live owner renews it every few seconds
+ * (15 s lease), so one that is 24 h past expiry is not being renewed. deviceId
+ * alone is not machine evidence (a synced Library copies owner records to
+ * other machines, a copied home copies app-config.json). Residual risk, not
+ * removed here: if a live owner sits on another machine with the same
+ * deviceId (a cloned home) and the Library sync itself stalls for more than
+ * 24 h, its stale synced copy would be taken over.
+ */
+function staleByDeviceAndLease(owner: LibraryWriterOwner, context: AcquisitionContext): boolean {
+  const policy = context.staleByDeviceAndLease
+  if (!policy.enabled || !context.localDeviceId || owner.deviceId !== context.localDeviceId) return false
+  const leaseExpiresAt = Date.parse(owner.leaseExpiresAt)
+  if (!Number.isFinite(leaseExpiresAt) || context.now() - leaseExpiresAt < policy.minimumLeaseExpiredMs) {
+    return false
+  }
+  return context.readProcessStart(owner.pid) === 'missing'
+}
+
 function staleDecision(
   owner: LibraryWriterOwner,
   context: AcquisitionContext
-): 'recover' | Exclude<LibraryWriterBusyReason, 'timeout' | 'corrupt-owner' | 'recovery-in-progress'> {
+): StaleVerdict {
   if (sameBoot(owner, context)) {
     // schemaVersion 1 is a deliberately time-bounded migration exception. It
     // has no stable host proof, so raw same-boot evidence is accepted only to
@@ -729,10 +814,13 @@ function staleDecision(
   }
   if (owner.schemaVersion === 2 &&
     owner.hostProof === deriveLibraryHostProof(context.hostIdentity, owner.hostProofSalt!)) return 'recover'
-  if (owner.schemaVersion === 2) return 'remote-owner'
+  if (owner.schemaVersion === 2) {
+    return staleByDeviceAndLease(owner, context) ? LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE : 'remote-owner'
+  }
   // A legacy owner from a different boot has no stable host proof. deviceId is
   // intentionally not accepted as machine evidence because profiles/reinstalls
-  // rotate it and synced Libraries copy it to other machines.
+  // rotate it and synced Libraries copy it to other machines; the v2 second
+  // evidence above is not extended to this time-bounded v1 migration branch.
   return 'unverifiable-owner'
 }
 
@@ -756,16 +844,43 @@ export function resolveLibraryWriterHostIdentityStoragePath(
     : defaultHostIdentityPath(platform)
 }
 
-function hostIdentityRuntimeOptions(platform: NodeJS.Platform): { platform: NodeJS.Platform; storagePath: string } {
+/** The machine-local backup copy (next to app-config.json); written only on the acquisition path. */
+export function resolveLibraryWriterHostIdentityBackupPath(
+  platform: NodeJS.Platform,
+  environment: NodeJS.ProcessEnv = process.env
+): string {
+  const testHome = environment.NODE_ENV === 'test' ? environment.SWOB_TEST_HOME : undefined
+  return testHome
+    ? path.join(path.resolve(testHome), '.claude-session-manager', 'host-identity-v1.json')
+    : defaultHostIdentityBackupPath(platform, environment)
+}
+
+function hostIdentityRuntimeOptions(
+  platform: NodeJS.Platform
+): { platform: NodeJS.Platform; storagePath: string; backupPath: string } {
   return {
     platform,
-    storagePath: resolveLibraryWriterHostIdentityStoragePath(platform)
+    storagePath: resolveLibraryWriterHostIdentityStoragePath(platform),
+    backupPath: resolveLibraryWriterHostIdentityBackupPath(platform)
+  }
+}
+
+function staleByDeviceAndLeasePolicy(
+  options: LibraryWriterLeaseOptions
+): AcquisitionContext['staleByDeviceAndLease'] {
+  const configured = options.staleByDeviceAndLease?.minimumLeaseExpiredMs
+  return {
+    enabled: options.staleByDeviceAndLease?.enabled !== false,
+    minimumLeaseExpiredMs: typeof configured === 'number' && Number.isFinite(configured) && configured >= 0
+      ? configured
+      : DEFAULT_STALE_BY_DEVICE_AND_LEASE_MS
   }
 }
 
 function prepareAcquisition(
   libraryRoot: string,
-  options: LibraryWriterLeaseOptions
+  options: LibraryWriterLeaseOptions,
+  localDeviceId?: string
 ): AcquisitionContext {
   const platform = options.platform || process.platform
   const pid = options.pid ?? process.pid
@@ -800,7 +915,10 @@ function prepareAcquisition(
     readProcessStart,
     recoveryClaimCreated: options.recoveryClaimCreated,
     recoveryClaimObserved: options.recoveryClaimObserved,
-    startedMonotonic: (options.monotonicNow || (() => performance.now()))()
+    startedMonotonic: (options.monotonicNow || (() => performance.now()))(),
+    ...(localDeviceId ? { localDeviceId } : {}),
+    now: options.now || Date.now,
+    staleByDeviceAndLease: staleByDeviceAndLeasePolicy(options)
   }
 }
 
@@ -879,7 +997,8 @@ function createRecoveryClaim(
   existing: ExistingDirectoryOwner,
   context: AcquisitionContext,
   kind: RecoveryClaim['kind'],
-  nowMs: number
+  nowMs: number,
+  basis?: LibraryWriterRecoveryBasis
 ): { path: string; content: string } | null {
   const claimPath = path.join(context.lockDir, RECOVERY_CLAIM)
   const claimantHostProofSalt = randomUUID()
@@ -898,7 +1017,8 @@ function createRecoveryClaim(
     claimantHostProof: deriveLibraryHostProof(context.hostIdentity, claimantHostProofSalt),
     claimantHostProofSalt,
     createdAt: new Date(nowMs).toISOString(),
-    kind
+    kind,
+    ...(basis ? { basis } : {})
   }
   const content = JSON.stringify(claim)
   try {
@@ -926,7 +1046,7 @@ function quarantineClaimedLock(
   if (current.kind !== 'valid' || current.owner.ownerNonce !== existing.owner.ownerNonce ||
     current.ownerPath !== existing.ownerPath || current.evidenceHash !== existing.evidenceHash ||
     !claimContentMatches(claim.path, claim.content) ||
-    (requireAutomaticProof && staleDecision(current.owner, context) !== 'recover')) {
+    (requireAutomaticProof && !isRecoverVerdict(staleDecision(current.owner, context)))) {
     removeUnchangedClaim(context.lockDir, claim.content)
     return null
   }
@@ -952,11 +1072,12 @@ function quarantineClaimedLock(
 function recoverProvenStaleLock(
   context: AcquisitionContext,
   existing: ExistingDirectoryOwner,
-  nowMs: number
+  nowMs: number,
+  basis?: LibraryWriterRecoveryBasis
 ): 'recovered' | 'retry' | 'recovery-in-progress' | 'unverifiable-owner' {
   const activeClaim = readClaim(context.lockDir)
   if (activeClaim) return existingClaimDecision(existing, context, activeClaim)
-  const claim = createRecoveryClaim(existing, context, 'automatic', nowMs)
+  const claim = createRecoveryClaim(existing, context, 'automatic', nowMs, basis)
   if (!claim) return 'retry'
   return quarantineClaimedLock(context, existing, claim, true) ? 'recovered' : 'retry'
 }
@@ -1007,10 +1128,11 @@ function tryAcquire(
       return 'corrupt-owner'
     }
     const decision = staleDecision(existing.owner, context)
-    if (decision !== 'recover') return decision
-    const recovery = recoverProvenStaleLock(context, existing, now())
+    if (!isRecoverVerdict(decision)) return decision
+    const basis = decision === 'recover' ? undefined : decision
+    const recovery = recoverProvenStaleLock(context, existing, now(), basis)
     if (recovery !== 'recovered') return recovery
-    emit(libraryRoot, mode, 'stale-recovered', options)
+    emit(libraryRoot, mode, 'stale-recovered', options, basis ? { recoveryBasis: basis } : {})
     return 'recovered'
   }
 
@@ -1061,7 +1183,7 @@ export async function acquireLibraryWriterLease(
   // supported 12-process contention contract.
   const timeoutMs = options.timeoutMs ?? 5_000
   const pollMs = options.pollMs ?? 40
-  const context = prepareAcquisition(libraryRoot, options)
+  const context = prepareAcquisition(libraryRoot, options, deviceId)
   let lastReason: LibraryWriterBusyReason = 'timeout'
   let recovered = false
   while (recovered || monotonicNow() - context.startedMonotonic <= timeoutMs) {
@@ -1114,7 +1236,7 @@ export function acquireLibraryWriterLeaseSync(
   const monotonicNow = options.monotonicNow || (() => performance.now())
   const timeoutMs = options.timeoutMs ?? 150
   const pollMs = options.pollMs ?? 15
-  const context = prepareAcquisition(libraryRoot, options)
+  const context = prepareAcquisition(libraryRoot, options, deviceId)
   let lastReason: LibraryWriterBusyReason = 'timeout'
   let recovered = false
   while (recovered || monotonicNow() - context.startedMonotonic <= timeoutMs) {
@@ -1137,7 +1259,7 @@ export function acquireLibraryWriterLeaseSync(
 
 export function inspectLibraryWriterLease(
   libraryRoot: string,
-  options: LibraryWriterLeaseOptions = {}
+  options: LibraryWriterInspectionOptions = {}
 ): LibraryWriterLeaseInspection {
   // Inspection is a strict read path: unlike acquisition it does not create
   // .swob/locks or bootstrap a host identity. Missing local identity evidence
@@ -1215,7 +1337,8 @@ export function inspectLibraryWriterLease(
     mode: existing.owner.mode,
     heartbeatAt: existing.owner.heartbeatAt,
     leaseExpiresAt: existing.owner.leaseExpiresAt,
-    leaseExpired: Date.parse(existing.owner.leaseExpiresAt) < now
+    leaseExpired: Date.parse(existing.owner.leaseExpiresAt) < now,
+    ...(options.localDeviceId ? { ownerDeviceIsLocal: existing.owner.deviceId === options.localDeviceId } : {})
   }
 }
 

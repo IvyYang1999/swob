@@ -14,6 +14,7 @@ import {
   type Valuation
 } from './token-valuation'
 import { usageFactsForSession } from './usage-fact-store'
+import { precedesInBillingRank } from './billing-identity'
 import type { UsageFact } from './analysis-contract'
 import {
   BUILTIN_PROVIDER_DEFINITIONS,
@@ -248,9 +249,10 @@ function accountingInput(accounting: TokenAccounting): number {
 
 /**
  * One billing owner's UsageFact, cut down to what outlives the session it came
- * from: the keys of usage-facts' billing_rank, and what the day, hour and
- * unknown-time rollups add up. Whole facts (valuation history, pricing trace)
- * are not kept across sessions.
+ * from: the keys of usage-facts' billing_rank (precedesInBillingRank in
+ * billing-identity.ts, the rule the ledger and the session loader share), and
+ * what the day, hour and unknown-time rollups add up. Whole facts (valuation
+ * history, pricing trace) are not kept across sessions.
  */
 interface OwnerFact {
   agentScope: UsageFact['agentScope']
@@ -280,26 +282,6 @@ function ownerFact(fact: UsageFact): OwnerFact {
     callCount: fact.callCount,
     turnCount: fact.turnCount
   }
-}
-
-function scopeRank(scope: UsageFact['agentScope']): number {
-  return scope === 'main' ? 0 : scope === 'subagent' ? 1 : 2
-}
-
-/**
- * Whether `a` comes before `b` in usage-facts' billing_rank, which picks the
- * copy of a billing fact that aggregates count (canonicalizeBillingFacts in
- * usage-fact-store.ts): main, then subagent, then any other scope; timestamped
- * before untimed; then occurred_at, then event_id. SQLite orders those two as
- * TEXT, byte by byte, so compare the raw strings: "…12:00:00.000Z" comes before
- * "…12:00:00Z", although both are the same instant.
- */
-function precedesInBillingRank(a: OwnerFact, b: OwnerFact): boolean {
-  const scope = scopeRank(a.agentScope) - scopeRank(b.agentScope)
-  if (scope !== 0) return scope < 0
-  if ((a.occurredAt === null) !== (b.occurredAt === null)) return b.occurredAt === null
-  if (a.occurredAt !== b.occurredAt) return a.occurredAt! < b.occurredAt!
-  return a.eventId < b.eventId
 }
 
 interface SessionLedger {

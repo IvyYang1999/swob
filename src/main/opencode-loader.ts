@@ -1209,12 +1209,22 @@ function summarizeLoadedSqliteAgentSession(source: SqliteAgentSource, loaded: Lo
     if (tokenUsage.inputTokens === 0 && tokenUsage.outputTokens === 0 && sessionTokenUsage) {
       Object.assign(tokenUsage, sessionTokenUsage)
     }
-    tokenAccounting = accountingFromMutuallyExclusiveUsage(
+    const fallback = accountingFromMutuallyExclusiveUsage(
       source as SessionSource,
       tokenUsage,
       'reported',
       `${source} legacy aggregate fallback; request-level model/provider evidence unavailable`
     )
+    // Keep why no per-call row was accepted (e.g. zcode-completed-row-rejected:*,
+    // zcode-model-usage-status-excluded:*) behind one fixed code.
+    tokenAccounting = {
+      ...fallback,
+      warnings: [...new Set([
+        `${source}-aggregate-fallback:per-call-usage-unavailable`,
+        ...loaded.tokenAccounting.warnings,
+        ...fallback.warnings
+      ])]
+    }
   }
   const normalizedTokenUsage = tokenUsageFromAccounting(tokenAccounting)
 

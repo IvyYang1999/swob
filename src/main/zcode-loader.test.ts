@@ -16,6 +16,7 @@ import {
   makeZcodeSessionRef
 } from './zcode-loader'
 import { loadSessionDetail } from './session-loader'
+import { closeUsageFactStore, sessionUsageEvents, synchronizeUsageFacts } from './usage-fact-store'
 import { installFakeSqlite3, realSqlite3Path, type FakeSqlite3 } from './__test-support__/fake-sqlite3'
 
 const SESSION_ID = 'sess_subagent_agent_b3c1-42'
@@ -242,5 +243,93 @@ describe('zcode-loader sqlite3 CLI failures (F1e)', () => {
     const summary = await buildZcodeSessionSummary(db.sourceRef)
     expect(summary?.providerOutcome?.usage).toBe('available')
     expect(summary?.tokenAccounting?.usageEvents).toHaveLength(1)
+  })
+})
+
+// F1k ②a: when no model_usage row is accepted, the loader falls back to the
+// message/session token aggregate. The fallback now keeps why the per-call
+// rows were rejected, plus one fixed code, instead of one generic sentence.
+describe('zcode-loader aggregate fallback keeps why the per-call rows were rejected (F1k)', () => {
+  const FALLBACK_CODE = 'zcode-aggregate-fallback:per-call-usage-unavailable'
+  const FALLBACK_SENTENCE = 'zcode legacy aggregate fallback; request-level model/provider evidence unavailable'
+  const fixtureDirs: string[] = []
+
+  function fixture(sql?: string) {
+    const created = createZcodeDb()
+    fixtureDirs.push(created.dir)
+    if (sql) execFileSync('sqlite3', [created.dbPath], { input: sql })
+    return created
+  }
+
+  afterEach(() => {
+    for (const dir of fixtureDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  fixtureIt('without any model_usage row the aggregate carries the fixed code', async () => {
+    const db = fixture('DELETE FROM model_usage;')
+    const summary = await buildZcodeSessionSummary(db.sourceRef)
+    expect(summary?.tokenAccounting).toMatchObject({
+      billingTotal: 18,
+      usageEvents: [expect.objectContaining({
+        dedupKey: 'zcode:aggregate',
+        providerFormatVersion: 'zcode-aggregate-v1'
+      })]
+    })
+    expect(summary?.tokenAccounting?.warnings).toEqual([FALLBACK_CODE, FALLBACK_SENTENCE])
+    expect(summary?.providerOutcome?.usage).toBe('available')
+  })
+
+  fixtureIt.each([
+    ["UPDATE model_usage SET status = 'failed';", 'zcode-model-usage-status-excluded:failed:1'],
+    ['UPDATE model_usage SET provider_total_tokens = 999;', 'zcode-completed-row-rejected:provider-total-mismatch']
+  ])('a rejected model_usage row (%s) keeps its reason code on the aggregate', async (sql, reason) => {
+    const db = fixture(sql)
+    const summary = await buildZcodeSessionSummary(db.sourceRef)
+    expect(summary?.tokenAccounting?.billingTotal).toBe(18)
+    expect(summary?.tokenAccounting?.usageEvents.map((event) => event.dedupKey)).toEqual(['zcode:aggregate'])
+    expect(summary?.tokenAccounting?.warnings).toEqual([FALLBACK_CODE, reason, FALLBACK_SENTENCE])
+  })
+
+  fixtureIt('with no message tokens either the session has no usage, and the reason still says so', async () => {
+    const db = fixture(
+      "UPDATE model_usage SET status = 'failed'; UPDATE message SET data = json_remove(data, '$.tokens');"
+    )
+    const summary = await buildZcodeSessionSummary(db.sourceRef)
+    expect(summary?.tokenAccounting).toMatchObject({ billingTotal: null, usageEvents: [] })
+    expect(summary?.tokenAccounting?.warnings).toEqual([
+      FALLBACK_CODE,
+      'zcode-model-usage-status-excluded:failed:1',
+      FALLBACK_SENTENCE
+    ])
+    expect(summary?.providerOutcome?.usage).toBe('unavailable')
+  })
+
+  fixtureIt('end to end: a row rejected after a per-call sync leaves the ledger\'s per-call fact in place', async () => {
+    const db = fixture()
+    const previousIndex = process.env.SWOB_USAGE_INDEX_PATH
+    process.env.SWOB_USAGE_INDEX_PATH = path.join(db.dir, 'usage.db')
+    try {
+      const perCall = await buildZcodeSessionSummary(db.sourceRef)
+      expect(synchronizeUsageFacts([perCall!], [])).toMatchObject({ changedSessions: 1, factCount: 1 })
+
+      execFileSync('sqlite3', [db.dbPath], { input: "UPDATE model_usage SET status = 'failed';" })
+      const fallback = await buildZcodeSessionSummary(db.sourceRef)
+      expect(fallback?.tokenAccounting?.warnings).toContain('zcode-model-usage-status-excluded:failed:1')
+      expect(synchronizeUsageFacts([fallback!], [])).toEqual({
+        changedSessions: 0,
+        unchangedSessions: 1,
+        removedSessions: 0,
+        factCount: 1,
+        rebuilt: false,
+        downgradesSkipped: { zcode: 1 }
+      })
+      expect(sessionUsageEvents(SESSION_ID, { range: 'all', metricBasis: 'billing' }).events).toEqual([
+        expect.objectContaining({ dedupKey: 'zcode:model-usage:usage_1', nonCachedInputTokens: 8, outputTokens: 5 })
+      ])
+    } finally {
+      closeUsageFactStore()
+      if (previousIndex === undefined) delete process.env.SWOB_USAGE_INDEX_PATH
+      else process.env.SWOB_USAGE_INDEX_PATH = previousIndex
+    }
   })
 })

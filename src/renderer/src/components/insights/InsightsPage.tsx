@@ -8,7 +8,11 @@ import { ScopeContext, DEFAULT_SCOPE } from './scope'
 import type { AnalysisScope } from './scope'
 import type { InsightsData, QueryBundle, PreviousPeriodComparison } from './shared'
 import { adaptQueryBundle, extractFilterOptions } from './shared'
-import type { AnalysisDimension, InsightsQueryBundleResult } from '../../../../shared/analysis-scope-types'
+import type {
+  AnalysisDimension,
+  InsightsQueryBundleResult,
+  UsageFactSyncFailure
+} from '../../../../shared/analysis-scope-types'
 import {
   createDefaultDashboardLayout,
   migrateDashboardLayout,
@@ -36,6 +40,18 @@ interface DrilldownTarget {
   label: string
 }
 
+interface LedgerStatus {
+  lastIndexedAt: string | null
+  lastSyncError: UsageFactSyncFailure | null
+}
+
+function formatLedgerTime(value: string, locale: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString(locale, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
 export function InsightsPage() {
   const config = useStore((s) => s.config)
   const sessions = useStore((s) => s.sessions)
@@ -49,6 +65,7 @@ export function InsightsPage() {
     [auditLensEnabled, tokenInsightsLensEnabled]
   )
   const [bundle, setBundle] = useState<QueryBundle | null>(null)
+  const [ledgerStatus, setLedgerStatus] = useState<LedgerStatus | null>(null)
   const [refreshing, setRefreshing] = useState(true)
   const [queryError, setQueryError] = useState(false)
   const [retryRevision, setRetryRevision] = useState(0)
@@ -100,6 +117,10 @@ export function InsightsPage() {
         project: response.results.project,
         session: response.results.session,
         filterOptions: response.filterOptions,
+      })
+      setLedgerStatus({
+        lastIndexedAt: response.results.global.quality.lastIndexedAt,
+        lastSyncError: response.lastSyncError ?? null
       })
     }).catch(() => {
       if (!cancelled) setQueryError(true)
@@ -188,6 +209,27 @@ export function InsightsPage() {
           </div>
         )}
         <FilterBar data={data} />
+
+        {/* F1k: when the usage ledger last committed, and a failing background sync */}
+        {ledgerStatus && (ledgerStatus.lastIndexedAt || ledgerStatus.lastSyncError) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-[10px] text-muted">
+            {ledgerStatus.lastIndexedAt && (
+              <span>
+                {translate(locale, 'renderer.insights_page.ledger_updated_at', {
+                  time: formatLedgerTime(ledgerStatus.lastIndexedAt, locale)
+                })}
+              </span>
+            )}
+            {ledgerStatus.lastSyncError && (
+              <span className="text-soft-amber">
+                {translate(locale, 'renderer.insights_page.ledger_sync_failed', {
+                  code: ledgerStatus.lastSyncError.errorCode || ledgerStatus.lastSyncError.errorName,
+                  n: ledgerStatus.lastSyncError.consecutiveFailures
+                })}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* tF32: stale data disclaimer */}
         <StaleDisclaimer variant="insights" />

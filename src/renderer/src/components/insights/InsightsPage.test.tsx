@@ -171,6 +171,32 @@ describe('InsightsPage query lifecycle', () => {
     expect(window.api.queryInsightsBundle).toHaveBeenCalledTimes(2)
   })
 
+  it('shows when the ledger was last updated, and a failing sync with its code and count (F1k)', async () => {
+    const scope: AnalysisScope = { range: '7d', metricBasis: 'billing' }
+    vi.mocked(window.api.queryInsightsBundle)
+      .mockResolvedValueOnce({
+        ...bundle(42, scope),
+        lastSyncError: {
+          at: '2026-09-27T01:05:00.000Z',
+          errorName: 'SqliteError',
+          errorCode: 'SQLITE_CONSTRAINT_PRIMARYKEY',
+          consecutiveFailures: 3
+        }
+      })
+      .mockResolvedValueOnce({ ...bundle(84, scope), lastSyncError: null })
+
+    render(<InsightsPage />)
+    await screen.findByText('42')
+    expect(screen.getByText(/^账本更新于 2026/)).not.toBeNull()
+    expect(screen.getByText('上次同步失败：SQLITE_CONSTRAINT_PRIMARYKEY，连续 3 次')).not.toBeNull()
+
+    // The next committed snapshot clears the failure; the ledger time stays.
+    act(() => notifyFactsUpdated?.())
+    await waitFor(() => expect(screen.getByTestId('total-tokens').textContent).toBe('84'))
+    expect(screen.queryByText(/上次同步失败/)).toBeNull()
+    expect(screen.getByText(/^账本更新于 2026/)).not.toBeNull()
+  })
+
   it('keeps Token and Audit independently reachable and resets a disabled active tab', async () => {
     const view = render(<InsightsPage />)
     await screen.findByText('42')

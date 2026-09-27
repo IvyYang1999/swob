@@ -19,9 +19,11 @@ import {
 } from './library-health'
 import { syncLibraryStartupIncrementally } from './library-startup-sync'
 import { closeSearchIndex } from './search-index'
-import { closeUsageFactStore } from './usage-fact-store'
+import { closeUsageFactStore, type UsageFactAbsenceEvidence } from './usage-fact-store'
 import { closeCanonicalSessionStore, getCanonicalSessionStore } from './canonical-store'
 import { canonicalRecordsToSessionSummary } from './canonical-projection'
+import { accountingFromMutuallyExclusiveUsage } from './token-accounting'
+import type { SessionSource, SessionSummary } from './session-types'
 import type { CanonicalRecord, SourceRef } from '../shared/provider-schema.generated'
 
 const roots: string[] = []
@@ -232,6 +234,39 @@ function writeClaudeSession(filePath: string, sessionId: string): void {
     cwd: '/isolated-test',
     message: { role: 'user', content: 'production worker arbiter regression' }
   }) + '\n')
+}
+
+/** A minimal session with one aggregate usage event, for usage-ledger requests. */
+function usageWorkerSession(sessionId: string, source: SessionSource = 'claude-code'): SessionSummary {
+  const tokenUsage = { inputTokens: 10, outputTokens: 2, cacheCreationTokens: 0, cacheReadTokens: 0 }
+  return {
+    id: sessionId,
+    sessionId,
+    slug: sessionId,
+    createdAt: '2026-08-10T00:00:00.000Z',
+    updatedAt: '2026-08-10T00:01:00.000Z',
+    activityDays: ['2026-08-10'],
+    messageCount: 2,
+    turnCount: 1,
+    compactCount: 0,
+    cwds: ['/fixture/usage'],
+    version: 'test',
+    firstUserMessage: sessionId,
+    toolUsage: {},
+    skillInvocations: [],
+    projectPath: '/fixture/usage',
+    filePath: `/fixture/usage/${sessionId}.jsonl`,
+    fileSizeBytes: 1,
+    userImages: [],
+    pastedImageCount: 0,
+    tokenUsage,
+    tokenAccounting: accountingFromMutuallyExclusiveUsage(source, tokenUsage),
+    providerOutcome: { detected: 'detected', parse: 'parsed', usage: 'available' },
+    referencedFiles: [],
+    configFiles: [],
+    source,
+    models: []
+  }
 }
 
 function canonicalWorkerFixture(text: string, fingerprintValue: string): {
@@ -785,6 +820,86 @@ describe('Library worker request', () => {
       }
     })
     expect(fs.existsSync(process.env.SWOB_USAGE_INDEX_PATH)).toBe(true)
+  })
+
+  it('passes absence evidence through the usage request and reports what it kept', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-usage-absence-request-'))
+    roots.push(root)
+    process.env.SWOB_USAGE_INDEX_PATH = path.join(root, 'usage.db')
+    const kept = usageWorkerSession('absence-request-kept')
+    await runLibraryWorkerRequest({ type: 'usage-facts-sync', root, sessions: [kept], folders: [] })
+
+    const result = await runLibraryWorkerRequest({
+      type: 'usage-facts-sync',
+      root,
+      sessions: [],
+      folders: [],
+      absence: { physicalLoad: null, providerSettlement: null, excludedSources: [] }
+    })
+
+    expect(result).toEqual({
+      kind: 'usage-facts-sync',
+      value: {
+        changedSessions: 0,
+        unchangedSessions: 0,
+        removedSessions: 0,
+        factCount: 1,
+        rebuilt: false,
+        retainedSessions: 1,
+        heldRemovals: 0,
+        absences: [{ source: 'claude-code', reason: 'awaiting-first-load', sessions: 1 }]
+      }
+    })
+  })
+
+  it('12 carries absence evidence across the production worker boundary and keeps holds in worker memory', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-usage-absence-worker-'))
+    roots.push(root)
+    process.env.SWOB_USAGE_INDEX_PATH = path.join(root, 'usage.db')
+    const worker = new LibraryWorkerClient(await buildProductionWorker(root))
+    const missing = Array.from({ length: 3 }, (_, index) => usageWorkerSession(`absence-worker-${index}`, 'codex'))
+    const keeper = usageWorkerSession('absence-worker-keeper')
+    const absence = (loadId: string, summaryCache: 'warm' | 'cold'): UsageFactAbsenceEvidence => ({
+      physicalLoad: {
+        loadId,
+        summaryCache,
+        sqliteSources: { opencode: { discovery: 'ok', presentSessionIds: ['ses_WorkerListed'] } }
+      },
+      providerSettlement: 'complete',
+      excludedSources: []
+    })
+
+    try {
+      expect(await worker.syncUsageFacts(root, [...missing, keeper], [])).toEqual({
+        changedSessions: 4,
+        unchangedSessions: 0,
+        removedSessions: 0,
+        factCount: 4,
+        rebuilt: false
+      })
+      // The evidence survives structured clone: a cold load keeps the rows.
+      expect(await worker.syncUsageFacts(root, [keeper], [], { absence: absence('load-A', 'cold') })).toEqual({
+        changedSessions: 0,
+        unchangedSessions: 1,
+        removedSessions: 0,
+        factCount: 4,
+        rebuilt: false,
+        retainedSessions: 3,
+        heldRemovals: 0,
+        absences: [{ source: 'codex', reason: 'cold-summary-cache', sessions: 3 }]
+      })
+      expect(await worker.syncUsageFacts(root, [keeper], [], { absence: absence('load-A', 'warm') }))
+        .toMatchObject({
+          removedSessions: 0,
+          heldRemovals: 3,
+          absences: [{ source: 'codex', reason: 'source-vanished', sessions: 3 }]
+        })
+      // The hold lives in the worker's memory; a second physical load confirms it there.
+      expect(await worker.syncUsageFacts(root, [keeper], [], { absence: absence('load-B', 'warm') }))
+        .toMatchObject({ removedSessions: 3, heldRemovals: 0, factCount: 1 })
+    } finally {
+      await worker.close()
+    }
   })
 
   it('preserves the usage hydration error code across the production worker boundary', async () => {

@@ -27,13 +27,15 @@ import * as fs from 'fs'
 import { getLocalNetworkInfo, queryPublicIp } from './network-info'
 import {
   loadAllSessions,
+  loadAllSessionsWithEvidence,
   loadAllSessionsWithProviderStatus,
   restoreOmittedUsageEvents,
   loadSessionDetail,
   loadSessionDetailWithFallback,
   findAllSessionFiles,
   findClaudeSessionFiles,
-  buildSessionSummaryFromBackup
+  buildSessionSummaryFromBackup,
+  type SessionLoadEvidence
 } from './session-loader'
 import {
   beginSessionBootstrap,
@@ -210,7 +212,8 @@ import {
   initializeUsageFactStore,
   queryInsights,
   queryInsightsBundle,
-  sessionUsageEvents
+  sessionUsageEvents,
+  type UsageFactAbsenceEvidence
 } from './usage-fact-store'
 import { LatestSnapshotRunner } from './latest-snapshot-runner'
 import { ReportJobManager, type ReportJobRunner } from './report-job-manager'
@@ -391,6 +394,10 @@ let librarySessionInventoryReady = false
 let latestLibraryTree: LibraryTree | null = null
 let libraryInitializationPromise: Promise<void> | null = null
 let latestProviderSettlementStatus: 'complete' | 'degraded' | null = null
+// Evidence of the physical load behind the physical part of cachedSessions,
+// taken with each replacePhysical. null until this process has one: the usage
+// ledger then keeps every row whose session is missing.
+let latestPhysicalLoadEvidence: SessionLoadEvidence | null = null
 let libraryHydrationGeneration = 0
 let libraryHydrationActive = 0
 let usageFactSyncError: unknown = null
@@ -398,6 +405,8 @@ interface UsageFactSyncSnapshot {
   sessions: SessionSummary[]
   folders: Folder[]
   rebuild: boolean
+  // Why sessions may be missing from `sessions`, captured with them.
+  absence: UsageFactAbsenceEvidence
 }
 let usageFactSyncRunner: LatestSnapshotRunner<UsageFactSyncSnapshot, UsageFactSyncResult> | null = null
 const startupProjectionGate = new StartupProjectionGate<UsageFactSyncResult>()
@@ -1254,14 +1263,14 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
           let result: UsageFactSyncResult
           try {
             result = await worker.syncUsageFacts(
-              getLibraryRoot(), sessions, snapshot.folders, { rebuild: snapshot.rebuild }
+              getLibraryRoot(), sessions, snapshot.folders, { rebuild: snapshot.rebuild, absence: snapshot.absence }
             )
           } catch (error) {
             const code = (error as { code?: unknown })?.code
             if (code !== 'USAGE_EVENTS_HYDRATION_REQUIRED' || sessions !== snapshot.sessions) throw error
             sessions = await materializeUsageEventsForSnapshot(snapshot.sessions)
             result = await worker.syncUsageFacts(
-              getLibraryRoot(), sessions, snapshot.folders, { rebuild: snapshot.rebuild }
+              getLibraryRoot(), sessions, snapshot.folders, { rebuild: snapshot.rebuild, absence: snapshot.absence }
             )
           }
           usageFactSyncError = null
@@ -1274,6 +1283,8 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
       },
       merge: (current: UsageFactSyncSnapshot, incoming: UsageFactSyncSnapshot) => ({
         ...incoming,
+        // The evidence belongs to the sessions it was captured with.
+        absence: incoming.absence,
         rebuild: current.rebuild || incoming.rebuild
       }),
       onError: (error) => {
@@ -1285,7 +1296,12 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
   const run = usageFactSyncRunner.schedule({
     sessions: [...cachedSessions],
     folders: currentAnalysisFolders(),
-    rebuild: options.rebuild === true
+    rebuild: options.rebuild === true,
+    absence: {
+      physicalLoad: latestPhysicalLoadEvidence,
+      providerSettlement: latestProviderSettlementStatus,
+      excludedSources: [...getExcludedSources()]
+    }
   })
   void run.catch(() => { /* error is retained for ensureUsageFactsReady */ })
   return run
@@ -1330,8 +1346,9 @@ async function ensureUsageFactsReady(): Promise<void> {
 }
 
 async function reloadSessionsForAction(): Promise<SessionSummary[]> {
-  const loaded = await loadAllSessions()
+  const { sessions: loaded, evidence } = await loadAllSessionsWithEvidence()
   sourceSessionInventory.replacePhysical(loaded)
+  latestPhysicalLoadEvidence = evidence
   sourceSessionInventory.merge(loaded.filter(isProviderSession))
   cachedSessions = sourceSessionInventory.filtered(getExcludedSources())
   for (const s of cachedSessions) {
@@ -3098,16 +3115,23 @@ ipcMain.handle('sessions:loadAll', async (event) => {
     // A missing, stale, or migrating fact snapshot must take the fully
     // materialized path so the next synchronization can repair it.
   }
+  // The first-paint snapshot reaches cachedSessions (and the usage ledger)
+  // before the completion does, so its evidence is taken from it.
+  const initialLoad: { evidence: SessionLoadEvidence | null } = { evidence: null }
   const bootstrap = await beginSessionBootstrap(
-    () => loadAllSessions({
+    () => loadAllSessionsWithEvidence({
       readOnly: true,
       migrateLegacyCache: true,
       quiet: true,
       omitCachedUsageEvents
+    }).then(({ sessions, evidence }) => {
+      initialLoad.evidence = evidence
+      return sessions
     }),
     () => loadAllSessionsWithProviderStatus({ omitCachedUsageEvents })
   )
   sourceSessionInventory.replacePhysical(bootstrap.initial)
+  latestPhysicalLoadEvidence = initialLoad.evidence
   const sessions = filterExcludedSources(bootstrap.initial)
   const lastKnownProviderSessions = filterExcludedSources(
     sourceSessionInventory.snapshot().filter(isProviderSession)

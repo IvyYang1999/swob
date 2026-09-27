@@ -17,8 +17,11 @@ import {
   queryInsightsBundle,
   sessionUsageEvents,
   synchronizeUsageFacts,
-  usageFactStoreStats
+  usageFactStoreStats,
+  usageRemovalGateThresholds,
+  type UsageFactAbsenceEvidence
 } from './usage-fact-store'
+import type { SessionLoadEvidence } from './session-loader'
 
 let root = ''
 let previousUsageIndex: string | undefined
@@ -1206,4 +1209,411 @@ describe('UsageFact + AnalysisScope', () => {
     console.info(`usage fact acceptance: 1700 sessions warm query p95 ${p95.toFixed(2)}ms`)
     expect(p95).toBeLessThan(200)
   }, 30_000)
+})
+
+// ========================================================
+// F1f: a session missing from one sync's input is not a deleted session
+// ========================================================
+describe('usage sync removes a missing session only on evidence (F1f)', () => {
+  const REMOVAL_ENV = ['SWOB_USAGE_REMOVAL_MAX_RATIO', 'SWOB_USAGE_REMOVAL_MAX_COUNT', 'SWOB_USAGE_REMOVAL_MIN_COUNT']
+  const savedRemovalEnv = new Map<string, string | undefined>()
+
+  beforeEach(() => {
+    for (const name of REMOVAL_ENV) {
+      savedRemovalEnv.set(name, process.env[name])
+      delete process.env[name]
+    }
+  })
+
+  afterEach(() => {
+    for (const name of REMOVAL_ENV) {
+      const value = savedRemovalEnv.get(name)
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    vi.restoreAllMocks()
+  })
+
+  function session(id: string, source: SessionSource = 'claude-code', project = `/repo/${source}`): SessionSummary {
+    return makeSession(id, project, [
+      usageEvent(`${id}-call`, localTimestamp(2026, 7, 20, 9), components(10, 2), { model: 'm1' })
+    ], { source })
+  }
+
+  function physicalLoad(overrides: Partial<SessionLoadEvidence> = {}): SessionLoadEvidence {
+    return { loadId: 'load-A', summaryCache: 'warm', sqliteSources: {}, ...overrides }
+  }
+
+  function absence(overrides: Partial<UsageFactAbsenceEvidence> = {}): UsageFactAbsenceEvidence {
+    return { physicalLoad: physicalLoad(), providerSettlement: 'complete', excludedSources: [], ...overrides }
+  }
+
+  /** Read the ledger through a second, read-only connection: the store (and its pending holds) stays open. */
+  function ledger(): {
+    sessions: string[]
+    facts: Record<string, number>
+    history: Record<string, number>
+    historyTotal: number
+    activity: Record<string, number>
+    folders: Record<string, number>
+  } {
+    const audit = new Database(process.env.SWOB_USAGE_INDEX_PATH!, { readonly: true, fileMustExist: true })
+    try {
+      const bySession = (sql: string): Record<string, number> => Object.fromEntries(
+        (audit.prepare(sql).all() as Array<{ session_id: string; count: number }>)
+          .map((row) => [row.session_id, row.count])
+      )
+      return {
+        sessions: (audit.prepare('SELECT session_id FROM usage_sessions ORDER BY session_id').all() as
+          Array<{ session_id: string }>).map((row) => row.session_id),
+        facts: bySession('SELECT session_id, count(*) AS count FROM usage_facts GROUP BY session_id'),
+        history: bySession('SELECT session_id, count(*) AS count FROM usage_valuation_history GROUP BY session_id'),
+        historyTotal: (audit.prepare('SELECT count(*) AS count FROM usage_valuation_history').get() as
+          { count: number }).count,
+        activity: bySession('SELECT session_id, count(*) AS count FROM usage_session_activity GROUP BY session_id'),
+        folders: bySession('SELECT session_id, count(*) AS count FROM usage_session_folders GROUP BY session_id')
+      }
+    } finally {
+      audit.close()
+    }
+  }
+
+  it('6 a whole-source disappearance is held until a second, independent load agrees; history never shrinks', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const opencode = Array.from({ length: 10 }, (_, index) => session(`ses_gate${index}`, 'opencode'))
+    const keeper = session('keeper')
+    synchronizeUsageFacts([...opencode, keeper], [])
+    const before = ledger()
+    expect(before.sessions).toHaveLength(11)
+    expect(before.historyTotal).toBeGreaterThanOrEqual(11)
+
+    // OpenCode discovery succeeded and lists none of them: every one is a
+    // deletion candidate, and the whole source vanished from the input.
+    const gone = (loadId: string) => absence({
+      physicalLoad: physicalLoad({ loadId, sqliteSources: { opencode: { discovery: 'ok', presentSessionIds: [] } } })
+    })
+    expect(synchronizeUsageFacts([keeper], [], { absence: gone('load-A') })).toEqual({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      removedSessions: 0,
+      factCount: 11,
+      rebuilt: false,
+      retainedSessions: 0,
+      heldRemovals: 10,
+      absences: [{ source: 'opencode', reason: 'source-vanished', sessions: 10 }]
+    })
+    expect(ledger()).toEqual(before)
+
+    // Live updates re-sync on the same physical load: that is not a second round.
+    expect(synchronizeUsageFacts([keeper], [], { absence: gone('load-A') }))
+      .toMatchObject({ removedSessions: 0, heldRemovals: 10 })
+    expect(ledger()).toEqual(before)
+
+    // A different physical load agrees: now the rows go, the history stays.
+    expect(synchronizeUsageFacts([keeper], [], { absence: gone('load-B') }))
+      .toMatchObject({ removedSessions: 10, heldRemovals: 0, retainedSessions: 0, absences: [], factCount: 1 })
+    const after = ledger()
+    expect(after.sessions).toEqual(['keeper'])
+    expect(after.history).toEqual(before.history)
+    expect(after.historyTotal).toBe(before.historyTotal)
+
+    const lines = warn.mock.calls.map(([line]) => String(line))
+    expect(lines).toEqual([
+      '[usage-facts] opencode: holding 10 removal(s) until an independent load confirms them (source-vanished)',
+      '[usage-facts] opencode: removed 10 held session(s) that an independent load confirmed gone'
+    ])
+    for (const line of lines) expect(line).not.toMatch(/ses_gate|\/repo/)
+  })
+
+  it('7 an excluded source leaves at once, ungated, and keeps its valuation history', () => {
+    const kept = session('kept')
+    const excluded = [session('codex-1', 'codex'), session('codex-2', 'codex')]
+    synchronizeUsageFacts([kept, ...excluded], [])
+    const before = ledger()
+
+    // Without the exclusion, codex vanishing whole would be held by the gate.
+    expect(synchronizeUsageFacts([kept], [], { absence: absence({ excludedSources: ['codex'] }) }))
+      .toMatchObject({ removedSessions: 2, heldRemovals: 0, retainedSessions: 0, absences: [] })
+    const after = ledger()
+    expect(after.sessions).toEqual(['kept'])
+    expect(after.facts['codex-1']).toBeUndefined()
+    expect(after.history).toEqual(before.history)
+  })
+
+  it('8 a session still in the input but filtered out (branch, excluded from rollups) leaves as before', () => {
+    const branch = session('branch-main')
+    const excludedFromRollups = session('rollup-excluded')
+    synchronizeUsageFacts([branch, excludedFromRollups], [])
+    const before = ledger()
+
+    const asBranch: SessionSummary = { ...branch, branchLeafUuid: 'leaf-1' }
+    const asExcluded: SessionSummary = {
+      ...excludedFromRollups,
+      tokenAccounting: { ...excludedFromRollups.tokenAccounting!, excludedFromRollups: true }
+    }
+    // The input names them explicitly, so neither the cold cache nor the
+    // vanished source holds them back.
+    expect(synchronizeUsageFacts([asBranch, asExcluded], [], {
+      absence: absence({ physicalLoad: physicalLoad({ summaryCache: 'cold' }) })
+    })).toMatchObject({ removedSessions: 2, heldRemovals: 0, retainedSessions: 0 })
+    expect(ledger().sessions).toEqual([])
+    expect(ledger().history).toEqual(before.history)
+  })
+
+  it('9 a legacy caller (no evidence) still removes every missing session at once, but keeps its valuation history', () => {
+    const a = session('legacy-a')
+    const b = session('legacy-b', 'codex')
+    synchronizeUsageFacts([a, b], [])
+    const before = ledger()
+    expect(before.history['legacy-b']).toBeGreaterThan(0)
+
+    expect(synchronizeUsageFacts([a], [])).toEqual({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      removedSessions: 1,
+      factCount: 1,
+      rebuilt: false
+    })
+    const after = ledger()
+    expect(after.sessions).toEqual(['legacy-a'])
+    expect(after.facts['legacy-b']).toBeUndefined()
+    expect(after.history).toEqual(before.history)
+
+    // A legacy rebuild with nothing in the input empties the ledger, not the history.
+    expect(synchronizeUsageFacts([], [], { rebuild: true })).toMatchObject({ removedSessions: 1, rebuilt: true })
+    expect(ledger().sessions).toEqual([])
+    expect(ledger().history).toEqual(before.history)
+  })
+
+  it('keeps every missing row until this process has a physical load, excluded and filtered ones included', () => {
+    const rows = [session('first-a'), session('first-b', 'opencode'), session('first-c', 'pi')]
+    synchronizeUsageFacts(rows, [])
+    const before = ledger()
+    expect(synchronizeUsageFacts([{ ...rows[0], branchLeafUuid: 'leaf' }], [], {
+      absence: { physicalLoad: null, providerSettlement: null, excludedSources: ['opencode'] }
+    })).toMatchObject({
+      removedSessions: 0,
+      retainedSessions: 3,
+      heldRemovals: 0,
+      absences: [
+        { source: 'claude-code', reason: 'awaiting-first-load', sessions: 1 },
+        { source: 'opencode', reason: 'awaiting-first-load', sessions: 1 },
+        { source: 'pi', reason: 'awaiting-first-load', sessions: 1 }
+      ]
+    })
+    expect(ledger()).toEqual(before)
+  })
+
+  it('applies the per-source-family rules to missing rows', () => {
+    const rows = [
+      session('claude-live'), session('claude-cold'),
+      session('ses_ocListed', 'opencode'), session('ses_ocUnlisted', 'opencode'), session('ses_ocLive', 'opencode'),
+      session('ses_zcA', 'zcode'), session('ses_zcB', 'zcode'),
+      session('pi-a', 'pi'), session('pi-b', 'pi'),
+      session('gemini-a', 'gemini')
+    ]
+    const byId = new Map(rows.map((row) => [row.sessionId, row]))
+    const input = (...ids: string[]) => ids.map((id) => byId.get(id)!)
+    synchronizeUsageFacts(rows, [])
+    const before = ledger()
+
+    // Cold summary cache: every legacy source keeps its missing rows; the
+    // provider-host family keeps them until this process settles 'complete'.
+    expect(synchronizeUsageFacts(input('claude-live', 'ses_ocLive'), [], {
+      absence: absence({ physicalLoad: physicalLoad({ summaryCache: 'cold' }), providerSettlement: null })
+    })).toMatchObject({
+      removedSessions: 0,
+      retainedSessions: 8,
+      heldRemovals: 0,
+      absences: [
+        { source: 'claude-code', reason: 'cold-summary-cache', sessions: 1 },
+        { source: 'gemini', reason: 'provider-unsettled', sessions: 1 },
+        { source: 'opencode', reason: 'cold-summary-cache', sessions: 2 },
+        { source: 'pi', reason: 'provider-unsettled', sessions: 2 },
+        { source: 'zcode', reason: 'cold-summary-cache', sessions: 2 }
+      ]
+    })
+    expect(ledger()).toEqual(before)
+
+    // Warm: an unreadable DB keeps its rows; a readable one keeps what it still
+    // lists; a degraded provider settlement keeps the whole family.
+    expect(synchronizeUsageFacts(input('claude-live', 'claude-cold', 'ses_ocLive', 'pi-a'), [], {
+      absence: absence({
+        physicalLoad: physicalLoad({
+          sqliteSources: {
+            opencode: { discovery: 'ok', presentSessionIds: ['ses_ocLive', 'ses_ocListed'] },
+            zcode: { discovery: 'unavailable', presentSessionIds: [] }
+          }
+        }),
+        providerSettlement: 'degraded'
+      })
+    })).toMatchObject({
+      removedSessions: 1,
+      retainedSessions: 5,
+      heldRemovals: 0,
+      absences: [
+        { source: 'gemini', reason: 'provider-degraded', sessions: 1 },
+        { source: 'opencode', reason: 'listed-by-source', sessions: 1 },
+        { source: 'pi', reason: 'provider-degraded', sessions: 1 },
+        { source: 'zcode', reason: 'discovery-unavailable', sessions: 2 }
+      ]
+    })
+    // The one row the DB no longer lists went; everything else is intact.
+    const afterWarm = ledger()
+    expect(afterWarm.sessions).not.toContain('ses_ocUnlisted')
+    expect(afterWarm.sessions).toHaveLength(9)
+    expect(afterWarm.history).toEqual(before.history)
+
+    // An absent DB (no file) and a complete provider settlement make candidates;
+    // sources that vanished from the input whole are held by the gate.
+    expect(synchronizeUsageFacts(input('claude-live', 'claude-cold', 'ses_ocLive', 'ses_ocListed', 'pi-a'), [], {
+      absence: absence({
+        physicalLoad: physicalLoad({
+          sqliteSources: {
+            opencode: { discovery: 'ok', presentSessionIds: ['ses_ocLive', 'ses_ocListed'] },
+            zcode: { discovery: 'absent', presentSessionIds: [] }
+          }
+        })
+      })
+    })).toMatchObject({
+      removedSessions: 1,
+      retainedSessions: 0,
+      heldRemovals: 3,
+      absences: [
+        { source: 'gemini', reason: 'source-vanished', sessions: 1 },
+        { source: 'zcode', reason: 'source-vanished', sessions: 2 }
+      ]
+    })
+    const afterAbsent = ledger()
+    expect(afterAbsent.sessions).not.toContain('pi-b')
+    expect(afterAbsent.sessions).toEqual(expect.arrayContaining(['gemini-a', 'ses_zcA', 'ses_zcB']))
+    expect(afterAbsent.history).toEqual(before.history)
+  })
+
+  it('holds a large share or count of one source, and lets a small one go at once', () => {
+    const claude = Array.from({ length: 10 }, (_, index) => session(`claude-${index}`))
+    const codex = [session('codex-a', 'codex'), session('codex-b', 'codex')]
+    synchronizeUsageFacts([...claude, ...codex], [])
+
+    // 6 of 10 (60% and at least 5) is held; 1 of 2 is under the minimum and goes.
+    expect(synchronizeUsageFacts([...claude.slice(0, 4), codex[0]], [], { absence: absence() })).toMatchObject({
+      removedSessions: 1,
+      heldRemovals: 6,
+      absences: [{ source: 'claude-code', reason: 'over-max-ratio', sessions: 6 }]
+    })
+    expect(ledger().sessions).toHaveLength(11)
+
+    // Over the absolute count, even when the ratio is small.
+    process.env.SWOB_USAGE_REMOVAL_MAX_COUNT = '2'
+    process.env.SWOB_USAGE_REMOVAL_MAX_RATIO = '1'
+    expect(synchronizeUsageFacts([...claude.slice(0, 7), codex[0]], [], { absence: absence() })).toMatchObject({
+      removedSessions: 0,
+      heldRemovals: 3,
+      absences: [{ source: 'claude-code', reason: 'over-max-count', sessions: 3 }]
+    })
+    // All three have been held since load-A, so load-B confirms them.
+    expect(synchronizeUsageFacts([...claude.slice(0, 7), codex[0]], [], {
+      absence: absence({ physicalLoad: physicalLoad({ loadId: 'load-B' }) })
+    })).toMatchObject({ removedSessions: 3, heldRemovals: 0 })
+    expect(ledger().sessions).toHaveLength(8)
+  })
+
+  it('reads the gate thresholds from the environment, clamped', () => {
+    expect(usageRemovalGateThresholds()).toEqual({ maxRatio: 0.2, maxCount: 100, minCount: 5 })
+    process.env.SWOB_USAGE_REMOVAL_MAX_RATIO = 'not-a-number'
+    process.env.SWOB_USAGE_REMOVAL_MAX_COUNT = ' '
+    process.env.SWOB_USAGE_REMOVAL_MIN_COUNT = 'Infinity'
+    expect(usageRemovalGateThresholds()).toEqual({ maxRatio: 0.2, maxCount: 100, minCount: 5 })
+    process.env.SWOB_USAGE_REMOVAL_MAX_RATIO = '7'
+    process.env.SWOB_USAGE_REMOVAL_MAX_COUNT = '-5'
+    process.env.SWOB_USAGE_REMOVAL_MIN_COUNT = '0'
+    expect(usageRemovalGateThresholds()).toEqual({ maxRatio: 1, maxCount: 0, minCount: 1 })
+    process.env.SWOB_USAGE_REMOVAL_MAX_RATIO = '-1'
+    process.env.SWOB_USAGE_REMOVAL_MAX_COUNT = '2.7'
+    process.env.SWOB_USAGE_REMOVAL_MIN_COUNT = '3.9'
+    expect(usageRemovalGateThresholds()).toEqual({ maxRatio: 0, maxCount: 2, minCount: 3 })
+  })
+
+  it('a kept round between two loads keeps the hold; a returning session clears it', () => {
+    const rows = Array.from({ length: 6 }, (_, index) => session(`round-${index}`))
+    const lastLive = rows.slice(0, 1)
+    synchronizeUsageFacts(rows, [])
+    const warm = (loadId: string) => absence({ physicalLoad: physicalLoad({ loadId }) })
+
+    expect(synchronizeUsageFacts(lastLive, [], { absence: warm('load-A') })).toMatchObject({ heldRemovals: 5 })
+    // A cold load has no say; the hold from load-A stands.
+    expect(synchronizeUsageFacts(lastLive, [], {
+      absence: absence({ physicalLoad: physicalLoad({ loadId: 'load-B', summaryCache: 'cold' }) })
+    })).toMatchObject({ removedSessions: 0, retainedSessions: 5, heldRemovals: 0 })
+    expect(synchronizeUsageFacts(lastLive, [], { absence: warm('load-C') }))
+      .toMatchObject({ removedSessions: 5, heldRemovals: 0 })
+    expect(ledger().sessions).toEqual(['round-0'])
+
+    // A held session that comes back forgets its hold.
+    const again = Array.from({ length: 6 }, (_, index) => session(`again-${index}`))
+    synchronizeUsageFacts([...lastLive, ...again], [], { absence: warm('load-D') })
+    expect(synchronizeUsageFacts(lastLive, [], { absence: warm('load-E') })).toMatchObject({ heldRemovals: 6 })
+    synchronizeUsageFacts([...lastLive, ...again], [], { absence: warm('load-F') })
+    expect(synchronizeUsageFacts(lastLive, [], { absence: warm('load-G') }))
+      .toMatchObject({ removedSessions: 0, heldRemovals: 6 })
+    expect(synchronizeUsageFacts(lastLive, [], { absence: warm('load-H') }))
+      .toMatchObject({ removedSessions: 6, heldRemovals: 0 })
+  })
+
+  it('a rolled-back sync records no hold', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const rows = Array.from({ length: 5 }, (_, index) => session(`rollback-${index}`, 'codex'))
+    const keeper = session('rollback-keeper')
+    synchronizeUsageFacts([...rows, keeper], [])
+    const warm = (loadId: string) => absence({ physicalLoad: physicalLoad({ loadId }) })
+
+    // Cancel at the last check of the transaction, after the removal plan.
+    // Checks: transaction start, one per input session, and the final one.
+    let checks = 0
+    expect(() => synchronizeUsageFacts([keeper], [], {
+      absence: warm('load-A'),
+      shouldCancel: () => ++checks >= 3
+    })).toThrowError(/cancelled/)
+    expect(checks).toBe(3)
+
+    // Had load-A's hold survived the rollback, load-B would confirm it.
+    expect(synchronizeUsageFacts([keeper], [], { absence: warm('load-B') }))
+      .toMatchObject({ removedSessions: 0, heldRemovals: 5 })
+    expect(synchronizeUsageFacts([keeper], [], { absence: warm('load-C') }))
+      .toMatchObject({ removedSessions: 5, heldRemovals: 0 })
+  })
+
+  it('closing the store forgets every hold', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const rows = Array.from({ length: 5 }, (_, index) => session(`restart-${index}`, 'codex'))
+    const keeper = session('restart-keeper')
+    synchronizeUsageFacts([...rows, keeper], [])
+    const warm = (loadId: string) => absence({ physicalLoad: physicalLoad({ loadId }) })
+    expect(synchronizeUsageFacts([keeper], [], { absence: warm('load-A') })).toMatchObject({ heldRemovals: 5 })
+    closeUsageFactStore()
+    expect(synchronizeUsageFacts([keeper], [], { absence: warm('load-B') }))
+      .toMatchObject({ removedSessions: 0, heldRemovals: 5 })
+  })
+
+  it('a rebuild keeps the activity days and folders of a row it keeps', () => {
+    const live = session('rebuild-live')
+    const missing = makeSession('rebuild-missing', '/repo/missing', [
+      usageEvent('rebuild-missing-call', localTimestamp(2026, 7, 21, 9), components(30, 6), { model: 'm1' })
+    ])
+    synchronizeUsageFacts([live, missing], [folder('kept-folder', ['rebuild-missing'])])
+    const before = ledger()
+    expect(before.activity['rebuild-missing']).toBe(1)
+    expect(before.folders['rebuild-missing']).toBe(1)
+
+    expect(synchronizeUsageFacts([live], [folder('kept-folder', ['rebuild-missing'])], {
+      rebuild: true,
+      absence: absence({ physicalLoad: physicalLoad({ summaryCache: 'cold' }) })
+    })).toMatchObject({ changedSessions: 1, removedSessions: 0, retainedSessions: 1, rebuilt: true })
+    const after = ledger()
+    expect(after.activity).toEqual(before.activity)
+    expect(after.folders).toEqual(before.folders)
+    expect(after.facts).toEqual(before.facts)
+    // Rollups are rebuilt from every current fact, the kept row's included.
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(12 + 36)
+  })
 })

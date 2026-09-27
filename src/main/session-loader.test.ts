@@ -40,6 +40,8 @@ import {
   type CodexFixtureRow,
   type CodexRowBase
 } from './__fixtures__/codex-rollout-synthetic'
+import { isSessionSourceSupported } from './platform-support'
+import type { SessionLoadEvidence } from './session-loader'
 import type { RawJsonlMessage } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -437,8 +439,16 @@ async function withSessionLoaderModules<T>(
   }
 }
 
-/** Add one more session (same layout as createSqliteAgentCacheFixture) to an existing DB. */
-function addSqliteAgentSession(dbPath: string, sessionId: string, prompt: string): string {
+/**
+ * Add one more session (same layout as createSqliteAgentCacheFixture) to an
+ * existing DB. `withUsage` gives its assistant message OpenCode token usage.
+ */
+function addSqliteAgentSession(
+  dbPath: string,
+  sessionId: string,
+  prompt: string,
+  options: { withUsage?: boolean } = {}
+): string {
   const db = new Database(dbPath)
   try {
     db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?)').run(
@@ -447,7 +457,18 @@ function addSqliteAgentSession(dbPath: string, sessionId: string, prompt: string
     db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(`${sessionId}-user`, sessionId,
       JSON.stringify({ role: 'user', time: { created: '2026-08-03T00:00:00Z' } }), 1785715200)
     db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(`${sessionId}-assistant`, sessionId,
-      JSON.stringify({ role: 'assistant', parentID: `${sessionId}-user`, time: { created: '2026-08-03T00:00:01Z' } }), 1785715201)
+      JSON.stringify({
+        role: 'assistant',
+        parentID: `${sessionId}-user`,
+        time: { created: '2026-08-03T00:00:01Z' },
+        ...(options.withUsage
+          ? {
+              providerID: 'openai',
+              modelID: 'gpt-5.1',
+              tokens: { input: 13, output: 5, reasoning: 1, cache: { read: 2, write: 3 }, total: 24 }
+            }
+          : {})
+      }), 1785715201)
     const insertPart = db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)')
     insertPart.run(`${sessionId}-part-user`, sessionId, `${sessionId}-user`, 'text', 0, JSON.stringify({ text: prompt }))
     insertPart.run(`${sessionId}-part-assistant`, sessionId, `${sessionId}-assistant`, 'text', 0,
@@ -477,6 +498,16 @@ function readSummaryCacheRow(
     return database.prepare(
       'SELECT sig, per_file_json, compact_json FROM summary_cache_entries WHERE file_path = ?'
     ).get(filePath) as { sig: string; per_file_json: string; compact_json: string | null } | undefined
+  } finally {
+    database.close()
+  }
+}
+
+/** Stamp the summary cache with another version, as a CACHE_VERSION bump (F1d) would leave it. */
+function setSummaryCacheVersion(home: string, version: number): void {
+  const database = new Database(summaryCacheDbPath(home))
+  try {
+    database.pragma(`user_version = ${version}`)
   } finally {
     database.close()
   }
@@ -3318,4 +3349,446 @@ describe('Codex 子 agent：压缩、分叉用量与孙级挂接（F1b）', () =
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
+})
+
+// F1f: evidence of each physical load, for the usage ledger
+// ========================================================
+describe('physical-load evidence for the usage ledger (F1f)', () => {
+  const fakes: FakeSqlite3[] = []
+  const homes: string[] = []
+
+  function tempHome(label: string): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `swob-f1f-${label}-home-`))
+    homes.push(home)
+    return home
+  }
+
+  function install(behavior: Parameters<typeof installFakeSqlite3>[0]): FakeSqlite3 {
+    const fake = installFakeSqlite3(behavior)
+    fakes.push(fake)
+    return fake
+  }
+
+  afterEach(() => {
+    for (const fake of fakes.splice(0)) fake.restore()
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const absentSqliteSources = () => Object.fromEntries((['opencode', 'zcode'] as const)
+    .filter((source) => isSessionSourceSupported(source))
+    .map((source) => [source, { discovery: 'absent', presentSessionIds: [] }]))
+
+  it('one evidence per physical load, shared by every reader of its flight; cold until the summary cache is usable', async () => {
+    const home = tempHome('evidence')
+    writeJsonlAt(path.join(home, '.claude', 'projects', '-Users-test-evidence', 'evidence-session.jsonl'), [
+      rawMsg({ sessionId: 'evidence-session', type: 'user', message: { role: 'user', content: 'evidence fixture' } })
+    ])
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      // The desktop's first paint (read-only), its writable completion and an
+      // action reload that overlap all read one physical load.
+      const [readOnly, writable, completion] = await Promise.all([
+        sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true }),
+        sessionLoader.loadAllSessionsWithEvidence({ quiet: true }),
+        sessionLoader.loadAllSessionsWithProviderStatus()
+      ])
+      expect(readOnly.sessions.map((session) => session.sessionId)).toEqual(['evidence-session'])
+      expect(writable.evidence).toBe(readOnly.evidence)
+      expect(completion.evidence).toBe(readOnly.evidence)
+      expect(readOnly.evidence).toEqual({
+        loadId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+        summaryCache: 'cold',
+        sqliteSources: absentSqliteSources()
+      })
+
+      // The next load is independent, and the writable load above saved the cache.
+      const warm = await sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true })
+      expect(warm.evidence.loadId).not.toBe(readOnly.evidence.loadId)
+      expect(warm.evidence.summaryCache).toBe('warm')
+      expect(warm.sessions).toEqual(await sessionLoader.loadAllSessions({ readOnly: true, quiet: true }))
+
+      // Another CACHE_VERSION (as after F1d) or no cache at all is cold again.
+      setSummaryCacheVersion(home, 1)
+      expect((await sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true })).evidence.summaryCache)
+        .toBe('cold')
+      removeSummaryCache(home)
+      expect((await sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true })).evidence.summaryCache)
+        .toBe('cold')
+    })
+  }, 30_000)
+
+  sqliteCliIt('reports each SQLite source discovery and the session ids it lists, never a path', async () => {
+    const home = tempHome('sqlite-evidence')
+    const firstRef = createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1fListedA')
+    const dbPath = firstRef.slice(0, firstRef.lastIndexOf('#'))
+    addSqliteAgentSession(dbPath, 'ses_F1fListedB', 'second evidence session')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const evidences: unknown[] = []
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const ok = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      evidences.push(ok.evidence)
+      expect(ok.evidence.sqliteSources.opencode).toEqual({ discovery: 'ok', presentSessionIds: expect.any(Array) })
+      expect([...ok.evidence.sqliteSources.opencode!.presentSessionIds].sort())
+        .toEqual(['ses_F1fListedA', 'ses_F1fListedB'])
+      expect(ok.evidence.sqliteSources.zcode).toEqual({ discovery: 'absent', presentSessionIds: [] })
+
+      // A failed session read leaves the discovery 'ok': the DB still lists it.
+      install({ kind: 'fail-matching', match: ['FROM "message"', 'ses_F1fListedB'], stderr: CORRUPT_STDERR })
+      touchSqliteAgentDb(dbPath)
+      const partial = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      evidences.push(partial.evidence)
+      expect([...partial.evidence.sqliteSources.opencode!.presentSessionIds].sort())
+        .toEqual(['ses_F1fListedA', 'ses_F1fListedB'])
+      for (const fake of fakes.splice(0)) fake.restore()
+
+      // A failed discovery lists nothing, even while the sessions are carried over.
+      install({ kind: 'fail', stderr: BUSY_STDERR })
+      touchSqliteAgentDb(dbPath)
+      const unavailable = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      evidences.push(unavailable.evidence)
+      expect(unavailable.sessions.map((session) => session.sessionId))
+        .toEqual(expect.arrayContaining(['ses_F1fListedA', 'ses_F1fListedB']))
+      expect(unavailable.evidence.sqliteSources.opencode).toEqual({ discovery: 'unavailable', presentSessionIds: [] })
+    })
+
+    const serialized = JSON.stringify(evidences)
+    for (const secret of [home, dbPath, 'opencode.db', 'database is locked', 'malformed']) {
+      expect(serialized).not.toContain(secret)
+    }
+  }, 60_000)
+})
+
+// F1f: the usage ledger keeps what a load did not see (pins 1-5, 10, 11, 14)
+// ========================================================
+describe('the usage ledger keeps what a load did not see (F1f)', () => {
+  type SessionLoaderModule = typeof import('./session-loader')
+  type UsageModule = typeof import('./usage-fact-store')
+  type Loaded = { sessions: Awaited<ReturnType<SessionLoaderModule['loadAllSessions']>>; evidence?: SessionLoadEvidence }
+
+  const fakes: FakeSqlite3[] = []
+  const homes: string[] = []
+
+  function tempHome(label: string): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `swob-f1f-${label}-home-`))
+    homes.push(home)
+    return home
+  }
+
+  function install(behavior: Parameters<typeof installFakeSqlite3>[0]): FakeSqlite3 {
+    const fake = installFakeSqlite3(behavior)
+    fakes.push(fake)
+    return fake
+  }
+
+  function restoreFakes(): void {
+    for (const fake of fakes.splice(0)) fake.restore()
+  }
+
+  afterEach(() => {
+    restoreFakes()
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  /**
+   * Load through the evidence-carrying export when there is one. The optional
+   * call keeps these pins runnable on code without it: the sync then gets no
+   * evidence, falls back to the legacy semantics and really deletes rows, so
+   * the pins fail on the ledger counts rather than on a missing function.
+   */
+  async function load(sessionLoader: SessionLoaderModule): Promise<Loaded> {
+    const withEvidence = (sessionLoader as Partial<SessionLoaderModule>).loadAllSessionsWithEvidence
+    if (typeof withEvidence === 'function') return withEvidence({ quiet: true })
+    return { sessions: await sessionLoader.loadAllSessions({ quiet: true }) }
+  }
+
+  function sync(usage: UsageModule, loaded: Loaded): ReturnType<UsageModule['synchronizeUsageFacts']> {
+    return usage.synchronizeUsageFacts(loaded.sessions, [], loaded.evidence
+      ? { absence: { physicalLoad: loaded.evidence, providerSettlement: 'complete', excludedSources: [] } }
+      : {})
+  }
+
+  /** The ledger rows of `sessionIds`, through a separate read-only connection. */
+  function ledgerCounts(home: string, sessionIds: readonly string[]): { sessions: number; facts: number; history: number } {
+    const ledger = new Database(path.join(home, 'usage-facts.db'), { readonly: true, fileMustExist: true })
+    try {
+      const placeholders = sessionIds.map(() => '?').join(', ')
+      const count = (table: string): number => (ledger.prepare(
+        `SELECT count(*) AS count FROM ${table} WHERE session_id IN (${placeholders})`
+      ).get(...sessionIds) as { count: number }).count
+      return { sessions: count('usage_sessions'), facts: count('usage_facts'), history: count('usage_valuation_history') }
+    } finally {
+      ledger.close()
+    }
+  }
+
+  async function withUsageLedger<T>(home: string, run: (usage: UsageModule) => Promise<T>): Promise<T> {
+    const previousUsageIndex = process.env.SWOB_USAGE_INDEX_PATH
+    process.env.SWOB_USAGE_INDEX_PATH = path.join(home, 'usage-facts.db')
+    // One ledger module for the whole pin, like the one long-lived usage worker.
+    const usage = await import('./usage-fact-store')
+    usage.closeUsageFactStore()
+    try {
+      return await run(usage)
+    } finally {
+      usage.closeUsageFactStore()
+      if (previousUsageIndex === undefined) delete process.env.SWOB_USAGE_INDEX_PATH
+      else process.env.SWOB_USAGE_INDEX_PATH = previousUsageIndex
+    }
+  }
+
+  /** Two OpenCode sessions, both with usage, loaded and synced once. */
+  function openCodePair(home: string): { dbPath: string; keptId: string; flakyId: string; flakyRef: string; ids: string[] } {
+    const keptId = 'ses_F1fKept'
+    const flakyId = 'ses_F1fFlaky'
+    const keptRef = createSqliteAgentCacheFixture(home, 'opencode', keptId)
+    const dbPath = keptRef.slice(0, keptRef.lastIndexOf('#'))
+    const flakyRef = addSqliteAgentSession(dbPath, flakyId, 'flaky pin prompt', { withUsage: true })
+    return { dbPath, keptId, flakyId, flakyRef, ids: [keptId, flakyId] }
+  }
+
+  async function warmUp(
+    sessionLoader: SessionLoaderModule,
+    usage: UsageModule,
+    home: string,
+    ids: readonly string[]
+  ): Promise<{ sessions: number; facts: number; history: number }> {
+    const first = await load(sessionLoader)
+    expect(first.sessions.map((session) => session.sessionId)).toEqual(expect.arrayContaining([...ids]))
+    expect(sync(usage, first)).toMatchObject({ changedSessions: ids.length, removedSessions: 0 })
+    const baseline = ledgerCounts(home, ids)
+    expect(baseline).toMatchObject({ sessions: ids.length })
+    expect(baseline.facts).toBeGreaterThanOrEqual(ids.length)
+    expect(baseline.history).toBeGreaterThanOrEqual(ids.length)
+    return baseline
+  }
+
+  const flakyMessages = (flakyId: string) =>
+    ({ kind: 'fail-matching', match: ['FROM "message"', flakyId], stderr: CORRUPT_STDERR }) as const
+
+  sqliteCliIt('1 hot, every read succeeds: nothing leaves the ledger', async () => {
+    const home = tempHome('pin1')
+    const { ids } = openCodePair(home)
+    await withUsageLedger(home, async (usage) => {
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const baseline = await warmUp(sessionLoader, usage, home, ids)
+        const hot = await load(sessionLoader)
+        const result = sync(usage, hot)
+        expect(ledgerCounts(home, ids)).toEqual(baseline)
+        expect(result).toMatchObject({ changedSessions: 0, unchangedSessions: 2, removedSessions: 0 })
+      })
+    })
+  }, 60_000)
+
+  sqliteCliIt('2 hot, one session read fails: its last good row stands in, nothing leaves the ledger', async () => {
+    const home = tempHome('pin2')
+    const { dbPath, flakyId, ids } = openCodePair(home)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await withUsageLedger(home, async (usage) => {
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const baseline = await warmUp(sessionLoader, usage, home, ids)
+        touchSqliteAgentDb(dbPath)
+        install(flakyMessages(flakyId))
+        const hot = await load(sessionLoader)
+        expect(hot.sessions.map((session) => session.sessionId)).toContain(flakyId)
+        const result = sync(usage, hot)
+        expect(ledgerCounts(home, ids)).toEqual(baseline)
+        expect(result).toMatchObject({ removedSessions: 0 })
+      })
+    })
+  }, 60_000)
+
+  sqliteCliIt('3 cold (summary cache reset), one session read fails: the absent session keeps its facts and history', async () => {
+    const home = tempHome('pin3')
+    const { flakyId, ids } = openCodePair(home)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await withUsageLedger(home, async (usage) => {
+      let baseline!: ReturnType<typeof ledgerCounts>
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        baseline = await warmUp(sessionLoader, usage, home, ids)
+      })
+      setSummaryCacheVersion(home, 1)
+      install(flakyMessages(flakyId))
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const cold = await load(sessionLoader)
+        expect(cold.sessions.map((session) => session.sessionId)).not.toContain(flakyId)
+        const result = sync(usage, cold)
+        // The ledger first: this is what the legacy semantics destroys.
+        expect(ledgerCounts(home, ids)).toEqual(baseline)
+        expect(result).toMatchObject({
+          removedSessions: 0,
+          retainedSessions: 1,
+          heldRemovals: 0,
+          absences: [{ source: 'opencode', reason: 'cold-summary-cache', sessions: 1 }]
+        })
+      })
+    })
+  }, 60_000)
+
+  sqliteCliIt('4 cold (summary cache reset), the whole source fails discovery: every session keeps its facts and history', async () => {
+    const home = tempHome('pin4')
+    const { ids } = openCodePair(home)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await withUsageLedger(home, async (usage) => {
+      let baseline!: ReturnType<typeof ledgerCounts>
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        baseline = await warmUp(sessionLoader, usage, home, ids)
+      })
+      setSummaryCacheVersion(home, 1)
+      install({ kind: 'fail', stderr: BUSY_STDERR })
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const cold = await load(sessionLoader)
+        expect(cold.sessions.filter((session) => session.source === 'opencode')).toEqual([])
+        const result = sync(usage, cold)
+        expect(ledgerCounts(home, ids)).toEqual(baseline)
+        expect(result).toMatchObject({
+          removedSessions: 0,
+          retainedSessions: 2,
+          absences: [{ source: 'opencode', reason: 'cold-summary-cache', sessions: 2 }]
+        })
+      })
+      restoreFakes()
+
+      // Once the source reads again, both sessions come back unchanged.
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const recovered = await load(sessionLoader)
+        expect(sync(usage, recovered)).toMatchObject({ changedSessions: 0, unchangedSessions: 2, removedSessions: 0 })
+        expect(ledgerCounts(home, ids)).toEqual(baseline)
+      })
+    })
+  }, 60_000)
+
+  sqliteCliIt('5 a session the DB no longer lists still leaves the ledger at once; its valuation history stays', async () => {
+    const home = tempHome('pin5')
+    const { dbPath, keptId, flakyId, ids } = openCodePair(home)
+    await withUsageLedger(home, async (usage) => {
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const baseline = await warmUp(sessionLoader, usage, home, ids)
+        const keptBefore = ledgerCounts(home, [keptId])
+        const goneBefore = ledgerCounts(home, [flakyId])
+        const db = new Database(dbPath)
+        try {
+          db.prepare('DELETE FROM session WHERE id = ?').run(flakyId)
+        } finally {
+          db.close()
+        }
+        const warm = await load(sessionLoader)
+        expect(warm.sessions.map((session) => session.sessionId)).not.toContain(flakyId)
+        expect(sync(usage, warm)).toMatchObject({ removedSessions: 1 })
+        expect(ledgerCounts(home, [keptId])).toEqual(keptBefore)
+        expect(ledgerCounts(home, [flakyId])).toEqual({ sessions: 0, facts: 0, history: goneBefore.history })
+        expect(ledgerCounts(home, ids).history).toBe(baseline.history)
+      })
+    })
+  }, 60_000)
+
+  it('10 a cold round keeps a deleted file-backed session; the next warm round removes it, history intact', async () => {
+    const home = tempHome('pin10')
+    const writeClaudeSession = (sessionId: string): string => writeJsonlAt(
+      path.join(home, '.claude', 'projects', '-Users-test-f1f', `${sessionId}.jsonl`),
+      [
+        rawMsg({
+          sessionId, uuid: `${sessionId}-u1`, type: 'user', timestamp: '2026-08-04T00:00:00Z',
+          message: { role: 'user', content: `${sessionId} prompt` }
+        }),
+        rawMsg({
+          sessionId, uuid: `${sessionId}-a1`, parentUuid: `${sessionId}-u1`, type: 'assistant',
+          requestId: `${sessionId}-request`, timestamp: '2026-08-04T00:00:01Z',
+          message: {
+            id: `${sessionId}-message`, role: 'assistant', model: 'claude-sonnet-4-5', content: 'answer',
+            stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 20 }
+          }
+        })
+      ]
+    )
+    const deletedFile = writeClaudeSession('f1f-deleted')
+    writeClaudeSession('f1f-remaining')
+    const ids = ['f1f-deleted', 'f1f-remaining']
+    await withUsageLedger(home, async (usage) => {
+      let baseline!: ReturnType<typeof ledgerCounts>
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        baseline = await warmUp(sessionLoader, usage, home, ids)
+      })
+      const deletedBefore = ledgerCounts(home, ['f1f-deleted'])
+
+      // The file really is gone, but this round cannot tell: the cache was reset.
+      setSummaryCacheVersion(home, 1)
+      fs.rmSync(deletedFile)
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const cold = await load(sessionLoader)
+        expect(cold.sessions.map((session) => session.sessionId)).toEqual(['f1f-remaining'])
+        const result = sync(usage, cold)
+        expect(ledgerCounts(home, ids)).toEqual(baseline)
+        expect(result).toMatchObject({
+          removedSessions: 0,
+          retainedSessions: 1,
+          absences: [{ source: 'claude-code', reason: 'cold-summary-cache', sessions: 1 }]
+        })
+      })
+
+      // The next warm round has the evidence: the deletion goes through.
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const warm = await load(sessionLoader)
+        expect(sync(usage, warm)).toMatchObject({ removedSessions: 1, retainedSessions: 0, heldRemovals: 0 })
+        expect(ledgerCounts(home, ['f1f-deleted']))
+          .toEqual({ sessions: 0, facts: 0, history: deletedBefore.history })
+        expect(ledgerCounts(home, ['f1f-remaining'])).toMatchObject({ sessions: 1 })
+      })
+    })
+  }, 60_000)
+
+  sqliteCliIt('11 warm cache without the row, read fails: the DB still lists the session, so it stays', async () => {
+    const home = tempHome('pin11')
+    const { flakyId, flakyRef, ids } = openCodePair(home)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await withUsageLedger(home, async (usage) => {
+      let baseline!: ReturnType<typeof ledgerCounts>
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        baseline = await warmUp(sessionLoader, usage, home, ids)
+      })
+      const cache = new Database(summaryCacheDbPath(home))
+      try {
+        cache.prepare('DELETE FROM summary_cache_entries WHERE file_path = ?').run(flakyRef)
+      } finally {
+        cache.close()
+      }
+      install(flakyMessages(flakyId))
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const warm = await load(sessionLoader)
+        expect(warm.sessions.map((session) => session.sessionId)).not.toContain(flakyId)
+        const result = sync(usage, warm)
+        expect(ledgerCounts(home, ids)).toEqual(baseline)
+        expect(result).toMatchObject({
+          removedSessions: 0,
+          retainedSessions: 1,
+          absences: [{ source: 'opencode', reason: 'listed-by-source', sessions: 1 }]
+        })
+      })
+    })
+  }, 60_000)
+
+  sqliteCliIt('14 an unusable cache but an earlier good discovery in this process: the known refs are not pruned', async () => {
+    const home = tempHome('pin14')
+    const ref = createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1fMemory')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await withUsageLedger(home, async (usage) => {
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const baseline = await warmUp(sessionLoader, usage, home, ['ses_F1fMemory'])
+        const row = readSummaryCacheRow(home, ref)
+        expect(row).toBeDefined()
+
+        // The cache cannot list the source's refs (another version); only
+        // this process's last successful discovery still knows them.
+        setSummaryCacheVersion(home, 1)
+        install({ kind: 'fail', stderr: BUSY_STDERR })
+        const loaded = await load(sessionLoader)
+        expect(loaded.sessions.map((session) => session.sessionId)).not.toContain('ses_F1fMemory')
+        expect(readSummaryCacheRow(home, ref)).toEqual(row)
+        sync(usage, loaded)
+        expect(ledgerCounts(home, ['ses_F1fMemory'])).toEqual(baseline)
+      })
+    })
+  }, 60_000)
 })

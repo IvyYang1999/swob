@@ -48,6 +48,8 @@ import {
 } from './library-control-plane'
 import {
   getSessionLineagePath,
+  LineageRegistryWriteRefusedError,
+  readLineageRegistrySnapshot,
   rebuildSessionLineageRegistry,
   writeSessionLineageRegistry
 } from '../main/session-lineage'
@@ -512,8 +514,38 @@ function cmdWhere(sessionId: string): void {
 
 async function cmdLineage(flags: Record<string, string | true>): Promise<void> {
   const libraryRoot = getLibraryRoot()
+  const registryPath = getSessionLineagePath(libraryRoot)
+  // The same guard as the desktop (F1d): the file as the rebuild found it is
+  // the only one it may replace, never one it could not read, never losing
+  // an alias or a resolution, and only after a copy in the state directory.
+  const before = readLineageRegistrySnapshot(registryPath)
   const registry = await rebuildSessionLineageRegistry(libraryRoot)
-  if (flags['dry-run'] !== true) writeSessionLineageRegistry(registry, getSessionLineagePath(libraryRoot))
+  if (flags['dry-run'] !== true) {
+    try {
+      const { check, backupFileName } = writeSessionLineageRegistry(registry, registryPath, { expected: before })
+      for (const drop of check?.staleAliasDrops || []) {
+        console.warn(`lineage: alias ${drop.sessionId} dropped, its resolution ${drop.resolutionId} is stale`)
+      }
+      for (const resolutionId of check?.newlyStaleResolutions || []) {
+        console.warn(`lineage: resolution ${resolutionId} is stale`)
+      }
+      if (backupFileName) console.warn(`lineage: previous registry saved as lineage-backups/${backupFileName}`)
+    } catch (error) {
+      if (!(error instanceof LineageRegistryWriteRefusedError)) throw error
+      for (const alias of error.check?.lostAliases || []) console.warn(`lineage: the rebuild would lose alias ${alias}`)
+      for (const resolution of error.check?.lostResolutions || []) {
+        console.warn(`lineage: the rebuild would lose resolution ${resolution}`)
+      }
+      for (const relation of error.check?.lostManualRelations || []) {
+        console.warn(`lineage: the rebuild would lose manual relation ${relation}`)
+      }
+      throw new CliFailure(error.message, 1, {
+        code: error.code,
+        hint: 'The registry was left unchanged; swob lineage --dry-run prints the rebuild to compare',
+        retryable: error.code === 'LINEAGE_REGISTRY_CHANGED'
+      })
+    }
+  }
   out(registry)
 }
 

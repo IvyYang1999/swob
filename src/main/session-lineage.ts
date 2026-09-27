@@ -1,10 +1,12 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { runtimeHome } from './runtime-home'
 import {
   findClaudeSessionFiles,
   loadCachedClaudeLineageMetadata,
   parseSessionFile,
   resolvePhysicalSessionId,
+  SUMMARY_CACHE_VERSION,
   type CachedClaudeLineageFile
 } from './session-loader'
 import type { RawJsonlMessage } from './session-types'
@@ -102,6 +104,12 @@ export interface SessionLineageRegistry {
   ambiguous: LineageAmbiguity[]
   /** Optional only while reading a legacy v1 registry; every new build writes it. */
   resolutions?: LineageResolution[]
+  /**
+   * The summary-cache version whose lineage fields this registry was rebuilt
+   * from (F1d). The desktop rebuilds a registry of another version, or of
+   * none, once after its first writable load. Readers ignore it.
+   */
+  derivedFrom?: { summaryCacheVersion: number }
 }
 
 /**
@@ -164,12 +172,377 @@ export async function rebuildSessionLineageRegistry(
     ...options,
     libraryRoot
   })
-  return preserveExistingAliases(registry, getSessionLineagePath(libraryRoot))
+  return {
+    ...preserveExistingAliases(registry, getSessionLineagePath(libraryRoot)),
+    derivedFrom: { summaryCacheVersion: SUMMARY_CACHE_VERSION }
+  }
 }
 
-export function writeSessionLineageRegistry(registry: SessionLineageRegistry, filePath: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  fs.writeFileSync(filePath, JSON.stringify(registry, null, 2) + '\n', 'utf-8')
+/**
+ * The registry file as a replacement must see it (F1d). Only a missing file
+ * (ENOENT) is "no registry". One that exists but cannot be read, is not a
+ * regular file (a symlink is never followed), is not UTF-8 JSON holding an
+ * object, or whose aliases, resolutions or relations have another shape is
+ * unreadable: nothing may replace it.
+ */
+export type LineageRegistrySnapshot =
+  | { readonly state: 'missing' }
+  | { readonly state: 'unreadable'; readonly code: string }
+  | {
+      readonly state: 'readable'
+      /** The file as read: what a replacement backs up and compares against. */
+      readonly bytes: Buffer
+      readonly mode: number
+      readonly registry: Readonly<Record<string, unknown>>
+    }
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+export function readLineageRegistrySnapshot(filePath: string): LineageRegistrySnapshot {
+  let descriptor: number | undefined
+  let bytes: Buffer
+  let mode: number
+  try {
+    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))
+    const stat = fs.fstatSync(descriptor)
+    if (!stat.isFile()) return { state: 'unreadable', code: 'not-a-regular-file' }
+    mode = stat.mode & 0o777
+    bytes = fs.readFileSync(descriptor)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { state: 'missing' }
+    return { state: 'unreadable', code: code === 'ELOOP' ? 'not-a-regular-file' : code || 'read-failed' }
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  } catch {
+    return { state: 'unreadable', code: 'invalid-json' }
+  }
+  if (!isPlainObject(parsed)) return { state: 'unreadable', code: 'not-an-object' }
+  if (parsed.aliases !== undefined && !isPlainObject(parsed.aliases)) {
+    return { state: 'unreadable', code: 'invalid-aliases' }
+  }
+  for (const field of ['resolutions', 'relations'] as const) {
+    if (parsed[field] !== undefined && !Array.isArray(parsed[field])) {
+      return { state: 'unreadable', code: `invalid-${field}` }
+    }
+  }
+  return { state: 'readable', bytes, mode, registry: parsed }
+}
+
+function sameLineageRegistrySnapshot(left: LineageRegistrySnapshot, right: LineageRegistrySnapshot): boolean {
+  if (left.state === 'readable' || right.state === 'readable') {
+    return left.state === 'readable' && right.state === 'readable' && left.bytes.equals(right.bytes)
+  }
+  return left.state === right.state
+}
+
+export interface LineageRegistryCounts {
+  readonly aliases: number
+  readonly resolutions: number
+  readonly manualRelations: number
+}
+
+export interface LineageRegistryReplacementCheck {
+  readonly previous: LineageRegistryCounts
+  readonly next: LineageRegistryCounts
+  /** Old alias keys left out because the continuation resolution behind them went stale: allowed, each reported. */
+  readonly staleAliasDrops: ReadonlyArray<{ sessionId: string; successorId: string; resolutionId: string }>
+  /** Resolutions applied before and stale now (kept, marked stale): each reported. */
+  readonly newlyStaleResolutions: readonly string[]
+  /** Old alias keys the new registry loses for any other reason. */
+  readonly lostAliases: readonly string[]
+  /** Old resolutions the new registry loses: by id (a duplicate counts), `#<index>` for one that does not parse. */
+  readonly lostResolutions: readonly string[]
+  /** Old manual relations (`type:parent->child`) the new registry loses while their resolution is not stale. */
+  readonly lostManualRelations: readonly string[]
+}
+
+export function lineageRegistryCounts(registry: SessionLineageRegistry): LineageRegistryCounts {
+  return {
+    aliases: Object.keys(registry.aliases).length,
+    resolutions: (registry.resolutions || []).length,
+    manualRelations: registry.relations.filter((relation) => relation.provenance === 'manual').length
+  }
+}
+
+/**
+ * What replacing `previous` (a registry as read from disk) by `next` would
+ * lose. Any lost alias key, resolution or manual relation refuses the
+ * replacement; an alias dropped because its resolution went stale is not a
+ * loss, and is reported with every resolution that went stale.
+ */
+export function checkLineageRegistryReplacement(
+  previous: Readonly<Record<string, unknown>>,
+  next: SessionLineageRegistry
+): LineageRegistryReplacementCheck {
+  const previousAliases = isPlainObject(previous.aliases)
+    ? Object.entries(previous.aliases).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    : []
+  const previousResolutions: unknown[] = Array.isArray(previous.resolutions) ? previous.resolutions : []
+  const previousManual = (Array.isArray(previous.relations) ? previous.relations : [])
+    .filter((relation): relation is Record<string, unknown> =>
+      isPlainObject(relation) && relation.provenance === 'manual')
+  const nextResolutions = next.resolutions || []
+  const nextStatus = new Map(nextResolutions.map((resolution) => [resolution.resolutionId, resolution.status]))
+  const staleContinuations = new Map(nextResolutions
+    .filter((resolution) => resolution.status === 'stale' && resolution.type === 'continuation')
+    .map((resolution) => [resolution.parentSessionId, resolution.resolutionId]))
+
+  const staleAliasDrops: Array<{ sessionId: string; successorId: string; resolutionId: string }> = []
+  const lostAliases: string[] = []
+  for (const [sessionId, successorId] of previousAliases) {
+    if (Object.prototype.hasOwnProperty.call(next.aliases, sessionId)) continue
+    const resolutionId = staleContinuations.get(sessionId)
+    if (resolutionId) staleAliasDrops.push({ sessionId, successorId, resolutionId })
+    else lostAliases.push(sessionId)
+  }
+
+  const lostResolutions: string[] = []
+  const newlyStaleResolutions: string[] = []
+  const previousTimes = new Map<string, number>()
+  previousResolutions.forEach((entry, index) => {
+    const resolution = parseResolution(entry)
+    if (!resolution) {
+      lostResolutions.push(`#${index}`)
+      return
+    }
+    previousTimes.set(resolution.resolutionId, (previousTimes.get(resolution.resolutionId) || 0) + 1)
+    if (resolution.status === 'applied' && nextStatus.get(resolution.resolutionId) === 'stale' &&
+      !newlyStaleResolutions.includes(resolution.resolutionId)) {
+      newlyStaleResolutions.push(resolution.resolutionId)
+    }
+  })
+  for (const [resolutionId, times] of previousTimes) {
+    const kept = nextResolutions.filter((resolution) => resolution.resolutionId === resolutionId).length
+    if (kept < times) lostResolutions.push(resolutionId)
+  }
+
+  const lostManualRelations: string[] = []
+  for (const relation of previousManual) {
+    const kept = next.relations.some((candidate) => candidate.provenance === 'manual' &&
+      candidate.parent === relation.parent && candidate.child === relation.child && candidate.type === relation.type)
+    if (kept) continue
+    if (typeof relation.resolutionId === 'string' && nextStatus.get(relation.resolutionId) === 'stale') continue
+    lostManualRelations.push(`${String(relation.type)}:${String(relation.parent)}->${String(relation.child)}`)
+  }
+
+  return {
+    previous: {
+      aliases: previousAliases.length,
+      resolutions: previousResolutions.length,
+      manualRelations: previousManual.length
+    },
+    next: lineageRegistryCounts(next),
+    staleAliasDrops,
+    newlyStaleResolutions,
+    lostAliases,
+    lostResolutions,
+    lostManualRelations
+  }
+}
+
+export type LineageRegistryRefusalCode =
+  | 'LINEAGE_REGISTRY_UNREADABLE'
+  | 'LINEAGE_REGISTRY_CHANGED'
+  | 'LINEAGE_REGISTRY_ENTRIES_LOST'
+  | 'LINEAGE_REGISTRY_BACKUP_FAILED'
+
+/** writeSessionLineageRegistry refused before replacing anything. */
+export class LineageRegistryWriteRefusedError extends Error {
+  readonly code: LineageRegistryRefusalCode
+  /** Why the file could not be read or backed up (an errno code or a shape code). */
+  readonly readCode?: string
+  readonly check?: LineageRegistryReplacementCheck
+
+  constructor(
+    code: LineageRegistryRefusalCode,
+    message: string,
+    detail: { readCode?: string; check?: LineageRegistryReplacementCheck } = {}
+  ) {
+    super(message)
+    this.name = 'LineageRegistryWriteRefusedError'
+    this.code = code
+    this.readCode = detail.readCode
+    this.check = detail.check
+  }
+}
+
+export interface LineageRegistryWriteOptions {
+  /** The file as the rebuild found it: a file changed since is not replaced. */
+  readonly expected?: LineageRegistrySnapshot
+  /** Where a replaced file is copied first. Default: <state>/lineage-backups, never the Library. */
+  readonly backupDirectory?: string
+}
+
+export interface LineageRegistryWriteResult {
+  /** null when there was no registry file to replace. */
+  readonly check: LineageRegistryReplacementCheck | null
+  /**
+   * The byte-for-byte copy of the replaced file in the backup directory:
+   * written by this call, or the newest backup when it already held exactly
+   * these bytes (a replacement retried after failing past its backup).
+   */
+  readonly backupFileName: string | null
+}
+
+export function defaultLineageBackupDirectory(): string {
+  return path.join(runtimeHome(), '.claude-session-manager', 'lineage-backups')
+}
+
+/**
+ * The only writer of the lineage registry, which is the only store of old
+ * aliases and manual resolutions (F1d). It creates a missing registry, and
+ * replaces an existing one only when it could read it, it is still what the
+ * caller's rebuild saw (`expected`), the new registry loses no alias key, no
+ * resolution and no manual relation (see checkLineageRegistryReplacement),
+ * and a byte-for-byte copy is on disk outside the Library before anything
+ * else is written: this call writes it, unless the newest backup already
+ * holds exactly these bytes, so a replacement that keeps failing past its
+ * backup (a read-only Library, a busy rename) leaves one copy, not one per
+ * try. The replacement is atomic: a temporary file in the same directory,
+ * fsync, rename. Anything else throws LineageRegistryWriteRefusedError with
+ * the file as it was.
+ */
+export function writeSessionLineageRegistry(
+  registry: SessionLineageRegistry,
+  filePath: string,
+  options: LineageRegistryWriteOptions = {}
+): LineageRegistryWriteResult {
+  const current = readLineageRegistrySnapshot(filePath)
+  if (current.state === 'unreadable') {
+    throw new LineageRegistryWriteRefusedError(
+      'LINEAGE_REGISTRY_UNREADABLE',
+      `The lineage registry exists but cannot be read (${current.code}); it was left unchanged`,
+      { readCode: current.code }
+    )
+  }
+  if (options.expected && !sameLineageRegistrySnapshot(options.expected, current)) {
+    throw new LineageRegistryWriteRefusedError(
+      'LINEAGE_REGISTRY_CHANGED',
+      'The lineage registry changed while it was being rebuilt; it was left unchanged'
+    )
+  }
+  let check: LineageRegistryReplacementCheck | null = null
+  let backupFileName: string | null = null
+  if (current.state === 'readable') {
+    check = checkLineageRegistryReplacement(current.registry, registry)
+    const lost = check.lostAliases.length + check.lostResolutions.length + check.lostManualRelations.length
+    if (lost > 0) {
+      throw new LineageRegistryWriteRefusedError(
+        'LINEAGE_REGISTRY_ENTRIES_LOST',
+        `The rebuilt lineage registry would lose ${check.lostAliases.length} alias(es), ` +
+        `${check.lostResolutions.length} resolution(s) and ${check.lostManualRelations.length} manual relation(s); ` +
+        'the registry was left unchanged',
+        { check }
+      )
+    }
+    const backupDirectory = options.backupDirectory || defaultLineageBackupDirectory()
+    backupFileName = newestIdenticalBackup(backupDirectory, current.bytes) ??
+      backupLineageRegistry(current.bytes, backupDirectory)
+  }
+  replaceLineageRegistryFile(filePath, JSON.stringify(registry, null, 2) + '\n', current)
+  return { check, backupFileName }
+}
+
+const BACKUP_FILE_NAME = /^session-lineage-.+\.json$/
+
+/**
+ * The newest backup in `directory` (by modification time) when it already
+ * holds exactly `bytes`; null when there is none, it differs, or the
+ * directory cannot be read (the backup is then written, or fails, as usual).
+ * Symbolic links are never followed.
+ */
+function newestIdenticalBackup(directory: string, bytes: Buffer): string | null {
+  try {
+    let newest: { name: string; mtimeMs: number } | null = null
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !BACKUP_FILE_NAME.test(entry.name)) continue
+      const { mtimeMs } = fs.lstatSync(path.join(directory, entry.name))
+      if (!newest || mtimeMs > newest.mtimeMs || (mtimeMs === newest.mtimeMs && entry.name > newest.name)) {
+        newest = { name: entry.name, mtimeMs }
+      }
+    }
+    return newest && fs.readFileSync(path.join(directory, newest.name)).equals(bytes) ? newest.name : null
+  } catch {
+    return null
+  }
+}
+
+function createBackupFile(directory: string): { descriptor: number; filePath: string } {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  for (let attempt = 0; ; attempt++) {
+    const filePath = path.join(directory, `session-lineage-${stamp}-${process.pid}${attempt ? `-${attempt}` : ''}.json`)
+    try {
+      return { descriptor: fs.openSync(filePath, 'wx', 0o600), filePath }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 99) throw error
+    }
+  }
+}
+
+/** Copy the registry being replaced, byte for byte, and return the copy's file name. */
+function backupLineageRegistry(bytes: Buffer, directory: string): string {
+  let backup: { descriptor: number; filePath: string } | null = null
+  let open = false
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+    backup = createBackupFile(directory)
+    open = true
+    fs.writeFileSync(backup.descriptor, bytes)
+    fs.fsyncSync(backup.descriptor)
+    open = false
+    fs.closeSync(backup.descriptor)
+    return path.basename(backup.filePath)
+  } catch (error) {
+    if (backup) {
+      if (open) fs.closeSync(backup.descriptor)
+      try { fs.unlinkSync(backup.filePath) } catch { /* no partial copy to clean */ }
+    }
+    const code = (error as NodeJS.ErrnoException).code || 'backup-failed'
+    throw new LineageRegistryWriteRefusedError(
+      'LINEAGE_REGISTRY_BACKUP_FAILED',
+      `The lineage registry could not be backed up (${code}); it was left unchanged`,
+      { readCode: code }
+    )
+  }
+}
+
+function replaceLineageRegistryFile(filePath: string, text: string, current: LineageRegistrySnapshot): void {
+  const directory = path.dirname(filePath)
+  fs.mkdirSync(directory, { recursive: true })
+  const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`)
+  let descriptor: number | undefined
+  try {
+    // A new registry gets the usual 0666 & ~umask; a replaced one keeps its mode.
+    descriptor = fs.openSync(temporaryPath, 'wx', current.state === 'readable' ? 0o600 : 0o666)
+    fs.writeFileSync(descriptor, text)
+    if (current.state === 'readable') fs.fchmodSync(descriptor, current.mode)
+    fs.fsyncSync(descriptor)
+    fs.closeSync(descriptor)
+    descriptor = undefined
+    // A last look before the rename: what another writer put there since is kept.
+    if (!sameLineageRegistrySnapshot(current, readLineageRegistrySnapshot(filePath))) {
+      throw new LineageRegistryWriteRefusedError(
+        'LINEAGE_REGISTRY_CHANGED',
+        'The lineage registry changed while it was being written; it was left unchanged'
+      )
+    }
+    fs.renameSync(temporaryPath, filePath)
+    try {
+      const directoryDescriptor = fs.openSync(directory, 'r')
+      try { fs.fsyncSync(directoryDescriptor) } finally { fs.closeSync(directoryDescriptor) }
+    } catch { /* directory fsync is unavailable on some filesystems */ }
+  } catch (error) {
+    if (descriptor !== undefined) fs.closeSync(descriptor)
+    try { fs.unlinkSync(temporaryPath) } catch { /* no temporary file to clean */ }
+    throw error
+  }
 }
 
 function resolutionId(input: LineageResolutionInput): string {

@@ -441,6 +441,17 @@ export interface LibraryWriterLeaseInspection {
   heartbeatAt?: string
   leaseExpiresAt?: string
   leaseExpired?: boolean
+  /**
+   * Present only when the caller passed its own deviceId: whether the owner
+   * record names the same installation. The deviceId itself is never returned,
+   * and it stays diagnostic metadata, not liveness evidence.
+   */
+  ownerDeviceIsLocal?: boolean
+}
+
+export interface LibraryWriterInspectionOptions extends LibraryWriterLeaseOptions {
+  /** The caller's installation deviceId, compared with the owner's; never echoed back. */
+  localDeviceId?: string
 }
 
 export const LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION = 'RECOVER_LIBRARY_WRITER_LOCK'
@@ -468,6 +479,11 @@ const BUSY_MESSAGES: Record<LibraryWriterBusyReason, string> = {
   'corrupt-owner': 'Library 写锁 owner 格式损坏；证据已保留，不会自动删除',
   'recovery-in-progress': 'Library 写锁正由另一个本机进程恢复；不会并发抢占',
   timeout: 'Library 写入锁等待超时'
+}
+
+/** The fixed diagnostic sentence for a busy reason (the desktop dialog's zh-CN text must match it). */
+export function libraryWriterBusyMessage(reason: LibraryWriterBusyReason): string {
+  return BUSY_MESSAGES[reason]
 }
 
 export class LibraryWriterBusyError extends Error {
@@ -1137,7 +1153,7 @@ export function acquireLibraryWriterLeaseSync(
 
 export function inspectLibraryWriterLease(
   libraryRoot: string,
-  options: LibraryWriterLeaseOptions = {}
+  options: LibraryWriterInspectionOptions = {}
 ): LibraryWriterLeaseInspection {
   // Inspection is a strict read path: unlike acquisition it does not create
   // .swob/locks or bootstrap a host identity. Missing local identity evidence
@@ -1215,7 +1231,8 @@ export function inspectLibraryWriterLease(
     mode: existing.owner.mode,
     heartbeatAt: existing.owner.heartbeatAt,
     leaseExpiresAt: existing.owner.leaseExpiresAt,
-    leaseExpired: Date.parse(existing.owner.leaseExpiresAt) < now
+    leaseExpired: Date.parse(existing.owner.leaseExpiresAt) < now,
+    ...(options.localDeviceId ? { ownerDeviceIsLocal: existing.owner.deviceId === options.localDeviceId } : {})
   }
 }
 

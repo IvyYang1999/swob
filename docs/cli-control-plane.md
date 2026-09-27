@@ -79,6 +79,33 @@ swob doctor checkup [--report <目录|文件.md>] [--json] [--sources a,b] [--co
 
 **平台。** Windows 上 `runtimeHome()` 不读 HOME，隔离 HOME 的办法不成立，直接退出 `1`（`checkup-windows-unsupported`）。
 
+## insights 口径
+
+```bash
+swob insights [--json] [--summary]
+```
+
+合计按计费事实全局去重，与桌面端 Insights 页（usage-facts）同一口径。
+
+- **一条计费事实只算一次。** 续接或分叉的转录可能带着另一场会话也记下的调用。合计只算其中一份，选哪一份按 usage-facts 的 `billing_rank`：作用域 main 先于 subagent、再先于其他；有时间的先于没有时间的；再按 `occurred_at`、`event_id` 的原串升序。胜出那份所在的会话决定这笔用量归哪个来源、项目、文件夹、日期和小时。
+- **跨会话只按计费身份合并。** 身份就是 usage-facts 的 `billing_fact_id`：来源 + `billingFactKey`。没有 `billingFactKey` 的调用（legacy 聚合账本、Codex 旧总账、没有 id 的 Claude 行）只在本会话内去重，不跨会话合并；同一个 `billingFactKey` 在不同来源下也不合并。
+- **全局只算一份：** `totalTokens`、`conversationOnlyTokens`、`totalInputTokens`、`totalOutputTokens`、`totalCacheReadTokens`、`totalCacheCreationTokens`、`valuation`，`bySource`、`byProject`、`byFolder` 的 token，`byModel`，`byDate` 的 token、`turnCount` 与分来源/项目/文件夹的 token，`heatmap`、`hourlyDistribution`、`unknownTimeUsage`。
+- **按会话：** `bySession` 逐会话列出，两场会话共有的调用各显示一次，所以 Σ `bySession` 大于合计，差额见下面三个 duplicate 字段。各类会话数、`totalTurns`、`turnCountDistribution`、`totalTime`、`topTools`、`codeChanges` 也按会话。某一天的 `sessionCount`、`activeDays` 和时间分摊跟着会话自己的全部调用走：一场会话的调用全部记在了别的会话上，它当天仍算活跃，时间也照样分到那一天。
+
+**对账**（`--json` 的 `reconciliation`）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `global`、`projects`、`sessions` | `totalTokens`、Σ `byProject`、Σ `bySession`（逐会话，含跨会话重复） |
+| `crossSessionDuplicateFacts` | 记在别的会话上的调用份数（已解析的会话；一条事实出现在 n 场会话里记 n − 1） |
+| `crossSessionDuplicateTokens` | 这些调用的 token（只数用量可用的会话，与 `global` 同一范围） |
+| `valuation.crossSessionDuplicateUsd` | 这些调用逐条估价之和，没有金额按 0 |
+
+- token：`difference = max(|global − projects|, |global + crossSessionDuplicateTokens − sessions|)`，`ok` 要求 `difference` 恰为 0。
+- 估价：g、s、u、d 依次是 `globalUsd`、`sessionsUsd`、`uniqueEventsUsd`（全局那一份逐条平铺求和）、`crossSessionDuplicateUsd`，null 按 0。`difference = max(|g − u|, |g + d − s|)`；`ok` 要求 `difference ≤ 1e-9 × max(1, |s|, |g|)`、两侧覆盖率之差 `coverageDifference ≤ 1e-9` 个百分点，且两侧已定价 token、可计费 token 两个整数都相等。
+
+桌面端的会话审计报告与 HTML 洞察报告仍按会话累加，与 CLI、Insights 页的合计都不相等。
+
 ## 退出码与稳定错误码
 
 | 退出码 | 含义 |

@@ -23,6 +23,15 @@
  * of them the ledger made the owner), the oracle side calls `claudeRecountUsage` once on the *union* of the
  * group's physical units (which dedupes the shared history by message.id/requestId exactly once, matching
  * the summed Swob side).
+ *
+ * C2a-2 deliverable 2: symmetric exclusion of active families. `eligible` (in codexEntry/claudeEntry) has
+ * always dropped a directly changed unit from the oracle's eligible set, but `tallySessions`' Swob side did
+ * not drop anything, so an actively-written comparison group was compared with a partial oracle against a
+ * complete (and possibly still growing) Swob total — F1m's own independent verifier measured this pushing
+ * the real-HOME deviation up by 0.7%-3.1% depending on how busy the machine was. Now: if any unit belonging
+ * to a comparison group changed during the run, the *whole group* (every member session, every one of their
+ * units) is dropped from both sides — reported once as `census.file-changed-during-run`, not compared at
+ * all (same reason code/shape ①/③ already use for the identical situation at their own granularity).
  */
 import type { Finding, Verdict } from '../contract'
 import { claudeRecountUsage, type ClaudeUnit } from '../census/claude-census'
@@ -273,32 +282,49 @@ interface SessionTally {
   ungroupedSessionsCompared: number
   /** Largest comparison group's member count this run (S2 sentinel; 1 when nothing ever groups, e.g. Codex — package decision E2). */
   maxGroupSize: number
+  /** Individual sessions dropped because a unit of their comparison group changed mid-run (deliverable 2: symmetric exclusion). */
+  excludedForChange: number
+  excludedForChangeSamples: string[]
 }
 
 function emptyTally(): SessionTally {
   return {
     swobGlobal: emptyComponents(), sessionsCompared: 0, sessionsEqual: 0, mismatchSamples: [],
     unavailableAsZero: 0, unavailableAsZeroSamples: [], calibrationDeltaTokens: 0,
-    ungroupedSessionsCompared: 0, maxGroupSize: 0
+    ungroupedSessionsCompared: 0, maxGroupSize: 0, excludedForChange: 0, excludedForChangeSamples: []
   }
 }
 
 /**
  * Walks every comparison group once (Codex: always a single listed session — package decision E2; Claude:
- * a branch family, `claudeBranchGroups`). A member with no usable Swob ledger is checked on its own against
- * its own solo-family oracle via `singleSessionOracle` — that question (`tokens.swob-unavailable-as-zero`:
- * did Swob's ledger for *this one session* go missing) is unrelated to branch grouping and unaffected by
- * it, identical to pre-C2a-2 behaviour. The group's remaining ("available") members, if any, are summed
- * and compared once against `groupOracle` (E1: "组算 1") — for a group of one this reduces exactly to the
+ * a branch family, `claudeBranchGroups`). A group with any changed member is excluded from both sides
+ * entirely (deliverable 2: symmetric exclusion) rather than compared with a partial oracle on one side and
+ * a complete Swob total on the other — `eligible` in claudeEntry/codexEntry already dropped a directly
+ * changed unit from the oracle's eligible set, but this tally previously did not drop anything from the
+ * Swob side, so an actively-written family was compared with a partial oracle against a complete (and
+ * possibly still growing) Swob total. F1m's own independent verifier measured this pushing the real-HOME
+ * deviation up by 0.7%-3.1% depending on how busy the machine was.
+ *
+ * In a surviving group, a member with no usable Swob ledger is still checked on its own against its own
+ * solo-family oracle via `singleSessionOracle` — that question (`tokens.swob-unavailable-as-zero`: did
+ * Swob's ledger for *this one session* go missing) is unrelated to branch grouping and unaffected by it,
+ * identical to pre-C2a-2 behaviour. The group's remaining ("available") members, if any, are summed and
+ * compared once against `groupOracle` (E1: "组算 1") — for a group of one this reduces exactly to the
  * pre-C2a-2 per-session comparison.
  */
 function tallySessions(input: {
   groups: readonly ReadoutSession[][]
+  isChanged: (session: ReadoutSession) => boolean
   singleSessionOracle: (sessionId: string) => Components
   groupOracle: (group: readonly ReadoutSession[]) => Components
 }): SessionTally {
   const result = emptyTally()
   for (const group of input.groups) {
+    if (group.some(input.isChanged)) {
+      result.excludedForChange += group.length
+      result.excludedForChangeSamples.push(...group.map((session) => session.sessionId))
+      continue
+    }
     result.ungroupedSessionsCompared += group.length
     if (group.length > result.maxGroupSize) result.maxGroupSize = group.length
 
@@ -420,6 +446,18 @@ function buildSourceEntry(input: {
       samples: sampleIds(ctx.salt, tally.mismatchSamples)
     }))
   }
+  // Deliverable 2 (symmetric exclusion): a whole comparison group dropped because one of its units changed
+  // mid-run. Same reason code and shape ③/① already use for the identical situation at their own
+  // granularity (compaction.ts, inclusion.ts). `verdict` above never reads findings at all (unlike
+  // lineage.ts/compaction.ts's `sourceVerdict` helper) — it is purely `sourceVerdictFor`'s threshold on the
+  // (already-exclusion-aware) numbers, so this finding (verdict: 'undetermined', matching the reused code's
+  // own severity) is reporting-only and cannot itself move the source off that threshold verdict.
+  if (tally.excludedForChange > 0) {
+    findings.push(makeFinding({
+      code: 'census.file-changed-during-run', verdict: 'undetermined', source, count: derived(tally.excludedForChange, 'sessions'),
+      samples: sampleIds(ctx.salt, tally.excludedForChangeSamples)
+    }))
+  }
 
   return {
     verdict,
@@ -428,6 +466,7 @@ function buildSourceEntry(input: {
       billingTotalDeviationPct: rawBillingDeviation === null ? derived(100, 'percent') : derived(round3(rawBillingDeviation), 'percent'),
       sessionsCompared: derived(tally.sessionsCompared, 'sessions'),
       sessionsEqual: derived(tally.sessionsEqual, 'sessions'),
+      sessionsExcludedChanged: derived(tally.excludedForChange, 'sessions'),
       // C2a-2 deliverable 1 (package decision E1): only meaningful where grouping happens at all (Claude —
       // package decision E2 keeps Codex ungrouped, so its own N always equals M and its max is always 1;
       // shown only for Claude to avoid implying Codex was considered for grouping and wasn't).
@@ -451,10 +490,11 @@ function withZeroCacheWrite(components: { nonCachedInput: number; cacheRead: num
 
 function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   const census = ctx.codex!
-  const eligible = census.units.filter((unit) => unit.isRollout && !unit.unreadable && !ctx.changed.has(unit.path))
-  const oracle = codexRecountB(eligible)
-  const oracleComponents = withZeroCacheWrite(oracle.components)
+  const rawEligible = census.units.filter((unit) => unit.isRollout && !unit.unreadable)
   if (ctx.readout.status !== 'ok') {
+    const eligible = rawEligible.filter((unit) => !ctx.changed.has(unit.path))
+    const oracle = codexRecountB(eligible)
+    const oracleComponents = withZeroCacheWrite(oracle.components)
     return {
       verdict: 'undetermined',
       swob: { billingTotal: unavailable('tokens', ctx.readout.reason ?? 'readout.not-isolated') },
@@ -464,12 +504,26 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   }
   const sessions = ctx.readout.sessions.filter((session) => session.source === 'codex' && !session.virtual)
   const listedTopLevel = new Set(sessions.map((session) => session.sessionId))
-  const families = codexFamilies(eligible, listedTopLevel)
+  // Fed the full (not-yet-change-filtered) unit set: a family must be known in full to tell whether *any*
+  // of its own units changed (deliverable 2) — filtering changed units out first would just make the
+  // family look incomplete, not changed, silently reintroducing the exclusion asymmetry the fix removes.
+  const families = codexFamilies(rawEligible, listedTopLevel)
   // Package decision E2: Codex is not grouped by branch — each listed session stays its own comparison unit
   // (its own family, via `codexFamilies`, already folds in derived/spawned children — unchanged from C2a).
   const groups: ReadoutSession[][] = sessions.map((session) => [session])
+  const isChanged = (session: ReadoutSession): boolean => (families.get(session.sessionId) ?? []).some((unit) => ctx.changed.has(unit.path))
+
+  const changedUnitPaths = new Set<string>(ctx.changed)
+  for (const session of sessions) {
+    if (!isChanged(session)) continue
+    for (const unit of families.get(session.sessionId) ?? []) changedUnitPaths.add(unit.path)
+  }
+  const eligible = rawEligible.filter((unit) => !changedUnitPaths.has(unit.path))
+  const oracle = codexRecountB(eligible)
+  const oracleComponents = withZeroCacheWrite(oracle.components)
+
   const tally = tallySessions({
-    groups,
+    groups, isChanged,
     singleSessionOracle: (sessionId) => withZeroCacheWrite(codexRecountB(families.get(sessionId) ?? []).components),
     // A Codex group is always exactly the one listed session (E2): the same recount as singleSessionOracle.
     groupOracle: (group) => withZeroCacheWrite(codexRecountB(families.get(group[0].sessionId) ?? []).components)
@@ -482,11 +536,11 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
 
 function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   const census = ctx.claude!
-  const eligible = census.units.filter((unit) => !unit.unreadable && !ctx.changed.has(unit.path) &&
-    (unit.kind === 'claude-main' || unit.kind === 'claude-subagent'))
-  const oracle = claudeRecountUsage(eligible)
-  const oracleComponents: Components = { ...oracle.components, reasoning: 0 }
+  const rawEligible = census.units.filter((unit) => !unit.unreadable && (unit.kind === 'claude-main' || unit.kind === 'claude-subagent'))
   if (ctx.readout.status !== 'ok') {
+    const eligible = rawEligible.filter((unit) => !ctx.changed.has(unit.path))
+    const oracle = claudeRecountUsage(eligible)
+    const oracleComponents: Components = { ...oracle.components, reasoning: 0 }
     return {
       verdict: 'undetermined',
       swob: { billingTotal: unavailable('tokens', ctx.readout.reason ?? 'readout.not-isolated') },
@@ -495,16 +549,30 @@ function claudeEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
     }
   }
   const sessions = ctx.readout.sessions.filter((session) => session.source === 'claude-code' && !session.virtual)
-  const families = claudeFamilies(eligible, sessions)
+  // Fed the full (not-yet-change-filtered) unit set — same reasoning as codexEntry above.
+  const familiesBySessionId = claudeFamilies(rawEligible, sessions)
   const branchGroups = claudeBranchGroups(sessions) // deliverable 1 (package decisions E1/M2)
+  const isChanged = (session: ReadoutSession): boolean => (familiesBySessionId.get(session.sessionId) ?? []).some((unit) => ctx.changed.has(unit.path))
+
+  // A group with any changed member drops *all* of its units from the oracle's eligible set (deliverable
+  // 2): a partial family (one member's units missing, the rest present) is exactly the asymmetry being fixed.
+  const changedUnitPaths = new Set<string>(ctx.changed)
+  for (const group of branchGroups) {
+    if (!group.some(isChanged)) continue
+    for (const session of group) for (const unit of familiesBySessionId.get(session.sessionId) ?? []) changedUnitPaths.add(unit.path)
+  }
+  const eligible = rawEligible.filter((unit) => !changedUnitPaths.has(unit.path))
+  const oracle = claudeRecountUsage(eligible)
+  const oracleComponents: Components = { ...oracle.components, reasoning: 0 }
+
   const tally = tallySessions({
-    groups: branchGroups,
+    groups: branchGroups, isChanged,
     singleSessionOracle: (sessionId) => {
-      const recount = claudeRecountUsage(families.get(sessionId) ?? [])
+      const recount = claudeRecountUsage(familiesBySessionId.get(sessionId) ?? [])
       return { ...recount.components, reasoning: 0 }
     },
     groupOracle: (group) => {
-      const recount = claudeRecountUsage(unitsForGroup(group, families))
+      const recount = claudeRecountUsage(unitsForGroup(group, familiesBySessionId))
       return { ...recount.components, reasoning: 0 }
     }
   })

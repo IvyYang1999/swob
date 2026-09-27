@@ -321,3 +321,105 @@ describe('⑤ tokens — C2a-2 deliverable 1: branch-family grouping', () => {
     expect(entry.verdict).toBe('warn')
   })
 })
+describe('⑤ tokens — C2a-2 deliverable 2: symmetric exclusion of families still being written', () => {
+  it('Claude：整个分支家族里只要有一个单元在体检期间变化，两侧都把这整个家族剔除，不产生虚假偏差', async () => {
+    const root = home()
+    const project = path.join('.claude', 'projects', claudeProjectDir(CWD))
+    const ownerId = syntheticUuid(950)
+    const childId = syntheticUuid(951)
+    const stableId = syntheticUuid(952)
+    const sharedUuid = syntheticUuid(960)
+    const startUuid = syntheticUuid(961)
+
+    const ownerPath = writeClaudeFile(root, project, ownerId, [
+      claude.user({ uuid: startUuid, parentUuid: null, sessionId: ownerId, timestamp: syntheticTime(0), cwd: CWD, text: 'start' }),
+      claude.assistant({
+        uuid: sharedUuid, parentUuid: startUuid, sessionId: ownerId, timestamp: syntheticTime(1), cwd: CWD, text: 'shared',
+        messageId: 'm-shared-3', requestId: 'r-shared-3', usage: { input: 100, output: 20 }
+      })
+    ])
+    const childPath = writeClaudeFile(root, project, childId, [
+      claude.user({ uuid: startUuid, parentUuid: null, sessionId: childId, timestamp: syntheticTime(0), cwd: CWD, text: 'start' }),
+      claude.assistant({
+        uuid: sharedUuid, parentUuid: startUuid, sessionId: childId, timestamp: syntheticTime(1), cwd: CWD, text: 'shared',
+        messageId: 'm-shared-3', requestId: 'r-shared-3', usage: { input: 100, output: 20 }
+      }),
+      claude.assistant({
+        uuid: syntheticUuid(962), parentUuid: sharedUuid, sessionId: childId, timestamp: syntheticTime(2), cwd: CWD, text: 'own',
+        messageId: 'm-child-own-3', requestId: 'r-child-own-3', usage: { input: 50, output: 10 }
+      })
+    ])
+    const stablePath = writeClaudeFile(root, project, stableId, [
+      claude.user({ uuid: syntheticUuid(970), parentUuid: null, sessionId: stableId, timestamp: syntheticTime(0), cwd: CWD, text: 'hi' }),
+      claude.assistant({
+        uuid: syntheticUuid(971), parentUuid: syntheticUuid(970), sessionId: stableId, timestamp: syntheticTime(1), cwd: CWD, text: 'ok',
+        messageId: 'm-stable-3', requestId: 'r-stable-3', usage: { input: 30, output: 5 }
+      })
+    ])
+    const claudeCensus = await censusClaude(root)
+    const ownerNodeId = `${ownerId}:branch-2`
+    const childNodeId = `${childId}:branch-1`
+    const sessions = readout([
+      claudeSession(ownerId, ownerPath, tokens({ nonCachedInput: 100, output: 20 }), { id: ownerNodeId }),
+      claudeSession(childId, childPath, tokens({ nonCachedInput: 50, output: 10 }), { id: childNodeId, branchParentId: ownerNodeId }),
+      claudeSession(stableId, stablePath, tokens({ nonCachedInput: 30, output: 5 }))
+    ])
+
+    // Baseline: nothing changed mid-run — the family compares cleanly (same shape as the grouping test above).
+    const baseline = tokensCheck(ctx({ claude: claudeCensus, readout: sessions }))
+    expect(baseline.bySource['claude-code'].verdict).toBe('pass')
+    expect(baseline.bySource['claude-code'].swob.sessionsCompared.value).toBe(2)
+
+    // The child's file changed mid-run: without symmetric exclusion, the oracle would drop only the
+    // child's unit from *its own* family (shrinking that one family's oracle) while Swob still summed the
+    // child's (possibly-stale) reported tokens in full — the exact asymmetry F1m's independent verifier
+    // measured pushing the real-HOME deviation up by 0.7%-3.1%. With the fix, the *whole* family (owner +
+    // child) is dropped from both sides; the unrelated, stable session is untouched.
+    const result = tokensCheck(ctx({ claude: claudeCensus, readout: sessions, changed: new Set([childPath]) }))
+    const entry = result.bySource['claude-code']
+    expect(entry.swob.sessionsExcludedChanged.value).toBe(2) // owner + child, both dropped as one family
+    expect(entry.swob.sessionsCompared.value).toBe(1) // only the stable session is left to compare
+    expect(entry.swob.sessionsEqual.value).toBe(1)
+    expect(entry.swob.billingTotal.value).toBe(35) // the family's contribution is gone from *both* sides (30+5 left)
+    expect(entry.oracle.billingTotal.value).toBe(35)
+    expect(entry.swob.billingTotalDeviationPct.value).toBe(0) // no spurious deviation from the exclusion itself
+    const finding = result.findings.find((item) => item.source === 'claude-code' && item.code === 'census.file-changed-during-run')
+    expect(finding).toBeTruthy()
+    expect(finding?.count.value).toBe(2)
+    expect(finding?.verdict).toBe('undetermined')
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('Codex：结果与「都不剔除且文件未变」一致 —— 排除掉的会话不引入虚假偏差', async () => {
+    const root = home()
+    const p = syntheticUuid(980, 'c0de')
+    const q = syntheticUuid(981, 'c0de')
+    const pPath = await codexUnitAt(root, p, 0, { input: 1000, cached: 200, output: 50 })
+    const qPath = await codexUnitAt(root, q, 10, { input: 500, cached: 0, output: 25 })
+    const codexCensus = await censusCodex(root, { env: {} })
+    const sessions = readout([
+      codexSession(p, pPath, tokens({ nonCachedInput: 800, cacheRead: 200, output: 50 })),
+      codexSession(q, qPath, tokens({ nonCachedInput: 500, cacheRead: 0, output: 25 }))
+    ])
+
+    const baseline = tokensCheck(ctx({ codex: codexCensus, readout: sessions }))
+    expect(baseline.bySource.codex.verdict).toBe('pass')
+    expect(baseline.bySource.codex.swob.sessionsCompared.value).toBe(2)
+    expect(baseline.bySource.codex.swob.billingTotalDeviationPct.value).toBe(0)
+
+    const result = tokensCheck(ctx({ codex: codexCensus, readout: sessions, changed: new Set([qPath]) }))
+    const entry = result.bySource.codex
+    expect(entry.swob.sessionsExcludedChanged.value).toBe(1)
+    expect(entry.swob.sessionsCompared.value).toBe(1)
+    expect(entry.swob.sessionsEqual.value).toBe(1)
+    // Identical qualitative result to "neither side excludes anything and the file never changed": still a
+    // clean 0% deviation, still 'pass' — the one excluded session simply is not part of either total.
+    expect(entry.swob.billingTotalDeviationPct.value).toBe(0)
+    expect(entry.verdict).toBe('pass')
+    const finding = result.findings.find((item) => item.source === 'codex' && item.code === 'census.file-changed-during-run')
+    expect(finding).toBeTruthy()
+    expect(finding?.count.value).toBe(1)
+    expect(finding?.verdict).toBe('undetermined')
+  })
+})
+

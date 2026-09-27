@@ -34,7 +34,7 @@ import { contentCheck } from './checks/content'
 import { compactionCheck } from './checks/compaction'
 import { lineageCheck } from './checks/lineage'
 import { tokensCheck } from './checks/tokens'
-import { pendingCheck } from './checks/pending'
+import { resumeCheck } from './checks/resume'
 import {
   applicabilityEntry,
   assembleCheck,
@@ -475,7 +475,7 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
   const tokensResult = tokensCheck(ctx)
   timingsMs['check.tokens'] = elapsed(checkPhase)
   checkPhase = performance.now()
-  const resumeResult = pendingCheck('resume', ctx)
+  const resumeResult = resumeCheck(ctx)
   timingsMs['check.resume'] = elapsed(checkPhase)
   const checks: CheckResult[] = [inclusion.result, contentResult, compactionResult, lineageResult, tokensResult, resumeResult]
   timingsMs.checks = elapsed(phase)

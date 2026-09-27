@@ -14,6 +14,7 @@ import type { CodexStateDb } from '../census/codex-state-db'
 import { compactionCheck } from '../checks/compaction'
 import { contentCheck } from '../checks/content'
 import { lineageCheck } from '../checks/lineage'
+import { locateProgram } from '../checks/resume'
 import type { CheckContext } from '../checks/common'
 import type { ClaudeParseResult, ReadoutSession, SwobReadout } from '../readout'
 import {
@@ -38,6 +39,8 @@ import {
  * - `census-only`: census-layer assertion (the reason code belongs to ⑤).
  * - `injected-partial-attachment`: the readout attaches only the direct thread-spawn child, mirroring the
  *   pre-bb9a6e5 kernel behaviour, so a real kernel fix can never change this self-test's outcome (④).
+ * - `census-only` (resume-broken-symlink, ⑥): a pure filesystem-metadata assertion on checks/resume.ts's
+ *   own `locateProgram` (lstat -> realpath -> X_OK); no census/readout/kernel involved at all.
  */
 export const CASE_SWOB_SIDE: Readonly<Record<SelfTestCaseId, string>> = {
   'line-separator-split': 'injected-loss',
@@ -46,7 +49,8 @@ export const CASE_SWOB_SIDE: Readonly<Record<SelfTestCaseId, string>> = {
   'codex-legacy-compacted': 'injected-zero-compaction',
   'fork-inherited-compaction': 'injected-per-row',
   'fork-usage-copy': 'census-only',
-  'lineage-grandchild-orphan': 'injected-partial-attachment'
+  'lineage-grandchild-orphan': 'injected-partial-attachment',
+  'resume-broken-symlink': 'census-only'
 }
 
 export interface SelfTestResult {
@@ -319,6 +323,24 @@ async function caseLineageGrandchildOrphan(home: string, options: SelfTestOption
     entry.oracle.derivationTotal?.value === 2 && entry.verdict === 'fail'
 }
 
+/**
+ * ⑥ design §6.5 class 11: a PATH entry that is a symlink to a target that no longer exists — the real
+ * machine's own `claude` shortcut pointing at a deleted version (design doc, 09-26 real run). Also checks
+ * that a real executable is still found and a genuinely absent name is still reported missing, so the
+ * three-way branch (found / broken-symlink / missing) is exercised, not just the one new case.
+ */
+async function caseResumeBrokenSymlink(home: string): Promise<boolean> {
+  const binDir = path.join(home, 'bin')
+  fs.mkdirSync(binDir, { recursive: true })
+  fs.symlinkSync(path.join(home, 'deleted-version', 'claude'), path.join(binDir, 'claude'))
+  const realBinary = path.join(binDir, 'codex')
+  fs.writeFileSync(realBinary, '#!/bin/sh\nexit 0\n')
+  fs.chmodSync(realBinary, 0o755)
+  return locateProgram('claude', binDir) === 'broken-symlink' &&
+    locateProgram('codex', binDir) === 'found' &&
+    locateProgram('opencode', binDir) === 'missing'
+}
+
 const CASES: Record<SelfTestCaseId, (home: string, options: SelfTestOptions) => Promise<boolean>> = {
   'line-separator-split': caseLineSeparator,
   'tool-bad-line': caseToolBadLine,
@@ -326,7 +348,8 @@ const CASES: Record<SelfTestCaseId, (home: string, options: SelfTestOptions) => 
   'codex-legacy-compacted': caseCodexLegacyCompacted,
   'fork-inherited-compaction': caseForkInheritedCompaction,
   'fork-usage-copy': (home) => caseForkUsageCopy(home),
-  'lineage-grandchild-orphan': caseLineageGrandchildOrphan
+  'lineage-grandchild-orphan': caseLineageGrandchildOrphan,
+  'resume-broken-symlink': (home) => caseResumeBrokenSymlink(home)
 }
 
 export async function runSelfTest(options: SelfTestOptions): Promise<SelfTestResult> {

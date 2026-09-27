@@ -38,10 +38,16 @@ export const HEADLINES = {
   'compaction.mismatch': '{n} 场会话里有 {n} 场压缩次数对不上：原始 {n} 处，Swob 认出 {n} 处',
   'lineage.pass': 'Codex 自己记录的 {n} 条血统边全部表达',
   'lineage.gaps': 'Codex 自己记录了 {n} 条血统边，Swob 少了 {n} 条',
+  // C2c (④ P2-4 补): derivation edges clean but the fork/replay edges have a gap, or both have a gap
+  'lineage.gaps-fork': 'Codex 自己记录的 {n} 条血统边全部表达，但另有 {n} 场（共 {n} 场）分叉/重放会话没有连起来',
+  'lineage.gaps-both': 'Codex 自己记录了 {n} 条血统边，Swob 少了 {n} 条；另有 {n} 场（共 {n} 场）分叉/重放会话也没有连起来',
   // ⑤ tokens (C2a)
   'tokens.pass': '{n} 个来源的 Token 分量偏差都在 0.1% 以内，逐场全等率不低于 99%',
   'tokens.note': '{n} 个来源里有 {n} 项需要留意：偏差在 1% 以内，或属于已登记口径差',
   'tokens.mismatch': '{n} 个来源里有 {n} 项分量偏差超出可解释范围',
+  // ⑥ resume (C2c)
+  'resume.pass': '{n} 场会话干跑全部可恢复：文件在、目录在、内容锚点一致',
+  'resume.problems': '{n} 个来源里有 {n} 项干跑没通过',
   'check.not-implemented': '本版体检还没有实现这一项',
   'check.undetermined': '本项这次无法判定',
   'check.not-applicable': '本项对本机数据不适用',
@@ -245,6 +251,38 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   'tokens.swob-unavailable-as-zero': {
     ownerLine: '{source}：有 {n} 场会话标准答案测得有 Token 用量，但 Swob 这次显示不可用，不应该被当成 0',
     engineerHint: 'src/checkup/readout.ts#readoutTokensFromAccounting：会话的 tokenAccounting 缺失或 provenance 为 unavailable 时，这次比对必须显示 [U] 而不是把它当 0 参与总量'
+  },
+  // —— C2c additions (④ F1n/G1 fork-edge "explained" rule) ——
+  'lineage.fork-child-empty-excluded': {
+    ownerLine: '{source}：有 {n} 场分叉/重放会话的子会话本身没有对话内容，① 已经把它排除，不算未表达',
+    engineerHint: 'census/codex-census.ts codexTopLevelForkEdges 的子会话 unit.assistantSide === 0（与 checks/inclusion.ts classifyCodexUnits 判定 codex.empty-session 的条件一致）：子会话没有产生任何对话，从未成为 Swob 会话，① 已排除；④ 不再把这种边计入未表达，但仍列出以便核对'
+  },
+  // —— C2c additions (⑥ resume dry run) ——
+  // environment class: the owner can fix these locally (reinstall / relink / restore the directory)
+  'resume.program-not-found': {
+    ownerLine: '{source}：抽样会话里有 {n} 场，恢复命令要用的程序在 PATH 上找不到。这是电脑的问题，装上对应的程序就好',
+    engineerHint: 'src/checkup/checks/resume.ts#locateProgram：lstat 在 PATH 每一段都找不到这个名字的可执行文件（stat 失败或不可执行）'
+  },
+  'resume.program-broken-symlink': {
+    ownerLine: '{source}：抽样会话里有 {n} 场，恢复命令要用的程序是一个坏的符号链接，指向的版本已经不在了。重新安装或者修一下这个链接就好',
+    engineerHint: 'src/checkup/checks/resume.ts#locateProgram：lstat 找到了这个名字，但 realpath 解析失败（悬空链接）；替代 src/main/resume-audit.ts#isBinaryAvailable 只会把这种情况报成"找不到"、说不出原因'
+  },
+  'resume.directory-missing': {
+    ownerLine: '{source}：有 {n} 场会话记录的工作目录已经不在了。这是电脑的问题，恢复前先确认项目目录还在',
+    engineerHint: 'src/checkup/checks/resume.ts#classifyBucket：ReadoutSession.resumeCwd（来自 SessionSummary.resumeCwd）这次用 fs.statSync 复核后不存在'
+  },
+  // data / anchor class: hand to dev, the number itself should not be trusted yet
+  'resume.file-missing': {
+    ownerLine: '{source}：有 {n} 场会话记录的文件这次已经找不到了，点"恢复"大概率会 404。这个转给开发',
+    engineerHint: 'src/checkup/checks/resume.ts#classifyBucket / #anchorStatusFor：ReadoutSession.primaryPath 这次用 fs.statSync 复核后不存在（或 L3 锚点比对时同一文件已读不到，would-404）'
+  },
+  'resume.command-syntax-invalid': {
+    ownerLine: '{source}：有 {n} 场会话，Swob 自己拼出来的恢复命令连语法都不对，这不是电脑的问题，是 Swob 的 bug，转给开发',
+    engineerHint: 'src/checkup/checks/resume.ts#zshSyntaxOk：`zsh -n -c "<命令>"` 语法检查未通过（只解析不执行）；命令由 src/main/session-actions.ts#buildResumeCommand 拼出'
+  },
+  'resume.anchor-mismatch': {
+    ownerLine: '{source}：有 {n} 场会话，Swob 记的最后一句话和这次重新读到的对不上，恢复出来的内容可能是旧的或者串了分支。转给开发',
+    engineerHint: 'src/checkup/checks/resume.ts#anchorStatusFor -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：hash 不相等'
   }
 }
 
@@ -460,12 +498,20 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   'claude.continuation-edge-unexpressed': '续写的文件，Swob 没有连成一场会话',
   'claude.resume-fork-edge-unexpressed': '开头原样复制的文件，Swob 没有连起来',
   'claude.branch-edge-swob-extra': 'Swob 认为的恢复/分叉关系，原始文件里没有证据',
+  'lineage.fork-child-empty-excluded': '分叉/重放会话的子会话没有对话内容，① 已排除，不算未表达',
   'codex.fork-usage-copy': '子 agent 抄写了父会话的用量快照',
   'tokens.deviation-high': 'Token 总量偏差超出可解释范围',
   'tokens.deviation-note': 'Token 总量有偏差，在允许范围内',
   'tokens.session-mismatch': '有会话的四项分量和标准答案对不上',
   'tokens.cache-write-calibration-difference': '缓存写入聚合值和 5 分钟/1 小时细分值对不上（已知口径差）',
   'tokens.swob-unavailable-as-zero': '标准答案测得有用量，但 Swob 显示不可用',
+  'resume.program-not-found': '恢复命令要用的程序在 PATH 上找不到（环境问题）',
+  'resume.program-broken-symlink': '恢复命令要用的程序是坏的符号链接（环境问题）',
+  'resume.directory-missing': '记录的工作目录已经不在了（环境问题）',
+  'resume.file-missing': '记录的文件这次已经找不到了',
+  'resume.command-syntax-invalid': 'Swob 拼出来的恢复命令语法不对',
+  'resume.anchor-mismatch': 'Swob 记的最后一句话和重新读到的对不上',
+  'resume.probe-not-injected': '这个壳没有注入命令层探针，命令层这次不判定',
   'source.not-implemented': '本版体检还没有检查这个来源',
   'source.no-data': '本机没有这个来源的数据',
   'source.capability-unavailable': '这个来源本身不提供这项数据',
@@ -533,7 +579,8 @@ export const ORACLE_LABELS: Readonly<Record<string, string>> = {
   'census.codex-jsonl': 'Codex 原始文件逐行重读',
   'codex.state-db': 'Codex 线程库',
   'census.unscanned-roots': 'Swob 不读的已知目录清点',
-  'census.source-presence': '各来源目录是否存在'
+  'census.source-presence': '各来源目录是否存在',
+  'fs.local-environment': '本机文件系统与 PATH 环境'
 }
 
 /** What a lost record was (② "丢失里有什么"). */
@@ -677,6 +724,7 @@ export const MEASURE_LABELS: Readonly<Record<string, string>> = {
   resumeForkExpressed: '已表达的恢复/分叉边',
   resumeForkNotExpressed: '未表达的恢复/分叉边',
   resumeForkSwobExtra: 'Swob 多出的恢复/分叉边',
+  forkExplained: '已解释的分叉边（子会话无对话内容）',
   sameFileParentCoverage: '同文件父指针覆盖率',
   // ⑤ tokens (census-level evidence)
   forkUsageCopies: '子 agent 抄写父会话的用量快照',
@@ -695,7 +743,21 @@ export const MEASURE_LABELS: Readonly<Record<string, string>> = {
   cacheReadDeviationPct: '缓存读偏差',
   cacheWriteDeviationPct: '缓存写偏差',
   outputDeviationPct: '输出偏差',
-  reasoningDeviationPct: '推理偏差'
+  reasoningDeviationPct: '推理偏差',
+  // ⑥ resume (C2c)
+  recoverable: '可恢复',
+  missingFile: '缺文件',
+  missingDirectory: '缺目录',
+  unsupportedSource: '不支持来源（单场）',
+  recoverableRate: '可恢复率',
+  commandSampled: '命令层抽样场数',
+  commandFound: '程序可找到',
+  commandBrokenSymlink: '程序是坏链接',
+  commandMissing: '程序找不到',
+  commandSyntaxInvalid: '命令语法不对',
+  anchorCompared: '参与锚点比对',
+  anchorMatch: '锚点一致',
+  anchorMismatch: '锚点不一致'
 }
 
 /** Headings, table headers and fixed sentences of the Markdown report. */
@@ -768,6 +830,15 @@ export const MARKDOWN_TEXT = {
   colOracleBillingTotal: '标准答案计费合计',
   colSwobBillingTotal: 'Swob 计费合计',
   colDeviation: '偏差',
+  // ⑥ resume (C2c)
+  colResumeTotal: '会话数',
+  colRecoverableRate: '可恢复率',
+  colMissingFile: '缺文件',
+  colMissingDirectory: '缺目录',
+  colCommandSample: '命令层抽样（找到/坏链接/找不到）',
+  colAnchor: '锚点（一致/不一致）',
+  resumeCommandCell: '{n} 找到 / {n} 坏链接 / {n} 找不到',
+  resumeAnchorCell: '{n} 一致 / {n} 不一致',
   colMeasure: '数字',
   colSide: '哪一侧',
   colUnit: '单位',

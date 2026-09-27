@@ -31,6 +31,18 @@
  * first-party: any gap there is only ever an observation (warn at most, never fail) — this is what "两套
  * 实现的分歧只计数并报观察" resolves to now that the registry side cannot run in this environment: the
  * observation is census evidence vs Swob's own runtime state, not two Swob implementations.
+ *
+ * C2c (F1n diagnosis / G1 decision): a fork edge whose child rollout never became a Swob session because
+ * ① already excludes it as an empty session (codex.empty-session: role top-level, not primary/covered,
+ * `unit.assistantSide === 0` — the child recorded a `forked_from_id` but produced no dialogue of its own,
+ * e.g. a resume/fork of an already-archived session that ended before any turn happened) is reported
+ * separately (lineage.fork-child-empty-excluded, warn) and no longer counted toward `forkNotExpressed` —
+ * there was no content for ④ to connect. A fork child that *has* content and still is not connected keeps
+ * failing with zero tolerance, unchanged.
+ *
+ * C2c (P2-4, C2b independent acceptance): the headline now also names a fork-edge gap when the derivation
+ * edges are otherwise clean — the real-machine case that a fork-only gap used to leave out of the one-line
+ * summary entirely.
  */
 import type { Finding, Verdict } from '../contract'
 import { claudeParentUuidCoverage, findClaudeUuidOverlapPairs, type ClaudeUnit } from '../census/claude-census'
@@ -77,13 +89,23 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
 
   // — fork edges (top-level forked_from_id) —
   const forkEdges = codexTopLevelForkEdges(eligible)
+  const unitByPath = new Map(eligible.map((unit) => [unit.path, unit] as const))
   const sessionById = new Map(sessions.map((session) => [session.sessionId, session] as const))
   let forkExpressed = 0
+  let forkExplained = 0
   const forkNotExpressedPaths: string[] = []
+  const forkExplainedPaths: string[] = []
   for (const edge of forkEdges) {
     const child = sessionById.get(edge.childId)
-    if (child?.branchParentId === `codex:${edge.parentId}`) forkExpressed++
-    else forkNotExpressedPaths.push(edge.childPath)
+    if (child?.branchParentId === `codex:${edge.parentId}`) { forkExpressed++; continue }
+    // F1n/G1: a fork child that never became a Swob session because ① already excludes it as an empty
+    // session (codex.empty-session, checks/inclusion.ts classifyCodexUnits: role top-level, not primary/
+    // covered, unit.assistantSide === 0) is not a lineage gap — there was no content for ④ to connect.
+    // Only checked when `!child` (never any Swob session at all): a child that *does* exist as a session
+    // but with the wrong/missing branchParentId has content and stays a real gap below.
+    const childUnit = !child ? unitByPath.get(edge.childPath) : undefined
+    if (childUnit && childUnit.assistantSide === 0) { forkExplained++; forkExplainedPaths.push(edge.childPath); continue }
+    forkNotExpressedPaths.push(edge.childPath)
   }
   const forkTotal = forkEdges.length
   const forkNotExpressed = forkNotExpressedPaths.length
@@ -118,6 +140,12 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
   if (derivationSwobExtra > 0) {
     sourceFindings.push(makeFinding({ code: 'codex.derivation-edge-swob-extra', verdict: 'warn', source: 'codex', count: derived(derivationSwobExtra, 'edges') }))
   }
+  if (forkExplained > 0) {
+    sourceFindings.push(makeFinding({
+      code: 'lineage.fork-child-empty-excluded', verdict: 'warn', source: 'codex',
+      count: derived(forkExplained, 'edges'), samples: sampleIds(ctx.salt, forkExplainedPaths)
+    }))
+  }
   if (forkNotExpressed > 0) {
     sourceFindings.push(makeFinding({
       code: 'codex.fork-edge-unexpressed', verdict: 'fail', source: 'codex',
@@ -137,6 +165,7 @@ function codexEntry(ctx: CheckContext, findings: Finding[]): SourceEntry {
       derivationSwobExtra: derived(derivationSwobExtra, 'edges'),
       forkExpressed: derived(forkExpressed, 'edges'),
       forkNotExpressed: derived(forkNotExpressed, 'edges'),
+      forkExplained: derived(forkExplained, 'edges'),
       forkSwobExtra: derived(forkSwobExtra, 'edges')
     },
     oracle: {
@@ -324,6 +353,7 @@ export function lineageCheck(ctx: CheckContext): ReturnType<typeof assembleCheck
   const evaluated = new Set<string>()
   let codexDerivationTotal = 0
   let codexDerivationNotExpressed = 0
+  let codexForkTotal = 0
   let codexForkNotExpressed = 0
   if (hasClaudeData(ctx) && ctx.claude) {
     evaluated.add('claude-code')
@@ -335,17 +365,22 @@ export function lineageCheck(ctx: CheckContext): ReturnType<typeof assembleCheck
     bySource.codex = entry
     codexDerivationTotal = entry.oracle.derivationTotal?.value ?? 0
     codexDerivationNotExpressed = entry.swob.derivationNotExpressed?.value ?? 0
+    codexForkTotal = entry.oracle.forkTotal?.value ?? 0
     codexForkNotExpressed = entry.swob.forkNotExpressed?.value ?? 0
   }
   Object.assign(bySource, remainingSources('lineage', ctx, evaluated))
-  const gaps = codexDerivationNotExpressed > 0 || codexForkNotExpressed > 0
-  const result = assembleCheck({
-    id: 'lineage',
-    bySource,
-    findings,
-    headline: gaps ? 'lineage.gaps' : 'lineage.pass',
-    headlineNumbers: gaps ? [codexDerivationTotal, codexDerivationNotExpressed] : [codexDerivationTotal]
-  })
+  // P2-4 (C2b independent acceptance): the headline must not go silent about a fork-edge gap just because
+  // derivation edges are clean (the real-machine case that slipped through before) — pick the headline
+  // key that actually carries both numbers involved, instead of always defaulting to the derivation pair.
+  const derivationGap = codexDerivationNotExpressed > 0
+  const forkGap = codexForkNotExpressed > 0
+  const headline = derivationGap && forkGap ? 'lineage.gaps-both' : derivationGap ? 'lineage.gaps' : forkGap ? 'lineage.gaps-fork' : 'lineage.pass'
+  const headlineNumbers = derivationGap && forkGap
+    ? [codexDerivationTotal, codexDerivationNotExpressed, codexForkNotExpressed, codexForkTotal]
+    : derivationGap ? [codexDerivationTotal, codexDerivationNotExpressed]
+      : forkGap ? [codexDerivationTotal, codexForkNotExpressed, codexForkTotal]
+        : [codexDerivationTotal]
+  const result = assembleCheck({ id: 'lineage', bySource, findings, headline, headlineNumbers })
   if (ctx.readout.status !== 'ok') result.reason = ctx.readout.reason ?? 'readout.not-isolated'
   return result
 }

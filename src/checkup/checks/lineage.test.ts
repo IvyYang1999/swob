@@ -85,6 +85,19 @@ async function writeCodexFork(root: string, id: string, forkedFromId: string, mi
   return fs.realpathSync(file)
 }
 
+/**
+ * F1n/G1: a fork child with `session_meta.forked_from_id` but no dialogue of its own at all —
+ * `assistantSide === 0` (and no user message either), the same condition ①'s classifyCodexUnits uses for
+ * `codex.empty-session`. Unlike writeCodexFork, this file never gains any content, so it can never become
+ * a Swob session (buildCodexSessionSummaryFromLines returns null on an empty rawMessages array).
+ */
+async function writeCodexEmptyFork(root: string, id: string, forkedFromId: string, minute: number): Promise<string> {
+  const file = writeSample(root, codexRolloutPath(id, minute), jsonl([
+    codexTopLevelForkRow({ id, forkedFromId, timestamp: syntheticTime(minute) })
+  ]))
+  return fs.realpathSync(file)
+}
+
 /** A run of Claude user/assistant records with explicit uuids (for cross-file overlap fixtures). */
 function claudeMessages(sessionId: string, uuids: string[], textPrefix: string): Array<Record<string, unknown>> {
   const records: Array<Record<string, unknown>> = []
@@ -178,11 +191,13 @@ describe('④ lineage — Codex fork edges (first-party, session_meta.forked_fro
     expect(result.bySource.codex.verdict).toBe('pass')
   })
 
-  it('Codex 分叉边不一致 → 不通过', async () => {
+  it('Codex 分叉边不一致 → 不通过（C2c: 子会话有内容却未连上，仍零容差 fail）', async () => {
     const root = home()
     const parentId = syntheticUuid(41, 'c0de')
     const childId = syntheticUuid(42, 'c0de')
     const parentPath = await writeCodexTopLevel(root, parentId, 0)
+    // writeCodexFork's child has its own assistantMessage (assistantSide > 0): real content, so the F1n/G1
+    // "explained" carve-out must not apply here.
     const childPath = await writeCodexFork(root, childId, parentId, 10)
     const codexCensus = await censusCodex(root, { env: {} })
     const codexDb: CodexStateDb = { available: true, version: 1, candidates: 1, threads: [], edges: [], audit: null }
@@ -190,10 +205,36 @@ describe('④ lineage — Codex fork edges (first-party, session_meta.forked_fro
     const sessions = [codexSession(parentId, parentPath), codexSession(childId, childPath)]
     const result = lineageCheck(ctx({ codex: codexCensus, codexDb, readout: readout(sessions) }))
     expect(result.bySource.codex.swob.forkNotExpressed?.value).toBe(1)
+    expect(result.bySource.codex.swob.forkExplained?.value).toBe(0)
     expect(result.bySource.codex.verdict).toBe('fail')
     expect(result.verdict).toBe('fail')
     const finding = result.findings.find((entry) => entry.code === 'codex.fork-edge-unexpressed')
     expect(finding).toMatchObject({ verdict: 'fail', source: 'codex' })
+    expect(result.findings.some((entry) => entry.code === 'lineage.fork-child-empty-excluded')).toBe(false)
+  })
+
+  it('C2c (F1n/G1): 分叉子会话本身无对话内容（① 已排除）→ 已解释，不算未表达，可以回到通过', async () => {
+    const root = home()
+    const parentId = syntheticUuid(43, 'c0de')
+    const childId = syntheticUuid(44, 'c0de')
+    const parentPath = await writeCodexTopLevel(root, parentId, 0)
+    // No assistantMessage/userMessage at all: assistantSide === 0, the same condition ①'s
+    // classifyCodexUnits uses for codex.empty-session. This child never becomes a Swob session.
+    const childPath = await writeCodexEmptyFork(root, childId, parentId, 10)
+    const codexCensus = await censusCodex(root, { env: {} })
+    const childUnit = codexCensus.units.find((unit) => unit.path === childPath)
+    expect(childUnit?.assistantSide).toBe(0)
+    const codexDb: CodexStateDb = { available: true, version: 1, candidates: 1, threads: [], edges: [], audit: null }
+    // Only the parent is a Swob session; the empty child rollout was never turned into one.
+    const sessions = [codexSession(parentId, parentPath)]
+    const result = lineageCheck(ctx({ codex: codexCensus, codexDb, readout: readout(sessions) }))
+    expect(result.bySource.codex.swob.forkExplained?.value).toBe(1)
+    expect(result.bySource.codex.swob.forkNotExpressed?.value).toBe(0)
+    expect(result.bySource.codex.verdict).not.toBe('fail')
+    expect(result.verdict).not.toBe('fail')
+    const explained = result.findings.find((entry) => entry.code === 'lineage.fork-child-empty-excluded')
+    expect(explained).toMatchObject({ verdict: 'warn', source: 'codex', count: { value: 1 } })
+    expect(result.findings.some((entry) => entry.code === 'codex.fork-edge-unexpressed')).toBe(false)
   })
 })
 

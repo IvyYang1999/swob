@@ -144,10 +144,15 @@ export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compact
  * C2b — ④ Lineage and branching implemented: Codex derivation edges (state db thread_spawn_edges) and
  * fork edges (top-level forked_from_id) plus Claude continuation/subagent/resume-fork physical evidence,
  * reconciled against the kernel's own expressed lineage (branchParentId/branchChildIds/
- * continuationSessionIds/subagents[]); Claude-side gaps are observations only (never fail).
+ * continuationSessionIds/subagents[]); Claude-side gaps are observations only (never fail). Also 1.3.0:
+ * C2c — ⑥ Resume (dry run) implemented: four buckets (recoverable / missing file / missing directory /
+ * unsupported source), a command-layer probe (program lookup via lstat→realpath→X_OK, `zsh -n` syntax
+ * check only), and an L3 content-anchor comparison reusing resume-verifier.ts's own classifier (non-
+ * independent oracle, labelled [D]); ④'s headline now also names a fork-edge gap, and a fork edge whose
+ * child ① already excludes as an empty session (codex.empty-session) is no longer counted unexpressed.
  */
 export const CHECKUP_VERSION = '1.3.0'
-export const SELF_TEST_TOTAL = 7
+export const SELF_TEST_TOTAL = 8
 
 export const SOURCE_IDS = [
   'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity',
@@ -179,7 +184,9 @@ export const SELF_TEST_CASES = [
   'fork-inherited-compaction',
   'fork-usage-copy',
   // C2b (④ lineage): a grandchild thread-spawn edge the Swob side never attaches.
-  'lineage-grandchild-orphan'
+  'lineage-grandchild-orphan',
+  // C2c (⑥ resume): a PATH entry that is a symlink to a target that no longer exists.
+  'resume-broken-symlink'
 ] as const
 export type SelfTestCaseId = typeof SELF_TEST_CASES[number]
 
@@ -193,7 +200,9 @@ export const ORACLE_IDS = [
   'census.codex-jsonl',
   'codex.state-db',
   'census.unscanned-roots',
-  'census.source-presence'
+  'census.source-presence',
+  // resume ⑥ (C2c): the local filesystem + login-shell PATH (design "工具自己的存储，加上本机环境")
+  'fs.local-environment'
 ] as const
 
 /**
@@ -296,6 +305,8 @@ export const REASON_CODES = [
   'claude.continuation-edge-unexpressed',
   'claude.resume-fork-edge-unexpressed',
   'claude.branch-edge-swob-extra',
+  // lineage ④ (C2c, F1n/G1: a fork edge's child that ① already excludes as an empty session)
+  'lineage.fork-child-empty-excluded',
   // tokens ⑤ (C1a: census-level evidence only; C2a: the check itself)
   'codex.fork-usage-copy',
   'tokens.deviation-high',
@@ -303,6 +314,17 @@ export const REASON_CODES = [
   'tokens.session-mismatch',
   'tokens.cache-write-calibration-difference',
   'tokens.swob-unavailable-as-zero',
+  // resume ⑥ (C2c): environment class (owner can fix locally: reinstall / relink)
+  'resume.program-not-found',
+  'resume.program-broken-symlink',
+  'resume.directory-missing',
+  // resume ⑥ (C2c): data / anchor class (hand to dev)
+  'resume.file-missing',
+  'resume.command-syntax-invalid',
+  'resume.anchor-mismatch',
+  // resume ⑥ (C2c): the shell running the checkup did not inject a command-layer probe (design §3.4 —
+  // e.g. the AI diary), never a real environment/data problem
+  'resume.probe-not-injected',
   // source applicability
   'source.not-implemented',
   'source.no-data',

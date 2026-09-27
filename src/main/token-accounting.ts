@@ -485,6 +485,26 @@ export function uniqueBillingEvents(events: UsageEvent[]): UsageEvent[] {
   return [...selected.values()]
 }
 
+/**
+ * The copies a ledger would own had the load not counted them in another
+ * session (F1m): per billing fact, uniqueBillingEvents' pick among its
+ * inherited copies by observed scope. Indexes into `events`. Insights keeps
+ * their days: a session is active on every call it made (F1j D5).
+ */
+export function inheritedOwnerIndexes(events: readonly UsageEvent[]): number[] {
+  const selected = new Map<string, number>()
+  events.forEach((event, index) => {
+    if (event.scope !== 'inherited' || !event.inheritedFrom) return
+    const key = event.billingFactKey || event.dedupKey
+    const current = selected.get(key)
+    if (current === undefined ||
+      (events[current].inheritedFrom!.originalScope !== 'main' && event.inheritedFrom.originalScope === 'main')) {
+      selected.set(key, index)
+    }
+  })
+  return [...selected.values()]
+}
+
 /** uniqueBillingEvents over compact rollups. */
 function uniqueBillingRollups(rollups: readonly CompactUsageEventRollup[]): CompactUsageEventRollup[] {
   const selected = new Map<string, CompactUsageEventRollup>()

@@ -44,6 +44,17 @@ let commandEnvironment: NodeJS.ProcessEnv = {}
 const exercised = new Set<string>()
 const GLOBAL_CLI_PATHS = ['/usr/local/bin/swob', '/opt/homebrew/bin/swob']
 let globalCliStateBefore: string[] = []
+// F1l-c reverse-verification pin (deliverable 1): before the sandbox redirect,
+// NODE_ENV=production made the packaged CLI's write commands fall through to
+// the real host-identity primary despite SWOB_TEST_HOME/SWOB_E2E_SANDBOX_ROOT
+// being set (this is exactly what regenerated the real identity on 2026-09-26
+// at 22:22, the same minute a packaged-contract run executed write commands).
+// This never writes to the real path itself - only a read-only lstat
+// signature, taken before any CLI invocation and compared again at the end.
+const REAL_HOST_IDENTITY_DIR = '/Users/Shared/Swob'
+const REAL_HOST_IDENTITY_FILE = path.join(REAL_HOST_IDENTITY_DIR, 'host-identity-v1.json')
+let realHostIdentityDirStateBefore = ''
+let realHostIdentityFileStateBefore = ''
 
 function inspectGlobalCliPath(filePath: string): string {
   try {
@@ -51,6 +62,18 @@ function inspectGlobalCliPath(filePath: string): string {
     return stat.isSymbolicLink()
       ? `symlink:${fs.readlinkSync(filePath)}`
       : `file:${stat.mode}:${stat.size}:${stat.mtimeMs}`
+  } catch {
+    return 'missing'
+  }
+}
+
+/** Like inspectGlobalCliPath, plus the inode: a stronger read-only before/after signature. */
+function inspectRealPathSignature(filePath: string): string {
+  try {
+    const stat = fs.lstatSync(filePath)
+    return stat.isSymbolicLink()
+      ? `symlink:${fs.readlinkSync(filePath)}`
+      : `file:${stat.mode}:${stat.size}:${stat.mtimeMs}:${stat.ino}`
   } catch {
     return 'missing'
   }
@@ -180,6 +203,8 @@ function waitForProcessStart(): Promise<void> {
 beforeAll(() => {
   if (!packagedApp) return
   globalCliStateBefore = GLOBAL_CLI_PATHS.map(inspectGlobalCliPath)
+  realHostIdentityDirStateBefore = inspectRealPathSignature(REAL_HOST_IDENTITY_DIR)
+  realHostIdentityFileStateBefore = inspectRealPathSignature(REAL_HOST_IDENTITY_FILE)
   const appPath = packagedApp
   packagedCli = path.join(appPath, 'Contents', 'Resources', 'cli', 'cli.js')
   unpackedNodeModules = path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules')
@@ -498,5 +523,20 @@ describePackaged('packaged Swob CLI complete command contract', () => {
 
   it('covers every command definition through the real installed wrapper', () => {
     expect([...exercised].sort()).toEqual(CLI_COMMANDS.map((command) => command.usage).sort())
+  })
+
+  it('F1l-c: every write command above ran under NODE_ENV=production without ever touching /Users/Shared/Swob', () => {
+    // Positive control: the writer identity these commands actually needed was
+    // created (and its machine-local backup written) inside this sandbox, so a
+    // pass here is not merely "nothing was written anywhere".
+    expect(fs.existsSync(path.join(fixtureHome, '.swob-machine', 'host-identity-v1.json'))).toBe(false)
+    expect(fs.existsSync(path.join(sandboxRoot, '.swob-machine', 'host-identity-v1.json'))).toBe(true)
+    expect(fs.existsSync(path.join(sandboxRoot, '.claude-session-manager', 'host-identity-v1.json'))).toBe(true)
+    // The real path: read-only lstat signature, unchanged from before beforeAll
+    // did any work. Never asserted absent outright - a real identity commonly
+    // already exists on the machine running this test (it does on this one,
+    // from the very 2026-09-26 22:22 incident this deliverable fixes).
+    expect(inspectRealPathSignature(REAL_HOST_IDENTITY_FILE)).toBe(realHostIdentityFileStateBefore)
+    expect(inspectRealPathSignature(REAL_HOST_IDENTITY_DIR)).toBe(realHostIdentityDirStateBefore)
   })
 })

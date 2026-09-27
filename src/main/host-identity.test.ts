@@ -15,6 +15,10 @@ import {
   type HostIdentityEvent,
   type HostIdentityOptions
 } from './host-identity'
+import {
+  resolveLibraryWriterHostIdentityBackupPath,
+  resolveLibraryWriterHostIdentityStoragePath
+} from './library-writer-lease'
 
 const roots: string[] = []
 
@@ -425,6 +429,145 @@ describe('machine-local host identity backup', () => {
 
   it('under the test harness the machine binding is a seed, never the host identifier', () => {
     expect(readHostMachineBinding('darwin')).toBe(`test-machine:${path.resolve(process.env.SWOB_TEST_HOME!)}`)
+  })
+})
+
+describe('E2E sandbox redirect (packaged-CLI contract and dev-mode e2e launches)', () => {
+  function sandbox(label: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `swob-host-identity-e2e-${label}-`))
+    roots.push(root)
+    return root
+  }
+
+  it('redirects the primary and backup into the sandbox when both E2E markers are set, in production', () => {
+    const sandboxRoot = sandbox('prod')
+    const environment = {
+      NODE_ENV: 'production',
+      HOME: '/tmp/should-be-ignored',
+      SWOB_E2E_RUNNER: 'packaged-cli-contract',
+      SWOB_E2E_SANDBOX_ROOT: sandboxRoot
+    }
+    expect(defaultHostIdentityPath('darwin', environment)).toBe(path.join(sandboxRoot, '.swob-machine', 'host-identity-v1.json'))
+    expect(defaultHostIdentityBackupPath('darwin', environment)).toBe(path.join(sandboxRoot, '.claude-session-manager', 'host-identity-v1.json'))
+  })
+
+  it('redirects in development mode too (the dangerous dev-mode e2e desktop launch)', () => {
+    const sandboxRoot = sandbox('dev')
+    const environment = {
+      NODE_ENV: 'development',
+      SWOB_E2E_RUNNER: 'app-launch-e2e',
+      SWOB_E2E_SANDBOX_ROOT: sandboxRoot
+    }
+    expect(defaultHostIdentityPath('darwin', environment)).toBe(path.join(sandboxRoot, '.swob-machine', 'host-identity-v1.json'))
+  })
+
+  it('never redirects with only one of the two markers set (both must be present)', () => {
+    const sandboxRoot = sandbox('partial')
+    expect(defaultHostIdentityPath('darwin', { NODE_ENV: 'production', SWOB_E2E_SANDBOX_ROOT: sandboxRoot }))
+      .toBe('/Users/Shared/Swob/host-identity-v1.json')
+    expect(defaultHostIdentityPath('darwin', { NODE_ENV: 'production', SWOB_E2E_RUNNER: 'x' }))
+      .toBe('/Users/Shared/Swob/host-identity-v1.json')
+    expect(defaultHostIdentityBackupPath('darwin', { NODE_ENV: 'production', HOME: '/tmp/profile-a', SWOB_E2E_SANDBOX_ROOT: sandboxRoot }))
+      .toBe('/tmp/profile-a/.claude-session-manager/host-identity-v1.json')
+  })
+
+  it('an ordinary production run (no E2E markers) still resolves to the real machine path', () => {
+    // This is the reverse-verification pin for deliverable 1: on master, this
+    // assertion already holds for the *unmarked* case, but the packaged CLI
+    // contract sets both markers (packaged-contract.test.ts:216-217) and, before
+    // this fix, defaultHostIdentityPath ignores them entirely and still resolves
+    // here - the two 'redirects' tests above are what must fail before the fix.
+    expect(defaultHostIdentityPath('darwin', { NODE_ENV: 'production' })).toBe('/Users/Shared/Swob/host-identity-v1.json')
+  })
+
+  it('refuses a sandbox subdirectory that is a symlink escaping the declared sandbox root', () => {
+    const sandboxRoot = sandbox('escape')
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-host-identity-e2e-outside-'))
+    roots.push(outside)
+    fs.symlinkSync(outside, path.join(sandboxRoot, '.swob-machine'))
+    expect(() => defaultHostIdentityPath('darwin', {
+      NODE_ENV: 'production',
+      SWOB_E2E_RUNNER: 'x',
+      SWOB_E2E_SANDBOX_ROOT: sandboxRoot
+    })).toThrow(/sandbox/)
+  })
+
+  // resolveLibraryWriterHostIdentityStoragePath calls defaultHostIdentityPath
+  // with only a platform argument (no environment) - by design (it is one of
+  // the two resolvers this package must not touch), so it only sees the same
+  // redirect its sibling backup resolver does when both read the *same*
+  // process.env object a real child process actually has, not a synthetic one
+  // passed by value. These two tests mutate process.env (saved/restored) to
+  // match that real condition instead of passing a private environment object.
+  function withProcessEnv<T>(overrides: Record<string, string | undefined>, run: () => T): T {
+    const previous = { ...process.env }
+    try {
+      for (const [key, value] of Object.entries(overrides)) {
+        if (value === undefined) delete (process.env as Record<string, string | undefined>)[key]
+        else process.env[key] = value
+      }
+      return run()
+    } finally {
+      for (const key of Object.keys(overrides)) delete (process.env as Record<string, string | undefined>)[key]
+      Object.assign(process.env, previous)
+    }
+  }
+
+  it('the real production entry points (library-writer-lease\'s two resolvers) redirect too, unmodified', () => {
+    // This is the reverse-verification pin for deliverable 1, exercised through
+    // the actual call chain packaged-contract.test.ts drives: NODE_ENV is
+    // 'production' (so the resolvers' own NODE_ENV==='test' + SWOB_TEST_HOME
+    // seam does not apply, matching :210-230's real child-process environment,
+    // which sets SWOB_TEST_HOME alongside NODE_ENV: 'production' for other
+    // reasons), and both E2E markers are set. Before this fix,
+    // resolveLibraryWriterHostIdentityStoragePath/BackupPath fall through to
+    // defaultHostIdentityPath/BackupPath, which ignored the markers and
+    // resolved to /Users/Shared/Swob and the real HOME - so this must fail
+    // before the fix and needs no change to either resolver.
+    const sandboxRoot = sandbox('resolvers')
+    withProcessEnv({
+      NODE_ENV: 'production',
+      HOME: path.join(sandboxRoot, 'home'),
+      SWOB_TEST_HOME: path.join(sandboxRoot, 'home'),
+      SWOB_E2E_RUNNER: 'packaged-cli-contract',
+      SWOB_E2E_SANDBOX_ROOT: sandboxRoot
+    }, () => {
+      expect(resolveLibraryWriterHostIdentityStoragePath('darwin'))
+        .toBe(path.join(sandboxRoot, '.swob-machine', 'host-identity-v1.json'))
+      expect(resolveLibraryWriterHostIdentityBackupPath('darwin'))
+        .toBe(path.join(sandboxRoot, '.claude-session-manager', 'host-identity-v1.json'))
+    })
+  })
+
+  it('an actual identity create through the redirected path lands only inside the sandbox (lstat before/after on the real path)', () => {
+    const sandboxRoot = sandbox('full-cycle')
+    // Read-only before/after comparison of the real production path, per the
+    // task's "只读 lstat 前后比对" requirement: never assert it is absent
+    // outright (a real identity may already exist on the machine running this
+    // test), only that this call leaves it exactly as found.
+    const realPrimaryPath = '/Users/Shared/Swob/host-identity-v1.json'
+    const before = (() => { try { return fs.lstatSync(realPrimaryPath) } catch { return null } })()
+
+    const identity = withProcessEnv({
+      NODE_ENV: 'production',
+      SWOB_E2E_RUNNER: 'packaged-cli-contract',
+      SWOB_E2E_SANDBOX_ROOT: sandboxRoot
+    }, () => getOrCreateHostIdentity({
+      storagePath: resolveLibraryWriterHostIdentityStoragePath('darwin'),
+      backupPath: resolveLibraryWriterHostIdentityBackupPath('darwin'),
+      machineBinding: () => 'sandbox-machine'
+    }))
+
+    expect(identity).toMatch(/^[0-9a-f-]{36}$/)
+    expect(fs.existsSync(path.join(sandboxRoot, '.swob-machine', 'host-identity-v1.json'))).toBe(true)
+    expect(fs.existsSync(path.join(sandboxRoot, '.claude-session-manager', 'host-identity-v1.json'))).toBe(true)
+
+    const after = (() => { try { return fs.lstatSync(realPrimaryPath) } catch { return null } })()
+    expect(Boolean(after)).toBe(Boolean(before))
+    if (before && after) {
+      expect({ ino: after.ino, size: after.size, mtimeMs: after.mtimeMs })
+        .toEqual({ ino: before.ino, size: before.size, mtimeMs: before.mtimeMs })
+    }
   })
 })
 

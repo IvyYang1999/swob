@@ -60,6 +60,63 @@ export class HostIdentityError extends Error {
 }
 
 /**
+ * Both markers must be present together to redirect a *default* primary or
+ * backup path off the real machine locations, regardless of NODE_ENV: this is
+ * how the packaged-CLI contract (NODE_ENV=production) and a development-mode
+ * desktop e2e launch both stay off /Users/Shared/Swob and the real machine-
+ * local backup, without letting an ordinary production run be redirected by
+ * an environment variable a user or a broken script might set. An explicit
+ * options.storagePath/backupPath, or the pre-existing NODE_ENV==='test' +
+ * SWOB_TEST_HOME seam used elsewhere, is untouched by this check: it only
+ * guards the two exported default*Path functions themselves. 2026-09-26's
+ * incident was exactly this gap: the packaged CLI contract test already set
+ * SWOB_TEST_HOME alongside NODE_ENV=production, but library-writer-lease.ts's
+ * resolvers only honor SWOB_TEST_HOME when NODE_ENV==='test', so production
+ * fell through to the real path and rebuilt a fresh identity there.
+ */
+function e2eSandboxRoot(environment: NodeJS.ProcessEnv): string | null {
+  return environment.SWOB_E2E_RUNNER && environment.SWOB_E2E_SANDBOX_ROOT
+    ? path.resolve(environment.SWOB_E2E_SANDBOX_ROOT)
+    : null
+}
+
+/**
+ * Resolve every existing ancestor's real path before appending path
+ * components that do not exist yet, so a sandbox-local symlink pointing
+ * outside the declared sandbox root is caught even though the redirected
+ * primary/backup file itself never exists ahead of time.
+ */
+function canonicalPathThroughExistingAncestor(candidatePath: string): string {
+  let existing = path.resolve(candidatePath)
+  const missing: string[] = []
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing)
+    if (parent === existing) break
+    missing.unshift(path.basename(existing))
+    existing = parent
+  }
+  return path.resolve(fs.realpathSync.native(existing), ...missing)
+}
+
+function isPathContained(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+/** The redirected default path for `subdirectory`, or null when not in an E2E sandbox. */
+function sandboxedDefaultPath(environment: NodeJS.ProcessEnv, subdirectory: string): string | null {
+  const sandboxRoot = e2eSandboxRoot(environment)
+  if (!sandboxRoot) return null
+  const candidate = path.join(sandboxRoot, subdirectory, 'host-identity-v1.json')
+  const canonicalSandbox = canonicalPathThroughExistingAncestor(sandboxRoot)
+  const canonicalCandidate = canonicalPathThroughExistingAncestor(candidate)
+  if (!isPathContained(canonicalSandbox, canonicalCandidate)) {
+    throw new Error(`Refusing E2E host-identity sandbox redirect: ${candidate} resolves outside sandbox ${sandboxRoot}`)
+  }
+  return candidate
+}
+
+/**
  * Host identity is deliberately outside Electron userData and the Library:
  * changing an app profile, HOME, or reinstalling the app must not rotate it,
  * and a synced Library must never upload it. The value is random, not derived
@@ -82,9 +139,17 @@ export class HostIdentityError extends Error {
  *
  * Tests use an explicit storagePath (or SWOB_TEST_HOME through the internal
  * resolver) so they never touch machine state. defaultHostIdentityPath itself
- * intentionally ignores HOME and test HOME.
+ * intentionally ignores HOME and test HOME, in any NODE_ENV - except for the
+ * explicit SWOB_E2E_RUNNER + SWOB_E2E_SANDBOX_ROOT pair above, which a
+ * packaged-CLI contract test or a development-mode e2e desktop launch sets to
+ * declare itself, never an ordinary run.
  */
-export function defaultHostIdentityPath(platform: NodeJS.Platform = process.platform): string {
+export function defaultHostIdentityPath(
+  platform: NodeJS.Platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env
+): string {
+  const sandboxed = sandboxedDefaultPath(environment, '.swob-machine')
+  if (sandboxed) return sandboxed
   if (platform === 'darwin') return '/Users/Shared/Swob/host-identity-v1.json'
   if (platform === 'win32') {
     const drive = process.env.SystemDrive && /^[A-Za-z]:$/.test(process.env.SystemDrive)
@@ -103,6 +168,8 @@ export function defaultHostIdentityBackupPath(
   platform: NodeJS.Platform = process.platform,
   environment: NodeJS.ProcessEnv = process.env
 ): string {
+  const sandboxed = sandboxedDefaultPath(environment, '.claude-session-manager')
+  if (sandboxed) return sandboxed
   const home = resolveRuntimeHome({ platform, nodeEnv: environment.NODE_ENV, env: environment, osHome: os.homedir() })
   return path.join(home, '.claude-session-manager', 'host-identity-v1.json')
 }

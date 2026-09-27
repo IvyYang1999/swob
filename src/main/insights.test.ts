@@ -13,6 +13,8 @@ import {
   type UsageEvent
 } from './token-accounting'
 import type { SessionSummary, Folder } from './types'
+import { localActivityDay } from './activity-time'
+import { usageFactsForSession } from './usage-fact-store'
 import {
   codexClock,
   codexRow,
@@ -787,5 +789,253 @@ describe('buildInsights 按模型与按日聚合只算计费归属（F1i）', ()
     expect(result.totalTokens).toBe(1_100)
     expect(result.unknownTimeUsage).toEqual({ eventCount: 1, totalTokens: 1_100 })
     expect(result.byModel).toEqual([{ model: 'gpt-5', totalTokens: 1_100, sessionCount: 1 }])
+  })
+})
+
+// 同一计费事实出现在两场会话里（续接、分叉的转录会抄写另一场已记下的调用）。usage-facts 与 Insights 页
+// 按 billing_fact_id 全局只算一次，取 billing_rank 排第一的那份（作用域 main → subagent → 其他；
+// 有时间先于无时间；occurred_at、event_id 按原串升序）。CLI 的全局聚合与之同口径，bySession 仍逐会话（F1j）。
+// 金额走 provider-billed 账目，不依赖价目表；时间取本地三天前起，落在 byDate 的 365 天窗口里。
+describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）', () => {
+  const base = new Date()
+  base.setDate(base.getDate() - 3)
+  base.setHours(10, 0, 0, 0)
+  const at = (hours: number): string => new Date(base.getTime() + hours * 3_600_000).toISOString()
+  const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0)
+  const dayOf = (timestamp: string): string => localActivityDay(timestamp)!
+
+  interface CallSpec {
+    id: string
+    usd: number
+    input: number
+    cacheRead?: number
+    cacheWrite?: number
+    output?: number
+    model?: string
+    scope?: UsageEvent['scope']
+    timestamp?: string
+  }
+
+  /** 一条 Claude 调用：billingFactKey 与 dedupKey 都是 claude:message:<id>，与带 id 的 Claude 行一致。 */
+  function call(spec: CallSpec): UsageEvent {
+    const key = `claude:message:${spec.id}`
+    return {
+      provider: 'claude-code',
+      providerFormatVersion: 'fixture-v1',
+      dedupKey: key,
+      billingFactKey: key,
+      ...(spec.timestamp ? { timestamp: spec.timestamp } : {}),
+      ...(spec.model ? { modelRaw: spec.model, modelCanonical: spec.model } : {}),
+      modelProvenance: spec.model ? 'response' : 'unknown',
+      providerProvenance: 'unknown',
+      scope: spec.scope || 'main',
+      counterKind: 'incremental',
+      provenance: 'reported',
+      components: {
+        nonCachedInputTokens: spec.input, cacheReadTokens: spec.cacheRead || 0, cacheWriteTokens: spec.cacheWrite || 0,
+        cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, outputTokens: spec.output || 0
+      },
+      semantics: 'anthropic-disjoint',
+      reportedCostUsd: spec.usd,
+      reportedCostKind: 'provider-billed',
+      warnings: []
+    }
+  }
+
+  function ledgerSession(sessionId: string, project: string, events: UsageEvent[]): SessionSummary {
+    const accounting = accountingFromUsageEvents('claude-code', events)
+    return makeSession({
+      sessionId, cwds: [project], projectPath: project,
+      tokenAccounting: accounting, tokenUsage: tokenUsageFromAccounting(accounting)
+    })
+  }
+
+  const eventIdOf = (session: SessionSummary): string => usageFactsForSession(session)[0].eventId
+  const byPath = <T extends { fullPath: string }>(rows: T[]): Record<string, T> =>
+    Object.fromEntries(rows.map((row) => [row.fullPath, row]))
+
+  // 共享的那条事实 1,800 token、$2；B 的一份更早，按 billing_rank 胜出，A 的一份落选。
+  // A 另有一条 haiku（180 token、$0.5），B 另有一条 opus（360 token、$1），落在第二天。
+  function sharedFactSessions(): SessionSummary[] {
+    const shared = { id: 'shared', usd: 2, input: 1_000, cacheRead: 200, cacheWrite: 100, output: 500, model: 'claude-sonnet-4-5' }
+    return [
+      ledgerSession('dup-a', '/dup/a', [
+        call({ id: 'a-own', usd: 0.5, input: 100, cacheRead: 20, cacheWrite: 10, output: 50, model: 'claude-haiku-4-5', timestamp: at(0) }),
+        call({ ...shared, timestamp: at(2) })
+      ]),
+      ledgerSession('dup-b', '/dup/b', [
+        call({ id: 'b-own', usd: 1, input: 300, output: 60, model: 'claude-opus-4-1', timestamp: at(24) }),
+        call({ ...shared, timestamp: at(1) })
+      ])
+    ]
+  }
+  const sharedFactFolders = [
+    makeFolder({ id: 'fa', name: 'A', sessionIds: ['dup-a'] }),
+    makeFolder({ id: 'fb', name: 'B', sessionIds: ['dup-b'] })
+  ]
+
+  it('两场会话共享同一条 main 事实：全局各项只计一次，归属胜出的会话；bySession 各计一次', () => {
+    const result = buildInsights(sharedFactSessions(), sharedFactFolders)
+
+    // 合计：180 + 360 + 1,800（只算 B 的一份）。
+    expect(result.totalTokens).toBe(2_340)
+    expect(result.conversationOnlyTokens).toBe(2_340)
+    expect(result.totalInputTokens).toBe(130 + 300 + 1_300)
+    expect(result.totalOutputTokens).toBe(50 + 60 + 500)
+    expect(result.totalCacheReadTokens).toBe(220)
+    expect(result.totalCacheCreationTokens).toBe(110)
+    expect(result.valuation.usd).toBe(3.5)
+    expect(result.bySource.find((source) => source.source === 'claude-code')).toMatchObject({
+      totalTokens: 2_340, inputTokens: 1_730, outputTokens: 610, sessionCount: 2
+    })
+    const projects = byPath(result.byProject)
+    expect(projects['/dup/a']).toMatchObject({ totalTokens: 180, inputTokens: 130, outputTokens: 50, sessionCount: 1 })
+    expect(projects['/dup/b']).toMatchObject({ totalTokens: 2_160, inputTokens: 1_600, outputTokens: 560, sessionCount: 1 })
+    expect(sum(result.byProject.map((project) => project.totalTokens))).toBe(result.totalTokens)
+    expect(result.byFolder.map(({ folderId, totalTokens, inputTokens, outputTokens }) => ({ folderId, totalTokens, inputTokens, outputTokens })))
+      .toEqual([
+        { folderId: 'fb', totalTokens: 2_160, inputTokens: 1_600, outputTokens: 560 },
+        { folderId: 'fa', totalTokens: 180, inputTokens: 130, outputTokens: 50 }
+      ])
+    // A 的 sonnet 调用全部落选：sonnet 只算 B 的一份，也只数 B 一场。
+    expect(result.byModel).toEqual([
+      { model: 'claude-sonnet-4-5', totalTokens: 1_800, sessionCount: 1 },
+      { model: 'claude-opus-4-1', totalTokens: 360, sessionCount: 1 },
+      { model: 'claude-haiku-4-5', totalTokens: 180, sessionCount: 1 }
+    ])
+
+    // 按日：A 的一份（第一天 12 点）不计，B 的一份（第一天 11 点）计给 B。
+    const firstDay = result.byDate.find((date) => date.date === dayOf(at(0)))!
+    const secondDay = result.byDate.find((date) => date.date === dayOf(at(24)))!
+    expect(firstDay).toMatchObject({
+      totalTokens: 1_980, inputTokens: 1_430, outputTokens: 550, sessionCount: 2, turnCount: 2,
+      bySource: { 'claude-code': 1_980 }, byProject: { a: 180, b: 1_800 }, byFolder: { fa: 180, fb: 1_800 }
+    })
+    expect(secondDay).toMatchObject({
+      totalTokens: 360, inputTokens: 300, outputTokens: 60, sessionCount: 1, turnCount: 1,
+      bySource: { 'claude-code': 360 }, byProject: { b: 360 }, byFolder: { fb: 360 }
+    })
+    expect(result.unknownTimeUsage).toEqual({ eventCount: 0, totalTokens: 0 })
+    expect(sum(result.byDate.map((date) => date.totalTokens))).toBe(result.totalTokens)
+    expect(sum(result.heatmap.map((day) => day.value))).toBe(result.totalTokens)
+    const hourly = new Array(24).fill(0) as number[]
+    for (const timestamp of [at(0), at(1), at(24)]) hourly[new Date(timestamp).getHours()]++
+    expect(result.hourlyDistribution).toEqual(hourly)
+    expect(result.activeDays).toBe(2)
+
+    // 逐会话不变：两场各自带着那一份。
+    expect(result.bySession.map(({ sessionId, totalTokens, conversationOnlyTokens, valuation }) => ({
+      sessionId, totalTokens, conversationOnlyTokens, usd: valuation.usd
+    }))).toEqual([
+      { sessionId: 'dup-a', totalTokens: 1_980, conversationOnlyTokens: 1_980, usd: 2.5 },
+      { sessionId: 'dup-b', totalTokens: 2_160, conversationOnlyTokens: 2_160, usd: 3 }
+    ])
+  })
+
+  // A、B 各有同一条事实的一份：A 的 1,000 token、$1，B 的 2,000 token、$2。每一例只让一个排序键起作用，
+  // 胜出的一份与会话顺序无关；前置断言写明 event_id 的先后，保证换掉那个键就会选到另一份。
+  const RAW_INSTANT = at(30).replace(/\.\d{3}Z$/, '')
+  it.each([
+    ['作用域：main 胜过更早的 subagent 副本', 'rank-scope',
+      { a: { scope: 'sidechain' as const, timestamp: at(0) }, b: { timestamp: at(1) } }, 'b', null],
+    ['时间：更早的一份胜出', 'rank-time', { a: { timestamp: at(1) }, b: { timestamp: at(0) } }, 'b', 'a'],
+    ['NULL：有时间的一份胜过没有时间的', 'rank-null', { a: {}, b: { timestamp: at(1) } }, 'b', null],
+    ['event_id：同一时间取 event_id 小的', 'rank-event-id', { a: { timestamp: at(1) }, b: { timestamp: at(1) } }, 'b', 'b'],
+    ['时间按原串比较：同一时刻 .000Z 排在 Z 前', 'rank-raw-string',
+      { a: { timestamp: `${RAW_INSTANT}.000Z` }, b: { timestamp: `${RAW_INSTANT}Z` } }, 'a', 'b'],
+    // 逐字节 '+'（0x2B）在 '-'（0x2D）前；localeCompare 反过来。
+    ['时间逐字节比较，不用 localeCompare：同一时刻 +00:00 排在 -00:00 前', 'rank-offset',
+      { a: { timestamp: `${RAW_INSTANT}+00:00` }, b: { timestamp: `${RAW_INSTANT}-00:00` } }, 'a', null]
+  ] as const)('两份金额不同（%s）：两种会话顺序都取 billing_rank 排第一的那份', (_name, key, copies, winner, smallerEventId) => {
+    const a = ledgerSession(`${key}-a`, '/rank/a', [call({ id: key, usd: 1, input: 1_000, ...copies.a })])
+    const b = ledgerSession(`${key}-b`, '/rank/b', [call({ id: key, usd: 2, input: 2_000, ...copies.b })])
+    if (smallerEventId) {
+      const [smaller, larger] = smallerEventId === 'a' ? [a, b] : [b, a]
+      expect(eventIdOf(smaller) < eventIdOf(larger)).toBe(true)
+    }
+    const expected = winner === 'a'
+      ? { totalTokens: 1_000, usd: 1, projects: { '/rank/a': 1_000, '/rank/b': 0 } }
+      : { totalTokens: 2_000, usd: 2, projects: { '/rank/a': 0, '/rank/b': 2_000 } }
+
+    for (const order of [[a, b], [b, a]]) {
+      const result = buildInsights(order, [])
+      expect(result.totalTokens).toBe(expected.totalTokens)
+      // 胜出的一份都是 main；作用域一例里落选的是 subagent 副本，不在 conversationOnly 里，不能从中再扣。
+      expect(result.conversationOnlyTokens).toBe(expected.totalTokens)
+      expect(result.valuation.usd).toBe(expected.usd)
+      expect(Object.fromEntries(result.byProject.map((project) => [project.fullPath, project.totalTokens])))
+        .toEqual(expected.projects)
+      expect(Object.fromEntries(result.bySession.map((session) => [session.sessionId, session.totalTokens])))
+        .toEqual({ [`${key}-a`]: 1_000, [`${key}-b`]: 2_000 })
+    }
+  })
+
+  it('两场会话共用同一个账本对象：每条事实只扣落选会话的那一份（按会话与下标记，不按事件对象）', () => {
+    const ledger = accountingFromUsageEvents('claude-code', [
+      call({ id: 'shared-ledger-1', usd: 1, input: 1_000, timestamp: at(0) }),
+      call({ id: 'shared-ledger-2', usd: 2, input: 2_000, timestamp: at(0) })
+    ])
+    const sessions = ['shared-1', 'shared-2'].map((sessionId) => makeSession({
+      sessionId, cwds: ['/shared'], tokenAccounting: ledger, tokenUsage: tokenUsageFromAccounting(ledger)
+    }))
+
+    const result = buildInsights(sessions, [])
+
+    expect(result.totalTokens).toBe(3_000)
+    expect(result.valuation.usd).toBe(3)
+    expect(result.byProject).toMatchObject([{ fullPath: '/shared', totalTokens: 3_000, sessionCount: 2 }])
+    expect(sum(result.byDate.map((date) => date.totalTokens))).toBe(3_000)
+    expect(result.bySession.map((session) => session.totalTokens)).toEqual([3_000, 3_000])
+  })
+
+  it('落选的一份没有时间戳：未知时间用量不算它，byDate 合计 + 未知时间 = totalTokens', () => {
+    const copy = { id: 'untimed-shared', usd: 2, input: 1_000, output: 100 }
+    // A 的一份没有时间（NULL 排后），落选；B 的一份胜出，计在它的日期上。
+    const result = buildInsights([
+      ledgerSession('untimed-a', '/untimed/a', [call(copy)]),
+      ledgerSession('untimed-b', '/untimed/b', [call({ ...copy, timestamp: at(1) })])
+    ], [])
+
+    expect(result.totalTokens).toBe(1_100)
+    expect(result.unknownTimeUsage).toEqual({ eventCount: 0, totalTokens: 0 })
+    expect(sum(result.byDate.map((date) => date.totalTokens)) + result.unknownTimeUsage.totalTokens).toBe(result.totalTokens)
+    expect(sum(result.hourlyDistribution)).toBe(1)
+
+    // 反过来：没有时间的是 main，作用域先于时间，它胜出；有时间的 subagent 副本落选，byDate 不算它。
+    const reversed = buildInsights([
+      ledgerSession('untimed-a', '/untimed/a', [call(copy)]),
+      ledgerSession('untimed-b', '/untimed/b', [call({ ...copy, scope: 'subagent', timestamp: at(1) })])
+    ], [])
+
+    expect(reversed.totalTokens).toBe(1_100)
+    expect(reversed.unknownTimeUsage).toEqual({ eventCount: 1, totalTokens: 1_100 })
+    expect(sum(reversed.byDate.map((date) => date.totalTokens))).toBe(0)
+    expect(sum(reversed.hourlyDistribution)).toBe(0)
+  })
+
+  it('一场会话的调用全部落选：当天仍算它活跃，它的时间照样分到那一天（D5）', () => {
+    const copy = { id: 'd5-shared', usd: 2, input: 1_000, output: 100 }
+    // A 的一份在第二天、B 的一份在第一天：B 的更早，A 的调用全部落选。
+    const sessions = [
+      ledgerSession('d5-a', '/d5/a', [call({ ...copy, timestamp: at(24) })]),
+      ledgerSession('d5-b', '/d5/b', [call({ ...copy, timestamp: at(0) })])
+    ]
+    const sessionTimes = new Map([['d5-a', 600_000], ['d5-b', 1_200_000]])
+
+    const result = buildInsights(sessions, [], sessionTimes)
+
+    expect(result.totalTokens).toBe(1_100)
+    expect(result.byDate.find((date) => date.date === dayOf(at(24)))).toMatchObject({
+      totalTokens: 0, inputTokens: 0, outputTokens: 0, turnCount: 0, sessionCount: 1,
+      bySource: {}, byProject: {}, totalTime: 600_000, byProjectTime: { a: 600_000 }
+    })
+    expect(result.byDate.find((date) => date.date === dayOf(at(0)))).toMatchObject({
+      totalTokens: 1_100, inputTokens: 1_000, outputTokens: 100, turnCount: 1, sessionCount: 1,
+      bySource: { 'claude-code': 1_100 }, byProject: { b: 1_100 }, totalTime: 1_200_000, byProjectTime: { b: 1_200_000 }
+    })
+    expect(result.activeDays).toBe(2)
+    expect(result.totalTime).toBe(1_800_000)
+    expect(sum(result.byDate.map((date) => date.totalTime))).toBe(result.totalTime)
+    expect(sum(result.hourlyDistribution)).toBe(1)
   })
 })

@@ -654,6 +654,126 @@ describe('resume audit', () => {
     expect(report.environmentMissing).toEqual([
       { binary: 'cursor', count: 1, exampleSessionId: `cursor:${IDS.cursor}` }
     ])
+    // The missing CLI no longer skips L3: the empty fixture reaches it and has no expected anchor.
+    expect(report.l3).toMatchObject({
+      match: 0,
+      mismatch: { total: 0 },
+      would404: 0,
+      skipped: 1,
+      skippedReasons: { expectedAnchorEmpty: 1 }
+    })
+    expect(report.envMissingWithL3).toEqual({ match: 0, mismatch: 0, would404: 0, skipped: 1 })
+  })
+
+  it('缺 harness CLI 但 L3 锚点一致：仍记 env-missing，L3 照记 match，不算已验证', async () => {
+    const sessionId = IDS.codex
+    const expected = writeCodexSession(
+      path.join(tempRoot, 'library', 'codex-env-missing-match.jsonl'),
+      sessionId,
+      '程序缺失也能比对的用户锚点',
+      '程序缺失也能比对的助手锚点'
+    )
+    const target = writeCodexSession(
+      path.join(tempRoot, '.codex', 'sessions', `rollout-2026-07-18T00-00-00-${sessionId}.jsonl`),
+      sessionId,
+      '程序缺失也能比对的用户锚点',
+      '程序缺失也能比对的助手锚点'
+    )
+
+    const report = await runResumeAudit({
+      sessions: [summary('codex', sessionId, expected)],
+      pathEnv: binDir,
+      resumeTargets: { codex: [target] }
+    })
+
+    expect(report).toMatchObject({
+      total: 1,
+      ok: 0,
+      fail: 0,
+      envMissing: 1,
+      successRate: null,
+      verifiedRate: 0,
+      l1: { ok: 1, fail: 0 },
+      l2: { ok: 0, fail: 0, envMissing: 1 },
+      l3: {
+        match: 1,
+        mismatch: { total: 0, wrongBranch: 0, stale: 0, empty: 0 },
+        would404: 0,
+        skipped: 0,
+        skippedReasons: { expectedAnchorEmpty: 0 }
+      },
+      envMissingWithL3: { match: 1, mismatch: 0, would404: 0, skipped: 0 }
+    })
+    expect(report.ok + report.fail + report.envMissing).toBe(report.total)
+    expect(report.environmentMissing).toEqual([
+      { binary: 'codex', count: 1, exampleSessionId: `codex:${sessionId}` }
+    ])
+    expect(report.perSource.codex).toMatchObject({
+      ok: 0,
+      envMissing: 1,
+      successRate: null,
+      l3: { match: 1 },
+      envMissingWithL3: { match: 1, mismatch: 0, would404: 0, skipped: 0 }
+    })
+    const output = formatResumeAuditReport(report)
+    expect(output).toContain(
+      '  env-missing (CLI not found, L3 still checked): match=1, mismatch=0, would-404=0, skipped=0'
+    )
+    expect(output).toContain('    env-missing L3: match=1, mismatch=0, would-404=0, skipped=0')
+  })
+
+  it('缺 harness CLI 且 L3 锚点不一致或目标缺失：仍记 env-missing 不升级为失败，L3 照记 mismatch 与 would-404', async () => {
+    const staleExpected = writeCodexSession(
+      path.join(tempRoot, 'library', 'codex-env-missing-stale.jsonl'),
+      IDS.staleCodex,
+      '程序缺失时的新用户锚点',
+      '程序缺失时的新助手锚点'
+    )
+    const staleTarget = writeCodexSession(
+      path.join(tempRoot, '.codex', 'sessions', `rollout-2026-07-18T00-00-00-${IDS.staleCodex}.jsonl`),
+      IDS.staleCodex,
+      '程序缺失时的旧用户内容',
+      '程序缺失时的旧助手内容'
+    )
+    const missingTargetExpected = writeCodexSession(
+      path.join(tempRoot, 'library', 'codex-env-missing-404.jsonl'),
+      IDS.codex,
+      '目标已不存在的用户锚点',
+      '目标已不存在的助手锚点'
+    )
+
+    const report = await runResumeAudit({
+      sessions: [
+        summary('codex', IDS.staleCodex, staleExpected),
+        summary('codex', IDS.codex, missingTargetExpected)
+      ],
+      pathEnv: binDir,
+      resumeTargets: { codex: [staleTarget] }
+    })
+
+    expect(report).toMatchObject({
+      total: 2,
+      ok: 0,
+      fail: 0,
+      envMissing: 2,
+      successRate: null,
+      verifiedRate: 0,
+      l2: { ok: 0, fail: 0, envMissing: 2 },
+      l3: {
+        match: 0,
+        mismatch: { total: 1, wrongBranch: 0, stale: 1, empty: 0 },
+        would404: 1,
+        skipped: 0
+      },
+      envMissingWithL3: { match: 0, mismatch: 1, would404: 1, skipped: 0 }
+    })
+    expect(report.ok + report.fail + report.envMissing).toBe(report.total)
+    expect(report.failureReasons).toEqual([])
+    expect(report.environmentMissing).toEqual([
+      { binary: 'codex', count: 2, exampleSessionId: `codex:${IDS.staleCodex}` }
+    ])
+    expect(report.l3.mismatchExamples.map((example) => example.classification)).toEqual(['stale'])
+    expect(report.l3.would404Examples.map((example) => example.sessionId)).toEqual([`codex:${IDS.codex}`])
   })
 
   it('Cursor 恢复目录的来源如实计数：未经 harness 确认的在逐来源诊断里标出，只给计数不给路径', async () => {
@@ -698,6 +818,10 @@ describe('resume audit', () => {
     expect(output).toContain('L3 would-404 examples (max 3):')
     expect(output).toContain('  claude-code:')
     expect(output).toContain('env-missing is excluded')
+    expect(output).toContain(
+      '  env-missing (CLI not found, L3 still checked): match=0, mismatch=0, would-404=0, skipped=1'
+    )
+    expect(output).toContain('    env-missing L3: match=0, mismatch=0, would-404=0, skipped=1')
     expect(output).not.toContain(sourcePath)
     expect(output).not.toContain('private-project-name')
   })

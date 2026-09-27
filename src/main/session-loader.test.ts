@@ -24,8 +24,11 @@ import {
   projectCanonicalProviderSessions,
   restoreOmittedUsageEvents,
   parseSessionFile,
-  parseSessionFileWithStats
+  parseSessionFileWithStats,
+  SUMMARY_CACHE_VERSION
 } from './session-loader'
+import { compactPerFileJson } from './summary-cache-compact.cjs'
+import { Worker } from 'node:worker_threads'
 import { buildResumeCommand, resolveSessionActionContext } from './session-actions'
 import { buildExecutionTree } from './execution-tree'
 import { shellQuote } from './resume-terminal'
@@ -42,7 +45,7 @@ import {
 } from './__fixtures__/codex-rollout-synthetic'
 import { isSessionSourceSupported } from './platform-support'
 import type { SessionLoadEvidence } from './session-loader'
-import type { RawJsonlMessage } from './types'
+import type { RawJsonlMessage, SessionSummary } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -1464,7 +1467,7 @@ describe('loadAllSessions per-file incremental cache', () => {
     }
   })
 
-  it('v28 SQLite 缓存在隔离 worker 中原地补齐 compact_json 后才进入轻量读取', async () => {
+  it('v28 SQLite 缓存在当前版本下不迁移：只读加载冷重建且库原样不动，可写加载清表重写（F1d）', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-v28-compact-migration-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'v28.jsonl')
     writeJsonlAt(file, [
@@ -1482,37 +1485,51 @@ describe('loadAllSessions per-file incremental cache', () => {
         }
       })
     ])
+    const columnNames = (database: Database.Database): string[] =>
+      (database.prepare('PRAGMA table_info(summary_cache_entries)').all() as Array<{ name: string }>)
+        .map((column) => column.name)
 
     try {
       await loadAllSessionsFromTempHome(home, { quiet: true })
       const legacy = new Database(summaryCacheDbPath(home))
+      const row = legacy.prepare('SELECT per_file_json FROM summary_cache_entries WHERE file_path = ?')
+        .get(file) as { per_file_json: string }
+      const perFile = JSON.parse(row.per_file_json)
+      perFile.summary.firstUserMessage = 'v28 cached value'
+      legacy.prepare('UPDATE summary_cache_entries SET per_file_json = ? WHERE file_path = ?')
+        .run(JSON.stringify(perFile), file)
       legacy.exec('ALTER TABLE summary_cache_entries DROP COLUMN compact_json')
       legacy.pragma('user_version = 28')
       legacy.close()
+      const v28Bytes = fs.readFileSync(summaryCacheDbPath(home))
 
+      // The worker's 28 -> 29 step does not apply to this version: nothing is
+      // migrated, the read-only scan re-reads the file, the v28 DB is untouched.
       const sessions = await loadAllSessionsFromTempHome(home, {
         readOnly: true,
         migrateLegacyCache: true,
         quiet: true,
         omitCachedUsageEvents: true
       })
-      expect(sessions[0].tokenAccounting).toMatchObject({
-        billingTotal: 100,
-        usageEvents: [],
-        usageEventsOmitted: true
-      })
-      expect(sessions[0].tokenAccounting?.usageEventRollups?.[0]?.[0])
-        .toBe('claude:message:v28-usage')
-      const migrated = new Database(summaryCacheDbPath(home), { readonly: true })
-      expect(Number(migrated.pragma('user_version', { simple: true }))).toBe(29)
-      expect((migrated.prepare('PRAGMA table_info(summary_cache_entries)').all() as Array<{ name: string }>)
-        .map((column) => column.name)).toContain('compact_json')
-      expect(migrated.prepare(`
+      expect(sessions[0].firstUserMessage).toBe('v28 migration')
+      expect(sessions[0].tokenAccounting).toMatchObject({ billingTotal: 100 })
+      expect(sessions[0].tokenAccounting?.usageEvents).toHaveLength(1)
+      expect(sessions[0].tokenAccounting).not.toHaveProperty('usageEventsOmitted')
+      expect(fs.readFileSync(summaryCacheDbPath(home)).equals(v28Bytes)).toBe(true)
+
+      // The first writable load empties the v28 table and writes this version.
+      const writable = await loadAllSessionsFromTempHome(home, { quiet: true })
+      expect(writable[0].firstUserMessage).toBe('v28 migration')
+      const rebuilt = new Database(summaryCacheDbPath(home), { readonly: true })
+      expect(Number(rebuilt.pragma('user_version', { simple: true }))).toBe(SUMMARY_CACHE_VERSION)
+      expect(columnNames(rebuilt)).toContain('compact_json')
+      expect(rebuilt.prepare(`
         SELECT json_array_length(compact_json, '$.summary.tokenAccounting.usageEventRollups') AS count,
-          json_extract(compact_json, '$.summary.tokenAccounting.usageEventRollups[0][0]') AS ledger_key
+          json_extract(compact_json, '$.summary.tokenAccounting.usageEventRollups[0][0]') AS ledger_key,
+          json_extract(per_file_json, '$.summary.firstUserMessage') AS first_user_message
         FROM summary_cache_entries WHERE file_path = ?
-      `).get(file)).toEqual({ count: 1, ledger_key: 'claude:message:v28-usage' })
-      migrated.close()
+      `).get(file)).toEqual({ count: 1, ledger_key: 'claude:message:v28-usage', first_user_message: 'v28 migration' })
+      rebuilt.close()
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }
@@ -1700,7 +1717,7 @@ describe('loadAllSessions per-file incremental cache', () => {
     }
   })
 
-  it('普通 readOnly 读取既有 v27 缓存时不迁移也不删除', async () => {
+  it('普通 readOnly 不复用既有 v27 缓存（F1d），也不迁移、不删除它', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-readonly-legacy-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'readonly-legacy.jsonl')
     writeJsonlAt(file, [
@@ -1721,7 +1738,7 @@ describe('loadAllSessions per-file incremental cache', () => {
       const sessions = await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true })
 
       expect(sessions.find((session) => session.sessionId === 'readonly-legacy-session')?.firstUserMessage)
-        .toBe('read-only cached value')
+        .toBe('source value')
       expect(fs.existsSync(legacyPath)).toBe(true)
       expect(fs.existsSync(summaryCacheDbPath(home))).toBe(false)
     } finally {
@@ -1729,7 +1746,7 @@ describe('loadAllSessions per-file incremental cache', () => {
     }
   })
 
-  it('桌面显式迁移可在 readOnly 会话扫描前原子升级 v27 缓存', async () => {
+  it('桌面显式迁移不再升级 v27 缓存（F1d）：readOnly 扫描冷读、JSON 原样保留，首次可写加载才删', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-explicit-migration-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'explicit-migration.jsonl')
     writeJsonlAt(file, [
@@ -1754,8 +1771,14 @@ describe('loadAllSessions per-file incremental cache', () => {
       })
 
       expect(sessions.find((session) => session.sessionId === 'explicit-migration-session')?.firstUserMessage)
-        .toBe('worker migrated value')
-      expect(readSummaryCache(home).version).toBe(29)
+        .toBe('source value')
+      expect(fs.existsSync(summaryCacheDbPath(home))).toBe(false)
+      expect(fs.existsSync(legacyPath)).toBe(true)
+
+      const writable = await loadAllSessionsFromTempHome(home, { quiet: true })
+      expect(writable.find((session) => session.sessionId === 'explicit-migration-session')?.firstUserMessage)
+        .toBe('source value')
+      expect(readSummaryCache(home).version).toBe(SUMMARY_CACHE_VERSION)
       expect(fs.existsSync(legacyPath)).toBe(false)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
@@ -1811,14 +1834,14 @@ describe('loadAllSessions per-file incremental cache', () => {
       expect(sessions).toEqual(expect.arrayContaining([
         expect.objectContaining({ sessionId: 'repair-session' })
       ]))
-      expect(rebuilt.version).toBe(29)
+      expect(rebuilt.version).toBe(SUMMARY_CACHE_VERSION)
       expect(rebuilt.entries[file]).toBeDefined()
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
     }
   })
 
-  it('v27 大型 JSON 缓存跨读取块逐条迁移，不误判转义引号或容器字符', async () => {
+  it('v27 大型 JSON 缓存不再逐条迁移（F1d）：可写加载读源文件、写当前版本并删除 JSON', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-streaming-cache-home-'))
     const file = path.join(home, '.claude', 'projects', '-Users-test-vault', 'stream-"quoted".jsonl')
     writeJsonlAt(file, [
@@ -1840,8 +1863,10 @@ describe('loadAllSessions per-file incremental cache', () => {
       const sessions = await loadAllSessionsFromTempHome(home, { quiet: true })
 
       expect(sessions.find((session) => session.sessionId === 'streaming-cache-session')?.firstUserMessage)
-        .toBe(marker)
-      expect(readSummaryCache(home).version).toBe(29)
+        .toBe('streaming source value')
+      const rebuilt = readSummaryCache(home)
+      expect(rebuilt.version).toBe(SUMMARY_CACHE_VERSION)
+      expect(JSON.stringify(rebuilt.entries)).not.toContain('cached-{[')
       expect(fs.existsSync(legacyPath)).toBe(false)
     } finally {
       fs.rmSync(home, { recursive: true, force: true })
@@ -1870,7 +1895,7 @@ describe('loadAllSessions per-file incremental cache', () => {
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 2, reused 0, files 2')
 
       const diskCache = readSummaryCache(home)
-      expect(diskCache.version).toBe(29)
+      expect(diskCache.version).toBe(SUMMARY_CACHE_VERSION)
       expect(Object.keys(diskCache.entries).sort()).toEqual([firstFile, secondFile].sort())
       expect(diskCache.entries[firstFile]).toMatchObject({
         sig: expect.any(String),
@@ -2040,7 +2065,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       expect(incrementalCacheLog(infoSpy)).toContain('parsed 1, reused 0, files 1')
       expect(summary).toMatchObject({ firstUserMessage: 'old-cache-session', turnCount: 0 })
-      expect(refreshedCache.version).toBe(29)
+      expect(refreshedCache.version).toBe(SUMMARY_CACHE_VERSION)
       expect(refreshedCache.entries[file].perFile.lineageMeta.leafUuidRefs[0]).toMatchObject({
         origin: { kind: 'task-notification' },
         promptSource: 'sdk'
@@ -2051,7 +2076,7 @@ describe('loadAllSessions per-file incremental cache', () => {
     }
   })
 
-  it('v25 升 v27 重建 Codex 和 SQLite-agent 投影，其他来源热复用', async () => {
+  it('v25 JSON 缓存在当前版本下全部重建（F1d）：Claude、Cursor 也不再热复用', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-v25-selective-cache-home-'))
     const claudeFile = path.join(home, '.claude', 'projects', '-Users-test-vault', 'v25-claude.jsonl')
     const cursorId = 'v25-cursor'
@@ -2119,11 +2144,11 @@ describe('loadAllSessions per-file incremental cache', () => {
       const sessions = await loadAllSessionsFromTempHome(home)
       const refreshed = readSummaryCache(home)
 
-      expect(incrementalCacheLog(infoSpy)).toContain('parsed 3, reused 2, files 5')
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 5, reused 0, files 5')
       expect(sessions.find((session) => session.sessionId === 'v25-claude')?.firstUserMessage)
-        .toBe('v25 Claude cache reused')
+        .toBe('Claude source value')
       expect(sessions.find((session) => session.sessionId === cursorId)?.firstUserMessage)
-        .toBe('v25 Cursor cache reused')
+        .toBe('Cursor source value')
       expect(sessions.find((session) => session.sessionId === opencodeId)?.firstUserMessage)
         .toBe('opencode source value')
       expect(sessions.find((session) => session.sessionId === zcodeId)?.firstUserMessage)
@@ -2134,7 +2159,7 @@ describe('loadAllSessions per-file incremental cache', () => {
         .toEqual([expect.objectContaining({ providerFormatVersion: 'zcode-model-usage-v1' })])
       expect(sessions.find((session) => session.sessionId === codexId)?.firstUserMessage)
         .toBe('从 Codex backup 建 summary')
-      expect(refreshed.version).toBe(29)
+      expect(refreshed.version).toBe(SUMMARY_CACHE_VERSION)
 
       infoSpy.mockClear()
       await loadAllSessionsFromTempHome(home)
@@ -2145,7 +2170,7 @@ describe('loadAllSessions per-file incremental cache', () => {
     }
   })
 
-  it('v26 升 v27 重建 SQLite-agent 投影并在下一次 v27 启动全量热复用', async () => {
+  it('v26 JSON 缓存在当前版本下全部重建（F1d），下一次启动全量热复用', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-v26-sqlite-cache-home-'))
     const claudeFile = path.join(home, '.claude', 'projects', '-Users-test-vault', 'v26-claude.jsonl')
     const codexId = '18400000-0000-4000-8000-000000000026'
@@ -2192,16 +2217,16 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       infoSpy.mockClear()
       const migrated = await loadAllSessionsFromTempHome(home)
-      expect(incrementalCacheLog(infoSpy)).toContain('parsed 2, reused 2, files 4')
+      expect(incrementalCacheLog(infoSpy)).toContain('parsed 4, reused 0, files 4')
       expect(migrated.find((session) => session.sessionId === 'v26-claude')?.firstUserMessage)
-        .toBe('v26 Claude cache reused')
+        .toBe('Claude v26 source value')
       expect(migrated.find((session) => session.sessionId === codexId)?.firstUserMessage)
-        .toBe('v26 Codex cache reused')
+        .toBe('从 Codex backup 建 summary')
       expect(migrated.find((session) => session.sessionId === opencodeId)?.tokenAccounting?.usageEvents)
         .toEqual([expect.objectContaining({ providerFormatVersion: 'opencode-message-usage-v2' })])
       expect(migrated.find((session) => session.sessionId === zcodeId)?.tokenAccounting?.usageEvents)
         .toEqual([expect.objectContaining({ providerFormatVersion: 'zcode-model-usage-v1' })])
-      expect(readSummaryCache(home).version).toBe(29)
+      expect(readSummaryCache(home).version).toBe(SUMMARY_CACHE_VERSION)
 
       infoSpy.mockClear()
       await loadAllSessionsFromTempHome(home)
@@ -2286,7 +2311,7 @@ describe('loadAllSessions per-file incremental cache', () => {
         .filter((event) => event.billingFactKey && event.billingFactKey === parent.tokenAccounting?.usageEvents[0]?.billingFactKey)
       expect(copiedPrefix).toHaveLength(2)
       expect(new Set(copiedPrefix?.map((event) => event.auditSourceId))).toEqual(new Set([parentId, childId]))
-      expect(cache.version).toBe(29)
+      expect(cache.version).toBe(SUMMARY_CACHE_VERSION)
       expect(cache.entries[parentFile].perFile.summary.tokenAccounting.usageEvents
         .every((event: { auditSourceId?: string }) => event.auditSourceId === parentId)).toBe(true)
       expect(cache.entries[childFile].perFile.codexSubagent.tokenAccounting.usageEvents
@@ -2320,7 +2345,7 @@ describe('loadAllSessions per-file incremental cache', () => {
 
       const hot = await loadAllSessionsFromTempHome(home)
       expect(hot.map((session) => session.sessionId)).toEqual([parentId])
-      expect(readSummaryCache(home).version).toBe(29)
+      expect(readSummaryCache(home).version).toBe(SUMMARY_CACHE_VERSION)
 
       fs.rmSync(childFile)
       fs.rmSync(guardianFile)
@@ -3769,26 +3794,693 @@ describe('the usage ledger keeps what a load did not see (F1f)', () => {
     })
   }, 60_000)
 
-  sqliteCliIt('14 an unusable cache but an earlier good discovery in this process: the known refs are not pruned', async () => {
+  sqliteCliIt('14 an unusable cache but an earlier good discovery in this process: the known refs stay active', async () => {
     const home = tempHome('pin14')
     const ref = createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1fMemory')
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     await withUsageLedger(home, async (usage) => {
       await withSessionLoaderModules(home, async ({ sessionLoader }) => {
         const baseline = await warmUp(sessionLoader, usage, home, ['ses_F1fMemory'])
-        const row = readSummaryCacheRow(home, ref)
-        expect(row).toBeDefined()
+        expect(readSummaryCacheRow(home, ref)).toBeDefined()
 
         // The cache cannot list the source's refs (another version); only
         // this process's last successful discovery still knows them.
         setSummaryCacheVersion(home, 1)
         install({ kind: 'fail', stderr: BUSY_STDERR })
-        const loaded = await load(sessionLoader)
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+        const loaded = await sessionLoader.loadAllSessionsWithEvidence({})
         expect(loaded.sessions.map((session) => session.sessionId)).not.toContain('ses_F1fMemory')
-        expect(readSummaryCacheRow(home, ref)).toEqual(row)
+        // The known ref stays active, sitting this load out with nothing to
+        // reuse. F1d (write gate W2): the row itself was written under another
+        // version, so the writable load does not carry it into this one.
+        expect(incrementalCacheLog(infoSpy)).toContain('parsed 0, reused 0, files 1')
+        expect(readSummaryCacheRow(home, ref)).toBeUndefined()
+        expect(readSummaryCache(home).version).toBe(SUMMARY_CACHE_VERSION)
         sync(usage, loaded)
         expect(ledgerCounts(home, ['ses_F1fMemory'])).toEqual(baseline)
       })
     })
   }, 60_000)
+})
+
+// F1d: CACHE_VERSION bump — write gate W2, retired JSON cache, worker guard, probe
+// ========================================================
+describe('summary cache version bump: write gate, retired JSON cache, worker guard (F1d)', () => {
+  /** An older version: neither this build's, nor 28 (a v28 DB is the one-time migration worker's to judge). */
+  const STALE_VERSION = 1
+  /** Planted in cache rows as an older build's projection; must never reach a load or survive a write. */
+  const STALE = 'F1D-STALE'
+  const fakes: FakeSqlite3[] = []
+  const homes: string[] = []
+
+  function tempHome(label: string): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `swob-f1d-${label}-home-`))
+    homes.push(home)
+    return home
+  }
+
+  function install(behavior: Parameters<typeof installFakeSqlite3>[0]): FakeSqlite3 {
+    const fake = installFakeSqlite3(behavior)
+    fakes.push(fake)
+    return fake
+  }
+
+  afterEach(() => {
+    for (const fake of fakes.splice(0)) fake.restore()
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  /** One file of each file-backed source whose projection F1a-F1c-2 changed. */
+  function writeFileSources(home: string): { claude: string; codex: string; cursor: string; ids: string[] } {
+    const claude = writeJsonlAt(path.join(home, '.claude', 'projects', '-Users-test-f1d', 'f1d-claude.jsonl'), [
+      rawMsg({ sessionId: 'f1d-claude', type: 'user', message: { role: 'user', content: 'Claude source value' } })
+    ])
+    const cursorId = 'f1d-cursor'
+    const cursor = writeJsonlAt(
+      path.join(home, '.cursor', 'projects', 'Users-test-f1d', 'agent-transcripts', cursorId, `${cursorId}.jsonl`),
+      cursorBackupRows('Cursor source value') as RawJsonlMessage[]
+    )
+    const codexId = '18400000-0000-4000-8000-00000000f1d0'
+    const codex = writeJsonlAt(
+      path.join(home, '.codex', 'sessions', '2026', '09', '27', `rollout-2026-09-27T00-00-00-${codexId}.jsonl`),
+      codexBackupRows(codexId) as RawJsonlMessage[]
+    )
+    return { claude, codex, cursor, ids: ['f1d-claude', cursorId, codexId] }
+  }
+
+  /** Rewrite every cache row (both JSON columns), optionally under another version, as an older build left it. */
+  function rewriteCacheRows(
+    home: string,
+    rewrite: (filePath: string, perFile: any) => any,
+    version?: number
+  ): void {
+    const database = new Database(summaryCacheDbPath(home))
+    try {
+      const rows = database.prepare('SELECT file_path, per_file_json FROM summary_cache_entries')
+        .all() as Array<{ file_path: string; per_file_json: string }>
+      const update = database.prepare(
+        'UPDATE summary_cache_entries SET per_file_json = ?, compact_json = ? WHERE file_path = ?'
+      )
+      database.transaction(() => {
+        for (const row of rows) {
+          const perFile = rewrite(row.file_path, JSON.parse(row.per_file_json))
+          update.run(JSON.stringify(perFile), compactPerFileJson(perFile), row.file_path)
+        }
+        if (version !== undefined) database.pragma(`user_version = ${version}`)
+      })()
+    } finally {
+      database.close()
+    }
+  }
+
+  const staleRow = (_filePath: string, perFile: any): any => perFile.summary
+    ? { ...perFile, summary: { ...perFile.summary, firstUserMessage: `${STALE} ${perFile.source}` } }
+    : perFile
+
+  const staleValuesIn = (value: unknown): number => JSON.stringify(value).split(STALE).length - 1
+
+  function runMigrationWorker(workerData: {
+    legacyPath: string
+    databasePath: string
+    cacheVersion: number
+  }): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(path.join(__dirname, 'summary-cache-migration-worker.cjs'), { workerData })
+      let reported: unknown
+      worker.once('message', (message) => { reported = message })
+      worker.once('error', reject)
+      worker.once('exit', (code) => code === 0 && reported !== undefined
+        ? resolve(reported)
+        : reject(new Error(`summary-cache migration worker exited ${code}`)))
+    })
+  }
+
+  it('① an older-version cache: a focused (lineage) write first neither writes nor claims this version, and the writable load after it shows no stale Codex or Cursor value', async () => {
+    const home = tempHome('lineage-first')
+    const files = writeFileSources(home)
+    await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+    const current = readSummaryCache(home).version
+    rewriteCacheRows(home, staleRow, STALE_VERSION)
+    const planted = readSummaryCache(home)
+    expect(staleValuesIn(planted.entries)).toBe(3)
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const lineage = await sessionLoader.loadCachedClaudeLineageMetadata()
+      expect(lineage.files.map((file) => file.filePath)).toEqual([files.claude])
+      // This focused write owns Claude rows only and cannot prune: on a cache
+      // of another version it writes nothing and leaves the version alone.
+      expect(readSummaryCache(home)).toEqual(planted)
+
+      const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      expect(loaded.evidence.summaryCache).toBe('cold')
+      expect(loaded.sessions.map((session) => session.sessionId).sort()).toEqual([...files.ids].sort())
+      expect(staleValuesIn(loaded.sessions)).toBe(0)
+    })
+    const rebuilt = readSummaryCache(home)
+    expect(rebuilt.version).toBe(current)
+    expect(staleValuesIn(rebuilt.entries)).toBe(0)
+  }, 30_000)
+
+  sqliteCliIt('② an older-version cache holding an OpenCode `summary: null`: that session\'s cold read fails, and the writable load leaves no `summary: null` in this version', async () => {
+    const home = tempHome('opencode-null')
+    const sessionId = 'ses_F1dNullRow'
+    const ref = createSqliteAgentCacheFixture(home, 'opencode', sessionId)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+    const current = readSummaryCache(home).version
+    // What a build before F1e left for a failed read: `summary: null` under the signature.
+    rewriteCacheRows(home, (filePath, perFile) => filePath === ref ? { ...perFile, summary: null } : perFile, STALE_VERSION)
+    expect(readSummaryCache(home).entries[ref].perFile.summary).toBeNull()
+
+    install({ kind: 'fail-matching', match: ['FROM "message"', sessionId], stderr: CORRUPT_STDERR })
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const cold = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      expect(cold.evidence.summaryCache).toBe('cold')
+      expect(cold.sessions.map((session) => session.sessionId)).not.toContain(sessionId)
+    })
+    const cache = readSummaryCache(home)
+    expect(cache.version).toBe(current)
+    expect(Object.values(cache.entries)
+      .filter((entry) => entry.perFile.source === 'opencode' && entry.perFile.summary === null)).toEqual([])
+
+    // The next load reads the session again.
+    for (const fake of fakes.splice(0)) fake.restore()
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const warm = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(warm.map((session) => session.sessionId)).toContain(sessionId)
+    })
+  }, 60_000)
+
+  it('③ a v27 JSON cache is reused on no path (beside an older-version DB or alone, by the scan or the migration worker); a writable load deletes it, a read-only one keeps it', async () => {
+    for (const besideStaleDb of [false, true]) {
+      const home = tempHome(besideStaleDb ? 'json-beside-db' : 'json-alone')
+      writeFileSources(home)
+      await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+      const current = readSummaryCache(home).version
+      const dbBytes = fs.readFileSync(summaryCacheDbPath(home))
+      const legacy = readSummaryCache(home)
+      legacy.version = 27
+      for (const [filePath, entry] of Object.entries(legacy.entries)) {
+        legacy.entries[filePath] = { ...entry, perFile: staleRow(filePath, entry.perFile) }
+      }
+      const legacyPath = writeLegacySummaryCache(home, legacy)
+      if (besideStaleDb) {
+        fs.writeFileSync(summaryCacheDbPath(home), dbBytes)
+        rewriteCacheRows(home, staleRow, STALE_VERSION)
+      }
+      const dbBefore = besideStaleDb ? fs.readFileSync(summaryCacheDbPath(home)) : null
+
+      // Read-only, with the desktop's one-time migration first: neither cache is used.
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const readOnly = await sessionLoader.loadAllSessionsWithEvidence({
+          readOnly: true,
+          migrateLegacyCache: true,
+          quiet: true
+        })
+        expect(readOnly.evidence.summaryCache).toBe('cold')
+        expect(readOnly.sessions).toHaveLength(3)
+        expect(staleValuesIn(readOnly.sessions)).toBe(0)
+      })
+      expect(fs.existsSync(legacyPath)).toBe(true)
+      if (dbBefore) expect(fs.readFileSync(summaryCacheDbPath(home)).equals(dbBefore)).toBe(true)
+      else expect(fs.existsSync(summaryCacheDbPath(home))).toBe(false)
+
+      // The first writable load writes this version and deletes the JSON.
+      await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+        const writable = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+        expect(writable.evidence.summaryCache).toBe('cold')
+        expect(staleValuesIn(writable.sessions)).toBe(0)
+      })
+      expect(fs.existsSync(legacyPath)).toBe(false)
+      const rebuilt = readSummaryCache(home)
+      expect(rebuilt.version).toBe(current)
+      expect(staleValuesIn(rebuilt.entries)).toBe(0)
+    }
+  }, 60_000)
+
+  it('④ the migration worker leaves a v28 or a v29 cache alone under this version: its 28 -> 29 step is a guard, never "previous -> current"', async () => {
+    for (const oldVersion of [28, 29]) {
+      const home = tempHome(`worker-v${oldVersion}`)
+      writeJsonlAt(path.join(home, '.claude', 'projects', '-Users-test-f1d', 'worker.jsonl'), [
+        rawMsg({ sessionId: 'f1d-worker', type: 'user', message: { role: 'user', content: 'worker guard' } })
+      ])
+      await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+      const databasePath = summaryCacheDbPath(home)
+      const database = new Database(databasePath)
+      try {
+        if (oldVersion === 28) database.exec('ALTER TABLE summary_cache_entries DROP COLUMN compact_json')
+        database.pragma(`user_version = ${oldVersion}`)
+      } finally {
+        database.close()
+      }
+      const before = fs.readFileSync(databasePath)
+      await expect(runMigrationWorker({
+        legacyPath: path.join(home, '.claude-session-manager', 'summary-cache.json'),
+        databasePath,
+        cacheVersion: SUMMARY_CACHE_VERSION
+      })).resolves.toEqual({ migrated: false })
+      expect(fs.readFileSync(databasePath).equals(before)).toBe(true)
+    }
+  }, 30_000)
+
+  it('probeSummaryCache reports the version and row count read-only, never creating or changing the cache', async () => {
+    const home = tempHome('probe')
+    writeJsonlAt(path.join(home, '.claude', 'projects', '-Users-test-f1d', 'probe.jsonl'), [
+      rawMsg({ sessionId: 'f1d-probe', type: 'user', message: { role: 'user', content: 'probe fixture' } })
+    ])
+    const databasePath = summaryCacheDbPath(home)
+    const legacyPath = path.join(home, '.claude-session-manager', 'summary-cache.json')
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      expect(sessionLoader.probeSummaryCache()).toEqual({ state: 'missing', version: null, rows: null, legacyJson: false })
+      expect(fs.existsSync(databasePath)).toBe(false)
+
+      await sessionLoader.loadAllSessions({ quiet: true })
+      expect(sessionLoader.probeSummaryCache())
+        .toEqual({ state: 'current', version: SUMMARY_CACHE_VERSION, rows: 1, legacyJson: false })
+
+      setSummaryCacheVersion(home, STALE_VERSION)
+      fs.writeFileSync(legacyPath, '{"version":27,"entries":{}}')
+      const before = fs.readFileSync(databasePath)
+      expect(sessionLoader.probeSummaryCache())
+        .toEqual({ state: 'stale', version: STALE_VERSION, rows: 1, legacyJson: true })
+      expect(fs.readFileSync(databasePath).equals(before)).toBe(true)
+      expect(fs.readFileSync(legacyPath, 'utf8')).toBe('{"version":27,"entries":{}}')
+
+      fs.writeFileSync(databasePath, 'not-a-sqlite-database')
+      expect(sessionLoader.probeSummaryCache())
+        .toEqual({ state: 'unreadable', version: null, rows: null, legacyJson: true })
+      expect(fs.readFileSync(databasePath, 'utf8')).toBe('not-a-sqlite-database')
+    })
+  })
+
+  // Path D (1f): a failed or cut-short read of a file-backed source is never cached.
+  const readDeniableIt = process.platform !== 'win32' && process.getuid?.() !== 0 ? it : it.skip
+
+  /** While `run` runs, reading these files fails (EACCES); stat, and so their signature, still works. */
+  async function withUnreadable<T>(filePaths: string[], run: () => Promise<T>): Promise<T> {
+    for (const filePath of filePaths) fs.chmodSync(filePath, 0o000)
+    try {
+      return await run()
+    } finally {
+      for (const filePath of filePaths) fs.chmodSync(filePath, 0o644)
+    }
+  }
+
+  readDeniableIt('path D: in a warm round a Codex and a Cursor file whose read fails sit the load out, leave their row as it was (no `summary: null`), and are read again by the next load', async () => {
+    const home = tempHome('path-d-warm')
+    const files = writeFileSources(home)
+    await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+    const before = readSummaryCache(home)
+    // Both files change, then cannot be read.
+    fs.appendFileSync(files.codex, '\n' + JSON.stringify({
+      timestamp: '2026-07-07T00:00:03Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Codex grew' }] }
+    }))
+    fs.appendFileSync(files.cursor, '\n' + JSON.stringify({ role: 'user', message: { content: '<user_query>Cursor grew</user_query>' } }))
+    await withUnreadable([files.codex, files.cursor], () => withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const warm = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      expect(warm.evidence.summaryCache).toBe('warm')
+      expect(warm.sessions.map((session) => session.sessionId)).toEqual(['f1d-claude'])
+    }))
+    const after = readSummaryCache(home)
+    expect(after.entries[files.codex]).toEqual(before.entries[files.codex])
+    expect(after.entries[files.cursor]).toEqual(before.entries[files.cursor])
+    expect(Object.values(after.entries).filter((entry) => entry.perFile.summary === null)).toEqual([])
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const next = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(next.map((session) => session.sessionId).sort()).toEqual([...files.ids].sort())
+    })
+    const recovered = readSummaryCache(home)
+    expect(recovered.entries[files.codex].sig).not.toBe(before.entries[files.codex].sig)
+    expect(recovered.entries[files.cursor].sig).not.toBe(before.entries[files.cursor].sig)
+  }, 30_000)
+
+  readDeniableIt('path D: a Claude file whose read is cut short is not cached, on the lineage path either, while a file that simply has no session id is; the next load reads it again', async () => {
+    const home = tempHome('path-d-claude')
+    const project = path.join(home, '.claude', 'projects', '-Users-test-f1d')
+    const cutShort = writeJsonlAt(path.join(project, 'f1d-cut-short.jsonl'), [
+      rawMsg({ sessionId: 'f1d-cut-short', type: 'user', message: { role: 'user', content: 'cut short source value' } })
+    ])
+    const noSessionId = path.join(project, 'f1d-no-session-id.jsonl')
+    fs.writeFileSync(noSessionId, JSON.stringify({ type: 'summary', summary: 'a file without a session id', leafUuid: 'f1d-leaf' }))
+
+    await withUnreadable([cutShort], () => withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const lineage = await sessionLoader.loadCachedClaudeLineageMetadata()
+      expect(lineage.files).toEqual([])
+      expect(readSummaryCache(home).entries[cutShort]).toBeUndefined()
+      const loaded = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(loaded.map((session) => session.sessionId)).not.toContain('f1d-cut-short')
+    }))
+    const cache = readSummaryCache(home)
+    expect(cache.entries[cutShort]).toBeUndefined()
+    // Read in full, a file without a session id is an empty session: cached as such.
+    expect(cache.entries[noSessionId]?.perFile.summary).toBeNull()
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const next = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(next.map((session) => session.sessionId)).toEqual(['f1d-cut-short'])
+    })
+    expect(readSummaryCache(home).entries[cutShort]?.perFile.summary?.firstUserMessage).toBe('cut short source value')
+  }, 30_000)
+
+  readDeniableIt('path D: a Claude file cut short after it grew keeps its last usable row for the load, leaves that row as it was, and is read in full by the next load', async () => {
+    const home = tempHome('path-d-claude-grown')
+    const file = writeJsonlAt(path.join(home, '.claude', 'projects', '-Users-test-f1d', 'f1d-grown.jsonl'), [
+      rawMsg({ uuid: 'f1d-g-u1', sessionId: 'f1d-grown', type: 'user', message: { role: 'user', content: 'grown first question' } })
+    ])
+    const first = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+    const row = readSummaryCacheRow(home, file)
+    expect(row).toBeDefined()
+    fs.appendFileSync(file, '\n' + JSON.stringify(rawMsg({
+      uuid: 'f1d-g-a1', parentUuid: 'f1d-g-u1', sessionId: 'f1d-grown', type: 'assistant',
+      timestamp: '2026-03-01T00:01:00Z', message: { role: 'assistant', content: 'grown answer' }
+    })))
+
+    await withUnreadable([file], () => withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const loaded = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(loaded).toEqual(first)
+    }))
+    expect(readSummaryCacheRow(home, file)).toEqual(row)
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const next = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(next.map((session) => session.sessionId)).toEqual(['f1d-grown'])
+      expect(next[0].messageCount).toBeGreaterThan(first[0].messageCount)
+    })
+    expect(readSummaryCacheRow(home, file)?.sig).not.toBe(row?.sig)
+  }, 30_000)
+
+  // Deliverable 6, kernel part: a synthetic v29 cache over four sources, and
+  // a synthetic ledger through the bump (F1f's cold-round rule included).
+  describe('end to end', () => {
+    type Loaded = { sessions: SessionSummary[]; evidence: SessionLoadEvidence }
+    type UsageModule = typeof import('./usage-fact-store')
+    type SyncResult = ReturnType<UsageModule['synchronizeUsageFacts']>
+
+    // OpenCode needs the sqlite3 CLI; the Codex read failure needs a file this user cannot read.
+    const e2eIt = process.platform !== 'win32' && realSqlite3Path() && process.getuid?.() !== 0 ? it : it.skip
+    const PREVIOUS_VERSION = SUMMARY_CACHE_VERSION - 1
+
+    interface Fixture {
+      claudeU2028: string
+      claudeKept: string
+      claudeDeleted: string
+      codexCompacted: string
+      codexFlaky: string
+      cursor: string
+      opencodeRef: string
+    }
+
+    /** Unchanged files of four sources whose projection F1a-F1e changed. */
+    function writeFourSources(home: string): Fixture {
+      const project = path.join(home, '.claude', 'projects', '-Users-test-f1d-e2e')
+      const claudeSession = (sessionId: string, answer: string): string => writeJsonlAt(
+        path.join(project, `${sessionId}.jsonl`),
+        [
+          rawMsg({
+            uuid: `${sessionId}-u1`, sessionId, type: 'user', timestamp: '2026-09-20T00:00:00Z',
+            message: { role: 'user', content: `${sessionId} question` }
+          }),
+          rawMsg({
+            uuid: `${sessionId}-a1`, parentUuid: `${sessionId}-u1`, sessionId, type: 'assistant',
+            requestId: `${sessionId}-request`, timestamp: '2026-09-20T00:00:01Z',
+            message: {
+              id: `${sessionId}-message`, role: 'assistant', model: 'claude-sonnet-4-5', content: answer,
+              stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 20 }
+            }
+          })
+        ]
+      )
+      const codexDirectory = path.join(home, '.codex', 'sessions', '2026', '09', '20')
+      fs.mkdirSync(codexDirectory, { recursive: true })
+      const codexRollout = (id: string, compacted: boolean): string => {
+        const at = codexClock('2026-09-20T01:00:00.000Z')
+        const cwd = '/synthetic/f1d-e2e'
+        const model = 'gpt-5.5-codex'
+        const rows = [
+          codexRow.topLevelMeta({ ...at(), id, cwd }),
+          codexRow.turnContext({ ...at(), turnId: `${id}-turn-1`, cwd, model }),
+          codexRow.userMessage({ ...at(), text: `${id} question` }),
+          codexRow.assistantMessage({ ...at(), text: `${id} answer` }),
+          codexRow.tokenCount({ ...at(), total: { input: 1000, cached: 200, output: 100 }, last: { input: 1000, cached: 200, output: 100 } }),
+          ...(compacted
+            ? [
+                codexRow.compacted({ ...at(), message: 'synthetic compaction', window: 1 }),
+                codexRow.turnContext({ ...at(), turnId: `${id}-turn-2`, cwd, model }),
+                codexRow.userMessage({ ...at(), text: `${id} after the compaction` }),
+                codexRow.tokenCount({ ...at(), total: { input: 2500, cached: 700, output: 250 }, last: { input: 1500, cached: 500, output: 150 } })
+              ]
+            : [])
+        ]
+        const filePath = path.join(codexDirectory, `rollout-2026-09-20T01-00-00-${id}.jsonl`)
+        fs.writeFileSync(filePath, codexJsonl(rows))
+        return filePath
+      }
+      const cursorId = 'f1d-e2e-cursor'
+      return {
+        // The answer holds a raw U+2028 in its JSON string: the reader before F1a lost this record.
+        claudeU2028: claudeSession('f1d-e2e-u2028', 'first line\u2028second line'),
+        claudeKept: claudeSession('f1d-e2e-kept', 'kept answer'),
+        claudeDeleted: claudeSession('f1d-e2e-deleted', 'deleted answer'),
+        codexCompacted: codexRollout('7f1d0000-0000-4000-8000-0000000000e1', true),
+        codexFlaky: codexRollout('7f1d0000-0000-4000-8000-0000000000e2', false),
+        cursor: writeJsonlAt(
+          path.join(home, '.cursor', 'projects', 'Users-test-f1d-e2e', 'agent-transcripts', cursorId, `${cursorId}.jsonl`),
+          cursorBackupRows('Cursor e2e question') as RawJsonlMessage[]
+        ),
+        opencodeRef: createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1dE2E')
+      }
+    }
+
+    /**
+     * Rewrite the rows as builds before F1a-F1e projected them: the U+2028
+     * record lost, Codex without its compaction and with other usage,
+     * another Cursor project, a failed OpenCode read as `summary: null`, and
+     * a marker in every summary.
+     */
+    function plantEarlierProjection(home: string, fixture: Fixture): void {
+      rewriteCacheRows(home, (filePath, perFile) => {
+        if (filePath === fixture.opencodeRef) return { ...perFile, summary: null }
+        if (!perFile.summary) return perFile
+        const summary = { ...perFile.summary, firstUserMessage: `${STALE} ${perFile.source}` }
+        if (filePath === fixture.claudeU2028) summary.messageCount -= 1
+        if (filePath === fixture.codexCompacted) {
+          summary.compactCount = 0
+          summary.tokenAccounting = {
+            ...summary.tokenAccounting,
+            usageEvents: summary.tokenAccounting.usageEvents.map((event: any) => ({
+              ...event,
+              components: { ...event.components, outputTokens: event.components.outputTokens + 1000 }
+            }))
+          }
+        }
+        if (filePath === fixture.cursor) summary.projectPath = `/${STALE}/cursor`
+        return { ...perFile, summary }
+      })
+    }
+
+    async function withUsageLedger<T>(home: string, run: (usage: UsageModule) => Promise<T>): Promise<T> {
+      const previousUsageIndex = process.env.SWOB_USAGE_INDEX_PATH
+      process.env.SWOB_USAGE_INDEX_PATH = path.join(home, 'usage-facts.db')
+      // One ledger module for the whole run, like the one long-lived usage worker.
+      const usage = await import('./usage-fact-store')
+      usage.closeUsageFactStore()
+      try {
+        return await run(usage)
+      } finally {
+        usage.closeUsageFactStore()
+        if (previousUsageIndex === undefined) delete process.env.SWOB_USAGE_INDEX_PATH
+        else process.env.SWOB_USAGE_INDEX_PATH = previousUsageIndex
+      }
+    }
+
+    const sync = (usage: UsageModule, loaded: Loaded): SyncResult => usage.synchronizeUsageFacts(loaded.sessions, [], {
+      absence: { physicalLoad: loaded.evidence, providerSettlement: 'complete', excludedSources: [] }
+    })
+
+    /**
+     * The three ledger tables through a separate read-only connection, plus
+     * the current Codex output tokens (the earlier projection adds 1,000 per
+     * call) and the current Codex facts whose billing key is not F1b's
+     * (turn + last + total usage signatures).
+     */
+    function ledgerState(home: string): {
+      sessions: number
+      facts: number
+      history: number
+      codexOutputTokens: number
+      codexFactsWithoutF1bKey: number
+    } {
+      const ledger = new Database(path.join(home, 'usage-facts.db'), { readonly: true, fileMustExist: true })
+      try {
+        const count = (sql: string): number => (ledger.prepare(sql).get() as { count: number }).count
+        return {
+          sessions: count('SELECT count(*) AS count FROM usage_sessions'),
+          facts: count('SELECT count(*) AS count FROM usage_facts'),
+          history: count('SELECT count(*) AS count FROM usage_valuation_history'),
+          codexOutputTokens: count(
+            "SELECT coalesce(sum(output_tokens), 0) AS count FROM usage_facts WHERE source_client = 'codex' AND superseded = 0"
+          ),
+          codexFactsWithoutF1bKey: count(`
+            SELECT count(*) AS count FROM usage_facts
+            WHERE source_client = 'codex' AND superseded = 0 AND billing_fact_key NOT LIKE 'codex:event:%'
+          `)
+        }
+      } finally {
+        ledger.close()
+      }
+    }
+
+    function cacheState(home: string): { version: number; rows: number; stale: number; nullOpenCode: number } {
+      const cache = readSummaryCache(home)
+      const entries = Object.values(cache.entries)
+      return {
+        version: cache.version,
+        rows: entries.length,
+        stale: staleValuesIn(entries),
+        nullOpenCode: entries.filter((entry) => entry.perFile.source === 'opencode' && entry.perFile.summary === null).length
+      }
+    }
+
+    e2eIt('the first round after the bump is cold, shows no earlier value, keeps every ledger row; the next warm round judges as usual', async () => {
+      const home = tempHome('e2e-ledger')
+      const fixture = writeFourSources(home)
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const phases: unknown[] = []
+      const record = (phase: string, loaded: Loaded, result: SyncResult): void => {
+        phases.push({
+          phase,
+          cache: cacheState(home),
+          evidence: loaded.evidence.summaryCache,
+          sessions: loaded.sessions.length,
+          staleInSessions: staleValuesIn(loaded.sessions),
+          ledger: ledgerState(home),
+          sync: {
+            changed: result.changedSessions,
+            unchanged: result.unchangedSessions,
+            removed: result.removedSessions,
+            retained: result.retainedSessions ?? 0,
+            held: result.heldRemovals ?? 0
+          }
+        })
+      }
+      let coldAbsences: unknown
+
+      await withUsageLedger(home, async (usage) => {
+        // P0: this build reads everything, and the ledger records it.
+        await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+          record('P0 this build', loaded, sync(usage, loaded))
+        })
+        // P1: the rows as earlier builds projected them, still read as
+        // current, so the ledger follows them ...
+        plantEarlierProjection(home, fixture)
+        await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+          record('P1 earlier projection', loaded, sync(usage, loaded))
+        })
+        // ... and left under the previous version: the v29 cache.
+        setSummaryCacheVersion(home, PREVIOUS_VERSION)
+        phases.push({ phase: 'previous-version cache', cache: cacheState(home), ledger: ledgerState(home) })
+
+        // P2, the bump: OpenCode cannot be discovered, one Codex rollout
+        // cannot be read, one Claude file is really gone.
+        fs.rmSync(fixture.claudeDeleted)
+        install({ kind: 'fail', stderr: BUSY_STDERR })
+        await withUnreadable([fixture.codexFlaky], () => withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+          const result = sync(usage, loaded)
+          record('P2 bump', loaded, result)
+          coldAbsences = [...(result.absences ?? [])].sort((left, right) => left.source.localeCompare(right.source))
+        }))
+        for (const fake of fakes.splice(0)) fake.restore()
+
+        // P3: the next round, warm; everything readable again.
+        await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+          record('P3 next round', loaded, sync(usage, loaded))
+        })
+      })
+
+      const cache = (rows: number, stale: number, nullOpenCode: number, version = SUMMARY_CACHE_VERSION) =>
+        ({ version, rows, stale, nullOpenCode })
+      const ledger = (sessions: number, facts: number, history: number, codexOutputTokens: number) =>
+        ({ sessions, facts, history, codexOutputTokens, codexFactsWithoutF1bKey: 0 })
+      const synced = (changed: number, unchanged: number, removed: number, retained: number) =>
+        ({ changed, unchanged, removed, retained, held: 0 })
+      expect(phases).toEqual([
+        {
+          phase: 'P0 this build', cache: cache(7, 0, 0), evidence: 'cold', sessions: 7, staleInSessions: 0,
+          ledger: ledger(7, 7, 7, 350), sync: synced(7, 0, 0, 0)
+        },
+        {
+          phase: 'P1 earlier projection', cache: cache(7, 7, 1), evidence: 'warm', sessions: 6, staleInSessions: 7,
+          ledger: ledger(7, 7, 7, 2_350), sync: synced(1, 5, 0, 1)
+        },
+        { phase: 'previous-version cache', cache: cache(7, 7, 1, PREVIOUS_VERSION), ledger: ledger(7, 7, 7, 2_350) },
+        // Cold: every earlier value is gone, the three absent sessions keep
+        // their ledger rows, and no row is written for a read that failed.
+        {
+          phase: 'P2 bump', cache: cache(4, 0, 0), evidence: 'cold', sessions: 4, staleInSessions: 0,
+          ledger: ledger(7, 7, 7, 350), sync: synced(1, 3, 0, 3)
+        },
+        // Warm: the deleted Claude session leaves (its valuation history
+        // stays); the other two are read again.
+        {
+          phase: 'P3 next round', cache: cache(6, 0, 0), evidence: 'warm', sessions: 6, staleInSessions: 0,
+          ledger: ledger(6, 6, 7, 350), sync: synced(0, 6, 1, 0)
+        }
+      ])
+      expect(coldAbsences).toEqual([
+        { source: 'claude-code', reason: 'cold-summary-cache', sessions: 1 },
+        { source: 'codex', reason: 'cold-summary-cache', sessions: 1 },
+        { source: 'opencode', reason: 'cold-summary-cache', sessions: 1 }
+      ])
+
+      // The warm round shows what a full rebuild shows.
+      const warm = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+      removeSummaryCache(home)
+      const fullRebuild = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+      expect(warm).toEqual(fullRebuild)
+      expect(fullRebuild.find((session) => session.filePath === fixture.codexCompacted)?.compactCount).toBe(1)
+    }, 120_000)
+
+    e2eIt('whichever entry comes first after the bump (the lineage write, a read-only scan, or the writable load alone), the round is cold and equals a full rebuild', async () => {
+      for (const order of ['lineage first', 'read-only first', 'writable only'] as const) {
+        const home = tempHome(`e2e-${order.replace(' ', '-')}`)
+        const fixture = writeFourSources(home)
+        await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+        plantEarlierProjection(home, fixture)
+        setSummaryCacheVersion(home, PREVIOUS_VERSION)
+        const planted = readSummaryCache(home)
+
+        let bumped!: Loaded
+        await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          if (order === 'lineage first') {
+            await sessionLoader.loadCachedClaudeLineageMetadata()
+            expect(readSummaryCache(home)).toEqual(planted)
+          }
+          if (order === 'read-only first') {
+            const readOnly = await sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true })
+            expect(readOnly.evidence.summaryCache).toBe('cold')
+            expect(staleValuesIn(readOnly.sessions)).toBe(0)
+            expect(readSummaryCache(home)).toEqual(planted)
+          }
+          bumped = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+        })
+        expect(bumped.evidence.summaryCache).toBe('cold')
+        expect(cacheState(home)).toEqual({ version: SUMMARY_CACHE_VERSION, rows: 7, stale: 0, nullOpenCode: 0 })
+
+        const hot = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+        removeSummaryCache(home)
+        const fullRebuild = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+        expect(bumped.sessions).toEqual(fullRebuild)
+        expect(hot).toEqual(fullRebuild)
+        expect(staleValuesIn(fullRebuild)).toBe(0)
+      }
+    }, 120_000)
+  })
 })

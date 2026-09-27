@@ -92,7 +92,14 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const LEGACY_CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
 const CACHE_DB_FILE = path.join(CACHE_DIR, 'summary-cache.sqlite')
-const CACHE_VERSION = 29 // Keep audit events in a cold column; hot startup reads compact rows only
+// 30 (F1d): re-read every session once. Rows written before it predate F1a
+// (records holding U+2028/U+2029), F1b (Codex compaction, subagent usage,
+// fork dedup keys), F1c-2 (Cursor working directories) and F1e (a failed read
+// is not a summary). A row of another version is never reused or carried
+// over: see writeSqliteDiskCache. 29 kept audit events in a cold column.
+const CACHE_VERSION = 30
+/** The summary-cache version this build reads and writes. */
+export const SUMMARY_CACHE_VERSION = CACHE_VERSION
 
 type CachedSessionSource = SessionSource
 
@@ -163,7 +170,11 @@ function attributeUsageEventsInPlace(
   return accounting
 }
 
-const SELECTIVELY_COMPATIBLE_CACHE_VERSIONS = new Set([25, 26, 27])
+// Since v30 (F1d) no v25-v27 JSON entry is reused, for any source: every one
+// predates the F1a/F1b/F1c-2/F1e parser fixes (cc-mirror, OpenCode and ZCode
+// included). The JSON is a cache miss and is deleted by the first successful
+// SQLite write (saveDiskCache); the migration worker's list is empty too.
+const SELECTIVELY_COMPATIBLE_CACHE_VERSIONS = new Set<number>()
 
 function assertTestCacheWriteContained(): void {
   if (process.env.NODE_ENV !== 'test') return
@@ -181,6 +192,9 @@ function isLegacyCacheSourceCompatible(
   version: number,
   source: CachedSessionSource | undefined
 ): boolean {
+  // Unreachable since v30: no JSON version is compatible any more, so the
+  // header check throws before any entry is visited. Kept for P2b, which
+  // removes the JSON path as a whole.
   // v26 introduced Codex lifecycle/lineage fields. v27 introduces the
   // OpenCode/ZCode authoritative per-call accounting projection. Preserve the
   // unaffected providers while forcing every source whose cached summary can
@@ -242,6 +256,47 @@ function loadSqliteDiskCache(
   } catch { /* corrupt cache */ }
   finally { database?.close() }
   return null
+}
+
+export interface SummaryCacheProbe {
+  /**
+   * 'current': written by this build. 'stale': written under another
+   * CACHE_VERSION, so the next writable full load re-reads every session.
+   * 'missing': nothing cached (no summary-cache.sqlite, or no table in it).
+   * 'unreadable': the file exists but cannot be read.
+   */
+  readonly state: 'current' | 'stale' | 'missing' | 'unreadable'
+  /** PRAGMA user_version; null without a readable file. */
+  readonly version: number | null
+  /** Rows in summary_cache_entries whatever their version; null without a readable file. */
+  readonly rows: number | null
+  /** A pre-SQLite summary-cache.json is still on disk (never reused since v30). */
+  readonly legacyJson: boolean
+}
+
+/**
+ * Read-only look at the summary cache, e.g. for a notice that the first load
+ * after a version bump re-reads everything. Never creates, migrates or writes
+ * the cache.
+ */
+export function probeSummaryCache(): SummaryCacheProbe {
+  const legacyJson = fs.existsSync(LEGACY_CACHE_FILE)
+  if (!fs.existsSync(CACHE_DB_FILE)) return { state: 'missing', version: null, rows: null, legacyJson }
+  let database: Database.Database | null = null
+  try {
+    database = new Database(CACHE_DB_FILE, { readonly: true, fileMustExist: true })
+    const version = Number(database.pragma('user_version', { simple: true }))
+    const hasTable = Boolean(database.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'summary_cache_entries'"
+    ).get())
+    if (!hasTable) return { state: 'missing', version, rows: 0, legacyJson }
+    const { rows } = database.prepare('SELECT count(*) AS rows FROM summary_cache_entries').get() as { rows: number }
+    return { state: version === CACHE_VERSION ? 'current' : 'stale', version, rows, legacyJson }
+  } catch {
+    return { state: 'unreadable', version: null, rows: null, legacyJson }
+  } finally {
+    database?.close()
+  }
 }
 
 /**
@@ -429,30 +484,48 @@ function writeSqliteDiskCache(
   try {
     database = new Database(CACHE_DB_FILE)
     database.pragma('synchronous = NORMAL')
-    database.exec(`
-      CREATE TABLE IF NOT EXISTS summary_cache_entries (
-        file_path TEXT PRIMARY KEY,
-        sig TEXT NOT NULL,
-        per_file_json TEXT NOT NULL,
-        compact_json TEXT
+    const db = database
+    // Write gate (F1d, W2): stamping CACHE_VERSION over rows this write did not
+    // rewrite would carry another version's rows into this one. So the version
+    // is read inside the write transaction (IMMEDIATE: no other writer can
+    // change it before the commit), and on a cache written under another
+    // version:
+    // - a focused write (no activePaths: loadCachedClaudeLineageMetadata owns
+    //   Claude rows only and cannot prune) writes nothing and leaves the
+    //   version alone, so the next full load is still a cold round
+    //   (loadSqliteDiskCache -> null), as the usage ledger (F1f) relies on;
+    // - a full write empties the table first, then writes this load's rows.
+    // A cache this write creates holds no row of any version: it starts here.
+    db.transaction(() => {
+      const created = !db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'summary_cache_entries'"
+      ).get()
+      const otherVersion = !created && Number(db.pragma('user_version', { simple: true })) !== CACHE_VERSION
+      if (otherVersion && !activePaths) return
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS summary_cache_entries (
+          file_path TEXT PRIMARY KEY,
+          sig TEXT NOT NULL,
+          per_file_json TEXT NOT NULL,
+          compact_json TEXT
+        )
+      `)
+      const columns = new Set(
+        (db.prepare('PRAGMA table_info(summary_cache_entries)').all() as Array<{ name: string }>)
+          .map((column) => column.name)
       )
-    `)
-    const columns = new Set(
-      (database.prepare('PRAGMA table_info(summary_cache_entries)').all() as Array<{ name: string }>)
-        .map((column) => column.name)
-    )
-    if (!columns.has('compact_json')) {
-      database.exec('ALTER TABLE summary_cache_entries ADD COLUMN compact_json TEXT')
-    }
-    const insert = database.prepare(`
-      INSERT INTO summary_cache_entries(file_path, sig, per_file_json, compact_json)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(file_path) DO UPDATE SET
-        sig = excluded.sig,
-        per_file_json = excluded.per_file_json,
-        compact_json = excluded.compact_json
-    `)
-    database.transaction(() => {
+      if (!columns.has('compact_json')) {
+        db.exec('ALTER TABLE summary_cache_entries ADD COLUMN compact_json TEXT')
+      }
+      if (otherVersion) db.exec('DELETE FROM summary_cache_entries')
+      const insert = db.prepare(`
+        INSERT INTO summary_cache_entries(file_path, sig, per_file_json, compact_json)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(file_path) DO UPDATE SET
+          sig = excluded.sig,
+          per_file_json = excluded.per_file_json,
+          compact_json = excluded.compact_json
+      `)
       for (const filePath of changedPaths) {
         const entry = entries[filePath]
         if (!entry) continue
@@ -467,15 +540,15 @@ function writeSqliteDiskCache(
         const active = new Set(activePaths)
         // Materialize compact primary keys before deleting. Mutating the table
         // while a better-sqlite3 iterator is active aborts the transaction.
-        const staleRows = database!.prepare('SELECT file_path FROM summary_cache_entries').all() as
+        const staleRows = db.prepare('SELECT file_path FROM summary_cache_entries').all() as
           Array<{ file_path: string }>
-        const remove = database!.prepare('DELETE FROM summary_cache_entries WHERE file_path = ?')
+        const remove = db.prepare('DELETE FROM summary_cache_entries WHERE file_path = ?')
         for (const row of staleRows) {
           if (!active.has(row.file_path)) remove.run(row.file_path)
         }
       }
-      database!.pragma(`user_version = ${CACHE_VERSION}`)
-    })()
+      db.pragma(`user_version = ${CACHE_VERSION}`)
+    }).immediate()
     database.close()
     database = null
     return null
@@ -742,15 +815,26 @@ async function loadRelatedClaudeSubagentMessages(
   filePath: string,
   sessionId: string
 ): Promise<RawJsonlMessage[]> {
+  return (await readRelatedClaudeSubagentMessages(filePath, sessionId)).messages
+}
+
+/** The related subagent messages, and whether any subagent file's read was cut short. */
+async function readRelatedClaudeSubagentMessages(
+  filePath: string,
+  sessionId: string
+): Promise<{ messages: RawJsonlMessage[]; truncated: boolean }> {
   const related: RawJsonlMessage[] = []
+  let truncated = false
   for (const subagentPath of findClaudeSubagentFilesNearMain(filePath)) {
-    const raw = await parseSessionFile(subagentPath)
+    const read = await parseSessionFileWithStats(subagentPath)
+    if (read.truncated) truncated = true
+    const raw = read.messages
     const ownerDir = path.basename(path.dirname(path.dirname(subagentPath)))
     const belongsToSession = ownerDir === sessionId || raw.some((message) => message.sessionId === sessionId)
     if (!belongsToSession) continue
     related.push(...raw)
   }
-  return related
+  return { messages: related, truncated }
 }
 
 function findJsonFilesFlat(root: string): string[] {
@@ -2188,42 +2272,59 @@ function linkCrossSessionBranches(
   }
 }
 
-async function buildPerFileCache(filePath: string, source: CachedSessionSource): Promise<PerFileCache> {
+/**
+ * One file's cache entry. `truncated`: a Claude or cc-mirror read (the main
+ * file or a subagent file) stopped early, on its timeout or a stream error,
+ * and resolved only what it had read. Such an entry must never be cached (F1d
+ * path D). The other file-backed sources throw on a failed read instead.
+ */
+async function buildPerFileCache(
+  filePath: string,
+  source: CachedSessionSource
+): Promise<{ perFile: PerFileCache; truncated: boolean }> {
   if (source === 'claude-code') {
-    const raw = await parseSessionFile(filePath)
+    const { messages: raw, truncated } = await parseSessionFileWithStats(filePath)
     const lineageMeta = buildLineageMeta(filePath, raw)
-    const subagentUsage = lineageMeta.sessionId
-      ? await loadRelatedClaudeSubagentMessages(filePath, lineageMeta.sessionId)
-      : []
+    const subagents = lineageMeta.sessionId
+      ? await readRelatedClaudeSubagentMessages(filePath, lineageMeta.sessionId)
+      : { messages: [], truncated: false }
     const summary = lineageMeta.sessionId
-      ? buildSessionSummary(filePath, raw, true, lineageMeta.sessionId, 'claude-code', subagentUsage)
+      ? buildSessionSummary(filePath, raw, true, lineageMeta.sessionId, 'claude-code', subagents.messages)
       : null
-    return { summary, lineageMeta, source }
+    return { perFile: { summary, lineageMeta, source }, truncated: truncated || subagents.truncated }
   }
 
   if (source === 'cc-mirror') {
-    const raw = await parseSessionFile(filePath)
+    const { messages: raw, truncated } = await parseSessionFileWithStats(filePath)
     const sessionId = resolvePhysicalSessionId(filePath, raw)
-    const subagentUsage = sessionId ? await loadRelatedClaudeSubagentMessages(filePath, sessionId) : []
-    const summary = buildSessionSummary(filePath, raw, true, undefined, 'cc-mirror', subagentUsage)
-    return { summary, lineageMeta: emptyLineageMeta(summary), source }
+    const subagents = sessionId
+      ? await readRelatedClaudeSubagentMessages(filePath, sessionId)
+      : { messages: [], truncated: false }
+    const summary = buildSessionSummary(filePath, raw, true, undefined, 'cc-mirror', subagents.messages)
+    return {
+      perFile: { summary, lineageMeta: emptyLineageMeta(summary), source },
+      truncated: truncated || subagents.truncated
+    }
   }
 
   let summary: SessionSummary | null = null
   if (source === 'codex') {
     const record = await loadCodexSessionRecord(filePath)
     return {
-      summary: record.summary,
-      lineageMeta: emptyLineageMeta(record.summary),
-      source,
-      ...(record.subagent ? { codexSubagent: record.subagent } : {})
+      perFile: {
+        summary: record.summary,
+        lineageMeta: emptyLineageMeta(record.summary),
+        source,
+        ...(record.subagent ? { codexSubagent: record.subagent } : {})
+      },
+      truncated: false
     }
   }
   else if (source === 'cursor') summary = await buildCursorSessionSummary(filePath)
   else if (source === 'opencode') summary = await buildOpencodeSessionSummary(filePath)
   else if (source === 'zcode') summary = await buildZcodeSessionSummary(filePath)
   else summary = buildUnavailableSourceSummary(filePath, source)
-  return { summary, lineageMeta: emptyLineageMeta(summary), source }
+  return { perFile: { summary, lineageMeta: emptyLineageMeta(summary), source }, truncated: false }
 }
 
 export interface CachedClaudeLineageFile {
@@ -2269,14 +2370,28 @@ export async function loadCachedClaudeLineageMetadata(
     }
 
     parsedFileCount++
-    changedPaths.add(filePath)
+    // Path D (F1d): a read cut short, or a failed parse, is never cached; this
+    // call keeps using the last usable row of the file, if there is one.
+    const usable = cached?.perFile?.source === 'claude-code' &&
+      cached.perFile.lineageMeta?.lineageFormatVersion === 2 &&
+      Array.isArray(cached.perFile.lineageMeta?.leafUuidRefs)
     try {
-      entries[filePath] = { sig, perFile: await buildPerFileCache(filePath, 'claude-code') }
-    } catch {
-      entries[filePath] = {
-        sig,
-        perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source: 'claude-code' }
+      const { perFile, truncated } = await buildPerFileCache(filePath, 'claude-code')
+      if (truncated) {
+        if (!usable) entries[filePath] = { sig, perFile }
+        changedPaths.delete(filePath)
+        return
       }
+      entries[filePath] = { sig, perFile }
+      changedPaths.add(filePath)
+    } catch {
+      if (!usable) {
+        entries[filePath] = {
+          sig,
+          perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source: 'claude-code' }
+        }
+      }
+      changedPaths.delete(filePath)
     }
   })
 
@@ -2480,7 +2595,16 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
 
     parsedCount++
     try {
-      const perFile = await buildPerFileCache(filePath, source)
+      const { perFile, truncated } = await buildPerFileCache(filePath, source)
+      if (truncated) {
+        // Path D (F1d): a Claude/cc-mirror read cut short resolved only what
+        // it had read. Never cache that: this load keeps the file's last
+        // usable row (else shows what was read), the row on disk stays as it
+        // is, and the next load reads the file again.
+        entries[filePath] = cached && cachedUsable ? cached : { sig, perFile }
+        changedPaths.delete(filePath)
+        return
+      }
       entries[filePath] = { sig, perFile }
       changedPaths.add(filePath)
       if (sqliteLoad && perFile.summary) sqliteLoad.sessionsRead++
@@ -2497,8 +2621,11 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
         }
         return
       }
-      changedPaths.add(filePath)
-      entries[filePath] = { sig, perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source } }
+      // Path D (F1d): a failed read of any other file-backed source (Codex and
+      // Cursor throw) is not an empty session either. Persisting `summary:
+      // null` under this signature hid the session until the file changed
+      // again. Now it sits this load out, its row (if any) stays as it is,
+      // and the next load reads the file again.
     }
   })
   for (const source of ['opencode', 'zcode'] as const) {

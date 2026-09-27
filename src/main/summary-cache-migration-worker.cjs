@@ -5,8 +5,14 @@ const { parser } = require('stream-json')
 const { pick } = require('stream-json/filters/Pick')
 const { compactPerFileJson } = require('./summary-cache-compact.cjs')
 
-const COMPATIBLE_VERSIONS = new Set([25, 26, 27])
+// Since summary-cache v30 (F1d) no v25-v27 JSON is migrated: every entry
+// predates the F1a/F1b/F1c-2/F1e parser fixes, whatever its source. The
+// loader treats the JSON as a cache miss and deletes it after its first
+// successful SQLite write.
+const COMPATIBLE_VERSIONS = new Set()
 
+// Unreachable since v30 (nothing passes COMPATIBLE_VERSIONS). P2b removes
+// this worker as a whole.
 function sourceCompatible(version, source) {
   if (version <= 26 && (source === 'opencode' || source === 'zcode')) return false
   if (version === 25 && source === 'codex') return false
@@ -111,6 +117,11 @@ async function migrate() {
     const database = new Database(databasePath)
     try {
       const version = Number(database.pragma('user_version', { simple: true }))
+      // Deliberately literal, never "previous -> current": this step only
+      // backfills compact_json for the v28 -> v29 format change. Under any
+      // later cacheVersion a v28 or v29 DB is left alone and rebuilt cold by
+      // the loader (F1d): migrating it would carry rows parsed before the
+      // F1a/F1b/F1c-2/F1e fixes into the new version.
       if (version !== 28 || cacheVersion !== 29) return false
       database.pragma('journal_mode = WAL')
       database.pragma('synchronous = NORMAL')

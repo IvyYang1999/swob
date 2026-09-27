@@ -20,6 +20,18 @@ import { builtinProviderForId } from '../shared/provider-capabilities'
 // v4 rebuilds unchanged files so ANSI/CSI/OSC text cannot survive in old FTS rows.
 const SEARCH_SCHEMA_VERSION = 5
 
+/**
+ * Version of what a legacy (file-backed) row projects, carried in its
+ * file_signature as `p<version>|<mtimeMs>:<size>`. A row of another version
+ * (1 was the bare `mtimeMs:size`) no longer matches, so its file is
+ * re-projected as a whole by its next full sync, one file per transaction:
+ * the old rows stay searchable until then, and an interrupted pass resumes.
+ * 2 (F1d): F1a keeps records holding U+2028/U+2029, F1b and F1c-2 change the
+ * Codex and Cursor projections. Changing this never drops a table.
+ */
+export const SEARCH_PROJECTION_VERSION = 2
+const SEARCH_PROJECTION_PREFIX = `p${SEARCH_PROJECTION_VERSION}|`
+
 function searchDatabaseBusyTimeoutMs(): number {
   const configured = Number(process.env.SWOB_SEARCH_INDEX_BUSY_TIMEOUT_MS)
   return Number.isFinite(configured) && configured >= 0 ? configured : 3_000
@@ -146,7 +158,7 @@ function computeFileState(filePath: string): FileState | null {
   try {
     const stat = fs.statSync(filePath)
     return {
-      signature: `${stat.mtimeMs}:${stat.size}`,
+      signature: `${SEARCH_PROJECTION_PREFIX}${stat.mtimeMs}:${stat.size}`,
       size: stat.size,
       dev: stat.dev,
       ino: stat.ino
@@ -404,8 +416,13 @@ function writeIndexedRawSource(
     return false
   }
 
+  // Only rows of the current projection may be appended to: an older reader
+  // may have counted records differently (before F1a a U+2028 record was
+  // lost), so slicing at its indexed_raw_count would duplicate and still miss
+  // rows. Such a file is re-projected as a whole.
   const canAppend = Boolean(
     !source.stateFilePath && existing && existing.session_id === sessionId &&
+    existing.file_signature.startsWith(SEARCH_PROJECTION_PREFIX) &&
     existing.file_dev === state.dev && existing.file_ino === state.ino &&
     state.size > existing.indexed_size && raw.length >= existing.indexed_raw_count
   )
@@ -641,9 +658,26 @@ export async function synchronizeSearchSources(
   return serializeSynchronization(async () => {
     throwIfSearchIndexSyncCancelled(options.shouldCancel)
     const uniqueSources = new Map(sources.map((source) => [source.filePath, source]))
+    // Progress of a full pass that re-projects files (after a
+    // SEARCH_PROJECTION_VERSION change, every file once): one line per 100
+    // files and one when done. A hot pass that re-projects nothing and a live
+    // pass (prune: false) stay silent.
+    const startedAt = Date.now()
+    let processed = 0
+    let replaced = 0
+    const logProgress = (done: boolean): void => {
+      if (options.prune === false || replaced === 0) return
+      console.info(
+        `[search-index] full sync${done ? ' done' : ''}: processed ${processed}/${uniqueSources.size} files, ` +
+        `replaced ${replaced}, ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+      )
+    }
     for (const source of uniqueSources.values()) {
       throwIfSearchIndexSyncCancelled(options.shouldCancel)
       const changed = await indexSourceNow(source, options.shouldCancel)
+      processed++
+      if (changed) replaced++
+      if (processed % 100 === 0) logProgress(false)
       // Yield only after real parse/write work. Unchanged hot-index validation is
       // intentionally one tight stat/query pass so every search stays sub-50ms.
       if (changed) await new Promise<void>((resolve) => setImmediate(resolve))
@@ -661,7 +695,42 @@ export async function synchronizeSearchSources(
         if (!livePaths.has(row.file_path)) removeIndexedFile(db, row.file_path, options.shouldCancel)
       }
     }
+    logProgress(true)
   })
+}
+
+export interface SearchProjectionProbe {
+  /** File-backed (legacy) rows in search.db. */
+  readonly legacyRows: number
+  /**
+   * Of those, rows projected under another SEARCH_PROJECTION_VERSION (or a
+   * search.db of another schema version): each file is re-projected by its
+   * next full sync.
+   */
+  readonly staleLegacyRows: number
+}
+
+/**
+ * Read-only count of what the next full sync will re-project; null without a
+ * readable search.db. Never creates, migrates or writes the index.
+ */
+export function probeSearchProjection(): SearchProjectionProbe | null {
+  if (!fs.existsSync(searchDatabasePath())) return null
+  try {
+    return withReadOnlyDatabase((db) => {
+      const counts = db.prepare(`
+        SELECT count(*) AS legacyRows,
+          coalesce(sum(substr(file_signature, 1, length(@prefix)) <> @prefix), 0) AS staleLegacyRows
+        FROM sessions WHERE projection_kind = 'legacy'
+      `).get({ prefix: SEARCH_PROJECTION_PREFIX }) as SearchProjectionProbe
+      // Another schema version drops and rebuilds every table on the next write.
+      return db.pragma('user_version', { simple: true }) === SEARCH_SCHEMA_VERSION
+        ? { legacyRows: counts.legacyRows, staleLegacyRows: counts.staleLegacyRows }
+        : { legacyRows: counts.legacyRows, staleLegacyRows: counts.legacyRows }
+    })
+  } catch {
+    return null
+  }
 }
 
 function toFtsQuery(query: string): string | null {

@@ -127,6 +127,29 @@ export function classifyCodexUnits(ctx: CheckContext): Map<string, UnitDispositi
   }
   const dbSource = new Map((ctx.codexDb?.threads ?? []).map((thread) => [thread.id, thread.threadSource]))
 
+  /**
+   * A zero-usage guardian's own parent is often itself a subagent, not a
+   * top-level Swob session: session-loader.ts's codexSubagentsByTopLevel (F1b)
+   * walks that whole chain when it attaches descendants, but only a
+   * thread-spawn child ever lands in a parent's subagents (attachedPaths),
+   * and a guardian that never produced usage of its own can never enter
+   * attributedChildIds either — so a one-hop parent check alone misses a
+   * guardian nested two or more levels down even though the kernel already
+   * attached it. Self-contained walk mirroring that logic (does not touch
+   * session-loader.ts), bounded and cycle-safe like the kernel's own cap.
+   */
+  const hasTopLevelCodexAncestor = (parentId: string | null): boolean => {
+    const visited = new Set<string>()
+    let current = parentId
+    for (let hops = 0; current && hops < 16 && !visited.has(current); hops++) {
+      if (swobSessionIds.has(current)) return true
+      visited.add(current)
+      const parents = unitsBySession.get(current) ?? []
+      current = parents.map((parent) => codexUnitParentId(parent)).find((id): id is string => !!id) ?? null
+    }
+    return false
+  }
+
   const childReason = (unit: CodexUnit): ReasonCode => {
     const parentId = codexUnitParentId(unit)
     if (!parentId) return 'codex.subagent-no-parent-id'
@@ -173,7 +196,7 @@ export function classifyCodexUnits(ctx: CheckContext): Map<string, UnitDispositi
     const parentId = codexUnitParentId(unit)
     const hasUsage = unit.usageSnapshots + unit.usageRecords > 0
     if (ctx.readout.attributedChildIds.has(sessionId) ||
-        (!hasUsage && parentId !== null && swobSessionIds.has(parentId))) {
+        (!hasUsage && hasTopLevelCodexAncestor(parentId))) {
       result.set(unit.path, { bucket: 'merged', reason: 'codex.child-attached' })
     } else {
       result.set(unit.path, { bucket: 'not-included', reason: childReason(unit) })

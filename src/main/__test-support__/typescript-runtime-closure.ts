@@ -64,6 +64,13 @@ export function resolveTypeScriptImport(fromFile: string, specifier: string): st
     path.join(candidate, 'index.ts'),
     path.join(candidate, 'index.tsx')
   ]
+  // An ESM-style specifier can name compiled output ('./foo.js') while the
+  // real source is its .ts/.tsx sibling: none of the suffixes above match
+  // (they would look for './foo.js.ts'), so try the extension swapped too.
+  if (candidate.endsWith('.js')) {
+    const stem = candidate.slice(0, -'.js'.length)
+    choices.push(`${stem}.ts`, `${stem}.tsx`)
+  }
   const resolved = choices.find((choice) => fs.existsSync(choice) && fs.statSync(choice).isFile())
   if (!resolved) throw new Error(`cannot resolve TypeScript runtime dependency: ${fromFile} -> ${specifier}`)
   return resolved

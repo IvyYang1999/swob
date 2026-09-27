@@ -298,9 +298,28 @@ describe('live Library synchronization architecture', () => {
     const hold = source.match(/async function waitForLibraryHydrationTestHold[\s\S]*?\n}\n/)?.[0] || ''
     expect(hold).toContain("process.env.NODE_ENV !== 'test' || !testHome")
     expect(hold).toContain('path.relative(path.resolve(testHome), path.resolve(holdPath))')
+    // The hold path must resolve inside SWOB_TEST_HOME: a relative escaping it
+    // (empty, '..'-prefixed or still absolute) is refused, not just NODE_ENV/testHome.
+    expect(hold).toContain(
+      "if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return"
+    )
     expect(hold).toContain('generation === libraryHydrationGeneration && !runtimeShuttingDown')
     expect(source.match(/waitForLibraryHydrationTestHold\(generation\)/g)).toHaveLength(1)
     expect(hydration).toMatch(/await waitForLibraryHydrationTestHold\(generation\)\n\s*const coveredIds = collectSessionCoverage\(cachedSessions\)/)
+  })
+
+  it('logs a lifecycle line when a hydration fails or recovers, and never swallows the error', () => {
+    const wrapper = source.match(/async function hydrateLibrarySessions\(tree: LibraryTree\): Promise<void> \{[\s\S]*?\n}\n/)?.[0] || ''
+    // A separate streak from usageFactSyncFailures: unrelated failures, own counter.
+    expect(source).toContain('const libraryHydrationFailures = new UsageFactSyncFailureTracker()')
+    expect(wrapper).toMatch(
+      /await hydrateLibrarySessionsUnderGate\(tree\)\n\s*const recovered = libraryHydrationFailures\.recordSuccess\(\)\n\s*if \(recovered\) writeLifecycleLog\('hydrate-library-recovered', recovered\.fields\)/
+    )
+    expect(wrapper).toMatch(
+      /catch \(error\) \{[\s\S]*?const entry = libraryHydrationFailures\.recordFailure\(error\)\n\s*if \(entry\) writeLifecycleLog\('hydrate-library-failed', entry\.fields\)\n\s*throw error/
+    )
+    // The finally block (active-count bookkeeping) still runs either way.
+    expect(wrapper).toMatch(/} finally \{\n\s*libraryHydrationActive--\n\s*if \(libraryHydrationActive === 0\) scheduleAutomaticDuplicateRecoveryAnalysis\(\)/)
   })
 
   it('closes the shared writer coordinator before a mutation-incomplete fatal dialog', () => {

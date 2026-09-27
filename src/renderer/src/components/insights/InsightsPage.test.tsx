@@ -110,6 +110,7 @@ describe('InsightsPage query lifecycle', () => {
   beforeEach(() => {
     notifyFactsUpdated = null
     store.state.sessions = []
+    store.state.locale = 'zh-CN'
     store.state.config.preferences.enabledLenses = null
     const scope: AnalysisScope = { range: '7d', metricBasis: 'billing' }
     ;(window as unknown as { api: Record<string, unknown> }).api = {
@@ -195,6 +196,29 @@ describe('InsightsPage query lifecycle', () => {
     await waitFor(() => expect(screen.getByTestId('total-tokens').textContent).toBe('84'))
     expect(screen.queryByText(/上次同步失败/)).toBeNull()
     expect(screen.getByText(/^账本更新于 2026/)).not.toBeNull()
+  })
+
+  it('falls back to errorName when there is no error code, in English (F1k P2-3)', async () => {
+    store.state.locale = 'en'
+    const scope: AnalysisScope = { range: '7d', metricBasis: 'billing' }
+    vi.mocked(window.api.queryInsightsBundle).mockResolvedValueOnce({
+      ...bundle(42, scope),
+      lastSyncError: {
+        at: '2026-09-27T01:05:00.000Z',
+        errorName: 'TypeError',
+        errorCode: null,
+        consecutiveFailures: 2
+      }
+    })
+
+    render(<InsightsPage />)
+    await screen.findByText('42')
+    expect(screen.getByText(/^Ledger updated /)).not.toBeNull()
+    // No errorCode: renderer.insights_page.ledger_sync_failed's {code} falls
+    // back to errorName (InsightsPage.tsx: errorCode || errorName), and the
+    // English i18n copy is used, not the zh-CN one exercised above.
+    expect(screen.getByText('Last sync failed: TypeError (2 in a row)')).not.toBeNull()
+    expect(screen.queryByText(/上次同步失败/)).toBeNull()
   })
 
   it('keeps Token and Audit independently reachable and resets a disabled active tab', async () => {

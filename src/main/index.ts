@@ -166,8 +166,10 @@ import {
   advanceLibraryWriterArbiterEpoch,
   inspectLibraryWriterLease,
   LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
-  recoverLibraryWriterLeaseManually
+  recoverLibraryWriterLeaseManually,
+  type LibraryWriterEvent
 } from './library-writer-lease'
+import type { HostIdentityEvent } from './host-identity'
 import { passLibraryStartupGate } from './library-startup-gate'
 import { loadConfig, saveConfig } from './config-store'
 import {
@@ -1466,6 +1468,18 @@ function writeLifecycleLog(event: string, fields: Record<string, unknown> = {}):
     })}\n`)
   } catch { /* lifecycle diagnostics must never block startup or quit */ }
 }
+
+// Facts that must survive in lifecycle.log: a regenerated host identity makes
+// this machine's older locks look remote, a restored one keeps them local, and
+// a takeover on the second evidence moves a lock into writer-recovery-evidence.
+process.on('swob:host-identity-event', (event: HostIdentityEvent) => {
+  const { component: _component, event: name, ...fields } = event
+  writeLifecycleLog(name, fields)
+})
+process.on('swob:library-writer-event', (event: LibraryWriterEvent) => {
+  if (event.event !== 'stale-recovered' || !event.recoveryBasis) return
+  writeLifecycleLog('library-writer-stale-recovered', { basis: event.recoveryBasis, mode: event.mode })
+})
 
 let runtimeCleanupPromise: Promise<void> | null = null
 

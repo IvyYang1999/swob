@@ -216,6 +216,14 @@ describe.sequential('Swob CLI machine contract', () => {
 
   it('doctor locks/library 对 Library 与 machine identity 零写', async () => {
     const machineDir = path.join(tempHome, '.swob-machine')
+    // The identity paths the lease module really uses under this harness, including the backup copy.
+    const lease = await import('../main/library-writer-lease')
+    const { getOrCreateHostIdentity } = await import('../main/host-identity')
+    const identityPath = lease.resolveLibraryWriterHostIdentityStoragePath(process.platform)
+    const backupPath = lease.resolveLibraryWriterHostIdentityBackupPath(process.platform)
+    getOrCreateHostIdentity({ storagePath: identityPath })
+    fs.rmSync(backupPath, { force: true })
+    const identityBefore = fs.readFileSync(identityPath, 'utf8')
     const before = libraryFileEvidence(libraryRoot)
 
     expect((await invoke(['doctor', 'locks', '--json'])).code).toBe(0)
@@ -223,6 +231,49 @@ describe.sequential('Swob CLI machine contract', () => {
 
     expect(libraryFileEvidence(libraryRoot)).toEqual(before)
     expect(fs.existsSync(machineDir)).toBe(false)
+    // Read-only diagnostics never write the backup copy, even when it is missing.
+    expect(fs.existsSync(backupPath)).toBe(false)
+    expect(fs.readFileSync(identityPath, 'utf8')).toBe(identityBefore)
+  })
+
+  it('doctor locks/library 读到被占用的锁（会读本机身份）时也不写身份备用副本', async () => {
+    const lease = await import('../main/library-writer-lease')
+    const { getOrCreateHostIdentity } = await import('../main/host-identity')
+    const identityPath = lease.resolveLibraryWriterHostIdentityStoragePath(process.platform)
+    const backupPath = lease.resolveLibraryWriterHostIdentityBackupPath(process.platform)
+    getOrCreateHostIdentity({ storagePath: identityPath })
+    fs.rmSync(backupPath, { force: true })
+    const identityBefore = fs.readFileSync(identityPath, 'utf8')
+    const locks = path.join(libraryRoot, '.swob', 'locks')
+    const foreignHost = '20000000-0000-4000-8000-000000000905'
+    const salt = '30000000-0000-4000-8000-000000000905'
+    fs.mkdirSync(path.join(locks, 'library-writer'), { recursive: true })
+    fs.writeFileSync(path.join(locks, 'library-writer', 'foreign.owner.json'), JSON.stringify({
+      schemaVersion: 2,
+      ownerNonce: 'foreign',
+      deviceId: 'foreign-device',
+      pid: 76437,
+      bootIdentity: deriveHostBootIdentity(foreignHost, 'boot-0904', salt),
+      processStartFingerprint: 'start-76437',
+      hostProof: deriveLibraryHostProof(foreignHost, salt),
+      hostProofSalt: salt,
+      mode: 'maintenance',
+      acquiredAt: '2026-09-04T01:00:00.000Z',
+      heartbeatAt: '2026-09-04T01:00:00.000Z',
+      leaseExpiresAt: '2026-09-04T01:00:15.000Z'
+    }))
+    const before = libraryFileEvidence(libraryRoot)
+    try {
+      // remote-owner (not unverifiable-owner) proves the inspection read this machine's identity.
+      expect(parsed(await invoke(['doctor', 'locks', '--json']))).toMatchObject({ state: 'blocked', reason: 'remote-owner' })
+      expect((await invoke(['doctor', 'library', '--json'])).code).toBe(0)
+
+      expect(libraryFileEvidence(libraryRoot)).toEqual(before)
+      expect(fs.existsSync(backupPath)).toBe(false)
+      expect(fs.readFileSync(identityPath, 'utf8')).toBe(identityBefore)
+    } finally {
+      fs.rmSync(locks, { recursive: true, force: true })
+    }
   })
 
   describe.sequential('doctor locks --recover（显式、证据绑定的写锁恢复）', () => {

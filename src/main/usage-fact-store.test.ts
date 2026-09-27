@@ -2035,4 +2035,33 @@ describe('usage sync keeps what a session committed when its input degrades (F1k
     })
     expect(queryInsights(scope(), 'global').total.processedTokens).toBe(48 + 36)
   })
+
+  // keepCommitted 只应在「回退」（当前是逐调用/无用量 → 这次是聚合）时保留旧值；
+  // 当前已经是聚合、这次仍是聚合、只是数值合法变大，不是回退，必须照常替换
+  // （F1k P2-2：没有用例钉住这一条，M05 把本场聚合行本身也当成「逐调用证据」会存活）。
+  function growingAggregate(id: string, source: 'opencode' | 'zcode', input: number, output: number): SessionSummary {
+    const session = makeSession(id, `/repo/${source}`, [], { source, turns: 1, parse: 'parsed' })
+    session.tokenUsage = { inputTokens: input, outputTokens: output, cacheCreationTokens: 0, cacheReadTokens: 0 }
+    session.tokenAccounting = accountingFromMutuallyExclusiveUsage(source, session.tokenUsage, 'reported',
+      `${source} legacy aggregate fallback; request-level model/provider evidence unavailable`)
+    session.providerOutcome = { detected: 'detected', parse: 'parsed', usage: 'available' }
+    return session
+  }
+
+  it.each(['opencode', 'zcode'] as const)(
+    '一场 %s 会话的聚合合法增长（120 → 150）：照常替换，不计入 downgradesSkipped',
+    (source) => {
+      const id = `ses_${source}Grow`
+      expect(synchronizeUsageFacts([growingAggregate(id, source, 100, 20)], [])).toMatchObject({
+        changedSessions: 1, factCount: 1
+      })
+      expect(sessionLedger(id)).toMatchObject({ current: 1, superseded: 0, tokens: 120 })
+
+      const result = synchronizeUsageFacts([growingAggregate(id, source, 130, 20)], [])
+      expect(result).toMatchObject({ changedSessions: 1, unchangedSessions: 0, factCount: 1 })
+      expect(result.downgradesSkipped?.[source]).toBeUndefined()
+      expect(sessionLedger(id)).toMatchObject({ current: 1, superseded: 0, tokens: 150 })
+      expect(queryInsights(scope(), 'global').total.processedTokens).toBe(150)
+    }
+  )
 })

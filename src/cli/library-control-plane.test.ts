@@ -4,7 +4,12 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { deriveHostBootIdentity, deriveLibraryHostProof } from '../main/host-identity'
 import { inspectLibraryWriterLease, type LibrarySession } from '../main/library-manager'
-import { buildSessionLocation, inspectWriterLock, type WriterLockStatus } from './library-control-plane'
+import {
+  buildSessionLocation,
+  inspectWriterLock,
+  recoverWriterLock,
+  type WriterLockStatus
+} from './library-control-plane'
 
 const unlockedWriter: WriterLockStatus = {
   state: 'unlocked',
@@ -150,6 +155,44 @@ describe('CLI writer lock doctor', () => {
     expect(result.evidenceHash).toBe(formalInspection.evidenceHash)
     expect(result.manualRecoveryAvailable).toBe(formalInspection.manualRecoveryAvailable)
     expect(fs.existsSync(lockDir)).toBe(true)
+  })
+
+  it('doctor locks --recover 对本机存活 owner 拒绝（active-owner），不进入写路径', () => {
+    const lockDir = path.join(libraryRoot, '.swob', 'locks', 'library-writer')
+    const hostIdentity = '00000000-0000-4000-8000-000000000194'
+    const hostProofSalt = '10000000-0000-4000-8000-000000000194'
+    fs.mkdirSync(lockDir, { recursive: true })
+    fs.writeFileSync(path.join(lockDir, 'live.owner.json'), JSON.stringify({
+      schemaVersion: 2,
+      ownerNonce: 'live',
+      deviceId: 'device',
+      pid: 194,
+      bootIdentity: deriveHostBootIdentity(hostIdentity, 'boot', hostProofSalt),
+      processStartFingerprint: 'start-194',
+      hostProof: deriveLibraryHostProof(hostIdentity, hostProofSalt),
+      hostProofSalt,
+      mode: 'maintenance',
+      acquiredAt: '2026-08-02T00:00:00.000Z',
+      heartbeatAt: '2026-08-02T00:00:01.000Z',
+      leaseExpiresAt: '2026-08-02T00:00:16.000Z'
+    }))
+    const options = {
+      pid: 202,
+      bootIdentity: () => 'boot',
+      hostIdentity: () => hostIdentity,
+      processStartFingerprint: (pid: number) => pid === 194 ? 'start-194' : 'caller-start',
+      eventSink: () => {}
+    }
+    const inspection = inspectWriterLock(libraryRoot, options)
+    expect(inspection).toMatchObject({ state: 'blocked', reason: 'active-owner', manualRecoveryAvailable: false })
+
+    expect(recoverWriterLock({
+      recover: true,
+      evidence: inspection.evidenceHash!,
+      confirmation: 'RECOVER_LIBRARY_WRITER_LOCK'
+    }, libraryRoot, options)).toEqual({ recovered: false, reason: 'active-owner' })
+    expect(fs.readdirSync(lockDir)).toEqual(['live.owner.json'])
+    expect(fs.existsSync(path.join(libraryRoot, '.swob', 'locks', 'writer-recovery-evidence'))).toBe(false)
   })
 
   it('unlocked doctor 不创建 .swob 或 host identity', () => {

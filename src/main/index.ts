@@ -118,6 +118,7 @@ import {
   recoverInterruptedLibraryOrganization,
   closeLibraryWriterRuntime,
   withLibraryMaintenanceWriter,
+  getOrCreateLocalDeviceId,
   getLibrarySessionRegistryDiagnostics,
   getSessionFreshness,
   getStaleSessions,
@@ -164,7 +165,15 @@ import {
   type SessionFreshness,
   type CompensationProgress
 } from './library-health'
-import { advanceLibraryWriterArbiterEpoch } from './library-writer-lease'
+import {
+  advanceLibraryWriterArbiterEpoch,
+  inspectLibraryWriterLease,
+  LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
+  recoverLibraryWriterLeaseManually,
+  type LibraryWriterEvent
+} from './library-writer-lease'
+import type { HostIdentityEvent } from './host-identity'
+import { passLibraryStartupGate } from './library-startup-gate'
 import { loadConfig, saveConfig } from './config-store'
 import {
   DuplicateRecoveryPlanExpiredError,
@@ -1600,6 +1609,18 @@ function writeLifecycleLog(event: string, fields: Record<string, unknown> = {}):
     })}\n`)
   } catch { /* lifecycle diagnostics must never block startup or quit */ }
 }
+
+// Facts that must survive in lifecycle.log: a regenerated host identity makes
+// this machine's older locks look remote, a restored one keeps them local, and
+// a takeover on the second evidence moves a lock into writer-recovery-evidence.
+process.on('swob:host-identity-event', (event: HostIdentityEvent) => {
+  const { component: _component, event: name, ...fields } = event
+  writeLifecycleLog(name, fields)
+})
+process.on('swob:library-writer-event', (event: LibraryWriterEvent) => {
+  if (event.event !== 'stale-recovered' || !event.recoveryBasis) return
+  writeLifecycleLog('library-writer-stale-recovered', { basis: event.recoveryBasis, mode: event.mode })
+})
 
 let runtimeCleanupPromise: Promise<void> | null = null
 
@@ -5777,7 +5798,26 @@ if (activeRuntimeSafety.mode !== startupRuntimeSafety.mode) {
 
 const ownsGuiInstance = app.requestSingleInstanceLock()
 if (!ownsGuiInstance) app.quit()
-app.on('second-instance', () => showMainWindow())
+// Until the Library startup gate passes, its dialog is the only UI: a second
+// launch must not open a window whose IPC could touch the Library early.
+let libraryStartupGatePassed = false
+app.on('second-instance', () => {
+  if (libraryStartupGatePassed) showMainWindow()
+})
+
+function localDeviceIdForDiagnostics(): string | undefined {
+  try {
+    return getOrCreateLocalDeviceId()
+  } catch {
+    return undefined
+  }
+}
+
+function formatStartupGateTime(iso: string): string {
+  const time = Date.parse(iso)
+  if (!Number.isFinite(time)) return iso
+  return new Date(time).toLocaleString(mainLocale() === 'zh-CN' ? 'zh-CN' : 'en-US', { hour12: false })
+}
 
 app.whenReady().then(async () => {
   if (!ownsGuiInstance) return
@@ -5796,21 +5836,42 @@ app.whenReady().then(async () => {
     getLibraryRoot(),
     path.join(runtimeHome(), '.claude-session-manager', 'diagnostics')
   )
-  try {
-    await withLibraryMaintenanceWriter(() => recoverInterruptedDuplicateRecoveryTransactions(
+  // The startup gate: roll back an interrupted duplicate recovery under the
+  // Library writer. A writer-lock failure gets its real explanation and an
+  // explicit Recover lock action; after a recovery the gate simply runs again.
+  const gate = await passLibraryStartupGate({
+    runUnderMaintenanceWriter: (operation) => withLibraryMaintenanceWriter(operation),
+    rollbackInterruptedDuplicateRecovery: () => recoverInterruptedDuplicateRecoveryTransactions(
       getLibraryRoot(),
       duplicateRecoveryQuarantineRoot()
-    ))
-  } catch (error) {
-    console.error('[duplicate-recovery] Interrupted transaction rollback failed:',
-      duplicateRecoveryErrorCode(error))
-    dialog.showErrorBox(
-      mainT('native.duplicate_recovery.fatal_title'),
-      mainT('native.duplicate_recovery.fatal_body')
-    )
+    ),
+    inspectWriterLock: () => inspectLibraryWriterLease(getLibraryRoot(), {
+      localDeviceId: localDeviceIdForDiagnostics()
+    }),
+    recoverWriterLock: (expectedEvidenceHash) => recoverLibraryWriterLeaseManually(getLibraryRoot(), {
+      expectedEvidenceHash,
+      confirmation: LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION
+    }),
+    showMessageBox: (options) => dialog.showMessageBox(options),
+    translate: mainT,
+    formatTime: formatStartupGateTime,
+    log: writeLifecycleLog,
+    isShuttingDown: () => runtimeShuttingDown
+  })
+  if (gate !== 'continue') {
     app.quit()
     return
   }
+  libraryStartupGatePassed = true
+  await continueStartupAfterLibraryGate()
+})
+
+/**
+ * Everything that runs once the Library startup gate has passed, whether on
+ * the first attempt or after the user recovered the writer lock: the window,
+ * IPC registrations, watchers and timers. Nothing here may run before it.
+ */
+async function continueStartupAfterLibraryGate(): Promise<void> {
   try {
     recoverInterruptedLibraryOrganization()
   } catch (error) {
@@ -5979,7 +6040,7 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     showMainWindow()
   })
-})
+}
 
 app.on('window-all-closed', () => {
   // macOS: don't unregister shortcuts — app stays alive and user expects Cmd+Shift+Space to work

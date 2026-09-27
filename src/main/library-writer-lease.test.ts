@@ -13,8 +13,11 @@ import {
   LibraryWriterIdentityUnavailableError,
   registerLibraryWriterArbiterParticipant,
   recoverLibraryWriterLeaseManually,
+  resolveLibraryWriterHostIdentityBackupPath,
   resolveLibraryWriterHostIdentityStoragePath,
   runWithLibraryWriterArbiterContext,
+  type LibraryWriterEvent,
+  type LibraryWriterLeaseHandle,
   type LibraryWriterLeaseOptions
 } from './library-writer-lease'
 import { deriveHostBootIdentity, deriveLibraryHostProof } from './host-identity'
@@ -441,4 +444,216 @@ describe('Library 跨进程单写者 lease', () => {
       .toThrow(LibraryWriterCoordinatorClosedError)
     expect(readLibraryWriteGeneration(root)).toBe(1)
   })
+
+  describe('宿主身份重生成后的第二证据（stale-by-device-and-lease）', () => {
+    const oldHost = '10000000-0000-4000-8000-000000000904'
+    const regeneratedHost = '20000000-0000-4000-8000-000000000926'
+    const incidentAt = Date.parse('2026-09-04T01:00:00.000Z')
+    const dayMs = 24 * 60 * 60 * 1_000
+    const orphans: LibraryWriterLeaseHandle[] = []
+
+    afterEach(() => {
+      for (const handle of orphans.splice(0)) handle.release()
+    })
+
+    /** 09-04: this installation takes the lock (15 s lease) and its process dies without releasing it. */
+    async function incidentLock(overrides: Partial<LibraryWriterLeaseOptions> = {}, deviceId = 'this-install'): Promise<void> {
+      orphans.push(await acquireLibraryWriterLease(root, deviceId, 'maintenance',
+        leaseOptions(76437, () => 'start-76437', {
+          bootIdentity: () => 'boot-0904',
+          hostIdentity: () => oldHost,
+          now: () => incidentAt,
+          heartbeatMs: 60_000,
+          ...overrides
+        })))
+    }
+
+    /** After a reboot, with a regenerated host identity (its HMAC key no longer matches the owner's proof). */
+    function afterRegeneration(
+      nowMs: number,
+      processState: (pid: number) => string | 'missing' | null,
+      overrides: Partial<LibraryWriterLeaseOptions> = {}
+    ): LibraryWriterLeaseOptions {
+      return leaseOptions(202, (pid) => pid === 202 ? 'start-202' : processState(pid), {
+        bootIdentity: () => 'boot-0926',
+        hostIdentity: () => regeneratedHost,
+        now: () => nowMs,
+        timeoutMs: 20,
+        pollMs: 1,
+        ...overrides
+      })
+    }
+
+    it('不同 boot + 身份重生成 + 本机 deviceId + 租约过期 ≥ 24 h + PID missing → 自动恢复，原因码进证据与事件', async () => {
+      await incidentLock()
+      const events: LibraryWriterEvent[] = []
+      const now = Date.parse('2026-09-27T16:45:00.000Z')
+      expect(inspectLibraryWriterLease(root, { ...afterRegeneration(now, () => 'missing'), localDeviceId: 'this-install' }))
+        .toMatchObject({ state: 'blocked', reason: 'remote-owner', ownerDeviceIsLocal: true, leaseExpired: true })
+
+      const recovered = await acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRegeneration(now, () => 'missing', { eventSink: (event) => { events.push(event) } }))
+
+      expect(recovered.owner).toMatchObject({ schemaVersion: 2, deviceId: 'this-install' })
+      const evidenceDir = path.join(root, '.swob', 'locks', 'writer-recovery-evidence')
+      const retained = fs.readdirSync(evidenceDir)
+      expect(retained).toHaveLength(1)
+      const evidence = fs.readdirSync(path.join(evidenceDir, retained[0])).sort()
+      expect(evidence).toHaveLength(2)
+      expect(evidence).toContain('recovery.claim')
+      expect(JSON.parse(fs.readFileSync(path.join(evidenceDir, retained[0], 'recovery.claim'), 'utf8')))
+        .toMatchObject({ kind: 'automatic', basis: 'stale-by-device-and-lease' })
+      expect(events).toContainEqual(expect.objectContaining({
+        event: 'stale-recovered',
+        recoveryBasis: 'stale-by-device-and-lease'
+      }))
+      recovered.release()
+    })
+
+    it.each([
+      {
+        label: 'owner 的 deviceId 不是本机',
+        ownerDevice: 'other-install',
+        expiredMs: 23 * dayMs,
+        processState: () => 'missing' as const,
+        overrides: {}
+      },
+      {
+        label: '租约过期未满 24 h',
+        ownerDevice: 'this-install',
+        expiredMs: dayMs - 60_000,
+        processState: () => 'missing' as const,
+        overrides: {}
+      },
+      {
+        label: 'PID 仍在（同一进程指纹）',
+        ownerDevice: 'this-install',
+        expiredMs: 23 * dayMs,
+        processState: () => 'start-76437',
+        overrides: {}
+      },
+      {
+        label: 'PID 被复用（只认 missing）',
+        ownerDevice: 'this-install',
+        expiredMs: 23 * dayMs,
+        processState: () => 'reused-start',
+        overrides: {}
+      },
+      {
+        label: 'PID 状态无法判定',
+        ownerDevice: 'this-install',
+        expiredMs: 23 * dayMs,
+        processState: () => null,
+        overrides: {}
+      },
+      {
+        label: 'options 关闭第二证据',
+        ownerDevice: 'this-install',
+        expiredMs: 23 * dayMs,
+        processState: () => 'missing' as const,
+        overrides: { staleByDeviceAndLease: { enabled: false } }
+      }
+    ])('$label → 维持 remote-owner，锁原样保留', async ({ ownerDevice, expiredMs, processState, overrides }) => {
+      await incidentLock({}, ownerDevice)
+      const leaseExpiresAt = incidentAt + 15_000
+      const error = await acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRegeneration(leaseExpiresAt + expiredMs, processState, overrides))
+        .then(() => null, (caught: unknown) => caught)
+
+      expect(error).toBeInstanceOf(LibraryWriterBusyError)
+      expect(error).toMatchObject({ reason: 'remote-owner' })
+      const lockDir = path.join(root, '.swob', 'locks', 'library-writer')
+      expect(fs.readdirSync(lockDir).filter((name) => name.endsWith('.owner.json'))).toHaveLength(1)
+      expect(fs.existsSync(path.join(root, '.swob', 'locks', 'writer-recovery-evidence'))).toBe(false)
+    })
+
+    it('阈值可配置：minimumLeaseExpiredMs = 1 h 时过期 2 h 即恢复', async () => {
+      await incidentLock()
+      const recovered = await acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRegeneration(incidentAt + 15_000 + 2 * 60 * 60 * 1_000, () => 'missing', {
+          staleByDeviceAndLease: { minimumLeaseExpiredMs: 60 * 60 * 1_000 }
+        }))
+      recovered.release()
+    })
+
+    it('不放宽 active-owner：同 boot 且 owner 进程存活时，即使 deviceId 相同、墙钟显示过期 30 天也不抢', async () => {
+      await incidentLock({ bootIdentity: () => 'boot-a', hostIdentity: () => oldHost })
+      await expect(acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        leaseOptions(202, (pid) => pid === 76437 ? 'start-76437' : 'start-202', {
+          bootIdentity: () => 'boot-a',
+          hostIdentity: () => oldHost,
+          now: () => incidentAt + 30 * dayMs,
+          timeoutMs: 5,
+          pollMs: 1
+        }))).rejects.toMatchObject({ reason: 'active-owner' })
+    })
+
+    it('legacy v1 owner 不享受第二证据，仍是 unverifiable-owner', async () => {
+      const lockDir = path.join(root, '.swob', 'locks', 'library-writer')
+      fs.mkdirSync(lockDir, { recursive: true })
+      fs.writeFileSync(path.join(lockDir, 'legacy.owner.json'), JSON.stringify({
+        schemaVersion: 1,
+        ownerNonce: 'legacy',
+        deviceId: 'this-install',
+        pid: 76437,
+        bootIdentity: 'boot-0904',
+        processStartFingerprint: 'start-76437',
+        mode: 'maintenance',
+        acquiredAt: '2026-09-04T01:00:00.000Z',
+        heartbeatAt: '2026-09-04T01:00:00.000Z',
+        leaseExpiresAt: '2026-09-04T01:00:15.000Z'
+      }))
+      await expect(acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRegeneration(Date.parse('2026-09-27T16:45:00.000Z'), () => 'missing')))
+        .rejects.toMatchObject({ reason: 'unverifiable-owner' })
+    })
+
+    it('验收③：宿主身份目录被删后从备用副本恢复同一身份，本机旧锁仍被认作本机', async () => {
+      const machineHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-machine-home-'))
+      const previousTestHome = process.env.SWOB_TEST_HOME
+      process.env.SWOB_TEST_HOME = machineHome
+      try {
+        const runtimeIdentity = (pid: number, bootIdentity: string, alive: (candidate: number) => string | 'missing') => ({
+          pid,
+          bootIdentity: () => bootIdentity,
+          processStartFingerprint: alive,
+          eventSink: () => {}
+        })
+        // No hostIdentity seam: the real getOrCreateHostIdentity runs against the test machine paths.
+        orphans.push(await acquireLibraryWriterLease(root, 'this-install', 'maintenance', {
+          ...runtimeIdentity(101, 'boot-a', () => 'start-101'),
+          heartbeatMs: 60_000
+        }))
+        const identityPath = path.join(machineHome, '.swob-machine', 'host-identity-v1.json')
+        const backupPath = path.join(machineHome, '.claude-session-manager', 'host-identity-v1.json')
+        const identityBefore = fs.readFileSync(identityPath, 'utf8')
+        expect(fs.existsSync(backupPath)).toBe(true)
+
+        // The incident: the shared identity directory disappears and the machine reboots.
+        fs.rmSync(path.dirname(identityPath), { recursive: true, force: true })
+
+        const recovered = await acquireLibraryWriterLease(root, 'this-install', 'move', {
+          ...runtimeIdentity(202, 'boot-b', (pid) => pid === 202 ? 'start-202' : 'start-101'),
+          // Prove it is the restored host proof, not the second evidence.
+          staleByDeviceAndLease: { enabled: false },
+          timeoutMs: 50,
+          pollMs: 1
+        })
+        expect(fs.readFileSync(identityPath, 'utf8')).toBe(identityBefore)
+        recovered.release()
+      } finally {
+        if (previousTestHome === undefined) delete process.env.SWOB_TEST_HOME
+        else process.env.SWOB_TEST_HOME = previousTestHome
+        fs.rmSync(machineHome, { recursive: true, force: true })
+      }
+    })
+
+    it('测试环境下 host identity 备用副本解析到测试 HOME，生产解析到状态目录', () => {
+      expect(resolveLibraryWriterHostIdentityBackupPath('darwin', { NODE_ENV: 'test', SWOB_TEST_HOME: root }))
+        .toBe(path.join(root, '.claude-session-manager', 'host-identity-v1.json'))
+      expect(resolveLibraryWriterHostIdentityBackupPath('darwin', { NODE_ENV: 'production', HOME: '/tmp/profile-a', SWOB_TEST_HOME: root }))
+        .toBe('/tmp/profile-a/.claude-session-manager/host-identity-v1.json')
+    })
+  })
 })
+

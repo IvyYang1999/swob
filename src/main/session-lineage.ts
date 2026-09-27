@@ -383,7 +383,11 @@ export interface LineageRegistryWriteOptions {
 export interface LineageRegistryWriteResult {
   /** null when there was no registry file to replace. */
   readonly check: LineageRegistryReplacementCheck | null
-  /** The byte-for-byte copy of the replaced file, in the backup directory. */
+  /**
+   * The byte-for-byte copy of the replaced file in the backup directory:
+   * written by this call, or the newest backup when it already held exactly
+   * these bytes (a replacement retried after failing past its backup).
+   */
   readonly backupFileName: string | null
 }
 
@@ -397,10 +401,13 @@ export function defaultLineageBackupDirectory(): string {
  * replaces an existing one only when it could read it, it is still what the
  * caller's rebuild saw (`expected`), the new registry loses no alias key, no
  * resolution and no manual relation (see checkLineageRegistryReplacement),
- * and a byte-for-byte copy is on disk outside the Library. The replacement
- * is atomic: a temporary file in the same directory, fsync, rename.
- * Anything else throws LineageRegistryWriteRefusedError with the file as it
- * was.
+ * and a byte-for-byte copy is on disk outside the Library before anything
+ * else is written: this call writes it, unless the newest backup already
+ * holds exactly these bytes, so a replacement that keeps failing past its
+ * backup (a read-only Library, a busy rename) leaves one copy, not one per
+ * try. The replacement is atomic: a temporary file in the same directory,
+ * fsync, rename. Anything else throws LineageRegistryWriteRefusedError with
+ * the file as it was.
  */
 export function writeSessionLineageRegistry(
   registry: SessionLineageRegistry,
@@ -435,10 +442,36 @@ export function writeSessionLineageRegistry(
         { check }
       )
     }
-    backupFileName = backupLineageRegistry(current.bytes, options.backupDirectory || defaultLineageBackupDirectory())
+    const backupDirectory = options.backupDirectory || defaultLineageBackupDirectory()
+    backupFileName = newestIdenticalBackup(backupDirectory, current.bytes) ??
+      backupLineageRegistry(current.bytes, backupDirectory)
   }
   replaceLineageRegistryFile(filePath, JSON.stringify(registry, null, 2) + '\n', current)
   return { check, backupFileName }
+}
+
+const BACKUP_FILE_NAME = /^session-lineage-.+\.json$/
+
+/**
+ * The newest backup in `directory` (by modification time) when it already
+ * holds exactly `bytes`; null when there is none, it differs, or the
+ * directory cannot be read (the backup is then written, or fails, as usual).
+ * Symbolic links are never followed.
+ */
+function newestIdenticalBackup(directory: string, bytes: Buffer): string | null {
+  try {
+    let newest: { name: string; mtimeMs: number } | null = null
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !BACKUP_FILE_NAME.test(entry.name)) continue
+      const { mtimeMs } = fs.lstatSync(path.join(directory, entry.name))
+      if (!newest || mtimeMs > newest.mtimeMs || (mtimeMs === newest.mtimeMs && entry.name > newest.name)) {
+        newest = { name: entry.name, mtimeMs }
+      }
+    }
+    return newest && fs.readFileSync(path.join(directory, newest.name)).equals(bytes) ? newest.name : null
+  } catch {
+    return null
+  }
 }
 
 function createBackupFile(directory: string): { descriptor: number; filePath: string } {

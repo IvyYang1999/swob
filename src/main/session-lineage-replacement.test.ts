@@ -65,14 +65,17 @@ function writeRaw(filePath: string, content: string | object): Buffer {
   return bytes
 }
 
-function refusal(run: () => unknown): { code?: string; reason?: string; check?: any } {
+function refusal(run: () => unknown): { code?: string; readCode?: string; check?: any } {
   try {
     run()
   } catch (error) {
-    return error as { code?: string; reason?: string; check?: any }
+    return error as { code?: string; readCode?: string; check?: any }
   }
   throw new Error('expected the replacement to be refused')
 }
+
+/** Denying writes to a directory needs POSIX permissions and a non-root user. */
+const permissionIt = process.platform !== 'win32' && process.getuid?.() !== 0 ? it : it.skip
 
 function leftovers(directory: string): string[] {
   return fs.readdirSync(directory).filter((name) => name.endsWith('.tmp'))
@@ -188,6 +191,16 @@ describe('F1d-2 lineage registry replacement guard', () => {
     // Replaced by a rename, never rewritten in place.
     expect(fs.statSync(registryPath).ino).not.toBe(inode)
     expect(leftovers(library)).toEqual([])
+
+    // A later replacement of other bytes gets its own copy: only identical bytes are not copied twice.
+    const replaced = fs.readFileSync(registryPath)
+    const again = lineage.writeSessionLineageRegistry(
+      registry({ ...next, generatedAt: '2026-08-03T00:00:00.000Z' }), registryPath, { backupDirectory: backups }
+    )
+    expect(again.backupFileName).not.toBe(result.backupFileName)
+    expect(listing(backups)).toEqual([result.backupFileName, again.backupFileName].sort())
+    expect(fs.readFileSync(path.join(backups, again.backupFileName!)).equals(replaced)).toBe(true)
+    expect(fs.readFileSync(path.join(backups, result.backupFileName!)).equals(before)).toBe(true)
   })
 
   it('creates a missing registry without a backup, and keeps its default backups in the state directory', () => {
@@ -240,6 +253,76 @@ describe('F1d-2 lineage registry replacement guard', () => {
     expect(error.code).toBe('LINEAGE_REGISTRY_ENTRIES_LOST')
     expect(error.check.lostManualRelations).toEqual(['continuation:f1d2-parent->f1d2-child'])
     expect(fs.readFileSync(registryPath).equals(before)).toBe(true)
+  })
+
+  it('refuses when the backup cannot be written: LINEAGE_REGISTRY_BACKUP_FAILED, the old file byte for byte, no temporary file', () => {
+    const { registryPath, library } = fixture('backup-failed')
+    const before = writeRaw(registryPath, registry({ aliases: { 'f1d2-old-a': 'f1d2-latest' } }))
+    // The backup directory's parent is a regular file: the directory can never be created.
+    const blocker = path.join(path.dirname(library), 'state-is-a-file')
+    fs.writeFileSync(blocker, 'not a directory\n')
+    const next = registry({ aliases: { 'f1d2-old-a': 'f1d2-latest', 'f1d2-old-b': 'f1d2-latest' } })
+
+    const error = refusal(() => lineage.writeSessionLineageRegistry(next, registryPath, {
+      backupDirectory: path.join(blocker, 'lineage-backups')
+    }))
+    expect(error.code).toBe('LINEAGE_REGISTRY_BACKUP_FAILED')
+    expect(error.readCode).toEqual(expect.any(String))
+    expect(fs.readFileSync(registryPath).equals(before)).toBe(true)
+    expect(leftovers(library)).toEqual([])
+  })
+
+  it('refuses to replace a registry whose aliases are not an object', () => {
+    const { registryPath, backups, library } = fixture('aliases-array')
+    const before = writeRaw(registryPath, { ...registry(), aliases: ['f1d2-old-a'] })
+    expect(lineage.readLineageRegistrySnapshot(registryPath)).toEqual({ state: 'unreadable', code: 'invalid-aliases' })
+
+    const error = refusal(() => lineage.writeSessionLineageRegistry(registry(), registryPath, { backupDirectory: backups }))
+    expect(error).toMatchObject({ code: 'LINEAGE_REGISTRY_UNREADABLE', readCode: 'invalid-aliases' })
+    expect(fs.readFileSync(registryPath).equals(before)).toBe(true)
+    expect(listing(backups)).toEqual([])
+    expect(leftovers(library)).toEqual([])
+  })
+
+  it('counts an old resolution it cannot parse as lost and refuses', () => {
+    const { registryPath, backups } = fixture('bad-resolution')
+    // No decidedAt: parseResolution cannot read it, so a rebuild would drop it.
+    const before = writeRaw(registryPath, { ...registry(), resolutions: [
+      { ambiguitySessionId: 'f1d2-child', parentSessionId: 'f1d2-parent', childSessionId: 'f1d2-child', type: 'fork' }
+    ] })
+
+    const error = refusal(() => lineage.writeSessionLineageRegistry(registry(), registryPath, { backupDirectory: backups }))
+    expect(error.code).toBe('LINEAGE_REGISTRY_ENTRIES_LOST')
+    expect(error.check).toMatchObject({ lostResolutions: ['#0'], lostAliases: [], lostManualRelations: [] })
+    expect(fs.readFileSync(registryPath).equals(before)).toBe(true)
+    expect(listing(backups)).toEqual([])
+  })
+
+  permissionIt('keeps one backup however often a replacement fails after it (a read-only Library, three tries)', () => {
+    const { registryPath, backups, library } = fixture('retry')
+    const before = writeRaw(registryPath, registry({ aliases: { 'f1d2-old-a': 'f1d2-latest' } }))
+    const next = registry({ aliases: { 'f1d2-old-a': 'f1d2-latest', 'f1d2-old-b': 'f1d2-latest' } })
+    fs.chmodSync(library, 0o555)
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const error = refusal(() => lineage.writeSessionLineageRegistry(next, registryPath, { backupDirectory: backups }))
+        expect(error.code).toBe('EACCES')
+      }
+    } finally {
+      fs.chmodSync(library, 0o755)
+    }
+    expect(fs.readFileSync(registryPath).equals(before)).toBe(true)
+    expect(leftovers(library)).toEqual([])
+    // The first try's copy (the backup precedes the rename), and no second one.
+    const saved = listing(backups)
+    expect(saved).toHaveLength(1)
+    expect(fs.readFileSync(path.join(backups, saved[0])).equals(before)).toBe(true)
+
+    // Writable again: the replacement goes through and names that same copy.
+    const result = lineage.writeSessionLineageRegistry(next, registryPath, { backupDirectory: backups })
+    expect(result.backupFileName).toBe(saved[0])
+    expect(listing(backups)).toEqual(saved)
+    expect(JSON.parse(fs.readFileSync(registryPath, 'utf8'))).toEqual(next)
   })
 
   it('stamps a rebuild with its summary-cache version, and lets a stale resolution drop only its own alias', async () => {

@@ -152,6 +152,15 @@ describe('F1d-2 deterministic startup rebuild (planStartupCacheRebuild evaluated
     ])
   })
 
+  it('a search index that does not exist is not reported as unreadable, and does not trigger', () => {
+    const planner = startupPlanner(CURRENT, null, false)
+    expect(planner.plan).not.toBeNull()
+    expect(planner.plan!()).toBeNull()
+    expect(planner.fs.existsSync).toHaveBeenCalledWith('/fixtures/f1d2-state/search.db')
+    expect(planner.startupProjectionGate.prepareStartup).not.toHaveBeenCalled()
+    expect(planner.writeLifecycleLog).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['both current', CURRENT, { legacyRows: 4, staleLegacyRows: 0 }, []],
     ['summary cache of another version', STALE, { legacyRows: 4, staleLegacyRows: 0 }, ['summary-cache-version']],

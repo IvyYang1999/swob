@@ -24,7 +24,7 @@
 - **Cursor 会话的工作目录改为按转录线索、并经 Cursor 自己的记录确认**：工作目录改为按转录里的线索确定，并用 Cursor 自己的 `chats/<md5(路径)>/` 记录确认。本机实测 35 场会话的工作目录随之变化，桌面端的项目分组和 Insights 里 29 个项目名的归属也跟着变。目录已删除的会话保留线索里的路径。
 - **Insights 不再因为会话本轮缺席而删除用量与估值历史**：某些会话本轮读不到时（缓存重置、SQLite 探测失败、provider 未就绪），它们的用量行和估值历史原来会被删掉；现在保留，大批量或整源消失要等下一次独立加载确认后才删除。
 - **升级后第一次启动在启动阶段就重建搜索索引**：摘要缓存或搜索索引是旧版本写的时，启动阶段自己的全量投影会逐个文件重投影搜索索引（并刷新 Insights），即使没有 Library 会话变化，不再等之后碰巧来的某次全量刷新。`~/.claude-session-manager/lifecycle.log` 记下 `cache-rebuild-started` 与 `cache-rebuild-finished`（原因、计数、耗时，不含路径）。两份缓存都是当前版本时，启动不做额外的事。
-- **血统注册表升级后重建一次，且不以丢失已有内容为代价**：Library 里的 `.session-lineage.json` 是旧会话别名和手工血统裁决唯一的存放处。新版本第一次加载完成后，旧版本建的注册表在后台重建一次：先把旧文件原样备份到 `~/.claude-session-manager/lineage-backups/`，再原子写入新文件；重建若会丢掉别名或裁决就拒绝替换（裁决已无法应用时，它对应的别名会去掉并记日志）。存在但读不出的注册表不再被新建的覆盖；以前文件损坏或读不出时会被悄悄换掉，别名随之丢失。`swob lineage` 遵循同样的规则，拒绝时退出码为 1，错误码为 `LINEAGE_REGISTRY_UNREADABLE`、`LINEAGE_REGISTRY_ENTRIES_LOST`、`LINEAGE_REGISTRY_CHANGED` 或 `LINEAGE_REGISTRY_BACKUP_FAILED`，文件保持不变。
+- **血统注册表升级后重建一次，不以别名和裁决为代价**：Library 里的 `.session-lineage.json` 是旧会话别名和手工血统裁决唯一的存放处。新版本第一次加载完成后，旧版本建的注册表在后台重建一次：先把旧文件原样备份到 `~/.claude-session-manager/lineage-backups/`（替换失败重试时沿用这一份），再原子写入新文件；重建若会丢掉别名或裁决就拒绝替换（裁决已无法应用时，它对应的别名会去掉并记日志）。Swob 自动识别的血统关系（relations）按当前源文件重算，可能随之变化，旧文件留在备份里。存在但读不出的注册表不再被新建的覆盖；以前文件损坏或读不出时会被悄悄换掉，别名随之丢失。`swob lineage` 遵循同样的规则，拒绝时退出码为 1，错误码为 `LINEAGE_REGISTRY_UNREADABLE`、`LINEAGE_REGISTRY_ENTRIES_LOST`、`LINEAGE_REGISTRY_CHANGED` 或 `LINEAGE_REGISTRY_BACKUP_FAILED`，文件保持不变。
 
 ## v1.4.0 — 2026-08-08
 

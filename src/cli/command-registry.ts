@@ -111,6 +111,7 @@ Swob 管理 Claude Code、Codex、Cursor 等 AI 编程助手的会话。Agent �
 - 带 \`--json\` 的命令，stdout 只包含一个合法 JSON 值；日志与警告只写 stderr。
 - \`show --format=jsonl\` 的 stdout 每行是一个独立 JSON 事件。
 - \`insights\` 的 token 汇总指标名为 \`billing_total\`：非缓存输入 + cache creation/read + 输出（计费口径）。
+- \`insights\` 的合计按计费事实全局去重，与桌面端 Insights 页同一口径；\`bySession\` 逐会话，两场会话共有的调用各计一次，与合计的差额见 \`reconciliation.crossSessionDuplicateFacts\`、\`crossSessionDuplicateTokens\` 与 \`reconciliation.valuation.crossSessionDuplicateUsd\`。
 - \`list\`、\`search\` 的 \`tokens\` 指标名为 \`input_plus_output\`：非缓存输入 + 输出，不包含 cache creation/read。
 - 批量 move/rename 接受 JSONL，也兼容一个 JSON 数组；整批先校验再提交。
 

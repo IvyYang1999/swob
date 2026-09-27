@@ -14,6 +14,7 @@ import {
   type Valuation
 } from './token-valuation'
 import { usageFactsForSession } from './usage-fact-store'
+import type { UsageFact } from './analysis-contract'
 import {
   BUILTIN_PROVIDER_DEFINITIONS,
   valuationCapabilityForSource,
@@ -143,13 +144,20 @@ export interface InsightsData {
   reconciliation: {
     global: number
     projects: number
+    /** Σ bySession: per session, so a billing fact two sessions share counts in both. */
     sessions: number
+    /** Owners whose billing fact counts in another session (parsed sessions; a fact in n sessions adds n − 1). */
+    crossSessionDuplicateFacts: number
+    /** Their tokens, in usage-available sessions only, the scope of global. */
+    crossSessionDuplicateTokens: number
     difference: number
     ok: boolean
     valuation: {
       globalUsd: number | null
       sessionsUsd: number | null
       uniqueEventsUsd: number | null
+      /** Those owners valued one by one (parsed sessions), a missing amount as 0. */
+      crossSessionDuplicateUsd: number
       difference: number
       coverageDifference: number
       ok: boolean
@@ -238,6 +246,209 @@ function accountingInput(accounting: TokenAccounting): number {
     : 0
 }
 
+/**
+ * One billing owner's UsageFact, cut down to what outlives the session it came
+ * from: the keys of usage-facts' billing_rank, and what the day, hour and
+ * unknown-time rollups add up. Whole facts (valuation history, pricing trace)
+ * are not kept across sessions.
+ */
+interface OwnerFact {
+  agentScope: UsageFact['agentScope']
+  occurredAt: string | null
+  eventId: string
+  occurredDay: string
+  occurredHour: number | null
+  nonCachedInputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  outputTokens: number
+  callCount: number
+  turnCount: number
+}
+
+function ownerFact(fact: UsageFact): OwnerFact {
+  return {
+    agentScope: fact.agentScope,
+    occurredAt: fact.occurredAt,
+    eventId: fact.eventId,
+    occurredDay: fact.occurredDay,
+    occurredHour: fact.occurredHour,
+    nonCachedInputTokens: fact.nonCachedInputTokens,
+    cacheReadTokens: fact.cacheReadTokens,
+    cacheWriteTokens: fact.cacheWriteTokens,
+    outputTokens: fact.outputTokens,
+    callCount: fact.callCount,
+    turnCount: fact.turnCount
+  }
+}
+
+function scopeRank(scope: UsageFact['agentScope']): number {
+  return scope === 'main' ? 0 : scope === 'subagent' ? 1 : 2
+}
+
+/**
+ * Whether `a` comes before `b` in usage-facts' billing_rank, which picks the
+ * copy of a billing fact that aggregates count (canonicalizeBillingFacts in
+ * usage-fact-store.ts): main, then subagent, then any other scope; timestamped
+ * before untimed; then occurred_at, then event_id. SQLite orders those two as
+ * TEXT, byte by byte, so compare the raw strings: "…12:00:00.000Z" comes before
+ * "…12:00:00Z", although both are the same instant.
+ */
+function precedesInBillingRank(a: OwnerFact, b: OwnerFact): boolean {
+  const scope = scopeRank(a.agentScope) - scopeRank(b.agentScope)
+  if (scope !== 0) return scope < 0
+  if ((a.occurredAt === null) !== (b.occurredAt === null)) return b.occurredAt === null
+  if (a.occurredAt !== b.occurredAt) return a.occurredAt! < b.occurredAt!
+  return a.eventId < b.eventId
+}
+
+interface SessionLedger {
+  accounting: TokenAccounting
+  parsed: boolean
+  /** uniqueBillingEvents(accounting.usageEvents): one owner per billing fact within the session. */
+  owners: UsageEvent[]
+  /** facts[i] is owners[i]'s usage fact (parsed sessions only). */
+  facts: OwnerFact[]
+  /** Indexes into owners whose billing fact counts in another session. */
+  lost?: Set<number>
+}
+
+/**
+ * The cross-session pass. One billing fact can reach two sessions (a transcript
+ * that carries calls another session also recorded). usage-facts, and so the
+ * Insights page, counts it once by billing_fact_id, in the copy billing_rank
+ * puts first; the global rollups do the same. Within a session the owners are
+ * uniqueBillingEvents' as before; across sessions they compete by the
+ * billingFactId usageFactsForSession derives. That id is session-scoped when a
+ * call has no billingFactKey (legacy aggregates, the old Codex session total,
+ * Claude rows without an id), so those calls never merge across sessions.
+ *
+ * A losing copy is recorded by session and owner index, never by event object:
+ * two sessions can share one ledger object, and dropping the object would drop
+ * both copies. Only slim owner facts are kept, and usageFactsForSession runs
+ * once per session.
+ */
+function sessionLedgers(sessions: SessionSummary[]): SessionLedger[] {
+  const ledgers: SessionLedger[] = []
+  const winners = new Map<string, { session: number; owner: number }>()
+  for (const session of sessions) {
+    const accounting = accountingForSession(session)
+    const parsed = sessionHasParsedTranscript(session)
+    const ledger: SessionLedger = {
+      accounting,
+      parsed,
+      owners: parsed ? uniqueBillingEvents(accounting.usageEvents) : [],
+      facts: []
+    }
+    const sessionIndex = ledgers.push(ledger) - 1
+    if (!parsed) continue
+    // Facts map accounting.usageEvents one to one, copies included. Align by
+    // index, not by object: a legacy session's accounting is rebuilt on every
+    // accountingForSession call, usageFactsForSession's own included.
+    const usageFacts = usageFactsForSession(session)
+    const eventIndex = new Map(accounting.usageEvents.map((event, index) => [event, index] as const))
+    ledger.owners.forEach((owner, ownerIndex) => {
+      const usageFact = usageFacts[eventIndex.get(owner)!]
+      const fact = ownerFact(usageFact)
+      ledger.facts.push(fact)
+      const winner = winners.get(usageFact.billingFactId)
+      if (!winner) {
+        winners.set(usageFact.billingFactId, { session: sessionIndex, owner: ownerIndex })
+      } else if (precedesInBillingRank(fact, ledgers[winner.session].facts[winner.owner])) {
+        (ledgers[winner.session].lost ??= new Set()).add(winner.owner)
+        winners.set(usageFact.billingFactId, { session: sessionIndex, owner: ownerIndex })
+      } else {
+        (ledger.lost ??= new Set()).add(ownerIndex)
+      }
+    })
+  }
+  return ledgers
+}
+
+/** A session's share of the global token totals. */
+interface CountedUsage {
+  tokens: number
+  conversationOnly: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  /** What tokens leaves out: the session's copies that count in another session. */
+  duplicateTokens: number
+}
+
+/** The session's ledger less its owners whose billing fact counts in another session. */
+function countedUsage(ledger: SessionLedger): CountedUsage {
+  const { accounting, facts, lost } = ledger
+  const components = accounting.components!
+  const usage: CountedUsage = {
+    tokens: accounting.billingTotal!,
+    conversationOnly: accounting.conversationOnly || 0,
+    input: accountingInput(accounting),
+    output: components.outputTokens,
+    cacheRead: components.cacheReadTokens,
+    cacheWrite: totalCacheWriteTokens(components),
+    duplicateTokens: 0
+  }
+  for (const ownerIndex of lost ?? []) {
+    const fact = facts[ownerIndex]
+    const input = fact.nonCachedInputTokens + fact.cacheReadTokens + fact.cacheWriteTokens
+    const tokens = input + fact.outputTokens
+    usage.duplicateTokens += tokens
+    usage.tokens -= tokens
+    if (fact.agentScope === 'main') usage.conversationOnly -= tokens
+    usage.input -= input
+    usage.output -= fact.outputTokens
+    usage.cacheRead -= fact.cacheReadTokens
+    usage.cacheWrite -= fact.cacheWriteTokens
+  }
+  return usage
+}
+
+type CoverageSide = Pick<Valuation, 'coveragePercent' | 'coveredTokens' | 'totalBillableTokens'>
+
+/** What the valuation reconciliation compares; a null amount counts as 0. */
+export interface ValuationReconciliationInput {
+  /** valuation.usd: the global owners, summed per session. */
+  globalUsd: number | null
+  /** Σ bySession valuation.usd: per session, cross-session copies included. */
+  sessionsUsd: number | null
+  /** The global owners valued one by one and summed flat. */
+  uniqueEventsUsd: number | null
+  /** The copies that count in another session, valued one by one. */
+  crossSessionDuplicateUsd: number
+  global: CoverageSide
+  uniqueEvents: CoverageSide
+}
+
+/**
+ * The valuation reconciliation verdict. The global total must equal the flat
+ * sum over the same owners, and with the cross-session copies added back it
+ * must equal the per-session sum. Each pair adds the same amounts in another
+ * order, so their last bits differ at real scale (1 ULP is already above
+ * 1e-12 from $8,192): USD gets 1e-9 of the larger total. Coverage stays exact:
+ * the covered and billable token counts must be equal, which also catches a
+ * difference at 0% or 100% coverage, and the percentages within 1e-9 points.
+ */
+export function valuationReconciliationVerdict(input: ValuationReconciliationInput): {
+  difference: number
+  coverageDifference: number
+  ok: boolean
+} {
+  const globalUsd = input.globalUsd ?? 0
+  const sessionsUsd = input.sessionsUsd ?? 0
+  const difference = Math.max(
+    Math.abs(globalUsd - (input.uniqueEventsUsd ?? 0)),
+    Math.abs(globalUsd + input.crossSessionDuplicateUsd - sessionsUsd)
+  )
+  const coverageDifference = Math.abs(input.global.coveragePercent - input.uniqueEvents.coveragePercent)
+  const ok = difference <= 1e-9 * Math.max(1, Math.abs(sessionsUsd), Math.abs(globalUsd)) &&
+    coverageDifference <= 1e-9 &&
+    input.global.coveredTokens === input.uniqueEvents.coveredTokens &&
+    input.global.totalBillableTokens === input.uniqueEvents.totalBillableTokens
+  return { difference, coverageDifference, ok }
+}
+
 const THIRTY_MINUTES = 30 * 60 * 1000
 
 /** Adjacent message gaps are accumulated, with idle gaps over 30 minutes excluded. */
@@ -298,8 +509,20 @@ export function buildInsights(
   const modelMap = new Map<string, { totalTokens: number; sessionIds: Set<string> }>()
   const toolAgg = new Map<string, number>()
   const bySession: InsightsData['bySession'] = []
+  const ledgers = sessionLedgers(rollupSessions)
+  // Per rollup session: its share of the global token totals, null when its
+  // usage is unavailable. byFolder reads it too.
+  const countedUsages: Array<CountedUsage | null> = []
   const sessionValuations: Valuation[] = []
-  const uniqueValuationEvents = new Map<string, UsageEvent>()
+  // The global valuation's per-session parts: a session that lost copies is
+  // revalued from the owners it keeps, any other reuses its own valuation, so
+  // without cross-session copies the total is bit for bit what it was.
+  const countedValuations: Valuation[] = []
+  // The reconciliation's per-event oracle: every global owner, in one flat list.
+  const ownerEvents: UsageEvent[] = []
+  let crossSessionDuplicateFacts = 0
+  let crossSessionDuplicateTokens = 0
+  let crossSessionDuplicateUsd = 0
   const hourly = new Array(24).fill(0) as number[]
   const turnBuckets = [0, 0, 0, 0, 0, 0]
   let totalTokens = 0
@@ -319,26 +542,28 @@ export function buildInsights(
   let unknownTimeEvents = 0
   let unknownTimeTokens = 0
 
-  for (const session of rollupSessions) {
+  for (const [sessionIndex, session] of rollupSessions.entries()) {
     const source = session.source || 'claude-code'
-    const parsed = sessionHasParsedTranscript(session)
-    const accounting = accountingForSession(session)
-    const facts = parsed ? usageFactsForSession(session) : []
+    const ledger = ledgers[sessionIndex]
+    const { accounting, parsed, owners, facts, lost } = ledger
     const available = sessionHasAuthoritativeUsage(session) && accounting.billingTotal !== null && accounting.components !== null
-    const input = available ? accountingInput(accounting) : 0
-    const output = available ? accounting.components!.outputTokens : 0
-    const tokens = available ? accounting.billingTotal! : 0
+    const usage = available ? countedUsage(ledger) : null
+    countedUsages.push(usage)
     const sessionValuation = valuationForAccounting(accounting)
     const { project, fullPath } = getProjectFromCwds(session.cwds)
 
     if (parsed) {
       parsedSessionCount++
       sessionValuations.push(sessionValuation)
-      // The billing owners valuationForAccounting values: a forked child's copy
-      // shares its parent's keys and must not replace the parent's event here.
-      for (const event of uniqueBillingEvents(accounting.usageEvents)) {
-        uniqueValuationEvents.set(`${session.sessionId}:${event.billingFactKey || event.dedupKey}`, event)
+      // owners are the billing owners valuationForAccounting values: a forked
+      // child's copy shares its parent's keys and never replaces its event.
+      const kept = lost ? owners.filter((_, index) => !lost.has(index)) : owners
+      countedValuations.push(lost ? aggregateValuations(kept.map((event) => valueUsageEvent(event))) : sessionValuation)
+      for (const event of kept) ownerEvents.push(event)
+      for (const ownerIndex of lost ?? []) {
+        crossSessionDuplicateUsd += valueUsageEvent(owners[ownerIndex]).usd ?? 0
       }
+      crossSessionDuplicateFacts += lost?.size ?? 0
       bySession.push({
         sessionId: session.sessionId,
         projectPath: fullPath,
@@ -410,37 +635,36 @@ export function buildInsights(
     // inventory, but never enter usage/turn/session statistical denominators.
     if (!parsed) continue
 
-    if (available) {
+    if (usage) {
       tokenAvailableSessions++
       sourceStats.tokenAvailableSessions++
       projectStats.tokenAvailableSessions++
       sourceStats.usageAvailableSessionCount++
       projectStats.usageAvailableSessionCount++
-      totalTokens += tokens
-      conversationOnlyTokens += accounting.conversationOnly || 0
-      totalInputTokens += input
-      totalOutputTokens += output
-      totalCacheRead += accounting.components!.cacheReadTokens
-      totalCacheCreate += totalCacheWriteTokens(accounting.components!)
-      sourceStats.totalTokens += tokens
-      sourceStats.inputTokens += input
-      sourceStats.outputTokens += output
-      projectStats.totalTokens += tokens
-      projectStats.inputTokens += input
-      projectStats.outputTokens += output
+      totalTokens += usage.tokens
+      crossSessionDuplicateTokens += usage.duplicateTokens
+      conversationOnlyTokens += usage.conversationOnly
+      totalInputTokens += usage.input
+      totalOutputTokens += usage.output
+      totalCacheRead += usage.cacheRead
+      totalCacheCreate += usage.cacheWrite
+      sourceStats.totalTokens += usage.tokens
+      sourceStats.inputTokens += usage.input
+      sourceStats.outputTokens += usage.output
+      projectStats.totalTokens += usage.tokens
+      projectStats.inputTokens += usage.input
+      projectStats.outputTokens += usage.output
 
       // Billing owners only, the calls totalTokens counts: a forked child's
-      // copy of its parent's call would add that call again under a model.
-      const eventsWithModels = uniqueBillingEvents(accounting.usageEvents)
-        .filter((event) => event.modelCanonical || event.modelRaw)
-      if (eventsWithModels.length > 0) {
-        for (const event of eventsWithModels) {
-          const model = event.modelCanonical || normalizeModelName(event.modelRaw!)
-          const entry = modelMap.get(model) || { totalTokens: 0, sessionIds: new Set<string>() }
-          entry.totalTokens += processedTotal(event.components)
-          entry.sessionIds.add(session.sessionId)
-          modelMap.set(model, entry)
-        }
+      // copy of its parent's call would add that call again under a model, and
+      // so would a copy whose billing fact counts in another session.
+      for (const [ownerIndex, event] of owners.entries()) {
+        if (lost?.has(ownerIndex) || !(event.modelCanonical || event.modelRaw)) continue
+        const model = event.modelCanonical || normalizeModelName(event.modelRaw!)
+        const entry = modelMap.get(model) || { totalTokens: 0, sessionIds: new Set<string>() }
+        entry.totalTokens += processedTotal(event.components)
+        entry.sessionIds.add(session.sessionId)
+        modelMap.set(model, entry)
       }
     } else {
       tokenUnavailableSessions++
@@ -471,27 +695,35 @@ export function buildInsights(
     totalTime += estimatedTime
 
     const factDays = new Map<string, number>()
-    // facts map accounting.usageEvents one to one, copies included. Keep the
-    // billing owners' facts only, so byDate, heatmap, hourly and unknown-time
-    // usage add up to totalTokens. Align by index, not by object: a legacy
-    // session's accounting is rebuilt on every accountingForSession call.
-    const eventIndex = new Map(accounting.usageEvents.map((event, index) => [event, index] as const))
-    const ownerFacts = uniqueBillingEvents(accounting.usageEvents).map((event) => facts[eventIndex.get(event)!])
-    for (const fact of ownerFacts) {
+    // Billing owners' facts only, so byDate, heatmap, hourly and unknown-time
+    // usage add up to totalTokens; a copy whose billing fact counts in another
+    // session adds nothing either. The session was still active on that copy's
+    // day, though: a day's session count and the session's time share follow
+    // all of the session's own owners.
+    for (const [ownerIndex, fact] of facts.entries()) {
+      const counted = !lost?.has(ownerIndex)
       const factInput = fact.nonCachedInputTokens + fact.cacheReadTokens + fact.cacheWriteTokens
       const factTokens = factInput + fact.outputTokens
       if (fact.occurredDay === 'unknown-time' || fact.occurredHour === null) {
-        unknownTimeEvents += fact.callCount
-        unknownTimeTokens += factTokens
+        if (counted) {
+          unknownTimeEvents += fact.callCount
+          unknownTimeTokens += factTokens
+        }
         continue
       }
 
-      hourly[fact.occurredHour] += fact.callCount
       let dateStats = dateMap.get(fact.occurredDay)
       if (!dateStats) {
         dateStats = emptyDateStats(fact.occurredDay)
         dateMap.set(fact.occurredDay, dateStats)
       }
+      const ids = dateSessionIds.get(fact.occurredDay) || new Set<string>()
+      ids.add(session.sessionId)
+      dateSessionIds.set(fact.occurredDay, ids)
+      factDays.set(fact.occurredDay, (factDays.get(fact.occurredDay) || 0) + fact.callCount)
+      if (!counted) continue
+
+      hourly[fact.occurredHour] += fact.callCount
       dateStats.totalTokens += factTokens
       dateStats.inputTokens += factInput
       dateStats.outputTokens += fact.outputTokens
@@ -501,10 +733,6 @@ export function buildInsights(
       for (const folderId of folderIdsBySession.get(session.sessionId) || []) {
         dateStats.byFolder[folderId] = (dateStats.byFolder[folderId] || 0) + factTokens
       }
-      const ids = dateSessionIds.get(fact.occurredDay) || new Set<string>()
-      ids.add(session.sessionId)
-      dateSessionIds.set(fact.occurredDay, ids)
-      factDays.set(fact.occurredDay, (factDays.get(fact.occurredDay) || 0) + fact.callCount)
     }
 
     // Active time has no request-level timestamp. Distribute it across the
@@ -547,24 +775,24 @@ export function buildInsights(
       tokenAvailableSessions: 0,
       tokenUnavailableSessions: 0
     }
-    for (const session of rollupSessions) {
+    for (const [sessionIndex, session] of rollupSessions.entries()) {
       if (!sessionIds.has(session.sessionId)) continue
-      const accounting = accountingForSession(session)
       stats.sessionCount++
       stats.detectedSessionCount++
-      if (!sessionHasParsedTranscript(session)) continue
+      if (!ledgers[sessionIndex].parsed) continue
       stats.parsedSessionCount++
       stats.turnCount += session.turnCount
-      if (!sessionHasAuthoritativeUsage(session) || accounting.billingTotal === null || !accounting.components) {
+      const usage = countedUsages[sessionIndex]
+      if (!usage) {
         stats.tokenUnavailableSessions++
         stats.usageUnavailableSessionCount++
         continue
       }
       stats.tokenAvailableSessions++
       stats.usageAvailableSessionCount++
-      stats.totalTokens += accounting.billingTotal
-      stats.inputTokens += accountingInput(accounting)
-      stats.outputTokens += accounting.components.outputTokens
+      stats.totalTokens += usage.tokens
+      stats.inputTokens += usage.input
+      stats.outputTokens += usage.output
     }
     folderMap.set(folder.id, stats)
   }
@@ -591,21 +819,18 @@ export function buildInsights(
   const activeDays = dateSessionIds.size
   const projectsTotal = byProject.reduce((sum, project) => sum + project.totalTokens, 0)
   const sessionsTotal = bySession.reduce((sum, session) => sum + (session.totalTokens || 0), 0)
-  const difference = Math.max(Math.abs(totalTokens - projectsTotal), Math.abs(totalTokens - sessionsTotal))
-  const valuation = aggregateValuations(sessionValuations)
-  const uniqueEventsValuation = aggregateValuations(
-    [...uniqueValuationEvents.values()].map((event) => valueUsageEvent(event))
+  // Σ bySession counts a cross-session copy in each of its sessions, totalTokens once.
+  const difference = Math.max(
+    Math.abs(totalTokens - projectsTotal),
+    Math.abs(totalTokens + crossSessionDuplicateTokens - sessionsTotal)
   )
+  const valuation = aggregateValuations(countedValuations)
+  const uniqueEventsValuation = aggregateValuations(ownerEvents.map((event) => valueUsageEvent(event)))
   const globalUsd = valuation.usd ?? null
   const sessionsUsd = sessionValuations.some((item) => item.usd !== undefined)
     ? sessionValuations.reduce((sum, item) => sum + (item.usd || 0), 0)
     : null
   const uniqueEventsUsd = uniqueEventsValuation.usd ?? null
-  const valuationDifference = Math.max(
-    Math.abs((globalUsd || 0) - (sessionsUsd || 0)),
-    Math.abs((globalUsd || 0) - (uniqueEventsUsd || 0))
-  )
-  const coverageDifference = Math.abs(valuation.coveragePercent - uniqueEventsValuation.coveragePercent)
 
   return {
     totalTokens,
@@ -634,19 +859,23 @@ export function buildInsights(
       global: totalTokens,
       projects: projectsTotal,
       sessions: sessionsTotal,
+      crossSessionDuplicateFacts,
+      crossSessionDuplicateTokens,
       difference,
       ok: difference === 0,
       valuation: {
         globalUsd,
         sessionsUsd,
         uniqueEventsUsd,
-        difference: valuationDifference,
-        coverageDifference,
-        // Per-session sums and the flat per-event sum add the same amounts in a
-        // different order, so their last bits differ at real scale (1 ULP is
-        // already above 1e-12 from $8,192). USD gets a tolerance relative to the
-        // total; coverage stays near-exact, both sides divide exact token sums.
-        ok: valuationDifference <= 1e-9 * Math.max(1, Math.abs(globalUsd || 0)) && coverageDifference <= 1e-9
+        crossSessionDuplicateUsd,
+        ...valuationReconciliationVerdict({
+          globalUsd,
+          sessionsUsd,
+          uniqueEventsUsd,
+          crossSessionDuplicateUsd,
+          global: valuation,
+          uniqueEvents: uniqueEventsValuation
+        })
       }
     },
     totalCacheReadTokens: totalCacheRead,

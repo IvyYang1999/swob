@@ -69,3 +69,24 @@ export function breakFullTextPages(filePath: string): number[] {
   breakPageHeaders(filePath, pages)
   return pages
 }
+
+/**
+ * Append pages no b-tree or freelist refers to and count them in the header
+ * (the index must be closed, checkpointed). Every query still works; only
+ * PRAGMA quick_check sees it ("Page N: never used"): damage no reader or
+ * writer ever trips over, that only the active check finds.
+ */
+export function addUnusedPages(filePath: string, count = 2): void {
+  const pageSize = pageSizeOf(filePath)
+  const descriptor = fs.openSync(filePath, 'r+')
+  try {
+    const header = Buffer.alloc(4)
+    fs.readSync(descriptor, header, 0, 4, 28)
+    const pages = header.readUInt32BE(0)
+    fs.writeSync(descriptor, Buffer.alloc(pageSize * count, 0), 0, pageSize * count, pages * pageSize)
+    header.writeUInt32BE(pages + count, 0)
+    fs.writeSync(descriptor, header, 0, 4, 28)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+}

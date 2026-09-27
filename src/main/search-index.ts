@@ -17,6 +17,7 @@ import {
 } from '../shared/chat-format'
 import { builtinProviderForId } from '../shared/provider-capabilities'
 import {
+  pruneProgramBackups,
   SEARCH_INDEX_COMPANION_SUFFIXES,
   searchIndexBackupDirectory,
   searchIndexBackupName
@@ -138,6 +139,8 @@ interface FileIdentity {
   readonly ino: number
 }
 
+export type SearchIndexFileIdentity = FileIdentity
+
 let database: Database.Database | null = null
 let databasePath = ''
 /** The file this thread's writer connection opened: a repair moves that file and no other (F1d-3). */
@@ -186,6 +189,11 @@ function fileIdentity(filePath: string): FileIdentity | null {
 
 function sameFile(left: FileIdentity | null, right: FileIdentity | null): boolean {
   return Boolean(left && right && left.dev === right.dev && left.ino === right.ino)
+}
+
+/** The file at search.db's path now (device and inode), or null without one. */
+export function searchIndexFileIdentity(): SearchIndexFileIdentity | null {
+  return fileIdentity(searchDatabasePath())
 }
 
 // --- F1d-3: a corrupt search.db is moved aside and rebuilt ---
@@ -306,7 +314,7 @@ interface SearchIndexRepairTrigger {
 }
 
 /** repaired: moved aside, empty index in place; replaced: another file is there already; refused: nothing moved. */
-type SearchIndexRepairResult = 'repaired' | 'replaced' | 'refused'
+export type SearchIndexRepairResult = 'repaired' | 'replaced' | 'refused'
 
 function syncDirectory(directory: string): void {
   try {
@@ -466,6 +474,15 @@ function repairCorruptSearchIndex(trigger: SearchIndexRepairTrigger): SearchInde
     rebuilt,
     ms: Date.now() - startedAt
   })
+  // Only a copy checked whole may retire the older one (program-backups.ts).
+  if (complete) {
+    try {
+      pruneProgramBackups({
+        log: (event, details) => emitSearchIndexEvent({ event, ...details }),
+        verifiedSearchIndexBackup: backupFileName
+      })
+    } catch { /* pruning is housekeeping: the repair stands */ }
+  }
   return 'repaired'
 }
 
@@ -841,11 +858,45 @@ function writeIndexedRawSource(
   return true
 }
 
-function serializeSynchronization(operation: string, work: () => Promise<void>): Promise<void> {
-  const run = (): Promise<void> => withSearchIndexRepair(operation, work)
-  const next = synchronizationTail.then(run, run)
+function serializeWork(work: () => Promise<void>): Promise<void> {
+  const next = synchronizationTail.then(work, work)
   synchronizationTail = next.catch(() => {})
   return next
+}
+
+function serializeSynchronization(operation: string, work: () => Promise<void>): Promise<void> {
+  return serializeWork(() => withSearchIndexRepair(operation, work))
+}
+
+/** What an integrity check of search.db found (PRAGMA quick_check, run only in the library worker). */
+export interface SearchIndexIntegrityOutcome {
+  /**
+   * ok: quick_check found nothing; repaired: it found the file corrupt, and
+   * the file was moved aside and rebuilt; corrupt: found corrupt, but the
+   * repair was refused (see repairCorruptSearchIndex); busy / error: no
+   * verdict; missing: no index to check.
+   */
+  readonly status: 'ok' | 'repaired' | 'corrupt' | 'busy' | 'error' | 'missing'
+  /** How long quick_check itself took. */
+  readonly ms: number
+  /** Lines quick_check reported other than "ok". */
+  readonly problems?: number
+  /** The SQLite code, or 'quick_check' when the check listed problems. */
+  readonly reason?: string
+}
+
+/**
+ * The repair after an integrity check found search.db corrupt (F1d-3): the
+ * same repair as a failed write, serialized with every write. `expected` is
+ * the file the check read, so a file put at the path since is never moved.
+ */
+export function repairSearchIndexAfterCheck(
+  check: { reason: string; expected: SearchIndexFileIdentity }
+): Promise<SearchIndexRepairResult> {
+  let result: SearchIndexRepairResult = 'refused'
+  return serializeWork(async () => {
+    result = repairCorruptSearchIndex({ operation: 'quick-check', reason: check.reason, expected: check.expected })
+  }).then(() => result)
 }
 
 export async function indexSearchSource(source: SearchIndexSource): Promise<void> {

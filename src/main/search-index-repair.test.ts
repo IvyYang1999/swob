@@ -317,6 +317,40 @@ describe('search.db repair (F1d-3)', () => {
     expect(backupSets()).toHaveLength(1)
   })
 
+  it('a later repair retires the earlier moved index only once its own copy is whole on disk (N = 1), logging each deletion before and after', async () => {
+    const all = await healthyIndex()
+    truncateSearchIndex(searchDatabasePath())
+    await synchronizeSearchSources(all)
+    const first = String(named('search-index-repaired')[0].backupFileName)
+    const firstFiles = backups()
+    expect(backupSets()).toEqual([first])
+    expect(events.filter((event) => event.event.startsWith('program-backup'))).toEqual([])
+
+    // A new writer (as after the worker is recycled) and a second corruption.
+    closeSearchIndex()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    overwriteSearchIndexHeader(searchDatabasePath())
+    events.length = 0
+    await synchronizeSearchSources(all)
+
+    const second = String(named('search-index-repaired')[0].backupFileName)
+    expect(second > first).toBe(true)
+    expect(named('search-index-repaired')[0]).toMatchObject({ complete: true })
+    expect(backupSets()).toEqual([second])
+    expect(backups().every((name) => name.startsWith(second))).toBe(true)
+    const pruning = events.filter((event) => event.event.startsWith('program-backup'))
+    expect(pruning).toHaveLength(firstFiles.length * 2)
+    for (const name of firstFiles) {
+      expect(pruning.filter((event) => event.fileName === name).map((event) => event.event), name)
+        .toEqual(['program-backup-deleting', 'program-backup-deleted'])
+    }
+    expect(pruning.every((event) => event.kind === 'search-index' && event.rule === 'count')).toBe(true)
+    // The new copy was reported whole before anything was deleted.
+    expect(events.findIndex((event) => event.event === 'search-index-repaired'))
+      .toBeLessThan(events.findIndex((event) => event.event === 'program-backup-deleting'))
+    for (const token of TOKENS) expect(searchFTS(token), token).toHaveLength(1)
+  })
+
   it('an unusable backup directory leaves the corrupt file where it is and the error stands', async () => {
     const all = await healthyIndex()
     fs.mkdirSync(path.dirname(searchIndexBackupDirectory()), { recursive: true })

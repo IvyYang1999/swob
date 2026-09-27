@@ -210,6 +210,19 @@ describe('search.db repair (F1d-3)', () => {
     for (const token of TOKENS) expect(searchFTS(token), token).toHaveLength(1)
   })
 
+  it('the startup probe that meets a corrupt index answers null, reports it once, and never moves the file', async () => {
+    await healthyIndex()
+    truncateSearchIndex(searchDatabasePath())
+    const corrupt = identity(searchDatabasePath())
+
+    expect(probeSearchProjection()).toBeNull()
+    expect(probeSearchProjection()).toBeNull()
+
+    expect(events).toEqual([{ event: 'search-index-read-corrupt', operation: 'probe', reason: 'SQLITE_CORRUPT' }])
+    expect(identity(searchDatabasePath())).toEqual(corrupt)
+    expect(backups()).toEqual([])
+  })
+
   it('the -wal and -shm move with the file, so the rebuilt index never meets the old WAL', async () => {
     const all = await healthyIndex()
     // A second writer leaves frames in the WAL; copies of its -wal/-shm stand in for a crash.
@@ -388,21 +401,31 @@ describe('search.db repair (F1d-3)', () => {
   })
 
   it('the read connection follows another file put at the path, without any signal', async () => {
-    await healthyIndex()
+    const all = await healthyIndex()
     expect(searchFTS(TOKENS[0])).toHaveLength(1)
     const opens = searchIndexConnectionStats().readOpens
 
-    // Another index, built elsewhere, renamed over the path.
-    const elsewhere = path.join(root, 'elsewhere')
-    process.env.SWOB_SEARCH_INDEX_DIR = elsewhere
-    await synchronizeSearchSources([{ filePath: writeSession('replacementmarker') }])
-    closeSearchIndex()
-    process.env.SWOB_SEARCH_INDEX_DIR = path.join(root, 'index')
-    fs.renameSync(path.join(elsewhere, 'search.db'), searchDatabasePath())
+    // Another index takes the path (its old -wal/-shm moved away, as a
+    // repair moves them) while this thread's read connection stays open on
+    // the old file, and no event says so.
+    const replacement = path.join(root, 'replacement.db')
+    fs.copyFileSync(searchDatabasePath(), replacement)
+    const other = new Database(replacement)
+    other.prepare('DELETE FROM messages_fts WHERE file_path = ?').run(all[0].filePath)
+    other.prepare(
+      "INSERT INTO messages_fts(session_id, file_path, role, text, timestamp) VALUES (?, ?, 'user', 'replacementmarker question', '')"
+    ).run(`${TOKENS[0]}-session`, all[0].filePath)
+    other.close()
+    for (const suffix of ['-wal', '-shm']) {
+      if (fs.existsSync(searchDatabasePath() + suffix)) fs.renameSync(searchDatabasePath() + suffix, path.join(root, `moved${suffix}`))
+    }
+    fs.renameSync(replacement, searchDatabasePath())
+    expect(searchIndexConnectionStats().hasReadConnection).toBe(true)
 
     expect(searchFTS('replacementmarker')).toHaveLength(1)
     expect(searchFTS(TOKENS[0])).toEqual([])
     expect(searchIndexConnectionStats().readOpens).toBe(opens + 1)
+    expect(events).toEqual([])
   })
 
   it('reports carry file names, sizes and durations, never a path', async () => {

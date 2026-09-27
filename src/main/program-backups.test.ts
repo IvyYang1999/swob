@@ -169,6 +169,15 @@ describe('program backup pruning (F1d-3)', () => {
     expect(logs.at(-1)).toEqual({ event: 'program-backups-over-cap', fields: { keptBytes: 5_200, capBytes: 1_000 } })
   })
 
+  it('the size cap never deletes a partial moved index newer than the newest whole one (a repair may still be moving it)', () => {
+    const whole = searchSet('2026-09-10T00:00:00.000Z', [], 100)
+    const partial = searchSet('2026-09-20T00:00:00.000Z', ['-wal', '-shm'], 100, false)
+    const report = pruneProgramBackups({ log, limits: { totalBytes: 50 } })
+    expect(report).toEqual({ deleted: [], failed: [], keptBytes: 164, overCap: true })
+    expect(listing(searchDirectory())).toEqual([whole, `${partial}-shm`, `${partial}-wal`].sort())
+    expect(logs).toEqual([{ event: 'program-backups-over-cap', fields: { keptBytes: 164, capBytes: 50 } }])
+  })
+
   it('at real sizes: two moved 700 MiB indexes leave one, under the 1 GiB cap', () => {
     expect(PROGRAM_BACKUP_LIMITS).toEqual({ searchIndexBackups: 1, lineageRegistryBackups: 3, totalBytes: 1024 ** 3 })
     const older = searchSet('2026-09-01T00:00:00.000Z', ['-wal'], 700 * 1024 ** 2)
@@ -179,6 +188,11 @@ describe('program backup pruning (F1d-3)', () => {
     expect(report.overCap).toBe(false)
     expect(listing(searchDirectory())).toEqual([newer, `${newer}-shm`].sort())
     expect(listing(lineageDirectory())).toEqual([lineage])
+  })
+
+  it('search-backups/ sits next to lineage-backups/, in the state directory, derived from it', () => {
+    expect(searchIndexBackupDirectory()).toBe(path.join(path.dirname(defaultLineageBackupDirectory()), 'search-backups'))
+    expect(path.dirname(searchIndexBackupDirectory())).toBe(path.join(os.homedir(), '.claude-session-manager'))
   })
 
   it('names: the patterns take only what Swob writes, and the last check refuses anything else', () => {

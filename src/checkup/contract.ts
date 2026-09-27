@@ -122,8 +122,11 @@ export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compact
  * per-session count follows the kernel's per-file rule (known differences listed as
  * codex.compaction-rule-difference) and legacy-unrecognized needs a Swob count of 0. A --sources run
  * marks unselected sources in readoutBySource and in the inventory rows with data (source.not-selected).
+ * 1.3.0: C2a — ⑤ Token implemented: Claude/Codex independent census-level recounts (message.id+requestId
+ * dedup; cumulative snapshot signature dedup) compared against the kernel's own per-session ledger
+ * (`ReadoutSession.tokens`), by source-level component totals and session-level exact match.
  */
-export const CHECKUP_VERSION = '1.2.0'
+export const CHECKUP_VERSION = '1.3.0'
 export const SELF_TEST_TOTAL = 6
 
 export const SOURCE_IDS = [
@@ -263,8 +266,13 @@ export const REASON_CODES = [
   'codex.state-db-unreadable',
   'unsupported.kimi-legacy-sessions',
   'unscanned.zcode-v2-tasks',
-  // tokens ⑤ (census-level evidence only in C1a)
+  // tokens ⑤ (C1a: census-level evidence only; C2a: the check itself)
   'codex.fork-usage-copy',
+  'tokens.deviation-high',
+  'tokens.deviation-note',
+  'tokens.session-mismatch',
+  'tokens.cache-write-calibration-difference',
+  'tokens.swob-unavailable-as-zero',
   // source applicability
   'source.not-implemented',
   'source.no-data',

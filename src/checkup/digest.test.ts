@@ -13,7 +13,7 @@ vi.mock('./privacy', async (importOriginal) => {
 import type { CheckupReport } from './contract'
 import { checkupDigest } from './digest'
 import { PrivacyViolationError, assertMarkdownPrivacyClean, scanMarkdownForPrivacy } from './privacy'
-import type { ReadoutSession, SwobReadout } from './readout'
+import { unavailableReadoutTokens, type ReadoutSession, type SwobReadout } from './readout'
 import { runKernelCheckup } from './run'
 import { claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from './self-test/samples'
 import { allUndeterminedReport, d, dayReport, finding, mixedReport, partialReport, passReport, r, u } from './__fixtures__/checkup-reports'
@@ -180,8 +180,13 @@ describe('checkupDigest on a synthetic HOME (runKernelCheckup)', () => {
     writeSample(root, path.join('.local', 'share', 'opencode', 'opencode.db'), '')
     writeSample(root, path.join('.zcode', 'cli', 'db', 'db.sqlite'), '')
     const sessions: ReadoutSession[] = [
-      { source: 'claude-code', sessionId: sid, primaryPath: main, paths: [main], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false },
-      { source: 'codex', sessionId: codexId, primaryPath: rollout, paths: [rollout], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false }
+      // C2a: matches the oracle's independent recount of msg80/req80's default usage (input 10, output 5),
+      // so ⑤ tokens passes too — this test's `report.verdict` asserts every graded check passes.
+      {
+        source: 'claude-code', sessionId: sid, primaryPath: main, paths: [main], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false,
+        tokens: { provenance: 'reported', components: { nonCachedInput: 10, cacheRead: 0, cacheWrite: 0, output: 5, reasoning: 0 }, billingTotal: 15, cacheWriteCalibrationDeltaTokens: 0 }
+      },
+      { source: 'codex', sessionId: codexId, primaryPath: rollout, paths: [rollout], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false, tokens: unavailableReadoutTokens() }
     ]
     const readout: SwobReadout = {
       status: 'ok', sessions, claudeParsed: new Map([[main, { records: 2, elapsedMs: 1, partial: false }]]),
@@ -190,7 +195,8 @@ describe('checkupDigest on a synthetic HOME (runKernelCheckup)', () => {
     const report = await runKernelCheckup({ homeDir: root, stateDir: tempDir('digest-state-'), privacySalt: 'digest-home' }, { readout: async () => readout })
     expect(report.verdict).toBe('pass')
     const line = checkupDigest(report, { linkTarget: LINK })
-    expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · OpenCode、ZCode：一场会话都没读到（注意） · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
+    // C2a: ⑤ tokens now passes too (its oracle matches the injected readout exactly) — 4 graded checks, not 3.
+    expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · OpenCode、ZCode：一场会话都没读到（注意） · 已检查的 4 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
     expect(scanMarkdownForPrivacy(line).ok).toBe(true)
   })
 

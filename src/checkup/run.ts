@@ -32,6 +32,7 @@ import { kernelHome, readSwobReadout, type SwobReadout } from './readout'
 import { inclusionCheck, type UnitDisposition } from './checks/inclusion'
 import { contentCheck } from './checks/content'
 import { compactionCheck } from './checks/compaction'
+import { tokensCheck } from './checks/tokens'
 import { pendingCheck } from './checks/pending'
 import {
   applicabilityEntry,
@@ -455,7 +456,7 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
     contentCheck(ctx),
     compactionCheck(ctx),
     pendingCheck('lineage', ctx),
-    pendingCheck('tokens', ctx),
+    tokensCheck(ctx),
     pendingCheck('resume', ctx)
   ]
   timingsMs.checks = elapsed(phase)

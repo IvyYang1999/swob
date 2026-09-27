@@ -36,6 +36,10 @@ export const HEADLINES = {
   'content.meta-only': '只丢了 {n} 条元数据记录，没有丢对话内容',
   'compaction.pass': '{n} 场会话的压缩次数逐场一致',
   'compaction.mismatch': '{n} 场会话里有 {n} 场压缩次数对不上：原始 {n} 处，Swob 认出 {n} 处',
+  // ⑤ tokens (C2a)
+  'tokens.pass': '{n} 个来源的 Token 分量偏差都在 0.1% 以内，逐场全等率不低于 99%',
+  'tokens.note': '{n} 个来源里有 {n} 项需要留意：偏差在 1% 以内，或属于已登记口径差',
+  'tokens.mismatch': '{n} 个来源里有 {n} 项分量偏差超出可解释范围',
   'check.not-implemented': '本版体检还没有实现这一项',
   'check.undetermined': '本项这次无法判定',
   'check.not-applicable': '本项对本机数据不适用',
@@ -189,6 +193,27 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   'content.swob-read-error': {
     ownerLine: '{source}：有 {n} 个文件没拿到 Swob 的逐文件读入数（读取出错，或这次没有读），没有参与比对，也不做推算',
     engineerHint: 'src/checkup/readout.ts#readSwobReadout：没有这个文件的逐文件读数（parseCodexFileWithStats 读取抛错，或文件不在这次读数的清单里）；不推算，不参与 ② 的比对'
+  },
+  // —— C2a additions (⑤ tokens) ——
+  'tokens.deviation-high': {
+    ownerLine: '{source}：Token 总量和标准答案（复算）相比偏差达 {n}%，超出可解释范围，这次先别用这项数字下结论',
+    engineerHint: 'src/checkup/checks/tokens.ts：来源级 billingTotal 偏差 |Swob−oracle|/oracle 超过 1%，且未落在已登记口径差（tokens.cache-write-calibration-difference）范围内；标准答案见 census/codex-census.ts#codexRecountB、census/claude-census.ts#claudeRecountUsage'
+  },
+  'tokens.deviation-note': {
+    ownerLine: '{source}：Token 总量和标准答案相比有 {n}% 的偏差，在允许范围内，暂不影响结论',
+    engineerHint: 'src/checkup/checks/tokens.ts：来源级偏差 >0.1% 且 ≤1%（设计 §四 4.5 阈值表「注意」档）'
+  },
+  'tokens.session-mismatch': {
+    ownerLine: '{source}：有 {n} 场会话的四项分量和标准答案对不上',
+    engineerHint: 'src/checkup/checks/tokens.ts：Swob 每场会话的四分量（非缓存输入/缓存读/输出/推理）与同一会话族标准答案的四分量逐项比对，任一项不等就计入'
+  },
+  'tokens.cache-write-calibration-difference': {
+    ownerLine: '{source}：有 {n} 次请求的缓存写入，Swob 取 5 分钟/1 小时细分值，标准答案取聚合值，两者对不上；这是已知口径差，不是识别错误',
+    engineerHint: 'src/main/token-accounting.ts#accountClaudeUsage（:554-568）：有 5m/1h 细分时优先用细分值而不是 usage.cache_creation_input_tokens 聚合值，并把差额记进该事件的 warnings；census 的 Claude 复算取聚合值（ccusage 同类工具的口径），两者的差额即由此产生'
+  },
+  'tokens.swob-unavailable-as-zero': {
+    ownerLine: '{source}：有 {n} 场会话标准答案测得有 Token 用量，但 Swob 这次显示不可用，不应该被当成 0',
+    engineerHint: 'src/checkup/readout.ts#readoutTokensFromAccounting：会话的 tokenAccounting 缺失或 provenance 为 unavailable 时，这次比对必须显示 [U] 而不是把它当 0 参与总量'
   }
 }
 
@@ -398,6 +423,11 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   'unsupported.kimi-legacy-sessions': '旧版 Kimi 格式，Swob 不支持',
   'unscanned.zcode-v2-tasks': 'ZCode v2 任务索引，Swob 不读',
   'codex.fork-usage-copy': '子 agent 抄写了父会话的用量快照',
+  'tokens.deviation-high': 'Token 总量偏差超出可解释范围',
+  'tokens.deviation-note': 'Token 总量有偏差，在允许范围内',
+  'tokens.session-mismatch': '有会话的四项分量和标准答案对不上',
+  'tokens.cache-write-calibration-difference': '缓存写入聚合值和 5 分钟/1 小时细分值对不上（已知口径差）',
+  'tokens.swob-unavailable-as-zero': '标准答案测得有用量，但 Swob 显示不可用',
   'source.not-implemented': '本版体检还没有检查这个来源',
   'source.no-data': '本机没有这个来源的数据',
   'source.capability-unavailable': '这个来源本身不提供这项数据',
@@ -584,7 +614,21 @@ export const MEASURE_LABELS: Readonly<Record<string, string>> = {
   // ⑤ tokens (census-level evidence)
   forkUsageCopies: '子 agent 抄写父会话的用量快照',
   forkUsageCopiesSameTimestamp: '时间戳也相同的抄写快照',
-  forkChildFilesWithCopies: '含抄写快照的子 agent 文件'
+  forkChildFilesWithCopies: '含抄写快照的子 agent 文件',
+  // ⑤ tokens (C2a: the check itself)
+  nonCachedInput: '非缓存输入',
+  cacheRead: '缓存读',
+  cacheWrite: '缓存写',
+  output: '输出',
+  reasoning: '推理',
+  billingTotal: '计费合计',
+  uniqueFacts: '去重后的用量事实',
+  billingTotalDeviationPct: '计费合计偏差',
+  nonCachedInputDeviationPct: '非缓存输入偏差',
+  cacheReadDeviationPct: '缓存读偏差',
+  cacheWriteDeviationPct: '缓存写偏差',
+  outputDeviationPct: '输出偏差',
+  reasoningDeviationPct: '推理偏差'
 }
 
 /** Headings, table headers and fixed sentences of the Markdown report. */
@@ -648,6 +692,10 @@ export const MARKDOWN_TEXT = {
   colGlobal: '全局去重',
   colSwobCompact: 'Swob 认出',
   colSessionsEqual: '逐场一致',
+  // ⑤ tokens (C2a)
+  colOracleBillingTotal: '标准答案计费合计',
+  colSwobBillingTotal: 'Swob 计费合计',
+  colDeviation: '偏差',
   colMeasure: '数字',
   colSide: '哪一侧',
   colUnit: '单位',
@@ -767,7 +815,10 @@ export const COMPARE_TEXT = {
   colDelta: '变化',
   colSamples: '样本',
   // C1b-2 (acceptance P2-13): the summary line when previous issues were not checked this time
-  summaryWithNotChecked: '和上次比（上次 {date}）：新增问题 {n} 项，已修复 {n} 项，未变 {n} 项，首次检查 {n} 项，本次未检查 {n} 项。'
+  summaryWithNotChecked: '和上次比（上次 {date}）：新增问题 {n} 项，已修复 {n} 项，未变 {n} 项，首次检查 {n} 项，本次未检查 {n} 项。',
+  // C2a: a check that was 「未实现」last time and has a real verdict this time (④⑤⑥ landing one at a
+  // time) — display only, `compareIssues` already routes its findings to firstCheck, not added.
+  newlyDetermined: '本次新增了 {checks} 的判定。'
 } as const
 
 let cachedTemplateSet: Set<string> | null = null

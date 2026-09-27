@@ -271,6 +271,18 @@ function compareLine(comparison: CheckupComparison | null, options: RenderOption
 }
 
 /**
+ * C2a: a check that went from 「未实现」(undetermined, check.not-implemented) to a real verdict since the
+ * previous report (④⑤⑥ land one at a time). Display only: `compareIssues` already routes such a check's
+ * findings to firstCheck rather than added (`checkLooked`), so this never double-counts anything.
+ */
+function newlyDeterminedLine(comparison: CheckupComparison | null): string | null {
+  if (!comparison || !comparison.comparable) return null
+  const newlyDetermined = comparison.checks.filter((check) => check.previous === 'undetermined' && check.current !== null && check.current !== 'undetermined')
+  if (newlyDetermined.length === 0) return null
+  return fillText(COMPARE_TEXT.newlyDetermined, { checks: newlyDetermined.map((check) => CHECK_LABELS[check.id]).join('、') })
+}
+
+/**
  * Sources whose raw data is present while the readout returned no session (readout.source-empty, listed
  * under ①), in source order. The finding never grades ①, so it is surfaced at the top as well.
  */
@@ -309,6 +321,8 @@ function overallLines(report: CheckupReport, comparison: CheckupComparison | nul
     })
   ))
   lines.push('', compareLine(comparison, options))
+  const newlyDetermined = newlyDeterminedLine(comparison)
+  if (newlyDetermined) lines.push(newlyDetermined)
   return lines
 }
 
@@ -484,6 +498,31 @@ function compactionTable(check: CheckResult, used: Set<string>): string[] {
   return rows.length > 0 ? table(header, rows) : []
 }
 
+/**
+ * ⑤ Token (C2a): one row per source — the headline numbers (billing total both sides, deviation, per-
+ * session exact match). The four components (`nonCachedInput`/`cacheRead`/`cacheWrite`/`output`/
+ * `reasoning`) and the oracle's unique-fact count are not claimed here, so they fall through to
+ * `otherNumbers()` (the generic per-check appendix), same as `compactionTable`'s finer numbers do.
+ */
+function tokensTable(check: CheckResult, used: Set<string>): string[] {
+  const rows: string[][] = []
+  for (const source of measuredSources(check)) {
+    const entry = check.bySource[source]
+    if (!entry.oracle.billingTotal && !entry.swob.billingTotal) continue
+    for (const key of ['oracle.billingTotal', 'swob.billingTotal', 'swob.billingTotalDeviationPct', 'swob.sessionsEqual', 'swob.sessionsCompared']) used.add(key)
+    rows.push([
+      sourceLabel(source)!,
+      measureCell(entry.oracle.billingTotal),
+      measureCell(entry.swob.billingTotal),
+      measureCell(entry.swob.billingTotalDeviationPct),
+      ratioCell(entry.swob.sessionsEqual, entry.swob.sessionsCompared)
+    ])
+  }
+  const header = [MARKDOWN_TEXT.colSource, MARKDOWN_TEXT.colOracleBillingTotal, MARKDOWN_TEXT.colSwobBillingTotal,
+    MARKDOWN_TEXT.colDeviation, MARKDOWN_TEXT.colSessionsEqual]
+  return rows.length > 0 ? table(header, rows) : []
+}
+
 const FINDING_ORDER: Readonly<Record<string, number>> = { fail: 0, warn: 1, undetermined: 2, 'not-applicable': 3 }
 
 function findingLines(check: CheckResult, audience: Audience): string[] {
@@ -539,7 +578,8 @@ function checkSection(check: CheckResult, audience: Audience): string[] {
   const used = new Set<string>()
   const main = check.id === 'inclusion' ? columnsTable(check, INCLUSION_COLUMNS, used)
     : check.id === 'content' ? contentTable(check, used)
-      : check.id === 'compaction' ? compactionTable(check, used) : []
+      : check.id === 'compaction' ? compactionTable(check, used)
+        : check.id === 'tokens' ? tokensTable(check, used) : []
   if (main.length > 0) lines.push(...main, '')
   if (main.length === 0 && check.findings.length === 0) {
     const label = headlineLabel(check)

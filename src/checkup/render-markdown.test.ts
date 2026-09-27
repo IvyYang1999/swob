@@ -4,16 +4,18 @@ import * as path from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { beforeAll, describe, expect, it } from 'vitest'
 import schema from './contract/kernel-checkup-report-v1.schema.json'
-import { CHECK_ORDER, MEASURE_UNITS, ORACLE_IDS, REASON_CODES, type CheckupReport } from './contract'
+import { CHECK_ORDER, CHECKUP_VERSION, MEASURE_UNITS, ORACLE_IDS, REASON_CODES, type CheckupReport } from './contract'
 import { runKernelCheckup } from './run'
 import { PrivacyViolationError, scanForPrivacy, scanMarkdownForPrivacy } from './privacy'
 import {
   CHECK_LABELS,
   COMPARE_TEXT,
+  HEADLINES,
   MARKDOWN_MARKER,
   MARKDOWN_TEXT,
   MEASURE_LABELS,
   ORACLE_LABELS,
+  OWNER_ACTIONS,
   REASON_TEXT,
   RETIRED_TEMPLATES,
   UNIT_LABELS,
@@ -328,6 +330,27 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     expect(renderCheckupMarkdown(mixedReport(), { ...RENDER, previous: legacy })).toContain('和上次比：上次报告没有机器指纹（旧版体检生成的），这次不比。')
   })
 
+  it('C2a: names a check that went from 「未实现」to a real verdict since the previous report', () => {
+    const previous = mixedReport()
+    previous.generatedAt = '2026-09-26T01:00:00.000Z'
+    const current = mixedReport()
+    // ⑤ tokens landed; ④⑥ are still pending, unchanged from previous.
+    current.checks[4] = {
+      id: 'tokens', verdict: 'pass', headline: fillTemplate(HEADLINES['tokens.pass'], [2]), ownerAction: OWNER_ACTIONS.pass,
+      bySource: previous.checks[4].bySource, findings: []
+    }
+    const withPrevious = renderCheckupMarkdown(current, { ...RENDER, previous })
+    expect(withPrevious).toContain('本次新增了 ⑤ Token 的判定。')
+    // Nothing changed for ④⑥: only ⑤ is named in that sentence (the sentence line itself, not the
+    // document as a whole — ④'s own still-pending row is legitimately printed elsewhere).
+    const [newlyDeterminedLine] = withPrevious.split('\n').filter((line) => line.includes('本次新增了'))
+    expect(newlyDeterminedLine).toBe('本次新增了 ⑤ Token 的判定。')
+    expect(withPrevious.match(/本次新增了/g)).toHaveLength(1)
+    // No previous report, or nothing newly determined: no such line at all.
+    expect(renderCheckupMarkdown(current, RENDER)).not.toContain('本次新增了')
+    expect(renderCheckupMarkdown(mixedReport(), { ...RENDER, previous })).not.toContain('本次新增了')
+  })
+
   it('refuses to render (PrivacyViolationError) when a report carries unregistered text', () => {
     const report = mixedReport()
     report.checks[0].headline = CANARY.userText
@@ -347,7 +370,8 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
 describe('renderCheckupMarkdown on the sample HOME report (runKernelCheckup)', () => {
   it('renders owner and engineer versions without any canary', async () => {
     expect(validate(sampleReport), JSON.stringify(validate.errors)).toBe(true)
-    expect(sampleReport.kernel.checkupVersion).toBe('1.2.0')
+    // C2a: a literal here churns every time any package bumps CHECKUP_VERSION; assert against the constant.
+    expect(sampleReport.kernel.checkupVersion).toBe(CHECKUP_VERSION)
     const owner = renderCheckupMarkdown(sampleReport, RENDER)
     const engineer = renderCheckupMarkdown(sampleReport, { ...RENDER, audience: 'engineer' })
     for (const canary of Object.values(CANARY)) {

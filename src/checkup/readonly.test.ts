@@ -100,8 +100,9 @@ describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
     expect(report.checks.map((check) => check.id)).toEqual([...CHECK_ORDER])
     expect(report.kernel).toMatchObject({ readOnly: true, selfTest: { passed: 6, total: 6 }, commit: '4971632ac809b012357461c2f96f04a8a281eac5' })
     expect(report.readout).toEqual({ status: 'ok' })
+    // C2a: ⑤ tokens is implemented (a graded pass on this sample HOME, no check-level reason); ④⑥ stay pending.
     expect(report.checks.slice(3).map((check) => [check.verdict, check.reason])).toEqual([
-      ['undetermined', 'check.not-implemented'], ['undetermined', 'check.not-implemented'], ['undetermined', 'check.not-implemented']
+      ['undetermined', 'check.not-implemented'], ['pass', undefined], ['undetermined', 'check.not-implemented']
     ])
   })
 

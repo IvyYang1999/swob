@@ -23,6 +23,7 @@ import { findCodexSessionFiles, parseCodexFileWithStats } from '../main/codex-lo
 import type { JsonlReadStats } from '../main/jsonl-lines'
 import { runtimeHome } from '../main/runtime-home'
 import type { SessionSummary } from '../main/types'
+import type { TokenAccounting, UsageEvent } from '../main/token-accounting'
 import type { ReasonCode } from './contract'
 
 /** HOME as the kernel saw it when this module (evaluated right after the kernel) loaded. */
@@ -30,6 +31,25 @@ const KERNEL_HOME_AT_LOAD = runtimeHome()
 
 export const CLAUDE_PARSE_TIMEOUT_MS = 30_000
 const PARSE_TIMEOUT_MARGIN_MS = 250
+
+/**
+ * ⑤ Token: one session's Swob-side four components + billing total (C2a), independent of the census
+ * oracle. `provenance` mirrors `TokenAccounting.provenance`; `unavailable` (no components/billingTotal)
+ * happens when the kernel itself has no authoritative usage for this session (e.g. Cursor).
+ */
+export interface ReadoutSessionTokens {
+  provenance: 'reported' | 'derived' | 'estimated' | 'unavailable'
+  components: { nonCachedInput: number; cacheRead: number; cacheWrite: number; output: number; reasoning: number } | null
+  billingTotal: number | null
+  /**
+   * Sum of |raw cache-write aggregate − Swob's own cache-write total| over billed Claude events where the
+   * two disagree (token-accounting.ts:554-568's registered cache-write calibration difference: a request
+   * with a 5m/1h breakdown uses the breakdown for billing, but `rawCacheWriteTokens` keeps the aggregate).
+   * A ccusage-style oracle that reads the raw aggregate differs from Swob by up to this much for a known,
+   * already-warned reason, not a defect (design §四 4.5). Always 0 for a non-Claude session.
+   */
+  cacheWriteCalibrationDeltaTokens: number
+}
 
 export interface ReadoutSession {
   source: string
@@ -42,6 +62,17 @@ export interface ReadoutSession {
   compactCount: number
   /** Intra-file branch views share their parent's files and are not physical sessions. */
   virtual: boolean
+  /**
+   * ⑤ Token (C2a). Optional so every existing fixture/self-test session (①②③, none of which need token
+   * data) keeps compiling unchanged; absent is equivalent to `unavailableReadoutTokens()`
+   * (`checks/tokens.ts` reads it through that default, never `.tokens!`).
+   */
+  tokens?: ReadoutSessionTokens
+}
+
+/** The `tokens` value of a session with no usable ledger (absent `ReadoutSession.tokens`, or a real unavailable one). */
+export function unavailableReadoutTokens(): ReadoutSessionTokens {
+  return { provenance: 'unavailable', components: null, billingTotal: null, cacheWriteCalibrationDeltaTokens: 0 }
 }
 
 export interface ClaudeParseResult { records: number; elapsedMs: number; partial: boolean }
@@ -156,6 +187,73 @@ function realOrResolved(filePath: string): string {
   return realpathOrNull(filePath) ?? path.resolve(filePath)
 }
 
+/**
+ * ⑤ Token (C2a, package decision 1): equivalent rewrite of `token-accounting.ts#uniqueBillingEvents` — one
+ * event per billing fact key (`billingFactKey || dedupKey`), a `scope: 'main'` event winning a collision.
+ * Independent of the kernel export (guarded by `readout.test.ts`'s equivalence test against the same
+ * events), so the ⑤ check never merely reads back a number the kernel already computed for itself.
+ */
+function dedupeBillingEvents(events: readonly UsageEvent[]): UsageEvent[] {
+  const selected = new Map<string, UsageEvent>()
+  for (const event of events) {
+    const key = event.billingFactKey || event.dedupKey
+    const current = selected.get(key)
+    if (!current || (current.scope !== 'main' && event.scope === 'main')) selected.set(key, event)
+  }
+  return [...selected.values()]
+}
+
+function addComponents(
+  totals: NonNullable<ReadoutSessionTokens['components']>,
+  components: UsageEvent['components']
+): void {
+  totals.nonCachedInput += components.nonCachedInputTokens
+  totals.cacheRead += components.cacheReadTokens
+  totals.cacheWrite += components.cacheWriteTokens + components.cacheWrite5mTokens + components.cacheWrite1hTokens
+  totals.output += components.outputTokens
+  totals.reasoning += components.reasoningTokens ?? 0
+}
+
+/** The registered Claude cache-write calibration difference (token-accounting.ts:554-568), if this event has it. */
+function cacheWriteCalibrationDelta(event: UsageEvent): number {
+  if (event.provider !== 'claude-code' && event.provider !== 'cc-mirror') return 0
+  const raw = event.rawCacheWriteTokens
+  if (raw === undefined) return 0
+  const billed = event.components.cacheWriteTokens + event.components.cacheWrite5mTokens + event.components.cacheWrite1hTokens
+  return raw === billed ? 0 : Math.abs(raw - billed)
+}
+
+function sumReadoutComponents(events: readonly UsageEvent[]): { components: NonNullable<ReadoutSessionTokens['components']>; cacheWriteCalibrationDeltaTokens: number } {
+  const components = { nonCachedInput: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 }
+  let cacheWriteCalibrationDeltaTokens = 0
+  for (const event of events) {
+    addComponents(components, event.components)
+    cacheWriteCalibrationDeltaTokens += cacheWriteCalibrationDelta(event)
+  }
+  return { components, cacheWriteCalibrationDeltaTokens }
+}
+
+function billingTotalOf(components: NonNullable<ReadoutSessionTokens['components']>): number {
+  return components.nonCachedInput + components.cacheRead + components.cacheWrite + components.output
+}
+
+/** ⑤ Token (C2a): `ReadoutSession.tokens` from the kernel's own per-session ledger. Exported for tests. */
+export function readoutTokensFromAccounting(accounting: TokenAccounting | null | undefined): ReadoutSessionTokens {
+  if (!accounting || accounting.provenance === 'unavailable' || !accounting.components || accounting.billingTotal === null) {
+    return unavailableReadoutTokens()
+  }
+  if (accounting.usageEventsOmitted) {
+    // Defensive fallback, not expected under checkup's readOnly load (task book: omitCachedUsageEvents is
+    // never passed, so usageEvents stay complete) — without the per-event ledger there is nothing to
+    // redo the dedup from, so the kernel's own aggregate is used as-is.
+    const components = { nonCachedInput: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0 }
+    addComponents(components, accounting.components)
+    return { provenance: accounting.provenance, components, billingTotal: accounting.billingTotal, cacheWriteCalibrationDeltaTokens: 0 }
+  }
+  const { components, cacheWriteCalibrationDeltaTokens } = sumReadoutComponents(dedupeBillingEvents(accounting.usageEvents))
+  return { provenance: accounting.provenance, components, billingTotal: billingTotalOf(components), cacheWriteCalibrationDeltaTokens }
+}
+
 function projectSession(summary: SessionSummary): ReadoutSession {
   const primary = typeof summary.filePath === 'string' && summary.filePath ? summary.filePath : null
   const paths = new Set<string>()
@@ -170,7 +268,8 @@ function projectSession(summary: SessionSummary): ReadoutSession {
     subagentPaths: subagents.map((subagent) => realOrResolved(subagent.filePath)),
     subagentIds: subagents.map((subagent) => subagent.sessionId),
     compactCount: typeof summary.compactCount === 'number' ? summary.compactCount : 0,
-    virtual: !!summary.branchLeafUuid
+    virtual: !!summary.branchLeafUuid,
+    tokens: readoutTokensFromAccounting(summary.tokenAccounting)
   }
 }
 

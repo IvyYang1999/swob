@@ -998,6 +998,30 @@ describe('UsageFact + AnalysisScope', () => {
     })
   })
 
+  // F1k ②b: the compact shape keeps billingTotal but drops the events, so an
+  // aggregate-fallback session used to derive version 8 compact and 6 hydrated
+  // and forced a full hydration on every compact sync.
+  it.each(['opencode', 'zcode'] as const)('%s 聚合回退会话在紧凑与补全两种形态下派生版本一致（F1k ②b）', (source) => {
+    const full = makeSession(`${source}-aggregate-compact`, `/repo/${source}`, [], {
+      source, turns: 1, parse: 'parsed'
+    })
+    full.tokenUsage = { inputTokens: 100, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0 }
+    full.tokenAccounting = accountingFromMutuallyExclusiveUsage(source, full.tokenUsage, 'reported',
+      `${source} legacy aggregate fallback; request-level model/provider evidence unavailable`)
+    full.providerOutcome = { detected: 'detected', parse: 'parsed', usage: 'available' }
+    expect(synchronizeUsageFacts([full], [])).toMatchObject({ changedSessions: 1, factCount: 1 })
+
+    const compact = structuredClone(full)
+    compact.tokenAccounting!.usageEvents = []
+    compact.tokenAccounting!.usageEventsOmitted = true
+    expect(synchronizeUsageFacts([compact], [])).toMatchObject({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      factCount: 1
+    })
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(120)
+  })
+
   it('t184: active + replay copied prefix + archived 进真实账本后等于手工核算 215', () => {
     const occurredAt = localTimestamp(2026, 8, 2, 12)
     const shared = { model: 'gpt-5.6-terra', billingFactKey: 'codex:turn:t184-shared' }

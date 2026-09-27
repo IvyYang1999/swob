@@ -453,9 +453,13 @@ function usageFactProjectionInput(
   resolvedRoot: string
 ): unknown {
   const source = session.source || 'claude-code'
+  // Decide on billingTotal alone: both the hydrated and the compact shape of a
+  // session carry it, while the compact shape drops the events that tell
+  // per-call from aggregate. Per-call ledgers always have a billingTotal, so
+  // they keep version 8; an aggregate fallback now derives 8 in both shapes
+  // instead of 6 hydrated and 8 compact (which forced a hydration each sync).
   const derivationVersion = (source === 'opencode' || source === 'zcode') &&
-    (isPerCallSqliteAgentAccounting(accounting) ||
-      (accounting.usageEventsOmitted === true && accounting.billingTotal !== null))
+    accounting.billingTotal !== null
     ? PER_CALL_SQLITE_AGENT_DERIVATION_VERSION
     : BASE_USAGE_FACT_DERIVATION_VERSION
   return {

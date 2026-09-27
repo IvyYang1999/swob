@@ -410,6 +410,27 @@ export function countForkUsageCopies(units: readonly CodexUnit[]): ForkUsageCopi
   return result
 }
 
+export interface CodexForkEdge { parentId: string; childId: string; childPath: string }
+
+/**
+ * Top-level Codex sessions that are a fork/replay of another top-level session
+ * (session_meta.forked_from_id on the child; design §4.4's "顶层分叉"). Distinct from the thread-spawn
+ * derivation edges in the state db: a subagent's own forked_from_id (used as a parentThreadId fallback,
+ * codexUnitParentId) is not counted here to avoid double-reporting the same physical relationship under
+ * both edge types.
+ */
+export function codexTopLevelForkEdges(units: readonly CodexUnit[]): CodexForkEdge[] {
+  const edges: CodexForkEdge[] = []
+  for (const unit of units) {
+    if (unit.unreadable || !unit.isRollout || !unit.meta || unit.meta.role !== 'top-level') continue
+    const childId = codexUnitSessionId(unit)
+    const parentId = unit.meta.forkedFromId
+    if (!childId || !parentId || parentId === childId) continue
+    edges.push({ parentId, childId, childPath: unit.path })
+  }
+  return edges
+}
+
 /** Primary compaction markers in child units that are copies of a parent's markers. */
 export function countInheritedCodexMarkers(units: readonly CodexUnit[]): { inherited: number; childUnits: number } {
   const markersBySession = new Map<string, Set<string>>()

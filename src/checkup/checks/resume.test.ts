@@ -358,6 +358,33 @@ describe('⑥ resume — sampling (task book H1/H2)', () => {
     expect(probed[0].length).toBe(4)
   })
 
+  it('resumeSampling (C2c-3 report appendix) reports salted, reproducible ids for the sessions actually sampled this run', () => {
+    const sessions = Array.from({ length: 20 }, (_, index) => claudeSession(`disclose-${index}`, file(`disclose-${index}.jsonl`)))
+    const probe = fakeProbe('/usr/bin:/bin', () => ({ command: 'echo x' }))
+    const first = resumeCheck(ctx({ readout: readout(sessions), resumeProbe: probe, resumeSample: { perSource: 4, seed: '2026-09-28' } }))
+    const second = resumeCheck(ctx({ readout: readout(sessions), resumeProbe: probe, resumeSample: { perSource: 4, seed: '2026-09-28' } }))
+    expect(first.resumeSampling?.sampledIds.length).toBeGreaterThan(0)
+    expect(first.resumeSampling?.sampledIds.every((id) => /^[0-9a-f]{8}$/.test(id))).toBe(true)
+    // Same seed + same session set -> the same salted id list, both runs (task book H1: "同一天两次运行抽样相同").
+    expect(second.resumeSampling?.sampledIds).toEqual(first.resumeSampling?.sampledIds)
+    expect(first.resumeSampling?.localDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(Number.isInteger(first.resumeSampling?.timezoneOffsetMinutes)).toBe(true)
+  })
+
+  it('resumeSampling is still present (seed/local day disclosed) when no command-layer probe is injected', () => {
+    // Sampling itself (which sessions the seed picks) does not depend on a probe being injected — only
+    // *acting* on the sample does — so the choice is still made and still disclosed.
+    const sessions = [claudeSession('lone', file('lone.jsonl'))]
+    const result = resumeCheck(ctx({ readout: readout(sessions), resumeProbe: null }))
+    expect(result.resumeSampling?.sampledIds.length).toBe(1)
+    expect(result.resumeSampling?.localDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  it('resumeSampling.sampledIds is empty when there is nothing to sample at all', () => {
+    const result = resumeCheck(ctx({ readout: readout([]) }))
+    expect(result.resumeSampling?.sampledIds).toEqual([])
+  })
+
   it('a different seed (a different day) can pick a different sample', () => {
     const sessions = Array.from({ length: 20 }, (_, index) => claudeSession(`day-${index}`, file(`day-${index}.jsonl`)))
     const runWithSeed = (seed: string): string[] => {

@@ -95,6 +95,14 @@ export interface LocalTime { date: string; time: string; offset: string }
 
 const pad2 = (value: number): string => String(value).padStart(2, '0')
 
+/** `UTC±hh:mm` of a raw minutes offset (C2c-3: shared with `resumeSamplingLine()`, which only ever has the
+ * numeric minutes — see checks/common.ts#localDateAndOffset for why the JSON side never stores this
+ * formatted). */
+export function formatUtcOffset(offsetMinutes: number): string {
+  const absolute = Math.abs(offsetMinutes)
+  return `UTC${offsetMinutes < 0 ? '-' : '+'}${pad2(Math.floor(absolute / 60))}:${pad2(absolute % 60)}`
+}
+
 /** Local date / `date hh:mm` / `UTC±hh:mm` of an ISO instant. */
 export function localTime(iso: string, utcOffsetMinutes?: number): LocalTime {
   const ms = Date.parse(iso)
@@ -102,12 +110,7 @@ export function localTime(iso: string, utcOffsetMinutes?: number): LocalTime {
   const offset = utcOffsetMinutes ?? -new Date(ms).getTimezoneOffset()
   const shifted = new Date(ms + offset * 60_000).toISOString()
   const date = shifted.slice(0, 10)
-  const absolute = Math.abs(offset)
-  return {
-    date,
-    time: `${date} ${shifted.slice(11, 16)}`,
-    offset: `UTC${offset < 0 ? '-' : '+'}${pad2(Math.floor(absolute / 60))}:${pad2(absolute % 60)}`
-  }
+  return { date, time: `${date} ${shifted.slice(11, 16)}`, offset: formatUtcOffset(offset) }
 }
 
 export function reasonText(code: string | undefined | null): string {
@@ -570,6 +573,20 @@ function tokensBranchGroupingLine(check: CheckResult): string | null {
 }
 
 /**
+ * ⑥ resume (C2c-3, task book H1 / C2c 独立验收 P2-1): the command-layer sampling seed, the local day/UTC
+ * offset it was computed from, and every session actually sampled this run (salted) — engineer audience
+ * only (same gating as `samplesLine`), so a reader can confirm "same local day -> same batch" is real.
+ */
+function resumeSamplingLine(check: CheckResult): string | null {
+  const sampling = check.resumeSampling
+  if (!sampling) return null
+  const offset = formatUtcOffset(sampling.timezoneOffsetMinutes)
+  return sampling.sampledIds.length > 0
+    ? fillText(MARKDOWN_TEXT.resumeSamplingLine, { date: sampling.localDate, offset, samples: sampling.sampledIds.join(' ') })
+    : fillText(MARKDOWN_TEXT.resumeSamplingLineEmpty, { date: sampling.localDate, offset })
+}
+
+/**
  * ⑥ resume (C2c): one row per graded source — bucket totals, sampled command-layer outcome (found /
  * broken symlink / not found), and the full-population L3 anchor tally (match / mismatch). The per-
  * bucket/command/anchor numbers not claimed here fall through to `otherNumbers()`, same pattern as
@@ -668,6 +685,10 @@ function checkSection(check: CheckResult, audience: Audience): string[] {
   if (check.id === 'tokens') {
     const grouping = tokensBranchGroupingLine(check)
     if (grouping) lines.push(grouping, '')
+  }
+  if (check.id === 'resume' && audience === 'engineer') {
+    const sampling = resumeSamplingLine(check)
+    if (sampling) lines.push(sampling, '')
   }
   if (main.length === 0 && check.findings.length === 0) {
     const label = headlineLabel(check)

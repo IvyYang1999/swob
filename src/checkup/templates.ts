@@ -880,6 +880,9 @@ export const MARKDOWN_TEXT = {
   colAnchor: '锚点（一致/不一致）',
   resumeCommandCell: '{n} 找到 / {n} 坏链接 / {n} 找不到',
   resumeAnchorCell: '{n} 一致 / {n} 不一致',
+  // ⑥ resume (C2c-3, 抽样种子与抽中会话，工程师视图；task book H1 / C2c 独立验收 P2-1)
+  resumeSamplingLine: '抽样种子：{date}（{offset}）· 抽中会话（盐化 id，至多 5 个）：{samples}',
+  resumeSamplingLineEmpty: '抽样种子：{date}（{offset}）· 本次没有会话被抽中',
   colMeasure: '数字',
   colSide: '哪一侧',
   colUnit: '单位',

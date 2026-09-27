@@ -49,6 +49,7 @@ import {
   derived,
   hasClaudeData,
   hasCodexData,
+  localDateAndOffset,
   makeFinding,
   percentMeasure,
   remainingSources,
@@ -330,6 +331,8 @@ interface ResumeTally {
   anchorCacheLagIds: string[]
   anchorCannotVerify: number
   anchorCannotVerifyIds: string[]
+  /** Every session the seeded/most-active pick actually chose this run (task book H1; C2c 独立验收 P2-1 — reported so the sampling seed's "same day -> same batch" claim is checkable), independent of whether a command-layer probe was injected to act on it. */
+  sampledSessionIds: string[]
 }
 
 function emptyTally(): ResumeTally {
@@ -338,7 +341,7 @@ function emptyTally(): ResumeTally {
     unsupported: 0, commandSampled: 0, commandFound: 0, commandBrokenSymlink: 0, commandBrokenSymlinkIds: [],
     commandMissing: 0, commandMissingIds: [], commandSyntaxInvalid: 0, commandSyntaxInvalidIds: [],
     anchorCompared: 0, anchorMatch: 0, anchorMismatch: 0, anchorMismatchIds: [], anchorWould404: 0, anchorWould404Ids: [],
-    anchorCacheLag: 0, anchorCacheLagIds: [], anchorCannotVerify: 0, anchorCannotVerifyIds: []
+    anchorCacheLag: 0, anchorCacheLagIds: [], anchorCannotVerify: 0, anchorCannotVerifyIds: [], sampledSessionIds: []
   }
 }
 
@@ -386,9 +389,13 @@ function tallyResumeSource(input: {
     else if (status === 'cannot-verify') { tally.anchorCannotVerify++; tally.anchorCannotVerifyIds.push(session.sessionId) }
     else { tally.anchorMismatch++; tally.anchorMismatchIds.push(session.sessionId) }
   }
+  // Sampling (task book H1) is independent of whether a command-layer probe is injected: the *choice* of
+  // sample must be reproducible and reportable (resumeSampling below) even for a shell that owns no resume
+  // command at all (design §3.4, e.g. the AI diary) — only *acting* on the sample needs a probe.
+  const sample = chooseSample(evaluable, ctx.resumeSample.seed, ctx.resumeSample.perSource, nowMs)
+  tally.sampledSessionIds = sample.map((session) => session.sessionId)
   if (!ctx.resumeProbe) return tally
   const probe = ctx.resumeProbe
-  const sample = chooseSample(evaluable, ctx.resumeSample.seed, ctx.resumeSample.perSource, nowMs)
   const program = RESUME_PROGRAM[source]
   for (const session of sample) {
     const built = probe.build(probeInput(session, source))
@@ -511,6 +518,10 @@ export function resumeCheck(ctx: CheckContext): ReturnType<typeof assembleCheck>
   // to `evaluated` below purely to stop remainingSources() also computing an entry for it (see the
   // override's own comment), so it must not inflate the headline's "how many sources" count.
   let gradedSourceCount = 0
+  // C2c-3 (report appendix): every session either source's sample actually chose this run, across both
+  // sources, before salting/capping — so "same local day -> same batch" is checkable (task book H1 / C2c
+  // 独立验收 P2-1).
+  const sampledSessionIds: string[] = []
 
   if (hasClaudeData(ctx) && ctx.claude) {
     evaluated.add('claude-code')
@@ -524,6 +535,7 @@ export function resumeCheck(ctx: CheckContext): ReturnType<typeof assembleCheck>
       bySource['claude-code'] = entry
       headlineTotal += tally.total - tally.unsupported
       if (entry.verdict === 'warn' || entry.verdict === 'fail') headlineProblems++
+      sampledSessionIds.push(...tally.sampledSessionIds)
     }
   }
   if (hasCodexData(ctx) && ctx.codex) {
@@ -538,6 +550,7 @@ export function resumeCheck(ctx: CheckContext): ReturnType<typeof assembleCheck>
       bySource.codex = entry
       headlineTotal += tally.total - tally.unsupported
       if (entry.verdict === 'warn' || entry.verdict === 'fail') headlineProblems++
+      sampledSessionIds.push(...tally.sampledSessionIds)
     }
   }
   // Cursor: forced not-applicable (task book — this check's infrastructure is Claude/Codex-only; see file
@@ -558,5 +571,11 @@ export function resumeCheck(ctx: CheckContext): ReturnType<typeof assembleCheck>
   const headlineNumbers = headlineProblems === 0 ? [headlineTotal] : [gradedSourceCount, headlineProblems]
   const result = assembleCheck({ id: 'resume', bySource, findings, headline, headlineNumbers })
   if (ctx.readout.status !== 'ok') result.reason = ctx.readout.reason ?? 'readout.not-isolated'
+  // C2c-3 (task book H1 / C2c 独立验收 P2-1): disclose the local day the seed was computed from (== the
+  // seed itself in production, see contract.ts#resumeSampling) regardless of whether any session was
+  // actually sampled this run (e.g. readout not isolated, or neither source has data) — it is still
+  // meaningful on its own.
+  const { date, offsetMinutes } = localDateAndOffset()
+  result.resumeSampling = { localDate: date, timezoneOffsetMinutes: offsetMinutes, sampledIds: sampleIds(ctx.salt, sampledSessionIds) }
   return result
 }

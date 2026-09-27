@@ -208,6 +208,8 @@
 | Claude Code | 2[R] | 0%[D] | 0[D] | 2[D] | 0 找到 / 0 坏链接 / 0 找不到 | 2 一致 / 0 不一致 |
 | Codex | 2[R] | 0%[D] | 0[D] | 2[D] | 0 找到 / 0 坏链接 / 0 找不到 | 2 一致 / 0 不一致 |
 
+抽样种子：2026-09-28（UTC+08:00）· 抽中会话（盐化 id，至多 5 个）：xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx
+
 - 注意 · Claude Code：有 2 场会话记录的工作目录已经不在了。这是电脑的问题，恢复前先确认项目目录还在[D]
   - src/checkup/checks/resume.ts#classifyBucket：ReadoutSession.resumeCwd（来自 SessionSummary.resumeCwd）这次用 fs.statSync 复核后不存在
   - 样本：xxxxxxxx xxxxxxxx

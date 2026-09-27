@@ -211,7 +211,17 @@
         "ownerAction": { "type": "string" },
         "bySource": { "type": "object", "additionalProperties": { "$ref": "#/$defs/SourceEntry" } },
         "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" } },
-        "reason": { "type": "string" }
+        "reason": { "type": "string" },
+        "resumeSampling": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["localDate", "timezoneOffsetMinutes", "sampledIds"],
+          "properties": {
+            "localDate": { "type": "string" },
+            "timezoneOffsetMinutes": { "type": "number" },
+            "sampledIds": { "type": "array", "maxItems": 5, "items": { "type": "string", "pattern": "^[0-9a-f]{8}$" } }
+          }
+        }
       }
     },
     "CheckupUnit": {

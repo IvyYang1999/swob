@@ -11,7 +11,7 @@ import { censusClaude } from '../census/claude-census'
 import { censusCodex } from '../census/codex-census'
 import type { ReadoutSession, ReadoutSessionTokens, SwobReadout } from '../readout'
 import { unavailableReadoutTokens } from '../readout'
-import { claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from '../self-test/samples'
+import { claude, claudeProjectDir, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from '../self-test/samples'
 import type { CheckContext } from './common'
 import { tokensCheck } from './tokens'
 
@@ -52,8 +52,13 @@ function codexSession(id: string, filePath: string, sessionTokens: ReadoutSessio
   return { source: 'codex', sessionId: id, primaryPath: filePath, paths: [filePath], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false, tokens: sessionTokens }
 }
 
-function claudeSession(id: string, filePath: string, sessionTokens: ReadoutSessionTokens): ReadoutSession {
-  return { source: 'claude-code', sessionId: id, primaryPath: filePath, paths: [filePath], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false, tokens: sessionTokens }
+function claudeSession(id: string, filePath: string, sessionTokens: ReadoutSessionTokens, extra: Partial<ReadoutSession> = {}): ReadoutSession {
+  return { source: 'claude-code', sessionId: id, primaryPath: filePath, paths: [filePath], subagentPaths: [], subagentIds: [], compactCount: 0, virtual: false, tokens: sessionTokens, ...extra }
+}
+
+/** Real Claude file at `<project>/<sessionId>.jsonl` (real physical Claude naming: by sessionId, never `.id`). */
+function writeClaudeFile(root: string, project: string, sessionId: string, rows: Array<Record<string, unknown>>): string {
+  return fs.realpathSync(writeSample(root, path.join(project, `${sessionId}.jsonl`), jsonl(rows)))
 }
 
 async function codexUnitAt(root: string, id: string, minute: number, usage: { input: number; cached?: number; output: number }): Promise<string> {
@@ -188,3 +193,233 @@ describe('⑤ tokens', () => {
     expect(result.bySource['claude-code'].verdict).toBe('warn')
   })
 })
+
+describe('⑤ tokens — C2a-2 deliverable 1: branch-family grouping', () => {
+  it('an owner + a split-cluster child (`.id` in "sessionId:branch-N" form) are compared once: the on-disk-duplicated shared prefix is deduped by the oracle union, not double-counted; an unrelated session is not swept in', async () => {
+    const root = home()
+    const project = path.join('.claude', 'projects', claudeProjectDir(CWD))
+    const ownerId = syntheticUuid(900)
+    const childId = syntheticUuid(901)
+    const otherId = syntheticUuid(902)
+    const sharedUuid = syntheticUuid(910)
+    const startUuid = syntheticUuid(911)
+
+    // Owner's file: the shared assistant row only.
+    const ownerPath = writeClaudeFile(root, project, ownerId, [
+      claude.user({ uuid: startUuid, parentUuid: null, sessionId: ownerId, timestamp: syntheticTime(0), cwd: CWD, text: 'start' }),
+      claude.assistant({
+        uuid: sharedUuid, parentUuid: startUuid, sessionId: ownerId, timestamp: syntheticTime(1), cwd: CWD, text: 'shared',
+        messageId: 'm-shared', requestId: 'r-shared', usage: { input: 100, output: 20 }
+      })
+    ])
+    // Child's file: an on-disk copy of the *same* shared row (identical messageId/requestId — the physical
+    // duplication C2a's real-HOME investigation found across branch-linked top-level files) plus the
+    // child's own independent tail.
+    const childPath = writeClaudeFile(root, project, childId, [
+      claude.user({ uuid: startUuid, parentUuid: null, sessionId: childId, timestamp: syntheticTime(0), cwd: CWD, text: 'start' }),
+      claude.assistant({
+        uuid: sharedUuid, parentUuid: startUuid, sessionId: childId, timestamp: syntheticTime(1), cwd: CWD, text: 'shared',
+        messageId: 'm-shared', requestId: 'r-shared', usage: { input: 100, output: 20 }
+      }),
+      claude.assistant({
+        uuid: syntheticUuid(912), parentUuid: sharedUuid, sessionId: childId, timestamp: syntheticTime(2), cwd: CWD, text: 'own',
+        messageId: 'm-child-own', requestId: 'r-child-own', usage: { input: 50, output: 10 }
+      })
+    ])
+    // Unrelated, independent session: its own row only, no link to owner/child.
+    const otherPath = writeClaudeFile(root, project, otherId, [
+      claude.user({ uuid: syntheticUuid(920), parentUuid: null, sessionId: otherId, timestamp: syntheticTime(0), cwd: CWD, text: 'hi' }),
+      claude.assistant({
+        uuid: syntheticUuid(921), parentUuid: syntheticUuid(920), sessionId: otherId, timestamp: syntheticTime(1), cwd: CWD, text: 'ok',
+        messageId: 'm-other', requestId: 'r-other', usage: { input: 30, output: 5 }
+      })
+    ])
+    const claudeCensus = await censusClaude(root)
+
+    // F1m-correct kernel behaviour (hand-specified, as every other test in this file does): the shared
+    // prefix's billing fact is attributed to exactly one side (the owner) and excluded ('scope: inherited')
+    // from the child's own billingTotal — the child's ledger reports only its own tail.
+    const ownerTokens = tokens({ nonCachedInput: 100, output: 20 })
+    const childTokens = tokens({ nonCachedInput: 50, output: 10 })
+    const otherTokens = tokens({ nonCachedInput: 30, output: 5 })
+    // The owner's own `.id` is *also* a split-cluster id (a different branch index than the child's), so
+    // the closure is exercised in the `.id` namespace on both ends of the edge, not only the child's —
+    // package decision M2's exact concern: `branchParentId`/`branchChildIds` live in the `.id` namespace,
+    // not `.sessionId`, and a naive sessionId-keyed closure would still coincidentally connect a single
+    // split id to an unsplit one, but not two split ids to each other.
+    const ownerNodeId = `${ownerId}:branch-2`
+    const childNodeId = `${childId}:branch-1`
+    const ownerSession = claudeSession(ownerId, ownerPath, ownerTokens, { id: ownerNodeId })
+    const childSession = claudeSession(childId, childPath, childTokens, { id: childNodeId, branchParentId: ownerNodeId })
+    const otherSession = claudeSession(otherId, otherPath, otherTokens)
+
+    const result = tokensCheck(ctx({ claude: claudeCensus, readout: readout([ownerSession, childSession, otherSession]) }))
+
+    const entry = result.bySource['claude-code']
+    expect(entry.oracle.billingTotal.value).toBe(215) // 100+20 (shared, once) + 50+10 (child tail) + 30+5 (other)
+    expect(entry.swob.billingTotal.value).toBe(215)
+    expect(entry.swob.billingTotalDeviationPct.value).toBe(0)
+    expect(entry.swob.sessionsRawCompared.value).toBe(3) // N: owner + child + other
+    expect(entry.swob.sessionsCompared.value).toBe(2) // M: {owner,child} merged into one group, + {other}
+    expect(entry.swob.sessionsEqual.value).toBe(2)
+    expect(entry.swob.maxBranchGroupSize.value).toBe(2)
+    expect(result.findings.find((item) => item.source === 'claude-code' && item.code === 'tokens.session-mismatch')).toBeUndefined()
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('反例（S1，第二轮决定）：重合太小、内核没有识别为分支（无 branchParentId）时，⑤ 仍如实报不一致，不被并组逻辑意外吞掉', async () => {
+    const root = home()
+    const project = path.join('.claude', 'projects', claudeProjectDir(CWD))
+    const ownerId = syntheticUuid(930)
+    const otherId = syntheticUuid(931)
+    const sharedUuid = syntheticUuid(940)
+    const startUuid = syntheticUuid(941)
+
+    const ownerPath = writeClaudeFile(root, project, ownerId, [
+      claude.user({ uuid: startUuid, parentUuid: null, sessionId: ownerId, timestamp: syntheticTime(0), cwd: CWD, text: 'start' }),
+      claude.assistant({
+        uuid: sharedUuid, parentUuid: startUuid, sessionId: ownerId, timestamp: syntheticTime(1), cwd: CWD, text: 'shared',
+        messageId: 'm-shared-2', requestId: 'r-shared-2', usage: { input: 100, output: 20 }
+      })
+    ])
+    const otherPath = writeClaudeFile(root, project, otherId, [
+      claude.user({ uuid: startUuid, parentUuid: null, sessionId: otherId, timestamp: syntheticTime(0), cwd: CWD, text: 'start' }),
+      claude.assistant({
+        uuid: sharedUuid, parentUuid: startUuid, sessionId: otherId, timestamp: syntheticTime(1), cwd: CWD, text: 'shared',
+        messageId: 'm-shared-2', requestId: 'r-shared-2', usage: { input: 100, output: 20 }
+      }),
+      claude.assistant({
+        uuid: syntheticUuid(942), parentUuid: sharedUuid, sessionId: otherId, timestamp: syntheticTime(2), cwd: CWD, text: 'own',
+        messageId: 'm-other-own-2', requestId: 'r-other-own-2', usage: { input: 50, output: 10 }
+      })
+    ])
+    const claudeCensus = await censusClaude(root)
+    const ownerTokens = tokens({ nonCachedInput: 100, output: 20 })
+    const otherTokens = tokens({ nonCachedInput: 50, output: 10 })
+    // No branchParentId/branchChildIds on either side: this reproduces the design gap the task book's
+    // complementary "反例" fixture calls for (session-loader.ts's linkCrossSessionBranches needs uuid
+    // overlap >= 3 *and* both sides to carry independent tail content — below that threshold, or with a
+    // one-sided tail, it never writes the link at all, and no amount of grouping logic here can find a
+    // link the kernel never recorded).
+    const result = tokensCheck(ctx({
+      claude: claudeCensus,
+      readout: readout([claudeSession(ownerId, ownerPath, ownerTokens), claudeSession(otherId, otherPath, otherTokens)])
+    }))
+    const entry = result.bySource['claude-code']
+    // The *global* total still matches (F1m already fixed the ledger) — the bug this reproduces is at the
+    // per-session granularity: the ungrouped "other" session's own solo-family oracle recount still sees
+    // its file's full physical content (both the shared row and its own tail), while its ledger-correct
+    // Swob total only reports its own tail.
+    expect(entry.swob.billingTotalDeviationPct.value).toBe(0)
+    expect(entry.swob.sessionsRawCompared.value).toBe(2)
+    expect(entry.swob.sessionsCompared.value).toBe(2) // ungrouped: no branch link to merge on
+    expect(entry.swob.maxBranchGroupSize.value).toBe(1)
+    expect(entry.swob.sessionsEqual.value).toBe(1)
+    const mismatch = result.findings.find((item) => item.source === 'claude-code' && item.code === 'tokens.session-mismatch')
+    expect(mismatch).toBeTruthy()
+    expect(mismatch?.count.value).toBe(1)
+    expect(entry.verdict).toBe('warn')
+  })
+})
+describe('⑤ tokens — C2a-2 deliverable 2: symmetric exclusion of families still being written', () => {
+  it('Claude：整个分支家族里只要有一个单元在体检期间变化，两侧都把这整个家族剔除，不产生虚假偏差', async () => {
+    const root = home()
+    const project = path.join('.claude', 'projects', claudeProjectDir(CWD))
+    const ownerId = syntheticUuid(950)
+    const childId = syntheticUuid(951)
+    const stableId = syntheticUuid(952)
+    const sharedUuid = syntheticUuid(960)
+    const startUuid = syntheticUuid(961)
+
+    const ownerPath = writeClaudeFile(root, project, ownerId, [
+      claude.user({ uuid: startUuid, parentUuid: null, sessionId: ownerId, timestamp: syntheticTime(0), cwd: CWD, text: 'start' }),
+      claude.assistant({
+        uuid: sharedUuid, parentUuid: startUuid, sessionId: ownerId, timestamp: syntheticTime(1), cwd: CWD, text: 'shared',
+        messageId: 'm-shared-3', requestId: 'r-shared-3', usage: { input: 100, output: 20 }
+      })
+    ])
+    const childPath = writeClaudeFile(root, project, childId, [
+      claude.user({ uuid: startUuid, parentUuid: null, sessionId: childId, timestamp: syntheticTime(0), cwd: CWD, text: 'start' }),
+      claude.assistant({
+        uuid: sharedUuid, parentUuid: startUuid, sessionId: childId, timestamp: syntheticTime(1), cwd: CWD, text: 'shared',
+        messageId: 'm-shared-3', requestId: 'r-shared-3', usage: { input: 100, output: 20 }
+      }),
+      claude.assistant({
+        uuid: syntheticUuid(962), parentUuid: sharedUuid, sessionId: childId, timestamp: syntheticTime(2), cwd: CWD, text: 'own',
+        messageId: 'm-child-own-3', requestId: 'r-child-own-3', usage: { input: 50, output: 10 }
+      })
+    ])
+    const stablePath = writeClaudeFile(root, project, stableId, [
+      claude.user({ uuid: syntheticUuid(970), parentUuid: null, sessionId: stableId, timestamp: syntheticTime(0), cwd: CWD, text: 'hi' }),
+      claude.assistant({
+        uuid: syntheticUuid(971), parentUuid: syntheticUuid(970), sessionId: stableId, timestamp: syntheticTime(1), cwd: CWD, text: 'ok',
+        messageId: 'm-stable-3', requestId: 'r-stable-3', usage: { input: 30, output: 5 }
+      })
+    ])
+    const claudeCensus = await censusClaude(root)
+    const ownerNodeId = `${ownerId}:branch-2`
+    const childNodeId = `${childId}:branch-1`
+    const sessions = readout([
+      claudeSession(ownerId, ownerPath, tokens({ nonCachedInput: 100, output: 20 }), { id: ownerNodeId }),
+      claudeSession(childId, childPath, tokens({ nonCachedInput: 50, output: 10 }), { id: childNodeId, branchParentId: ownerNodeId }),
+      claudeSession(stableId, stablePath, tokens({ nonCachedInput: 30, output: 5 }))
+    ])
+
+    // Baseline: nothing changed mid-run — the family compares cleanly (same shape as the grouping test above).
+    const baseline = tokensCheck(ctx({ claude: claudeCensus, readout: sessions }))
+    expect(baseline.bySource['claude-code'].verdict).toBe('pass')
+    expect(baseline.bySource['claude-code'].swob.sessionsCompared.value).toBe(2)
+
+    // The child's file changed mid-run: without symmetric exclusion, the oracle would drop only the
+    // child's unit from *its own* family (shrinking that one family's oracle) while Swob still summed the
+    // child's (possibly-stale) reported tokens in full — the exact asymmetry F1m's independent verifier
+    // measured pushing the real-HOME deviation up by 0.7%-3.1%. With the fix, the *whole* family (owner +
+    // child) is dropped from both sides; the unrelated, stable session is untouched.
+    const result = tokensCheck(ctx({ claude: claudeCensus, readout: sessions, changed: new Set([childPath]) }))
+    const entry = result.bySource['claude-code']
+    expect(entry.swob.sessionsExcludedChanged.value).toBe(2) // owner + child, both dropped as one family
+    expect(entry.swob.sessionsCompared.value).toBe(1) // only the stable session is left to compare
+    expect(entry.swob.sessionsEqual.value).toBe(1)
+    expect(entry.swob.billingTotal.value).toBe(35) // the family's contribution is gone from *both* sides (30+5 left)
+    expect(entry.oracle.billingTotal.value).toBe(35)
+    expect(entry.swob.billingTotalDeviationPct.value).toBe(0) // no spurious deviation from the exclusion itself
+    const finding = result.findings.find((item) => item.source === 'claude-code' && item.code === 'census.file-changed-during-run')
+    expect(finding).toBeTruthy()
+    expect(finding?.count.value).toBe(2)
+    expect(finding?.verdict).toBe('undetermined')
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('Codex：结果与「都不剔除且文件未变」一致 —— 排除掉的会话不引入虚假偏差', async () => {
+    const root = home()
+    const p = syntheticUuid(980, 'c0de')
+    const q = syntheticUuid(981, 'c0de')
+    const pPath = await codexUnitAt(root, p, 0, { input: 1000, cached: 200, output: 50 })
+    const qPath = await codexUnitAt(root, q, 10, { input: 500, cached: 0, output: 25 })
+    const codexCensus = await censusCodex(root, { env: {} })
+    const sessions = readout([
+      codexSession(p, pPath, tokens({ nonCachedInput: 800, cacheRead: 200, output: 50 })),
+      codexSession(q, qPath, tokens({ nonCachedInput: 500, cacheRead: 0, output: 25 }))
+    ])
+
+    const baseline = tokensCheck(ctx({ codex: codexCensus, readout: sessions }))
+    expect(baseline.bySource.codex.verdict).toBe('pass')
+    expect(baseline.bySource.codex.swob.sessionsCompared.value).toBe(2)
+    expect(baseline.bySource.codex.swob.billingTotalDeviationPct.value).toBe(0)
+
+    const result = tokensCheck(ctx({ codex: codexCensus, readout: sessions, changed: new Set([qPath]) }))
+    const entry = result.bySource.codex
+    expect(entry.swob.sessionsExcludedChanged.value).toBe(1)
+    expect(entry.swob.sessionsCompared.value).toBe(1)
+    expect(entry.swob.sessionsEqual.value).toBe(1)
+    // Identical qualitative result to "neither side excludes anything and the file never changed": still a
+    // clean 0% deviation, still 'pass' — the one excluded session simply is not part of either total.
+    expect(entry.swob.billingTotalDeviationPct.value).toBe(0)
+    expect(entry.verdict).toBe('pass')
+    const finding = result.findings.find((item) => item.source === 'codex' && item.code === 'census.file-changed-during-run')
+    expect(finding).toBeTruthy()
+    expect(finding?.count.value).toBe(1)
+    expect(finding?.verdict).toBe('undetermined')
+  })
+})
+

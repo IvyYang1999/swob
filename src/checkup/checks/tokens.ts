@@ -109,6 +109,23 @@ function round3(value: number): number {
  * it reaches a session Swob actually listed. Mirrors F1b's family-scoped recompute (verified equal to the
  * global one on real data); units that never reach a listed session (should not happen once ④ is clean)
  * are simply not attributed to any family and only count toward the global oracle total.
+ *
+ * C2a-2 P2-3 (real-HOME investigation, not fixed here — a kernel-side gap, not a comparison-logic bug):
+ * this unlimited-depth, physical-evidence walk is unchanged from C2a and deliberately does not defer to
+ * whatever `src/main/session-loader.ts` itself chose to merge into a session's own `tokenAccounting` — the
+ * whole point of an independent oracle is to not simply echo the kernel's own selection back at it. Real
+ * HOME (2026-09-28) surfaced exactly two `tokens.session-mismatch` Codex sessions this way, both real,
+ * both explained, neither a checkup bug: (1) two top-level rollout files that self-report the identical
+ * `session_meta.id` (their own physical duplication of the same session id — census sums both files'
+ * `tokenSnapshots`, but the session's own `tokenAccounting` reflects markedly fewer messages than the sum
+ * of both files' own conversations, so the kernel is not folding both files' full content into one ledger
+ * the way this walk assumes); (2) an eleven-hop `codexUnitParentId` chain of thread-spawn descendants
+ * spanning roughly two weeks, every one of them already merged into *some* session's ledger
+ * (`ctx.readout.attributedChildIds` confirms it), just not transitively re-summed all the way up into this
+ * top-level ancestor's own total the way an unbounded walk does. Both are `src/main/session-loader.ts`
+ * session-merge decisions (outside `src/checkup/**`, this check's only writable surface) — this comment
+ * exists so a future kernel-side package (in the spirit of C2a's P1-1 → F1m) has a documented starting
+ * point instead of re-discovering it from a bare "2 sessions differ" finding.
  */
 function codexFamilies(units: readonly CodexUnit[], listedTopLevel: ReadonlySet<string>): Map<string, CodexUnit[]> {
   const bySession = new Map<string, CodexUnit[]>()
@@ -214,6 +231,23 @@ function claudeFamilies(units: readonly ClaudeUnit[], sessions: readonly Readout
  * (a fixture predating C2b, or a future source) falls back to its `sessionId` as a node key: still a valid
  * (isolated) group member, just not a link target — `branchParentId`/`branchChildIds` are always empty in
  * that case anyway.
+ *
+ * Real-HOME finding (2026-09-28, not fixed here — a kernel-side gap, not a comparison-logic bug): grouping
+ * only ever helps when `session-loader.ts#linkCrossSessionBranches` actually wrote the link, and on a
+ * machine whose Claude Code sessions are mostly *dispatched/automated* continuations (background agents
+ * resumed by another agent, sub-sessions with no further manually-typed input) rather than a human
+ * retyping into a resumed chat, its `hasMaterialUserTailDivergence` gate — both sides must have their own
+ * unique *real user text* after the shared branch point, not just diverging content of any kind — routinely
+ * finds nothing to require on the automated side and never links the pair, no matter how large the
+ * physical uuid overlap is (real HOME here: several unlinked pairs with overlap in the hundreds). Each such
+ * unlinked pair stays two singleton groups and is correctly, individually reported as a
+ * `tokens.session-mismatch` (exactly what the S1 counterexample below tests for) — this is the intended
+ * behaviour of a check with no branch-metadata to group on, not a defect in it. It does mean the "≥99%
+ * grouped session match" bar this package's task book expected is machine-usage-pattern-dependent: on this
+ * kind of automation-heavy machine, on this day, ⑤ Claude still lands on 'warn' after both C2a-2 fixes,
+ * driven by this kernel-side linking gap rather than by anything `checks/tokens.ts` can decide from
+ * `ReadoutSession`/oracle data alone — a candidate for a follow-up kernel-side package (in the spirit of
+ * C2a's P1-1 → F1m), not something to special-case away here.
  */
 function claudeBranchGroups(sessions: readonly ReadoutSession[]): ReadoutSession[][] {
   const nodeKey = (session: ReadoutSession): string => session.id ?? session.sessionId

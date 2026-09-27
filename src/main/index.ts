@@ -419,6 +419,11 @@ let usageFactSyncError: unknown = null
 // The failure streak behind usageFactSyncError, shown on the Insights page:
 // counted once per failed run (onError), cleared by a committed sync.
 const usageFactSyncFailures = new UsageFactSyncFailureTracker()
+// A hydration that throws otherwise leaves no trace: the epoch's Insights
+// rows are simply held back (see hydrateLibrarySessionsUnderGate). Same shape
+// as usageFactSyncFailures (name, code and count, never a message or path); a
+// separate streak because the two failures are unrelated.
+const libraryHydrationFailures = new UsageFactSyncFailureTracker()
 interface UsageFactSyncSnapshot {
   sessions: SessionSummary[]
   folders: Folder[]
@@ -2027,6 +2032,14 @@ async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
   libraryHydrationActive++
   try {
     await hydrateLibrarySessionsUnderGate(tree)
+    const recovered = libraryHydrationFailures.recordSuccess()
+    if (recovered) writeLifecycleLog('hydrate-library-recovered', recovered.fields)
+  } catch (error) {
+    // Diagnostic only: every caller's existing try/catch (or unhandled-rejection
+    // handling for a `void` call) is unchanged, this only makes the failure visible.
+    const entry = libraryHydrationFailures.recordFailure(error)
+    if (entry) writeLifecycleLog('hydrate-library-failed', entry.fields)
+    throw error
   } finally {
     libraryHydrationActive--
     if (libraryHydrationActive === 0) scheduleAutomaticDuplicateRecoveryAnalysis()

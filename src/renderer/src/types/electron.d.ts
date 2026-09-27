@@ -172,6 +172,8 @@ type RendererUsageFactSyncResult = {
   removedSessions: number
   factCount: number
   rebuilt: boolean
+  downgradesSkipped?: Record<string, number>
+  aggregateAccepted?: Record<string, number>
 }
 
 interface ElectronAPI {

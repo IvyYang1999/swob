@@ -424,6 +424,7 @@ export function closeUsageFactStore(): void {
   insightsBundleCache.clear()
   pendingUsageRemovals.clear()
   reportedUsageRemovalHolds.clear()
+  reportedUsageDowngrades.clear()
 }
 
 export function initializeUsageFactStore(): void {
@@ -928,6 +929,10 @@ interface PendingUsageRemoval {
 const pendingUsageRemovals = new Map<string, Map<string, PendingUsageRemoval>>()
 // Last hold reported per ledger path and source, so a steady hold is logged once.
 const reportedUsageRemovalHolds = new Map<string, string>()
+// Last count of kept sessions reported per ledger path and source. Not reset
+// by a sync that keeps none: a compact sync never judges a kept session, so a
+// steady degraded input is logged once, not after every compact round.
+const reportedUsageDowngrades = new Map<string, number>()
 
 const USAGE_REMOVAL_MAX_RATIO = 0.2
 const USAGE_REMOVAL_MAX_COUNT = 100
@@ -1137,6 +1142,32 @@ function reportUsageRemovalHolds(ledgerPath: string, holds: UsageRemovalPlan['ho
   }
 }
 
+/** Kept and accepted sessions of one committed sync: source name and counts only, a steady count once. */
+function reportUsageDowngrades(
+  ledgerPath: string,
+  kept: ReadonlyMap<string, number>,
+  accepted: ReadonlyMap<string, number>
+): void {
+  for (const [source, count] of sortedCountEntries(kept)) {
+    const key = `${ledgerPath}\0${source}`
+    if (reportedUsageDowngrades.get(key) === count) continue
+    reportedUsageDowngrades.set(key, count)
+    console.warn(`[usage-facts] ${source}: kept the committed usage of ${count} session(s) whose input fell back to an aggregate or to no usage`)
+  }
+  for (const [source, count] of sortedCountEntries(accepted)) {
+    console.warn(`[usage-facts] ${source}: took this sync's aggregate for ${count} session(s) that had only superseded rows`)
+  }
+}
+
+function sortedCountEntries(counts: ReadonlyMap<string, number>): Array<[string, number]> {
+  return [...counts].sort(([left], [right]) => left.localeCompare(right))
+}
+
+/** The one event id a session's `${source}:aggregate` fact has (usageFactsForSession's formula). */
+function sqliteAgentAggregateEventId(source: string, sessionId: string): string {
+  return stableHash([source, sessionId, sessionId, `${source}:aggregate`])
+}
+
 export function synchronizeUsageFacts(
   sessions: SessionSummary[],
   folders: SessionGroup[],
@@ -1169,6 +1200,10 @@ export function synchronizeUsageFacts(
   const affectedBillingFactIds = new Set<string>()
   const changedSessionIds = new Set<string>()
   let removalPlan: UsageRemovalPlan | null = null
+  // Per source: changed sessions kept as committed, and sessions whose only
+  // (superseded) rows gave way to this sync's aggregate. See the loop below.
+  const downgradesSkipped = new Map<string, number>()
+  const aggregateAccepted = new Map<string, number>()
 
   const sync = db.transaction(() => {
     throwIfUsageFactSyncCancelled(options.shouldCancel)
@@ -1176,6 +1211,26 @@ export function synchronizeUsageFacts(
     const selectSessionBillingIds = db.prepare(
       'SELECT DISTINCT billing_fact_id FROM usage_facts WHERE session_id = ?'
     )
+    const selectCurrentFact = db.prepare(
+      'SELECT 1 FROM usage_facts WHERE session_id = ? AND superseded = 0 LIMIT 1'
+    )
+    const selectOtherCurrentFact = db.prepare(
+      'SELECT 1 FROM usage_facts WHERE session_id = ? AND superseded = 0 AND event_id <> ? LIMIT 1'
+    )
+    const selectSupersededFactIds = db.prepare(
+      'SELECT event_id FROM usage_facts WHERE session_id = ? AND superseded = 1'
+    )
+    const deleteSupersededFact = db.prepare(
+      'DELETE FROM usage_facts WHERE event_id = ? AND session_id = ? AND superseded = 1'
+    )
+    const updateKeptSession = db.prepare(
+      'UPDATE usage_sessions SET projection_signature = ?, folder_signature = ? WHERE session_id = ?'
+    )
+    const restoreKeptActivity = db.prepare(`
+      INSERT OR IGNORE INTO usage_session_activity(session_id, occurred_day)
+      SELECT DISTINCT session_id, occurred_day FROM usage_facts
+      WHERE session_id = ? AND superseded = 0 AND occurred_day <> '${UNKNOWN_TIME}'
+    `)
     db.prepare('DELETE FROM usage_folders').run()
     const insertFolderName = db.prepare('INSERT INTO usage_folders(folder_id, name) VALUES (?, ?)')
     for (const folder of folders) {
@@ -1241,59 +1296,93 @@ export function synchronizeUsageFacts(
       const facts = factChanged && parsed
         ? usageFactsForSession(session, { rootSessionId: resolvedRoot })
         : []
-      const activityDays = factChanged ? activityDaysForSession(session, facts) : []
-      const activityTimeStatus = factChanged
+      const source = session.source || 'claude-code'
+      const sqliteAgent = session.source === 'opencode' || session.source === 'zcode'
+      const isPerCallSqliteAgent = sqliteAgent && isPerCallSqliteAgentAccounting(accounting)
+      // F1k: judge a changed session against what it committed before this
+      // sync touches it. It keeps its committed facts when the ledger has
+      // current facts for it and this input has none (no events, a placeholder
+      // or a parse error: `facts` is empty whenever parse is not 'parsed'), or
+      // falls back from per-call rows to an aggregate (a current row whose id
+      // is not the session's aggregate id is a per-call row). Replacing them
+      // would silently lose usage; the old aggregate insert even hit the
+      // superseded aggregate's primary key and rolled back the whole sync. The
+      // session stays in uniqueSessions, so the removal plan below never sees
+      // it as absent. Only a changed session with a prior row is judged: an
+      // unchanged one also has no facts to write.
+      let hasCurrentFacts = false
+      let keepCommitted = false
+      if (factChanged && prior) {
+        hasCurrentFacts = selectCurrentFact.get(sessionId) !== undefined
+        keepCommitted = hasCurrentFacts && (
+          facts.length === 0 ||
+          (sqliteAgent && !isPerCallSqliteAgent &&
+            selectOtherCurrentFact.get(sessionId, sqliteAgentAggregateEventId(source, sessionId)) !== undefined)
+        )
+      }
+      const writeFacts = factChanged && !keepCommitted
+      const activityDays = writeFacts ? activityDaysForSession(session, facts) : []
+      const activityTimeStatus = writeFacts
         ? (activityDays.length > 0 ? 'known' : 'unknown')
         : prior!.activity_time_status
-      if (factChanged) changedSessions++
+      if (writeFacts) changedSessions++
       else unchangedSessions++
 
-      db.prepare(`
-        INSERT INTO usage_sessions(
-          session_id, root_session_id, source_client, project_path, turn_count,
-          detection_status, parse_status, usage_status, usage_available,
-          fact_signature, projection_signature, folder_signature, updated_at, activity_time_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(session_id) DO UPDATE SET
-          root_session_id = excluded.root_session_id,
-          source_client = excluded.source_client,
-          project_path = excluded.project_path,
-          turn_count = excluded.turn_count,
-          detection_status = excluded.detection_status,
-          parse_status = excluded.parse_status,
-          usage_status = excluded.usage_status,
-          usage_available = excluded.usage_available,
-          fact_signature = excluded.fact_signature,
-          projection_signature = excluded.projection_signature,
-          folder_signature = excluded.folder_signature,
-          updated_at = excluded.updated_at,
-          activity_time_status = excluded.activity_time_status
-      `).run(
-        sessionId,
-        resolvedRoot,
-        session.source || 'claude-code',
-        projectPath(session),
-        session.turnCount,
-        outcome.detected,
-        outcome.parse,
-        outcome.usage,
-        usageAvailable ? 1 : 0,
-        factSignature,
-        projectionSignature,
-        folderSignature,
-        session.updatedAt || '',
-        activityTimeStatus
-      )
+      if (keepCommitted) {
+        // Facts, activity, statuses and fact signature stay those of the kept
+        // facts, so the next sync judges the session again. The projection
+        // signature follows this input (a compact sync of the same input is
+        // then not sent to hydrate every time); folders are handled below.
+        updateKeptSession.run(projectionSignature, folderSignature, sessionId)
+        downgradesSkipped.set(source, (downgradesSkipped.get(source) || 0) + 1)
+        // A legacy rebuild (no absence evidence) cleared every activity day
+        // above: take back the days of the facts this session keeps.
+        if (options.rebuild && !options.absence) restoreKeptActivity.run(sessionId)
+      } else {
+        db.prepare(`
+          INSERT INTO usage_sessions(
+            session_id, root_session_id, source_client, project_path, turn_count,
+            detection_status, parse_status, usage_status, usage_available,
+            fact_signature, projection_signature, folder_signature, updated_at, activity_time_status
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            root_session_id = excluded.root_session_id,
+            source_client = excluded.source_client,
+            project_path = excluded.project_path,
+            turn_count = excluded.turn_count,
+            detection_status = excluded.detection_status,
+            parse_status = excluded.parse_status,
+            usage_status = excluded.usage_status,
+            usage_available = excluded.usage_available,
+            fact_signature = excluded.fact_signature,
+            projection_signature = excluded.projection_signature,
+            folder_signature = excluded.folder_signature,
+            updated_at = excluded.updated_at,
+            activity_time_status = excluded.activity_time_status
+        `).run(
+          sessionId,
+          resolvedRoot,
+          session.source || 'claude-code',
+          projectPath(session),
+          session.turnCount,
+          outcome.detected,
+          outcome.parse,
+          outcome.usage,
+          usageAvailable ? 1 : 0,
+          factSignature,
+          projectionSignature,
+          folderSignature,
+          session.updatedAt || '',
+          activityTimeStatus
+        )
+      }
 
-      if (factChanged) {
+      if (writeFacts) {
         changedSessionIds.add(sessionId)
         const oldBillingIds = selectSessionBillingIds.all(sessionId) as Array<{ billing_fact_id: string }>
         for (const row of oldBillingIds) affectedBillingFactIds.add(row.billing_fact_id)
-        const isPerCallSqliteAgent = (session.source === 'opencode' || session.source === 'zcode') &&
-          isPerCallSqliteAgentAccounting(accounting)
         if (isPerCallSqliteAgent) {
-          const source = session.source!
-          const aggregateEventId = stableHash([source, sessionId, sessionId, `${source}:aggregate`])
+          const aggregateEventId = sqliteAgentAggregateEventId(source, sessionId)
           db.prepare(`
             UPDATE usage_facts
             SET superseded = 1,
@@ -1305,6 +1394,22 @@ export function synchronizeUsageFacts(
         }
         db.prepare('DELETE FROM usage_facts WHERE session_id = ? AND superseded = 0').run(sessionId)
         db.prepare('DELETE FROM usage_session_activity WHERE session_id = ?').run(sessionId)
+        if (prior && !hasCurrentFacts && facts.length > 0) {
+          // Only superseded rows and no current fact: nothing stronger to
+          // protect, and this input's tokens beat none. A fact whose id is a
+          // superseded row's (the aggregate that per-call rows once replaced)
+          // takes that row's place instead of failing on its primary key. A
+          // session has current rows from then on, so this happens once.
+          const supersededIds = new Set((selectSupersededFactIds.all(sessionId) as Array<{ event_id: string }>)
+            .map((row) => row.event_id))
+          let accepted = false
+          for (const fact of facts) {
+            if (!supersededIds.has(fact.eventId)) continue
+            deleteSupersededFact.run(fact.eventId, sessionId)
+            accepted = true
+          }
+          if (accepted) aggregateAccepted.set(source, (aggregateAccepted.get(source) || 0) + 1)
+        }
         for (const fact of facts) {
           throwIfUsageFactSyncCancelled(options.shouldCancel)
           affectedBillingFactIds.add(fact.billingFactId)
@@ -1381,6 +1486,7 @@ export function synchronizeUsageFacts(
     else pendingUsageRemovals.delete(ledgerPath)
     reportUsageRemovalHolds(ledgerPath, plan.holds)
   }
+  reportUsageDowngrades(ledgerPath, downgradesSkipped, aggregateAccepted)
 
   const factCount = (db.prepare(
     'SELECT count(*) AS count FROM usage_facts WHERE superseded = 0'
@@ -1397,6 +1503,13 @@ export function synchronizeUsageFacts(
           heldRemovals: plan.heldRemovals,
           absences: plan.absences
         }
+      : {}),
+    // Only when non-empty, so every existing result shape stays exactly as it was.
+    ...(downgradesSkipped.size > 0
+      ? { downgradesSkipped: Object.fromEntries(sortedCountEntries(downgradesSkipped)) }
+      : {}),
+    ...(aggregateAccepted.size > 0
+      ? { aggregateAccepted: Object.fromEntries(sortedCountEntries(aggregateAccepted)) }
       : {})
   }
 }

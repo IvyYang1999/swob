@@ -686,19 +686,32 @@ describe('UsageFact + AnalysisScope', () => {
     }
     expect(historyCount).toBeGreaterThanOrEqual(4)
 
-    // A stale pre-t183 summary cache can attempt to downgrade the same
-    // sessions back to their legacy aggregate. The ledger must fail closed:
-    // never revive/replace the superseded aggregate and never discard the
-    // stronger per-call facts. CACHE_VERSION 27 prevents this input in the
-    // loader; this assertion preserves the storage boundary independently.
-    let downgradeError: unknown = null
-    try {
-      synchronizeUsageFacts(legacySessions, [])
-    } catch (error) {
-      downgradeError = error
-    }
-    expect(downgradeError).toMatchObject({ code: 'SQLITE_CONSTRAINT_PRIMARYKEY' })
+    // A stale pre-t183 summary cache, or a loader that falls back to the
+    // legacy aggregate (a rejected model_usage row), can bring the same
+    // sessions back as their aggregate. F1k: the ledger keeps each such
+    // session as committed - never revives or replaces the superseded
+    // aggregate, never discards the stronger per-call facts - and commits the
+    // sync instead of rolling back every source on the aggregate's primary key.
+    const revisionBefore = Number(queryInsightsBundle(scope()).usageRevision)
+    expect(synchronizeUsageFacts(legacySessions, [])).toEqual({
+      changedSessions: 0,
+      unchangedSessions: 2,
+      removedSessions: 0,
+      factCount: 2,
+      rebuilt: false,
+      downgradesSkipped: { opencode: 1, zcode: 1 }
+    })
+    expect(Number(queryInsightsBundle(scope()).usageRevision)).toBe(revisionBefore + 1)
     expect(queryInsights(scope(), 'global').total.processedTokens).toBe(96)
+    closeUsageFactStore()
+    const kept = new Database(process.env.SWOB_USAGE_INDEX_PATH!, { readonly: true })
+    const keptRows = kept.prepare(`
+      SELECT source_client, superseded, billing_included, superseded_by
+      FROM usage_facts
+      ORDER BY source_client, superseded DESC
+    `).all()
+    kept.close()
+    expect(keptRows).toEqual(rows)
 
     // When authoritative request rows are parsed again, the round trip is a
     // no-op over the last committed per-call snapshot.
@@ -1639,5 +1652,387 @@ describe('usage sync removes a missing session only on evidence (F1f)', () => {
     expect(after.facts).toEqual(before.facts)
     // Rollups are rebuilt from every current fact, the kept row's included.
     expect(queryInsights(scope(), 'global').total.processedTokens).toBe(12 + 36)
+  })
+})
+
+// ========================================================
+// F1k: one session's degraded input neither rolls back the whole sync nor
+// silently replaces what the session committed
+// ========================================================
+describe('usage sync keeps what a session committed when its input degrades (F1k)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const SQLITE_AGENT_FORMAT = {
+    opencode: 'opencode-message-usage-v2',
+    zcode: 'zcode-model-usage-v1'
+  } as const
+
+  /** A per-call OpenCode/ZCode session: one authoritative row per [key, input, output]. */
+  function perCall(
+    id: string,
+    source: 'opencode' | 'zcode',
+    calls: Array<[key: string, input: number, output: number]>
+  ): SessionSummary {
+    const events = calls.map(([key, input, output], index) => {
+      const event = usageEvent(`${source}:call:${key}`, localTimestamp(2026, 7, 20, 9 + index), components(input, output), {
+        model: 'glm-4.5',
+        billingFactKey: `${source}:call:${key}`
+      })
+      event.provider = source
+      event.providerFormatVersion = SQLITE_AGENT_FORMAT[source]
+      return event
+    })
+    return makeSession(id, `/repo/${source}`, events, { source })
+  }
+
+  /** The loader's legacy aggregate fallback for the same session (100 in, 20 out). */
+  function aggregate(id: string, source: 'opencode' | 'zcode'): SessionSummary {
+    const session = makeSession(id, `/repo/${source}`, [], { source, turns: 1, parse: 'parsed' })
+    session.tokenUsage = { inputTokens: 100, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0 }
+    session.tokenAccounting = accountingFromMutuallyExclusiveUsage(source, session.tokenUsage, 'reported',
+      `${source} legacy aggregate fallback; request-level model/provider evidence unavailable`)
+    session.providerOutcome = { detected: 'detected', parse: 'parsed', usage: 'available' }
+    return session
+  }
+
+  /** Parsed, but no usage this time: no events, usage unavailable. */
+  function noUsage(id: string, source: SessionSource): SessionSummary {
+    return makeSession(id, `/repo/${source}`, [], { source, unavailable: true, parse: 'parsed' })
+  }
+
+  /** One session's ledger state, through a second, read-only connection. */
+  function sessionLedger(sessionId: string): {
+    current: number
+    superseded: number
+    tokens: number
+    supersededBy: Array<string | null>
+    history: number
+    activity: number
+    folders: number
+    parse: string | undefined
+    usage: string | undefined
+    factSignature: string | undefined
+    projectionSignature: string | null | undefined
+  } {
+    const audit = new Database(process.env.SWOB_USAGE_INDEX_PATH!, { readonly: true, fileMustExist: true })
+    try {
+      const facts = audit.prepare(`
+        SELECT superseded, superseded_by,
+          non_cached_input + cache_read + cache_write + output_tokens AS tokens
+        FROM usage_facts WHERE session_id = ? ORDER BY superseded, event_id
+      `).all(sessionId) as Array<{ superseded: number; superseded_by: string | null; tokens: number }>
+      const count = (table: string): number => (audit.prepare(
+        `SELECT count(*) AS count FROM ${table} WHERE session_id = ?`
+      ).get(sessionId) as { count: number }).count
+      const row = audit.prepare(`
+        SELECT parse_status, usage_status, fact_signature, projection_signature
+        FROM usage_sessions WHERE session_id = ?
+      `).get(sessionId) as {
+        parse_status: string
+        usage_status: string
+        fact_signature: string
+        projection_signature: string | null
+      } | undefined
+      const current = facts.filter((fact) => fact.superseded === 0)
+      return {
+        current: current.length,
+        superseded: facts.length - current.length,
+        tokens: current.reduce((sum, fact) => sum + fact.tokens, 0),
+        supersededBy: facts.filter((fact) => fact.superseded === 1).map((fact) => fact.superseded_by),
+        history: count('usage_valuation_history'),
+        activity: count('usage_session_activity'),
+        folders: count('usage_session_folders'),
+        parse: row?.parse_status,
+        usage: row?.usage_status,
+        factSignature: row?.fact_signature,
+        projectionSignature: row?.projection_signature
+      }
+    } finally {
+      audit.close()
+    }
+  }
+
+  it('a per-call session whose input falls back to an aggregate keeps its per-call facts; steady and returning rounds are no-ops', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const perCallInput = perCall('ses_zcPerCall', 'zcode', [['a', 20, 4], ['b', 20, 4]])
+    expect(synchronizeUsageFacts([perCallInput], [])).toMatchObject({ changedSessions: 1, factCount: 2 })
+    const before = sessionLedger('ses_zcPerCall')
+    expect(before).toMatchObject({ current: 2, tokens: 48, activity: 1, parse: 'parsed', usage: 'available' })
+
+    // Never an aggregate before (no superseded row): the old ledger replaced
+    // the per-call rows with the aggregate without a word.
+    const fallback = aggregate('ses_zcPerCall', 'zcode')
+    expect(synchronizeUsageFacts([fallback], [])).toEqual({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      removedSessions: 0,
+      factCount: 2,
+      rebuilt: false,
+      downgradesSkipped: { zcode: 1 }
+    })
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(48)
+    const kept = sessionLedger('ses_zcPerCall')
+    expect(kept).toMatchObject({
+      current: 2,
+      superseded: 0,
+      tokens: 48,
+      activity: 1,
+      parse: 'parsed',
+      usage: 'available',
+      factSignature: before.factSignature
+    })
+    // It takes this sync's projection signature, so a compact sync of the
+    // same fallback does not ask for a hydration every time.
+    expect(kept.projectionSignature).not.toBe(before.projectionSignature)
+    const compact = structuredClone(fallback)
+    compact.tokenAccounting!.usageEvents = []
+    compact.tokenAccounting!.usageEventsOmitted = true
+    expect(synchronizeUsageFacts([compact], [])).toEqual({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      removedSessions: 0,
+      factCount: 2,
+      rebuilt: false
+    })
+
+    // The next hydrated round judges it again; the log line is not repeated.
+    expect(synchronizeUsageFacts([fallback], [])).toMatchObject({ downgradesSkipped: { zcode: 1 } })
+    expect(sessionLedger('ses_zcPerCall').tokens).toBe(48)
+
+    // The per-call rows come back: nothing to redo.
+    expect(synchronizeUsageFacts([perCallInput], [])).toEqual({
+      changedSessions: 0,
+      unchangedSessions: 1,
+      removedSessions: 0,
+      factCount: 2,
+      rebuilt: false
+    })
+    expect(sessionLedger('ses_zcPerCall')).toMatchObject({ current: 2, tokens: 48, history: before.history })
+
+    const lines = warn.mock.calls.map(([line]) => String(line))
+    expect(lines).toEqual([
+      '[usage-facts] zcode: kept the committed usage of 1 session(s) whose input fell back to an aggregate or to no usage'
+    ])
+    for (const line of lines) expect(line).not.toMatch(/ses_|\/repo/)
+  })
+
+  it('a session whose input has no usage this time keeps its committed facts, for every source', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const zcode = perCall('ses_zcNoUsage', 'zcode', [['a', 20, 4], ['b', 20, 4]])
+    const claude = makeSession('claude-no-usage', '/repo/claude', [
+      usageEvent('claude-no-usage-call', localTimestamp(2026, 7, 20, 9), components(30, 6), { model: 'm1' })
+    ])
+    const fresh = noUsage('claude-never-had-usage', 'claude-code')
+    synchronizeUsageFacts([zcode, claude, fresh], [])
+    const before = { zcode: sessionLedger('ses_zcNoUsage'), claude: sessionLedger('claude-no-usage') }
+
+    // A session that never had facts has nothing to keep: it is written as usual.
+    const freshAgain = { ...fresh, turnCount: fresh.turnCount + 1 }
+    expect(synchronizeUsageFacts([
+      noUsage('ses_zcNoUsage', 'zcode'),
+      noUsage('claude-no-usage', 'claude-code'),
+      freshAgain
+    ], [])).toEqual({
+      changedSessions: 1,
+      unchangedSessions: 2,
+      removedSessions: 0,
+      factCount: 3,
+      rebuilt: false,
+      downgradesSkipped: { 'claude-code': 1, zcode: 1 }
+    })
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(48 + 36)
+    // Facts, activity, statuses and fact signature stay as committed; only the
+    // projection signature follows this sync's input.
+    for (const [id, prior] of [['ses_zcNoUsage', before.zcode], ['claude-no-usage', before.claude]] as const) {
+      const { projectionSignature: _projection, ...committed } = prior
+      expect(sessionLedger(id)).toMatchObject(committed)
+    }
+    expect(before.zcode).toMatchObject({ current: 2, tokens: 48, activity: 1, parse: 'parsed', usage: 'available' })
+    expect(before.claude).toMatchObject({ current: 1, tokens: 36, activity: 1, parse: 'parsed', usage: 'available' })
+  })
+
+  it('a session with facts that comes back as a manifest-only placeholder or a parse error keeps them (all sources)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const claude = makeSession('claude-manifest', '/repo/claude', [
+      usageEvent('claude-manifest-call', localTimestamp(2026, 7, 20, 9), components(30, 6), { model: 'm1' })
+    ])
+    const codex = makeSession('codex-parse-error', '/repo/codex', [
+      usageEvent('codex-parse-error-call', localTimestamp(2026, 7, 20, 10), components(30, 6), { model: 'm1' })
+    ], { source: 'codex' })
+    synchronizeUsageFacts([claude, codex], [folder('kept-folder', ['claude-manifest'])])
+    const before = { claude: sessionLedger('claude-manifest'), codex: sessionLedger('codex-parse-error') }
+
+    // Library hydration fell back to the manifest (backup missing or
+    // unreadable): no messages, no accounting, no persisted outcome, which
+    // reads as parse 'placeholder'. The Codex read failed this time.
+    const manifestOnly: SessionSummary = {
+      ...claude,
+      isManifestOnly: true,
+      messageCount: 0,
+      activityDays: [],
+      tokenAccounting: undefined,
+      providerOutcome: undefined,
+      tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
+    }
+    const parseError: SessionSummary = {
+      ...codex,
+      providerOutcome: { detected: 'detected', parse: 'error', usage: 'unavailable' }
+    }
+    expect(synchronizeUsageFacts([manifestOnly, parseError], [
+      folder('kept-folder', ['claude-manifest', 'codex-parse-error'])
+    ])).toEqual({
+      changedSessions: 0,
+      unchangedSessions: 2,
+      removedSessions: 0,
+      factCount: 2,
+      rebuilt: false,
+      downgradesSkipped: { 'claude-code': 1, codex: 1 }
+    })
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(72)
+    expect(sessionLedger('claude-manifest')).toMatchObject({
+      current: 1, tokens: 36, activity: before.claude.activity, parse: 'parsed', usage: 'available', folders: 1
+    })
+    // Folders are still kept up to date for a kept session.
+    expect(sessionLedger('codex-parse-error')).toMatchObject({
+      current: 1, tokens: 36, activity: before.codex.activity, parse: 'parsed', usage: 'available', folders: 1
+    })
+  })
+
+  it('a session left with only its superseded aggregate takes this sync\'s aggregate once, and never flips back', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const id = 'ses_zcOnlySuperseded'
+    const other = makeSession('claude-alongside', '/repo/claude', [
+      usageEvent('claude-alongside-call', localTimestamp(2026, 7, 20, 9), components(30, 6), { model: 'm1' })
+    ])
+    synchronizeUsageFacts([aggregate(id, 'zcode'), other], [])
+    synchronizeUsageFacts([perCall(id, 'zcode', [['a', 40, 8]]), other], [])
+    expect(sessionLedger(id)).toMatchObject({
+      current: 1, superseded: 1, tokens: 48, supersededBy: ['t183-per-call-usage-v1']
+    })
+
+    // The shape the real ledger was left in: a no-usage round cleared the
+    // per-call rows and only the superseded aggregate stayed. A sync can no
+    // longer produce it, so write it through a second connection.
+    const writer = new Database(process.env.SWOB_USAGE_INDEX_PATH!)
+    writer.prepare('DELETE FROM usage_facts WHERE session_id = ? AND superseded = 0').run(id)
+    writer.prepare('DELETE FROM usage_rollups WHERE session_id = ?').run(id)
+    writer.prepare("UPDATE usage_sessions SET fact_signature = 'before-f1k' WHERE session_id = ?").run(id)
+    writer.close()
+    const onlySuperseded = sessionLedger(id)
+    expect(onlySuperseded).toMatchObject({ current: 0, superseded: 1, tokens: 0 })
+
+    // Nothing stronger to protect: the aggregate's tokens are better than none.
+    // The old ledger hit the superseded row's primary key and rolled back
+    // every session of the sync, the Claude Code one included.
+    const changedOther = makeSession('claude-alongside', '/repo/claude', [
+      usageEvent('claude-alongside-call', localTimestamp(2026, 7, 20, 9), components(30, 6), { model: 'm1' }),
+      usageEvent('claude-alongside-next', localTimestamp(2026, 7, 20, 11), components(10, 2), { model: 'm1' })
+    ])
+    expect(synchronizeUsageFacts([aggregate(id, 'zcode'), changedOther], [])).toEqual({
+      changedSessions: 2,
+      unchangedSessions: 0,
+      removedSessions: 0,
+      factCount: 3,
+      rebuilt: false,
+      aggregateAccepted: { zcode: 1 }
+    })
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(120 + 48)
+    const accepted = sessionLedger(id)
+    expect(accepted).toMatchObject({ current: 1, superseded: 0, tokens: 120, supersededBy: [] })
+    expect(accepted.history).toBeGreaterThanOrEqual(onlySuperseded.history)
+
+    // Per-call rows return: the accepted aggregate is superseded again.
+    expect(synchronizeUsageFacts([perCall(id, 'zcode', [['a', 40, 8]]), changedOther], []))
+      .not.toHaveProperty('aggregateAccepted')
+    expect(sessionLedger(id)).toMatchObject({
+      current: 1, superseded: 1, tokens: 48, supersededBy: ['t183-per-call-usage-v1']
+    })
+    // From here an aggregate or a no-usage input is kept out, and nothing is accepted again.
+    expect(synchronizeUsageFacts([aggregate(id, 'zcode'), changedOther], []))
+      .toMatchObject({ downgradesSkipped: { zcode: 1 } })
+    expect(synchronizeUsageFacts([noUsage(id, 'zcode'), changedOther], []))
+      .toMatchObject({ downgradesSkipped: { zcode: 1 } })
+    const settled = sessionLedger(id)
+    expect(settled).toMatchObject({ current: 1, superseded: 1, tokens: 48 })
+    expect(settled.history).toBeGreaterThanOrEqual(accepted.history)
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(48 + 48)
+  })
+
+  it('a kept session stays input to the F1f removal rules: never absent or counted there, and its source never vanishes', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const kept = perCall('ses_zcKept', 'zcode', [['a', 20, 4], ['b', 20, 4]])
+    const gone = perCall('ses_zcGone', 'zcode', [['c', 10, 2]])
+    const claude = makeSession('claude-kept', '/repo/claude', [
+      usageEvent('claude-kept-call', localTimestamp(2026, 7, 20, 9), components(30, 6), { model: 'm1' })
+    ])
+    synchronizeUsageFacts([kept, gone, claude], [])
+    const history = { kept: sessionLedger('ses_zcKept').history, gone: sessionLedger('ses_zcGone').history }
+
+    // Warm load: ZCode discovery succeeded and still lists the kept session
+    // only; the other one was deleted in ZCode.
+    const evidence: UsageFactAbsenceEvidence = {
+      physicalLoad: {
+        loadId: 'load-A',
+        summaryCache: 'warm',
+        sqliteSources: { zcode: { discovery: 'ok', presentSessionIds: ['ses_zcKept'] } }
+      },
+      providerSettlement: 'complete',
+      excludedSources: []
+    }
+    // The kept session is still ZCode input, so the one deleted session is an
+    // ordinary candidate (under the gate's minimum), not a vanished source.
+    expect(synchronizeUsageFacts([aggregate('ses_zcKept', 'zcode'), noUsage('claude-kept', 'claude-code')], [], {
+      absence: evidence
+    })).toEqual({
+      changedSessions: 0,
+      unchangedSessions: 2,
+      removedSessions: 1,
+      factCount: 3,
+      rebuilt: false,
+      retainedSessions: 0,
+      heldRemovals: 0,
+      absences: [],
+      downgradesSkipped: { 'claude-code': 1, zcode: 1 }
+    })
+    expect(sessionLedger('ses_zcKept')).toMatchObject({ current: 2, tokens: 48, history: history.kept })
+    expect(sessionLedger('claude-kept')).toMatchObject({ current: 1, tokens: 36 })
+    expect(sessionLedger('ses_zcGone')).toMatchObject({ current: 0, parse: undefined, history: history.gone })
+  })
+
+  it('a legacy rebuild gives a kept session back the activity days of the facts it keeps', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const zcode = perCall('ses_zcRebuild', 'zcode', [['a', 20, 4], ['b', 20, 4]])
+    const claude = makeSession('claude-rebuild', '/repo/claude', [
+      usageEvent('claude-rebuild-call', localTimestamp(2026, 7, 21, 9), components(30, 6), { model: 'm1' })
+    ])
+    const folders = [folder('rebuild-folder', ['ses_zcRebuild'])]
+    synchronizeUsageFacts([zcode, claude], folders)
+    const bounded = scope({ range: { from: '2026-07-20', to: '2026-07-20' } })
+    expect(queryInsights(bounded, 'global').total).toMatchObject({
+      processedTokens: 48,
+      sessionCount: 1,
+      usageCoverage: { covered: 1, total: 1, percent: 100 }
+    })
+
+    // No absence evidence: the rebuild clears every activity day and folder
+    // first; a kept session must not drop out of the bounded denominator.
+    expect(synchronizeUsageFacts([aggregate('ses_zcRebuild', 'zcode'), claude], folders, { rebuild: true }))
+      .toEqual({
+        changedSessions: 1,
+        unchangedSessions: 1,
+        removedSessions: 0,
+        factCount: 3,
+        rebuilt: true,
+        downgradesSkipped: { zcode: 1 }
+      })
+    expect(sessionLedger('ses_zcRebuild')).toMatchObject({ current: 2, tokens: 48, activity: 1, folders: 1 })
+    expect(queryInsights(bounded, 'global').total).toMatchObject({
+      processedTokens: 48,
+      sessionCount: 1,
+      usageCoverage: { covered: 1, total: 1, percent: 100 }
+    })
+    expect(queryInsights(scope(), 'global').total.processedTokens).toBe(48 + 36)
   })
 })

@@ -250,4 +250,18 @@ export interface UsageFactSyncResult {
       | 'over-max-ratio'
     sessions: number
   }>
+  /**
+   * Present only when non-empty: per source, the changed sessions that kept
+   * what they committed because this input had no usage (no events, a
+   * placeholder or a parse error) or fell back from per-call rows to an
+   * aggregate while the ledger still had their facts. They count as
+   * unchanged; the next sync judges them again.
+   */
+  downgradesSkipped?: Record<string, number>
+  /**
+   * Present only when non-empty: per source, the sessions that had only
+   * superseded rows and no current fact, whose aggregate from this sync took
+   * the place of the superseded row with the same id.
+   */
+  aggregateAccepted?: Record<string, number>
 }

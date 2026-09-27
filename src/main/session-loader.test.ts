@@ -45,7 +45,7 @@ import {
 } from './__fixtures__/codex-rollout-synthetic'
 import { isSessionSourceSupported } from './platform-support'
 import type { SessionLoadEvidence } from './session-loader'
-import type { RawJsonlMessage } from './types'
+import type { RawJsonlMessage, SessionSummary } from './types'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -4172,4 +4172,315 @@ describe('summary cache version bump: write gate, retired JSON cache, worker gua
     })
     expect(readSummaryCacheRow(home, file)?.sig).not.toBe(row?.sig)
   }, 30_000)
+
+  // Deliverable 6, kernel part: a synthetic v29 cache over four sources, and
+  // a synthetic ledger through the bump (F1f's cold-round rule included).
+  describe('end to end', () => {
+    type Loaded = { sessions: SessionSummary[]; evidence: SessionLoadEvidence }
+    type UsageModule = typeof import('./usage-fact-store')
+    type SyncResult = ReturnType<UsageModule['synchronizeUsageFacts']>
+
+    // OpenCode needs the sqlite3 CLI; the Codex read failure needs a file this user cannot read.
+    const e2eIt = process.platform !== 'win32' && realSqlite3Path() && process.getuid?.() !== 0 ? it : it.skip
+    const PREVIOUS_VERSION = SUMMARY_CACHE_VERSION - 1
+
+    interface Fixture {
+      claudeU2028: string
+      claudeKept: string
+      claudeDeleted: string
+      codexCompacted: string
+      codexFlaky: string
+      cursor: string
+      opencodeRef: string
+    }
+
+    /** Unchanged files of four sources whose projection F1a-F1e changed. */
+    function writeFourSources(home: string): Fixture {
+      const project = path.join(home, '.claude', 'projects', '-Users-test-f1d-e2e')
+      const claudeSession = (sessionId: string, answer: string): string => writeJsonlAt(
+        path.join(project, `${sessionId}.jsonl`),
+        [
+          rawMsg({
+            uuid: `${sessionId}-u1`, sessionId, type: 'user', timestamp: '2026-09-20T00:00:00Z',
+            message: { role: 'user', content: `${sessionId} question` }
+          }),
+          rawMsg({
+            uuid: `${sessionId}-a1`, parentUuid: `${sessionId}-u1`, sessionId, type: 'assistant',
+            requestId: `${sessionId}-request`, timestamp: '2026-09-20T00:00:01Z',
+            message: {
+              id: `${sessionId}-message`, role: 'assistant', model: 'claude-sonnet-4-5', content: answer,
+              stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 20 }
+            }
+          })
+        ]
+      )
+      const codexDirectory = path.join(home, '.codex', 'sessions', '2026', '09', '20')
+      fs.mkdirSync(codexDirectory, { recursive: true })
+      const codexRollout = (id: string, compacted: boolean): string => {
+        const at = codexClock('2026-09-20T01:00:00.000Z')
+        const cwd = '/synthetic/f1d-e2e'
+        const model = 'gpt-5.5-codex'
+        const rows = [
+          codexRow.topLevelMeta({ ...at(), id, cwd }),
+          codexRow.turnContext({ ...at(), turnId: `${id}-turn-1`, cwd, model }),
+          codexRow.userMessage({ ...at(), text: `${id} question` }),
+          codexRow.assistantMessage({ ...at(), text: `${id} answer` }),
+          codexRow.tokenCount({ ...at(), total: { input: 1000, cached: 200, output: 100 }, last: { input: 1000, cached: 200, output: 100 } }),
+          ...(compacted
+            ? [
+                codexRow.compacted({ ...at(), message: 'synthetic compaction', window: 1 }),
+                codexRow.turnContext({ ...at(), turnId: `${id}-turn-2`, cwd, model }),
+                codexRow.userMessage({ ...at(), text: `${id} after the compaction` }),
+                codexRow.tokenCount({ ...at(), total: { input: 2500, cached: 700, output: 250 }, last: { input: 1500, cached: 500, output: 150 } })
+              ]
+            : [])
+        ]
+        const filePath = path.join(codexDirectory, `rollout-2026-09-20T01-00-00-${id}.jsonl`)
+        fs.writeFileSync(filePath, codexJsonl(rows))
+        return filePath
+      }
+      const cursorId = 'f1d-e2e-cursor'
+      return {
+        // The answer holds a raw U+2028 in its JSON string: the reader before F1a lost this record.
+        claudeU2028: claudeSession('f1d-e2e-u2028', 'first line\u2028second line'),
+        claudeKept: claudeSession('f1d-e2e-kept', 'kept answer'),
+        claudeDeleted: claudeSession('f1d-e2e-deleted', 'deleted answer'),
+        codexCompacted: codexRollout('7f1d0000-0000-4000-8000-0000000000e1', true),
+        codexFlaky: codexRollout('7f1d0000-0000-4000-8000-0000000000e2', false),
+        cursor: writeJsonlAt(
+          path.join(home, '.cursor', 'projects', 'Users-test-f1d-e2e', 'agent-transcripts', cursorId, `${cursorId}.jsonl`),
+          cursorBackupRows('Cursor e2e question') as RawJsonlMessage[]
+        ),
+        opencodeRef: createSqliteAgentCacheFixture(home, 'opencode', 'ses_F1dE2E')
+      }
+    }
+
+    /**
+     * Rewrite the rows as builds before F1a-F1e projected them: the U+2028
+     * record lost, Codex without its compaction and with other usage,
+     * another Cursor project, a failed OpenCode read as `summary: null`, and
+     * a marker in every summary.
+     */
+    function plantEarlierProjection(home: string, fixture: Fixture): void {
+      rewriteCacheRows(home, (filePath, perFile) => {
+        if (filePath === fixture.opencodeRef) return { ...perFile, summary: null }
+        if (!perFile.summary) return perFile
+        const summary = { ...perFile.summary, firstUserMessage: `${STALE} ${perFile.source}` }
+        if (filePath === fixture.claudeU2028) summary.messageCount -= 1
+        if (filePath === fixture.codexCompacted) {
+          summary.compactCount = 0
+          summary.tokenAccounting = {
+            ...summary.tokenAccounting,
+            usageEvents: summary.tokenAccounting.usageEvents.map((event: any) => ({
+              ...event,
+              components: { ...event.components, outputTokens: event.components.outputTokens + 1000 }
+            }))
+          }
+        }
+        if (filePath === fixture.cursor) summary.projectPath = `/${STALE}/cursor`
+        return { ...perFile, summary }
+      })
+    }
+
+    async function withUsageLedger<T>(home: string, run: (usage: UsageModule) => Promise<T>): Promise<T> {
+      const previousUsageIndex = process.env.SWOB_USAGE_INDEX_PATH
+      process.env.SWOB_USAGE_INDEX_PATH = path.join(home, 'usage-facts.db')
+      // One ledger module for the whole run, like the one long-lived usage worker.
+      const usage = await import('./usage-fact-store')
+      usage.closeUsageFactStore()
+      try {
+        return await run(usage)
+      } finally {
+        usage.closeUsageFactStore()
+        if (previousUsageIndex === undefined) delete process.env.SWOB_USAGE_INDEX_PATH
+        else process.env.SWOB_USAGE_INDEX_PATH = previousUsageIndex
+      }
+    }
+
+    const sync = (usage: UsageModule, loaded: Loaded): SyncResult => usage.synchronizeUsageFacts(loaded.sessions, [], {
+      absence: { physicalLoad: loaded.evidence, providerSettlement: 'complete', excludedSources: [] }
+    })
+
+    /**
+     * The three ledger tables through a separate read-only connection, plus
+     * the current Codex output tokens (the earlier projection adds 1,000 per
+     * call) and the current Codex facts whose billing key is not F1b's
+     * (turn + last + total usage signatures).
+     */
+    function ledgerState(home: string): {
+      sessions: number
+      facts: number
+      history: number
+      codexOutputTokens: number
+      codexFactsWithoutF1bKey: number
+    } {
+      const ledger = new Database(path.join(home, 'usage-facts.db'), { readonly: true, fileMustExist: true })
+      try {
+        const count = (sql: string): number => (ledger.prepare(sql).get() as { count: number }).count
+        return {
+          sessions: count('SELECT count(*) AS count FROM usage_sessions'),
+          facts: count('SELECT count(*) AS count FROM usage_facts'),
+          history: count('SELECT count(*) AS count FROM usage_valuation_history'),
+          codexOutputTokens: count(
+            "SELECT coalesce(sum(output_tokens), 0) AS count FROM usage_facts WHERE source_client = 'codex' AND superseded = 0"
+          ),
+          codexFactsWithoutF1bKey: count(`
+            SELECT count(*) AS count FROM usage_facts
+            WHERE source_client = 'codex' AND superseded = 0 AND billing_fact_key NOT LIKE 'codex:event:%'
+          `)
+        }
+      } finally {
+        ledger.close()
+      }
+    }
+
+    function cacheState(home: string): { version: number; rows: number; stale: number; nullOpenCode: number } {
+      const cache = readSummaryCache(home)
+      const entries = Object.values(cache.entries)
+      return {
+        version: cache.version,
+        rows: entries.length,
+        stale: staleValuesIn(entries),
+        nullOpenCode: entries.filter((entry) => entry.perFile.source === 'opencode' && entry.perFile.summary === null).length
+      }
+    }
+
+    e2eIt('the first round after the bump is cold, shows no earlier value, keeps every ledger row; the next warm round judges as usual', async () => {
+      const home = tempHome('e2e-ledger')
+      const fixture = writeFourSources(home)
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const phases: unknown[] = []
+      const record = (phase: string, loaded: Loaded, result: SyncResult): void => {
+        phases.push({
+          phase,
+          cache: cacheState(home),
+          evidence: loaded.evidence.summaryCache,
+          sessions: loaded.sessions.length,
+          staleInSessions: staleValuesIn(loaded.sessions),
+          ledger: ledgerState(home),
+          sync: {
+            changed: result.changedSessions,
+            unchanged: result.unchangedSessions,
+            removed: result.removedSessions,
+            retained: result.retainedSessions ?? 0,
+            held: result.heldRemovals ?? 0
+          }
+        })
+      }
+      let coldAbsences: unknown
+
+      await withUsageLedger(home, async (usage) => {
+        // P0: this build reads everything, and the ledger records it.
+        await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+          record('P0 this build', loaded, sync(usage, loaded))
+        })
+        // P1: the rows as earlier builds projected them, still read as
+        // current, so the ledger follows them ...
+        plantEarlierProjection(home, fixture)
+        await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+          record('P1 earlier projection', loaded, sync(usage, loaded))
+        })
+        // ... and left under the previous version: the v29 cache.
+        setSummaryCacheVersion(home, PREVIOUS_VERSION)
+        phases.push({ phase: 'previous-version cache', cache: cacheState(home), ledger: ledgerState(home) })
+
+        // P2, the bump: OpenCode cannot be discovered, one Codex rollout
+        // cannot be read, one Claude file is really gone.
+        fs.rmSync(fixture.claudeDeleted)
+        install({ kind: 'fail', stderr: BUSY_STDERR })
+        await withUnreadable([fixture.codexFlaky], () => withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+          const result = sync(usage, loaded)
+          record('P2 bump', loaded, result)
+          coldAbsences = [...(result.absences ?? [])].sort((left, right) => left.source.localeCompare(right.source))
+        }))
+        for (const fake of fakes.splice(0)) fake.restore()
+
+        // P3: the next round, warm; everything readable again.
+        await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          const loaded = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+          record('P3 next round', loaded, sync(usage, loaded))
+        })
+      })
+
+      const cache = (rows: number, stale: number, nullOpenCode: number, version = SUMMARY_CACHE_VERSION) =>
+        ({ version, rows, stale, nullOpenCode })
+      const ledger = (sessions: number, facts: number, history: number, codexOutputTokens: number) =>
+        ({ sessions, facts, history, codexOutputTokens, codexFactsWithoutF1bKey: 0 })
+      const synced = (changed: number, unchanged: number, removed: number, retained: number) =>
+        ({ changed, unchanged, removed, retained, held: 0 })
+      expect(phases).toEqual([
+        {
+          phase: 'P0 this build', cache: cache(7, 0, 0), evidence: 'cold', sessions: 7, staleInSessions: 0,
+          ledger: ledger(7, 7, 7, 350), sync: synced(7, 0, 0, 0)
+        },
+        {
+          phase: 'P1 earlier projection', cache: cache(7, 7, 1), evidence: 'warm', sessions: 6, staleInSessions: 7,
+          ledger: ledger(7, 7, 7, 2_350), sync: synced(1, 5, 0, 1)
+        },
+        { phase: 'previous-version cache', cache: cache(7, 7, 1, PREVIOUS_VERSION), ledger: ledger(7, 7, 7, 2_350) },
+        // Cold: every earlier value is gone, the three absent sessions keep
+        // their ledger rows, and no row is written for a read that failed.
+        {
+          phase: 'P2 bump', cache: cache(4, 0, 0), evidence: 'cold', sessions: 4, staleInSessions: 0,
+          ledger: ledger(7, 7, 7, 350), sync: synced(1, 3, 0, 3)
+        },
+        // Warm: the deleted Claude session leaves (its valuation history
+        // stays); the other two are read again.
+        {
+          phase: 'P3 next round', cache: cache(6, 0, 0), evidence: 'warm', sessions: 6, staleInSessions: 0,
+          ledger: ledger(6, 6, 7, 350), sync: synced(0, 6, 1, 0)
+        }
+      ])
+      expect(coldAbsences).toEqual([
+        { source: 'claude-code', reason: 'cold-summary-cache', sessions: 1 },
+        { source: 'codex', reason: 'cold-summary-cache', sessions: 1 },
+        { source: 'opencode', reason: 'cold-summary-cache', sessions: 1 }
+      ])
+
+      // The warm round shows what a full rebuild shows.
+      const warm = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+      removeSummaryCache(home)
+      const fullRebuild = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+      expect(warm).toEqual(fullRebuild)
+      expect(fullRebuild.find((session) => session.filePath === fixture.codexCompacted)?.compactCount).toBe(1)
+    }, 120_000)
+
+    e2eIt('whichever entry comes first after the bump (the lineage write, a read-only scan, or the writable load alone), the round is cold and equals a full rebuild', async () => {
+      for (const order of ['lineage first', 'read-only first', 'writable only'] as const) {
+        const home = tempHome(`e2e-${order.replace(' ', '-')}`)
+        const fixture = writeFourSources(home)
+        await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+        plantEarlierProjection(home, fixture)
+        setSummaryCacheVersion(home, PREVIOUS_VERSION)
+        const planted = readSummaryCache(home)
+
+        let bumped!: Loaded
+        await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+          if (order === 'lineage first') {
+            await sessionLoader.loadCachedClaudeLineageMetadata()
+            expect(readSummaryCache(home)).toEqual(planted)
+          }
+          if (order === 'read-only first') {
+            const readOnly = await sessionLoader.loadAllSessionsWithEvidence({ readOnly: true, quiet: true })
+            expect(readOnly.evidence.summaryCache).toBe('cold')
+            expect(staleValuesIn(readOnly.sessions)).toBe(0)
+            expect(readSummaryCache(home)).toEqual(planted)
+          }
+          bumped = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+        })
+        expect(bumped.evidence.summaryCache).toBe('cold')
+        expect(cacheState(home)).toEqual({ version: SUMMARY_CACHE_VERSION, rows: 7, stale: 0, nullOpenCode: 0 })
+
+        const hot = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+        removeSummaryCache(home)
+        const fullRebuild = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+        expect(bumped.sessions).toEqual(fullRebuild)
+        expect(hot).toEqual(fullRebuild)
+        expect(staleValuesIn(fullRebuild)).toBe(0)
+      }
+    }, 120_000)
+  })
 })

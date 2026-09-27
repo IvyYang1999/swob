@@ -4,10 +4,12 @@ import { extractCodexTokenAccounting, type CodexLine } from './codex-loader'
 import {
   accountCodexUsage,
   accountingFromMutuallyExclusiveUsage,
+  accountingFromUsageEvents,
   markExcludedFromRollups,
   mergeTokenAccountings,
   tokenUsageFromAccounting,
-  unavailableTokenAccounting
+  unavailableTokenAccounting,
+  type UsageEvent
 } from './token-accounting'
 import type { SessionSummary, Folder } from './types'
 import {
@@ -551,6 +553,51 @@ describe('buildInsights', () => {
       expect(result.reconciliation.valuation.difference).toBeLessThan(1e-12)
       expect(result.reconciliation.valuation.coverageDifference).toBeLessThan(1e-12)
       expect(result.reconciliation.valuation.ok).toBe(true)
+    })
+
+    // globalUsd / sessionsUsd 先按会话求和再汇总，uniqueEventsUsd 逐条平铺求和：同一批事件，
+    // 两种求和次序的末位可以不同。$8,192 以上 1 个 ULP 就超过 1e-12（$10,000 处 = 2^-39）。
+    // 金额走 provider-billed 账目，不依赖价目表（F1i）。
+    it('【回归】按会话求和与逐条平铺求和只差浮点末位：估价对账仍然 ok（F1i）', () => {
+      const billed = (dedupKey: string, usd: number): UsageEvent => ({
+        provider: 'claude-code',
+        providerFormatVersion: 'fixture-v1',
+        dedupKey,
+        modelProvenance: 'unknown',
+        providerProvenance: 'unknown',
+        scope: 'main',
+        counterKind: 'incremental',
+        provenance: 'reported',
+        components: {
+          nonCachedInputTokens: 1_000, cacheReadTokens: 0, cacheWriteTokens: 0,
+          cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, outputTokens: 0
+        },
+        semantics: 'anthropic-disjoint',
+        reportedCostUsd: usd,
+        reportedCostKind: 'provider-billed',
+        warnings: []
+      })
+      const billedSession = (sessionId: string, events: UsageEvent[]): SessionSummary => {
+        const accounting = accountingFromUsageEvents('claude-code', events)
+        return makeSession({ sessionId, tokenAccounting: accounting, tokenUsage: tokenUsageFromAccounting(accounting) })
+      }
+      // 前置：这组金额在两种次序下末位确实不同。顺序要固定为 [A, B]，换成 [B, A] 差为 0。
+      expect(0 + 10_000 + 0.1 + 0.2).not.toBe(10_000 + (0.1 + 0.2))
+
+      const result = buildInsights([
+        billedSession('session-a', [billed('a-1', 10_000)]),
+        billedSession('session-b', [billed('b-1', 0.1), billed('b-2', 0.2)])
+      ], [])
+      const { valuation } = result.reconciliation
+
+      expect(valuation.globalUsd).toBe(10_000 + (0.1 + 0.2))
+      expect(valuation.sessionsUsd).toBe(valuation.globalUsd)
+      expect(valuation.uniqueEventsUsd).toBe(0 + 10_000 + 0.1 + 0.2)
+      // 差正好 1 个 ULP，大于旧的绝对阈值 1e-12：不是漏算或多算，只是求和次序。
+      expect(valuation.difference).toBe(2 ** -39)
+      expect(valuation.difference).toBeGreaterThan(1e-12)
+      expect(valuation.coverageDifference).toBe(0)
+      expect(valuation.ok).toBe(true)
     })
   })
 })

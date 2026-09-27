@@ -633,7 +633,11 @@ export function buildInsights(
         uniqueEventsUsd,
         difference: valuationDifference,
         coverageDifference,
-        ok: valuationDifference < 1e-12 && coverageDifference < 1e-12
+        // Per-session sums and the flat per-event sum add the same amounts in a
+        // different order, so their last bits differ at real scale (1 ULP is
+        // already above 1e-12 from $8,192). USD gets a tolerance relative to the
+        // total; coverage stays near-exact, both sides divide exact token sums.
+        ok: valuationDifference <= 1e-9 * Math.max(1, Math.abs(globalUsd || 0)) && coverageDifference <= 1e-9
       }
     },
     totalCacheReadTokens: totalCacheRead,

@@ -86,7 +86,9 @@ function baseContext(salt: string, readout: SwobReadout, census: Partial<Pick<Ch
     unscanned: null,
     presence: [],
     readout,
-    changed: new Set()
+    changed: new Set(),
+    resumeProbe: null,
+    resumeSample: { perSource: 4, seed: '2026-09-28' }
   }
 }
 

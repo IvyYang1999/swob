@@ -6,7 +6,6 @@
  * package decisions. This module is types + frozen registries only: it has no
  * runtime import, so the census closure may depend on it.
  */
-import type { SessionSummary } from '../main/types'
 
 // —— §6.1 contract (shells depend on this part only) ——
 export type Label = 'reported' | 'derived' | 'estimated' | 'unavailable' // same words as TokenProvenance
@@ -104,8 +103,25 @@ export interface CheckupOptions {
   /** Parent directory for self-test samples; must be inside stateDir. Default: a fresh directory in stateDir. */
   selfTestDir?: string
 }
+/**
+ * ⑥ resume (C2c): the narrowed shape `ResumeProbe.build()` actually needs — never the whole
+ * `SessionSummary` (no message content, no derived fields the command layer does not use). Every field
+ * mirrors a same-named `SessionSummary` field (session-types.ts); `filePath`/`allFilePaths` reuse
+ * `ReadoutSession.primaryPath`/`paths` at the call site (checks/resume.ts), not a new projection.
+ */
+export interface ResumeProbeInput {
+  sessionId: string
+  source?: SourceId
+  resumeCwd?: string
+  permissionMode?: string
+  claudeConfigDir?: string
+  filePath: string
+  allFilePaths?: string[]
+  canResumeLocal?: boolean
+  resumeUnavailableReason?: string
+}
 export interface ResumeProbe {
-  build(session: SessionSummary): { command: string } | { refused: string }
+  build(input: ResumeProbeInput): { command: string } | { refused: string }
   pathEnv: string                         // login shell PATH
 }
 

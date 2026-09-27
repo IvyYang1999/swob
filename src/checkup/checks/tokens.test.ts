@@ -34,7 +34,8 @@ function readout(sessions: ReadoutSession[]): SwobReadout {
 function ctx(partial: Partial<CheckContext> & Pick<CheckContext, 'readout'>): CheckContext {
   return {
     salt: 'tokens-test-salt', selected: new Set(['claude-code', 'codex', 'cursor']),
-    claude: null, codex: null, codexDb: null, unscanned: null, presence: [], changed: new Set(), ...partial
+    claude: null, codex: null, codexDb: null, unscanned: null, presence: [], changed: new Set(), resumeProbe: null,
+    resumeSample: { perSource: 4, seed: '2026-09-28' }, ...partial
   }
 }
 

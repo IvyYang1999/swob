@@ -452,7 +452,13 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
   // cost per check — needed once ④⑤⑥ stop being one-line pendingCheck() calls (C2 acceptance: record each
   // of ④⑤⑥'s own timingsMs, not only the total).
   phase = performance.now()
-  const ctx: CheckContext = { salt, selected, claude, codex, codexDb, unscanned, presence, readout, changed }
+  const ctx: CheckContext = {
+    salt, selected, claude, codex, codexDb, unscanned, presence, readout, changed,
+    resumeProbe: options.resumeProbe ?? null,
+    // ⑥ H1 (task book): seed defaults to today's local date so the sample is reproducible for the day and
+    // the report appendix can state it (design "随机种子取当天日期，保证可以复现").
+    resumeSample: options.resumeSample ?? { perSource: 4, seed: new Date().toISOString().slice(0, 10) }
+  }
   let checkPhase = performance.now()
   const inclusion = inclusionCheck(ctx)
   timingsMs['check.inclusion'] = elapsed(checkPhase)

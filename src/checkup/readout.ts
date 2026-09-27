@@ -2,11 +2,14 @@
  * Swob-side readout: the only module of the checkup that calls the kernel.
  *
  * Allowed kernel entries (task C1a, red line; C1c adds the two per-file reads
- * with stats): `loadAllSessions({ readOnly: true, quiet: true })`,
- * `parseSessionFileWithStats(filePath)`, `parseCodexFileWithStats(filePath)`
- * and pure discovery functions. Everything else — writable loads, lineage,
- * details, resume audit, library/canonical/search/usage writers — is forbidden
- * and guarded by an architecture test.
+ * with stats; C2c adds the ⑥ resume command-layer factory and the L3 anchor
+ * classifier, both pure): `loadAllSessions({ readOnly: true, quiet: true })`,
+ * `parseSessionFileWithStats(filePath)`, `parseCodexFileWithStats(filePath)`,
+ * `buildResumeCommand` (session-actions.ts) and `classifyResumeL3` /
+ * `anchorsFromMessages` (resume-verifier.ts), plus pure discovery functions.
+ * Everything else — writable loads, lineage, details, resume audit,
+ * library/canonical/search/usage writers, guarded resume (buildGuardedResumeCommand) — is forbidden and
+ * guarded by an architecture test.
  *
  * The kernel captures HOME when its modules load and then reuses any summary
  * cache under `$HOME/.claude-session-manager`. Therefore the readout runs only
@@ -15,16 +18,25 @@
  * kernel was loaded. Otherwise it is `undetermined` (readout.not-isolated) and
  * no kernel entry is called at all.
  */
+import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { findClaudeSessionFiles, loadAllSessions, parseSessionFileWithStats } from '../main/session-loader'
-import { findCodexSessionFiles, parseCodexFileWithStats } from '../main/codex-loader'
+import { findCodexSessionFiles, parseCodexFileWithStats, type CodexLine } from '../main/codex-loader'
 import type { JsonlReadStats } from '../main/jsonl-lines'
 import { runtimeHome } from '../main/runtime-home'
-import type { SessionSummary } from '../main/types'
+import type { RawJsonlMessage, SessionSummary } from '../main/types'
 import type { TokenAccounting, UsageEvent } from '../main/token-accounting'
-import type { ReasonCode } from './contract'
+import { buildResumeCommand } from '../main/session-actions'
+import {
+  anchorsFromMessages,
+  classifyResumeL3,
+  type ResumeAnchorMessage,
+  type ResumeAnchors,
+  type ResumeL3TargetData
+} from '../main/resume-verifier'
+import type { ReasonCode, ResumeProbe, ResumeProbeInput } from './contract'
 
 /** HOME as the kernel saw it when this module (evaluated right after the kernel) loaded. */
 const KERNEL_HOME_AT_LOAD = runtimeHome()
@@ -81,6 +93,19 @@ export interface ReadoutSession {
    * (`checks/tokens.ts` reads it through that default, never `.tokens!`).
    */
   tokens?: ReadoutSessionTokens
+  // —— C2c (⑥ resume) additions: same fields ResumeProbeInput needs, never message content ——
+  /** Working directory the resume command would `cd` into (SessionSummary.resumeCwd). */
+  resumeCwd?: string
+  permissionMode?: string
+  /** Non-default Claude config dir, e.g. ~/.claude-window/<id> (SessionSummary.claudeConfigDir). */
+  claudeConfigDir?: string
+  /** Compatibility field: mirrors SessionSummary.canResumeLocal (absent when the kernel never set it). */
+  canResumeLocal?: boolean
+  resumeUnavailableReason?: string
+  /** SessionSummary.messageCount (H1: sampling by 7-day activity uses this, never a new count). */
+  messageCount?: number
+  /** SessionSummary.updatedAt (ISO); used only to decide the 7-day sampling window. */
+  updatedAt?: string
 }
 
 /** The `tokens` value of a session with no usable ledger (absent `ReadoutSession.tokens`, or a real unavailable one). */
@@ -88,13 +113,20 @@ export function unavailableReadoutTokens(): ReadoutSessionTokens {
   return { provenance: 'unavailable', components: null, billingTotal: null, cacheWriteCalibrationDeltaTokens: 0 }
 }
 
-export interface ClaudeParseResult { records: number; elapsedMs: number; partial: boolean }
+/**
+ * Hashed anchor pair (⑥ L3, C2c): the normalized last user / last assistant text of one physical file,
+ * reduced to sha256(text).slice(0,8) — never the text itself (design red line: "锚点只留哈希/布尔"). `null`
+ * when that role has no anchor text in the file (e.g. an assistant-only or empty file).
+ */
+export interface ResumeAnchorHashes { lastUser: string | null; lastAssistant: string | null }
+
+export interface ClaudeParseResult { records: number; elapsedMs: number; partial: boolean; resumeAnchors?: ResumeAnchorHashes }
 
 /**
  * Per-file Codex read (C1c). `records` is the kernel's recordsRead; null when the read threw (the
  * kernel reads a Codex file completely or throws, so there is no partial result).
  */
-export interface CodexParseResult { records: number | null; elapsedMs: number }
+export interface CodexParseResult { records: number | null; elapsedMs: number; resumeAnchors?: ResumeAnchorHashes }
 
 export interface SwobReadout {
   status: 'ok' | 'undetermined'
@@ -288,7 +320,14 @@ function projectSession(summary: SessionSummary): ReadoutSession {
     ...(summary.branchPointUuid ? { branchPointUuid: summary.branchPointUuid } : {}),
     ...(summary.continuationSessionIds && summary.continuationSessionIds.length > 0 ? { continuationSessionIds: [...summary.continuationSessionIds] } : {}),
     ...(subagents.length > 0 ? { subagents: subagents.map((subagent) => ({ sessionId: subagent.sessionId, parentSessionId: subagent.parentSessionId ?? null })) } : {}),
-    tokens: readoutTokensFromAccounting(summary.tokenAccounting)
+    tokens: readoutTokensFromAccounting(summary.tokenAccounting),
+    ...(summary.resumeCwd ? { resumeCwd: summary.resumeCwd } : {}),
+    ...(summary.permissionMode ? { permissionMode: summary.permissionMode } : {}),
+    ...(summary.claudeConfigDir ? { claudeConfigDir: summary.claudeConfigDir } : {}),
+    ...(summary.canResumeLocal !== undefined ? { canResumeLocal: summary.canResumeLocal } : {}),
+    ...(summary.resumeUnavailableReason ? { resumeUnavailableReason: summary.resumeUnavailableReason } : {}),
+    ...(typeof summary.messageCount === 'number' ? { messageCount: summary.messageCount } : {}),
+    ...(summary.updatedAt ? { updatedAt: summary.updatedAt } : {})
   }
 }
 
@@ -323,6 +362,62 @@ async function loadAndProject(): Promise<{ sessions: ReadoutSession[]; attribute
 
 const elapsedSince = (started: number): number => Math.round(performance.now() - started)
 
+/** sha256(text.trim()).slice(0,8), or null when there is nothing to anchor on (⑥, design red line: no raw text leaves this file). */
+function hashAnchor(text: string): string | null {
+  const trimmed = text.trim()
+  return trimmed ? createHash('sha256').update(trimmed).digest('hex').slice(0, 8) : null
+}
+
+/** Same shape resume-verifier.ts's own `extractRawText` reads (message.content: string, or text parts joined). */
+function claudeMessageText(message: RawJsonlMessage): string {
+  const content = message.message?.content
+  if (!content) return ''
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content.filter((part) => part.type === 'text' && part.text).map((part) => part.text!).join('\n')
+}
+
+/**
+ * Last default-chain user/assistant anchor of one Claude file (⑥ C2c, design §四 4.6): non-sidechain
+ * user/assistant records, reduced with the whitelisted `anchorsFromMessages` (resume-verifier.ts) and
+ * hashed immediately. Intra-file branch selection is not replicated here (`selectClaudeDefaultChain` is
+ * not on the kernel-gateway whitelist); "last non-sidechain record of each role in file order" is used
+ * instead — a reasonable v1 simplification (task book: comparison is non-independent / [D] already).
+ */
+function claudeResumeAnchors(messages: readonly RawJsonlMessage[]): ResumeAnchorHashes {
+  const candidates: ResumeAnchorMessage[] = []
+  for (const message of messages) {
+    if (message.isSidechain) continue
+    if (message.type === 'user') candidates.push({ role: 'user', text: claudeMessageText(message) })
+    else if (message.type === 'assistant') candidates.push({ role: 'assistant', text: claudeMessageText(message) })
+  }
+  const anchors = anchorsFromMessages(candidates)
+  return { lastUser: hashAnchor(anchors.user), lastAssistant: hashAnchor(anchors.assistant) }
+}
+
+/** One response_item.message row's anchor candidate, or null when it is not a user/assistant message. */
+function codexAnchorCandidate(line: Pick<CodexLine, 'type' | 'payload'>): ResumeAnchorMessage | null {
+  if (line.type !== 'response_item') return null
+  const payload = line.payload
+  const role = payload?.type === 'message' ? payload.role : undefined
+  if (role !== 'user' && role !== 'assistant') return null
+  const parts = Array.isArray(payload.content) ? payload.content as Array<{ type?: unknown; text?: unknown }> : []
+  const wanted = role === 'user' ? 'input_text' : 'output_text'
+  const text = parts.filter((part) => part?.type === wanted && typeof part.text === 'string').map((part) => part.text as string).join('\n')
+  return { role, text }
+}
+
+/** Last user/assistant anchor of one Codex rollout file (⑥ C2c): same reduction as the Claude side. */
+function codexResumeAnchors(lines: readonly CodexLine[]): ResumeAnchorHashes {
+  const candidates: ResumeAnchorMessage[] = []
+  for (const line of lines) {
+    const candidate = codexAnchorCandidate(line)
+    if (candidate) candidates.push(candidate)
+  }
+  const anchors = anchorsFromMessages(candidates)
+  return { lastUser: hashAnchor(anchors.user), lastAssistant: hashAnchor(anchors.assistant) }
+}
+
 /**
  * Claude per-file result from the kernel's read stats (C1c): partial when the kernel says the read was
  * cut short (truncated: its 30 s timeout fired or the stream failed, and only what was read came back),
@@ -335,21 +430,68 @@ export function claudeParseResult(stats: Pick<JsonlReadStats, 'recordsRead' | 't
 async function timedParse(filePath: string): Promise<ClaudeParseResult> {
   const started = performance.now()
   const stats = await parseSessionFileWithStats(filePath)
-  return claudeParseResult(stats, elapsedSince(started))
+  // ⑥ C2c: the full message array is already in hand (stats.messages) before it is dropped below —
+  // extract the anchor here, once, in the same read ② already pays for.
+  const resumeAnchors = claudeResumeAnchors(stats.messages)
+  return { ...claudeParseResult(stats, elapsedSince(started)), resumeAnchors }
 }
 
 /**
- * Codex per-file result (C1c): parseCodexFileWithStats sets no timeout and throws on a stream error, so
- * a returned read is complete (never partial by time) and a throw leaves the file without a read count.
- * Only the counts are kept: the records the kernel returns are dropped right here. Exported for tests.
+ * Codex per-file result (C1c/C2c): parseCodexFileWithStats sets no timeout and throws on a stream error,
+ * so a returned read is complete (never partial by time) and a throw leaves the file without a read
+ * count. The record counts are kept as before; C2c additionally widens `read()`'s return type to include
+ * `lines` (previously narrowed to `Pick<JsonlReadStats,'recordsRead'>`, which dropped them before this
+ * function ever saw them) so the ⑥ resume anchor can be extracted here, once, before `lines` is dropped —
+ * same pattern as the Claude side, not a second file read. Exported for tests.
  */
-export async function codexParseResult(read: () => Promise<Pick<JsonlReadStats, 'recordsRead'>>): Promise<CodexParseResult> {
+export async function codexParseResult(read: () => Promise<Pick<JsonlReadStats, 'recordsRead'> & { lines: readonly CodexLine[] }>): Promise<CodexParseResult> {
   const started = performance.now()
   try {
-    const { recordsRead } = await read()
-    return { records: recordsRead, elapsedMs: elapsedSince(started) }
+    const { recordsRead, lines } = await read()
+    return { records: recordsRead, elapsedMs: elapsedSince(started), resumeAnchors: codexResumeAnchors(lines) }
   } catch {
     return { records: null, elapsedMs: elapsedSince(started) }
+  }
+}
+
+export type ResumeAnchorMatchStatus = 'match' | 'mismatch' | 'would-404' | 'skipped'
+
+/**
+ * ⑥ L3 (C2c, design §四 4.6): compares two already-hashed anchor pairs by delegating to the whitelisted
+ * `classifyResumeL3` (resume-verifier.ts) — the hashes stand in for the real text it compares by `===`,
+ * so this is the one place that decision function runs; no anchor text ever leaves this module (non-
+ * independent oracle, [D] — an independent implementation is deferred to C2d per the task book).
+ */
+export function classifyResumeAnchors(input: { expected: ResumeAnchorHashes; target: ResumeAnchorHashes | 'missing' | 'unparseable' }): ResumeAnchorMatchStatus {
+  const expected: ResumeAnchors = { user: input.expected.lastUser ?? '', assistant: input.expected.lastAssistant ?? '' }
+  if (input.target === 'missing' || input.target === 'unparseable') {
+    const target: ResumeL3TargetData = { status: input.target, defaultMessages: [], allMessages: [] }
+    return classifyResumeL3(expected, target).status
+  }
+  const messages: ResumeAnchorMessage[] = []
+  if (input.target.lastUser) messages.push({ role: 'user', text: input.target.lastUser })
+  if (input.target.lastAssistant) messages.push({ role: 'assistant', text: input.target.lastAssistant })
+  const target: ResumeL3TargetData = { status: messages.length > 0 ? 'found' : 'empty', defaultMessages: messages, allMessages: messages }
+  return classifyResumeL3(expected, target).status
+}
+
+/**
+ * ⑥ command layer (C2c): the CLI worker's own factory (task book — `ResumeProbe.build()` must be
+ * constructed inside the process that runs the checkup, never passed across the worker's process
+ * boundary as a function value). `buildResumeCommand` is a pure command-string builder (only
+ * `fs.existsSync(cwd)`; never `buildGuardedResumeCommand`, which may write and spawn).
+ */
+export function defaultResumeProbe(pathEnv: string): ResumeProbe {
+  return {
+    pathEnv,
+    build(input: ResumeProbeInput) {
+      if (input.canResumeLocal === false) return { refused: input.resumeUnavailableReason ?? 'resume-unavailable' }
+      try {
+        return { command: buildResumeCommand(input.sessionId, input.permissionMode, input.resumeCwd, input.source, input.claudeConfigDir) }
+      } catch (error) {
+        return { refused: error instanceof Error ? error.message : 'resume-command-build-failed' }
+      }
+    }
   }
 }
 

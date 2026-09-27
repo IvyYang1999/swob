@@ -17,7 +17,7 @@ import type { CodexCensus } from '../census/codex-census'
 import type { CodexStateDb } from '../census/codex-state-db'
 import type { SourcePresence } from '../census/source-roots'
 import type { UnscannedRootsCensus } from '../census/unscanned-roots'
-import type { SwobReadout } from '../readout'
+import type { ReadoutSession, SwobReadout } from '../readout'
 import { saltedId } from '../privacy'
 
 export interface CheckContext {
@@ -185,4 +185,43 @@ export function hasCodexData(ctx: Pick<CheckContext, 'codex' | 'selected'>): boo
 /** Verdict of one evaluated source: threshold verdict worsened by its findings. */
 export function sourceVerdict(threshold: Verdict, findings: readonly Finding[], source: string): Verdict {
   return worstVerdict([threshold, ...findings.filter((finding) => finding.source === source).map((finding) => finding.verdict)])
+}
+
+/**
+ * Codex thread-spawn edges (state db `thread_spawn_edges`) reconciled against the Swob readout. Shared by
+ * ① (inclusion.ts codexReconciliation, unchanged behaviour: it only ever reads `attachedAnywhere` /
+ * `childInCensus`) and ④ (checks/lineage.ts, which also needs the parent-matched count and the Swob-extra
+ * side: ①'s own reconciliation never had a second implementation to diff against, so this is the stronger
+ * check C2b's review added instead).
+ */
+export interface CodexSpawnEdgeReconciliation {
+  /** Edge count whose child appears in *some* session's subagentIds ("attached somewhere"; ①'s number). */
+  attachedAnywhere: number
+  /** Edge count whose child is present in the Codex census units at all (①'s number). */
+  childInCensus: number
+  /** Edge count whose child's Swob-recorded parent (subagents[].parentSessionId) equals the edge's own parent. */
+  attachedToRecordedParent: number
+  /** Swob subagent child ids (from every session's subagents[]) that no state-db edge lists as a child at all. */
+  swobExtraChildIds: string[]
+}
+
+export function reconcileCodexSpawnEdges(
+  edges: ReadonlyArray<{ parent: string; child: string }>,
+  sessions: ReadonlyArray<Pick<ReadoutSession, 'subagentIds' | 'subagents'>>,
+  censusIds: ReadonlySet<string>
+): CodexSpawnEdgeReconciliation {
+  const subagentIds = new Set(sessions.flatMap((session) => session.subagentIds))
+  const parentByChild = new Map<string, string | null>()
+  for (const session of sessions) {
+    for (const subagent of session.subagents ?? []) {
+      if (!parentByChild.has(subagent.sessionId)) parentByChild.set(subagent.sessionId, subagent.parentSessionId)
+    }
+  }
+  const edgeChildIds = new Set(edges.map((edge) => edge.child))
+  return {
+    attachedAnywhere: edges.filter((edge) => subagentIds.has(edge.child)).length,
+    childInCensus: edges.filter((edge) => censusIds.has(edge.child)).length,
+    attachedToRecordedParent: edges.filter((edge) => parentByChild.get(edge.child) === edge.parent).length,
+    swobExtraChildIds: [...parentByChild.keys()].filter((childId) => !edgeChildIds.has(childId))
+  }
 }

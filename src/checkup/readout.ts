@@ -62,6 +62,19 @@ export interface ReadoutSession {
   compactCount: number
   /** Intra-file branch views share their parent's files and are not physical sessions. */
   virtual: boolean
+  // —— C2b (④ lineage) additions: ids only, never the session's content ——
+  /** SessionSummary.id (internal composite id; used to resolve branchParentId/branchChildIds below). */
+  id?: string
+  /** The `.id` of the session this one was resumed/forked from (session-loader.ts linkCrossSessionBranches / forkedFrom / Codex forked_from_id). */
+  branchParentId?: string
+  /** The `.id`s of sessions resumed/forked from this one. */
+  branchChildIds?: string[]
+  /** uuid at which a cross-session branch/fork point was detected. */
+  branchPointUuid?: string
+  /** Other physical sessionIds merged into this logical session (same sessionId, multiple files). */
+  continuationSessionIds?: string[]
+  /** Direct subagents of this session, each with the parent it was actually recorded under (may be a nested ancestor, not always this session's own id). */
+  subagents?: Array<{ sessionId: string; parentSessionId: string | null }>
   /**
    * ⑤ Token (C2a). Optional so every existing fixture/self-test session (①②③, none of which need token
    * data) keeps compiling unchanged; absent is equivalent to `unavailableReadoutTokens()`
@@ -269,6 +282,12 @@ function projectSession(summary: SessionSummary): ReadoutSession {
     subagentIds: subagents.map((subagent) => subagent.sessionId),
     compactCount: typeof summary.compactCount === 'number' ? summary.compactCount : 0,
     virtual: !!summary.branchLeafUuid,
+    id: summary.id,
+    ...(summary.branchParentId ? { branchParentId: summary.branchParentId } : {}),
+    ...(summary.branchChildIds && summary.branchChildIds.length > 0 ? { branchChildIds: [...summary.branchChildIds] } : {}),
+    ...(summary.branchPointUuid ? { branchPointUuid: summary.branchPointUuid } : {}),
+    ...(summary.continuationSessionIds && summary.continuationSessionIds.length > 0 ? { continuationSessionIds: [...summary.continuationSessionIds] } : {}),
+    ...(subagents.length > 0 ? { subagents: subagents.map((subagent) => ({ sessionId: subagent.sessionId, parentSessionId: subagent.parentSessionId ?? null })) } : {}),
     tokens: readoutTokensFromAccounting(summary.tokenAccounting)
   }
 }

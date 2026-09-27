@@ -10,8 +10,10 @@ import * as path from 'node:path'
 import { SELF_TEST_CASES, SELF_TEST_TOTAL, type SelfTestCaseId } from '../contract'
 import { censusClaude } from '../census/claude-census'
 import { censusCodex, countForkUsageCopies } from '../census/codex-census'
+import type { CodexStateDb } from '../census/codex-state-db'
 import { compactionCheck } from '../checks/compaction'
 import { contentCheck } from '../checks/content'
+import { lineageCheck } from '../checks/lineage'
 import type { CheckContext } from '../checks/common'
 import type { ClaudeParseResult, ReadoutSession, SwobReadout } from '../readout'
 import {
@@ -34,6 +36,8 @@ import {
  * - `injected-zero-compaction`: Swob recognises no legacy marker;
  * - `injected-per-row`: Swob counts every copied marker row per session;
  * - `census-only`: census-layer assertion (the reason code belongs to ⑤).
+ * - `injected-partial-attachment`: the readout attaches only the direct thread-spawn child, mirroring the
+ *   pre-bb9a6e5 kernel behaviour, so a real kernel fix can never change this self-test's outcome (④).
  */
 export const CASE_SWOB_SIDE: Readonly<Record<SelfTestCaseId, string>> = {
   'line-separator-split': 'injected-loss',
@@ -41,7 +45,8 @@ export const CASE_SWOB_SIDE: Readonly<Record<SelfTestCaseId, string>> = {
   'truncated-tail': 'injected-complete',
   'codex-legacy-compacted': 'injected-zero-compaction',
   'fork-inherited-compaction': 'injected-per-row',
-  'fork-usage-copy': 'census-only'
+  'fork-usage-copy': 'census-only',
+  'lineage-grandchild-orphan': 'injected-partial-attachment'
 }
 
 export interface SelfTestResult {
@@ -71,13 +76,13 @@ function standInReadout(sessions: ReadoutSession[], claudeParsed = new Map<strin
   }
 }
 
-function baseContext(salt: string, readout: SwobReadout, census: Partial<Pick<CheckContext, 'claude' | 'codex'>>): CheckContext {
+function baseContext(salt: string, readout: SwobReadout, census: Partial<Pick<CheckContext, 'claude' | 'codex' | 'codexDb'>>): CheckContext {
   return {
     salt,
     selected: new Set(['claude-code', 'codex']),
     claude: census.claude ?? null,
     codex: census.codex ?? null,
-    codexDb: null,
+    codexDb: census.codexDb ?? null,
     unscanned: null,
     presence: [],
     readout,
@@ -264,13 +269,62 @@ async function caseForkUsageCopy(home: string): Promise<boolean> {
   return copies.rewritten === 2 && copies.sameTimestamp === 0 && copies.childUnits === 1
 }
 
+/**
+ * ④ design §6.5 class 7: a "grandchild" thread-spawn (a subagent spawned by another subagent, not directly
+ * by the top-level session). The state db records both hops of the derivation edge (top -> child, child ->
+ * grandchild); the injected readout attaches only the direct child (the pre-bb9a6e5 kernel behaviour), so
+ * the grandchild edge must be reported as not-expressed regardless of what the real kernel does today.
+ */
+async function caseLineageGrandchildOrphan(home: string, options: SelfTestOptions): Promise<boolean> {
+  const topId = syntheticUuid(71, 'c0de')
+  const childId = syntheticUuid(72, 'c0de')
+  const grandchildId = syntheticUuid(73, 'c0de')
+  const topPath = await realpath(writeSample(home, codexRolloutPath(topId, 0), jsonl([
+    codex.topLevelMeta({ timestamp: syntheticTime(0), ordinal: 0, id: topId, cwd: CWD }),
+    codex.userMessage({ timestamp: syntheticTime(1), ordinal: 1, text: 'task' }),
+    codex.assistantMessage({ timestamp: syntheticTime(2), ordinal: 2, text: 'ok' })
+  ])))
+  await realpath(writeSample(home, codexRolloutPath(childId, 10), jsonl([
+    codex.threadSpawnMeta({ timestamp: syntheticTime(10), ordinal: 0, id: childId, parentId: topId, cwd: CWD }),
+    codex.assistantMessage({ timestamp: syntheticTime(11), ordinal: 1, text: 'child work' })
+  ])))
+  await realpath(writeSample(home, codexRolloutPath(grandchildId, 20), jsonl([
+    codex.threadSpawnMeta({ timestamp: syntheticTime(20), ordinal: 0, id: grandchildId, parentId: childId, cwd: CWD, depth: 2 }),
+    codex.assistantMessage({ timestamp: syntheticTime(21), ordinal: 1, text: 'grandchild work' })
+  ])))
+  const census = await censusCodex(home, { env: {} })
+  const codexDb: CodexStateDb = {
+    available: true,
+    version: 1,
+    candidates: 1,
+    threads: [
+      { id: topId, rolloutPath: null, threadSource: 'user', archived: false },
+      { id: childId, rolloutPath: null, threadSource: 'subagent', archived: false },
+      { id: grandchildId, rolloutPath: null, threadSource: 'subagent', archived: false }
+    ],
+    edges: [
+      { parent: topId, child: childId, status: 'open' },
+      { parent: childId, child: grandchildId, status: 'open' }
+    ],
+    audit: null
+  }
+  const readout = standInReadout([{ ...session('codex', topId, topPath, 0), subagents: [{ sessionId: childId, parentSessionId: topId }] }])
+  const result = lineageCheck(baseContext(options.salt, readout, { codex: census, codexDb }))
+  const finding = result.findings.find((entry) => entry.code === 'codex.derivation-edge-unexpressed')
+  const entry = result.bySource.codex
+  return !!finding && finding.count.value === 1 &&
+    entry?.swob.derivationExpressed?.value === 1 && entry.swob.derivationNotExpressed?.value === 1 &&
+    entry.oracle.derivationTotal?.value === 2 && entry.verdict === 'fail'
+}
+
 const CASES: Record<SelfTestCaseId, (home: string, options: SelfTestOptions) => Promise<boolean>> = {
   'line-separator-split': caseLineSeparator,
   'tool-bad-line': caseToolBadLine,
   'truncated-tail': caseTruncatedTail,
   'codex-legacy-compacted': caseCodexLegacyCompacted,
   'fork-inherited-compaction': caseForkInheritedCompaction,
-  'fork-usage-copy': (home) => caseForkUsageCopy(home)
+  'fork-usage-copy': (home) => caseForkUsageCopy(home),
+  'lineage-grandchild-orphan': caseLineageGrandchildOrphan
 }
 
 export async function runSelfTest(options: SelfTestOptions): Promise<SelfTestResult> {

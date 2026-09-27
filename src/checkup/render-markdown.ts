@@ -29,6 +29,7 @@ import {
   CHECK_LABELS,
   CHECK_SHORT_LABELS,
   COMPARE_TEXT,
+  LINEAGE_EDGE_LABELS,
   LOSS_KIND_LABELS,
   MARKDOWN_MARKER,
   MARKDOWN_TEXT,
@@ -271,18 +272,6 @@ function compareLine(comparison: CheckupComparison | null, options: RenderOption
 }
 
 /**
- * C2a: a check that went from 「未实现」(undetermined, check.not-implemented) to a real verdict since the
- * previous report (④⑤⑥ land one at a time). Display only: `compareIssues` already routes such a check's
- * findings to firstCheck rather than added (`checkLooked`), so this never double-counts anything.
- */
-function newlyDeterminedLine(comparison: CheckupComparison | null): string | null {
-  if (!comparison || !comparison.comparable) return null
-  const newlyDetermined = comparison.checks.filter((check) => check.previous === 'undetermined' && check.current !== null && check.current !== 'undetermined')
-  if (newlyDetermined.length === 0) return null
-  return fillText(COMPARE_TEXT.newlyDetermined, { checks: newlyDetermined.map((check) => CHECK_LABELS[check.id]).join('、') })
-}
-
-/**
  * Sources whose raw data is present while the readout returned no session (readout.source-empty, listed
  * under ①), in source order. The finding never grades ①, so it is surfaced at the top as well.
  */
@@ -321,8 +310,9 @@ function overallLines(report: CheckupReport, comparison: CheckupComparison | nul
     })
   ))
   lines.push('', compareLine(comparison, options))
-  const newlyDetermined = newlyDeterminedLine(comparison)
-  if (newlyDetermined) lines.push(newlyDetermined)
+  // C2a and C2b each independently added a "本次新增了…的判定" line for this same transition (one here,
+  // one in compareSection() below); merge keeps only compareSection()'s copy, next to the per-check
+  // previous/current table it explains, rather than printing the identical sentence twice in one report.
   return lines
 }
 
@@ -498,6 +488,43 @@ function compactionTable(check: CheckResult, used: Set<string>): string[] {
   return rows.length > 0 ? table(header, rows) : []
 }
 
+/** ④ lineage: one row per (source, edge type), same shape the checks/lineage.ts oracle/swob keys share. */
+const LINEAGE_EDGE_TYPES: ReadonlyArray<{ source: string; key: keyof typeof LINEAGE_EDGE_LABELS }> = [
+  { source: 'codex', key: 'derivation' },
+  { source: 'codex', key: 'fork' },
+  { source: 'claude-code', key: 'continuation' },
+  { source: 'claude-code', key: 'subagent' },
+  { source: 'claude-code', key: 'resumeFork' }
+]
+
+function lineageTable(check: CheckResult, used: Set<string>): string[] {
+  const rows: string[][] = []
+  for (const { source, key } of LINEAGE_EDGE_TYPES) {
+    const entry = check.bySource[source]
+    if (!entry) continue
+    const totalKey = `${key}Total`
+    const expressedKey = `${key}Expressed`
+    const notExpressedKey = `${key}NotExpressed`
+    const swobExtraKey = `${key}SwobExtra`
+    if (!entry.oracle[totalKey]) continue
+    used.add(`oracle.${totalKey}`)
+    used.add(`swob.${expressedKey}`)
+    used.add(`swob.${notExpressedKey}`)
+    used.add(`swob.${swobExtraKey}`)
+    rows.push([
+      sourceLabel(source)!,
+      LINEAGE_EDGE_LABELS[key],
+      measureCell(entry.oracle[totalKey]),
+      measureCell(entry.swob[expressedKey]),
+      measureCell(entry.swob[notExpressedKey]),
+      measureCell(entry.swob[swobExtraKey])
+    ])
+  }
+  const header = [MARKDOWN_TEXT.colSource, MARKDOWN_TEXT.colEdgeType, MARKDOWN_TEXT.colEdgeTotal,
+    MARKDOWN_TEXT.colEdgeExpressed, MARKDOWN_TEXT.colEdgeNotExpressed, MARKDOWN_TEXT.colEdgeSwobExtra]
+  return rows.length > 0 ? table(header, rows) : []
+}
+
 /**
  * ⑤ Token (C2a): one row per source — the headline numbers (billing total both sides, deviation, per-
  * session exact match). The four components (`nonCachedInput`/`cacheRead`/`cacheWrite`/`output`/
@@ -579,7 +606,8 @@ function checkSection(check: CheckResult, audience: Audience): string[] {
   const main = check.id === 'inclusion' ? columnsTable(check, INCLUSION_COLUMNS, used)
     : check.id === 'content' ? contentTable(check, used)
       : check.id === 'compaction' ? compactionTable(check, used)
-        : check.id === 'tokens' ? tokensTable(check, used) : []
+        : check.id === 'lineage' ? lineageTable(check, used)
+          : check.id === 'tokens' ? tokensTable(check, used) : []
   if (main.length > 0) lines.push(...main, '')
   if (main.length === 0 && check.findings.length === 0) {
     const label = headlineLabel(check)
@@ -628,6 +656,12 @@ function compareSection(comparison: CheckupComparison, options: RenderOptions, a
     check.previous ? VERDICT_LABELS[check.previous] : '—',
     check.current ? VERDICT_LABELS[check.current] : '—'
   ])))
+  // A check that moved from undetermined (check.not-implemented) to a real verdict: never a "new issue"
+  // (compareIssues already routes it to firstCheck), just named here so it is not misread as regressed.
+  const newlyImplemented = comparison.checks
+    .filter((check) => check.previous === 'undetermined' && check.current !== null && check.current !== 'undetermined')
+    .map((check) => CHECK_LABELS[check.id])
+  if (newlyImplemented.length > 0) lines.push('', fillText(COMPARE_TEXT.newlyImplementedChecks, { checks: newlyImplemented.join('、') }))
   const issues = comparison.issues
   lines.push('', `### ${COMPARE_TEXT.issueHeading}`, '', ...table([COMPARE_TEXT.colGroup, COMPARE_TEXT.colCount], [
     [COMPARE_TEXT.groupAdded, formatNumber(issues.added.length)],

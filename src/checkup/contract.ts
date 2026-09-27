@@ -124,10 +124,14 @@ export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compact
  * marks unselected sources in readoutBySource and in the inventory rows with data (source.not-selected).
  * 1.3.0: C2a — ⑤ Token implemented: Claude/Codex independent census-level recounts (message.id+requestId
  * dedup; cumulative snapshot signature dedup) compared against the kernel's own per-session ledger
- * (`ReadoutSession.tokens`), by source-level component totals and session-level exact match.
+ * (`ReadoutSession.tokens`), by source-level component totals and session-level exact match. Also 1.3.0:
+ * C2b — ④ Lineage and branching implemented: Codex derivation edges (state db thread_spawn_edges) and
+ * fork edges (top-level forked_from_id) plus Claude continuation/subagent/resume-fork physical evidence,
+ * reconciled against the kernel's own expressed lineage (branchParentId/branchChildIds/
+ * continuationSessionIds/subagents[]); Claude-side gaps are observations only (never fail).
  */
 export const CHECKUP_VERSION = '1.3.0'
-export const SELF_TEST_TOTAL = 6
+export const SELF_TEST_TOTAL = 7
 
 export const SOURCE_IDS = [
   'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity',
@@ -157,7 +161,9 @@ export const SELF_TEST_CASES = [
   'truncated-tail',
   'codex-legacy-compacted',
   'fork-inherited-compaction',
-  'fork-usage-copy'
+  'fork-usage-copy',
+  // C2b (④ lineage): a grandchild thread-spawn edge the Swob side never attaches.
+  'lineage-grandchild-orphan'
 ] as const
 export type SelfTestCaseId = typeof SELF_TEST_CASES[number]
 
@@ -266,6 +272,14 @@ export const REASON_CODES = [
   'codex.state-db-unreadable',
   'unsupported.kimi-legacy-sessions',
   'unscanned.zcode-v2-tasks',
+  // lineage ④ (C2b)
+  'codex.derivation-edge-unexpressed',
+  'codex.derivation-edge-swob-extra',
+  'codex.fork-edge-unexpressed',
+  'codex.fork-edge-swob-extra',
+  'claude.continuation-edge-unexpressed',
+  'claude.resume-fork-edge-unexpressed',
+  'claude.branch-edge-swob-extra',
   // tokens ⑤ (C1a: census-level evidence only; C2a: the check itself)
   'codex.fork-usage-copy',
   'tokens.deviation-high',

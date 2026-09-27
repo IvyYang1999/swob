@@ -32,6 +32,7 @@ import { kernelHome, readSwobReadout, type SwobReadout } from './readout'
 import { inclusionCheck, type UnitDisposition } from './checks/inclusion'
 import { contentCheck } from './checks/content'
 import { compactionCheck } from './checks/compaction'
+import { lineageCheck } from './checks/lineage'
 import { tokensCheck } from './checks/tokens'
 import { pendingCheck } from './checks/pending'
 import {
@@ -447,18 +448,30 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
   }
   const sqliteAfter = sqliteSnapshot(homeDir)
 
-  // 5. Checks.
+  // 5. Checks. Timed individually (not just the combined `checks` phase) so a real-HOME run can attribute
+  // cost per check — needed once ④⑤⑥ stop being one-line pendingCheck() calls (C2 acceptance: record each
+  // of ④⑤⑥'s own timingsMs, not only the total).
   phase = performance.now()
   const ctx: CheckContext = { salt, selected, claude, codex, codexDb, unscanned, presence, readout, changed }
+  let checkPhase = performance.now()
   const inclusion = inclusionCheck(ctx)
-  const checks: CheckResult[] = [
-    inclusion.result,
-    contentCheck(ctx),
-    compactionCheck(ctx),
-    pendingCheck('lineage', ctx),
-    tokensCheck(ctx),
-    pendingCheck('resume', ctx)
-  ]
+  timingsMs['check.inclusion'] = elapsed(checkPhase)
+  checkPhase = performance.now()
+  const contentResult = contentCheck(ctx)
+  timingsMs['check.content'] = elapsed(checkPhase)
+  checkPhase = performance.now()
+  const compactionResult = compactionCheck(ctx)
+  timingsMs['check.compaction'] = elapsed(checkPhase)
+  checkPhase = performance.now()
+  const lineageResult = lineageCheck(ctx)
+  timingsMs['check.lineage'] = elapsed(checkPhase)
+  checkPhase = performance.now()
+  const tokensResult = tokensCheck(ctx)
+  timingsMs['check.tokens'] = elapsed(checkPhase)
+  checkPhase = performance.now()
+  const resumeResult = pendingCheck('resume', ctx)
+  timingsMs['check.resume'] = elapsed(checkPhase)
+  const checks: CheckResult[] = [inclusion.result, contentResult, compactionResult, lineageResult, tokensResult, resumeResult]
   timingsMs.checks = elapsed(phase)
   const overall = overallVerdict(checks, selfTest)
   const allUnits = [...(claude?.units ?? []), ...(codex?.units ?? [])]

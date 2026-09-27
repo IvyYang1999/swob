@@ -36,6 +36,8 @@ export const HEADLINES = {
   'content.meta-only': '只丢了 {n} 条元数据记录，没有丢对话内容',
   'compaction.pass': '{n} 场会话的压缩次数逐场一致',
   'compaction.mismatch': '{n} 场会话里有 {n} 场压缩次数对不上：原始 {n} 处，Swob 认出 {n} 处',
+  'lineage.pass': 'Codex 自己记录的 {n} 条血统边全部表达',
+  'lineage.gaps': 'Codex 自己记录了 {n} 条血统边，Swob 少了 {n} 条',
   // ⑤ tokens (C2a)
   'tokens.pass': '{n} 个来源的 Token 分量偏差都在 0.1% 以内，逐场全等率不低于 99%',
   'tokens.note': '{n} 个来源里有 {n} 项需要留意：偏差在 1% 以内，或属于已登记口径差',
@@ -193,6 +195,35 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   'content.swob-read-error': {
     ownerLine: '{source}：有 {n} 个文件没拿到 Swob 的逐文件读入数（读取出错，或这次没有读），没有参与比对，也不做推算',
     engineerHint: 'src/checkup/readout.ts#readSwobReadout：没有这个文件的逐文件读数（parseCodexFileWithStats 读取抛错，或文件不在这次读数的清单里）；不推算，不参与 ② 的比对'
+  },
+  // —— C2b (④ lineage) additions ——
+  'codex.derivation-edge-unexpressed': {
+    ownerLine: 'Codex：自己记录了 {n} 条「谁派出了谁」，Swob 里少了 {n} 条',
+    engineerHint: 'src/checkup/census/codex-state-db.ts thread_spawn_edges vs src/main/session-loader.ts#loadLegacySessionSnapshot 的子 agent 挂载：边的子线程不在任何会话的 subagents[] 里，或挂错了父'
+  },
+  'codex.derivation-edge-swob-extra': {
+    ownerLine: 'Codex：Swob 挂了 {n} 个子 agent，但线程库的派生关系表里找不到对应的边',
+    engineerHint: 'src/main/session-loader.ts#loadLegacySessionSnapshot 挂到某会话的 subagents[]，census/codex-state-db.ts 的 thread_spawn_edges 里没有以它为子线程的行；标 [E]，可能是线程库本身遗漏'
+  },
+  'codex.fork-edge-unexpressed': {
+    ownerLine: 'Codex：有 {n} 场（共 {n} 场）分叉/重放会话，Swob 没有把它和原会话连起来',
+    engineerHint: 'session_meta.forked_from_id（census/codex-census.ts codexTopLevelForkEdges）vs src/main/codex-loader.ts#extractCodexReplayParentId 写入的 branchParentId'
+  },
+  'codex.fork-edge-swob-extra': {
+    ownerLine: 'Codex：Swob 认为有 {n} 场会话是分叉/重放来的，但线程自己的记录里没有这条证据',
+    engineerHint: 'branchParentId（codex:<id> 前缀）在 census/codex-census.ts 的 codexTopLevelForkEdges 里找不到对应的 forked_from_id；标 [E]'
+  },
+  'claude.continuation-edge-unexpressed': {
+    ownerLine: 'Claude Code：有 {n} 对文件明显是「接着上一场继续聊」，Swob 没有把它们连成一场会话',
+    engineerHint: 'census/claude-census.ts 的 sessionIds 与 basenameId 交叉引用 vs readout.ts ReadoutSession 的 paths / continuationSessionIds'
+  },
+  'claude.resume-fork-edge-unexpressed': {
+    ownerLine: 'Claude Code：有 {n} 对文件开头原样复制了另一个文件至少 8 条消息，Swob 没有把它们连起来',
+    engineerHint: 'census/claude-census.ts#findClaudeUuidOverlapPairs（uuid 前缀重叠 ≥8，标 [E]）vs branchParentId/branchChildIds（session-loader.ts#linkCrossSessionBranches 或 forkedFrom 字段）；两套独立实现的分歧只报观察，不影响结论'
+  },
+  'claude.branch-edge-swob-extra': {
+    ownerLine: 'Claude Code：Swob 认为有 {n} 场会话是恢复/分叉来的，但原始文件里找不到这条证据',
+    engineerHint: 'branchParentId/branchChildIds（session-loader.ts#linkCrossSessionBranches 或 forkedFrom 字段）在 census/claude-census.ts#findClaudeUuidOverlapPairs 的重叠证据里找不到对应的文件对；标 [E]，父文件可能已被清理'
   },
   // —— C2a additions (⑤ tokens) ——
   'tokens.deviation-high': {
@@ -422,6 +453,13 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   'codex.state-db-unreadable': 'Codex 线程库打不开',
   'unsupported.kimi-legacy-sessions': '旧版 Kimi 格式，Swob 不支持',
   'unscanned.zcode-v2-tasks': 'ZCode v2 任务索引，Swob 不读',
+  'codex.derivation-edge-unexpressed': '线程库记录的派生关系，Swob 没有表达',
+  'codex.derivation-edge-swob-extra': 'Swob 表达的派生关系，线程库里没有对应的边',
+  'codex.fork-edge-unexpressed': '分叉/重放会话，Swob 没有连到原会话',
+  'codex.fork-edge-swob-extra': 'Swob 认为的分叉关系，线程自己的记录里没有证据',
+  'claude.continuation-edge-unexpressed': '续写的文件，Swob 没有连成一场会话',
+  'claude.resume-fork-edge-unexpressed': '开头原样复制的文件，Swob 没有连起来',
+  'claude.branch-edge-swob-extra': 'Swob 认为的恢复/分叉关系，原始文件里没有证据',
   'codex.fork-usage-copy': '子 agent 抄写了父会话的用量快照',
   'tokens.deviation-high': 'Token 总量偏差超出可解释范围',
   'tokens.deviation-note': 'Token 总量有偏差，在允许范围内',
@@ -478,6 +516,15 @@ export const UNIT_LABELS: Readonly<Record<string, string>> = {
   tokens: 'token',
   checks: '项检查',
   dirs: '个目录'
+}
+
+/** ④ lineage edge-type row labels (render-markdown.ts lineageTable). */
+export const LINEAGE_EDGE_LABELS: Readonly<Record<string, string>> = {
+  derivation: '派生边（thread-spawn）',
+  fork: '分叉边（forked_from_id）',
+  continuation: '续写边',
+  subagent: '子 agent 边',
+  resumeFork: '恢复/分叉边（uuid 重叠）'
 }
 
 /** Oracle ids (contract ORACLE_IDS). */
@@ -611,6 +658,26 @@ export const MEASURE_LABELS: Readonly<Record<string, string>> = {
   // C1c: files counted under the kernel's per-file rule (shown only when there are any)
   bothFormatFiles: '新旧两种压缩记录并存的文件',
   eventOnlyFiles: '只有压缩事件的文件',
+  // ④ lineage
+  derivationTotal: '线程库记录的派生边',
+  derivationExpressed: '已表达的派生边',
+  derivationNotExpressed: '未表达的派生边',
+  derivationSwobExtra: 'Swob 多出的派生边',
+  forkTotal: '顶层分叉边（forked_from_id）',
+  forkExpressed: '已表达的分叉边',
+  forkNotExpressed: '未表达的分叉边',
+  forkSwobExtra: 'Swob 多出的分叉边',
+  continuationTotal: '续写文件对',
+  continuationExpressed: '已表达的续写边',
+  continuationNotExpressed: '未表达的续写边',
+  subagentTotal: '子 agent 边',
+  subagentExpressed: '已表达的子 agent 边',
+  subagentNotExpressed: '未表达的子 agent 边',
+  resumeForkTotal: '恢复/分叉边（uuid 重叠 ≥8）',
+  resumeForkExpressed: '已表达的恢复/分叉边',
+  resumeForkNotExpressed: '未表达的恢复/分叉边',
+  resumeForkSwobExtra: 'Swob 多出的恢复/分叉边',
+  sameFileParentCoverage: '同文件父指针覆盖率',
   // ⑤ tokens (census-level evidence)
   forkUsageCopies: '子 agent 抄写父会话的用量快照',
   forkUsageCopiesSameTimestamp: '时间戳也相同的抄写快照',
@@ -692,6 +759,11 @@ export const MARKDOWN_TEXT = {
   colGlobal: '全局去重',
   colSwobCompact: 'Swob 认出',
   colSessionsEqual: '逐场一致',
+  colEdgeType: '边的类型',
+  colEdgeTotal: '标准答案边数',
+  colEdgeExpressed: '已表达',
+  colEdgeNotExpressed: '未表达',
+  colEdgeSwobExtra: 'Swob 多出[E]',
   // ⑤ tokens (C2a)
   colOracleBillingTotal: '标准答案计费合计',
   colSwobBillingTotal: 'Swob 计费合计',
@@ -816,9 +888,11 @@ export const COMPARE_TEXT = {
   colSamples: '样本',
   // C1b-2 (acceptance P2-13): the summary line when previous issues were not checked this time
   summaryWithNotChecked: '和上次比（上次 {date}）：新增问题 {n} 项，已修复 {n} 项，未变 {n} 项，首次检查 {n} 项，本次未检查 {n} 项。',
-  // C2a: a check that was 「未实现」last time and has a real verdict this time (④⑤⑥ landing one at a
-  // time) — display only, `compareIssues` already routes its findings to firstCheck, not added.
-  newlyDetermined: '本次新增了 {checks} 的判定。'
+  // C2b: a check that moved from undetermined (check.not-implemented) to a real verdict is never counted
+  // as a new problem (checkLooked/compareIssues already send it to firstCheck); this names the transition.
+  // (C2a independently added the same sentence under a second key, `newlyDetermined`, for the same
+  // transition; the merge kept this one — see render-markdown.ts#overallLines — and retired that one.)
+  newlyImplementedChecks: '本次新增了 {checks} 的判定。'
 } as const
 
 let cachedTemplateSet: Set<string> | null = null
@@ -840,6 +914,7 @@ export function registeredTemplateSet(): Set<string> {
     ...Object.values(REASON_TEXT),
     ...Object.values(REASON_SHORT_TEXT).filter((text): text is string => !!text),
     ...Object.values(UNIT_LABELS),
+    ...Object.values(LINEAGE_EDGE_LABELS),
     ...Object.values(ORACLE_LABELS),
     ...Object.values(LOSS_KIND_LABELS),
     ...Object.values(MEASURE_LABELS),

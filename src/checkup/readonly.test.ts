@@ -98,11 +98,12 @@ describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
     const report = runs[0].report
     expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
     expect(report.checks.map((check) => check.id)).toEqual([...CHECK_ORDER])
-    expect(report.kernel).toMatchObject({ readOnly: true, selfTest: { passed: 6, total: 6 }, commit: '4971632ac809b012357461c2f96f04a8a281eac5' })
+    expect(report.kernel).toMatchObject({ readOnly: true, selfTest: { passed: 7, total: 7 }, commit: '4971632ac809b012357461c2f96f04a8a281eac5' })
     expect(report.readout).toEqual({ status: 'ok' })
-    // C2a: ⑤ tokens is implemented (a graded pass on this sample HOME, no check-level reason); ④⑥ stay pending.
+    // ④ lineage (C2b) and ⑤ tokens (C2a) both now produce real (passing) verdicts on this sample HOME;
+    // ⑥ resume stays pending (C2c not yet merged).
     expect(report.checks.slice(3).map((check) => [check.verdict, check.reason])).toEqual([
-      ['undetermined', 'check.not-implemented'], ['pass', undefined], ['undetermined', 'check.not-implemented']
+      ['pass', undefined], ['pass', undefined], ['undetermined', 'check.not-implemented']
     ])
   })
 

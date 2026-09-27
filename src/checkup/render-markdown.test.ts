@@ -330,6 +330,24 @@ describe('renderCheckupMarkdown (hand-written reports)', () => {
     expect(renderCheckupMarkdown(mixedReport(), { ...RENDER, previous: legacy })).toContain('和上次比：上次报告没有机器指纹（旧版体检生成的），这次不比。')
   })
 
+  // C2b: a check moving from undetermined (check.not-implemented) to a real verdict is never a "new
+  // problem" (checkLooked/compareIssues already route it to firstCheck; compare.test.ts covers that); this
+  // is the one new piece of rendering — naming the transition so it does not read as a regression.
+  it('names a check that moved from undetermined to a real verdict, without touching the issue counts', () => {
+    const previous = mixedReport()
+    previous.generatedAt = '2026-09-26T01:00:00.000Z'
+    const current = mixedReport()
+    current.checks[3].verdict = 'pass'
+    delete current.checks[3].reason
+    const withTransition = renderCheckupMarkdown(current, { ...RENDER, previous })
+    expect(withTransition).toContain('本次新增了 ④ 血统与分支 的判定。')
+    expect(withTransition).toContain('| ④ 血统与分支 | 无法判定 | 通过 |')
+    // Unrelated to the issue-level comparison (still driven by checkLooked/compareIssues alone).
+    expect(withTransition).toContain('和上次比（上次 2026-09-26）：新增问题 0 项，已修复 0 项，未变 5 项，首次检查 0 项。')
+    // No transition (both undetermined, the common case pre-C2): the sentence is absent.
+    expect(renderCheckupMarkdown(mixedReport(), { ...RENDER, previous })).not.toContain('本次新增了')
+  })
+
   it('C2a: names a check that went from 「未实现」to a real verdict since the previous report', () => {
     const previous = mixedReport()
     previous.generatedAt = '2026-09-26T01:00:00.000Z'

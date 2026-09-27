@@ -68,6 +68,15 @@ export interface ClaudeUnit {
   /** Subset of hazards caused by literal U+2028/U+2029. */
   lineSeparatorKinds: Record<LossKind, number>
   timeRange: { min: string | null; max: string | null }
+  // —— C2b (④ lineage) additions: physical evidence, independent of any Swob lineage code ——
+  /** Every distinct `uuid` seen in this file (any record type), for the cross-file overlap check below. */
+  uuids: string[]
+  /** Records carrying a non-null `parentUuid`. */
+  parentUuidTotal: number
+  /** Of those, how many resolve to a uuid found in this same file (the design's "same-file parent coverage"). */
+  parentUuidSameFileCovered: number
+  /** `forkedFrom` occurrences (rare/never observed in practice; kept small). */
+  forkedFromRefs: Array<{ sessionId: string; messageUuid: string }>
   /** ⑤ Token: this file's own usage-bearing assistant rows (fork-inherited rows excluded, see below). */
   usageSnapshots: ClaudeUsageSnapshot[]
   /** Assistant rows with usage that carried Claude Code's own `forkedFrom` marker (excluded, not copies). */
@@ -179,6 +188,9 @@ export async function censusClaudeFile(
   let compactBoundaryRows = 0
   let compactBoundaryRowsWithoutUuid = 0
   let compactSummaryRows = 0
+  const uuids = new Set<string>()
+  const parentUuidRefs: string[] = []
+  const forkedFromRefs: ClaudeUnit['forkedFromRefs'] = []
   const usageSnapshots: ClaudeUsageSnapshot[] = []
   let forkInheritedUsageRows = 0
 
@@ -225,6 +237,15 @@ export async function censusClaudeFile(
           else compactBoundaryRowsWithoutUuid++
         }
         if (entry.isCompactSummary === true) compactSummaryRows++
+        if (typeof entry.uuid === 'string' && entry.uuid) uuids.add(entry.uuid)
+        if (typeof entry.parentUuid === 'string' && entry.parentUuid) parentUuidRefs.push(entry.parentUuid)
+        const forkedFrom = entry.forkedFrom as { sessionId?: unknown; messageUuid?: unknown } | undefined
+        if (forkedFrom && typeof forkedFrom === 'object' &&
+            typeof forkedFrom.sessionId === 'string' && forkedFrom.sessionId &&
+            typeof forkedFrom.messageUuid === 'string' && forkedFrom.messageUuid &&
+            forkedFromRefs.length < 16) {
+          forkedFromRefs.push({ sessionId: forkedFrom.sessionId, messageUuid: forkedFrom.messageUuid })
+        }
         if (meta.lineSeparator || meta.bareCr) {
           const kind = claudeLossKind(entry)
           hazardKinds[kind]++
@@ -237,6 +258,7 @@ export async function censusClaudeFile(
     }
   }
   const after = fingerprint(filePath)
+  const parentUuidSameFileCovered = parentUuidRefs.filter((ref) => uuids.has(ref)).length
   return {
     path: filePath,
     fixedRoot: root.fixedRoot,
@@ -258,6 +280,10 @@ export async function censusClaudeFile(
     hazardKinds,
     lineSeparatorKinds,
     timeRange: { min: timeRange.min, max: timeRange.max },
+    uuids: [...uuids],
+    parentUuidTotal: parentUuidRefs.length,
+    parentUuidSameFileCovered,
+    forkedFromRefs,
     usageSnapshots,
     forkInheritedUsageRows
   }
@@ -359,4 +385,58 @@ export function claudeRecountUsage(units: readonly ClaudeUnit[]): RecountedClaud
     uniqueRequests: groups.size,
     forkInheritedRows
   }
+}
+
+export interface ClaudeUuidOverlapPair { pathA: string; pathB: string; overlap: number }
+
+/**
+ * Cross-file uuid-prefix overlap (design §4.4): a new file whose beginning copies at least `threshold`
+ * messages of an older file is physical evidence of a resume or fork, labelled [E] (estimated) in the
+ * report because it cannot say which of the two it is. Evidence-level cost only (an inverted index +
+ * pairwise counters), not the registry's decision-level single-parent disambiguation
+ * (session-lineage.ts): a uuid normally lives in exactly one file, so the counted collisions stay small
+ * even at real scale.
+ */
+export function findClaudeUuidOverlapPairs(units: readonly ClaudeUnit[], threshold = 8): ClaudeUuidOverlapPair[] {
+  const owners = new Map<string, string[]>()
+  for (const unit of units) {
+    if (unit.unreadable) continue
+    for (const uuid of unit.uuids) {
+      const list = owners.get(uuid)
+      if (list) { if (!list.includes(unit.path)) list.push(unit.path) } else owners.set(uuid, [unit.path])
+    }
+  }
+  const pairCounts = new Map<string, number>()
+  for (const paths of owners.values()) {
+    if (paths.length < 2) continue
+    for (let i = 0; i < paths.length; i++) {
+      for (let j = i + 1; j < paths.length; j++) {
+        const key = paths[i] < paths[j] ? `${paths[i]}\u0000${paths[j]}` : `${paths[j]}\u0000${paths[i]}`
+        pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1)
+      }
+    }
+  }
+  const pairs: ClaudeUuidOverlapPair[] = []
+  for (const [key, overlap] of pairCounts) {
+    if (overlap < threshold) continue
+    const [pathA, pathB] = key.split('\u0000')
+    pairs.push({ pathA, pathB, overlap })
+  }
+  return pairs
+}
+
+/**
+ * Auxiliary indicator (design §4.4, not part of the three-column edge tally): of every non-null
+ * parentUuid pointer, what fraction resolves to a uuid found in the *same physical file*. A pointer that
+ * does not resolve usually targets a file already cleaned up (not a Swob problem).
+ */
+export function claudeParentUuidCoverage(units: readonly ClaudeUnit[]): { covered: number; total: number } {
+  let covered = 0
+  let total = 0
+  for (const unit of units) {
+    if (unit.unreadable) continue
+    covered += unit.parentUuidSameFileCovered
+    total += unit.parentUuidTotal
+  }
+  return { covered, total }
 }

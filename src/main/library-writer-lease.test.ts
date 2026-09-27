@@ -655,5 +655,185 @@ describe('Library 跨进程单写者 lease', () => {
         .toBe('/tmp/profile-a/.claude-session-manager/host-identity-v1.json')
     })
   })
+
+  describe('身份历史第二证据（F1l-c：stale-by-identity-history）', () => {
+    const identityA = '10000000-0000-4000-8000-000000000a01'
+    const identityB = '20000000-0000-4000-8000-000000000b02'
+    const orphans: LibraryWriterLeaseHandle[] = []
+
+    afterEach(() => {
+      for (const handle of orphans.splice(0)) handle.release()
+    })
+
+    /** identityA signed the incident lock; the current machine identity has since moved to identityB. */
+    async function incidentLockSignedByA(deviceId = 'this-install'): Promise<void> {
+      orphans.push(await acquireLibraryWriterLease(root, deviceId, 'maintenance',
+        leaseOptions(76437, () => 'start-76437', {
+          bootIdentity: () => 'boot-0904',
+          hostIdentity: () => identityA,
+          now: () => Date.parse('2026-09-04T01:00:00.000Z'),
+          heartbeatMs: 60_000
+        })))
+    }
+
+    function afterRotationToB(
+      overrides: Partial<LibraryWriterLeaseOptions> = {}
+    ): LibraryWriterLeaseOptions {
+      return leaseOptions(202, (pid) => pid === 202 ? 'start-202' : 'missing', {
+        bootIdentity: () => 'boot-0926',
+        hostIdentity: () => identityB,
+        now: () => Date.parse('2026-09-27T16:45:00.000Z'),
+        timeoutMs: 20,
+        pollMs: 1,
+        ...overrides
+      })
+    }
+
+    it('history 里的旧身份匹配 owner hostProof + deviceId 相同 → recover，原因码 stale-by-identity-history', async () => {
+      await incidentLockSignedByA()
+      const events: LibraryWriterEvent[] = []
+      const recovered = await acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRotationToB({
+          // Disabled so this test isolates identity-history: without it, staleByDeviceAndLease's
+          // own conditions (deviceId match, >=24h expired, pid missing) would also independently
+          // recover this same lock, masking whether identity-history actually did the work.
+          staleByDeviceAndLease: { enabled: false },
+          identityHistory: () => [identityA],
+          eventSink: (event) => { events.push(event) }
+        }))
+
+      expect(recovered.owner).toMatchObject({ schemaVersion: 2, deviceId: 'this-install' })
+      const evidenceDir = path.join(root, '.swob', 'locks', 'writer-recovery-evidence')
+      const retained = fs.readdirSync(evidenceDir)
+      expect(retained).toHaveLength(1)
+      expect(JSON.parse(fs.readFileSync(path.join(evidenceDir, retained[0], 'recovery.claim'), 'utf8')))
+        .toMatchObject({ kind: 'automatic', basis: 'stale-by-identity-history' })
+      expect(events).toContainEqual(expect.objectContaining({
+        event: 'stale-recovered',
+        recoveryBasis: 'stale-by-identity-history'
+      }))
+      recovered.release()
+    })
+
+    it('history 里排第二的旧身份（历史有多条，最近的在前也要试到匹配的那条）', async () => {
+      await incidentLockSignedByA()
+      const recovered = await acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRotationToB({
+          staleByDeviceAndLease: { enabled: false },
+          identityHistory: () => ['30000000-0000-4000-8000-000000000c03', identityA]
+        }))
+      expect(recovered.owner).toMatchObject({ deviceId: 'this-install' })
+      recovered.release()
+    })
+
+    it('deviceId 不同：即使历史身份匹配也不 recover，维持 remote-owner（历史不能跨机器用）', async () => {
+      await incidentLockSignedByA('other-install')
+      const error = await acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRotationToB({ identityHistory: () => [identityA] }))
+        .then(() => null, (caught: unknown) => caught)
+
+      expect(error).toBeInstanceOf(LibraryWriterBusyError)
+      expect(error).toMatchObject({ reason: 'remote-owner' })
+      expect(fs.existsSync(path.join(root, '.swob', 'locks', 'writer-recovery-evidence'))).toBe(false)
+    })
+
+    it('历史里没有匹配的身份 → 维持 remote-owner（不假装是本机的历史）', async () => {
+      await incidentLockSignedByA()
+      const error = await acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRotationToB({
+          // Isolated from staleByDeviceAndLease for the same reason as above: this test is
+          // specifically about identity-history refusing to fabricate a match, not about what
+          // the other mechanism would independently do with these same deviceId/lease/pid facts.
+          staleByDeviceAndLease: { enabled: false },
+          identityHistory: () => ['40000000-0000-4000-8000-000000000d04']
+        }))
+        .then(() => null, (caught: unknown) => caught)
+      expect(error).toBeInstanceOf(LibraryWriterBusyError)
+      expect(error).toMatchObject({ reason: 'remote-owner' })
+      expect(fs.existsSync(path.join(root, '.swob', 'locks', 'writer-recovery-evidence'))).toBe(false)
+    })
+
+    it('优先于 stale-by-device-and-lease：两者条件都满足时，原因码是 identity-history 而不是 device-and-lease', async () => {
+      await incidentLockSignedByA() // this-install, lease expires long ago relative to the check below
+      const recovered = await acquireLibraryWriterLease(root, 'this-install', 'maintenance',
+        afterRotationToB({
+          // staleByDeviceAndLease would also fire here (deviceId matches, ≥24h expired, pid missing) -
+          // identity-history must win because it is the stronger evidence.
+          identityHistory: () => [identityA]
+        }))
+      const evidenceDir = path.join(root, '.swob', 'locks', 'writer-recovery-evidence')
+      const retained = fs.readdirSync(evidenceDir)
+      expect(JSON.parse(fs.readFileSync(path.join(evidenceDir, retained[0], 'recovery.claim'), 'utf8')).basis)
+        .toBe('stale-by-identity-history')
+      recovered.release()
+    })
+
+    it('空历史（默认，无 identityHistory 覆盖）不影响既有 remote-owner/second-evidence 行为', async () => {
+      await incidentLockSignedByA()
+      const recovered = await acquireLibraryWriterLease(root, 'this-install', 'maintenance', afterRotationToB())
+      const evidenceDir = path.join(root, '.swob', 'locks', 'writer-recovery-evidence')
+      expect(JSON.parse(fs.readFileSync(
+        path.join(evidenceDir, fs.readdirSync(evidenceDir)[0], 'recovery.claim'), 'utf8'
+      )).basis).toBe('stale-by-device-and-lease')
+      recovered.release()
+    })
+
+    it('验收②：旧身份 A 签的锁 + 主副本已重生成为 B（真实身份历史机制）→ recover，不弹远端 owner', async () => {
+      const machineHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-machine-home-history-'))
+      const previousTestHome = process.env.SWOB_TEST_HOME
+      process.env.SWOB_TEST_HOME = machineHome
+      try {
+        // 1) This machine's real identity is A; it signs an incident lock, orphaned (heartbeat far in the future).
+        orphans.push(await acquireLibraryWriterLease(root, 'this-install', 'maintenance', {
+          pid: 101,
+          bootIdentity: () => 'boot-a',
+          processStartFingerprint: (pid) => pid === 101 ? 'start-101' : 'missing',
+          heartbeatMs: 60_000,
+          eventSink: () => {}
+        }))
+        const identityPath = path.join(machineHome, '.swob-machine', 'host-identity-v1.json')
+        const backupPath = path.join(machineHome, '.claude-session-manager', 'host-identity-v1.json')
+        const historyPath = path.join(machineHome, '.claude-session-manager', 'host-identity-history.jsonl')
+        expect(fs.existsSync(historyPath)).toBe(false) // nothing superseded yet
+
+        // 2) Something else regenerates the primary to B - the 09-26 shape - without going through this backup.
+        const identityA = JSON.parse(fs.readFileSync(identityPath, 'utf8')).identity
+        fs.rmSync(path.dirname(identityPath), { recursive: true, force: true })
+        fs.mkdirSync(path.dirname(identityPath), { recursive: true })
+        fs.writeFileSync(identityPath, JSON.stringify({
+          schemaVersion: 1, identity: identityB, createdAt: '2026-09-26T22:22:00.000Z'
+        }), { mode: 0o600 })
+
+        // 3) The next process to read the identity (e.g. a `doctor locks` or another write attempt
+        // that reaches getOrCreateHostIdentity) syncs the backup, archiving A into history.
+        const { getOrCreateHostIdentity } = await import('./host-identity')
+        getOrCreateHostIdentity({ storagePath: identityPath, backupPath })
+        expect(fs.existsSync(historyPath)).toBe(true)
+        expect(fs.readFileSync(historyPath, 'utf8')).toContain(identityA)
+        expect(JSON.parse(fs.readFileSync(backupPath, 'utf8')).identity).toBe(identityB)
+
+        // 4) Reboot: a fresh acquisition attempt now sees hostIdentity=B. The owner's hostProof was
+        // derived from A, so same-host proof no longer matches - but identity history does.
+        const recovered = await acquireLibraryWriterLease(root, 'this-install', 'move', {
+          pid: 202,
+          bootIdentity: () => 'boot-b',
+          processStartFingerprint: (pid) => pid === 202 ? 'start-202' : 'missing',
+          timeoutMs: 50,
+          pollMs: 1,
+          eventSink: () => {}
+          // No hostIdentity/identityHistory seam: the real getOrCreateHostIdentity/readHostIdentityHistory run.
+        })
+        const evidenceDir = path.join(root, '.swob', 'locks', 'writer-recovery-evidence')
+        const retained = fs.readdirSync(evidenceDir)
+        expect(JSON.parse(fs.readFileSync(path.join(evidenceDir, retained[0], 'recovery.claim'), 'utf8')))
+          .toMatchObject({ basis: 'stale-by-identity-history' })
+        recovered.release()
+      } finally {
+        if (previousTestHome === undefined) delete process.env.SWOB_TEST_HOME
+        else process.env.SWOB_TEST_HOME = previousTestHome
+        fs.rmSync(machineHome, { recursive: true, force: true })
+      }
+    })
+  })
 })
 

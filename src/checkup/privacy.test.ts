@@ -105,7 +105,10 @@ describe('privacy scanner', () => {
       'content.line-separator-split:reasonText',
       'content.swob-extra-records:engineerHint',
       'content.unexplained-loss:engineerHint',
-      'readout.parse-timeout:engineerHint'
+      'readout.parse-timeout:engineerHint',
+      'resume.anchor-mismatch:engineerHint',
+      'resume.anchor-mismatch:ownerLine',
+      'resume.anchor-mismatch:reasonText'
     ])
     for (const entry of RETIRED_TEMPLATES) {
       expect(REASON_CODES).toContain(entry.code)

@@ -4,6 +4,7 @@ import * as path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ResumeProbe, ResumeProbeInput } from '../contract'
 import type { ClaudeParseResult, CodexParseResult, ReadoutSession, SwobReadout } from '../readout'
+import type { CodexStateDb, CodexThreadRow } from '../census/codex-state-db'
 import type { CheckContext } from './common'
 import { locateProgram, resumeCheck } from './resume'
 
@@ -69,6 +70,11 @@ function fakeProbe(pathEnv: string, build: (input: ResumeProbeInput) => { comman
   return { pathEnv, build }
 }
 
+/** Minimal Codex state db fixture (⑥ L3 C2c-3: `codexRecoverySide` reads `.available`/`.threads` only). */
+function codexStateDb(threads: CodexThreadRow[]): CodexStateDb {
+  return { available: true, version: 1, candidates: 1, threads, edges: [], audit: null }
+}
+
 describe('⑥ resume — data-layer buckets', () => {
   it('file and directory both present -> recoverable, pass', () => {
     const dir = tempDir()
@@ -124,24 +130,31 @@ describe('⑥ resume — data-layer buckets', () => {
   })
 })
 
-describe('⑥ resume — L3 anchor comparison ([D], non-independent)', () => {
-  it('a single-file session with a readable anchor -> match, pass', () => {
+describe('⑥ resume — L3 anchor comparison (C2c-3: 恢复侧 vs 展示侧, [D] non-independent)', () => {
+  it('a single-file session degenerates to comparing a file against itself -> always match (documented, not special-cased)', () => {
+    // session.paths has only one member, so 恢复侧 (primaryPath) and 展示侧 (the freshest-anchor member of
+    // session.paths) are structurally the same physical file here — this is the overwhelming majority
+    // shape on a real machine (C2c 独立验收: 58/59 Claude, 526/528 Codex) and is only ever an existence
+    // check ("does this file still read cleanly"), never an independent-content check, for them.
     const main = file('c.jsonl')
     const sessions = [claudeSession('s6', main)]
-    const claudeParsed = new Map([[main, { records: 4, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb' } }]])
+    const claudeParsed = new Map([[main, { records: 4, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb', lastTimestamp: '2026-08-01T00:00:00.000Z' } }]])
     const result = resumeCheck(ctx({ readout: readout(sessions, { claudeParsed }) }))
     expect(result.bySource['claude-code'].swob.anchorMatch?.value).toBe(1)
     expect(result.bySource['claude-code'].swob.anchorMismatch?.value).toBe(0)
     expect(result.bySource['claude-code'].verdict).toBe('pass')
   })
 
-  it('a multi-file session whose files disagree -> anchor mismatch, fail (reachable, not dead code)', () => {
-    const primary = file('main.jsonl')
-    const shard = file('shard.jsonl')
-    const sessions = [claudeSession('s7', primary, { paths: [primary, shard] })]
+  it('Claude continuation pair: 展示侧 (the newer shard) differs from 恢复侧 (primaryPath) -> anchor mismatch, fail (F1o real-HOME shape)', () => {
+    const primary = file('main.jsonl') // 恢复侧: session.primaryPath, the sessionId-named file `claude --resume` opens
+    const shard = file('shard.jsonl') // 展示侧 wins this one: its own anchor is the freshest in session.paths
+    const sessions = [claudeSession('s7', primary, {
+      paths: [primary, shard],
+      updatedAt: '2026-08-08T00:00:00.000Z' // >= shard's own timestamp, so this is not mistaken for cache-lag
+    })]
     const claudeParsed = new Map([
-      [primary, { records: 2, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb' } }],
-      [shard, { records: 2, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'cccccccc', lastAssistant: 'dddddddd' } }]
+      [primary, { records: 2, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb', lastTimestamp: '2026-07-01T00:00:00.000Z' } }],
+      [shard, { records: 2, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'cccccccc', lastAssistant: 'dddddddd', lastTimestamp: '2026-08-08T00:00:00.000Z' } }]
     ])
     const result = resumeCheck(ctx({ readout: readout(sessions, { claudeParsed }) }))
     const entry = result.bySource['claude-code']
@@ -150,17 +163,91 @@ describe('⑥ resume — L3 anchor comparison ([D], non-independent)', () => {
     expect(result.findings.find((f) => f.code === 'resume.anchor-mismatch')).toMatchObject({ verdict: 'fail', source: 'claude-code' })
   })
 
-  it('a multi-file session whose files agree -> match, pass (no false positive from grouping alone)', () => {
-    const primary = file('main2.jsonl')
-    const shard = file('shard2.jsonl')
-    const sessions = [claudeSession('s8', primary, { paths: [primary, shard] })]
+  it('Codex state db points at a secondary rollout Swob did not pick as primary -> 恢复侧 ≠ 展示侧, anchor mismatch, fail', () => {
+    const primary = file('codex-primary.jsonl') // Swob's own pick (not the db pointer) — wins 展示侧: freshest anchor
+    const secondary = file('codex-secondary.jsonl') // state db's rollout_path — 恢复侧: what `codex resume` actually opens
+    const sessions = [codexSession('s-db-secondary', primary, {
+      paths: [primary, secondary],
+      updatedAt: '2026-09-13T04:50:00.000Z' // >= primary's (展示侧's) own timestamp: not cache-lag
+    })]
+    const codexParsed = new Map<string, CodexParseResult>([
+      [primary, { records: 4, elapsedMs: 1, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb', lastTimestamp: '2026-09-13T04:43:37.000Z' } }],
+      [secondary, { records: 10, elapsedMs: 1, resumeAnchors: { lastUser: 'cccccccc', lastAssistant: 'dddddddd', lastTimestamp: '2026-09-13T04:41:00.000Z' } }]
+    ])
+    const db = codexStateDb([{ id: 's-db-secondary', rolloutPath: secondary, threadSource: null, archived: false }])
+    const result = resumeCheck(ctx({ readout: readout(sessions, { codexParsed }), codexDb: db }))
+    const entry = result.bySource.codex
+    expect(entry.swob.anchorMismatch?.value).toBe(1)
+    expect(entry.verdict).toBe('fail')
+    expect(result.findings.find((f) => f.code === 'resume.anchor-mismatch')).toMatchObject({ verdict: 'fail', source: 'codex' })
+  })
+
+  it('Codex state db points at the file Swob already shows (the post-F1p shape) -> match, pass', () => {
+    // F1p (once landed) makes Swob's own primaryPath follow the state db pointer; this fixture simulates
+    // that outcome directly (task book: "夹具里模拟「Swob 主文件 == db 指针」的情形 → match") without
+    // depending on F1p's own landing.
+    const rollout = file('codex-current.jsonl')
+    const sessions = [codexSession('s-db-matches-primary', rollout)]
+    const codexParsed = new Map<string, CodexParseResult>([
+      [rollout, { records: 4, elapsedMs: 1, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb', lastTimestamp: '2026-09-13T04:46:20.000Z' } }]
+    ])
+    const db = codexStateDb([{ id: 's-db-matches-primary', rolloutPath: rollout, threadSource: null, archived: false }])
+    const result = resumeCheck(ctx({ readout: readout(sessions, { codexParsed }), codexDb: db }))
+    const entry = result.bySource.codex
+    expect(entry.swob.anchorMatch?.value).toBe(1)
+    expect(entry.swob.anchorMismatch?.value).toBe(0)
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('db has no row for this session -> falls back to primaryPath (same as Claude), not an automatic failure', () => {
+    const main = file('codex-no-db-row.jsonl')
+    const sessions = [codexSession('s-no-db-row', main)]
+    const codexParsed = new Map<string, CodexParseResult>([
+      [main, { records: 4, elapsedMs: 1, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb', lastTimestamp: '2026-09-01T00:00:00.000Z' } }]
+    ])
+    const db = codexStateDb([]) // db available, but no row at all for this session id
+    const result = resumeCheck(ctx({ readout: readout(sessions, { codexParsed }), codexDb: db }))
+    const entry = result.bySource.codex
+    expect(entry.swob.anchorMatch?.value).toBe(1)
+    expect(entry.swob.anchorCannotVerify?.value).toBe(0)
+    expect(entry.verdict).toBe('pass')
+  })
+
+  it('mismatch downgrades to "注意 · 缓存滞后" when Swob\'s own updatedAt has not caught up to the fresher anchor (task book S2)', () => {
+    const primary = file('lag-main.jsonl')
+    const shard = file('lag-shard.jsonl')
+    const sessions = [claudeSession('s-cache-lag', primary, {
+      paths: [primary, shard],
+      updatedAt: '2026-07-01T00:00:00.000Z' // Swob's own summary thinks this is the latest activity...
+    })]
     const claudeParsed = new Map([
-      [primary, { records: 2, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb' } }],
-      [shard, { records: 2, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb' } }]
+      [primary, { records: 2, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb', lastTimestamp: '2026-07-01T00:00:00.000Z' } }],
+      // ...but this run's own fresh re-read of the shard already sees content dated after that.
+      [shard, { records: 2, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: 'cccccccc', lastAssistant: 'dddddddd', lastTimestamp: '2026-07-15T00:00:00.000Z' } }]
     ])
     const result = resumeCheck(ctx({ readout: readout(sessions, { claudeParsed }) }))
-    expect(result.bySource['claude-code'].swob.anchorMatch?.value).toBe(1)
-    expect(result.bySource['claude-code'].verdict).toBe('pass')
+    const entry = result.bySource['claude-code']
+    expect(entry.swob.anchorCacheLag?.value).toBe(1)
+    expect(entry.swob.anchorMismatch?.value).toBe(0)
+    expect(entry.verdict).toBe('warn') // a note, not a fail: task book — this is more likely stale bookkeeping than a real divergence
+    expect(result.findings.find((f) => f.code === 'resume.anchor-cache-lag')).toMatchObject({ verdict: 'warn', source: 'claude-code' })
+  })
+
+  it('Codex db has a row but this run never read the file it points to -> "注意 · 无法核对" (task book S3), not silently matched or failed', () => {
+    const main = file('unverifiable-primary.jsonl')
+    const neverRead = path.join(tempDir(), 'unverifiable-secondary.jsonl') // deliberately never written/read this run
+    const sessions = [codexSession('s-cannot-verify', main)]
+    const codexParsed = new Map<string, CodexParseResult>([
+      [main, { records: 4, elapsedMs: 1, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb', lastTimestamp: '2026-09-01T00:00:00.000Z' } }]
+    ])
+    const db = codexStateDb([{ id: 's-cannot-verify', rolloutPath: neverRead, threadSource: null, archived: false }])
+    const result = resumeCheck(ctx({ readout: readout(sessions, { codexParsed }), codexDb: db }))
+    const entry = result.bySource.codex
+    expect(entry.swob.anchorCannotVerify?.value).toBe(1)
+    expect(entry.swob.anchorMatch?.value).toBe(0)
+    expect(entry.swob.anchorMismatch?.value).toBe(0)
+    expect(entry.verdict).toBe('warn')
+    expect(result.findings.find((f) => f.code === 'resume.anchor-cannot-verify')).toMatchObject({ verdict: 'warn', source: 'codex' })
   })
 
   it('a Codex file whose read genuinely threw (records: null) -> would-404, folded into resume.file-missing (fail)', () => {
@@ -186,7 +273,7 @@ describe('⑥ resume — L3 anchor comparison ([D], non-independent)', () => {
   it('an empty session (both anchors null) -> skipped, still counts as a pass, not a mismatch', () => {
     const main = file('empty.jsonl')
     const sessions = [claudeSession('s11', main)]
-    const claudeParsed = new Map([[main, { records: 0, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: null, lastAssistant: null } }]])
+    const claudeParsed = new Map([[main, { records: 0, elapsedMs: 1, partial: false, resumeAnchors: { lastUser: null, lastAssistant: null, lastTimestamp: null } }]])
     const result = resumeCheck(ctx({ readout: readout(sessions, { claudeParsed }) }))
     expect(result.bySource['claude-code'].swob.anchorMatch?.value).toBe(1)
     expect(result.bySource['claude-code'].swob.anchorMismatch?.value).toBe(0)

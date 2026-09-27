@@ -322,6 +322,14 @@ export const REASON_CODES = [
   'resume.file-missing',
   'resume.command-syntax-invalid',
   'resume.anchor-mismatch',
+  // resume ⑥ (C2c-3): both sides read, both non-empty, genuinely different — but Swob's own summary
+  // (updatedAt) already looks behind the fresh anchor re-read, so a stale grouping/cache is more likely
+  // than two unrelated files (task book M1/S2, F1o/C2c 独立验收 P1-1)
+  'resume.anchor-cache-lag',
+  // resume ⑥ (C2c-3): Codex's own state db names a different file as the one it would actually resume,
+  // but this run could not read it (path did not resolve, or was outside this run's read queue) — neither
+  // a confirmed match nor a confirmed mismatch (task book S3)
+  'resume.anchor-cannot-verify',
   // resume ⑥ (C2c): the shell running the checkup did not inject a command-layer probe (design §3.4 —
   // e.g. the AI diary), never a real environment/data problem
   'resume.probe-not-injected',

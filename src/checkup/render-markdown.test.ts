@@ -98,6 +98,9 @@ describe('text registries (templates.ts)', () => {
       finding('content.swob-extra-records', 'warn', 'codex', d(1, 'files')),
       finding('content.unexplained-loss', 'fail', 'codex', d(1, 'records'))
     )
+    // C2c-3 retired resume.anchor-mismatch's ownerLine/engineerHint (and reasonText) when the L3 comparison
+    // was redefined around 恢复侧/展示侧 — covered here the same way as the other retirements above.
+    older.checks[5].findings.push(finding('resume.anchor-mismatch', 'fail', 'claude-code', d(1, 'sessions')))
     const retiredHints = RETIRED_TEMPLATES.filter((entry) => entry.field === 'engineerHint')
     for (const check of older.checks) {
       for (const entry of check.findings) {

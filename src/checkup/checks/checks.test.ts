@@ -759,15 +759,28 @@ describe('readout: per-file results from the kernel read stats (C1c)', () => {
 
   it('⑥ C2c: Codex per-file resumeAnchors comes from the same read, hashed (no raw text)', async () => {
     const lines = [
-      { timestamp: 't0', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'first question' }] } },
-      { timestamp: 't1', type: 'response_item' as const, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'first answer' }] } },
-      { timestamp: 't2', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'second question' }] } }
+      { timestamp: '2026-01-01T00:00:00.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'first question' }] } },
+      { timestamp: '2026-01-01T00:00:01.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'first answer' }] } },
+      { timestamp: '2026-01-01T00:00:02.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'second question' }] } }
     ]
     const result = await codexParseResult(async () => ({ recordsRead: 3, lines }))
     expect(result.resumeAnchors?.lastUser).toMatch(/^[0-9a-f]{8}$/)
     expect(result.resumeAnchors?.lastAssistant).toMatch(/^[0-9a-f]{8}$/)
+    // ⑥ C2c-3: the timestamp of the last user/assistant record (file order), not just the last hashed role —
+    // here that is the trailing "second question" user record, later than the assistant reply before it.
+    expect(result.resumeAnchors?.lastTimestamp).toBe('2026-01-01T00:00:02.000Z')
     expect(JSON.stringify(result)).not.toContain('first question')
     expect(JSON.stringify(result)).not.toContain('first answer')
+  })
+
+  it('⑥ C2c-3: Codex resumeAnchors.lastTimestamp tracks the latest parseable timestamp seen, even out of file order', async () => {
+    const lines = [
+      { timestamp: '2026-01-01T00:00:05.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'later by time, earlier in file' }] } },
+      { timestamp: 'not-a-real-timestamp', type: 'response_item' as const, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'unparseable timestamp, ignored for ranking' }] } },
+      { timestamp: '2026-01-01T00:00:01.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'earlier by time, later in file' }] } }
+    ]
+    const result = await codexParseResult(async () => ({ recordsRead: 3, lines }))
+    expect(result.resumeAnchors?.lastTimestamp).toBe('2026-01-01T00:00:05.000Z')
   })
 })
 

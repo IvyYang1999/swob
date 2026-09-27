@@ -29,6 +29,7 @@ import {
   CHECK_LABELS,
   CHECK_SHORT_LABELS,
   COMPARE_TEXT,
+  LINEAGE_EDGE_LABELS,
   LOSS_KIND_LABELS,
   MARKDOWN_MARKER,
   MARKDOWN_TEXT,
@@ -484,6 +485,43 @@ function compactionTable(check: CheckResult, used: Set<string>): string[] {
   return rows.length > 0 ? table(header, rows) : []
 }
 
+/** ④ lineage: one row per (source, edge type), same shape the checks/lineage.ts oracle/swob keys share. */
+const LINEAGE_EDGE_TYPES: ReadonlyArray<{ source: string; key: keyof typeof LINEAGE_EDGE_LABELS }> = [
+  { source: 'codex', key: 'derivation' },
+  { source: 'codex', key: 'fork' },
+  { source: 'claude-code', key: 'continuation' },
+  { source: 'claude-code', key: 'subagent' },
+  { source: 'claude-code', key: 'resumeFork' }
+]
+
+function lineageTable(check: CheckResult, used: Set<string>): string[] {
+  const rows: string[][] = []
+  for (const { source, key } of LINEAGE_EDGE_TYPES) {
+    const entry = check.bySource[source]
+    if (!entry) continue
+    const totalKey = `${key}Total`
+    const expressedKey = `${key}Expressed`
+    const notExpressedKey = `${key}NotExpressed`
+    const swobExtraKey = `${key}SwobExtra`
+    if (!entry.oracle[totalKey]) continue
+    used.add(`oracle.${totalKey}`)
+    used.add(`swob.${expressedKey}`)
+    used.add(`swob.${notExpressedKey}`)
+    used.add(`swob.${swobExtraKey}`)
+    rows.push([
+      sourceLabel(source)!,
+      LINEAGE_EDGE_LABELS[key],
+      measureCell(entry.oracle[totalKey]),
+      measureCell(entry.swob[expressedKey]),
+      measureCell(entry.swob[notExpressedKey]),
+      measureCell(entry.swob[swobExtraKey])
+    ])
+  }
+  const header = [MARKDOWN_TEXT.colSource, MARKDOWN_TEXT.colEdgeType, MARKDOWN_TEXT.colEdgeTotal,
+    MARKDOWN_TEXT.colEdgeExpressed, MARKDOWN_TEXT.colEdgeNotExpressed, MARKDOWN_TEXT.colEdgeSwobExtra]
+  return rows.length > 0 ? table(header, rows) : []
+}
+
 const FINDING_ORDER: Readonly<Record<string, number>> = { fail: 0, warn: 1, undetermined: 2, 'not-applicable': 3 }
 
 function findingLines(check: CheckResult, audience: Audience): string[] {
@@ -539,7 +577,8 @@ function checkSection(check: CheckResult, audience: Audience): string[] {
   const used = new Set<string>()
   const main = check.id === 'inclusion' ? columnsTable(check, INCLUSION_COLUMNS, used)
     : check.id === 'content' ? contentTable(check, used)
-      : check.id === 'compaction' ? compactionTable(check, used) : []
+      : check.id === 'compaction' ? compactionTable(check, used)
+        : check.id === 'lineage' ? lineageTable(check, used) : []
   if (main.length > 0) lines.push(...main, '')
   if (main.length === 0 && check.findings.length === 0) {
     const label = headlineLabel(check)
@@ -588,6 +627,12 @@ function compareSection(comparison: CheckupComparison, options: RenderOptions, a
     check.previous ? VERDICT_LABELS[check.previous] : '—',
     check.current ? VERDICT_LABELS[check.current] : '—'
   ])))
+  // A check that moved from undetermined (check.not-implemented) to a real verdict: never a "new issue"
+  // (compareIssues already routes it to firstCheck), just named here so it is not misread as regressed.
+  const newlyImplemented = comparison.checks
+    .filter((check) => check.previous === 'undetermined' && check.current !== null && check.current !== 'undetermined')
+    .map((check) => CHECK_LABELS[check.id])
+  if (newlyImplemented.length > 0) lines.push('', fillText(COMPARE_TEXT.newlyImplementedChecks, { checks: newlyImplemented.join('、') }))
   const issues = comparison.issues
   lines.push('', `### ${COMPARE_TEXT.issueHeading}`, '', ...table([COMPARE_TEXT.colGroup, COMPARE_TEXT.colCount], [
     [COMPARE_TEXT.groupAdded, formatNumber(issues.added.length)],

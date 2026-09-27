@@ -124,7 +124,7 @@ export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compact
  * marks unselected sources in readoutBySource and in the inventory rows with data (source.not-selected).
  */
 export const CHECKUP_VERSION = '1.2.0'
-export const SELF_TEST_TOTAL = 6
+export const SELF_TEST_TOTAL = 7
 
 export const SOURCE_IDS = [
   'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity',
@@ -154,7 +154,9 @@ export const SELF_TEST_CASES = [
   'truncated-tail',
   'codex-legacy-compacted',
   'fork-inherited-compaction',
-  'fork-usage-copy'
+  'fork-usage-copy',
+  // C2b (④ lineage): a grandchild thread-spawn edge the Swob side never attaches.
+  'lineage-grandchild-orphan'
 ] as const
 export type SelfTestCaseId = typeof SELF_TEST_CASES[number]
 
@@ -263,6 +265,14 @@ export const REASON_CODES = [
   'codex.state-db-unreadable',
   'unsupported.kimi-legacy-sessions',
   'unscanned.zcode-v2-tasks',
+  // lineage ④ (C2b)
+  'codex.derivation-edge-unexpressed',
+  'codex.derivation-edge-swob-extra',
+  'codex.fork-edge-unexpressed',
+  'codex.fork-edge-swob-extra',
+  'claude.continuation-edge-unexpressed',
+  'claude.resume-fork-edge-unexpressed',
+  'claude.branch-edge-swob-extra',
   // tokens ⑤ (census-level evidence only in C1a)
   'codex.fork-usage-copy',
   // source applicability

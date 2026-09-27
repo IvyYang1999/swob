@@ -18,6 +18,7 @@ import {
   derived,
   makeFinding,
   percentMeasure,
+  reconcileCodexSpawnEdges,
   remainingSources,
   reported,
   sampleIds,
@@ -338,9 +339,11 @@ function codexReconciliation(ctx: CheckContext): { oracle: SourceEntry['oracle']
   const threadIds = new Set(db.threads.map((thread) => thread.id))
   const rolloutsNotInDb = units.filter((unit) => unit.isRollout && !threadPaths.has(unit.path) &&
     !threadIds.has(codexUnitSessionId(unit) ?? ''))
-  const subagentIds = new Set(ctx.readout.sessions.flatMap((session) => session.subagentIds))
-  const edgesAttached = db.edges.filter((edge) => subagentIds.has(edge.child)).length
-  const edgesChildInCensus = db.edges.filter((edge) => censusIds.has(edge.child)).length
+  // ① only ever reads attachedAnywhere/childInCensus from this shared reconciliation (unchanged from before
+  // the C2b extraction); the stronger parentSessionId match and the Swob-extra side are ④'s (checks/lineage.ts).
+  const reconciliation = reconcileCodexSpawnEdges(db.edges, ctx.readout.sessions, censusIds)
+  const edgesAttached = reconciliation.attachedAnywhere
+  const edgesChildInCensus = reconciliation.childInCensus
   if (missing.length > 0) findings.push(makeFinding({ code: 'codex.thread-rollout-missing', verdict: 'warn', source: 'codex', count: derived(missing.length, 'threads') }))
   if (outside.length > 0) findings.push(makeFinding({ code: 'codex.thread-rollout-outside-roots', verdict: 'fail', source: 'codex', count: derived(outside.length, 'threads'), samples: sampleIds(ctx.salt, outside) }))
   if (notInCensus.length > 0) findings.push(makeFinding({ code: 'codex.thread-not-in-census', verdict: 'fail', source: 'codex', count: derived(notInCensus.length, 'threads'), samples: sampleIds(ctx.salt, notInCensus) }))

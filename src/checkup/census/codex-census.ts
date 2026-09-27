@@ -75,11 +75,27 @@ export interface CodexUnit {
   lineSeparatorKinds: Record<LossKind, number>
   /** Hazard records by (sanitised) record type, e.g. `response_item:function_call_output`. */
   hazardTypes: Record<string, number>
-  /** Cumulative token snapshots: signature of total (+ last total) and timestamp. */
-  tokenSnapshots: Array<{ sig: string; ts: string | null }>
+  /**
+   * Cumulative token snapshots: signature of total (+ last total), timestamp, and the four billable
+   * components read from `last_token_usage` (C2a). The signature alone drives dedup (`codexRecountB`);
+   * the components are only carried so a unique signature contributes its numbers exactly once.
+   */
+  tokenSnapshots: CodexTokenSnapshot[]
   usageSnapshots: number
   usageRecords: number
   timeRange: { min: string | null; max: string | null }
+}
+
+/** One cumulative `token_count` snapshot, reduced to its dedup signature and billable components (C2a). */
+export interface CodexTokenSnapshot {
+  /** `t.in|t.cached|t.out|t.reasoning|t.total|l.total` (design §四 4.5's recompute B signature). */
+  sig: string
+  ts: string | null
+  /** `last_token_usage` reduced to Swob's four comparable components (design §四 4.5). */
+  nonCachedInput: number
+  cacheRead: number
+  output: number
+  reasoning: number
 }
 
 export interface ForkUsageCopies {
@@ -278,10 +294,17 @@ export async function censusCodexFile(
             const total = asRecord(info?.total_token_usage)
             if (total) {
               const last = asRecord(info?.last_token_usage)
+              const lastInput = asNumber(last?.input_tokens) ?? 0
+              const lastCached = asNumber(last?.cached_input_tokens) ?? 0
               tokenSnapshots.push({
                 sig: [total.input_tokens, total.cached_input_tokens, total.output_tokens,
                   total.reasoning_output_tokens, total.total_tokens, last?.total_tokens].map((value) => asNumber(value) ?? '').join('|'),
-                ts: typeof entry.timestamp === 'string' ? entry.timestamp : null
+                ts: typeof entry.timestamp === 'string' ? entry.timestamp : null,
+                // last_token_usage: cached_input_tokens is a subset of input_tokens (openai-input-subset).
+                nonCachedInput: Math.max(0, lastInput - lastCached),
+                cacheRead: lastCached,
+                output: asNumber(last?.output_tokens) ?? 0,
+                reasoning: asNumber(last?.reasoning_output_tokens) ?? 0
               })
             }
           } else if (payloadType === 'context_compacted') {
@@ -453,4 +476,50 @@ export function countInheritedCodexMarkers(units: readonly CodexUnit[]): { inher
     if (copied > 0) childUnits++
   }
   return { inherited, childUnits }
+}
+
+export interface RecountBComponents {
+  nonCachedInput: number
+  cacheRead: number
+  output: number
+  reasoning: number
+}
+
+export interface CodexRecountB {
+  components: RecountBComponents
+  /** nonCachedInput + cacheRead + output (design §四 4.5; Codex cache-write is not part of the four tracked components). */
+  billingTotal: number
+  /** Distinct signatures counted (design §四 4.5's "recompute B" cardinality). */
+  uniqueSnapshots: number
+}
+
+/**
+ * ⑤ Token census-level oracle ("recompute B", F1b's `codex-token-join2.mjs` O4 solidified): every
+ * cumulative `token_count` snapshot in `units`, deduplicated globally by its cumulative signature
+ * (`CodexTokenSnapshot.sig`). A forked child's copied prefix shares its parent's signature exactly, so
+ * this global dedup removes the inherited copies as a side effect of removing any duplicate signature —
+ * no separate prefix-detection step is needed (design §四 4.5, F1b acceptance §⑤).
+ *
+ * Deliberately narrow: this function only ever sees Codex census units and their own signatures. It does
+ * not take a readout, a session list or any other Swob-derived input — the global total it returns is the
+ * number the ⑤ threshold judges, and it must stay independent of which sessions Swob decided to list.
+ * Restricting a family's own units, or scoping to Swob's own session grouping, is `checks/tokens.ts`'s job
+ * (per-session comparison), not this function's.
+ */
+export function codexRecountB(units: readonly CodexUnit[]): CodexRecountB {
+  const seen = new Set<string>()
+  const components: RecountBComponents = { nonCachedInput: 0, cacheRead: 0, output: 0, reasoning: 0 }
+  let uniqueSnapshots = 0
+  for (const unit of units) {
+    for (const snapshot of unit.tokenSnapshots) {
+      if (seen.has(snapshot.sig)) continue
+      seen.add(snapshot.sig)
+      uniqueSnapshots++
+      components.nonCachedInput += snapshot.nonCachedInput
+      components.cacheRead += snapshot.cacheRead
+      components.output += snapshot.output
+      components.reasoning += snapshot.reasoning
+    }
+  }
+  return { components, billingTotal: components.nonCachedInput + components.cacheRead + components.output, uniqueSnapshots }
 }

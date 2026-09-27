@@ -100,9 +100,10 @@ describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
     expect(report.checks.map((check) => check.id)).toEqual([...CHECK_ORDER])
     expect(report.kernel).toMatchObject({ readOnly: true, selfTest: { passed: 7, total: 7 }, commit: '4971632ac809b012357461c2f96f04a8a281eac5' })
     expect(report.readout).toEqual({ status: 'ok' })
-    // ④ lineage now produces a real verdict (C2b); ⑤⑥ stay pending.
+    // ④ lineage (C2b) and ⑤ tokens (C2a) both now produce real (passing) verdicts on this sample HOME;
+    // ⑥ resume stays pending (C2c not yet merged).
     expect(report.checks.slice(3).map((check) => [check.verdict, check.reason])).toEqual([
-      ['pass', undefined], ['undetermined', 'check.not-implemented'], ['undetermined', 'check.not-implemented']
+      ['pass', undefined], ['pass', undefined], ['undetermined', 'check.not-implemented']
     ])
   })
 

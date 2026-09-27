@@ -80,6 +80,25 @@ describe('issue level (all six checks, keyed by check + code + source)', () => {
     expect(issues.added).toEqual([])
   })
 
+  it('C2a: ⑤ tokens landing (undetermined/check.not-implemented → a real graded verdict) is a first check, never a new issue', () => {
+    const { previous, current } = pair()
+    // previous.checks[4] ('tokens') is still mixedReport()'s pending('tokens', ...): undetermined,
+    // reason check.not-implemented — exactly what every report before C2a produced.
+    expect(previous.checks[4]).toMatchObject({ id: 'tokens', verdict: 'undetermined', reason: 'check.not-implemented' })
+    current.checks[4] = {
+      id: 'tokens', verdict: 'warn', headline: 'x', ownerAction: 'y',
+      bySource: previous.checks[4].bySource,
+      findings: [finding('tokens.deviation-note', 'warn', 'codex', d(0.5, 'percent'), [0.5])]
+    }
+    const issues = compareIssues(previous, current)
+    expect(issues.firstCheck.map((issue) => [issue.check, issue.code, issue.source])).toEqual([['tokens', 'tokens.deviation-note', 'codex']])
+    expect(issues.added).toEqual([])
+    // The check-verdict table still shows the transition (previous undetermined, current warn) — the
+    // render layer, not compareIssues, turns this into the "newly determined" sentence (render-markdown.ts).
+    const comparison = compareCheckupReports(previous, current)
+    expect(comparison.checks[4]).toEqual({ id: 'tokens', previous: 'undetermined', current: 'warn' })
+  })
+
   it('a Codex content problem is a first check against a report older than checkup 1.2.0 (Codex read counts were inferred then)', () => {
     const { previous, current } = pair()
     current.kernel.checkupVersion = '1.2.0'

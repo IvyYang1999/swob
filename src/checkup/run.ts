@@ -33,6 +33,7 @@ import { inclusionCheck, type UnitDisposition } from './checks/inclusion'
 import { contentCheck } from './checks/content'
 import { compactionCheck } from './checks/compaction'
 import { lineageCheck } from './checks/lineage'
+import { tokensCheck } from './checks/tokens'
 import { pendingCheck } from './checks/pending'
 import {
   applicabilityEntry,
@@ -465,7 +466,7 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
   const lineageResult = lineageCheck(ctx)
   timingsMs['check.lineage'] = elapsed(checkPhase)
   checkPhase = performance.now()
-  const tokensResult = pendingCheck('tokens', ctx)
+  const tokensResult = tokensCheck(ctx)
   timingsMs['check.tokens'] = elapsed(checkPhase)
   checkPhase = performance.now()
   const resumeResult = pendingCheck('resume', ctx)

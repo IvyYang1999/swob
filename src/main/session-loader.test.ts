@@ -4073,4 +4073,103 @@ describe('summary cache version bump: write gate, retired JSON cache, worker gua
       expect(fs.readFileSync(databasePath, 'utf8')).toBe('not-a-sqlite-database')
     })
   })
+
+  // Path D (1f): a failed or cut-short read of a file-backed source is never cached.
+  const readDeniableIt = process.platform !== 'win32' && process.getuid?.() !== 0 ? it : it.skip
+
+  /** While `run` runs, reading these files fails (EACCES); stat, and so their signature, still works. */
+  async function withUnreadable<T>(filePaths: string[], run: () => Promise<T>): Promise<T> {
+    for (const filePath of filePaths) fs.chmodSync(filePath, 0o000)
+    try {
+      return await run()
+    } finally {
+      for (const filePath of filePaths) fs.chmodSync(filePath, 0o644)
+    }
+  }
+
+  readDeniableIt('path D: in a warm round a Codex and a Cursor file whose read fails sit the load out, leave their row as it was (no `summary: null`), and are read again by the next load', async () => {
+    const home = tempHome('path-d-warm')
+    const files = writeFileSources(home)
+    await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+    const before = readSummaryCache(home)
+    // Both files change, then cannot be read.
+    fs.appendFileSync(files.codex, '\n' + JSON.stringify({
+      timestamp: '2026-07-07T00:00:03Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Codex grew' }] }
+    }))
+    fs.appendFileSync(files.cursor, '\n' + JSON.stringify({ role: 'user', message: { content: '<user_query>Cursor grew</user_query>' } }))
+    await withUnreadable([files.codex, files.cursor], () => withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const warm = await sessionLoader.loadAllSessionsWithEvidence({ quiet: true })
+      expect(warm.evidence.summaryCache).toBe('warm')
+      expect(warm.sessions.map((session) => session.sessionId)).toEqual(['f1d-claude'])
+    }))
+    const after = readSummaryCache(home)
+    expect(after.entries[files.codex]).toEqual(before.entries[files.codex])
+    expect(after.entries[files.cursor]).toEqual(before.entries[files.cursor])
+    expect(Object.values(after.entries).filter((entry) => entry.perFile.summary === null)).toEqual([])
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const next = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(next.map((session) => session.sessionId).sort()).toEqual([...files.ids].sort())
+    })
+    const recovered = readSummaryCache(home)
+    expect(recovered.entries[files.codex].sig).not.toBe(before.entries[files.codex].sig)
+    expect(recovered.entries[files.cursor].sig).not.toBe(before.entries[files.cursor].sig)
+  }, 30_000)
+
+  readDeniableIt('path D: a Claude file whose read is cut short is not cached, on the lineage path either, while a file that simply has no session id is; the next load reads it again', async () => {
+    const home = tempHome('path-d-claude')
+    const project = path.join(home, '.claude', 'projects', '-Users-test-f1d')
+    const cutShort = writeJsonlAt(path.join(project, 'f1d-cut-short.jsonl'), [
+      rawMsg({ sessionId: 'f1d-cut-short', type: 'user', message: { role: 'user', content: 'cut short source value' } })
+    ])
+    const noSessionId = path.join(project, 'f1d-no-session-id.jsonl')
+    fs.writeFileSync(noSessionId, JSON.stringify({ type: 'summary', summary: 'a file without a session id', leafUuid: 'f1d-leaf' }))
+
+    await withUnreadable([cutShort], () => withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const lineage = await sessionLoader.loadCachedClaudeLineageMetadata()
+      expect(lineage.files).toEqual([])
+      expect(readSummaryCache(home).entries[cutShort]).toBeUndefined()
+      const loaded = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(loaded.map((session) => session.sessionId)).not.toContain('f1d-cut-short')
+    }))
+    const cache = readSummaryCache(home)
+    expect(cache.entries[cutShort]).toBeUndefined()
+    // Read in full, a file without a session id is an empty session: cached as such.
+    expect(cache.entries[noSessionId]?.perFile.summary).toBeNull()
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const next = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(next.map((session) => session.sessionId)).toEqual(['f1d-cut-short'])
+    })
+    expect(readSummaryCache(home).entries[cutShort]?.perFile.summary?.firstUserMessage).toBe('cut short source value')
+  }, 30_000)
+
+  readDeniableIt('path D: a Claude file cut short after it grew keeps its last usable row for the load, leaves that row as it was, and is read in full by the next load', async () => {
+    const home = tempHome('path-d-claude-grown')
+    const file = writeJsonlAt(path.join(home, '.claude', 'projects', '-Users-test-f1d', 'f1d-grown.jsonl'), [
+      rawMsg({ uuid: 'f1d-g-u1', sessionId: 'f1d-grown', type: 'user', message: { role: 'user', content: 'grown first question' } })
+    ])
+    const first = await withSessionLoaderModules(home, ({ sessionLoader }) => sessionLoader.loadAllSessions({ quiet: true }))
+    const row = readSummaryCacheRow(home, file)
+    expect(row).toBeDefined()
+    fs.appendFileSync(file, '\n' + JSON.stringify(rawMsg({
+      uuid: 'f1d-g-a1', parentUuid: 'f1d-g-u1', sessionId: 'f1d-grown', type: 'assistant',
+      timestamp: '2026-03-01T00:01:00Z', message: { role: 'assistant', content: 'grown answer' }
+    })))
+
+    await withUnreadable([file], () => withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const loaded = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(loaded).toEqual(first)
+    }))
+    expect(readSummaryCacheRow(home, file)).toEqual(row)
+
+    await withSessionLoaderModules(home, async ({ sessionLoader }) => {
+      const next = await sessionLoader.loadAllSessions({ quiet: true })
+      expect(next.map((session) => session.sessionId)).toEqual(['f1d-grown'])
+      expect(next[0].messageCount).toBeGreaterThan(first[0].messageCount)
+    })
+    expect(readSummaryCacheRow(home, file)?.sig).not.toBe(row?.sig)
+  }, 30_000)
 })

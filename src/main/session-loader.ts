@@ -815,15 +815,26 @@ async function loadRelatedClaudeSubagentMessages(
   filePath: string,
   sessionId: string
 ): Promise<RawJsonlMessage[]> {
+  return (await readRelatedClaudeSubagentMessages(filePath, sessionId)).messages
+}
+
+/** The related subagent messages, and whether any subagent file's read was cut short. */
+async function readRelatedClaudeSubagentMessages(
+  filePath: string,
+  sessionId: string
+): Promise<{ messages: RawJsonlMessage[]; truncated: boolean }> {
   const related: RawJsonlMessage[] = []
+  let truncated = false
   for (const subagentPath of findClaudeSubagentFilesNearMain(filePath)) {
-    const raw = await parseSessionFile(subagentPath)
+    const read = await parseSessionFileWithStats(subagentPath)
+    if (read.truncated) truncated = true
+    const raw = read.messages
     const ownerDir = path.basename(path.dirname(path.dirname(subagentPath)))
     const belongsToSession = ownerDir === sessionId || raw.some((message) => message.sessionId === sessionId)
     if (!belongsToSession) continue
     related.push(...raw)
   }
-  return related
+  return { messages: related, truncated }
 }
 
 function findJsonFilesFlat(root: string): string[] {
@@ -2261,42 +2272,59 @@ function linkCrossSessionBranches(
   }
 }
 
-async function buildPerFileCache(filePath: string, source: CachedSessionSource): Promise<PerFileCache> {
+/**
+ * One file's cache entry. `truncated`: a Claude or cc-mirror read (the main
+ * file or a subagent file) stopped early, on its timeout or a stream error,
+ * and resolved only what it had read. Such an entry must never be cached (F1d
+ * path D). The other file-backed sources throw on a failed read instead.
+ */
+async function buildPerFileCache(
+  filePath: string,
+  source: CachedSessionSource
+): Promise<{ perFile: PerFileCache; truncated: boolean }> {
   if (source === 'claude-code') {
-    const raw = await parseSessionFile(filePath)
+    const { messages: raw, truncated } = await parseSessionFileWithStats(filePath)
     const lineageMeta = buildLineageMeta(filePath, raw)
-    const subagentUsage = lineageMeta.sessionId
-      ? await loadRelatedClaudeSubagentMessages(filePath, lineageMeta.sessionId)
-      : []
+    const subagents = lineageMeta.sessionId
+      ? await readRelatedClaudeSubagentMessages(filePath, lineageMeta.sessionId)
+      : { messages: [], truncated: false }
     const summary = lineageMeta.sessionId
-      ? buildSessionSummary(filePath, raw, true, lineageMeta.sessionId, 'claude-code', subagentUsage)
+      ? buildSessionSummary(filePath, raw, true, lineageMeta.sessionId, 'claude-code', subagents.messages)
       : null
-    return { summary, lineageMeta, source }
+    return { perFile: { summary, lineageMeta, source }, truncated: truncated || subagents.truncated }
   }
 
   if (source === 'cc-mirror') {
-    const raw = await parseSessionFile(filePath)
+    const { messages: raw, truncated } = await parseSessionFileWithStats(filePath)
     const sessionId = resolvePhysicalSessionId(filePath, raw)
-    const subagentUsage = sessionId ? await loadRelatedClaudeSubagentMessages(filePath, sessionId) : []
-    const summary = buildSessionSummary(filePath, raw, true, undefined, 'cc-mirror', subagentUsage)
-    return { summary, lineageMeta: emptyLineageMeta(summary), source }
+    const subagents = sessionId
+      ? await readRelatedClaudeSubagentMessages(filePath, sessionId)
+      : { messages: [], truncated: false }
+    const summary = buildSessionSummary(filePath, raw, true, undefined, 'cc-mirror', subagents.messages)
+    return {
+      perFile: { summary, lineageMeta: emptyLineageMeta(summary), source },
+      truncated: truncated || subagents.truncated
+    }
   }
 
   let summary: SessionSummary | null = null
   if (source === 'codex') {
     const record = await loadCodexSessionRecord(filePath)
     return {
-      summary: record.summary,
-      lineageMeta: emptyLineageMeta(record.summary),
-      source,
-      ...(record.subagent ? { codexSubagent: record.subagent } : {})
+      perFile: {
+        summary: record.summary,
+        lineageMeta: emptyLineageMeta(record.summary),
+        source,
+        ...(record.subagent ? { codexSubagent: record.subagent } : {})
+      },
+      truncated: false
     }
   }
   else if (source === 'cursor') summary = await buildCursorSessionSummary(filePath)
   else if (source === 'opencode') summary = await buildOpencodeSessionSummary(filePath)
   else if (source === 'zcode') summary = await buildZcodeSessionSummary(filePath)
   else summary = buildUnavailableSourceSummary(filePath, source)
-  return { summary, lineageMeta: emptyLineageMeta(summary), source }
+  return { perFile: { summary, lineageMeta: emptyLineageMeta(summary), source }, truncated: false }
 }
 
 export interface CachedClaudeLineageFile {
@@ -2342,14 +2370,28 @@ export async function loadCachedClaudeLineageMetadata(
     }
 
     parsedFileCount++
-    changedPaths.add(filePath)
+    // Path D (F1d): a read cut short, or a failed parse, is never cached; this
+    // call keeps using the last usable row of the file, if there is one.
+    const usable = cached?.perFile?.source === 'claude-code' &&
+      cached.perFile.lineageMeta?.lineageFormatVersion === 2 &&
+      Array.isArray(cached.perFile.lineageMeta?.leafUuidRefs)
     try {
-      entries[filePath] = { sig, perFile: await buildPerFileCache(filePath, 'claude-code') }
-    } catch {
-      entries[filePath] = {
-        sig,
-        perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source: 'claude-code' }
+      const { perFile, truncated } = await buildPerFileCache(filePath, 'claude-code')
+      if (truncated) {
+        if (!usable) entries[filePath] = { sig, perFile }
+        changedPaths.delete(filePath)
+        return
       }
+      entries[filePath] = { sig, perFile }
+      changedPaths.add(filePath)
+    } catch {
+      if (!usable) {
+        entries[filePath] = {
+          sig,
+          perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source: 'claude-code' }
+        }
+      }
+      changedPaths.delete(filePath)
     }
   })
 
@@ -2553,7 +2595,16 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
 
     parsedCount++
     try {
-      const perFile = await buildPerFileCache(filePath, source)
+      const { perFile, truncated } = await buildPerFileCache(filePath, source)
+      if (truncated) {
+        // Path D (F1d): a Claude/cc-mirror read cut short resolved only what
+        // it had read. Never cache that: this load keeps the file's last
+        // usable row (else shows what was read), the row on disk stays as it
+        // is, and the next load reads the file again.
+        entries[filePath] = cached && cachedUsable ? cached : { sig, perFile }
+        changedPaths.delete(filePath)
+        return
+      }
       entries[filePath] = { sig, perFile }
       changedPaths.add(filePath)
       if (sqliteLoad && perFile.summary) sqliteLoad.sessionsRead++
@@ -2570,8 +2621,11 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
         }
         return
       }
-      changedPaths.add(filePath)
-      entries[filePath] = { sig, perFile: { summary: null, lineageMeta: emptyLineageMeta(null), source } }
+      // Path D (F1d): a failed read of any other file-backed source (Codex and
+      // Cursor throw) is not an empty session either. Persisting `summary:
+      // null` under this signature hid the session until the file changed
+      // again. Now it sits this load out, its row (if any) stays as it is,
+      // and the next load reads the file again.
     }
   })
   for (const source of ['opencode', 'zcode'] as const) {

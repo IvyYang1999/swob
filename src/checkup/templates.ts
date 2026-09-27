@@ -695,7 +695,10 @@ export const MEASURE_LABELS: Readonly<Record<string, string>> = {
   cacheReadDeviationPct: '缓存读偏差',
   cacheWriteDeviationPct: '缓存写偏差',
   outputDeviationPct: '输出偏差',
-  reasoningDeviationPct: '推理偏差'
+  reasoningDeviationPct: '推理偏差',
+  // ⑤ tokens (C2a-2: branch-family grouping, Claude only — package decision E1/E2)
+  sessionsRawCompared: '并组前的场次',
+  maxBranchGroupSize: '本次最大分支组大小'
 }
 
 /** Headings, table headers and fixed sentences of the Markdown report. */
@@ -768,6 +771,9 @@ export const MARKDOWN_TEXT = {
   colOracleBillingTotal: '标准答案计费合计',
   colSwobBillingTotal: 'Swob 计费合计',
   colDeviation: '偏差',
+  // C2a-2 deliverable 1 (package decision E1): "其中 N 场按分支家族并为 M 组比对（最大组 K 场）。" — three
+  // `{n}` in order (原始场次, 并组后条目, 本次最大组大小), same repeated-placeholder convention as sessionsRatio.
+  tokensBranchGrouping: '其中 {n} 场按分支家族并为 {n} 组比对（最大组 {n} 场）。',
   colMeasure: '数字',
   colSide: '哪一侧',
   colUnit: '单位',

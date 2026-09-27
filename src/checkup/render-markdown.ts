@@ -536,7 +536,11 @@ function tokensTable(check: CheckResult, used: Set<string>): string[] {
   for (const source of measuredSources(check)) {
     const entry = check.bySource[source]
     if (!entry.oracle.billingTotal && !entry.swob.billingTotal) continue
-    for (const key of ['oracle.billingTotal', 'swob.billingTotal', 'swob.billingTotalDeviationPct', 'swob.sessionsEqual', 'swob.sessionsCompared']) used.add(key)
+    for (const key of [
+      'oracle.billingTotal', 'swob.billingTotal', 'swob.billingTotalDeviationPct', 'swob.sessionsEqual', 'swob.sessionsCompared',
+      // C2a-2 deliverable 1: carried entirely by tokensBranchGroupingLine() below, not a table column.
+      'swob.sessionsRawCompared', 'swob.maxBranchGroupSize'
+    ]) used.add(key)
     rows.push([
       sourceLabel(source)!,
       measureCell(entry.oracle.billingTotal),
@@ -548,6 +552,21 @@ function tokensTable(check: CheckResult, used: Set<string>): string[] {
   const header = [MARKDOWN_TEXT.colSource, MARKDOWN_TEXT.colOracleBillingTotal, MARKDOWN_TEXT.colSwobBillingTotal,
     MARKDOWN_TEXT.colDeviation, MARKDOWN_TEXT.colSessionsEqual]
   return rows.length > 0 ? table(header, rows) : []
+}
+
+/**
+ * ⑤ Token (C2a-2 deliverable 1, package decision E1): "其中 N 场按分支家族并为 M 组比对（最大组 K 场）。" —
+ * Claude-only (`sessionsRawCompared`/`maxBranchGroupSize` are only ever set for claude-code, package
+ * decision E2), shown for both audiences right under the main table so the ratio cell's grouped M/M is
+ * never read as if it were the original per-session count.
+ */
+function tokensBranchGroupingLine(check: CheckResult): string | null {
+  const entry = check.bySource['claude-code']
+  const raw = entry?.swob.sessionsRawCompared
+  const grouped = entry?.swob.sessionsCompared
+  const maxSize = entry?.swob.maxBranchGroupSize
+  if (!raw || !grouped || !maxSize || raw.value === null || grouped.value === null || maxSize.value === null) return null
+  return fillText(MARKDOWN_TEXT.tokensBranchGrouping, { n: [raw.value, grouped.value, maxSize.value] })
 }
 
 const FINDING_ORDER: Readonly<Record<string, number>> = { fail: 0, warn: 1, undetermined: 2, 'not-applicable': 3 }
@@ -609,6 +628,10 @@ function checkSection(check: CheckResult, audience: Audience): string[] {
         : check.id === 'lineage' ? lineageTable(check, used)
           : check.id === 'tokens' ? tokensTable(check, used) : []
   if (main.length > 0) lines.push(...main, '')
+  if (check.id === 'tokens') {
+    const grouping = tokensBranchGroupingLine(check)
+    if (grouping) lines.push(grouping, '')
+  }
   if (main.length === 0 && check.findings.length === 0) {
     const label = headlineLabel(check)
     lines.push(`${check.headline}${label ? LABEL_TAGS[label] : ''}`, '')

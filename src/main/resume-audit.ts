@@ -80,7 +80,9 @@ export interface ResumeAuditEnvironmentStat {
 
 export interface ResumeAuditLevelStats {
   l1: { ok: number; fail: number }
+  /** `ok` counts only sessions whose harness CLI was found; the others are `envMissing`. */
   l2: { ok: number; fail: number; envMissing: number }
+  /** Data-layer verdicts of every session that reached L3, env-missing sessions included. */
   l3: ResumeAuditL3Stats
 }
 
@@ -110,11 +112,25 @@ export interface ResumeAuditL3Stats {
   would404Examples: ResumeAuditAnchorExample[]
 }
 
+/** L3 verdicts of the sessions counted as env-missing; the four counts add up to `envMissing`. */
+export interface ResumeAuditEnvMissingL3Stats {
+  match: number
+  mismatch: number
+  would404: number
+  skipped: number
+}
+
 export interface ResumeAuditStats extends ResumeAuditLevelStats {
   total: number
   ok: number
   fail: number
   envMissing: number
+  /**
+   * L3 reads the harness's own storage and needs no CLI, so it still runs for
+   * env-missing sessions: their verdicts count in `l3` and here, never in `ok`,
+   * `fail` or `l2.ok`.
+   */
+  envMissingWithL3: ResumeAuditEnvMissingL3Stats
   /** Fully verified among sessions whose harness CLI is available. */
   successRate: number | null
   /** Fully verified among every discovered session, including environment gaps. */
@@ -154,10 +170,15 @@ export interface ResumeAuditOptions {
 interface AuditOutcome {
   source: ResumeAuditSource
   sessionId: string
+  /**
+   * What the user acts on next. 'env-missing' (harness CLI not found) takes
+   * precedence over the L3 verdict: the CLI has to be installed before any resume.
+   */
   status: 'ok' | 'fail' | 'env-missing' | 'skipped'
   level: 'L1' | 'L2' | 'L3'
   failureCode?: ResumeAuditFailureCode
   binary?: string
+  /** Data-layer verdict; an env-missing outcome carries it too. */
   l3Status?: 'match' | 'mismatch' | 'would-404' | 'skipped'
   l3SkipReason?: 'expected-anchor-empty'
   mismatchKind?: ResumeAuditMismatchKind
@@ -787,6 +808,31 @@ function fail(
   return { source, sessionId, status: 'fail', level, failureCode }
 }
 
+/** L3: Swob's tail anchors against what the harness itself would resume. */
+async function auditL3(
+  session: SessionSummary,
+  exampleId: string,
+  commandSessionId: string,
+  claudeConfigDir: string | undefined,
+  runtime: ResumeAuditRuntime
+): Promise<AuditOutcome> {
+  const source = sourceOf(session)
+  const expected = await loadExpectedAnchors(session, runtime)
+  if (!expected.user && !expected.assistant) {
+    return {
+      source,
+      sessionId: exampleId,
+      status: 'skipped',
+      level: 'L3',
+      l3Status: 'skipped',
+      l3SkipReason: 'expected-anchor-empty',
+      expectedAnchors: expected
+    }
+  }
+  const target = await loadResumeTarget(session, commandSessionId, claudeConfigDir, runtime)
+  return classifyL3(source, exampleId, expected, target)
+}
+
 async function auditSession(
   session: SessionSummary,
   options: ResumeAuditOptions,
@@ -846,24 +892,14 @@ async function auditSession(
 
   const binary = BINARY_BY_SOURCE[source]
   const binaryAvailable = options.binaryAvailable || isBinaryAvailable
-  if (!binaryAvailable(binary, options.pathEnv ?? process.env.PATH ?? '')) {
-    return { source, sessionId: exampleId, status: 'env-missing', level: 'L2', binary }
-  }
+  const harnessFound = binaryAvailable(binary, options.pathEnv ?? process.env.PATH ?? '')
 
-  const expected = await loadExpectedAnchors(session, runtime)
-  if (!expected.user && !expected.assistant) {
-    return {
-      source,
-      sessionId: exampleId,
-      status: 'skipped',
-      level: 'L3',
-      l3Status: 'skipped',
-      l3SkipReason: 'expected-anchor-empty',
-      expectedAnchors: expected
-    }
-  }
-  const target = await loadResumeTarget(session, commandSessionId, claudeConfigDir, runtime)
-  return classifyL3(source, exampleId, expected, target)
+  // L3 reads the harness's own storage and needs no CLI, so a missing CLI no
+  // longer skips it. The missing CLI still sets the status (installing it is
+  // the next step); the L3 verdict stays alongside for summarize().
+  const outcome = await auditL3(session, exampleId, commandSessionId, claudeConfigDir, runtime)
+  if (harnessFound) return outcome
+  return { ...outcome, status: 'env-missing', level: 'L2', binary }
 }
 
 function roundedPercent(numerator: number, denominator: number): number | null {
@@ -872,7 +908,12 @@ function roundedPercent(numerator: number, denominator: number): number | null {
 }
 
 function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
-  const ok = outcomes.filter((outcome) => outcome.l3Status === 'match').length
+  // `status` and `l3Status` are two axes: an env-missing outcome carries an L3
+  // verdict too. Verified counts (ok, l2.ok) leave it out; L3 counts keep it.
+  const ok = outcomes.filter(
+    (outcome) => outcome.l3Status === 'match' && outcome.status !== 'env-missing'
+  ).length
+  const l3MatchCount = outcomes.filter((outcome) => outcome.l3Status === 'match').length
   const failures = outcomes.filter((outcome) => outcome.status === 'fail')
   const levelFailures = failures.filter(
     (outcome): outcome is AuditOutcome & {
@@ -924,7 +965,11 @@ function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
   const expectedAnchorEmptyOutcomes = outcomes.filter(
     (outcome) => outcome.l3SkipReason === 'expected-anchor-empty'
   )
-  const l2Ok = outcomes.filter((outcome) => !!outcome.l3Status).length
+  const l2Ok = outcomes.filter(
+    (outcome) => !!outcome.l3Status && outcome.status !== 'env-missing'
+  ).length
+  const envMissingL3 = (l3Status: NonNullable<AuditOutcome['l3Status']>): number =>
+    envMissingOutcomes.filter((outcome) => outcome.l3Status === l3Status).length
   const mismatchExamples: ResumeAuditAnchorExample[] = []
   for (const kind of ['wrong-branch', 'stale', 'empty'] as const) {
     const outcome = mismatchOutcomes.find((candidate) => candidate.mismatchKind === kind)
@@ -945,12 +990,18 @@ function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
     ok,
     fail: failCount,
     envMissing: envMissingOutcomes.length,
+    envMissingWithL3: {
+      match: envMissingL3('match'),
+      mismatch: envMissingL3('mismatch'),
+      would404: envMissingL3('would-404'),
+      skipped: envMissingL3('skipped')
+    },
     successRate: roundedPercent(ok, ok + failCount),
     verifiedRate: roundedPercent(ok, total),
     l1: { ok: total - l1Fail, fail: l1Fail },
     l2: { ok: l2Ok, fail: l2Fail, envMissing: envMissingOutcomes.length },
     l3: {
-      match: ok,
+      match: l3MatchCount,
       mismatch: {
         total: mismatchOutcomes.length,
         wrongBranch: mismatchOutcomes.filter((outcome) => outcome.mismatchKind === 'wrong-branch').length,
@@ -958,7 +1009,7 @@ function summarize(outcomes: AuditOutcome[]): ResumeAuditStats {
         empty: mismatchOutcomes.filter((outcome) => outcome.mismatchKind === 'empty').length
       },
       would404: would404Outcomes.length,
-      skipped: total - ok - mismatchOutcomes.length - would404Outcomes.length,
+      skipped: total - l3MatchCount - mismatchOutcomes.length - would404Outcomes.length,
       skippedReasons: {
         expectedAnchorEmpty: expectedAnchorEmptyOutcomes.length
       },
@@ -1012,6 +1063,10 @@ function rate(value: number | null): string {
   return value === null ? 'n/a' : `${value.toFixed(2)}%`
 }
 
+function envMissingL3Counts(stats: ResumeAuditEnvMissingL3Stats): string {
+  return `match=${stats.match}, mismatch=${stats.mismatch}, would-404=${stats.would404}, skipped=${stats.skipped}`
+}
+
 export function formatResumeAuditReport(report: ResumeAuditReport): string {
   const headers = ['source', 'total', 'ok', 'fail', 'envMissing', 'L3match', 'mismatch', 'would404', 'success', 'verified']
   const rows = RESUME_AUDIT_SOURCES.map((source) => {
@@ -1062,6 +1117,7 @@ export function formatResumeAuditReport(report: ResumeAuditReport): string {
     `L3 content consistency: ${report.l3.match} match / ${report.l3.mismatch.total} mismatch / ${report.l3.would404} would-404 / ${report.l3.skipped} skipped`,
     `  mismatch: wrong-branch=${report.l3.mismatch.wrongBranch}, stale=${report.l3.mismatch.stale}, empty=${report.l3.mismatch.empty}`,
     `  skipped: expected-anchor-empty=${report.l3.skippedReasons.expectedAnchorEmpty}`,
+    `  env-missing (CLI not found, L3 still checked): ${envMissingL3Counts(report.envMissingWithL3)}`,
     'success = ok / (ok + fail); env-missing is excluded. verified = ok / total.'
   ]
 
@@ -1135,6 +1191,9 @@ export function formatResumeAuditReport(report: ResumeAuditReport): string {
     }
     for (const item of stats.environmentMissing) {
       lines.push(`    env-missing ${item.binary}: ${item.count}; example=${item.exampleSessionId}`)
+    }
+    if (stats.envMissing > 0) {
+      lines.push(`    env-missing L3: ${envMissingL3Counts(stats.envMissingWithL3)}`)
     }
     if (stats.l3.skippedReasons.expectedAnchorEmpty > 0) {
       lines.push(`    L3 skipped expected-anchor-empty=${stats.l3.skippedReasons.expectedAnchorEmpty}`)

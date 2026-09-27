@@ -184,8 +184,16 @@ describe('live Library synchronization architecture', () => {
     // load the evidence says so (physicalLoad null) instead of falling back
     // to the legacy delete-every-missing-row semantics.
     expect(usageSync).toMatch(
-      /usageFactSyncRunner\.schedule\(\{\s*sessions: \[\.\.\.cachedSessions\],[\s\S]*?absence: \{\s*physicalLoad: latestPhysicalLoadEvidence,\s*providerSettlement: latestProviderSettlementStatus,\s*excludedSources: \[\.\.\.getExcludedSources\(\)\]\s*\}/
+      /usageFactSyncRunner\.schedule\(\{\s*sessions: \[\.\.\.cachedSessions\],[\s\S]*?absence: \{\s*physicalLoad: usageSyncPhysicalLoadEvidence\(\),\s*providerSettlement: latestProviderSettlementStatus,\s*excludedSources: \[\.\.\.getExcludedSources\(\)\]\s*\}/
     )
+    // F1g: withheld before the reset epoch has hydrated, never dropped and
+    // never hard-wired to null (that would switch every F1f removal off).
+    const evidenceGate = source.match(
+      /function usageSyncPhysicalLoadEvidence\(\): SessionLoadEvidence \| null \{[\s\S]*?\n}\n/
+    )?.[0] || ''
+    expect(evidenceGate).toContain('libraryHydrationCompleteEpoch === libraryResetEpoch')
+    expect(evidenceGate).toContain('!shouldReadLibraryConfig()')
+    expect(evidenceGate).toMatch(/\?\s*latestPhysicalLoadEvidence\s*:\s*null\s*\n}/)
 
     // Each physical replacement takes the evidence of the load it installs.
     expect(source.match(/sourceSessionInventory\.replacePhysical\(/g)).toHaveLength(2)
@@ -202,6 +210,49 @@ describe('live Library synchronization architecture', () => {
     const reload = source.match(/async function reloadSessionsForAction[\s\S]*?\n}\n/)?.[0] || ''
     expect(reload).toContain('await loadAllSessionsWithEvidence()')
     expect(reload).toMatch(/replacePhysical\(loaded\)\n\s*latestPhysicalLoadEvidence = evidence/)
+  })
+
+  it('F1g ① gives the ledger no physical-load evidence until the reset epoch has hydrated', () => {
+    // Every whole replacement of cachedSessions starts a new reset epoch and
+    // supersedes the hydration in flight; nothing else advances the epoch.
+    const reset = source.match(/function resetLibraryHydrationEpoch\(\): void \{[\s\S]*?\n}\n/)?.[0] || ''
+    expect(reset).toContain('libraryResetEpoch++')
+    expect(reset).toContain('libraryHydrationGeneration++')
+    expect(source.match(/libraryResetEpoch\+\+/g)).toHaveLength(1)
+    expect(source.match(/\n\s+resetLibraryHydrationEpoch\(\)\n/g)).toHaveLength(4)
+    const loadHandler = source.match(/ipcMain\.handle\('sessions:loadAll'[\s\S]*?\n}\)\n/)?.[0] || ''
+    expect(loadHandler).toMatch(
+      /cachedSessions = \[\.\.\.sessions, \.\.\.lastKnownProviderSessions\][^\n]*\n[^\n]*\n\s*resetLibraryHydrationEpoch\(\)[\s\S]*?void scheduleUsageFactSync\(\)[\s\S]*?if \(latestLibraryTree\) void hydrateLibrarySessions\(latestLibraryTree\)/
+    )
+    const reload = source.match(/async function reloadSessionsForAction[\s\S]*?\n}\n/)?.[0] || ''
+    expect(reload).toMatch(
+      /cachedSessions = sourceSessionInventory\.filtered\(getExcludedSources\(\)\)\n\s*resetLibraryHydrationEpoch\(\)[\s\S]*?void scheduleUsageFactSync\(\)[\s\S]*?if \(latestLibraryTree\) void hydrateLibrarySessions\(latestLibraryTree\)\n\s*return cachedSessions/
+    )
+    const onboarding = source.match(/ipcMain\.handle\('onboarding:complete',[\s\S]*?\n}\)/)?.[0] || ''
+    expect(onboarding).toMatch(
+      /cachedSessions = \[\.\.\.activationSessions\]\n\s*resetLibraryHydrationEpoch\(\)\n\s*const root = await activateLibraryAt/
+    )
+    expect(source).toMatch(
+      /async function performLibraryActivation[\s\S]*?latestLibraryTree = null\n\s*resetLibraryHydrationEpoch\(\)/
+    )
+
+    // Only a hydration still current in the epoch it started in completes it,
+    // right after its last flush (a superseded flush returns silently).
+    const hydration = source.match(/async function hydrateLibrarySessionsUnderGate[\s\S]*?\n}\n/)?.[0] || ''
+    expect(hydration).toMatch(/const generation = \+\+libraryHydrationGeneration\n\s*const epoch = libraryResetEpoch\n/)
+    expect(hydration).toMatch(
+      /await flush\(\)\n(?:\s*\/\/[^\n]*\n)*\s*if \(generation === libraryHydrationGeneration && epoch === libraryResetEpoch\) \{\n\s*libraryHydrationCompleteEpoch = epoch\n\s*\}\n\s*void scheduleUsageFactSync\(\)\n\}\n$/
+    )
+    expect(source.match(/\n\s+libraryHydrationCompleteEpoch = /g)).toHaveLength(1)
+
+    // The usage revision carries whether the evidence is ready, so the sync
+    // after a completed hydration is not skipped as a repeat of the window's.
+    // A boolean only: a loadId would add a sync per load and change the
+    // two-load confirmation cadence.
+    const revision = source.match(/function currentProjectionRevision[\s\S]*?\n}\n/)?.[0] || ''
+    expect(revision).toContain('physicalLoadEvidence: usageSyncPhysicalLoadEvidence() !== null')
+    expect(revision).not.toContain('latestPhysicalLoadEvidence')
+    expect(revision).not.toContain('loadId')
   })
 
   it('closes the shared writer coordinator before a mutation-incomplete fatal dialog', () => {

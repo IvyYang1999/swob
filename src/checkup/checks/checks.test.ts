@@ -380,6 +380,35 @@ describe('① inclusion buckets and thresholds (Codex)', () => {
     expect(result.findings.find((finding) => finding.code === 'codex.nested-subagent-orphan')?.samples).toHaveLength(1)
   })
 
+  it('attaches a zero-usage guardian nested under a thread-spawn child, not just one directly under the top-level session (C1e)', async () => {
+    // Same shape as "reports a nested orphan" above, but the guardian's own
+    // parent is the thread-spawn child (not the top-level session) and it
+    // never produced any usage of its own: attributedChildIds can never carry
+    // it (F1b), and the old one-hop parent check only recognized a guardian
+    // parented directly to a top-level session. session-loader.ts's
+    // codexSubagentsByTopLevel already walks the whole chain and attaches it;
+    // before this fix inclusion.ts still called it a nested orphan.
+    const parent = syntheticUuid(1000, 'c0de')
+    const child = syntheticUuid(1, 'c0de')
+    const nestedGuardian = syntheticUuid(2, 'c0de')
+    const { root, sessions } = await codexFixture(3, (dir) => {
+      writeSample(dir, codexRolloutPath(child, 200), jsonl([codex.threadSpawnMeta({ timestamp: syntheticTime(200), ordinal: 0, id: child, parentId: parent, cwd: CWD })]))
+      writeSample(dir, codexRolloutPath(nestedGuardian, 201), jsonl([
+        codex.guardianMeta({ timestamp: syntheticTime(201), ordinal: 0, id: nestedGuardian, parentId: child, cwd: CWD })
+      ]))
+    })
+    const census = await censusCodex(root, { env: {} })
+    const childPath = census.units.find((unit) => unit.meta?.id === child)!.path
+    sessions[0] = { ...sessions[0], subagentPaths: [childPath], subagentIds: [child] }
+    const result = inclusionCheck(ctx({ codex: census, readout: readout(sessions) })).result
+    const entry = result.bySource.codex
+    expect(entry.swob).toMatchObject({
+      becameSession: { value: 3 }, merged: { value: 2 }, notIncluded: { value: 0 }
+    })
+    expect(entry.verdict).toBe('pass')
+    expect(result.findings.map((finding) => finding.code)).not.toContain('codex.nested-subagent-orphan')
+  })
+
   it('fails on an unexplained top-level gap and on > 1 % explained gaps', async () => {
     const { root, sessions } = await codexFixture(10, () => undefined)
     const census = await censusCodex(root, { env: {} })

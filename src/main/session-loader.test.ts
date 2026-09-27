@@ -4484,3 +4484,212 @@ describe('summary cache version bump: write gate, retired JSON cache, worker gua
     }, 120_000)
   })
 })
+
+// ========================================================
+// F1m：跨会话共有调用的归属（加载层，完整事件与压缩缓存两条路径）
+// ========================================================
+describe('cross-session usage ownership in the loader (F1m)', () => {
+  const homes: string[] = []
+  afterEach(() => {
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true })
+  })
+
+  const SESSIONS = ['f1m-parent', 'f1m-child', 'f1m-resume'] as const
+  type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+  const usageOf = (n: number): Usage => ({ input_tokens: 10 * n, output_tokens: n, cache_read_input_tokens: 1_000 * n, cache_creation_input_tokens: 100 * n })
+  const minute = (m: number): string => `2026-06-20T10:${String(m).padStart(2, '0')}:00.000Z`
+
+  function user(sessionId: string, uuid: string, parentUuid: string | null, m: number, text: string): RawJsonlMessage {
+    return rawMsg({ uuid, parentUuid, sessionId, type: 'user', timestamp: minute(m), message: { role: 'user', content: text } })
+  }
+  function assistant(sessionId: string, uuid: string, parentUuid: string, m: number, id: string, n: number): RawJsonlMessage {
+    return rawMsg({
+      uuid, parentUuid, sessionId, type: 'assistant', timestamp: minute(m),
+      message: { id, role: 'assistant', content: 'ok', stop_reason: 'end_turn', usage: usageOf(n) } as RawJsonlMessage['message']
+    })
+  }
+  /** The shared history: four calls; a resumed session copies the first two. */
+  function prefix(sessionId: string, calls = 4): RawJsonlMessage[] {
+    const rows: RawJsonlMessage[] = []
+    let parent: string | null = null
+    for (let i = 1; i <= calls; i++) {
+      rows.push(user(sessionId, `f1m-u${i}`, parent, 2 * i, `共享的第 ${i} 问`))
+      rows.push(assistant(sessionId, `f1m-a${i}`, `f1m-u${i}`, 2 * i + 1, `msg_f1m_shared_${i}`, i))
+      parent = `f1m-a${i}`
+    }
+    return rows
+  }
+  function writeFixture(home: string): Record<string, string> {
+    const dir = path.join(home, '.claude', 'projects', '-Users-test-f1m')
+    const files = Object.fromEntries(SESSIONS.map((sessionId) => [sessionId, path.join(dir, `${sessionId}.jsonl`)]))
+    writeJsonlAt(files['f1m-parent'], [...prefix('f1m-parent'),
+      user('f1m-parent', 'f1m-p-u', 'f1m-a4', 20, '父会话走 A 方案'), assistant('f1m-parent', 'f1m-p-a', 'f1m-p-u', 21, 'msg_f1m_parent', 50)])
+    writeJsonlAt(files['f1m-child'], [...prefix('f1m-child'),
+      user('f1m-child', 'f1m-c-u', 'f1m-a4', 30, '分支走 B 方案'), assistant('f1m-child', 'f1m-c-a', 'f1m-c-u', 31, 'msg_f1m_child', 70)])
+    writeJsonlAt(files['f1m-resume'], [...prefix('f1m-resume', 2),
+      user('f1m-resume', 'f1m-r-u', 'f1m-a2', 40, '续接后问别的'), assistant('f1m-resume', 'f1m-r-a', 'f1m-r-u', 41, 'msg_f1m_resume', 90)])
+    return files
+  }
+  function tempHome(): string {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-f1m-ownership-home-'))
+    homes.push(home)
+    return home
+  }
+  const processed = (usage: Usage): number =>
+    usage.input_tokens + usage.output_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+  /** The oracle: every assistant call once, by message.id, straight from the files. */
+  function recountByMessageId(files: Record<string, string>): number {
+    const calls = new Map<string, number>()
+    for (const file of Object.values(files)) {
+      for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+        const row = JSON.parse(line) as RawJsonlMessage & { message?: { id?: string; usage?: Usage } }
+        if (row.type === 'assistant' && row.message?.id && row.message.usage) calls.set(row.message.id, processed(row.message.usage))
+      }
+    }
+    return [...calls.values()].reduce((sum, value) => sum + value, 0)
+  }
+  /** Each session as parsed on its own, before any load decides ownership. */
+  async function pristine(files: Record<string, string>): Promise<SessionSummary[]> {
+    return Promise.all(SESSIONS.map(async (sessionId) =>
+      buildSessionSummary(files[sessionId], await parseSessionFile(files[sessionId]), true, sessionId, 'claude-code')!))
+  }
+  const claude = (sessions: SessionSummary[]): SessionSummary[] =>
+    SESSIONS.map((sessionId) => sessions.find((session) => session.sessionId === sessionId)!)
+  const inherited = (session: SessionSummary): string[] => (session.tokenAccounting?.usageEvents || [])
+    .filter((event) => event.scope === 'inherited').map((event) => `${event.dedupKey}>${event.inheritedFrom?.sessionId}`).sort()
+  const inheritedRollups = (session: SessionSummary): string[] => (session.tokenAccounting?.usageEventRollups || [])
+    .filter((rollup) => rollup[2] === 'inherited').map((rollup) => `${rollup[0]}>${rollup[13]?.sessionId}`).sort()
+  const numbers = (session: SessionSummary): unknown => {
+    const accounting = session.tokenAccounting!
+    return [accounting.billingTotal, accounting.conversationOnly, accounting.components, accounting.warnings, session.tokenUsage]
+  }
+
+  it('Σ sessions == Insights total == a message.id recount; the ledger, Insights and the load pick the same owners; usage_facts rows stay as they were', async () => {
+    const home = tempHome()
+    const files = writeFixture(home)
+    const loaded = claude(await loadAllSessionsFromTempHome(home, { quiet: true }))
+    const before = await pristine(files)
+    const oracle = recountByMessageId(files)
+
+    // The fixture has what F1m is about: copies in two or three sessions, none marked forkedFrom.
+    const inheritedCopies = loaded.flatMap(inherited)
+    expect(inheritedCopies).toHaveLength(2 + 2 + 1 + 1)
+    expect(before.reduce((sum, session) => sum + session.tokenAccounting!.billingTotal!, 0)).toBeGreaterThan(oracle)
+
+    const { buildInsights } = await import('./insights')
+    const folders = SESSIONS.map((sessionId) => ({ id: `folder-${sessionId}`, name: sessionId, sessionIds: [sessionId], createdAt: minute(0) }))
+    const insightsAfter = buildInsights(loaded, folders)
+    const insightsBefore = buildInsights(before, folders)
+    expect(loaded.reduce((sum, session) => sum + session.tokenAccounting!.billingTotal!, 0)).toBe(oracle)
+    expect(insightsAfter.totalTokens).toBe(oracle)
+    expect(insightsBefore.totalTokens).toBe(oracle)
+    // Insights' own winners (before the load decided) are the load's owners, session by session.
+    for (const session of loaded) {
+      expect(insightsBefore.byFolder.find((folder) => folder.folderId === `folder-${session.sessionId}`)!.totalTokens, session.sessionId)
+        .toBe(session.tokenAccounting!.billingTotal)
+    }
+
+    // The ledger: the same rows whether it is fed the loaded sessions or the ones parsed on their own, and
+    // billing_included on exactly the copies the load kept.
+    const previousUsageIndex = process.env.SWOB_USAGE_INDEX_PATH
+    const usage = await import('./usage-fact-store')
+    const rows = (input: SessionSummary[], name: string): Array<Record<string, unknown>> => {
+      usage.closeUsageFactStore()
+      process.env.SWOB_USAGE_INDEX_PATH = path.join(home, name)
+      usage.synchronizeUsageFacts(input, [])
+      usage.closeUsageFactStore()
+      const db = new Database(path.join(home, name), { readonly: true, fileMustExist: true })
+      try {
+        return db.prepare(`
+          SELECT session_id, event_id, billing_fact_id, billing_included, agent_scope, occurred_at, turn_count,
+            non_cached_input, cache_read, cache_write, output_tokens, call_count
+          FROM usage_facts ORDER BY event_id
+        `).all() as Array<Record<string, unknown>>
+      } finally {
+        db.close()
+      }
+    }
+    try {
+      const fromLoaded = rows(loaded, 'loaded.db')
+      const fromPristine = rows(before, 'pristine.db')
+      expect(fromLoaded).toEqual(fromPristine)
+      expect(fromLoaded).toHaveLength(4 + 1 + 4 + 1 + 2 + 1)
+      expect(fromLoaded.every((row) => row.agent_scope === 'main' && row.turn_count === 1)).toBe(true)
+      const kept = new Set(loaded.flatMap((session) => session.tokenAccounting!.usageEvents
+        .filter((event) => event.scope !== 'inherited')
+        .map((event) => `${session.sessionId}|${event.dedupKey}`)))
+      const keptByLedger = new Set(fromLoaded.filter((row) => row.billing_included === 1).map((row) => {
+        const session = loaded.find((candidate) => candidate.sessionId === row.session_id)!
+        const copy = usage.usageFactsForSession(session).find((fact) => fact.eventId === row.event_id)!
+        return `${row.session_id}|${copy.dedupKey}`
+      }))
+      expect(keptByLedger).toEqual(kept)
+    } finally {
+      usage.closeUsageFactStore()
+      if (previousUsageIndex === undefined) delete process.env.SWOB_USAGE_INDEX_PATH
+      else process.env.SWOB_USAGE_INDEX_PATH = previousUsageIndex
+    }
+
+    // Branch links are the loader's as before; ownership did not add or move any.
+    const byId = Object.fromEntries(loaded.map((session) => [session.sessionId, session]))
+    const linked = loaded.filter((session) => session.branchParentId)
+    expect(linked.length).toBeGreaterThan(0)
+    for (const session of linked) expect(byId[session.branchParentId!]?.branchChildIds).toContain(session.id)
+  })
+
+  it('the compact cache path (omitCachedUsageEvents) decides the same owners, totals and tokenUsage as full events', async () => {
+    const home = tempHome()
+    const files = writeFixture(home)
+    const full = claude(await loadAllSessionsFromTempHome(home, { quiet: true }))
+    const compact = claude(await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true, omitCachedUsageEvents: true }))
+    expect(compact.every((session) => session.tokenAccounting?.usageEventsOmitted === true)).toBe(true)
+    compact.forEach((session, index) => {
+      expect(numbers(session), session.sessionId).toEqual(numbers(full[index]))
+      expect(inheritedRollups(session), session.sessionId).toEqual(inherited(full[index]))
+    })
+    expect(compact.flatMap(inheritedRollups)).toHaveLength(6)
+    // Hydrating the compact snapshot (the usage sync's path) hands over the same decided ledgers.
+    const hydrated = restoreOmittedUsageEvents(compact, full)
+    hydrated.forEach((session, index) => expect(session.tokenAccounting).toEqual(full[index].tokenAccounting))
+    // Ownership is never cached: the rows on disk hold each copy as observed.
+    const cache = new Database(summaryCacheDbPath(home), { readonly: true, fileMustExist: true })
+    try {
+      const cached = cache.prepare('SELECT per_file_json, compact_json FROM summary_cache_entries').all() as Array<{ per_file_json: string; compact_json: string }>
+      expect(cached).toHaveLength(3)
+      expect(cached.some((row) => row.per_file_json.includes('inherited') || row.compact_json.includes('inherited'))).toBe(false)
+    } finally {
+      cache.close()
+    }
+
+    // One session re-read this round (its file changed), the others compact: still the same decisions.
+    writeJsonlAt(files['f1m-resume'], [...prefix('f1m-resume', 2),
+      user('f1m-resume', 'f1m-r-u', 'f1m-a2', 40, '续接后问别的'), assistant('f1m-resume', 'f1m-r-a', 'f1m-r-u', 41, 'msg_f1m_resume', 90),
+      user('f1m-resume', 'f1m-r-u2', 'f1m-r-a', 42, '再问一个'), assistant('f1m-resume', 'f1m-r-a2', 'f1m-r-u2', 43, 'msg_f1m_resume_2', 5)])
+    const mixed = claude(await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true, omitCachedUsageEvents: true }))
+    const mixedFull = claude(await loadAllSessionsFromTempHome(home, { readOnly: true, quiet: true }))
+    expect(mixed.map((session) => session.tokenAccounting?.usageEventsOmitted === true)).toEqual([true, true, false])
+    mixed.forEach((session, index) => {
+      expect(numbers(session), session.sessionId).toEqual(numbers(mixedFull[index]))
+      expect([...inheritedRollups(session), ...inherited(session)].sort()).toEqual(inherited(mixedFull[index]))
+    })
+  })
+
+  it('when an owner is gone, the next load gives its calls back to the copies left', async () => {
+    const home = tempHome()
+    const files = writeFixture(home)
+    const first = claude(await loadAllSessionsFromTempHome(home, { quiet: true }))
+    // Remove the session that owns the most shared calls; the others' copies of them must come back.
+    const owners = first.map((session) => ({
+      sessionId: session.sessionId,
+      owned: first.flatMap((other) => other.tokenAccounting!.usageEvents).filter((event) => event.inheritedFrom?.sessionId === session.sessionId).length
+    })).sort((left, right) => right.owned - left.owned)
+    const gone = owners[0].sessionId
+    expect(owners[0].owned).toBeGreaterThan(0)
+    fs.rmSync(files[gone])
+    const remaining = SESSIONS.filter((sessionId) => sessionId !== gone)
+    const second = (await loadAllSessionsFromTempHome(home, { quiet: true })).filter((session) => remaining.includes(session.sessionId as typeof remaining[number]))
+    expect(second.flatMap(inherited).every((entry) => !entry.endsWith(`>${gone}`))).toBe(true)
+    const remainingFiles = Object.fromEntries(remaining.map((sessionId) => [sessionId, files[sessionId]]))
+    expect(second.reduce((sum, session) => sum + session.tokenAccounting!.billingTotal!, 0)).toBe(recountByMessageId(remainingFiles))
+  })
+})

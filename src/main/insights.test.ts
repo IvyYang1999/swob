@@ -9,6 +9,7 @@ import {
   accountClaudeUsage,
   accountCodexUsage,
   accountingForSession,
+  assignCrossSessionUsageOwners,
   accountingFromMutuallyExclusiveUsage,
   accountingFromUsageEvents,
   markExcludedFromRollups,
@@ -1239,6 +1240,90 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
       // SQL 侧：真的写进账本，读 canonicalizeBillingFacts 判定的 billing_included 行。
       synchronizeUsageFacts([a, b], [])
       expect(billingIncludedSessionId(sharedBillingFactId)).toBe(jsWinner)
+    })
+  })
+
+  // F1m：加载层用同一条规则先把跨会话共有的调用归到一场会话（其余副本标 inherited，所在会话的账不再含它）。
+  // Insights 的全局与逐会话份额（byProject/byFolder/bySource 即各会话的 CountedUsage）与归属前逐位相同，
+  // 按日会话数与时间分摊也不变（D5：一场会话的调用全记在别处，它当天仍算活跃）；按会话的 bySession 与对账里
+  // 按会话的几个数按预期下降，对账恒等式照样闭合。
+  describe('F1m：加载层归属之后 Insights 位级不变', () => {
+    const shared = (id: string, hours: number, scope?: UsageEvent['scope']) =>
+      call({ id, usd: 0.25, input: 1_000, cacheRead: 4_000, cacheWrite: 100, output: 50, model: 'claude-sonnet-4-5', timestamp: at(hours), ...(scope ? { scope } : {}) })
+    function pristineSessions(): SessionSummary[] {
+      const parent = ledgerSession('f1m-parent', '/f1m/parent', [
+        shared('p-1', 0), shared('p-2', 1), shared('p-3', 25),
+        call({ id: 'parent-own', usd: 1, input: 3_000, output: 300, model: 'claude-opus-4-1', timestamp: at(26) })
+      ])
+      // 分支：抄了父会话的三条调用（跨两天），再各自继续。
+      const child = ledgerSession('f1m-child', '/f1m/child', [
+        shared('p-1', 0), shared('p-2', 1), shared('p-3', 25),
+        call({ id: 'child-own', usd: 2, input: 5_000, output: 500, model: 'claude-opus-4-1', timestamp: at(48) })
+      ])
+      // 只抄历史、自己没有调用的会话；它的副本作用域更弱，三条都会记在父或子会话上。
+      const copy = ledgerSession('f1m-copy', '/f1m/copy', [shared('p-1', 0, 'sidechain'), shared('p-2', 1, 'sidechain')])
+      const unrelated = ledgerSession('f1m-other', '/f1m/other', [call({ id: 'other-own', usd: 0.5, input: 700, output: 70, timestamp: at(2) })])
+      const sessions = [parent, child, copy, unrelated]
+      sessions.forEach((session, index) => { session.estimatedTime = 600_000 * (index + 1) })
+      return sessions
+    }
+    const folders = ['f1m-parent', 'f1m-child', 'f1m-copy', 'f1m-other'].map((sessionId) =>
+      makeFolder({ id: `folder-${sessionId}`, name: sessionId, sessionIds: [sessionId] }))
+    /** Everything but the per-session ledgers (bySession) and the reconciliation numbers built from them. */
+    const global = (result: ReturnType<typeof buildInsights>): string => JSON.stringify({
+      ...result,
+      bySession: undefined,
+      reconciliation: {
+        ...result.reconciliation,
+        sessions: undefined,
+        crossSessionDuplicateFacts: undefined,
+        crossSessionDuplicateTokens: undefined,
+        valuation: { ...result.reconciliation.valuation, sessionsUsd: undefined, crossSessionDuplicateUsd: undefined, difference: undefined }
+      }
+    })
+
+    it('global totals, per-session shares, days and time are bit for bit the same; per-session ledgers drop the inherited copies', () => {
+      const before = buildInsights(pristineSessions(), folders)
+      const owned = pristineSessions()
+      const stats = assignCrossSessionUsageOwners(owned)
+      expect(stats).toMatchObject({ sessions: 4, sharedFacts: 3, inheritedCopies: 5 })
+      const after = buildInsights(owned, folders)
+
+      expect(global(after)).toBe(global(before))
+      // What that covers, spelled out: the session that only copied history is still active on its days,
+      // and every session's time is still spread over days (D5).
+      expect(after.byDate).toEqual(before.byDate)
+      expect(after.activeDays).toBe(before.activeDays)
+      expect(sum(after.byDate.map((date) => date.totalTime))).toBe(sum(before.byDate.map((date) => date.totalTime)))
+      expect(after.byFolder.find((folder) => folder.folderId === 'folder-f1m-copy')).toMatchObject({ totalTokens: 0, tokenAvailableSessions: 1 })
+
+      // Three ways to the same number: Σ per-session ledgers, the Insights total, each call once.
+      const perCall = 3 * 5_150 + 3_300 + 5_500 + 770
+      expect(sum(owned.map((session) => session.tokenAccounting!.billingTotal!))).toBe(perCall)
+      expect(after.totalTokens).toBe(perCall)
+      expect(before.totalTokens).toBe(perCall)
+      // Per session: bySession follows the session's own ledger; the load resolved every duplicate.
+      expect(Object.fromEntries(after.bySession.map((session) => [session.sessionId, session.totalTokens])))
+        .toEqual(Object.fromEntries(owned.map((session) => [session.sessionId, session.tokenAccounting!.billingTotal])))
+      expect(before.reconciliation).toMatchObject({ crossSessionDuplicateFacts: 5, crossSessionDuplicateTokens: 5 * 5_150, ok: true })
+      expect(after.reconciliation).toMatchObject({
+        global: perCall, sessions: perCall, crossSessionDuplicateFacts: 0, crossSessionDuplicateTokens: 0, difference: 0, ok: true,
+        valuation: { crossSessionDuplicateUsd: 0, ok: true }
+      })
+      expect(after.valuation.usd).toBe(before.valuation.usd)
+    })
+
+    it('the owner the load picks is the one Insights picked on the same sessions before the load decided', () => {
+      const before = buildInsights(pristineSessions(), folders)
+      const owned = pristineSessions()
+      assignCrossSessionUsageOwners(owned)
+      // byFolder (one session per folder) is each session's counted share: equal before and after means
+      // Insights' own cross-session winners and the load's owners are the same copies.
+      for (const session of owned) {
+        const folderId = `folder-${session.sessionId}`
+        const share = before.byFolder.find((folder) => folder.folderId === folderId)!.totalTokens
+        expect(session.tokenAccounting!.billingTotal, session.sessionId).toBe(share)
+      }
     })
   })
 })

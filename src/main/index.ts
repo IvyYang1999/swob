@@ -35,6 +35,7 @@ import {
   findAllSessionFiles,
   findClaudeSessionFiles,
   buildSessionSummaryFromBackup,
+  SUMMARY_CACHE_VERSION,
   type SessionLoadEvidence
 } from './session-loader'
 import {
@@ -342,8 +343,12 @@ import {
   SWOB_APP_CLI_PATH
 } from './cli-install'
 import {
+  type LineageRegistrySnapshot,
   type SessionLineageRegistry,
   getSessionLineagePath,
+  LineageRegistryWriteRefusedError,
+  lineageRegistryCounts,
+  readLineageRegistrySnapshot,
   rebuildSessionLineageRegistry,
   resolveSessionSuccessor,
   writeSessionLineageRegistry
@@ -707,6 +712,9 @@ const sourceSessionInventory = new SessionSourceInventory(isProviderSession)
 let currentLineageRegistry: SessionLineageRegistry | null = null
 let currentLineageRegistryRoot: string | null = null
 let lineageRegistryLoadPromise: Promise<SessionLineageRegistry | null> | null = null
+/** The Library root whose registry derivation this process has checked (F1d). */
+let lineageDerivationCheckedRoot: string | null = null
+const lineageRefusalsLogged = new Set<string>()
 
 const approvedLibraryRoots = new Set<string>()
 let onboardingEstimateTargetPath: string | null = null
@@ -3166,6 +3174,9 @@ function settleProviderBootstrap(
       scheduleSearchIndexWarmup()
       void scheduleUsageFactSync()
     }
+    // The writable load behind this completion has put the current summary
+    // cache on disk: the lineage registry may now be rebuilt from it (F1d).
+    refreshLineageRegistryDerivation()
   }).catch((error) => {
     console.error('[session-bootstrap] additive provider refresh failed:', error)
     latestProviderSettlementStatus = 'degraded'
@@ -3190,6 +3201,85 @@ function readSessionLineageRegistry(): SessionLineageRegistry | null {
   return null
 }
 
+function errorCodeOf(error: unknown): string | null {
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' ? code : null
+}
+
+/** Once per process, root and cause: a registry that stays unreadable is not reported on every read. */
+function logLineageRegistryRefused(
+  trigger: 'no-registry' | 'derivation',
+  code: string,
+  fields: Record<string, unknown> = {}
+): void {
+  const key = [getLibraryRoot(), trigger, code, String(fields.readCode ?? '')].join('\0')
+  if (lineageRefusalsLogged.has(key)) return
+  lineageRefusalsLogged.add(key)
+  writeLifecycleLog('lineage-registry-refused', { trigger, code, ...fields })
+}
+
+/**
+ * Write a rebuilt registry through the guarded writer (F1d). The registry is
+ * the only store of old aliases and manual resolutions: one that exists but
+ * cannot be read is never replaced, a replaced one is first copied to the
+ * state directory, and a rebuild that would lose an alias key, a resolution
+ * or a manual relation is refused. Every outcome goes to lifecycle.log (ids
+ * and counts, never a path). Returns whether the rebuild lost nothing, so it
+ * may be served even when the Library could not be written.
+ */
+async function persistLineageRegistry(
+  registry: SessionLineageRegistry,
+  registryPath: string,
+  expected: LineageRegistrySnapshot,
+  trigger: 'no-registry' | 'derivation'
+): Promise<boolean> {
+  if (expected.state === 'unreadable') {
+    logLineageRegistryRefused(trigger, 'LINEAGE_REGISTRY_UNREADABLE', { readCode: expected.code })
+    return false
+  }
+  try {
+    const result = await withLibraryMaintenanceWriter(() => writeSessionLineageRegistry(registry, registryPath, { expected }))
+    for (const drop of result.check?.staleAliasDrops || []) {
+      writeLifecycleLog('lineage-alias-dropped', { trigger, ...drop })
+    }
+    for (const resolutionId of result.check?.newlyStaleResolutions || []) {
+      writeLifecycleLog('lineage-resolution-stale', { trigger, resolutionId })
+    }
+    writeLifecycleLog('lineage-registry-rebuilt', {
+      trigger,
+      summaryCacheVersion: registry.derivedFrom?.summaryCacheVersion ?? null,
+      previous: result.check?.previous ?? null,
+      next: lineageRegistryCounts(registry),
+      backup: result.backupFileName
+    })
+    return true
+  } catch (error) {
+    if (error instanceof LineageRegistryWriteRefusedError) {
+      const check = error.check
+      logLineageRegistryRefused(trigger, error.code, {
+        readCode: error.readCode ?? null,
+        ...(check
+          ? {
+              previous: check.previous,
+              next: check.next,
+              lostAliases: check.lostAliases.slice(0, 20),
+              lostResolutions: check.lostResolutions.slice(0, 20),
+              lostManualRelations: check.lostManualRelations.slice(0, 20)
+            }
+          : {})
+      })
+      return false
+    }
+    // Writer busy, read-only Library: nothing was replaced and nothing lost.
+    writeLifecycleLog('lineage-registry-write-failed', {
+      trigger,
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorCode: errorCodeOf(error)
+    })
+    return true
+  }
+}
+
 async function loadSessionLineageRegistry(): Promise<SessionLineageRegistry | null> {
   const existing = readSessionLineageRegistry()
   if (existing) return existing
@@ -3198,12 +3288,14 @@ async function loadSessionLineageRegistry(): Promise<SessionLineageRegistry | nu
   const registryPath = getSessionLineagePath(libraryRoot)
   lineageRegistryLoadPromise = (async () => {
     try {
+      // Only a missing registry is created here. One that exists but cannot
+      // be read keeps its bytes (F1d); the rebuild is served from memory, as
+      // for a read-only Library.
+      const before = readLineageRegistrySnapshot(registryPath)
       const registry = await rebuildSessionLineageRegistry(libraryRoot)
       currentLineageRegistry = registry
       currentLineageRegistryRoot = libraryRoot
-      try {
-        await withLibraryMaintenanceWriter(() => writeSessionLineageRegistry(registry, registryPath))
-      } catch { /* a read-only Library still gets the in-memory evidence */ }
+      await persistLineageRegistry(registry, registryPath, before, 'no-registry')
       return registry
     } catch {
       return null
@@ -3212,6 +3304,70 @@ async function loadSessionLineageRegistry(): Promise<SessionLineageRegistry | nu
     }
   })()
   return lineageRegistryLoadPromise
+}
+
+/** Re-annotate every cached session's successor from the current registry and patch the renderer. */
+function refreshSessionSuccessors(): void {
+  const patch: SessionSummary[] = []
+  for (const summary of cachedSessions) {
+    const before = summary.successor
+    annotateSessionSuccessor(summary)
+    if (before !== summary.successor) patch.push(summary)
+  }
+  emitLibraryPatch(patch)
+}
+
+/**
+ * F1d: the registry is derived from the summary cache's Claude lineage
+ * fields and stamped with that cache's version. After this process's first
+ * writable load has put the current summary cache on disk, a registry
+ * derived under another version, or under none, is rebuilt once in the
+ * background through the guarded writer. Never before that load: the cache
+ * it would read is still the old version's, which the write gate (W2) keeps
+ * it from writing, so it would parse every Claude file cold on the main
+ * thread, and the first writer of a bumped cache must be a full load. A
+ * missing registry belongs to loadSessionLineageRegistry; one that cannot be
+ * read is left alone.
+ */
+function refreshLineageRegistryDerivation(): void {
+  try {
+    const libraryRoot = getLibraryRoot()
+    if (lineageDerivationCheckedRoot === libraryRoot || lineageRegistryLoadPromise) return
+    lineageDerivationCheckedRoot = libraryRoot
+    const registryPath = getSessionLineagePath(libraryRoot)
+    const before = readLineageRegistrySnapshot(registryPath)
+    if (before.state === 'missing') return
+    if (before.state === 'unreadable') {
+      logLineageRegistryRefused('derivation', 'LINEAGE_REGISTRY_UNREADABLE', { readCode: before.code })
+      return
+    }
+    const derivedFrom = before.registry.derivedFrom as { summaryCacheVersion?: unknown } | undefined
+    if (derivedFrom?.summaryCacheVersion === SUMMARY_CACHE_VERSION) return
+    lineageRegistryLoadPromise = (async () => {
+      try {
+        const registry = await rebuildSessionLineageRegistry(libraryRoot)
+        if (getLibraryRoot() !== libraryRoot) return null
+        if (!await persistLineageRegistry(registry, registryPath, before, 'derivation')) {
+          return currentLineageRegistryRoot === libraryRoot ? currentLineageRegistry : null
+        }
+        currentLineageRegistry = registry
+        currentLineageRegistryRoot = libraryRoot
+        refreshSessionSuccessors()
+        return registry
+      } catch (error) {
+        writeLifecycleLog('lineage-registry-rebuild-failed', {
+          trigger: 'derivation',
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorCode: errorCodeOf(error)
+        })
+        return null
+      } finally {
+        lineageRegistryLoadPromise = null
+      }
+    })()
+  } catch (error) {
+    console.error('[lineage] registry derivation check failed:', error)
+  }
 }
 
 ipcMain.handle('platform:getCapabilities', () => {
@@ -3273,14 +3429,7 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   if (latestLibraryTree) void hydrateLibrarySessions(latestLibraryTree)
   if (!diskLineage) {
     void loadSessionLineageRegistry().then((registry) => {
-      if (!registry) return
-      const patch: SessionSummary[] = []
-      for (const summary of cachedSessions) {
-        const before = summary.successor
-        annotateSessionSuccessor(summary)
-        if (before !== summary.successor) patch.push(summary)
-      }
-      emitLibraryPatch(patch)
+      if (registry) refreshSessionSuccessors()
     })
   }
 

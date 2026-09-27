@@ -16,6 +16,11 @@ import {
   stripTerminalControlSequencesDeep
 } from '../shared/chat-format'
 import { builtinProviderForId } from '../shared/provider-capabilities'
+import {
+  SEARCH_INDEX_COMPANION_SUFFIXES,
+  searchIndexBackupDirectory,
+  searchIndexBackupName
+} from './program-backups'
 
 // v4 rebuilds unchanged files so ANSI/CSI/OSC text cannot survive in old FTS rows.
 const SEARCH_SCHEMA_VERSION = 5
@@ -128,10 +133,26 @@ interface GrepRow {
   timestamp: string
 }
 
+interface FileIdentity {
+  readonly dev: number
+  readonly ino: number
+}
+
 let database: Database.Database | null = null
 let databasePath = ''
+/** The file this thread's writer connection opened: a repair moves that file and no other (F1d-3). */
+let writerFileIdentity: FileIdentity | null = null
+/**
+ * A writer connection whose schema setup found the file corrupt (F1d-3). It
+ * stays open until a repair has moved the file: closing the last connection
+ * removes `<path>-wal` and `-shm` by name, which would lose the WAL before it
+ * is moved with the file.
+ */
+let failedWriterDatabase: Database.Database | null = null
 let readDatabase: Database.Database | null = null
 let readDatabasePath = ''
+/** The file the read connection has open; another file at the path is opened anew (F1d-3). */
+let readDatabaseIdentity: FileIdentity | null = null
 let readDatabaseOpenCount = 0
 let synchronizationTail: Promise<void> = Promise.resolve()
 let indexRevision = 0
@@ -152,6 +173,317 @@ function indexDirectory(): string {
 
 export function searchDatabasePath(): string {
   return path.join(indexDirectory(), 'search.db')
+}
+
+function fileIdentity(filePath: string): FileIdentity | null {
+  try {
+    const stat = fs.statSync(filePath, { throwIfNoEntry: false })
+    return stat ? { dev: stat.dev, ino: stat.ino } : null
+  } catch {
+    return null
+  }
+}
+
+function sameFile(left: FileIdentity | null, right: FileIdentity | null): boolean {
+  return Boolean(left && right && left.dev === right.dev && left.ino === right.ino)
+}
+
+// --- F1d-3: a corrupt search.db is moved aside and rebuilt ---
+
+/**
+ * SQLite's own verdict that search.db's bytes are not a database it can use:
+ * SQLITE_CORRUPT (with its extended codes) or SQLITE_NOTADB. BUSY and LOCKED
+ * never are: another connection may be using a healthy file (the summary
+ * cache's repair in session-loader.ts draws the same line).
+ */
+export function isSearchIndexCorruption(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' &&
+    (code === 'SQLITE_NOTADB' || code === 'SQLITE_CORRUPT' || code.startsWith('SQLITE_CORRUPT_'))
+}
+
+function errorCodeOf(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  if (typeof code === 'string') return code
+  return error instanceof Error ? error.name : 'unknown'
+}
+
+/**
+ * A record of the search index's own maintenance, for lifecycle.log: what
+ * happened and why, sizes and durations, file names but never a path or any
+ * content.
+ */
+export interface SearchIndexEvent {
+  readonly event: string
+  readonly [field: string]: unknown
+}
+
+let searchIndexEventSink: ((event: SearchIndexEvent) => void) | null = null
+
+/**
+ * Where this thread's search index events go. The library worker, which owns
+ * the app's writer, hands them to the main thread (WorkerReply
+ * 'search-index-event'); anywhere else they are delivered in place.
+ */
+export function setSearchIndexEventSink(sink: ((event: SearchIndexEvent) => void) | null): void {
+  searchIndexEventSink = sink
+}
+
+function emitSearchIndexEvent(event: SearchIndexEvent): void {
+  try {
+    if (searchIndexEventSink) searchIndexEventSink(event)
+    else deliverSearchIndexEvent(event)
+  } catch { /* a report never changes what the index does */ }
+}
+
+/**
+ * Deliver a search index event on this thread, emitted in place or posted by
+ * the worker that owns the writer. A repair replaced the file this thread's
+ * read connection has open, which would go on reading the moved copy: that
+ * connection is closed first, so the next query opens the rebuilt index.
+ * Then process 'swob:search-index-event' (the desktop app logs it and
+ * projects every source into a rebuilt index).
+ */
+export function deliverSearchIndexEvent(event: SearchIndexEvent): void {
+  if (event.event === 'search-index-repaired') reopenSearchIndexReadConnection()
+  try {
+    process.emit('swob:search-index-event', event)
+  } catch { /* a listener's failure is not the index's */ }
+}
+
+/** Close this thread's read connection: the next query opens whatever file is at the path then. */
+export function reopenSearchIndexReadConnection(): void {
+  if (readDatabase) {
+    try { readDatabase.close() } catch { /* the handle is released either way */ }
+  }
+  readDatabase = null
+  readDatabasePath = ''
+  readDatabaseIdentity = null
+  invalidateQueryCache()
+}
+
+function closeSearchIndexConnections(): void {
+  for (const connection of [database, failedWriterDatabase]) {
+    if (!connection) continue
+    try { connection.close() } catch { /* the handle is released either way */ }
+  }
+  database = null
+  databasePath = ''
+  failedWriterDatabase = null
+  reopenSearchIndexReadConnection()
+}
+
+/** The one search.db file a failed query reported, so repeated searches do not repeat it. */
+let reportedCorruptRead: FileIdentity | null = null
+
+/**
+ * A query on this thread found search.db corrupt. Only the thread that owns
+ * the writer moves the file (repairCorruptSearchIndex; in the app, the
+ * library worker): here the read connection is dropped, and the finding is
+ * reported once per file.
+ */
+function reportCorruptRead(operation: 'search' | 'probe', error: unknown): void {
+  const identity = fileIdentity(searchDatabasePath())
+  reopenSearchIndexReadConnection()
+  if (identity && sameFile(identity, reportedCorruptRead)) return
+  reportedCorruptRead = identity
+  emitSearchIndexEvent({ event: 'search-index-read-corrupt', operation, reason: errorCodeOf(error) })
+}
+
+/**
+ * One repair per this long per thread: an index that keeps turning corrupt
+ * (a failing disk) is reported, not moved aside and rebuilt over and over.
+ */
+const SEARCH_INDEX_REPAIR_INTERVAL_MS = 10 * 60_000
+let lastSearchIndexRepairAt: number | null = null
+let deferredRepairReportedFor: number | null = null
+
+interface SearchIndexRepairTrigger {
+  readonly operation: string
+  readonly reason: string
+  /** The file found corrupt; by default the one this thread's writer opened. */
+  readonly expected?: FileIdentity | null
+}
+
+/** repaired: moved aside, empty index in place; replaced: another file is there already; refused: nothing moved. */
+type SearchIndexRepairResult = 'repaired' | 'replaced' | 'refused'
+
+function syncDirectory(directory: string): void {
+  try {
+    const descriptor = fs.openSync(directory, 'r')
+    try { fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
+  } catch { /* directory fsync is unavailable on some filesystems */ }
+}
+
+function freeSearchIndexBackupName(directory: string, at: number): string | null {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const name = searchIndexBackupName(new Date(at), process.pid, attempt)
+    const taken = ['', ...SEARCH_INDEX_COMPANION_SUFFIXES].some((suffix) => {
+      try {
+        fs.lstatSync(path.join(directory, name + suffix))
+        return true
+      } catch {
+        return false
+      }
+    })
+    if (!taken) return name
+  }
+  return null
+}
+
+/**
+ * F1d-3. search.db is a derived index: every row is projected again from the
+ * session files. So a file SQLite calls corrupt or not a database
+ * (isSearchIndexCorruption) is moved aside whole and rebuilt, never patched
+ * and never deleted. Only the thread that owns the writer runs this (in the
+ * app, the library worker, which then tells the main thread; see
+ * deliverSearchIndexEvent). In order:
+ * 1. the file must still be the one found corrupt ('replaced' otherwise:
+ *    another file is at the path already, nothing moves) and a regular file
+ *    (a symbolic link is never followed or moved);
+ * 2. its `-wal`/`-shm`/`-journal`, then the file itself, are renamed into
+ *    search-backups/ (program-backups.ts) on the same volume, so a new index
+ *    never finds the old WAL beside it. A failed rename puts back what moved;
+ * 3. only then are this thread's connections closed. A last connection's
+ *    close removes `<path>-wal` and `-shm` by name: before the move that
+ *    would lose the WAL, after a new index exists it would be the new
+ *    index's. Between the two, the names are empty;
+ * 4. both directories are synced, and each copy is checked to be the very
+ *    file that was at the path (`complete`);
+ * 5. an empty index with the current schema takes its place; the caller
+ *    retries its operation.
+ * 'refused' when a repair already ran within the interval, the path is not
+ * a regular file, the backup directory is unusable or a rename failed: the
+ * caller's error stands and the file stays where it was. Every outcome is
+ * reported (search-index-repaired / -repair-failed / -repair-deferred).
+ */
+function repairCorruptSearchIndex(trigger: SearchIndexRepairTrigger): SearchIndexRepairResult {
+  const startedAt = Date.now()
+  const fields = { operation: trigger.operation, reason: trigger.reason }
+  if (lastSearchIndexRepairAt !== null && startedAt - lastSearchIndexRepairAt < SEARCH_INDEX_REPAIR_INTERVAL_MS) {
+    if (deferredRepairReportedFor !== lastSearchIndexRepairAt) {
+      deferredRepairReportedFor = lastSearchIndexRepairAt
+      emitSearchIndexEvent({
+        event: 'search-index-repair-deferred',
+        ...fields,
+        sinceLastRepairMs: startedAt - lastSearchIndexRepairAt
+      })
+    }
+    return 'refused'
+  }
+  const expected = trigger.expected === undefined ? writerFileIdentity : trigger.expected
+  const refuse = (why: string, error?: unknown): SearchIndexRepairResult => {
+    closeSearchIndexConnections()
+    emitSearchIndexEvent({
+      event: 'search-index-repair-failed',
+      ...fields,
+      why,
+      ...(error === undefined ? {} : { code: errorCodeOf(error) }),
+      ms: Date.now() - startedAt
+    })
+    return 'refused'
+  }
+  const indexPath = searchDatabasePath()
+  let original: fs.Stats
+  try {
+    original = fs.lstatSync(indexPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return refuse('stat', error)
+    // Gone already: the retry creates a new index.
+    closeSearchIndexConnections()
+    return 'replaced'
+  }
+  if (original.isFile() && expected && !sameFile(expected, original)) {
+    closeSearchIndexConnections()
+    return 'replaced'
+  }
+  lastSearchIndexRepairAt = startedAt
+  if (!original.isFile()) return refuse('not-a-file')
+  const companions: Array<{ suffix: string; stat: fs.Stats }> = []
+  for (const suffix of SEARCH_INDEX_COMPANION_SUFFIXES) {
+    let stat: fs.Stats
+    try {
+      stat = fs.lstatSync(indexPath + suffix)
+    } catch {
+      continue
+    }
+    if (!stat.isFile()) return refuse('companion-not-a-file')
+    companions.push({ suffix, stat })
+  }
+  const directory = searchIndexBackupDirectory()
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+    if (!fs.lstatSync(directory).isDirectory()) return refuse('backup-directory')
+  } catch (error) {
+    return refuse('backup-directory', error)
+  }
+  const backupFileName = freeSearchIndexBackupName(directory, startedAt)
+  if (!backupFileName) return refuse('backup-name')
+  const moved: Array<{ from: string; to: string }> = []
+  try {
+    for (const { suffix } of companions) {
+      const move = { from: indexPath + suffix, to: path.join(directory, backupFileName + suffix) }
+      fs.renameSync(move.from, move.to)
+      moved.push(move)
+    }
+    fs.renameSync(indexPath, path.join(directory, backupFileName))
+  } catch (error) {
+    for (const move of moved.reverse()) {
+      try { fs.renameSync(move.to, move.from) } catch { /* stays in search-backups, never deleted */ }
+    }
+    return refuse('rename', error)
+  }
+  closeSearchIndexConnections()
+  syncDirectory(directory)
+  syncDirectory(path.dirname(indexPath))
+  // Each copy is the very file that was at the path (a rename moves it whole;
+  // a closing connection may only have folded its own WAL into it).
+  const complete = [{ suffix: '', stat: original }, ...companions].every(({ suffix, stat }) => {
+    try {
+      const landed = fs.lstatSync(path.join(directory, backupFileName + suffix))
+      return landed.isFile() && landed.dev === stat.dev && landed.ino === stat.ino
+    } catch {
+      return false
+    }
+  })
+  let rebuilt = true
+  try {
+    getDatabase()
+  } catch {
+    rebuilt = false
+  }
+  const companionBytes = (suffix: string): number =>
+    companions.find((companion) => companion.suffix === suffix)?.stat.size ?? 0
+  emitSearchIndexEvent({
+    event: 'search-index-repaired',
+    ...fields,
+    bytes: original.size,
+    walBytes: companionBytes('-wal'),
+    shmBytes: companionBytes('-shm'),
+    journalBytes: companionBytes('-journal'),
+    backupFileName,
+    complete,
+    rebuilt,
+    ms: Date.now() - startedAt
+  })
+  return 'repaired'
+}
+
+/**
+ * Run a write operation; when SQLite finds search.db corrupt, repair it
+ * (above) and run the operation once more against the rebuilt index. Every
+ * SQLite call inside these operations is on search.db: a source that fails
+ * to parse, even with a SQLite error of its own store, is handled per source
+ * in indexSourceNow and never reaches here.
+ */
+async function withSearchIndexRepair(operation: string, work: () => Promise<void>): Promise<void> {
+  try {
+    await work()
+  } catch (error) {
+    if (!isSearchIndexCorruption(error)) throw error
+    if (repairCorruptSearchIndex({ operation, reason: errorCodeOf(error) }) === 'refused') throw error
+    await work()
+  }
 }
 
 function computeFileState(filePath: string): FileState | null {
@@ -227,11 +559,18 @@ function getDatabase(): Database.Database {
 
   fs.mkdirSync(path.dirname(requestedPath), { recursive: true, mode: 0o700 })
   const nextDatabase = new Database(requestedPath, { timeout: searchDatabaseBusyTimeoutMs() })
+  writerFileIdentity = fileIdentity(requestedPath)
   try {
     ensureSchema(nextDatabase)
     try { fs.chmodSync(requestedPath, 0o600) } catch { /* best effort */ }
   } catch (error) {
-    nextDatabase.close()
+    if (isSearchIndexCorruption(error)) {
+      // Closed by the repair once the file has moved (see failedWriterDatabase).
+      if (failedWriterDatabase) failedWriterDatabase.close()
+      failedWriterDatabase = nextDatabase
+    } else {
+      nextDatabase.close()
+    }
     throw error
   }
   database = nextDatabase
@@ -255,17 +594,17 @@ function withReadOnlyDatabase<T>(query: (db: Database.Database) => T): T {
 
 function getReadOnlyDatabase(): Database.Database | null {
   const requestedPath = searchDatabasePath()
-  if (!fs.existsSync(requestedPath)) {
-    if (readDatabase && readDatabasePath === requestedPath) {
-      readDatabase.close()
-      readDatabase = null
-      readDatabasePath = ''
-      queryCache.clear()
-    }
+  const identity = fileIdentity(requestedPath)
+  if (!identity) {
+    if (readDatabase && readDatabasePath === requestedPath) reopenSearchIndexReadConnection()
     return null
   }
-  if (readDatabase && readDatabasePath === requestedPath) return readDatabase
-  if (readDatabase) readDatabase.close()
+  if (readDatabase && readDatabasePath === requestedPath && sameFile(readDatabaseIdentity, identity)) {
+    return readDatabase
+  }
+  // Another path, or another file at this path (a repaired index, F1d-3): an
+  // open connection would go on reading the file it opened.
+  if (readDatabase) reopenSearchIndexReadConnection()
   const nextDatabase = new Database(requestedPath, {
     readonly: true,
     fileMustExist: true,
@@ -274,6 +613,7 @@ function getReadOnlyDatabase(): Database.Database | null {
   nextDatabase.pragma(`busy_timeout = ${searchDatabaseBusyTimeoutMs()}`)
   readDatabase = nextDatabase
   readDatabasePath = requestedPath
+  readDatabaseIdentity = identity
   readDatabaseOpenCount++
   return nextDatabase
 }
@@ -501,14 +841,15 @@ function writeIndexedRawSource(
   return true
 }
 
-function serializeSynchronization(work: () => Promise<void>): Promise<void> {
-  const next = synchronizationTail.then(work, work)
+function serializeSynchronization(operation: string, work: () => Promise<void>): Promise<void> {
+  const run = (): Promise<void> => withSearchIndexRepair(operation, work)
+  const next = synchronizationTail.then(run, run)
   synchronizationTail = next.catch(() => {})
   return next
 }
 
 export async function indexSearchSource(source: SearchIndexSource): Promise<void> {
-  return serializeSynchronization(async () => {
+  return serializeSynchronization('index-source', async () => {
     await indexSourceNow(source)
   })
 }
@@ -517,7 +858,7 @@ export async function indexParsedSearchSource(
   source: SearchIndexSource,
   raw: RawJsonlMessage[]
 ): Promise<void> {
-  return serializeSynchronization(async () => {
+  return serializeSynchronization('index-parsed-source', async () => {
     const db = getDatabase()
     const state = computeFileState(source.stateFilePath || source.filePath)
     if (!state) {
@@ -556,7 +897,7 @@ export async function indexCanonicalSession(
   records: CanonicalRecord[],
   options: { includeThinking?: boolean; shouldCancel?: () => boolean } = {}
 ): Promise<void> {
-  return serializeSynchronization(async () => {
+  return serializeSynchronization('canonical-index', async () => {
     throwIfSearchIndexSyncCancelled(options.shouldCancel)
     const session = canonicalSessionRecord(records)
     if (session.sourceSessionId !== sessionId) throw new Error('canonical-search-session-id-mismatch')
@@ -645,7 +986,7 @@ export async function tombstoneCanonicalSession(
   sessionRecordId: string,
   options: { shouldCancel?: () => boolean } = {}
 ): Promise<void> {
-  return serializeSynchronization(async () => {
+  return serializeSynchronization('canonical-tombstone', async () => {
     throwIfSearchIndexSyncCancelled(options.shouldCancel)
     removeIndexedFile(getDatabase(), canonicalIndexKey(sessionRecordId), options.shouldCancel)
   })
@@ -655,7 +996,7 @@ export async function synchronizeSearchSources(
   sources: SearchIndexSource[],
   options: { prune?: boolean; shouldCancel?: () => boolean } = { prune: true }
 ): Promise<void> {
-  return serializeSynchronization(async () => {
+  return serializeSynchronization(options.prune === false ? 'live-sync' : 'full-sync', async () => {
     throwIfSearchIndexSyncCancelled(options.shouldCancel)
     const uniqueSources = new Map(sources.map((source) => [source.filePath, source]))
     // Progress of a full pass that re-projects files (after a
@@ -728,7 +1069,8 @@ export function probeSearchProjection(): SearchProjectionProbe | null {
         ? { legacyRows: counts.legacyRows, staleLegacyRows: counts.staleLegacyRows }
         : { legacyRows: counts.legacyRows, staleLegacyRows: counts.legacyRows }
     })
-  } catch {
+  } catch (error) {
+    if (isSearchIndexCorruption(error)) reportCorruptRead('probe', error)
     return null
   }
 }
@@ -742,8 +1084,16 @@ function toFtsQuery(query: string): string | null {
 export function searchFTS(query: string, limit = 50): SearchIndexResult[] {
   const ftsQuery = toFtsQuery(query)
   if (!ftsQuery || limit <= 0) return []
-  const db = getReadOnlyDatabase()
-  return db ? searchFTSFromDatabase(db, ftsQuery, limit) : []
+  try {
+    const db = getReadOnlyDatabase()
+    return db ? searchFTSFromDatabase(db, ftsQuery, limit) : []
+  } catch (error) {
+    // F1d-3: a corrupt index answers nothing instead of failing the search;
+    // the writer's thread moves it aside and rebuilds it.
+    if (!isSearchIndexCorruption(error)) throw error
+    reportCorruptRead('search', error)
+    return []
+  }
 }
 
 function searchFTSFromDatabase(
@@ -935,11 +1285,18 @@ export function searchIndexConnectionStats(): {
 
 export function closeSearchIndex(): void {
   if (database) database.close()
+  if (failedWriterDatabase) failedWriterDatabase.close()
+  failedWriterDatabase = null
   if (readDatabase) readDatabase.close()
   database = null
   databasePath = ''
+  writerFileIdentity = null
   readDatabase = null
   readDatabasePath = ''
+  readDatabaseIdentity = null
+  reportedCorruptRead = null
+  lastSearchIndexRepairAt = null
+  deferredRepairReportedFor = null
   synchronizationTail = Promise.resolve()
   invalidateQueryCache()
 }

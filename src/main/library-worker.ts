@@ -34,9 +34,12 @@ import { buildCursorSessionSummary, loadCursorRawMessages } from './cursor-loade
 import { detectSessionSourceFromPath } from './session-source'
 import {
   closeSearchIndex,
+  deliverSearchIndexEvent,
   indexCanonicalSession,
+  setSearchIndexEventSink,
   synchronizeSearchSources,
-  tombstoneCanonicalSession
+  tombstoneCanonicalSession,
+  type SearchIndexEvent
 } from './search-index'
 import { closeUsageFactStore, synchronizeUsageFacts, type UsageFactAbsenceEvidence } from './usage-fact-store'
 import type { Folder, SessionSummary } from './types'
@@ -154,6 +157,12 @@ interface WorkerEnvelope {
 type WorkerReply =
   | { requestId: number; type: 'progress'; progress: LibraryWorkerProgress }
   | { requestId: number; type: 'result'; result: LibraryWorkerResult }
+  /**
+   * The search index this worker writes reports its own maintenance (F1d-3):
+   * the main thread logs it, and a repair closes the main thread's read
+   * connection to the moved file. Posted before the request's result.
+   */
+  | { requestId: number; type: 'search-index-event'; event: SearchIndexEvent }
   | {
       requestId: number
       type: 'error'
@@ -363,8 +372,13 @@ function assertWorkerTestSandbox(root?: string): void {
 
 if (!isMainThread && parentPort) {
   let requestTail: Promise<void> = Promise.resolve()
+  let activeRequestId = 0
+  setSearchIndexEventSink((event) => {
+    parentPort!.postMessage({ requestId: activeRequestId, type: 'search-index-event', event } satisfies WorkerReply)
+  })
   parentPort.on('message', ({ requestId, request }: WorkerEnvelope) => {
     requestTail = requestTail.then(async () => {
+      activeRequestId = requestId
       try {
         const result = await runLibraryWorkerRequest(request, (progress) => {
           parentPort!.postMessage({ requestId, type: 'progress', progress } satisfies WorkerReply)
@@ -696,6 +710,10 @@ export class LibraryWorkerClient {
     }
     this.workerArbiterParticipant = arbiterParticipant
     worker.on('message', (reply: WorkerReply) => {
+      if (reply.type === 'search-index-event') {
+        deliverSearchIndexEvent(reply.event)
+        return
+      }
       const pending = this.pending.get(reply.requestId)
       if (!pending) return
       if (reply.type === 'progress') {

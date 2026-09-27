@@ -184,7 +184,7 @@ describe('live Library synchronization architecture', () => {
     // load the evidence says so (physicalLoad null) instead of falling back
     // to the legacy delete-every-missing-row semantics.
     expect(usageSync).toMatch(
-      /usageFactSyncRunner\.schedule\(\{\s*sessions: \[\.\.\.cachedSessions\],[\s\S]*?absence: \{\s*physicalLoad: usageSyncPhysicalLoadEvidence\(\),\s*providerSettlement: latestProviderSettlementStatus,\s*excludedSources: \[\.\.\.getExcludedSources\(\)\]\s*\}/
+      /usageFactSyncRunner\.schedule\(\{\s*sessions: usageSyncSessions\(\),[\s\S]*?absence: \{\s*physicalLoad: usageSyncPhysicalLoadEvidence\(\),\s*providerSettlement: latestProviderSettlementStatus,\s*excludedSources: \[\.\.\.getExcludedSources\(\)\]\s*\}/
     )
     // F1g: withheld before the reset epoch has hydrated, never dropped and
     // never hard-wired to null (that would switch every F1f removal off).
@@ -253,6 +253,54 @@ describe('live Library synchronization architecture', () => {
     expect(revision).toContain('physicalLoadEvidence: usageSyncPhysicalLoadEvidence() !== null')
     expect(revision).not.toContain('latestPhysicalLoadEvidence')
     expect(revision).not.toContain('loadId')
+  })
+
+  it('F1g ② keeps the hydrated Library-only sessions in the usage snapshot across a whole replacement', () => {
+    // Phase 2b records every Library-only summary it adds, backup and
+    // manifest fallback alike, from the current generation only.
+    const hydration = source.match(/async function hydrateLibrarySessionsUnderGate[\s\S]*?\n}\n/)?.[0] || ''
+    const records = hydration.match(
+      /addSessionCoverage\(coveredIds, summary\)\n\s*if \(generation === libraryHydrationGeneration\) \{\n\s*libraryOnlyUsageSessions\.set\(summary\.id, \{[^}]*packageSessionId: sessionId,[^}]*projectionSource[^}]*\}\)\n\s*\}\n\s*batch\.push\(summary\)/g
+    ) || []
+    expect(records).toHaveLength(2)
+    expect(records[1]).toContain('projectionSource: evidencedSource')
+    expect(source.match(/libraryOnlyUsageSessions\.set\(/g)).toHaveLength(2)
+
+    // The snapshot adds only what no current summary covers, whose package
+    // is still in the latest tree, never a Provider package, never an
+    // excluded source (a carried row would count as present and rule 3
+    // could not remove it).
+    const snapshotSessions = source.match(/function usageSyncSessions\(\): SessionSummary\[\] \{[\s\S]*?\n}\n/)?.[0] || ''
+    expect(snapshotSessions).toContain('const sessions = [...cachedSessions]')
+    expect(snapshotSessions).toContain('const covered = collectSessionCoverage(sessions)')
+    expect(snapshotSessions).toContain('if (covered.has(summary.id) || covered.has(summary.sessionId)) continue')
+    expect(snapshotSessions).toContain('collectLibrarySessionsFromTree(latestLibraryTree)')
+    expect(snapshotSessions).toContain('!packaged.has(packageSessionId) || isProviderSession(summary)')
+    expect(snapshotSessions).toContain('const excludedSources = getExcludedSources()')
+    expect(snapshotSessions).toContain('isSessionSourceProjected(projectionSource, excludedSources)')
+    expect(snapshotSessions).toContain('addSessionCoverage(covered, summary)')
+    // cachedSessions itself is untouched: the renderer and re-parsing keep today's behavior.
+    expect(snapshotSessions).not.toMatch(/cachedSessions\s*=/)
+
+    // A root switch forgets the old root's packages.
+    expect(source).toMatch(
+      /async function performLibraryActivation[\s\S]*?latestLibraryTree = null\n\s*resetLibraryHydrationEpoch\(\)\n\s*libraryOnlyUsageSessions\.clear\(\)/
+    )
+    // Excluding sources keeps the epoch (the snapshot carries what stays
+    // projected) but supersedes the hydration in flight and starts another.
+    const exclusion = source.match(/ipcMain\.handle\('onboarding:setExcludedSources',[\s\S]*?\n}\)/)?.[0] || ''
+    expect(exclusion).toMatch(
+      /cachedSessions = sourceSessionInventory\.filtered\(excluded\)\n(?:\s*\/\/[^\n]*\n)*\s*libraryHydrationGeneration\+\+\n\s*if \(latestLibraryTree\) void hydrateLibrarySessions\(latestLibraryTree\)/
+    )
+    expect(exclusion).not.toContain('resetLibraryHydrationEpoch()')
+
+    // The end-to-end hold before Phase 2b is test-only and stays in the sandbox.
+    const hold = source.match(/async function waitForLibraryHydrationTestHold[\s\S]*?\n}\n/)?.[0] || ''
+    expect(hold).toContain("process.env.NODE_ENV !== 'test' || !testHome")
+    expect(hold).toContain('path.relative(path.resolve(testHome), path.resolve(holdPath))')
+    expect(hold).toContain('generation === libraryHydrationGeneration && !runtimeShuttingDown')
+    expect(source.match(/waitForLibraryHydrationTestHold\(generation\)/g)).toHaveLength(1)
+    expect(hydration).toMatch(/await waitForLibraryHydrationTestHold\(generation\)\n\s*const coveredIds = collectSessionCoverage\(cachedSessions\)/)
   })
 
   it('closes the shared writer coordinator before a mutation-incomplete fatal dialog', () => {

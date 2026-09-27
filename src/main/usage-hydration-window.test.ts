@@ -151,6 +151,27 @@ describe('the usage ledger around a Library hydration (F1g contract)', () => {
     expect(ledger()).toEqual(before)
   })
 
+  it('counts the hydrated Library-only summaries carried into a pre-hydration snapshot as present and unchanged', async () => {
+    const physical = await sessions('physical', 4, physicalSession)
+    const libraryOnly = await sessions('library-only', 3, libraryOnlySession)
+    synchronizeUsageFacts([...physical, ...libraryOnly], [], { absence: evidence('load-1') })
+    const before = ledger()
+
+    // What the desktop hands over after a whole replacement: no evidence yet,
+    // and the summaries the last hydration added ride along (F1g ②).
+    for (let load = 0; load < 2; load++) {
+      expect(synchronizeUsageFacts([...physical, ...libraryOnly], [], { absence: beforeHydration })).toMatchObject({
+        changedSessions: 0,
+        unchangedSessions: 7,
+        removedSessions: 0,
+        retainedSessions: 0,
+        heldRemovals: 0,
+        absences: []
+      })
+    }
+    expect(ledger()).toEqual(before)
+  })
+
   it('keeps an earlier hold through a pre-hydration round without confirming it; the hydrated input releases it', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     process.env.SWOB_USAGE_REMOVAL_MAX_COUNT = '2'

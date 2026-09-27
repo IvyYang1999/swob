@@ -405,6 +405,14 @@ let libraryHydrationGeneration = 0
 // only; they never make the physical-load evidence premature.
 let libraryResetEpoch = 0
 let libraryHydrationCompleteEpoch = -1
+// Library-only summaries that hydration Phase 2b added, by id. They stay out
+// of cachedSessions after a whole replacement until the next hydration, but
+// the usage snapshot keeps carrying them (usageSyncSessions).
+const libraryOnlyUsageSessions = new Map<string, {
+  summary: SessionSummary
+  packageSessionId: string
+  projectionSource: SessionSource | null
+}>()
 let libraryHydrationActive = 0
 let usageFactSyncError: unknown = null
 interface UsageFactSyncSnapshot {
@@ -1258,6 +1266,31 @@ function usageSyncPhysicalLoadEvidence(): SessionLoadEvidence | null {
 }
 
 /**
+ * The usage snapshot's sessions: cachedSessions, plus every Library-only
+ * session a hydration added that no current summary covers. A whole
+ * replacement leaves those out of cachedSessions until the next hydration;
+ * the ledger still sees them present, so it neither holds nor removes them
+ * meanwhile. Only packages still in the latest tree, of sources not
+ * excluded, and never a Provider package: an authoritative Provider refresh
+ * may drop one on purpose.
+ */
+function usageSyncSessions(): SessionSummary[] {
+  const sessions = [...cachedSessions]
+  if (libraryOnlyUsageSessions.size === 0 || !latestLibraryTree) return sessions
+  const covered = collectSessionCoverage(sessions)
+  const packaged = new Set(collectLibrarySessionsFromTree(latestLibraryTree).map((session) => session.sessionId))
+  const excludedSources = getExcludedSources()
+  for (const { summary, packageSessionId, projectionSource } of libraryOnlyUsageSessions.values()) {
+    if (covered.has(summary.id) || covered.has(summary.sessionId)) continue
+    if (!packaged.has(packageSessionId) || isProviderSession(summary)) continue
+    if (!isSessionSourceProjected(projectionSource, excludedSources)) continue
+    addSessionCoverage(covered, summary)
+    sessions.push(summary)
+  }
+  return sessions
+}
+
+/**
  * Serialize fact writes in a dedicated worker. The query path only waits for
  * the current snapshot; it never parses source JSONL or performs a new scan.
  */
@@ -1318,7 +1351,7 @@ function scheduleUsageFactSyncNow(options: { rebuild?: boolean } = {}): Promise<
     })
   }
   const run = usageFactSyncRunner.schedule({
-    sessions: [...cachedSessions],
+    sessions: usageSyncSessions(),
     folders: currentAnalysisFolders(),
     rebuild: options.rebuild === true,
     absence: {
@@ -1959,6 +1992,23 @@ function resetLibraryHydrationEpoch(): void {
   libraryHydrationGeneration++
 }
 
+/**
+ * Test only: while the file SWOB_TEST_LIBRARY_HYDRATION_HOLD names exists, a
+ * hydration waits before Phase 2b, so an end-to-end test can hold the
+ * pre-hydration window open. Inert unless NODE_ENV=test and SWOB_TEST_HOME is
+ * set, with the hold file inside it.
+ */
+async function waitForLibraryHydrationTestHold(generation: number): Promise<void> {
+  const holdPath = process.env.SWOB_TEST_LIBRARY_HYDRATION_HOLD
+  const testHome = process.env.SWOB_TEST_HOME
+  if (!holdPath || process.env.NODE_ENV !== 'test' || !testHome) return
+  const relative = path.relative(path.resolve(testHome), path.resolve(holdPath))
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return
+  while (fs.existsSync(holdPath) && generation === libraryHydrationGeneration && !runtimeShuttingDown) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}
+
 async function hydrateLibrarySessions(tree: LibraryTree): Promise<void> {
   libraryHydrationActive++
   try {
@@ -2021,6 +2071,7 @@ async function hydrateLibrarySessionsUnderGate(tree: LibraryTree): Promise<void>
   // Phase 2b: parse Library-only backups incrementally instead of blocking the first paint.
   // If backup.jsonl is absent/placeholder/unparseable, the small manifest still
   // produces a visible session with explicit download/SSH capabilities.
+  await waitForLibraryHydrationTestHold(generation)
   const coveredIds = collectSessionCoverage(cachedSessions)
   for (const librarySession of librarySessions) {
     if (generation !== libraryHydrationGeneration) return
@@ -2044,6 +2095,9 @@ async function hydrateLibrarySessionsUnderGate(tree: LibraryTree): Promise<void>
       if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
       if (meta.customTitle) (summary as any)._libraryTitle = meta.customTitle
       addSessionCoverage(coveredIds, summary)
+      if (generation === libraryHydrationGeneration) {
+        libraryOnlyUsageSessions.set(summary.id, { summary, packageSessionId: sessionId, projectionSource })
+      }
       batch.push(summary)
       if (batch.length >= batchSize) await flush()
     } catch {
@@ -2058,6 +2112,13 @@ async function hydrateLibrarySessionsUnderGate(tree: LibraryTree): Promise<void>
       if (remoteState.remoteHost) summary.remoteHost = remoteState.remoteHost
       if (meta.customTitle) (summary as any)._libraryTitle = meta.customTitle
       addSessionCoverage(coveredIds, summary)
+      if (generation === libraryHydrationGeneration) {
+        libraryOnlyUsageSessions.set(summary.id, {
+          summary,
+          packageSessionId: sessionId,
+          projectionSource: evidencedSource
+        })
+      }
       batch.push(summary)
       if (batch.length >= batchSize) await flush()
     }
@@ -4948,6 +5009,7 @@ async function performLibraryActivation(
     libraryInitializationPromise = null
     latestLibraryTree = null
     resetLibraryHydrationEpoch()
+    libraryOnlyUsageSessions.clear()
     await Promise.all([
       previousWorker?.close(),
       previousLiveSessionSyncWorker?.close(),
@@ -5203,6 +5265,12 @@ ipcMain.handle('onboarding:setExcludedSources', async (_event, excludedSources: 
   setExcludedSources(excluded)
   await reconcileCanonicalProviderProjection()
   cachedSessions = sourceSessionInventory.filtered(excluded)
+  // A hydration in flight would merge the newly excluded sources back from its
+  // old snapshot: supersede it and hydrate the current tree again. The reset
+  // epoch stays, because the usage snapshot still carries the Library-only
+  // sessions that remain projected (usageSyncSessions).
+  libraryHydrationGeneration++
+  if (latestLibraryTree) void hydrateLibrarySessions(latestLibraryTree)
   refreshCachedMissingSources()
   await reconcileSearchIndexProjection()
   void scheduleUsageFactSync()

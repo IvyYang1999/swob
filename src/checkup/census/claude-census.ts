@@ -17,6 +17,24 @@ export function emptyLossKinds(): Record<LossKind, number> {
 
 export type ClaudeUnitKind = 'claude-main' | 'claude-subagent' | 'claude-other'
 
+/**
+ * ⑤ Token: one assistant row's usage, reduced to its dedup identity and four billable components
+ * (design §四 4.5, ccusage-style — the aggregate `cache_creation_input_tokens`, not the 5m/1h breakdown;
+ * a difference from Swob's own breakdown-preferring total on requests that carry both is the registered
+ * calibration difference `token-accounting.ts:554-568` documents).
+ */
+export interface ClaudeUsageSnapshot {
+  messageId: string | null
+  requestId: string | null
+  /** Fallback identity when a row has neither id (kept so it is never silently dropped). */
+  uuid: string | null
+  hasStopReason: boolean
+  nonCachedInput: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+}
+
 export interface ClaudeUnit {
   /** Real path (internal only; never reported). */
   path: string
@@ -50,6 +68,10 @@ export interface ClaudeUnit {
   /** Subset of hazards caused by literal U+2028/U+2029. */
   lineSeparatorKinds: Record<LossKind, number>
   timeRange: { min: string | null; max: string | null }
+  /** ⑤ Token: this file's own usage-bearing assistant rows (fork-inherited rows excluded, see below). */
+  usageSnapshots: ClaudeUsageSnapshot[]
+  /** Assistant rows with usage that carried Claude Code's own `forkedFrom` marker (excluded, not copies). */
+  forkInheritedUsageRows: number
 }
 
 export interface ClaudeCensus {
@@ -59,6 +81,18 @@ export interface ClaudeCensus {
   otherBytes: number
   lowerSymlinks: number
   unreadableDirs: number
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 export function claudeLossKind(record: Record<string, unknown>): LossKind {
@@ -145,6 +179,8 @@ export async function censusClaudeFile(
   let compactBoundaryRows = 0
   let compactBoundaryRowsWithoutUuid = 0
   let compactSummaryRows = 0
+  const usageSnapshots: ClaudeUsageSnapshot[] = []
+  let forkInheritedUsageRows = 0
 
   const before = fingerprint(filePath)
   let stats: JsonlFileStats = emptyJsonlStats()
@@ -158,7 +194,30 @@ export async function censusClaudeFile(
         if (typeof entry.sessionId === 'string' && sessionIds.size < 256) sessionIds.add(entry.sessionId)
         const type = entry.type
         if (type === 'user') userRecords++
-        else if (type === 'assistant') assistantRecords++
+        else if (type === 'assistant') {
+          assistantRecords++
+          // ⑤ Token oracle (design §四 4.5): Claude Code's own `forkedFrom` marker means this row is a
+          // copy already counted in its origin session (token-accounting.ts accountClaudeUsage does the
+          // same exclusion); everything else with a usage object is a candidate billing snapshot.
+          if (entry.forkedFrom) {
+            forkInheritedUsageRows++
+          } else {
+            const message = asRecord(entry.message)
+            const usage = asRecord(message?.usage)
+            if (usage) {
+              usageSnapshots.push({
+                messageId: asString(message?.id),
+                requestId: asString(entry.requestId) ?? asString(message?.request_id),
+                uuid: asString(entry.uuid),
+                hasStopReason: !!message?.stop_reason,
+                nonCachedInput: asNumber(usage.input_tokens) ?? 0,
+                cacheRead: asNumber(usage.cache_read_input_tokens) ?? 0,
+                cacheWrite: asNumber(usage.cache_creation_input_tokens) ?? 0,
+                output: asNumber(usage.output_tokens) ?? 0
+              })
+            }
+          }
+        }
         if (type === 'user' || type === 'assistant' || type === 'system') conversationRecords++
         if (type === 'system' && entry.subtype === 'compact_boundary') {
           compactBoundaryRows++
@@ -198,6 +257,106 @@ export async function censusClaudeFile(
     compactSummaryRows,
     hazardKinds,
     lineSeparatorKinds,
-    timeRange: { min: timeRange.min, max: timeRange.max }
+    timeRange: { min: timeRange.min, max: timeRange.max },
+    usageSnapshots,
+    forkInheritedUsageRows
+  }
+}
+
+interface ClaudeUsageGroup {
+  hasStopReason: boolean
+  /** Tie-break ("没有就取数值最大的"): sum of the four components, mirroring processedTotal's shape. */
+  score: number
+  nonCachedInput: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+}
+
+export interface RecountedClaudeUsage {
+  components: { nonCachedInput: number; cacheRead: number; cacheWrite: number; output: number }
+  /** nonCachedInput + cacheRead + cacheWrite + output (mirrors token-accounting.ts#processedTotal). */
+  billingTotal: number
+  uniqueRequests: number
+  /** Rows excluded because they carried Claude Code's own `forkedFrom` marker. */
+  forkInheritedRows: number
+}
+
+function betterClaudeGroup(candidate: ClaudeUsageGroup, current: ClaudeUsageGroup): boolean {
+  const candidateRank = candidate.hasStopReason ? 1 : 0
+  const currentRank = current.hasStopReason ? 1 : 0
+  return candidateRank > currentRank || (candidateRank === currentRank && candidate.score > current.score)
+}
+
+function claudeUsageGroup(snapshot: ClaudeUsageSnapshot): ClaudeUsageGroup {
+  return {
+    hasStopReason: snapshot.hasStopReason,
+    score: snapshot.nonCachedInput + snapshot.cacheRead + snapshot.cacheWrite + snapshot.output,
+    nonCachedInput: snapshot.nonCachedInput,
+    cacheRead: snapshot.cacheRead,
+    cacheWrite: snapshot.cacheWrite,
+    output: snapshot.output
+  }
+}
+
+/** `message.id` / `requestId` aliases; a row with neither falls back to its own uuid, then its position. */
+function claudeUsageAliases(snapshot: ClaudeUsageSnapshot, index: number): string[] {
+  const aliases: string[] = []
+  if (snapshot.messageId) aliases.push(`message:${snapshot.messageId}`)
+  if (snapshot.requestId) aliases.push(`request:${snapshot.requestId}`)
+  if (aliases.length > 0) return aliases
+  if (snapshot.uuid) return [`uuid:${snapshot.uuid}`]
+  return [`row:${index}`]
+}
+
+/**
+ * ⑤ Token census-level Claude oracle (design §四 4.5, ccusage-style): every assistant row's usage across
+ * `units`, deduplicated by `message.id`/`requestId`. A later row can be the first to carry both aliases at
+ * once, merging two groups that until then looked separate (a partial streaming snapshot, then a complete
+ * one); the group's kept snapshot is the one with a `stop_reason`, else the numerically larger one.
+ *
+ * Global by construction, like `codexRecountB`: it only reads `units[].usageSnapshots`, never a readout or
+ * session list. Restricting to one family's units (main + its subagent files) for a per-session comparison
+ * is `checks/tokens.ts`'s job — call this again with just that subset.
+ */
+export function claudeRecountUsage(units: readonly ClaudeUnit[]): RecountedClaudeUsage {
+  const groupOf = new Map<string, string>()
+  const groups = new Map<string, ClaudeUsageGroup>()
+  let nextGroupId = 0
+  let forkInheritedRows = 0
+  let index = 0
+  for (const unit of units) {
+    forkInheritedRows += unit.forkInheritedUsageRows
+    for (const snapshot of unit.usageSnapshots) {
+      const aliases = claudeUsageAliases(snapshot, index++)
+      const existingIds = [...new Set(aliases.map((alias) => groupOf.get(alias)).filter((id): id is string => !!id))]
+      const targetId = existingIds[0] ?? `g${nextGroupId++}`
+      // A row that bridges two previously separate groups: keep the better of the two, then delete the other.
+      for (const otherId of existingIds.slice(1)) {
+        if (otherId === targetId) continue
+        const other = groups.get(otherId)
+        const current = groups.get(targetId)
+        if (other) groups.set(targetId, !current || betterClaudeGroup(other, current) ? other : current)
+        groups.delete(otherId)
+        for (const [alias, id] of groupOf) if (id === otherId) groupOf.set(alias, targetId)
+      }
+      const candidate = claudeUsageGroup(snapshot)
+      const current = groups.get(targetId)
+      groups.set(targetId, !current || betterClaudeGroup(candidate, current) ? candidate : current)
+      for (const alias of aliases) groupOf.set(alias, targetId)
+    }
+  }
+  const components = { nonCachedInput: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
+  for (const group of groups.values()) {
+    components.nonCachedInput += group.nonCachedInput
+    components.cacheRead += group.cacheRead
+    components.cacheWrite += group.cacheWrite
+    components.output += group.output
+  }
+  return {
+    components,
+    billingTotal: components.nonCachedInput + components.cacheRead + components.cacheWrite + components.output,
+    uniqueRequests: groups.size,
+    forkInheritedRows
   }
 }

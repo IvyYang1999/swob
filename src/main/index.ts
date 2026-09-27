@@ -35,8 +35,10 @@ import {
   findAllSessionFiles,
   findClaudeSessionFiles,
   buildSessionSummaryFromBackup,
+  probeSummaryCache,
   SUMMARY_CACHE_VERSION,
-  type SessionLoadEvidence
+  type SessionLoadEvidence,
+  type SummaryCacheProbe
 } from './session-loader'
 import {
   beginSessionBootstrap,
@@ -192,7 +194,13 @@ import {
   resolveSessionProjectionSource
 } from './session-projection-policy'
 import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
-import { closeSearchIndex } from './search-index'
+import {
+  closeSearchIndex,
+  probeSearchProjection,
+  SEARCH_PROJECTION_VERSION,
+  searchDatabasePath,
+  type SearchProjectionProbe
+} from './search-index'
 import {
   closeSearchIndexWriteCoordinator,
   getSearchIndexWriteCoordinator,
@@ -433,6 +441,10 @@ interface UsageFactSyncSnapshot {
 }
 let usageFactSyncRunner: LatestSnapshotRunner<UsageFactSyncSnapshot, UsageFactSyncResult> | null = null
 const startupProjectionGate = new StartupProjectionGate<UsageFactSyncResult>()
+/** The derived caches are probed once per process, before its first load (F1d). */
+let startupCacheProbed = false
+/** Handed the next full search snapshot a warmup starts, once (F1d: cache-rebuild-finished). */
+let searchSnapshotObserver: ((snapshot: Promise<void>) => void) | null = null
 let runtimeShuttingDown = false
 let libraryRuntimeEpoch = 0
 let libraryRuntimePaused = false
@@ -1178,11 +1190,16 @@ function scheduleSearchIndexWarmupNow(): Promise<void> {
       run: () => {
         started = true
         try {
-          void getSearchIndexWriteCoordinator().scheduleLegacySnapshot(currentSearchSources())
-            .then(() => {
-              notifySearchIndexUpdated()
-              resolve()
-            }, reject)
+          const snapshot = getSearchIndexWriteCoordinator().scheduleLegacySnapshot(currentSearchSources())
+          // A startup cache rebuild (F1d) waits for this snapshot itself: the
+          // sibling timer below may settle the queue item before it starts.
+          const observer = searchSnapshotObserver
+          searchSnapshotObserver = null
+          observer?.(snapshot)
+          void snapshot.then(() => {
+            notifySearchIndexUpdated()
+            resolve()
+          }, reject)
         } catch (error) {
           reject(error)
         }
@@ -1250,6 +1267,117 @@ function reconcileSearchIndexProjection(): Promise<void> {
 function scheduleSearchIndexWarmup(): void {
   void reconcileSearchIndexProjection().catch((error) => {
     if (!runtimeShuttingDown) console.error('[search-index] queued warmup dropped:', error)
+  })
+}
+
+type StartupCacheRebuildReason =
+  | 'summary-cache-version'
+  | 'summary-cache-legacy-json'
+  | 'search-projection-version'
+
+interface StartupCacheRebuild {
+  readonly startedAt: number
+  readonly reasons: StartupCacheRebuildReason[]
+}
+
+/**
+ * Why this startup re-derives the caches (F1d); empty when both hold what
+ * this build writes. Pure: vitest evaluates it from this file's text.
+ */
+function startupCacheRebuildReasons(
+  summaryCache: SummaryCacheProbe,
+  searchProjection: SearchProjectionProbe | null
+): StartupCacheRebuildReason[] {
+  const reasons: StartupCacheRebuildReason[] = []
+  // Written under another CACHE_VERSION: the first writable load re-reads every session.
+  if (summaryCache.state === 'stale') reasons.push('summary-cache-version')
+  // Only the pre-SQLite JSON cache (v25-27) is left, which v30 never reuses either.
+  if (summaryCache.state === 'missing' && summaryCache.legacyJson) reasons.push('summary-cache-legacy-json')
+  // Rows projected under another SEARCH_PROJECTION_VERSION, or another search.db schema.
+  if (searchProjection && searchProjection.staleLegacyRows > 0) reasons.push('search-projection-version')
+  return reasons
+}
+
+/**
+ * F1d: once per process, before its first load can write the summary cache,
+ * look (read-only) at what the derived caches were built under. When they
+ * were built under another version this startup re-derives them, so the
+ * startup gate runs the full Search and Usage projections even with no
+ * dirty Library session, instead of leaving the search re-projection to the
+ * next full warmup that happens to come. prepareStartup only upgrades
+ * skip -> run. Later loads of this process (a renderer reload, the Agent
+ * window) would find the cache this process rewrote, so they never probe; a
+ * startup with both caches current never triggers. A probe that cannot read
+ * is reported, not taken for "up to date", and does not trigger either: it
+ * cannot tell what is stale, and a rebuild would not repair it.
+ */
+function planStartupCacheRebuild(): StartupCacheRebuild | null {
+  if (startupCacheProbed) return null
+  startupCacheProbed = true
+  const summaryCache = probeSummaryCache()
+  const searchProjection = probeSearchProjection()
+  const searchIndexUnreadable = !searchProjection && fs.existsSync(searchDatabasePath())
+  if (summaryCache.state === 'unreadable' || searchIndexUnreadable) {
+    writeLifecycleLog('cache-probe-unreadable', {
+      summaryCache: summaryCache.state,
+      searchIndex: searchIndexUnreadable ? 'unreadable' : searchProjection ? 'readable' : 'missing'
+    })
+  }
+  const reasons = startupCacheRebuildReasons(summaryCache, searchProjection)
+  if (reasons.length === 0) return null
+  startupProjectionGate.prepareStartup(true)
+  writeLifecycleLog('cache-rebuild-started', {
+    reasons,
+    summaryCache: {
+      state: summaryCache.state,
+      version: summaryCache.version,
+      rows: summaryCache.rows,
+      legacyJson: summaryCache.legacyJson
+    },
+    summaryCacheVersion: SUMMARY_CACHE_VERSION,
+    searchProjection: searchProjection
+      ? { legacyRows: searchProjection.legacyRows, staleLegacyRows: searchProjection.staleLegacyRows }
+      : null,
+    searchProjectionVersion: SEARCH_PROJECTION_VERSION
+  })
+  return { startedAt: Date.now(), reasons }
+}
+
+/**
+ * cache-rebuild-finished, once the startup's writable load (the summary
+ * cache) and the first full search snapshot after the probe (the startup
+ * projection) have both settled: how each ended, how long since the probe,
+ * and what the probes find now. The snapshot is observed directly: the
+ * gate's queue item for it may settle before the snapshot even starts.
+ * Nothing when the process quits first.
+ */
+function trackStartupCacheRebuild(rebuild: StartupCacheRebuild, summary: Promise<unknown>): void {
+  const search = new Promise<void>((resolve, reject) => {
+    searchSnapshotObserver = (snapshot) => { void snapshot.then(resolve, reject) }
+  })
+  const settle = (work: Promise<unknown>): Promise<Record<string, unknown>> => work.then(
+    () => ({ outcome: 'ok', ms: Date.now() - rebuild.startedAt }),
+    (error: unknown) => ({
+      outcome: 'failed',
+      ms: Date.now() - rebuild.startedAt,
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorCode: errorCodeOf(error)
+    })
+  )
+  void Promise.all([settle(summary), settle(search)]).then(([summaryOutcome, searchOutcome]) => {
+    if (runtimeShuttingDown) return
+    const summaryCache = probeSummaryCache()
+    const searchProjection = probeSearchProjection()
+    writeLifecycleLog('cache-rebuild-finished', {
+      reasons: rebuild.reasons,
+      summary: summaryOutcome,
+      search: searchOutcome,
+      summaryCache: { state: summaryCache.state, version: summaryCache.version, rows: summaryCache.rows },
+      searchProjection: searchProjection
+        ? { legacyRows: searchProjection.legacyRows, staleLegacyRows: searchProjection.staleLegacyRows }
+        : null,
+      elapsedMs: Date.now() - rebuild.startedAt
+    })
   })
 }
 
@@ -3384,6 +3512,8 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   // Reading an existing registry is cheap. A first-run rebuild stays in the
   // background so lineage cannot delay the first session-list paint.
   const diskLineage = readSessionLineageRegistry()
+  // Before any load of this process can write the summary cache (F1d).
+  const cacheRebuild = planStartupCacheRebuild()
   latestProviderSettlementStatus = null
   let omitCachedUsageEvents = false
   try {
@@ -3419,6 +3549,7 @@ ipcMain.handle('sessions:loadAll', async (event) => {
   librarySessionInventoryReady = true
   scheduleSearchIndexWarmup()
   void scheduleUsageFactSync()
+  if (cacheRebuild) trackStartupCacheRebuild(cacheRebuild, bootstrap.completion)
   knownSessionIds.clear()
 
   // Phase 1: physical source summaries are authoritative and immediately

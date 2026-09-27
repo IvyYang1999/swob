@@ -968,11 +968,12 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
   it.each([
     ['作用域：main 胜过更早的 subagent 副本', 'rank-scope',
       { a: { scope: 'sidechain' as const, timestamp: at(0) }, b: { timestamp: at(1) } }, 'b', null, null],
-    // scopeRank：main 0、subagent 1、其余（这里用 'inherited'）2。subagent 排在其他作用域之前，
-    // 即便它的一份更晚：作用域先于时间，与 main/subagent 那一档同一套比较顺序。两份都不是 main，
-    // conversationOnly 与哪份胜出无关，恒为 0（覆盖默认的「胜者即 conversationOnly」）。
-    ['作用域：subagent 胜过更早的其他（inherited）副本', 'rank-scope-subagent',
-      { a: { scope: 'inherited' as const, timestamp: at(0) }, b: { scope: 'subagent' as const, timestamp: at(1) } }, 'b', null, 0],
+    // scopeRank：main 0、subagent 1、其余 2。sidechain 与 subagent 同属 subagent 一档，档内看时间。两份都不是
+    // main，conversationOnly 与哪份胜出无关，恒为 0（覆盖默认的「胜者即 conversationOnly」）。「subagent 先于
+    // 其他」那一档原先借 'inherited' 造：F1m 起 inherited 副本不再参与竞争（见下一条用例），这一档改由
+    // billing-identity.test.ts 的纯函数与账本 SQL 对拍守。
+    ['作用域：sidechain 与 subagent 同档，更早的一份胜出', 'rank-scope-subagent',
+      { a: { scope: 'subagent' as const, timestamp: at(1) }, b: { scope: 'sidechain' as const, timestamp: at(0) } }, 'b', null, 0],
     ['时间：更早的一份胜出', 'rank-time', { a: { timestamp: at(1) }, b: { timestamp: at(0) } }, 'b', 'a', null],
     ['NULL：有时间的一份胜过没有时间的', 'rank-null', { a: {}, b: { timestamp: at(1) } }, 'b', null, null],
     ['event_id：同一时间取 event_id 小的', 'rank-event-id', { a: { timestamp: at(1) }, b: { timestamp: at(1) } }, 'b', 'b', null],
@@ -1010,6 +1011,26 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
         crossSessionDuplicateTokens: 3_000 - expected.totalTokens,
         ok: true,
         valuation: { crossSessionDuplicateUsd: 3 - expected.usd, ok: true }
+      })
+    }
+  })
+
+  // F1m：加载层把一份副本标成 inherited（它的计费事实记在别的会话上），它就不再是本会话的 owner，
+  // 也不参与跨会话竞争；哪怕没有 inheritedFrom，也按 inherited 处理（uniqueBillingEvents 跳过它）。
+  it('inherited 副本不参与跨会话竞争：全局只算另一份，它所在会话的账不含它', () => {
+    const a = ledgerSession('inherited-a', '/inherited/a', [call({ id: 'inherited-shared', usd: 1, input: 1_000, scope: 'inherited', timestamp: at(0) })])
+    const b = ledgerSession('inherited-b', '/inherited/b', [call({ id: 'inherited-shared', usd: 2, input: 2_000, scope: 'subagent', timestamp: at(1) })])
+    for (const order of [[a, b], [b, a]]) {
+      const result = buildInsights(order, [])
+      expect(result.totalTokens).toBe(2_000)
+      expect(result.valuation.usd).toBe(2)
+      expect(Object.fromEntries(result.byProject.map((project) => [project.fullPath, project.totalTokens])))
+        .toEqual({ '/inherited/a': 0, '/inherited/b': 2_000 })
+      expect(Object.fromEntries(result.bySession.map((session) => [session.sessionId, session.totalTokens])))
+        .toEqual({ 'inherited-a': 0, 'inherited-b': 2_000 })
+      expect(result.reconciliation).toMatchObject({
+        crossSessionDuplicateFacts: 0, crossSessionDuplicateTokens: 0, ok: true,
+        valuation: { crossSessionDuplicateUsd: 0, ok: true }
       })
     }
   })
@@ -1195,7 +1216,8 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
 
     it.each([
       ['作用域：main 先于 subagent', [{ scope: 'sidechain' as const, timestamp: at(0) }, { timestamp: at(1) }]],
-      ['作用域：subagent 先于其他（inherited）', [{ scope: 'inherited' as const, timestamp: at(0) }, { scope: 'subagent' as const, timestamp: at(1) }]],
+      ['作用域：sidechain 与 subagent 同档，看时间', [{ scope: 'subagent' as const, timestamp: at(1) }, { scope: 'sidechain' as const, timestamp: at(0) }]],
+      ['时间按原串比较：同一时刻 .000Z 排在 Z 前', [{ timestamp: `${RAW_INSTANT}Z` }, { timestamp: `${RAW_INSTANT}.000Z` }]],
       ['时间：更早胜出', [{ timestamp: at(1) }, { timestamp: at(0) }]],
       ['NULL：有时间胜过没有时间', [{}, { timestamp: at(1) }]],
       ['event_id：同一时间取更小的', [{ timestamp: at(1) }, { timestamp: at(1) }]]

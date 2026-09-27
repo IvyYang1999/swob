@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { SessionGroup, SessionSummary } from './session-types'
-import { accountingForSession, totalCacheWriteTokens } from './token-accounting'
+import { accountingForSession, observedUsageScope, totalCacheWriteTokens } from './token-accounting'
 import { previewUsageEventRepricing, valueUsageEvent, type Valuation } from './token-valuation'
 import { PRICING_CATALOG_VERSION } from './pricing-catalog'
 import { searchDatabasePath } from './search-index'
@@ -576,6 +576,9 @@ export function usageFactsForSession(
   const rootId = options.rootSessionId || rootSessionId(session)
   return accounting.usageEvents.map((event) => {
     const time = normalizedTimestamp(event.timestamp)
+    // A copy the load counted in another session (scope 'inherited', F1m) is
+    // recorded as observed: billing_rank ranks it as before and picks the same owner.
+    const scope = observedUsageScope(event)
     const rawModel = event.modelRaw || event.model || null
     const canonicalModel = event.modelCanonical || event.model || null
     const eventId = usageFactEventId(source, session.sessionId, event)
@@ -597,7 +600,7 @@ export function usageFactsForSession(
       sourceClient: source,
       sessionId: session.sessionId,
       rootSessionId: rootId,
-      agentScope: billingAgentScope(event.scope),
+      agentScope: billingAgentScope(scope),
       projectPath: project,
       model: canonicalModel,
       modelRaw: rawModel,
@@ -616,7 +619,7 @@ export function usageFactsForSession(
       reasoningTokens: event.components.reasoningTokens || 0,
       usageProvenance: event.provenance,
       callCount: 1,
-      turnCount: event.scope === 'main' ? 1 : 0,
+      turnCount: scope === 'main' ? 1 : 0,
       costUsd: valuation.usd ?? null,
       pricingProvenance: valuation.mode,
       pricedTokens: valuation.coveredTokens,

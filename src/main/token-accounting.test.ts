@@ -147,7 +147,8 @@ describe('token accounting', () => {
       ...accounting,
       usageEvents: [],
       usageEventRollups: accounting.usageEvents.map((event): CompactUsageEventRollup => [
-        event.billingFactKey || event.dedupKey,
+        event.dedupKey,
+        event.billingFactKey || null,
         event.scope,
         event.provenance,
         event.components.nonCachedInputTokens,
@@ -156,7 +157,9 @@ describe('token accounting', () => {
         event.components.cacheWrite5mTokens,
         event.components.cacheWrite1hTokens,
         event.components.outputTokens,
-        event.components.reasoningTokens || 0
+        event.components.reasoningTokens || 0,
+        event.timestamp || null,
+        event.auditSourceId || null
       ]),
       usageEventsOmitted: true
     })

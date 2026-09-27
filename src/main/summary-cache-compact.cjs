@@ -1,7 +1,13 @@
+// One usage copy of the compact column (token-accounting.ts CompactUsageEventRollup,
+// summary-cache v31). Since F1m it keeps the billing identity usage-facts derives
+// (dedupKey and billingFactKey apart, the timestamp, the auditSourceId): a load
+// decides cross-session ownership on read, from cached summaries too, and ranks
+// copies by it. Ownership itself is never cached.
 function usageEventRollup(event) {
   const components = event.components
   return [
-    event.billingFactKey || event.dedupKey,
+    event.dedupKey,
+    event.billingFactKey || null,
     event.scope,
     event.provenance,
     components.nonCachedInputTokens,
@@ -10,7 +16,9 @@ function usageEventRollup(event) {
     components.cacheWrite5mTokens,
     components.cacheWrite1hTokens,
     components.outputTokens,
-    components.reasoningTokens || 0
+    components.reasoningTokens || 0,
+    event.timestamp || null,
+    event.auditSourceId || null
   ]
 }
 

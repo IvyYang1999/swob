@@ -8,6 +8,7 @@ swob where <id-or-prefix> --json
 swob transcript status <id-or-prefix> --json
 swob transcript rebuild <id-or-prefix> [--dry-run]
 swob doctor locks --json
+swob doctor locks --recover --evidence <hash> --confirm RECOVER_LIBRARY_WRITER_LOCK --json
 swob doctor library --json
 swob doctor checkup --report <目录|文件.md> [--json]
 ```
@@ -42,6 +43,8 @@ dry-run 会解析目标 source/backup 并报告将写入的 transcript 数量，
 ## Doctor
 
 `doctor locks` 只调用 t190 权威 lease inspector，只读报告 writer 是否占用、owner PID/模式、存活性、heartbeat、lease、恢复证据哈希与是否可进入显式恢复。它不会创建 host identity 或 `.swob/locks`，不会删除或移动锁；活 owner 永远显示为不可抢占。
+
+**显式恢复写锁。** `swob doctor locks --recover --evidence <hash> --confirm RECOVER_LIBRARY_WRITER_LOCK` 调用同一个 t190 手动恢复函数（桌面端启动时的【恢复锁】也是它）。`--recover`、`--evidence`、`--confirm` 缺一即拒绝，只给 `--evidence`/`--confirm` 而不给 `--recover` 也拒绝；`<hash>` 必须是先运行 `doctor locks --json` 得到的 `evidenceHash`（64 位十六进制），确认字串必须逐字为 `RECOVER_LIBRARY_WRITER_LOCK`。参数齐全后先做只读核对：锁不存在（`unlocked`）、证据哈希与当前锁不一致（`evidence-changed`，例如 owner 仍在续租）或 owner 是本机存活进程（`active-owner`）都在进入写路径之前拒绝；通过后才取得恢复 claim、再次核对证据，把整个锁目录原子改名进 `.swob/locks/writer-recovery-evidence/`（只移动、不删除，可逆）。stdout 始终是 `{ recovered, reason, quarantinePath? }`：成功时退出 `0`、`reason` 为 `recovered`；未恢复时退出 `1`，`reason` 是原因码（`recover-flag-required`、`evidence-required`、`confirmation-required`、`unlocked`、`evidence-changed`、`active-owner`、`recovery-in-progress`），stderr 另写一行结构化错误（`code: LIBRARY_WRITER_RECOVERY_REFUSED`，含 `reason`、`hint`、`retryable`）。恢复会取得本机身份（与普通写入相同），所以只应在确认其它设备上的 Swob 没有在使用这个 Library 时执行。
 
 `doctor library` 返回明确标记为 `instantaneous-filesystem` 的 `LibraryDoctorSnapshot`，不伪造 Electron 运行时的 compensation/diagnostics 状态。它报告 `state`、`writeCapability`、目录可写性、manifest 数量、仅按 DTO `stale` 计算的 `staleCount`、单独的 `unverifiableCount`、identity conflict 和扫描问题。
 
@@ -119,4 +122,4 @@ swob insights [--json] [--summary]
 | `6` | `doctor checkup`：Swob app 正在运行，拒绝体检 |
 | `7` | `doctor checkup`：隐私扫描拒绝，不写任何文件 |
 
-控制面可能返回：`IDENTIFIER_AMBIGUOUS`、`SESSION_NOT_FOUND`、`SESSION_IDENTITY_CONFLICT`、`LIBRARY_MANIFEST_CORRUPT`、`LIBRARY_SCAN_INCOMPLETE`、`ICLOUD_PLACEHOLDER`、`LIBRARY_WRITER_BUSY`、`TRANSCRIPT_SOURCE_UNAVAILABLE`。带 `--json` 的命令始终把业务结果写到 stdout；结构化错误写到 stderr。
+控制面可能返回：`IDENTIFIER_AMBIGUOUS`、`SESSION_NOT_FOUND`、`SESSION_IDENTITY_CONFLICT`、`LIBRARY_MANIFEST_CORRUPT`、`LIBRARY_SCAN_INCOMPLETE`、`ICLOUD_PLACEHOLDER`、`LIBRARY_WRITER_BUSY`、`LIBRARY_WRITER_RECOVERY_REFUSED`、`TRANSCRIPT_SOURCE_UNAVAILABLE`。带 `--json` 的命令始终把业务结果写到 stdout；结构化错误写到 stderr。

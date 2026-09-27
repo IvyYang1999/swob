@@ -42,7 +42,9 @@ import {
   inspectWriterLock,
   locateSession,
   readLibraryControlSnapshot,
-  resolveFromSnapshot
+  recoverWriterLock,
+  resolveFromSnapshot,
+  type WriterLockRecoveryOutcome
 } from './library-control-plane'
 import {
   getSessionLineagePath,
@@ -121,7 +123,7 @@ function fail(message: string, exitCode = 1): never {
 }
 
 const booleanFlags = new Set([
-  'all', 'dry-run', 'full', 'help', 'json', 'missing-only', 'skip-permissions',
+  'all', 'dry-run', 'full', 'help', 'json', 'missing-only', 'recover', 'skip-permissions',
   'stdin', 'summary', 'version'
 ])
 
@@ -761,10 +763,52 @@ async function cmdTranscript(args: string[], flags: Record<string, string | true
   out(result)
 }
 
+const WRITER_RECOVERY_USAGE =
+  '用法: swob doctor locks --recover --evidence <evidenceHash> --confirm RECOVER_LIBRARY_WRITER_LOCK；evidenceHash 取自 swob doctor locks --json'
+
+function writerRecoveryRefusal(outcome: WriterLockRecoveryOutcome): { hint: string; retryable: boolean } {
+  switch (outcome.reason) {
+    case 'recover-flag-required':
+    case 'evidence-required':
+    case 'confirmation-required':
+      return { hint: WRITER_RECOVERY_USAGE, retryable: false }
+    case 'evidence-changed':
+      return { hint: '写锁在确认后变了：重新运行 swob doctor locks --json 取最新 evidenceHash 再确认', retryable: true }
+    case 'unlocked':
+      return { hint: '写锁当前未被占用，无需恢复', retryable: false }
+    case 'active-owner':
+      return { hint: '本机存活的 Swob 进程正持有写锁，不会抢锁；等它结束后重试', retryable: true }
+    case 'recovery-in-progress':
+      return { hint: '另一个本机进程正在恢复写锁；稍后重新运行 swob doctor locks --json', retryable: true }
+    default:
+      return { hint: '重新运行 swob doctor locks --json 核对写锁状态', retryable: true }
+  }
+}
+
 async function cmdDoctor(args: string[], flags: Record<string, string | true>): Promise<number> {
   if (args[0] === 'locks') {
-    out(inspectWriterLock())
-    return 0
+    const recoveryRequested = flags.recover !== undefined || flags.evidence !== undefined || flags.confirm !== undefined
+    if (!recoveryRequested) {
+      out(inspectWriterLock())
+      return 0
+    }
+    // Explicit recovery: --recover, --evidence and --confirm are all required.
+    const outcome = recoverWriterLock({
+      recover: flags.recover === true,
+      evidence: typeof flags.evidence === 'string' ? flags.evidence : undefined,
+      confirmation: typeof flags.confirm === 'string' ? flags.confirm : undefined
+    })
+    out(outcome)
+    if (outcome.recovered) return 0
+    activeIo.stderr(JSON.stringify({
+      error: {
+        message: `Library 写锁未恢复：${outcome.reason}`,
+        code: 'LIBRARY_WRITER_RECOVERY_REFUSED',
+        reason: outcome.reason,
+        ...writerRecoveryRefusal(outcome)
+      }
+    }) + '\n')
+    return 1
   }
   if (args[0] === 'library') {
     out(inspectLibrary())
@@ -780,7 +824,7 @@ async function cmdDoctor(args: string[], flags: Record<string, string | true>): 
       worker: activeCheckupWorker
     })
   }
-  fail('用法: swob doctor locks --json、swob doctor library --json，或 swob doctor checkup [--report <目录|文件.md>] [--json]')
+  fail('用法: swob doctor locks --json（显式恢复加 --recover --evidence <hash> --confirm RECOVER_LIBRARY_WRITER_LOCK）、swob doctor library --json，或 swob doctor checkup [--report <目录|文件.md>] [--json]')
 }
 
 async function cmdInstall(): Promise<void> {

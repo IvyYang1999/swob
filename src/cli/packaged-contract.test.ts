@@ -340,6 +340,13 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     })
 
     expect(parseSuccess(invokeInstalled('doctor locks [--json]', ['doctor', 'locks', '--json']))).toMatchObject({ state: 'unlocked' })
+    // Nothing to recover here: the read-only precheck answers before any machine identity is read.
+    const recovery = invokeInstalled(
+      'doctor locks --recover --evidence <hash> --confirm RECOVER_LIBRARY_WRITER_LOCK [--json]',
+      ['doctor', 'locks', '--recover', '--evidence', '0'.repeat(64), '--confirm', 'RECOVER_LIBRARY_WRITER_LOCK', '--json']
+    )
+    expect(recovery.code, recovery.stderr).toBe(1)
+    expect(JSON.parse(recovery.stdout)).toEqual({ recovered: false, reason: 'unlocked' })
     expect(parseSuccess(invokeInstalled('doctor library [--json]', ['doctor', 'library', '--json']))).toMatchObject({
       manifestCount: 2,
       staleCount: expect.any(Number)

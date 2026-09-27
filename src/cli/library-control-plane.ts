@@ -2,7 +2,13 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
 import { classifyUnverifiableReason, computeSessionFreshness } from '../main/library-freshness'
-import { inspectLibraryWriterLease } from '../main/library-writer-lease'
+import {
+  inspectLibraryWriterLease,
+  LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION,
+  recoverLibraryWriterLeaseManually,
+  type LibraryWriterLeaseOptions,
+  type LibraryWriterManualRecoveryResult
+} from '../main/library-writer-lease'
 import type {
   LibraryHealthSnapshot,
   SessionFreshness,
@@ -303,6 +309,57 @@ export function inspectWriterLock(
     manualRecoveryAvailable: inspection.manualRecoveryAvailable,
     whyNotRecoverable: inspection.manualRecoveryAvailable ? null : inspection.state === 'blocked' ? inspection.message : null
   }
+}
+
+export interface WriterLockRecoveryRequest {
+  /** `--recover` was given as a bare flag. */
+  recover: boolean
+  /** `--evidence <hash>`: the evidenceHash `doctor locks` printed. */
+  evidence?: string
+  /** `--confirm <text>`: must be exactly RECOVER_LIBRARY_WRITER_LOCK. */
+  confirmation?: string
+}
+
+export interface WriterLockRecoveryOutcome {
+  recovered: boolean
+  reason: LibraryWriterManualRecoveryResult['reason'] | 'recover-flag-required' | 'evidence-required'
+  quarantinePath?: string
+}
+
+const EVIDENCE_HASH = /^[0-9a-f]{64}$/
+
+/**
+ * `doctor locks --recover`: the explicit, evidence-bound manual recovery.
+ * All three arguments are required; a missing one is refused before anything
+ * is read. A read-only inspection then settles "unlocked", "evidence changed"
+ * and "live local owner" without entering the write path, so only a request
+ * for exactly the lock the operator inspected reaches
+ * recoverLibraryWriterLeaseManually, which re-checks everything under its own
+ * recovery claim and moves the lock into writer-recovery-evidence (never
+ * deleting it).
+ */
+export function recoverWriterLock(
+  request: WriterLockRecoveryRequest,
+  libraryRoot = getLibraryRoot(),
+  options: LibraryWriterLeaseOptions = {}
+): WriterLockRecoveryOutcome {
+  if (!request.recover) return { recovered: false, reason: 'recover-flag-required' }
+  if (!request.evidence || !EVIDENCE_HASH.test(request.evidence)) {
+    return { recovered: false, reason: 'evidence-required' }
+  }
+  if (request.confirmation !== LIBRARY_WRITER_MANUAL_RECOVERY_CONFIRMATION) {
+    return { recovered: false, reason: 'confirmation-required' }
+  }
+  const inspection = inspectLibraryWriterLease(libraryRoot, options)
+  if (inspection.state === 'unlocked') return { recovered: false, reason: 'unlocked' }
+  if (inspection.evidenceHash !== request.evidence) return { recovered: false, reason: 'evidence-changed' }
+  if (!inspection.manualRecoveryAvailable) {
+    return { recovered: false, reason: inspection.reason ?? 'active-owner' }
+  }
+  return recoverLibraryWriterLeaseManually(libraryRoot, {
+    expectedEvidenceHash: request.evidence,
+    confirmation: request.confirmation
+  }, options)
 }
 
 export function buildSessionLocation(

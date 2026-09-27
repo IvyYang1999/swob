@@ -1,4 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect } from 'vitest'
+import Database from 'better-sqlite3'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { buildInsights, estimateActiveTime, valuationReconciliationVerdict } from './insights'
 import { extractCodexTokenAccounting, type CodexLine } from './codex-loader'
 import {
@@ -16,7 +20,8 @@ import {
 } from './token-accounting'
 import type { SessionSummary, Folder, RawJsonlMessage } from './types'
 import { localActivityDay } from './activity-time'
-import { usageFactsForSession } from './usage-fact-store'
+import { closeUsageFactStore, synchronizeUsageFacts, usageFactsForSession } from './usage-fact-store'
+import { sessionHasParsedTranscript } from './session-provider-outcome'
 import {
   codexClock,
   codexRow,
@@ -962,16 +967,21 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
   const RAW_INSTANT = at(30).replace(/\.\d{3}Z$/, '')
   it.each([
     ['作用域：main 胜过更早的 subagent 副本', 'rank-scope',
-      { a: { scope: 'sidechain' as const, timestamp: at(0) }, b: { timestamp: at(1) } }, 'b', null],
-    ['时间：更早的一份胜出', 'rank-time', { a: { timestamp: at(1) }, b: { timestamp: at(0) } }, 'b', 'a'],
-    ['NULL：有时间的一份胜过没有时间的', 'rank-null', { a: {}, b: { timestamp: at(1) } }, 'b', null],
-    ['event_id：同一时间取 event_id 小的', 'rank-event-id', { a: { timestamp: at(1) }, b: { timestamp: at(1) } }, 'b', 'b'],
+      { a: { scope: 'sidechain' as const, timestamp: at(0) }, b: { timestamp: at(1) } }, 'b', null, null],
+    // scopeRank：main 0、subagent 1、其余（这里用 'inherited'）2。subagent 排在其他作用域之前，
+    // 即便它的一份更晚：作用域先于时间，与 main/subagent 那一档同一套比较顺序。两份都不是 main，
+    // conversationOnly 与哪份胜出无关，恒为 0（覆盖默认的「胜者即 conversationOnly」）。
+    ['作用域：subagent 胜过更早的其他（inherited）副本', 'rank-scope-subagent',
+      { a: { scope: 'inherited' as const, timestamp: at(0) }, b: { scope: 'subagent' as const, timestamp: at(1) } }, 'b', null, 0],
+    ['时间：更早的一份胜出', 'rank-time', { a: { timestamp: at(1) }, b: { timestamp: at(0) } }, 'b', 'a', null],
+    ['NULL：有时间的一份胜过没有时间的', 'rank-null', { a: {}, b: { timestamp: at(1) } }, 'b', null, null],
+    ['event_id：同一时间取 event_id 小的', 'rank-event-id', { a: { timestamp: at(1) }, b: { timestamp: at(1) } }, 'b', 'b', null],
     ['时间按原串比较：同一时刻 .000Z 排在 Z 前', 'rank-raw-string',
-      { a: { timestamp: `${RAW_INSTANT}.000Z` }, b: { timestamp: `${RAW_INSTANT}Z` } }, 'a', 'b'],
+      { a: { timestamp: `${RAW_INSTANT}.000Z` }, b: { timestamp: `${RAW_INSTANT}Z` } }, 'a', 'b', null],
     // 逐字节 '+'（0x2B）在 '-'（0x2D）前；localeCompare 反过来。
     ['时间逐字节比较，不用 localeCompare：同一时刻 +00:00 排在 -00:00 前', 'rank-offset',
-      { a: { timestamp: `${RAW_INSTANT}+00:00` }, b: { timestamp: `${RAW_INSTANT}-00:00` } }, 'a', null]
-  ] as const)('两份金额不同（%s）：两种会话顺序都取 billing_rank 排第一的那份', (_name, key, copies, winner, smallerEventId) => {
+      { a: { timestamp: `${RAW_INSTANT}+00:00` }, b: { timestamp: `${RAW_INSTANT}-00:00` } }, 'a', null, null]
+  ] as const)('两份金额不同（%s）：两种会话顺序都取 billing_rank 排第一的那份', (_name, key, copies, winner, smallerEventId, conversationOnlyOverride) => {
     const a = ledgerSession(`${key}-a`, '/rank/a', [call({ id: key, usd: 1, input: 1_000, ...copies.a })])
     const b = ledgerSession(`${key}-b`, '/rank/b', [call({ id: key, usd: 2, input: 2_000, ...copies.b })])
     if (smallerEventId) {
@@ -981,12 +991,14 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
     const expected = winner === 'a'
       ? { totalTokens: 1_000, usd: 1, projects: { '/rank/a': 1_000, '/rank/b': 0 } }
       : { totalTokens: 2_000, usd: 2, projects: { '/rank/a': 0, '/rank/b': 2_000 } }
+    const expectedConversationOnly = conversationOnlyOverride ?? expected.totalTokens
 
     for (const order of [[a, b], [b, a]]) {
       const result = buildInsights(order, [])
       expect(result.totalTokens).toBe(expected.totalTokens)
-      // 胜出的一份都是 main；作用域一例里落选的是 subagent 副本，不在 conversationOnly 里，不能从中再扣。
-      expect(result.conversationOnlyTokens).toBe(expected.totalTokens)
+      // 胜出的一份多数是 main：不在 conversationOnly 里的落选份不能从中再扣。作用域-subagent 那一档
+      // 两份都不是 main，见 conversationOnlyOverride。
+      expect(result.conversationOnlyTokens).toBe(expectedConversationOnly)
       expect(result.valuation.usd).toBe(expected.usd)
       expect(Object.fromEntries(result.byProject.map((project) => [project.fullPath, project.totalTokens])))
         .toEqual(expected.projects)
@@ -999,6 +1011,33 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
         ok: true,
         valuation: { crossSessionDuplicateUsd: 3 - expected.usd, ok: true }
       })
+    }
+  })
+
+  // 候选范围只看 sessionHasParsedTranscript：sessionLedgers 对未解析的会话强制
+  // owners = []（哪怕它的 tokenAccounting 意外带着事件），所以它既不会赢也不会
+  // 让另一份落选；已解析且可用的会话才进入 billing_rank 竞争（F1j P2-1 a）。
+  it('未解析的会话即使携带同一计费键的事件，也不进入跨会话去重竞争', () => {
+    const shared = { id: 'range-shared', usd: 2, input: 1_000, output: 200 }
+    const parsedSession = ledgerSession('range-parsed', '/range/parsed', [call({ ...shared, timestamp: at(1) })])
+    const unparsedAccounting = accountingFromUsageEvents('claude-code', [call({ ...shared, timestamp: at(0) })])
+    const unparsedSession: SessionSummary = {
+      ...makeSession({ sessionId: 'range-unparsed', cwds: ['/range/unparsed'], projectPath: '/range/unparsed' }),
+      isManifestOnly: true,
+      messageCount: 0,
+      tokenAccounting: unparsedAccounting,
+      tokenUsage: tokenUsageFromAccounting(unparsedAccounting)
+    }
+    expect(sessionHasParsedTranscript(unparsedSession)).toBe(false)
+
+    for (const order of [[parsedSession, unparsedSession], [unparsedSession, parsedSession]]) {
+      const result = buildInsights(order, [])
+      // 未解析的会话从未进入 winners 竞争：不产生任何落选，也不出现在 bySession
+      // （bySession 只收 parsed 的会话），它的事件对总量的贡献是 0，不是「胜出」。
+      expect(result.reconciliation).toMatchObject({ crossSessionDuplicateFacts: 0, crossSessionDuplicateTokens: 0 })
+      expect(result.bySession.map((session) => session.sessionId)).toEqual(['range-parsed'])
+      expect(result.bySession[0].totalTokens).toBe(1_200)
+      expect(result.totalTokens).toBe(1_200)
     }
   })
 
@@ -1118,6 +1157,66 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
       difference: 0,
       ok: true,
       valuation: { crossSessionDuplicateUsd: 0, ok: true }
+    })
+  })
+
+  // insights.ts 的 precedesInBillingRank 是 usage-fact-store.ts 里
+  // canonicalizeBillingFacts 的 billing_rank（SQL ORDER BY）的复本（见 precedesInBillingRank
+  // 的注释）；两边各写一份，从未对照过同一组事实是否选出同一条（F1j P2-1 c）。
+  describe('与 usage-facts 的 billing_rank 对照：同一组事实两边选出同一条', () => {
+    let root = ''
+    let previousUsageIndex: string | undefined
+
+    beforeEach(() => {
+      closeUsageFactStore()
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'swob-insights-billing-rank-'))
+      previousUsageIndex = process.env.SWOB_USAGE_INDEX_PATH
+      process.env.SWOB_USAGE_INDEX_PATH = path.join(root, 'usage.db')
+    })
+
+    afterEach(() => {
+      closeUsageFactStore()
+      if (previousUsageIndex === undefined) delete process.env.SWOB_USAGE_INDEX_PATH
+      else process.env.SWOB_USAGE_INDEX_PATH = previousUsageIndex
+      fs.rmSync(root, { recursive: true, force: true })
+    })
+
+    function billingIncludedSessionId(sharedBillingFactId: string): string {
+      const db = new Database(process.env.SWOB_USAGE_INDEX_PATH!, { readonly: true, fileMustExist: true })
+      try {
+        const row = db.prepare(
+          'SELECT session_id FROM usage_facts WHERE billing_fact_id = ? AND superseded = 0 AND billing_included = 1'
+        ).get(sharedBillingFactId) as { session_id: string } | undefined
+        return row?.session_id ?? ''
+      } finally {
+        db.close()
+      }
+    }
+
+    it.each([
+      ['作用域：main 先于 subagent', [{ scope: 'sidechain' as const, timestamp: at(0) }, { timestamp: at(1) }]],
+      ['作用域：subagent 先于其他（inherited）', [{ scope: 'inherited' as const, timestamp: at(0) }, { scope: 'subagent' as const, timestamp: at(1) }]],
+      ['时间：更早胜出', [{ timestamp: at(1) }, { timestamp: at(0) }]],
+      ['NULL：有时间胜过没有时间', [{}, { timestamp: at(1) }]],
+      ['event_id：同一时间取更小的', [{ timestamp: at(1) }, { timestamp: at(1) }]]
+    ] as const)('%s：JS 与 SQL 选出同一场会话', (name, [aSpec, bSpec]) => {
+      const key = `parity-${name}`
+      const a = ledgerSession(`${key}-a`, '/parity/a', [call({ id: key, usd: 1, input: 1_000, ...aSpec })])
+      const b = ledgerSession(`${key}-b`, '/parity/b', [call({ id: key, usd: 2, input: 2_000, ...bSpec })])
+      const sharedBillingFactId = usageFactsForSession(a)[0].billingFactId
+      expect(usageFactsForSession(b)[0].billingFactId).toBe(sharedBillingFactId)
+
+      // JS 侧：bySession 两边永远各自满额（1,000 / 2,000，未按胜负削减），赢家只能从全局合计
+      // 反推——全局合计等于赢家那一份的满额，因为落选的一份被扣掉了。
+      const jsResult = buildInsights([a, b], [])
+      expect(Object.fromEntries(jsResult.bySession.map((session) => [session.sessionId, session.totalTokens])))
+        .toEqual({ [`${key}-a`]: 1_000, [`${key}-b`]: 2_000 })
+      expect(jsResult.totalTokens === 1_000 || jsResult.totalTokens === 2_000).toBe(true)
+      const jsWinner = jsResult.totalTokens === 2_000 ? `${key}-b` : `${key}-a`
+
+      // SQL 侧：真的写进账本，读 canonicalizeBillingFacts 判定的 billing_included 行。
+      synchronizeUsageFacts([a, b], [])
+      expect(billingIncludedSessionId(sharedBillingFactId)).toBe(jsWinner)
     })
   })
 })

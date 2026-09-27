@@ -510,7 +510,7 @@ describePackaged('packaged Swob CLI complete command contract', () => {
     const validate = new Ajv2020({ allErrors: true, strict: true }).compile(checkupReportSchema)
     expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
     expect(report.readout).toEqual({ status: 'ok' })
-    expect(report.kernel).toMatchObject({ version: CLI_VERSION, readOnly: true, selfTest: { passed: 7, total: 7 } })
+    expect(report.kernel).toMatchObject({ version: CLI_VERSION, readOnly: true, selfTest: { passed: 8, total: 8 } })
     expect(report.readoutBySource['claude-code'].sessions.label).toBe('reported')
     expect(report.readoutBySource['claude-code'].sessions.value).toBeGreaterThan(0)
     const canaries = [SESSION_A, SESSION_B, 'packaged contract alpha', 'packaged-thinking-needle', 'packaged-tool-needle', 'packaged-tool-result', 'Alpha Original', sandboxRoot]

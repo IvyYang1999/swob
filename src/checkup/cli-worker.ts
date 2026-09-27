@@ -26,7 +26,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { SOURCE_IDS, type CheckupReport } from './contract'
 import { PrivacyViolationError } from './privacy'
-import { currentKernelIsolation } from './readout'
+import { currentKernelIsolation, defaultResumeProbe } from './readout'
 import { runKernelCheckup } from './run'
 import { CHECKUP_KERNEL_VERSION, CHECKUP_WORKER_EXIT } from './run-guard'
 
@@ -98,7 +98,13 @@ export async function runCheckupWorker(argv: readonly string[]): Promise<number>
       stateDir: args.state,
       ...(args.sources ? { sources: args.sources } : {}),
       ...(args.kernelVersion ? { kernelVersion: args.kernelVersion } : {}),
-      kernelCommit: null
+      kernelCommit: null,
+      // ⑥ resume (C2c): built here, inside the worker process that actually runs the checkup — a
+      // ResumeProbe is a function value and cannot cross the parent CLI's child_process boundary
+      // (checkup-command.ts spawns this file with only serializable --flags). isolatedWorkerEnv()
+      // (run-guard.ts) already passes the parent's PATH through unchanged, so process.env.PATH here is
+      // the same login-shell PATH the parent CLI saw; checkup-command.ts needs no change for this.
+      resumeProbe: defaultResumeProbe(process.env.PATH ?? '')
     })
   } catch (error) {
     return error instanceof PrivacyViolationError ? CHECKUP_WORKER_EXIT.privacy : CHECKUP_WORKER_EXIT.failure

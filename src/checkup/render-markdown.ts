@@ -569,6 +569,42 @@ function tokensBranchGroupingLine(check: CheckResult): string | null {
   return fillText(MARKDOWN_TEXT.tokensBranchGrouping, { n: [raw.value, grouped.value, maxSize.value] })
 }
 
+/**
+ * ⑥ resume (C2c): one row per graded source — bucket totals, sampled command-layer outcome (found /
+ * broken symlink / not found), and the full-population L3 anchor tally (match / mismatch). The per-
+ * bucket/command/anchor numbers not claimed here fall through to `otherNumbers()`, same pattern as
+ * `compactionTable`/`tokensTable`.
+ */
+function resumeTable(check: CheckResult, used: Set<string>): string[] {
+  const rows: string[][] = []
+  for (const source of measuredSources(check)) {
+    const entry = check.bySource[source]
+    if (!entry.oracle.sessions) continue
+    for (const key of ['oracle.sessions', 'swob.recoverableRate', 'swob.missingFile', 'swob.missingDirectory',
+      'swob.commandFound', 'swob.commandBrokenSymlink', 'swob.commandMissing', 'swob.anchorMatch', 'swob.anchorMismatch']) used.add(key)
+    const command = entry.swob.commandFound || entry.swob.commandBrokenSymlink || entry.swob.commandMissing
+      ? fillText(MARKDOWN_TEXT.resumeCommandCell, {
+          n: [entry.swob.commandFound?.value ?? 0, entry.swob.commandBrokenSymlink?.value ?? 0, entry.swob.commandMissing?.value ?? 0]
+        })
+      : measureCell(entry.swob.commandSampled)
+    const anchor = entry.swob.anchorMatch || entry.swob.anchorMismatch
+      ? fillText(MARKDOWN_TEXT.resumeAnchorCell, { n: [entry.swob.anchorMatch?.value ?? 0, entry.swob.anchorMismatch?.value ?? 0] })
+      : ''
+    rows.push([
+      sourceLabel(source)!,
+      measureCell(entry.oracle.sessions),
+      measureCell(entry.swob.recoverableRate),
+      measureCell(entry.swob.missingFile),
+      measureCell(entry.swob.missingDirectory),
+      command,
+      anchor
+    ])
+  }
+  const header = [MARKDOWN_TEXT.colSource, MARKDOWN_TEXT.colResumeTotal, MARKDOWN_TEXT.colRecoverableRate,
+    MARKDOWN_TEXT.colMissingFile, MARKDOWN_TEXT.colMissingDirectory, MARKDOWN_TEXT.colCommandSample, MARKDOWN_TEXT.colAnchor]
+  return rows.length > 0 ? table(header, rows) : []
+}
+
 const FINDING_ORDER: Readonly<Record<string, number>> = { fail: 0, warn: 1, undetermined: 2, 'not-applicable': 3 }
 
 function findingLines(check: CheckResult, audience: Audience): string[] {
@@ -626,7 +662,8 @@ function checkSection(check: CheckResult, audience: Audience): string[] {
     : check.id === 'content' ? contentTable(check, used)
       : check.id === 'compaction' ? compactionTable(check, used)
         : check.id === 'lineage' ? lineageTable(check, used)
-          : check.id === 'tokens' ? tokensTable(check, used) : []
+          : check.id === 'tokens' ? tokensTable(check, used)
+            : check.id === 'resume' ? resumeTable(check, used) : []
   if (main.length > 0) lines.push(...main, '')
   if (check.id === 'tokens') {
     const grouping = tokensBranchGroupingLine(check)

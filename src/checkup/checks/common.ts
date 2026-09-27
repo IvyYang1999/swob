@@ -6,6 +6,7 @@ import type {
   Label,
   Measure,
   ReasonCode,
+  ResumeProbe,
   SourceId,
   Verdict
 } from '../contract'
@@ -31,6 +32,12 @@ export interface CheckContext {
   readout: SwobReadout
   /** Real paths of census units that changed during the run or became unreadable. */
   changed: ReadonlySet<string>
+  /** ⑥ resume command layer (C2c): injected by the shell running the checkup; null for the AI diary. */
+  resumeProbe: ResumeProbe | null
+  /** ⑥ resume sampling (C2c, CheckupOptions.resumeSample, defaulted in run.ts): perSource + a seed string
+   * (default: today's local date), so the "random" pick is reproducible for a given day and readable in
+   * the report appendix (design H1/H2). */
+  resumeSample: { perSource: number; seed: string }
 }
 
 export type SourceEntry = CheckResult['bySource'][string]

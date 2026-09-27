@@ -47,6 +47,8 @@ export interface HostIdentityOptions {
   now?: () => number
   /** Defaults to process.emit('swob:host-identity-event'); the desktop app logs it to lifecycle.log. */
   eventSink?: (event: HostIdentityEvent) => void
+  /** Maximum identity-history entries kept (oldest dropped first); default 20. */
+  historyLimit?: number
 }
 
 export class HostIdentityError extends Error {
@@ -57,6 +59,63 @@ export class HostIdentityError extends Error {
     this.name = 'HostIdentityError'
     if (cause !== undefined) this.cause = cause
   }
+}
+
+/**
+ * Both markers must be present together to redirect a *default* primary or
+ * backup path off the real machine locations, regardless of NODE_ENV: this is
+ * how the packaged-CLI contract (NODE_ENV=production) and a development-mode
+ * desktop e2e launch both stay off /Users/Shared/Swob and the real machine-
+ * local backup, without letting an ordinary production run be redirected by
+ * an environment variable a user or a broken script might set. An explicit
+ * options.storagePath/backupPath, or the pre-existing NODE_ENV==='test' +
+ * SWOB_TEST_HOME seam used elsewhere, is untouched by this check: it only
+ * guards the two exported default*Path functions themselves. 2026-09-26's
+ * incident was exactly this gap: the packaged CLI contract test already set
+ * SWOB_TEST_HOME alongside NODE_ENV=production, but library-writer-lease.ts's
+ * resolvers only honor SWOB_TEST_HOME when NODE_ENV==='test', so production
+ * fell through to the real path and rebuilt a fresh identity there.
+ */
+function e2eSandboxRoot(environment: NodeJS.ProcessEnv): string | null {
+  return environment.SWOB_E2E_RUNNER && environment.SWOB_E2E_SANDBOX_ROOT
+    ? path.resolve(environment.SWOB_E2E_SANDBOX_ROOT)
+    : null
+}
+
+/**
+ * Resolve every existing ancestor's real path before appending path
+ * components that do not exist yet, so a sandbox-local symlink pointing
+ * outside the declared sandbox root is caught even though the redirected
+ * primary/backup file itself never exists ahead of time.
+ */
+function canonicalPathThroughExistingAncestor(candidatePath: string): string {
+  let existing = path.resolve(candidatePath)
+  const missing: string[] = []
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing)
+    if (parent === existing) break
+    missing.unshift(path.basename(existing))
+    existing = parent
+  }
+  return path.resolve(fs.realpathSync.native(existing), ...missing)
+}
+
+function isPathContained(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+/** The redirected default path for `subdirectory`, or null when not in an E2E sandbox. */
+function sandboxedDefaultPath(environment: NodeJS.ProcessEnv, subdirectory: string): string | null {
+  const sandboxRoot = e2eSandboxRoot(environment)
+  if (!sandboxRoot) return null
+  const candidate = path.join(sandboxRoot, subdirectory, 'host-identity-v1.json')
+  const canonicalSandbox = canonicalPathThroughExistingAncestor(sandboxRoot)
+  const canonicalCandidate = canonicalPathThroughExistingAncestor(candidate)
+  if (!isPathContained(canonicalSandbox, canonicalCandidate)) {
+    throw new Error(`Refusing E2E host-identity sandbox redirect: ${candidate} resolves outside sandbox ${sandboxRoot}`)
+  }
+  return candidate
 }
 
 /**
@@ -82,9 +141,17 @@ export class HostIdentityError extends Error {
  *
  * Tests use an explicit storagePath (or SWOB_TEST_HOME through the internal
  * resolver) so they never touch machine state. defaultHostIdentityPath itself
- * intentionally ignores HOME and test HOME.
+ * intentionally ignores HOME and test HOME, in any NODE_ENV - except for the
+ * explicit SWOB_E2E_RUNNER + SWOB_E2E_SANDBOX_ROOT pair above, which a
+ * packaged-CLI contract test or a development-mode e2e desktop launch sets to
+ * declare itself, never an ordinary run.
  */
-export function defaultHostIdentityPath(platform: NodeJS.Platform = process.platform): string {
+export function defaultHostIdentityPath(
+  platform: NodeJS.Platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env
+): string {
+  const sandboxed = sandboxedDefaultPath(environment, '.swob-machine')
+  if (sandboxed) return sandboxed
   if (platform === 'darwin') return '/Users/Shared/Swob/host-identity-v1.json'
   if (platform === 'win32') {
     const drive = process.env.SystemDrive && /^[A-Za-z]:$/.test(process.env.SystemDrive)
@@ -103,6 +170,8 @@ export function defaultHostIdentityBackupPath(
   platform: NodeJS.Platform = process.platform,
   environment: NodeJS.ProcessEnv = process.env
 ): string {
+  const sandboxed = sandboxedDefaultPath(environment, '.claude-session-manager')
+  if (sandboxed) return sandboxed
   const home = resolveRuntimeHome({ platform, nodeEnv: environment.NODE_ENV, env: environment, osHome: os.homedir() })
   return path.join(home, '.claude-session-manager', 'host-identity-v1.json')
 }
@@ -292,6 +361,141 @@ function readVerifiedBackup(backupPath: string, options: HostIdentityOptions): B
   return { state: 'valid', record: { schemaVersion: 1, identity: backup.identity, createdAt: backup.createdAt } }
 }
 
+// —— identity history ——
+// The backup only ever holds the *current* primary; if something else (a
+// mis-sandboxed test framework, an old build, a lost machine identifier)
+// regenerates the primary while this process is not looking, the very next
+// syncBackup() overwrites the backup with the new identity and the old one -
+// which may still be signing this machine's own locks - is gone for good.
+// That is exactly how every lock of this machine turned "remote" on
+// 2026-09-26. Before syncBackup() overwrites a backup that already held a
+// different, validly-parsed identity, the superseded identity is appended
+// here so staleDecision (stale-by-identity-history) can still recognize a
+// lock it once signed.
+
+const HISTORY_MAC_DOMAIN = 'swob-host-identity-history-v1'
+const HISTORY_FILENAME = 'host-identity-history.jsonl'
+const HISTORY_SOURCE = 'superseded' as const
+const DEFAULT_HISTORY_LIMIT = 20
+
+interface HostIdentityHistoryEntry {
+  schemaVersion: 1
+  identity: string
+  createdAt: string
+  /** Currently the only trigger: an about-to-be-overwritten backup value. */
+  source: typeof HISTORY_SOURCE
+  /** HMAC-SHA256 of identity + createdAt, keyed by this machine's platform identifier, own domain from the backup's. */
+  mac: string
+}
+
+function historyMac(binding: string, identity: string, createdAt: string): string {
+  const key = createHash('sha256').update(`${HISTORY_MAC_DOMAIN}\0key\0${binding}`).digest()
+  return createHmac('sha256', key).update(`${HISTORY_MAC_DOMAIN}\0${identity}\0${createdAt}`).digest('hex')
+}
+
+function historyPathFor(backupPath: string): string {
+  return path.join(path.dirname(backupPath), HISTORY_FILENAME)
+}
+
+function historyLimitFor(options: HostIdentityOptions): number {
+  const configured = options.historyLimit
+  return typeof configured === 'number' && Number.isFinite(configured) && configured >= 1
+    ? Math.floor(configured)
+    : DEFAULT_HISTORY_LIMIT
+}
+
+function parseHistoryEntry(line: string): HostIdentityHistoryEntry | null {
+  try {
+    const value = JSON.parse(line) as Partial<HostIdentityHistoryEntry>
+    if (value.schemaVersion !== 1 || typeof value.identity !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.identity) ||
+      typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt)) ||
+      value.source !== HISTORY_SOURCE ||
+      typeof value.mac !== 'string' || !/^[0-9a-f]{64}$/.test(value.mac)) return null
+    return value as HostIdentityHistoryEntry
+  } catch {
+    return null
+  }
+}
+
+/** Malformed/tampered lines are dropped individually; one bad line must not hide every other verified entry. */
+function readHistoryEntries(filePath: string): HostIdentityHistoryEntry[] {
+  try {
+    const stat = fs.lstatSync(filePath)
+    if (stat.isSymbolicLink() || !stat.isFile()) return []
+    const entries: HostIdentityHistoryEntry[] = []
+    for (const line of fs.readFileSync(filePath, 'utf8').split('\n')) {
+      if (!line.trim()) continue
+      const entry = parseHistoryEntry(line)
+      if (entry) entries.push(entry)
+    }
+    return entries
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Append the identity a stale backup is about to be overwritten with.
+ * Append-only and capped at `limit` (oldest dropped first); best effort, like
+ * the backup itself, and never writes through a symlink at the history path.
+ * Deduplicated against every entry already recorded (not only the last one):
+ * the high-frequency "primary unchanged" path never reaches here at all
+ * (syncBackup already returns before this point whenever the backup already
+ * matches), but a flip-flop between two identities must not grow the file
+ * with the same identity recorded twice either.
+ */
+function appendIdentityHistory(
+  backupPath: string,
+  superseded: HostIdentityRecord,
+  binding: string,
+  limit: number
+): void {
+  try {
+    const filePath = historyPathFor(backupPath)
+    try {
+      const stat = fs.lstatSync(filePath)
+      if (stat.isSymbolicLink() || !stat.isFile()) return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return
+    }
+    const existing = readHistoryEntries(filePath)
+    if (existing.some((entry) => entry.identity === superseded.identity)) return
+    const entry: HostIdentityHistoryEntry = {
+      schemaVersion: 1,
+      identity: superseded.identity,
+      createdAt: superseded.createdAt,
+      source: HISTORY_SOURCE,
+      mac: historyMac(binding, superseded.identity, superseded.createdAt)
+    }
+    const bounded = [...existing, entry].slice(-Math.max(1, limit))
+    writeBackupAtomically(filePath, `${bounded.map((item) => JSON.stringify(item)).join('\n')}\n`)
+  } catch { /* best effort, like the backup itself */ }
+}
+
+/**
+ * Every historical identity this machine's own record has verifiably held,
+ * most recent first, each proven by the same machine-bound HMAC construction
+ * the backup uses (under its own domain): a directory copied to another
+ * machine can never forge a match, because it never carries this machine's
+ * platform identifier. Read-only: never creates the backup, the history
+ * file, or any directory, and never restores or repairs anything - like
+ * readHostIdentity, this is a diagnostic seam, used by staleDecision's
+ * stale-by-identity-history branch through library-writer-lease.ts.
+ */
+export function readHostIdentityHistory(options: HostIdentityOptions = {}): string[] {
+  const backupPath = backupPathForRuntime(options)
+  if (!backupPath) return []
+  const binding = machineBindingFor(options)
+  if (!binding) return []
+  const verified = readHistoryEntries(historyPathFor(backupPath)).filter((entry) => {
+    const expected = Buffer.from(historyMac(binding, entry.identity, entry.createdAt), 'hex')
+    const actual = Buffer.from(entry.mac, 'hex')
+    return expected.length === actual.length && timingSafeEqual(expected, actual)
+  })
+  return verified.map((entry) => entry.identity).reverse()
+}
+
 function writeBackupAtomically(backupPath: string, content: string): void {
   const dirPath = path.dirname(backupPath)
   ensureStorageDirectory(dirPath)
@@ -314,7 +518,10 @@ function writeBackupAtomically(backupPath: string, content: string): void {
 /**
  * Keep the backup equal to the primary this process just read or published.
  * Best effort: a backup that cannot be written never blocks the Library writer.
- * A symlink or non-file at the backup path is left untouched.
+ * A symlink or non-file at the backup path is left untouched. Before a
+ * validly-parsed *different* backup value is overwritten ('stale'), the
+ * identity it is about to lose is preserved in the identity history file -
+ * see appendIdentityHistory above.
  */
 function syncBackup(record: HostIdentityRecord, backupPath: string, options: HostIdentityOptions): void {
   try {
@@ -323,6 +530,7 @@ function syncBackup(record: HostIdentityRecord, backupPath: string, options: Hos
     const content = backupContent(record, binding)
     const cacheKey = `${backupPath}\0${content}`
     let previous: 'missing' | 'stale' | 'corrupt' = 'missing'
+    let superseded: HostIdentityRecord | null = null
     try {
       const stat = fs.lstatSync(backupPath)
       if (stat.isSymbolicLink() || !stat.isFile()) return
@@ -332,10 +540,15 @@ function syncBackup(record: HostIdentityRecord, backupPath: string, options: Hos
         confirmedBackups.set(cacheKey, statSignature(stat))
         return
       }
-      previous = parseBackup(existing) ? 'stale' : 'corrupt'
+      const existingBackup = parseBackup(existing)
+      previous = existingBackup ? 'stale' : 'corrupt'
+      if (existingBackup) {
+        superseded = { schemaVersion: 1, identity: existingBackup.identity, createdAt: existingBackup.createdAt }
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return
     }
+    if (superseded) appendIdentityHistory(backupPath, superseded, binding, historyLimitFor(options))
     writeBackupAtomically(backupPath, content)
     confirmedBackups.set(cacheKey, statSignature(fs.lstatSync(backupPath)))
     emitHostIdentityEvent({ component: 'host-identity', event: 'host-identity-backup-written', previous }, options)

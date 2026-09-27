@@ -11,7 +11,8 @@ import {
   deriveHostBootIdentity,
   deriveLibraryHostProof,
   getOrCreateHostIdentity,
-  readHostIdentity
+  readHostIdentity,
+  readHostIdentityHistory
 } from './host-identity'
 import {
   assertSafeLibraryWritePath,
@@ -416,7 +417,19 @@ export interface LibraryWriterEvent {
  * writer-recovery-evidence together with the lock, and into the event.
  */
 export const LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE = 'stale-by-device-and-lease'
-export type LibraryWriterRecoveryBasis = typeof LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE
+/**
+ * Reason code of an automatic takeover that rested on this machine's identity
+ * history (host-identity.ts's readHostIdentityHistory): the owner's host
+ * proof was signed by a *previous* identity of this same machine, not the
+ * current one, because the primary was regenerated elsewhere (F1l-c) - this
+ * is stronger evidence than stale-by-device-and-lease (a machine-bound HMAC
+ * proof, not a heuristic), so staleDecision tries it first. Still requires
+ * the owner's deviceId to match this installation (see staleByIdentityHistory).
+ */
+export const LIBRARY_WRITER_STALE_BY_IDENTITY_HISTORY = 'stale-by-identity-history'
+export type LibraryWriterRecoveryBasis =
+  | typeof LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE
+  | typeof LIBRARY_WRITER_STALE_BY_IDENTITY_HISTORY
 export const DEFAULT_STALE_BY_DEVICE_AND_LEASE_MS = 24 * 60 * 60 * 1_000
 
 export interface LibraryWriterLeaseOptions {
@@ -436,6 +449,13 @@ export interface LibraryWriterLeaseOptions {
   arbiterOwnerId?: number
   /** Test/embedding seam. The returned raw value is never persisted in the Library. */
   hostIdentity?: () => string
+  /**
+   * Test/embedding seam for this machine's verified identity history (most
+   * recent first); defaults to host-identity.ts's readHostIdentityHistory
+   * under the same runtime options acquisition already resolves for
+   * hostIdentity. Never persisted in the Library.
+   */
+  identityHistory?: () => string[]
   /** Test-only crash seam after a durable heartbeat temp exists but before atomic publish. */
   heartbeatBeforePublish?: (tempPath: string) => void
   /** Test-only concurrency seam after the recovery claim is durable. */
@@ -722,6 +742,8 @@ interface AcquisitionContext {
   lockDir: string
   rawBootIdentity: string
   hostIdentity: string
+  /** Lazy: this machine's verified identity history is only read if staleDecision actually needs it. */
+  identityHistory: () => string[]
   pid: number
   processStartFingerprint: string
   readProcessStart: (pid: number) => string | 'missing' | null
@@ -740,7 +762,8 @@ type StaleVerdict =
   | Exclude<LibraryWriterBusyReason, 'timeout' | 'corrupt-owner' | 'recovery-in-progress'>
 
 function isRecoverVerdict(verdict: StaleVerdict): verdict is 'recover' | LibraryWriterRecoveryBasis {
-  return verdict === 'recover' || verdict === LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE
+  return verdict === 'recover' || verdict === LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE ||
+    verdict === LIBRARY_WRITER_STALE_BY_IDENTITY_HISTORY
 }
 
 function sameBoot(owner: LibraryWriterOwner, context: AcquisitionContext): boolean {
@@ -785,6 +808,26 @@ function staleByDeviceAndLease(owner: LibraryWriterOwner, context: AcquisitionCo
   return context.readProcessStart(owner.pid) === 'missing'
 }
 
+/**
+ * Second evidence for a v2 owner whose host proof matches neither this
+ * machine's current identity nor an active claim: try every identity this
+ * machine's own record has verifiably held before (host-identity.ts's
+ * readHostIdentityHistory, each entry machine-bound-HMAC verified there), not
+ * only the current one. This is what lets a lock signed before the primary
+ * was regenerated elsewhere (F1l-c) still be recognized, instead of only the
+ * weaker staleByDeviceAndLease heuristic. Still requires the owner to name
+ * this installation's deviceId (F1l-c 需派单人决定 1, default: yes) - a
+ * history file is exactly the kind of state a cloned home carries along, so
+ * on its own it is not machine evidence; deviceId match is the same consistency
+ * check staleByDeviceAndLease already applies, not an independent proof
+ * (that proof is the HMAC readHostIdentityHistory already verified).
+ */
+function staleByIdentityHistory(owner: LibraryWriterOwner, context: AcquisitionContext): boolean {
+  if (!context.localDeviceId || owner.deviceId !== context.localDeviceId) return false
+  return context.identityHistory().some((identity) =>
+    owner.hostProof === deriveLibraryHostProof(identity, owner.hostProofSalt!))
+}
+
 function staleDecision(
   owner: LibraryWriterOwner,
   context: AcquisitionContext
@@ -815,6 +858,10 @@ function staleDecision(
   if (owner.schemaVersion === 2 &&
     owner.hostProof === deriveLibraryHostProof(context.hostIdentity, owner.hostProofSalt!)) return 'recover'
   if (owner.schemaVersion === 2) {
+    // Strongest evidence first: a cryptographic proof this exact machine once
+    // held that identity outranks the device+lease heuristic, so it is tried
+    // before staleByDeviceAndLease, not after.
+    if (staleByIdentityHistory(owner, context)) return LIBRARY_WRITER_STALE_BY_IDENTITY_HISTORY
     return staleByDeviceAndLease(owner, context) ? LIBRARY_WRITER_STALE_BY_DEVICE_AND_LEASE : 'remote-owner'
   }
   // A legacy owner from a different boot has no stable host proof. deviceId is
@@ -904,12 +951,24 @@ function prepareAcquisition(
   ensureSafeLibraryDirectory(canonicalRoot, lockParent)
   const lockDir = path.join(lockParent, 'library-writer')
   assertSafeLibraryWritePath(canonicalRoot, lockDir)
+  // Lazy and memoized: most acquisitions never reach staleDecision's remote-
+  // owner branch at all (same-boot/active-owner is the common case), so the
+  // identity-history file is only read the first time it is actually needed,
+  // and at most once per acquisition attempt even under repeated contention.
+  let memoizedIdentityHistory: string[] | undefined
+  const identityHistory = (): string[] => {
+    if (!memoizedIdentityHistory) {
+      memoizedIdentityHistory = (options.identityHistory || (() => readHostIdentityHistory(hostIdentityRuntimeOptions(platform))))()
+    }
+    return memoizedIdentityHistory
+  }
   return {
     libraryRoot: canonicalRoot,
     lockParent,
     lockDir,
     rawBootIdentity,
     hostIdentity,
+    identityHistory,
     pid,
     processStartFingerprint,
     readProcessStart,

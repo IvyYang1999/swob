@@ -368,13 +368,16 @@ describe.sequential('Swob CLI machine contract', () => {
       refused(await invoke(['doctor', 'locks', '--recover', '--evidence', evidence, '--confirm', confirm, '--json']), 'unlocked')
     })
 
-    it('不带恢复参数的 doctor locks 输出形状不变', async () => {
+    it('不带恢复参数的 doctor locks 输出形状：F1l-c 新增 deviceIdCaveat，其余不变', async () => {
       writeIncidentLock()
       const status = parsed(await invoke(['doctor', 'locks', '--json'])) as Record<string, unknown>
       expect(Object.keys(status).sort()).toEqual([
-        'evidenceHash', 'heartbeatAt', 'leaseExpired', 'leaseExpiresAt', 'manualRecoveryAvailable',
+        'deviceIdCaveat', 'evidenceHash', 'heartbeatAt', 'leaseExpired', 'leaseExpiresAt', 'manualRecoveryAvailable',
         'mode', 'ownerAlive', 'ownerPid', 'reason', 'state', 'whyNotRecoverable'
       ])
+      // The incident lock's owner names a different installation, so the caveat
+      // (which only fires when the owner's deviceId matches this one) is null.
+      expect(status.deviceIdCaveat).toBeNull()
       expect(JSON.stringify(status)).not.toContain('incident-device')
       fs.rmSync(lockParent(), { recursive: true, force: true })
     })

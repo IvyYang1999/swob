@@ -1,6 +1,7 @@
 import type { SessionSummary, SessionGroup, SessionSource } from './session-types'
 import {
   accountingForSession,
+  inheritedOwnerIndexes,
   processedTotal,
   totalCacheWriteTokens,
   uniqueBillingEvents,
@@ -14,6 +15,7 @@ import {
   type Valuation
 } from './token-valuation'
 import { usageFactsForSession } from './usage-fact-store'
+import { precedesInBillingRank } from './billing-identity'
 import type { UsageFact } from './analysis-contract'
 import {
   BUILTIN_PROVIDER_DEFINITIONS,
@@ -248,9 +250,10 @@ function accountingInput(accounting: TokenAccounting): number {
 
 /**
  * One billing owner's UsageFact, cut down to what outlives the session it came
- * from: the keys of usage-facts' billing_rank, and what the day, hour and
- * unknown-time rollups add up. Whole facts (valuation history, pricing trace)
- * are not kept across sessions.
+ * from: the keys of usage-facts' billing_rank (precedesInBillingRank in
+ * billing-identity.ts, the rule the ledger and the session loader share), and
+ * what the day, hour and unknown-time rollups add up. Whole facts (valuation
+ * history, pricing trace) are not kept across sessions.
  */
 interface OwnerFact {
   agentScope: UsageFact['agentScope']
@@ -282,26 +285,6 @@ function ownerFact(fact: UsageFact): OwnerFact {
   }
 }
 
-function scopeRank(scope: UsageFact['agentScope']): number {
-  return scope === 'main' ? 0 : scope === 'subagent' ? 1 : 2
-}
-
-/**
- * Whether `a` comes before `b` in usage-facts' billing_rank, which picks the
- * copy of a billing fact that aggregates count (canonicalizeBillingFacts in
- * usage-fact-store.ts): main, then subagent, then any other scope; timestamped
- * before untimed; then occurred_at, then event_id. SQLite orders those two as
- * TEXT, byte by byte, so compare the raw strings: "…12:00:00.000Z" comes before
- * "…12:00:00Z", although both are the same instant.
- */
-function precedesInBillingRank(a: OwnerFact, b: OwnerFact): boolean {
-  const scope = scopeRank(a.agentScope) - scopeRank(b.agentScope)
-  if (scope !== 0) return scope < 0
-  if ((a.occurredAt === null) !== (b.occurredAt === null)) return b.occurredAt === null
-  if (a.occurredAt !== b.occurredAt) return a.occurredAt! < b.occurredAt!
-  return a.eventId < b.eventId
-}
-
 interface SessionLedger {
   accounting: TokenAccounting
   parsed: boolean
@@ -311,6 +294,13 @@ interface SessionLedger {
   facts: OwnerFact[]
   /** Indexes into owners whose billing fact counts in another session. */
   lost?: Set<number>
+  /**
+   * Facts of the copies the load itself counted in another session (scope
+   * 'inherited', F1m): no owners here, but the session made those calls, so
+   * a day's session count and its time share still follow them, as they
+   * followed a lost owner before the load decided ownership.
+   */
+  inheritedFacts?: OwnerFact[]
 }
 
 /**
@@ -322,6 +312,14 @@ interface SessionLedger {
  * billingFactId usageFactsForSession derives. That id is session-scoped when a
  * call has no billingFactKey (legacy aggregates, the old Codex session total,
  * Claude rows without an id), so those calls never merge across sessions.
+ *
+ * Since F1m the session loader settles this, by the same rule, among the
+ * Claude sessions of one load: a copy counted in another session arrives
+ * marked 'inherited', is no owner here (uniqueBillingEvents), and is already
+ * out of its session's accounting totals, so it is neither lost again nor
+ * counted as a cross-session duplicate. This pass decides the rest (other
+ * sources, sessions the load did not see together), and the global totals
+ * stay what they were.
  *
  * A losing copy is recorded by session and owner index, never by event object:
  * two sessions can share one ledger object, and dropping the object would drop
@@ -361,6 +359,8 @@ function sessionLedgers(sessions: SessionSummary[]): SessionLedger[] {
         (ledger.lost ??= new Set()).add(ownerIndex)
       }
     })
+    const inherited = inheritedOwnerIndexes(accounting.usageEvents)
+    if (inherited.length > 0) ledger.inheritedFacts = inherited.map((index) => ownerFact(usageFacts[index]))
   }
   return ledgers
 }
@@ -545,7 +545,7 @@ export function buildInsights(
   for (const [sessionIndex, session] of rollupSessions.entries()) {
     const source = session.source || 'claude-code'
     const ledger = ledgers[sessionIndex]
-    const { accounting, parsed, owners, facts, lost } = ledger
+    const { accounting, parsed, owners, facts, lost, inheritedFacts } = ledger
     const available = sessionHasAuthoritativeUsage(session) && accounting.billingTotal !== null && accounting.components !== null
     const usage = available ? countedUsage(ledger) : null
     countedUsages.push(usage)
@@ -697,11 +697,13 @@ export function buildInsights(
     const factDays = new Map<string, number>()
     // Billing owners' facts only, so byDate, heatmap, hourly and unknown-time
     // usage add up to totalTokens; a copy whose billing fact counts in another
-    // session adds nothing either. The session was still active on that copy's
-    // day, though: a day's session count and the session's time share follow
-    // all of the session's own owners.
-    for (const [ownerIndex, fact] of facts.entries()) {
-      const counted = !lost?.has(ownerIndex)
+    // session adds nothing either (a lost owner, or a copy the load marked
+    // inherited). The session was still active on that copy's day, though: a
+    // day's session count and the session's time share follow all of the
+    // session's own calls.
+    const dayFacts: Array<[OwnerFact, boolean]> = facts.map((fact, ownerIndex) => [fact, !lost?.has(ownerIndex)])
+    for (const fact of inheritedFacts ?? []) dayFacts.push([fact, false])
+    for (const [fact, counted] of dayFacts) {
       const factInput = fact.nonCachedInputTokens + fact.cacheReadTokens + fact.cacheWriteTokens
       const factTokens = factInput + fact.outputTokens
       if (fact.occurredDay === 'unknown-time' || fact.occurredHour === null) {

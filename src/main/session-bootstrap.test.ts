@@ -99,7 +99,7 @@ describe('session bootstrap contract', () => {
   it('removes audit-heavy fields from renderer IPC without mutating main-process truth', () => {
     const source = summary('large-ledger')
     source.canonicalProjectionFingerprint = 'main-process-only-fingerprint'
-    source.tokenAccounting!.usageEventRollups = [['ledger', 'main', 'reported', 1, 0, 0, 0, 0, 2, 0]]
+    source.tokenAccounting!.usageEventRollups = [['ledger', 'ledger', 'main', 'reported', 1, 0, 0, 0, 0, 2, 0, null, null]]
     source.tokenAccounting!.usageEventsOmitted = true
     const projected = sessionSummaryForRenderer(source)
 

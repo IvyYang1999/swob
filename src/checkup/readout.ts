@@ -237,10 +237,13 @@ function realOrResolved(filePath: string): string {
  * event per billing fact key (`billingFactKey || dedupKey`), a `scope: 'main'` event winning a collision.
  * Independent of the kernel export (guarded by `readout.test.ts`'s equivalence test against the same
  * events), so the ⑤ check never merely reads back a number the kernel already computed for itself.
+ * F1m: an `'inherited'` copy never wins either — the kernel's load counted its billing fact in another
+ * session (the copy stays in `usageEvents` as an audit row), so summing it here would count that call twice.
  */
 function dedupeBillingEvents(events: readonly UsageEvent[]): UsageEvent[] {
   const selected = new Map<string, UsageEvent>()
   for (const event of events) {
+    if (event.scope === 'inherited') continue
     const key = event.billingFactKey || event.dedupKey
     const current = selected.get(key)
     if (!current || (current.scope !== 'main' && event.scope === 'main')) selected.set(key, event)

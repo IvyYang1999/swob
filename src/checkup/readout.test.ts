@@ -64,6 +64,32 @@ describe('readoutTokensFromAccounting (C2a decision 1 guard)', () => {
     expect(result.provenance).toBe('reported')
   })
 
+  it('F1m: skips a copy the kernel load counted in another session (inherited), as uniqueBillingEvents does', () => {
+    const inherited = { sessionId: 'owner-session', originalScope: 'main' as const }
+    const events: UsageEvent[] = [
+      usageEvent({
+        dedupKey: 'shared', billingFactKey: 'fact-shared', scope: 'inherited', inheritedFrom: inherited, rawCacheWriteTokens: 50,
+        components: { nonCachedInputTokens: 500, cacheReadTokens: 5_000, cacheWriteTokens: 0, cacheWrite5mTokens: 20, cacheWrite1hTokens: 0, outputTokens: 50 }
+      }),
+      usageEvent({
+        dedupKey: 'own', billingFactKey: 'fact-own',
+        components: { nonCachedInputTokens: 10, cacheReadTokens: 100, cacheWriteTokens: 1, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, outputTokens: 2 }
+      }),
+      // An inherited copy never wins a key either, even as the only other copy of a fact this session owns.
+      usageEvent({
+        dedupKey: 'own-copy', billingFactKey: 'fact-own', scope: 'inherited', inheritedFrom: inherited,
+        components: { nonCachedInputTokens: 999, cacheReadTokens: 0, cacheWriteTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, outputTokens: 0 }
+      })
+    ]
+    const accounting = accountingFromUsageEvents('claude-code', events)
+    const result = readoutTokensFromAccounting(accounting)
+    expect(result.billingTotal).toBe(accounting.billingTotal)
+    expect(result.components).toEqual({ nonCachedInput: 10, cacheRead: 100, cacheWrite: 1, output: 2, reasoning: 0 })
+    expect(result.billingTotal).toBe(113)
+    // The inherited copy's cache-write calibration gap belongs to the session that counts it.
+    expect(result.cacheWriteCalibrationDeltaTokens).toBe(0)
+  })
+
   it('reports unavailable exactly when the kernel has no authoritative usage for the session', () => {
     expect(readoutTokensFromAccounting(unavailableTokenAccounting('claude-code', 'no usage'))).toEqual(unavailableReadoutTokens())
     expect(readoutTokensFromAccounting(null)).toEqual(unavailableReadoutTokens())

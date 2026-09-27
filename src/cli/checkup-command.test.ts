@@ -191,7 +191,7 @@ describe.sequential('swob doctor checkup (in process, isolated worker)', () => {
     expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
     expect(scanForPrivacy(report)).toEqual({ ok: true, hits: [] })
     expect(report.readout).toEqual({ status: 'ok' })
-    expect(report.kernel).toMatchObject({ commit: null, readOnly: true, selfTest: { passed: 6, total: 6 } })
+    expect(report.kernel).toMatchObject({ commit: null, readOnly: true, selfTest: { passed: 7, total: 7 } })
     // stdout is the AI-diary line linking the dated note.
     const base = markdownName.replace(/\.md$/, '')
     expect(invocation.stdout).toMatch(new RegExp(`^体检 · .+ → \\[\\[${base}\\]\\]（.+）\\n$`))

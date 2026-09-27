@@ -55,7 +55,7 @@ describe('readout isolation guard (fail-closed)', () => {
     const report = await runKernelCheckup({ homeDir: sampleHome, stateDir, privacySalt: 'guard' })
     expectNoKernelCall()
     expect(report.readout).toEqual({ status: 'undetermined', reason: 'readout.not-isolated' })
-    expect(report.kernel.selfTest).toEqual({ passed: 6, total: 6 })
+    expect(report.kernel.selfTest).toEqual({ passed: 7, total: 7 })
     expect(report.checks.slice(0, 3).map((check) => [check.id, check.verdict, check.reason])).toEqual([
       ['inclusion', 'undetermined', 'readout.not-isolated'],
       ['content', 'undetermined', 'readout.not-isolated'],

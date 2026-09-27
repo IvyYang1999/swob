@@ -16,19 +16,19 @@ afterEach(() => {
   for (const dir of roots.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
 })
 
-describe('checkup self-test (referee fault classes 1-6)', () => {
-  it('passes all six classes with stand-in readouts', async () => {
+describe('checkup self-test (referee fault classes 1-7)', () => {
+  it('passes all seven classes with stand-in readouts', async () => {
     const result = await runSelfTest({ workDir: workDir(), salt: 'unit-salt' })
     expect(result.cases.map((entry) => entry.id)).toEqual([...SELF_TEST_CASES])
     expect(result.cases.filter((entry) => !entry.passed)).toEqual([])
-    expect(result).toMatchObject({ passed: 6, total: 6 })
+    expect(result).toMatchObject({ passed: 7, total: 7 })
   })
 
   it('never calls the kernel: every class uses an injected Swob readout', async () => {
     const sessionLoader = await import('../../main/session-loader')
     const spy = vi.spyOn(sessionLoader, 'parseSessionFile')
     const result = await runSelfTest({ workDir: workDir(), salt: 'unit-salt' })
-    expect(result.passed).toBe(6)
+    expect(result.passed).toBe(7)
     expect(spy).not.toHaveBeenCalled()
     expect(Object.values(CASE_SWOB_SIDE).every((side) => side.startsWith('injected-') || side === 'census-only')).toBe(true)
     spy.mockRestore()

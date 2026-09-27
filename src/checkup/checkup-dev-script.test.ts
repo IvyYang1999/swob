@@ -39,7 +39,7 @@ describe('scripts/checkup-dev.mjs', () => {
     expect(fs.readdirSync(stateDir)).toEqual([])
     const report = JSON.parse(fs.readFileSync(json, 'utf8'))
     expect(report.readout).toEqual({ status: 'ok' })
-    expect(report.kernel.selfTest).toEqual({ passed: 6, total: 6 })
+    expect(report.kernel.selfTest).toEqual({ passed: 7, total: 7 })
     const output = `${result.stdout}${fs.readFileSync(json, 'utf8')}`
     for (const canary of Object.values(CANARY)) expect(output.includes(canary), canary).toBe(false)
     const audit = JSON.parse(result.stdout.trim().split('\n').at(-1)!).readonlyAudit

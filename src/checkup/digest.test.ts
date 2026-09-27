@@ -190,7 +190,9 @@ describe('checkupDigest on a synthetic HOME (runKernelCheckup)', () => {
     const report = await runKernelCheckup({ homeDir: root, stateDir: tempDir('digest-state-'), privacySalt: 'digest-home' }, { readout: async () => readout })
     expect(report.verdict).toBe('pass')
     const line = checkupDigest(report, { linkTarget: LINK })
-    expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · OpenCode、ZCode：一场会话都没读到（注意） · 已检查的 3 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
+    // ④ lineage now also produces a real (passing) verdict on this tiny synthetic HOME (C2b), so one more
+    // check counts as graded than before it was implemented.
+    expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · OpenCode、ZCode：一场会话都没读到（注意） · 已检查的 4 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
     expect(scanMarkdownForPrivacy(line).ok).toBe(true)
   })
 

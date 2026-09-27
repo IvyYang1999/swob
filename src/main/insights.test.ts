@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { buildInsights, estimateActiveTime } from './insights'
+import { buildInsights, estimateActiveTime, valuationReconciliationVerdict } from './insights'
 import { extractCodexTokenAccounting, type CodexLine } from './codex-loader'
 import {
+  accountClaudeUsage,
   accountCodexUsage,
+  accountingForSession,
   accountingFromMutuallyExclusiveUsage,
   accountingFromUsageEvents,
   markExcludedFromRollups,
@@ -12,7 +14,7 @@ import {
   unavailableTokenAccounting,
   type UsageEvent
 } from './token-accounting'
-import type { SessionSummary, Folder } from './types'
+import type { SessionSummary, Folder, RawJsonlMessage } from './types'
 import { localActivityDay } from './activity-time'
 import { usageFactsForSession } from './usage-fact-store'
 import {
@@ -479,12 +481,15 @@ describe('buildInsights', () => {
         global: 1_280,
         projects: 1_280,
         sessions: 1_280,
+        crossSessionDuplicateFacts: 0,
+        crossSessionDuplicateTokens: 0,
         difference: 0,
         ok: true,
         valuation: {
           globalUsd: null,
           sessionsUsd: null,
           uniqueEventsUsd: null,
+          crossSessionDuplicateUsd: 0,
           difference: 0,
           coverageDifference: 0,
           ok: true
@@ -930,6 +935,26 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
       { sessionId: 'dup-a', totalTokens: 1_980, conversationOnlyTokens: 1_980, usd: 2.5 },
       { sessionId: 'dup-b', totalTokens: 2_160, conversationOnlyTokens: 2_160, usd: 3 }
     ])
+
+    // 对账：Σ bySession 比合计多出的正是落选的那一份，三个 duplicate 字段报出它，两个 ok 都是 true。
+    expect(result.reconciliation).toEqual({
+      global: 2_340,
+      projects: 2_340,
+      sessions: 4_140,
+      crossSessionDuplicateFacts: 1,
+      crossSessionDuplicateTokens: 1_800,
+      difference: 0,
+      ok: true,
+      valuation: {
+        globalUsd: 3.5,
+        sessionsUsd: 5.5,
+        uniqueEventsUsd: 3.5,
+        crossSessionDuplicateUsd: 2,
+        difference: 0,
+        coverageDifference: 0,
+        ok: true
+      }
+    })
   })
 
   // A、B 各有同一条事实的一份：A 的 1,000 token、$1，B 的 2,000 token、$2。每一例只让一个排序键起作用，
@@ -967,6 +992,13 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
         .toEqual(expected.projects)
       expect(Object.fromEntries(result.bySession.map((session) => [session.sessionId, session.totalTokens])))
         .toEqual({ [`${key}-a`]: 1_000, [`${key}-b`]: 2_000 })
+      // 落选的是另一份：两份合计 3,000 token、$3。
+      expect(result.reconciliation).toMatchObject({
+        crossSessionDuplicateFacts: 1,
+        crossSessionDuplicateTokens: 3_000 - expected.totalTokens,
+        ok: true,
+        valuation: { crossSessionDuplicateUsd: 3 - expected.usd, ok: true }
+      })
     }
   })
 
@@ -986,6 +1018,13 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
     expect(result.byProject).toMatchObject([{ fullPath: '/shared', totalTokens: 3_000, sessionCount: 2 }])
     expect(sum(result.byDate.map((date) => date.totalTokens))).toBe(3_000)
     expect(result.bySession.map((session) => session.totalTokens)).toEqual([3_000, 3_000])
+    // 两条事实各落选一份；按对象记会把两份都扣掉，合计变成 0、重复记成 4，对账却照样闭合。
+    expect(result.reconciliation).toMatchObject({
+      crossSessionDuplicateFacts: 2,
+      crossSessionDuplicateTokens: 3_000,
+      ok: true,
+      valuation: { crossSessionDuplicateUsd: 3, ok: true }
+    })
   })
 
   it('落选的一份没有时间戳：未知时间用量不算它，byDate 合计 + 未知时间 = totalTokens', () => {
@@ -1037,5 +1076,134 @@ describe('buildInsights 跨会话同一计费事实全局只计一次（F1j）',
     expect(result.totalTime).toBe(1_800_000)
     expect(sum(result.byDate.map((date) => date.totalTime))).toBe(result.totalTime)
     expect(sum(result.hourlyDistribution)).toBe(1)
+  })
+
+  it('没有 billingFactKey 的调用不跨会话合并：legacy 聚合、Codex 旧总账、无 id 的 Claude 行、Codex 原始键；同键不同来源也不合并', () => {
+    const legacy = (sessionId: string, source: 'claude-code' | 'codex'): SessionSummary => makeSession({ sessionId, source })
+    const withLedger = (sessionId: string, source: SessionSummary['source'], accounting: ReturnType<typeof accountingFromUsageEvents>) =>
+      makeSession({ sessionId, source, tokenAccounting: accounting, tokenUsage: tokenUsageFromAccounting(accounting) })
+    const claudeRowWithoutId = { type: 'assistant', message: { model: 'claude-sonnet-4-5', usage: { input_tokens: 40, output_tokens: 10 } } }
+    const codexWithoutHint = { kind: 'incremental' as const, timestamp: at(0), model: 'gpt-5', inputTokens: 700, outputTokens: 70 }
+    const sameKey = (source: 'claude-code' | 'cc-mirror') =>
+      accountingFromUsageEvents(source, [{ ...call({ id: 'cross-source', usd: 1, input: 300 }), provider: source }])
+    // 两两一对：legacy 聚合 claude-code:aggregate、Codex 旧总账 codex:legacy-session-total、无 id 的 Claude 行
+    // claude:row:0、没有 dedupHint 的 Codex 原始键，以及同一 billingFactKey 分属 claude-code 与 cc-mirror。
+    const sessions = [
+      legacy('legacy-1', 'claude-code'), legacy('legacy-2', 'claude-code'),
+      legacy('codex-legacy-1', 'codex'), legacy('codex-legacy-2', 'codex'),
+      withLedger('claude-row-1', 'claude-code', accountClaudeUsage([claudeRowWithoutId as unknown as RawJsonlMessage])),
+      withLedger('claude-row-2', 'claude-code', accountClaudeUsage([claudeRowWithoutId as unknown as RawJsonlMessage])),
+      withLedger('codex-raw-1', 'codex', accountCodexUsage([codexWithoutHint])),
+      withLedger('codex-raw-2', 'codex', accountCodexUsage([codexWithoutHint])),
+      withLedger('cross-source-1', 'claude-code', sameKey('claude-code')),
+      withLedger('cross-source-2', 'cc-mirror', sameKey('cc-mirror'))
+    ]
+    // 前置：每一对的朴素键（billingFactKey || dedupKey）相同，usage-facts 的 billingFactId 却两两不同。
+    const naiveKeys = sessions.map((session) =>
+      accountingForSession(session).usageEvents.map((event) => event.billingFactKey || event.dedupKey))
+    for (let index = 0; index < sessions.length; index += 2) expect(naiveKeys[index]).toEqual(naiveKeys[index + 1])
+    const billingFactIds = sessions.flatMap((session) => usageFactsForSession(session).map((fact) => fact.billingFactId))
+    expect(billingFactIds).toHaveLength(sessions.length)
+    expect(new Set(billingFactIds).size).toBe(sessions.length)
+
+    const result = buildInsights(sessions, [])
+    const perSession = sum(sessions.map((session) => accountingForSession(session).billingTotal!))
+
+    expect(result.totalTokens).toBe(perSession)
+    expect(result.reconciliation).toMatchObject({
+      global: perSession,
+      sessions: perSession,
+      crossSessionDuplicateFacts: 0,
+      crossSessionDuplicateTokens: 0,
+      difference: 0,
+      ok: true,
+      valuation: { crossSessionDuplicateUsd: 0, ok: true }
+    })
+  })
+})
+
+// 估价对账的判定（F1j）。F1j 之后全局、逐会话、逐条三项金额按构造自洽，从 buildInsights 的输入造不出
+// valuation.ok = false，所以反例直接喂给判定函数；buildInsights 的 reconciliation.valuation 原样展开它的
+// 返回值（F1i 验收 P2-1）。
+describe('valuationReconciliationVerdict：估价对账的判定（F1j）', () => {
+  const side = (coveragePercent: number, coveredTokens: number, totalBillableTokens: number) =>
+    ({ coveragePercent, coveredTokens, totalBillableTokens })
+  const verdict = (
+    usd: { globalUsd: number | null; sessionsUsd: number | null; uniqueEventsUsd: number | null; crossSessionDuplicateUsd: number },
+    global = side(0, 0, 0),
+    uniqueEvents = global
+  ) => valuationReconciliationVerdict({ ...usd, global, uniqueEvents })
+  const agreeing = (usd: number) => ({ globalUsd: usd, sessionsUsd: usd, uniqueEventsUsd: usd, crossSessionDuplicateUsd: 0 })
+
+  it('USD 容差是较大合计的 1e-9：$8,192 处差 2^-17 在内、2^-16 在外', () => {
+    // 前置：两个差在 $8,192 处都能精确表示，容差 8.192e-6 夹在两者之间。
+    expect(8_192 + 2 ** -17 - 8_192).toBe(2 ** -17)
+    expect(8_192 + 2 ** -16 - 8_192).toBe(2 ** -16)
+    expect(2 ** -17).toBeLessThan(1e-9 * 8_192)
+    expect(2 ** -16).toBeGreaterThan(1e-9 * 8_192)
+
+    expect(verdict({ ...agreeing(8_192), uniqueEventsUsd: 8_192 + 2 ** -17 }))
+      .toEqual({ difference: 2 ** -17, coverageDifference: 0, ok: true })
+    expect(verdict({ ...agreeing(8_192), uniqueEventsUsd: 8_192 + 2 ** -16 }))
+      .toEqual({ difference: 2 ** -16, coverageDifference: 0, ok: false })
+  })
+
+  it('容差的尺度取全局与逐会话中较大的一个：逐会话 $12,288 时差 2^-17 仍在容差内', () => {
+    // 全局 $4,096，跨会话重复约 $8,192：尺度 12,288，容差 1.2288e-5；只按全局算是 4.096e-6，2^-17 就超了。
+    expect(4_096 + (8_192 + 2 ** -17) - 12_288).toBe(2 ** -17)
+    expect(2 ** -17).toBeGreaterThan(1e-9 * 4_096)
+
+    expect(verdict({ globalUsd: 4_096, sessionsUsd: 12_288, uniqueEventsUsd: 4_096, crossSessionDuplicateUsd: 8_192 + 2 ** -17 }))
+      .toEqual({ difference: 2 ** -17, coverageDifference: 0, ok: true })
+  })
+
+  it('差恰好等于容差仍然一致（≤，不是 <）', () => {
+    // 金额为 0 时尺度取 1，容差正好是 1e-9。
+    expect(verdict({ ...agreeing(0), uniqueEventsUsd: 1e-9 })).toEqual({ difference: 1e-9, coverageDifference: 0, ok: true })
+  })
+
+  it('逐会话之和含跨会话重复：加回重复金额才一致，漏加判不一致', () => {
+    // 两场会话共享一条 $2 的事实：逐会话合计 $5.5，全局与逐条都是 $3.5。
+    expect(verdict({ globalUsd: 3.5, sessionsUsd: 5.5, uniqueEventsUsd: 3.5, crossSessionDuplicateUsd: 2 }))
+      .toEqual({ difference: 0, coverageDifference: 0, ok: true })
+    expect(verdict({ globalUsd: 3.5, sessionsUsd: 5.5, uniqueEventsUsd: 3.5, crossSessionDuplicateUsd: 0 }))
+      .toEqual({ difference: 2, coverageDifference: 0, ok: false })
+  })
+
+  it('全局对逐条那一项不能省：与逐会话对得上、与逐条差 $0.5，判不一致', () => {
+    expect(verdict({ globalUsd: 3.5, sessionsUsd: 5.5, uniqueEventsUsd: 3, crossSessionDuplicateUsd: 2 }))
+      .toEqual({ difference: 0.5, coverageDifference: 0, ok: false })
+  })
+
+  it('覆盖率差 1e-6 个百分点判不一致（真实规模的 token 数，容差不随 token 数放大）', () => {
+    const result = verdict(agreeing(10), side(50, 16_000_000_000, 32_000_000_000), side(50 + 1e-6, 16_000_000_000, 32_000_000_000))
+
+    expect(result.difference).toBe(0)
+    expect(result.coverageDifference).toBeGreaterThan(1e-9)
+    expect(result.ok).toBe(false)
+  })
+
+  it('覆盖率也比整数：100% 与 0% 时百分点相同，覆盖或可计费 token 差 1 仍判不一致（D6）', () => {
+    expect(verdict(agreeing(10), side(100, 1_000, 1_000), side(100, 999, 999)))
+      .toEqual({ difference: 0, coverageDifference: 0, ok: false })
+    expect(verdict(agreeing(10), side(0, 0, 1_000), side(0, 0, 999)))
+      .toEqual({ difference: 0, coverageDifference: 0, ok: false })
+    expect(verdict(agreeing(10), side(100, 1_000, 1_000), side(100, 1_000, 1_000)))
+      .toEqual({ difference: 0, coverageDifference: 0, ok: true })
+  })
+})
+
+describe('buildInsights 的 token 对账会判不一致（F1j）', () => {
+  it('provider 结论是 usage 不可用、账本却有 billingTotal：Σ bySession 多出这一场，ok = false', () => {
+    // 默认 tokenUsage 1,000 + 500，legacy 聚合账本 1,500；它不进合计，但照样列在 bySession。
+    const result = buildInsights([makeSession({
+      sessionId: 'outcome-unavailable',
+      providerOutcome: { detected: 'detected', parse: 'parsed', usage: 'unavailable', reason: 'fixture' }
+    })], [])
+
+    expect(result.totalTokens).toBe(0)
+    expect(result.reconciliation).toMatchObject({
+      global: 0, projects: 0, sessions: 1_500, crossSessionDuplicateTokens: 0, difference: 1_500, ok: false
+    })
   })
 })

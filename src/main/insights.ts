@@ -144,13 +144,20 @@ export interface InsightsData {
   reconciliation: {
     global: number
     projects: number
+    /** Σ bySession: per session, so a billing fact two sessions share counts in both. */
     sessions: number
+    /** Owners whose billing fact counts in another session (parsed sessions; a fact in n sessions adds n − 1). */
+    crossSessionDuplicateFacts: number
+    /** Their tokens, in usage-available sessions only, the scope of global. */
+    crossSessionDuplicateTokens: number
     difference: number
     ok: boolean
     valuation: {
       globalUsd: number | null
       sessionsUsd: number | null
       uniqueEventsUsd: number | null
+      /** Those owners valued one by one (parsed sessions), a missing amount as 0. */
+      crossSessionDuplicateUsd: number
       difference: number
       coverageDifference: number
       ok: boolean
@@ -366,6 +373,8 @@ interface CountedUsage {
   output: number
   cacheRead: number
   cacheWrite: number
+  /** What tokens leaves out: the session's copies that count in another session. */
+  duplicateTokens: number
 }
 
 /** The session's ledger less its owners whose billing fact counts in another session. */
@@ -378,12 +387,14 @@ function countedUsage(ledger: SessionLedger): CountedUsage {
     input: accountingInput(accounting),
     output: components.outputTokens,
     cacheRead: components.cacheReadTokens,
-    cacheWrite: totalCacheWriteTokens(components)
+    cacheWrite: totalCacheWriteTokens(components),
+    duplicateTokens: 0
   }
   for (const ownerIndex of lost ?? []) {
     const fact = facts[ownerIndex]
     const input = fact.nonCachedInputTokens + fact.cacheReadTokens + fact.cacheWriteTokens
     const tokens = input + fact.outputTokens
+    usage.duplicateTokens += tokens
     usage.tokens -= tokens
     if (fact.agentScope === 'main') usage.conversationOnly -= tokens
     usage.input -= input
@@ -392,6 +403,50 @@ function countedUsage(ledger: SessionLedger): CountedUsage {
     usage.cacheWrite -= fact.cacheWriteTokens
   }
   return usage
+}
+
+type CoverageSide = Pick<Valuation, 'coveragePercent' | 'coveredTokens' | 'totalBillableTokens'>
+
+/** What the valuation reconciliation compares; a null amount counts as 0. */
+export interface ValuationReconciliationInput {
+  /** valuation.usd: the global owners, summed per session. */
+  globalUsd: number | null
+  /** Σ bySession valuation.usd: per session, cross-session copies included. */
+  sessionsUsd: number | null
+  /** The global owners valued one by one and summed flat. */
+  uniqueEventsUsd: number | null
+  /** The copies that count in another session, valued one by one. */
+  crossSessionDuplicateUsd: number
+  global: CoverageSide
+  uniqueEvents: CoverageSide
+}
+
+/**
+ * The valuation reconciliation verdict. The global total must equal the flat
+ * sum over the same owners, and with the cross-session copies added back it
+ * must equal the per-session sum. Each pair adds the same amounts in another
+ * order, so their last bits differ at real scale (1 ULP is already above
+ * 1e-12 from $8,192): USD gets 1e-9 of the larger total. Coverage stays exact:
+ * the covered and billable token counts must be equal, which also catches a
+ * difference at 0% or 100% coverage, and the percentages within 1e-9 points.
+ */
+export function valuationReconciliationVerdict(input: ValuationReconciliationInput): {
+  difference: number
+  coverageDifference: number
+  ok: boolean
+} {
+  const globalUsd = input.globalUsd ?? 0
+  const sessionsUsd = input.sessionsUsd ?? 0
+  const difference = Math.max(
+    Math.abs(globalUsd - (input.uniqueEventsUsd ?? 0)),
+    Math.abs(globalUsd + input.crossSessionDuplicateUsd - sessionsUsd)
+  )
+  const coverageDifference = Math.abs(input.global.coveragePercent - input.uniqueEvents.coveragePercent)
+  const ok = difference <= 1e-9 * Math.max(1, Math.abs(sessionsUsd), Math.abs(globalUsd)) &&
+    coverageDifference <= 1e-9 &&
+    input.global.coveredTokens === input.uniqueEvents.coveredTokens &&
+    input.global.totalBillableTokens === input.uniqueEvents.totalBillableTokens
+  return { difference, coverageDifference, ok }
 }
 
 const THIRTY_MINUTES = 30 * 60 * 1000
@@ -463,7 +518,11 @@ export function buildInsights(
   // revalued from the owners it keeps, any other reuses its own valuation, so
   // without cross-session copies the total is bit for bit what it was.
   const countedValuations: Valuation[] = []
-  const uniqueValuationEvents = new Map<string, UsageEvent>()
+  // The reconciliation's per-event oracle: every global owner, in one flat list.
+  const ownerEvents: UsageEvent[] = []
+  let crossSessionDuplicateFacts = 0
+  let crossSessionDuplicateTokens = 0
+  let crossSessionDuplicateUsd = 0
   const hourly = new Array(24).fill(0) as number[]
   const turnBuckets = [0, 0, 0, 0, 0, 0]
   let totalTokens = 0
@@ -496,14 +555,15 @@ export function buildInsights(
     if (parsed) {
       parsedSessionCount++
       sessionValuations.push(sessionValuation)
-      countedValuations.push(lost
-        ? aggregateValuations(owners.filter((_, index) => !lost.has(index)).map((event) => valueUsageEvent(event)))
-        : sessionValuation)
-      // The billing owners valuationForAccounting values: a forked child's copy
-      // shares its parent's keys and must not replace the parent's event here.
-      for (const event of owners) {
-        uniqueValuationEvents.set(`${session.sessionId}:${event.billingFactKey || event.dedupKey}`, event)
+      // owners are the billing owners valuationForAccounting values: a forked
+      // child's copy shares its parent's keys and never replaces its event.
+      const kept = lost ? owners.filter((_, index) => !lost.has(index)) : owners
+      countedValuations.push(lost ? aggregateValuations(kept.map((event) => valueUsageEvent(event))) : sessionValuation)
+      for (const event of kept) ownerEvents.push(event)
+      for (const ownerIndex of lost ?? []) {
+        crossSessionDuplicateUsd += valueUsageEvent(owners[ownerIndex]).usd ?? 0
       }
+      crossSessionDuplicateFacts += lost?.size ?? 0
       bySession.push({
         sessionId: session.sessionId,
         projectPath: fullPath,
@@ -582,6 +642,7 @@ export function buildInsights(
       sourceStats.usageAvailableSessionCount++
       projectStats.usageAvailableSessionCount++
       totalTokens += usage.tokens
+      crossSessionDuplicateTokens += usage.duplicateTokens
       conversationOnlyTokens += usage.conversationOnly
       totalInputTokens += usage.input
       totalOutputTokens += usage.output
@@ -758,21 +819,18 @@ export function buildInsights(
   const activeDays = dateSessionIds.size
   const projectsTotal = byProject.reduce((sum, project) => sum + project.totalTokens, 0)
   const sessionsTotal = bySession.reduce((sum, session) => sum + (session.totalTokens || 0), 0)
-  const difference = Math.max(Math.abs(totalTokens - projectsTotal), Math.abs(totalTokens - sessionsTotal))
-  const valuation = aggregateValuations(countedValuations)
-  const uniqueEventsValuation = aggregateValuations(
-    [...uniqueValuationEvents.values()].map((event) => valueUsageEvent(event))
+  // Σ bySession counts a cross-session copy in each of its sessions, totalTokens once.
+  const difference = Math.max(
+    Math.abs(totalTokens - projectsTotal),
+    Math.abs(totalTokens + crossSessionDuplicateTokens - sessionsTotal)
   )
+  const valuation = aggregateValuations(countedValuations)
+  const uniqueEventsValuation = aggregateValuations(ownerEvents.map((event) => valueUsageEvent(event)))
   const globalUsd = valuation.usd ?? null
   const sessionsUsd = sessionValuations.some((item) => item.usd !== undefined)
     ? sessionValuations.reduce((sum, item) => sum + (item.usd || 0), 0)
     : null
   const uniqueEventsUsd = uniqueEventsValuation.usd ?? null
-  const valuationDifference = Math.max(
-    Math.abs((globalUsd || 0) - (sessionsUsd || 0)),
-    Math.abs((globalUsd || 0) - (uniqueEventsUsd || 0))
-  )
-  const coverageDifference = Math.abs(valuation.coveragePercent - uniqueEventsValuation.coveragePercent)
 
   return {
     totalTokens,
@@ -801,19 +859,23 @@ export function buildInsights(
       global: totalTokens,
       projects: projectsTotal,
       sessions: sessionsTotal,
+      crossSessionDuplicateFacts,
+      crossSessionDuplicateTokens,
       difference,
       ok: difference === 0,
       valuation: {
         globalUsd,
         sessionsUsd,
         uniqueEventsUsd,
-        difference: valuationDifference,
-        coverageDifference,
-        // Per-session sums and the flat per-event sum add the same amounts in a
-        // different order, so their last bits differ at real scale (1 ULP is
-        // already above 1e-12 from $8,192). USD gets a tolerance relative to the
-        // total; coverage stays near-exact, both sides divide exact token sums.
-        ok: valuationDifference <= 1e-9 * Math.max(1, Math.abs(globalUsd || 0)) && coverageDifference <= 1e-9
+        crossSessionDuplicateUsd,
+        ...valuationReconciliationVerdict({
+          globalUsd,
+          sessionsUsd,
+          uniqueEventsUsd,
+          crossSessionDuplicateUsd,
+          global: valuation,
+          uniqueEvents: uniqueEventsValuation
+        })
       }
     },
     totalCacheReadTokens: totalCacheRead,

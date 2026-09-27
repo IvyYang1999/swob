@@ -17,6 +17,7 @@ import type {
 import {
   getLibrarySessionRegistryDiagnostics,
   getLibraryRoot,
+  loadAppConfig,
   resolveSessionBinding,
   resolveLibrarySessionRemoteState,
   scanLibrary,
@@ -97,6 +98,28 @@ export interface WriterLockStatus {
   evidenceHash: string | null
   manualRecoveryAvailable: boolean
   whyNotRecoverable: string | null
+  /**
+   * Set only when reason is 'remote-owner' and the owner names this
+   * installation's deviceId (F1l-c P2-3): this is exactly the residual case
+   * where an automatic/manual recovery could rest on deviceId + a stale lease,
+   * or on identity history, instead of a host proof - both of which two
+   * machines sharing a deviceId (a cloned home: Migration Assistant, Time
+   * Machine, a manual `cp -r ~`) would also satisfy. Null in every other case.
+   */
+  deviceIdCaveat: string | null
+}
+
+const WRITER_DEVICE_ID_CLONE_CAVEAT =
+  '这把锁的持有安装 deviceId 与本机相同：如果这确实是另一台机器（例如用迁移助理/Time Machine/手工整目录复制过 HOME），' +
+  '基于 deviceId + 租约过期或身份历史的恢复可能会误判为可安全接管；执行恢复前请先核对两台机器的 deviceId 是否本应不同。'
+
+/** Read-only; never creates app-config.json. Only for display - never treated as machine-binding proof. */
+function localDeviceIdForDisplay(): string | undefined {
+  try {
+    return loadAppConfig().deviceId
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -295,7 +318,8 @@ export function inspectWriterLock(
   libraryRoot = getLibraryRoot(),
   options: Parameters<typeof inspectLibraryWriterLease>[1] = {}
 ): WriterLockStatus {
-  const inspection = inspectLibraryWriterLease(libraryRoot, options)
+  const localDeviceId = options.localDeviceId ?? localDeviceIdForDisplay()
+  const inspection = inspectLibraryWriterLease(libraryRoot, { ...options, localDeviceId })
   return {
     state: inspection.state,
     ownerPid: inspection.ownerPid ?? null,
@@ -307,7 +331,10 @@ export function inspectWriterLock(
     leaseExpired: inspection.leaseExpired ?? null,
     evidenceHash: inspection.evidenceHash ?? null,
     manualRecoveryAvailable: inspection.manualRecoveryAvailable,
-    whyNotRecoverable: inspection.manualRecoveryAvailable ? null : inspection.state === 'blocked' ? inspection.message : null
+    whyNotRecoverable: inspection.manualRecoveryAvailable ? null : inspection.state === 'blocked' ? inspection.message : null,
+    deviceIdCaveat: inspection.reason === 'remote-owner' && inspection.ownerDeviceIsLocal === true
+      ? WRITER_DEVICE_ID_CLONE_CAVEAT
+      : null
   }
 }
 

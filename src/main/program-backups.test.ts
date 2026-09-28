@@ -16,9 +16,13 @@ import {
   LINEAGE_REGISTRY_BACKUP_FILE_NAME,
   PROGRAM_BACKUP_LIMITS,
   pruneProgramBackups,
+  readSearchIndexRepairStamp,
   SEARCH_INDEX_BACKUP_FILE_NAME,
+  SEARCH_INDEX_REPAIR_STAMP_FILE,
   searchIndexBackupDirectory,
-  searchIndexBackupName
+  searchIndexBackupName,
+  searchIndexRepairStampPath,
+  writeSearchIndexRepairStamp
 } from './program-backups'
 
 const searchDirectory = (): string => searchIndexBackupDirectory()
@@ -102,14 +106,17 @@ describe('program backup pruning (F1d-3)', () => {
     fs.mkdirSync(predeploy, { recursive: true })
     write(predeploy, 'search.db', 10)
     write(predeploy, 'manifest.json', 10)
+    // The repair stamp (F1d-3-b) sits next to the moved copies and is no backup.
+    expect(writeSearchIndexRepairStamp(Date.parse('2026-09-20T00:00:00.000Z'))).toBe(true)
     const untouched = [...foreign, namedDirectory, path.join(namedDirectory, 'inside.db'), namedLink, outsideTarget,
-      predeploy, path.join(predeploy, 'search.db'), path.join(predeploy, 'manifest.json')]
+      predeploy, path.join(predeploy, 'search.db'), path.join(predeploy, 'manifest.json'), searchIndexRepairStampPath()]
     const before = new Map(untouched.map((filePath) => [filePath, fingerprint(filePath)]))
 
     const report = pruneProgramBackups({ log })
 
     expect(listing(searchDirectory())).toEqual([
-      path.basename(namedLink), path.basename(namedDirectory), 'notes.txt', 'search-manual.db.corrupt', `${s1}.bak`, s3, `${s3}-shm`
+      path.basename(namedLink), path.basename(namedDirectory), 'notes.txt', 'search-manual.db.corrupt', `${s1}.bak`, s3, `${s3}-shm`,
+      SEARCH_INDEX_REPAIR_STAMP_FILE
     ].sort())
     expect(listing(lineageDirectory())).toEqual(['README', 'session-lineage-before-upgrade.json', ...lineage.slice(2)].sort())
     for (const [filePath, print] of before) expect(fingerprint(filePath), filePath).toEqual(print)
@@ -228,5 +235,55 @@ describe('program backup pruning (F1d-3)', () => {
     expect(fs.existsSync(path.join(realDirectory, copy))).toBe(true)
     fs.unlinkSync(searchDirectory())
     expect(logs).toEqual([])
+  })
+})
+
+describe('the repair stamp next to the moved indexes (F1d-3-b)', () => {
+  it('reads back the start it was given; nothing, garbage, a later time, a large file or a directory read as none', () => {
+    expect(readSearchIndexRepairStamp()).toBeNull()
+    const at = Date.now() - 5 * 60_000
+    expect(writeSearchIndexRepairStamp(at)).toBe(true)
+    expect(readSearchIndexRepairStamp()).toBe(at)
+    expect(fs.lstatSync(searchIndexRepairStampPath()).mode & 0o777).toBe(0o600)
+    expect(writeSearchIndexRepairStamp(at + 1)).toBe(true)
+    expect(readSearchIndexRepairStamp()).toBe(at + 1)
+    // A clock set back must not hold repairs off: a start later than now is no record.
+    expect(readSearchIndexRepairStamp(at)).toBeNull()
+    for (const content of ['', 'not json', '{"lastRepairAt":"soon"}', '{"lastRepairAt":-5}', 'null', '[1]']) {
+      fs.writeFileSync(searchIndexRepairStampPath(), content)
+      expect(readSearchIndexRepairStamp(), content).toBeNull()
+    }
+    fs.writeFileSync(searchIndexRepairStampPath(), JSON.stringify({ lastRepairAt: at, padding: 'x'.repeat(5000) }))
+    expect(readSearchIndexRepairStamp()).toBeNull()
+    fs.rmSync(searchIndexRepairStampPath())
+    fs.mkdirSync(searchIndexRepairStampPath())
+    expect(readSearchIndexRepairStamp()).toBeNull()
+    expect(writeSearchIndexRepairStamp(at)).toBe(false)
+  })
+
+  it('is never read or written through a symbolic link', () => {
+    const target = write(outside, 'elsewhere.json', 10)
+    fs.writeFileSync(target, JSON.stringify({ lastRepairAt: 1000 }))
+    const before = fingerprint(target)
+    fs.symlinkSync(target, searchIndexRepairStampPath())
+
+    expect(readSearchIndexRepairStamp()).toBeNull()
+    expect(writeSearchIndexRepairStamp(Date.now())).toBe(false)
+
+    expect(fingerprint(target)).toEqual(before)
+    expect(fs.lstatSync(searchIndexRepairStampPath()).isSymbolicLink()).toBe(true)
+  })
+
+  it('is never listed or deleted by pruneProgramBackups, even over the size cap', () => {
+    expect(writeSearchIndexRepairStamp(Date.parse('2026-09-28T00:00:00.000Z'))).toBe(true)
+    const stamp = fingerprint(searchIndexRepairStampPath())
+    const older = searchSet('2026-09-01T00:00:00.000Z')
+    const newest = searchSet('2026-09-20T00:00:00.000Z')
+
+    const report = pruneProgramBackups({ log, limits: { totalBytes: 1 } })
+
+    expect(report.deleted).toEqual([older])
+    expect(listing(searchDirectory())).toEqual([SEARCH_INDEX_REPAIR_STAMP_FILE, newest].sort())
+    expect(fingerprint(searchIndexRepairStampPath())).toEqual(stamp)
   })
 })

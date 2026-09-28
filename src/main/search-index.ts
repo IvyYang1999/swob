@@ -18,9 +18,11 @@ import {
 import { builtinProviderForId } from '../shared/provider-capabilities'
 import {
   pruneProgramBackups,
+  readSearchIndexRepairStamp,
   SEARCH_INDEX_COMPANION_SUFFIXES,
   searchIndexBackupDirectory,
-  searchIndexBackupName
+  searchIndexBackupName,
+  writeSearchIndexRepairStamp
 } from './program-backups'
 
 // v4 rebuilds unchanged files so ANSI/CSI/OSC text cannot survive in old FTS rows.
@@ -415,12 +417,24 @@ function reportCorruptRead(operation: 'search' | 'probe', error: unknown): void 
 }
 
 /**
- * One repair per this long per thread: an index that keeps turning corrupt
- * (a failing disk) is reported, not moved aside and rebuilt over and over.
+ * One repair per this long: an index that keeps turning corrupt (a failing
+ * disk) is reported, not moved aside and rebuilt over and over. F1d-3-b:
+ * not per thread only. A repair that gets as far as moving files also
+ * records when it began next to the moved copies (program-backups.ts,
+ * search-backups/last-repair.json), so the interval outlives a recycled
+ * library worker and a restarted app; this thread's own record covers the
+ * attempts that stop before that.
  */
 const SEARCH_INDEX_REPAIR_INTERVAL_MS = 10 * 60_000
 let lastSearchIndexRepairAt: number | null = null
 let deferredRepairReportedFor: number | null = null
+
+/** The later of this thread's last repair and the one recorded on disk, if any. */
+function lastRepairStartedAt(now: number): number | null {
+  const recorded = readSearchIndexRepairStamp(now)
+  if (lastSearchIndexRepairAt === null) return recorded
+  return recorded === null ? lastSearchIndexRepairAt : Math.max(lastSearchIndexRepairAt, recorded)
+}
 
 interface SearchIndexRepairTrigger {
   readonly operation: string
@@ -506,13 +520,14 @@ function freeSearchIndexBackupName(directory: string, at: number): string | null
 function repairCorruptSearchIndex(trigger: SearchIndexRepairTrigger): SearchIndexRepairResult {
   const startedAt = Date.now()
   const fields = { operation: trigger.operation, reason: trigger.reason }
-  if (lastSearchIndexRepairAt !== null && startedAt - lastSearchIndexRepairAt < SEARCH_INDEX_REPAIR_INTERVAL_MS) {
-    if (deferredRepairReportedFor !== lastSearchIndexRepairAt) {
-      deferredRepairReportedFor = lastSearchIndexRepairAt
+  const lastRepairAt = lastRepairStartedAt(startedAt)
+  if (lastRepairAt !== null && startedAt - lastRepairAt < SEARCH_INDEX_REPAIR_INTERVAL_MS) {
+    if (deferredRepairReportedFor !== lastRepairAt) {
+      deferredRepairReportedFor = lastRepairAt
       emitSearchIndexEvent({
         event: 'search-index-repair-deferred',
         ...fields,
-        sinceLastRepairMs: startedAt - lastSearchIndexRepairAt
+        sinceLastRepairMs: startedAt - lastRepairAt
       })
     }
     return 'refused'
@@ -563,6 +578,8 @@ function repairCorruptSearchIndex(trigger: SearchIndexRepairTrigger): SearchInde
   } catch (error) {
     return refuse('backup-directory', error)
   }
+  // Before anything moves (F1d-3-b): the next repair, in whichever thread or run, waits the interval.
+  writeSearchIndexRepairStamp(startedAt)
   const backupFileName = freeSearchIndexBackupName(directory, startedAt)
   if (!backupFileName) return refuse('backup-name')
   const moved: Array<{ from: string; to: string }> = []

@@ -28,7 +28,14 @@ import {
   type SearchIndexEvent,
   type SearchIndexSource
 } from './search-index'
-import { SEARCH_INDEX_BACKUP_FILE_NAME, searchIndexBackupDirectory } from './program-backups'
+import {
+  readSearchIndexRepairStamp,
+  SEARCH_INDEX_BACKUP_FILE_NAME,
+  SEARCH_INDEX_REPAIR_STAMP_FILE,
+  searchIndexBackupDirectory,
+  searchIndexRepairStampPath,
+  writeSearchIndexRepairStamp
+} from './program-backups'
 import {
   breakFullTextPages,
   overwriteSearchIndexHeader,
@@ -98,9 +105,10 @@ function identity(filePath: string): { dev: number; ino: number; size: number; m
   return { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs }
 }
 
+/** What is in search-backups/ but the repair stamp beside the moved files (checked on its own, F1d-3-b). */
 function backups(): string[] {
   try {
-    return fs.readdirSync(searchIndexBackupDirectory()).sort()
+    return fs.readdirSync(searchIndexBackupDirectory()).filter((name) => name !== SEARCH_INDEX_REPAIR_STAMP_FILE).sort()
   } catch {
     return []
   }
@@ -339,6 +347,60 @@ describe('search.db repair (F1d-3)', () => {
     expect(backupSets()).toHaveLength(1)
   })
 
+  it('F1d-3-b: the repair interval outlives the writer that repaired (a recycled worker, a restarted app): its start is kept beside the moved copies', async () => {
+    const all = await healthyIndex()
+    truncateSearchIndex(searchDatabasePath())
+    await synchronizeSearchSources(all)
+    const [repaired] = named('search-index-repaired')
+    expect(repaired).toMatchObject({ complete: true })
+    const stamp = readSearchIndexRepairStamp()
+    expect(stamp).toEqual(expect.any(Number))
+    expect(fs.lstatSync(searchIndexRepairStampPath()).isFile()).toBe(true)
+    // The moved copy is named for the same start.
+    expect(String(repaired.backupFileName)).toContain(new Date(stamp!).toISOString().replace(/[:.]/g, '-'))
+
+    // A new writer: this thread's own record is gone (closeSearchIndex), as in a new worker.
+    closeSearchIndex()
+    overwriteSearchIndexHeader(searchDatabasePath())
+    const second = identity(searchDatabasePath())
+    await expect(synchronizeSearchSources(all)).rejects.toMatchObject({ code: 'SQLITE_NOTADB' })
+    expect(named('search-index-repaired')).toHaveLength(1)
+    expect(named('search-index-repair-deferred')).toEqual([
+      expect.objectContaining({ operation: 'full-sync', reason: 'SQLITE_NOTADB', sinceLastRepairMs: expect.any(Number) })
+    ])
+    expect(identity(searchDatabasePath())).toEqual(second)
+    expect(backupSets()).toEqual([String(repaired.backupFileName)])
+
+    // The interval after that start, the next writer repairs again.
+    closeSearchIndex()
+    expect(writeSearchIndexRepairStamp(stamp! - 10 * 60_000)).toBe(true)
+    await synchronizeSearchSources(all)
+    expect(named('search-index-repaired')).toHaveLength(2)
+    for (const token of TOKENS) expect(searchFTS(token), token).toHaveLength(1)
+  })
+
+  it('F1d-3-b: an attempt this thread refused before moving anything counts too, even when the stamp on disk is older', async () => {
+    const all = await healthyIndex()
+    // search.db is a symbolic link to a corrupt file: the repair refuses before anything moves
+    // (a link is never followed or moved), and records nothing on disk.
+    const target = path.join(root, 'linked.db')
+    fs.renameSync(searchDatabasePath(), target)
+    overwriteSearchIndexHeader(target)
+    fs.symlinkSync(target, searchDatabasePath())
+    await expect(synchronizeSearchSources(all)).rejects.toMatchObject({ code: 'SQLITE_NOTADB' })
+    expect(named('search-index-repair-failed')).toEqual([expect.objectContaining({ why: 'not-a-file' })])
+    expect(readSearchIndexRepairStamp()).toBeNull()
+
+    // An older repair on disk (past the interval) does not reopen the interval this attempt started.
+    fs.mkdirSync(searchIndexBackupDirectory(), { recursive: true })
+    expect(writeSearchIndexRepairStamp(Date.now() - 11 * 60_000)).toBe(true)
+    await expect(synchronizeSearchSources(all)).rejects.toMatchObject({ code: 'SQLITE_NOTADB' })
+    expect(named('search-index-repair-deferred')).toHaveLength(1)
+    expect(named('search-index-repair-failed')).toHaveLength(1)
+    expect(named('search-index-repaired')).toEqual([])
+    expect(fs.lstatSync(searchDatabasePath()).isSymbolicLink()).toBe(true)
+  })
+
   it('a later repair retires the earlier moved index only once its own copy is whole on disk (N = 1), logging each deletion before and after', async () => {
     const all = await healthyIndex()
     truncateSearchIndex(searchDatabasePath())
@@ -348,9 +410,11 @@ describe('search.db repair (F1d-3)', () => {
     expect(backupSets()).toEqual([first])
     expect(events.filter((event) => event.event.startsWith('program-backup'))).toEqual([])
 
-    // A new writer (as after the worker is recycled) and a second corruption.
+    // A new writer (as after the worker is recycled) and a second corruption,
+    // more than the repair interval later (F1d-3-b: it outlives the writer).
     closeSearchIndex()
     await new Promise((resolve) => setTimeout(resolve, 2))
+    expect(writeSearchIndexRepairStamp(Date.now() - 11 * 60_000)).toBe(true)
     overwriteSearchIndexHeader(searchDatabasePath())
     events.length = 0
     await synchronizeSearchSources(all)

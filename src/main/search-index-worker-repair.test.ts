@@ -158,4 +158,36 @@ describe('search.db repair across the worker boundary (F1d-3)', () => {
       await worker.close()
     }
   }, 60_000)
+
+  it('F1d-3-b: the repair interval outlives the worker; a new worker (the app recycles it after a large file) defers a second repair within 10 minutes', async () => {
+    const descriptors = ['papaworker', 'quebecworker'].map((token) => ({ filePath: writeSession(token), sessionId: `${token}-session`, source: 'claude-code' }))
+    await synchronizeSearchSources(descriptors)
+    closeSearchIndex()
+    overwriteSearchIndexHeader(searchDatabasePath())
+
+    const first = new LibraryWorkerClient(workerPath)
+    try {
+      await first.syncSearchSources(descriptors, { prune: true })
+    } finally {
+      await first.close()
+    }
+    expect(events.filter((event) => event.event === 'search-index-repaired')).toHaveLength(1)
+
+    // The rebuilt index turns corrupt again (a failing disk) and the next worker meets it.
+    overwriteSearchIndexHeader(searchDatabasePath())
+    const again = fs.lstatSync(searchDatabasePath())
+    const next = new LibraryWorkerClient(workerPath)
+    try {
+      await expect(next.syncSearchSources(descriptors, { prune: true })).rejects.toMatchObject({ code: 'SQLITE_NOTADB' })
+    } finally {
+      await next.close()
+    }
+    expect(events.filter((event) => event.event === 'search-index-repaired')).toHaveLength(1)
+    expect(events.filter((event) => event.event === 'search-index-repair-deferred')).toEqual([
+      expect.objectContaining({ operation: 'full-sync', reason: 'SQLITE_NOTADB', sinceLastRepairMs: expect.any(Number) })
+    ])
+    const now = fs.lstatSync(searchDatabasePath())
+    expect({ ino: now.ino, size: now.size, mtimeMs: now.mtimeMs }).toEqual({ ino: again.ino, size: again.size, mtimeMs: again.mtimeMs })
+    expect(fs.readdirSync(searchIndexBackupDirectory()).filter((name) => name.endsWith('.db.corrupt'))).toHaveLength(1)
+  }, 60_000)
 })

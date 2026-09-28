@@ -28,6 +28,57 @@ export function searchIndexBackupName(at: Date, pid: number, attempt: number): s
 }
 
 /**
+ * F1d-3-b: when a repair last began moving a search index aside, kept next
+ * to the moved copies, so "at most one repair per interval" outlives the
+ * thread that repaired (the app recycles its library worker after a large
+ * file, and restarts). Not a backup name: pruneProgramBackups never lists it.
+ */
+export const SEARCH_INDEX_REPAIR_STAMP_FILE = 'last-repair.json'
+
+export function searchIndexRepairStampPath(): string {
+  return path.join(searchIndexBackupDirectory(), SEARCH_INDEX_REPAIR_STAMP_FILE)
+}
+
+/**
+ * When the last repair began (epoch ms); null when none is recorded or the
+ * record is not a small regular file holding a time no later than `now` (a
+ * clock set back must not hold repairs off).
+ */
+export function readSearchIndexRepairStamp(now = Date.now()): number | null {
+  try {
+    const stamp = searchIndexRepairStampPath()
+    const stat = fs.lstatSync(stamp)
+    if (!stat.isFile() || stat.size > 4096) return null
+    const value = (JSON.parse(fs.readFileSync(stamp, 'utf8')) as { lastRepairAt?: unknown } | null)?.lastRepairAt
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= now ? value : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Record that a repair began at `at` (search-backups/ must exist). Never
+ * through a symbolic link; best effort: false when it could not be written,
+ * and the repairing thread's own interval still holds.
+ */
+export function writeSearchIndexRepairStamp(at: number): boolean {
+  let descriptor: number | null = null
+  try {
+    descriptor = fs.openSync(
+      searchIndexRepairStampPath(),
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
+      0o600
+    )
+    fs.writeSync(descriptor, `${JSON.stringify({ lastRepairAt: at })}\n`)
+    return true
+  } catch {
+    return false
+  } finally {
+    if (descriptor !== null) fs.closeSync(descriptor)
+  }
+}
+
+/**
  * The lineage registry copies F1d-2 writes (session-lineage.ts,
  * createBackupFile): `session-lineage-<ISO time>-<pid>[-<n>].json`. Stricter
  * than the name F1d-2 recognises: a hand-named copy there is never pruned.

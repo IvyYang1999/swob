@@ -281,8 +281,17 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
     engineerHint: 'src/checkup/checks/resume.ts#zshSyntaxOk：`zsh -n -c "<命令>"` 语法检查未通过（只解析不执行）；命令由 src/main/session-actions.ts#buildResumeCommand 拼出'
   },
   'resume.anchor-mismatch': {
-    ownerLine: '{source}：有 {n} 场会话，Swob 记的最后一句话和这次重新读到的对不上，恢复出来的内容可能是旧的或者串了分支。转给开发',
-    engineerHint: 'src/checkup/checks/resume.ts#anchorStatusFor -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：hash 不相等'
+    ownerLine: '{source}：有 {n} 场会话，点「恢复」打开的内容和 Swob 里显示的不是同一份；我们在修，不用你处理',
+    engineerHint: 'src/checkup/checks/resume.ts#classifyAnchorComparison -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：恢复侧（Claude 取 sessionId 命名文件即 primaryPath／Codex 取 state db threads.rollout_path 指向文件，无行退回 primaryPath）与展示侧（#resolveDisplaySide 按来源区分：Claude 取 session.paths 内锚点时间戳最新的文件；Codex 取 session.primaryPath 本身，Swob 不合并 Codex 多副本展示，见 F1o 诊断）hash 不相等'
+  },
+  // —— C2c-3 additions (⑥ resume L3 口径修正：恢复侧 vs 展示侧，见 F1o 诊断) ——
+  'resume.anchor-cache-lag': {
+    ownerLine: '{source}：有 {n} 场会话，Swob 这次读到的内容比它自己记录的更新时间还新，大概率是内部缓存没跟上，不是内容真的对不上。我们在看，不用你处理',
+    engineerHint: 'src/checkup/checks/resume.ts#classifyAnchorComparison：展示侧（#resolveDisplaySide 按来源区分，见 resume.anchor-mismatch 的说明）自身锚点时间戳晚于 ReadoutSession.updatedAt（loadAllSessions 给出的摘要字段，可能来自内核复用的旧摘要缓存条目，见设计文档勘误），判定为缓存滞后而非数据错误'
+  },
+  'resume.anchor-cannot-verify': {
+    ownerLine: '{source}：有 {n} 场会话，工具自己记录的恢复位置这次没能读到，没法确认和 Swob 显示的是不是同一份。转给开发看看',
+    engineerHint: 'src/checkup/checks/resume.ts#codexRecoverySide：Codex state db threads.rollout_path 有行，但目标路径这次未解析到内容（realOrResolved 后不在 codexParsed 读取队列里，或读取本身失败）；未退回按 primaryPath 直接比较，因为已知恢复目标另有其文，静默回退可能掩盖真实分歧'
   }
 }
 
@@ -371,6 +380,41 @@ export const RETIRED_TEMPLATES: readonly RetiredTemplate[] = [
     text: 'src/main/session-loader.ts#loadLegacySessionSnapshot：子 agent 只挂顶层父会话，没按 thread_spawn 逐级上溯',
     replacedBy: 'src/main/session-loader.ts#loadLegacySessionSnapshot：F1b 起子 agent 沿 parentSessionId 逐级上溯（最多 16 层）挂到顶层会话；走不到 Swob 的顶层会话才挂不上：链在中间断了（某层 rollout 已不在、没写父会话编号，或顶层祖先不是 Swob 的会话）、父子成环、超过 16 层',
     retiredIn: 'C1d (checkup 1.2.0)'
+  },
+  {
+    code: 'resume.anchor-mismatch',
+    field: 'ownerLine',
+    text: '{source}：有 {n} 场会话，Swob 记的最后一句话和这次重新读到的对不上，恢复出来的内容可能是旧的或者串了分支。转给开发',
+    replacedBy: '{source}：有 {n} 场会话，点「恢复」打开的内容和 Swob 里显示的不是同一份；我们在修，不用你处理',
+    retiredIn: 'C2c-3 (checkup 1.3.0)'
+  },
+  {
+    code: 'resume.anchor-mismatch',
+    field: 'engineerHint',
+    text: 'src/checkup/checks/resume.ts#anchorStatusFor -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：hash 不相等',
+    replacedBy: 'src/checkup/checks/resume.ts#classifyAnchorComparison -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：恢复侧（Claude 取 sessionId 命名文件即 primaryPath／Codex 取 state db threads.rollout_path 指向文件，无行退回 primaryPath）与展示侧（session.paths 内锚点时间戳最新的文件）hash 不相等',
+    retiredIn: 'C2c-3 (checkup 1.3.0)'
+  },
+  {
+    code: 'resume.anchor-mismatch',
+    field: 'reasonText',
+    text: 'Swob 记的最后一句话和重新读到的对不上',
+    replacedBy: '点「恢复」打开的内容和 Swob 显示的不是同一份',
+    retiredIn: 'C2c-3 (checkup 1.3.0)'
+  },
+  {
+    code: 'resume.anchor-mismatch',
+    field: 'engineerHint',
+    text: 'src/checkup/checks/resume.ts#classifyAnchorComparison -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：恢复侧（Claude 取 sessionId 命名文件即 primaryPath／Codex 取 state db threads.rollout_path 指向文件，无行退回 primaryPath）与展示侧（session.paths 内锚点时间戳最新的文件）hash 不相等',
+    replacedBy: 'src/checkup/checks/resume.ts#classifyAnchorComparison -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：恢复侧（Claude 取 sessionId 命名文件即 primaryPath／Codex 取 state db threads.rollout_path 指向文件，无行退回 primaryPath）与展示侧（#resolveDisplaySide 按来源区分：Claude 取 session.paths 内锚点时间戳最新的文件；Codex 取 session.primaryPath 本身，Swob 不合并 Codex 多副本展示，见 F1o 诊断）hash 不相等',
+    retiredIn: 'C2c-3 ③ (checkup 1.3.0)'
+  },
+  {
+    code: 'resume.anchor-cache-lag',
+    field: 'engineerHint',
+    text: 'src/checkup/checks/resume.ts#classifyAnchorComparison：展示侧（session.paths 内锚点时间戳最新的文件）自身锚点时间戳晚于 ReadoutSession.updatedAt（loadAllSessions 给出的摘要字段，可能来自内核复用的旧摘要缓存条目，见设计文档勘误），判定为缓存滞后而非数据错误',
+    replacedBy: 'src/checkup/checks/resume.ts#classifyAnchorComparison：展示侧（#resolveDisplaySide 按来源区分，见 resume.anchor-mismatch 的说明）自身锚点时间戳晚于 ReadoutSession.updatedAt（loadAllSessions 给出的摘要字段，可能来自内核复用的旧摘要缓存条目，见设计文档勘误），判定为缓存滞后而非数据错误',
+    retiredIn: 'C2c-3 ③ (checkup 1.3.0)'
   }
 ]
 
@@ -510,7 +554,9 @@ export const REASON_TEXT: Readonly<Record<ReasonCode, string>> = {
   'resume.directory-missing': '记录的工作目录已经不在了（环境问题）',
   'resume.file-missing': '记录的文件这次已经找不到了',
   'resume.command-syntax-invalid': 'Swob 拼出来的恢复命令语法不对',
-  'resume.anchor-mismatch': 'Swob 记的最后一句话和重新读到的对不上',
+  'resume.anchor-mismatch': '点「恢复」打开的内容和 Swob 显示的不是同一份',
+  'resume.anchor-cache-lag': '展示的内容比记录的更新时间还新，像是缓存滞后',
+  'resume.anchor-cannot-verify': 'Codex 自己记录的恢复位置这次没能读到',
   'resume.probe-not-injected': '这个壳没有注入命令层探针，命令层这次不判定',
   'source.not-implemented': '本版体检还没有检查这个来源',
   'source.no-data': '本机没有这个来源的数据',
@@ -760,7 +806,10 @@ export const MEASURE_LABELS: Readonly<Record<string, string>> = {
   commandSyntaxInvalid: '命令语法不对',
   anchorCompared: '参与锚点比对',
   anchorMatch: '锚点一致',
-  anchorMismatch: '锚点不一致'
+  anchorMismatch: '锚点不一致',
+  // ⑥ resume (C2c-3)
+  anchorCacheLag: '锚点缓存滞后',
+  anchorCannotVerify: '锚点无法核对'
 }
 
 /** Headings, table headers and fixed sentences of the Markdown report. */
@@ -845,6 +894,9 @@ export const MARKDOWN_TEXT = {
   colAnchor: '锚点（一致/不一致）',
   resumeCommandCell: '{n} 找到 / {n} 坏链接 / {n} 找不到',
   resumeAnchorCell: '{n} 一致 / {n} 不一致',
+  // ⑥ resume (C2c-3, 抽样种子与抽中会话，工程师视图；task book H1 / C2c 独立验收 P2-1)
+  resumeSamplingLine: '抽样种子：{date}（{offset}）· 抽中会话（盐化 id，至多 5 个）：{samples}',
+  resumeSamplingLineEmpty: '抽样种子：{date}（{offset}）· 本次没有会话被抽中',
   colMeasure: '数字',
   colSide: '哪一侧',
   colUnit: '单位',

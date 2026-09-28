@@ -117,8 +117,16 @@ export function unavailableReadoutTokens(): ReadoutSessionTokens {
  * Hashed anchor pair (⑥ L3, C2c): the normalized last user / last assistant text of one physical file,
  * reduced to sha256(text).slice(0,8) — never the text itself (design red line: "锚点只留哈希/布尔"). `null`
  * when that role has no anchor text in the file (e.g. an assistant-only or empty file).
+ *
+ * `lastTimestamp` (C2c-3): the file's own record timestamp of its last non-sidechain user/assistant record
+ * (whichever role that is), kept only to (a) let checks/resume.ts pick which of a session's several files
+ * the merged UI would show last — an approximation, not a replica of session-loader.ts's uuid-deduped
+ * cross-file merge — and (b) flag a cached summary that has not caught up to a fresher on-disk file (design
+ * doc's own errata: `loadAllSessions({readOnly:true})` may reuse a `summary-cache.sqlite` entry older than
+ * this run's own fresh per-file read). A timestamp, never raw text (still within the red line). Optional so
+ * every pre-C2c-3 fixture/older readout keeps compiling; absent is equivalent to null (no ranking signal).
  */
-export interface ResumeAnchorHashes { lastUser: string | null; lastAssistant: string | null }
+export interface ResumeAnchorHashes { lastUser: string | null; lastAssistant: string | null; lastTimestamp?: string | null }
 
 export interface ClaudeParseResult { records: number; elapsedMs: number; partial: boolean; resumeAnchors?: ResumeAnchorHashes }
 
@@ -228,7 +236,10 @@ async function withCapturedConsole<T>(counter: { lines: number }, run: () => Pro
   }
 }
 
-function realOrResolved(filePath: string): string {
+/** Real path of `filePath`, falling back to a plain resolve when it does not (yet) exist. Exported (C2c-3)
+ * so checks/resume.ts can normalize a path read from outside this module (Codex state db `rollout_path`)
+ * the same way every path already inside a `ReadoutSession`/`claudeParsed`/`codexParsed` key was. */
+export function realOrResolved(filePath: string): string {
   return realpathOrNull(filePath) ?? path.resolve(filePath)
 }
 
@@ -387,15 +398,26 @@ function claudeMessageText(message: RawJsonlMessage): string {
  * not on the kernel-gateway whitelist); "last non-sidechain record of each role in file order" is used
  * instead — a reasonable v1 simplification (task book: comparison is non-independent / [D] already).
  */
+/** Latest parseable timestamp seen so far (file order is not trusted to already be chronological); `null` when nothing parsed yet. */
+function laterTimestamp(current: string | null, currentMs: number, candidate: string): { value: string | null; ms: number } {
+  const ms = Date.parse(candidate)
+  if (!Number.isFinite(ms) || ms < currentMs) return { value: current, ms: currentMs }
+  return { value: candidate, ms }
+}
+
 function claudeResumeAnchors(messages: readonly RawJsonlMessage[]): ResumeAnchorHashes {
   const candidates: ResumeAnchorMessage[] = []
+  let lastTimestamp: string | null = null
+  let lastMs = -Infinity
   for (const message of messages) {
     if (message.isSidechain) continue
     if (message.type === 'user') candidates.push({ role: 'user', text: claudeMessageText(message) })
     else if (message.type === 'assistant') candidates.push({ role: 'assistant', text: claudeMessageText(message) })
+    else continue
+    ;({ value: lastTimestamp, ms: lastMs } = laterTimestamp(lastTimestamp, lastMs, message.timestamp))
   }
   const anchors = anchorsFromMessages(candidates)
-  return { lastUser: hashAnchor(anchors.user), lastAssistant: hashAnchor(anchors.assistant) }
+  return { lastUser: hashAnchor(anchors.user), lastAssistant: hashAnchor(anchors.assistant), lastTimestamp }
 }
 
 /** One response_item.message row's anchor candidate, or null when it is not a user/assistant message. */
@@ -413,12 +435,16 @@ function codexAnchorCandidate(line: Pick<CodexLine, 'type' | 'payload'>): Resume
 /** Last user/assistant anchor of one Codex rollout file (⑥ C2c): same reduction as the Claude side. */
 function codexResumeAnchors(lines: readonly CodexLine[]): ResumeAnchorHashes {
   const candidates: ResumeAnchorMessage[] = []
+  let lastTimestamp: string | null = null
+  let lastMs = -Infinity
   for (const line of lines) {
     const candidate = codexAnchorCandidate(line)
-    if (candidate) candidates.push(candidate)
+    if (!candidate) continue
+    candidates.push(candidate)
+    ;({ value: lastTimestamp, ms: lastMs } = laterTimestamp(lastTimestamp, lastMs, line.timestamp))
   }
   const anchors = anchorsFromMessages(candidates)
-  return { lastUser: hashAnchor(anchors.user), lastAssistant: hashAnchor(anchors.assistant) }
+  return { lastUser: hashAnchor(anchors.user), lastAssistant: hashAnchor(anchors.assistant), lastTimestamp }
 }
 
 /**

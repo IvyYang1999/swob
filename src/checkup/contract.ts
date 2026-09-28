@@ -28,6 +28,18 @@ export interface CheckResult {
   findings: Finding[]
   /** C1a addition: reason code when the whole check is undetermined / not applicable. */
   reason?: string
+  /**
+   * ⑥ resume (C2c-3): the local calendar day + UTC offset (minutes — see checks/common.ts#localDateAndOffset
+   * for why not the formatted `UTC±HH:MM` string) the command-layer sampling seed was computed from (in
+   * production this *is* the seed value: run.ts defaults `resumeSample.seed` to exactly this same local
+   * date), and every session actually sampled this run (salted, at most 5 — same convention as
+   * `Finding.samples`), so a reader can see "same local day -> same batch" is real and reproduce it
+   * (task book H1; C2c 独立验收 P2-1: this was never rendered anywhere). Deliberately reports the computed
+   * local day rather than echoing `CheckupOptions.resumeSample.seed` verbatim: that option accepts an
+   * arbitrary caller string (tests use non-date values), which the privacy scanner's whitelist would
+   * reject. Only ever set by the resume check; every other check leaves it undefined.
+   */
+  resumeSampling?: { localDate: string; timezoneOffsetMinutes: number; sampledIds: string[] }
 }
 export interface CheckupReport {
   schemaVersion: 1
@@ -201,7 +213,13 @@ export const ORACLE_IDS = [
   'codex.state-db',
   'census.unscanned-roots',
   'census.source-presence',
-  // resume ⑥ (C2c): the local filesystem + login-shell PATH (design "工具自己的存储，加上本机环境")
+  // resume ⑥ (C2c): the local filesystem + login-shell PATH (design "工具自己的存储，加上本机环境") — backs
+  // the data-layer buckets (recoverable/missingFile/missingDirectory, a fresh fs.statSync this run) and the
+  // command-layer lookup (commandFound/commandBrokenSymlink/commandMissing/commandSyntaxInvalid, a fresh
+  // PATH walk this run) only. The L3 anchor numbers (anchorCompared/anchorMatch/anchorMismatch/
+  // anchorCacheLag/anchorCannotVerify) have no independent oracle at all — both the "recovery side" and the
+  // "display side" come from this same readout pass (self-referential, [D] on the measure itself) — so this
+  // id must not be read as covering them (C2c 独立验收 P2-4).
   'fs.local-environment'
 ] as const
 
@@ -322,6 +340,14 @@ export const REASON_CODES = [
   'resume.file-missing',
   'resume.command-syntax-invalid',
   'resume.anchor-mismatch',
+  // resume ⑥ (C2c-3): both sides read, both non-empty, genuinely different — but Swob's own summary
+  // (updatedAt) already looks behind the fresh anchor re-read, so a stale grouping/cache is more likely
+  // than two unrelated files (task book M1/S2, F1o/C2c 独立验收 P1-1)
+  'resume.anchor-cache-lag',
+  // resume ⑥ (C2c-3): Codex's own state db names a different file as the one it would actually resume,
+  // but this run could not read it (path did not resolve, or was outside this run's read queue) — neither
+  // a confirmed match nor a confirmed mismatch (task book S3)
+  'resume.anchor-cannot-verify',
   // resume ⑥ (C2c): the shell running the checkup did not inject a command-layer probe (design §3.4 —
   // e.g. the AI diary), never a real environment/data problem
   'resume.probe-not-injected',

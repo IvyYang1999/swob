@@ -38,6 +38,7 @@ import { resumeCheck } from './checks/resume'
 import {
   applicabilityEntry,
   assembleCheck,
+  localDateAndOffset,
   makeFinding,
   remainingSources,
   reported,
@@ -455,9 +456,10 @@ export async function runKernelCheckup(options: CheckupOptions, internals: Check
   const ctx: CheckContext = {
     salt, selected, claude, codex, codexDb, unscanned, presence, readout, changed,
     resumeProbe: options.resumeProbe ?? null,
-    // ⑥ H1 (task book): seed defaults to today's local date so the sample is reproducible for the day and
+    // ⑥ H1 (task book): seed defaults to today's *local* date (C2c-3, C2c 独立验收 P2-1: this was silently
+    // the UTC date — see checks/common.ts#localDateAndOffset) so the sample is reproducible for the day and
     // the report appendix can state it (design "随机种子取当天日期，保证可以复现").
-    resumeSample: options.resumeSample ?? { perSource: 4, seed: new Date().toISOString().slice(0, 10) }
+    resumeSample: options.resumeSample ?? { perSource: 4, seed: localDateAndOffset().date }
   }
   let checkPhase = performance.now()
   const inclusion = inclusionCheck(ctx)

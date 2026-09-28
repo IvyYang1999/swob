@@ -9,11 +9,13 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+  assertHostIdentityMachineStateUnchanged,
   closeApp,
   launchApp,
   launchDangerousDevelopmentApp,
   resizeAppWindow,
   revealAllSessions,
+  snapshotHostIdentityMachineState,
   type LaunchedApp
 } from './helpers'
 import type { ElectronApplication, Page } from '@playwright/test'
@@ -56,6 +58,19 @@ test('E2E launcher 在启动 Electron 前拒绝 sandbox 外的 Library', async (
 })
 
 test('开发态使用受保护 Library 时同时显示红色标识与原生标题', async ({}, testInfo) => {
+  // F1l-d lstat pin: this is the one launcher whose NODE_ENV=development,
+  // no-SWOB_TEST_HOME environment makes host-identity.ts's
+  // defaultHostIdentityPath/defaultHostIdentityBackupPath resolve to the real
+  // machine paths (confirmed empirically: this test's own automatic
+  // writer-lease check already exercises getOrCreateHostIdentity, and its
+  // machine-local backup lands under this launch's own fake HOME, safe only
+  // because of that pre-existing, unrelated HOME-override - the primary
+  // resolves to the literal real path). F1l-c's SWOB_E2E_RUNNER +
+  // SWOB_E2E_SANDBOX_ROOT pair cannot be layered on top of this launcher
+  // without breaking it - see helpers.ts's comment on launchDangerousDevelopmentApp
+  // - so this stays a read-only safety net for a known-open gap rather than
+  // proof the redirect fired. Never reads file contents, only lstat metadata.
+  const hostIdentityBefore = snapshotHostIdentityMachineState()
   const dangerous = await launchDangerousDevelopmentApp()
   try {
     const marker = dangerous.page.getByTestId('real-library-danger-marker')
@@ -83,6 +98,7 @@ test('开发态使用受保护 Library 时同时显示红色标识与原生标�
   } finally {
     await closeApp(dangerous)
   }
+  assertHostIdentityMachineStateUnchanged(hostIdentityBefore)
 })
 
 test('侧边栏加载出 session 列表', async ({}, testInfo) => {

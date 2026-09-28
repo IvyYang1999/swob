@@ -64,6 +64,56 @@ function verifyProtectedStateAudit(app: ElectronApplication): void {
 }
 
 /**
+ * F1l-d reverse-verification pin: launchDangerousDevelopmentApp runs
+ * NODE_ENV=development against a real-looking (if disposable) Library, the
+ * one launcher host-identity resolution could otherwise fall through to the
+ * real machine paths for (see the SWOB_E2E_RUNNER/SWOB_E2E_SANDBOX_ROOT pair
+ * added above). Mirrors packaged-contract.test.ts's
+ * inspectRealPathSignature/REAL_HOST_IDENTITY_FILE pin: a read-only lstat
+ * signature (mode/size/mtime/ino, or 'missing' when absent) of both real
+ * host-identity copies, taken before a dangerous launch and compared again
+ * after. Never reads file contents - only lstat metadata - so it can never
+ * capture real identity/session content.
+ */
+const REAL_HOST_IDENTITY_PRIMARY_FILE = '/Users/Shared/Swob/host-identity-v1.json'
+const REAL_HOST_IDENTITY_BACKUP_FILE = path.join(os.homedir(), '.claude-session-manager', 'host-identity-v1.json')
+
+function inspectRealHostIdentityPathSignature(filePath: string): string {
+  try {
+    const stat = fs.lstatSync(filePath)
+    return stat.isSymbolicLink()
+      ? `symlink:${fs.readlinkSync(filePath)}`
+      : `file:${stat.mode}:${stat.size}:${stat.mtimeMs}:${stat.ino}`
+  } catch {
+    return 'missing'
+  }
+}
+
+export interface HostIdentityMachineStateSnapshot {
+  primary: string
+  backup: string
+}
+
+/** Read-only lstat signature of the real primary and real backup host-identity paths. */
+export function snapshotHostIdentityMachineState(): HostIdentityMachineStateSnapshot {
+  return {
+    primary: inspectRealHostIdentityPathSignature(REAL_HOST_IDENTITY_PRIMARY_FILE),
+    backup: inspectRealHostIdentityPathSignature(REAL_HOST_IDENTITY_BACKUP_FILE)
+  }
+}
+
+/** Throws if either real host-identity path's lstat signature changed since `before`. */
+export function assertHostIdentityMachineStateUnchanged(before: HostIdentityMachineStateSnapshot): void {
+  const after = snapshotHostIdentityMachineState()
+  if (after.primary !== before.primary) {
+    throw new Error(`Test isolation violation: real host-identity primary ${REAL_HOST_IDENTITY_PRIMARY_FILE} changed (${before.primary} -> ${after.primary})`)
+  }
+  if (after.backup !== before.backup) {
+    throw new Error(`Test isolation violation: real host-identity backup ${REAL_HOST_IDENTITY_BACKUP_FILE} changed (${before.backup} -> ${after.backup})`)
+  }
+}
+
+/**
  * Legacy launcher for specs that manage their own fixture HOME and inspect it
  * after the app closes (onboarding, vault-lens, visual capture). New specs
  * should prefer the fully sandboxed launchApp below.
@@ -171,6 +221,25 @@ export async function launchDangerousDevelopmentApp(): Promise<LaunchedApp> {
     SWOB_USER_DATA_ROOT: userData,
     SWOB_ISOLATION_PROTECTED_HOME: home,
     SWOB_DEV_USE_REAL_LIBRARY: '1',
+    // F1l-d investigated adding SWOB_E2E_RUNNER/SWOB_E2E_SANDBOX_ROOT here
+    // (the pair host-identity.ts's defaultHostIdentityPath/BackupPath need to
+    // redirect off the real machine paths, per packaged-contract.test.ts and
+    // F1l-c's own host-identity.test.ts "redirects in development mode too"
+    // pin) and confirmed by actually running this launch that it cannot be
+    // done from this file alone: e2e-library-isolation.ts's
+    // testRuntimeRequested() treats *either* var's mere presence as "this is
+    // an isolated-test launch" and runtimeSafetyState() then unconditionally
+    // returns dangerousRealLibrary: false before ever reaching the
+    // development branch this launcher depends on - so adding the pair here
+    // makes runtimeSafetyState() throw missing-SWOB_TEST_HOME (this launcher
+    // never sets SWOB_TEST_HOME/SWOB_TEST_SYSTEM_TEMP_ROOT, by design, to
+    // stay out of isolated-test mode) and, even if those were also added,
+    // would silently kill the "DEV · REAL LIBRARY" marker this spec asserts
+    // on. Closing this for real needs a change inside e2e-library-isolation.ts
+    // or host-identity.ts (both src/main/**, outside this package's write
+    // domain) - see the F1l-d credentials/report for the follow-up decision.
+    // Left unset here; assertHostIdentityMachineStateUnchanged below is the
+    // safety net for exactly this still-open gap.
     XDG_CACHE_HOME: cache,
     XDG_CONFIG_HOME: config,
     TMPDIR: temp

@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import Database from 'better-sqlite3'
 import { LibraryWorkerClient } from './library-worker'
 import {
   closeSearchIndex,
@@ -24,7 +25,7 @@ import {
 } from './search-index'
 import { searchIndexBackupDirectory } from './program-backups'
 import { buildProductionLibraryWorker } from './__test-support__/production-library-worker'
-import { overwriteSearchIndexHeader } from './__fixtures__/search-index-corruption'
+import { breakPageHeaders, overwriteSearchIndexHeader } from './__fixtures__/search-index-corruption'
 
 let buildRoot = ''
 let workerPath = ''
@@ -102,6 +103,57 @@ describe('search.db repair across the worker boundary (F1d-3)', () => {
       expect(fs.statSync(searchDatabasePath()).ino).not.toBe(corruptIno)
       // The next query opens the index the worker rebuilt.
       for (const token of tokens) expect(searchFTS(token), token).toHaveLength(1)
+    } finally {
+      await worker.close()
+    }
+  }, 60_000)
+
+  it('③ F1d-3-b: a writer that holds the old file while the worker repairs it (as a CLI process would) writes into the rebuilt index at its next operation; neither writer writes the moved copy again', async () => {
+    const descriptor = (token: string) => ({ filePath: writeSession(token), sessionId: `${token}-session`, source: 'claude-code' })
+    const initial = ['kiloworker', 'limaworker'].map(descriptor)
+    // This thread is the other writer: it never armed the self-heal (like the
+    // CLI), and its connection stays open on the file.
+    await synchronizeSearchSources(initial)
+    expect(searchIndexConnectionStats().hasWriteConnection).toBe(true)
+    // Its pages go into the file (the WAL emptied); then damage only a
+    // Library-backup projection meets (the backup table's own pages). A
+    // plain session's projection never reads them: this writer could go on
+    // writing into the file, as the app's writer did in the F1d-3 case.
+    const checkpoint = new Database(searchDatabasePath())
+    checkpoint.pragma('wal_checkpoint(TRUNCATE)')
+    const backupTable = (checkpoint.prepare("SELECT rootpage FROM sqlite_master WHERE name = 'library_backup'").get() as { rootpage: number }).rootpage
+    checkpoint.close()
+    breakPageHeaders(searchDatabasePath(), [backupTable])
+    const corruptIno = fs.statSync(searchDatabasePath()).ino
+
+    const worker = new LibraryWorkerClient(workerPath)
+    try {
+      const backup = { ...descriptor('oscarbackup'), source: 'library-backup', isLibraryBackup: true }
+      await worker.syncSearchSources([backup], { prune: false })
+      const [repaired] = events.filter((event) => event.event === 'search-index-repaired')
+      expect(repaired).toMatchObject({ operation: 'live-sync', reason: expect.stringMatching(/^SQLITE_CORRUPT/), complete: true, rebuilt: true })
+      const moved = path.join(searchIndexBackupDirectory(), String(repaired.backupFileName))
+      expect(fs.statSync(moved).ino).toBe(corruptIno)
+      const movedFiles = (): string[] => fs.readdirSync(searchIndexBackupDirectory()).sort().map((name) => {
+        const stat = fs.lstatSync(path.join(searchIndexBackupDirectory(), name))
+        return `${name}:${stat.ino}:${stat.size}:${stat.mtimeMs}`
+      })
+      const afterRepair = movedFiles()
+
+      // The other writer's next operation lands in the rebuilt index, not in
+      // the copy it had open (F1d-3 verification C1 had two rows land there).
+      const fromOther = descriptor('mikeother')
+      await synchronizeSearchSources([fromOther], { prune: false })
+      // So do the worker's own next writes, and the re-projection the app runs after a repair.
+      const fromWorker = descriptor('novemberworker')
+      await worker.syncSearchSources([fromWorker], { prune: false })
+      await worker.syncSearchSources(initial, { prune: false })
+
+      for (const token of ['kiloworker', 'limaworker', 'mikeother', 'novemberworker', 'oscarbackup']) {
+        expect(searchFTS(token), token).toHaveLength(1)
+      }
+      expect(movedFiles()).toEqual(afterRepair)
+      expect(events.map((event) => event.event)).toEqual(['search-index-repaired'])
     } finally {
       await worker.close()
     }

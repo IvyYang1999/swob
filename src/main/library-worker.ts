@@ -34,6 +34,7 @@ import { loadCodexRawMessages, loadCodexSessionRecordWithRaw } from './codex-loa
 import { buildCursorSessionSummary, loadCursorRawMessages } from './cursor-loader'
 import { detectSessionSourceFromPath } from './session-source'
 import {
+  armSearchIndexSelfHeal,
   closeSearchIndex,
   deliverSearchIndexEvent,
   indexCanonicalSession,
@@ -372,7 +373,8 @@ export async function runLibraryWorkerRequest(
  * (search-index-quick-check.architecture.test.ts). It reads through a
  * read-only connection of its own and writes nothing. Only SQLite's verdict
  * that the file is corrupt moves it aside, through the same repair as a
- * failed write (search-index.ts); BUSY or any other error is no verdict.
+ * failed write (search-index.ts, armed in this thread's bootstrap below);
+ * BUSY or any other error is no verdict.
  */
 async function checkSearchIndexIntegrityInWorker(trigger: string): Promise<SearchIndexIntegrityOutcome> {
   if (isMainThread) throw new Error('PRAGMA quick_check on search.db runs only in the library worker thread')
@@ -439,6 +441,11 @@ function assertWorkerTestSandbox(root?: string): void {
 if (!isMainThread && parentPort) {
   let requestTail: Promise<void> = Promise.resolve()
   let activeRequestId = 0
+  // F1d-3-b: the desktop app's library worker thread is the one place that
+  // repairs search.db (moves a corrupt one aside, rebuilds it, prunes after
+  // it). The CLI and the main thread never arm it and leave a corrupt index
+  // as it is (search-index-self-heal.architecture.test.ts).
+  armSearchIndexSelfHeal()
   setSearchIndexEventSink((event) => {
     parentPort!.postMessage({ requestId: activeRequestId, type: 'search-index-event', event } satisfies WorkerReply)
   })

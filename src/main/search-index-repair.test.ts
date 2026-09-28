@@ -6,6 +6,9 @@
  * corrupt index answers nothing and reports it, but never moves the file;
  * BUSY/LOCKED are never corruption; a healthy index is never touched. Every
  * index here is synthetic, damaged by __fixtures__/search-index-corruption.ts.
+ * F1d-3-b: only a thread that armed the self-heal repairs (the app's library
+ * worker arms itself); this thread arms it for each test here, and the last
+ * describe block shows a thread that did not (the CLI, the main thread).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as fs from 'node:fs'
@@ -13,9 +16,11 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import Database from 'better-sqlite3'
 import {
+  armSearchIndexSelfHeal,
   closeSearchIndex,
   isSearchIndexCorruption,
   probeSearchProjection,
+  SearchIndexCorruptError,
   searchDatabasePath,
   searchFTS,
   searchIndexConnectionStats,
@@ -33,6 +38,7 @@ import {
 let root = ''
 let priorIndexDir: string | undefined
 let priorBusyTimeout: string | undefined
+let disarm: () => void = () => {}
 const events: SearchIndexEvent[] = []
 const listener = (event: SearchIndexEvent): void => { events.push(event) }
 
@@ -45,9 +51,12 @@ beforeEach(() => {
   fs.rmSync(searchIndexBackupDirectory(), { recursive: true, force: true })
   events.length = 0
   process.on('swob:search-index-event', listener)
+  // As the library worker's bootstrap does (F1d-3-b); the last describe block disarms it.
+  disarm = armSearchIndexSelfHeal()
 })
 
 afterEach(() => {
+  disarm()
   process.off('swob:search-index-event', listener)
   closeSearchIndex()
   if (priorIndexDir === undefined) delete process.env.SWOB_SEARCH_INDEX_DIR
@@ -443,3 +452,144 @@ describe('search.db repair (F1d-3)', () => {
   })
 })
 
+describe('a thread that did not arm the self-heal: the CLI, the app\'s main thread (F1d-3-b)', () => {
+  beforeEach(() => { disarm() })
+
+  const companionsGone = (): boolean =>
+    !fs.existsSync(`${searchDatabasePath()}-wal`) && !fs.existsSync(`${searchDatabasePath()}-shm`)
+
+  /** A new message in a session, so the next pass writes full-text rows for it. */
+  function appendMessage(source: SearchIndexSource, text: string): void {
+    fs.appendFileSync(source.filePath, JSON.stringify({
+      uuid: `late-${text}`, parentUuid: null, sessionId: `${TOKENS[1]}-session`, type: 'user',
+      timestamp: '2026-09-28T00:01:00.000Z', message: { role: 'user', content: `${text} lateaddition` }
+    }) + '\n')
+  }
+
+  it('a write that meets a corrupt index fails with SearchIndexCorruptError and leaves it byte for byte: nothing moved, rebuilt or pruned', async () => {
+    const damages = [
+      { damage: 'truncated', apply: truncateSearchIndex, reason: /^SQLITE_CORRUPT/ },
+      { damage: 'not a database', apply: overwriteSearchIndexHeader, reason: /^SQLITE_NOTADB$/ },
+      { damage: 'broken full-text pages', apply: breakFullTextPages, reason: /^SQLITE_CORRUPT/ }
+    ]
+    for (const { damage, apply, reason } of damages) {
+      closeSearchIndex()
+      fs.rmSync(path.dirname(searchDatabasePath()), { recursive: true, force: true })
+      const all = await healthyIndex()
+      apply(searchDatabasePath())
+      appendMessage(all[1], damage.replace(/\W/g, ''))
+      const before = identity(searchDatabasePath())
+      const bytes = fs.readFileSync(searchDatabasePath())
+      events.length = 0
+
+      const failure = await synchronizeSearchSources(all).then(() => null, (error: unknown) => error)
+
+      expect(failure, damage).toBeInstanceOf(SearchIndexCorruptError)
+      expect(failure, damage).toMatchObject({ operation: 'full-sync', code: expect.stringMatching(reason) })
+      expect(isSearchIndexCorruption(failure), damage).toBe(true)
+      expect(identity(searchDatabasePath()), damage).toEqual(before)
+      expect(fs.readFileSync(searchDatabasePath()).equals(bytes), damage).toBe(true)
+      // The -wal/-shm SQLite opened beside it are gone again, as before the write.
+      expect(companionsGone(), damage).toBe(true)
+      expect(fs.existsSync(searchIndexBackupDirectory()), damage).toBe(false)
+      expect(searchIndexConnectionStats().hasWriteConnection, damage).toBe(false)
+      expect(events, damage).toEqual([
+        { event: 'search-index-left-corrupt', operation: 'full-sync', reason: expect.stringMatching(reason) }
+      ])
+    }
+  })
+
+  it('frames a crashed writer left in the WAL stay there: nothing is checkpointed into the corrupt file, its -wal stays byte for byte', async () => {
+    const all = await healthyIndex()
+    breakFullTextPages(searchDatabasePath())
+    // A writer that crashed: its committed frames are only in the WAL. (It
+    // closes while a read-only connection holds the file, so it is not the
+    // last one and checkpoints nothing: the state a crash leaves.)
+    const crashed = new Database(searchDatabasePath())
+    crashed.prepare('UPDATE sessions SET first_user_message = ? WHERE file_path = ?').run('walonlymarker', all[0].filePath)
+    const holder = new Database(searchDatabasePath(), { readonly: true, fileMustExist: true })
+    holder.pragma('schema_version')
+    crashed.close()
+    holder.close()
+    appendMessage(all[1], 'crashedwal')
+    const before = { main: identity(searchDatabasePath()), wal: identity(`${searchDatabasePath()}-wal`) }
+    const walBytes = fs.readFileSync(`${searchDatabasePath()}-wal`)
+    expect(before.wal.size).toBeGreaterThan(0)
+
+    await expect(synchronizeSearchSources(all)).rejects.toBeInstanceOf(SearchIndexCorruptError)
+
+    expect(identity(searchDatabasePath())).toEqual(before.main)
+    expect(identity(`${searchDatabasePath()}-wal`)).toEqual(before.wal)
+    expect(fs.readFileSync(`${searchDatabasePath()}-wal`).equals(walBytes)).toBe(true)
+    expect(fs.existsSync(searchIndexBackupDirectory())).toBe(false)
+    // The next opener (the app's worker) still finds the frames there.
+    const next = new Database(searchDatabasePath(), { readonly: true, fileMustExist: true })
+    try {
+      expect(next.prepare('SELECT count(*) AS rows FROM sessions WHERE first_user_message = ?').get('walonlymarker'))
+        .toEqual({ rows: 1 })
+    } finally {
+      next.close()
+    }
+  })
+
+  it('then every write on that file fails at once without opening it; once another file is at the path, writes go on there', async () => {
+    const all = await healthyIndex()
+    overwriteSearchIndexHeader(searchDatabasePath())
+    const corrupt = identity(searchDatabasePath())
+    await expect(synchronizeSearchSources(all)).rejects.toBeInstanceOf(SearchIndexCorruptError)
+    const opens = searchIndexConnectionStats().writeOpens
+
+    await expect(synchronizeSearchSources([all[0]], { prune: false }))
+      .rejects.toMatchObject({ name: 'SearchIndexCorruptError', operation: 'live-sync', code: 'SQLITE_NOTADB' })
+    await expect(synchronizeSearchSources(all)).rejects.toBeInstanceOf(SearchIndexCorruptError)
+    expect(searchIndexConnectionStats().writeOpens).toBe(opens)
+    expect(identity(searchDatabasePath())).toEqual(corrupt)
+    expect(named('search-index-left-corrupt')).toHaveLength(1)
+
+    // The app's worker moved it aside: this thread writes into the file at the path as usual.
+    const moved = path.join(root, 'moved-by-the-app.db.corrupt')
+    fs.renameSync(searchDatabasePath(), moved)
+    await synchronizeSearchSources(all)
+    for (const token of TOKENS) expect(searchFTS(token), token).toHaveLength(1)
+    expect(identity(moved)).toMatchObject({ ino: corrupt.ino, size: corrupt.size, mtimeMs: corrupt.mtimeMs })
+    expect(named('search-index-repaired')).toEqual([])
+  })
+
+  it('a new writer on a current, healthy index writes nothing: the schema version and the mode are set only when they differ', async () => {
+    const all = await healthyIndex()
+    const closed = identity(searchDatabasePath())
+    // A new writer (as each CLI run opens one) and an unchanged pass.
+    await synchronizeSearchSources(all)
+    expect(searchIndexConnectionStats().hasWriteConnection).toBe(true)
+    closeSearchIndex()
+    expect(identity(searchDatabasePath())).toEqual(closed)
+    expect(companionsGone()).toBe(true)
+    expect(events).toEqual([])
+  })
+
+  it('a writer follows another file at the path at its next operation, without any signal, and never writes the file it opened again', async () => {
+    const all = await healthyIndex()
+    await synchronizeSearchSources(all)
+    expect(searchIndexConnectionStats().hasWriteConnection).toBe(true)
+    // The file this writer has open moves away with its -wal/-shm (as a repair moves it).
+    const moved = path.join(root, 'moved.db')
+    for (const suffix of ['-wal', '-shm']) {
+      if (fs.existsSync(searchDatabasePath() + suffix)) fs.renameSync(searchDatabasePath() + suffix, moved + suffix)
+    }
+    fs.renameSync(searchDatabasePath(), moved)
+    const movedFiles = (): Array<ReturnType<typeof identity> | null> =>
+      ['', '-wal', '-shm'].map((suffix) => (fs.existsSync(moved + suffix) ? identity(moved + suffix) : null))
+    const before = movedFiles()
+
+    const added = { filePath: writeSession('followmarker') }
+    await synchronizeSearchSources([...all, added])
+
+    expect(searchFTS('followmarker')).toHaveLength(1)
+    for (const token of TOKENS) expect(searchFTS(token), token).toHaveLength(1)
+    expect(identity(searchDatabasePath()).ino).not.toBe(before[0]!.ino)
+    const after = movedFiles()
+    expect(after.map((file) => file && { ino: file.ino, size: file.size, mtimeMs: file.mtimeMs }))
+      .toEqual(before.map((file) => file && { ino: file.ino, size: file.size, mtimeMs: file.mtimeMs }))
+    expect(events).toEqual([])
+  })
+})

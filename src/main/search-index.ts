@@ -149,9 +149,10 @@ let writerFileIdentity: FileIdentity | null = null
  * A writer connection whose schema setup found the file corrupt (F1d-3). It
  * stays open until a repair has moved the file: closing the last connection
  * removes `<path>-wal` and `-shm` by name, which would lose the WAL before it
- * is moved with the file.
+ * is moved with the file. (Unarmed, F1d-3-b: until closeWritersLeavingFileAsIs.)
  */
 let failedWriterDatabase: Database.Database | null = null
+let writeDatabaseOpenCount = 0
 let readDatabase: Database.Database | null = null
 let readDatabasePath = ''
 /** The file the read connection has open; another file at the path is opened anew (F1d-3). */
@@ -217,6 +218,23 @@ function errorCodeOf(error: unknown): string {
 }
 
 /**
+ * search.db is corrupt, and this thread does not repair it (F1d-3-b: only
+ * the desktop app's library worker does, see armSearchIndexSelfHeal): the
+ * file was left where and as it was. `code` is SQLite's own verdict
+ * (SQLITE_CORRUPT…, SQLITE_NOTADB). Being this class, not a bare SQLite
+ * error, tells a caller the verdict is about search.db and no other store.
+ */
+export class SearchIndexCorruptError extends Error {
+  readonly code: string
+
+  constructor(readonly operation: string, readonly reason: string) {
+    super(`search.db is corrupt (${reason}); left as it is for the Swob app to repair`)
+    this.name = 'SearchIndexCorruptError'
+    this.code = reason
+  }
+}
+
+/**
  * A record of the search index's own maintenance, for lifecycle.log: what
  * happened and why, sizes and durations, file names but never a path or any
  * content.
@@ -248,9 +266,12 @@ function emitSearchIndexEvent(event: SearchIndexEvent): void {
  * Deliver a search index event on this thread, emitted in place or posted by
  * the worker that owns the writer. A repair replaced the file this thread's
  * read connection has open, which would go on reading the moved copy: that
- * connection is closed first, so the next query opens the rebuilt index.
- * Then process 'swob:search-index-event' (the desktop app logs it and
- * projects every source into a rebuilt index).
+ * connection is closed first, so the next query opens the rebuilt index. A
+ * writer on this thread needs no signal: each write operation starts by
+ * following the file at the path (followSearchIndexFile, F1d-3-b), and one
+ * already running is never closed under it. Then process
+ * 'swob:search-index-event' (the desktop app logs it and projects every
+ * source into a rebuilt index).
  */
 export function deliverSearchIndexEvent(event: SearchIndexEvent): void {
   if (event.event === 'search-index-repaired') reopenSearchIndexReadConnection()
@@ -270,7 +291,7 @@ export function reopenSearchIndexReadConnection(): void {
   invalidateQueryCache()
 }
 
-function closeSearchIndexConnections(): void {
+function closeWriterConnections(): void {
   for (const connection of [database, failedWriterDatabase]) {
     if (!connection) continue
     try { connection.close() } catch { /* the handle is released either way */ }
@@ -278,17 +299,112 @@ function closeSearchIndexConnections(): void {
   database = null
   databasePath = ''
   failedWriterDatabase = null
+  invalidateQueryCache()
+}
+
+function closeSearchIndexConnections(): void {
+  closeWriterConnections()
   reopenSearchIndexReadConnection()
+}
+
+/**
+ * F1d-3-b. A writer follows the file at the path, as the read connection
+ * does (getReadOnlyDatabase). Checked once as each write operation starts:
+ * when another file is at the path (the app's worker moved a corrupt one
+ * aside and rebuilt it, or anyone replaced or removed it), this thread's
+ * writers are closed, so the operation writes into the file at the path and
+ * never into the moved copy. Closing a connection whose file moved
+ * checkpoints nothing into the new file and removes none of its -wal/-shm
+ * (SQLite checks that the file has not moved). What follows no signal: a
+ * writer in another process (the CLI) follows at its next operation, and an
+ * operation already running when the file moves finishes in the moved copy.
+ */
+function followSearchIndexFile(): void {
+  if (!database && !failedWriterDatabase) return
+  if (sameFile(fileIdentity(searchDatabasePath()), writerFileIdentity)) return
+  closeWriterConnections()
+}
+
+/**
+ * F1d-3-b. Close this thread's writers on a file found corrupt without
+ * writing into it. The last connection to a WAL database checkpoints the
+ * WAL's frames into the file as it closes. With an empty -wal there is
+ * nothing to checkpoint, and the close only removes the -wal/-shm the
+ * writer itself opened. Otherwise a read-only connection that has read the
+ * header holds the file while the writers close (none is the last one), and
+ * a read-only connection's own close never checkpoints: the file and its
+ * -wal stay byte for byte, and the next opener (the app's worker) reads the
+ * frames there. Best effort: a holder that cannot read even the header means
+ * no WAL was opened on the file either.
+ */
+function closeWritersLeavingFileAsIs(): void {
+  const indexPath = searchDatabasePath()
+  const walBytes = (): number => {
+    try {
+      return fs.statSync(`${indexPath}-wal`, { throwIfNoEntry: false })?.size ?? 0
+    } catch {
+      return 1 // unknown: hold the file
+    }
+  }
+  let holder: Database.Database | null = null
+  if ((database || failedWriterDatabase) && sameFile(fileIdentity(indexPath), writerFileIdentity) && walBytes() > 0) {
+    try {
+      holder = new Database(indexPath, { readonly: true, fileMustExist: true, timeout: 0 })
+      holder.pragma('schema_version', { simple: true })
+    } catch {
+      try { holder?.close() } catch { /* nothing was held */ }
+      holder = null
+    }
+  }
+  closeWriterConnections()
+  if (holder) {
+    try { holder.close() } catch { /* read-only: nothing to lose */ }
+  }
+}
+
+/**
+ * The file this thread found corrupt without repairing it (F1d-3-b: a thread
+ * that did not arm the self-heal). Nothing more is written into it: every
+ * later write fails at once with the same verdict, without opening it, until
+ * another file is at the path.
+ */
+let leftCorruptIndex: { readonly identity: FileIdentity; readonly reason: string } | null = null
+
+/**
+ * A write (or the CLI's query) on a thread that does not repair found
+ * search.db corrupt: the writers close without writing into it, it is
+ * reported once per file (search-index-left-corrupt), and the caller gets a
+ * SearchIndexCorruptError. Nothing is moved, rebuilt or deleted.
+ */
+function leaveCorruptSearchIndex(operation: string, error: unknown): SearchIndexCorruptError {
+  const reason = errorCodeOf(error)
+  const identity = database || failedWriterDatabase ? writerFileIdentity : fileIdentity(searchDatabasePath())
+  closeWritersLeavingFileAsIs()
+  if (identity && !sameFile(identity, leftCorruptIndex?.identity ?? null)) {
+    leftCorruptIndex = { identity, reason }
+    emitSearchIndexEvent({ event: 'search-index-left-corrupt', operation, reason })
+  }
+  return new SearchIndexCorruptError(operation, reason)
+}
+
+function refuseLeftCorruptIndex(operation: string): SearchIndexCorruptError | null {
+  if (!leftCorruptIndex || selfHeal) return null
+  if (!sameFile(fileIdentity(searchDatabasePath()), leftCorruptIndex.identity)) {
+    // Another file is at the path (the app repaired it): write as usual.
+    leftCorruptIndex = null
+    return null
+  }
+  return new SearchIndexCorruptError(operation, leftCorruptIndex.reason)
 }
 
 /** The one search.db file a failed query reported, so repeated searches do not repeat it. */
 let reportedCorruptRead: FileIdentity | null = null
 
 /**
- * A query on this thread found search.db corrupt. Only the thread that owns
- * the writer moves the file (repairCorruptSearchIndex; in the app, the
- * library worker): here the read connection is dropped, and the finding is
- * reported once per file.
+ * A query on this thread found search.db corrupt. Only a thread that armed
+ * the self-heal moves the file (repairCorruptSearchIndex; in the app, the
+ * library worker, when it writes or checks): here the read connection is
+ * dropped, and the finding is reported once per file.
  */
 function reportCorruptRead(operation: 'search' | 'probe', error: unknown): void {
   const identity = fileIdentity(searchDatabasePath())
@@ -315,6 +431,28 @@ interface SearchIndexRepairTrigger {
 
 /** repaired: moved aside, empty index in place; replaced: another file is there already; refused: nothing moved. */
 export type SearchIndexRepairResult = 'repaired' | 'replaced' | 'refused'
+
+/**
+ * F1d-3-b. This thread's self-heal: null until armSearchIndexSelfHeal, and
+ * the only way to reach repairCorruptSearchIndex (the move aside, the
+ * rebuild, the prune after it). Unarmed, a corrupt search.db is left as it
+ * is: see leaveCorruptSearchIndex.
+ */
+let selfHeal: ((trigger: SearchIndexRepairTrigger) => SearchIndexRepairResult) | null = null
+
+/**
+ * F1d-3-b. Arm this thread to repair search.db: a write, or the worker's
+ * quick_check, that finds it corrupt moves it aside, rebuilds it and retries
+ * (repairCorruptSearchIndex). Only the desktop app's library worker calls
+ * this, in its worker-thread bootstrap (library-worker.ts). The CLI, the
+ * app's main thread and every other thread never do, so none of them moves,
+ * rebuilds or prunes anything (search-index-self-heal.architecture.test.ts
+ * pins that the CLI cannot reach this). Returns the disarm, for tests.
+ */
+export function armSearchIndexSelfHeal(): () => void {
+  selfHeal = repairCorruptSearchIndex
+  return () => { selfHeal = null }
+}
 
 function syncDirectory(directory: string): void {
   try {
@@ -343,9 +481,9 @@ function freeSearchIndexBackupName(directory: string, at: number): string | null
  * F1d-3. search.db is a derived index: every row is projected again from the
  * session files. So a file SQLite calls corrupt or not a database
  * (isSearchIndexCorruption) is moved aside whole and rebuilt, never patched
- * and never deleted. Only the thread that owns the writer runs this (in the
- * app, the library worker, which then tells the main thread; see
- * deliverSearchIndexEvent). In order:
+ * and never deleted. Only a thread that armed it runs this (F1d-3-b,
+ * armSearchIndexSelfHeal: the app's library worker, which then tells the
+ * main thread; see deliverSearchIndexEvent). In order:
  * 1. the file must still be the one found corrupt ('replaced' otherwise:
  *    another file is at the path already, nothing moves) and a regular file
  *    (a symbolic link is never followed or moved);
@@ -491,14 +629,22 @@ function repairCorruptSearchIndex(trigger: SearchIndexRepairTrigger): SearchInde
  * (above) and run the operation once more against the rebuilt index. Every
  * SQLite call inside these operations is on search.db: a source that fails
  * to parse, even with a SQLite error of its own store, is handled per source
- * in indexSourceNow and never reaches here.
+ * in indexSourceNow and never reaches here. F1d-3-b: the writer first
+ * follows the file at the path; a thread that did not arm the self-heal
+ * repairs nothing and leaves a corrupt index as it is (a
+ * SearchIndexCorruptError, now and for every later write on that file).
  */
 async function withSearchIndexRepair(operation: string, work: () => Promise<void>): Promise<void> {
+  followSearchIndexFile()
+  const refused = refuseLeftCorruptIndex(operation)
+  if (refused) throw refused
   try {
     await work()
   } catch (error) {
     if (!isSearchIndexCorruption(error)) throw error
-    if (repairCorruptSearchIndex({ operation, reason: errorCodeOf(error) }) === 'refused') throw error
+    const repair = selfHeal
+    if (!repair) throw leaveCorruptSearchIndex(operation, error)
+    if (repair({ operation, reason: errorCodeOf(error) }) === 'refused') throw error
     await work()
   }
 }
@@ -565,7 +711,11 @@ function ensureSchema(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS library_backup_session_id_idx ON library_backup(session_id);
   `)
-  db.pragma(`user_version = ${SEARCH_SCHEMA_VERSION}`)
+  // Written only when it changes (F1d-3-b): setting the same value is still a
+  // write (a WAL frame, checkpointed into the file on close), so a new
+  // connection on a current index writes nothing, and a CLI that meets a
+  // corrupt one leaves it byte for byte.
+  if (version !== SEARCH_SCHEMA_VERSION) db.pragma(`user_version = ${SEARCH_SCHEMA_VERSION}`)
 }
 
 function getDatabase(): Database.Database {
@@ -576,10 +726,14 @@ function getDatabase(): Database.Database {
 
   fs.mkdirSync(path.dirname(requestedPath), { recursive: true, mode: 0o700 })
   const nextDatabase = new Database(requestedPath, { timeout: searchDatabaseBusyTimeoutMs() })
+  writeDatabaseOpenCount++
   writerFileIdentity = fileIdentity(requestedPath)
   try {
     ensureSchema(nextDatabase)
-    try { fs.chmodSync(requestedPath, 0o600) } catch { /* best effort */ }
+    // Only when it differs (F1d-3-b): chmod to the same mode still changes the file's ctime.
+    try {
+      if ((fs.statSync(requestedPath).mode & 0o777) !== 0o600) fs.chmodSync(requestedPath, 0o600)
+    } catch { /* best effort */ }
   } catch (error) {
     if (isSearchIndexCorruption(error)) {
       // Closed by the repair once the file has moved (see failedWriterDatabase).
@@ -895,7 +1049,9 @@ export function repairSearchIndexAfterCheck(
 ): Promise<SearchIndexRepairResult> {
   let result: SearchIndexRepairResult = 'refused'
   return serializeWork(async () => {
-    result = repairCorruptSearchIndex({ operation: 'quick-check', reason: check.reason, expected: check.expected })
+    // Only where armed (F1d-3-b); elsewhere the file stays as it is.
+    const repair = selfHeal
+    if (repair) result = repair({ operation: 'quick-check', reason: check.reason, expected: check.expected })
   }).then(() => result)
 }
 
@@ -1304,12 +1460,21 @@ export function grepTranscripts(query: string, filters: TranscriptGrepFilters = 
   return grepTranscriptsFromDatabase(getDatabase(), query, filters)
 }
 
-/** CLI query path: never runs schema setup or writes to the shared GUI index. */
+/**
+ * CLI query path: never runs schema setup or writes to the shared GUI index.
+ * F1d-3-b: a corrupt index answers a SearchIndexCorruptError, and a writer
+ * this process still holds on it closes without writing into it.
+ */
 export function grepTranscriptsReadOnly(
   query: string,
   filters: TranscriptGrepFilters = {}
 ): TranscriptGrepResult[] {
-  return withReadOnlyDatabase((db) => grepTranscriptsFromDatabase(db, query, filters))
+  try {
+    return withReadOnlyDatabase((db) => grepTranscriptsFromDatabase(db, query, filters))
+  } catch (error) {
+    if (!isSearchIndexCorruption(error)) throw error
+    throw leaveCorruptSearchIndex('grep', error)
+  }
 }
 
 export function searchIndexStats(): { sessions: number; messages: number; libraryBackups: number; databasePath: string } {
@@ -1324,11 +1489,13 @@ export function searchIndexStats(): { sessions: number; messages: number; librar
 
 export function searchIndexConnectionStats(): {
   readOpens: number
+  writeOpens: number
   hasReadConnection: boolean
   hasWriteConnection: boolean
 } {
   return {
     readOpens: readDatabaseOpenCount,
+    writeOpens: writeDatabaseOpenCount,
     hasReadConnection: readDatabase !== null,
     hasWriteConnection: database !== null
   }
@@ -1346,6 +1513,7 @@ export function closeSearchIndex(): void {
   readDatabasePath = ''
   readDatabaseIdentity = null
   reportedCorruptRead = null
+  leftCorruptIndex = null
   lastSearchIndexRepairAt = null
   deferredRepairReportedFor = null
   synchronizationTail = Promise.resolve()

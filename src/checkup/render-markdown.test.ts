@@ -98,10 +98,29 @@ describe('text registries (templates.ts)', () => {
       finding('content.swob-extra-records', 'warn', 'codex', d(1, 'files')),
       finding('content.unexplained-loss', 'fail', 'codex', d(1, 'records'))
     )
+    // C2c-3 retired resume.anchor-mismatch's ownerLine/engineerHint (and reasonText) when the L3 comparison
+    // was redefined around 恢复侧/展示侧, then retired its engineerHint *again* when 展示侧 was split by
+    // source (Codex ≠ Claude, see resolveDisplaySide) — two generations of the same code+field, covered by
+    // pushing one finding per generation below. resume.anchor-cache-lag's engineerHint was reworded the
+    // same way in the same follow-up.
+    older.checks[5].findings.push(
+      finding('resume.anchor-mismatch', 'fail', 'claude-code', d(1, 'sessions')),
+      finding('resume.anchor-mismatch', 'fail', 'codex', d(1, 'sessions')),
+      finding('resume.anchor-cache-lag', 'warn', 'claude-code', d(1, 'sessions'))
+    )
     const retiredHints = RETIRED_TEMPLATES.filter((entry) => entry.field === 'engineerHint')
+    // Several retired generations can share one code+field (e.g. resume.anchor-mismatch was reworded
+    // twice): queue them per code and consume one per finding of that code, oldest generation first, so
+    // every retired sentence still lands in the rendered output somewhere, not just the first.
+    const retiredQueueByCode = new Map<string, typeof retiredHints>()
+    for (const item of retiredHints) {
+      const queue = retiredQueueByCode.get(item.code) ?? []
+      queue.push(item)
+      retiredQueueByCode.set(item.code, queue)
+    }
     for (const check of older.checks) {
       for (const entry of check.findings) {
-        const retired = retiredHints.find((item) => item.code === entry.code)
+        const retired = retiredQueueByCode.get(entry.code)?.shift()
         if (retired) entry.engineerHint = fillTemplate(retired.text, [], entry.source)
       }
     }

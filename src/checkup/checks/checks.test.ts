@@ -6,7 +6,16 @@ import type { CheckResult, CheckupReport } from '../contract'
 import { censusClaude } from '../census/claude-census'
 import { censusCodex } from '../census/codex-census'
 import type { SourcePresence } from '../census/source-roots'
-import { CLAUDE_PARSE_TIMEOUT_MS, claudeParseResult, codexParseResult, type CodexParseResult, type ReadoutSession, type SwobReadout } from '../readout'
+import {
+  CLAUDE_PARSE_TIMEOUT_MS,
+  claudeParseResult,
+  classifyResumeAnchors,
+  codexParseResult,
+  defaultResumeProbe,
+  type CodexParseResult,
+  type ReadoutSession,
+  type SwobReadout
+} from '../readout'
 import { LS, claude, codex, codexRolloutPath, jsonl, syntheticTime, syntheticUuid, writeSample } from '../self-test/samples'
 import { overallVerdict, runKernelCheckup, type CheckupInternals } from '../run'
 import Ajv2020 from 'ajv/dist/2020.js'
@@ -40,7 +49,8 @@ function readout(sessions: ReadoutSession[], extra: Partial<SwobReadout> = {}): 
 function ctx(partial: Partial<CheckContext> & Pick<CheckContext, 'readout'>): CheckContext {
   return {
     salt: 'checks-salt', selected: new Set(['claude-code', 'codex', 'cursor', 'gemini', 'opencode', 'kimi', 'zcode']),
-    claude: null, codex: null, codexDb: null, unscanned: null, presence: [], changed: new Set(), ...partial
+    claude: null, codex: null, codexDb: null, unscanned: null, presence: [], changed: new Set(), resumeProbe: null,
+    resumeSample: { perSource: 4, seed: '2026-09-28' }, ...partial
   }
 }
 
@@ -743,8 +753,83 @@ describe('readout: per-file results from the kernel read stats (C1c)', () => {
   })
 
   it('Codex: the read count of a completed read; no count when the kernel read throws (never partial by time)', async () => {
-    await expect(codexParseResult(async () => ({ recordsRead: 5 }))).resolves.toMatchObject({ records: 5 })
+    await expect(codexParseResult(async () => ({ recordsRead: 5, lines: [] }))).resolves.toMatchObject({ records: 5 })
     await expect(codexParseResult(async () => { throw new Error('stream failed') })).resolves.toMatchObject({ records: null })
+  })
+
+  it('⑥ C2c: Codex per-file resumeAnchors comes from the same read, hashed (no raw text)', async () => {
+    const lines = [
+      { timestamp: '2026-01-01T00:00:00.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'first question' }] } },
+      { timestamp: '2026-01-01T00:00:01.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'first answer' }] } },
+      { timestamp: '2026-01-01T00:00:02.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'second question' }] } }
+    ]
+    const result = await codexParseResult(async () => ({ recordsRead: 3, lines }))
+    expect(result.resumeAnchors?.lastUser).toMatch(/^[0-9a-f]{8}$/)
+    expect(result.resumeAnchors?.lastAssistant).toMatch(/^[0-9a-f]{8}$/)
+    // ⑥ C2c-3: the timestamp of the last user/assistant record (file order), not just the last hashed role —
+    // here that is the trailing "second question" user record, later than the assistant reply before it.
+    expect(result.resumeAnchors?.lastTimestamp).toBe('2026-01-01T00:00:02.000Z')
+    expect(JSON.stringify(result)).not.toContain('first question')
+    expect(JSON.stringify(result)).not.toContain('first answer')
+  })
+
+  it('⑥ C2c-3: Codex resumeAnchors.lastTimestamp tracks the latest parseable timestamp seen, even out of file order', async () => {
+    const lines = [
+      { timestamp: '2026-01-01T00:00:05.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'later by time, earlier in file' }] } },
+      { timestamp: 'not-a-real-timestamp', type: 'response_item' as const, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'unparseable timestamp, ignored for ranking' }] } },
+      { timestamp: '2026-01-01T00:00:01.000Z', type: 'response_item' as const, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'earlier by time, later in file' }] } }
+    ]
+    const result = await codexParseResult(async () => ({ recordsRead: 3, lines }))
+    expect(result.resumeAnchors?.lastTimestamp).toBe('2026-01-01T00:00:05.000Z')
+  })
+})
+
+describe('⑥ C2c: classifyResumeAnchors (delegates to the whitelisted resume-verifier.ts#classifyResumeL3)', () => {
+  it('identical hashes on both sides -> match', () => {
+    const anchors = { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb' }
+    expect(classifyResumeAnchors({ expected: anchors, target: anchors })).toBe('match')
+  })
+
+  it('different hashes -> mismatch', () => {
+    expect(classifyResumeAnchors({
+      expected: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb' },
+      target: { lastUser: 'cccccccc', lastAssistant: 'dddddddd' }
+    })).toBe('mismatch')
+  })
+
+  it('the target file is missing or unparseable -> would-404, regardless of the expected anchor', () => {
+    const expected = { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb' }
+    expect(classifyResumeAnchors({ expected, target: 'missing' })).toBe('would-404')
+    expect(classifyResumeAnchors({ expected, target: 'unparseable' })).toBe('would-404')
+  })
+
+  it('both sides have no anchor at all (an empty session) -> skipped, not mismatch', () => {
+    const empty = { lastUser: null, lastAssistant: null }
+    expect(classifyResumeAnchors({ expected: empty, target: empty })).toBe('skipped')
+  })
+})
+
+describe('⑥ C2c: defaultResumeProbe (the CLI worker\'s own command-layer factory)', () => {
+  it('delegates to buildResumeCommand (session-actions.ts) for a resumable session', () => {
+    const probe = defaultResumeProbe('/usr/bin:/bin')
+    const result = probe.build({ sessionId: 'abc-123', source: 'claude-code', filePath: '/tmp/x.jsonl', canResumeLocal: true })
+    expect(probe.pathEnv).toBe('/usr/bin:/bin')
+    expect(result).toHaveProperty('command')
+    expect((result as { command: string }).command).toContain('abc-123')
+    expect((result as { command: string }).command).toContain('claude')
+  })
+
+  it('refuses without calling buildResumeCommand when canResumeLocal is false', () => {
+    const probe = defaultResumeProbe('/usr/bin:/bin')
+    const result = probe.build({ sessionId: 'abc-123', filePath: '/tmp/x.jsonl', canResumeLocal: false, resumeUnavailableReason: 'ssh-only' })
+    expect(result).toEqual({ refused: 'ssh-only' })
+  })
+
+  it('never spawns a process itself: building a command is pure (only fs.existsSync(cwd) inside buildResumeCommand)', () => {
+    const probe = defaultResumeProbe('/usr/bin:/bin')
+    // A cwd that does not exist must not throw or shell out — buildTerminalResumeCommand just skips the `cd` prefix.
+    const result = probe.build({ sessionId: 'abc-123', source: 'codex', filePath: '/tmp/x.jsonl', resumeCwd: '/definitely/not/a/real/directory', canResumeLocal: true })
+    expect((result as { command: string }).command).not.toContain('cd ')
   })
 })
 

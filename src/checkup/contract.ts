@@ -6,7 +6,6 @@
  * package decisions. This module is types + frozen registries only: it has no
  * runtime import, so the census closure may depend on it.
  */
-import type { SessionSummary } from '../main/types'
 
 // —— §6.1 contract (shells depend on this part only) ——
 export type Label = 'reported' | 'derived' | 'estimated' | 'unavailable' // same words as TokenProvenance
@@ -29,6 +28,18 @@ export interface CheckResult {
   findings: Finding[]
   /** C1a addition: reason code when the whole check is undetermined / not applicable. */
   reason?: string
+  /**
+   * ⑥ resume (C2c-3): the local calendar day + UTC offset (minutes — see checks/common.ts#localDateAndOffset
+   * for why not the formatted `UTC±HH:MM` string) the command-layer sampling seed was computed from (in
+   * production this *is* the seed value: run.ts defaults `resumeSample.seed` to exactly this same local
+   * date), and every session actually sampled this run (salted, at most 5 — same convention as
+   * `Finding.samples`), so a reader can see "same local day -> same batch" is real and reproduce it
+   * (task book H1; C2c 独立验收 P2-1: this was never rendered anywhere). Deliberately reports the computed
+   * local day rather than echoing `CheckupOptions.resumeSample.seed` verbatim: that option accepts an
+   * arbitrary caller string (tests use non-date values), which the privacy scanner's whitelist would
+   * reject. Only ever set by the resume check; every other check leaves it undefined.
+   */
+  resumeSampling?: { localDate: string; timezoneOffsetMinutes: number; sampledIds: string[] }
 }
 export interface CheckupReport {
   schemaVersion: 1
@@ -104,8 +115,25 @@ export interface CheckupOptions {
   /** Parent directory for self-test samples; must be inside stateDir. Default: a fresh directory in stateDir. */
   selfTestDir?: string
 }
+/**
+ * ⑥ resume (C2c): the narrowed shape `ResumeProbe.build()` actually needs — never the whole
+ * `SessionSummary` (no message content, no derived fields the command layer does not use). Every field
+ * mirrors a same-named `SessionSummary` field (session-types.ts); `filePath`/`allFilePaths` reuse
+ * `ReadoutSession.primaryPath`/`paths` at the call site (checks/resume.ts), not a new projection.
+ */
+export interface ResumeProbeInput {
+  sessionId: string
+  source?: SourceId
+  resumeCwd?: string
+  permissionMode?: string
+  claudeConfigDir?: string
+  filePath: string
+  allFilePaths?: string[]
+  canResumeLocal?: boolean
+  resumeUnavailableReason?: string
+}
 export interface ResumeProbe {
-  build(session: SessionSummary): { command: string } | { refused: string }
+  build(input: ResumeProbeInput): { command: string } | { refused: string }
   pathEnv: string                         // login shell PATH
 }
 
@@ -128,10 +156,15 @@ export const CHECK_ORDER: readonly CheckId[] = ['inclusion', 'content', 'compact
  * C2b — ④ Lineage and branching implemented: Codex derivation edges (state db thread_spawn_edges) and
  * fork edges (top-level forked_from_id) plus Claude continuation/subagent/resume-fork physical evidence,
  * reconciled against the kernel's own expressed lineage (branchParentId/branchChildIds/
- * continuationSessionIds/subagents[]); Claude-side gaps are observations only (never fail).
+ * continuationSessionIds/subagents[]); Claude-side gaps are observations only (never fail). Also 1.3.0:
+ * C2c — ⑥ Resume (dry run) implemented: four buckets (recoverable / missing file / missing directory /
+ * unsupported source), a command-layer probe (program lookup via lstat→realpath→X_OK, `zsh -n` syntax
+ * check only), and an L3 content-anchor comparison reusing resume-verifier.ts's own classifier (non-
+ * independent oracle, labelled [D]); ④'s headline now also names a fork-edge gap, and a fork edge whose
+ * child ① already excludes as an empty session (codex.empty-session) is no longer counted unexpressed.
  */
 export const CHECKUP_VERSION = '1.3.0'
-export const SELF_TEST_TOTAL = 7
+export const SELF_TEST_TOTAL = 8
 
 export const SOURCE_IDS = [
   'claude-code', 'codex', 'cursor', 'opencode', 'zcode', 'cc-mirror', 'antigravity',
@@ -163,7 +196,9 @@ export const SELF_TEST_CASES = [
   'fork-inherited-compaction',
   'fork-usage-copy',
   // C2b (④ lineage): a grandchild thread-spawn edge the Swob side never attaches.
-  'lineage-grandchild-orphan'
+  'lineage-grandchild-orphan',
+  // C2c (⑥ resume): a PATH entry that is a symlink to a target that no longer exists.
+  'resume-broken-symlink'
 ] as const
 export type SelfTestCaseId = typeof SELF_TEST_CASES[number]
 
@@ -177,7 +212,15 @@ export const ORACLE_IDS = [
   'census.codex-jsonl',
   'codex.state-db',
   'census.unscanned-roots',
-  'census.source-presence'
+  'census.source-presence',
+  // resume ⑥ (C2c): the local filesystem + login-shell PATH (design "工具自己的存储，加上本机环境") — backs
+  // the data-layer buckets (recoverable/missingFile/missingDirectory, a fresh fs.statSync this run) and the
+  // command-layer lookup (commandFound/commandBrokenSymlink/commandMissing/commandSyntaxInvalid, a fresh
+  // PATH walk this run) only. The L3 anchor numbers (anchorCompared/anchorMatch/anchorMismatch/
+  // anchorCacheLag/anchorCannotVerify) have no independent oracle at all — both the "recovery side" and the
+  // "display side" come from this same readout pass (self-referential, [D] on the measure itself) — so this
+  // id must not be read as covering them (C2c 独立验收 P2-4).
+  'fs.local-environment'
 ] as const
 
 /**
@@ -280,6 +323,8 @@ export const REASON_CODES = [
   'claude.continuation-edge-unexpressed',
   'claude.resume-fork-edge-unexpressed',
   'claude.branch-edge-swob-extra',
+  // lineage ④ (C2c, F1n/G1: a fork edge's child that ① already excludes as an empty session)
+  'lineage.fork-child-empty-excluded',
   // tokens ⑤ (C1a: census-level evidence only; C2a: the check itself)
   'codex.fork-usage-copy',
   'tokens.deviation-high',
@@ -287,6 +332,25 @@ export const REASON_CODES = [
   'tokens.session-mismatch',
   'tokens.cache-write-calibration-difference',
   'tokens.swob-unavailable-as-zero',
+  // resume ⑥ (C2c): environment class (owner can fix locally: reinstall / relink)
+  'resume.program-not-found',
+  'resume.program-broken-symlink',
+  'resume.directory-missing',
+  // resume ⑥ (C2c): data / anchor class (hand to dev)
+  'resume.file-missing',
+  'resume.command-syntax-invalid',
+  'resume.anchor-mismatch',
+  // resume ⑥ (C2c-3): both sides read, both non-empty, genuinely different — but Swob's own summary
+  // (updatedAt) already looks behind the fresh anchor re-read, so a stale grouping/cache is more likely
+  // than two unrelated files (task book M1/S2, F1o/C2c 独立验收 P1-1)
+  'resume.anchor-cache-lag',
+  // resume ⑥ (C2c-3): Codex's own state db names a different file as the one it would actually resume,
+  // but this run could not read it (path did not resolve, or was outside this run's read queue) — neither
+  // a confirmed match nor a confirmed mismatch (task book S3)
+  'resume.anchor-cannot-verify',
+  // resume ⑥ (C2c): the shell running the checkup did not inject a command-layer probe (design §3.4 —
+  // e.g. the AI diary), never a real environment/data problem
+  'resume.probe-not-injected',
   // source applicability
   'source.not-implemented',
   'source.no-data',

@@ -95,6 +95,14 @@ export interface LocalTime { date: string; time: string; offset: string }
 
 const pad2 = (value: number): string => String(value).padStart(2, '0')
 
+/** `UTC±hh:mm` of a raw minutes offset (C2c-3: shared with `resumeSamplingLine()`, which only ever has the
+ * numeric minutes — see checks/common.ts#localDateAndOffset for why the JSON side never stores this
+ * formatted). */
+export function formatUtcOffset(offsetMinutes: number): string {
+  const absolute = Math.abs(offsetMinutes)
+  return `UTC${offsetMinutes < 0 ? '-' : '+'}${pad2(Math.floor(absolute / 60))}:${pad2(absolute % 60)}`
+}
+
 /** Local date / `date hh:mm` / `UTC±hh:mm` of an ISO instant. */
 export function localTime(iso: string, utcOffsetMinutes?: number): LocalTime {
   const ms = Date.parse(iso)
@@ -102,12 +110,7 @@ export function localTime(iso: string, utcOffsetMinutes?: number): LocalTime {
   const offset = utcOffsetMinutes ?? -new Date(ms).getTimezoneOffset()
   const shifted = new Date(ms + offset * 60_000).toISOString()
   const date = shifted.slice(0, 10)
-  const absolute = Math.abs(offset)
-  return {
-    date,
-    time: `${date} ${shifted.slice(11, 16)}`,
-    offset: `UTC${offset < 0 ? '-' : '+'}${pad2(Math.floor(absolute / 60))}:${pad2(absolute % 60)}`
-  }
+  return { date, time: `${date} ${shifted.slice(11, 16)}`, offset: formatUtcOffset(offset) }
 }
 
 export function reasonText(code: string | undefined | null): string {
@@ -536,7 +539,11 @@ function tokensTable(check: CheckResult, used: Set<string>): string[] {
   for (const source of measuredSources(check)) {
     const entry = check.bySource[source]
     if (!entry.oracle.billingTotal && !entry.swob.billingTotal) continue
-    for (const key of ['oracle.billingTotal', 'swob.billingTotal', 'swob.billingTotalDeviationPct', 'swob.sessionsEqual', 'swob.sessionsCompared']) used.add(key)
+    for (const key of [
+      'oracle.billingTotal', 'swob.billingTotal', 'swob.billingTotalDeviationPct', 'swob.sessionsEqual', 'swob.sessionsCompared',
+      // C2a-2 deliverable 1: carried entirely by tokensBranchGroupingLine() below, not a table column.
+      'swob.sessionsRawCompared', 'swob.maxBranchGroupSize'
+    ]) used.add(key)
     rows.push([
       sourceLabel(source)!,
       measureCell(entry.oracle.billingTotal),
@@ -547,6 +554,71 @@ function tokensTable(check: CheckResult, used: Set<string>): string[] {
   }
   const header = [MARKDOWN_TEXT.colSource, MARKDOWN_TEXT.colOracleBillingTotal, MARKDOWN_TEXT.colSwobBillingTotal,
     MARKDOWN_TEXT.colDeviation, MARKDOWN_TEXT.colSessionsEqual]
+  return rows.length > 0 ? table(header, rows) : []
+}
+
+/**
+ * ⑤ Token (C2a-2 deliverable 1, package decision E1): "其中 N 场按分支家族并为 M 组比对（最大组 K 场）。" —
+ * Claude-only (`sessionsRawCompared`/`maxBranchGroupSize` are only ever set for claude-code, package
+ * decision E2), shown for both audiences right under the main table so the ratio cell's grouped M/M is
+ * never read as if it were the original per-session count.
+ */
+function tokensBranchGroupingLine(check: CheckResult): string | null {
+  const entry = check.bySource['claude-code']
+  const raw = entry?.swob.sessionsRawCompared
+  const grouped = entry?.swob.sessionsCompared
+  const maxSize = entry?.swob.maxBranchGroupSize
+  if (!raw || !grouped || !maxSize || raw.value === null || grouped.value === null || maxSize.value === null) return null
+  return fillText(MARKDOWN_TEXT.tokensBranchGrouping, { n: [raw.value, grouped.value, maxSize.value] })
+}
+
+/**
+ * ⑥ resume (C2c-3, task book H1 / C2c 独立验收 P2-1): the command-layer sampling seed, the local day/UTC
+ * offset it was computed from, and every session actually sampled this run (salted) — engineer audience
+ * only (same gating as `samplesLine`), so a reader can confirm "same local day -> same batch" is real.
+ */
+function resumeSamplingLine(check: CheckResult): string | null {
+  const sampling = check.resumeSampling
+  if (!sampling) return null
+  const offset = formatUtcOffset(sampling.timezoneOffsetMinutes)
+  return sampling.sampledIds.length > 0
+    ? fillText(MARKDOWN_TEXT.resumeSamplingLine, { date: sampling.localDate, offset, samples: sampling.sampledIds.join(' ') })
+    : fillText(MARKDOWN_TEXT.resumeSamplingLineEmpty, { date: sampling.localDate, offset })
+}
+
+/**
+ * ⑥ resume (C2c): one row per graded source — bucket totals, sampled command-layer outcome (found /
+ * broken symlink / not found), and the full-population L3 anchor tally (match / mismatch). The per-
+ * bucket/command/anchor numbers not claimed here fall through to `otherNumbers()`, same pattern as
+ * `compactionTable`/`tokensTable`.
+ */
+function resumeTable(check: CheckResult, used: Set<string>): string[] {
+  const rows: string[][] = []
+  for (const source of measuredSources(check)) {
+    const entry = check.bySource[source]
+    if (!entry.oracle.sessions) continue
+    for (const key of ['oracle.sessions', 'swob.recoverableRate', 'swob.missingFile', 'swob.missingDirectory',
+      'swob.commandFound', 'swob.commandBrokenSymlink', 'swob.commandMissing', 'swob.anchorMatch', 'swob.anchorMismatch']) used.add(key)
+    const command = entry.swob.commandFound || entry.swob.commandBrokenSymlink || entry.swob.commandMissing
+      ? fillText(MARKDOWN_TEXT.resumeCommandCell, {
+          n: [entry.swob.commandFound?.value ?? 0, entry.swob.commandBrokenSymlink?.value ?? 0, entry.swob.commandMissing?.value ?? 0]
+        })
+      : measureCell(entry.swob.commandSampled)
+    const anchor = entry.swob.anchorMatch || entry.swob.anchorMismatch
+      ? fillText(MARKDOWN_TEXT.resumeAnchorCell, { n: [entry.swob.anchorMatch?.value ?? 0, entry.swob.anchorMismatch?.value ?? 0] })
+      : ''
+    rows.push([
+      sourceLabel(source)!,
+      measureCell(entry.oracle.sessions),
+      measureCell(entry.swob.recoverableRate),
+      measureCell(entry.swob.missingFile),
+      measureCell(entry.swob.missingDirectory),
+      command,
+      anchor
+    ])
+  }
+  const header = [MARKDOWN_TEXT.colSource, MARKDOWN_TEXT.colResumeTotal, MARKDOWN_TEXT.colRecoverableRate,
+    MARKDOWN_TEXT.colMissingFile, MARKDOWN_TEXT.colMissingDirectory, MARKDOWN_TEXT.colCommandSample, MARKDOWN_TEXT.colAnchor]
   return rows.length > 0 ? table(header, rows) : []
 }
 
@@ -607,8 +679,17 @@ function checkSection(check: CheckResult, audience: Audience): string[] {
     : check.id === 'content' ? contentTable(check, used)
       : check.id === 'compaction' ? compactionTable(check, used)
         : check.id === 'lineage' ? lineageTable(check, used)
-          : check.id === 'tokens' ? tokensTable(check, used) : []
+          : check.id === 'tokens' ? tokensTable(check, used)
+            : check.id === 'resume' ? resumeTable(check, used) : []
   if (main.length > 0) lines.push(...main, '')
+  if (check.id === 'tokens') {
+    const grouping = tokensBranchGroupingLine(check)
+    if (grouping) lines.push(grouping, '')
+  }
+  if (check.id === 'resume' && audience === 'engineer') {
+    const sampling = resumeSamplingLine(check)
+    if (sampling) lines.push(sampling, '')
+  }
   if (main.length === 0 && check.findings.length === 0) {
     const label = headlineLabel(check)
     lines.push(`${check.headline}${label ? LABEL_TAGS[label] : ''}`, '')

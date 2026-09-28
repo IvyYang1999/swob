@@ -195,10 +195,11 @@ describe('checkupDigest on a synthetic HOME (runKernelCheckup)', () => {
     const report = await runKernelCheckup({ homeDir: root, stateDir: tempDir('digest-state-'), privacySalt: 'digest-home' }, { readout: async () => readout })
     expect(report.verdict).toBe('pass')
     const line = checkupDigest(report, { linkTarget: LINK })
-    // ④ lineage (C2b) and ⑤ tokens (C2a) both now produce real (passing) verdicts on this tiny synthetic
-    // HOME, so two more checks count as graded than before either was implemented (3 -> 5; ⑥ resume stays
-    // pending, so it's still not the full 6 -> not `allPass`).
-    expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · OpenCode、ZCode：一场会话都没读到（注意） · 已检查的 5 项都通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
+    // ④⑤ (C2a/C2b) and ⑥ resume (C2c) now all produce real (passing) verdicts on this tiny synthetic HOME
+    // (no resumeCwd set on either session, so the data layer is clean; no resumeProbe injected here, so
+    // the command layer stays unavailable and does not grade; no resumeAnchors on the hand-built readout
+    // fixture, so the anchor tally is empty too) — all 6 checks are now graded and passing -> `allPass`.
+    expect(line).toBe('体检 · 全部 2 场会话（Claude Code 1 · Codex 1） · 2 个来源 · OpenCode、ZCode：一场会话都没读到（注意） · 各项通过 → [[Swob内核体检-2026-09-27-a1b2c3]]（数字均为 [R]）')
     expect(scanMarkdownForPrivacy(line).ok).toBe(true)
   })
 

@@ -208,6 +208,7 @@ import {
   probeSearchProjection,
   SEARCH_PROJECTION_VERSION,
   searchDatabasePath,
+  type SearchIndexEvent,
   type SearchProjectionProbe
 } from './search-index'
 import {
@@ -370,6 +371,7 @@ import {
   resolveSessionSuccessor,
   writeSessionLineageRegistry
 } from './session-lineage'
+import { pruneProgramBackups } from './program-backups'
 import type { Folder, Highlight, SessionSource, SessionSummary } from './types'
 import type { SshTargetConfig } from './types'
 import type { AnalysisDimension, AnalysisScope, UsageFactSyncResult } from './analysis-contract'
@@ -1284,6 +1286,23 @@ function scheduleSearchIndexWarmup(): void {
   })
 }
 
+/**
+ * F1d-3: a repaired search.db starts empty. The startup gate skips a search
+ * projection of an unchanged session list, so every current source and
+ * canonical session is handed to the writer directly. Before the first load
+ * there is nothing to hand over: that load's own warmup projects every
+ * source into the empty index.
+ */
+function reprojectRepairedSearchIndex(): void {
+  if (runtimeShuttingDown || !librarySessionInventoryReady) return
+  void Promise.all([
+    getSearchIndexWriteCoordinator().scheduleLegacySnapshot(currentSearchSources()),
+    reconcileCanonicalProviderProjection()
+  ]).then(() => notifySearchIndexUpdated(), (error) => {
+    if (!runtimeShuttingDown) console.error('[search-index] projection into the repaired index delayed:', error)
+  })
+}
+
 type StartupCacheRebuildReason =
   | 'summary-cache-version'
   | 'summary-cache-legacy-json'
@@ -1620,6 +1639,20 @@ process.on('swob:host-identity-event', (event: HostIdentityEvent) => {
 process.on('swob:library-writer-event', (event: LibraryWriterEvent) => {
   if (event.event !== 'stale-recovered' || !event.recoveryBasis) return
   writeLifecycleLog('library-writer-stale-recovered', { basis: event.recoveryBasis, mode: event.mode })
+})
+// The search index's own maintenance (F1d-3), from whichever thread writes
+// it: a corrupt search.db moved aside and rebuilt, a query that found it
+// corrupt, an integrity check, a backup pruned. File names, sizes and
+// durations only; a rebuilt index is filled again from every current source.
+// A query here cannot move the file: it has the writer's worker check it
+// (PRAGMA quick_check runs there only), which repairs what it finds corrupt.
+process.on('swob:search-index-event', (event: SearchIndexEvent) => {
+  const { event: name, ...fields } = event
+  writeLifecycleLog(name, fields)
+  if (name === 'search-index-repaired') reprojectRepairedSearchIndex()
+  if (name === 'search-index-read-corrupt' && !runtimeShuttingDown) {
+    void getSearchIndexWriteCoordinator().requestIntegrityCheck(`read-${String(fields.operation)}`)
+  }
 })
 
 let runtimeCleanupPromise: Promise<void> | null = null
@@ -5949,6 +5982,17 @@ async function continueStartupAfterLibraryGate(): Promise<void> {
     }
   }, 60_000)
   freshnessMonitor.unref?.()
+  // F1d-3: once per launch, a minute in, Swob's own backups are held to their
+  // limits (program-backups.ts); files it did not name are never touched.
+  const programBackupPrune = setTimeout(() => {
+    if (runtimeShuttingDown) return
+    try {
+      pruneProgramBackups({ log: writeLifecycleLog })
+    } catch (error) {
+      console.error('[program-backups] pruning failed:', error instanceof Error ? error.message : 'unknown error')
+    }
+  }, 60_000)
+  programBackupPrune.unref?.()
   void initializeLibraryScanInBackground()
   setupAutoUpdater()
   autoInstallCliOnStartup()

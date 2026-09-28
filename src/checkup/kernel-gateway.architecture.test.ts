@@ -26,12 +26,37 @@ const FORBIDDEN_MODULES = /(?:session-lineage|canonical-store|canonical-package|
 /**
  * The only runtime kernel imports allowed, all in readout.ts. C1c (task book, explicit exception to the
  * C1a red line): the per-file reads with stats, parseSessionFileWithStats (replaces parseSessionFile)
- * and parseCodexFileWithStats.
+ * and parseCodexFileWithStats. C2c adds two more, both re-verified against the current worktree (134ea20,
+ * not just copied from an earlier review) by tracing the actual call graph, not just the module's import
+ * list — a sibling export in an imported *module* may be dangerous while the one *function* actually
+ * called never reaches it, which the check below distinguishes:
+ *
+ * - `src/main/session-actions.ts#buildResumeCommand`: its call graph is
+ *   `buildResumeCommand:369-377 -> buildTerminalResumeCommand:185-269`, which calls only
+ *   `fs.existsSync(cwd)` plus these of its own module's imports: `shellQuote` (`./resume-terminal:67-69`,
+ *   a pure string replace — that module's `spawn`/`exec`/`writeFileSync`, used by its *other* exports
+ *   `openWithTerminalApp`/`openWithITerm`/`openResumeLaunchSpec`, are never called on this path) and
+ *   `isAntigravityConversationId` (`./providers/antigravity-resume.ts:10-12`, a pure regex test — that
+ *   module's `execFile` is only reachable through the separate, uncalled `probeAntigravityResumeCapability`
+ *   export). `assertQoderResumeSessionId` is a local, non-exported regex-only function in the same file.
+ *   `alphaUnsupportedReason` / `providerCapabilitiesForSource` / `supportsVerifiedSessionFork` are real
+ *   imports of session-actions.ts but are called only from `buildResumeAction`/`buildForkLaunchSpec`/
+ *   `buildForkCommand` (verified by line number: their call sites are 83/85/160/294/387, all outside
+ *   369-377); they are not reachable from `buildResumeCommand`. `buildGuardedResumeCommand`
+ *   (resume-guard.ts) is deliberately not on this list (red line: it may touch Library and spawn).
+ * - `src/main/resume-verifier.ts#classifyResumeL3` / `#anchorsFromMessages`: transitive dependencies
+ *   re-verified for C2c (third independent check after C2/C2c-0's task-book and review passes, same
+ *   result): `./backup-validator` (only imports `selectClaudeDefaultChain` from `./claude-main-chain`),
+ *   `./claude-main-chain` (zero imports), `./session-message-classifier` (only imports a type) — no
+ *   fs write / child_process in any of the three files or resume-verifier.ts itself (which only imports
+ *   `node:crypto`'s `createHash`).
  */
 const ALLOWED_KERNEL_IMPORTS: Record<string, string[]> = {
   'src/main/session-loader.ts': ['findClaudeSessionFiles', 'loadAllSessions', 'parseSessionFileWithStats'],
   'src/main/codex-loader.ts': ['findCodexSessionFiles', 'parseCodexFileWithStats'],
-  'src/main/runtime-home.ts': ['runtimeHome']
+  'src/main/runtime-home.ts': ['runtimeHome'],
+  'src/main/session-actions.ts': ['buildResumeCommand'],
+  'src/main/resume-verifier.ts': ['classifyResumeL3', 'anchorsFromMessages']
 }
 
 function listTs(dir: string): string[] {

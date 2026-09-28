@@ -4,9 +4,11 @@ import * as fs from 'node:fs'
 import type { CanonicalRecord, SessionRecord } from '../shared/provider-schema.generated'
 import {
   closeSearchIndex,
+  deliverSearchIndexEvent,
   indexCanonicalSession,
   synchronizeSearchSources,
   tombstoneCanonicalSession,
+  type SearchIndexIntegrityOutcome,
   type SearchIndexSource
 } from './search-index'
 
@@ -18,8 +20,42 @@ export interface SearchIndexWritePort {
     options?: { includeThinking?: boolean }
   ): Promise<void>
   tombstoneCanonicalSearch(sessionRecordId: string): Promise<void>
+  /** PRAGMA quick_check in the writer's worker thread (F1d-3); absent where the writer runs on this thread. */
+  checkIntegrity?(trigger: string): Promise<SearchIndexIntegrityOutcome>
   cancelPending?(): void
   close(): Promise<void>
+}
+
+/**
+ * How long the coordinator waits for an integrity check before it calls the
+ * index suspect. A real 594 MiB search.db took 5.5 s (F1d-2's verification);
+ * this leaves room for slower disks and larger indexes.
+ */
+export const SEARCH_INDEX_CHECK_DEADLINE_MS = 30_000
+/** At most one integrity check per this long. */
+export const SEARCH_INDEX_CHECK_COOLDOWN_MS = 10 * 60_000
+
+/** What requestIntegrityCheck reports. */
+export interface SearchIndexCheckReport {
+  readonly trigger: string
+  /**
+   * The check's own status, or: suspect (still running at the deadline),
+   * skipped (another check within the cooldown, or the writer stopped),
+   * unsupported (no worker thread to run it in).
+   */
+  readonly status: SearchIndexIntegrityOutcome['status'] | 'suspect' | 'skipped' | 'unsupported'
+  readonly ms?: number
+  readonly problems?: number
+  readonly reason?: string
+  /** The verdict came after the deadline had already reported the index suspect. */
+  readonly late?: boolean
+}
+
+interface PendingIntegrityCheck {
+  trigger: string
+  waiters: Array<(report: SearchIndexCheckReport) => void>
+  /** Set once answered: at the deadline (suspect), or with the verdict. */
+  answered: SearchIndexCheckReport | null
 }
 
 interface SearchIndexSourceDescriptor {
@@ -61,6 +97,8 @@ export interface SearchIndexWriteCoordinatorOptions {
   busyRetryDelaysMs?: number[]
   delay?: (milliseconds: number) => Promise<void>
   onError?: (error: unknown, stats: SearchIndexWriteStats) => void
+  integrityCheckDeadlineMs?: number
+  integrityCheckCooldownMs?: number
 }
 
 export interface SearchIndexWriteStats {
@@ -69,6 +107,8 @@ export interface SearchIndexWriteStats {
   pendingCanonical: number
   exhausted: boolean
   busyAttempts: number
+  /** The last integrity check (F1d-3): unchecked, checking, suspect, or its status. */
+  integrity: 'unchecked' | 'checking' | 'suspect' | SearchIndexIntegrityOutcome['status']
 }
 
 // Large JSONL parsing leaves a correspondingly large V8 isolate reservation.
@@ -126,6 +166,12 @@ export class SearchIndexWriteCoordinator {
   private readonly busyRetryDelaysMs: number[]
   private readonly delay: (milliseconds: number) => Promise<void>
   private readonly onError?: (error: unknown, stats: SearchIndexWriteStats) => void
+  private readonly integrityCheckDeadlineMs: number
+  private readonly integrityCheckCooldownMs: number
+  private pendingCheck: PendingIntegrityCheck | null = null
+  private activeCheck: PendingIntegrityCheck | null = null
+  private lastCheckStartedAt: number | null = null
+  private integrity: SearchIndexWriteStats['integrity'] = 'unchecked'
 
   constructor(
     private readonly writer: SearchIndexWritePort,
@@ -137,6 +183,8 @@ export class SearchIndexWriteCoordinator {
       setTimeout(resolve, milliseconds)
     }))
     this.onError = options.onError
+    this.integrityCheckDeadlineMs = options.integrityCheckDeadlineMs ?? SEARCH_INDEX_CHECK_DEADLINE_MS
+    this.integrityCheckCooldownMs = options.integrityCheckCooldownMs ?? SEARCH_INDEX_CHECK_COOLDOWN_MS
   }
 
   scheduleLegacySource(source: SearchIndexSource): Promise<void> {
@@ -190,8 +238,41 @@ export class SearchIndexWriteCoordinator {
       pendingLegacy: this.pending?.legacy.size || 0,
       pendingCanonical: this.pending?.canonical.size || 0,
       exhausted: this.exhausted,
-      busyAttempts: this.busyAttempts
+      busyAttempts: this.busyAttempts,
+      integrity: this.integrity
     }
+  }
+
+  /**
+   * F1d-3, the secondary, active probe: the writer's worker thread runs
+   * PRAGMA quick_check on search.db and repairs it there when SQLite finds
+   * it corrupt. The check never runs on this thread (the port has no
+   * checkIntegrity where the writer does: the CLI, an in-process writer).
+   * It goes before further writes, which wait here, merged, until it
+   * answers: meanwhile the index is only read. Its answer is awaited for
+   * integrityCheckDeadlineMs of wall-clock time; a check still running then
+   * cannot be interrupted, so the index is reported suspect
+   * (search-index-check-suspect) and nothing is moved or deleted for that.
+   * Only the check's own verdict, whenever it comes, repairs. One check at a
+   * time, at most one per cooldown.
+   */
+  requestIntegrityCheck(trigger: string): Promise<SearchIndexCheckReport> {
+    if (this.stoppedError) return Promise.resolve({ trigger, status: 'skipped', reason: 'stopped' })
+    if (!this.writer.checkIntegrity) return Promise.resolve({ trigger, status: 'unsupported' })
+    const current = this.pendingCheck ?? this.activeCheck
+    if (current) {
+      // Joins the check already asked for: its answer, or the suspect report it already gave.
+      if (current.answered) return Promise.resolve(current.answered)
+      return new Promise((resolve) => current.waiters.push(resolve))
+    }
+    if (this.lastCheckStartedAt !== null && Date.now() - this.lastCheckStartedAt < this.integrityCheckCooldownMs) {
+      return Promise.resolve({ trigger, status: 'skipped', reason: 'cooldown' })
+    }
+    const check: PendingIntegrityCheck = { trigger, waiters: [], answered: null }
+    this.pendingCheck = check
+    const report = new Promise<SearchIndexCheckReport>((resolve) => check.waiters.push(resolve))
+    if (!this.running) void this.drain()
+    return report
   }
 
   async close(error: unknown = new Error('Search index writer stopped')): Promise<void> {
@@ -200,6 +281,12 @@ export class SearchIndexWriteCoordinator {
       const pending = this.pending
       this.pending = null
       if (pending) for (const waiter of pending.waiters) waiter.reject(error)
+      const check = this.pendingCheck
+      this.pendingCheck = null
+      if (check) {
+        check.answered = { trigger: check.trigger, status: 'skipped', reason: 'stopped' }
+        for (const waiter of check.waiters) waiter(check.answered)
+      }
     }
     // Signal active worker work before awaiting the coordinator drain. Waiting
     // first prevents LibraryWorkerClient.close() from ever setting its shared
@@ -221,8 +308,15 @@ export class SearchIndexWriteCoordinator {
   private async drain(): Promise<void> {
     if (this.running || this.stoppedError) return
     this.running = true
+    let writesHeld = false
     try {
-      while (this.pending && !this.stoppedError) {
+      while (!this.stoppedError) {
+        // A requested integrity check goes first; writes arriving meanwhile wait, merged.
+        if (this.pendingCheck) {
+          await this.runIntegrityCheck(this.pendingCheck)
+          continue
+        }
+        if (writesHeld || !this.pending) break
         const current = this.pending
         this.pending = null
         let failure: unknown = null
@@ -258,13 +352,49 @@ export class SearchIndexWriteCoordinator {
         this.pending = { ...combined, waiters: [] }
         this.exhausted = true
         this.onError?.(failure, this.getStats())
-        break // bounded: retain evidence, never spin forever
+        writesHeld = true // bounded: retain evidence, never spin forever
       }
     } finally {
       this.running = false
       for (const resolve of this.idleWaiters) resolve()
       this.idleWaiters.clear()
     }
+  }
+
+  private async runIntegrityCheck(check: PendingIntegrityCheck): Promise<void> {
+    this.pendingCheck = null
+    this.activeCheck = check
+    const startedAt = Date.now()
+    this.lastCheckStartedAt = startedAt
+    this.integrity = 'checking'
+    const report = (value: SearchIndexCheckReport): void => {
+      if (check.answered) return
+      check.answered = value
+      for (const waiter of check.waiters) waiter(value)
+    }
+    const deadline = setTimeout(() => {
+      this.integrity = 'suspect'
+      deliverSearchIndexEvent({
+        event: 'search-index-check-suspect',
+        trigger: check.trigger,
+        deadlineMs: this.integrityCheckDeadlineMs
+      })
+      report({ trigger: check.trigger, status: 'suspect', ms: Date.now() - startedAt })
+    }, this.integrityCheckDeadlineMs)
+    deadline.unref?.()
+    let outcome: SearchIndexIntegrityOutcome
+    try {
+      outcome = await this.writer.checkIntegrity!(check.trigger)
+    } catch (error) {
+      outcome = { status: 'error', ms: Date.now() - startedAt, reason: error instanceof Error ? error.name : 'unknown' }
+    } finally {
+      clearTimeout(deadline)
+      this.activeCheck = null
+    }
+    const late = check.answered !== null
+    this.integrity = outcome.status
+    deliverSearchIndexEvent({ event: 'search-index-checked', trigger: check.trigger, ...outcome, late })
+    report({ trigger: check.trigger, ...outcome, late })
   }
 
   private async execute(batch: PendingBatch): Promise<void> {
@@ -328,6 +458,10 @@ export class WorkerSearchIndexWritePort implements SearchIndexWritePort {
 
   tombstoneCanonicalSearch(sessionRecordId: string): Promise<void> {
     return this.worker().then((worker) => worker.tombstoneCanonicalSearch(sessionRecordId))
+  }
+
+  checkIntegrity(trigger: string): Promise<SearchIndexIntegrityOutcome> {
+    return this.worker().then((worker) => worker.checkSearchIndexIntegrity(trigger))
   }
 
   cancelPending(): void {

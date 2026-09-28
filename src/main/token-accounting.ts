@@ -1,8 +1,22 @@
-import type { RawJsonlMessage, SessionSource, TokenUsage } from './session-types'
+import type { RawJsonlMessage, SessionSource, SessionSummary, TokenUsage } from './session-types'
 import { canonicalizeModel, inferOriginalProvider, providerFromModelRoute } from './pricing-catalog'
+import {
+  billingAgentScope,
+  billingOccurredAt,
+  precedesInBillingRank,
+  usageFactEventId,
+  type BillingRankKey
+} from './billing-identity'
 
 export type TokenProvenance = 'reported' | 'derived' | 'estimated' | 'unavailable'
+/**
+ * 'inherited' is never observed in a transcript: the load's cross-session
+ * ownership pass (assignCrossSessionUsageOwners, F1m) marks a copy with it
+ * when the copy's billing fact counts in another session.
+ */
 export type UsageScope = 'main' | 'sidechain' | 'subagent' | 'inherited'
+/** A scope a copy is observed with. */
+export type ObservedUsageScope = Exclude<UsageScope, 'inherited'>
 export type ModelProvenance = 'response' | 'turn-context' | 'session-fallback' | 'unknown'
 export type ProviderProvenance = 'explicit' | 'model-prefix' | 'inferred' | 'unknown'
 export type ReportedCostKind = 'provider-billed' | 'harness-list-estimate' | 'swob-estimate'
@@ -115,6 +129,12 @@ export interface UsageEvent {
   providerRaw?: string
   providerProvenance: ProviderProvenance
   scope: UsageScope
+  /**
+   * Set with scope 'inherited' (F1m): this copy stays an audit row of its
+   * session, but its billing fact counts in `sessionId`, the copy
+   * usage-facts' billing_rank puts first. Never cached: the load decides it.
+   */
+  inheritedFrom?: InheritedUsage
   counterKind: 'incremental' | 'cumulative-delta'
   provenance: Exclude<TokenProvenance, 'unavailable'>
   rawInputTokens?: number
@@ -141,13 +161,26 @@ export interface UsageEvent {
   warnings: string[]
 }
 
+/** Where an inherited copy's billing fact counts (F1m). */
+export interface InheritedUsage {
+  /** sessionId of the session whose copy the totals count. */
+  sessionId: string
+  /** The scope this copy was observed with; the usage ledger records it so. */
+  originalScope: ObservedUsageScope
+}
+
 /**
- * Internal summary-cache tuple. The positional form avoids repeating object
- * keys for every audit row while retaining exactly what cross-session merge
- * needs: billing identity, scope, provenance, and additive components.
+ * Internal summary-cache tuple (the compact column; this shape since cache
+ * v31, F1m). The positional form avoids repeating object keys for every audit
+ * row while retaining what cross-session work needs: the billing identity
+ * usage-facts derives (dedupKey and billingFactKey apart, the timestamp, the
+ * auditSourceId), scope, provenance and the additive components. Written by
+ * summary-cache-compact.cjs; `inheritedFrom` only ever exists in memory, on a
+ * copy the load's ownership pass marked inherited.
  */
 export type CompactUsageEventRollup = readonly [
-  ledgerKey: string,
+  dedupKey: string,
+  billingFactKey: string | null,
   scope: UsageScope,
   provenance: Exclude<TokenProvenance, 'unavailable'>,
   nonCachedInputTokens: number,
@@ -156,7 +189,10 @@ export type CompactUsageEventRollup = readonly [
   cacheWrite5mTokens: number,
   cacheWrite1hTokens: number,
   outputTokens: number,
-  reasoningTokens: number
+  reasoningTokens: number,
+  timestamp: string | null,
+  auditSourceId: string | null,
+  inheritedFrom?: InheritedUsage
 ]
 
 export interface TokenAccounting {
@@ -375,15 +411,15 @@ function sumComponents(events: Array<Pick<UsageEvent, 'components'>>): Normalize
   })
 }
 
-function sumRollupComponents(rollups: CompactUsageEventRollup[]): NormalizedTokenComponents {
+function sumRollupComponents(rollups: readonly CompactUsageEventRollup[]): NormalizedTokenComponents {
   return rollups.reduce<NormalizedTokenComponents>((total, rollup) => addComponents(total, {
-    nonCachedInputTokens: rollup[3],
-    cacheReadTokens: rollup[4],
-    cacheWriteTokens: rollup[5],
-    cacheWrite5mTokens: rollup[6],
-    cacheWrite1hTokens: rollup[7],
-    outputTokens: rollup[8],
-    reasoningTokens: rollup[9]
+    nonCachedInputTokens: rollup[4],
+    cacheReadTokens: rollup[5],
+    cacheWriteTokens: rollup[6],
+    cacheWrite5mTokens: rollup[7],
+    cacheWrite1hTokens: rollup[8],
+    outputTokens: rollup[9],
+    reasoningTokens: rollup[10]
   }), {
     nonCachedInputTokens: 0,
     cacheReadTokens: 0,
@@ -395,9 +431,11 @@ function sumRollupComponents(rollups: CompactUsageEventRollup[]): NormalizedToke
   })
 }
 
-function compactUsageEventRollup(event: UsageEvent): CompactUsageEventRollup {
-  return [
-    event.billingFactKey || event.dedupKey,
+/** The rollup of one usage copy: summary-cache-compact.cjs's tuple, plus an in-memory inherited mark. */
+export function compactUsageEventRollup(event: UsageEvent): CompactUsageEventRollup {
+  const rollup = [
+    event.dedupKey,
+    event.billingFactKey || null,
     event.scope,
     event.provenance,
     event.components.nonCachedInputTokens,
@@ -406,18 +444,75 @@ function compactUsageEventRollup(event: UsageEvent): CompactUsageEventRollup {
     event.components.cacheWrite5mTokens,
     event.components.cacheWrite1hTokens,
     event.components.outputTokens,
-    event.components.reasoningTokens || 0
-  ]
+    event.components.reasoningTokens || 0,
+    event.timestamp || null,
+    event.auditSourceId || null
+  ] as const
+  return event.inheritedFrom ? [...rollup, event.inheritedFrom] : rollup
 }
 
+/** billingFactKey || dedupKey: the key uniqueBillingEvents keeps one owner per. */
+function rollupLedgerKey(rollup: CompactUsageEventRollup): string {
+  return rollup[1] || rollup[0]
+}
+
+/** The scope a copy was observed with: an inherited copy's original scope (F1m). */
+export function observedUsageScope(event: Pick<UsageEvent, 'scope' | 'inheritedFrom'>): UsageScope {
+  return event.scope === 'inherited' && event.inheritedFrom ? event.inheritedFrom.originalScope : event.scope
+}
+
+function observedRollupScope(rollup: CompactUsageEventRollup): UsageScope {
+  return rollup[2] === 'inherited' && rollup[13] ? rollup[13].originalScope : rollup[2]
+}
+
+/**
+ * One owner per billing fact (billingFactKey, else dedupKey) within one
+ * ledger: the first copy, replaced by a later main-scope copy. A copy the
+ * load's cross-session pass marked inherited (F1m) never owns: its billing
+ * fact counts in another session, so it stays an audit row here and adds
+ * nothing to components, billingTotal or conversationOnly.
+ */
 export function uniqueBillingEvents(events: UsageEvent[]): UsageEvent[] {
   const selected = new Map<string, UsageEvent>()
   for (const event of events) {
+    if (event.scope === 'inherited') continue
     const key = event.billingFactKey || event.dedupKey
     const current = selected.get(key)
     if (!current || (current.scope !== 'main' && event.scope === 'main')) {
       selected.set(key, event)
     }
+  }
+  return [...selected.values()]
+}
+
+/**
+ * The copies a ledger would own had the load not counted them in another
+ * session (F1m): per billing fact, uniqueBillingEvents' pick among its
+ * inherited copies by observed scope. Indexes into `events`. Insights keeps
+ * their days: a session is active on every call it made (F1j D5).
+ */
+export function inheritedOwnerIndexes(events: readonly UsageEvent[]): number[] {
+  const selected = new Map<string, number>()
+  events.forEach((event, index) => {
+    if (event.scope !== 'inherited' || !event.inheritedFrom) return
+    const key = event.billingFactKey || event.dedupKey
+    const current = selected.get(key)
+    if (current === undefined ||
+      (events[current].inheritedFrom!.originalScope !== 'main' && event.inheritedFrom.originalScope === 'main')) {
+      selected.set(key, index)
+    }
+  })
+  return [...selected.values()]
+}
+
+/** uniqueBillingEvents over compact rollups. */
+function uniqueBillingRollups(rollups: readonly CompactUsageEventRollup[]): CompactUsageEventRollup[] {
+  const selected = new Map<string, CompactUsageEventRollup>()
+  for (const rollup of rollups) {
+    if (rollup[2] === 'inherited') continue
+    const key = rollupLedgerKey(rollup)
+    const current = selected.get(key)
+    if (!current || (current[2] !== 'main' && rollup[2] === 'main')) selected.set(key, rollup)
   }
   return [...selected.values()]
 }
@@ -834,22 +929,16 @@ export function mergeTokenAccountings(
     if (rollups.length === 0) return first.usageEventsOmitted
       ? first
       : { ...first, usageEventsOmitted: true }
-    const selected = new Map<string, typeof rollups[number]>()
-    for (const rollup of rollups) {
-      const key = rollup[0]
-      const current = selected.get(key)
-      if (!current || (current[1] !== 'main' && rollup[1] === 'main')) selected.set(key, rollup)
-    }
-    const billable = [...selected.values()]
+    const billable = uniqueBillingRollups(rollups)
     const components = sumRollupComponents(billable)
     const mainComponents = sumRollupComponents(
-      billable.filter((rollup) => rollup[1] === 'main')
+      billable.filter((rollup) => rollup[2] === 'main')
     )
-    const provenance: TokenProvenance = billable.some((rollup) => rollup[2] === 'estimated')
+    const provenance: TokenProvenance = billable.some((rollup) => rollup[3] === 'estimated')
       ? 'estimated'
-      : billable.some((rollup) => rollup[2] === 'derived') ? 'derived' : 'reported'
+      : billable.some((rollup) => rollup[3] === 'derived') ? 'derived' : 'reported'
     const warnings = [...new Set(available.flatMap(({ accounting }) => accounting.warnings))]
-    const duplicateCount = rollups.length - selected.size
+    const duplicateCount = rollups.length - billable.length
     if (duplicateCount > 0) {
       warnings.push(
         `deduplicated ${duplicateCount} cross-session usage event${duplicateCount === 1 ? '' : 's'}`
@@ -950,4 +1039,273 @@ export function accountingForSession(session: {
 
 export function markExcludedFromRollups(accounting: TokenAccounting): TokenAccounting {
   return { ...accounting, excludedFromRollups: true }
+}
+
+// --- Cross-session ownership (F1m) ---
+
+/** What one load's ownership pass found (assignCrossSessionUsageOwners). */
+export interface CrossSessionUsageOwnership {
+  /** Sessions whose copies took part: rollup sessions with a parsed transcript and a ledger. */
+  sessions: number
+  /** Billing facts at least two of them carry. */
+  sharedFacts: number
+  /** Copies marked inherited: each is an audit row whose billing fact counts in another session. */
+  inheritedCopies: number
+  /** Sessions left with at least one inherited copy (their totals and tokenUsage were recomputed). */
+  sessionsWithInheritedCopies: number
+}
+
+/** One session ledger's copies, as full usage events or as compact rollups. */
+interface UsageCopies {
+  readonly count: number
+  dedupKey(index: number): string
+  billingFactKey(index: number): string | undefined
+  /** The scope the copy was observed with (an inherited copy's original scope). */
+  observedScope(index: number): UsageScope
+  timestamp(index: number): string | undefined
+  auditSourceId(index: number): string | undefined
+  /** Whether the copy carries an ownership pass's mark (restored before the pass decides again). */
+  marked(index: number): boolean
+}
+
+function eventCopies(events: readonly UsageEvent[]): UsageCopies {
+  return {
+    count: events.length,
+    dedupKey: (index) => events[index].dedupKey,
+    billingFactKey: (index) => events[index].billingFactKey,
+    observedScope: (index) => observedUsageScope(events[index]),
+    timestamp: (index) => events[index].timestamp,
+    auditSourceId: (index) => events[index].auditSourceId,
+    marked: (index) => events[index].scope === 'inherited' && events[index].inheritedFrom !== undefined
+  }
+}
+
+function rollupCopies(rollups: readonly CompactUsageEventRollup[]): UsageCopies {
+  return {
+    count: rollups.length,
+    dedupKey: (index) => rollups[index][0],
+    billingFactKey: (index) => rollups[index][1] || undefined,
+    observedScope: (index) => observedRollupScope(rollups[index]),
+    timestamp: (index) => rollups[index][11] || undefined,
+    auditSourceId: (index) => rollups[index][12] || undefined,
+    marked: (index) => rollups[index][2] === 'inherited' && rollups[index][13] !== undefined
+  }
+}
+
+/** A ledger's copies: its usage events, or its compact rollups when the events were left in the cache. */
+function usageCopiesOf(accounting: TokenAccounting): UsageCopies | null {
+  if (accounting.usageEventsOmitted) {
+    return accounting.usageEventRollups ? rollupCopies(accounting.usageEventRollups) : null
+  }
+  return eventCopies(accounting.usageEvents)
+}
+
+/** providerOutcomeForSession(session).parse === 'parsed' (session-provider-outcome.ts), without its import cycle. */
+function hasParsedTranscript(session: SessionSummary): boolean {
+  if (session.providerOutcome) return session.providerOutcome.parse === 'parsed'
+  return session.isManifestOnly !== true && session.messageCount > 0
+}
+
+function restoredEvent(event: UsageEvent): UsageEvent {
+  if (event.scope !== 'inherited' || !event.inheritedFrom) return event
+  const { inheritedFrom, ...observed } = event
+  return { ...observed, scope: inheritedFrom.originalScope }
+}
+
+function restoredRollup(rollup: CompactUsageEventRollup): CompactUsageEventRollup {
+  const inheritedFrom = rollup[13]
+  if (rollup[2] !== 'inherited' || !inheritedFrom) return rollup
+  return [
+    rollup[0], rollup[1], inheritedFrom.originalScope, rollup[3], rollup[4], rollup[5], rollup[6],
+    rollup[7], rollup[8], rollup[9], rollup[10], rollup[11], rollup[12]
+  ]
+}
+
+function inheritedRollup(rollup: CompactUsageEventRollup, inheritedFrom: InheritedUsage): CompactUsageEventRollup {
+  return [
+    rollup[0], rollup[1], 'inherited', rollup[3], rollup[4], rollup[5], rollup[6],
+    rollup[7], rollup[8], rollup[9], rollup[10], rollup[11], rollup[12], inheritedFrom
+  ]
+}
+
+/**
+ * The ledger with its copies of `lost` (ledger key -> the owner session's
+ * sessionId) marked inherited, every earlier mark undone, and the totals
+ * recomputed from the owners left. The input ledger is never mutated: cached
+ * summaries share their ledger objects with the summary cache.
+ */
+function ledgerWithOwners(
+  accounting: TokenAccounting,
+  lost: ReadonlyMap<string, string> | undefined
+): { accounting: TokenAccounting; inherited: number } {
+  let inherited = 0
+  if (accounting.usageEventsOmitted && accounting.usageEventRollups) {
+    const usageEventRollups = accounting.usageEventRollups.map((rollup) => {
+      const observed = restoredRollup(rollup)
+      const owner = lost?.get(rollupLedgerKey(observed))
+      if (owner === undefined || observed[2] === 'inherited') return observed
+      inherited++
+      return inheritedRollup(observed, { sessionId: owner, originalScope: observed[2] })
+    })
+    const owners = uniqueBillingRollups(usageEventRollups)
+    const components = sumRollupComponents(owners)
+    const mainComponents = sumRollupComponents(owners.filter((rollup) => rollup[2] === 'main'))
+    return {
+      accounting: {
+        ...accounting,
+        billingTotal: processedTotal(components),
+        conversationOnly: processedTotal(mainComponents),
+        components,
+        usageEventRollups
+      },
+      inherited
+    }
+  }
+  const usageEvents = accounting.usageEvents.map((event): UsageEvent => {
+    const observed = restoredEvent(event)
+    const owner = lost?.get(observed.billingFactKey || observed.dedupKey)
+    if (owner === undefined || observed.scope === 'inherited') return observed
+    inherited++
+    return { ...observed, scope: 'inherited', inheritedFrom: { sessionId: owner, originalScope: observed.scope } }
+  })
+  const owners = uniqueBillingEvents(usageEvents)
+  const components = sumComponents(owners)
+  const mainComponents = sumComponents(owners.filter((event) => event.scope === 'main'))
+  return {
+    accounting: {
+      ...accounting,
+      billingTotal: processedTotal(components),
+      conversationOnly: processedTotal(mainComponents),
+      components,
+      usageEvents
+    },
+    inherited
+  }
+}
+
+/**
+ * One load's cross-session ownership (F1m). A billing fact can reach several
+ * sessions: a Claude branch or resume that copied another session's history
+ * without Claude Code's forkedFrom mark (accountClaudeUsage drops the marked
+ * rows already) carries that history's calls again. Each session counted such
+ * a call, so the per-session totals (the session list and detail, `swob list`,
+ * checkup ⑤, any per-session sum) added it once per copy, while the usage
+ * ledger and Insights count it once, in the copy billing_rank puts first.
+ *
+ * Here the sessions' own owners (uniqueBillingEvents: one copy per billing
+ * fact within a session) compete across sessions by billing identity
+ * (source + billingFactKey, usage-facts' billing_fact_id) and
+ * precedesInBillingRank (billing-identity.ts, the ledger's and Insights'
+ * rule). A copy without a billingFactKey is a fact of its own and never
+ * merges across sessions. The owner session keeps its copy; every other
+ * session keeps its copies as audit rows with scope 'inherited' and
+ * `inheritedFrom` (the owner's sessionId, the observed scope), and its
+ * components, billingTotal, conversationOnly and tokenUsage are recomputed
+ * without them. Nothing else of a session changes (branch metadata included),
+ * and an input ledger is never mutated: the session gets a new one.
+ *
+ * Candidates are the sessions the ledger and Insights count: not an
+ * intra-file branch view, not excluded from rollups, a parsed transcript.
+ * They compete in the order the load lists them (updatedAt, newest first),
+ * so a complete tie (two copies with one event_id: two summaries sharing a
+ * sessionId) goes to the one Insights meets first too. Grouping is per
+ * source; the loader calls this for its Claude sessions only.
+ *
+ * Idempotent and reversible: earlier marks are undone before deciding, so
+ * running it again changes nothing, and a copy whose owner is gone from the
+ * input owns its fact again. It reads full usage events, or the compact
+ * rollups (summary-cache v31) when a cached ledger left its events on disk;
+ * both give the same owners and totals.
+ */
+export function assignCrossSessionUsageOwners(sessions: SessionSummary[]): CrossSessionUsageOwnership {
+  interface Entry { session: SessionSummary; source: string; accounting: TokenAccounting; copies: UsageCopies; owners: Map<string, number> }
+  const entries: Entry[] = []
+  const candidates = sessions
+    .map((session, index) => ({ session, index }))
+    .filter(({ session }) => !session.branchLeafUuid && session.tokenAccounting &&
+      session.tokenAccounting.excludedFromRollups !== true && hasParsedTranscript(session))
+    .sort((left, right) => right.session.updatedAt.localeCompare(left.session.updatedAt) || left.index - right.index)
+  for (const { session } of candidates) {
+    const accounting = session.tokenAccounting!
+    const copies = usageCopiesOf(accounting)
+    if (!copies || copies.count === 0) continue
+    // The session's own owner per billing fact, as uniqueBillingEvents picks it from the observed scopes.
+    const owners = new Map<string, number>()
+    for (let index = 0; index < copies.count; index++) {
+      const scope = copies.observedScope(index)
+      if (scope === 'inherited') continue
+      const key = copies.billingFactKey(index) || copies.dedupKey(index)
+      const current = owners.get(key)
+      if (current === undefined || (copies.observedScope(current) !== 'main' && scope === 'main')) owners.set(key, index)
+    }
+    entries.push({ session, source: session.source || accounting.provider || 'claude-code', accounting, copies, owners })
+  }
+
+  interface Holder { entry: number; copy: number }
+  const firstHolder = new Map<string, Holder>()
+  const shared = new Map<string, Holder[]>()
+  entries.forEach((entry, entryIndex) => {
+    for (const copy of entry.owners.values()) {
+      const billingFactKey = entry.copies.billingFactKey(copy)
+      if (!billingFactKey) continue
+      const identity = `${entry.source}\u0000${billingFactKey}`
+      const holder = { entry: entryIndex, copy }
+      const first = firstHolder.get(identity)
+      if (!first) {
+        firstHolder.set(identity, holder)
+        continue
+      }
+      const group = shared.get(identity)
+      if (group) group.push(holder)
+      else shared.set(identity, [first, holder])
+    }
+  })
+
+  const rankKey = (holder: Holder): BillingRankKey => {
+    const { session, source, copies } = entries[holder.entry]
+    return {
+      agentScope: billingAgentScope(copies.observedScope(holder.copy)),
+      occurredAt: billingOccurredAt(copies.timestamp(holder.copy)),
+      eventId: usageFactEventId(source, session.sessionId, {
+        auditSourceId: copies.auditSourceId(holder.copy),
+        dedupKey: copies.dedupKey(holder.copy)
+      })
+    }
+  }
+  const lostBy = new Map<number, Map<string, string>>()
+  for (const holders of shared.values()) {
+    let winner = holders[0]
+    let winnerKey = rankKey(winner)
+    for (const holder of holders.slice(1)) {
+      const key = rankKey(holder)
+      if (precedesInBillingRank(key, winnerKey)) {
+        winner = holder
+        winnerKey = key
+      }
+    }
+    const ownerSessionId = entries[winner.entry].session.sessionId
+    for (const holder of holders) {
+      if (holder === winner) continue
+      const { copies } = entries[holder.entry]
+      const ledgerKey = copies.billingFactKey(holder.copy) || copies.dedupKey(holder.copy)
+      let lost = lostBy.get(holder.entry)
+      if (!lost) lostBy.set(holder.entry, lost = new Map())
+      lost.set(ledgerKey, ownerSessionId)
+    }
+  }
+
+  let inheritedCopies = 0
+  let sessionsWithInheritedCopies = 0
+  entries.forEach((entry, entryIndex) => {
+    const lost = lostBy.get(entryIndex)
+    let marked = false
+    for (let index = 0; !marked && index < entry.copies.count; index++) marked = entry.copies.marked(index)
+    if (!lost && !marked) return
+    const result = ledgerWithOwners(entry.accounting, lost)
+    entry.session.tokenAccounting = result.accounting
+    entry.session.tokenUsage = tokenUsageFromAccounting(result.accounting)
+    inheritedCopies += result.inherited
+    if (result.inherited > 0) sessionsWithInheritedCopies++
+  })
+  return { sessions: entries.length, sharedFacts: shared.size, inheritedCopies, sessionsWithInheritedCopies }
 }

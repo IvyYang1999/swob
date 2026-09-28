@@ -6,6 +6,7 @@ import type {
   Label,
   Measure,
   ReasonCode,
+  ResumeProbe,
   SourceId,
   Verdict
 } from '../contract'
@@ -31,6 +32,12 @@ export interface CheckContext {
   readout: SwobReadout
   /** Real paths of census units that changed during the run or became unreadable. */
   changed: ReadonlySet<string>
+  /** ⑥ resume command layer (C2c): injected by the shell running the checkup; null for the AI diary. */
+  resumeProbe: ResumeProbe | null
+  /** ⑥ resume sampling (C2c, CheckupOptions.resumeSample, defaulted in run.ts): perSource + a seed string
+   * (default: today's local date), so the "random" pick is reproducible for a given day and readable in
+   * the report appendix (design H1/H2). */
+  resumeSample: { perSource: number; seed: string }
 }
 
 export type SourceEntry = CheckResult['bySource'][string]
@@ -67,6 +74,27 @@ export function sampleIds(salt: string, paths: Iterable<string>, limit = 5): str
   const ids = new Set<string>()
   for (const filePath of paths) ids.add(saltedId(salt, `unit:${filePath}`))
   return [...ids].sort().slice(0, limit)
+}
+
+/**
+ * Local (not UTC) calendar day of `now`, plus its UTC offset in minutes (kept numeric, not the formatted
+ * `UTC±HH:MM` string render-markdown.ts's own `localTime()` produces: the JSON privacy scanner's whitelist
+ * has no category for a raw offset *string* — only numbers, registered enums/templates, hex ids, ISO times
+ * and versions — so a formatted offset stored directly in a `CheckResult` field would fail
+ * `assertPrivacyClean`; a plain number needs no such category. render-markdown.ts formats it into
+ * `UTC±HH:MM` only at render time, same convention as `RenderOptions.utcOffsetMinutes`).
+ *
+ * ⑥ resume (C2c-3, C2c 独立验收 P2-1): the sampling seed's default was silently
+ * `new Date().toISOString().slice(0, 10)` — the *UTC* day — while both the code comment and the design
+ * ("随机种子取当天日期") promised the caller's local day; between UTC midnight and the local midnight that
+ * follows it (e.g. 00:00–08:00 at UTC+8), that default silently picked yesterday's seed. run.ts now
+ * defaults to `localDateAndOffset().date`, and checks/resume.ts reports both the seed's local day and this
+ * offset in the check result so a reader can see what "local" meant for that run and reproduce it.
+ */
+export function localDateAndOffset(now: Date = new Date()): { date: string; offsetMinutes: number } {
+  const offsetMinutes = -now.getTimezoneOffset()
+  const shifted = new Date(now.getTime() + offsetMinutes * 60_000)
+  return { date: shifted.toISOString().slice(0, 10), offsetMinutes }
 }
 
 export function makeFinding(input: {

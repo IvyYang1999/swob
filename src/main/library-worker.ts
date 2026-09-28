@@ -1,5 +1,6 @@
 import { Worker, isMainThread, parentPort } from 'node:worker_threads'
 import * as path from 'node:path'
+import Database from 'better-sqlite3'
 import {
   initLibrary,
   scanLibrary,
@@ -33,10 +34,19 @@ import { loadCodexRawMessages, loadCodexSessionRecordWithRaw } from './codex-loa
 import { buildCursorSessionSummary, loadCursorRawMessages } from './cursor-loader'
 import { detectSessionSourceFromPath } from './session-source'
 import {
+  armSearchIndexSelfHeal,
   closeSearchIndex,
+  deliverSearchIndexEvent,
   indexCanonicalSession,
+  isSearchIndexCorruption,
+  repairSearchIndexAfterCheck,
+  searchDatabasePath,
+  searchIndexFileIdentity,
+  setSearchIndexEventSink,
   synchronizeSearchSources,
-  tombstoneCanonicalSession
+  tombstoneCanonicalSession,
+  type SearchIndexEvent,
+  type SearchIndexIntegrityOutcome
 } from './search-index'
 import { closeUsageFactStore, synchronizeUsageFacts, type UsageFactAbsenceEvidence } from './usage-fact-store'
 import type { Folder, SessionSummary } from './types'
@@ -114,6 +124,8 @@ export type LibraryWorkerRequest = (
   | { type: 'search-sources-sync'; sources: SearchIndexSourceDescriptor[]; prune: boolean }
   | { type: 'search-canonical-index'; sessionId: string; records: CanonicalRecord[]; includeThinking?: boolean }
   | { type: 'search-canonical-tombstone'; sessionRecordId: string }
+  /** F1d-3: PRAGMA quick_check of search.db, here in the worker thread only. */
+  | { type: 'search-integrity-check'; trigger: string }
 ) & {
   cancelBuffer?: SharedArrayBuffer
   writerArbiter?: LibraryWriterArbiterWire
@@ -139,6 +151,7 @@ type LibraryWorkerResult =
   | { kind: 'session-sync'; value: LibraryWorkerSessionSyncResult }
   | { kind: 'usage-facts-sync'; value: UsageFactSyncResult }
   | { kind: 'search-write' }
+  | { kind: 'search-integrity-check'; value: SearchIndexIntegrityOutcome }
 
 export interface LibraryWorkerProgress {
   current: number
@@ -154,6 +167,12 @@ interface WorkerEnvelope {
 type WorkerReply =
   | { requestId: number; type: 'progress'; progress: LibraryWorkerProgress }
   | { requestId: number; type: 'result'; result: LibraryWorkerResult }
+  /**
+   * The search index this worker writes reports its own maintenance (F1d-3):
+   * the main thread logs it, and a repair closes the main thread's read
+   * connection to the moved file. Posted before the request's result.
+   */
+  | { requestId: number; type: 'search-index-event'; event: SearchIndexEvent }
   | {
       requestId: number
       type: 'error'
@@ -227,6 +246,9 @@ export async function runLibraryWorkerRequest(
   if (request.type === 'search-canonical-tombstone') {
     await tombstoneCanonicalSession(request.sessionRecordId, { shouldCancel })
     return { kind: 'search-write' }
+  }
+  if (request.type === 'search-integrity-check') {
+    return { kind: 'search-integrity-check', value: await checkSearchIndexIntegrityInWorker(request.trigger) }
   }
   if (request.type === 'writer-probe') {
     const testControl = request.testControl
@@ -344,6 +366,61 @@ export async function runLibraryWorkerRequest(
   })
 }
 
+/**
+ * F1d-3: PRAGMA quick_check reads every page of search.db in one synchronous
+ * native call that nothing can interrupt (5.5 s on a real 594 MiB index), so
+ * it runs here, in the library worker thread, and never on the main thread
+ * (search-index-quick-check.architecture.test.ts). It reads through a
+ * read-only connection of its own and writes nothing. Only SQLite's verdict
+ * that the file is corrupt moves it aside, through the same repair as a
+ * failed write (search-index.ts, armed in this thread's bootstrap below);
+ * BUSY or any other error is no verdict.
+ */
+async function checkSearchIndexIntegrityInWorker(trigger: string): Promise<SearchIndexIntegrityOutcome> {
+  if (isMainThread) throw new Error('PRAGMA quick_check on search.db runs only in the library worker thread')
+  const checked = searchIndexFileIdentity()
+  if (!checked) return { status: 'missing', ms: 0 }
+  const startedAt = Date.now()
+  let status: SearchIndexIntegrityOutcome['status'] = 'ok'
+  let reason: string | undefined
+  let problems = 0
+  let db: Database.Database | null = null
+  try {
+    db = new Database(searchDatabasePath(), { readonly: true, fileMustExist: true })
+    holdSearchIndexCheckForTest()
+    const rows = db.pragma('quick_check') as Array<{ quick_check: string }>
+    problems = rows.filter((row) => row.quick_check !== 'ok').length
+    if (problems > 0) {
+      status = 'corrupt'
+      reason = 'quick_check'
+    }
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code
+    reason = typeof code === 'string' ? code : error instanceof Error ? error.name : 'unknown'
+    status = isSearchIndexCorruption(error)
+      ? 'corrupt'
+      : /^SQLITE_(?:BUSY|LOCKED)/.test(reason) ? 'busy' : 'error'
+  } finally {
+    try { db?.close() } catch { /* a read-only handle holds nothing to lose */ }
+  }
+  const ms = Date.now() - startedAt
+  if (status !== 'corrupt') return { status, ms, ...(reason ? { reason } : {}) }
+  const repair = await repairSearchIndexAfterCheck({ reason: reason!, expected: checked })
+  return { status: repair === 'repaired' ? 'repaired' : 'corrupt', ms, problems, reason }
+}
+
+/**
+ * Tests only: hold the checking thread the way a long quick_check does
+ * (SWOB_TEST_SEARCH_QUICK_CHECK_HOLD_MS, at most 30 s), so a test can show
+ * the main thread still answers meanwhile.
+ */
+function holdSearchIndexCheckForTest(): void {
+  if (process.env.NODE_ENV !== 'test') return
+  const holdMs = Number(process.env.SWOB_TEST_SEARCH_QUICK_CHECK_HOLD_MS || 0)
+  if (!Number.isFinite(holdMs) || holdMs <= 0) return
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, Math.min(holdMs, 30_000))
+}
+
 function throwIfWorkerCancelled(shouldCancel?: () => boolean): void {
   if (!shouldCancel?.()) return
   const error = new Error('Library worker request cancelled')
@@ -363,8 +440,18 @@ function assertWorkerTestSandbox(root?: string): void {
 
 if (!isMainThread && parentPort) {
   let requestTail: Promise<void> = Promise.resolve()
+  let activeRequestId = 0
+  // F1d-3-b: the desktop app's library worker thread is the one place that
+  // repairs search.db (moves a corrupt one aside, rebuilds it, prunes after
+  // it). The CLI and the main thread never arm it and leave a corrupt index
+  // as it is (search-index-self-heal.architecture.test.ts).
+  armSearchIndexSelfHeal()
+  setSearchIndexEventSink((event) => {
+    parentPort!.postMessage({ requestId: activeRequestId, type: 'search-index-event', event } satisfies WorkerReply)
+  })
   parentPort.on('message', ({ requestId, request }: WorkerEnvelope) => {
     requestTail = requestTail.then(async () => {
+      activeRequestId = requestId
       try {
         const result = await runLibraryWorkerRequest(request, (progress) => {
           parentPort!.postMessage({ requestId, type: 'progress', progress } satisfies WorkerReply)
@@ -557,6 +644,16 @@ export class LibraryWorkerClient {
     }))
   }
 
+  /** PRAGMA quick_check of search.db in this worker's thread (F1d-3); repaired there when found corrupt. */
+  checkSearchIndexIntegrity(trigger: string): Promise<SearchIndexIntegrityOutcome> {
+    return this.observe(this.request({ type: 'search-integrity-check', trigger }).then((result) => {
+      if (result.kind !== 'search-integrity-check') {
+        throw new Error('Library worker returned an invalid search integrity result')
+      }
+      return result.value
+    }))
+  }
+
   private observe<T>(promise: Promise<T>): Promise<T> {
     // Preserve rejection for awaiting callers while preventing deliberately
     // fire-and-forget background work from becoming a process-level unhandled
@@ -696,6 +793,10 @@ export class LibraryWorkerClient {
     }
     this.workerArbiterParticipant = arbiterParticipant
     worker.on('message', (reply: WorkerReply) => {
+      if (reply.type === 'search-index-event') {
+        deliverSearchIndexEvent(reply.event)
+        return
+      }
       const pending = this.pending.get(reply.requestId)
       if (!pending) return
       if (reply.type === 'progress') {

@@ -56,7 +56,7 @@ import {
 import { detectSessionSourceForJsonl } from '../main/session-source'
 import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
 import { refreshCanonicalProviders } from '../main/provider-runtime'
-import { grepTranscriptsReadOnly, type SearchIndexSource } from '../main/search-index'
+import { grepTranscriptsReadOnly, SearchIndexCorruptError, type SearchIndexSource } from '../main/search-index'
 import {
   closeSearchIndexWriteCoordinator,
   getSearchIndexWriteCoordinator
@@ -412,6 +412,9 @@ async function cmdGrep(query: string, flags: Record<string, string | true>): Pro
         }
       }
     } catch (error) {
+      // F1d-3-b: search.db itself is corrupt. The CLI writes nothing more to
+      // it (no legacy pass, no query) and never repairs it: runCli says so.
+      if (error instanceof SearchIndexCorruptError) throw error
       // Canonical search is additive; legacy grep must remain available.
       const message = error instanceof Error ? error.message : String(error)
       const code = error && typeof error === 'object' && 'code' in error
@@ -956,6 +959,19 @@ async function dispatch(cmd: string[], flags: Record<string, string | true>): Pr
   }
 }
 
+/**
+ * F1d-3-b: a CLI command met a corrupt search.db. The CLI only reads it then:
+ * it never moves, rebuilds or prunes it (only the Swob app's library worker
+ * repairs it; the file is left byte for byte), and it says what to do.
+ */
+function searchIndexCorruptFailure(error: SearchIndexCorruptError): CliFailure {
+  return new CliFailure('搜索索引损坏，打开 Swob 让它自愈', 1, {
+    code: 'SEARCH_INDEX_CORRUPT',
+    hint: `CLI 只读、不改动它（${error.reason}）；Swob 会把它原样移到一旁并重建，之后重试`,
+    retryable: true
+  })
+}
+
 function errorExitCode(error: unknown): number {
   if (error instanceof ControlPlaneError) return error.exitCode
   if (error instanceof CliFailure) return error.exitCode
@@ -1015,7 +1031,8 @@ export async function runCli(
     initLibrary(options.libraryRoot, { readOnly: controlPlaneRead })
     if (!commandOwnsScan) scanLibrary()
     return await dispatch(cmd, flags)
-  } catch (error) {
+  } catch (caught) {
+    const error = caught instanceof SearchIndexCorruptError ? searchIndexCorruptFailure(caught) : caught
     const message = error instanceof Error ? error.message : String(error)
     const details = error instanceof ControlPlaneError
       ? {

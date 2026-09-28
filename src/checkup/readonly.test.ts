@@ -98,12 +98,16 @@ describe('runKernelCheckup on a sample HOME (vitest sandbox)', () => {
     const report = runs[0].report
     expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
     expect(report.checks.map((check) => check.id)).toEqual([...CHECK_ORDER])
-    expect(report.kernel).toMatchObject({ readOnly: true, selfTest: { passed: 7, total: 7 }, commit: '4971632ac809b012357461c2f96f04a8a281eac5' })
+    expect(report.kernel).toMatchObject({ readOnly: true, selfTest: { passed: 8, total: 8 }, commit: '4971632ac809b012357461c2f96f04a8a281eac5' })
     expect(report.readout).toEqual({ status: 'ok' })
-    // ④ lineage (C2b) and ⑤ tokens (C2a) both now produce real (passing) verdicts on this sample HOME;
-    // ⑥ resume stays pending (C2c not yet merged).
+    // ④ lineage (C2b) and ⑤ tokens (C2a) both produce real (passing) verdicts on this sample HOME. ⑥
+    // resume (C2c) also now grades: this fixture's synthetic sessions carry a `resumeCwd` that does not
+    // exist on the machine actually running this test (the fixture's project directory is a made-up
+    // path), so the data layer reports it as the environment-class "missing directory" bucket (warn,
+    // not fail) — an owner-fixable problem, never a data/anchor-class one; no resumeProbe is injected
+    // here, so the command layer stays unavailable and does not grade.
     expect(report.checks.slice(3).map((check) => [check.verdict, check.reason])).toEqual([
-      ['pass', undefined], ['pass', undefined], ['undetermined', 'check.not-implemented']
+      ['pass', undefined], ['pass', undefined], ['warn', undefined]
     ])
   })
 

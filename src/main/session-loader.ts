@@ -36,6 +36,7 @@ import { detectTranscriptOrigin } from './transcript-origin'
 import { isSystemText } from './session-message-classifier'
 import {
   accountClaudeUsage,
+  assignCrossSessionUsageOwners,
   markExcludedFromRollups,
   mergeTokenAccountings,
   totalCacheWriteTokens,
@@ -92,12 +93,17 @@ function getInitialSessionCwd(rawMessages: RawJsonlMessage[]): string | undefine
 const CACHE_DIR = path.join(HOME, '.claude-session-manager')
 const LEGACY_CACHE_FILE = path.join(CACHE_DIR, 'summary-cache.json')
 const CACHE_DB_FILE = path.join(CACHE_DIR, 'summary-cache.sqlite')
+// 31 (F1m): the compact column's usage rollups carry the billing identity a
+// load's cross-session ownership pass ranks copies by (dedupKey and
+// billingFactKey apart, timestamp, auditSourceId); a v30 rollup had only
+// billingFactKey || dedupKey. The first load after the bump re-reads every
+// session once (F1d's cold round; nothing else of the cache changed).
 // 30 (F1d): re-read every session once. Rows written before it predate F1a
 // (records holding U+2028/U+2029), F1b (Codex compaction, subagent usage,
 // fork dedup keys), F1c-2 (Cursor working directories) and F1e (a failed read
 // is not a summary). A row of another version is never reused or carried
 // over: see writeSqliteDiskCache. 29 kept audit events in a cold column.
-const CACHE_VERSION = 30
+const CACHE_VERSION = 31
 /** The summary-cache version this build reads and writes. */
 export const SUMMARY_CACHE_VERSION = CACHE_VERSION
 
@@ -2769,6 +2775,16 @@ async function loadLegacySessionSnapshot(omitCachedUsageEvents = false): Promise
       }
     }
   }
+
+  // F1m: a call two Claude sessions both carry (a branch or resume that copied
+  // the other's history without Claude Code's forkedFrom mark) counts in one of
+  // them, the copy usage-facts' billing_rank puts first, as the ledger and
+  // Insights count it. The other copies stay in usageEvents as 'inherited'
+  // audit rows and those sessions' totals and tokenUsage are recomputed; branch
+  // metadata is untouched. It runs on every load over cached and freshly parsed
+  // summaries alike (full events or compact rollups), and is never cached: a
+  // new peer or a removed owner takes effect on the next load.
+  assignCrossSessionUsageOwners(summaries)
 
   const nonClaudeBySession = new Map<string, SessionSummary>()
   for (const { filePath, source } of descriptors) {

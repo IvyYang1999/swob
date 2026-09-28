@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { SessionGroup, SessionSummary } from './session-types'
-import { accountingForSession, totalCacheWriteTokens, type UsageEvent } from './token-accounting'
+import { accountingForSession, observedUsageScope, totalCacheWriteTokens } from './token-accounting'
 import { previewUsageEventRepricing, valueUsageEvent, type Valuation } from './token-valuation'
 import { PRICING_CATALOG_VERSION } from './pricing-catalog'
 import { searchDatabasePath } from './search-index'
@@ -12,6 +12,13 @@ import { providerOutcomeForSession } from './session-provider-outcome'
 import { isPerCallSqliteAgentAccounting } from './sqlite-agent-usage'
 import type { SessionLoadEvidence, SqliteSourceLoadEvidence } from './session-loader'
 import { providerUsesCanonicalRuntime } from '../shared/provider-capabilities'
+import {
+  billingAgentScope,
+  billingOccurredAt,
+  stableHash,
+  usageFactBillingFactId,
+  usageFactEventId
+} from './billing-identity'
 import {
   USAGE_FACT_SCHEMA_VERSION,
   type AnalysisDimension,
@@ -443,10 +450,6 @@ export function hasCompletedUsageFactSnapshot(): boolean {
   return Boolean(row?.last_indexed_at && row.reusable)
 }
 
-function stableHash(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
-}
-
 function usageFactProjectionInput(
   session: SessionSummary,
   accounting: ReturnType<typeof accountingForSession>,
@@ -525,10 +528,9 @@ function parseJson<T>(value: string | null, fallback: T): T {
 }
 
 function normalizedTimestamp(value?: string): { occurredAt: string | null; day: string; hour: number } {
-  if (!value) return { occurredAt: null, day: UNKNOWN_TIME, hour: -1 }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return { occurredAt: null, day: UNKNOWN_TIME, hour: -1 }
-  return { occurredAt: value, day: localActivityDay(value)!, hour: date.getHours() }
+  const occurredAt = billingOccurredAt(value)
+  if (occurredAt === null) return { occurredAt: null, day: UNKNOWN_TIME, hour: -1 }
+  return { occurredAt, day: localActivityDay(occurredAt)!, hour: new Date(occurredAt).getHours() }
 }
 
 function projectPath(session: SessionSummary): string {
@@ -554,12 +556,6 @@ function resolveRootSessionId(
   return current.sessionId
 }
 
-function agentScope(scope: UsageEvent['scope']): UsageFact['agentScope'] {
-  if (scope === 'main') return 'main'
-  if (scope === 'sidechain' || scope === 'subagent') return 'subagent'
-  return 'unknown'
-}
-
 function valuationHistoryEntry(valuation: Valuation): UsageFact['valuationHistory'][number] {
   return {
     priceRevision: valuation.priceRevision,
@@ -580,17 +576,13 @@ export function usageFactsForSession(
   const rootId = options.rootSessionId || rootSessionId(session)
   return accounting.usageEvents.map((event) => {
     const time = normalizedTimestamp(event.timestamp)
+    // A copy the load counted in another session (scope 'inherited', F1m) is
+    // recorded as observed: billing_rank ranks it as before and picks the same owner.
+    const scope = observedUsageScope(event)
     const rawModel = event.modelRaw || event.model || null
     const canonicalModel = event.modelCanonical || event.model || null
-    const eventId = stableHash([
-      source,
-      session.sessionId,
-      event.auditSourceId || session.sessionId,
-      event.dedupKey
-    ])
-    const billingFactId = event.billingFactKey
-      ? stableHash([source, event.billingFactKey])
-      : eventId
+    const eventId = usageFactEventId(source, session.sessionId, event)
+    const billingFactId = usageFactBillingFactId(source, event.billingFactKey, eventId)
     const valuation = valueUsageEvent(event)
     const valuationHistory = valuation.revision
       ? [
@@ -608,7 +600,7 @@ export function usageFactsForSession(
       sourceClient: source,
       sessionId: session.sessionId,
       rootSessionId: rootId,
-      agentScope: agentScope(event.scope),
+      agentScope: billingAgentScope(scope),
       projectPath: project,
       model: canonicalModel,
       modelRaw: rawModel,
@@ -627,7 +619,7 @@ export function usageFactsForSession(
       reasoningTokens: event.components.reasoningTokens || 0,
       usageProvenance: event.provenance,
       callCount: 1,
-      turnCount: event.scope === 'main' ? 1 : 0,
+      turnCount: scope === 'main' ? 1 : 0,
       costUsd: valuation.usd ?? null,
       pricingProvenance: valuation.mode,
       pricedTokens: valuation.coveredTokens,
@@ -1165,7 +1157,7 @@ function sortedCountEntries(counts: ReadonlyMap<string, number>): Array<[string,
 
 /** The one event id a session's `${source}:aggregate` fact has (usageFactsForSession's formula). */
 function sqliteAgentAggregateEventId(source: string, sessionId: string): string {
-  return stableHash([source, sessionId, sessionId, `${source}:aggregate`])
+  return usageFactEventId(source, sessionId, { dedupKey: `${source}:aggregate` })
 }
 
 export function synchronizeUsageFacts(

@@ -74,7 +74,7 @@ describe('checkup worker (isolated child process of swob doctor checkup)', () =>
       const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema)
       expect(validate(report), JSON.stringify(validate.errors)).toBe(true)
       expect(report.readout).toEqual({ status: 'ok' })
-      expect(report.kernel).toMatchObject({ version: '1.4.0', commit: null, readOnly: true, selfTest: { passed: 7, total: 7 } })
+      expect(report.kernel).toMatchObject({ version: '1.4.0', commit: null, readOnly: true, selfTest: { passed: 8, total: 8 } })
       expect(report.saltFingerprint).toMatch(/^[0-9a-f]{8}$/)
       expect(scanForPrivacy(report)).toEqual({ ok: true, hits: [] })
       for (const canary of Object.values(CANARY)) {

@@ -106,6 +106,8 @@ describe('privacy scanner', () => {
       'content.swob-extra-records:engineerHint',
       'content.unexplained-loss:engineerHint',
       'readout.parse-timeout:engineerHint',
+      'resume.anchor-cache-lag:engineerHint',
+      'resume.anchor-mismatch:engineerHint',
       'resume.anchor-mismatch:engineerHint',
       'resume.anchor-mismatch:ownerLine',
       'resume.anchor-mismatch:reasonText'

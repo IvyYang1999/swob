@@ -7,21 +7,24 @@
  * - Data layer (kernel-independent, pure fs metadata): four buckets — recoverable / missing file /
  *   missing directory / unsupported source (`session.canResumeLocal === false`, e.g. an intra-file branch
  *   view or a remote-only session; never inferred, mirrors the kernel's own field).
- * - L3 content anchor (C2c-3 口径修正: F1o 诊断 + 三轮派单人决定): readout.ts already extracted and hashed
+ * - L3 content anchor (C2c-3 口径修正: F1o 诊断 + 四轮派单人决定): readout.ts already extracted and hashed
  *   the last user/assistant anchor of every file it read, each now carrying its own timestamp
  *   (`resumeAnchors`); this check asks resume-verifier.ts's own classifier (via `classifyResumeAnchors`,
  *   whitelisted, unchanged) whether "恢复侧" (the file the tool's own default resume command would actually
  *   open — Claude: `session.primaryPath`, structurally the `sessionId`-named file; Codex: the file Codex's
  *   own state db `rollout_path` currently names, falling back to `primaryPath` when there is no row) still
- *   reads the same content as "展示侧" (the `session.paths` member whose own anchor is freshest — an
- *   approximation of what the merged UI actually shows last). Labelled [D], "非独立来源" (design/task book):
- *   v1 has no second, independently-implemented anchor extraction to diff against — both sides come from
- *   the same readout pass. This deliberately no longer compares "Swob's primary file" against "any other
- *   file the same session happens to group" (the pre-C2c-3 v1): a multi-file session's other file is
- *   routinely, by design, different content (a Claude continuation shard, a Codex thread's second rollout),
- *   so that comparison's "mismatch" never meant anything a user could act on — see `classifyAnchorComparison`
- *   below for the full reasoning and the `cache-lag`/`cannot-verify` tiers this revision adds. An
- *   independent implementation is still deferred to C2d (task book).
+ *   reads the same content as "展示侧" (which file Swob actually *shows* — **source-dependent**, see
+ *   `resolveDisplaySide`: Claude merges continuations, so the `session.paths` member whose own anchor is
+ *   freshest approximates the merged view; Codex does not merge multiple physical files at all, so 展示侧
+ *   is `session.primaryPath` directly — the "visible copy" `nonClaudeBySession` picked, pre-F1p unrelated
+ *   to the state db). Labelled [D], "非独立来源" (design/task book): v1 has no second, independently-
+ *   implemented anchor extraction to diff against — both sides come from the same readout pass. This
+ *   deliberately no longer compares "Swob's primary file" against "any other file the same session happens
+ *   to group" (the pre-C2c-3 v1): a multi-file session's other file is routinely, by design, different
+ *   content (a Claude continuation shard, a Codex thread's second rollout), so that comparison's "mismatch"
+ *   never meant anything a user could act on — see `classifyAnchorComparison` below for the full reasoning
+ *   and the `cache-lag`/`cannot-verify` tiers this revision adds. An independent implementation is still
+ *   deferred to C2d (task book).
  *
  * The command layer (program lookup + `zsh -n`) is sampled, not run on every session (design §四 4.6):
  * per source, `resumeSample.perSource` sessions chosen by a seeded, reproducible order (H1: seed = local
@@ -247,14 +250,40 @@ function codexRecoverySide(
 }
 
 /**
- * "展示侧": the `session.paths` member (continuation shards, compaction copies, Codex's second rollout, …)
- * whose own last-message timestamp is the *latest* — an approximation of what the merged UI actually shows
- * last (task book M1/S2), not a replica of session-loader.ts's uuid-deduped cross-file raw merge (that
- * function is private to session-loader.ts and out of this package's write domain either way). A file with
- * no anchor data this run (unread or unparseable) is not a candidate: there is no timestamp to rank it by,
- * and no content to compare either.
+ * "展示侧": which physical file Swob actually shows the user — this differs by source, because Swob does
+ * not treat "a session with several physical files" the same way for all of them (F1o 诊断
+ * 2026-09-28，第③节 "Swob 分组是否正确、显示/恢复用哪份"; 派单人 2026-09-28 追加决定).
+ *
+ * Claude: a continuation is a real cross-file *merge* — session-loader.ts's `buildLogicalSessionClusters`/
+ * `mergeRawMessages` fold every linked file's raw messages (uuid-deduped) into one stream before the
+ * summary is built from it, and F1o confirmed the continuation shard's uuids are themselves a near-total
+ * subset of the file that keeps growing afterward — so the file whose own last-message anchor is *freshest*
+ * is a reasonable stand-in for what that merged view last shows. Kept as the existing scan over
+ * `session.paths` for this source, unchanged from the previous revision of this function.
+ *
+ * Codex (and, generically, every non-Claude source ⑥ evaluates — currently just Codex, see file header):
+ * Swob does **not** merge multiple physical files into one displayed session at all. The session list and
+ * detail view both show exactly one "visible copy" — `session.primaryPath` (session-loader.ts's
+ * `nonClaudeBySession`, whose `visibleCopy`/`preferred` selection is pre-F1p `billingTotal`/
+ * `lifecycleState`-based and does not consult the state db). "锚点时间戳最新的文件" is the wrong question
+ * for Codex: it can pick the state-db-pointed file even when Swob itself is still showing a different,
+ * older one — exactly the real-machine shape F1o's diagnosis found for both known Codex sessions (Swob's
+ * own `primaryPath` is the *older* physical file; the file with the freshest content is the one the state
+ * db already points to). Comparing "freshest" against a db-pointer recovery side would then silently
+ * converge both sides onto the same file and give this check zero detection power for the one problem F1o
+ * actually found — so for Codex, 展示侧 is `session.primaryPath` directly, no scan, no fallback: if that one
+ * file's anchor cannot be read this run, there is nothing to compare (excluded, not a failure — same
+ * "excluded from tally" spirit as an unresolvable recovery side).
  */
-function resolveDisplaySide(session: ReadoutSession, parsed: ReadonlyMap<string, ParsedEntry> | undefined): ResumeAnchorHashes | null {
+function resolveDisplaySide(
+  session: ReadoutSession,
+  source: ResumeSource,
+  parsed: ReadonlyMap<string, ParsedEntry> | undefined
+): ResumeAnchorHashes | null {
+  if (source !== 'claude-code') {
+    const entry = anchorLookup(session.primaryPath, parsed)
+    return entry === null || entry === 'unparseable' ? null : entry
+  }
   let best: ResumeAnchorHashes | null = null
   let bestMs = -Infinity
   for (const filePath of session.paths) {
@@ -268,8 +297,8 @@ function resolveDisplaySide(session: ReadoutSession, parsed: ReadonlyMap<string,
 }
 
 /**
- * ⑥ L3 (C2c-3): 恢复侧 (the file the tool's own default resume command would actually open) vs 展示侧 (the
- * `session.paths` member whose own anchor is freshest, see `resolveDisplaySide`). Both sides read, both
+ * ⑥ L3 (C2c-3): 恢复侧 (the file the tool's own default resume command would actually open) vs 展示侧 (which
+ * physical file Swob actually shows — source-dependent, see `resolveDisplaySide`). Both sides read, both
  * non-empty, genuinely different content → `mismatch`: this is the one case that means something a user
  * can act on ("what opens on resume ≠ what you're looking at"). A mismatch is downgraded to `cache-lag`
  * when even Swob's own summary (`session.updatedAt`, the field `loadAllSessions` computed for this session)
@@ -281,6 +310,9 @@ function resolveDisplaySide(session: ReadoutSession, parsed: ReadonlyMap<string,
  * degenerate to comparing a file against itself here (both sides resolve to the same physical file), so
  * this is a "does primaryPath / the db-pointed file still read cleanly" existence check for them, not a
  * genuine independent-content check — expected and unavoidable in a single-file world, not special-cased.
+ * For a multi-file Codex session pre-F1p, this is *not* a degenerate case: 恢复侧 (db pointer) and 展示侧
+ * (primaryPath) are two different files by construction whenever Swob's own visible-copy pick has not
+ * caught up to the state db, and a genuine content difference is expected to fail here (F1o 诊断).
  */
 function classifyAnchorComparison(
   session: ReadoutSession,
@@ -292,8 +324,8 @@ function classifyAnchorComparison(
   if (recovery.kind === 'not-comparable') return { status: 'not-comparable' }
   if (recovery.kind === 'would-404') return { status: 'would-404' }
   if (recovery.kind === 'cannot-verify') return { status: 'cannot-verify' }
-  const display = resolveDisplaySide(session, parsed)
-  if (!display) return { status: 'not-comparable' } // 恢复侧 read fine, but nothing in session.paths could stand in for 展示侧
+  const display = resolveDisplaySide(session, source, parsed)
+  if (!display) return { status: 'not-comparable' } // 恢复侧 read fine, but 展示侧 (source-dependent target) had no anchor data this run
   const base = classifyResumeAnchors({ expected: recovery.anchors, target: display })
   if (base === 'match' || base === 'skipped') return { status: 'match' }
   const updatedAtMs = session.updatedAt ? Date.parse(session.updatedAt) : NaN

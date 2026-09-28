@@ -282,12 +282,12 @@ export const FINDING_TEXT: Readonly<Partial<Record<ReasonCode, FindingText>>> = 
   },
   'resume.anchor-mismatch': {
     ownerLine: '{source}：有 {n} 场会话，点「恢复」打开的内容和 Swob 里显示的不是同一份；我们在修，不用你处理',
-    engineerHint: 'src/checkup/checks/resume.ts#classifyAnchorComparison -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：恢复侧（Claude 取 sessionId 命名文件即 primaryPath／Codex 取 state db threads.rollout_path 指向文件，无行退回 primaryPath）与展示侧（session.paths 内锚点时间戳最新的文件）hash 不相等'
+    engineerHint: 'src/checkup/checks/resume.ts#classifyAnchorComparison -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：恢复侧（Claude 取 sessionId 命名文件即 primaryPath／Codex 取 state db threads.rollout_path 指向文件，无行退回 primaryPath）与展示侧（#resolveDisplaySide 按来源区分：Claude 取 session.paths 内锚点时间戳最新的文件；Codex 取 session.primaryPath 本身，Swob 不合并 Codex 多副本展示，见 F1o 诊断）hash 不相等'
   },
   // —— C2c-3 additions (⑥ resume L3 口径修正：恢复侧 vs 展示侧，见 F1o 诊断) ——
   'resume.anchor-cache-lag': {
     ownerLine: '{source}：有 {n} 场会话，Swob 这次读到的内容比它自己记录的更新时间还新，大概率是内部缓存没跟上，不是内容真的对不上。我们在看，不用你处理',
-    engineerHint: 'src/checkup/checks/resume.ts#classifyAnchorComparison：展示侧（session.paths 内锚点时间戳最新的文件）自身锚点时间戳晚于 ReadoutSession.updatedAt（loadAllSessions 给出的摘要字段，可能来自内核复用的旧摘要缓存条目，见设计文档勘误），判定为缓存滞后而非数据错误'
+    engineerHint: 'src/checkup/checks/resume.ts#classifyAnchorComparison：展示侧（#resolveDisplaySide 按来源区分，见 resume.anchor-mismatch 的说明）自身锚点时间戳晚于 ReadoutSession.updatedAt（loadAllSessions 给出的摘要字段，可能来自内核复用的旧摘要缓存条目，见设计文档勘误），判定为缓存滞后而非数据错误'
   },
   'resume.anchor-cannot-verify': {
     ownerLine: '{source}：有 {n} 场会话，工具自己记录的恢复位置这次没能读到，没法确认和 Swob 显示的是不是同一份。转给开发看看',
@@ -401,6 +401,20 @@ export const RETIRED_TEMPLATES: readonly RetiredTemplate[] = [
     text: 'Swob 记的最后一句话和重新读到的对不上',
     replacedBy: '点「恢复」打开的内容和 Swob 显示的不是同一份',
     retiredIn: 'C2c-3 (checkup 1.3.0)'
+  },
+  {
+    code: 'resume.anchor-mismatch',
+    field: 'engineerHint',
+    text: 'src/checkup/checks/resume.ts#classifyAnchorComparison -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：恢复侧（Claude 取 sessionId 命名文件即 primaryPath／Codex 取 state db threads.rollout_path 指向文件，无行退回 primaryPath）与展示侧（session.paths 内锚点时间戳最新的文件）hash 不相等',
+    replacedBy: 'src/checkup/checks/resume.ts#classifyAnchorComparison -> readout.ts#classifyResumeAnchors（复用 src/main/resume-verifier.ts#classifyResumeL3，[D] 非独立来源）：恢复侧（Claude 取 sessionId 命名文件即 primaryPath／Codex 取 state db threads.rollout_path 指向文件，无行退回 primaryPath）与展示侧（#resolveDisplaySide 按来源区分：Claude 取 session.paths 内锚点时间戳最新的文件；Codex 取 session.primaryPath 本身，Swob 不合并 Codex 多副本展示，见 F1o 诊断）hash 不相等',
+    retiredIn: 'C2c-3 ③ (checkup 1.3.0)'
+  },
+  {
+    code: 'resume.anchor-cache-lag',
+    field: 'engineerHint',
+    text: 'src/checkup/checks/resume.ts#classifyAnchorComparison：展示侧（session.paths 内锚点时间戳最新的文件）自身锚点时间戳晚于 ReadoutSession.updatedAt（loadAllSessions 给出的摘要字段，可能来自内核复用的旧摘要缓存条目，见设计文档勘误），判定为缓存滞后而非数据错误',
+    replacedBy: 'src/checkup/checks/resume.ts#classifyAnchorComparison：展示侧（#resolveDisplaySide 按来源区分，见 resume.anchor-mismatch 的说明）自身锚点时间戳晚于 ReadoutSession.updatedAt（loadAllSessions 给出的摘要字段，可能来自内核复用的旧摘要缓存条目，见设计文档勘误），判定为缓存滞后而非数据错误',
+    retiredIn: 'C2c-3 ③ (checkup 1.3.0)'
   }
 ]
 

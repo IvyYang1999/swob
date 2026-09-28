@@ -163,8 +163,14 @@ describe('⑥ resume — L3 anchor comparison (C2c-3: 恢复侧 vs 展示侧, [D
     expect(result.findings.find((f) => f.code === 'resume.anchor-mismatch')).toMatchObject({ verdict: 'fail', source: 'claude-code' })
   })
 
-  it('Codex state db points at a secondary rollout Swob did not pick as primary -> 恢复侧 ≠ 展示侧, anchor mismatch, fail', () => {
-    const primary = file('codex-primary.jsonl') // Swob's own pick (not the db pointer) — wins 展示侧: freshest anchor
+  it('Codex primaryPath (旧, Swob 展示的可见副本) ≠ state db rollout_path (新, 恢复目标) -> anchor mismatch, fail (F1o 诊断真实机形状)', () => {
+    // F1o (诊断/F1o-诊断-2026-09-28.md) found this exact shape on a real machine for both known Codex
+    // mismatches: primaryPath (older, chosen by billingTotal pre-F1p) has an *earlier* content timestamp
+    // than the file the state db already points to (newer). Swob does not merge Codex's multiple physical
+    // files (unlike Claude's continuations), so 展示侧 must be primaryPath itself, not "whichever file is
+    // freshest" — a freshest-scan would wrongly pick the db-pointed (newer) file here too, silently
+    // converging both sides and losing all detection power for exactly this real-machine problem.
+    const primary = file('codex-primary.jsonl') // Swob's own visible copy (primaryPath) — 展示侧
     const secondary = file('codex-secondary.jsonl') // state db's rollout_path — 恢复侧: what `codex resume` actually opens
     const sessions = [codexSession('s-db-secondary', primary, {
       paths: [primary, secondary],
@@ -172,7 +178,10 @@ describe('⑥ resume — L3 anchor comparison (C2c-3: 恢复侧 vs 展示侧, [D
     })]
     const codexParsed = new Map<string, CodexParseResult>([
       [primary, { records: 4, elapsedMs: 1, resumeAnchors: { lastUser: 'aaaaaaaa', lastAssistant: 'bbbbbbbb', lastTimestamp: '2026-09-13T04:43:37.000Z' } }],
-      [secondary, { records: 10, elapsedMs: 1, resumeAnchors: { lastUser: 'cccccccc', lastAssistant: 'dddddddd', lastTimestamp: '2026-09-13T04:41:00.000Z' } }]
+      // Deliberately the *later* timestamp (unlike commit ①'s draft of this fixture): this is what a
+      // freshest-scan display rule would wrongly pick, and exactly why Codex's 展示侧 must be primaryPath
+      // directly instead.
+      [secondary, { records: 10, elapsedMs: 1, resumeAnchors: { lastUser: 'cccccccc', lastAssistant: 'dddddddd', lastTimestamp: '2026-09-13T04:46:20.000Z' } }]
     ])
     const db = codexStateDb([{ id: 's-db-secondary', rolloutPath: secondary, threadSource: null, archived: false }])
     const result = resumeCheck(ctx({ readout: readout(sessions, { codexParsed }), codexDb: db }))
